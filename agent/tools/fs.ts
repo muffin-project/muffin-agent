@@ -397,6 +397,33 @@ function containmentCheck(base: string, target: string): boolean {
 }
 
 /**
+ * A nested checkout's `.git/hooks` is the same escape `mandatoryGuards`
+ * names literally for the top level (`core/rot/guards.ts`,
+ * `join(cwd, '.git', 'hooks')`): a write there still runs uncontained, as
+ * the owner, on that checkout's next commit.
+ *
+ * Structural, not listed. A coding turn can `git clone`/`git worktree add`
+ * into any subdirectory at any depth, and `mandatoryGuards` is computed once
+ * per turn — a static path added before the clone happened would never name
+ * it. Measured 2026-09-04: `@anthropic-ai/sandbox-runtime`'s own "nested
+ * repos" protection exists (`macGetMandatoryDenyPatterns` /
+ * `linuxGetMandatoryDenyPaths`) but anchors to *its own* `process.cwd()`,
+ * not the per-call working directory a turn actually runs in — so it
+ * protects nothing here either. This is the only guard against a nested
+ * `.git/hooks`, and it has to hold without knowing the checkout exists in
+ * advance.
+ *
+ * Checked on path segments so `.git-worktree` or a directory named
+ * `.gitxhooks` cannot fake a match: a `.git` segment must be followed
+ * immediately by a `hooks` segment.
+ */
+function isNestedGitHooksPath(target: string): boolean {
+  const segments = target.split(sep).map(norm);
+  const gitIdx = segments.lastIndexOf(norm('.git'));
+  return gitIdx !== -1 && segments[gitIdx + 1] === norm('hooks');
+}
+
+/**
  * Is `target` (already real) on one of `scope`'s deny-lists?
  *
  * Shared by `resolveInScope` (the path a tool is about to touch) and `fsList`
@@ -404,6 +431,7 @@ function containmentCheck(base: string, target: string): boolean {
  * more about a denied path than a read of that same path would allow.
  */
 function isDenied(scope: FsScope, target: string, forWrite: boolean): boolean {
+  if (forWrite && isNestedGitHooksPath(target)) return true;
   const denied = forWrite ? [...scope.denyWrite, ...(scope.denyRead ?? [])] : (scope.denyRead ?? []);
   const t = norm(target);
   return denied.some((path) => {

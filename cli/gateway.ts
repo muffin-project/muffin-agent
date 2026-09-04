@@ -190,7 +190,18 @@ export function cmdGatewayStatus(home: string): number {
  * su macOS, `systemctl --user start` su Linux — perché il PathState riarma il
  * KeepAlive per il *futuro*, non fa partire un processo adesso.
  */
-export function cmdGatewayStart(home: string, deps: { run?: StepRunner } = {}): number {
+export async function cmdGatewayStart(
+  home: string,
+  deps: {
+    run?: StepRunner;
+    /** «Chi sta servendo, adesso?» — reale `currentGatewayPid(home)` di default, una coda in test. */
+    readGatewayPid?: () => number | null;
+    /** Timer reali di default; istantaneo nei test — vedi `waitForGatewayPid` (`cli/update.ts`). */
+    sleep?: (ms: number) => Promise<void>;
+    verifyAttempts?: number;
+    verifyIntervalMs?: number;
+  } = {},
+): Promise<number> {
   const semaforo = paths(home).gatewayStopped;
   const cera = existsSync(semaforo);
   if (cera) rmSync(semaforo, { force: true });
@@ -222,7 +233,30 @@ export function cmdGatewayStart(home: string, deps: { run?: StepRunner } = {}): 
     );
     return 2;
   }
-  process.stdout.write(`gateway riacceso\n`);
+
+  // Regola della casa, la stessa di `restartVerdict` (`cli/update.ts`): il
+  // successo lo decide lo STATO — un pid comparso — mai l'exit status del
+  // comando che ha appena toccato il supervisore. Prima di questa riga
+  // `launchctl kickstart`/`systemctl --user start` uscito 0 bastava a
+  // stampare "gateway riacceso", anche quando il servizio falliva ad
+  // avviarsi un istante dopo (unit rotta, porta occupata, build che non
+  // parte) — `kickstart`/`start` sono asincroni per natura: dicono "ricevuto
+  // l'ordine", non "è in piedi". `cli/update.ts` già faceva questa verifica
+  // per il riavvio; questo comando, che accende lo stesso servizio, no.
+  const readGatewayPid = deps.readGatewayPid ?? ((): number | null => currentGatewayPid(home));
+  const pid = await waitForGatewayPid(readGatewayPid, null, {
+    ...(deps.verifyAttempts !== undefined ? { attempts: deps.verifyAttempts } : {}),
+    ...(deps.verifyIntervalMs !== undefined ? { intervalMs: deps.verifyIntervalMs } : {}),
+    ...(deps.sleep !== undefined ? { sleep: deps.sleep } : {}),
+  });
+  if (pid === null) {
+    process.stderr.write(
+      `${supervisore.join(' ')} è uscito 0, ma nessun gateway risulta attivo entro il tempo di attesa\n` +
+        `→ \`muffin gateway status\` per il dettaglio, i log del supervisore (\`journalctl --user -u muffin\`/Console.app) per il perché\n`,
+    );
+    return 2;
+  }
+  process.stdout.write(`gateway riacceso — pid ${pid}\n`);
   return 0;
 }
 
@@ -399,7 +433,7 @@ const REAL_RUNNER: StepRunner = (argv) => {
 /** Esce 3 quando la unit è al suo posto e il servizio no: né rifiuto (2) né avvertenza (1). */
 export const EXIT_NOT_ACTIVATED = 3;
 
-export function cmdGatewayInstall(
+export async function cmdGatewayInstall(
   home: string,
   argv: string[],
   deps: {
@@ -415,8 +449,14 @@ export function cmdGatewayInstall(
      */
     homeDir?: string;
     configHome?: string;
+    /** «Chi sta servendo, adesso?» — reale `currentGatewayPid(home)` di default, una coda in test. */
+    readGatewayPid?: () => number | null;
+    /** Timer reali di default; istantaneo nei test — vedi `waitForGatewayPid` (`cli/update.ts`). */
+    sleep?: (ms: number) => Promise<void>;
+    verifyAttempts?: number;
+    verifyIntervalMs?: number;
   } = {},
-): number {
+): Promise<number> {
   let values: { write?: boolean; force?: boolean; start?: boolean };
   try {
     ({ values } = parseArgs({
@@ -524,7 +564,29 @@ export function cmdGatewayInstall(
         return EXIT_NOT_ACTIVATED;
       }
     }
-    process.stderr.write(`\nil gateway è un servizio adesso — \`muffin gateway status\` lo vede.\n`);
+    // Regola della casa, la stessa di `restartVerdict` (`cli/update.ts`) e di
+    // `cmdGatewayStart` qui sopra: ogni passo di `plan.activation` è uscito 0
+    // (altrimenti si sarebbe già tornati sopra), ma `enable --now`/`load` è
+    // "ho dato l'ordine", non "il processo gira" — un `ExecStart` sbagliato o
+    // una porta occupata fa fallire l'avvio un istante dopo, exit 0 di
+    // `systemctl`/`launchctl` compreso. Verificato con lo STATO — un pid
+    // comparso — prima di dire che il gateway è un servizio adesso.
+    const readGatewayPid = deps.readGatewayPid ?? ((): number | null => currentGatewayPid(home));
+    const pid = await waitForGatewayPid(readGatewayPid, null, {
+      ...(deps.verifyAttempts !== undefined ? { attempts: deps.verifyAttempts } : {}),
+      ...(deps.verifyIntervalMs !== undefined ? { intervalMs: deps.verifyIntervalMs } : {}),
+      ...(deps.sleep !== undefined ? { sleep: deps.sleep } : {}),
+    });
+    if (pid === null) {
+      process.stderr.write(
+        `\nogni passo è uscito 0, ma nessun gateway risulta attivo entro il tempo di attesa.\n` +
+          `la unit è scritta e caricata in ${plan.path}; il processo no — \`muffin gateway status\` per il dettaglio, ` +
+          `i log del supervisore (\`journalctl --user -u muffin\`/Console.app) per il perché.\n`,
+      );
+      for (const w of plan.warnings) process.stderr.write(`\n! ${w}\n`);
+      return EXIT_NOT_ACTIVATED;
+    }
+    process.stderr.write(`\nil gateway è un servizio adesso — pid ${pid}, \`muffin gateway status\` lo vede.\n`);
     for (const w of plan.warnings) process.stderr.write(`\n! ${w}\n`);
     if (launcher.warning) {
       process.stderr.write(`\n! ${launcher.warning}\n`);

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SandboxManager, type SandboxRuntimeConfig } from '@anthropic-ai/sandbox-runtime';
@@ -53,12 +53,6 @@ export type ExecRequest = {
   cwd: string;
   /** Absolute directories writable for THIS invocation only. */
   writeScope: readonly string[];
-  /**
-   * Domains reachable through the egress proxy for this invocation. Default
-   * none: with an empty allowlist and no ask-callback registered, srt denies
-   * every host.
-   */
-  allowHosts?: readonly string[];
   timeoutMs?: number;
   signal?: AbortSignal;
 };
@@ -161,6 +155,79 @@ export type ExecGuards = {
   /** Secrets — denied in read: a child that reads the key has already won. */
   denyRead: readonly string[];
 };
+
+/**
+ * How many directory levels under a write root get walked looking for a
+ * nested checkout's `.git/hooks`. Matches `@anthropic-ai/sandbox-runtime`'s
+ * own default (`DEFAULT_MANDATORY_DENY_SEARCH_DEPTH` in its Linux
+ * implementation) — a checkout nested deeper than this is rare enough that
+ * the traversal cost is not worth paying on every command.
+ */
+const NESTED_GIT_HOOKS_SEARCH_DEPTH = 3;
+
+/**
+ * `ExecGuards.denyWrite`'s `.git/hooks` entry (`core/rot/guards.ts`,
+ * `mandatoryGuards`) names only the TOP of `cwd`, computed once per turn. A
+ * coding flow's `git clone`/`git worktree add` puts a second, independently
+ * executable `.git/hooks` anywhere under the write scope, possibly created
+ * by an earlier command in the SAME turn — after that literal was computed.
+ *
+ * `@anthropic-ai/sandbox-runtime` ships its own "nested repos" protection
+ * (`macGetMandatoryDenyPatterns` / `linuxGetMandatoryDenyPaths`) and it does
+ * not cover this either: measured 2026-09-04, both implementations resolve
+ * paths against `process.cwd()` — the `SandboxManager` HOST process's own
+ * directory — never the `cwd` a caller passes to `wrapWithSandboxArgv`. A
+ * real round trip through the PRE-fix `run()` confirmed it: with a nested
+ * checkout already sitting under the write scope, a write to its
+ * `.git/hooks/pre-commit` still succeeded — srt was protecting the daemon's
+ * own repo, not the turn's workspace. The mandatory-guards literal above it
+ * (`join(cwd, '.git', 'hooks')`) is therefore NOT decorative — it is the
+ * only thing that was ever real here, and it only reached the top level.
+ *
+ * So this walk happens HERE, fresh on every `run()` — not folded into
+ * `mandatoryGuards` and cached for the turn — so a checkout created by
+ * command N is denied by command N+1 of the same turn (measured: fixed).
+ * Only concrete, resolved paths go into `denyWrite`, never a glob: srt's own
+ * `stripWriteGlobs` silently DROPS any `filesystem.denyWrite` entry that
+ * contains glob characters on Linux, so a `**\/.git/hooks` pattern would
+ * compile clean here and protect nothing on the platform Muffin actually
+ * runs on (a VPS) — the same shape of silent-empty-deny-list this module's
+ * own docstring already warns about for a typo'd config key.
+ *
+ * **Declared limit, not silently left open**: a checkout created and
+ * written to inside ONE `shell_run` call (e.g. `git clone x && echo evil >
+ * x/.git/hooks/pre-commit`) still gets through — this walk runs once,
+ * before the whole compound command is spawned, and a filesystem profile
+ * compiled ahead of time cannot see a directory the command itself creates
+ * mid-execution. `agent/tools/fs.ts`'s structural check
+ * (`isNestedGitHooksPath`) has no such gap for the `fs_write` tool, because
+ * it inspects the actual resolved path of each call rather than a
+ * pre-computed list — but `shell_run`'s containment is srt's ahead-of-time
+ * profile, which has no equivalent live check.
+ */
+function nestedGitHooksDirs(root: string, depth: number = NESTED_GIT_HOOKS_SEARCH_DEPTH): string[] {
+  const found: string[] = [];
+  const walk = (dir: string, remaining: number): void => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return; // gone or unreadable between listing and here — nothing to protect there
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name === 'node_modules') continue; // the one directory guaranteed to dwarf everything else
+      const full = join(dir, entry.name);
+      if (entry.name === '.git') {
+        found.push(join(full, 'hooks'));
+        continue; // hooks cannot nest inside hooks
+      }
+      if (remaining > 0) walk(full, remaining - 1);
+    }
+  };
+  walk(root, depth);
+  return found;
+}
 
 /**
  * Quanti esecutori hanno inizializzato `SandboxManager` e non si sono ancora
@@ -484,14 +551,33 @@ export class SandboxExecutor {
 
     const perCall: Partial<SandboxRuntimeConfig> = {
       network: {
-        allowedDomains: [...(req.allowHosts ?? [])],
+        // Always empty, deliberately: srt's proxy (`filterNetworkRequest`)
+        // decides every connection against the SESSION-level config captured
+        // at `initialize()` (this class's `baseConfig()`, also `[]`), never
+        // against the `customConfig` passed to `wrapWithSandboxArgv` here.
+        // A per-call allowlist used to exist on `ExecRequest` (`allowHosts`)
+        // and looked like a working door — nothing read it, and even a
+        // caller that populated it by hand could not change what the proxy
+        // actually allows through this path. Removed rather than repaired
+        // (measured 2026-09-04, docs/evidence/consegna-github-2026-09-04.md
+        // §2.1): making per-call domains real needs a session-config swap
+        // around each command, which races concurrent execs sharing this
+        // one SandboxManager — a bigger change than this door pretended to be.
+        allowedDomains: [],
         deniedDomains: [],
         ...(process.platform === 'linux' ? { allowAllUnixSockets: true } : {}),
       },
       filesystem: {
         denyRead: [...this.guards.denyRead],
         allowWrite: [...req.writeScope, scratch],
-        denyWrite: [...this.guards.denyWrite],
+        // `nestedGitHooksDirs` walks every writable root fresh, THIS call —
+        // see its docstring for why neither `this.guards.denyWrite` (fixed
+        // once per turn) nor srt's own nested-repo protection (anchored to
+        // its own process, not `req.cwd`) cover a checkout cloned mid-turn.
+        denyWrite: [
+          ...this.guards.denyWrite,
+          ...new Set([req.cwd, ...req.writeScope].flatMap((root) => nestedGitHooksDirs(root))),
+        ],
       },
     };
 

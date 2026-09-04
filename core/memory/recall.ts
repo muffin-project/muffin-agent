@@ -570,13 +570,57 @@ export async function recall(
 
   // --- half two: meaning -----------------------------------------------------
   if (deps.vectors) {
+    // Solo la ricerca vera e propria, deliberatamente: misurato 2026-09-04,
+    // questo `try` avvolgeva anche la lettura della provenienza di OGNI hit
+    // qui sotto, quindi un guasto dello store a metà del `forEach` (una riga
+    // corrotta, un lock, un file mancante) interrompeva l'iterazione INTERA —
+    // perdendo la provenienza degli hit non ancora processati, non solo di
+    // quello guasto — e il risultato veniva etichettato `vector-non-disponibile`,
+    // la stessa frase che dice "l'embedder è giù". Le due cose non sono la
+    // stessa: la ricerca vettoriale era riuscita, a fallire è stata la lettura
+    // a valle. Confonderle nasconde un guasto dello store dietro una frase
+    // che dice all'owner di controllare Ollama.
+    let vectorHits: Awaited<ReturnType<NonNullable<typeof deps.vectors>['search']>>;
+    let searchFallita = false;
     try {
-      const vectorHits = await deps.vectors.search(tenantId, query, limit * 2);
-      // Always, not only when there were hits: "the semantic half was starved"
-      // and "the semantic half ran and found nothing" are different facts, and
-      // a caller reading `strategies` cannot otherwise tell them apart.
-      strategies.push('vector');
-      vectorHits.forEach((hit, rank) => {
+      vectorHits = await deps.vectors.search(tenantId, query, limit * 2);
+    } catch (error) {
+      searchFallita = true;
+      // A missing embedder degrades recall; it must never take the turn down,
+      // and it must never pretend the semantic half ran.
+      //
+      // La causa, non la classe. `error.name` sembrava dire qualcosa e non
+      // diceva niente: ogni guasto dell'embedder arriva qui gia' avvolto in
+      // `EmbedderUnavailable`, quindi quel nome era una **costante** — la
+      // stessa parola per ollama giu', per il modello inesistente e per la
+      // rete caduta, che sono i tre casi per cui uno guarda questa riga.
+      // `causa` e' il campo che li separa (`TypeError (ECONNREFUSED)`,
+      // `HTTP 404`, `dimensione 768, attesa 1024`), ed e' gia' costruito in
+      // una forma che non puo' portare l'URL dell'embedder.
+      strategies.push(
+        `vector-non-disponibile(${
+          error instanceof EmbedderUnavailable ? error.causa : error instanceof Error ? error.name : 'errore'
+        })`,
+      );
+      vectorHits = [];
+    }
+    // Always, not only when there were hits: "the semantic half was starved"
+    // and "the semantic half ran and found nothing" are different facts, and
+    // a caller reading `strategies` cannot otherwise tell them apart. Pushed
+    // only when the search itself succeeded — the `catch` above already named
+    // its own outcome, and pushing both would say the half both ran and did
+    // not on the same call.
+    if (!searchFallita) strategies.push('vector');
+    let righePerse = 0;
+    vectorHits.forEach((hit, rank) => {
+      // Una riga alla volta: la ricerca vettoriale è già riuscita per TUTTI
+      // questi hit, quindi un guasto nella lettura a valle di uno solo (una
+      // provenienza, un fatto) non deve costare gli altri — `forEach` non
+      // continuerebbe da solo dopo un `throw`, e senza questo `try` un unico
+      // hit corrotto avrebbe azzerato l'intera metà semantica di questa
+      // chiamata, silenziosamente scambiata per "l'embedder è giù" dal
+      // `catch` esterno che c'era prima.
+      try {
         if (hit.kind === 'fact') {
           // A superseded belief stays embedded forever — nothing re-embeds on
           // supersede — so paraphrase can match its old text years later. The
@@ -653,30 +697,15 @@ export async function recall(
           ...episodeOrigin(hit.sourceId),
           ...(provenance.supersededAt == null ? {} : { expired: true }),
         }, rank);
-      });
-    } catch (error) {
-      // A missing embedder degrades recall; it must never take the turn down,
-      // and it must never pretend the semantic half ran.
-      //
-      // La causa, non la classe. `error.name` sembrava dire qualcosa e non
-      // diceva niente: ogni guasto dell'embedder arriva qui gia' avvolto in
-      // `EmbedderUnavailable`, quindi quel nome era una **costante** — la
-      // stessa parola per ollama giu', per il modello inesistente e per la
-      // rete caduta, che sono i tre casi per cui uno guarda questa riga.
-      // `causa` e' il campo che li separa (`TypeError (ECONNREFUSED)`,
-      // `HTTP 404`, `dimensione 768, attesa 1024`), ed e' gia' costruito in
-      // una forma che non puo' portare l'URL dell'embedder.
-      //
-      // Il ramo `Error` non e' un residuo: questo `try` avvolge anche la
-      // lettura della provenienza, quindi un guasto dello store puo' finire
-      // qui. Per quello il nome della classe e' l'unica cosa vera che si
-      // possa dire — e va detta cosi', senza vestirlo da causa di rete.
-      strategies.push(
-        `vector-non-disponibile(${
-          error instanceof EmbedderUnavailable ? error.causa : error instanceof Error ? error.name : 'errore'
-        })`,
-      );
-    }
+      } catch {
+        // Questo hit non entra nel risultato — non l'intera metà semantica.
+        // Il conteggio, non l'errore per riga: `strategies` è una linea di
+        // riepilogo, non un log, e un hit corrotto non porta un messaggio che
+        // valga la pena distinguere da un altro.
+        righePerse += 1;
+      }
+    });
+    if (righePerse > 0) strategies.push(`vector-righe-perse(${righePerse})`);
   } else {
     strategies.push('vector-non-configurato');
   }

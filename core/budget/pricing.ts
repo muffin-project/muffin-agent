@@ -20,16 +20,59 @@
 
 export type Price = { inputPerMTok: number; outputPerMTok: number; cachedInputPerMTok?: number };
 
-/** Public list prices, 2026-08. Matched by substring, longest pattern first. */
+/**
+ * Public list prices. Matched by substring, longest pattern first.
+ *
+ * **Re-verified 2026-09-04, from the source, not from memory or the previous
+ * diff.** The three Claude rows were checked against
+ * `platform.claude.com/docs/en/about-claude/pricing` (fetched directly) and
+ * left as they were: `claude-haiku` matches Haiku 4.5 exactly ($1/$5), and
+ * `claude-opus`/`claude-sonnet` sit ABOVE the current flagships (Opus 5 is
+ * $5/$25, not $15/$75; Sonnet 5's $2/$10 launch price is now confirmed
+ * permanent, not $3/$15) — stale toward the safe side this header already
+ * names, so left alone rather than tightened.
+ *
+ * The five open-weight rows were a different measurement, and wrong in the
+ * dangerous direction. These families have no single "official" price —
+ * they are weights, hosted by whichever provider will run them — so the
+ * number here has to answer "what does THIS install actually get billed",
+ * which is whatever the OpenRouter-compatible endpoint charges
+ * (`agent/providers/openai-compat.ts` is the door every non-Anthropic model
+ * goes through). Fetched `openrouter.ai/api/v1/models` and the per-model
+ * pricing pages directly, 2026-09-04, and took the highest rate any listed
+ * host charged for the family's current generation — the same "charge HIGH"
+ * rule this file already applies to `UNKNOWN`, now applied inside each
+ * pattern too, because a family spans hosts at prices five to twenty times
+ * apart and picking the cheap one is how five of these eight rows had gone
+ * quietly wrong:
+ *
+ *   - `gpt-oss`: was $0.05/$0.2, measured $0.02–0.35/$0.10–0.75 across hosts
+ *     for gpt-oss-120b/20b (`openrouter.ai/openai/gpt-oss-120b`) — Cerebras's
+ *     $0.35/$0.75 is the ceiling used here, 7×/3.75× the old number.
+ *   - `qwen3`: was $0.1/$0.3, measured $0.03–2.00/$0.13–6.00 across the
+ *     qwen3.x line (`openrouter.ai/api/v1/models`) — the flagship
+ *     qwen3.8-max ceiling is 20× the old number on both sides.
+ *   - `gemma`: was $0.13/$0.4, measured up to $0.15/$0.60 for Gemma 4
+ *     26B-A4B on Google Vertex (`openrouter.ai/google/gemma-4-26b-a4b-it`) —
+ *     the smallest miss of the five, but still under the ceiling.
+ *   - `glm`: was $0.1/$0.3, measured up to $1.40/$4.40 for GLM-5.3
+ *     (`openrouter.ai/api/v1/models`) — 14×/~15× the old number.
+ *   - `deepseek`: was $0.3/$1.1, measured up to $1.1154/$3.3462 for
+ *     deepseek-v4-pro-0813 (`openrouter.ai/api/v1/models`), rounded up —
+ *     the old number was tuned to the cheap "flash" tier and undercharged
+ *     the "pro" tier this repo's own model comparison
+ *     (`docs/evidence/economia-dei-modelli.md`) already flags as the one
+ *     used for real capability.
+ */
 const PRICES: [pattern: string, price: Price][] = [
   ['claude-opus', { inputPerMTok: 15, outputPerMTok: 75, cachedInputPerMTok: 1.5 }],
   ['claude-sonnet', { inputPerMTok: 3, outputPerMTok: 15, cachedInputPerMTok: 0.3 }],
   ['claude-haiku', { inputPerMTok: 1, outputPerMTok: 5, cachedInputPerMTok: 0.1 }],
-  ['gpt-oss', { inputPerMTok: 0.05, outputPerMTok: 0.2 }],
-  ['qwen3', { inputPerMTok: 0.1, outputPerMTok: 0.3 }],
-  ['gemma', { inputPerMTok: 0.13, outputPerMTok: 0.4 }],
-  ['glm', { inputPerMTok: 0.1, outputPerMTok: 0.3 }],
-  ['deepseek', { inputPerMTok: 0.3, outputPerMTok: 1.1 }],
+  ['gpt-oss', { inputPerMTok: 0.35, outputPerMTok: 0.75 }],
+  ['qwen3', { inputPerMTok: 2, outputPerMTok: 6 }],
+  ['gemma', { inputPerMTok: 0.15, outputPerMTok: 0.6 }],
+  ['glm', { inputPerMTok: 1.4, outputPerMTok: 4.4 }],
+  ['deepseek', { inputPerMTok: 1.12, outputPerMTok: 3.35 }],
 ];
 
 /**
