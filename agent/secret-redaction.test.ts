@@ -106,6 +106,7 @@ function bench(tools: RegisteredTool[]) {
       budgetExhausted: () => false,
       hardened: true,
     }),
+    capabilities: new Map(decls.map((d) => [d.id, d])),
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions: store,
     turns,
