@@ -295,6 +295,43 @@ try {
       const trascrizioni = c.filter((x) => (x.method === 'sendMessage' || x.method === 'editMessageText') && /✓ leggo un file/.test(testo(x)));
       esito('trascrizione · i passi restano in un messaggio vero', trascrizioni.length > 0, `${String(trascrizioni.length)} scritture con «✓ leggo un file»`);
       esito('trascrizione · niente cancellato', !c.some((x) => x.method === 'deleteMessage'), `${String(c.filter((x) => x.method === 'deleteMessage').length)} deleteMessage`);
+
+      /**
+       * Lo **stato finale** del messaggio della trascrizione, non l'esistenza
+       * di una scrittura qualsiasi.
+       *
+       * I due controlli sopra, da soli, non chiudono B13. «Almeno una scrittura
+       * conteneva un passo» resta vero anche se l'ultima `editMessageText` su
+       * quel messaggio sostituisce l'elenco dei passi con la sola risposta: e
+       * cancellare i passi con una edit invece che con un `deleteMessage` e'
+       * esattamente cio' di cui l'owner si e' lamentato il 03/09 — «non voglio
+       * perdere gli step che ha fatto». Un banco che guarda solo le scritture
+       * intermedie non puo' vedere la differenza fra «i passi restano» e «i
+       * passi sono stati sovrascritti», che e' la domanda.
+       *
+       * Quindi: si prende il `message_id` del messaggio di trascrizione, si
+       * guarda l'ULTIMA scrittura che lo tocca, e si pretende che i passi
+       * siano ancora li'.
+       */
+      const nato = c.find((x) => x.method === 'sendMessage' && /✓ leggo un file/.test(testo(x)));
+      const idTrascrizione = nato?.messageId;
+      if (nato === undefined || idTrascrizione === undefined) {
+        esito(
+          'trascrizione · i passi ci sono ancora alla fine',
+          false,
+          'nessun messaggio di trascrizione con un message_id: non posso guardarne lo stato finale',
+        );
+      } else {
+        const suQuelMessaggio = c.filter(
+          (x) => x.method === 'editMessageText' && x.payload['message_id'] === idTrascrizione,
+        );
+        const ultima = suQuelMessaggio.at(-1) ?? nato;
+        esito(
+          'trascrizione · i passi ci sono ancora alla fine, non solo durante',
+          /✓ leggo un file/.test(testo(ultima)),
+          `${String(suQuelMessaggio.length)} edit sul messaggio #${String(idTrascrizione)}; ultima: ${testo(ultima).slice(0, 120).replace(/\n/g, ' ⏎ ')}`,
+        );
+      }
       const troppo = inviati().filter((x) => testo(x).length > TELEGRAM_MAX);
       esito('niente tagliato · ogni messaggio entro il limite', troppo.length === 0, `${String(troppo.length)} oltre ${String(TELEGRAM_MAX)} caratteri`);
       const ask = c.find((x) => x.method === 'sendMessage' && x.payload['reply_markup'] !== undefined);
