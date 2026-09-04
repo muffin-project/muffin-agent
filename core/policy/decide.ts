@@ -231,6 +231,20 @@ export function createDecide(ctx: PolicyContext): Decide {
       // and nothing here noticed (audit 2026-08-16, P04-1). A clean
       // destination is not the same claim as a clean request: the model chose
       // everything after it.
+      // Un buco aperto, dichiarato invece che lasciato implicito: `hasParams`
+      // guarda `search` e `hash` e dice a voce alta di **non** guardare il
+      // path. ADR-0066 ha tolto l'allowlist alla lettura e non ha messo
+      // niente al suo posto per il path, quindi `https://evil/<segreto>` non
+      // incontra nessun cancello — ed e' la ragione per cui lo scenario di
+      // accettazione D10 e' rosso su `dev` da allora (asseriva la protezione
+      // vecchia, ritirata da ADR-0066 senza che la prova la seguisse).
+      //
+      // Chiuderlo con la provenienza funziona — «ogni URL non citato passa
+      // dal cancello» — ma **chiude anche ogni lettura in un gruppo** che non
+      // sia un link incollato alla lettera, misurato su
+      // `runtime-wiring.test.ts` e `egress-gate.test.ts`. E' il contrario
+      // della direzione dell'owner del 04/09 (*«non puo non entrare»*), ed e'
+      // un'inversione di ADR-0066: va decisa da lui, non qui.
       if (hasParams(resource.value)) {
         const gated = gateParams(
           principal,
@@ -239,6 +253,11 @@ export function createDecide(ctx: PolicyContext): Decide {
           decl.resourceKind === 'url-read'
             ? `lettura con parametri scelti dal contenuto: ${resource.value}`
             : `egress con parametri verso host allowlisted: ${resource.value}`,
+          // Solo qui, e solo sull'URL **intero**. Un aggressore che
+          // concatena un suo prefisso con byte letti altrove non produce una
+          // stringa che era già presente; uno che pubblica l'URL completo
+          // conosceva già ciò che ci ha messo dentro.
+          req.quoted === true,
         );
         if (gated) return gated;
       }
@@ -259,7 +278,15 @@ export function createDecide(ctx: PolicyContext): Decide {
           detail: `${capability} declares a query resource but received ${resource.kind} — refusing rather than skipping the check`,
         };
       }
-      const gated = gateParams(principal, taint, ctx.matrix.paramsMaxTaint, `ricerca: "${resource.value}"`);
+      // `quoted: false`, sempre e per costruzione. Una query di ricerca è
+      // **scritta** dal modello: è linguaggio naturale, non un indirizzo che
+      // si copia. Passare qui la provenienza aprirebbe l'esfiltrazione che
+      // questo gate esiste per fermare — misurato: `read-then-egress.test.ts`
+      // legge un segreto da un file avvelenato e lo cerca *letteralmente*,
+      // quindi «era già negli ingressi» è vero ed è vero **perché** è il
+      // segreto. La citazione regge per un URL (l'indirizzo esisteva prima
+      // che il dato fosse visto) e non regge per un payload.
+      const gated = gateParams(principal, taint, ctx.matrix.paramsMaxTaint, `ricerca: "${resource.value}"`, false);
       if (gated) return gated;
     }
 
@@ -352,13 +379,40 @@ function hostOf(value: string): string | null {
  * still falls through to the risk-class switch below, exactly as the url
  * branch already did once the allowlist cleared.
  */
-function gateParams(principal: Principal, taint: TrustTier, ceiling: TrustTier, prompt: string): Decision | null {
-  if (taint <= ceiling) return null;
-  if (isOwnerPrincipal(principal)) return ask(prompt);
+function gateParams(
+  principal: Principal,
+  taint: TrustTier,
+  ceiling: TrustTier,
+  prompt: string,
+  quoted: boolean,
+): Decision | null {
+  // Byte che erano già nel turno prima che il modello scrivesse: nessuno li
+  // ha *scelti* qui, quindi non c'è niente da mostrare a nessuno. È il ramo
+  // che rende utilizzabile un giro di ricerca — cerca, apri un link, apri il
+  // prossimo — senza chiedere il permesso a ogni passo per un URL che Muffin
+  // ha copiato invece di comporre. Vedi `DecisionRequest.quoted` per perché
+  // regge come argomento di sicurezza e non solo di comodità.
+  if (quoted) return null;
+
+  if (isOwnerPrincipal(principal)) {
+    return taint <= ceiling ? null : ask(prompt);
+  }
+
+  // Un principal che non è l'owner e ha **composto** byte in uscita: qui non
+  // c'è nessuno a cui chiedere. In un gruppo `ask` non raggiunge nessuno che
+  // possa rispondere, quindi degradare a domanda non sarebbe una difesa.
+  //
+  // Questo chiude il buco misurato in `muffin-nei-gruppi-2026-09-04.md` §6.1:
+  // `taint <= ceiling` era vero **per costruzione** per ogni turno di gruppo
+  // (`tierOf(member)` è 2, `paramsMaxTaint` è 2), quindi la prima query
+  // inventata usciva sempre senza che nessuno la vedesse. Con la provenienza
+  // il criterio smette di essere un numero che i gruppi hanno già raggiunto
+  // in partenza e diventa una domanda a cui si può rispondere: questi byte
+  // vengono da qualche parte, o se li è inventati adesso?
   return {
     effect: 'deny',
     code: 'resource_denied',
-    detail: `params blocked at taint ${taint} (ceiling ${ceiling})`,
+    detail: `params composed by the model, not quoted from this turn (taint ${taint}, ceiling ${ceiling})`,
   };
 }
 
