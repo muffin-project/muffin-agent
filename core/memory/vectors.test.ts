@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { VectorIndex } from './vectors.js';
 import { MEMORY_SCHEMA } from './schema.js';
 import { makeEmbedder, toVectorBlob, type Embedder } from './embed.js';
+import { MemoryStore } from './store.js';
 
 /**
  * Cambiare embedder cambia la dimensione dei vettori, e la dimensione è
@@ -202,5 +203,93 @@ describe('la tabella vettoriale segue l\'embedder', () => {
     await nuovo.index('host', nuovo.indexBacklog('host'), '2026-08-27');
     expect(conta(db, 'chunks')).toBe(conta(db, 'chunks_vec'));
     expect(conta(db, 'chunks_vec')).toBe(1);
+  });
+});
+
+/**
+ * A request-fact never gets its own vector.
+ *
+ * Measured on the owner's real database (docs/decisions/0067,
+ * §"La misura, riprodotta"): 12 distinct already-answered requests from
+ * 08/27–08/30 resurfaced through this exact channel — direct semantic match
+ * on a standalone fact vector, with no recency discipline at all — across 9
+ * of 15 representative "today" queries that shared nothing but vocabulary
+ * with them. The entity graph hop (`recall.ts`, `EXPANSION_SLOTS`) already
+ * caps by recency; this half of recall never did, because a fact's chunk is
+ * indexed and searched with no notion of "how many other facts this subject
+ * has gained since".
+ */
+describe('un fatto-richiesta non entra mai nell\'indice semantico', () => {
+  let db: DatabaseCtor.Database | undefined;
+  afterEach(() => db?.close());
+
+  const conFatti = (): { store: MemoryStore; askId: number; lawId: number } => {
+    db = new DatabaseCtor(':memory:');
+    const store = new MemoryStore(db);
+    const owner = store.upsertEntity('host', 'owner', 'person', '2026-08-27');
+    const ep = store.addEpisode({
+      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
+      kind: 'message', content: 'elenca i file .md della cartella corrente', trustTier: 0, createdAt: '2026-08-27',
+    });
+    const askId = store.addFact({
+      tenantId: 'host', subjectId: owner, predicate: 'asked_to',
+      objectValue: 'elenca i file .md della cartella corrente', episodeId: ep,
+      trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: '2026-08-27',
+    });
+    const lawId = store.addFact({
+      tenantId: 'host', subjectId: owner, predicate: 'lives_in', objectValue: 'Cagliari',
+      episodeId: ep, trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: '2026-08-27',
+    });
+    return { store, askId, lawId };
+  };
+
+  it('indexBacklog skips a request-family predicate and keeps an ordinary one', () => {
+    conFatti();
+    const vectors = new VectorIndex(db!, finto('fake', 4));
+    const backlog = vectors.indexBacklog('host');
+    const factRows = backlog.filter((b) => b.kind === 'fact');
+    // Two facts on the entity, one episode: one fact-shaped candidate, not two.
+    expect(factRows).toHaveLength(1);
+    expect(factRows[0]!.text).toContain('lives_in');
+  });
+
+  it('every compound on the same stem is skipped too, not only the exact predicates', () => {
+    conFatti();
+    const store = new MemoryStore(db!);
+    const owner = store.entitiesByName('host', 'owner')[0]!.id;
+    const ep = store.addEpisode({
+      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
+      kind: 'message', content: 'un saluto', trustTier: 0, createdAt: '2026-08-27',
+    });
+    store.addFact({
+      tenantId: 'host', subjectId: owner, predicate: 'asks_to_greet', objectValue: 'salutare',
+      episodeId: ep, trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: '2026-08-27',
+    });
+    const vectors = new VectorIndex(db!, finto('fake', 4));
+    const backlog = vectors.indexBacklog('host');
+    expect(backlog.filter((b) => b.kind === 'fact' && b.text.includes('asks_to_greet'))).toHaveLength(0);
+  });
+
+  it('forgetRequestFacts retracts a chunk embedded before this policy existed, and only that one', async () => {
+    const { askId, lawId } = conFatti();
+    // Simulates a corpus that consolidated before `sqlBacklog` learned to skip
+    // this family: both facts already have a standalone vector.
+    const vectors = new VectorIndex(db!, finto('fake', 4));
+    await vectors.index('host', [
+      { kind: 'fact', sourceId: askId, text: 'owner asked_to elenca i file .md della cartella corrente' },
+      { kind: 'fact', sourceId: lawId, text: 'owner lives_in Cagliari' },
+    ], '2026-08-27');
+    expect(conta(db!, 'chunks')).toBe(2);
+
+    const removed = vectors.forgetRequestFacts('host');
+    expect(removed).toBe(1);
+    expect(conta(db!, 'chunks')).toBe(1);
+    expect(conta(db!, 'chunks_vec')).toBe(1);
+    expect(
+      (db!.prepare(`SELECT source_id FROM chunks`).get() as { source_id: number }).source_id,
+    ).toBe(lawId);
+
+    // Idempotent: nothing left to retract the second time.
+    expect(vectors.forgetRequestFacts('host')).toBe(0);
   });
 });

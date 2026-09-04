@@ -2,7 +2,7 @@ import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
@@ -223,5 +223,168 @@ describe('una correzione pendente quando il turno si sospende', () => {
     expect(quante(w.provider.seen[2]!.messages, CORREZIONE)).toBe(1);
     expect(quante(w.turns.get(first.turnId)!.messages, CORREZIONE)).toBe(1);
     expect(quante(w.sessions.read(session), CORREZIONE)).toBe(0);
+  });
+});
+
+/**
+ * `/steer` mandato mentre la corsia sta GIÀ eseguendo un turno ripreso — non
+ * prima che si sospenda (i test sopra), un caso diverso: qui la correzione
+ * arriva dopo il risveglio, mentre il tool call del resume sta girando.
+ *
+ * Chiuso 2026-09-04. `drive()` (`agent/loop.ts`) legge `options.steer` a ogni
+ * giro da sempre, e `runTurn` lo inoltra da sempre — ma `resumeTurn` fino a
+ * oggi accettava solo `onDelta`/`onProgress` da `ResumeStream`: `steer` (e
+ * `signal`, per `/stop`) non erano nel tipo, quindi nessun chiamante poteva
+ * passarli, quale che fosse il connettore. Il meccanismo esisteva
+ * (`options.steer` in `drive`) e la produzione non lo raggiungeva per un
+ * turno ripreso — la stessa forma di guasto che questo repository chiama
+ * "un meccanismo che c'è e la produzione non lo raggiunge".
+ *
+ * Il sintomo misurato era in `connectors/telegram/connector.ts`: `vivi` (la
+ * mappa "turno vivo per questa chat" che `/steer`/`/stop` consultano) veniva
+ * popolata solo da `handle()`, mai da `resumeStream` — quindi un `/steer`
+ * mandato mentre un turno ripreso girava trovava `vivi.has(chatId)` falso e
+ * rispondeva «nessun turno in corso», falso. Questo file prova il livello
+ * sotto quel sintomo (`resumeTurn` stesso), perché è lì che il filo era
+ * reciso; `connectors/telegram/busy.test.ts` prova che l'owner riceve
+ * davvero l'effetto attraverso il connettore vero.
+ */
+describe('/steer durante l esecuzione di un turno che la corsia ha già ripreso', () => {
+  it('resumeTurn inoltra `steer` a `drive` come runTurn — la correzione arriva al giro dopo quello in cui è stata scritta, dentro la STESSA ripresa', async () => {
+    const coda: string[] = [];
+    // 1ª chiamata: sospende su `wait` (nessuna correzione ancora).
+    // 2ª chiamata: il PRIMO giro del resume — chiama `http_get`, e la
+    // correzione viene scritta mentre questa chiamata è "in volo" (`durante`
+    // corre prima che `drive` droni il turno risultato del tool).
+    // 3ª chiamata: il giro successivo, ANCORA dentro lo stesso `resumeTurn` —
+    // deve vedere la correzione.
+    const w = world([call('wait', { seconds: 3600 }), call('http_get'), answer('fatto')], (n) => {
+      if (n === 2) coda.push(CORREZIONE);
+    });
+
+    const first = await runTurn(w.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'telegram',
+      session: w.sessions.open('ripreso-vivo'),
+      text: 'cerca e poi aspetta',
+    });
+    expect(first.stopped).toBe('suspended');
+    expect(w.provider.seen).toHaveLength(1);
+    expect(coda).toEqual([]); // non scritta ancora: il turno dorme
+
+    // La leva che un connettore come Telegram (`resumeStream`,
+    // `connectors/telegram/connector.ts`) ora passa: lo stesso `() =>
+    // vivo.correzioni.splice(0)` che `handle()` passa a `runTurn`.
+    const resumed = await resumeTurn(w.deps, first.turnId, { steer: () => coda.splice(0) });
+
+    expect('why' in resumed).toBe(false);
+    expect(w.provider.seen).toHaveLength(3);
+    // Non alla chiamata dove è stata scritta (troppo tardi per quella, la
+    // richiesta era già in volo) — a quella dopo, nella STESSA ripresa.
+    expect(prompt(w.provider.seen[1])).not.toContain(CORREZIONE);
+    expect(prompt(w.provider.seen[2])).toContain(CORREZIONE);
+    expect(coda).toEqual([]); // drenata, non lasciata per il prossimo risveglio
+  });
+
+  it('senza `steer` passato a resumeTurn, una correzione scritta durante la ripresa non arriva mai (il gap che questa fix chiude)', async () => {
+    const coda: string[] = [];
+    const w = world([call('wait', { seconds: 3600 }), call('http_get'), answer('fatto')], (n) => {
+      if (n === 2) coda.push(CORREZIONE);
+    });
+    const first = await runTurn(w.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'telegram',
+      session: w.sessions.open('ripreso-senza-leva'),
+      text: 'cerca e poi aspetta',
+    });
+    expect(first.stopped).toBe('suspended');
+
+    // Nessun `steer` nel terzo argomento — la forma di `resumeTurn` prima di
+    // questo commit, e ancora una chiamata legittima oggi (uno stream senza
+    // leva, es. un resume da un processo senza connettore vivo).
+    const resumed = await resumeTurn(w.deps, first.turnId);
+
+    expect('why' in resumed).toBe(false);
+    expect(prompt(w.provider.seen[2])).not.toContain(CORREZIONE);
+    // La correzione non è sparita: è ancora nella coda del chiamante, che
+    // resta responsabile di consegnarla altrove (`/steer` di nuovo, un
+    // prossimo risveglio con la leva questa volta).
+    expect(coda).toEqual([CORREZIONE]);
+  });
+});
+
+/**
+ * ADR-0054 §2: la correzione che nessun giro consuma viene ripescata a fine
+ * turno da `finish` (`scriviCorrezioniInSessione` in `agent/loop.ts`) e
+ * scritta in sessione con `deps.sessions.append`. Chiuso 2026-09-04.
+ *
+ * Prima di questa fix, un `sessions.append` che lanciava finiva SOLO in un
+ * attributo dello span di tracing (`muffin.turn.steer_residuo_error`) — mai
+ * letto da nessuna superficie, mai visto da nessun owner. La correzione
+ * spariva e il turno rispondeva come se niente fosse: esattamente il
+ * "silenzioso" che l'assegnazione misura. Ora `scriviCorrezioniInSessione`
+ * riporta l'esito e `finish` lo aggiunge al testo che l'owner legge — lo
+ * stesso canale con cui ogni altra risposta arriva, senza dover toccare
+ * nessun connettore di superficie.
+ */
+describe('sessions.append fallito nella ripesca finale di /steer non è più silenzioso', () => {
+  it('il turno finisce comunque, ma la risposta dice che la correzione non è stata salvata', async () => {
+    const coda: string[] = [];
+    // Un solo giro, senza tool: `finish` è l'unico punto che ripesca questa
+    // correzione (nessun giro successivo la consuma prima).
+    const w = world([answer('fatto subito')], (n) => {
+      if (n === 1) coda.push(CORREZIONE);
+    });
+    // Solo la scrittura della correzione residua fallisce — il preambolo del
+    // turno (`sessions.append` con il messaggio dell'owner che apre il
+    // turno) deve continuare a funzionare, o il test proverebbe un guasto
+    // diverso da quello che sta misurando.
+    const originaleAppend = w.sessions.append.bind(w.sessions);
+    vi.spyOn(w.sessions, 'append').mockImplementation((session, message) => {
+      if (message.content === CORREZIONE) throw new Error('disco pieno (simulato)');
+      return originaleAppend(session, message);
+    });
+
+    const result = await runTurn(w.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'telegram',
+      session: w.sessions.open('steer-perso'),
+      text: 'rispondi subito',
+      steer: () => coda.splice(0),
+    });
+
+    // Il guasto di una sessione non deve trasformare un turno riuscito in un
+    // errore (lo dice già il commento su `scriviCorrezioniInSessione`).
+    expect(result.stopped).toBe('answered');
+    expect(result.text).toContain('fatto subito');
+    // L'avviso non lo compone piu' `finish` con una costante di modulo: da
+    // ADR-0054 §2 (emendamento 03/09c) c'e' un solo punto che svuota la porta
+    // dello `/steer`, l'imbuto in `drive`, ed e' lui a parlare. La promessa
+    // misurata qui non cambia — l'owner deve **sapere** che la correzione e'
+    // andata persa — e in piu' l'imbuto gliela **ricita**, cosi' puo'
+    // rimandarla senza riscriverla a memoria.
+    expect(result.text).toContain('riuscito a salvare la correzione');
+    expect(result.text).toContain(CORREZIONE);
+  });
+
+  it('senza guasto, la stessa correzione residua non lascia traccia nella risposta (il caso normale)', async () => {
+    const coda: string[] = [];
+    const w = world([answer('fatto subito')], (n) => {
+      if (n === 1) coda.push(CORREZIONE);
+    });
+
+    const result = await runTurn(w.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'telegram',
+      session: w.sessions.open('steer-ok'),
+      text: 'rispondi subito',
+      steer: () => coda.splice(0),
+    });
+
+    expect(result.text).toBe('fatto subito');
   });
 });

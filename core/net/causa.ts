@@ -79,6 +79,22 @@ const FORMA_DI_NOME = /^[A-Za-z][A-Za-z0-9]{0,30}$/;
 /** Quando non si puo' dire niente di sicuro, si dice questo — e non si tace. */
 const IGNOTA = 'errore di rete';
 
+/**
+ * Quanti anelli di `.cause` seguire prima di arrendersi. Misurato il 3-4/09/2026
+ * sulla macchina dell'owner: con un solo livello attivo (`error.cause.code`),
+ * 3188 righe su 4748 (67%) restavano `Telegram 0: TypeError` nuda — il
+ * meccanismo esisteva e in due casi su tre non scattava. `fetch` di Node
+ * (undici) incapsula un fallimento di trasporto come `TypeError('fetch
+ * failed', { cause })`, ma quella `cause` e' a sua volta un altro errore che
+ * a volte porta il codice **e a volte lo tiene un livello piu' sotto**
+ * (`SocketError` → causa originale del sistema operativo): un solo salto non
+ * basta a raggiungerlo sempre. Un tetto piccolo, non un giro senza fine: la
+ * catena e' generata da `fetch`, non da input esterno, ma nulla vieta a una
+ * versione futura di undici di aggiungerne un anello e non e' questo il posto
+ * per scoprirlo con uno stack overflow.
+ */
+const MAX_PROFONDITA_CAUSA = 5;
+
 export function causaDiRete(error: unknown): string {
   if (!(error instanceof Error)) return IGNOTA;
 
@@ -89,12 +105,33 @@ export function causaDiRete(error: unknown): string {
   const dichiarato = error.name;
   const nome = FORMA_DI_NOME.test(dichiarato) ? dichiarato : IGNOTA;
 
+  const codice = trovaCodice(error, MAX_PROFONDITA_CAUSA);
+  if (codice !== undefined) return `${nome} (${codice})`;
+  return nome;
+}
+
+/**
+ * Scende `.cause` un anello alla volta, non solo il primo: vedi
+ * `MAX_PROFONDITA_CAUSA` sopra per il perche'. Ogni anello e' controllato con
+ * la stessa forma imposta del livello zero — niente di quello che un URL puo'
+ * avere passa, a nessuna profondita' — cosi' un token che risalisse la catena
+ * non avrebbe comunque dove uscire.
+ */
+function trovaCodice(error: Error, profonditaResidua: number): string | undefined {
+  if (profonditaResidua <= 0) return undefined;
+
   // `cause` e' `unknown` per contratto e puo' essere qualsiasi cosa: una
   // stringa, null, un oggetto senza `code`. Si legge difensivamente e si
   // accetta solo una stringa della forma giusta.
   const causa = (error as { cause?: unknown }).cause;
-  const codice = typeof causa === 'object' && causa !== null ? (causa as { code?: unknown }).code : undefined;
+  if (typeof causa !== 'object' || causa === null) return undefined;
 
-  if (typeof codice === 'string' && FORMA_DI_CODICE.test(codice)) return `${nome} (${codice})`;
-  return nome;
+  const codice = (causa as { code?: unknown }).code;
+  if (typeof codice === 'string' && FORMA_DI_CODICE.test(codice)) return codice;
+
+  // Nessun codice a questo livello: se la causa e' a sua volta un `Error` (e
+  // solo allora — un oggetto qualsiasi non ha una `.cause` propria da
+  // seguire), si prova un livello piu' sotto.
+  if (causa instanceof Error) return trovaCodice(causa, profonditaResidua - 1);
+  return undefined;
 }

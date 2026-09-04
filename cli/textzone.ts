@@ -81,7 +81,7 @@ export type TextzoneDeps = {
  * Misurato pilotando il REPL vero dentro un pty il 28/08/2026.
  */
 export function larghezzaVisibile(testoRiga: string): number {
-  // eslint-disable-next-line no-control-regex
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching raw ANSI escape sequences to measure visible width
   return testoRiga.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').length;
 }
 
@@ -456,6 +456,7 @@ export function rigaDelCursore(input: NodeJS.ReadStream, output: Pick<NodeJS.Wri
     };
     const onData = (chunk: Buffer | string): void => {
       buffer += String(chunk);
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: matching the terminal's cursor-position report (ESC [ row ; col R)
       const m = /\x1b\[(\d+);(\d+)R/.exec(buffer);
       if (!m) return;
       fine(Number(m[1]), buffer.slice(0, m.index) + buffer.slice(m.index + m[0].length));
