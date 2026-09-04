@@ -1036,7 +1036,7 @@
   },
   "cli/memory.ts:256": {
     "path": "cli/memory.ts",
-    "line": 290,
+    "line": 291,
     "testo": "total.skippedEmpty += report.skippedEmpty;"
   },
   "cli/memory.ts:28": {
@@ -1046,7 +1046,7 @@
   },
   "cli/memory.ts:326": {
     "path": "cli/memory.ts",
-    "line": 358,
+    "line": 361,
     "testo": "* `verbose` reveals the judge's raw response on a row it could not read"
   },
   "cli/observe.ts:67": {
@@ -1476,62 +1476,62 @@
   },
   "core/memory/ingest.ts:117": {
     "path": "core/memory/ingest.ts",
-    "line": 151,
+    "line": 158,
     "testo": "* `judgeUnavailable` below instead, kept apart rather than folded in here."
   },
   "core/memory/ingest.ts:176": {
     "path": "core/memory/ingest.ts",
-    "line": 210,
+    "line": 217,
     "testo": "`giudice non disponibile su ${g.subject}/${g.predicate}` +"
   },
   "core/memory/ingest.ts:235": {
     "path": "core/memory/ingest.ts",
-    "line": 286,
+    "line": 294,
     "testo": "// would read as \"stuck\" on exactly the page that was working."
   },
   "core/memory/ingest.ts:237": {
     "path": "core/memory/ingest.ts",
-    "line": 288,
+    "line": 296,
     "testo": "deps.store.markExtracted(tenantId, [id], EXTRACTION_VERSION);"
   },
   "core/memory/ingest.ts:272": {
     "path": "core/memory/ingest.ts",
-    "line": 323,
+    "line": 331,
     "testo": "if (episode.kind === 'document') {"
   },
   "core/memory/ingest.ts:304": {
     "path": "core/memory/ingest.ts",
-    "line": 403,
+    "line": 411,
     "testo": "fact.subjectKind,"
   },
   "core/memory/ingest.ts:321": {
     "path": "core/memory/ingest.ts",
-    "line": 420,
+    "line": 428,
     "testo": "// What remains: a crash between the last write inside this episode's"
   },
   "core/memory/ingest.ts:323": {
     "path": "core/memory/ingest.ts",
-    "line": 422,
+    "line": 430,
     "testo": "// never the ones before it, which is what the old end-of-batch marker"
   },
   "core/memory/ingest.ts:324": {
     "path": "core/memory/ingest.ts",
-    "line": 423,
+    "line": 431,
     "testo": "// risked (up to `limit` episodes, replayed together). Replaying means"
   },
   "core/memory/ingest.ts:448": {
     "path": "core/memory/ingest.ts",
-    "line": 569,
+    "line": 584,
     "testo": "// fact that actually was current, because the code never reached the"
   },
   "core/memory/ingest.ts:449": {
     "path": "core/memory/ingest.ts",
-    "line": 570,
+    "line": 585,
     "testo": "// comparison that would have noticed. Matching only `candidate` keeps the"
   },
   "core/memory/ingest.ts:463": {
     "path": "core/memory/ingest.ts",
-    "line": 584,
+    "line": 599,
     "testo": ");"
   },
   "core/memory/invariants.test.ts:117": {
@@ -1576,77 +1576,77 @@
   },
   "core/memory/recall.ts:108": {
     "path": "core/memory/recall.ts",
-    "line": 119,
+    "line": 128,
     "testo": "export function normaliseDate(raw: string | undefined, edge: 'start' | 'end'): string | undefined {"
   },
   "core/memory/recall.ts:266": {
     "path": "core/memory/recall.ts",
-    "line": 297,
+    "line": 306,
     "testo": "/** Names the halves that actually ran, so a degraded recall is never silent. */"
   },
   "core/memory/recall.ts:279": {
     "path": "core/memory/recall.ts",
-    "line": 329,
+    "line": 338,
     "testo": "const K = 60;"
   },
   "core/memory/recall.ts:302": {
     "path": "core/memory/recall.ts",
-    "line": 355,
+    "line": 364,
     "testo": "* discarded."
   },
   "core/memory/recall.ts:369": {
     "path": "core/memory/recall.ts",
-    "line": 434,
+    "line": 443,
     "testo": "// Least important, and among equals the oldest. The `<`-only reduce that was"
   },
   "core/memory/recall.ts:396": {
     "path": "core/memory/recall.ts",
-    "line": 459,
+    "line": 468,
     "testo": "tenantId: string,"
   },
   "core/memory/recall.ts:428": {
     "path": "core/memory/recall.ts",
-    "line": 507,
+    "line": 516,
     "testo": "if (textHits.length > 0) strategies.push('fts');"
   },
   "core/memory/recall.ts:432": {
     "path": "core/memory/recall.ts",
-    "line": 511,
+    "line": 520,
     "testo": "options.surface ? `superficie=${options.surface}` : '',"
   },
   "core/memory/recall.ts:435": {
     "path": "core/memory/recall.ts",
-    "line": 514,
+    "line": 523,
     "testo": "]"
   },
   "core/memory/recall.ts:441": {
     "path": "core/memory/recall.ts",
-    "line": 520,
+    "line": 529,
     "testo": "fuse(`episode:${hit.id}`, {"
   },
   "core/memory/recall.ts:527": {
     "path": "core/memory/recall.ts",
-    "line": 607,
+    "line": 617,
     "testo": "if (options.surface !== undefined && connector !== options.surface) return;"
   },
   "core/memory/recall.ts:586": {
     "path": "core/memory/recall.ts",
-    "line": 685,
+    "line": 695,
     "testo": "...(nearest"
   },
   "core/memory/recall.ts:593": {
     "path": "core/memory/recall.ts",
-    "line": 692,
+    "line": 702,
     "testo": ": {}),"
   },
   "core/memory/recall.ts:665": {
     "path": "core/memory/recall.ts",
-    "line": 795,
+    "line": 806,
     "testo": "const key = `episode:${near.id}`;"
   },
   "core/memory/recall.ts:708": {
     "path": "core/memory/recall.ts",
-    "line": 890,
+    "line": 902,
     "testo": "* duplicate was never a separate truth (`store.ts` supersede). Both set"
   },
   "core/memory/rerank.ts:47": {
@@ -1666,7 +1666,7 @@
   },
   "core/memory/schema.ts:217": {
     "path": "core/memory/schema.ts",
-    "line": 243,
+    "line": 297,
     "testo": "export const EXTRACTION_VERSION = 1;"
   },
   "core/memory/schema.ts:25": {
@@ -1761,22 +1761,22 @@
   },
   "core/memory/vectors.ts:106": {
     "path": "core/memory/vectors.ts",
-    "line": 258,
+    "line": 272,
     "testo": "async index("
   },
   "core/memory/vectors.ts:151": {
     "path": "core/memory/vectors.ts",
-    "line": 303,
+    "line": 317,
     "testo": "async search("
   },
   "core/memory/vectors.ts:18": {
     "path": "core/memory/vectors.ts",
-    "line": 18,
+    "line": 19,
     "testo": "const CHUNKS_SCHEMA = `"
   },
   "core/memory/vectors.ts:212": {
     "path": "core/memory/vectors.ts",
-    "line": 364,
+    "line": 414,
     "testo": "indexBacklog(tenantId: string, limit = 200): { kind: ChunkSource; sourceId: number; text: string }[] {"
   },
   "core/net/egress.ts:41": {
@@ -2376,7 +2376,7 @@
   },
   "ingest.ts:362": {
     "path": "core/memory/ingest.ts",
-    "line": 443,
+    "line": 458,
     "testo": "} catch (error) {"
   },
   "ingest.ts:39": {
@@ -2656,52 +2656,52 @@
   },
   "recall.ts:290": {
     "path": "core/memory/recall.ts",
-    "line": 343,
+    "line": 352,
     "testo": "* model-typed. Fixed at the primitive instead of at each boundary so a third"
   },
   "recall.ts:293": {
     "path": "core/memory/recall.ts",
-    "line": 346,
+    "line": 355,
     "testo": "const MAX_NEIGHBOURS = 5;"
   },
   "recall.ts:302": {
     "path": "core/memory/recall.ts",
-    "line": 355,
+    "line": 364,
     "testo": "* discarded."
   },
   "recall.ts:375": {
     "path": "core/memory/recall.ts",
-    "line": 440,
+    "line": 449,
     "testo": "(min, f) =>"
   },
   "recall.ts:503": {
     "path": "core/memory/recall.ts",
-    "line": 583,
+    "line": 592,
     "testo": "validFrom: fact.validFrom,"
   },
   "recall.ts:588": {
     "path": "core/memory/recall.ts",
-    "line": 687,
+    "line": 697,
     "testo": "nearest: {"
   },
   "recall.ts:655": {
     "path": "core/memory/recall.ts",
-    "line": 785,
+    "line": 796,
     "testo": "const k = Math.min(Math.max(options.neighbours ?? 0, 0), MAX_NEIGHBOURS);"
   },
   "recall.ts:675": {
     "path": "core/memory/recall.ts",
-    "line": 704,
+    "line": 714,
     "testo": "score: 0,"
   },
   "recall.ts:731": {
     "path": "core/memory/recall.ts",
-    "line": 913,
+    "line": 925,
     "testo": "`${item.neighbourOf === undefined ? '' : ', intorno'}] ` +"
   },
   "recall.ts:750": {
     "path": "core/memory/recall.ts",
-    "line": 932,
+    "line": 944,
     "testo": "`. Dillo, non rispondere con quello che vale oggi.`,"
   },
   "redact.ts:11": {
@@ -2776,7 +2776,7 @@
   },
   "schema.ts:217": {
     "path": "core/memory/schema.ts",
-    "line": 243,
+    "line": 297,
     "testo": "export const EXTRACTION_VERSION = 1;"
   },
   "schema.ts:57": {
@@ -2926,12 +2926,12 @@
   },
   "vectors.ts:43": {
     "path": "core/memory/vectors.ts",
-    "line": 98,
+    "line": 112,
     "testo": "// new version and a re-index — never a silent mix of incompatible vectors."
   },
   "vectors.ts:67": {
     "path": "core/memory/vectors.ts",
-    "line": 218,
+    "line": 232,
     "testo": "private migrateUnpartitioned(): void {"
   },
   "verify.ts:120": {
