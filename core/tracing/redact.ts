@@ -191,3 +191,103 @@ export function redactAttributes(
 function marker(length: number): string {
   return `«redacted:${length}»`;
 }
+
+/**
+ * The third net, next to value shapes and field names: a **resource's own
+ * name**. `isSecretName` above already asks "is this word a secret word" of
+ * an attribute key (`apiKeyRef`, `authToken`); this asks the identical
+ * question of a file path or URL a tool just read in full — `segreto.txt`,
+ * `/vault/credenziali.json`, `.../id_rsa` — because the file's *content*
+ * carries none of the shapes `SECRET_VALUE_SHAPES` know to look for. A note
+ * that just says "the wifi password is `casa2024`" is not `sk-…`, not a JWT,
+ * not `token=…`; the only signal deterministic code has is the name the
+ * owner (or whoever created the file) already gave it.
+ *
+ * Kept as its own word list rather than folded into `SECRET_WORDS`: that set
+ * also drives `redactAttributes`, which runs on span attribute *names*
+ * (`camelCase` field identifiers, ADR-0020 English) on every trace this
+ * process writes — changing its matches would change already-tested,
+ * unrelated behaviour. A file path is data the owner or a connector wrote,
+ * not a code identifier, and this owner's own files are as likely to be
+ * named in Italian as in English — so the two lists diverge on purpose, not
+ * by omission.
+ */
+const SENSITIVE_RESOURCE_WORDS = new Set([
+  'secret',
+  'secrets',
+  'password',
+  'passwd',
+  'credential',
+  'credentials',
+  'token',
+  'key',
+  'segreto',
+  'segreti',
+  'credenziali',
+  'chiave',
+]);
+
+/**
+ * Does this file path / URL name itself as holding a secret? Reuses `words`
+ * unchanged: a path segments on `/` and `.` exactly the way `words` already
+ * segments on any non-alphanumeric run, so `/home/owner/vault/segreto.txt`
+ * arrives as `['home','owner','vault','segreto','txt']` with no extra code.
+ *
+ * Exported for `agent/loop.ts`, the one caller that knows, for a given tool
+ * call, which argument names the resource (`resourceFor`'s own job on the
+ * policy side) — this module has no opinion on tool schemas and must not
+ * grow one.
+ */
+export function isSensitiveResourceName(identifier: string): boolean {
+  return words(identifier).some((word) => SENSITIVE_RESOURCE_WORDS.has(word));
+}
+
+/** Below this many characters a needle matches too much ordinary prose to be worth flagging. */
+const MIN_ECHO_LENGTH = 12;
+
+/**
+ * The whole trimmed content is one needle (catches a short note copied
+ * whole), and every non-trivial line is a second needle of its own (catches
+ * one line lifted out of a longer file) — both exact, both case-sensitive,
+ * because a fuzzy match on prose is exactly the false-positive risk this
+ * module's own doc-comment above warns against for entropy detectors.
+ */
+function echoNeedles(content: string): string[] {
+  const trimmed = content.trim();
+  if (trimmed === '') return [];
+  const lines = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '');
+  return [trimmed, ...lines];
+}
+
+/**
+ * The redaction half of the same floor: given the full contents this turn
+ * read from resources `isSensitiveResourceName` flagged, strip any verbatim
+ * reproduction of them out of `text` — the reply about to reach the owner, or
+ * the episode about to reach durable memory (ADR pending, `agent/loop.ts`
+ * §"sensitive resource echo").
+ *
+ * Deliberately **not** "any content this turn read that the owner didn't
+ * name" — that axis is `chosenBy` in `evals/security/candidate-b.ts`, and
+ * that file's own doc-comment already names why production cannot compute it
+ * today: `agent/loop.ts` gets tool arguments already resolved and cannot tell
+ * whether the owner's own message named a path or a page read three rounds
+ * earlier did. Building that would be the CaMeL-style capability-per-value
+ * project the same file describes, not a mechanical fix. What *is*
+ * computable today, exactly like a credential's shape, is the resource's own
+ * name — so this floor answers a narrower question than "was this
+ * requested", and stays silent on every read whose name does not, itself,
+ * say "secret".
+ */
+export function scrubResourceEchoes(text: string, sensitiveContents: readonly string[]): string {
+  let out = text;
+  for (const content of sensitiveContents) {
+    for (const needle of echoNeedles(content)) {
+      if (needle.length < MIN_ECHO_LENGTH) continue;
+      out = out.split(needle).join(marker(needle.length));
+    }
+  }
+  return out;
+}

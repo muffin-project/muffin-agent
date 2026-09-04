@@ -619,7 +619,14 @@ export function noteDopoLoSwing(args: {
   return righe;
 }
 
-function restartCommand(platform: NodeJS.Platform): { printable: string; argv: string[] } {
+/**
+ * Exported so `cli/gateway.ts`'s `muffin gateway restart` can build the exact
+ * same `launchctl kickstart -k`/`systemctl --user restart` this file's own
+ * `offerGatewayRestart` runs after `muffin update` — one mechanism, not a
+ * second `launchctl` string that could drift from this one on the next macOS
+ * quirk.
+ */
+export function restartCommand(platform: NodeJS.Platform): { printable: string; argv: string[] } {
   if (platform === 'darwin') {
     const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
     const target = `gui/${uid}/${LAUNCHD_LABEL}`;
@@ -637,7 +644,7 @@ function restartCommand(platform: NodeJS.Platform): { printable: string; argv: s
  * domanda serve anche a `cli/gateway.ts` — un meccanismo solo, non due che
  * possono divergere.
  */
-function currentGatewayPid(home: string): number | null {
+export function currentGatewayPid(home: string): number | null {
   const file = paths(home).db;
   if (!existsSync(file)) return null;
   const db = new DatabaseCtor(file, { readonly: true });
@@ -662,7 +669,7 @@ function isGatewayRunning(home: string): boolean {
  * che va bene; per uno che non va, dire onestamente «non confermato entro Ns»
  * è la risposta giusta — non un'attesa più lunga a caso.
  */
-async function waitForGatewayPid(
+export async function waitForGatewayPid(
   readPid: () => number | null,
   before: number | null,
   opts: {
