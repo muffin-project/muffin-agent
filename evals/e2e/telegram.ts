@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -204,16 +204,50 @@ function avviaProxy(): Promise<{ server: Server; url: string }> {
 // Il binario vero, come lo usa l'owner.
 // ---------------------------------------------------------------------------
 
-function muffin(args: string[], stdin?: string): { code: number; out: string; err: string } {
-  const r = spawnSync('npx', ['tsx', CLI, ...args], {
-    env: { ...process.env, MUFFIN_HOME: HOME, NO_COLOR: '1' },
-    cwd: WORKSPACE,
-    encoding: 'utf8',
-    maxBuffer: 32 * 1024 * 1024,
+/**
+ * Asincrona, e la ragione non e' lo stile: era `spawnSync`, e con `spawnSync`
+ * questo banco non poteva funzionare.
+ *
+ * Il proxy che registra il filo vive **in questo stesso processo**. `spawnSync`
+ * blocca l'event loop finche' il figlio non esce, quindi mentre
+ * `muffin surface enable --api-base http://127.0.0.1:<porta>` chiedeva
+ * `getMe` al proxy, il proxy non poteva rispondere: nessuno stava girando.
+ * Il figlio aspettava i 65 secondi di `REQUEST_TIMEOUT_MS` e moriva con
+ * `Telegram 0: TimeoutError`, e il filo restava **vuoto** — perche' nessuna
+ * chiamata era mai stata servita, non perche' nessuna fosse mai arrivata.
+ *
+ * Misurato il 04/09/2026 sulla macchina dell'owner, e riprodotto in isolamento:
+ * un server locale piu' uno `spawnSync` che gli parla da' `TimeoutError` dopo
+ * esattamente la scadenza del figlio.
+ *
+ * Il guasto e' entrato quando `surface enable` ha cominciato a validare il
+ * token contro il server vero (`cli/surface.ts`, `api.getMe()`): prima di
+ * allora nessun comando di setup parlava al proxy, e il blocco non si vedeva.
+ * Non e' una svista di stile: e' una dipendenza fra due meccanismi che nessun
+ * test unitario poteva incontrare, perche' vive solo quando il banco gira
+ * intero.
+ */
+function muffin(args: string[], stdin?: string): Promise<{ code: number; out: string; err: string }> {
+  return new Promise((resolve) => {
+    const child = spawn('npx', ['tsx', CLI, ...args], {
+      env: { ...process.env, MUFFIN_HOME: HOME, NO_COLOR: '1' },
+      cwd: WORKSPACE,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let out = '';
+    let err = '';
+    child.stdout?.on('data', (c: Buffer) => {
+      out += c.toString('utf8');
+    });
+    child.stderr?.on('data', (c: Buffer) => {
+      err += c.toString('utf8');
+    });
     // Segreti da stdin, mai da argv (direttiva owner 2026-08-18).
-    ...(stdin === undefined ? {} : { input: stdin }),
+    if (stdin !== undefined) child.stdin?.write(stdin);
+    child.stdin?.end();
+    child.on('error', () => resolve({ code: -1, out, err }));
+    child.on('close', (code) => resolve({ code: code ?? -1, out, err }));
   });
-  return { code: r.status ?? -1, out: r.stdout ?? '', err: r.stderr ?? '' };
 }
 
 type Passo = { nome: string; ok: boolean; dettaglio: string };
@@ -257,11 +291,11 @@ const { server: proxy, url: proxyUrl } = await avviaProxy();
 let gateway: ReturnType<typeof spawn> | null = null;
 
 try {
-  const init = muffin(['init', '--provider', 'openai-compat', '--base-url', BASE_URL, '--model', MODEL], apiKey);
+  const init = await muffin(['init', '--provider', 'openai-compat', '--base-url', BASE_URL, '--model', MODEL], apiKey);
   if (init.code !== 0) throw new Error(`muffin init: ${init.err.slice(-300)}`);
-  const tok = muffin(['secret', 'set', 'telegram_token'], token);
+  const tok = await muffin(['secret', 'set', 'telegram_token'], token);
   if (tok.code !== 0) throw new Error(`secret set: ${senzaToken(tok.err.slice(-300))}`);
-  const enable = muffin(['surface', 'enable', 'telegram', '--api-base', proxyUrl, '--owner', String(ownerId)]);
+  const enable = await muffin(['surface', 'enable', 'telegram', '--api-base', proxyUrl, '--owner', String(ownerId)]);
   if (enable.code !== 0) throw new Error(`surface enable: ${senzaToken(enable.err.slice(-300))}`);
 
   gateway = spawn('npx', ['tsx', CLI, 'gateway', 'run'], {
