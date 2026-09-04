@@ -138,6 +138,45 @@ shell dotfiles) and `scope.root` is the whole Home. Widening *where* work can
 run while the write scope is already this loose would widen the blast radius
 before the boundary is narrowed — narrow the scope first.
 
+### The two uncovered sinks, after the corpus measured them (2026-09-04)
+
+**This is not a deferral — it is `critical-path.md` point 4-bis**, recorded here
+only because the roadmap is where an authority change is looked for. The
+ordering authority is the critical path; do not duplicate it.
+
+Point 4 of the critical path — the security eval — has run on the real binary
+and produced a result rather than an opinion
+(`docs/evidence/eval-taint-corpus-avversariale-2026-09-03.md`): **4/7 attacks
+succeed with no human at all, 6/7 with the owner's real answering behaviour**,
+and three of the seven scenes meet **no control whatsoever** — `s3` (approval
+reflex), `s6` (the reply sink), `s7` (memory and recall). The single attack that
+was stopped, `s4`, was stopped by the tool's own SSRF floor, not by the policy.
+
+Those three are `allow/allow/allow` in `ROW_FLOOR` **by decision**: replying on
+the origin channel and writing to memory are how the agent works. So the corpus
+did not find a bug; it put a number on the cost of a recorded choice. That is
+what makes this a roadmap entry instead of a defect ticket.
+
+Two things this work is explicitly **not**. It is not "add an approval to
+`reply`": 32 of 35 approvals were granted, all in one cell, and a gate granted
+nine times in ten is a reflex rather than a defence — the failure the threat
+model names first. And it is not "replace ambient taint with candidate B": that
+substitution was measured and lost, beating A on **0/7** contested actions and
+tightening only `s4`, where the attack never succeeded anyway. Reopening either
+needs new evidence, not a fresh preference.
+
+What it is: the owner's house rule — *keep deterministic what needs to be
+deterministic, do not lean on an LLM where code can decide* — applied where the
+corpus says it is missing. `s4` is the existence proof: a floor in code stopped
+it, asking nobody and trusting no judgement. Needs a `docs/RESEARCH.md` pass
+before implementation, because it changes authority semantics on two rows.
+
+Note the ordering trap: the disk fence merged on 2026-09-04 is a **prerequisite**
+of this work and not a part of it. It supplies provenance — it makes "external
+content arrives marked as external" a true sentence — and stops there. Whether
+the model then obeys the mark is what the corpus measures, and on these three
+scenes it does not. A defence resting on obedience is not this item.
+
 ### Five items from the owner's conversation, 2026-09-03
 
 Recorded in `docs/evidence/il-lavoro-che-viene-2026-09-03.md`. All five queue
