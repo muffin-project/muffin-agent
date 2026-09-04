@@ -906,6 +906,19 @@ export type TurnResult = {
 export const MAX_RESUMES = 3;
 
 /**
+ * Quello che l'owner legge quando `scriviCorrezioniInSessione` (dentro
+ * `drive`) ha fallito a salvare almeno una correzione residua — mai
+ * silenzioso. Modulo, non dentro `drive`: una `const` locale dichiarata
+ * dopo il primo punto in cui serve (il fallback di `suspendHere`, molto
+ * prima nel corpo della funzione) sarebbe nella sua stessa temporal dead
+ * zone finché l'esecuzione non raggiunge quella riga — un dettaglio di
+ * `const` che non vale la pena rischiare per una stringa che non cambia
+ * mai per chiamata.
+ */
+const STEER_RESIDUO_NON_SALVATO =
+  '\n\n(non sono riuscito a salvare la tua ultima correzione — se era importante, ripetila.)';
+
+/**
  * Questa ripresa spende il budget, o no?
  *
  * `MAX_RESUMES` e un circuit breaker su una **recovery che continua a uccidere
@@ -1152,6 +1165,28 @@ export type ResumeRefusal = {
 export type ResumeStream = {
   onDelta?: ((delta: TurnDelta) => void) | undefined;
   onProgress?: ((event: TurnEvent) => void) | undefined;
+  /**
+   * `/stop` and `/steer` for a turn the LANE is running, not a fresh
+   * `runTurn` call — `drive` below has accepted both since before this
+   * comment, `runTurn`'s own `TurnInput.signal`/`.steer` (ADR-0054) already
+   * forward into it, and until now nothing upstream of `resumeTurn` ever HAD
+   * a lever to hand it: the same shape of gap `onDelta`/`onProgress` were,
+   * closed the same way.
+   *
+   * Measured 2026-09-04: a turn resumed after an ASK approval (a lane run
+   * that can take as long as the tool call it is waiting on) was invisible
+   * to the surface's own "is a turn live for this chat" bookkeeping
+   * (`connectors/telegram/connector.ts`'s `vivi`), which is populated only
+   * by `runTurn`'s call site — so `/steer` sent while that lane run was in
+   * flight answered "nessun turno in corso", which was false: a turn WAS
+   * running, just not through the door that ever registered one. Wiring
+   * these two through is what lets a connector register the SAME `vivi`
+   * entry for a resumed turn that it already does for a fresh one, so the
+   * answer is honest in both directions — reachable, not just theoretically
+   * plumbed.
+   */
+  signal?: AbortSignal | undefined;
+  steer?: (() => string[]) | undefined;
 };
 
 /**
@@ -1345,6 +1380,12 @@ export async function resumeTurn(
     // `options.onProgress` qui sotto), mancava solo chi li passasse fin qui.
     ...(stream?.onDelta ? { onDelta: stream.onDelta } : {}),
     ...(stream?.onProgress ? { onProgress: stream.onProgress } : {}),
+    // Lo stesso filo, per `/stop` e `/steer` invece che per lo streaming —
+    // vedi il commento su `ResumeStream` qui sopra. `drive` li legge già
+    // (`options.signal`/`options.steer`); prima di questa riga nessuno li
+    // passava fin qui per un turno ripreso dalla corsia.
+    ...(stream?.signal ? { signal: stream.signal } : {}),
+    ...(stream?.steer ? { steer: stream.steer } : {}),
   });
 }
 
@@ -2488,12 +2529,13 @@ async function drive(
       // vuota e la correzione svanirebbe proprio dove il codice sta già
       // ammettendo di aver fallito. Scritte in conversazione con la stessa
       // provenienza che usa `finish`, così è il turno dopo a vederle.
-      scriviCorrezioniInSessione(turn, correzioniPendenti);
+      const correzioniSalvate = scriviCorrezioniInSessione(turn, correzioniPendenti);
       return finish(
         turn,
         'error',
         'Volevo sospendermi e aspettare, ma non sono riuscito a salvare lo stato del turno: ' +
-          'se aspettassi comunque non mi sveglierebbe nessuno. Mi fermo qui e te lo dico.',
+          'se aspettassi comunque non mi sveglierebbe nessuno. Mi fermo qui e te lo dico.' +
+          (correzioniSalvate ? '' : STEER_RESIDUO_NON_SALVATO),
         iterations,
         usage,
       );
@@ -2721,7 +2763,18 @@ async function drive(
    * `try` del chiamante: una scrittura di sessione che fallisce non deve
    * trasformare un turno riuscito in un errore.
    */
-  function scriviCorrezioniInSessione(span: SpanHandle, correzioni: readonly string[]): void {
+  /**
+   * `true` quando ogni correzione è stata scritta. `false` se anche una sola
+   * `sessions.append` è fallita — misurato 2026-09-04: prima di questo valore
+   * di ritorno l'unico segno era un attributo sullo `span` di tracing
+   * (`muffin.turn.steer_residuo_error`), che nessuna superficie legge e
+   * nessun owner vede mai. Una correzione digitata e persa senza che lo si
+   * sappia è esattamente il difetto ADR-0054 §2 esiste per chiudere — non
+   * bastava chiuderlo per il caso in cui il giro la consuma e riaprirlo per
+   * quello in cui la sessione non la tiene.
+   */
+  function scriviCorrezioniInSessione(span: SpanHandle, correzioni: readonly string[]): boolean {
+    let ok = true;
     for (const residua of correzioni) {
       try {
         deps.sessions.append(input.session, {
@@ -2740,9 +2793,12 @@ async function drive(
         });
       } catch (error) {
         span.setAttributes({ 'muffin.turn.steer_residuo_error': error instanceof Error ? error.message : String(error) });
+        ok = false;
       }
     }
+    return ok;
   }
+
 
   function finish(
     span: SpanHandle,
@@ -2770,7 +2826,7 @@ async function drive(
     // è distruttivo, quindi ciò che un giro ha già consumato — o che
     // `suspendHere` ha già messo nella riga — non è più nella porta quando si
     // arriva qui. E il ramo che sospende davvero non passa da `finish`.
-    if (stopped !== 'aborted') scriviCorrezioniInSessione(span, input.steer?.() ?? []);
+    const correzioniSalvate = stopped !== 'aborted' ? scriviCorrezioniInSessione(span, input.steer?.() ?? []) : true;
     // Before the span ends and before the hook fires: the row is the durable
     // half, and a background lane must never be able to run while the record
     // still says a live process is executing this turn.
@@ -2801,7 +2857,7 @@ async function drive(
     // allowed to delay this return.
     announceEnd(stopped);
     return {
-      text,
+      text: correzioniSalvate ? text : text + STEER_RESIDUO_NON_SALVATO,
       iterations: iters,
       traceId: span.traceId,
       // `record.id`, not `span.traceId`. On a fresh turn the two are the same

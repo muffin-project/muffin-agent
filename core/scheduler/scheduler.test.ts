@@ -156,6 +156,62 @@ describe('Scheduler.tick', () => {
       // markRan did not run either — the fire is still due for the new owner.
       expect(store.get(job.id)!.lastRunAt).toBeNull();
     });
+
+    /**
+     * ADR-0060 §Limiti noti, item 2 — closed here (2026-09-04).
+     *
+     * Before this fix `stillOwner` was consulted only right before a job
+     * *starts* — reachable exclusively through the `store.due(now)` branch
+     * below it — so a tick with no due job (the common case: the beat is
+     * 30 seconds, most beats find nothing) ran `commitments.tick` with no
+     * ownership check at all, ever. A gateway that had just lost its claim
+     * kept trying to speak dated commitments on every single beat.
+     *
+     * No job is added to the store here on purpose: this must fail even
+     * when the job lane has nothing to do, which is exactly the gap the
+     * old ordering left open.
+     */
+    it('does not run the commitments lane either, when the claim is already gone — even with no job due', async () => {
+      const db = new DatabaseCtor(':memory:');
+      const store = new JobStore(db); // no job added: due() is always empty
+      const events: SchedulerEvent[] = [];
+      const commitments = { tick: vi.fn() };
+      const sched = new Scheduler(
+        store, async () => ({ stopped: 'answered', text: 'x', turnId: TURN }), async () => DELIVERED, undefined,
+        (e) => events.push(e), () => new Date(), undefined, undefined,
+        new ModelLane(),
+        () => false, // the claim is already someone else's
+        undefined,
+        undefined,
+        commitments,
+      );
+
+      sched.tick();
+      await flush();
+
+      expect(commitments.tick).not.toHaveBeenCalled();
+      expect(events).toContainEqual({ kind: 'deferred', reason: 'handover' });
+    });
+
+    it('DOES run the commitments lane when this process still owns the claim, even with no job due', async () => {
+      const db = new DatabaseCtor(':memory:');
+      const store = new JobStore(db);
+      const commitments = { tick: vi.fn() };
+      const sched = new Scheduler(
+        store, async () => ({ stopped: 'answered', text: 'x', turnId: TURN }), async () => DELIVERED, undefined,
+        () => {}, () => new Date(), undefined, undefined,
+        new ModelLane(),
+        () => true,
+        undefined,
+        undefined,
+        commitments,
+      );
+
+      sched.tick();
+      await flush();
+
+      expect(commitments.tick).toHaveBeenCalledOnce();
+    });
   });
 
   it('a yielded (aborted) job is neither delivered nor marked ran — it retries', async () => {
