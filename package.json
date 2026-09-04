@@ -25,9 +25,13 @@
     "gate:local": "bash scripts/local-gate.sh",
     "e2e:telegram": "tsx evals/e2e/telegram.ts",
     "eval:character": "tsx evals/character/run.ts",
-    "mappa:regen": "node docs/derived/architecture-map/ancore.mjs && node docs/derived/architecture-map/build.mjs && git add docs/derived/architecture-map/ancore.json docs/derived/architecture-map/mappa.html"
+    "mappa:regen": "node docs/derived/architecture-map/ancore.mjs && node docs/derived/architecture-map/build.mjs && git add docs/derived/architecture-map/ancore.json docs/derived/architecture-map/mappa.html",
+    "lint": "biome check --changed",
+    "lint:all": "biome check .",
+    "format": "biome format --write --changed"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.12",
     "@grammyjs/types": "^4.0.0",
     "@modelcontextprotocol/server": "2.0.0",
     "@types/better-sqlite3": "^9.6.0",
