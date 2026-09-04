@@ -3635,6 +3635,18 @@ async function runTool(
     // guarantee — a backend-known secret never reaches this variable in the
     // first place, because no tool handler ever calls `readSecret`.
     const safeContent = redactText(outcome.content);
+    /**
+     * The failure twin of `giaFatte`, read **before** this call's own row is
+     * written — same reason: the count has to mean "how many times before",
+     * not "including now". Unlike `giaFatte` it cannot be read before the
+     * handler runs, because "identical" here includes this call's own error
+     * content (`identicalFailuresDone`'s own comment says why: two failures
+     * with the same args can hit different walls, and only a matching
+     * `content` says they are the same wall). `0` on a success, since there
+     * is nothing to compare.
+     */
+    const fallimentiIdentici =
+      outcome.isError === true ? deps.turns.identicalFailuresDone(ctx.turnId, call.name, args, safeContent) : 0;
     // The outcome and the taint it dragged in, in one transaction: a tier-3
     // result raises the turn's taint, and the two facts must not be able to
     // land apart — a record that had read the web at a tier saying it had not
@@ -3669,6 +3681,9 @@ async function runTool(
     if (giaFatte > 0 && outcome.isError !== true) {
       span.setAttributes({ 'muffin.tool.repeated': giaFatte });
     }
+    if (fallimentiIdentici > 0) {
+      span.setAttributes({ 'muffin.tool.repeated_failure': fallimentiIdentici });
+    }
     return {
       type: 'tool_result',
       toolCallId: call.id,
@@ -3687,8 +3702,17 @@ async function runTool(
        * `tool_result` (`agent/providers/openai-compat.ts`), quindi finirebbe
        * fra la chiamata dell'assistente e le sue risposte — che quel protocollo
        * non ammette. Qui invece e dove il modello sta gia guardando.
+       *
+       * I due avvisi sono a esclusione reciproca per costruzione: `giaFatte`
+       * conta solo righe con `is_error = 0`, `fallimentiIdentici` solo righe
+       * con `is_error = 1`, e questa stessa chiamata e o l'uno o l'altro.
        */
-      content: giaFatte > 0 && outcome.isError !== true ? `${safeContent}\n\n${avvisoRipetizione(call.name, giaFatte)}` : safeContent,
+      content:
+        giaFatte > 0 && outcome.isError !== true
+          ? `${safeContent}\n\n${avvisoRipetizione(call.name, giaFatte)}`
+          : fallimentiIdentici > 0
+            ? `${safeContent}\n\n${avvisoFallimentoRipetuto(call.name, fallimentiIdentici)}`
+            : safeContent,
       ...(outcome.isError ? { isError: true } : {}),
     };
   } catch (error) {
@@ -3699,6 +3723,10 @@ async function runTool(
     // point that covers the durable record, the session and `turns.messages`
     // for the failure exit too.
     const detail = redactText(error instanceof Error ? error.message : String(error));
+    // Same counter as the success path's error exit, read before this call's
+    // own row lands, for the same reason: `identicalFailuresDone` compares
+    // `content` too, and `detail` is this call's content.
+    const fallimentiIdentici = deps.turns.identicalFailuresDone(ctx.turnId, call.name, args, detail);
     // Unconditional, and the same call the success path makes a few lines up
     // — a judge's round-1 finding was that this branch never raised taint at
     // all, so a handler that threw was invisible to the ledger no matter whose
@@ -3715,7 +3743,15 @@ async function runTool(
     recordOutcome(deps, ctx.turnId, span, call.id, { content: detail, isError: true, tier: tool.throwTier });
     span.end({ status: 'error', error: detail });
     emitToolEnd(true);
-    return { type: 'tool_result', toolCallId: call.id, content: detail, isError: true };
+    if (fallimentiIdentici > 0) {
+      span.setAttributes({ 'muffin.tool.repeated_failure': fallimentiIdentici });
+    }
+    return {
+      type: 'tool_result',
+      toolCallId: call.id,
+      content: fallimentiIdentici > 0 ? `${detail}\n\n${avvisoFallimentoRipetuto(call.name, fallimentiIdentici)}` : detail,
+      isError: true,
+    };
   }
 }
 
@@ -3746,6 +3782,22 @@ function avvisoRipetizione(tool: string, giaFatte: number): string {
   return (
     `[in questo turno hai gia chiamato \`${tool}\` ${volte} con gli stessi argomenti, ` +
     `e la risposta e la stessa. Se ti serve altro cambia argomenti; altrimenti rispondi con quello che hai.]`
+  );
+}
+
+/**
+ * La meta gemella per il fallimento — stessa forma, non lo stesso testo.
+ *
+ * Non ripete l'errore: il tool l'ha gia detto nel contenuto appena sopra
+ * questo avviso, e ridirlo sarebbe rumore che nasconde l'unica cosa che
+ * l'avviso deve aggiungere — che e gia successo, e cosa lo farebbe smettere.
+ */
+function avvisoFallimentoRipetuto(tool: string, fallimentiIdentici: number): string {
+  const volte = fallimentiIdentici === 1 ? 'una volta' : `${fallimentiIdentici} volte`;
+  return (
+    `[in questo turno hai gia chiamato \`${tool}\` ${volte} con gli stessi argomenti e hai gia avuto ` +
+    `questo stesso errore. Ripetere non lo cambia: cambia argomenti, prova un'altra via, o fermati e ` +
+    `spiega il blocco invece di riprovare.]`
   );
 }
 
