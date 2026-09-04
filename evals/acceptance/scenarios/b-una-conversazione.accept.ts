@@ -308,7 +308,14 @@ describe('acceptance · i gruppi restano separati · attraverso il percorso di p
         env: { MUFFIN_GATEWAY_TICK_MS: '200' },
       });
       const IN_PRIVATA = 'il barometro del capanno segna 1013';
-      const NELLA_STANZA = 'che ore sono per la riunione di venerdì';
+      // Nominato di proposito. Dal 04/09/2026 un messaggio di gruppo che non
+      // chiama Muffin non apre nessun turno (`apreUnTurno`, ADR-0063): senza
+      // la menzione questo scenario aspetta trenta secondi una risposta che
+      // non arriverà mai, e fallirebbe per il gate invece che per la
+      // separazione dei tenant, che è la cosa che sta provando.
+      // `muffin_test_bot` è lo username che il finto Bot API restituisce a
+      // `getMe` (`evals/acceptance/telegram.ts`).
+      const NELLA_STANZA = '@muffin_test_bot che ore sono per la riunione di venerdì';
       try {
         const gw = await pairOwner(inst, tg);
         try {
