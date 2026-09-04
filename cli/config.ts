@@ -3,22 +3,43 @@ import { relative } from 'node:path';
 import { ConfigError } from '../core/config/config.js';
 import { styleFor } from './ui.js';
 import { listConfigKnobs, type ConfigKnob } from '../core/config/inventory.js';
+import { describeSettableKnobs, formatSetOutcome, setConfigKnob } from '../core/config/settings.js';
 
 /**
- * `muffin config` — read-only, on purpose (ADR-0036).
+ * `muffin config` — read-only by default, on purpose (ADR-0036), plus one
+ * narrow door: `muffin config set <chiave> <valore>` (ADR-0070).
  *
- * It answers "what can I adjust, and where" completely without building a
- * write surface anything has to guard: every knob, its current value, the
- * file it lives in, and whether that file is sealed. Prior art looked at
- * before choosing the shape (`docs/PRACTICES.md` §3) — `git config --list
- * --show-origin` pairs a value with the file it came from but has no sealed
- * axis to show; `gh config list` is bare key=value with no origin at all;
- * `aws configure list` is the closest match, a table of Name / Value / Type /
- * Location. This is that shape with "Type" replaced by "Sigillato", the one
- * column none of the three needed and this command exists to answer.
+ * `muffin config` (senza sotto-comando) answers "what can I adjust, and
+ * where" completely without building a write surface anything has to guard:
+ * every knob, its current value, the file it lives in, and whether that file
+ * is sealed. Prior art looked at before choosing the shape (`docs/PRACTICES.md`
+ * §3) — `git config --list --show-origin` pairs a value with the file it came
+ * from but has no sealed axis to show; `gh config list` is bare key=value
+ * with no origin at all; `aws configure list` is the closest match, a table
+ * of Name / Value / Type / Location. This is that shape with "Type" replaced
+ * by "Sigillato", the one column none of the three needed and this command
+ * exists to answer.
+ *
+ * `set` is deliberately not "the write surface ADR-0036 refused to build" —
+ * that one would be a conversational, kernel-gated capability the model could
+ * eventually reach. This is the owner typing a command; `setConfigKnob`
+ * (`core/config/settings.ts`) is the one function behind it, behind three
+ * doors (this file, `/config` in `agent/comandi.ts`, Telegram through the
+ * same comando), and the reasoning for why that is safe without a kernel
+ * capability lives in that file's own docstring.
  */
 
+export const CONFIG_USAGE = `usage:
+  muffin config                mostra ogni manopola, il valore, dove vive e se è sigillata
+  muffin config --json         come sopra, in JSON
+  muffin config set <chiave> <valore>
+                                cambia una delle poche manopole scrivibili da qui:
+${describeSettableKnobs()}
+`;
+
 export function cmdConfig(home: string, argv: string[]): number {
+  if (argv[0] === 'set') return cmdConfigSet(home, argv.slice(1));
+
   const { values } = parseArgs({ args: argv, options: { json: { type: 'boolean' } }, allowPositionals: false });
 
   let knobs: ConfigKnob[];
@@ -73,4 +94,28 @@ export function formatConfigKnobs(knobs: ConfigKnob[], home: string): string {
     'sigillato = dentro il Root of Trust: per cambiarlo, modifica il file e poi `muffin rot reseal`.',
   ];
   return lines.join('\n');
+}
+
+/**
+ * `muffin config set <chiave> <valore>` — questa funzione fa solo argv e
+ * stampa; la decisione è tutta in `setConfigKnob`. Exit 0 su una scrittura o
+ * un "già così" (idempotente, come `cmdSurfaceDefault`), 78 (EX_USAGE) su una
+ * chiave o un valore che il comando rifiuta — mai un errore generico: l'owner
+ * ha già la lista delle chiavi valide nel messaggio.
+ */
+export function cmdConfigSet(home: string, argv: string[]): number {
+  const [key, ...rest] = argv;
+  const value = rest.join(' ');
+  if (key === undefined || value === '') {
+    process.stderr.write(CONFIG_USAGE);
+    return 78;
+  }
+  const outcome = setConfigKnob(home, key, value);
+  const line = formatSetOutcome(outcome);
+  if (!outcome.ok) {
+    process.stderr.write(`${line}\n`);
+    return 78;
+  }
+  process.stdout.write(`${line}\n`);
+  return 0;
 }

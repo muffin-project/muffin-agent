@@ -13,13 +13,35 @@ DAY-1 chiede la prova reale, e il suo verde si scrive nella riga con la data.
 
 ## Cosa serve
 
-Tutto dall'ambiente, mai da argv, mai stampato:
+Su un'installazione viva, **quasi niente**: la chiave del modello e la tua user
+id Telegram Muffin le ha già, e chiederle di nuovo sarebbe la stessa porta
+aperta due volte. Le legge da `provider.apiKeyRef` e da
+`surfaces.telegram.ownerUserId`. Niente `.env`.
 
-| variabile | cosa |
+Resta una cosa sola, e solo se il gateway installato è vivo: **il bot**. Due
+processi che fanno `getUpdates` sullo stesso token non convivono, Telegram
+risponde 409 a uno dei due, e il filo registrerebbe un fallimento che sembra un
+difetto del prodotto. Due strade, entrambe legittime:
+
+```bash
+muffin gateway stop            # riusa il bot di prova installato; a fine corsa: muffin gateway start
+muffin secret set e2e_telegram_token   # oppure un bot dedicato (BotFather), e il gateway resta su
+```
+
+Lo script si ferma **prima** di partire se il conflitto c'è, e dice quale dei
+due comandi risolve. L'ambiente resta e vince su tutto, perché una corsa deve
+poter puntare a un account diverso da quello installato senza toccare la
+config:
+
+| variabile | ha la meglio su |
 |---|---|
-| `LLM_API_KEY` (o `OPENROUTER_API_KEY`) | la chiave del modello |
-| `MUFFIN_E2E_TELEGRAM_TOKEN` | il token di un bot **di prova** (BotFather) — non quello installato, che sta già facendo `getUpdates` e risponderebbe 409 |
-| `MUFFIN_E2E_OWNER_ID` | la tua user id Telegram |
+| `LLM_API_KEY` (o `OPENROUTER_API_KEY`) | `provider.apiKeyRef` |
+| `MUFFIN_E2E_TELEGRAM_TOKEN` | `secret://e2e_telegram_token`, poi `secret://telegram_token` |
+| `MUFFIN_E2E_OWNER_ID` | `surfaces.telegram.ownerUserId` |
+
+La scelta è una funzione pura in `credenziali.ts`, con il suo test: là dentro
+sarebbe stata leggibile e mai falsificabile, ed è esattamente dove aveva già
+sbagliato.
 
 ```bash
 npx tsx evals/e2e/telegram.ts
