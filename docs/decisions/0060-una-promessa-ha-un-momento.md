@@ -298,20 +298,39 @@ Cinque, trovati da giudici indipendenti e **non riparati in questa slice**:
 sono scritti qui perché un limite non dichiarato è indistinguibile da un difetto
 che nessuno ha visto.
 
-1. **Due gateway in corsa consegnano due volte.** `fires.has → deliver →
-   fires.record` è check-then-act senza lucchetto, mentre `cli/observe.ts`
-   avvolge la stessa identica forma in `SendLock`. Con due processi che si
-   contendono la stessa casa la stessa promessa può uscire due volte.
-2. **La corsia gira prima che `stillOwner` sia consultato.** Dentro
-   `Scheduler.tick` il controllo P20 arriva solo dopo che `store.due(now)` ha
-   trovato un job, e un tick senza job dovuti torna prima. Un gateway che ha
-   appena perso la rivendicazione può quindi consegnare un impegno. È la metà
-   dello stesso rischio del punto 1 e si chiude con la stessa mossa (una
-   rivendicazione della singola consegna), non con due rattoppi.
-3. **Il messaggio in ritardo non dice l'anno.** «era per martedì 6 ottobre alle
-   09:00» letto tre mesi dopo si legge come ieri. La forma giusta probabilmente
-   dipende da quanto è vecchio l'impegno, e inventarla senza un caso vero è
-   esattamente ciò che questo repository chiama una costante non misurata.
+1. ~~**Due gateway in corsa consegnano due volte.**~~ **Chiuso 2026-09-04.**
+   `fires.has → deliver → fires.record` era check-then-act senza lucchetto,
+   mentre `cli/observe.ts` avvolgeva la stessa identica forma in `SendLock`.
+   `CommitmentLaneDeps.acquireSendLock` (`core/scheduler/commitments.ts`) ora
+   acquisisce lo STESSO `SendLock` (`agent/commitment-run.ts`) per l'intero
+   `pass()`, prima ancora che `fires.has` sia letto — non un lucchetto nuovo,
+   quello già esistente esteso a questa corsia. Test che prova due
+   `CommitmentLane` reali sulla stessa casa, con la consegna tenuta aperta a
+   bella posta perché la seconda arrivi mentre la prima è ancora dentro:
+   `core/scheduler/commitments.test.ts`, descrive «due corsie sulla stessa
+   casa non consegnano la stessa promessa due volte» — rosso se il lucchetto
+   viene tolto (provato togliendolo).
+2. ~~**La corsia gira prima che `stillOwner` sia consultato.**~~ **Chiuso
+   2026-09-04.** Dentro `Scheduler.tick` il controllo P20 arrivava solo dopo
+   che `store.due(now)` aveva trovato un job, e un tick senza job dovuti
+   tornava prima — la corsia degli impegni girava su OGNI battito senza mai
+   essere chiesta. `stillOwner()` è ora consultato subito dopo `standDown`/
+   `paused`, prima di `commitments?.tick(now)` — la stessa mossa del punto 1,
+   non un secondo rattoppo: quel lucchetto rende sicure due corsie che si
+   credono entrambe proprietarie, questo impedisce a una corsia già
+   sicuramente spodestata di girare affatto. Test:
+   `core/scheduler/scheduler.test.ts`, «does not run the commitments lane
+   either, when the claim is already gone — even with no job due» — rosso
+   se il controllo anticipato viene tolto (provato togliendolo).
+3. ~~**Il messaggio in ritardo non dice l'anno.**~~ **Chiuso 2026-09-04.**
+   «era per martedì 6 ottobre alle 09:00» letto tre mesi dopo si leggeva come
+   ieri. `quando()` (`core/scheduler/commitments.ts`) ora include sempre
+   l'anno (`year: 'numeric'`): «era per martedì 6 ottobre 2026 alle 09:00».
+   Nessuna soglia di età: un anno non costa nulla da leggere quando il
+   promemoria è puntuale, e toglie l'ambiguità quando non lo è. Le quattro
+   asserzioni in `core/scheduler/commitments.test.ts` che citano la frase
+   sono state aggiornate e vanno rosse se l'anno viene tolto (provato
+   togliendolo).
 4. **La rotaia del taint è limitata dalla finestra di reiniezione, non
    assoluta.** `due_tier` è il soffitto del turno che ha messo la **data**, e un
    soffitto decade: `taint()` si calcola sulla storia reiniettata, che è

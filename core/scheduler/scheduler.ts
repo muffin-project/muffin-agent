@@ -284,6 +284,22 @@ export class Scheduler {
       this.onEvent({ kind: 'deferred', reason: 'paused' });
       return;
     }
+    // Before the commitments lane, not only before a job starts below: a
+    // commitment costs no model call, so nothing that arbitrates the model
+    // lane ever gated it — but ownership must, the same as it gates a job.
+    // Measured (2026-09-04, ADR-0060 §Limiti noti item 2): this check used to
+    // sit only at the job-start line further down, so a gateway that had
+    // JUST lost its claim still ran `commitments.tick` on every beat before
+    // reaching it. Not a second, differently-shaped patch from the
+    // check-then-act lock `CommitmentLane.pass` now holds
+    // (`acquireSendLock`, commitments.ts) — that lock is what makes two
+    // processes racing the SAME anchor safe even if both still believe they
+    // own the claim; this is what stops a KNOWN-stale process from trying at
+    // all, same as the job lane already does.
+    if (!this.stillOwner()) {
+      this.onEvent({ kind: 'deferred', reason: 'handover' });
+      return;
+    }
     // Before every lane check below it: see the constructor's own comment —
     // this pass never calls the model, so nothing that arbitrates the model
     // lane has any business delaying a promise past the moment it was made for.
@@ -302,9 +318,13 @@ export class Scheduler {
     if (!job) return;
 
     // Re-verified right before the job actually starts, the same point
-    // `modelLane.take` is — a claim can be taken over between the top of this
-    // tick and here in principle, and this is the last chance to catch it
-    // before the model is ever called.
+    // `modelLane.take` is — a claim can be taken over between the hoisted
+    // check above and here in principle (the commitments pass and two store
+    // reads sit in between), and this is the last chance to catch it before
+    // the model is ever called. The hoisted check above answers "is this
+    // tick allowed to do anything at all"; this one answers "is it still true
+    // a few lines later" — same question, asked again because the gap is not
+    // zero, not a second mechanism.
     if (!this.stillOwner()) {
       this.onEvent({ kind: 'deferred', reason: 'handover' });
       return;

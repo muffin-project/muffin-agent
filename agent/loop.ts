@@ -1217,6 +1217,28 @@ export type ResumeRefusal = {
 export type ResumeStream = {
   onDelta?: ((delta: TurnDelta) => void) | undefined;
   onProgress?: ((event: TurnEvent) => void) | undefined;
+  /**
+   * `/stop` and `/steer` for a turn the LANE is running, not a fresh
+   * `runTurn` call — `drive` below has accepted both since before this
+   * comment, `runTurn`'s own `TurnInput.signal`/`.steer` (ADR-0054) already
+   * forward into it, and until now nothing upstream of `resumeTurn` ever HAD
+   * a lever to hand it: the same shape of gap `onDelta`/`onProgress` were,
+   * closed the same way.
+   *
+   * Measured 2026-09-04: a turn resumed after an ASK approval (a lane run
+   * that can take as long as the tool call it is waiting on) was invisible
+   * to the surface's own "is a turn live for this chat" bookkeeping
+   * (`connectors/telegram/connector.ts`'s `vivi`), which is populated only
+   * by `runTurn`'s call site — so `/steer` sent while that lane run was in
+   * flight answered "nessun turno in corso", which was false: a turn WAS
+   * running, just not through the door that ever registered one. Wiring
+   * these two through is what lets a connector register the SAME `vivi`
+   * entry for a resumed turn that it already does for a fresh one, so the
+   * answer is honest in both directions — reachable, not just theoretically
+   * plumbed.
+   */
+  signal?: AbortSignal | undefined;
+  steer?: (() => string[]) | undefined;
 };
 
 /**
@@ -1412,6 +1434,12 @@ export async function resumeTurn(
     // `options.onProgress` qui sotto), mancava solo chi li passasse fin qui.
     ...(stream?.onDelta ? { onDelta: stream.onDelta } : {}),
     ...(stream?.onProgress ? { onProgress: stream.onProgress } : {}),
+    // Lo stesso filo, per `/stop` e `/steer` invece che per lo streaming —
+    // vedi il commento su `ResumeStream` qui sopra. `drive` li legge già
+    // (`options.signal`/`options.steer`); prima di questa riga nessuno li
+    // passava fin qui per un turno ripreso dalla corsia.
+    ...(stream?.signal ? { signal: stream.signal } : {}),
+    ...(stream?.steer ? { steer: stream.steer } : {}),
   });
 }
 
