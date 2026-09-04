@@ -6,6 +6,7 @@ import { homedir, userInfo } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { attachMcp, buildRuntime } from '../agent/runtime.js';
+import { makeCommitmentLane } from '../agent/commitment-run.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
 import { makeLaneRunner, NO_SURFACE, type AttachStream, type LaneDeliver } from '../agent/turn-lane.js';
 import { TurnLane, type LaneEvent } from '../core/turns/lane.js';
@@ -667,6 +668,40 @@ export async function cmdGatewayRun(
     registry === null ? notDelivered('le superfici non sono ancora connesse') : registry.deliver(channel, text);
 
   const pausa = new Pausa(runtime.db);
+  /**
+   * ADR-0060: la promessa datata, sulla stessa battuta dei job.
+   *
+   * `deliver` è la stessa indirezione che riceve lo scheduler — quindi una
+   * consegna tentata prima che le superfici siano su torna `{ delivered: false }`
+   * e l'ancora resta aperta, che è esattamente la regola su cui gira
+   * `cli/observe.ts`: si brucia solo ciò che è arrivato all'owner.
+   */
+  const commitments = makeCommitmentLane(runtime, deliver, {
+    /**
+     * Il gateway gira in due modi e la risposta e' diversa: `muffin gateway
+     * run` in un terminale ha davvero l'owner davanti; sotto launchd o systemd
+     * stdout **e' il journal**. E' lo stesso segnale che `cliSurface` legge per
+     * decidere se lo streaming ha un senso, letto qui perche' e' qui che si sa
+     * come questo processo e' stato avviato.
+     */
+    hasTerminal: () => process.stdout.isTTY === true,
+    onEvent: (e) => {
+      if (e.kind === 'undelivered') {
+        process.stderr.write(`impegno ${e.anchor}: non consegnato — ${e.why}\n`);
+      } else if (e.kind === 'unreachable') {
+        // Una volta per ancora, non una ogni trenta secondi (vedi
+        // `CommitmentEvent`). La promessa resta dovuta: quando l'owner cambia
+        // la superficie predefinita, arriva — in ritardo, e dicendolo.
+        process.stderr.write(
+          `impegno ${e.anchor}: scaduto, ma "${e.channel}" non arriva a nessuno da qui — ` +
+            `resta in attesa\n→ ${e.remedy}\n`,
+        );
+      } else if (e.kind === 'failed') {
+        // Il processo e' vivo: e' questo il punto della riga.
+        process.stderr.write(`corsia impegni: giro fallito — ${e.error}\n`);
+      }
+    },
+  });
   const scheduler = new Scheduler(
     runtime.jobs,
     makeJobRunner(runtime.deps, runtime.jobFires, runtime.executor, { cwd: runtime.workspace }),
@@ -711,6 +746,10 @@ export async function cmdGatewayRun(
     // ADR-0054 §4: `/pause` da qualunque superficie, letta dal database che
     // tutti i processi condividono.
     () => pausa.attiva(),
+    // ADR-0060: l'unico produttore di `commitment_due`. Passato allo scheduler
+    // e non chiamato da `Gateway.tick`, perché le due condizioni che devono
+    // zittirlo — handover e `/pause` — sono già risolte lì dentro.
+    commitments,
   );
 
   /**
@@ -772,7 +811,7 @@ export async function cmdGatewayRun(
   });
   onAssembled?.({ turnLane, lock });
 
-  let stopSurfaces: (() => void) | null = null;
+  let stopSurfaces: ((budgetMs: number) => Promise<void>) | null = null;
   let controlSocket: ControlServer | undefined;
   const avviatoAlle = new Date().toISOString();
   const envTickMs = tickMsFromEnv(process.env['MUFFIN_GATEWAY_TICK_MS']);
@@ -784,14 +823,29 @@ export async function cmdGatewayRun(
     scheduler,
     turnLane,
     jobs: runtime.jobs,
-    close: () => {
+    close: async (remainingMs) => {
       // Il socket per primo: da qui in poi nessuno deve poterci parlare, e il
       // file rimosto dalla chiusura pulita e' meta' del contratto — quello che
       // resta e' sempre e solo il socket di un morto (`control-socket.ts`).
       void controlSocket?.close();
       // Surfaces first, then the runtime: the connector must stop polling
       // before the database under it goes away (the REPL's order, same reason).
-      stopSurfaces?.();
+      //
+      // **Awaited, not fired and forgotten.** Until 03/09/2026 `stopSurfaces`
+      // only *signalled* — synchronous, `() => void` — and `runtime.close()`
+      // ran the very next line, closing the database while a `getUpdates`
+      // already in flight (Telegram's long poll, up to 65s) or a turn a
+      // connector's own drain was still writing (never tracked by `Gateway`'s
+      // `busy()` — those run outside `turnLane`) was still going. It landed on
+      // the owner's real gateway: `~/.muffin/gateway.err` showed `telegram:
+      // update 99665860 fallito — The database connection is not open`
+      // followed by `telegram: polling fallito (The database connection is
+      // not open)`, both after `gateway: SIGTERM — drenaggio…` had already
+      // printed. `remainingMs` is what is left of `Gateway.drain`'s own
+      // budget after its busy-wait — not a second budget invented here, so the
+      // "fino a Xs" the owner already read stays true of the whole shutdown,
+      // comfortably inside `unit.ts`'s `TimeoutStopSec` margin.
+      await stopSurfaces?.(remainingMs);
       runtime.close();
     },
     log: (line) => process.stderr.write(`${line}\n`),

@@ -362,7 +362,11 @@ describe('what a filesystem tool says about where its bytes came from', () => {
   it('a read is tier 2: the disk cannot tell the owner from a stranger', async () => {
     const { scope } = scoped();
     const out = await byName(scope, 'fs_read').handler({ path: 'nota.md' }, ctx);
-    expect(out.content).toBe('ciao\n');
+    // Non più i byte nudi: dal 2026-09-03 (`slice/il-disco-ha-un-recinto`) il
+    // corpo esce dentro il recinto, e i byte del file sono ciò che sta dentro.
+    // Il recinto ha una prova sua in `agent/tools/recinto-del-disco.test.ts`;
+    // qui interessa che il tier non si sia mosso.
+    expect(out.content).toContain('ciao');
     expect(out.tier).toBe(DISK_TIER);
     expect(DISK_TIER).toBe(2);
   });

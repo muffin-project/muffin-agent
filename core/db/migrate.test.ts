@@ -246,11 +246,12 @@ describe('migrazione 2 — jobs.kind', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    // [2, 3]: this fixture has no `facts` table, so migration 3 (added by
-    // `slice/memoria-appuntata`) is a genuine no-op here — but `migrate()`
-    // still runs and stamps it, the same way migration 2 itself no-ops (and
-    // still counts) on a database where `jobs` is absent, two tests below.
-    expect(res.applied).toEqual([2, 3]);
+    // [2, 3, 4, 5]: this fixture has neither a `facts` nor a `todos` table, so
+    // migration 3 (`slice/memoria-appuntata`) and migrations 4 and 5
+    // (`slice/una-promessa-torna`) are genuine no-ops here — but `migrate()` still runs and stamps them, the
+    // same way migration 2 itself no-ops (and still counts) on a database where
+    // `jobs` is absent, two tests below.
+    expect(res.applied).toEqual([2, 3, 4, 5]);
     const riga = db.prepare(`SELECT goal, kind FROM jobs WHERE id = 'j1'`).get() as {
       goal: string;
       kind: string;
@@ -267,10 +268,10 @@ describe('migrazione 2 — jobs.kind', () => {
     const { db, backups } = fileDb();
     // È il caso di ogni installazione fresca: `migrate()` gira in
     // `agent/runtime.ts` PRIMA che `JobStore` crei la propria tabella —
-    // e prima che `MemoryStore` crei `facts`, motivo per cui la 3 arriva
-    // fin qui allo stesso modo.
+    // e prima che `MemoryStore` crei `facts` e `TodoStore` crei `todos`,
+    // motivo per cui la 3 e la 4 arrivano fin qui allo stesso modo.
     expect(() => migrate(db, { backupDir: backups })).not.toThrow();
-    expect(schemaVersionOf(db)).toBe(3);
+    expect(schemaVersionOf(db)).toBe(5);
   });
 });
 
@@ -313,7 +314,7 @@ describe('migrazione 3 — facts.pinned', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([2, 3]);
+    expect(res.applied).toEqual([2, 3, 4, 5]);
     const pinned = db.prepare(`SELECT id FROM facts WHERE pinned = 1 ORDER BY id`).all() as { id: number }[];
     expect(pinned.map((r) => r.id)).toEqual([1, 2, 3]);
     // Rows survive untouched — this is a backfill, not a rewrite.
@@ -361,6 +362,86 @@ describe('migrazione 3 — facts.pinned', () => {
     // The fresh-install case: `MemoryStore` has not run yet, so `facts` is not
     // there for this migration to touch — same guard, same reason as jobs.kind.
     expect(() => migrate(db, { backupDir: backups })).not.toThrow();
-    expect(schemaVersionOf(db)).toBe(3);
+    expect(schemaVersionOf(db)).toBe(5);
+  });
+});
+
+describe('migrazioni 4 e 5 — todos.due_at, poi todos.due_tier', () => {
+  /** The pre-ADR-0060 shape of `todos`: a plan step with no moment. */
+  function seedOldTodos(db: DatabaseCtor.Database): void {
+    db.exec(`
+      CREATE TABLE todos (
+        tenant TEXT NOT NULL, session_id TEXT NOT NULL, seq INTEGER NOT NULL,
+        key TEXT NOT NULL, text TEXT NOT NULL, state TEXT NOT NULL, note TEXT,
+        tier INTEGER NOT NULL CHECK (tier BETWEEN 0 AND 3),
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        PRIMARY KEY (tenant, session_id, key))`);
+    const raw = db.prepare(
+      `INSERT INTO todos (tenant, session_id, seq, key, text, state, tier, created_at, updated_at)
+       VALUES ('host', 's1', ?, ?, ?, 'pending', 0, '2026-08-01T10:00:00Z', '2026-08-01T10:00:00Z')`,
+    );
+    for (let i = 1; i <= 200; i += 1) raw.run(i, `k${i}`, `passo ${i}`);
+  }
+
+  it('porta un todos popolato fino a HEAD con le righe intatte, e l\'indice che lo scanner usa', () => {
+    const { db, backups } = fileDb();
+    seedOldTodos(db);
+    migrate(db, { backupDir: backups, migrations: [] }); // baseline v1, un'installazione vecchia
+
+    const res = migrate(db, { backupDir: backups });
+
+    expect(res.applied).toEqual([2, 3, 4, 5]);
+    const colonne = (db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>).map((c) => c.name);
+    expect(colonne).toContain('due_at');
+    expect(colonne).toContain('due_tier');
+    const righe = db.prepare(`SELECT count(*) AS n FROM todos`).get() as { n: number };
+    expect(righe.n).toBe(200);
+    // Nessuna riga scritta prima di oggi acquista un momento per effetto di un
+    // aggiornamento: sarebbe testo che l'owner non ha mai datato, e che da
+    // domani può far parlare Muffin per primo.
+    const datate = db.prepare(`SELECT count(*) AS n FROM todos WHERE due_at IS NOT NULL`).get() as { n: number };
+    expect(datate.n).toBe(0);
+    const piano = db
+      .prepare(`EXPLAIN QUERY PLAN SELECT key FROM todos WHERE tenant = 'host' AND due_at > '' AND due_at < 'z'`)
+      .all() as Array<{ detail: string }>;
+    expect(piano.map((r) => r.detail).join(' ')).toContain('idx_todos_due');
+  });
+
+  /**
+   * Il reperto del secondo giudice, e il solo motivo per cui `due_tier` è una
+   * versione a sé.
+   *
+   * Le due colonne sono state una sola migrazione 4 per un commit di questo
+   * ramo (`44dbcdf`). Un database timbrato da *quella* build ha `due_at` e non
+   * `due_tier`, e il runner salta una versione che ha già registrato: la
+   * seconda colonna non sarebbe mai arrivata, e la prima query che `TodoStore`
+   * prepara moriva con `no such column: due_tier` prima che il runtime finisse
+   * di partire. Nessuna casa rilasciata è a quel timbro — quella dell'owner è
+   * alla 3, misurata — ma un numero di versione già girato non si riusa.
+   */
+  it('una casa timbrata dal primo v4 — due_at senza due_tier — riceve la colonna mancante e parte', () => {
+    const { db, backups } = fileDb();
+    seedOldTodos(db);
+    db.exec(`ALTER TABLE todos ADD COLUMN due_at TEXT`);
+    // Timbrata fino alla 4 inclusa, esattamente come l'avrebbe lasciata `44dbcdf`.
+    migrate(db, { backupDir: backups, migrations: [] });
+    const timbra = db.prepare(
+      `INSERT INTO schema_version (version, description, applied_at) VALUES (?, ?, '2026-09-03T00:00:00Z')`,
+    );
+    for (const v of [2, 3, 4]) timbra.run(v, `girata da 44dbcdf (${v})`);
+    expect(schemaVersionOf(db)).toBe(4);
+
+    const res = migrate(db, { backupDir: backups });
+
+    expect(res.applied).toEqual([5]);
+    const colonne = (db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>).map((c) => c.name);
+    expect(colonne).toContain('due_tier');
+    // La query che moriva: è questa a rendere l'asserzione un comportamento e
+    // non un `PRAGMA` soddisfatto di sé.
+    expect(() =>
+      db.prepare(`SELECT max(tier, coalesce(due_tier, 0)) AS tier FROM todos WHERE tenant = 'host'`).get(),
+    ).not.toThrow();
+    const righe = db.prepare(`SELECT count(*) AS n FROM todos`).get() as { n: number };
+    expect(righe.n).toBe(200);
   });
 });
