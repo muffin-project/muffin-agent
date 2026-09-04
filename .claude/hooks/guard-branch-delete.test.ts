@@ -28,7 +28,26 @@ function esegui(command: string, env: Record<string, string> = {}): { code: numb
   // quel warning che i casi devono poter leggere.
   const r = spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify({ tool_input: { command } }),
-    env: { ...process.env, PATH: `${binConGh}:${process.env['PATH']}`, ...env },
+    env: {
+      ...process.env,
+      PATH: `${binConGh}:${process.env['PATH']}`,
+      // Il timeout della guardia e' fissato qui, e non lasciato al suo default
+      // di 3s, perche' su timeout la guardia **fallisce aperta**: se lo `sh`
+      // finto non risponde in tempo il delete passa, e il caso diventa verde
+      // per la ragione opposta a quella che asserisce.
+      //
+      // Non e' teorico. Il 04/09/2026, con la suite intera in parallelo su
+      // questa macchina, «rifiuta il delete di un branch che e' testa di una
+      // PR aperta» ha dato `expected +0 to be 2`, e da solo sullo stesso
+      // commit passava. Un test cosi' misura quanto e' carica la CPU, non cosa
+      // fa la guardia.
+      //
+      // 30s non e' un'attesa: e' un numero abbastanza grande da non poter
+      // essere raggiunto se non quando qualcosa e' rotto davvero. Il caso che
+      // prova il timeout lo sovrascrive a 200ms — `...env` viene dopo apposta.
+      MUFFIN_GH_TIMEOUT_MS: '30000',
+      ...env,
+    },
     encoding: 'utf8',
   });
   return { code: r.status ?? -1, err: r.stderr ?? '' };
