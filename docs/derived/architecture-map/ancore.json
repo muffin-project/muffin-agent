@@ -791,7 +791,7 @@
   },
   "cli/config.ts:22": {
     "path": "cli/config.ts",
-    "line": 21,
+    "line": 40,
     "testo": "export function cmdConfig(home: string, argv: string[]): number {"
   },
   "cli/doctor.ts:195": {
@@ -811,37 +811,37 @@
   },
   "cli/gateway.ts:27": {
     "path": "cli/gateway.ts",
-    "line": 33,
+    "line": 34,
     "testo": "import type { SurfaceRegistry } from '../core/surface/registry.js';"
   },
   "cli/gateway.ts:296": {
     "path": "cli/gateway.ts",
-    "line": 545,
+    "line": 615,
     "testo": "* The process. Invoked by the supervisor, and by `muffin gateway run` when the"
   },
   "cli/gateway.ts:297": {
     "path": "cli/gateway.ts",
-    "line": 546,
+    "line": 616,
     "testo": "* owner wants to watch it in a terminal."
   },
   "cli/gateway.ts:363": {
     "path": "cli/gateway.ts",
-    "line": 705,
+    "line": 775,
     "testo": "const scheduler = new Scheduler("
   },
   "cli/gateway.ts:375": {
     "path": "cli/gateway.ts",
-    "line": 418,
+    "line": 430,
     "testo": "}"
   },
   "cli/gateway.ts:381": {
     "path": "cli/gateway.ts",
-    "line": 734,
+    "line": 804,
     "testo": "(turnId, state) => runtime.deps.turns.delivered(turnId, state),"
   },
   "cli/gateway.ts:388": {
     "path": "cli/gateway.ts",
-    "line": 756,
+    "line": 826,
     "testo": "* The turn lane, on the gateway's own beat."
   },
   "cli/init.ts:104": {
@@ -881,132 +881,132 @@
   },
   "cli/main.ts:101": {
     "path": "cli/main.ts",
-    "line": 192,
+    "line": 198,
     "testo": "* where Italian has the word an owner would actually say — not a translation"
   },
   "cli/main.ts:121": {
     "path": "cli/main.ts",
-    "line": 158,
+    "line": 164,
     "testo": "muffin rot verify | reseal | harden"
   },
   "cli/main.ts:134": {
     "path": "cli/main.ts",
-    "line": 175,
+    "line": 181,
     "testo": "muffin trace tail [-n N] [--errors] | grep PATTERN"
   },
   "cli/main.ts:159": {
     "path": "cli/main.ts",
-    "line": 258,
+    "line": 264,
     "testo": "* which is what a real terminal always gets. `--stream` exists for the"
   },
   "cli/main.ts:161": {
     "path": "cli/main.ts",
-    "line": 260,
+    "line": 266,
     "testo": "* progressive text (`muffin repl --stream | tee log`, and the acceptance"
   },
   "cli/main.ts:163": {
     "path": "cli/main.ts",
-    "line": 262,
+    "line": 268,
     "testo": "* to autodetect from). `--no-stream` wins if a script passes both — the"
   },
   "cli/main.ts:165": {
     "path": "cli/main.ts",
-    "line": 264,
+    "line": 270,
     "testo": "* conflicting pair elsewhere in this CLI (flag beats flag, most restrictive"
   },
   "cli/main.ts:167": {
     "path": "cli/main.ts",
-    "line": 195,
+    "line": 201,
     "testo": "*/"
   },
   "cli/main.ts:171": {
     "path": "cli/main.ts",
-    "line": 270,
+    "line": 276,
     "testo": "return undefined;"
   },
   "cli/main.ts:175": {
     "path": "cli/main.ts",
-    "line": 274,
+    "line": 280,
     "testo": "loadDotenvIfPresent();"
   },
   "cli/main.ts:177": {
     "path": "cli/main.ts",
-    "line": 276,
+    "line": 282,
     "testo": "// is the same whether they ride with a bare `muffin` (`command` ends up"
   },
   "cli/main.ts:179": {
     "path": "cli/main.ts",
-    "line": 278,
+    "line": 284,
     "testo": "const stream = streamOverride(rawArgv);"
   },
   "cli/main.ts:181": {
     "path": "cli/main.ts",
-    "line": 284,
+    "line": 290,
     "testo": "const [typed, ...rest] = argv;"
   },
   "cli/main.ts:183": {
     "path": "cli/main.ts",
-    "line": 286,
+    "line": 292,
     "testo": "// only ever sees canonical command names. `typed` itself is undefined for a"
   },
   "cli/main.ts:185": {
     "path": "cli/main.ts",
-    "line": 288,
+    "line": 294,
     "testo": "const command = typed !== undefined ? (COMMAND_ALIASES[typed] ?? typed) : typed;"
   },
   "cli/main.ts:187": {
     "path": "cli/main.ts",
-    "line": 290,
+    "line": 296,
     "testo": "case 'run':"
   },
   "cli/main.ts:191": {
     "path": "cli/main.ts",
-    "line": 294,
+    "line": 300,
     "testo": "case 'init':"
   },
   "cli/main.ts:198": {
     "path": "cli/main.ts",
-    "line": 350,
+    "line": 356,
     "testo": "return cmdRot(rest);"
   },
   "cli/main.ts:202": {
     "path": "cli/main.ts",
-    "line": 354,
+    "line": 360,
     "testo": "return cmdMemory(rest);"
   },
   "cli/main.ts:245": {
     "path": "cli/main.ts",
-    "line": 472,
+    "line": 478,
     "testo": "options: {"
   },
   "cli/main.ts:258": {
     "path": "cli/main.ts",
-    "line": 491,
+    "line": 497,
     "testo": "if (providerFlag && providerFlag !== 'anthropic' && providerFlag !== 'openai-compat') {"
   },
   "cli/main.ts:297": {
     "path": "cli/main.ts",
-    "line": 670,
+    "line": 676,
     "testo": "// change exists to preserve would start writing `anthropic` for an OpenRouter"
   },
   "cli/main.ts:308": {
     "path": "cli/main.ts",
-    "line": 716,
+    "line": 722,
     "testo": "...(values.hardened ? { hardened: true } : {}),"
   },
   "cli/main.ts:317": {
     "path": "cli/main.ts",
-    "line": 726,
+    "line": 732,
     "testo": "for (const s of steps) process.stderr.write(`${s.done ? '✓' : '!'} ${s.name.padEnd(16)} ${s.detail}\\n`);"
   },
   "cli/main.ts:340": {
     "path": "cli/main.ts",
-    "line": 757,
+    "line": 763,
     "testo": "* a TTY it prints the command instead and installs nothing: `promptLine`"
   },
   "cli/main.ts:505": {
     "path": "cli/main.ts",
-    "line": 975,
+    "line": 981,
     "testo": "const { values } = parseArgs({ args: rest, options: { limit: { type: 'string' } } });"
   },
   "cli/mcp.ts:142": {
@@ -1194,14 +1194,29 @@
     "line": 147,
     "testo": "detail = ` · token ${token ? 'presente' : 'MANCANTE'} · owner ${owner ?? 'MANCANTE'}`;"
   },
-  "connector.ts:354": {
+  "connector.ts:1046": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1352,
-    "testo": "const onDelta = (delta: TurnDelta): void => {"
+    "line": 1046,
+    "testo": "* byte-for-byte regardless of what this method computes on that later call"
+  },
+  "connector.ts:1431": {
+    "path": "connectors/telegram/connector.ts",
+    "line": 1431,
+    "testo": "if (outcome === 'deferred') return;"
+  },
+  "connector.ts:981": {
+    "path": "connectors/telegram/connector.ts",
+    "line": 981,
+    "testo": "* Il menu dei comandi, dichiarato a Telegram a ogni avvio."
+  },
+  "connector.ts:989": {
+    "path": "connectors/telegram/connector.ts",
+    "line": 989,
+    "testo": "* invisibile, e quello e' il modo in cui il menu smette di essere vero."
   },
   "connectors/discord/connector.ts:139": {
     "path": "connectors/discord/connector.ts",
-    "line": 158,
+    "line": 170,
     "testo": "};"
   },
   "connectors/telegram/connector.ts:153": {
@@ -1216,7 +1231,7 @@
   },
   "connectors/telegram/connector.ts:198": {
     "path": "connectors/telegram/connector.ts",
-    "line": 703,
+    "line": 759,
     "testo": "async run(signal?: AbortSignal): Promise<void> {"
   },
   "connectors/telegram/connector.ts:223": {
@@ -1236,17 +1251,17 @@
   },
   "connectors/telegram/connector.ts:307": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1572,
+    "line": 1727,
     "testo": "this.deps.savePairing({"
   },
   "connectors/telegram/connector.ts:313": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1578,
+    "line": 1733,
     "testo": "this.deps.config.ownerChatId = incoming.chatId;"
   },
   "connectors/telegram/connector.ts:354": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1352,
+    "line": 1503,
     "testo": "const onDelta = (delta: TurnDelta): void => {"
   },
   "consolidator.ts:109": {
@@ -1971,22 +1986,22 @@
   },
   "core/sandbox/executor.ts:117": {
     "path": "core/sandbox/executor.ts",
-    "line": 409,
+    "line": 472,
     "testo": "filesystem: {"
   },
   "core/sandbox/executor.ts:118": {
     "path": "core/sandbox/executor.ts",
-    "line": 410,
+    "line": 473,
     "testo": "denyRead: [...this.guards.denyRead],"
   },
   "core/sandbox/executor.ts:63": {
     "path": "core/sandbox/executor.ts",
-    "line": 165,
+    "line": 202,
     "testo": "export class SandboxExecutor {"
   },
   "core/sandbox/executor.ts:75": {
     "path": "core/sandbox/executor.ts",
-    "line": 177,
+    "line": 214,
     "testo": "status(): SandboxProbe {"
   },
   "core/sandbox/probe.ts:31": {
@@ -2076,7 +2091,7 @@
   },
   "core/vault/vault.ts:420": {
     "path": "core/vault/vault.ts",
-    "line": 454,
+    "line": 471,
     "testo": "report.chunks += 1;"
   },
   "core/vault/vault.ts:58": {
@@ -2311,17 +2326,17 @@
   },
   "executor.ts:112": {
     "path": "core/sandbox/executor.ts",
-    "line": 404,
+    "line": 467,
     "testo": "// v1 skips the optional apply-seccomp layer: two open bugs break it on"
   },
   "executor.ts:114": {
     "path": "core/sandbox/executor.ts",
-    "line": 406,
+    "line": 469,
     "testo": "// Declared limit: Unix-socket hardening is off on Linux."
   },
   "executor.ts:168": {
     "path": "core/sandbox/executor.ts",
-    "line": 460,
+    "line": 523,
     "testo": "private childEnv(srtEnv: NodeJS.ProcessEnv, scratch: string): NodeJS.ProcessEnv {"
   },
   "extract.ts:187": {
@@ -2584,15 +2599,10 @@
     "line": 52,
     "testo": "* kept every retired belief on purpose had no path by which any of them could"
   },
-  "presence.ts:238": {
+  "presence.ts:58": {
     "path": "connectors/telegram/presence.ts",
-    "line": 222,
-    "testo": "streamText,"
-  },
-  "presence.ts:240": {
-    "path": "connectors/telegram/presence.ts",
-    "line": 224,
-    "testo": "async stop() {"
+    "line": 58,
+    "testo": "export async function startPresence(api: TelegramApiLike, chatId: number): Promise<Presence> {"
   },
   "pricing.ts:43": {
     "path": "core/budget/pricing.ts",
@@ -2873,6 +2883,16 @@
     "path": "core/tracing/tracer.ts",
     "line": 94,
     "testo": "attributes: redactAttributes(current),"
+  },
+  "transcript.ts:448": {
+    "path": "connectors/telegram/transcript.ts",
+    "line": 448,
+    "testo": "live(text) {"
+  },
+  "transcript.ts:468": {
+    "path": "connectors/telegram/transcript.ts",
+    "line": 468,
+    "testo": "handoff() {"
   },
   "types.ts:104": {
     "path": "core/policy/types.ts",
