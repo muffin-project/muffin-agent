@@ -169,7 +169,7 @@ function quantoSiSomigliano(a: ReadonlySet<string>, b: ReadonlySet<string>): num
 }
 
 /** Sopra questa soglia due affermazioni dicono la stessa cosa. */
-export const SOGLIA = 0.6;
+const SOGLIA = 0.6;
 
 /**
  * Le eco fra blocchi diversi, dalla più forte alla più debole.

@@ -110,12 +110,12 @@ import { schemaVersionOf } from '../core/db/migrate.js';
  * asimmetria, ed è ciò che rende la riga di ritardo una domanda con una
  * risposta sola invece di un confronto fra pari.
  */
-export const CHANNELS = ['main', 'dev'] as const;
+const CHANNELS = ['main', 'dev'] as const;
 export type Channel = (typeof CHANNELS)[number];
-export const DEFAULT_CHANNEL: Channel = 'main';
+const DEFAULT_CHANNEL: Channel = 'main';
 const UPSTREAM_OF: Readonly<Record<Channel, Channel | null>> = { main: 'dev', dev: null };
 
-export function isChannel(x: string): x is Channel {
+function isChannel(x: string): x is Channel {
   return (CHANNELS as readonly string[]).includes(x);
 }
 
@@ -200,7 +200,7 @@ export function arrivalsSummary(args: {
   );
 }
 
-export type UpdateStep = { name: string; done: boolean; detail: string };
+type UpdateStep = { name: string; done: boolean; detail: string };
 export type UpdateResult = { steps: UpdateStep[]; code: number };
 
 type SpawnResult = { status: number; stdout: string; stderr: string };
@@ -637,7 +637,7 @@ function restartCommand(platform: NodeJS.Platform): { printable: string; argv: s
  * domanda serve anche a `cli/gateway.ts` — un meccanismo solo, non due che
  * possono divergere.
  */
-export function currentGatewayPid(home: string): number | null {
+function currentGatewayPid(home: string): number | null {
   const file = paths(home).db;
   if (!existsSync(file)) return null;
   const db = new DatabaseCtor(file, { readonly: true });
@@ -662,7 +662,7 @@ function isGatewayRunning(home: string): boolean {
  * che va bene; per uno che non va, dire onestamente «non confermato entro Ns»
  * è la risposta giusta — non un'attesa più lunga a caso.
  */
-export async function waitForGatewayPid(
+async function waitForGatewayPid(
   readPid: () => number | null,
   before: number | null,
   opts: {
@@ -1103,7 +1103,7 @@ export function runUpdate(deps: UpdateDeps = {}): UpdateResult {
   return { steps, code: 0 };
 }
 
-export const UPDATE_USAGE = `uso:
+const UPDATE_USAGE = `uso:
   muffin update [--dry-run] [--yes]     fetch del canale, costruisce una release
       [--channel main|dev]               affiancata (git worktree + npm ci),
                                          backup, poi scambio atomico del/i

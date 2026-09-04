@@ -62,7 +62,7 @@ import { DRAIN_BUDGET_MS } from '../core/gateway/service.js';
  * in due passi. Aggiungere una superficie senza toccarla è il modo in cui i due
  * elenchi finiscono per non essere d'accordo.
  */
-export const SUPERFICI_NOTE: readonly string[] = ['cli', 'telegram', 'discord'];
+const SUPERFICI_NOTE: readonly string[] = ['cli', 'telegram', 'discord'];
 
 export const SURFACE_USAGE = `usage:
   muffin surface list                     le superfici e il loro stato
