@@ -25,7 +25,7 @@ import type { Principal } from '../core/policy/types.js';
  * nothing said so. Both failed closed, so neither was a hole; both were total
  * outages that no test could notice.
  *
- * ADR-0065 removed the second line for `sys.http` specifically: `makeHttpTool()`
+ * ADR-0066 removed the second line for `sys.http` specifically: `makeHttpTool()`
  * no longer takes `egress` at all, so there is no allowlist wiring left to
  * prove for it — the join that matters now is simpler (does `buildRuntime`'s
  * `sys.http` registration actually reach the kernel as `url-read`, through a
@@ -148,7 +148,7 @@ describe('the tier of a file read reaches the kernel', () => {
   ];
 
   it("a real turn that reads a real file can then fetch anywhere — reading a file arms no gate `sys.http` still has", async () => {
-    // ADR-0065: `sys.http` is `url-read`, open regardless of `rot/egress.json`.
+    // ADR-0066: `sys.http` is `url-read`, open regardless of `rot/egress.json`.
     // `DISK_TIER` (`agent/tools/fs.ts`) is 2, and `paramsMaxTaint` (`POLICY_FLOOR`)
     // is also 2 — a disk read alone never exceeds it, by the owner's own
     // 2026-08-17 decision ("Ships 2": the owner's own disk should not make

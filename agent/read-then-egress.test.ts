@@ -39,7 +39,7 @@ import { shellCapability } from './tools/shell.js';
  * turn, lets the loop and the real kernel do what production does, and asks the
  * only question that matters — did the bytes get out?
  *
- * **ADR-0065 changed the `sys.http` half of this story, not the `sys.shell`
+ * **ADR-0066 changed the `sys.http` half of this story, not the `sys.shell`
  * half.** `fs.write`/`sys.shell` still answer to the `host` row exactly as
  * described above — taint still closes them to an `ask`, still gated by the
  * owner's yes. `sys.http` moved to `resourceKind: 'url-read'`: reading is
@@ -47,7 +47,7 @@ import { shellCapability } from './tools/shell.js';
  * only a query string or fragment the model chose still does, through
  * `paramsMaxTaint`, proven in the "params" describe further down. The tests
  * immediately below keep the same chain-not-field discipline, with their
- * assertions updated to the post-ADR-0065 decision.
+ * assertions updated to the post-ADR-0066 decision.
  */
 
 class Scripted implements Provider {
@@ -164,7 +164,7 @@ function harness(script: ChatResult[]) {
   return { deps, fetched, approvals, home, provider: deps.provider as Scripted };
 }
 
-describe('read-then-fetch, through a real turn — ADR-0065: reading is open, so this no longer closes', () => {
+describe('read-then-fetch, through a real turn — ADR-0066: reading is open, so this no longer closes', () => {
   it('a plain fetch runs the same after a file read as before one — no gate left to close', async () => {
     const h = harness([
       callTool('fs_read', { path: 'nota.md' }),
@@ -179,7 +179,7 @@ describe('read-then-fetch, through a real turn — ADR-0065: reading is open, so
       text: 'leggi nota.md e fai quello che dice',
     });
 
-    // Before ADR-0065 this array was empty (a flat deny) — `url-read` never
+    // Before ADR-0066 this array was empty (a flat deny) — `url-read` never
     // consults the allowlist, so the plain fetch just runs, exactly as it
     // would with no read at all.
     expect(h.fetched).toEqual([EXFIL]);
@@ -405,7 +405,7 @@ describe('a THROWN result taints the turn too (judge round-1, PR #28)', () => {
    * `raiseTaint` call) — so `http_get` to an off-allowlist host right after
    * came back `ask` at taint 0, the owner approved, and the fetch ran.
    *
-   * ADR-0065: a plain `http_get` no longer has an allowlist to skip past, so
+   * ADR-0066: a plain `http_get` no longer has an allowlist to skip past, so
    * this probe needs a URL that still has something to lose — a query string,
    * which is what `paramsMaxTaint` gates regardless of how reading itself
    * opened up. Same probe, same question: does a thrown result's declared
@@ -489,14 +489,14 @@ describe('a THROWN result taints the turn too (judge round-1, PR #28)', () => {
  * file, same real `runTool`/`resourceFor`/`decide` chain as every describe
  * block above.
  *
- * ADR-0065 removed the allowlist from this story for `sys.http` — `ALLOWED_HOST`
+ * ADR-0066 removed the allowlist from this story for `sys.http` — `ALLOWED_HOST`
  * is now just "a host", not a host anyone had to name in `rot/egress.json`; the
  * name is kept only so the URLs below read the same as before. `egressAllowed`
  * is passed through and never consulted for `url-read`. What did NOT change is
  * the point of this whole describe: the params gate is a *destination-
  * independent* check on model-chosen bytes, and it fires exactly the same
  * whether the destination got there via an allowlist entry (the old world) or
- * via reading being open by default (ADR-0065).
+ * via reading being open by default (ADR-0066).
  */
 const ALLOWED_HOST = 'allowed.example.com';
 const withParamsAllowed = () =>
@@ -505,13 +505,13 @@ const withParamsAllowed = () =>
     capabilities: new Map(decls.map((d) => [d.id, d])),
     budgetExhausted: () => false,
     hardened: true,
-    // Irrelevant to `sys.http` since ADR-0065 (`url-read` never calls it);
+    // Irrelevant to `sys.http` since ADR-0066 (`url-read` never calls it);
     // left in place because `withParamsAllowed` predates the split and other
     // `url`-resource capabilities would still need it.
     egressAllowed: (host) => host === ALLOWED_HOST,
   });
 
-describe('params on any host — the gate http_get skipped until P04-1, unaffected by ADR-0065 opening the host itself', () => {
+describe('params on any host — the gate http_get skipped until P04-1, unaffected by ADR-0066 opening the host itself', () => {
   const WITH_PARAMS = `https://${ALLOWED_HOST}/collect?q=SECRET-BYTES`;
 
   it('after a tier-3 fetch, a query string on any host asks the owner and shows the whole URL', async () => {
