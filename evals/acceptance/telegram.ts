@@ -85,6 +85,23 @@ export type FakeTelegram = {
   messages(): Array<{ chatId: number; text: string }>;
   /** Only `sendDocument` (B14) — the file, its byte length, and where it went. */
   documents(): Array<{ chatId: number; filename: string; bytes: number; caption?: string }>;
+  /**
+   * Scripts `getChatMember`'s answer for one (chatId, userId) pair — F4's own
+   * use (`connectors/telegram/invito.ts`): the owner marked `'left'` in the
+   * group Muffin was just added to. Unset pairs answer `'member'`, the
+   * harmless default that keeps every scenario that never calls this from
+   * accidentally tripping the exit flow.
+   */
+  setChatMember(chatId: number, userId: number, status: string): void;
+  /**
+   * The `allowed_updates` array the most recent `getUpdates` call actually
+   * carried on the wire — F4's own use: proving `my_chat_member` is really
+   * requested, not merely declared as a client-side default that a future
+   * edit could drop without any test noticing (`connectors/telegram/
+   * dove-e-il-mio-umano.test.ts`'s own "il pezzo senza cui tutto il resto e'
+   * codice morto").
+   */
+  lastAllowedUpdates(): string[] | undefined;
   close(): Promise<void>;
 };
 
@@ -155,6 +172,8 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
   let ritardoGetMe = 0;
   let nextUpdateId = 1;
   let nextMessageId = 1000;
+  const chatMembers = new Map<string, string>();
+  let ultimoAllowedUpdates: string[] | undefined;
 
   const server: Server = createServer((req, res) => {
     // `Buffer`s, not a string: `sendDocument` (B14) carries real file bytes in
@@ -198,6 +217,12 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
       }
 
       if (method === 'getUpdates') {
+        // Registrato **prima** del ramo guasto/lungo-poll: e' il dato che F4
+        // guarda per provare che `my_chat_member` e' davvero sul filo, non
+        // solo nel default di `api.ts` — un long poll caduto o ancora in
+        // attesa non deve nascondere cosa questa chiamata ha chiesto.
+        const richiesti = payload['allowed_updates'];
+        ultimoAllowedUpdates = Array.isArray(richiesti) ? richiesti.map(String) : undefined;
         if (guasto) {
           req.socket.destroy();
           return;
@@ -216,6 +241,21 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
           setTimeout(drain, HOLD_STEP_MS);
         };
         drain();
+        return;
+      }
+
+      // Prima dell'inoltro generico qui sotto: senza un ramo suo, questa
+      // chiamata cadeva in quello e rispondeva `ok(true)` — un booleano dove
+      // il client vero (`connectors/telegram/api.ts#getChatMember`) legge
+      // `{status}`, quindi `stato.status` era sempre `undefined` e
+      // `gestisciInvito` decideva sempre "l'owner c'e'" per costruzione. F4
+      // esiste per scriptare l'altra risposta.
+      if (method === 'getChatMember') {
+        const chatId = Number(payload['chat_id'] ?? 0);
+        const userId = Number(payload['user_id'] ?? 0);
+        const status = chatMembers.get(`${chatId}:${userId}`) ?? 'member';
+        calls.push({ method, payload });
+        ok({ status });
         return;
       }
 
@@ -278,6 +318,10 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
           bytes: c.files?.['document']?.size ?? 0,
           ...(typeof c.payload['caption'] === 'string' ? { caption: c.payload['caption'] as string } : {}),
         })),
+    setChatMember: (chatId, userId, status) => {
+      chatMembers.set(`${chatId}:${userId}`, status);
+    },
+    lastAllowedUpdates: () => ultimoAllowedUpdates,
     close: () =>
       new Promise<void>((resolve) => {
         server.close(() => resolve());
