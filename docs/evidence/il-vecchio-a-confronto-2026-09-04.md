@@ -1,7 +1,7 @@
 # Il vecchio Muffin a confronto — 2026-09-04
 
 Documento di esposizione, non di raccomandazione. Per ogni concetto: cosa
-faceva il vecchio Muffin (`/Users/giusto/dev/Muffin`, letto in sola lettura,
+faceva il vecchio Muffin (`/home/user/dev/Muffin`, letto in sola lettura,
 HEAD al momento dell'analisi), cosa fa il nuovo (`muffin-agent`, branch `dev`),
 se esiste una decisione registrata (ADR o `docs/COGNITIVE-DESIGN.md`), e le
 conseguenze di ciascuna forma. Nessuna scelta viene indicata come migliore.

@@ -1,4 +1,9 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { runInit } from '../cli/init.js';
+import { loadConfig } from '../core/config/config.js';
 import { COMANDI, aiuto, eseguiComando, type ContestoComandi, type Controlli } from './comandi.js';
 
 /**
@@ -114,5 +119,66 @@ describe('/pause e /resume', () => {
     expect((await eseguiComando('/resume', contesto(l.controlli))).testo).toContain('ripreso');
     expect(l.inPausa()).toBe(false);
     expect((await eseguiComando('/resume', contesto(l.controlli))).testo).toContain('non ero in pausa');
+  });
+});
+
+/**
+ * `/config` (ADR-0070) — la porta REPL/Telegram sulla stessa funzione di
+ * `muffin config set` (`core/config/settings.ts::setConfigKnob`). A
+ * differenza delle leve di ADR-0054 questo comando tocca davvero il
+ * filesystem, quindi serve una home reale — non `/nessuno`.
+ */
+function contestoConHome(home: string): ContestoComandi {
+  let config = loadConfig(home);
+  return {
+    home,
+    config,
+    profilo: { name: 'test', thinking: 'unset' },
+    budget: { status: () => ({ monthUsd: 0, monthlyCapUsd: 1, exhausted: false }), tenantTodayUsd: () => 0 },
+    sessionId: 's',
+    verbosity: 'normale',
+    puoiUscire: false,
+    model: async () => undefined,
+    onConfig: (next) => {
+      config = next;
+    },
+  };
+}
+
+describe('/config', () => {
+  it('è nell elenco condiviso — una volta, per tutte le superfici', () => {
+    expect(COMANDI.map((c) => c.nome)).toContain('config');
+  });
+
+  it('senza "set" o senza argomenti elenca le chiavi scrivibili, e non tocca il file', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-comandi-config-'));
+    runInit({ home: dir, apiKey: 'sk-ant-fixture' });
+    const before = loadConfig(dir);
+    for (const riga of ['/config', '/config set', '/config set traces.retentionDays']) {
+      const e = await eseguiComando(riga, contestoConHome(dir));
+      expect(e.testo).toContain('traces.retentionDays');
+    }
+    expect(loadConfig(dir)).toEqual(before);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('/config set traces.retentionDays 20 scrive davvero e lo dice', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-comandi-config-'));
+    runInit({ home: dir, apiKey: 'sk-ant-fixture' });
+    const e = await eseguiComando('/config set traces.retentionDays 20', contestoConHome(dir));
+    expect(e.testo).toContain('traces.retentionDays');
+    expect(e.testo).toContain('20');
+    expect(loadConfig(dir).traces.retentionDays).toBe(20);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('/config set rot.mode hardened è rifiutato, come da CLI — stessa funzione, stessa risposta', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-comandi-config-'));
+    runInit({ home: dir, apiKey: 'sk-ant-fixture' });
+    const before = loadConfig(dir);
+    const e = await eseguiComando('/config set rot.mode hardened', contestoConHome(dir));
+    expect(e.testo).toContain('non è un\'impostazione modificabile');
+    expect(loadConfig(dir)).toEqual(before);
+    rmSync(dir, { recursive: true, force: true });
   });
 });

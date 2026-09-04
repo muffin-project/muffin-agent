@@ -115,7 +115,8 @@ export async function cmdVaultCheck(home: string): Promise<number> {
     for (const p of audit.missing) process.stdout.write(`  ! sul disco, non indicizzato   ${p}\n`);
     for (const p of audit.stale) process.stdout.write(`  ! indice stantio               ${p}\n`);
     for (const p of audit.orphaned) process.stdout.write(`  ! indicizzato, file sparito    ${p}\n`);
-    const drift = audit.missing.length + audit.stale.length + audit.orphaned.length;
+    for (const p of audit.unreadable) process.stdout.write(`  ! sul disco, illeggibile ora   ${p}\n`);
+    const drift = audit.missing.length + audit.stale.length + audit.orphaned.length + audit.unreadable.length;
     if (drift === 0) {
       process.stdout.write(`indice allineato\n`);
       return 0;
