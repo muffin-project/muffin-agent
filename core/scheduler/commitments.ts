@@ -3,6 +3,7 @@ import type { FireLog } from './firelog.js';
 import type { Deliver } from './scheduler.js';
 import { decideProactive } from './proactivity.js';
 import type { ProactiveContext, ProactiveDecision, ProactiveTrigger } from './proactivity.js';
+import type { LockOutcome } from './sendlock.js';
 
 /**
  * `commitment_due`, at last with a producer — ADR-0060.
@@ -201,13 +202,25 @@ export function observeCommitments(deps: CommitmentDeps): CommitmentObservation[
   return out;
 }
 
-/** `martedì 3 ottobre alle 09:00`, in the owner's timezone. */
+/**
+ * `martedì 3 ottobre 2026 alle 09:00`, in the owner's timezone.
+ *
+ * The year is not optional. This is the string a LATE reminder quotes
+ * (`commitmentMessage` below never calls it for an on-time one), and a late
+ * reminder is, by construction, read after the fact — sometimes weeks or
+ * months after (ADR-0060 §Limiti noti). Without a year, "era per martedì 6
+ * ottobre alle 09:00" read three months later reads as yesterday: the
+ * sentence is still grammatically about the past, but the owner has no way
+ * to tell HOW far past without checking `todos` themselves — exactly the
+ * lookup the reminder exists to save them.
+ */
 function quando(at: Date, timezone: string): string {
   const giorno = new Intl.DateTimeFormat('it-IT', {
     timeZone: timezone,
     weekday: 'long',
     day: 'numeric',
     month: 'long',
+    year: 'numeric',
   }).format(at);
   const ora = new Intl.DateTimeFormat('it-IT', {
     timeZone: timezone,
@@ -327,6 +340,28 @@ export type CommitmentLaneDeps = {
   context: (now: Date) => ProactiveContext;
   decide?: typeof decideProactive;
   onEvent?: (e: CommitmentEvent) => void;
+  /**
+   * The SAME cross-process "one proactive send at a time" lock
+   * `muffin observe --send` already acquires (`core/scheduler/sendlock.ts`,
+   * `SendLock.acquire`) — passed as a function, not the class, so a test can
+   * fake contention without a real database, and so this module does not
+   * need to know `better-sqlite3` exists.
+   *
+   * **Why this pass needs it too.** `fires.has(anchor)` inside
+   * `observeCommitments` below, `deps.deliver`, and `recordCommitmentFired`
+   * span an `await` with nothing serialising them — measured (2026-09-04):
+   * exactly the check-then-act shape `SendLock`'s own docstring names for
+   * `muffin observe --send`, on the SAME `fires` table. Two gateways racing
+   * a handover, or this lane racing a concurrent `muffin observe --send`,
+   * both read "not yet fired" and both delivered — a promise spoken twice is
+   * the failure ADR-0060 §Limiti noti records for this lane specifically.
+   *
+   * Acquired for the WHOLE pass, before `fires.has` is even read — mirroring
+   * where `cli/observe.ts` acquires `SendLock`, before its own call to
+   * `observe()` — not per-observation: the has-check and the record it
+   * guards must be inside ONE held lock, or the gap simply moves earlier.
+   */
+  acquireSendLock: (now: Date) => LockOutcome;
 };
 
 export type CommitmentEvent =
@@ -413,6 +448,21 @@ export class CommitmentLane {
   }
 
   private async pass(now: Date): Promise<void> {
+    // Whole pass, not per anchor: `observeCommitments`'s `fires.has` below
+    // has to be INSIDE the same held lock as the `recordCommitmentFired` it
+    // guards, or the race just moves a few lines earlier. `held` is
+    // contention, not a failure — the anchor's `due_at` does not move while
+    // it waits, and the next tick (30s) tries again.
+    const lock = this.deps.acquireSendLock(now);
+    if ('held' in lock) return;
+    try {
+      await this.passLocked(now);
+    } finally {
+      lock.release();
+    }
+  }
+
+  private async passLocked(now: Date): Promise<void> {
     // Once per pass, not once per row: every observation in this pass is
     // judged against the same channel, and a config rewritten mid-loop must
     // not split one beat between two answers.

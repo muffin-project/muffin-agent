@@ -114,6 +114,57 @@ riscritte sopra:
   `finish`, invece di svanire nel ramo che sta già ammettendo il guasto. Il
   drain è distruttivo, quindi ogni strada che esce dal loop la consegna una
   volta sola. La conferma nomina adesso tutti e tre gli esiti.
+- **§2, un imbuto invece di una lista di siti** (04/09, ripreso dal branch
+  fermo `wip/repl-linereader-pipe-eof`'s sibling `slice/steer-un-imbuto`, che
+  si era fermato senza verificare). L'invariante resta una riga: *una
+  correzione `/steer` non si perde mai e non arriva mai due volte.* Era stata
+  riparata tre volte aggiungendo un drain a un'uscita in più — la cima del
+  giro, poi `finish`, poi la sospensione — e ogni riparazione era giusta e
+  lasciava scoperta un'altra uscita. Portando il test del branch fermo
+  (`agent/steer-imbuto.test.ts`, invariato) su `agent/loop.ts` di oggi si sono
+  misurate **due** uscite ancora scoperte: il **rethrow** di `guidaIlTurno`
+  (il provider esaurisce i ritentativi, la riga si chiude `error` e la
+  funzione rilancia senza passare da `finish`, mentre il `finally` del
+  connettore sta per cancellare l'array delle correzioni) e una **ripresa
+  rifiutata** (sotto). Enumerare le uscite non converge: sono una lista che
+  cresce con il codice. La garanzia non sta più su una lista di siti ma sulla
+  forma: il motore (`guidaIlTurno`) gira dentro un guardiano (`drive`) e può
+  uscire soltanto tornando o lanciando; su entrambe le strade il guardiano
+  svuota la porta di steer e scrive ciò che resta in conversazione, come
+  parole dell'owner. Un'uscita aggiunta domani ci passa **per costruzione**. I
+  due drain di sito restano solo dove piazzano la correzione *meglio*
+  dell'imbuto: in cima al giro, che la fa vedere al modello di questo turno, e
+  nella sospensione, che la mette nei `messages` persistiti così è quel turno
+  a vederla al risveglio. Sono sicuri perché la porta è **distruttiva**: un
+  sito che ha già drenato lascia all'imbuto un no-op — misurato, non assunto
+  (`agent/steer-imbuto.test.ts` conta le occorrenze su ogni strada, e togliere
+  il solo imbuto lasciando tutti i drain di sito fa rosso). L'eccezione
+  deliberata resta `aborted`: lì l'imbuto svuota la porta e **butta**, perché
+  l'owner ha detto `/stop`.
+- **§2, una scrittura fallita non è silenziosa.** Un `sessions.append` fallito
+  nella ripesca finiva su un attributo di span: l'owner restava con un
+  «ricevuto» che nessuno aveva onorato, e nessun modo di saperlo. Adesso
+  l'imbuto torna ciò che non è riuscito a scrivere e il turno lo dice **nel
+  proprio testo** — lo stesso canale che si usa già quando la sospensione non
+  riesce a salvare lo stato — riportando la correzione perché l'owner possa
+  rimandarla. Una frase solo nel turno in cui la scrittura è davvero fallita:
+  gli altri non diventano un rapporto.
+- **§2, una ripresa rifiutata.** `resumeTurn` rifiuta `model_changed` o
+  `resumes_exhausted` **prima** di `drive`, e `closeRow` chiude la riga: una
+  correzione che la sospensione aveva parcheggiato durevolmente in
+  `record.messages` non sarebbe più stata rigiocata a nessun modello —
+  conservata e irraggiungibile, lo stesso difetto con un vestito migliore.
+  Decisione: **va all'owner, dentro il rifiuto**, non nella sessione. Il
+  criterio di «mai visto» è esatto — tutto ciò che segue l'ultimo messaggio
+  dell'assistente e non è un risultato di tool — ma fra quei messaggi possono
+  esserci anche frasi che il loop ha scritto da sé (il rapporto di risveglio,
+  un passo di `recover`), e `Message` non porta nessuna provenienza con cui
+  distinguerle: appenderle alla sessione come parole dell'owner metterebbe
+  frasi di Muffin in bocca a lui, e una bugia di provenienza costa più di una
+  riga persa. Nel `detail` del rifiuto sono invece il turno che riferisce, e la
+  corsia lo consegna già (`agent/turn-lane.ts`), quindi l'owner le rilegge e
+  decide se rimandarle. Se non c'è niente di non visto, il rifiuto non aggiunge
+  rumore.
 - **§5, un comando servito due volte.** `gestiti` — l'insieme che dice al drain
   «questo l'ho già servito io» — veniva riempito *mentre* i comandi si
   servivano, quindi un batch `[/pause, /resume]` lo popolava solo fino a dove

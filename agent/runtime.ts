@@ -705,15 +705,18 @@ export function buildRuntime(
   tools.push(makeSkillTool(skillScan.skills));
 
   // Egress. A home installed before egress.json existed gets the empty policy,
-  // not a bricked boot — which is fail-closed the visible way: the kernel then
-  // answers `ask` for every URL, and the first fetch tells the owner why.
+  // not a bricked boot — which is fail-closed the visible way for what this
+  // still governs: `url`-resource capabilities (none shipped yet) and which
+  // third-party endpoints get registered below (`diagnoseSearch`). `sys.http`
+  // itself no longer reads `egress` at all — ADR-0066 made it `url-read`, open
+  // regardless of this file's contents.
   let egress: EgressPolicy;
   try {
     egress = loadEgress(home);
   } catch {
     egress = { allow: [] };
   }
-  tools.push(makeHttpTool(egress));
+  tools.push(makeHttpTool());
 
   // Search is registered only when it is configured, so an unconfigured install
   // has no `web_search` in its tool list rather than one that fails at the first
@@ -1090,6 +1093,9 @@ export function buildRuntime(
       onTurnEnd: ({ tenant }) => consolidation.notify(tenant),
       systemPrompts: renderSystemPrompts(promptBlocks),
       istanza: leggiIstanza,
+      // Il fuso dell'owner, non quello del processo — la stessa lettura di
+      // `quietHours` poco sopra, mai una seconda. Vedi `LoopDeps.timeZone`.
+      timeZone: budgets.quietHours.timezone,
       memory: { store: memoryStore, recall: recallDeps },
     },
     close: () => {
