@@ -3198,12 +3198,14 @@ async function runTool(
         // 7, egress-params) so approving a params-gated fetch or search shows
         // the exact bytes, not just the kernel's prose — the gap ADR-0044
         // §revisione named and left open ("l'URL che sys.http sta per
-        // raggiungere ... non compaiono nel testo che l'owner vede"). For a
+        // raggiungere ... non compaiono nel testo che l'owner vede"). `url-read`
+        // (ADR-0062) joined the same set: its only way to reach `ask` is the
+        // params gate, and that ask exists precisely to show the bytes. For a
         // `resourceKind: 'none'` capability the kernel has nothing to offer,
         // so the call's own arguments are the action — `sys.shell`'s
         // command+cwd, a pid+name — and hiding them made the ask
         // unanswerable (D12-min, RETURN S3).
-        ...(resource.kind === 'path' || resource.kind === 'url' || resource.kind === 'query'
+        ...(resource.kind === 'path' || resource.kind === 'url' || resource.kind === 'url-read' || resource.kind === 'query'
           ? { resource: resource.value }
           : { resource: summarizeCallArgs(call.args) }),
         ...(descriptionOf(call.args) === undefined ? {} : { description: descriptionOf(call.args) }),
@@ -3597,9 +3599,11 @@ function recordOutcome(
  * `url`, `path` and `query` are lifted. `query` joined the other two so that
  * `sys.search` could stop declaring `resourceKind: 'none'` — the mechanism
  * this function already provides needed no new case, only a wider guard
- * (mandato inv. 7, P04-2). A `tenant` resource is not in the args — it is the
- * turn's tenant — and inventing one here would change what the kernel
- * decides for every memory read.
+ * (mandato inv. 7, P04-2). `url-read` (ADR-0062, `sys.http`) is the same
+ * shape as `url` — a string argument naming the resource — and needs no new
+ * case either, only the same wider guard. A `tenant` resource is not in the
+ * args — it is the turn's tenant — and inventing one here would change what
+ * the kernel decides for every memory read.
  */
 function resourceFor(
   decl: CapabilityDecl | undefined,
@@ -3607,7 +3611,10 @@ function resourceFor(
 ): DecisionRequest['resource'] {
   if (
     !decl ||
-    (decl.resourceKind !== 'url' && decl.resourceKind !== 'path' && decl.resourceKind !== 'query')
+    (decl.resourceKind !== 'url' &&
+      decl.resourceKind !== 'url-read' &&
+      decl.resourceKind !== 'path' &&
+      decl.resourceKind !== 'query')
   ) {
     return { kind: 'none' };
   }

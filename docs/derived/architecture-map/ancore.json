@@ -71,12 +71,12 @@
   },
   "agent/loop.ts:2004": {
     "path": "agent/loop.ts",
-    "line": 3428,
+    "line": 3430,
     "testo": "const safeContent = redactText(outcome.content);"
   },
   "agent/loop.ts:2044": {
     "path": "agent/loop.ts",
-    "line": 3492,
+    "line": 3494,
     "testo": "const detail = redactText(error instanceof Error ? error.message : String(error));"
   },
   "agent/loop.ts:2229": {
@@ -86,12 +86,12 @@
   },
   "agent/loop.ts:2549": {
     "path": "agent/loop.ts",
-    "line": 3604,
+    "line": 3608,
     "testo": "function resourceFor("
   },
   "agent/loop.ts:2553": {
     "path": "agent/loop.ts",
-    "line": 3608,
+    "line": 3612,
     "testo": "if ("
   },
   "agent/loop.ts:271": {
@@ -476,42 +476,42 @@
   },
   "agent/runtime.ts:488": {
     "path": "agent/runtime.ts",
-    "line": 724,
+    "line": 727,
     "testo": "...processCapabilities,"
   },
   "agent/runtime.ts:494": {
     "path": "agent/runtime.ts",
-    "line": 731,
+    "line": 734,
     "testo": "// built-ins get the same treatment."
   },
   "agent/runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 762,
+    "line": 765,
     "testo": "safeMode: safeMode !== null,"
   },
   "agent/runtime.ts:533": {
     "path": "agent/runtime.ts",
-    "line": 783,
+    "line": 786,
     "testo": "* Built here and not in the gateway, deliberately: turns happen in whichever"
   },
   "agent/runtime.ts:614": {
     "path": "agent/runtime.ts",
-    "line": 821,
+    "line": 824,
     "testo": "// calls that could drift apart."
   },
   "agent/runtime.ts:619": {
     "path": "agent/runtime.ts",
-    "line": 855,
+    "line": 858,
     "testo": "tools,"
   },
   "agent/runtime.ts:638": {
     "path": "agent/runtime.ts",
-    "line": 682,
+    "line": 685,
     "testo": "const searchDiagnosis = diagnoseSearch(config, egress, (ref) => readSecret(ref, home));"
   },
   "agent/runtime.ts:640": {
     "path": "agent/runtime.ts",
-    "line": 1007,
+    "line": 1010,
     "testo": "onTurnEnd: ({ tenant }) => consolidation.notify(tenant),"
   },
   "agent/scheduler-run.ts:31": {
@@ -601,27 +601,27 @@
   },
   "agent/tools/http.ts:116": {
     "path": "agent/tools/http.ts",
-    "line": 146,
-    "testo": "if (hop > 0 && !hostAllowed(current.hostname, policy)) {"
+    "line": 116,
+    "testo": "/** Injectable for tests: the logic under test is ours, not undici's. */"
   },
   "agent/tools/http.ts:192": {
     "path": "agent/tools/http.ts",
-    "line": 232,
+    "line": 245,
     "testo": "return isForbiddenAddress(literal) ? `address not routable from here: ${literal}` : null;"
   },
   "agent/tools/http.ts:22": {
     "path": "agent/tools/http.ts",
     "line": 22,
-    "testo": "* Declared limit, not silent: the check is resolve-then-connect, so a DNS"
+    "testo": "* it still gates every `url` resource (reaching a host to **act**: write,"
   },
   "agent/tools/http.ts:30": {
     "path": "agent/tools/http.ts",
-    "line": 38,
+    "line": 55,
     "testo": "export const httpCapability: CapabilityDecl = {"
   },
   "agent/tools/http.ts:41": {
     "path": "agent/tools/http.ts",
-    "line": 53,
+    "line": 70,
     "testo": "hostOnly: false,"
   },
   "agent/tools/mcp.ts:104": {
@@ -1791,82 +1791,82 @@
   },
   "core/policy/decide.ts:111": {
     "path": "core/policy/decide.ts",
-    "line": 129,
+    "line": 135,
     "testo": "if (denyListCovers(ctx.matrix.neverAtRuntime, capability)) {"
   },
   "core/policy/decide.ts:113": {
     "path": "core/policy/decide.ts",
-    "line": 113,
+    "line": 119,
     "testo": "const decl = ctx.capabilities.get(capability) ?? doors.get(capability);"
   },
   "core/policy/decide.ts:119": {
     "path": "core/policy/decide.ts",
-    "line": 137,
+    "line": 143,
     "testo": "// Guard against a caller assembling an incoherent request."
   },
   "core/policy/decide.ts:121": {
     "path": "core/policy/decide.ts",
-    "line": 121,
+    "line": 127,
     "testo": "if (ctx.safeMode === true && decl.risk !== 'low') {"
   },
   "core/policy/decide.ts:127": {
     "path": "core/policy/decide.ts",
-    "line": 145,
+    "line": 151,
     "testo": "// rule below behind a wrong refusal."
   },
   "core/policy/decide.ts:128": {
     "path": "core/policy/decide.ts",
-    "line": 146,
+    "line": 152,
     "testo": "if (decl.hostOnly && principal.kind === 'member') {"
   },
   "core/policy/decide.ts:132": {
     "path": "core/policy/decide.ts",
-    "line": 150,
+    "line": 156,
     "testo": "if (principal.kind === 'system' && denyListCovers(ctx.matrix.forbiddenForSystem, capability)) {"
   },
   "core/policy/decide.ts:137": {
     "path": "core/policy/decide.ts",
-    "line": 154,
+    "line": 160,
     "testo": "// The ceiling comes from the capability's **effect row** — where the bytes"
   },
   "core/policy/decide.ts:145": {
     "path": "core/policy/decide.ts",
-    "line": 171,
+    "line": 177,
     "testo": "if (decl.risk !== 'low' && ctx.budgetExhausted(tenant)) {"
   },
   "core/policy/decide.ts:149": {
     "path": "core/policy/decide.ts",
-    "line": 175,
-    "testo": "// Egress: a URL-holding capability answers to the allowlist in the root of"
+    "line": 149,
+    "testo": "// host-only excludes *remote tenants*, not autonomous local principals: the"
   },
   "core/policy/decide.ts:195": {
     "path": "core/policy/decide.ts",
-    "line": 254,
+    "line": 266,
     "testo": "// Autonomous principals never auto-approve what a human would be asked for:"
   },
   "core/policy/decide.ts:201": {
     "path": "core/policy/decide.ts",
-    "line": 261,
+    "line": 273,
     "testo": "switch (decl.risk) {"
   },
   "core/policy/decide.ts:204": {
     "path": "core/policy/decide.ts",
-    "line": 264,
+    "line": 276,
     "testo": "case 'medium':"
   },
   "core/policy/decide.ts:208": {
     "path": "core/policy/decide.ts",
-    "line": 208,
+    "line": 216,
     "testo": "const allowed = ctx.egressAllowed?.(host) ?? false;"
   },
   "core/policy/decide.ts:88": {
     "path": "core/policy/decide.ts",
-    "line": 88,
+    "line": 94,
     "testo": "export function createDecide(ctx: PolicyContext): Decide {"
   },
   "core/policy/decide.ts:91": {
     "path": "core/policy/decide.ts",
-    "line": 88,
+    "line": 94,
     "testo": "export function createDecide(ctx: PolicyContext): Decide {"
   },
   "core/policy/matrix.ts:162": {
@@ -2096,37 +2096,37 @@
   },
   "decide.ts:114": {
     "path": "core/policy/decide.ts",
-    "line": 114,
+    "line": 120,
     "testo": "if (!decl) {"
   },
   "decide.ts:120": {
     "path": "core/policy/decide.ts",
-    "line": 138,
+    "line": 144,
     "testo": "const expected = tenantOf(principal);"
   },
   "decide.ts:132": {
     "path": "core/policy/decide.ts",
-    "line": 150,
+    "line": 156,
     "testo": "if (principal.kind === 'system' && denyListCovers(ctx.matrix.forbiddenForSystem, capability)) {"
   },
   "decide.ts:145": {
     "path": "core/policy/decide.ts",
-    "line": 171,
+    "line": 177,
     "testo": "if (decl.risk !== 'low' && ctx.budgetExhausted(tenant)) {"
   },
   "decide.ts:149": {
     "path": "core/policy/decide.ts",
-    "line": 175,
-    "testo": "// Egress: a URL-holding capability answers to the allowlist in the root of"
+    "line": 149,
+    "testo": "// host-only excludes *remote tenants*, not autonomous local principals: the"
   },
   "decide.ts:155": {
     "path": "core/policy/decide.ts",
-    "line": 181,
+    "line": 215,
     "testo": "if (decl.resourceKind === 'url') {"
   },
   "decide.ts:182": {
     "path": "core/policy/decide.ts",
-    "line": 208,
+    "line": 216,
     "testo": "const allowed = ctx.egressAllowed?.(host) ?? false;"
   },
   "decide.ts:20": {
@@ -2136,12 +2136,12 @@
   },
   "decide.ts:205": {
     "path": "core/policy/decide.ts",
-    "line": 265,
+    "line": 277,
     "testo": "return decl.reversible === 'undoable'"
   },
   "decide.ts:206": {
     "path": "core/policy/decide.ts",
-    "line": 266,
+    "line": 278,
     "testo": "? { effect: 'draft', undo: { capability, windowSeconds: 300 } }"
   },
   "decide.ts:45": {
@@ -2166,7 +2166,7 @@
   },
   "decide.ts:74": {
     "path": "core/policy/decide.ts",
-    "line": 71,
+    "line": 77,
     "testo": "egressAllowed?: (host: string) => boolean;"
   },
   "defaults/rot/budgets.json:4": {
@@ -2411,7 +2411,7 @@
   },
   "loop.ts:3020": {
     "path": "agent/loop.ts",
-    "line": 3781,
+    "line": 3788,
     "testo": "* derivation produced, which is exactly why deriving it looked safe for as long"
   },
   "loop.ts:309": {
@@ -2736,27 +2736,27 @@
   },
   "runtime.ts:464": {
     "path": "agent/runtime.ts",
-    "line": 700,
+    "line": 703,
     "testo": "* able to run a multi-turn plan in the first place. Nothing said so: the two"
   },
   "runtime.ts:488": {
     "path": "agent/runtime.ts",
-    "line": 724,
+    "line": 727,
     "testo": "...processCapabilities,"
   },
   "runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 762,
+    "line": 765,
     "testo": "safeMode: safeMode !== null,"
   },
   "runtime.ts:531": {
     "path": "agent/runtime.ts",
-    "line": 781,
+    "line": 784,
     "testo": "* The thing that makes memory fill itself (ADR-0038)."
   },
   "runtime.ts:642": {
     "path": "agent/runtime.ts",
-    "line": 686,
+    "line": 689,
     "testo": "} else if (searchDiagnosis.gap) {"
   },
   "runtime.ts:98": {
@@ -2876,7 +2876,7 @@
   },
   "types.ts:104": {
     "path": "core/policy/types.ts",
-    "line": 112,
+    "line": 135,
     "testo": "*/"
   },
   "types.ts:11": {
@@ -2896,12 +2896,12 @@
   },
   "types.ts:67": {
     "path": "core/policy/types.ts",
-    "line": 79,
+    "line": 102,
     "testo": "/** Already validated against the tool's input schema — never raw model output. */"
   },
   "types.ts:69": {
     "path": "core/policy/types.ts",
-    "line": 81,
+    "line": 104,
     "testo": "/** Recomputed at every call, never frozen for the turn (blueprint 03 §2). */"
   },
   "updates.ts:81": {

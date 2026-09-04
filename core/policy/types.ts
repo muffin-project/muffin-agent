@@ -42,7 +42,30 @@ export type CapabilityId = string;
 
 type Resource =
   | { kind: 'path'; value: string } // absolute, normalized, symlinks resolved
+  /**
+   * A URL this capability may reach in order to **act** — write, execute, send.
+   * Gated by `rot/egress.json` (ADR-0062): off the allowlist is a hard refusal
+   * (`ask` for the owner at low taint, `deny` for everyone else, never a silent
+   * skip once taint has climbed), because acting somewhere the owner has not
+   * named is the thing the allowlist exists to stop. No shipped capability uses
+   * this today — `sys.http` is GET-only and moved to `url-read` — but the
+   * branch stays for the next one that writes or executes through a
+   * model-chosen host (`decide.ts`'s own comment names `outward.send`).
+   */
   | { kind: 'url'; value: string }
+  /**
+   * A URL this capability may **read** — GET only, by construction of the tool
+   * that declares it (`sys.http`). ADR-0062: reading a public page is not the
+   * same authority as reaching a host to act on it, so this kind answers to a
+   * different gate than `url` — no allowlist, because the owner already
+   * decided that fetching bytes from wherever a page or a link points is not
+   * an action that needs naming in advance. What still applies, unchanged:
+   * the SSRF floor (`core/net/egress.ts#isForbiddenAddress`, enforced by the
+   * tool itself on every redirect hop, DNS-resolved) and `paramsMaxTaint` on
+   * a query string or fragment the model chose (`decide.ts`'s `gateParams`) —
+   * the destination is open, the bytes riding along in it are not.
+   */
+  | { kind: 'url-read'; value: string }
   /**
    * The literal text a model-controlled search argument sends outbound, when
    * the destination is a constant the capability already pins (`sys.search`'s
