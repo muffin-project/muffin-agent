@@ -136,6 +136,13 @@ export type IngestReport = {
   /** Chunks embedded this run. Zero with an embedder present is worth noticing. */
   indexed: number;
   /**
+   * Standalone request-fact vectors (`asked_to`, `asks_to`, …) retracted this
+   * run — `VectorIndex.forgetRequestFacts`, docs/decisions/0067. Zero on every
+   * ordinary run once a tenant has converged; nonzero only the first few times
+   * this runs against a corpus that consolidated before this existed.
+   */
+  forgottenRequestChunks: number;
+  /**
    * The lane lock refused: another extraction already held it.
    *
    * Structural rather than left for a caller to recognise in `errors[0]`. The
@@ -247,6 +254,7 @@ export async function ingestPending(
     skippedDocuments: 0,
     skippedEmpty: 0,
     indexed: 0,
+    forgottenRequestChunks: 0,
     busy: false,
     needsReview: [],
     errors: [],
@@ -440,6 +448,13 @@ export async function ingestPending(
         if (backlog.length > 0) {
           report.indexed = await deps.vectors.index(tenantId, backlog, now().toISOString());
         }
+        // Same idempotent-and-cheap shape, the other direction: `indexBacklog`
+        // stops offering a request fact a vector going forward
+        // (docs/decisions/0067), but says nothing about one embedded before
+        // that existed. This retracts it — a plain SQL delete on the derived
+        // planes, never touching `facts` — and converges to a no-op the moment
+        // a tenant has none left.
+        report.forgottenRequestChunks = deps.vectors.forgetRequestFacts(tenantId);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const detail = `indice vettoriale: ${message} — il recall resta testuale`;

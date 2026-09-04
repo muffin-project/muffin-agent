@@ -111,6 +111,7 @@ function harness(
         principals.push(req.principal);
         return decide(req);
       },
+      capabilities: new Map([[decl.id, decl]]),
       tracer: new SimpleTracer(new JsonlExporter(home)),
       sessions,
       turns: new TurnStore(new DatabaseCtor(':memory:')),

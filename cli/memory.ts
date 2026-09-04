@@ -270,6 +270,7 @@ export async function cmdMemoryExtract(home: string, limit: number): Promise<num
       skipped: 0,
       skippedEmpty: 0,
       indexed: 0,
+      forgottenRequestChunks: 0,
       review: 0,
       errors: 0,
     };
@@ -289,6 +290,7 @@ export async function cmdMemoryExtract(home: string, limit: number): Promise<num
       total.skipped += report.skippedAgentOutput;
       total.skippedEmpty += report.skippedEmpty;
       total.indexed += report.indexed;
+      total.forgottenRequestChunks += report.forgottenRequestChunks;
       total.review += report.needsReview.length;
       // Both counts, same reasoning as `consolidator.ts`: a judge failure is
       // a problem this round exactly as much as anything in `errors`, and
@@ -318,6 +320,7 @@ export async function cmdMemoryExtract(home: string, limit: number): Promise<num
       `${total.episodes} episodi estratti · ${total.facts} fatti · ${total.superseded} ritirati · ` +
         `${total.skipped} dell'agente tenuti come evidenza · ${total.indexed} chunk indicizzati` +
         `${total.skippedEmpty > 0 ? ` · ${total.skippedEmpty} vuoti segnati` : ''}` +
+        `${total.forgottenRequestChunks > 0 ? ` · ${total.forgottenRequestChunks} vettori-richiesta ritirati` : ''}` +
         `${total.review > 0 ? ` · ${total.review} da rivedere` : ''}\n`,
     );
     return total.errors > 0 ? 1 : 0;
