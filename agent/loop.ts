@@ -15,6 +15,7 @@ import type { SpanHandle, Tracer } from '../core/tracing/types.js';
 import { ATTR } from '../core/tracing/types.js';
 import { memoryWriteCapability, replyCapability } from '../core/policy/doors.js';
 import { redactText } from '../core/tracing/redact.js';
+import { sleep } from '../core/net/sleep.js';
 import { checkCompletion, completionNudge } from './completion.js';
 import {
   ambienteSection,
@@ -284,7 +285,7 @@ export type ApprovalWhere = {
  * `unavailable` vuol dire «qui non c'è nessun canale per chiederlo», che è la
  * cosa che il turno deve dire invece di fingere un errore del tool.
  */
-export type ApprovalAnswer = 'allow' | 'deny' | 'asked' | 'unavailable';
+type ApprovalAnswer = 'allow' | 'deny' | 'asked' | 'unavailable';
 
 export type Approver = (request: ApprovalRequest, where: ApprovalWhere) => Promise<ApprovalAnswer>;
 
@@ -930,7 +931,7 @@ export const MAX_RESUMES = 3;
  * rossi cinque test fra `suspend-resume`, `approvazione-differita` e
  * `lane-wiring`.
  */
-export function spendeIlBudget(resumed: boolean, wokenFromWait: boolean): boolean {
+function spendeIlBudget(resumed: boolean, wokenFromWait: boolean): boolean {
   return resumed && !wokenFromWait;
 }
 
@@ -1032,7 +1033,7 @@ export function denyText(decision: Extract<Decision, { effect: 'deny' }>): strin
  * a sealed `rot/policy.json` that tightened the `reply` row does, and the
  * owner who tightened it is the one reading this.
  */
-export function replyRefusedText(decision: Exclude<Decision, { effect: 'allow' }>): string {
+function replyRefusedText(decision: Exclude<Decision, { effect: 'allow' }>): string {
   const why = decision.effect === 'deny' ? `${decision.code}${decision.detail ? `: ${decision.detail}` : ''}` : decision.effect;
   return `La risposta è stata trattenuta dal kernel dei permessi (${why}). Una conversazione nuova riparte con il contesto pulito.`;
 }
@@ -3911,14 +3912,3 @@ function edgeTrimmer(): (chunk: string) => string | null {
   };
 }
 
-/** Sleeps, unless the turn is abandoned first. */
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  if (ms <= 0 || signal?.aborted === true) return Promise.resolve();
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener('abort', () => {
-      clearTimeout(timer);
-      resolve();
-    }, { once: true });
-  });
-}
