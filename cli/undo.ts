@@ -1,4 +1,7 @@
+import { openDb } from '../core/db/open.js';
 import { paths } from '../core/config/config.js';
+import { MemoryStore } from '../core/memory/store.js';
+import { TurnStore } from '../core/turns/store.js';
 import { UndoJournal } from '../core/undo/journal.js';
 
 /**
@@ -9,7 +12,17 @@ import { UndoJournal } from '../core/undo/journal.js';
  * `draft` esisteva nel kernel e nessuno lo implementava — e ripeterlo nel
  * commit che lo ripara sarebbe la cosa peggiore che questa slice possa fare.
  * Per questo D2 e D3 atterrano insieme.
+ *
+ * D11, l'altra metà: rimettere i file com'erano non basta se la cronologia
+ * del turno e la memoria continuano a dire «ho scritto». Dopo un restore
+ * **completo** (mai uno parziale — vedi sotto) questo file marca anche
+ * `turn_tool_calls.undone_at` e gli episodi `role: 'agent'` di quel turno,
+ * sulla stessa connessione (`muffin.db`) che `agent/loop.ts` legge per
+ * riassemblare il contesto del giro dopo.
  */
+
+/** L'unico tenant che questo comando conosce: `muffin undo` gira sulla macchina dell'owner. */
+const TENANT = 'host';
 
 const USAGE = `uso:
   muffin undo                    i turni che si possono disfare, dal più recente
@@ -161,6 +174,7 @@ scegli tu: disfare quello sbagliato non si disfà.
     // Turno disfatto: le sue copie sono peso morto, e il ritorno indietro
     // dell'undo vive sotto `annulla-…`, che resta.
     journal.forget(bersaglio);
+    marcaDisfatto(home, bersaglio, entry.snapshots.map((s) => s.callId));
     process.stdout.write(`\ndisfatto ${bersaglio}. per tornare com'era: muffin undo ${rete} --yes\n`);
     return 0;
   }
@@ -168,4 +182,36 @@ scegli tu: disfare quello sbagliato non si disfà.
     `\n${bersaglio} disfatto solo in parte — le copie restano, riprova dopo aver risolto.\n`,
   );
   return 1;
+}
+
+/**
+ * D11: dopo un restore **completo**, riallinea la cronologia del turno e la
+ * memoria — mai su un restore parziale, perché una marcatura totale su un
+ * disfacimento parziale sarebbe la stessa bugia che questa slice ripara,
+ * solo spostata di un livello (vedi B3 in `docs/work/day1/critical-path.md`).
+ *
+ * `callIds` sono esattamente quelli che `entry.snapshots` porta per questo
+ * turno — mai «ogni chiamata del turno», che marcherebbe come disfatte anche
+ * letture che l'undo non ha mai toccato.
+ *
+ * Non fa fallire il comando: il filesystem è già tornato com'era quando
+ * questa funzione gira, e un errore qui (database assente, disco pieno) è un
+ * fatto in meno nella cronologia, non un restore fallito. Dichiarato su
+ * stderr, mai inghiottito in silenzio.
+ */
+function marcaDisfatto(home: string, turnId: string, callIds: readonly string[]): void {
+  let db: ReturnType<typeof openDb> | undefined;
+  try {
+    db = openDb(paths(home).db);
+    const now = new Date().toISOString();
+    new TurnStore(db).markUndone(turnId, callIds);
+    new MemoryStore(db).markEpisodesUndone(TENANT, turnId, now);
+  } catch (error) {
+    process.stderr.write(
+      `! i file sono tornati com'erano, ma non sono riuscito ad aggiornare cronologia/memoria ` +
+        `(${error instanceof Error ? error.message : String(error)}). Il modello potrebbe ancora leggere «ho scritto».\n`,
+    );
+  } finally {
+    db?.close();
+  }
 }
