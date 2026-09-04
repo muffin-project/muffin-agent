@@ -245,7 +245,10 @@ non un guasto accidentale.
 | `npx tsc --noEmit -p tsconfig.json` | exit 0, nessun output |
 | `npx vitest run` (prima corsa, prima di rigenerare la mappa) | **1 fallito su 248 file** — `docs/derived/architecture-map/mappa.test.ts`, un'ancora spostata dalle righe aggiunte a `core/vault/vault.ts`; 3180 passati, 3 skippati |
 | `node docs/derived/architecture-map/ancore.mjs && node docs/derived/architecture-map/build.mjs` | `588 ancore scritte`, `400 hanno seguito il codice spostato`, `mappa.html: 289 KB · 588 ancore` |
-| `npx vitest run` (seconda corsa, dopo la rigenerazione) | **248 file, 3181 test passati, 3 skippati, 0 falliti**, 64,4s |
+| `npx vitest run` (dopo la rigenerazione, prima del rebase) | **248 file, 3181 test passati, 3 skippati, 0 falliti** |
+| `git rebase origin/dev` (`91b9528`, un commit di sicurezza arrivato durante la caccia, senza conflitti con `core/vault/`) | pulito; l'hook `post-merge-regen` ha rigenerato la mappa da solo su un commit aggiuntivo |
+| `npx tsc --noEmit -p tsconfig.json` (dopo il rebase) | exit 0 |
+| `npx vitest run` (dopo il rebase — numeri finali) | **249 file, 3187 test passati, 3 skippati, 0 falliti**, 95,2s |
 
 Nessuna copia di stato privato dell'owner è entrata nel repository: i vault
 usati per rompere `identityOf` erano directory temporanee sotto `/tmp`,
