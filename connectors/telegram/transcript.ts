@@ -176,6 +176,8 @@ export type TranscriptOptions = {
   now?: () => number;
   /** Groups get the slower edit floor. Default: private. */
   isPrivate?: boolean;
+  /** Il topic del forum, quando il turno è nato dentro uno. Vedi `SendOptions.threadId`. */
+  threadId?: number;
   /** Traces a swallowed Bot API failure. Absent means silent. */
   log?: (line: string) => void;
 };
@@ -297,7 +299,9 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     lastCallAt = now();
     try {
       if (seg.messageId === null) {
-        const message = await api.sendMessage(chatId, text);
+        const message = await api.sendMessage(chatId, text, {
+          ...(options.threadId === undefined ? {} : { threadId: options.threadId }),
+        });
         seg.messageId = message.message_id;
       } else {
         await api.editMessageText(chatId, seg.messageId, text);
