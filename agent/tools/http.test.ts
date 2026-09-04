@@ -19,7 +19,7 @@ function fetchScript(responses: Response[]) {
 }
 
 describe('http_get', () => {
-  it('fetches any public host — reading is open (ADR-0062), no allowlist consulted', async () => {
+  it('fetches any public host — reading is open (ADR-0065), no allowlist consulted', async () => {
     const { fetchFn, calls } = fetchScript([
       new Response('<html>ciao</html>', { status: 200, headers: { 'content-type': 'text/html' } }),
     ]);

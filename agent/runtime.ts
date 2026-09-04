@@ -708,7 +708,7 @@ export function buildRuntime(
   // not a bricked boot — which is fail-closed the visible way for what this
   // still governs: `url`-resource capabilities (none shipped yet) and which
   // third-party endpoints get registered below (`diagnoseSearch`). `sys.http`
-  // itself no longer reads `egress` at all — ADR-0062 made it `url-read`, open
+  // itself no longer reads `egress` at all — ADR-0065 made it `url-read`, open
   // regardless of this file's contents.
   let egress: EgressPolicy;
   try {
