@@ -536,6 +536,11 @@ export async function runRepl(
   } catch (error) {
     mcpLines = [`mcp: ${error instanceof Error ? error.message : String(error)}`];
   }
+  // Same reason as `cli/gateway.ts`: `runtime.bootLines` was rendered inside
+  // `buildRuntime`, before `attachSendFile`/`attachMcp` above registered
+  // anything — `send_file` (DAY-1 B14) could never appear in a cut announced
+  // from that frozen array. Redo the cut against what actually exists now.
+  const exposureLines = runtime.recomputeExposure();
 
   // Only when there is something to decide — see `reviewBootLine`.
   const review = reviewBootLine(runtime.db, CONSOLIDATION_TENANT);
@@ -566,6 +571,7 @@ export async function runRepl(
       surfaces.lines.map((l) => `${l}\n`).join('') +
       mcpLines.map((l) => `${l}\n`).join('') +
       runtime.bootLines.map((l) => `${l}\n`).join('') +
+      exposureLines.map((l) => `! ${l}\n`).join('') +
       `${consolidationBootLine()}\n` +
       (review === null ? '' : `${review}\n`) +
       `\n`,
