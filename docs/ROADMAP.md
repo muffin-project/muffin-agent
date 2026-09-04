@@ -329,6 +329,16 @@ ADR-0028's high-confidence posture remains the constraint. Revisit concrete dete
 
 Do not reintroduce a generic “I noticed…” firehose.
 
+**Groups (placed here 2026-09-04, owner decision: *«deterministico + proattivo,
+la versione completa dopo»*).** DAY-1 ships the deterministic base only — a
+group turn opens when Muffin is addressed (ADR-0063, DAY-1 row F1). The
+proactive half is this phase: a debounce on T seconds of silence, an
+X-message threshold in busy moments, embedding relevance against what the
+room's tenant already knows, a light model only on the survivors, a per-room
+switch, and a throttle under Telegram's 20 messages/minute per group. It is
+measured before it is widened, because the failure mode it risks is the one
+§8 of the thesis names first: something the owner learns to ignore.
+
 ### Background process ownership
 
 Starting/owning long-lived background processes beyond current wait/process inspection remains consumer-triggered. Add it when a real daily workflow requires Muffin to own such a process lifecycle.
