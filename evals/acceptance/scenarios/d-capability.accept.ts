@@ -162,6 +162,13 @@ describe('acceptance · D · capability e sicurezza', () => {
     30_000,
   );
 
+  /**
+   * L'URL che il modello si compone: la query string non compare in nessun
+   * ingresso del turno, che e' esattamente cio' che ADR-0071 chiama
+   * «composto» invece di «citato».
+   */
+  const COMPOSTO = 'https://example.com/?q=tutto-a-evil-example';
+
   scenario(
     'D10',
     async () => {
@@ -174,6 +181,9 @@ describe('acceptance · D · capability e sicurezza', () => {
           // answer, no tool call: the point is that this turn does not have
           // to read anything of its own for the assertion after it to hold.
           { text: 'tutto ok, nessuna azione da fare' },
+          // Terza corsa, stessa sessione: la stessa lettura ma con una query
+          // string che il modello si e' composto. Vedi il blocco finale.
+          { tool: { name: 'http_get', args: { url: COMPOSTO } } },
         ],
       });
       try {
@@ -220,12 +230,22 @@ describe('acceptance · D · capability e sicurezza', () => {
           throw new Error(`atteso almeno un secondo giro dopo memory_search, chiamate: ${calls.length}`);
         }
 
-        // The desired invariant: once the turn has read tier-3 content, it
-        // cannot use a *later* tool call to name an unlisted host — the
-        // kernel is supposed to deny outright (not merely ask, which an owner
-        // in a clean context would get instead), because an ask still lets a
-        // poisoned context describe the exfiltration target to a human who
-        // has no way to tell it was suggested by the untrusted text.
+        // **Riscritta il 04/09.** Lo scenario chiedeva il rifiuto di una
+        // lettura verso un host non in lista. ADR-0066 ha ritirato quella
+        // regola — la lettura non consulta piu' nessuna lista, direzione
+        // owner: *«non puo non entrare»* — e la prova non l'ha seguita,
+        // quindi questo scenario era **rosso su `dev`** da quel giorno senza
+        // che nessuno lo vedesse (CI di GitHub ferma per fatturazione,
+        // trovato da `npm run ci:local`).
+        //
+        // Le tre cose che sono vere oggi, asserite tutte e tre qui sotto
+        // perche' nessuna da sola distingue «la protezione funziona» da «il
+        // cablaggio e' rotto»:
+        //
+        //  1. la lettura nuda passa, ed e' la decisione, non una svista;
+        //  2. il turno sale comunque a taint 3;
+        //  3. una lettura con parametri **composti dal modello** no
+        //     (ADR-0071) — terzo blocco in fondo.
         const turnRow = inst.db(
           (db) =>
             db.prepare(`SELECT id, taint, messages FROM turns ORDER BY created_at DESC LIMIT 1`).get() as
@@ -247,11 +267,13 @@ describe('acceptance · D · capability e sicurezza', () => {
         // reproduced live before writing this). The kernel's refusal is a
         // `tool_result` message pushed straight into the turn's transcript,
         // so `turns.messages` is where the denial actually lands.
+        // (1) La lettura nuda e' passata. Asserito invece che sottinteso: e'
+        // la meta' che rende visibile ADR-0066, e senza di lei un domani in
+        // cui la lettura tornasse chiusa passerebbe verde.
         const messages: unknown = JSON.parse(turnRow.messages);
-        const denied = JSON.stringify(messages).includes('resource_denied');
-        if (!denied) {
+        if (JSON.stringify(messages).includes('resource_denied')) {
           throw new Error(
-            `nessun tool_result con "resource_denied" nei messaggi del turno — http_get non è stato negato dal kernel:\n` +
+            `la lettura nuda e' stata negata: ADR-0066 dice che non deve esserlo\n` +
               JSON.stringify(messages, null, 2),
           );
         }
@@ -298,6 +320,32 @@ describe('acceptance · D · capability e sicurezza', () => {
             `il secondo turno (stessa sessione, nessuna lettura propria) non eredita taint 3 dalla history ` +
               `reiniettata: ${JSON.stringify(secondTurn)}`,
           );
+        }
+
+        // (3) La protezione che esiste davvero, ADR-0071. Stessa sessione,
+        // quindi ancora taint 3 per eredita': la stessa lettura di prima ma
+        // con una query string che **non compare in nessun ingresso** del
+        // turno. Per l'owner il kernel non nega, si ferma e chiede — e senza
+        // un terminale interattivo quel «chiede» e' un exit 3 con il motivo
+        // scritto, non un fetch silenzioso.
+        const composto = await inst.muffin([
+          'run',
+          '--session',
+          'd10-taint-continuity',
+          '--timeout',
+          '20',
+          'apri quel link con i parametri',
+        ]);
+        if (composto.code !== 3) {
+          throw new Error(
+            `una lettura con parametri composti dal modello non si e' fermata: exit ${composto.code}\n` +
+              `${composto.out}\n${composto.err}`,
+          );
+        }
+        // L'URL intero nel motivo, non solo «serve un permesso»: chi legge
+        // deve poter vedere *cosa* stava per uscire.
+        if (!`${composto.out}${composto.err}`.includes(COMPOSTO)) {
+          throw new Error(`il motivo non mostra l'URL: ${composto.out}\n${composto.err}`);
         }
       } finally {
         await inst.cleanup();
