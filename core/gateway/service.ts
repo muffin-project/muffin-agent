@@ -155,8 +155,16 @@ export type GatewayDeps = {
   turnLane: Pick<TurnLane, 'tick' | 'isRunning'>;
   /** Read for the idle status line only — the scheduler owns the firing. */
   jobs: Pick<JobStore, 'list'>;
-  /** Teardown, in the caller's order: surfaces before the runtime under them. */
-  close: () => void | Promise<void>;
+  /**
+   * Teardown, in the caller's order: surfaces before the runtime under them.
+   *
+   * `remainingMs` is what is left of `drainBudgetMs` after the busy-wait below
+   * has already spent some of it — not a second budget for the caller to
+   * invent, so a connector's own bounded wait (`cli/gateway.ts`'s `close`,
+   * over `cli/surface.ts`'s `stop`) keeps the whole shutdown inside the one
+   * number the owner was already told about (`drain`'s log line, below).
+   */
+  close: (remainingMs: number) => void | Promise<void>;
   log: (line: string) => void;
   now?: () => Date;
   signals?: SignalSource;
@@ -345,7 +353,11 @@ export class Gateway {
     // The claim goes before the teardown: from here on there is no scheduler in
     // this process, so a REPL starting now is right to start its own ticker.
     this.deps.lock.release(this.pid);
-    await this.deps.close();
+    // Whatever is left of the one budget, not a fresh `drainBudgetMs`: the
+    // busy-wait above may already have spent most or all of it, and `close`'s
+    // own wait (a connector's in-flight request, `cli/gateway.ts`) has to fit
+    // in what remains for the "fino a Xs" line above to stay true.
+    await this.deps.close(Math.max(0, deadline - Date.now()));
     // Every way out ends here, not only a signal: a claim taken over from under
     // us also has to end `serve`, or the process stays up with no timers,
     // scheduling nothing and reporting nothing.

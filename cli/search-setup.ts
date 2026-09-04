@@ -156,11 +156,17 @@ export async function cmdSearch(home: string, argv: string[], deps: SearchDeps):
   // motore È l'autorizzazione a parlargli. Un fallimento qui (nessun
   // terminale, l'owner ha detto no, il risigillo non riesce) non disfa la
   // config appena scritta — resta scritta, e `widenEgressForCapability` ha
-  // già stampato perché e cosa fare a mano.
+  // già stampato perché e cosa fare a mano. Ma non è un esito uguale a "tutto
+  // fatto": la seconda porta della stessa serratura (ADR-0058, revisione
+  // 03/09/2026) deve accordarsi con la prima, `muffin mcp add --host`, sullo
+  // stesso segnale — «un meccanismo, due porte» vale anche per l'exit code,
+  // non solo per la funzione che le due chiamano. Uno script che guarda solo
+  // lo stato di uscita non ha altro modo di accorgersi che l'host nominato
+  // non è entrato nell'allowlist.
   const host = new URL(entry.endpoint).hostname;
-  await widenEgressForCapability(home, [host], `la ricerca web (${entry.label})`, {
+  const esitoEgress = await widenEgressForCapability(home, [host], `la ricerca web (${entry.label})`, {
     out,
     ...(deps.chiediConferma !== undefined ? { chiediConferma: deps.chiediConferma } : {}),
   });
-  return 0;
+  return esitoEgress.ok ? 0 : 1;
 }

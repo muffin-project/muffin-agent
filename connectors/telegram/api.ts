@@ -73,10 +73,10 @@ export type SendOptions = {
  * never satisfy `TelegramApi` itself, only an interface like this one.
  */
 export interface TelegramApiLike {
-  call<T>(method: string, payload?: Record<string, unknown>, attempt?: number): Promise<T>;
+  call<T>(method: string, payload?: Record<string, unknown>, attempt?: number, signal?: AbortSignal): Promise<T>;
   upload<T>(method: string, body: FormData): Promise<T>;
   getMe(): Promise<User>;
-  getUpdates(offset: number, allowed?: string[]): Promise<Update[]>;
+  getUpdates(offset: number, allowed?: string[], signal?: AbortSignal): Promise<Update[]>;
   sendMessage(chatId: number, html: string, options?: SendOptions): Promise<Message>;
   editMessageText(chatId: number, messageId: number, html: string): Promise<Message | boolean>;
   editMessageReplyMarkup(chatId: number, messageId: number): Promise<Message | boolean>;
@@ -100,9 +100,13 @@ export class TelegramApi implements TelegramApiLike {
    * The retry honours `retry_after` when Telegram sends it, because guessing a
    * backoff against a server that just told you the number is how a soft limit
    * becomes a hard one.
+   *
+   * `signal` is what lets `getUpdates`' long poll actually be cut short —
+   * `stop()` in `connector.ts` aborts it instead of waiting out the up-to-65s
+   * `REQUEST_TIMEOUT_MS` this same call already carries.
    */
-  async call<T>(method: string, payload: Record<string, unknown> = {}, attempt = 0): Promise<T> {
-    return this.request<T>(method, payload, true, true, attempt);
+  async call<T>(method: string, payload: Record<string, unknown> = {}, attempt = 0, signal?: AbortSignal): Promise<T> {
+    return this.request<T>(method, payload, true, true, attempt, signal);
   }
 
   /**
@@ -120,6 +124,7 @@ export class TelegramApi implements TelegramApiLike {
     retryTransport: boolean,
     retryRejected: boolean,
     attempt: number,
+    signal?: AbortSignal,
   ): Promise<T> {
     let response: Response;
     try {
@@ -127,15 +132,20 @@ export class TelegramApi implements TelegramApiLike {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: signal === undefined ? AbortSignal.timeout(REQUEST_TIMEOUT_MS) : AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
       });
     } catch (error) {
+      // A deliberate stop, not a network failure: retrying it (or wrapping it
+      // as a `TelegramError` for the caller to log as a fault) would be lying
+      // about what just happened. `connector.ts` already knows *why* — it is
+      // the one that aborted — so the raw error goes back to it unwrapped.
+      if (signal?.aborted === true) throw error;
       // Reads retry one network failure. User-visible effects deliberately do
       // not: after an unreadable response the remote side may have accepted
       // the request, and a second send can become a second visible message.
       if (retryTransport && attempt === 0) {
         await sleep(1000);
-        return this.request<T>(method, payload, retryTransport, retryRejected, 1);
+        return this.request<T>(method, payload, retryTransport, retryRejected, 1, signal);
       }
       // Mai `.message`, e non per prudenza astratta: l'URL su cui questa
       // `fetch` e' appena fallita porta il bot token nel path (Telegram, a
@@ -233,12 +243,23 @@ export class TelegramApi implements TelegramApiLike {
     // non viene mai consegnato — e un pulsante che nessuno riceve è un pulsante
     // che gira per sempre.
     allowed: string[] = ['message', 'edited_message', 'callback_query'],
+    // Il gancio che rende il long poll interrompibile davvero: senza, uno
+    // `stop()` durante l'attesa non poteva far altro che aspettare fino a
+    // `REQUEST_TIMEOUT_MS` — e il database, chiuso nel frattempo, riceveva la
+    // scrittura di una risposta arrivata da un processo che si considerava già
+    // fermo.
+    signal?: AbortSignal,
   ): Promise<Update[]> {
-    return this.call<Update[]>('getUpdates', {
-      offset,
-      timeout: POLL_SECONDS,
-      allowed_updates: allowed,
-    });
+    return this.call<Update[]>(
+      'getUpdates',
+      {
+        offset,
+        timeout: POLL_SECONDS,
+        allowed_updates: allowed,
+      },
+      0,
+      signal,
+    );
   }
 
   sendMessage(chatId: number, html: string, options: SendOptions = {}): Promise<Message> {

@@ -28,7 +28,7 @@ import {
 } from './memory.js';
 import { checkTemporalWindow, EVERY_INSTANT, normaliseDate } from '../core/memory/recall.js';
 import { cmdVaultAdd, cmdVaultCheck, cmdVaultLs, cmdVaultReindex, VAULT_USAGE } from './vault.js';
-import { cmdSurfaceDisable, cmdSurfaceEnable, cmdSurfaceList, SURFACE_USAGE } from './surface.js';
+import { cmdSurfaceDefault, cmdSurfaceDisable, cmdSurfaceEnable, cmdSurfaceList, SURFACE_USAGE } from './surface.js';
 import { cmdMcpAdd, cmdMcpList, cmdMcpRemove, MCP_USAGE } from './mcp.js';
 import { cmdAdopt } from './adopt.js';
 import { cmdJobsAdd, cmdJobsList, cmdJobsRemove, JOBS_USAGE } from './jobs.js';
@@ -59,7 +59,7 @@ import {
   type ProviderKind,
 } from '../core/config/config.js';
 import { promptLine, promptSecret } from './prompt.js';
-import { cmdPromptShow, PROMPT_USAGE } from './prompt-show.js';
+import { cmdPromptShow, cmdPromptVersion, PROMPT_USAGE } from './prompt-show.js';
 import {
   askLocalOrApi,
   askModelChoice,
@@ -137,6 +137,7 @@ comandi operatore:
   muffin update --rollback [--yes]
                                 torna alla release precedente (flip inverso)
   muffin surface list | enable telegram [--owner <chat-id>] | disable telegram
+  muffin surface default <id>   dove Muffin parla quando nessuno ha chiesto
   muffin gateway status | stop | install [--write]
                                 il processo che tiene vivi i job quando non hai
                                 nessuna finestra aperta. \`muffin init\` propone
@@ -146,6 +147,10 @@ comandi operatore:
                                 il system prompt che il modello riceverebbe
                                 davvero, sulla home corrente — niente chiamate
                                 al modello, segreti redatti
+  muffin prompt version [v1|v2]
+                                quale prompt assembla questa installazione. v1 e
+                                il default e non si muove; v2 riscrive carattere,
+                                voce e regole di lavoro. Vale dal prossimo boot.
   muffin secret set NOME [--persist]
                                 (valore su stdin) --persist lo scrive fuori da
                                 ~/.muffin, così sopravvive a \`uninstall\` e
@@ -1052,8 +1057,9 @@ async function cmdMemory(argv: string[]): Promise<number> {
 }
 
 /**
- * `prompt` has one sub-verb today, `show`. A dispatcher rather than a
- * top-level `cmdPromptShow` in the switch above so a second sub-verb (say,
+ * `prompt` has two sub-verbs: `show`, what the model would really receive, and
+ * `version`, which of the two assemblies it receives. A dispatcher rather than
+ * a top-level `cmdPromptShow` in the switch above so a further sub-verb (say,
  * `prompt diff` against a previous snapshot) has somewhere to land without
  * touching `main`'s own switch again — the same shape `cmdMemory`/`cmdVault`
  * already use for their own sub-verbs.
@@ -1061,6 +1067,7 @@ async function cmdMemory(argv: string[]): Promise<number> {
 function cmdPrompt(argv: string[]): number {
   const [sub, ...rest] = argv;
   if (sub === 'show') return cmdPromptShow(paths().home, rest);
+  if (sub === 'version') return cmdPromptVersion(paths().home, rest);
   process.stderr.write(PROMPT_USAGE);
   return 78;
 }
@@ -1188,6 +1195,9 @@ async function cmdSurface(argv: string[]): Promise<number> {
     return cmdSurfaceEnable(home, id, values.owner, values['api-base']);
   }
   if (sub === 'disable' && id) return cmdSurfaceDisable(home, id);
+  // ADR-0060: la manopola che `surfaces.default` dichiarava da sempre e che
+  // nessun comando poteva girare.
+  if (sub === 'default' && id) return cmdSurfaceDefault(home, id);
   process.stderr.write(SURFACE_USAGE);
   return 78;
 }

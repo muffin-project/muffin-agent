@@ -1,12 +1,42 @@
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir, platform } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runInit } from '../../cli/init.js';
 import { isValidEgressHost, widenEgressForCapability } from './egress-writer.js';
 import { verify } from './verify.js';
 import { paths } from '../config/config.js';
-import { hostAllowed } from '../net/egress.js';
+import { hostAllowed, isForbiddenAddress } from '../net/egress.js';
+
+/**
+ * `writeFileSync` reale per ogni chiamata, tranne quando `guasto.armato` è
+ * vero: da lì in poi ogni scrittura successiva alla prima fallisce con
+ * `EACCES` — quella "prima" è la nuova `egress.json` che
+ * `widenEgressForCapability` scrive per prima; le successive sono i due
+ * write di `seal()` (manifest, poi anchor) e i due tentativi di rollback che
+ * seguono un fallimento. Un mock, non un `chmod`: un `chmod` sul file blocca
+ * la *prima* scrittura, non permette "la prima riesce, tutte le altre no" —
+ * esattamente la sequenza che fa scattare `rollbackFallito` (vedi sotto), e
+ * lo stesso approccio con cui un giudice indipendente l'ha esercitato la
+ * prima volta.
+ */
+const guasto = vi.hoisted(() => ({ armato: false, chiamate: 0 }));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const vero = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...vero,
+    writeFileSync: (...args: Parameters<typeof vero.writeFileSync>) => {
+      if (guasto.armato) {
+        guasto.chiamate += 1;
+        if (guasto.chiamate > 1) {
+          throw Object.assign(new Error('EACCES: permission denied, open (mock)'), { code: 'EACCES' });
+        }
+      }
+      return vero.writeFileSync(...args);
+    },
+  };
+});
 
 function home(): string {
   const h = mkdtempSync(join(tmpdir(), 'muffin-egress-writer-'));
@@ -376,4 +406,159 @@ describe('widenEgressForCapability — permesso negato al risigillo', () => {
       expect(stato.ok).toBe(true);
     },
   );
+
+  /**
+   * Il ramo che il test sopra NON esercita: lì il rollback riesce sempre,
+   * perché soltanto l'anchor era bloccato e i due file da riportare indietro
+   * restavano scrivibili. Qui, con `writeFileSync` mockato (vedi `guasto` in
+   * cima al file) per fallire da SUBITO DOPO la prima scrittura riuscita in
+   * poi, la sequenza è: (1) la nuova `egress.json` si scrive davvero, (2)
+   * `seal()` fallisce sul primo write che tenta (`manifest.json`, mai
+   * arrivato a toccare il file — resta quello di prima), (3) il tentativo di
+   * rimettere `egress.json` com'era fallisce anch'esso. `egress.json` sul
+   * disco resta quindi con il nuovo host **mai ripristinato** — l'unica riga
+   * owner-facing del modulo senza copertura, misurata da un giudice
+   * indipendente mockando `writeFileSync` per fallire dopo la prima
+   * scrittura riuscita. Il messaggio deve ammetterlo, non promettere un
+   * ripristino che il disco non ha — ed è per questo che `verify()` lo vede
+   * davvero come uno scarto (`files_diverged`), non come uno stato pulito.
+   */
+  it("rollbackFallito: se anche il ripristino fallisce, il messaggio lo dice — non promette un ripristino che non c'è stato", async () => {
+    const h = home();
+    const egressPath = join(paths(h).rot, 'egress.json');
+    const manifestPath = join(paths(h).rot, 'manifest.json');
+    const egressPrima = readFileSync(egressPath, 'utf8');
+    const manifestPrima = readFileSync(manifestPath, 'utf8');
+    const { out, sink } = raccogli();
+    guasto.chiamate = 0;
+    guasto.armato = true;
+    try {
+      const esito = await widenEgressForCapability(h, ['api.tavily.com'], 'la ricerca web (Tavily)', {
+        out: sink,
+        chiediConferma: () => Promise.resolve('s'),
+      });
+      expect(esito.ok).toBe(false);
+    } finally {
+      guasto.armato = false;
+    }
+    const testo = out.join('\n');
+    expect(testo).toContain('non sono riuscito a rimettere');
+    // I due percorsi separati e leggibili, non incollati da un `/` che li fa
+    // sembrare un unico percorso inesistente (`…/egress.json//tmp/…/manifest.json`).
+    expect(testo).toContain(`rimettere ${egressPath} e ${manifestPath} come stavano prima`);
+    expect(testo).not.toContain(`${egressPath}/${manifestPath}`);
+    expect(testo).toContain('muffin rot verify');
+    // Il disco, a differenza del rollback riuscito sopra, NON è tornato
+    // com'era: `egress.json` ha già il nuovo host e il tentativo di
+    // rimetterlo com'era è quello che è fallito.
+    expect(readFileSync(egressPath, 'utf8')).not.toBe(egressPrima);
+    expect(JSON.parse(readFileSync(egressPath, 'utf8')).allow).toContain('api.tavily.com');
+    // manifest.json non è mai stato toccato: seal() ha fallito sul suo stesso
+    // primo write, prima ancora di scrivere byte nuovi.
+    expect(readFileSync(manifestPath, 'utf8')).toBe(manifestPrima);
+    // E `verify()` lo vede per quello che è: uno scarto reale fra il
+    // manifest (vecchio) e `egress.json` (nuovo) — non uno stato pulito che
+    // il messaggio avrebbe promesso a torto.
+    const stato = verify(h, 'single-user');
+    expect(stato.ok).toBe(false);
+  });
+});
+
+/**
+ * Un indirizzo privato o link-local (`127.0.0.1`, il metadata endpoint
+ * `169.254.169.254`, un RFC1918) non deve entrare nell'allowlist da questa
+ * porta — vedi il commento sopra `isValidEgressHost` per il perché. Ogni
+ * caso qui prova **entrambe le metà**, come richiesto: rifiutato da chi
+ * scrive, e comunque rifiutato a connect-time dal pavimento esistente
+ * (`isForbiddenAddress`, la stessa funzione che `agent/tools/http.ts#addressVeto`
+ * chiama su ogni hop) — due difese indipendenti, non la stessa provata due volte.
+ */
+describe('isValidEgressHost — il pavimento anti-SSRF si applica anche a chi scrive', () => {
+  it.each([
+    ['127.0.0.1', 'loopback'],
+    ['169.254.169.254', 'metadata endpoint cloud'],
+    ['10.0.0.5', 'RFC1918 10/8'],
+    ['172.16.0.1', 'RFC1918 172.16/12'],
+    ['192.168.1.1', 'RFC1918 192.168/16'],
+    ['*.169.254.169.254', 'wildcard su un indirizzo, non su un dominio'],
+  ])('"%s" (%s): isValidEgressHost lo rifiuta', (host) => {
+    expect(isValidEgressHost(host)).toBe(false);
+  });
+
+  it('un IPv4 pubblico resta un host valido — il controllo è mirato, non "nessun IP"', () => {
+    expect(isValidEgressHost('8.8.8.8')).toBe(true);
+  });
+
+  it('widenEgressForCapability: rifiuta prima di chiedere o scrivere, e il pavimento a connect-time lo rifiuterebbe comunque', async () => {
+    const h = home();
+    const { out, sink } = raccogli();
+    let chiesto = 0;
+    const esito = await widenEgressForCapability(h, ['169.254.169.254'], 'test', {
+      out: sink,
+      chiediConferma: () => {
+        chiesto += 1;
+        return Promise.resolve('s');
+      },
+    });
+    // Prima metà: la porta che scrive rifiuta.
+    expect(esito.ok).toBe(false);
+    expect(chiesto).toBe(0);
+    expect(egressAllow(h)).toEqual([]);
+    expect(out.join('\n')).toMatch(/non è un host valido/);
+    // Seconda metà: anche se questo host fosse finito nell'allowlist per
+    // un'altra via, il pavimento a connect-time lo rifiuterebbe comunque —
+    // le due difese sono indipendenti, non la stessa cosa vista due volte.
+    expect(isForbiddenAddress('169.254.169.254')).toBe(true);
+  });
+});
+
+/**
+ * RFC 1035 §3.1: un'etichetta non supera i 63 caratteri (già coperto sopra),
+ * ma il nome intero non supera i 253 — un limite diverso, su un totale
+ * diverso, che nessuna delle etichette singole può far scattare da sola.
+ */
+describe('isValidEgressHost — il nome intero, non solo ogni etichetta, ha un tetto', () => {
+  it('cinque etichette da 60 caratteri (ciascuna valida) superano insieme i 253: rifiutato', () => {
+    const nome = Array(5).fill('a'.repeat(60)).join('.');
+    expect(nome.length).toBeGreaterThan(253);
+    expect(nome.split('.').every((l) => l.length <= 63)).toBe(true); // nessuna etichetta, da sola, è il motivo
+    expect(isValidEgressHost(nome)).toBe(false);
+  });
+
+  it('253 caratteri esatti restano validi — il tetto è "oltre", non "fino a"', () => {
+    // 4 etichette da 62 (62·4 = 248) unite da 3 punti (251), più un punto e
+    // un'etichetta finale di 1 carattere: 251 + 2 = 253.
+    const nome = `${Array(4).fill('a'.repeat(62)).join('.')}.a`;
+    expect(nome.length).toBe(253);
+    expect(isValidEgressHost(nome)).toBe(true);
+  });
+});
+
+/**
+ * `EgressFileSchema` in modalità `.loose()` (`core/net/egress.ts`): una
+ * chiave che l'owner ha scritto a mano — una nota, un promemoria, qualunque
+ * cosa questo schema non conosca — sopravvive a una riscrittura, invece di
+ * sparire in silenzio alla prima `widenEgressForCapability`.
+ */
+describe('widenEgressForCapability — una chiave sconosciuta scritta dall owner sopravvive alla riscrittura', () => {
+  it('una nota owner in un campo che lo schema non conosce resta, byte per byte, dopo l aggiunta di un host', async () => {
+    const h = home();
+    const egressPath = join(paths(h).rot, 'egress.json');
+    writeFileSync(
+      egressPath,
+      JSON.stringify(
+        { schemaVersion: 1, allow: ['gia-dentro.example'], nota_owner: 'aggiunto per il progetto X, non toccare' },
+        null,
+        2,
+      ),
+    );
+    const esito = await widenEgressForCapability(h, ['nuovo.example'], 'test', {
+      out: () => {},
+      chiediConferma: () => Promise.resolve('s'),
+    });
+    expect(esito.ok).toBe(true);
+    const scritto = JSON.parse(readFileSync(egressPath, 'utf8'));
+    expect(scritto.nota_owner).toBe('aggiunto per il progetto X, non toccare');
+    expect(scritto.allow).toEqual(['gia-dentro.example', 'nuovo.example']);
+  });
 });

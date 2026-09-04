@@ -1,13 +1,19 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runInit } from '../../cli/init.js';
-import { paths } from '../../core/config/config.js';
+import {
+  loadConfig,
+  paths,
+  PROMPT_VERSIONS,
+  saveConfig,
+  type PromptVersion,
+} from '../../core/config/config.js';
 import type { Principal } from '../../core/policy/types.js';
 import { buildRuntime, type Runtime } from '../runtime.js';
-import { buildSystemPromptBlocks, tenantClass, visibleTools } from './assemble.js';
+import { buildSystemPromptBlocks, renderSystemPrompts, tenantClass, visibleTools } from './assemble.js';
 
 /**
  * The prompt is a function of the tenant, and the tool list is a function of the
@@ -97,6 +103,31 @@ describe('the owner-class prompt does not move', () => {
    * Note that the three files named above are not the only inputs: `WORK_RULES`
    * in `assemble.ts` is a fourth, and it is the one the re-capture below moved.
    *
+   * Ri-fissato 2026-09-03 (`slice/il-disco-ha-un-recinto`): una riga in più in
+   * `WORK_RULES`, 305 caratteri, che dice al modello **cosa sia un recinto**.
+   * Fino a ieri nessuna riga del prompt spedito lo diceva: l'unico posto dove il
+   * modello veniva avvertito era la descrizione di due tool (`http_get`,
+   * `web_search`), cioè un avvertimento che sparisce se quei tool non sono
+   * registrati e che per il disco non c'è mai stato.
+   *
+   * **Perché muovere v1 invece di tenerlo congelato**, che era l'altra strada e
+   * va detta: il congelamento ha una ragione vera e recente — `slice/prompt-v2`
+   * tiene v1 come fondo su cui l'owner torna indietro, e la reversibilità *è*
+   * che v1 non si muova di un byte. Ma `promptVersion` di default è `v1`
+   * (`core/config/config.ts`): una riga solo in v2 non arriverebbe a nessuno
+   * finché l'owner non gira la manopola, e il buco che questa fetta chiude è
+   * spedito adesso. Fra «v1 immobile» e «la regola arriva all'installazione che
+   * gira» vince la seconda, e il costo si scrive invece di subirlo: ogni
+   * sessione con un prefisso caldo va a freddo una volta, su tutte e due le
+   * classi. Il fondo per il ritorno indietro resta, con la riga dentro — v1 e v2
+   * dicono la stessa cosa sul recinto, quindi la manopola continua a scegliere
+   * fra due prompt e non fra due politiche di sicurezza.
+   *
+   * La riga è la metà **probabilistica** di questa fetta e non è il controllo:
+   * il controllo è `fenceDisk` in `agent/tools/fs.ts`, che marca i byte in
+   * codice qualunque cosa il modello stia pensando. Pin precedente:
+   * `ac57a24adb0fa04428a72c9b6ba363e54f341db829835854a9faa51897fd41a7`.
+   *
    * Ri-fissato 2026-08-27 (`slice/skill-di-serie`): due cose insieme, e la
    * seconda è il motivo per cui questo test esiste. (1) Il catalogo delle skill
    * ora ha contenuto — `defaults/skills/` spedisce due skill e `init` le mette
@@ -163,7 +194,7 @@ describe('the owner-class prompt does not move', () => {
    * `3ebf2cfc307bdda5c73fff6ed4d60d5a9db2eceffac754164b220a86214cabf2`.
    */
   const OWNER_PROMPT_SHA_AT_SPLIT =
-    'ac57a24adb0fa04428a72c9b6ba363e54f341db829835854a9faa51897fd41a7';
+    'a8eb81ecd95df248b8bdc588c07521292bed8d5d75dcddce22b76fb32112c8b3';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
@@ -200,6 +231,149 @@ describe('the owner-class prompt does not move', () => {
     } finally {
       runtime.close();
     }
+  });
+
+  /**
+   * Il fondo su cui l'owner torna indietro.
+   *
+   * `slice/prompt-v2` aggiunge una seconda versione del prompt, e la sola cosa
+   * che rende quel passaggio reversibile è che v1 non si muova di un byte: non
+   * i file — che nessuno tocca — ma la **stringa assemblata**, che è ciò che il
+   * modello riceve e ciò su cui la cache del provider prende. Il pin sopra lo
+   * dice per la classe owner attraverso il default; questi due lo dicono per
+   * l'argomento esplicito e per il gruppo, che prima non aveva nessun pin.
+   *
+   * Falsificabile per costruzione: montare v2 mentre la versione dice v1 fa
+   * cadere questi tre insieme.
+   */
+  it("chiedere v1 esplicitamente dà la stessa stringa del default — e la stessa di ieri", () => {
+    const home = bootHome();
+    const runtime = boot(home);
+    try {
+      const skills = runtime.promptBlocks.owner.find((b) => b.name === 'skills')?.text ?? '';
+      const esplicito = renderSystemPrompts(buildSystemPromptBlocks(home, false, skills, 'v1'));
+      expect(esplicito.owner).toBe(runtime.deps.systemPrompts.owner);
+      expect(createHash('sha256').update(esplicito.owner, 'utf8').digest('hex')).toBe(OWNER_PROMPT_SHA_AT_SPLIT);
+    } finally {
+      runtime.close();
+    }
+  });
+
+  /**
+   * Lo stesso pin per la classe `group`, fissato il 2026-09-03 con
+   * `slice/prompt-v2`. Vale la stessa regola dell'altro: quando cade dopo una
+   * modifica voluta a `defaults/voice.md` o a `GROUP_PERSONA`, si ri-cattura
+   * nello stesso commit della modifica, così l'invalidazione della cache è una
+   * cosa che qualcuno ha deciso e non una cosa che è successa.
+   */
+  /**
+   * Ri-fissato 2026-09-03 (`slice/il-disco-ha-un-recinto`) insieme al pin owner,
+   * e per la stessa riga: `WORK_RULES` spedisce a tutte e due le classi, quindi
+   * la regola sul recinto arriva anche alla stanza — che è dove il contenuto di
+   * qualcun altro entra per definizione. Pin precedente:
+   * `23aa24da39dc582dd7909f750fed59b165a71ce70dc549428b5df634ced0ed9b`.
+   */
+  const GROUP_PROMPT_SHA_V1 = '6d0a7bef6f7da6ded227c879427715bb64c53e8886e52710b58ace44823a524b';
+
+  it('e la stanza riceve lo stesso prompt di ieri, byte per byte', () => {
+    const runtime = boot(bootHome());
+    try {
+      const sha = createHash('sha256').update(runtime.deps.systemPrompts.group, 'utf8').digest('hex');
+      expect(sha).toBe(GROUP_PROMPT_SHA_V1);
+    } finally {
+      runtime.close();
+    }
+  });
+});
+
+/**
+ * La manopola della versione, provata sulla strada vera.
+ *
+ * Due porte sulla stessa manopola — `config.json` e `muffin prompt version` —
+ * e la proprietà che conta non è che ognuna funzioni, è che **dicano la stessa
+ * cosa**: una manopola esposta da due porte che divergono è peggio di una
+ * manopola esposta da una sola. Il confronto qui sotto è fra la config scritta
+ * a mano e la config scritta dal comando, montate entrambe da `buildRuntime`.
+ */
+describe('quale versione del prompt assembla questa installazione', () => {
+  it('senza campo in config monta v1, e col campo a v2 monta v2 — attraverso buildRuntime', () => {
+    const home = bootHome();
+    const primo = boot(home);
+    const v1 = primo.deps.systemPrompts.owner;
+    primo.close();
+    // Il default è v1 e non è scritto da nessuna parte: la config appena creata
+    // da `runInit` non nomina il prompt.
+    expect(loadConfig(home).prompt).toBeUndefined();
+
+    saveConfig({ ...loadConfig(home), prompt: { version: 'v2' } }, home);
+    const secondo = boot(home);
+    const v2 = secondo.deps.systemPrompts.owner;
+    secondo.close();
+
+    expect(v2).not.toBe(v1);
+    // E non è «una stringa diversa» qualunque: è la v2, riconoscibile da una
+    // riga che esiste solo lì.
+    expect(v2).toContain('## Quando il risultato è incerto');
+    expect(v1).not.toContain('## Quando il risultato è incerto');
+
+    // Il ritorno indietro è lo stesso campo, e riporta i byte esatti.
+    saveConfig({ ...loadConfig(home), prompt: { version: 'v1' } }, home);
+    const terzo = boot(home);
+    try {
+      expect(terzo.deps.systemPrompts.owner).toBe(v1);
+    } finally {
+      terzo.close();
+    }
+  });
+
+  it('v2 legge la copia spedita quando la home non ce l\'ha ancora, e sono lo stesso testo', () => {
+    // L'installazione su cui questa fetta va provata è **già fatta**: `muffin
+    // init` è passato mesi fa e `~/.muffin/v2/` non esiste. Se v2 sapesse
+    // leggere solo la home, la manopola sarebbe girabile e non avrebbe niente
+    // da montare — un difetto che si vede soltanto su una casa vecchia.
+    const vecchia = mkdtempSync(join(tmpdir(), 'muffin-assemble-vecchia-'));
+    runInit({ home: vecchia, apiKey: 'sk-assemble-never-called' });
+    rmSync(join(vecchia, 'v2'), { recursive: true, force: true });
+    expect(existsSync(join(vecchia, 'v2', 'persona.md'))).toBe(false);
+
+    const daSpedito = renderSystemPrompts(buildSystemPromptBlocks(vecchia, false, '', 'v2'));
+    expect(daSpedito.owner).toContain('## Quando il risultato è incerto');
+    // E la provenienza è dichiarata, non silenziosa: chi guarda `--blocks` deve
+    // vedere che sta leggendo il pacchetto e non la sua home.
+    const blocchi = buildSystemPromptBlocks(vecchia, false, '', 'v2');
+    expect(blocchi.owner.find((b) => b.name === 'persona')?.source).toContain('spedito');
+
+    // Stessa home dopo un init che la ripopola: stesso testo, sorgente diversa.
+    runInit({ home: vecchia, apiKey: 'sk-assemble-never-called' });
+    const daCasa = buildSystemPromptBlocks(vecchia, false, '', 'v2');
+    expect(daCasa.owner.find((b) => b.name === 'persona')?.source).toBe('v2/persona.md');
+    expect(renderSystemPrompts(daCasa).owner).toBe(daSpedito.owner);
+  });
+
+  it('la metà operativa smette di essere un trentaduesimo del carattere', () => {
+    // La misura che ha motivato la fetta, tenuta come test perché è la sola
+    // affermazione strutturale che v2 fa: non «è scritto meglio» — quello lo
+    // decide l'owner leggendo — ma «esiste».
+    const home = bootHome();
+    const conta = (v: PromptVersion) => {
+      const b = buildSystemPromptBlocks(home, false, '', v);
+      const testo = (nome: string) => b.owner.find((x) => x.name === nome)?.text.length ?? 0;
+      return {
+        chiSei: testo('persona') + testo('identity') + testo('voice'),
+        comeLavori: testo('work-rules'),
+      };
+    };
+    const v1 = conta('v1');
+    const v2 = conta('v2');
+    // Era `> 20` fino al 2026-09-03: la riga sul recinto aggiunge 305 caratteri
+    // a `WORK_RULES` e porta il rapporto v1 da 23,35 a 17,07 (19.335 / 1.133).
+    // La soglia scende con la misura invece di essere aggirata, e l'affermazione
+    // che il test fa — v1 è pesantemente carattere, v2 no — regge identica: 17
+    // contro il `< 8` di v2 sotto, che è la riga che porta il peso.
+    expect(v1.chiSei / v1.comeLavori).toBeGreaterThan(15);
+    expect(v2.chiSei / v2.comeLavori).toBeLessThan(8);
+    // E il prompt non è cresciuto per farlo: il peso si è spostato.
+    expect(v2.chiSei + v2.comeLavori).toBeLessThan((v1.chiSei + v1.comeLavori) * 1.02);
   });
 });
 
@@ -361,6 +535,117 @@ describe('what a group turn is allowed to be told', () => {
       runtime.close();
     }
   });
+});
+
+/**
+ * I pavimenti della stanza — la trappola scritta in `assemble.ts` e facile da
+ * non vedere, resa un test.
+ *
+ * `voice.md` arriva a **tutte e due** le classi; `identity.md` solo all'owner.
+ * Quindi una frase presente in entrambi non è un doppione: è **l'unica copia
+ * che il gruppo riceve**, e cancellarla come ridondante toglie in silenzio un
+ * pavimento alla stanza piena di sconosciuti mentre il prompt dell'owner
+ * continua a sembrare a posto. `muffin prompt show --eco` misura la
+ * sovrapposizione ma non conosce questa regola: misura, non decide.
+ *
+ * Sette regole, e per ognuna la sola cosa che serve sapere è dove ne vive
+ * l'altra copia. Sono asserite **per versione**, così una potatura futura di
+ * `defaults/v2/voice.md` che ne cancella una perché «c'è già in identity.md»
+ * fallisce qui invece che nella chat di un estraneo.
+ *
+ * `identity.md` non ha una v2 (è sigillato), quindi la lista vale identica per
+ * entrambe: è esattamente ciò che rende il confronto per versione utile.
+ */
+describe('i pavimenti che la stanza riceve solo da voice.md', () => {
+  /**
+   * `[regola, frase-o-forma nel prompt di gruppo, dove sta l'altra copia]`.
+   *
+   * Le forme sono regex e non stringhe intere perché il testo va a capo dove
+   * capita: la proprietà è che la regola sia detta, non dove si spezza la riga.
+   */
+  const PAVIMENTI: readonly (readonly [string, RegExp, string])[] = [
+    [
+      'niente azioni simulate',
+      /Se descrivo un'azione al passato,?\s+deve\s+esserci\s+evidenza/,
+      "identity.md §«Cosa non fai mai»: «Non fingi di ricordare, aver visto, controllato, eseguito»",
+    ],
+    [
+      '«non lo so» invece di una certezza falsa',
+      /[«"]Non lo so[»"]\s+è\s+meglio\s+di\s+una\s+certezza\s+falsa/,
+      'identity.md §«Come ti comporti quando è difficile»: «Quando non sai, dici che non sai»',
+    ],
+    [
+      "un'inferenza si sente che è un'inferenza",
+      /[«"]mi\s+sembra\s+che\.\.\.[»"]|ho\s+l'impressione\s+che/,
+      'identity.md: «Non trasformi una tua inferenza su di me in un fatto»',
+    ],
+    [
+      'niente terapeuta, coach, motivational speaker',
+      /Non\s+faccio\s+il\s+motivational\s+speaker/,
+      'identity.md: «Non fai il terapeuta, il coach o il motivational speaker»',
+    ],
+    [
+      'niente linguaggio da assistente generico',
+      /come\s+posso\s+aiutarti\?/,
+      "persona.md, che al gruppo non arriva: «Un assistente cerca soprattutto di essere utile alla richiesta davanti a lui»",
+    ],
+    [
+      'niente emozioni o continuità finte',
+      /Non\s+fingo\s+continuità\s+emotiva/,
+      "identity.md: «Non devi inventarti emozioni umane»; GROUP_PERSONA lo dice a sua volta, ed è la sola con due copie",
+    ],
+    [
+      'la memoria non si ostenta',
+      /Non\s+ostento\s+la\s+memoria/,
+      'identity.md §«La relazione nel tempo»: «Non ostentare la memoria»',
+    ],
+  ];
+
+  /**
+   * E le tre che il gruppo riceve da un blocco che **cambia** fra le versioni.
+   *
+   * La distinzione crash/retry è il caso interessante: in v1 vive in
+   * `voice.md` §«Niente azioni simulate» come regola di forma, in v2 è una
+   * regola di lavoro in `WORK_RULES_V2`. Il pavimento è lo stesso e la stanza
+   * lo riceve in tutte e due, da blocchi diversi — che è precisamente perché
+   * questo si chiede al prompt di gruppo intero e non a un blocco per nome.
+   */
+  const PAVIMENTI_OPERATIVI: readonly (readonly [string, RegExp])[] = [
+    ['tre esiti distinti dopo un crash', /potrebbe\s+essere\s+successo/],
+    ['un tool negato si dice', /Non\s+fingere\s+di\s+aver\s+fatto|non\s+da\s+aggirare\s+in\s+silenzio/],
+    ['un limite non si inventa', /non\s+invent(o|are)\s+una\s+policy\s+o\s+un\s+permesso/],
+  ];
+
+  for (const versione of PROMPT_VERSIONS) {
+    it(`${versione}: la stanza li riceve tutti`, () => {
+      const home = bootHome();
+      const gruppo = renderSystemPrompts(buildSystemPromptBlocks(home, false, '', versione)).group;
+      for (const [regola, forma, altraCopia] of PAVIMENTI) {
+        expect(gruppo, `${regola} — altrove solo in: ${altraCopia}`).toMatch(forma);
+      }
+      for (const [regola, forma] of PAVIMENTI_OPERATIVI) {
+        expect(gruppo, regola).toMatch(forma);
+      }
+      // E le regole di gruppo vere e proprie, che nessun altro blocco porta.
+      expect(gruppo).toMatch(/In\s+gruppo\s+occupo\s+meno\s+spazio\s+che\s+in\s+privato/);
+      expect(gruppo).toMatch(/Non\s+sono\s+il\s+filo\s+principale\s+della\s+conversazione/);
+      expect(gruppo).toMatch(/informazioni\s+private\s+dell'owner\s+non\s+diventano\s+materiale/);
+      expect(gruppo).toMatch(/🧁 è ancora più raro/);
+    });
+
+    it(`${versione}: e continua a non ricevere niente del patto dell'owner`, () => {
+      const home = bootHome();
+      const blocchi = buildSystemPromptBlocks(home, false, '', versione);
+      const gruppo = renderSystemPrompts(blocchi).group;
+      const owner = renderSystemPrompts(blocchi).owner;
+      // Presente da una parte, assente dall'altra: senza la prima metà questo
+      // sarebbe un test che passa perché il file non si è caricato.
+      expect(owner).toContain('Non mi dai ragione per farmi contento');
+      expect(gruppo).not.toContain('Non mi dai ragione per farmi contento');
+      expect(gruppo).not.toContain('Sei il mio secondo cervello');
+      expect(blocchi.group.map((b) => b.name)).not.toContain('identity');
+    });
+  }
 });
 
 describe('the tool list a principal is shown', () => {
