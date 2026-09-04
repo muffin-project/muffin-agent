@@ -42,7 +42,7 @@ export type FlowScenario = SecurityBaselineScenario & {
   readonly expectTuple: Decision['effect'];
 };
 
-/** `sys.http`'s real shape since ADR-0065: reading, not acting — see `agent/tools/http.ts`. */
+/** `sys.http`'s real shape since ADR-0066: reading, not acting — see `agent/tools/http.ts`. */
 const urlRead = (value: string) => ({ kind: 'url-read' as const, value });
 const path = (value: string) => ({ kind: 'path' as const, value });
 
@@ -63,7 +63,7 @@ export const FLOW_SCENARIOS: readonly FlowScenario[] = [
     flow: 'owner',
     expectTuple: 'allow',
     claim:
-      "l'owner nomina una destinazione e ci manda dei byte (ADR-0065: sys.http legge in apertura, nessuna allowlist da nominare più): A e B la lasciano passare, ed è il membro «utility» della coppia",
+      "l'owner nomina una destinazione e ci manda dei byte (ADR-0066: sys.http legge in apertura, nessuna allowlist da nominare più): A e B la lasciano passare, ed è il membro «utility» della coppia",
     action: {
       principal: OWNER,
       tenant: 'host',
@@ -88,15 +88,15 @@ export const FLOW_SCENARIOS: readonly FlowScenario[] = [
      * a entrambi, e non per un difetto: a taint 2 `paramsMaxTaint` è
      * soddisfatto (`POLICY_FLOOR.paramsMaxTaint === 2`, decisione owner del
      * 17/08) e lo scalare non ha un campo in cui la differenza possa esistere.
-     * Prima di ADR-0065 il residuo che il threat model dichiarava era
+     * Prima di ADR-0066 il residuo che il threat model dichiarava era
      * *"esfiltrazione verso un dominio in allowlist"* (`03-threat-model.md:117`);
-     * da ADR-0065 `sys.http` è `url-read` e non c'è più un'allowlist da cui
+     * da ADR-0066 `sys.http` è `url-read` e non c'è più un'allowlist da cui
      * uscire — il residuo è lo stesso, misurato sullo stesso meccanismo
      * (`paramsMaxTaint`), ma ora vale per **qualunque** host, non solo per uno
      * che l'owner aveva già approvato.
      */
     claim:
-      "la stessa richiesta, con la destinazione scelta dal contenuto letto: A non ha un campo in cui la differenza possa esistere e la lascia passare a taint 2 — vero prima di ADR-0065 con l'allowlist, vero dopo senza",
+      "la stessa richiesta, con la destinazione scelta dal contenuto letto: A non ha un campo in cui la differenza possa esistere e la lascia passare a taint 2 — vero prima di ADR-0066 con l'allowlist, vero dopo senza",
     action: {
       principal: OWNER,
       tenant: 'host',

@@ -192,7 +192,7 @@ describe('una decisione non dipende da come è impacchettato il contenuto', () =
     const pulito = await scena(INNOCUO, script, 'allow');
     const sporco = await scena(AVVELENATO, [...script], 'allow');
 
-    // ADR-0065: `sys.http` è `url-read`, aperta per costruzione — il fatto
+    // ADR-0066: `sys.http` è `url-read`, aperta per costruzione — il fatto
     // misurato non è più "i byte non escono", è "escono ugualmente nei due
     // casi", perché la decisione guarda il **taint**, non il testo. `EXFIL`
     // porta una query (`?x=1`) e `DISK_TIER` (2) non supera `paramsMaxTaint`

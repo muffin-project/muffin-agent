@@ -1,4 +1,4 @@
-# ADR-0065 — Leggere è un'altra cosa dall'agire: `sys.http` legge in apertura
+# ADR-0066 — Leggere è un'altra cosa dall'agire: `sys.http` legge in apertura
 
 **Stato:** accettato · 2026-09-04
 

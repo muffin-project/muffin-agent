@@ -184,7 +184,7 @@ describe('(a) a clean turn in a session that read tier-3 content inherits taint 
   });
 
   it("the kernel of the second turn's very first decision already sees taint 3, not 0", async () => {
-    // ADR-0065: `sys.http` is `url-read` — a plain URL is open at any taint,
+    // ADR-0066: `sys.http` is `url-read` — a plain URL is open at any taint,
     // so it can no longer be the instrument that proves what taint the second
     // turn started at. A query string still can: `paramsMaxTaint` is 2, so
     // taint 3 (and only taint 3) turns it into an `ask` — never silently
@@ -376,7 +376,7 @@ describe('(e) a clean turn does not stamp its own answer at an inherited ceiling
   });
 
   it('and a third, equally clean turn is not re-poisoned by the second', async () => {
-    // ADR-0065: same substitution as (a)'s second test — a query string,
+    // ADR-0066: same substitution as (a)'s second test — a query string,
     // since a plain `url-read` fetch no longer answers to any taint at all.
     const EXFIL_PARAMS = `${EXFIL}?x=1`;
     const h = harness([

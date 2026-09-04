@@ -292,7 +292,7 @@ Egress has more than one form.
 ### Tool/network egress
 
 **Reading a URL and reaching a host to act on it are two different authorities
-(ADR-0065).** The kernel's egress branch (`core/policy/decide.ts`) distinguishes
+(ADR-0066).** The kernel's egress branch (`core/policy/decide.ts`) distinguishes
 them by resource kind: `url-read` (`sys.http`, GET-only) is answered without
 consulting the host allowlist at all — any public host is reachable, by owner
 decision, and neither the tool nor the kernel re-checks a redirect target
@@ -322,7 +322,7 @@ is 2, and a group member's turn starts at taint 2 by construction
 (`tierOf(member)`) — not after reading something, but from the first message.
 The params gate fires only above its ceiling, so it never fires for a group
 turn that has not yet read tier-3 content, regardless of which host the
-request reaches. This predates ADR-0065 (it applied identically to an
+request reaches. This predates ADR-0066 (it applied identically to an
 allowlisted host before this split) and is not this document's or that ADR's
 fix; it is named here so this section does not read as a stronger guarantee
 than the code gives for a group tenant.
@@ -637,7 +637,7 @@ status lives only in `docs/work/day1/requirements-status.md`.
   exfiltration, and a material reversal would be an ADR, not an edit to this
   paragraph.
 
-  **2026-09-04 (ADR-0065): the egress allowlist stopped being one of those
+  **2026-09-04 (ADR-0066): the egress allowlist stopped being one of those
   three guards for `sys.http`.** Reading is now open by owner decision —
   `sys.http` declares a `url-read` resource, and `core/policy/decide.ts` never
   consults `egressAllowed` for it — so the allowlist named above governed a
@@ -651,7 +651,7 @@ status lives only in `docs/work/day1/requirements-status.md`.
   because the floor, not the list, was already doing the stopping. An eighth
   scene added the same day — a hostile page instructing the *next* request to
   carry a secret in its query string — measures the same floor holding for the
-  read/act split this ADR introduces; see ADR-0065 for the full corpus
+  read/act split this ADR introduces; see ADR-0066 for the full corpus
   before/after and the residual (`docs/evidence/muffin-nei-gruppi-2026-09-04.md`
   §6.1) it names but does not close: `paramsMaxTaint` does not gate a group
   turn's first message, because that principal's own floor taint already
