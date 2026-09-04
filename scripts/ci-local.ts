@@ -586,22 +586,11 @@ type JobVerdict =
   | { readonly kind: 'not-executable'; readonly reason: string };
 
 async function main(): Promise<void> {
-  const workflowsDir = join(REPO_ROOT, '.github', 'workflows');
   const only = process.env['MUFFIN_CI_LOCAL_ONLY'];
-  const allJobs = loadJobs(workflowsDir);
-  const jobs = only ? allJobs.filter((j) => j.jobId === only) : allJobs;
-  if (only && jobs.length === 0) {
-    throw new Error(
-      `MUFFIN_CI_LOCAL_ONLY='${only}' matches no job. Known jobs: ${allJobs.map((j) => j.jobId).join(', ')}`,
-    );
-  }
-
   const sha = execFileSync('git', ['-C', REPO_ROOT, 'rev-parse', 'HEAD']).toString().trim();
   console.log(`muffin ci:local — replaces GitHub Actions while billing is off\n`);
   console.log(`commit:       ${sha}  (uncommitted changes are not run, like actions/checkout)`);
   console.log(`distribution: ubuntu-latest → ${IMAGE} (ubuntu-latest's current distribution; update here if it changes)`);
-  console.log(`jobs found:   ${jobs.map((j) => `${j.jobId} (${j.workflowFile})`).join(', ')}`);
-  console.log('');
 
   const scratch = mkdtempSync(join(tmpdir(), 'muffin-ci-local-'));
   const keep = process.env['MUFFIN_CI_LOCAL_KEEP'] === '1';
@@ -613,6 +602,28 @@ async function main(): Promise<void> {
     const repoTar = join(scratch, 'repo.tar');
     execFileSync('bash', ['-c', `COPYFILE_DISABLE=1 tar cf ${shSingleQuote(repoTar)} -C ${shSingleQuote(cloneDir)} .`]);
     console.log(`repo.tar written: ${repoTar}`);
+
+    /**
+     * I job si leggono **dal clone**, non dall'albero di lavoro.
+     *
+     * Sembra un dettaglio e non lo e': il container riceve il tarball di HEAD,
+     * quindi leggere i workflow da `REPO_ROOT` fa girare passi che nel tarball
+     * non esistono. Il 04/09/2026 e' successo davvero — un workflow giocattolo
+     * non tracciato e' finito nell'elenco dei job sotto l'intestazione
+     * «cloning HEAD (committed state only)», che diceva l'esatto contrario di
+     * cio' che il runner stava facendo. Nell'altro verso e' peggio: modifichi
+     * un workflow senza committare e il runner deriva i passi dalla modifica e
+     * il codice da HEAD — una combinazione che non esiste da nessuna parte, ne'
+     * su GitHub ne' sul tuo disco.
+     */
+    const allJobs = loadJobs(join(cloneDir, '.github', 'workflows'));
+    const jobs = only ? allJobs.filter((j) => j.jobId === only) : allJobs;
+    if (only && jobs.length === 0) {
+      throw new Error(
+        `MUFFIN_CI_LOCAL_ONLY='${only}' matches no job. Known jobs: ${allJobs.map((j) => j.jobId).join(', ')}`,
+      );
+    }
+    console.log(`jobs found:   ${jobs.map((j) => `${j.jobId} (${j.workflowFile})`).join(', ')}\n`);
 
     let privilegeChoice: PrivilegeChoice | PrivilegeUnavailable | null = null;
 
