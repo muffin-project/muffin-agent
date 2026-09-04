@@ -49,15 +49,12 @@ soffitto si muove prima del risultato del corpus (oggi 4/7).
 
 ## Aperto, non bloccante
 
-**Code dei giudici:** due gateway in corsa consegnano un impegno due volte
-(niente `SendLock` sulla corsia); una superficie *accesa* dopo l'avvio non è nel
-registro e vuole ancora un riavvio; il messaggio in ritardo non dice l'anno; la
-rotaia del taint sugli impegni è limitata dalla finestra di reiniezione (40
-turni), non assoluta — ADR-0060 §Limiti noti.
-
-**Altro:** un `sessions.append` fallito nella ripesca dello `/steer` è
-silenzioso; `pricing.ts` sottostima 5 famiglie su 8; il finto Bot API non serve
-`getFile` (B10, C8 senza scenario).
+Migrato su GitHub Issue (#378 tiene l'indice): #371 SendLock mancante sulla
+corsia impegni, #372 superficie post-boot non registrata, #373 anno assente nel
+messaggio in ritardo, #374 rotaia del taint limitata alla finestra di
+reiniezione, #375 `sessions.append` silenzioso in `/steer`, #377 `pricing.ts`
+sottostima 5/8 famiglie. B10/C8 (finto Bot API senza `getFile`) restano su #361.
 
 **Truth maintenance:** `day1/requirements-status.md` possiede lo stato,
-critical-path.md#ordine-corrente l'ordine.
+critical-path.md#ordine-corrente l'ordine, le Issue linkate sopra il lavoro
+aperto attribuibile.
