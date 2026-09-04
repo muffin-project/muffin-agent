@@ -6,6 +6,8 @@ import {
   renderForPrompt,
   type RecallDeps,
 } from '../../core/memory/recall.js';
+import { describeProvenance } from '../../core/memory/provenance.js';
+import type { Fact } from '../../core/memory/store.js';
 import type { CapabilityDecl } from '../../core/policy/types.js';
 import type { ToolOutcome } from '../loop.js';
 import type { ToolSpec } from '../providers/types.js';
@@ -225,4 +227,103 @@ export async function searchMemory(
     // pre-loop recall does. Searching on purpose must not be a way around it.
     tier: result.items.reduce<0 | 1 | 2 | 3>((max, i) => (i.trustTier > max ? i.trustTier : max), 0),
   };
+}
+
+/**
+ * DAY-1 C5 — "posso capire perché crede una cosa?"
+ *
+ * `muffin memory why` (`cli/memory.ts`) already answered this for the owner,
+ * at a terminal. The model had no door to the same answer: asked mid-turn
+ * "why do you think that", it could only narrate — the least trustworthy
+ * artefact this system produces, because a model asked to justify a belief
+ * will produce a fluent reason whether or not one exists. This tool and the
+ * CLI command now read the identical rows through `describeProvenance`
+ * (`core/memory/provenance.ts`), so the two can never quietly start
+ * disagreeing about what "why" means.
+ *
+ * Same capability as `memory_search` (`memoryCapability`, `memory.read`):
+ * this is a read of the same store, scoped to the same tenant, and inventing
+ * a second capability id for the same effect would be a distinction the
+ * policy matrix has no row for.
+ */
+export const memoryWhySpec: ToolSpec = {
+  name: 'memory_why',
+  description:
+    'Explain why you believe something: the exact episode a fact came from, who said it (or which ' +
+    'document), when, over which connector, and how much it is trusted. Use it whenever the owner asks ' +
+    '"why do you think that" or "who told you that" — never invent a reason, look it up. ' +
+    'Pass "fact_id" when you already have one; otherwise pass "query" describing the belief in ' +
+    'natural language and the closest matching fact is explained.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      fact_id: { type: 'number', description: 'The id of a fact you already know (e.g. from memory_search), to explain directly.' },
+      query: {
+        type: 'string',
+        description: 'The belief to explain, in natural language, when you do not already have a fact_id.',
+      },
+    },
+  },
+};
+
+/** The raw shape of `args`, before any of it is trusted. */
+type WhyRawArgs = {
+  fact_id?: unknown;
+  query?: unknown;
+};
+
+export async function whyMemory(
+  deps: RecallDeps,
+  tenantId: string,
+  args: unknown,
+): Promise<ToolOutcome> {
+  const raw = (args ?? {}) as WhyRawArgs;
+  const hasFactId = raw.fact_id !== undefined;
+  const hasQuery = typeof raw.query === 'string' && raw.query.trim() !== '';
+
+  if (hasFactId && typeof raw.fact_id !== 'number') {
+    return { content: 'memory_why: "fact_id" deve essere un numero.', isError: true, tier: 0 };
+  }
+  if (!hasFactId && !hasQuery) {
+    return {
+      content: 'memory_why richiede "fact_id" (un id già noto) oppure "query" (il fatto da spiegare, a parole).',
+      isError: true,
+      tier: 0,
+    };
+  }
+
+  let fact: Fact | null;
+  if (hasFactId) {
+    const factId = raw.fact_id as number;
+    // Tenant-scoped through the store's own method — never trusts a fact_id
+    // the model happens to type into meaning "any tenant's fact #N".
+    fact = deps.store.factById(tenantId, factId);
+    if (!fact) {
+      return { content: `Nessun fatto #${factId} in questa memoria.`, tier: 0 };
+    }
+  } else {
+    // The ordinary path: `renderForPrompt` never prints a fact id (nothing in
+    // `memory_search`'s rendered block does), so the model almost never has
+    // one to pass. It has words instead — the same hybrid recall
+    // `memory_search` runs, read here for its facts rather than rendered for
+    // the prompt.
+    const query = raw.query as string;
+    const found = await recall(deps, tenantId, query, { limit: 5 });
+    const hit = found.items.find((item) => item.kind === 'fact');
+    if (!hit) {
+      return {
+        content: `Nessun fatto trovato per "${query}" — niente di cui posso spiegare la provenienza. Strategie usate: ${found.strategies.join(', ')}.`,
+        tier: 0,
+      };
+    }
+    fact = deps.store.factById(tenantId, hit.id);
+    if (!fact) {
+      // The hop just found it; a fact retired between that read and this one
+      // is the only way this branch is reachable.
+      return { content: `Il fatto #${hit.id} non è più leggibile.`, tier: 0 };
+    }
+  }
+
+  const { lines, tier } = describeProvenance(deps.store, tenantId, fact);
+  return { content: lines.join('\n'), tier };
 }
