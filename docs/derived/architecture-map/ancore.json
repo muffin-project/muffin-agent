@@ -1691,72 +1691,72 @@
   },
   "core/memory/store.ts:147": {
     "path": "core/memory/store.ts",
-    "line": 149,
+    "line": 150,
     "testo": "*"
   },
   "core/memory/store.ts:162": {
     "path": "core/memory/store.ts",
-    "line": 199,
+    "line": 200,
     "testo": "private readonly ingestLock: IngestLock;"
   },
   "core/memory/store.ts:218": {
     "path": "core/memory/store.ts",
-    "line": 265,
+    "line": 291,
     "testo": "pendingEpisodes(tenantId: string, extractionV: number, limit = 50): Episode[] {"
   },
   "core/memory/store.ts:237": {
     "path": "core/memory/store.ts",
-    "line": 290,
+    "line": 316,
     "testo": "markExtracted(tenantId: string, episodeIds: number[], extractionV: number): void {"
   },
   "core/memory/store.ts:256": {
     "path": "core/memory/store.ts",
-    "line": 309,
+    "line": 335,
     "testo": "releaseIngestLock(pid: number = process.pid): void {"
   },
   "core/memory/store.ts:295": {
     "path": "core/memory/store.ts",
-    "line": 348,
+    "line": 374,
     "testo": "upsertEntity(tenantId: string, name: string, kind: string, recordedAt: string): number {"
   },
   "core/memory/store.ts:38": {
     "path": "core/memory/store.ts",
-    "line": 46,
+    "line": 47,
     "testo": "export type FactInput = {"
   },
   "core/memory/store.ts:503": {
     "path": "core/memory/store.ts",
-    "line": 499,
+    "line": 489,
     "testo": "/**"
   },
   "core/memory/store.ts:572": {
     "path": "core/memory/store.ts",
-    "line": 572,
+    "line": 568,
     "testo": "/**"
   },
   "core/memory/store.ts:610": {
     "path": "core/memory/store.ts",
-    "line": 562,
+    "line": 558,
     "testo": "FROM facts f"
   },
   "core/memory/store.ts:637": {
     "path": "core/memory/store.ts",
-    "line": 764,
+    "line": 790,
     "testo": "searchEpisodes("
   },
   "core/memory/store.ts:700": {
     "path": "core/memory/store.ts",
-    "line": 834,
+    "line": 860,
     "testo": "episodeNeighbourhood("
   },
   "core/memory/store.ts:829": {
     "path": "core/memory/store.ts",
-    "line": 970,
+    "line": 996,
     "testo": "episodesForVaultPath(tenantId: string, vaultPath: string): { id: number; mediaMeta: string | null }[] {"
   },
   "core/memory/store.ts:958": {
     "path": "core/memory/store.ts",
-    "line": 1120,
+    "line": 1146,
     "testo": "f.superseded_by AS supersededBy"
   },
   "core/memory/vectors.ts:106": {
@@ -2826,17 +2826,17 @@
   },
   "store.ts:116": {
     "path": "core/memory/store.ts",
-    "line": 141,
+    "line": 142,
     "testo": "since?: string | undefined;"
   },
   "store.ts:147": {
     "path": "core/memory/store.ts",
-    "line": 149,
+    "line": 150,
     "testo": "*"
   },
   "store.ts:179": {
     "path": "core/memory/store.ts",
-    "line": 217,
+    "line": 218,
     "testo": "`origin TEXT NOT NULL DEFAULT 'said' CHECK (origin IN ('said','inferred','imported'))`,"
   },
   "store.ts:21": {
@@ -2846,27 +2846,27 @@
   },
   "store.ts:228": {
     "path": "core/memory/store.ts",
-    "line": 228,
+    "line": 229,
     "testo": "// `MemoryStore` straight from a file, exactly the gap `jobs.kind`'s own"
   },
   "store.ts:503": {
     "path": "core/memory/store.ts",
-    "line": 499,
+    "line": 489,
     "testo": "/**"
   },
   "store.ts:740": {
     "path": "core/memory/store.ts",
-    "line": 881,
+    "line": 907,
     "testo": "entitiesByName(tenantId: string, name: string, limit = 5): { id: number; name: string; kind: string }[] {"
   },
   "store.ts:903": {
     "path": "core/memory/store.ts",
-    "line": 1044,
+    "line": 1070,
     "testo": "* Where a recalled chunk came from and how much it is worth."
   },
   "store.ts:935": {
     "path": "core/memory/store.ts",
-    "line": 1097,
+    "line": 1123,
     "testo": "// recall has nothing else to read it from. Without it an inferred"
   },
   "tracer.ts:94": {
