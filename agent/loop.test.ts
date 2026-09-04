@@ -146,6 +146,7 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
   const db = new DatabaseCtor(':memory:');
   const turns = new TurnStore(db);
   const todos = new TodoStore(db);
+  const capabilities = new Map(decls.map((d) => [d.id, d]));
   const base: LoopDeps = {
     provider: new ScriptedProvider(script),
     profile: CONSERVATIVE,
@@ -153,10 +154,11 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
     tools,
     decide: createDecide({
       matrix: POLICY_FLOOR,
-      capabilities: new Map(decls.map((d) => [d.id, d])),
+      capabilities,
       budgetExhausted: () => false,
       hardened: true,
     }),
+    capabilities,
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions: store,
     turns,
@@ -423,6 +425,7 @@ describe('agent loop', () => {
         budgetExhausted: () => false,
         hardened: false,
       }),
+      capabilities: new Map(decls.map((x) => [x.id, x])),
       tracer: new SimpleTracer(new JsonlExporter(home)),
       sessions: store,
       turns: new TurnStore(new DatabaseCtor(':memory:')),
