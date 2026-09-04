@@ -1,4 +1,4 @@
-import type { CallbackQuery, Message, MessageOrigin, Update } from '@grammyjs/types';
+import type { CallbackQuery, ChatMemberUpdated, Message, MessageOrigin, Update } from '@grammyjs/types';
 import { randomBytes } from 'node:crypto';
 import { runTurn, type LoopDeps, type TurnDelta, type TurnEvent } from '../../agent/loop.js';
 import type { AttachStream } from '../../agent/turn-lane.js';
@@ -37,6 +37,7 @@ type Arrivo = { line: string; image?: ImageBlock; audio?: AudioBlock };
 type ApprovalDecide = (id: string, decision: 'allow' | 'deny', now: Date) => 'ok' | 'already' | 'unknown';
 type ApprovalGet = (id: string) => { turnId: string; capability: string; resource: string | null } | null;
 import { startPresence } from './presence.js';
+import { avvisoAllOwner, decidiInvito, SALUTO_NEL_GRUPPO, type Invito } from './invito.js';
 import { startTranscript, type Transcript } from './transcript.js';
 import { awaitWithBudget } from '../shared/stop-budget.js';
 import { DRAIN_BUDGET_MS } from '../../core/gateway/service.js';
@@ -1396,6 +1397,76 @@ export class TelegramConnector {
     }
   }
 
+  /**
+   * Qualcuno ha aggiunto Muffin da qualche parte.
+   *
+   * La decisione sta in `invito.ts`, pura; qui c'è solo ciò che tocca la
+   * rete. L'ordine dei tre effetti è deciso e non incidentale:
+   *
+   *  1. **il saluto nel gruppo, per primo** — dopo `leaveChat` non si può
+   *     più scrivere lì dentro;
+   *  2. **l'avviso all'owner** — prima dell'uscita, perché è l'unica delle
+   *     tre cose che l'owner non può ricostruire da solo dopo;
+   *  3. **l'uscita**.
+   *
+   * Ognuno nel suo `try`: un saluto che non parte (bot mutato, permessi
+   * stretti) non deve impedire l'uscita, ed è proprio nel gruppo ostile che
+   * quel caso è più probabile.
+   */
+  private async gestisciInvito(evento: ChatMemberUpdated, log: (line: string) => void): Promise<void> {
+    const chat = evento.chat;
+    const invito: Invito = {
+      chatId: chat.id,
+      titolo: 'title' in chat && typeof chat.title === 'string' ? chat.title : '',
+      tipo: chat.type,
+      daId: evento.from?.id ?? 0,
+      daNome: evento.from?.first_name ?? '',
+      ...(evento.from?.username === undefined ? {} : { daUsername: evento.from.username }),
+      statoNuovo: evento.new_chat_member?.status ?? 'left',
+    };
+
+    // Tre valori, non due: `undefined` è «non ho potuto chiedere», e in
+    // `decidiInvito` vale uscire. Senza owner configurato non c'è nemmeno la
+    // domanda — un bot non appaiato non ha un umano da cercare in nessuna
+    // stanza, quindi `false` e non `undefined`.
+    let ownerPresente: boolean | undefined;
+    const ownerId = this.deps.config.ownerUserId;
+    if (invito.tipo === 'private') {
+      ownerPresente = undefined;
+    } else if (ownerId === undefined) {
+      ownerPresente = false;
+    } else {
+      try {
+        const stato = await this.deps.api.getChatMember(chat.id, ownerId);
+        ownerPresente = stato.status !== 'left' && stato.status !== 'kicked';
+      } catch (error) {
+        log(`telegram: non ho potuto chiedere se l'owner è in ${chat.id} — ${error instanceof Error ? error.message : String(error)}`);
+        ownerPresente = undefined;
+      }
+    }
+
+    const esito = decidiInvito(invito, ownerPresente);
+    log(`telegram: invito in ${chat.id} (${invito.tipo}) → ${esito.azione}: ${esito.perche}`);
+    if (esito.azione === 'resta') return;
+
+    try {
+      await this.deps.api.sendMessage(chat.id, escapeHtml(SALUTO_NEL_GRUPPO));
+    } catch (error) {
+      log(`telegram: saluto non inviato in ${chat.id} — ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    const ownerChat = this.deps.config.ownerChatId;
+    if (ownerChat !== undefined) {
+      try {
+        await this.deps.api.sendMessage(ownerChat, escapeHtml(avvisoAllOwner(invito, esito)));
+      } catch (error) {
+        log(`telegram: avviso all'owner non inviato — ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    await this.deps.api.leaveChat(chat.id);
+  }
+
   /** Everything not yet answered, oldest first. Also the crash-recovery path. */
   private async drain(): Promise<void> {
     const log = this.deps.log ?? (() => {});
@@ -1411,6 +1482,21 @@ export class TelegramConnector {
           await this.handleCallback(premuto);
         } catch (error) {
           log(`telegram: pulsante non gestito — ${error instanceof Error ? error.message : String(error)}`);
+        }
+        this.markProcessedQuietly(stored.updateId, log);
+        continue;
+      }
+
+      // Anche questo prima di `parseUpdate`: un `my_chat_member` non porta
+      // nessun `message`, quindi verrebbe archiviato come «niente da fare» —
+      // che è esattamente com'è stato finché nessuno lo chiedeva in
+      // `allowed_updates`.
+      const cambioDiStato = (update as { my_chat_member?: ChatMemberUpdated }).my_chat_member;
+      if (cambioDiStato !== undefined) {
+        try {
+          await this.gestisciInvito(cambioDiStato, log);
+        } catch (error) {
+          log(`telegram: invito non gestito — ${error instanceof Error ? error.message : String(error)}`);
         }
         this.markProcessedQuietly(stored.updateId, log);
         continue;
