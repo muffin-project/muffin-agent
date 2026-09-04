@@ -7,7 +7,7 @@ import { describeSettableKnobs, formatSetOutcome, setConfigKnob } from '../core/
 
 /**
  * `muffin config` — read-only by default, on purpose (ADR-0036), plus one
- * narrow door: `muffin config set <chiave> <valore>` (ADR-0062).
+ * narrow door: `muffin config set <chiave> <valore>` (ADR-0070).
  *
  * `muffin config` (senza sotto-comando) answers "what can I adjust, and
  * where" completely without building a write surface anything has to guard:

@@ -123,7 +123,7 @@ describe('/pause e /resume', () => {
 });
 
 /**
- * `/config` (ADR-0062) — la porta REPL/Telegram sulla stessa funzione di
+ * `/config` (ADR-0070) — la porta REPL/Telegram sulla stessa funzione di
  * `muffin config set` (`core/config/settings.ts::setConfigKnob`). A
  * differenza delle leve di ADR-0054 questo comando tocca davvero il
  * filesystem, quindi serve una home reale — non `/nessuno`.

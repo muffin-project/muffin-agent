@@ -1,4 +1,4 @@
-# ADR-0062 — Le impostazioni si cambiano da un comando, mai dal modello
+# ADR-0070 — Le impostazioni si cambiano da un comando, mai dal modello
 
 **Stato:** accettato · 2026-09-04 · direzione owner
 

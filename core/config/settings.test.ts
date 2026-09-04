@@ -8,7 +8,7 @@ import { describeSettableKnobs, formatSetOutcome, SETTABLE_CONFIG_KEYS, setConfi
 
 /**
  * `setConfigKnob` — la funzione sola dietro `muffin config set`, `/config set`
- * e Telegram (ADR-0062). Questi test coprono la parte che nessuna porta deve
+ * e Telegram (ADR-0070). Questi test coprono la parte che nessuna porta deve
  * poter aggirare: quali chiavi si possono scrivere, e con quale validazione.
  * Le porte stesse (CLI, comando) hanno i loro test in `cli/config.test.ts` e
  * `agent/comandi.test.ts` — qui si prova solo il cancello.

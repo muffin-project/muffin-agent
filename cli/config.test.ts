@@ -113,7 +113,7 @@ describe('muffin config', () => {
 });
 
 /**
- * `muffin config set` (ADR-0062) — `cmdConfigSet` non decide niente: prova che
+ * `muffin config set` (ADR-0070) — `cmdConfigSet` non decide niente: prova che
  * chiama `setConfigKnob` e stampa esattamente `formatSetOutcome`, mai un testo
  * suo. `core/config/settings.test.ts` prova il cancello stesso (chiavi
  * escluse, validazione); qui si prova solo che questa porta lo raggiunge.
