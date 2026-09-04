@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -146,6 +146,31 @@ describe('vault', () => {
     expect(report.chunks).toBe(0);
     expect(report.skipped.map((s) => s.path).sort()).toEqual(['foto.bin', 'vuoto.md']);
     expect(report.skipped.find((s) => s.path === 'foto.bin')?.why).toContain('estrattore');
+    // Il difetto che questo test isola dagli altri due: un file vuoto non è
+    // "un formato che non sappiamo leggere" — il testo del `why` deve
+    // distinguerli, o un binario e una nota vuota sembrano lo stesso guasto.
+    expect(report.skipped.find((s) => s.path === 'vuoto.md')?.why).toBe('vuoto');
+  });
+
+  it('un file diventato illeggibile non è "serve un estrattore": reindex dice perché non può leggerlo', async () => {
+    // `identityOf` collassava permessi tolti, formato non supportato e nota
+    // vuota nello stesso `null`, e questo era l'unico ramo che li leggeva: un
+    // file leggibile scritto e poi reso illeggibile (permessi, un errore di
+    // I/O) veniva riportato come "non è testo né PDF né DOCX — serve un
+    // estrattore" — falso, e senza rimedio possibile, perché il vero problema
+    // non è il formato.
+    const f = fixture();
+    write(f.root, 'segreto.txt', 'contenuto vero, che varrebbe la pena indicizzare.');
+    chmodSync(join(f.root, 'segreto.txt'), 0o000);
+    try {
+      const report = await f.vault.reindex(HOST, { now: NOW });
+      expect(report.added).toBe(0);
+      const skip = report.skipped.find((s) => s.path === 'segreto.txt');
+      expect(skip?.why).toContain('illeggibile');
+      expect(skip?.why).not.toContain('estrattore');
+    } finally {
+      chmodSync(join(f.root, 'segreto.txt'), 0o600); // altrimenti il cleanup del tmpdir fallisce
+    }
   });
 
   it('drops the vectors of retired chunks so old text stops winning searches', async () => {
@@ -178,6 +203,49 @@ describe('vault', () => {
     rmSync(join(f.root, 'a.md'));
     rmSync(join(f.root, 'b.md'));
     expect((await f.vault.audit(HOST)).orphaned).toEqual(['a.md']);
+  });
+
+  it('un documento illeggibile non torna "indice allineato": audit lo nomina, non lo cancella dal conto', async () => {
+    // `muffin vault check` esiste, per parole sue, perché "il meccanismo che
+    // funziona non è la stessa cosa dell'indice giusto". Prima di questo test
+    // un vault con un solo file senza permesso di lettura passava quel check
+    // pulito: `identityOf` tornava `null`, `audit()` lo escludeva da `onDisk`
+    // senza lasciare traccia in nessuno dei tre array, e il comando stampava
+    // "0 file leggibili sul disco · 0 indicizzati" seguito da "indice
+    // allineato", exit 0 — lo stesso guasto, "indicizzazione a zero e verde
+    // ovunque", di cui il modulo cita Khoj e Reor nel proprio commento di
+    // testa, qui prodotto da un bit di permesso invece che da un bug di path.
+    const f = fixture();
+    write(f.root, 'segreto.txt', 'contenuto vero, mai indicizzato perché illeggibile.');
+    chmodSync(join(f.root, 'segreto.txt'), 0o000);
+    try {
+      const audit = await f.vault.audit(HOST);
+      expect(audit.unreadable).toEqual(['segreto.txt']);
+      expect(audit.missing).toEqual([]); // non è "assente dall'indice": un reindex non lo risolverebbe
+      expect(audit.orphaned).toEqual([]); // non è "sparito dal disco": il file c'è
+      expect(audit.files).toBe(0); // "leggibili sul disco" — questo non lo è
+    } finally {
+      chmodSync(join(f.root, 'segreto.txt'), 0o600);
+    }
+  });
+
+  it('un file indicizzato che poi diventa illeggibile non è "orphaned": il file non è sparito', async () => {
+    const f = fixture();
+    write(f.root, 'nota.md', '# Nota\n\ncontenuto indicizzato mentre era ancora leggibile.\n');
+    await f.vault.reindex(HOST, { now: NOW });
+    expect((await f.vault.audit(HOST)).indexed).toBe(1);
+
+    chmodSync(join(f.root, 'nota.md'), 0o000);
+    try {
+      const audit = await f.vault.audit(HOST);
+      expect(audit.unreadable).toEqual(['nota.md']);
+      // Prima della guardia in `audit()`, questo stesso caso finiva ANCHE in
+      // `orphaned` — "indicizzato, file sparito" — che è falso: il file esiste,
+      // è solo illeggibile ora.
+      expect(audit.orphaned).toEqual([]);
+    } finally {
+      chmodSync(join(f.root, 'nota.md'), 0o600);
+    }
   });
 
   it('indicizza un documento in una home che è essa stessa una dotdir', async () => {
