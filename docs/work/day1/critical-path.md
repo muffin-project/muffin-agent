@@ -37,7 +37,12 @@ vengono prima di allargare capability o architettura.
      capability dichiarate dal kernel e tracciate a ogni giro; nessun permesso
      è cambiato, e a decidere i permessi resta il punto 4
         ↓
-4  le colonne: eval di sicurezza, adapter B + corpus avversariale sul binario
+4  le colonne: eval di sicurezza, adapter B + corpus avversariale — **eseguito,
+   e ha dato un risultato**: candidate B non batte il taint ambientale, e il
+   corpus ha misurato dove le guardie non ci sono
+        ↓
+4-bis  i due sink scoperti, in modo deterministico (nato dal punto 4, non da
+       un'intuizione: vedi §«Che cosa ha detto il corpus»)
         ↓
 5  undo semantico (l'altra metà di D11)
         ↓
@@ -48,11 +53,63 @@ Il punto 2 precede le porte perché è ciò che rende il dogfood **sopportabile*
 senza, l'owner torna al vecchio agente prima che il punto 3 serva a qualcuno.
 2d va costruita con 2a e non dopo: è la prova che 2a e 2b chiedono.
 
-Stato al 03/09: 2a, 2b, 2c e il punto 3 sono integrati e promossi su `main`
+Stato al 04/09: 2a, 2b, 2c e il punto 3 sono integrati e promossi su `main`
 (#298, #299, #300 con due giudici, #303 con uno); 2d **costruita**
 (`evals/e2e/telegram.ts`) e da eseguire dall'owner — il passo che chiude
-B11/B13/B2 è quella corsa, non un'altra PR. Il punto **4**, l'eval comparativo
-sulle colonne, è quindi il prossimo lavoro di codice.
+B11/B13/B2 è quella corsa, non un'altra PR. Il punto **4** è stato eseguito, e il
+**4-bis** che il suo risultato ha creato è stato eseguito il 04/09 (ADR-0069):
+un floor deterministico sul nome della risorsa chiude `s6-sink-risposta`
+(4/7→3/7 senza umano, 6/7→5/7 col riflesso) e cabla il choke point sulla
+risposta che PR #351 aveva lasciato scoperto. `s7-memoria-e-ricordo` resta
+aperta — dichiarato con reperto in ADR-0069, non un residuo taciuto: la
+provenienza dell'episodio è già corretta (misurato in
+`i-sink-scoperti-2026-09-04.md` §5.2), ciò che manca è un floor per
+l'obbedienza del modello a un'istruzione recintata, e nessuno dei due
+documenti ne trova uno che non cambi la forma dell'agente. `s3` resta fuori
+mandato per costruzione: è la riga `sys.shell`, non un sink.
+
+## Che cosa ha detto il corpus, e il lavoro che ne nasce
+
+Il punto 4 non è più una domanda aperta: l'eval è stato eseguito sul binario
+vero il 03/09 (`docs/evidence/eval-taint-corpus-avversariale-2026-09-03.md`) e
+ha prodotto tre risultati, tutti misurati e nessuno gradito.
+
+1. **4/7 attacchi riescono senza nessun essere umano; 6/7 se l'owner risponde
+   come ha risposto davvero** (32 sì su 35 approvazioni, tutte nella stessa
+   cella `sys.shell` a taint 2). Il controllo che ha morso l'unico attacco
+   fermato — `s4` — è il **floor SSRF del tool**, non la policy.
+2. **Candidate B non vince.** La tupla `(effetto × sink × chi ha scelto la
+   risorsa × reversibilità)` batte A su **0/7** azioni contese ed è più stretta
+   su 1/7, proprio `s4`, dove l'attacco non riusciva comunque. La sostituzione
+   ovvia del taint ambientale è quindi già stata provata e bocciata: non si
+   riapre senza evidenza nuova.
+3. **Tre scene su sette non incontrano nessuna guardia** — `s3` (riflesso
+   d'approvazione), `s6` (sink della risposta), `s7` (memoria e ricordo). E non
+   per una svista: `reply`, `memory` e `context` sono `allow/allow/allow` in
+   `ROW_FLOOR` **per decisione**. Rispondere sul canale d'origine e scrivere in
+   memoria sono il modo in cui l'agente funziona. Il corpus non ha trovato un
+   difetto: ha messo un numero sul costo di una scelta registrata.
+
+Il difetto di forma che ne esce è quello che la decision memo del 02/09 aveva
+già nominato, adesso con una misura dietro: **il gate più stretto sta sulla
+porta più innocua.** `fs.write` — scrittura locale, reversibile, con journal —
+chiede conferma; la risposta in chat e la scrittura di memoria, i due sink da cui
+l'attaccante è effettivamente uscito, non passano dal kernel.
+
+**Perché il rimedio ovvio è escluso.** Aggiungere una domanda su `reply` non è
+una difesa: un gate concesso il 91% delle volte è un riflesso, ed è il
+fallimento che il threat model nomina per primo. Il punto 4-bis è quindi
+esplicitamente *non* «più approvazioni», ma la regola di casa dell'owner —
+**tenere deterministico ciò che serve che sia deterministico** — applicata dove
+il corpus dice che serve. `s4` è l'esistenza di prova: si è fermato su un floor
+di codice, senza chiedere niente a nessuno e senza dipendere dal giudizio del
+modello.
+
+Il recinto del disco (ADR in `docs/SECURITY.md`, integrato il 04/09) è il
+prerequisito di questo lavoro e **non** una sua parte: dà provenienza, cioè
+rende vera la frase «il contenuto esterno arriva marcato». Se il modello poi
+obbedisca lo dice il corpus, e su tre scene dice di no. Una difesa che poggia
+sull'obbedienza non è il punto 4-bis.
 
 Righe e colonne sono domande separate, e questa è la ragione dell'ordine. La
 **riga** dice dove finiscono i byte di un effetto, e ADR-0053 l'ha resa

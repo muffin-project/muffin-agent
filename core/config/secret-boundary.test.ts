@@ -73,6 +73,29 @@ const ALLOWED_CALLERS: Readonly<Record<string, string>> = {
    * L'ambiente resta primo: questo è il fallback, e serve a non chiedere di
    * nuovo una chiave che l'installazione ha già.
    */
+  /**
+   * Aggiunto il 04/09/2026, e la decisione e' sul **verso**: qui il segreto
+   * non esce dall'installazione, ci **rientra**.
+   *
+   * `evals/e2e/telegram.ts` costruisce una home usa-e-getta e ci installa
+   * dentro Muffin da capo. Prima chiedeva tre segreti nell'ambiente, e due
+   * l'installazione li aveva gia' sul disco — cioe' proponeva un `.env` a una
+   * macchina che ha un vault, che e' il modo piu' rapido per far finire una
+   * chiave in un file che nessuno ruota. Leggerli dal vault e' la porta
+   * stretta, non una in piu'.
+   *
+   * I due sink sono entrambi la CLI, e via **stdin**, mai argv (direttiva
+   * owner 2026-08-18): `muffin init` per la chiave del provider e
+   * `muffin secret set telegram_token` per il bot. Nessuna struttura
+   * intermedia li tiene, il filo che questo banco registra li redige, e lo
+   * script non ne stampa un carattere.
+   *
+   * Stessa forma di `evals/floor/run.ts` qui sotto, con una differenza a
+   * favore: quello mette la chiave sul filo verso il provider, questo la
+   * consegna a un binario che la scrive in un file 0600 e la richiude.
+   */
+  'evals/e2e/telegram.ts':
+    'installa una home usa-e-getta: chiave del provider a `muffin init` e token a `muffin secret set`, entrambi da stdin, mai da argv',
   'evals/floor/run.ts': 'runs the real loop against the real model — the key goes straight into the provider constructor and onto the wire, same shape as agent/runtime.ts; env vars still win, this is the fallback so nobody has to paste a secret into a shell to measure something',
 };
 

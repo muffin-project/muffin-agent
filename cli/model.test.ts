@@ -62,18 +62,38 @@ describe('fetchCatalogue', () => {
 /**
  * Il confronto che rende questo comando più di uno scrittore di JSON.
  *
- * `pricing.ts` fa match per sottostringa di famiglia: `qwen3` è in tabella a
- * 0.1/0.3 per MTok, e il modello che l'installazione dell'owner usava costa
- * 0.425/2.55. Quella è una **sottostima**, cioè il tetto in `rot/budgets.json`
- * scatta tardi invece che presto — la direzione che `pricing.ts` chiama
- * pericolosa nella sua stessa intestazione.
+ * `pricing.ts` fa match per sottostringa di famiglia. Fino al 2026-09-04
+ * `qwen3` era in tabella a 0.1/0.3 per MTok, e il modello che l'installazione
+ * dell'owner usava costava 0.425/2.55: una **sottostima** reale, cioè il tetto
+ * in `rot/budgets.json` scattava tardi invece che presto — la direzione che
+ * `pricing.ts` chiama pericolosa nella sua stessa intestazione. La stessa
+ * ri-verifica che ha chiuso l'item 10 (`core/budget/pricing.ts`, tabella
+ * `PRICES`) ha portato `qwen3` a 2/6 — il tetto della linea, non più il
+ * pavimento — quindi il modello reale dell'owner non è più il fixture giusto
+ * per provare che il meccanismo *nomina* una sottostima: è diventato l'esempio
+ * di quella che questo comando ha appena chiuso (vedi il secondo `it` qui
+ * sotto). Il primo resta sintetico, sopra il nuovo tetto di famiglia, per non
+ * perdere la copertura del ramo che nomina.
  */
 describe('priceNote', () => {
   it('nomina la sottostima, coi due prezzi', () => {
-    const nota = priceNote({ id: 'qwen/qwen3.8-27b', inputPerMTok: 0.425, outputPerMTok: 2.55 }, OR.baseUrl);
-    expect(nota).toContain('0.425');
-    expect(nota).toContain('0.1');
+    // Sintetico: nessun host reale costa questo per qwen3 al 2026-09-04, ma è
+    // sopra il tetto di famiglia (2/6) che la tabella corretta usa adesso, ed
+    // è quello che serve per provare che il ramo "nomina" è ancora vivo dopo
+    // la correzione dei prezzi.
+    const nota = priceNote({ id: 'qwen/qwen3.9-ipotetico', inputPerMTok: 2.5, outputPerMTok: 7 }, OR.baseUrl);
+    expect(nota).toContain('2.5');
+    expect(nota).toContain('2'); // il prezzo fatturato dalla tabella corretta
     expect(nota).toContain('rot/budgets.json');
+  });
+
+  it('il qwen3.8-27b reale dell owner, sottostimato prima del 2026-09-04, ora tace: la tabella lo sovrastima', () => {
+    // Stesso fixture che prima del fix nominava la sottostima (0.1/0.3 in
+    // tabella contro 0.425/2.55 reali). Con la tabella corretta a 2/6 il
+    // reale sta sotto il fatturato: silenzio, ed è il silenzio giusto.
+    expect(
+      priceNote({ id: 'qwen/qwen3.8-27b', inputPerMTok: 0.425, outputPerMTok: 2.55 }, OR.baseUrl),
+    ).toBeNull();
   });
 
   it('tace sulla sovrastima: il tetto che scatta presto è la direzione sicura', () => {

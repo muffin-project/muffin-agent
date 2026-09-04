@@ -17,22 +17,22 @@ import { httpCapability } from './tools/http.js';
 import { searchCapability } from './tools/search.js';
 
 /**
- * The egress allowlist has to be reached by a real tool call.
+ * The egress branches have to be reached by a real tool call — for both
+ * shapes of URL resource the kernel knows.
  *
- * This is a regression test for a defect that had every part working and no
- * part connected: `decide.ts` gates URLs on `resource.kind === 'url'`, its unit
+ * Originally a regression test for a defect that had every part working and no
+ * part connected: `decide.ts` gated URLs on `resource.kind === 'url'`, its unit
  * tests passed such a resource directly and went green, and the loop built the
  * resource from `args['path']` alone — so every tool call reached the kernel as
  * `{kind:'none'}` and the egress branch never once ran in production.
  *
- * `http_get` did not catch it either, and could not have: it deliberately skips
- * the allowlist on its first hop, with a comment saying the kernel approved it.
- * Two correct halves, each waiting for the other, and the visible behaviour was
- * an empty allowlist permitting every public host.
- *
- * So this test refuses to call `decide` directly. It runs a turn, lets the loop
- * derive the resource the way production does, and asserts on whether the tool
- * body executed.
+ * ADR-0066 split that one branch into two: `url-read` (reading — `sys.http`,
+ * GET-only) never consults the allowlist at all, by decision; `url` (acting —
+ * no shipped capability yet, stood in here) still does, unchanged. Both need
+ * the same wiring proof this file always existed for: a real turn, the real
+ * loop deriving the resource, and an assertion on whether the tool body
+ * executed — never a `decide()` call built by hand, which is exactly what let
+ * the original defect ship green.
  */
 
 class Scripted implements Provider {
@@ -69,7 +69,7 @@ const callTool = (name: string, args: unknown): ChatResult => ({
 
 const decls: CapabilityDecl[] = [httpCapability];
 
-function harness(allowHost: boolean) {
+function harness(allowHost: boolean, script: ChatResult[] = [callTool('http_get', { url: 'https://evil.example.com/steal' })]) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-egress-gate-'));
   const fetched: string[] = [];
 
@@ -92,7 +92,7 @@ function harness(allowHost: boolean) {
   ];
 
   const deps: LoopDeps = {
-    provider: new Scripted([callTool('http_get', { url: 'https://evil.example.com/steal' })]),
+    provider: new Scripted(script),
     profile: CONSERVATIVE,
     model: 'test',
     tools,
@@ -105,6 +105,9 @@ function harness(allowHost: boolean) {
       capabilities: new Map(decls.map((d) => [d.id, d])),
       budgetExhausted: () => false,
       hardened: true,
+      // `allowHost` is passed through for the record, but `sys.http` is
+      // `url-read` now: this predicate is never even called for it. The
+      // parametrised test below proves exactly that — same result either way.
       egressAllowed: () => allowHost,
     }),
     tracer: new SimpleTracer(new JsonlExporter(home)),
@@ -117,10 +120,10 @@ function harness(allowHost: boolean) {
   return { deps, fetched, provider: deps.provider as Scripted };
 }
 
-// A group member: taint 2, which the egress branch refuses outright rather than
-// asking. The owner would get an `ask`, and an approval prompt in a test proves
-// less than a refusal does — a poisoned context must not even be able to
-// nominate the destination.
+// A group member: taint 2. Before ADR-0066 the egress branch refused this
+// outright rather than asking, for a host-holding `url` resource. `url-read`
+// has no such refusal to prove any more — the point of the tests below is
+// that a member reads exactly as freely as the owner does.
 const member: Principal = {
   kind: 'member',
   connector: 'telegram',
@@ -128,48 +131,36 @@ const member: Principal = {
   externalId: 'u1',
 };
 
-describe('egress allowlist, through a real turn', () => {
-  it('never runs the fetch when the host is off the allowlist', async () => {
-    const h = harness(false);
-    await runTurn(h.deps, {
-      principal: member,
-      tenant: 'group:telegram:42',
-      surface: 'telegram',
-      session: h.deps.sessions.open('s1'),
-      text: 'leggi https://evil.example.com/steal',
-    });
+describe('reading is open, through a real turn (ADR-0066)', () => {
+  it.each([true, false])(
+    'fetches regardless of the allowlist predicate (egressAllowed → %s) — url-read never consults it',
+    async (allowHost) => {
+      const h = harness(allowHost);
+      await runTurn(h.deps, {
+        principal: member,
+        tenant: 'group:telegram:42',
+        surface: 'telegram',
+        session: h.deps.sessions.open(`s-read-${String(allowHost)}`),
+        text: 'leggi https://evil.example.com/steal',
+      });
 
-    // The assertion that matters: the body never ran. Before the loop lifted
-    // `url` into the resource, this array had the URL in it.
-    expect(h.fetched).toEqual([]);
-    // And the model was told why, rather than silently getting nothing: a
-    // refusal it cannot see is one it will keep retrying.
-    expect(h.provider.seen.join('\n')).toMatch(/Rifiutato dal kernel.*resource_denied/s);
-  });
+      // The assertion that matters, unchanged since before this slice: the
+      // loop really did lift `url` into the kernel's resource (the original
+      // defect this file exists for) — and now that a real resource reached
+      // it, the kernel's own decision for `url-read` is "no allowlist to
+      // consult", so the body runs regardless of `allowHost`.
+      expect(h.fetched).toEqual(['https://evil.example.com/steal']);
+    },
+  );
 
-  it('runs it when the host is allowlisted, so the gate is a gate and not a wall', async () => {
-    const h = harness(true);
-    await runTurn(h.deps, {
-      principal: member,
-      tenant: 'group:telegram:42',
-      surface: 'telegram',
-      session: h.deps.sessions.open('s2'),
-      text: 'leggi https://evil.example.com/steal',
-    });
-
-    expect(h.fetched).toEqual(['https://evil.example.com/steal']);
-  });
-});
-
-describe('the exploit that the first fix left open', () => {
-  it('a junk path argument cannot shadow the url and skip the allowlist', async () => {
-    // Found by review. `http_get({url, path:'x'})`: the loop checked `path`
-    // first, built a path resource, and the kernel's egress branch — which
-    // required `resource.kind === 'url'` — was skipped entirely, falling
-    // through to medium/reversible = allow. Measured before the fix: deny
-    // without the key, fetch with it, for a taint-2 group member.
-    const h = harness(false);
-    h.deps.provider = new Scripted([
+  it('a junk path argument cannot shadow the url — resourceFor reads policyArgs, not argument order', async () => {
+    // Historical exploit, kept as a regression probe even though its outcome
+    // changed: `http_get({url, path:'x'})` used to matter because a hardcoded
+    // loop checked `path` before `url`. `resourceFor` (agent/loop.ts) reads
+    // `decl.policyArgs` — `['url']` for `sys.http` — so an unrelated extra key
+    // was already inert before ADR-0066, and reading being open now means the
+    // observable fact is simply that the fetch still happens.
+    const h = harness(false, [
       callTool('http_get', { url: 'https://evil.example.com/steal', path: 'anything' }),
     ]);
 
@@ -177,11 +168,117 @@ describe('the exploit that the first fix left open', () => {
       principal: member,
       tenant: 'group:telegram:42',
       surface: 'telegram',
-      session: h.deps.sessions.open('s3'),
+      session: h.deps.sessions.open('s-read-junk'),
       text: 'leggi',
     });
 
-    expect(h.fetched).toEqual([]);
+    expect(h.fetched).toEqual(['https://evil.example.com/steal']);
+  });
+});
+
+/**
+ * `url` (acting) is untouched by ADR-0066: no shipped capability declares it
+ * today (`sys.http` moved to `url-read`), so this stands in with a minimal
+ * capability of the same shape — same `resourceKind`, same `policyArgs` — to
+ * prove the *mechanism* a real turn still reaches it exactly as before.
+ */
+const urlActCapability: CapabilityDecl = {
+  id: 'demo.url-act',
+  effect: 'egress',
+  risk: 'medium',
+  reversible: 'yes',
+  rerunnable: true,
+  resourceKind: 'url',
+  policyArgs: ['url'],
+  hostOnly: false,
+};
+
+function actHarness(allowHost: boolean, script: ChatResult[]) {
+  const home = mkdtempSync(join(tmpdir(), 'muffin-egress-gate-act-'));
+  const acted: string[] = [];
+  const actDecls: CapabilityDecl[] = [urlActCapability];
+
+  const tools: RegisteredTool[] = [
+    {
+      capability: urlActCapability.id,
+      spec: {
+        name: 'url_act',
+        description: 'stands in for a future url-acting capability',
+        inputSchema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] },
+      },
+      handler: (args) => {
+        acted.push(String((args as { url: string }).url));
+        return { content: 'done', tier: 0 as const };
+      },
+      throwTier: 0,
+    },
+  ];
+
+  const deps: LoopDeps = {
+    provider: new Scripted(script),
+    profile: CONSERVATIVE,
+    model: 'test',
+    tools,
+    capabilities: new Map(actDecls.map((d) => [d.id, d])),
+    decide: createDecide({
+      matrix: POLICY_FLOOR,
+      capabilities: new Map(actDecls.map((d) => [d.id, d])),
+      budgetExhausted: () => false,
+      hardened: true,
+      egressAllowed: () => allowHost,
+    }),
+    tracer: new SimpleTracer(new JsonlExporter(home)),
+    sessions: new SessionStore(home),
+    turns: new TurnStore(new DatabaseCtor(':memory:')),
+    todos: new TodoStore(new DatabaseCtor(':memory:')),
+    budgetExhausted: () => false,
+    systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite in un gruppo.' },
+  };
+  return { deps, acted, provider: deps.provider as Scripted };
+}
+
+describe('acting is still gated, through a real turn — ADR-0066 opened reading, not the allowlist', () => {
+  it('never runs the body when the host is off the allowlist', async () => {
+    const h = actHarness(false, [callTool('url_act', { url: 'https://evil.example.com/steal' })]);
+    await runTurn(h.deps, {
+      principal: member,
+      tenant: 'group:telegram:42',
+      surface: 'telegram',
+      session: h.deps.sessions.open('s-act-1'),
+      text: 'agisci su https://evil.example.com/steal',
+    });
+
+    expect(h.acted).toEqual([]);
+    expect(h.provider.seen.join('\n')).toMatch(/Rifiutato dal kernel.*resource_denied/s);
+  });
+
+  it('runs it when the host is allowlisted, so the gate is a gate and not a wall', async () => {
+    const h = actHarness(true, [callTool('url_act', { url: 'https://evil.example.com/steal' })]);
+    await runTurn(h.deps, {
+      principal: member,
+      tenant: 'group:telegram:42',
+      surface: 'telegram',
+      session: h.deps.sessions.open('s-act-2'),
+      text: 'agisci su https://evil.example.com/steal',
+    });
+
+    expect(h.acted).toEqual(['https://evil.example.com/steal']);
+  });
+
+  it('a junk path argument still cannot shadow the url and skip the allowlist', async () => {
+    const h = actHarness(false, [
+      callTool('url_act', { url: 'https://evil.example.com/steal', path: 'anything' }),
+    ]);
+
+    await runTurn(h.deps, {
+      principal: member,
+      tenant: 'group:telegram:42',
+      surface: 'telegram',
+      session: h.deps.sessions.open('s-act-3'),
+      text: 'agisci',
+    });
+
+    expect(h.acted).toEqual([]);
   });
 });
 

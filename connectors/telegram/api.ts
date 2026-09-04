@@ -1,5 +1,6 @@
 import type { Message, Update, User } from '@grammyjs/types';
 import { causaDiRete } from '../../core/net/causa.js';
+import { sleep } from '../../core/net/sleep.js';
 
 /**
  * The Bot API, over `fetch`, with no library between.
@@ -47,7 +48,7 @@ const REQUEST_TIMEOUT_MS = (POLL_SECONDS + 15) * 1000;
  * verde, `primary`. Un "rifiuta" e un "consenti" che si somigliano sono un
  * pulsante premuto per sbaglio.
  */
-export type InlineButton = { text: string; callback_data: string; style?: 'danger' | 'success' | 'primary' };
+type InlineButton = { text: string; callback_data: string; style?: 'danger' | 'success' | 'primary' };
 
 export type SendOptions = {
   replyTo?: number;
@@ -403,8 +404,4 @@ export class TelegramApi implements TelegramApiLike {
     if (!file.file_path) throw new TelegramError(0, `no file_path for ${fileId}`);
     return `${this.baseUrl}/file/bot${this.token}/${file.file_path}`;
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

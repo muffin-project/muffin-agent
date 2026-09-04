@@ -1,11 +1,13 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
+import { loadConfig, muffinHome, readSecret } from '../../core/config/config.js';
 import { TELEGRAM_MAX } from '../../connectors/telegram/render.js';
+import { type Installazione, risolviCredenziali } from './credenziali.js';
 
 /**
  * La corsia end-to-end **reale** su Telegram — modello vero, Bot API vera,
@@ -46,15 +48,45 @@ const { values } = parseArgs({
   },
 });
 
-const apiKey = process.env['LLM_API_KEY'] ?? process.env['OPENROUTER_API_KEY'] ?? '';
-const token = process.env['MUFFIN_E2E_TELEGRAM_TOKEN'] ?? '';
-const ownerId = Number(process.env['MUFFIN_E2E_OWNER_ID'] ?? '');
-if (apiKey === '' || token === '' || !Number.isInteger(ownerId) || ownerId === 0) {
-  process.stderr.write(
-    'servono LLM_API_KEY (o OPENROUTER_API_KEY), MUFFIN_E2E_TELEGRAM_TOKEN e MUFFIN_E2E_OWNER_ID nell\'ambiente\n',
-  );
+const installato = ((): Installazione => {
+  const assente = { apiKey: '', ownerId: 0, tokenDedicato: '', tokenInstallato: '', gatewayVivo: false };
+  try {
+    const home = muffinHome();
+    const cfg = loadConfig(home);
+    const leggi = (ref: string | undefined): string => {
+      if (ref === undefined || ref === '') return '';
+      try {
+        return readSecret(ref, home);
+      } catch {
+        return '';
+      }
+    };
+    return {
+      apiKey: leggi(cfg.provider.apiKeyRef),
+      ownerId: cfg.surfaces.telegram?.ownerUserId ?? 0,
+      tokenDedicato: leggi('secret://e2e_telegram_token'),
+      tokenInstallato: leggi('secret://telegram_token'),
+      gatewayVivo: existsSync(join(home, 'gateway.sock')),
+    };
+  } catch {
+    return assente;
+  }
+})();
+
+const avvio = risolviCredenziali(
+  {
+    apiKey: process.env['LLM_API_KEY'] ?? process.env['OPENROUTER_API_KEY'],
+    token: process.env['MUFFIN_E2E_TELEGRAM_TOKEN'],
+    ownerId: process.env['MUFFIN_E2E_OWNER_ID'],
+  },
+  installato,
+);
+if (!avvio.ok) {
+  process.stderr.write(avvio.motivi.length === 1 ? '' : `mancano ${avvio.motivi.length} cose:\n`);
+  for (const r of avvio.motivi) process.stderr.write(`  - ${r}\n`);
   process.exit(78);
 }
+const { apiKey, token, ownerId } = avvio.credenziali;
 
 const MODEL = values.model ?? 'anthropic/claude-sonnet-5';
 const BASE_URL = values['base-url'] ?? 'https://openrouter.ai/api/v1';

@@ -99,7 +99,7 @@ export function toolSubject(name: string, args: unknown): string {
   const campi = typeof campo === 'string' ? [campo] : campo;
   const grezzo = campi.map((c) => (args as Record<string, unknown>)[c]).find((v) => typeof v === 'string' && v !== '');
   if (typeof grezzo !== 'string' || grezzo === '') return '';
-  // eslint-disable-next-line no-control-regex
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: il modello ha scritto grezzo, i caratteri di controllo vanno tolti prima del terminale
   const piatto = grezzo.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (piatto === '') return '';
   return piatto.length > SOGGETTO_MASSIMO ? `${piatto.slice(0, SOGGETTO_MASSIMO - 1)}…` : piatto;

@@ -439,3 +439,65 @@ describe('memory store — pinned facts', () => {
     expect(pinned.map((f) => f.id)).toEqual([newId]);
   });
 });
+
+describe('markEpisodesUndone — D11, muffin undo\'s memory half', () => {
+  it('marks only the role: agent episodes of that turn', () => {
+    const s = store();
+    const agentEp = s.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't1', role: 'agent', kind: 'message',
+      content: 'Fatto: ho scritto nota.md.', trustTier: 0, createdAt: '2026-09-04T10:00:00Z', turnId: 'turn-1',
+    });
+    const userEp = s.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't1', role: 'user', kind: 'message',
+      content: 'scrivi nota.md', trustTier: 0, createdAt: '2026-09-04T09:59:00Z', turnId: 'turn-1',
+    });
+    const altroTurno = s.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't1', role: 'agent', kind: 'message',
+      content: 'un altro turno', trustTier: 0, createdAt: '2026-09-04T11:00:00Z', turnId: 'turn-2',
+    });
+
+    const marcati = s.markEpisodesUndone(HOST, 'turn-1', '2026-09-04T12:00:00Z');
+    expect(marcati).toBe(1);
+    expect(s.episodeById(HOST, agentEp)?.undoneAt).toBe('2026-09-04T12:00:00Z');
+    // La riga dell'owner non è mai marcata: sarebbe la bugia nella direzione
+    // opposta ("la tua richiesta non è più valida").
+    expect(s.episodeById(HOST, userEp)?.undoneAt).toBeUndefined();
+    expect(s.episodeById(HOST, altroTurno)?.undoneAt).toBeUndefined();
+  });
+
+  it('non riscrive content: la riga resta ciò che l\'agente ha detto davvero', () => {
+    const s = store();
+    const ep = s.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't1', role: 'agent', kind: 'message',
+      content: 'Fatto: ho scritto nota.md.', trustTier: 0, createdAt: '2026-09-04T10:00:00Z', turnId: 'turn-1',
+    });
+    s.markEpisodesUndone(HOST, 'turn-1', '2026-09-04T12:00:00Z');
+    expect(s.episodeById(HOST, ep)?.content).toBe('Fatto: ho scritto nota.md.');
+  });
+
+  it('un secondo undo dello stesso turno non sovrascrive il primo timestamp', () => {
+    const s = store();
+    const ep = s.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't1', role: 'agent', kind: 'message',
+      content: 'x', trustTier: 0, createdAt: '2026-09-04T10:00:00Z', turnId: 'turn-1',
+    });
+    s.markEpisodesUndone(HOST, 'turn-1', '2026-09-04T12:00:00Z');
+    expect(s.markEpisodesUndone(HOST, 'turn-1', '2026-09-04T13:00:00Z')).toBe(0);
+    expect(s.episodeById(HOST, ep)?.undoneAt).toBe('2026-09-04T12:00:00Z');
+  });
+
+  it('un turno senza episodi agente marca zero righe, senza lanciare', () => {
+    const s = store();
+    expect(s.markEpisodesUndone(HOST, 'turno-mai-esistito', '2026-09-04T12:00:00Z')).toBe(0);
+  });
+
+  it('non attraversa il tenant: un episodio di un altro tenant con lo stesso turnId non si marca', () => {
+    const s = store();
+    const groupEp = s.addEpisode({
+      tenantId: GROUP, connector: 'telegram', threadKey: 't1', role: 'agent', kind: 'message',
+      content: 'x', trustTier: 2, createdAt: '2026-09-04T10:00:00Z', turnId: 'turn-1',
+    });
+    s.markEpisodesUndone(HOST, 'turn-1', '2026-09-04T12:00:00Z');
+    expect(s.episodeById(GROUP, groupEp)?.undoneAt).toBeUndefined();
+  });
+});

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir, platform } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { SandboxExecutor } from './executor.js';
+import { SandboxExecutor, type ExecRequest } from './executor.js';
 import { probeSandbox } from './probe.js';
 
 /**
@@ -217,6 +217,35 @@ describe.runIf(gate.run)(`sandboxed execution holds (real containment — ${gate
     expect(r.stdout).not.toContain('Example Domain');
   }, 20_000);
 
+  /**
+   * `ExecRequest.allowHosts` used to exist, have a type, and read like a
+   * per-call escape hatch through the egress proxy. It was removed
+   * (2026-09-04, docs/evidence/consegna-github-2026-09-04.md §2.1) because
+   * it never controlled anything: srt's `filterNetworkRequest` decides every
+   * connection against the SESSION-level config stamped at `initialize()`
+   * (this class's `baseConfig()`, always `[]`), never against the
+   * `customConfig` passed per call to `wrapWithSandboxArgv` — populating the
+   * field by hand still got a denied CONNECT to github.com in that
+   * measurement. Two guards here, not one: the `@ts-expect-error` fails
+   * `tsc --noEmit` the day the field is added back to the type; the runtime
+   * assertion proves the property that would matter even if some future
+   * caller bypassed the type — a per-call allowlist changes nothing about
+   * what the proxy admits.
+   */
+  it('a per-call host allowlist has no effect — the field was removed, not repaired (2026-09-04)', async () => {
+    const req: ExecRequest = {
+      command: 'curl -sS --max-time 4 https://github.com',
+      cwd: s.workspace,
+      writeScope: [s.workspace],
+      timeoutMs: 15_000,
+      // @ts-expect-error — `allowHosts` was removed from `ExecRequest`; this
+      // must keep erroring if the field ever comes back.
+      allowHosts: ['github.com'],
+    };
+    const r = await executor.run(req);
+    expect(r.code).not.toBe(0);
+  }, 20_000);
+
   it('a command that overruns its timeout is killed and says so', async () => {
     const r = await executor.run({
       command: 'sleep 10',
@@ -238,6 +267,35 @@ describe.runIf(gate.run)(`sandboxed execution holds (real containment — ${gate
     expect(r.stdout).toContain('output troncato');
     // tail-weighted: the end of the output survives the cut
     expect(r.stdout).toContain('TAIL_END');
+  }, 20_000);
+
+  /**
+   * `mandatoryGuards`' `.git/hooks` entry (`core/rot/guards.ts`) only names
+   * the top of `cwd`, computed once per turn. Measured 2026-09-04: a nested
+   * checkout's `.git/hooks/pre-commit` — created by an earlier command in
+   * the same turn (e.g. `git clone`), same as a coding flow actually
+   * produces — was written successfully through this exact `run()` before
+   * `nestedGitHooksDirs` existed, because `@anthropic-ai/sandbox-runtime`'s
+   * own "nested repos" protection resolves against ITS OWN `process.cwd()`,
+   * never the `cwd` passed here. Mutation tried: commenting out the
+   * `nestedGitHooksDirs` line in `run()`'s `denyWrite` turns this red
+   * (`code` becomes `0` and the hook file lands on disk) — confirmed by hand
+   * while writing this fix, not asserted from memory.
+   */
+  it('refuses a git hook inside a NESTED checkout that already exists under the write scope', async () => {
+    const nestedHooks = join(s.workspace, 'vendored', 'some-dep', '.git', 'hooks');
+    mkdirSync(nestedHooks, { recursive: true });
+    const hookPath = join(nestedHooks, 'pre-commit');
+
+    const r = await executor.run({
+      command: `echo "#!/bin/sh" > ${hookPath} && echo evil >> ${hookPath}`,
+      cwd: s.workspace,
+      writeScope: [s.workspace],
+      timeoutMs: 15_000,
+    });
+
+    expect(r.code).not.toBe(0);
+    expect(existsSync(hookPath)).toBe(false);
   }, 20_000);
 });
 
