@@ -992,10 +992,29 @@ export class TelegramConnector {
       transcript.report(event);
     };
 
+    // ADR-0054's stessa leva di `handle()`, per un turno che la corsia sta
+    // riprendendo invece di una che questo processo ha appena accettato.
+    // Misurato 2026-09-04: senza questo, `/steer`/`/stop` mandati mentre
+    // questo lane run è in volo (per esempio dopo un'approvazione, mentre il
+    // tool che l'aspettava gira) trovavano `vivi.has(chatId)` falso e
+    // rispondevano «nessun turno in corso» — falso, un turno stava
+    // esattamente girando. Registrata qui e tolta in `stop`, esattamente
+    // come `handle()` fa nel proprio `finally` — non una seconda forma
+    // dello stesso meccanismo. Se `chatId` risultasse già vivo (non
+    // dovrebbe: «una chat, un turno alla volta» è la stessa corsia) la voce
+    // esistente non viene toccata, per non spezzare il turno che la sta
+    // usando davvero.
+    const giàVivo = this.vivi.has(chatId);
+    const vivo = giàVivo ? this.vivi.get(chatId)! : { controller: new AbortController(), correzioni: [] as string[] };
+    if (!giàVivo) this.vivi.set(chatId, vivo);
+
     return {
       onDelta,
       onProgress,
+      signal: vivo.controller.signal,
+      steer: () => vivo.correzioni.splice(0),
       stop: async () => {
+        if (!giàVivo) this.vivi.delete(chatId);
         const presence = await presencePromise;
         await presence.stop();
         await transcript.stop();
@@ -1066,6 +1085,15 @@ export class TelegramConnector {
         );
       }
       this.deps.inbox.markProcessed(incoming.updateId, this.now());
+      // `gestiti` esisteva solo per coprire la finestra fra questa
+      // registrazione anticipata e `markProcessed`: dopo questa riga
+      // `this.deps.inbox.pending()` non restituirà mai più questo
+      // `updateId`, quindi il controllo `gestiti.has(...)` dentro `drain()`
+      // non lo incontrerà mai più a prescindere. Misurato 2026-09-04: senza
+      // questa riga il set cresceva di una voce per ogni comando di
+      // controllo per tutta la vita del processo — un piccolo perdita, ma
+      // per un agente pensato per restare acceso mesi, non zero.
+      this.gestiti.delete(incoming.updateId);
       // `/resume` deve far ripartire la coda senza aspettare un altro update.
       // È anche il drain che, prima della registrazione anticipata qui sopra,
       // trovava il comando *successivo* dello stesso batch ancora `pending` e
