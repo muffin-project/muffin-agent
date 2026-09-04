@@ -51,6 +51,11 @@ export async function runHeadless(options: RunOptions): Promise<RunExit> {
   } catch (error) {
     process.stderr.write(`mcp: ${error instanceof Error ? error.message : String(error)}\n`);
   }
+  // `bootLines` above was rendered before `attachMcp` registered anything —
+  // `recomputeExposure` redoes the `maxToolsExposed` cut against what is
+  // actually registered now, so an MCP tool that tips a small profile over
+  // the line is named here instead of staying invisible until a turn hits it.
+  for (const line of runtime.recomputeExposure()) process.stderr.write(`! ${line}\n`);
 
   // A headless turn gets its own thread unless asked to continue one: a script
   // run in a loop should not silently accumulate a conversation.
