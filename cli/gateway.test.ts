@@ -19,7 +19,7 @@ import { ModelLane } from '../core/turns/model-lane.js';
 import { TurnStore } from '../core/turns/store.js';
 import { gatewayStandDown } from './repl.js';
 import { cmdGatewayInstall, cmdGatewayStatus, EXIT_NOT_ACTIVATED } from './gateway.js';
-import { cmdGatewayRun, stopCaveat, tickMsFromEnv } from './gateway.js';
+import { cmdGatewayRestart, cmdGatewayRun, stopCaveat, tickMsFromEnv } from './gateway.js';
 import { runInit } from './init.js';
 
 /**
@@ -872,6 +872,112 @@ describe('muffin gateway stop admits what it cannot do', () => {
   });
 });
 
+/**
+ * `muffin gateway restart` (ADR-0070) — l'owner l'ha chiesto per non dover
+ * fare `launchctl kickstart` più `muffin gateway status` a mano ogni volta.
+ * `restartCommand`/`waitForGatewayPid`/`restartVerdict` sono gli stessi tre
+ * pezzi di `cli/update.ts`'s `offerGatewayRestart` — questi test rispecchiano
+ * apposta i tre casi di `describe('verifying the restart by state, not by
+ * exit code')` in `cli/update.test.ts`, sullo stesso meccanismo importato.
+ */
+describe('muffin gateway restart', () => {
+  /** Returns `seq[i]` on the i-th call, then repeats the last value forever — stessa forma di update.test.ts. */
+  function pidSequence(seq: (number | null)[]): () => number | null {
+    let i = 0;
+    return () => seq[Math.min(i++, seq.length - 1)] ?? null;
+  }
+  const noSleep = async (): Promise<void> => {};
+  const engaged = {
+    unitFileExists: () => true,
+    systemdEnabled: () => true,
+    systemdFailed: () => false,
+    lingerEnabled: () => true,
+  };
+
+  it('nessun supervisore installato: esce diverso da zero e nomina il rimedio, senza tentare niente', async () => {
+    const err: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      err.push(String(chunk));
+      return true;
+    });
+    let code: number;
+    try {
+      code = await cmdGatewayRestart(home(), {
+        platform: 'linux',
+        supervisorProbes: { unitFileExists: () => false },
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(code).not.toBe(0);
+    expect(err.join('')).toMatch(/nessun gateway supervisionato/);
+    expect(err.join('')).toContain('muffin gateway install');
+  });
+
+  it('riavviato e verificato: pid diverso dopo, esce 0 — anche se il comando avesse detto altro', async () => {
+    const code = await cmdGatewayRestart(home(), {
+      platform: 'linux',
+      supervisorProbes: engaged,
+      restart: () => ({ status: 0, stdout: '', stderr: '' }),
+      readGatewayPid: pidSequence([88175, 88175, 65671]),
+      sleep: noSleep,
+    });
+    expect(code).toBe(0);
+  });
+
+  it('comando fallito e nessun pid nuovo: esce diverso da zero — verificato sullo STATO, non sull exit code del comando', async () => {
+    const out: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      out.push(String(chunk));
+      return true;
+    });
+    let code: number;
+    try {
+      code = await cmdGatewayRestart(home(), {
+        platform: 'linux',
+        supervisorProbes: engaged,
+        restart: () => ({ status: 1, stdout: '', stderr: 'Failed to restart muffin-gateway.service: Unit is masked.' }),
+        readGatewayPid: pidSequence([88175]),
+        sleep: noSleep,
+        verifyAttempts: 2,
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(code).not.toBe(0);
+    expect(out.join('')).toMatch(/il riavvio non è avvenuto/);
+    expect(out.join('')).toContain('Failed to restart muffin-gateway.service: Unit is masked.');
+  });
+
+  it('comando "fallito" ma un pid nuovo serve comunque (scontro transitorio): esce 0', async () => {
+    const code = await cmdGatewayRestart(home(), {
+      platform: 'linux',
+      supervisorProbes: engaged,
+      restart: () => ({ status: 1, stdout: '', stderr: '' }),
+      readGatewayPid: pidSequence([88175, 88175, 65671]),
+      sleep: noSleep,
+    });
+    expect(code).toBe(0);
+  });
+
+  it('su darwin usa launchctl kickstart -k — lo stesso comando di offerGatewayRestart, non una seconda stringa', async () => {
+    let restarted: string[] | null = null;
+    await cmdGatewayRestart(home(), {
+      platform: 'darwin',
+      supervisorProbes: { unitFileExists: () => true, launchdLoaded: () => true },
+      restart: (argv) => {
+        restarted = argv;
+        return { status: 0, stdout: '', stderr: '' };
+      },
+      readGatewayPid: pidSequence([1111, 2222]),
+      sleep: noSleep,
+    });
+    expect(restarted?.[0]).toBe('launchctl');
+    expect(restarted?.[1]).toBe('kickstart');
+    expect(restarted?.[2]).toBe('-k');
+  });
+});
+
 describe('muffin doctor reports the gateway', () => {
   it('warns when nothing is running, and says what that costs', () => {
     const r = muffin(home(), ['doctor']);
@@ -1002,17 +1108,24 @@ describe('muffin gateway install --start', () => {
     return { righe, ripristina: () => { spy.mockRestore(); spyOut.mockRestore(); } };
   };
 
-  it('esegue la sequenza systemd nell ordine, linger compreso', () => {
+  it('esegue la sequenza systemd nell ordine, linger compreso', async () => {
     const dir = home();
     const visti: string[][] = [];
     const s = zitto();
     try {
-      const code = cmdGatewayInstall(dir, ['--start'], {
+      const code = await cmdGatewayInstall(dir, ['--start'], {
         platform: 'linux',
         homeDir: dir,
         configHome: join(dir, '.config'),
         identity: { user: 'owner', uid: 1000 },
         run: (argv) => { visti.push(argv); return { status: 0, stderr: '' }; },
+        // Lo STATO che la verifica post-attivazione (regola della casa,
+        // `cli/update.ts`) legge: un pid comparso. Un `run` finto che esce 0
+        // non fa girare niente sul serio, quindi senza questa riga
+        // `currentGatewayPid` leggerebbe sempre `null` e il test aspetterebbe
+        // il tempo di attesa reale per un esito che non è quello che sta
+        // provando.
+        readGatewayPid: () => 4242,
       });
       // 0 oppure 1: sotto tsx il launcher non è il symlink installato e
       // `currentLauncher()` lo dice — è vero, ed è un avvertimento, non un
@@ -1027,15 +1140,20 @@ describe('muffin gateway install --start', () => {
     expect(s.righe.join('')).toContain('è un servizio adesso');
   });
 
-it('stampa il passo prima di eseguirlo, non dopo', () => {
+it('stampa il passo prima di eseguirlo, non dopo', async () => {
     // `systemctl --user` su una macchina senza bus di sessione non fallisce:
     // aspetta. Se la riga si stampasse dopo, l'owner guarderebbe un cursore
     // fermo senza sapere su quale dei tre comandi. Un runner che lancia è il
     // modo di chiedere «eri già passato dalla stampa?» senza appendere il test.
+    //
+    // `cmdGatewayInstall` è `async` (la verifica post-attivazione aspetta un
+    // pid): una funzione async non lancia mai in modo sincrono, un `throw`
+    // dentro diventa sempre una promise rifiutata — `expect(() =>
+    // ...).toThrow(...)` non vedrebbe più niente da catturare.
     const dir = home();
     const s = zitto();
     try {
-      expect(() =>
+      await expect(
         cmdGatewayInstall(dir, ['--start'], {
           platform: 'linux',
           homeDir: dir,
@@ -1043,18 +1161,18 @@ it('stampa il passo prima di eseguirlo, non dopo', () => {
           identity: { user: 'owner', uid: 1000 },
           run: () => { throw new Error('come se non tornasse mai'); },
         }),
-      ).toThrow('come se non tornasse mai');
+      ).rejects.toThrow('come se non tornasse mai');
     } finally { s.ripristina(); }
     expect(s.righe.join('')).toContain('systemctl --user daemon-reload');
   });
 
-  it('si ferma al primo che fallisce, invece di abilitare una unit non riletta', () => {
+  it('si ferma al primo che fallisce, invece di abilitare una unit non riletta', async () => {
     const dir = home();
     const visti: string[][] = [];
     const s = zitto();
     let code: number;
     try {
-      code = cmdGatewayInstall(dir, ['--start'], {
+      code = await cmdGatewayInstall(dir, ['--start'], {
         platform: 'linux',
         homeDir: dir,
         configHome: join(dir, '.config'),
@@ -1073,16 +1191,21 @@ it('stampa il passo prima di eseguirlo, non dopo', () => {
     expect(detto).toContain('loginctl enable-linger');
   });
 
-  it('scrive la unit anche senza --write, perché non si accende un file che non c è', () => {
+  it('scrive la unit anche senza --write, perché non si accende un file che non c è', async () => {
     const dir = home();
     const s = zitto();
     try {
-      cmdGatewayInstall(dir, ['--start'], {
+      await cmdGatewayInstall(dir, ['--start'], {
         platform: 'linux',
         homeDir: dir,
         configHome: join(dir, '.config'),
         identity: { user: 'owner', uid: 1000 },
         run: () => ({ status: 0, stderr: '' }),
+        // Questo test prova solo la scrittura del file, non l'esito
+        // dell'accensione — un tentativo solo, senza attesa reale.
+        readGatewayPid: () => null,
+        verifyAttempts: 1,
+        verifyIntervalMs: 0,
       });
     } finally { s.ripristina(); }
     expect(existsSync(join(dir, '.config', 'systemd', 'user', 'muffin-gateway.service'))).toBe(true);

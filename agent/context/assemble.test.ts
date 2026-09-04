@@ -730,13 +730,25 @@ describe('the tool list a principal is shown', () => {
     }
   });
 
-  it('filters nothing when there are no declarations to filter by', () => {
-    // The degradation is documented on `LoopDeps.capabilities`: absent only so a
-    // test can build a minimal deps object. Production always passes it
-    // (`agent/runtime.ts`), and the kernel refuses either way.
+  it('shows a member nothing when declarations are absent, rather than everything', () => {
+    // `capabilities` is mandatory on `LoopDeps` now — no real construction site
+    // can omit it, and `tsc` refuses the build if one tries (proven outside
+    // this file: reverting the field to optional and dropping it from
+    // `agent/runtime.ts`'s construction of `deps` is a compile error).
+    //
+    // This test is the second, independent line of defence for a caller that
+    // reaches `visibleTools` from outside the type checker — a `.js` importer,
+    // an `as any` — which is the only way `capabilities` can still be falsy
+    // here. Before this slice that path filtered *nothing* and handed a member
+    // every host-only tool by name; it must now fail closed. Mutating the
+    // guard back to `return tools` reproduces exactly that regression and
+    // turns this test red.
     const runtime = boot(bootHome());
     try {
-      expect(visibleTools(runtime.deps.tools, MEMBER, undefined)).toEqual(runtime.deps.tools);
+      const senzaTipo = undefined as unknown as typeof runtime.deps.capabilities;
+      expect(visibleTools(runtime.deps.tools, MEMBER, senzaTipo)).toEqual([]);
+      // The owner is never filtered, absence of declarations or not.
+      expect(visibleTools(runtime.deps.tools, OWNER, senzaTipo)).toEqual(runtime.deps.tools);
     } finally {
       runtime.close();
     }

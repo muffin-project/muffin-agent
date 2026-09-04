@@ -31,7 +31,7 @@ import { PROVIDERS, providerFor, type ProviderEntry } from '../core/config/provi
  */
 
 /** Le tre corsie che un'installazione ha, e che fino a oggi si cambiavano solo a mano. */
-export type Lane = 'main' | 'light' | 'embed';
+type Lane = 'main' | 'light' | 'embed';
 
 export type CatalogueModel = { id: string; inputPerMTok: number; outputPerMTok: number };
 

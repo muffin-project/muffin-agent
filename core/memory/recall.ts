@@ -1,6 +1,6 @@
 import type { TrustTier } from '../policy/types.js';
 import { EmbedderUnavailable } from './embed.js';
-import type { FactOrigin } from './schema.js';
+import { isRequestPredicate, type FactOrigin } from './schema.js';
 import { fence } from './spotlight.js';
 import type { Reranker } from './rerank.js';
 import type { Fact, MemoryStore } from './store.js';
@@ -66,6 +66,24 @@ export type RecallItem = {
    */
   turnId?: string;
   /**
+   * Present on episodes: who produced the bytes.
+   *
+   * Already folded into `source` as a word for a human («Muffin», «tu»); here
+   * as a value too, because one consumer branches on it rather than printing
+   * it — `undone` immediately below is legitimate for the agent's own claim
+   * and a lie for the owner's request, and marking that distinction needs the
+   * same field `describeEpisodeSource` already reads.
+   */
+  role?: EpisodeRole;
+  /**
+   * Present on an episode whose turn `muffin undo` has put back (D11).
+   *
+   * Marked, not filtered out — the way `expired` is: an episode that was
+   * undone is still on record, and the model needs to see it *and* know it no
+   * longer describes the disk, not find a gap it has to explain by guessing.
+   */
+  undone?: boolean;
+  /**
    * Set on an item that is here as *context* for another one, never as a
    * result of its own. Neighbours are attached after the cut and never enter
    * the fusion: they did not match the query and must not displace something
@@ -80,6 +98,15 @@ export type RecallItem = {
    * discipline.
    */
   origin?: FactOrigin;
+  /**
+   * Present on facts. The raw predicate, carried through only so
+   * `temporalLabel` can recognise a request (`asked_to`, `asks_to`, …)
+   * without re-parsing `text` — see `isRequestPredicate` in `schema.ts` and
+   * `docs/decisions/0068-una-richiesta-ha-un-momento-non-una-fiducia.md` for
+   * the argument. Never rendered verbatim; only ever tested against a fixed
+   * predicate family.
+   */
+  predicate?: string;
 };
 
 /**
@@ -329,7 +356,7 @@ export type RecallResult = {
 const K = 60;
 
 /** The durable episode role. Trust and speaker are deliberately separate axes. */
-type EpisodeRole = NonNullable<ReturnType<MemoryStore['episodeById']>>['role'];
+export type EpisodeRole = NonNullable<ReturnType<MemoryStore['episodeById']>>['role'];
 
 /** How many of an entity's facts the graph expansion carries. */
 const EXPANSION_SLOTS = 6;
@@ -474,17 +501,32 @@ export async function recall(
   // `superseded_at` is for.
   const includeSuperseded = when !== undefined;
 
-  // `role` lives on the durable episode row. Do not duplicate it into every
-  // retrieval projection just to render provenance: FTS, vector and
-  // neighbourhood all converge here, so one cached lookup per unique episode
-  // is the single seam that decides who actually said the text. Missing role
+  // `role` and `undone_at` live on the durable episode row. Do not duplicate
+  // them into every retrieval projection just to render provenance: FTS,
+  // vector and neighbourhood all converge here, so one cached lookup per
+  // unique episode is the single seam that decides who actually said the
+  // text, and whether `muffin undo` has since put it back. Missing role
   // fails closed as unattributed; tier 0 alone can never manufacture "tu".
-  const episodeRoles = new Map<number, EpisodeRole | null>();
-  const episodeSource = (id: number, tier: TrustTier, at: string, surface?: string): string => {
-    if (!episodeRoles.has(id)) {
-      episodeRoles.set(id, deps.store.episodeById(tenantId, id)?.role ?? null);
-    }
-    return describeEpisodeSource(episodeRoles.get(id) ?? null, tier, at, surface);
+  const episodeDurables = new Map<number, { role: EpisodeRole | null; undoneAt: string | null }>();
+  const durable = (id: number): { role: EpisodeRole | null; undoneAt: string | null } => {
+    const cached = episodeDurables.get(id);
+    if (cached !== undefined) return cached;
+    const row = deps.store.episodeById(tenantId, id);
+    const fresh = { role: row?.role ?? null, undoneAt: row?.undoneAt ?? null };
+    episodeDurables.set(id, fresh);
+    return fresh;
+  };
+  const episodeSource = (id: number, tier: TrustTier, at: string, surface?: string): string =>
+    describeEpisodeSource(durable(id).role, tier, at, surface);
+  /**
+   * Chi ha prodotto la riga e se il turno che l'ha scritta e stato disfatto —
+   * sull'item, non solo nella stringa di provenienza, perche' `renderForPrompt`
+   * deve poter *decidere* (marcare `undone` in `temporalLabel`) invece di solo
+   * stampare. Stessa lettura cachata di `episodeSource`: una riga letta sola.
+   */
+  const episodeOrigin = (id: number): { role?: EpisodeRole; undone?: boolean } => {
+    const { role, undoneAt } = durable(id);
+    return { ...(role === null ? {} : { role }), ...(undoneAt === null ? {} : { undone: true }) };
   };
 
   const fuse = (key: string, item: RecallItem, rank: number): void => {
@@ -526,6 +568,7 @@ export async function recall(
       score: 0,
       surface: hit.connector,
       ...(hit.turnId === null ? {} : { turnId: hit.turnId }),
+      ...episodeOrigin(hit.id),
       // Retired evidence comes back only when the past was asked for, and it
       // arrives marked. An episode that was withdrawn or a vault note that has
       // since been edited is still true of *then*, and false of now; handing it
@@ -536,13 +579,57 @@ export async function recall(
 
   // --- half two: meaning -----------------------------------------------------
   if (deps.vectors) {
+    // Solo la ricerca vera e propria, deliberatamente: misurato 2026-09-04,
+    // questo `try` avvolgeva anche la lettura della provenienza di OGNI hit
+    // qui sotto, quindi un guasto dello store a metà del `forEach` (una riga
+    // corrotta, un lock, un file mancante) interrompeva l'iterazione INTERA —
+    // perdendo la provenienza degli hit non ancora processati, non solo di
+    // quello guasto — e il risultato veniva etichettato `vector-non-disponibile`,
+    // la stessa frase che dice "l'embedder è giù". Le due cose non sono la
+    // stessa: la ricerca vettoriale era riuscita, a fallire è stata la lettura
+    // a valle. Confonderle nasconde un guasto dello store dietro una frase
+    // che dice all'owner di controllare Ollama.
+    let vectorHits: Awaited<ReturnType<NonNullable<typeof deps.vectors>['search']>>;
+    let searchFallita = false;
     try {
-      const vectorHits = await deps.vectors.search(tenantId, query, limit * 2);
-      // Always, not only when there were hits: "the semantic half was starved"
-      // and "the semantic half ran and found nothing" are different facts, and
-      // a caller reading `strategies` cannot otherwise tell them apart.
-      strategies.push('vector');
-      vectorHits.forEach((hit, rank) => {
+      vectorHits = await deps.vectors.search(tenantId, query, limit * 2);
+    } catch (error) {
+      searchFallita = true;
+      // A missing embedder degrades recall; it must never take the turn down,
+      // and it must never pretend the semantic half ran.
+      //
+      // La causa, non la classe. `error.name` sembrava dire qualcosa e non
+      // diceva niente: ogni guasto dell'embedder arriva qui gia' avvolto in
+      // `EmbedderUnavailable`, quindi quel nome era una **costante** — la
+      // stessa parola per ollama giu', per il modello inesistente e per la
+      // rete caduta, che sono i tre casi per cui uno guarda questa riga.
+      // `causa` e' il campo che li separa (`TypeError (ECONNREFUSED)`,
+      // `HTTP 404`, `dimensione 768, attesa 1024`), ed e' gia' costruito in
+      // una forma che non puo' portare l'URL dell'embedder.
+      strategies.push(
+        `vector-non-disponibile(${
+          error instanceof EmbedderUnavailable ? error.causa : error instanceof Error ? error.name : 'errore'
+        })`,
+      );
+      vectorHits = [];
+    }
+    // Always, not only when there were hits: "the semantic half was starved"
+    // and "the semantic half ran and found nothing" are different facts, and
+    // a caller reading `strategies` cannot otherwise tell them apart. Pushed
+    // only when the search itself succeeded — the `catch` above already named
+    // its own outcome, and pushing both would say the half both ran and did
+    // not on the same call.
+    if (!searchFallita) strategies.push('vector');
+    let righePerse = 0;
+    vectorHits.forEach((hit, rank) => {
+      // Una riga alla volta: la ricerca vettoriale è già riuscita per TUTTI
+      // questi hit, quindi un guasto nella lettura a valle di uno solo (una
+      // provenienza, un fatto) non deve costare gli altri — `forEach` non
+      // continuerebbe da solo dopo un `throw`, e senza questo `try` un unico
+      // hit corrotto avrebbe azzerato l'intera metà semantica di questa
+      // chiamata, silenziosamente scambiata per "l'embedder è giù" dal
+      // `catch` esterno che c'era prima.
+      try {
         if (hit.kind === 'fact') {
           // A superseded belief stays embedded forever — nothing re-embeds on
           // supersede — so paraphrase can match its old text years later. The
@@ -583,6 +670,7 @@ export async function recall(
             validFrom: fact.validFrom,
             validTo: fact.validTo,
             expired: fact.expiredAt !== null,
+            predicate: fact.predicate,
             ...(fact.origin === 'inferred' ? { origin: fact.origin } : {}),
             ...(successor ? { replacedBy: { id: successor.id, text: factText(successor) } } : {}),
           }, rank);
@@ -616,32 +704,18 @@ export async function recall(
           score: 0,
           surface: connector,
           ...(provenance.turnId == null ? {} : { turnId: provenance.turnId }),
+          ...episodeOrigin(hit.sourceId),
           ...(provenance.supersededAt == null ? {} : { expired: true }),
         }, rank);
-      });
-    } catch (error) {
-      // A missing embedder degrades recall; it must never take the turn down,
-      // and it must never pretend the semantic half ran.
-      //
-      // La causa, non la classe. `error.name` sembrava dire qualcosa e non
-      // diceva niente: ogni guasto dell'embedder arriva qui gia' avvolto in
-      // `EmbedderUnavailable`, quindi quel nome era una **costante** — la
-      // stessa parola per ollama giu', per il modello inesistente e per la
-      // rete caduta, che sono i tre casi per cui uno guarda questa riga.
-      // `causa` e' il campo che li separa (`TypeError (ECONNREFUSED)`,
-      // `HTTP 404`, `dimensione 768, attesa 1024`), ed e' gia' costruito in
-      // una forma che non puo' portare l'URL dell'embedder.
-      //
-      // Il ramo `Error` non e' un residuo: questo `try` avvolge anche la
-      // lettura della provenienza, quindi un guasto dello store puo' finire
-      // qui. Per quello il nome della classe e' l'unica cosa vera che si
-      // possa dire — e va detta cosi', senza vestirlo da causa di rete.
-      strategies.push(
-        `vector-non-disponibile(${
-          error instanceof EmbedderUnavailable ? error.causa : error instanceof Error ? error.name : 'errore'
-        })`,
-      );
-    }
+      } catch {
+        // Questo hit non entra nel risultato — non l'intera metà semantica.
+        // Il conteggio, non l'errore per riga: `strategies` è una linea di
+        // riepilogo, non un log, e un hit corrotto non porta un messaggio che
+        // valga la pena distinguere da un altro.
+        righePerse += 1;
+      }
+    });
+    if (righePerse > 0) strategies.push(`vector-righe-perse(${righePerse})`);
   } else {
     strategies.push('vector-non-configurato');
   }
@@ -710,6 +784,7 @@ export async function recall(
           expired: fact.expiredAt !== null,
           ...(successor ? { replacedBy: { id: successor.id, text: factText(successor) } } : {}),
           origin: fact.origin,
+          predicate: fact.predicate,
         }, rank);
       });
     }
@@ -806,6 +881,7 @@ export async function recall(
           surface: near.connector,
           neighbourOf: anchor.id,
           ...(near.turnId === null ? {} : { turnId: near.turnId }),
+          ...episodeOrigin(near.id),
           ...(near.supersededAt === null ? {} : { expired: true }),
         });
       }
@@ -853,6 +929,7 @@ export async function recall(
     validFrom: f.validFrom,
     validTo: f.validTo,
     origin: f.origin,
+    predicate: f.predicate,
   }));
   kept = [...pinnedItems, ...kept];
 
@@ -1007,6 +1084,23 @@ function temporalLabel(item: RecallItem): string {
   if (item.validFrom || item.validTo) {
     parts.push(`valido ${item.validFrom?.slice(0, 10) ?? '?'} → ${item.validTo?.slice(0, 10) ?? 'oggi'}`);
   }
+  // A request-type fact (`asked_to`, `asks_to`, `asks_for`, …) reaching this
+  // function did not come from the model's own extraction of *this* turn —
+  // consolidation always runs after the turn that produced its evidence
+  // (ADR-0038's trailing-edge queue), so by the time a request fact exists at
+  // all, its turn is already over. `vectors.ts` stopped offering this family a
+  // standalone semantic vector for exactly this reason (a paraphrase match has
+  // no recency discipline — see `docs/decisions/0068-una-richiesta-ha-un-momento-non-una-fiducia.md`),
+  // but the graph hop and `--history` are structurally allowed to still carry
+  // one here, when the query names the entity or asks about the past on
+  // purpose. This label is what stops that reader — model or owner — from
+  // mistaking a closed request for a standing instruction. It is deliberately
+  // silent on whether the request was ever satisfied: recall has no signal for
+  // that, and guessing would be the confidence-decay mistake ADR-0040 already
+  // refused, in a render-time costume instead of a schema one.
+  if (item.kind === 'fact' && isRequestPredicate(item.predicate ?? '')) {
+    parts.push('richiesta di un turno già concluso, non di questo');
+  }
   if (item.expired) {
     // Two different reasons a fact can be retired, and only one of them is a
     // change of mind. `supersede` is called from the judge, closing world time
@@ -1023,6 +1117,12 @@ function temporalLabel(item: RecallItem): string {
     parts.push(
       item.kind === 'fact' && !item.validTo ? 'riga ritirata (duplicato)' : 'non più attuale — era vero prima',
     );
+  }
+  if (item.undone) {
+    // D11: marcato, non escluso — la stessa scelta di `expired` sopra, e per
+    // la stessa ragione. Il testo resta quello che l'agente ha detto davvero;
+    // solo la lettura "questo è ancora sul disco" smette di essere implicita.
+    parts.push('disfatto con muffin undo — i file che descrive sono tornati com\'erano prima');
   }
   return parts.length === 0 ? '' : `, ${parts.join(', ')}`;
 }

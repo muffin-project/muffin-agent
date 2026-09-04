@@ -105,7 +105,7 @@ export type TupleDecision = {
  * di terzi) contro uno che resta dentro (disco locale nello scope, la chat di
  * origine, il tenant del turno).
  */
-export type Sink =
+type Sink =
   | 'nothing'
   | 'local-host'
   | 'origin-channel'
@@ -129,7 +129,7 @@ const SINK_BY_ROW: Readonly<Record<EffectRow, Sink>> = {
 
 const ESCAPING: ReadonlySet<Sink> = new Set<Sink>(['network', 'new-recipient', 'third-party']);
 
-export function sinkOf(decl: CapabilityDecl): Sink {
+function sinkOf(decl: CapabilityDecl): Sink {
   return SINK_BY_ROW[decl.effect];
 }
 

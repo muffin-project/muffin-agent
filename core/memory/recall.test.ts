@@ -240,6 +240,48 @@ describe('recall', () => {
     expect(ignoto.strategies.join(' ')).not.toContain('errore di rete');
   });
 
+  /**
+   * Chiuso 2026-09-04. Prima di questa fix il `try` intorno a `search()`
+   * avvolgeva anche il `forEach` che legge la provenienza di ogni hit — un
+   * guasto dello store su UN hit interrompeva `forEach` (un `throw` dentro
+   * non continua da solo) e perdeva anche gli hit successivi mai raggiunti,
+   * e tutta la meta' semantica finiva etichettata `vector-non-disponibile`,
+   * la stessa frase che dice "l'embedder e' giu'" — falsa qui: la ricerca era
+   * riuscita, a fallire e' stata la lettura a valle di una sola riga.
+   */
+  it('un guasto nella lettura di UN hit non azzera gli altri, e non si traveste da imbedder giu', async () => {
+    const { store, vectors } = harness();
+    const buona = episode(store, 'ho parlato col commercialista per le tasse');
+    const rotta = episode(store, 'il contabile mi ha richiamato per la fattura');
+    await vectors!.index(HOST, [
+      { kind: 'episode', sourceId: buona, text: 'ho parlato col commercialista per le tasse' },
+      { kind: 'episode', sourceId: rotta, text: 'il contabile mi ha richiamato per la fattura' },
+    ], NOW);
+
+    const provenanceOfOriginale = store.provenanceOf.bind(store);
+    vi.spyOn(store, 'provenanceOf').mockImplementation((tenantId, kind, sourceId) => {
+      if (sourceId === rotta) throw new Error('riga corrotta (simulato)');
+      return provenanceOfOriginale(tenantId, kind, sourceId);
+    });
+
+    // "fiscale" non compare in nessuno dei due testi: il full text non trova
+    // niente, quindi ogni hit in `result.items` arriva solo dalla meta'
+    // semantica — la stessa che questo test misura.
+    expect(store.searchEpisodes(HOST, 'fiscale')).toHaveLength(0);
+    const result = await recall({ store, vectors }, HOST, 'fiscale');
+
+    // La ricerca vettoriale e' riuscita — non e' l'embedder ad essere giu'.
+    expect(result.strategies).toContain('vector');
+    expect(result.strategies.some((s) => s.startsWith('vector-non-disponibile'))).toBe(false);
+    // La riga guasta e' contata, non silenziosa.
+    expect(result.strategies).toContain('vector-righe-perse(1)');
+    // L'altro hit, che `provenanceOf` non ha mai toccato prima di quello
+    // guasto, e' comunque nel risultato — l'intera meta' non e' stata persa
+    // per colpa di una riga sola.
+    expect(result.items.some((i) => i.id === buona)).toBe(true);
+    expect(result.items.some((i) => i.id === rotta)).toBe(false);
+  });
+
   it('brings the facts about a named entity along', async () => {
     const { store, vectors } = harness();
     const marco = store.upsertEntity(HOST, 'Marco', 'person', NOW);
@@ -717,6 +759,115 @@ describe('recall', () => {
     expect(rendered).not.toContain('non più attuale — era vero prima');
   });
 
+  it('labels a request-type fact as belonging to a turn already over, never as live', async () => {
+    // Measured on the owner's own database (docs/decisions/0067): a request
+    // asked and answered inside one exchange resurfaced, unlabelled, when a
+    // later turn merely sounded similar to it. `vectors.ts` now stops that
+    // fact ever reaching recall through the semantic half at all, but the
+    // graph hop is structurally still allowed to carry one here — when the
+    // query names the entity on purpose — so nothing on the rendered line
+    // said it was not the turn asking now. The graph hop reaches this fact
+    // through the entity, not the vector half, so the fixture needs no
+    // embedder to prove the label is there.
+    const { store, vectors } = harness(false);
+    const marco = store.upsertEntity(HOST, 'Marco', 'person', NOW);
+    const ep = episode(store, 'Marco: puoi mandarmi i file?');
+    store.addFact({
+      tenantId: HOST, subjectId: marco, predicate: 'asks_to', objectValue: 'mandare i file',
+      episodeId: ep, trustTier: 1, confidence: 0.9, extractionV: 1, recordedAt: NOW,
+    });
+
+    const result = await recall({ store, vectors }, HOST, 'Marco');
+    const rendered = renderForPrompt(result);
+    expect(rendered).toContain('richiesta di un turno già concluso, non di questo');
+  });
+
+  it('never labels an ordinary fact as a request, on the same predicate family boundary', async () => {
+    // The mutation this guards against: a prefix test loose enough to catch
+    // `askew`-shaped predicates, or one so narrow it stops matching the
+    // compounds the model actually mints (`asks_for_advice`, seen once on the
+    // owner's install). Both directions are checked in one fixture.
+    const { store, vectors } = harness(false);
+    const marco = store.upsertEntity(HOST, 'Marco', 'person', NOW);
+    const ep = episode(store, 'Marco vive a Cagliari e chiede consigli spesso');
+    const base = {
+      tenantId: HOST, subjectId: marco, episodeId: ep, trustTier: 1 as const,
+      confidence: 0.9, extractionV: 1, recordedAt: NOW,
+    };
+    store.addFact({ ...base, predicate: 'lives_in', objectValue: 'Cagliari' });
+    store.addFact({ ...base, predicate: 'asks_for_advice', objectValue: 'consigli sul lavoro' });
+
+    const result = await recall({ store, vectors }, HOST, 'Marco');
+    const rendered = renderForPrompt(result);
+    expect(rendered).toContain('Cagliari');
+    expect(rendered).toContain('consigli sul lavoro');
+    // One request-family fact in the fixture, so the label appears exactly
+    // once — not zero (the compound predicate must still match) and not
+    // twice (the unrelated fact must not).
+    expect(rendered.split('richiesta di un turno già concluso, non di questo').length - 1).toBe(1);
+  });
+
+  it('a semantically similar but unrelated later query no longer resurfaces an already-answered request, and an ordinary fact is unaffected', async () => {
+    // The end-to-end proof, through the real `recall()` pipeline (FTS +
+    // vector + graph), not a unit test of one function in isolation.
+    // Reproduces the shape of the measured defect on synthetic data instead
+    // of the owner's private database: an 08/27-style request ("elenca i
+    // file .md della cartella corrente") and a 09/04-style new, unrelated ask
+    // that only shares vocabulary with it ("puoi elencare i file di questa
+    // cartella?"). Before `vectors.ts` stopped embedding request facts, the
+    // old one came back — unlabelled, indistinguishable from a live ask.
+    //
+    // The false-positive check lives in the same test on purpose: an ordinary
+    // fact (`lives_in`) must still be reachable by the identical mechanism —
+    // a closure that also ate legitimate recall would be worse than the
+    // defect it fixes (owner directive: "una memoria che chiude troppo è
+    // peggio di una che chiude poco").
+    class FileEmbedder implements Embedder {
+      readonly id = 'fake:file-v1';
+      readonly dimensions = 8;
+      private readonly vocab = ['file', 'md', 'cartella', 'elenca', 'elenco', 'vive', 'cagliari', 'sardegna'];
+      async embed(texts: string[]): Promise<Float32Array[]> {
+        return texts.map((text) => {
+          const lower = text.toLowerCase();
+          const v = Float32Array.from(this.vocab.map((w) => (lower.includes(w) ? 1 : 0)));
+          const norm = Math.hypot(...v) || 1;
+          return v.map((x) => x / norm) as Float32Array;
+        });
+      }
+    }
+    const db = new DatabaseCtor(':memory:');
+    const store = new MemoryStore(db);
+    const vectors = new VectorIndex(db, new FileEmbedder());
+
+    const owner = store.upsertEntity(HOST, 'owner', 'person', NOW);
+    const askEp = episode(store, 'elenca i file .md della cartella corrente con lo strumento shell');
+    const askId = store.addFact({
+      tenantId: HOST, subjectId: owner, predicate: 'asked_to',
+      objectValue: 'elenca i file .md della cartella corrente con lo strumento shell', episodeId: askEp,
+      trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: NOW,
+    });
+
+    const marco = store.upsertEntity(HOST, 'Marco', 'person', NOW);
+    const lawEp = episode(store, 'Marco vive a Cagliari, in Sardegna');
+    const lawId = store.addFact({
+      tenantId: HOST, subjectId: marco, predicate: 'lives_in', objectValue: 'Cagliari',
+      episodeId: lawEp, trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: NOW,
+    });
+
+    // What a live consolidation round would do: embed the backlog once.
+    await vectors.index(HOST, vectors.indexBacklog(HOST), NOW);
+
+    // A new, unrelated ask that only shares vocabulary with the old one, and
+    // does not name the entity — so the graph hop cannot rescue it either.
+    const today = await recall({ store, vectors }, HOST, 'puoi elencare i file di questa cartella?', { limit: 8 });
+    expect(today.items.some((i) => i.kind === 'fact' && i.id === askId)).toBe(false);
+
+    // The ordinary fact, reached through the identical (vector) channel, is
+    // unaffected.
+    const about = await recall({ store, vectors }, HOST, 'dove vive Marco, in Sardegna?', { limit: 8 });
+    expect(about.items.some((i) => i.kind === 'fact' && i.id === lawId)).toBe(true);
+  });
+
   it('carries the K episodes before and after a match, from its own thread and reading order', async () => {
     const { store, vectors } = harness(false);
     const fill = (label: string, minute: number, threadKey = 't') =>
@@ -859,6 +1010,51 @@ describe('recall', () => {
     const result = await recall({ store, vectors }, HOST, 'il mio codice', { neighbours: 2 });
     expect(result.items.some((i) => i.id === mine)).toBe(true);
     expect(result.items.map((i) => i.text).join(' ')).not.toContain('altro tenant');
+  });
+});
+
+describe('recall porta `undone` (D11) e `role` sull\'item, marcati non esclusi', () => {
+  it('un episodio agente disfatto torna con undone: true e nel testo del prompt', async () => {
+    const { store, vectors } = harness();
+    const epId = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'agent', kind: 'message',
+      content: 'Fatto: ho scritto nota-vela.md.', trustTier: 0, createdAt: NOW, turnId: 'turn-1',
+    });
+    store.markEpisodesUndone(HOST, 'turn-1', '2026-08-04T11:00:00Z');
+
+    const result = await recall({ store, vectors }, HOST, 'nota-vela.md');
+    const item = result.items.find((i) => i.id === epId);
+    expect(item?.role).toBe('agent');
+    expect(item?.undone).toBe(true);
+    expect(renderForPrompt(result)).toContain('disfatto con muffin undo');
+    // Il testo resta quello vero — marcato, non riscritto.
+    expect(item?.text).toBe('Fatto: ho scritto nota-vela.md.');
+  });
+
+  it('un episodio non disfatto non porta undone', async () => {
+    const { store, vectors } = harness();
+    const epId = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'agent', kind: 'message',
+      content: 'Fatto: ho letto nota-vela.md.', trustTier: 0, createdAt: NOW, turnId: 'turn-2',
+    });
+    const result = await recall({ store, vectors }, HOST, 'nota-vela.md');
+    const item = result.items.find((i) => i.id === epId);
+    expect(item?.undone).toBeUndefined();
+  });
+
+  it('un episodio dell\'owner non è mai undone, anche col turno marcato', async () => {
+    // markEpisodesUndone filtra su role: 'agent' — questo prova il lato
+    // recall della stessa garanzia, non solo lo store.
+    const { store, vectors } = harness();
+    const epId = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
+      content: 'scrivi nota-vela.md', trustTier: 0, createdAt: NOW, turnId: 'turn-3',
+    });
+    store.markEpisodesUndone(HOST, 'turn-3', '2026-08-04T11:00:00Z');
+    const result = await recall({ store, vectors }, HOST, 'nota-vela.md');
+    const item = result.items.find((i) => i.id === epId);
+    expect(item?.role).toBe('user');
+    expect(item?.undone).toBeUndefined();
   });
 });
 

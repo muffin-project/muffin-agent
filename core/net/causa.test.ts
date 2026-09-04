@@ -67,6 +67,34 @@ describe('causaDiRete — dice la causa, e non puo dire un segreto', () => {
     (errore as { cause?: unknown }).cause = { code: 'E'.repeat(4000) };
     expect(causaDiRete(errore)).toBe('TypeError');
   });
+
+  /**
+   * Il difetto misurato il 3-4/09/2026: con un solo livello di `.cause`
+   * seguito, 3188 righe su 4748 (67%) restavano `Telegram 0: TypeError` nuda.
+   * `fetch` di Node (undici) puo' incapsulare un fallimento di trasporto a
+   * due livelli — `TypeError('fetch failed') → SocketError('other side
+   * closed') → { code }` — e non sempre il codice sta sul primo. Questo test
+   * costruisce esattamente quella forma e si falsifica rimettendo il vecchio
+   * confronto a un livello solo (`error.cause.code`, senza scendere in
+   * `error.cause.cause`): deve tornare rosso.
+   */
+  it('scende oltre un livello: una cause annidata a due passi porta comunque il codice', () => {
+    const codiceDiSistema = { code: 'ECONNRESET' };
+    const causaIntermedia = Object.assign(new Error('other side closed'), { cause: codiceDiSistema });
+    const errore = new TypeError('fetch failed');
+    (errore as { cause?: unknown }).cause = causaIntermedia;
+    expect(causaDiRete(errore)).toBe('TypeError (ECONNRESET)');
+  });
+
+  it('una catena troppo lunga si ferma, non gira all infinito', () => {
+    let corrente: Error = Object.assign(new Error('fondo'), { code: 'ECONNRESET' });
+    for (let i = 0; i < 10; i++) {
+      corrente = Object.assign(new Error(`anello ${i}`), { cause: corrente });
+    }
+    const errore = new TypeError('fetch failed');
+    (errore as { cause?: unknown }).cause = corrente;
+    expect(causaDiRete(errore)).toBe('TypeError');
+  });
 });
 
 /**

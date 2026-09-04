@@ -110,12 +110,12 @@ import { schemaVersionOf } from '../core/db/migrate.js';
  * asimmetria, ed è ciò che rende la riga di ritardo una domanda con una
  * risposta sola invece di un confronto fra pari.
  */
-export const CHANNELS = ['main', 'dev'] as const;
+const CHANNELS = ['main', 'dev'] as const;
 export type Channel = (typeof CHANNELS)[number];
-export const DEFAULT_CHANNEL: Channel = 'main';
+const DEFAULT_CHANNEL: Channel = 'main';
 const UPSTREAM_OF: Readonly<Record<Channel, Channel | null>> = { main: 'dev', dev: null };
 
-export function isChannel(x: string): x is Channel {
+function isChannel(x: string): x is Channel {
   return (CHANNELS as readonly string[]).includes(x);
 }
 
@@ -200,7 +200,7 @@ export function arrivalsSummary(args: {
   );
 }
 
-export type UpdateStep = { name: string; done: boolean; detail: string };
+type UpdateStep = { name: string; done: boolean; detail: string };
 export type UpdateResult = { steps: UpdateStep[]; code: number };
 
 type SpawnResult = { status: number; stdout: string; stderr: string };
@@ -619,7 +619,14 @@ export function noteDopoLoSwing(args: {
   return righe;
 }
 
-function restartCommand(platform: NodeJS.Platform): { printable: string; argv: string[] } {
+/**
+ * Exported so `cli/gateway.ts`'s `muffin gateway restart` can build the exact
+ * same `launchctl kickstart -k`/`systemctl --user restart` this file's own
+ * `offerGatewayRestart` runs after `muffin update` — one mechanism, not a
+ * second `launchctl` string that could drift from this one on the next macOS
+ * quirk.
+ */
+export function restartCommand(platform: NodeJS.Platform): { printable: string; argv: string[] } {
   if (platform === 'darwin') {
     const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
     const target = `gui/${uid}/${LAUNCHD_LABEL}`;
@@ -1103,7 +1110,7 @@ export function runUpdate(deps: UpdateDeps = {}): UpdateResult {
   return { steps, code: 0 };
 }
 
-export const UPDATE_USAGE = `uso:
+const UPDATE_USAGE = `uso:
   muffin update [--dry-run] [--yes]     fetch del canale, costruisce una release
       [--channel main|dev]               affiancata (git worktree + npm ci),
                                          backup, poi scambio atomico del/i
