@@ -102,6 +102,7 @@ function fixture(script: ChatResult[] = []) {
     model: 'test-model',
     tools: [],
     decide: createDecide({ matrix: POLICY_FLOOR, capabilities: new Map(), budgetExhausted: () => false, hardened: true }),
+    capabilities: new Map(),
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions: new SessionStore(home),
     turns,
