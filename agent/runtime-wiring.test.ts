@@ -12,7 +12,7 @@ import { buildRuntime } from './runtime.js';
 import { runDoctor } from '../cli/doctor.js';
 import { muffinWorkspace } from '../core/config/workspace.js';
 import { runTurn, type LoopDeps, type ToolContext } from './loop.js';
-import type { ChatResult, Provider } from './providers/types.js';
+import type { ChatCall, ChatResult, Provider } from './providers/types.js';
 import type { Principal } from '../core/policy/types.js';
 
 /**
@@ -621,6 +621,157 @@ describe('un turno vero scrive un file vero, e si disfa', () => {
     expect(turno).toBeDefined();
     expect(cmdUndo([turno!, '--yes'], home)).toBe(0);
     expect(readFileSync(join(workspace, 'nota.md'), 'utf8')).toBe('prima');
+
+    runtime.close();
+  });
+
+  /**
+   * D11, la metà misurata mancante da #186: rimettere il file non basta se il
+   * giro dopo rilegge «Fatto: ho scritto nota.md» come storia ancora vera.
+   *
+   * Prova end-to-end sulla stessa infrastruttura del test sopra: un turno
+   * scrive davvero (`fs_write`, `draft`, il journal fotografa), `muffin undo`
+   * lo disfa, e un **secondo turno nella stessa sessione** rilegge la propria
+   * storia. Cattura i `ChatCall` reali che il provider riceve — non lo stato
+   * interno — perché la garanzia è su cosa *il modello vede*, non su una
+   * struttura dati intermedia.
+   */
+  it('dopo `muffin undo` il turno dopo non rilegge «ho scritto» come vero (D11 — turno/sessione)', async () => {
+    const home = homeAllowing('ok.example.com');
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-wiring-write-'));
+    writeFileSync(join(workspace, 'nota.md'), 'prima', 'utf8');
+
+    const runtime = buildRuntime(home, workspace);
+    const catture: ChatCall[] = [];
+    class Catturante implements Provider {
+      readonly kind = 'openai-compat' as const;
+      private i = 0;
+      constructor(private readonly script: ChatResult[]) {}
+      async chat(call: ChatCall): Promise<ChatResult> {
+        catture.push(call);
+        return (
+          this.script[this.i++] ?? {
+            text: 'fine',
+            toolCalls: [],
+            stopReason: 'end',
+            usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+            model: 't',
+          }
+        );
+      }
+    }
+
+    const session = runtime.deps.sessions.open('u-d11-turno');
+    const deps1: LoopDeps = {
+      ...runtime.deps,
+      provider: new Catturante([
+        writeCall('nota.md', 'dopo'),
+        {
+          text: 'Fatto: ho scritto nota.md.',
+          toolCalls: [],
+          stopReason: 'end',
+          usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          model: 't',
+        },
+      ]),
+    };
+    await runTurn(deps1, {
+      principal: owner, tenant: 'host', surface: 'cli',
+      session, text: 'scrivi nota.md',
+    });
+    expect(readFileSync(join(workspace, 'nota.md'), 'utf8')).toBe('dopo');
+
+    const journal = new UndoJournal(paths(home).undo);
+    const turno = journal.turns()[0];
+    expect(turno).toBeDefined();
+    expect(cmdUndo([turno!, '--yes'], home)).toBe(0);
+    expect(readFileSync(join(workspace, 'nota.md'), 'utf8')).toBe('prima');
+
+    const deps2: LoopDeps = {
+      ...runtime.deps,
+      provider: new Catturante([
+        {
+          text: 'certo',
+          toolCalls: [],
+          stopReason: 'end',
+          usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          model: 't',
+        },
+      ]),
+    };
+    await runTurn(deps2, {
+      principal: owner, tenant: 'host', surface: 'cli',
+      session, text: 'e adesso?',
+    });
+
+    const ultima = catture.at(-1)!;
+    const testo = ultima.messages
+      .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+      .map((b) => ('text' in b ? b.text : ''))
+      .join('\n');
+    expect(testo).toContain('Fatto: ho scritto nota.md.');
+    expect(testo).toContain('disfatto con');
+    expect(testo).toContain('muffin undo');
+
+    runtime.close();
+  });
+
+  /**
+   * D11, l'altra metà misurata mancante da #186: la stessa affermazione
+   * dell'agente vive anche come episodio di memoria (`role: 'agent'`), due
+   * blocchi più in basso nella stessa `ChatCall`, ed è pescabile dal recall di
+   * un giro successivo qualunque sia la sessione. Marcare solo la sessione e
+   * lasciare la memoria nuda è marcare una copia su due — il difetto B1 del
+   * judge di #186.
+   */
+  it('dopo `muffin undo` la memoria non ripete ciò che l\'undo ha rimesso indietro (D11 — memoria)', async () => {
+    const home = homeAllowing('ok.example.com');
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-wiring-write-'));
+    writeFileSync(join(workspace, 'nota.md'), 'prima', 'utf8');
+
+    const runtime = buildRuntime(home, workspace);
+    const deps: LoopDeps = {
+      ...runtime.deps,
+      provider: new Scripted([
+        writeCall('nota.md', 'dopo'),
+        {
+          text: 'Fatto: ho scritto nota.md.',
+          toolCalls: [],
+          stopReason: 'end',
+          usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          model: 't',
+        },
+      ]),
+    };
+    await runTurn(deps, {
+      principal: owner, tenant: 'host', surface: 'cli',
+      session: deps.sessions.open('u-d11-memoria'), text: 'scrivi nota.md',
+    });
+    expect(readFileSync(join(workspace, 'nota.md'), 'utf8')).toBe('dopo');
+
+    const memoria = runtime.deps.memory;
+    if (memoria === undefined) throw new Error('memoria non cablata da buildRuntime — precondizione del test');
+    const primaDellUndo = memoria.store.searchEpisodes('host', 'nota.md');
+    expect(primaDellUndo.length).toBeGreaterThan(0);
+    expect(primaDellUndo.every((e) => e.turnId !== null)).toBe(true);
+    for (const e of primaDellUndo) expect(memoria.store.episodeById('host', e.id)?.undoneAt).toBeUndefined();
+
+    const journal = new UndoJournal(paths(home).undo);
+    const turno = journal.turns()[0];
+    expect(turno).toBeDefined();
+    expect(cmdUndo([turno!, '--yes'], home)).toBe(0);
+    expect(readFileSync(join(workspace, 'nota.md'), 'utf8')).toBe('prima');
+
+    // Marcato, non escluso: la riga resta pescabile e resta il testo vero.
+    const dopoLUndo = memoria.store.searchEpisodes('host', 'nota.md');
+    expect(dopoLUndo.length).toBe(primaDellUndo.length);
+    const agenteDopo = dopoLUndo.filter((e) => memoria.store.episodeById('host', e.id)?.role === 'agent');
+    expect(agenteDopo.length).toBeGreaterThan(0);
+    for (const e of agenteDopo) {
+      const row = memoria.store.episodeById('host', e.id);
+      expect(row?.undoneAt).toBeDefined();
+      expect(row?.content).toContain('ho scritto nota.md');
+    }
 
     runtime.close();
   });
