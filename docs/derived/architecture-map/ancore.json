@@ -2076,7 +2076,7 @@
   },
   "core/vault/vault.ts:420": {
     "path": "core/vault/vault.ts",
-    "line": 454,
+    "line": 471,
     "testo": "report.chunks += 1;"
   },
   "core/vault/vault.ts:58": {
