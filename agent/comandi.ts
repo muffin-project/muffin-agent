@@ -1,5 +1,6 @@
 import { loadConfig, saveConfig, type Config } from '../core/config/config.js';
 import { loadProfiles, selectProfile } from './profiles/profile.js';
+import { describeSettableKnobs, formatSetOutcome, setConfigKnob } from '../core/config/settings.js';
 
 /**
  * I comandi che una persona può dare a Muffin, in un posto solo.
@@ -94,6 +95,7 @@ export const COMANDI: readonly { nome: string; aiuto: string; soloTerminale?: bo
   { nome: 'spend', aiuto: 'quanto hai speso questo mese e oggi' },
   { nome: 'think', aiuto: 'ragionamento: on | off | reset (senza argomenti lo mostra)' },
   { nome: 'model', aiuto: 'modello: [main|light|embed] <slug>, --list, o niente per vederli' },
+  { nome: 'config', aiuto: 'set <chiave> <valore> — solo le poche manopole scrivibili da qui' },
   { nome: 'debug', aiuto: 'giri, token e millisecondi: on | off (da solo, inverte)' },
   { nome: 'stop', aiuto: 'interrompe il turno in corso; quelli in coda restano' },
   { nome: 'steer', aiuto: '<testo> — corregge il turno in corso, al prossimo passo' },
@@ -214,6 +216,24 @@ export async function eseguiComando(riga: string, ctx: ContestoComandi): Promise
       await ctx.model(arg === '' ? [] : arg.split(/\s+/), (l) => righe.push(l));
       ctx.onConfig?.(loadConfig(ctx.home));
       return { testo: `${righe.join('\n')}\n(il modello nuovo vale dal prossimo avvio)`.trim() };
+    }
+
+    // La stessa funzione di `muffin config set` (`core/config/settings.ts`):
+    // un comando come questo non crea mai un turno — il connector lo
+    // intercetta prima di chiamare il modello — quindi non c'è bisogno che
+    // passi dal kernel per tenere il modello fuori da questa manopola.
+    case 'config': {
+      const [sub, chiave, ...resto] = arg.split(/\s+/).filter((s) => s !== '');
+      if (sub !== 'set' || chiave === undefined || resto.length === 0) {
+        return {
+          testo:
+            '/config set <chiave> <valore> — le chiavi che si possono cambiare da qui:\n' +
+            describeSettableKnobs(),
+        };
+      }
+      const outcome = setConfigKnob(ctx.home, chiave, resto.join(' '));
+      if (outcome.ok) ctx.onConfig?.(loadConfig(ctx.home));
+      return { testo: formatSetOutcome(outcome) };
     }
 
     default:
