@@ -146,6 +146,7 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
   const db = new DatabaseCtor(':memory:');
   const turns = new TurnStore(db);
   const todos = new TodoStore(db);
+  const capabilities = new Map(decls.map((d) => [d.id, d]));
   const base: LoopDeps = {
     provider: new ScriptedProvider(script),
     profile: CONSERVATIVE,
@@ -153,10 +154,11 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
     tools,
     decide: createDecide({
       matrix: POLICY_FLOOR,
-      capabilities: new Map(decls.map((d) => [d.id, d])),
+      capabilities,
       budgetExhausted: () => false,
       hardened: true,
     }),
+    capabilities,
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions: store,
     turns,
@@ -423,6 +425,7 @@ describe('agent loop', () => {
         budgetExhausted: () => false,
         hardened: false,
       }),
+      capabilities: new Map(decls.map((x) => [x.id, x])),
       tracer: new SimpleTracer(new JsonlExporter(home)),
       sessions: store,
       turns: new TurnStore(new DatabaseCtor(':memory:')),
@@ -1794,5 +1797,84 @@ describe('una capability undoable è rifiutata finché non c e un registro di un
     expect(risultati[0]?.content).toContain('registro di undo');
     expect(risultati[0]?.content).toContain('Non eseguito');
     expect(risultati[0]?.isError).toBe(true);
+  });
+});
+
+/**
+ * 4-bis: the reply and the memory episode draw from the same `text` local in
+ * `runTurn` (see the choke-point comment right above `scrubResourceEchoes` in
+ * `agent/loop.ts`), so a wiring test on the returned `result.text` proves the
+ * memory side too — `deps.memory.store.addEpisode` reads the exact same
+ * string a few lines below where this one is produced.
+ *
+ * A fresh, minimal `tools` override rather than adding to the shared array
+ * above: that array's exact tool list is itself asserted elsewhere
+ * (`expect(call.tools?.map((t) => t.name)).toEqual([...])`), and a fourth
+ * entry would silently break that unrelated test.
+ */
+describe('the sensitive-resource echo floor (4-bis)', () => {
+  /** Not credential-shaped — the corpus's own MARCATORE is the same shape, on purpose. */
+  const SEGRETO = 'MARKER-CONTENUTO-SEGRETO-abc123';
+
+  const fsReadTool = (contentByPath: Record<string, string>): RegisteredTool => ({
+    capability: 'demo.read',
+    spec: { name: 'fs_read', description: 'read a path', inputSchema: { type: 'object', properties: { path: { type: 'string' } } } },
+    throwTier: 0,
+    handler: (args) => ({ content: contentByPath[String((args as { path?: unknown }).path ?? '')] ?? '', tier: 0 as const }),
+  });
+
+  it('scrubs a verbatim echo of content read from a secret-named path out of the final reply', async () => {
+    const { deps: d, store } = deps(
+      [callTool('fs_read', { path: 'segreto.txt' }), answer(`ecco quello che ho trovato: ${SEGRETO}`)],
+      { tools: [fsReadTool({ 'segreto.txt': SEGRETO })] },
+    );
+    const result = await runTurn(d, input(store));
+    expect(result.text).not.toContain(SEGRETO);
+    expect(result.text).toContain('«redacted:');
+  });
+
+  /**
+   * The honest negative half, locked in as a test rather than left as prose:
+   * a resource whose own name does not say secret is not covered by this
+   * floor, on purpose (`core/tracing/redact.ts`'s own doc-comment on
+   * `scrubResourceEchoes` explains why "was this requested" is not
+   * computable today). This is exactly `s7-memoria-e-ricordo`'s shape —
+   * `appunti.md` is an innocuous name and the injected content lives inside
+   * it — and this test exists so a future change to the word list cannot
+   * silently start passing it without someone noticing the assertion flip.
+   */
+  it('leaves the echo alone when the resource name does not say secret — the s7 gap, on purpose', async () => {
+    const { deps: d, store } = deps(
+      [callTool('fs_read', { path: 'appunti.md' }), answer(`ho letto gli appunti: ${SEGRETO}`)],
+      { tools: [fsReadTool({ 'appunti.md': SEGRETO })] },
+    );
+    const result = await runTurn(d, input(store));
+    expect(result.text).toContain(SEGRETO);
+  });
+
+  it('does not touch a reply that never read anything secret-named', async () => {
+    const { deps: d, store } = deps([answer('ciao, come va?')], { tools: [fsReadTool({})] });
+    const result = await runTurn(d, input(store));
+    expect(result.text).toBe('ciao, come va?');
+  });
+
+  it('does not flag the read when the tool call errors — nothing to echo from a failed read', async () => {
+    const { deps: d, store } = deps(
+      [callTool('fs_read', { path: 'segreto.txt' }), answer('non sono riuscito a leggerlo')],
+      {
+        tools: [
+          {
+            capability: 'demo.read',
+            spec: { name: 'fs_read', description: 'read a path', inputSchema: { type: 'object', properties: { path: { type: 'string' } } } },
+            throwTier: 0,
+            handler: () => {
+              throw new Error('ENOENT');
+            },
+          },
+        ],
+      },
+    );
+    const result = await runTurn(d, input(store));
+    expect(result.text).toBe('non sono riuscito a leggerlo');
   });
 });

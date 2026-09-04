@@ -23,6 +23,7 @@
     "agent/**/*.ts",
     "cli/**/*.ts",
     "evals/**/*.ts",
+    "scripts/**/*.ts",
     "**/*.test.ts",
     ".claude/hooks/**/*.ts"
   ]
