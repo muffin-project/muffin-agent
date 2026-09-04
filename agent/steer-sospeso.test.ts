@@ -360,7 +360,14 @@ describe('sessions.append fallito nella ripesca finale di /steer non è più sil
     // errore (lo dice già il commento su `scriviCorrezioniInSessione`).
     expect(result.stopped).toBe('answered');
     expect(result.text).toContain('fatto subito');
-    expect(result.text).toContain('non sono riuscito a salvare');
+    // L'avviso non lo compone piu' `finish` con una costante di modulo: da
+    // ADR-0054 §2 (emendamento 03/09c) c'e' un solo punto che svuota la porta
+    // dello `/steer`, l'imbuto in `drive`, ed e' lui a parlare. La promessa
+    // misurata qui non cambia — l'owner deve **sapere** che la correzione e'
+    // andata persa — e in piu' l'imbuto gliela **ricita**, cosi' puo'
+    // rimandarla senza riscriverla a memoria.
+    expect(result.text).toContain('riuscito a salvare la correzione');
+    expect(result.text).toContain(CORREZIONE);
   });
 
   it('senza guasto, la stessa correzione residua non lascia traccia nella risposta (il caso normale)', async () => {
