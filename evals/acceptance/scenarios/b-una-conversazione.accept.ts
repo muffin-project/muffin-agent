@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, it } from 'vitest';
 import { install, until, type Install } from '../harness.js';
 import type { RecordedRequest, ScriptedReply } from '../provider.js';
+import { scenario } from '../scenario.js';
 import { privateMessage, startFakeTelegram, type FakeTelegram } from '../telegram.js';
 
 /**
@@ -299,8 +300,14 @@ describe('acceptance · i gruppi restano separati · attraverso il percorso di p
    * produzione non attraversa. Qui il gruppo entra dal gateway vero, come un
    * gruppo, e si guarda **quali file di sessione esistono**.
    */
-  it(
-    'un messaggio di gruppo non finisce nella conversazione dell owner',
+  // Registrato come **F2** nel manifest (`manifest.ts`) invece che lasciato
+  // fuori inventario: la riga DAY-1 F2 rivendica esattamente questa prova, e
+  // `scenario()` prende il titolo da li' — una sola stringa, non una copia
+  // che potrebbe divergere fra "quello che il rapporto si aspetta" e "come
+  // si chiama davvero il test" (stessa ragione del commento in cima a
+  // `manifest.ts`).
+  scenario(
+    'F2',
     async () => {
       const tg = await startFakeTelegram();
       const inst = await install({
