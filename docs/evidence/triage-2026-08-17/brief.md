@@ -1,6 +1,6 @@
 # Brief comune — triage evidence-only verso DAY-1 (17/08)
 
-Sei un worker di TRIAGE (sola lettura sul codice; scrivi UN file). Repo `muffin-agent`, base: `origin/dev` (usa il worktree `/Users/giusto/dev/muffin-agent/.claude/worktrees/loop-orchestration-workflow-e20bef`, che è su `dev` con `node_modules`; NON spostarlo, NON scrivere lì salvo il file che ti assegno; puoi eseguire test con `npx vitest run <file>` e l'harness `npm run test:acceptance` / `npx tsx evals/acceptance/report.ts`). Nessun provider a pagamento. Mai dev/main. **Tempo ≤ 60 minuti.**
+Sei un worker di TRIAGE (sola lettura sul codice; scrivi UN file). Repo `muffin-agent`, base: `origin/dev` (usa il worktree `/home/user/dev/muffin-agent/.claude/worktrees/loop-orchestration-workflow-e20bef`, che è su `dev` con `node_modules`; NON spostarlo, NON scrivere lì salvo il file che ti assegno; puoi eseguire test con `npx vitest run <file>` e l'harness `npm run test:acceptance` / `npx tsx evals/acceptance/report.ts`). Nessun provider a pagamento. Mai dev/main. **Tempo ≤ 60 minuti.**
 
 Direttiva owner (17/08): «corsa di convergenza verso DAY-1 READY, non altre iterazioni esplorative. UNA ricostruzione completa e un triage evidence-only di tutti i BLOCKER, tutti i ?, i finding audit ancora aperti e le proprietà trasversali. Classifica ogni voce SOLO come READY / BLOCKER / OUT / INVALIDATED, con evidenza attuale. Non trattare i ? come task distinti per forza: riusa acceptance journey e fault-chain integrate quando una prova può validare più proprietà.»
 
