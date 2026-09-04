@@ -103,6 +103,30 @@ export type DecisionRequest = {
   args: Readonly<Record<string, unknown>>;
   /** Recomputed at every call, never frozen for the turn (blueprint 03 §2). */
   taint: TrustTier;
+  /**
+   * Questi byte erano **già** nel turno prima che il modello li scrivesse?
+   *
+   * La domanda che `taint` da solo non sa fare, e la ragione per cui il gate
+   * sui parametri si comportava come un guasto. `hasParams` non distingue una
+   * query che il modello si è **inventato** — il canale di esfiltrazione — da
+   * un URL che ha **copiato** da un risultato di ricerca, e nella ricerca vera
+   * quasi ogni link ha un `?`. Risultato misurato: dopo la prima pagina letta,
+   * seguire un link chiedeva un'approvazione ogni volta, per sempre.
+   *
+   * L'argomento di sicurezza è che questo *non* è una comodità. Non si può
+   * esfiltrare un dato attraverso una stringa che esisteva già **prima** che
+   * il dato fosse visto: chi ha scritto quella pagina non conosceva il
+   * segreto quando l'ha scritta. Se il modello aggiunge un byte suo, la
+   * stringa non è più citata e il cancello torna.
+   *
+   * Contano solo gli **ingressi** — il messaggio della persona e i risultati
+   * dei tool — mai il testo che il modello ha prodotto: altrimenti basterebbe
+   * scrivere l'URL in un turno e «citarlo» in quello dopo per lavarlo.
+   *
+   * `undefined` significa «chi chiama non lo sa», ed è trattato come `false`:
+   * un chiamante che non misura la provenienza non guadagna niente.
+   */
+  quoted?: boolean | undefined;
 };
 
 export type RiskClass = 'low' | 'medium' | 'high';
@@ -283,4 +307,11 @@ export interface PermissionSnapshot {
    */
   invalidate(): void;
   check(capability: CapabilityId, resource: Resource, args: Readonly<Record<string, unknown>>): Decision;
+  /**
+   * Registra byte che sono **entrati** nel turno: il messaggio della persona,
+   * il risultato di un tool. Mai l'output del modello — vedi
+   * `DecisionRequest.quoted` per perché quella distinzione è il meccanismo e
+   * non un dettaglio.
+   */
+  recordInput(text: string): void;
 }

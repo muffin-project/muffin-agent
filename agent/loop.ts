@@ -1732,6 +1732,10 @@ async function guidaIlTurno(
   // `resumeTurn` §2. On a fresh turn the two agree by construction, which is
   // exactly why deriving it looked safe for as long as nothing resumed.
   const snapshot = makeSnapshot(deps.decide, input.principal, input.tenant, record.taint);
+  // La prima cosa entrata in questo turno: le parole della persona. Un URL che
+  // l'owner incolla lui stesso non è «scelto dal modello», ed è il caso più
+  // ovvio che il gate sui parametri trattava come tale.
+  snapshot.recordInput(input.text);
   const turnClass = tenantClass(input.principal, input.tenant);
 
   /**
@@ -3749,6 +3753,12 @@ async function runTool(
     // guarantee — a backend-known secret never reaches this variable in the
     // first place, because no tool handler ever calls `readSecret`.
     const safeContent = redactText(outcome.content);
+    // La provenienza, dalla stessa stringa che finisce nel prompt e nei tre
+    // sink: se il modello vedrà questi byte, allora sono entrati nel turno, e
+    // un URL copiato da qui non è un URL composto (`DecisionRequest.quoted`).
+    // Da `safeContent` e non da `outcome.content`, così ciò che è stato
+    // oscurato non può essere «citato» da una richiesta successiva.
+    snapshot.recordInput(safeContent);
     /**
      * The failure twin of `giaFatte`, read **before** this call's own row is
      * written — same reason: the count has to mean "how many times before",
@@ -4214,6 +4224,28 @@ function makeSnapshot(
    */
   let intrinsic: TrustTier = from;
   const cache = new Map<string, ReturnType<Decide>>();
+  /**
+   * Tutto ciò che è **entrato** in questo turno: il messaggio della persona e
+   * i risultati dei tool. Mai l'output del modello — vedi
+   * `DecisionRequest.quoted`: se il testo che il modello produce contasse
+   * come provenienza, basterebbe scrivere un URL e citarlo un passo dopo per
+   * lavarlo, e il criterio non proverebbe piu' niente.
+   *
+   * Un array e non un `Set`: la domanda non e' «e' uguale a» ma «e' contenuto
+   * in», perche' un URL vive dentro una pagina, non da solo.
+   */
+  const ingressi: string[] = [];
+  /**
+   * Questi byte erano gia' qui prima che il modello scrivesse?
+   *
+   * Confronto letterale, di proposito. Una versione tollerante (normalizzare
+   * l'escaping, riordinare i parametri) allargherebbe la finestra a cose che
+   * *somigliano* a un ingresso, ed e' esattamente il posto dove un aggressore
+   * lavora. Un falso negativo qui costa un'approvazione in piu'; un falso
+   * positivo aprirebbe il canale che questo gate esiste per chiudere.
+   */
+  const citato = (valore: string): boolean =>
+    valore !== '' && ingressi.some((testo) => testo.includes(valore));
   return {
     principal,
     tenant,
@@ -4235,11 +4267,18 @@ function makeSnapshot(
       // must not reach it.
     },
     invalidate: () => cache.clear(),
+    recordInput(text) {
+      if (text !== '') ingressi.push(text);
+    },
     check(capability, resource, args) {
-      const key = `${capability}:${resource.kind}:${'value' in resource ? resource.value : ''}:${taint}`;
+      const quoted = 'value' in resource && citato(resource.value);
+      // `quoted` sta nella chiave: la provenienza puo' solo crescere durante
+      // un turno, quindi una decisione presa quando quei byte non erano
+      // ancora arrivati non deve sopravvivere al momento in cui arrivano.
+      const key = `${capability}:${resource.kind}:${'value' in resource ? resource.value : ''}:${taint}:${quoted}`;
       const cached = cache.get(key);
       if (cached) return cached;
-      const decision = decide({ principal, tenant, capability, resource, args, taint });
+      const decision = decide({ principal, tenant, capability, resource, args, taint, quoted });
       cache.set(key, decision);
       return decision;
     },
