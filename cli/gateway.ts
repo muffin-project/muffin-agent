@@ -1003,6 +1003,14 @@ export async function cmdGatewayRun(
   } catch (error) {
     mcpLines = [`mcp: ${error instanceof Error ? error.message : String(error)}`];
   }
+  // `runtime.bootLines` below was rendered inside `buildRuntime`, before
+  // `attachSendFile`/`attachMcp` just above registered anything — the tool
+  // most at risk of a silent cut (`send_file`, DAY-1 B14) is exactly the one
+  // that could never appear in that frozen array. `recomputeExposure` redoes
+  // `profile.maxToolsExposed`'s cut against what is registered *now* and
+  // returns the lines to print alongside it, rather than trusting a snapshot
+  // that predates this gateway's own two `attach*` calls.
+  const exposureLines = runtime.recomputeExposure();
 
   // Only when there is something to decide — see `reviewBootLine`.
   const review = reviewBootLine(runtime.db, CONSOLIDATION_TENANT);
@@ -1012,6 +1020,7 @@ export async function cmdGatewayRun(
       surfaces.lines.map((l) => `${l}\n`).join('') +
       mcpLines.map((l) => `${l}\n`).join('') +
       runtime.bootLines.map((l) => `${l}\n`).join('') +
+      exposureLines.map((l) => `! ${l}\n`).join('') +
       // Said here too, and not only in the REPL: under a supervisor this line
       // is the journal entry that proves the memory lane exists in the process
       // that has no terminal — which is the one that was never going to be
