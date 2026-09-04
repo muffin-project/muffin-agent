@@ -1023,9 +1023,14 @@ export class TurnStore {
    * — cioe proprio il caso in cui il giro a vuoto e piu lungo.
    *
    * Solo le chiamate **finite bene**: una fallita e ripetuta e un'altra classe
-   * di guasto, e nel corpus dogfood del 30/08/2026 non se ne trova nemmeno una
-   * (10 errori in tutto lo store, zero ripetuti). Non si costruisce un
-   * rilevatore per un guasto che nessuno ha visto.
+   * di guasto — vedi `identicalFailuresDone` qui sotto, che la copre.
+   *
+   * Quel taglio di portata risaliva al corpus dogfood del 30/08/2026 (10
+   * errori in tutto lo store, zero ripetuti) ed e stato riverificato il
+   * 04/09/2026 su uno snapshot dal vivo: nel frattempo il corpus e cresciuto
+   * e una coppia e comparsa (`fs_read` sullo stesso path, stesso errore «no
+   * such file», sei minuti e tre altre chiamate di distanza). Il buco era
+   * reale; non lo si vede piu perche `identicalFailuresDone` adesso lo copre.
    */
   identicalCallsDone(turnId: string, tool: string, args: unknown): number {
     const row = this.db
@@ -1035,6 +1040,47 @@ export class TurnStore {
            AND ended_at IS NOT NULL AND is_error = 0`,
       )
       .get(turnId, tool, argsDigest(args)) as { n: number };
+    return row.n;
+  }
+
+  /**
+   * Quante volte questo turno ha **gia** fatto questa identica chiamata, con
+   * lo stesso esito **cattivo**.
+   *
+   * La meta gemella di `identicalCallsDone`, con due differenze deliberate.
+   *
+   * **Nessun gate su `progress: 'idempotent_read'`.** Quel campo esiste per
+   * distinguere, sul successo, una capability per cui rifare la stessa
+   * chiamata e informazione ripetuta (`fs_read`) da una per cui e effetto o
+   * tempo che passa (`fs_write`, `sys.wait` — vedi `core/policy/types.ts`).
+   * Sul fallimento quella distinzione non si applica: un effetto fallito non
+   * e mai atterrato, e un'attesa fallita non ha mai fatto passare il tempo
+   * che l'avrebbe resa progresso. Un fallimento identico e privo di
+   * progresso qualunque sia la capability, quindi qui non serve — e non
+   * sarebbe corretto ereditare — l'opt-in che serve al caso riuscito.
+   *
+   * **Confronta anche il contenuto, non solo tool+argomenti.** Due chiamate
+   * con lo stesso `args_digest` possono fallire per muri diversi — un
+   * timeout e un permesso negato hanno la stessa chiamata e risposte
+   * diverse, e la seconda e informazione nuova, non un giro a vuoto. Senza
+   * questo confronto il rilevatore avviserebbe anche li, insegnando al
+   * modello a ignorare l'avviso — il guasto che questo repo nomina per
+   * primo. Il confronto usa `content` cosi come e gia scritto da
+   * `endToolCall` (redatto a monte in `agent/loop.ts`): nessuna seconda
+   * nozione di «stesso errore», nessuna colonna nuova.
+   *
+   * Stesso motivo di durevolezza di `identicalCallsDone`: legge le righe che
+   * il turno scrive comunque, quindi sopravvive alla ripresa senza un
+   * contatore in memoria che si azzererebbe a meta del giro a vuoto.
+   */
+  identicalFailuresDone(turnId: string, tool: string, args: unknown, content: string): number {
+    const row = this.db
+      .prepare(
+        `SELECT count(*) AS n FROM turn_tool_calls
+         WHERE turn_id = ? AND tool = ? AND args_digest = ? AND content = ?
+           AND ended_at IS NOT NULL AND is_error = 1`,
+      )
+      .get(turnId, tool, argsDigest(args), content) as { n: number };
     return row.n;
   }
 
