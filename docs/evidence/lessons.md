@@ -1369,3 +1369,32 @@ the lowest layer is to run the map test where the docs trigger already runs
 `docs/collegamenti`; it now runs `docs/derived/architecture-map` too. Not a
 new workflow, not a wider `paths` filter: the job that owns "docs changed"
 also owns "docs anchors still resolve".
+
+## A gate that fails without an assertion inside teaches nothing **(this build)**
+
+`collegamenti.yml` ran `npx vitest run docs/derived/architecture-map` after
+that directory had been deleted. Vitest exits 1 on «no test files found», so
+the job was red on every PR — and nobody saw it, because GitHub's checks were
+stopped for billing and the local gate was not being used as a gate. A red
+that carries no assertion is worse than a failing test: it says nothing, and
+people learn to ignore it.
+
+**Defence:** `scripts/workflow-percorsi.test.ts` — every filter a workflow
+hands to `vitest run` must match at least one versioned test file. «Match a
+test», not «the path exists»: a vitest positional argument is a substring
+filter (`docs/collegamenti` was never a directory), found by running the guard
+before reasoning about it.
+
+## A verdict taken on a contended host is not a verdict **(this build)**
+
+`ci:local` reported `verifica FAIL` on a commit whose unit suite was green on
+the same machine minutes earlier and green again in the next container run.
+In that window the host was also running a full acceptance suite and a unit
+suite that took 170s instead of 55s. The wrong explanation was accepted first
+(a branch switch under the run — impossible, `ci-local.ts` pins `rev-parse
+HEAD` and clones once). The probable one is contention, and it is not proven.
+
+**Rule:** one gate run at a time per host, and a verdict from a window with
+another suite running is discarded, not interpreted. **Defence to add:**
+`ci-local.ts` records load (or the presence of another vitest/container) and
+marks the verdict as taken under contention.
