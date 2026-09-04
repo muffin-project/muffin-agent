@@ -286,6 +286,19 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'C4',
     'recall: a superseded fact is invisible to search until --history asks for it',
   ),
+  // New (slice/c5-memory-why). C5's row named the exact gap: `muffin memory
+  // why` already answered "why do you believe that" for the owner at a
+  // terminal (`cli/memory.ts`'s `cmdMemoryWhy`), but the model had no
+  // equivalent door — `agent/tools/memory.ts` registered only
+  // `memorySearchSpec`. Proves the new `memory_why` tool end to end: a real
+  // scripted turn asks for it by text (no fact id in hand, the ordinary
+  // case, since `memory_search`'s rendered block never prints one), and the
+  // model's own next request carries the planted episode's connector, trust
+  // tier and original sentence — not a paraphrase.
+  verde(
+    'C5',
+    'provenance: a real turn calling the memory_why tool gets back the planted episode\'s connector, tier and original sentence',
+  ),
   // New (slice/journey-memoria). C6's row asked for the temporal graph
   // itself: `factsAsOf`/`nearestFactTo` (`core/memory/store.ts`) and `asOf`
   // as the one parameter both the CLI and the `memory_search` tool take,
