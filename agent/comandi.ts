@@ -1,5 +1,6 @@
 import { loadConfig, saveConfig, type Config } from '../core/config/config.js';
 import { loadProfiles, selectProfile } from './profiles/profile.js';
+import { describeSettableKnobs, formatSetOutcome, setConfigKnob } from '../core/config/settings.js';
 
 /**
  * I comandi che una persona può dare a Muffin, in un posto solo.
@@ -94,6 +95,7 @@ export const COMANDI: readonly { nome: string; aiuto: string; soloTerminale?: bo
   { nome: 'spend', aiuto: 'quanto hai speso questo mese e oggi' },
   { nome: 'think', aiuto: 'ragionamento: on | off | reset (senza argomenti lo mostra)' },
   { nome: 'model', aiuto: 'modello: [main|light|embed] <slug>, --list, o niente per vederli' },
+  { nome: 'config', aiuto: 'set <chiave> <valore> — solo le poche manopole scrivibili da qui' },
   { nome: 'debug', aiuto: 'giri, token e millisecondi: on | off (da solo, inverte)' },
   { nome: 'stop', aiuto: 'interrompe il turno in corso; quelli in coda restano' },
   { nome: 'steer', aiuto: '<testo> — corregge il turno in corso, al prossimo passo' },
@@ -145,17 +147,20 @@ export async function eseguiComando(riga: string, ctx: ContestoComandi): Promise
       if (ctx.controlli === undefined) return { testo: 'qui non c\'è un turno da correggere.' };
       if (arg === '') return { testo: '/steer <cosa cambiare> — senza testo non so cosa correggere.' };
       return {
-        // Onesto in tutti e tre i casi, perche' nel momento in cui si
-        // risponde non si sa quale sara' vero. La correzione entra al
-        // prossimo confine di giro **se** un giro arriva, e una risposta
-        // senza tool e' un giro solo. Se invece il turno si sospende non e'
-        // finito: viaggia nei suoi messaggi persistiti e la vede al risveglio
-        // (ADR-0054 §2, emendamento 03/09b). E se il turno finisce davvero,
-        // `agent/loop.ts` la scrive in conversazione (emendamento 03/09), da
-        // dove la prende il turno dopo. Dire soltanto «dal prossimo passo»
-        // prometterebbe il caso che non c'e' stato.
+        // Onesto per **ogni** esito che il codice produce, perche' nel momento
+        // in cui si risponde non si sa quale sara' vero. La correzione entra al
+        // prossimo confine di giro se un giro arriva, e una risposta senza tool
+        // e' un giro solo. Se il turno si sospende non e' finito: viaggia nei
+        // suoi messaggi persistiti e la vede al risveglio (emendamento 03/09b).
+        // E se il turno esce in qualunque altro modo — risposta, budget, cap,
+        // errore, e anche il rethrow di un provider che ha esaurito i
+        // ritentativi — l'imbuto di `agent/loop.ts` la scrive in conversazione
+        // (emendamento 03/09c), da dove la prende il turno dopo; se **quella**
+        // scrittura fallisce, il turno stesso lo dice nel suo testo. L'unica
+        // strada che la butta e' `/stop`, ed e' l'owner ad averlo chiesto:
+        // quindi la conferma la nomina, invece di prometterla e basta.
         testo: ctx.controlli.steer(arg)
-          ? 'ricevuto: lo uso al prossimo passo di questo turno, o al suo risveglio se intanto si mette ad aspettare; se finisce prima, resta in conversazione per il turno dopo.'
+          ? 'ricevuto: lo uso al prossimo passo di questo turno, o al suo risveglio se si mette ad aspettare; comunque finisca — anche male — resta in conversazione per il turno dopo, o te lo dico, e solo /stop lo butta.'
           : 'nessun turno in corso: dimmelo come messaggio normale.',
       };
     }
@@ -211,6 +216,24 @@ export async function eseguiComando(riga: string, ctx: ContestoComandi): Promise
       await ctx.model(arg === '' ? [] : arg.split(/\s+/), (l) => righe.push(l));
       ctx.onConfig?.(loadConfig(ctx.home));
       return { testo: `${righe.join('\n')}\n(il modello nuovo vale dal prossimo avvio)`.trim() };
+    }
+
+    // La stessa funzione di `muffin config set` (`core/config/settings.ts`):
+    // un comando come questo non crea mai un turno — il connector lo
+    // intercetta prima di chiamare il modello — quindi non c'è bisogno che
+    // passi dal kernel per tenere il modello fuori da questa manopola.
+    case 'config': {
+      const [sub, chiave, ...resto] = arg.split(/\s+/).filter((s) => s !== '');
+      if (sub !== 'set' || chiave === undefined || resto.length === 0) {
+        return {
+          testo:
+            '/config set <chiave> <valore> — le chiavi che si possono cambiare da qui:\n' +
+            describeSettableKnobs(),
+        };
+      }
+      const outcome = setConfigKnob(ctx.home, chiave, resto.join(' '));
+      if (outcome.ok) ctx.onConfig?.(loadConfig(ctx.home));
+      return { testo: formatSetOutcome(outcome) };
     }
 
     default:

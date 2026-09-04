@@ -1,5 +1,6 @@
 import { CommitmentLane, type CommitmentEvent } from '../core/scheduler/commitments.js';
 import { FireLog } from '../core/scheduler/firelog.js';
+import { SendLock } from '../core/scheduler/sendlock.js';
 import type { Deliver } from '../core/scheduler/scheduler.js';
 import type { Runtime } from './runtime.js';
 
@@ -53,6 +54,11 @@ export function makeCommitmentLane(
   deliver: Deliver,
   opts: CommitmentLaneOptions,
 ): CommitmentLane {
+  // The same row `muffin observe --send` locks (`cli/observe.ts`), on the
+  // process's one database connection — constructed once here, not per pass,
+  // for the same reason `FireLog` below is: it is cheap either way, but one
+  // instance is one fewer thing to convince yourself agree.
+  const sendLock = new SendLock(runtime.db);
   return new CommitmentLane({
     todos: runtime.deps.todos,
     tenant: COMMITMENT_TENANT,
@@ -60,6 +66,10 @@ export function makeCommitmentLane(
     // commitment and an absence can never collide and neither can speak twice.
     fires: new FireLog(runtime.db),
     deliver,
+    // Closes the check-then-act race `SendLock`'s own docstring names for
+    // `muffin observe --send` — measured 2026-09-04 to be equally real here:
+    // see `CommitmentLaneDeps.acquireSendLock`'s docstring in commitments.ts.
+    acquireSendLock: (now) => sendLock.acquire(now),
     // Read per pass, from disk, not from the boot snapshot — `Runtime.defaultChannel`
     // carries the measurement. The remedy this lane prints is a command another
     // process runs; a captured value made it inert.

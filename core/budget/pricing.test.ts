@@ -44,3 +44,39 @@ describe('pricing', () => {
     expect(costUsd('anthropic/claude-haiku-4.5', { inputTokens: 1e6, outputTokens: 1e6 })).toBeCloseTo(6, 5);
   });
 });
+
+/**
+ * Re-verified 2026-09-04 against `openrouter.ai` (the actual billing surface
+ * for every non-Anthropic model, `agent/providers/openai-compat.ts`) — see
+ * `pricing.ts`'s own docstring on `PRICES` for the per-family sources. Five
+ * of the eight patterns were undercharging the family's own flagship/highest
+ * priced host by 3×–20×, which is wrong in the direction this file's header
+ * calls dangerous: an underpriced model lets an unattended budget run past
+ * its real dollar cost before the cap notices.
+ *
+ * One assertion per family, each pinned to the exact new floor measured —
+ * not "greater than the old value" (a mutation that halved the new price
+ * would still pass that) but the specific number the research found, so a
+ * silent drift back toward the old underestimate goes red here.
+ */
+describe('le cinque famiglie open-weight misurate 2026-09-04', () => {
+  it('gpt-oss: $0.35/$0.75 (Cerebras, il host più caro per gpt-oss-120b)', () => {
+    expect(costUsd('openai/gpt-oss-120b', { inputTokens: 1e6, outputTokens: 1e6 })).toBeCloseTo(1.1, 5);
+  });
+
+  it('qwen3: $2/$6 (qwen3.8-max, il più caro della linea qwen3.x)', () => {
+    expect(costUsd('qwen/qwen3.8-max', { inputTokens: 1e6, outputTokens: 1e6 })).toBeCloseTo(8, 5);
+  });
+
+  it('gemma: $0.15/$0.6 (Gemma 4 26B-A4B su Google Vertex)', () => {
+    expect(costUsd('google/gemma-4-26b-a4b-it', { inputTokens: 1e6, outputTokens: 1e6 })).toBeCloseTo(0.75, 5);
+  });
+
+  it('glm: $1.4/$4.4 (GLM-5.3, il flagship — non la variante flash)', () => {
+    expect(costUsd('z-ai/glm-5.3', { inputTokens: 1e6, outputTokens: 1e6 })).toBeCloseTo(5.8, 5);
+  });
+
+  it('deepseek: $1.12/$3.35 (deepseek-v4-pro, non la tariffa "flash")', () => {
+    expect(costUsd('deepseek/deepseek-v4-pro-0813', { inputTokens: 1e6, outputTokens: 1e6 })).toBeCloseTo(4.47, 5);
+  });
+});

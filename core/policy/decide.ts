@@ -67,6 +67,12 @@ export type PolicyContext = {
    * the type so tests can build a minimal context — but ABSENT means nothing
    * is allowed, not everything: a runtime that forgets to wire it gets a
    * kernel that asks for every URL, which is the failure mode you notice.
+   *
+   * Consulted only for a `url` resource — reaching a host to **act**. A
+   * `url-read` resource (`sys.http`, GET-only) never calls this: ADR-0066
+   * decided that fetching a public page is not the same authority as acting
+   * on one, and left it open. This predicate's absence is still fail-closed
+   * for the capability it does govern.
    */
   egressAllowed?: (host: string) => boolean;
 };
@@ -172,61 +178,67 @@ export function createDecide(ctx: PolicyContext): Decide {
       return { effect: 'deny', code: 'budget_exhausted' };
     }
 
-    // Egress: a URL-holding capability answers to the allowlist in the root of
-    // trust (03 §3, riga egress). On the list → the declared risk class speaks.
-    // Off the list → the owner in a clean context gets asked, everyone and
-    // everything else is refused: a tainted turn must not be able to *nominate*
-    // the exfiltration endpoint, which is exactly what ask-then-approve would
-    // let a poisoned context do at 2am.
-    if (decl.resourceKind === 'url') {
-      // Fail closed when the caller did not hand us the URL it declared.
-      //
-      // This branch used to be `resourceKind === 'url' && resource.kind ===
-      // 'url'`, so a caller that produced anything else skipped the allowlist
-      // entirely and fell through to the risk class — which for a medium,
-      // reversible capability is `allow`. That is not hypothetical: the loop
-      // derived the resource from argument *names*, checking `path` before
-      // `url`, so `http_get({url, path:'x'})` produced a path resource and
-      // fetched an off-allowlist host for a taint-2 group member. Measured:
-      // deny without the extra key, allow with it.
-      //
-      // A gate whose precondition is supplied by its caller is not a gate. Now
-      // a caller that forgets produces a refusal, loudly, instead of an
-      // unguarded allow — and the next URL-holding capability (`outward.send`,
-      // declared with `policyArgs: ['to']`) cannot ship with a silent no-op.
-      if (resource.kind !== 'url') {
+    // Egress. ADR-0066 splits what used to be one branch into two authorities
+    // over the same shape of resource: `url` is reaching a host to **act** —
+    // write, execute, send — and answers to the allowlist in the root of trust
+    // (03 §3, riga egress) exactly as before. `url-read` is fetching bytes from
+    // a public page — `sys.http` is GET-only by construction — and reading is
+    // not the same authority as acting: the owner decided the allowlist should
+    // not gate it at all. Both still answer to `paramsMaxTaint` below, because
+    // the bytes the model puts in a query string are exactly as chosen either
+    // way, and both still fail closed on a resource mismatch, for the same
+    // reason the single branch used to: a caller that produced anything else
+    // used to skip the gate entirely and fall through to the risk class —
+    // measured as `http_get({url, path:'x'})` fetching an off-allowlist host
+    // for a taint-2 group member, deny without the extra key, allow with it.
+    if (decl.resourceKind === 'url' || decl.resourceKind === 'url-read') {
+      if (resource.kind !== decl.resourceKind) {
         return {
           effect: 'deny',
           code: 'resource_denied',
-          detail: `${capability} declares a url resource but received ${resource.kind} — refusing rather than skipping the allowlist`,
+          detail: `${capability} declares a ${decl.resourceKind} resource but received ${resource.kind} — refusing rather than skipping the gate`,
         };
       }
       const host = hostOf(resource.value);
       if (host === null) {
         return { effect: 'deny', code: 'resource_denied', detail: `unparseable url` };
       }
-      const allowed = ctx.egressAllowed?.(host) ?? false;
-      if (!allowed) {
-        if (isOwnerPrincipal(principal) && taint <= 1) {
-          return ask(`egress fuori allowlist: ${host}`);
+      // The allowlist speaks only for `url` — reaching a host to act on it.
+      // Off the list, the owner in a clean context gets asked, everyone and
+      // everything else is refused: a tainted turn must not be able to
+      // *nominate* the exfiltration endpoint, which is exactly what
+      // ask-then-approve would let a poisoned context do at 2am. `url-read`
+      // never reaches this: there is no list to be off of, by decision — the
+      // SSRF floor under it (`core/net/egress.ts#isForbiddenAddress`, DNS-
+      // resolved, enforced by the tool on every hop) is what stands between an
+      // open read and the machine's own network.
+      if (decl.resourceKind === 'url') {
+        const allowed = ctx.egressAllowed?.(host) ?? false;
+        if (!allowed) {
+          if (isOwnerPrincipal(principal) && taint <= 1) {
+            return ask(`egress fuori allowlist: ${host}`);
+          }
+          return {
+            effect: 'deny',
+            code: 'resource_denied',
+            detail: `${host} is not in the egress allowlist (taint ${taint})`,
+          };
         }
-        return {
-          effect: 'deny',
-          code: 'resource_denied',
-          detail: `${host} is not in the egress allowlist (taint ${taint})`,
-        };
       }
-      // The allowlist only ever looked at `host`, so a turn that had read
-      // tier-2+ content could still put those bytes in the query string or
-      // fragment of an allowlisted URL and nothing here noticed (audit
-      // 2026-08-16, P04-1). A clean host is not the same claim as a clean
-      // request: the model chose everything after it.
+      // The allowlist (or, for `url-read`, the open destination) only ever
+      // says something about the HOST, so a turn that had read tier-2+
+      // content could still put those bytes in the query string or fragment
+      // and nothing here noticed (audit 2026-08-16, P04-1). A clean
+      // destination is not the same claim as a clean request: the model chose
+      // everything after it.
       if (hasParams(resource.value)) {
         const gated = gateParams(
           principal,
           taint,
           ctx.matrix.paramsMaxTaint,
-          `egress con parametri verso host allowlisted: ${resource.value}`,
+          decl.resourceKind === 'url-read'
+            ? `lettura con parametri scelti dal contenuto: ${resource.value}`
+            : `egress con parametri verso host allowlisted: ${resource.value}`,
         );
         if (gated) return gated;
       }
