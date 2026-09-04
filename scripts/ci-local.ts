@@ -463,9 +463,48 @@ function spawnSyncCapture(cmd: string, args: string[]): { status: number | null;
 interface RunResult {
   readonly status: number | null;
   readonly timedOut: boolean;
+  readonly failedStep: string | null;
 }
 
-function runContainer(opts: {
+/**
+ * Quale passo del job e' caduto, letto dallo stderr del container mentre scorre.
+ *
+ * Sta qui, isolato e senza I/O, per una ragione precisa: `runContainer` apre
+ * processi e scrive su `process.stderr`, quindi una regola scritta la' dentro
+ * si puo' solo leggere, mai far fallire. E questa regola ha gia' un modo ovvio
+ * di sbagliare in silenzio — il marcatore arriva a pezzi, perche' `data` non
+ * taglia sui confini di riga: un chunk puo' finire a meta' di
+ * `!!! STEP FA` e il resto arrivare nel successivo. Cercare dentro il singolo
+ * chunk perde quel caso e non lo dice; il verdetto tornerebbe a essere un
+ * numero senza che nessun test cambi colore.
+ *
+ * Quindi: si accumula fino a `\n`, si guarda solo le righe intere, e si tiene
+ * **l'ultima** — un job puo' avere piu' passi rossi, e quello che ha fermato
+ * il job e' l'ultimo che ha parlato.
+ */
+export function creaScannerPassi(): { consuma: (testo: string) => void; passoCaduto: () => string | null } {
+  const MARCATORE = /^.*!!! STEP FAILED: (.+?)\s*$/;
+  let resto = '';
+  let ultimo: string | null = null;
+  return {
+    consuma(testo: string): void {
+      resto += testo;
+      const righe = resto.split('\n');
+      resto = righe.pop() ?? '';
+      for (const riga of righe) {
+        const m = MARCATORE.exec(riga);
+        if (m?.[1] !== undefined) ultimo = m[1];
+      }
+    },
+    passoCaduto(): string | null {
+      // La riga finale puo' non avere il newline: il container e' morto li'.
+      const m = MARCATORE.exec(resto);
+      return m?.[1] !== undefined ? m[1] : ultimo;
+    },
+  };
+}
+
+export function runContainer(opts: {
   image: string;
   dockerArgs: readonly string[];
   containerName: string;
@@ -501,7 +540,18 @@ function runContainer(opts: {
       '-c',
       launcher,
     ];
-    const child = spawn('docker', args, { stdio: ['ignore', 'inherit', 'inherit'] });
+    // stderr passa da `inherit` a `pipe` per una ragione sola: il verdetto deve
+    // poter dire **quale passo** e' caduto. `buildJobScript` stampa gia
+    // `!!! STEP FAILED: <nome>` la' dentro (vedi `echoLine` sopra); senza
+    // leggerlo la riga finale resta «container exited 1», e chi la legge deve
+    // rifare la corsa per sapere cos'e' successo. Ritrasmesso a valle intatto:
+    // chi guardava la corsa scorrere continua a vederla identica.
+    const scanner = creaScannerPassi();
+    const child = spawn('docker', args, { stdio: ['ignore', 'inherit', 'pipe'] });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      process.stderr.write(chunk);
+      scanner.consuma(chunk.toString('utf8'));
+    });
     let timedOut = false;
     const timer =
       opts.timeoutMs === null
@@ -516,11 +566,11 @@ function runContainer(opts: {
           }, opts.timeoutMs);
     child.on('exit', (code) => {
       if (timer) clearTimeout(timer);
-      resolvePromise({ status: code, timedOut });
+      resolvePromise({ status: code, timedOut, failedStep: scanner.passoCaduto() });
     });
     child.on('error', () => {
       if (timer) clearTimeout(timer);
-      resolvePromise({ status: -1, timedOut });
+      resolvePromise({ status: -1, timedOut, failedStep: scanner.passoCaduto() });
     });
   });
 }
@@ -626,7 +676,10 @@ async function main(): Promise<void> {
         console.log(`\nPASS (${job.jobId})`);
         verdicts.push({ job, verdict: { kind: 'pass' } });
       } else {
-        const reason = `container exited ${result.status}`;
+        const reason =
+          result.failedStep === null
+            ? `container exited ${result.status}`
+            : `step "${result.failedStep}" failed (container exited ${result.status})`;
         console.log(`\nFAIL (${job.jobId}): ${reason}`);
         verdicts.push({ job, verdict: { kind: 'fail', reason } });
       }
