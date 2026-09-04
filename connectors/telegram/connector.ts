@@ -286,6 +286,71 @@ export type Incoming = {
  */
 const CONTROLLO: ReadonlySet<string> = new Set(['stop', 'steer', 'pause', 'resume']);
 
+/**
+ * Un update di gruppo apre un turno, oppure no.
+ *
+ * In privata **sempre**: chi scrive al bot in privata sta parlando col bot, e
+ * non c'e' niente da indovinare.
+ *
+ * In un gruppo no, e la ragione non e' il costo: un agente che risponde a ogni
+ * riga di una conversazione fra persone e' rumore, e il rumore in una stanza
+ * condivisa lo vedono tutti. Fino al 04/09/2026 `drain()` apriva un turno vero
+ * per ogni update — modello, memoria, tool — e a proteggere l'owner era solo
+ * la *privacy mode* di Telegram, accesa per default, che a un bot non-admin
+ * non consegna nemmeno una menzione nuda.
+ *
+ * L'owner ha deciso di **spegnerla**, per far vedere a Muffin la conversazione
+ * e non solo cio' che gli e' indirizzato. Quella decisione sposta il filtro
+ * qui dentro, e da quel momento questa funzione e' l'unica cosa fra un gruppo
+ * attivo e un turno per messaggio. Va quindi installata **prima** che la
+ * privacy mode venga spenta, mai dopo.
+ *
+ * Tre criteri, tutti deterministici, nessuna euristica sul testo e nessun
+ * modello — vedi ADR-0063: un gate che «capisce» se il messaggio meritava
+ * risposta e' la cosa che stiamo cercando di evitare, non la soluzione.
+ * L'intervento spontaneo e' un meccanismo separato, che decide su una raffica
+ * e non su un messaggio, e non passa di qui.
+ */
+export function apreUnTurno(i: {
+  readonly isPrivate: boolean;
+  readonly testo: string | undefined;
+  readonly citato?: { readonly da: 'muffin' | 'chi-scrive' | 'altri' } | undefined;
+  readonly meUsername?: string | undefined;
+  /** L'update porta un allegato (documento, media, posizione). */
+  readonly haAllegato?: boolean | undefined;
+}): boolean {
+  if (i.isPrivate) return true;
+  // 0. Un allegato apre sempre, e non e' un'eccezione di comodo.
+  //
+  //    Una riga di conversazione fra persone non e' rivolta a Muffin; un file
+  //    lasciato in una stanza lo e' abbastanza spesso, ed e' un atto
+  //    deliberato con un costo, non rumore. Ma la ragione decisiva e' un'altra:
+  //    scartare l'update qui significa che il documento non viene **indicizzato**
+  //    — e «i dati che entrano non si perdono in silenzio» e' una regola dura di
+  //    questo progetto, che ha gia' pagato «zero documenti indicizzati, da
+  //    sempre» per un filtro che sembrava innocuo.
+  //
+  //    Il costo e' un turno per file. Se un giorno diventa troppo, la risposta
+  //    non e' scartare: e' indicizzare senza aprire un turno — il «ricordare
+  //    senza rispondere» che resta il seguito aperto di ADR-0063.
+  if (i.haAllegato === true) return true;
+  const testo = i.testo ?? '';
+  // 1. Un comando. `/x` e `/x@nomebot` — la seconda forma e' quella che
+  //    Telegram consegna quando in un gruppo ci sono piu' bot.
+  if (nomeComando(testo) !== '') return true;
+  // 2. Una reply a un messaggio di Muffin. Il dato c'e' gia': `citazione()`
+  //    calcola `da: 'muffin'` per etichettare la citazione, e la stessa
+  //    condizione risponde a «stanno parlando con me».
+  if (i.citato?.da === 'muffin') return true;
+  // 3. Una menzione del bot. Confronto letterale sullo username, senza
+  //    distinzione di maiuscole: Telegram garantisce che lo username sia
+  //    unico e stabile, quindi non serve altro. Il confine di parola evita
+  //    che `@muffinbot2` risvegli `@muffinbot`.
+  const u = i.meUsername;
+  if (u !== undefined && u !== '' && new RegExp(`@${u}(?![A-Za-z0-9_])`, 'i').test(testo)) return true;
+  return false;
+}
+
 function nomeComando(testo: string): string {
   return /^\/([a-z]+)/i.exec(testo.trim())?.[1]?.toLowerCase() ?? '';
 }
@@ -640,6 +705,8 @@ export class TelegramConnector {
    * Telegram: `citazione` la legge come «non lo so», che è il ramo che recinta.
    */
   private meId: number | undefined;
+  /** Lo username del bot, per riconoscere una menzione in un gruppo (`apreUnTurno`). */
+  private meUsername: string | undefined;
   /**
    * Da quando dura il 409 in corso, o `null` se non ce n'e' uno.
    *
@@ -798,6 +865,7 @@ export class TelegramConnector {
       }
       if (shouldStop()) return;
       this.meId = me.id;
+      this.meUsername = me.username;
       this.deps.salute?.connessa('telegram', new Date(this.now()));
       log(`telegram: connesso come @${me.username ?? me.id}`);
       await this.publishCommands(log);
@@ -1305,6 +1373,22 @@ export class TelegramConnector {
       if (!incoming) {
         // Nothing to do with it, and saying so is better than leaving it pending
         // for ever: a queue that never empties hides the ones that matter.
+        this.markProcessedQuietly(stored.updateId, log);
+        continue;
+      }
+
+      // Il gate di gruppo (ADR-0063). Marcato elaborato, non lasciato pendente:
+      // un update che non apre un turno non lo aprira' mai, e una coda che non
+      // si svuota nasconde quelli che contano.
+      if (
+        !apreUnTurno({
+          isPrivate: incoming.isPrivate,
+          testo: 'text' in incoming ? incoming.text : undefined,
+          citato: incoming.citato,
+          haAllegato: 'attachment' in incoming || 'posizione' in incoming,
+          meUsername: this.meUsername,
+        })
+      ) {
         this.markProcessedQuietly(stored.updateId, log);
         continue;
       }
