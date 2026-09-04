@@ -174,6 +174,49 @@ describe('taintForIds — the batch read agent/context/history-taint.ts needs', 
   });
 });
 
+describe('markUndone / undoneTraceIds — D11, muffin undo\'s other half', () => {
+  const conUnaChiamataFinita = (s: TurnStore, turnId: string, callId = 'w1') => {
+    s.create(spec({ id: turnId }));
+    s.startToolCall(turnId, { callId, tool: 'fs_write', capability: 'fs.write', rerunnable: false, args: {} });
+    s.endToolCall(turnId, callId, { content: 'scritto', isError: false, tier: 0 });
+  };
+
+  it('un turno con una chiamata marcata compare in undoneTraceIds', () => {
+    const s = store();
+    conUnaChiamataFinita(s, 'turn-1');
+    expect(s.undoneTraceIds(['turn-1'])).toEqual(new Set());
+    s.markUndone('turn-1', ['w1']);
+    expect(s.undoneTraceIds(['turn-1'])).toEqual(new Set(['turn-1']));
+  });
+
+  it('un turno mai marcato non compare, anche se ha chiamate finite', () => {
+    const s = store();
+    conUnaChiamataFinita(s, 'turn-1');
+    conUnaChiamataFinita(s, 'turn-2', 'w2');
+    s.markUndone('turn-1', ['w1']);
+    expect(s.undoneTraceIds(['turn-1', 'turn-2'])).toEqual(new Set(['turn-1']));
+  });
+
+  it('markUndone su una chiamata mai iniziata non scrive nulla e non lancia', () => {
+    const s = store();
+    s.create(spec({ id: 'turn-1' }));
+    expect(() => s.markUndone('turn-1', ['mai-esistita'])).not.toThrow();
+    expect(s.undoneTraceIds(['turn-1'])).toEqual(new Set());
+  });
+
+  it('undoneTraceIds su un array vuoto è un insieme vuoto, senza query', () => {
+    const s = store();
+    expect(s.undoneTraceIds([])).toEqual(new Set());
+  });
+
+  it('content resta quello del tool: markUndone non lo riscrive', () => {
+    const s = store();
+    conUnaChiamataFinita(s, 'turn-1');
+    s.markUndone('turn-1', ['w1']);
+    expect(s.recordedOutcomes('turn-1').get('w1')?.content).toBe('scritto');
+  });
+});
+
 describe('reclaiming what a dead process was holding', () => {
   it('marks the row interrupted and names the calls that may have landed', () => {
     const s = store(() => false);

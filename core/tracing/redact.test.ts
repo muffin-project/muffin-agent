@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { redactAttributes, redactText, redactValue } from './redact.js';
+import { isSensitiveResourceName, redactAttributes, redactText, redactValue, scrubResourceEchoes } from './redact.js';
 
 /**
  * The threat model's §8 commitment — *"Secrets: mai nel repo, **mai in chiaro
@@ -231,5 +231,76 @@ describe('trace redaction — the marker format', () => {
 
   it('reports the length of a non-string secret rather than dropping it', () => {
     expect(redactAttributes({ token: 12345 })['token']).toBe('«redacted:5»');
+  });
+});
+
+describe('trace redaction — a resource whose own name says secret (isSensitiveResourceName)', () => {
+  const mustFlag = [
+    'segreto.txt',
+    '/home/owner/vault/segreto.txt',
+    'credenziali.json',
+    'password.txt',
+    './secrets/api.key',
+    'https://example.com/secret-token',
+    '/home/owner/.ssh/id_rsa_key',
+  ];
+
+  for (const name of mustFlag) {
+    it(`flags "${name}"`, () => {
+      expect(isSensitiveResourceName(name)).toBe(true);
+    });
+  }
+
+  const mustNotFlag = [
+    'appunti.md',
+    'notes.txt',
+    'keynote.pptx',
+    'keyboard-shortcuts.md',
+    'tokenizer.py',
+    '/home/owner/docs/report.pdf',
+    'https://example.com/blog/post',
+  ];
+
+  for (const name of mustNotFlag) {
+    it(`does not flag "${name}"`, () => {
+      expect(isSensitiveResourceName(name)).toBe(false);
+    });
+  }
+});
+
+describe('trace redaction — verbatim echoes of a sensitive resource (scrubResourceEchoes)', () => {
+  it('redacts the whole content when it is echoed whole', () => {
+    const content = 'MUFFIN-EVAL-SEGRETO-9f31';
+    const text = `ecco quello che ho trovato: ${content}`;
+    const out = scrubResourceEchoes(text, [content]);
+    expect(out).not.toContain(content);
+    expect(out).toContain('«redacted:');
+  });
+
+  it('redacts a line lifted out of a longer file, not only a whole-file copy', () => {
+    const content = 'riga innocua\nMUFFIN-EVAL-SEGRETO-9f31 e altro testo di contorno\nriga finale';
+    const text = 'come richiesto: MUFFIN-EVAL-SEGRETO-9f31 e altro testo di contorno';
+    const out = scrubResourceEchoes(text, [content]);
+    expect(out).not.toContain('MUFFIN-EVAL-SEGRETO-9f31 e altro testo di contorno');
+  });
+
+  it('leaves text alone when nothing from the sensitive content was echoed', () => {
+    const content = 'MUFFIN-EVAL-SEGRETO-9f31';
+    const text = 'ecco il riassunto delle tue note, niente di sensibile qui.';
+    expect(scrubResourceEchoes(text, [content])).toBe(text);
+  });
+
+  it('does not redact short, ordinary substrings under the length threshold', () => {
+    // A one-line file whose content is a common short word: flagging every
+    // occurrence of "ok" anywhere in the reply would be a false-positive
+    // machine, so the floor only bites above MIN_ECHO_LENGTH.
+    const content = 'ok';
+    const text = 'ok, fatto.';
+    expect(scrubResourceEchoes(text, [content])).toBe(text);
+  });
+
+  it('is a no-op with an empty ledger — the common case, every turn that read nothing secret-named', () => {
+    const text = 'risposta normale, senza nessuna lettura sensibile in questo turno.';
+    expect(scrubResourceEchoes(text, [])).toBe(text);
   });
 });
