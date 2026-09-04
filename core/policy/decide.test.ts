@@ -368,16 +368,38 @@ describe('params gate — model-chosen bytes above a ceiling, whichever tool car
     expect(d.effect).toBe('ask');
   });
 
-  it('sys.search: the query text is fine at taint <= paramsMaxTaint', () => {
-    expect(kernel()(queryReq(owner, 'host', 'previsioni domani', 0))).toMatchObject({ effect: 'allow' });
-    expect(kernel()(queryReq(owner, 'host', 'previsioni domani', 1))).toMatchObject({ effect: 'allow' });
-    expect(kernel()(queryReq(owner, 'host', 'previsioni domani', 2))).toMatchObject({ effect: 'allow' });
+  it('sys.search: la ricerca non chiede a nessun taint — `searchMaxTaint` e\' 3 (ADR-0072)', () => {
+    for (const taint of [0, 1, 2, 3] as const) {
+      expect(kernel()(queryReq(owner, 'host', 'previsioni domani', taint))).toMatchObject({ effect: 'allow' });
+    }
   });
 
-  it('sys.search: past the ceiling asks the owner and shows the query', () => {
-    const d = kernel()(queryReq(owner, 'host', 'MUFFIN-SECRET-sk-live-9f3a7c21', 3));
+  it("sys.search: il taint 3 e\' il caso che e\' cambiato — cerca, leggi, cerca ancora", () => {
+    // Il giro piu\' normale che esista portava il turno a 3 dopo la prima
+    // pagina, quindi il *secondo* `web_search` chiedeva sempre. Su un
+    // processo headless quell'`ask` e\' un `exit 3`: un'approvazione che
+    // nessuno puo\' dare e\' un divieto travestito.
+    expect(kernel()(queryReq(owner, 'host', 'MUFFIN-SECRET-sk-live-9f3a7c21', 3))).toMatchObject({
+      effect: 'allow',
+    });
+  });
+
+  it('ma il numero e\' ancora un cancello: rimetterlo giu\' lo riaccende', () => {
+    // La meta\' che impedisce a questa fetta di essere «il gate e\' stato
+    // cancellato»: `searchMaxTaint` e\' una manopola che un `rot/policy.json`
+    // sigillato puo\' abbassare, non una riga rimossa.
+    const stretto = kernel({ matrix: { ...POLICY_FLOOR, searchMaxTaint: 2 } });
+    const d = stretto(queryReq(owner, 'host', 'MUFFIN-SECRET-sk-live-9f3a7c21', 3));
     expect(d.effect).toBe('ask');
     if (d.effect === 'ask') expect(d.ask.prompt).toContain('MUFFIN-SECRET-sk-live-9f3a7c21');
+  });
+
+  it("e i parametri di un URL restano a 2: sono i due numeri separati da ADR-0072", () => {
+    // Il confine che regge il rischio: il *dove* di una ricerca e\' una
+    // costante allowlisted, quello di un URL lo sceglie il modello.
+    expect(withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/c?q=SEGRETO', 3)).effect).toBe(
+      'ask',
+    );
   });
 
   it('sys.search: a group member never reaches the params gate at all — host-only refuses first', () => {
