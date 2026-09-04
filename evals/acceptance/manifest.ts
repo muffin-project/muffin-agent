@@ -401,6 +401,12 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'security: a turn that read untrusted content may still read a page (ADR-0066) but cannot leave with ' +
       'bytes it composed (ADR-0071), and a later clean turn in the same session still carries the inherited taint',
   ),
+  // La riga era READY **senza** scenario e il secondo gate del rapporto la
+  // bocciava, correttamente: due test in `runtime-wiring.test.ts` provano il
+  // meccanismo, non che il binario lo raggiunga. D3 copre il disco; questo
+  // copre l'altra meta' della domanda della riga — «e un ripristino che disfa
+  // anche il turno?».
+  verde('D11', 'checkpoint: `muffin undo` marks the turn and the memory episode, not only the disk'),
   verde('E1', 'budget: a turn that would cross the monthly cap is stopped before it spends'),
   verde('E2', 'cost: the REPL answers how much has been spent this month, in dollars'),
   // Extended (slice/journey-lifecycle): still narrower than E3's own full
