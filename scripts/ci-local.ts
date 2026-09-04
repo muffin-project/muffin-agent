@@ -1,0 +1,583 @@
+#!/usr/bin/env node
+/**
+ * A local replacement for GitHub Actions, while the billing gate keeps it off.
+ *
+ * The owner's constraint decides the whole design: this file must **derive**
+ * its steps from `.github/workflows/*.yml`, never repeat them. Two definitions
+ * of the same CI that can drift apart is exactly the failure this repository
+ * keeps re-learning (a rule in prose next to one in code, and the code wins
+ * silently) — see AGENTS.md's closing section. So there is no hand-written
+ * list of "run npm ci, then tsc, then vitest" anywhere below: every `run:`
+ * command executed here comes from parsing the workflow file at run time, and
+ * every `uses:` step this runner does not know how to emulate stops the whole
+ * thing, naming it, instead of being skipped.
+ *
+ * ## What gets emulated, and what does not
+ *
+ * `uses: actions/checkout@*` and `uses: actions/setup-node@*` have no `run:`
+ * to execute — GitHub's hosted runner performs them natively. Locally they
+ * become: copy the repository into the container (`checkout`), install the
+ * requested Node version from NodeSource (`setup-node`). Any other `uses:`
+ * step is unknown and makes {@link loadJobs} throw, naming the action.
+ *
+ * `${{ runner.temp }}` is the only GitHub Actions expression these workflows
+ * use inside a `run:` or step `env:` (verified 2026-09-04 by grep). It
+ * resolves to a real directory created inside the container before the job
+ * runs. Any other `${{ ... }}` expression left in a `run:`/`env:` string is a
+ * bug in this runner, not something to hand to a shell unresolved — it makes
+ * {@link resolveExpressions} throw, naming the expression and where it was
+ * found.
+ *
+ * ## The hard part: bwrap inside Docker on macOS
+ *
+ * `ci.yml` and `accettazione.yml` install an AppArmor profile on the runner so
+ * `bwrap` can create a user namespace. That step cannot succeed inside *any*
+ * Docker container — there is no kernel AppArmor interface to write to
+ * (`/etc/apparmor.d` exists, `apparmor_parser` has nothing to talk to) —
+ * measured here on 2026-09-04 with `--privileged` too: `apparmor_parser -r`
+ * still exits 1 ("Cache read/write disabled: interface file missing"). This is
+ * not the containment guarantee those two jobs actually depend on, so its
+ * failure does not fail the job: {@link buildJobScript} recognizes any step
+ * whose script mentions `apparmor_parser` and reports its exit status loudly
+ * without setting `JOB_FAILED`. What *does* decide containment is whether
+ * `bwrap` can mount `/proc` inside a nested namespace, and that is a Docker
+ * privilege question, not a workflow step:
+ *
+ *   bwrap --unshare-all --dev-bind / / true                OK, everywhere
+ *   bwrap --unshare-all --proc /proc --dev-bind / / true   needs --privileged
+ *                                                           on Docker Desktop
+ *
+ * measured 2026-09-04, root and non-root alike. `chooseDockerPrivileges`
+ * reuses that exact probe — the same lesson `evals/acceptance/gate-linux.sh`
+ * applied for PR #389's Linux leg (read there, not copied: that script is bash
+ * and lives on an open PR this work must not touch; this is an independent
+ * TypeScript implementation of the same idea, named here rather than silently
+ * duplicated). It tries with no extra privileges first (what the GitHub
+ * runner actually has), then `--privileged`, and if neither lets `bwrap` mount
+ * `/proc`, the job is reported NOT EXECUTABLE — never green, and never a red
+ * that blames Muffin's code for a Docker limitation.
+ *
+ * Jobs that never install `bubblewrap` (`collegamenti`, `strumenti`) skip this
+ * probe entirely — they do not pay for `--privileged` or the wait, per the
+ * brief.
+ *
+ * ## Usage
+ *
+ *   npm run ci:local
+ *   MUFFIN_CI_LOCAL_KEEP=1 npm run ci:local     # keep the scratch clone
+ *
+ * Every command below is `git rev-parse HEAD`'s committed state, copied into
+ * the container — like `actions/checkout`, uncommitted changes do not run.
+ */
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { load as yamlLoad } from 'js-yaml';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface StepSpec {
+  readonly name: string;
+  /** Present for a `uses:` step; mutually exclusive with `run`. */
+  readonly uses?: string;
+  readonly usesWith?: Readonly<Record<string, string>>;
+  /** Present for a `run:` step. */
+  readonly run?: string;
+  readonly env?: Readonly<Record<string, string>>;
+  /** Only `'always()'` is understood; anything else makes derivation throw. */
+  readonly if?: string;
+}
+
+export interface JobSpec {
+  readonly workflowFile: string;
+  readonly jobId: string;
+  readonly runsOn: string;
+  readonly timeoutMinutes: number | null;
+  readonly steps: readonly StepSpec[];
+}
+
+export interface PrivilegeChoice {
+  readonly dockerArgs: readonly string[];
+  readonly mode: string;
+}
+
+export interface PrivilegeUnavailable {
+  readonly unavailable: true;
+  readonly reason: string;
+}
+
+// ---------------------------------------------------------------------------
+// `${{ ... }}` resolution — see the header note on why an unresolved
+// expression must throw instead of reaching a shell.
+// ---------------------------------------------------------------------------
+
+const EXPRESSION = /\$\{\{\s*([^}]+?)\s*\}\}/g;
+
+const KNOWN_EXPRESSIONS: Readonly<Record<string, string>> = {
+  'runner.temp': '/runner-temp',
+};
+
+export function resolveExpressions(text: string, where: string): string {
+  return text.replace(EXPRESSION, (_whole, rawKey: string) => {
+    const key = rawKey.trim();
+    const value = KNOWN_EXPRESSIONS[key];
+    if (value === undefined) {
+      throw new Error(
+        `unresolved GitHub Actions expression '\${{ ${key} }}' in ${where}. ` +
+          `This runner only knows: ${Object.keys(KNOWN_EXPRESSIONS).join(', ')}. ` +
+          `Teach resolveExpressions() about it instead of letting it reach a shell unresolved.`,
+      );
+    }
+    return value;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Deriving jobs from the workflow files
+// ---------------------------------------------------------------------------
+
+const KNOWN_USES = [/^actions\/checkout@/, /^actions\/setup-node@/];
+
+interface RawStep {
+  name?: string;
+  uses?: string;
+  with?: Record<string, string>;
+  run?: string;
+  env?: Record<string, string>;
+  if?: string;
+}
+
+interface RawJob {
+  'runs-on'?: string;
+  'timeout-minutes'?: number;
+  steps?: RawStep[];
+}
+
+interface RawWorkflow {
+  jobs?: Record<string, RawJob>;
+}
+
+function stepLabel(raw: RawStep): string {
+  if (raw.name) return raw.name;
+  if (raw.uses) return raw.uses;
+  const firstLine = raw.run?.split('\n')[0]?.trim();
+  return firstLine || '(unnamed step)';
+}
+
+/** Turns one job of one parsed workflow into the ordered steps this runner will execute. */
+export function deriveJob(workflowFile: string, jobId: string, raw: RawJob): JobSpec {
+  const steps: StepSpec[] = [];
+  for (const rawStep of raw.steps ?? []) {
+    const name = stepLabel(rawStep);
+    const where = `${workflowFile}#${jobId} → ${name}`;
+
+    if (rawStep.uses) {
+      const known = KNOWN_USES.some((re) => re.test(rawStep.uses as string));
+      if (!known) {
+        throw new Error(
+          `${where}: 'uses: ${rawStep.uses}' is not an action this runner knows how to emulate ` +
+            `(known: actions/checkout, actions/setup-node). Stopping instead of skipping it silently.`,
+        );
+      }
+      steps.push({ name, uses: rawStep.uses, usesWith: rawStep.with ?? {} });
+      continue;
+    }
+
+    if (rawStep.run !== undefined) {
+      if (rawStep.if !== undefined && rawStep.if !== 'always()') {
+        throw new Error(
+          `${where}: 'if: ${rawStep.if}' is not understood — only 'always()' is. ` +
+            `Stopping instead of guessing what the condition means.`,
+        );
+      }
+      const run = resolveExpressions(rawStep.run, where);
+      const env: Record<string, string> = {};
+      for (const [key, rawValue] of Object.entries(rawStep.env ?? {})) {
+        env[key] = resolveExpressions(String(rawValue), `${where} (env ${key})`);
+      }
+      steps.push({ name, run, env, ...(rawStep.if ? { if: rawStep.if } : {}) });
+      continue;
+    }
+
+    throw new Error(`${where}: step has neither 'run' nor 'uses': ${JSON.stringify(rawStep)}`);
+  }
+
+  return {
+    workflowFile,
+    jobId,
+    runsOn: raw['runs-on'] ?? '(unspecified)',
+    timeoutMinutes: raw['timeout-minutes'] ?? null,
+    steps,
+  };
+}
+
+/** Reads every `.github/workflows/*.yml` and derives every job in each. */
+export function loadJobs(workflowsDir: string): JobSpec[] {
+  const jobs: JobSpec[] = [];
+  const files = readdirSync(workflowsDir)
+    .filter((f) => f.endsWith('.yml') || f.endsWith('.yaml'))
+    .sort();
+  for (const file of files) {
+    const text = readFileSync(join(workflowsDir, file), 'utf8');
+    const doc = yamlLoad(text) as RawWorkflow;
+    for (const [jobId, rawJob] of Object.entries(doc.jobs ?? {})) {
+      jobs.push(deriveJob(file, jobId, rawJob));
+    }
+  }
+  return jobs;
+}
+
+/** A job needs the sandbox probe iff one of its own steps installs bubblewrap. */
+export function needsSandboxProbe(job: JobSpec): boolean {
+  return job.steps.some((s) => s.run !== undefined && /\bbwrap\b|bubblewrap/.test(s.run));
+}
+
+/** The Node version `actions/setup-node` was asked to install, derived from the job's own step. */
+export function requestedNodeVersion(job: JobSpec): string {
+  const step = job.steps.find((s) => s.uses?.startsWith('actions/setup-node@'));
+  const version = step?.usesWith?.['node-version'];
+  if (!version) {
+    throw new Error(`${job.workflowFile}#${job.jobId}: no 'actions/setup-node' step with a 'node-version' found.`);
+  }
+  return version;
+}
+
+// ---------------------------------------------------------------------------
+// Building the in-container script — pure text generation, no I/O, so it is
+// testable without Docker. Every dynamic string (step names, messages) is
+// base64-encoded before being embedded, so nothing a workflow author writes
+// in a step `name:` can break the generated shell.
+// ---------------------------------------------------------------------------
+
+function b64(text: string): string {
+  return Buffer.from(text, 'utf8').toString('base64');
+}
+
+/** `printf '%s\n' "$(echo <b64> | base64 -d)"` — prints arbitrary text without quoting hazards. */
+function echoLine(text: string): string {
+  return `printf '%s\\n' "$(printf '%s' '${b64(text)}' | base64 -d)"`;
+}
+
+function shSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+const APPARMOR_NOTE =
+  'note: this step failed inside Docker — expected. Loading an AppArmor profile requires a kernel ' +
+  'interface no container has (see the header comment of scripts/ci-local.ts). The real containment ' +
+  'guarantee is decided below by the bwrap /proc-mount probe, not by this step; it does not fail the job.';
+
+/**
+ * Builds the bash script that runs one job's `run:` steps, in order, inside
+ * the already-bootstrapped container (repository at `/app`, Node and sudo
+ * installed). Mirrors GitHub's own step semantics closely enough for these
+ * four workflows: a failed step fails the job and skips the steps after it,
+ * except steps marked `if: always()`, which run regardless.
+ */
+export function buildJobScript(job: JobSpec, opts: { runnerTemp: string; appDir?: string }): string {
+  const appDir = opts.appDir ?? '/app';
+  const lines: string[] = [];
+  lines.push('set +e');
+  lines.push('JOB_FAILED=0');
+  lines.push(`mkdir -p ${shSingleQuote(opts.runnerTemp)}`);
+  lines.push(`cd ${shSingleQuote(appDir)}`);
+
+  for (const step of job.steps) {
+    if (step.uses) {
+      lines.push(echoLine(`--- uses: ${step.uses} (${step.name}) — emulated during bootstrap, not re-run here ---`));
+      continue;
+    }
+    const run = step.run ?? '';
+    const isAlways = step.if === 'always()';
+    const tolerant = /apparmor_parser/.test(run);
+
+    lines.push(`if [ "$JOB_FAILED" = "1" ] && [ ${isAlways ? 1 : 0} -ne 1 ]; then`);
+    lines.push(`  ${echoLine(`--- SKIPPED (a previous step failed): ${step.name} ---`)}`);
+    lines.push('else');
+    lines.push(`  ${echoLine(`--- STEP: ${step.name} ---`)}`);
+    lines.push(`  printf '%s' '${b64(run)}' | base64 -d > /tmp/muffin-step.sh`);
+    for (const [key, value] of Object.entries(step.env ?? {})) {
+      lines.push(`  export ${key}=${shSingleQuote(value)}`);
+    }
+    lines.push('  ( bash -eo pipefail /tmp/muffin-step.sh )');
+    lines.push('  RC=$?');
+    if (tolerant) {
+      lines.push('  if [ "$RC" != "0" ]; then');
+      lines.push(`    ${echoLine(`${step.name}: exited non-zero. ${APPARMOR_NOTE}`)} >&2`);
+      lines.push('    echo "    exit=$RC" >&2');
+      lines.push('  fi');
+    } else {
+      lines.push('  if [ "$RC" != "0" ]; then');
+      lines.push(`    ${echoLine(`!!! STEP FAILED: ${step.name}`)} >&2`);
+      lines.push('    echo "    exit=$RC" >&2');
+      lines.push('    JOB_FAILED=1');
+      lines.push('  fi');
+    }
+    lines.push('fi');
+  }
+
+  lines.push('echo "===JOB_EXIT=$JOB_FAILED==="');
+  lines.push('exit "$JOB_FAILED"');
+  return lines.join('\n');
+}
+
+/**
+ * The bootstrap that stands in for the `uses:` steps: install `sudo` (every
+ * `run:` step below assumes it, like the real runner ships it preinstalled),
+ * install the requested Node version from NodeSource (`actions/setup-node`),
+ * and unpack the repository tarball into `/app` (`actions/checkout`). Runs
+ * before {@link buildJobScript}'s output, in the same container.
+ */
+export function buildBootstrapScript(nodeVersion: string): string {
+  return [
+    'set -e',
+    'export DEBIAN_FRONTEND=noninteractive',
+    echoLine('=== bootstrap: emulating uses: actions/checkout + actions/setup-node ==='),
+    'apt-get update -qq >/dev/null',
+    'apt-get install -y -qq curl ca-certificates sudo git >/dev/null',
+    `curl -fsSL https://deb.nodesource.com/setup_${nodeVersion}.x | bash - >/dev/null 2>&1`,
+    'apt-get install -y -qq nodejs >/dev/null',
+    echoLine(`node-version requested by actions/setup-node: ${nodeVersion}`),
+    'node --version',
+    'mkdir -p /app && tar xf /repo.tar -C /app',
+    echoLine('=== bootstrap done — the workflow-derived steps run below ==='),
+    'echo "===BOOTSTRAP_OK==="',
+  ].join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Docker privilege probing — see the header comment for the measurement this
+// reuses from evals/acceptance/gate-linux.sh (PR #389).
+// ---------------------------------------------------------------------------
+
+const SECURITY_OPTS = ['--security-opt', 'seccomp=unconfined', '--security-opt', 'apparmor=unconfined'];
+
+export function chooseDockerPrivileges(
+  probe: (dockerArgs: readonly string[]) => boolean,
+): PrivilegeChoice | PrivilegeUnavailable {
+  if (probe(SECURITY_OPTS)) {
+    return { dockerArgs: SECURITY_OPTS, mode: 'without extra privileges (matches the GitHub runner)' };
+  }
+  const privileged = ['--privileged', ...SECURITY_OPTS];
+  if (probe(privileged)) {
+    return {
+      dockerArgs: privileged,
+      mode:
+        'WITH --privileged: this Docker host refuses to mount /proc inside a nested namespace without it ' +
+        '(measured 2026-09-04; see evals/acceptance/gate-linux.sh, PR #389)',
+    };
+  }
+  return {
+    unavailable: true,
+    reason: 'bwrap cannot mount /proc inside a namespace on this Docker host, even with --privileged.',
+  };
+}
+
+/** The real probe: does `bwrap` mount `/proc` in a nested namespace with these extra `docker run` args? */
+function realDockerProbe(image: string): (dockerArgs: readonly string[]) => boolean {
+  return (dockerArgs) => {
+    const result = spawnSyncCapture('docker', [
+      'run',
+      '--rm',
+      ...dockerArgs,
+      image,
+      'bash',
+      '-c',
+      'command -v bwrap >/dev/null 2>&1 || (apt-get update -qq >/dev/null && apt-get install -y -qq bubblewrap >/dev/null); ' +
+        'bwrap --unshare-all --proc /proc --dev-bind / / true',
+    ]);
+    return result.status === 0;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// I/O plumbing — process spawning, tarball, container orchestration. Not
+// unit-tested (it is Docker and the filesystem); the pure functions above
+// carry the derivation logic the brief requires proof for.
+// ---------------------------------------------------------------------------
+
+function spawnSyncCapture(cmd: string, args: string[]): { status: number | null; stdout: string; stderr: string } {
+  const r = spawnSync(cmd, args, { encoding: 'utf8' });
+  return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
+interface RunResult {
+  readonly status: number | null;
+  readonly timedOut: boolean;
+}
+
+function runContainer(opts: {
+  image: string;
+  dockerArgs: readonly string[];
+  containerName: string;
+  repoTar: string;
+  scriptFile: string;
+  timeoutMs: number | null;
+}): Promise<RunResult> {
+  return new Promise((resolvePromise) => {
+    const args = [
+      'run',
+      '--rm',
+      '--name',
+      opts.containerName,
+      ...opts.dockerArgs,
+      '-v',
+      `${opts.repoTar}:/repo.tar:ro`,
+      '-v',
+      `${opts.scriptFile}:/run-job.sh:ro`,
+      opts.image,
+      'bash',
+      '/run-job.sh',
+    ];
+    const child = spawn('docker', args, { stdio: ['ignore', 'inherit', 'inherit'] });
+    let timedOut = false;
+    const timer =
+      opts.timeoutMs === null
+        ? null
+        : setTimeout(() => {
+            timedOut = true;
+            try {
+              execFileSync('docker', ['kill', opts.containerName], { stdio: 'ignore' });
+            } catch {
+              // The container may already have exited on its own; nothing to kill.
+            }
+          }, opts.timeoutMs);
+    child.on('exit', (code) => {
+      if (timer) clearTimeout(timer);
+      resolvePromise({ status: code, timedOut });
+    });
+    child.on('error', () => {
+      if (timer) clearTimeout(timer);
+      resolvePromise({ status: -1, timedOut });
+    });
+  });
+}
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = resolve(HERE, '..');
+const IMAGE = 'ubuntu:24.04';
+const RUNNER_TEMP = '/runner-temp';
+
+type JobVerdict =
+  | { readonly kind: 'pass' }
+  | { readonly kind: 'fail'; readonly reason: string }
+  | { readonly kind: 'not-executable'; readonly reason: string };
+
+async function main(): Promise<void> {
+  const workflowsDir = join(REPO_ROOT, '.github', 'workflows');
+  const jobs = loadJobs(workflowsDir);
+
+  const sha = execFileSync('git', ['-C', REPO_ROOT, 'rev-parse', 'HEAD']).toString().trim();
+  console.log(`muffin ci:local — replaces GitHub Actions while billing is off\n`);
+  console.log(`commit:       ${sha}  (uncommitted changes are not run, like actions/checkout)`);
+  console.log(`distribution: ubuntu-latest → ${IMAGE} (ubuntu-latest's current distribution; update here if it changes)`);
+  console.log(`jobs found:   ${jobs.map((j) => `${j.jobId} (${j.workflowFile})`).join(', ')}`);
+  console.log('');
+
+  const scratch = mkdtempSync(join(tmpdir(), 'muffin-ci-local-'));
+  const keep = process.env['MUFFIN_CI_LOCAL_KEEP'] === '1';
+  try {
+    console.log('=== cloning HEAD (committed state only) ===');
+    const cloneDir = join(scratch, 'src');
+    execFileSync('git', ['clone', '--quiet', '--no-hardlinks', `file://${REPO_ROOT}`, cloneDir]);
+    execFileSync('git', ['-C', cloneDir, 'checkout', '--quiet', sha]);
+    const repoTar = join(scratch, 'repo.tar');
+    execFileSync('bash', ['-c', `COPYFILE_DISABLE=1 tar cf ${shSingleQuote(repoTar)} -C ${shSingleQuote(cloneDir)} .`]);
+    console.log(`repo.tar written: ${repoTar}`);
+
+    let privilegeChoice: PrivilegeChoice | PrivilegeUnavailable | null = null;
+
+    const verdicts: { job: JobSpec; verdict: JobVerdict }[] = [];
+
+    for (const job of jobs) {
+      console.log(`\n########## job: ${job.jobId}  (${job.workflowFile}) ##########`);
+
+      if (job.runsOn !== 'ubuntu-latest') {
+        const reason = `runs-on '${job.runsOn}' — this runner only emulates ubuntu-latest`;
+        console.log(`NOT EXECUTABLE: ${reason}`);
+        verdicts.push({ job, verdict: { kind: 'not-executable', reason } });
+        continue;
+      }
+
+      let dockerArgs: readonly string[] = [];
+      if (needsSandboxProbe(job)) {
+        if (privilegeChoice === null) {
+          console.log('probing this Docker host: can bwrap mount /proc in a nested namespace?');
+          privilegeChoice = chooseDockerPrivileges(realDockerProbe(IMAGE));
+        }
+        if ('unavailable' in privilegeChoice) {
+          console.log(`NOT EXECUTABLE: ${privilegeChoice.reason}`);
+          verdicts.push({ job, verdict: { kind: 'not-executable', reason: privilegeChoice.reason } });
+          continue;
+        }
+        console.log(`privilege mode: ${privilegeChoice.mode}`);
+        dockerArgs = privilegeChoice.dockerArgs;
+      } else {
+        console.log('privilege mode: none needed (no bubblewrap in this job — no --privileged, no probe wait)');
+      }
+
+      const nodeVersion = requestedNodeVersion(job);
+      console.log(`node version:   ${nodeVersion} (from actions/setup-node)`);
+      if (job.timeoutMinutes !== null) console.log(`timeout:        ${job.timeoutMinutes} minutes (respected)`);
+
+      const script = [buildBootstrapScript(nodeVersion), buildJobScript(job, { runnerTemp: RUNNER_TEMP })].join(
+        '\n\n',
+      );
+      const scriptFile = join(scratch, `${job.jobId}.sh`);
+      writeFileSync(scriptFile, script);
+      chmodSync(scriptFile, 0o755);
+
+      const containerName = `muffin-ci-local-${job.jobId}-${Date.now()}`;
+      const timeoutMs = job.timeoutMinutes === null ? null : job.timeoutMinutes * 60_000;
+      const result = await runContainer({ image: IMAGE, dockerArgs, containerName, repoTar, scriptFile, timeoutMs });
+
+      if (result.timedOut) {
+        const reason = `exceeded timeout-minutes: ${job.timeoutMinutes}`;
+        console.log(`\nFAIL (${job.jobId}): ${reason}`);
+        verdicts.push({ job, verdict: { kind: 'fail', reason } });
+      } else if (result.status === 0) {
+        console.log(`\nPASS (${job.jobId})`);
+        verdicts.push({ job, verdict: { kind: 'pass' } });
+      } else {
+        const reason = `container exited ${result.status}`;
+        console.log(`\nFAIL (${job.jobId}): ${reason}`);
+        verdicts.push({ job, verdict: { kind: 'fail', reason } });
+      }
+    }
+
+    console.log('\n============================================================');
+    console.log(`CI-LOCAL verdict @ ${sha}`);
+    console.log(`distribution=${IMAGE} node=(per job, see above)`);
+    for (const { job, verdict } of verdicts) {
+      const label = verdict.kind === 'pass' ? 'PASS' : verdict.kind === 'fail' ? 'FAIL' : 'NOT EXECUTABLE';
+      const detail = verdict.kind === 'pass' ? '' : ` — ${verdict.reason}`;
+      console.log(`  ${label.padEnd(15)} ${job.jobId} (${job.workflowFile})${detail}`);
+    }
+    const allPass = verdicts.every((v) => v.verdict.kind === 'pass');
+    console.log('============================================================');
+    if (allPass) {
+      console.log(`CI-LOCAL PASS @ ${sha}  (${IMAGE}, ${verdicts.length} jobs, see privilege mode per job above)`);
+    } else {
+      console.log(`CI-LOCAL FAIL @ ${sha}  — not every job is green (a NOT EXECUTABLE job counts as not green)`);
+    }
+    process.exitCode = allPass ? 0 : 1;
+  } finally {
+    if (keep) {
+      console.log(`\nMUFFIN_CI_LOCAL_KEEP=1: leaving scratch dir at ${scratch}`);
+    } else {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }
+}
+
+const isMain = process.argv[1] === fileURLToPath(import.meta.url);
+if (isMain) {
+  main().catch((err) => {
+    console.error(err instanceof Error ? err.stack ?? err.message : err);
+    process.exitCode = 1;
+  });
+}
