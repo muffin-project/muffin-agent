@@ -198,9 +198,9 @@ Candidate measurements:
 ### H4 — Forgetting can improve usefulness; Muffin should complement human forgetting
 
 **External grounding: STRONG for adaptive forgetting in humans; ANALOGY for Muffin**  
-**Muffin evidence: ONE NARROW INSTANCE SHIPPED (ADR-0067), the rest UNTESTED**
+**Muffin evidence: ONE NARROW INSTANCE SHIPPED (ADR-0068), the rest UNTESTED**
 
-`docs/decisions/0067-una-richiesta-ha-un-momento-non-una-fiducia.md` is the
+`docs/decisions/0068-una-richiesta-ha-un-momento-non-una-fiducia.md` is the
 first measured case of the second bullet below, and it draws the line the
 hypothesis asks for exactly: a request-type fact (`asked_to`, `asks_to`, …) is
 canonical and stays exactly as alive as before — nothing decays, nothing is
