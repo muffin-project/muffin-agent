@@ -291,11 +291,41 @@ Egress has more than one form.
 
 ### Tool/network egress
 
-HTTP/search and other outbound capabilities are policy-gated. Host allowlisting
-alone is insufficient: model-chosen bytes in query/fragment/search parameters
-are also security-relevant. Above the configured taint threshold the owner may
-be asked only where the policy deliberately permits an ASK; other principals are
-refused.
+**Reading a URL and reaching a host to act on it are two different authorities
+(ADR-0066).** The kernel's egress branch (`core/policy/decide.ts`) distinguishes
+them by resource kind: `url-read` (`sys.http`, GET-only) is answered without
+consulting the host allowlist at all — any public host is reachable, by owner
+decision, and neither the tool nor the kernel re-checks a redirect target
+against a list that no longer applies to it. `url` (acting — writing,
+executing, sending through a model-chosen host; no shipped capability uses it
+today) still answers to `rot/egress.json` exactly as before: off the list is a
+hard refusal above low taint, never a silent skip.
+
+Both kinds answer to the same two floors, because the host is never the only
+channel that matters. First, an address floor independent of any list
+(`core/net/egress.ts#isForbiddenAddress`): loopback, RFC1918, CGNAT,
+link-local (the cloud metadata endpoint lives there) and their IPv6
+equivalents are refused on every hop, DNS-resolved before connecting, for a
+literal IP without even touching DNS. This is what stands between an open
+read and the machine's own network, and it does not depend on `rot/egress.json`
+holding anything. Second, model-chosen bytes in query/fragment/search
+parameters are security-relevant regardless of how the host was reached: above
+`paramsMaxTaint` the owner is asked and shown the exact URL, and every other
+principal is refused — never a silent pass. `rot/egress.json` remains
+load-bearing for what it still governs: `url` (acting) capabilities, and
+which third-party endpoints (e.g. a configured search backend) get registered
+at boot.
+
+**A residual is known and not closed by this split**
+(`docs/evidence/muffin-nei-gruppi-2026-09-04.md` §6.1–6.2): `paramsMaxTaint`
+is 2, and a group member's turn starts at taint 2 by construction
+(`tierOf(member)`) — not after reading something, but from the first message.
+The params gate fires only above its ceiling, so it never fires for a group
+turn that has not yet read tier-3 content, regardless of which host the
+request reaches. This predates ADR-0066 (it applied identically to an
+allowlisted host before this split) and is not this document's or that ADR's
+fix; it is named here so this section does not read as a stronger guarantee
+than the code gives for a group tenant.
 
 ### Model-provider egress
 
@@ -605,6 +635,27 @@ status lives only in `docs/work/day1/requirements-status.md`.
   declare rather than a regression. Nothing here adopts or retires the
   hypothesis: the numbers are one macOS corpus with no observable network
   exfiltration, and a material reversal would be an ADR, not an edit to this
+  paragraph.
+
+  **2026-09-04 (ADR-0066): the egress allowlist stopped being one of those
+  three guards for `sys.http`.** Reading is now open by owner decision —
+  `sys.http` declares a `url-read` resource, and `core/policy/decide.ts` never
+  consults `egressAllowed` for it — so the allowlist named above governed a
+  mechanism this document's own §7 now describes differently (below). Rerun
+  identical on the same seven scenes after that change: 4/7, 6/7, 7/7, still
+  candidate B beats the incumbent on none of them — the sentence above is
+  historically accurate for the run it describes and is not the current
+  mechanism for `sys.http`. What actually stopped the egress scene in both
+  runs was the tool's SSRF floor (the measurement sink is loopback); the
+  allowlist's absence changed nothing observable in that scene precisely
+  because the floor, not the list, was already doing the stopping. An eighth
+  scene added the same day — a hostile page instructing the *next* request to
+  carry a secret in its query string — measures the same floor holding for the
+  read/act split this ADR introduces; see ADR-0066 for the full corpus
+  before/after and the residual (`docs/evidence/muffin-nei-gruppi-2026-09-04.md`
+  §6.1) it names but does not close: `paramsMaxTaint` does not gate a group
+  turn's first message, because that principal's own floor taint already
+  equals the ceiling.
   paragraph.
 
 ## 14. What this document does not own

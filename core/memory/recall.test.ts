@@ -240,6 +240,48 @@ describe('recall', () => {
     expect(ignoto.strategies.join(' ')).not.toContain('errore di rete');
   });
 
+  /**
+   * Chiuso 2026-09-04. Prima di questa fix il `try` intorno a `search()`
+   * avvolgeva anche il `forEach` che legge la provenienza di ogni hit — un
+   * guasto dello store su UN hit interrompeva `forEach` (un `throw` dentro
+   * non continua da solo) e perdeva anche gli hit successivi mai raggiunti,
+   * e tutta la meta' semantica finiva etichettata `vector-non-disponibile`,
+   * la stessa frase che dice "l'embedder e' giu'" — falsa qui: la ricerca era
+   * riuscita, a fallire e' stata la lettura a valle di una sola riga.
+   */
+  it('un guasto nella lettura di UN hit non azzera gli altri, e non si traveste da imbedder giu', async () => {
+    const { store, vectors } = harness();
+    const buona = episode(store, 'ho parlato col commercialista per le tasse');
+    const rotta = episode(store, 'il contabile mi ha richiamato per la fattura');
+    await vectors!.index(HOST, [
+      { kind: 'episode', sourceId: buona, text: 'ho parlato col commercialista per le tasse' },
+      { kind: 'episode', sourceId: rotta, text: 'il contabile mi ha richiamato per la fattura' },
+    ], NOW);
+
+    const provenanceOfOriginale = store.provenanceOf.bind(store);
+    vi.spyOn(store, 'provenanceOf').mockImplementation((tenantId, kind, sourceId) => {
+      if (sourceId === rotta) throw new Error('riga corrotta (simulato)');
+      return provenanceOfOriginale(tenantId, kind, sourceId);
+    });
+
+    // "fiscale" non compare in nessuno dei due testi: il full text non trova
+    // niente, quindi ogni hit in `result.items` arriva solo dalla meta'
+    // semantica — la stessa che questo test misura.
+    expect(store.searchEpisodes(HOST, 'fiscale')).toHaveLength(0);
+    const result = await recall({ store, vectors }, HOST, 'fiscale');
+
+    // La ricerca vettoriale e' riuscita — non e' l'embedder ad essere giu'.
+    expect(result.strategies).toContain('vector');
+    expect(result.strategies.some((s) => s.startsWith('vector-non-disponibile'))).toBe(false);
+    // La riga guasta e' contata, non silenziosa.
+    expect(result.strategies).toContain('vector-righe-perse(1)');
+    // L'altro hit, che `provenanceOf` non ha mai toccato prima di quello
+    // guasto, e' comunque nel risultato — l'intera meta' non e' stata persa
+    // per colpa di una riga sola.
+    expect(result.items.some((i) => i.id === buona)).toBe(true);
+    expect(result.items.some((i) => i.id === rotta)).toBe(false);
+  });
+
   it('brings the facts about a named entity along', async () => {
     const { store, vectors } = harness();
     const marco = store.upsertEntity(HOST, 'Marco', 'person', NOW);
@@ -968,6 +1010,51 @@ describe('recall', () => {
     const result = await recall({ store, vectors }, HOST, 'il mio codice', { neighbours: 2 });
     expect(result.items.some((i) => i.id === mine)).toBe(true);
     expect(result.items.map((i) => i.text).join(' ')).not.toContain('altro tenant');
+  });
+});
+
+describe('recall porta `undone` (D11) e `role` sull\'item, marcati non esclusi', () => {
+  it('un episodio agente disfatto torna con undone: true e nel testo del prompt', async () => {
+    const { store, vectors } = harness();
+    const epId = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'agent', kind: 'message',
+      content: 'Fatto: ho scritto nota-vela.md.', trustTier: 0, createdAt: NOW, turnId: 'turn-1',
+    });
+    store.markEpisodesUndone(HOST, 'turn-1', '2026-08-04T11:00:00Z');
+
+    const result = await recall({ store, vectors }, HOST, 'nota-vela.md');
+    const item = result.items.find((i) => i.id === epId);
+    expect(item?.role).toBe('agent');
+    expect(item?.undone).toBe(true);
+    expect(renderForPrompt(result)).toContain('disfatto con muffin undo');
+    // Il testo resta quello vero — marcato, non riscritto.
+    expect(item?.text).toBe('Fatto: ho scritto nota-vela.md.');
+  });
+
+  it('un episodio non disfatto non porta undone', async () => {
+    const { store, vectors } = harness();
+    const epId = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'agent', kind: 'message',
+      content: 'Fatto: ho letto nota-vela.md.', trustTier: 0, createdAt: NOW, turnId: 'turn-2',
+    });
+    const result = await recall({ store, vectors }, HOST, 'nota-vela.md');
+    const item = result.items.find((i) => i.id === epId);
+    expect(item?.undone).toBeUndefined();
+  });
+
+  it('un episodio dell\'owner non è mai undone, anche col turno marcato', async () => {
+    // markEpisodesUndone filtra su role: 'agent' — questo prova il lato
+    // recall della stessa garanzia, non solo lo store.
+    const { store, vectors } = harness();
+    const epId = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
+      content: 'scrivi nota-vela.md', trustTier: 0, createdAt: NOW, turnId: 'turn-3',
+    });
+    store.markEpisodesUndone(HOST, 'turn-3', '2026-08-04T11:00:00Z');
+    const result = await recall({ store, vectors }, HOST, 'nota-vela.md');
+    const item = result.items.find((i) => i.id === epId);
+    expect(item?.role).toBe('user');
+    expect(item?.undone).toBeUndefined();
   });
 });
 

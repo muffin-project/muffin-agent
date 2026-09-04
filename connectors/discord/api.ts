@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { causaDiRete } from '../../core/net/causa.js';
+import { sleep } from '../../core/net/sleep.js';
 
 /**
  * The Discord HTTP API, over `fetch`, with no library between.
@@ -268,8 +269,4 @@ export class DiscordApi {
     }
     return buffer;
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

@@ -130,6 +130,7 @@ async function runScenario(
         // against is the same one. An owner-tightened `policy.json` would move
         // the floor silently, which is the one thing a floor may not do.
         decide: createDecide({ capabilities: decls, matrix: POLICY_FLOOR, budgetExhausted: () => budget.exhausted(), hardened: true }),
+        capabilities: decls,
         tracer: new SimpleTracer(new JsonlExporter(home)),
         sessions,
         turns,
