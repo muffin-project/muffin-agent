@@ -187,6 +187,8 @@ function recordingApi(): { api: TelegramApiLike; calls: Recorded[] } {
       throw new Error('unused in this fake');
     },
     getUpdates: async () => [],
+    getChatMember: async () => ({ status: 'member' }),
+    leaveChat: async () => true,
     sendMessage: async (chatId, html) => {
       const messageId = nextMessageId++;
       calls.push({ method: 'sendMessage', text: html, messageId });

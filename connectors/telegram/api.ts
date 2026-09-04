@@ -95,6 +95,8 @@ export interface TelegramApiLike {
   fileUrl(fileId: string): Promise<string>;
   setMyCommands(commands: { command: string; description: string }[]): Promise<boolean>;
   answerCallbackQuery(callbackQueryId: string, text?: string): Promise<boolean>;
+  getChatMember(chatId: number, userId: number): Promise<{ status: string }>;
+  leaveChat(chatId: number): Promise<boolean>;
 }
 
 export class TelegramApi implements TelegramApiLike {
@@ -251,7 +253,7 @@ export class TelegramApi implements TelegramApiLike {
     // è esplicito di proposito (vedi sopra), quindi un tipo che non si nomina
     // non viene mai consegnato — e un pulsante che nessuno riceve è un pulsante
     // che gira per sempre.
-    allowed: string[] = ['message', 'edited_message', 'callback_query'],
+    allowed: string[] = ['message', 'edited_message', 'callback_query', 'my_chat_member'],
     // Il gancio che rende il long poll interrompibile davvero: senza, uno
     // `stop()` durante l'attesa non poteva far altro che aspettare fino a
     // `REQUEST_TIMEOUT_MS` — e il database, chiuso nel frattempo, riceveva la
@@ -350,6 +352,24 @@ export class TelegramApi implements TelegramApiLike {
    * The "typing…" indicator. Self-cancels after about five seconds, so it is
    * repeated rather than set once — this is a heartbeat, not a state.
    */
+  /**
+   * Che rapporto ha questa persona con questa chat.
+   *
+   * `status` è l'unica cosa che si legge: `member`, `administrator`,
+   * `creator`, `restricted`, `left`, `kicked`. Serve a una domanda sola —
+   * «il mio umano è in questa stanza?» — e non va usata per decidere *chi
+   * è* qualcuno: l'identità la decide `identify`, e un ruolo di gruppo non è
+   * un'identità (ADR-0065).
+   */
+  getChatMember(chatId: number, userId: number): Promise<{ status: string }> {
+    return this.call<{ status: string }>('getChatMember', { chat_id: chatId, user_id: userId });
+  }
+
+  /** Esce dalla chat. Vedi `connectors/telegram/invito.ts` per quando. */
+  leaveChat(chatId: number): Promise<boolean> {
+    return this.call<boolean>('leaveChat', { chat_id: chatId });
+  }
+
   sendChatAction(chatId: number, action = 'typing', threadId?: number): Promise<boolean> {
     // Senza `message_thread_id` il «sta scrivendo…» compare in *General*
     // mentre la persona sta guardando il suo topic: il segnale c'è ed è
