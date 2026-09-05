@@ -14,6 +14,7 @@ import { TelegramConnector } from './connector.js';
 import { TelegramDeliveryStore } from './delivery.js';
 import { UpdateInbox } from './updates.js';
 import type { TurnRecord } from '../../core/turns/store.js';
+import { laneKey, type LaneRegistry } from '../shared/ingress/lane.js';
 
 /**
  * Un messaggio mentre un turno è vivo (ADR-0054), attraverso il **poller
@@ -348,27 +349,30 @@ describe('resumeStream tiene `vivi` onesto per un turno che la corsia riprende',
     try {
       const chatId = 555001;
       const record = { id: 'turno-ripreso-1', replyTo: { chatId } } as unknown as TurnRecord;
-      const vivi = (h.connector as unknown as { vivi: Map<number, { controller: AbortController; correzioni: string[] }> }).vivi;
+      // Il registro condiviso (`connectors/shared/ingress/lane.ts`), con la
+      // chiave che porta il prefisso della porta.
+      const corsie = (h.connector as unknown as { corsie: LaneRegistry }).corsie;
+      const key = laneKey('telegram', chatId);
 
-      expect(vivi.has(chatId)).toBe(false);
+      expect(corsie.isLive(key)).toBe(false);
 
       const stream = h.connector.resumeStream(record);
       expect(stream).toBeDefined();
       // La stessa leva che `handle()` passa a `runTurn` — ora passata a
       // `resumeTurn` per un turno che la corsia riprende.
-      expect(vivi.has(chatId)).toBe(true);
+      expect(corsie.isLive(key)).toBe(true);
       expect(typeof stream!.steer).toBe('function');
       expect(stream!.signal).toBeInstanceOf(AbortSignal);
 
-      // La correzione scritta nella riga di `vivi` (quella che `/steer`
-      // scriverebbe attraverso `controlli.steer` in `tryCommand`) arriva
-      // attraverso `stream.steer()`, esattamente come per un turno fresco.
-      vivi.get(chatId)!.correzioni.push('corretto durante la ripresa');
+      // La correzione scritta nella corsia (quella che `/steer` scriverebbe
+      // attraverso `controlli.steer` in `tryCommand`) arriva attraverso
+      // `stream.steer()`, esattamente come per un turno fresco.
+      expect(corsie.steer(key, 'corretto durante la ripresa')).toBe(true);
       expect(stream!.steer!()).toEqual(['corretto durante la ripresa']);
-      expect(vivi.get(chatId)!.correzioni).toEqual([]); // drenata
+      expect(corsie.get(key)!.correzioni).toEqual([]); // drenata
 
       await stream!.stop!();
-      expect(vivi.has(chatId)).toBe(false);
+      expect(corsie.isLive(key)).toBe(false);
     } finally {
       await h.chiudi();
     }
@@ -378,19 +382,19 @@ describe('resumeStream tiene `vivi` onesto per un turno che la corsia riprende',
     const h = harness([]);
     try {
       const chatId = 555002;
-      const vivi = (h.connector as unknown as { vivi: Map<number, { controller: AbortController; correzioni: string[] }> }).vivi;
-      const controllerDelTurnoFresco = new AbortController();
-      vivi.set(chatId, { controller: controllerDelTurnoFresco, correzioni: [] });
+      const corsie = (h.connector as unknown as { corsie: LaneRegistry }).corsie;
+      const key = laneKey('telegram', chatId);
+      const turnoFresco = corsie.open(key);
 
       const record = { id: 'turno-ripreso-2', replyTo: { chatId } } as unknown as TurnRecord;
       const stream = h.connector.resumeStream(record);
 
       // La leva restituita è quella del turno fresco già vivo, non una
-      // nuova — spegnerla con `stop()` non deve rimuovere la chat da `vivi`,
-      // che appartiene ancora a quel turno.
-      expect(stream!.signal).toBe(controllerDelTurnoFresco.signal);
+      // nuova — spegnerla con `stop()` non deve togliere la corsia, che
+      // appartiene ancora a quel turno.
+      expect(stream!.signal).toBe(turnoFresco.controller.signal);
       await stream!.stop!();
-      expect(vivi.has(chatId)).toBe(true);
+      expect(corsie.isLive(key)).toBe(true);
     } finally {
       await h.chiudi();
     }
