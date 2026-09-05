@@ -16,7 +16,7 @@ import {
 } from './types.js';
 
 /**
- * Slice 10 verification (`docs/evidence/ingresso-e-nucleo-2026-09-05.md` §3
+ * Slice 10 verification (`docs/evidence/ingresso-unico-e-nucleo-2026-09-05.md` §3
  * row 10). Three scenes, real wire shapes, one per port family the design
  * names: a Telegram forward, a Telegram reply-to-a-stranger, and a Discord
  * message carrying an attachment. Each is built the way `forward-taint.test.ts`
