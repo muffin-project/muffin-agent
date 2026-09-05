@@ -236,6 +236,24 @@ export async function startFakeProvider(options: FakeProviderOptions): Promise<F
         return;
       }
 
+      // `GET /models` — `agent/providers/modalita.ts#audioAccettato`, called
+      // for real the moment a voice note first reaches `cli/surface.ts`'s
+      // `voceFor` (C8): production asks the *provider* "does this model
+      // accept audio?" instead of hard-coding a model list, and that question
+      // is a real HTTP round trip to this same fake server. Left unanswered,
+      // it falls through to `record()` below with an empty body — filed as a
+      // bodyless "main" call, exactly the corruption the `/embeddings` comment
+      // above already names, and it would silently eat one of a scenario's
+      // scripted main replies. An empty `data` array is enough: `audioAccettato`
+      // finds no entry for the configured model and returns `false` — the
+      // conservative branch, and also the true answer for every model this
+      // suite configures.
+      if (req.method === 'GET' && req.url?.endsWith('/models')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ data: [] }));
+        return;
+      }
+
       // `/embeddings` — `core/memory/embed.ts`'s `OpenAICompatEmbedder`, not a
       // chat turn: no `messages`, so `record()` below would file it as a
       // bodyless "main" call and corrupt every scenario that counts

@@ -241,6 +241,25 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'B10',
     'immagini telegram: una foto vera attraversa il Bot API finto, il download e il vault, e arriva al modello come `image_url` con i byte esatti scaricati',
   ),
+  // New (slice/c8-b16-voce-e-reply): the row's own text asked for the
+  // perimeter DAY-1 actually uses (testo, file, immagini, voce, reply), not a
+  // universal envelope — the minimum already proven in unit
+  // (`connectors/telegram/forward-taint.test.ts`: `forward_origin` tier 2,
+  // typed caption/filename, `contentTaint`) had never been driven through the
+  // real binary. Proves two real turns in one chat through the fake Bot API:
+  // a forwarded message keeps `FORWARD_TIER` and its `[inoltrato]` fence; a
+  // reply-with-comment to a third party's message keeps its own `[citato]`
+  // fence and tier while the owner's own new sentence in the same message
+  // lands unfenced and outside that fence — the provenance-laundering check.
+  // Does not assert a later plain turn falls back to the owner's own tier: an
+  // earlier version of this scenario tried that and it measured the inherited
+  // tier instead, which is `agent/context/history-taint.ts`'s own invariant
+  // ("una sessione/transcript non è una lavanderia del taint") and D10's own
+  // already-tested claim, not a B16 defect — see the scenario's own comment.
+  verde(
+    'B16',
+    "ingresso tipizzato: un messaggio inoltrato e una reply-con-commento tengono il proprio recinto e tier (FORWARD_TIER), e il testo nuovo dell'owner non finisce dentro il recinto altrui",
+  ),
   // New (slice/journey-capability): B6 was BLOCKER only for a missing
   // scenario — the mechanism (`eseguiConRitentativi`, MAX_TOOL_RETRIES=2) is
   // already unit-proven (`agent/tool-retry.test.ts`) with a fake tool. What
@@ -341,6 +360,28 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   verde(
     'C7',
     "documents: a real PDF's text reaches an episode and is findable by search, and a scanned PDF with no text layer fails explicitly instead of indexing empty",
+  ),
+  // New (slice/c8-b16-voce-e-reply, issue #361): the row was BLOCKER only for
+  // a missing scenario — the mechanism (`core/audio/voce.ts#decidiVoce`,
+  // `core/audio/trascrivi.ts`, wired at `cli/surface.ts#voceFor`) was already
+  // in HEAD and unit-proven with a hand-substituted `voce` function
+  // (`connectors/telegram/voice-arrival.test.ts`). This drives the real
+  // binary instead: a real Ogg voice note through the fake Bot API's
+  // `getFile`/download route, `config.audio.{whisperBin,ffmpegBin}` pointed
+  // at two tiny fake scripts (an existing, documented, unsealed config knob —
+  // never a new "test" branch in `core/audio/`), and the fake provider's own
+  // `GET /models` answering `{data: []}` so `audioAccettato` deterministically
+  // takes the transcribe-in-house branch. Proves: the original audio bytes
+  // survive to the vault unmodified, the transcript reaches the real model
+  // request fenced as tainted data (never merged into the owner's own
+  // prose), and no `input_audio` part is ever sent — the branch actually
+  // taken is "trascritto", not "ascolta". Does not prove whisper.cpp/ffmpeg
+  // themselves transcribe correctly, which is a claim about a third-party
+  // binary the owner already spot-checked on a real installation
+  // (`trascrivi.ts`'s own docstring, 02/09/2026).
+  verde(
+    'C8',
+    'audio: a real Ogg voice note crosses the fake Bot API → vault → transcription → turn, with the original audio kept and the transcript fenced as tainted data, never the owner\'s own prose',
   ),
   verde(
     'D1',
