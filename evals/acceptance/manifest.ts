@@ -518,6 +518,10 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'F5',
     "egress params: a group member's invented query string is denied (`resource_denied`, never fetched), and the exact same URL pasted by that member is fetched for real (ADR-0071)",
   ),
+  verde(
+    'F6',
+    'remember without replying: a group message that opens no turn still becomes an episode of the group tenant — no provider call, no reply, no turn',
+  ),
 ] as const;
 
 export function entry(row: string): ScenarioEntry {

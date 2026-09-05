@@ -447,3 +447,82 @@ describe('acceptance · F5 · un link copiato non è un link composto, anche in 
     240_000,
   );
 });
+
+describe('acceptance · F6 · ricordare senza rispondere', () => {
+  /**
+   * PR #425, `ricordaSenzaRispondere` nel ramo chiuso di `drain()`
+   * (`connectors/telegram/connector.ts`). `ricordare-senza-rispondere.test.ts`
+   * prova il ramo in-process; qui il messaggio entra dal gateway vero e la
+   * prova è la riga in `episodes` del tenant del gruppo — senza turno, senza
+   * chiamata al provider, senza risposta.
+   */
+  scenario(
+    'F6',
+    async () => {
+      const tg = await startFakeTelegram();
+      const GROUP = -100_760;
+      const SOMEONE = 7601;
+      const FRASE = 'il criceto di Sara è scappato di nuovo stasera';
+      const inst = await install({ main: [{ text: 'mai chiamato' }], env: { MUFFIN_GATEWAY_TICK_MS: '200' } });
+      try {
+        const tok = await inst.muffin(['secret', 'set', 'telegram_token'], '123456:fake-f6-ricordo');
+        if (tok.code !== 0) throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
+        const enable = await inst.muffin(['surface', 'enable', 'telegram', '--api-base', tg.url]);
+        if (enable.code !== 0) throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
+
+        const gw = await inst.gateway();
+        await gw.waitFor(/muffin gateway/, 20_000);
+        try {
+          tg.deliver({
+            message: {
+              message_id: 7601,
+              date: Math.floor(Date.now() / 1000),
+              chat: { id: GROUP, type: 'supergroup', title: 'gruppo f6' },
+              from: { id: SOMEONE, is_bot: false, first_name: 'Sara' },
+              text: FRASE,
+            },
+          });
+          // La prova positiva: l'episodio compare. Il tetto è generoso perché
+          // il polling del finto Bot API è a 200ms e il drain scrive subito.
+          await until(
+            () =>
+              inst.db(
+                (db) =>
+                  (db.prepare(`SELECT COUNT(*) AS n FROM episodes WHERE tenant_id = ? AND content LIKE ?`).get(`group:telegram:${GROUP}`, `%criceto%`) as {
+                    n: number;
+                  }).n > 0,
+              ),
+            20_000,
+            200,
+          );
+        } finally {
+          await gw.stop();
+        }
+
+        const ep = inst.db(
+          (db) =>
+            db
+              .prepare(`SELECT tenant_id, connector, thread_key, role, trust_tier, turn_id FROM episodes WHERE tenant_id = ? AND content LIKE ?`)
+              .all(`group:telegram:${GROUP}`, `%criceto%`) as Array<Record<string, unknown>>,
+        );
+        if (ep.length !== 1) throw new Error(`atteso un episodio del gruppo, visti ${ep.length}: ${JSON.stringify(ep)}`);
+        const riga = ep[0]!;
+        if (riga['role'] !== 'user' || riga['turn_id'] !== null || riga['thread_key'] !== `telegram:${GROUP}` || riga['connector'] !== 'telegram') {
+          throw new Error(`l'episodio non ha la forma attesa (user, senza turno, sessione del gruppo): ${JSON.stringify(riga)}`);
+        }
+        if (inst.provider.main().length !== 0) {
+          throw new Error(`il provider è stato chiamato per un messaggio non indirizzato: ${inst.provider.main().length} volte`);
+        }
+        if (tg.messages().length !== 0) {
+          throw new Error(`un messaggio non indirizzato ha prodotto una risposta: ${JSON.stringify(tg.messages())}`);
+        }
+        const turni = inst.db((db) => db.prepare(`SELECT COUNT(*) AS n FROM turns`).get() as { n: number });
+        if (turni.n !== 0) throw new Error(`atteso nessun turno, visti ${turni.n}`);
+      } finally {
+        await inst.cleanup();
+        await tg.close();
+      }
+    },
+    240_000,
+  );
+});
