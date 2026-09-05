@@ -33,6 +33,7 @@ import {
 } from './providers/types.js';
 import { buildContext, primoMessaggio, userAudios, userImages } from './loop/context.js';
 import { denyText, initialTaint, makeSnapshot, spendeIlBudget } from './loop/permissions.js';
+import { TurnRun } from './loop/run-state.js';
 import { drainStream, edgeTrimmer, retryDelayMs } from './loop/stream.js';
 import { runTool } from './loop/tool-call.js';
 import {
@@ -886,42 +887,24 @@ async function guidaIlTurno(
     return false;
   };
 
-  const usage = { ...record.counters.usage };
-  let spentUsd = record.counters.spentUsd;
-  const cap = iterationCap(deps.profile);
   /**
-   * How far down the profile's declared cascade this turn has walked. An index,
-   * not a budget: attempt N runs strategy N.
-   */
-  let recoveriesUsed = record.counters.recoveriesUsed;
-  /** The other budget. See MAX_TRANSPORT_RETRIES for why it is not the same one. */
-  let transportRetriesLeft = record.counters.transportRetriesLeft;
-  let toolCallsMade = record.counters.toolCallsMade;
-  let nudgedForCompletion = record.counters.nudgedForCompletion;
-  let iterations = record.counters.iterations;
-  let contextBuilt = record.counters.contextBuilt;
-  const resumes =
-    record.counters.resumes +
-    (spendeIlBudget(options.resumed === true, options.wokenFromWait === true) ? 1 : 0);
-  const counters = (): TurnCounters => ({
-    iterations,
-    recoveriesUsed,
-    transportRetriesLeft,
-    toolCallsMade,
-    nudgedForCompletion,
-    usage,
-    spentUsd,
-    resumes,
-    contextBuilt,
-  });
-
-  /**
-   * The barrier `wait` arms, honoured between iterations and never inside one.
+   * Tutto cio' che cambia dentro questo turno, in un oggetto solo.
    *
-   * `null` until a handler asks. See `ToolContext.suspend` for why it is armed
-   * rather than thrown.
+   * Era una dozzina di `let` tenuti insieme dalla chiusura di questa funzione;
+   * e' un oggetto perche' le prossime fette portano `checkpoint`/`suspendHere`
+   * e il corpo di giro **fuori** da qui, e una chiusura non attraversa un
+   * confine di modulo — una firma a dieci parametri si', ed e' il posto dove
+   * si scambia un contatore con un altro senza che niente diventi rosso.
+   *
+   * Le garanzie (`resumes` in sola lettura, `counters()` che copia,
+   * `contextBuilt` che viene dai contatori e non dallo status) stanno su
+   * `agent/loop/run-state.ts`, dove il test gemello le misura.
    */
-  let barrier: WaitSpec | null = null;
+  const run = new TurnRun(record, {
+    resumed: options.resumed === true,
+    wokenFromWait: options.wokenFromWait === true,
+  });
+  const cap = iterationCap(deps.profile);
 
   /**
    * What every handler is told about the turn it is running in — built once,
@@ -941,7 +924,7 @@ async function guidaIlTurno(
     taint: () => snapshot.currentTaint(),
     intrinsicTaint: () => snapshot.intrinsicTaint(),
     suspend: (spec) => {
-      barrier = spec;
+      run.barrier = spec;
     },
     // `input.replyChannel` threaded through, per `ToolContext.replyChannel`'s
     // own docstring: the one field `send_file` (DAY-1 requirement B14) reads, absent
@@ -949,20 +932,6 @@ async function guidaIlTurno(
     replyChannel: input.replyChannel ?? null,
   };
 
-  /**
-   * The full content of every resource this turn read whose own name says
-   * "secret" (`isSensitiveResourceName` — a file path or URL, not what it
-   * contains: `segreto.txt`, `credenziali.json`, `.../id_rsa`). Accumulates
-   * for the whole turn, across every round of tool calls, the same way
-   * `snapshot`'s taint does — an echo in the answering round three calls
-   * after the read is still the same shape of leak.
-   *
-   * The sink, `scrubResourceEchoes` below at the one place `text` is
-   * finalised, strips any verbatim reproduction of these out of both the
-   * reply and the memory episode: see that call site for why it is one
-   * choke point and not one call per connector.
-   */
-  const sensitiveResourceEchoes: string[] = [];
   /**
    * Tool names whose single argument (`path` or `url`) names one resource
    * and whose successful result *is* that resource's content — as opposed to
@@ -977,10 +946,8 @@ async function guidaIlTurno(
     const args = (call.args ?? {}) as Record<string, unknown>;
     const resourceId = typeof args.path === 'string' ? args.path : typeof args.url === 'string' ? args.url : undefined;
     if (resourceId === undefined || !isSensitiveResourceName(resourceId)) return;
-    if (typeof outcome.content === 'string') sensitiveResourceEchoes.push(outcome.content);
+    if (typeof outcome.content === 'string') run.sensitiveResourceEchoes.push(outcome.content);
   };
-
-  const messages: Message[] = [...record.messages];
 
   // What this turn is shown, decided from who is speaking and where — never
   // from what they said. Filter first, cap second: `slice` on registration
@@ -998,7 +965,7 @@ async function guidaIlTurno(
   );
   turn.setAttributes({ 'muffin.context.class': turnClass, 'muffin.context.tools_exposed': exposed.length });
 
-  if (!contextBuilt) {
+  if (!run.contextBuilt) {
     /**
      * La finestra di history, letta **prima** del recall e non dopo.
      *
@@ -1157,8 +1124,8 @@ async function guidaIlTurno(
      */
     const undoneTraceIds = deps.turns.undoneTraceIds(traceIdsInWindow);
 
-    messages.length = 0;
-    messages.push(
+    run.messages.length = 0;
+    run.messages.push(
       ...buildContext(
         input,
         recalled,
@@ -1194,13 +1161,13 @@ async function guidaIlTurno(
     // preamble (one duplicated episode, absorbed by consolidation) while a
     // crash anywhere after it does not. The window is the microseconds between
     // two synchronous SQLite writes.
-    contextBuilt = true;
+    run.contextBuilt = true;
     // Lost the claim before the turn even got going — reachable only if
     // `resumeTurn`'s own `claim()` won a row a steal then immediately took
     // back, a vanishingly narrow window. `finish` re-attempts its own fenced
     // write, finds the same fencing failure, and returns the honest
     // lost-claim result without pretending anything was said.
-    if (!checkpoint()) return finish(turn, 'error', '', iterations, usage);
+    if (!checkpoint()) return finish(turn, 'error', '', run.iterations, run.usage);
   } else if (options.resumed === true) {
     // A resumed turn re-enters a transcript that a crash may have left with a
     // question and no answer. Repairing it is not optional: a `tool_use` block
@@ -1222,19 +1189,19 @@ async function guidaIlTurno(
           ? 'event'
           : 'timer';
       turn.setAttributes({ 'muffin.turn.woken_by': why });
-      messages.push({ role: 'user', content: [{ type: 'text', text: wakeReport(waitFor, why) }] });
+      run.messages.push({ role: 'user', content: [{ type: 'text', text: wakeReport(waitFor, why) }] });
     }
   }
 
   try {
-    while (iterations < cap) {
+    while (run.iterations < cap) {
       // Suspension point 1 (design §T3): nothing is in flight, so everything
       // worth keeping is in the variables above. This is where a `wait` armed
       // during the previous batch is honoured — the state goes to disk, the
       // status becomes `waiting`, and this function **returns**, which is the
       // half that distinguishes a wait from an `await sleep()`: the runtime is
       // released and nothing holds it while the deadline runs.
-      if (barrier !== null) return suspendHere(barrier);
+      if (run.barrier !== null) return suspendHere(run.barrier);
       // Written every iteration rather than only at the end, because the state
       // this saves is the state a process that dies here would otherwise take
       // with it — the transcript, the taint it has climbed to, and how much of
@@ -1244,12 +1211,12 @@ async function guidaIlTurno(
       // once per iteration, so a turn stolen mid-flight (P19 — a live pid past
       // the hard horizon, or a genuine crash-and-reclaim elsewhere) discovers
       // it here, before the next model call rather than after it.
-      if (!checkpoint()) return finish(turn, 'error', '', iterations, usage);
+      if (!checkpoint()) return finish(turn, 'error', '', run.iterations, run.usage);
       if (deps.budgetExhausted(input.tenant)) {
-        return finish(turn, 'budget', 'Budget esaurito: mi fermo prima di spendere altro.', iterations, usage);
+        return finish(turn, 'budget', 'Budget esaurito: mi fermo prima di spendere altro.', run.iterations, run.usage);
       }
       if (input.signal?.aborted) {
-        return finish(turn, 'aborted', 'Interrotto.', iterations, usage);
+        return finish(turn, 'aborted', 'Interrotto.', run.iterations, run.usage);
       }
       /**
        * May what this round produces reach the channel? Asked **before** the
@@ -1275,7 +1242,7 @@ async function guidaIlTurno(
       const replyRefusal = doorRefusal(door(replyCapability.id, { kind: 'none' }));
       if (replyRefusal !== undefined) {
         turn.setAttributes({ 'muffin.reply.refused': refusalLabel(replyRefusal) });
-        return finish(turn, 'answered', replyRefusedText(replyRefusal), iterations, usage);
+        return finish(turn, 'answered', replyRefusedText(replyRefusal), run.iterations, run.usage);
       }
       // `/steer` (ADR-0054 §2): l'owner ha corretto il turno mentre girava. Il
       // confine sicuro è **qui** — i tool del giro prima hanno finito, il
@@ -1284,20 +1251,20 @@ async function guidaIlTurno(
       // persiste, così un turno ripreso dopo un crash la ricorda. Mai a metà
       // di una tool call: un effect avviato non si finge non avvenuto.
       for (const correzione of input.steer?.() ?? []) {
-        messages.push({ role: 'user', content: [{ type: 'text', text: correzione }] });
+        run.messages.push({ role: 'user', content: [{ type: 'text', text: correzione }] });
       }
-      iterations += 1;
+      run.iterations += 1;
       // Reports the number this line just committed to — the same counter
       // `muffin.chat_call` below is about to tag itself with
       // (`ATTR.turnIteration`). A retry re-enters this loop and increments it
       // again, so a recovered attempt is correctly seen as its own round, not
       // folded into the one it replaced.
-      input.onProgress?.({ type: 'round', n: iterations });
+      input.onProgress?.({ type: 'round', n: run.iterations });
 
       // Old tool payloads are cleared before the request, not after: what goes
       // out is smaller, what is on record is whole. Nothing is removed, so every
       // `tool_use` keeps its `tool_result` and the request stays well-formed.
-      const compacted = compactToolResults(messages, {
+      const compacted = compactToolResults(run.messages, {
         budgetChars: TOOL_RESULT_BUDGET_CHARS,
         keep: (name) => deps.tools.find((t) => t.spec.name === name)?.keepResult === true,
       });
@@ -1353,7 +1320,7 @@ async function guidaIlTurno(
 
       const chatSpan = deps.tracer.start(
         'muffin.chat_call',
-        { [ATTR.requestModel]: deps.model, [ATTR.turnIteration]: iterations },
+        { [ATTR.requestModel]: deps.model, [ATTR.turnIteration]: run.iterations },
         turn,
       );
       // `chatSpan`'s own clock is not readable back from `SpanHandle` (it only
@@ -1437,7 +1404,7 @@ async function guidaIlTurno(
         // rejection fell through to `throw error` — the turn ended `error`
         // and the owner read «esito error» for a stop they had asked for.
         // The signal is the fact; the exception is only how it arrived.
-        if (input.signal?.aborted) return finish(turn, 'aborted', 'Interrotto.', iterations, usage);
+        if (input.signal?.aborted) return finish(turn, 'aborted', 'Interrotto.', run.iterations, run.usage);
         // Two failures wearing one type, and they take different doors.
         //
         // `output` is the model's own doing — arguments the adapter could not
@@ -1452,13 +1419,13 @@ async function guidaIlTurno(
         if (error instanceof ProviderError && error.retryable) {
           if (error.source === 'output') {
             if (recover('malformed')) continue;
-          } else if (transportRetriesLeft > 0) {
-            transportRetriesLeft -= 1;
+          } else if (run.transportRetriesLeft > 0) {
+            run.transportRetriesLeft -= 1;
             // Backoff, because the retryable case is mostly 429 and hammering a
             // rate limit four times in a row is how a soft limit becomes a hard
             // one. Exponential with jitter: the jitter matters when several turns
             // are throttled at once and would otherwise retry in lockstep.
-            const attempt = MAX_TRANSPORT_RETRIES - transportRetriesLeft;
+            const attempt = MAX_TRANSPORT_RETRIES - run.transportRetriesLeft;
             await sleep(retryDelayMs(attempt), input.signal);
             continue;
           }
@@ -1466,10 +1433,10 @@ async function guidaIlTurno(
         throw error;
       }
 
-      usage.inputTokens += result.usage.inputTokens;
-      usage.outputTokens += result.usage.outputTokens;
-      usage.cacheReadTokens += result.usage.cacheReadTokens;
-      usage.cacheWriteTokens += result.usage.cacheWriteTokens;
+      run.usage.inputTokens += result.usage.inputTokens;
+      run.usage.outputTokens += result.usage.outputTokens;
+      run.usage.cacheReadTokens += result.usage.cacheReadTokens;
+      run.usage.cacheWriteTokens += result.usage.cacheWriteTokens;
 
       // Billed here, on every call, before anything else can go wrong with the
       // iteration. The engine, its caps and its tests all existed before this
@@ -1487,7 +1454,7 @@ async function guidaIlTurno(
         cacheWriteTokens: result.usage.cacheWriteTokens,
       });
       if (usd !== undefined) {
-        spentUsd += usd;
+        run.spentUsd += usd;
         // The budget is an input to the kernel, so a decision cached before the
         // cap was reached must not survive it.
         snapshot.invalidate();
@@ -1533,7 +1500,7 @@ async function guidaIlTurno(
       // Nothing at all: recover rather than presenting silence as an answer.
       if (!result.text && result.toolCalls.length === 0) {
         if (recover('empty')) continue;
-        return finish(turn, 'error', 'Il modello non ha prodotto una risposta utilizzabile.', iterations, usage);
+        return finish(turn, 'error', 'Il modello non ha prodotto una risposta utilizzabile.', run.iterations, run.usage);
       }
 
       if (result.toolCalls.length === 0) {
@@ -1565,7 +1532,7 @@ async function guidaIlTurno(
          * run`'s stdout, and the final settled text of a streamed reply) and
          * does not retroactively unsend a frame that already rendered.
          */
-        const text = scrubResourceEchoes(redactText(result.text ?? ''), sensitiveResourceEchoes);
+        const text = scrubResourceEchoes(redactText(result.text ?? ''), run.sensitiveResourceEchoes);
 
         // The completion gate: did the answer describe a call this turn never
         // made? Deterministic, tool-aware, and it only fires when *nothing* was
@@ -1580,17 +1547,17 @@ async function guidaIlTurno(
         const completion = checkCompletion({
           text,
           available: exposed.map((t) => t.spec.name),
-          toolCallsMade,
+          toolCallsMade: run.toolCallsMade,
         });
         if (!completion.ok) {
           turn.setAttributes({ 'muffin.completion.named_uncalled': completion.named.join(',') });
-          if (nudgedForCompletion === false) {
+          if (run.nudgedForCompletion === false) {
             // One attempt, with the specific tools named. Vague feedback gets a
             // vague retry, and this is measured as the highest-value check in the
             // design — but it is a nudge, never a rewrite of what the agent said.
-            nudgedForCompletion = true;
+            run.nudgedForCompletion = true;
             closeLive('superseded');
-            messages.push({ role: 'user', content: [{ type: 'text', text: completionNudge(completion.named) }] });
+            run.messages.push({ role: 'user', content: [{ type: 'text', text: completionNudge(completion.named) }] });
             continue;
           }
           // It stands. Recorded rather than corrected: silently editing the
@@ -1690,7 +1657,7 @@ async function guidaIlTurno(
             turnId: record.id,
           });
         }
-        return finish(turn, 'answered', text, iterations, usage);
+        return finish(turn, 'answered', text, run.iterations, run.usage);
       }
 
       // Whatever this round said, it said it on the way to a tool call. The
@@ -1713,7 +1680,7 @@ async function guidaIlTurno(
       // the model's and the contents are opaque. A `?? []` because an adapter
       // may legitimately have none (openai-compat says so with `[]`), not
       // because absence is expected here.
-      messages.push({
+      run.messages.push({
         role: 'assistant',
         content: [
           ...(result.thinking ?? []),
@@ -1744,7 +1711,7 @@ async function guidaIlTurno(
       // loop. Bounded by one batch's duration, and it is the effect the fenced
       // `checkpoint`/`finish`/`suspend` writes stop from *landing*, not one
       // that stops a tool call already in flight from completing.
-      if (!checkpoint()) return finish(turn, 'error', '', iterations, usage);
+      if (!checkpoint()) return finish(turn, 'error', '', run.iterations, run.usage);
 
       const results: ContentBlock[] = [];
       for (const call_ of result.toolCalls) {
@@ -1752,7 +1719,7 @@ async function guidaIlTurno(
         // during a run of tool calls used to do nothing visible until the batch
         // finished, which for a slow batch is indistinguishable from being
         // ignored.
-        if (input.signal?.aborted) return finish(turn, 'aborted', 'Interrotto.', iterations, usage);
+        if (input.signal?.aborted) return finish(turn, 'aborted', 'Interrotto.', run.iterations, run.usage);
         // The ceiling counts CALLS, not iterations. `cap` above bounds trips
         // through this loop, but nothing upstream bounds how many `tool_use`
         // blocks one completion carries — a single response with 40 calls
@@ -1760,7 +1727,7 @@ async function guidaIlTurno(
         // RETURN S3). Refused calls still get a tool_result: a hole in the
         // batch is a protocol error every provider rejects, and the model
         // should read why it was stopped instead of retrying blind.
-        if (toolCallsMade >= deps.profile.maxToolCallsPerTurn) {
+        if (run.toolCallsMade >= deps.profile.maxToolCallsPerTurn) {
           results.push({
             type: 'tool_result',
             toolCallId: call_.id,
@@ -1771,7 +1738,7 @@ async function guidaIlTurno(
           });
           continue;
         }
-        toolCallsMade += 1;
+        run.toolCallsMade += 1;
         try {
           const outcome = await runTool(deps, snapshot, turn, call_, input, exposed, toolContext);
           results.push(outcome);
@@ -1783,23 +1750,23 @@ async function guidaIlTurno(
               turn,
               'ask',
               `Serve la tua approvazione per "${error.request.capability}"${error.request.resource ? ` su ${error.request.resource}` : ''}. Su questa superficie non posso chiederla.`,
-              iterations,
-              usage,
+              run.iterations,
+              run.usage,
             );
             return { ...stop, pending: error.request };
           }
           throw error;
         }
       }
-      messages.push({ role: 'user', content: results });
+      run.messages.push({ role: 'user', content: results });
     }
 
     return finish(
       turn,
       'cap',
       `Mi sono fermato dopo ${cap} passaggi senza chiudere. Dimmi come restringere il compito.`,
-      iterations,
-      usage,
+      run.iterations,
+      run.usage,
     );
   } catch (error) {
     turn.end({ error });
@@ -1843,7 +1810,7 @@ async function guidaIlTurno(
     try {
       return deps.turns.checkpoint(
         record.id,
-        { messages, taint: snapshot.currentTaint(), counters: counters() },
+        { messages: run.messages, taint: snapshot.currentTaint(), counters: run.counters() },
         record.claimToken,
       );
     } catch (error) {
@@ -1893,8 +1860,8 @@ async function guidaIlTurno(
     const correzioniPendenti = input.steer?.() ?? [];
     const conCorrezioni: Message[] =
       correzioniPendenti.length === 0
-        ? messages
-        : [...messages, ...correzioniPendenti.map((testo): Message => ({ role: 'user', content: [{ type: 'text', text: testo }] }))];
+        ? run.messages
+        : [...run.messages, ...correzioniPendenti.map((testo): Message => ({ role: 'user', content: [{ type: 'text', text: testo }] }))];
 
     const wrote = (() => {
       try {
@@ -1903,7 +1870,7 @@ async function guidaIlTurno(
           {
             messages: conCorrezioni,
             taint: snapshot.currentTaint(),
-            counters: counters(),
+            counters: run.counters(),
             wakeAt: spec.wakeAt,
             waitFor: spec.waitFor === null ? null : encodeWaitFor(spec.waitFor),
           },
@@ -1937,14 +1904,14 @@ async function guidaIlTurno(
         'error',
         'Volevo sospendermi e aspettare, ma non sono riuscito a salvare lo stato del turno: ' +
           'se aspettassi comunque non mi sveglierebbe nessuno. Mi fermo qui e te lo dico.',
-        iterations,
-        usage,
+        run.iterations,
+        run.usage,
       );
     }
 
     turn.setAttributes({
       [ATTR.stopReason]: 'suspended',
-      [ATTR.turnIteration]: iterations,
+      [ATTR.turnIteration]: run.iterations,
       'muffin.turn.wake_at': spec.wakeAt,
       ...(spec.waitFor === null ? {} : { 'muffin.turn.wait_for': encodeWaitFor(spec.waitFor) }),
     });
@@ -1954,7 +1921,7 @@ async function guidaIlTurno(
     // half-finished conversation every time the agent decided to wait.
     return {
       text: '',
-      iterations,
+      iterations: run.iterations,
       traceId: turn.traceId,
       turnId: record.id,
       stopped: 'suspended',
@@ -1964,7 +1931,7 @@ async function guidaIlTurno(
       // owed the tier of what was in its context, not a `0` standing in for
       // "nothing was said yet".
       taint: snapshot.currentTaint(),
-      usage,
+      usage: run.usage,
       suspendedUntil: spec,
     };
   }
@@ -2001,7 +1968,7 @@ async function guidaIlTurno(
    * checkpoints in the main loop.
    */
   async function reconcile(): Promise<TurnResult | null> {
-    const last = messages[messages.length - 1];
+    const last = run.messages[run.messages.length - 1];
     if (last === undefined || last.role !== 'assistant') return null;
     const pending = last.content.filter((b): b is Extract<ContentBlock, { type: 'tool_use' }> => b.type === 'tool_use');
     if (pending.length === 0) return null;
@@ -2066,8 +2033,8 @@ async function guidaIlTurno(
       }
     }
 
-    messages.push({ role: 'user', content: repaired });
-    return checkpoint() ? null : finish(turn, 'error', '', iterations, usage);
+    run.messages.push({ role: 'user', content: repaired });
+    return checkpoint() ? null : finish(turn, 'error', '', run.iterations, run.usage);
   }
 
   /**
@@ -2083,7 +2050,7 @@ async function guidaIlTurno(
     try {
       return deps.turns.finish(
         record.id,
-        { outcome, messages, taint: snapshot.currentTaint(), counters: counters() },
+        { outcome, messages: run.messages, taint: snapshot.currentTaint(), counters: run.counters() },
         record.claimToken,
       );
     } catch (error) {
@@ -2132,15 +2099,15 @@ async function guidaIlTurno(
    * to every model, keeps its own flag, and a profile may not decline it.
    */
   function recover(failure: RecoveryFailure): boolean {
-    const strategy = deps.profile.recovery[recoveriesUsed];
+    const strategy = deps.profile.recovery[run.recoveriesUsed];
     if (strategy === undefined) return false;
-    recoveriesUsed += 1;
+    run.recoveriesUsed += 1;
     const step = recoveryStep(strategy, { failure, tools: exposed.map((t) => t.spec.name) });
     if (step.message !== undefined) {
-      messages.push({ role: 'user', content: [{ type: 'text', text: step.message }] });
+      run.messages.push({ role: 'user', content: [{ type: 'text', text: step.message }] });
     }
     turn.setAttributes({
-      'muffin.recovery.attempt': recoveriesUsed,
+      'muffin.recovery.attempt': run.recoveriesUsed,
       'muffin.recovery.strategy': strategy,
       'muffin.recovery.failure': failure,
     });
