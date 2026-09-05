@@ -550,7 +550,17 @@ implements or verifies the mechanism, not for whoever reads `muffin doctor`.
 
 The Root of Trust contains constitutional material the runtime may not silently
 weaken: identity floor, policy floors/ceilings, hard deny lists, egress/budget
-configuration and other sealed material explicitly designated as such.
+configuration, the owner binding (`rot/owner.json` — which account each surface
+recognises as the owner, written by pairing and resealed in the same act) and
+other sealed material explicitly designated as such. A sealed binding that does
+not verify authenticates nobody, and does not fall back to `config.json`: the
+process that could tamper with the sealed file is the same one that can rewrite
+the unsealed copy, so a fallback would make the seal a suggestion.
+The seal is a detection boundary, not a prevention one: in `single-user` mode
+the sealed files share the owner's OS user and permissions, so a process that
+can rewrite `config.json` can also reseal a consistent chain, and that state is
+indistinguishable from a legitimate pairing. Only `hardened` mode (`muffin rot
+harden`) puts the seal out of that process's reach.
 
 A detected divergence moves the runtime toward conservative behaviour until the
 owner deliberately reseals/restarts as required by the implementation.
