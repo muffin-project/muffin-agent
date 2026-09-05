@@ -416,6 +416,95 @@ export function photoMessage(
 }
 
 /**
+ * An inbound voice note — the shape Telegram sends for `voice` (C8).
+ * `file_size` should be the real byte length of whatever was `plantFile`d
+ * under `fileId`: `connectors/telegram/media.ts#attachmentOf` reads it
+ * straight off the update, and `downloadToVault` checks the *real* download
+ * against `MAX_DOWNLOAD_BYTES`, not this declared number, so a scenario that
+ * lies here only fools the pre-download size guess, never the outcome.
+ */
+export function voiceMessage(
+  from: { id: number; name?: string },
+  fileId: string,
+  options: { duration?: number; bytes?: number } = {},
+): FakeUpdate {
+  return {
+    message: {
+      message_id: Math.floor(Math.random() * 100_000),
+      date: Math.floor(Date.now() / 1000),
+      from: { id: from.id, is_bot: false, first_name: from.name ?? `u${from.id}` },
+      chat: { id: from.id, type: 'private' },
+      voice: {
+        file_id: fileId,
+        file_unique_id: `u_${fileId}`,
+        duration: options.duration ?? 3,
+        mime_type: 'audio/ogg',
+        file_size: options.bytes ?? 20_000,
+      },
+    },
+  };
+}
+
+/**
+ * An inbound forwarded message — the shape Telegram sends when `forward_origin`
+ * is on the wire (Bot API 9.x, B16). `connectors/telegram/connector.ts#describeForwardOrigin`
+ * only reads `sender_user`, never trusts it for identity (ADR-0046 §1: a display
+ * name is content, not identity) — so this helper's `originName` only ever has
+ * to be *distinguishable* prose for the fenced `[inoltrato]` block, never a real
+ * account.
+ */
+export function forwardedMessage(
+  from: { id: number; name?: string },
+  text: string,
+  originName: string,
+): FakeUpdate {
+  return {
+    message: {
+      message_id: Math.floor(Math.random() * 100_000),
+      date: Math.floor(Date.now() / 1000),
+      from: { id: from.id, is_bot: false, first_name: from.name ?? `u${from.id}` },
+      chat: { id: from.id, type: 'private' },
+      text,
+      forward_origin: {
+        type: 'user',
+        date: Math.floor(Date.now() / 1000),
+        sender_user: { id: 555_000_000, is_bot: false, first_name: originName },
+      },
+    },
+  };
+}
+
+/**
+ * An inbound reply — the shape Telegram sends when `reply_to_message` is on
+ * the wire (B16). `connectors/telegram/connector.ts#citazione` reads
+ * `reply_to_message.from.id` to decide `da: 'muffin' | 'chi-scrive' | 'altri'`
+ * — never the text, which is why `repliedTo.fromId` is the field that decides
+ * the taint this scenario asserts on, not `repliedTo.text` alone.
+ */
+export function replyMessage(
+  from: { id: number; name?: string },
+  text: string,
+  repliedTo: { messageId: number; fromId: number; fromName?: string; text: string },
+): FakeUpdate {
+  return {
+    message: {
+      message_id: Math.floor(Math.random() * 100_000),
+      date: Math.floor(Date.now() / 1000),
+      from: { id: from.id, is_bot: false, first_name: from.name ?? `u${from.id}` },
+      chat: { id: from.id, type: 'private' },
+      text,
+      reply_to_message: {
+        message_id: repliedTo.messageId,
+        date: Math.floor(Date.now() / 1000),
+        chat: { id: from.id, type: 'private' },
+        from: { id: repliedTo.fromId, is_bot: false, first_name: repliedTo.fromName ?? `u${repliedTo.fromId}` },
+        text: repliedTo.text,
+      },
+    },
+  };
+}
+
+/**
  * An inbound button press, the shape Telegram sends for `callback_query`
  * (D12 — the ASK's Consenti/Rifiuta buttons, `cli/surface.ts`'s
  * `approvatoreTelegram`). `message` must echo the id/chat of the real ASK
