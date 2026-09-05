@@ -663,41 +663,121 @@ function haScript(): boolean {
  * comando: BSD (macOS) prende il comando come argv dopo il file, util-linux
  * (Linux, la produzione) vuole `-c "una stringa"`. Divergono e vanno scritte
  * entrambe, non scelte.
+ *
+ * `attesa` è il testo che deve comparire **sul pty** prima che il `^D` parta.
+ * Non è una comodità di scrittura: è la sola cosa che rende questi test
+ * deterministici, e la ragione sta in due meccanismi che si incastrano male.
+ *
+ * **1. La disciplina di linea mangia un `^D` che arriva troppo presto.** Fino
+ * al 05/09/2026 lo stdin era un file che conteneva già il byte 0x04, quindi
+ * `script` lo scriveva sul master entro pochi millisecondi — cioè mentre lo
+ * slave era ancora in modo *canonico*, perché readline non era nemmeno
+ * partita. In modo canonico Linux non consegna VEOF come byte: `n_tty` mette
+ * in coda `__DISABLED_CHAR` (0x00) e lo marca come fine-riga. Quando poi
+ * readline entra in raw mode, il cambio di canonicità azzera quei marcatori
+ * (`n_tty_set_termios`) e in coda resta un **NUL**, non un `^D`. Misurato nel
+ * container (ubuntu:24.04 arm64, util-linux 2.39.3, Node 22) intercettando
+ * `process.stdin.push`: il byte visto dal processo è `00`, mai `04`.
+ *
+ * **2. Quello che chiudeva davvero il comando era l'EOF automatico di
+ * `script`, e ha una scadenza di 2 secondi.** Quando il *suo* stdin finisce,
+ * util-linux accoda un ultimo `^D` per il figlio, ma prima aspetta che la coda
+ * dello slave si svuoti (`drain_child_buffers`, lib/pty-session.c): `poll` da
+ * 10 ms + `xusleep(250000)`, **al massimo 8 giri**. Se entro ~2 s il figlio
+ * non ha ancora letto — cioè non è ancora entrato in raw mode — `script`
+ * scrive l'EOF lo stesso, in modo canonico, e quel byte diventa un secondo
+ * NUL. Nessuno ne scriverà un terzo: il comando resta appeso per sempre.
+ *
+ * Da cui l'intermittenza del container e non del Mac: la soglia è «`muffin
+ * init` arriva alla prima domanda entro 2 s». Misurato con 16 processi a
+ * bruciare CPU, 12 corse: raw mode a +1666 ms → verde, a +1983/+2282/+3262/
+ * +3623/+3835/+4321/+4387 ms → appeso, 7 su 12. Con `sleep 2.5` davanti a
+ * `node`, 8 appesi su 8. Non è un difetto di `cli/prompt.ts`: un `^D` battuto
+ * prima che il programma legga si perde allo stesso modo con `cat`, e su un
+ * terminale vero l'owner ne batte semplicemente un altro.
+ *
+ * La riparazione è battere il `^D` **quando la domanda c'è**, che è anche ciò
+ * che fa una persona. `node-pty` non è disponibile qui (nessuna dipendenza
+ * nativa in questo repo), quindi il pty resta quello di `script` e a cambiare
+ * è la tastiera: una fifo tenuta aperta da un processo che aspetta di vedere
+ * `attesa` nella trascrizione del pty. Tenuta aperta fino alla fine, e non
+ * chiusa subito dopo il byte: altrimenti `script` manderebbe comunque il suo
+ * EOF automatico e la mutazione che toglie la memoria dell'EOF da
+ * `cli/prompt.ts` sopravvivrebbe alla seconda domanda.
  */
-function muffinTty(env: Record<string, string>, args: string[]): { code: number; out: string } {
+function muffinTty(env: Record<string, string>, args: string[], attesa: string): { code: number; out: string } {
   const argv = ['node', '--import', 'tsx', join(process.cwd(), 'cli/main.ts'), ...args];
-  const comando = SCRIPT_C_E
-    ? `script -qec ${shq(argv.map(shq).join(' '))} /dev/null`
-    : `script -q /dev/null ${argv.map(shq).join(' ')}`;
-  // Lo stdin dev'essere un **file vero**: dentro un worker di vitest quello che
-  // `spawnSync` fornisce è un socket, e `script` (BSD) ci chiama sopra
-  // `tcgetattr` e muore prima di aprire il pty.
+  const lavoro = mkdtempSync(join(tmpdir(), 'muffin-ctrl-d-'));
+  const schermo = join(lavoro, 'schermo'); // tutto ciò che il pty ha prodotto
+  // La terza divergenza fra le due `script`, e la sola che conta per #437.
   //
-  // E dentro quel file c'è un `^D` (0x04), non il vuoto di `/dev/null`. Le due
-  // `script` divergono una seconda volta, e questa costava un'ora di CI:
-  // BSD chiude il pty quando il **suo** stdin finisce, util-linux no. Misurato
-  // l'1/09/2026 con util-linux 2.38.1, `< /dev/null` lascia il figlio in
-  // attesa per sempre — i due test di Ctrl+D morivano al timeout di 60s con
-  // `status = null`, cioè l'`exit -1` che questo file chiama «appeso».
+  // BSD (macOS) **chiude il pty** quando il suo stdin finisce: il figlio legge
+  // 0 byte da un terminale che non c'è più, cioè un EOF che nessuna disciplina
+  // di linea può mangiare, in qualunque modo si trovi. Un file con dentro il
+  // `^D` basta, e infatti su macOS questo test non ha mai lampeggiato.
   //
-  // Il byte è anche la cosa più fedele delle due: il test dice «Ctrl+D su un
-  // terminale vero», e in raw mode readline sintetizza l'EOF proprio da quel
-  // carattere. `/dev/null` non era un Ctrl+D, era la sua conseguenza su una
-  // sola delle due piattaforme.
-  const ctrlD = join(mkdtempSync(join(tmpdir(), 'muffin-ctrl-d-')), 'eof');
-  writeFileSync(ctrlD, '\u0004');
-  const r = spawnSync('sh', ['-c', `${comando} < ${shq(ctrlD)}`], {
+  // util-linux no: il pty resta aperto, e l'unico EOF che il figlio vedrà è un
+  // byte 0x04 sul master. Quel byte va battuto a domanda fatta — vedi sopra —
+  // e per farlo la tastiera dev'essere una **fifo**, non un file già scritto.
+  // Il contrario non si può: BSD `script` rifiuta una fifo su stdin con
+  // «tcgetattr/ioctl: Operation not supported on socket» (misurato su macOS
+  // 25.0, 05/09/2026), la stessa morte che un socket di `spawnSync` gli dà.
+  let copione: string;
+  if (SCRIPT_C_E) {
+    const comando = `script -qec ${shq(argv.map(shq).join(' '))} /dev/null`;
+    const tastiera = join(lavoro, 'tastiera'); // la fifo da cui `script` legge
+    copione = [
+      `mkfifo ${shq(tastiera)}`,
+      `: > ${shq(schermo)}`,
+      // Il dito sul Ctrl+D. `$$` dentro una subshell resta il pid della `sh`
+      // (POSIX), quindi quando il test la uccide questo non resta orfano a
+      // girare. Il tetto di 1200 giri è una rete: se la domanda non arriva mai
+      // il `^D` parte comunque, e il test fallisce su un'asserzione invece che
+      // sul timeout.
+      `( i=0`,
+      `  while kill -0 $$ 2>/dev/null && ! grep -qaF ${shq(attesa)} ${shq(schermo)} 2>/dev/null && [ $i -lt 1200 ]`,
+      `  do sleep 0.1; i=$((i+1)); done`,
+      `  printf '\\004'`,
+      // Da qui la fifo resta aperta e non arriva altro: un solo Ctrl+D, che è
+      // esattamente la claim del test a due domande. Chiuderla farebbe partire
+      // l'EOF automatico di `script`, cioè un secondo Ctrl+D che il test non
+      // ha battuto.
+      `  while kill -0 $$ 2>/dev/null; do sleep 0.2; done`,
+      `) > ${shq(tastiera)} 2>/dev/null < /dev/null &`,
+      `dita=$!`,
+      `${comando} < ${shq(tastiera)} > ${shq(schermo)} 2>&1`,
+      `esito=$?`,
+      `kill $dita 2>/dev/null`,
+      `cat ${shq(schermo)}`,
+      `exit $esito`,
+    ].join('\n');
+  } else {
+    // Lo stdin dev'essere comunque un **file vero**: dentro un worker di
+    // vitest quello che `spawnSync` fornisce è un socket, e BSD `script` ci
+    // chiama sopra `tcgetattr` e muore prima di aprire il pty.
+    const comando = `script -q /dev/null ${argv.map(shq).join(' ')}`;
+    const ctrlD = join(lavoro, 'eof');
+    writeFileSync(ctrlD, '\u0004');
+    copione = `${comando} < ${shq(ctrlD)}`;
+  }
+  const r = spawnSync('sh', ['-c', copione], {
     // 120 s, non 60: dentro il container di ci:local, con gli altri tre job
     // in parallelo, `script` + `muffin init` a freddo passavano i 60 s e il
     // test diceva «appeso» (-1) a un comando che stava solo finendo tardi
-    // (05/09/2026, due giri). Il vero appeso di util-linux e' gia' escluso
-    // dal byte Ctrl+D qui sopra; il tetto serve solo a non aspettare per
+    // (05/09/2026, due giri). Il tetto serve solo a non aspettare per
     // sempre, non a misurare la velocita' della macchina.
     env: { ...process.env, NO_COLOR: '1', ...env }, encoding: 'utf8', timeout: 120_000,
   });
+  // La trascrizione si legge dal **file**, non da `r.stdout`: sul ramo
+  // util-linux lo stdout della `sh` arriva tutto in fondo, con un `cat`, e un
+  // comando ucciso dal timeout non ci arriva mai. Leggendo il file, un
+  // «appeso» dice ancora fin dove era arrivato — cioè `r.code === -1` **con**
+  // la domanda sul runtime locale dentro `r.out`, che è esattamente la
+  // diagnosi su cui #437 poggiava.
+  const trascrizione = existsSync(schermo) ? readFileSync(schermo, 'utf8') : `${r.stdout ?? ''}${r.stderr ?? ''}`;
   // Le sequenze di controllo del pty non sono il contenuto: togliere quelle e i
   // CR rende le asserzioni leggibili quanto quelle del ramo headless.
-  const pulito = `${r.stdout ?? ''}${r.stderr ?? ''}`
+  const pulito = trascrizione
     .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
     .replace(/\r/g, '\n');
   return { code: r.status ?? -1, out: pulito };
@@ -744,7 +824,11 @@ describe.skipIf(!haScript())('muffin init su un terminale vero', () => {
     // Il ramo headless di sopra non la stampa mai. Se `cmdInit` smettesse di
     // chiedere, nessuno di quei test se ne accorgerebbe.
     const { dir, xdg } = scratchHome();
-    const r = muffinTty({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg, HOME: dir, ...SENZA_RUNTIME_LOCALE }, ['init']);
+    const r = muffinTty(
+      { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg, HOME: dir, ...SENZA_RUNTIME_LOCALE },
+      ['init'],
+      'Chiave API',
+    );
     expect(r.out).toContain('Chiave API');
   });
 
@@ -753,7 +837,11 @@ describe.skipIf(!haScript())('muffin init su un terminale vero', () => {
     // scritto — nemmeno le directory. `rl.question` non chiama il callback su
     // EOF, e la promise non si decideva.
     const { dir, xdg } = scratchHome();
-    const r = muffinTty({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg, HOME: dir, ...SENZA_RUNTIME_LOCALE }, ['init']);
+    const r = muffinTty(
+      { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg, HOME: dir, ...SENZA_RUNTIME_LOCALE },
+      ['init'],
+      'Chiave API',
+    );
 
     expect(r.out).not.toContain('unsettled top-level await');
     expect(r.code).not.toBe(13);
@@ -799,6 +887,9 @@ describe.skipIf(!haScript())('muffin init su un terminale vero', () => {
           MUFFIN_LOCAL_RUNTIME_URL: `http://127.0.0.1:${String(porta)}/v1`,
         },
         ['init'],
+        // Il Ctrl+D parte alla **prima** domanda, quella sul runtime locale:
+        // e' quella che lo consumava lasciando la seconda appesa.
+        'runtime locale',
       );
       // La domanda in piu' c'e' davvero: senza, questo test non proverebbe
       // niente sul caso a due domande.
