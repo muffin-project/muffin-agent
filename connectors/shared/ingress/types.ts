@@ -115,6 +115,24 @@ export type IngressPart = {
   /** `''` for an attachment-only part (a bare forwarded photo, a location with no venue name). */
   readonly text: string;
   readonly attachment?: AttachmentRef;
+  /**
+   * The per-instance fragment of a fenced part's explanatory note that
+   * `compose.ts` (§3 row 11) cannot itself know — who a forward's declared
+   * origin is, which of the three quoted-by cases applies — or, for a source
+   * whose fixed note names the port's own vocabulary (`'catalog'`: "il
+   * catalogo di Telegram"), the whole note text. `compose.ts` never inspects
+   * this beyond splicing it into a source-keyed template or, for `'catalog'`
+   * and `'derived'`, using it verbatim: the string itself may carry a
+   * platform's name as *data*, which is not the identifier-or-branch the
+   * "no platform name" invariant (§4.11) actually bans. Added in slice 11
+   * once building the shared composer against slice 10's `IngressPart`
+   * showed the byte-identical requirement (§4.9) has no other way to survive
+   * a note whose wording depends on facts this type does not otherwise
+   * carry. `undefined` for a source with a fully fixed, platform-neutral
+   * note (`'caption'`, `'filename'`) and for `'author'`, which is never
+   * fenced at all.
+   */
+  readonly detail?: string;
 };
 
 /**
