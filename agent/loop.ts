@@ -6,9 +6,9 @@ import type { CapabilityId, Decision, DecisionRequest } from '../core/policy/typ
 import type { SessionRef, SessionStore } from '../core/session/store.js';
 import type { UndoJournal } from '../core/undo/journal.js';
 import { CAPPED_MODEL, SCRIPT_MODEL } from '../core/turns/store.js';
-import type { TurnCounters, TurnOutcome, TurnRecord, TurnStopped, TurnStore } from '../core/turns/store.js';
+import type { TurnCounters, TurnRecord, TurnStopped, TurnStore } from '../core/turns/store.js';
 import { planTaint } from '../core/turns/todo.js';
-import { decodeWaitFor, encodeWaitFor, satisfied, wakeReport, type WaitSpec } from '../core/turns/wait.js';
+import { decodeWaitFor, satisfied, wakeReport } from '../core/turns/wait.js';
 import type { ApprovalStore } from '../core/approvals/store.js';
 import type { SpanHandle, Tracer } from '../core/tracing/types.js';
 import { ATTR } from '../core/tracing/types.js';
@@ -32,6 +32,16 @@ import {
   type ToolSpec,
 } from './providers/types.js';
 import { buildContext, primoMessaggio, userAudios, userImages } from './loop/context.js';
+import {
+  announceEnd,
+  checkpoint,
+  closeRecord,
+  closeRow,
+  finish,
+  reconcile,
+  suspendHere,
+  type TurnScope,
+} from './loop/durability.js';
 import { denyText, initialTaint, makeSnapshot, spendeIlBudget } from './loop/permissions.js';
 import { TurnRun } from './loop/run-state.js';
 import { drainStream, edgeTrimmer, retryDelayMs } from './loop/stream.js';
@@ -965,6 +975,28 @@ async function guidaIlTurno(
   );
   turn.setAttributes({ 'muffin.context.class': turnClass, 'muffin.context.tools_exposed': exposed.length });
 
+  /**
+   * Ciò che le scritture durevoli leggevano per chiusura, in un valore solo.
+   *
+   * `checkpoint`, `suspendHere`, `reconcile`, `closeRecord`, `announceEnd` e
+   * `finish` vivono in `agent/loop/durability.ts` e non vedono più questa
+   * funzione: ricevono questo oggetto. Nulla qui è copiato — `run` è lo stesso
+   * `TurnRun` che il corpo del giro muta, `recupero` lo stesso array che
+   * `drive` svuota — perché il punto è che le due metà restino la stessa cosa.
+   */
+  const scope: TurnScope = {
+    deps,
+    record,
+    turn,
+    input,
+    run,
+    snapshot,
+    recupero,
+    exposed,
+    toolContext,
+    noteSensitiveResourceEcho,
+  };
+
   if (!run.contextBuilt) {
     /**
      * La finestra di history, letta **prima** del recall e non dopo.
@@ -1167,13 +1199,13 @@ async function guidaIlTurno(
     // back, a vanishingly narrow window. `finish` re-attempts its own fenced
     // write, finds the same fencing failure, and returns the honest
     // lost-claim result without pretending anything was said.
-    if (!checkpoint()) return finish(turn, 'error', '', run.iterations, run.usage);
+    if (!checkpoint(scope)) return finish(scope, 'error', '');
   } else if (options.resumed === true) {
     // A resumed turn re-enters a transcript that a crash may have left with a
     // question and no answer. Repairing it is not optional: a `tool_use` block
     // without its `tool_result` is a malformed request, and the provider says
     // so on the very first call.
-    const lostClaim = await reconcile();
+    const lostClaim = await reconcile(scope);
     if (lostClaim !== null) return lostClaim;
     if (options.wokenFromWait === true) {
       const waitFor = decodeWaitFor(options.waitForAtWake ?? record.waitFor);
@@ -1201,7 +1233,7 @@ async function guidaIlTurno(
       // status becomes `waiting`, and this function **returns**, which is the
       // half that distinguishes a wait from an `await sleep()`: the runtime is
       // released and nothing holds it while the deadline runs.
-      if (run.barrier !== null) return suspendHere(run.barrier);
+      if (run.barrier !== null) return suspendHere(scope, run.barrier);
       // Written every iteration rather than only at the end, because the state
       // this saves is the state a process that dies here would otherwise take
       // with it — the transcript, the taint it has climbed to, and how much of
@@ -1211,12 +1243,12 @@ async function guidaIlTurno(
       // once per iteration, so a turn stolen mid-flight (P19 — a live pid past
       // the hard horizon, or a genuine crash-and-reclaim elsewhere) discovers
       // it here, before the next model call rather than after it.
-      if (!checkpoint()) return finish(turn, 'error', '', run.iterations, run.usage);
+      if (!checkpoint(scope)) return finish(scope, 'error', '');
       if (deps.budgetExhausted(input.tenant)) {
-        return finish(turn, 'budget', 'Budget esaurito: mi fermo prima di spendere altro.', run.iterations, run.usage);
+        return finish(scope, 'budget', 'Budget esaurito: mi fermo prima di spendere altro.');
       }
       if (input.signal?.aborted) {
-        return finish(turn, 'aborted', 'Interrotto.', run.iterations, run.usage);
+        return finish(scope, 'aborted', 'Interrotto.');
       }
       /**
        * May what this round produces reach the channel? Asked **before** the
@@ -1242,7 +1274,7 @@ async function guidaIlTurno(
       const replyRefusal = doorRefusal(door(replyCapability.id, { kind: 'none' }));
       if (replyRefusal !== undefined) {
         turn.setAttributes({ 'muffin.reply.refused': refusalLabel(replyRefusal) });
-        return finish(turn, 'answered', replyRefusedText(replyRefusal), run.iterations, run.usage);
+        return finish(scope, 'answered', replyRefusedText(replyRefusal));
       }
       // `/steer` (ADR-0054 §2): l'owner ha corretto il turno mentre girava. Il
       // confine sicuro è **qui** — i tool del giro prima hanno finito, il
@@ -1404,7 +1436,7 @@ async function guidaIlTurno(
         // rejection fell through to `throw error` — the turn ended `error`
         // and the owner read «esito error» for a stop they had asked for.
         // The signal is the fact; the exception is only how it arrived.
-        if (input.signal?.aborted) return finish(turn, 'aborted', 'Interrotto.', run.iterations, run.usage);
+        if (input.signal?.aborted) return finish(scope, 'aborted', 'Interrotto.');
         // Two failures wearing one type, and they take different doors.
         //
         // `output` is the model's own doing — arguments the adapter could not
@@ -1500,7 +1532,7 @@ async function guidaIlTurno(
       // Nothing at all: recover rather than presenting silence as an answer.
       if (!result.text && result.toolCalls.length === 0) {
         if (recover('empty')) continue;
-        return finish(turn, 'error', 'Il modello non ha prodotto una risposta utilizzabile.', run.iterations, run.usage);
+        return finish(scope, 'error', 'Il modello non ha prodotto una risposta utilizzabile.');
       }
 
       if (result.toolCalls.length === 0) {
@@ -1657,7 +1689,7 @@ async function guidaIlTurno(
             turnId: record.id,
           });
         }
-        return finish(turn, 'answered', text, run.iterations, run.usage);
+        return finish(scope, 'answered', text);
       }
 
       // Whatever this round said, it said it on the way to a tool call. The
@@ -1711,7 +1743,7 @@ async function guidaIlTurno(
       // loop. Bounded by one batch's duration, and it is the effect the fenced
       // `checkpoint`/`finish`/`suspend` writes stop from *landing*, not one
       // that stops a tool call already in flight from completing.
-      if (!checkpoint()) return finish(turn, 'error', '', run.iterations, run.usage);
+      if (!checkpoint(scope)) return finish(scope, 'error', '');
 
       const results: ContentBlock[] = [];
       for (const call_ of result.toolCalls) {
@@ -1719,7 +1751,7 @@ async function guidaIlTurno(
         // during a run of tool calls used to do nothing visible until the batch
         // finished, which for a slow batch is indistinguishable from being
         // ignored.
-        if (input.signal?.aborted) return finish(turn, 'aborted', 'Interrotto.', run.iterations, run.usage);
+        if (input.signal?.aborted) return finish(scope, 'aborted', 'Interrotto.');
         // The ceiling counts CALLS, not iterations. `cap` above bounds trips
         // through this loop, but nothing upstream bounds how many `tool_use`
         // blocks one completion carries — a single response with 40 calls
@@ -1747,11 +1779,9 @@ async function guidaIlTurno(
           if (error instanceof ApprovalRequired) {
             turn.setAttributes({ 'muffin.policy.approval': 'unavailable' });
             const stop = finish(
-              turn,
+              scope,
               'ask',
               `Serve la tua approvazione per "${error.request.capability}"${error.request.resource ? ` su ${error.request.resource}` : ''}. Su questa superficie non posso chiederla.`,
-              run.iterations,
-              run.usage,
             );
             return { ...stop, pending: error.request };
           }
@@ -1762,11 +1792,9 @@ async function guidaIlTurno(
     }
 
     return finish(
-      turn,
+      scope,
       'cap',
       `Mi sono fermato dopo ${cap} passaggi senza chiudere. Dimmi come restringere il compito.`,
-      run.iterations,
-      run.usage,
     );
   } catch (error) {
     turn.end({ error });
@@ -1774,314 +1802,14 @@ async function guidaIlTurno(
     // retries never reaches `finish`, and a row left `running` by a turn that
     // is definitely over would be reclaimed as *interrupted* — "we do not know
     // whether it ran" — when we know exactly how it ended.
-    closeRecord('error');
+    closeRecord(scope, 'error');
     // A turn that threw still recorded the owner's words at the top of this
     // function, so they are still owed extraction. Announced here as well as in
     // `finish` because a provider that exhausted its retries never reaches
     // `finish` at all, and "the memory lane starts only when the model behaves"
     // is not a property anyone would have chosen.
-    announceEnd('error');
+    announceEnd(scope, 'error');
     throw error;
-  }
-
-  /**
-   * The turn's state, saved at a point where nothing is in flight.
-   *
-   * An **exception** is still swallowed, and this is the one place in this
-   * file where swallowing it is the right call — with the reason, because
-   * "caught and ignored" is how guards here have died before. A checkpoint
-   * that throws leaves the row **stale**, not wrong: the next one overwrites
-   * it, and a process that dies before then is reclaimed as interrupted,
-   * which is exactly what it was. Rethrowing would instead take down a turn
-   * that is still perfectly able to answer, over a write whose only job is to
-   * make a *future* failure cheaper. `Gateway.drain` closing the database
-   * under a long turn is not hypothetical — it is the measured crash in
-   * `core/scheduler/scheduler.ts:174-181`. The failure is on the span, so
-   * "the record stopped being written" is visible in a trace instead of being
-   * inferred from a stale row.
-   *
-   * A **fenced-out write** (P19) is a different fact and is not swallowed: it
-   * means another process's claim is on this row now, not that the write
-   * merely failed. Returns `false`, and every caller checks it — a checkpoint
-   * that could not land is the caller's cue to stop the turn without any
-   * further effect, not to keep iterating against a row it no longer owns.
-   */
-  function checkpoint(): boolean {
-    try {
-      return deps.turns.checkpoint(
-        record.id,
-        { messages: run.messages, taint: snapshot.currentTaint(), counters: run.counters() },
-        record.claimToken,
-      );
-    } catch (error) {
-      turn.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
-      return true;
-    }
-  }
-
-  /**
-   * The turn releases the runtime. **Not** an ending — see `TurnStopped`.
-   *
-   * The write is a single statement (`TurnStore.suspend`) for ADR-0035's
-   * reason, restated on this table: one write advances the state, so a second
-   * writer added later cannot move a turn past a suspension nobody recorded.
-   * A failure here is the one case that must **not** be swallowed the way a
-   * checkpoint is: if the row did not become `waiting`, nothing will ever wake
-   * it, and returning `suspended` would be a promise made to a caller that
-   * cannot be kept. So it falls back to finishing the turn and saying so.
-   */
-  function suspendHere(spec: WaitSpec): TurnResult {
-    /**
-     * `/steer` pendente al momento della sospensione (ADR-0054 §2,
-     * emendamento 03/09b).
-     *
-     * Un turno sospeso **non è finito**: ha rilasciato il runtime e gli è
-     * dovuto un risveglio. Quindi la correzione non va nella sessione per il
-     * turno *dopo* — va consegnata a **questo** turno quando si sveglia, che è
-     * letteralmente «il prossimo confine di giro» che la conferma promette.
-     *
-     * La strada è la riga: `suspend` persiste `messages`, e un turno ripreso
-     * riparte da `[...record.messages]`. Perciò la correzione entra
-     * nell'array che sta per essere scritto, e la prima chiamata al modello
-     * del risveglio la vede.
-     *
-     * Drenato **qui** e non in cima al giro perché la barriera si onora prima
-     * di quel drain, nello stesso giro: una correzione arrivata durante il
-     * giro N veniva saltata quando il turno si sospendeva in cima al giro N+1,
-     * e `suspendHere` — a differenza di `finish` — non svuotava mai la porta.
-     * Il `finally` del connettore cancella la voce `vivi` (con il suo array di
-     * correzioni) appena `runTurn` torna: nessuno dei due casi promessi
-     * all'owner avveniva, e la correzione spariva.
-     *
-     * `messages` non viene mutato: il ramo che fallisce la scrittura non deve
-     * proseguire con una correzione che non è su nessuna riga, e su quello che
-     * riesce si torna subito.
-     */
-    const correzioniPendenti = input.steer?.() ?? [];
-    const conCorrezioni: Message[] =
-      correzioniPendenti.length === 0
-        ? run.messages
-        : [...run.messages, ...correzioniPendenti.map((testo): Message => ({ role: 'user', content: [{ type: 'text', text: testo }] }))];
-
-    const wrote = (() => {
-      try {
-        return deps.turns.suspend(
-          record.id,
-          {
-            messages: conCorrezioni,
-            taint: snapshot.currentTaint(),
-            counters: run.counters(),
-            wakeAt: spec.wakeAt,
-            waitFor: spec.waitFor === null ? null : encodeWaitFor(spec.waitFor),
-          },
-          record.claimToken,
-        );
-      } catch (error) {
-        turn.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
-        return false;
-      }
-    })();
-
-    if (!wrote) {
-      // Covers two different facts with one fallback, and that is deliberate:
-      // a genuine write failure (the pre-existing case) and a fenced-out write
-      // — the claim is gone (P19) — both mean "the wait cannot be honoured",
-      // and `finish` below independently re-checks its own fencing. If the
-      // claim really is gone, `finish`'s own write fails too and it returns
-      // the honest lost-claim result instead of this text — so the message
-      // here only ever reaches an owner when the *first* case is what happened.
-      //
-      // Le correzioni drenate qui sopra sono già uscite dall'array del
-      // connettore — il drain è distruttivo — e sono finite in un `messages`
-      // che nessuno ha scritto: l'imbuto (`drive`) troverebbe la porta vuota e
-      // la correzione svanirebbe proprio dove il codice sta già ammettendo di
-      // aver fallito. Rese all'imbuto invece di scritte qui: è l'unico punto
-      // che parla alla conversazione, ed è lo stesso che sa dirlo all'owner
-      // nel testo del turno se **quella** scrittura fallisce a sua volta.
-      recupero.push(...correzioniPendenti);
-      return finish(
-        turn,
-        'error',
-        'Volevo sospendermi e aspettare, ma non sono riuscito a salvare lo stato del turno: ' +
-          'se aspettassi comunque non mi sveglierebbe nessuno. Mi fermo qui e te lo dico.',
-        run.iterations,
-        run.usage,
-      );
-    }
-
-    turn.setAttributes({
-      [ATTR.stopReason]: 'suspended',
-      [ATTR.turnIteration]: run.iterations,
-      'muffin.turn.wake_at': spec.wakeAt,
-      ...(spec.waitFor === null ? {} : { 'muffin.turn.wait_for': encodeWaitFor(spec.waitFor) }),
-    });
-    turn.end({ status: 'ok' });
-    // No `announceEnd`: the memory lane is told when a turn *ends*, and this
-    // one has not. Waking the consolidator here would mean extracting from a
-    // half-finished conversation every time the agent decided to wait.
-    return {
-      text: '',
-      iterations: run.iterations,
-      traceId: turn.traceId,
-      turnId: record.id,
-      stopped: 'suspended',
-      // Reported even with no text, and it is the same value that just went to
-      // disk. A suspended turn has climbed as far as it has climbed, and a
-      // caller deriving anything from it — a presence line, a log entry — is
-      // owed the tier of what was in its context, not a `0` standing in for
-      // "nothing was said yet".
-      taint: snapshot.currentTaint(),
-      usage: run.usage,
-      suspendedUntil: spec,
-    };
-  }
-
-  /**
-   * Repair a transcript a crash left mid-batch, using the two-phase tool record.
-   *
-   * The tail test is exact rather than heuristic: the loop pushes the results
-   * of a batch as **one** user message after the whole batch, so a transcript
-   * whose last message is an assistant turn carrying `tool_use` blocks is
-   * precisely a batch that was never answered. There is no partial results
-   * message to disambiguate.
-   *
-   * Three states, from the pair of rows, and the third is the one that only
-   * exists because the intent row does (`ADR-0042`):
-   *
-   *  - **done** — an outcome was recorded. Replay it. This is Temporal's
-   *    property in our own words: during replay the recorded result is reused,
-   *    not recomputed. Its tier is replayed too, or a turn that had read the
-   *    web would come back believing it had not.
-   *  - **maybe done** — an intent row, no outcome. `rerunnable` decides, and
-   *    nothing else may: `reversible` answers a different question (`fs.write`
-   *    is `undoable` and perfectly safe to repeat; a message is neither).
-   *    Where it says no, the turn resumes **declaring** that the call may have
-   *    landed — never pretending it did not, and never claiming it did.
-   *  - **not started** — neither row. Run it, through the same kernel path as
-   *    any other call, because the permission matrix may have tightened while
-   *    the turn was dead and a resume should inherit that.
-   *
-   * Returns `null` to continue normally, or a `TurnResult` when its own final
-   * checkpoint discovers the claim is gone (P19): the repair above may itself
-   * have run tool calls with real effects, so by the time that is discovered
-   * there is nothing left to do but stop and say so, exactly like the
-   * checkpoints in the main loop.
-   */
-  async function reconcile(): Promise<TurnResult | null> {
-    const last = run.messages[run.messages.length - 1];
-    if (last === undefined || last.role !== 'assistant') return null;
-    const pending = last.content.filter((b): b is Extract<ContentBlock, { type: 'tool_use' }> => b.type === 'tool_use');
-    if (pending.length === 0) return null;
-
-    const recorded = deps.turns.recordedOutcomes(record.id);
-    const uncertain = new Map(deps.turns.uncertainCalls(record.id).map((c) => [c.callId, c]));
-    const repaired: ContentBlock[] = [];
-    turn.setAttributes({ 'muffin.turn.reconciled': pending.length });
-
-    for (const block of pending) {
-      const done = recorded.get(block.id);
-      if (done !== undefined) {
-        // The taint the recorded result carried has to come back with it: this
-        // is the same "the two facts must not land apart" the outcome write
-        // enforces in a transaction.
-        if (done.tier !== null) snapshot.raiseTaint(done.tier);
-        repaired.push({
-          type: 'tool_result',
-          toolCallId: block.id,
-          content: done.content,
-          ...(done.isError ? { isError: true } : {}),
-        });
-        continue;
-      }
-
-      const open = uncertain.get(block.id);
-      if (open !== undefined && !open.rerunnable) {
-        repaired.push({
-          type: 'tool_result',
-          toolCallId: block.id,
-          content:
-            `Questa chiamata a ${block.name} era partita quando il processo è morto, e non è dichiarata ` +
-            `ri-eseguibile: **non è possibile sapere se ha avuto effetto**. Non l'ho rifatta. ` +
-            `Verifica lo stato prima di riprovarla, e dillo a chi ti ha chiesto la cosa.`,
-          isError: true,
-        });
-        continue;
-      }
-
-      // Either re-runnable and uncertain, or never started at all. Both go
-      // through `runTool`, so the kernel rules on them again and the intent row
-      // is written again — `ON CONFLICT DO NOTHING` absorbs the second write.
-      try {
-        const call = { id: block.id, name: block.name, args: block.input };
-        const outcome = await runTool(deps, snapshot, turn, call, input, exposed, toolContext);
-        repaired.push(outcome);
-        noteSensitiveResourceEcho(call, outcome);
-      } catch (error) {
-        // An `ask` that cannot be asked on this surface is not a reason to
-        // abandon a repair half-done: the block gets an honest result and the
-        // turn continues to the normal `ask` handling on its next call.
-        repaired.push({
-          type: 'tool_result',
-          toolCallId: block.id,
-          content: error instanceof ApprovalRequired
-            ? `Ripresa: ${block.name} vuole un'approvazione che qui non posso chiedere.`
-            : error instanceof Error
-              ? error.message
-              : String(error),
-          isError: true,
-        });
-      }
-    }
-
-    run.messages.push({ role: 'user', content: repaired });
-    return checkpoint() ? null : finish(turn, 'error', '', run.iterations, run.usage);
-  }
-
-  /**
-   * The single write that ends the row. Same exception-swallow, same reason,
-   * one caveat — and, since P19, a second return path that is not swallowed.
-   *
-   * Returns whether the write actually landed. `false` means fenced out: the
-   * claim on this row belongs to someone else now, and `finish` (below) turns
-   * that into the honest lost-claim result instead of returning a `TurnResult`
-   * that claims an outcome this row does not, in fact, record.
-   */
-  function closeRecord(outcome: TurnOutcome): boolean {
-    try {
-      return deps.turns.finish(
-        record.id,
-        { outcome, messages: run.messages, taint: snapshot.currentTaint(), counters: run.counters() },
-        record.claimToken,
-      );
-    } catch (error) {
-      // The caveat: unlike a checkpoint, nothing comes after this one. The row
-      // stays `running` and the next boot reclaims it as interrupted — a turn
-      // that answered, reported as "we cannot say". That is the safe direction
-      // of the two, and it is not silent: the attribute below is the trace's
-      // record that the outcome could not be written. An exception is treated
-      // as "could not write" (the pre-existing behaviour, `true`), never as
-      // "lost the claim" — those are different facts and only the second one
-      // is what a fenced `changes === 0` means.
-      turn.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
-      return true;
-    }
-  }
-
-  /**
-   * Tells the background lane a turn is over, and refuses to let it matter.
-   *
-   * Swallowed rather than propagated: this hook exists to start work *after*
-   * the answer, and a background lane that can turn a good turn into an
-   * exception would be a worse bug than the one it fixes. There is nothing for
-   * the owner to do about it either, which is the test for whether an error
-   * belongs on their screen.
-   */
-  function announceEnd(stopped: TurnOutcome): void {
-    try {
-      deps.onTurnEnd?.({ tenant: input.tenant, principal: input.principal, stopped });
-    } catch {
-      /* a lane that runs after the reply may not take the reply down with it */
-    }
   }
 
   /**
@@ -2112,109 +1840,6 @@ async function guidaIlTurno(
       'muffin.recovery.failure': failure,
     });
     return true;
-  }
-
-  function finish(
-    span: SpanHandle,
-    stopped: TurnOutcome,
-    text: string,
-    iters: number,
-    used: TurnResult['usage'],
-  ): TurnResult {
-    span.setAttributes({ [ATTR.stopReason]: stopped, [ATTR.turnIteration]: iters });
-    // Nessun drain di `/steer` qui, ed è la differenza fra questa versione e
-    // le tre riparazioni site-specific che l'hanno preceduta. `finish` era uno
-    // dei siti che svuotavano la porta da sé, e il rethrow del provider non
-    // passa mai da qui: l'unica svuotata adesso è quella dell'imbuto
-    // (`drive`), che vede **tutte** le strade — questa compresa, perché ogni
-    // `return finish(...)` in questo file torna attraverso di lì. Vedi
-    // ADR-0054 §2, emendamento 03/09c.
-    // Before the span ends and before the hook fires: the row is the durable
-    // half, and a background lane must never be able to run while the record
-    // still says a live process is executing this turn.
-    const written = closeRecord(stopped);
-    if (!written) {
-      // The claim is gone (P19): every caller of `finish` above already
-      // detected this from its *own* fenced write (a checkpoint, a suspend
-      // that fell back here) or is discovering it only now, right at the end.
-      // Either way the row does not, in fact, say what `stopped`/`text` claim
-      // — some other process's write is what is really on it — so neither may
-      // be returned. No `announceEnd`: the process that now owns this row is
-      // the one whose job it is to say the turn ended, not this one.
-      span.setAttributes({ 'muffin.turn.lost_claim': true });
-      span.end({ status: 'error' });
-      return {
-        text: '',
-        iterations: iters,
-        traceId: span.traceId,
-        turnId: record.id,
-        stopped: 'error',
-        taint: snapshot.currentTaint(),
-        usage: used,
-      };
-    }
-    span.end({ status: stopped === 'error' ? 'error' : 'ok' });
-    // Last thing before the return, so the span is closed and the result is
-    // built: the hook is not allowed to see a half-finished turn, and it is not
-    // allowed to delay this return.
-    announceEnd(stopped);
-    return {
-      text,
-      iterations: iters,
-      traceId: span.traceId,
-      // `record.id`, not `span.traceId`. On a fresh turn the two are the same
-      // value by construction; on a **resumed** one the span is a child of a
-      // remote parent and its own trace id would name the trace, not the row —
-      // so a surface recording the delivery would address a turn that does not
-      // exist. The row's identity is the one thing a resume must not lose.
-      turnId: record.id,
-      stopped,
-      // Read here rather than at any earlier point, because the whole property
-      // is that it can still rise: a tool result on the last iteration taints
-      // the answer exactly as much as one on the first.
-      taint: snapshot.currentTaint(),
-      usage: used,
-    };
-  }
-}
-
-/**
- * Close a row from outside the engine, for the two refusals that happen before
- * it starts.
- *
- * A refused resume has no transcript to write and no counters to advance — it
- * has a row that must stop being picked up, and a reason the owner can read. It
- * writes the reason into the transcript so the surface delivering the turn has
- * something to say, which is the difference between "the turn ended" and "the
- * turn vanished".
- */
-function closeRow(
-  deps: LoopDeps,
-  span: SpanHandle,
-  record: TurnRecord,
-  outcome: TurnOutcome,
-  detail: string,
-): void {
-  try {
-    // `record.claimToken` is the one `claim()` just handed back a moment ago
-    // in `resumeTurn` — both callers of this function run immediately after a
-    // winning claim, before anything could plausibly steal it. If something
-    // did (an exceptionally narrow race), the write is fenced out the same as
-    // anywhere else: `changes === 0`, nothing overwritten, and there is
-    // nothing further this function needs to do about it — the refusal it
-    // reports to its own caller does not depend on this write having landed.
-    deps.turns.finish(
-      record.id,
-      {
-        outcome,
-        messages: [...record.messages, { role: 'assistant', content: [{ type: 'text', text: detail }] }],
-        taint: record.taint,
-        counters: record.counters,
-      },
-      record.claimToken,
-    );
-  } catch (error) {
-    span.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
   }
 }
 
