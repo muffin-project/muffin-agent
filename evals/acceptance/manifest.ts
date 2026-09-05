@@ -212,6 +212,18 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'B14',
     'attachment telegram: `send_file` reaches `sendDocument` on the real binary, with the real filename and byte length, to the owner\'s chat',
   ),
+  // New (slice/b15-owner-nel-rot): B15's authenticated half was already
+  // proven — `b-telegram-pairing.accept.ts` shows nobody becomes owner
+  // without the code. What had no proof is where the resulting binding
+  // *lives*: `config.json` is writable by any process running as the owner,
+  // so the row's "protetto" stayed open. This scenario drives the same real
+  // pairing and asserts the binding lands inside the seal, and that the seal
+  // still verifies afterwards (write + reseal as one act, or the install
+  // would fall into safe mode the moment it paired).
+  verde(
+    'B15',
+    'owner binding: pairing writes the owner into the sealed root of trust, and the seal still verifies',
+  ),
   verde(
     'D12',
     'ask telegram: the ASK shows the command and cwd plus the taint reason, an owner\'s button press resumes the suspended turn exactly once, and a non-owner\'s press decides nothing',
@@ -523,6 +535,45 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   verde(
     'E7',
     "self-inspection: sys_inspect answers with this instance's live config, and after a real `muffin model main` change the second answer reflects it instead of repeating the first",
+  ),
+  // New (slice/f-scenari-di-accettazione): F1-F5 were READY on unit and
+  // wiring tests alone — nobody had driven any of the five through the real
+  // gateway binary against a fake Telegram Bot API, which is exactly the
+  // gap this manifest's second gate exists to catch. Orphaned in this
+  // repository until the sibling PR that adds DAY-1 section F to
+  // `requirements-status.md` lands — `report.ts`'s `orphanRows` check
+  // (a manifest row with no matching inventory row) will name F1-F5 as
+  // ORFANO until then, which is expected and stated in this slice's own PR
+  // body rather than worked around here.
+  verde(
+    'F1',
+    'group gate: a group message that does not address Muffin opens no turn and calls the provider zero times; one that @-mentions the bot opens exactly one turn and replies exactly once (ADR-0063)',
+  ),
+  // F2 is `b-una-conversazione.accept.ts`'s own `describe('acceptance · i
+  // gruppi restano separati · attraverso il percorso di produzione', …)` —
+  // written before this manifest had an F row for it. Claimed here instead
+  // of duplicated: that file's `it()` title now starts with this entry's
+  // exact string (`report.ts#chiaviEsito` matches by suffix), so the same
+  // scenario counts against F2 instead of showing up as "fuori inventario".
+  verde(
+    'F2',
+    "tenant: a group member's message never lands in the owner's own DM session, and the group keeps its own session at tier 2 — through the real gateway, past the mention gate",
+  ),
+  verde(
+    'F3',
+    'forum topics: two threads in the same supergroup keep two distinct sessions (`telegram:<chatId>#<thread>`), and a reply carries `message_thread_id` on the wire',
+  ),
+  verde(
+    'F4',
+    "group exit: added to a group the owner is not in, Muffin greets the room, tells the owner who added it and where, then leaves — never calling the model — and `getUpdates` actually asks for `my_chat_member`",
+  ),
+  verde(
+    'F5',
+    "egress params: a group member's invented query string is denied (`resource_denied`, never fetched), and the exact same URL pasted by that member is fetched for real (ADR-0071)",
+  ),
+  verde(
+    'F6',
+    'remember without replying: a group message that opens no turn still becomes an episode of the group tenant — no provider call, no reply, no turn',
   ),
 ] as const;
 
