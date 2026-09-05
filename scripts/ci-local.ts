@@ -530,7 +530,12 @@ export function contesa(campioni: readonly CampioneDiCarico[]): string | null {
   const ragioni: string[] = [];
   for (const c of campioni) {
     if (c.altriVitest > 0) ragioni.push(`${c.quando}: ${c.altriVitest} altro/i vitest sull'host`);
-    if (c.cpu > 0 && c.load1 > c.cpu) ragioni.push(`${c.quando}: load ${c.load1.toFixed(1)} su ${c.cpu} cpu`);
+    // Il load conta solo **prima** dei container: a fine corsa e' il nostro —
+    // quattro job in parallelo su una VM Docker portano un Mac a 10 cpu sopra
+    // 11 da soli (misurato il 05/09/2026, due giri scartati senza nessun
+    // altro processo sull'host). Un vitest estraneo resta contesa in ogni
+    // momento, perche' non e' nostro.
+    if (c.quando === 'inizio' && c.cpu > 0 && c.load1 > c.cpu) ragioni.push(`${c.quando}: load ${c.load1.toFixed(1)} su ${c.cpu} cpu`);
   }
   return ragioni.length === 0 ? null : ragioni.join('; ');
 }
