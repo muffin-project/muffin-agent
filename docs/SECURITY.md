@@ -556,6 +556,11 @@ other sealed material explicitly designated as such. A sealed binding that does
 not verify authenticates nobody, and does not fall back to `config.json`: the
 process that could tamper with the sealed file is the same one that can rewrite
 the unsealed copy, so a fallback would make the seal a suggestion.
+The seal is a detection boundary, not a prevention one: in `single-user` mode
+the sealed files share the owner's OS user and permissions, so a process that
+can rewrite `config.json` can also reseal a consistent chain, and that state is
+indistinguishable from a legitimate pairing. Only `hardened` mode (`muffin rot
+harden`) puts the seal out of that process's reach.
 
 A detected divergence moves the runtime toward conservative behaviour until the
 owner deliberately reseals/restarts as required by the implementation.
