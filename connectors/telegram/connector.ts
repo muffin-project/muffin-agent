@@ -12,6 +12,13 @@ import { identify, tierOf, type SurfaceIdentity } from '../../core/surface/types
 import { composeTurnText as sharedComposeTurnText } from '../shared/ingress/compose.js';
 import { tryPair as sharedTryPair } from '../shared/ingress/pair.js';
 import { rememberWithoutReplying } from '../shared/ingress/remember.js';
+import {
+  controlliPerCorsia,
+  laneKey,
+  LaneRegistry,
+  QueueNotices,
+  tryControlCommand,
+} from '../shared/ingress/lane.js';
 import { contentTierOf, type IngressPart } from '../shared/ingress/types.js';
 import { TelegramError, type TelegramApiLike } from './api.js';
 import {
@@ -768,15 +775,23 @@ export class TelegramConnector {
   /**
    * I turni vivi, per chat (ADR-0054): la leva per `/stop` e la coda delle
    * correzioni per `/steer`. Una chat, un turno alla volta — è la corsia.
+   *
+   * Il registro è `connectors/shared/ingress/lane.ts`, non una mappa di
+   * questo connettore: i due scrittori (il turno fresco e il ramo di resume)
+   * e i due lettori (l'avviso di coda e i comandi) sono le stesse quattro
+   * operazioni su ogni porta. La chiave porta il prefisso della porta —
+   * `laneKey('telegram', chatId)` — perche' la chiave dell'owner e' `'owner'`
+   * su tutte le porte e una corsia condivisa senza prefisso renderebbe
+   * `/stop` cross-port (invariante 5 del disegno).
    */
-  private readonly vivi = new Map<number, { controller: AbortController; correzioni: string[] }>();
+  private readonly corsie = new LaneRegistry();
   /** Lo svuotamento in corso, se c'è: uno solo alla volta, e chi arriva dopo lo rimette in coda. */
   private draining: Promise<void> | null = null;
   private drainAgain = false;
   /** Gli update già serviti dal poller (i comandi di controllo): il drain li salta. */
   private readonly gestiti = new Set<number>();
-  /** Gli update a cui è già stato detto «in coda» o «in pausa»: una volta sola. */
-  private readonly avvisati = new Set<number>();
+  /** Gli update a cui è già stato detto «in coda» o «in pausa»: una volta sola, **per update** e non per drain. */
+  private readonly avvisi = new QueueNotices();
   /**
    * Chi siamo, secondo `getMe`.
    *
@@ -1299,9 +1314,7 @@ export class TelegramConnector {
     // dovrebbe: «una chat, un turno alla volta» è la stessa corsia) la voce
     // esistente non viene toccata, per non spezzare il turno che la sta
     // usando davvero.
-    const giàVivo = this.vivi.has(chatId);
-    const vivo = giàVivo ? this.vivi.get(chatId)! : { controller: new AbortController(), correzioni: [] as string[] };
-    if (!giàVivo) this.vivi.set(chatId, vivo);
+    const { lane: vivo, release } = this.corsie.attach(this.corsia(chatId));
 
     return {
       onDelta,
@@ -1309,7 +1322,7 @@ export class TelegramConnector {
       signal: vivo.controller.signal,
       steer: () => vivo.correzioni.splice(0),
       stop: async () => {
-        if (!giàVivo) this.vivi.delete(chatId);
+        release();
         const presence = await presencePromise;
         await presence.stop();
         await transcript.stop();
@@ -1423,12 +1436,15 @@ export class TelegramConnector {
 
   /** «In coda» o «in pausa», una volta sola per messaggio, solo quando è vero. */
   private async avvisa(incoming: Incoming): Promise<void> {
-    if (this.avvisati.has(incoming.updateId)) return;
-    const inPausa = this.deps.pausa?.attiva() === true;
-    const vivo = this.vivi.has(incoming.chatId);
-    if (!inPausa && !vivo) return;
-    this.avvisati.add(incoming.updateId);
-    const testo = inPausa ? '⏸ in pausa: lo leggo al /resume.' : '📥 in coda: rispondo appena finisco con quello di prima.';
+    // Per **update**, non per drain: due messaggi arrivati mentre lo stesso
+    // turno gira sono due fatti da dire all'owner, e lo stesso update visto da
+    // un secondo drain è uno solo. La decisione — e le due frasi — stanno in
+    // `connectors/shared/ingress/lane.ts`.
+    const testo = this.avvisi.decide(incoming.updateId, {
+      inPausa: this.deps.pausa?.attiva() === true,
+      vivo: this.corsie.isLive(this.corsia(incoming.chatId)),
+    });
+    if (testo === undefined) return;
     try {
       await this.deps.api.sendMessage(incoming.chatId, testo, {
         replyTo: incoming.messageId,
@@ -1885,8 +1901,7 @@ export class TelegramConnector {
       // coda delle correzioni. Registrato prima di `runTurn` e tolto nel
       // `finally` qui sotto, così `/stop` e `/steer` trovano qualcosa esattamente
       // mentre c'è qualcosa.
-      const vivo = { controller: new AbortController(), correzioni: [] as string[] };
-      this.vivi.set(incoming.chatId, vivo);
+      const vivo = this.corsie.open(this.corsia(incoming.chatId));
 
       const result = await runTurn(this.deps.loop, {
         signal: vivo.controller.signal,
@@ -2027,7 +2042,7 @@ export class TelegramConnector {
       }
       this.deps.inbox.markProcessed(stored.updateId, this.now());
     } finally {
-      if (this.vivi.get(incoming.chatId)?.controller !== undefined) this.vivi.delete(incoming.chatId);
+      this.corsie.close(this.corsia(incoming.chatId));
       await presence.stop();
       // Non su un turno lasciato aperto per l'approvazione (`lasciataAperta`):
       // `stop()` è idempotente, ma qui vorrebbe dire congelare per sempre
@@ -2237,51 +2252,51 @@ export class TelegramConnector {
   private async tryCommand(incoming: Incoming): Promise<boolean> {
     if (!this.deps.comandi || !sembraComando(incoming.text)) return false;
     const { principal, sessionKey } = principalFor(incoming, this.deps.config.ownerUserId);
-    if (principal.kind !== 'owner') return false;
 
     // Stessa chiave del turno qui sopra, e dalla stessa funzione: `/new` deve
     // archiviare la conversazione che il turno successivo riaprirà, non
     // un'altra con lo stesso nome.
     const sessione = this.deps.sessions.open(sessionKey);
-    const chatId = incoming.chatId;
-    const pausa = this.deps.pausa;
-    // Le leve di ADR-0054, per **questa** chat: il turno vivo è quello della
-    // sua corsia, e `/stop` dal gruppo non ferma il turno della privata.
-    const controlli: Controlli = {
-      vivo: () => this.vivi.has(chatId),
-      stop: () => {
-        const v = this.vivi.get(chatId);
-        if (v === undefined) return false;
-        v.controller.abort();
-        return true;
+    return tryControlCommand({
+      principal,
+      text: incoming.text,
+      sessionId: sessione.id,
+      // Le leve di ADR-0054, per **questa** chat: il turno vivo è quello della
+      // sua corsia, e `/stop` dal gruppo non ferma il turno della privata.
+      controlli: controlliPerCorsia(this.corsie, this.corsia(incoming.chatId), this.deps.pausa),
+      esegui: this.deps.comandi,
+      // Il dialetto resta qui. `renderForTelegram` taglia sotto il limite di
+      // Telegram: `/model --list` supera i 4096 caratteri con una manciata di
+      // modelli, e mandarne solo il primo pezzo sarebbe un elenco troncato in
+      // silenzio. La citazione sta sul primo: e' li' che si vede a quale
+      // messaggio si sta rispondendo.
+      rispondi: async (testo) => {
+        const pezzi = renderForTelegram(testo);
+        for (const [i, pezzo] of pezzi.entries()) {
+          const topic = incoming.threadId === undefined ? {} : { threadId: incoming.threadId };
+          await this.deps.api.sendMessage(
+            incoming.chatId,
+            pezzo,
+            i === 0 ? { replyTo: incoming.messageId, ...topic } : topic,
+          );
+        }
       },
-      steer: (testo) => {
-        const v = this.vivi.get(chatId);
-        if (v === undefined) return false;
-        v.correzioni.push(testo);
-        return true;
-      },
-      pausa:
-        pausa === undefined
-          ? { attiva: () => false, metti: () => {}, togli: () => {} }
-          : { attiva: () => pausa.attiva(), metti: () => pausa.metti(), togli: () => pausa.togli() },
-    };
-    const esito = await this.deps.comandi(incoming.text, sessione.id, controlli);
-    if (esito === null) return false;
-    // `renderForTelegram` taglia sotto il limite di Telegram: `/model --list`
-    // supera i 4096 caratteri con una manciata di modelli, e mandarne solo il
-    // primo pezzo sarebbe un elenco troncato in silenzio. La citazione sta sul
-    // primo: e' li' che si vede a quale messaggio si sta rispondendo.
-    const pezzi = renderForTelegram(esito.testo);
-    for (const [i, pezzo] of pezzi.entries()) {
-      const topic = incoming.threadId === undefined ? {} : { threadId: incoming.threadId };
-      await this.deps.api.sendMessage(
-        incoming.chatId,
-        pezzo,
-        i === 0 ? { replyTo: incoming.messageId, ...topic } : topic,
-      );
-    }
-    return true;
+    });
+  }
+
+  /**
+   * La chiave di corsia di questa chat.
+   *
+   * Il prefisso è l'id della porta e non è decorativo: per l'owner
+   * `identify()` risponde `'owner'` su ogni porta, quindi un registro
+   * condiviso senza prefisso fonderebbe il turno vivo di Telegram con quello
+   * di Discord (invariante 5). La seconda metà è il `chatId` e non la
+   * `sessionKey`, perché `sessionKey` porta il suffisso `#<threadId>` di un
+   * topic di forum: due topic dello stesso gruppo condividono una corsia
+   * oggi, e questa fetta non cambia quel numero.
+   */
+  private corsia(chatId: number): string {
+    return laneKey('telegram', chatId);
   }
 
   /**
