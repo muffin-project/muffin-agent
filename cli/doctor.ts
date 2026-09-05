@@ -11,6 +11,7 @@ import { currentSchemaVersion, schemaVersionOf } from '../core/db/migrate.js';
 import { CONSERVATIVE, loadProfiles, selectProfile } from '../agent/profiles/profile.js';
 import { hardeningHolds, verify } from '../core/rot/verify.js';
 import { checkRotReaders } from '../core/rot/readers.js';
+import { loadSealedOwner } from '../core/rot/owner.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import { readGateway } from '../core/gateway/lock.js';
 import { PLAIN, type Style } from './ui.js';
@@ -21,7 +22,7 @@ import { readConsolidation } from '../core/memory/consolidator.js';
 import { makeEmbedder, OllamaEmbedder, type Embedder } from '../core/memory/embed.js';
 import { quantiNonIndicizzati } from '../core/memory/vectors.js';
 import { readOpenContradictions } from '../core/memory/maintenance.js';
-import { loadConfig, locateSecretAll, paths, readSecret, ConfigError } from '../core/config/config.js';
+import { loadConfig, locateSecretAll, paths, readSecret, ConfigError, type Config } from '../core/config/config.js';
 import { describeWorkspace } from '../core/config/workspace.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { diagnoseDefaultsDrift, type DefaultDrift } from '../core/config/defaults-drift.js';
@@ -308,6 +309,8 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
   } else {
     warn('root of trust', `${rot.reason}: ${rot.diverged.join(', ')} — safe mode`, rot.remedy);
   }
+  ownerBindingCheck(ok, warn, fail, home, config);
+
   // Where the permission matrix came from. Same shape of invisible fact as the
   // cache dialect above: the sealed file and the compiled fallback behave
   // identically on a default install, so nothing in the agent's output tells
@@ -1502,4 +1505,88 @@ async function probeEmbedder(
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
+}
+
+/**
+ * Chi è l'owner, e **da dove viene quel legame** — DAY-1 B15, la metà
+ * «protetto».
+ *
+ * Stessa classe di fatto invisibile del tetto di spesa qui sopra: per mesi
+ * `rot/budgets.json` e `config.json` hanno portato gli stessi numeri, e niente
+ * distingueva «il sigillo tiene il tetto» da «il sigillo tiene una copia del
+ * tetto». Qui la posta è più alta di un numero: `surfaces.telegram.ownerUserId`
+ * decide chi ha autorità di owner, e in un `config.json` ordinario lo riscrive
+ * qualunque processo che gira come l'owner — senza che niente, da nessuna
+ * parte, lo dica.
+ *
+ * Quattro esiti, uno per stato reale, perché confonderli è il difetto:
+ * sigillato; sigillato ma diverso da `config.json` (chi vince, e perché);
+ * solo in `config.json` (legacy: il rimedio, non un allarme); sigillato e non
+ * verificabile (nessuno è owner — questo è un `fail`).
+ */
+function ownerBindingCheck(
+  ok: (name: string, detail: string) => void,
+  warn: (name: string, detail: string, remedy: string) => void,
+  fail: (name: string, detail: string, remedy: string) => void,
+  home: string,
+  config: Config,
+): void {
+  const sealed = loadSealedOwner(home);
+  const tgConfig = config.surfaces.telegram?.ownerUserId;
+  const dcConfig = config.surfaces.discord?.ownerUserId;
+
+  if (sealed.source === 'refused') {
+    fail(
+      'owner binding',
+      `${sealed.note ?? 'il legame sigillato non si verifica'} — nessuna superficie riconosce più un owner`,
+      'guarda cosa è cambiato in rot/owner.json; se la modifica è tua `muffin rot reseal`, altrimenti rifai `muffin surface enable telegram --owner <id>`',
+    );
+    return;
+  }
+
+  const tgSealed = sealed.binding?.telegram?.userId;
+  const dcSealed = sealed.binding?.discord?.userId;
+  const sigillati: string[] = [];
+  if (tgSealed !== undefined) sigillati.push(`telegram ${tgSealed}`);
+  if (dcSealed !== undefined) sigillati.push(`discord ${dcSealed}`);
+
+  // Divergenza: il file sigillato e `config.json` nominano owner diversi per
+  // la stessa superficie. Non è un dettaglio di pulizia — è la domanda «quale
+  // dei due mi riconosce», e la risposta va detta, non dedotta.
+  const diverse: string[] = [];
+  if (tgSealed !== undefined && tgConfig !== undefined && tgSealed !== tgConfig) {
+    diverse.push(`telegram: sigillo ${tgSealed}, config.json ${tgConfig}`);
+  }
+  if (dcSealed !== undefined && dcConfig !== undefined && dcSealed !== dcConfig) {
+    diverse.push(`discord: sigillo ${dcSealed}, config.json ${dcConfig}`);
+  }
+
+  if (sigillati.length > 0 && diverse.length > 0) {
+    warn(
+      'owner binding',
+      `${diverse.join(' · ')} — vince il sigillo, e il campo in config.json non viene nemmeno letto`,
+      'se l\'owner giusto è quello sigillato non devi fare niente; se non lo è, `muffin surface enable telegram --owner <id>` lo riscrive e risigilla',
+    );
+    return;
+  }
+
+  if (sigillati.length > 0) {
+    ok('owner binding', `rot/owner.json — ${sigillati.join(', ')}, dentro il sigillo`);
+    // Una superficie legata solo in config.json accanto a una già sigillata
+    // resta legacy: va detta lo stesso, o la riga verde qui sopra coprirebbe
+    // metà della verità.
+  }
+
+  const legacy: string[] = [];
+  if (tgSealed === undefined && tgConfig !== undefined) legacy.push(`telegram ${tgConfig}`);
+  if (dcSealed === undefined && dcConfig !== undefined) legacy.push(`discord ${dcConfig}`);
+  if (legacy.length === 0) return;
+
+  warn(
+    'owner binding legacy',
+    `${legacy.join(', ')} — il legame vive solo in config.json, fuori dal sigillo: qualunque processo che gira come te ` +
+      'può riscriverlo e diventare owner, e nessun hash se ne accorgerebbe' +
+      (sealed.note === undefined ? '' : ` (${sealed.note})`),
+    'rifai `muffin surface enable telegram` (o `discord`): scrive rot/owner.json e risigilla nello stesso giro',
+  );
 }

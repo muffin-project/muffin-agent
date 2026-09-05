@@ -29,7 +29,8 @@
     "lint": "biome check --changed",
     "lint:all": "biome check .",
     "format": "biome format --write --changed",
-    "igiene": "node scripts/igiene.mjs"
+    "igiene": "node scripts/igiene.mjs",
+    "merge": "tsx scripts/merge.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.12",
