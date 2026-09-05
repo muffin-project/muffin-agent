@@ -31,7 +31,7 @@ import { cmdVaultAdd, cmdVaultCheck, cmdVaultLs, cmdVaultReindex, VAULT_USAGE } 
 import { cmdSurfaceDefault, cmdSurfaceDisable, cmdSurfaceEnable, cmdSurfaceList, SURFACE_USAGE } from './surface.js';
 import { cmdMcpAdd, cmdMcpList, cmdMcpRemove, MCP_USAGE } from './mcp.js';
 import { cmdAdopt } from './adopt.js';
-import { cmdJobsAdd, cmdJobsList, cmdJobsRemove, JOBS_USAGE } from './jobs.js';
+import { cmdJobsAdd, cmdJobsCap, cmdJobsList, cmdJobsRemove, JOBS_USAGE } from './jobs.js';
 import {
   cmdGatewayInstall,
   cmdGatewayRestart,
@@ -1127,6 +1127,7 @@ function cmdJobs(argv: string[]): number {
   const home = paths().home;
   if (sub === 'list' || sub === undefined) return cmdJobsList(home);
   if (sub === 'add') return cmdJobsAdd(home, rest);
+  if (sub === 'cap' && rest[0] && rest[1]) return cmdJobsCap(home, rest[0], rest[1]);
   if (sub === 'remove' && rest[0]) return cmdJobsRemove(home, rest[0]);
   process.stderr.write(JOBS_USAGE);
   return 78;
