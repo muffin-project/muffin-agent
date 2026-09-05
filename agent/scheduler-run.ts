@@ -1,9 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import type { JobFireStore } from '../core/scheduler/job-fires.js';
-import type { Job } from '../core/scheduler/jobs.js';
+import { jobPayload, type Job } from '../core/scheduler/jobs.js';
 import type { FireDeferred, FireSettleOnly, JobOutcome, RunJob } from '../core/scheduler/scheduler.js';
 import type { ExecResult } from '../core/sandbox/executor.js';
-import { SCRIPT_MODEL, type TurnCounters, type TurnOutcome } from '../core/turns/store.js';
+import { CAPPED_MODEL, SCRIPT_MODEL, type TurnCounters, type TurnOutcome } from '../core/turns/store.js';
 import { runTurn, type LoopDeps, type TurnResult } from './loop.js';
 import { recoveredText } from './recovered-text.js';
 
@@ -122,7 +122,31 @@ async function runFresh(
   signal: AbortSignal | undefined,
   exec: JobExec | null,
   scope: ScriptScope | null,
+  jobBudget: JobBudget | null,
 ): Promise<JobOutcome> {
+  /**
+   * **Il tetto per-job, e sta qui perché qui è l'unico punto che chiama il
+   * modello** (DAY-1 E1, ADR-0035 emendamento №2).
+   *
+   * Prima del ramo `script`, prima della sessione, prima del prompt: la
+   * domanda «questo job ha già speso il suo?» va fatta quando la risposta può
+   * ancora impedire la spesa. Un controllo dopo `runTurn` misurerebbe un
+   * addebito già avvenuto.
+   *
+   * `null` come tetto è «l'owner non ne ha messo uno» e non passa di qui.
+   * `null` come `jobBudget` è invece un cablaggio mancante, e viene trattato
+   * come `exec === null` poche righe più in basso: se il job dichiara un
+   * tetto e nessuno può misurarlo, il job **non parte**. Fail-open qui
+   * sarebbe la forma esatta del guasto che questa slice chiude — un limite
+   * che l'owner ha scritto e che il sistema ignora in silenzio.
+   */
+  if (job.perJobUsd !== null) {
+    if (jobBudget === null) {
+      return skipForBudget(deps, job, turnId, null, job.perJobUsd);
+    }
+    const spent = jobBudget.jobMonthUsd(job.id);
+    if (spent >= job.perJobUsd) return skipForBudget(deps, job, turnId, spent, job.perJobUsd);
+  }
   // Un job `script` non passa di qui sotto: nessuna sessione, nessun prompt,
   // nessuna chiamata al modello. Il turno durevole viene scritto lo stesso —
   // è ciò che tiene l'esattamente-una-volta, la visibilità in `doctor` e la
@@ -138,6 +162,12 @@ async function runFresh(
     surface: job.channel,
     session,
     text: job.goal,
+    // L'attribuzione della spesa, e non un'etichetta: ogni riga di `spend`
+    // che questo turno scrive porta questo id, ed è ciò che il gate qui sopra
+    // legge al giro successivo. Toglierla non rompe niente oggi e rende il
+    // tetto per-job un numero che non scende mai — il guasto silenzioso che
+    // questa slice esiste per chiudere.
+    jobId: job.id,
     // The identity `fires.bind` already committed, threaded in so the row
     // this call writes is the row the fire is already pointing at — never a
     // second, competing one.
@@ -190,12 +220,13 @@ async function resolveBound(
   signal: AbortSignal | undefined,
   exec: JobExec | null,
   scope: ScriptScope | null,
+  jobBudget: JobBudget | null,
 ): Promise<JobOutcome | FireDeferred | FireSettleOnly> {
   const existing = deps.turns.get(turnId);
   // The bind landed, but the row it points at does not exist — a crash
   // between the two (fault point 2). Nothing has run yet, so this is not a
   // duplicate: finish exactly what was interrupted, with the same identity.
-  if (existing === null) return runFresh(deps, job, turnId, signal, exec, scope);
+  if (existing === null) return runFresh(deps, job, turnId, signal, exec, scope, jobBudget);
   if (existing.status !== 'done') return { deferred: true };
   // `done`, and delivery already resolved by someone else (a live run's own
   // `Scheduler.settle`, or a completed one this same check is re-observing) —
@@ -228,6 +259,18 @@ export type JobExec = {
 /** Dove gira uno script di job, e per quanto al massimo. */
 export type ScriptScope = { cwd: string; timeoutMs?: number };
 
+/**
+ * Cosa serve per far rispettare un tetto per-job: sapere quanto quel job ha
+ * speso questo mese. `BudgetEngine` lo implementa; un finto con quel metodo è
+ * un contatore valido, come `JobExec` per l'esecutore.
+ *
+ * Un'interfaccia e non `BudgetEngine`: `agent/scheduler-run.ts` non ha
+ * bisogno di poter *registrare* spesa, e un tipo che gliene desse la
+ * possibilità renderebbe possibile un secondo scrittore del registro proprio
+ * nel file che deve solo leggerlo.
+ */
+export type JobBudget = { jobMonthUsd(jobId: string): number };
+
 export function makeJobRunner(
   deps: LoopDeps,
   fires: JobFireStore,
@@ -257,6 +300,19 @@ export function makeJobRunner(
    * invece di indovinare.
    */
   scope: ScriptScope | null = null,
+  /**
+   * Il contatore che il tetto per-job consuma, e `null` quando nessuno l'ha
+   * cablato.
+   *
+   * Stessa disciplina di `exec`/`scope` qui sopra, e per la stessa ragione: un
+   * default che *finge* di misurare — `{ jobMonthUsd: () => 0 }` — farebbe
+   * passare ogni tetto per non ancora raggiunto, per sempre, e la suite
+   * resterebbe verde su un limite che non limita. `null` invece chiude:
+   * `runFresh` rifiuta di far partire un job che dichiara un tetto quando non
+   * c'è modo di leggerne il conto. I due chiamanti di produzione
+   * (`cli/gateway.ts`, `cli/repl.ts`) passano `runtime.budget`.
+   */
+  jobBudget: JobBudget | null = null,
 ): RunJob {
   return async (job: Job, signal): Promise<JobOutcome | FireDeferred | FireSettleOnly> => {
     // The occurrence that is due, not the moment this process noticed it —
@@ -264,18 +320,113 @@ export function makeJobRunner(
     // recomputed later in this call.
     const scheduledFor = job.nextFireAt.toISOString();
     const fire = fires.claim(job.id, scheduledFor);
-    if (fire.turnId !== null) return resolveBound(deps, job, fire.turnId, signal, exec, scope);
+    if (fire.turnId !== null) return resolveBound(deps, job, fire.turnId, signal, exec, scope, jobBudget);
 
     const minted = randomBytes(16).toString('hex');
     const winner = fires.bind(job.id, scheduledFor, minted);
     // Lost the race: some other bind landed first. There is no turn to run —
     // `minted` was never written anywhere — so this resolves the winner's id
     // exactly as if it had found it already bound at the top of this call.
-    if (winner !== minted) return resolveBound(deps, job, winner, signal, exec, scope);
-    return runFresh(deps, job, winner, signal, exec, scope);
+    if (winner !== minted) return resolveBound(deps, job, winner, signal, exec, scope, jobBudget);
+    return runFresh(deps, job, winner, signal, exec, scope, jobBudget);
   };
 }
 
+
+/**
+ * Il tetto ha detto no: il giro non parte, e resta scritto perché.
+ *
+ * Tre cose insieme, e nessuna delle tre da sola basterebbe:
+ *
+ *  1. **Il modello non viene chiamato.** Nessuna sessione, nessun prompt,
+ *     nessun contesto assemblato. È il punto: il tetto esiste per non
+ *     spendere, non per spendere e poi dirlo.
+ *  2. **La riga durevole si scrive lo stesso**, con esito `budget` e i
+ *     contatori a zero — la stessa disciplina di `runScript`. È ciò su cui
+ *     poggiano l'esattamente-una-volta di `job_fires`, la visibilità in
+ *     `muffin doctor` e la consegna: senza riga, un job che ha smesso di
+ *     girare è indistinguibile da uno che gira e non trova niente da dire.
+ *  3. **L'owner lo sente.** Il testo non è vuoto, quindi `Scheduler` lo
+ *     consegna sul canale del job. Un job spento in silenzio *sembra verde*, ed
+ *     è la forma di guasto che `core/scheduler/scheduler.ts` nomina già in
+ *     proprio ("un controllo che fallisce in silenzio è peggio di un controllo
+ *     che non esiste"). Il costo dichiarato: un job a cadenza fitta lo ripete a
+ *     ogni occorrenza finché l'owner non alza il tetto (`muffin jobs cap`) o
+ *     finché non cambia il mese. Ripetere è la direzione recuperabile; tacere
+ *     no.
+ */
+function skipForBudget(
+  deps: LoopDeps,
+  job: Job,
+  turnId: string,
+  /** Quanto ha speso questo mese, o `null` quando non c'è modo di misurarlo. */
+  spentUsd: number | null,
+  capUsd: number,
+): JobOutcome {
+  const session = deps.sessions.open(`job-${job.id.slice(0, 8)}-${randomBytes(3).toString('hex')}`);
+  // Tutti a zero, e sono la prova: nessun giro, nessuna tool call, nessun
+  // token, nessuna spesa. La riga *dichiara* che il modello non è stato
+  // chiamato invece di lasciarlo dedurre.
+  const counters: TurnCounters = {
+    iterations: 0,
+    recoveriesUsed: 0,
+    transportRetriesLeft: 0,
+    toolCallsMade: 0,
+    nudgedForCompletion: false,
+    usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    spentUsd: 0,
+    resumes: 0,
+    // `true` come in `runScript`, e non "false perché non è stato costruito
+    // niente": `agent/loop.ts` usa questo flag per riconoscere un primo
+    // tentativo mai partito (riga `firstAttempt`), e una riga che dichiara di
+    // non aver ancora costruito il contesto è una riga che un boot successivo
+    // può decidere di riprendere. Qui non c'è niente da riprendere.
+    contextBuilt: true,
+  };
+  const breve = job.id.slice(0, 8);
+  const testo =
+    spentUsd === null
+      ? `Job "${breve}" non eseguito: dichiara un tetto di $${capUsd} al mese e questo processo non ha modo ` +
+        `di leggerne la spesa. Non lo faccio partire senza poter contare. \`muffin doctor\` dice cosa manca.`
+      : `Job "${breve}" non eseguito: ha già speso $${spentUsd.toFixed(2)} questo mese, sul tetto per-job di ` +
+        `$${capUsd}. Il modello non è stato chiamato. \`muffin jobs cap ${breve} <dollari>\` per cambiarlo, ` +
+        `\`muffin jobs cap ${breve} none\` per toglierlo.`;
+  // La riga prima dell'esito, come ovunque in questo file: `create` apre e
+  // conia il claim token, `finish` chiude solo la riga di cui è titolare.
+  const aperta = deps.turns.create({
+    id: turnId,
+    principal: { kind: 'system', source: 'scheduler' },
+    tenant: 'host',
+    surface: job.channel,
+    sessionId: session.id,
+    // `CAPPED_MODEL`, non `SCRIPT_MODEL` e non una stringa a mano: dice quale
+    // dei due motivi «senza modello» è questo, e `agent/loop.ts` la legge per
+    // non riprendere col modello un turno nato dal rifiuto di chiamarlo.
+    model: CAPPED_MODEL,
+    // La riga porta il job anche quando il modello non è stato chiamato: è
+    // ciò che rende «quali giri di questo job sono stati rifiutati» una
+    // query invece di una deduzione dal nome della sessione.
+    jobId: job.id,
+    messages: [{ role: 'user', content: [{ type: 'text', text: jobPayload(job) }] }],
+    taint: 0,
+    counters,
+    replyTo: { channel: job.channel },
+  });
+  deps.turns.finish(
+    turnId,
+    {
+      outcome: 'budget',
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: jobPayload(job) }] },
+        { role: 'assistant', content: [{ type: 'text', text: testo }] },
+      ],
+      taint: 0,
+      counters,
+    },
+    aperta.claimToken,
+  );
+  return { stopped: 'budget', text: testo, turnId };
+}
 
 /**
  * Un'occorrenza che esegue invece di ragionare.
@@ -347,6 +498,7 @@ async function runScript(
     // per rifiutarsi di riprendere attraverso il modello un turno che il
     // modello non ha mai visto.
     model: SCRIPT_MODEL,
+    jobId: job.id,
     messages: [{ role: 'user', content: [{ type: 'text', text: `script: ${comando}` }] }],
     taint: 0,
     counters,
