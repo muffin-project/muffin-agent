@@ -555,8 +555,13 @@ describe('parseInventoryRows — una barra dentro una cella non fa sparire la ri
     expect(rows[0]!.question).toBe('Aggiornare il codice non distrugge dati?');
   });
 
-  it('una barra NON sfuggita resta un separatore di colonna: la riga ha troppe celle e non è una riga di dati', () => {
-    expect(parseInventoryRows(`${riga('READY — a | b')}\n${riga('READY — sano')}`, 'finto.md').length).toBe(1);
+  it('una barra NON sfuggita non fa sparire la riga in silenzio: il parser rifiuta e nomina la riga', () => {
+    // 05/09/2026: la riga E1 scritta con `<dollari|none>` spariva dall'inventario
+    // e il rapporto accusava il manifest («scenario E1 orfano»), come il
+    // docstring del parser già prevedeva. Il rifiuto manda al file giusto.
+    expect(() => parseInventoryRows(`${riga('READY — a | b')}\n${riga('READY — sano')}`, 'finto.md')).toThrow(
+      /riga A6 in finto\.md non si legge/,
+    );
   });
 
   it('il separatore `|---|` continua a non essere una riga di dati', () => {
