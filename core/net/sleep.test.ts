@@ -73,7 +73,7 @@ describe('sleep — un timer, con o senza un modo per abbandonarlo', () => {
 describe('sleep — una porta sola, verificata sui chiamanti unificati', () => {
   const root = join(import.meta.dirname, '..', '..');
   const chiamanti = [
-    { file: 'agent/loop.ts', importPath: '../core/net/sleep.js' },
+    { file: 'agent/loop/round.ts', importPath: '../../core/net/sleep.js' },
     { file: 'connectors/discord/api.ts', importPath: '../../core/net/sleep.js' },
     { file: 'connectors/telegram/api.ts', importPath: '../../core/net/sleep.js' },
   ];
