@@ -526,6 +526,26 @@ export type CampioneDiCarico = { quando: string; load1: number; cpu: number; alt
  *
  * Pura: riceve i campioni, non li prende.
  */
+/**
+ * Il container ha le risorse di `ubuntu-latest` (4 vCPU), non quelle del Mac.
+ *
+ * Senza il tetto, quattro job in parallelo si contendono tutti i core
+ * dell'host e vitest, che dimensiona i worker su `os.cpus()` (10 qui, dentro
+ * il container come fuori), ne lancia 10 per container: 40 worker su 10
+ * core. Il 05/09/2026 il job `verifica` e' caduto due volte su `dev` pulito
+ * con `[vitest-worker]: Timeout calling "onTaskUpdate"` — l'RPC fra worker e
+ * runner scaduto, non un test rosso — e 30 test su 3582 mai riportati.
+ * `--cpus` limita la CPU ma non cambia `os.cpus()`, quindi i worker vanno
+ * detti a vitest a parte (`VITEST_MAX_THREADS`/`VITEST_MAX_FORKS`).
+ */
+export const RISORSE_DEL_RUNNER: readonly string[] = [
+  '--cpus=4',
+  '-e',
+  'VITEST_MAX_THREADS=4',
+  '-e',
+  'VITEST_MAX_FORKS=4',
+];
+
 export function contesa(campioni: readonly CampioneDiCarico[]): string | null {
   const ragioni: string[] = [];
   for (const c of campioni) {
@@ -576,6 +596,7 @@ export function runContainer(opts: {
       '--rm',
       '--name',
       opts.containerName,
+      ...RISORSE_DEL_RUNNER,
       ...opts.dockerArgs,
       '-v',
       `${opts.repoTar}:/repo.tar:ro`,
