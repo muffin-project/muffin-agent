@@ -6,7 +6,7 @@ import type { CapabilityDecl, CapabilityId, Decision, DecisionRequest } from '..
 import type { SessionMessage, SessionRef, SessionStore } from '../core/session/store.js';
 import { tierOf } from '../core/surface/types.js';
 import type { UndoJournal } from '../core/undo/journal.js';
-import { SCRIPT_MODEL } from '../core/turns/store.js';
+import { CAPPED_MODEL, SCRIPT_MODEL } from '../core/turns/store.js';
 import type { TurnCounters, TurnOutcome, TurnRecord, TurnStopped, TurnStore } from '../core/turns/store.js';
 import { planTaint, type TodoItem, type TodoStore } from '../core/turns/todo.js';
 import { decodeWaitFor, encodeWaitFor, satisfied, wakeReport, type WaitSpec } from '../core/turns/wait.js';
@@ -305,6 +305,14 @@ export type SpendEntry = {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  /**
+   * The scheduled job this call belongs to, threaded from `TurnInput.jobId`.
+   *
+   * Absent on every interactive turn. It is what makes a per-job ceiling a
+   * question the ledger can answer at all: without a key, "how much has THIS
+   * job spent" is not a query, it is an inference from session-name prefixes.
+   */
+  jobId?: string | undefined;
 };
 
 type ToolHandler = (args: unknown, ctx: ToolContext) => Promise<ToolOutcome> | ToolOutcome;
@@ -693,6 +701,18 @@ export type TurnInput = {
    */
   id?: string | undefined;
   /**
+   * The scheduled job this turn is a fire of, when it is one.
+   *
+   * Absent on a REPL turn, a Telegram message, a commitment — everything an
+   * `undefined` here correctly describes as "not a job". Its only effect is on
+   * the spend rows this turn writes: they carry the job id, so the per-job
+   * ceiling in `agent/scheduler-run.ts` has a counter to read on the *next*
+   * fire. It changes nothing inside this turn — a turn already running is not
+   * stopped mid-flight by the per-job cap, because the cap's whole shape is
+   * "do not start", and a mid-turn abort would leave paid-for work undelivered.
+   */
+  jobId?: string | undefined;
+  /**
    * Where the answer has to go, for a surface that delivers **out of band**.
    *
    * Opaque here on purpose: the loop must not learn what a chat id is — that is
@@ -1005,6 +1025,8 @@ export function enqueueTurn(deps: LoopDeps, input: TurnInput): string {
     messages: [{ role: 'user', content: primoMessaggio(input) }],
     taint: initialTaint(input),
     counters: freshCounters(),
+    // Sulla riga, non solo nell'input: vedi `TurnRecord.jobId`.
+    ...(input.jobId === undefined ? {} : { jobId: input.jobId }),
     ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
   });
   return id;
@@ -1113,6 +1135,8 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     messages: [{ role: 'user', content: primoMessaggio(input) }],
     taint: initialTaint(input),
     counters: freshCounters(),
+    // Sulla riga, non solo nell'input: vedi `TurnRecord.jobId`.
+    ...(input.jobId === undefined ? {} : { jobId: input.jobId }),
     ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
   });
 
@@ -1342,6 +1366,33 @@ export async function resumeTurn(
    * fatto" né "fatto" ma **forse fatto**, ed è ciò che va detto invece di
    * scegliere una delle due e sbagliare a caso.
    */
+  /**
+   * Lo stesso principio, per l'altra riga che il modello non ha mai visto: un
+   * giro di job rifiutato dal proprio tetto di spesa (`CAPPED_MODEL`).
+   *
+   * La finestra è stretta — `create` e `finish` sono due scritture sincrone
+   * consecutive in `agent/scheduler-run.ts`, senza I/O in mezzo — ma se un
+   * crash ci atterra la riga resta `running`, e senza questa guardia la lane
+   * la riprenderebbe **chiamando il modello**: cioè spendendo esattamente i
+   * soldi che il tetto aveva appena rifiutato. Il rifiuto si chiude, non si
+   * riprende.
+   */
+  if (record.model === CAPPED_MODEL) {
+    deps.turns.finish(
+      record.id,
+      { outcome: 'budget', messages: record.messages, taint: record.taint, counters: record.counters },
+      record.claimToken,
+    );
+    return {
+      turnId: record.id,
+      traceId: record.id,
+      stopped: 'budget',
+      text: `Questo giro era già stato fermato dal tetto di spesa del job: non l'ho ripreso.`,
+      taint: record.taint,
+      iterations: 0,
+      usage: record.counters.usage,
+    };
+  }
   if (record.model === SCRIPT_MODEL) {
     const comando = textOfFirstUserMessage(record.messages);
     const testo =
@@ -1715,6 +1766,14 @@ async function guidaIlTurno(
     // e il modello risponderebbe a una nota vocale che non ha mai sentito.
     ...(userAudios(record.messages).length > 0 ? { audios: userAudios(record.messages) } : {}),
     ...(options.signal ? { signal: options.signal } : {}),
+    // **Dal record**, come il testo e le immagini qui sopra, e non dal
+    // `TurnInput` di `runTurn`: `drive` ricostruisce l'input, quindi un
+    // `jobId` passato solo là sparirebbe qui in silenzio — e le righe di
+    // `spend` di questo turno non apparterrebbero a nessun job. È il guasto
+    // che il test «la spesa di un giro di job finisce nel registro attribuita
+    // a QUEL job» ha misurato prima che questa riga esistesse; passare dal
+    // record è anche ciò che fa sopravvivere l'attribuzione a una ripresa.
+    ...(record.jobId === null ? {} : { jobId: record.jobId }),
     ...(record.replyTo === null ? {} : { replyTo: record.replyTo }),
     ...(options.replyChannel !== undefined ? { replyChannel: options.replyChannel } : {}),
     ...(options.onDelta ? { onDelta: options.onDelta } : {}),
@@ -2398,6 +2457,9 @@ async function guidaIlTurno(
         tenant: input.tenant,
         capability: 'llm.chat',
         model: result.model,
+        // Attribuzione, non contabilità: la riga di spesa porta il job da cui
+        // il turno è nato, così il tetto per-job ha un contatore da leggere.
+        ...(input.jobId === undefined ? {} : { jobId: input.jobId }),
         inputTokens: result.usage.inputTokens,
         outputTokens: result.usage.outputTokens,
         cacheReadTokens: result.usage.cacheReadTokens,
