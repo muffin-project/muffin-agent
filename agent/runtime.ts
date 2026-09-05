@@ -38,7 +38,7 @@ import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAICompatProvider } from './providers/openai-compat.js';
 import { fsCapabilities, fsList, makeFsTools, type FsScope } from './tools/fs.js';
 import { documentCapability, makeDocumentTool } from './tools/document.js';
-import { memoryCapability, memorySearchSpec, searchMemory } from './tools/memory.js';
+import { memoryCapability, memorySearchSpec, memoryWhySpec, searchMemory, whyMemory } from './tools/memory.js';
 import { Vault } from '../core/vault/vault.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { makeShellTool, shellCapability } from './tools/shell.js';
@@ -309,6 +309,7 @@ export function baseToolOrder(input: {
     'fs_search',
     'fs_write',
     'memory_search',
+    'memory_why',
     'document_read',
     ...(input.sandboxAvailable ? ['shell_run'] : []),
     'process_list',
@@ -539,6 +540,10 @@ export function buildRuntime(
 
   const recordSpend = (entry: SpendEntry): number => {
     const usd = costUsd(entry.model, entry, config.provider.baseUrl);
+    // `entry` porta già `jobId` quando il turno è il giro di un job
+    // (`agent/loop.ts`), e lo spread lo passa dritto alla riga di `spend`:
+    // niente da tenere in sincrono qui, e nessun secondo posto in cui
+    // l'attribuzione possa perdersi.
     budget.record({ ...entry, usd });
     return usd;
   };
@@ -653,6 +658,26 @@ export function buildRuntime(
       // with recalled text; recalled fragments only ever leave through its
       // fenced `return`, tiered to the worst source pulled in. An escape here
       // would be `recall()`'s own storage/internal error.
+      throwTier: 0,
+    },
+    {
+      // DAY-1 C5: the agent's own door to `muffin memory why` — same
+      // capability as `memory_search` above (`memory.read`), same tenant
+      // scoping rule (the turn's, never one the model names), registered
+      // right next to it so a reader sees both halves of "read the memory"
+      // together. Declared and never registered here would have been the
+      // exact failure the row was BLOCKER for: the CLI's `cmdMemoryWhy`
+      // already worked, and nothing wired the model's equivalent into a live
+      // runtime.
+      capability: memoryCapability.id,
+      spec: memoryWhySpec,
+      handler: async (args, ctx) => whyMemory(recallDeps, ctx.tenant, args),
+      // The provenance a "why" answer rests on is the turn's own grounding,
+      // same as a `memory_search` hit — clearing it to save context would
+      // strip the reason the answer was said in the first place.
+      keepResult: true,
+      // `whyMemory` never throws with a provenance answer; only a
+      // storage-level error escapes its fenced `return`s.
       throwTier: 0,
     },
     // The other half of "a document enters whole": the vault stores every page
