@@ -687,7 +687,13 @@ function muffinTty(env: Record<string, string>, args: string[]): { code: number;
   const ctrlD = join(mkdtempSync(join(tmpdir(), 'muffin-ctrl-d-')), 'eof');
   writeFileSync(ctrlD, '\u0004');
   const r = spawnSync('sh', ['-c', `${comando} < ${shq(ctrlD)}`], {
-    env: { ...process.env, NO_COLOR: '1', ...env }, encoding: 'utf8', timeout: 60_000,
+    // 120 s, non 60: dentro il container di ci:local, con gli altri tre job
+    // in parallelo, `script` + `muffin init` a freddo passavano i 60 s e il
+    // test diceva «appeso» (-1) a un comando che stava solo finendo tardi
+    // (05/09/2026, due giri). Il vero appeso di util-linux e' gia' escluso
+    // dal byte Ctrl+D qui sopra; il tetto serve solo a non aspettare per
+    // sempre, non a misurare la velocita' della macchina.
+    env: { ...process.env, NO_COLOR: '1', ...env }, encoding: 'utf8', timeout: 120_000,
   });
   // Le sequenze di controllo del pty non sono il contenuto: togliere quelle e i
   // CR rende le asserzioni leggibili quanto quelle del ramo headless.
