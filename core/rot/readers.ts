@@ -79,6 +79,17 @@ export type RotEntry = {
   readers?: RotReaderRef[];
   /** Set instead of `readers` when nothing at runtime is supposed to open it. */
   unreadByDesign?: string;
+  /**
+   * Questo file non lo spedisce `defaults/rot/`: nasce quando l'owner compie
+   * l'atto che lo crea (oggi: legare il proprio account, `rot/owner.json`).
+   *
+   * Serve perché `allowlist_stale` altrimenti direbbe il falso su ogni
+   * installazione non ancora appaiata: la voce non è deriva, è una promessa su
+   * un file che arriverà. La metà che conta — «se il sigillo lo contiene,
+   * qualcuno lo legge davvero» — resta identica: appena il file entra nel
+   * manifest, i suoi `readers` vengono verificati come per ogni altra voce.
+   */
+  optional?: true;
 };
 
 /**
@@ -141,6 +152,24 @@ export const ROT_READERS: RotEntry[] = [
         module: 'cli/jobs.ts',
         fn: 'loadSealedBudgets',
         why: 'quietHours.timezone, so a cron written as "8am" means the owner\'s 8am',
+        indirect: true,
+      },
+    ],
+  },
+  {
+    file: 'owner.json',
+    // Non spedito da `defaults/rot/`: lo crea il pairing. Vedi `optional`.
+    optional: true,
+    readers: [
+      {
+        module: 'core/rot/owner.ts',
+        fn: 'loadSealedOwner',
+        why: "chi è l'owner — il subject-id che `identify()` confronta, verificato contro anchor e manifest prima di valere",
+      },
+      {
+        module: 'cli/surface.ts',
+        fn: 'loadSealedOwner',
+        why: 'il legame che arriva davvero ai connettori: `connectSurfaces` costruisce da qui `TelegramConfig.ownerUserId` e il suo gemello Discord',
         indirect: true,
       },
     ],
@@ -294,7 +323,9 @@ export function checkRotReaders(home: string, allowlist: RotEntry[] = ROT_READER
   for (const entry of allowlist) {
     const covered = sealed.filter((path) => matches(entry, path));
     if (covered.length === 0) {
-      stale.push(entry.file);
+      // Una voce `optional` assente non è deriva: il file nasce da un atto
+      // dell'owner che può non essere ancora avvenuto.
+      if (entry.optional !== true) stale.push(entry.file);
       continue;
     }
     // Only matched entries are audited: an entry for a file this home does not
