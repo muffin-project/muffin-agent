@@ -388,6 +388,11 @@ describe('un verdetto su host conteso non e\' un verdetto', () => {
   it('load sopra il numero di cpu e\' contesa', () => {
     expect(contesa([{ quando: 'inizio', load1: 9.4, cpu, altriVitest: 0 }])).toContain('load 9.4 su 8');
   });
+  it("il load a fine corsa e' il nostro (quattro container), non contesa", () => {
+    // 05/09/2026: due giri scartati con «fine: load 11.8 su 10 cpu» e nessun
+    // altro processo sull'host — il campione di fine misurava ci:local stesso.
+    expect(contesa([{ quando: 'inizio', load1: 2.0, cpu, altriVitest: 0 }, { quando: 'fine', load1: 11.8, cpu, altriVitest: 0 }])).toBeNull();
+  });
   it('senza cpu note non inventa una soglia', () => {
     expect(contesa([{ quando: 'inizio', load1: 99, cpu: 0, altriVitest: 0 }])).toBeNull();
   });
