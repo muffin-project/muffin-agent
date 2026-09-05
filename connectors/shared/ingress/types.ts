@@ -166,6 +166,21 @@ export type InboundAddress = {
   readonly channel: string;
   /** The wire id of the message this one answers, when the port can quote/reply to it. `undefined` when there is nothing to point back at. */
   readonly replyTo?: string;
+  /**
+   * The same address as an **opaque durable record** — what goes into
+   * `turns.replyTo` and comes back out of it after a restart.
+   *
+   * Added in slice 14, and deliberately not derived from `channel`/`replyTo`
+   * above: those two are the router's own vocabulary, while this is the
+   * port's, and §4 invariant 2 keeps the durable schema untouched. Telegram's
+   * is `{chatId, messageId, threadId?, channel}` — a *chat* id and a *message*
+   * id, which `SurfaceRegistry`'s single channel string has nowhere to put
+   * (`cli/surface.ts`'s `doors` docstring names that as the reason the two
+   * addressing schemes were never collapsed). Nothing outside the port that
+   * produced this event ever reads a field of it; the router only carries it
+   * from here to `turns.replyTo` and back.
+   */
+  readonly record: Record<string, unknown>;
 };
 
 /**
