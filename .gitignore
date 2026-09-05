@@ -42,3 +42,6 @@ evals/character/out/
 
 # lo scratch del gate Linux locale (evals/acceptance/gate-linux.sh)
 .gate-linux/
+
+# verdetti del gate locale (scripts/merge.ts) — per macchina, mai in Git
+.ci-local/
