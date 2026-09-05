@@ -75,7 +75,20 @@ export function parseInventoryRows(text: string, source = DAY1_REQUIREMENTS): In
   const rows: InventoryRow[] = [];
   for (const line of text.split('\n')) {
     const m = riga.exec(line);
-    if (!m) continue;
+    if (!m) {
+      // A line that *starts* like a data row and *carries* a status but does
+      // not parse has a bare `|` inside a cell: skipping it would resurface
+      // as «scenario X orfano» and send whoever reads the report to the
+      // manifest, when the defect sits in this document (E1, 05/09/2026:
+      // `<dollari|none>` written without the backslash). Refuse instead.
+      const inizio = /^\|\s*([A-Z]\d{1,2})\s*\|/.exec(line);
+      if (inizio && /\|\s*(?:READY|OUT|BLOCKER|\?)/.test(line)) {
+        throw new Error(
+          `riga ${inizio[1]} in ${source} non si legge: una barra non sfuggita (\`|\`) dentro una cella la spezza in più colonne — scrivila \\|`,
+        );
+      }
+      continue;
+    }
     const [, id, area, question, rawStato] = m as unknown as [string, string, string, string, string];
     let stato: Stato;
     if (rawStato.startsWith('READY')) stato = 'READY';
