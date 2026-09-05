@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { contesa,
+import { RISORSE_DEL_RUNNER, contesa,
   buildJobScript,
   chooseDockerPrivileges,
   creaScannerPassi,
@@ -395,5 +395,13 @@ describe('un verdetto su host conteso non e\' un verdetto', () => {
   });
   it('senza cpu note non inventa una soglia', () => {
     expect(contesa([{ quando: 'inizio', load1: 99, cpu: 0, altriVitest: 0 }])).toBeNull();
+  });
+});
+
+describe('il container ha le risorse del runner, non del Mac', () => {
+  it('quattro cpu e quattro worker vitest, come ubuntu-latest', () => {
+    expect(RISORSE_DEL_RUNNER).toContain('--cpus=4');
+    expect(RISORSE_DEL_RUNNER).toContain('VITEST_MAX_THREADS=4');
+    expect(RISORSE_DEL_RUNNER).toContain('VITEST_MAX_FORKS=4');
   });
 });
