@@ -212,6 +212,18 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'B14',
     'attachment telegram: `send_file` reaches `sendDocument` on the real binary, with the real filename and byte length, to the owner\'s chat',
   ),
+  // New (slice/b15-owner-nel-rot): B15's authenticated half was already
+  // proven — `b-telegram-pairing.accept.ts` shows nobody becomes owner
+  // without the code. What had no proof is where the resulting binding
+  // *lives*: `config.json` is writable by any process running as the owner,
+  // so the row's "protetto" stayed open. This scenario drives the same real
+  // pairing and asserts the binding lands inside the seal, and that the seal
+  // still verifies afterwards (write + reseal as one act, or the install
+  // would fall into safe mode the moment it paired).
+  verde(
+    'B15',
+    'owner binding: pairing writes the owner into the sealed root of trust, and the seal still verifies',
+  ),
   verde(
     'D12',
     'ask telegram: the ASK shows the command and cwd plus the taint reason, an owner\'s button press resumes the suspended turn exactly once, and a non-owner\'s press decides nothing',
