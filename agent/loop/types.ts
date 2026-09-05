@@ -919,3 +919,27 @@ export type ResumeStream = {
   signal?: AbortSignal | undefined;
   steer?: (() => string[]) | undefined;
 };
+
+/**
+ * Compile-time exhaustiveness, not a runtime nicety.
+ *
+ * Called only from a `switch`'s `default` after every real case of a closed
+ * union has its own `case`. If the switch stays exhaustive, TypeScript
+ * narrows the switched value to `never` at that `default`, so `x` type-checks
+ * against the `never` parameter here and the file compiles. The day a case is
+ * added to the union without a matching `case` in that switch, `x` is no
+ * longer `never` there and the build breaks — on the addition, not on
+ * whatever depended on the branch nobody wrote. If it is somehow still
+ * reached at runtime (a value that bypassed the type checker: a cast, a
+ * dependency built from a different commit, a persisted record replayed after
+ * a schema change), it throws loudly instead of letting the caller silently
+ * treat the unrecognised value as whichever branch happens to be last.
+ *
+ * Shared between `agent/loop.ts` (the pre-loop decision switch) and
+ * `agent/loop/tool-call.ts` (`runTool`'s own decision switch) — moved here,
+ * not duplicated, because both switch over the same `Decision['effect']`
+ * union and a second copy would be free to drift the day that union grows.
+ */
+export function assertNever(x: never): never {
+  throw new Error(`unreachable: unhandled variant ${JSON.stringify(x)}`);
+}
