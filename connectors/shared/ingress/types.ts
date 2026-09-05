@@ -2,7 +2,7 @@ import type { TrustTier } from '../../../core/policy/types.js';
 import type { IncomingIdentity, Surface } from '../../../core/surface/types.js';
 
 /**
- * Slice 10 of the ingress decomposition (`docs/evidence/ingresso-e-nucleo-2026-09-05.md`
+ * Slice 10 of the ingress decomposition (`docs/evidence/ingresso-unico-e-nucleo-2026-09-05.md`
  * §2.1-§2.3, §3 row 10). Additive only: nothing under `connectors/telegram/` or
  * `connectors/discord/` constructs one of these yet. That arrives with §3 rows
  * 11-15, one stage at a time.
@@ -216,7 +216,7 @@ export type IngressPort = {
 
 /**
  * Constructs an `IngressPort`, refusing one whose declarations contradict
- * each other. `docs/evidence/ingresso-e-nucleo-2026-09-05.md` §2.3: "Un test
+ * each other. `docs/evidence/ingresso-unico-e-nucleo-2026-09-05.md` §2.3: "Un test
  * rende rosso il disaccordo fra `port.ingress.edit` e
  * `surface.streaming.transport`" — a ban on writing the disagreement (a grep
  * a future edit could route around) is weaker than refusing to construct the
