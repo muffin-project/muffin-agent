@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 import { runTurn, type LoopDeps } from '../../agent/loop.js';
-import { checkPairing, type PendingPairing } from '../../core/config/pairing.js';
+import type { PendingPairing } from '../../core/config/pairing.js';
 import type { SessionStore } from '../../core/session/store.js';
 import type { TrustTier } from '../../core/policy/types.js';
 import { identify, tierOf, type SurfaceIdentity } from '../../core/surface/types.js';
@@ -12,6 +12,7 @@ import { startPresence } from './presence.js';
 import { renderForDiscord } from './render.js';
 import type { DiscordAttachment, DiscordMessage } from './api.js';
 import { awaitWithBudget } from '../shared/stop-budget.js';
+import { tryPair as sharedTryPair } from '../shared/ingress/pair.js';
 import { DRAIN_BUDGET_MS } from '../../core/gateway/service.js';
 
 /**
@@ -434,32 +435,37 @@ export class DiscordConnector {
   }
 
   /**
-   * The pairing gate — identical shape to `TelegramConnector.tryPair`, over a
-   * snowflake string instead of a numeric user id.
+   * The pairing gate. Slice 12: the algorithm itself now lives once in
+   * `connectors/shared/ingress/pair.ts` — this is Telegram's `tryPair`
+   * over a snowflake string instead of a numeric user id, and without the
+   * `ownerChatId` field only Telegram persists.
    */
   private async tryPair(incoming: Incoming): Promise<boolean> {
-    const { ownerUserId, pairing } = this.deps.config;
-    if (ownerUserId !== undefined || !pairing || !this.deps.savePairing) return false;
-    if (incoming.fromId === '') return false;
-
-    const { outcome, next } = checkPairing(pairing, incoming.text, new Date(this.now()));
-    const say = (text: string) => this.deps.api.sendMessage(incoming.channelId, text);
-
-    if (outcome.status === 'matched') {
-      this.deps.savePairing({ ownerUserId: incoming.fromId, pairing: null });
-      this.deps.config.ownerUserId = incoming.fromId;
-      this.deps.config.pairing = undefined;
-      await say('Sei tu. Da adesso questa è la nostra chat.');
-      return true;
-    }
-
-    if (!/^[\s0-9A-Za-z-]{8,12}$/.test(incoming.text.trim())) return false;
-
-    this.deps.savePairing({ pairing: next });
-    this.deps.config.pairing = next ?? undefined;
-    if (outcome.status === 'wrong') await say(`Non è quello. Tentativi rimasti: ${outcome.remaining}.`);
-    else await say('Quel codice non vale più. Rigenerane uno dalla CLI.');
-    return true;
+    return sharedTryPair(
+      {
+        ownerUserId: this.deps.config.ownerUserId,
+        pairing: this.deps.config.pairing,
+        canPersist: this.deps.savePairing !== undefined,
+      },
+      {
+        fromId: incoming.fromId,
+        text: incoming.text,
+        eligible: incoming.fromId !== '',
+      },
+      {
+        onMatched: (fromId) => {
+          this.deps.savePairing!({ ownerUserId: fromId, pairing: null });
+          this.deps.config.ownerUserId = fromId;
+          this.deps.config.pairing = undefined;
+        },
+        onAttempt: (next) => {
+          this.deps.savePairing!({ pairing: next });
+          this.deps.config.pairing = next ?? undefined;
+        },
+        say: (text) => this.deps.api.sendMessage(incoming.channelId, text),
+      },
+      new Date(this.now()),
+    );
   }
 
   private async handle(incoming: Incoming): Promise<void> {

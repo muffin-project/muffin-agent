@@ -4,13 +4,14 @@ import { runTurn, type LoopDeps, type TurnDelta, type TurnEvent } from '../../ag
 import type { AttachStream } from '../../agent/turn-lane.js';
 import { COMANDI, sembraComando, type Controlli } from '../../agent/comandi.js';
 import { recoveredText } from '../../agent/recovered-text.js';
-import { checkPairing, type PendingPairing } from '../../core/config/pairing.js';
+import type { PendingPairing } from '../../core/config/pairing.js';
 import { fence } from '../../core/memory/spotlight.js';
 import type { SessionStore } from '../../core/session/store.js';
 import type { TrustTier } from '../../core/policy/types.js';
-import { memoryWriteCapability } from '../../core/policy/doors.js';
 import { identify, tierOf, type SurfaceIdentity } from '../../core/surface/types.js';
 import { composeTurnText as sharedComposeTurnText } from '../shared/ingress/compose.js';
+import { tryPair as sharedTryPair } from '../shared/ingress/pair.js';
+import { rememberWithoutReplying } from '../shared/ingress/remember.js';
 import { contentTierOf, type IngressPart } from '../shared/ingress/types.js';
 import { TelegramError, type TelegramApiLike } from './api.js';
 import {
@@ -1631,12 +1632,6 @@ export class TelegramConnector {
    * ignora il kernel.
    */
   private ricordaSenzaRispondere(incoming: Incoming, log: (line: string) => void): void {
-    const memory = this.deps.loop.memory;
-    // Nessuna memoria collegata in questa installazione: niente da scrivere,
-    // e silenziosamente — la stessa degradazione che `agent/loop.ts` accetta
-    // per `deps.memory` assente altrove.
-    if (!memory) return;
-
     // Le stesse tre fonti che `composeTurnText` considera testo proprio del
     // messaggio, in ordine di preferenza — mai i byte di un allegato: se
     // questo ramo è stato raggiunto, `apreUnTurno` ha già escluso ogni
@@ -1652,52 +1647,23 @@ export class TelegramConnector {
     // portano.
     const trustTier = maxTier(tierOf(principal), contentTaintOf(incoming));
 
-    // Il kernel prima della scrittura, non dopo — la stessa domanda che il
-    // loop fa (`agent/loop.ts`'s `memoryDoorOpen`) mimata qui perché questo
-    // ramo non passa mai da `runTurn`: nessun turno esiste da cui chiederla.
-    const decision = this.deps.loop.decide({
-      principal,
-      tenant,
-      capability: memoryWriteCapability.id,
-      resource: { kind: 'tenant', value: tenant },
-      args: {},
-      taint: trustTier,
-    });
-    if (decision.effect !== 'allow') return;
-
-    // Nel suo `try`, perche' questa chiamata vive dentro il ciclo di `drain()`
-    // e fuori da ogni altro `try`: un errore di SQLite qui — un vincolo, un
-    // disco pieno — risalirebbe fino a `drain()` e fermerebbe **tutti** gli
-    // update Telegram, non solo questo. Un effetto collaterale a costo zero
-    // che puo' spegnere la superficie ha invertito la sua priorita'.
-    try {
-      memory.store.addEpisode({
-        tenantId: tenant,
-        connector: 'telegram',
-        threadKey: sessionKey,
-        role: 'user',
-        kind: 'message',
-        content,
-        trustTier,
-        // Non `actorId: incoming.fromId`: `episodes.actor_id` è una foreign key
-        // verso `identities.id` — una riga del *grafo*, risolta da chi collega
-        // un id di piattaforma a un'identità (estrazione/consolidamento), mai
-        // il numero grezzo che Telegram manda. Nessun altro punto di scrittura
-        // in produzione la valorizza (`agent/loop.ts`, due volte) per la stessa
-        // ragione, ed è comunque irraggiungibile qui: un tenant di gruppo non
-        // viene mai estratto (`CONSOLIDATION_TENANT`), quindi non esisterà mai
-        // una riga `identities` per questo mittente. Passare il numero grezzo
-        // fallisce il vincolo — misurato: `SqliteError: FOREIGN KEY constraint
-        // failed`.
-        createdAt: this.now(),
-      });
-    } catch (error) {
-      log(`telegram: messaggio di gruppo ${incoming.chatId} non ricordato — ${error instanceof Error ? error.message : String(error)}`);
+    // Slice 12: la scrittura, la porta del kernel e l'isolamento del `try`
+    // sono ora in `connectors/shared/ingress/remember.ts`, chiesti/eseguiti
+    // nello stesso ordine di prima.
+    const outcome = rememberWithoutReplying(
+      { memory: this.deps.loop.memory, decide: this.deps.loop.decide },
+      'telegram',
+      { principal, tenant, threadKey: sessionKey, content, trustTier, createdAt: this.now() },
+    );
+    if (outcome.kind === 'failed') {
+      log(`telegram: messaggio di gruppo ${incoming.chatId} non ricordato — ${outcome.message}`);
       return;
     }
-    // Mai il contenuto nel log: solo la stanza e il tier, come ogni altra
-    // riga di `drain()`.
-    log(`telegram: messaggio di gruppo ${incoming.chatId} ricordato senza rispondere (tier ${trustTier})`);
+    if (outcome.kind === 'written') {
+      // Mai il contenuto nel log: solo la stanza e il tier, come ogni altra
+      // riga di `drain()`.
+      log(`telegram: messaggio di gruppo ${incoming.chatId} ricordato senza rispondere (tier ${trustTier})`);
+    }
   }
 
   /** `markProcessed`, tolerant of a database that closed out from under a drain running past `stop()`'s budget. */
@@ -2093,40 +2059,43 @@ export class TelegramConnector {
    * a turn: an unpaired stranger typing anything gets the normal member path,
    * but the one who types the right eight characters becomes the owner and
    * nothing else does.
+   *
+   * Slice 12: the algorithm itself — the guard clauses, the branch on
+   * `checkPairing`'s outcome, the three sentences — now lives once in
+   * `connectors/shared/ingress/pair.ts`. What stays here is Telegram's own
+   * shape: which fields make a candidate eligible, and the extra
+   * `ownerChatId` Telegram alone persists on a match.
    */
   private async tryPair(incoming: Incoming): Promise<boolean> {
-    const { ownerUserId, pairing } = this.deps.config;
-    if (ownerUserId !== undefined || !pairing || !this.deps.savePairing) return false;
-    if (!incoming.isPrivate || incoming.fromId === 0) return false;
-
-    const { outcome, next } = checkPairing(pairing, incoming.text, new Date(this.now()));
-    const say = (text: string) => this.deps.api.sendMessage(incoming.chatId, text);
-
-    if (outcome.status === 'matched') {
-      // Persisted before the reply: if the send fails, the pairing still
-      // happened, and the alternative — confirming something we did not store —
-      // is the worse of the two.
-      this.deps.savePairing({
-        ownerUserId: incoming.fromId,
-        ownerChatId: incoming.chatId,
-        pairing: null,
-      });
-      this.deps.config.ownerUserId = incoming.fromId;
-      this.deps.config.ownerChatId = incoming.chatId;
-      this.deps.config.pairing = undefined;
-      await say('Sei tu. Da adesso questa è la nostra chat.');
-      return true;
-    }
-
-    // Anything else only counts as an attempt if it looked like a code; a
-    // stranger saying "ciao" must not burn the owner's tries.
-    if (!/^[\s0-9A-Za-z-]{8,12}$/.test(incoming.text.trim())) return false;
-
-    this.deps.savePairing({ pairing: next });
-    this.deps.config.pairing = next ?? undefined;
-    if (outcome.status === 'wrong') await say(`Non è quello. Tentativi rimasti: ${outcome.remaining}.`);
-    else await say('Quel codice non vale più. Rigenerane uno dalla CLI.');
-    return true;
+    return sharedTryPair(
+      {
+        ownerUserId: this.deps.config.ownerUserId,
+        pairing: this.deps.config.pairing,
+        canPersist: this.deps.savePairing !== undefined,
+      },
+      {
+        fromId: incoming.fromId,
+        text: incoming.text,
+        eligible: incoming.isPrivate && incoming.fromId !== 0,
+      },
+      {
+        onMatched: (fromId) => {
+          // Persisted before the reply: if the send fails, the pairing still
+          // happened, and the alternative — confirming something we did not
+          // store — is the worse of the two.
+          this.deps.savePairing!({ ownerUserId: fromId, ownerChatId: incoming.chatId, pairing: null });
+          this.deps.config.ownerUserId = fromId;
+          this.deps.config.ownerChatId = incoming.chatId;
+          this.deps.config.pairing = undefined;
+        },
+        onAttempt: (next) => {
+          this.deps.savePairing!({ pairing: next });
+          this.deps.config.pairing = next ?? undefined;
+        },
+        say: (text) => this.deps.api.sendMessage(incoming.chatId, text),
+      },
+      new Date(this.now()),
+    );
   }
 
   /**
