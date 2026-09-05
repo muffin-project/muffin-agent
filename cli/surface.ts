@@ -28,6 +28,7 @@ import { DiscordConnector, type ConnectorDeps as DiscordConnectorDeps } from '..
 import { discordSurface } from '../connectors/discord/surface.js';
 import { DiscordInbox } from '../connectors/discord/inbox.js';
 import { mandatoryGuards } from '../core/rot/guards.js';
+import { discordOwner, loadSealedOwner, sealOwnerBinding, telegramOwner } from '../core/rot/owner.js';
 import { makeSendFileTool, sendFileCapability } from '../agent/tools/deliver.js';
 import type { FsScope } from '../agent/tools/fs.js';
 import { cmdModel } from './model.js';
@@ -133,6 +134,11 @@ export function cmdSurfaceDefault(home: string, id: string): number {
 
 export function cmdSurfaceList(home: string): number {
   const config = loadConfig(home);
+  // La stessa precedenza che usa `connectSurfaces`: questa vista deve dire
+  // l'owner che i connettori riconosceranno davvero, non quello scritto in
+  // `config.json` — che dal sigillo in poi può essere un residuo legacy o,
+  // peggio, una riscrittura che nessuno ha autorizzato.
+  const sealedOwner = loadSealedOwner(home);
   const lines: string[] = [];
 
   for (const id of SUPERFICI_NOTE) {
@@ -142,7 +148,7 @@ export function cmdSurfaceList(home: string): number {
 
     if (id === 'telegram') {
       const token = hasSecret('secret://telegram_token', home);
-      const owner = config.surfaces.telegram?.ownerChatId;
+      const owner = telegramOwner(sealedOwner, config.surfaces.telegram).chatId;
       if (enabled) {
         detail = ` · token ${token ? 'presente' : 'MANCANTE'} · owner ${owner ?? 'MANCANTE'}`;
         const stats = inboxStats(home, 'telegram_updates');
@@ -154,7 +160,7 @@ export function cmdSurfaceList(home: string): number {
 
     if (id === 'discord') {
       const token = hasSecret('secret://discord_token', home);
-      const owner = config.surfaces.discord?.ownerUserId;
+      const owner = discordOwner(sealedOwner, config.surfaces.discord).userId;
       if (enabled) {
         detail = ` · token ${token ? 'presente' : 'MANCANTE'} · owner ${owner ?? 'MANCANTE'}`;
         const stats = inboxStats(home, 'discord_messages');
@@ -289,6 +295,18 @@ async function enableTelegram(home: string, ownerFlag?: string, apiBaseFlag?: st
     },
   };
   saveConfig(next, home);
+  // Il legame, quando c'è già, va sotto il sigillo qui: questo comando è la
+  // porta che l'owner digita, ed è anche il rimedio che `muffin doctor`
+  // nomina per una casa legacy — legame in `config.json` e sigillo che non ne
+  // sa niente. Senza owner (pairing in corso) non c'è ancora niente da
+  // sigillare: lo farà `savePairing` quando il codice torna indietro.
+  if (ownerUserId !== undefined) {
+    sealOwnerBinding(
+      home,
+      { telegram: { userId: ownerUserId, chatId: ownerChatId ?? ownerUserId } },
+      { out: (riga) => process.stdout.write(`${riga}\n`) },
+    );
+  }
   process.stdout.write(`telegram abilitata: @${me.username ?? me.id}, owner ${ownerChatId}\n`);
   process.stdout.write(`si connette al prossimo \`muffin\`\n`);
   ricordaLaPredefinita(home, 'telegram');
@@ -364,6 +382,10 @@ async function enableDiscord(home: string, ownerFlag?: string): Promise<number> 
     },
   };
   saveConfig(next, home);
+  // Stessa ragione di `enableTelegram`.
+  if (ownerUserId !== undefined) {
+    sealOwnerBinding(home, { discord: { userId: ownerUserId } }, { out: (riga) => process.stdout.write(`${riga}\n`) });
+  }
   process.stdout.write(`discord abilitata: @${me.username} (${me.id})${ownerUserId ? `, owner ${ownerUserId}` : ''}\n`);
   process.stdout.write(`si connette al prossimo \`muffin\`\n`);
   ricordaLaPredefinita(home, 'discord');
@@ -738,6 +760,16 @@ export function connectSurfaces(
    */
   const gatewayAtBoot = gatewayServes?.() ?? null;
   /**
+   * Chi è l'owner secondo il sigillo — letto una volta, per tutte le superfici.
+   *
+   * `note` non si perde in un booleano: «il legame sigillato non si verifica»
+   * è il fatto che deve arrivare all'owner, e senza questa riga una superficie
+   * smetterebbe di riconoscerlo senza che nulla lo dica. `muffin doctor` lo
+   * ripete con il rimedio; qui basta che non sia silenzioso.
+   */
+  const sealedOwner = loadSealedOwner(home);
+  if (sealedOwner.note !== undefined) log(`root of trust: ${sealedOwner.note}`);
+  /**
    * I poller che il cancello governa — uno per superficie che ne ha uno.
    *
    * Registrati invece che avviati sul posto, perche' il passaggio avviene in
@@ -793,8 +825,13 @@ export function connectSurfaces(
     try {
       const token = readSecret('secret://telegram_token', home);
       const tg = runtime.config.surfaces.telegram;
-      const ownerUserId = tg?.ownerUserId;
-      const ownerChatId = tg?.ownerChatId;
+      // Il legame owner viene dal sigillo quando il sigillo ne ha uno; da
+      // `config.json` solo su una casa che il sigillo non ha mai coperto
+      // (B15). Un file sigillato che non si verifica non retrocede su
+      // `config.json`: non autentica nessuno — vedi `core/rot/owner.ts`.
+      const legato = telegramOwner(sealedOwner, tg);
+      const ownerUserId = legato.userId;
+      const ownerChatId = legato.chatId;
       // Unpaired but with a code outstanding is a legitimate running state: the
       // surface has to be up to receive the code. What it must not do is treat
       // anyone as the owner while it waits.
@@ -856,6 +893,20 @@ export function connectSurfaces(
               },
               home,
             );
+            // E poi sotto il sigillo, nello stesso atto (B15): un legame che
+            // vive solo in `config.json` lo riscrive qualunque processo che
+            // gira come l'owner. Il campo legacy resta scritto qui sopra per
+            // una release — una casa che torna a un binario precedente deve
+            // continuare a riconoscere il suo owner.
+            if (next.ownerUserId !== undefined) {
+              sealOwnerBinding(
+                home,
+                // In una chat privata Telegram fa coincidere i due id, ed è
+                // l'unico caso in cui il pairing può concludersi.
+                { telegram: { userId: next.ownerUserId, chatId: next.ownerChatId ?? next.ownerUserId } },
+                { out: (riga) => log(`telegram: ${riga}`) },
+              );
+            }
           },
           log,
         });
@@ -924,7 +975,8 @@ export function connectSurfaces(
     try {
       const token = readSecret('secret://discord_token', home);
       const dc = runtime.config.surfaces.discord;
-      const ownerUserId = dc?.ownerUserId;
+      // Stessa precedenza di Telegram, stessa funzione: il sigillo prima.
+      const ownerUserId = discordOwner(sealedOwner, dc).userId;
       if (ownerUserId === undefined && dc?.pairing === undefined) {
         salute.caduta('discord', 'abilitata ma senza owner', adesso(), '`muffin surface enable discord`');
         lines.push('discord: abilitata ma senza owner — `muffin surface enable discord`');
@@ -961,6 +1013,15 @@ export function connectSurfaces(
               },
               home,
             );
+            // Stessa ragione di Telegram, qui sopra: il legame va sotto il
+            // sigillo appena esiste.
+            if (next.ownerUserId !== undefined) {
+              sealOwnerBinding(
+                home,
+                { discord: { userId: next.ownerUserId } },
+                { out: (riga) => log(`discord: ${riga}`) },
+              );
+            }
           },
           log,
         });
