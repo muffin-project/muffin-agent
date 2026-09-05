@@ -38,7 +38,7 @@ status DAY-1. La milestone aggiunge una classificazione, non un secondo backlog:
 - **DOGFOOD** (si chiude durante l'uso reale, non prima): tutte le altre righe
   BLOCKER — quelle di sola evidence (A4, B14, C2, C3, C6, C7, D4, D5, D6, D7,
   D9, E3), il character eval A2/A3, le capability fail-closed o oneste (B1,
-  B6, B10, B15, C5, C8, D2, D3, D11, E1, E5, E7) e la semantica busy-input
+  B6, B15, C8, D2, D3, D11, E1, E5, E7) e la semantica busy-input
   (B2/B16, metà restante). Nota di sicurezza verificata sul codice: foto e
   vocali sono archiviati come Evidence integra e dichiarati al turno —
   trascrizione/caption sono derivabili retroattivamente, quindi iniziare prima
@@ -200,9 +200,22 @@ corretto, ma che **la garanzia sia raggiungibile dal percorso vero**.
 > l'owner vede; B2 ha la forma decisa (ADR-0054). Da qui ogni riga user-facing
 > dichiara se è provata sul finto o sulla corsia **reale** (memo §5.4).
 >
-> **Conteggio: 34 READY · 15 BLOCKER · 6 OUT · 0 INVALIDATED** (56 righe). I 15
+> **E1 chiusa 04/09/2026 (`slice/e1-budget-per-job`, issue #368).** Il tetto
+> per-job esiste ed è sul percorso di produzione: `jobs.per_job_usd` (nullable,
+> migrazione 6), il contatore su `spend.job_id`/`turns.job_id`, e il rifiuto in
+> `agent/scheduler-run.ts` `runFresh` — l'unico punto che chiama il modello.
+> Misurato prima di implementare: ADR-0035 emendamento №2 chiedeva questa cosa
+> per nome (*«è la differenza fra un job rotto che costa €0,50 e uno che si
+> mangia il mese prima delle 7»*) e chiedeva anche che il conto stesse **fuori
+> dal turno** — sta nel registro, una riga per chiamata al modello, non in una
+> colonna contatore che si aggiorna solo se il giro torna. Un guasto trovato
+> dai test e non a mano: `TurnInput` non basta, perché `drive` ricostruisce
+> l'input dal record — senza `turns.job_id` la spesa non veniva attribuita a
+> nessun job e il tetto non sarebbe scattato mai.
+>
+> **Conteggio: 35 READY · 14 BLOCKER · 6 OUT · 0 INVALIDATED** (56 righe). I 14
 > BLOCKER: B11/B13 (forma dello streaming e dei passi, dogfood), B2/B16
-> (busy-input, forma decisa), A2/A3, B10, B15, C5, C8, D6/D7, E1, E5, E6 —
+> (busy-input, forma decisa), A2/A3, B10, B15, C5, C8, D6/D7, E5, E6 —
 > D11 non è più bloccata dal soffitto e resta per l'undo semantico.
 
 > **Conteggio precedente (02/09): 36 READY · 14 BLOCKER · 6 OUT · 0 INVALIDATED** (56 righe). I 14
@@ -250,6 +263,50 @@ corretto, ma che **la garanzia sia raggiungibile dal percorso vero**.
 > felice senza provider veri), E1 (per-job), E5 (composite), E6
 > (per-capability).
 
+> **C5 chiusa 04/09/2026 (slice/c5-memory-why).** Il gap era esattamente
+> quello che la riga nominava: `muffin memory why` (`cli/memory.ts`) esisteva
+> solo per l'owner, mai esposto come tool dell'agente. `agent/tools/memory.ts`
+> registra ora `memoryWhySpec`/`whyMemory`, sulla stessa `memoryCapability` di
+> `memory_search` (`memory.read`, sola lettura, nessuna capability nuova),
+> cablato in `agent/runtime.ts` accanto a `memory_search`. CLI e tool
+> condividono lo stesso renderer, `describeProvenance`
+> (`core/memory/provenance.ts`, estratto da `cmdMemoryWhy`), quindi le due
+> risposte a "perché lo credi" non possono più divergere in silenzio.
+> Scenario `C5` verde sul binario vero (`c-memory.accept.ts`): un turno reale
+> chiama `memory_why` per testo — il caso ordinario, perché `memory_search`
+> non stampa mai un fact_id da riusare — e la richiesta successiva del
+> modello porta il connettore, la tier reale e la frase originale
+> dell'episodio piantato, mai una parafrasi. Mutazione verificata: commentare
+> la registrazione in `agent/runtime.ts` (tool file intatto) fa cadere lo
+> scenario sulla prima assert ("il risultato di memory_why non porta il
+> connettore").
+>
+> **B10 chiusa 04/09/2026 (slice/b10-immagini-ed-errori, issue #361).** Il gap
+> era solo lo scenario: le immagini arrivavano già al modello (`ingest()`,
+> b815751), ma il finto Bot API dell'accettazione non serviva `getFile`, quindi
+> nessuno scenario poteva mettere byte veri dietro un `file_id`. Il finto Bot
+> API serve ora `getFile` e il download `/file/bot<token>/<file_path>`
+> (`FakeTelegram.plantFile`, `evals/acceptance/telegram.ts`), più un rifiuto
+> one-shot (`FakeTelegram.guasta`) per la metà «errori». Due scenari sul
+> binario vero (`b-immagini-ed-errori.accept.ts`): `B10` (una foto reale
+> attraversa Bot API finto → download → vault → `image_url` con i byte esatti
+> scaricati) e `B10-errori`, non manifestato per la stessa ragione di B1 in
+> `b-telegram-journey.accept.ts` (il manifest è 1:1 per riga) — una
+> `editMessageText` rifiutata a metà consegna resta `rejected`/`failed:<why>`
+> in `telegram_delivery_parts`/`turns.delivery`, mai promossa in silenzio a
+> `sent`, e il messaggio successivo dell'owner ne innesca il retry senza
+> richiamare il modello. Mutazione verificata: rimuovere lo spread
+> `images:` in `connector.ts#ingest` fa cadere `B10`; far saltare
+> `store.rejected(...)` in `delivery.ts#deliverTelegram` fa cadere
+> `B10-errori` su un'asserzione precisa (`part 'attempting'` invece di
+> `'rejected'`), non su un timeout generico.
+>
+> **Conteggio: 22 READY · 28 BLOCKER · 6 OUT · 0 INVALIDATED** (56 righe). Dei
+> 12 restanti che aspettano una decisione o un meccanismo (13 meno C5): A2/A3
+> (character eval), B1 (metà Telegram), B2/B16 (busy-input), B15 (binding nel
+> RoT), C8 (prerequisiti reali), D6/D7 (percorso felice senza provider veri),
+> E1 (per-job), E5 (composite), E6 (per-capability).
+
 Stato: `READY` · `OUT` (fuori da DAY-1, con ragione) · `BLOCKER` (con cosa
 manca e la slice del percorso critico che la chiude) · `INVALIDATED`
 (premessa non più valida, con ragione). `?` è ritirato dal 17/08 — le due
@@ -283,7 +340,7 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 | B7 | Scheduler | I job sopravvivono al riavvio? | READY — l'identità dell'occorrenza è chiusa (`slice/job-fires`, ADR-0035 emendamento №5). `job_fires` (`core/scheduler/job-fires.ts`, additiva, `(job_id, scheduled_for)` UNIQUE) lega ogni occorrenza dovuta a UN `turn_id`: `agent/scheduler-run.ts`'s `makeJobRunner` lo lega **prima** di chiamare il modello, e risolve un fire già legato (turno `done` → recupera testo/settle senza richiamare il modello; `runnable`/`running`/`waiting`/`interrupted` → cede alla corsia dei turni). `core/scheduler/scheduler.ts` guadagna due esiti (`FireDeferred`, `FireSettleOnly`) e un `settleFire` chiamato **prima** di ogni `markRan`, mai dopo. Matrice dei sette punti dell'owner, provata: i cinque interni con lo store/il runner reali (`core/scheduler/job-fires.test.ts`, `agent/scheduler-run.test.ts`, `core/scheduler/scheduler.test.ts` — quest'ultimo con la mutazione dell'ordinamento eseguita a mano, osservata rossa, ripristinata); i due che il mandato chiede col binario vero — crash fra il binding e la creazione del turno, e turno `done` prima di `markRan` — provati da `evals/acceptance/scenarios/job-fires.accept.ts` (riga B7 del manifest), due `SIGKILL` reali su `muffin gateway run` nelle due finestre (rese osservabili da `MUFFIN_JOB_FIRES_STALL_*`, stesso precedente di `MUFFIN_GATEWAY_TICK_MS`), verificato anche contro due mutazioni a mano (identità ignorata del tutto; bind interrotto completato con un id nuovo invece di quello legato) entrambe rosse per la ragione attesa. La proprietà resta occurrence→Work idempotente; ADR-0052 vieta di generalizzarla in “ogni transport event deve avere un Turn proprio”. Telegram riusa le primitive di idempotenza in #78, ma sotto event→composition→Work. |
 | B8 | Delivery | Un job che dice «inviato» è **arrivato**? | READY — canale non connesso → `failed:<why>`, mai `sent`, e `doctor` lo nomina ⚠️ nota sotto |
 | B9 | Proactivity | Agisce spontaneamente secondo i gate? | OUT — post-DAY-1: nessuna capability §5 dei 14 giorni dipende da trigger proattivi; `ProactiveKind` ha oggi 4 valori (non 5, `consolidation` rimosso da ADR-0038), `gone_quiet` ha un produttore reale (`core/scheduler/observe.ts`) cablato solo su invocazione manuale (`muffin observe --send`); `commitment_due` ne ha uno da ADR-0060 (`core/scheduler/commitments.ts`, un `todos.due_at` letto dal tick dello scheduler, prima consegna proattiva che non passa dal dito dell'owner); `deadline_near` e `fact_actionable` restano fuori finché non emerge un consumer reale → `docs/ROADMAP.md` “Proactivity beyond explicit jobs” |
-| B10 | Telegram | Messaggi, file, immagini, **errori** | BLOCKER — solo scenario mancante: messaggi e documenti ok (provato, vedi C7); **le immagini arrivano al modello** (`ImageBlock` in `agent/providers/types.ts`, `ingest()` di `connectors/telegram/connector.ts` → `images:` del turno, da b815751 del 28/08; il vault non le indicizza per scelta — si mostrano, non si trascrivono in testo); errori gestiti a pezzi, non come proprietà unica; nessuno scenario dedicato → PC 3.6 (riconciliato il 02/09: la riga diceva «nessun content-block immagine»). **03/09**: i file *documento* non arrivavano affatto in memoria in produzione — stesso difetto della nota C7/B10/C8 → tracked in issue #361 |
+| B10 | Telegram | Messaggi, file, immagini, **errori** | READY — messaggi e documenti ok (provato, vedi C7); **le immagini arrivano al modello** (`ImageBlock` in `agent/providers/types.ts`, `ingest()` di `connectors/telegram/connector.ts` → `images:` del turno, da b815751 del 28/08; il vault non le indicizza per scelta — si mostrano, non si trascrivono in testo). **04/09** (issue #361): il finto Bot API dell'accettazione serve ora `getFile` e il download `/file/bot<token>/<file_path>` (`FakeTelegram.plantFile`/`guasta`, `evals/acceptance/telegram.ts`), e due scenari sul binario vero lo provano — `B10` (una foto reale attraversa Bot API finto → download → vault → arriva al modello come `image_url` con i byte esatti) e `B10-errori`, non manifestato (una `editMessageText` rifiutata a metà consegna resta `rejected`/`failed:` in `telegram_delivery_parts`/`turns.delivery`, mai promossa in silenzio a `sent`, e il messaggio successivo dell'owner ne innesca il retry senza richiamare il modello) — `evals/acceptance/scenarios/b-immagini-ed-errori.accept.ts`. Il difetto «documenti non indicizzati in produzione» che questa riga citava (nota C7/B10/C8 qui sotto) era già chiuso il 03/09, prima di questa slice. |
 | B11 | Streaming | La risposta arriva mentre si forma, o solo alla fine? | READY — **chiusa il 04/09/2026 dalla corsia reale** (`evals/e2e/telegram.ts`, modello vero, Bot API vera, owner al telefono): 9 asserzioni su 9 verdi sul filo registrato. La risposta si forma dentro un messaggio **vero e durevole**: 7 edit successive sullo stesso messaggio, zero `deleteMessage`, niente oltre i 4096 caratteri. Da #388 la risposta finale **edita** il messaggio della scia invece di aggiungerne uno: una bolla per turno, che era esattamente la lamentela dell'owner («mi sta rispondendo due volte»). Filo e comandi in `docs/evidence/e2e-telegram-2026-09-04.md`. |
 | B12 | Overflow | Un output enorme di un tool va in contesto, o diventa un file richiamabile? | OUT — ROADMAP “Overflow / context-pressure UX”: `agent/context/compact.ts:89-101` sostituisce l'intero payload con un placeholder invece di troncare testa+coda (un difetto noto, non solo una mancanza); nessun overflow-a-file esiste; B11 copre già il segnale di presenza durante l'attesa |
 | B13 | Progress | Un turno lungo dice di essere vivo in modo **strutturale**, non cosmetico? | READY — **chiusa il 04/09/2026 dalla corsia reale** (`evals/e2e/telegram.ts`, modello vero, Bot API vera, owner al telefono): 9 asserzioni su 9 verdi sul filo registrato. I passi ci sono ancora **alla fine**, non solo durante — verificato sullo stato finale del messaggio, non sull'esistenza di una scrittura qualsiasi: l'ultima edit contiene ancora `✓ leggo un file`, `✗ … interrotto`, `✓ sys.shell: consentito`, `✓ eseguo un comando`. La specifica «mai una cronologia» resta rovesciata, come chiesto il 03/09. Filo e comandi in `docs/evidence/e2e-telegram-2026-09-04.md`. |
@@ -423,7 +480,7 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 | C2 | Extraction | L'estrazione è automatica? | READY — scenario `C2` verde (`c-consolidamento.accept.ts`, #283): un job vero eseguito da `muffin gateway run` produce fatti nel DB senza che nessuno lanci `memory extract`; la catena è `onTurnEnd → consolidation.notify` (`agent/runtime.ts`), debounce `CONSOLIDATION_IDLE_MS` 20 s in produzione, accorciato solo dalla seam test-only `MUFFIN_MEMORY_IDLE_MS` (stesso precedente di `MUFFIN_GATEWAY_TICK_MS`); scollegare `notify` fa cadere lo scenario (mutazione verificata) |
 | C3 | Consolidation | Si consolida senza intervento? | READY — scenario `C3` verde (`c-consolidamento.accept.ts`, #283): 27 episodi drenati in un solo `muffin memory extract`, due fatti duplicati a chiave esatta collassati (`sweepDuplicates`), una contraddizione aperta mostrata da `muffin memory review` con exit 1 e i due valori nominati |
 | C4 | Recall | Ripesca il vecchio **e** il superseded? | READY — scenario `C4` **verde** sul binario vero dopo la PR #54 (`evals/acceptance/scenarios/c-memory.accept.ts`, entità capitalizzata: `--history` ritrova il fatto superseduto, la ricerca ordinaria quello attivo); meccanismo in PR [#35](https://github.com/GiustoPiedimonte/muffin-agent/pull/35) (`factsAsOf`/`nearestFactTo`, `asOf` unico) ⚠️ limite noto: il one-hop del grafo parte solo da un nome capitalizzato (nota sotto); il percorso turno→estrazione→supersede è provato da J1 con C2/C3, non qui |
-| C5 | Provenance | Posso capire **perché** crede una cosa? | BLOCKER — `muffin memory why` esiste per l'owner (`cli/memory.ts:29`, `core/memory/store.ts:918 provenanceOf`), ma non è esposto come tool-agente (`agent/tools/memory.ts` ha solo `memorySearchSpec`); nessuno scenario → critical-path.md#da-qui-ordina-luso (J2) → tracked in issue #365 |
+| C5 | Provenance | Posso capire **perché** crede una cosa? | READY — `agent/tools/memory.ts` registra ora `memoryWhySpec`/`whyMemory`, cablato in `agent/runtime.ts` accanto a `memory_search` sulla stessa `memoryCapability` (`memory.read`); CLI e tool leggono le stesse righe da `describeProvenance` (`core/memory/provenance.ts`), unificato da `cmdMemoryWhy` (`cli/memory.ts`). Scenario `C5` verde (`c-memory.accept.ts`): un turno vero chiama `memory_why` per testo (nessun fact_id in mano, il caso ordinario) e la richiesta successiva del modello porta connettore, tier reale e frase originale del episodio piantato; commentare la registrazione in `agent/runtime.ts` fa cadere lo scenario sulla prima assert (`"il risultato di memory_why non porta il connettore (\"discord\")..."`) — mutazione verificata |
 | C6 | Temporal graph | «Chi era X a maggio» | READY — scenario `C6` verde (`c-tempo.accept.ts`, #283): fatti superseded a due date, «chi era il capo progetto a maggio» risponde con il valore di maggio sia via CLI (`memory search --as-of`) sia via tool (`memory_search` con `as_of`) sul binario vero; non esercitato `nearestFactTo`/il report del gap (limite dichiarato, non DAY-1) |
 | C7 | PDF | Acquisisce documenti utili? | READY — scenario `C7` verde (`c-documenti.accept.ts`, #283): un PDF vero con testo entra da `muffin vault add`, si indicizza ed è trovato da `memory search`; una scansione senza testo fallisce esplicitamente (exit 1, ragione nominata, zero episodi) — togliere il ramo `no_text_layer` fa cadere lo scenario (mutazione verificata). Il path Telegram allegato→vault resta provato da `connectors/telegram/document-arrival.test.ts` (non-acceptance) perché il finto Bot API non serve `getFile`; DOCX e il tool `document_read` non sono nello scenario. **03/09**: fino a questa slice l'ingest era morto sull'installazione vera — la home `~/.muffin` faceva scattare il filtro dotfile sul percorso assoluto e ogni allegato veniva rifiutato come «nascosto» (zero episodi `document` nel database dell'owner, tre file nel vault); ora le home di test hanno la forma di produzione, vedi la nota C7/B10/C8 |
 | C8 | Audio | Gestisce le note vocali DAY-1 conservando audio originale e provenance del transcript? | BLOCKER — solo scenario mancante: il meccanismo è atterrato (`core/audio/voce.ts` decide per modello, `core/audio/trascrivi.ts` trascrive in casa con whisper.cpp + ffmpeg, cablato nel path vocale Telegram con transcript recintato come dato tainted; `voice-arrival.test.ts`), **e l'installazione reale è pronta** (02/09): `qwen/qwen3.8-27b` dichiara `["text","image","video"]`, quindi si trascrive in casa — `ffmpeg` e `whisper-cli` installati con Homebrew, `~/.muffin/models/ggml-base.bin` scaricato, e una frase sintetizzata con `say` è tornata testo corretto attraverso `trascrivi` sul binario di questa macchina. `muffin doctor` ha la riga `note vocali` (misura `audioAccettato` e i prerequisiti dalle stesse fonti del runtime, avvisa solo con una superficie vocale abilitata) e sull'installazione dell'owner è verde. Manca lo scenario di accettazione con una nota vocale vera che attraversa Telegram → vault → trascrizione → turno (il finto Bot API non serve ancora `getFile`) → PC 3. **03/09**: le home di accettazione hanno ora la forma di produzione (`<root>/.muffin`), quindi lo scenario mancante, quando arriverà, non potrà essere verde su una forma di percorso che nessuna installazione ha — vedi la nota C7/B10/C8 → tracked in issue #361 |
@@ -513,8 +570,10 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 > percorso con un segmento col punto. Rimettere il percorso assoluto nel filtro,
 > o sostituire `insideRoot` con uno `startsWith`, fa cadere i test nuovi
 > (mutazione verificata il 03/09). Restano vere le riserve già scritte sotto:
-> lo scenario C7 passa dalla CLI e non da `getFile`, e B10/C8 restano senza
-> scenario di accettazione proprio.
+> lo scenario C7 passa dalla CLI e non da `getFile`. **04/09**: il finto Bot
+> API serve ora `getFile` (issue #361), e B10 ha il proprio scenario di
+> accettazione (`b-immagini-ed-errori.accept.ts`); C8 (nota vocale) resta
+> senza, per lo stesso motivo, non affrontato da questa slice.
 
 > **C7 — cosa il meccanismo prova.** Riclassificata `BLOCKER` il 17/08 per
 > mancanza dello scenario di accettazione, non per un difetto nel meccanismo
@@ -570,7 +629,7 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 
 | # | Area | Domanda DAY-1 | Stato |
 |---|---|---|---|
-| E1 | Budget | Cap globale **e** per-job? | BLOCKER — il per-job non esiste: solo `monthlyUsd` e `perTenantDailyUsd` (quest'ultimo escluso per `host`, `core/budget/budget.ts`); nessuna colonna `perJobUsd` su `jobs` → PC 3.7 `slice/budget-per-job` → tracked in issue #368 |
+| E1 | Budget | Cap globale **e** per-job? | READY — `slice/e1-budget-per-job` (issue #368): `jobs.per_job_usd` (nullable, additiva, migrazione 6) più `spend.job_id`/`turns.job_id` come contatore, e l'enforcement su `agent/scheduler-run.ts` `runFresh` — l'unico punto del file che chiama il modello — **prima** del ramo `script` e prima della sessione; un giro rifiutato scrive una riga durevole con esito `budget` e modello `(tetto per-job: nessun modello)`, e l'owner la riceve sul canale del job. Porte: `muffin jobs add --per-job-usd`, `muffin jobs cap <id> <dollari|none>`, e `jobs list` mostra tetto **e** speso. Lo scenario `E1` copre ora entrambe le metà della domanda della riga (`evals/acceptance/scenarios/e-cost.accept.ts`, gateway vero + `jobs add` vero): mutation-testato — tolto il controllo in `runFresh`, il rosso è *«il modello è stato chiamato 1 volte per un job già oltre il proprio tetto»* e la risposta del modello arriva davvero all'owner. Il tetto può solo stringere: il tetto mensile resta sigillato (ADR-0039) e limita tutto sopra di lui. |
 | E2 | Cost | So quanto costa una giornata? | READY — `/spend` (`cli/repl.ts`) stampa ora anche `oggi: $X`, letto da `tenantTodayUsd('host')` (`core/budget/budget.ts`, esisteva già senza chiamante); lo scenario `E2` aggiornato (`evals/acceptance/scenarios/e-cost.accept.ts`) prova entrambe le righe — mensile e di oggi — non-zero dopo un turno reale che ha speso, verde: `npx vitest run --config vitest.acceptance.config.ts evals/acceptance/scenarios/e-cost.accept.ts` (3/3) |
 | E3 | Tracing | Posso ricostruire cosa è successo? | READY — scenario `E3` esteso (`e-cost.accept.ts`, #285): oltre alla redazione dei segreti (ADR-0048), `muffin trace turn <id>` / `trace grep` ricostruiscono un turno qualunque dai file di trace veri, e la ricostruzione del turno B non mostra le tool call del turno A (isolamento asserito in entrambe le direzioni) |
 | E4 | Tests | Acceptance test **reali**, non solo unit? | READY (`evals/acceptance/`) — è il meccanismo: harness contro il binario vero, provider finto deterministico, ogni verde visto rosso prima. La PR #54 aggiunge nel manifest la specie provata dal meccanismo stesso, chiudendo l'unico "READY senza scenario" rimasto dopo il triage 17/08 |

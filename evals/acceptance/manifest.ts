@@ -228,6 +228,19 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'D12',
     'ask telegram: the ASK shows the command and cwd plus the taint reason, an owner\'s button press resumes the suspended turn exactly once, and a non-owner\'s press decides nothing',
   ),
+  // New (slice/b10-immagini-ed-errori, issue #361): the row was BLOCKER only
+  // because the fake Bot API this suite drives `muffin gateway` against had
+  // no `getFile` — the mechanism (`ImageBlock` via `ingest()`, since
+  // b815751) was already in HEAD but unreachable from an acceptance
+  // scenario. `evals/acceptance/telegram.ts` now serves `getFile` and the
+  // `/file/bot<token>/<file_path>` download route (`FakeTelegram.plantFile`).
+  // The row's error half is proven alongside, as a plain unmanifested `it()`
+  // in the same file — see `b-immagini-ed-errori.accept.ts`'s own docstring
+  // for why (manifest is 1:1 per row, same reasoning as B1's Telegram half).
+  verde(
+    'B10',
+    'immagini telegram: una foto vera attraversa il Bot API finto, il download e il vault, e arriva al modello come `image_url` con i byte esatti scaricati',
+  ),
   // New (slice/journey-capability): B6 was BLOCKER only for a missing
   // scenario — the mechanism (`eseguiConRitentativi`, MAX_TOOL_RETRIES=2) is
   // already unit-proven (`agent/tool-retry.test.ts`) with a fake tool. What
@@ -297,6 +310,19 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   verde(
     'C4',
     'recall: a superseded fact is invisible to search until --history asks for it',
+  ),
+  // New (slice/c5-memory-why). C5's row named the exact gap: `muffin memory
+  // why` already answered "why do you believe that" for the owner at a
+  // terminal (`cli/memory.ts`'s `cmdMemoryWhy`), but the model had no
+  // equivalent door — `agent/tools/memory.ts` registered only
+  // `memorySearchSpec`. Proves the new `memory_why` tool end to end: a real
+  // scripted turn asks for it by text (no fact id in hand, the ordinary
+  // case, since `memory_search`'s rendered block never prints one), and the
+  // model's own next request carries the planted episode's connector, trust
+  // tier and original sentence — not a paraphrase.
+  verde(
+    'C5',
+    'provenance: a real turn calling the memory_why tool gets back the planted episode\'s connector, tier and original sentence',
   ),
   // New (slice/journey-memoria). C6's row asked for the temporal graph
   // itself: `factsAsOf`/`nearestFactTo` (`core/memory/store.ts`) and `asOf`
@@ -419,7 +445,14 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // copre l'altra meta' della domanda della riga — «e un ripristino che disfa
   // anche il turno?».
   verde('D11', 'checkpoint: `muffin undo` marks the turn and the memory episode, not only the disk'),
-  verde('E1', 'budget: a turn that would cross the monthly cap is stopped before it spends'),
+  // Extended (slice/e1-budget-per-job): the row asks "cap globale **e**
+  // per-job?" and only the first half had a scenario, which the file's own
+  // docstring said out loud. Both halves now run in one test — the monthly cap
+  // stopping an interactive turn, and a scheduled job with its own ceiling
+  // refusing to fire — because `entry()` resolves a row to one manifest line
+  // and two `scenario('E1', …)` calls would register two tests with the same
+  // title for `report.ts` to disambiguate.
+  verde('E1', 'budget: the monthly cap stops a turn, and a job past its own per-job cap never reaches the model'),
   verde('E2', 'cost: the REPL answers how much has been spent this month, in dollars'),
   // Extended (slice/journey-lifecycle): still narrower than E3's own full
   // question in one respect (it does not exercise every span shape the row
