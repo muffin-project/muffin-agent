@@ -836,7 +836,7 @@ export async function cmdGatewayRun(
   });
   const scheduler = new Scheduler(
     runtime.jobs,
-    makeJobRunner(runtime.deps, runtime.jobFires, runtime.executor, { cwd: runtime.workspace }),
+    makeJobRunner(runtime.deps, runtime.jobFires, runtime.executor, { cwd: runtime.workspace }, runtime.budget),
     deliver,
     // ALWAYS_IDLE by omission, and it is a decision: a gateway has no terminal,
     // so there is no foreground to lose the lane to. When a surface turn becomes

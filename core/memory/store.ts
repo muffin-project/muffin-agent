@@ -1235,6 +1235,35 @@ export class MemoryStore {
       .all(tenantId, episodeId) as Fact[];
   }
 
+  /**
+   * The other direction of `supersededBy`: which facts this one replaced.
+   *
+   * Moved out of `cli/memory.ts`'s `cmdMemoryWhy`, where it was a raw
+   * `db.prepare` call reaching past the store — the one query in that
+   * function that was not tenant-scoped through a method here, which is
+   * exactly the shape this file's own docstring (`WHERE` filtered "at the
+   * least careful query") warns about. `agent/tools/memory.ts`'s `memory_why`
+   * needs the identical rows and would otherwise have had to repeat the same
+   * raw SQL a second time, on a `Database` handle it does not hold.
+   */
+  factsSupersededBy(tenantId: string, factId: number): Fact[] {
+    return this.db
+      .prepare(
+        `SELECT f.id, f.subject_id AS subjectId, s.name AS subjectName, f.predicate,
+                f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
+                f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
+                f.expired_at AS expiredAt, f.episode_id AS episodeId,
+                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance, f.pinned,
+                f.superseded_by AS supersededBy
+         FROM facts f
+         JOIN entities s ON s.id = f.subject_id
+         LEFT JOIN entities o ON o.id = f.object_id
+         WHERE f.tenant_id = ? AND f.superseded_by = ?
+         ORDER BY f.id`,
+      )
+      .all(tenantId, factId) as Fact[];
+  }
+
   stats(tenantId: string): MemoryStats {
     const one = <T>(sql: string, ...params: unknown[]): T =>
       (this.db.prepare(sql).get(...params) as { v: T }).v;
