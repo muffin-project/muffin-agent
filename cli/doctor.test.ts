@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { paths, writeSecret } from '../core/config/config.js';
+import { loadConfig, paths, saveConfig, writeSecret } from '../core/config/config.js';
 import { WORKSPACE_ENV, muffinWorkspace } from '../core/config/workspace.js';
 import { TurnStore } from '../core/turns/store.js';
 import { MemoryStore } from '../core/memory/store.js';
@@ -17,6 +17,7 @@ import {
   type ConsolidationRun,
 } from '../core/memory/consolidator.js';
 import { seal } from '../core/rot/verify.js';
+import { sealOwnerBinding } from '../core/rot/owner.js';
 import type { SupervisorProbes } from '../core/gateway/supervisor.js';
 import { runInit } from './init.js';
 import { buildRuntime } from '../agent/runtime.js';
@@ -1861,5 +1862,74 @@ describe('doctor nomina le capacità spente o tagliate, come sys.inspect', () =>
     expect(c?.level).toBe('ok');
     expect(c?.remedy).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+/**
+ * Da dove viene il legame owner — DAY-1 B15.
+ *
+ * Stessa famiglia di fatto invisibile del tetto di spesa qui sopra, con la
+ * posta più alta: `surfaces.telegram.ownerUserId` decide **chi ha autorità**,
+ * e in un `config.json` ordinario lo riscrive qualunque processo che gira come
+ * l'owner. I quattro stati vanno detti separati, o «c'è un owner» finisce per
+ * leggersi come «l'owner è protetto».
+ */
+describe('doctor names where the owner binding lives', () => {
+  const conConfigTelegram = (dir: string, ownerUserId: number): void => {
+    const config = loadConfig(dir);
+    saveConfig(
+      {
+        ...config,
+        surfaces: { ...config.surfaces, enabled: [...config.surfaces.enabled, 'telegram'], telegram: { ownerUserId, ownerChatId: ownerUserId } },
+      },
+      dir,
+    );
+  };
+
+  it('says nothing at all when nothing is bound anywhere', async () => {
+    const dir = home();
+    expect(await check(dir, 'owner binding')).toBeUndefined();
+    expect(await check(dir, 'owner binding legacy')).toBeUndefined();
+  });
+
+  it('names the sealed file when the binding is inside the seal', async () => {
+    const dir = home();
+    expect(sealOwnerBinding(dir, { telegram: { userId: 999, chatId: 999 } }, { out: () => {} }).ok).toBe(true);
+    const c = await check(dir, 'owner binding');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('rot/owner.json — telegram 999');
+  });
+
+  it('calls a config-only binding legacy, and names the command that seals it', async () => {
+    const dir = home();
+    conConfigTelegram(dir, 111);
+    const c = await check(dir, 'owner binding legacy');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('telegram 111');
+    // La conseguenza, non solo lo stato: è la riga che dice perché importa.
+    expect(c?.detail).toMatch(/qualunque processo che gira come te/);
+    expect(c?.remedy).toContain('muffin surface enable telegram');
+  });
+
+  it('says which of two disagreeing bindings wins', async () => {
+    const dir = home();
+    conConfigTelegram(dir, 111);
+    sealOwnerBinding(dir, { telegram: { userId: 999, chatId: 999 } }, { out: () => {} });
+    const c = await check(dir, 'owner binding');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('sigillo 999');
+    expect(c?.detail).toContain('config.json 111');
+    expect(c?.detail).toMatch(/vince il sigillo/);
+  });
+
+  it('fails loudly when the sealed binding no longer verifies — nobody is owner', async () => {
+    const dir = home();
+    conConfigTelegram(dir, 111);
+    sealOwnerBinding(dir, { telegram: { userId: 999, chatId: 999 } }, { out: () => {} });
+    // La manomissione: il file sigillato riscritto, nessun reseal.
+    writeFileSync(join(dir, 'rot', 'owner.json'), JSON.stringify({ schemaVersion: 1, telegram: { userId: 111, chatId: 111 } }));
+    const c = await check(dir, 'owner binding');
+    expect(c?.level).toBe('fail');
+    expect(c?.detail).toMatch(/nessuna superficie riconosce più un owner/);
   });
 });
