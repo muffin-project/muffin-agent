@@ -2,6 +2,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { DELIVERED, notDelivered, type DeliveryOutcome, type FileSpec, type Surface } from '../../core/surface/types.js';
 import type { DiscordApi } from './api.js';
 import { DISCORD_MAX, renderForDiscord } from './render.js';
+import { makeIngressPort, type IngressPort } from '../shared/ingress/types.js';
 
 /**
  * Discord as a delivery target, separate from Discord as a listener — the
@@ -49,6 +50,9 @@ async function resolveChannelId(api: DiscordApi, channelId: string, ownerUserId:
   return dm.id;
 }
 
+/** L'id di questa porta, scritto una volta — vedi `TELEGRAM_ID`. */
+export const DISCORD_ID = 'discord';
+
 export function discordSurface(api: DiscordApi, ownerUserId: string | undefined): Surface {
   // N1 (judge, PR #42): `deliverFile`'s size check used to hand-write
   // `10 * 1024 * 1024` again instead of reading the number it had already
@@ -61,7 +65,7 @@ export function discordSurface(api: DiscordApi, ownerUserId: string | undefined)
   };
 
   return {
-    id: 'discord',
+    id: DISCORD_ID,
     limits,
     // B17: Discord is explicitly out of scope for B11. `'off'` is the honest
     // answer today, not a placeholder for "not implemented yet" — nothing in
@@ -129,4 +133,25 @@ export function discordSurface(api: DiscordApi, ownerUserId: string | undefined)
       }
     },
   };
+}
+
+/**
+ * Discord as an **ingress** port (slice 14, §2.3).
+ *
+ * Every inbound-only capability is declared as it is **today**, not as slice
+ * 15 will leave it: `connectors/discord/connector.ts` has no slash commands
+ * (its own docstring says so), no approval buttons, no streaming transport
+ * (`streaming: {transport: \'off\'}` above, which `makeIngressPort` checks
+ * `edit: false` against) and no queue notice. Declaring any of them true here
+ * would make `DIVERGENZE_AMMESSE` (slice 16) a fiction on the day it is
+ * written.
+ */
+export function discordPort(api: DiscordApi, ownerUserId: string | undefined): IngressPort {
+  return makeIngressPort(discordSurface(api, ownerUserId), {
+    commands: false,
+    buttons: false,
+    edit: false,
+    typing: true,
+    upload: true,
+  });
 }
