@@ -202,7 +202,13 @@ describe('(a) a clean turn in a session that read tier-3 content inherits taint 
     // look like (a taint <= 2 start lets a query string through with no
     // question at all, proven by the params-gate tests elsewhere) — and this
     // harness's `approve` says yes, so the fetch ran after being asked.
-    expect(h.approvals).toEqual([`lettura con parametri scelti dal contenuto: ${EXFIL_PARAMS}`]);
+    expect(h.approvals).toEqual([
+      `lettura con parametri scelti dal contenuto: ${EXFIL_PARAMS}\n\n` +
+        // ADR-0075 punto 4: e la domanda nomina **da dove** viene il livello.
+        // Qui non da qualcosa che questo turno ha fatto: dalla history che si
+        // e' riportato dentro, che e' esattamente cio' che questo file prova.
+        'questo turno contiene contenuto di livello 3: la conversazione precedente, riletta in questo turno',
+    ]);
     expect(h.fetched).toEqual([EXFIL_PARAMS]);
   });
 });
@@ -395,7 +401,9 @@ describe('(e) a clean turn does not stamp its own answer at an inherited ceiling
     // not a borrowed 3 that turn 2 re-minted on its way through.
     const third = await runTurn(h.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: 'apri quel link' });
 
-    expect(h.approvals).toContain(`lettura con parametri scelti dal contenuto: ${EXFIL_PARAMS}`);
+    expect(h.approvals).toContain(
+      `lettura con parametri scelti dal contenuto: ${EXFIL_PARAMS}\n\n` + 'questo turno contiene contenuto di livello 3: la conversazione precedente, riletta in questo turno',
+    );
     expect(h.fetched).toEqual([EXFIL_PARAMS]);
     expect(third.taint).toBe(3);
   });

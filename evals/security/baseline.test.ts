@@ -70,23 +70,38 @@ describe('Security v2 A/B baseline — ambient taint only', () => {
       noAmbient: 'allow',
     });
 
-    // And removing ambient taint is not a free utility win: the same experiment
-    // makes an irreversible outward action reachable in the evaluation
-    // capability. Since ADR-0074 "reachable" means `ask` and no longer
-    // `allow` — the outward row asks for what cannot be recalled, at every
-    // taint — so what the scalar buys here is a `deny` instead of a question a
-    // person has to answer, not a `deny` instead of a silent send. This is the
-    // one baseline scene where the scalar still contributes anything: on the
-    // two S1 scenes A and B now coincide.
+    // **E il risultato che questa baseline riporta dal 06/09 (ADR-0075): su
+    // ogni scena, per l'owner, A e B danno la stessa risposta.**
+    //
+    // Non è un allentamento delle fixture, è la misura ripetuta dopo un
+    // cambiamento di produzione, ed è il seguito della frase che stava qui:
+    // «rimuovere il taint ambientale non è una vittoria gratuita di utilità».
+    // Lo era diventata, un pezzo alla volta. ADR-0074 aveva già portato le due
+    // scene S1 a coincidere (`ask` da entrambe le parti, perché ciò che chiede
+    // è l'irreversibilità e non il livello). Restavano due celle: un `deny` su
+    // una scrittura con `muffin undo` dietro, e un `deny` su un messaggio
+    // verso l'esterno che l'owner poteva approvare. ADR-0075 le ha misurate
+    // dove finiscono — nove turni su quattordici a taint 3 il 06/09, con la
+    // shell irraggiungibile — e le ha portate a `draft` e ad `ask`.
+    //
+    // Ciò che resta dello scalare, e che questa baseline **non** misura perché
+    // interroga solo l'owner: sopra il soffitto di `external`/`outward` un
+    // principal che non è l'owner riceve ancora `deny`
+    // (`core/policy/solo-irreversibile.test.ts`), e il livello continua a
+    // marchiare gli episodi e a comparire in ogni domanda. Il taint non è
+    // sparito: ha smesso di essere l'autorità in carica sull'host.
+    const differenti = results.filter((r) => r.ambient !== r.noAmbient);
+    expect(differenti).toEqual([]);
+
+    // La stessa cosa detta per nome sulle due celle che ADR-0075 ha spostato,
+    // perché un `filter` vuoto sarebbe verde anche se l'elenco delle scene si
+    // svuotasse.
     expect(results.find((r) => r.id === 's5-external-destination-outward')).toMatchObject({
-      ambient: 'deny',
+      ambient: 'ask',
       noAmbient: 'ask',
     });
-
-    // This pair is the reason candidate C must exist: current A blocks an
-    // already-scoped write after docs, while B makes the outward case reachable.
     expect(results.find((r) => r.id === 's2-web-docs-owner-write')).toMatchObject({
-      ambient: 'deny',
+      ambient: 'draft',
       noAmbient: 'draft',
     });
   });
@@ -134,19 +149,22 @@ describe('la baseline misura la produzione, non una copia', () => {
     expect(inventate.map((c) => c.id)).toEqual(['outward.send.eval']);
   });
 
-  it('lo scalino che misura e quello vero: sys.shell.write accetta taint 2 e non 3', () => {
-    // Ogni scenario S1/S3 misura questo gradino, deciso dall owner il 16/08
-    // (ADR-0044 §revisione). Se la produzione lo sposta, questa riga cade
-    // insieme agli scenari, invece di lasciarli verdi a raccontare ieri.
+  it('lo scalino che questa baseline misura non esiste piu: sulla riga host il taint non nega', () => {
+    // Questa riga si chiamava «sys.shell.write accetta taint 2 e non 3» e
+    // asseriva `denyAbove: 2`, perché ogni scenario S1/S3 misurava quel
+    // gradino (decisione owner del 16/08, ADR-0044 §revisione). Il gradino è
+    // stato tolto da ADR-0075, dopo averlo misurato dove finisce, e questa
+    // riga cambia con lui invece di lasciare gli scenari verdi a raccontare
+    // ieri — che è esattamente la ragione per cui esiste.
     //
-    // Dal 02/09 il gradino non è più un numero appuntato su questa capability:
-    // è la riga `host` della matrice normativa (ADR-0053), che lo dà a
-    // `sys.shell` e a `fs.write` insieme — le due porte allo stesso disco, che
-    // prima avevano due regole opposte.
+    // Ciò che ancora decide qui non è il livello ma la reversibilità: la
+    // capability è `high` e `reversible: 'no'`, quindi chiede a ogni taint.
     expect(shellWriteCapability.effect).toBe('host');
     expect(shellWriteCapability.maxTaint).toBeUndefined();
-    expect(POLICY_FLOOR.rows.host.denyAbove).toBe(2);
+    expect(POLICY_FLOOR.rows.host.denyAbove).toBe(3);
+    expect(POLICY_FLOOR.rows.host.asksForIrreversible).toBe(true);
     expect(shellWriteCapability.risk).toBe('high');
+    expect(shellWriteCapability.reversible).toBe('no');
   });
 
   /**

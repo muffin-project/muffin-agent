@@ -95,6 +95,29 @@ capability declarations, not in this prose. `defaultMaxTaint` is no longer the
 ceiling: ADR-0053 moved that to the effect row, and left the field readable so a
 home sealed before it still parses.
 
+**On the host row, the tier is provenance and not authority (ADR-0075,
+2026-09-06).** The tier of a turn still says what the turn has read, still
+stamps every episode, still decides the level memory keeps, and still appears in
+the text of every approval. What it no longer does is decide, on its own, that a
+capability on the `host` row is out of reach: `ROW_FLOOR.host.denyAbove` is `3`,
+so shell, host filesystem and process capabilities answer at tier 3 exactly as
+they answer at tier 0 — the reversible ones run, the irreversible ones ask.
+Symmetrically, **a `maxTaint` never narrows a reversible read**: `skill.read`
+and `sys.process.list` used to pin `1` and no longer do.
+
+Where the tier still decides on its own is where bytes leave the tenant. Above
+the ceiling of `external` and `outward` the owner is *asked*, with the tier and
+its origin quoted in the prompt, and every other principal is refused — in a
+group there is nobody who could answer a question, so degrading the refusal
+there would be an allow written in another language. `searchMaxTaint` and
+`paramsMaxTaint` (ADR-0071/0072) are unchanged, and `rot` is still never
+reachable at runtime at any tier.
+
+The measurement that decided this is in §13: on the owner's real installation
+nine of fourteen private turns sat at tier 3, the last real shell call was three
+days old, and the last turn ended on `context taint 3 exceeds 2 for sys.shell
+(host)`.
+
 ### Fencing: marking, not preventing
 
 Content that did not come from the owner is wrapped in a nonce-carrying fence
@@ -222,10 +245,10 @@ delivered.
 Three mechanisms this replaced, named because each one existed and decided
 things until 2026-09-06:
 
-- **Ambient taint no longer produces an `ask`.** It still refuses above the
-  row's ceiling (`denyAbove`, ADR-0044, unchanged) and still stamps
-  provenance; it no longer turns an `allow` or a `draft` into a question. §13
-  carries the measurement that decided this.
+- **Ambient taint no longer produces an `ask`.** It still stamps provenance;
+  it no longer turns an `allow` or a `draft` into a question. §13 carries the
+  measurement that decided this. What it does above a row's ceiling changed
+  again one day later — see the next block.
 - **`risk` no longer produces an `ask`.** It still decides safe mode, the
   budget gate, and the fail-safe that *queues* a high-risk request from an
   autonomous `system`/`agent` principal instead of auto-approving it.
@@ -239,15 +262,48 @@ other principal (ADR-0071), and a search's text answers to its own ceiling
 (ADR-0072). Both remain sources of an `ask` that has nothing to do with the
 rule above.
 
+### What the ceiling does above it (ADR-0075)
+
+ADR-0044's ceiling is still a ceiling and a sealed file can still lower it. What
+the kernel does when a request is above it now depends on the row:
+
+- **`host`** — there is no above any more. `denyAbove` is `3`, because every
+  capability on that row is already covered by another defence: `fs.write` is a
+  `draft` with a journal and `muffin undo`, `sys.shell` is the read-only lane
+  (no writes outside the scratch, no network), and `sys.shell.write` and
+  `sys.process.kill` are `reversible: 'no'` and therefore ask at every tier,
+  0 and 3 alike. The prohibition removed nothing from an attacker; it removed
+  the owner's ability to say yes.
+- **`external` and `outward`** — the ceiling stands at 1, and above it the
+  owner is **asked** with the tier quoted in the prompt while every other
+  principal keeps the same `deny/taint_exceeded` as before. This is the shape
+  `gateParams` already had for model-composed bytes (ADR-0071): the decision
+  stays with whoever can take it, and stays a decision, because bytes that have
+  left do not come back.
+- **`config` and `rot`** — unchanged, refused. `rot` is `-1`: never, for
+  anyone, at any tier, with `neverAtRuntime` refusing first.
+
+A `maxTaint` on a declaration may still narrow its row, but never on a
+reversible read: a read has nothing to take back and nothing that leaves, so
+the pin could only ever cost the capability. `core/policy/effect-rows.test.ts`
+refuses such a pin out loud.
+
 The approval text names the irreversible effect ("non si torna indietro:
 cambia questa macchina — `sys.shell`") plus the concrete action derived from
-the call's arguments. The turn's taint appears on the surfaces underneath it,
-as context — *this turn has read external content* — never as the cause.
+the call's arguments. When the turn is above tier 0 it also names **the tier and
+where it came from** — "questo turno contiene contenuto di livello 3: il
+risultato di web_search" — assembled in `agent/loop/tool-call.ts`, which is the
+only place that knows which part of the turn raised the level. That line is
+context and never the cause: since ADR-0074 the tier produces no `ask` on the
+host row, and since ADR-0075 it produces no `deny` there either.
 
 A sealed `rot/policy.json` may tighten a row in both of its fields: lower
 `denyAbove`, or turn `asksForIrreversible` on where the floor leaves it off.
-It may not turn one off. A file still carrying the removed `askAbove` field is
-**rejected** naming that field, and the kernel falls back to the compiled
+It may not turn one off. An owner who wants the old wall back writes
+`{"rows": {"host": {"denyAbove": 2}}}` and reseals; that path is exercised on
+the real binary by the D16 acceptance scenario.
+
+A file still carrying the removed `askAbove` field is **rejected** naming that field, and the kernel falls back to the compiled
 floor — an unknown key in the root of trust must not be read as a gate that no
 longer exists.
 
@@ -697,12 +753,15 @@ status lives only in `docs/work/day1/requirements-status.md`.
 - **A security mechanism is not considered real merely because its module, ADR
   or unit tests exist.** Production wiring and failure-path evidence are
   required.
-- **Ambient context taint is the incumbent *ceiling*, and since 2026-09-06 it
-  is no longer a reason to ask.** §4 and §5 use provenance tier both as a
-  property of data and, after taking the maximum over the context, as a
-  turn-wide authority input. That is still true of the **ceiling**: above a
-  row's `denyAbove` the capability is out of reach, and ADR-0044 is unchanged.
-  It is no longer true of the confirmation. ADR-0074 removed `askAbove` from
+- **Ambient context taint is provenance everywhere, and an authority only
+  where bytes leave the tenant (2026-09-06).** §4 and §5 use provenance tier
+  both as a property of data and, after taking the maximum over the context, as
+  a turn-wide input. Two changes on the same day narrowed what that input
+  decides: ADR-0074 removed the confirmation, and ADR-0075 removed the refusal
+  on the `host` row and turned the refusal on `external`/`outward` into a
+  question **for the owner only**. What survives is the ceiling on the rows
+  that leave the tenant, the stamp on every episode, and the line in every
+  approval prompt. ADR-0074 removed `askAbove` from
   the rows because the measurement said the gate was not gating what it was
   for: on the real installation, **all 35 approvals ever requested were
   `sys.shell` at taint 2, and 32 were granted** — a prompt conceded nine times
@@ -789,8 +848,42 @@ status lives only in `docs/work/day1/requirements-status.md`.
   attack completed *because the owner approved* are unaffected (the prompt was
   shown and granted either way), while `sys.shell` at taint 0 — previously an
   auto-allow under `hardened` — now prompts, and `fs.write` after a read no
-  longer does. The corpus has **not** been rerun against this kernel; the
-  numbers above describe the runs they name and are not restated as current.
+  longer does.
+
+  **2026-09-06 (ADR-0075): the ambient scalar stops being an authority on the
+  host, and the corpus was rerun.** The measurement that opened it is the
+  owner's own installation: nine of fourteen private turns at tier 3, the last
+  real `sys.shell` call three days old, and the last turn of the day ending on
+  `context taint 3 exceeds 2 for sys.shell (host)`. After a web search, no
+  shell and no write until a new conversation — and the model reported that to
+  the owner as "I don't have the shell". So `host.denyAbove` moved 2 → 3, the
+  `maxTaint` pins came off `skill.read` and `sys.process.list`, and above the
+  ceiling of `external`/`outward` the owner is asked rather than refused.
+
+  The rerun, same eight scenes, same machine, before and after the change:
+  **4 of 8 attacks complete with no human at all, 5 of 8 if the owner answers
+  the way the real owner answered 32 of 35 times, 8 of 8 controls alive** —
+  identical scene by scene, including which guard stopped what (the tool's SSRF
+  floor twice, one approval prompt once, nothing in the other five). Candidate
+  B still beats the incumbent on 0 of 8. This is the falsifier ADR-0075 named
+  for itself: had the number risen, the prohibition would have been stopping
+  something the ADR had not seen, and the ADR would reopen with that scene as
+  evidence.
+
+  The deterministic A/B layer was re-measured too, and it reports a result
+  worth stating plainly rather than burying: **on every baseline scene, for the
+  owner, the ambient scalar and its absence now give the same verdict.** Two
+  cells moved with this ADR — a write with an undo, from `deny` to `draft`, and
+  an outward message, from `deny` to the same `ask` the no-taint arm already
+  gave — and the two that ADR-0074 had already levelled stayed level. What the
+  scalar still buys, and what that baseline does not measure because it only
+  interrogates the owner, is the refusal for every *other* principal above the
+  outward ceiling, asserted in `core/policy/solo-irreversibile.test.ts`.
+
+  The corpus has not been rerun against ADR-0074's kernel separately; the
+  2026-09-06 numbers above are one run of the current kernel and the one
+  immediately before this change, and are not restated as valid for any other
+  build.
 
 ## 14. What this document does not own
 
