@@ -141,7 +141,9 @@ export function listConfigKnobs(home: string = muffinHome()): ConfigKnob[] {
   for (const [name, row] of Object.entries(matrix.rows)) {
     knobs.push({
       key: `policy.rows.${name}`,
-      value: `chiede sopra ${row.askAbove}, nega sopra ${row.denyAbove}`,
+      // ADR-0074: `askAbove` non esiste più — la riga dichiara *se*
+      // l'irreversibile chiede, non *sopra quale taint* si chiede.
+      value: `${row.asksForIrreversible ? 'chiede se irreversibile' : 'non chiede'}, nega sopra ${row.denyAbove}`,
       source: policyFile,
       sealed: true,
     });

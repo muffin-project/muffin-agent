@@ -52,14 +52,21 @@ class Scripted implements Provider {
 const usage = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 };
 const answer = (text: string): ChatResult => ({ text, toolCalls: [], stopReason: 'end', usage, model: 'test' });
 
-/** A high-risk capability with no kernel resource: the shell shape, stubbed. */
+/**
+ * An irreversible capability with no kernel resource: the shell shape, stubbed.
+ *
+ * `effect: 'host'` since ADR-0074 — the pair that produces an `ask` is now
+ * `reversible: 'no'` plus a row that says irreversibility matters there, not
+ * `risk: 'high'`. On the `context` row this stub would be allowed outright and
+ * there would be no ASK left for D12 to inspect.
+ */
 const probeAct: CapabilityDecl = {
   id: 'probe.act',
-  effect: 'context',
+  effect: 'host',
   risk: 'high',
   reversible: 'no',
   rerunnable: false,
-  maxTaint: 3,
+  maxTaint: 2,
   resourceKind: 'none',
   policyArgs: [],
   hostOnly: false,

@@ -31,8 +31,8 @@ const policyOf = (dir: string) => join(paths(dir).rot, 'policy.json');
 describe('le righe della matrice sigillata', () => {
   it('lascia che il file stringa una riga', () => {
     const dir = home();
-    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, rows: { host: { askAbove: 0, denyAbove: 1 } } }));
-    expect(loadPolicyMatrix(dir).rows.host).toEqual({ askAbove: 0, denyAbove: 1 });
+    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, rows: { host: { denyAbove: 1 } } }));
+    expect(loadPolicyMatrix(dir).rows.host).toEqual({ asksForIrreversible: true, denyAbove: 1 });
     // E le altre righe restano quelle del pavimento: un file parziale eredita.
     expect(loadPolicyMatrix(dir).rows.context).toEqual(POLICY_FLOOR.rows.context);
     rmSync(dir, { recursive: true, force: true });
@@ -40,12 +40,57 @@ describe('le righe della matrice sigillata', () => {
 
   it('rifiuta di lasciargliela allargare, su entrambe le soglie', () => {
     const dir = home();
-    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, rows: { host: { askAbove: 3, denyAbove: 3 } } }));
+    // `asksForIrreversible: false` su una riga che il pavimento tiene a
+    // `true` è l'allargamento della soglia che ADR-0074 mette al posto di
+    // `askAbove`: spegnerebbe la domanda su `sys.shell` con una scrittura di
+    // file più un reseal.
+    writeFileSync(
+      policyOf(dir),
+      JSON.stringify({ schemaVersion: 1, rows: { host: { asksForIrreversible: false, denyAbove: 3 } } }),
+    );
     expect(loadPolicyMatrix(dir).rows.host).toEqual(POLICY_FLOOR.rows.host);
 
     // Mista: la metà che stringe atterra, quella che allarga no.
-    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, rows: { host: { askAbove: 0, denyAbove: 3 } } }));
-    expect(loadPolicyMatrix(dir).rows.host).toEqual({ askAbove: 0, denyAbove: POLICY_FLOOR.rows.host.denyAbove });
+    writeFileSync(
+      policyOf(dir),
+      JSON.stringify({ schemaVersion: 1, rows: { host: { asksForIrreversible: false, denyAbove: 1 } } }),
+    );
+    expect(loadPolicyMatrix(dir).rows.host).toEqual({
+      asksForIrreversible: POLICY_FLOOR.rows.host.asksForIrreversible,
+      denyAbove: 1,
+    });
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /**
+   * **ADR-0074, la conseguenza sul file sigillato.** `askAbove` è sparito da
+   * `RowPolicy`: un `policy.json` che lo porta ancora promette un cancello
+   * («host chiede sopra taint 1») che questa build non ha più. Ignorarlo in
+   * silenzio — che è ciò che uno schema non-strict fa — lascerebbe l'owner a
+   * credere in una difesa inesistente, dentro il file che il sistema chiama
+   * radice di fiducia. Quindi il file viene **rifiutato**, si torna al
+   * pavimento, e la nota nomina il campo: `doctor` la stampa.
+   */
+  it('rifiuta un file che porta ancora `askAbove`, nominando il campo', () => {
+    const dir = home();
+    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, rows: { host: { askAbove: 1, denyAbove: 2 } } }));
+    const m = loadPolicyMatrix(dir);
+    expect(m.source).toBe('fallback');
+    expect(m.note ?? '').toContain('askAbove');
+    // E il pavimento è quello compilato, non una fusione a metà del file.
+    expect(m.rows).toEqual(POLICY_FLOOR.rows);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** Una riga che si stringe accendendo la domanda dove il pavimento non la fa. */
+  it('lascia che il file accenda `asksForIrreversible` su una riga che non chiede', () => {
+    const dir = home();
+    expect(POLICY_FLOOR.rows.reply.asksForIrreversible).toBe(false);
+    writeFileSync(
+      policyOf(dir),
+      JSON.stringify({ schemaVersion: 1, rows: { reply: { asksForIrreversible: true } } }),
+    );
+    expect(loadPolicyMatrix(dir).rows.reply).toEqual({ asksForIrreversible: true, denyAbove: 3 });
     rmSync(dir, { recursive: true, force: true });
   });
 

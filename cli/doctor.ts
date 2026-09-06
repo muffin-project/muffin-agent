@@ -321,13 +321,18 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
   // capability's effect row, and printing the class defaults here would name a
   // number that no longer decides anything — the exact shape of invisible fact
   // this check exists to remove. Three rows are shown because they are the ones
-  // an owner meets: the host row is the ask they will see after a read, and the
-  // other two are the refusals.
+  // an owner meets: the host row is the ask they will see for an action with no
+  // undo, and the other two are the refusals.
+  //
+  // `askAbove` used to be printed here as "host chiede sopra taint N". ADR-0074
+  // removed the field: the taint no longer produces an ask, so a doctor line
+  // naming a taint threshold for asking would be exactly the invisible-fact
+  // defect this check exists against, one field later.
   const rows = matrix.rows;
   if (matrix.source === 'sealed') {
     ok(
       'policy matrix',
-      `rot/policy.json — righe di effetto: host chiede sopra taint ${rows.host.askAbove} e nega sopra ${rows.host.denyAbove}, ` +
+      `rot/policy.json — righe di effetto: host ${rows.host.asksForIrreversible ? 'chiede per ciò che non si annulla' : 'non chiede'} e nega sopra taint ${rows.host.denyAbove}, ` +
         `esterni (MCP) negano sopra ${rows.external.denyAbove}, outward nega sopra ${rows.outward.denyAbove}; ` +
         `${matrix.neverAtRuntime.size} mai a runtime, ${matrix.forbiddenForSystem.size} vietate agli autonomi`,
     );
