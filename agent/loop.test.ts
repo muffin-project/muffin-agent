@@ -480,7 +480,8 @@ describe('agent loop', () => {
     // failure the tool never had. Headless now exits on it, so a script can act.
     const asking: CapabilityDecl[] = [
       // era il default della classe: la riga 'context' non lo eredita più
-      { id: 'demo.ask', effect: 'context', maxTaint: 1, risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
+      // ADR-0074: l'ask nasce da `reversible: 'no'` su una riga che chiede, non da `risk: 'high'`.
+      { id: 'demo.ask', effect: 'host', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
     ];
     const ran: string[] = [];
     const { deps: d, store } = deps([callTool('demo_ask'), answer('mai')], {
@@ -511,7 +512,8 @@ describe('agent loop', () => {
   it('runs the tool when the surface can ask and the owner says yes', async () => {
     const asking: CapabilityDecl[] = [
       // era il default della classe: la riga 'context' non lo eredita più
-      { id: 'demo.ask', effect: 'context', maxTaint: 1, risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
+      // ADR-0074: l'ask nasce da `reversible: 'no'` su una riga che chiede, non da `risk: 'high'`.
+      { id: 'demo.ask', effect: 'host', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
     ];
     const asked: string[] = [];
     const ran: string[] = [];
@@ -1649,7 +1651,8 @@ describe('agent loop · progress (B13)', () => {
   describe('closes the tool_start/tool_end pair on every exit that refuses', () => {
     const high: CapabilityDecl[] = [
       // era il default della classe: la riga 'context' non lo eredita più
-      { id: 'demo.high', effect: 'context', maxTaint: 1, risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
+      // ADR-0074: l'ask nasce da `reversible: 'no'` su una riga che chiede, non da `risk: 'high'`.
+      { id: 'demo.high', effect: 'host', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
     ];
     const undoable: CapabilityDecl[] = [
       // era il default della classe: la riga 'context' non lo eredita più
