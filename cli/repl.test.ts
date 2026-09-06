@@ -436,7 +436,7 @@ describe("un'approvazione rientra nel vocabolario dei passi (§4.1/§5 della mem
     return stdin;
   }
 
-  // `shell_run_write` e non `shell_run` dal 06/09 (ADR-0074 §4): la corsia che
+  // `shell_run_write` e non `shell_run` dal 06/09 (ADR-0074 punto 4): la corsia che
   // chiede è quella che scrive, e questi due test misurano il vocabolario di un
   // ASK. Usare la corsia in sola lettura qui vorrebbe dire misurare un'attesa
   // che non arriva mai — un test verde su uno schermo che non ha niente da dire.

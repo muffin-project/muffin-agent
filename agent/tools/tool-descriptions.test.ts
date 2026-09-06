@@ -88,7 +88,7 @@ describe('ogni tool esposto dice quando usarlo e quando no', () => {
       const desc = String(shell!.spec.description ?? '');
       const descWrite = String(write!.spec.description ?? '');
 
-      // Dal 06/09 (ADR-0074 §4) «last resort» non è più la shell: è la shell
+      // Dal 06/09 (ADR-0074 punto 4) «last resort» non è più la shell: è la shell
       // **che scrive**. Spostare la frase è metà del punto — l'altra metà è
       // che la corsia in sola lettura si dichiari come scelta di default,
       // altrimenti il modello continua a leggere «shell = ultima spiaggia» e

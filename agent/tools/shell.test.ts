@@ -62,7 +62,7 @@ const root = join(tmpdir(), 'muffin-shell-root');
  *
  * `sys.shell.write` keeps the row threat model §g put it on: without OS-level
  * prevention of RoT tampering, a lane that writes can never be a silent allow.
- * `sys.shell` is the lane ADR-0074 §4 made reversible by construction, and the
+ * `sys.shell` is the lane ADR-0074 punto 4 made reversible by construction, and the
  * only reason it may skip the ask.
  */
 describe('le due corsie attraverso il kernel', () => {
@@ -95,14 +95,14 @@ describe('le due corsie attraverso il kernel', () => {
     expect(chiedi(shellCapability.id, { hardened: false }).effect).toBe('allow');
   });
 
-  it('sys.shell.write, hardened, owner, taint 0: chiede lo stesso, la scorciatoia non esiste più (ADR-0074 §2)', () => {
+  it('sys.shell.write, hardened, owner, taint 0: chiede lo stesso, la scorciatoia non esiste più (ADR-0074 punto 2)', () => {
     const d = chiedi(shellWriteCapability.id, { hardened: true });
     expect(d.effect).toBe('ask');
     // E la domanda dice cosa non si annulla, non in che modalità è la RoT.
     expect(d.effect === 'ask' && d.ask.prompt).toContain('non si torna indietro');
   });
 
-  it('taint 2: la corsia in sola lettura passa ancora, il taint non chiede più (ADR-0074 §1)', () => {
+  it('taint 2: la corsia in sola lettura passa ancora, il taint non chiede più (ADR-0074 punto 1)', () => {
     expect(chiedi(shellCapability.id, { hardened: true, taint: 2 }).effect).toBe('allow');
     expect(chiedi(shellWriteCapability.id, { hardened: true, taint: 2 }).effect).toBe('ask');
   });
@@ -155,7 +155,7 @@ describe('le due corsie attraverso il kernel', () => {
 /**
  * **Il confine, come cablaggio e non come regola.**
  *
- * ADR-0074 §4 chiede che la shell in sola lettura non scriva nel workspace.
+ * ADR-0074 punto 4 chiede che la shell in sola lettura non scriva nel workspace.
  * La mutazione che lo falsifica è di una parola — `runReadOnly` → `run` in
  * `makeShellTool` — e questi due test la vedono da due lati: quale porta
  * dell'esecutore è stata aperta, e con quale `writeScope`.
@@ -242,7 +242,7 @@ describe('shell_run argument boundary', () => {
 /**
  * **La degradazione silenziosa, negata a voce.**
  *
- * ADR-0074 §4: *«dove il sandbox non può garantire il confine, la shell in sola
+ * ADR-0074 punto 4: *«dove il sandbox non può garantire il confine, la shell in sola
  * lettura non esiste: non degrada in silenzio a `sys.shell.write`, il tool dice
  * che quel comando va fatto a mano o con un tool dedicato»*.
  *

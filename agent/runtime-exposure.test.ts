@@ -41,7 +41,7 @@ function realRuntime(): { names: string[]; close: () => void } {
  * macchina e non del codice. Tolte dal confronto, ed è la ragione per cui
  * questo file asserisce una lista *filtrata* e non un'istantanea.
  *
- * Due e non una dal 06/09 (ADR-0074 §4): filtrarne una sola lascerebbe l'altra
+ * Due e non una dal 06/09 (ADR-0074 punto 4): filtrarne una sola lascerebbe l'altra
  * dentro il confronto e lo renderebbe dipendente dall'host, che è esattamente
  * il difetto che questa costante evita.
  */
@@ -78,7 +78,7 @@ describe('quali tool vede davvero un turno', () => {
     const conteneva = SANDBOXED.every((n) => rt.names.includes(n));
     // O tutte e due o nessuna: `agent/runtime.ts` le registra insieme, e un
     // host che ne offrisse una sola sarebbe la degradazione silenziosa che
-    // ADR-0074 §4 vieta — qui si vede, invece di passare inosservata.
+    // ADR-0074 punto 4 vieta — qui si vede, invece di passare inosservata.
     expect(SANDBOXED.some((n) => rt.names.includes(n))).toBe(conteneva);
     expect(baseToolOrder({ sandboxAvailable: conteneva, searchOn: false })).toEqual(rt.names);
   });
@@ -112,7 +112,7 @@ describe('quali tool vede davvero un turno', () => {
     // non sa più guardarsi, il cerotto.
     //
     // La risposta strutturale resta quella scritta sotto, e non è un numero.
-    // 16 dal 06/09 (ADR-0074 §4), e per una ragione contata invece che
+    // 16 dal 06/09 (ADR-0074 punto 4), e per una ragione contata invece che
     // stimata: `sys.shell` si è divisa in due tool, quindi i registrati sono
     // saliti esattamente di uno. Lasciare 15 avrebbe tagliato `sys_inspect` in
     // silenzio su ogni installazione consumer, che è il difetto, non la

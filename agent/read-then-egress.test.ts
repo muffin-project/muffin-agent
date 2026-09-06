@@ -223,7 +223,7 @@ describe('read-then-fetch, through a real turn — ADR-0066: reading is open, so
 
 describe('the price of the same rule, through the same turn', () => {
   /**
-   * `sys.shell.write` e non `sys.shell` dal 06/09 (ADR-0074 §4): la corsia che
+   * `sys.shell.write` e non `sys.shell` dal 06/09 (ADR-0074 punto 4): la corsia che
    * paga questo costo è quella che scrive. La sorella in sola lettura non ha un
    * `ask` da declassare — il suo confine è il sandbox, non l'owner — e usarla
    * qui misurerebbe un prezzo che non esiste.

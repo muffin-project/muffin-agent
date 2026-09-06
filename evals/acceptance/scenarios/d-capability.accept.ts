@@ -624,7 +624,7 @@ describe('acceptance · D · capability e sicurezza', () => {
    * la prova che quella sonda ha funzionato qui, prima ancora di qualunque
    * asserzione sotto.
    *
-   * Dal 06/09 (ADR-0074 §4) il tool che questo scenario chiama è
+   * Dal 06/09 (ADR-0074 punto 4) il tool che questo scenario chiama è
    * `shell_run_write`: `shell_run` è la corsia in sola lettura e non produce
    * più nessun ASK, quindi uno scenario che la usasse misurerebbe il contrario
    * di ciò che dice. Che *entrambe* siano offerte al modello resta la prova che
@@ -697,7 +697,7 @@ describe('acceptance · D · capability e sicurezza', () => {
       }
 
       /**
-       * **L'altra metà, dal 06/09 (ADR-0074 §4): la corsia che non chiede.**
+       * **L'altra metà, dal 06/09 (ADR-0074 punto 4): la corsia che non chiede.**
        *
        * Fino a oggi questo scenario poteva provare solo il confine di sopra —
        * il tool è offerto, l'ASK mostra comando e cwd — perché `muffin run`
