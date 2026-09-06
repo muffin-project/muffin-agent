@@ -117,7 +117,13 @@ describe('quali tool vede davvero un turno', () => {
     // saliti esattamente di uno. Lasciare 15 avrebbe tagliato `sys_inspect` in
     // silenzio su ogni installazione consumer, che è il difetto, non la
     // correzione. La risposta strutturale resta quella scritta sotto.
-    expect(profile.maxToolsExposed).toBe(16);
+    //
+    // 18 dal 06/09 sera: dopo `muffin update` l'installazione dell'owner
+    // registrava 18 tool (ricerca web configurata e `send_file` in più
+    // rispetto al conteggio del 04/09) e `doctor` diceva `todo` e
+    // `sys_inspect` tagliati. Di nuovo il numero dei registrati, contato
+    // sull'installazione vera, non stimato.
+    expect(profile.maxToolsExposed).toBe(18);
 
     const rt = realRuntime();
     rt.close();
@@ -135,11 +141,23 @@ describe('quali tool vede davvero un turno', () => {
      * search, scartata il 26/08 valutandola contro il budget di token invece
      * che contro questo tetto (`docs/evidence/tool-design-2026-08-26.md`).
      */
-    expect(cut, 'il tetto è tornato a tagliare: alzarlo ancora è un cerotto, non una risposta').toEqual([]);
+    expect(
+      cut,
+      'il tetto è tornato a tagliare: alzarlo ancora è un cerotto, non una risposta',
+    ).toEqual([]);
 
     // Detto anche al positivo, perché un'asserzione su un insieme vuoto passa
     // in un mondo vuoto.
-    for (const kept of ['fs_read', 'memory_search', 'document_read', 'skill_read', 'http_get', 'wait', 'todo', 'sys_inspect']) {
+    for (const kept of [
+      'fs_read',
+      'memory_search',
+      'document_read',
+      'skill_read',
+      'http_get',
+      'wait',
+      'todo',
+      'sys_inspect',
+    ]) {
       expect(rt.names, `${kept} deve restare esposto`).toContain(kept);
     }
   });
