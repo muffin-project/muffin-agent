@@ -5,8 +5,8 @@ import type { SessionStore } from '../../core/session/store.js';
 import { SaluteSuperfici } from '../../core/surface/salute.js';
 import type { DiscordApi } from './api.js';
 import { DiscordConnector } from './connector.js';
-import type { WebSocketLike, WsEvent } from './gateway.js';
 import { DiscordInbox } from './inbox.js';
+import { FakeSocket } from './fake-socket.js';
 
 /**
  * Il ponte fra il socket di Discord e cio' che `doctor` legge.
@@ -19,24 +19,6 @@ import { DiscordInbox } from './inbox.js';
  * quando rinuncia su un 4004, quindi il `.catch` di `connectSurfaces` non
  * scatta mai e la superficie restava «connessa» dalla stretta di mano d'avvio.
  */
-class FakeSocket implements WebSocketLike {
-  readyState = 1;
-  private handlers: Record<string, ((ev?: WsEvent) => void)[]> = {};
-  send(): void {}
-  close(code?: number, reason?: string): void {
-    this.emit('close', { code: code ?? 1000, reason: reason ?? '' });
-  }
-  addEventListener(type: 'open' | 'message' | 'close' | 'error', listener: (ev?: WsEvent) => void): void {
-    (this.handlers[type] ??= []).push(listener);
-  }
-  emit(type: string, ev?: WsEvent): void {
-    for (const h of this.handlers[type] ?? []) h(ev);
-  }
-  serverSends(envelope: Record<string, unknown>): void {
-    this.emit('message', { data: JSON.stringify(envelope) });
-  }
-}
-
 const HELLO = { op: 10, d: { heartbeat_interval: 45_000 } };
 const READY = { op: 0, s: 1, t: 'READY', d: { session_id: 's1', resume_gateway_url: 'wss://resume' } };
 
