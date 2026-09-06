@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { MemoryStore } from '../core/memory/store.js';
 import { createDecide } from '../core/policy/decide.js';
 import { memoryWriteCapability, replyCapability } from '../core/policy/doors.js';
-import { POLICY_FLOOR, ROW_FLOOR, type PolicyMatrix } from '../core/policy/matrix.js';
+import { POLICY_FLOOR, ROW_FLOOR, type PolicyMatrix, type RowPolicy } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
 import { TurnStore } from '../core/turns/store.js';
@@ -137,10 +137,20 @@ function harness(script: ChatResult[], matrix: PolicyMatrix = POLICY_FLOOR) {
   return { deps, home, spans, episodes, deltas, provider: deps.provider as Scripted };
 }
 
-/** A matrix that differs from the shipped floor in exactly one row. */
-const tightened = (row: 'reply' | 'memory', policy: { askAbove: number; denyAbove: number }): PolicyMatrix => ({
+/**
+ * A matrix that differs from the shipped floor in exactly one row.
+ *
+ * `Partial<RowPolicy>` merged **over** the floor row, not a whole row written
+ * by hand. The hand-written version carried `askAbove` — the field ADR-0074
+ * removed — and a computed key (`{ [row]: policy }`) widens the object enough
+ * that TypeScript never objected: the fixture went on shipping a dead field
+ * and silently missing the live one, on the very seam these tests measure.
+ * Merging over the floor makes it inherit whatever the row really has and
+ * name only what it means to change.
+ */
+const tightened = (row: 'reply' | 'memory', policy: Partial<RowPolicy>): PolicyMatrix => ({
   ...POLICY_FLOOR,
-  rows: { ...ROW_FLOOR, [row]: policy },
+  rows: { ...ROW_FLOOR, [row]: { ...ROW_FLOOR[row], ...policy } },
 });
 
 /** The read → answer script every test below runs, so the matrix is the only variable. */
@@ -191,7 +201,7 @@ describe('una riga stretta sulla porta della risposta', () => {
    * about bytes already streaming onto the owner's screen.
    */
   it('lascia girare il primo giro e trattiene il secondo, prima che il modello parli', async () => {
-    const h = harness(script(), tightened('reply', { askAbove: 3, denyAbove: 1 }));
+    const h = harness(script(), tightened('reply', { denyAbove: 1 }));
 
     const result = await runTurn(h.deps, {
       principal: owner,
@@ -228,7 +238,7 @@ describe('una riga stretta sulla porta della memoria', () => {
    * install to remember has not asked it to stop talking.
    */
   it('il turno risponde lo stesso e non scrive nessun episodio', async () => {
-    const h = harness(script(), tightened('memory', { askAbove: 3, denyAbove: -1 }));
+    const h = harness(script(), tightened('memory', { denyAbove: -1 }));
 
     const result = await runTurn(h.deps, {
       principal: owner,

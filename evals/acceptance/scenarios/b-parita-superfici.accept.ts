@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'vitest';
 import { install, until, type Install } from '../harness.js';
@@ -46,19 +46,32 @@ import { privateMessage, startFakeTelegram, type FakeTelegram } from '../telegra
  * — e le tre righe smettono di coincidere: è esattamente la divergenza che
  * questo scenario deve saper vedere.
  *
- * ## L'esito, aggiornato da ADR-0053
+ * ## L'esito, in tre passaggi
  *
- * La misura del 02/09 diceva: nessuna divergenza, e a taint 2 la scrittura è un
- * `deny/taint_exceeded` ovunque. La ricostruzione che ne è seguita ha trovato
- * che quel `deny` non era una decisione ma una trascrizione mancata — la riga
- * *Shell / filesystem host / processi* della matrice normativa dice `ASK` a
- * taint 2, e solo `sys.shell` l'aveva ricevuta. Da ADR-0053 il soffitto viene
- * dalla riga di effetto, quindi la cella condivisa è una **domanda**.
+ * **02/09.** Nessuna divergenza, e a taint 2 la scrittura è un
+ * `deny/taint_exceeded` ovunque.
+ *
+ * **ADR-0053.** Quel `deny` non era una decisione ma una trascrizione mancata:
+ * la riga *Shell / filesystem host / processi* della matrice dice `ASK` a
+ * taint 2, e solo `sys.shell` l'aveva ricevuta. Il soffitto passa alla riga di
+ * effetto, e la cella condivisa diventa una **domanda**.
+ *
+ * **ADR-0074, 06/09.** La domanda sparisce, e sparisce per la ragione che
+ * l'ADR misura: quel cancello scattava su una scrittura che ha una copia e un
+ * `muffin undo` dietro, cioè su una delle poche cose in questo sistema che si
+ * possono davvero rimettere a posto. Il taint continua a **negare** sopra il
+ * soffitto della riga (a taint 3 `fs.write` resta `deny`, invariato da
+ * ADR-0044) e non trasforma più un `draft` in un `ask`. La cella condivisa è
+ * quindi: **il file viene scritto, dopo che una copia è finita nel giornale.**
  *
  * La parità è la claim che non cambia, ed è la ragione per cui questo file
  * resta: le tre superfici devono continuare a rispondere identico, qualunque
- * sia la cella. Il segnale confrontato non è più il codice di rifiuto ma la
- * riga di `approvals`, che è la stessa su tutte e tre.
+ * sia la cella. Il segnale confrontato è cambiato con la cella — non più il
+ * codice di rifiuto, non più la riga di `approvals`, ma la coppia «file
+ * scritto + copia nel giornale», che è la stessa su tutte e tre. Le altre due
+ * colonne restano stampate e asserite a **zero**: un rifiuto o una domanda che
+ * ricomparissero su una sola superficie sarebbero esattamente la divergenza
+ * che questo scenario esiste per vedere.
  */
 
 const OWNER_ID = 4242;
@@ -83,6 +96,16 @@ type Esito = {
   /** Il taint della richiesta di approvazione registrata, se ha chiesto. */
   chiesto: number | null;
   scritto: boolean;
+  /**
+   * Una copia del file è finita nel giornale prima della scrittura?
+   *
+   * Il segnale che ADR-0074 rende centrale: da qui in poi la scrittura non
+   * chiede più, quindi ciò che deve essere identico sulle tre superfici è che
+   * **il `draft` abbia preso il suo checkpoint**. Senza questa colonna la
+   * misura direbbe soltanto «il file c'è», che è vero anche di una scrittura
+   * senza rete di sicurezza.
+   */
+  giornale: boolean;
 };
 
 /** Il turno **della scrittura**, scelto per contenuto e non per posizione: `LIMIT 1` sull'ultima riga prenderebbe qualunque turno di coda (un job, una consolidazione) come se fosse questo. */
@@ -123,6 +146,19 @@ function approvazioneScrittura(inst: Install): number | null {
   return row?.taint ?? null;
 }
 
+/**
+ * Il giornale di undo ha una copia di qualcosa, per questa installazione.
+ *
+ * Letto dal disco (`~/.muffin/undo/<turno>/manifest.json`) e non dal
+ * database, perché è lì che il `draft` mette la sua rete di sicurezza
+ * (`core/undo/journal.ts`) ed è quello che `muffin undo` rimetterebbe.
+ */
+function giornaleHaUnaCopia(inst: Install): boolean {
+  const root = join(inst.home, 'undo');
+  if (!existsSync(root)) return false;
+  return readdirSync(root).some((turno) => existsSync(join(root, turno, 'manifest.json')));
+}
+
 function esito(inst: Install, superficie: string): Esito {
   const row = turnoDellaScrittura(inst);
   const codice = /"?(taint_exceeded|resource_denied|no_capability|safe_mode|rot_violation)"?/.exec(row.messages)?.[1] ?? null;
@@ -133,6 +169,7 @@ function esito(inst: Install, superficie: string): Esito {
     codice,
     chiesto: approvazioneScrittura(inst),
     scritto: existsSync(join(inst.workspace, 'esito.txt')),
+    giornale: giornaleHaUnaCopia(inst),
   };
 }
 
@@ -224,9 +261,12 @@ describe('acceptance · parità di superficie · stesso principal, stessa histor
             30_000,
           );
           tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, SCRIVI));
-          // Non più la risposta del modello: il turno si ferma a chiedere. La
-          // riga di `approvals` è il segnale che le tre superfici condividono.
-          await until(() => approvazioneScrittura(tel) !== null, 30_000);
+          // Da ADR-0074 il turno non si ferma più a chiedere: la scrittura ha
+          // un undo, quindi va avanti come `draft`. Il segnale condiviso
+          // dalle tre superfici è il file, dopo che una copia è finita nel
+          // giornale — si aspetta quello, non una riga di `approvals` che non
+          // arriverà mai (e aspettarla sarebbe un timeout travestito da rosso).
+          await until(() => existsSync(join(tel.workspace, 'esito.txt')) && giornaleHaUnaCopia(tel), 30_000);
         } finally {
           await gw.stop();
         }
@@ -259,7 +299,8 @@ describe('acceptance · parità di superficie · stesso principal, stessa histor
       for (const m of misure) {
         process.stderr.write(
           `  parità · ${m.superficie.padEnd(20)} sessione=${m.sessione.padEnd(24)} taint=${m.taint} ` +
-            `codice=${m.codice ?? '-'} chiesto=${m.chiesto ?? '-'} scritto=${m.scritto ? 'sì' : 'no'}\n`,
+            `codice=${m.codice ?? '-'} chiesto=${m.chiesto ?? '-'} scritto=${m.scritto ? 'sì' : 'no'} ` +
+            `giornale=${m.giornale ? 'sì' : 'no'}\n`,
         );
       }
 
@@ -268,7 +309,10 @@ describe('acceptance · parità di superficie · stesso principal, stessa histor
 
       // (1) La divergenza superficie/kernel: se esiste, è qui che si vede.
       const chiavi = new Set(
-        tainted.map((m) => `${m.taint}/${m.codice ?? '-'}/${m.chiesto ?? '-'}/${m.scritto ? 'scritto' : 'no'}`),
+        tainted.map(
+          (m) =>
+            `${m.taint}/${m.codice ?? '-'}/${m.chiesto ?? '-'}/${m.scritto ? 'scritto' : 'no'}/${m.giornale ? 'giornale' : 'no'}`,
+        ),
       );
       if (chiavi.size !== 1) {
         throw new Error(
@@ -277,30 +321,56 @@ describe('acceptance · parità di superficie · stesso principal, stessa histor
         );
       }
 
-      // E l'esito condiviso è la cella che la matrice normativa stampa per la
-      // riga `host` a taint 2: **ASK**, non deny. `fs.write` scrive sul disco
-      // dell'host come la shell, e da ADR-0053 le due porte hanno la stessa
-      // regola. Il file non c'è perché nessuno ha approvato, non perché la
-      // capability sia irraggiungibile: è la differenza che questa slice ripara.
+      // E l'esito condiviso è quello che ADR-0074 mette al posto della
+      // domanda: `fs.write` è `undoable`, quindi a taint 2 resta un `draft` —
+      // la copia prima, l'effetto dopo — e non un cancello che l'owner
+      // concede nove volte su dieci. Le due colonne che devono restare a zero
+      // sono la prova che non è ricomparso niente per un'altra strada.
       for (const m of tainted) {
         if (m.taint !== 2) throw new Error(`${m.superficie}: atteso taint 2 dopo la lettura, trovato ${m.taint}`);
         if (m.codice !== null) {
-          throw new Error(`${m.superficie}: il kernel ha rifiutato (${m.codice}) invece di chiedere`);
+          throw new Error(`${m.superficie}: il kernel ha rifiutato (${m.codice}) invece di scrivere con undo`);
         }
-        if (m.chiesto !== 2) {
+        if (m.chiesto !== null) {
           throw new Error(
-            `${m.superficie}: attesa una domanda di approvazione per fs.write a taint 2, trovata ${String(m.chiesto)}`,
+            `${m.superficie}: nessuno doveva essere interrogato per una scrittura con undo (ADR-0074), ` +
+              `trovata una domanda a taint ${String(m.chiesto)}`,
           );
         }
-        if (m.scritto) throw new Error(`${m.superficie}: esito.txt è stato scritto senza approvazione`);
+        if (!m.scritto) throw new Error(`${m.superficie}: esito.txt non è stato scritto`);
+        if (!m.giornale) {
+          throw new Error(
+            `${m.superficie}: il file è stato scritto senza che il giornale prendesse una copia — ` +
+              `il "draft" senza checkpoint è la cosa che ADR-0022 rifiuta`,
+          );
+        }
       }
 
-      // (2) La vita della sessione, isolata: cambia solo quella, e l'esito
-      // cambia con lei.
-      if (frescaM.taint !== 0 || frescaM.codice !== null || frescaM.chiesto !== null || !frescaM.scritto) {
+      // (2) La sessione, isolata — e da ADR-0074 quello che isola è cambiato
+      // di segno, il che la rende una prova migliore e non peggiore.
+      //
+      // Prima: cambiare sessione cambiava il taint, e il taint cambiava
+      // l'esito (a taint 0 scriveva, a taint 2 chiedeva). Adesso il taint
+      // resta diverso — la colonna `taint=` lo stampa, 0 contro 2 — e l'esito
+      // **non** cambia più con lui. È esattamente l'affermazione dell'ADR
+      // («il taint non chiede mai») misurata sul binario vero e su tre
+      // superfici, e un `askAbove` rimesso su una riga qualunque la fa cadere
+      // qui, non solo negli unit test.
+      if (frescaM.taint !== 0) {
+        throw new Error(`il controllo a sessione nuova doveva partire da taint 0, trovato ${frescaM.taint}`);
+      }
+      if (frescaM.codice !== null || frescaM.chiesto !== null || !frescaM.scritto || !frescaM.giornale) {
         throw new Error(
-          `il controllo a sessione nuova non si comporta come atteso (taint 0, nessun rifiuto, file scritto): ` +
-            `${JSON.stringify(frescaM)}`,
+          `il controllo a sessione nuova non si comporta come atteso (nessun rifiuto, nessuna domanda, ` +
+            `file scritto con copia nel giornale): ${JSON.stringify(frescaM)}`,
+        );
+      }
+      const chiaveSenzaTaint = (m: Esito) =>
+        `${m.codice ?? '-'}/${m.chiesto ?? '-'}/${m.scritto ? 'scritto' : 'no'}/${m.giornale ? 'giornale' : 'no'}`;
+      if (chiaveSenzaTaint(frescaM) !== chiaveSenzaTaint(cliM)) {
+        throw new Error(
+          `il taint ha ancora cambiato l'esito di una scrittura con undo (ADR-0074): ` +
+            `taint 0 -> ${chiaveSenzaTaint(frescaM)}, taint 2 -> ${chiaveSenzaTaint(cliM)}`,
         );
       }
       if (frescaM.sessione === cliM.sessione) {
@@ -334,26 +404,42 @@ describe('acceptance · il giro DAY-1 dentro un turno solo · sessione nuova, ne
    * nessuna riforma di *quale* conversazione viene reiniettata apre questo
    * percorso da sola.
    *
-   * Falsificatore: porta `fs.write` sulla riga `context` in `agent/tools/fs.ts`
-   * e questo scenario diventa rosso perché il file compare senza che nessuno
-   * abbia approvato.
+   * **Aggiornato da ADR-0074 (06/09), ed è il giro che il DAY-1 chiede
+   * davvero.** Il taint sale ancora dentro il turno — la colonna `taint=2` lo
+   * stampa e questo test la asserisce — ma non chiude più niente che si possa
+   * disfare: la scrittura è un `draft`, prende la sua copia, e il turno
+   * finisce da solo. Su un processo headless (uno script, un job dello
+   * scheduler) la differenza non è di comodità: `exit 3` era un turno fermo
+   * su un'approvazione che, lì, nessuno poteva dare.
+   *
+   * Il soffitto resta, e non lo prova questo scenario ma
+   * `core/policy/read-then-write.test.ts`: a taint 3 `fs.write` è ancora
+   * `deny/taint_exceeded`.
+   *
+   * Falsificatori:
+   * - rimetti un `askAbove` sulla riga `host` in `core/policy/matrix.ts` e il
+   *   file non compare più: rosso su `scritto`;
+   * - togli il checkpoint al ramo `draft` e il file compare senza copia:
+   *   rosso su `giornale`.
    */
   it(
-    'leggi → scrivi nello stesso turno chiede, e non scrive finché nessuno risponde',
+    'leggi → scrivi nello stesso turno scrive, con la copia nel giornale e senza chiedere niente',
     async () => {
       const inst = await install({ main: SCRIPT_UN_TURNO });
       try {
         semina(inst);
         const r = await inst.muffin(['run', '--timeout', '20', 'leggi dati.txt e scrivi il totale in esito.txt']);
-        if (![0, 1, 3].includes(r.code)) throw new Error(`exit inatteso: ${r.code}\n${r.err}`);
+        if (![0, 1].includes(r.code)) throw new Error(`exit inatteso: ${r.code}\n${r.err}`);
         const m = esito(inst, 'cli un turno');
         process.stderr.write(
           `  parità · ${m.superficie.padEnd(20)} sessione=${m.sessione.padEnd(24)} taint=${m.taint} ` +
-            `codice=${m.codice ?? '-'} chiesto=${m.chiesto ?? '-'} scritto=${m.scritto ? 'sì' : 'no'}\n`,
+            `codice=${m.codice ?? '-'} chiesto=${m.chiesto ?? '-'} scritto=${m.scritto ? 'sì' : 'no'} ` +
+            `giornale=${m.giornale ? 'sì' : 'no'}\n`,
         );
-        if (m.taint !== 2 || m.codice !== null || m.chiesto !== 2 || m.scritto) {
+        if (m.taint !== 2 || m.codice !== null || m.chiesto !== null || !m.scritto || !m.giornale) {
           throw new Error(
-            `il giro read → write in un turno solo non si comporta come misurato il 02/09: ${JSON.stringify(m)}`,
+            `il giro read → write in un turno solo non si comporta come dice ADR-0074 ` +
+              `(taint 2, nessun rifiuto, nessuna domanda, file scritto con copia): ${JSON.stringify(m)}`,
           );
         }
       } finally {

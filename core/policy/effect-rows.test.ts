@@ -108,30 +108,33 @@ function decisionAt(decl: CapabilityDecl, taint: TrustTier): Decision {
 }
 
 /**
- * The matrix, as two thresholds per row: `askAbove` is the taint above which an
- * auto-allow (or an unattended `draft`) is no longer acceptable, `denyAbove`
- * the taint above which the capability is out of reach entirely. `3` means the
- * matrix does not constrain that column.
+ * The matrix, as a ceiling per row plus the answer to *does irreversibility
+ * matter here*. `denyAbove` is the taint above which the capability is out of
+ * reach entirely (`3` = the matrix does not constrain that column, `-1` =
+ * never). `asksForIrreversible` replaced `askAbove` in ADR-0074: an `ask` is
+ * produced by a `reversible: 'no'` declaration on a row that says `true`, and
+ * by nothing else — the taint denies above the ceiling and no longer converts
+ * an `allow` or a `draft` into a question.
  */
 const MATRICE = {
   /** Bytes enter the turn; nothing leaves and nothing on the host changes. */
-  context: { askAbove: 3, denyAbove: 3 },
-  /** "Shell / filesystem host / processi": ALLOW per classe · ASK · DENY. */
-  host: { askAbove: 1, denyAbove: 2 },
-  /** "Reply sul canale di origine": ALLOW · ALLOW · ALLOW. */
-  reply: { askAbove: 3, denyAbove: 3 },
-  /** "Egress rete": the allowlist and `paramsMaxTaint` own this row's columns. */
-  egress: { askAbove: 3, denyAbove: 3 },
+  context: { asksForIrreversible: false, denyAbove: 3 },
+  /** "Shell / filesystem host / processi": DENY sopra 2; chiede per ciò che non ha un undo (ADR-0074). */
+  host: { asksForIrreversible: true, denyAbove: 2 },
+  /** "Reply sul canale di origine": ALLOW · ALLOW · ALLOW. Una risposta è la conversazione stessa. */
+  reply: { asksForIrreversible: false, denyAbove: 3 },
+  /** "Egress rete": the allowlist and `paramsMaxTaint`/`searchMaxTaint` own this row's columns. */
+  egress: { asksForIrreversible: false, denyAbove: 3 },
   /** "Scrittura memoria (episodi/fatti)": ALLOW · ALLOW nel tenant · ALLOW. */
-  memory: { askAbove: 3, denyAbove: 3 },
+  memory: { asksForIrreversible: false, denyAbove: 3 },
   /** Third-party code outside the allowlist model (MCP). Not a printed row: keeps today's number. */
-  external: { askAbove: 1, denyAbove: 1 },
+  external: { asksForIrreversible: true, denyAbove: 1 },
   /** "Outward (mail, messaggi a terzi, pubblicazione)": DRAFT · DENY · DENY. */
-  outward: { askAbove: 0, denyAbove: 1 },
+  outward: { asksForIrreversible: true, denyAbove: 1 },
   /** "Scrittura config/voice (cricchetto)": ALLOW solo via ratchet · DENY · DENY. */
-  config: { askAbove: 0, denyAbove: 1 },
+  config: { asksForIrreversible: true, denyAbove: 1 },
   /** "Root of Trust": DENY a runtime per chiunque. */
-  rot: { askAbove: 0, denyAbove: -1 },
+  rot: { asksForIrreversible: true, denyAbove: -1 },
 } as const;
 
 describe('la matrice normativa è eseguibile', () => {
@@ -149,17 +152,23 @@ describe('la matrice normativa è eseguibile', () => {
       // fiducia, e il knob per capability è esattamente ciò che ha prodotto la
       // deriva (matrix.ts, §"defaultMaxTaint è clampato verso il basso").
       const denyAbove = Math.min(riga.denyAbove, decl.maxTaint ?? 3);
+      // ADR-0074: sotto il soffitto l'esito non dipende più dal taint. La
+      // stessa capability risponde la stessa cosa a taint 0 e a taint 2, e
+      // quella cosa è `ask` se e solo se non si può annullare su una riga
+      // dove l'irreversibilità conta.
+      const atteso = decl.reversible === 'no' && riga.asksForIrreversible ? 'ask' : 'non-deny';
       for (const taint of TIERS) {
         const d = decisionAt(decl, taint);
         if (taint > denyAbove) {
           expect(`${decl.id}@${taint}:${d.effect}`).toBe(`${decl.id}@${taint}:deny`);
           continue;
         }
-        if (taint > riga.askAbove) {
+        if (atteso === 'ask') {
           expect(`${decl.id}@${taint}:${d.effect}`).toBe(`${decl.id}@${taint}:ask`);
           continue;
         }
         expect(`${decl.id}@${taint}:${d.effect}`).not.toBe(`${decl.id}@${taint}:deny`);
+        expect(`${decl.id}@${taint}:${d.effect}`).not.toBe(`${decl.id}@${taint}:ask`);
       }
     },
   );
@@ -228,12 +237,29 @@ describe('la matrice normativa è eseguibile', () => {
     );
   });
 
-  it('le tre capability che questa slice cambia, per nome', () => {
+  /**
+   * Le tre capability della riga `host`/`reply` che ADR-0053 aveva allineato,
+   * riscritte da ADR-0074 sul punto che è cambiato: **quale delle due porte
+   * sullo stesso sink chiede**.
+   *
+   * ADR-0053 le aveva portate tutte e tre allo stesso verdetto a taint 2
+   * (`ask`, `ask`, `allow`) perché il taint era la ragione. ADR-0074 toglie
+   * quella ragione e mette al suo posto l'unica differenza che conta fra le
+   * due porte sull'host: `fs.write` fa una copia prima di scrivere e
+   * `muffin undo` la rimette, `sys.process.kill` no. Quindi `fs.write`
+   * diventa `draft` — a *ogni* taint sotto il soffitto, non solo a 0 — e
+   * `sys.process.kill` resta `ask`, anche a taint 0, anche in hardened.
+   */
+  it('le tre capability che ADR-0053 ha allineato, riscritte da ADR-0074', () => {
     const write = fsCapabilities.find((d) => d.id === 'fs.write');
     const kill = processCapabilities.find((d) => d.id === 'sys.process.kill');
     if (!write || !kill) throw new Error('dichiarazione mancante');
-    expect(decisionAt(write, 2).effect).toBe('ask');
-    expect(decisionAt(kill, 2).effect).toBe('ask');
+    // Ha un undo: mai una domanda, a nessun taint raggiungibile.
+    expect([0, 1, 2].map((t) => decisionAt(write, t as TrustTier).effect)).toEqual(['draft', 'draft', 'draft']);
+    // Non ha un undo: sempre una domanda, taint 0 e hardened compresi.
+    expect([0, 1, 2].map((t) => decisionAt(kill, t as TrustTier).effect)).toEqual(['ask', 'ask', 'ask']);
+    // Riga `reply`: irreversibile per dichiarazione, e la riga dice che qui
+    // non conta — la risposta è la conversazione stessa.
     expect(decisionAt(sendFileCapability, 2).effect).toBe('allow');
   });
 });
@@ -263,7 +289,7 @@ describe('il modello non ha una porta sulla riga "config" (ADR-0070)', () => {
     expect(righe).not.toContain('config');
   });
 
-  it('la riga "config" della matrice resta riservata: ASK sopra taint 0, DENY sopra taint 1 — invariata da ADR-0053', () => {
-    expect(ROW_FLOOR.config).toEqual({ askAbove: 0, denyAbove: 1 });
+  it('la riga "config" della matrice resta riservata: chiede per ciò che non si annulla, DENY sopra taint 1', () => {
+    expect(ROW_FLOOR.config).toEqual({ asksForIrreversible: true, denyAbove: 1 });
   });
 });
