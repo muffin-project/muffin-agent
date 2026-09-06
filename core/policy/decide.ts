@@ -52,8 +52,25 @@ export type PolicyContext = {
    */
   budgetExhausted: (tenant: string) => boolean;
   /**
-   * In single-user mode the Root of Trust is detection, not prevention, so
-   * shell can never be a silent allow. See docs/decisions/0003-root-of-trust.md (revision).
+   * Whether the Root of Trust is owned by another OS user, so tampering is
+   * prevented and not merely detected (`core/rot/verify.ts`).
+   *
+   * **Since ADR-0074 nothing in this file reads it, and that is deliberate
+   * rather than an oversight left to rot.** It used to buy the one shortcut
+   * that could skip an approval entirely — `hardened && owner && taint === 0`
+   * auto-allowed a high-risk capability — and the ADR removed it: that flag
+   * answers *who may rewrite the rules*, not *can this command be undone*. A
+   * hardened install and a single-user one now get the same verdict for the
+   * same action, which is the point.
+   *
+   * It stays on the context, still required, still wired from
+   * `agent/runtime.ts`, for two reasons and no third: the RoT mode is a real
+   * fact this snapshot should carry (a decision must be explainable from it,
+   * and "was prevention real when this ran" belongs in that explanation), and
+   * ADR-0074 point 4 — the read-only shell — is a different slice that will
+   * need to know whether the sandbox boundary is enforced. If that slice does
+   * not use it, delete the field there rather than leaving a knob that decides
+   * nothing.
    */
   hardened: boolean;
   /**
