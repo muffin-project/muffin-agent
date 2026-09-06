@@ -97,31 +97,31 @@ describe('M3 acceptance — through the production runtime', () => {
     expect(runtime.safeMode).toBeNull();
   });
 
-  it('the kernel it assembled denies a group member the shell — isolation by construction', () => {
+  it('the kernel it assembled denies a group member either shell — isolation by construction', () => {
     // Not a hand-built kernel: runtime.deps.decide is the one buildRuntime wired
     // from the sealed root of trust. This is the DoD isolation line.
     const decide = runtime.deps.decide;
-    const member = decide({
-      principal: { kind: 'member', connector: 'telegram', tenantId: 'group:t:1', externalId: 'u9' },
-      tenant: 'group:t:1',
-      capability: 'sys.shell',
-      resource: { kind: 'none' },
-      args: { command: 'ls' },
-      taint: 0,
-    });
-    expect(member).toMatchObject({ effect: 'deny' });
+    const chiedi = (principal: Parameters<typeof decide>[0]['principal'], tenant: string, capability: string) =>
+      decide({ principal, tenant, capability, resource: { kind: 'none' }, args: { command: 'ls' }, taint: 0 });
+    const member = { kind: 'member', connector: 'telegram', tenantId: 'group:t:1', externalId: 'u9' } as const;
 
-    // And the same capability for the owner in single-user mode is an ask, never
-    // a silent allow (threat model §g), proven through the same kernel.
-    const owner = decide({
-      principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
-      tenant: 'host',
-      capability: 'sys.shell',
-      resource: { kind: 'none' },
-      args: { command: 'ls' },
-      taint: 0,
-    });
-    expect(owner.effect).toBe('ask');
+    // Both lanes: `hostOnly` is what refuses a member, and it is declared on
+    // each capability separately — a split that gave the new one a different
+    // answer here would be a group member with a shell (ADR-0074 §4 changed
+    // what the owner is asked, never who may reach it).
+    for (const capability of ['sys.shell', 'sys.shell.write']) {
+      expect(chiedi(member, 'group:t:1', capability), capability).toMatchObject({ effect: 'deny' });
+    }
+
+    const owner = { kind: 'owner', connector: 'cli', externalId: 'local' } as const;
+    // The lane that writes, for the owner in single-user mode, is an ask and
+    // never a silent allow (threat model §g), proven through the same kernel.
+    expect(chiedi(owner, 'host', 'sys.shell.write').effect).toBe('ask');
+    // And the lane that cannot write does not ask — the cell ADR-0074 §4 moved.
+    // Asserted here and not only in the unit suite because this is the kernel
+    // the *assembled runtime* wired from the sealed root of trust: a policy.json
+    // that put the ask back would show up here and nowhere else.
+    expect(chiedi(owner, 'host', 'sys.shell').effect).toBe('allow');
   });
 
   it('every M3 capability the runtime exposes is known to the kernel', () => {
@@ -213,10 +213,14 @@ describe('M3 acceptance — through the production runtime', () => {
   it.runIf(contained)('the shell tool the runtime registered contains a write outside the workspace', async () => {
     // Production path: not the hand-built executor of executor.test, but the
     // shell tool buildRuntime wired, with the workspace as its scope.
-    const shell = runtime.deps.tools.find((t) => t.spec.name === 'shell_run');
+    // `shell_run_write`: the lane that *may* write, so a refusal here is the
+    // deny list talking. `shell_run` refuses every write by construction, which
+    // would make this assertion true for a reason that says nothing about the
+    // scope (`core/sandbox/confine-sola-lettura.test.ts` proves that one).
+    const shell = runtime.deps.tools.find((t) => t.spec.name === 'shell_run_write');
     expect(shell, 'shell tool not registered — sandbox unavailable?').toBeDefined();
     const escape = join(home, 'ESCAPED.txt');
-    const out = await shell!.handler({ command: `echo pwned > '${escape}'` }, toolContext());
+    const out = await shell!.handler({ command: `echo pwned > '${escape}'`, description: 'provo a uscire' }, toolContext());
     expect(out.isError).toBe(true);
     expect(existsSync(escape)).toBe(false);
   }, 20_000);
@@ -242,11 +246,14 @@ describe('M3 acceptance — through the production runtime', () => {
       expect(isSameOrNestedPath(supervisionato.workspace, home)).toBe(false);
       expect(supervisionato.bootLines.join('\n')).toContain('cartella di lavoro');
 
-      const shell = supervisionato.deps.tools.find((t) => t.spec.name === 'shell_run');
+      const shell = supervisionato.deps.tools.find((t) => t.spec.name === 'shell_run_write');
       expect(shell, 'shell tool not registered — sandbox unavailable?').toBeDefined();
       const db = join(home, 'muffin.db');
       const prima = readFileSync(db);
-      const out = await shell!.handler({ command: `printf 'pwned\\n' > '${db}'` }, toolContext());
+      const out = await shell!.handler(
+        { command: `printf 'pwned\\n' > '${db}'`, description: 'provo a scrivere nel database' },
+        toolContext(),
+      );
       expect(out.isError).toBe(true);
       expect(readFileSync(db), 'the agent overwrote its own database').toEqual(prima);
     } finally {
@@ -277,7 +284,7 @@ describe('M3 acceptance — through the production runtime', () => {
    * the file exists nowhere and both assertions below go red.
    *
    * Both doors, because ADR-0059 gave both the same root and either could be
-   * reverted alone: `shell_run` gets it through `ShellScope.root`, `fs_write`
+   * reverted alone: le due shell la prendono da `ShellScope.root`, `fs_write`
    * through `FsScope.root`.
    */
   it.runIf(contained)("a turn's own writes land in runtime.workspace — the positive claim the deny cannot make", async () => {
@@ -285,16 +292,21 @@ describe('M3 acceptance — through the production runtime', () => {
     try {
       const ws = supervisionato.workspace;
 
-      const shell = supervisionato.deps.tools.find((t) => t.spec.name === 'shell_run');
+      // `shell_run_write`: the positive claim is about a *write*, and after
+      // ADR-0074 §4 `shell_run` cannot make one — the read-only lane's write
+      // scope is the session scratch, which is not the workspace and is not
+      // supposed to be. Both get their root from the same `ShellScope`, so this
+      // still holds the wiring the comment above describes.
+      const shell = supervisionato.deps.tools.find((t) => t.spec.name === 'shell_run_write');
       expect(shell, 'shell tool not registered — sandbox unavailable?').toBeDefined();
       const daShell = await shell!.handler(
-        { command: `printf 'dalla shell\\n' > nota-shell.txt` },
+        { command: `printf 'dalla shell\\n' > nota-shell.txt`, description: 'scrivo una nota' },
         toolContext(),
       );
-      expect(daShell.isError, `shell_run failed: ${daShell.content}`).toBeUndefined();
+      expect(daShell.isError, `shell_run_write failed: ${daShell.content}`).toBeUndefined();
       expect(
         existsSync(join(ws, 'nota-shell.txt')),
-        `shell_run wrote a relative path somewhere other than runtime.workspace (${ws})`,
+        `shell_run_write wrote a relative path somewhere other than runtime.workspace (${ws})`,
       ).toBe(true);
       expect(existsSync(join(home, 'nota-shell.txt'))).toBe(false);
 

@@ -422,10 +422,14 @@ describe('un\'approvazione rientra nel vocabolario dei passi (§4.1/§5 della me
     return stdin;
   }
 
+  // `shell_run_write` e non `shell_run` dal 06/09 (ADR-0074 §4): la corsia che
+  // chiede è quella che scrive, e questi due test misurano il vocabolario di un
+  // ASK. Usare la corsia in sola lettura qui vorrebbe dire misurare un'attesa
+  // che non arriva mai — un test verde su uno schermo che non ha niente da dire.
   it('accettata: niente blocco ⚠, il verdetto precede subito il passo del tool, senza righe vuote fra i due', async () => {
     const provider = await startFakeProvider({
       main: [
-        { tool: { name: 'shell_run', args: { command: 'echo ciao', cwd: '.' } } },
+        { tool: { name: 'shell_run_write', args: { command: 'echo ciao', cwd: '.' } } },
         { text: 'Fatto, ho stampato ciao.' },
       ],
     });
@@ -465,9 +469,9 @@ describe('un\'approvazione rientra nel vocabolario dei passi (§4.1/§5 della me
       expect(testo).not.toContain('⚠');
       // Il vocabolario dei passi resta lo stesso di ogni altro tool: una riga
       // `⏸` mentre aspetta, `✓`/il capability quando si risolve.
-      expect(testo).toContain('⏸ sys.shell: aspetto la tua approvazione');
+      expect(testo).toContain('⏸ sys.shell.write: aspetto la tua approvazione');
 
-      const rigaVerdetto = righe.findIndex((r) => r.includes('sys.shell: consentito'));
+      const rigaVerdetto = righe.findIndex((r) => r.includes('sys.shell.write: consentito'));
       expect(rigaVerdetto).toBeGreaterThan(-1);
       // Non «rifiutato»: l'unica riga che porta «sys.shell» dopo il verdetto è
       // quella del tool che ne è seguito — l'owner ha detto sì una volta sola.
@@ -485,7 +489,7 @@ describe('un\'approvazione rientra nel vocabolario dei passi (§4.1/§5 della me
   it('rifiutata: il verdetto dice «rifiutato» nello stesso vocabolario, e il tool non gira mai', async () => {
     const provider = await startFakeProvider({
       main: [
-        { tool: { name: 'shell_run', args: { command: 'rm -rf /tmp/x', cwd: '.' } } },
+        { tool: { name: 'shell_run_write', args: { command: 'rm -rf /tmp/x', cwd: '.' } } },
         { text: 'Va bene, non lo eseguo.' },
       ],
     });
@@ -507,12 +511,12 @@ describe('un\'approvazione rientra nel vocabolario dei passi (§4.1/§5 della me
         .righe.map((r) => r.trimEnd())
         .join('\n');
       expect(testo).not.toContain('⚠');
-      expect(testo).toContain('✗ sys.shell: rifiutato');
+      expect(testo).toContain('✗ sys.shell.write: rifiutato');
       // Il rifiuto arriva al tool come un `tool_result` d'errore — non un
       // secondo canale — quindi la riga del passo segue comunque, con `✗`:
       // stesso alfabeto, mai un `✓` per un comando mai eseguito davvero.
       const righe = testo.split('\n').map((r) => r.trimEnd());
-      const rigaVerdetto = righe.findIndex((r) => r.includes('sys.shell: rifiutato'));
+      const rigaVerdetto = righe.findIndex((r) => r.includes('sys.shell.write: rifiutato'));
       const indiceDopo = righe.findIndex((r, i) => i > rigaVerdetto && r.trim() !== '');
       expect(indiceDopo).toBe(rigaVerdetto + 1);
       expect(righe[indiceDopo]).toContain('✗ eseguo un comando: rm -rf /tmp/x');

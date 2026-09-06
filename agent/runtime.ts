@@ -41,7 +41,7 @@ import { documentCapability, makeDocumentTool } from './tools/document.js';
 import { memoryCapability, memorySearchSpec, memoryWhySpec, searchMemory, whyMemory } from './tools/memory.js';
 import { Vault } from '../core/vault/vault.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
-import { makeShellTool, shellCapability } from './tools/shell.js';
+import { makeShellTool, makeShellWriteTool, shellCapability, shellWriteCapability } from './tools/shell.js';
 import { hostAllowed, loadEgress, type EgressPolicy } from '../core/net/egress.js';
 import { httpCapability, makeHttpTool } from './tools/http.js';
 import { diagnoseSearch, makeSearchTool, searchCapability } from './tools/search.js';
@@ -311,7 +311,12 @@ export function baseToolOrder(input: {
     'memory_search',
     'memory_why',
     'document_read',
-    ...(input.sandboxAvailable ? ['shell_run'] : []),
+    // Adjacent, and the read-only one first: the model reads this list in
+    // order, and ADR-0074 §4 makes `shell_run` the default choice while
+    // `shell_run_write` is the one that interrupts the owner. If a profile's
+    // cap ever splits the pair, the half that survives must be the half that
+    // does not ask.
+    ...(input.sandboxAvailable ? ['shell_run', 'shell_run_write'] : []),
     'process_list',
     'process_kill',
     'skill_read',
@@ -699,7 +704,16 @@ export function buildRuntime(
   const sandboxStatus = executor.status();
   const contained = sandboxStatus.available;
   if (contained) {
-    tools.push(makeShellTool(executor, { root: workspace }));
+    // Both lanes or neither (ADR-0074 §4). The read-only one is not a fallback
+    // for a host where containment failed — it is the *stricter* of the two and
+    // rests on the same probe: `runReadOnly`'s promise ("no writes outside the
+    // scratch, no network") is the sandbox's promise, so a host that cannot
+    // prove containment cannot offer it either. Registering it alone there
+    // would be the silent degradation the ADR forbids, pointed the other way.
+    tools.push(
+      makeShellTool(executor, { root: workspace }),
+      makeShellWriteTool(executor, { root: workspace }),
+    );
   }
   // The absent case used to produce nothing at all here — no boot line, no
   // structured record, not even the generic degrade note the search failures
@@ -710,7 +724,7 @@ export function buildRuntime(
   // machines.
   if (!contained) {
     capabilityGaps.push({
-      capability: 'shell_run',
+      capability: 'shell_run, shell_run_write',
       kind: 'disabled',
       reason: `${sandboxStatus.mechanism} non disponibile (${sandboxStatus.reason}): ${sandboxStatus.detail}`,
       remedy: sandboxStatus.remedy,
@@ -792,6 +806,7 @@ export function buildRuntime(
       memoryCapability,
       documentCapability,
       shellCapability,
+      shellWriteCapability,
       httpCapability,
       ...processCapabilities,
       skillCapability,

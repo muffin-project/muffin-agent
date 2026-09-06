@@ -16,7 +16,7 @@ import type { ChatResult, Provider } from './providers/types.js';
 import { fsCapabilities, makeFsTools, type FsScope } from './tools/fs.js';
 import { httpCapability } from './tools/http.js';
 import { makeSearchTool, searchCapability, type SearchBackend } from './tools/search.js';
-import { shellCapability } from './tools/shell.js';
+import { shellWriteCapability } from './tools/shell.js';
 
 /**
  * Read a file, then try to leave with it.
@@ -221,6 +221,11 @@ describe('read-then-fetch, through a real turn — ADR-0066: reading is open, so
 
 describe('the price of the same rule, through the same turn', () => {
   /**
+   * `sys.shell.write` e non `sys.shell` dal 06/09 (ADR-0074 §4): la corsia che
+   * paga questo costo è quella che scrive. La sorella in sola lettura non ha un
+   * `ask` da declassare — il suo confine è il sandbox, non l'owner — e usarla
+   * qui misurerebbe un prezzo che non esiste.
+   *
    * Owner decision, 2026-08-16 (ADR-0044 §revisione), reversing what this test
    * asserted through round 1 of PR #28's review: `sys.shell` now pins
    * `maxTaint: 2`, so `fs_read` → `shell_run` in the same turn is an `ask` the
@@ -235,16 +240,16 @@ describe('the price of the same rule, through the same turn', () => {
    * somebody removes quietly — same reasoning as before the reversal, aimed at
    * the new line instead of the old one.
    */
-  it('downgrades shell_run after a read to an ask, and still runs once the owner says yes', async () => {
+  it('downgrades shell_run_write after a read to an ask, and still runs once the owner says yes', async () => {
     const ran: string[] = [];
     const h = harness([
       callTool('fs_read', { path: 'nota.md' }),
-      callTool('shell_run', { command: 'echo ciao' }),
+      callTool('shell_run_write', { command: 'echo ciao' }),
     ]);
-    h.deps.capabilities = new Map([...h.deps.capabilities!, [shellCapability.id, shellCapability]]);
+    h.deps.capabilities = new Map([...h.deps.capabilities!, [shellWriteCapability.id, shellWriteCapability]]);
     h.deps.decide = createDecide({
       matrix: POLICY_FLOOR,
-      capabilities: new Map([...decls, shellCapability].map((d) => [d.id, d])),
+      capabilities: new Map([...decls, shellWriteCapability].map((d) => [d.id, d])),
       budgetExhausted: () => false,
       // Hardened, which is the *most* permissive setting shell has: at taint 0
       // it auto-allows. If the ask below still fires here it fires everywhere.
@@ -254,15 +259,15 @@ describe('the price of the same rule, through the same turn', () => {
     h.deps.tools = [
       ...h.deps.tools,
       {
-        capability: shellCapability.id,
+        capability: shellWriteCapability.id,
         spec: {
-          name: 'shell_run',
+          name: 'shell_run_write',
           description: 'run',
           inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
         },
         throwTier: 0,
         handler: () => {
-          ran.push('shell_run');
+          ran.push('shell_run_write');
           return { content: 'exit 0', tier: 2 as const };
         },
       },
@@ -278,11 +283,11 @@ describe('the price of the same rule, through the same turn', () => {
 
     // The owner was asked — not skipped, and not refused outright — and this
     // harness's `approve` says yes, so the command actually ran.
-    expect(h.approvals).toEqual(['sys.shell']);
-    expect(ran).toEqual(['shell_run']);
+    expect(h.approvals).toEqual(['sys.shell.write']);
+    expect(ran).toEqual(['shell_run_write']);
   });
 
-  it('still refuses shell_run outright once the turn is at taint 3, past the widened ceiling', async () => {
+  it('still refuses shell_run_write outright once the turn is at taint 3, past the widened ceiling', async () => {
     // The other half of the same line: widening the ceiling by one step did not
     // move it to the top. A turn tainted by a genuine tier-3 result (a
     // web/search/mcp call, stood in for here by a fake `demo_web`-shaped tool —
@@ -292,7 +297,7 @@ describe('the price of the same rule, through the same turn', () => {
     const ran: string[] = [];
     const h = harness([
       callTool('web_like', {}),
-      callTool('shell_run', { command: 'echo ciao' }),
+      callTool('shell_run_write', { command: 'echo ciao' }),
     ]);
     // A minimal stand-in with its own low-risk capability, only so the kernel
     // lets it run unconditionally and the test can isolate the one fact that
@@ -308,7 +313,7 @@ describe('the price of the same rule, through the same turn', () => {
       policyArgs: [],
       hostOnly: false,
     };
-    h.deps.capabilities = new Map([...h.deps.capabilities!, [shellCapability.id, shellCapability], [demoWebCapability.id, demoWebCapability]]);
+    h.deps.capabilities = new Map([...h.deps.capabilities!, [shellWriteCapability.id, shellWriteCapability], [demoWebCapability.id, demoWebCapability]]);
     h.deps.decide = createDecide({
       matrix: POLICY_FLOOR,
       capabilities: h.deps.capabilities,
@@ -325,15 +330,15 @@ describe('the price of the same rule, through the same turn', () => {
         handler: () => ({ content: 'contenuto dal web', tier: 3 as const }),
       },
       {
-        capability: shellCapability.id,
+        capability: shellWriteCapability.id,
         spec: {
-          name: 'shell_run',
+          name: 'shell_run_write',
           description: 'run',
           inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
         },
         throwTier: 0,
         handler: () => {
-          ran.push('shell_run');
+          ran.push('shell_run_write');
           return { content: 'exit 0', tier: 2 as const };
         },
       },

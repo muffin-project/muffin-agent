@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { sendFileCapability } from '../../agent/tools/deliver.js';
 import { fsCapabilities } from '../../agent/tools/fs.js';
 import { httpCapability } from '../../agent/tools/http.js';
-import { shellCapability } from '../../agent/tools/shell.js';
+import { shellCapability, shellWriteCapability } from '../../agent/tools/shell.js';
 import { memoryWriteCapability, replyCapability } from '../../core/policy/doors.js';
 import { POLICY_FLOOR } from '../../core/policy/matrix.js';
 import { makeBaselineHarness } from './baseline.js';
@@ -101,7 +101,7 @@ describe('la baseline misura la produzione, non una copia', () => {
     const scritta = fsCapabilities.find((c) => c.id === 'fs.write');
     expect(scritta).toBeDefined();
     expect(SECURITY_BASELINE_CAPABILITIES).toContain(scritta);
-    expect(SECURITY_BASELINE_CAPABILITIES).toContain(shellCapability);
+    expect(SECURITY_BASELINE_CAPABILITIES).toContain(shellWriteCapability);
     expect(SECURITY_BASELINE_CAPABILITIES).toContain(httpCapability);
     // Le tre porte di sink. Le due di ADR-0055 non sono registrate da nessun
     // runtime: le dichiara il kernel (`core/policy/doors.ts`), ed e quello
@@ -117,7 +117,7 @@ describe('la baseline misura la produzione, non una copia', () => {
     // policy si prova lo stesso. L id lo dice, cosi nessuno la scambia per una
     // capability che Muffin ha davvero.
     const diProduzione = [
-      shellCapability,
+      shellWriteCapability,
       httpCapability,
       sendFileCapability,
       replyCapability,
@@ -128,7 +128,7 @@ describe('la baseline misura la produzione, non una copia', () => {
     expect(inventate.map((c) => c.id)).toEqual(['outward.send.eval']);
   });
 
-  it('lo scalino che misura e quello vero: sys.shell accetta taint 2 e non 3', () => {
+  it('lo scalino che misura e quello vero: sys.shell.write accetta taint 2 e non 3', () => {
     // Ogni scenario S1/S3 misura questo gradino, deciso dall owner il 16/08
     // (ADR-0044 §revisione). Se la produzione lo sposta, questa riga cade
     // insieme agli scenari, invece di lasciarli verdi a raccontare ieri.
@@ -137,10 +137,28 @@ describe('la baseline misura la produzione, non una copia', () => {
     // è la riga `host` della matrice normativa (ADR-0053), che lo dà a
     // `sys.shell` e a `fs.write` insieme — le due porte allo stesso disco, che
     // prima avevano due regole opposte.
-    expect(shellCapability.effect).toBe('host');
-    expect(shellCapability.maxTaint).toBeUndefined();
+    expect(shellWriteCapability.effect).toBe('host');
+    expect(shellWriteCapability.maxTaint).toBeUndefined();
     expect(POLICY_FLOOR.rows.host.denyAbove).toBe(2);
-    expect(shellCapability.risk).toBe('high');
+    expect(shellWriteCapability.risk).toBe('high');
+  });
+
+  /**
+   * E la corsia che questa baseline **non** misura, nominata perché il
+   * silenzio si legge come «non esiste».
+   *
+   * Dal 06/09 (ADR-0074 §4) `sys.shell` è la shell in sola lettura: sandbox
+   * senza scrittura fuori dallo scratch e senza rete, quindi `reversible:
+   * 'yes'` e nessun `ask`. Non ha una riga in `SECURITY_BASELINE_CAPABILITIES`
+   * perché non c'è un gradino da misurare — ma se qualcuno la ridichiarasse
+   * `high`/`no` per «coerenza» con la sorella, o le rimettesse un tool che
+   * scrive, il rosso deve arrivare qui e non in un documento.
+   */
+  it('la corsia in sola lettura resta reversibile per costruzione', () => {
+    expect(shellCapability.id).toBe('sys.shell');
+    expect(shellCapability.risk).toBe('low');
+    expect(shellCapability.reversible).toBe('yes');
+    expect(shellCapability.effect).toBe('host');
   });
 
   /**
