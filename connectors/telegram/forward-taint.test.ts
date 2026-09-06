@@ -195,8 +195,30 @@ function episodeTier(h: ReturnType<typeof harness>, needle: string): number | un
   return row?.tier;
 }
 
+/**
+ * Il taint con cui il **kernel** ha deciso ogni chiamata di questo turno,
+ * letto dalla colonna che il loop scrive dallo snapshot (`TurnStore`, «the
+ * turn's taint, as a column and never derived»).
+ *
+ * Fino ad ADR-0075 questo file leggeva la stessa cosa di rimbalzo, da un
+ * rifiuto: `skill.read` appuntava `maxTaint: 1`, quindi un `Rifiutato dal
+ * kernel (taint_exceeded)` nel testo che tornava al modello era osservabile
+ * **solo** se l'inoltro aveva alzato il turno sopra 1. Quel pin non c'e' piu'
+ * — leggere una skill e' una lettura, e il numero rendeva Muffin incapace di
+ * aprire le proprie istruzioni dopo un inoltro — quindi il probe indiretto e'
+ * sparito con lui e va sostituito da quello diretto, non tolto: la garanzia di
+ * questa riga non e' «una capability viene negata», e' «il turno **decide** al
+ * tier dell'inoltro».
+ */
+function turnTaint(h: ReturnType<typeof harness>): number | undefined {
+  const row = h.runtime.db
+    .prepare(`SELECT taint FROM turns ORDER BY rowid DESC LIMIT 1`)
+    .get() as { taint: number } | undefined;
+  return row?.taint;
+}
+
 describe('(a) a forwarded, hostile message — red before the fix, per docs/JUDGE.md', () => {
-  it('starts the turn at tier >= 2, fences the forwarded text, and denies a maxTaint:1 capability instead of running it', async () => {
+  it('starts the turn at tier >= 2, fences the forwarded text, and decides every call at that tier', async () => {
     const h = harness([callTool('skill_read', { name: 'non-esiste' }), reply('Non posso, te lo dico.')]);
     try {
       await deliver(h, [forwardedHostile(1)]);
@@ -211,13 +233,19 @@ describe('(a) a forwarded, hostile message — red before the fix, per docs/JUDG
       expect(firstCall).toMatch(/<<<inoltrato_[0-9a-f]+/);
       expect(firstCall).toContain('Uno Sconosciuto');
 
-      // `skill.read` declares `maxTaint: 1` (`agent/tools/skill.ts`). A turn
-      // that starts at tier 0 (the owner's own) would get `ask` or `allow`;
-      // denied outright, with this exact code, is only reachable at taint >
-      // 1 — i.e. only because the forward raised it.
+      // Il turno ha deciso al tier dell'inoltro: 2, non lo 0 della riga
+      // dell'owner. E' la colonna che il kernel riceve a ogni `check()`
+      // (`makeSnapshot`, `agent/loop/permissions.ts`), quindi e' la stessa
+      // cosa che il vecchio rifiuto osservava di rimbalzo — vedi
+      // `turnTaint` qui sopra per perche' il probe e' cambiato con ADR-0075.
+      expect(turnTaint(h)).toBe(2);
+      // E la lettura che quel `maxTaint` spegneva adesso arriva davvero al suo
+      // handler: la risposta e' del tool, non del kernel. Le due meta'
+      // insieme dicono che il taint e' entrato nel turno **senza** diventare
+      // un divieto su una lettura.
       const fedBack = toolResultsText(h.seen[1]!);
-      expect(fedBack).toContain('Rifiutato dal kernel dei permessi');
-      expect(fedBack).toContain('taint_exceeded');
+      expect(fedBack).not.toContain('Rifiutato dal kernel dei permessi');
+      expect(fedBack).toContain('skill sconosciuta');
 
       // And the row itself: the message this turn is built from was written
       // at tier 2, not laundered back to the owner's own tier 0 — the exact

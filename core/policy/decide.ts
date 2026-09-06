@@ -185,6 +185,41 @@ export function createDecide(ctx: PolicyContext): Decide {
     const row = ctx.matrix.rows[decl.effect];
     const ceiling = Math.min(row.denyAbove, decl.maxTaint ?? 3);
     if (taint > ceiling) {
+      /**
+       * **ADR-0075 punto 3: verso l'esterno il taint chiede all'owner e nega
+       * agli altri.**
+       *
+       * Sopra il soffitto delle due righe che portano byte *fuori dal tenant*
+       * — `external` (codice di terzi) e `outward` (un destinatario nuovo) —
+       * il muro era la forma sbagliata per l'unico principal che può
+       * rispondere: a taint 3 l'owner non poteva nemmeno chiedere «cerca X e
+       * mandalo a Y», che è la richiesta più ordinaria che esista. È la
+       * stessa forma di `gateParams` (ADR-0071) per i parametri composti: la
+       * decisione resta a chi può prenderla, e resta una decisione, perché i
+       * byte usciti non tornano.
+       *
+       * Per chiunque altro il ramo non si muove di un carattere. In un gruppo
+       * un `ask` non raggiunge nessuno che possa rispondere, quindi degradare
+       * il divieto a domanda lì non sarebbe una difesa: sarebbe un `allow`
+       * scritto in un'altra lingua. Stessa asimmetria, stessa ragione, di
+       * `gateParams`.
+       *
+       * Le altre righe restano com'erano: `host` non arriva più qui (il suo
+       * soffitto è 3 da ADR-0075), `config` e `rot` negano — la seconda con
+       * `denyAbove: -1`, cioè a qualunque taint e per chiunque — e un
+       * soffitto **ristretto da un `policy.json` sigillato o da un
+       * `maxTaint`** nega esattamente come prima, perché è la riga a
+       * decidere il ramo e non il numero.
+       */
+      const chiedeSopraIlSoffitto = decl.effect === 'external' || decl.effect === 'outward';
+      if (chiedeSopraIlSoffitto && isOwnerPrincipal(principal)) {
+        // «taint N» e non la frase intera: la *ragione* in parole («questo
+        // turno contiene contenuto di livello 3: il risultato di web_search»)
+        // la aggiunge il loop, che è l'unico posto dove si sa **quale parte**
+        // ha alzato il livello (`PermissionSnapshot.taintOrigin`). Il kernel
+        // dice il numero, che è tutto ciò che vede da un solo snapshot.
+        return ask(`taint ${taint}: ${describe(capability, resource, decl.effect)}`);
+      }
       return {
         effect: 'deny',
         code: 'taint_exceeded',
@@ -349,8 +384,9 @@ export function createDecide(ctx: PolicyContext): Decide {
      *   influenced this turn*, not what an action costs to undo. It turned
      *   `fs.write` — checkpointed, with `muffin undo` behind it — into a
      *   confirmation for the rest of any turn that had read a web page. The
-     *   ceiling (`denyAbove`) is untouched: the taint still refuses, it no
-     *   longer interrogates.
+     *   ceiling (`denyAbove`) was untouched then; ADR-0075 moved it a second
+     *   time, in the branch above — on `host` it no longer refuses at all, and
+     *   on `external`/`outward` it asks the owner and refuses everyone else.
      * - **`hardened && owner && taint === 0 → allow`.** The one shortcut that
      *   could skip an irreversible act entirely, and the ADR names its own
      *   falsifier: an owner killing a process on a hardened install at taint 0

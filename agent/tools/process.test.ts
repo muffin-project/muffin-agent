@@ -168,27 +168,42 @@ describe('process_kill argument boundary', () => {
 });
 
 /**
- * The wiring these hang from: list must never exceed taint 1, kill must be
- * high risk — that is the matrix row "Shell / filesystem host / processi" and
- * the single-user shell rule applied to kill. A future edit that loosens the
- * declarations fails here.
+ * The wiring these hang from: `list` is a **read** and answers at every taint,
+ * `kill` is irreversible and asks at every taint — the matrix row "Shell /
+ * filesystem host / processi" as ADR-0074 and ADR-0075 left it. A future edit
+ * that turns either half around fails here.
  */
 describe('process capabilities through the kernel', () => {
   const caps = new Map(processCapabilities.map((c) => [c.id, c]));
   const base = { capabilities: caps, matrix: POLICY_FLOOR, budgetExhausted: () => false };
   const owner = { kind: 'owner', connector: 'cli', externalId: 'local' } as const;
 
-  it('list is denied once the context is tainted to 2', () => {
+  /**
+   * **Riscritto da ADR-0075 punto 2.** Questo test asseriva che `list` fosse
+   * negata da taint 2 in su, per via del `maxTaint: 1` appuntato sulla
+   * dichiarazione. Elencare i processi e' una lettura — riga `context`,
+   * `reversible: 'yes'`, niente che esca e niente da disfare — e quel pin
+   * comprava una cosa sola: dopo una ricerca web, Muffin non poteva piu'
+   * guardare cosa gira sulla macchina per il resto del turno.
+   *
+   * Adesso risponde a ogni taint, taint 3 compreso, e il test lo dice su tutta
+   * la scala invece che su un solo gradino: e' la meta' che una mutazione che
+   * rimettesse il pin farebbe cadere.
+   */
+  it('list risponde a ogni taint: e una lettura, e nessun maxTaint la stringe', () => {
     const decide = createDecide({ ...base, hardened: true });
-    const d = decide({
-      principal: owner,
-      tenant: 'host',
-      capability: 'sys.process.list',
-      resource: { kind: 'none' },
-      args: {},
-      taint: 2,
-    });
-    expect(d).toMatchObject({ effect: 'deny', code: 'taint_exceeded' });
+    for (const taint of [0, 1, 2, 3] as const) {
+      const d = decide({
+        principal: owner,
+        tenant: 'host',
+        capability: 'sys.process.list',
+        resource: { kind: 'none' },
+        args: {},
+        taint,
+      });
+      expect(`taint ${taint}: ${d.effect}`).toBe(`taint ${taint}: allow`);
+    }
+    expect(processCapabilities.find((c) => c.id === 'sys.process.list')?.maxTaint).toBeUndefined();
   });
 
   it('kill in single-user mode always asks — never a silent allow', () => {

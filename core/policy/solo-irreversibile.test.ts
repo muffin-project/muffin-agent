@@ -57,6 +57,17 @@ import { DOORS } from './doors.js';
  * rimettere un `askAbove` equivalente sulla riga `host`; rimettere la
  * scorciatoia `hardened && owner && taint === 0 -> allow`; mettere
  * `asksForIrreversible: true` sulla riga `reply`.
+ *
+ * **ADR-0075 (06/09) ha aggiunto tre affermazioni a questo stesso file**, e
+ * le tiene qui perche' rispondono alla stessa domanda dell'ADR precedente —
+ * *cosa produce una domanda, e cosa produce un muro* — solo dall'altro lato:
+ *
+ * 5. nessuna capability della riga `host` risponde `taint_exceeded`, a nessun
+ *    taint e per nessun principal; mutazione `host.denyAbove: 2` -> rosso;
+ * 6. sopra il soffitto di `external`/`outward` l'owner riceve un `ask` che
+ *    **cita il taint**; togliere quel numero dal prompt -> rosso;
+ * 7. sopra lo stesso soffitto un membro di gruppo riceve `deny`; degradarlo a
+ *    `ask` -> rosso.
  */
 
 const OWNER: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
@@ -184,10 +195,19 @@ describe('si chiede solo per l irreversibile — ADR-0074, ogni capability spedi
             expect(`${dove}:${d.effect}`).toBe(`${dove}:deny`);
             continue;
           }
-          // Sopra il soffitto della riga il taint nega, e continua a negare:
-          // ADR-0044 non e' cambiata.
+          // Sopra il soffitto della riga, da ADR-0075, la risposta dipende da
+          // **chi chiede**: sulle due righe che portano byte fuori dal tenant
+          // (`external`, `outward`) l'owner riceve una domanda che cita il
+          // taint, e chiunque altro il rifiuto di prima. Su ogni altra riga il
+          // rifiuto non si e' mosso — e la riga `host` non arriva piu' qui,
+          // perche' il suo soffitto e' 3 (asserito per nome piu' sotto).
           if (taint > soffitto) {
-            expect(`${dove}:${d.effect}`).toBe(`${dove}:deny`);
+            const fuori = decl.effect === 'external' || decl.effect === 'outward';
+            const atteso = fuori && principal.kind === 'owner' ? 'ask' : 'deny';
+            expect(`${dove}:${d.effect}`).toBe(`${dove}:${atteso}`);
+            if (atteso === 'ask' && d.effect === 'ask') {
+              expect(`${dove}:${d.ask.prompt}`).toContain('taint');
+            }
             continue;
           }
           expect(`${dove}:${d.effect}`).toBe(
@@ -230,12 +250,13 @@ describe('si chiede solo per l irreversibile — ADR-0074, ogni capability spedi
     const write = fsCapabilities.find((d) => d.id === 'fs.write');
     if (!write) throw new Error('fs.write manca');
     expect(write.reversible).toBe('undoable');
-    for (const taint of [0, 1, 2] as const) {
+    // Taint 3 compreso, da ADR-0075: era l'ultimo gradino su cui il taint
+    // negava una scrittura che ha una copia e un `muffin undo` dietro.
+    for (const taint of TIERS) {
       expect(`taint ${taint}: ${decisione(write, taint, OWNER).effect}`).toBe(
         `taint ${taint}: draft`,
       );
     }
-    expect(decisione(write, 3, OWNER).effect).toBe('deny');
 
     expect(todoCapability.reversible).toBe('undoable');
     for (const taint of TIERS) {
@@ -283,6 +304,113 @@ describe('si chiede solo per l irreversibile — ADR-0074, ogni capability spedi
     // destinatario nuovo (ADR-0053).
     expect(sendFileCapability.reversible).toBe('no');
     expect(decisione(sendFileCapability, 2, OWNER).effect).toBe('allow');
+  });
+
+  /**
+   * **ADR-0075 punto 1, per nome: nessuna capability della riga `host`
+   * risponde `taint_exceeded`, a nessun taint e per nessun principal.**
+   *
+   * L'`it.each` sopra lo attraversa gia' — `soffitto` lo legge da `ROW_FLOOR`,
+   * quindi seguirebbe in silenzio un `denyAbove` rimesso a 2 e continuerebbe a
+   * essere verde asserendo `deny`. Questo no: il codice dell'errore e' scritto
+   * qui, e la mutazione `host: { denyAbove: 2 }` fa cadere questa riga con il
+   * nome della capability che ha rifiutato.
+   *
+   * E' la frase che l'owner ha letto sull'installazione vera il 06/09 —
+   * `context taint 3 exceeds 2 for sys.shell (host)` — trasformata in
+   * un'asserzione.
+   */
+  it('nessuna capability della riga host risponde taint_exceeded, a nessun taint', () => {
+    const rifiuti: string[] = [];
+    for (const decl of ALL.filter((d) => d.effect === 'host')) {
+      for (const taint of TIERS) {
+        for (const principal of [OWNER, MEMBER]) {
+          if (principal.kind === 'member' && decl.hostOnly) continue;
+          const d = decisione(decl, taint, principal);
+          if (d.effect === 'deny' && d.code === 'taint_exceeded') {
+            rifiuti.push(`${decl.id}@taint${taint}/${principal.kind}: ${d.detail ?? ''}`);
+          }
+        }
+      }
+    }
+    expect(rifiuti).toEqual([]);
+    // E la meta' positiva, perche' «nessun taint_exceeded» sarebbe vero anche
+    // se la riga fosse sparita: a taint 3 la shell in sola lettura passa, la
+    // scrittura fotografa, e le due irreversibili chiedono.
+    expect(`sys.shell@3: ${decisione(shellCapability, 3, OWNER).effect}`).toBe('sys.shell@3: allow');
+    expect(`sys.shell.write@3: ${decisione(shellWriteCapability, 3, OWNER).effect}`).toBe(
+      'sys.shell.write@3: ask',
+    );
+  });
+
+  /**
+   * **ADR-0075 punto 3: verso l'esterno il taint chiede all'owner e nega agli
+   * altri.** Scritto per nome sulle due righe che portano byte fuori dal
+   * tenant, e su entrambi i principal nella stessa asserzione, perche' la
+   * meta' che si perde per prima e' la seconda: un `ask` che degradasse anche
+   * per un membro sarebbe un `allow` scritto in un'altra lingua, dato che in
+   * un gruppo non c'e' nessuno che possa rispondere alla domanda.
+   */
+  it("sopra il soffitto di external/outward: l'owner e' chiesto col taint nel testo, il membro e' negato", () => {
+    const fuori = ALL.filter((d) => d.effect === 'external' || d.effect === 'outward');
+    expect(fuori.map((d) => d.id)).not.toEqual([]);
+    for (const decl of fuori) {
+      const soffitto = Math.min(ROW_FLOOR[decl.effect].denyAbove, decl.maxTaint ?? 3);
+      for (const taint of TIERS.filter((t) => t > soffitto)) {
+        const owner = decisione(decl, taint, OWNER);
+        expect(`${decl.id}@${taint}/owner: ${owner.effect}`).toBe(`${decl.id}@${taint}/owner: ask`);
+        if (owner.effect !== 'ask') continue;
+        // Il prompt cita il taint: e' la ragione visibile che ADR-0075 mette
+        // al posto del muro, e senza di essa la domanda non dice niente che
+        // l'owner non sapesse gia'.
+        expect(`${decl.id}@${taint}: ${owner.ask.prompt}`).toContain(`taint ${taint}`);
+
+      }
+    }
+  });
+
+  /**
+   * La meta' non-owner della stessa regola, e **perche' ha bisogno di una
+   * dichiarazione sintetica invece che di una spedita.**
+   *
+   * Oggi le uniche dichiarazioni su quelle due righe sono `mcp.*`
+   * (`external`), e sono tutte `hostOnly: true`: un membro di gruppo le perde
+   * al confine dei tenant, molto prima del soffitto del taint. Nessuna riga
+   * `outward` e' spedita affatto — ADR-0070, asserito in
+   * `effect-rows.test.ts`. Un ciclo sulle sole capability spedite quindi
+   * *non puo'* osservare il caso, e resterebbe verde per vacuita' esattamente
+   * il giorno in cui `outward.send` arriva.
+   *
+   * Quindi la si dichiara qui, con la forma che la matrice gia' anticipa
+   * (`forbiddenForSystem` nomina `outward.send` da prima che esista), e si
+   * misura la sola cosa che questa fetta cambia: sopra il soffitto, chi non e'
+   * l'owner riceve il rifiuto di prima. Un `ask` qui non sarebbe una difesa —
+   * in un gruppo non c'e' nessuno che possa rispondere alla domanda — e
+   * sarebbe un `allow` scritto in un'altra lingua.
+   */
+  it('un membro sopra il soffitto di outward resta negato: la domanda e solo per chi puo rispondere', () => {
+    const inviaFuori: CapabilityDecl = {
+      id: 'outward.send',
+      effect: 'outward',
+      risk: 'high',
+      reversible: 'no',
+      rerunnable: false,
+      resourceKind: 'none',
+      policyArgs: ['to'],
+      hostOnly: false,
+    };
+    for (const taint of TIERS.filter((t) => t > ROW_FLOOR.outward.denyAbove)) {
+      const membro = decisione(inviaFuori, taint, MEMBER);
+      expect(`outward.send@${taint}/member: ${membro.effect}`).toBe(`outward.send@${taint}/member: deny`);
+      expect(membro.effect === 'deny' && membro.code).toBe('taint_exceeded');
+
+      // E l'owner, sulla stessa dichiarazione e allo stesso taint, e' chiesto:
+      // le due meta' insieme, perche' «il membro e' negato» sarebbe verde
+      // anche se il ramo di ADR-0075 non esistesse.
+      const owner = decisione(inviaFuori, taint, OWNER);
+      expect(`outward.send@${taint}/owner: ${owner.effect}`).toBe(`outward.send@${taint}/owner: ask`);
+      expect(owner.effect === 'ask' && owner.ask.prompt).toContain(`taint ${taint}`);
+    }
   });
 
   /**

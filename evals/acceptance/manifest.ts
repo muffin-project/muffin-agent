@@ -525,6 +525,16 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // copre l'altra meta' della domanda della riga — «e un ripristino che disfa
   // anche il turno?».
   verde('D11', 'checkpoint: `muffin undo` marks the turn and the memory episode, not only the disk'),
+  // Nuova (ADR-0075). La riga D16 nasce da una misura sul `muffin.db`
+  // dell'owner — nove turni su quattordici a taint 3 il 06/09, ultima shell
+  // vera il 03/09, ultimo turno chiuso da `context taint 3 exceeds 2 for
+  // sys.shell (host)` — e il suo criterio eseguibile ha due meta': il turno
+  // vero arriva in fondo, e il soffitto resta una manopola del file sigillato.
+  verde(
+    'D16',
+    'taint usabile: dopo una ricerca web la shell risponde nello stesso turno, e un policy.json che ' +
+      'rimette il soffitto fa tornare il rifiuto',
+  ),
   // Extended (slice/e1-budget-per-job): the row asks "cap globale **e**
   // per-job?" and only the first half had a scenario, which the file's own
   // docstring said out loud. Both halves now run in one test — the monthly cap
