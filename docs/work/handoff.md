@@ -56,5 +56,16 @@ Dopo la VPS: revoca dallo stesso porto di comando con test di parità
 (PRODUCTION-EVALS), verifica meccanica delle affermazioni negli ADR
 (`verifica-claim.py`); auto-merge (T-027) quando saremo open source.
 
+**Due decisioni owner del 06/09 sera, dal dogfood.** (1) **Taint:** «inutilizzabile in
+sto modo» — ADR-0075 (proposto) e riga **D16**: sull'host il taint non nega più,
+chiede con la ragione verso l'esterno, resta provenienza; fetta kernel dopo
+#456/#457. (2) **Streaming e file per porta e stanza:** il gateway negozia
+«posso draft? se no edit, ogni quanto? posso mandare file? se no come lo
+condivido?» da una tabella per `(porta, stanza)`; `sendMessageDraft` esiste in
+`api.ts` e non ha chiamanti da #388 (la bolla che scadeva si rinnova, non si
+toglie); privato → draft più messaggio finale vero, gruppo e topic → edit; il
+test di parità rifiuta una dichiarazione impossibile; prova finale sulla corsia
+e2e vera. Fetta dopo #457, tocca `surface.ts` e `transcript.ts`.
+
 **Truth maintenance:** `day1/requirements-status.md` possiede lo stato,
 critical-path.md#ordine-corrente l'ordine, le Issue il lavoro attribuibile.
