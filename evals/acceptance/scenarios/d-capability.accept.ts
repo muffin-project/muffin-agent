@@ -624,7 +624,15 @@ describe('acceptance · D · capability e sicurezza', () => {
    * la prova che quella sonda ha funzionato qui, prima ancora di qualunque
    * asserzione sotto.
    *
-   * `sys.shell` è dichiarato `high` risk (ADR-0027) e in modalità
+   * Dal 06/09 (ADR-0074 punto 4) il tool che questo scenario chiama è
+   * `shell_run_write`: `shell_run` è la corsia in sola lettura e non produce
+   * più nessun ASK, quindi uno scenario che la usasse misurerebbe il contrario
+   * di ciò che dice. Che *entrambe* siano offerte al modello resta la prova che
+   * la sonda del sandbox ha funzionato qui, ed è asserito sotto — su tutte e
+   * due, perché registrarne una sola sarebbe la degradazione silenziosa che
+   * l'ADR vieta.
+   *
+   * `sys.shell.write` è dichiarato `high` risk (ADR-0027) e in modalità
    * single-user — l'unica che `install()` costruisce, mai richiesta
    * `--hardened` — il ramo `high` di `decide()` chiede **sempre**
    * l'approvazione del owner (`core/policy/decide.ts`), e `muffin run`
@@ -649,7 +657,7 @@ describe('acceptance · D · capability e sicurezza', () => {
     async () => {
       const inst = await install({
         main: [
-          { tool: { name: 'shell_run', args: { command: 'echo ciao-dal-sandbox', cwd: 'sub' } } },
+          { tool: { name: 'shell_run_write', args: { command: 'echo ciao-dal-sandbox', cwd: 'sub' } } },
           { text: 'QUESTA RISPOSTA NON DEVE MAI COMPARIRE — il comando non deve girare senza un sì' },
         ],
       });
@@ -660,18 +668,21 @@ describe('acceptance · D · capability e sicurezza', () => {
 
         const call = inst.provider.main()[0];
         if (!call) throw new Error('il modello non è mai stato chiamato');
-        if (!call.tools.includes('shell_run')) {
-          throw new Error(
-            `shell_run non era nella lista tool offerta al modello: la sonda del sandbox non ha ` +
-              `dato esito positivo su questo host: ${call.tools.join(', ')}`,
-          );
+        for (const atteso of ['shell_run', 'shell_run_write']) {
+          if (!call.tools.includes(atteso)) {
+            throw new Error(
+              `${atteso} non era nella lista tool offerta al modello: la sonda del sandbox non ha ` +
+                `dato esito positivo su questo host, oppure le due corsie non si registrano più ` +
+                `insieme: ${call.tools.join(', ')}`,
+            );
+          }
         }
 
         if (r.code !== 3) {
           throw new Error(`atteso exit 3 (serve approvazione, headless non ha canale): ${r.code}\n${r.out}\n${r.err}`);
         }
         const parsed = JSON.parse(r.out) as { pending?: { capability?: string; resource?: string } };
-        if (parsed.pending?.capability !== 'sys.shell') {
+        if (parsed.pending?.capability !== 'sys.shell.write') {
           throw new Error(`pending inatteso: ${JSON.stringify(parsed.pending)}`);
         }
         const resource = parsed.pending.resource ?? '';
@@ -684,8 +695,54 @@ describe('acceptance · D · capability e sicurezza', () => {
       } finally {
         await inst.cleanup();
       }
+
+      /**
+       * **L'altra metà, dal 06/09 (ADR-0074 punto 4): la corsia che non chiede.**
+       *
+       * Fino a oggi questo scenario poteva provare solo il confine di sopra —
+       * il tool è offerto, l'ASK mostra comando e cwd — perché `muffin run`
+       * headless non ha un canale per rispondere e ogni comando finiva lì. È
+       * la riga che ha reso D13 un BLOCKER e che ha fatto fallire 5 delle 6
+       * prove `agentic` della character eval: un turno fermo su un `ask` che
+       * nessuno può dare.
+       *
+       * `shell_run` gira davvero, headless, senza approvatore, e il suo output
+       * torna nella risposta. Nessun `install()` qui costruisce `--hardened`,
+       * quindi non c'è nessuna scorciatoia a spiegarlo: passa perché la
+       * capability è `low`/`reversible: 'yes'`, e lo è perché il sandbox la
+       * tiene dentro un confine — provato in `core/sandbox/confine-sola-lettura.test.ts`,
+       * su Linux nel container di ci:local.
+       */
+      const sola = await install({
+        main: [
+          { tool: { name: 'shell_run', args: { command: 'ls', cwd: 'sub' } } },
+          { text: 'nella sottocartella sub ho trovato il file segnalino.txt' },
+        ],
+      });
+      try {
+        mkdirSync(join(sola.workspace, 'sub'), { recursive: true });
+        writeFileSync(join(sola.workspace, 'sub', 'segnalino.txt'), 'ciao\n', 'utf8');
+
+        const r = await sola.muffin(['run', '--json', '--timeout', '20', 'guarda cosa c\'è in sub']);
+        if (r.code !== 0) {
+          throw new Error(
+            `la shell in sola lettura si è fermata invece di girare (exit ${r.code}): headless non ha ` +
+              `approvatore, quindi un exit 3 qui vuol dire che chiede ancora.\n${r.out}\n${r.err}`,
+          );
+        }
+        // E il comando è girato davvero: l'output del secondo giro contiene il
+        // risultato del primo, cioè il tool ha visto il filesystem.
+        const secondo = sola.provider.main()[1];
+        if (!secondo) throw new Error('il modello non è stato richiamato col risultato del tool');
+        const testo = JSON.stringify(secondo);
+        if (!testo.includes('segnalino.txt')) {
+          throw new Error(`il risultato di \`ls\` non è tornato al modello: ${testo.slice(0, 400)}`);
+        }
+      } finally {
+        await sola.cleanup();
+      }
     },
-    30_000,
+    60_000,
     () => {
       const esito = hostContiene();
       return esito.ok ? null : esito.perche;

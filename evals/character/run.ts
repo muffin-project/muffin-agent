@@ -253,7 +253,7 @@ function seedCrashedTurn(runtime: Runtime): string {
     },
     deadPid(),
   );
-  runtime.deps.turns.startToolCall(id, { callId: 'call_1', tool: 'shell_run', capability: 'sys.shell', rerunnable: false, args: { cmd: './deploy.sh' } });
+  runtime.deps.turns.startToolCall(id, { callId: 'call_1', tool: 'shell_run_write', capability: 'sys.shell.write', rerunnable: false, args: { cmd: './deploy.sh' } });
   const [interrupted] = runtime.deps.turns.reclaim();
   return interrupted ? describeInterrupted(interrupted) : 'nessun turno interrotto trovato (fixture non riuscita)';
 }

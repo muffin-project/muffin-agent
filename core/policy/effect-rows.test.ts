@@ -6,7 +6,7 @@ import { createDecide } from './decide.js';
 import { POLICY_FLOOR, ROW_FLOOR } from './matrix.js';
 import type { CapabilityDecl, Decision, DecisionRequest, Principal, TrustTier } from './types.js';
 import { fsCapabilities } from '../../agent/tools/fs.js';
-import { shellCapability } from '../../agent/tools/shell.js';
+import { shellCapability, shellWriteCapability } from '../../agent/tools/shell.js';
 import { processCapabilities } from '../../agent/tools/process.js';
 import { sendFileCapability } from '../../agent/tools/deliver.js';
 import { httpCapability } from '../../agent/tools/http.js';
@@ -55,6 +55,7 @@ const TIERS: readonly TrustTier[] = [0, 1, 2, 3];
 const ALL: readonly CapabilityDecl[] = [
   ...fsCapabilities,
   shellCapability,
+  shellWriteCapability,
   ...processCapabilities,
   sendFileCapability,
   httpCapability,
@@ -182,8 +183,11 @@ describe('la matrice normativa è eseguibile', () => {
    * 19 test su 19 restare verdi.
    */
   it('nessuna dichiarazione appunta un `maxTaint` più largo della propria riga', () => {
-    const larghe = ALL.filter((d) => d.maxTaint !== undefined && d.maxTaint > MATRICE[d.effect].denyAbove).map(
-      (d) => `${d.id}: maxTaint ${String(d.maxTaint)} > riga ${d.effect} (${MATRICE[d.effect].denyAbove})`,
+    const larghe = ALL.filter(
+      (d) => d.maxTaint !== undefined && d.maxTaint > MATRICE[d.effect].denyAbove,
+    ).map(
+      (d) =>
+        `${d.id}: maxTaint ${String(d.maxTaint)} > riga ${d.effect} (${MATRICE[d.effect].denyAbove})`,
     );
     expect(larghe).toEqual([]);
   });
@@ -230,11 +234,37 @@ describe('la matrice normativa è eseguibile', () => {
         'process.ts:processCapabilities',
         'search.ts:searchCapability',
         'shell.ts:shellCapability',
+        'shell.ts:shellWriteCapability',
         'skill.ts:skillCapability',
         'todo.ts:todoCapability',
         'wait.ts:waitCapability',
       ].sort(),
     );
+  });
+
+  /**
+   * ADR-0074 punto 4, come cella e non come frase: le due corsie della shell stanno
+   * sulla **stessa riga** (`host`, stesso soffitto, stesse conseguenze se
+   * qualcosa scappa) e danno risposte diverse allo stesso taint, perché il
+   * confine che le separa è quello che il sandbox costruisce — scrittura e
+   * rete — non il nome della capability.
+   *
+   * Con i punti 1 e 2 della stessa ADR sul kernel, la cella vale a ogni taint
+   * sotto il soffitto: il ciclo parametrizzato sopra lo prova contro l'oracolo
+   * `MATRICE`, qui si nominano le due corsie una accanto all'altra.
+   */
+  it('la corsia in sola lettura non chiede dove quella che scrive chiede', () => {
+    for (const taint of [0, 1, 2] as const) {
+      expect(`sys.shell@${taint}:${decisionAt(shellCapability, taint).effect}`).toBe(
+        `sys.shell@${taint}:allow`,
+      );
+      expect(`sys.shell.write@${taint}:${decisionAt(shellWriteCapability, taint).effect}`).toBe(
+        `sys.shell.write@${taint}:ask`,
+      );
+    }
+    // E il perché, dichiarato: `ask` ⇔ irreversibile.
+    expect(shellCapability.reversible).toBe('yes');
+    expect(shellWriteCapability.reversible).toBe('no');
   });
 
   /**
@@ -255,9 +285,17 @@ describe('la matrice normativa è eseguibile', () => {
     const kill = processCapabilities.find((d) => d.id === 'sys.process.kill');
     if (!write || !kill) throw new Error('dichiarazione mancante');
     // Ha un undo: mai una domanda, a nessun taint raggiungibile.
-    expect([0, 1, 2].map((t) => decisionAt(write, t as TrustTier).effect)).toEqual(['draft', 'draft', 'draft']);
+    expect([0, 1, 2].map((t) => decisionAt(write, t as TrustTier).effect)).toEqual([
+      'draft',
+      'draft',
+      'draft',
+    ]);
     // Non ha un undo: sempre una domanda, taint 0 e hardened compresi.
-    expect([0, 1, 2].map((t) => decisionAt(kill, t as TrustTier).effect)).toEqual(['ask', 'ask', 'ask']);
+    expect([0, 1, 2].map((t) => decisionAt(kill, t as TrustTier).effect)).toEqual([
+      'ask',
+      'ask',
+      'ask',
+    ]);
     // Riga `reply`: irreversibile per dichiarazione, e la riga dice che qui
     // non conta — la risposta è la conversazione stessa.
     expect(decisionAt(sendFileCapability, 2).effect).toBe('allow');
