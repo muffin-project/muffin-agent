@@ -71,10 +71,16 @@ describe('Security v2 A/B baseline — ambient taint only', () => {
     });
 
     // And removing ambient taint is not a free utility win: the same experiment
-    // makes a high-risk outward action reachable in the evaluation capability.
+    // makes an irreversible outward action reachable in the evaluation
+    // capability. Since ADR-0074 "reachable" means `ask` and no longer
+    // `allow` — the outward row asks for what cannot be recalled, at every
+    // taint — so what the scalar buys here is a `deny` instead of a question a
+    // person has to answer, not a `deny` instead of a silent send. This is the
+    // one baseline scene where the scalar still contributes anything: on the
+    // two S1 scenes A and B now coincide.
     expect(results.find((r) => r.id === 's5-external-destination-outward')).toMatchObject({
       ambient: 'deny',
-      noAmbient: 'allow',
+      noAmbient: 'ask',
     });
 
     // This pair is the reason candidate C must exist: current A blocks an

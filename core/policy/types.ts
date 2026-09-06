@@ -149,9 +149,12 @@ type Reversibility = 'yes' | 'undoable' | 'no';
  * sink, the safer one shut. See ADR-0053.
  *
  * `risk` and `effect` are different questions and both are needed: risk says how
- * bad it is to get this wrong (and drives allow/draft/ask), effect says where
- * the result lands (and drives the ceiling and the floor above which nothing is
- * unattended). A capability that answers only one of the two is the shape the
+ * bad it is to get this wrong, effect says where the result lands. The row
+ * drives the ceiling and — since ADR-0074, via `RowPolicy.asksForIrreversible`
+ * — whether an irreversible declaration on it is worth a human's confirmation.
+ * `risk` still decides safe mode, the budget gate, whether an `undoable` write
+ * is a `draft`, and the queue for autonomous principals; it no longer decides
+ * the `ask`. A capability that answers only one of the two is the shape the
  * drift came in.
  *
  * `core/policy/effect-rows.test.ts` asserts every shipped declaration against
@@ -183,6 +186,19 @@ export type EffectRow =
  */
 export type CapabilityDecl = {
   readonly id: CapabilityId;
+  /**
+   * How bad it is to get this wrong. **Not** how hard it is to undo — that is
+   * `reversible`, one field down, and conflating the two is what ADR-0074
+   * unwound.
+   *
+   * What it still decides, exhaustively, so nobody has to guess whether the
+   * field is dead: safe mode refuses anything above `low` when the root of
+   * trust diverged; the budget gate is consulted for anything above `low`; an
+   * `undoable` write becomes a `draft` only above `low` (a low-risk undoable
+   * has no file for the loop to photograph); and a `high` request from a
+   * `system`/`agent` principal is queued for a human instead of granted at
+   * 3am. What it no longer decides is the `ask` — see `decide.ts`.
+   */
   readonly risk: RiskClass;
   readonly reversible: Reversibility;
   /**
