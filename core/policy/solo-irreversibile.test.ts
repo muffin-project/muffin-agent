@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { createDecide } from './decide.js';
 import { POLICY_FLOOR, ROW_FLOOR } from './matrix.js';
-import type { CapabilityDecl, Decision, DecisionRequest, EffectRow, Principal, TrustTier } from './types.js';
+import type {
+  CapabilityDecl,
+  Decision,
+  DecisionRequest,
+  EffectRow,
+  Principal,
+  TrustTier,
+} from './types.js';
 import { fsCapabilities } from '../../agent/tools/fs.js';
-import { shellCapability } from '../../agent/tools/shell.js';
+import { shellCapability, shellWriteCapability } from '../../agent/tools/shell.js';
 import { processCapabilities } from '../../agent/tools/process.js';
 import { sendFileCapability } from '../../agent/tools/deliver.js';
 import { httpCapability } from '../../agent/tools/http.js';
@@ -77,6 +84,7 @@ const TIERS: readonly TrustTier[] = [0, 1, 2, 3];
 const ALL: readonly CapabilityDecl[] = [
   ...fsCapabilities,
   shellCapability,
+  shellWriteCapability,
   ...processCapabilities,
   sendFileCapability,
   httpCapability,
@@ -182,7 +190,9 @@ describe('si chiede solo per l irreversibile — ADR-0074, ogni capability spedi
             expect(`${dove}:${d.effect}`).toBe(`${dove}:deny`);
             continue;
           }
-          expect(`${dove}:${d.effect}`).toBe(`${dove}:${deveChiedere ? 'ask' : d.effect === 'ask' ? 'NON-ask' : d.effect}`);
+          expect(`${dove}:${d.effect}`).toBe(
+            `${dove}:${deveChiedere ? 'ask' : d.effect === 'ask' ? 'NON-ask' : d.effect}`,
+          );
         }
       }
     },
@@ -194,16 +204,18 @@ describe('si chiede solo per l irreversibile — ADR-0074, ogni capability spedi
    * l'elenco delle capability che chiedono e' scritto **per nome**.
    *
    * Tre, e sono le tre cose che questa installazione non sa disfare: un
-   * comando di shell, un processo terminato, una chiamata a un server MCP di
-   * cui non possediamo la semantica. `mcp.*` e' `reversible: 'no'` a mano su
+   * comando di shell che scrive nel workspace (`sys.shell.write`; la corsia in
+   * sola lettura di ADR-0074 punto 4 non è fra loro, perché è reversibile per
+   * costruzione), un processo terminato, una chiamata a un server MCP di cui
+   * non possediamo la semantica. `mcp.*` e' `reversible: 'no'` a mano su
    * ogni server ed e' la meta' che ADR-0074 punto 5 (altra fetta) sistema
    * leggendo `readOnlyHint` dal protocollo; finché quella non atterra, ogni
    * chiamata MCP chiede, ed e' la conseguenza dichiarata dell'ADR, non una
    * sorpresa di questa.
    */
-  it('le capability che chiedono, per nome: shell, kill, MCP — e nessun altra', () => {
+  it('le capability che chiedono, per nome: shell che scrive, kill, MCP — e nessun altra', () => {
     const chiedono = ALL.filter((d) => decisione(d, 0, OWNER).effect === 'ask').map((d) => d.id);
-    expect(chiedono.sort()).toEqual(['mcp.esempio', 'sys.process.kill', 'sys.shell']);
+    expect(chiedono.sort()).toEqual(['mcp.esempio', 'sys.process.kill', 'sys.shell.write']);
   });
 
   /**
@@ -219,13 +231,17 @@ describe('si chiede solo per l irreversibile — ADR-0074, ogni capability spedi
     if (!write) throw new Error('fs.write manca');
     expect(write.reversible).toBe('undoable');
     for (const taint of [0, 1, 2] as const) {
-      expect(`taint ${taint}: ${decisione(write, taint, OWNER).effect}`).toBe(`taint ${taint}: draft`);
+      expect(`taint ${taint}: ${decisione(write, taint, OWNER).effect}`).toBe(
+        `taint ${taint}: draft`,
+      );
     }
     expect(decisione(write, 3, OWNER).effect).toBe('deny');
 
     expect(todoCapability.reversible).toBe('undoable');
     for (const taint of TIERS) {
-      expect(`turn.todo@${taint}: ${decisione(todoCapability, taint, OWNER).effect}`).not.toContain('ask');
+      expect(`turn.todo@${taint}: ${decisione(todoCapability, taint, OWNER).effect}`).not.toContain(
+        'ask',
+      );
     }
   });
 
@@ -280,7 +296,9 @@ describe('si chiede solo per l irreversibile — ADR-0074, ogni capability spedi
       const soffitto = Math.min(ROW_FLOOR[decl.effect].denyAbove, decl.maxTaint ?? 3);
       const sotto = TIERS.filter((t) => t <= soffitto);
       const esiti = new Set(sotto.map((t) => decisione(decl, t, OWNER).effect));
-      expect(`${decl.id}: ${[...esiti].sort().join('|')}`).toBe(`${decl.id}: ${[...esiti][0] ?? ''}`);
+      expect(`${decl.id}: ${[...esiti].sort().join('|')}`).toBe(
+        `${decl.id}: ${[...esiti][0] ?? ''}`,
+      );
     }
   });
 });

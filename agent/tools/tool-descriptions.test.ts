@@ -64,33 +64,49 @@ describe('ogni tool esposto dice quando usarlo e quando no', () => {
       // di loro pur restando verde.
       const nomi = tools.map((t) => t.spec.name);
       expect(nomi).toEqual(
-        expect.arrayContaining(['fs_read', 'fs_search', 'process_list', 'sys_inspect', 'shell_run']),
+        expect.arrayContaining(['fs_read', 'fs_search', 'process_list', 'sys_inspect', 'shell_run', 'shell_run_write']),
       );
     } finally {
       runtime.close();
     }
   });
 
-  it('shell_run nomina i tool dedicati che lo precedono, non solo "usa gli altri prima"', () => {
+  it('le due corsie della shell nominano i tool dedicati, e dicono quale delle due è il ripiego', () => {
     const home = mkdtempSync(join(tmpdir(), 'muffin-tooldesc-shell-'));
     runInit({ home, apiKey: 'sk-never-called' });
     const runtime = buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-tooldesc-shell-ws-')));
     try {
       const shell = runtime.deps.tools.find((t) => t.spec.name === 'shell_run');
+      const write = runtime.deps.tools.find((t) => t.spec.name === 'shell_run_write');
       // Non skippato in silenzio: se il sandbox non è disponibile su questa
       // macchina, la claim di D13 non è verificabile e il test lo dice invece
       // di passare per assenza di prove (schema-conformance.test.ts nomina
       // shell_run allo stesso modo, quindi ci si aspetta che sia registrato
       // in questo harness).
       expect(shell, 'shell_run non registrato: sandbox non disponibile su questo host, la claim D13 non è provata qui').toBeDefined();
+      expect(write, 'shell_run_write non registrato: le due corsie si registrano insieme o per niente').toBeDefined();
       const desc = String(shell!.spec.description ?? '');
-      expect(desc).toMatch(/last resort/i);
+      const descWrite = String(write!.spec.description ?? '');
+
+      // Dal 06/09 (ADR-0074 punto 4) «last resort» non è più la shell: è la shell
+      // **che scrive**. Spostare la frase è metà del punto — l'altra metà è
+      // che la corsia in sola lettura si dichiari come scelta di default,
+      // altrimenti il modello continua a leggere «shell = ultima spiaggia» e
+      // a chiedere il permesso per un `ls`, che è il difetto misurato.
+      expect(descWrite).toMatch(/last resort/i);
+      expect(desc).not.toMatch(/last resort/i);
+      expect(desc).toMatch(/default way to run a command/i);
+
       // Almeno tre dei tool dedicati che il capitolo D13 chiede di nominare,
       // uno per ciascuna famiglia (file, processo, propriocezione): togliere
       // la sezione che li nomina fa cadere questa riga.
       for (const dedicated of ['fs_read', 'process_list', 'sys_inspect']) {
         expect(desc, `shell_run non nomina ${dedicated}`).toContain(dedicated);
       }
+      // E il rinvio fra le due, in tutte e due le direzioni: senza, il modello
+      // sa che esistono due porte e non quale prendere.
+      expect(desc, 'shell_run non dice dove andare quando serve scrivere').toContain('shell_run_write');
+      expect(descWrite, 'shell_run_write non rimanda alla corsia che non chiede').toContain('shell_run');
     } finally {
       runtime.close();
     }
