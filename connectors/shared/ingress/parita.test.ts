@@ -21,6 +21,10 @@ import { TelegramDeliveryStore } from '../../telegram/delivery.js';
 import { UpdateInbox } from '../../telegram/updates.js';
 import { AVVISO_IN_PAUSA } from './lane.js';
 import { INGRESS_STAGES, witnessIngress, type IngressStage, type IngressVisit } from './router.js';
+import { PLACES, type FileMode, type Place, type StreamMode } from '../../../core/surface/types.js';
+import type { IngressPort } from './types.js';
+import { telegramPort } from '../../telegram/surface.js';
+import { discordPort } from '../../discord/surface.js';
 
 /**
  * Slice 16 of the ingress decomposition
@@ -613,5 +617,95 @@ describe('4. il connettore entra davvero dal router', () => {
       .filter((f) => !f.endsWith(join('shared', 'ingress', 'router.ts')))
       .filter((f) => readFileSync(f, 'utf8').includes('witnessIngress'));
     expect(colpevoli.map((f) => relative(RADICE, f))).toEqual([]);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  Il quarto asse — la stanza                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Decisione dell'owner del 06/09/2026: cosa Muffin puo' fare non e' una
+ * proprieta' della porta, e' una proprieta' della coppia `(porta, stanza)`.
+ * Fino a quel giorno `Surface.streaming.transport` era un valore per porta —
+ * `'edit'` per tutta Telegram — e il codice che doveva sapere se qui dentro
+ * si poteva mostrare un'anteprima lo deduceva da un booleano `isPrivate`
+ * passato a mano a un renderer.
+ *
+ * Questo asse e' scritto **a mano** e non derivato da `negotiate`, per la
+ * stessa ragione per cui `TABELLA` non e' derivata da `DIVERGENZE_AMMESSE`:
+ * due viste dello stesso oggetto non possono discordare, e il test che conta
+ * e' quello che mette a confronto due dichiarazioni indipendenti. Una porta
+ * che comincia a servire una stanza nuova, o che cambia cosa promette in una
+ * che gia' serviva, diventa rossa qui.
+ */
+type Promessa = { readonly stream: readonly StreamMode[]; readonly files: readonly FileMode[] };
+
+const NEGOZIAZIONE: Record<string, Partial<Record<Place, Promessa>>> = {
+  telegram: {
+    // `sendMessageDraft` esiste solo in una chat privata, e la risposta
+    // finale resta un messaggio vero: la catena dice esattamente questo.
+    direct: { stream: ['draft', 'edit', 'off'], files: ['native', 'say'] },
+    group: { stream: ['edit', 'off'], files: ['native', 'say'] },
+    // Un topic eredita i limiti della chat: cambia dove si scrive, non cosa si puo' fare.
+    topic: { stream: ['edit', 'off'], files: ['native', 'say'] },
+  },
+  discord: {
+    // Dichiarato com'e' oggi: `connectors/discord/connector.ts` non riscrive
+    // mai un messaggio inviato, e accetta solo DM uno-a-uno.
+    direct: { stream: ['off'], files: ['native', 'say'] },
+  },
+};
+
+/** Le porte come `cli/surface.ts` le costruisce, con un trasporto che non viene mai toccato. */
+const FINTA = {} as never;
+const PORTE_DICHIARATE: readonly { readonly id: string; readonly porta: IngressPort }[] = [
+  { id: 'telegram', porta: telegramPort(FINTA, 1) },
+  { id: 'discord', porta: discordPort(FINTA, '1') },
+];
+
+describe('5. ogni porta dichiara cosa sa fare in ogni stanza che serve', () => {
+  it("l'asse delle stanze copre esattamente le porte registrate", () => {
+    expect(PORTE_DICHIARATE.map((p) => p.id).sort()).toEqual([...INGRESS_PORT_IDS].sort());
+    expect(Object.keys(NEGOZIAZIONE).sort()).toEqual([...INGRESS_PORT_IDS].sort());
+  });
+
+  for (const { id, porta } of PORTE_DICHIARATE) {
+    it(`${id}: la tabella scritta qui e quella che la porta risponde sono la stessa`, () => {
+      const dichiarate = [...porta.surface.places].sort();
+      // Una stanza servita senza una riga qui (o una riga qui senza la
+      // stanza) e' la porta che «salta la negoziazione»: rossa.
+      expect(Object.keys(NEGOZIAZIONE[id]!).sort()).toEqual(dichiarate);
+      for (const place of porta.surface.places) {
+        const attesa = NEGOZIAZIONE[id]![place]!;
+        const vera = porta.surface.negotiate(place);
+        expect({ stream: vera.stream, files: vera.files }).toEqual(attesa);
+      }
+    });
+
+    it(`${id}: nelle stanze che non serve non promette niente`, () => {
+      for (const place of PLACES) {
+        if (porta.surface.places.includes(place)) continue;
+        const n = porta.surface.negotiate(place);
+        expect(n.stream[0]).toBe('off');
+        expect(n.files[0]).toBe('say');
+      }
+    });
+  }
+
+  it('una stanza che dichiara un ritmo lo dichiara intero', () => {
+    for (const { porta } of PORTE_DICHIARATE) {
+      for (const place of porta.surface.places) {
+        const n = porta.surface.negotiate(place);
+        if (n.stream.includes('edit')) {
+          expect(n.editEveryMs).toBeGreaterThan(0);
+          expect(n.maxEditsPerMinute).toBeGreaterThan(0);
+          // I due limiti della Bot API devono poter coesistere: un tetto
+          // oltre quello che il pavimento lascia passare non e' un tetto.
+          expect(n.maxEditsPerMinute).toBeLessThanOrEqual(Math.floor(60_000 / n.editEveryMs));
+        }
+        if (n.stream.includes('draft')) expect(n.draftTtlMs).toBeGreaterThan(0);
+      }
+    }
   });
 });

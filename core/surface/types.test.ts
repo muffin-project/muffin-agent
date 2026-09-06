@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { identify, type IncomingIdentity } from './types.js';
+import {
+  assertNegotiable,
+  DELIVERED,
+  fileModeFor,
+  identify,
+  MUTA,
+  type IncomingIdentity,
+  type Negotiation,
+  type Place,
+  type Surface,
+} from './types.js';
 
 /**
  * La chiave di conversazione, provata dove viene decisa.
@@ -77,5 +87,130 @@ describe('identify · sessionKey', () => {
     const anonimo = identify(dm('telegram', '', '4242'), OWNER);
     expect(anonimo.principal.kind).toBe('member');
     expect(anonimo.sessionKey).toBe('telegram:4242');
+  });
+});
+
+
+/* -------------------------------------------------------------------------- */
+/*  La negoziazione per stanza                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * La decisione dell'owner del 06/09/2026 provata dove vive: una superficie
+ * che dichiara qualcosa di impossibile non deve arrivare a esistere.
+ *
+ * `makeIngressPort` chiama `assertNegotiable`, quindi il rifiuto e' alla
+ * costruzione della porta e non davanti all'owner a meta' turno. Le regole
+ * qui sotto non nominano nessuna piattaforma: valgono anche per la porta che
+ * non e' ancora stata scritta.
+ */
+function superficie(over: {
+  places?: readonly Place[];
+  negotiate?: (p: Place) => Negotiation;
+  maxUploadBytes?: number;
+  transport?: 'stdout' | 'edit' | 'off';
+}): Surface {
+  return {
+    id: 'prova',
+    limits: { maxMessageChars: 100, maxUploadBytes: over.maxUploadBytes ?? 10, maxDownloadBytes: 0 },
+    streaming: { transport: over.transport ?? 'off' },
+    places: over.places ?? ['direct'],
+    negotiate: over.negotiate ?? ((): Negotiation => MUTA),
+    handles: () => true,
+    deliver: async () => DELIVERED,
+    deliverFile: async () => DELIVERED,
+  };
+}
+
+const VIVA = (over: Partial<Negotiation> = {}): Negotiation => ({
+  stream: ['edit', 'off'],
+  editEveryMs: 1_000,
+  maxEditsPerMinute: 20,
+  draftTtlMs: 0,
+  files: ['say'],
+  ...over,
+});
+
+describe('assertNegotiable rifiuta una dichiarazione impossibile', () => {
+  it("un'anteprima in una stanza condivisa e' rifiutata: non esiste una riga di composizione di tutti", () => {
+    expect(() =>
+      assertNegotiable(
+        superficie({
+          places: ['group'],
+          transport: 'edit',
+          negotiate: (p) => (p === 'group' ? VIVA({ stream: ['draft', 'edit', 'off'], draftTtlMs: 30_000 }) : MUTA),
+        }),
+      ),
+    ).toThrow(/draft/);
+  });
+
+  it("un'anteprima uno-a-uno senza scadenza e' rifiutata: senza ttl non si sa quando rinnovarla", () => {
+    expect(() =>
+      assertNegotiable(
+        superficie({
+          places: ['direct'],
+          transport: 'edit',
+          negotiate: (p) => (p === 'direct' ? VIVA({ stream: ['draft', 'edit', 'off'] }) : MUTA),
+        }),
+      ),
+    ).toThrow(/draftTtlMs/);
+  });
+
+  it('un allegato nativo su una superficie che non muove byte e\' rifiutato', () => {
+    expect(() =>
+      assertNegotiable(
+        superficie({
+          places: ['direct'],
+          maxUploadBytes: 0,
+          transport: 'edit',
+          negotiate: (p) => (p === 'direct' ? VIVA({ files: ['native', 'say'] }) : MUTA),
+        }),
+      ),
+    ).toThrow(/native/);
+  });
+
+  it('un tetto oltre quello che il pavimento lascia passare e\' rifiutato: uno dei due numeri sarebbe decorazione', () => {
+    expect(() =>
+      assertNegotiable(
+        superficie({
+          places: ['direct'],
+          transport: 'edit',
+          negotiate: (p) => (p === 'direct' ? VIVA({ editEveryMs: 1_000, maxEditsPerMinute: 120 }) : MUTA),
+        }),
+      ),
+    ).toThrow(/maxEditsPerMinute/);
+  });
+
+  it('una catena senza fondo e\' rifiutata: promette che qualcosa funzionera\' sempre', () => {
+    expect(() =>
+      assertNegotiable(
+        superficie({ places: ['direct'], transport: 'edit', negotiate: (p) => (p === 'direct' ? VIVA({ stream: ['edit'] }) : MUTA) }),
+      ),
+    ).toThrow(/off/);
+  });
+
+  it('una promessa in una stanza non dichiarata e\' rifiutata', () => {
+    expect(() => assertNegotiable(superficie({ places: ['direct'], transport: 'edit', negotiate: () => VIVA() }))).toThrow(
+      /non e\u0300 fra le stanze dichiarate|non è fra le stanze dichiarate/,
+    );
+  });
+
+  it('streaming.transport e le stanze non possono discordare', () => {
+    expect(() =>
+      assertNegotiable(superficie({ places: ['direct'], transport: 'off', negotiate: (p) => (p === 'direct' ? VIVA() : MUTA) })),
+    ).toThrow(/streaming.transport/);
+  });
+});
+
+describe('fileModeFor scende la catena finche\' un modo regge questi byte', () => {
+  const limits = { maxMessageChars: 100, maxUploadBytes: 1_000, maxDownloadBytes: 0 };
+  const catena = VIVA({ files: ['native', 'say'] });
+
+  it("sotto il tetto e' un allegato vero", () => {
+    expect(fileModeFor(catena, limits, 999)).toBe('native');
+  });
+
+  it("sopra il tetto non e' un fallimento, e' un percorso detto a parole", () => {
+    expect(fileModeFor(catena, limits, 1_001)).toBe('say');
   });
 });

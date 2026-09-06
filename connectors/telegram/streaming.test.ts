@@ -32,9 +32,16 @@ import { UpdateInbox } from './updates.js';
  * turn that used a tool. The scenarios below now assert the opposite of what
  * they asserted before that date: a tool-using turn produces **exactly one**
  * `sendMessage` a person would read, extended by edits, never a second
- * `sendMessage` for the answer — and `sendMessageDraft` never appears at all,
- * because there is no more ephemeral bubble to expire out from under a dead
- * process.
+ * `sendMessage` for the answer.
+ *
+ * **Dal 06/09/2026 l'anteprima e' tornata, e solo in una DM.** La decisione
+ * dell'owner e' che il difetto della PR #388 fosse il rinnovo mancante, non
+ * la bolla: `Surface.negotiate('direct')` dichiara `['draft','edit','off']`
+ * con `draftTtlMs` 30 s, `negotiate('group')` dichiara `['edit','off']` e
+ * basta. Quindi qui sotto `sendMessageDraft` compare nelle scene private e
+ * **non deve** comparire in quelle di gruppo, dove non esiste come chiamata;
+ * il rinnovo dentro la finestra e' misurato dove si puo' misurare il
+ * «quando», cioe' in `transcript.test.ts` con l'orologio finto.
  *
  * **What this file does not attempt, and why**: a scenario asserting several
  * genuinely time-spaced live edits from one round. `agent/loop.ts` buffers a
@@ -262,6 +269,10 @@ describe('a group turn uses ephemeral presence and durably sends only the final 
 
       expect(calls.filter((c) => c.method === 'editMessageText')).toHaveLength(0);
       expect(calls.filter((c) => c.method === 'sendMessage').map((c) => c.text)).toEqual([finalText]);
+      // In un gruppo l'anteprima non esiste: `assertNegotiable` rifiuta
+      // `'draft'` fuori da una stanza uno-a-uno, quindi non c'e' nemmeno il
+      // codice che potrebbe chiamarla.
+      expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(0);
     } finally {
       runtime.close();
     }
@@ -314,7 +325,7 @@ describe('a group turn uses ephemeral presence and durably sends only the final 
 });
 
 describe('a private turn streams into a real message as the answer forms (B11)', () => {
-  it('opens one real message on the first token and finishes it with an edit — never a draft, never a second message', async () => {
+  it("l'anteprima mostra il testo che si forma, e la chat conserva un solo messaggio vero: la risposta", async () => {
     const finalText = 'Ciao! Ecco una storia breve.';
     const provider = streamingProvider(['Ciao! ', 'Ecco una storia breve.'], finalText);
     const { api, calls } = recordingApi();
@@ -323,20 +334,18 @@ describe('a private turn streams into a real message as the answer forms (B11)',
     try {
       await deliver(connector, [privateMsg(3)]);
 
-      // Since 04/09/2026 (`docs/evidence/turno-sospendibile.md`): B11's live
-      // preview is a real, durable message (`transcript.ts#live()`), never a
-      // `sendMessageDraft` — a "temporary 30-second preview" that a dead
-      // process cannot keep renewing, which is exactly how a turn's answer
-      // used to vanish on its own after a crash and reappear minutes later.
-      expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(0);
+      // Dal 06/09/2026 la stanza `direct` negozia `['draft','edit','off']`:
+      // il testo che si forma passa dall'anteprima effimera, rinnovata dentro
+      // la sua finestra (`transcript.test.ts` misura il rinnovo). Quello che
+      // la chat **conserva** resta un messaggio vero e uno solo.
+      expect(calls.filter((c) => c.method === 'sendMessageDraft').length).toBeGreaterThan(0);
 
       const sent = calls.filter((c) => c.method === 'sendMessage');
-      expect(sent).toHaveLength(1); // one real message for the whole turn, not a preview plus an answer
-
-      const edits = calls.filter((c) => c.method === 'editMessageText');
-      expect(edits.length).toBeGreaterThanOrEqual(1);
-      expect(edits[edits.length - 1]!.text).toBe(finalText);
-      expect(edits.every((e) => e.messageId === sent[0]!.messageId)).toBe(true);
+      expect(sent).toHaveLength(1); // un messaggio vero per tutto il turno
+      expect(sent[0]!.text).toBe(finalText); // ed e' la risposta finale, non un pezzo di frase
+      // L'anteprima non e' un messaggio: non c'e' niente da cancellare e
+      // niente da riscrivere quando arriva la risposta.
+      expect(calls.filter((c) => c.method === 'deleteMessage')).toHaveLength(0);
     } finally {
       runtime.close();
     }
@@ -344,13 +353,12 @@ describe('a private turn streams into a real message as the answer forms (B11)',
 });
 
 describe('the transcript of a turn stays above the answer (DAY-1 requirement B13, the owner\'s shape)', () => {
-  it('a turn with no tool call still streams into one real message, finished by a single edit', async () => {
-    // Until 04/09/2026 a tool-free turn produced no transcript message at
-    // all — only the (draft-previewed, then separately sent) answer. Since
-    // B11's preview moved into `transcript.ts#live()`, that same real
-    // message *is* now where the answer streams and finalises: the private
-    // case's own invariant (this scenario's own file, "a private turn
-    // streams…") applies here too, tool call or not.
+  it("un turno senza tool conserva un solo messaggio vero, e il testo intermedio passa dall'anteprima", async () => {
+    // Un turno senza tool in privato: l'anteprima mostra il testo mentre si
+    // forma, e la chat conserva un messaggio solo — la risposta. Fra il
+    // 04/09 e il 06/09 conservava lo stesso unico messaggio ma ci arrivava
+    // per edit successivi; la differenza che l'owner ha chiesto il 06/09 e'
+    // *dove* si vede il testo intermedio, non quanti messaggi restano.
     const finalText = 'Fatto, eccolo.';
     const provider = streamingProviderWithRealGap(['Fatto, ', 'eccolo.'], finalText);
     const { api, calls } = recordingApi();
@@ -360,10 +368,8 @@ describe('the transcript of a turn stays above the answer (DAY-1 requirement B13
       await deliver(connector, [privateMsg(30)]);
       const sent = calls.filter((c) => c.method === 'sendMessage');
       expect(sent).toHaveLength(1);
-      const edits = calls.filter((c) => c.method === 'editMessageText');
-      expect(edits.length).toBeGreaterThanOrEqual(1);
-      expect(edits[edits.length - 1]!.text).toBe(finalText);
-      expect(edits.every((e) => e.messageId === sent[0]!.messageId)).toBe(true);
+      expect(sent[0]!.text).toBe(finalText);
+      expect(calls.filter((c) => c.method === 'sendMessageDraft').length).toBeGreaterThan(0);
       expect(calls.filter((c) => c.method === 'deleteMessage')).toHaveLength(0);
     } finally {
       runtime.close();
