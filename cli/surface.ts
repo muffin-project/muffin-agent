@@ -27,7 +27,7 @@ import { TELEGRAM_ID, telegramSurface } from '../connectors/telegram/surface.js'
 import { UpdateInbox } from '../connectors/telegram/updates.js';
 import { DiscordApi } from '../connectors/discord/api.js';
 import { DiscordConnector, type ConnectorDeps as DiscordConnectorDeps } from '../connectors/discord/connector.js';
-import { DISCORD_ID, discordPort, discordSurface } from '../connectors/discord/surface.js';
+import { DISCORD_ID, discordSurface } from '../connectors/discord/surface.js';
 import { DiscordInbox } from '../connectors/discord/inbox.js';
 import { mandatoryGuards } from '../core/rot/guards.js';
 import { discordOwner, loadSealedOwner, sealOwnerBinding, telegramOwner, type SealedOwner } from '../core/rot/owner.js';
@@ -1288,6 +1288,10 @@ function connectDiscord(ctx: PortConnectContext): PortConnection | null {
       ...(ownerUserId === undefined ? {} : { ownerUserId }),
       ...(dc?.pairing === undefined ? {} : { pairing: dc.pairing }),
     },
+    // ADR-0054 §4: la stessa leva durevole che riceve Telegram. Prima della
+    // fetta 15 Discord non la guardava, quindi `/pause` fermava i job e
+    // Telegram e lasciava questa porta a rispondere.
+    pausa: new Pausa(runtime.db),
     savePairing: (next) => {
       const current = loadConfig(home);
       saveConfig(
@@ -1327,12 +1331,12 @@ function connectDiscord(ctx: PortConnectContext): PortConnection | null {
   };
 
   return {
-    // Costruita qui e non dal connettore: Discord diventa una porta nella
-    // fetta 15, e dichiararlo prima vorrebbe dire una `IngressPort` che nessun
-    // codice di Discord legge. Le capacità sono quelle di **oggi** — niente
-    // comandi, niente pulsanti, niente streaming — così `DIVERGENZE_AMMESSE`
-    // (fetta 16) nasce vera.
-    port: discordPort(api, ownerUserId),
+    // La porta del connettore stesso, non una seconda costruita qui: è quella
+    // il cui `surface.id` finisce in `turns.surface` (§4 invariante 1). Fino
+    // alla fetta 14 era `discordPort(api, ownerUserId)` scritto qui, perché
+    // nessun codice di Discord leggeva ancora una `IngressPort`; dalla fetta
+    // 15 il connettore la costruisce e la percorre.
+    port: connector.ingressPort,
     surface: discordSurface(api, ownerUserId),
     start: avvia,
     // Fire-and-forget for the same reason Telegram's poller stop is. Stessa
