@@ -21,8 +21,8 @@ a mano è bloccato dal hook. I minuti GitHub sono finiti (run morti in 4 s).
 
 ## Le decisioni dell'owner
 
-`routing.only: ["alibaba"]`, `dataCollection: "deny"`; finché `rot harden`
-non è fatto `sys.shell` chiede sempre. Kernel (ADR-0071/0072): un link
+`routing.only: ["alibaba"]`, `dataCollection: "deny"`; ADR-0074 (06/09, «si chiede solo
+l'irreversibile, sempre, anche in privato»). Kernel (ADR-0071/0072): un link
 citato non chiede, composto+non-owner nega, una ricerca non chiede mai.
 Gruppi: senza il suo umano Muffin saluta, avvisa e esce (F4). Nucleo e
 ingresso (05-06/09): `agent/loop.ts` è un barile di 54 righe su nove moduli;
@@ -30,12 +30,10 @@ il percorso in entrata vive una volta in `connectors/shared/ingress/`
 (router a dieci stadi), Telegram e Discord sono porte, e
 `parita.test.ts` diventa rosso se una porta salta il router.
 
-**Azioni owner senza codice:** un sì o un no su **ADR-0073** (dentro il vault
-del gruppo non si chiede; ask solo per l'irreversibile) · `muffin rot harden`
-(senza, il sigillo dell'owner è riscrivibile: riserva su B15) · billing
-GitHub Actions · `npm run e2e:telegram` con un bot vero (B11/B13/B2 datati)
-· la prima install vera su una VPS x86_64 (A11 è provata solo nel container
-arm64).
+**Azioni owner senza codice:** billing GitHub Actions · `npm run e2e:telegram`
+con un bot vero (B11/B13/B2 datati) · la prima install vera su una VPS x86_64
+(A11 è provata solo nel container arm64). `rot harden` è fatto (06/09, rot di
+uid 0); ADR-0073 ha avuto il sì e ADR-0074 lo estende a ogni stanza.
 
 ## Aperto
 
@@ -48,6 +46,15 @@ sì. **Fase C** (fette 17-21 di `ingresso-unico-e-nucleo-2026-09-05.md`:
 comandi e coda, approvazioni, transcript, consegna, provenienza su Discord)
 non è DAY-1. `evals/e2e/telegram.ts:66` legge ancora l'owner da
 `config.json`. Issue #378 tiene l'indice (#371-#377).
+
+**Da Centria (`centrialabs/centria`, `origin/stage`, letto il 06/09).** DAY-1:
+**D15** registro degli effetti (più autonomia ⇒ più sorveglianza). Il tetto di
+spesa c'è già (E1/E2): resta solo la prenotazione fra turni concorrenti e
+`pricing.ts`. Scartato: percorso riservato meccanico nella porta di merge.
+Dopo la VPS: revoca dallo stesso porto di comando con test di parità
+(T-028), giudice LLM come sensore versionato con calibrazione e holdout
+(PRODUCTION-EVALS), verifica meccanica delle affermazioni negli ADR
+(`verifica-claim.py`); auto-merge (T-027) quando saremo open source.
 
 **Truth maintenance:** `day1/requirements-status.md` possiede lo stato,
 critical-path.md#ordine-corrente l'ordine, le Issue il lavoro attribuibile.
