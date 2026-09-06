@@ -26,6 +26,7 @@ unused manifest would be another source of drift.
 | How is Muffin shaped now? | `docs/ARCHITECTURE.md` |
 | What security boundary does Muffin claim now? | `docs/SECURITY.md` |
 | How should design choices be made? | `docs/DESIGN-PRINCIPLES.md` |
+| How is Muffin installed, updated and rolled back on a real machine? | `install.sh`, with `docs/INSTALL.md` for what it does and why |
 | How should installable capability grow around the core? | `docs/EXTENSIONS.md` |
 | How should the owner-run project become public/community-maintained? | `docs/OPEN-SOURCE-STRATEGY.md` |
 | How do public/current/historical claims stay honest outside this repo? | `docs/PUBLIC-NARRATIVE.md` |

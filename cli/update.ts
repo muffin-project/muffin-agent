@@ -823,8 +823,21 @@ export async function offerGatewayRestart(
 }
 
 function rollback(checkoutRoot: string, home: string, deps: UpdateDeps, steps: UpdateStep[]): UpdateResult {
+  /**
+   * Accumulato **e** emesso, come `step` in `runUpdate` — e per una ragione
+   * misurata il 06/09/2026 da `evals/install/ubuntu.sh`: questa funzione
+   * accumulava soltanto, quindi `muffin update --rollback` stampava `✓
+   * checkout`, poi la nota sul supervisore, e nel mezzo **niente**. Il flip
+   * avveniva davvero — il launcher tornava indietro — ma l'unico passo che
+   * quel comando esegue era l'unico che non si vedeva: chi lo lanciava non
+   * poteva sapere a quale release fosse tornato, né distinguere «fatto» da
+   * «non c'era nessuna release precedente». Due consumatori dello stesso
+   * evento, non due elenchi che possono divergere.
+   */
   const push = (name: string, detail: string, done = true): void => {
-    steps.push({ name, done, detail });
+    const s = { name, done, detail };
+    steps.push(s);
+    deps.onStep?.(s);
   };
   const previous = readMarker(checkoutRoot, 'previous');
   if (!previous) {
