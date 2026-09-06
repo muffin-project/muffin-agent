@@ -157,17 +157,30 @@ describe.runIf(gate.run)(`le due corsie contengono cose diverse (${gate.why})`, 
       expect(existsSync(join(workspace, 'relativo.txt'))).toBe(false);
     });
 
-    it('lo scratch di sessione resta scrivibile — il confine è lo scope, non «tutto negato»', async () => {
+    it('lo scratch di sessione resta scrivibile, e `$TMPDIR` ci punta davvero', async () => {
       // Senza questa riga i due rossi qui sopra sarebbero indistinguibili da un
       // sandbox che rifiuta ogni scrittura, e `cmd1 > f && cmd2 < f` — la
       // ragione per cui lo scratch esiste — smetterebbe di funzionare senza
       // che niente lo dica.
+      //
+      // **E ha trovato un guasto vero il 06/09**, nel container di ci:local e
+      // non sul portatile: su Linux `$TMPDIR` valeva `/tmp/claude`, il default
+      // che `@anthropic-ai/sandbox-runtime` infila fra i `--setenv` di bwrap,
+      // e non lo scratch di questo esecutore — una directory inesistente che
+      // nessun `allowWrite` nomina. Vedi `puntaTmpdirAlloScratch` in
+      // `core/sandbox/executor.ts`. La riga sotto è la sua mutazione: togliere
+      // quella funzione la fa tornare rossa su Linux e restare verde su macOS,
+      // che è esattamente com'è arrivato il guasto.
       const r = await executor.runReadOnly({
-        command: 'echo ok > "$TMPDIR/nota" && cat "$TMPDIR/nota"',
+        command: 'echo ok > "$TMPDIR/nota" && cat "$TMPDIR/nota" && echo "TMPDIR=$TMPDIR"',
         cwd: workspace,
       });
       expect(r.stderr + r.stdout).toContain('ok');
       expect(r.code).toBe(0);
+      // Non «una qualunque directory scrivibile»: *lo scratch di questo
+      // esecutore*, che è ciò che `close()` cancella a fine sessione e l'unica
+      // superficie che la corsia in sola lettura può toccare.
+      expect(r.stdout).toContain('muffin-exec-');
     });
 
     it("la rete è spenta: una porta che l'host raggiunge non è raggiungibile da dentro", async () => {
@@ -180,6 +193,20 @@ describe.runIf(gate.run)(`le due corsie contengono cose diverse (${gate.why})`, 
       expect(r.code).not.toBe(0);
       // E la porta è ancora viva dopo: il fallimento non era il server morto.
       expect(await raggiungibileDallHost()).toBe(true);
+    });
+
+    it('la riscrittura di `$TMPDIR` non tocca il comando del modello', async () => {
+      // L'altra metà di `puntaTmpdirAlloScratch`, e quella pericolosa. Su macOS
+      // l'intera invocazione è **una** stringa in cui il comando del modello è
+      // incastonato dopo le variabili di srt: un `TMPDIR=` cercato ovunque
+      // riscriverebbe testo che il modello ha scritto. Qui il comando ne
+      // contiene uno, e deve tornare indietro identico.
+      const r = await executor.runReadOnly({
+        command: `echo 'TMPDIR=/tmp/finto-del-modello'`,
+        cwd: workspace,
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout.trim()).toBe('TMPDIR=/tmp/finto-del-modello');
     });
 
     it("il proxy di egress rifiuta anche una GET — l'altra strada fuori, non solo il socket grezzo", async () => {
