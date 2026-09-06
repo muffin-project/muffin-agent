@@ -11,7 +11,7 @@ import { debugCommand, thinkingCommand } from '../agent/comandi.js';
 import { readdirSync, readFileSync } from 'node:fs';
 import { cliSurface } from '../core/surface/cli.js';
 import { SurfaceRegistry } from '../core/surface/registry.js';
-import { DELIVERED, type Surface } from '../core/surface/types.js';
+import { DELIVERED, MUTA, type Surface } from '../core/surface/types.js';
 import { startFakeProvider } from '../evals/acceptance/provider.js';
 import type { TurnEvent } from '../agent/loop.js';
 
@@ -113,6 +113,8 @@ describe('a channel nothing serves', () => {
       id: 'rotta',
       limits: { maxMessageChars: 10, maxUploadBytes: 0, maxDownloadBytes: 0 },
       streaming: { transport: 'off' },
+      places: ['terminal'],
+      negotiate: () => MUTA,
       handles: (c) => c === 'rotta',
       deliver: async () => {
         throw new Error('socket chiuso');
@@ -137,6 +139,8 @@ describe('a channel nothing serves', () => {
       id,
       limits: { maxMessageChars: 100, maxUploadBytes: 0, maxDownloadBytes: 0 },
       streaming: { transport: 'off' },
+      places: ['terminal'],
+      negotiate: () => MUTA,
       handles: (c) => c === id,
       deliver: async (_c, text) => {
         seen.push(`${id}:${text}`);

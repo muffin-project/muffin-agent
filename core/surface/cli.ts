@@ -1,5 +1,5 @@
 import { statSync } from 'node:fs';
-import { DELIVERED, type DeliveryOutcome, type FileSpec, type StreamingCapability, type Surface } from './types.js';
+import { DELIVERED, MUTA, type DeliveryOutcome, type FileSpec, type Negotiation, type Place, type StreamingCapability, type Surface } from './types.js';
 
 /**
  * The terminal, as a surface like any other.
@@ -49,6 +49,7 @@ export function cliSurface(
     streaming?: StreamingCapability;
   } = {},
 ): Surface {
+  const streaming: StreamingCapability = opts.streaming ?? { transport: process.stdout.isTTY === true ? 'stdout' : 'off' };
   return {
     id: 'cli',
     limits: {
@@ -64,7 +65,24 @@ export function cliSurface(
       maxUploadBytes: Number.POSITIVE_INFINITY,
       maxDownloadBytes: 0,
     },
-    streaming: opts.streaming ?? { transport: process.stdout.isTTY === true ? 'stdout' : 'off' },
+    streaming: streaming,
+    // Una stanza sola, ed è l'unica che non è una chat. `'stdout'` quando il
+    // terminale è un TTY, `'off'` quando è una pipe — la stessa domanda che
+    // `streaming` già poneva, chiesta dalla stanza invece che dalla porta.
+    // Nessun file esce di qui: l'owner è su questa macchina, quindi
+    // «consegnare» un file è dire dov'è già, che è `'say'` e non `'native'`
+    // per quanto grande sia `maxUploadBytes`.
+    places: ['terminal'],
+    negotiate: (place: Place): Negotiation =>
+      place === 'terminal'
+        ? {
+            stream: streaming.transport === 'stdout' ? ['stdout', 'off'] : ['off'],
+            editEveryMs: 0,
+            maxEditsPerMinute: 0,
+            draftTtlMs: 0,
+            files: ['say'],
+          }
+        : MUTA,
     handles: (channel) => channel === 'cli',
     deliver: async (_channel, text): Promise<DeliveryOutcome> => {
       write(text);

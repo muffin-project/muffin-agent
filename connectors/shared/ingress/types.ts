@@ -1,4 +1,5 @@
 import type { TrustTier } from '../../../core/policy/types.js';
+import { assertNegotiable } from '../../../core/surface/types.js';
 import type { IncomingIdentity, Surface } from '../../../core/surface/types.js';
 
 /**
@@ -257,6 +258,13 @@ export type IngressPort = {
  * only in a test that asserts fixtures were built correctly.
  */
 export function makeIngressPort(surface: Surface, ingress: IngressCapabilities): IngressPort {
+  // La negoziazione per stanza, rifiutata qui se è impossibile — `'draft'`
+  // in un gruppo, `'native'` su una superficie che non muove byte, un tetto
+  // di edit che il pavimento non lascia passare. Stessa scelta della riga
+  // sotto, per la stessa ragione (§2.3): un divieto scritto in un test
+  // guarda le porte di oggi, un costruttore che rifiuta guarda anche quella
+  // di domani.
+  assertNegotiable(surface);
   const canEdit = surface.streaming.transport !== 'off';
   if (ingress.edit !== canEdit) {
     throw new Error(
