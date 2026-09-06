@@ -24,11 +24,7 @@ a mano è bloccato dal hook. I minuti GitHub sono finiti (run morti in 4 s).
 `routing.only: ["alibaba"]`, `dataCollection: "deny"`; ADR-0074 (06/09, «si chiede solo
 l'irreversibile, sempre, anche in privato»). Kernel (ADR-0071/0072): un link
 citato non chiede, composto+non-owner nega, una ricerca non chiede mai.
-Gruppi: senza il suo umano Muffin saluta, avvisa e esce (F4). Nucleo e
-ingresso (05-06/09): `agent/loop.ts` è un barile di 54 righe su nove moduli;
-il percorso in entrata vive una volta in `connectors/shared/ingress/`
-(router a dieci stadi), Telegram e Discord sono porte, e
-`parita.test.ts` diventa rosso se una porta salta il router.
+Gruppi: senza il suo umano Muffin saluta, avvisa e esce (F4).
 
 **Azioni owner senza codice:** billing GitHub Actions · `npm run e2e:telegram`
 con un bot vero (B11/B13/B2 datati) · la prima install vera su una VPS x86_64
@@ -47,25 +43,16 @@ comandi e coda, approvazioni, transcript, consegna, provenienza su Discord)
 non è DAY-1. `evals/e2e/telegram.ts:66` legge ancora l'owner da
 `config.json`. Issue #378 tiene l'indice (#371-#377).
 
-**Da Centria (`centrialabs/centria`, `origin/stage`, letto il 06/09).** DAY-1:
-**D15** registro degli effetti (più autonomia ⇒ più sorveglianza). Il tetto di
-spesa c'è già (E1/E2): resta solo la prenotazione fra turni concorrenti e
-`pricing.ts`. Scartato: percorso riservato meccanico nella porta di merge.
-Dopo la VPS: revoca dallo stesso porto di comando con test di parità
-(T-028), giudice LLM come sensore versionato con calibrazione e holdout
-(PRODUCTION-EVALS), verifica meccanica delle affermazioni negli ADR
-(`verifica-claim.py`); auto-merge (T-027) quando saremo open source.
+**Da Centria (`origin/stage`, 06/09):** entra **D15** (registro degli effetti: più
+autonomia ⇒ più sorveglianza); il tetto di spesa c'è già (E1/E2). Dopo la VPS:
+revoca con parità (T-028), giudice come sensore versionato, verifica delle
+affermazioni negli ADR; auto-merge quando saremo open source.
 
-**Due decisioni owner del 06/09 sera, dal dogfood.** (1) **Taint:** «inutilizzabile in
-sto modo» — ADR-0075 (proposto) e riga **D16**: sull'host il taint non nega più,
-chiede con la ragione verso l'esterno, resta provenienza; fetta kernel dopo
-#456/#457. (2) **Streaming e file per porta e stanza:** il gateway negozia
-«posso draft? se no edit, ogni quanto? posso mandare file? se no come lo
-condivido?» da una tabella per `(porta, stanza)`; `sendMessageDraft` esiste in
-`api.ts` e non ha chiamanti da #388 (la bolla che scadeva si rinnova, non si
-toglie); privato → draft più messaggio finale vero, gruppo e topic → edit; il
-test di parità rifiuta una dichiarazione impossibile; prova finale sulla corsia
-e2e vera. Fetta dopo #457, tocca `surface.ts` e `transcript.ts`.
+**Dogfood 06/09 sera, due decisioni owner.** (1) Taint «inutilizzabile»:
+ADR-0075 e **D16**, sull'host il taint non nega più, verso l'esterno chiede con
+la ragione; fetta kernel dopo #457. (2) Streaming e file negoziati per
+`(porta, stanza)`: privato → draft nativo più messaggio finale vero, gruppo e
+topic → edit; `sendMessageDraft` non ha chiamanti da #388. Brief pronti.
 
 **Truth maintenance:** `day1/requirements-status.md` possiede lo stato,
 critical-path.md#ordine-corrente l'ordine, le Issue il lavoro attribuibile.
