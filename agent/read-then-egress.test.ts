@@ -278,7 +278,15 @@ describe('the price of the same rule, through the same turn', () => {
 
     // The owner was asked — not skipped, and not refused outright — and this
     // harness's `approve` says yes, so the command actually ran.
-    expect(h.approvals).toEqual(['sys.shell']);
+    //
+    // ADR-0074 changed the *wording* of that ask, not the verdict, and the
+    // assertion follows the words rather than being loosened to ignore them:
+    // the prompt leads with what cannot be taken back and names the capability
+    // after it. What did change is the reason: the ask no longer fires because
+    // the read raised the taint — it would have fired identically at taint 0,
+    // which `core/policy/solo-irreversibile.test.ts` asserts capability by
+    // capability.
+    expect(h.approvals).toEqual(['non si torna indietro: cambia questa macchina — sys.shell']);
     expect(ran).toEqual(['shell_run']);
   });
 
