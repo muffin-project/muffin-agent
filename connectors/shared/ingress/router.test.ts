@@ -28,6 +28,11 @@ const PORT: IngressPort = makeIngressPort(
     id: 'prova',
     limits: { maxMessageChars: 4096, maxUploadBytes: 1, maxDownloadBytes: 1 },
     streaming: { transport: 'edit' },
+    places: ['direct'],
+    negotiate: (p: string) =>
+      p === 'direct'
+        ? ({ stream: ['edit', 'off'] as const, editEveryMs: 1_000, maxEditsPerMinute: 20, draftTtlMs: 0, files: ['say'] as const })
+        : ({ stream: ['off'] as const, editEveryMs: 0, maxEditsPerMinute: 0, draftTtlMs: 0, files: ['say'] as const }),
     handles: () => true,
     deliver: async () => ({ ok: true }) as never,
   } as never,
@@ -362,6 +367,8 @@ describe('a port whose declaration and hooks disagree never walks (§2.3)', () =
       id: 'muta',
       limits: { maxMessageChars: 4096, maxUploadBytes: 1, maxDownloadBytes: 1 },
       streaming: { transport: 'off' },
+      places: ['direct'],
+      negotiate: () => ({ stream: ['off'] as const, editEveryMs: 0, maxEditsPerMinute: 0, draftTtlMs: 0, files: ['say'] as const }),
       handles: () => true,
       deliver: async () => ({ ok: true }) as never,
     } as never,
