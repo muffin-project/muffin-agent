@@ -465,7 +465,13 @@ describe('un\'approvazione rientra nel vocabolario dei passi (§4.1/§5 della me
       expect(testo).not.toContain('⚠');
       // Il vocabolario dei passi resta lo stesso di ogni altro tool: una riga
       // `⏸` mentre aspetta, `✓`/il capability quando si risolve.
-      expect(testo).toContain('⏸ sys.shell: aspetto la tua approvazione');
+      //
+      // Cosa c'è **su** quella riga è cambiato con ADR-0074 punto 2: era
+      // `sys.shell: aspetto la tua approvazione` — il nome della capability
+      // più una frase che non dice nulla — ed è diventata il testo del
+      // kernel, che dice cosa non si può annullare. Il terminale buttava via
+      // `ApprovalRequest.prompt`; Telegram lo mostrava già.
+      expect(testo).toContain('⏸ non si torna indietro: cambia questa macchina — sys.shell');
 
       const rigaVerdetto = righe.findIndex((r) => r.includes('sys.shell: consentito'));
       expect(rigaVerdetto).toBeGreaterThan(-1);

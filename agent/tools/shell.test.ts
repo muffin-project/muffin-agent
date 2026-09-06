@@ -52,9 +52,20 @@ describe('sys.shell through the kernel', () => {
     expect(d.effect).toBe('ask');
   });
 
-  it('hardened mode, owner, taint 0: allow', () => {
+  /**
+   * **Riscritta da ADR-0074 punto 2.** Pinnava
+   * `hardened && owner && taint === 0 -> allow`: la sola scorciatoia capace di
+   * saltare del tutto la domanda su un comando che non si annulla. L'ADR la
+   * toglie perche' `muffin rot harden` risponde a «chi puo' riscrivere le
+   * regole», non a «questo comando si disfa»: un `rm -rf` resta un `rm -rf`
+   * anche quando la radice di fiducia appartiene a un altro utente UNIX.
+   */
+  it('hardened mode, owner, taint 0: chiede lo stesso, la scorciatoia non esiste piu', () => {
     const decide = createDecide({ ...base, hardened: true });
-    expect(decide({ ...req, principal: ctx.principal }).effect).toBe('allow');
+    const d = decide({ ...req, principal: ctx.principal });
+    expect(d.effect).toBe('ask');
+    // E la domanda dice cosa non si annulla, non in che modalita' e' la RoT.
+    expect(d.effect === 'ask' && d.ask.prompt).toContain('non si torna indietro');
   });
 
   it('taint 2 (a disk read) is within the widened ceiling: still an ask, never a silent allow', () => {
@@ -169,21 +180,22 @@ describe('what a command hands back is disk content', () => {
     expect(exec.calls.length).toBe(0);
   });
 
-  it('the cost, stated as a test: a read no longer ends shell access, it downgrades to ask', async () => {
-    // Owner decision, 2026-08-16 (ADR-0044 §revisione; PR #28 round-2): the
-    // owner contradicted the line ADR-0044 asked about. `sys.shell` now pins
-    // `maxTaint: 2` instead of inheriting `defaultMaxTaint.high` = 1, so one
-    // read (DISK_TIER = 2) no longer pushes the turn's only shell_run of the
-    // turn into a flat refusal — it downgrades the hardened auto-allow into an
-    // ask, which is what "leggi il file e poi lancia i test" needs to still be
-    // completable with the owner's yes. The floor stays real: nothing here
-    // reaches `taint === 0`, so the auto-allow itself is still unreachable once
-    // anything has been read, and a taint-3 turn — a web/search/mcp result,
-    // never a second read: `raiseTaint` only ever raises to the max it has
-    // seen, so a second DISK_TIER (2) read still leaves the turn at 2 — is
-    // still a flat `taint_exceeded` deny — egress stays shut, only the ask
-    // survives. Widening this again requires a test in the diff, same as this
-    // one.
+  it('il prezzo, come test: la shell chiede sempre, e il taint decide solo il soffitto', async () => {
+    // Lineage. 2026-08-16 (ADR-0044 §revisione): una lettura non chiudeva piu'
+    // la shell, la declassava da auto-allow ad ask, e questo test pinnava le
+    // tre celle 0/2/3 come `allow` / `ask` / `deny`.
+    //
+    // **ADR-0074 toglie la prima.** L'auto-allow a taint 0 era la scorciatoia
+    // `hardened && owner && taint === 0`, e la misura che l'ha uccisa e' che
+    // tutte le 35 approvazioni mai chieste su questa installazione erano
+    // `sys.shell` a taint 2 — cioe' il cancello scattava dove il taint era
+    // salito, e taceva dove non lo era, per un comando che non si annulla in
+    // nessuno dei due casi. Adesso `sys.shell` chiede a 0, a 1 e a 2, sempre
+    // con la stessa frase, e il taint continua a fare l'unica cosa che gli
+    // resta: negare sopra il soffitto della riga `host` (ADR-0044, invariato).
+    //
+    // Allargare di nuovo questo soffitto richiede un test nel diff, come
+    // questo.
     const decide = createDecide({
       capabilities: new Map([[shellCapability.id, shellCapability]]),
       matrix: POLICY_FLOOR,
@@ -200,9 +212,11 @@ describe('what a command hands back is disk content', () => {
         taint,
       });
 
-    expect(ask(0).effect).toBe('allow');
+    expect(ask(0).effect).toBe('ask');
     const afterOneRead = ask(DISK_TIER);
     expect(afterOneRead.effect).toBe('ask');
+    // La stessa decisione, parola per parola: il taint non e' piu' la ragione.
+    expect(ask(0)).toEqual(afterOneRead);
     const afterTaint3 = ask(3);
     expect(afterTaint3.effect).toBe('deny');
     expect(afterTaint3.effect === 'deny' ? afterTaint3.code : null).toBe('taint_exceeded');
