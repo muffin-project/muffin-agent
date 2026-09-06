@@ -104,7 +104,7 @@ async function pairOwner(inst: Install, tg: FakeTelegram, ownerId: number): Prom
   return gw;
 }
 
-/** Same shape as `d-capability.accept.ts`'s `plantTier3Episode`, at tier 2 — D12 needs an ask whose taint is shown but not exceeded (`sys.shell`'s `maxTaint: 2`). */
+/** Same shape as `d-capability.accept.ts`'s `plantTier3Episode`, at tier 2 — D12 needs an ask whose taint is shown but not exceeded (the `host` row's ceiling of 2). */
 function plantTier2Episode(home: string, threadKey: string): void {
   const db = new DatabaseCtor(join(home, 'muffin.db'));
   try {
@@ -448,20 +448,21 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
       const inst = await install({
         main: [
           { tool: { name: 'memory_search', args: { query: 'nota interna' } } },
-          { tool: { name: 'shell_run', args: { command: 'echo ciao', cwd: '.', description: 'stampa la parola ciao' } } },
+          { tool: { name: 'shell_run_write', args: { command: 'echo ciao', cwd: '.', description: 'stampa la parola ciao' } } },
           // The same call again: a resumed turn re-asks the model, and the
           // model is scripted here to retry exactly the call it made before
           // suspending (`cli/surface.ts#approvatoreTelegram`'s own docstring:
           // "il turno si sospende qui e riprende da solo quando arriva la
           // risposta" — the retry is real production behaviour, not a test
           // artefact).
-          { tool: { name: 'shell_run', args: { command: 'echo ciao', cwd: '.', description: 'stampa la parola ciao' } } },
+          { tool: { name: 'shell_run_write', args: { command: 'echo ciao', cwd: '.', description: 'stampa la parola ciao' } } },
           { text: 'fatto, il comando ha risposto ciao' },
         ],
         env: { MUFFIN_GATEWAY_TICK_MS: '200' },
       });
       try {
-        // Taint 2 ("gruppo/sconosciuto"), inside `sys.shell`'s `maxTaint: 2` —
+        // `shell_run_write` dal 06/09 (ADR-0074 §4): è la corsia che chiede.
+        // Taint 2 ("gruppo/sconosciuto"), inside `sys.shell.write`'s row ceiling —
         // enough to make the ASK show a taint reason without tripping
         // `taint_exceeded` into an outright deny.
         plantTier2Episode(inst.home, 'fixture-d12');
@@ -479,7 +480,7 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
           const askCall = tg.sent().find((c) => c.method === 'sendMessage' && c.payload['reply_markup'] !== undefined);
           if (!askCall) throw new Error('nessun messaggio ASK con tastiera trovato');
           const askText = String(askCall.payload['text'] ?? '');
-          if (!askText.includes('sys.shell')) throw new Error(`l'ASK non nomina la capability:\n${askText}`);
+          if (!askText.includes('sys.shell.write')) throw new Error(`l'ASK non nomina la capability:\n${askText}`);
           if (!askText.includes('command: echo ciao') || !askText.includes('cwd: .')) {
             throw new Error(`l'ASK non mostra comando e cwd insieme:\n${askText}`);
           }
@@ -600,7 +601,7 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
               `la riga di attesa resta congelata a turno concluso:\n${ultimoTestoTrascrizione}`,
             );
           }
-          if (!ultimoTestoTrascrizione.includes('sys.shell: consentito')) {
+          if (!ultimoTestoTrascrizione.includes('sys.shell.write: consentito')) {
             throw new Error(`il verdetto non compare, risolto, nella trascrizione:\n${ultimoTestoTrascrizione}`);
           }
           // E il tool rieseguito dopo la ripresa è arrivato nello stesso

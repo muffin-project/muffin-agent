@@ -36,12 +36,16 @@ function realRuntime(): { names: string[]; close: () => void } {
 }
 
 /**
- * `shell_run` is registered only where the sandbox probe passed, so it is the
- * one entry whose presence is a property of the machine rather than of the
- * code. Dropped from the comparison, and its absence is the reason this file
- * asserts a *filtered* list rather than a snapshot.
+ * Le due corsie della shell sono registrate solo dove la sonda del sandbox è
+ * passata, quindi sono le uniche voci la cui presenza è una proprietà della
+ * macchina e non del codice. Tolte dal confronto, ed è la ragione per cui
+ * questo file asserisce una lista *filtrata* e non un'istantanea.
+ *
+ * Due e non una dal 06/09 (ADR-0074 §4): filtrarne una sola lascerebbe l'altra
+ * dentro il confronto e lo renderebbe dipendente dall'host, che è esattamente
+ * il difetto che questa costante evita.
  */
-const SANDBOXED = 'shell_run';
+const SANDBOXED = ['shell_run', 'shell_run_write'];
 
 /**
  * L'ordine dichiarato, sandbox e search a parte — non più un secondo elenco
@@ -59,7 +63,7 @@ describe('quali tool vede davvero un turno', () => {
   it('l’ordine di registrazione è quello dichiarato, e cambiarlo fallisce qui', () => {
     const rt = realRuntime();
     rt.close();
-    expect(rt.names.filter((n) => n !== SANDBOXED)).toEqual(REGISTERED);
+    expect(rt.names.filter((n) => !SANDBOXED.includes(n))).toEqual(REGISTERED);
   });
 
   it('baseToolOrder non diverge dal registro reale, sandbox della macchina compresa', () => {
@@ -71,7 +75,11 @@ describe('quali tool vede davvero un turno', () => {
     // diventa rosso — non a `cli/doctor.test.ts`, dove nessuno lo cercherebbe.
     const rt = realRuntime();
     rt.close();
-    const conteneva = rt.names.includes(SANDBOXED);
+    const conteneva = SANDBOXED.every((n) => rt.names.includes(n));
+    // O tutte e due o nessuna: `agent/runtime.ts` le registra insieme, e un
+    // host che ne offrisse una sola sarebbe la degradazione silenziosa che
+    // ADR-0074 §4 vieta — qui si vede, invece di passare inosservata.
+    expect(SANDBOXED.some((n) => rt.names.includes(n))).toBe(conteneva);
     expect(baseToolOrder({ sandboxAvailable: conteneva, searchOn: false })).toEqual(rt.names);
   });
 
@@ -104,7 +112,12 @@ describe('quali tool vede davvero un turno', () => {
     // non sa più guardarsi, il cerotto.
     //
     // La risposta strutturale resta quella scritta sotto, e non è un numero.
-    expect(profile.maxToolsExposed).toBe(15);
+    // 16 dal 06/09 (ADR-0074 §4), e per una ragione contata invece che
+    // stimata: `sys.shell` si è divisa in due tool, quindi i registrati sono
+    // saliti esattamente di uno. Lasciare 15 avrebbe tagliato `sys_inspect` in
+    // silenzio su ogni installazione consumer, che è il difetto, non la
+    // correzione. La risposta strutturale resta quella scritta sotto.
+    expect(profile.maxToolsExposed).toBe(16);
 
     const rt = realRuntime();
     rt.close();

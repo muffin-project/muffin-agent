@@ -6,7 +6,7 @@ import { createDecide } from './decide.js';
 import { POLICY_FLOOR, ROW_FLOOR } from './matrix.js';
 import type { CapabilityDecl, Decision, DecisionRequest, Principal, TrustTier } from './types.js';
 import { fsCapabilities } from '../../agent/tools/fs.js';
-import { shellCapability } from '../../agent/tools/shell.js';
+import { shellCapability, shellWriteCapability } from '../../agent/tools/shell.js';
 import { processCapabilities } from '../../agent/tools/process.js';
 import { sendFileCapability } from '../../agent/tools/deliver.js';
 import { httpCapability } from '../../agent/tools/http.js';
@@ -55,6 +55,7 @@ const TIERS: readonly TrustTier[] = [0, 1, 2, 3];
 const ALL: readonly CapabilityDecl[] = [
   ...fsCapabilities,
   shellCapability,
+  shellWriteCapability,
   ...processCapabilities,
   sendFileCapability,
   httpCapability,
@@ -221,11 +222,35 @@ describe('la matrice normativa è eseguibile', () => {
         'process.ts:processCapabilities',
         'search.ts:searchCapability',
         'shell.ts:shellCapability',
+        'shell.ts:shellWriteCapability',
         'skill.ts:skillCapability',
         'todo.ts:todoCapability',
         'wait.ts:waitCapability',
       ].sort(),
     );
+  });
+
+  /**
+   * ADR-0074 §4, come cella e non come frase: le due corsie della shell stanno
+   * sulla **stessa riga** (`host`, stesso soffitto, stesse conseguenze se
+   * qualcosa scappa) e danno risposte diverse allo stesso taint, perché il
+   * confine che le separa è quello che il sandbox costruisce — scrittura e
+   * rete — non il nome della capability.
+   *
+   * Taint 1 è la cella che le distingue e l'unica asserita qui. A taint 0 la
+   * scorciatoia `hardened && owner` fa passare anche quella che scrive (ADR-0074
+   * §2 la toglie, ed è un'altra fetta); a taint 2 `askAbove: 1` della riga `host`
+   * rimette un `ask` anche sulla corsia in sola lettura, e quello lo toglie il
+   * punto 1 della stessa ADR. Il ciclo parametrizzato sopra copre ogni taint
+   * contro l'oracolo `MATRICE`, quindi quando quelle due fette atterrano è là
+   * che si aggiorna il numero, non qui.
+   */
+  it('la corsia in sola lettura non chiede dove quella che scrive chiede', () => {
+    expect(decisionAt(shellCapability, 1).effect).toBe('allow');
+    expect(decisionAt(shellWriteCapability, 1).effect).toBe('ask');
+    // E il perché, dichiarato: `ask` ⇔ irreversibile.
+    expect(shellCapability.reversible).toBe('yes');
+    expect(shellWriteCapability.reversible).toBe('no');
   });
 
   it('le tre capability che questa slice cambia, per nome', () => {

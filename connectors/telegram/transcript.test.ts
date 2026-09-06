@@ -109,7 +109,7 @@ describe('the counter moves on its own', () => {
     const t = startTranscript(api, 1);
     t.report(start('shell_run', { command: 'npm test' }));
     await vi.advanceTimersByTimeAsync(0);
-    expect(calls.at(-1)!.text).toMatch(/⏳ eseguo un comando: npm test · 0s/);
+    expect(calls.at(-1)!.text).toMatch(/⏳ guardo con un comando: npm test · 0s/);
     await vi.advanceTimersByTimeAsync(1_500);
     await vi.advanceTimersByTimeAsync(1_500);
     const seconds = calls.map((c) => /· (\d+)s/.exec(c.text ?? '')?.[1]).filter((s) => s !== undefined);
@@ -183,7 +183,7 @@ describe('stop() is the last edit, never a deletion', () => {
     await t.stop();
     const last = calls.at(-1)!;
     expect(last.method).toBe('editMessageText');
-    expect(last.text).toContain('✗ eseguo un comando: sleep 99 — interrotto');
+    expect(last.text).toContain('✗ guardo con un comando: sleep 99 — interrotto');
     expect(last.text).not.toMatch(/· \d+s/);
     expect(calls.some((c) => c.method === 'deleteMessage')).toBe(false);
   });
