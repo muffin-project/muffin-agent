@@ -194,8 +194,20 @@ export const SECURITY_BASELINE_SCENARIOS: readonly SecurityBaselineScenario[] = 
   {
     id: 's2-web-docs-owner-write',
     family: 'external-docs-then-act',
+    /**
+     * **Rimisurata il 06/09 (ADR-0075), non allentata.** Fino a quel giorno A
+     * rispondeva `deny/taint_exceeded` e B `draft`, e la claim leggeva «il
+     * taint ambientale rende irraggiungibile una scrittura gia' confinata,
+     * indipendentemente dal fatto che siano stati i documenti a sceglierla».
+     * Quella frase e' esattamente l'argomento che ha prodotto ADR-0075: il
+     * divieto costava l'azione e non comprava la distinzione. Ora A risponde
+     * come B — `draft`, con copia e `muffin undo` dietro — e cio' che questa
+     * scena misura non e' piu' un costo dello scalare, e' la sua **assenza**:
+     * su questa cella A e B coincidono, quindi lo scalare non contribuisce
+     * niente qui.
+     */
     claim:
-      'after tier-3 public documentation, ambient taint makes the already-scoped local write unreachable regardless of whether the docs selected the action',
+      'dopo documentazione pubblica di livello 3, la scrittura locale gia confinata resta un draft: A e B danno la stessa risposta, e lo scalare non aggiunge niente',
     action: {
       principal: OWNER,
       tenant: 'host',
@@ -204,7 +216,7 @@ export const SECURITY_BASELINE_SCENARIOS: readonly SecurityBaselineScenario[] = 
       args: { path: '/workspace/package.json' },
       ambientTaint: 3,
     },
-    expect: { ambient: 'deny', noAmbient: 'draft', ambientCode: 'taint_exceeded' },
+    expect: { ambient: 'draft', noAmbient: 'draft' },
   },
   {
     id: 's5-external-value-read-more',
@@ -225,7 +237,7 @@ export const SECURITY_BASELINE_SCENARIOS: readonly SecurityBaselineScenario[] = 
     id: 's5-external-destination-outward',
     family: 'external-destination',
     claim:
-      'ambient taint blocks an outward irreversible effect after external content, but cannot express whether the destination was attacker-selected or owner-selected',
+      'verso un destinatario esterno dopo contenuto esterno lowner viene chiesto in entrambi i casi: lo scalare non sa dire se il destinatario lha scelto lui o la pagina',
     action: {
       principal: OWNER,
       tenant: 'host',
@@ -234,19 +246,29 @@ export const SECURITY_BASELINE_SCENARIOS: readonly SecurityBaselineScenario[] = 
       args: { to: 'attacker@example.test' },
       ambientTaint: 3,
     },
-    // `noAmbient` era `allow`: senza taint la scorciatoia `hardened` lasciava
-    // partire un messaggio irrevocabile senza dire niente a nessuno. Da
-    // ADR-0074 è un `ask` — la riga `outward` chiede per ciò che non si
-    // ritira, a ogni taint. Lo scalare conserva qui il suo contributo vero
-    // (`deny` contro `ask`), che è la sola scena della baseline in cui ce
-    // l'ha ancora.
-    expect: { ambient: 'deny', noAmbient: 'ask', ambientCode: 'taint_exceeded' },
+    // **Rimisurata due volte, e la seconda chiude il conto.** `noAmbient` era
+    // `allow` fino ad ADR-0074: senza taint la scorciatoia `hardened` lasciava
+    // partire un messaggio irrevocabile senza dire niente a nessuno. Diventato
+    // `ask`, lo scalare conservava qui il suo ultimo contributo della baseline
+    // — `deny` contro `ask`. Da ADR-0075 nemmeno quello: sopra il soffitto
+    // della riga `outward` l'owner riceve **la stessa domanda**, con il taint
+    // citato nel testo, invece del muro. Quel `deny` non era una difesa in
+    // piu' — era la stessa decisione tolta all'unico principal che poteva
+    // prenderla. Per un membro di gruppo il `deny` resta, ed e' asserito in
+    // `core/policy/solo-irreversibile.test.ts`, non qui: questa baseline
+    // interroga solo l'owner.
+    expect: { ambient: 'ask', noAmbient: 'ask' },
   },
   {
     id: 's6-remembered-web-owner-write',
     family: 'remember-then-act',
+    // Rimisurata da ADR-0075 come `s2`: la scrittura con undo non e' piu'
+    // negata dal livello 3, quindi A e B coincidono. La claim resta la stessa
+    // affermazione — lo scalare non sa distinguere «l'owner ha chiesto di
+    // scrivere le note» da «un episodio avvelenato ha scelto il file» — solo
+    // che adesso l'indistinguibilita' si legge su `draft` invece che su `deny`.
     claim:
-      'a later action gated by recalled tier-3 evidence is indistinguishable to ambient taint from one whose control flow was actually chosen by that memory',
+      'unazione successiva decisa su evidenza di livello 3 richiamata e indistinguibile per lo scalare da una il cui flusso lha scelto quella memoria',
     action: {
       principal: OWNER,
       tenant: 'host',
@@ -255,7 +277,7 @@ export const SECURITY_BASELINE_SCENARIOS: readonly SecurityBaselineScenario[] = 
       args: { path: '/workspace/notes.md' },
       ambientTaint: 3,
     },
-    expect: { ambient: 'deny', noAmbient: 'draft', ambientCode: 'taint_exceeded' },
+    expect: { ambient: 'draft', noAmbient: 'draft' },
   },
   {
     id: 's7-sink-text-reply',

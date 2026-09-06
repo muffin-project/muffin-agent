@@ -255,13 +255,33 @@ export const ROW_FLOOR: Readonly<Record<EffectRow, RowPolicy>> = {
    */
   context: { asksForIrreversible: false, denyAbove: 3 },
   /**
-   * "Shell / filesystem host / processi": DENY sopra taint 2, unchanged. What
-   * moved in ADR-0074 is the other half of the cell — the document's `ASK` at
-   * taint 2 applied to the whole row, so `fs.write` (checkpointed, with an
-   * undo) asked for the same reason `sys.shell` (no undo at all) did. Now the
-   * row asks for the second and not the first.
+   * "Shell / filesystem host / processi". **`3`, cioè su questa riga il taint
+   * non nega più — ADR-0075.**
+   *
+   * ADR-0074 aveva già tolto al taint la facoltà di *chiedere* qui: la cella
+   * `ASK` a taint 2 valeva per tutta la riga, quindi `fs.write` (con copia e
+   * `muffin undo`) chiedeva per la stessa ragione di `sys.shell.write` (che
+   * non ha nessun ritorno). Restava la facoltà di *negare* sopra 2, ed è
+   * quella che il 06/09 è stata misurata sull'installazione dell'owner: nove
+   * turni su quattordici in privato a taint 3, l'ultima shell vera il 03/09,
+   * l'ultimo turno chiuso da `context taint 3 exceeds 2 for sys.shell (host)`.
+   * Dopo una ricerca web niente shell e niente scrittura fino a una
+   * conversazione nuova — e il modello lo raccontava come «non ho la shell».
+   *
+   * Il divieto non comprava sicurezza dove stava, perché dopo ADR-0074 ogni
+   * capability di questa riga è già coperta da un'altra difesa: `fs.write` è
+   * `draft` con giornale e undo, `sys.shell` è la corsia in sola lettura senza
+   * rete e senza scrittura fuori dallo scratch, `sys.shell.write` e
+   * `sys.process.kill` sono `reversible: 'no'` e quindi chiedono **sempre**, a
+   * taint 0 come a taint 3. Ciò che il soffitto toglieva era solo la
+   * possibilità, per l'owner, di dire sì. Il taint resta nel prompt dell'`ask`
+   * come ragione visibile (`decide.ts`, `agent/loop/tool-call.ts`).
+   *
+   * Un `policy.json` sigillato può ancora rimettere `2`: `tighterRows` stringe
+   * e non allarga, ed è la stessa manopola che ADR-0072 lascia su
+   * `searchMaxTaint`.
    */
-  host: { asksForIrreversible: true, denyAbove: 2 },
+  host: { asksForIrreversible: true, denyAbove: 3 },
   /**
    * "Reply sul canale di origine": ALLOW · ALLOW · ALLOW. `false`, and the
    * declarations are why it has to be said: `surface.reply` and
@@ -295,9 +315,21 @@ export const ROW_FLOOR: Readonly<Record<EffectRow, RowPolicy>> = {
    * declaration is `reversible: 'no'` by hand, so every MCP call asks — which
    * is ADR-0074 point 5's own starting position, and the thing point 5 (a
    * different slice) fixes by reading the protocol's `readOnlyHint`.
+   *
+   * **Sopra questo soffitto, da ADR-0075, l'owner è *chiesto* e chiunque
+   * altro è negato** (`decide.ts`): dove il taint conta davvero — i byte che
+   * escono dal tenant — il muro resta la forma sbagliata, perché a taint 3
+   * l'owner non poteva nemmeno chiedere «cerca X e mandalo a Y». Il numero non
+   * si muove: è il ramo sopra di esso che distingue chi può decidere da chi
+   * non c'è.
    */
   external: { asksForIrreversible: true, denyAbove: 1 },
-  /** "Outward (mail, messaggi a terzi, pubblicazione)": DRAFT di default · DENY · DENY. Un messaggio spedito non si ritira. */
+  /**
+   * "Outward (mail, messaggi a terzi, pubblicazione)": DRAFT di default · DENY
+   * · DENY. Un messaggio spedito non si ritira — e sopra il soffitto vale la
+   * stessa distinzione di `external` (ADR-0075): `ask` all'owner con la
+   * ragione, `deny` a tutti gli altri.
+   */
   outward: { asksForIrreversible: true, denyAbove: 1 },
   /**
    * "Scrittura config/voice (cricchetto)": ALLOW solo via ratchet-API · DENY ·

@@ -15,9 +15,9 @@ const execFileAsync = promisify(execFile);
  * dangerous edges (kill 0, kill -1, kill self) are unrepresentable instead of
  * discovered. Shell remains the long tail; this is the structured case.
  *
- * Both are host-only. The matrix row for host processes denies everything at
- * taint ≥2, so the list capability narrows its ceiling explicitly — `low` risk
- * would otherwise default to 3.
+ * Both are host-only. `sys.process.list` sta sulla riga `context` — elencare i
+ * processi è una lettura — e da ADR-0075 non appunta più nessun `maxTaint`:
+ * vedi la dichiarazione qui sotto.
  */
 export const processCapabilities: CapabilityDecl[] = [
   {
@@ -26,7 +26,12 @@ export const processCapabilities: CapabilityDecl[] = [
     risk: 'low',
     reversible: 'yes',
     rerunnable: true,
-    maxTaint: 1,
+    // Il `maxTaint: 1` è tolto da ADR-0075 punto 2, con la stessa ragione di
+    // `skill.read`: un `maxTaint` non stringe mai una capability reversibile.
+    // Elencare i processi non lascia niente da disfare e non fa uscire niente
+    // dal tenant, e il numero serviva solo a rendere `process_list`
+    // irraggiungibile per tutto il resto di un turno che aveva letto una
+    // pagina web — cioè proprio nel turno in cui si vuole guardare cosa gira.
     resourceKind: 'none',
     policyArgs: [],
     hostOnly: true,

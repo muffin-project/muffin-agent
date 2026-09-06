@@ -239,7 +239,18 @@ describe('mcp capability through the kernel', () => {
     hardened: true,
   });
 
-  it('a tainted turn cannot reach a third-party server at all', () => {
+  /**
+   * **Riscritto da ADR-0075 punto 3.** Diceva che un turno avvelenato non
+   * potesse raggiungere un server di terzi «per niente». Sopra il soffitto
+   * della riga `external` l'owner adesso riceve una domanda che cita il taint,
+   * e chiunque altro il rifiuto di prima: verso l'esterno il taint chiede a chi
+   * puo' rispondere e nega a chi non c'e'.
+   *
+   * Non e' un allentamento del muro per tutti — il test qui sotto tiene ferma
+   * la meta' che conta, e in piu' `mcp.*` e' `hostOnly`, quindi un membro non
+   * arriva nemmeno a questo ramo.
+   */
+  it('un turno avvelenato chiede all owner prima di raggiungere un server di terzi, e cita il taint', () => {
     const d = decide({
       principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
       tenant: 'host',
@@ -248,7 +259,11 @@ describe('mcp capability through the kernel', () => {
       args: {},
       taint: 2,
     });
-    expect(d).toMatchObject({ effect: 'deny', code: 'taint_exceeded' });
+    expect(d.effect).toBe('ask');
+    expect(d.effect === 'ask' && d.ask.prompt).toContain('taint 2');
+    // La domanda dice anche cosa non torna indietro: non possediamo la
+    // semantica dall'altra parte del tubo (ADR-0074).
+    expect(d.effect === 'ask' && d.ask.prompt).toContain('non si torna indietro');
   });
 
   it('a group member has no path to it', () => {
