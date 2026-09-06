@@ -30,6 +30,11 @@ function porta(id: string, transport: 'edit' | 'off' = 'edit'): IngressPort {
       id,
       limits: { maxMessageChars: 4096, maxUploadBytes: 1, maxDownloadBytes: 1 },
       streaming: { transport },
+      places: ['direct'],
+      negotiate: (p: string) =>
+        transport === 'edit' && p === 'direct'
+          ? ({ stream: ['edit', 'off'] as const, editEveryMs: 1_000, maxEditsPerMinute: 20, draftTtlMs: 0, files: ['say'] as const })
+          : { stream: ['off'] as const, editEveryMs: 0, maxEditsPerMinute: 0, draftTtlMs: 0, files: ['say'] as const },
       handles: () => true,
       deliver: async () => ({ ok: true }),
     } as never,

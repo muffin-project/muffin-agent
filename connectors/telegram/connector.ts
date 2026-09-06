@@ -59,6 +59,7 @@ type ApprovalDecide = (id: string, decision: 'allow' | 'deny', now: Date) => 'ok
 type ApprovalGet = (id: string) => { turnId: string; capability: string; resource: string | null } | null;
 import { startPresence } from './presence.js';
 import { avvisoAllOwner, decidiInvito, SALUTO_NEL_GRUPPO, type Invito } from './invito.js';
+import { stanzaDi } from './negoziazione.js';
 import { startTranscript, type Transcript } from './transcript.js';
 import { awaitWithBudget } from '../shared/stop-budget.js';
 import { DRAIN_BUDGET_MS } from '../../core/gateway/service.js';
@@ -1328,7 +1329,18 @@ export class TelegramConnector {
     // Stesso topic della domanda: la riga durevole è l'unica fonte che
     // sopravvive al riavvio da cui questo percorso riparte.
     const threadId = typeof record.replyTo?.['threadId'] === 'number' ? record.replyTo['threadId'] : undefined;
-    const transcript = this.transcriptInSospeso.get(record.id) ?? startTranscript(this.deps.api, chatId, { isPrivate, ...(threadId === undefined ? {} : { threadId }), ...(this.deps.log ? { log: this.deps.log } : {}) });
+    // La stanza, non la porta: `negotiate` risponde per questa DM o per
+    // questo gruppo, e la trascrizione non deve più dedurre da un booleano
+    // né il ritmo degli edit né il diritto di mostrare la risposta che si
+    // forma. Unico consumatore della negoziazione insieme ad `apriIlVivo`.
+    const negotiation = this.port.surface.negotiate(stanzaDi({ isPrivate, threadId }));
+    const transcript =
+      this.transcriptInSospeso.get(record.id) ??
+      startTranscript(this.deps.api, chatId, {
+        negotiation,
+        ...(threadId === undefined ? {} : { threadId }),
+        ...(this.deps.log ? { log: this.deps.log } : {}),
+      });
     this.transcriptInSospeso.delete(record.id);
     const presencePromise = startPresence(this.deps.api, chatId, threadId);
 
@@ -1930,7 +1942,9 @@ export class TelegramConnector {
   private async apriIlVivo(incoming: Incoming): Promise<LiveWork> {
     const presence = await startPresence(this.deps.api, incoming.chatId, incoming.threadId);
     const transcript = startTranscript(this.deps.api, incoming.chatId, {
-      isPrivate: incoming.isPrivate,
+      // Vedi `resumeStream`: la stanza la sa l'ingresso (`direct`, il topic),
+      // e la risposta su cosa ci si può fare la dà la porta.
+      negotiation: this.port.surface.negotiate(stanzaDi(incoming)),
       ...(incoming.threadId === undefined ? {} : { threadId: incoming.threadId }),
       ...(this.deps.log ? { log: this.deps.log } : {}),
     });
