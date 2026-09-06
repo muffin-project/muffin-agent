@@ -1,41 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DiscordGateway, nextAction, type WebSocketLike, type WsEvent } from './gateway.js';
-
-/**
- * `DiscordGateway`, driven by a scripted fake socket rather than a real one.
- *
- * Node has a built-in WebSocket *client* (since v22.4.0) but no built-in
- * WebSocket *server*, so there is nothing to point a real socket at in a test
- * without either a new dependency or hand-rolling RFC 6455 framing — and
- * either would be testing Node's WebSocket implementation, not this file's
- * state machine. `wsFactory` exists for exactly this: the fake below emits
- * the same three events (`message`, `close`, `error`) the real class does and
- * nothing more, so a test proves "does this file Identify/Resume/reconnect
- * correctly", the actual property at risk.
- */
-class FakeSocket implements WebSocketLike {
-  readyState = 1;
-  sent: unknown[] = [];
-  closedWith: { code: number; reason: string } | null = null;
-  private handlers: Record<string, ((ev?: WsEvent) => void)[]> = {};
-
-  send(data: string): void {
-    this.sent.push(JSON.parse(data));
-  }
-  close(code?: number, reason?: string): void {
-    this.closedWith = { code: code ?? 1000, reason: reason ?? '' };
-    this.emit('close', { code: code ?? 1000, reason: reason ?? '' });
-  }
-  addEventListener(type: 'open' | 'message' | 'close' | 'error', listener: (ev?: WsEvent) => void): void {
-    (this.handlers[type] ??= []).push(listener);
-  }
-  emit(type: string, ev?: WsEvent): void {
-    for (const h of this.handlers[type] ?? []) h(ev);
-  }
-  serverSends(envelope: Record<string, unknown>): void {
-    this.emit('message', { data: JSON.stringify(envelope) });
-  }
-}
+import { DiscordGateway, nextAction } from './gateway.js';
+// Il socket finto vive in `fake-socket.ts` dalla fetta 16: ne servivano tre
+// copie (qui, `salute-superficie.test.ts`, e il test di parità) e due erano
+// già divergenti.
+import { FakeSocket } from './fake-socket.js';
 
 function harness(over: { intents?: number } = {}) {
   const sockets: FakeSocket[] = [];
