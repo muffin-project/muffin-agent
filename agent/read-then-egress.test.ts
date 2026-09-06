@@ -301,18 +301,29 @@ describe('the price of the same rule, through the same turn', () => {
     // which `core/policy/solo-irreversibile.test.ts` asserts capability by
     // capability.
     expect(h.approvals).toEqual([
-      'non si torna indietro: cambia questa macchina — sys.shell.write',
+      'non si torna indietro: cambia questa macchina — sys.shell.write\n\n' +
+        // ADR-0075 punto 4: la domanda dice anche **da dove** viene il livello
+        // di questo turno. Qui e' la lettura di disco della riga sopra.
+        'questo turno contiene contenuto di livello 2: il risultato di fs_read',
     ]);
     expect(ran).toEqual(['shell_run_write']);
   });
 
-  it('still refuses shell_run_write outright once the turn is at taint 3, past the widened ceiling', async () => {
-    // The other half of the same line: widening the ceiling by one step did not
-    // move it to the top. A turn tainted by a genuine tier-3 result (a
-    // web/search/mcp call, stood in for here by a fake `demo_web`-shaped tool —
-    // a second `fs_read` would NOT do it: `DISK_TIER` is a constant 2, and
-    // `raiseTaint` only ever raises, so two reads leave the turn at 2, not 3)
-    // still gets a flat refusal from `shell_run`, never an ask.
+  it('at taint 3 shell_run_write still asks — and the question names the web result that raised the turn (ADR-0075)', async () => {
+    // **Riscritta il 06/09 da ADR-0075.** Questa riga asseriva il contrario:
+    // a taint 3 la shell che scrive riceveva un `deny/taint_exceeded` piatto,
+    // «il soffitto si e' allargato di un gradino, non fino in cima». Il
+    // gradino e' stato misurato dove finisce — nove turni su quattordici a
+    // taint 3 il 06/09, e l'ultimo chiuso proprio da quel messaggio — e il
+    // divieto non comprava niente: `sys.shell.write` e' `reversible: 'no'`,
+    // quindi **chiede comunque**, a taint 0 come a taint 3. Cio' che il
+    // soffitto toglieva era solo la possibilita', per l'owner, di dire si'.
+    //
+    // Un turno avvelenato da un risultato di livello 3 vero (una chiamata
+    // web/search/mcp, qui sostituita da un tool a forma di `demo_web` — un
+    // secondo `fs_read` NON basterebbe: `DISK_TIER` e' la costante 2 e
+    // `raiseTaint` solo alza, quindi due letture lasciano il turno a 2)
+    // arriva quindi alla domanda, e la domanda porta la provenienza.
     const ran: string[] = [];
     const h = harness([
       callTool('web_like', {}),
@@ -383,9 +394,17 @@ describe('the price of the same rule, through the same turn', () => {
       text: 'cerca sul web e poi lancia lo script',
     });
 
-    expect(ran).toEqual([]);
-    expect(h.approvals).toEqual([]);
-    expect(h.provider.seen.join('\n')).toMatch(/Rifiutato dal kernel.*taint_exceeded/s);
+    // L'owner ha detto si' (questo harness approva), quindi il comando gira:
+    // e' esattamente cio' che a taint 3 non era possibile.
+    expect(ran).toEqual(['shell_run_write']);
+    expect(h.approvals).toEqual([
+      "non si torna indietro: cambia questa macchina — sys.shell.write\n\n" +
+        "questo turno contiene contenuto di livello 3: il risultato di web_like",
+    ]);
+    // E nessun rifiuto per taint da nessuna parte in cio' che il modello ha
+    // letto: la meta' negativa, perche' «ha chiesto» sarebbe verde anche in un
+    // turno dove il rifiuto e' arrivato prima su un'altra chiamata.
+    expect(h.provider.seen.join('\n')).not.toMatch(/taint_exceeded/);
   });
 });
 
@@ -516,7 +535,12 @@ describe('a THROWN result taints the turn too (judge round-1, PR #28)', () => {
     // and asked — not skipped, which is what a lost `raiseTaint` would look
     // like — and this harness's `approve` says yes, so the fetch ran after
     // being asked, not before.
-    expect(h.approvals).toEqual([`lettura con parametri scelti dal contenuto: ${EXFIL_PARAMS}`]);
+    expect(h.approvals).toEqual([
+      `lettura con parametri scelti dal contenuto: ${EXFIL_PARAMS}\n\n` +
+        // ADR-0075 punto 4: e la provenienza, che qui e' l'**errore** di un
+        // tool — un handler che lancia porta dentro byte come uno che torna.
+        "questo turno contiene contenuto di livello 3: l'errore di mcp_evil_fetch",
+    ]);
     expect(h.fetched).toEqual([EXFIL_PARAMS]);
   });
 });
@@ -578,7 +602,10 @@ describe('params on any host — the gate http_get skipped until P04-1, unaffect
     // Not skipped (the defect this closes) and not a wall (the harness's
     // `approve` says yes, same as every `ask`-then-approve test above): the
     // owner was asked and shown the exact URL, not just the kernel's prose.
-    expect(h.approvals).toEqual([`lettura con parametri scelti dal contenuto: ${WITH_PARAMS}`]);
+    expect(h.approvals).toEqual([
+      `lettura con parametri scelti dal contenuto: ${WITH_PARAMS}\n\n` +
+        'questo turno contiene contenuto di livello 3: il risultato di http_get',
+    ]);
     expect(h.fetched).toEqual([`https://${ALLOWED_HOST}/pagina`, WITH_PARAMS]);
   });
 
@@ -755,7 +782,10 @@ describe('sys.search now answers to the same kernel — mandato inv. 7 (P04-2)',
     // second one, which a straight allow also happens to satisfy... except it
     // does not: under the mutation the backend runs immediately, so
     // `h.searched` would equal `['MUFFIN-SECRET-9f3a7c21']` here, not `[]`.
-    expect(h.approvals).toEqual(['ricerca: "MUFFIN-SECRET-9f3a7c21"']);
+    expect(h.approvals).toEqual([
+      'ricerca: "MUFFIN-SECRET-9f3a7c21"\n\n' +
+        'questo turno contiene contenuto di livello 3: il risultato di web_like',
+    ]);
     expect(h.searched).toEqual([]);
     expect(h.provider.seen.join('\n')).toMatch(/L'owner ha rifiutato/);
   });

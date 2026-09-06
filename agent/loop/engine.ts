@@ -448,7 +448,11 @@ export async function guidaIlTurno(
           },
         );
         const inherited = recallTaint(result);
-        snapshot.raiseTaint(inherited);
+        // Il nome accanto al numero (ADR-0075 punto 4): un fatto che uno
+        // sconosciuto ha piantato mesi fa alza questo turno esattamente come se
+        // avesse appena parlato, e il prompt di un `ask` successivo deve poterlo
+        // dire invece di mostrare solo un livello.
+        snapshot.raiseTaint(inherited, 'la memoria richiamata');
         recallSpan.setAttributes({
           'muffin.memory.items': result.items.length,
           'muffin.memory.strategies': result.strategies.join(','),
@@ -491,7 +495,7 @@ export async function guidaIlTurno(
      * every clean answer re-poisoning the window it was meant to age out of.
      */
     const open = deps.todos.open(input.tenant, input.session.id);
-    snapshot.raiseCeiling(planTaint(open));
+    snapshot.raiseCeiling(planTaint(open), 'un promemoria aperto di questa sessione');
 
     /**
      * The session transcript, and the taint that comes with it — same order,
@@ -516,7 +520,7 @@ export async function guidaIlTurno(
      */
     const traceIdsInWindow = spoken.kept.map((m) => m.traceId).filter((id): id is string => id !== undefined);
     const taintByTrace = deps.turns.taintForIds(traceIdsInWindow);
-    snapshot.raiseCeiling(historyTaint(spoken.kept, taintByTrace));
+    snapshot.raiseCeiling(historyTaint(spoken.kept, taintByTrace), 'la conversazione precedente, riletta in questo turno');
 
     /**
      * D11's other half: which turns in this window `muffin undo` has already

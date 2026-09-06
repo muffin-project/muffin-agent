@@ -159,6 +159,16 @@ export function makeSnapshot(
   // too, and a tool result raises it further — monotonically, never down.
   let taint: TrustTier = from;
   /**
+   * Il nome di ciò che ha portato il turno al livello che `taint` riporta —
+   * ADR-0075 punto 4, letto dal prompt di ogni `ask`.
+   *
+   * Parte da `null` e non da una frase su `from`: il livello con cui un turno
+   * *nasce* è chi sta parlando o il contenuto che gli è stato spedito, e non
+   * c'è nessuna «parte che l'ha alzato» da nominare. Il primo `raiseTaint` che
+   * lo supera scrive la sua.
+   */
+  let origine: string | null = null;
+  /**
    * The ceiling, minus whatever `raiseCeiling` alone contributed — ADR-0044
    * §Riconciliazione 2026-08-28. Starts equal to `taint`: a fresh turn's own
    * `from` (its principal, or the content it was sent) is intrinsic to it by
@@ -194,16 +204,24 @@ export function makeSnapshot(
     tenant,
     currentTaint: () => taint,
     intrinsicTaint: () => intrinsic,
-    raiseTaint(tier) {
+    taintOrigin: () => origine,
+    raiseTaint(tier, origin) {
       if (tier > taint) {
         taint = tier;
+        // L'etichetta cambia **solo** quando cambia il numero: è ciò che le
+        // impedisce di raccontare una provenienza che non è quella per cui il
+        // turno è gated adesso. Una salita senza nome cancella un nome vecchio
+        // che sarebbe diventato falso — meglio nessuna ragione che una
+        // sbagliata (ADR-0075 punto 4).
+        origine = origin ?? null;
         cache.clear(); // decisions taken at a lower taint no longer apply
       }
       if (tier > intrinsic) intrinsic = tier;
     },
-    raiseCeiling(tier) {
+    raiseCeiling(tier, origin) {
       if (tier > taint) {
         taint = tier;
+        origine = origin ?? null;
         cache.clear();
       }
       // `intrinsic` is deliberately left alone: this is exactly the raise that

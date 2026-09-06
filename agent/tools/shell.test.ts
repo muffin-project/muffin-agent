@@ -112,12 +112,35 @@ describe('le due corsie attraverso il kernel', () => {
     expect(chiedi(shellWriteCapability.id, { hardened: true, taint: 1 }).effect).toBe('ask');
   });
 
-  it('taint 3 è oltre il soffitto della riga host per entrambe', () => {
+  /**
+   * **Riscritto da ADR-0075 punto 1.** Asseriva che a taint 3 entrambe le
+   * corsie fossero fuori dal soffitto della riga `host`. Quella riga era
+   * l'ultima cosa che il taint negava sull'host, ed è la frase che l'owner ha
+   * letto sull'installazione vera il 06/09: `context taint 3 exceeds 2 for
+   * sys.shell (host)` — dopo una ricerca web, niente shell fino a una
+   * conversazione nuova.
+   *
+   * Il divieto non comprava sicurezza: la corsia in sola lettura non scrive
+   * fuori dallo scratch e non ha rete (è la ragione per cui è `reversible:
+   * 'yes'`), e quella che scrive è `reversible: 'no'` e **chiede comunque**, a
+   * taint 0 come a taint 3. Quindi a taint 3 la prima passa e la seconda
+   * chiede, esattamente come a taint 0 — e il taint compare nella domanda come
+   * ragione visibile, non come muro (`agent/loop/tool-call.ts`).
+   */
+  it('taint 3: la corsia in sola lettura passa e quella che scrive chiede, come a taint 0 (ADR-0075)', () => {
+    expect(chiedi(shellCapability.id, { hardened: true, taint: 3 }).effect).toBe('allow');
+    expect(chiedi(shellWriteCapability.id, { hardened: true, taint: 3 }).effect).toBe('ask');
+    // E il soffitto resta una manopola: un `policy.json` sigillato che rimette
+    // `host.denyAbove: 2` fa tornare il rifiuto per entrambe.
+    const stretto = createDecide({
+      ...base,
+      hardened: true,
+      matrix: { ...POLICY_FLOOR, rows: { ...POLICY_FLOOR.rows, host: { asksForIrreversible: true, denyAbove: 2 } } },
+    });
     for (const id of [shellCapability.id, shellWriteCapability.id]) {
-      expect(chiedi(id, { hardened: true, taint: 3 })).toMatchObject({
-        effect: 'deny',
-        code: 'taint_exceeded',
-      });
+      expect(
+        stretto({ principal: ctx.principal, tenant: 'host', capability: id, resource: { kind: 'none' }, args: { command: 'ls' }, taint: 3 }),
+      ).toMatchObject({ effect: 'deny', code: 'taint_exceeded' });
     }
   });
 
@@ -307,9 +330,10 @@ describe('what a command hands back is disk content', () => {
     // una per cella: la corsia che scrive chiede a ogni taint sotto il soffitto
     // (a 0 come a 2, con la stessa frase: il taint non è più la ragione, e la
     // scorciatoia hardened non c'è più); la corsia in sola lettura passa a
-    // ogni taint sotto il soffitto; e sopra il soffitto della riga `host`
-    // entrambe sono negate (ADR-0044, invariato). Allargare di nuovo quel
-    // soffitto richiede un test nel diff, come questo.
+    // ogni taint sotto il soffitto; e — da ADR-0075 — quel soffitto sulla riga
+    // `host` è 3, cioè non c'è più nessun taint che le neghi: la stessa cella
+    // a 3 dà la stessa risposta che dà a 0. Rimetterlo giù richiede un test nel
+    // diff, come questo.
     const decide = createDecide({
       capabilities: new Map([
         [shellCapability.id, shellCapability],
@@ -333,11 +357,14 @@ describe('what a command hands back is disk content', () => {
     const dopoUnaLettura = at(shellWriteCapability.id, DISK_TIER);
     expect(dopoUnaLettura.effect).toBe('ask');
     expect(at(shellWriteCapability.id, 0)).toEqual(dopoUnaLettura);
-    const oltre = at(shellWriteCapability.id, 3);
-    expect(oltre).toMatchObject({ effect: 'deny', code: 'taint_exceeded' });
+    // E a 3 — il livello che una ricerca web produce — la risposta è ancora la
+    // stessa domanda, non un rifiuto: è tutto ciò che ADR-0075 cambia qui.
+    expect(at(shellWriteCapability.id, 3)).toEqual(dopoUnaLettura);
 
-    expect(at(shellCapability.id, 0).effect).toBe('allow');
-    expect(at(shellCapability.id, 1).effect).toBe('allow');
-    expect(at(shellCapability.id, DISK_TIER).effect).toBe('allow');
+    for (const taint of [0, 1, DISK_TIER, 3] as const) {
+      expect(`sola lettura@${taint}: ${at(shellCapability.id, taint).effect}`).toBe(
+        `sola lettura@${taint}: allow`,
+      );
+    }
   });
 });

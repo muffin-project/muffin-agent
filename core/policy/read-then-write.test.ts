@@ -134,8 +134,46 @@ describe('leggere un file spegne la scrittura per il resto del turno', () => {
     expect(d).toEqual(chiedi(0));
   });
 
-  it('a taint 3 resta un rifiuto: la riga si è alzata di un gradino, non è sparita', () => {
+  /**
+   * **Riscritta da ADR-0075.** Fino al 06/09 questo test asseriva che a taint
+   * 3 la scrittura restava un `deny/taint_exceeded` — «la riga si è alzata di
+   * un gradino, non è sparita». Il gradino è stato misurato dove finisce: nove
+   * turni su quattordici in privato a taint 3 il 06/09, cioè dopo una ricerca
+   * web niente scrittura e niente shell fino a una conversazione nuova.
+   *
+   * Il rifiuto non comprava niente *qui*: la cosa che si stava negando ha una
+   * copia e un `muffin undo` dietro. Quindi la scrittura resta `draft` anche a
+   * taint 3, e il taint compare dove serve — nel testo di ciò che chiede
+   * (`agent/loop/tool-call.ts`) — invece che come un muro.
+   */
+  it('a taint 3 la scrittura con undo resta un draft, identico al turno pulito (ADR-0075)', () => {
     const d = chiedi(3);
+    expect(d.effect).toBe('draft');
+    expect(d).toEqual(chiedi(0));
+  });
+
+  /**
+   * E il muro è una **manopola**, non una riga cancellata: un `policy.json`
+   * sigillato che rimette `host.denyAbove: 2` lo rimette davvero, perché
+   * `tighterRows` stringe. Senza questa metà, ADR-0075 sarebbe
+   * indistinguibile da «il soffitto è stato tolto dal codice» — ed è la stessa
+   * distinzione che ADR-0072 ha già dovuto provare per `searchMaxTaint`.
+   */
+  it('un policy.json che rimette host.denyAbove a 2 vince, e il rifiuto torna', () => {
+    const stretto = createDecide({
+      capabilities: decls,
+      matrix: { ...POLICY_FLOOR, rows: { ...POLICY_FLOOR.rows, host: { asksForIrreversible: true, denyAbove: 2 } } },
+      budgetExhausted: () => false,
+      hardened: false,
+    });
+    const d = stretto({
+      principal: owner,
+      capability: 'fs.write',
+      tenant: 'host',
+      taint: 3,
+      resource: { kind: 'path', value: '/w/out.txt' },
+      args: { path: 'out.txt', content: 'x' },
+    });
     expect(d.effect).toBe('deny');
     expect(d.effect === 'deny' && d.code).toBe('taint_exceeded');
   });
@@ -145,7 +183,7 @@ describe('leggere un file spegne la scrittura per il resto del turno', () => {
     // capability, questo test lo nomina: è la forma che ha prodotto la deriva.
     expect(decls.get('fs.write')?.effect).toBe('host');
     expect(decls.get('fs.write')?.maxTaint).toBeUndefined();
-    expect(POLICY_FLOOR.rows.host).toEqual({ asksForIrreversible: true, denyAbove: 2 });
+    expect(POLICY_FLOOR.rows.host).toEqual({ asksForIrreversible: true, denyAbove: 3 });
     // La classe di rischio resta `medium` e continua a decidere altro — se la
     // scrittura sia un `draft` o un `allow`, il safe mode, il budget, la coda
     // degli autonomi — ma non il soffitto, e da ADR-0074 nemmeno l'`ask`.
