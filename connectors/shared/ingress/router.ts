@@ -216,6 +216,7 @@ export async function receive(port: IngressPort, event: InboundEvent, hooks: Ing
  * Telegram's `resolveBound` re-entered `runFresh`.
  */
 async function walk(ctx: Ingressing, hooks: IngressHooks, from: IngressStage): Promise<IngressOutcome> {
+  assertPortHonest(ctx.port, hooks);
   let live: LiveWork | undefined;
   const openLive = async (): Promise<LiveWork> => {
     live ??= await hooks.openLive(ctx);
@@ -252,6 +253,42 @@ async function walk(ctx: Ingressing, hooks: IngressHooks, from: IngressStage): P
   } finally {
     await live?.close();
   }
+}
+
+/**
+ * A port's declaration and the hooks it hands in must say the same thing.
+ *
+ * §2.3 is explicit that a second capability record beside `Surface` would be
+ * "two literals that agreed today and had no reason to keep agreeing
+ * tomorrow", and `makeIngressPort` already refuses the one pair it can see at
+ * construction (`ingress.edit` against `surface.streaming.transport`). This is
+ * the same check for the one capability whose evidence only exists here:
+ * `commands` has no field on `Surface` and no shape a type can enforce, only a
+ * hook that is either wired or not.
+ *
+ * Both directions, because both are real defects. A port that **declares**
+ * commands and wires none would make slice 16's parity table claim a scene
+ * that cannot run — the axis would say Discord answers `/stop` while
+ * `agent/comandi.ts` never sees a line from it. A port that **runs** commands
+ * it does not declare is the mirror: the table would record a divergence that
+ * production does not have, and the first reader to trust it would be wrong in
+ * the safe-looking direction.
+ *
+ * The other four capabilities are not checked here, and the reason is that
+ * they have no hook to check against: `buttons` is answered by an `Approver`
+ * registered in `cli/surface.ts`, `typing` and `upload` live inside
+ * `openLive`/`ingest` closures the router only ever calls, and `ingest` is
+ * legitimately absent for an event with nothing attached — an absence that
+ * says "no attachment here", never "this port cannot receive one".
+ */
+function assertPortHonest(port: IngressPort, hooks: IngressHooks): void {
+  const wired = hooks.command !== undefined;
+  if (port.ingress.commands === wired) return;
+  throw new Error(
+    port.ingress.commands
+      ? `ingress port "${port.surface.id}": ingress.commands=true but no command hook is wired`
+      : `ingress port "${port.surface.id}": a command hook is wired but ingress.commands=false`,
+  );
 }
 
 type Step = { readonly kind: 'step'; readonly outcome: StageOutcome } | { readonly kind: 'divert'; readonly to: IngressStage };
