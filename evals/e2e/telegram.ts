@@ -352,6 +352,35 @@ try {
       esito('trascrizione · niente cancellato', !c.some((x) => x.method === 'deleteMessage'), `${String(c.filter((x) => x.method === 'deleteMessage').length)} deleteMessage`);
 
       /**
+       * B11 in privato, dopo la decisione dell'owner del 06/09/2026:
+       * `Surface.negotiate('direct')` dichiara `['draft','edit','off']` con
+       * `draftTtlMs` 30 s, quindi il filo deve contenere `sendMessageDraft`,
+       * con lo **stesso** `draft_id` per tutto il turno, e senza mai un buco
+       * piu' lungo della finestra dichiarata.
+       *
+       * Perche' qui e non solo nell'unita': l'unita' misura il timer con un
+       * orologio finto, e un timer perfetto che nessuno arma non si vede.
+       * Solo il filo di un bot vero dice che la Bot API ha davvero ricevuto
+       * un rinnovo, e che l'ha ricevuto in tempo. Il rosso che questo passo
+       * esiste per catturare e' esattamente il difetto della PR #388 letto al
+       * contrario: una bolla mostrata una volta e mai piu' rinnovata.
+       */
+      const bozze = c.filter((x) => x.method === 'sendMessageDraft');
+      const idBozza = new Set(bozze.map((x) => String(x.payload['draft_id'] ?? '')));
+      esito(
+        'B11 privato · l\'anteprima esiste e ha un solo draft_id per turno',
+        bozze.length > 0 && idBozza.size === 1 && !idBozza.has('') && !idBozza.has('0'),
+        `${String(bozze.length)} sendMessageDraft, draft_id: ${[...idBozza].join(', ') || 'nessuno'}`,
+      );
+      const tempi = bozze.map((x) => Date.parse(x.at));
+      const buco = tempi.slice(1).reduce((m, t, i) => Math.max(m, t - tempi[i]!), 0);
+      esito(
+        'B11 privato · rinnovata dentro la finestra dichiarata (30 s)',
+        bozze.length > 1 && buco < 30_000,
+        bozze.length > 1 ? `buco massimo fra due rinnovi: ${String(buco)}ms` : 'una sola anteprima: nessun rinnovo osservato',
+      );
+
+      /**
        * Lo **stato finale** del messaggio della trascrizione, non l'esistenza
        * di una scrittura qualsiasi.
        *

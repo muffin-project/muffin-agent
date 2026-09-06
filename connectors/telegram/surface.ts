@@ -1,5 +1,6 @@
 import { statSync } from 'node:fs';
-import { DELIVERED, notDelivered, type DeliveryOutcome, type FileSpec, type Surface } from '../../core/surface/types.js';
+import { DELIVERED, fileModeFor, notDelivered, type DeliveryOutcome, type FileSpec, type Surface } from '../../core/surface/types.js';
+import { negoziazioneTelegram, stanzaDi, TELEGRAM_PLACES } from './negoziazione.js';
 import type { TelegramApiLike } from './api.js';
 import { MAX_DOWNLOAD_BYTES, sendDocument } from './media.js';
 import { renderForTelegram, TELEGRAM_MAX } from './render.js';
@@ -75,6 +76,13 @@ export function telegramSurface(api: TelegramApiLike, ownerChatId: number | unde
     // (`TelegramConnector.handle`) is capable of.
     streaming: { transport: 'edit' },
 
+    // La tabella `(porta, stanza)` del 06/09/2026, letta da `negoziazione.ts`
+    // e da nessun letterale qui: chi consuma la negoziazione (la trascrizione
+    // del turno vivo) e chi la verifica (`assertNegotiable`, `parita.test.ts`)
+    // guardano lo stesso oggetto.
+    places: TELEGRAM_PLACES,
+    negotiate: negoziazioneTelegram,
+
     handles: (channel) => chatIdFor(channel, ownerChatId) !== null,
 
     deliver: async (channel, text): Promise<DeliveryOutcome> => {
@@ -127,10 +135,20 @@ export function telegramSurface(api: TelegramApiLike, ownerChatId: number | unde
       // Checked here, before a multipart upload is even built: failing fast on
       // a file the Bot API would reject anyway is cheaper than discovering it
       // after reading the bytes into memory and opening the connection.
-      if (bytes > limits.maxUploadBytes) {
-        return notDelivered(
-          `${(bytes / 1e6).toFixed(1)}MB, oltre il limite di ${(limits.maxUploadBytes / 1e6).toFixed(0)}MB di sendDocument`,
-        );
+      // La catena `files` decide, e per un file troppo grande la stanza
+      // risponde `'say'`: prima del 06/09/2026 la risposta era
+      // `{delivered:false}`, cioè «non te lo do» senza dire dove sta.
+      const modo = fileModeFor(negoziazioneTelegram(stanzaDi({ isPrivate: chatId > 0 })), limits, bytes);
+      if (modo !== 'native') {
+        const dove =
+          `${file.filename} è pronto ma pesa ${(bytes / 1e6).toFixed(1)}MB, oltre il limite di ` +
+          `${(limits.maxUploadBytes / 1e6).toFixed(0)}MB di sendDocument: sta in ${file.absolutePath}`;
+        try {
+          await api.sendMessage(chatId, dove);
+          return DELIVERED;
+        } catch (error) {
+          return notDelivered(`telegram ha rifiutato anche il messaggio con il percorso: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
 
       try {

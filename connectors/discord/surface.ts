@@ -1,5 +1,5 @@
 import { readFileSync, statSync } from 'node:fs';
-import { DELIVERED, notDelivered, type DeliveryOutcome, type FileSpec, type Surface } from '../../core/surface/types.js';
+import { DELIVERED, fileModeFor, notDelivered, type DeliveryOutcome, type FileSpec, type Negotiation, type Place, type Surface } from '../../core/surface/types.js';
 import type { DiscordApi } from './api.js';
 import { DISCORD_MAX, renderForDiscord } from './render.js';
 import { makeIngressPort, type IngressPort } from '../shared/ingress/types.js';
@@ -53,6 +53,22 @@ async function resolveChannelId(api: DiscordApi, channelId: string, ownerUserId:
 /** L'id di questa porta, scritto una volta — vedi `TELEGRAM_ID`. */
 export const DISCORD_ID = 'discord';
 
+/** L'unica stanza che questa porta serve: `parseMessage` accetta solo DM. */
+export const DISCORD_PLACES: readonly Place[] = ['direct'] as const;
+
+/** Niente in diretta, un allegato vero sotto il tetto, poi il percorso a parole. */
+const DISCORD_DM: Negotiation = {
+  stream: ['off'],
+  editEveryMs: 0,
+  maxEditsPerMinute: 0,
+  draftTtlMs: 0,
+  files: ['native', 'say'],
+};
+
+export function negoziazioneDiscord(place: Place): Negotiation {
+  return place === 'direct' ? DISCORD_DM : { stream: ['off'], editEveryMs: 0, maxEditsPerMinute: 0, draftTtlMs: 0, files: ['say'] };
+}
+
 export function discordSurface(api: DiscordApi, ownerUserId: string | undefined): Surface {
   // N1 (judge, PR #42): `deliverFile`'s size check used to hand-write
   // `10 * 1024 * 1024` again instead of reading the number it had already
@@ -71,6 +87,15 @@ export function discordSurface(api: DiscordApi, ownerUserId: string | undefined)
     // answer today, not a placeholder for "not implemented yet" — nothing in
     // this file has ever progressively rewritten a message.
     streaming: { transport: 'off' },
+
+    // Dichiarato com'è **oggi**, non come sarà: `connectors/discord/
+    // connector.ts` non riscrive mai un messaggio già inviato (il suo
+    // `streaming.transport` è `'off'` da sempre) e `parseMessage` accetta
+    // solo DM uno-a-uno, quindi l'unica stanza che questa porta serve è
+    // `'direct'`. Promettere `'edit'` qui renderebbe falsa la tabella di
+    // `parita.test.ts` il giorno in cui viene scritta.
+    places: DISCORD_PLACES,
+    negotiate: negoziazioneDiscord,
 
     handles: (channel) => channelIdFor(channel, ownerUserId) !== null,
 
@@ -111,10 +136,20 @@ export function discordSurface(api: DiscordApi, ownerUserId: string | undefined)
       } catch (error) {
         return notDelivered(`${file.absolutePath} non è leggibile: ${error instanceof Error ? error.message : String(error)}`);
       }
-      if (bytes > limits.maxUploadBytes) {
-        return notDelivered(
-          `${(bytes / 1e6).toFixed(1)}MB, oltre il limite di upload di ${(limits.maxUploadBytes / 1e6).toFixed(0)}MB (Nitro alza il tetto ma non è verificato qui)`,
-        );
+      // Stessa catena di Telegram, stesso fondo: un file troppo grande non è
+      // un fallimento muto, è un percorso detto a parole.
+      if (fileModeFor(negoziazioneDiscord('direct'), limits, bytes) !== 'native') {
+        const target2 = await resolveChannelId(api, target, ownerUserId).catch(() => null);
+        if (target2 === null) return notDelivered(`impossibile aprire il DM con l'owner per dire dove sta ${file.filename}`);
+        try {
+          await api.sendMessage(
+            target2,
+            `${file.filename} è pronto ma pesa ${(bytes / 1e6).toFixed(1)}MB, oltre il limite di upload di ${(limits.maxUploadBytes / 1e6).toFixed(0)}MB (Nitro alza il tetto ma non è verificato qui): sta in ${file.absolutePath}`,
+          );
+          return DELIVERED;
+        } catch (error) {
+          return notDelivered(`discord ha rifiutato anche il messaggio con il percorso: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
 
       let channelId: string;
