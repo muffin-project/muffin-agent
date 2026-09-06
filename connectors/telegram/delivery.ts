@@ -65,7 +65,9 @@ export class TelegramDeliveryStore {
     // sopra è un no-op e ogni INSERT qui sotto fallirebbe. L'ALTER è
     // idempotente perché la condizione è la presenza della colonna, non il
     // numero di versione di qualcosa.
-    const colonne = db.prepare(`PRAGMA table_info(telegram_delivery_parts)`).all() as { name: string }[];
+    const colonne = db.prepare(`PRAGMA table_info(telegram_delivery_parts)`).all() as {
+      name: string;
+    }[];
     if (!colonne.some((c) => c.name === 'thread_id')) {
       db.exec(`ALTER TABLE telegram_delivery_parts ADD COLUMN thread_id INTEGER`);
     }
@@ -132,7 +134,13 @@ export class TelegramDeliveryStore {
     );
   }
 
-  sent(turnId: string, partIndex: number, attemptId: string, messageId: number | null, at: string): boolean {
+  sent(
+    turnId: string,
+    partIndex: number,
+    attemptId: string,
+    messageId: number | null,
+    at: string,
+  ): boolean {
     return (
       this.db
         .prepare(
@@ -148,7 +156,13 @@ export class TelegramDeliveryStore {
     this.finishAttempt(turnId, partIndex, attemptId, 'rejected', reason, at);
   }
 
-  possiblySent(turnId: string, partIndex: number, attemptId: string, reason: string, at: string): void {
+  possiblySent(
+    turnId: string,
+    partIndex: number,
+    attemptId: string,
+    reason: string,
+    at: string,
+  ): void {
     this.finishAttempt(turnId, partIndex, attemptId, 'possibly_sent', reason, at);
   }
 
@@ -201,7 +215,9 @@ export async function deliverTelegram(
               ...(part.replyTo === null ? {} : { replyTo: part.replyTo }),
             });
       const messageId =
-        typeof response === 'object' && response !== null && 'message_id' in response &&
+        typeof response === 'object' &&
+        response !== null &&
+        'message_id' in response &&
         typeof response.message_id === 'number'
           ? response.message_id
           : part.editMessageId;
@@ -210,6 +226,20 @@ export async function deliverTelegram(
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
+      // Un edit che Telegram rifiuta perché il testo è **già quello** non è
+      // una consegna fallita: il messaggio sullo schermo è esattamente ciò
+      // che volevamo scrivere. Succede a ogni riavvio del gateway: gli
+      // update in sospeso vengono rielaborati e l'edit finale riscrive un
+      // messaggio identico. Misurato sull'installazione dell'owner il 06/09
+      // dopo `muffin update`: cinque `update … fallito — Telegram 400: Bad
+      // Request: message is not modified` in un secondo, e `doctor` che
+      // contava otto consegne non confermate per un testo che era già lì.
+      if (part.operation === 'edit' && isNotModified(error)) {
+        if (!store.sent(turnId, part.partIndex, attemptId, part.editMessageId, now())) {
+          return 'possibly_sent';
+        }
+        continue;
+      }
       if (error instanceof TelegramError && error.status > 0) {
         store.rejected(turnId, part.partIndex, attemptId, reason, now());
         throw error;
@@ -219,4 +249,17 @@ export async function deliverTelegram(
     }
   }
   return 'sent';
+}
+
+/**
+ * `400 Bad Request: message is not modified` — la stringa stabile della Bot
+ * API per un `editMessageText` con testo e markup identici a quelli già sul
+ * messaggio. Solo su 400 e solo quel testo: ogni altro 4xx resta un rifiuto.
+ */
+function isNotModified(error: unknown): boolean {
+  return (
+    error instanceof TelegramError &&
+    error.status === 400 &&
+    /message is not modified/i.test(error.description)
+  );
 }
