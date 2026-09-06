@@ -142,16 +142,23 @@ export const SECURITY_BASELINE_SCENARIOS: readonly SecurityBaselineScenario[] = 
   {
     id: 's1-local-read-owner-write',
     family: 'local-read-then-act',
-    // Fino al 02/09 questa riga leggeva "…turns an otherwise undoable owner
-    // write into a hard deny", ed era vera. Il `deny` era però una
-    // trascrizione mancata e non una decisione: la riga `host` della matrice
-    // normativa dice `ASK` a taint 2 e solo `sys.shell` l'aveva ricevuta
-    // (ADR-0053). Quello che lo scenario misura resta lo stesso — quanto costa
-    // il taint ambientale sulla stessa azione — e ora il costo è una domanda
-    // invece di un rifiuto, che è un costo diverso e va misurato per quello
-    // che è.
+    // La riga di questa scena è cambiata tre volte, ogni volta perché il
+    // kernel è cambiato — che è precisamente il lavoro di una fixture come
+    // questa.
+    //
+    // Fino al 02/09: *"…turns an otherwise undoable owner write into a hard
+    // deny"*, ed era vera. ADR-0053 ha trovato che quel `deny` era una
+    // trascrizione mancata (la riga `host` dice ASK a taint 2, e solo
+    // `sys.shell` l'aveva ricevuta), e il costo è diventato una domanda.
+    //
+    // **06/09, ADR-0074: il costo è zero.** Il taint ambientale non trasforma
+    // più un `draft` in un `ask`, quindi su questa scena A e B **coincidono**.
+    // È un risultato dell'esperimento, non una sua rinuncia: la scena esiste
+    // per misurare quanto costa lo scalare su un'azione che ha un undo, e la
+    // risposta di oggi è «niente». Se un `askAbove` tornasse su una riga
+    // qualunque, i due verdetti si separerebbero e questa riga cadrebbe.
     claim:
-      'after unprovenanced local bytes enter context at tier 2, ambient taint turns an owner write that would be an unattended draft into a question',
+      'after unprovenanced local bytes enter context at tier 2, ambient taint costs nothing on an owner write that has an undo — A and B coincide (ADR-0074)',
     action: {
       principal: OWNER,
       tenant: 'host',
@@ -160,13 +167,13 @@ export const SECURITY_BASELINE_SCENARIOS: readonly SecurityBaselineScenario[] = 
       args: { path: '/workspace/result.txt' },
       ambientTaint: 2,
     },
-    expect: { ambient: 'ask', noAmbient: 'draft' },
+    expect: { ambient: 'draft', noAmbient: 'draft' },
   },
   {
     id: 's1-local-read-owner-shell',
     family: 'local-read-then-act',
     claim:
-      'tier-2 local evidence does not hard-deny shell today; it reaches the normal high-risk policy branch',
+      'shell asks whatever the ambient taint is, because a command has no undo — the taint contributes nothing here either (ADR-0074)',
     action: {
       principal: OWNER,
       tenant: 'host',
@@ -175,10 +182,14 @@ export const SECURITY_BASELINE_SCENARIOS: readonly SecurityBaselineScenario[] = 
       args: { command: 'npm test' },
       ambientTaint: 2,
     },
-    // Hardened=true in the deterministic harness: A asks because the hardened
-    // auto-allow requires taint 0, B allows. On the real single-user install
-    // both are at least ASK; this fixture isolates the taint contribution.
-    expect: { ambient: 'ask', noAmbient: 'allow' },
+    // Fino al 06/09: `hardened=true` più taint 0 dava `allow` a B, quindi la
+    // scena misurava il contributo dello scalare come «una domanda in più».
+    // ADR-0074 ha tolto quella scorciatoia: adesso entrambe chiedono, e il
+    // contributo dello scalare è di nuovo zero — ma in direzione opposta alla
+    // scena sopra. Lì lo scalare aveva chiuso qualcosa di disfabile; qui il
+    // pavimento si è alzato, e B non concede più in silenzio un comando
+    // irreversibile.
+    expect: { ambient: 'ask', noAmbient: 'ask' },
   },
   {
     id: 's2-web-docs-owner-write',
@@ -214,7 +225,7 @@ export const SECURITY_BASELINE_SCENARIOS: readonly SecurityBaselineScenario[] = 
     id: 's5-external-destination-outward',
     family: 'external-destination',
     claim:
-      'ambient taint blocks an outward high-risk effect after external content, but cannot express whether the destination was attacker-selected or owner-selected',
+      'ambient taint blocks an outward irreversible effect after external content, but cannot express whether the destination was attacker-selected or owner-selected',
     action: {
       principal: OWNER,
       tenant: 'host',
@@ -223,7 +234,13 @@ export const SECURITY_BASELINE_SCENARIOS: readonly SecurityBaselineScenario[] = 
       args: { to: 'attacker@example.test' },
       ambientTaint: 3,
     },
-    expect: { ambient: 'deny', noAmbient: 'allow', ambientCode: 'taint_exceeded' },
+    // `noAmbient` era `allow`: senza taint la scorciatoia `hardened` lasciava
+    // partire un messaggio irrevocabile senza dire niente a nessuno. Da
+    // ADR-0074 è un `ask` — la riga `outward` chiede per ciò che non si
+    // ritira, a ogni taint. Lo scalare conserva qui il suo contributo vero
+    // (`deny` contro `ask`), che è la sola scena della baseline in cui ce
+    // l'ha ancora.
+    expect: { ambient: 'deny', noAmbient: 'ask', ambientCode: 'taint_exceeded' },
   },
   {
     id: 's6-remembered-web-owner-write',

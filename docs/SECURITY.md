@@ -178,12 +178,12 @@ The policy kernel is pure and deterministic. It decides from typed facts such as
 - canonical resource;
 - current taint;
 - the capability's **effect row** — where the bytes of the effect land — which
-  owns the taint ceiling and the threshold above which nothing on that row runs
-  unattended. The rows are the ones the threat model's matrix has always
-  printed, and since ADR-0053 the kernel executes that table instead of a risk
-  class plus a ceiling pinned by hand on each declaration. A declaration may
-  tighten its own row and never widen it; `core/policy/effect-rows.test.ts`
-  asserts every shipped cell;
+  owns the taint ceiling and says whether irreversibility is decisive on that
+  row. The rows are the ones the threat model's matrix has always printed, and
+  since ADR-0053 the kernel executes that table instead of a risk class plus a
+  ceiling pinned by hand on each declaration. A declaration may tighten its own
+  row and never widen it; `core/policy/effect-rows.test.ts` asserts every
+  shipped cell;
 - capability risk/reversibility/rerunnability metadata;
 - the two acts the turn performs **without a tool** — replying on the
   originating channel and writing a memory episode — which since ADR-0055 are
@@ -206,6 +206,50 @@ must fail closed rather than skip the relevant gate.
 
 The model never chooses its own risk class, taint ceiling or constitutional
 exception.
+
+### When the kernel asks a human, and when it does not (ADR-0074)
+
+A confirmation is requested **if and only if** the capability declares
+`reversible: 'no'` **and** its effect row declares `asksForIrreversible` — the
+host machine, third-party code (MCP), a new outward recipient. Nothing else in
+the risk/taint path produces one. A declaration with an undo executes as a
+`draft` — checkpoint first, effect second — at every taint below its ceiling.
+A declaration with nothing to take back, on a row where that does not decide
+(`surface.reply`, `memory.write`, `surface.send_file`), is allowed: a reply is
+the conversation itself, and an approval prompt that gates replies cannot be
+delivered.
+
+Three mechanisms this replaced, named because each one existed and decided
+things until 2026-09-06:
+
+- **Ambient taint no longer produces an `ask`.** It still refuses above the
+  row's ceiling (`denyAbove`, ADR-0044, unchanged) and still stamps
+  provenance; it no longer turns an `allow` or a `draft` into a question. §13
+  carries the measurement that decided this.
+- **`risk` no longer produces an `ask`.** It still decides safe mode, the
+  budget gate, and the fail-safe that *queues* a high-risk request from an
+  autonomous `system`/`agent` principal instead of auto-approving it.
+- **`hardened` no longer skips one.** The `hardened && owner && taint === 0`
+  auto-allow is gone: `muffin rot harden` answers "who may rewrite the rules",
+  not "can this command be undone".
+
+Egress is a separate authority and is untouched by this: model-composed bytes
+riding out in a URL's query or fragment still ask the owner and refuse every
+other principal (ADR-0071), and a search's text answers to its own ceiling
+(ADR-0072). Both remain sources of an `ask` that has nothing to do with the
+rule above.
+
+The approval text names the irreversible effect ("non si torna indietro:
+cambia questa macchina — `sys.shell`") plus the concrete action derived from
+the call's arguments. The turn's taint appears on the surfaces underneath it,
+as context — *this turn has read external content* — never as the cause.
+
+A sealed `rot/policy.json` may tighten a row in both of its fields: lower
+`denyAbove`, or turn `asksForIrreversible` on where the floor leaves it off.
+It may not turn one off. A file still carrying the removed `askAbove` field is
+**rejected** naming that field, and the kernel falls back to the compiled
+floor — an unknown key in the root of trust must not be read as a gate that no
+longer exists.
 
 A Node does **not** add another authority engine that can grant what the Home
 kernel refused. It contributes only a monotone local restriction. For a Node
@@ -653,13 +697,31 @@ status lives only in `docs/work/day1/requirements-status.md`.
 - **A security mechanism is not considered real merely because its module, ADR
   or unit tests exist.** Production wiring and failure-path evidence are
   required.
-- **Ambient context taint is the incumbent authority signal, and its precision
-  is an open question — not a settled one.** §4 and §5 use provenance tier both
-  as a property of data and, after taking the maximum over the context, as a
-  turn-wide authority input. Dogfood shows the cost: owner-directed work becomes
-  unreachable after reading disk or external content, even when that content did
-  not choose the action. A task/action-flow model — binding authority to *what
-  asked for an action* rather than to the highest tier merely present — is an
+- **Ambient context taint is the incumbent *ceiling*, and since 2026-09-06 it
+  is no longer a reason to ask.** §4 and §5 use provenance tier both as a
+  property of data and, after taking the maximum over the context, as a
+  turn-wide authority input. That is still true of the **ceiling**: above a
+  row's `denyAbove` the capability is out of reach, and ADR-0044 is unchanged.
+  It is no longer true of the confirmation. ADR-0074 removed `askAbove` from
+  the rows because the measurement said the gate was not gating what it was
+  for: on the real installation, **all 35 approvals ever requested were
+  `sys.shell` at taint 2, and 32 were granted** — a prompt conceded nine times
+  out of ten is a reflex, not a decision — while what the taint actually shut
+  down was `fs.write`, the one write in the system that takes a checkpoint and
+  has `muffin undo` behind it. The same signal appeared in the character eval:
+  5 of the 6 `agentic` failures of the main model were turns stopped on an
+  approval nobody was there to give (`docs/evidence/tool-use-2026-09-06.md`).
+  On a headless process — the VPS, a scheduler job — such a prompt is an
+  `exit 3`, which is a prohibition in disguise. A confirmation now follows
+  irreversibility, which is the question it was always for; the taint keeps the
+  ceiling, the provenance stamps and the context line on the prompt.
+
+  The precision of the ambient scalar **as a ceiling** remains an open
+  question, not a settled one. Dogfood shows the cost: owner-directed work
+  becomes unreachable after reading disk or external content, even when that
+  content did not choose the action. A task/action-flow model — binding
+  authority to *what asked for an action* rather than to the highest tier merely
+  present — is an
   **unresolved hypothesis**. It may replace the incumbent only if a comparative
   evaluation demonstrates better utility **without material security
   regression**, and an ADR written before that comparison exists would be
@@ -716,7 +778,19 @@ status lives only in `docs/work/day1/requirements-status.md`.
   §6.1) it names but does not close: `paramsMaxTaint` does not gate a group
   turn's first message, because that principal's own floor taint already
   equals the ceiling.
-  paragraph.
+
+  **2026-09-06 (ADR-0074): the third of those three guards changed shape.**
+  The corpus found that what stopped things was the egress allowlist, the
+  tool's own SSRF floor, and *a single approval prompt* — and this ADR moved
+  when that prompt fires. It no longer fires because the turn is tainted; it
+  fires because the act cannot be undone, on every taint including 0 and on a
+  hardened install. On the corpus's own terms the change cuts both ways and
+  neither direction is claimed here without a rerun: the scenes where the
+  attack completed *because the owner approved* are unaffected (the prompt was
+  shown and granted either way), while `sys.shell` at taint 0 — previously an
+  auto-allow under `hardened` — now prompts, and `fs.write` after a read no
+  longer does. The corpus has **not** been rerun against this kernel; the
+  numbers above describe the runs they name and are not restated as current.
 
 ## 14. What this document does not own
 

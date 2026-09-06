@@ -64,13 +64,15 @@ class Scripted implements Provider {
         if (b.type === 'tool_result' && b.content) this.seen.push(b.content);
       }
     }
-    return this.script[this.i++] ?? {
-      text: 'fine',
-      toolCalls: [],
-      stopReason: 'end',
-      usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
-      model: 'test',
-    };
+    return (
+      this.script[this.i++] ?? {
+        text: 'fine',
+        toolCalls: [],
+        stopReason: 'end',
+        usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        model: 'test',
+      }
+    );
   }
 }
 
@@ -211,7 +213,7 @@ describe('read-then-fetch, through a real turn — ADR-0066: reading is open, so
       tenant: 'host',
       surface: 'cli',
       session: h.deps.sessions.open('s3'),
-      text: 'guarda cosa c\'è qui',
+      text: "guarda cosa c'è qui",
     });
 
     expect(h.fetched).toEqual([EXFIL]);
@@ -246,7 +248,10 @@ describe('the price of the same rule, through the same turn', () => {
       callTool('fs_read', { path: 'nota.md' }),
       callTool('shell_run_write', { command: 'echo ciao' }),
     ]);
-    h.deps.capabilities = new Map([...h.deps.capabilities!, [shellWriteCapability.id, shellWriteCapability]]);
+    h.deps.capabilities = new Map([
+      ...h.deps.capabilities!,
+      [shellWriteCapability.id, shellWriteCapability],
+    ]);
     h.deps.decide = createDecide({
       matrix: POLICY_FLOOR,
       capabilities: new Map([...decls, shellWriteCapability].map((d) => [d.id, d])),
@@ -263,7 +268,11 @@ describe('the price of the same rule, through the same turn', () => {
         spec: {
           name: 'shell_run_write',
           description: 'run',
-          inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
+          inputSchema: {
+            type: 'object',
+            properties: { command: { type: 'string' } },
+            required: ['command'],
+          },
         },
         throwTier: 0,
         handler: () => {
@@ -283,7 +292,17 @@ describe('the price of the same rule, through the same turn', () => {
 
     // The owner was asked — not skipped, and not refused outright — and this
     // harness's `approve` says yes, so the command actually ran.
-    expect(h.approvals).toEqual(['sys.shell.write']);
+    //
+    // ADR-0074 changed the *wording* of that ask, not the verdict, and the
+    // assertion follows the words rather than being loosened to ignore them:
+    // the prompt leads with what cannot be taken back and names the capability
+    // after it. What did change is the reason: the ask no longer fires because
+    // the read raised the taint — it would have fired identically at taint 0,
+    // which `core/policy/solo-irreversibile.test.ts` asserts capability by
+    // capability.
+    expect(h.approvals).toEqual([
+      'non si torna indietro: cambia questa macchina — sys.shell.write',
+    ]);
     expect(ran).toEqual(['shell_run_write']);
   });
 
@@ -313,7 +332,11 @@ describe('the price of the same rule, through the same turn', () => {
       policyArgs: [],
       hostOnly: false,
     };
-    h.deps.capabilities = new Map([...h.deps.capabilities!, [shellWriteCapability.id, shellWriteCapability], [demoWebCapability.id, demoWebCapability]]);
+    h.deps.capabilities = new Map([
+      ...h.deps.capabilities!,
+      [shellWriteCapability.id, shellWriteCapability],
+      [demoWebCapability.id, demoWebCapability],
+    ]);
     h.deps.decide = createDecide({
       matrix: POLICY_FLOOR,
       capabilities: h.deps.capabilities,
@@ -325,7 +348,11 @@ describe('the price of the same rule, through the same turn', () => {
       ...h.deps.tools,
       {
         capability: demoWebCapability.id,
-        spec: { name: 'web_like', description: 'stands in for a tier-3 fetch', inputSchema: { type: 'object', properties: {} } },
+        spec: {
+          name: 'web_like',
+          description: 'stands in for a tier-3 fetch',
+          inputSchema: { type: 'object', properties: {} },
+        },
         throwTier: 0,
         handler: () => ({ content: 'contenuto dal web', tier: 3 as const }),
       },
@@ -334,7 +361,11 @@ describe('the price of the same rule, through the same turn', () => {
         spec: {
           name: 'shell_run_write',
           description: 'run',
-          inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
+          inputSchema: {
+            type: 'object',
+            properties: { command: { type: 'string' } },
+            required: ['command'],
+          },
         },
         throwTier: 0,
         handler: () => {
@@ -394,7 +425,11 @@ describe('the structural half: no tool can be born without answering', () => {
     // must say so, and one that only ever throws its own words must say 0.
     const tool: RegisteredTool = {
       capability: 'demo.read',
-      spec: { name: 'demo_read', description: 'r', inputSchema: { type: 'object', properties: {} } },
+      spec: {
+        name: 'demo_read',
+        description: 'r',
+        inputSchema: { type: 'object', properties: {} },
+      },
       handler: () => ({ content: 'ok', tier: 0 }),
     };
     expect(tool.capability).toBe('demo.read');
@@ -615,13 +650,21 @@ describe('sys.search now answers to the same kernel — mandato inv. 7 (P04-2)',
       hostOnly: false,
       maxTaint: 3,
     };
-    h.deps.capabilities = new Map([...h.deps.capabilities!, [searchCapability.id, searchCapability], [webish.id, webish]]);
+    h.deps.capabilities = new Map([
+      ...h.deps.capabilities!,
+      [searchCapability.id, searchCapability],
+      [webish.id, webish],
+    ]);
     h.deps.tools = [
       ...h.deps.tools,
       makeSearchTool(backend),
       {
         capability: webish.id,
-        spec: { name: 'web_like', description: 'stands in for a tier-3 fetch', inputSchema: { type: 'object', properties: {} } },
+        spec: {
+          name: 'web_like',
+          description: 'stands in for a tier-3 fetch',
+          inputSchema: { type: 'object', properties: {} },
+        },
         throwTier: 0,
         handler: () => ({ content: 'contenuto dal web', tier: 3 as const }),
       },
@@ -667,7 +710,7 @@ describe('sys.search now answers to the same kernel — mandato inv. 7 (P04-2)',
     expect(h.searched).toEqual(['MUFFIN-SECRET-9f3a7c21']);
   });
 
-  it('ma il cancello e\' una manopola, non una riga tolta: rimesso giu\', chiede', async () => {
+  it("ma il cancello e' una manopola, non una riga tolta: rimesso giu', chiede", async () => {
     const h = searchHarness([
       // In questo describe l'allowlist è vuota, quindi una fetch non può alzare
       // il turno: si usa il tool tier-3 dichiarato dall'harness, come fa il
