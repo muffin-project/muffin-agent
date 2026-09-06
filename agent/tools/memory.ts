@@ -66,10 +66,12 @@ export const memorySearchSpec: ToolSpec = {
   description:
     'Search your own memory: past conversations, documents and facts you have learned. ' +
     'Use it when the answer may depend on something said before, or on a name or detail you ' +
-    'have just come across. Results carry their source and how much it is trusted. ' +
+    'have just come across. Not for a fact about this running instance — model, provider, build, which tools ' +
+    'you can see — that is sys_inspect, not memory. Results carry their source and how much it is trusted. ' +
     'For a question about the past ("who was my accountant in May", "what did we decide back then"), ' +
     'set as_of to that date — without it you get what is true now, which is a wrong answer to a ' +
-    'question about then. Set history:true to see a belief and everything it replaced.',
+    'question about then. Set history:true to see a belief and everything it replaced. ' +
+    'Returns up to `limit` fragments, each with its provenance and trust tier. e.g. memory_search({query: "chi è il mio commercialista"}).',
   inputSchema: {
     type: 'object',
     properties: {
@@ -252,8 +254,10 @@ export const memoryWhySpec: ToolSpec = {
     'Explain why you believe something: the exact episode a fact came from, who said it (or which ' +
     'document), when, over which connector, and how much it is trusted. Use it whenever the owner asks ' +
     '"why do you think that" or "who told you that" — never invent a reason, look it up. ' +
+    'Not for finding a fact in the first place — call memory_search first, then explain the one it returns. ' +
     'Pass "fact_id" when you already have one; otherwise pass "query" describing the belief in ' +
-    'natural language and the closest matching fact is explained.',
+    'natural language and the closest matching fact is explained. Returns the provenance of one fact, or a ' +
+    'message saying none matched.',
   inputSchema: {
     type: 'object',
     properties: {

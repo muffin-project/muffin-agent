@@ -99,7 +99,8 @@ const todoSpec: ToolSpec = {
     'start of every turn, so you do not have to re-derive it. `plan` writes the steps (restate the whole ' +
     'list — repeating a step you already wrote does not duplicate it); `set` moves one step to ' +
     `${TODO_STATES.join(' | ')}; \`list\` shows it. Use it for work that takes more than one turn. ` +
-    'Nothing here executes anything: it records what you intend to do. ' +
+    'Not for a single step you are about to do right now — planning what you will do in the next call adds ' +
+    'bookkeeping with no benefit; just do it. Nothing here executes anything: it records what you intend to do. ' +
     '`due` is the one exception and the only way to remember something for a moment that is not now: ' +
     'it puts a date and time on a step, and at that moment Muffin says the step back to the owner, ' +
     'once, on their own channel — even in a conversation nobody has opened since. Use it when the owner ' +

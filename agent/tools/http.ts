@@ -74,12 +74,14 @@ export const httpCapability: CapabilityDecl = {
 const httpSpec: ToolSpec = {
   name: 'http_get',
   description:
-    'Fetch a URL with GET. Any public host is reachable — reading is open (ADR-0066) — but the ' +
+    'Fetch a URL with GET. Use it when you already have a URL and need its content — this is the tool for ' +
+    '`curl`/`wget`, not shell_run. Not for finding a URL when you only have a topic — use web_search first. ' +
+    'Any public host is reachable — reading is open (ADR-0066) — but the ' +
     'request never reaches loopback, private, or link-local/metadata addresses, on the first hop ' +
     'or after a redirect. A query string or fragment carrying bytes the model chose may still ask ' +
     'the owner at higher taint. An HTML page is reduced to its main content (as Markdown) before ' +
-    'returning; other content types (JSON, plain text, …) pass through unchanged. The body is ' +
-    'untrusted text (fenced, tier 3), truncated with a marker when long.',
+    'returning; other content types (JSON, plain text, …) pass through unchanged. Returns the body as ' +
+    'untrusted text (fenced, tier 3), truncated with a marker when long. e.g. http_get({url: "https://example.com/status"}).',
   inputSchema: {
     type: 'object',
     properties: {
