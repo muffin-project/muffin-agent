@@ -1,0 +1,101 @@
+# L'installazione è l'unica parte di Muffin che nessuna suite tocca.
+#
+# `verifica` (ci.yml) e `accettazione` girano dentro un albero **già** clonato,
+# già installato con `npm ci`, con Node già messo lì da `actions/setup-node`.
+# Cioè: esercitano tutto tranne i tre passi che una VPS vuota deve fare per
+# prima — procurarsi Node, procurarsi il codice, diventare un comando — e
+# quindi non hanno mai visto `install.sh` per intero. Il 04/09/2026 questo è
+# costato all'owner il Muffin installato: `prepare` chiamava uno script
+# cancellato, e nessun test è cambiato di colore perché `prepare` gira solo su
+# un albero pulito (`scripts/script-che-esistono.test.ts` ha chiuso quel
+# singolo buco, non la classe).
+#
+# Questo job è la classe: `evals/install/ubuntu.sh` fa il giro intero su una
+# macchina senza Node — PATH ripulito, HOME usa e getta, il repo servito da un
+# origin git locale che punta a **questo** commit — e chiede quattro cose
+# osservate, non dedotte: `install.sh` arriva in fondo da solo, `muffin doctor`
+# non ha righe rosse, la unit del supervisore esiste ed è accettata da systemd,
+# `muffin update` costruisce una release affiancata e `--rollback` torna
+# indietro. Il limite del container (nessuna istanza systemd utente) lo
+# dichiara lo script stesso, e nel caso prova la unit con `systemd-analyze
+# verify` più un avvio in primo piano del suo `ExecStart`.
+#
+# ## Il costo, detto e non nascosto
+#
+# È il job più lento del repository e non c'è modo di renderlo veloce senza
+# smettere di provare la cosa: `npm ci` con `better-sqlite3` nativo gira **due
+# volte** — una per l'installazione, una dentro la release che `muffin update`
+# costruisce — più il download del tarball di Node. Il tetto è quindi alto di
+# proposito: un `timeout-minutes` non è un budget, è ciò che uccide un run
+# appeso (stessa ragione scritta per esteso in `accettazione.yml`).
+#
+# ## Il filtro
+#
+# `paths` nomina ciò che può rompere l'installazione e nient'altro:
+# l'installer, la prova, i comandi che l'installer esegue (`cli/init`,
+# `cli/doctor`, `cli/update`, `cli/gateway`), la unit del supervisore, e il
+# manifesto/lock da cui dipende il build. Una PR che tocca solo il runtime
+# dell'agente non paga questo giro.
+
+name: install
+
+on:
+  pull_request:
+    paths:
+      - 'install.sh'
+      - 'evals/install/**'
+      - 'cli/**'
+      - 'core/gateway/**'
+      - 'core/config/config.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/install.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'install.sh'
+      - 'evals/install/**'
+      - 'cli/**'
+      - 'core/gateway/**'
+      - 'core/config/config.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/install.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      # `fetch-depth: 0` e non il default 1: la prova crea un origin git da
+      # questo checkout e ci fa girare `muffin update`, che conta i commit fra
+      # due sha. Con un clone superficiale quel conteggio non ha una storia da
+      # attraversare.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Serve al runner (e a `scripts/ci-local.ts`, che deriva da qui quale Node
+      # installare nel container), NON alla prova: `evals/install/ubuntu.sh`
+      # costruisce un PATH ripulito da cui `node` è irraggiungibile, e si
+      # rifiuta di proseguire se lo trova ancora. È esattamente il prerequisito
+      # che `install.sh` deve risolvere da solo.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # systemd per `systemd-analyze verify`, che è il pezzo di verifica della
+      # unit che un container può davvero fare (stessa ragione per cui
+      # `evals/acceptance/gate-linux.sh` lo installa).
+      - name: systemd, per verificare la unit
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq systemd
+
+      - name: da una macchina vuota a un agente supervisionato
+        run: bash evals/install/ubuntu.sh
