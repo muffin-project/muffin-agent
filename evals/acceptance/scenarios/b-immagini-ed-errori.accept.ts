@@ -225,15 +225,19 @@ describe('acceptance · B10 · telegram — immagini ed errori', () => {
       try {
         const gw = await pairOwner(inst, tg, OWNER_ID);
         try {
-          // One rejection, for the *delivery*'s own edit — not the
-          // transcript's decorative creation (`transcript.ts` swallows its
-          // own failures on purpose; this rejection is aimed at the call
-          // `deliverTelegram`/`TelegramDeliveryStore` actually track,
-          // confirmed against this exact shape: a plain, tool-less reply
-          // lands as one `sendMessage` (the transcript's own segment) and
-          // one `editMessageText` (`deliverTo`'s handoff-based delivery of
-          // that same text) — the second call is the one this line fails.
-          tg.guasta('editMessageText', 400, 'Bad Request: fake rejection (B10-errori)');
+          // One rejection, for the *delivery*'s own call — not the
+          // transcript's preview (`transcript.ts` swallows its own failures
+          // on purpose; this rejection is aimed at the call
+          // `deliverTelegram`/`TelegramDeliveryStore` actually track).
+          // Confirmed against the private-chat shape after the per-room
+          // negotiation (#460): the answer forms in a `sendMessageDraft`
+          // preview, which is not a message, and the one real message is
+          // the delivery's own `sendMessage` — so that is the call this
+          // line fails. Before #460 the shape was a transcript `sendMessage`
+          // plus a delivery `editMessageText`, and the rejection sat on the
+          // edit; a rejection planted on a call the delivery no longer
+          // makes is never consumed, and this scenario waited forever.
+          tg.guasta('sendMessage', 400, 'Bad Request: fake rejection (B10-errori)');
           tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'dimmi qualcosa'));
 
           await until(() => {
