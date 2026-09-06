@@ -327,7 +327,14 @@ export async function guidaIlTurno(
   // model, which the row pins. The legitimate direction of change in between —
   // a tightened permission matrix — is one a resume should *inherit*, not one
   // it should carry a stale copy past.
-  const exposed = visibleTools(deps.tools, input.principal, deps.capabilities).slice(
+  const exposed = visibleTools(
+    deps.tools,
+    input.principal,
+    deps.capabilities,
+    // `input.tenant` e non il tenant del principal: sono lo stesso valore, e
+    // questo è quello su cui il kernel deciderà fra due righe.
+    deps.grants?.get(input.tenant),
+  ).slice(
     0,
     deps.profile.maxToolsExposed,
   );

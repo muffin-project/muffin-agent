@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { paths } from '../config/config.js';
-import type { CapabilityId, EffectRow, RiskClass, TrustTier } from './types.js';
+import type { CapabilityId, EffectRow, RiskClass, TenantId, TrustTier } from './types.js';
 
 /**
  * The permission matrix, read from the root of trust — the first real reader of
@@ -68,7 +68,116 @@ const PolicyFileSchema = z.object({
         .strict(),
     )
     .optional(),
+  /**
+   * **Le stanze che ricevono qualcosa in più, per nome — ADR-0073 punto 1.**
+   *
+   * L'unico campo di questo file che *allarga*, e l'asimmetria è deliberata:
+   * restringere non chiede mai (ogni altro campo qui sopra è tighten-only),
+   * allargare si scrive nel sigillo, dove serve una modifica al file **e** un
+   * `muffin rot reseal` dell'owner. È la forma di Progent, e la ragione per
+   * cui esiste è misurata: senza, la sola manopola disponibile sarebbe
+   * togliere `hostOnly` a una capability in TypeScript, cioè concederla a
+   * *ogni* stanza in una volta.
+   *
+   * Un grant **aggiunge** a una stanza nominata (`group:…`, `community:…`) le
+   * capability che in quella stanza smettono di essere `hostOnly`. Non toglie
+   * mai niente a `host`, non nomina mai un insieme di stanze (`group:*` è
+   * rifiutato), e non può nominare ciò che sta in `MAI_CONCEDIBILI`.
+   * `.strict()` sul valore per la stessa ragione di `rows`: una chiave che
+   * questa build non capisce, dentro un blocco che concede privilegi, deve
+   * fermare il file invece di essere ignorata in silenzio.
+   */
+  tenants: z
+    .record(z.string(), z.object({ grants: z.array(z.string().min(1)) }).strict())
+    .optional(),
+}).superRefine((file, ctx) => {
+  // Il rifiuto nomina **il campo**, come per `askAbove`: `loadPolicyMatrix`
+  // costruisce la nota di fallback da `issue.path`, quindi `muffin doctor`
+  // stampa `tenants.group:telegram:42.grants.0` e l'owner sa quale riga
+  // riscrivere. Un grant rifiutato in silenzio sarebbe la stessa classe di
+  // guasto di un `askAbove` letto e scartato: il file promette qualcosa che il
+  // kernel non fa. Qui il verso è l'altro — il file promette *meno* di quel
+  // che ha scritto — e il fallback è comunque la direzione chiusa, perché il
+  // pavimento non concede niente a nessuna stanza.
+  for (const [tenantId, entry] of Object.entries(file.tenants ?? {})) {
+    const perche = tenantNonNominabile(tenantId);
+    if (perche !== null) {
+      ctx.addIssue({ code: 'custom', path: ['tenants', tenantId], message: perche });
+      continue;
+    }
+    entry.grants.forEach((capability, index) => {
+      const why = nonConcedibile(capability);
+      if (why !== null) {
+        ctx.addIssue({ code: 'custom', path: ['tenants', tenantId, 'grants', index], message: why });
+      }
+    });
+  }
 });
+
+/**
+ * **La lista chiusa di ciò che nessun sigillo può concedere a una stanza.**
+ *
+ * Scritta qui, in codice sotto revisione, e non nel file che la userebbe: il
+ * file sigillato e la dichiarazione non sono lo stesso dominio di fiducia
+ * (`merge` sotto lo argomenta per `defaultMaxTaint`), e una lista di divieti
+ * che vive nello stesso file che concede è una lista che chi concede può
+ * accorciare.
+ *
+ * Le voci, e perché ciascuna:
+ *
+ * - `sys.shell`, `sys.shell.*` — direzione owner del 04/09, alla lettera:
+ *   *«shell no»*. Una stanza non ha una macchina.
+ * - `sys.process.*` — gli stessi processi, dalla porta accanto.
+ * - `fs.*` — non esiste uno spazio su disco *della stanza*: `resolveWorkspace`
+ *   ne conosce uno per installazione (ADR-0059), quindi concedere `fs.write` a
+ *   un gruppo vorrebbe dire dargli il disco dell'owner. Lo spazio della stanza
+ *   è il suo vault (`vault.write`).
+ * - `rot.*` — già in `neverAtRuntime`: qui è la cintura, perché un grant che
+ *   la nominasse sarebbe un file che prova a concedere la propria riscrittura.
+ * - `outward.*` — un destinatario nuovo non è dentro il confine della stanza,
+ *   ed è la riga che `forbiddenForSystem` già protegge dagli autonomi.
+ * - `config.*` — ADR-0070: il modello non cambia le impostazioni, e a maggior
+ *   ragione non lo fa un membro.
+ *
+ * Un grant nomina **una capability**, mai un insieme: `sys.*` o un qualunque
+ * id con `*` dentro è rifiutato anche quando il prefisso non è in questa
+ * lista. Concedere per famiglia significherebbe concedere in anticipo ciò che
+ * qualcuno spedirà domani sotto lo stesso prefisso — che è esattamente
+ * l'argomento per cui `denyListCovers` esiste, letto al contrario.
+ */
+export const MAI_CONCEDIBILI: readonly CapabilityId[] = [
+  'sys.shell',
+  'sys.shell.*',
+  'sys.process.*',
+  'fs.*',
+  'rot.*',
+  'outward.*',
+  'config.*',
+];
+
+const MAI_CONCEDIBILI_SET: ReadonlySet<CapabilityId> = new Set(MAI_CONCEDIBILI);
+
+/** `null` se la capability si può concedere; altrimenti la frase che dice perché no. */
+export function nonConcedibile(capability: string): string | null {
+  if (capability.includes('*')) {
+    return `"${capability}": un grant nomina una capability, mai una famiglia`;
+  }
+  if (denyListCovers(MAI_CONCEDIBILI_SET, capability)) {
+    return `"${capability}" non è concedibile a una stanza (lista chiusa in core/policy/matrix.ts)`;
+  }
+  return null;
+}
+
+/** `null` se questa chiave è una stanza nominata; altrimenti perché non lo è. */
+export function tenantNonNominabile(tenantId: string): string | null {
+  if (tenantId.includes('*')) {
+    return `"${tenantId}": un grant nomina una stanza, mai un insieme di stanze`;
+  }
+  if (!tenantId.startsWith('group:') && !tenantId.startsWith('community:')) {
+    return `"${tenantId}" non è una stanza: un grant vale solo per group:… o community:…`;
+  }
+  return null;
+}
 
 /**
  * One row of the threat model's matrix: a ceiling over the taint columns, and
@@ -190,6 +299,18 @@ export type PolicyMatrix = {
   readonly searchMaxTaint: TrustTier;
   readonly neverAtRuntime: ReadonlySet<CapabilityId>;
   readonly forbiddenForSystem: ReadonlySet<CapabilityId>;
+  /**
+   * **Stanza → capability che lì smettono di essere `hostOnly`** — la
+   * dimensione che ADR-0073 punto 1 aggiunge al kernel, e la sola cosa che
+   * un `policy.json` sigillato può *allargare*.
+   *
+   * Vuota nel pavimento, sempre: se il file non si legge — assente, corrotto,
+   * o rifiutato per un grant che nomina `sys.shell` — nessuna stanza riceve
+   * niente, che è la direzione chiusa. Si legge da `grantedTo`, non a mano,
+   * perché la chiave è esatta e la corrispondenza per prefisso qui sarebbe
+   * una concessione per famiglia scritta di straforo.
+   */
+  readonly grants: ReadonlyMap<TenantId, ReadonlySet<CapabilityId>>;
   /** Which of the two produced these numbers. Surfaced by `doctor`. */
   readonly source: 'sealed' | 'fallback';
   /** Why the fallback answered. `null` whenever the sealed file did. */
@@ -305,6 +426,34 @@ export const ROW_FLOOR: Readonly<Record<EffectRow, RowPolicy>> = {
    */
   memory: { asksForIrreversible: false, denyAbove: 3 },
   /**
+   * **«Scrivere nel vault del proprio tenant» — ADR-0073 punto 2, e il
+   * soffitto è alto per dichiarazione, non per distrazione.**
+   *
+   * `denyAbove: 3` e `asksForIrreversible: false` dicono la stessa cosa da
+   * due lati: una scrittura che resta **dentro** il confine del tenant che la
+   * scrive non attraversa mai un `ask`, a nessun taint. Non perché chi scrive
+   * sia fidato — un membro di gruppo è tier 2 per costruzione, e in un gruppo
+   * un `ask` non raggiunge nessuno che possa rispondere, quindi qui una
+   * domanda sarebbe un divieto travestito — ma perché il *confine* è ciò che
+   * rende la scrittura sicura: nessuna lettura cross-tenant, nessun host
+   * esterno, un giornale e `muffin undo` dietro (`agent/loop/tool-call.ts`,
+   * ramo `draft`).
+   *
+   * **La mutazione che questa riga deve far cadere**, ed è nominata perché è
+   * l'unico modo di sbagliarla senza accorgersene: portarla al livello delle
+   * righe che escono dal tenant (`external`/`outward`: `denyAbove: 1`,
+   * `asksForIrreversible: true`). Un membro a tier 2 sarebbe negato per
+   * taint, e la frase dell'ADR — *«un membro salva, nessun ask»* — sarebbe
+   * falsa senza che niente nel kernel lo dica.
+   *
+   * Ciò che il numero **non** compra, detto qui perché la riga da sola
+   * sembrerebbe generosa: la capability su questa riga è `hostOnly: true`,
+   * quindi la stanza la riceve solo se il `policy.json` sigillato la nomina
+   * (`tenants`, sopra). La riga decide cosa succede *quando* si arriva; il
+   * grant decide *se* si arriva.
+   */
+  vault: { asksForIrreversible: false, denyAbove: 3 },
+  /**
    * Third-party code and services outside the allowlist model. The one row the
    * document does not print: MCP is covered in prose (`docs/SECURITY.md` §10),
    * and this keeps the number those capabilities already had rather than
@@ -354,9 +503,38 @@ export const POLICY_FLOOR: PolicyMatrix = {
   neverAtRuntime: new Set<CapabilityId>(['rot.write', 'rot.*']),
   /** Excluded from autonomous principals regardless of taint (blueprint 03 §3). */
   forbiddenForSystem: new Set<CapabilityId>(['outward.send', 'outward.*', 'config.ratchet']),
+  /**
+   * **Il pavimento non concede niente a nessuna stanza**, e questa riga è
+   * quella che rende il fallback fail-closed nel senso di ADR-0073: se il
+   * file è assente, corrotto, o rifiutato perché un grant nominava
+   * `sys.shell`, ogni stanza torna a essere `hostOnly` su tutto. Il residuo
+   * dichiarato è simmetrico a quello di `defaultMaxTaint`, ma nella direzione
+   * innocua: un owner che aveva **concesso** e poi perde il file perde la
+   * concessione, non ne guadagna una.
+   */
+  grants: new Map<TenantId, ReadonlySet<CapabilityId>>(),
   source: 'fallback',
   note: null,
 };
+
+/**
+ * Questa stanza ha ricevuto questa capability, per nome?
+ *
+ * Corrispondenza **esatta**, e non `denyListCovers`: quello espande i
+ * namespace perché un *divieto* deve coprire ciò che nessuno ha ancora
+ * scritto, mentre una *concessione* che si espandesse per prefisso
+ * concederebbe in anticipo la prossima capability spedita sotto lo stesso
+ * nome. Le due liste guardano nella stessa direzione (verso ciò che non
+ * esiste ancora) e devono rispondere in modo opposto.
+ *
+ * `tenant` è quello della richiesta, che il kernel ha già verificato contro
+ * il principal (`tenantOf`, `tenant_mismatch`) prima di arrivare qui: quindi
+ * un membro non può nominare la stanza di qualcun altro per ereditarne i
+ * grant.
+ */
+export function grantedTo(matrix: PolicyMatrix, tenant: TenantId, capability: CapabilityId): boolean {
+  return matrix.grants.get(tenant)?.has(capability) === true;
+}
 
 /**
  * Does a deny list cover this capability? Exact id, or a namespace entry.
@@ -483,6 +661,17 @@ function merge(file: z.infer<typeof PolicyFileSchema>): PolicyMatrix {
       ...POLICY_FLOOR.forbiddenForSystem,
       ...(file.forbiddenForSystem ?? []),
     ]),
+    // L'unico campo che il file **aggiunge** invece di stringere, e il solo
+    // punto in cui non c'è un pavimento da unire: il pavimento è vuoto, quindi
+    // qui non si perde niente. Ciò che impedisce a questa riga di essere il
+    // buco che `defaultMaxTaint` è stato è `superRefine` sopra — un grant
+    // fuori dalla lista chiusa non arriva qui, fa cadere il file intero.
+    grants: new Map<TenantId, ReadonlySet<CapabilityId>>(
+      Object.entries(file.tenants ?? {}).map(([tenantId, entry]) => [
+        tenantId,
+        new Set<CapabilityId>(entry.grants),
+      ]),
+    ),
     source: 'sealed',
     note: null,
   };

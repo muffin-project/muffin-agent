@@ -297,6 +297,66 @@ only place that knows which part of the turn raised the level. That line is
 context and never the cause: since ADR-0074 the tier produces no `ask` on the
 host row, and since ADR-0075 it produces no `deny` there either.
 
+### The tenant dimension: what a room may do (ADR-0073, 2026-09-06)
+
+Until 2026-09-06 the kernel had one answer to *may a remote tenant reach this
+capability* — `CapabilityDecl.hostOnly`, a property of the **capability**. The
+only way to give a group something was therefore to give it to every group at
+once, in TypeScript. Since ADR-0073 the kernel reads `hostOnly &&
+principal.kind === 'member' && !grantedTo(tenant, capability)`, and the second
+half comes from a `tenants` block in the sealed `rot/policy.json`:
+
+```json
+{ "schemaVersion": 1,
+  "tenants": { "group:telegram:-100950": { "grants": ["vault.write", "turn.todo"] } } }
+```
+
+This is the **only** field of that file that widens; every other one may only
+tighten. The asymmetry is deliberate — restricting never needs to ask,
+widening is written into the seal, which takes a file edit plus `muffin rot
+reseal`. Four properties bound it, and all four are in
+`core/policy/matrix.ts` rather than in the file that would use them:
+
+- a grant names **one room** (`group:…`, `community:…`) — never `group:*`,
+  never `host`;
+- a grant names **one capability** — never a `prefix.*` family, so it cannot
+  concede in advance whatever ships under that prefix tomorrow;
+- a closed list is never grantable at all: `sys.shell`, `sys.shell.*`,
+  `sys.process.*`, `fs.*`, `rot.*`, `outward.*`, `config.*`. A room has no
+  machine, and `resolveWorkspace` knows one workspace per installation
+  (ADR-0059), so `fs.*` would mean handing a group the owner's disk;
+- a file that breaks any of these is **refused whole**, naming the field
+  (`tenants.group:telegram:42.grants.0`), and the kernel falls back to the
+  compiled floor — which grants nothing to anybody. Same direction, and same
+  reason, as the refusal of a file still carrying `askAbove`.
+
+The compiled floor holds no grants, so every failure mode of that file leaves
+every room exactly where it was.
+
+What a granted room gets is bounded by everything else in this document, which
+the grant does not touch: `sys.search` in a granted room still answers to
+ADR-0071's composed-parameters gate and to `perTenantDailyUsd`; `vault.write`
+still answers to safe mode and the budget. **No room is ever granted
+`sys.search` with model-composed parameters** — ADR-0073 point 3 refuses that
+until an adversarial corpus of the shape 0066/0071 use shows no exfiltration
+scene completing undetected.
+
+The space a room gets is its **vault**, not the disk. `vault.write`
+(`agent/tools/vault-save.ts`) writes into `salvati/<room slug>/…` and indexes
+the file under the turn's own tenant — the tenant comes from `ToolContext`,
+never from an argument, so no call shape reaches another room's space. Its
+effect row is `vault`, declared `asksForIrreversible: false` with
+`denyAbove: 3`: a write that stays **inside** the boundary of the tenant
+writing it, with a journal and `muffin undo` behind it, crosses no approval at
+any taint. That is not trust in the writer — a group member is tier 2 by
+construction, and in a group an approval reaches nobody who could answer it,
+so a gate there would be a prohibition in disguise. It is the boundary that
+makes the write safe. Reading back is `documents.read`, which was already
+per-tenant.
+
+`muffin doctor` prints the rooms that hold grants, and stays silent when there
+are none.
+
 A sealed `rot/policy.json` may tighten a row in both of its fields: lower
 `denyAbove`, or turn `asksForIrreversible` on where the floor leaves it off.
 It may not turn one off. An owner who wants the old wall back writes
