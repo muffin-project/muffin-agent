@@ -65,7 +65,7 @@ export const shellCapability: CapabilityDecl = {
   // claim this declaration makes; "no effect of any kind on the host" is not,
   // and moving the row would have asserted it.
   effect: 'host',
-  // The lane the sandbox makes reversible by construction, so ADR-0074 §4's
+  // The lane the sandbox makes reversible by construction, so ADR-0074 punto 4's
   // condition is met and only then does it stop asking. Not a judgement that
   // running commands is cheap — a statement about *this* lane's boundary.
   risk: 'low',
@@ -260,7 +260,7 @@ function makeLane(
         });
       } catch (error) {
         // `ensureInit()` throws `sandbox unavailable: …` when containment
-        // cannot be proved on this host — the case ADR-0074 §4 names by hand:
+        // cannot be proved on this host — the case ADR-0074 punto 4 names by hand:
         // *«dove il sandbox non può garantire il confine, la shell in sola
         // lettura non esiste: non degrada in silenzio a `sys.shell.write`»*.
         // The answer is a refusal in Muffin's own voice, and there is no other

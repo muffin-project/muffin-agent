@@ -107,7 +107,7 @@ describe('M3 acceptance — through the production runtime', () => {
 
     // Both lanes: `hostOnly` is what refuses a member, and it is declared on
     // each capability separately — a split that gave the new one a different
-    // answer here would be a group member with a shell (ADR-0074 §4 changed
+    // answer here would be a group member with a shell (ADR-0074 punto 4 changed
     // what the owner is asked, never who may reach it).
     for (const capability of ['sys.shell', 'sys.shell.write']) {
       expect(chiedi(member, 'group:t:1', capability), capability).toMatchObject({ effect: 'deny' });
@@ -117,7 +117,7 @@ describe('M3 acceptance — through the production runtime', () => {
     // The lane that writes, for the owner in single-user mode, is an ask and
     // never a silent allow (threat model §g), proven through the same kernel.
     expect(chiedi(owner, 'host', 'sys.shell.write').effect).toBe('ask');
-    // And the lane that cannot write does not ask — the cell ADR-0074 §4 moved.
+    // And the lane that cannot write does not ask — the cell ADR-0074 punto 4 moved.
     // Asserted here and not only in the unit suite because this is the kernel
     // the *assembled runtime* wired from the sealed root of trust: a policy.json
     // that put the ask back would show up here and nowhere else.
@@ -293,7 +293,7 @@ describe('M3 acceptance — through the production runtime', () => {
       const ws = supervisionato.workspace;
 
       // `shell_run_write`: the positive claim is about a *write*, and after
-      // ADR-0074 §4 `shell_run` cannot make one — the read-only lane's write
+      // ADR-0074 punto 4 `shell_run` cannot make one — the read-only lane's write
       // scope is the session scratch, which is not the workspace and is not
       // supposed to be. Both get their root from the same `ShellScope`, so this
       // still holds the wiring the comment above describes.

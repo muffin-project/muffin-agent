@@ -153,7 +153,7 @@ describe('la baseline misura la produzione, non una copia', () => {
    * E la corsia che questa baseline **non** misura, nominata perché il
    * silenzio si legge come «non esiste».
    *
-   * Dal 06/09 (ADR-0074 §4) `sys.shell` è la shell in sola lettura: sandbox
+   * Dal 06/09 (ADR-0074 punto 4) `sys.shell` è la shell in sola lettura: sandbox
    * senza scrittura fuori dallo scratch e senza rete, quindi `reversible:
    * 'yes'` e nessun `ask`. Non ha una riga in `SECURITY_BASELINE_CAPABILITIES`
    * perché non c'è un gradino da misurare — ma se qualcuno la ridichiarasse

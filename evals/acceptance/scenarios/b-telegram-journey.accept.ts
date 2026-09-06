@@ -461,7 +461,7 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
         env: { MUFFIN_GATEWAY_TICK_MS: '200' },
       });
       try {
-        // `shell_run_write` dal 06/09 (ADR-0074 §4): è la corsia che chiede.
+        // `shell_run_write` dal 06/09 (ADR-0074 punto 4): è la corsia che chiede.
         // Taint 2 ("gruppo/sconosciuto"), inside `sys.shell.write`'s row ceiling —
         // enough to make the ASK show a taint reason without tripping
         // `taint_exceeded` into an outright deny.

@@ -426,7 +426,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // scenario. The shell tools are registered only when the sandbox probe held
   // on this host (agent/runtime.ts).
   //
-  // 06/09, ADR-0074 §4: the scenario now has two halves, because the tool
+  // 06/09, ADR-0074 punto 4: the scenario now has two halves, because the tool
   // does. `sys.shell.write` is `high` risk — single-user (the only mode
   // `install()` builds) always asks, and headless `muffin run` has no approval
   // channel, so what that half proves is the ASK's content, not an end-to-end

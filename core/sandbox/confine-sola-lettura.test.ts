@@ -269,7 +269,7 @@ describe.runIf(gate.run)(`le due corsie contengono cose diverse (${gate.why})`, 
     });
 
     it('la rete resta spenta anche di qua — questa corsia chiede, non esce', async () => {
-      // ADR-0074 §4 descrive `sys.shell.write` come «scrive nel workspace **o**
+      // ADR-0074 punto 4 descrive `sys.shell.write` come «scrive nel workspace **o**
       // parla in rete». Metà è vera oggi e metà no, e la differenza è scritta
       // qui invece che lasciata al lettore: aprire la rete a questa corsia
       // vorrebbe dire scavalcare l'allowlist di egress della RoT (ADR-0066) da

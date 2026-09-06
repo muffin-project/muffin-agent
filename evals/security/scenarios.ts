@@ -119,7 +119,7 @@ function diProduzione(id: string): CapabilityDecl {
  */
 export const SECURITY_BASELINE_CAPABILITIES: readonly CapabilityDecl[] = [
   diProduzione('fs.write'),
-  // `sys.shell.write` e non `sys.shell` dal 06/09 (ADR-0074 §4): la porta che
+  // `sys.shell.write` e non `sys.shell` dal 06/09 (ADR-0074 punto 4): la porta che
   // questi scenari misurano è quella che *scrive*, cioè quella che chiede.
   // `sys.shell` esiste ancora ed è ora la corsia in sola lettura, `low`/`yes`,
   // che per costruzione non ha niente da misurare qui — chiedere il permesso
