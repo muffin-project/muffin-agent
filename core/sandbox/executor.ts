@@ -221,7 +221,13 @@ function networkOff(): SandboxRuntimeConfig['network'] {
  *
  *  - **Linux** lo trasforma in `--setenv TMPDIR /tmp/claude` fra i flag di
  *    bwrap (`dist/sandbox/linux-sandbox-utils.js`), e un `--setenv` batte
- *    l'ambiente dello spawn.
+ *    l'ambiente dello spawn. E **non** arriva come argomenti separati:
+ *    `wrapWithSandboxArgv` (`dist/sandbox/sandbox-manager.js`) restituisce
+ *    `[shell, '-c', quote(['bwrap', ...bwrapArgs])]`, cioè l'intera riga di
+ *    bwrap è *una* stringa. La prima versione di questa funzione cercava la
+ *    coppia fra gli elementi dell'argv e nel container restava rossa (06/09,
+ *    seconda corsa di `verifica`): il rosso era giusto, la lettura della forma
+ *    no.
  *  - **macOS** antepone `env … TMPDIR=/tmp/claude /usr/bin/sandbox-exec …`
  *    all'argv (`dist/sandbox/macos-sandbox-utils.js`), che è la stessa cosa
  *    scritta in un'altra sintassi.
@@ -246,14 +252,32 @@ function networkOff(): SandboxRuntimeConfig['network'] {
  * processo (`esecutoriVivi`, sopra) si sovrascriverebbero a vicenda. Qui la
  * modifica è per chiamata, sul vettore che si sta per eseguire.
  */
-function puntaTmpdirAlloScratch(argv: readonly string[], scratch: string): string[] {
+export function puntaTmpdirAlloScratch(argv: readonly string[], scratch: string): string[] {
   const out = [...argv];
+  const scratchQuotato = quoteShell(scratch);
 
-  // **Forma Linux**: bwrap riceve la coppia come due argomenti separati.
-  //
-  // Il comando dell'utente è l'ultimo elemento, dopo il `-c` della shell, e non
-  // si tocca mai: `TMPDIR=/x make` scritto dal modello è testo suo, non una
-  // variabile che stiamo componendo noi.
+  // **Forma Linux**: `[shell, '-c', '<riga di bwrap>']`. Dentro quella stringa
+  // la coppia `--setenv TMPDIR <valore>` sta fra i flag di bwrap, cioè prima
+  // del `--` che separa i flag dal programma da eseguire. Il comando del
+  // modello è dopo quel `--`, incastonato in `bash -c '…'`, e non si tocca mai:
+  // `TMPDIR=/x make` scritto dal modello è testo suo, non una variabile che
+  // stiamo componendo noi. Il valore può essere una parola nuda
+  // (`/tmp/claude`, il default) o una stringa in apici singoli
+  // (`CLAUDE_CODE_TMPDIR` con uno spazio dentro): si accettano entrambe.
+  const SETENV = /--setenv TMPDIR (?:'(?:[^']|'"'"')*'|[^\s']+)/;
+  for (let i = 0; i < out.length; i += 1) {
+    const arg = out[i];
+    if (arg === undefined || (!arg.startsWith('bwrap') && !/(^|[\s/])bwrap\s/.test(arg))) continue;
+    const separatore = arg.indexOf(' -- ');
+    if (separatore < 0) continue;
+    const flag = arg.slice(0, separatore);
+    if (!SETENV.test(flag)) continue;
+    out[i] = flag.replace(SETENV, `--setenv TMPDIR ${scratchQuotato}`) + arg.slice(separatore);
+  }
+
+  // **Forma a elementi separati**, se un giorno srt smettesse di appiattire la
+  // riga in una stringa: bwrap riceve la coppia come due argomenti distinti,
+  // prima del `-c` della shell (l'ultimo elemento è il comando, e non si tocca).
   const ultimoC = out.lastIndexOf('-c');
   const fine = ultimoC > 0 ? ultimoC : out.length - 1;
   for (let i = 0; i + 2 < fine; i += 1) {
@@ -276,10 +300,20 @@ function puntaTmpdirAlloScratch(argv: readonly string[], scratch: string): strin
     const resto = arg.slice(PREFISSO.length);
     const spazio = resto.indexOf(' ');
     if (spazio < 0) continue;
-    out[i] = `${PREFISSO}${scratch}${resto.slice(spazio)}`;
+    out[i] = `${PREFISSO}${scratchQuotato}${resto.slice(spazio)}`;
   }
 
   return out;
+}
+
+/**
+ * La stessa regola di `quote` in srt (`dist/utils/shell-quote.js`): una
+ * parola fatta solo di caratteri che nessuna shell POSIX interpreta resta
+ * nuda, tutto il resto va in apici singoli con `'"'"'` per l'apice.
+ */
+function quoteShell(word: string): string {
+  if (/^[A-Za-z0-9_./:@+,-][A-Za-z0-9_./:=@+,-]*$/.test(word)) return word;
+  return `'${word.replace(/'/g, `'"'"'`)}'`;
 }
 
 /** Paths the sandbox must never touch, whatever the per-call scope says. */
@@ -765,7 +799,7 @@ export class SandboxExecutor {
     for (const [key, value] of Object.entries(srtEnv)) {
       if (value !== undefined && process.env[key] !== value) out[key] = value;
     }
-    out['TMPDIR'] = scratch;
+    out.TMPDIR = scratch;
     return out;
   }
 
@@ -777,7 +811,8 @@ export class SandboxExecutor {
     started: number,
   ): Promise<ExecResult> {
     return new Promise((resolvePromise, rejectPromise) => {
-      const child = spawn(argv[0]!, argv.slice(1), {
+      const [programma = '', ...argomenti] = argv;
+      const child = spawn(programma, argomenti, {
         cwd: req.cwd,
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
