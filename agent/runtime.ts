@@ -312,7 +312,7 @@ export function baseToolOrder(input: {
     'memory_why',
     'document_read',
     // Adjacent, and the read-only one first: the model reads this list in
-    // order, and ADR-0074 §4 makes `shell_run` the default choice while
+    // order, and ADR-0074 punto 4 makes `shell_run` the default choice while
     // `shell_run_write` is the one that interrupts the owner. If a profile's
     // cap ever splits the pair, the half that survives must be the half that
     // does not ask.
@@ -704,7 +704,7 @@ export function buildRuntime(
   const sandboxStatus = executor.status();
   const contained = sandboxStatus.available;
   if (contained) {
-    // Both lanes or neither (ADR-0074 §4). The read-only one is not a fallback
+    // Both lanes or neither (ADR-0074 punto 4). The read-only one is not a fallback
     // for a host where containment failed — it is the *stricter* of the two and
     // rests on the same probe: `runReadOnly`'s promise ("no writes outside the
     // scratch, no network") is the sandbox's promise, so a host that cannot

@@ -69,7 +69,7 @@ describe('the shell tool exists only where a containment was proved', () => {
     verdict.current = doesNot;
     const names = toolNames();
     expect(names).not.toContain('shell_run');
-    // Dal 06/09 (ADR-0074 §4) le corsie sono due, e la sola lettura non è un
+    // Dal 06/09 (ADR-0074 punto 4) le corsie sono due, e la sola lettura non è un
     // ripiego per un host senza sandbox: è la *più stretta* delle due e la sua
     // promessa — niente scritture fuori dallo scratch, niente rete — è la
     // promessa del sandbox. Registrarla dove il contenimento non si prova

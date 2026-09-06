@@ -62,7 +62,7 @@ export type ExecRequest = {
  *
  * `writeScope` is not optional here, it is absent: `runReadOnly` has nowhere to
  * put a workspace even if a caller wanted to hand it one, so the boundary
- * ADR-0074 §4 asks for is carried by the type rather than by a rule someone has
+ * ADR-0074 punto 4 asks for is carried by the type rather than by a rule someone has
  * to keep obeying. Widening this lane to the workspace is not a wrong argument
  * at one call site — it is an edit to this file, which is what separates a
  * wiring from a prohibition (AGENTS.md, "un divieto non regge il cablaggio").
@@ -165,7 +165,7 @@ function isMissingDependency(detail: string): boolean {
  *
  * Every config this module builds — session, per-call, self-test — reads its
  * `network` block from here, so "the sandbox has no network" is one function
- * to check and one function to break. That matters more since ADR-0074 §4:
+ * to check and one function to break. That matters more since ADR-0074 punto 4:
  * `sys.shell` (the read-only lane) declares `reversible: 'yes'` and never asks,
  * and the claim behind `'yes'` is exactly this — a command that cannot open a
  * socket cannot have sent anything that would need undoing.
@@ -712,7 +712,7 @@ export class SandboxExecutor {
   }
 
   /**
-   * **The read-only lane** (`sys.shell`, ADR-0074 §4).
+   * **The read-only lane** (`sys.shell`, ADR-0074 punto 4).
    *
    * Writes land in the session scratch and nowhere else — not the workspace,
    * not the home, not the caller's cwd — and the network is off. That pair is

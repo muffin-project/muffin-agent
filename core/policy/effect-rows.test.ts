@@ -243,7 +243,7 @@ describe('la matrice normativa è eseguibile', () => {
   });
 
   /**
-   * ADR-0074 §4, come cella e non come frase: le due corsie della shell stanno
+   * ADR-0074 punto 4, come cella e non come frase: le due corsie della shell stanno
    * sulla **stessa riga** (`host`, stesso soffitto, stesse conseguenze se
    * qualcosa scappa) e danno risposte diverse allo stesso taint, perché il
    * confine che le separa è quello che il sandbox costruisce — scrittura e
