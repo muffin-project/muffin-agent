@@ -345,3 +345,53 @@ describe('`recover` non chiama mai il modello', () => {
     expect(traccia.stadi).toEqual(['deliver', 'settle']);
   });
 });
+
+/**
+ * §2.3, second half. `makeIngressPort` refuses a port whose `edit` contradicts
+ * its own `Surface`; this is the same refusal for the one capability that has
+ * no field on `Surface` to contradict — only a hook that is wired or is not.
+ *
+ * Slice 15's own mutation lands here: declaring `commands: true` on Discord
+ * (`connectors/discord/surface.ts`) while nothing in its connector calls
+ * `agent/comandi.ts` makes the very first message it drains throw, instead of
+ * quietly making slice 16's parity table claim a scene that cannot run.
+ */
+describe('a port whose declaration and hooks disagree never walks (§2.3)', () => {
+  const senzaComandi: IngressPort = makeIngressPort(
+    {
+      id: 'muta',
+      limits: { maxMessageChars: 4096, maxUploadBytes: 1, maxDownloadBytes: 1 },
+      streaming: { transport: 'off' },
+      handles: () => true,
+      deliver: async () => ({ ok: true }) as never,
+    } as never,
+    { commands: false, buttons: false, edit: false, typing: true, upload: true },
+  );
+
+  it('refuses commands: true with no command hook, naming the port', async () => {
+    const traccia: Traccia = { stadi: [], scritture: [], detto: [] };
+    const dichiaraECiMente = makeIngressPort(senzaComandi.surface, { ...senzaComandi.ingress, commands: true });
+    const { command: _tolto, ...senzaGancio } = ganci(traccia);
+    await expect(receive(dichiaraECiMente, evento({ port: dichiaraECiMente }), senzaGancio)).rejects.toThrow(
+      /ingress port "muta": ingress\.commands=true but no command hook is wired/,
+    );
+    // E non a metà strada: niente ha camminato, quindi niente ha scritto.
+    expect(traccia.stadi).toEqual([]);
+    expect(traccia.scritture).toEqual([]);
+  });
+
+  it('refuses a wired command hook on a port that declares commands: false', async () => {
+    const traccia: Traccia = { stadi: [], scritture: [], detto: [] };
+    await expect(receive(senzaComandi, evento({ port: senzaComandi }), ganci(traccia))).rejects.toThrow(
+      /a command hook is wired but ingress\.commands=false/,
+    );
+  });
+
+  it('walks normally when the two agree', async () => {
+    const traccia: Traccia = { stadi: [], scritture: [], detto: [] };
+    const { command: _tolto, ...senzaGancio } = ganci(traccia);
+    const esito = await receive(senzaComandi, evento({ port: senzaComandi }), senzaGancio);
+    expect(esito.kind).toBe('answered');
+    expect(traccia.stadi).not.toContain('command');
+  });
+});

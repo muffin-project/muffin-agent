@@ -260,6 +260,31 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'B16',
     "ingresso tipizzato: un messaggio inoltrato e una reply-con-commento tengono il proprio recinto e tier (FORWARD_TIER), e il testo nuovo dell'owner non finisce dentro il recinto altrui",
   ),
+  // B18 and B19 are the two rows the ingress/loop decomposition closed
+  // (`docs/evidence/ingresso-unico-e-nucleo-2026-09-05.md`, slices 1-16), and
+  // neither can honestly be an acceptance scenario: both are claims about the
+  // *shape* of the code, not about something the real binary does that it did
+  // not do before. B19 asks whether the turn loop is a narrow core of named
+  // modules each with a twin test — a question `muffin` spawned as a process
+  // cannot answer, because a monolith and a decomposition deliver the same
+  // reply. B18 asks whether every surface enters through one path; the whole
+  // point of slice 14-16 is that the *observable behaviour* is unchanged, so
+  // a scenario asserting an answer arrives on Telegram would have been green
+  // before the work started.
+  //
+  // What actually establishes them is named here, so `report.ts` counts the
+  // rows as covered instead of filing them under `nessuno scenario` — and so
+  // that deleting the test that carries a row is a visible act.
+  provataDalMeccanismo(
+    'B18',
+    'ingresso unico: ogni porta entra dal router condiviso, e la parità fra porte è misurata invece che dichiarata',
+    "la regge `connectors/shared/ingress/parita.test.ts` con i quattro describe di §2.6: l'asse delle porte viene da `INGRESS_PORT_IDS` (la tabella vera di `cli/surface.ts`), l'asse dei comportamenti da `INGRESS_STAGES` (lo stesso array che `receive` itera), e il quarto describe guida il drain vero di ciascun connettore dal suo trasporto finto — inlinare gli stadi in un connettore lo rende rosso mentre gli altri tre restano verdi",
+  ),
+  provataDalMeccanismo(
+    'B19',
+    'nucleo modulare: il loop è nove moduli nominati con il gemello, e `agent/loop.ts` è il barile che conserva i 35 importatori',
+    'la reggono `agent/loop/barrel.test.ts` (i cinque export di valore, e nessun modulo che reimporta il barile) e i nove test gemelli sotto `agent/loop/`; il numero, 54 righe in `agent/loop.ts`, è verificabile con `wc -l` e non da uno scenario che spawna il binario',
+  ),
   // New (slice/journey-capability): B6 was BLOCKER only for a missing
   // scenario — the mechanism (`eseguiConRitentativi`, MAX_TOOL_RETRIES=2) is
   // already unit-proven (`agent/tool-retry.test.ts`) with a fake tool. What
