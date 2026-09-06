@@ -1,6 +1,6 @@
 import type { CallbackQuery, ChatMemberUpdated, Message, MessageOrigin, Update } from '@grammyjs/types';
 import { randomBytes } from 'node:crypto';
-import { runTurn, type LoopDeps, type TurnDelta, type TurnEvent } from '../../agent/loop.js';
+import type { LoopDeps, TurnDelta, TurnEvent } from '../../agent/loop.js';
 import type { AttachStream } from '../../agent/turn-lane.js';
 import { COMANDI, sembraComando, type Controlli } from '../../agent/comandi.js';
 import { recoveredText } from '../../agent/recovered-text.js';
