@@ -3,7 +3,7 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { MessageOrigin, Update } from '@grammyjs/types';
 import { describe, expect, it } from 'vitest';
-import { DELIVERED, type Surface } from '../../../core/surface/types.js';
+import { DELIVERED, MUTA, type Negotiation, type Place, type Surface } from '../../../core/surface/types.js';
 import type { DiscordMessage } from '../../discord/api.js';
 import { parseMessage } from '../../discord/connector.js';
 import { contentTaintOf, type Incoming, parseUpdate } from '../../telegram/connector.js';
@@ -171,11 +171,16 @@ describe('contentTierOf matches contentTaintOf on the same real update', () => {
   });
 });
 
+/** Una stanza che sa riscrivere, per i casi «edit» qui sotto. */
+const VIVA: Negotiation = { stream: ['edit', 'off'], editEveryMs: 1_000, maxEditsPerMinute: 20, draftTtlMs: 0, files: ['say'] };
+
 describe('makeIngressPort refuses ingress.edit and surface.streaming.transport disagreeing (§2.3)', () => {
   const baseSurface: Surface = {
     id: 'test-port',
     limits: { maxMessageChars: 1000, maxUploadBytes: 1, maxDownloadBytes: 1 },
     streaming: { transport: 'off' },
+    places: ['direct'],
+    negotiate: () => MUTA,
     handles: () => true,
     deliver: async () => DELIVERED,
     deliverFile: async () => DELIVERED,
@@ -193,7 +198,7 @@ describe('makeIngressPort refuses ingress.edit and surface.streaming.transport d
   });
 
   it('agreeing (edit / edit:true) constructs cleanly', () => {
-    const editable: Surface = { ...baseSurface, streaming: { transport: 'edit' } };
+    const editable: Surface = { ...baseSurface, streaming: { transport: 'edit' }, negotiate: (p: Place) => (p === 'direct' ? VIVA : MUTA) };
     expect(() => makeIngressPort(editable, { ...baseCapabilities, edit: true })).not.toThrow();
   });
 
@@ -202,7 +207,7 @@ describe('makeIngressPort refuses ingress.edit and surface.streaming.transport d
   });
 
   it('disagreeing (edit / edit:false) is refused', () => {
-    const editable: Surface = { ...baseSurface, streaming: { transport: 'edit' } };
+    const editable: Surface = { ...baseSurface, streaming: { transport: 'edit' }, negotiate: (p: Place) => (p === 'direct' ? VIVA : MUTA) };
     expect(() => makeIngressPort(editable, baseCapabilities)).toThrow();
   });
 });
