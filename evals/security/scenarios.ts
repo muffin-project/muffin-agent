@@ -1,7 +1,7 @@
 import { sendFileCapability } from '../../agent/tools/deliver.js';
 import { fsCapabilities } from '../../agent/tools/fs.js';
 import { httpCapability } from '../../agent/tools/http.js';
-import { shellCapability } from '../../agent/tools/shell.js';
+import { shellCapability, shellWriteCapability } from '../../agent/tools/shell.js';
 import { DOORS } from '../../core/policy/doors.js';
 import type { CapabilityDecl, Decision } from '../../core/policy/types.js';
 import type { BaselineAction } from './baseline.js';
@@ -79,7 +79,14 @@ const OUTWARD_EVAL: CapabilityDecl = {
  * nuovo una copia — l'esatto difetto che questa funzione esiste per uccidere.
  */
 function diProduzione(id: string): CapabilityDecl {
-  const trovata = [...fsCapabilities, shellCapability, httpCapability, sendFileCapability, ...DOORS].find(
+  const trovata = [
+    ...fsCapabilities,
+    shellCapability,
+    shellWriteCapability,
+    httpCapability,
+    sendFileCapability,
+    ...DOORS,
+  ].find(
     (c) => c.id === id,
   );
   if (!trovata) {
@@ -112,7 +119,12 @@ function diProduzione(id: string): CapabilityDecl {
  */
 export const SECURITY_BASELINE_CAPABILITIES: readonly CapabilityDecl[] = [
   diProduzione('fs.write'),
-  diProduzione('sys.shell'),
+  // `sys.shell.write` e non `sys.shell` dal 06/09 (ADR-0074 punto 4): la porta che
+  // questi scenari misurano è quella che *scrive*, cioè quella che chiede.
+  // `sys.shell` esiste ancora ed è ora la corsia in sola lettura, `low`/`yes`,
+  // che per costruzione non ha niente da misurare qui — chiedere il permesso
+  // di guardare era il difetto, non il controllo.
+  diProduzione('sys.shell.write'),
   diProduzione('sys.http'),
   // Le tre porte di sink, tutte e tre di produzione: l'allegato, la risposta e
   // l'episodio. Le ultime due sono capability solo da ADR-0055.
@@ -165,7 +177,7 @@ export const SECURITY_BASELINE_SCENARIOS: readonly SecurityBaselineScenario[] = 
     action: {
       principal: OWNER,
       tenant: 'host',
-      capability: 'sys.shell',
+      capability: 'sys.shell.write',
       resource: none,
       args: { command: 'npm test' },
       ambientTaint: 2,

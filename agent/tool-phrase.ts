@@ -40,7 +40,8 @@ const TOOL_PHRASE: Readonly<Record<string, string>> = {
   document_read: 'leggo un documento',
   http_get: 'apro una pagina',
   web_search: 'cerco sul web',
-  shell_run: 'eseguo un comando',
+  shell_run: 'guardo con un comando',
+  shell_run_write: 'eseguo un comando',
   process_list: 'guardo i processi',
   process_kill: 'chiudo un processo',
   send_file: 'ti mando un file',
@@ -80,6 +81,7 @@ const TOOL_SUBJECT: Readonly<Record<string, string | readonly string[]>> = {
   document_read: 'path',
   http_get: 'url',
   shell_run: 'command',
+  shell_run_write: 'command',
   skill_read: 'name',
   send_file: 'path',
 };

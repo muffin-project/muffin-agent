@@ -288,7 +288,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   provataDalMeccanismo(
     'D14',
     "solo l'irreversibile chiede: un ask arriva se e solo se `reversible: 'no'` incontra una riga con `asksForIrreversible`, mai per il taint, la classe o la scorciatoia hardened",
-    "la regge `core/policy/solo-irreversibile.test.ts`, che enumera ogni `CapabilityDecl` spedita (17 tool più le due porte) per owner e membro di gruppo a taint 0-3 e fissa per nome chi chiede (`sys.shell`, `sys.process.kill`, `mcp.*`); un ask in più o in meno lo fa rosso, e le tre mutazioni della PR #456 (askAbove restituito, scorciatoia hardened restituita, `asksForIrreversible` su `reply`) lo hanno fatto rosso. Uno scenario di accettazione non aggiunge nulla: la domanda della riga è sul kernel, e il kernel è lo stesso oggetto per il binario e per il test",
+    "la regge `core/policy/solo-irreversibile.test.ts`, che enumera ogni `CapabilityDecl` spedita (18 tool più le due porte) per owner e membro di gruppo a taint 0-3 e fissa per nome chi chiede (`sys.shell`, `sys.process.kill`, `mcp.*`); un ask in più o in meno lo fa rosso, e le tre mutazioni della PR #456 (askAbove restituito, scorciatoia hardened restituita, `asksForIrreversible` su `reply`) lo hanno fatto rosso. Uno scenario di accettazione non aggiunge nulla: la domanda della riga è sul kernel, e il kernel è lo stesso oggetto per il binario e per il test",
   ),
   provataDalMeccanismo(
     'B19',
@@ -423,16 +423,20 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'file read: a symlink inside the workspace cannot walk fs_read past the real scope, real path or real deny-list',
   ),
   // New (slice/journey-capability): the row was BLOCKER only for a missing
-  // scenario. shell_run is registered only when the sandbox probe held on
-  // this host (agent/runtime.ts), and sys.shell is `high` risk — single-user
-  // (the only mode `install()` builds) always asks, and headless `muffin run`
-  // has no approval channel. The honest boundary this scenario proves: the
-  // tool is offered (sandbox proven live), and the resulting ASK shows the
-  // exact command and cwd — not that the command executes end to end, which
-  // stays the unit suite's and the CI gate's proof.
+  // scenario. The shell tools are registered only when the sandbox probe held
+  // on this host (agent/runtime.ts).
+  //
+  // 06/09, ADR-0074 punto 4: the scenario now has two halves, because the tool
+  // does. `sys.shell.write` is `high` risk — single-user (the only mode
+  // `install()` builds) always asks, and headless `muffin run` has no approval
+  // channel, so what that half proves is the ASK's content, not an end-to-end
+  // execution. `sys.shell` is the read-only lane and asks nobody: that half
+  // runs the command through the real binary, headless, and checks the output
+  // came back — which is the thing D13 could not prove before, and the reason
+  // five of the six `agentic` character-eval failures existed.
   verde(
     'D4',
-    'shell: a scripted shell_run is only ever offered after a live sandbox probe, and the resulting ASK shows the real command and cwd',
+    'shell: both lanes are offered only after a live sandbox probe; the writing one produces an ASK showing the real command and cwd, and the read-only one runs headless with no approver at all',
   ),
   // New (slice/journey-capability): same shape as D4 for sys.process.kill —
   // process_list/process_kill act on the host's real process table, not a
