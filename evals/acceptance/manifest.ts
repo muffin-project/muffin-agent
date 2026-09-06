@@ -276,6 +276,11 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // rows as covered instead of filing them under `nessuno scenario` — and so
   // that deleting the test that carries a row is a visible act.
   provataDalMeccanismo(
+    'A11',
+    'install pulita: un comando su Ubuntu vuota porta a doctor senza rossi, unit systemd scritta e verificata, update e rollback dalla stessa via',
+    "la regge il job `install` (`.github/workflows/install.yml`, eseguito da ci:local in `ubuntu:24.04` senza Node preinstallato): `evals/install/ubuntu.sh` rifiuta di partire se `node` è già raggiungibile, esegue `install.sh` da utente con sudo, poi `muffin doctor` senza righe `fail`, `systemd-analyze verify` sulla unit e un avvio in foreground con il suo stesso ExecStart, poi `muffin update` e il rollback. Non è uno scenario della suite di accettazione perché il suo banco è un container pulito, non una home finta",
+  ),
+  provataDalMeccanismo(
     'B18',
     'ingresso unico: ogni porta entra dal router condiviso, e la parità fra porte è misurata invece che dichiarata',
     "la regge `connectors/shared/ingress/parita.test.ts` con i quattro describe di §2.6: l'asse delle porte viene da `INGRESS_PORT_IDS` (la tabella vera di `cli/surface.ts`), l'asse dei comportamenti da `INGRESS_STAGES` (lo stesso array che `receive` itera), e il quarto describe guida il drain vero di ciascun connettore dal suo trasporto finto — inlinare gli stadi in un connettore lo rende rosso mentre gli altri tre restano verdi",
