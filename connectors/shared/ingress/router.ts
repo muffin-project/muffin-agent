@@ -181,6 +181,48 @@ export type Ingressing = {
   result: TurnResult | undefined;
 };
 
+/**
+ * One stage the walk actually entered, for one event, on one port.
+ *
+ * This exists for a single claim, and it is the one §5 names as the falsifier
+ * of the whole of phase B: *"il describe 4 non esiste o non diventa rosso
+ * quando si inlineano gli stadi nel drain di un connettore importando i moduli
+ * condivisi"*. Every other guarantee in the parity test is satisfied by a
+ * connector that imports `composeTurnText`, `ingestAttachment` and `runWork`
+ * and calls them in its own hand-written order — the shared code would be
+ * shared, and the *walk* would not be. Only something the router itself emits
+ * can tell the two apart, because it is the only thing an inlined copy has no
+ * reason to reproduce.
+ *
+ * Deliberately not a hook on `IngressHooks`: a hook is handed in by the port,
+ * so a port could satisfy it by calling it. Nothing outside this module can
+ * make these visits happen.
+ */
+export type IngressVisit = { readonly portId: string; readonly eventId: string; readonly stage: IngressStage };
+
+export type IngressWitness = (visit: IngressVisit) => void;
+
+let witness: IngressWitness | undefined;
+
+/**
+ * Watch the stage walk. Returns the undo, so a test restores whatever was
+ * there rather than assuming nothing was.
+ *
+ * Production never calls this and the default is `undefined`, so the cost on
+ * the real path is one `!== undefined` per stage. Same posture as the
+ * `testStall` seams in `connectors/telegram/connector.ts` and
+ * `agent/scheduler-run.ts`: a window that only a test opens, kept in the
+ * production file because putting it anywhere else would mean the test is no
+ * longer watching production.
+ */
+export function witnessIngress(next: IngressWitness | undefined): () => void {
+  const previous = witness;
+  witness = next;
+  return () => {
+    witness = previous;
+  };
+}
+
 /** Nothing more to do here; keep walking the stages. */
 const CONTINUE = undefined;
 
@@ -236,6 +278,7 @@ async function walk(ctx: Ingressing, hooks: IngressHooks, from: IngressStage): P
         divertTo = undefined;
         viaDivert = true;
       }
+      witness?.({ portId: ctx.port.surface.id, eventId: ctx.event.eventId, stage });
       const step = await runStage(stage, ctx, hooks, openLive, viaDivert);
       if (step.kind === 'divert') {
         divertTo = step.to;
