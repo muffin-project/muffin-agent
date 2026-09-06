@@ -34,7 +34,9 @@ export const skillCapability: CapabilityDecl = {
 const skillSpec: ToolSpec = {
   name: 'skill_read',
   description:
-    'Read a skill. With just the name, returns its SKILL.md (activate the skill by following it). ' +
+    'Read a skill. Use it when a skill in your list looks relevant to the task at hand, or you need one of its ' +
+    'bundled files. Not for a skill that is not in your list — you cannot read one that was not discovered at ' +
+    'boot. With just the name, returns its SKILL.md (activate the skill by following it). ' +
     'With file, returns that bundled file from the skill directory (references, assets).',
   inputSchema: {
     type: 'object',
