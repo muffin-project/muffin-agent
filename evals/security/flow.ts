@@ -151,7 +151,11 @@ const FLOW_SCENARIOS: readonly FlowScenario[] = [
     id: 'f5-flusso-non-ricostruibile',
     family: 'local-read-then-act',
     flow: 'unreconstructable',
-    expectTuple: 'ask',
+    // `ask` fino al 06/09, e cambia per la ragione che questa scena esiste per
+    // provare: B-tupla, quando il flusso non è ricostruibile, **ricade su A**.
+    // A da ADR-0074 risponde `draft`, quindi B ricade su `draft`. La proprietà
+    // asserita è la stessa di prima, il valore no.
+    expectTuple: 'draft',
     /**
      * Il ramo che il memo §5-B impone e che decide se B vale la pena in
      * produzione: quando nessuno sa dire chi ha scelto, B **è** A. Oggi il
@@ -169,7 +173,12 @@ const FLOW_SCENARIOS: readonly FlowScenario[] = [
       args: { path: '/workspace/result.txt' },
       ambientTaint: 2,
     },
-    expect: { ambient: 'ask', noAmbient: 'draft' },
+    // A era `ask` per il taint; da ADR-0074 è `draft`, come B-senza-taint. Le
+    // tre corse coincidono tutte e tre su questa scena, ed è il dato che pesa
+    // sulla decisione su B: nel ramo in cui il runtime di oggi vive per
+    // intero, B non aggiunge niente a un kernel che ha smesso di chiedere per
+    // il taint.
+    expect: { ambient: 'draft', noAmbient: 'draft' },
   },
 ];
 
