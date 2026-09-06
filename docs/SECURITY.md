@@ -418,7 +418,7 @@ and egress rather than by this boundary.
 
 ### 9.1 Two shell lanes, and what each one promises
 
-Since ADR-0074 §4 there are two contained command capabilities, not one, and the
+Since point 4 of the *ask only for the irreversible* decision (`docs/decisions/0074-si-chiede-solo-per-l-irreversibile.md` — the document lands in its own PR; this section is written against its point 4) there are two contained command capabilities, not one, and the
 line between them is what the sandbox can be made to guarantee rather than a
 judgement about how dangerous commands are.
 
@@ -459,8 +459,8 @@ Three properties of this split are load-bearing:
   moving to `context`: "no writes outside the scratch and no IP network" is the
   claim; "no effect of any kind on the host" is not.
 
-Network is off on **both** lanes today, although ADR-0074 describes the writing
-one as writing *or* reaching the network. Opening the network there would route
+Network is off on **both** lanes today, although that decision describes the
+writing one as writing *or* reaching the network. Opening the network there would route
 around the Root of Trust's egress allowlist (ADR-0066) through a door that does
 not consult it, and that is a separate decision from this split. The current
 state is asserted, not assumed: the same live containment test checks the

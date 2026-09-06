@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SandboxManager, type SandboxRuntimeConfig } from '@anthropic-ai/sandbox-runtime';
 import {
-  probeSandbox,
-  isUsernsDenied,
   APPARMOR_REMEDY,
-  SANDBOX_BINARIES_REMEDY,
+  isUsernsDenied,
   message,
+  probeSandbox,
+  SANDBOX_BINARIES_REMEDY,
   type SandboxProbe,
 } from './probe.js';
 
@@ -205,6 +205,81 @@ function networkOff(): SandboxRuntimeConfig['network'] {
     deniedDomains: ['*'],
     ...(process.platform === 'linux' ? { allowAllUnixSockets: true } : {}),
   };
+}
+
+/**
+ * **`$TMPDIR` deve essere lo scratch di questa sessione, e non lo era.**
+ *
+ * `childEnv` sotto mette `TMPDIR=<scratch>` nell'ambiente con cui si spawna il
+ * processo, e la docstring di `scratch()` dice che quella è la superficie
+ * temporanea della sessione — creata da questo processo, cancellata da
+ * `close()`. Era falso su tutt'e due le piattaforme, e per la stessa riga di
+ * `@anthropic-ai/sandbox-runtime` 0.0.71: `generateProxyEnvVars`
+ * (`dist/sandbox/sandbox-utils.js`) aggiunge `TMPDIR=/tmp/claude` — il default
+ * del suo consumatore, non il nostro — e ciascun ramo lo applica in un modo
+ * che vince sull'ambiente ereditato:
+ *
+ *  - **Linux** lo trasforma in `--setenv TMPDIR /tmp/claude` fra i flag di
+ *    bwrap (`dist/sandbox/linux-sandbox-utils.js`), e un `--setenv` batte
+ *    l'ambiente dello spawn.
+ *  - **macOS** antepone `env … TMPDIR=/tmp/claude /usr/bin/sandbox-exec …`
+ *    all'argv (`dist/sandbox/macos-sandbox-utils.js`), che è la stessa cosa
+ *    scritta in un'altra sintassi.
+ *
+ * **Misurato, non dedotto** (06/09/2026). Su Linux, nel job `verifica` di
+ * ci:local (`ubuntu:24.04`, bwrap 0.9.0): `echo ok > "$TMPDIR/nota"` risponde
+ * `/tmp/claude/nota: No such file or directory` — una directory che non esiste
+ * e che nessun `allowWrite` nomina. Su macOS lo stesso comando **riesce**, e
+ * per questo la cosa è vissuta: `/tmp/claude` è fra i write path di default di
+ * srt, quindi i file temporanei finivano lì — una directory condivisa fra
+ * sessioni, che `close()` non cancella e che non è nostra.
+ *
+ * Costava poco finché la shell scriveva nel workspace: chi voleva un file
+ * d'appoggio lo metteva lì. Costa tutto adesso, perché lo scratch **è** l'unica
+ * superficie scrivibile della corsia in sola lettura (`runReadOnly`): un
+ * `sort`, un `git`, uno `sqlite3` che vogliono un temporaneo fallirebbero su
+ * Linux e scriverebbero in un posto condiviso e persistente su macOS.
+ *
+ * La riscrittura è dell'argv e non dell'ambiente di proposito: `CLAUDE_CODE_TMPDIR`
+ * — l'altra maniglia che srt legge — sta in `process.env`, cioè è stato di
+ * processo, e lo scratch è per esecutore: due esecutori vivi nello stesso
+ * processo (`esecutoriVivi`, sopra) si sovrascriverebbero a vicenda. Qui la
+ * modifica è per chiamata, sul vettore che si sta per eseguire.
+ */
+function puntaTmpdirAlloScratch(argv: readonly string[], scratch: string): string[] {
+  const out = [...argv];
+
+  // **Forma Linux**: bwrap riceve la coppia come due argomenti separati.
+  //
+  // Il comando dell'utente è l'ultimo elemento, dopo il `-c` della shell, e non
+  // si tocca mai: `TMPDIR=/x make` scritto dal modello è testo suo, non una
+  // variabile che stiamo componendo noi.
+  const ultimoC = out.lastIndexOf('-c');
+  const fine = ultimoC > 0 ? ultimoC : out.length - 1;
+  for (let i = 0; i + 2 < fine; i += 1) {
+    if (out[i] === '--setenv' && out[i + 1] === 'TMPDIR') out[i + 2] = scratch;
+  }
+
+  // **Forma macOS**: tutta l'invocazione è UNA stringa dentro
+  // `['/bin/bash', '-c', 'env SANDBOX_RUNTIME=1 TMPDIR=… /usr/bin/sandbox-exec …']`,
+  // quindi non ci sono elementi separati da sostituire — misurato sull'argv
+  // vero, non dedotto dalla forma dell'altro ramo.
+  //
+  // Ancorato al prefisso esatto che srt emette, e a nient'altro: `SANDBOX_RUNTIME=1`
+  // è la sua prima variabile e `TMPDIR` la seconda (`generateProxyEnvVars`).
+  // Cercare `TMPDIR=` ovunque nella stringa vorrebbe dire poter riscrivere il
+  // comando del modello, che in quella stessa stringa è incastonato più avanti.
+  const PREFISSO = 'env SANDBOX_RUNTIME=1 TMPDIR=';
+  for (let i = 0; i < out.length; i += 1) {
+    const arg = out[i];
+    if (arg === undefined || !arg.startsWith(PREFISSO)) continue;
+    const resto = arg.slice(PREFISSO.length);
+    const spazio = resto.indexOf(' ');
+    if (spazio < 0) continue;
+    out[i] = `${PREFISSO}${scratch}${resto.slice(spazio)}`;
+  }
+
+  return out;
 }
 
 /** Paths the sandbox must never touch, whatever the per-call scope says. */
@@ -410,7 +485,8 @@ export class SandboxExecutor {
                 resolve({
                   reason: 'contain_failed',
                   detail: `the real containment self-test did not finish within ${SELFTEST_OVERALL_TIMEOUT_MS}ms`,
-                  remedy: 'the sandbox mechanism (bwrap/sandbox-exec) may be hanging on this host — check for stuck processes',
+                  remedy:
+                    'the sandbox mechanism (bwrap/sandbox-exec) may be hanging on this host — check for stuck processes',
                 }),
               SELFTEST_OVERALL_TIMEOUT_MS,
             );
@@ -446,7 +522,9 @@ export class SandboxExecutor {
         // `contain_failed` tutto cio' che non riconosce: un banale TypeError
         // dentro l'init si presentava come «il sandbox non contiene su questo
         // host», con un rimedio su AppArmor che non c'entrava niente.
-        throw new Error(`sandbox unavailable: ${failure.reason} — ${failure.detail} — ${failure.remedy}`);
+        throw new Error(
+          `sandbox unavailable: ${failure.reason} — ${failure.detail} — ${failure.remedy}`,
+        );
       }
 
       // Da qui il manager globale e' inizializzato **per conto di questo
@@ -475,7 +553,10 @@ export class SandboxExecutor {
   private async selfTestContainment(): Promise<ContainmentFailure | null> {
     const cwd = this.scratch();
     const sentinelPath = join(cwd, SELFTEST_SENTINEL_NAME);
-    writeFileSync(sentinelPath, 'muffin sandbox self-test — this line must be unreadable during the deny leg\n');
+    writeFileSync(
+      sentinelPath,
+      'muffin sandbox self-test — this line must be unreadable during the deny leg\n',
+    );
 
     const runLeg = async (denyRead: string[]): Promise<ExecResult> => {
       const controller = new AbortController();
@@ -518,7 +599,8 @@ export class SandboxExecutor {
       return {
         reason: 'contain_failed',
         detail: `the denied read of the self-test sentinel through SandboxManager did not exit within ${SELFTEST_LEG_TIMEOUT_MS}ms — a hang is not evidence of a held deny`,
-        remedy: 'the real sandbox invocation may be hanging on this host — check for stuck bwrap/sandbox-exec processes',
+        remedy:
+          'the real sandbox invocation may be hanging on this host — check for stuck bwrap/sandbox-exec processes',
       };
     }
     if (deny.code === 0) {
@@ -527,7 +609,8 @@ export class SandboxExecutor {
         detail:
           `a real sandboxed invocation through SandboxManager still let a process read ` +
           `a file with it explicitly denied — the runtime's own execution path is not containing anything`,
-        remedy: 'check whether the sandbox actually engages for real commands, not only for a narrower probe invocation',
+        remedy:
+          'check whether the sandbox actually engages for real commands, not only for a narrower probe invocation',
       };
     }
 
@@ -540,7 +623,8 @@ export class SandboxExecutor {
       return {
         reason: 'contain_failed',
         detail: `SandboxManager could not run even an unrestricted contained command (${detail}) — the denied read failing above is not evidence of containment when this unrestricted one fails too`,
-        remedy: 'the real sandbox invocation is broken independent of any deny policy — check the mechanism against this kernel/OS/container',
+        remedy:
+          'the real sandbox invocation is broken independent of any deny policy — check the mechanism against this kernel/OS/container',
       };
     }
     if (!allow.stdout.includes('muffin sandbox self-test')) {
@@ -550,7 +634,8 @@ export class SandboxExecutor {
       return {
         reason: 'contain_failed',
         detail: `the unrestricted leg exited 0 but did not read the sentinel's content back (stdout: ${JSON.stringify(allow.stdout.slice(0, 200))})`,
-        remedy: 'the real sandbox invocation is not behaving as a plain read on this host — check the mechanism against this kernel/OS/container',
+        remedy:
+          'the real sandbox invocation is not behaving as a plain read on this host — check the mechanism against this kernel/OS/container',
       };
     }
 
@@ -651,7 +736,13 @@ export class SandboxExecutor {
 
     const started = Date.now();
     try {
-      return await this.spawnCollect(wrapped.argv, this.childEnv(wrapped.env, scratch), req, timeoutMs, started);
+      return await this.spawnCollect(
+        puntaTmpdirAlloScratch(wrapped.argv, scratch),
+        this.childEnv(wrapped.env, scratch),
+        req,
+        timeoutMs,
+        started,
+      );
     } finally {
       // Linux leaves ghost mount-point files for deny paths that did not exist;
       // upstream documents this as the embedder's job after every command.
