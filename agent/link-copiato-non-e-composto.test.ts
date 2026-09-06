@@ -181,7 +181,11 @@ describe('seguire un link trovato dalla ricerca', () => {
 
     // Il cancello non è stato tolto: è stato dato un criterio a cui si può
     // rispondere. Questi byte non vengono da nessuna parte.
-    expect(h.approvals).toEqual([`lettura con parametri scelti dal contenuto: ${COMPOSTO}`]);
+    expect(h.approvals).toEqual([
+      `lettura con parametri scelti dal contenuto: ${COMPOSTO}\n\n` +
+        // ADR-0075 punto 4: la domanda porta anche la provenienza del livello.
+        'questo turno contiene contenuto di livello 3: il risultato di http_get',
+    ]);
   });
 
   it('e un URL che la persona ha incollato lei passa, a qualunque taint', async () => {
@@ -268,7 +272,11 @@ describe('citato vale per un indirizzo, mai per un payload', () => {
       text: 'leggi quella pagina',
     });
 
-    expect(h.approvals).toEqual([`lettura con parametri scelti dal contenuto: ${CON_SEGRETO}`]);
+    expect(h.approvals).toEqual([
+      `lettura con parametri scelti dal contenuto: ${CON_SEGRETO}\n\n` +
+        // ADR-0075 punto 4: la domanda porta anche la provenienza del livello.
+        'questo turno contiene contenuto di livello 3: il risultato di http_get',
+    ]);
   });
 });
 
@@ -297,7 +305,11 @@ describe('la provenienza non si autocertifica', () => {
 
     // Chiesto lo stesso, con l'URL intero sotto gli occhi dell'owner: le
     // parole del modello non sono un ingresso.
-    expect(h.approvals).toEqual([`lettura con parametri scelti dal contenuto: ${COMPOSTO}`]);
+    expect(h.approvals).toEqual([
+      `lettura con parametri scelti dal contenuto: ${COMPOSTO}\n\n` +
+        // ADR-0075 punto 4: la domanda porta anche la provenienza del livello.
+        'questo turno contiene contenuto di livello 3: il risultato di http_get',
+    ]);
   });
 });
 

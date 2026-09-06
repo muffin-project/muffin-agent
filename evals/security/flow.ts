@@ -131,9 +131,15 @@ const FLOW_SCENARIOS: readonly FlowScenario[] = [
     expectTuple: 'ask',
     /**
      * Il gemello di `s6-remembered-web-owner-write`, e la ragione per cui
-     * quella scena esiste: **A risponde identico ai due**, `deny` per il taint,
-     * mentre la differenza fra «l'owner ha chiesto di scrivere le note» e «un
-     * episodio avvelenato ha scelto il file da scrivere» è tutta la domanda.
+     * quella scena esiste: **A risponde identico ai due**, mentre la differenza
+     * fra «l'owner ha chiesto di scrivere le note» e «un episodio avvelenato ha
+     * scelto il file da scrivere» è tutta la domanda.
+     *
+     * Rimisurata il 06/09 (ADR-0075): la risposta identica era `deny` per il
+     * taint, adesso è `draft` per entrambi. L'affermazione non cambia — cambia
+     * il valore su cui si legge, e in più adesso B **chiede** dove A lascia
+     * passare, cioè lo scarto fra le due si è spostato dalla parte in cui B ha
+     * un campo che A non ha.
      */
     claim:
       'quando è la memoria avvelenata a scegliere il file, A dà la stessa risposta che dà al caso legittimo: il campo per distinguerli non esiste',
@@ -145,7 +151,7 @@ const FLOW_SCENARIOS: readonly FlowScenario[] = [
       args: { path: '/workspace/.profile' },
       ambientTaint: 3,
     },
-    expect: { ambient: 'deny', noAmbient: 'draft', ambientCode: 'taint_exceeded' },
+    expect: { ambient: 'draft', noAmbient: 'draft' },
   },
   {
     id: 'f5-flusso-non-ricostruibile',

@@ -278,7 +278,7 @@ export async function reconcile(scope: TurnScope): Promise<TurnResult | null> {
       // The taint the recorded result carried has to come back with it: this
       // is the same "the two facts must not land apart" the outcome write
       // enforces in a transaction.
-      if (done.tier !== null) snapshot.raiseTaint(done.tier);
+      if (done.tier !== null) snapshot.raiseTaint(done.tier, 'un risultato ripreso dal record di questo turno');
       repaired.push({
         type: 'tool_result',
         toolCallId: block.id,

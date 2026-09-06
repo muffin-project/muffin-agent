@@ -38,9 +38,9 @@ import { DOORS } from './doors.js';
  * This file is the guard that makes that drift impossible to repeat: every
  * shipped declaration names its row, and every cell of the matrix is asserted
  * against the kernel's own answer. Move a row in the document without moving
- * the table here, pin a `maxTaint` that contradicts a row, drop one of the two
- * deliberate tightenings, or ship a capability this file has never heard of,
- * and it goes red.
+ * the table here, pin a `maxTaint` that contradicts a row — or one on a
+ * reversible read, which ADR-0075 forbids outright — or ship a capability this
+ * file has never heard of, and it goes red.
  *
  * **What it does not cover**, stated because a guard that is trusted further
  * than it reaches is worse than none: `decisionAt` asks as the owner, hardened,
@@ -120,8 +120,14 @@ function decisionAt(decl: CapabilityDecl, taint: TrustTier): Decision {
 const MATRICE = {
   /** Bytes enter the turn; nothing leaves and nothing on the host changes. */
   context: { asksForIrreversible: false, denyAbove: 3 },
-  /** "Shell / filesystem host / processi": DENY sopra 2; chiede per ciò che non ha un undo (ADR-0074). */
-  host: { asksForIrreversible: true, denyAbove: 2 },
+  /**
+   * "Shell / filesystem host / processi": chiede per ciò che non ha un undo
+   * (ADR-0074) e **non nega più per taint** (ADR-0075: `denyAbove` 2 → 3).
+   * Ogni capability della riga risponde a taint 3 come a taint 0, perché ogni
+   * capability della riga è già coperta da un'altra difesa — giornale e undo,
+   * il sandbox in sola lettura, o un `ask` che arriva comunque.
+   */
+  host: { asksForIrreversible: true, denyAbove: 3 },
   /** "Reply sul canale di origine": ALLOW · ALLOW · ALLOW. Una risposta è la conversazione stessa. */
   reply: { asksForIrreversible: false, denyAbove: 3 },
   /** "Egress rete": the allowlist and `paramsMaxTaint`/`searchMaxTaint` own this row's columns. */
@@ -161,7 +167,16 @@ describe('la matrice normativa è eseguibile', () => {
       for (const taint of TIERS) {
         const d = decisionAt(decl, taint);
         if (taint > denyAbove) {
-          expect(`${decl.id}@${taint}:${d.effect}`).toBe(`${decl.id}@${taint}:deny`);
+          // ADR-0075 punto 3: sopra il soffitto delle due righe che portano
+          // byte **fuori dal tenant**, l'owner — che è il principal di questo
+          // file — riceve una domanda invece di un muro, e il prompt cita il
+          // taint. Per ogni altra riga, e per ogni altro principal (provato in
+          // `solo-irreversibile.test.ts`), il rifiuto non si muove.
+          const fuori = decl.effect === 'external' || decl.effect === 'outward';
+          expect(`${decl.id}@${taint}:${d.effect}`).toBe(`${decl.id}@${taint}:${fuori ? 'ask' : 'deny'}`);
+          if (fuori && d.effect === 'ask') {
+            expect(`${decl.id}@${taint}:${d.ask.prompt}`).toContain(`taint ${taint}`);
+          }
           continue;
         }
         if (atteso === 'ask') {
@@ -193,15 +208,44 @@ describe('la matrice normativa è eseguibile', () => {
   });
 
   /**
-   * Le due strette deliberate, nominate. Sono l'unica cosa che tiene
-   * `skill.read` e `sys.process.list` sotto la loro riga, e un giro di pulizia
-   * che togliesse quei `maxTaint` come «ridondanti» — proprio ciò che questa
-   * slice ha fatto a `sys.http`, `sys.search`, `turn.wait` e `sys.shell` —
-   * porterebbe entrambe da 1 a 3 senza che nient'altro nella suite lo dica.
+   * **Le due strette esplicite non ci sono più, e questo è il posto dove si
+   * dice perché — ADR-0075 punto 2.**
+   *
+   * Fino al 06/09 questo test asseriva l'opposto: `skill.read` e
+   * `sys.process.list` pinnavano `maxTaint: 1`, e la ragione scritta qui era
+   * che un giro di pulizia le avrebbe tolte come «ridondanti» portandole da 1
+   * a 3 senza che nient'altro nella suite lo dicesse. La ragione era buona e
+   * la conclusione è cambiata per una misura, non per una pulizia: quel numero
+   * non comprava sicurezza da nessuna parte. Sono **letture** — riga
+   * `context`, `reversible: 'yes'`, niente che esca dal tenant e niente da
+   * disfare — e l'unica cosa che il pin faceva era rendere Muffin incapace di
+   * aprire le proprie skill o di guardare i propri processi per tutto il resto
+   * di un turno che aveva letto una pagina web (nove turni su quattordici, il
+   * 06/09, sull'installazione dell'owner).
+   *
+   * La regola che resta, ed è quella che il test asserisce adesso: **un
+   * `maxTaint` non stringe mai una capability reversibile.** Una stretta per
+   * capability è ancora lecita dove la riga stessa nega (`external`,
+   * `outward`) o dove esiste un cancello di egress (`searchMaxTaint`,
+   * `paramsMaxTaint`), e il test sopra continua a rifiutare a voce alta un
+   * `maxTaint` più largo della propria riga. Rimettere un pin qui va contro
+   * ADR-0075 e questo test lo dice per nome.
    */
-  it('le strette esplicite restano esplicite', () => {
-    expect(skillCapability.maxTaint).toBe(1);
-    expect(processCapabilities.find((d) => d.id === 'sys.process.list')?.maxTaint).toBe(1);
+  it('nessuna lettura reversibile porta più un maxTaint, e a taint 3 risponde', () => {
+    expect(skillCapability.maxTaint).toBeUndefined();
+    expect(processCapabilities.find((d) => d.id === 'sys.process.list')?.maxTaint).toBeUndefined();
+    // Il pin era la sola cosa fra queste due e un turno a livello 3: senza,
+    // rispondono. È la metà che un `toBeUndefined()` da solo non prova.
+    for (const decl of [skillCapability, ...processCapabilities.filter((d) => d.id === 'sys.process.list')]) {
+      expect(`${decl.id}@3: ${decisionAt(decl, 3).effect}`).toBe(`${decl.id}@3: allow`);
+    }
+    // E la regola in generale, su tutto ciò che questo repository spedisce:
+    // un `maxTaint` sopravvive solo su una dichiarazione che non è reversibile
+    // o che sta su una riga dove il taint ha ancora un cancello suo.
+    const reversibiliConPin = ALL.filter(
+      (d) => d.maxTaint !== undefined && d.reversible !== 'no' && MATRICE[d.effect].denyAbove === 3,
+    ).map((d) => `${d.id}: maxTaint ${String(d.maxTaint)} su una lettura reversibile`);
+    expect(reversibiliConPin).toEqual([]);
   });
 
   /**
