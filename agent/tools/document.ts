@@ -51,9 +51,11 @@ const documentReadSpec: ToolSpec = {
   description:
     'Read an exact portion of a document already in your memory — a PDF, a DOCX, a note. ' +
     'Use it when a document was announced with an index of its pages and you need the real ' +
-    'text of some of them, rather than answering from the index. `path` is the vault path as ' +
+    'text of some of them, rather than answering from the index. Not for a file that was never indexed as a ' +
+    'document — that is fs_read (or a document Muffin has not seen), not this. `path` is the vault path as ' +
     'it was given to you; `da` and `a` are page numbers for a PDF and part numbers otherwise. ' +
-    'The whole document is stored: nothing was summarised away, so asking is always worth it.',
+    'The whole document is stored: nothing was summarised away, so asking is always worth it. ' +
+    'Returns the exact text of the requested pages/parts. e.g. document_read({path: "vault/report.pdf", da: 2, a: 3}).',
   inputSchema: {
     type: 'object',
     properties: {

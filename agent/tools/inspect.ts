@@ -108,8 +108,11 @@ const SPEC_DESCRIPTION =
   "Read-only: come è configurata QUESTA istanza adesso — build, provider e modello in uso, " +
   'profilo attivo, root of trust, stato dei check di salute, capability esposte a questo turno, ' +
   'blocchi del system prompt con la loro provenienza, turni aperti, job. ' +
-  "Usalo quando ti si chiede come funzioni o cosa stai usando: la risposta è misurata, non ricordata. " +
-  "Non descrive l'architettura del progetto, solo lo stato vivo.";
+  "Usalo quando ti si chiede come funzioni o cosa stai usando (che modello ti esegue, quanti tool vedi, " +
+  "se il RoT è integro): è il tool per questo, non un comando di sistema — la risposta è misurata, non ricordata. " +
+  "Non per l'architettura del progetto in teoria (quella sta nei documenti), solo per lo stato vivo di questo processo. " +
+  'Ritorna un report testuale a sezioni: istanza, turno corrente, capacità spente, salute, system prompt, turni, job. ' +
+  'e.g. sys_inspect({}) risponde a "che modello ti sta eseguendo, di preciso?" senza lanciare nulla in shell_run.';
 
 /**
  * Una riga di check, senza il testo di terze parti.
