@@ -57,6 +57,18 @@ export type ExecRequest = {
   signal?: AbortSignal;
 };
 
+/**
+ * The read-only lane's request, and **the point is the field that is missing**.
+ *
+ * `writeScope` is not optional here, it is absent: `runReadOnly` has nowhere to
+ * put a workspace even if a caller wanted to hand it one, so the boundary
+ * ADR-0074 §4 asks for is carried by the type rather than by a rule someone has
+ * to keep obeying. Widening this lane to the workspace is not a wrong argument
+ * at one call site — it is an edit to this file, which is what separates a
+ * wiring from a prohibition (AGENTS.md, "un divieto non regge il cablaggio").
+ */
+export type ReadOnlyExecRequest = Omit<ExecRequest, 'writeScope'>;
+
 export type ExecResult = {
   code: number | null;
   stdout: string;
@@ -146,6 +158,53 @@ function isMissingDependency(detail: string): boolean {
   return /dependencies not available|not found in PATH|\b(?:rg|ripgrep|socat|bwrap|bubblewrap)\b[^\n]{0,40}not found/i.test(
     detail,
   );
+}
+
+/**
+ * **No network, and the one place that says so.**
+ *
+ * Every config this module builds — session, per-call, self-test — reads its
+ * `network` block from here, so "the sandbox has no network" is one function
+ * to check and one function to break. That matters more since ADR-0074 §4:
+ * `sys.shell` (the read-only lane) declares `reversible: 'yes'` and never asks,
+ * and the claim behind `'yes'` is exactly this — a command that cannot open a
+ * socket cannot have sent anything that would need undoing.
+ *
+ * **What actually does the work, measured in `@anthropic-ai/sandbox-runtime`
+ * 0.0.71, not assumed from the field names.** `allowedDomains` being *defined*
+ * — empty is still defined — is what sets srt's `needsNetworkRestriction`
+ * (`dist/sandbox/sandbox-manager.js`, `hasNetworkConfig`). On Linux that flag
+ * is what pushes `--unshare-net` into the bwrap argv
+ * (`dist/sandbox/linux-sandbox-utils.js`); on macOS it is what makes the
+ * seatbelt profile omit `(allow network*)` (`dist/sandbox/macos-sandbox-utils.js`).
+ * Delete the key and both disappear silently — the whole host network comes
+ * back with nothing going red. That is the mutation the containment test
+ * `core/sandbox/confine-sola-lettura.test.ts` is written to catch.
+ *
+ * `deniedDomains: ['*']` is the second lock, on the proxy rather than the
+ * kernel: srt checks the deny list *first* and refuses unconditionally, where
+ * an empty allowlist alone refuses only because no `SandboxAskCallback` is
+ * registered (its own `NetworkRestrictionConfig` docstring says so). Nothing
+ * registers one today; this stops the day something does from being a silent
+ * widening.
+ *
+ * **Declared residual: AF_UNIX on Linux.** `allowAllUnixSockets` skips srt's
+ * seccomp layer, which is the only thing that blocks `socket(AF_UNIX, …)` —
+ * v1 keeps it on because two open upstream bugs (#428, #429) break seccomp on
+ * Ubuntu 24.04. `--unshare-net` does not cover Unix sockets: they are
+ * filesystem objects, and `connect()` to one is not a write, so a socket
+ * reachable under the read-only bind is reachable from the read-only lane too.
+ * The read-only lane therefore promises *no IP network and no writes outside
+ * the scratch* — not "no side effects reachable by any means". Written down in
+ * `docs/SECURITY.md` §9 rather than left as a gap between what the code does
+ * and what the capability declares.
+ */
+function networkOff(): SandboxRuntimeConfig['network'] {
+  return {
+    allowedDomains: [],
+    deniedDomains: ['*'],
+    ...(process.platform === 'linux' ? { allowAllUnixSockets: true } : {}),
+  };
 }
 
 /** Paths the sandbox must never touch, whatever the per-call scope says. */
@@ -423,11 +482,7 @@ export class SandboxExecutor {
       const timer = setTimeout(() => controller.abort(), SELFTEST_LEG_TIMEOUT_MS);
       try {
         const legConfig: Partial<SandboxRuntimeConfig> = {
-          network: {
-            allowedDomains: [],
-            deniedDomains: [],
-            ...(process.platform === 'linux' ? { allowAllUnixSockets: true } : {}),
-          },
+          network: networkOff(),
           // `allowWrite: [cwd]` on both legs even though the command only
           // reads: `run()` below always includes the scratch dir in
           // allowWrite, and a self-test that omits it is one more gratuitous
@@ -528,14 +583,7 @@ export class SandboxExecutor {
    */
   private baseConfig(): SandboxRuntimeConfig {
     return {
-      network: {
-        allowedDomains: [],
-        deniedDomains: [],
-        // v1 skips the optional apply-seccomp layer: two open bugs break it on
-        // Ubuntu 24.04 (#428, #429) for reasons orthogonal to the userns fix.
-        // Declared limit: Unix-socket hardening is off on Linux.
-        ...(process.platform === 'linux' ? { allowAllUnixSockets: true } : {}),
-      },
+      network: networkOff(),
       filesystem: {
         denyRead: [...this.guards.denyRead],
         allowWrite: [],
@@ -544,31 +592,43 @@ export class SandboxExecutor {
     };
   }
 
+  /**
+   * **The read-only lane** (`sys.shell`, ADR-0074 §4).
+   *
+   * Writes land in the session scratch and nowhere else — not the workspace,
+   * not the home, not the caller's cwd — and the network is off. That pair is
+   * the whole reason the capability may declare `reversible: 'yes'` and never
+   * ask: a command that can only touch a directory this process created under
+   * `tmpdir()` and deletes in `close()` has nothing to undo, and a command with
+   * no socket has sent nothing.
+   *
+   * `cwd` is still the caller's: reading is the point, and `--ro-bind / /`
+   * makes the whole filesystem readable minus `guards.denyRead` either way.
+   * What changes between the lanes is `allowWrite`, and `ReadOnlyExecRequest`
+   * is the type that makes it unchangeable from outside.
+   */
+  async runReadOnly(req: ReadOnlyExecRequest): Promise<ExecResult> {
+    return this.execute({ ...req, writeScope: [] });
+  }
+
+  /** **The writing lane** (`sys.shell.write`): `req.writeScope`, and an ask. */
   async run(req: ExecRequest): Promise<ExecResult> {
+    return this.execute(req);
+  }
+
+  private async execute(req: ExecRequest): Promise<ExecResult> {
     await this.ensureInit();
     const scratch = this.scratch();
     const timeoutMs = Math.min(req.timeoutMs ?? EXEC_DEFAULT_TIMEOUT_MS, EXEC_MAX_TIMEOUT_MS);
 
     const perCall: Partial<SandboxRuntimeConfig> = {
-      network: {
-        // Always empty, deliberately: srt's proxy (`filterNetworkRequest`)
-        // decides every connection against the SESSION-level config captured
-        // at `initialize()` (this class's `baseConfig()`, also `[]`), never
-        // against the `customConfig` passed to `wrapWithSandboxArgv` here.
-        // A per-call allowlist used to exist on `ExecRequest` (`allowHosts`)
-        // and looked like a working door — nothing read it, and even a
-        // caller that populated it by hand could not change what the proxy
-        // actually allows through this path. Removed rather than repaired
-        // (measured 2026-09-04, docs/evidence/consegna-github-2026-09-04.md
-        // §2.1): making per-call domains real needs a session-config swap
-        // around each command, which races concurrent execs sharing this
-        // one SandboxManager — a bigger change than this door pretended to be.
-        allowedDomains: [],
-        deniedDomains: [],
-        ...(process.platform === 'linux' ? { allowAllUnixSockets: true } : {}),
-      },
+      network: networkOff(),
       filesystem: {
         denyRead: [...this.guards.denyRead],
+        // The scratch is in both lanes, and it is the *only* entry the
+        // read-only lane has: `runReadOnly` passes `writeScope: []`, so this
+        // spread contributes nothing there. `cmd1 > f && cmd2 < f` keeps
+        // working in both, because the scratch survives the session.
         allowWrite: [...req.writeScope, scratch],
         // `nestedGitHooksDirs` walks every writable root fresh, THIS call —
         // see its docstring for why neither `this.guards.denyWrite` (fixed

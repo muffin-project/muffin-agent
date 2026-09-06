@@ -416,6 +416,56 @@ Read access to the home is a separate, still-open question: a contained command
 can read `muffin.db` and the session log, and what leaves is governed by taint
 and egress rather than by this boundary.
 
+### 9.1 Two shell lanes, and what each one promises
+
+Since ADR-0074 §4 there are two contained command capabilities, not one, and the
+line between them is what the sandbox can be made to guarantee rather than a
+judgement about how dangerous commands are.
+
+`sys.shell` (`shell_run`) is the **read-only lane**: the filesystem is readable
+subject to the deny-read list, writes are confined to a scratch directory this
+process creates under the system temp dir and removes when the session ends, and
+there is no IP network. It declares `reversible: 'yes'` and `risk: 'low'`, and
+the kernel therefore lets it run without asking anyone. That is the whole
+argument: a command that cannot write outside a throwaway directory has nothing
+to undo, and a command with no socket has sent nothing. Both halves are executed
+against a live sandbox in `core/sandbox/confine-sola-lettura.test.ts`, on Linux
+under `bwrap` in the `verifica` job of `scripts/ci-local.ts` and on macOS under
+seatbelt.
+
+`sys.shell.write` (`shell_run_write`) is the **writing lane**: the workspace is
+its write scope, it keeps `reversible: 'no'` and `risk: 'high'`, and it asks
+every time. It is the capability the earlier single `sys.shell` was.
+
+Three properties of this split are load-bearing:
+
+- **The boundary is wiring, not a rule.** `SandboxExecutor.runReadOnly` takes a
+  request type with no `writeScope` field, so the read-only lane cannot be
+  handed the workspace by a mistaken caller. The two lanes are two tools with
+  two capability ids, decided by the kernel before a handler runs, rather than
+  one tool branching on a parameter the model wrote.
+- **Neither lane exists where containment cannot be proved.** The read-only lane
+  is the stricter of the two and its promise *is* the sandbox's promise, so a
+  host with a negative `probeSandbox` gets no shell at all — never the read-only
+  one as a "safe fallback", and never a silent fall back to the writing one. The
+  tool says the command must be run by hand or with a dedicated tool.
+- **What it does not claim.** Two residuals are declared rather than implied.
+  On Linux `network.allowAllUnixSockets` is on — srt's seccomp layer, the only
+  thing that blocks `socket(AF_UNIX, …)`, is broken on Ubuntu 24.04 (upstream
+  #428/#429) — and `--unshare-net` does not cover Unix sockets, which are
+  filesystem objects: a socket reachable under the read-only bind is reachable
+  from the read-only lane. And a command still spends the host's CPU, memory and
+  file descriptors. So `sys.shell` stays on the `host` effect row rather than
+  moving to `context`: "no writes outside the scratch and no IP network" is the
+  claim; "no effect of any kind on the host" is not.
+
+Network is off on **both** lanes today, although ADR-0074 describes the writing
+one as writing *or* reaching the network. Opening the network there would route
+around the Root of Trust's egress allowlist (ADR-0066) through a door that does
+not consult it, and that is a separate decision from this split. The current
+state is asserted, not assumed: the same live containment test checks the
+writing lane cannot reach a listening host socket either.
+
 Symlink, hardlink, ancestor-symlink and path-canonicalisation behaviour are part
 of the security claim rather than filesystem edge cases.
 
