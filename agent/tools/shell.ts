@@ -57,9 +57,16 @@ export const shellCapability: CapabilityDecl = {
 const shellSpec: ToolSpec = {
   name: 'shell_run',
   description:
-    'Run a non-interactive shell command inside the sandbox. Writes are confined to the ' +
+    'Run a non-interactive shell command inside the sandbox — the last resort. Not for `cat`/`ls`/`find`/`grep`/`echo … >` ' +
+    '(fs_read, fs_list, fs_search, fs_write), `ps`/`kill` (process_list, process_kill), a question about this instance — ' +
+    'model, provider, tools, RoT (sys_inspect), an indexed document (document_read), what you already know ' +
+    '(memory_search), or a URL/search you already have a tool for (http_get, web_search): each of those runs ' +
+    'without asking the owner, and this one always asks. Use it when the task genuinely needs a program none of ' +
+    'the above wraps — a build, a test suite, a one-off script — only after checking that no dedicated tool ' +
+    'covers the case. Writes are confined to the ' +
     'working directory and a scratch TMPDIR; there is no network access. The working ' +
-    'directory does NOT persist between calls — pass cwd each time. Output over ~30k ' +
+    'directory does NOT persist between calls — pass cwd each time. Returns the exit code, stdout and stderr; ' +
+    'output over ~30k ' +
     'characters is cut head-and-tail with an explicit marker. If the sandbox blocks the ' +
     'command, say so and tell the owner what to run themselves; there is no unsandboxed retry.',
   inputSchema: {

@@ -637,6 +637,19 @@ function concat(parts: string[]): string {
  * permission is the worst of both: false, plausible, and it sends the owner
  * to look for a setting that does not exist. The runtime cannot close this
  * one: nothing is called, so nothing is denied.
+ *
+ * A fifth (DAY-1 D13, measured 04-06/09/2026): `sys.shell` always asks —
+ * single-user mode never auto-allows it — while `fs_read`, `fs_search`,
+ * `process_list` and `sys_inspect` never do. The character baseline of
+ * 04/09 found four `agentic` fails whose turn stalled on "serve la tua
+ * approvazione per sys.shell" where a dedicated tool already covered the
+ * question ("che modello ti sta eseguendo" is `sys_inspect`, not a shell
+ * command). Every tool's own description now says when to use it and when
+ * not to (Anthropic, *Define tools* — "when it should be used (and when it
+ * shouldn't)"), but a model choosing between fourteen tool descriptions and
+ * one instruction line reads the line first. The rule below is that line: it
+ * does not repeat what each description says, it says *which order to try
+ * them in*, once.
  */
 const WORK_RULES = [
   // `#` e non `##`, ed è una correzione di struttura, non di stile. I quattro
@@ -655,6 +668,7 @@ const WORK_RULES = [
   "- Prima di rifare una chiamata che hai già fatto, chiediti cosa è cambiato. Se non è cambiato niente, la risposta ce l'hai già.",
   '- Se il lavoro richiede più passaggi, dì in una riga cosa stai per fare prima di partire. Non a metà, e non a cose fatte.',
   '- Quando hai finito, rispondi e basta: non chiamare altri tool per abitudine.',
+  '- Il tool dedicato viene prima della shell: leggi con `fs_read`/`fs_search`, ispeziona con `sys_inspect` o `process_list`, poi agisci se serve. `sys.shell` è l\'ultima risorsa, e chiede sempre — per "che modello ti sta eseguendo" concateni `sys_inspect`, non un comando: `fs_read("config.json")` poi, se serve, `shell_run` sul risultato, non il contrario.',
   // La riga sul recinto. Sta qui e non in `persona.md` perché è una regola
   // operativa su cosa fare di un risultato, non un tratto di carattere; e sta
   // in **tutte e due** le versioni perché `promptVersion` di default è `v1`
@@ -724,6 +738,7 @@ const WORK_RULES_V2 = [
   '- Chiedo a parole solo quando la decisione è davvero sua: un tradeoff irreversibile, o due strade che portano a due lavori diversi. In quel caso porto le opzioni e la mia opinione, non una domanda aperta.',
   "- Prima di rifare una chiamata che ho già fatto, mi chiedo cosa è cambiato. Se non è cambiato niente, la risposta ce l'ho già.",
   '- I tool che ho sono quelli che vedo. Se per una cosa non ne ho uno lo dico così, e non invento una policy o un permesso che lo nasconderebbe.',
+  '- Il tool dedicato viene prima della shell: leggo con `fs_read`/`fs_search`, ispeziono con `sys_inspect` o `process_list`, poi agisco se serve. `sys.shell` è l\'ultima risorsa, e chiede sempre — per "che modello mi sta eseguendo" concateno `sys_inspect`, non un comando: prima `fs_read` sul file che mi serve, poi `shell_run` sul risultato se serve davvero, non il contrario.',
   '',
   '## Quello che leggo',
   '',
