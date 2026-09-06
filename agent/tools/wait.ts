@@ -123,6 +123,19 @@ export const waitCapability: CapabilityDecl = {
    * the answer that cannot be wrong is no. The kernel refuses a member here
    * (`decide.ts`) and `visibleTools` keeps it off their menu, so a group turn
    * neither sees it nor could use it.
+   *
+   * **ADR-0073 punto 5 dà a quella domanda aperta un posto dove ricevere una
+   * risposta, una stanza alla volta.** Il `true` qui non si muove: il default
+   * resta no, per ogni gruppo che nessuno ha esaminato. Ciò che esiste ora è
+   * il modo di dire sì a *questa* stanza — un grant `turn.wait` in `tenants`
+   * di una `rot/policy.json` sigillata — che è esattamente la forma che
+   * «finché non è esaminato» chiedeva: un esame, scritto, per un caso
+   * concreto, non un flag globale.
+   *
+   * E il punto 5 dice perché non serve altro: un `wait` è del **turno**, e un
+   * turno di stanza vive già nella sessione della stanza. Il tetto per tenant
+   * dei turni sospesi (`turns`, sopra) conta già per tenant, quindi una
+   * stanza non può tenere sospesa la casa dell'owner.
    */
   hostOnly: true,
 };

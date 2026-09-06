@@ -675,7 +675,7 @@ describe('the tool list a principal is shown', () => {
     try {
       const all = runtime.deps.tools;
       const caps = runtime.deps.capabilities;
-      const forMember = visibleTools(all, MEMBER, caps);
+      const forMember = visibleTools(all, MEMBER, caps, undefined);
 
       expect(forMember.length).toBeGreaterThan(0);
       expect(forMember.length).toBeLessThan(all.length);
@@ -698,9 +698,9 @@ describe('the tool list a principal is shown', () => {
     try {
       const all = runtime.deps.tools;
       const caps = runtime.deps.capabilities;
-      expect(visibleTools(all, OWNER, caps)).toEqual(all);
-      expect(visibleTools(all, { kind: 'system', source: 'scheduler' }, caps)).toEqual(all);
-      expect(visibleTools(all, { kind: 'agent', role: 'dev' }, caps)).toEqual(all);
+      expect(visibleTools(all, OWNER, caps, undefined)).toEqual(all);
+      expect(visibleTools(all, { kind: 'system', source: 'scheduler' }, caps, undefined)).toEqual(all);
+      expect(visibleTools(all, { kind: 'agent', role: 'dev' }, caps, undefined)).toEqual(all);
     } finally {
       runtime.close();
     }
@@ -714,7 +714,7 @@ describe('the tool list a principal is shown', () => {
     const runtime = boot(bootHome());
     try {
       const { tools, capabilities, decide } = runtime.deps;
-      const shown = new Set(visibleTools(tools, MEMBER, capabilities).map((t) => t.spec.name));
+      const shown = new Set(visibleTools(tools, MEMBER, capabilities, undefined).map((t) => t.spec.name));
       let refused = 0;
       for (const tool of tools) {
         const decision = decide({
@@ -743,9 +743,9 @@ describe('the tool list a principal is shown', () => {
     const runtime = boot(bootHome());
     try {
       const rogue = { ...runtime.deps.tools[0]!, capability: 'not.declared' };
-      const shown = visibleTools([rogue], MEMBER, runtime.deps.capabilities);
+      const shown = visibleTools([rogue], MEMBER, runtime.deps.capabilities, undefined);
       expect(shown).toEqual([]);
-      expect(visibleTools([rogue], OWNER, runtime.deps.capabilities)).toEqual([rogue]);
+      expect(visibleTools([rogue], OWNER, runtime.deps.capabilities, undefined)).toEqual([rogue]);
     } finally {
       runtime.close();
     }
@@ -767,9 +767,9 @@ describe('the tool list a principal is shown', () => {
     const runtime = boot(bootHome());
     try {
       const senzaTipo = undefined as unknown as typeof runtime.deps.capabilities;
-      expect(visibleTools(runtime.deps.tools, MEMBER, senzaTipo)).toEqual([]);
+      expect(visibleTools(runtime.deps.tools, MEMBER, senzaTipo, undefined)).toEqual([]);
       // The owner is never filtered, absence of declarations or not.
-      expect(visibleTools(runtime.deps.tools, OWNER, senzaTipo)).toEqual(runtime.deps.tools);
+      expect(visibleTools(runtime.deps.tools, OWNER, senzaTipo, undefined)).toEqual(runtime.deps.tools);
     } finally {
       runtime.close();
     }
