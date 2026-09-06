@@ -46,18 +46,57 @@ const PolicyFileSchema = z.object({
    * The normative matrix's own rows. Partial, like `defaultMaxTaint`: a file
    * that wants to tighten one row says so and inherits the rest, and — same
    * clamp, same reason — it may only tighten.
+   *
+   * **`.strict()`, and that is the whole point of this object since
+   * ADR-0074.** `askAbove` is gone from `RowPolicy`: the taint no longer turns
+   * an `allow` or a `draft` into an `ask`. A sealed `policy.json` written
+   * against the old vocabulary is therefore making a promise this build does
+   * not keep — *"host asks above taint 1"* — and the one failure mode that
+   * must not happen is the kernel reading the rest of that file, ignoring the
+   * field in silence, and leaving the owner believing a gate that no longer
+   * exists. Strict makes the unknown key an issue whose message carries the
+   * key's own name, so `loadPolicyMatrix`'s fallback note says `askAbove` out
+   * loud and `muffin doctor` prints it. Refusing the file is the fail-closed
+   * direction here for the same reason the deny lists are unioned: the floor
+   * is stricter than any row a file could have widened.
    */
-  rows: z.record(z.string(), z.object({ askAbove: Tier.optional(), denyAbove: Tier.optional() })).optional(),
+  rows: z
+    .record(
+      z.string(),
+      z
+        .object({ asksForIrreversible: z.boolean().optional(), denyAbove: Tier.optional() })
+        .strict(),
+    )
+    .optional(),
 });
 
 /**
- * One row of the threat model's matrix, as two thresholds over the taint
- * columns: above `askAbove` nothing on this row may be unattended (an `allow`
- * or a `draft` becomes an `ask`), above `denyAbove` the row is out of reach.
- * `3` means the matrix leaves that column to the risk class and the other
- * gates; `-1` means never, at any taint.
+ * One row of the threat model's matrix: a ceiling over the taint columns, and
+ * the answer to *does irreversibility matter here*.
+ *
+ * `denyAbove` is unchanged since ADR-0044 — above it the row is out of reach,
+ * `3` means the matrix does not constrain that column, `-1` means never at any
+ * taint. It is the ceiling, and the ceiling is still the taint's job.
+ *
+ * `asksForIrreversible` replaced `askAbove` in ADR-0074. The old field said
+ * *"above this taint nothing on this row may run unattended"*, which made the
+ * turn's ambient taint a reason to ask about an action that has an undo:
+ * after reading one web page, `fs.write` — journalled, with `muffin undo`
+ * behind it — asked. Measured on the real installation, all 35 approvals ever
+ * requested were `sys.shell` at taint 2, granted 32 times: a gate conceded
+ * nine times out of ten is a reflex, not a decision. The taint still denies
+ * above `denyAbove` and still stamps episodes; it no longer converts an
+ * `allow` or a `draft` into an `ask`.
+ *
+ * What is left is the question the confirmation was always for: **can this be
+ * taken back?** `true` on the rows where the answer decides something — the
+ * host machine, third-party code, a new recipient — and `false` where an
+ * irreversible-by-declaration effect is still the conversation itself
+ * (`reply`), an episode that can be deleted (`memory`), bytes merely entering
+ * the turn (`context`), or a destination the allowlist and `gateParams`
+ * already own (`egress`).
  */
-export type RowPolicy = { readonly askAbove: TrustTier; readonly denyAbove: number };
+export type RowPolicy = { readonly asksForIrreversible: boolean; readonly denyAbove: number };
 
 export type PolicyMatrix = {
   /**
@@ -210,29 +249,67 @@ export type PolicyMatrix = {
  * ADR-0053 rather than quoted, and neither changed any behaviour.
  */
 export const ROW_FLOOR: Readonly<Record<EffectRow, RowPolicy>> = {
-  /** Reading is not acting: ADR-0044's own summary — a turn that read from disk still reads and answers. */
-  context: { askAbove: 3, denyAbove: 3 },
-  /** "Shell / filesystem host / processi": ALLOW per classe (HITL) · **ASK** · DENY. */
-  host: { askAbove: 1, denyAbove: 2 },
-  /** "Reply sul canale di origine": ALLOW · ALLOW · ALLOW. */
-  reply: { askAbove: 3, denyAbove: 3 },
-  /** "Egress rete": the allowlist and `paramsMaxTaint` own these columns, not this row. */
-  egress: { askAbove: 3, denyAbove: 3 },
-  /** "Scrittura memoria": ALLOW · ALLOW nel tenant, tier ereditato · ALLOW, tier 3. */
-  memory: { askAbove: 3, denyAbove: 3 },
+  /**
+   * Reading is not acting: ADR-0044's own summary — a turn that read from disk
+   * still reads and answers. Nothing on this row leaves a trace to take back.
+   */
+  context: { asksForIrreversible: false, denyAbove: 3 },
+  /**
+   * "Shell / filesystem host / processi": DENY sopra taint 2, unchanged. What
+   * moved in ADR-0074 is the other half of the cell — the document's `ASK` at
+   * taint 2 applied to the whole row, so `fs.write` (checkpointed, with an
+   * undo) asked for the same reason `sys.shell` (no undo at all) did. Now the
+   * row asks for the second and not the first.
+   */
+  host: { asksForIrreversible: true, denyAbove: 2 },
+  /**
+   * "Reply sul canale di origine": ALLOW · ALLOW · ALLOW. `false`, and the
+   * declarations are why it has to be said: `surface.reply` and
+   * `surface.send_file` are both `reversible: 'no'` — bytes on the wire cannot
+   * be recalled — and an approval prompt that gates the reply is an approval
+   * prompt that cannot be delivered. The row the matrix prints as ALLOW at
+   * every taint stays ALLOW at every taint.
+   */
+  reply: { asksForIrreversible: false, denyAbove: 3 },
+  /**
+   * "Egress rete": the allowlist and `paramsMaxTaint`/`searchMaxTaint` own
+   * these columns, not this row — ADR-0071 and ADR-0072 are untouched by
+   * ADR-0074, and they are where an egress `ask` still comes from.
+   */
+  egress: { asksForIrreversible: false, denyAbove: 3 },
+  /**
+   * "Scrittura memoria": ALLOW · ALLOW nel tenant, tier ereditato · ALLOW,
+   * tier 3. `memory.write` declares `reversible: 'no'` because nothing
+   * journals it, not because an episode is unrecoverable: a row can be
+   * deleted and consolidation rewrites what it derives from.
+   */
+  memory: { asksForIrreversible: false, denyAbove: 3 },
   /**
    * Third-party code and services outside the allowlist model. The one row the
    * document does not print: MCP is covered in prose (`docs/SECURITY.md` §10),
    * and this keeps the number those capabilities already had rather than
    * inventing a widening nobody reviewed.
+   *
+   * `true`: we do not own the semantics on the other side of the pipe, so a
+   * call that may have landed cannot be taken back. Today every MCP
+   * declaration is `reversible: 'no'` by hand, so every MCP call asks — which
+   * is ADR-0074 point 5's own starting position, and the thing point 5 (a
+   * different slice) fixes by reading the protocol's `readOnlyHint`.
    */
-  external: { askAbove: 1, denyAbove: 1 },
-  /** "Outward (mail, messaggi a terzi, pubblicazione)": DRAFT di default · DENY · DENY. */
-  outward: { askAbove: 0, denyAbove: 1 },
-  /** "Scrittura config/voice (cricchetto)": ALLOW solo via ratchet-API · DENY · DENY. */
-  config: { askAbove: 0, denyAbove: 1 },
+  external: { asksForIrreversible: true, denyAbove: 1 },
+  /** "Outward (mail, messaggi a terzi, pubblicazione)": DRAFT di default · DENY · DENY. Un messaggio spedito non si ritira. */
+  outward: { asksForIrreversible: true, denyAbove: 1 },
+  /**
+   * "Scrittura config/voice (cricchetto)": ALLOW solo via ratchet-API · DENY ·
+   * DENY. Unchanged in effect, and inert by construction: no shipped
+   * `CapabilityDecl` declares this row (ADR-0070, asserted in
+   * `effect-rows.test.ts`), so the ratchet — not this boolean — is what keeps
+   * the model out of the configuration. `true` is what the row would answer if
+   * one ever arrived.
+   */
+  config: { asksForIrreversible: true, denyAbove: 1 },
   /** "Root of Trust: DENY a runtime per chiunque" — `neverAtRuntime` refuses it first; this is the belt. */
-  rot: { askAbove: 0, denyAbove: -1 },
+  rot: { asksForIrreversible: true, denyAbove: -1 },
 };
 
 export const POLICY_FLOOR: PolicyMatrix = {
@@ -320,13 +397,20 @@ function tighter(fromFile: TrustTier | undefined, floor: TrustTier): TrustTier {
  * vocabulary the kernel never reviewed.
  */
 function tighterRows(
-  fromFile: Record<string, { askAbove?: TrustTier | undefined; denyAbove?: TrustTier | undefined }> | undefined,
+  fromFile:
+    | Record<string, { asksForIrreversible?: boolean | undefined; denyAbove?: TrustTier | undefined }>
+    | undefined,
 ): Readonly<Record<EffectRow, RowPolicy>> {
   const out = {} as Record<EffectRow, RowPolicy>;
   for (const [name, floor] of Object.entries(ROW_FLOOR) as Array<[EffectRow, RowPolicy]>) {
     const said = fromFile?.[name];
     out[name] = {
-      askAbove: tighter(said?.askAbove, floor.askAbove),
+      // Tighten-only in the boolean's own direction: `true` (ask about what
+      // cannot be undone on this row) is the strict value, so a file may turn
+      // a `false` row on and may never turn a `true` row off. An owner who
+      // wants an approval on every reply can have it; a file write plus a
+      // reseal cannot silence the ask on `sys.shell`.
+      asksForIrreversible: said?.asksForIrreversible === true || floor.asksForIrreversible,
       denyAbove: said?.denyAbove !== undefined && said.denyAbove < floor.denyAbove ? said.denyAbove : floor.denyAbove,
     };
   }

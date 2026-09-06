@@ -286,6 +286,11 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     "la regge `connectors/shared/ingress/parita.test.ts` con i quattro describe di §2.6: l'asse delle porte viene da `INGRESS_PORT_IDS` (la tabella vera di `cli/surface.ts`), l'asse dei comportamenti da `INGRESS_STAGES` (lo stesso array che `receive` itera), e il quarto describe guida il drain vero di ciascun connettore dal suo trasporto finto — inlinare gli stadi in un connettore lo rende rosso mentre gli altri tre restano verdi",
   ),
   provataDalMeccanismo(
+    'D14',
+    "solo l'irreversibile chiede: un ask arriva se e solo se `reversible: 'no'` incontra una riga con `asksForIrreversible`, mai per il taint, la classe o la scorciatoia hardened",
+    "la regge `core/policy/solo-irreversibile.test.ts`, che enumera ogni `CapabilityDecl` spedita (17 tool più le due porte) per owner e membro di gruppo a taint 0-3 e fissa per nome chi chiede (`sys.shell`, `sys.process.kill`, `mcp.*`); un ask in più o in meno lo fa rosso, e le tre mutazioni della PR #456 (askAbove restituito, scorciatoia hardened restituita, `asksForIrreversible` su `reply`) lo hanno fatto rosso. Uno scenario di accettazione non aggiunge nulla: la domanda della riga è sul kernel, e il kernel è lo stesso oggetto per il binario e per il test",
+  ),
+  provataDalMeccanismo(
     'B19',
     'nucleo modulare: il loop è nove moduli nominati con il gemello, e `agent/loop.ts` è il barile che conserva i 35 importatori',
     'la reggono `agent/loop/barrel.test.ts` (i cinque export di valore, e nessun modulo che reimporta il barile) e i nove test gemelli sotto `agent/loop/`; il numero, 54 righe in `agent/loop.ts`, è verificabile con `wc -l` e non da uno scenario che spawna il binario',

@@ -57,14 +57,23 @@ class Scripted implements Provider {
 const usage = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 };
 const risposta = (text: string): ChatResult => ({ text, toolCalls: [], stopReason: 'end', usage, model: 'test' });
 
-/** La forma di `sys.shell`: rischio alto, nessuna risorsa del kernel. */
+/**
+ * La forma di `sys.shell`: irreversibile, sulla riga `host`, nessuna risorsa
+ * del kernel.
+ *
+ * `effect: 'host'` invece di `'context'` da ADR-0074: ciò che produce l'`ask`
+ * è la coppia `reversible: 'no'` + riga che chiede, non più `risk: 'high'`.
+ * Con la riga `context` questa dichiarazione otterrebbe un `allow` e i sette
+ * test qui sotto — che riguardano l'approvazione **differita**, non il
+ * kernel — non avrebbero più una domanda da differire.
+ */
 const probeAct: CapabilityDecl = {
   id: 'probe.act',
-  effect: 'context',
+  effect: 'host',
   risk: 'high',
   reversible: 'no',
   rerunnable: false,
-  maxTaint: 3,
+  maxTaint: 2,
   resourceKind: 'none',
   policyArgs: [],
   hostOnly: false,
