@@ -251,3 +251,112 @@ describe('a tool the model was not shown', () => {
     expect(content).not.toContain('web_search');
   });
 });
+
+/**
+ * **ADR-0075 punto 4: il prompt di ogni `ask` porta l'origine del taint.**
+ *
+ * Il kernel dice cosa non torna indietro; da un solo snapshot non può dire
+ * *quale parte del turno* ha alzato il livello, perché quella non è nella
+ * `DecisionRequest`. Il giro sì, ed è qui che si prova — sul percorso vero
+ * (`runTool` due volte, la stessa `PermissionSnapshot`, un `approve` che
+ * cattura ciò che l'owner leggerebbe), non sulla funzione di formattazione da
+ * sola: la cucitura fra chi alza il taint e chi scrive la domanda è
+ * esattamente la cosa che può rompersi restando verde altrove.
+ */
+describe('la domanda dice da dove viene il taint — ADR-0075', () => {
+  /** Una capability che chiede sempre: `host` + `reversible: 'no'` (ADR-0074). */
+  const scrive: CapabilityDecl = {
+    id: 'sys.shell.write',
+    effect: 'host',
+    risk: 'high',
+    reversible: 'no',
+    rerunnable: false,
+    resourceKind: 'none',
+    policyArgs: ['command'],
+    hostOnly: false,
+  };
+
+  async function chiediDopoUnaRicerca(): Promise<string> {
+    const cerca: CapabilityDecl = { ...searchCapability, hostOnly: false };
+    const toolCerca: RegisteredTool = {
+      capability: cerca.id,
+      spec: searchSpec,
+      // Tier 3: è ciò che una ricerca web restituisce davvero
+      // (`agent/tools/search.ts`), non un numero scelto dal test.
+      handler: (): Promise<ToolOutcome> => Promise.resolve({ content: 'risultati', tier: 3 }),
+      throwTier: 3,
+    };
+    const toolScrive: RegisteredTool = {
+      capability: scrive.id,
+      spec: { name: 'shell_run_write', description: 'scrive', inputSchema: { type: 'object', properties: {} } },
+      handler: (): Promise<ToolOutcome> => Promise.resolve({ content: 'fatto', tier: 0 }),
+      throwTier: 0,
+    };
+    const { deps } = harness([cerca, scrive], [toolCerca, toolScrive]);
+    let letto = '';
+    deps.approve = (request) => {
+      letto = request.prompt;
+      return Promise.resolve('deny');
+    };
+    const snapshot = makeSnapshot(deps.decide, owner, 'host', 0);
+    const parent = deps.tracer.start('muffin.turn', {});
+    const ctx = toolCtx(deps, owner, 'turn-origine');
+
+    await runTool(deps, snapshot, parent, { id: 'c1', name: searchSpec.name, args: { query: 'x' } }, toolInput(owner), [toolCerca, toolScrive], ctx);
+    // Il turno è salito per davvero: senza questo, la riga sotto proverebbe
+    // solo che una stringa viene concatenata.
+    expect(snapshot.currentTaint()).toBe(3);
+    await runTool(
+      deps,
+      snapshot,
+      parent,
+      { id: 'c2', name: 'shell_run_write', args: { command: 'rm -rf /tmp/x' } },
+      toolInput(owner),
+      [toolCerca, toolScrive],
+      ctx,
+    );
+    return letto;
+  }
+
+  it("la domanda che segue una ricerca nomina il livello e la parte che l'ha alzato", async () => {
+    const prompt = await chiediDopoUnaRicerca();
+    // La prima metà resta quella di ADR-0074: si chiede per ciò che non torna.
+    expect(prompt).toContain('non si torna indietro');
+    // La seconda è ADR-0075: il livello, e da dove viene.
+    expect(prompt).toContain('questo turno contiene contenuto di livello 3');
+    expect(prompt).toContain(`il risultato di ${searchSpec.name}`);
+  });
+
+  /**
+   * Il falsificatore dell'altra metà: a taint 0 non si aggiunge niente. Una
+   * riga fissa che dicesse «livello 0» su ogni domanda sarebbe rumore, e il
+   * rumore è come una ragione visibile smette di essere letta.
+   */
+  it('un turno pulito non porta nessuna riga di provenienza', async () => {
+    const toolScrive: RegisteredTool = {
+      capability: scrive.id,
+      spec: { name: 'shell_run_write', description: 'scrive', inputSchema: { type: 'object', properties: {} } },
+      handler: (): Promise<ToolOutcome> => Promise.resolve({ content: 'fatto', tier: 0 }),
+      throwTier: 0,
+    };
+    const { deps } = harness([scrive], [toolScrive]);
+    let letto = '';
+    deps.approve = (request) => {
+      letto = request.prompt;
+      return Promise.resolve('deny');
+    };
+    const snapshot = makeSnapshot(deps.decide, owner, 'host', 0);
+    const parent = deps.tracer.start('muffin.turn', {});
+    await runTool(
+      deps,
+      snapshot,
+      parent,
+      { id: 'c1', name: 'shell_run_write', args: { command: 'ls' } },
+      toolInput(owner),
+      [toolScrive],
+      toolCtx(deps, owner, 'turn-pulito'),
+    );
+    expect(letto).toContain('non si torna indietro');
+    expect(letto).not.toContain('contenuto di livello');
+  });
+});

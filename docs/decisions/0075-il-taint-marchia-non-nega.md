@@ -1,6 +1,6 @@
 # ADR-0075 — Il taint marchia, non nega: sull'host decide la reversibilità
 
-**Stato:** proposto · 2026-09-06 · decisione owner (*«per il taint non ha
+**Stato:** accettato · 2026-09-06 · decisione owner (*«per il taint non ha
 senso che ancora abbiamo sti problemi, inutilizzabile in sto modo»*) sul
 `muffin.db` vivo e sul corpus avversariale di SECURITY §13
 
@@ -39,7 +39,7 @@ livello 3 nel contesto è la ragione per cui un messaggio a terzi può portare
 fuori ciò che il turno ha letto. Ma anche lì il muro è la forma sbagliata: a
 taint 3 l'owner oggi non può nemmeno chiedere «cerca X e mandalo a Y».
 
-## Decisione (proposta)
+## Decisione
 
 **1. Sulla riga `host` il taint non nega più.** `denyAbove` di `host` passa
 da 2 a 3. Ogni capability della riga risponde a taint 3 come a taint 0: le

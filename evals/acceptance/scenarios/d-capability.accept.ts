@@ -830,4 +830,149 @@ describe('acceptance · D · capability e sicurezza', () => {
     },
     30_000,
   );
+
+  /**
+   * **D16 — dopo una ricerca web, nella stessa conversazione, la shell
+   * risponde ancora (ADR-0075).**
+   *
+   * La riga nasce da una misura, non da un'idea: il 06/09, sul `muffin.db`
+   * dell'owner, nove turni su quattordici in privato erano a taint 3, l'ultima
+   * chiamata vera alla shell era del 03/09, e l'ultimo turno si era chiuso con
+   * `context taint 3 exceeds 2 for sys.shell (host)`. Dopo una ricerca web,
+   * niente shell e niente scrittura fino a una conversazione nuova — e il
+   * modello lo raccontava come «non ho la shell».
+   *
+   * Perché passa dal binario e non dal kernel: `solo-irreversibile.test.ts`
+   * prova che il kernel non risponde piu' `taint_exceeded` sulla riga `host`,
+   * ed e' un'affermazione sul kernel. Questa e' l'altra: che il **turno vero**
+   * — un processo headless, senza approvatore, con il taint composto dal
+   * loop e non passato a mano — arrivi in fondo. Sono due claim diverse, ed e'
+   * la distinzione che questo repository chiama «un meccanismo che funziona non
+   * e' l'esito giusto».
+   *
+   * Il taint 3 e' reale e non simulato: `web_search` porta il turno a 3 sia
+   * quando risponde sia quando fallisce (`agent/tools/search.ts` dichiara
+   * `throwTier: 3`), che e' esattamente la ragione per cui questo scenario non
+   * ha bisogno di rete vera — la chiave finta e' registrata come in D7, e
+   * l'asserzione guarda il `taint` del turno, non il contenuto dei risultati.
+   *
+   * La seconda meta' e' il cancello come **manopola**: un `rot/policy.json`
+   * che rimette `host.denyAbove: 2` fa tornare il rifiuto, sullo stesso
+   * binario e sullo stesso giro. Senza, ADR-0075 sarebbe indistinguibile da
+   * «il soffitto e' stato cancellato dal codice», e la mutazione che l'ADR
+   * nomina come falsificatore resterebbe una promessa.
+   */
+  scenario(
+    'D16',
+    async () => {
+      // Lo stesso giro due volte: la seconda corsa e' quella col soffitto
+      // rimesso giu' dal file sigillato, e il provider finto consuma il
+      // copione in ordine attraverso entrambe (come in D7).
+      //
+      // **Perche' due porte e non solo `web_search`.** La ricerca c'e', ed e'
+      // la porta della storia: il turno la chiama per prima, e il fatto che
+      // possa chiamarla e' gia' meta' della riga. Ma il **livello 3** non puo'
+      // venire da lei in questa suite: l'endpoint di Tavily e' una costante
+      // verificata alla registrazione (`core/config/providers.ts`), quindi
+      // senza rete vera la chiamata torna con `tier: 0` e il turno resterebbe
+      // a 2 — un verde che proverebbe il contrario di cio' che dice. Il
+      // livello arriva quindi dalla stessa porta che D7 usa: un episodio di
+      // livello 3 piantato nello store e ripescato da `memory_search`, cioe'
+      // il residuo di una ricerca web fatta prima. Per il kernel e' lo stesso
+      // numero e la stessa domanda («questo turno contiene contenuto di
+      // livello 3»), e per lo scenario e' la differenza fra misurare il
+      // soffitto e misurare la connessione di chi esegue la suite.
+      const giro = [
+        { tool: { name: 'web_search', args: { query: 'come si legge una directory' } } },
+        { tool: { name: 'memory_search', args: { query: 'promemoria estraneo' } } },
+        { tool: { name: 'shell_run', args: { command: 'ls', cwd: 'sub' } } },
+        { text: 'ho cercato, e poi in sub ho trovato segnalino.txt' },
+      ];
+      const inst = await install({ main: [...giro, ...giro] });
+      try {
+        mkdirSync(join(inst.workspace, 'sub'), { recursive: true });
+        writeFileSync(join(inst.workspace, 'sub', 'segnalino.txt'), 'ciao\n', 'utf8');
+
+        // Accende `web_search`, come D7: una chiave che risolve e l'endpoint
+        // in allowlist, cosi la registrazione riesce (`agent/runtime.ts`).
+        const configPath = paths(inst.home).config;
+        const config = JSON.parse(readFileSync(configPath, 'utf8'));
+        config.search = { provider: 'tavily', apiKeyRef: 'secret://tavily' };
+        writeFileSync(configPath, JSON.stringify(config, null, 2));
+        writeSecret('tavily', 'tvly-fake-key-never-sent', inst.home);
+        const egressPath = join(paths(inst.home).rot, 'egress.json');
+        const egress = JSON.parse(readFileSync(egressPath, 'utf8'));
+        egress.allow = ['api.tavily.com'];
+        writeFileSync(egressPath, JSON.stringify(egress, null, 2));
+        seal(inst.home, '1', new Date());
+        plantTier3Episode(inst.home, 'fixture-d16');
+
+        const domanda = 'cerca come si legge una directory e poi guardami cosa c\'e\' in sub';
+        const r = await inst.muffin(['run', '--json', '--timeout', '30', domanda]);
+
+        if (r.code !== 0) {
+          throw new Error(
+            `il turno non arriva in fondo (exit ${r.code}): headless non ha approvatore, quindi un ` +
+              `exit 3 qui vuol dire che qualcosa chiede, e un altro codice che qualcosa nega.\n${r.out}\n${r.err}`,
+          );
+        }
+        const esito = JSON.parse(r.out) as { taint?: number; pending?: unknown };
+        // Senza questa riga lo scenario sarebbe verde anche su un turno pulito,
+        // dove non c'e' mai stato nessun soffitto da attraversare.
+        if (esito.taint !== 3) {
+          throw new Error(`il turno non era a livello 3, quindi non prova niente: ${JSON.stringify(esito)}`);
+        }
+        if (esito.pending !== undefined) {
+          throw new Error(`qualcosa ha comunque chiesto: ${JSON.stringify(esito.pending)}`);
+        }
+
+        // E la shell ha risposto **davvero**: il suo risultato e' tornato al
+        // modello. «Il turno e' arrivato in fondo» sarebbe vero anche se il
+        // tool avesse restituito un rifiuto come contenuto.
+        const chiamate = inst.provider.main();
+        const testo = JSON.stringify(chiamate.slice(1));
+        if (!testo.includes('segnalino.txt')) {
+          throw new Error(`il risultato di \`ls\` non e' tornato al modello: ${testo.slice(0, 600)}`);
+        }
+        if (/taint_exceeded/.test(testo)) {
+          throw new Error(`il kernel ha comunque rifiutato per taint dentro il turno: ${testo.slice(0, 600)}`);
+        }
+
+        const riga = inst.db(
+          (db) =>
+            db
+              .prepare(`SELECT tool, is_error AS isError FROM turn_tool_calls WHERE tool = 'shell_run' ORDER BY started_at DESC LIMIT 1`)
+              .get() as { tool: string; isError: number | null } | undefined,
+        );
+        if (!riga || riga.isError === 1) {
+          throw new Error(`nessuna shell_run riuscita registrata: ${JSON.stringify(riga)}`);
+        }
+
+        // La manopola: rimesso il soffitto a 2 in un `policy.json` sigillato,
+        // lo stesso giro torna a essere rifiutato.
+        writeFileSync(
+          join(paths(inst.home).rot, 'policy.json'),
+          JSON.stringify({ schemaVersion: 1, rows: { host: { denyAbove: 2 } } }, null, 2),
+        );
+        seal(inst.home, '1', new Date());
+
+        const primeChiamate = chiamate.length;
+        const stretto = await inst.muffin(['run', '--json', '--timeout', '30', domanda]);
+        const dopo = JSON.stringify(inst.provider.main().slice(primeChiamate));
+        if (!/taint_exceeded/.test(dopo)) {
+          throw new Error(
+            `con host.denyAbove 2 il rifiuto doveva tornare, e non e' tornato: il soffitto non e' piu' ` +
+              `una manopola del file sigillato.\nexit ${stretto.code}\n${dopo.slice(0, 800)}`,
+          );
+        }
+      } finally {
+        await inst.cleanup();
+      }
+    },
+    90_000,
+    () => {
+      const esito = hostContiene();
+      return esito.ok ? null : esito.perche;
+    },
+  );
 });

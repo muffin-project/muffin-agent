@@ -297,8 +297,34 @@ export interface PermissionSnapshot {
   readonly principal: Principal;
   readonly tenant: TenantId;
   currentTaint(): TrustTier;
-  /** What this turn is gated on right now — every raise, ceiling-only included. */
-  raiseTaint(tier: TrustTier): void;
+  /**
+   * **Da dove viene il livello che `currentTaint` riporta**, in parole, o
+   * `null` per un turno che non è mai salito sopra ciò con cui è nato.
+   *
+   * ADR-0075 punto 4: il taint torna a essere provenienza, e una provenienza
+   * che non si può nominare non la vede nessuno. Il prompt di ogni `ask` la
+   * porta (`agent/loop/tool-call.ts`) come già porta l'irreversibilità
+   * dell'effetto — «questo turno contiene contenuto di livello 3: il risultato
+   * di web_search» — così l'owner decide sapendo *perché* la domanda arriva
+   * adesso.
+   *
+   * **Non è un secondo registro**: è l'etichetta che accompagna l'unico
+   * valore, scritta dallo stesso `raiseTaint`/`raiseCeiling` che lo alza e
+   * sostituita solo quando il livello sale davvero. Un registro a parte
+   * potrebbe dire una cosa mentre il numero ne dice un'altra, ed è la cucitura
+   * che `docs/JUDGE.md` chiama per nome.
+   */
+  taintOrigin(): string | null;
+  /**
+   * What this turn is gated on right now — every raise, ceiling-only included.
+   *
+   * `origin` names, in the caller's own words, what carried these bytes in —
+   * `il risultato di web_search`, `la memoria richiamata`. Optional because a
+   * raise with no name is still a raise and must never be dropped; it is
+   * recorded only when the tier actually moves the level, so the label and the
+   * number cannot disagree (`taintOrigin` above).
+   */
+  raiseTaint(tier: TrustTier, origin?: string): void;
   /**
    * Raises the ceiling `currentTaint` reads, without raising what
    * `intrinsicTaint` reports — for taint that is reinjected from a *past*
@@ -306,8 +332,10 @@ export interface PermissionSnapshot {
    * produced or observed. The turn still may not act freely on it (the
    * ceiling gates every `check()` below); its own new output does not inherit
    * it as if this turn had caused it.
+   *
+   * `origin`: same contract as `raiseTaint`'s.
    */
-  raiseCeiling(tier: TrustTier): void;
+  raiseCeiling(tier: TrustTier, origin?: string): void;
   /**
    * What this turn's own newly-written content should be stamped with, for a
    * later turn's reinjection to read back — the ceiling, minus whatever

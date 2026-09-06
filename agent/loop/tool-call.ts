@@ -51,6 +51,34 @@ function summarizeCallArgs(args: unknown): string | undefined {
   return parts.join(' · ');
 }
 
+/**
+ * La provenienza del taint, aggiunta al testo che l'owner legge prima di
+ * decidere — **ADR-0075 punto 4**.
+ *
+ * Il kernel produce la prima metà: *cosa* si perde e non torna
+ * (`core/policy/decide.ts`, `IRREVERSIBILE`), o il numero sopra il soffitto
+ * delle righe che escono dal tenant. Da un solo snapshot non può produrre la
+ * seconda, perché *quale parte del turno* ha alzato il livello non è nella
+ * `DecisionRequest`: è nel giro, ed è il giro a scriverla.
+ *
+ * La forma è quella che D12 ha già per l'effetto irreversibile — una riga in
+ * più sotto la domanda, mai una domanda in più. E resta **contesto, non
+ * causa**: dopo ADR-0074 il taint non produce nessun `ask` sulla riga `host`,
+ * e dopo ADR-0075 non nega più nemmeno lì; questa riga dice all'owner perché
+ * il turno è marcato adesso, non perché gli si sta chiedendo.
+ *
+ * A taint 0 non si aggiunge niente: non c'è nessuna provenienza da dichiarare,
+ * e una riga fissa che dice «livello 0» sarebbe rumore su ogni singola
+ * domanda. Senza un'origine nominata (un turno nato già a livello alto —
+ * il messaggio stesso, o un turno ripreso da un record) resta il livello, che
+ * è vero e verificabile, senza inventare una parte che non si sa quale sia.
+ */
+export function conProvenienza(prompt: string, taint: TrustTier, origine: string | null): string {
+  if (taint === 0) return prompt;
+  const da = origine === null ? '' : `: ${origine}`;
+  return `${prompt}\n\nquesto turno contiene contenuto di livello ${taint}${da}`;
+}
+
 /** The model's one-line account of what a call does, when the tool has that field. */
 function descriptionOf(args: unknown): string | undefined {
   if (args === null || typeof args !== 'object') return undefined;
@@ -302,7 +330,7 @@ export async function runTool(
     case 'ask': {
       const request: ApprovalRequest = {
         capability,
-        prompt: decision.ask.prompt,
+        prompt: conProvenienza(decision.ask.prompt, snapshot.currentTaint(), snapshot.taintOrigin()),
         // `path` carried this alone; `url` and `query` joined it (mandato inv.
         // 7, egress-params) so approving a params-gated fetch or search shows
         // the exact bytes, not just the kernel's prose — the gap ADR-0044
@@ -525,7 +553,11 @@ export async function runTool(
     // whole defect: it turned "this tool said nothing about provenance" into
     // "this tool brought nothing in". `raiseTaint` only ever raises, so a tool
     // that honestly reports 0 costs the turn nothing.
-    snapshot.raiseTaint(outcome.tier);
+    //
+    // Il nome accanto al numero (ADR-0075 punto 4): quando è *questo* risultato
+    // ad alzare il livello, è questo il nome che comparirà nel prompt del
+    // prossimo `ask`. Non è un secondo registro — vedi `PermissionSnapshot`.
+    snapshot.raiseTaint(outcome.tier, `il risultato di ${call.name}`);
     // The write boundary (owner, 2026-08-17; ADR-0048): every sink a tool
     // result reaches from here — the durable record, the session JSONL, and
     // the `tool_result` that later gets persisted into `turns.messages` by
@@ -641,7 +673,7 @@ export async function runTool(
     // words `detail` carried. `tool.throwTier` is this tool's own declared
     // answer for its failure exit, the same way `outcome.tier` is its answer
     // for success; neither is guessed here.
-    snapshot.raiseTaint(tool.throwTier);
+    snapshot.raiseTaint(tool.throwTier, `l'errore di ${call.name}`);
     // And an outcome all the same: a handler that threw *came back*, so the
     // call is decided, not uncertain. Leaving the intent row open here would
     // make every failed tool call look like one that might still have landed.
