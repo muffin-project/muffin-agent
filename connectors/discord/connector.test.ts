@@ -120,7 +120,7 @@ describe('who is speaking', () => {
   });
 });
 
-function harness(over: { attachment?: { filename: string; content: string }; suspend?: boolean } = {}) {
+function harness(over: { attachment?: { filename: string; content: string }; suspend?: boolean; inPausa?: boolean } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-discord-connector-'));
   const sent: { channelId: string; text: string }[] = [];
   const delivered: [string, DeliveryState][] = [];
@@ -175,6 +175,7 @@ function harness(over: { attachment?: { filename: string; content: string }; sus
     inbox: new DiscordInbox(new DatabaseCtor(':memory:')),
     api,
     config: { token: 't', ownerUserId: OWNER },
+    ...(over.inPausa === undefined ? {} : { pausa: { attiva: () => over.inPausa === true, metti: () => {}, togli: () => {} } }),
     vault: {
       root: vaultRoot,
       reindexPath: async (tenantId, path, tier) => {
@@ -421,5 +422,40 @@ describe('a discord turn records the SurfaceRegistry address (#41 stitching)', (
     const row = id === undefined ? null : runtime.deps.turns.get(id);
     expect(row?.replyTo).toMatchObject({ channelId: '555', messageId: '1', channel: 'discord:555' });
     runtime.close();
+  });
+});
+
+/**
+ * ADR-0054 §4, through the `busy` stage of the shared router (slice 15).
+ *
+ * The one behaviour this slice adds. Before it, `/pause` — a durable,
+ * cross-process fact (`core/runtime/pausa.ts`) that already stops the
+ * scheduler, the turn lane and Telegram — did not exist for this connector:
+ * a paused Muffin kept answering on Discord. It now says the same sentence
+ * Telegram says, once, and leaves the message in the inbox.
+ */
+describe('in pausa, questa porta non parte (ADR-0054 §4)', () => {
+  it('lo dice una volta sola, non chiama il modello, e lascia il messaggio nell inbox', async () => {
+    const h = harness({ inPausa: true });
+    const inbox = (h.connector as unknown as { deps: { inbox: DiscordInbox } }).deps.inbox;
+    const raw: DiscordMessage = { id: '1', channel_id: '42', channel_type: 1, author: { id: OWNER, bot: false }, content: 'ciao' };
+    inbox.accept(raw.id, raw, new Date().toISOString());
+
+    await (h.connector as unknown as { drain: () => Promise<void> }).drain();
+    // Byte per byte, la stessa frase di Telegram (`lane.ts`'s AVVISO_IN_PAUSA).
+    expect(h.sent).toEqual([{ channelId: '42', text: '⏸ in pausa: lo leggo al /resume.' }]);
+    expect(h.delivered).toEqual([]);
+    // Niente di durevole: e' cio' che lo fa ri-drenare.
+    expect(inbox.pending().map((m) => m.messageId)).toEqual(['1']);
+
+    // Un secondo drain non ripete l'avviso allo stesso messaggio.
+    await (h.connector as unknown as { drain: () => Promise<void> }).drain();
+    expect(h.sent).toHaveLength(1);
+  });
+
+  it('senza pausa risponde come sempre', async () => {
+    const h = harness({ inPausa: false });
+    await deliver(h, [{ id: '1', channel_id: '42', channel_type: 1, author: { id: OWNER, bot: false }, content: 'ciao' }]);
+    expect(h.sent).toEqual([{ channelId: '42', text: 'fatto' }]);
   });
 });
