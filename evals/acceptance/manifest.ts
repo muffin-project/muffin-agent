@@ -525,6 +525,19 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // copre l'altra meta' della domanda della riga — «e un ripristino che disfa
   // anche il turno?».
   verde('D11', 'checkpoint: `muffin undo` marks the turn and the memory episode, not only the disk'),
+  // D13, uso dei tool. La domanda della riga è sul comportamento di un
+  // modello reale che sceglie fra shell e tool dedicato — un provider finto
+  // e deterministico (quello di ogni scenario di accettazione) non può
+  // produrre quella scelta, solo scriptarla: uno scenario qui misurerebbe il
+  // proprio script, non il modello. La regge invece
+  // `evals/character/run.ts` (character eval, `--fake-approve`) contro
+  // modelli reali via OpenRouter — tre giri indipendenti, zero `ask` su 132
+  // turni, e un difetto ripetibile trovato e corretto (`docs/evidence/tool-use-2026-09-07.md`).
+  provataDalMeccanismo(
+    'D13',
+    'uso dei tool: il modello sceglie il tool dedicato prima della shell, e la shell in sola lettura non ferma mai il turno su un ask',
+    "la regge la character eval (`evals/character/run.ts --fake-approve`) contro modelli reali (via OpenRouter, non un provider finto scriptato — la scelta del tool è il comportamento sotto misura, non qualcosa che un fake può produrre): tre giri indipendenti, 22 probe, due modelli, zero `ask` su 132 turni misurati — il registro D15 (`turn_tool_calls`, letto da `tool-calls.json` per probe) mostra ogni chiamata, chiesta o no. Un difetto ripetibile (un tool MCP finto ignorato 0/6 volte per `env`/shell) trovato e corretto con una riga di `WORK_RULES`, riverificato 6/6 su tre giri mirati. `docs/evidence/tool-use-2026-09-07.md`",
+  ),
   // D15, il registro degli effetti. La riga nasce dal costo di ADR-0074: se
   // si chiede solo l'irreversibile, quasi tutto passa in silenzio, e cio' che
   // passa in silenzio deve restare **guardabile**. Lo scenario prova le tre
