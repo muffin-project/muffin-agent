@@ -5,9 +5,9 @@ Muffin, da una requirement owner, da una migrazione costosa o da un rischio su
 authority/data/effect — non da questa lista e non da una feature list di peer.
 
 **Goal owner:** DAY-1 = *«io installo Muffin sulla VPS, quindi deve essere
-praticamente pronto»*. Snapshot 07/09 dopo D15: 62 righe READY su 63 in scope;
-resta BLOCKER **solo D13** (uso dei tool). Ricostruire sempre da
-Git/PR/check + `day1/requirements-status.md` prima di usare il conteggio.
+praticamente pronto»*. Snapshot 07/09 dopo D13: **63/63 righe READY, zero
+BLOCKER DAY-1.** Ricostruire sempre da Git/PR/check +
+`day1/requirements-status.md` prima di usare il conteggio.
 
 **Come si trovano le cose.** REPL in **tmux**, tracce, log e il `muffin.db`
 vero (`sqlite3 <db> ".backup <dest>"`, mai `cp`); processi di prova fermati per
@@ -38,15 +38,16 @@ uid 0); ADR-0073 ha avuto il sì e ADR-0074 lo estende a ogni stanza.
 **F7** è su dev (#462, ADR-0073 punti 1/2/3/5); il punto 4 (ask effimera
 all'owner dentro il gruppo) resta aperto, non DAY-1.
 
-**D13** resta BLOCKER (`tool-use-2026-09-06.md`): 4 probe su 22 chiedono ancora
-la shell; con la corsia in sola lettura (#457) va **rimisurato** prima di
-aggiungere tool one-off (cautela dell'audit §14).
+**D13 chiusa READY il 07/09** (`tool-use-2026-09-07.md`): zero `ask` in tre
+giri puliti; l'unico difetto ripetibile (MCP ignorato per shell) corretto in
+`WORK_RULES`, verificato 6/6. Trovato e riparato nello stesso passaggio:
+l'eval a modello remoto leggeva il filesystem reale
+(`eval-fuga-filesystem-2026-09-07.md`).
 
 **Fase C** (Discord: comandi, coda, approvazioni, transcript, consegna) non è
-DAY-1; issue #378. **Da Centria:** D15 chiusa il 07/09 (quattro colonne su
-`turn_tool_calls`, una `readEffects`, `sys_effects` per l'owner). Restano: dopo
-la VPS revoca con parità, giudice come sensore versionato, verifica delle
-affermazioni negli ADR.
+DAY-1; issue #378. D15 (registro effetti) chiusa il 07/09. Da Centria
+restano: revoca con parità dopo la VPS, giudice come sensore versionato,
+verifica delle affermazioni negli ADR.
 
 **Dogfood 06-07/09 (installato fe8d55e+):** ADR-0075 su dev (#461, D16 READY);
 streaming e file per `(porta, stanza)` (#460; le asserzioni e2e sull'anteprima
