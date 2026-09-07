@@ -277,6 +277,8 @@ When the product needs explicit `remember` / agent-intentional memory, implement
 
 This can be promoted into DAY-1 if reconciliation of the DAY-1 requirements shows that inability to intentionally remember a fact would force a fallback during the dogfood window.
 
+**2026-09-07:** measured on the owner's installation (`docs/evidence/critica-moduli-vs-peer-2026-09-07.md`): 528 episodes → 145 facts, of which 73 are recorded requests (`asked_to`/`asks_to`) rather than beliefs; 4 entities, 0 identities; `profiles`, `digests`, `identities` have no writer; no retrieval-quality metric exists. The audit's §11 and this measurement agree: close the write → reconcile → use → correct → forget loop before adding ontology. The first executable step is a retrieval gold set with recall@8 on the rendered block, so that a number exists that can get worse. The trigger for promotion is unchanged; the evidence that the loop is open is now on record.
+
 ### Home migration / Capsule v0
 
 Before trusted users accumulate continuity that is painful to lose, provide a verified way to move/restore one Home while preserving canonical state and rebuilding derived state.
@@ -306,6 +308,12 @@ load the relevant definition when needed
 The point is not token optimization by itself. It is to let capability breadth grow without forcing every model to choose among the whole catalogue on every turn. Preserve the same policy kernel: discovery changes what the model can see, not what it is authorised to execute.
 
 Do not build this merely because external agent SDKs support tool search/deferred loading. The trigger is Muffin-specific evidence.
+
+**2026-09-07, reconciliation of the ecosystem audit (#463):** the trigger above has fired three times on the owner's installation — the exposure cap was raised 14→15 (04/09), 15→16 (06/09) and 16→18 (06/09, `doctor` naming `todo` and `sys_inspect` as cut). This is the measured catalogue pressure this entry asked for. It becomes a candidate claim, not an implementation: the D13 re-measurement with the read-only shell comes first, and the shape (small always-visible set + discovery) must be chosen against the character eval, not against the audit's §6.
+
+### Persistent specialist facets and steerable workers
+
+Default placement: **MVP / trusted alpha, hypothesis only** (ecosystem audit 2026-09-07, `docs/evidence/personal-agent-ecosystem-audit-2026-09-07.md` §8-9). One canonical Muffin identity may carry persistent specialist facets (e.g. a coding facet) that are neither replaceable workers nor separate Muffins; delegated work may need a small control surface (spawn, status, steer, stop, resume) rather than spawn-only delegation. Muffin has no subagents today, by choice (ADR-0045: the unit is the continuous agent). Trigger: an observed dogfood need that a single context cannot serve, or a delegated task the owner could not steer without losing work. Nothing here authorizes a multi-agent society.
 
 ### Local / owner-controlled compute experiments
 
