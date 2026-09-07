@@ -388,6 +388,19 @@ export function buildRuntime(
      * chiunque non abbia un terminale da proteggere.
      */
     log?: (line: string) => void;
+    /**
+     * Extra paths no tool may read, layered on top of `mandatoryGuards` —
+     * never a substitute for it. Production never passes this; it exists for
+     * a caller that runs a *real* model against a throwaway home and needs
+     * the read-only shell lane (`sys.shell`, ADR-0074 punto 4 — deliberately
+     * allow-by-default on reads, `--ro-bind / /` minus the mandatory guards)
+     * to see only that home, not the operator's real one. `evals/character/run.ts`
+     * is the first caller: a probe whose fixture workspace has nothing to
+     * find can send the model looking on the real disk, and a real network
+     * model's tool result is bytes leaving the machine (found running D13's
+     * first instrumented round, `docs/evidence/eval-fuga-filesystem-2026-09-07.md`).
+     */
+    extraDenyRead?: readonly string[];
   } = {},
 ): Runtime {
   const p = paths(home);
@@ -679,10 +692,11 @@ export function buildRuntime(
   // contained write that becomes an uncontained execution the next time the
   // owner commits, or opens a shell.
   const guards = mandatoryGuards(home, workspace);
+  const denyRead = [...guards.denyRead, ...(opts.extraDenyRead ?? [])];
   const scope: FsScope = {
     root: workspace,
     denyWrite: guards.denyWrite,
-    denyRead: guards.denyRead,
+    denyRead,
   };
   /**
    * Ogni capacità spenta o tagliata a questo assemblaggio, riempito via `push`
@@ -751,7 +765,7 @@ export function buildRuntime(
   // deny-list plus a hole". They were two hand-written copies, and both were
   // missing the same two categories — so the hole was in neither copy's
   // divergence but in both of them agreeing on an incomplete list.
-  const executor = new SandboxExecutor(guards);
+  const executor = new SandboxExecutor({ ...guards, denyRead });
   const sandboxStatus = executor.status();
   const contained = sandboxStatus.available;
   if (contained) {
