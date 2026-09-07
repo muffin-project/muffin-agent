@@ -130,7 +130,7 @@ export type DecisionRequest = {
 };
 
 export type RiskClass = 'low' | 'medium' | 'high';
-type Reversibility = 'yes' | 'undoable' | 'no';
+export type Reversibility = 'yes' | 'undoable' | 'no';
 
 /**
  * **Where the bytes of this effect end up** — the row of the threat model's own
