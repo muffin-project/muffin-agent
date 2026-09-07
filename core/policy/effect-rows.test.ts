@@ -15,6 +15,7 @@ import { memoryCapability } from '../../agent/tools/memory.js';
 import { skillCapability } from '../../agent/tools/skill.js';
 import { documentCapability } from '../../agent/tools/document.js';
 import { inspectCapability } from '../../agent/tools/inspect.js';
+import { effectsCapability } from '../../agent/tools/effects.js';
 import { todoCapability } from '../../agent/tools/todo.js';
 import { waitCapability } from '../../agent/tools/wait.js';
 import { vaultWriteCapability } from '../../agent/tools/vault-save.js';
@@ -65,6 +66,7 @@ const ALL: readonly CapabilityDecl[] = [
   skillCapability,
   documentCapability,
   inspectCapability,
+  effectsCapability,
   todoCapability,
   waitCapability,
   vaultWriteCapability,
@@ -283,6 +285,7 @@ describe('la matrice normativa è eseguibile', () => {
       [
         'deliver.ts:sendFileCapability',
         'document.ts:documentCapability',
+        'effects.ts:effectsCapability',
         'fs.ts:fsCapabilities',
         'http.ts:httpCapability',
         'inspect.ts:inspectCapability',

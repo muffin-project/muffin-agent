@@ -123,7 +123,13 @@ describe('quali tool vede davvero un turno', () => {
     // rispetto al conteggio del 04/09) e `doctor` diceva `todo` e
     // `sys_inspect` tagliati. Di nuovo il numero dei registrati, contato
     // sull'installazione vera, non stimato.
-    expect(profile.maxToolsExposed).toBe(18);
+    //
+    // 19 dal 07/09 (DAY-1 D15): `sys_effects` — «cosa hai fatto oggi», letto
+    // dal record durevole invece che ricordato — e' esattamente un tool
+    // registrato in piu'. Il +1 tiene costante quanti ne cadono
+    // sull'installazione dell'owner; non chiude il taglio che c'era gia'
+    // prima, e non pretende di averlo chiuso.
+    expect(profile.maxToolsExposed).toBe(19);
 
     const rt = realRuntime();
     rt.close();
