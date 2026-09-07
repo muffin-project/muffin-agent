@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runInit } from '../../cli/init.js';
 import { paths } from '../config/config.js';
-import { POLICY_FLOOR, loadPolicyMatrix } from './matrix.js';
+import { POLICY_FLOOR, grantedTo, loadPolicyMatrix } from './matrix.js';
 
 /**
  * `rot/policy.json` was sealed, hashed and read by nobody: the matrix it
@@ -306,6 +306,113 @@ describe('paramsMaxTaint — the one ceiling the file may also raise (mandato in
     expect(matrix.source).toBe('fallback');
     expect(matrix.note).toMatch(/paramsMaxTaint/);
     expect(matrix.paramsMaxTaint).toBe(2);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+/**
+ * **I grant per stanza — ADR-0073 punto 1.**
+ *
+ * L'unico campo di questo file che *allarga*, quindi l'unico su cui il
+ * rifiuto deve essere rumoroso: un grant che il kernel non applicherà è la
+ * stessa classe di guasto di un `askAbove` letto e scartato — il sigillo
+ * promette un comportamento che il codice non ha.
+ */
+describe('grant per stanza nel sigillo (ADR-0073)', () => {
+  const conTenants = (tenants: unknown): string => {
+    const dir = home();
+    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, tenants }));
+    return dir;
+  };
+
+  it('il pavimento non concede niente a nessuna stanza', () => {
+    expect(POLICY_FLOOR.grants.size).toBe(0);
+    // E un file che non nomina `tenants` non ne inventa: eredita il vuoto.
+    const dir = home();
+    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1 }));
+    const matrix = loadPolicyMatrix(dir);
+    expect(matrix.source).toBe('sealed');
+    expect(matrix.grants.size).toBe(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('una stanza nominata riceve esattamente le capability elencate', () => {
+    const dir = conTenants({
+      'group:telegram:-100950': { grants: ['vault.write', 'sys.search'] },
+      'community:vicinato': { grants: ['turn.todo'] },
+    });
+    const matrix = loadPolicyMatrix(dir);
+    expect(matrix.source).toBe('sealed');
+    expect([...(matrix.grants.get('group:telegram:-100950') ?? [])].sort()).toEqual([
+      'sys.search',
+      'vault.write',
+    ]);
+    expect(grantedTo(matrix, 'group:telegram:-100950', 'vault.write')).toBe(true);
+    // Per stanza, non per famiglia di stanze: un'altra stanza non eredita.
+    expect(grantedTo(matrix, 'group:telegram:-100951', 'vault.write')).toBe(false);
+    // E per capability, non per prefisso: `sys.search` concesso non concede
+    // `sys.shell`, nemmeno se qualcuno spedisse `sys.search.qualcosa` domani.
+    expect(grantedTo(matrix, 'group:telegram:-100950', 'sys.shell')).toBe(false);
+    expect(grantedTo(matrix, 'community:vicinato', 'turn.todo')).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /**
+   * Il cuore del punto 1: la lista chiusa. Ogni voce provata per nome, perché
+   * una lista di divieti che nessuno enumera è una lista di cui si può
+   * perdere una riga in un giro di pulizia senza che niente diventi rosso.
+   *
+   * Il rifiuto è del **file intero** — non del solo grant illecito — e
+   * nomina il campo: è la stessa decisione che `.strict()` prende per
+   * `askAbove`, e la ragione è identica. Un file che concede `sys.shell` a un
+   * gruppo è un file che l'owner ha scritto credendo qualcosa di falso;
+   * leggerne il resto e tacere sulla riga rifiutata lo lascerebbe crederlo.
+   */
+  it.each([
+    ['sys.shell', 'la shell'],
+    ['sys.shell.write', 'la shell che scrive'],
+    ['sys.process.kill', 'i processi'],
+    ['fs.write', 'il disco'],
+    ['fs.read', 'il disco in lettura'],
+    ['rot.write', 'la radice di fiducia'],
+    ['outward.send', 'un destinatario nuovo'],
+    ['config.ratchet', 'la configurazione'],
+  ])('nessun sigillo concede %s a una stanza (%s)', (capability) => {
+    const dir = conTenants({ 'group:telegram:42': { grants: ['vault.write', capability] } });
+    const matrix = loadPolicyMatrix(dir);
+    expect(matrix.source).toBe('fallback');
+    // Il nome del campo, cioè dove intervenire, e il nome della capability.
+    expect(matrix.note).toContain('tenants.group:telegram:42.grants.1');
+    expect(matrix.note).toContain(capability);
+    // E niente passa: nemmeno il grant lecito che stava nella stessa riga.
+    expect(matrix.grants.size).toBe(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('un grant non nomina mai una famiglia di capability', () => {
+    const dir = conTenants({ 'group:telegram:42': { grants: ['memory.*'] } });
+    const matrix = loadPolicyMatrix(dir);
+    expect(matrix.source).toBe('fallback');
+    expect(matrix.note).toContain('tenants.group:telegram:42.grants.0');
+    expect(matrix.note).toContain('mai una famiglia');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('un grant non nomina mai un insieme di stanze, e mai host', () => {
+    for (const chiave of ['group:*', '*', 'host', 'group:telegram:*']) {
+      const dir = conTenants({ [chiave]: { grants: ['vault.write'] } });
+      const matrix = loadPolicyMatrix(dir);
+      expect(`${chiave}: ${matrix.source}`).toBe(`${chiave}: fallback`);
+      expect(matrix.note).toContain(`tenants.${chiave}`);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('una chiave sconosciuta dentro un blocco che concede ferma il file, come per le righe', () => {
+    const dir = conTenants({ 'group:telegram:42': { grants: ['vault.write'], denyAbove: 3 } });
+    const matrix = loadPolicyMatrix(dir);
+    expect(matrix.source).toBe('fallback');
+    expect(matrix.note).toContain('denyAbove');
     rmSync(dir, { recursive: true, force: true });
   });
 });

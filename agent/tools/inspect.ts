@@ -81,6 +81,12 @@ export type InspectSources = {
   build: () => Promise<BuildStamp | null>;
   tools: readonly RegisteredTool[];
   capabilities: ReadonlyMap<CapabilityId, CapabilityDecl>;
+  /**
+   * I grant per stanza della policy sigillata (ADR-0073). `sys_inspect` deve
+   * rispondere «cosa raggiungo **io**, in questa stanza», e senza questi
+   * risponderebbe la domanda di ieri: la lista di ciò che non è `hostOnly`.
+   */
+  grants?: ReadonlyMap<string, ReadonlySet<CapabilityId>>;
   promptBlocks: Readonly<Record<string, readonly PromptBlock[]>>;
   /** La stessa funzione che esegue `muffin doctor`. Iniettabile per i test. */
   doctor: () => Promise<DoctorReport>;
@@ -176,6 +182,7 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
         sources.tools.map((t) => ({ capability: t.capability, name: t.spec.name })),
         principal,
         sources.capabilities,
+        sources.grants?.get(ctx.tenant),
       );
       const esposti = filtrati.slice(0, sources.profile.maxToolsExposed);
       const tagliatiDalTetto = filtrati.slice(sources.profile.maxToolsExposed);

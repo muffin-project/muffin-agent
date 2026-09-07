@@ -487,7 +487,11 @@ describe('draft: la copia e la scrittura sono lo stesso file', () => {
     const { scope, root } = scoped();
     const tool = byName(scope, 'fs_write');
     expect(tool.resolveEffectPath).toBeDefined();
-    expect(tool.resolveEffectPath!({ path: 'nota.md', content: 'x' })).toBe(
+    // Il secondo argomento (il `ToolContext`) è arrivato con ADR-0073 per
+    // `vault_save`, il cui percorso dipende dal tenant del turno. `fs_write`
+    // non lo legge — il suo file dipende solo dallo scope — e il cast qui lo
+    // dice: nessun campo del contesto viene toccato su questa strada.
+    expect(tool.resolveEffectPath!({ path: 'nota.md', content: 'x' }, {} as never)).toBe(
       realpathSync(join(root, 'nota.md')),
     );
   });

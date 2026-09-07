@@ -130,10 +130,31 @@ export function visibleTools<T extends { capability: CapabilityId }>(
   tools: T[],
   principal: Principal,
   capabilities: ReadonlyMap<CapabilityId, CapabilityDecl>,
+  /**
+   * I grant della **stanza di questo principal** (ADR-0073 punto 1), letti
+   * dalla matrice sigillata: `matrix.grants.get(tenant)`.
+   *
+   * Il quarto argomento esiste perché senza di esso questa funzione e il
+   * kernel tornerebbero a essere in disaccordo, che è precisamente ciò che il
+   * docstring sopra dice di aver appena finito di riparare: `decide.ts` legge
+   * `hostOnly && !grantedTo(...)`, e un menu che si fermasse a `hostOnly`
+   * nasconderebbe al modello, per sempre, la capability che il sigillo ha
+   * appena concesso. Il difetto sarebbe silenzioso e fail-*closed* — la
+   * stanza semplicemente non userebbe mai il grant — cioè invisibile a
+   * qualunque test che guardi solo i rifiuti.
+   *
+   * `undefined` significa «nessun grant», mai «tutti»: una stanza senza voce
+   * in `policy.json` vede quello che vedeva prima.
+   */
+  granted: ReadonlySet<CapabilityId> | undefined,
 ): T[] {
   if (principal.kind !== 'member') return tools;
   if (!capabilities) return [];
-  return tools.filter((tool) => capabilities.get(tool.capability)?.hostOnly === false);
+  return tools.filter((tool) => {
+    const decl = capabilities.get(tool.capability);
+    if (decl === undefined) return false;
+    return decl.hostOnly === false || granted?.has(tool.capability) === true;
+  });
 }
 
 /**
