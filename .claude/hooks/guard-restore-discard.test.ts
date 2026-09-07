@@ -96,4 +96,93 @@ describe('guard-restore-discard', () => {
   it('cede all override esplicito, che resta visibile nel transcript', () => {
     expect(esegui('MUFFIN_DISCARD_OK=1 git checkout -- sporco.ts').code).toBe(0);
   });
+
+  /**
+   * `git reset --hard` — la terza volta, il 07/09/2026, e in una forma che le
+   * prime due non coprivano: non un mutation test, ma un riallineamento del
+   * worktree a `origin/dev` a fetta gia' integrata. Nel working tree c'era una
+   * riga non committata del registro delle deleghe, e il reset l'ha presa in
+   * silenzio.
+   */
+  describe('git reset --hard', () => {
+    it('rifiuta un reset che butterebbe via il working tree', () => {
+      const r = esegui('git reset --hard origin/dev');
+      expect(r.code).toBe(2);
+      expect(r.err).toContain('sporco.ts');
+      // Il messaggio deve nominare la forma che sposta HEAD senza toccare i file.
+      expect(r.err).toContain('--mixed');
+    });
+
+    it('vede anche il reset senza ref e in fondo a una catena', () => {
+      expect(esegui('git reset --hard').code).toBe(2);
+      expect(esegui('git fetch origin && git reset --hard origin/dev').code).toBe(2);
+    });
+
+    it('prende anche cio che e solo in stage, che `git diff` da solo non vedrebbe', () => {
+      // `--hard` scarta l'indice quanto il working tree: un file aggiunto con
+      // `git add` e mai committato sparisce, e un confronto con l'indice
+      // direbbe «niente da perdere».
+      execFileSync('git', ['-C', repo, 'add', 'sporco.ts'], { stdio: 'pipe' });
+      try {
+        expect(esegui('git reset --hard').code).toBe(2);
+      } finally {
+        execFileSync('git', ['-C', repo, 'reset', '-q'], { stdio: 'pipe' });
+      }
+    });
+
+    it('lascia passare --soft e --mixed, che i file non li toccano', () => {
+      expect(esegui('git reset --soft HEAD~1').code).toBe(0);
+      expect(esegui('git reset --mixed HEAD~1').code).toBe(0);
+      expect(esegui('git reset HEAD~1').code).toBe(0);
+    });
+
+    it('lascia passare un reset su un albero che non ha niente da perdere', () => {
+      const pulito = execFileSync('mktemp', ['-d']).toString().trim();
+      const git = (...a: string[]): void => {
+        execFileSync('git', ['-C', pulito, ...a], { stdio: 'pipe' });
+      };
+      git('init', '-q');
+      git('config', 'user.email', 't@t');
+      git('config', 'user.name', 't');
+      writeFileSync(join(pulito, 'a.ts'), 'x\n');
+      git('add', '.');
+      git('commit', '-qm', 'base');
+      const r = execFileSync('node', [HOOK], {
+        input: JSON.stringify({ tool_input: { command: 'git reset --hard HEAD' } }),
+        cwd: pulito,
+        stdio: 'pipe',
+      });
+      expect(String(r)).toBe('');
+    });
+
+    it('non si lascia disarmare da un messaggio che nomina il comando', () => {
+      expect(esegui('git commit -m "mai usare git reset --hard qui"').code).toBe(0);
+    });
+  });
+
+  /**
+   * Il corpo di un heredoc è dato quanto una stringa fra virgolette, e questo
+   * caso non è ipotetico: è successo nell'ora in cui il ramo `reset` è stato
+   * scritto. Scrivere la **documentazione** di questo guard — un file di
+   * memoria il cui testo spiega perché quel comando è pericoloso — lo faceva
+   * scattare su sé stesso, mentre git non toccava niente.
+   */
+  describe('un heredoc è dato, non sintassi', () => {
+    it('un documento che nomina i comandi non arma il guard', () => {
+      const doc = [
+        "cat > nota.md <<'EOF'",
+        'Non ripristinare con git checkout -- sporco.ts.',
+        'E prima di git reset --hard, guarda git status.',
+        'EOF',
+      ].join('\n');
+      expect(esegui(doc).code).toBe(0);
+    });
+
+    it('ma un comando vero DOPO un heredoc resta visto', () => {
+      // Il rischio dell'aggiunta sopra: neutralizzare troppo. Il marcatore
+      // chiude, e ciò che viene dopo è di nuovo sintassi.
+      const doc = ["cat > nota.md <<'EOF'", 'prosa qualunque', 'EOF', 'git reset --hard'].join('\n');
+      expect(esegui(doc).code).toBe(2);
+    });
+  });
 });
