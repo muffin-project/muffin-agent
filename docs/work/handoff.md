@@ -5,21 +5,15 @@ Muffin, da una requirement owner, da una migrazione costosa o da un rischio su
 authority/data/effect — non da questa lista e non da una feature list di peer.
 
 **Goal owner:** DAY-1 = *«io installo Muffin sulla VPS, quindi deve essere
-praticamente pronto»*. Snapshot autoritativo 06/09: 58 righe READY su 60 in
-scope; aperte D13 (uso dei tool) e F7 (capacità per stanza). Lo stato corrente
-va sempre ricostruito da Git/PR/check + `day1/requirements-status.md` prima di
-usare quel conteggio.
+praticamente pronto»*. Snapshot 07/09 dopo #462: 61 righe READY su 63 in scope;
+BLOCKER D13 (uso dei tool) e D15 (registro degli effetti). Ricostruire sempre da
+Git/PR/check + `day1/requirements-status.md` prima di usare il conteggio.
 
 **Come si trovano le cose.** REPL in **tmux**, tracce, log e il `muffin.db`
-vero — mai `cp`: `sqlite3 <db> ".backup <dest>"`. Fermare un processo di
-prova si fa **per PID**: `pkill -f "gateway run"` prende anche quello vivo.
-
-**Il gate è una porta sola:** `npm run merge -- <pr>` costruisce dev+PR in un
-worktree e ci fa girare `ci:local` (cinque job nei container: verifica,
-accettazione, collegamenti, strumenti, **install**); unisce solo su PASS.
-Una PR alla volta, ~12-15 minuti, **con nessun worker che gira**: un vitest
-estraneo o load > 10 all'inizio danno `DISCARDED`, da rifare. `gh pr merge`
-a mano è bloccato dal hook. I minuti GitHub sono finiti (run morti in 4 s).
+vero (`sqlite3 <db> ".backup <dest>"`, mai `cp`); processi di prova fermati per
+PID. **Il gate è una porta sola:** `npm run merge -- <pr>` (ci:local in Docker,
+cinque job; una PR alla volta, host quieto o `DISCARDED`; `gh pr merge` a mano
+è bloccato dal hook). I minuti GitHub sono finiti.
 
 ## Le decisioni dell'owner
 
@@ -28,17 +22,11 @@ chiede solo l'irreversibile, sempre, anche in privato»). Kernel
 (ADR-0071/0072): un link citato non chiede, composto+non-owner nega, una ricerca
 non chiede mai. Gruppi: senza il suo umano Muffin saluta, avvisa e esce (F4).
 
-07/09: il normale owner **non deve imparare una grande command surface** per
-usare Muffin. Conversazione e automazione devono assorbire la meccanica normale;
-CLI/TUI/control plane conservano recovery, osservabilità e developer/operator
-power. Issue #465 tiene la riconciliazione di questa decisione, non
-l'implementazione indiscriminata.
-
-07/09: il repository deve diventare **source-public/pre-alpha appena è sicuro
-pubblicarlo**, senza aspettare il product public-alpha. Ci sono già contributor
-interessati; contributor ≠ maintainer. La pubblicazione richiede audit di HEAD e
-dell'intera history per segreti/private owner data e una decisione licenza
-esplicita. Issue #464 possiede questo lavoro.
+07/09 (audit): la command surface del normale owner deve diventare piccola —
+conversazione e automazione assorbono la meccanica, CLI/TUI restano per recovery
+e operatori (#465). Il repository diventa **source-public/pre-alpha appena è
+sicuro** (audit di HEAD e history, licenza esplicita; #464); contributor ≠
+maintainer.
 
 **Azioni owner senza codice:** billing GitHub Actions · `npm run e2e:telegram`
 con un bot vero (B11/B13/B2 datati) · la prima install vera su una VPS x86_64
@@ -47,53 +35,33 @@ uid 0); ADR-0073 ha avuto il sì e ADR-0074 lo estende a ogni stanza.
 
 ## Aperto
 
-**F7** non aspetta più il sì: PR **#462** è aperta e mergeable su `dev`
-(`slice/f7-capacita-per-stanza`). Implementa i punti 1/2/3/5 di ADR-0073:
-grant capability per stanza, `vault.write` tenant-scoped e grant di `todo`/
-`wait`; il punto 4 (ask effimera all'owner da stanza) resta separato. Prima di
-agire, osservare se #462 è ancora aperta o è già integrata.
+**F7** è su dev (#462, ADR-0073 punti 1/2/3/5: grant per stanza nel sigillo,
+`vault.write` per tenant con giornale e undo); il punto 4 (ask effimera
+all'owner dentro il gruppo) resta aperto, non DAY-1.
 
-**D13** resta BLOCKER nello snapshot 06/09 (`tool-use-2026-09-06.md`): dopo le
-descrizioni riscritte 4 probe su 22 chiedono ancora la shell — servono un
-approvatore finto nell'eval, due tool mancanti (porte aperte, SQLite in
-lettura), tre giri di misura. L'audit 07/09 aggiunge solo una cautela come
-evidence: non trasformare automaticamente ogni shell read in un one-off tool;
-la forma va decisa contro eval e policy reali.
+**D13** resta BLOCKER (`tool-use-2026-09-06.md`): 4 probe su 22 chiedono ancora
+la shell; con la corsia in sola lettura (#457) va **rimisurato** prima di
+aggiungere tool one-off (cautela dell'audit §14).
 
-**Fase C** (fette 17-21 di `ingresso-unico-e-nucleo-2026-09-05.md`: comandi e
-coda, approvazioni, transcript, consegna, provenienza su Discord) non è DAY-1.
-`evals/e2e/telegram.ts:66` legge ancora l'owner da `config.json`. Issue #378
-tiene l'indice (#371-#377).
+**Fase C** (Discord: comandi, coda, approvazioni, transcript, consegna) non è
+DAY-1; issue #378. **Da Centria (06/09):** D15 entra; dopo la VPS revoca con
+parità, giudice come sensore versionato, verifica delle affermazioni negli ADR.
 
-**Da Centria (`origin/stage`, 06/09):** entra **D15** (registro degli effetti:
-più autonomia ⇒ più sorveglianza); il tetto di spesa c'è già (E1/E2). Dopo la
-VPS: revoca con parità (T-028), giudice come sensore versionato, verifica delle
-affermazioni negli ADR; auto-merge quando saremo open source.
-
-**Dogfood 06/09 sera, due decisioni owner.** (1) Taint «inutilizzabile»:
-ADR-0075 e **D16**, sull'host il taint non nega più, verso l'esterno chiede con
-la ragione; fetta kernel dopo #457. (2) Streaming e file negoziati per
-`(porta, stanza)`: privato → draft nativo più messaggio finale vero, gruppo e
-topic → edit; `sendMessageDraft` non ha chiamanti da #388. Brief pronti.
+**Dogfood 06-07/09 (installato fe8d55e+):** ADR-0075 su dev (#461, D16 READY);
+streaming e file per `(porta, stanza)` (#460; le asserzioni e2e sul draft
+aspettano il bot vero). Osservato, non lavorato: 15 s senza segno di vita (il
+loop scarta `thinking_delta`/`tool_call_delta`); su «analizzati» il modello ha
+misurato una volta e ragionato su un ricordo vecchio (`sys_inspect` senza il
+verdetto per capability, la memoria riporta le auto-dichiarazioni come fatti).
+Critiche vs peer: `critica-moduli-vs-peer-2026-09-07.md`.
 
 ## Audit ecosistema 07/09
 
-PR **#474** conserva l'audit completo come
-`docs/evidence/personal-agent-ecosystem-audit-2026-09-07.md`, aggiorna la
-strategia source-public e rende `CONTRIBUTING.md` utilizzabile anche senza
-Claude Code. È evidence/product-community docs: **non autorizza feature parity**.
-
-Issue **#463** possiede la riconciliazione: osservare stato reale → leggere
-l'audit come evidence → aggiornare solo gli authoritative homes realmente stale
-→ produrre **una** prossima claim falsificabile. Il commento su #463 contiene
-il brief esatto per la prossima sessione Claude Code e un `/goal` candidato da
-rigenerare contro lo stato reale, non da usare come master plan.
-
-Le ipotesi interessanti (Hermes moving benchmark, persistent facets tipo
-`Muffin Code`, capability discovery, self-work con verifica indipendente,
-steerable workers, ecc.) sono conservate nell'audit. Le issue speculative create
-durante la decomposizione sono chiuse `not_planned`: non sono backlog finché
-reconciliation/dogfood non crea una claim reale.
+`docs/evidence/personal-agent-ecosystem-audit-2026-09-07.md` (#474) è evidence,
+**non autorizza feature parity**. Issue **#463** possiede la riconciliazione
+(stato reale → audit come evidence → solo le case autoritative davvero stale →
+una claim per `/goal`); #464 la pubblicazione sicura; #465 la command surface
+piccola. Le issue speculative sono chiuse `not_planned`.
 
 **Truth maintenance:** `day1/requirements-status.md` possiede lo stato,
 `critical-path.md#ordine-corrente` l'ordine, le Issue il lavoro attribuibile.
