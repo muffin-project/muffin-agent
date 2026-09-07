@@ -114,6 +114,24 @@ const effectsSpec: ToolSpec = {
  */
 export function makeEffectsTool(
   turns: Pick<TurnStore, 'effects'>,
+  /**
+   * Il fuso **dell'owner**, dal root of trust sigillato — mai quello del
+   * processo.
+   *
+   * Passato e non letto, e stavolta davvero: la prima versione prendeva un
+   * offset e lo riempiva con `new Date().getTimezoneOffset()`, cioè con il
+   * fuso di chi esegue. Il gateway gira sotto launchd/systemd, dove `TZ` è
+   * quello del supervisore, quindi «cosa hai fatto oggi» chiesto a Telegram e
+   * `muffin effects` dal terminale dell'owner rispondevano su due finestre
+   * diverse — con una funzione sola, che è precisamente il modo in cui «un
+   * solo meccanismo» smette di significare «una sola risposta».
+   *
+   * `budgets.quietHours.timezone` è la stessa fonte che leggono `cli/jobs.ts`,
+   * `core/scheduler/commitments.ts` e `LoopDeps.timeZone`, con la stessa frase
+   * nel commento. Il default `UTC` è la caduta esplicita che quei file già
+   * scelgono quando il root of trust non si legge.
+   */
+  timeZone = 'UTC',
   now: () => Date = () => new Date(),
 ): RegisteredTool {
   return {
@@ -121,9 +139,8 @@ export function makeEffectsTool(
     spec: effectsSpec,
     /**
      * `throwTier: 0`: ogni lancio raggiungibile da qui è un errore SQLite di
-     * `readEffects`, cioè testo nostro. Nessun byte di terzi passa da questo
-     * handler — la `resource` che stampa è già passata da `redactText` quando
-     * è stata scritta.
+     * `readEffects`, cioè testo nostro. Il tier del **risultato**, invece, non
+     * è 0 e non è costante — vedi `report.maxTier` nell'handler.
      */
     throwTier: 0,
     /**
@@ -137,35 +154,36 @@ export function makeEffectsTool(
     handler: (args, ctx) => {
       const a = (args ?? {}) as { scope?: unknown };
       const scope = a.scope === 'turn' ? 'turn' : 'today';
-      /**
-       * `tier: 0`, dichiarato invece che lasciato al default.
-       *
-       * Il contenuto è il nostro stesso record: `tool`, `capability`, la riga
-       * della matrice, un percorso già redatto. Nessuno di questi campi è mai
-       * stato scritto dal modello o da una pagina — l'unico campo di
-       * `turn_tool_calls` che porta byte di terzi è `content`, cioè il
-       * risultato del tool, e questo report non lo legge affatto. Se un giorno
-       * lo leggesse, questo numero dovrebbe salire con lui.
-       */
-      const CLEAN: 0 = 0;
-      const adesso = now();
       const report =
         scope === 'turn'
           ? turns.effects({ turnId: ctx.turnId })
-          : turns.effects({
-              // La giornata **locale** di chi sta usando Muffin, non quella di
-              // Greenwich: `started_at` è UTC, e senza l'offset «oggi» perde le
-              // prime ore del giorno per chi vive a est di Londra.
-              day: localDay(adesso),
-              tzOffsetMinutes: adesso.getTimezoneOffset(),
-            });
+          : turns.effects({ day: localDay(now(), timeZone), timeZone });
 
-      const tagliato = report.calls.length > MAX_RIGHE;
-      const reso = tagliato ? { ...report, calls: report.calls.slice(-MAX_RIGHE) } : report;
-      const nota = tagliato
-        ? `\n(mostrate le ultime ${MAX_RIGHE} di ${report.calls.length}: i totali sopra contano tutte.)`
-        : '';
-      return { content: `${formatEffects(reso)}${nota}`, tier: CLEAN };
+      const reso =
+        report.calls.length > MAX_RIGHE
+          ? { ...report, calls: report.calls.slice(-MAX_RIGHE) }
+          : report;
+      /**
+       * **Il tier viene dalle righe rese, non da una costante.**
+       *
+       * Questo handler dichiarava `tier: 0` con l'argomento che nessun campo
+       * del report è mai stato scritto dal modello. Era falso: `resource` è
+       * preso verbatim da `args[name]`
+       * (`agent/loop/permissions.ts#resourceFor`), quindi per `sys.search` è
+       * prosa che il modello ha scelto, e in un turno a taint 3 è prosa scelta
+       * con una pagina davanti. Un turno avvelenato poteva scrivere una riga e
+       * un turno pulito del giorno dopo rileggerla come byte fidati — il
+       * fetch-then-act che il kernel esiste per chiudere, riaperto da una
+       * porta nuova.
+       *
+       * `maxTier` è il massimo fra il `tier` di ogni chiamata resa e il taint
+       * del turno che l'ha fatta, letto dalle **stesse righe**
+       * (`core/turns/effects.ts`). Stessa forma di `agent/tools/memory.ts`,
+       * che rende il massimo di ciò che rende. Su un registro pulito il
+       * numero è 0 e non costa niente; su uno che ha visto il web, il turno
+       * che legge sale come deve.
+       */
+      return { content: formatEffects(reso), tier: reso.maxTier };
     },
   };
 }

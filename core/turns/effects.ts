@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { EffectRow, Reversibility } from '../policy/types.js';
+import type { EffectRow, Reversibility, TrustTier } from '../policy/types.js';
 
 /**
  * Il registro degli effetti (DAY-1 requirement D15): **cosa è passato senza
@@ -86,17 +86,40 @@ export type EffectRecord = {
 /**
  * Cosa si sta guardando: un turno, o una giornata.
  *
- * Le due domande di D15, e nient'altro. `day` è una data locale `YYYY-MM-DD`
- * confrontata su `started_at`, che è UTC — vedi `dayBounds` per come i due si
- * incontrano senza che «oggi» significhi due cose diverse a seconda del fuso.
+ * Le due domande di D15, e nient'altro. `day` è una data `YYYY-MM-DD` nel fuso
+ * `timeZone`, confrontata su `started_at`, che è UTC.
+ *
+ * **`timeZone` è un nome IANA, non un offset in minuti, e il cambio è una
+ * riparazione.** La prima versione prendeva `tzOffsetMinutes` e dichiarava di
+ * evitare così il fuso del processo — ma entrambe le porte lo riempivano con
+ * `new Date().getTimezoneOffset()`, cioè con il fuso del processo, spostando
+ * la lettura di un frame invece di toglierla. Il fuso autorevole dell'owner
+ * esiste già ed è sigillato nel root of trust
+ * (`budgets.quietHours.timezone`): lo leggono `cli/jobs.ts`,
+ * `core/scheduler/commitments.ts` e `LoopDeps.timeZone`, tutti con la stessa
+ * frase — «mai quello dell'host». Un nome IANA porta anche il cambio d'ora,
+ * che un offset unico applicato a una finestra di 24 ore sbaglia due volte
+ * l'anno.
+ *
+ * Assente = `UTC`: la stessa caduta che `cli/jobs.ts` sceglie quando il root
+ * of trust non si legge — esplicita, non il fuso di chi esegue.
  */
-export type EffectsFilter = { turnId: string } | { day: string; tzOffsetMinutes?: number };
+export type EffectsFilter = { turnId: string } | { day: string; timeZone?: string };
 
 export type EffectsReport = {
   /** Come è stato chiesto, per il lettore che stampa l'intestazione. */
   scope: { kind: 'turn'; turnId: string } | { kind: 'day'; day: string };
-  /** Tutte le chiamate nello scope, dalla più vecchia alla più recente. */
+  /**
+   * Le chiamate nello scope, dalla più vecchia alla più recente.
+   *
+   * Può essere **più corta di `totale`**: una porta che rende al modello ne
+   * taglia le più vecchie. I conteggi qui sotto restano quelli interi, e
+   * `formatEffects` dichiara il taglio invece di lasciar credere che la lista
+   * sia tutto.
+   */
   calls: readonly EffectRecord[];
+  /** Quante ce n'erano davvero nello scope, taglio o non taglio. */
+  totale: number;
   /**
    * Quante sono passate **senza domanda** — `allow` e `draft`.
    *
@@ -116,12 +139,39 @@ export type EffectsReport = {
    * registro non può raccontare, e dirlo è più utile che tacerlo.
    */
   nonRegistrate: number;
+  /**
+   * La provenienza dei byte che questo report porta — il massimo fra il `tier`
+   * di ogni chiamata resa e il taint del turno che l'ha fatta.
+   *
+   * **Non è cautela generica: senza, questa lettura lava il taint.** Il campo
+   * `resource` è preso verbatim dagli argomenti del modello
+   * (`agent/loop/permissions.ts#resourceFor` legge `args[name]`), quindi per
+   * `sys.search` è prosa che il modello ha scelto — in un turno a taint 3,
+   * prosa scelta sotto l'influenza di una pagina. Un tool che rendesse quelle
+   * stringhe dichiarando `tier: 0` permetterebbe a un turno avvelenato di
+   * scrivere nel registro e a un turno pulito del giorno dopo di rileggerle
+   * come byte fidati: il fetch-then-act che il kernel esiste per chiudere,
+   * riaperto da una porta nuova.
+   *
+   * `agent/tools/memory.ts` risolve la stessa domanda allo stesso modo — rende
+   * il massimo di ciò che rende — e il numero viene dalle **stesse righe**
+   * (`turn_tool_calls.tier`, `turns.taint`), non da una seconda contabilità.
+   * `0` su un report vuoto: non c'è niente da cui ereditare.
+   */
+  maxTier: TrustTier;
 };
 
-const SELECT = `SELECT turn_id AS turnId, call_id AS callId, tool, capability, started_at AS startedAt,
-                       ended_at AS endedAt, is_error AS isError, undone_at AS undoneAt,
-                       effect_row AS effectRow, reversible, resource, decision
-                FROM turn_tool_calls`;
+/**
+ * `LEFT JOIN turns`, e il `LEFT` è la parte che conta: una riga di chiamata il
+ * cui turno è stato cancellato resta leggibile, con `turnTaint` a `NULL`. Un
+ * `JOIN` semplice la farebbe sparire dal registro — cioè nasconderebbe un
+ * effetto avvenuto, che è il contrario di ciò che questa tabella serve a fare.
+ */
+const SELECT = `SELECT c.turn_id AS turnId, c.call_id AS callId, c.tool, c.capability,
+                       c.started_at AS startedAt, c.ended_at AS endedAt, c.is_error AS isError,
+                       c.undone_at AS undoneAt, c.effect_row AS effectRow, c.reversible,
+                       c.resource, c.decision, c.tier AS callTier, t.taint AS turnTaint
+                FROM turn_tool_calls c LEFT JOIN turns t ON t.id = c.turn_id`;
 
 type Raw = {
   turnId: string;
@@ -136,10 +186,61 @@ type Raw = {
   reversible: string | null;
   resource: string | null;
   decision: string | null;
+  callTier: number | null;
+  turnTaint: number | null;
 };
 
 /**
- * L'intervallo UTC di una giornata **locale**.
+ * L'offset di un fuso IANA **a un istante preciso**, in minuti a est di UTC.
+ *
+ * Un istante e non «il fuso», perché un fuso non ha un offset solo: Roma è
+ * +60 a gennaio e +120 a luglio. `Intl.DateTimeFormat` è l'unica cosa in
+ * piattaforma che conosca il database dei fusi; formattare l'istante nel fuso
+ * e rileggerlo come se fosse UTC dà, per differenza, l'offset che valeva
+ * allora.
+ */
+function offsetMinutesAt(utcMs: number, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(new Date(utcMs));
+  const n = (type: string): number => Number(parts.find((p) => p.type === type)?.value ?? '0');
+  // `hour: '2-digit'` con `hour12: false` rende 24 per la mezzanotte in alcuni
+  // ICU: `Date.UTC` lo assorbe come il giorno dopo alle 0, che e' lo stesso
+  // istante, quindi la differenza resta giusta.
+  const asIfUtc = Date.UTC(
+    n('year'),
+    n('month') - 1,
+    n('day'),
+    n('hour'),
+    n('minute'),
+    n('second'),
+  );
+  return (asIfUtc - utcMs) / 60_000;
+}
+
+/** La mezzanotte di `day` in `timeZone`, come istante UTC. */
+function zonedMidnightMs(day: string, timeZone: string): number {
+  const nominale = Date.parse(`${day}T00:00:00.000Z`);
+  if (Number.isNaN(nominale)) throw new Error(`data non valida (attesa YYYY-MM-DD): ${day}`);
+  // Due passate, e la seconda serve davvero: il primo offset e' quello che
+  // vale a mezzanotte UTC, che nella notte del cambio d'ora non e' quello che
+  // vale a mezzanotte locale. Ricalcolarlo sull'istante appena stimato
+  // converge — la stessa forma che usa qualunque libreria di fusi.
+  const primo = offsetMinutesAt(nominale, timeZone);
+  const stima = nominale - primo * 60_000;
+  const secondo = offsetMinutesAt(stima, timeZone);
+  return secondo === primo ? stima : nominale - secondo * 60_000;
+}
+
+/**
+ * L'intervallo UTC di una giornata **nel fuso dell'owner**.
  *
  * `started_at` è ISO in UTC; «oggi» per l'owner è la sua mezzanotte, non
  * quella di Greenwich. Senza questa conversione una domanda fatta la sera in
@@ -147,32 +248,40 @@ type Raw = {
  * precedente — il genere di errore che si scopre solo quando qualcuno cerca
  * una scrittura che «di sicuro» ha fatto.
  *
- * `tzOffsetMinutes` è l'offset del chiamante (`Date#getTimezoneOffset`, cioè
- * minuti da sottrarre per arrivare a UTC), passato invece che letto: il
- * gateway gira sotto launchd/systemd, dove `TZ` non è per forza quello
- * dell'owner, e una funzione che legge l'ambiente darebbe una risposta diversa
- * a seconda di chi la chiama.
+ * Il fondo è la mezzanotte del **giorno dopo**, non «l'inizio più 24 ore»: nei
+ * due giorni del cambio d'ora una giornata locale dura 23 o 25 ore, e sommare
+ * 24 ore fisse sposta fino a un'ora di chiamate nel giorno sbagliato.
  */
-function dayBounds(day: string, tzOffsetMinutes: number): { from: string; to: string } {
-  const startUtcMs = Date.parse(`${day}T00:00:00.000Z`) + tzOffsetMinutes * 60_000;
-  if (Number.isNaN(startUtcMs)) throw new Error(`data non valida (attesa YYYY-MM-DD): ${day}`);
+function dayBounds(day: string, timeZone: string): { from: string; to: string } {
+  const from = zonedMidnightMs(day, timeZone);
+  const [y, m, d] = day.split('-').map(Number) as [number, number, number];
+  const dopo = new Date(Date.UTC(y, m - 1, d + 1));
+  const giornoDopo = dopo.toISOString().slice(0, 10);
   return {
-    from: new Date(startUtcMs).toISOString(),
-    to: new Date(startUtcMs + 24 * 60 * 60 * 1000).toISOString(),
+    from: new Date(from).toISOString(),
+    to: new Date(zonedMidnightMs(giornoDopo, timeZone)).toISOString(),
   };
 }
 
 /**
- * `YYYY-MM-DD` **nel fuso di chi chiama**, mai `toISOString().slice(0, 10)`,
- * che è già UTC e quindi sbaglia giorno per mezza giornata a est di Londra.
+ * `YYYY-MM-DD` **nel fuso dell'owner**, mai `toISOString().slice(0, 10)`, che è
+ * già UTC e quindi sbaglia giorno per mezza giornata a est di Londra, e mai
+ * `getFullYear()`, che è il fuso del processo — cioè quello del supervisore.
  *
  * Esportata da qui e non riscritta a ogni porta: `sys_effects` e
  * `muffin effects` devono intendere la stessa cosa per «oggi», e due copie di
  * tre righe sono due definizioni di oggi.
  */
-export function localDay(d: Date): string {
-  const p = (n: number): string => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+export function localDay(d: Date, timeZone = 'UTC'): string {
+  // `en-CA` rende esattamente `YYYY-MM-DD`, che e' il formato che il resto di
+  // questo file confronta: costruirlo a mano dai `parts` sarebbe la stessa
+  // cosa con tre righe in piu' e un padStart da sbagliare.
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
 }
 
 /** `'yes' | 'no' | 'undoable'`, o `null` se la riga non lo dice. Mai un valore inventato. */
@@ -196,7 +305,7 @@ export function readEffects(db: Database.Database, filter: EffectsFilter): Effec
           .prepare(`${SELECT} WHERE turn_id = ? ORDER BY started_at, call_id`)
           .all(filter.turnId) as Raw[])
       : (() => {
-          const { from, to } = dayBounds(filter.day, filter.tzOffsetMinutes ?? 0);
+          const { from, to } = dayBounds(filter.day, filter.timeZone ?? 'UTC');
           return db
             .prepare(
               `${SELECT} WHERE started_at >= ? AND started_at < ? ORDER BY started_at, call_id`,
@@ -229,10 +338,25 @@ export function readEffects(db: Database.Database, filter: EffectsFilter): Effec
         ? { kind: 'turn', turnId: filter.turnId }
         : { kind: 'day', day: filter.day },
     calls,
+    totale: calls.length,
     senzaDomanda: calls.filter((c) => c.decision === 'allow' || c.decision === 'draft').length,
     conDomanda: calls.filter((c) => c.decision === 'ask').length,
     nonRegistrate: calls.filter((c) => c.decision === null).length,
+    // Il massimo fra le due colonne, riga per riga: il `tier` del risultato di
+    // quella chiamata e il taint del turno che l'ha fatta. Servono tutte e due
+    // — una `fs_read` a `tier: 0` dentro un turno salito a 3 dopo una ricerca
+    // porta comunque un percorso che il modello ha scelto avendo la pagina
+    // davanti, e il taint del turno e' l'unica colonna che lo dice.
+    maxTier: rows.reduce<TrustTier>(
+      (max, r) => Math.max(max, tierOf(r.callTier), tierOf(r.turnTaint)) as TrustTier,
+      0,
+    ),
   };
+}
+
+/** Un intero fuori scala o assente vale `0` — mai un `NaN` che si propaga come tier. */
+function tierOf(raw: number | null): TrustTier {
+  return raw === 1 || raw === 2 || raw === 3 ? raw : 0;
 }
 
 /**
@@ -252,7 +376,7 @@ export function formatEffects(r: EffectsReport): string {
   const righe = r.calls.map((c) => {
     const esito = c.endedAt === null ? 'non conclusa' : c.isError === true ? 'errore' : 'ok';
     const dove = c.resource === null ? '' : ` su ${c.resource}`;
-    const riga = c.row ?? 'riga non registrata';
+    const riga = c.row ?? 'non registrata';
     const rev =
       c.reversible === null ? 'reversibilità non registrata' : `reversibile: ${c.reversible}`;
     const come =
@@ -267,10 +391,17 @@ export function formatEffects(r: EffectsReport): string {
     return `  ${c.startedAt} ${c.tool} (${c.capability})${dove} — riga ${riga}, ${rev}, ${come} · ${esito}${undo}`;
   });
 
+  // `r.totale` e non `r.calls.length`: chi rende solo le ultime N righe
+  // (`agent/tools/effects.ts`) affetta `calls` e lascia i totali interi, e una
+  // coda che contasse la lista affettata direbbe «60 chiamate · 95 senza
+  // domanda» — due numeri che non possono stare nella stessa frase.
   const coda = [
     '',
-    `${r.calls.length} chiamate · ${r.senzaDomanda} senza domanda · ${r.conDomanda} dopo una domanda`,
+    `${r.totale} chiamate · ${r.senzaDomanda} senza domanda · ${r.conDomanda} dopo una domanda`,
   ];
+  if (r.calls.length < r.totale) {
+    coda.push(`(mostrate le ultime ${r.calls.length}; i totali sopra contano tutte.)`);
+  }
   if (r.nonRegistrate > 0) {
     coda.push(
       `${r.nonRegistrate} scritte prima che il registro degli effetti esistesse: di quelle non si sa come sono passate.`,

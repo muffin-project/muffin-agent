@@ -308,3 +308,4 @@
 {"id":"judge-186-r3","chiuso":"PR #186 integrata da settimane; il terzo giro CRITICAL non è mai partito e il tema (attribuzione episodi, backfill, undo annidato) è coperto da D11 READY e dallo scenario E3","quando":"2026-09-07T02:18:09.816Z"}
 {"id":"installazione-riconciliata","chiuso":"superata da A11 (install pulita, docs/INSTALL.md, install.sh) integrata su dev il 06/09","quando":"2026-09-07T02:18:09.870Z"}
 {"id":"ae95b1a589bd9074a","chiuso":"PR #186 integrata da settimane; il terzo giro non è mai partito; tema coperto da D11 READY e scenario E3","quando":"2026-09-07T02:18:31.267Z"}
+{"id":"ec3651bdb53e2a84","slug":"judge-476-d15","cosa":"giudice indipendente CRITICAL su PR #476 (D15, registro degli effetti): schema durevole additivo su turn_tool_calls, percorso del loop, tool nuovo sul menu del modello, tetto dei tool alzato di uno","quando":"2026-09-07T05:56:16.637Z"}
