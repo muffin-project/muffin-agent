@@ -1,16 +1,17 @@
+import { APPROVAL_WINDOW_MS } from '../../core/approvals/store.js';
+import { sleep } from '../../core/net/sleep.js';
 import type { PermissionSnapshot, TrustTier } from '../../core/policy/types.js';
 import type { SessionMessage } from '../../core/session/store.js';
-import { APPROVAL_WINDOW_MS } from '../../core/approvals/store.js';
+import { redactText } from '../../core/tracing/redact.js';
 import type { SpanHandle } from '../../core/tracing/types.js';
 import { ATTR } from '../../core/tracing/types.js';
-import { redactText } from '../../core/tracing/redact.js';
-import { sleep } from '../../core/net/sleep.js';
+import type { EffectDecision, EffectMetadata } from '../../core/turns/effects.js';
 import type { ContentBlock } from '../providers/types.js';
 import { denyText, resourceFor } from './permissions.js';
 import {
+  type ApprovalRequest,
   ApprovalRequired,
   assertNever,
-  type ApprovalRequest,
   type LoopDeps,
   type RegisteredTool,
   type ToolContext,
@@ -146,7 +147,14 @@ async function eseguiConRitentativi(
     // Annunciato **prima** dell'attesa: un retry dichiarato quando e' gia'
     // finito non serve a chi sta guardando lo spinner fermo, ed e' per quello
     // che l'evento esiste.
-    onProgress?.({ type: 'tool_retry', name: nome, attempt: tentativo, inMs, why: outcome.content, args });
+    onProgress?.({
+      type: 'tool_retry',
+      name: nome,
+      attempt: tentativo,
+      inMs,
+      why: outcome.content,
+      args,
+    });
     await sleep(inMs, signal);
     outcome = await tool.handler(args, ctx);
   }
@@ -164,7 +172,11 @@ export async function runTool(
   /** The turn a handler is running in: identity, and the suspension barrier. */
   ctx: ToolContext,
 ): Promise<ContentBlock> {
-  const span = deps.tracer.start('muffin.tool_call', { [ATTR.toolName]: call.name, [ATTR.toolCallId]: call.id }, parent);
+  const span = deps.tracer.start(
+    'muffin.tool_call',
+    { [ATTR.toolName]: call.name, [ATTR.toolCallId]: call.id },
+    parent,
+  );
   // Resolved against every registered tool, not against `exposed`, and that is
   // the load-bearing half of "defence in depth, not replacement": a member who
   // names a host-only tool anyway must meet `decide.ts:132` and be refused
@@ -201,7 +213,13 @@ export async function runTool(
   const toolCallStartedAt = Date.now();
   input.onProgress?.({ type: 'tool_start', name: call.name, capability, args });
   const emitToolEnd = (isError: boolean): void => {
-    input.onProgress?.({ type: 'tool_end', name: call.name, ms: Date.now() - toolCallStartedAt, isError, args });
+    input.onProgress?.({
+      type: 'tool_end',
+      name: call.name,
+      ms: Date.now() - toolCallStartedAt,
+      isError,
+      args,
+    });
   };
   // The kernel decides on a *resource*, so anything it is supposed to gate has
   // to be lifted out of the args here. `url` was missing, and the consequence
@@ -330,7 +348,11 @@ export async function runTool(
     case 'ask': {
       const request: ApprovalRequest = {
         capability,
-        prompt: conProvenienza(decision.ask.prompt, snapshot.currentTaint(), snapshot.taintOrigin()),
+        prompt: conProvenienza(
+          decision.ask.prompt,
+          snapshot.currentTaint(),
+          snapshot.taintOrigin(),
+        ),
         // `path` carried this alone; `url` and `query` joined it (mandato inv.
         // 7, egress-params) so approving a params-gated fetch or search shows
         // the exact bytes, not just the kernel's prose — the gap ADR-0044
@@ -342,10 +364,15 @@ export async function runTool(
         // so the call's own arguments are the action — `sys.shell`'s
         // command+cwd, a pid+name — and hiding them made the ask
         // unanswerable (D12-min, RETURN S3).
-        ...(resource.kind === 'path' || resource.kind === 'url' || resource.kind === 'url-read' || resource.kind === 'query'
+        ...(resource.kind === 'path' ||
+        resource.kind === 'url' ||
+        resource.kind === 'url-read' ||
+        resource.kind === 'query'
           ? { resource: resource.value }
           : { resource: summarizeCallArgs(call.args) }),
-        ...(descriptionOf(call.args) === undefined ? {} : { description: descriptionOf(call.args) }),
+        ...(descriptionOf(call.args) === undefined
+          ? {}
+          : { description: descriptionOf(call.args) }),
         taint: snapshot.currentTaint(),
       };
       const nega = (): ContentBlock => {
@@ -369,7 +396,11 @@ export async function runTool(
        * e il sì dell'owner non arriverebbe mai a valere.
        */
       const gia = deps.approvals?.take(
-        { turnId: ctx.turnId, capability, ...(request.resource === undefined ? {} : { resource: request.resource }) },
+        {
+          turnId: ctx.turnId,
+          capability,
+          ...(request.resource === undefined ? {} : { resource: request.resource }),
+        },
         (deps.now ?? (() => new Date()))(),
       );
       if (gia === 'deny') return nega();
@@ -430,7 +461,9 @@ export async function runTool(
           // prossimo punto di sospensione, quando ogni `tool_use` di questo
           // giro ha il suo `tool_result` (`ToolContext.suspend`).
           ctx.suspend({
-            wakeAt: new Date((deps.now ?? (() => new Date()))().getTime() + APPROVAL_WINDOW_MS).toISOString(),
+            wakeAt: new Date(
+              (deps.now ?? (() => new Date()))().getTime() + APPROVAL_WINDOW_MS,
+            ).toISOString(),
             waitFor: { kind: 'approval', id: approvalId },
           });
           span.end({ status: 'ok' });
@@ -453,7 +486,11 @@ export async function runTool(
         if (deps.approvals !== undefined && approvalId !== undefined) {
           deps.approvals.decide(approvalId, answer, (deps.now ?? (() => new Date()))());
           deps.approvals.take(
-            { turnId: ctx.turnId, capability, ...(request.resource === undefined ? {} : { resource: request.resource }) },
+            {
+              turnId: ctx.turnId,
+              capability,
+              ...(request.resource === undefined ? {} : { resource: request.resource }),
+            },
             (deps.now ?? (() => new Date()))(),
           );
         }
@@ -511,13 +548,54 @@ export async function runTool(
    * noto di ogni confronto per uguaglianza esatta.
    */
   const giaFatte =
-    decl?.progress === 'idempotent_read' ? deps.turns.identicalCallsDone(ctx.turnId, call.name, args) : 0;
+    decl?.progress === 'idempotent_read'
+      ? deps.turns.identicalCallsDone(ctx.turnId, call.name, args)
+      : 0;
+  /**
+   * Il registro degli effetti (D15), scritto sulla stessa riga d'intento.
+   *
+   * Qui e non altrove, e per due ragioni che sono la stessa. La prima: questo
+   * è il punto in cui il verdetto del kernel esiste ed è ancora in mano —
+   * `decision` è stato calcolato sopra e non sopravvive a questa funzione, e
+   * ricostruirlo dopo vorrebbe dire richiamare `check()` su un taint che nel
+   * frattempo può essere salito, cioè inventare un secondo verdetto. La
+   * seconda: la riga d'intento si scrive **prima** che l'handler tocchi il
+   * mondo, quindi un effetto che avviene ha per costruzione i suoi metadata
+   * già a terra — un registro scritto dopo perderebbe esattamente le chiamate
+   * che sono morte a metà, che sono quelle su cui l'owner ha più bisogno di
+   * sapere cosa è passato.
+   *
+   * `decision.effect` è preso letteralmente e non ricalcolato: `deny` non può
+   * arrivare qui (lo `switch` sopra ritorna), quindi ciò che resta è
+   * esattamente `allow | draft | ask` — e un `ask` che arriva a questa riga è
+   * un `ask` a cui l'owner ha già detto sì, perché il rifiuto e la sospensione
+   * ritornano anche loro.
+   *
+   * La risorsa preferisce `risolto` al valore grezzo: per una scrittura di
+   * file il kernel giudica l'argomento del modello (`note.md`) mentre il file
+   * che viene toccato è quello che `resolveEffectPath` ha risolto, ed è quello
+   * che l'owner cerca quando chiede cosa è stato scritto. `redactText` come su
+   * ogni altro sink (ADR-0048): un URL può portarsi dietro un token, e questa
+   * riga la rilegge una CLI.
+   */
+  const effect: EffectMetadata = {
+    row: decl?.effect ?? null,
+    reversible: decl?.reversible ?? null,
+    resource:
+      risolto !== undefined
+        ? redactText(risolto)
+        : resource.kind === 'none'
+          ? null
+          : redactText(resource.value),
+    decision: decision.effect as EffectDecision,
+  };
   const intentError = recordIntent(deps, ctx.turnId, span, {
     callId: call.id,
     tool: call.name,
     capability,
     rerunnable: decl?.rerunnable === true,
     args,
+    effect,
   });
   if (intentError !== null) {
     // EFFECT WAL, a DAY-1 readiness invariant: the write above did not land, so
@@ -586,7 +664,9 @@ export async function runTool(
      * is nothing to compare.
      */
     const fallimentiIdentici =
-      outcome.isError === true ? deps.turns.identicalFailuresDone(ctx.turnId, call.name, args, safeContent) : 0;
+      outcome.isError === true
+        ? deps.turns.identicalFailuresDone(ctx.turnId, call.name, args, safeContent)
+        : 0;
     // The outcome and the taint it dragged in, in one transaction: a tier-3
     // result raises the turn's taint, and the two facts must not be able to
     // land apart — a record that had read the web at a tier saying it had not
@@ -666,7 +746,12 @@ export async function runTool(
     // Same counter as the success path's error exit, read before this call's
     // own row lands, for the same reason: `identicalFailuresDone` compares
     // `content` too, and `detail` is this call's content.
-    const fallimentiIdentici = deps.turns.identicalFailuresDone(ctx.turnId, call.name, args, detail);
+    const fallimentiIdentici = deps.turns.identicalFailuresDone(
+      ctx.turnId,
+      call.name,
+      args,
+      detail,
+    );
     // Unconditional, and the same call the success path makes a few lines up
     // — a judge's round-1 finding was that this branch never raised taint at
     // all, so a handler that threw was invisible to the ledger no matter whose
@@ -680,7 +765,11 @@ export async function runTool(
     // `ctx.turnId` for the same reason as the success path above; `tier:
     // tool.throwTier`, never `undefined` — the record and the taint it
     // produced must agree, exactly as ADR-0044 requires of the success path.
-    recordOutcome(deps, ctx.turnId, span, call.id, { content: detail, isError: true, tier: tool.throwTier });
+    recordOutcome(deps, ctx.turnId, span, call.id, {
+      content: detail,
+      isError: true,
+      tier: tool.throwTier,
+    });
     span.end({ status: 'error', error: detail });
     emitToolEnd(true);
     if (fallimentiIdentici > 0) {
@@ -689,7 +778,10 @@ export async function runTool(
     return {
       type: 'tool_result',
       toolCallId: call.id,
-      content: fallimentiIdentici > 0 ? `${detail}\n\n${avvisoFallimentoRipetuto(call.name, fallimentiIdentici)}` : detail,
+      content:
+        fallimentiIdentici > 0
+          ? `${detail}\n\n${avvisoFallimentoRipetuto(call.name, fallimentiIdentici)}`
+          : detail,
       isError: true,
     };
   }
@@ -745,7 +837,14 @@ function recordIntent(
   deps: LoopDeps,
   turnId: string,
   span: SpanHandle,
-  call: { callId: string; tool: string; capability: string; rerunnable: boolean; args: unknown },
+  call: {
+    callId: string;
+    tool: string;
+    capability: string;
+    rerunnable: boolean;
+    args: unknown;
+    effect: EffectMetadata;
+  },
 ): string | null {
   try {
     deps.turns.startToolCall(turnId, call);
@@ -778,7 +877,8 @@ function recordOutcome(
   try {
     deps.turns.endToolCall(turnId, callId, result);
   } catch (error) {
-    span.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
+    span.setAttributes({
+      'muffin.turn.record_error': error instanceof Error ? error.message : String(error),
+    });
   }
 }
-

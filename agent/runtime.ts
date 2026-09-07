@@ -1,78 +1,94 @@
-import DatabaseCtor from 'better-sqlite3';
-import { openDb } from '../core/db/open.js';
 import { join } from 'node:path';
+import type DatabaseCtor from 'better-sqlite3';
+import { ApprovalStore } from '../core/approvals/store.js';
 import { BudgetEngine } from '../core/budget/budget.js';
-import { migrate } from '../core/db/migrate.js';
 import { costUsd } from '../core/budget/pricing.js';
 import {
+  type Config,
   loadConfig,
   paths,
   promptVersion,
   readDefaultChannel,
   readSecret,
   secretDir,
-  type Config,
 } from '../core/config/config.js';
 import { resolveWorkspace } from '../core/config/workspace.js';
-import { loadSealedBudgets } from '../core/rot/budgets.js';
-import type { QuietHours } from '../core/scheduler/proactivity.js';
-import { mandatoryGuards } from '../core/rot/guards.js';
-import { createDecide } from '../core/policy/decide.js';
-import { loadPolicyMatrix } from '../core/policy/matrix.js';
-import type { CapabilityDecl } from '../core/policy/types.js';
-import { hardeningHolds, verify, type HardeningCheck } from '../core/rot/verify.js';
-import { SessionStore } from '../core/session/store.js';
-import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
-import {
-  buildSystemPromptBlocks,
-  renderSystemPrompts,
-  type IstanzaFacts,
-  type SystemPromptBlocks,
-} from './context/assemble.js';
-import type { Approver, LoopDeps, RegisteredTool, SpendEntry } from './loop.js';
-import { ApprovalStore } from '../core/approvals/store.js';
-import { UndoJournal } from '../core/undo/journal.js';
-import type { Provider } from './providers/types.js';
-import { loadProfiles, selectProfile, withThinking } from './profiles/profile.js';
-import { AnthropicProvider } from './providers/anthropic.js';
-import { OpenAICompatProvider } from './providers/openai-compat.js';
-import { fsCapabilities, fsList, makeFsTools, type FsScope } from './tools/fs.js';
-import { documentCapability, makeDocumentTool } from './tools/document.js';
-import { memoryCapability, memorySearchSpec, memoryWhySpec, searchMemory, whyMemory } from './tools/memory.js';
-import { Vault } from '../core/vault/vault.js';
-import { SandboxExecutor } from '../core/sandbox/executor.js';
-import { makeShellTool, makeShellWriteTool, shellCapability, shellWriteCapability } from './tools/shell.js';
-import { hostAllowed, loadEgress, type EgressPolicy } from '../core/net/egress.js';
-import { httpCapability, makeHttpTool } from './tools/http.js';
-import { diagnoseSearch, makeSearchTool, searchCapability } from './tools/search.js';
-import { formatCapabilityGap, truncationGap, type CapabilityGap } from './tools/capability-status.js';
-import { makeProcessTools, processCapabilities } from './tools/process.js';
+import { migrate } from '../core/db/migrate.js';
+import { openDb } from '../core/db/open.js';
 import { loadMcpRegistry } from '../core/mcp/registry.js';
-import { buildMcpTools } from './tools/mcp.js';
-import { discoverSkills, skillsPromptSection } from '../core/skills/skills.js';
-import { makeSkillTool, skillCapability } from './tools/skill.js';
-import { promptNonce } from '../core/skills/nonce.js';
-import { inspectCapability, makeInspectTool } from './tools/inspect.js';
-import { JobFireStore } from '../core/scheduler/job-fires.js';
-import { JobStore } from '../core/scheduler/jobs.js';
-import { TurnStore, describeInterrupted } from '../core/turns/store.js';
-import { TodoStore } from '../core/turns/todo.js';
-import { makeWaitTool, waitCapability } from './tools/wait.js';
-import { makeTodoTool, todoCapability } from './tools/todo.js';
-import { makeVaultSaveTool, vaultWriteCapability } from './tools/vault-save.js';
+import {
+  CONSOLIDATION_CAPABILITY,
+  CONSOLIDATION_TENANT,
+  Consolidator,
+} from '../core/memory/consolidator.js';
 import { makeEmbedder } from '../core/memory/embed.js';
+import { ingestPending } from '../core/memory/ingest.js';
+import { sweepDuplicates } from '../core/memory/maintenance.js';
+import type { RecallDeps } from '../core/memory/recall.js';
 import { LlmReranker } from '../core/memory/rerank.js';
 import { MemoryStore } from '../core/memory/store.js';
 import { VectorIndex } from '../core/memory/vectors.js';
-import type { RecallDeps } from '../core/memory/recall.js';
-import { ingestPending } from '../core/memory/ingest.js';
-import { sweepDuplicates } from '../core/memory/maintenance.js';
+import { type EgressPolicy, hostAllowed, loadEgress } from '../core/net/egress.js';
+import { createDecide } from '../core/policy/decide.js';
+import { loadPolicyMatrix } from '../core/policy/matrix.js';
+import type { CapabilityDecl } from '../core/policy/types.js';
+import { loadSealedBudgets } from '../core/rot/budgets.js';
+import { mandatoryGuards } from '../core/rot/guards.js';
+import { type HardeningCheck, hardeningHolds, verify } from '../core/rot/verify.js';
+import { SandboxExecutor } from '../core/sandbox/executor.js';
+import { JobFireStore } from '../core/scheduler/job-fires.js';
+import { JobStore } from '../core/scheduler/jobs.js';
+import type { QuietHours } from '../core/scheduler/proactivity.js';
+import { SessionStore } from '../core/session/store.js';
+import { promptNonce } from '../core/skills/nonce.js';
+import { discoverSkills, skillsPromptSection } from '../core/skills/skills.js';
+import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
+import { describeInterrupted, TurnStore } from '../core/turns/store.js';
+import { TodoStore } from '../core/turns/todo.js';
+import { UndoJournal } from '../core/undo/journal.js';
+import { Vault } from '../core/vault/vault.js';
 import {
-  Consolidator,
-  CONSOLIDATION_CAPABILITY,
-  CONSOLIDATION_TENANT,
-} from '../core/memory/consolidator.js';
+  buildSystemPromptBlocks,
+  type IstanzaFacts,
+  renderSystemPrompts,
+  type SystemPromptBlocks,
+} from './context/assemble.js';
+import type { Approver, LoopDeps, RegisteredTool, SpendEntry } from './loop.js';
+import { loadProfiles, selectProfile, withThinking } from './profiles/profile.js';
+import { AnthropicProvider } from './providers/anthropic.js';
 import { lightLane } from './providers/light-lane.js';
+import { OpenAICompatProvider } from './providers/openai-compat.js';
+import type { Provider } from './providers/types.js';
+import {
+  type CapabilityGap,
+  formatCapabilityGap,
+  truncationGap,
+} from './tools/capability-status.js';
+import { documentCapability, makeDocumentTool } from './tools/document.js';
+import { effectsCapability, makeEffectsTool } from './tools/effects.js';
+import { type FsScope, fsCapabilities, fsList, makeFsTools } from './tools/fs.js';
+import { httpCapability, makeHttpTool } from './tools/http.js';
+import { inspectCapability, makeInspectTool } from './tools/inspect.js';
+import { buildMcpTools } from './tools/mcp.js';
+import {
+  memoryCapability,
+  memorySearchSpec,
+  memoryWhySpec,
+  searchMemory,
+  whyMemory,
+} from './tools/memory.js';
+import { makeProcessTools, processCapabilities } from './tools/process.js';
+import { diagnoseSearch, makeSearchTool, searchCapability } from './tools/search.js';
+import {
+  makeShellTool,
+  makeShellWriteTool,
+  shellCapability,
+  shellWriteCapability,
+} from './tools/shell.js';
+import { makeSkillTool, skillCapability } from './tools/skill.js';
+import { makeTodoTool, todoCapability } from './tools/todo.js';
+import { makeVaultSaveTool, vaultWriteCapability } from './tools/vault-save.js';
+import { makeWaitTool, waitCapability } from './tools/wait.js';
 
 /**
  * Assembly.
@@ -330,6 +346,17 @@ export function baseToolOrder(input: {
     'http_get',
     ...(input.searchOn ? ['web_search'] : []),
     ...(input.sendFileAvailable ? ['send_file'] : []),
+    /**
+     * Sopra `wait`/`todo`/`sys_inspect`, e per l'argomento che `send_file` ha
+     * gia' vinto due righe piu' su: quelli tre sono i primi che un taglio di
+     * profilo prende, e il registro degli effetti (D15) e' una riga DAY-1 —
+     * la risposta a «cosa hai fatto oggi». Perderla in silenzio significa un
+     * owner che non puo' piu' vedere cosa e' passato senza domanda, che e'
+     * esattamente la sorveglianza che ADR-0074 rende necessaria togliendo
+     * quasi ogni domanda. Fra l'auto-descrizione e l'auto-rendiconto, il
+     * secondo.
+     */
+    'sys_effects',
     'wait',
     'todo',
     'sys_inspect',
@@ -481,9 +508,7 @@ export function buildRuntime(
    * left behind by the slice that built it, which is exactly how a comment
    * becomes a lie a reader has no way to catch.)
    */
-  const turnNotes = turns
-    .reclaim()
-    .map((t) => `! ${describeInterrupted(t)}`);
+  const turnNotes = turns.reclaim().map((t) => `! ${describeInterrupted(t)}`);
 
   /**
    * Turns suspended with nobody to wake them, named at boot for the same reason
@@ -497,7 +522,10 @@ export function buildRuntime(
   const waitingNotes = ((): string[] => {
     const { waiting } = turns.health({ windowMs: 0 });
     if (waiting.count === 0) return [];
-    const due = waiting.oldestWakeAt === null ? '' : ` (il più vecchio scade ${waiting.oldestWakeAt.slice(0, 16).replace('T', ' ')})`;
+    const due =
+      waiting.oldestWakeAt === null
+        ? ''
+        : ` (il più vecchio scade ${waiting.oldestWakeAt.slice(0, 16).replace('T', ' ')})`;
     return [
       `! ${waiting.count} turni sospesi in attesa di risveglio${due} — li riprende la corsia del gateway, ` +
         `\`muffin doctor\` dice se ne sta girando uno`,
@@ -519,7 +547,9 @@ export function buildRuntime(
   const undeliverableNotes = ((): string[] => {
     const { undeliverable } = turns.health({ windowMs: 0 });
     if (undeliverable.count === 0) return [];
-    return [`! ${undeliverable.count} turni con risposta senza indirizzo — \`muffin doctor\` li nomina`];
+    return [
+      `! ${undeliverable.count} turni con risposta senza indirizzo — \`muffin doctor\` li nomina`,
+    ];
   })();
 
   // One connection, two lanes: the endpoint is the same, the model id is not.
@@ -574,7 +604,11 @@ export function buildRuntime(
   const light = lightLane(provider, {
     profile: selectProfile(config.models.light, profiles),
     record: (entry) =>
-      void recordSpend({ ...entry, tenant: CONSOLIDATION_TENANT, capability: CONSOLIDATION_CAPABILITY }),
+      void recordSpend({
+        ...entry,
+        tenant: CONSOLIDATION_TENANT,
+        capability: CONSOLIDATION_CAPABILITY,
+      }),
   });
 
   // Memory. The vector half is optional and its absence is reported rather than
@@ -645,7 +679,11 @@ export function buildRuntime(
   // contained write that becomes an uncontained execution the next time the
   // owner commits, or opens a shell.
   const guards = mandatoryGuards(home, workspace);
-  const scope: FsScope = { root: workspace, denyWrite: guards.denyWrite, denyRead: guards.denyRead };
+  const scope: FsScope = {
+    root: workspace,
+    denyWrite: guards.denyWrite,
+    denyRead: guards.denyRead,
+  };
   /**
    * Ogni capacità spenta o tagliata a questo assemblaggio, riempito via `push`
    * man mano che ogni pezzo sotto scopre il proprio motivo — mai riassegnato,
@@ -811,7 +849,7 @@ export function buildRuntime(
    * `wait` gets the store for one purpose only, counting how many turns this
    * tenant already holds suspended; it cannot suspend anything by itself.
    */
-  tools.push(makeWaitTool(turns), makeTodoTool(todos));
+  tools.push(makeWaitTool(turns), makeTodoTool(todos), makeEffectsTool(turns));
 
   const capabilities = new Map<string, CapabilityDecl>(
     [
@@ -831,6 +869,7 @@ export function buildRuntime(
       // built-ins get the same treatment.
       waitCapability,
       todoCapability,
+      effectsCapability,
       vaultWriteCapability,
       // Declared only when the tool exists. A capability the kernel knows about
       // but nothing can invoke is the harmless direction; the dangerous one is a
@@ -1022,7 +1061,8 @@ export function buildRuntime(
     );
     tools.sort(
       (a, b) =>
-        (priorita.get(a.spec.name) ?? Number.MAX_SAFE_INTEGER) - (priorita.get(b.spec.name) ?? Number.MAX_SAFE_INTEGER),
+        (priorita.get(a.spec.name) ?? Number.MAX_SAFE_INTEGER) -
+        (priorita.get(b.spec.name) ?? Number.MAX_SAFE_INTEGER),
     );
     // Idempotente: una rilettura aggiorna le righe `truncated`, non le accumula.
     for (let i = capabilityGaps.length - 1; i >= 0; i -= 1) {
@@ -1034,7 +1074,13 @@ export function buildRuntime(
     // del profilo la taglia» e «non esiste per questa installazione» sono due
     // domande diverse, e confonderle è esattamente il difetto misurato.
     for (const tool of tagliati) {
-      capabilityGaps.push(truncationGap({ tool, profileName: profile.name, maxToolsExposed: profile.maxToolsExposed }));
+      capabilityGaps.push(
+        truncationGap({
+          tool,
+          profileName: profile.name,
+          maxToolsExposed: profile.maxToolsExposed,
+        }),
+      );
     }
   };
   computeExposureGaps();
@@ -1099,7 +1145,9 @@ export function buildRuntime(
     },
     recomputeExposure: () => {
       computeExposureGaps();
-      return capabilityGaps.filter((g) => g.kind === 'truncated').map((g) => formatCapabilityGap(g));
+      return capabilityGaps
+        .filter((g) => g.kind === 'truncated')
+        .map((g) => formatCapabilityGap(g));
     },
     onClose: (hook) => {
       closeHooks.push(hook);
@@ -1207,4 +1255,3 @@ export async function attachMcp(runtime: Runtime, home = paths().home): Promise<
   runtime.onClose(() => attachment.close());
   return attachment.report;
 }
-

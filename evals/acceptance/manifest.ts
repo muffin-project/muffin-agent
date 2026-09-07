@@ -525,6 +525,18 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // copre l'altra meta' della domanda della riga — «e un ripristino che disfa
   // anche il turno?».
   verde('D11', 'checkpoint: `muffin undo` marks the turn and the memory episode, not only the disk'),
+  // D15, il registro degli effetti. La riga nasce dal costo di ADR-0074: se
+  // si chiede solo l'irreversibile, quasi tutto passa in silenzio, e cio' che
+  // passa in silenzio deve restare **guardabile**. Lo scenario prova le tre
+  // meta' insieme — i metadata sulla riga, la lettura canonica per turno e per
+  // giornata, e la strada dell'owner che lo chiede parlando — perche' nessuna
+  // delle tre da sola chiude la domanda della riga.
+  verde(
+    'D15',
+    'registro degli effetti: una scrittura reversibile passa senza ask e lascia riga della matrice, ' +
+      'reversibilita\' e risorsa; `muffin effects` le rilegge per turno e per giornata, e l\'owner ci arriva ' +
+      'chiedendo "cosa hai fatto oggi?" senza conoscere un comando',
+  ),
   // Nuova (ADR-0075). La riga D16 nasce da una misura sul `muffin.db`
   // dell'owner — nove turni su quattordici a taint 3 il 06/09, ultima shell
   // vera il 03/09, ultimo turno chiuso da `context taint 3 exceeds 2 for
