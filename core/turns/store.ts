@@ -1,9 +1,15 @@
-import { redactText } from '../tracing/redact.js';
-import type Database from 'better-sqlite3';
 import { createHash, randomUUID } from 'node:crypto';
+import type Database from 'better-sqlite3';
 import type { Message } from '../../agent/providers/types.js';
 import { ensureColumn, heldBy, pidAlive } from '../lock/durable.js';
 import type { Principal, TrustTier } from '../policy/types.js';
+import { redactText } from '../tracing/redact.js';
+import {
+  type EffectMetadata,
+  type EffectsFilter,
+  type EffectsReport,
+  readEffects,
+} from './effects.js';
 
 /**
  * A turn is a durable record with an identity, not a stack frame.
@@ -117,7 +123,12 @@ export type TurnStopped = TurnOutcome | 'suspended';
  * retry. Additive: existing rows keep reading `pending` / `sent` / `failed:…`
  * exactly as before.
  */
-export type DeliveryState = 'pending' | 'sent' | 'possibly_sent' | 'undeliverable' | `failed:${string}`;
+export type DeliveryState =
+  | 'pending'
+  | 'sent'
+  | 'possibly_sent'
+  | 'undeliverable'
+  | `failed:${string}`;
 
 export type TurnCounters = {
   iterations: number;
@@ -125,7 +136,12 @@ export type TurnCounters = {
   transportRetriesLeft: number;
   toolCallsMade: number;
   nudgedForCompletion: boolean;
-  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+  };
   spentUsd: number;
   /**
    * How many times this row has been picked back up.
@@ -416,9 +432,37 @@ CREATE TABLE IF NOT EXISTS turn_tool_calls (
   -- gets undone ("muffin undo annulla-<turno>") is a *different* row's
   -- undone_at, on the reversing turn, not an erasure of this one's.
   undone_at   TEXT,
+  -- D15, il registro degli effetti. Quattro colonne su questa tabella e non
+  -- un secondo store: ogni chiamata ne scrive gia' una riga, e un registro
+  -- degli effetti tenuto altrove sarebbe libero di dire una cosa mentre
+  -- questa ne dice un'altra -- la cucitura che docs/JUDGE.md chiama per nome,
+  -- e che taintOrigin ha gia' rifiutato per il taint.
+  --
+  --  * effect_row   la riga della matrice (CapabilityDecl.effect) che ha
+  --                 deciso il soffitto: e' *questa* che ha ammesso la
+  --                 chiamata, non la classe di rischio (ADR-0053/0074).
+  --  * reversible   la classe di reversibilita' dichiarata dalla capability.
+  --  * resource     su cosa: il percorso/URL che il kernel ha giudicato, non
+  --                 il digest degli argomenti -- args_digest confronta due
+  --                 chiamate, non racconta nessuna delle due.
+  --  * decision     allow | draft | ask: cio' che e' passato **senza domanda**
+  --                 sono le prime due, ed e' la distinzione per cui D15
+  --                 esiste. La tabella approvals registra solo cio' che e'
+  --                 stato chiesto, quindi da sola non sa nominare il resto.
+  --
+  -- Additive come undone_at (ensureColumn sotto), quindi un database gia'
+  -- popolato le acquisisce vuote: le righe scritte prima di questa versione
+  -- restano leggibili e si dichiarano "non registrato" invece di fingere.
+  effect_row  TEXT,
+  reversible  TEXT,
+  resource    TEXT,
+  decision    TEXT,
   PRIMARY KEY (turn_id, call_id)
 );
 CREATE INDEX IF NOT EXISTS idx_turn_tool_calls_open ON turn_tool_calls(turn_id, ended_at);
+-- La lettura per giornata di D15 (readEffects) filtra su started_at; senza
+-- indice sarebbe una scansione dell'intera tabella a ogni domanda dell'owner.
+CREATE INDEX IF NOT EXISTS idx_turn_tool_calls_started ON turn_tool_calls(started_at);
 `;
 
 /**
@@ -495,7 +539,10 @@ function toRecord(row: Row): TurnRecord {
  * already holds verbatim, in the same home, so it is not a new exposure.
  */
 function argsDigest(args: unknown): string {
-  return createHash('sha256').update(JSON.stringify(args ?? null)).digest('hex').slice(0, 16);
+  return createHash('sha256')
+    .update(JSON.stringify(args ?? null))
+    .digest('hex')
+    .slice(0, 16);
 }
 
 /**
@@ -563,6 +610,15 @@ export class TurnStore {
     // Additive, for a database written before D11's undo-realigns-the-turn
     // half existed. See the column's own comment in `SCHEMA` above.
     ensureColumn(db, 'turn_tool_calls', 'undone_at', 'undone_at TEXT');
+    // D15: stessa rete, stessa ragione. Vedi il commento delle quattro colonne
+    // dentro `SCHEMA` per cosa sono e perche' stanno qui e non altrove.
+    ensureColumn(db, 'turn_tool_calls', 'effect_row', 'effect_row TEXT');
+    ensureColumn(db, 'turn_tool_calls', 'reversible', 'reversible TEXT');
+    ensureColumn(db, 'turn_tool_calls', 'resource', 'resource TEXT');
+    ensureColumn(db, 'turn_tool_calls', 'decision', 'decision TEXT');
+    // `CREATE INDEX IF NOT EXISTS` in `SCHEMA` non basta per un database che
+    // ha gia' la tabella e non la colonna: l'indice sopra nomina `started_at`,
+    // che esiste da sempre, quindi qui non serve un secondo `ensureIndex`.
     // `@status` and a nullable `@pid`, where both used to be the literal
     // `'running'` and this process: a connector that creates the row and
     // returns (B2) writes a turn nobody is executing yet, and a row claimed by
@@ -595,10 +651,14 @@ export class TurnStore {
                         counters = @counters, claimed_by = NULL, claim_token = NULL, updated_at = @now
        WHERE id = @id AND claim_token = @claimToken`,
     );
-    this.deliveryStmt = db.prepare(`UPDATE turns SET delivery = @delivery, updated_at = @now WHERE id = @id`);
+    this.deliveryStmt = db.prepare(
+      `UPDATE turns SET delivery = @delivery, updated_at = @now WHERE id = @id`,
+    );
     this.intentStmt = db.prepare(
-      `INSERT INTO turn_tool_calls (turn_id, call_id, tool, capability, rerunnable, args_digest, started_at)
-       VALUES (@turnId, @callId, @tool, @capability, @rerunnable, @digest, @now)
+      `INSERT INTO turn_tool_calls (turn_id, call_id, tool, capability, rerunnable, args_digest, started_at,
+                                    effect_row, reversible, resource, decision)
+       VALUES (@turnId, @callId, @tool, @capability, @rerunnable, @digest, @now,
+               @effectRow, @reversible, @resource, @decision)
        ON CONFLICT(turn_id, call_id) DO NOTHING`,
     );
     this.outcomeStmt = db.prepare(
@@ -767,7 +827,9 @@ export class TurnStore {
        FROM turn_tool_calls WHERE turn_id = ? AND ended_at IS NOT NULL`,
     );
     /** Turns whose answer has nowhere to go (D2) — read by `health`. */
-    this.undeliverableCountStmt = db.prepare(`SELECT count(*) AS n FROM turns WHERE delivery = 'undeliverable'`);
+    this.undeliverableCountStmt = db.prepare(
+      `SELECT count(*) AS n FROM turns WHERE delivery = 'undeliverable'`,
+    );
     // Guarded on `ended_at IS NOT NULL`: a call still open has no outcome to
     // mislabel yet, and `muffin undo` only ever names calls that finished
     // (the journal only records a snapshot for a capability that ran).
@@ -945,7 +1007,9 @@ export class TurnStore {
    * re-running — Temporal's property in our own words: "When a Workflow calls
    * an Activity … During replay, that result is reused, not recomputed."
    */
-  recordedOutcomes(turnId: string): Map<string, { content: string; isError: boolean; tier: TrustTier | null }> {
+  recordedOutcomes(
+    turnId: string,
+  ): Map<string, { content: string; isError: boolean; tier: TrustTier | null }> {
     const rows = this.outcomesStmt.all(turnId) as {
       callId: string;
       content: string | null;
@@ -955,7 +1019,11 @@ export class TurnStore {
     return new Map(
       rows.map((r) => [
         r.callId,
-        { content: r.content ?? '', isError: r.isError === 1, tier: (r.tier as TrustTier | null) ?? null },
+        {
+          content: r.content ?? '',
+          isError: r.isError === 1,
+          tier: (r.tier as TrustTier | null) ?? null,
+        },
       ]),
     );
   }
@@ -1054,10 +1122,31 @@ export class TurnStore {
     this.deliveryStmt.run({ id, delivery, now: this.clock().toISOString() });
   }
 
-  /** "I am about to call this handler." Written before the effect can land. */
+  /**
+   * "I am about to call this handler." Written before the effect can land.
+   *
+   * **`effect` è obbligatorio, non opzionale** (D15), e per la stessa ragione
+   * per cui `tier` lo è diventato su `endToolCall`: un campo che si può
+   * omettere scrive un `NULL` silenzioso, e nessuno se ne accorge finché
+   * l'owner non chiede «cosa hai fatto oggi» e riceve una riga che non sa
+   * dirlo. Un chiamante che non lo passa non compila.
+   *
+   * Nullable **dentro**, invece, e la differenza conta: una chiamata la cui
+   * capability non è dichiarata (un tool MCP che sparisce fra la
+   * registrazione e la chiamata) scrive `null` — «non registrato» — e il
+   * lettore lo dice a parole. Ciò che il tipo vieta è dimenticare la domanda,
+   * non rispondere «non lo so» quando è la verità.
+   */
   startToolCall(
     turnId: string,
-    call: { callId: string; tool: string; capability: string; rerunnable: boolean; args: unknown },
+    call: {
+      callId: string;
+      tool: string;
+      capability: string;
+      rerunnable: boolean;
+      args: unknown;
+      effect: EffectMetadata;
+    },
   ): void {
     this.intentStmt.run({
       turnId,
@@ -1067,7 +1156,24 @@ export class TurnStore {
       rerunnable: call.rerunnable ? 1 : 0,
       digest: argsDigest(call.args),
       now: this.clock().toISOString(),
+      effectRow: call.effect.row,
+      reversible: call.effect.reversible,
+      resource: call.effect.resource,
+      decision: call.effect.decision,
     });
+  }
+
+  /**
+   * Il registro degli effetti (D15), letto dall'unica query che lo sa leggere.
+   *
+   * Delega a `readEffects` invece di preparare uno statement proprio: la CLI
+   * (`muffin effects`) e il tool `sys_effects` devono dare la stessa risposta,
+   * e due query sono due risposte che divergono il giorno che una cambia —
+   * la stessa regola che `sys_inspect` si è data («legge dalle stesse fonti
+   * autorevoli») e che `orientamento-report.ts` già segue.
+   */
+  effects(filter: EffectsFilter): EffectsReport {
+    return readEffects(this.db, filter);
   }
 
   /**
@@ -1165,7 +1271,11 @@ export class TurnStore {
    * throw paths both do); a future one that does not now fails `tsc` instead
    * of shipping an underestimated taint.
    */
-  endToolCall(turnId: string, callId: string, result: { content: string; isError: boolean; tier: TrustTier }): void {
+  endToolCall(
+    turnId: string,
+    callId: string,
+    result: { content: string; isError: boolean; tier: TrustTier },
+  ): void {
     const now = this.clock().toISOString();
     const write = this.db.transaction(() => {
       this.outcomeStmt.run({
@@ -1244,7 +1354,11 @@ export class TurnStore {
   reclaim(now: Date = this.clock()): InterruptedTurn[] {
     const nowMs = now.getTime();
     const at = now.toISOString();
-    const candidates = this.staleStmt.all() as { id: string; pid: number | null; takenAt: string | null }[];
+    const candidates = this.staleStmt.all() as {
+      id: string;
+      pid: number | null;
+      takenAt: string | null;
+    }[];
     const out: InterruptedTurn[] = [];
     for (const row of candidates) {
       if (heldBy(row, nowMs, TURN_STALE_AFTER_MS, this.alive) !== null) continue;
@@ -1282,13 +1396,15 @@ export class TurnStore {
     const now = options.now ?? this.clock();
     const windowMs = options.windowMs ?? DOCTOR_WINDOW_MS;
     const since = new Date(now.getTime() - windowMs).toISOString();
-    return (this.undeliveredStmt.all({ since }) as {
-      id: string;
-      surface: string;
-      tenant: string;
-      startedAt: string;
-      delivery: string;
-    }[]).map((r) => ({ ...r, delivery: r.delivery as DeliveryState }));
+    return (
+      this.undeliveredStmt.all({ since }) as {
+        id: string;
+        surface: string;
+        tenant: string;
+        startedAt: string;
+        delivery: string;
+      }[]
+    ).map((r) => ({ ...r, delivery: r.delivery as DeliveryState }));
   }
 
   /** Tool calls with an intent row and no outcome row — the "maybe done" set. */
@@ -1321,7 +1437,10 @@ export class TurnStore {
    */
   health(options: { now?: Date; windowMs?: number } = {}): TurnHealth {
     const now = options.now ?? this.clock();
-    const since = options.windowMs === undefined ? '' : new Date(now.getTime() - options.windowMs).toISOString();
+    const since =
+      options.windowMs === undefined
+        ? ''
+        : new Date(now.getTime() - options.windowMs).toISOString();
     const total = (this.countStmt.get() as { n: number }).n;
     const rows = this.interruptedStmt.all({ since }) as {
       id: string;
@@ -1336,7 +1455,9 @@ export class TurnStore {
       takenAt: string | null;
     }[];
     const abandoned = rows.filter(
-      (r) => r.status === 'interrupted' || heldBy(r, now.getTime(), TURN_STALE_AFTER_MS, this.alive) === null,
+      (r) =>
+        r.status === 'interrupted' ||
+        heldBy(r, now.getTime(), TURN_STALE_AFTER_MS, this.alive) === null,
     );
     const waiting = this.waitingStmt.get() as { n: number; oldest: string | null };
     const undeliverable = this.undeliverableCountStmt.get() as { n: number };

@@ -48,6 +48,7 @@ const TOOL_PHRASE: Readonly<Record<string, string>> = {
   send_file: 'ti mando un file',
   skill_read: 'leggo una skill',
   sys_inspect: 'mi guardo dentro',
+  sys_effects: 'rileggo cosa ho fatto',
   todo: 'aggiorno il piano',
   wait: 'mi metto in attesa',
 };
