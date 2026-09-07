@@ -277,6 +277,8 @@ When the product needs explicit `remember` / agent-intentional memory, implement
 
 This can be promoted into DAY-1 if reconciliation of the DAY-1 requirements shows that inability to intentionally remember a fact would force a fallback during the dogfood window.
 
+**Evidence (2026-09-07):** the proposal path of ADR-0051 is not implemented, and the memory loop (write → reconcile → use → correct → forget) is open at several points; measurement and peer comparison in `docs/evidence/critica-moduli-vs-peer-2026-09-07.md`. Conclusion for placement: close that loop before adding ontology, starting from a retrieval-quality measure that can get worse. The promotion trigger above is unchanged.
+
 ### Home migration / Capsule v0
 
 Before trusted users accumulate continuity that is painful to lose, provide a verified way to move/restore one Home while preserving canonical state and rebuilding derived state.
@@ -306,6 +308,12 @@ load the relevant definition when needed
 The point is not token optimization by itself. It is to let capability breadth grow without forcing every model to choose among the whole catalogue on every turn. Preserve the same policy kernel: discovery changes what the model can see, not what it is authorised to execute.
 
 Do not build this merely because external agent SDKs support tool search/deferred loading. The trigger is Muffin-specific evidence.
+
+**Trigger observed (2026-09-07).** The static exposure cap has been raised three times on the owner's installation to stop cutting base tools (evidence: `docs/evidence/personal-agent-ecosystem-audit-2026-09-07.md` §6 and the `consumer-local` profile notes). This is the catalogue pressure the entry asked for, so the item is a candidate claim; it is not an authorization to implement. The D13 re-measurement with the read-only shell comes first, and the shape must be chosen against the character eval.
+
+### Persistent specialist facets and steerable workers
+
+Default placement: **MVP / trusted alpha, hypothesis only** (evidence: `docs/evidence/personal-agent-ecosystem-audit-2026-09-07.md` §8-9). One canonical Muffin identity may carry persistent specialist facets that are neither replaceable workers nor separate Muffins; delegated work may need a small control surface (spawn, status, steer, stop, resume) rather than spawn-only delegation. Muffin has no subagents today, by choice (ADR-0045). Trigger: an observed dogfood need that a single context cannot serve, or a delegated task the owner could not steer without losing work. Nothing here authorizes a multi-agent society.
 
 ### Local / owner-controlled compute experiments
 
