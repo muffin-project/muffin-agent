@@ -48,7 +48,7 @@ DAY-1; issue #378. **Da Centria (06/09):** D15 entra; dopo la VPS revoca con
 parità, giudice come sensore versionato, verifica delle affermazioni negli ADR.
 
 **Dogfood 06-07/09 (installato fe8d55e+):** ADR-0075 su dev (#461, D16 READY);
-streaming e file per `(porta, stanza)` (#460; le asserzioni e2e sul draft
+streaming e file per `(porta, stanza)` (#460; le asserzioni e2e sull'anteprima nativa
 aspettano il bot vero). Osservato, non lavorato: 15 s senza segno di vita (il
 loop scarta `thinking_delta`/`tool_call_delta`); su «analizzati» il modello ha
 misurato una volta e ragionato su un ricordo vecchio (`sys_inspect` senza il
