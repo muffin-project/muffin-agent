@@ -305,3 +305,6 @@
 {"id":"journey-memoria","chiuso":"PR #283 integrata: C2 C3 C6 C7 provati sul binario vero; seam MUFFIN_MEMORY_IDLE_MS; embeddings finti nel provider","quando":"2026-09-02T05:40:34.173Z"}
 {"id":"journey-lifecycle","chiuso":"PR #285 integrata: A4 A6 A7 A8 E3 provati sul binario vero","quando":"2026-09-02T05:48:16.169Z"}
 {"id":"journey-telegram","chiuso":"PR #286 integrata: B13 B14 D12 provati sul gateway vero + finto Bot API; metà Telegram di B1","quando":"2026-09-02T05:54:52.697Z"}
+{"id":"judge-186-r3","chiuso":"PR #186 integrata da settimane; il terzo giro CRITICAL non è mai partito e il tema (attribuzione episodi, backfill, undo annidato) è coperto da D11 READY e dallo scenario E3","quando":"2026-09-07T02:18:09.816Z"}
+{"id":"installazione-riconciliata","chiuso":"superata da A11 (install pulita, docs/INSTALL.md, install.sh) integrata su dev il 06/09","quando":"2026-09-07T02:18:09.870Z"}
+{"id":"ae95b1a589bd9074a","chiuso":"PR #186 integrata da settimane; il terzo giro non è mai partito; tema coperto da D11 READY e scenario E3","quando":"2026-09-07T02:18:31.267Z"}
