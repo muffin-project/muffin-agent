@@ -312,6 +312,7 @@ describe('reconcile keeps the three states of the two-phase tool record', () => 
       capability: decl.id,
       rerunnable: true,
       args: { query: 'x' },
+      effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' },
     });
     h.turns.endToolCall(h.record.id, 'c1', { content: 'quello di prima', isError: false, tier: 2 });
 
@@ -333,6 +334,7 @@ describe('reconcile keeps the three states of the two-phase tool record', () => 
       capability: decl.id,
       rerunnable: false,
       args: { query: 'x' },
+      effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' },
     });
 
     expect(await reconcile(h.scope)).toBeNull();
@@ -373,6 +375,7 @@ describe('reconcile keeps the three states of the two-phase tool record', () => 
       capability: decl.id,
       rerunnable: false,
       args: { query: 'x' },
+      effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' },
     });
     h.steal();
 

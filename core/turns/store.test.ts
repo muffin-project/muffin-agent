@@ -78,7 +78,7 @@ describe('the turn record', () => {
   it('raises the taint with the tool result that caused it, in one write', () => {
     const s = store();
     s.create(spec());
-    s.startToolCall('turn-1', { callId: 'c1', tool: 'http_get', capability: 'sys.http', rerunnable: true, args: { url: 'https://x' } });
+    s.startToolCall('turn-1', { callId: 'c1', tool: 'http_get', capability: 'sys.http', rerunnable: true, args: { url: 'https://x' }, effect: { row: 'egress', reversible: 'yes', resource: null, decision: 'allow' } });
     s.endToolCall('turn-1', 'c1', { content: 'body', isError: false, tier: 3 });
     // Not derivable from the principal — an owner turn starts at 0 and this one
     // is at 3 because of what it read. That is the escalation the design names:
@@ -91,9 +91,9 @@ describe('the turn record', () => {
   it('never lowers the taint, whatever a later result says', () => {
     const s = store();
     s.create(spec());
-    s.startToolCall('turn-1', { callId: 'c1', tool: 'http_get', capability: 'sys.http', rerunnable: true, args: {} });
+    s.startToolCall('turn-1', { callId: 'c1', tool: 'http_get', capability: 'sys.http', rerunnable: true, args: {}, effect: { row: 'egress', reversible: 'yes', resource: null, decision: 'allow' } });
     s.endToolCall('turn-1', 'c1', { content: 'body', isError: false, tier: 3 });
-    s.startToolCall('turn-1', { callId: 'c2', tool: 'fs_read', capability: 'fs.read', rerunnable: true, args: {} });
+    s.startToolCall('turn-1', { callId: 'c2', tool: 'fs_read', capability: 'fs.read', rerunnable: true, args: {}, effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' } });
     s.endToolCall('turn-1', 'c2', { content: 'file', isError: false, tier: 0 });
     expect(s.get('turn-1')?.taint).toBe(3);
   });
@@ -177,7 +177,7 @@ describe('taintForIds — the batch read agent/context/history-taint.ts needs', 
 describe('markUndone / undoneTraceIds — D11, muffin undo\'s other half', () => {
   const conUnaChiamataFinita = (s: TurnStore, turnId: string, callId = 'w1') => {
     s.create(spec({ id: turnId }));
-    s.startToolCall(turnId, { callId, tool: 'fs_write', capability: 'fs.write', rerunnable: false, args: {} });
+    s.startToolCall(turnId, { callId, tool: 'fs_write', capability: 'fs.write', rerunnable: false, args: {}, effect: { row: 'host', reversible: 'undoable', resource: null, decision: 'allow' } });
     s.endToolCall(turnId, callId, { content: 'scritto', isError: false, tier: 0 });
   };
 
@@ -221,10 +221,10 @@ describe('reclaiming what a dead process was holding', () => {
   it('marks the row interrupted and names the calls that may have landed', () => {
     const s = store(() => false);
     s.create(spec(), 99999);
-    s.startToolCall('turn-1', { callId: 'c1', tool: 'fs_read', capability: 'fs.read', rerunnable: true, args: {} });
+    s.startToolCall('turn-1', { callId: 'c1', tool: 'fs_read', capability: 'fs.read', rerunnable: true, args: {}, effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' } });
     s.endToolCall('turn-1', 'c1', { content: 'ok', isError: false, tier: 0 });
     // Intent, no outcome: the process died between the two.
-    s.startToolCall('turn-1', { callId: 'c2', tool: 'shell_run', capability: 'sys.shell', rerunnable: false, args: { command: 'send-mail' } });
+    s.startToolCall('turn-1', { callId: 'c2', tool: 'shell_run', capability: 'sys.shell', rerunnable: false, args: { command: 'send-mail' }, effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' } });
 
     const [reclaimed] = s.reclaim();
     expect(reclaimed).toMatchObject({ id: 'turn-1', surface: 'cli', model: 'claude-opus-5' });
@@ -424,7 +424,7 @@ describe('the reader a surface with only a database can use', () => {
     const db = new DatabaseCtor(':memory:');
     const s = new TurnStore(db, () => new Date(), () => false);
     s.create(spec(), 99999);
-    s.startToolCall('turn-1', { callId: 'c1', tool: 'shell_run', capability: 'sys.shell', rerunnable: false, args: {} });
+    s.startToolCall('turn-1', { callId: 'c1', tool: 'shell_run', capability: 'sys.shell', rerunnable: false, args: {}, effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' } });
     s.reclaim();
     const health = readTurnHealth(db);
     expect(health?.total).toBe(1);

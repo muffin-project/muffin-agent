@@ -314,6 +314,7 @@ describe('il muro ripetuto — il registro durevole resta onesto', () => {
       capability: ROTTA.id,
       rerunnable: true,
       args: { path: 'a.md' },
+      effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' },
     });
     h.turns.endToolCall(finto, 'vecchia', { content: 'no such file', isError: true, tier: 0 });
     expect(h.turns.identicalFailuresDone(finto, 'rompi', { path: 'a.md' }, 'no such file')).toBe(1);
@@ -328,6 +329,7 @@ describe('il muro ripetuto — il registro durevole resta onesto', () => {
       capability: ROTTA.id,
       rerunnable: true,
       args: { path: 'b.md' },
+      effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' },
     });
     h.turns.endToolCall(finto, 'buona', { content: 'no such file', isError: false, tier: 0 });
     expect(h.turns.identicalFailuresDone(finto, 'rompi', { path: 'b.md' }, 'no such file')).toBe(0);

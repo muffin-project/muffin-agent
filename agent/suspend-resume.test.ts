@@ -501,6 +501,7 @@ describe('una chiamata in volo quando il processo muore', () => {
       capability: sendCapability.id,
       rerunnable: false,
       args: {},
+      effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' },
     });
 
     const resumed = await resumeTurn(w.deps, first.turnId);
