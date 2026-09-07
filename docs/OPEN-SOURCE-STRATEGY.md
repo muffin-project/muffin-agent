@@ -1,12 +1,17 @@
 # Open-source, distribution and community strategy
 
-This document owns the **distribution/community shape** of Muffin after the
-private owner dogfood phase. It is product strategy, not a claim that every item
-below already exists.
+This document owns the **distribution/community shape** of Muffin. It is product
+strategy, not a claim that every item below already exists.
+
+The repository may become **source-public/pre-alpha before the product reaches
+public alpha**. Public source means people can inspect and contribute to the
+project; it does not mean Muffin is stable, supported for general users or ready
+for a public product recommendation.
 
 `THESIS.md` owns why Muffin exists. `VISION.md` owns the product destination.
 `ARCHITECTURE.md` owns the current semantic runtime shape. `EXTENSIONS.md` owns
-the extension/capability design direction. DAY-1 status remains in `docs/work/day1/requirements-status.md`.
+the extension/capability design direction. DAY-1 status remains in
+`docs/work/day1/requirements-status.md`.
 
 ## 1. Owner-run is the default product
 
@@ -97,8 +102,8 @@ Imports must preserve epistemic distinctions:
 
 An email in the owner's mailbox is not automatically owner speech.
 
-The old Muffin database is **not** a required migration source for this
-rebuild (ADR-0049). Future legacy import remains opt-in.
+The old Muffin database is **not** a required migration source for this rebuild
+(ADR-0049). Future legacy import remains opt-in.
 
 ## 4. Portability is semantic, not a DB-copy trick
 
@@ -205,7 +210,8 @@ These communicate provenance/maintenance/review, not universal safety.
 
 ## 9. Contribution policy follows the narrow waist
 
-Before public alpha the repo should make the common contribution paths obvious:
+The common contribution paths should be obvious **before the repository becomes
+public**, not postponed until product public alpha:
 
 - bug/security/cross-platform fix in core;
 - new extension or importer outside core;
@@ -217,41 +223,111 @@ This mirrors a healthy pattern visible in mature agent repos: breadth goes to
 extensions/skills/plugins; core changes carry a higher evidence burden because
 they expand the trusted base and affect every installation.
 
-A public `CONTRIBUTING.md` should make this routing explicit rather than relying
-on maintainer taste in review.
+`CONTRIBUTING.md` is the external contributor router. It links to the canonical
+working rules instead of duplicating them. The repository's important invariants
+must remain executable by humans and agents that do **not** use Claude Code;
+Claude-specific hooks/skills may improve ergonomics but must not be the only
+place a contribution rule exists.
 
-## 10. Community sequence
+Early contribution does not imply maintainer authority. A contributor can submit
+useful work before the product is publicly released; maintainership is earned
+through observed work and judgement over time.
 
-Do not recruit co-maintainers before there is a real object to install and
-criticize.
+## 10. Source-public/pre-alpha and product public-alpha are separate milestones
+
+The owner wants the repository open source as soon as it is safe to publish, and
+several people are already interested in contributing. Therefore the earlier
+assumption that contributors only emerge after public alpha no longer holds.
+
+What remains valid is the stronger statement:
+
+> **Do not grant co-maintainer authority merely because somebody arrived early.**
+
+A repository can be public while the product is explicitly pre-alpha and owner
+dogfood is still running.
 
 Preferred progression:
 
 ```text
-owner DAY-1
-→ 14-day dogfood
-→ 2–5 deliberately different trusted-alpha testers
-→ public alpha
-→ contributors emerge
-→ maintainers earn trust through observed contributions
+owner RETURN / source-public preparation may overlap
+→ repository source-public/pre-alpha when publication is safe
+→ owner 14-day dogfood
+→ 2–5 deliberately different trusted-alpha users
+→ product public alpha
+→ contribution volume grows
+→ maintainership is earned through observed contributions
 ```
 
-Trusted-alpha selection should cover different failure surfaces rather than five
-copies of the founder: macOS, Linux/VPS, technical non-contributor, less-technical
-user, and someone with security/open-source instincts where possible.
+Interested contributors may participate before public alpha through scoped
+issues/PRs, review, documentation/evals, cross-platform work and extension
+experiments. This is useful pressure on hidden founder context; it does not make
+them public-alpha testers by default.
 
-The alpha question is not "do you like Muffin?". It is:
+Trusted-alpha selection should still cover different failure surfaces rather than
+five copies of the founder: macOS, Linux/VPS, technical non-contributor,
+less-technical user, and someone with security/open-source instincts where
+possible.
 
-> can you install, understand, update, recover and use it without calling the
+The product-alpha question remains:
+
+> can you install, understand, update, recover and use Muffin without calling the
 > founder?
 
-## 11. Public-release repository surface
+## 11. Publication safety comes before changing repository visibility
 
-Before public alpha, add the community layer that would be premature today:
+Making a private repository public exposes more than current HEAD. Before the
+visibility change, treat publication as a privacy/security boundary and inspect
+**the full Git history**.
 
-- consumer-oriented root README;
+The minimum publication claim is:
+
+- no secrets, API keys, tokens, credentials or private signing material in HEAD
+  or history;
+- no owner personal data, private conversation dumps, private Muffin Home data,
+  sensitive machine-specific paths/content or artifacts that cannot become
+  public;
+- a deliberate decision on whether existing history can be published intact or
+  needs rewriting before visibility changes;
+- the intended license is explicit rather than accidental package metadata;
+- public/root documentation clearly says source-public/pre-alpha when the product
+  is not public-alpha;
+- `CONTRIBUTING.md` gives an external human/agent enough context to submit one
+  scoped claim without founder-only instructions;
+- there is a minimal security-reporting/support route appropriate to pre-alpha
+  source, without inventing a stable-product SLA;
+- issue/PR templates and branch/integration rules are understandable to people
+  who did not participate in the rebuild.
+
+Publication safety is a **CRITICAL boundary** where relevant, even if many of the
+resulting documentation edits are individually FAST.
+
+Source-public work must not become a cosmetic blocker for owner dogfood. If the
+privacy/history audit finds a real publication blocker, fix it before changing
+visibility; otherwise product capability work and community polish may continue
+in parallel.
+
+## 12. Public-release repository surface grows progressively
+
+Some community surface is required for source-public/pre-alpha; more can be added
+before product public alpha as the actual boundary becomes known.
+
+### Before source-public/pre-alpha
+
+At minimum:
+
+- honest root/public maturity wording;
 - `CONTRIBUTING.md`;
-- `SECURITY.md`/security-reporting instructions appropriate for a public repo;
+- publication/privacy/history audit;
+- explicit license decision;
+- a minimal security-reporting/support route;
+- issue/PR contribution path that does not rely on founder-only context.
+
+### Before product public alpha
+
+Add or stabilize as evidence requires:
+
+- consumer-oriented root README and install journey;
+- security-reporting instructions appropriate for the released product boundary;
 - issue forms/support boundary;
 - version/release/channel policy;
 - supported-platform matrix;
@@ -259,10 +335,11 @@ Before public alpha, add the community layer that would be premature today:
 - extension authoring/validation path;
 - good-first issues derived from observed needs, not filler.
 
-Do not write a security disclosure policy or compatibility promise before the
-actual release boundary is known.
+Do not write compatibility promises, support SLAs or a detailed security
+disclosure process before the corresponding public product boundary is actually
+known.
 
-## 12. Licensing is an explicit pre-public decision
+## 13. Licensing is an explicit pre-public decision
 
 The current repository declares MIT. Earlier Muffin notes considered a
 non-commercial source-available license plus DCO/trademark policy.
@@ -271,11 +348,11 @@ Those are materially different community strategies. A non-commercial license
 is not OSI open source and would change adoption, commercial use and contributor
 expectations.
 
-Do not let the package metadata decide this accidentally. Before public release,
-the owner must choose the intended model and record a new ADR if it differs from
-ADR-0019/current MIT.
+Do not let the package metadata decide this accidentally. Before making the
+repository public, the owner must confirm the intended model and record a new ADR
+if it differs from ADR-0019/current MIT.
 
-## 13. Telegram as early distribution/surface leverage
+## 14. Telegram as early distribution/surface leverage
 
 Telegram is likely to remain an unusually useful early mobile surface, including
 new bot provisioning and richer private-chat capabilities. It should be used
@@ -289,7 +366,7 @@ would retain authority the owner does not want to delegate.
 The runtime/database still belongs to the owner; a CommanderBot is a provisioning
 surface, not a free hosted Muffin fleet.
 
-## 14. Public docs are already distribution
+## 15. Public docs are already distribution
 
 People and automated agents already consume the public Muffin documents and
 `giusto.dev`. Treat them as a real external API of the project's ideas.
@@ -298,12 +375,15 @@ The migration plan lives in `PUBLIC-NARRATIVE.md`: current claims, historical
 snapshots and machine-readable surfaces must change coherently rather than
 leaving `llms.txt` teaching an old architecture after the code has moved on.
 
-## 15. What does not enter DAY-1 just because this document names it
+## 16. What does not enter DAY-1 just because this document names it
 
 Installer GUI, canonical capsule, marketplace, capability manifests, public
-community governance, Telegram managed provisioning and external-data importers
-are product direction. They enter the current DAY-1 requirements only if the owner would
-otherwise be unable to start the fourteen-day dogfood window.
+community governance, Telegram managed provisioning, external-data importers and
+source-public polish are product/community direction. They enter the current
+DAY-1 requirements only if the owner would otherwise be unable to start the
+fourteen-day dogfood window or if a concrete privacy/security boundary makes the
+work inseparable.
 
 The first roadmap after DAY-1 should be driven by observed direct-interface
-fallbacks, not by turning this strategy document into a feature checklist.
+fallbacks, not by turning this strategy document — or an ecosystem audit — into
+a feature checklist.
