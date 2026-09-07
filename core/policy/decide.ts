@@ -191,7 +191,7 @@ export function createDecide(ctx: PolicyContext): Decide {
      * La mutazione che deve far cadere una prova per stanza: cancellare il
      * `&& !grantedTo(...)`. Allora un membro di una stanza **con** grant
      * riceve `principal_forbidden` su `vault.write`, e
-     * `core/policy/grant-per-stanza.test.ts` lo dice con il nome della
+     * `core/policy/solo-irreversibile.test.ts (describe «una stanza con grant»)` lo dice con il nome della
      * capability.
      */
     if (decl.hostOnly && principal.kind === 'member' && !grantedTo(ctx.matrix, tenant, capability)) {
