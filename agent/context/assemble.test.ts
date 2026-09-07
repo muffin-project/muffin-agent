@@ -189,6 +189,18 @@ describe('the owner-class prompt does not move', () => {
    * caratteri. Pin precedente:
    * `19f1e7d300ad74c4c28d4ac0d9ff1dab0519f85c0d64fdcfabda060c2bd45d4a`.
    *
+   * Re-captured 2026-09-07 (D13, remeasurement after #457/ADR-0074): the
+   * `WORK_RULES`/`WORK_RULES_V2` line on tool order named `sys.shell` as one
+   * tool that "always asks" — stale since the ADR-0074 split gave it two
+   * (`shell_run`, read-only, never asks; `shell_run_write` always does), and
+   * the model was being told a false fact about its own tools. Corrected in
+   * the same line, and extended by one clause the D13 measurement asked for:
+   * when the task names an external service, check for a loaded tool with
+   * that name before falling back to the environment (`mcp-tool-use` probe,
+   * 3/3 rounds, `docs/evidence/tool-use-2026-09-07.md`). Assembly order
+   * unchanged. Previous pin, for the record:
+   * `7dbab742425de4af2b473f7e509a72e82cb501ddc2d3e50527e700f1f6740c53`.
+   *
    * Re-captured 2026-08-26 (`slice/come-lavori`): three rules added to
    * `WORK_RULES`, each closing a gap the runtime does not close on its own —
    * see that constant's docstring for which trace produced which rule. The
@@ -205,7 +217,7 @@ describe('the owner-class prompt does not move', () => {
    * `3ebf2cfc307bdda5c73fff6ed4d60d5a9db2eceffac754164b220a86214cabf2`.
    */
   const OWNER_PROMPT_SHA_AT_SPLIT =
-    '29665501ed85a8b9f1130987423ed16a48acf52fba2d8e9fe5bf51c627cc5cab';
+    '9565cd19cf33d7de6f66d71ec8c4de5fb82607ce14a5886fb25c95e0016dfd05';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
@@ -278,6 +290,12 @@ describe('the owner-class prompt does not move', () => {
    * cosa che qualcuno ha deciso e non una cosa che è successa.
    */
   /**
+   * Ri-fissato 2026-09-07 (D13, remeasurement dopo #457/ADR-0074) insieme al
+   * pin owner, per la stessa riga: `WORK_RULES` spedisce a tutte e due le
+   * classi, quindi la correzione (`sys.shell` non è più un tool solo, e non
+   * "chiede sempre") arriva anche alla stanza. Pin precedente:
+   * `0cd5604d608887cb6918b8b3392cd926de5194ce73134082636a4c1d5dd7bc23`.
+   *
    * Ri-fissato 2026-09-06 (`slice/d13-tool-prima-della-shell`) insieme al pin
    * owner, per la stessa riga: `WORK_RULES` spedisce a tutte e due le classi,
    * quindi la regola sull'ordine tool-poi-shell arriva anche alla stanza. Pin
@@ -289,7 +307,7 @@ describe('the owner-class prompt does not move', () => {
    * qualcun altro entra per definizione. Pin precedente:
    * `23aa24da39dc582dd7909f750fed59b165a71ce70dc549428b5df634ced0ed9b`.
    */
-  const GROUP_PROMPT_SHA_V1 = '0cd5604d608887cb6918b8b3392cd926de5194ce73134082636a4c1d5dd7bc23';
+  const GROUP_PROMPT_SHA_V1 = '347fbb261b874d9e9fa701ee94d36f8c73a678c24034605afd883f32864cf70e';
 
   it('e la stanza riceve lo stesso prompt di ieri, byte per byte', () => {
     const runtime = boot(bootHome());
@@ -386,12 +404,16 @@ describe('quale versione del prompt assembla questa installazione', () => {
     // Ri-misurato 2026-09-06 (`slice/d13-tool-prima-della-shell`, DAY-1 D13):
     // la riga sull'ordine tool-poi-shell aggiunge testo a `WORK_RULES`
     // (1.133 → 1.488 caratteri) e porta il rapporto a 12,99 (19.335 / 1.488).
+    // Ri-misurato di nuovo 2026-09-07 (D13, remeasurement dopo #457/ADR-0074):
+    // la stessa riga corregge "sys.shell chiede sempre" (falso dopo la
+    // separazione in due tool) e aggiunge la clausola sui tool MCP caricati
+    // (1.488 → 1.715 caratteri), rapporto 11,27 (19.335 / 1.715).
     // `chiSei` non è cambiato: `persona.md`/`identity.md`/`voice.md` restano
     // gli stessi file. La soglia scende con la misura invece di essere
     // aggirata, e l'affermazione che il test fa — v1 è pesantemente carattere,
-    // v2 no — regge identica: 12,99 contro il `< 8` di v2 sotto (misurato
-    // 4,72), che è la riga che porta il peso.
-    expect(v1.chiSei / v1.comeLavori).toBeGreaterThan(12);
+    // v2 no — regge identica: 11,27 contro il `< 8` di v2 sotto, che è la
+    // riga che porta il peso.
+    expect(v1.chiSei / v1.comeLavori).toBeGreaterThan(11);
     expect(v2.chiSei / v2.comeLavori).toBeLessThan(8);
     // E il prompt non è cresciuto per farlo: il peso si è spostato.
     expect(v2.chiSei + v2.comeLavori).toBeLessThan((v1.chiSei + v1.comeLavori) * 1.02);

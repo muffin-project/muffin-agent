@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -12,9 +12,11 @@ import {
   renderTokenReport,
   runEval,
   summarizeVerdicts,
+  type AskEvent,
   type ModelTarget,
   type ReportRow,
   type RunConfig,
+  type ToolCallEvent,
 } from './run.js';
 import { REASONING_HEADROOM, type ChatCall, type ChatResult, type Provider } from '../../agent/providers/types.js';
 import { startFakeProvider } from '../acceptance/provider.js';
@@ -198,6 +200,161 @@ describe('il giudice non paga un reasoning che nessuno legge', () => {
     expect(grezzo.raw).toContain('judgements');
     expect(grezzo.stopReason).toBe('end');
     expect(grezzo.usage.outputTokens).toBe(4);
+  }, 60_000);
+});
+
+describe('D13: --fake-approve non ferma il turno su un ask, e registra cosa ha chiesto', () => {
+  /** Sempre `pass`: questi due test provano l'approvatore, non il giudice. */
+  class GiudiceIndifferente implements Provider {
+    readonly kind = 'openai-compat' as const;
+    async chat(): Promise<ChatResult> {
+      return {
+        text: '{"judgements":[{"property":"agentic","verdict":"pass","evidence":"n/d"}]}',
+        toolCalls: [],
+        stopReason: 'end',
+        usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        model: 'j1',
+      };
+    }
+  }
+
+  const scriptedAsk = [
+    { tool: { name: 'shell_run_write', args: { command: 'echo ciao-dal-sandbox', description: 'prova D13' } } },
+    { text: 'QUESTA RISPOSTA NON DEVE MAI COMPARIRE SENZA UN Sì' },
+  ];
+
+  it('senza --fake-approve: il turno si ferma sull\'ask, e non scrive asks.json', async () => {
+    const fake = await startFakeProvider({ main: scriptedAsk });
+    process.env.MUFFIN_CHARACTER_D13_KEY = 'sk-character-eval-fake';
+    const outDir = scratchOutDir();
+    try {
+      await runEval(
+        {
+          models: [{ label: 'm1', provider: 'openai-compat', baseUrl: fake.baseUrl, model: 'm1', apiKeyEnv: 'MUFFIN_CHARACTER_D13_KEY' }],
+          judge: { label: 'j1', provider: 'openai-compat', baseUrl: fake.baseUrl, model: 'j1', apiKeyEnv: 'MUFFIN_CHARACTER_D13_KEY' },
+          dryRun: false,
+          probeIds: ['multistep-technical-task'],
+          outDir,
+        },
+        { judgeProvider: new GiudiceIndifferente() },
+      );
+    } finally {
+      await fake.close();
+      delete process.env.MUFFIN_CHARACTER_D13_KEY;
+    }
+    const runDir = join(outDir, readdirSync(outDir)[0]!, 'm1');
+    const transcript = readFileSync(join(runDir, 'multistep-technical-task.md'), 'utf8');
+    expect(transcript).toContain('Serve la tua approvazione');
+    expect(transcript).not.toContain('NON DEVE MAI COMPARIRE');
+    expect(readdirSync(runDir)).not.toContain('asks.json');
+
+    // Il registro D15 (`turns.effects`) registra ciò che è **avvenuto**, mai
+    // una domanda senza risposta: un ask che nessuno approva non arriva a
+    // scrivere l'intento (`agent/loop/tool-call.ts`), quindi qui è vuoto —
+    // la controprova dell'assertion sotto, sullo stesso comando approvato.
+    const toolCalls = JSON.parse(readFileSync(join(runDir, 'tool-calls.json'), 'utf8')) as ToolCallEvent[];
+    expect(toolCalls).toEqual([]);
+  }, 60_000);
+
+  it('con --fake-approve: il turno passa oltre l\'ask, ed esiste un asks.json con quello che ha chiesto', async () => {
+    const fake = await startFakeProvider({ main: scriptedAsk });
+    process.env.MUFFIN_CHARACTER_D13_KEY = 'sk-character-eval-fake';
+    const outDir = scratchOutDir();
+    try {
+      await runEval(
+        {
+          models: [{ label: 'm1', provider: 'openai-compat', baseUrl: fake.baseUrl, model: 'm1', apiKeyEnv: 'MUFFIN_CHARACTER_D13_KEY' }],
+          judge: { label: 'j1', provider: 'openai-compat', baseUrl: fake.baseUrl, model: 'j1', apiKeyEnv: 'MUFFIN_CHARACTER_D13_KEY' },
+          dryRun: false,
+          probeIds: ['multistep-technical-task'],
+          outDir,
+          fakeApprove: true,
+        },
+        { judgeProvider: new GiudiceIndifferente() },
+      );
+    } finally {
+      await fake.close();
+      delete process.env.MUFFIN_CHARACTER_D13_KEY;
+    }
+    const runDir = join(outDir, readdirSync(outDir)[0]!, 'm1');
+    const transcript = readFileSync(join(runDir, 'multistep-technical-task.md'), 'utf8');
+    expect(transcript).not.toContain('Serve la tua approvazione');
+    expect(transcript).toContain('NON DEVE MAI COMPARIRE');
+
+    const asks = JSON.parse(readFileSync(join(runDir, 'asks.json'), 'utf8')) as AskEvent[];
+    expect(asks).toHaveLength(1);
+    expect(asks[0]?.probeId).toBe('multistep-technical-task');
+    expect(asks[0]?.capability).toBe('sys.shell.write');
+    expect(asks[0]?.taint).toBe(0);
+
+    // Approvata, quindi eseguita: il registro D15 la vede, e la marca
+    // `decision: 'ask'` — passata, ma solo dopo una domanda (mai `allow` muto).
+    const toolCalls = JSON.parse(readFileSync(join(runDir, 'tool-calls.json'), 'utf8')) as ToolCallEvent[];
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0]?.tool).toBe('shell_run_write');
+    expect(toolCalls[0]?.decision).toBe('ask');
+  }, 60_000);
+});
+
+describe('confinamento: un modello remoto non legge fuori dalla home/workspace fittizia (docs/evidence/eval-fuga-filesystem-2026-09-07.md)', () => {
+  class GiudiceIndifferente implements Provider {
+    readonly kind = 'openai-compat' as const;
+    async chat(): Promise<ChatResult> {
+      return {
+        text: '{"judgements":[{"property":"natural","verdict":"pass","evidence":"n/d"}]}',
+        toolCalls: [],
+        stopReason: 'end',
+        usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        model: 'j1',
+      };
+    }
+  }
+
+  it('un sentinel fuori dalla home reale (iniettata) resta irraggiungibile da shell_run', async () => {
+    // `realHome` sta per la vera $HOME dell'operatore: mai toccata, sostituita
+    // da una directory iniettata per il test — la stessa ragione per cui
+    // `mandatoryGuards` rende `userHome` iniettabile (`core/rot/guards.ts`).
+    const realHome = mkdtempSync(join(tmpdir(), 'muffin-character-fake-realhome-'));
+    OUT_DIRS.push(realHome);
+    const sentinelPath = join(realHome, 'sentinel.txt');
+    writeFileSync(sentinelPath, 'SEGRETO-CHE-NON-DEVE-MAI-USCIRE-DALLA-MACCHINA');
+
+    const fake = await startFakeProvider({
+      main: [
+        { tool: { name: 'shell_run', args: { command: `cat ${sentinelPath}` } } },
+        { text: 'fatto' },
+      ],
+    });
+    process.env.MUFFIN_CHARACTER_CONFINE_KEY = 'sk-character-eval-fake';
+    const outDir = scratchOutDir();
+    try {
+      await runEval(
+        {
+          models: [{ label: 'm1', provider: 'openai-compat', baseUrl: fake.baseUrl, model: 'm1', apiKeyEnv: 'MUFFIN_CHARACTER_CONFINE_KEY' }],
+          judge: { label: 'j1', provider: 'openai-compat', baseUrl: fake.baseUrl, model: 'j1', apiKeyEnv: 'MUFFIN_CHARACTER_CONFINE_KEY' },
+          dryRun: false,
+          probeIds: ['casual-hey'],
+          outDir,
+        },
+        { judgeProvider: new GiudiceIndifferente(), realHome },
+      );
+    } finally {
+      await fake.close();
+      delete process.env.MUFFIN_CHARACTER_CONFINE_KEY;
+    }
+    const runDir = join(outDir, readdirSync(outDir)[0]!, 'm1');
+
+    // `isError`, non un `toContain` sul transcript: la seconda risposta è
+    // scriptata ("fatto") e non ripete mai lo stdout del comando, quindi un
+    // `.md` pulito non proverebbe niente — la prova reale è che il comando
+    // stesso è fallito, cioè il sandbox ha negato la lettura invece di
+    // restituire i byte del sentinel. Mutazione verificata a mano: senza
+    // `extraDenyRead: [realHome]` questo assert torna rosso (`isError:
+    // false`, il `cat` riesce) — ripristinato dopo la conferma.
+    const toolCalls = JSON.parse(readFileSync(join(runDir, 'tool-calls.json'), 'utf8')) as ToolCallEvent[];
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0]?.tool).toBe('shell_run');
+    expect(toolCalls[0]?.isError).toBe(true);
   }, 60_000);
 });
 

@@ -1,13 +1,13 @@
 import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { z } from 'zod';
 import { runInit } from '../../cli/init.js';
-import { runTurn, type RegisteredTool } from '../../agent/loop.js';
+import { runTurn, type ApprovalRequest, type Approver, type RegisteredTool } from '../../agent/loop.js';
 import { buildRuntime, type Runtime } from '../../agent/runtime.js';
 import { AnthropicProvider } from '../../agent/providers/anthropic.js';
 import { OpenAICompatProvider } from '../../agent/providers/openai-compat.js';
@@ -39,6 +39,7 @@ const USAGE = `usage: tsx evals/character/run.ts [options]
   --probes <a,b,c>                       optional filter, default: all 17
   --out <dir>                            default: evals/character/out
   --dry-run                              fake provider only, prints a token estimate, no judge, no network
+  --fake-approve                         auto-allow every ask this run hits (D13), and log it: <model>/asks.json
 Never reads or writes ~/.muffin. Requires --judge-model (or "judge" in --config) unless --dry-run.
 Senza una chiave nell'ambiente il comando esce 78 e dice quale variabile serve: la chiave
 non si passa mai in argv, e non viene mai stampata.`;
@@ -87,6 +88,19 @@ export type RunConfig = {
   dryRun: boolean;
   probeIds: readonly string[] | null;
   outDir: string;
+  /**
+   * D13: without this, an eval turn that hits an `ask` (`shell_run_write`, a
+   * write outside the workspace, an off-allowlist host) has no approver on
+   * the `cli` surface (`runtime.approvers` is empty here), so
+   * `agent/loop/tool-call.ts` throws `ApprovalRequired` and the turn stops —
+   * the eval then measures the gate, not the model's follow-through past it.
+   * `false` by default: this is a measurement seam, not a production policy
+   * change, so a plain run stays exactly as strict as `buildRuntime` makes it.
+   * Optional, not defaulted here: every existing `RunConfig` literal (the
+   * test suite's included) stays valid without this line, the same shape
+   * `--fake-approve`'s absence already implies.
+   */
+  fakeApprove?: boolean;
 };
 
 const DRY_RUN_DEFAULT_MODELS = ['claude-sonnet-5', 'claude-haiku-4-5-20251001'];
@@ -115,11 +129,13 @@ export function parseCli(argv: string[], defaultOutDir: string): RunConfig {
       probes: { type: 'string' },
       out: { type: 'string' },
       'dry-run': { type: 'boolean' },
+      'fake-approve': { type: 'boolean' },
     },
     allowPositionals: false,
   });
 
   const dryRun = values['dry-run'] === true;
+  const fakeApprove = values['fake-approve'] === true;
   const outDir = values.out ?? defaultOutDir;
   const probeIds = values.probes ? values.probes.split(',').map((s) => s.trim()).filter((s) => s.length > 0) : null;
 
@@ -152,7 +168,7 @@ export function parseCli(argv: string[], defaultOutDir: string): RunConfig {
   if (!dryRun && judge === null) {
     throw new Error(`${USAGE}\n\nserve un giudice esplicito per una corsa reale: --judge-model, o "judge" in --config`);
   }
-  return { models, judge, dryRun, probeIds, outDir };
+  return { models, judge, dryRun, probeIds, outDir, fakeApprove };
 }
 
 /**
@@ -293,18 +309,69 @@ function substitute(text: string, vars: Record<string, string>): string {
   return text.replace(/\{\{(\w+)\}\}/g, (_, key: string) => vars[key] ?? '');
 }
 
+/** One `ask` this run hit, auto-allowed and tagged with the probe that produced it — D13's raw material. */
+export type AskEvent = {
+  probeId: string;
+  capability: string;
+  resource?: string;
+  description?: string;
+  taint: number;
+};
+
+/**
+ * D13's measurement seam, and the whole reason it exists: without an
+ * approver on the `cli` surface, `agent/loop/tool-call.ts` throws
+ * `ApprovalRequired` the moment a probe's turn hits an `ask`
+ * (`shell_run_write`, mainly) and the eval measures the gate instead of what
+ * the model does once past it. This says yes to everything and records what
+ * it said yes to — `probeId` is read at call time, not captured, so one
+ * approver instance can sit on the runtime for a model's whole run instead of
+ * being re-registered per probe.
+ */
+function makeAutoApprover(probeId: () => string, sink: (event: AskEvent) => void): Approver {
+  return async (request: ApprovalRequest) => {
+    sink({
+      probeId: probeId(),
+      capability: request.capability,
+      ...(request.resource === undefined ? {} : { resource: request.resource }),
+      ...(request.description === undefined ? {} : { description: request.description }),
+      taint: request.taint,
+    });
+    return 'allow';
+  };
+}
+
 export type TurnRecord = { role: 'owner' | 'agente'; text: string };
 
-async function runProbe(runtime: Runtime, probe: Probe): Promise<TurnRecord[]> {
+/**
+ * D13's other half of the raw material — which tool the model actually
+ * reached for, not just what it hit an `ask` on. Read straight from D15's own
+ * registry (`TurnStore.effects`, `turn_tool_calls`), the mechanism that
+ * already answers "what did this turn do": no second bookkeeping, and it
+ * covers every call, `allow` and `ask` alike, not only the ones this eval
+ * auto-approved.
+ */
+export type ToolCallEvent = {
+  probeId: string;
+  tool: string;
+  capability: string;
+  resource: string | null;
+  decision: 'allow' | 'draft' | 'ask' | null;
+  isError: boolean | null;
+};
+
+async function runProbe(runtime: Runtime, probe: Probe): Promise<{ transcript: TurnRecord[]; turnIds: string[] }> {
   const session = runtime.deps.sessions.open(`probe-${probe.id}-${randomBytes(3).toString('hex')}`);
   const vars = seedContext(runtime, probe, session);
   const transcript: TurnRecord[] = [];
+  const turnIds: string[] = [];
   for (const raw of probe.turns) {
     const text = substitute(raw, vars);
     const result = await runTurn(runtime.deps, { principal: OWNER, tenant: TENANT, surface: 'cli', session, text });
     transcript.push({ role: 'owner', text }, { role: 'agente', text: result.text });
+    turnIds.push(result.turnId);
   }
-  return transcript;
+  return { transcript, turnIds };
 }
 
 function renderTranscript(probe: Probe, transcript: TurnRecord[]): string {
@@ -549,7 +616,17 @@ export async function runEval(
    * proverebbe il contrario di quello che sembra. Qui il test guarda la
    * `ChatCall` che la corsa costruisce, che è l'anello che si è rotto.
    */
-  overrides: { judgeProvider?: Provider } = {},
+  overrides: {
+    judgeProvider?: Provider;
+    /**
+     * The operator's real OS home, injectable so a test can point it at a
+     * throwaway directory instead of the machine's actual one — same reason
+     * `mandatoryGuards`' own `userHome` parameter is injectable
+     * (`core/rot/guards.ts`). Default `homedir()`, called here and not at
+     * module load, so a test can `vi.spyOn`/mock `node:os` per run.
+     */
+    realHome?: string;
+  } = {},
 ): Promise<{
   reportPath: string;
   report: string;
@@ -575,6 +652,13 @@ export async function runEval(
   mkdirSync(runOutDir, { recursive: true });
 
   const fake: FakeProvider | null = config.dryRun ? await startFakeProvider({ main: [{ text: 'Ok, capito.' }] }) : null;
+  // The confinement fix for `docs/evidence/eval-fuga-filesystem-2026-09-07.md`:
+  // every probe's runtime denies reads under the operator's real OS home, on
+  // top of `mandatoryGuards`, so a probe whose fixture workspace has nothing
+  // to find cannot send a real model looking on — and reading from — the
+  // real disk. `--dry-run`'s fake provider never emits a tool call, so this
+  // is inert there, but it costs nothing to apply unconditionally either.
+  const realHome = overrides.realHome ?? homedir();
   const homes: string[] = [];
   const judgeProvider = overrides.judgeProvider ?? (!config.dryRun && config.judge ? buildProvider(config.judge) : null);
   const reportRows: ReportRow[] = [];
@@ -598,7 +682,7 @@ export async function runEval(
         ...(baseUrl ? { baseUrl } : {}),
       });
 
-      const runtime = buildRuntime(home, workspace);
+      const runtime = buildRuntime(home, workspace, { extraDenyRead: [realHome] });
       // This eval measures character, not memory consolidation — a different
       // question (ORCHESTRATION.md#scope-firewall). Left armed, `onTurnEnd` notifies on every
       // probe turn and the ceiling (12) trips mid-run, firing a real light-lane
@@ -610,11 +694,30 @@ export async function runEval(
       // `stop()` is permanent (no `start()`), which is exactly right for a
       // short-lived eval runtime that never wants this lane armed at all.
       runtime.consolidation.stop();
+      let currentProbeId = '';
+      const asks: AskEvent[] = [];
+      const toolCalls: ToolCallEvent[] = [];
+      if (config.fakeApprove === true) {
+        runtime.approvers.set('cli', makeAutoApprover(() => currentProbeId, (event) => asks.push(event)));
+      }
       try {
         for (const probe of probes) {
+          currentProbeId = probe.id;
           const before = fake?.requests.length ?? 0;
-          const transcript = await runProbe(runtime, probe);
+          const { transcript, turnIds } = await runProbe(runtime, probe);
           writeFileSync(join(modelOutDir, `${probe.id}.md`), renderTranscript(probe, transcript));
+          for (const turnId of turnIds) {
+            for (const call of runtime.deps.turns.effects({ turnId }).calls) {
+              toolCalls.push({
+                probeId: probe.id,
+                tool: call.tool,
+                capability: call.capability,
+                resource: call.resource,
+                decision: call.decision,
+                isError: call.isError,
+              });
+            }
+          }
 
           if (config.dryRun) {
             const made = fake!.requests.slice(before);
@@ -640,6 +743,13 @@ export async function runEval(
           }
         }
       } finally {
+        // Not under `--dry-run`: the fake provider there never emits a tool
+        // call, so the file would always be `[]` — noise in the directory
+        // listing for a mode that never touches a tool at all.
+        if (!config.dryRun) {
+          if (config.fakeApprove === true) writeFileSync(join(modelOutDir, 'asks.json'), JSON.stringify(asks, null, 2));
+          writeFileSync(join(modelOutDir, 'tool-calls.json'), JSON.stringify(toolCalls, null, 2));
+        }
         runtime.close();
       }
     }
