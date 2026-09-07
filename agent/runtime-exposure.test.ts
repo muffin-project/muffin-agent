@@ -163,6 +163,12 @@ describe('quali tool vede davvero un turno', () => {
       'wait',
       'todo',
       'sys_inspect',
+      // Nominato per nome dal 07/09 (D15): il punto 3 della riga — «l'owner
+      // chiede cosa hai fatto oggi e riceve una risposta» — non esiste su
+      // un'installazione dove questo tool cade sotto il tetto, e un `cut`
+      // vuoto misurato su un runtime senza ricerca ne' `send_file` non lo
+      // direbbe.
+      'sys_effects',
     ]) {
       expect(rt.names, `${kept} deve restare esposto`).toContain(kept);
     }

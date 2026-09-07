@@ -26,93 +26,99 @@ import type { CapabilityId, EffectRow, RiskClass, TenantId, TrustTier } from './
 /** 0..3 as a schema, so the parse and the type cannot drift (PRACTICES.md#parse-at-boundaries-preserve-provenance). */
 const Tier = z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]);
 
-const PolicyFileSchema = z.object({
-  _comment: z.string().optional(),
-  schemaVersion: z.literal(1),
-  /**
-   * Partial on purpose: a file that only wants to lower `low` says so and
-   * inherits the rest. Every band it omits comes from the floor below.
-   */
-  defaultMaxTaint: z
-    .object({ low: Tier.optional(), medium: Tier.optional(), high: Tier.optional() })
-    .optional(),
-  /** See `PolicyMatrix.paramsMaxTaint` below for what this gates. */
-  paramsMaxTaint: Tier.optional(),
-  /** See `PolicyMatrix.searchMaxTaint` below. Tighten-only, unlike its sibling. */
-  searchMaxTaint: Tier.optional(),
-  neverAtRuntime: z.array(z.string().min(1)).optional(),
-  forbiddenForSystem: z.array(z.string().min(1)).optional(),
-  /**
-   * The normative matrix's own rows. Partial, like `defaultMaxTaint`: a file
-   * that wants to tighten one row says so and inherits the rest, and — same
-   * clamp, same reason — it may only tighten.
-   *
-   * **`.strict()`, and that is the whole point of this object since
-   * ADR-0074.** `askAbove` is gone from `RowPolicy`: the taint no longer turns
-   * an `allow` or a `draft` into an `ask`. A sealed `policy.json` written
-   * against the old vocabulary is therefore making a promise this build does
-   * not keep — *"host asks above taint 1"* — and the one failure mode that
-   * must not happen is the kernel reading the rest of that file, ignoring the
-   * field in silence, and leaving the owner believing a gate that no longer
-   * exists. Strict makes the unknown key an issue whose message carries the
-   * key's own name, so `loadPolicyMatrix`'s fallback note says `askAbove` out
-   * loud and `muffin doctor` prints it. Refusing the file is the fail-closed
-   * direction here for the same reason the deny lists are unioned: the floor
-   * is stricter than any row a file could have widened.
-   */
-  rows: z
-    .record(
-      z.string(),
-      z
-        .object({ asksForIrreversible: z.boolean().optional(), denyAbove: Tier.optional() })
-        .strict(),
-    )
-    .optional(),
-  /**
-   * **Le stanze che ricevono qualcosa in più, per nome — ADR-0073 punto 1.**
-   *
-   * L'unico campo di questo file che *allarga*, e l'asimmetria è deliberata:
-   * restringere non chiede mai (ogni altro campo qui sopra è tighten-only),
-   * allargare si scrive nel sigillo, dove serve una modifica al file **e** un
-   * `muffin rot reseal` dell'owner. È la forma di Progent, e la ragione per
-   * cui esiste è misurata: senza, la sola manopola disponibile sarebbe
-   * togliere `hostOnly` a una capability in TypeScript, cioè concederla a
-   * *ogni* stanza in una volta.
-   *
-   * Un grant **aggiunge** a una stanza nominata (`group:…`, `community:…`) le
-   * capability che in quella stanza smettono di essere `hostOnly`. Non toglie
-   * mai niente a `host`, non nomina mai un insieme di stanze (`group:*` è
-   * rifiutato), e non può nominare ciò che sta in `MAI_CONCEDIBILI`.
-   * `.strict()` sul valore per la stessa ragione di `rows`: una chiave che
-   * questa build non capisce, dentro un blocco che concede privilegi, deve
-   * fermare il file invece di essere ignorata in silenzio.
-   */
-  tenants: z
-    .record(z.string(), z.object({ grants: z.array(z.string().min(1)) }).strict())
-    .optional(),
-}).superRefine((file, ctx) => {
-  // Il rifiuto nomina **il campo**, come per `askAbove`: `loadPolicyMatrix`
-  // costruisce la nota di fallback da `issue.path`, quindi `muffin doctor`
-  // stampa `tenants.group:telegram:42.grants.0` e l'owner sa quale riga
-  // riscrivere. Un grant rifiutato in silenzio sarebbe la stessa classe di
-  // guasto di un `askAbove` letto e scartato: il file promette qualcosa che il
-  // kernel non fa. Qui il verso è l'altro — il file promette *meno* di quel
-  // che ha scritto — e il fallback è comunque la direzione chiusa, perché il
-  // pavimento non concede niente a nessuna stanza.
-  for (const [tenantId, entry] of Object.entries(file.tenants ?? {})) {
-    const perche = tenantNonNominabile(tenantId);
-    if (perche !== null) {
-      ctx.addIssue({ code: 'custom', path: ['tenants', tenantId], message: perche });
-      continue;
-    }
-    entry.grants.forEach((capability, index) => {
-      const why = nonConcedibile(capability);
-      if (why !== null) {
-        ctx.addIssue({ code: 'custom', path: ['tenants', tenantId, 'grants', index], message: why });
+const PolicyFileSchema = z
+  .object({
+    _comment: z.string().optional(),
+    schemaVersion: z.literal(1),
+    /**
+     * Partial on purpose: a file that only wants to lower `low` says so and
+     * inherits the rest. Every band it omits comes from the floor below.
+     */
+    defaultMaxTaint: z
+      .object({ low: Tier.optional(), medium: Tier.optional(), high: Tier.optional() })
+      .optional(),
+    /** See `PolicyMatrix.paramsMaxTaint` below for what this gates. */
+    paramsMaxTaint: Tier.optional(),
+    /** See `PolicyMatrix.searchMaxTaint` below. Tighten-only, unlike its sibling. */
+    searchMaxTaint: Tier.optional(),
+    neverAtRuntime: z.array(z.string().min(1)).optional(),
+    forbiddenForSystem: z.array(z.string().min(1)).optional(),
+    /**
+     * The normative matrix's own rows. Partial, like `defaultMaxTaint`: a file
+     * that wants to tighten one row says so and inherits the rest, and — same
+     * clamp, same reason — it may only tighten.
+     *
+     * **`.strict()`, and that is the whole point of this object since
+     * ADR-0074.** `askAbove` is gone from `RowPolicy`: the taint no longer turns
+     * an `allow` or a `draft` into an `ask`. A sealed `policy.json` written
+     * against the old vocabulary is therefore making a promise this build does
+     * not keep — *"host asks above taint 1"* — and the one failure mode that
+     * must not happen is the kernel reading the rest of that file, ignoring the
+     * field in silence, and leaving the owner believing a gate that no longer
+     * exists. Strict makes the unknown key an issue whose message carries the
+     * key's own name, so `loadPolicyMatrix`'s fallback note says `askAbove` out
+     * loud and `muffin doctor` prints it. Refusing the file is the fail-closed
+     * direction here for the same reason the deny lists are unioned: the floor
+     * is stricter than any row a file could have widened.
+     */
+    rows: z
+      .record(
+        z.string(),
+        z
+          .object({ asksForIrreversible: z.boolean().optional(), denyAbove: Tier.optional() })
+          .strict(),
+      )
+      .optional(),
+    /**
+     * **Le stanze che ricevono qualcosa in più, per nome — ADR-0073 punto 1.**
+     *
+     * L'unico campo di questo file che *allarga*, e l'asimmetria è deliberata:
+     * restringere non chiede mai (ogni altro campo qui sopra è tighten-only),
+     * allargare si scrive nel sigillo, dove serve una modifica al file **e** un
+     * `muffin rot reseal` dell'owner. È la forma di Progent, e la ragione per
+     * cui esiste è misurata: senza, la sola manopola disponibile sarebbe
+     * togliere `hostOnly` a una capability in TypeScript, cioè concederla a
+     * *ogni* stanza in una volta.
+     *
+     * Un grant **aggiunge** a una stanza nominata (`group:…`, `community:…`) le
+     * capability che in quella stanza smettono di essere `hostOnly`. Non toglie
+     * mai niente a `host`, non nomina mai un insieme di stanze (`group:*` è
+     * rifiutato), e non può nominare ciò che sta in `MAI_CONCEDIBILI`.
+     * `.strict()` sul valore per la stessa ragione di `rows`: una chiave che
+     * questa build non capisce, dentro un blocco che concede privilegi, deve
+     * fermare il file invece di essere ignorata in silenzio.
+     */
+    tenants: z
+      .record(z.string(), z.object({ grants: z.array(z.string().min(1)) }).strict())
+      .optional(),
+  })
+  .superRefine((file, ctx) => {
+    // Il rifiuto nomina **il campo**, come per `askAbove`: `loadPolicyMatrix`
+    // costruisce la nota di fallback da `issue.path`, quindi `muffin doctor`
+    // stampa `tenants.group:telegram:42.grants.0` e l'owner sa quale riga
+    // riscrivere. Un grant rifiutato in silenzio sarebbe la stessa classe di
+    // guasto di un `askAbove` letto e scartato: il file promette qualcosa che il
+    // kernel non fa. Qui il verso è l'altro — il file promette *meno* di quel
+    // che ha scritto — e il fallback è comunque la direzione chiusa, perché il
+    // pavimento non concede niente a nessuna stanza.
+    for (const [tenantId, entry] of Object.entries(file.tenants ?? {})) {
+      const perche = tenantNonNominabile(tenantId);
+      if (perche !== null) {
+        ctx.addIssue({ code: 'custom', path: ['tenants', tenantId], message: perche });
+        continue;
       }
-    });
-  }
-});
+      entry.grants.forEach((capability, index) => {
+        const why = nonConcedibile(capability);
+        if (why !== null) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['tenants', tenantId, 'grants', index],
+            message: why,
+          });
+        }
+      });
+    }
+  });
 
 /**
  * **La lista chiusa di ciò che nessun sigillo può concedere a una stanza.**
@@ -146,6 +152,20 @@ const PolicyFileSchema = z.object({
  * l'argomento per cui `denyListCovers` esiste, letto al contrario.
  */
 export const MAI_CONCEDIBILI: readonly CapabilityId[] = [
+  /**
+   * Il registro degli effetti (D15). `hostOnly: true` da solo non basta: dopo
+   * ADR-0073 quel campo è condizionato a `!grantedTo(...)` (`decide.ts`),
+   * quindi un grant sigillato lo aprirebbe a una stanza — e `readEffects` non
+   * ha nessun filtro per tenant, quindi quella stanza riceverebbe la giornata
+   * **intera** dell'installazione: percorsi sul disco dell'owner, URL
+   * raggiunti, comandi eseguiti per qualcun altro.
+   *
+   * La lista chiusa è la risposta giusta finché il registro non sa dire «cosa
+   * ho fatto **in questa stanza**», che è una domanda diversa e che D15 non
+   * fa. Il giorno che la sapesse, questa riga si toglie insieme al filtro che
+   * la rende inutile — non prima.
+   */
+  'sys.effects',
   'sys.shell',
   'sys.shell.*',
   'sys.process.*',
@@ -532,7 +552,11 @@ export const POLICY_FLOOR: PolicyMatrix = {
  * un membro non può nominare la stanza di qualcun altro per ereditarne i
  * grant.
  */
-export function grantedTo(matrix: PolicyMatrix, tenant: TenantId, capability: CapabilityId): boolean {
+export function grantedTo(
+  matrix: PolicyMatrix,
+  tenant: TenantId,
+  capability: CapabilityId,
+): boolean {
   return matrix.grants.get(tenant)?.has(capability) === true;
 }
 
@@ -576,7 +600,9 @@ export function loadPolicyMatrix(home: string): PolicyMatrix {
   try {
     raw = JSON.parse(readFileSync(file, 'utf8'));
   } catch (error) {
-    return fallback(`${file} non è JSON valido: ${error instanceof Error ? error.message : String(error)}`);
+    return fallback(
+      `${file} non è JSON valido: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 
   // Version before schema, like the config loader: a file from a future build
@@ -589,7 +615,9 @@ export function loadPolicyMatrix(home: string): PolicyMatrix {
   const parsed = PolicyFileSchema.safeParse(raw);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
-    return fallback(`${file} non valido — ${issue?.path.join('.') ?? '(root)'}: ${issue?.message ?? 'illeggibile'}`);
+    return fallback(
+      `${file} non valido — ${issue?.path.join('.') ?? '(root)'}: ${issue?.message ?? 'illeggibile'}`,
+    );
   }
   return merge(parsed.data);
 }
@@ -608,7 +636,10 @@ function tighter(fromFile: TrustTier | undefined, floor: TrustTier): TrustTier {
  */
 function tighterRows(
   fromFile:
-    | Record<string, { asksForIrreversible?: boolean | undefined; denyAbove?: TrustTier | undefined }>
+    | Record<
+        string,
+        { asksForIrreversible?: boolean | undefined; denyAbove?: TrustTier | undefined }
+      >
     | undefined,
 ): Readonly<Record<EffectRow, RowPolicy>> {
   const out = {} as Record<EffectRow, RowPolicy>;
@@ -621,7 +652,10 @@ function tighterRows(
       // wants an approval on every reply can have it; a file write plus a
       // reseal cannot silence the ask on `sys.shell`.
       asksForIrreversible: said?.asksForIrreversible === true || floor.asksForIrreversible,
-      denyAbove: said?.denyAbove !== undefined && said.denyAbove < floor.denyAbove ? said.denyAbove : floor.denyAbove,
+      denyAbove:
+        said?.denyAbove !== undefined && said.denyAbove < floor.denyAbove
+          ? said.denyAbove
+          : floor.denyAbove,
     };
   }
   return out;

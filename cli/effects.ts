@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import DatabaseCtor from 'better-sqlite3';
 import { paths } from '../core/config/config.js';
+import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { type EffectsFilter, formatEffects, localDay, readEffects } from '../core/turns/effects.js';
 
 /**
@@ -66,15 +67,38 @@ export function cmdEffects(argv: string[], now: () => Date = () => new Date()): 
     return 78;
   }
 
+  /**
+   * Il fuso **dell'owner**, dal root of trust sigillato, per la ragione scritta
+   * in `agent/tools/effects.ts`: le due porte devono intendere la stessa
+   * giornata, e il fuso del processo non è quello dell'owner appena il comando
+   * gira dentro un supervisore o su una VPS. Stessa lettura di
+   * `cli/jobs.ts#ownerTimezone`, e la stessa caduta a `UTC` quando il root of
+   * trust non si legge — un fuso indovinato sarebbe peggio di uno dichiarato.
+   *
+   * Su un `--db` altrui resta il fuso di **questa** installazione: è l'unico
+   * che si possa leggere, e la giornata stampata lo dice nell'intestazione.
+   */
+  let timeZone = 'UTC';
+  try {
+    timeZone = loadSealedBudgets(paths().home).quietHours.timezone;
+  } catch {
+    // Root of trust illeggibile: è un problema di `muffin doctor`, non di
+    // questo comando, che deve comunque poter mostrare il registro.
+  }
+
   const adesso = now();
-  const filter: EffectsFilter =
+  // Costruito **dentro** il try/catch che segue, non prima: `dayBounds` lancia
+  // su una data non valida, e fuori di qui quel lancio usciva da `cmdEffects`
+  // come stack trace — `cli/main.ts` non lo cattura. Un errore d'uso deve
+  // uscire 78 con una frase, come ogni altro argomento sbagliato.
+  const filter = (): EffectsFilter =>
     values.turn !== undefined
       ? { turnId: values.turn }
-      : { day: values.day ?? localDay(adesso), tzOffsetMinutes: adesso.getTimezoneOffset() };
+      : { day: values.day ?? localDay(adesso, timeZone), timeZone };
 
   const db = new DatabaseCtor(file, { readonly: true, fileMustExist: true });
   try {
-    process.stdout.write(`${formatEffects(readEffects(db, filter))}\n`);
+    process.stdout.write(`${formatEffects(readEffects(db, filter()))}\n`);
     return 0;
   } catch (error) {
     // Un database piu' vecchio del registro degli effetti non ha le colonne, e
@@ -86,6 +110,10 @@ export function cmdEffects(argv: string[], now: () => Date = () => new Date()): 
         `${file} e' stato scritto prima del registro degli effetti e non ha le colonne ` +
           `(${detail}). Fai partire Muffin una volta su questa home: le aggiunge da solo.\n`,
       );
+      return 78;
+    }
+    if (/data non valida/.test(detail)) {
+      process.stderr.write(`${detail}\n${EFFECTS_USAGE}`);
       return 78;
     }
     throw error;
