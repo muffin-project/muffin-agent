@@ -44,6 +44,13 @@ describe('acceptance · D15 · registro degli effetti', () => {
               args: { path: 'diario.md', content: 'oggi ho fatto qualcosa' },
             },
           },
+          // Una capability **senza risorsa** per il kernel (`memory.read` è
+          // `resourceKind: 'tenant'`, quindi `resourceFor` risponde `none`).
+          // Sull'installazione dell'owner questa è la forma dominante —
+          // `sys.shell` da solo è 42 delle 111 chiamate degli ultimi sette
+          // giorni — e senza il ramo che riassume gli argomenti il «su cosa»
+          // del registro sarebbe vuoto proprio dove serve di più.
+          { tool: { name: 'memory_search', args: { query: 'diario di settembre' } } },
           { text: 'fatto, ho scritto diario.md' },
           // Turno 2: l'owner chiede a parole. Il modello sceglie il tool; qui
           // la scelta è copionata, perché ciò che questo scenario prova è che
@@ -125,6 +132,9 @@ describe('acceptance · D15 · registro degli effetti', () => {
           'riga host',
           'reversibile: undoable',
           'senza chiedere',
+          // La capability senza risorsa: gli argomenti riassunti dalla stessa
+          // funzione che il ramo `ask` mostra all'owner, non un campo vuoto.
+          'su query: diario di settembre',
         ]) {
           if (!perTurno.out.includes(atteso)) {
             throw new Error(

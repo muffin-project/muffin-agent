@@ -107,6 +107,15 @@ const SECRET_REF = /^secret:\/\/[A-Za-z0-9_]+$/;
  * `.ts` file `fs_read` can return has no quotes around `string`, so it does
  * not match; `"token": "abc123xyz"` does).
  */
+/**
+ * 07/09/2026, trovato da un giudice su D15: `\btoken=` non ha un confine di
+ * parola dentro `access_token=`, quindi i due nomi di parametro OAuth più
+ * comuni passavano interi. Misurato prima della correzione:
+ * `redactText('https://api.x/v1?access_token=abcdef123456')` tornava la
+ * stringa intatta. Le due righe sotto nominano i prefissi (`access_`,
+ * `refresh_`, `id_`) e accettano anche un `_` prima del nome, che è come
+ * arrivano dentro uno snake_case.
+ */
 const SECRET_VALUE_SHAPES: readonly RegExp[] = [
   /\bsk-[A-Za-z0-9_-]{16,}\b/, // OpenAI-style
   /\bsk-ant-[A-Za-z0-9_-]{16,}\b/, // Anthropic
@@ -117,8 +126,8 @@ const SECRET_VALUE_SHAPES: readonly RegExp[] = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/, // PEM
   /(?<!\d)\d{6,}:[A-Za-z0-9_-]{30,}\b/, // Telegram bot token (id:secret) — always written `bot<id>:<hash>` with no separator, so the id side has no leading `\b` to anchor on
   /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}\b/i, // `Authorization: Bearer <token>` — the value, threshold 8 so "Bearer test" in prose is not enough on its own
-  /\b(?:api[_-]?key|token|password|passwd)\b["']?\s*[:=]\s*"[^"\s]{6,}"/i, // "token": "value" — JSON, optional closing quote on the key, value double-quoted, threshold 6
-  /\b(?:api[_-]?key|token|password|passwd)=[^\s"&]{6,}/i, // token=value — query string or form, unquoted, threshold 6
+  /\b(?:api[_-]?key|(?:access[_-]|refresh[_-]|id[_-])?token|password|passwd|secret)\b["']?\s*[:=]\s*"[^"\s]{6,}"/i, // "token": "value" — JSON, optional closing quote on the key, value double-quoted, threshold 6
+  /(?:\b|_)(?:api[_-]?key|(?:access[_-]|refresh[_-]|id[_-])?token|password|passwd|secret)=[^\s"&]{6,}/i, // token=value — query string or form, unquoted, threshold 6
 ];
 
 /**

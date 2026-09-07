@@ -849,7 +849,16 @@ export function buildRuntime(
    * `wait` gets the store for one purpose only, counting how many turns this
    * tenant already holds suspended; it cannot suspend anything by itself.
    */
-  tools.push(makeWaitTool(turns), makeTodoTool(todos), makeEffectsTool(turns));
+  // `budgets.quietHours.timezone` e non il fuso del processo: e' la stessa
+  // lettura che riceve `LoopDeps.timeZone` poco piu' sotto, e senza di essa
+  // «cosa hai fatto oggi» chiesto al gateway (launchd/systemd, `TZ` del
+  // supervisore) risponderebbe su una giornata diversa da quella che
+  // `muffin effects` stampa sul terminale dell'owner.
+  tools.push(
+    makeWaitTool(turns),
+    makeTodoTool(todos),
+    makeEffectsTool(turns, budgets.quietHours.timezone),
+  );
 
   const capabilities = new Map<string, CapabilityDecl>(
     [

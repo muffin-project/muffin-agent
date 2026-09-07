@@ -577,16 +577,24 @@ export async function runTool(
    * che l'owner cerca quando chiede cosa è stato scritto. `redactText` come su
    * ogni altro sink (ADR-0048): un URL può portarsi dietro un token, e questa
    * riga la rilegge una CLI.
+   *
+   * **E per una capability `resourceKind: 'none'`, gli argomenti riassunti.**
+   * Non un ripiego: `sys.shell` è 42 delle 111 chiamate degli ultimi sette
+   * giorni sull'installazione dell'owner, e senza questo ramo il «su cosa» del
+   * registro sarebbe vuoto proprio per la fetta più grande. La funzione è
+   * `summarizeCallArgs`, la **stessa** che il ramo `ask` qui sopra usa per lo
+   * stesso motivo — «per una capability senza risorsa gli argomenti *sono*
+   * l'azione» — quindi il registro e la domanda dicono la stessa cosa invece
+   * di due cose vicine.
+   *
+   * Il costo è dichiarato: questi byte li ha scritti il modello. È per questo
+   * che `sys_effects` deriva il proprio tier dalle righe che rende
+   * (`agent/tools/effects.ts`) invece di dichiararsi pulito.
    */
   const effect: EffectMetadata = {
     row: decl?.effect ?? null,
     reversible: decl?.reversible ?? null,
-    resource:
-      risolto !== undefined
-        ? redactText(risolto)
-        : resource.kind === 'none'
-          ? null
-          : redactText(resource.value),
+    resource: effectResource(risolto, resource, call.args),
     decision: decision.effect as EffectDecision,
   };
   const intentError = recordIntent(deps, ctx.turnId, span, {
@@ -831,6 +839,36 @@ function avvisoFallimentoRipetuto(tool: string, fallimentiIdentici: number): str
     `questo stesso errore. Ripetere non lo cambia: cambia argomenti, prova un'altra via, o fermati e ` +
     `spiega il blocco invece di riprovare.]`
   );
+}
+
+/**
+ * Quanto del riassunto degli argomenti finisce nel registro.
+ *
+ * Il ramo `ask` non taglia — l'owner deve vedere intero il comando che sta per
+ * approvare (D12-min) — ma quella riga vive un istante, mentre questa resta e
+ * viene stampata in elenco. 300 caratteri tengono un comando di shell vero e
+ * fermano un `content` incollato negli argomenti.
+ */
+const MAX_RESOURCE_CHARS = 300;
+
+/**
+ * Su cosa ha agito questa chiamata, come lo dirà il registro.
+ *
+ * L'ordine è: il percorso risolto se il ramo `draft` ne ha preso uno (è il
+ * file vero, non l'argomento del modello), poi la risorsa che il kernel ha
+ * giudicato, poi — per una capability senza risorsa — gli argomenti riassunti
+ * dalla stessa funzione che il ramo `ask` mostra all'owner. `redactText` su
+ * ogni ramo, mai su nessuno solo.
+ */
+function effectResource(
+  risolto: string | undefined,
+  resource: ReturnType<typeof resourceFor>,
+  args: unknown,
+): string | null {
+  if (risolto !== undefined) return redactText(risolto);
+  if (resource.kind !== 'none') return redactText(resource.value);
+  const riassunto = summarizeCallArgs(args);
+  return riassunto === undefined ? null : redactText(riassunto.slice(0, MAX_RESOURCE_CHARS));
 }
 
 function recordIntent(
