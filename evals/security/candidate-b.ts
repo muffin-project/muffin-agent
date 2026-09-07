@@ -120,6 +120,10 @@ const SINK_BY_ROW: Readonly<Record<EffectRow, Sink>> = {
   host: 'local-host',
   reply: 'origin-channel',
   memory: 'own-tenant-memory',
+  // ADR-0073: il vault **del tenant che scrive**. Stesso sink di `memory` per
+  // ciò che questo file decide — resta dentro il confine del turno, non esce —
+  // e riga separata perché la scrittura è deliberata e ha un file dietro.
+  vault: 'own-tenant-memory',
   egress: 'network',
   outward: 'new-recipient',
   external: 'third-party',

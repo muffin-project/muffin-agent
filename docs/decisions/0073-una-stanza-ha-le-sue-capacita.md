@@ -1,8 +1,27 @@
 # ADR-0073 — Una stanza ha le sue capacità, e dentro il suo confine non chiede
 
-**Stato:** proposto · 2026-09-04, riscritto il 2026-09-06 · direzione owner,
-ricerca `muffin-nei-gruppi-2026-09-04.md` §3 e §5 e
+**Stato:** **accettato per i punti 1, 2, 3 e 5 · 2026-09-07**; il **punto 4
+resta aperto** (la domanda effimera all'owner dentro il gruppo: un `ask` nato
+in una stanza è ancora `deny` per un membro, com'era) · proposto 2026-09-04,
+riscritto il 2026-09-06 · direzione owner, ricerca
+`muffin-nei-gruppi-2026-09-04.md` §3 e §5 e
 `harness-non-permessi-2026-09-06.md`
+
+**Dove vive, adesso** (2026-09-07): il grant per stanza in
+`core/policy/matrix.ts` (`tenants`, `MAI_CONCEDIBILI`, `grantedTo`), letto dal
+kernel in `core/policy/decide.ts`; `vault.write` e il tool `vault_save` in
+`agent/tools/vault-save.ts`, con la riga di effetto `vault` in `ROW_FLOOR`;
+il menu del modello allineato al kernel in `agent/context/assemble.ts`
+(`visibleTools`, quarto argomento). Provato per stanza da
+`core/policy/solo-irreversibile.test.ts`, `core/policy/matrix.test.ts`,
+`agent/capability-gaps.test.ts`, `agent/tools/vault-save.test.ts` e — sul
+binario vero, con il sigillo riscritto fra due vite del gateway — dallo
+scenario di accettazione F7 (`evals/acceptance/scenarios/f-gruppi.accept.ts`).
+
+Il punto 5 è atterrato come l'ADR lo scrive: `turn.todo` e `turn.wait` restano
+`hostOnly: true` — il default per un gruppo che nessuno ha esaminato resta no
+— e una stanza li riceve nominandoli nel proprio grant, senza nessun
+meccanismo separato, perché seguono già la sessione della stanza.
 
 ## Contesto
 

@@ -396,7 +396,18 @@ export type RegisteredTool = {
    * negato dalla root of trust) non c'è niente da fotografare e non c'è niente
    * da eseguire, e il messaggio del lancio è la ragione da mostrare.
    */
-  resolveEffectPath?: (args: Record<string, unknown>) => string;
+  /**
+   * `ctx` è il secondo argomento **da ADR-0073**, e non è una comodità.
+   * `vault_save` scrive in `salvati/<slug del tenant>/…`, quindi il file che
+   * questa chiamata tocca dipende dal tenant del turno e non solo dagli
+   * argomenti del modello — che è esattamente la proprietà che rende quel
+   * tool incapace di scrivere nella stanza di qualcun altro. Senza il
+   * contesto qui, la fotografia si prenderebbe su un percorso derivato da
+   * ciò che il modello ha scritto, cioè su un file diverso da quello che
+   * l'handler scriverà: un undo che ripristina il file sbagliato è peggio di
+   * nessun undo (vedi il paragrafo sopra). `fs.ts` lo ignora, come faceva.
+   */
+  resolveEffectPath?: (args: Record<string, unknown>, ctx: ToolContext) => string;
 };
 
 export type LoopDeps = {
@@ -526,6 +537,22 @@ export type LoopDeps = {
    * `visibleTools` in `agent/context/assemble.ts`.
    */
   capabilities: ReadonlyMap<CapabilityId, CapabilityDecl>;
+  /**
+   * **Stanza → capability concesse**, dalla `rot/policy.json` sigillata
+   * (`PolicyMatrix.grants`, ADR-0073 punto 1). Serve a una cosa sola:
+   * `visibleTools`, perché il menu del modello e il kernel devono rispondere
+   * la stessa cosa su cosa una stanza raggiunge.
+   *
+   * Opzionale, a differenza di `capabilities` qui sopra, e la ragione è la
+   * direzione in cui degrada: dimenticarla nasconde al membro una capability
+   * che il sigillo gli ha concesso — la stanza non la usa mai — mentre
+   * dimenticare `capabilities` gliele mostrava tutte. Il primo è un menu
+   * povero, il secondo era un menu che mente. Ciò che rende accettabile
+   * l'opzionale è che il cablaggio vero è provato sul binario: lo scenario di
+   * accettazione F7 fa salvare qualcosa a un membro, e senza questa riga il
+   * tool non comparirebbe nel suo menu.
+   */
+  grants?: ReadonlyMap<TenantId, ReadonlySet<CapabilityId>>;
   /**
    * Il registro di undo, cioè l'implementazione del verdetto `draft`.
    *

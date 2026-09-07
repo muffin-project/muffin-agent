@@ -1,6 +1,11 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe } from 'vitest';
+import { paths } from '../../../core/config/config.js';
+import { seal } from '../../../core/rot/verify.js';
+import { buildRuntime } from '../../../agent/runtime.js';
+import { readDocument } from '../../../agent/tools/document.js';
+import { vaultPathPer } from '../../../agent/tools/vault-save.js';
 import { install, until } from '../harness.js';
 import { scenario } from '../scenario.js';
 import { startFakeTelegram } from '../telegram.js';
@@ -524,5 +529,279 @@ describe('acceptance · F6 · ricordare senza rispondere', () => {
       }
     },
     240_000,
+  );
+});
+
+describe('acceptance · F7 · una stanza ha le sue capacità, e dentro il suo vault non chiede', () => {
+  /**
+   * ADR-0073 punti 1, 2, 3 e 5, sul binario vero e in un ordine che nessun
+   * test unitario può riprodurre: **la stessa stanza, prima e dopo il
+   * sigillo**.
+   *
+   * È la forma che questa fetta richiede perché il grant non è un flag di
+   * processo: è un campo di `rot/policy.json`, cioè un file che `muffin rot
+   * verify` copre e che `buildRuntime` legge **una volta, all'avvio**. Un
+   * test che costruisse la `PolicyMatrix` a mano proverebbe `grantedTo` e non
+   * proverebbe la sola cosa che l'owner deve poter fare: scriverlo,
+   * risigillare, e vedere la stanza cambiare comportamento al riavvio
+   * successivo. Quindi due vite del gateway, la seconda con il file sigillato
+   * in mezzo — la stessa manopola, e lo stesso `seal(...)`, che D16 usa per
+   * rimettere il soffitto della riga `host`.
+   *
+   * Le quattro affermazioni, in quest'ordine dentro lo scenario:
+   *
+   *  (a) senza grant: `vault_save` è respinto al confine dei tenant
+   *      (`principal_forbidden`), nessun file compare nel vault, e Muffin lo
+   *      dice invece di fingere;
+   *  (b) con grant: lo stesso membro salva, **senza nessun `ask`** — la riga
+   *      `vault` non chiede — e i byte sono nel vault del tenant
+   *      `group:telegram:<id>`;
+   *  (c) `documents.read` di quella stanza li ritrova, e il tenant `host` no:
+   *      il vault è uno, il confine è nell'indice;
+   *  (d) nella stessa stanza e con lo stesso sigillo, `shell_run` resta
+   *      `deny`. Un grant aggiunge per nome, e `sys.shell` non è nemmeno
+   *      nominabile.
+   */
+  scenario(
+    'F7',
+    async () => {
+      const tg = await startFakeTelegram();
+      const GROUP = -100_970;
+      const MEMBER = 9701;
+      const TENANT = `group:telegram:${GROUP}`;
+      const TITOLO = 'orari della portineria';
+      const TESTO = 'aperta dalle 8 alle 12, chiusa il sabato';
+      const SENZA = 'in questa stanza non posso salvare niente';
+      const CON = 'fatto, l ho salvato qui';
+      const NIENTE_SHELL = 'la shell in questa stanza non ce l ho';
+
+      const inst = await install({
+        main: [
+          // (a) — la stanza non ha ancora nessun grant.
+          { tool: { name: 'vault_save', args: { titolo: TITOLO, testo: TESTO } } },
+          { text: SENZA },
+          // (b) — stessa stanza, sigillo riscritto fra i due gateway.
+          { tool: { name: 'vault_save', args: { titolo: TITOLO, testo: TESTO } } },
+          { text: CON },
+          // (d) — e la shell, nella stanza che adesso salva.
+          { tool: { name: 'shell_run', args: { command: 'echo ciao' } } },
+          { text: NIENTE_SHELL },
+        ],
+        env: { MUFFIN_GATEWAY_TICK_MS: '200' },
+      });
+      try {
+        const tok = await inst.muffin(['secret', 'set', 'telegram_token'], '123456:fake-f7-grant');
+        if (tok.code !== 0) throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
+        const enable = await inst.muffin(['surface', 'enable', 'telegram', '--api-base', tg.url]);
+        if (enable.code !== 0) throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
+
+        const salvato = vaultPathPer(TENANT, TITOLO);
+        const sulDisco = join(paths(inst.home).vault, salvato);
+
+        // ─────────── (a) la stanza senza grant ───────────
+        const gw1 = await inst.gateway();
+        await gw1.waitFor(/muffin gateway/, 20_000);
+        try {
+          tg.deliver({
+            message: {
+              message_id: 9701,
+              date: Math.floor(Date.now() / 1000),
+              chat: { id: GROUP, type: 'supergroup', title: 'gruppo f7' },
+              from: { id: MEMBER, is_bot: false, first_name: 'Membro' },
+              text: `@muffin_test_bot salva questi orari: ${TESTO}`,
+            },
+          });
+          await until(
+            () =>
+              tg
+                .sent()
+                .some(
+                  (c) =>
+                    (c.method === 'sendMessage' || c.method === 'editMessageText') &&
+                    String(c.payload['text'] ?? '').includes(SENZA),
+                ),
+            30_000,
+          );
+        } finally {
+          await gw1.stop();
+        }
+
+        const negato = inst.db(
+          (db) =>
+            db.prepare(`SELECT messages FROM turns ORDER BY created_at DESC LIMIT 1`).get() as {
+              messages: string;
+            },
+        );
+        if (!JSON.stringify(JSON.parse(negato.messages)).includes('principal_forbidden')) {
+          throw new Error(
+            `senza grant, vault_save doveva essere respinto al confine dei tenant: ${negato.messages.slice(0, 800)}`,
+          );
+        }
+        if (existsSync(sulDisco)) {
+          throw new Error(`una stanza senza grant ha scritto nel vault: ${sulDisco}`);
+        }
+
+        // ─────────── il sigillo: la manopola dell'owner ───────────
+        // `tenants` nomina **questa** stanza e **queste** capability. Il file
+        // sta dentro il manifest della radice di fiducia, quindi va risigillato
+        // o la home riparte in safe mode invece di leggerlo (stessa cosa che
+        // fa `muffin rot reseal`).
+        writeFileSync(
+          join(paths(inst.home).rot, 'policy.json'),
+          JSON.stringify(
+            { schemaVersion: 1, tenants: { [TENANT]: { grants: ['vault.write', 'turn.todo'] } } },
+            null,
+            2,
+          ),
+        );
+        seal(inst.home, '1', new Date());
+
+        // Il grant è visibile all'owner senza aprire il JSON: è l'unica cosa
+        // che questo file allarga, quindi doctor la nomina.
+        const doctor = await inst.muffin(['doctor']);
+        if (!doctor.out.includes(TENANT) || !doctor.out.includes('vault.write')) {
+          throw new Error(`doctor non elenca la stanza con grant:\n${doctor.out}`);
+        }
+
+        // ─────────── (b), (c), (d) la stessa stanza, col grant ───────────
+        const gw2 = await inst.gateway();
+        await gw2.waitFor(/muffin gateway/, 20_000);
+        try {
+          tg.deliver({
+            message: {
+              message_id: 9702,
+              date: Math.floor(Date.now() / 1000),
+              chat: { id: GROUP, type: 'supergroup', title: 'gruppo f7' },
+              from: { id: MEMBER, is_bot: false, first_name: 'Membro' },
+              text: `@muffin_test_bot adesso salvali: ${TESTO}`,
+            },
+          });
+          await until(
+            () =>
+              tg
+                .sent()
+                .some(
+                  (c) =>
+                    (c.method === 'sendMessage' || c.method === 'editMessageText') &&
+                    String(c.payload['text'] ?? '').includes(CON),
+                ),
+            30_000,
+          );
+
+          tg.deliver({
+            message: {
+              message_id: 9703,
+              date: Math.floor(Date.now() / 1000),
+              chat: { id: GROUP, type: 'supergroup', title: 'gruppo f7' },
+              from: { id: MEMBER, is_bot: false, first_name: 'Membro' },
+              text: '@muffin_test_bot elenca i file di questa macchina',
+            },
+          });
+          await until(
+            () =>
+              tg
+                .sent()
+                .some(
+                  (c) =>
+                    (c.method === 'sendMessage' || c.method === 'editMessageText') &&
+                    String(c.payload['text'] ?? '').includes(NIENTE_SHELL),
+                ),
+            30_000,
+          );
+        } finally {
+          await gw2.stop();
+        }
+
+        // (b) i byte esistono, e sono quelli.
+        if (!existsSync(sulDisco)) {
+          throw new Error(`col grant, il membro non ha salvato niente: manca ${sulDisco}`);
+        }
+        if (!readFileSync(sulDisco, 'utf8').includes(TESTO)) {
+          throw new Error(`il file salvato non contiene il testo del membro: ${sulDisco}`);
+        }
+
+        // (b) e **nessun ask**: la riga `vault` non chiede, a nessun taint. In
+        // un gruppo un ask non raggiunge nessuno che possa rispondere, quindi
+        // una riga qui sarebbe un divieto travestito.
+        const ask = inst.db(
+          (db) =>
+            db.prepare(`SELECT COUNT(*) AS n FROM approvals WHERE capability = 'vault.write'`).get() as {
+              n: number;
+            },
+        );
+        if (ask.n !== 0) {
+          throw new Error(`un membro ha salvato nel proprio vault e gli e' stato chiesto: ${ask.n} approvazioni`);
+        }
+        // La chiamata è arrivata all'handler (il kernel ha detto `draft`, non
+        // `deny`): senza questa riga «nessun ask» sarebbe vero anche per un
+        // rifiuto.
+        const riga = inst.db(
+          (db) =>
+            db
+              .prepare(
+                `SELECT is_error FROM turn_tool_calls WHERE tool = 'vault_save' ORDER BY started_at DESC LIMIT 1`,
+              )
+              .get() as { is_error: number } | undefined,
+        );
+        if (!riga || riga.is_error !== 0) {
+          throw new Error(`vault_save non e' arrivata all'handler col grant: ${JSON.stringify(riga)}`);
+        }
+
+        // (c) il documento è nel tenant della stanza, e `host` non lo vede.
+        const perTenant = inst.db(
+          (db) =>
+            db
+              .prepare(
+                `SELECT tenant_id AS tenant, COUNT(*) AS n FROM episodes WHERE vault_path = ? AND superseded_at IS NULL GROUP BY tenant_id`,
+              )
+              .all(salvato) as Array<{ tenant: string; n: number }>,
+        );
+        const dellaStanza = perTenant.find((r) => r.tenant === TENANT);
+        if (!dellaStanza || dellaStanza.n === 0) {
+          throw new Error(`il salvataggio non e' in memoria del tenant della stanza: ${JSON.stringify(perTenant)}`);
+        }
+        if (perTenant.some((r) => r.tenant !== TENANT)) {
+          throw new Error(`il salvataggio di una stanza e' finito anche in un altro tenant: ${JSON.stringify(perTenant)}`);
+        }
+
+        // La stessa cosa dal lato del tool che il modello userebbe:
+        // `document_read` della stanza lo ritrova, quello di `host` no.
+        const runtime = buildRuntime(inst.home, inst.workspace);
+        try {
+          const daStanza = await readDocument(runtime.vault, runtime.memory.store, TENANT, { path: salvato });
+          if (daStanza.isError === true || !daStanza.content.includes(TESTO)) {
+            throw new Error(`document_read della stanza non ritrova il salvataggio: ${daStanza.content.slice(0, 300)}`);
+          }
+          const daHost = await readDocument(runtime.vault, runtime.memory.store, 'host', { path: salvato });
+          if (daHost.isError !== true || daHost.content.includes(TESTO)) {
+            throw new Error(`il tenant host vede il vault di una stanza: ${daHost.content.slice(0, 300)}`);
+          }
+        } finally {
+          runtime.close();
+        }
+
+        // (d) e la shell resta fuori, nella stanza che salva.
+        const ultimo = inst.db(
+          (db) =>
+            db.prepare(`SELECT messages FROM turns ORDER BY created_at DESC LIMIT 1`).get() as {
+              messages: string;
+            },
+        );
+        if (!JSON.stringify(JSON.parse(ultimo.messages)).includes('principal_forbidden')) {
+          throw new Error(`shell_run doveva restare negata nella stanza con grant: ${ultimo.messages.slice(0, 800)}`);
+        }
+        const shell = inst.db(
+          (db) =>
+            db.prepare(`SELECT COUNT(*) AS n FROM turn_tool_calls WHERE tool = 'shell_run'`).get() as { n: number },
+        );
+        if (shell.n !== 0) {
+          throw new Error(`una shell_run negata ha comunque raggiunto l'handler: ${shell.n} righe`);
+        }
+      } finally {
+        await inst.cleanup();
+        await tg.close();
+      }
+    },
+    300_000,
   );
 });

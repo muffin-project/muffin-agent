@@ -1,4 +1,4 @@
-import { denyListCovers, type PolicyMatrix } from './matrix.js';
+import { denyListCovers, grantedTo, type PolicyMatrix } from './matrix.js';
 import { DOORS } from './doors.js';
 import type {
   CapabilityDecl,
@@ -164,10 +164,37 @@ export function createDecide(ctx: PolicyContext): Decide {
       return { effect: 'deny', code: 'tenant_mismatch', detail: `${expected} != ${tenant}` };
     }
 
-    // host-only excludes *remote tenants*, not autonomous local principals: the
-    // scheduler runs on the host. Denying it here would have hidden the queueing
-    // rule below behind a wrong refusal.
-    if (decl.hostOnly && principal.kind === 'member') {
+    /**
+     * host-only excludes *remote tenants*, not autonomous local principals: the
+     * scheduler runs on the host. Denying it here would have hidden the queueing
+     * rule below behind a wrong refusal.
+     *
+     * **`&& !grantedTo(...)` è tutta ADR-0073 nel kernel.** Fino al 06/09 la
+     * riga finiva un carattere prima, e con essa finiva la sola dimensione
+     * disponibile: `hostOnly` è una proprietà della *capability*, quindi
+     * l'unico modo di dare qualcosa a una stanza era toglierlo a `host` per
+     * tutte le stanze insieme. Il grant sposta la domanda dove l'owner può
+     * rispondere per nome — questa stanza, questa capability, scritto nel
+     * sigillo — senza che nient'altro del kernel si muova: soffitti,
+     * ADR-0071 (composto + non-owner → deny), ADR-0072, ADR-0074, ADR-0075
+     * sono tutti *sotto* questa riga e la attraversano identici. Una stanza
+     * con grant su `sys.search` resta soggetta a `gateParams` e a
+     * `perTenantDailyUsd`; una stanza con grant su `vault.write` resta
+     * soggetta a `budgetExhausted` e a `safeMode`.
+     *
+     * `tenant` e non `principal.tenantId`: sono lo stesso valore per
+     * costruzione (il controllo `tenant_mismatch` sopra è già passato), e
+     * leggere quello della *richiesta* è ciò che rende impossibile a un
+     * chiamante di nominare una stanza diversa da quella per cui il principal
+     * è stato risolto.
+     *
+     * La mutazione che deve far cadere una prova per stanza: cancellare il
+     * `&& !grantedTo(...)`. Allora un membro di una stanza **con** grant
+     * riceve `principal_forbidden` su `vault.write`, e
+     * `core/policy/solo-irreversibile.test.ts (describe «una stanza con grant»)` lo dice con il nome della
+     * capability.
+     */
+    if (decl.hostOnly && principal.kind === 'member' && !grantedTo(ctx.matrix, tenant, capability)) {
       return { effect: 'deny', code: 'principal_forbidden', detail: 'host-only capability' };
     }
 
