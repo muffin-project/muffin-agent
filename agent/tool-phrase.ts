@@ -37,6 +37,7 @@ const TOOL_PHRASE: Readonly<Record<string, string>> = {
   fs_list: 'guardo una cartella',
   fs_search: 'cerco nei file',
   fs_write: 'scrivo un file',
+  vault_save: 'salvo nel vault della stanza',
   document_read: 'leggo un documento',
   http_get: 'apro una pagina',
   web_search: 'cerco sul web',
@@ -78,6 +79,7 @@ const TOOL_SUBJECT: Readonly<Record<string, string | readonly string[]>> = {
   // `name`. Un solo campo lascerebbe muta metà delle chiamate.
   fs_search: ['query', 'name'],
   fs_write: 'path',
+  vault_save: 'titolo',
   document_read: 'path',
   http_get: 'url',
   shell_run: 'command',
