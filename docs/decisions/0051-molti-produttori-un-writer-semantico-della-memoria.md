@@ -1,6 +1,6 @@
 # ADR-0051 — Molti produttori, un writer semantico della memoria
 
-**Stato:** accettato · 2026-08-21 · **non implementato al 2026-09-07**: i soli produttori di scritture durevoli restano quelli automatici (ingestione allegati, episodio di ogni turno); nessuna proposta intenzionale (`remember`/correggi/dimentica) raggiunge il writer semantico. Misura e confronto con i peer in `docs/evidence/critica-moduli-vs-peer-2026-09-07.md`; il posto in cui si decide quando entra è `docs/ROADMAP.md` «Intentional memory proposals».
+**Stato:** accettato · 2026-08-21
 
 ## Contesto
 

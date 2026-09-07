@@ -254,7 +254,7 @@ the boundary) and developer/operator interfaces (evals, traces, database
 inspection, low-level lifecycle). Only the third bucket belongs in the normal
 owner surface; a new command must say which bucket it is in and why it is not
 conversational or automatic. Observability and recovery are never deleted to
-achieve this. Issue #465 tracks the reconciliation of existing commands.
+achieve this.
 
 Central project infrastructure may simplify download, updates, discovery, OAuth
 bootstrap or Telegram provisioning. **It must not be necessary for an already
