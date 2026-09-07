@@ -24,6 +24,7 @@ function fixture(rows: readonly { turnId: string; tool: string }[]): DatabaseCto
       capability: 'test.cap',
       rerunnable: true,
       args: { i },
+      effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' },
     });
   });
   return db;

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { isSensitiveResourceName, redactAttributes, redactText, redactValue, scrubResourceEchoes } from './redact.js';
+import {
+  isSensitiveResourceName,
+  redactAttributes,
+  redactText,
+  redactValue,
+  scrubResourceEchoes,
+} from './redact.js';
 
 /**
  * The threat model's §8 commitment — *"Secrets: mai nel repo, **mai in chiaro
@@ -149,13 +155,19 @@ describe('trace redaction — the value-shape net', () => {
  */
 describe('trace redaction — labeled credentials inside free text (redactText)', () => {
   const mustRedact: [string, string][] = [
-    ['a Bearer header', 'curl -H "Authorization: Bearer sk-ant-abc123DEF456ghi789xyz" https://api.example.com'],
+    [
+      'a Bearer header',
+      'curl -H "Authorization: Bearer sk-ant-abc123DEF456ghi789xyz" https://api.example.com',
+    ],
     ['api_key in a query string', 'GET /search?api_key=AKIA1234567890ABCD&q=ciao HTTP/1.1'],
     ['token in a query string', 'redirect_uri=https://x?token=abcdEFGH1234&state=1'],
     ['password in a JSON body', '{"user":"bob","password":"hunter2Strong!"}'],
     ['api_key in a JSON body, snake_case', '{"api_key":"sk-liveTESTKEY1234567890"}'],
     ['password in an unquoted form body', 'username=bob&password=Sup3rSecret!&remember=1'],
-    ['a Telegram bot URL', 'fetch fallito su https://api.telegram.org/bot123456789:ABCdefGHIjklMNOpqrsTUVwxyz1234567/getMe'],
+    [
+      'a Telegram bot URL',
+      'fetch fallito su https://api.telegram.org/bot123456789:ABCdefGHIjklMNOpqrsTUVwxyz1234567/getMe',
+    ],
   ];
 
   for (const [label, text] of mustRedact) {
@@ -178,13 +190,19 @@ describe('trace redaction — labeled credentials inside free text (redactText)'
     ['a TypeScript interface', 'interface Config { apiKey: string; token: string }'],
     ['a token_type field, not a token value', '{"token_type": "Bearer", "expires_in": 3600}'],
     ['password_confirmation, a compound word', 'password_confirmation does not match password'],
-    ['prose mentioning the word token', 'il token del bot va altrove: muffin secret set telegram_token'],
+    [
+      'prose mentioning the word token',
+      'il token del bot va altrove: muffin secret set telegram_token',
+    ],
     ['prose mentioning the word password (Italian)', 'la password deve avere almeno 8 caratteri'],
     ['a session id under an unrelated key', 'session: {"id": "abc123", "active": true}'],
     ['the English word bearer, unrelated', 'the bearer of good news arrived early'],
     ['a short numeric value under the threshold', 'token=42 // contatore del loop'],
     ['a compound identifier with a short value', 'api_key_id: 8834'],
-    ['a secret reference, which is a name, not a value', 'ho usato secret://provider_api_key per la chiamata'],
+    [
+      'a secret reference, which is a name, not a value',
+      'ho usato secret://provider_api_key per la chiamata',
+    ],
     ['a yaml-ish colon with no secret label', 'key: value pairs in yaml, like host: localhost'],
   ];
 
@@ -207,7 +225,10 @@ describe('trace redaction — secret:// is a reference, not a value', () => {
   });
 
   it('passes a reference through redactAttributes even under a secret-flavoured field name', () => {
-    const out = redactAttributes({ apiKeyRef: 'secret://provider_api_key', 'muffin.telegram.tokenRef': 'secret://telegram_token' });
+    const out = redactAttributes({
+      apiKeyRef: 'secret://provider_api_key',
+      'muffin.telegram.tokenRef': 'secret://telegram_token',
+    });
     expect(out['apiKeyRef']).toBe('secret://provider_api_key');
     expect(out['muffin.telegram.tokenRef']).toBe('secret://telegram_token');
   });
@@ -302,5 +323,27 @@ describe('trace redaction — verbatim echoes of a sensitive resource (scrubReso
   it('is a no-op with an empty ledger — the common case, every turn that read nothing secret-named', () => {
     const text = 'risposta normale, senza nessuna lettura sensibile in questo turno.';
     expect(scrubResourceEchoes(text, [])).toBe(text);
+  });
+});
+
+describe('i parametri OAuth più comuni', () => {
+  /**
+   * Trovato da un giudice indipendente su D15 (07/09/2026), non da un'idea:
+   * `\btoken=` non ha un confine di parola dentro `access_token=`, quindi
+   * l'URL sotto usciva **intatto**. D15 aggiunge a `resource` un sink durevole
+   * e stampabile per gli URL che il modello sceglie, quindi il buco smette di
+   * essere teorico.
+   */
+  it('oscura access_token, refresh_token e id_token in una query string', () => {
+    for (const nome of ['access_token', 'refresh_token', 'id_token', 'token', 'secret']) {
+      const url = `https://api.esempio.test/v1?${nome}=abcdef123456&u=1`;
+      expect(redactText(url), `${nome} è uscito in chiaro`).not.toContain('abcdef123456');
+    }
+  });
+
+  it('non oscura una parola che contiene "token" senza essere un parametro', () => {
+    // Il confine serve ancora: `tokenizer` non è una credenziale, e un
+    // pattern che lo prendesse renderebbe illeggibile mezza traccia.
+    expect(redactText('ho usato il tokenizer standard')).toBe('ho usato il tokenizer standard');
   });
 });
