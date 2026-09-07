@@ -624,6 +624,10 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'F6',
     'remember without replying: a group message that opens no turn still becomes an episode of the group tenant — no provider call, no reply, no turn',
   ),
+  verde(
+    'F7',
+    'room capabilities: the same group cannot save before a sealed policy.json names it and can after — the member saves with no approval asked, the bytes land in that room\'s vault tenant and `host` cannot read them, and `shell_run` stays denied in that same room (ADR-0073)',
+  ),
 ] as const;
 
 export function entry(row: string): ScenarioEntry {

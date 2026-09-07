@@ -171,6 +171,28 @@ export type EffectRow =
   | 'egress'
   /** A durable write to the tenant's own memory. */
   | 'memory'
+  /**
+   * A deliberate durable write **inside the writing tenant's own vault** —
+   * ADR-0073 punto 2, la riga che rende una stanza uno spazio invece di una
+   * sola conversazione.
+   *
+   * Perché non `memory` e perché non `host`. Non `memory`: quella riga è
+   * l'episodio che ogni turno scrive da sé, automatico e senza un file
+   * dietro; qui c'è un file, un giornale e un `muffin undo`, e chi scrive lo
+   * ha chiesto. Non `host`: `host` è la macchina dell'owner — il suo disco,
+   * la sua shell, i suoi processi — e una stanza non ne ha una. `fs.*` resta
+   * `hostOnly` e non concedibile proprio perché le due cose non sono la
+   * stessa.
+   *
+   * Il soffitto della riga è **esplicito e alto** (`denyAbove: 3`,
+   * `asksForIrreversible: false`): byte che restano dentro il confine del
+   * tenant che li scrive, senza lettura cross-tenant e senza host esterno,
+   * non attraversano mai un `ask` a nessun taint. Ciò che rende la scrittura
+   * sicura è il confine, non la fiducia in chi scrive — e il confine lo
+   * costruisce il tool (`agent/tools/vault-save.ts`: il tenant è quello del
+   * turno, mai un argomento), non questo numero.
+   */
+  | 'vault'
   /** Third-party code or services outside the allowlist model (MCP). */
   | 'external'
   /** A **new** recipient: mail, a message to someone else, publication. */

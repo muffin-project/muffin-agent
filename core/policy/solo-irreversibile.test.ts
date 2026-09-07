@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDecide } from './decide.js';
 import { POLICY_FLOOR, ROW_FLOOR } from './matrix.js';
+import type { PolicyMatrix } from './matrix.js';
 import type {
   CapabilityDecl,
   Decision,
@@ -21,6 +22,7 @@ import { documentCapability } from '../../agent/tools/document.js';
 import { inspectCapability } from '../../agent/tools/inspect.js';
 import { todoCapability } from '../../agent/tools/todo.js';
 import { waitCapability } from '../../agent/tools/wait.js';
+import { vaultWriteCapability } from '../../agent/tools/vault-save.js';
 import { mcpCapabilityFor } from '../../agent/tools/mcp.js';
 import { DOORS } from './doors.js';
 
@@ -83,7 +85,38 @@ const MEMBER: Principal = {
   tenantId: 'group:telegram:42',
   externalId: 'u1',
 };
+/**
+ * Lo stesso membro, in una stanza che il `policy.json` sigillato **nomina**
+ * (ADR-0073 punto 1). Tenant diverso di proposito: il grant è per stanza, e
+ * un test che riusasse lo stesso tenant non potrebbe dire se la differenza la
+ * fa il grant o il principal.
+ */
+const STANZA_CON_GRANT = 'group:telegram:77';
+const MEMBRO_CON_GRANT: Principal = {
+  kind: 'member',
+  connector: 'telegram',
+  tenantId: STANZA_CON_GRANT,
+  externalId: 'u2',
+};
+
+/**
+ * Ciò che una stanza riceve col grant, alla lettera di ADR-0073 punto 4 del
+ * brief: la scrittura nel proprio vault, la ricerca (che resta soggetta a
+ * ADR-0071/0072 e al tetto di spesa del tenant), e le due primitive del turno
+ * del punto 5. `sys.http` non è nell'elenco perché non è `hostOnly`: era già
+ * aperta, e concederla sarebbe un no-op scritto per sembrare una decisione.
+ */
+const CONCESSE = ['vault.write', 'sys.search', 'turn.todo', 'turn.wait'] as const;
+
+const CON_GRANT: PolicyMatrix = {
+  ...POLICY_FLOOR,
+  grants: new Map([[STANZA_CON_GRANT, new Set<string>(CONCESSE)]]),
+};
+
 const TIERS: readonly TrustTier[] = [0, 1, 2, 3];
+
+/** I tre principal dell'enumerazione, nell'ordine in cui il file li argomenta. */
+const PRINCIPALI: readonly Principal[] = [OWNER, MEMBER, MEMBRO_CON_GRANT];
 
 /**
  * Ogni `CapabilityDecl` che un turno può davvero invocare, raccolta dai file
@@ -106,6 +139,7 @@ const ALL: readonly CapabilityDecl[] = [
   inspectCapability,
   todoCapability,
   waitCapability,
+  vaultWriteCapability,
   mcpCapabilityFor('esempio'),
   ...DOORS,
 ];
@@ -136,10 +170,18 @@ function resourceFor(decl: CapabilityDecl): DecisionRequest['resource'] {
  * un altro cancello: il gate di egress (ADR-0071/0072) e' fuori da questa
  * fetta e ha i suoi test in `decide.test.ts`.
  */
-function decisione(decl: CapabilityDecl, taint: TrustTier, principal: Principal): Decision {
+function decisione(
+  decl: CapabilityDecl,
+  taint: TrustTier,
+  principal: Principal,
+  // Il pavimento, che non concede niente a nessuna stanza, resta il default:
+  // ogni affermazione di ADR-0074/0075 qui sotto vale nel mondo in cui i grant
+  // non esistono, ed è così che deve restare.
+  matrix: PolicyMatrix = POLICY_FLOOR,
+): Decision {
   const decide = createDecide({
     capabilities: new Map([[decl.id, decl]]),
-    matrix: POLICY_FLOOR,
+    matrix,
     budgetExhausted: () => false,
     hardened: true,
     egressAllowed: () => true,
@@ -184,14 +226,29 @@ describe('si chiede solo per l irreversibile — ADR-0074, ogni capability spedi
       const deveChiedere = decl.reversible === 'no' && CHIEDE.has(decl.effect);
 
       for (const taint of TIERS) {
-        for (const principal of [OWNER, MEMBER]) {
-          const d = decisione(decl, taint, principal);
-          const dove = `${decl.id}@taint${taint}/${principal.kind}`;
+        /**
+         * Tre principal, non due, da ADR-0073: l'owner, un membro in una
+         * stanza qualunque, e un membro in una stanza che il sigillo
+         * **nomina**. La terza colonna è quella che non esisteva, e senza di
+         * essa ogni affermazione qui sotto sarebbe vera per vacuità per un
+         * membro — `hostOnly` lo fermava prima che la regola
+         * dell'irreversibilità avesse qualcosa da dire.
+         */
+        for (const principal of PRINCIPALI) {
+          const conGrant = principal === MEMBRO_CON_GRANT;
+          const d = decisione(decl, taint, principal, conGrant ? CON_GRANT : POLICY_FLOOR);
+          const dove = `${decl.id}@taint${taint}/${principal.kind}${conGrant ? '+grant' : ''}`;
 
-          // Un membro non raggiunge una capability `hostOnly`, e non e' questo
-          // il piano che si sta misurando: quel rifiuto e' il confine dei
-          // tenant, provato da `decide.test.ts`.
-          if (principal.kind === 'member' && decl.hostOnly) {
+          // Un membro non raggiunge una capability `hostOnly` — **a meno che
+          // la sua stanza non l'abbia ricevuta per nome**. Il rifiuto è il
+          // confine dei tenant (provato da `decide.test.ts`); il grant è la
+          // sola cosa che lo sposta, e lo sposta per una capability alla
+          // volta.
+          const fermatoDalConfine =
+            principal.kind === 'member' &&
+            decl.hostOnly &&
+            !(conGrant && (CONCESSE as readonly string[]).includes(decl.id));
+          if (fermatoDalConfine) {
             expect(`${dove}:${d.effect}`).toBe(`${dove}:deny`);
             continue;
           }
@@ -410,6 +467,127 @@ describe('si chiede solo per l irreversibile — ADR-0074, ogni capability spedi
       const owner = decisione(inviaFuori, taint, OWNER);
       expect(`outward.send@${taint}/owner: ${owner.effect}`).toBe(`outward.send@${taint}/owner: ask`);
       expect(owner.effect === 'ask' && owner.ask.prompt).toContain(`taint ${taint}`);
+    }
+  });
+
+  /**
+   * **ADR-0073 punti 1 e 2, con le due mutazioni scritte per nome.**
+   *
+   * Prima metà — *il kernel legge il grant*. La stessa capability, lo stesso
+   * taint, due stanze: quella che il sigillo nomina scrive, quella che non lo
+   * nomina è respinta al confine dei tenant. Mutazione: togliere
+   * `&& !grantedTo(ctx.matrix, tenant, capability)` da `decide.ts`. Allora la
+   * prima riga qui sotto diventa `deny` con `principal_forbidden`, e il
+   * messaggio dell'expect nomina la capability.
+   *
+   * Seconda metà — *un membro salva, nessun ask*. Il verdetto è `draft` a
+   * **ogni** taint, 3 compreso: una scrittura che resta nel vault del proprio
+   * tenant ha un giornale e un `muffin undo` dietro, e in un gruppo una
+   * domanda non raggiunge nessuno che possa rispondere. Mutazione: portare la
+   * riga `vault` al livello delle righe di rete
+   * (`{ asksForIrreversible: true, denyAbove: 1 }`). Allora a taint 2 — il
+   * taint di un membro per costruzione — la risposta diventa `deny`
+   * `taint_exceeded`, e a taint 0 diventa `ask`: entrambe cadono qui.
+   */
+  it('un membro di una stanza con grant salva nel vault, a ogni taint e senza mai un ask', () => {
+    for (const taint of TIERS) {
+      const dentro = decisione(vaultWriteCapability, taint, MEMBRO_CON_GRANT, CON_GRANT);
+      expect(`vault.write@${taint}/stanza-con-grant: ${dentro.effect}`).toBe(
+        `vault.write@${taint}/stanza-con-grant: draft`,
+      );
+
+      // La stessa chiamata nella stanza che il sigillo non nomina: il confine
+      // dei tenant, intatto. Senza questa metà la riga sopra sarebbe verde
+      // anche se `hostOnly` avesse smesso di significare qualcosa.
+      const fuori = decisione(vaultWriteCapability, taint, MEMBER, CON_GRANT);
+      expect(`vault.write@${taint}/stanza-senza-grant: ${fuori.effect}`).toBe(
+        `vault.write@${taint}/stanza-senza-grant: deny`,
+      );
+      expect(fuori.effect === 'deny' && fuori.code).toBe('principal_forbidden');
+    }
+
+    // E la riga, per nome: è il numero che la seconda mutazione muove, ed è
+    // scritto qui perché `decisione` lo legge da `ROW_FLOOR` e seguirebbe una
+    // riga abbassata restando verde su un'asserzione parametrica.
+    expect(ROW_FLOOR.vault).toEqual({ asksForIrreversible: false, denyAbove: 3 });
+  });
+
+  /**
+   * **ADR-0073 punto 3: il grant apre la porta, non il cancello di ADR-0071.**
+   *
+   * `sys.search` concesso a una stanza resta una capability i cui byte
+   * *escono* dal tenant, quindi `gateParams` continua a rispondere come
+   * prima: una query che il modello ha **composto** — non citata da un
+   * ingresso del turno — è negata per un principal che non è l'owner, perché
+   * in un gruppo non c'è nessuno a cui chiedere. È la frase «nessun
+   * `sys.search:composed` per stanza» come asserzione: la prima stesura
+   * dell'ADR lo concedeva per nome e riapriva la trifecta che 0071 aveva
+   * chiuso.
+   *
+   * Le due metà insieme, perché «negato» da solo sarebbe verde anche se il
+   * grant non fosse mai arrivato: la stessa chiamata **citata** passa.
+   */
+  it('una stanza con grant su sys.search non guadagna la query composta (ADR-0071 intatto)', () => {
+    const decide = createDecide({
+      capabilities: new Map([[searchCapability.id, searchCapability]]),
+      matrix: CON_GRANT,
+      budgetExhausted: () => false,
+      hardened: true,
+      egressAllowed: () => true,
+    });
+    const chiedi = (quoted: boolean): Decision =>
+      decide({
+        principal: MEMBRO_CON_GRANT,
+        tenant: STANZA_CON_GRANT,
+        capability: searchCapability.id,
+        resource: { kind: 'query', value: 'quanto costa il pane' },
+        args: {},
+        taint: 2,
+        quoted,
+      });
+
+    const composta = chiedi(false);
+    expect(`composta: ${composta.effect}`).toBe('composta: deny');
+    expect(composta.effect === 'deny' && composta.code).toBe('resource_denied');
+
+    // E il grant serve a qualcosa: senza, la stessa richiesta non arriverebbe
+    // nemmeno al cancello — si fermerebbe a `principal_forbidden`.
+    const senzaGrant = createDecide({
+      capabilities: new Map([[searchCapability.id, searchCapability]]),
+      matrix: POLICY_FLOOR,
+      budgetExhausted: () => false,
+      hardened: true,
+      egressAllowed: () => true,
+    })({
+      principal: MEMBRO_CON_GRANT,
+      tenant: STANZA_CON_GRANT,
+      capability: searchCapability.id,
+      resource: { kind: 'query', value: 'quanto costa il pane' },
+      args: {},
+      taint: 2,
+      quoted: false,
+    });
+    expect(senzaGrant.effect === 'deny' && senzaGrant.code).toBe('principal_forbidden');
+  });
+
+  /**
+   * **La stanza con grant non riceve la macchina.** L'altra metà del punto 1:
+   * un grant *aggiunge per nome*, quindi tutto ciò che il sigillo non ha
+   * nominato resta esattamente dov'era — e `sys.shell` non è nemmeno
+   * nominabile (`MAI_CONCEDIBILI`), quindi non c'è nessun `policy.json` che
+   * possa far comparire questa riga verde.
+   *
+   * È l'affermazione (c) dello scenario di accettazione F7, alla misura del
+   * kernel: nella stanza che salva, `shell_run` resta `deny`.
+   */
+  it('nella stanza con grant, la shell e le scritture su disco restano negate', () => {
+    for (const decl of [shellCapability, shellWriteCapability, ...fsCapabilities]) {
+      for (const taint of TIERS) {
+        const d = decisione(decl, taint, MEMBRO_CON_GRANT, CON_GRANT);
+        expect(`${decl.id}@${taint}/stanza-con-grant: ${d.effect}`).toBe(
+          `${decl.id}@${taint}/stanza-con-grant: deny`,
+        );
+      }
     }
   });
 

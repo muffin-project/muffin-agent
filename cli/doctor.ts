@@ -344,6 +344,26 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
     );
   }
 
+  /**
+   * **Quali stanze ricevono qualcosa in più, per nome — ADR-0073 punto 1.**
+   *
+   * Un grant è l'unica cosa che questo file *allarga*, quindi è l'unica che
+   * l'owner deve poter rileggere senza aprire il JSON: «cosa può fare Muffin
+   * in quel gruppo» è la domanda, e finché la risposta viveva solo dentro il
+   * sigillo era una manopola che nessuno poteva verificare di aver girato.
+   * Stessa ragione della riga sopra sulla provenienza della matrice: un fatto
+   * invisibile che decide il comportamento.
+   *
+   * Silenzioso quando non c'è nessun grant: un `doctor` che stampa «nessuna
+   * stanza» su ogni installazione insegna a saltare la riga.
+   */
+  if (matrix.grants.size > 0) {
+    const stanze = [...matrix.grants.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([tenant, grants]) => `${tenant} → ${[...grants].sort().join(', ')}`);
+    ok('stanze con grant', stanze.join(' · '));
+  }
+
   // The RoT-readers invariant, run where an owner will see it. An invariant
   // nothing executes is the defect examining itself — and this one exists
   // precisely because a sealed file went unread for months without a single

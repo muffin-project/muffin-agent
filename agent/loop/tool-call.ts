@@ -309,7 +309,7 @@ export async function runTool(
         // una copia inutilizzata: rumore, non falsità.
         // Una sola risoluzione, e il suo risultato viaggia con la chiamata:
         // l'handler la riusa invece di rifarla (vedi `ToolContext.effectPath`).
-        risolto = tool.resolveEffectPath(args);
+        risolto = tool.resolveEffectPath(args, ctx);
         deps.undo.take(ctx.turnId, { callId: call.id, capability, path: risolto });
       } catch (error) {
         span.end({ status: 'error', error: 'draft_snapshot_failed' });
