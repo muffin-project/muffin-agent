@@ -277,7 +277,7 @@ When the product needs explicit `remember` / agent-intentional memory, implement
 
 This can be promoted into DAY-1 if reconciliation of the DAY-1 requirements shows that inability to intentionally remember a fact would force a fallback during the dogfood window.
 
-**2026-09-07:** measured on the owner's installation (`docs/evidence/critica-moduli-vs-peer-2026-09-07.md`): 528 episodes → 145 facts, of which 73 are recorded requests (`asked_to`/`asks_to`) rather than beliefs; 4 entities, 0 identities; `profiles`, `digests`, `identities` have no writer; no retrieval-quality metric exists. The audit's §11 and this measurement agree: close the write → reconcile → use → correct → forget loop before adding ontology. The first executable step is a retrieval gold set with recall@8 on the rendered block, so that a number exists that can get worse. The trigger for promotion is unchanged; the evidence that the loop is open is now on record.
+**Evidence (2026-09-07):** the proposal path of ADR-0051 is not implemented, and the memory loop (write → reconcile → use → correct → forget) is open at several points; measurement and peer comparison in `docs/evidence/critica-moduli-vs-peer-2026-09-07.md`. Conclusion for placement: close that loop before adding ontology, starting from a retrieval-quality measure that can get worse. The promotion trigger above is unchanged.
 
 ### Home migration / Capsule v0
 
@@ -309,11 +309,11 @@ The point is not token optimization by itself. It is to let capability breadth g
 
 Do not build this merely because external agent SDKs support tool search/deferred loading. The trigger is Muffin-specific evidence.
 
-**2026-09-07, reconciliation of the ecosystem audit (#463):** the trigger above has fired three times on the owner's installation — the exposure cap was raised 14→15 (04/09), 15→16 (06/09) and 16→18 (06/09, `doctor` naming `todo` and `sys_inspect` as cut). This is the measured catalogue pressure this entry asked for. It becomes a candidate claim, not an implementation: the D13 re-measurement with the read-only shell comes first, and the shape (small always-visible set + discovery) must be chosen against the character eval, not against the audit's §6.
+**Trigger observed (2026-09-07).** The static exposure cap has been raised three times on the owner's installation to stop cutting base tools (evidence: `docs/evidence/personal-agent-ecosystem-audit-2026-09-07.md` §6 and the `consumer-local` profile notes). This is the catalogue pressure the entry asked for, so the item is a candidate claim; it is not an authorization to implement. The D13 re-measurement with the read-only shell comes first, and the shape must be chosen against the character eval.
 
 ### Persistent specialist facets and steerable workers
 
-Default placement: **MVP / trusted alpha, hypothesis only** (ecosystem audit 2026-09-07, `docs/evidence/personal-agent-ecosystem-audit-2026-09-07.md` §8-9). One canonical Muffin identity may carry persistent specialist facets (e.g. a coding facet) that are neither replaceable workers nor separate Muffins; delegated work may need a small control surface (spawn, status, steer, stop, resume) rather than spawn-only delegation. Muffin has no subagents today, by choice (ADR-0045: the unit is the continuous agent). Trigger: an observed dogfood need that a single context cannot serve, or a delegated task the owner could not steer without losing work. Nothing here authorizes a multi-agent society.
+Default placement: **MVP / trusted alpha, hypothesis only** (evidence: `docs/evidence/personal-agent-ecosystem-audit-2026-09-07.md` §8-9). One canonical Muffin identity may carry persistent specialist facets that are neither replaceable workers nor separate Muffins; delegated work may need a small control surface (spawn, status, steer, stop, resume) rather than spawn-only delegation. Muffin has no subagents today, by choice (ADR-0045). Trigger: an observed dogfood need that a single context cannot serve, or a delegated task the owner could not steer without losing work. Nothing here authorizes a multi-agent society.
 
 ### Local / owner-controlled compute experiments
 

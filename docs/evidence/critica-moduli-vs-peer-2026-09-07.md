@@ -1,8 +1,8 @@
 # Critica modulo per modulo, contro i peer — 2026-09-07
 
 **Evidence datata, non autorità.** Domanda dell'owner (07/09, dopo il dogfood):
-*«stiamo facendo una memoria del cazzo? se ci paragoniamo alle memorie più grandi
-in circolazione, stiamo facendo slop? sii critico, ogni modulo»*. Quattro
+la memoria e gli altri moduli, confrontati con i sistemi più maturi in
+circolazione, sono slop? Quattro
 revisori indipendenti (memoria; loop, prompt e tool; superfici; kernel e
 harness) hanno letto il codice installato (`fe8d55e`) e la documentazione
 ufficiale dei peer. **Due parti sono complete** (memoria, superfici); le altre
@@ -12,7 +12,7 @@ dell'owner letto in sola lettura, in forma aggregata.
 
 Come usarla: nessuna riga qui è una decisione. Ciò che cambia una promessa
 corrente è stato instradato nella sua casa autoritativa dalla riconciliazione
-di #463; il resto resta ipotesi per il dogfood.
+del 2026-09-07; il resto resta ipotesi per il dogfood.
 
 ---
 
@@ -239,8 +239,7 @@ usare in silenzio. Righe di lacuna esplicite («su X non ho niente che valga per
 il …; dillo, non rispondere con quello che vale oggi»), successore sulla stessa
 riga della credenza ritirata, `dedotto — non detto` solo quando è l'eccezione.
 
-**Il difetto.** La riga resa è una tripla: `[tu, 2026-09-03] owner — created —
-video script`. Con metà della tabella fatta di `asked_to`/`asks_to`, il blocco
+**Il difetto.** La riga resa è una tripla: `[tu, <data>] owner — <predicato> — <oggetto>`. Con metà della tabella fatta di `asked_to`/`asks_to`, il blocco
 che il modello legge ogni turno è in larga parte un elenco di promemoria di
 richieste già chiuse, in una notazione che ha buttato via la frase originale —
 mentre gli episodi da cui vengono sono lì, interi, indicizzati e a portata di
@@ -386,8 +385,7 @@ DDL sparisce.
 
 Il criterio che governa tutti e tre: **dopo questi tre giorni deve esistere un
 numero che può peggiorare.** Oggi non ce n'è nessuno, ed è per questo che la
-domanda «stiamo facendo una memoria del cazzo?» non si può rispondere dall'interno
-del repository.
+domanda «la memoria è slop?» non si può rispondere dall'interno del repository.
 
 
 ---
