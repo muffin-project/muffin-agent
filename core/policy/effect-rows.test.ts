@@ -17,6 +17,7 @@ import { documentCapability } from '../../agent/tools/document.js';
 import { inspectCapability } from '../../agent/tools/inspect.js';
 import { todoCapability } from '../../agent/tools/todo.js';
 import { waitCapability } from '../../agent/tools/wait.js';
+import { vaultWriteCapability } from '../../agent/tools/vault-save.js';
 import { mcpCapabilityFor } from '../../agent/tools/mcp.js';
 import { DOORS } from './doors.js';
 
@@ -66,6 +67,7 @@ const ALL: readonly CapabilityDecl[] = [
   inspectCapability,
   todoCapability,
   waitCapability,
+  vaultWriteCapability,
   mcpCapabilityFor('esempio'),
   // The two doors: declared without a tool, asserted against their rows like
   // everything else (ADR-0055).
@@ -134,6 +136,17 @@ const MATRICE = {
   egress: { asksForIrreversible: false, denyAbove: 3 },
   /** "Scrittura memoria (episodi/fatti)": ALLOW · ALLOW nel tenant · ALLOW. */
   memory: { asksForIrreversible: false, denyAbove: 3 },
+  /**
+   * ADR-0073 punto 2 — «scrivere nel vault del proprio tenant». Riga nuova, e
+   * non una trascrizione: la matrice stampata non la conosce, perché fino al
+   * 06/09 nessuna scrittura durevole era deliberata. Il soffitto è alto e la
+   * domanda è spenta **per dichiarazione**: byte che restano dentro il
+   * confine di chi li scrive, con giornale e `muffin undo` dietro, non
+   * attraversano mai un `ask`. La mutazione da far cadere è portarla al
+   * livello delle righe di rete (`denyAbove: 1`), che negherebbe un membro a
+   * tier 2 — provata per nome in `solo-irreversibile.test.ts`.
+   */
+  vault: { asksForIrreversible: false, denyAbove: 3 },
   /** Third-party code outside the allowlist model (MCP). Not a printed row: keeps today's number. */
   external: { asksForIrreversible: true, denyAbove: 1 },
   /** "Outward (mail, messaggi a terzi, pubblicazione)": DRAFT · DENY · DENY. */
@@ -281,6 +294,7 @@ describe('la matrice normativa è eseguibile', () => {
         'shell.ts:shellWriteCapability',
         'skill.ts:skillCapability',
         'todo.ts:todoCapability',
+        'vault-save.ts:vaultWriteCapability',
         'wait.ts:waitCapability',
       ].sort(),
     );

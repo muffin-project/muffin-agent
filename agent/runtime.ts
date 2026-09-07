@@ -59,6 +59,7 @@ import { TurnStore, describeInterrupted } from '../core/turns/store.js';
 import { TodoStore } from '../core/turns/todo.js';
 import { makeWaitTool, waitCapability } from './tools/wait.js';
 import { makeTodoTool, todoCapability } from './tools/todo.js';
+import { makeVaultSaveTool, vaultWriteCapability } from './tools/vault-save.js';
 import { makeEmbedder } from '../core/memory/embed.js';
 import { LlmReranker } from '../core/memory/rerank.js';
 import { MemoryStore } from '../core/memory/store.js';
@@ -311,6 +312,12 @@ export function baseToolOrder(input: {
     'memory_search',
     'memory_why',
     'document_read',
+    // Accanto a `document_read`, e non in coda: sono le due metà della stessa
+    // cosa — si salva per rileggere. In una stanza con grant (ADR-0073) queste
+    // due sono quasi tutto il menu, quindi farle cadere per prime da un tetto
+    // di profilo vorrebbe dire tagliare proprio la capacità che il sigillo ha
+    // appena concesso.
+    'vault_save',
     // Adjacent, and the read-only one first: the model reads this list in
     // order, and ADR-0074 punto 4 makes `shell_run` the default choice while
     // `shell_run_write` is the one that interrupts the owner. If a profile's
@@ -689,6 +696,12 @@ export function buildRuntime(
     // and the model is handed an index, so it needs a door back to the text.
     // An index with no door is a summary with extra steps.
     makeDocumentTool(vault, memoryStore),
+    // L'altra metà: «salva questo». ADR-0073 punto 2 — la prima scrittura
+    // deliberata che questo sistema abbia mai avuto, per l'owner come per una
+    // stanza che il sigillo nomina. `hostOnly: true` sulla dichiarazione, quindi
+    // registrarla qui non concede niente a nessun gruppo: è `tenants` in
+    // `rot/policy.json` a decidere chi la raggiunge.
+    makeVaultSaveTool({ root: p.vault, vault, vectors }),
   ];
 
   // The hands of M3. The shell tool is registered only when the probe proved a
@@ -818,6 +831,7 @@ export function buildRuntime(
       // built-ins get the same treatment.
       waitCapability,
       todoCapability,
+      vaultWriteCapability,
       // Declared only when the tool exists. A capability the kernel knows about
       // but nothing can invoke is the harmless direction; the dangerous one is a
       // tool the kernel has never heard of, and registering them together is
@@ -941,6 +955,10 @@ export function buildRuntime(
       },
       tools,
       capabilities,
+      // ADR-0073: `sys_inspect` risponde «cosa raggiungo in questa stanza», e
+      // in una stanza con grant la risposta non è più «tutto ciò che non è
+      // host-only».
+      grants: matrix.grants,
       promptBlocks,
       capabilityGaps,
       /**
@@ -1098,6 +1116,11 @@ export function buildRuntime(
       // The declarations, so the loop derives the policy resource from
       // resourceKind/policyArgs instead of guessing at argument names.
       capabilities,
+      // E i grant per stanza della stessa matrice sigillata che `decide` legge,
+      // dallo stesso oggetto: il menu del modello e il kernel non possono
+      // essere in disaccordo su cosa una stanza raggiunge, perché leggono la
+      // stessa `PolicyMatrix` (ADR-0073 punto 1).
+      grants: matrix.grants,
       // Il registro di undo: senza questa riga `fs_write` è offerto al modello e
       // non scrive mai, perché il kernel giudica `draft` e `draft` senza copia
       // rifiuta (DAY-1 requirement D2/D3/D11). Il difetto era esattamente qui — un verdetto
