@@ -107,16 +107,35 @@ describe('acceptance · D1 · una sola corsia del modello', () => {
 
           // And the deferred one is not starved — it runs at the next beat.
           await until(() => inst.provider.main().length - before >= 2, 40_000);
-          expect(inst.provider.main().length - before).toBe(2);
 
-          // Never more than once each: two calls total, not two-plus-retries.
+          /**
+           * Il turno arriva in fondo, e la sua riga lo dice.
+           *
+           * Atteso invece che asserito subito, ed è una riparazione: la
+           * chiamata al modello e la scrittura di `status = 'done'` sono due
+           * momenti diversi — il loop chiama, riceve, chiude, e solo allora
+           * `finish` tocca la riga. Asserire lo stato durevole nell'istante in
+           * cui si osserva l'evento *a monte* è una gara fra due osservazioni,
+           * e su un host carico la si perde: misurato il 07/09/2026 nel gate
+           * (`ci:local` in container, suite in 747 s), dove questa riga ha
+           * letto `running` mentre la seconda chiamata era appena partita.
+           *
+           * Ciò che la fetta afferma non cambia di una virgola: il conteggio
+           * viene riasserito **dopo** l'attesa, quindi una terza chiamata
+           * arrivata nel frattempo resta un rosso.
+           */
           const db2 = new DatabaseCtor(dbPath, { readonly: true });
           try {
-            const turnRow = db2.prepare(`SELECT status FROM turns WHERE id = ?`).get(turnId) as { status: string };
-            expect(turnRow.status).toBe('done');
+            const statoDelTurno = (): string =>
+              (db2.prepare(`SELECT status FROM turns WHERE id = ?`).get(turnId) as { status: string }).status;
+            await until(() => statoDelTurno() === 'done', 20_000);
+            expect(statoDelTurno()).toBe('done');
           } finally {
             db2.close();
           }
+
+          // Never more than once each: two calls total, not two-plus-retries.
+          expect(inst.provider.main().length - before).toBe(2);
         } finally {
           await gw.stop();
         }
