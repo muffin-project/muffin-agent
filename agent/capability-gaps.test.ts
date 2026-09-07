@@ -5,6 +5,9 @@ import { describe, expect, it } from 'vitest';
 import { runInit } from '../cli/init.js';
 import { paths, writeSecret } from '../core/config/config.js';
 import { seal } from '../core/rot/verify.js';
+import { visibleTools } from './context/assemble.js';
+import { loadPolicyMatrix } from '../core/policy/matrix.js';
+import type { Principal } from '../core/policy/types.js';
 import { toolContext } from './fixtures/tool-context.js';
 import { buildRuntime } from './runtime.js';
 import { makeSendFileTool, sendFileCapability } from './tools/deliver.js';
@@ -201,5 +204,157 @@ describe('una capacità spenta lo dice, non solo al log', () => {
     } finally {
       runtime.close();
     }
+  });
+});
+
+/**
+ * **Cosa raggiunge davvero un membro di una stanza — con e senza grant
+ * (ADR-0073).**
+ *
+ * Questo file è ciò che l'ADR cita per la frase *«oggi un membro raggiunge
+ * `documents.read`, `sys.http` (lettura), `memory.*`, `surface.reply`; tutto
+ * il resto è `hostOnly`»*. Quella frase era vera e non era scritta qui: la
+ * misura viveva in una sessione, non in un'asserzione, e una misura che
+ * nessuno riesegue è una frase che invecchia in silenzio. Adesso è
+ * un'enumerazione, e ha due colonne perché da ADR-0073 la risposta dipende da
+ * **quale** stanza.
+ *
+ * Passa dal `buildRuntime` vero e dalla `rot/policy.json` **sigillata**, non
+ * da una `PolicyMatrix` costruita a mano: il grant è una manopola che vive nel
+ * sigillo, e provarla su un oggetto in memoria proverebbe la funzione senza
+ * provare che l'owner possa girarla.
+ */
+describe('cosa raggiunge un membro, con e senza grant (ADR-0073)', () => {
+  const STANZA_CON_GRANT = 'group:telegram:-100950';
+  const STANZA_SENZA = 'group:telegram:-100777';
+  const CONCESSE = ['vault.write', 'turn.todo', 'turn.wait'];
+
+  function homeConGrant(): { home: string; workspace: string } {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-grant-'));
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-grant-ws-'));
+    runInit({ home, apiKey: 'sk-never-called' });
+    const policy = join(paths(home).rot, 'policy.json');
+    writeFileSync(
+      policy,
+      JSON.stringify({ schemaVersion: 1, tenants: { [STANZA_CON_GRANT]: { grants: CONCESSE } } }, null, 2),
+    );
+    // La stessa cosa che fa `muffin rot reseal`: senza, il file diverge dal
+    // manifest e la home entra in safe mode invece di leggere il grant.
+    seal(home, '1', new Date());
+    return { home, workspace };
+  }
+
+  const membro = (tenantId: string): Principal => ({
+    kind: 'member',
+    connector: 'telegram',
+    tenantId,
+    externalId: 'u1',
+  });
+
+  /** Il menu che il modello vede per quel principal, per nome di tool. */
+  function menu(runtime: ReturnType<typeof buildRuntime>, tenantId: string): string[] {
+    return visibleTools(
+      runtime.deps.tools,
+      membro(tenantId),
+      runtime.deps.capabilities,
+      runtime.deps.grants?.get(tenantId),
+    )
+      .map((t) => t.spec.name)
+      .sort();
+  }
+
+  /** Cosa il kernel vero concede a quel principal, per id di capability. */
+  function raggiunte(runtime: ReturnType<typeof buildRuntime>, tenantId: string): string[] {
+    const out: string[] = [];
+    for (const [id, decl] of runtime.deps.capabilities) {
+      const d = runtime.deps.decide({
+        principal: membro(tenantId),
+        tenant: tenantId,
+        capability: id,
+        resource:
+          decl.resourceKind === 'path'
+            ? { kind: 'path', value: '/tmp/x' }
+            : decl.resourceKind === 'url-read'
+              ? { kind: 'url-read', value: 'https://esempio.test/p' }
+              : decl.resourceKind === 'url'
+                ? { kind: 'url', value: 'https://esempio.test/p' }
+                : decl.resourceKind === 'query'
+                  ? { kind: 'query', value: 'q' }
+                  : decl.resourceKind === 'tenant'
+                    ? { kind: 'tenant', value: tenantId }
+                    : { kind: 'none' },
+        args: {},
+        // 2 e non 0: è il taint di un membro per costruzione (`tierOf`), cioè
+        // il numero con cui questa domanda si pone davvero.
+        taint: 2,
+      });
+      if (d.effect !== 'deny') out.push(id);
+    }
+    return out.sort();
+  }
+
+  it('senza grant: la stessa lista di sempre, e niente di più', () => {
+    const { home, workspace } = homeConGrant();
+    const runtime = buildRuntime(home, workspace);
+    try {
+      // La frase dell'ADR, eseguita. `surface.reply` e `memory.write` sono le
+      // due porte del loop (`DOORS`), che non compaiono in `capabilities`.
+      expect(raggiunte(runtime, STANZA_SENZA)).toEqual(['documents.read', 'memory.read', 'sys.http']);
+      expect(menu(runtime, STANZA_SENZA)).toEqual(['document_read', 'http_get', 'memory_search', 'memory_why']);
+      // In particolare, ciò che una stanza non riceverà mai.
+      expect(raggiunte(runtime, STANZA_SENZA)).not.toContain('sys.shell');
+      expect(raggiunte(runtime, STANZA_SENZA)).not.toContain('fs.write');
+      expect(raggiunte(runtime, STANZA_SENZA)).not.toContain('vault.write');
+    } finally {
+      runtime.close();
+    }
+  });
+
+  it('con grant: le tre concesse in più, per nome, e nient’altro', () => {
+    const { home, workspace } = homeConGrant();
+    const runtime = buildRuntime(home, workspace);
+    try {
+      expect(runtime.deps.grants?.get(STANZA_CON_GRANT)).toBeDefined();
+      const con = raggiunte(runtime, STANZA_CON_GRANT);
+      const senza = raggiunte(runtime, STANZA_SENZA);
+      // La differenza è **esattamente** ciò che il sigillo ha nominato: un
+      // grant aggiunge per nome, e questa sottrazione è ciò che va rosso se
+      // un giorno concedesse per famiglia.
+      expect(con.filter((id) => !senza.includes(id))).toEqual([...CONCESSE].sort());
+      expect(senza.filter((id) => !con.includes(id))).toEqual([]);
+
+      // E il menu segue il kernel: una capability concessa che il modello non
+      // vede è un grant che non si usa mai (`visibleTools`, quarto argomento).
+      expect(menu(runtime, STANZA_CON_GRANT)).toContain('vault_save');
+      expect(menu(runtime, STANZA_CON_GRANT)).toContain('todo');
+      expect(menu(runtime, STANZA_CON_GRANT)).toContain('wait');
+      expect(menu(runtime, STANZA_SENZA)).not.toContain('vault_save');
+
+      // La shell resta fuori nella stanza che salva: è l'affermazione (c) di F7.
+      expect(con).not.toContain('sys.shell');
+      expect(menu(runtime, STANZA_CON_GRANT)).not.toContain('shell_run');
+    } finally {
+      runtime.close();
+    }
+  });
+
+  it('un grant che nomina la shell fa cadere il file intero, e doctor lo dice', () => {
+    // Il verso rumoroso del rifiuto: non «quel grant è ignorato», ma «questo
+    // file non si usa», con il nome del campo. Altrimenti l'owner resta a
+    // credere di aver concesso qualcosa a metà.
+    const home = mkdtempSync(join(tmpdir(), 'muffin-grant-no-'));
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-grant-no-ws-'));
+    runInit({ home, apiKey: 'sk-never-called' });
+    writeFileSync(
+      join(paths(home).rot, 'policy.json'),
+      JSON.stringify({ schemaVersion: 1, tenants: { [STANZA_CON_GRANT]: { grants: ['sys.shell'] } } }),
+    );
+    seal(home, '1', new Date());
+
+    const matrix = loadPolicyMatrix(home);
+    expect(matrix.source).toBe('fallback');
+    expect(matrix.note).toContain('tenants.group:telegram:-100950.grants.0');
+    expect(matrix.note).toContain('sys.shell');
+    expect(matrix.grants.size).toBe(0);
   });
 });
