@@ -129,7 +129,13 @@ describe('quali tool vede davvero un turno', () => {
     // registrato in piu'. Il +1 tiene costante quanti ne cadono
     // sull'installazione dell'owner; non chiude il taglio che c'era gia'
     // prima, e non pretende di averlo chiuso.
-    expect(profile.maxToolsExposed).toBe(19);
+    //
+    // 20 dall'08/09: `muffin doctor` sull'installazione dell'owner, subito
+    // dopo l'update a dev (2b6de29), contava 20 registrati e `sys_inspect`
+    // tagliato — il conteggio del 07/09 era di uno inferiore a quello vero
+    // (18 con zero tagliati la sera del 06/09, quindi 20 dopo D15). Di nuovo
+    // il numero dei registrati contato sull'installazione vera, non stimato.
+    expect(profile.maxToolsExposed).toBe(20);
 
     const rt = realRuntime();
     rt.close();
