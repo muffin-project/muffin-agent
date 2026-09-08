@@ -76,7 +76,10 @@ These are the strongest post-DAY-1 candidates. They are not automatically requir
 
 Default placement: **MVP / trusted alpha**.
 
-Promote to DAY-1 only if the chosen dogfood deployment requires a remote Home (for example a VPS) **and** normal daily use requires Mac-local capability during those fourteen days.
+**Owner decision, 2026-09-08:** VPS-only is sufficient for DAY-1. Mac-local
+filesystem/apps and Home-to-Mac execution are OUT of that gate. Dogfood may
+promote this later only after a measured placement failure and a new owner
+decision; the VPS choice alone is no longer a promotion trigger.
 
 Minimum useful Node, not a general distributed platform:
 
@@ -187,38 +190,13 @@ content arrives marked as external" a true sentence — and stops there. Whether
 the model then obeys the mark is what the corpus measures, and on these three
 scenes it does not. A defence resting on obedience is not this item.
 
-### Five items from the owner's conversation, 2026-09-03
+### Four deferred items from the owner's conversation, 2026-09-03
 
-Recorded in `docs/evidence/il-lavoro-che-viene-2026-09-03.md`. All five queue
-behind what is already in flight — the sandbox write scope above, the
-derived architecture map's rebase conflicts, and the character eval
-(`requirements-status.md` A2/A3, `evals/character/`, never yet on a path in
-`docs/work/day1/critical-path.md`) — because none of the five change what
-closes the dogfood in progress. Ordered below by what unblocks what, not by
-which feels most wanted; no effort estimate is claimed for any of them.
-
-#### A maintenance tick, not a heartbeat conversation
-
-First, because in the owner's own words a capability nobody ever re-checks
-does not exist for him — the other four assume a Muffin that is still there
-to use them. Measured today on the owner's live database: `todos` holds seven
-rows still `pending` from 2026-08-27, a plan written and never surfaced
-again. `B4` (READY) reads the plan on every turn of a session; nothing today
-starts a turn on its own to do that reading when no one has written to the
-session.
-
-This is not `COGNITIVE-DESIGN.md` §5's rejected "proactivity as regular
-heartbeat conversation" — elapsed time is still not a reason to interrupt the
-owner. The gap is narrower: whether the runtime's own scheduler tick
-re-checks durable `pending`/`waiting` state (todos, `interrupted` turns, due
-jobs) at all when nothing is due, so it does not rot silently, independent of
-whether anything is ever surfaced to the owner. Adjacent to, not the same as,
-"Background process ownership" and "Proactivity beyond explicit jobs" below —
-those are about owning a long-lived process and about initiating dialogue;
-this is about the runtime's own liveness cadence over its own durable state.
-Record repeats of this pain the same way as any other dogfood signal
-(`docs/work/day1/critical-path.md` "Da qui ordina l'uso" already asks for
-"lavoro promesso e dimenticato").
+Recorded in `docs/evidence/il-lavoro-che-viene-2026-09-03.md`. The maintenance
+tick from that set was promoted into DAY-1 by the owner on 2026-09-08. Its
+status and order now live only in the DAY-1 requirements and critical path;
+keeping a second copy here would recreate the phase error. The four remaining
+items stay deferred.
 
 #### GitHub delivery: plan, implement, test, commit, PR
 

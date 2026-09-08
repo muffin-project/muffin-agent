@@ -251,14 +251,48 @@ capability where authority allows), automatic (backups, migrations, indexing,
 cleanup, safe recovery), explicit constitutional/recovery actions (pairing,
 root-of-trust changes, authority widening, destructive recovery: the friction is
 the boundary) and developer/operator interfaces (evals, traces, database
-inspection, low-level lifecycle). Only the third bucket belongs in the normal
-owner surface; a new command must say which bucket it is in and why it is not
-conversational or automatic. Observability and recovery are never deleted to
-achieve this.
+inspection, low-level lifecycle). Conversation is the normal product surface;
+automatic mechanics should disappear from its vocabulary; constitutional or
+recovery actions appear explicitly only when their boundary is needed; and
+developer/operator interfaces stay outside normal use. A new command must say
+which bucket it is in and why it is not conversational or automatic.
+Observability and recovery are never deleted to achieve this.
+
+No semantic product capability is “CLI-only”. CLI, Telegram, voice and a future
+desktop are surfaces of the same Muffin: they may expose native shortcuts or
+render differently, but a product behaviour that exists only through one
+surface is an architectural smell. With no explicit destination, output goes to
+the owner's configured default surface.
+
+Scheduling follows the same rule. “Domani alle 08:32 ricordami X” and a
+recurring deterministic reminder are DAY-1 owner language, not cron/CLI
+knowledge. A deterministic fire does not call a model. Work that genuinely
+needs judgement re-enters the normal loop; deterministic work uses the cheapest
+typed executor that faithfully represents it.
 
 Central project infrastructure may simplify download, updates, discovery, OAuth
 bootstrap or Telegram provisioning. **It must not be necessary for an already
 installed Muffin to retain identity, memory or work.**
+
+## Product capability view
+
+Use this view to ask what Muffin can do without turning it into a backlog:
+
+```text
+PERCEIVE / REMEMBER / ACT / CONTINUE / DELEGATE / JUDGE /
+BE PRESENT / LEARN-ADAPT
+```
+
+Each concrete capability or journey moves only with evidence:
+
+```text
+MISSING → MECHANISM → WIRED → PROVED → DOGFOODED → RELIABLE
+```
+
+A domain does not inherit the maturity of its best mechanism. “Implemented” is
+not a maturity level: wiring, real-path proof and sustained use are separate
+claims. This view compares product coverage; it neither schedules work nor
+promotes a capability into DAY-1.
 
 ## What we deliberately do not promise yet
 

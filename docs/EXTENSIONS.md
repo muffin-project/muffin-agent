@@ -43,6 +43,20 @@ prima.
 
 ## 2. Il core resta stretto
 
+La regola di breadth è:
+
+```text
+own semantics
+rent capabilities
+
+reuse > adapt > implement
+```
+
+Muffin possiede identità, Work, Effects, Authority e canonical state; per una
+capability commodity preferisce riuso o adattamento a una seconda
+implementazione. Hermes e gli altri peer sono benchmark/reference da
+distillare, non un secondo personal agent e non un'autorità di roadmap.
+
 Il core possiede le primitive che devono comporre qualunque use case:
 
 - identity/principal;
@@ -62,6 +76,12 @@ Rizzo PII o la prossima piattaforma che diventa popolare.
 **Una capability che un owner non installa non deve esistere nella sua
 installazione.** Il core non simula una integrazione assente e non porta il suo
 peso operativo per principio.
+
+Il linguaggio segue la responsabilità. Il Home TypeScript possiede semantica e
+authority; un processo Python o altro runtime può fornire compute/capability
+attraverso un confine locale, stretto e tipizzato, ma non diventa un secondo
+Home o un secondo semantic writer. Il confine concreto si introduce solo quando
+una capability misurata lo giustifica, non come framework preventivo.
 
 ## 3. `Plugin` è una parola UX, non una sola interfaccia runtime
 

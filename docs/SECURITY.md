@@ -493,11 +493,30 @@ A remote LLM provider is itself a **privileged data recipient**. System prompt,
 selected history, recalled memory and tool results included in a model request
 have reached that provider.
 
-The current runtime trusts the configured provider to receive the assembled
-context. Muffin does not yet claim a per-evidence
-`local-only`/`owner-controlled-only`/`cloud-allowed` policy. Any such future
-policy must live at the provider/placement boundary and be explicit about what
-can still be inferred after redaction.
+The target boundary is request-sensitive, not a global model whitelist:
+
+```text
+model catalogue / capability
+        !=
+privacy eligibility of one request
+
+whole assembled request
+        → local privacy/egress boundary
+        → eligible route
+```
+
+“Whole” includes system/context blocks, history, recall, tool results, documents
+and worker output, not only the latest owner message. Known secrets stay behind
+the deterministic local secret-reference boundary and fail closed. A local PII
+transform may pseudonymise identifiers, but PII transformation is not proof that
+arbitrary private semantics are safe to send. Unresolved or uncertain sensitive
+meaning requires a stronger route or explicit policy, such as an eligible ZDR
+endpoint or owner-controlled model.
+
+The current runtime still trusts its configured provider with the assembled
+context and does not implement this request-egress eligibility boundary. The
+minimum mechanism is a separate DAY-1 `DELEGATE` claim; this document fixes the
+security target without pretending the mechanism shipped.
 
 ### Owner-controlled cross-host locality
 
@@ -508,8 +527,7 @@ data to a third-party model provider, and future policy should not flatten those
 two trust relationships into one boolean `remote` flag.
 
 Optional local PII/privacy transforms may reduce exposure to cloud providers but
-are best-effort transformations, not a substitute for structural secret
-handling.
+are not a substitute for structural secret handling or semantic privacy policy.
 
 ## 8. Secrets
 
@@ -788,8 +806,9 @@ must not be remotely mutable merely because the Home owns its own RoT.
 This section names architectural boundaries without assigning DAY-1 status; DAY-1
 status lives only in `docs/work/day1/requirements-status.md`.
 
-- **Configured cloud provider receives model context.** There is no per-item
-  local/cloud privacy policy yet.
+- **Configured cloud provider receives the assembled model context.** There is
+  no whole-request privacy eligibility/route boundary yet; global ZDR routing is
+  not the target architecture.
 - **The Node protocol does not exist in the current runtime.** ADR-0050 defines
   its future authority/security contract; current code does not yet enforce it.
 - **Surface and Node execution placement are still the same `cwd`, found

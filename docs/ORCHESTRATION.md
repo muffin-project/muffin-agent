@@ -80,6 +80,27 @@ A draft PR is useful once scope and the primary decision are stable. Commit
 coherent checkpoints before a long experiment can become the only place the work
 exists.
 
+## Work ownership is explicit
+
+Creating an issue preserves a durable item; it does not assign an executor.
+Every active item uses one execution mode:
+
+- **SELF** — the named creator/executor is doing the work now;
+- **PRESERVE** — context, evidence or a decision is retained, with no authority
+  to implement it;
+- **DELEGATE** — a named executor receives one bounded claim.
+
+If the mode or executor is absent, the item is `PRESERVE`. A handoff must say who
+is acting, which single claim is active, which durable source carries the full
+context, and what must not start automatically afterward.
+
+For a non-mechanical claim that can distort product or architecture, preserve
+the smallest durable pack that still carries: product principle, current
+observation, target shape, concrete good/bad examples, preferred seam,
+non-goals and falsifier. The execution brief may then narrow that pack to one
+claim. Do not create a new pack when an existing authority or issue already owns
+the context.
+
 ## Delegation is a context tool, not the default
 
 The orchestrator works directly when the task is local and clear.

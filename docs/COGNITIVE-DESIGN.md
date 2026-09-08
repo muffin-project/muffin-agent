@@ -15,6 +15,25 @@ mechanism will survive dogfood.
 The governing design principle remains `DESIGN-PRINCIPLES.md` P1:
 **neuroscience is a lens, not a blueprint**.
 
+Every cognitive candidate must cross the same promotion pipeline:
+
+```text
+concept
+→ problem
+→ hypothesis
+→ simpler baseline
+→ observable prediction
+→ metric
+→ kill criterion
+→ experiment
+→ promotion
+```
+
+Skipping a stage is not acceleration. Predictive learning, circadian/sleep
+ideas, counterfactual reasoning and similar concepts remain hypotheses until
+this pipeline produces evidence. A name such as “sleep” never justifies a
+`SleepEngine`; start from the measured problem and let a simpler baseline win.
+
 ---
 
 ## 1. Human-first means complement, not imitate

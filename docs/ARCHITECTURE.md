@@ -119,6 +119,20 @@ therefore related but not identical.
 Work does not own the truth of what happened in the outside world; that belongs
 to effects/evidence.
 
+The target control loop for autonomous continuation is:
+
+```text
+WAKE → OBSERVE → CHOOSE → WORK → VERIFY → CONTINUE
+```
+
+The first claim is deliberately narrower than a general proactive agent: a
+maintenance/liveness wake inspects durable open Work; actionable Work may
+advance through the existing turn, Authority and Effects path without a new
+owner message; no actionable Work means no model call and no owner message.
+This boundary does not create a `GoalEngine`, `HeartbeatManager` or second agent
+runtime. The current runtime has durable Work and event/schedule-driven resume,
+but it does not yet prove this no-input actionable-Work loop end to end.
+
 ### Effects
 
 Effects own the transition between "we intend to do this" and "the world may or
@@ -291,6 +305,10 @@ A surface owns transport-specific concerns such as:
 A surface must not fork memory, identity, work or policy. Surface-specific
 session boundaries may exist for interaction ergonomics, but they are not a
 second personal agent.
+
+Nor may a surface own an otherwise unavailable semantic capability. CLI,
+Telegram, voice and desktop adapt the same capability; when a request does not
+override delivery, the configured default surface receives its output.
 
 ## 7. Node authority can only narrow Home authority
 

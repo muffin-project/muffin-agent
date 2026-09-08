@@ -14,6 +14,13 @@ context is a resource, and history is not startup context.
   Verify load-bearing current-state claims against code, config or runtime.
 - Literal mechanics belong to code, schemas and shipped config, never to prose.
 
+## Ownership before delegation
+
+`Issue != delegation`. Mark work `SELF`, `PRESERVE` or `DELEGATE`; default
+`PRESERVE`. `SELF` names the actor; `DELEGATE` names actor and claim;
+`PRESERVE` authorises no implementation. Preserve context before
+narrowing. Details: `docs/ORCHESTRATION.md`.
+
 ## Challenge the design before writing it
 
 For a non-mechanical change to runtime, harness, security and authority, memory,

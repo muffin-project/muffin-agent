@@ -1,69 +1,80 @@
-# Handoff operativo
+# Owner Map
 
-**Regola di stop.** Il prossimo lavoro nasce da un failure osservato usando
-Muffin, da una requirement owner, da una migrazione costosa o da un rischio su
-authority/data/effect — non da questa lista e non da una feature list di peer.
+> Disposable orientation, observed on `origin/dev` `0c55b9b` (2026-09-08).
+> Git/PR state wins. This page links authority; it does not replace it.
 
-**Goal owner:** DAY-1 = *«io installo Muffin sulla VPS»*. Il cutover reale
-dell'08/09 (`docs/evidence/cutover-2026-09-08.md`) ha chiuso «dimentica»
-(#484/#486, provato in REPL viva) e i difetti dell'installer trovati sulla VPS
-(#485), e ha rieseguito la corsia Telegram vera (#487). Secondo verdetto del
-reviewer fresco su 2efe207: **`DAY_1_CAN_START: NO` per un solo residuo, ZDR**,
-che è una decisione owner — il light `qwen3.7-flash` non ha alcun endpoint ZDR,
-il main sì. Nessun cambio a provider o routing è stato fatto.
+## NOW — max 3 claims
 
-**Come si trovano le cose.** REPL in **tmux**, tracce, log e il `muffin.db`
-vero (`sqlite3 <db> ".backup <dest>"`, mai `cp`); processi di prova fermati per
-PID. **Il gate è una porta sola:** `npm run merge -- <pr>` (ci:local in Docker,
-cinque job; una PR alla volta, host quieto o `DISCARDED`; `gh pr merge` a mano
-è bloccato dal hook). I minuti GitHub sono finiti.
+1. **Muffin today.** One owner-run continuous personal agent: one Home owns
+   identity, memory, Work, Effects and Authority; CLI/Telegram and future
+   voice/desktop are ports of the same agent. The real cutover proved the
+   foundation: durable recovery, remember/correct/forget on the live path, and
+   the real Telegram lane. The VPS cutover found PATH/supervisor defects; their
+   fixes and mutations were reviewed, but the repaired installer and corrected
+   Telegram script have not both been rerun end-to-end on the real targets.
+2. **DAY-1 is not ready.** Foundation/cutover is proven; three owner-required
+   claims are still `BLOCKER`: precise surface-agnostic scheduling, safe
+   Work-liveness, and whole-request privacy/egress routing.
+3. **Active ownership.** `SELF` — Codex/ChatGPT owns governance reset #482 on
+   `codex/governance-reset`. No DAY-1 implementation claim is delegated or in
+   flight. #481 and #464 are `PRESERVE`; #483 is superseded, not merged.
 
-## Le decisioni dell'owner
+## NEXT GATE
 
-`routing.only: ["alibaba"]`, `dataCollection: "deny"`; ADR-0074 (06/09, «si
-chiede solo l'irreversibile, sempre, anche in privato»). Kernel
-(ADR-0071/0072): un link citato non chiede, composto+non-owner nega, una ricerca
-non chiede mai. Gruppi: senza il suo umano Muffin saluta, avvisa e esce (F4).
+```text
+foundation/cutover proven
+→ scheduling preciso surface-agnostic
+→ safe heartbeat/work-liveness
+→ privacy request-egress
+→ integrated real acceptance
+→ fresh reviewer
+→ DAY-1
+```
 
-07/09: la command surface del normale owner resta piccola — conversazione e
-automazione assorbono la meccanica, CLI/TUI per recovery e operatori (#465). È
-in `docs/VISION.md` ed è **autoritativa sui criteri**: D15 chiedeva `muffin
-effetti` come comando normale, e il criterio è stato corretto dentro la sua
-claim. Repository **source-public/pre-alpha appena è sicuro** (#464).
+## STOP CONDITION
 
-**Azioni owner senza codice:** billing GitHub Actions · `npm run e2e:telegram`
-con un bot vero (non rieseguita a 4521f83) · scelta modello/provider ZDR · VPS
-Hetzner rifatta (x86_64, utente `muffin`, deploy key read-only): install
-arrivata a `init`, gateway e sandbox a mano come in `cutover-2026-09-08.md`.
-Mac a 4521f83, memoria al backup pre-prova. `rot harden` fatto (06/09).
+Only the first unproved claim may become active. Stop before coding if its
+executor, falsifier or owner decision is missing; stop after proof/integration
+and reconstruct Git again. Do not start the next arrow automatically.
 
-## Aperto
+## OPEN OWNER DECISIONS
 
-**F7** è su dev (#462, ADR-0073 punti 1/2/3/5); il punto 4 (ask effimera
-all'owner dentro il gruppo) resta aperto, non DAY-1.
+- Define the numeric tolerance that makes “08:32” precise enough for DAY-1.
+- Before source-public only: choose the exact license and the canonical
+  `main`/`dev` release channel (#464). Neither blocks DAY-1 runtime.
 
-**D13 chiusa READY il 07/09** (`tool-use-2026-09-07.md`): zero `ask` in tre
-giri puliti; l'unico difetto ripetibile (MCP ignorato per shell) corretto in
-`WORK_RULES`, verificato 6/6. Trovato e riparato nello stesso passaggio:
-l'eval a modello remoto leggeva il filesystem reale
-(`eval-fuga-filesystem-2026-09-07.md`).
+## KNOWN BLOCKERS / WRONG SHAPES
 
-**Fase C** (Discord: comandi, coda, approvazioni, consegna) non è DAY-1;
-issue #378. D15 chiusa il 07/09. Da Centria: revoca con parità dopo la VPS,
-giudice come sensore versionato, verifica delle affermazioni negli ADR.
+- **BLOCKER:** B20 scheduling; B21 Work-liveness; D17 privacy request-egress.
+- **WRONG SHAPE:** static tool-cap ratchet; installer still couples bootstrap,
+  onboarding and deployment product-wise; an owner review comment is advisory,
+  not load-bearing; `main`/`dev` release-channel divergence; any product verb that
+  exists only on one surface. This reset removes the stale handoff,
+  critical-path archaeology and distorted command-surface wording; it does not
+  repair runtime shapes.
 
-**Dogfood 06-07/09:** ADR-0075 su dev (#461, D16 READY); streaming e file per
-`(porta, stanza)` (#460). Osservato, non lavorato: 15 s senza segno di vita
-(`thinking_delta`/`tool_call_delta` scartati); `sys_inspect` senza verdetto per
-capability. Critiche vs peer: `critica-moduli-vs-peer-2026-09-07.md`.
+## DEFERRED
 
-## Audit ecosistema 07/09
+Mac Node/Home-to-Mac execution (explicitly OUT; VPS-only is enough), Docker
+productisation, full onboarding redesign, generic Python framework, capability
+discovery, broad peer parity, richer proactivity, and all predictive,
+circadian/sleep or counterfactual cognitive ideas. Hermes is reference, not a
+second agent or roadmap.
 
-`docs/evidence/personal-agent-ecosystem-audit-2026-09-07.md` (#474) è evidence,
-**non autorizza feature parity**. Issue #463 possiede la riconciliazione, #464
-la pubblicazione sicura, #465 la command surface piccola.
+## DO NOT TOUCH
 
-**Truth maintenance:** `day1/requirements-status.md` possiede lo stato,
-`critical-path.md#ordine-corrente` l'ordine, le Issue il lavoro attribuibile.
-`docs/evidence/` conserva ciò che abbiamo osservato/imparato; non possiede la
-roadmap.
+Runtime and the three DAY-1 claims in this reset; `Job.kind='script'` (already
+sandboxed, no-LLM, empty stdout = silence); LICENSE; publication/visibility;
+historical evidence; a second agent runtime, `GoalEngine` or `HeartbeatManager`.
+
+## AUTHORITY
+
+- Product: [`THESIS`](../THESIS.md), [`VISION`](../VISION.md)
+- Current shape/security: [`ARCHITECTURE`](../ARCHITECTURE.md),
+  [`SECURITY`](../SECURITY.md)
+- DAY-1: [`requirements`](day1/requirements-status.md),
+  [`order`](day1/critical-path.md), [`exit`](day1/readiness-criteria.md)
+- Deferrals/hypotheses: [`ROADMAP`](../ROADMAP.md),
+  [`COGNITIVE-DESIGN`](../COGNITIVE-DESIGN.md)
+- Work rules: [`ORCHESTRATION`](../ORCHESTRATION.md)
+- Evidence: [`cutover`](../evidence/cutover-2026-09-08.md), #481, #482, #464
