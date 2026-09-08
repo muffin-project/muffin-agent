@@ -139,8 +139,27 @@ export async function forgetMemory(
       tier: 0,
     };
   }
-  const found = await recall(deps, ctx.tenant, raw.query.trim(), { limit: 12 });
+  const query = raw.query.trim();
+  const found = await recall(deps, ctx.tenant, query, { limit: 12 });
   const items = found.items.filter((i) => (i.kind === 'fact' || i.kind === 'episode') && i.expired !== true);
+  // Facts reach recall through the vector index or the entity hop. A fact
+  // extracted a minute ago may have no vector yet (embedder backlog — measured
+  // on the owner's install, 08/09), and then «dimentica» would list only the
+  // episodes and leave the belief standing. So the active facts are also
+  // searched by their words, deterministically, and merged in by id.
+  const seen = new Set(items.filter((i) => i.kind === 'fact').map((i) => i.id));
+  for (const f of deps.store.searchActiveFacts(ctx.tenant, query)) {
+    if (seen.has(f.id)) continue;
+    seen.add(f.id);
+    items.push({
+      kind: 'fact',
+      id: f.id,
+      text: `${f.subjectName} ${f.predicate} ${f.objectValue ?? f.objectName ?? ''}`,
+      trustTier: f.trustTier,
+      source: `fatto registrato il ${f.recordedAt.slice(0, 10)}`,
+      score: 0,
+    });
+  }
   if (items.length === 0) {
     return { content: `Niente da dimenticare: nessun fatto attivo né episodio corrisponde a «${raw.query.trim()}».`, tier: 0 };
   }
