@@ -52,8 +52,9 @@ export const memoryForgetCapability: CapabilityDecl = {
 export const memoryForgetSpec: ToolSpec = {
   name: 'memory_forget',
   description:
-    'Forget something on the owner\'s request: "dimentica X", "non considerarlo più vero", ' +
-    '"non voglio che tu lo ricordi". Retires the belief and the messages it came from so normal ' +
+    'Forget something on the owner\'s request. Use it when the owner says "dimentica X", "non ' +
+    'considerarlo più vero", "non voglio che tu lo ricordi". Not for a correction ("no, è Y"): just ' +
+    'state the new value and memory supersedes the old one. Retires the belief and the messages it came from so normal ' +
     'recall stops using them; history and provenance are kept, nothing is deleted. Two steps: ' +
     'first call with `query` to get the candidate facts and episodes with their ids; then call ' +
     'again with the ids to retire (`facts`, `episodes`). Never use the shell, sqlite or files ' +
