@@ -57,6 +57,15 @@ one absolute interpreter directory that still exists next month. So the
 installer puts the official build at `~/.local/share/muffin/node` and the
 generated unit names that directory in its `Environment=PATH`.
 
+Your own shells need it too: the `muffin` command is a symlink whose shebang
+resolves `node` through `PATH`. So the installer also appends one marked
+`export PATH=…` line — the launcher directory plus that Node directory — to
+`~/.profile` (and to `~/.bash_profile` or `~/.zprofile` where those are the
+files your login shell reads). New login shells find `muffin`; the shell you
+ran the installer in needs `. ~/.profile` first. Measured on a fresh VPS on
+2026-09-08, where the previous «add it yourself» hint had left `muffin`
+failing with `/usr/bin/env: 'node': No such file or directory`.
+
 If your machine already has Node ≥ 22, that one is used and nothing is
 downloaded.
 

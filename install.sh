@@ -316,19 +316,47 @@ ln -sf "$BIN" "$BINDIR/$CMD"
 MUFFIN="$BINDIR/$CMD"
 say "installed: $MUFFIN -> $BIN"
 
-case ":$PATH:" in
-  *":$BINDIR:"*) : ;;
-  *)
-    # Prepended for the rest of *this* run (steps 6 and 7 call `$MUFFIN` by
-    # absolute path anyway, but `muffin gateway install` walks PATH to find
-    # which launcher to name in the unit), and printed for the next shell.
-    PATH="$BINDIR:$PATH"
-    export PATH
-    say ""
-    say "warning: $BINDIR is not on your PATH. Add it, then re-open the shell:"
-    say "  echo 'export PATH=\"$BINDIR:\$PATH\"' >> ~/.profile"
-    ;;
-esac
+# The contract of this section is «install → `muffin` works», in the next
+# shell too, not only inside this script. Two directories have to be on the
+# login shell's PATH for that: the launcher's, and — measured on a fresh VPS
+# on 2026-09-08, where `muffin` printed «/usr/bin/env: 'node': No such file»
+# after a clean run of this very script — the bundled Node's, because the
+# launcher is a symlink whose shebang resolves `node` through PATH. Printing
+# an `echo … >> ~/.profile` for the owner to copy was the previous answer,
+# and it left the second directory out. So the script writes the line itself,
+# once (the marker keeps re-runs from stacking it), into the files login
+# shells actually read: `~/.profile` (sh/dash/bash when no .bash_profile),
+# `~/.bash_profile` when it exists (bash then skips .profile), `~/.zprofile`
+# on macOS/zsh. Interactive shells already open need `. ~/.profile` or a new
+# login — said below, not assumed.
+PERSIST=""
+case ":$PATH:" in *":$BINDIR:"*) : ;; *) PERSIST="$BINDIR" ;; esac
+if [ -x "$NODE_DIR/bin/node" ] && [ "$(command -v node 2>/dev/null)" = "$NODE_DIR/bin/node" ]; then
+  PERSIST="$PERSIST${PERSIST:+:}$NODE_DIR/bin"
+fi
+PATH="$BINDIR:$PATH"
+export PATH
+if [ -n "$PERSIST" ]; then
+  MARK="# muffin (install.sh): the launcher and its bundled Node"
+  LINE="export PATH=\"$PERSIST:\$PATH\""
+  written=""
+  for rc in "$HOME/.profile" "$HOME/.bash_profile" "$HOME/.zprofile"; do
+    case "$rc" in
+      */.profile) ;;
+      */.bash_profile) [ -f "$rc" ] || continue ;;
+      */.zprofile) [ "$(uname -s)" = Darwin ] || [ "${SHELL:-}" != "" ] && [ "${SHELL##*/}" = zsh ] || continue ;;
+    esac
+    if [ -f "$rc" ] && grep -qF "$MARK" "$rc" 2>/dev/null; then
+      written="$written $rc"
+      continue
+    fi
+    printf '\n%s\n%s\n' "$MARK" "$LINE" >>"$rc" || die "could not write $rc"
+    written="$written $rc"
+  done
+  say ""
+  say "PATH: added $PERSIST to$written"
+  say "      new login shells find muffin; in this one:  . ~/.profile"
+fi
 
 # ---------------------------------------------------------------------------
 # 6. Setup — `muffin init`.
@@ -414,8 +442,9 @@ if [ "$(uname -s)" = Linux ]; then
   if ! have systemctl; then
     say "  systemd is not installed here, so there is no user service to load."
   elif ! systemctl --user is-system-running >/dev/null 2>&1; then
-    say "  there is no user systemd instance in this session (a container, or a"
-    say "  shell that never logged in). Log in as this user and re-run:"
+    say "  this shell has no user systemd bus (a container, or a \`su -\`/\`sudo -i\`"
+    say "  shell): the line above says whether \`loginctl enable-linger $(id -un)\`"
+    say "  from root is what is missing. Then re-run, in this same shell:"
   fi
 fi
 say "    $CMD gateway install --write --start"

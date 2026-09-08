@@ -205,10 +205,30 @@ else
   bad "no launcher at $MUFFIN — the command is not installed"
 fi
 
-# From here on, the only thing on PATH beyond the system dirs is what the
-# installer itself put there: the launcher and the Node it downloaded. If
-# anything below needs something else, that is a missing step in install.sh.
-export PATH="$BINDIR:$MUFFIN_PREFIX/node/bin:$CLEAN_PATH"
+# From here on, PATH is what a *login shell* of this user would have: the
+# clean system dirs plus whatever install.sh persisted in ~/.profile — not a
+# line this script adds by hand. Until 2026-09-08 it did add that line, and so
+# the one thing a fresh VPS actually broke on («/usr/bin/env: 'node': No such
+# file or directory» from `muffin` in the next shell) was invisible here.
+step "a login shell finds muffin"
+export PATH="$CLEAN_PATH"
+if [ -f "$HOME/.profile" ]; then
+  # shellcheck disable=SC1091
+  . "$HOME/.profile"
+  ok "sourced ~/.profile as a login shell would"
+else
+  bad "install.sh left no ~/.profile — a new login shell would not find muffin"
+fi
+if command -v muffin >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
+  ok "muffin -> $(command -v muffin) · node -> $(command -v node), from ~/.profile alone"
+else
+  bad "after ~/.profile, muffin or node is still not on PATH ($PATH)"
+fi
+if "$MUFFIN" --version >/dev/null 2>&1; then
+  ok "\`muffin --version\` runs through the launcher: $("$MUFFIN" --version 2>/dev/null)"
+else
+  bad "\`muffin --version\` fails through the launcher: the symlink's node is not reachable"
+fi
 
 if [ -f "$HOME/.muffin/config.json" ]; then
   ok "~/.muffin is set up (config.json written by \`muffin init\`)"
