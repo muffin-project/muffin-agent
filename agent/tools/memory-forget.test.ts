@@ -64,6 +64,23 @@ describe('memory_forget — «dimentica X» ritira la belief attraverso il write
     expect(h.store.activeFacts('host', h.me, 'dentist')).toHaveLength(1);
   });
 
+  it('elenca anche un fatto che il recall non vede: senza vettore e con un episodio che non lo nomina', async () => {
+    const h = seed();
+    // A fact whose source episode says nothing recall could match on, and no
+    // vector for either: the 08/09 case on the owner's install.
+    const ep = h.store.addEpisode({
+      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
+      content: 'ok segnato', trustTier: 0, createdAt: NOW,
+    });
+    const orphan = h.store.addFact({
+      tenantId: 'host', subjectId: h.me, predicate: 'claims', objectValue: 'il codice di prova della sessione viva è ciliegia',
+      episodeId: ep, trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: NOW,
+    });
+    const out = await forgetMemory(h.deps, CTX, { query: 'codice di prova della sessione viva' });
+    expect(out.content).toContain(`[fact #${orphan}]`);
+    expect(out.content).not.toContain(`#${h.other}]`);
+  });
+
   it('con gli id ritira fatto ed episodio: il recall normale non li usa più, la storia sì', async () => {
     const h = seed();
     const out = await forgetMemory(h.deps, CTX, { facts: [h.fact], episodes: [h.ep] }, () => new Date(NOW));
