@@ -14,6 +14,18 @@ context is a resource, and history is not startup context.
   Verify load-bearing current-state claims against code, config or runtime.
 - Literal mechanics belong to code, schemas and shipped config, never to prose.
 
+## Preserve ownership and product context before delegating
+
+Creating an issue is **not** the same act as delegating it. Follow
+`docs/WORK-OWNERSHIP.md` for the execution-mode contract (`SELF`, `PRESERVE`,
+`DELEGATE`) and for the product/architecture-pack → execution-brief pattern.
+
+When a non-mechanical claim can shape the product, do not compress the work to a
+one-line coding task before preserving the product principle, target shape,
+examples, preferred seam, non-goals and falsifier somewhere durable. The coding
+agent should receive one bounded claim **after** that context exists, not be
+expected to reconstruct the product from the task sentence.
+
 ## Challenge the design before writing it
 
 For a non-mechanical change to runtime, harness, security and authority, memory,
