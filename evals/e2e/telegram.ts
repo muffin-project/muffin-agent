@@ -337,14 +337,24 @@ try {
   // ---- 1. la trascrizione: parole, passi, e niente cancellato ---------------
   {
     const da = contatore;
-    chiedi('Manda al bot: «leggi spesa.txt e dimmi quanto ho speso in tutto, poi esegui `echo ciao` e riporta cosa risponde». Quando chiede di approvare il comando, premi Consenti.');
+    // `echo ciao > saluto.txt`, non `echo ciao`: dall'ADR-0074 (06/09) la corsia
+    // di sola lettura `shell_run` non chiede mai, e la corsa dell'08/09 con un bot
+    // vero lo ha mostrato — nessun ASK, correttamente, e l'asserzione D12 rossa
+    // per una domanda sbagliata. Una scrittura passa da `shell_run_write`, che
+    // chiede sempre: è quello l'ASK che D12 misura.
+    chiedi('Manda al bot: «leggi spesa.txt e dimmi quanto ho speso in tutto, poi esegui `echo ciao > saluto.txt` e riporta cosa risponde». Quando chiede di approvare il comando, premi Consenti.');
     const arrivato = await aspetta(() => messaggiOwner(da).length >= 1);
     if (!arrivato) esito('trascrizione · messaggio ricevuto', false, 'nessun messaggio dell\'owner sul filo');
     else {
+      // Da #388 la risposta finale edita il messaggio dei passi: non arriva un
+      // `sendMessage` pulito, arriva l'ultima `editMessageText` con i passi e,
+      // sotto, la risposta. Si aspetta quella (la corsa dell'08/09 ha aspettato
+      // 180 s un messaggio separato che per costruzione non esiste più).
       const finito = await aspetta(() => {
-        const t = dopo(da).filter((c) => c.method === 'sendMessage' && c.payload['reply_markup'] === undefined);
-        // La risposta finale: un sendMessage senza tastiera che non è una riga di trascrizione.
-        return t.some((c) => !/[✓✗⏳⏸]/.test(testo(c)) && /ciao/i.test(testo(c)));
+        const t = dopo(da).filter(
+          (c) => (c.method === 'sendMessage' || c.method === 'editMessageText') && c.payload['reply_markup'] === undefined,
+        );
+        return t.some((c) => /spesa totale|totale spesa/i.test(testo(c)) && !/⏳|sto pensando/.test(testo(c)));
       });
       const c = dopo(da);
       const trascrizioni = c.filter((x) => (x.method === 'sendMessage' || x.method === 'editMessageText') && /✓ leggo un file/.test(testo(x)));
@@ -441,7 +451,8 @@ try {
        * su un prodotto corretto: un banco che porta avanti la specifica di
        * ieri accusa il codice di oggi.
        */
-      const rispostaNelloStesso = /Totale spesa/i.test(testo(ultima ?? nato ?? { payload: {} } as never));
+      // «Spesa totale» o «Totale spesa»: il modello sceglie l'ordine, la regex no (08/09: rosso per questo).
+      const rispostaNelloStesso = /spesa totale|totale spesa/i.test(testo(ultima ?? nato ?? { payload: {} } as never));
       esito(
         'risposta · nello stesso messaggio dei passi, dopo di essi (#388)',
         finito && rispostaNelloStesso,

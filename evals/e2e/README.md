@@ -59,7 +59,10 @@ oltre 4096). Lo script dice cosa mandare al bot, aspetta il filo, e stampa
 
 1. **trascrizione** (B11/B13/D12): i passi restano in un messaggio vero,
    niente cancellato, niente oltre il limite, l'ASK con il comando intero e la
-   frase del modello, la risposta come messaggio a parte dopo l'ultima edit;
+   frase del modello (su una scrittura: `shell_run` in sola lettura non chiede,
+   ADR-0074), la risposta dentro il messaggio dei passi, sotto di essi (#388);
+   in privato l'anteprima (`sendMessageDraft`) con un solo `draft_id`,
+   rinnovata entro 30 s;
 2. **coda** (B2): un secondo messaggio a turno vivo è confermato «in coda»
    prima della prima risposta, e risposto dopo;
 3. **`/stop`** (B2): «fermato» e poi «Interrotto.».
