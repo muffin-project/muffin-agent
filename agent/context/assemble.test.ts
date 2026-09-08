@@ -217,7 +217,7 @@ describe('the owner-class prompt does not move', () => {
    * `3ebf2cfc307bdda5c73fff6ed4d60d5a9db2eceffac754164b220a86214cabf2`.
    */
   const OWNER_PROMPT_SHA_AT_SPLIT =
-    '9565cd19cf33d7de6f66d71ec8c4de5fb82607ce14a5886fb25c95e0016dfd05';
+    '45a73d354ec5b8d52b30fa1b306f96d35b04959c3ddf9d10e831e3beb73ffbbf';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
@@ -307,7 +307,7 @@ describe('the owner-class prompt does not move', () => {
    * qualcun altro entra per definizione. Pin precedente:
    * `23aa24da39dc582dd7909f750fed59b165a71ce70dc549428b5df634ced0ed9b`.
    */
-  const GROUP_PROMPT_SHA_V1 = '347fbb261b874d9e9fa701ee94d36f8c73a678c24034605afd883f32864cf70e';
+  const GROUP_PROMPT_SHA_V1 = '292d65153a5cacfc370ac05120c15c164b2acb7e4da2a3655db887a75cf55cc4';
 
   it('e la stanza riceve lo stesso prompt di ieri, byte per byte', () => {
     const runtime = boot(bootHome());
@@ -413,7 +413,12 @@ describe('quale versione del prompt assembla questa installazione', () => {
     // aggirata, e l'affermazione che il test fa — v1 è pesantemente carattere,
     // v2 no — regge identica: 11,27 contro il `< 8` di v2 sotto, che è la
     // riga che porta il peso.
-    expect(v1.chiSei / v1.comeLavori).toBeGreaterThan(11);
+    // Ri-misurato 2026-09-08 (DAY-1 cutover, «dimentica X»): la stessa riga
+    // nomina `memory_forget` come la porta per dimenticare, mai shell/sqlite —
+    // il difetto misurato in REPL viva quel giorno — (1.715 → 1.858 caratteri),
+    // rapporto 10,41 (19.335 / 1.858). Stessa regola: la soglia scende con la
+    // misura, e v1 resta pesantemente carattere contro il `< 8` di v2.
+    expect(v1.chiSei / v1.comeLavori).toBeGreaterThan(10);
     expect(v2.chiSei / v2.comeLavori).toBeLessThan(8);
     // E il prompt non è cresciuto per farlo: il peso si è spostato.
     expect(v2.chiSei + v2.comeLavori).toBeLessThan((v1.chiSei + v1.comeLavori) * 1.02);
