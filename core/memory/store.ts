@@ -547,6 +547,42 @@ export class MemoryStore {
    * this tenant move; the ids that actually changed come back, so a caller
    * cannot confirm a retirement that did not happen.
    */
+  /**
+   * Active facts whose text carries the words of a query — deterministic,
+   * no embedder. `memory_forget` lists candidates with this, because on the
+   * owner's install (08/09/2026) the fact just extracted had no vector yet
+   * (embedder backlog) and recall's vector half never surfaced it: the owner
+   * said «dimentica» and the belief stayed. Tokens of 4+ letters, any match,
+   * ranked by how many matched; `limit` caps it. Not a recall strategy — a
+   * safety net for one verb.
+   */
+  searchActiveFacts(tenantId: string, query: string, limit = 12): Fact[] {
+    const tokens = [...new Set(query.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 4))];
+    if (tokens.length === 0) return [];
+    const rows = this.db
+      .prepare(
+        `SELECT f.id, f.subject_id AS subjectId, s.name AS subjectName, f.predicate,
+                f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
+                f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
+                f.expired_at AS expiredAt, f.episode_id AS episodeId,
+                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance, f.pinned,
+                f.superseded_by AS supersededBy
+         FROM facts f
+         JOIN entities s ON s.id = f.subject_id
+         LEFT JOIN entities o ON o.id = f.object_id
+         WHERE f.tenant_id = ? AND f.expired_at IS NULL`,
+      )
+      .all(tenantId) as Fact[];
+    const scored = rows
+      .map((f) => {
+        const text = `${f.subjectName} ${f.predicate} ${f.objectValue ?? ''} ${f.objectName ?? ''}`.toLowerCase();
+        return { f, hits: tokens.filter((t) => text.includes(t)).length };
+      })
+      .filter((x) => x.hits > 0)
+      .sort((a, b) => b.hits - a.hits || b.f.id - a.f.id);
+    return scored.slice(0, limit).map((x) => x.f);
+  }
+
   retireFacts(tenantId: string, factIds: number[], at: string, reason: string): number[] {
     const stmt = this.db.prepare(
       `UPDATE facts SET expired_at = ?, valid_to = COALESCE(valid_to, ?), retired_reason = ?
