@@ -97,6 +97,8 @@ export type Fact = {
   importance: number;
   /** The fact that replaced this one, if any. Recall shows it; `why` follows it. */
   supersededBy: number | null;
+  /** Set only by `retireFacts`: the owner asked to forget, and this names the request. Absent on rows read by other queries. */
+  retiredReason?: string | null;
   /**
    * 0 or 1 — SQLite has no boolean, and this follows `importance`'s own
    * convention of reading the CHECK-less integer bare rather than narrowing
@@ -234,6 +236,10 @@ export class MemoryStore {
     // `MemoryStore` straight from a file, exactly the gap `jobs.kind`'s own
     // `ensureColumn` call exists to close (judge #106 giro 2).
     ensureColumn(db, 'facts', 'pinned', 'pinned INTEGER NOT NULL DEFAULT 0');
+    // Why a belief was retired without a successor — «dimentica X» from the
+    // owner (`ingest.ts#retireBeliefs`), never the judge's `supersede`, which
+    // records its reason as `superseded_by`. NULL on every historical row.
+    ensureColumn(db, 'facts', 'retired_reason', 'retired_reason TEXT');
     // Nullable e senza default: un database esistente guadagna la colonna e non
     // perde una riga, e nessuna riga storica riceve un turno che non ha avuto.
     ensureColumn(db, 'episodes', 'turn_id', 'turn_id TEXT');
@@ -528,6 +534,32 @@ export class MemoryStore {
          WHERE id = ? AND tenant_id = ? AND expired_at IS NULL`,
       )
       .run(at, newFactId, validTo === null ? null : (validTo ?? at), oldFactId, tenantId);
+  }
+
+  /**
+   * Retire beliefs **without** a successor — the owner said «dimentica X».
+   *
+   * Same columns `supersede` closes (`expired_at`, `valid_to`), no
+   * `superseded_by`, and `retired_reason` says which request did it, so
+   * `muffin memory why` and `--history` can show a retirement instead of a
+   * fact that silently stopped being true. Nothing is deleted: the row, its
+   * episode and its provenance stay (ADR-0051, #481). Only active facts of
+   * this tenant move; the ids that actually changed come back, so a caller
+   * cannot confirm a retirement that did not happen.
+   */
+  retireFacts(tenantId: string, factIds: number[], at: string, reason: string): number[] {
+    const stmt = this.db.prepare(
+      `UPDATE facts SET expired_at = ?, valid_to = COALESCE(valid_to, ?), retired_reason = ?
+       WHERE id = ? AND tenant_id = ? AND expired_at IS NULL`,
+    );
+    const retired: number[] = [];
+    const tx = this.db.transaction((ids: number[]) => {
+      for (const id of ids) {
+        if (stmt.run(at, at, reason, id, tenantId).changes > 0) retired.push(id);
+      }
+    });
+    tx(factIds);
+    return retired;
   }
 
   /**
@@ -1151,7 +1183,7 @@ export class MemoryStore {
                 f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
                 f.expired_at AS expiredAt, f.episode_id AS episodeId,
                 f.trust_tier AS trustTier, f.confidence, f.origin, f.importance, f.pinned,
-                f.superseded_by AS supersededBy
+                f.superseded_by AS supersededBy, f.retired_reason AS retiredReason
          FROM facts f
          JOIN entities s ON s.id = f.subject_id
          LEFT JOIN entities o ON o.id = f.object_id
