@@ -4,14 +4,13 @@
 Muffin, da una requirement owner, da una migrazione costosa o da un rischio su
 authority/data/effect — non da questa lista e non da una feature list di peer.
 
-**Goal owner:** DAY-1 = *«io installo Muffin sulla VPS»*. 63/63 READY dal
-07/09, ma il **primo cutover reale (08/09, `docs/evidence/cutover-2026-09-08.md`)
-ha dato `DAY_1_CAN_START: NO`** su 4521f83, per due decisioni owner: (F1)
-«dimentica» non ha alcun meccanismo mentre VISION lo dichiara intento
-ordinario; (F2) ZDR è requisito owner e la config di produzione non lo
-soddisfa (`only: alibaba` non-ZDR, `qwen3.7-flash` senza endpoint ZDR). Prima,
-meccanico dentro A11: (F3) `install.sh` non persiste il PATH del suo Node e da
-`su -` il gateway non parte.
+**Goal owner:** DAY-1 = *«io installo Muffin sulla VPS»*. Il cutover reale
+dell'08/09 (`docs/evidence/cutover-2026-09-08.md`) ha chiuso «dimentica»
+(#484/#486, provato in REPL viva) e i difetti dell'installer trovati sulla VPS
+(#485), e ha rieseguito la corsia Telegram vera (#487). Secondo verdetto del
+reviewer fresco su 2efe207: **`DAY_1_CAN_START: NO` per un solo residuo, ZDR**,
+che è una decisione owner — il light `qwen3.7-flash` non ha alcun endpoint ZDR,
+il main sì. Nessun cambio a provider o routing è stato fatto.
 
 **Come si trovano le cose.** REPL in **tmux**, tracce, log e il `muffin.db`
 vero (`sqlite3 <db> ".backup <dest>"`, mai `cp`); processi di prova fermati per
