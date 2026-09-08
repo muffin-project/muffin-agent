@@ -33,6 +33,7 @@
 const TOOL_PHRASE: Readonly<Record<string, string>> = {
   memory_search: 'cerco in memoria',
   memory_why: 'guardo da dove viene',
+  memory_forget: 'dimentico',
   fs_read: 'leggo un file',
   fs_list: 'guardo una cartella',
   fs_search: 'cerco nei file',
