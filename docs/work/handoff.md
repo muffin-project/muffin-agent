@@ -7,11 +7,12 @@
 
 1. **Muffin today.** One owner-run continuous personal agent: one Home owns
    identity, memory, Work, Effects and Authority; CLI/Telegram and future
-   voice/desktop are ports of the same agent. The real cutover proved the
-   foundation: durable recovery, remember/correct/forget on the live path, and
-   the real Telegram lane. The VPS cutover found PATH/supervisor defects; their
-   fixes and mutations were reviewed, but the repaired installer and corrected
-   Telegram script have not both been rerun end-to-end on the real targets.
+   voice/desktop are ports of the same agent. Cutover evidence is sufficient to
+   hold the foundation proven: durable recovery, remember/correct/forget on the
+   live path, and the real Telegram lane. It is not the final integrated
+   acceptance: after the VPS exposed PATH/supervisor defects, the fixes and
+   mutations were reviewed, but repaired install plus corrected Telegram
+   assertions were not rerun together on the real targets.
 2. **DAY-1 is not ready.** Foundation/cutover is proven; three owner-required
    claims are still `BLOCKER`: precise surface-agnostic scheduling, safe
    Work-liveness, and whole-request privacy/egress routing.
