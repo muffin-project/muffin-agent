@@ -77,6 +77,7 @@ import {
   searchMemory,
   whyMemory,
 } from './tools/memory.js';
+import { forgetMemory, memoryForgetCapability, memoryForgetSpec } from './tools/memory-forget.js';
 import { makeProcessTools, processCapabilities } from './tools/process.js';
 import { diagnoseSearch, makeSearchTool, searchCapability } from './tools/search.js';
 import {
@@ -327,6 +328,7 @@ export function baseToolOrder(input: {
     'fs_write',
     'memory_search',
     'memory_why',
+    'memory_forget',
     'document_read',
     // Accanto a `document_read`, e non in coda: sono le due metà della stessa
     // cosa — si salva per rileggere. In una stanza con grant (ADR-0073) queste
@@ -744,6 +746,20 @@ export function buildRuntime(
       // storage-level error escapes its fenced `return`s.
       throwTier: 0,
     },
+    {
+      // «Dimentica X» — the third verb of `docs/VISION.md`'s conversational
+      // memory (remember, correct, forget), and the one the 08/09 cutover found
+      // with no mechanism at all. Same tenant rule as the two above; the
+      // capability is `memory.forget` — owner-only, same `memory` effect as
+      // `memory.write`. The turn id is the provenance of the retirement.
+      capability: memoryForgetCapability.id,
+      spec: memoryForgetSpec,
+      handler: async (args, ctx) => forgetMemory(recallDeps, { tenant: ctx.tenant, turnId: ctx.turnId }, args),
+      // Its answer is either the candidate list (built from recalled text,
+      // tiered to the worst source) or the durable result; only a storage or
+      // lock error escapes.
+      throwTier: 0,
+    },
     // The other half of "a document enters whole": the vault stores every page
     // and the model is handed an index, so it needs a door back to the text.
     // An index with no door is a summary with extra steps.
@@ -878,6 +894,9 @@ export function buildRuntime(
     [
       ...fsCapabilities,
       memoryCapability,
+      // `memory_forget`'s own door, host-only: declared here or the visibility
+      // filter and the kernel disagree about who sees it.
+      memoryForgetCapability,
       documentCapability,
       shellCapability,
       shellWriteCapability,

@@ -142,7 +142,11 @@ export async function cmdMemorySearch(
       const body = `   ${item.text.replace(/\n/g, '\n   ')}`;
       // The successor is what turns "Marco, retired" into an answer: without it
       // the owner reads a name and has to run `why` to find out what replaced it.
-      const successor = item.replacedBy ? `\n   ↳ sostituito da #${item.replacedBy.id} ${item.replacedBy.text}` : '';
+      const successor = item.replacedBy
+        ? `\n   ↳ sostituito da #${item.replacedBy.id} ${item.replacedBy.text}`
+        : item.expired === true && item.kind === 'fact'
+          ? '\n   ↳ ritirato, senza successore (`muffin memory why` dice da quale richiesta)'
+          : '';
       return `${head}\n${body}${successor}`;
     });
     process.stdout.write(`${lines.join('\n\n')}\n`);

@@ -74,6 +74,10 @@ export function describeProvenance(store: MemoryStore, tenantId: string, fact: F
   );
   out.push(`  imparato il ${fact.recordedAt.slice(0, 16).replace('T', ' ')}`);
 
+  if (fact.retiredReason) {
+    // «Dimentica X»: retired without a successor (`ingest.ts#retireBeliefs`).
+    out.push(`  ritirato senza successore: ${fact.retiredReason}`);
+  }
   if (fact.supersededBy !== null) {
     const successor = store.factById(tenantId, fact.supersededBy);
     out.push(`  sostituito da: ${successor ? factLine(successor) : `#${fact.supersededBy} (mancante)`}`);

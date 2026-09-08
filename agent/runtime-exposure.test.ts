@@ -135,7 +135,10 @@ describe('quali tool vede davvero un turno', () => {
     // tagliato — il conteggio del 07/09 era di uno inferiore a quello vero
     // (18 con zero tagliati la sera del 06/09, quindi 20 dopo D15). Di nuovo
     // il numero dei registrati contato sull'installazione vera, non stimato.
-    expect(profile.maxToolsExposed).toBe(20);
+    //
+    // 21 dall'08/09 sera: `memory_forget` («dimentica X», il verbo che il
+    // cutover ha trovato senza meccanismo) è un tool registrato in più.
+    expect(profile.maxToolsExposed).toBe(21);
 
     const rt = realRuntime();
     rt.close();
@@ -175,6 +178,8 @@ describe('quali tool vede davvero un turno', () => {
       // vuoto misurato su un runtime senza ricerca ne' `send_file` non lo
       // direbbe.
       'sys_effects',
+      // 08/09: «dimentica X» non esiste su un'installazione dove questo cade.
+      'memory_forget',
     ]) {
       expect(rt.names, `${kept} deve restare esposto`).toContain(kept);
     }
