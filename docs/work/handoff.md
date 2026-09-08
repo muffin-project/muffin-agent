@@ -4,10 +4,14 @@
 Muffin, da una requirement owner, da una migrazione costosa o da un rischio su
 authority/data/effect — non da questa lista e non da una feature list di peer.
 
-**Goal owner:** DAY-1 = *«io installo Muffin sulla VPS, quindi deve essere
-praticamente pronto»*. Snapshot 07/09 dopo D13: **63/63 righe READY, zero
-BLOCKER DAY-1.** Ricostruire sempre da Git/PR/check +
-`day1/requirements-status.md` prima di usare il conteggio.
+**Goal owner:** DAY-1 = *«io installo Muffin sulla VPS»*. 63/63 READY dal
+07/09, ma il **primo cutover reale (08/09, `docs/evidence/cutover-2026-09-08.md`)
+ha dato `DAY_1_CAN_START: NO`** su 4521f83, per due decisioni owner: (F1)
+«dimentica» non ha alcun meccanismo mentre VISION lo dichiara intento
+ordinario; (F2) ZDR è requisito owner e la config di produzione non lo
+soddisfa (`only: alibaba` non-ZDR, `qwen3.7-flash` senza endpoint ZDR). Prima,
+meccanico dentro A11: (F3) `install.sh` non persiste il PATH del suo Node e da
+`su -` il gateway non parte.
 
 **Come si trovano le cose.** REPL in **tmux**, tracce, log e il `muffin.db`
 vero (`sqlite3 <db> ".backup <dest>"`, mai `cp`); processi di prova fermati per
@@ -29,9 +33,10 @@ effetti` come comando normale, e il criterio è stato corretto dentro la sua
 claim. Repository **source-public/pre-alpha appena è sicuro** (#464).
 
 **Azioni owner senza codice:** billing GitHub Actions · `npm run e2e:telegram`
-con un bot vero (B11/B13/B2 datati) · la prima install vera su una VPS x86_64
-(A11 è provata solo nel container arm64). `rot harden` è fatto (06/09, rot di
-uid 0); ADR-0073 ha avuto il sì e ADR-0074 lo estende a ogni stanza.
+con un bot vero (non rieseguita a 4521f83) · scelta modello/provider ZDR · VPS
+Hetzner rifatta (x86_64, utente `muffin`, deploy key read-only): install
+arrivata a `init`, gateway e sandbox a mano come in `cutover-2026-09-08.md`.
+Mac a 4521f83, memoria al backup pre-prova. `rot harden` fatto (06/09).
 
 ## Aperto
 
@@ -44,26 +49,20 @@ giri puliti; l'unico difetto ripetibile (MCP ignorato per shell) corretto in
 l'eval a modello remoto leggeva il filesystem reale
 (`eval-fuga-filesystem-2026-09-07.md`).
 
-**Fase C** (Discord: comandi, coda, approvazioni, transcript, consegna) non è
-DAY-1; issue #378. D15 (registro effetti) chiusa il 07/09. Da Centria
-restano: revoca con parità dopo la VPS, giudice come sensore versionato,
-verifica delle affermazioni negli ADR.
+**Fase C** (Discord: comandi, coda, approvazioni, consegna) non è DAY-1;
+issue #378. D15 chiusa il 07/09. Da Centria: revoca con parità dopo la VPS,
+giudice come sensore versionato, verifica delle affermazioni negli ADR.
 
-**Dogfood 06-07/09 (installato fe8d55e+):** ADR-0075 su dev (#461, D16 READY);
-streaming e file per `(porta, stanza)` (#460; le asserzioni e2e sull'anteprima
-aspettano il bot vero). Osservato, non lavorato: 15 s senza segno di vita (il
-loop scarta `thinking_delta`/`tool_call_delta`); su «analizzati» il modello ha
-misurato una volta e ragionato su un ricordo vecchio (`sys_inspect` senza il
-verdetto per capability, la memoria riporta le auto-dichiarazioni come fatti).
-Critiche vs peer: `critica-moduli-vs-peer-2026-09-07.md`.
+**Dogfood 06-07/09:** ADR-0075 su dev (#461, D16 READY); streaming e file per
+`(porta, stanza)` (#460). Osservato, non lavorato: 15 s senza segno di vita
+(`thinking_delta`/`tool_call_delta` scartati); `sys_inspect` senza verdetto per
+capability. Critiche vs peer: `critica-moduli-vs-peer-2026-09-07.md`.
 
 ## Audit ecosistema 07/09
 
 `docs/evidence/personal-agent-ecosystem-audit-2026-09-07.md` (#474) è evidence,
-**non autorizza feature parity**. Issue **#463** possiede la riconciliazione
-(stato reale → audit come evidence → solo le case autoritative davvero stale →
-una claim per `/goal`); #464 la pubblicazione sicura; #465 la command surface
-piccola. Le issue speculative sono chiuse `not_planned`.
+**non autorizza feature parity**. Issue #463 possiede la riconciliazione, #464
+la pubblicazione sicura, #465 la command surface piccola.
 
 **Truth maintenance:** `day1/requirements-status.md` possiede lo stato,
 `critical-path.md#ordine-corrente` l'ordine, le Issue il lavoro attribuibile.
