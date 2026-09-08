@@ -12,6 +12,7 @@ import { sendFileCapability } from '../../agent/tools/deliver.js';
 import { httpCapability } from '../../agent/tools/http.js';
 import { searchCapability } from '../../agent/tools/search.js';
 import { memoryCapability } from '../../agent/tools/memory.js';
+import { memoryForgetCapability } from '../../agent/tools/memory-forget.js';
 import { skillCapability } from '../../agent/tools/skill.js';
 import { documentCapability } from '../../agent/tools/document.js';
 import { inspectCapability } from '../../agent/tools/inspect.js';
@@ -63,6 +64,7 @@ const ALL: readonly CapabilityDecl[] = [
   httpCapability,
   searchCapability,
   memoryCapability,
+  memoryForgetCapability,
   skillCapability,
   documentCapability,
   inspectCapability,
@@ -291,6 +293,7 @@ describe('la matrice normativa è eseguibile', () => {
         'inspect.ts:inspectCapability',
         'mcp.ts:mcpCapabilityFor',
         'memory.ts:memoryCapability',
+        'memory-forget.ts:memoryForgetCapability',
         'process.ts:processCapabilities',
         'search.ts:searchCapability',
         'shell.ts:shellCapability',
