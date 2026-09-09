@@ -10,7 +10,6 @@ import { planTaint } from '../../core/turns/todo.js';
 import { decodeWaitFor, satisfied, wakeReport } from '../../core/turns/wait.js';
 import { tenantClass, visibleTools } from '../context/assemble.js';
 import { historyTaint, reinjectedHistory } from '../context/history-taint.js';
-import { iterationCap } from '../profiles/profile.js';
 import type { ContentBlock, Message } from '../providers/types.js';
 import { buildContext, userAudios, userImages } from './context.js';
 import { announceEnd, checkpoint, closeRecord, finish, reconcile } from './durability.js';
@@ -272,8 +271,6 @@ export async function guidaIlTurno(
     resumed: options.resumed === true,
     wokenFromWait: options.wokenFromWait === true,
   });
-  const cap = iterationCap(deps.profile);
-
   /**
    * What every handler is told about the turn it is running in — built once,
    * because the barrier has to be the same object across the whole turn.
@@ -367,7 +364,6 @@ export async function guidaIlTurno(
     exposed,
     toolContext,
     noteSensitiveResourceEcho,
-    cap,
     turnClass,
     now,
     door,
