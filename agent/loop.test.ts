@@ -271,11 +271,12 @@ describe('agent loop', () => {
     expect(calls).not.toContain('demo_write');
   });
 
-  it('stops at the cap instead of looping forever', async () => {
-    const script = Array.from({ length: 40 }, () => callTool('demo_read'));
-    const { deps: d, store } = deps(script, { profile: { ...CONSERVATIVE, maxToolCallsPerTurn: 5 } as Profile });
+  it('can answer after more than 15 progressing rounds without weakening the tool-call cap', async () => {
+    const script = [...Array.from({ length: 16 }, () => callTool('demo_read')), answer('finito')];
+    const { deps: d, store, calls } = deps(script);
     const result = await runTurn(d, input(store));
-    expect(result).toMatchObject({ stopped: 'cap', iterations: 5 });
+    expect(calls).toHaveLength(15);
+    expect(result).toMatchObject({ stopped: 'answered', text: 'finito', iterations: 17 });
   });
 
   it('stops when the budget is gone, before spending more', async () => {
