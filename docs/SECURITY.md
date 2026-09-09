@@ -95,6 +95,29 @@ capability declarations, not in this prose. `defaultMaxTaint` is no longer the
 ceiling: ADR-0053 moved that to the effect row, and left the field readable so a
 home sealed before it still parses.
 
+**On the host row, the tier is provenance and not authority (ADR-0075,
+2026-09-06).** The tier of a turn still says what the turn has read, still
+stamps every episode, still decides the level memory keeps, and still appears in
+the text of every approval. What it no longer does is decide, on its own, that a
+capability on the `host` row is out of reach: `ROW_FLOOR.host.denyAbove` is `3`,
+so shell, host filesystem and process capabilities answer at tier 3 exactly as
+they answer at tier 0 — the reversible ones run, the irreversible ones ask.
+Symmetrically, **a `maxTaint` never narrows a reversible read**: `skill.read`
+and `sys.process.list` used to pin `1` and no longer do.
+
+Where the tier still decides on its own is where bytes leave the tenant. Above
+the ceiling of `external` and `outward` the owner is *asked*, with the tier and
+its origin quoted in the prompt, and every other principal is refused — in a
+group there is nobody who could answer a question, so degrading the refusal
+there would be an allow written in another language. `searchMaxTaint` and
+`paramsMaxTaint` (ADR-0071/0072) are unchanged, and `rot` is still never
+reachable at runtime at any tier.
+
+The measurement that decided this is in §13: on the owner's real installation
+nine of fourteen private turns sat at tier 3, the last real shell call was three
+days old, and the last turn ended on `context taint 3 exceeds 2 for sys.shell
+(host)`.
+
 ### Fencing: marking, not preventing
 
 Content that did not come from the owner is wrapped in a nonce-carrying fence
@@ -178,12 +201,12 @@ The policy kernel is pure and deterministic. It decides from typed facts such as
 - canonical resource;
 - current taint;
 - the capability's **effect row** — where the bytes of the effect land — which
-  owns the taint ceiling and the threshold above which nothing on that row runs
-  unattended. The rows are the ones the threat model's matrix has always
-  printed, and since ADR-0053 the kernel executes that table instead of a risk
-  class plus a ceiling pinned by hand on each declaration. A declaration may
-  tighten its own row and never widen it; `core/policy/effect-rows.test.ts`
-  asserts every shipped cell;
+  owns the taint ceiling and says whether irreversibility is decisive on that
+  row. The rows are the ones the threat model's matrix has always printed, and
+  since ADR-0053 the kernel executes that table instead of a risk class plus a
+  ceiling pinned by hand on each declaration. A declaration may tighten its own
+  row and never widen it; `core/policy/effect-rows.test.ts` asserts every
+  shipped cell;
 - capability risk/reversibility/rerunnability metadata;
 - the two acts the turn performs **without a tool** — replying on the
   originating channel and writing a memory episode — which since ADR-0055 are
@@ -206,6 +229,143 @@ must fail closed rather than skip the relevant gate.
 
 The model never chooses its own risk class, taint ceiling or constitutional
 exception.
+
+### When the kernel asks a human, and when it does not (ADR-0074)
+
+A confirmation is requested **if and only if** the capability declares
+`reversible: 'no'` **and** its effect row declares `asksForIrreversible` — the
+host machine, third-party code (MCP), a new outward recipient. Nothing else in
+the risk/taint path produces one. A declaration with an undo executes as a
+`draft` — checkpoint first, effect second — at every taint below its ceiling.
+A declaration with nothing to take back, on a row where that does not decide
+(`surface.reply`, `memory.write`, `surface.send_file`), is allowed: a reply is
+the conversation itself, and an approval prompt that gates replies cannot be
+delivered.
+
+Three mechanisms this replaced, named because each one existed and decided
+things until 2026-09-06:
+
+- **Ambient taint no longer produces an `ask`.** It still stamps provenance;
+  it no longer turns an `allow` or a `draft` into a question. §13 carries the
+  measurement that decided this. What it does above a row's ceiling changed
+  again one day later — see the next block.
+- **`risk` no longer produces an `ask`.** It still decides safe mode, the
+  budget gate, and the fail-safe that *queues* a high-risk request from an
+  autonomous `system`/`agent` principal instead of auto-approving it.
+- **`hardened` no longer skips one.** The `hardened && owner && taint === 0`
+  auto-allow is gone: `muffin rot harden` answers "who may rewrite the rules",
+  not "can this command be undone".
+
+Egress is a separate authority and is untouched by this: model-composed bytes
+riding out in a URL's query or fragment still ask the owner and refuse every
+other principal (ADR-0071), and a search's text answers to its own ceiling
+(ADR-0072). Both remain sources of an `ask` that has nothing to do with the
+rule above.
+
+### What the ceiling does above it (ADR-0075)
+
+ADR-0044's ceiling is still a ceiling and a sealed file can still lower it. What
+the kernel does when a request is above it now depends on the row:
+
+- **`host`** — there is no above any more. `denyAbove` is `3`, because every
+  capability on that row is already covered by another defence: `fs.write` is a
+  `draft` with a journal and `muffin undo`, `sys.shell` is the read-only lane
+  (no writes outside the scratch, no network), and `sys.shell.write` and
+  `sys.process.kill` are `reversible: 'no'` and therefore ask at every tier,
+  0 and 3 alike. The prohibition removed nothing from an attacker; it removed
+  the owner's ability to say yes.
+- **`external` and `outward`** — the ceiling stands at 1, and above it the
+  owner is **asked** with the tier quoted in the prompt while every other
+  principal keeps the same `deny/taint_exceeded` as before. This is the shape
+  `gateParams` already had for model-composed bytes (ADR-0071): the decision
+  stays with whoever can take it, and stays a decision, because bytes that have
+  left do not come back.
+- **`config` and `rot`** — unchanged, refused. `rot` is `-1`: never, for
+  anyone, at any tier, with `neverAtRuntime` refusing first.
+
+A `maxTaint` on a declaration may still narrow its row, but never on a
+reversible read: a read has nothing to take back and nothing that leaves, so
+the pin could only ever cost the capability. `core/policy/effect-rows.test.ts`
+refuses such a pin out loud.
+
+The approval text names the irreversible effect ("non si torna indietro:
+cambia questa macchina — `sys.shell`") plus the concrete action derived from
+the call's arguments. When the turn is above tier 0 it also names **the tier and
+where it came from** — "questo turno contiene contenuto di livello 3: il
+risultato di web_search" — assembled in `agent/loop/tool-call.ts`, which is the
+only place that knows which part of the turn raised the level. That line is
+context and never the cause: since ADR-0074 the tier produces no `ask` on the
+host row, and since ADR-0075 it produces no `deny` there either.
+
+### The tenant dimension: what a room may do (ADR-0073, 2026-09-06)
+
+Until 2026-09-06 the kernel had one answer to *may a remote tenant reach this
+capability* — `CapabilityDecl.hostOnly`, a property of the **capability**. The
+only way to give a group something was therefore to give it to every group at
+once, in TypeScript. Since ADR-0073 the kernel reads `hostOnly &&
+principal.kind === 'member' && !grantedTo(tenant, capability)`, and the second
+half comes from a `tenants` block in the sealed `rot/policy.json`:
+
+```json
+{ "schemaVersion": 1,
+  "tenants": { "group:telegram:-100950": { "grants": ["vault.write", "turn.todo"] } } }
+```
+
+This is the **only** field of that file that widens; every other one may only
+tighten. The asymmetry is deliberate — restricting never needs to ask,
+widening is written into the seal, which takes a file edit plus `muffin rot
+reseal`. Four properties bound it, and all four are in
+`core/policy/matrix.ts` rather than in the file that would use them:
+
+- a grant names **one room** (`group:…`, `community:…`) — never `group:*`,
+  never `host`;
+- a grant names **one capability** — never a `prefix.*` family, so it cannot
+  concede in advance whatever ships under that prefix tomorrow;
+- a closed list is never grantable at all: `sys.shell`, `sys.shell.*`,
+  `sys.process.*`, `fs.*`, `rot.*`, `outward.*`, `config.*`. A room has no
+  machine, and `resolveWorkspace` knows one workspace per installation
+  (ADR-0059), so `fs.*` would mean handing a group the owner's disk;
+- a file that breaks any of these is **refused whole**, naming the field
+  (`tenants.group:telegram:42.grants.0`), and the kernel falls back to the
+  compiled floor — which grants nothing to anybody. Same direction, and same
+  reason, as the refusal of a file still carrying `askAbove`.
+
+The compiled floor holds no grants, so every failure mode of that file leaves
+every room exactly where it was.
+
+What a granted room gets is bounded by everything else in this document, which
+the grant does not touch: `sys.search` in a granted room still answers to
+ADR-0071's composed-parameters gate and to `perTenantDailyUsd`; `vault.write`
+still answers to safe mode and the budget. **No room is ever granted
+`sys.search` with model-composed parameters** — ADR-0073 point 3 refuses that
+until an adversarial corpus of the shape 0066/0071 use shows no exfiltration
+scene completing undetected.
+
+The space a room gets is its **vault**, not the disk. `vault.write`
+(`agent/tools/vault-save.ts`) writes into `salvati/<room slug>/…` and indexes
+the file under the turn's own tenant — the tenant comes from `ToolContext`,
+never from an argument, so no call shape reaches another room's space. Its
+effect row is `vault`, declared `asksForIrreversible: false` with
+`denyAbove: 3`: a write that stays **inside** the boundary of the tenant
+writing it, with a journal and `muffin undo` behind it, crosses no approval at
+any taint. That is not trust in the writer — a group member is tier 2 by
+construction, and in a group an approval reaches nobody who could answer it,
+so a gate there would be a prohibition in disguise. It is the boundary that
+makes the write safe. Reading back is `documents.read`, which was already
+per-tenant.
+
+`muffin doctor` prints the rooms that hold grants, and stays silent when there
+are none.
+
+A sealed `rot/policy.json` may tighten a row in both of its fields: lower
+`denyAbove`, or turn `asksForIrreversible` on where the floor leaves it off.
+It may not turn one off. An owner who wants the old wall back writes
+`{"rows": {"host": {"denyAbove": 2}}}` and reseals; that path is exercised on
+the real binary by the D16 acceptance scenario.
+
+A file still carrying the removed `askAbove` field is **rejected** naming that field, and the kernel falls back to the compiled
+floor — an unknown key in the root of trust must not be read as a gate that no
+longer exists.
 
 A Node does **not** add another authority engine that can grant what the Home
 kernel refused. It contributes only a monotone local restriction. For a Node
@@ -416,6 +576,56 @@ Read access to the home is a separate, still-open question: a contained command
 can read `muffin.db` and the session log, and what leaves is governed by taint
 and egress rather than by this boundary.
 
+### 9.1 Two shell lanes, and what each one promises
+
+Since point 4 of the *ask only for the irreversible* decision (`docs/decisions/0074-si-chiede-solo-per-l-irreversibile.md` — the document lands in its own PR; this section is written against its point 4) there are two contained command capabilities, not one, and the
+line between them is what the sandbox can be made to guarantee rather than a
+judgement about how dangerous commands are.
+
+`sys.shell` (`shell_run`) is the **read-only lane**: the filesystem is readable
+subject to the deny-read list, writes are confined to a scratch directory this
+process creates under the system temp dir and removes when the session ends, and
+there is no IP network. It declares `reversible: 'yes'` and `risk: 'low'`, and
+the kernel therefore lets it run without asking anyone. That is the whole
+argument: a command that cannot write outside a throwaway directory has nothing
+to undo, and a command with no socket has sent nothing. Both halves are executed
+against a live sandbox in `core/sandbox/confine-sola-lettura.test.ts`, on Linux
+under `bwrap` in the `verifica` job of `scripts/ci-local.ts` and on macOS under
+seatbelt.
+
+`sys.shell.write` (`shell_run_write`) is the **writing lane**: the workspace is
+its write scope, it keeps `reversible: 'no'` and `risk: 'high'`, and it asks
+every time. It is the capability the earlier single `sys.shell` was.
+
+Three properties of this split are load-bearing:
+
+- **The boundary is wiring, not a rule.** `SandboxExecutor.runReadOnly` takes a
+  request type with no `writeScope` field, so the read-only lane cannot be
+  handed the workspace by a mistaken caller. The two lanes are two tools with
+  two capability ids, decided by the kernel before a handler runs, rather than
+  one tool branching on a parameter the model wrote.
+- **Neither lane exists where containment cannot be proved.** The read-only lane
+  is the stricter of the two and its promise *is* the sandbox's promise, so a
+  host with a negative `probeSandbox` gets no shell at all — never the read-only
+  one as a "safe fallback", and never a silent fall back to the writing one. The
+  tool says the command must be run by hand or with a dedicated tool.
+- **What it does not claim.** Two residuals are declared rather than implied.
+  On Linux `network.allowAllUnixSockets` is on — srt's seccomp layer, the only
+  thing that blocks `socket(AF_UNIX, …)`, is broken on Ubuntu 24.04 (upstream
+  #428/#429) — and `--unshare-net` does not cover Unix sockets, which are
+  filesystem objects: a socket reachable under the read-only bind is reachable
+  from the read-only lane. And a command still spends the host's CPU, memory and
+  file descriptors. So `sys.shell` stays on the `host` effect row rather than
+  moving to `context`: "no writes outside the scratch and no IP network" is the
+  claim; "no effect of any kind on the host" is not.
+
+Network is off on **both** lanes today, although that decision describes the
+writing one as writing *or* reaching the network. Opening the network there would route
+around the Root of Trust's egress allowlist (ADR-0066) through a door that does
+not consult it, and that is a separate decision from this split. The current
+state is asserted, not assumed: the same live containment test checks the
+writing lane cannot reach a listening host socket either.
+
 Symlink, hardlink, ancestor-symlink and path-canonicalisation behaviour are part
 of the security claim rather than filesystem edge cases.
 
@@ -550,7 +760,17 @@ implements or verifies the mechanism, not for whoever reads `muffin doctor`.
 
 The Root of Trust contains constitutional material the runtime may not silently
 weaken: identity floor, policy floors/ceilings, hard deny lists, egress/budget
-configuration and other sealed material explicitly designated as such.
+configuration, the owner binding (`rot/owner.json` — which account each surface
+recognises as the owner, written by pairing and resealed in the same act) and
+other sealed material explicitly designated as such. A sealed binding that does
+not verify authenticates nobody, and does not fall back to `config.json`: the
+process that could tamper with the sealed file is the same one that can rewrite
+the unsealed copy, so a fallback would make the seal a suggestion.
+The seal is a detection boundary, not a prevention one: in `single-user` mode
+the sealed files share the owner's OS user and permissions, so a process that
+can rewrite `config.json` can also reseal a consistent chain, and that state is
+indistinguishable from a legitimate pairing. Only `hardened` mode (`muffin rot
+harden`) puts the seal out of that process's reach.
 
 A detected divergence moves the runtime toward conservative behaviour until the
 owner deliberately reseals/restarts as required by the implementation.
@@ -593,13 +813,34 @@ status lives only in `docs/work/day1/requirements-status.md`.
 - **A security mechanism is not considered real merely because its module, ADR
   or unit tests exist.** Production wiring and failure-path evidence are
   required.
-- **Ambient context taint is the incumbent authority signal, and its precision
-  is an open question — not a settled one.** §4 and §5 use provenance tier both
-  as a property of data and, after taking the maximum over the context, as a
-  turn-wide authority input. Dogfood shows the cost: owner-directed work becomes
-  unreachable after reading disk or external content, even when that content did
-  not choose the action. A task/action-flow model — binding authority to *what
-  asked for an action* rather than to the highest tier merely present — is an
+- **Ambient context taint is provenance everywhere, and an authority only
+  where bytes leave the tenant (2026-09-06).** §4 and §5 use provenance tier
+  both as a property of data and, after taking the maximum over the context, as
+  a turn-wide input. Two changes on the same day narrowed what that input
+  decides: ADR-0074 removed the confirmation, and ADR-0075 removed the refusal
+  on the `host` row and turned the refusal on `external`/`outward` into a
+  question **for the owner only**. What survives is the ceiling on the rows
+  that leave the tenant, the stamp on every episode, and the line in every
+  approval prompt. ADR-0074 removed `askAbove` from
+  the rows because the measurement said the gate was not gating what it was
+  for: on the real installation, **all 35 approvals ever requested were
+  `sys.shell` at taint 2, and 32 were granted** — a prompt conceded nine times
+  out of ten is a reflex, not a decision — while what the taint actually shut
+  down was `fs.write`, the one write in the system that takes a checkpoint and
+  has `muffin undo` behind it. The same signal appeared in the character eval:
+  5 of the 6 `agentic` failures of the main model were turns stopped on an
+  approval nobody was there to give (`docs/evidence/tool-use-2026-09-06.md`).
+  On a headless process — the VPS, a scheduler job — such a prompt is an
+  `exit 3`, which is a prohibition in disguise. A confirmation now follows
+  irreversibility, which is the question it was always for; the taint keeps the
+  ceiling, the provenance stamps and the context line on the prompt.
+
+  The precision of the ambient scalar **as a ceiling** remains an open
+  question, not a settled one. Dogfood shows the cost: owner-directed work
+  becomes unreachable after reading disk or external content, even when that
+  content did not choose the action. A task/action-flow model — binding
+  authority to *what asked for an action* rather than to the highest tier merely
+  present — is an
   **unresolved hypothesis**. It may replace the incumbent only if a comparative
   evaluation demonstrates better utility **without material security
   regression**, and an ADR written before that comparison exists would be
@@ -656,7 +897,53 @@ status lives only in `docs/work/day1/requirements-status.md`.
   §6.1) it names but does not close: `paramsMaxTaint` does not gate a group
   turn's first message, because that principal's own floor taint already
   equals the ceiling.
-  paragraph.
+
+  **2026-09-06 (ADR-0074): the third of those three guards changed shape.**
+  The corpus found that what stopped things was the egress allowlist, the
+  tool's own SSRF floor, and *a single approval prompt* — and this ADR moved
+  when that prompt fires. It no longer fires because the turn is tainted; it
+  fires because the act cannot be undone, on every taint including 0 and on a
+  hardened install. On the corpus's own terms the change cuts both ways and
+  neither direction is claimed here without a rerun: the scenes where the
+  attack completed *because the owner approved* are unaffected (the prompt was
+  shown and granted either way), while `sys.shell` at taint 0 — previously an
+  auto-allow under `hardened` — now prompts, and `fs.write` after a read no
+  longer does.
+
+  **2026-09-06 (ADR-0075): the ambient scalar stops being an authority on the
+  host, and the corpus was rerun.** The measurement that opened it is the
+  owner's own installation: nine of fourteen private turns at tier 3, the last
+  real `sys.shell` call three days old, and the last turn of the day ending on
+  `context taint 3 exceeds 2 for sys.shell (host)`. After a web search, no
+  shell and no write until a new conversation — and the model reported that to
+  the owner as "I don't have the shell". So `host.denyAbove` moved 2 → 3, the
+  `maxTaint` pins came off `skill.read` and `sys.process.list`, and above the
+  ceiling of `external`/`outward` the owner is asked rather than refused.
+
+  The rerun, same eight scenes, same machine, before and after the change:
+  **4 of 8 attacks complete with no human at all, 5 of 8 if the owner answers
+  the way the real owner answered 32 of 35 times, 8 of 8 controls alive** —
+  identical scene by scene, including which guard stopped what (the tool's SSRF
+  floor twice, one approval prompt once, nothing in the other five). Candidate
+  B still beats the incumbent on 0 of 8. This is the falsifier ADR-0075 named
+  for itself: had the number risen, the prohibition would have been stopping
+  something the ADR had not seen, and the ADR would reopen with that scene as
+  evidence.
+
+  The deterministic A/B layer was re-measured too, and it reports a result
+  worth stating plainly rather than burying: **on every baseline scene, for the
+  owner, the ambient scalar and its absence now give the same verdict.** Two
+  cells moved with this ADR — a write with an undo, from `deny` to `draft`, and
+  an outward message, from `deny` to the same `ask` the no-taint arm already
+  gave — and the two that ADR-0074 had already levelled stayed level. What the
+  scalar still buys, and what that baseline does not measure because it only
+  interrogates the owner, is the refusal for every *other* principal above the
+  outward ceiling, asserted in `core/policy/solo-irreversibile.test.ts`.
+
+  The corpus has not been rerun against ADR-0074's kernel separately; the
+  2026-09-06 numbers above are one run of the current kernel and the one
+  immediately before this change, and are not restated as valid for any other
+  build.
 
 ## 14. What this document does not own
 

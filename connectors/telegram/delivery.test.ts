@@ -17,6 +17,7 @@ function sendPart(html: string, index: number): TelegramDeliveryPlanPart {
   return {
     operation: 'send',
     chatId: 42,
+    threadId: null,
     replyTo: index === 0 ? 7 : null,
     editMessageId: null,
     html,
@@ -84,16 +85,71 @@ describe('deliverTelegram — ambiguous effects are terminal', () => {
     });
     const plan = [sendPart('answer', 0)];
 
-    await expect(deliverTelegram(store, apiWith(sendMessage), 'turn-unknown', plan, at)).resolves.toBe(
-      'possibly_sent',
-    );
-    await expect(deliverTelegram(store, apiWith(sendMessage), 'turn-unknown', plan, at)).resolves.toBe(
-      'possibly_sent',
-    );
+    await expect(
+      deliverTelegram(store, apiWith(sendMessage), 'turn-unknown', plan, at),
+    ).resolves.toBe('possibly_sent');
+    await expect(
+      deliverTelegram(store, apiWith(sendMessage), 'turn-unknown', plan, at),
+    ).resolves.toBe('possibly_sent');
 
     expect(accepted).toBe(1);
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(store.parts('turn-unknown')[0]?.status).toBe('possibly_sent');
+  });
+
+  it('an edit Telegram refuses as "not modified" is a delivery, not a failure', async () => {
+    // Ogni riavvio del gateway rielabora gli update in sospeso, e l'edit
+    // finale riscrive un messaggio identico: la Bot API risponde 400 «message
+    // is not modified». Il testo sullo schermo è quello voluto, quindi il
+    // pezzo è `sent` con lo stesso message id — non `rejected`, non
+    // `possibly_sent`, e senza rilanciare l'errore al chiamante.
+    const db = new DatabaseCtor(':memory:');
+    const store = new TelegramDeliveryStore(db);
+    const editMessageText = vi.fn(async () => {
+      throw new TelegramError(
+        400,
+        'Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message',
+      );
+    });
+    const plan: TelegramDeliveryPlanPart[] = [
+      {
+        operation: 'edit',
+        chatId: 42,
+        threadId: null,
+        replyTo: null,
+        editMessageId: 9001,
+        html: 'answer',
+      },
+    ];
+
+    await expect(
+      deliverTelegram(
+        store,
+        { editMessageText } as unknown as TelegramApiLike,
+        'turn-edit-same',
+        plan,
+        at,
+      ),
+    ).resolves.toBe('sent');
+    expect(store.parts('turn-edit-same')[0]).toMatchObject({
+      status: 'sent',
+      telegramMessageId: 9001,
+    });
+
+    // Ogni altro 400 resta un rifiuto, come prima.
+    const other = vi.fn(async () => {
+      throw new TelegramError(400, 'Bad Request: message to edit not found');
+    });
+    await expect(
+      deliverTelegram(
+        store,
+        { editMessageText: other } as unknown as TelegramApiLike,
+        'turn-edit-gone',
+        plan,
+        at,
+      ),
+    ).rejects.toThrow('not found');
+    expect(store.parts('turn-edit-gone')[0]?.status).toBe('rejected');
   });
 
   it('lets one concurrent delivery cross the wire and defers the loser', async () => {
@@ -101,20 +157,26 @@ describe('deliverTelegram — ambiguous effects are terminal', () => {
     const store = new TelegramDeliveryStore(db);
     let release!: (message: { message_id: number }) => void;
     const sendMessage = vi.fn(
-      () => new Promise<{ message_id: number }>((resolve) => {
-        release = resolve;
-      }) as never,
+      () =>
+        new Promise<{ message_id: number }>((resolve) => {
+          release = resolve;
+        }) as never,
     );
     const plan = [sendPart('answer', 0)];
 
     const winner = deliverTelegram(store, apiWith(sendMessage), 'turn-concurrent', plan, at);
     await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
-    await expect(deliverTelegram(store, apiWith(sendMessage), 'turn-concurrent', plan, at)).resolves.toBe('deferred');
+    await expect(
+      deliverTelegram(store, apiWith(sendMessage), 'turn-concurrent', plan, at),
+    ).resolves.toBe('deferred');
     release({ message_id: 91 });
 
     await expect(winner).resolves.toBe('sent');
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(store.parts('turn-concurrent')[0]).toMatchObject({ status: 'sent', telegramMessageId: 91 });
+    expect(store.parts('turn-concurrent')[0]).toMatchObject({
+      status: 'sent',
+      telegramMessageId: 91,
+    });
   });
 
   it('never replays a confirmed multipart prefix and stops the suffix after an ambiguous part', async () => {
@@ -128,8 +190,12 @@ describe('deliverTelegram — ambiguous effects are terminal', () => {
     });
     const plan = ['part-0', 'part-1', 'part-2'].map(sendPart);
 
-    expect(await deliverTelegram(store, apiWith(sendMessage), 'turn-multipart', plan, at)).toBe('possibly_sent');
-    expect(await deliverTelegram(store, apiWith(sendMessage), 'turn-multipart', plan, at)).toBe('possibly_sent');
+    expect(await deliverTelegram(store, apiWith(sendMessage), 'turn-multipart', plan, at)).toBe(
+      'possibly_sent',
+    );
+    expect(await deliverTelegram(store, apiWith(sendMessage), 'turn-multipart', plan, at)).toBe(
+      'possibly_sent',
+    );
 
     expect(sent).toEqual(['part-0', 'part-1']);
     expect(store.parts('turn-multipart').map((part) => part.status)).toEqual([
@@ -154,11 +220,19 @@ describe('deliverTelegram — ambiguous effects are terminal', () => {
     });
     const plan = ['part-0', 'part-1', 'part-2'].map(sendPart);
 
-    await expect(deliverTelegram(store, apiWith(sendMessage), 'turn-rejected', plan, at)).rejects.toThrow('429');
-    await expect(deliverTelegram(store, apiWith(sendMessage), 'turn-rejected', plan, at)).resolves.toBe('sent');
+    await expect(
+      deliverTelegram(store, apiWith(sendMessage), 'turn-rejected', plan, at),
+    ).rejects.toThrow('429');
+    await expect(
+      deliverTelegram(store, apiWith(sendMessage), 'turn-rejected', plan, at),
+    ).resolves.toBe('sent');
 
     expect(sent).toEqual(['part-0', 'part-1', 'part-2']);
     expect(sendMessage).toHaveBeenCalledTimes(4);
-    expect(store.parts('turn-rejected').map((part) => part.status)).toEqual(['sent', 'sent', 'sent']);
+    expect(store.parts('turn-rejected').map((part) => part.status)).toEqual([
+      'sent',
+      'sent',
+      'sent',
+    ]);
   });
 });

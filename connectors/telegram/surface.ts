@@ -1,8 +1,10 @@
 import { statSync } from 'node:fs';
-import { DELIVERED, notDelivered, type DeliveryOutcome, type FileSpec, type Surface } from '../../core/surface/types.js';
-import type { TelegramApi } from './api.js';
+import { DELIVERED, fileModeFor, notDelivered, type DeliveryOutcome, type FileSpec, type Surface } from '../../core/surface/types.js';
+import { negoziazioneTelegram, stanzaDi, TELEGRAM_PLACES } from './negoziazione.js';
+import type { TelegramApiLike } from './api.js';
 import { MAX_DOWNLOAD_BYTES, sendDocument } from './media.js';
 import { renderForTelegram, TELEGRAM_MAX } from './render.js';
+import { makeIngressPort, type IngressPort } from '../shared/ingress/types.js';
 
 /**
  * Telegram as a delivery target, separate from Telegram as a listener.
@@ -37,7 +39,17 @@ function chatIdFor(channel: string, ownerChatId: number | undefined): number | n
   return Number.isInteger(id) && id !== 0 ? id : null;
 }
 
-export function telegramSurface(api: TelegramApi, ownerChatId: number | undefined): Surface {
+/**
+ * L'id di questa porta, scritto una volta.
+ *
+ * Letto da `Surface.id` qui sotto e dalla tabella `INGRESS_PORTS`
+ * (`cli/surface.ts`): finché è una costante sola, la riga `turns.surface` che
+ * lo stadio `work` scrive e la chiave sotto cui `doors`/`streams`/`approvers`
+ * registrano non possono divergere (§4 invariante 1).
+ */
+export const TELEGRAM_ID = 'telegram';
+
+export function telegramSurface(api: TelegramApiLike, ownerChatId: number | undefined): Surface {
   // N1 (judge, PR #42): `deliverFile`'s size check used to hand-write
   // `50 * 1024 * 1024` again instead of reading the number it had already
   // declared here — two literals that agreed today and had no reason to keep
@@ -53,7 +65,7 @@ export function telegramSurface(api: TelegramApi, ownerChatId: number | undefine
   };
 
   return {
-    id: 'telegram',
+    id: TELEGRAM_ID,
     limits,
     // Always 'edit', for both transports the connector ends up choosing
     // between (`connectors/telegram/presence.ts`): a business draft in a
@@ -63,6 +75,13 @@ export function telegramSurface(api: TelegramApi, ownerChatId: number | undefine
     // rewrite — this field only declares what the *live* turn path
     // (`TelegramConnector.handle`) is capable of.
     streaming: { transport: 'edit' },
+
+    // La tabella `(porta, stanza)` del 06/09/2026, letta da `negoziazione.ts`
+    // e da nessun letterale qui: chi consuma la negoziazione (la trascrizione
+    // del turno vivo) e chi la verifica (`assertNegotiable`, `parita.test.ts`)
+    // guardano lo stesso oggetto.
+    places: TELEGRAM_PLACES,
+    negotiate: negoziazioneTelegram,
 
     handles: (channel) => chatIdFor(channel, ownerChatId) !== null,
 
@@ -116,10 +135,20 @@ export function telegramSurface(api: TelegramApi, ownerChatId: number | undefine
       // Checked here, before a multipart upload is even built: failing fast on
       // a file the Bot API would reject anyway is cheaper than discovering it
       // after reading the bytes into memory and opening the connection.
-      if (bytes > limits.maxUploadBytes) {
-        return notDelivered(
-          `${(bytes / 1e6).toFixed(1)}MB, oltre il limite di ${(limits.maxUploadBytes / 1e6).toFixed(0)}MB di sendDocument`,
-        );
+      // La catena `files` decide, e per un file troppo grande la stanza
+      // risponde `'say'`: prima del 06/09/2026 la risposta era
+      // `{delivered:false}`, cioè «non te lo do» senza dire dove sta.
+      const modo = fileModeFor(negoziazioneTelegram(stanzaDi({ isPrivate: chatId > 0 })), limits, bytes);
+      if (modo !== 'native') {
+        const dove =
+          `${file.filename} è pronto ma pesa ${(bytes / 1e6).toFixed(1)}MB, oltre il limite di ` +
+          `${(limits.maxUploadBytes / 1e6).toFixed(0)}MB di sendDocument: sta in ${file.absolutePath}`;
+        try {
+          await api.sendMessage(chatId, dove);
+          return DELIVERED;
+        } catch (error) {
+          return notDelivered(`telegram ha rifiutato anche il messaggio con il percorso: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
 
       try {
@@ -130,4 +159,23 @@ export function telegramSurface(api: TelegramApi, ownerChatId: number | undefine
       }
     },
   };
+}
+
+/**
+ * Telegram as an **ingress** port (slice 14, §2.3): the same `Surface` above,
+ * plus the handful of inbound-only facts `Surface` has no field for.
+ *
+ * Built through `makeIngressPort` rather than as an object literal so the
+ * declaration cannot contradict the `Surface` it contains: `edit: true` here
+ * and `streaming.transport: 'edit'` above are the same fact, and the
+ * constructor refuses a port where they disagree.
+ */
+export function telegramPort(api: TelegramApiLike, ownerChatId: number | undefined): IngressPort {
+  return makeIngressPort(telegramSurface(api, ownerChatId), {
+    commands: true,
+    buttons: true,
+    edit: true,
+    typing: true,
+    upload: true,
+  });
 }

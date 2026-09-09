@@ -26,6 +26,7 @@ unused manifest would be another source of drift.
 | How is Muffin shaped now? | `docs/ARCHITECTURE.md` |
 | What security boundary does Muffin claim now? | `docs/SECURITY.md` |
 | How should design choices be made? | `docs/DESIGN-PRINCIPLES.md` |
+| How is Muffin installed, updated and rolled back on a real machine? | `install.sh`, with `docs/INSTALL.md` for what it does and why |
 | How should installable capability grow around the core? | `docs/EXTENSIONS.md` |
 | How should the owner-run project become public/community-maintained? | `docs/OPEN-SOURCE-STRATEGY.md` |
 | How do public/current/historical claims stay honest outside this repo? | `docs/PUBLIC-NARRATIVE.md` |
@@ -37,7 +38,6 @@ unused manifest would be another source of drift.
 | How is repository work orchestrated and verified? | `docs/ORCHESTRATION.md`, with `BRANCHING.md`, `JUDGE.md` and `PRACTICES.md` for their scoped concerns. |
 | What evidence informed a decision? | `docs/evidence/`, audits and `docs/evidence/lessons.md` |
 | What did the project believe or do at an earlier point? | `docs/history/` and rebuild-era material; never a claim about HEAD |
-| What does the architecture map show? | `docs/derived/architecture-map/`; a derived view, never an independent source of truth |
 
 There is no universal "Markdown beats code" or "latest file wins" rule. Authority
 is **typed by question**.

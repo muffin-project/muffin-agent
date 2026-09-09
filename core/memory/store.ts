@@ -97,6 +97,8 @@ export type Fact = {
   importance: number;
   /** The fact that replaced this one, if any. Recall shows it; `why` follows it. */
   supersededBy: number | null;
+  /** Set only by `retireFacts`: the owner asked to forget, and this names the request. Absent on rows read by other queries. */
+  retiredReason?: string | null;
   /**
    * 0 or 1 — SQLite has no boolean, and this follows `importance`'s own
    * convention of reading the CHECK-less integer bare rather than narrowing
@@ -234,6 +236,10 @@ export class MemoryStore {
     // `MemoryStore` straight from a file, exactly the gap `jobs.kind`'s own
     // `ensureColumn` call exists to close (judge #106 giro 2).
     ensureColumn(db, 'facts', 'pinned', 'pinned INTEGER NOT NULL DEFAULT 0');
+    // Why a belief was retired without a successor — «dimentica X» from the
+    // owner (`ingest.ts#retireBeliefs`), never the judge's `supersede`, which
+    // records its reason as `superseded_by`. NULL on every historical row.
+    ensureColumn(db, 'facts', 'retired_reason', 'retired_reason TEXT');
     // Nullable e senza default: un database esistente guadagna la colonna e non
     // perde una riga, e nessuna riga storica riceve un turno che non ha avuto.
     ensureColumn(db, 'episodes', 'turn_id', 'turn_id TEXT');
@@ -528,6 +534,68 @@ export class MemoryStore {
          WHERE id = ? AND tenant_id = ? AND expired_at IS NULL`,
       )
       .run(at, newFactId, validTo === null ? null : (validTo ?? at), oldFactId, tenantId);
+  }
+
+  /**
+   * Retire beliefs **without** a successor — the owner said «dimentica X».
+   *
+   * Same columns `supersede` closes (`expired_at`, `valid_to`), no
+   * `superseded_by`, and `retired_reason` says which request did it, so
+   * `muffin memory why` and `--history` can show a retirement instead of a
+   * fact that silently stopped being true. Nothing is deleted: the row, its
+   * episode and its provenance stay (ADR-0051, #481). Only active facts of
+   * this tenant move; the ids that actually changed come back, so a caller
+   * cannot confirm a retirement that did not happen.
+   */
+  /**
+   * Active facts whose text carries the words of a query — deterministic,
+   * no embedder. `memory_forget` lists candidates with this, because on the
+   * owner's install (08/09/2026) the fact just extracted had no vector yet
+   * (embedder backlog) and recall's vector half never surfaced it: the owner
+   * said «dimentica» and the belief stayed. Tokens of 4+ letters, any match,
+   * ranked by how many matched; `limit` caps it. Not a recall strategy — a
+   * safety net for one verb.
+   */
+  searchActiveFacts(tenantId: string, query: string, limit = 12): Fact[] {
+    const tokens = [...new Set(query.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 4))];
+    if (tokens.length === 0) return [];
+    const rows = this.db
+      .prepare(
+        `SELECT f.id, f.subject_id AS subjectId, s.name AS subjectName, f.predicate,
+                f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
+                f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
+                f.expired_at AS expiredAt, f.episode_id AS episodeId,
+                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance, f.pinned,
+                f.superseded_by AS supersededBy
+         FROM facts f
+         JOIN entities s ON s.id = f.subject_id
+         LEFT JOIN entities o ON o.id = f.object_id
+         WHERE f.tenant_id = ? AND f.expired_at IS NULL`,
+      )
+      .all(tenantId) as Fact[];
+    const scored = rows
+      .map((f) => {
+        const text = `${f.subjectName} ${f.predicate} ${f.objectValue ?? ''} ${f.objectName ?? ''}`.toLowerCase();
+        return { f, hits: tokens.filter((t) => text.includes(t)).length };
+      })
+      .filter((x) => x.hits > 0)
+      .sort((a, b) => b.hits - a.hits || b.f.id - a.f.id);
+    return scored.slice(0, limit).map((x) => x.f);
+  }
+
+  retireFacts(tenantId: string, factIds: number[], at: string, reason: string): number[] {
+    const stmt = this.db.prepare(
+      `UPDATE facts SET expired_at = ?, valid_to = COALESCE(valid_to, ?), retired_reason = ?
+       WHERE id = ? AND tenant_id = ? AND expired_at IS NULL`,
+    );
+    const retired: number[] = [];
+    const tx = this.db.transaction((ids: number[]) => {
+      for (const id of ids) {
+        if (stmt.run(at, at, reason, id, tenantId).changes > 0) retired.push(id);
+      }
+    });
+    tx(factIds);
+    return retired;
   }
 
   /**
@@ -1151,7 +1219,7 @@ export class MemoryStore {
                 f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
                 f.expired_at AS expiredAt, f.episode_id AS episodeId,
                 f.trust_tier AS trustTier, f.confidence, f.origin, f.importance, f.pinned,
-                f.superseded_by AS supersededBy
+                f.superseded_by AS supersededBy, f.retired_reason AS retiredReason
          FROM facts f
          JOIN entities s ON s.id = f.subject_id
          LEFT JOIN entities o ON o.id = f.object_id
@@ -1233,6 +1301,35 @@ export class MemoryStore {
          ORDER BY f.id`,
       )
       .all(tenantId, episodeId) as Fact[];
+  }
+
+  /**
+   * The other direction of `supersededBy`: which facts this one replaced.
+   *
+   * Moved out of `cli/memory.ts`'s `cmdMemoryWhy`, where it was a raw
+   * `db.prepare` call reaching past the store — the one query in that
+   * function that was not tenant-scoped through a method here, which is
+   * exactly the shape this file's own docstring (`WHERE` filtered "at the
+   * least careful query") warns about. `agent/tools/memory.ts`'s `memory_why`
+   * needs the identical rows and would otherwise have had to repeat the same
+   * raw SQL a second time, on a `Database` handle it does not hold.
+   */
+  factsSupersededBy(tenantId: string, factId: number): Fact[] {
+    return this.db
+      .prepare(
+        `SELECT f.id, f.subject_id AS subjectId, s.name AS subjectName, f.predicate,
+                f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
+                f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
+                f.expired_at AS expiredAt, f.episode_id AS episodeId,
+                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance, f.pinned,
+                f.superseded_by AS supersededBy
+         FROM facts f
+         JOIN entities s ON s.id = f.subject_id
+         LEFT JOIN entities o ON o.id = f.object_id
+         WHERE f.tenant_id = ? AND f.superseded_by = ?
+         ORDER BY f.id`,
+      )
+      .all(tenantId, factId) as Fact[];
   }
 
   stats(tenantId: string): MemoryStats {

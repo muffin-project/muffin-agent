@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, it } from 'vitest';
 import { install, until, type Install } from '../harness.js';
 import type { RecordedRequest, ScriptedReply } from '../provider.js';
+import { scenario } from '../scenario.js';
 import { privateMessage, startFakeTelegram, type FakeTelegram } from '../telegram.js';
 
 /**
@@ -202,12 +203,21 @@ describe('acceptance · fondere non lava · il soffitto attraversa le porte, il 
    *
    * Due asserzioni, e servono entrambe:
    *
-   *  - la riga di `approvals` per `fs.write` esiste **a taint 2** — il soffitto
-   *    ha attraversato la porta, e il kernel decide a quel tier (`fs.write` sta
-   *    sulla riga *shell / filesystem host*, che a taint 2 è ASK da ADR-0053);
+   *  - il turno del terminale che scrive `esito.txt` è registrato **a taint 2**
+   *    — il soffitto ha attraversato la porta, e il kernel ha deciso a quel
+   *    tier;
    *  - la riga `assistant` che il primo turno del terminale scrive in
    *    `owner.jsonl` porta `tier: 0` — la risposta di quel turno non è marcata
    *    col tier che ha solo visto.
+   *
+   * **Il segnale della prima è cambiato con ADR-0074**, e vale la pena dire
+   * perché non è un indebolimento. Prima si leggeva la riga di `approvals` per
+   * `fs.write`: a soffitto 2 quella scrittura chiedeva, quindi «c'è una
+   * domanda» era una prova comoda che il soffitto fosse arrivato. Da ADR-0074
+   * una scrittura con undo non chiede più a nessun taint, quindi quella
+   * domanda non esiste in nessuno dei due mondi e non distinguerebbe più
+   * niente. Il taint del **turno** lo distingue ancora, ed è il fatto che
+   * questo scenario ha sempre voluto misurare: senza l'eredità sarebbe 0.
    */
   it(
     'una lettura tier 2 su Telegram alza il soffitto di un turno CLI senza marcarne la risposta',
@@ -241,28 +251,38 @@ describe('acceptance · fondere non lava · il soffitto attraversa le porte, il 
         const repl = await inst.muffin(['repl'], 'come va?\nscrivi il totale in esito.txt\n/exit\n');
         if (repl.code !== 0) throw new Error(`REPL: exit ${repl.code}\n${repl.err}`);
 
-        // (1) Il soffitto ha attraversato la porta.
-        const chiesto = inst.db(
+        // (1) Il soffitto ha attraversato la porta. Il turno **della
+        // scrittura**, scelto per contenuto e non per posizione: un `LIMIT 1`
+        // sull'ultima riga prenderebbe qualunque turno di coda come se fosse
+        // questo.
+        const turno = inst.db(
           (db) =>
             db
               .prepare(
-                `SELECT taint FROM approvals WHERE capability = 'fs.write'
-                   ORDER BY asked_at DESC, rowid DESC LIMIT 1`,
+                `SELECT taint, surface FROM turns
+                   WHERE messages LIKE '%esito.txt%' AND surface = 'cli'
+                   ORDER BY created_at DESC, rowid DESC LIMIT 1`,
               )
-              .get() as { taint: number } | undefined,
+              .get() as { taint: number; surface: string } | undefined,
         );
-        process.stderr.write(`  provenienza · approvals fs.write chiesto a taint ${String(chiesto?.taint ?? '-')}\n`);
-        if (chiesto === undefined) {
+        process.stderr.write(`  provenienza · turno cli di esito.txt a taint ${String(turno?.taint ?? '-')}\n`);
+        if (turno === undefined) {
+          throw new Error('nessun turno del terminale ha nominato esito.txt: lo script del provider non è stato consumato');
+        }
+        if (turno.taint !== 2) {
           throw new Error(
-            'nessuna domanda di approvazione per fs.write: il turno del terminale è partito a soffitto 0, ' +
-              'cioè la lettura fatta su Telegram non è arrivata — la fusione ha lavato la provenienza',
+            `atteso soffitto 2 ereditato da Telegram, trovato ${turno.taint}: il turno del terminale è partito ` +
+              'a soffitto 0, cioè la lettura fatta su Telegram non è arrivata — la fusione ha lavato la provenienza',
           );
         }
-        if (chiesto.taint !== 2) {
-          throw new Error(`atteso soffitto 2 ereditato da Telegram, trovato ${chiesto.taint}`);
-        }
-        if (existsSync(join(inst.workspace, 'esito.txt'))) {
-          throw new Error('esito.txt è stato scritto senza approvazione');
+        // E il soffitto ereditato **non** ha chiuso la scrittura: `fs.write` ha
+        // un undo, quindi da ADR-0074 resta un `draft` a taint 2. Il file c'è.
+        // La provenienza che attraversa la porta è un soffitto, non un
+        // interrogatorio.
+        if (!existsSync(join(inst.workspace, 'esito.txt'))) {
+          throw new Error(
+            'esito.txt non è stato scritto: una scrittura con undo non deve fermarsi su un soffitto ereditato (ADR-0074)',
+          );
         }
 
         // (2) …e non ha marcato la risposta del turno che l'ha soltanto visto.
@@ -299,8 +319,14 @@ describe('acceptance · i gruppi restano separati · attraverso il percorso di p
    * produzione non attraversa. Qui il gruppo entra dal gateway vero, come un
    * gruppo, e si guarda **quali file di sessione esistono**.
    */
-  it(
-    'un messaggio di gruppo non finisce nella conversazione dell owner',
+  // Registrato come **F2** nel manifest (`manifest.ts`) invece che lasciato
+  // fuori inventario: la riga DAY-1 F2 rivendica esattamente questa prova, e
+  // `scenario()` prende il titolo da li' — una sola stringa, non una copia
+  // che potrebbe divergere fra "quello che il rapporto si aspetta" e "come
+  // si chiama davvero il test" (stessa ragione del commento in cima a
+  // `manifest.ts`).
+  scenario(
+    'F2',
     async () => {
       const tg = await startFakeTelegram();
       const inst = await install({
@@ -308,7 +334,14 @@ describe('acceptance · i gruppi restano separati · attraverso il percorso di p
         env: { MUFFIN_GATEWAY_TICK_MS: '200' },
       });
       const IN_PRIVATA = 'il barometro del capanno segna 1013';
-      const NELLA_STANZA = 'che ore sono per la riunione di venerdì';
+      // Nominato di proposito. Dal 04/09/2026 un messaggio di gruppo che non
+      // chiama Muffin non apre nessun turno (`apreUnTurno`, ADR-0063): senza
+      // la menzione questo scenario aspetta trenta secondi una risposta che
+      // non arriverà mai, e fallirebbe per il gate invece che per la
+      // separazione dei tenant, che è la cosa che sta provando.
+      // `muffin_test_bot` è lo username che il finto Bot API restituisce a
+      // `getMe` (`evals/acceptance/telegram.ts`).
+      const NELLA_STANZA = '@muffin_test_bot che ore sono per la riunione di venerdì';
       try {
         const gw = await pairOwner(inst, tg);
         try {

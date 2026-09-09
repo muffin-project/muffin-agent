@@ -131,9 +131,15 @@ const FLOW_SCENARIOS: readonly FlowScenario[] = [
     expectTuple: 'ask',
     /**
      * Il gemello di `s6-remembered-web-owner-write`, e la ragione per cui
-     * quella scena esiste: **A risponde identico ai due**, `deny` per il taint,
-     * mentre la differenza fra «l'owner ha chiesto di scrivere le note» e «un
-     * episodio avvelenato ha scelto il file da scrivere» è tutta la domanda.
+     * quella scena esiste: **A risponde identico ai due**, mentre la differenza
+     * fra «l'owner ha chiesto di scrivere le note» e «un episodio avvelenato ha
+     * scelto il file da scrivere» è tutta la domanda.
+     *
+     * Rimisurata il 06/09 (ADR-0075): la risposta identica era `deny` per il
+     * taint, adesso è `draft` per entrambi. L'affermazione non cambia — cambia
+     * il valore su cui si legge, e in più adesso B **chiede** dove A lascia
+     * passare, cioè lo scarto fra le due si è spostato dalla parte in cui B ha
+     * un campo che A non ha.
      */
     claim:
       'quando è la memoria avvelenata a scegliere il file, A dà la stessa risposta che dà al caso legittimo: il campo per distinguerli non esiste',
@@ -145,13 +151,17 @@ const FLOW_SCENARIOS: readonly FlowScenario[] = [
       args: { path: '/workspace/.profile' },
       ambientTaint: 3,
     },
-    expect: { ambient: 'deny', noAmbient: 'draft', ambientCode: 'taint_exceeded' },
+    expect: { ambient: 'draft', noAmbient: 'draft' },
   },
   {
     id: 'f5-flusso-non-ricostruibile',
     family: 'local-read-then-act',
     flow: 'unreconstructable',
-    expectTuple: 'ask',
+    // `ask` fino al 06/09, e cambia per la ragione che questa scena esiste per
+    // provare: B-tupla, quando il flusso non è ricostruibile, **ricade su A**.
+    // A da ADR-0074 risponde `draft`, quindi B ricade su `draft`. La proprietà
+    // asserita è la stessa di prima, il valore no.
+    expectTuple: 'draft',
     /**
      * Il ramo che il memo §5-B impone e che decide se B vale la pena in
      * produzione: quando nessuno sa dire chi ha scelto, B **è** A. Oggi il
@@ -169,7 +179,12 @@ const FLOW_SCENARIOS: readonly FlowScenario[] = [
       args: { path: '/workspace/result.txt' },
       ambientTaint: 2,
     },
-    expect: { ambient: 'ask', noAmbient: 'draft' },
+    // A era `ask` per il taint; da ADR-0074 è `draft`, come B-senza-taint. Le
+    // tre corse coincidono tutte e tre su questa scena, ed è il dato che pesa
+    // sulla decisione su B: nel ramo in cui il runtime di oggi vive per
+    // intero, B non aggiunge niente a un kernel che ha smesso di chiedere per
+    // il taint.
+    expect: { ambient: 'draft', noAmbient: 'draft' },
   },
 ];
 

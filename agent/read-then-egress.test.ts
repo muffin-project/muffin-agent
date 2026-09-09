@@ -16,7 +16,7 @@ import type { ChatResult, Provider } from './providers/types.js';
 import { fsCapabilities, makeFsTools, type FsScope } from './tools/fs.js';
 import { httpCapability } from './tools/http.js';
 import { makeSearchTool, searchCapability, type SearchBackend } from './tools/search.js';
-import { shellCapability } from './tools/shell.js';
+import { shellWriteCapability } from './tools/shell.js';
 
 /**
  * Read a file, then try to leave with it.
@@ -64,13 +64,15 @@ class Scripted implements Provider {
         if (b.type === 'tool_result' && b.content) this.seen.push(b.content);
       }
     }
-    return this.script[this.i++] ?? {
-      text: 'fine',
-      toolCalls: [],
-      stopReason: 'end',
-      usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
-      model: 'test',
-    };
+    return (
+      this.script[this.i++] ?? {
+        text: 'fine',
+        toolCalls: [],
+        stopReason: 'end',
+        usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        model: 'test',
+      }
+    );
   }
 }
 
@@ -211,7 +213,7 @@ describe('read-then-fetch, through a real turn — ADR-0066: reading is open, so
       tenant: 'host',
       surface: 'cli',
       session: h.deps.sessions.open('s3'),
-      text: 'guarda cosa c\'è qui',
+      text: "guarda cosa c'è qui",
     });
 
     expect(h.fetched).toEqual([EXFIL]);
@@ -221,6 +223,11 @@ describe('read-then-fetch, through a real turn — ADR-0066: reading is open, so
 
 describe('the price of the same rule, through the same turn', () => {
   /**
+   * `sys.shell.write` e non `sys.shell` dal 06/09 (ADR-0074 punto 4): la corsia che
+   * paga questo costo è quella che scrive. La sorella in sola lettura non ha un
+   * `ask` da declassare — il suo confine è il sandbox, non l'owner — e usarla
+   * qui misurerebbe un prezzo che non esiste.
+   *
    * Owner decision, 2026-08-16 (ADR-0044 §revisione), reversing what this test
    * asserted through round 1 of PR #28's review: `sys.shell` now pins
    * `maxTaint: 2`, so `fs_read` → `shell_run` in the same turn is an `ask` the
@@ -235,16 +242,19 @@ describe('the price of the same rule, through the same turn', () => {
    * somebody removes quietly — same reasoning as before the reversal, aimed at
    * the new line instead of the old one.
    */
-  it('downgrades shell_run after a read to an ask, and still runs once the owner says yes', async () => {
+  it('downgrades shell_run_write after a read to an ask, and still runs once the owner says yes', async () => {
     const ran: string[] = [];
     const h = harness([
       callTool('fs_read', { path: 'nota.md' }),
-      callTool('shell_run', { command: 'echo ciao' }),
+      callTool('shell_run_write', { command: 'echo ciao' }),
     ]);
-    h.deps.capabilities = new Map([...h.deps.capabilities!, [shellCapability.id, shellCapability]]);
+    h.deps.capabilities = new Map([
+      ...h.deps.capabilities!,
+      [shellWriteCapability.id, shellWriteCapability],
+    ]);
     h.deps.decide = createDecide({
       matrix: POLICY_FLOOR,
-      capabilities: new Map([...decls, shellCapability].map((d) => [d.id, d])),
+      capabilities: new Map([...decls, shellWriteCapability].map((d) => [d.id, d])),
       budgetExhausted: () => false,
       // Hardened, which is the *most* permissive setting shell has: at taint 0
       // it auto-allows. If the ask below still fires here it fires everywhere.
@@ -254,15 +264,19 @@ describe('the price of the same rule, through the same turn', () => {
     h.deps.tools = [
       ...h.deps.tools,
       {
-        capability: shellCapability.id,
+        capability: shellWriteCapability.id,
         spec: {
-          name: 'shell_run',
+          name: 'shell_run_write',
           description: 'run',
-          inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
+          inputSchema: {
+            type: 'object',
+            properties: { command: { type: 'string' } },
+            required: ['command'],
+          },
         },
         throwTier: 0,
         handler: () => {
-          ran.push('shell_run');
+          ran.push('shell_run_write');
           return { content: 'exit 0', tier: 2 as const };
         },
       },
@@ -278,21 +292,42 @@ describe('the price of the same rule, through the same turn', () => {
 
     // The owner was asked — not skipped, and not refused outright — and this
     // harness's `approve` says yes, so the command actually ran.
-    expect(h.approvals).toEqual(['sys.shell']);
-    expect(ran).toEqual(['shell_run']);
+    //
+    // ADR-0074 changed the *wording* of that ask, not the verdict, and the
+    // assertion follows the words rather than being loosened to ignore them:
+    // the prompt leads with what cannot be taken back and names the capability
+    // after it. What did change is the reason: the ask no longer fires because
+    // the read raised the taint — it would have fired identically at taint 0,
+    // which `core/policy/solo-irreversibile.test.ts` asserts capability by
+    // capability.
+    expect(h.approvals).toEqual([
+      'non si torna indietro: cambia questa macchina — sys.shell.write\n\n' +
+        // ADR-0075 punto 4: la domanda dice anche **da dove** viene il livello
+        // di questo turno. Qui e' la lettura di disco della riga sopra.
+        'questo turno contiene contenuto di livello 2: il risultato di fs_read',
+    ]);
+    expect(ran).toEqual(['shell_run_write']);
   });
 
-  it('still refuses shell_run outright once the turn is at taint 3, past the widened ceiling', async () => {
-    // The other half of the same line: widening the ceiling by one step did not
-    // move it to the top. A turn tainted by a genuine tier-3 result (a
-    // web/search/mcp call, stood in for here by a fake `demo_web`-shaped tool —
-    // a second `fs_read` would NOT do it: `DISK_TIER` is a constant 2, and
-    // `raiseTaint` only ever raises, so two reads leave the turn at 2, not 3)
-    // still gets a flat refusal from `shell_run`, never an ask.
+  it('at taint 3 shell_run_write still asks — and the question names the web result that raised the turn (ADR-0075)', async () => {
+    // **Riscritta il 06/09 da ADR-0075.** Questa riga asseriva il contrario:
+    // a taint 3 la shell che scrive riceveva un `deny/taint_exceeded` piatto,
+    // «il soffitto si e' allargato di un gradino, non fino in cima». Il
+    // gradino e' stato misurato dove finisce — nove turni su quattordici a
+    // taint 3 il 06/09, e l'ultimo chiuso proprio da quel messaggio — e il
+    // divieto non comprava niente: `sys.shell.write` e' `reversible: 'no'`,
+    // quindi **chiede comunque**, a taint 0 come a taint 3. Cio' che il
+    // soffitto toglieva era solo la possibilita', per l'owner, di dire si'.
+    //
+    // Un turno avvelenato da un risultato di livello 3 vero (una chiamata
+    // web/search/mcp, qui sostituita da un tool a forma di `demo_web` — un
+    // secondo `fs_read` NON basterebbe: `DISK_TIER` e' la costante 2 e
+    // `raiseTaint` solo alza, quindi due letture lasciano il turno a 2)
+    // arriva quindi alla domanda, e la domanda porta la provenienza.
     const ran: string[] = [];
     const h = harness([
       callTool('web_like', {}),
-      callTool('shell_run', { command: 'echo ciao' }),
+      callTool('shell_run_write', { command: 'echo ciao' }),
     ]);
     // A minimal stand-in with its own low-risk capability, only so the kernel
     // lets it run unconditionally and the test can isolate the one fact that
@@ -308,7 +343,11 @@ describe('the price of the same rule, through the same turn', () => {
       policyArgs: [],
       hostOnly: false,
     };
-    h.deps.capabilities = new Map([...h.deps.capabilities!, [shellCapability.id, shellCapability], [demoWebCapability.id, demoWebCapability]]);
+    h.deps.capabilities = new Map([
+      ...h.deps.capabilities!,
+      [shellWriteCapability.id, shellWriteCapability],
+      [demoWebCapability.id, demoWebCapability],
+    ]);
     h.deps.decide = createDecide({
       matrix: POLICY_FLOOR,
       capabilities: h.deps.capabilities,
@@ -320,20 +359,28 @@ describe('the price of the same rule, through the same turn', () => {
       ...h.deps.tools,
       {
         capability: demoWebCapability.id,
-        spec: { name: 'web_like', description: 'stands in for a tier-3 fetch', inputSchema: { type: 'object', properties: {} } },
+        spec: {
+          name: 'web_like',
+          description: 'stands in for a tier-3 fetch',
+          inputSchema: { type: 'object', properties: {} },
+        },
         throwTier: 0,
         handler: () => ({ content: 'contenuto dal web', tier: 3 as const }),
       },
       {
-        capability: shellCapability.id,
+        capability: shellWriteCapability.id,
         spec: {
-          name: 'shell_run',
+          name: 'shell_run_write',
           description: 'run',
-          inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
+          inputSchema: {
+            type: 'object',
+            properties: { command: { type: 'string' } },
+            required: ['command'],
+          },
         },
         throwTier: 0,
         handler: () => {
-          ran.push('shell_run');
+          ran.push('shell_run_write');
           return { content: 'exit 0', tier: 2 as const };
         },
       },
@@ -347,9 +394,17 @@ describe('the price of the same rule, through the same turn', () => {
       text: 'cerca sul web e poi lancia lo script',
     });
 
-    expect(ran).toEqual([]);
-    expect(h.approvals).toEqual([]);
-    expect(h.provider.seen.join('\n')).toMatch(/Rifiutato dal kernel.*taint_exceeded/s);
+    // L'owner ha detto si' (questo harness approva), quindi il comando gira:
+    // e' esattamente cio' che a taint 3 non era possibile.
+    expect(ran).toEqual(['shell_run_write']);
+    expect(h.approvals).toEqual([
+      "non si torna indietro: cambia questa macchina — sys.shell.write\n\n" +
+        "questo turno contiene contenuto di livello 3: il risultato di web_like",
+    ]);
+    // E nessun rifiuto per taint da nessuna parte in cio' che il modello ha
+    // letto: la meta' negativa, perche' «ha chiesto» sarebbe verde anche in un
+    // turno dove il rifiuto e' arrivato prima su un'altra chiamata.
+    expect(h.provider.seen.join('\n')).not.toMatch(/taint_exceeded/);
   });
 });
 
@@ -389,7 +444,11 @@ describe('the structural half: no tool can be born without answering', () => {
     // must say so, and one that only ever throws its own words must say 0.
     const tool: RegisteredTool = {
       capability: 'demo.read',
-      spec: { name: 'demo_read', description: 'r', inputSchema: { type: 'object', properties: {} } },
+      spec: {
+        name: 'demo_read',
+        description: 'r',
+        inputSchema: { type: 'object', properties: {} },
+      },
       handler: () => ({ content: 'ok', tier: 0 }),
     };
     expect(tool.capability).toBe('demo.read');
@@ -476,7 +535,12 @@ describe('a THROWN result taints the turn too (judge round-1, PR #28)', () => {
     // and asked — not skipped, which is what a lost `raiseTaint` would look
     // like — and this harness's `approve` says yes, so the fetch ran after
     // being asked, not before.
-    expect(h.approvals).toEqual([`lettura con parametri scelti dal contenuto: ${EXFIL_PARAMS}`]);
+    expect(h.approvals).toEqual([
+      `lettura con parametri scelti dal contenuto: ${EXFIL_PARAMS}\n\n` +
+        // ADR-0075 punto 4: e la provenienza, che qui e' l'**errore** di un
+        // tool — un handler che lancia porta dentro byte come uno che torna.
+        "questo turno contiene contenuto di livello 3: l'errore di mcp_evil_fetch",
+    ]);
     expect(h.fetched).toEqual([EXFIL_PARAMS]);
   });
 });
@@ -538,7 +602,10 @@ describe('params on any host — the gate http_get skipped until P04-1, unaffect
     // Not skipped (the defect this closes) and not a wall (the harness's
     // `approve` says yes, same as every `ask`-then-approve test above): the
     // owner was asked and shown the exact URL, not just the kernel's prose.
-    expect(h.approvals).toEqual([`lettura con parametri scelti dal contenuto: ${WITH_PARAMS}`]);
+    expect(h.approvals).toEqual([
+      `lettura con parametri scelti dal contenuto: ${WITH_PARAMS}\n\n` +
+        'questo turno contiene contenuto di livello 3: il risultato di http_get',
+    ]);
     expect(h.fetched).toEqual([`https://${ALLOWED_HOST}/pagina`, WITH_PARAMS]);
   });
 
@@ -610,13 +677,21 @@ describe('sys.search now answers to the same kernel — mandato inv. 7 (P04-2)',
       hostOnly: false,
       maxTaint: 3,
     };
-    h.deps.capabilities = new Map([...h.deps.capabilities!, [searchCapability.id, searchCapability], [webish.id, webish]]);
+    h.deps.capabilities = new Map([
+      ...h.deps.capabilities!,
+      [searchCapability.id, searchCapability],
+      [webish.id, webish],
+    ]);
     h.deps.tools = [
       ...h.deps.tools,
       makeSearchTool(backend),
       {
         capability: webish.id,
-        spec: { name: 'web_like', description: 'stands in for a tier-3 fetch', inputSchema: { type: 'object', properties: {} } },
+        spec: {
+          name: 'web_like',
+          description: 'stands in for a tier-3 fetch',
+          inputSchema: { type: 'object', properties: {} },
+        },
         throwTier: 0,
         handler: () => ({ content: 'contenuto dal web', tier: 3 as const }),
       },
@@ -631,7 +706,38 @@ describe('sys.search now answers to the same kernel — mandato inv. 7 (P04-2)',
     return { ...h, searched };
   }
 
-  it('after a read, a search asks the owner and shows the query — never runs unapproved', async () => {
+  it('dopo una lettura, una ricerca gira senza chiedere niente — ADR-0072', async () => {
+    // **Riscritto il 04/09.** Questo test asseriva l'`ask`, e l'`ask` era la
+    // decisione fino a quel giorno. `searchMaxTaint` l'ha separata da
+    // `paramsMaxTaint` e spedita a 3: il giro piu' normale che esista —
+    // cerca, leggi una pagina, cerca ancora — portava il turno a 3 alla
+    // prima lettura, quindi il *secondo* `web_search` chiedeva **sempre**, e
+    // su un processo headless quell'`ask` e' un `exit 3`. Un'approvazione che
+    // nessuno puo' dare e' un divieto travestito.
+    //
+    // Cosa si perde, asserito qui sopra invece che taciuto: proprio questo —
+    // un turno che ha letto un segreto e lo cerca letteralmente non chiede
+    // piu'. Il *dove* pero' non lo sceglie il modello: la destinazione di
+    // `sys.search` e' una costante allowlisted, al contrario di un URL, dove
+    // il gate resta a 2 (il test dopo il prossimo).
+    const h = searchHarness([
+      callTool('web_like', {}),
+      callTool('web_search', { query: 'MUFFIN-SECRET-9f3a7c21' }),
+    ]);
+
+    await runTurn(h.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session: h.deps.sessions.open('s-search-0'),
+      text: 'leggi nota.md e poi cerca MUFFIN-SECRET-9f3a7c21',
+    });
+
+    expect(h.approvals).toEqual([]);
+    expect(h.searched).toEqual(['MUFFIN-SECRET-9f3a7c21']);
+  });
+
+  it("ma il cancello e' una manopola, non una riga tolta: rimesso giu', chiede", async () => {
     const h = searchHarness([
       // In questo describe l'allowlist è vuota, quindi una fetch non può alzare
       // il turno: si usa il tool tier-3 dichiarato dall'harness, come fa il
@@ -640,6 +746,17 @@ describe('sys.search now answers to the same kernel — mandato inv. 7 (P04-2)',
       callTool('web_like', {}),
       callTool('web_search', { query: 'MUFFIN-SECRET-9f3a7c21' }),
     ]);
+    // Un `rot/policy.json` sigillato che riabbassa la soglia: e' l'unico
+    // movimento che il merge consente su questo numero (`tighter()`), ed e'
+    // cio' che rende ADR-0072 una decisione revocabile invece che un pezzo
+    // di kernel cancellato.
+    h.deps.decide = createDecide({
+      matrix: { ...POLICY_FLOOR, searchMaxTaint: 2 },
+      capabilities: h.deps.capabilities,
+      budgetExhausted: () => false,
+      hardened: true,
+      egressAllowed: () => false,
+    });
     // The owner says no this time: the assertion that matters is that the
     // search was gated at all, which only shows up as "never ran" when it is
     // refused. This is the mutation-sensitive half — see the comment below.
@@ -665,7 +782,10 @@ describe('sys.search now answers to the same kernel — mandato inv. 7 (P04-2)',
     // second one, which a straight allow also happens to satisfy... except it
     // does not: under the mutation the backend runs immediately, so
     // `h.searched` would equal `['MUFFIN-SECRET-9f3a7c21']` here, not `[]`.
-    expect(h.approvals).toEqual(['ricerca: "MUFFIN-SECRET-9f3a7c21"']);
+    expect(h.approvals).toEqual([
+      'ricerca: "MUFFIN-SECRET-9f3a7c21"\n\n' +
+        'questo turno contiene contenuto di livello 3: il risultato di web_like',
+    ]);
     expect(h.searched).toEqual([]);
     expect(h.provider.seen.join('\n')).toMatch(/L'owner ha rifiutato/);
   });

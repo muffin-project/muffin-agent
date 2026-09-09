@@ -15,9 +15,9 @@ const execFileAsync = promisify(execFile);
  * dangerous edges (kill 0, kill -1, kill self) are unrepresentable instead of
  * discovered. Shell remains the long tail; this is the structured case.
  *
- * Both are host-only. The matrix row for host processes denies everything at
- * taint ≥2, so the list capability narrows its ceiling explicitly — `low` risk
- * would otherwise default to 3.
+ * Both are host-only. `sys.process.list` sta sulla riga `context` — elencare i
+ * processi è una lettura — e da ADR-0075 non appunta più nessun `maxTaint`:
+ * vedi la dichiarazione qui sotto.
  */
 export const processCapabilities: CapabilityDecl[] = [
   {
@@ -26,7 +26,12 @@ export const processCapabilities: CapabilityDecl[] = [
     risk: 'low',
     reversible: 'yes',
     rerunnable: true,
-    maxTaint: 1,
+    // Il `maxTaint: 1` è tolto da ADR-0075 punto 2, con la stessa ragione di
+    // `skill.read`: un `maxTaint` non stringe mai una capability reversibile.
+    // Elencare i processi non lascia niente da disfare e non fa uscire niente
+    // dal tenant, e il numero serviva solo a rendere `process_list`
+    // irraggiungibile per tutto il resto di un turno che aveva letto una
+    // pagina web — cioè proprio nel turno in cui si vuole guardare cosa gira.
     resourceKind: 'none',
     policyArgs: [],
     hostOnly: true,
@@ -49,8 +54,11 @@ export const processCapabilities: CapabilityDecl[] = [
 const processListSpec: ToolSpec = {
   name: 'process_list',
   description:
-    'List running processes (pid, user, command). Read-only. Output is capped; ' +
-    'filter with the optional `grep` substring instead of asking for everything.',
+    'List running processes (pid, user, command). Use it when you need to check what is running, find a pid to ' +
+    'inspect or kill, or confirm something started or stopped — this is the tool for `ps`, not shell_run. Not for ' +
+    "a process's own output or logs: those come from wherever it was started, not from this listing. Read-only. " +
+    'Output is capped; filter with the optional `grep` substring instead of asking for everything. Returns one ' +
+    'line per process: pid, user, command. e.g. process_list({grep: "node"}).',
   inputSchema: {
     type: 'object',
     properties: {
@@ -62,9 +70,11 @@ const processListSpec: ToolSpec = {
 const processKillSpec: ToolSpec = {
   name: 'process_kill',
   description:
-    'Send a signal to one process by pid (default SIGTERM). Refuses pid 0/negative ' +
-    '(process groups) and the agent process itself. Killing what you did not start ' +
-    'usually needs the owner: say why in your reply when you use this.',
+    'Send a signal to one process by pid (default SIGTERM). Use it when you need to stop a specific process you ' +
+    'found with process_list or that you started yourself — this is the tool for `kill`, not shell_run. Not for a ' +
+    'process you did not start and cannot identify with confidence: killing what you did not start usually needs ' +
+    'the owner, say why in your reply when you use this. Refuses pid 0/negative (process groups) and the agent ' +
+    'process itself. Returns whether the signal was sent.',
   inputSchema: {
     type: 'object',
     properties: {

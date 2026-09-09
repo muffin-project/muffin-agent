@@ -249,6 +249,7 @@ describe('il giro a vuoto — il registro durevole resta onesto', () => {
       capability: LETTURA.id,
       rerunnable: true,
       args: { path: 'a.md' },
+      effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' },
     });
     h.turns.endToolCall(finto, 'vecchia', { content: 'contenuto di ieri', isError: false, tier: 0 });
     expect(h.turns.identicalCallsDone(finto, 'leggi', { path: 'a.md' })).toBe(1);

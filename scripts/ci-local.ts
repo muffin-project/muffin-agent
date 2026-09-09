@@ -74,7 +74,7 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { load as yamlLoad } from 'js-yaml';
-import { tmpdir } from 'node:os';
+import { cpus, loadavg, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -504,6 +504,74 @@ export function creaScannerPassi(): { consuma: (testo: string) => void; passoCad
   };
 }
 
+/** Un campione di quanto e' occupato l'host, preso a un certo punto del giro. */
+export type CampioneDiCarico = { quando: string; load1: number; cpu: number; altriVitest: number };
+
+/**
+ * Un verdetto preso su un host conteso non e' un verdetto.
+ *
+ * Misurato il 04/09/2026: `verifica FAIL` su un commit la cui suite era verde
+ * sulla stessa macchina pochi minuti prima, e di nuovo verde nel container
+ * successivo. In quella finestra girava anche una suite di accettazione
+ * sull'host, e la suite unitaria ci ha messo 170s invece di 55. La causa
+ * probabile e' la contesa — `lessons.md`, «rosso da contesa» — e la prima
+ * spiegazione accettata era sbagliata (un cambio di ramo sotto il giro, che
+ * qui e' impossibile: lo SHA e' pinnato e il clone e' uno).
+ *
+ * Quindi il giro registra il carico all'inizio e alla fine, e se in uno dei
+ * due campioni l'host era conteso — load medio sopra il numero di CPU, o un
+ * altro `vitest` in esecuzione fuori dai container — un FAIL viene
+ * **scartato**, non interpretato. Un PASS resta un PASS: la contesa rende le
+ * cose piu' lente e piu' rosse, mai verdi per sbaglio.
+ *
+ * Pura: riceve i campioni, non li prende.
+ */
+/**
+ * Il container ha le risorse di `ubuntu-latest` (4 vCPU), non quelle del Mac.
+ *
+ * Senza il tetto, quattro job in parallelo si contendono tutti i core
+ * dell'host e vitest, che dimensiona i worker su `os.cpus()` (10 qui, dentro
+ * il container come fuori), ne lancia 10 per container: 40 worker su 10
+ * core. Il 05/09/2026 il job `verifica` e' caduto due volte su `dev` pulito
+ * con `[vitest-worker]: Timeout calling "onTaskUpdate"` — l'RPC fra worker e
+ * runner scaduto, non un test rosso — e 30 test su 3582 mai riportati.
+ * `--cpus` limita la CPU ma non cambia `os.cpus()`, quindi i worker vanno
+ * detti a vitest a parte (`VITEST_MAX_THREADS`/`VITEST_MAX_FORKS`).
+ */
+export const RISORSE_DEL_RUNNER: readonly string[] = [
+  '--cpus=4',
+  '-e',
+  'VITEST_MAX_THREADS=4',
+  '-e',
+  'VITEST_MAX_FORKS=4',
+];
+
+export function contesa(campioni: readonly CampioneDiCarico[]): string | null {
+  const ragioni: string[] = [];
+  for (const c of campioni) {
+    if (c.altriVitest > 0) ragioni.push(`${c.quando}: ${c.altriVitest} altro/i vitest sull'host`);
+    // Il load conta solo **prima** dei container: a fine corsa e' il nostro —
+    // quattro job in parallelo su una VM Docker portano un Mac a 10 cpu sopra
+    // 11 da soli (misurato il 05/09/2026, due giri scartati senza nessun
+    // altro processo sull'host). Un vitest estraneo resta contesa in ogni
+    // momento, perche' non e' nostro.
+    if (c.quando === 'inizio' && c.cpu > 0 && c.load1 > c.cpu) ragioni.push(`${c.quando}: load ${c.load1.toFixed(1)} su ${c.cpu} cpu`);
+  }
+  return ragioni.length === 0 ? null : ragioni.join('; ');
+}
+
+/** Il campione vero. `pgrep` e' sola lettura: qui si conta, non si tocca. */
+function campionaCarico(quando: string): CampioneDiCarico {
+  let altriVitest = 0;
+  try {
+    const out = spawnSync('pgrep', ['-f', 'vitest run'], { encoding: 'utf8' }).stdout ?? '';
+    altriVitest = out.split('\n').filter((l) => l.trim() !== '').length;
+  } catch {
+    // Senza pgrep si misura solo il load: meglio un campione parziale che nessuno.
+  }
+  return { quando, load1: loadavg()[0] ?? 0, cpu: cpus().length, altriVitest };
+}
+
 export function runContainer(opts: {
   image: string;
   dockerArgs: readonly string[];
@@ -528,6 +596,7 @@ export function runContainer(opts: {
       '--rm',
       '--name',
       opts.containerName,
+      ...RISORSE_DEL_RUNNER,
       ...opts.dockerArgs,
       '-v',
       `${opts.repoTar}:/repo.tar:ro`,
@@ -627,6 +696,9 @@ async function main(): Promise<void> {
         : " — ubuntu-latest is x86_64, and so is the VPS: a green here is NOT a green there for anything arch-sensitive (native addons, bwrap/socat, allocator)"
     }`,
   );
+
+  const campioni: CampioneDiCarico[] = [campionaCarico('inizio')];
+  console.log(`host load:    ${campioni[0]!.load1.toFixed(1)} on ${campioni[0]!.cpu} cpu, ${campioni[0]!.altriVitest} other vitest`);
 
   const scratch = mkdtempSync(join(tmpdir(), 'muffin-ci-local-'));
   const keep = process.env['MUFFIN_CI_LOCAL_KEEP'] === '1';
@@ -743,13 +815,23 @@ async function main(): Promise<void> {
       console.log(`  ${label.padEnd(15)} ${job.jobId} (${job.workflowFile})${detail}`);
     }
     const allPass = verdicts.every((v) => v.verdict.kind === 'pass');
+    campioni.push(campionaCarico('fine'));
+    const contesaRilevata = contesa(campioni);
+    if (contesaRilevata !== null) console.log(`CONTENTION: ${contesaRilevata}`);
     console.log('============================================================');
     if (allPass) {
       console.log(`CI-LOCAL PASS @ ${sha}  (${IMAGE}, ${verdicts.length} jobs, see privilege mode per job above)`);
+      process.exitCode = 0;
+    } else if (contesaRilevata !== null) {
+      // Non e' un verdetto: e' un giro da rifare da solo. Exit 2, distinto
+      // dall'1 di un FAIL vero, cosi' chi lo legge da uno script non lo
+      // scambia per un rosso del codice.
+      console.log(`CI-LOCAL DISCARDED @ ${sha}  — red under contention is not a verdict; rerun alone (see CONTENTION above)`);
+      process.exitCode = 2;
     } else {
       console.log(`CI-LOCAL FAIL @ ${sha}  — not every job is green (a NOT EXECUTABLE job counts as not green)`);
+      process.exitCode = 1;
     }
-    process.exitCode = allPass ? 0 : 1;
   } finally {
     if (keep) {
       console.log(`\nMUFFIN_CI_LOCAL_KEEP=1: leaving scratch dir at ${scratch}`);

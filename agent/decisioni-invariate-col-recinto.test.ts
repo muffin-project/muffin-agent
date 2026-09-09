@@ -15,7 +15,7 @@ import { CONSERVATIVE } from './profiles/profile.js';
 import type { ChatResult, Provider } from './providers/types.js';
 import { fsCapabilities, makeFsTools, DISK_TIER, type FsScope } from './tools/fs.js';
 import { httpCapability } from './tools/http.js';
-import { shellCapability } from './tools/shell.js';
+import { shellCapability, shellWriteCapability } from './tools/shell.js';
 
 /**
  * Il recinto marca la provenienza e **non muove una decisione**.
@@ -84,7 +84,12 @@ const AVVELENATO = [
 ].join('\n');
 const INNOCUO = '# Appunti\n\nComprare il pane.\n';
 
-const decls: CapabilityDecl[] = [...fsCapabilities, httpCapability, shellCapability];
+const decls: CapabilityDecl[] = [
+  ...fsCapabilities,
+  httpCapability,
+  shellCapability,
+  shellWriteCapability,
+];
 
 type Osservato = {
   /** Gli URL che il tool di rete ha davvero ricevuto: i byte usciti. */
@@ -97,7 +102,11 @@ type Osservato = {
   tier: number[];
 };
 
-async function scena(contenuto: string, script: ChatResult[], approva: 'allow' | 'deny'): Promise<Osservato> {
+async function scena(
+  contenuto: string,
+  script: ChatResult[],
+  approva: 'allow' | 'deny',
+): Promise<Osservato> {
   const home = mkdtempSync(join(tmpdir(), 'muffin-decisioni-'));
   const work = mkdtempSync(join(tmpdir(), 'muffin-decisioni-work-'));
   writeFileSync(join(work, 'nota.md'), contenuto, 'utf8');
@@ -133,20 +142,33 @@ async function scena(contenuto: string, script: ChatResult[], approva: 'allow' |
       },
       throwTier: 0,
     },
-    {
-      capability: shellCapability.id,
-      spec: {
-        name: 'shell_run',
-        description: 'run',
-        inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
-      },
-      handler: (args) => {
-        out.eseguiti.push(String((args as { command: string }).command));
-        out.tier.push(DISK_TIER);
-        return { content: 'exit 0', tier: DISK_TIER };
-      },
-      throwTier: 0,
-    },
+    // Le due corsie della shell (ADR-0074 punto 4), stesso handler finto: qui
+    // conta solo quale delle due il kernel lascia passare senza domanda.
+    ...(
+      [
+        [shellCapability.id, 'shell_run'],
+        [shellWriteCapability.id, 'shell_run_write'],
+      ] as const
+    ).map(
+      ([capability, name]): RegisteredTool => ({
+        capability,
+        spec: {
+          name,
+          description: 'run',
+          inputSchema: {
+            type: 'object',
+            properties: { command: { type: 'string' } },
+            required: ['command'],
+          },
+        },
+        handler: (args: unknown) => {
+          out.eseguiti.push(String((args as { command: string }).command));
+          out.tier.push(DISK_TIER);
+          return { content: 'exit 0', tier: DISK_TIER };
+        },
+        throwTier: 0,
+      }),
+    ),
   ];
 
   const provider = new Scripted(script);
@@ -210,21 +232,38 @@ describe('una decisione non dipende da come è impacchettato il contenuto', () =
     expect(DISK_TIER).toBe(2);
   });
 
-  it("leggere e poi la shell: la stessa domanda, e l'esecuzione solo col sì", async () => {
-    const script = [callTool('fs_read', { path: 'nota.md' }), callTool('shell_run', { command: 'echo ciao' })];
+  it("leggere e poi la shell che scrive: la stessa domanda, e l'esecuzione solo col sì", async () => {
+    const script = [
+      callTool('fs_read', { path: 'nota.md' }),
+      callTool('shell_run_write', { command: 'echo ciao' }),
+    ];
 
     const sì = await scena(AVVELENATO, script, 'allow');
     const no = await scena(AVVELENATO, [...script], 'deny');
 
-    // Una domanda sola, in tutti e due i rami: è il gradino che `DISK_TIER`
-    // produce sulla riga `host`, e non si è mosso.
+    // Una domanda sola, in tutti e due i rami. Prima di ADR-0074 era il
+    // gradino che `DISK_TIER` produceva sulla riga `host`; ora è la corsia
+    // stessa, che non si annulla e chiede a ogni taint — il recinto non
+    // c'entra in nessuna delle due versioni.
     expect(sì.domande).toHaveLength(1);
     expect(no.domande).toHaveLength(1);
     expect(sì.eseguiti).toEqual(['echo ciao']);
     expect(no.eseguiti).toEqual([]);
   });
 
-  it("uscire senza aver letto niente resta raggiungibile — è un gate, non un muro", async () => {
+  it('leggere e poi la shell in sola lettura: nessuna domanda, e il recinto non la crea', async () => {
+    const script = [
+      callTool('fs_read', { path: 'nota.md' }),
+      callTool('shell_run', { command: 'ls' }),
+    ];
+    const letto = await scena(AVVELENATO, script, 'deny');
+    // `deny` come approvatore, apposta: se una domanda arrivasse, il comando
+    // non girerebbe, e `eseguiti` lo direbbe.
+    expect(letto.domande).toEqual([]);
+    expect(letto.eseguiti).toEqual(['ls']);
+  });
+
+  it('uscire senza aver letto niente resta raggiungibile — è un gate, non un muro', async () => {
     const solo = await scena(AVVELENATO, [callTool('http_get', { url: EXFIL })], 'allow');
     // Nessuna lettura, quindi taint 0: sotto `paramsMaxTaint` esattamente come
     // nel test sopra, quindi nessuna domanda anche qui — la riga di utility

@@ -103,6 +103,17 @@ describe('the owner-class prompt does not move', () => {
    * Note that the three files named above are not the only inputs: `WORK_RULES`
    * in `assemble.ts` is a fourth, and it is the one the re-capture below moved.
    *
+   * Ri-fissato 2026-09-06 (`slice/d13-tool-prima-della-shell`, DAY-1 D13): una
+   * riga in più in `WORK_RULES` che dice l'ordine — tool dedicato prima,
+   * `sys.shell` ultimo — e mostra una concatenazione (`fs_read` poi, se serve,
+   * `shell_run` sul risultato). La misura del 04/09 aveva trovato quattro fail
+   * `agentic` della baseline di carattere fermi su "serve la tua approvazione
+   * per sys.shell" dove un tool dedicato copriva già la domanda; le descrizioni
+   * dei singoli tool (agent/tools/*.ts) ora dicono ciascuna quando usarle e
+   * quando no, ma una riga nel prompt che dice l'ordine una volta sola resta
+   * quella che un modello legge per primo. Ordine di assemblaggio invariato.
+   * Pin precedente: `a8eb81ecd95df248b8bdc588c07521292bed8d5d75dcddce22b76fb32112c8b3`.
+   *
    * Ri-fissato 2026-09-03 (`slice/il-disco-ha-un-recinto`): una riga in più in
    * `WORK_RULES`, 305 caratteri, che dice al modello **cosa sia un recinto**.
    * Fino a ieri nessuna riga del prompt spedito lo diceva: l'unico posto dove il
@@ -178,6 +189,18 @@ describe('the owner-class prompt does not move', () => {
    * caratteri. Pin precedente:
    * `19f1e7d300ad74c4c28d4ac0d9ff1dab0519f85c0d64fdcfabda060c2bd45d4a`.
    *
+   * Re-captured 2026-09-07 (D13, remeasurement after #457/ADR-0074): the
+   * `WORK_RULES`/`WORK_RULES_V2` line on tool order named `sys.shell` as one
+   * tool that "always asks" — stale since the ADR-0074 split gave it two
+   * (`shell_run`, read-only, never asks; `shell_run_write` always does), and
+   * the model was being told a false fact about its own tools. Corrected in
+   * the same line, and extended by one clause the D13 measurement asked for:
+   * when the task names an external service, check for a loaded tool with
+   * that name before falling back to the environment (`mcp-tool-use` probe,
+   * 3/3 rounds, `docs/evidence/tool-use-2026-09-07.md`). Assembly order
+   * unchanged. Previous pin, for the record:
+   * `7dbab742425de4af2b473f7e509a72e82cb501ddc2d3e50527e700f1f6740c53`.
+   *
    * Re-captured 2026-08-26 (`slice/come-lavori`): three rules added to
    * `WORK_RULES`, each closing a gap the runtime does not close on its own —
    * see that constant's docstring for which trace produced which rule. The
@@ -194,7 +217,7 @@ describe('the owner-class prompt does not move', () => {
    * `3ebf2cfc307bdda5c73fff6ed4d60d5a9db2eceffac754164b220a86214cabf2`.
    */
   const OWNER_PROMPT_SHA_AT_SPLIT =
-    'a8eb81ecd95df248b8bdc588c07521292bed8d5d75dcddce22b76fb32112c8b3';
+    '45a73d354ec5b8d52b30fa1b306f96d35b04959c3ddf9d10e831e3beb73ffbbf';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
@@ -267,13 +290,24 @@ describe('the owner-class prompt does not move', () => {
    * cosa che qualcuno ha deciso e non una cosa che è successa.
    */
   /**
+   * Ri-fissato 2026-09-07 (D13, remeasurement dopo #457/ADR-0074) insieme al
+   * pin owner, per la stessa riga: `WORK_RULES` spedisce a tutte e due le
+   * classi, quindi la correzione (`sys.shell` non è più un tool solo, e non
+   * "chiede sempre") arriva anche alla stanza. Pin precedente:
+   * `0cd5604d608887cb6918b8b3392cd926de5194ce73134082636a4c1d5dd7bc23`.
+   *
+   * Ri-fissato 2026-09-06 (`slice/d13-tool-prima-della-shell`) insieme al pin
+   * owner, per la stessa riga: `WORK_RULES` spedisce a tutte e due le classi,
+   * quindi la regola sull'ordine tool-poi-shell arriva anche alla stanza. Pin
+   * precedente: `6d0a7bef6f7da6ded227c879427715bb64c53e8886e52710b58ace44823a524b`.
+   *
    * Ri-fissato 2026-09-03 (`slice/il-disco-ha-un-recinto`) insieme al pin owner,
    * e per la stessa riga: `WORK_RULES` spedisce a tutte e due le classi, quindi
    * la regola sul recinto arriva anche alla stanza — che è dove il contenuto di
    * qualcun altro entra per definizione. Pin precedente:
    * `23aa24da39dc582dd7909f750fed59b165a71ce70dc549428b5df634ced0ed9b`.
    */
-  const GROUP_PROMPT_SHA_V1 = '6d0a7bef6f7da6ded227c879427715bb64c53e8886e52710b58ace44823a524b';
+  const GROUP_PROMPT_SHA_V1 = '292d65153a5cacfc370ac05120c15c164b2acb7e4da2a3655db887a75cf55cc4';
 
   it('e la stanza riceve lo stesso prompt di ieri, byte per byte', () => {
     const runtime = boot(bootHome());
@@ -365,12 +399,26 @@ describe('quale versione del prompt assembla questa installazione', () => {
     };
     const v1 = conta('v1');
     const v2 = conta('v2');
-    // Era `> 20` fino al 2026-09-03: la riga sul recinto aggiunge 305 caratteri
-    // a `WORK_RULES` e porta il rapporto v1 da 23,35 a 17,07 (19.335 / 1.133).
-    // La soglia scende con la misura invece di essere aggirata, e l'affermazione
-    // che il test fa — v1 è pesantemente carattere, v2 no — regge identica: 17
-    // contro il `< 8` di v2 sotto, che è la riga che porta il peso.
-    expect(v1.chiSei / v1.comeLavori).toBeGreaterThan(15);
+    // Era `> 20` fino al 2026-09-03, poi `> 15`: la riga sul recinto aveva
+    // portato il rapporto v1 da 23,35 a 17,07 (19.335 / 1.133).
+    // Ri-misurato 2026-09-06 (`slice/d13-tool-prima-della-shell`, DAY-1 D13):
+    // la riga sull'ordine tool-poi-shell aggiunge testo a `WORK_RULES`
+    // (1.133 → 1.488 caratteri) e porta il rapporto a 12,99 (19.335 / 1.488).
+    // Ri-misurato di nuovo 2026-09-07 (D13, remeasurement dopo #457/ADR-0074):
+    // la stessa riga corregge "sys.shell chiede sempre" (falso dopo la
+    // separazione in due tool) e aggiunge la clausola sui tool MCP caricati
+    // (1.488 → 1.715 caratteri), rapporto 11,27 (19.335 / 1.715).
+    // `chiSei` non è cambiato: `persona.md`/`identity.md`/`voice.md` restano
+    // gli stessi file. La soglia scende con la misura invece di essere
+    // aggirata, e l'affermazione che il test fa — v1 è pesantemente carattere,
+    // v2 no — regge identica: 11,27 contro il `< 8` di v2 sotto, che è la
+    // riga che porta il peso.
+    // Ri-misurato 2026-09-08 (DAY-1 cutover, «dimentica X»): la stessa riga
+    // nomina `memory_forget` come la porta per dimenticare, mai shell/sqlite —
+    // il difetto misurato in REPL viva quel giorno — (1.715 → 1.858 caratteri),
+    // rapporto 10,41 (19.335 / 1.858). Stessa regola: la soglia scende con la
+    // misura, e v1 resta pesantemente carattere contro il `< 8` di v2.
+    expect(v1.chiSei / v1.comeLavori).toBeGreaterThan(10);
     expect(v2.chiSei / v2.comeLavori).toBeLessThan(8);
     // E il prompt non è cresciuto per farlo: il peso si è spostato.
     expect(v2.chiSei + v2.comeLavori).toBeLessThan((v1.chiSei + v1.comeLavori) * 1.02);
@@ -654,7 +702,7 @@ describe('the tool list a principal is shown', () => {
     try {
       const all = runtime.deps.tools;
       const caps = runtime.deps.capabilities;
-      const forMember = visibleTools(all, MEMBER, caps);
+      const forMember = visibleTools(all, MEMBER, caps, undefined);
 
       expect(forMember.length).toBeGreaterThan(0);
       expect(forMember.length).toBeLessThan(all.length);
@@ -677,9 +725,9 @@ describe('the tool list a principal is shown', () => {
     try {
       const all = runtime.deps.tools;
       const caps = runtime.deps.capabilities;
-      expect(visibleTools(all, OWNER, caps)).toEqual(all);
-      expect(visibleTools(all, { kind: 'system', source: 'scheduler' }, caps)).toEqual(all);
-      expect(visibleTools(all, { kind: 'agent', role: 'dev' }, caps)).toEqual(all);
+      expect(visibleTools(all, OWNER, caps, undefined)).toEqual(all);
+      expect(visibleTools(all, { kind: 'system', source: 'scheduler' }, caps, undefined)).toEqual(all);
+      expect(visibleTools(all, { kind: 'agent', role: 'dev' }, caps, undefined)).toEqual(all);
     } finally {
       runtime.close();
     }
@@ -693,7 +741,7 @@ describe('the tool list a principal is shown', () => {
     const runtime = boot(bootHome());
     try {
       const { tools, capabilities, decide } = runtime.deps;
-      const shown = new Set(visibleTools(tools, MEMBER, capabilities).map((t) => t.spec.name));
+      const shown = new Set(visibleTools(tools, MEMBER, capabilities, undefined).map((t) => t.spec.name));
       let refused = 0;
       for (const tool of tools) {
         const decision = decide({
@@ -722,9 +770,9 @@ describe('the tool list a principal is shown', () => {
     const runtime = boot(bootHome());
     try {
       const rogue = { ...runtime.deps.tools[0]!, capability: 'not.declared' };
-      const shown = visibleTools([rogue], MEMBER, runtime.deps.capabilities);
+      const shown = visibleTools([rogue], MEMBER, runtime.deps.capabilities, undefined);
       expect(shown).toEqual([]);
-      expect(visibleTools([rogue], OWNER, runtime.deps.capabilities)).toEqual([rogue]);
+      expect(visibleTools([rogue], OWNER, runtime.deps.capabilities, undefined)).toEqual([rogue]);
     } finally {
       runtime.close();
     }
@@ -746,9 +794,9 @@ describe('the tool list a principal is shown', () => {
     const runtime = boot(bootHome());
     try {
       const senzaTipo = undefined as unknown as typeof runtime.deps.capabilities;
-      expect(visibleTools(runtime.deps.tools, MEMBER, senzaTipo)).toEqual([]);
+      expect(visibleTools(runtime.deps.tools, MEMBER, senzaTipo, undefined)).toEqual([]);
       // The owner is never filtered, absence of declarations or not.
-      expect(visibleTools(runtime.deps.tools, OWNER, senzaTipo)).toEqual(runtime.deps.tools);
+      expect(visibleTools(runtime.deps.tools, OWNER, senzaTipo, undefined)).toEqual(runtime.deps.tools);
     } finally {
       runtime.close();
     }

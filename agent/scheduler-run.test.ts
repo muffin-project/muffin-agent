@@ -3,6 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { BudgetEngine } from '../core/budget/budget.js';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import { JobFireStore } from '../core/scheduler/job-fires.js';
@@ -10,7 +11,7 @@ import { JobStore, type Job, jobPayload } from '../core/scheduler/jobs.js';
 import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { TodoStore } from '../core/turns/todo.js';
-import { SCRIPT_MODEL, TurnStore } from '../core/turns/store.js';
+import { CAPPED_MODEL, SCRIPT_MODEL, TurnStore } from '../core/turns/store.js';
 import { jobOutcomeFromTurn, makeJobRunner } from './scheduler-run.js';
 import { resumeTurn } from './loop.js';
 import type { LoopDeps, TurnResult } from './loop.js';
@@ -486,5 +487,147 @@ describe('makeJobRunner — uno script non gira due volte', () => {
     expect(esito.text).toContain("Non l'ho rifatto");
     expect(esito.text).toContain('echo ciao');
     expect(deps.turns.get(riga.id)?.status).toBe('done');
+  });
+});
+
+/**
+ * Il tetto per-job, sul percorso che chiama davvero il modello (DAY-1 E1).
+ *
+ * `makeJobRunner` è l'unico posto in cui un job diventa una chiamata al
+ * modello, quindi è l'unico posto in cui un tetto per-job può essere qualcosa
+ * di diverso da una colonna. La prova non è «la funzione ha restituito
+ * budget»: è **`provider.calls === 0`** — l'assenza di una richiesta che
+ * sarebbe stata registrata se ci fosse stata — più la riga durevole che dice
+ * perché.
+ */
+describe('makeJobRunner — il tetto per-job (E1)', () => {
+  /** `BudgetEngine` visto da `makeJobRunner`: solo il conto, in dollari. */
+  const contatore = (map: Record<string, number>) => ({ jobMonthUsd: (id: string) => map[id] ?? 0 });
+
+  it('un job che ha già speso il suo tetto NON chiama il modello, e la riga dice perché', async () => {
+    // Lo script è vuoto di proposito: se il modello venisse chiamato,
+    // `Scripted.chat` lancerebbe «lo script è finito» — il rosso arriverebbe
+    // comunque, e da due direzioni invece che da una.
+    const { deps, db, jobs, fires, provider } = fixture([]);
+    const job = jobs.add({ ...SPEC, perJobUsd: 1 });
+
+    const outcome = await makeJobRunner(deps, fires, null, null, contatore({ [job.id]: 1.5 }))(job, undefined);
+
+    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
+    // (1) Il modello non è stato chiamato. È la proprietà, il resto è contorno.
+    expect(provider.calls).toBe(0);
+    // (2) L'esito è durevole e nomina il tetto: un job spento in silenzio
+    //     sembra un job che gira e non trova niente da dire.
+    expect(outcome.stopped).toBe('budget');
+    expect(outcome.text).toContain('tetto per-job');
+    expect(outcome.text).toContain('$1');
+    expect(outcome.text).toContain('1.50');
+    const riga = deps.turns.get(outcome.turnId!);
+    expect(riga?.status).toBe('done');
+    expect(riga?.outcome).toBe('budget');
+    // (3) La riga dichiara di non aver visto il modello, e con quale dei due
+    //     motivi: non è uno script, è un tetto.
+    expect(riga?.model).toBe(CAPPED_MODEL);
+    expect(riga?.counters.spentUsd).toBe(0);
+    expect(riga?.counters.usage.inputTokens).toBe(0);
+    // (4) L'occorrenza resta legata a UNA identità, come ogni altro giro: il
+    //     rifiuto non è un buco in `job_fires`.
+    expect(fires.get(job.id, job.nextFireAt.toISOString())?.turnId).toBe(outcome.turnId);
+    expect((db.prepare(`SELECT count(*) AS n FROM turns`).get() as { n: number }).n).toBe(1);
+  });
+
+  it('sotto il tetto il job gira normalmente — il tetto non è un interruttore generale', async () => {
+    const { deps, jobs, fires, provider } = fixture([answer('ecco il brief')]);
+    const job = jobs.add({ ...SPEC, perJobUsd: 1 });
+
+    const outcome = await makeJobRunner(deps, fires, null, null, contatore({ [job.id]: 0.4 }))(job, undefined);
+
+    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
+    expect(outcome.stopped).toBe('answered');
+    expect(provider.calls).toBe(1);
+  });
+
+  it('un job SENZA tetto gira anche quando nessuno ha cablato il contatore', async () => {
+    // La direzione conta: la slice aggiunge un limite opzionale, non un
+    // prerequisito nuovo per far girare i job che l'owner ha già.
+    const { deps, jobs, fires, provider } = fixture([answer('ecco il brief')]);
+    const job = jobs.add(SPEC);
+    const outcome = await makeJobRunner(deps, fires)(job, undefined);
+    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
+    expect(outcome.stopped).toBe('answered');
+    expect(provider.calls).toBe(1);
+  });
+
+  it('un job CON tetto e nessun contatore cablato non parte: fail closed, non fail open', async () => {
+    // La stessa disciplina di `exec === null` per gli script. Un default che
+    // finge di misurare farebbe passare ogni tetto per non raggiunto, per
+    // sempre, e la suite resterebbe verde su un limite che non limita.
+    const { deps, jobs, fires, provider } = fixture([]);
+    const job = jobs.add({ ...SPEC, perJobUsd: 1 });
+
+    const outcome = await makeJobRunner(deps, fires)(job, undefined);
+
+    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
+    expect(provider.calls).toBe(0);
+    expect(outcome.stopped).toBe('budget');
+    expect(outcome.text).toContain('non ha modo');
+  });
+
+  it('vale anche per un job script: il tetto è chiesto prima di sapere che tipo di job è', async () => {
+    // Uno script non spende, quindi il suo conto non sale mai e questo caso
+    // non si presenta in natura — ma il controllo sta *prima* del ramo
+    // `script` di proposito: la domanda «posso spendere» non deve dipendere
+    // da un ramo che qualcuno potrebbe riordinare.
+    const { deps, jobs, fires } = fixture([]);
+    const { goal: _ignorato, ...comune } = SPEC;
+    const job = jobs.add({ ...comune, kind: 'script' as const, script: 'echo ciao', perJobUsd: 0 });
+    let eseguito = false;
+    const exec = {
+      run: async () => {
+        eseguito = true;
+        return { stdout: '', stderr: '', code: 0, timedOut: false, truncated: false, durationMs: 0 };
+      },
+    };
+    const outcome = await makeJobRunner(deps, fires, exec, { cwd: '/tmp' }, contatore({}))(job, undefined);
+    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
+    expect(outcome.stopped).toBe('budget');
+    expect(eseguito).toBe(false);
+  });
+
+  /**
+   * Il cablaggio, provato dove si rompe: produttore → registro → gate.
+   *
+   * Un tetto che legge un contatore che nessuno alimenta è un tetto che non
+   * scatta mai. Questa prova fa girare un job **vero** con un `recordSpend`
+   * vero (`BudgetEngine`), e poi chiede al motore quanto ha speso *quel* job:
+   * se `agent/loop.ts` smettesse di passare `jobId`, o
+   * `agent/scheduler-run.ts` smettesse di metterlo nell'input del turno, il
+   * numero tornerebbe zero e questa riga andrebbe rossa.
+   */
+  it('la spesa di un giro di job finisce nel registro attribuita a QUEL job', async () => {
+    const { deps, db, jobs, fires } = fixture([answer('ecco il brief')]);
+    const budget = new BudgetEngine(db, { monthlyUsd: 100, perTenantDailyUsd: 100 });
+    const conSpesa: LoopDeps = {
+      ...deps,
+      recordSpend: (entry) => {
+        budget.record({ ...entry, usd: 0.75 });
+        return 0.75;
+      },
+    };
+    const job = jobs.add({ ...SPEC, perJobUsd: 5 });
+
+    await makeJobRunner(conSpesa, fires, null, null, budget)(job, undefined);
+
+    expect(budget.jobMonthUsd(job.id)).toBe(0.75);
+    // E la riga del turno porta lo stesso job, cosi' una ripresa dopo un
+    // crash (che ricostruisce l'input DAL RECORD) attribuisce alla stessa
+    // voce invece di perdere l'attribuzione a meta' turno.
+    const turno = db.prepare(`SELECT job_id FROM turns`).get() as { job_id: string | null };
+    expect(turno.job_id).toBe(job.id);
+    // E la spesa interattiva resta fuori dal conto del job: la colonna è
+    // nullable perché «nessun job» è un valore, non un job chiamato ''.
+    budget.record({ tenant: 'host', capability: 'llm.chat', model: 'test', inputTokens: 1, outputTokens: 1, usd: 9 });
+    expect(budget.jobMonthUsd(job.id)).toBe(0.75);
+    expect(budget.monthToDateUsd()).toBe(9.75);
   });
 });

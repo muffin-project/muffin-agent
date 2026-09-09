@@ -1,5 +1,6 @@
 import type { TurnEvent } from '../../agent/loop.js';
 import { toolLine, toolPhrase } from '../../agent/tool-phrase.js';
+import type { Negotiation } from '../../core/surface/types.js';
 import type { TelegramApiLike } from './api.js';
 import { escapeHtml, splitHtml, TELEGRAM_MAX, toTelegramHtml } from './render.js';
 
@@ -83,12 +84,25 @@ import { escapeHtml, splitHtml, TELEGRAM_MAX, toTelegramHtml } from './render.js
  * inverted that priority.
  */
 
-/** Edit floor in a private chat — inside the per-chat ceiling with margin. */
-const MIN_EDIT_PRIVATE_MS = 1_500;
-/** Edit floor in a group — one per 3 s is the documented group ceiling. */
-const MIN_EDIT_GROUP_MS = 3_000;
 /** How long `stop()` waits for the final edit before letting the answer go out anyway. */
 const STOP_WAIT_MS = 2_000;
+
+/**
+ * `draft_id` deve essere non-zero e va riusato per tutta la vita di
+ * un'anteprima (`api.ts#sendMessageDraft`). Un contatore di processo: due
+ * turni nella stessa chat non devono mai riscrivere la stessa anteprima.
+ */
+let prossimoDraftId = 1;
+
+/**
+ * Telegram risponde 400 «message is not modified» a un edit identico. Non è
+ * una consegna fallita: è la conferma che il messaggio è già come lo
+ * volevamo. Trattarlo come errore spegneva la trascrizione per il resto del
+ * turno (`disabled`), che è il difetto vero.
+ */
+function nonModificato(error: unknown): boolean {
+  return /message is not modified/i.test(error instanceof Error ? error.message : String(error));
+}
 
 type Step = {
   /** Already escaped: built from `toolLine`, which carries model-written arguments. */
@@ -174,24 +188,58 @@ export type Transcript = {
 
 export type TranscriptOptions = {
   now?: () => number;
-  /** Groups get the slower edit floor. Default: private. */
-  isPrivate?: boolean;
+  /**
+   * Cosa si può fare in **questa stanza** — `Surface.negotiate(place)`.
+   *
+   * Obbligatoria e senza default: fino al 06/09/2026 questo file leggeva un
+   * `isPrivate?: boolean` opzionale e ne derivava da solo due pavimenti di
+   * edit e il diritto di mostrare la risposta mentre si forma. Erano tre
+   * decisioni sul *cosa può fare Telegram in una stanza* prese dentro il
+   * renderer, e un default le rendeva anche saltabili. Ora arrivano dalla
+   * porta, che è l'unica a saperle, e il compilatore chiede a ogni chiamante
+   * di dire in che stanza sta.
+   */
+  negotiation: Negotiation;
+  /** Il topic del forum, quando il turno è nato dentro uno. Vedi `SendOptions.threadId`. */
+  threadId?: number;
   /** Traces a swallowed Bot API failure. Absent means silent. */
   log?: (line: string) => void;
 };
 
-export function startTranscript(api: TelegramApiLike, chatId: number, options: TranscriptOptions = {}): Transcript {
+export function startTranscript(api: TelegramApiLike, chatId: number, options: TranscriptOptions): Transcript {
   const now = options.now ?? Date.now;
   const log = options.log ?? ((): void => {});
-  const minEditMs = options.isPrivate === false ? MIN_EDIT_GROUP_MS : MIN_EDIT_PRIVATE_MS;
-  // `live()` is B11's replacement for the private-chat-only draft
-  // (`api.ts#sendMessageDraft` "the target **private** chat"): a real
-  // placeholder is not safe to open in a group the same way a draft never
-  // was — see `presence.ts`'s own former docstring on why groups only ever
-  // got the self-expiring chat action. Steps and preamble (`spoke()`,
-  // `report()`) stay unconditional; only the live answer-in-progress text is
-  // private-only.
-  const liveEnabled = options.isPrivate !== false;
+  const negotiation = options.negotiation;
+  const minEditMs = negotiation.editEveryMs > 0 ? negotiation.editEveryMs : 1_000;
+  const maxPerMinute = negotiation.maxEditsPerMinute;
+  /**
+   * Dove va il testo che sta ancora arrivando, deciso dalla testa della
+   * catena e non da un booleano su «privato».
+   *
+   * - `'draft'` → l'anteprima effimera (`sendMessageDraft`), rinnovata dentro
+   *   `draftTtlMs`. Non apre nessun messaggio vero, quindi un processo che
+   *   muore non lascia niente: la bozza sparisce da sola, ed è la ragione per
+   *   cui `docs/evidence/turno-sospendibile.md` la voleva morta *senza
+   *   rinnovo* e non in assoluto.
+   * - `'edit'` → la coda del segmento aperto, un messaggio vero (il
+   *   comportamento del 04/09).
+   * - `'off'` → niente in diretta.
+   */
+  const testaDelloStream = negotiation.stream[0] ?? 'off';
+  const liveEnabled = testaDelloStream !== 'off';
+  const draftEnabled = testaDelloStream === 'draft';
+  /**
+   * Ogni quanto ributtare l'anteprima sul filo. Il pavimento degli edit
+   * (`editEveryMs`) è già molto dentro `draftTtlMs`, quindi lo stesso ritmo
+   * aggiorna *e* rinnova: non serve un secondo timer che faccia la seconda
+   * cosa, e un secondo timer sarebbe la «due meccanismi a ritmi diversi» che
+   * questo file ha già pagato una volta.
+   */
+  const draftEveryMs = Math.max(1, Math.min(minEditMs, Math.floor(negotiation.draftTtlMs / 3) || minEditMs));
+  const draftId = prossimoDraftId++;
+  let draftText = '';
+  let draftTimer: NodeJS.Timeout | null = null;
+  let draftDisabled = !draftEnabled;
   const turnStartedAt = now();
 
   const segments: Segment[] = [];
@@ -208,6 +256,8 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
    */
   let liveText = '';
   let lastCallAt = 0;
+  /** Quando sono partite le chiamate dell'ultimo minuto, per il tetto della stanza. */
+  const finestra: number[] = [];
   let flushTimer: NodeJS.Timeout | null = null;
   /** The call currently on the wire, so two never overlap and `messageId` is written by one send at a time. */
   let inFlight: Promise<void> | null = null;
@@ -295,18 +345,59 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     const text = render(seg, live, now(), tail);
     if (text === seg.shown) return;
     lastCallAt = now();
+    finestra.push(lastCallAt);
     try {
       if (seg.messageId === null) {
-        const message = await api.sendMessage(chatId, text);
+        const message = await api.sendMessage(chatId, text, {
+          ...(options.threadId === undefined ? {} : { threadId: options.threadId }),
+        });
         seg.messageId = message.message_id;
       } else {
         await api.editMessageText(chatId, seg.messageId, text);
       }
       seg.shown = text;
     } catch (error) {
+      // Un edit identico non è un guasto: il messaggio è già come lo
+      // volevamo, quindi si registra come mostrato e si continua.
+      if (nonModificato(error)) {
+        seg.shown = text;
+        return;
+      }
       disabled = true;
       log(`telegram: trascrizione del turno sospesa — ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+
+  /**
+   * Manda (o rinnova) l'anteprima. Un guasto qui spegne **solo** l'anteprima:
+   * la trascrizione vera e la risposta non dipendono da una bolla che scade
+   * da sola.
+   */
+  async function pushDraft(): Promise<void> {
+    if (stopped || draftDisabled || draftText === '') return;
+    try {
+      await api.sendMessageDraft(chatId, draftId, draftText);
+    } catch (error) {
+      if (nonModificato(error)) return;
+      draftDisabled = true;
+      log(`telegram: anteprima del turno sospesa — ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * Il rinnovo. Riparte da solo finché c'è testo da mostrare, e questo è il
+   * punto dell'intera fetta: senza questa ri-programmazione l'anteprima
+   * scade dopo `draftTtlMs` e l'owner guarda il vuoto — il difetto misurato
+   * il 04/09 e chiuso allora togliendo la bolla invece che rinnovandola.
+   */
+  function scheduleDraft(): void {
+    if (stopped || draftDisabled || draftTimer !== null) return;
+    draftTimer = setTimeout(() => {
+      draftTimer = null;
+      void pushDraft().then(() => {
+        if (!stopped && !draftDisabled && draftText !== '') scheduleDraft();
+      });
+    }, draftEveryMs);
   }
 
   /**
@@ -346,10 +437,27 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     if (!stopped && !disabled && (running(current()) || status !== null) && hasContent(current())) schedule();
   }
 
+  /**
+   * Quanto aspettare prima della prossima chiamata: il pavimento fra due
+   * chiamate **e** il tetto sulla finestra di un minuto, che sono due limiti
+   * diversi della Bot API con due orizzonti diversi (vedi `Negotiation`).
+   * Prima del 06/09/2026 ne esisteva uno solo, e per stare dentro il tetto
+   * di un gruppo il pavimento era stato alzato a 3 s — cioè si pagava il
+   * tetto anche quando la finestra era vuota.
+   */
+  function attesa(): number {
+    const t = now();
+    while (finestra.length > 0 && t - finestra[0]! >= 60_000) finestra.shift();
+    const pavimento = Math.max(0, minEditMs - (t - lastCallAt));
+    if (maxPerMinute > 0 && finestra.length >= maxPerMinute) {
+      return Math.max(pavimento, finestra[0]! + 60_000 - t);
+    }
+    return pavimento;
+  }
+
   function schedule(): void {
     if (stopped || disabled || flushTimer !== null) return;
-    const wait = Math.max(0, minEditMs - (now() - lastCallAt));
-    flushTimer = setTimeout(() => void flush(), wait);
+    flushTimer = setTimeout(() => void flush(), attesa());
   }
 
   return {
@@ -361,6 +469,9 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       // Cleared unconditionally and first, so a flush racing this call can
       // never render the tail a second time once it is also `seg.html`.
       liveText = '';
+      // Quel testo ora vive in un messaggio vero: l'anteprima ha finito il
+      // suo lavoro per questo giro e non va rinnovata oltre.
+      draftText = '';
       const trimmed = text.trim();
       if (trimmed !== '') {
         const parts = splitHtml(toTelegramHtml(trimmed));
@@ -448,6 +559,24 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     live(text) {
       if (stopped || disabled || !liveEnabled) return;
       const trimmed = text.trim();
+      if (draftEnabled) {
+        // La stanza preferisce l'anteprima: il testo che sta arrivando non
+        // tocca nessun messaggio vero, e la risposta finale resta l'unico
+        // messaggio che la chat conserva.
+        if (draftDisabled) return;
+        const nuovo = trimmed === '' ? '' : toTelegramHtml(trimmed);
+        if (nuovo.length > TELEGRAM_MAX) return;
+        const primo = draftText === '' && nuovo !== '';
+        draftText = nuovo;
+        if (primo) {
+          // Subito, così l'anteprima compare al primo token invece che dopo
+          // una finestra intera di attesa.
+          void pushDraft().then(() => scheduleDraft());
+          return;
+        }
+        scheduleDraft();
+        return;
+      }
       if (trimmed === '') {
         if (liveText !== '') {
           liveText = '';
@@ -457,6 +586,14 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       }
       const rendered = toTelegramHtml(trimmed);
       const seg = current();
+      // `'edit'` è, alla lettera, «riscrivere un messaggio **già inviato**»:
+      // mostra la risposta che si forma dentro il messaggio che il turno
+      // possiede già (il preambolo, i passi), e non ne apre uno solo per far
+      // vedere un pezzo di frase. È ciò che tiene una stanza condivisa senza
+      // un messaggio a metà che un processo morto lascerebbe lì — la stessa
+      // ragione per cui l'anteprima, che non è un messaggio, può invece
+      // partire dal nulla.
+      if (!hasContent(seg)) return;
       // Overflow: stay with whatever is already shown rather than force a
       // rotation mid-round — `deliverTo`'s own render is what makes the
       // final, complete, correctly-split answer right regardless.
@@ -475,6 +612,21 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     async stop() {
       if (stopped) return;
       stopped = true;
+      if (draftTimer !== null) {
+        clearTimeout(draftTimer);
+        draftTimer = null;
+      }
+      // Best-effort: un'anteprima vuota la fa sparire subito invece di
+      // lasciarla sotto la risposta finché scade da sola. Se la Bot API
+      // rifiuta un testo vuoto non è successo niente — scadrà lei.
+      if (draftEnabled && !draftDisabled && draftText !== '') {
+        draftText = '';
+        try {
+          await api.sendMessageDraft(chatId, draftId, '');
+        } catch {
+          // Vedi sopra: scade da sola.
+        }
+      }
       if (flushTimer !== null) {
         clearTimeout(flushTimer);
         flushTimer = null;
