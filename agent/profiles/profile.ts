@@ -115,9 +115,6 @@ export const CONSERVATIVE: Profile = {
   notes: 'Unknown model: the capability floor, with every crutch enabled.',
 };
 
-/** The hard ceiling. Not a profile setting: no profile may raise it. */
-const MAX_ITERATIONS_HARD_CAP = 40;
-
 /**
  * Parsed, not cast (PRACTICES.md#parse-at-boundaries-preserve-provenance) — and the history is why. `recovery` used to
  * be inert data: a typo added 1 to a counter and nothing else. Once the cascade
@@ -194,7 +191,6 @@ function globMatch(pattern: string, value: string): boolean {
   return new RegExp(`^${escaped}$`, 'i').test(value);
 }
 
-/** The effective ceiling: the profile can lower it, never raise it. */
 /**
  * Il profilo del modello, con la scelta dell'installazione sopra.
  *
@@ -215,8 +211,4 @@ function globMatch(pattern: string, value: string): boolean {
  */
 export function withThinking(profile: Profile, override?: Profile['thinking']): Profile {
   return override === undefined ? { ...profile } : { ...profile, thinking: override };
-}
-
-export function iterationCap(profile: Profile): number {
-  return Math.min(profile.maxToolCallsPerTurn, MAX_ITERATIONS_HARD_CAP);
 }

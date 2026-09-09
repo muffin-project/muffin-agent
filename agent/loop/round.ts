@@ -51,10 +51,11 @@ import {
  *    — each attempt its own `muffin.chat_call` span. What must never exist is a
  *    second `chatStream` inside one attempt: the partial text of the first is
  *    already on a surface, and the surface is told `superseded` exactly once.
- *  - **The cap counts calls, not iterations.** `cap` bounds trips through the
- *    loop; nothing upstream bounds how many `tool_use` blocks one completion
- *    carries, and a refused call still gets a `tool_result` because a hole in
- *    the batch is a protocol error every provider rejects.
+ *  - **The tool cap counts calls, not iterations.** Rounds continue while the
+ *    turn is making progress; nothing upstream bounds how many `tool_use`
+ *    blocks one completion carries, and a refused call still gets a
+ *    `tool_result` because a hole in the batch is a protocol error every
+ *    provider rejects.
  *
  * Owner-visible text is byte-identical to what the closure produced (§4 inv. 9):
  * every string in here moved without an edit.
@@ -68,7 +69,6 @@ export type RoundScope = TurnScope & {
    * the gateway already resolved, and re-deriving them here would let what the
    * model just said change them.
    */
-  readonly cap: number;
   readonly turnClass: TenantClass;
   readonly now: () => Date;
   /** The kernel, asked the way `runTool` asks it. Defined in the pre-loop because the episode write uses it too. */
@@ -129,7 +129,6 @@ export function recover(scope: TurnScope, failure: RecoveryFailure): boolean {
  */
 export async function runRounds(scope: RoundScope): Promise<TurnResult> {
   const {
-    cap,
     deps,
     door,
     doorRefusal,
@@ -147,7 +146,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     turnClass,
   } = scope;
 
-  while (run.iterations < cap) {
+  while (true) {
     // Suspension point 1 (design §T3): nothing is in flight, so everything
     // worth keeping is in the variables above. This is where a `wait` armed
     // during the previous batch is honoured — the state goes to disk, the
@@ -673,13 +672,12 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // finished, which for a slow batch is indistinguishable from being
       // ignored.
       if (input.signal?.aborted) return finish(scope, 'aborted', 'Interrotto.');
-      // The ceiling counts CALLS, not iterations. `cap` above bounds trips
-      // through this loop, but nothing upstream bounds how many `tool_use`
-      // blocks one completion carries — a single response with 40 calls
-      // used to execute all 40 under a profile that promised 15 (E6,
-      // RETURN S3). Refused calls still get a tool_result: a hole in the
-      // batch is a protocol error every provider rejects, and the model
-      // should read why it was stopped instead of retrying blind.
+      // The ceiling counts CALLS, not iterations. Nothing upstream bounds how
+      // many `tool_use` blocks one completion carries — a single response
+      // with 40 calls used to execute all 40 under a profile that promised 15
+      // (E6, RETURN S3). Refused calls still get a tool_result: a hole in the
+      // batch is a protocol error every provider rejects, and the model should
+      // read why it was stopped instead of retrying blind.
       if (run.toolCallsMade >= deps.profile.maxToolCallsPerTurn) {
         results.push({
           type: 'tool_result',
@@ -711,10 +709,4 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     }
     run.messages.push({ role: 'user', content: results });
   }
-
-  return finish(
-    scope,
-    'cap',
-    `Mi sono fermato dopo ${cap} passaggi senza chiudere. Dimmi come restringere il compito.`,
-  );
 }
