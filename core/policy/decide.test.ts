@@ -8,7 +8,12 @@ const decls: CapabilityDecl[] = [
   // era il default della classe: la riga 'context' non lo eredita più
   { id: 'fs.write', effect: 'context', maxTaint: 1, risk: 'medium', reversible: 'undoable', rerunnable: true, resourceKind: 'path', policyArgs: ['path'], hostOnly: true },
   // era il default della classe: la riga 'context' non lo eredita più
-  { id: 'sys.shell', effect: 'context', maxTaint: 1, risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: ['command'], hostOnly: true },
+  // effect: 'host', la riga vera della dichiarazione spedita
+  // (agent/tools/shell.ts). Stava su 'context' con un maxTaint appuntato a
+  // mano, che replicava il vecchio soffitto ma NON la riga: da ADR-0074 e' la
+  // riga a dire se l'irreversibile chiede, quindi un finto su 'context'
+  // proverebbe una capability che non esiste.
+  { id: 'sys.shell', effect: 'host', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: ['command'], hostOnly: true },
   { id: 'sys.http', effect: 'context', risk: 'medium', reversible: 'yes', rerunnable: true, maxTaint: 3, resourceKind: 'url', policyArgs: ['url'], hostOnly: false },
   { id: 'sys.search', effect: 'context', risk: 'medium', reversible: 'yes', rerunnable: true, maxTaint: 3, resourceKind: 'query', policyArgs: ['query'], hostOnly: true },
   // era il default della classe: la riga 'context' non lo eredita più
@@ -183,9 +188,29 @@ describe('policy kernel', () => {
     expect(withSiblings(req(scheduler, 'host', 'memory.read', 0)).effect).not.toBe('deny');
   });
 
-  it('asks before shell when the root of trust is only detected, not prevented', () => {
-    expect(kernel({ hardened: true })(req(owner, 'host', 'sys.shell', 0))).toMatchObject({ effect: 'allow' });
+  /**
+   * **Riscritta da ADR-0074 punto 2.** Pinnava la scorciatoia
+   * `hardened && owner && taint === 0 -> allow`: su un'installazione hardened
+   * l'owner in una chat pulita eseguiva la shell senza che nessuno glielo
+   * chiedesse. L'ADR la toglie e ne fa un falsificatore esplicito - *"su
+   * un'installazione hardened, l'owner a taint 0 esegue `sys.process.kill`
+   * senza un `ask`: allora la scorciatoia e' tornata"*.
+   *
+   * Il cambio non dice che hardened non valga: dice che `muffin rot harden`
+   * parla di **chi puo' riscrivere le regole**, non di cosa un comando fa
+   * alla macchina. Un `rm -rf` non diventa disfabile perche' la radice di
+   * fiducia appartiene a un altro utente UNIX.
+   */
+  it('un comando che non si puo\' annullare chiede anche in hardened, anche a taint 0', () => {
+    expect(kernel({ hardened: true })(req(owner, 'host', 'sys.shell', 0))).toMatchObject({ effect: 'ask' });
     expect(kernel({ hardened: false })(req(owner, 'host', 'sys.shell', 0))).toMatchObject({ effect: 'ask' });
+    // E la risposta e' la stessa a ogni taint sotto il soffitto della riga
+    // `host`: il taint non e' piu' la ragione, quindi non e' piu' una differenza.
+    for (const taint of [0, 1, 2] as const) {
+      expect(kernel({ hardened: true })(req(owner, 'host', 'sys.shell', taint)), `taint ${taint}`).toMatchObject({
+        effect: 'ask',
+      });
+    }
   });
 
   it('asks the budget about the turnic tenant, not just about the wallet', () => {
@@ -368,16 +393,38 @@ describe('params gate — model-chosen bytes above a ceiling, whichever tool car
     expect(d.effect).toBe('ask');
   });
 
-  it('sys.search: the query text is fine at taint <= paramsMaxTaint', () => {
-    expect(kernel()(queryReq(owner, 'host', 'previsioni domani', 0))).toMatchObject({ effect: 'allow' });
-    expect(kernel()(queryReq(owner, 'host', 'previsioni domani', 1))).toMatchObject({ effect: 'allow' });
-    expect(kernel()(queryReq(owner, 'host', 'previsioni domani', 2))).toMatchObject({ effect: 'allow' });
+  it('sys.search: la ricerca non chiede a nessun taint — `searchMaxTaint` e\' 3 (ADR-0072)', () => {
+    for (const taint of [0, 1, 2, 3] as const) {
+      expect(kernel()(queryReq(owner, 'host', 'previsioni domani', taint))).toMatchObject({ effect: 'allow' });
+    }
   });
 
-  it('sys.search: past the ceiling asks the owner and shows the query', () => {
-    const d = kernel()(queryReq(owner, 'host', 'MUFFIN-SECRET-sk-live-9f3a7c21', 3));
+  it("sys.search: il taint 3 e\' il caso che e\' cambiato — cerca, leggi, cerca ancora", () => {
+    // Il giro piu\' normale che esista portava il turno a 3 dopo la prima
+    // pagina, quindi il *secondo* `web_search` chiedeva sempre. Su un
+    // processo headless quell'`ask` e\' un `exit 3`: un'approvazione che
+    // nessuno puo\' dare e\' un divieto travestito.
+    expect(kernel()(queryReq(owner, 'host', 'MUFFIN-SECRET-sk-live-9f3a7c21', 3))).toMatchObject({
+      effect: 'allow',
+    });
+  });
+
+  it('ma il numero e\' ancora un cancello: rimetterlo giu\' lo riaccende', () => {
+    // La meta\' che impedisce a questa fetta di essere «il gate e\' stato
+    // cancellato»: `searchMaxTaint` e\' una manopola che un `rot/policy.json`
+    // sigillato puo\' abbassare, non una riga rimossa.
+    const stretto = kernel({ matrix: { ...POLICY_FLOOR, searchMaxTaint: 2 } });
+    const d = stretto(queryReq(owner, 'host', 'MUFFIN-SECRET-sk-live-9f3a7c21', 3));
     expect(d.effect).toBe('ask');
     if (d.effect === 'ask') expect(d.ask.prompt).toContain('MUFFIN-SECRET-sk-live-9f3a7c21');
+  });
+
+  it("e i parametri di un URL restano a 2: sono i due numeri separati da ADR-0072", () => {
+    // Il confine che regge il rischio: il *dove* di una ricerca e\' una
+    // costante allowlisted, quello di un URL lo sceglie il modello.
+    expect(withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/c?q=SEGRETO', 3)).effect).toBe(
+      'ask',
+    );
   });
 
   it('sys.search: a group member never reaches the params gate at all — host-only refuses first', () => {
@@ -440,11 +487,15 @@ describe('D12 — il prompt del kernel non annuncia la propria ignoranza', () =>
   it('una capability senza risorsa produce un prompt che nomina solo la capability', () => {
     const decl: CapabilityDecl = {
       id: 'sys.shell',
-      effect: 'context',
+      // `'host'`, non `'context'`: da ADR-0074 è la riga che decide se
+      // l'irreversibile chiede, quindi un finto sulla riga sbagliata non
+      // arriverebbe mai a un `ask` e questo test proverebbe un prompt che
+      // nessuno vede.
+      effect: 'host',
       risk: 'high',
       reversible: 'no',
       rerunnable: false,
-      maxTaint: 3,
+      maxTaint: 2,
       resourceKind: 'none',
       policyArgs: [],
       hostOnly: false,
@@ -474,11 +525,15 @@ describe('D12 — il prompt del kernel non annuncia la propria ignoranza', () =>
   it('una capability CON risorsa continua a mostrarla', () => {
     const decl: CapabilityDecl = {
       id: 'fs.write',
-      effect: 'context',
+      // Come sopra: la riga `host` è la sola che porta questo finto a un `ask`.
+      // La `fs.write` **spedita** è `undoable` e da ADR-0074 non chiede mai —
+      // qui la dichiarazione è finta apposta (`reversible: 'no'`), perché il
+      // test riguarda il testo del prompt, non quale capability lo produce.
+      effect: 'host',
       risk: 'high',
       reversible: 'no',
       rerunnable: false,
-      maxTaint: 3,
+      maxTaint: 2,
       resourceKind: 'path',
       policyArgs: [],
       hostOnly: false,
@@ -503,18 +558,29 @@ describe('D12 — il prompt del kernel non annuncia la propria ignoranza', () =>
   });
 });
 
-describe('the ask prompt names why single-user always asks — 03/09/2026 UX pass', () => {
-  // `muffin doctor` already told the owner this in the `root of trust mode`
-  // line; the approval prompt itself — the one screen he actually reads
-  // mid-turn — did not. Same decision either way (still `ask`), only the
-  // words on it change.
+/**
+ * **Riscritto da ADR-0074 punto 2.**
+ *
+ * Il blocco che stava qui pinnava la frase del 03/09: l'`ask` di
+ * `sys.shell` in single-user aggiungeva *«chiede sempre finché il blocco non
+ * è reale (`muffin rot harden`)»*, e un secondo test verificava che
+ * un'installazione hardened **non** prendesse in prestito quella spiegazione,
+ * perché lì la domanda nasceva dal taint.
+ *
+ * Entrambe le metà sono cadute con la loro causa. Il ramo `hardened` non
+ * esiste più (la scorciatoia è sparita, quindi non c'è più una ragione
+ * "single-user" da distinguere), e il taint non produce più `ask`, quindi non
+ * c'è più una seconda ragione da non confondere con la prima. Ne resta una
+ * sola, ed è quella che il prompt deve dire: **questa cosa non si annulla.**
+ */
+describe("il prompt dell'ask dice cosa non si può annullare — ADR-0074", () => {
   const decl: CapabilityDecl = {
     id: 'sys.shell',
-    effect: 'context',
+    effect: 'host',
     risk: 'high',
     reversible: 'no',
     rerunnable: false,
-    maxTaint: 3,
+    maxTaint: 2,
     resourceKind: 'none',
     policyArgs: [],
     hostOnly: false,
@@ -529,22 +595,29 @@ describe('the ask prompt names why single-user always asks — 03/09/2026 UX pas
     taint: 0 as const,
   };
 
-  it('single-user: the prompt says it always asks, and points at `muffin rot harden`', () => {
-    const decision = createDecide({ ...base, hardened: false })(req0);
-    expect(decision.effect).toBe('ask');
-    if (decision.effect !== 'ask') return;
-    expect(decision.ask.prompt).toContain('sys.shell');
-    expect(decision.ask.prompt).toContain('muffin rot harden');
+  it('nomina la conseguenza irreversibile, non la modalità della radice di fiducia', () => {
+    for (const hardened of [true, false]) {
+      const decision = createDecide({ ...base, hardened })(req0);
+      expect(decision.effect).toBe('ask');
+      if (decision.effect !== 'ask') return;
+      // Cosa non si può annullare, prima di tutto il resto.
+      expect(decision.ask.prompt).toContain('non si torna indietro');
+      expect(decision.ask.prompt).toContain('questa macchina');
+      // E la capability resta nominata, perché D12 vuole sapere cosa si approva.
+      expect(decision.ask.prompt).toContain('sys.shell');
+      // La modalità della radice di fiducia non c'entra: `muffin rot harden`
+      // decide **chi può riscrivere le regole**, non se un comando si disfa.
+      expect(decision.ask.prompt).not.toContain('muffin rot harden');
+    }
   });
 
-  it('hardened, still asking for an unrelated reason (taint above 0): no borrowed single-user reason', () => {
-    // Hardened only auto-allows at taint 0. At taint 2 it still asks — for a
-    // taint reason, not a "prevention isn't real" reason, so the prompt must
-    // not claim the single-user explanation it did not earn.
-    const decision = createDecide({ ...base, hardened: true })({ ...req0, taint: 2 });
-    expect(decision.effect).toBe('ask');
-    if (decision.effect !== 'ask') return;
-    expect(decision.ask.prompt).toContain('sys.shell');
-    expect(decision.ask.prompt).not.toContain('muffin rot harden');
+  it('la frase non cambia col taint: il taint è contesto, non la causa', () => {
+    const decide = createDecide({ ...base, hardened: false });
+    const a = decide(req0);
+    const b = decide({ ...req0, taint: 2 });
+    expect(a).toEqual(b);
+    // Il contesto («questo turno ha letto contenuto esterno») lo aggiungono le
+    // superfici da `ApprovalRequest.taint` — `cli/repl.ts` e `cli/surface.ts`,
+    // riga `contesto: turno a taint N` — proprio perché non è più una causa.
   });
 });

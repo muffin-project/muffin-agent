@@ -51,9 +51,11 @@ describe('the shell tool exists only where a containment was proved', () => {
     verdict.current = null;
   });
 
-  it('a probe that proved containment registers shell_run', () => {
+  it('a probe that proved containment registers both lanes', () => {
     verdict.current = contains;
-    expect(toolNames()).toContain('shell_run');
+    const names = toolNames();
+    expect(names).toContain('shell_run');
+    expect(names).toContain('shell_run_write');
   });
 
   /**
@@ -67,6 +69,12 @@ describe('the shell tool exists only where a containment was proved', () => {
     verdict.current = doesNot;
     const names = toolNames();
     expect(names).not.toContain('shell_run');
+    // Dal 06/09 (ADR-0074 punto 4) le corsie sono due, e la sola lettura non è un
+    // ripiego per un host senza sandbox: è la *più stretta* delle due e la sua
+    // promessa — niente scritture fuori dallo scratch, niente rete — è la
+    // promessa del sandbox. Registrarla dove il contenimento non si prova
+    // sarebbe la degradazione silenziosa che l'ADR vieta, dalla parte opposta.
+    expect(names).not.toContain('shell_run_write');
     // Not a general outage: the rest of the toolset is untouched, so a red here
     // means the gate, not a broken runtime.
     expect(names).toContain('fs_read');

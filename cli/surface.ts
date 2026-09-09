@@ -8,12 +8,14 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Runtime } from '../agent/runtime.js';
 import type { AttachStream, LaneDeliver } from '../agent/turn-lane.js';
+import type { IngressPort } from '../connectors/shared/ingress/types.js';
 import {
   loadConfig,
   paths,
   readSecret,
   saveConfig,
   ConfigError,
+  type Config,
 } from '../core/config/config.js';
 import { cliSurface, type CliWriter } from '../core/surface/cli.js';
 import { SurfaceRegistry } from '../core/surface/registry.js';
@@ -21,13 +23,14 @@ import type { Surface } from '../core/surface/types.js';
 import { TelegramApi } from '../connectors/telegram/api.js';
 import { TelegramConnector, type ConnectorDeps } from '../connectors/telegram/connector.js';
 import { TelegramDeliveryStore } from '../connectors/telegram/delivery.js';
-import { telegramSurface } from '../connectors/telegram/surface.js';
+import { TELEGRAM_ID, telegramSurface } from '../connectors/telegram/surface.js';
 import { UpdateInbox } from '../connectors/telegram/updates.js';
 import { DiscordApi } from '../connectors/discord/api.js';
 import { DiscordConnector, type ConnectorDeps as DiscordConnectorDeps } from '../connectors/discord/connector.js';
-import { discordSurface } from '../connectors/discord/surface.js';
+import { DISCORD_ID, discordSurface } from '../connectors/discord/surface.js';
 import { DiscordInbox } from '../connectors/discord/inbox.js';
 import { mandatoryGuards } from '../core/rot/guards.js';
+import { discordOwner, loadSealedOwner, sealOwnerBinding, telegramOwner, type SealedOwner } from '../core/rot/owner.js';
 import { makeSendFileTool, sendFileCapability } from '../agent/tools/deliver.js';
 import type { FsScope } from '../agent/tools/fs.js';
 import { cmdModel } from './model.js';
@@ -62,7 +65,93 @@ import { DRAIN_BUDGET_MS } from '../core/gateway/service.js';
  * in due passi. Aggiungere una superficie senza toccarla è il modo in cui i due
  * elenchi finiscono per non essere d'accordo.
  */
-const SUPERFICI_NOTE: readonly string[] = ['cli', 'telegram', 'discord'];
+
+/**
+ * Le porte d'ingresso registrate — una riga per porta, e **nessuna lista di id
+ * scritta a mano** (slice 14, §5).
+ *
+ * Prima di questa fetta il file conteneva due `if (runtime.config.surfaces
+ * .enabled.includes('telegram'))` lunghi un centinaio di righe ciascuno, e
+ * accanto tre mappe (`doors`, `streams`, `approvers`) riempite con lo stesso
+ * letterale scritto un'altra volta. Il difetto che quella forma nasconde è
+ * preciso: una terza porta si aggiungeva con un terzo `if` e poteva
+ * dimenticarsi una delle tre mappe senza che nulla diventasse rosso, mentre
+ * `turns.surface` — la chiave durevole che dopo un riavvio decide chi
+ * risponde a un turno sospeso (§4 invariante 1) — la scriveva il connettore
+ * per conto suo.
+ *
+ * Adesso c'è un solo posto: `connect()` restituisce l'`IngressPort` che il
+ * connettore userà davvero, e il ciclo qui sotto registra le tre mappe sotto
+ * `port.surface.id`, cioè esattamente la stringa che lo stadio `work`
+ * (`connectors/shared/ingress/work.ts`) scrive nella colonna.
+ *
+ * `id` resta come chiave *statica* per le due viste che parlano di una porta
+ * prima che esista un client (`surface list`, `surface enable`): è la stessa
+ * costante che il modulo del connettore usa per il suo `Surface.id`, e
+ * `connectSurfaces` rifiuta di partire se le due non coincidono.
+ */
+type PortRegistration = {
+  readonly id: string;
+  /** Dove sta il token di questa porta. */
+  readonly secret: string;
+  /** La tabella d'inbox da cui `surface list` legge la coda. */
+  readonly inbox: 'telegram_updates' | 'discord_messages';
+  /** Chi è l'owner secondo il sigillo, per questa porta. */
+  readonly ownerOf: (sealed: SealedOwner, config: Config) => string | number | undefined;
+  readonly enable: (home: string, ownerFlag?: string, apiBaseFlag?: string) => Promise<number>;
+  /** `null` quando la porta è abilitata ma non può partire e l'ha già detto. */
+  readonly connect: (ctx: PortConnectContext) => PortConnection | null;
+};
+
+type PortConnectContext = {
+  readonly runtime: Runtime;
+  readonly home: string;
+  readonly log: SinkDiLog;
+  readonly salute: SaluteSuperfici;
+  readonly adesso: () => Date;
+  readonly sealedOwner: SealedOwner;
+  readonly gatewayAtBoot: { pid: number } | null;
+  readonly onWork: (() => void) | undefined;
+  /** Le righe d'avvio, per la porta che deve dire perché **non** parte. */
+  readonly lines: string[];
+};
+
+type PortConnection = {
+  /** La porta vera, costruita col client vero: da qui vengono le chiavi delle tre mappe. */
+  readonly port: IngressPort;
+  readonly surface: Surface;
+  readonly start: () => void;
+  readonly stopPoller: () => void;
+  readonly stop: (budgetMs: number) => Promise<void>;
+  readonly door?: ((turnId: string, replyTo: Record<string, unknown>, text: string) => Promise<void | 'possibly_sent'>) | undefined;
+  readonly stream?: AttachStream | undefined;
+  readonly approver?: Approver | undefined;
+  readonly line: string;
+};
+
+const INGRESS_PORTS: readonly PortRegistration[] = [
+  {
+    id: TELEGRAM_ID,
+    secret: 'secret://telegram_token',
+    inbox: 'telegram_updates',
+    ownerOf: (sealed, config) => telegramOwner(sealed, config.surfaces.telegram).chatId,
+    enable: (home, ownerFlag, apiBaseFlag) => enableTelegram(home, ownerFlag, apiBaseFlag),
+    connect: connectTelegram,
+  },
+  {
+    id: DISCORD_ID,
+    secret: 'secret://discord_token',
+    inbox: 'discord_messages',
+    ownerOf: (sealed, config) => discordOwner(sealed, config.surfaces.discord).userId,
+    enable: (home, ownerFlag) => enableDiscord(home, ownerFlag),
+    connect: connectDiscord,
+  },
+];
+
+/** Gli id delle porte registrate, derivati dalla tabella e mai riscritti a mano. */
+export const INGRESS_PORT_IDS: readonly string[] = INGRESS_PORTS.map((r) => r.id);
+
+const SUPERFICI_NOTE: readonly string[] = ['cli', ...INGRESS_PORT_IDS];
 
 export const SURFACE_USAGE = `usage:
   muffin surface list                     le superfici e il loro stato
@@ -133,6 +222,11 @@ export function cmdSurfaceDefault(home: string, id: string): number {
 
 export function cmdSurfaceList(home: string): number {
   const config = loadConfig(home);
+  // La stessa precedenza che usa `connectSurfaces`: questa vista deve dire
+  // l'owner che i connettori riconosceranno davvero, non quello scritto in
+  // `config.json` — che dal sigillo in poi può essere un residuo legacy o,
+  // peggio, una riscrittura che nessuno ha autorizzato.
+  const sealedOwner = loadSealedOwner(home);
   const lines: string[] = [];
 
   for (const id of SUPERFICI_NOTE) {
@@ -140,27 +234,20 @@ export function cmdSurfaceList(home: string): number {
     const isDefault = config.surfaces.default === id;
     let detail = '';
 
-    if (id === 'telegram') {
-      const token = hasSecret('secret://telegram_token', home);
-      const owner = config.surfaces.telegram?.ownerChatId;
+    // Una riga sola per ogni porta registrata, e nessun `if` su un id: il
+    // difetto che questa tabella chiude è che una terza porta si aggiungeva
+    // con un terzo `if` qui e restava fuori da `doors`/`streams`/`approvers`
+    // senza che nulla diventasse rosso (§5).
+    const reg = INGRESS_PORTS.find((r) => r.id === id);
+    if (reg) {
+      const token = hasSecret(reg.secret, home);
+      const owner = reg.ownerOf(sealedOwner, config);
       if (enabled) {
         detail = ` · token ${token ? 'presente' : 'MANCANTE'} · owner ${owner ?? 'MANCANTE'}`;
-        const stats = inboxStats(home, 'telegram_updates');
+        const stats = inboxStats(home, reg.inbox);
         if (stats) detail += ` · ${stats.pending} in coda${stats.failed > 0 ? ` · ${stats.failed} falliti` : ''}`;
       } else {
-        detail = token ? ' · token presente, abilitala con `muffin surface enable telegram`' : '';
-      }
-    }
-
-    if (id === 'discord') {
-      const token = hasSecret('secret://discord_token', home);
-      const owner = config.surfaces.discord?.ownerUserId;
-      if (enabled) {
-        detail = ` · token ${token ? 'presente' : 'MANCANTE'} · owner ${owner ?? 'MANCANTE'}`;
-        const stats = inboxStats(home, 'discord_messages');
-        if (stats) detail += ` · ${stats.pending} in coda${stats.failed > 0 ? ` · ${stats.failed} falliti` : ''}`;
-      } else {
-        detail = token ? ' · token presente, abilitala con `muffin surface enable discord`' : '';
+        detail = token ? ` · token presente, abilitala con \`muffin surface enable ${id}\`` : '';
       }
     }
 
@@ -207,8 +294,8 @@ export async function cmdSurfaceEnable(
     process.stderr.write(`la CLI è sempre abilitata\n`);
     return 0;
   }
-  if (id === 'telegram') return enableTelegram(home, ownerFlag, apiBaseFlag);
-  if (id === 'discord') return enableDiscord(home, ownerFlag);
+  const reg = INGRESS_PORTS.find((r) => r.id === id);
+  if (reg) return reg.enable(home, ownerFlag, apiBaseFlag);
   process.stderr.write(`superficie sconosciuta: ${id}\n${SURFACE_USAGE}`);
   return 78;
 }
@@ -289,6 +376,18 @@ async function enableTelegram(home: string, ownerFlag?: string, apiBaseFlag?: st
     },
   };
   saveConfig(next, home);
+  // Il legame, quando c'è già, va sotto il sigillo qui: questo comando è la
+  // porta che l'owner digita, ed è anche il rimedio che `muffin doctor`
+  // nomina per una casa legacy — legame in `config.json` e sigillo che non ne
+  // sa niente. Senza owner (pairing in corso) non c'è ancora niente da
+  // sigillare: lo farà `savePairing` quando il codice torna indietro.
+  if (ownerUserId !== undefined) {
+    sealOwnerBinding(
+      home,
+      { telegram: { userId: ownerUserId, chatId: ownerChatId ?? ownerUserId } },
+      { out: (riga) => process.stdout.write(`${riga}\n`) },
+    );
+  }
   process.stdout.write(`telegram abilitata: @${me.username ?? me.id}, owner ${ownerChatId}\n`);
   process.stdout.write(`si connette al prossimo \`muffin\`\n`);
   ricordaLaPredefinita(home, 'telegram');
@@ -364,6 +463,10 @@ async function enableDiscord(home: string, ownerFlag?: string): Promise<number> 
     },
   };
   saveConfig(next, home);
+  // Stessa ragione di `enableTelegram`.
+  if (ownerUserId !== undefined) {
+    sealOwnerBinding(home, { discord: { userId: ownerUserId } }, { out: (riga) => process.stdout.write(`${riga}\n`) });
+  }
   process.stdout.write(`discord abilitata: @${me.username} (${me.id})${ownerUserId ? `, owner ${ownerUserId}` : ''}\n`);
   process.stdout.write(`si connette al prossimo \`muffin\`\n`);
   ricordaLaPredefinita(home, 'discord');
@@ -738,6 +841,16 @@ export function connectSurfaces(
    */
   const gatewayAtBoot = gatewayServes?.() ?? null;
   /**
+   * Chi è l'owner secondo il sigillo — letto una volta, per tutte le superfici.
+   *
+   * `note` non si perde in un booleano: «il legame sigillato non si verifica»
+   * è il fatto che deve arrivare all'owner, e senza questa riga una superficie
+   * smetterebbe di riconoscerlo senza che nulla lo dica. `muffin doctor` lo
+   * ripete con il rimedio; qui basta che non sia silenzioso.
+   */
+  const sealedOwner = loadSealedOwner(home);
+  if (sealedOwner.note !== undefined) log(`root of trust: ${sealedOwner.note}`);
+  /**
    * I poller che il cancello governa — uno per superficie che ne ha uno.
    *
    * Registrati invece che avviati sul posto, perche' il passaggio avviene in
@@ -789,228 +902,61 @@ export function connectSurfaces(
    */
   const streams = new Map<string, AttachStream>();
 
-  if (runtime.config.surfaces.enabled.includes('telegram')) {
+  /**
+   * Una porta per giro, dalla tabella `INGRESS_PORTS`.
+   *
+   * Le tre mappe si riempiono qui, tutte con la **stessa** chiave —
+   * `conn.port.surface.id`, cioè il valore che lo stadio `work` scrive in
+   * `turns.surface` — e non con tre letterali che si somigliavano. È
+   * l'invariante 1 reso meccanico: un turno sospeso ritrovato dopo un riavvio
+   * cerca la sua porta con `doors.get(turn.surface)`, e finché quella stringa
+   * nasce da un posto solo non può non trovarla.
+   */
+  for (const reg of INGRESS_PORTS) {
+    if (!runtime.config.surfaces.enabled.includes(reg.id)) continue;
     try {
-      const token = readSecret('secret://telegram_token', home);
-      const tg = runtime.config.surfaces.telegram;
-      const ownerUserId = tg?.ownerUserId;
-      const ownerChatId = tg?.ownerChatId;
-      // Unpaired but with a code outstanding is a legitimate running state: the
-      // surface has to be up to receive the code. What it must not do is treat
-      // anyone as the owner while it waits.
-      if (ownerUserId === undefined && tg?.pairing === undefined) {
-        salute.caduta('telegram', 'abilitata ma senza owner', adesso(), '`muffin surface enable telegram`');
-        lines.push('telegram: abilitata ma senza owner — `muffin surface enable telegram`');
-      } else {
-        const base = tg?.apiBase;
-        const api = base === undefined ? new TelegramApi(token) : new TelegramApi(token, base);
-        const telegramDb = openDb(paths(home).db);
-        const inbox = new UpdateInbox(telegramDb);
-        const delivery = new TelegramDeliveryStore(telegramDb);
-        const vaultRoot = paths(home).vault;
-        mkdirSync(join(vaultRoot, 'inbox'), { recursive: true });
-        // The runtime's own vault, not a second one: `document_read` reads
-        // through that instance, and a connector indexing into a different root
-        // would produce documents the model cannot open.
-        const connector = new TelegramConnector({
-          loop: runtime.deps,
-          sessions: runtime.deps.sessions,
-          inbox,
-          delivery,
-          api,
-          vault: telegramVault(runtime, vaultRoot),
-          voce: voceFor(runtime, home),
-          comandi: comandiPerTelegram(runtime, home),
-          // ADR-0054 §4: il fatto durevole che scheduler e corsia leggono.
-          pausa: new Pausa(runtime.db),
-          // La metà che torna indietro: i pulsanti li manda l'approvatore qui
-          // sotto, il dito che li preme lo gestisce il connettore. Condizionale
-          // e non un cast: `LoopDeps.approvals` è opzionale nel tipo, e un
-          // runtime senza registro è un runtime dove i pulsanti non si mandano —
-          // quindi non c'è niente da gestire quando tornano.
-          ...(runtime.deps.approvals === undefined ? {} : { approvals: runtime.deps.approvals }),
-          ...(onWork === undefined ? {} : { onWork }),
-          salute,
-          config: {
-            token,
-            ...(ownerUserId === undefined ? {} : { ownerUserId }),
-            ...(ownerChatId === undefined ? {} : { ownerChatId }),
-            ...(tg?.pairing === undefined ? {} : { pairing: tg.pairing }),
-          },
-          // The pairing outcome has to reach disk, or the bind lasts until the
-          // process exits and the owner has to do it again every restart.
-          savePairing: (next) => {
-            const current = loadConfig(home);
-            saveConfig(
-              {
-                ...current,
-                surfaces: {
-                  ...current.surfaces,
-                  telegram: {
-                    ...current.surfaces.telegram,
-                    ...(next.ownerUserId === undefined ? {} : { ownerUserId: next.ownerUserId }),
-                    ...(next.ownerChatId === undefined ? {} : { ownerChatId: next.ownerChatId }),
-                    ...(next.pairing === null ? { pairing: undefined } : { pairing: next.pairing }),
-                  },
-                },
-              },
-              home,
-            );
-          },
-          log,
-        });
-
-        // Registrato prima di far partire il connettore: un turno che chiede
-        // un'approvazione al primo messaggio non deve trovare l'instradatore
-        // vuoto e rispondere «qui non posso chiedertelo».
-        runtime.approvers.set('telegram', approvatoreTelegram(api));
-
-        // Same process, background. A crash of the surface is reported and does
-        // not take the REPL down: the terminal is the surface of last resort,
-        // and it stays up when the others fall over.
-        // Sincrono, prima che il connettore abbia parlato con qualcuno: fra qui
-        // e il primo battito passano fino a due minuti se la rete e' lenta, e
-        // in quella finestra l'assenza di una riga non deve poter essere letta
-        // come «non e' stata nemmeno tentata».
-        const avviaTelegram = (): void => {
-          salute.inAvvio('telegram', adesso());
-          void connector.run().catch((error: unknown) => {
-            const causa = error instanceof Error ? error.message : String(error);
-            salute.caduta('telegram', causa, adesso());
-            log(`telegram: caduta — ${causa}`);
-          });
-        };
-        // Fire-and-forget on purpose here: the mouth handoff is not a
-        // shutdown, nothing downstream is about to close the database, and
-        // the interval callback that calls this must not block on it.
-        pollers.push({ start: avviaTelegram, stop: () => void connector.stop() });
-        if (gatewayAtBoot === null) avviaTelegram();
-        stops.push((budgetMs) => connector.stop(budgetMs).then(() => undefined));
-        // The door for the lane. Registered next to the connector that owns it,
-        // so a surface that did not come up simply has none — the honest state,
-        // rather than a door onto a dead poller.
-        doors.set('telegram', async (turnId, replyTo, text) => {
-          const outcome = await connector.deliverTo(turnId, replyTo, text);
-          return outcome === 'possibly_sent' ? outcome : undefined;
-        });
-        streams.set('telegram', connector.resumeStream);
-        // Delivery for `SurfaceRegistry`, from the same token the listener
-        // uses. `ownerChatId` is what makes `handles('telegram')` true, so an
-        // unpaired surface listens but does not claim to be a destination —
-        // which is the honest answer while nobody is the owner yet.
-        surfaces.push(telegramSurface(api, ownerChatId));
-        lines.push(
-          gatewayAtBoot !== null
-            ? `telegram: la riceve il gateway (pid ${gatewayAtBoot.pid}) — questa finestra manda soltanto`
-            : ownerUserId === undefined
-              ? 'telegram: connessa, in attesa del codice — nessuno è owner finché non arriva'
-              : `telegram: connessa (owner ${ownerUserId})`,
-        );
+      const conn = reg.connect({
+        runtime,
+        home,
+        log,
+        salute,
+        adesso,
+        sealedOwner,
+        gatewayAtBoot,
+        onWork,
+        lines,
+      });
+      // La porta è abilitata ma non può partire, e l'ha già detto con la sua
+      // frase e la sua caduta: niente da registrare.
+      if (conn === null) continue;
+      if (conn.port.surface.id !== reg.id) {
+        // Non un commento e non un divieto: la registrazione e la porta vera
+        // devono essere la stessa cosa, o `doors.get(turn.surface)` fallirebbe
+        // in silenzio dopo il primo riavvio dell'owner.
+        throw new Error(`porta "${reg.id}" registrata ma costruita come "${conn.port.surface.id}"`);
       }
+      const id = conn.port.surface.id;
+      // Registrato prima di far partire il connettore: un turno che chiede
+      // un'approvazione al primo messaggio non deve trovare l'instradatore
+      // vuoto e rispondere «qui non posso chiedertelo».
+      if (conn.approver !== undefined) runtime.approvers.set(id, conn.approver);
+      if (conn.door !== undefined) doors.set(id, conn.door);
+      if (conn.stream !== undefined) streams.set(id, conn.stream);
+      surfaces.push(conn.surface);
+      pollers.push({ start: conn.start, stop: conn.stopPoller });
+      if (gatewayAtBoot === null) conn.start();
+      stops.push(conn.stop);
+      lines.push(conn.line);
     } catch (error) {
       // Il rimedio esplicito, perche' quello di default direbbe «riavvia il
       // gateway» e un segreto che manca non si ripara riavviando.
       salute.caduta(
-        'telegram',
+        reg.id,
         `non parte — ${(error as ConfigError).message}`,
         adesso(),
         'non e la rete: risolvi cio che la causa nomina (di solito `muffin secret set`), poi riavvia il gateway',
       );
-      lines.push(`telegram: abilitata ma non parte — ${(error as ConfigError).message}`);
-    }
-  }
-
-  if (runtime.config.surfaces.enabled.includes('discord')) {
-    try {
-      const token = readSecret('secret://discord_token', home);
-      const dc = runtime.config.surfaces.discord;
-      const ownerUserId = dc?.ownerUserId;
-      if (ownerUserId === undefined && dc?.pairing === undefined) {
-        salute.caduta('discord', 'abilitata ma senza owner', adesso(), '`muffin surface enable discord`');
-        lines.push('discord: abilitata ma senza owner — `muffin surface enable discord`');
-      } else {
-        const api = new DiscordApi(token);
-        const inbox = new DiscordInbox(openDb(paths(home).db));
-        const vaultRoot = paths(home).vault;
-        mkdirSync(join(vaultRoot, 'inbox'), { recursive: true });
-        const connector = new DiscordConnector({
-          loop: runtime.deps,
-          sessions: runtime.deps.sessions,
-          inbox,
-          api,
-          vault: discordVault(runtime, vaultRoot),
-          salute,
-          config: {
-            token,
-            ...(ownerUserId === undefined ? {} : { ownerUserId }),
-            ...(dc?.pairing === undefined ? {} : { pairing: dc.pairing }),
-          },
-          savePairing: (next) => {
-            const current = loadConfig(home);
-            saveConfig(
-              {
-                ...current,
-                surfaces: {
-                  ...current.surfaces,
-                  discord: {
-                    ...current.surfaces.discord,
-                    ...(next.ownerUserId === undefined ? {} : { ownerUserId: next.ownerUserId }),
-                    ...(next.pairing === null ? { pairing: undefined } : { pairing: next.pairing }),
-                  },
-                },
-              },
-              home,
-            );
-          },
-          log,
-        });
-
-        // Sincrono, prima che il connettore abbia parlato con qualcuno: fra qui
-        // e il primo battito passano fino a due minuti se la rete e' lenta, e
-        // in quella finestra l'assenza di una riga non deve poter essere letta
-        // come «non e' stata nemmeno tentata».
-        const avviaDiscord = (): void => {
-          salute.inAvvio('discord', adesso());
-          void connector.run().catch((error: unknown) => {
-            const causa = error instanceof Error ? error.message : String(error);
-            salute.caduta('discord', causa, adesso());
-            log(`discord: caduta — ${causa}`);
-          });
-        };
-        // Fire-and-forget for the same reason Telegram's poller stop is.
-        pollers.push({ start: avviaDiscord, stop: () => void connector.stop() });
-        // Stessa ragione di Telegram: una sola gateway websocket per token,
-        // altrimenti ogni messaggio viene servito due volte.
-        if (gatewayAtBoot === null) avviaDiscord();
-        stops.push((budgetMs) => connector.stop(budgetMs).then(() => undefined));
-        surfaces.push(discordSurface(api, ownerUserId));
-        // N2 (judge, PR #42): this used to say "connessa" before `api.me()` —
-        // called inside `connector.run()`, fire-and-forget above — had
-        // actually answered. A bad token would print "connessa" and then, a
-        // moment later, "discord: caduta" from the `.catch` above: two lines
-        // that contradict each other, in the order that hides which one is
-        // true. `connector.run()` already logs the real confirmation once
-        // `me()` succeeds ("discord: connesso come @…", `connector.ts`), so
-        // this line only ever claims what it can see synchronously: that the
-        // connector was started, not that Discord has answered it.
-        lines.push(
-          gatewayAtBoot !== null
-            ? `discord: la riceve il gateway (pid ${gatewayAtBoot.pid}) — questa finestra manda soltanto`
-            : ownerUserId === undefined
-              ? 'discord: in connessione, in attesa del codice — nessuno è owner finché non arriva'
-              : `discord: in connessione (owner ${ownerUserId})`,
-        );
-      }
-    } catch (error) {
-      // Il rimedio esplicito, perche' quello di default direbbe «riavvia il
-      // gateway» e un segreto che manca non si ripara riavviando.
-      salute.caduta(
-        'discord',
-        `non parte — ${(error as ConfigError).message}`,
-        adesso(),
-        'non e la rete: risolvi cio che la causa nomina (di solito `muffin secret set`), poi riavvia il gateway',
-      );
-      lines.push(`discord: abilitata ma non parte — ${(error as ConfigError).message}`);
+      lines.push(`${reg.id}: abilitata ma non parte — ${(error as ConfigError).message}`);
     }
   }
 
@@ -1163,4 +1109,251 @@ function inboxStats(home: string, table: 'telegram_updates' | 'discord_messages'
   } finally {
     db.close();
   }
+}
+
+
+/**
+ * Telegram, dal token alla porta registrata.
+ *
+ * Il corpo è quello che stava dentro `if (…includes('telegram'))` prima della
+ * slice 14, spostato senza riscritture: quello che cambia è **chi decide
+ * quando chiamarlo** (la tabella) e **sotto quale chiave finiscono door,
+ * stream e approvatore** (`port.surface.id`, non un letterale).
+ */
+function connectTelegram(ctx: PortConnectContext): PortConnection | null {
+  const { runtime, home, log, salute, adesso, sealedOwner, gatewayAtBoot, onWork, lines } = ctx;
+  const token = readSecret('secret://telegram_token', home);
+  const tg = runtime.config.surfaces.telegram;
+  // Il legame owner viene dal sigillo quando il sigillo ne ha uno; da
+  // `config.json` solo su una casa che il sigillo non ha mai coperto (B15). Un
+  // file sigillato che non si verifica non retrocede su `config.json`: non
+  // autentica nessuno — vedi `core/rot/owner.ts`.
+  const legato = telegramOwner(sealedOwner, tg);
+  const ownerUserId = legato.userId;
+  const ownerChatId = legato.chatId;
+  // Unpaired but with a code outstanding is a legitimate running state: the
+  // surface has to be up to receive the code. What it must not do is treat
+  // anyone as the owner while it waits.
+  if (ownerUserId === undefined && tg?.pairing === undefined) {
+    salute.caduta(TELEGRAM_ID, 'abilitata ma senza owner', adesso(), '`muffin surface enable telegram`');
+    lines.push('telegram: abilitata ma senza owner — `muffin surface enable telegram`');
+    return null;
+  }
+  const base = tg?.apiBase;
+  const api = base === undefined ? new TelegramApi(token) : new TelegramApi(token, base);
+  const telegramDb = openDb(paths(home).db);
+  const inbox = new UpdateInbox(telegramDb);
+  const delivery = new TelegramDeliveryStore(telegramDb);
+  const vaultRoot = paths(home).vault;
+  mkdirSync(join(vaultRoot, 'inbox'), { recursive: true });
+  // The runtime's own vault, not a second one: `document_read` reads through
+  // that instance, and a connector indexing into a different root would
+  // produce documents the model cannot open.
+  const connector = new TelegramConnector({
+    loop: runtime.deps,
+    sessions: runtime.deps.sessions,
+    inbox,
+    delivery,
+    api,
+    vault: telegramVault(runtime, vaultRoot),
+    voce: voceFor(runtime, home),
+    comandi: comandiPerTelegram(runtime, home),
+    // ADR-0054 §4: il fatto durevole che scheduler e corsia leggono.
+    pausa: new Pausa(runtime.db),
+    // La metà che torna indietro: i pulsanti li manda l'approvatore qui sotto,
+    // il dito che li preme lo gestisce il connettore. Condizionale e non un
+    // cast: `LoopDeps.approvals` è opzionale nel tipo, e un runtime senza
+    // registro è un runtime dove i pulsanti non si mandano — quindi non c'è
+    // niente da gestire quando tornano.
+    ...(runtime.deps.approvals === undefined ? {} : { approvals: runtime.deps.approvals }),
+    ...(onWork === undefined ? {} : { onWork }),
+    salute,
+    config: {
+      token,
+      ...(ownerUserId === undefined ? {} : { ownerUserId }),
+      ...(ownerChatId === undefined ? {} : { ownerChatId }),
+      ...(tg?.pairing === undefined ? {} : { pairing: tg.pairing }),
+    },
+    // The pairing outcome has to reach disk, or the bind lasts until the
+    // process exits and the owner has to do it again every restart.
+    savePairing: (next) => {
+      const current = loadConfig(home);
+      saveConfig(
+        {
+          ...current,
+          surfaces: {
+            ...current.surfaces,
+            telegram: {
+              ...current.surfaces.telegram,
+              ...(next.ownerUserId === undefined ? {} : { ownerUserId: next.ownerUserId }),
+              ...(next.ownerChatId === undefined ? {} : { ownerChatId: next.ownerChatId }),
+              ...(next.pairing === null ? { pairing: undefined } : { pairing: next.pairing }),
+            },
+          },
+        },
+        home,
+      );
+      // E poi sotto il sigillo, nello stesso atto (B15): un legame che vive
+      // solo in `config.json` lo riscrive qualunque processo che gira come
+      // l'owner. Il campo legacy resta scritto qui sopra per una release — una
+      // casa che torna a un binario precedente deve continuare a riconoscere
+      // il suo owner.
+      if (next.ownerUserId !== undefined) {
+        sealOwnerBinding(
+          home,
+          // In una chat privata Telegram fa coincidere i due id, ed è l'unico
+          // caso in cui il pairing può concludersi.
+          { telegram: { userId: next.ownerUserId, chatId: next.ownerChatId ?? next.ownerUserId } },
+          { out: (riga) => log(`telegram: ${riga}`) },
+        );
+      }
+    },
+    log,
+  });
+
+  // Same process, background. A crash of the surface is reported and does not
+  // take the REPL down: the terminal is the surface of last resort, and it
+  // stays up when the others fall over.
+  // Sincrono, prima che il connettore abbia parlato con qualcuno: fra qui e il
+  // primo battito passano fino a due minuti se la rete e' lenta, e in quella
+  // finestra l'assenza di una riga non deve poter essere letta come «non e'
+  // stata nemmeno tentata».
+  const avvia = (): void => {
+    salute.inAvvio(TELEGRAM_ID, adesso());
+    void connector.run().catch((error: unknown) => {
+      const causa = error instanceof Error ? error.message : String(error);
+      salute.caduta(TELEGRAM_ID, causa, adesso());
+      log(`telegram: caduta — ${causa}`);
+    });
+  };
+
+  return {
+    // La porta del connettore stesso, non una seconda costruita qui: è quella
+    // il cui `surface.id` finisce in `turns.surface`.
+    port: connector.ingressPort,
+    // Delivery for `SurfaceRegistry`, from the same token the listener uses.
+    // `ownerChatId` is what makes `handles('telegram')` true, so an unpaired
+    // surface listens but does not claim to be a destination — which is the
+    // honest answer while nobody is the owner yet.
+    surface: telegramSurface(api, ownerChatId),
+    start: avvia,
+    // Fire-and-forget on purpose here: the mouth handoff is not a shutdown,
+    // nothing downstream is about to close the database, and the interval
+    // callback that calls this must not block on it.
+    stopPoller: () => void connector.stop(),
+    stop: (budgetMs) => connector.stop(budgetMs).then(() => undefined),
+    // The door for the lane. Returned next to the connector that owns it, so a
+    // surface that did not come up simply has none — the honest state, rather
+    // than a door onto a dead poller.
+    door: async (turnId, replyTo, text) => {
+      const outcome = await connector.deliverTo(turnId, replyTo, text);
+      return outcome === 'possibly_sent' ? outcome : undefined;
+    },
+    stream: connector.resumeStream,
+    approver: approvatoreTelegram(api),
+    line:
+      gatewayAtBoot !== null
+        ? `telegram: la riceve il gateway (pid ${gatewayAtBoot.pid}) — questa finestra manda soltanto`
+        : ownerUserId === undefined
+          ? 'telegram: connessa, in attesa del codice — nessuno è owner finché non arriva'
+          : `telegram: connessa (owner ${ownerUserId})`,
+  };
+}
+
+/** Discord, stessa forma e stesso ciclo. Invariato dalla slice 14: la porta arriva alla fetta 15. */
+function connectDiscord(ctx: PortConnectContext): PortConnection | null {
+  const { runtime, home, log, salute, adesso, sealedOwner, gatewayAtBoot, lines } = ctx;
+  const token = readSecret('secret://discord_token', home);
+  const dc = runtime.config.surfaces.discord;
+  // Stessa precedenza di Telegram, stessa funzione: il sigillo prima.
+  const ownerUserId = discordOwner(sealedOwner, dc).userId;
+  if (ownerUserId === undefined && dc?.pairing === undefined) {
+    salute.caduta(DISCORD_ID, 'abilitata ma senza owner', adesso(), '`muffin surface enable discord`');
+    lines.push('discord: abilitata ma senza owner — `muffin surface enable discord`');
+    return null;
+  }
+  const api = new DiscordApi(token);
+  const inbox = new DiscordInbox(openDb(paths(home).db));
+  const vaultRoot = paths(home).vault;
+  mkdirSync(join(vaultRoot, 'inbox'), { recursive: true });
+  const connector = new DiscordConnector({
+    loop: runtime.deps,
+    sessions: runtime.deps.sessions,
+    inbox,
+    api,
+    vault: discordVault(runtime, vaultRoot),
+    salute,
+    config: {
+      token,
+      ...(ownerUserId === undefined ? {} : { ownerUserId }),
+      ...(dc?.pairing === undefined ? {} : { pairing: dc.pairing }),
+    },
+    // ADR-0054 §4: la stessa leva durevole che riceve Telegram. Prima della
+    // fetta 15 Discord non la guardava, quindi `/pause` fermava i job e
+    // Telegram e lasciava questa porta a rispondere.
+    pausa: new Pausa(runtime.db),
+    savePairing: (next) => {
+      const current = loadConfig(home);
+      saveConfig(
+        {
+          ...current,
+          surfaces: {
+            ...current.surfaces,
+            discord: {
+              ...current.surfaces.discord,
+              ...(next.ownerUserId === undefined ? {} : { ownerUserId: next.ownerUserId }),
+              ...(next.pairing === null ? { pairing: undefined } : { pairing: next.pairing }),
+            },
+          },
+        },
+        home,
+      );
+      // Stessa ragione di Telegram, qui sopra: il legame va sotto il sigillo
+      // appena esiste.
+      if (next.ownerUserId !== undefined) {
+        sealOwnerBinding(home, { discord: { userId: next.ownerUserId } }, { out: (riga) => log(`discord: ${riga}`) });
+      }
+    },
+    log,
+  });
+
+  // Sincrono, prima che il connettore abbia parlato con qualcuno: fra qui e il
+  // primo battito passano fino a due minuti se la rete e' lenta, e in quella
+  // finestra l'assenza di una riga non deve poter essere letta come «non e'
+  // stata nemmeno tentata».
+  const avvia = (): void => {
+    salute.inAvvio(DISCORD_ID, adesso());
+    void connector.run().catch((error: unknown) => {
+      const causa = error instanceof Error ? error.message : String(error);
+      salute.caduta(DISCORD_ID, causa, adesso());
+      log(`discord: caduta — ${causa}`);
+    });
+  };
+
+  return {
+    // La porta del connettore stesso, non una seconda costruita qui: è quella
+    // il cui `surface.id` finisce in `turns.surface` (§4 invariante 1). Fino
+    // alla fetta 14 era `discordPort(api, ownerUserId)` scritto qui, perché
+    // nessun codice di Discord leggeva ancora una `IngressPort`; dalla fetta
+    // 15 il connettore la costruisce e la percorre.
+    port: connector.ingressPort,
+    surface: discordSurface(api, ownerUserId),
+    start: avvia,
+    // Fire-and-forget for the same reason Telegram's poller stop is. Stessa
+    // ragione di Telegram: una sola gateway websocket per token, altrimenti
+    // ogni messaggio viene servito due volte.
+    stopPoller: () => void connector.stop(),
+    stop: (budgetMs) => connector.stop(budgetMs).then(() => undefined),
+    // N2 (judge, PR #42): questa riga diceva «connessa» prima che `api.me()`
+    // — chiamata dentro `connector.run()`, fire-and-forget — avesse davvero
+    // risposto. Un token sbagliato stampava «connessa» e, un attimo dopo,
+    // «discord: caduta»: due righe che si contraddicono, nell'ordine che
+    // nasconde quale delle due è vera.
+    line:
+      gatewayAtBoot !== null
+        ? `discord: la riceve il gateway (pid ${gatewayAtBoot.pid}) — questa finestra manda soltanto`
+        : ownerUserId === undefined
+          ? 'discord: in connessione, in attesa del codice — nessuno è owner finché non arriva'
+          : `discord: in connessione (owner ${ownerUserId})`,
+  };
 }

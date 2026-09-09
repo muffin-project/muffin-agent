@@ -6,11 +6,10 @@ import { formatConsolidationLines } from '../core/memory/ingest.js';
 import { checkInvariants, formatCheck } from '../core/memory/invariants.js';
 import { EVERY_INSTANT, recall } from '../core/memory/recall.js';
 import { resolveContradiction, reviewLine, reviewSummary } from '../core/memory/maintenance.js';
-import type { FactOrigin } from '../core/memory/schema.js';
+import { describeProvenance, factLine } from '../core/memory/provenance.js';
 import { makeEmbedder, OllamaEmbedder } from '../core/memory/embed.js';
 import { MemoryStore, type Fact } from '../core/memory/store.js';
 import { quantiNonIndicizzati } from '../core/memory/vectors.js';
-import type { TrustTier } from '../core/policy/types.js';
 
 /**
  * `muffin memory` — reading the memory without asking the agent about it.
@@ -61,32 +60,6 @@ function openStore(home: string): { db: DatabaseCtor.Database; store: MemoryStor
   return { db, store: new MemoryStore(db) };
 }
 
-const TIER_LABEL = ['owner', 'contatto noto', 'gruppo/sconosciuto', 'web/tool esterno'] as const;
-
-function tierName(tier: TrustTier): string {
-  return `tier ${tier} · ${TIER_LABEL[tier]}`;
-}
-
-/** Said, inferred or imported — deliberately not folded into the tier label. */
-function originName(origin: FactOrigin): string {
-  return origin === 'said' ? 'detto' : origin === 'inferred' ? 'dedotto' : 'importato';
-}
-
-/** Spelled out rather than shown as 0/1/2: a bare integer invites averaging. */
-function importanceName(importance: number): string {
-  return importance >= 2 ? 'carico' : importance === 1 ? 'conta' : 'routine';
-}
-
-function factLine(f: Fact): string {
-  const object = f.objectName ?? f.objectValue ?? '?';
-  const state = f.expiredAt ? `ritirato il ${f.expiredAt.slice(0, 10)}` : 'attivo';
-  const world =
-    f.validFrom || f.validTo
-      ? ` · valido ${f.validFrom?.slice(0, 10) ?? '?'} → ${f.validTo?.slice(0, 10) ?? 'oggi'}`
-      : '';
-  return `#${f.id} ${f.subjectName} ${f.predicate} ${object} — ${state}${world}`;
-}
-
 export function cmdMemoryWhy(home: string, factId: number): number {
   const { db, store } = openStore(home);
   try {
@@ -95,50 +68,12 @@ export function cmdMemoryWhy(home: string, factId: number): number {
       process.stderr.write(`nessun fatto #${factId}\n`);
       return 1;
     }
-    const episode = store.episodeById(TENANT, fact.episodeId);
-
-    const out: string[] = [factLine(fact)];
-    // `why` is the one place the two axes must not blur into each other: the
-    // tier says who it came from, the origin says how we got from them to this.
-    out.push(
-      `  fiducia ${fact.confidence.toFixed(2)} · ${tierName(fact.trustTier)} · ` +
-        `${originName(fact.origin)} · ${importanceName(fact.importance)}`,
-    );
-    out.push(`  imparato il ${fact.recordedAt.slice(0, 16).replace('T', ' ')}`);
-
-    if (fact.supersededBy !== null) {
-      const successor = store.factById(TENANT, fact.supersededBy);
-      out.push(`  sostituito da: ${successor ? factLine(successor) : `#${fact.supersededBy} (mancante)`}`);
-    }
-    const replaced = db
-      .prepare(`SELECT id FROM facts WHERE tenant_id = ? AND superseded_by = ?`)
-      .all(TENANT, factId) as { id: number }[];
-    for (const r of replaced) {
-      const old = store.factById(TENANT, r.id);
-      if (old) out.push(`  ha sostituito: ${factLine(old)}`);
-    }
-
-    out.push('');
-    if (!episode) {
-      // Impossible while the foreign key holds; worth saying out loud if it ever
-      // does not, because a fact without provenance is not a fact here.
-      out.push(`episodio #${fact.episodeId} MANCANTE — provenienza rotta`);
-    } else {
-      const where = episode.vaultPath ?? `${episode.connector}:${episode.threadKey}`;
-      out.push(`da episodio #${episode.id} · ${episode.role} · ${where}`);
-      out.push(`   ${episode.createdAt.slice(0, 16).replace('T', ' ')} · ${tierName(episode.trustTier)}`);
-      out.push('');
-      for (const line of (episode.content ?? '(nessun testo)').split('\n')) out.push(`   │ ${line}`);
-
-      const siblings = store.factsFromEpisode(TENANT, episode.id).filter((f) => f.id !== fact.id);
-      if (siblings.length > 0) {
-        out.push('');
-        out.push(`dallo stesso episodio:`);
-        for (const s of siblings) out.push(`   ${factLine(s)}`);
-      }
-    }
-
-    process.stdout.write(`${out.join('\n')}\n`);
+    // `describeProvenance` (`core/memory/provenance.ts`) is the one renderer:
+    // `agent/tools/memory.ts`'s `memory_why` tool builds the model's answer to
+    // the same question from the same function, so the two can never quietly
+    // start disagreeing about what "why" means.
+    const { lines } = describeProvenance(store, TENANT, fact);
+    process.stdout.write(`${lines.join('\n')}\n`);
     return 0;
   } finally {
     db.close();
@@ -207,7 +142,11 @@ export async function cmdMemorySearch(
       const body = `   ${item.text.replace(/\n/g, '\n   ')}`;
       // The successor is what turns "Marco, retired" into an answer: without it
       // the owner reads a name and has to run `why` to find out what replaced it.
-      const successor = item.replacedBy ? `\n   ↳ sostituito da #${item.replacedBy.id} ${item.replacedBy.text}` : '';
+      const successor = item.replacedBy
+        ? `\n   ↳ sostituito da #${item.replacedBy.id} ${item.replacedBy.text}`
+        : item.expired === true && item.kind === 'fact'
+          ? '\n   ↳ ritirato, senza successore (`muffin memory why` dice da quale richiesta)'
+          : '';
       return `${head}\n${body}${successor}`;
     });
     process.stdout.write(`${lines.join('\n\n')}\n`);

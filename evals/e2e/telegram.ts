@@ -337,19 +337,58 @@ try {
   // ---- 1. la trascrizione: parole, passi, e niente cancellato ---------------
   {
     const da = contatore;
-    chiedi('Manda al bot: «leggi spesa.txt e dimmi quanto ho speso in tutto, poi esegui `echo ciao` e riporta cosa risponde». Quando chiede di approvare il comando, premi Consenti.');
+    // `echo ciao > saluto.txt`, non `echo ciao`: dall'ADR-0074 (06/09) la corsia
+    // di sola lettura `shell_run` non chiede mai, e la corsa dell'08/09 con un bot
+    // vero lo ha mostrato — nessun ASK, correttamente, e l'asserzione D12 rossa
+    // per una domanda sbagliata. Una scrittura passa da `shell_run_write`, che
+    // chiede sempre: è quello l'ASK che D12 misura.
+    chiedi('Manda al bot: «leggi spesa.txt e dimmi quanto ho speso in tutto, poi esegui `echo ciao > saluto.txt` e riporta cosa risponde». Quando chiede di approvare il comando, premi Consenti.');
     const arrivato = await aspetta(() => messaggiOwner(da).length >= 1);
     if (!arrivato) esito('trascrizione · messaggio ricevuto', false, 'nessun messaggio dell\'owner sul filo');
     else {
+      // Da #388 la risposta finale edita il messaggio dei passi: non arriva un
+      // `sendMessage` pulito, arriva l'ultima `editMessageText` con i passi e,
+      // sotto, la risposta. Si aspetta quella (la corsa dell'08/09 ha aspettato
+      // 180 s un messaggio separato che per costruzione non esiste più).
       const finito = await aspetta(() => {
-        const t = dopo(da).filter((c) => c.method === 'sendMessage' && c.payload['reply_markup'] === undefined);
-        // La risposta finale: un sendMessage senza tastiera che non è una riga di trascrizione.
-        return t.some((c) => !/[✓✗⏳⏸]/.test(testo(c)) && /ciao/i.test(testo(c)));
+        const t = dopo(da).filter(
+          (c) => (c.method === 'sendMessage' || c.method === 'editMessageText') && c.payload['reply_markup'] === undefined,
+        );
+        return t.some((c) => /spesa totale|totale spesa/i.test(testo(c)) && !/⏳|sto pensando/.test(testo(c)));
       });
       const c = dopo(da);
       const trascrizioni = c.filter((x) => (x.method === 'sendMessage' || x.method === 'editMessageText') && /✓ leggo un file/.test(testo(x)));
       esito('trascrizione · i passi restano in un messaggio vero', trascrizioni.length > 0, `${String(trascrizioni.length)} scritture con «✓ leggo un file»`);
       esito('trascrizione · niente cancellato', !c.some((x) => x.method === 'deleteMessage'), `${String(c.filter((x) => x.method === 'deleteMessage').length)} deleteMessage`);
+
+      /**
+       * B11 in privato, dopo la decisione dell'owner del 06/09/2026:
+       * `Surface.negotiate('direct')` dichiara `['draft','edit','off']` con
+       * `draftTtlMs` 30 s, quindi il filo deve contenere `sendMessageDraft`,
+       * con lo **stesso** `draft_id` per tutto il turno, e senza mai un buco
+       * piu' lungo della finestra dichiarata.
+       *
+       * Perche' qui e non solo nell'unita': l'unita' misura il timer con un
+       * orologio finto, e un timer perfetto che nessuno arma non si vede.
+       * Solo il filo di un bot vero dice che la Bot API ha davvero ricevuto
+       * un rinnovo, e che l'ha ricevuto in tempo. Il rosso che questo passo
+       * esiste per catturare e' esattamente il difetto della PR #388 letto al
+       * contrario: una bolla mostrata una volta e mai piu' rinnovata.
+       */
+      const bozze = c.filter((x) => x.method === 'sendMessageDraft');
+      const idBozza = new Set(bozze.map((x) => String(x.payload['draft_id'] ?? '')));
+      esito(
+        'B11 privato · l\'anteprima esiste e ha un solo draft_id per turno',
+        bozze.length > 0 && idBozza.size === 1 && !idBozza.has('') && !idBozza.has('0'),
+        `${String(bozze.length)} sendMessageDraft, draft_id: ${[...idBozza].join(', ') || 'nessuno'}`,
+      );
+      const tempi = bozze.map((x) => Date.parse(x.at));
+      const buco = tempi.slice(1).reduce((m, t, i) => Math.max(m, t - tempi[i]!), 0);
+      esito(
+        'B11 privato · rinnovata dentro la finestra dichiarata (30 s)',
+        bozze.length > 1 && buco < 30_000,
+        bozze.length > 1 ? `buco massimo fra due rinnovi: ${String(buco)}ms` : 'una sola anteprima: nessun rinnovo osservato',
+      );
 
       /**
        * Lo **stato finale** del messaggio della trascrizione, non l'esistenza
@@ -412,7 +451,8 @@ try {
        * su un prodotto corretto: un banco che porta avanti la specifica di
        * ieri accusa il codice di oggi.
        */
-      const rispostaNelloStesso = /Totale spesa/i.test(testo(ultima ?? nato ?? { payload: {} } as never));
+      // «Spesa totale» o «Totale spesa»: il modello sceglie l'ordine, la regex no (08/09: rosso per questo).
+      const rispostaNelloStesso = /spesa totale|totale spesa/i.test(testo(ultima ?? nato ?? { payload: {} } as never));
       esito(
         'risposta · nello stesso messaggio dei passi, dopo di essi (#388)',
         finito && rispostaNelloStesso,

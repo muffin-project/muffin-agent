@@ -81,6 +81,12 @@ export type InspectSources = {
   build: () => Promise<BuildStamp | null>;
   tools: readonly RegisteredTool[];
   capabilities: ReadonlyMap<CapabilityId, CapabilityDecl>;
+  /**
+   * I grant per stanza della policy sigillata (ADR-0073). `sys_inspect` deve
+   * rispondere «cosa raggiungo **io**, in questa stanza», e senza questi
+   * risponderebbe la domanda di ieri: la lista di ciò che non è `hostOnly`.
+   */
+  grants?: ReadonlyMap<string, ReadonlySet<CapabilityId>>;
   promptBlocks: Readonly<Record<string, readonly PromptBlock[]>>;
   /** La stessa funzione che esegue `muffin doctor`. Iniettabile per i test. */
   doctor: () => Promise<DoctorReport>;
@@ -108,8 +114,11 @@ const SPEC_DESCRIPTION =
   "Read-only: come è configurata QUESTA istanza adesso — build, provider e modello in uso, " +
   'profilo attivo, root of trust, stato dei check di salute, capability esposte a questo turno, ' +
   'blocchi del system prompt con la loro provenienza, turni aperti, job. ' +
-  "Usalo quando ti si chiede come funzioni o cosa stai usando: la risposta è misurata, non ricordata. " +
-  "Non descrive l'architettura del progetto, solo lo stato vivo.";
+  "Usalo quando ti si chiede come funzioni o cosa stai usando (che modello ti esegue, quanti tool vedi, " +
+  "se il RoT è integro): è il tool per questo, non un comando di sistema — la risposta è misurata, non ricordata. " +
+  "Non per l'architettura del progetto in teoria (quella sta nei documenti), solo per lo stato vivo di questo processo. " +
+  'Ritorna un report testuale a sezioni: istanza, turno corrente, capacità spente, salute, system prompt, turni, job. ' +
+  'e.g. sys_inspect({}) risponde a "che modello ti sta eseguendo, di preciso?" senza lanciare nulla in shell_run.';
 
 /**
  * Una riga di check, senza il testo di terze parti.
@@ -173,6 +182,7 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
         sources.tools.map((t) => ({ capability: t.capability, name: t.spec.name })),
         principal,
         sources.capabilities,
+        sources.grants?.get(ctx.tenant),
       );
       const esposti = filtrati.slice(0, sources.profile.maxToolsExposed);
       const tagliatiDalTetto = filtrati.slice(sources.profile.maxToolsExposed);
@@ -233,7 +243,11 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
         `# Job (${job.length}):`,
         ...job.map(
           (j) =>
-            `  ${j.cron} ${j.timezone} → ${j.channel} · ${j.kind} · ${j.active ? 'attivo' : 'spento'} · ultimo ${j.lastRunAt?.toISOString() ?? 'mai'} — ${jobPayload(j).slice(0, 60)}`,
+            // Il tetto per-job compare solo quando c'è: è la differenza fra
+            // «questo job può ancora girare» e «questo job è fermo finché non
+            // cambia il mese», e senza la riga il modello che si ispeziona
+            // leggerebbe un job attivo che in realtà non parte più.
+            `  ${j.cron} ${j.timezone} → ${j.channel} · ${j.kind} · ${j.active ? 'attivo' : 'spento'}${j.perJobUsd === null ? '' : ` · tetto $${j.perJobUsd}/mese`} · ultimo ${j.lastRunAt?.toISOString() ?? 'mai'} — ${jobPayload(j).slice(0, 60)}`,
         ),
       ];
       return { content: righe.filter((r) => r !== '').join('\n'), tier: 0 };

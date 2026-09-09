@@ -5,19 +5,13 @@ import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runInit } from './init.js';
 import { applica } from './schermo.js';
-import {
-  formatProgressLine,
-  makeReplCliWrite,
-  runRepl,
-  closingLine,
-  statusFor,
-} from './repl.js';
+import { formatProgressLine, makeReplCliWrite, runRepl, closingLine, statusFor } from './repl.js';
 import { TOOL_PHRASES, toolLine, toolPhrase, toolSubject } from '../agent/tool-phrase.js';
 import { debugCommand, thinkingCommand } from '../agent/comandi.js';
 import { readdirSync, readFileSync } from 'node:fs';
 import { cliSurface } from '../core/surface/cli.js';
 import { SurfaceRegistry } from '../core/surface/registry.js';
-import { DELIVERED, type Surface } from '../core/surface/types.js';
+import { DELIVERED, MUTA, type Surface } from '../core/surface/types.js';
 import { startFakeProvider } from '../evals/acceptance/provider.js';
 import type { TurnEvent } from '../agent/loop.js';
 
@@ -59,7 +53,9 @@ describe("the REPL's cli surface", () => {
     const rl = { cancella: vi.fn(), redraw: vi.fn() };
     const registry = new SurfaceRegistry([cliSurface(makeReplCliWrite(rl))]);
 
-    await expect(registry.deliver('cli', 'promemoria: chiama Marco')).resolves.toEqual({ delivered: true });
+    await expect(registry.deliver('cli', 'promemoria: chiama Marco')).resolves.toEqual({
+      delivered: true,
+    });
     expect(out.join('')).toContain('promemoria: chiama Marco');
     // Prima si toglie il riquadro, poi si scrive, poi si rimette: senza la
     // prima mossa il messaggio finisce dentro la riga di input.
@@ -95,7 +91,9 @@ describe('a channel nothing serves', () => {
     const outcome = await registry.deliver('telegram', 'promemoria: chiama Marco');
 
     expect(outcome.delivered).toBe(false);
-    expect(outcome.delivered === false && outcome.why).toMatch(/nessuna superficie serve "telegram"/);
+    expect(outcome.delivered === false && outcome.why).toMatch(
+      /nessuna superficie serve "telegram"/,
+    );
   });
 
   it('names what is connected, so the owner knows which repair to make', async () => {
@@ -115,6 +113,8 @@ describe('a channel nothing serves', () => {
       id: 'rotta',
       limits: { maxMessageChars: 10, maxUploadBytes: 0, maxDownloadBytes: 0 },
       streaming: { transport: 'off' },
+      places: ['terminal'],
+      negotiate: () => MUTA,
       handles: (c) => c === 'rotta',
       deliver: async () => {
         throw new Error('socket chiuso');
@@ -139,6 +139,8 @@ describe('a channel nothing serves', () => {
       id,
       limits: { maxMessageChars: 100, maxUploadBytes: 0, maxDownloadBytes: 0 },
       streaming: { transport: 'off' },
+      places: ['terminal'],
+      negotiate: () => MUTA,
       handles: (c) => c === id,
       deliver: async (_c, text) => {
         seen.push(`${id}:${text}`);
@@ -249,32 +251,40 @@ describe('formatProgressLine (B13) — in debug, i numeri restano quelli di semp
 
   it('formats a model event', () => {
     expect(
-      formatProgressLine({
-        type: 'model',
-        model: 'gpt-test',
-        ms: 842,
-        inputTokens: 120,
-        outputTokens: 40,
-        cacheReadTokens: 0,
-        stopReason: 'end',
-      }, 'debug'),
+      formatProgressLine(
+        {
+          type: 'model',
+          model: 'gpt-test',
+          ms: 842,
+          inputTokens: 120,
+          outputTokens: 40,
+          cacheReadTokens: 0,
+          stopReason: 'end',
+        },
+        'debug',
+      ),
     ).toBe('· modello: 842ms, 120→40 token, stop: end');
   });
 
   it('formats a tool_start event', () => {
-    expect(formatProgressLine({ type: 'tool_start', name: 'demo_read', capability: 'demo.read' }, 'debug')).toBe('· demo_read…');
+    expect(
+      formatProgressLine(
+        { type: 'tool_start', name: 'demo_read', capability: 'demo.read' },
+        'debug',
+      ),
+    ).toBe('· demo_read…');
   });
 
   it('formats a successful tool_end event', () => {
-    expect(formatProgressLine({ type: 'tool_end', name: 'demo_read', ms: 12, isError: false }, 'debug')).toBe(
-      '· demo_read fatto (12ms)',
-    );
+    expect(
+      formatProgressLine({ type: 'tool_end', name: 'demo_read', ms: 12, isError: false }, 'debug'),
+    ).toBe('· demo_read fatto (12ms)');
   });
 
   it('formats a failed tool_end event', () => {
-    expect(formatProgressLine({ type: 'tool_end', name: 'demo_boom', ms: 3, isError: true }, 'debug')).toBe(
-      '· demo_boom fallito (3ms)',
-    );
+    expect(
+      formatProgressLine({ type: 'tool_end', name: 'demo_boom', ms: 3, isError: true }, 'debug'),
+    ).toBe('· demo_boom fallito (3ms)');
   });
 
   it('throws on a variant the switch does not recognise, instead of silently rendering a blank line', () => {
@@ -323,7 +333,10 @@ describe('the REPL renders progress on stderr, gated on stderr being a TTY (B13)
       const code = await runRepl(home, { stdin: stdinWith('ciao'), debug: true });
 
       expect(code).toBe(0);
-      const progressLines = err.join('').split('\n').filter((l) => l.startsWith('· '));
+      const progressLines = err
+        .join('')
+        .split('\n')
+        .filter((l) => l.startsWith('· '));
       // Exactly one round, no tool call: `round 1` then the `model` line —
       // never a `tool_start`/`tool_end` this script never triggered.
       expect(progressLines).toHaveLength(2);
@@ -384,7 +397,12 @@ describe('the REPL renders progress on stderr, gated on stderr being a TTY (B13)
       const code = await runRepl(home, { stdin: stdinWith('ciao') });
 
       expect(code).toBe(0);
-      expect(err.join('').split('\n').some((l) => l.startsWith('· '))).toBe(false);
+      expect(
+        err
+          .join('')
+          .split('\n')
+          .some((l) => l.startsWith('· ')),
+      ).toBe(false);
     } finally {
       process.stderr.isTTY = originalIsTTY;
       await provider.close();
@@ -404,7 +422,7 @@ describe('the REPL renders progress on stderr, gated on stderr being a TTY (B13)
  * substring check on the raw writes and still be the defect on a real
  * terminal.
  */
-describe('un\'approvazione rientra nel vocabolario dei passi (§4.1/§5 della memo)', () => {
+describe("un'approvazione rientra nel vocabolario dei passi (§4.1/§5 della memo)", () => {
   afterEach(() => vi.restoreAllMocks());
 
   function homeAgainst(baseUrl: string): string {
@@ -422,10 +440,14 @@ describe('un\'approvazione rientra nel vocabolario dei passi (§4.1/§5 della me
     return stdin;
   }
 
+  // `shell_run_write` e non `shell_run` dal 06/09 (ADR-0074 punto 4): la corsia che
+  // chiede è quella che scrive, e questi due test misurano il vocabolario di un
+  // ASK. Usare la corsia in sola lettura qui vorrebbe dire misurare un'attesa
+  // che non arriva mai — un test verde su uno schermo che non ha niente da dire.
   it('accettata: niente blocco ⚠, il verdetto precede subito il passo del tool, senza righe vuote fra i due', async () => {
     const provider = await startFakeProvider({
       main: [
-        { tool: { name: 'shell_run', args: { command: 'echo ciao', cwd: '.' } } },
+        { tool: { name: 'shell_run_write', args: { command: 'echo ciao', cwd: '.' } } },
         { text: 'Fatto, ho stampato ciao.' },
       ],
     });
@@ -444,7 +466,9 @@ describe('un\'approvazione rientra nel vocabolario dei passi (§4.1/§5 della me
         return true;
       });
 
-      const code = await runRepl(home, { stdin: stdinConSN('esegui il comando echo per favore', 's') });
+      const code = await runRepl(home, {
+        stdin: stdinConSN('esegui il comando echo per favore', 's'),
+      });
 
       expect(code).toBe(0);
       // B11, la parte concreta della memo (`cli/textzone.ts:357`): il prompt
@@ -465,9 +489,15 @@ describe('un\'approvazione rientra nel vocabolario dei passi (§4.1/§5 della me
       expect(testo).not.toContain('⚠');
       // Il vocabolario dei passi resta lo stesso di ogni altro tool: una riga
       // `⏸` mentre aspetta, `✓`/il capability quando si risolve.
-      expect(testo).toContain('⏸ sys.shell: aspetto la tua approvazione');
+      //
+      // Cosa c'è **su** quella riga è cambiato con ADR-0074 punto 2: era
+      // `sys.shell: aspetto la tua approvazione` — il nome della capability
+      // più una frase che non dice nulla — ed è diventata il testo del
+      // kernel, che dice cosa non si può annullare. Il terminale buttava via
+      // `ApprovalRequest.prompt`; Telegram lo mostrava già.
+      expect(testo).toContain('⏸ non si torna indietro: cambia questa macchina — sys.shell.write');
 
-      const rigaVerdetto = righe.findIndex((r) => r.includes('sys.shell: consentito'));
+      const rigaVerdetto = righe.findIndex((r) => r.includes('sys.shell.write: consentito'));
       expect(rigaVerdetto).toBeGreaterThan(-1);
       // Non «rifiutato»: l'unica riga che porta «sys.shell» dopo il verdetto è
       // quella del tool che ne è seguito — l'owner ha detto sì una volta sola.
@@ -485,7 +515,7 @@ describe('un\'approvazione rientra nel vocabolario dei passi (§4.1/§5 della me
   it('rifiutata: il verdetto dice «rifiutato» nello stesso vocabolario, e il tool non gira mai', async () => {
     const provider = await startFakeProvider({
       main: [
-        { tool: { name: 'shell_run', args: { command: 'rm -rf /tmp/x', cwd: '.' } } },
+        { tool: { name: 'shell_run_write', args: { command: 'rm -rf /tmp/x', cwd: '.' } } },
         { text: 'Va bene, non lo eseguo.' },
       ],
     });
@@ -507,12 +537,12 @@ describe('un\'approvazione rientra nel vocabolario dei passi (§4.1/§5 della me
         .righe.map((r) => r.trimEnd())
         .join('\n');
       expect(testo).not.toContain('⚠');
-      expect(testo).toContain('✗ sys.shell: rifiutato');
+      expect(testo).toContain('✗ sys.shell.write: rifiutato');
       // Il rifiuto arriva al tool come un `tool_result` d'errore — non un
       // secondo canale — quindi la riga del passo segue comunque, con `✗`:
       // stesso alfabeto, mai un `✓` per un comando mai eseguito davvero.
       const righe = testo.split('\n').map((r) => r.trimEnd());
-      const rigaVerdetto = righe.findIndex((r) => r.includes('sys.shell: rifiutato'));
+      const rigaVerdetto = righe.findIndex((r) => r.includes('sys.shell.write: rifiutato'));
       const indiceDopo = righe.findIndex((r, i) => i > rigaVerdetto && r.trim() !== '');
       expect(indiceDopo).toBe(rigaVerdetto + 1);
       expect(righe[indiceDopo]).toContain('✗ eseguo un comando: rm -rf /tmp/x');
@@ -596,19 +626,27 @@ describe('formatProgressLine — modalità normale', () => {
   });
 
   it("l'inizio di un tool nemmeno: quello è la riga di stato, e dirlo due volte è dirlo due volte", () => {
-    expect(formatProgressLine({ type: 'tool_start', name: 'memory_search', capability: 'memory.read' }, 'normale')).toBeNull();
+    expect(
+      formatProgressLine(
+        { type: 'tool_start', name: 'memory_search', capability: 'memory.read' },
+        'normale',
+      ),
+    ).toBeNull();
   });
 
   it('un passo finito resta, in italiano e senza millisecondi', () => {
-    expect(formatProgressLine({ type: 'tool_end', name: 'memory_search', ms: 9, isError: false }, 'normale')).toBe(
-      '  ✓ cerco in memoria',
-    );
+    expect(
+      formatProgressLine(
+        { type: 'tool_end', name: 'memory_search', ms: 9, isError: false },
+        'normale',
+      ),
+    ).toBe('  ✓ cerco in memoria');
   });
 
   it('e un passo fallito si distingue dal segno, non dalla parola', () => {
-    expect(formatProgressLine({ type: 'tool_end', name: 'fs_write', ms: 3, isError: true }, 'normale')).toBe(
-      '  ✗ scrivo un file',
-    );
+    expect(
+      formatProgressLine({ type: 'tool_end', name: 'fs_write', ms: 3, isError: true }, 'normale'),
+    ).toBe('  ✗ scrivo un file');
   });
 });
 
@@ -622,21 +660,32 @@ describe('formatProgressLine — modalità normale', () => {
 describe('la riga dice anche su cosa', () => {
   it('sette ricerche diverse sono sette righe diverse', () => {
     const riga = (query: string): string | null =>
-      formatProgressLine({ type: 'tool_end', name: 'memory_search', ms: 9, isError: false, args: { query } }, 'normale');
+      formatProgressLine(
+        { type: 'tool_end', name: 'memory_search', ms: 9, isError: false, args: { query } },
+        'normale',
+      );
     expect(riga('cosa ha detto ieri')).toBe('  ✓ cerco in memoria: cosa ha detto ieri');
     expect(riga('primo messaggio')).toBe('  ✓ cerco in memoria: primo messaggio');
     expect(riga('cosa ha detto ieri')).not.toBe(riga('primo messaggio'));
   });
 
   it('e anche la riga di stato viva, che è dove si guarda mentre succede', () => {
-    expect(statusFor({ type: 'tool_start', name: 'fs_read', capability: 'fs.read', args: { path: 'note/spesa.md' } })).toBe(
-      '  leggo un file: note/spesa.md…',
-    );
+    expect(
+      statusFor({
+        type: 'tool_start',
+        name: 'fs_read',
+        capability: 'fs.read',
+        args: { path: 'note/spesa.md' },
+      }),
+    ).toBe('  leggo un file: note/spesa.md…');
   });
 
   /** Un campo solo, quello che risponde a «su cosa?» — non un dump degli argomenti. */
   it('di `fs_write` mostra il percorso e non il contenuto', () => {
-    const s = toolLine('fs_write', { path: 'note/x.md', content: 'un file intero, riga dopo riga' });
+    const s = toolLine('fs_write', {
+      path: 'note/x.md',
+      content: 'un file intero, riga dopo riga',
+    });
     expect(s).toBe('scrivo un file: note/x.md');
     expect(s).not.toContain('riga dopo riga');
   });
@@ -672,7 +721,9 @@ describe('statusFor — solo chi apre un attesa', () => {
   });
 
   it('un tool che parte dice cosa sta facendo, non come si chiama la funzione', () => {
-    expect(statusFor({ type: 'tool_start', name: 'web_search', capability: 'web.search' })).toBe('  cerco sul web…');
+    expect(statusFor({ type: 'tool_start', name: 'web_search', capability: 'web.search' })).toBe(
+      '  cerco sul web…',
+    );
   });
 
   it('chi chiude non apre: model e tool_end non scrivono nessuna attesa', () => {
@@ -701,7 +752,11 @@ describe('ogni tool registrato ha una frase', () => {
     }
     expect(scoperti.size).toBeGreaterThan(10);
     expect([...scoperti].filter((n) => !(n in TOOL_PHRASES)).sort()).toEqual([]);
-    expect(Object.keys(TOOL_PHRASES).filter((n) => !scoperti.has(n)).sort()).toEqual([]);
+    expect(
+      Object.keys(TOOL_PHRASES)
+        .filter((n) => !scoperti.has(n))
+        .sort(),
+    ).toEqual([]);
   });
 });
 
@@ -751,7 +806,9 @@ describe('closingLine', () => {
    */
   it('un costo minuscolo non diventa mai zero', () => {
     expect(closingLine({ inputTokens: 10, outputTokens: 1 }, 800, 0.00004)).toContain('<$0.0001');
-    expect(closingLine({ inputTokens: 10, outputTokens: 1 }, 800, 0.00004)).not.toContain('$0.0000');
+    expect(closingLine({ inputTokens: 10, outputTokens: 1 }, 800, 0.00004)).not.toContain(
+      '$0.0000',
+    );
   });
 
   /**
@@ -773,16 +830,16 @@ describe('closingLine', () => {
    * nessuno dei due si scopriva senza rileggere i trace a mano.
    */
   it('dice quanto del prompt è arrivato dalla cache', () => {
-    expect(closingLine({ inputTokens: 8866, outputTokens: 785, cacheReadTokens: 7840 }, 4712, 0.0023)).toBe(
-      '  4.7s · 8866→785 token · 88% da cache · $0.0023',
-    );
+    expect(
+      closingLine({ inputTokens: 8866, outputTokens: 785, cacheReadTokens: 7840 }, 4712, 0.0023),
+    ).toBe('  4.7s · 8866→785 token · 88% da cache · $0.0023');
   });
 
   /** Lo zero è il caso che conta: si vede mentre succede, invece di ricostruirlo dopo. */
   it("e lo dice anche quando è zero, che è l'unica lettura che serviva", () => {
-    expect(closingLine({ inputTokens: 9607, outputTokens: 158, cacheReadTokens: 0 }, 3000, null)).toContain(
-      '0% da cache',
-    );
+    expect(
+      closingLine({ inputTokens: 9607, outputTokens: 158, cacheReadTokens: 0 }, 3000, null),
+    ).toContain('0% da cache');
   });
 
   /** Senza il campo la riga resta quella di prima: non si inventa uno 0%. */

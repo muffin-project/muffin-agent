@@ -2,59 +2,68 @@
 
 **Regola di stop.** Il prossimo lavoro nasce da un failure osservato usando
 Muffin, da una requirement owner, da una migrazione costosa o da un rischio su
-authority/data/effect — non da questa lista.
+authority/data/effect — non da questa lista e non da una feature list di peer.
 
-**Goal owner:** un agente *davvero usabile*, rivisto modulo per modulo, e tutto
-ciò che manca prima della VPS.
+**Goal owner:** DAY-1 = *«io installo Muffin sulla VPS»*. Il cutover reale
+dell'08/09 (`docs/evidence/cutover-2026-09-08.md`) ha chiuso «dimentica»
+(#484/#486, provato in REPL viva) e i difetti dell'installer trovati sulla VPS
+(#485), e ha rieseguito la corsia Telegram vera (#487). Secondo verdetto del
+reviewer fresco su 2efe207: **`DAY_1_CAN_START: NO` per un solo residuo, ZDR**,
+che è una decisione owner — il light `qwen3.7-flash` non ha alcun endpoint ZDR,
+il main sì. Nessun cambio a provider o routing è stato fatto.
 
 **Come si trovano le cose.** REPL in **tmux**, tracce, log e il `muffin.db`
-vero — mai `cp`: `sqlite3 <db> ".backup <dest>"`. **Il gate sono i check di
-GitHub**, sulla *condizione*, mai su una stampa. Fermare un processo di prova
-si fa **per PID**: `pkill -f "gateway run"` prende anche quello vivo dell'owner.
+vero (`sqlite3 <db> ".backup <dest>"`, mai `cp`); processi di prova fermati per
+PID. **Il gate è una porta sola:** `npm run merge -- <pr>` (ci:local in Docker,
+cinque job; una PR alla volta, host quieto o `DISCARDED`; `gh pr merge` a mano
+è bloccato dal hook). I minuti GitHub sono finiti.
 
 ## Le decisioni dell'owner
 
-**Instradamento: deciso** — `routing.only: ["alibaba"]`, `dataCollection:
-"deny"`. Finché `rot harden` non è fatto, `sys.shell` chiede *sempre* conferma.
+`routing.only: ["alibaba"]`, `dataCollection: "deny"`; ADR-0074 (06/09, «si
+chiede solo l'irreversibile, sempre, anche in privato»). Kernel
+(ADR-0071/0072): un link citato non chiede, composto+non-owner nega, una ricerca
+non chiede mai. Gruppi: senza il suo umano Muffin saluta, avvisa e esce (F4).
 
-**Azioni owner senza codice:** `npm run e2e:telegram` con un bot di prova
-(`evals/e2e/README.md`) — B11/B13/B2 restano BLOCKER finché quella corsa non è
-verde e datata · chiave Tavily + `rot/egress.json` · `muffin rot harden` ·
-`muffin update` · `muffin surface default telegram` (senza, i promemoria
-scaduti finiscono nel journal di launchd e nessuno li legge).
+07/09: la command surface del normale owner resta piccola — conversazione e
+automazione assorbono la meccanica, CLI/TUI per recovery e operatori (#465). È
+in `docs/VISION.md` ed è **autoritativa sui criteri**: D15 chiedeva `muffin
+effetti` come comando normale, e il criterio è stato corretto dentro la sua
+claim. Repository **source-public/pre-alpha appena è sicuro** (#464).
 
-## Il difetto di forma, misurato il 03/09
+**Azioni owner senza codice:** billing GitHub Actions · `npm run e2e:telegram`
+con un bot vero (non rieseguita a 4521f83) · scelta modello/provider ZDR · VPS
+Hetzner rifatta (x86_64, utente `muffin`, deploy key read-only): install
+arrivata a `init`, gateway e sandbox a mano come in `cutover-2026-09-08.md`.
+Mac a 4521f83, memoria al backup pre-prova. `rot harden` fatto (06/09).
 
-Guardare il `muffin.db` vivo ha trovato in dieci minuti ciò che una notte di PR
-non aveva trovato: **zero documenti e zero media indicizzati da sempre**, verde
-in ogni test perché una home di test non ha punti. **Un banco di prova finto non
-chiude una riga che l'owner vede.** Leggere il database dell'owner viene
-**prima** di aprire una fetta.
+## Aperto
 
-**La divergenza fra superfici è il difetto strutturale aperto.** Su Discord non
-esistono streaming, passi, **approvazioni**, consegna durevole, inoltri con
-provenienza, note vocali, né coda/`/steer`/`/stop`: ~9300 righe di connettore
-Telegram contro ~2700. Causa: il registro ha unificato l'**uscita** e l'ingresso
-non ha mai avuto il gemello. Ordine deciso: (1) evento tipizzato + percorso in
-entrata condiviso + coda/comandi fuori da Telegram + **test di parità che
-fallisce se un comportamento vive su una sola superficie**; (2) approvazioni,
-streaming e passi sullo stesso percorso.
+**F7** è su dev (#462, ADR-0073 punti 1/2/3/5); il punto 4 (ask effimera
+all'owner dentro il gruppo) resta aperto, non DAY-1.
 
-## Le colonne: si misura, non si decide
+**D13 chiusa READY il 07/09** (`tool-use-2026-09-07.md`): zero `ask` in tre
+giri puliti; l'unico difetto ripetibile (MCP ignorato per shell) corretto in
+`WORK_RULES`, verificato 6/6. Trovato e riparato nello stesso passaggio:
+l'eval a modello remoto leggeva il filesystem reale
+(`eval-fuga-filesystem-2026-09-07.md`).
 
-Il taint ambientale resta un'ipotesi non falsificata (`SECURITY.md` §13). Misura
-dal vivo: **tutte** le 35 approvazioni mai chieste sono `sys.shell` a taint 2,
-32 sì e 3 no — un gate concesso nove volte su dieci è un riflesso. Nessun
-soffitto si muove prima del risultato del corpus (oggi 4/7).
+**Fase C** (Discord: comandi, coda, approvazioni, consegna) non è DAY-1;
+issue #378. D15 chiusa il 07/09. Da Centria: revoca con parità dopo la VPS,
+giudice come sensore versionato, verifica delle affermazioni negli ADR.
 
-## Aperto, non bloccante
+**Dogfood 06-07/09:** ADR-0075 su dev (#461, D16 READY); streaming e file per
+`(porta, stanza)` (#460). Osservato, non lavorato: 15 s senza segno di vita
+(`thinking_delta`/`tool_call_delta` scartati); `sys_inspect` senza verdetto per
+capability. Critiche vs peer: `critica-moduli-vs-peer-2026-09-07.md`.
 
-Migrato su GitHub Issue (#378 tiene l'indice): #371 SendLock mancante sulla
-corsia impegni, #372 superficie post-boot non registrata, #373 anno assente nel
-messaggio in ritardo, #374 rotaia del taint limitata alla finestra di
-reiniezione, #375 `sessions.append` silenzioso in `/steer`, #377 `pricing.ts`
-sottostima 5/8 famiglie. B10/C8 (finto Bot API senza `getFile`) restano su #361.
+## Audit ecosistema 07/09
+
+`docs/evidence/personal-agent-ecosystem-audit-2026-09-07.md` (#474) è evidence,
+**non autorizza feature parity**. Issue #463 possiede la riconciliazione, #464
+la pubblicazione sicura, #465 la command surface piccola.
 
 **Truth maintenance:** `day1/requirements-status.md` possiede lo stato,
-critical-path.md#ordine-corrente l'ordine, le Issue linkate sopra il lavoro
-aperto attribuibile.
+`critical-path.md#ordine-corrente` l'ordine, le Issue il lavoro attribuibile.
+`docs/evidence/` conserva ciò che abbiamo osservato/imparato; non possiede la
+roadmap.

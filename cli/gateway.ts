@@ -455,6 +455,10 @@ export async function cmdGatewayInstall(
     sleep?: (ms: number) => Promise<void>;
     verifyAttempts?: number;
     verifyIntervalMs?: number;
+    /** The environment the activation steps run in. Tests hand in their own; production is `process.env`. */
+    env?: NodeJS.ProcessEnv;
+    /** Whether `/run/user/<uid>` exists — i.e. a user systemd instance is up (login or linger). */
+    runtimeDirExists?: (path: string) => boolean;
   } = {},
 ): Promise<number> {
   let values: { write?: boolean; force?: boolean; start?: boolean };
@@ -545,6 +549,33 @@ export async function cmdGatewayInstall(
       return EXIT_NOT_ACTIVATED;
     }
     const run = deps.run ?? REAL_RUNNER;
+    // Measured on the owner's VPS, 08/09/2026: `adduser muffin && su - muffin`
+    // then `install.sh` — the unit was written and `systemctl --user
+    // daemon-reload` died with «Failed to connect to bus: No medium found».
+    // A `su -`/`sudo -i` shell has no XDG_RUNTIME_DIR, but the user's systemd
+    // instance may well be running (a real login, or `loginctl
+    // enable-linger` done by root): then `/run/user/<uid>` exists and naming it
+    // is all systemctl needs. When it does not exist, no command this user can
+    // run creates it — only root's `enable-linger` does — so that is the one
+    // remedy worth printing, instead of «a container, or a shell that never
+    // logged in».
+    const platform = deps.platform ?? process.platform;
+    const env = deps.env ?? process.env;
+    let noUserBus: string | null = null;
+    if (platform === 'linux' && !env['XDG_RUNTIME_DIR'] && plan.activation.length > 0) {
+      const uid = deps.identity?.uid ?? userInfo().uid;
+      const runtimeDir = `/run/user/${uid}`;
+      if ((deps.runtimeDirExists ?? existsSync)(runtimeDir)) {
+        env['XDG_RUNTIME_DIR'] = runtimeDir;
+        if (!env['DBUS_SESSION_BUS_ADDRESS']) env['DBUS_SESSION_BUS_ADDRESS'] = `unix:path=${runtimeDir}/bus`;
+        process.stderr.write(`\nquesta shell non aveva XDG_RUNTIME_DIR (su -, sudo): uso ${runtimeDir}\n`);
+      } else {
+        const user = deps.identity?.user ?? userInfo().username;
+        noUserBus =
+          `nessun bus systemd per l'utente ${user} in questa shell (tipico di \`su -\`/\`sudo -i\`), e ${runtimeDir} non esiste: ` +
+          `lo crea solo root con \`loginctl enable-linger ${user}\` — poi rilancia \`muffin gateway install --write --start\` da questa stessa shell.`;
+      }
+    }
     process.stderr.write(`\nl'accendo:\n`);
     for (const step of plan.activation) {
       // Stampato PRIMA di eseguirlo, non dopo: se il passo si pianta (systemctl
@@ -558,6 +589,7 @@ export async function cmdGatewayInstall(
         process.stderr.write(`\n! si è fermato qui: ${step.argv.join(' ')}\n`);
         const detail = r.stderr.trim();
         if (detail !== '') process.stderr.write(`  ${detail.split('\n').join('\n  ')}\n`);
+        if (noUserBus !== null) process.stderr.write(`\n! ${noUserBus}\n`);
         process.stderr.write(`\nla unit è scritta in ${plan.path}; il servizio no. I passi rimasti:\n`);
         for (const c of plan.commands) process.stderr.write(`  ${c}\n`);
         for (const w of plan.warnings) process.stderr.write(`\n! ${w}\n`);
@@ -836,7 +868,7 @@ export async function cmdGatewayRun(
   });
   const scheduler = new Scheduler(
     runtime.jobs,
-    makeJobRunner(runtime.deps, runtime.jobFires, runtime.executor, { cwd: runtime.workspace }),
+    makeJobRunner(runtime.deps, runtime.jobFires, runtime.executor, { cwd: runtime.workspace }, runtime.budget),
     deliver,
     // ALWAYS_IDLE by omission, and it is a decision: a gateway has no terminal,
     // so there is no foreground to lose the lane to. When a surface turn becomes

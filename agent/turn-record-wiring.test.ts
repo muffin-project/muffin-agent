@@ -83,6 +83,7 @@ rt.deps.turns.create({
 });
 rt.deps.turns.startToolCall('crash-turn', {
   callId: 'k1', tool: 'shell_run', capability: 'sys.shell', rerunnable: false, args: { command: 'invia' },
+  effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' },
 });
 // Dies exactly where the defect lives: inside the turn, after the effect may
 // have started and before anything recorded how it went.

@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { SurfaceRegistry } from './registry.js';
-import { DELIVERED, type Surface } from './types.js';
+import { DELIVERED, MUTA, type Surface } from './types.js';
 
 function fakeSurface(id: string): Surface {
   return {
     id,
     limits: { maxMessageChars: 100, maxUploadBytes: 0, maxDownloadBytes: 0 },
     streaming: { transport: 'off' },
+    places: ['terminal'],
+    negotiate: () => MUTA,
     handles: (c) => c.startsWith(`${id}:`) || c === id,
     deliver: async () => DELIVERED,
     deliverFile: async () => DELIVERED,

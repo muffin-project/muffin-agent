@@ -25,7 +25,15 @@ export const skillCapability: CapabilityDecl = {
   risk: 'low',
   reversible: 'yes',
   rerunnable: true,
-  maxTaint: 1,
+  // Il `maxTaint: 1` che stava qui è tolto da ADR-0075 punto 2: **un
+  // `maxTaint` non stringe mai una capability reversibile.** Leggere una
+  // skill installata dall'owner è una lettura — `effect: 'context'`,
+  // `reversible: 'yes'`, niente che esca e niente da disfare — e quel numero
+  // faceva l'unica cosa che poteva fare: dopo una ricerca web, in un turno a
+  // taint 3, Muffin non poteva più aprire le proprie istruzioni. La stretta
+  // per capability resta lecita dove la riga stessa nega (`external`,
+  // `outward`) o dove c'è un cancello di egress (`searchMaxTaint`,
+  // `paramsMaxTaint`, ADR-0071/0072); qui non c'era nessuno dei due.
   resourceKind: 'none',
   policyArgs: ['name'],
   hostOnly: true,
@@ -34,7 +42,9 @@ export const skillCapability: CapabilityDecl = {
 const skillSpec: ToolSpec = {
   name: 'skill_read',
   description:
-    'Read a skill. With just the name, returns its SKILL.md (activate the skill by following it). ' +
+    'Read a skill. Use it when a skill in your list looks relevant to the task at hand, or you need one of its ' +
+    'bundled files. Not for a skill that is not in your list — you cannot read one that was not discovered at ' +
+    'boot. With just the name, returns its SKILL.md (activate the skill by following it). ' +
     'With file, returns that bundled file from the skill directory (references, assets).',
   inputSchema: {
     type: 'object',

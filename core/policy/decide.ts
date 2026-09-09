@@ -1,4 +1,4 @@
-import { denyListCovers, type PolicyMatrix } from './matrix.js';
+import { denyListCovers, grantedTo, type PolicyMatrix } from './matrix.js';
 import { DOORS } from './doors.js';
 import type {
   CapabilityDecl,
@@ -6,6 +6,7 @@ import type {
   Decide,
   Decision,
   DecisionRequest,
+  EffectRow,
   Principal,
   TrustTier,
 } from './types.js';
@@ -51,8 +52,25 @@ export type PolicyContext = {
    */
   budgetExhausted: (tenant: string) => boolean;
   /**
-   * In single-user mode the Root of Trust is detection, not prevention, so
-   * shell can never be a silent allow. See docs/decisions/0003-root-of-trust.md (revision).
+   * Whether the Root of Trust is owned by another OS user, so tampering is
+   * prevented and not merely detected (`core/rot/verify.ts`).
+   *
+   * **Since ADR-0074 nothing in this file reads it, and that is deliberate
+   * rather than an oversight left to rot.** It used to buy the one shortcut
+   * that could skip an approval entirely — `hardened && owner && taint === 0`
+   * auto-allowed a high-risk capability — and the ADR removed it: that flag
+   * answers *who may rewrite the rules*, not *can this command be undone*. A
+   * hardened install and a single-user one now get the same verdict for the
+   * same action, which is the point.
+   *
+   * It stays on the context, still required, still wired from
+   * `agent/runtime.ts`, for two reasons and no third: the RoT mode is a real
+   * fact this snapshot should carry (a decision must be explainable from it,
+   * and "was prevention real when this ran" belongs in that explanation), and
+   * ADR-0074 point 4 — the read-only shell — is a different slice that will
+   * need to know whether the sandbox boundary is enforced. If that slice does
+   * not use it, delete the field there rather than leaving a knob that decides
+   * nothing.
    */
   hardened: boolean;
   /**
@@ -146,10 +164,37 @@ export function createDecide(ctx: PolicyContext): Decide {
       return { effect: 'deny', code: 'tenant_mismatch', detail: `${expected} != ${tenant}` };
     }
 
-    // host-only excludes *remote tenants*, not autonomous local principals: the
-    // scheduler runs on the host. Denying it here would have hidden the queueing
-    // rule below behind a wrong refusal.
-    if (decl.hostOnly && principal.kind === 'member') {
+    /**
+     * host-only excludes *remote tenants*, not autonomous local principals: the
+     * scheduler runs on the host. Denying it here would have hidden the queueing
+     * rule below behind a wrong refusal.
+     *
+     * **`&& !grantedTo(...)` è tutta ADR-0073 nel kernel.** Fino al 06/09 la
+     * riga finiva un carattere prima, e con essa finiva la sola dimensione
+     * disponibile: `hostOnly` è una proprietà della *capability*, quindi
+     * l'unico modo di dare qualcosa a una stanza era toglierlo a `host` per
+     * tutte le stanze insieme. Il grant sposta la domanda dove l'owner può
+     * rispondere per nome — questa stanza, questa capability, scritto nel
+     * sigillo — senza che nient'altro del kernel si muova: soffitti,
+     * ADR-0071 (composto + non-owner → deny), ADR-0072, ADR-0074, ADR-0075
+     * sono tutti *sotto* questa riga e la attraversano identici. Una stanza
+     * con grant su `sys.search` resta soggetta a `gateParams` e a
+     * `perTenantDailyUsd`; una stanza con grant su `vault.write` resta
+     * soggetta a `budgetExhausted` e a `safeMode`.
+     *
+     * `tenant` e non `principal.tenantId`: sono lo stesso valore per
+     * costruzione (il controllo `tenant_mismatch` sopra è già passato), e
+     * leggere quello della *richiesta* è ciò che rende impossibile a un
+     * chiamante di nominare una stanza diversa da quella per cui il principal
+     * è stato risolto.
+     *
+     * La mutazione che deve far cadere una prova per stanza: cancellare il
+     * `&& !grantedTo(...)`. Allora un membro di una stanza **con** grant
+     * riceve `principal_forbidden` su `vault.write`, e
+     * `core/policy/solo-irreversibile.test.ts (describe «una stanza con grant»)` lo dice con il nome della
+     * capability.
+     */
+    if (decl.hostOnly && principal.kind === 'member' && !grantedTo(ctx.matrix, tenant, capability)) {
       return { effect: 'deny', code: 'principal_forbidden', detail: 'host-only capability' };
     }
 
@@ -167,6 +212,41 @@ export function createDecide(ctx: PolicyContext): Decide {
     const row = ctx.matrix.rows[decl.effect];
     const ceiling = Math.min(row.denyAbove, decl.maxTaint ?? 3);
     if (taint > ceiling) {
+      /**
+       * **ADR-0075 punto 3: verso l'esterno il taint chiede all'owner e nega
+       * agli altri.**
+       *
+       * Sopra il soffitto delle due righe che portano byte *fuori dal tenant*
+       * — `external` (codice di terzi) e `outward` (un destinatario nuovo) —
+       * il muro era la forma sbagliata per l'unico principal che può
+       * rispondere: a taint 3 l'owner non poteva nemmeno chiedere «cerca X e
+       * mandalo a Y», che è la richiesta più ordinaria che esista. È la
+       * stessa forma di `gateParams` (ADR-0071) per i parametri composti: la
+       * decisione resta a chi può prenderla, e resta una decisione, perché i
+       * byte usciti non tornano.
+       *
+       * Per chiunque altro il ramo non si muove di un carattere. In un gruppo
+       * un `ask` non raggiunge nessuno che possa rispondere, quindi degradare
+       * il divieto a domanda lì non sarebbe una difesa: sarebbe un `allow`
+       * scritto in un'altra lingua. Stessa asimmetria, stessa ragione, di
+       * `gateParams`.
+       *
+       * Le altre righe restano com'erano: `host` non arriva più qui (il suo
+       * soffitto è 3 da ADR-0075), `config` e `rot` negano — la seconda con
+       * `denyAbove: -1`, cioè a qualunque taint e per chiunque — e un
+       * soffitto **ristretto da un `policy.json` sigillato o da un
+       * `maxTaint`** nega esattamente come prima, perché è la riga a
+       * decidere il ramo e non il numero.
+       */
+      const chiedeSopraIlSoffitto = decl.effect === 'external' || decl.effect === 'outward';
+      if (chiedeSopraIlSoffitto && isOwnerPrincipal(principal)) {
+        // «taint N» e non la frase intera: la *ragione* in parole («questo
+        // turno contiene contenuto di livello 3: il risultato di web_search»)
+        // la aggiunge il loop, che è l'unico posto dove si sa **quale parte**
+        // ha alzato il livello (`PermissionSnapshot.taintOrigin`). Il kernel
+        // dice il numero, che è tutto ciò che vede da un solo snapshot.
+        return ask(`taint ${taint}: ${describe(capability, resource, decl.effect)}`);
+      }
       return {
         effect: 'deny',
         code: 'taint_exceeded',
@@ -231,6 +311,20 @@ export function createDecide(ctx: PolicyContext): Decide {
       // and nothing here noticed (audit 2026-08-16, P04-1). A clean
       // destination is not the same claim as a clean request: the model chose
       // everything after it.
+      // Un buco aperto, dichiarato invece che lasciato implicito: `hasParams`
+      // guarda `search` e `hash` e dice a voce alta di **non** guardare il
+      // path. ADR-0066 ha tolto l'allowlist alla lettura e non ha messo
+      // niente al suo posto per il path, quindi `https://evil/<segreto>` non
+      // incontra nessun cancello — ed e' la ragione per cui lo scenario di
+      // accettazione D10 e' rosso su `dev` da allora (asseriva la protezione
+      // vecchia, ritirata da ADR-0066 senza che la prova la seguisse).
+      //
+      // Chiuderlo con la provenienza funziona — «ogni URL non citato passa
+      // dal cancello» — ma **chiude anche ogni lettura in un gruppo** che non
+      // sia un link incollato alla lettera, misurato su
+      // `runtime-wiring.test.ts` e `egress-gate.test.ts`. E' il contrario
+      // della direzione dell'owner del 04/09 (*«non puo non entrare»*), ed e'
+      // un'inversione di ADR-0066: va decisa da lui, non qui.
       if (hasParams(resource.value)) {
         const gated = gateParams(
           principal,
@@ -239,6 +333,11 @@ export function createDecide(ctx: PolicyContext): Decide {
           decl.resourceKind === 'url-read'
             ? `lettura con parametri scelti dal contenuto: ${resource.value}`
             : `egress con parametri verso host allowlisted: ${resource.value}`,
+          // Solo qui, e solo sull'URL **intero**. Un aggressore che
+          // concatena un suo prefisso con byte letti altrove non produce una
+          // stringa che era già presente; uno che pubblica l'URL completo
+          // conosceva già ciò che ci ha messo dentro.
+          req.quoted === true,
         );
         if (gated) return gated;
       }
@@ -259,52 +358,108 @@ export function createDecide(ctx: PolicyContext): Decide {
           detail: `${capability} declares a query resource but received ${resource.kind} — refusing rather than skipping the check`,
         };
       }
-      const gated = gateParams(principal, taint, ctx.matrix.paramsMaxTaint, `ricerca: "${resource.value}"`);
+      // `quoted: false`, sempre e per costruzione. Una query di ricerca è
+      // **scritta** dal modello: è linguaggio naturale, non un indirizzo che
+      // si copia. Passare qui la provenienza aprirebbe l'esfiltrazione che
+      // questo gate esiste per fermare — misurato: `read-then-egress.test.ts`
+      // legge un segreto da un file avvelenato e lo cerca *letteralmente*,
+      // quindi «era già negli ingressi» è vero ed è vero **perché** è il
+      // segreto. La citazione regge per un URL (l'indirizzo esisteva prima
+      // che il dato fosse visto) e non regge per un payload.
+      // `searchMaxTaint`, non `paramsMaxTaint`: dal 04/09 sono due numeri
+      // (ADR-0072). Il *dove* di una ricerca e' una costante allowlisted che
+      // un contesto avvelenato non puo' nominare, e su un processo headless
+      // un `ask` e' un `exit 3` — un divieto travestito per un'azione a
+      // basso rischio.
+      const gated = gateParams(principal, taint, ctx.matrix.searchMaxTaint, `ricerca: "${resource.value}"`, false);
       if (gated) return gated;
     }
 
     // Autonomous principals never auto-approve what a human would be asked for:
     // the job queues and waits instead. Fail-safe is the mandated direction.
+    //
+    // Unchanged by ADR-0074, deliberately, and one of the three things `risk`
+    // still decides. The question here is not "can this be taken back" but
+    // "may a process nobody is watching grant itself this at 3am", and the
+    // declared class is the answer the threat model already gives it. (The ADR
+    // words point 3 as *"un principal system/agent su un'azione irreversibile
+    // resta ask in coda"*; the code keeps the wider `risk === 'high'` gate it
+    // already had, because narrowing a fail-safe was not part of this slice.)
     if (principal.kind === 'system' || principal.kind === 'agent') {
       if (decl.risk === 'high') return ask(`queued: ${capability} requested by ${principal.kind}`);
     }
 
-    const byRisk = ((): Decision => {
-      switch (decl.risk) {
-        case 'low':
-          return { effect: 'allow' };
-        case 'medium':
-          return decl.reversible === 'undoable'
-            ? { effect: 'draft', undo: { capability, windowSeconds: 300 } }
-            : { effect: 'allow' };
-        case 'high': {
-          // Without OS-level prevention of RoT tampering, a high-risk capability
-          // is never a silent allow — see docs/decisions/0003-root-of-trust.md (revision).
-          if (ctx.hardened && isOwnerPrincipal(principal) && taint === 0) return { effect: 'allow' };
-          // The owner reads this prompt with nothing else on screen: naming
-          // *why* it always asks is cheaper here than in a doc he is not
-          // reading mid-approval. Gated strictly on `!ctx.hardened` — a
-          // hardened install still asking here is asking for a different
-          // reason (a non-owner principal, or taint above 0), and must not
-          // borrow this one.
-          const because = ctx.hardened ? '' : ' — chiede sempre finché il blocco non è reale (`muffin rot harden`)';
-          return ask(`${describe(capability, resource)}${because}`);
-        }
-      }
-    })();
-
-    // The row's second threshold, and the half a ceiling alone cannot express.
-    // The matrix says `ASK` at taint 2 for the host row: not "reachable", but
-    // "reachable **and never unattended**". Without this a `draft` — which
-    // executes, journalled but unasked — would satisfy the ceiling and
-    // contradict the cell. It only ever tightens: an `ask` stays an `ask`, a
-    // `deny` was already returned above.
-    if (taint > row.askAbove && byRisk.effect !== 'ask') {
-      return ask(describe(capability, resource));
+    /**
+     * **The rule, since ADR-0074: an `ask` is for what cannot be taken back,
+     * and for nothing else.**
+     *
+     * Two conditions, both necessary. The capability declares
+     * `reversible: 'no'` — no undo, no journal, no re-run that lands on the
+     * same state — and its effect row is one where that matters
+     * (`asksForIrreversible`: the host machine, third-party code, a new
+     * recipient). `surface.reply` and `memory.write` are `'no'` too and never
+     * ask: the reply *is* the conversation, and an approval prompt that gates
+     * replies cannot be delivered.
+     *
+     * What this replaced, and why, one line each:
+     *
+     * - **`risk: 'high'` asked.** Severity is not reversibility, and the two
+     *   are different axes — `types.ts` already argues exactly this about
+     *   `rerunnable`. `risk` still decides safe mode, the budget gate and the
+     *   queue above; it no longer decides an ask.
+     * - **`taint > row.askAbove` asked.** Ambient taint measures *who
+     *   influenced this turn*, not what an action costs to undo. It turned
+     *   `fs.write` — checkpointed, with `muffin undo` behind it — into a
+     *   confirmation for the rest of any turn that had read a web page. The
+     *   ceiling (`denyAbove`) was untouched then; ADR-0075 moved it a second
+     *   time, in the branch above — on `host` it no longer refuses at all, and
+     *   on `external`/`outward` it asks the owner and refuses everyone else.
+     * - **`hardened && owner && taint === 0 → allow`.** The one shortcut that
+     *   could skip an irreversible act entirely, and the ADR names its own
+     *   falsifier: an owner killing a process on a hardened install at taint 0
+     *   without an `ask` means the shortcut is back.
+     */
+    if (decl.reversible === 'no' && row.asksForIrreversible) {
+      return ask(describe(capability, resource, decl.effect));
     }
-    return byRisk;
+
+    // Everything reachable that is not irreversible either takes an undo
+    // before the effect, or has nothing to take back.
+    //
+    // `risk !== 'low'` is the gate `draft` has always had, kept rather than
+    // widened: a low-risk `undoable` (`turn.todo` — a row in our own table,
+    // scoped to the caller's tenant and session) has no file for
+    // `agent/loop/tool-call.ts` to photograph, and promising a checkpoint the
+    // loop does not take is the exact shape ADR-0022's draft path refuses.
+    if (decl.reversible === 'undoable' && decl.risk !== 'low') {
+      return { effect: 'draft', undo: { capability, windowSeconds: 300 } };
+    }
+    return { effect: 'allow' };
   };
 }
+
+/**
+ * What the row loses that cannot be got back — the first half of the sentence
+ * the owner reads before deciding.
+ *
+ * ADR-0074 point 2: the prompt says **what cannot be undone**, not *"serve la
+ * tua approvazione per sys.shell"*. A capability id is a fact about our code;
+ * "questa macchina cambia e non si torna indietro" is the thing being decided.
+ * The row is the only part of that the kernel knows — the concrete act comes
+ * from the call's own arguments, which `agent/loop/tool-call.ts` puts on
+ * `ApprovalRequest.resource` and every surface prints under this line.
+ *
+ * Only the four rows with `asksForIrreversible: true` can reach this. The
+ * fallback exists so a row added later arrives as a sentence rather than as
+ * `undefined`.
+ */
+const IRREVERSIBILE: Partial<Record<EffectRow, string>> = {
+  host: 'non si torna indietro: cambia questa macchina',
+  external: 'non si torna indietro: chiama un servizio di terzi',
+  outward: 'non si ritira: esce verso un destinatario nuovo',
+  config: 'non si torna indietro: cambia la configurazione',
+  rot: 'non si torna indietro: tocca la radice di fiducia',
+};
 
 /**
  * The sentence the owner reads before deciding.
@@ -319,11 +474,17 @@ export function createDecide(ctx: PolicyContext): Decide {
  *     ⚠ sys.shell on (no resource)
  *        su: command: ls -1 *.md
  *
- * So the kernel now says only what it knows. It names the capability, and it
- * names the resource when it has one; the surface supplies the action.
+ * So the kernel says only what it knows: **why** this is a question at all
+ * (the row's irreversibility, ADR-0074), then the capability, then the
+ * resource when it has one. The surface supplies the action and — when the
+ * turn is above taint 0 — the context line that says untrusted content is
+ * already in the turn. That line is context and never the cause: since
+ * ADR-0074 the taint does not produce an `ask`.
  */
-function describe(capability: string, resource: DecisionRequest['resource']): string {
-  return resource.kind === 'none' ? capability : `${capability} on ${resource.kind}:${resource.value}`;
+function describe(capability: string, resource: DecisionRequest['resource'], row: EffectRow): string {
+  const what = resource.kind === 'none' ? capability : `${capability} on ${resource.kind}:${resource.value}`;
+  const perche = IRREVERSIBILE[row];
+  return perche === undefined ? what : `${perche} — ${what}`;
 }
 
 /** Pure: URL parsing only, no I/O. `null` for anything that is not http(s). */
@@ -352,13 +513,40 @@ function hostOf(value: string): string | null {
  * still falls through to the risk-class switch below, exactly as the url
  * branch already did once the allowlist cleared.
  */
-function gateParams(principal: Principal, taint: TrustTier, ceiling: TrustTier, prompt: string): Decision | null {
-  if (taint <= ceiling) return null;
-  if (isOwnerPrincipal(principal)) return ask(prompt);
+function gateParams(
+  principal: Principal,
+  taint: TrustTier,
+  ceiling: TrustTier,
+  prompt: string,
+  quoted: boolean,
+): Decision | null {
+  // Byte che erano già nel turno prima che il modello scrivesse: nessuno li
+  // ha *scelti* qui, quindi non c'è niente da mostrare a nessuno. È il ramo
+  // che rende utilizzabile un giro di ricerca — cerca, apri un link, apri il
+  // prossimo — senza chiedere il permesso a ogni passo per un URL che Muffin
+  // ha copiato invece di comporre. Vedi `DecisionRequest.quoted` per perché
+  // regge come argomento di sicurezza e non solo di comodità.
+  if (quoted) return null;
+
+  if (isOwnerPrincipal(principal)) {
+    return taint <= ceiling ? null : ask(prompt);
+  }
+
+  // Un principal che non è l'owner e ha **composto** byte in uscita: qui non
+  // c'è nessuno a cui chiedere. In un gruppo `ask` non raggiunge nessuno che
+  // possa rispondere, quindi degradare a domanda non sarebbe una difesa.
+  //
+  // Questo chiude il buco misurato in `muffin-nei-gruppi-2026-09-04.md` §6.1:
+  // `taint <= ceiling` era vero **per costruzione** per ogni turno di gruppo
+  // (`tierOf(member)` è 2, `paramsMaxTaint` è 2), quindi la prima query
+  // inventata usciva sempre senza che nessuno la vedesse. Con la provenienza
+  // il criterio smette di essere un numero che i gruppi hanno già raggiunto
+  // in partenza e diventa una domanda a cui si può rispondere: questi byte
+  // vengono da qualche parte, o se li è inventati adesso?
   return {
     effect: 'deny',
     code: 'resource_denied',
-    detail: `params blocked at taint ${taint} (ceiling ${ceiling})`,
+    detail: `params composed by the model, not quoted from this turn (taint ${taint}, ceiling ${ceiling})`,
   };
 }
 

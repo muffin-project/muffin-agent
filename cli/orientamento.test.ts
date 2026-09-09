@@ -33,6 +33,7 @@ function fixtureDb(rows: readonly { turnId: string; tool: string }[]): string {
       capability: 'test.cap',
       rerunnable: true,
       args: { i },
+      effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' },
     }),
   );
   db.close();

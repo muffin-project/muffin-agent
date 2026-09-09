@@ -259,7 +259,11 @@ export const fsToolSpecs: ToolSpec[] = [
   {
     name: 'fs_read',
     description:
-      'Read a UTF-8 text file. Paths are relative to the working directory. Returns the file content.',
+      'Read a UTF-8 text file whole. Use it when you already know the path (or found it with fs_search/fs_list) ' +
+      'and need its exact text — before editing it, before answering about its content, before deciding what to ' +
+      'do with it. Not for a binary file (image, archive), and not for finding a file whose path you do not know ' +
+      '— use fs_search for that instead of `cat`/`find` in shell_run. Paths are relative to the working directory. ' +
+      'Returns the full file content as text, or an error naming the missing path. e.g. fs_read({path: "docs/README.md"}).',
     inputSchema: {
       type: 'object',
       properties: { path: { type: 'string', description: 'Path relative to the working directory' } },
@@ -268,7 +272,11 @@ export const fsToolSpecs: ToolSpec[] = [
   },
   {
     name: 'fs_list',
-    description: 'List the entries of a directory, marking which are directories.',
+    description:
+      'List the entries of a directory, marking which are directories. Use it when you need to see what is in a ' +
+      'folder before deciding what to read or search next — this is the tool for `ls`, not shell_run. Not for ' +
+      'finding a file inside subdirectories: fs_search with `name` recurses, this does not. Returns each entry\'s ' +
+      'name and whether it is a directory.',
     inputSchema: {
       type: 'object',
       properties: { path: { type: 'string', description: 'Directory, relative to the working directory' } },
@@ -278,7 +286,13 @@ export const fsToolSpecs: ToolSpec[] = [
   {
     name: 'fs_search',
     description:
-      'Search files under a directory, recursively. `query` searches file *contents* and returns `path:line: text` for each hit; `name` filters which files are searched by a substring of their path. At least one of the two is required — with `name` alone you get the matching paths, which is how you find a file whose exact location you do not know. Prefer this over running grep/find through the shell: same files, no confirmation needed.',
+      'Search files under a directory, recursively. Use it when you need to find text inside files, or a file by ' +
+      '(partial) name — this is the tool for `grep`/`find`, not shell_run: same files, no confirmation needed. ' +
+      '`query` searches file *contents* and returns `path:line: text` for each hit; `name` filters which files are ' +
+      'searched by a substring of their path. At least one of the two is required — with `name` alone you get the ' +
+      'matching paths, which is how you find a file whose exact location you do not know. Not for reading a whole ' +
+      'file once you have its path — use fs_read for that. Returns matching `path:line: text` lines (or bare paths ' +
+      'with `name` alone), capped so a broad query does not flood the turn. e.g. fs_search({query: "maxToolsExposed"}).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -291,7 +305,11 @@ export const fsToolSpecs: ToolSpec[] = [
   {
     name: 'fs_write',
     description:
-      'Write a UTF-8 text file, creating parent directories as needed. Overwrites an existing file.',
+      'Write a UTF-8 text file, creating parent directories as needed. Use it when you need to create a file or ' +
+      'replace one entirely — this is the tool for writing a file, not `echo … > file` in shell_run. Not for a ' +
+      'partial edit of a file you have not read: read it first with fs_read so the replacement does not silently ' +
+      'drop the parts you meant to keep. Overwrites an existing file whole. Returns confirmation of the path ' +
+      'written, or an error naming what blocked it.',
     inputSchema: {
       type: 'object',
       properties: {

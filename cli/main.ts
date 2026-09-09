@@ -7,6 +7,7 @@ import { styleFor } from './ui.js';
 import { ALL_API_KEY_NAMES, LEGACY_API_KEY_NAME } from '../core/config/providers.js';
 import { cmdUndo } from './undo.js';
 import { cmdOrientamento } from './orientamento.js';
+import { cmdEffects } from './effects.js';
 import { defaultModels, isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { seal, verify } from '../core/rot/verify.js';
@@ -31,7 +32,7 @@ import { cmdVaultAdd, cmdVaultCheck, cmdVaultLs, cmdVaultReindex, VAULT_USAGE } 
 import { cmdSurfaceDefault, cmdSurfaceDisable, cmdSurfaceEnable, cmdSurfaceList, SURFACE_USAGE } from './surface.js';
 import { cmdMcpAdd, cmdMcpList, cmdMcpRemove, MCP_USAGE } from './mcp.js';
 import { cmdAdopt } from './adopt.js';
-import { cmdJobsAdd, cmdJobsList, cmdJobsRemove, JOBS_USAGE } from './jobs.js';
+import { cmdJobsAdd, cmdJobsCap, cmdJobsList, cmdJobsRemove, JOBS_USAGE } from './jobs.js';
 import {
   cmdGatewayInstall,
   cmdGatewayRestart,
@@ -182,6 +183,12 @@ ispezione:
   muffin trace turn <id>        il turno passo per passo: cosa ha fatto, quanto
                                 ci ha messo, quanti token — l'id è quello che il
                                 turno stampa alla fine ("trace c22cb4445952")
+  muffin effects [--turn <id> | --day YYYY-MM-DD] [--db <path>]
+                                il registro degli effetti (D15): cosa e' passato
+                                senza domanda, con riga della matrice, risorsa e
+                                classe di reversibilita'. Interfaccia da
+                                operatore: l'owner la stessa cosa la chiede
+                                parlando ("cosa hai fatto oggi?").
   muffin orientamento --db <path> [--cap N]
                                 quota di chiamate "di orientamento"
                                 (fs_list/fs_read/fs_search/sys_inspect) su
@@ -380,6 +387,8 @@ async function main(rawArgv: string[]): Promise<number> {
       return cmdUndo(rest);
     case 'orientamento':
       return cmdOrientamento(rest);
+    case 'effects':
+      return cmdEffects(rest);
     case undefined: {
       // Bare `muffin` opens the REPL — but on a first run there is no config to
       // open it with. Detect that and route into setup instead of failing with a
@@ -1127,6 +1136,7 @@ function cmdJobs(argv: string[]): number {
   const home = paths().home;
   if (sub === 'list' || sub === undefined) return cmdJobsList(home);
   if (sub === 'add') return cmdJobsAdd(home, rest);
+  if (sub === 'cap' && rest[0] && rest[1]) return cmdJobsCap(home, rest[0], rest[1]);
   if (sub === 'remove' && rest[0]) return cmdJobsRemove(home, rest[0]);
   process.stderr.write(JOBS_USAGE);
   return 78;

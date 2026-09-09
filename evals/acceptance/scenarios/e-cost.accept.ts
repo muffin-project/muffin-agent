@@ -2,20 +2,27 @@ import DatabaseCtor from 'better-sqlite3';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe } from 'vitest';
-import { install, type Run } from '../harness.js';
+import { install, until, type Run } from '../harness.js';
 import { extraction } from '../provider.js';
 import { scenario } from '../scenario.js';
 
 /**
  * E · Economics and observability.
  *
- * E1 and E2 prove the mechanism that exists today — the **global** monthly
- * cap and the owner-facing spend readout — not the per-job cap E1's row is
- * actually missing (DAY-1 requirement E1, cap globale e per-job: "il per-job
- * non esiste"). A green scenario here
- * documents that the cap which does exist really stops a turn before it
- * spends; it does not promote E1 to READY, and this suite does not touch that
- * row's text on the strength of it.
+ * E1 covers **both** caps its row asks for — "cap globale e per-job" — since
+ * `slice/e1-budget-per-job`. Half (a) is the one that always existed: the
+ * global monthly cap stopping an interactive turn before it spends. Half (b)
+ * is the one the row called missing: a scheduled job with a ceiling of its
+ * own, already past it, that never reaches the model at all.
+ *
+ * Half (b) runs through the **gateway**, not by calling `makeJobRunner` by
+ * hand, and the job is created by the real `muffin jobs add --per-job-usd`.
+ * That is the whole point of putting it here rather than leaving it to
+ * `agent/scheduler-run.test.ts`: a unit test proves the mechanism, and this
+ * repository's recorded failure mode is a mechanism that works and that
+ * production never reaches. The evidence is `inst.provider.main()` being
+ * empty — the absence of an HTTP request that would have been recorded if
+ * there had been one — while the job's own turn row says, durably, why.
  *
  * E5 proves a narrower thing than its own question ("ogni fallimento
  * importante è esplicito e recuperabile?") asks in full, which is why the row
@@ -28,6 +35,134 @@ import { scenario } from '../scenario.js';
  * gave no way to tell three different problems apart on a real install,
  * 2026-08-16.
  */
+
+/**
+ * E1, metà (b): il tetto per-job, sul gateway vero.
+ *
+ * Il giro è quello di un owner: `muffin jobs add --per-job-usd`, una spesa già
+ * attribuita a quel job nel registro, l'occorrenza portata a scadenza, il
+ * gateway che la raccoglie. Le tre asserzioni che contano, in ordine di forza:
+ *
+ *  1. **`inst.provider.main()` è vuoto.** Il modello non è stato chiamato. Non
+ *     è un'interpretazione: è l'assenza di una richiesta HTTP che sarebbe
+ *     stata registrata. Se l'enforcement in `agent/scheduler-run.ts` sparisce,
+ *     questa riga diventa rossa con un `1` in mano — ed è la mutazione con cui
+ *     questa slice è stata verificata.
+ *  2. **La riga del turno è durevole e nomina il tetto**: esito `budget`,
+ *     modello `(tetto per-job: nessun modello)`, contatori a zero. Un job
+ *     fermato che non lascia traccia è indistinguibile da un job che gira e
+ *     non trova niente da dire.
+ *  3. **L'owner lo sente** sul canale del job, e `muffin jobs list` lo mostra.
+ */
+async function tettoPerJob(): Promise<void> {
+  const inst = await install({
+    // Canarino, non copione: se il modello venisse chiamato, questa risposta
+    // comparirebbe nell'output del gateway.
+    main: [{ text: 'QUESTA RISPOSTA NON DEVE MAI COMPARIRE' }],
+    env: { MUFFIN_GATEWAY_TICK_MS: '300' },
+  });
+  try {
+    const gateway = await inst.gateway();
+    await gateway.waitFor(/muffin gateway/, 20_000);
+
+    // Un job a obiettivo — quindi uno che il modello *dovrebbe* vedere — con
+    // un tetto minuscolo, creato dalla porta vera.
+    const creato = await inst.muffin([
+      'jobs',
+      'add',
+      '--cron',
+      '0 8 * * *',
+      '--channel',
+      'cli',
+      '--per-job-usd',
+      '0.01',
+      'riassumi la giornata',
+    ]);
+    if (creato.code !== 0) throw new Error(`jobs add --per-job-usd: exit ${creato.code}\n${creato.err}`);
+    if (!creato.out.includes('tetto $0.01/mese')) {
+      throw new Error(`add non conferma il tetto: ${JSON.stringify(creato.out)}`);
+    }
+
+    const jobId = inst.db((d) => (d.prepare(`SELECT id FROM jobs`).get() as { id: string }).id);
+
+    // La spesa già fatta da QUESTO job, sopra il suo tetto e ben sotto quello
+    // mensile globale ($80): se il job si fermasse, senza questa distinzione,
+    // per il tetto globale, lo scenario non proverebbe niente di nuovo.
+    const w = new DatabaseCtor(join(inst.home, 'muffin.db'));
+    const now = new Date();
+    w.prepare(
+      `INSERT INTO spend (tenant, capability, model, input_tokens, output_tokens, usd, day, month, job_id, created_at)
+       VALUES ('host', 'llm.chat', 'test', 10, 10, 0.5, ?, ?, ?, ?)`,
+    ).run(now.toISOString().slice(0, 10), now.toISOString().slice(0, 7), jobId, now.toISOString());
+    // E l'occorrenza diventa dovuta.
+    w.prepare(`UPDATE jobs SET next_fire_at = ?`).run(new Date(Date.now() - 60_000).toISOString());
+    w.close();
+
+    // Si aspetta che l'occorrenza sia **conclusa**, non che il gateway abbia
+    // scritto una frase: se l'enforcement sparisse, aspettare la frase
+    // scadrebbe in timeout e il rosso direbbe "nessuna riga sullo stderr" —
+    // vero ma muto. Un turno `done` c'è in entrambi i mondi, e le asserzioni
+    // che seguono possono quindi dire QUALE dei due si sta guardando.
+    await until(
+      () =>
+        inst.db(
+          (d) => (d.prepare(`SELECT COUNT(*) AS n FROM turns WHERE status = 'done'`).get() as { n: number }).n,
+        ) >= 1,
+      60_000,
+    );
+
+    // (1) Il modello non è mai stato chiamato. È LA proprietà.
+    const chiamate = inst.provider.main();
+    if (chiamate.length !== 0) {
+      throw new Error(
+        `il modello è stato chiamato ${chiamate.length} volte per un job già oltre il proprio tetto ` +
+          `— l'enforcement per-job non è sul percorso di produzione`,
+      );
+    }
+    const visto = `${gateway.stdout()}${gateway.stderr()}`;
+    if (visto.includes('NON DEVE MAI COMPARIRE')) {
+      throw new Error(`la risposta del modello è arrivata all'owner: il job è partito comunque\n${visto}`);
+    }
+
+    // (2) La riga durevole, e dice perché.
+    const turni = inst.db(
+      (d) =>
+        d.prepare(`SELECT model, turn_outcome, counters, job_id, messages FROM turns`).all() as Array<{
+          model: string;
+          turn_outcome: string | null;
+          counters: string;
+          job_id: string | null;
+          messages: string;
+        }>,
+    );
+    if (turni.length !== 1) throw new Error(`atteso un solo turno per l'occorrenza, trovati ${turni.length}`);
+    const riga = turni[0]!;
+    if (riga.turn_outcome !== 'budget') throw new Error(`esito atteso "budget", trovato ${riga.turn_outcome}`);
+    if (!riga.model.includes('tetto per-job')) {
+      throw new Error(`la riga non dichiara di non aver visto il modello: model=${JSON.stringify(riga.model)}`);
+    }
+    if (riga.job_id !== jobId) throw new Error(`la riga non è attribuita al job: job_id=${riga.job_id}`);
+    const counters = JSON.parse(riga.counters) as { spentUsd?: number; usage?: { inputTokens: number } };
+    if (counters.spentUsd !== 0 || counters.usage?.inputTokens !== 0) {
+      throw new Error(`il turno rifiutato dichiara una spesa: ${riga.counters}`);
+    }
+    if (!riga.messages.includes('tetto per-job')) {
+      throw new Error(`il testo durevole non nomina il tetto: ${riga.messages}`);
+    }
+
+    // (3) E l'owner lo sente: il rifiuto arriva sul canale del job, e la
+    //     lista lo mostra col conto accanto al tetto.
+    await gateway.waitFor(/tetto per-job/, 30_000);
+    const lista = await inst.muffin(['jobs', 'list']);
+    if (!lista.out.includes('tetto $0.01/mese') || !lista.out.includes('raggiunto: non parte')) {
+      throw new Error(`jobs list non mostra tetto e spesa: ${JSON.stringify(lista.out)}`);
+    }
+
+    await gateway.stop();
+  } finally {
+    await inst.cleanup();
+  }
+}
 
 describe('acceptance · E · economia e osservabilità', () => {
   scenario(
@@ -65,8 +200,11 @@ describe('acceptance · E · economia e osservabilità', () => {
       } finally {
         await inst.cleanup();
       }
+
+      // --- (b) il tetto PER-JOB: un job che ha già speso il suo non parte.
+      await tettoPerJob();
     },
-    30_000,
+    180_000,
   );
 
   scenario(

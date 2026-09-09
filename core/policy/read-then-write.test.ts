@@ -109,18 +109,71 @@ describe('leggere un file spegne la scrittura per il resto del turno', () => {
     expect(chiedi(1).effect).toBe('draft');
   });
 
-  it('dopo un `fs_read` è una domanda, non un rifiuto (ADR-0053)', () => {
+  /**
+   * **Riscritta da ADR-0074 punto 1**, ed è il caso che ha prodotto l'ADR.
+   *
+   * ADR-0053 aveva portato questa cella da `deny` ad `ask`: la riga `host`
+   * diceva ASK a taint 2, quindi dopo un `fs_read` la scrittura chiedeva. La
+   * misura successiva ha detto perché non regge — 35 approvazioni in tutta la
+   * vita dell'installazione, tutte a taint 2, 32 concesse: un cancello
+   * concesso nove volte su dieci è un riflesso. E ciò che si stava
+   * approvando aveva **un undo**: `fs.write` fotografa il file prima di
+   * scrivere e `muffin undo` lo rimette.
+   *
+   * Quindi resta `draft`, identico a taint 0 e a taint 2, e ciò che il taint
+   * decide su questa riga è solo il soffitto — provato dal test qui sotto,
+   * che a taint 3 resta `deny`.
+   */
+  it('dopo un `fs_read` resta un `draft` con undo, non una domanda (ADR-0074)', () => {
     // Il numero non è scelto qui: è quello che `fs_read` produce davvero.
     expect(DISK_TIER).toBe(2);
     const d = chiedi(DISK_TIER as 2);
-    expect(d.effect).toBe('ask');
-    // E la domanda dice cosa sta approvando: il percorso, non solo il nome
-    // della capability — il gap che ADR-0044 §revisione aveva dichiarato.
-    expect(d.effect === 'ask' && d.ask.prompt).toContain('/w/out.txt');
+    expect(d.effect).toBe('draft');
+    // E la finestra di undo è la stessa del turno pulito: il taint non ha
+    // cambiato niente sotto il soffitto.
+    expect(d).toEqual(chiedi(0));
   });
 
-  it('a taint 3 resta un rifiuto: la riga si è alzata di un gradino, non è sparita', () => {
+  /**
+   * **Riscritta da ADR-0075.** Fino al 06/09 questo test asseriva che a taint
+   * 3 la scrittura restava un `deny/taint_exceeded` — «la riga si è alzata di
+   * un gradino, non è sparita». Il gradino è stato misurato dove finisce: nove
+   * turni su quattordici in privato a taint 3 il 06/09, cioè dopo una ricerca
+   * web niente scrittura e niente shell fino a una conversazione nuova.
+   *
+   * Il rifiuto non comprava niente *qui*: la cosa che si stava negando ha una
+   * copia e un `muffin undo` dietro. Quindi la scrittura resta `draft` anche a
+   * taint 3, e il taint compare dove serve — nel testo di ciò che chiede
+   * (`agent/loop/tool-call.ts`) — invece che come un muro.
+   */
+  it('a taint 3 la scrittura con undo resta un draft, identico al turno pulito (ADR-0075)', () => {
     const d = chiedi(3);
+    expect(d.effect).toBe('draft');
+    expect(d).toEqual(chiedi(0));
+  });
+
+  /**
+   * E il muro è una **manopola**, non una riga cancellata: un `policy.json`
+   * sigillato che rimette `host.denyAbove: 2` lo rimette davvero, perché
+   * `tighterRows` stringe. Senza questa metà, ADR-0075 sarebbe
+   * indistinguibile da «il soffitto è stato tolto dal codice» — ed è la stessa
+   * distinzione che ADR-0072 ha già dovuto provare per `searchMaxTaint`.
+   */
+  it('un policy.json che rimette host.denyAbove a 2 vince, e il rifiuto torna', () => {
+    const stretto = createDecide({
+      capabilities: decls,
+      matrix: { ...POLICY_FLOOR, rows: { ...POLICY_FLOOR.rows, host: { asksForIrreversible: true, denyAbove: 2 } } },
+      budgetExhausted: () => false,
+      hardened: false,
+    });
+    const d = stretto({
+      principal: owner,
+      capability: 'fs.write',
+      tenant: 'host',
+      taint: 3,
+      resource: { kind: 'path', value: '/w/out.txt' },
+      args: { path: 'out.txt', content: 'x' },
+    });
     expect(d.effect).toBe('deny');
     expect(d.effect === 'deny' && d.code).toBe('taint_exceeded');
   });
@@ -130,9 +183,10 @@ describe('leggere un file spegne la scrittura per il resto del turno', () => {
     // capability, questo test lo nomina: è la forma che ha prodotto la deriva.
     expect(decls.get('fs.write')?.effect).toBe('host');
     expect(decls.get('fs.write')?.maxTaint).toBeUndefined();
-    expect(POLICY_FLOOR.rows.host).toEqual({ askAbove: 1, denyAbove: 2 });
+    expect(POLICY_FLOOR.rows.host).toEqual({ asksForIrreversible: true, denyAbove: 3 });
     // La classe di rischio resta `medium` e continua a decidere altro — se la
-    // scrittura sia un `draft` o un `allow` — ma non il soffitto.
+    // scrittura sia un `draft` o un `allow`, il safe mode, il budget, la coda
+    // degli autonomi — ma non il soffitto, e da ADR-0074 nemmeno l'`ask`.
     expect(decls.get('fs.write')?.risk).toBe('medium');
   });
 });

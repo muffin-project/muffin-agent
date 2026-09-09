@@ -75,7 +75,20 @@ export function parseInventoryRows(text: string, source = DAY1_REQUIREMENTS): In
   const rows: InventoryRow[] = [];
   for (const line of text.split('\n')) {
     const m = riga.exec(line);
-    if (!m) continue;
+    if (!m) {
+      // A line that *starts* like a data row and *carries* a status but does
+      // not parse has a bare `|` inside a cell: skipping it would resurface
+      // as «scenario X orfano» and send whoever reads the report to the
+      // manifest, when the defect sits in this document (E1, 05/09/2026:
+      // `<dollari|none>` written without the backslash). Refuse instead.
+      const inizio = /^\|\s*([A-Z]\d{1,2})\s*\|/.exec(line);
+      if (inizio && /\|\s*(?:READY|OUT|BLOCKER|\?)/.test(line)) {
+        throw new Error(
+          `riga ${inizio[1]} in ${source} non si legge: una barra non sfuggita (\`|\`) dentro una cella la spezza in più colonne — scrivila \\|`,
+        );
+      }
+      continue;
+    }
     const [, id, area, question, rawStato] = m as unknown as [string, string, string, string, string];
     let stato: Stato;
     if (rawStato.startsWith('READY')) stato = 'READY';
@@ -119,7 +132,15 @@ function senzaMotivo(full: string): string {
 const FILE_NON_CARICATO = '[file non caricato]';
 
 const NOT_PROVABLE_HERE: Record<string, string> = {
-  C8: 'richiede una trascrizione audio reale — property 2 del brief vieta chiavi/chiamate a pagamento in questa suite',
+  // C8 non è più qui (slice/c8-b16-voce-e-reply): la ragione — "richiede una
+  // trascrizione audio reale, e property 2 del brief vieta chiavi/chiamate a
+  // pagamento in questa suite" — presumeva che l'unico modo di prendere il
+  // ramo trascritto fosse whisper.cpp/ffmpeg veri. `core/audio/trascrivi.ts`
+  // trova i due binari **per percorso** (`trovaBinario`), quindi lo scenario
+  // punta `config.audio.{whisperBin,ffmpegBin}` — una manopola già esistente
+  // e documentata — a due script finti: nessuna chiave, nessuna chiamata a
+  // pagamento, nessun binario di questa macchina. Vedi `c-audio.accept.ts`.
+  //
   // B16 non è più qui. L'override esiste ora in produzione —
   // `surfaces.telegram.apiBase`, con `muffin surface enable telegram
   // --api-base <url>` — e non come cablaggio da test: Telegram pubblica il Bot

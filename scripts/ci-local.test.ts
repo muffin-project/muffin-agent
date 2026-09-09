@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
+import { RISORSE_DEL_RUNNER, contesa,
   buildJobScript,
   chooseDockerPrivileges,
   creaScannerPassi,
@@ -372,5 +372,36 @@ describe('lo scanner dei passi caduti', () => {
     const s = creaScannerPassi();
     s.consuma('2026-09-04T12:00:00Z  !!! STEP FAILED: vitest run   \n');
     expect(s.passoCaduto()).toBe('vitest run');
+  });
+});
+
+describe('un verdetto su host conteso non e\' un verdetto', () => {
+  const cpu = 8;
+  it('host libero: nessuna contesa', () => {
+    expect(contesa([{ quando: 'inizio', load1: 2.1, cpu, altriVitest: 0 }, { quando: 'fine', load1: 3.0, cpu, altriVitest: 0 }])).toBeNull();
+  });
+  it('un altro vitest sull\'host, anche solo alla fine, e\' contesa', () => {
+    const r = contesa([{ quando: 'inizio', load1: 1, cpu, altriVitest: 0 }, { quando: 'fine', load1: 1, cpu, altriVitest: 1 }]);
+    expect(r).toContain('fine');
+    expect(r).toContain('vitest');
+  });
+  it('load sopra il numero di cpu e\' contesa', () => {
+    expect(contesa([{ quando: 'inizio', load1: 9.4, cpu, altriVitest: 0 }])).toContain('load 9.4 su 8');
+  });
+  it("il load a fine corsa e' il nostro (quattro container), non contesa", () => {
+    // 05/09/2026: due giri scartati con «fine: load 11.8 su 10 cpu» e nessun
+    // altro processo sull'host — il campione di fine misurava ci:local stesso.
+    expect(contesa([{ quando: 'inizio', load1: 2.0, cpu, altriVitest: 0 }, { quando: 'fine', load1: 11.8, cpu, altriVitest: 0 }])).toBeNull();
+  });
+  it('senza cpu note non inventa una soglia', () => {
+    expect(contesa([{ quando: 'inizio', load1: 99, cpu: 0, altriVitest: 0 }])).toBeNull();
+  });
+});
+
+describe('il container ha le risorse del runner, non del Mac', () => {
+  it('quattro cpu e quattro worker vitest, come ubuntu-latest', () => {
+    expect(RISORSE_DEL_RUNNER).toContain('--cpus=4');
+    expect(RISORSE_DEL_RUNNER).toContain('VITEST_MAX_THREADS=4');
+    expect(RISORSE_DEL_RUNNER).toContain('VITEST_MAX_FORKS=4');
   });
 });
