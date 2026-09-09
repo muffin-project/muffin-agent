@@ -288,7 +288,6 @@ function harness(options: {
     exposed: tools,
     toolContext,
     noteSensitiveResourceEcho: () => undefined,
-    cap: Math.min(profile.maxToolCallsPerTurn, 8),
     turnClass: 'owner',
     now: () => new Date('2026-09-05T12:00:00.000Z'),
     door,
