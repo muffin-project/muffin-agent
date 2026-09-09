@@ -655,7 +655,14 @@ export async function runRepl(
   // una scrittura fuori banda mentre un turno gira (`cli/status-line.ts`),
   // così una spinner viva non gli finisce incollato davanti.
   runtime.approvers.set('cli', async (request) => {
-    status.line(`  ⏸ ${request.capability}: aspetto la tua approvazione`);
+    // Il testo del kernel, non una parafrasi, ed è la riga che ADR-0074 punto 2
+    // chiede: *«l'ASK dice cosa non si può annullare»*, non «serve la tua
+    // approvazione per sys.shell». Fino a qui il terminale stampava solo il
+    // nome della capability e buttava via `request.prompt` — cioè proprio la
+    // metà che dice perché la domanda esiste. Telegram lo mostrava già
+    // (`cli/surface.ts`, `approvatoreTelegram`): era il terminale l'unica
+    // superficie che chiedeva senza dire di cosa.
+    status.line(`  ⏸ ${request.prompt}`);
     // The model's own account first, the exact bytes after: one reads the
     // sentence to know whether to look, and the command to decide. Never
     // the sentence alone — a paraphrase is where a request sounds smaller.
@@ -786,7 +793,7 @@ export async function runRepl(
   });
   const scheduler = new Scheduler(
     runtime.jobs,
-    makeJobRunner(runtime.deps, runtime.jobFires, runtime.executor, { cwd: runtime.workspace }),
+    makeJobRunner(runtime.deps, runtime.jobFires, runtime.executor, { cwd: runtime.workspace }, runtime.budget),
     deliver,
     foreground,
     (e) => {

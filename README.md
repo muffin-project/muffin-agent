@@ -142,19 +142,28 @@ The detailed DAY-1 state moves too quickly to duplicate here.
 
 ## Try Muffin — developer preview
 
-**Requirements:** Node.js 22+ and a supported model provider.
+**Requirements:** a Linux or macOS machine, and a supported model provider.
+Node is not one: the installer brings its own if the machine has none.
 
 ```bash
-git clone https://github.com/GiustoPiedimonte/muffin-agent.git
-cd muffin-agent
-./install.sh
-muffin init
-muffin
+curl -fsSL https://raw.githubusercontent.com/GiustoPiedimonte/muffin-agent/main/install.sh | sh
 ```
 
-The current install path is still developer-grade. Public onboarding is meant to
-become substantially simpler: self-hosted should describe ownership, not an
-installation punishment.
+One command, from an empty box to a running agent: it installs Node 22 if
+needed, clones and builds the source, puts `muffin` on your `PATH`, asks for
+your API key (on stdin — never argv, never the environment), and installs the
+gateway as a supervised service. Updates and rollbacks go through the same
+path afterwards:
+
+```bash
+muffin update              # a release built alongside, then an atomic swap
+muffin update --rollback   # the inverse flip
+```
+
+From a clone instead — `git clone …` then `./install.sh` — if you would rather
+read the script before running it.
+
+[What the installer does, and how to undo it →](docs/INSTALL.md)
 
 <details>
 <summary><strong>Architecture — evidence, beliefs, work, effects and authority</strong></summary>

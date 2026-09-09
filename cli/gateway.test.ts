@@ -1191,6 +1191,67 @@ it('stampa il passo prima di eseguirlo, non dopo', async () => {
     expect(detto).toContain('loginctl enable-linger');
   });
 
+  // Misurato sulla VPS dell'owner l'08/09/2026: `adduser muffin && su - muffin`,
+  // poi install.sh — unit scritta, `daemon-reload` morto con «No medium
+  // found». Una shell da `su -` non ha XDG_RUNTIME_DIR, ma se l'istanza
+  // systemd dell'utente gira (login vero, o linger dato da root) esiste
+  // /run/user/<uid>, e nominarlo basta. Se non esiste, lo crea solo root:
+  // quella è l'unica riga da stampare.
+  it('da una shell senza XDG_RUNTIME_DIR nomina /run/user/<uid> quando esiste, e attiva', async () => {
+    const dir = home();
+    const visti: string[][] = [];
+    const env: NodeJS.ProcessEnv = {};
+    const s = zitto();
+    let code: number;
+    try {
+      code = await cmdGatewayInstall(dir, ['--start'], {
+        platform: 'linux',
+        homeDir: dir,
+        configHome: join(dir, '.config'),
+        identity: { user: 'owner', uid: 1000 },
+        env,
+        runtimeDirExists: (p) => p === '/run/user/1000',
+        run: (argv) => { visti.push(argv); return { status: 0, stderr: '' }; },
+        readGatewayPid: () => 4242,
+        verifyAttempts: 1,
+        sleep: async () => {},
+      });
+    } finally { s.ripristina(); }
+    expect(env['XDG_RUNTIME_DIR']).toBe('/run/user/1000');
+    expect(env['DBUS_SESSION_BUS_ADDRESS']).toBe('unix:path=/run/user/1000/bus');
+    expect(visti.map((a) => a.join(' '))).toEqual([
+      'systemctl --user daemon-reload',
+      'systemctl --user enable --now muffin-gateway.service',
+      'loginctl enable-linger owner',
+    ]);
+    expect(code).not.toBe(EXIT_NOT_ACTIVATED);
+    expect(s.righe.join('')).toContain('uso /run/user/1000');
+  });
+
+  it('senza XDG_RUNTIME_DIR e senza /run/user/<uid> dice che serve root con enable-linger, per nome', async () => {
+    const dir = home();
+    const env: NodeJS.ProcessEnv = {};
+    const s = zitto();
+    let code: number;
+    try {
+      code = await cmdGatewayInstall(dir, ['--start'], {
+        platform: 'linux',
+        homeDir: dir,
+        configHome: join(dir, '.config'),
+        identity: { user: 'muffin', uid: 1000 },
+        env,
+        runtimeDirExists: () => false,
+        run: () => ({ status: 1, stderr: 'Failed to connect to bus: No medium found' }),
+      });
+    } finally { s.ripristina(); }
+    expect(code).toBe(EXIT_NOT_ACTIVATED);
+    expect(env['XDG_RUNTIME_DIR']).toBeUndefined();
+    const detto = s.righe.join('');
+    expect(detto).toContain('loginctl enable-linger muffin');
+    expect(detto).toContain('/run/user/1000 non esiste');
+    expect(detto).toContain('su -');
+  });
+
   it('scrive la unit anche senza --write, perché non si accende un file che non c è', async () => {
     const dir = home();
     const s = zitto();

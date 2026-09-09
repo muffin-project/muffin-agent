@@ -734,3 +734,43 @@ async function reconcile(
   }
   return 'added';
 }
+
+/**
+ * «Dimentica X» — the owner's retirement of a belief, through the one writer.
+ *
+ * ADR-0051: many producers, one semantic writer. This is that writer's door
+ * for a retirement request: it takes the same `IngestLock` the extractor
+ * takes, so a consolidation run and a forget cannot interleave on the same
+ * rows, and it closes beliefs the way `supersede` closes them — `expired_at`,
+ * `valid_to` — but with no successor and a `retired_reason` naming the request.
+ * Episodes go through D11's `superseded_at`: excluded from FTS, vectors and the
+ * vault listing, never deleted. Evidence stays; normal recall stops using it;
+ * `--history` and `memory why` still show provenance and the retirement.
+ *
+ * The caller names ids, never a query (`docs/evidence/dimentica-2026-09-08.md`:
+ * LangMem deletes by exact id for the same reason): retiring "whatever matched"
+ * is how the wrong memory disappears. Only what actually changed is reported,
+ * so the confirmation the owner receives is the durable result, not the
+ * intention.
+ */
+export function retireBeliefs(
+  store: MemoryStore,
+  tenantId: string,
+  input: { factIds: number[]; episodeIds: number[]; at: Date; reason: string },
+): { facts: number[]; episodes: number[] } {
+  const claim = store.acquireIngestLock(input.at);
+  if ('held' in claim) {
+    throw new Error(`memoria occupata (${claim.held}): ${claim.remedy}`);
+  }
+  try {
+    const at = input.at.toISOString();
+    const facts = store.retireFacts(tenantId, input.factIds, at, input.reason);
+    // Only episodes this tenant owns: `episodeWindow` answers null for a
+    // foreign or unknown id, and `supersedeEpisodes` guards the tenant again.
+    const episodes = input.episodeIds.filter((id) => store.episodeWindow(tenantId, id) !== null);
+    if (episodes.length > 0) store.supersedeEpisodes(tenantId, episodes, at);
+    return { facts, episodes };
+  } finally {
+    claim.release();
+  }
+}

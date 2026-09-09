@@ -123,6 +123,19 @@ export const waitCapability: CapabilityDecl = {
    * the answer that cannot be wrong is no. The kernel refuses a member here
    * (`decide.ts`) and `visibleTools` keeps it off their menu, so a group turn
    * neither sees it nor could use it.
+   *
+   * **ADR-0073 punto 5 dà a quella domanda aperta un posto dove ricevere una
+   * risposta, una stanza alla volta.** Il `true` qui non si muove: il default
+   * resta no, per ogni gruppo che nessuno ha esaminato. Ciò che esiste ora è
+   * il modo di dire sì a *questa* stanza — un grant `turn.wait` in `tenants`
+   * di una `rot/policy.json` sigillata — che è esattamente la forma che
+   * «finché non è esaminato» chiedeva: un esame, scritto, per un caso
+   * concreto, non un flag globale.
+   *
+   * E il punto 5 dice perché non serve altro: un `wait` è del **turno**, e un
+   * turno di stanza vive già nella sessione della stanza. Il tetto per tenant
+   * dei turni sospesi (`turns`, sopra) conta già per tenant, quindi una
+   * stanza non può tenere sospesa la casa dell'owner.
    */
   hostOnly: true,
 };
@@ -130,12 +143,13 @@ export const waitCapability: CapabilityDecl = {
 const waitSpec: ToolSpec = {
   name: 'wait',
   description:
-    'Suspend this turn and come back later. The turn is persisted and the runtime is released — ' +
-    'this is not a sleep, and nothing runs in the meantime. `seconds` is required and is the deadline ' +
+    'Suspend this turn and come back later. Use it when the answer genuinely depends on something that has not ' +
+    'happened yet (a process to finish, a deadline to arrive). The turn is persisted and the runtime is released ' +
+    '— this is not a sleep, and nothing runs in the meantime. `seconds` is required and is the deadline ' +
     `(min ${MIN_WAIT_MS / 1000}s, max ${MAX_WAIT_MS / 1000}s). Optionally also wait for a process to exit ` +
     'with `until_process_exits`; whichever happens first wakes the turn, and you are told which. ' +
-    'Use it when the answer depends on something that has not happened yet. Do not use it to pace ' +
-    'yourself: if you can do the work now, do it now.',
+    'Not for pacing yourself, and not a substitute for polling a process from shell_run in a loop: if you can do ' +
+    'the work now, do it now. Returns nothing itself — the turn resumes and continues from where it left off.',
   inputSchema: {
     type: 'object',
     properties: {

@@ -85,6 +85,46 @@ export type FakeTelegram = {
   messages(): Array<{ chatId: number; text: string }>;
   /** Only `sendDocument` (B14) — the file, its byte length, and where it went. */
   documents(): Array<{ chatId: number; filename: string; bytes: number; caption?: string }>;
+  /**
+   * Scripts `getChatMember`'s answer for one (chatId, userId) pair — F4's own
+   * use (`connectors/telegram/invito.ts`): the owner marked `'left'` in the
+   * group Muffin was just added to. Unset pairs answer `'member'`, the
+   * harmless default that keeps every scenario that never calls this from
+   * accidentally tripping the exit flow.
+   */
+  setChatMember(chatId: number, userId: number, status: string): void;
+  /**
+   * The `allowed_updates` array the most recent `getUpdates` call actually
+   * carried on the wire — F4's own use: proving `my_chat_member` is really
+   * requested, not merely declared as a client-side default that a future
+   * edit could drop without any test noticing (`connectors/telegram/
+   * dove-e-il-mio-umano.test.ts`'s own "il pezzo senza cui tutto il resto e'
+   * codice morto").
+   */
+  lastAllowedUpdates(): string[] | undefined;
+  /**
+   * Registers bytes this server hands back for `fileId` — the two-step dance
+   * `connectors/telegram/api.ts#fileUrl` and
+   * `connectors/telegram/media.ts#downloadToVault` actually do against the
+   * real Bot API: `getFile` resolves a `file_path`, then a plain GET on
+   * `/file/bot<token>/<file_path>` returns the bytes. Issue #361 is exactly
+   * the absence of this: without it `getFile` fell through to the generic
+   * `ok(true)` branch below and every download failed, which is why B10
+   * (images) and C8 (voice notes) had no acceptance scenario before this
+   * slice.
+   */
+  plantFile(fileId: string, filePath: string, bytes: Buffer): void;
+  /**
+   * Makes the next call to `method` answer once with a real Telegram
+   * rejection (`{ok:false, description}` at `status`) instead of succeeding —
+   * B10's error half. Distinct from `rompi()`, which drops the connection
+   * with no response at all: this is a response Telegram itself would send,
+   * the class `TelegramError`/`deliverTelegram`
+   * (`connectors/telegram/delivery.ts`) actually branch on. Consumed on
+   * first use — every later call to the same method answers normally again,
+   * exactly like a transient rejection would.
+   */
+  guasta(method: string, status: number, description: string): void;
   close(): Promise<void>;
 };
 
@@ -155,8 +195,41 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
   let ritardoGetMe = 0;
   let nextUpdateId = 1;
   let nextMessageId = 1000;
+  const chatMembers = new Map<string, string>();
+  let ultimoAllowedUpdates: string[] | undefined;
+  // B10: `getFile` resolves a `file_path` for a `file_id` the fake was told
+  // about in advance — a scenario plants both together, the way a real photo
+  // would already exist on Telegram's servers before `attachmentOf` ever
+  // names its `file_id`.
+  const filesById = new Map<string, { filePath: string; bytes: Buffer }>();
+  // Keyed by `file_path`, not `file_id`: the download route only ever sees
+  // the path (`/file/bot<token>/<file_path>`), the same asymmetry the real
+  // Bot API has.
+  const bytesByPath = new Map<string, Buffer>();
+  // B10-errori: one planned rejection per method, consumed in call order.
+  const guasti = new Map<string, Array<{ status: number; description: string }>>();
 
   const server: Server = createServer((req, res) => {
+    // The file **download** route is not `<base>/bot<token>/METHOD` — it is
+    // `<base>/file/bot<token>/<file_path>`, a plain GET with no JSON body, so
+    // it is answered here, before the POST/JSON machinery below ever runs.
+    // `fileUrl()` (`connectors/telegram/api.ts`) builds exactly this shape.
+    if (req.method === 'GET' && (req.url ?? '').startsWith('/file/bot')) {
+      const filePath = /^\/file\/bot[^/]+\/(.+)$/.exec(req.url ?? '')?.[1];
+      const bytes = filePath ? bytesByPath.get(decodeURIComponent(filePath)) : undefined;
+      if (!bytes) {
+        // A real Bot API 404s a path nobody planted; matching that shape
+        // means a scenario that forgets `plantFile` fails as a bad download,
+        // not as a mysterious hang.
+        res.writeHead(404, { 'content-type': 'text/plain' });
+        res.end('Not Found');
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/octet-stream' });
+      res.end(bytes);
+      return;
+    }
+
     // `Buffer`s, not a string: `sendDocument` (B14) carries real file bytes in
     // a `multipart/form-data` body, and `body += chunk` (the old shape here)
     // ran every chunk through the default utf8 `toString()` on the way in —
@@ -197,7 +270,30 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
         return;
       }
 
+      if (method === 'getFile') {
+        // Real shape: `{ok:true, result:{file_id, file_unique_id, file_size, file_path}}`
+        // on a known id, an ordinary Bot API rejection on an unknown one —
+        // never a thrown error, so `TelegramApi.fileUrl`'s own `no file_path`
+        // guard stays unreached unless a scenario genuinely never planted the
+        // file it is asking for.
+        const fileId = String(payload['file_id'] ?? '');
+        const planted = filesById.get(fileId);
+        if (!planted) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, description: `Bad Request: file not found (fake, file_id=${fileId})` }));
+          return;
+        }
+        ok({ file_id: fileId, file_unique_id: `u_${fileId}`, file_size: planted.bytes.length, file_path: planted.filePath });
+        return;
+      }
+
       if (method === 'getUpdates') {
+        // Registrato **prima** del ramo guasto/lungo-poll: e' il dato che F4
+        // guarda per provare che `my_chat_member` e' davvero sul filo, non
+        // solo nel default di `api.ts` — un long poll caduto o ancora in
+        // attesa non deve nascondere cosa questa chiamata ha chiesto.
+        const richiesti = payload['allowed_updates'];
+        ultimoAllowedUpdates = Array.isArray(richiesti) ? richiesti.map(String) : undefined;
         if (guasto) {
           req.socket.destroy();
           return;
@@ -219,6 +315,21 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
         return;
       }
 
+      // Prima dell'inoltro generico qui sotto: senza un ramo suo, questa
+      // chiamata cadeva in quello e rispondeva `ok(true)` — un booleano dove
+      // il client vero (`connectors/telegram/api.ts#getChatMember`) legge
+      // `{status}`, quindi `stato.status` era sempre `undefined` e
+      // `gestisciInvito` decideva sempre "l'owner c'e'" per costruzione. F4
+      // esiste per scriptare l'altra risposta.
+      if (method === 'getChatMember') {
+        const chatId = Number(payload['chat_id'] ?? 0);
+        const userId = Number(payload['user_id'] ?? 0);
+        const status = chatMembers.get(`${chatId}:${userId}`) ?? 'member';
+        calls.push({ method, payload });
+        ok({ status });
+        return;
+      }
+
       // `sendMessage`/`sendMessageDraft` *create* a message — the id is the
       // server's own invention, and this is the only place it is ever known.
       // `editMessageText`/`deleteMessage` *address* an existing one — the
@@ -231,6 +342,17 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
       // answered: a scenario asserting "Muffin never sent this" needs the
       // record to exist even when the reply is uninteresting.
       calls.push({ method, payload, ...(files ? { files } : {}), ...(createdId !== undefined ? { messageId: createdId } : {}) });
+
+      // B10-errori: a planned rejection wins over every effect branch below
+      // (`sendMessage`, `editMessageText`, …). Placed after `calls.push`, on
+      // purpose: a scenario asserting "Muffin tried to send this" needs the
+      // record even for the attempt that got rejected.
+      const guastoInCoda = guasti.get(method)?.shift();
+      if (guastoInCoda) {
+        res.writeHead(guastoInCoda.status, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, description: guastoInCoda.description }));
+        return;
+      }
 
       if (method === 'sendMessage' || method === 'editMessageText' || method === 'sendMessageDraft') {
         ok({
@@ -278,6 +400,19 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
           bytes: c.files?.['document']?.size ?? 0,
           ...(typeof c.payload['caption'] === 'string' ? { caption: c.payload['caption'] as string } : {}),
         })),
+    setChatMember: (chatId, userId, status) => {
+      chatMembers.set(`${chatId}:${userId}`, status);
+    },
+    lastAllowedUpdates: () => ultimoAllowedUpdates,
+    plantFile: (fileId, filePath, bytes) => {
+      filesById.set(fileId, { filePath, bytes });
+      bytesByPath.set(filePath, bytes);
+    },
+    guasta: (method, status, description) => {
+      const coda = guasti.get(method) ?? [];
+      coda.push({ status, description });
+      guasti.set(method, coda);
+    },
     close: () =>
       new Promise<void>((resolve) => {
         server.close(() => resolve());
@@ -294,6 +429,121 @@ export function privateMessage(from: { id: number; name?: string }, text: string
       from: { id: from.id, is_bot: false, first_name: from.name ?? `u${from.id}` },
       chat: { id: from.id, type: 'private' },
       text,
+    },
+  };
+}
+
+/**
+ * An inbound photo — the shape Telegram sends for `photo` (DAY-1 requirement
+ * B10). Real messages carry several sizes, smallest first;
+ * `connectors/telegram/media.ts#attachmentOf` always reads the *last* one as
+ * "the largest Telegram kept", so a single entry already exercises that read
+ * without needing to fabricate several.
+ */
+export function photoMessage(
+  from: { id: number; name?: string },
+  fileId: string,
+  options: { caption?: string; bytes?: number } = {},
+): FakeUpdate {
+  return {
+    message: {
+      message_id: Math.floor(Math.random() * 100_000),
+      date: Math.floor(Date.now() / 1000),
+      from: { id: from.id, is_bot: false, first_name: from.name ?? `u${from.id}` },
+      chat: { id: from.id, type: 'private' },
+      ...(options.caption === undefined ? {} : { caption: options.caption }),
+      photo: [
+        { file_id: fileId, file_unique_id: `u_${fileId}`, width: 1280, height: 960, file_size: options.bytes ?? 45_000 },
+      ],
+    },
+  };
+}
+
+/**
+ * An inbound voice note — the shape Telegram sends for `voice` (C8).
+ * `file_size` should be the real byte length of whatever was `plantFile`d
+ * under `fileId`: `connectors/telegram/media.ts#attachmentOf` reads it
+ * straight off the update, and `downloadToVault` checks the *real* download
+ * against `MAX_DOWNLOAD_BYTES`, not this declared number, so a scenario that
+ * lies here only fools the pre-download size guess, never the outcome.
+ */
+export function voiceMessage(
+  from: { id: number; name?: string },
+  fileId: string,
+  options: { duration?: number; bytes?: number } = {},
+): FakeUpdate {
+  return {
+    message: {
+      message_id: Math.floor(Math.random() * 100_000),
+      date: Math.floor(Date.now() / 1000),
+      from: { id: from.id, is_bot: false, first_name: from.name ?? `u${from.id}` },
+      chat: { id: from.id, type: 'private' },
+      voice: {
+        file_id: fileId,
+        file_unique_id: `u_${fileId}`,
+        duration: options.duration ?? 3,
+        mime_type: 'audio/ogg',
+        file_size: options.bytes ?? 20_000,
+      },
+    },
+  };
+}
+
+/**
+ * An inbound forwarded message — the shape Telegram sends when `forward_origin`
+ * is on the wire (Bot API 9.x, B16). `connectors/telegram/connector.ts#describeForwardOrigin`
+ * only reads `sender_user`, never trusts it for identity (ADR-0046 §1: a display
+ * name is content, not identity) — so this helper's `originName` only ever has
+ * to be *distinguishable* prose for the fenced `[inoltrato]` block, never a real
+ * account.
+ */
+export function forwardedMessage(
+  from: { id: number; name?: string },
+  text: string,
+  originName: string,
+): FakeUpdate {
+  return {
+    message: {
+      message_id: Math.floor(Math.random() * 100_000),
+      date: Math.floor(Date.now() / 1000),
+      from: { id: from.id, is_bot: false, first_name: from.name ?? `u${from.id}` },
+      chat: { id: from.id, type: 'private' },
+      text,
+      forward_origin: {
+        type: 'user',
+        date: Math.floor(Date.now() / 1000),
+        sender_user: { id: 555_000_000, is_bot: false, first_name: originName },
+      },
+    },
+  };
+}
+
+/**
+ * An inbound reply — the shape Telegram sends when `reply_to_message` is on
+ * the wire (B16). `connectors/telegram/connector.ts#citazione` reads
+ * `reply_to_message.from.id` to decide `da: 'muffin' | 'chi-scrive' | 'altri'`
+ * — never the text, which is why `repliedTo.fromId` is the field that decides
+ * the taint this scenario asserts on, not `repliedTo.text` alone.
+ */
+export function replyMessage(
+  from: { id: number; name?: string },
+  text: string,
+  repliedTo: { messageId: number; fromId: number; fromName?: string; text: string },
+): FakeUpdate {
+  return {
+    message: {
+      message_id: Math.floor(Math.random() * 100_000),
+      date: Math.floor(Date.now() / 1000),
+      from: { id: from.id, is_bot: false, first_name: from.name ?? `u${from.id}` },
+      chat: { id: from.id, type: 'private' },
+      text,
+      reply_to_message: {
+        message_id: repliedTo.messageId,
+        date: Math.floor(Date.now() / 1000),
+        chat: { id: from.id, type: 'private' },
+        from: { id: repliedTo.fromId, is_bot: false, first_name: repliedTo.fromName ?? `u${repliedTo.fromId}` },
+        text: repliedTo.text,
+      },
     },
   };
 }

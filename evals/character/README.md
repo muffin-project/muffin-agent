@@ -96,6 +96,29 @@ testo su stderr. La corsa reale **non gira in CI** e non deve: costa denaro e
 tocca la rete. In CI resta la struttura (`--dry-run`, i test su fixture, e il
 confronto byte-per-byte col prompt di produzione in `prompt-reale.test.ts`).
 
+`--fake-approve` (D13): senza, un turno che chiama `shell_run_write` (o
+qualunque altra `ask`) trova `runtime.approvers` vuoto sul surface `cli`, e il
+turno si ferma su *"Serve la tua approvazione per..."* — l'eval misura il
+cancello, non cosa il modello fa dopo averlo passato. Il flag registra un
+approvatore che dice sempre sì e scrive `<modello>/asks.json` (una riga per
+`ask`: `probeId`, `capability`, `resource`, `description`, `taint`) — la
+materia grezza per distinguere, per probe, se esisteva un tool dedicato che il
+modello ha ignorato o se la shell era la scelta giusta e solo l'harness la
+bloccava. Non tocca il kernel né la policy: è un approvatore in più sul
+surface dell'eval, esattamente come `cli/repl.ts` ne registra uno interattivo
+per il terminale vero.
+
+**Confinamento del filesystem reale.** `shell_run` è allow-by-default sulle
+letture (ADR-0074 punto 4: `--ro-bind / /` meno le guardie obbligatorie) — su
+un'installazione vera è il comportamento voluto, in un eval che parla con un
+modello di rete è un modo per mandare byte del disco vero a un provider
+esterno: misurato il 07/09/2026, un probe la cui workspace fittizia non aveva
+cosa cercare ha mandato il modello a leggere sul disco vero, fino al vero
+`~/.muffin/rot/identity.md` (`docs/evidence/eval-fuga-filesystem-2026-09-07.md`).
+Ogni corsa non `--dry-run` nega ora la lettura sotto la vera `$HOME`
+dell'operatore, in più rispetto a `mandatoryGuards` — non è opzionale e non ha
+un flag: è sempre attivo quando un modello vero è in gioco.
+
 Qualunque endpoint OpenAI-compatibile va bene, incluso un modello locale — è
 così che è stata presa la baseline del 03/09/2026:
 

@@ -84,3 +84,76 @@ macchineria dell'input mentre un turno è vivo — coda, ack, `/steer`, `/stop`,
 `Controlli` né un turno vivo da fermare). La lezione non è che l'astrazione fosse
 sbagliata: è che una frase ambigua in §Conseguenze è bastata a far crescere il
 canale privilegiato che §Contesto voleva impedire.
+
+---
+
+## §revisione 2026-09-06 — la negoziazione è per stanza, non per porta
+
+La §revisione 2026-08-17 qui sopra resta vera in tutto ciò che dice, e sbagliava
+un dettaglio che nel frattempo è costato: `streaming: {transport}` è **un valore
+per porta**. Telegram dichiarava `'edit'` e basta, e chi doveva sapere se *qui
+dentro* si potesse mostrare un'anteprima lo deduceva da un booleano `isPrivate`
+passato a mano a un renderer (`connectors/telegram/transcript.ts`), insieme a
+due pavimenti di edit scritti come costanti accanto. Tre decisioni su *cosa la
+piattaforma permette in una stanza*, prese dentro il codice che disegna il
+messaggio.
+
+Non è un dettaglio estetico: la Bot API dà risposte diverse per stanza.
+`sendMessageDraft` è documentata per «the target **private** chat»; i limiti di
+scrittura verso un gruppo non sono quelli di una DM; un topic eredita i limiti
+della chat ma non il posto in cui si scrive. Una sola risposta per porta o mente
+sui gruppi o rinuncia in privato — e ha rinunciato in privato: la PR #388 ha
+tolto l'anteprima perché scadeva dopo trenta secondi, cioè per un rinnovo
+mancante, non perché l'anteprima fosse sbagliata.
+
+Direttiva owner del 06/09/2026: il gateway chiede alla porta *«posso mostrare
+una bozza? se no posso riscrivere? ogni quanto? posso mandare file? se no come
+lo condivido?»*, e la risposta viene da una tabella `(porta, stanza)`.
+
+`Surface` guadagna quindi due membri **richiesti** (`core/surface/types.ts`),
+sullo stesso piano di `limits` e per la stessa ragione:
+
+- `places: readonly Place[]` — le stanze che questa porta serve davvero
+  (`'direct' | 'group' | 'topic' | 'terminal'`);
+- `negotiate(place): Negotiation` — la catena di preferenza per lo stream
+  (`'draft' | 'edit' | 'stdout' | 'off'`) e per i file
+  (`'native' | 'link' | 'inline' | 'say'`), più il ritmo: `editEveryMs`,
+  `maxEditsPerMinute`, `draftTtlMs`.
+
+Tre proprietà, e sono nel codice e non in questa prosa:
+
+1. **Una dichiarazione impossibile non arriva a esistere.** `assertNegotiable`
+   è chiamata da `makeIngressPort`, quindi una porta che dichiara `'draft'` in
+   una stanza condivisa, o `'native'` senza saper muovere byte, o un tetto di
+   edit oltre quello che il suo stesso pavimento lascia passare, fallisce alla
+   **registrazione** — non davanti all'owner a metà turno. Nessuna riga di
+   quella funzione nomina una piattaforma: la ragione per cui un'anteprima non
+   esiste in un gruppo (non c'è *una* riga di composizione da riscrivere) vale
+   anche per la porta che non è ancora stata scritta.
+2. **Ogni catena ha un fondo.** `stream` finisce con `'off'`, `files` finisce
+   con `'say'`. Una catena senza fondo promette che qualcosa funzionerà sempre;
+   con il fondo, un file oltre `maxUploadBytes` smette di essere un
+   `{delivered:false}` muto e diventa una frase che dice dove sta.
+3. **Il campo vecchio non può discordare dalla tabella nuova.**
+   `streaming.transport` resta (lo leggono il REPL e `makeIngressPort`), e
+   `assertNegotiable` rifiuta una porta il cui `transport` dica il contrario di
+   quello che dicono le sue stanze — la stessa scelta che `makeIngressPort`
+   aveva già fatto per `ingress.edit`.
+
+**Il consumatore resta uno**, come diceva la §revisione 2026-08-17: il codice
+che invoca il turno sulla superficie. Su Telegram sono `apriIlVivo` e
+`resumeStream` (`connectors/telegram/connector.ts`), che calcolano la stanza da
+ciò che l'ingresso già sa — `direct`, il topic — e passano la `Negotiation` alla
+trascrizione. Nessuna logica di Telegram vive fuori dal connettore, e la
+trascrizione non deduce più niente da sola. La catena dei file la consuma
+`deliverFile` di ciascuna superficie, perché solo la superficie sa quanto pesano
+i suoi byte.
+
+**Cosa NON cambia.** Il modello di registro (§Decisione) è invariato: nessuna
+surface privilegiata, tutte connesse, i target dei job invariati. Un topic
+continua a **non** essere un inquilino (vedi la §revisione sulla `sessionKey`):
+è una stanza, quindi entra qui e in `sessionKey`, mai in `tenant`.
+
+**Reversibilità.** Alta: `negotiate` è una funzione dichiarativa per superficie.
+Segnale che era sbagliata: se dopo mesi ogni porta risponde la stessa cosa in
+ogni stanza, la tabella è cerimonia e si torna a un valore per porta.

@@ -212,9 +212,88 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'B14',
     'attachment telegram: `send_file` reaches `sendDocument` on the real binary, with the real filename and byte length, to the owner\'s chat',
   ),
+  // New (slice/b15-owner-nel-rot): B15's authenticated half was already
+  // proven — `b-telegram-pairing.accept.ts` shows nobody becomes owner
+  // without the code. What had no proof is where the resulting binding
+  // *lives*: `config.json` is writable by any process running as the owner,
+  // so the row's "protetto" stayed open. This scenario drives the same real
+  // pairing and asserts the binding lands inside the seal, and that the seal
+  // still verifies afterwards (write + reseal as one act, or the install
+  // would fall into safe mode the moment it paired).
+  verde(
+    'B15',
+    'owner binding: pairing writes the owner into the sealed root of trust, and the seal still verifies',
+  ),
   verde(
     'D12',
     'ask telegram: the ASK shows the command and cwd plus the taint reason, an owner\'s button press resumes the suspended turn exactly once, and a non-owner\'s press decides nothing',
+  ),
+  // New (slice/b10-immagini-ed-errori, issue #361): the row was BLOCKER only
+  // because the fake Bot API this suite drives `muffin gateway` against had
+  // no `getFile` — the mechanism (`ImageBlock` via `ingest()`, since
+  // b815751) was already in HEAD but unreachable from an acceptance
+  // scenario. `evals/acceptance/telegram.ts` now serves `getFile` and the
+  // `/file/bot<token>/<file_path>` download route (`FakeTelegram.plantFile`).
+  // The row's error half is proven alongside, as a plain unmanifested `it()`
+  // in the same file — see `b-immagini-ed-errori.accept.ts`'s own docstring
+  // for why (manifest is 1:1 per row, same reasoning as B1's Telegram half).
+  verde(
+    'B10',
+    'immagini telegram: una foto vera attraversa il Bot API finto, il download e il vault, e arriva al modello come `image_url` con i byte esatti scaricati',
+  ),
+  // New (slice/c8-b16-voce-e-reply): the row's own text asked for the
+  // perimeter DAY-1 actually uses (testo, file, immagini, voce, reply), not a
+  // universal envelope — the minimum already proven in unit
+  // (`connectors/telegram/forward-taint.test.ts`: `forward_origin` tier 2,
+  // typed caption/filename, `contentTaint`) had never been driven through the
+  // real binary. Proves two real turns in one chat through the fake Bot API:
+  // a forwarded message keeps `FORWARD_TIER` and its `[inoltrato]` fence; a
+  // reply-with-comment to a third party's message keeps its own `[citato]`
+  // fence and tier while the owner's own new sentence in the same message
+  // lands unfenced and outside that fence — the provenance-laundering check.
+  // Does not assert a later plain turn falls back to the owner's own tier: an
+  // earlier version of this scenario tried that and it measured the inherited
+  // tier instead, which is `agent/context/history-taint.ts`'s own invariant
+  // ("una sessione/transcript non è una lavanderia del taint") and D10's own
+  // already-tested claim, not a B16 defect — see the scenario's own comment.
+  verde(
+    'B16',
+    "ingresso tipizzato: un messaggio inoltrato e una reply-con-commento tengono il proprio recinto e tier (FORWARD_TIER), e il testo nuovo dell'owner non finisce dentro il recinto altrui",
+  ),
+  // B18 and B19 are the two rows the ingress/loop decomposition closed
+  // (`docs/evidence/ingresso-unico-e-nucleo-2026-09-05.md`, slices 1-16), and
+  // neither can honestly be an acceptance scenario: both are claims about the
+  // *shape* of the code, not about something the real binary does that it did
+  // not do before. B19 asks whether the turn loop is a narrow core of named
+  // modules each with a twin test — a question `muffin` spawned as a process
+  // cannot answer, because a monolith and a decomposition deliver the same
+  // reply. B18 asks whether every surface enters through one path; the whole
+  // point of slice 14-16 is that the *observable behaviour* is unchanged, so
+  // a scenario asserting an answer arrives on Telegram would have been green
+  // before the work started.
+  //
+  // What actually establishes them is named here, so `report.ts` counts the
+  // rows as covered instead of filing them under `nessuno scenario` — and so
+  // that deleting the test that carries a row is a visible act.
+  provataDalMeccanismo(
+    'A11',
+    'install pulita: un comando su Ubuntu vuota porta a doctor senza rossi, unit systemd scritta e verificata, update e rollback dalla stessa via',
+    "la regge il job `install` (`.github/workflows/install.yml`, eseguito da ci:local in `ubuntu:24.04` senza Node preinstallato): `evals/install/ubuntu.sh` rifiuta di partire se `node` è già raggiungibile, esegue `install.sh` da utente con sudo, poi `muffin doctor` senza righe `fail`, `systemd-analyze verify` sulla unit e un avvio in foreground con il suo stesso ExecStart, poi `muffin update` e il rollback. Non è uno scenario della suite di accettazione perché il suo banco è un container pulito, non una home finta",
+  ),
+  provataDalMeccanismo(
+    'B18',
+    'ingresso unico: ogni porta entra dal router condiviso, e la parità fra porte è misurata invece che dichiarata',
+    "la regge `connectors/shared/ingress/parita.test.ts` con i quattro describe di §2.6: l'asse delle porte viene da `INGRESS_PORT_IDS` (la tabella vera di `cli/surface.ts`), l'asse dei comportamenti da `INGRESS_STAGES` (lo stesso array che `receive` itera), e il quarto describe guida il drain vero di ciascun connettore dal suo trasporto finto — inlinare gli stadi in un connettore lo rende rosso mentre gli altri tre restano verdi",
+  ),
+  provataDalMeccanismo(
+    'D14',
+    "solo l'irreversibile chiede: un ask arriva se e solo se `reversible: 'no'` incontra una riga con `asksForIrreversible`, mai per il taint, la classe o la scorciatoia hardened",
+    "la regge `core/policy/solo-irreversibile.test.ts`, che enumera ogni `CapabilityDecl` spedita (18 tool più le due porte) per owner e membro di gruppo a taint 0-3 e fissa per nome chi chiede (`sys.shell`, `sys.process.kill`, `mcp.*`); un ask in più o in meno lo fa rosso, e le tre mutazioni della PR #456 (askAbove restituito, scorciatoia hardened restituita, `asksForIrreversible` su `reply`) lo hanno fatto rosso. Uno scenario di accettazione non aggiunge nulla: la domanda della riga è sul kernel, e il kernel è lo stesso oggetto per il binario e per il test",
+  ),
+  provataDalMeccanismo(
+    'B19',
+    'nucleo modulare: il loop è nove moduli nominati con il gemello, e `agent/loop.ts` è il barile che conserva i 35 importatori',
+    'la reggono `agent/loop/barrel.test.ts` (i cinque export di valore, e nessun modulo che reimporta il barile) e i nove test gemelli sotto `agent/loop/`; il numero, 54 righe in `agent/loop.ts`, è verificabile con `wc -l` e non da uno scenario che spawna il binario',
   ),
   // New (slice/journey-capability): B6 was BLOCKER only for a missing
   // scenario — the mechanism (`eseguiConRitentativi`, MAX_TOOL_RETRIES=2) is
@@ -286,6 +365,19 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'C4',
     'recall: a superseded fact is invisible to search until --history asks for it',
   ),
+  // New (slice/c5-memory-why). C5's row named the exact gap: `muffin memory
+  // why` already answered "why do you believe that" for the owner at a
+  // terminal (`cli/memory.ts`'s `cmdMemoryWhy`), but the model had no
+  // equivalent door — `agent/tools/memory.ts` registered only
+  // `memorySearchSpec`. Proves the new `memory_why` tool end to end: a real
+  // scripted turn asks for it by text (no fact id in hand, the ordinary
+  // case, since `memory_search`'s rendered block never prints one), and the
+  // model's own next request carries the planted episode's connector, trust
+  // tier and original sentence — not a paraphrase.
+  verde(
+    'C5',
+    'provenance: a real turn calling the memory_why tool gets back the planted episode\'s connector, tier and original sentence',
+  ),
   // New (slice/journey-memoria). C6's row asked for the temporal graph
   // itself: `factsAsOf`/`nearestFactTo` (`core/memory/store.ts`) and `asOf`
   // as the one parameter both the CLI and the `memory_search` tool take,
@@ -304,21 +396,47 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'C7',
     "documents: a real PDF's text reaches an episode and is findable by search, and a scanned PDF with no text layer fails explicitly instead of indexing empty",
   ),
+  // New (slice/c8-b16-voce-e-reply, issue #361): the row was BLOCKER only for
+  // a missing scenario — the mechanism (`core/audio/voce.ts#decidiVoce`,
+  // `core/audio/trascrivi.ts`, wired at `cli/surface.ts#voceFor`) was already
+  // in HEAD and unit-proven with a hand-substituted `voce` function
+  // (`connectors/telegram/voice-arrival.test.ts`). This drives the real
+  // binary instead: a real Ogg voice note through the fake Bot API's
+  // `getFile`/download route, `config.audio.{whisperBin,ffmpegBin}` pointed
+  // at two tiny fake scripts (an existing, documented, unsealed config knob —
+  // never a new "test" branch in `core/audio/`), and the fake provider's own
+  // `GET /models` answering `{data: []}` so `audioAccettato` deterministically
+  // takes the transcribe-in-house branch. Proves: the original audio bytes
+  // survive to the vault unmodified, the transcript reaches the real model
+  // request fenced as tainted data (never merged into the owner's own
+  // prose), and no `input_audio` part is ever sent — the branch actually
+  // taken is "trascritto", not "ascolta". Does not prove whisper.cpp/ffmpeg
+  // themselves transcribe correctly, which is a claim about a third-party
+  // binary the owner already spot-checked on a real installation
+  // (`trascrivi.ts`'s own docstring, 02/09/2026).
+  verde(
+    'C8',
+    'audio: a real Ogg voice note crosses the fake Bot API → vault → transcription → turn, with the original audio kept and the transcript fenced as tainted data, never the owner\'s own prose',
+  ),
   verde(
     'D1',
     'file read: a symlink inside the workspace cannot walk fs_read past the real scope, real path or real deny-list',
   ),
   // New (slice/journey-capability): the row was BLOCKER only for a missing
-  // scenario. shell_run is registered only when the sandbox probe held on
-  // this host (agent/runtime.ts), and sys.shell is `high` risk — single-user
-  // (the only mode `install()` builds) always asks, and headless `muffin run`
-  // has no approval channel. The honest boundary this scenario proves: the
-  // tool is offered (sandbox proven live), and the resulting ASK shows the
-  // exact command and cwd — not that the command executes end to end, which
-  // stays the unit suite's and the CI gate's proof.
+  // scenario. The shell tools are registered only when the sandbox probe held
+  // on this host (agent/runtime.ts).
+  //
+  // 06/09, ADR-0074 punto 4: the scenario now has two halves, because the tool
+  // does. `sys.shell.write` is `high` risk — single-user (the only mode
+  // `install()` builds) always asks, and headless `muffin run` has no approval
+  // channel, so what that half proves is the ASK's content, not an end-to-end
+  // execution. `sys.shell` is the read-only lane and asks nobody: that half
+  // runs the command through the real binary, headless, and checks the output
+  // came back — which is the thing D13 could not prove before, and the reason
+  // five of the six `agentic` character-eval failures existed.
   verde(
     'D4',
-    'shell: a scripted shell_run is only ever offered after a live sandbox probe, and the resulting ASK shows the real command and cwd',
+    'shell: both lanes are offered only after a live sandbox probe; the writing one produces an ASK showing the real command and cwd, and the read-only one runs headless with no approver at all',
   ),
   // New (slice/journey-capability): same shape as D4 for sys.process.kill —
   // process_list/process_kill act on the host's real process table, not a
@@ -360,7 +478,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // from this suite is out of scope (no real providers).
   verde(
     'D7',
-    'web search: the query now answers to the kernel — after tainted content, a search asks the owner and the backend is never called unapproved',
+    'web search: after tainted content a search runs (ADR-0072), and a policy.json that lowers searchMaxTaint puts the ask back — the gate is a knob, not a removed line',
   ),
   // Nuovo (slice/skill-di-serie). La riga D9 chiedeva «la prova stretta al
   // profilo richiesto (injection/fake-close + production wiring)». Il recinto
@@ -398,10 +516,58 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // "LAUNDERED" finding, closed and pinned to the real binary.
   verde(
     'D10',
-    'security: a turn that read untrusted content cannot use it to reach an unlisted host, and a later ' +
-      'clean turn in the same session still carries the inherited taint',
+    'security: a turn that read untrusted content may still read a page (ADR-0066) but cannot leave with ' +
+      'bytes it composed (ADR-0071), and a later clean turn in the same session still carries the inherited taint',
   ),
-  verde('E1', 'budget: a turn that would cross the monthly cap is stopped before it spends'),
+  // La riga era READY **senza** scenario e il secondo gate del rapporto la
+  // bocciava, correttamente: due test in `runtime-wiring.test.ts` provano il
+  // meccanismo, non che il binario lo raggiunga. D3 copre il disco; questo
+  // copre l'altra meta' della domanda della riga — «e un ripristino che disfa
+  // anche il turno?».
+  verde('D11', 'checkpoint: `muffin undo` marks the turn and the memory episode, not only the disk'),
+  // D13, uso dei tool. La domanda della riga è sul comportamento di un
+  // modello reale che sceglie fra shell e tool dedicato — un provider finto
+  // e deterministico (quello di ogni scenario di accettazione) non può
+  // produrre quella scelta, solo scriptarla: uno scenario qui misurerebbe il
+  // proprio script, non il modello. La regge invece
+  // `evals/character/run.ts` (character eval, `--fake-approve`) contro
+  // modelli reali via OpenRouter — tre giri indipendenti, zero `ask` su 132
+  // turni, e un difetto ripetibile trovato e corretto (`docs/evidence/tool-use-2026-09-07.md`).
+  provataDalMeccanismo(
+    'D13',
+    'uso dei tool: il modello sceglie il tool dedicato prima della shell, e la shell in sola lettura non ferma mai il turno su un ask',
+    "la regge la character eval (`evals/character/run.ts --fake-approve`) contro modelli reali (via OpenRouter, non un provider finto scriptato — la scelta del tool è il comportamento sotto misura, non qualcosa che un fake può produrre): tre giri indipendenti, 22 probe, due modelli, zero `ask` su 132 turni misurati — il registro D15 (`turn_tool_calls`, letto da `tool-calls.json` per probe) mostra ogni chiamata, chiesta o no. Un difetto ripetibile (un tool MCP finto ignorato 0/6 volte per `env`/shell) trovato e corretto con una riga di `WORK_RULES`, riverificato 6/6 su tre giri mirati. `docs/evidence/tool-use-2026-09-07.md`",
+  ),
+  // D15, il registro degli effetti. La riga nasce dal costo di ADR-0074: se
+  // si chiede solo l'irreversibile, quasi tutto passa in silenzio, e cio' che
+  // passa in silenzio deve restare **guardabile**. Lo scenario prova le tre
+  // meta' insieme — i metadata sulla riga, la lettura canonica per turno e per
+  // giornata, e la strada dell'owner che lo chiede parlando — perche' nessuna
+  // delle tre da sola chiude la domanda della riga.
+  verde(
+    'D15',
+    'registro degli effetti: una scrittura reversibile passa senza ask e lascia riga della matrice, ' +
+      'reversibilita\' e risorsa; `muffin effects` le rilegge per turno e per giornata, e l\'owner ci arriva ' +
+      'chiedendo "cosa hai fatto oggi?" senza conoscere un comando',
+  ),
+  // Nuova (ADR-0075). La riga D16 nasce da una misura sul `muffin.db`
+  // dell'owner — nove turni su quattordici a taint 3 il 06/09, ultima shell
+  // vera il 03/09, ultimo turno chiuso da `context taint 3 exceeds 2 for
+  // sys.shell (host)` — e il suo criterio eseguibile ha due meta': il turno
+  // vero arriva in fondo, e il soffitto resta una manopola del file sigillato.
+  verde(
+    'D16',
+    'taint usabile: dopo una ricerca web la shell risponde nello stesso turno, e un policy.json che ' +
+      'rimette il soffitto fa tornare il rifiuto',
+  ),
+  // Extended (slice/e1-budget-per-job): the row asks "cap globale **e**
+  // per-job?" and only the first half had a scenario, which the file's own
+  // docstring said out loud. Both halves now run in one test — the monthly cap
+  // stopping an interactive turn, and a scheduled job with its own ceiling
+  // refusing to fire — because `entry()` resolves a row to one manifest line
+  // and two `scenario('E1', …)` calls would register two tests with the same
+  // title for `report.ts` to disambiguate.
+  verde('E1', 'budget: the monthly cap stops a turn, and a job past its own per-job cap never reaches the model'),
   verde('E2', 'cost: the REPL answers how much has been spent this month, in dollars'),
   // Extended (slice/journey-lifecycle): still narrower than E3's own full
   // question in one respect (it does not exercise every span shape the row
@@ -443,6 +609,49 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   verde(
     'E7',
     "self-inspection: sys_inspect answers with this instance's live config, and after a real `muffin model main` change the second answer reflects it instead of repeating the first",
+  ),
+  // New (slice/f-scenari-di-accettazione): F1-F5 were READY on unit and
+  // wiring tests alone — nobody had driven any of the five through the real
+  // gateway binary against a fake Telegram Bot API, which is exactly the
+  // gap this manifest's second gate exists to catch. Orphaned in this
+  // repository until the sibling PR that adds DAY-1 section F to
+  // `requirements-status.md` lands — `report.ts`'s `orphanRows` check
+  // (a manifest row with no matching inventory row) will name F1-F5 as
+  // ORFANO until then, which is expected and stated in this slice's own PR
+  // body rather than worked around here.
+  verde(
+    'F1',
+    'group gate: a group message that does not address Muffin opens no turn and calls the provider zero times; one that @-mentions the bot opens exactly one turn and replies exactly once (ADR-0063)',
+  ),
+  // F2 is `b-una-conversazione.accept.ts`'s own `describe('acceptance · i
+  // gruppi restano separati · attraverso il percorso di produzione', …)` —
+  // written before this manifest had an F row for it. Claimed here instead
+  // of duplicated: that file's `it()` title now starts with this entry's
+  // exact string (`report.ts#chiaviEsito` matches by suffix), so the same
+  // scenario counts against F2 instead of showing up as "fuori inventario".
+  verde(
+    'F2',
+    "tenant: a group member's message never lands in the owner's own DM session, and the group keeps its own session at tier 2 — through the real gateway, past the mention gate",
+  ),
+  verde(
+    'F3',
+    'forum topics: two threads in the same supergroup keep two distinct sessions (`telegram:<chatId>#<thread>`), and a reply carries `message_thread_id` on the wire',
+  ),
+  verde(
+    'F4',
+    "group exit: added to a group the owner is not in, Muffin greets the room, tells the owner who added it and where, then leaves — never calling the model — and `getUpdates` actually asks for `my_chat_member`",
+  ),
+  verde(
+    'F5',
+    "egress params: a group member's invented query string is denied (`resource_denied`, never fetched), and the exact same URL pasted by that member is fetched for real (ADR-0071)",
+  ),
+  verde(
+    'F6',
+    'remember without replying: a group message that opens no turn still becomes an episode of the group tenant — no provider call, no reply, no turn',
+  ),
+  verde(
+    'F7',
+    'room capabilities: the same group cannot save before a sealed policy.json names it and can after — the member saves with no approval asked, the bytes land in that room\'s vault tenant and `host` cannot read them, and `shell_run` stays denied in that same room (ADR-0073)',
   ),
 ] as const;
 

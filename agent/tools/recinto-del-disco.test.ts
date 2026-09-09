@@ -124,7 +124,7 @@ describe('i byte del disco escono dentro un recinto', () => {
 
   it("shell_run: l'intestazione resta fuori, l'output sta dentro — la forma di http.ts", async () => {
     const shell = makeShellTool(
-      { run: async () => ({ code: 0, stdout: 'riga uno\nriga due\n', stderr: '', truncated: false, timedOut: false, durationMs: 3 }) },
+      { runReadOnly: async () => ({ code: 0, stdout: 'riga uno\nriga due\n', stderr: '', truncated: false, timedOut: false, durationMs: 3 }) },
       { root: mkdtempSync(join(tmpdir(), 'muffin-recinto-sh-')) },
     );
     const out = await shell.handler({ command: 'echo x', description: 'prova' }, ctx);
@@ -239,7 +239,7 @@ describe('le forme che un attaccante prova, e il recinto regge', () => {
     // il posto dove il taglio fa uscire qualcosa.
     const tagliato = `${'x'.repeat(50)}\n…[output troncato: ~120000 caratteri omessi]…\n${'y'.repeat(50)}`;
     const shell = makeShellTool(
-      { run: async () => ({ code: 0, stdout: tagliato, stderr: '', truncated: true, timedOut: false, durationMs: 9 }) },
+      { runReadOnly: async () => ({ code: 0, stdout: tagliato, stderr: '', truncated: true, timedOut: false, durationMs: 9 }) },
       { root: mkdtempSync(join(tmpdir(), 'muffin-recinto-sh2-')) },
     );
     const out = await shell.handler({ command: 'cat grande', description: 'prova' }, ctx);

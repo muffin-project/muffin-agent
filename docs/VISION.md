@@ -243,6 +243,19 @@ A normal person should not need to understand Node.js, npm, SQLite,
 launchd/systemd, wire protocols or token files to create and operate a standard
 installation.
 
+The same rule applies after installation. **Owner decision, 2026-09-07:** the
+normal owner operates Muffin by talking to it, not by learning a command
+vocabulary. Mechanics fall into four buckets — conversational (remember,
+correct, forget, create a routine, show open work, connect or disable a
+capability where authority allows), automatic (backups, migrations, indexing,
+cleanup, safe recovery), explicit constitutional/recovery actions (pairing,
+root-of-trust changes, authority widening, destructive recovery: the friction is
+the boundary) and developer/operator interfaces (evals, traces, database
+inspection, low-level lifecycle). Only the third bucket belongs in the normal
+owner surface; a new command must say which bucket it is in and why it is not
+conversational or automatic. Observability and recovery are never deleted to
+achieve this.
+
 Central project infrastructure may simplify download, updates, discovery, OAuth
 bootstrap or Telegram provisioning. **It must not be necessary for an already
 installed Muffin to retain identity, memory or work.**

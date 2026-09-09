@@ -55,7 +55,7 @@ export type Presence = {
  * behaves identically in a private chat and a group, so there is nothing left
  * here for a chat kind to change.
  */
-export async function startPresence(api: TelegramApiLike, chatId: number): Promise<Presence> {
+export async function startPresence(api: TelegramApiLike, chatId: number, threadId?: number): Promise<Presence> {
   let stopped = false;
 
   const safely = async (work: () => Promise<unknown>): Promise<void> => {
@@ -68,8 +68,11 @@ export async function startPresence(api: TelegramApiLike, chatId: number): Promi
   };
 
   // Works everywhere, including groups, and costs nothing.
-  await safely(() => api.sendChatAction(chatId));
-  const actionTimer: NodeJS.Timeout = setInterval(() => void safely(() => api.sendChatAction(chatId)), ACTION_RENEW_MS);
+  await safely(() => api.sendChatAction(chatId, 'typing', threadId));
+  const actionTimer: NodeJS.Timeout = setInterval(
+    () => void safely(() => api.sendChatAction(chatId, 'typing', threadId)),
+    ACTION_RENEW_MS,
+  );
 
   return {
     async stop() {

@@ -1,17 +1,23 @@
+import { randomBytes } from 'node:crypto';
 import type { z } from 'zod';
-import { runTurn, type LoopDeps } from '../../agent/loop.js';
-import { checkPairing, type PendingPairing } from '../../core/config/pairing.js';
+import type { LoopDeps } from '../../agent/loop.js';
+import type { PendingPairing } from '../../core/config/pairing.js';
 import type { SessionStore } from '../../core/session/store.js';
 import type { TrustTier } from '../../core/policy/types.js';
 import { identify, tierOf, type SurfaceIdentity } from '../../core/surface/types.js';
 import { DiscordApi, DiscordMessageSchema } from './api.js';
 import { DiscordGateway, type DiscordGatewayDeps } from './gateway.js';
-import { DiscordInbox } from './inbox.js';
+import { DiscordInbox, type StoredMessage } from './inbox.js';
 import { downloadToVault } from './media.js';
 import { startPresence } from './presence.js';
 import { renderForDiscord } from './render.js';
+import { discordPort } from './surface.js';
 import type { DiscordAttachment, DiscordMessage } from './api.js';
 import { awaitWithBudget } from '../shared/stop-budget.js';
+import { tryPair as sharedTryPair } from '../shared/ingress/pair.js';
+import { LaneRegistry, QueueNotices, laneKey, type LaneState, type PausaLever } from '../shared/ingress/lane.js';
+import { receive, type Claim, type IngressHooks, type LiveWork } from '../shared/ingress/router.js';
+import type { InboundEvent, IngressPart, IngressPort } from '../shared/ingress/types.js';
 import { DRAIN_BUDGET_MS } from '../../core/gateway/service.js';
 
 /**
@@ -107,6 +113,24 @@ export type ConnectorDeps = {
    */
   wsFactory?: DiscordGatewayDeps['wsFactory'];
   config: DiscordConfig;
+  /**
+   * La pausa durevole (ADR-0054 §4, `core/runtime/pausa.ts`), come la riceve
+   * gia' Telegram. Assente = mai in pausa.
+   *
+   * Slice 15, e **l'unico cambiamento di comportamento** della fetta: prima
+   * di diventare una porta questo connettore non guardava la pausa affatto,
+   * quindi `/pause` dal terminale o dal telefono fermava i job e Telegram e
+   * lasciava Discord a rispondere. Lo stadio `busy` del router e' lo stesso
+   * su ogni porta, e dichiararlo non applicabile qui vorrebbe dire scrivere
+   * in `DIVERGENZE_AMMESSE` una divergenza che nessun ADR giustifica: la
+   * pausa e' un fatto del runtime, non un dialetto di piattaforma.
+   *
+   * Cio' che Discord ancora non ha e' il `/resume` da questa porta (niente
+   * comandi, fetta 17): il messaggio resta pending nell'inbox e lo raccoglie
+   * il primo drain successivo alla ripresa — niente va perso, ma la ripresa
+   * la deve chiedere un'altra bocca.
+   */
+  pausa?: PausaLever | undefined;
   now?: () => Date;
   log?: (line: string) => void;
 };
@@ -187,6 +211,21 @@ export function principalFor(incoming: Incoming, ownerUserId: string | undefined
   );
 }
 
+/**
+ * Le parti di contenuto di questo messaggio (fetta 15).
+ *
+ * Una sola, oggi: le parole di chi scrive, mai recintate perche' sono le sue.
+ * Discord non porta ancora ne' provenienza di inoltro/citazione ne' il nome
+ * del file come parte tipizzata — sono la fetta 21, e aggiungerle qui
+ * cambierebbe i byte del prompt che questa fetta si e' impegnata a lasciare
+ * dov'erano. `contentTierOf` su questa lista vale quindi 0, che e' esattamente
+ * il `contentTaint` che Discord non passava affatto prima.
+ */
+function partiDi(incoming: Incoming): IngressPart[] {
+  if (incoming.text === '') return [];
+  return [{ source: 'author', tier: 0, text: incoming.text }];
+}
+
 /** Names the field, same idiom as `core/config/config.ts`'s own boundary parse. */
 function describeZodIssues(error: z.ZodError): string {
   return error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ');
@@ -211,7 +250,53 @@ export class DiscordConnector {
   /** Same meaning as `TelegramConnector.runDone` — resolves once `run()` itself has returned. */
   private runDone: Promise<void> = Promise.resolve();
 
-  constructor(private readonly deps: ConnectorDeps) {}
+  /**
+   * Questo connettore come **porta d'ingresso** (fetta 15).
+   *
+   * Costruita qui e non iniettata, per la stessa ragione che
+   * `TelegramConnector` scrive accanto alla sua: `cli/surface.ts` registra
+   * `doors`/`streams`/`approvers` sotto `connector.ingressPort.surface.id`, e
+   * lo stadio `work` scrive quello stesso valore in `turns.surface`. Due
+   * costruzioni separate sarebbero due letterali che concordano oggi senza
+   * ragione di concordare domani (§4 invariante 1).
+   *
+   * `ownerUserId` qui dentro decide solo `Surface.handles`, che il lato
+   * d'ingresso non legge mai: il pairing che lo cambia piu' tardi lascia
+   * `port.surface.id` dov'era.
+   */
+  private readonly port: IngressPort;
+
+  /**
+   * La corsia viva di questa conversazione (ADR-0054): il segnale di abort e
+   * la coda delle correzioni che il turno consuma.
+   *
+   * La chiave porta il prefisso della porta — `laneKey('discord', channelId)`
+   * — perche' `identify()` risponde `'owner'` come `sessionKey` su **ogni**
+   * porta: un registro senza prefisso fonderebbe il turno Telegram e quello
+   * Discord dell'owner in una corsia sola (§4 invariante 5).
+   *
+   * Oggi nessun comando Discord la legge (`ingress.commands: false`, fetta
+   * 17); esiste perche' lo stadio `work` chiede un `AbortSignal` alla porta e
+   * un segnale finto sarebbe una leva che non ferma niente.
+   */
+  private readonly corsie = new LaneRegistry();
+
+  /** I messaggi a cui e' gia' stato detto «in pausa»: una volta sola, **per messaggio**, non per drain. */
+  private readonly avvisi = new QueueNotices();
+
+  constructor(private readonly deps: ConnectorDeps) {
+    this.port = discordPort(deps.api, deps.config.ownerUserId);
+  }
+
+  /**
+   * Questa porta, per chi la assembla — stesso getter, stessa ragione di
+   * `TelegramConnector.ingressPort`: l'oggetto da cui `work` prende
+   * `turns.surface` e' lo stesso da cui `cli/surface.ts` prende le chiavi
+   * delle tre mappe.
+   */
+  get ingressPort(): IngressPort {
+    return this.port;
+  }
 
   /**
    * Connects and processes until stopped.
@@ -400,8 +485,7 @@ export class DiscordConnector {
       }
 
       try {
-        await this.handle(incoming);
-        this.markProcessedQuietly(stored.messageId, log);
+        await this.resolve(stored, incoming);
       } catch (error) {
         // `this.stopping` checked before touching `error.message` for the same
         // reason `TelegramConnector.drain` does: past `stop()`'s budget the
@@ -434,88 +518,227 @@ export class DiscordConnector {
   }
 
   /**
-   * The pairing gate — identical shape to `TelegramConnector.tryPair`, over a
-   * snowflake string instead of a numeric user id.
+   * The pairing gate. Slice 12: the algorithm itself now lives once in
+   * `connectors/shared/ingress/pair.ts` — this is Telegram's `tryPair`
+   * over a snowflake string instead of a numeric user id, and without the
+   * `ownerChatId` field only Telegram persists.
    */
   private async tryPair(incoming: Incoming): Promise<boolean> {
-    const { ownerUserId, pairing } = this.deps.config;
-    if (ownerUserId !== undefined || !pairing || !this.deps.savePairing) return false;
-    if (incoming.fromId === '') return false;
-
-    const { outcome, next } = checkPairing(pairing, incoming.text, new Date(this.now()));
-    const say = (text: string) => this.deps.api.sendMessage(incoming.channelId, text);
-
-    if (outcome.status === 'matched') {
-      this.deps.savePairing({ ownerUserId: incoming.fromId, pairing: null });
-      this.deps.config.ownerUserId = incoming.fromId;
-      this.deps.config.pairing = undefined;
-      await say('Sei tu. Da adesso questa è la nostra chat.');
-      return true;
-    }
-
-    if (!/^[\s0-9A-Za-z-]{8,12}$/.test(incoming.text.trim())) return false;
-
-    this.deps.savePairing({ pairing: next });
-    this.deps.config.pairing = next ?? undefined;
-    if (outcome.status === 'wrong') await say(`Non è quello. Tentativi rimasti: ${outcome.remaining}.`);
-    else await say('Quel codice non vale più. Rigenerane uno dalla CLI.');
-    return true;
+    return sharedTryPair(
+      {
+        ownerUserId: this.deps.config.ownerUserId,
+        pairing: this.deps.config.pairing,
+        canPersist: this.deps.savePairing !== undefined,
+      },
+      {
+        fromId: incoming.fromId,
+        text: incoming.text,
+        eligible: incoming.fromId !== '',
+      },
+      {
+        onMatched: (fromId) => {
+          this.deps.savePairing!({ ownerUserId: fromId, pairing: null });
+          this.deps.config.ownerUserId = fromId;
+          this.deps.config.pairing = undefined;
+        },
+        onAttempt: (next) => {
+          this.deps.savePairing!({ pairing: next });
+          this.deps.config.pairing = next ?? undefined;
+        },
+        say: (text) => this.deps.api.sendMessage(incoming.channelId, text),
+      },
+      new Date(this.now()),
+    );
   }
 
-  private async handle(incoming: Incoming): Promise<void> {
-    if (await this.tryPair(incoming)) return;
-    const { principal, tenant, sessionKey } = principalFor(incoming, this.deps.config.ownerUserId);
-    const presence = startPresence(this.deps.api, incoming.channelId);
+  /**
+   * L'unico punto in cui questo connettore entra nel cammino d'ingresso
+   * condiviso (fetta 15, `docs/evidence/ingresso-unico-e-nucleo-2026-09-05.md`
+   * §3 riga 15).
+   *
+   * Cio' che prima era `handle()` — pairing, presenza, ingest, `runTurn`,
+   * consegna, `markProcessed` — e' adesso
+   * `connectors/shared/ingress/router.ts`, percorso stadio per stadio da
+   * `INGRESS_STAGES`. Qui restano soltanto i fatti di Discord: quali campi
+   * fanno un candidato al pairing, come si spezza un messaggio sotto i 2000
+   * caratteri, quale riga dell'inbox si marca elaborata.
+   *
+   * **Solo `receive`, non `recover`.** Il gemello esiste per un evento gia'
+   * legato a un `workId` durevole, e `discord_messages` (`inbox.ts`:29-38) non
+   * ha ne' la colonna del legame ne' quella del settle: un messaggio Discord e'
+   * o pending o elaborato. `claim` conia quindi sempre un id nuovo e vince
+   * sempre, non esiste una gara di bind da perdere, e `recover` non ha da qui
+   * un chiamante raggiungibile. La conseguenza e' quella di oggi, invariata:
+   * un crash fra il turno e `markProcessed` fa ripartire il messaggio al drain
+   * successivo. Darle un bind — e con esso l'esattamente-una-volta che
+   * Telegram ha — e' una migrazione additiva dello schema durevole, che il
+   * disegno mette nella fetta 20 accanto alle parti di consegna.
+   */
+  private async resolve(stored: StoredMessage, incoming: Incoming): Promise<void> {
+    const log = this.deps.log ?? (() => {});
+    const esito = await receive(this.port, this.eventoDi(stored, incoming), this.ganci(stored, incoming));
 
-    try {
-      const arrival = incoming.attachment ? await this.ingest(incoming, incoming.attachment, tenant, tierOf(principal)) : null;
+    // Un pairing non crea mai un turno: non chiama il modello e legarlo a uno
+    // vorrebbe dire fargli attraversare tutta la macchina di consegna
+    // costruita per una risposta che non arrivera'.
+    if (esito.kind === 'paired' || esito.kind === 'commanded' || esito.kind === 'ignored') {
+      this.markProcessedQuietly(stored.messageId, log);
+      return;
+    }
+    // `queued` (in pausa) non scrive niente e non marca niente: e' esattamente
+    // cio' che lo lascia nell'inbox per il drain successivo alla ripresa. Ogni
+    // altro esito ha gia' scritto quello che doveva, dentro il router.
+  }
 
-      const result = await runTurn(this.deps.loop, {
-        principal,
-        tenant,
-        surface: 'discord',
-        // Come su Telegram, e per la stessa ragione: la chiave la decide
-        // `identify`, non questo file. Per l'owner è `owner` — la stessa che
-        // Telegram e il terminale aprono — e per chiunque altro è
-        // `discord:<channelId>`, la stringa che stava scritta qui (ADR-0056).
-        session: this.deps.sessions.open(sessionKey),
-        text: arrival ? `${arrival}\n\n${incoming.text}`.trim() : incoming.text,
-        // `channel` added for #41's lane (turno sospeso): the durable
-        // `replyTo` used to carry only Discord's own addressing
-        // (`channelId`/`messageId`), with nothing telling a future reader
-        // which `SurfaceRegistry` address to deliver through — the same
-        // field `agent/scheduler-run.ts`'s `makeJobRunner` already writes
-        // for a scheduled job's `replyTo`.
-        replyTo: { channelId: incoming.channelId, messageId: incoming.messageId, channel: `discord:${incoming.channelId}` },
-        replyChannel: `discord:${incoming.channelId}`,
-      });
+  /**
+   * Questo messaggio come `InboundEvent` — la forma che ogni stadio legge.
+   *
+   * `parts` e' dove la conoscenza del filo di Discord si ferma. Oggi ce n'e'
+   * una sola, le parole di chi scrive: la riga d'arrivo dell'allegato la
+   * produce lo stadio `ingest` e la mette in testa lui, e il **nome** del file
+   * non entra ancora come parte `filename` recintata come fa Telegram —
+   * aggiungerla cambierebbe i byte del prompt di Discord, che e' la fetta 21
+   * («una parte per allegato invece di `attachments[0]`»), non questa.
+   *
+   * `addressing.direct` e' `true` per costruzione e non per scelta:
+   * `parseMessage` (:155-156) rifiuta tutto cio' che non e' un DM uno-a-uno,
+   * quindi `mentionsBot`/`repliesToBot` non hanno un ramo che possa
+   * raggiungerli — la ragione per cui `gate` e `remember` sono in
+   * `DIVERGENZE_AMMESSE` dal giorno uno.
+   */
+  private eventoDi(stored: StoredMessage, incoming: Incoming): InboundEvent {
+    const channel = `discord:${incoming.channelId}`;
+    return {
+      port: this.port,
+      // Discord non compone mai piu' dispatch in un Work solo, quindi i due id
+      // sono la stessa stringa — la risposta onesta per una porta che non
+      // compone, come dice il docstring di `InboundEvent`.
+      eventId: stored.messageId,
+      compositionId: stored.messageId,
+      identity: {
+        connector: 'discord',
+        authorId: incoming.fromId,
+        conversationId: incoming.channelId,
+        // Letto da `parseMessage`, mai riasserito qui: e' la stessa riga che
+        // `principalFor` documenta, e un secondo `true` scritto a mano e'
+        // esattamente la forma che fece leggere un GROUP_DM come chat privata.
+        direct: incoming.direct,
+      },
+      address: {
+        channel,
+        replyTo: incoming.messageId,
+        // Il record durevole, invariato: e' cio' che `turns.replyTo` contiene
+        // gia' su questa installazione, e questa fetta non tocca lo schema
+        // (§4 invariante 2).
+        record: { channelId: incoming.channelId, messageId: incoming.messageId, channel },
+      },
+      addressing: { direct: incoming.direct, mentionsBot: false, repliesToBot: false },
+      parts: partiDi(incoming),
+      receivedAt: new Date(stored.receivedAt),
+    };
+  }
 
-      // A suspended turn has produced nothing to deliver. Rendering `''` would
-      // send an empty message (`renderForDiscord('')` is `['(risposta vuota)']`) and record
-      // `sent` on a turn that has not answered — the owner would read it as the
-      // answer. Discord has no `deliverTo` yet, so the resumed answer
-      // is recorded `failed:` by the lane until that door exists (named in
-      // requisiti DAY-1): the mirror of the guard
-      // `agent/turn-lane.ts` already has on the resume path. Found by the
-      // integrated judge of the dev→main promotion (#44), between #41 and #42.
-      if (result.stopped === 'suspended') return;
-
-      try {
-        const parts = renderForDiscord(result.text);
-        for (const part of parts) {
+  /**
+   * Tutto cio' che il router chiede a questa porta, per un messaggio.
+   *
+   * Gli stadi che questa porta non ha sono `undefined`, non finti: il router
+   * salta uno stadio il cui gancio manca, e un gancio che risponde sempre «no»
+   * direbbe la stessa cosa nascondendola. `command` manca perche'
+   * `ingress.commands` e' `false` (fetta 17); `remember` manca perche'
+   * `opensATurn` non ha un ramo che possa rifiutare.
+   */
+  private ganci(stored: StoredMessage, incoming: Incoming): IngressHooks {
+    const log = this.deps.log ?? (() => {});
+    const spec = incoming.attachment;
+    return {
+      ownerId: this.deps.config.ownerUserId,
+      pair: () => this.tryPair(incoming),
+      // §2.5: la regola del gate resta nella porta. Qui e' una costante, e la
+      // costante e' il fatto: `parseMessage` ha gia' rifiutato ogni messaggio
+      // che non sia un DM uno-a-uno, quindi ogni evento che arriva fin qui
+      // apre un turno. Non c'e' un ramo di gruppo da provare, ed e' per questo
+      // che `gate` e `remember` sono divergenze ammesse e non buchi.
+      opensATurn: () => true,
+      laneState: (): LaneState => ({
+        inPausa: this.deps.pausa?.attiva() === true,
+        vivo: this.corsie.isLive(this.corsia(incoming.channelId)),
+      }),
+      notices: this.avvisi,
+      say: (_ctx, testo) => this.dilloA(incoming, testo),
+      ...(spec === undefined
+        ? {}
+        : {
+            ingest: async (ctx) => ({
+              line: await this.ingest(incoming, spec, ctx.identity.tenant, tierOf(ctx.identity.principal)),
+            }),
+          }),
+      claim: async (): Promise<Claim> => ({ kind: 'mine', workId: randomBytes(16).toString('hex') }),
+      work: { loop: this.deps.loop, sessions: this.deps.sessions },
+      openLive: async () => this.apriIlVivo(incoming),
+      deliver: async (_ctx, _workId, text) => {
+        for (const part of renderForDiscord(text)) {
           await this.deps.api.sendMessage(incoming.channelId, part);
         }
-        this.recordDelivery(result.turnId, 'sent');
-      } catch (error) {
-        this.recordDelivery(result.turnId, `failed:${error instanceof Error ? error.message : String(error)}`);
-        throw error;
-      }
-    } finally {
-      await presence.stop();
+        return 'sent';
+      },
+      recordDelivery: (turnId, delivery) => this.recordDelivery(turnId, delivery),
+      finish: () => this.markProcessedQuietly(stored.messageId, log),
+      // Discord non ha un fuoco da spegnere: `discord_messages` non ha una
+      // colonna `settled_at`, perche' senza bind non c'e' la finestra fra il
+      // legame e la consegna che quella colonna esiste per testimoniare.
+      settle: () => {},
+      markProcessed: () => this.markProcessedQuietly(stored.messageId, log),
+      log: (riga) => log(`discord: ${riga}`),
+    };
+  }
+
+  /** La chiave della corsia viva di questa conversazione (§4 invariante 5). */
+  private corsia(channelId: string): string {
+    return laneKey(this.port.surface.id, channelId);
+  }
+
+  /** Una frase sola, non richiesta, nel canale da cui e' arrivato questo messaggio. */
+  private async dilloA(incoming: Incoming, testo: string): Promise<void> {
+    try {
+      await this.deps.api.sendMessage(incoming.channelId, testo);
+    } catch (error) {
+      (this.deps.log ?? (() => {}))(
+        `discord: conferma di coda non inviata — ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
-  private recordDelivery(turnId: string, delivery: 'sent' | `failed:${string}`): void {
+  /**
+   * I sink vivi di un turno, come li chiede il router.
+   *
+   * La presenza parte all'apertura — e' cosi' che l'owner vede che qualcosa
+   * sta succedendo, anche durante uno scaricamento lento — mentre la corsia la
+   * apre `arm()`, che il router chiama subito prima del modello: una corsia
+   * registrata durante lo scaricamento farebbe dire a `/stop` di aver
+   * interrotto un turno che non era ancora partito.
+   *
+   * Niente `onDelta`/`onProgress` e niente `ran`: Discord non ha trasporto di
+   * streaming (`surface.ts`, `streaming: {transport: 'off'}`, e la porta
+   * dichiara `edit: false` di conseguenza). Sono assenti, non finti.
+   */
+  private apriIlVivo(incoming: Incoming): LiveWork {
+    const presence = startPresence(this.deps.api, incoming.channelId);
+    const key = this.corsia(incoming.channelId);
+    let armata = false;
+    return {
+      arm: () => {
+        const vivo = this.corsie.open(key);
+        armata = true;
+        return { signal: vivo.controller.signal, steer: () => vivo.correzioni.splice(0) };
+      },
+      close: async () => {
+        if (armata) this.corsie.close(key);
+        await presence.stop();
+      },
+    };
+  }
+
+  private recordDelivery(turnId: string, delivery: 'sent' | 'possibly_sent' | 'undeliverable' | `failed:${string}`): void {
     try {
       this.deps.loop.turns.delivered(turnId, delivery);
     } catch (error) {

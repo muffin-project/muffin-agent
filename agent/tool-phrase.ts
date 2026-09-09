@@ -32,19 +32,24 @@
  */
 const TOOL_PHRASE: Readonly<Record<string, string>> = {
   memory_search: 'cerco in memoria',
+  memory_why: 'guardo da dove viene',
+  memory_forget: 'dimentico',
   fs_read: 'leggo un file',
   fs_list: 'guardo una cartella',
   fs_search: 'cerco nei file',
   fs_write: 'scrivo un file',
+  vault_save: 'salvo nel vault della stanza',
   document_read: 'leggo un documento',
   http_get: 'apro una pagina',
   web_search: 'cerco sul web',
-  shell_run: 'eseguo un comando',
+  shell_run: 'guardo con un comando',
+  shell_run_write: 'eseguo un comando',
   process_list: 'guardo i processi',
   process_kill: 'chiudo un processo',
   send_file: 'ti mando un file',
   skill_read: 'leggo una skill',
   sys_inspect: 'mi guardo dentro',
+  sys_effects: 'rileggo cosa ho fatto',
   todo: 'aggiorno il piano',
   wait: 'mi metto in attesa',
 };
@@ -67,6 +72,7 @@ const TOOL_PHRASE: Readonly<Record<string, string>> = {
  */
 const TOOL_SUBJECT: Readonly<Record<string, string | readonly string[]>> = {
   memory_search: 'query',
+  memory_why: 'query',
   web_search: 'query',
   fs_read: 'path',
   fs_list: 'path',
@@ -75,9 +81,11 @@ const TOOL_SUBJECT: Readonly<Record<string, string | readonly string[]>> = {
   // `name`. Un solo campo lascerebbe muta metà delle chiamate.
   fs_search: ['query', 'name'],
   fs_write: 'path',
+  vault_save: 'titolo',
   document_read: 'path',
   http_get: 'url',
   shell_run: 'command',
+  shell_run_write: 'command',
   skill_read: 'name',
   send_file: 'path',
 };

@@ -1,77 +1,95 @@
-import DatabaseCtor from 'better-sqlite3';
-import { openDb } from '../core/db/open.js';
 import { join } from 'node:path';
+import type DatabaseCtor from 'better-sqlite3';
+import { ApprovalStore } from '../core/approvals/store.js';
 import { BudgetEngine } from '../core/budget/budget.js';
-import { migrate } from '../core/db/migrate.js';
 import { costUsd } from '../core/budget/pricing.js';
 import {
+  type Config,
   loadConfig,
   paths,
   promptVersion,
   readDefaultChannel,
   readSecret,
   secretDir,
-  type Config,
 } from '../core/config/config.js';
 import { resolveWorkspace } from '../core/config/workspace.js';
-import { loadSealedBudgets } from '../core/rot/budgets.js';
-import type { QuietHours } from '../core/scheduler/proactivity.js';
-import { mandatoryGuards } from '../core/rot/guards.js';
-import { createDecide } from '../core/policy/decide.js';
-import { loadPolicyMatrix } from '../core/policy/matrix.js';
-import type { CapabilityDecl } from '../core/policy/types.js';
-import { hardeningHolds, verify, type HardeningCheck } from '../core/rot/verify.js';
-import { SessionStore } from '../core/session/store.js';
-import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
-import {
-  buildSystemPromptBlocks,
-  renderSystemPrompts,
-  type IstanzaFacts,
-  type SystemPromptBlocks,
-} from './context/assemble.js';
-import type { Approver, LoopDeps, RegisteredTool, SpendEntry } from './loop.js';
-import { ApprovalStore } from '../core/approvals/store.js';
-import { UndoJournal } from '../core/undo/journal.js';
-import type { Provider } from './providers/types.js';
-import { loadProfiles, selectProfile, withThinking } from './profiles/profile.js';
-import { AnthropicProvider } from './providers/anthropic.js';
-import { OpenAICompatProvider } from './providers/openai-compat.js';
-import { fsCapabilities, fsList, makeFsTools, type FsScope } from './tools/fs.js';
-import { documentCapability, makeDocumentTool } from './tools/document.js';
-import { memoryCapability, memorySearchSpec, searchMemory } from './tools/memory.js';
-import { Vault } from '../core/vault/vault.js';
-import { SandboxExecutor } from '../core/sandbox/executor.js';
-import { makeShellTool, shellCapability } from './tools/shell.js';
-import { hostAllowed, loadEgress, type EgressPolicy } from '../core/net/egress.js';
-import { httpCapability, makeHttpTool } from './tools/http.js';
-import { diagnoseSearch, makeSearchTool, searchCapability } from './tools/search.js';
-import { formatCapabilityGap, truncationGap, type CapabilityGap } from './tools/capability-status.js';
-import { makeProcessTools, processCapabilities } from './tools/process.js';
+import { migrate } from '../core/db/migrate.js';
+import { openDb } from '../core/db/open.js';
 import { loadMcpRegistry } from '../core/mcp/registry.js';
-import { buildMcpTools } from './tools/mcp.js';
-import { discoverSkills, skillsPromptSection } from '../core/skills/skills.js';
-import { makeSkillTool, skillCapability } from './tools/skill.js';
-import { promptNonce } from '../core/skills/nonce.js';
-import { inspectCapability, makeInspectTool } from './tools/inspect.js';
-import { JobFireStore } from '../core/scheduler/job-fires.js';
-import { JobStore } from '../core/scheduler/jobs.js';
-import { TurnStore, describeInterrupted } from '../core/turns/store.js';
-import { TodoStore } from '../core/turns/todo.js';
-import { makeWaitTool, waitCapability } from './tools/wait.js';
-import { makeTodoTool, todoCapability } from './tools/todo.js';
+import {
+  CONSOLIDATION_CAPABILITY,
+  CONSOLIDATION_TENANT,
+  Consolidator,
+} from '../core/memory/consolidator.js';
 import { makeEmbedder } from '../core/memory/embed.js';
+import { ingestPending } from '../core/memory/ingest.js';
+import { sweepDuplicates } from '../core/memory/maintenance.js';
+import type { RecallDeps } from '../core/memory/recall.js';
 import { LlmReranker } from '../core/memory/rerank.js';
 import { MemoryStore } from '../core/memory/store.js';
 import { VectorIndex } from '../core/memory/vectors.js';
-import type { RecallDeps } from '../core/memory/recall.js';
-import { ingestPending } from '../core/memory/ingest.js';
-import { sweepDuplicates } from '../core/memory/maintenance.js';
+import { type EgressPolicy, hostAllowed, loadEgress } from '../core/net/egress.js';
+import { createDecide } from '../core/policy/decide.js';
+import { loadPolicyMatrix } from '../core/policy/matrix.js';
+import type { CapabilityDecl } from '../core/policy/types.js';
+import { loadSealedBudgets } from '../core/rot/budgets.js';
+import { mandatoryGuards } from '../core/rot/guards.js';
+import { type HardeningCheck, hardeningHolds, verify } from '../core/rot/verify.js';
+import { SandboxExecutor } from '../core/sandbox/executor.js';
+import { JobFireStore } from '../core/scheduler/job-fires.js';
+import { JobStore } from '../core/scheduler/jobs.js';
+import type { QuietHours } from '../core/scheduler/proactivity.js';
+import { SessionStore } from '../core/session/store.js';
+import { promptNonce } from '../core/skills/nonce.js';
+import { discoverSkills, skillsPromptSection } from '../core/skills/skills.js';
+import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
+import { describeInterrupted, TurnStore } from '../core/turns/store.js';
+import { TodoStore } from '../core/turns/todo.js';
+import { UndoJournal } from '../core/undo/journal.js';
+import { Vault } from '../core/vault/vault.js';
 import {
-  Consolidator,
-  CONSOLIDATION_CAPABILITY,
-  CONSOLIDATION_TENANT,
-} from '../core/memory/consolidator.js';
+  buildSystemPromptBlocks,
+  type IstanzaFacts,
+  renderSystemPrompts,
+  type SystemPromptBlocks,
+} from './context/assemble.js';
+import type { Approver, LoopDeps, RegisteredTool, SpendEntry } from './loop.js';
+import { loadProfiles, selectProfile, withThinking } from './profiles/profile.js';
+import { AnthropicProvider } from './providers/anthropic.js';
 import { lightLane } from './providers/light-lane.js';
+import { OpenAICompatProvider } from './providers/openai-compat.js';
+import type { Provider } from './providers/types.js';
+import {
+  type CapabilityGap,
+  formatCapabilityGap,
+  truncationGap,
+} from './tools/capability-status.js';
+import { documentCapability, makeDocumentTool } from './tools/document.js';
+import { effectsCapability, makeEffectsTool } from './tools/effects.js';
+import { type FsScope, fsCapabilities, fsList, makeFsTools } from './tools/fs.js';
+import { httpCapability, makeHttpTool } from './tools/http.js';
+import { inspectCapability, makeInspectTool } from './tools/inspect.js';
+import { buildMcpTools } from './tools/mcp.js';
+import {
+  memoryCapability,
+  memorySearchSpec,
+  memoryWhySpec,
+  searchMemory,
+  whyMemory,
+} from './tools/memory.js';
+import { forgetMemory, memoryForgetCapability, memoryForgetSpec } from './tools/memory-forget.js';
+import { makeProcessTools, processCapabilities } from './tools/process.js';
+import { diagnoseSearch, makeSearchTool, searchCapability } from './tools/search.js';
+import {
+  makeShellTool,
+  makeShellWriteTool,
+  shellCapability,
+  shellWriteCapability,
+} from './tools/shell.js';
+import { makeSkillTool, skillCapability } from './tools/skill.js';
+import { makeTodoTool, todoCapability } from './tools/todo.js';
+import { makeVaultSaveTool, vaultWriteCapability } from './tools/vault-save.js';
+import { makeWaitTool, waitCapability } from './tools/wait.js';
 
 /**
  * Assembly.
@@ -309,14 +327,38 @@ export function baseToolOrder(input: {
     'fs_search',
     'fs_write',
     'memory_search',
+    'memory_why',
+    'memory_forget',
     'document_read',
-    ...(input.sandboxAvailable ? ['shell_run'] : []),
+    // Accanto a `document_read`, e non in coda: sono le due metà della stessa
+    // cosa — si salva per rileggere. In una stanza con grant (ADR-0073) queste
+    // due sono quasi tutto il menu, quindi farle cadere per prime da un tetto
+    // di profilo vorrebbe dire tagliare proprio la capacità che il sigillo ha
+    // appena concesso.
+    'vault_save',
+    // Adjacent, and the read-only one first: the model reads this list in
+    // order, and ADR-0074 punto 4 makes `shell_run` the default choice while
+    // `shell_run_write` is the one that interrupts the owner. If a profile's
+    // cap ever splits the pair, the half that survives must be the half that
+    // does not ask.
+    ...(input.sandboxAvailable ? ['shell_run', 'shell_run_write'] : []),
     'process_list',
     'process_kill',
     'skill_read',
     'http_get',
     ...(input.searchOn ? ['web_search'] : []),
     ...(input.sendFileAvailable ? ['send_file'] : []),
+    /**
+     * Sopra `wait`/`todo`/`sys_inspect`, e per l'argomento che `send_file` ha
+     * gia' vinto due righe piu' su: quelli tre sono i primi che un taglio di
+     * profilo prende, e il registro degli effetti (D15) e' una riga DAY-1 —
+     * la risposta a «cosa hai fatto oggi». Perderla in silenzio significa un
+     * owner che non puo' piu' vedere cosa e' passato senza domanda, che e'
+     * esattamente la sorveglianza che ADR-0074 rende necessaria togliendo
+     * quasi ogni domanda. Fra l'auto-descrizione e l'auto-rendiconto, il
+     * secondo.
+     */
+    'sys_effects',
     'wait',
     'todo',
     'sys_inspect',
@@ -348,6 +390,19 @@ export function buildRuntime(
      * chiunque non abbia un terminale da proteggere.
      */
     log?: (line: string) => void;
+    /**
+     * Extra paths no tool may read, layered on top of `mandatoryGuards` —
+     * never a substitute for it. Production never passes this; it exists for
+     * a caller that runs a *real* model against a throwaway home and needs
+     * the read-only shell lane (`sys.shell`, ADR-0074 punto 4 — deliberately
+     * allow-by-default on reads, `--ro-bind / /` minus the mandatory guards)
+     * to see only that home, not the operator's real one. `evals/character/run.ts`
+     * is the first caller: a probe whose fixture workspace has nothing to
+     * find can send the model looking on the real disk, and a real network
+     * model's tool result is bytes leaving the machine (found running D13's
+     * first instrumented round, `docs/evidence/eval-fuga-filesystem-2026-09-07.md`).
+     */
+    extraDenyRead?: readonly string[];
   } = {},
 ): Runtime {
   const p = paths(home);
@@ -468,9 +523,7 @@ export function buildRuntime(
    * left behind by the slice that built it, which is exactly how a comment
    * becomes a lie a reader has no way to catch.)
    */
-  const turnNotes = turns
-    .reclaim()
-    .map((t) => `! ${describeInterrupted(t)}`);
+  const turnNotes = turns.reclaim().map((t) => `! ${describeInterrupted(t)}`);
 
   /**
    * Turns suspended with nobody to wake them, named at boot for the same reason
@@ -484,7 +537,10 @@ export function buildRuntime(
   const waitingNotes = ((): string[] => {
     const { waiting } = turns.health({ windowMs: 0 });
     if (waiting.count === 0) return [];
-    const due = waiting.oldestWakeAt === null ? '' : ` (il più vecchio scade ${waiting.oldestWakeAt.slice(0, 16).replace('T', ' ')})`;
+    const due =
+      waiting.oldestWakeAt === null
+        ? ''
+        : ` (il più vecchio scade ${waiting.oldestWakeAt.slice(0, 16).replace('T', ' ')})`;
     return [
       `! ${waiting.count} turni sospesi in attesa di risveglio${due} — li riprende la corsia del gateway, ` +
         `\`muffin doctor\` dice se ne sta girando uno`,
@@ -506,7 +562,9 @@ export function buildRuntime(
   const undeliverableNotes = ((): string[] => {
     const { undeliverable } = turns.health({ windowMs: 0 });
     if (undeliverable.count === 0) return [];
-    return [`! ${undeliverable.count} turni con risposta senza indirizzo — \`muffin doctor\` li nomina`];
+    return [
+      `! ${undeliverable.count} turni con risposta senza indirizzo — \`muffin doctor\` li nomina`,
+    ];
   })();
 
   // One connection, two lanes: the endpoint is the same, the model id is not.
@@ -539,6 +597,10 @@ export function buildRuntime(
 
   const recordSpend = (entry: SpendEntry): number => {
     const usd = costUsd(entry.model, entry, config.provider.baseUrl);
+    // `entry` porta già `jobId` quando il turno è il giro di un job
+    // (`agent/loop.ts`), e lo spread lo passa dritto alla riga di `spend`:
+    // niente da tenere in sincrono qui, e nessun secondo posto in cui
+    // l'attribuzione possa perdersi.
     budget.record({ ...entry, usd });
     return usd;
   };
@@ -557,7 +619,11 @@ export function buildRuntime(
   const light = lightLane(provider, {
     profile: selectProfile(config.models.light, profiles),
     record: (entry) =>
-      void recordSpend({ ...entry, tenant: CONSOLIDATION_TENANT, capability: CONSOLIDATION_CAPABILITY }),
+      void recordSpend({
+        ...entry,
+        tenant: CONSOLIDATION_TENANT,
+        capability: CONSOLIDATION_CAPABILITY,
+      }),
   });
 
   // Memory. The vector half is optional and its absence is reported rather than
@@ -628,7 +694,12 @@ export function buildRuntime(
   // contained write that becomes an uncontained execution the next time the
   // owner commits, or opens a shell.
   const guards = mandatoryGuards(home, workspace);
-  const scope: FsScope = { root: workspace, denyWrite: guards.denyWrite, denyRead: guards.denyRead };
+  const denyRead = [...guards.denyRead, ...(opts.extraDenyRead ?? [])];
+  const scope: FsScope = {
+    root: workspace,
+    denyWrite: guards.denyWrite,
+    denyRead,
+  };
   /**
    * Ogni capacità spenta o tagliata a questo assemblaggio, riempito via `push`
    * man mano che ogni pezzo sotto scopre il proprio motivo — mai riassegnato,
@@ -655,10 +726,50 @@ export function buildRuntime(
       // would be `recall()`'s own storage/internal error.
       throwTier: 0,
     },
+    {
+      // DAY-1 C5: the agent's own door to `muffin memory why` — same
+      // capability as `memory_search` above (`memory.read`), same tenant
+      // scoping rule (the turn's, never one the model names), registered
+      // right next to it so a reader sees both halves of "read the memory"
+      // together. Declared and never registered here would have been the
+      // exact failure the row was BLOCKER for: the CLI's `cmdMemoryWhy`
+      // already worked, and nothing wired the model's equivalent into a live
+      // runtime.
+      capability: memoryCapability.id,
+      spec: memoryWhySpec,
+      handler: async (args, ctx) => whyMemory(recallDeps, ctx.tenant, args),
+      // The provenance a "why" answer rests on is the turn's own grounding,
+      // same as a `memory_search` hit — clearing it to save context would
+      // strip the reason the answer was said in the first place.
+      keepResult: true,
+      // `whyMemory` never throws with a provenance answer; only a
+      // storage-level error escapes its fenced `return`s.
+      throwTier: 0,
+    },
+    {
+      // «Dimentica X» — the third verb of `docs/VISION.md`'s conversational
+      // memory (remember, correct, forget), and the one the 08/09 cutover found
+      // with no mechanism at all. Same tenant rule as the two above; the
+      // capability is `memory.forget` — owner-only, same `memory` effect as
+      // `memory.write`. The turn id is the provenance of the retirement.
+      capability: memoryForgetCapability.id,
+      spec: memoryForgetSpec,
+      handler: async (args, ctx) => forgetMemory(recallDeps, { tenant: ctx.tenant, turnId: ctx.turnId }, args),
+      // Its answer is either the candidate list (built from recalled text,
+      // tiered to the worst source) or the durable result; only a storage or
+      // lock error escapes.
+      throwTier: 0,
+    },
     // The other half of "a document enters whole": the vault stores every page
     // and the model is handed an index, so it needs a door back to the text.
     // An index with no door is a summary with extra steps.
     makeDocumentTool(vault, memoryStore),
+    // L'altra metà: «salva questo». ADR-0073 punto 2 — la prima scrittura
+    // deliberata che questo sistema abbia mai avuto, per l'owner come per una
+    // stanza che il sigillo nomina. `hostOnly: true` sulla dichiarazione, quindi
+    // registrarla qui non concede niente a nessun gruppo: è `tenants` in
+    // `rot/policy.json` a decidere chi la raggiunge.
+    makeVaultSaveTool({ root: p.vault, vault, vectors }),
   ];
 
   // The hands of M3. The shell tool is registered only when the probe proved a
@@ -670,11 +781,20 @@ export function buildRuntime(
   // deny-list plus a hole". They were two hand-written copies, and both were
   // missing the same two categories — so the hole was in neither copy's
   // divergence but in both of them agreeing on an incomplete list.
-  const executor = new SandboxExecutor(guards);
+  const executor = new SandboxExecutor({ ...guards, denyRead });
   const sandboxStatus = executor.status();
   const contained = sandboxStatus.available;
   if (contained) {
-    tools.push(makeShellTool(executor, { root: workspace }));
+    // Both lanes or neither (ADR-0074 punto 4). The read-only one is not a fallback
+    // for a host where containment failed — it is the *stricter* of the two and
+    // rests on the same probe: `runReadOnly`'s promise ("no writes outside the
+    // scratch, no network") is the sandbox's promise, so a host that cannot
+    // prove containment cannot offer it either. Registering it alone there
+    // would be the silent degradation the ADR forbids, pointed the other way.
+    tools.push(
+      makeShellTool(executor, { root: workspace }),
+      makeShellWriteTool(executor, { root: workspace }),
+    );
   }
   // The absent case used to produce nothing at all here — no boot line, no
   // structured record, not even the generic degrade note the search failures
@@ -685,7 +805,7 @@ export function buildRuntime(
   // machines.
   if (!contained) {
     capabilityGaps.push({
-      capability: 'shell_run',
+      capability: 'shell_run, shell_run_write',
       kind: 'disabled',
       reason: `${sandboxStatus.mechanism} non disponibile (${sandboxStatus.reason}): ${sandboxStatus.detail}`,
       remedy: sandboxStatus.remedy,
@@ -759,14 +879,27 @@ export function buildRuntime(
    * `wait` gets the store for one purpose only, counting how many turns this
    * tenant already holds suspended; it cannot suspend anything by itself.
    */
-  tools.push(makeWaitTool(turns), makeTodoTool(todos));
+  // `budgets.quietHours.timezone` e non il fuso del processo: e' la stessa
+  // lettura che riceve `LoopDeps.timeZone` poco piu' sotto, e senza di essa
+  // «cosa hai fatto oggi» chiesto al gateway (launchd/systemd, `TZ` del
+  // supervisore) risponderebbe su una giornata diversa da quella che
+  // `muffin effects` stampa sul terminale dell'owner.
+  tools.push(
+    makeWaitTool(turns),
+    makeTodoTool(todos),
+    makeEffectsTool(turns, budgets.quietHours.timezone),
+  );
 
   const capabilities = new Map<string, CapabilityDecl>(
     [
       ...fsCapabilities,
       memoryCapability,
+      // `memory_forget`'s own door, host-only: declared here or the visibility
+      // filter and the kernel disagree about who sees it.
+      memoryForgetCapability,
       documentCapability,
       shellCapability,
+      shellWriteCapability,
       httpCapability,
       ...processCapabilities,
       skillCapability,
@@ -778,6 +911,8 @@ export function buildRuntime(
       // built-ins get the same treatment.
       waitCapability,
       todoCapability,
+      effectsCapability,
+      vaultWriteCapability,
       // Declared only when the tool exists. A capability the kernel knows about
       // but nothing can invoke is the harmless direction; the dangerous one is a
       // tool the kernel has never heard of, and registering them together is
@@ -901,6 +1036,10 @@ export function buildRuntime(
       },
       tools,
       capabilities,
+      // ADR-0073: `sys_inspect` risponde «cosa raggiungo in questa stanza», e
+      // in una stanza con grant la risposta non è più «tutto ciò che non è
+      // host-only».
+      grants: matrix.grants,
       promptBlocks,
       capabilityGaps,
       /**
@@ -964,7 +1103,8 @@ export function buildRuntime(
     );
     tools.sort(
       (a, b) =>
-        (priorita.get(a.spec.name) ?? Number.MAX_SAFE_INTEGER) - (priorita.get(b.spec.name) ?? Number.MAX_SAFE_INTEGER),
+        (priorita.get(a.spec.name) ?? Number.MAX_SAFE_INTEGER) -
+        (priorita.get(b.spec.name) ?? Number.MAX_SAFE_INTEGER),
     );
     // Idempotente: una rilettura aggiorna le righe `truncated`, non le accumula.
     for (let i = capabilityGaps.length - 1; i >= 0; i -= 1) {
@@ -976,7 +1116,13 @@ export function buildRuntime(
     // del profilo la taglia» e «non esiste per questa installazione» sono due
     // domande diverse, e confonderle è esattamente il difetto misurato.
     for (const tool of tagliati) {
-      capabilityGaps.push(truncationGap({ tool, profileName: profile.name, maxToolsExposed: profile.maxToolsExposed }));
+      capabilityGaps.push(
+        truncationGap({
+          tool,
+          profileName: profile.name,
+          maxToolsExposed: profile.maxToolsExposed,
+        }),
+      );
     }
   };
   computeExposureGaps();
@@ -1041,7 +1187,9 @@ export function buildRuntime(
     },
     recomputeExposure: () => {
       computeExposureGaps();
-      return capabilityGaps.filter((g) => g.kind === 'truncated').map((g) => formatCapabilityGap(g));
+      return capabilityGaps
+        .filter((g) => g.kind === 'truncated')
+        .map((g) => formatCapabilityGap(g));
     },
     onClose: (hook) => {
       closeHooks.push(hook);
@@ -1058,6 +1206,11 @@ export function buildRuntime(
       // The declarations, so the loop derives the policy resource from
       // resourceKind/policyArgs instead of guessing at argument names.
       capabilities,
+      // E i grant per stanza della stessa matrice sigillata che `decide` legge,
+      // dallo stesso oggetto: il menu del modello e il kernel non possono
+      // essere in disaccordo su cosa una stanza raggiunge, perché leggono la
+      // stessa `PolicyMatrix` (ADR-0073 punto 1).
+      grants: matrix.grants,
       // Il registro di undo: senza questa riga `fs_write` è offerto al modello e
       // non scrive mai, perché il kernel giudica `draft` e `draft` senza copia
       // rifiuta (DAY-1 requirement D2/D3/D11). Il difetto era esattamente qui — un verdetto
@@ -1144,4 +1297,3 @@ export async function attachMcp(runtime: Runtime, home = paths().home): Promise<
   runtime.onClose(() => attachment.close());
   return attachment.report;
 }
-

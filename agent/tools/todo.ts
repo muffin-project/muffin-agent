@@ -84,10 +84,30 @@ export const todoCapability: CapabilityDecl = {
   resourceKind: 'none',
   policyArgs: ['action'],
   /**
-   * Host only, matching `wait`, and for the same unexamined-surface reason: a
-   * group member's multi-step work would be persistent state armed by a tier-2
-   * principal, which the threat model has not looked at. Fail-closed until it
-   * has.
+   * Host only, matching `wait` — e da ADR-0073 punto 5 questo non è più
+   * l'ultima parola, è il **default**.
+   *
+   * La ragione originale era buona e resta scritta: il lavoro multi-passo di
+   * un membro sarebbe stato stato durevole armato da un principal tier 2, e
+   * il modello di minaccia non lo aveva guardato. «Fail-closed finché non
+   * l'ha guardato» è ciò che questo campo dice ancora, e ciò che il grant
+   * cambia è **chi** lo guarda: una stanza nominata in `tenants` di una
+   * `rot/policy.json` sigillata è l'owner che ha guardato quella stanza in
+   * particolare, per iscritto, dentro un file che serve un `muffin rot
+   * reseal` per cambiare.
+   *
+   * Il punto 5 dell'ADR — *«`todo` e `wait` sono del turno, non della
+   * stanza»* — è la ragione per cui la concessione non ha bisogno di nessun
+   * meccanismo suo: un `todo` scritto in una stanza segue già la **sessione**
+   * di quella stanza (il handler scrive `(tenant, sessionId)`, e un topic di
+   * forum ha la sua — F3). Non c'è niente da isolare in più; c'è solo da
+   * decidere se quella stanza può, ed è la stessa manopola di `vault.write`.
+   *
+   * Ciò che il grant **non** cambia: `decideProactive` continua a rifiutare
+   * un trigger sopra il tier 1, quindi una riga con una data scritta da un
+   * membro (tier 2) non fa parlare Muffin per prima. La superficie che il
+   * commento sopra chiamava inesaminata resta chiusa dalla difesa che la
+   * chiudeva già.
    */
   hostOnly: true,
 };
@@ -99,7 +119,8 @@ const todoSpec: ToolSpec = {
     'start of every turn, so you do not have to re-derive it. `plan` writes the steps (restate the whole ' +
     'list — repeating a step you already wrote does not duplicate it); `set` moves one step to ' +
     `${TODO_STATES.join(' | ')}; \`list\` shows it. Use it for work that takes more than one turn. ` +
-    'Nothing here executes anything: it records what you intend to do. ' +
+    'Not for a single step you are about to do right now — planning what you will do in the next call adds ' +
+    'bookkeeping with no benefit; just do it. Nothing here executes anything: it records what you intend to do. ' +
     '`due` is the one exception and the only way to remember something for a moment that is not now: ' +
     'it puts a date and time on a step, and at that moment Muffin says the step back to the owner, ' +
     'once, on their own channel — even in a conversation nobody has opened since. Use it when the owner ' +

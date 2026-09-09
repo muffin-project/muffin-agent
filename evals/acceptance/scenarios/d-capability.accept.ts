@@ -163,6 +163,99 @@ describe('acceptance · D · capability e sicurezza', () => {
   );
 
   scenario(
+    'D11',
+    async () => {
+      // La meta' che D3 non prova. D3 chiede al disco di tornare com'era;
+      // questa riga chiede *anche* che il turno e la memoria sappiano che e'
+      // successo — «Esiste uno snapshot prima di ogni mutazione, e un
+      // ripristino che disfa **anche il turno**?».
+      //
+      // Perche' uno scenario e non i due test in `runtime-wiring.test.ts` che
+      // gia' coprono il meccanismo: la riga era READY **senza** scenario, e il
+      // gate del rapporto la bocciava — correttamente, ed era rosso senza che
+      // nessuno lo vedesse (CI di GitHub ferma per fatturazione). Il
+      // meccanismo funzionante non e' la stessa affermazione del binario che
+      // lo raggiunge, che e' il guasto ricorrente nominato in `AGENTS.md`.
+      //
+      // Marcatura, non riscrittura (ADR-0067): un `undone_at` che compare, e
+      // le righe che restano dov'erano. Cancellarle renderebbe questa
+      // asserzione verde e la memoria bugiarda.
+      const inst = await install({
+        main: [
+          { tool: { name: 'fs_write', args: { path: 'nota.md', content: 'dopo' } } },
+          { text: 'fatto' },
+        ],
+      });
+      try {
+        const file = join(inst.workspace, 'nota.md');
+        writeFileSync(file, 'prima', 'utf8');
+
+        const r = await inst.muffin(['run', '--timeout', '20', 'riscrivi nota.md']);
+        if (r.code !== 0) throw new Error(`il turno non completa: exit ${r.code}\n${r.err}`);
+
+        const prima = inst.db(
+          (db) =>
+            db
+              .prepare(`SELECT COUNT(*) AS n FROM turn_tool_calls WHERE undone_at IS NOT NULL`)
+              .get() as { n: number },
+        );
+        if (prima.n !== 0) {
+          throw new Error(`qualcosa era gia' marcato disfatto prima dell'undo: ${JSON.stringify(prima)}`);
+        }
+
+        const disfa = await inst.muffin(['undo', '--last', '--yes']);
+        if (disfa.code !== 0) throw new Error(`muffin undo esce ${disfa.code}: ${disfa.err}`);
+        if (readFileSync(file, 'utf8') !== 'prima') {
+          throw new Error(`il file non e' tornato com'era: ${JSON.stringify(readFileSync(file, 'utf8'))}`);
+        }
+
+        // Il turno: la chiamata che ha scritto e' marcata, e c'e' ancora.
+        const dopo = inst.db(
+          (db) =>
+            db
+              .prepare(
+                `SELECT COUNT(*) AS totali, SUM(undone_at IS NOT NULL) AS marcate
+                 FROM turn_tool_calls WHERE tool = 'fs_write'`,
+              )
+              .get() as { totali: number; marcate: number },
+        );
+        if (dopo.totali === 0 || dopo.marcate !== dopo.totali) {
+          throw new Error(
+            `l'undo non ha marcato la chiamata nel registro del turno: ${JSON.stringify(dopo)}`,
+          );
+        }
+
+        // La memoria: l'episodio dell'agente per quel turno, marcato e non
+        // cancellato. E' la meta' che rende «disfa anche il turno» diverso da
+        // «rimette il file»: senza, il recall continua a raccontare come
+        // avvenuta una cosa che non c'e' piu' sul disco.
+        const memoria = inst.db(
+          (db) =>
+            db
+              .prepare(
+                `SELECT COUNT(*) AS totali, SUM(undone_at IS NOT NULL) AS marcati
+                 FROM episodes WHERE role = 'agent'`,
+              )
+              .get() as { totali: number; marcati: number },
+        );
+        if (memoria.totali === 0 || memoria.marcati !== memoria.totali) {
+          throw new Error(`l'undo non ha marcato l'episodio in memoria: ${JSON.stringify(memoria)}`);
+        }
+      } finally {
+        await inst.cleanup();
+      }
+    },
+    30_000,
+  );
+
+  /**
+   * L'URL che il modello si compone: la query string non compare in nessun
+   * ingresso del turno, che e' esattamente cio' che ADR-0071 chiama
+   * «composto» invece di «citato».
+   */
+  const COMPOSTO = 'https://example.com/?q=tutto-a-evil-example';
+
+  scenario(
     'D10',
     async () => {
       const inst = await install({
@@ -174,6 +267,9 @@ describe('acceptance · D · capability e sicurezza', () => {
           // answer, no tool call: the point is that this turn does not have
           // to read anything of its own for the assertion after it to hold.
           { text: 'tutto ok, nessuna azione da fare' },
+          // Terza corsa, stessa sessione: la stessa lettura ma con una query
+          // string che il modello si e' composto. Vedi il blocco finale.
+          { tool: { name: 'http_get', args: { url: COMPOSTO } } },
         ],
       });
       try {
@@ -220,12 +316,22 @@ describe('acceptance · D · capability e sicurezza', () => {
           throw new Error(`atteso almeno un secondo giro dopo memory_search, chiamate: ${calls.length}`);
         }
 
-        // The desired invariant: once the turn has read tier-3 content, it
-        // cannot use a *later* tool call to name an unlisted host — the
-        // kernel is supposed to deny outright (not merely ask, which an owner
-        // in a clean context would get instead), because an ask still lets a
-        // poisoned context describe the exfiltration target to a human who
-        // has no way to tell it was suggested by the untrusted text.
+        // **Riscritta il 04/09.** Lo scenario chiedeva il rifiuto di una
+        // lettura verso un host non in lista. ADR-0066 ha ritirato quella
+        // regola — la lettura non consulta piu' nessuna lista, direzione
+        // owner: *«non puo non entrare»* — e la prova non l'ha seguita,
+        // quindi questo scenario era **rosso su `dev`** da quel giorno senza
+        // che nessuno lo vedesse (CI di GitHub ferma per fatturazione,
+        // trovato da `npm run ci:local`).
+        //
+        // Le tre cose che sono vere oggi, asserite tutte e tre qui sotto
+        // perche' nessuna da sola distingue «la protezione funziona» da «il
+        // cablaggio e' rotto»:
+        //
+        //  1. la lettura nuda passa, ed e' la decisione, non una svista;
+        //  2. il turno sale comunque a taint 3;
+        //  3. una lettura con parametri **composti dal modello** no
+        //     (ADR-0071) — terzo blocco in fondo.
         const turnRow = inst.db(
           (db) =>
             db.prepare(`SELECT id, taint, messages FROM turns ORDER BY created_at DESC LIMIT 1`).get() as
@@ -247,11 +353,13 @@ describe('acceptance · D · capability e sicurezza', () => {
         // reproduced live before writing this). The kernel's refusal is a
         // `tool_result` message pushed straight into the turn's transcript,
         // so `turns.messages` is where the denial actually lands.
+        // (1) La lettura nuda e' passata. Asserito invece che sottinteso: e'
+        // la meta' che rende visibile ADR-0066, e senza di lei un domani in
+        // cui la lettura tornasse chiusa passerebbe verde.
         const messages: unknown = JSON.parse(turnRow.messages);
-        const denied = JSON.stringify(messages).includes('resource_denied');
-        if (!denied) {
+        if (JSON.stringify(messages).includes('resource_denied')) {
           throw new Error(
-            `nessun tool_result con "resource_denied" nei messaggi del turno — http_get non è stato negato dal kernel:\n` +
+            `la lettura nuda e' stata negata: ADR-0066 dice che non deve esserlo\n` +
               JSON.stringify(messages, null, 2),
           );
         }
@@ -298,6 +406,32 @@ describe('acceptance · D · capability e sicurezza', () => {
             `il secondo turno (stessa sessione, nessuna lettura propria) non eredita taint 3 dalla history ` +
               `reiniettata: ${JSON.stringify(secondTurn)}`,
           );
+        }
+
+        // (3) La protezione che esiste davvero, ADR-0071. Stessa sessione,
+        // quindi ancora taint 3 per eredita': la stessa lettura di prima ma
+        // con una query string che **non compare in nessun ingresso** del
+        // turno. Per l'owner il kernel non nega, si ferma e chiede — e senza
+        // un terminale interattivo quel «chiede» e' un exit 3 con il motivo
+        // scritto, non un fetch silenzioso.
+        const composto = await inst.muffin([
+          'run',
+          '--session',
+          'd10-taint-continuity',
+          '--timeout',
+          '20',
+          'apri quel link con i parametri',
+        ]);
+        if (composto.code !== 3) {
+          throw new Error(
+            `una lettura con parametri composti dal modello non si e' fermata: exit ${composto.code}\n` +
+              `${composto.out}\n${composto.err}`,
+          );
+        }
+        // L'URL intero nel motivo, non solo «serve un permesso»: chi legge
+        // deve poter vedere *cosa* stava per uscire.
+        if (!`${composto.out}${composto.err}`.includes(COMPOSTO)) {
+          throw new Error(`il motivo non mostra l'URL: ${composto.out}\n${composto.err}`);
         }
       } finally {
         await inst.cleanup();
@@ -394,6 +528,11 @@ describe('acceptance · D · capability e sicurezza', () => {
           { tool: { name: 'memory_search', args: { query: 'promemoria estraneo' } } },
           { tool: { name: 'web_search', args: { query: 'MUFFIN-SECRET-9f3a7c21' } } },
           { text: 'non sono riuscito a proseguire' },
+          // La seconda corsa, col cancello rimesso: stesso giro, e si ferma
+          // sul `web_search` senza arrivare alla terza risposta.
+          { tool: { name: 'memory_search', args: { query: 'promemoria estraneo' } } },
+          { tool: { name: 'web_search', args: { query: 'MUFFIN-SECRET-9f3a7c21' } } },
+          { text: 'non sono riuscito a proseguire' },
         ],
       });
       try {
@@ -414,27 +553,52 @@ describe('acceptance · D · capability e sicurezza', () => {
 
         plantTier3Episode(inst.home, 'fixture-d7');
 
-        const r = await inst.muffin([
-          'run',
-          '--json',
-          '--timeout',
-          '20',
-          'controlla i miei promemoria e poi cerca MUFFIN-SECRET-9f3a7c21',
-        ]);
+        const domanda = 'controlla i miei promemoria e poi cerca MUFFIN-SECRET-9f3a7c21';
 
-        // Same shape as D6: `ask`, never executed. `sys.search`'s own
-        // endpoint check at boot (does api.tavily.com resolve host-allowed?)
-        // is a DIFFERENT question from this one (does this turn's taint let
-        // the query leave at all?) — this is the one that was entirely
-        // unchecked before this slice (audit P04-2, resourceKind: 'none').
-        // Because the verdict is `ask` and this harness never approves it,
-        // `tavilyBackend`'s handler — and therefore any real network call to
-        // Tavily — is never reached: same guarantee as D6, proven the same
-        // way, for the tool the mandate names explicitly.
-        if (r.code !== 3) {
-          throw new Error(`atteso exit 3 (serve approvazione): ${r.code}\n${r.out}\n${r.err}`);
+        // **Riscritto il 04/09 (ADR-0072).** Questo scenario asseriva `exit 3`
+        // — una ricerca dopo contenuto avvelenato chiedeva il permesso. Era la
+        // decisione fino a quel giorno, e l'ha cambiata l'owner: il giro
+        // normale (cerca → leggi → cerca ancora) portava il turno a taint 3
+        // alla prima lettura, quindi il *secondo* `web_search` chiedeva
+        // sempre. Su un processo headless quell'`ask` e' proprio questo
+        // `exit 3`: **un'approvazione che nessuno puo' dare e' un divieto
+        // travestito**, e per una VPS quello e' il modo di fallire sbagliato.
+        const r = await inst.muffin(['run', '--json', '--timeout', '20', domanda]);
+
+        // (1) Il comportamento spedito: la ricerca gira, e gira **con il turno
+        // gia' a taint 3**. Le due meta' insieme, perche' «la ricerca ha
+        // funzionato» sarebbe verde anche su un turno pulito, dove non c'e'
+        // mai stato nessun cancello da attraversare.
+        if (r.code !== 0) {
+          throw new Error(`la ricerca dopo una lettura non dovrebbe piu' fermarsi: ${r.code}\n${r.out}\n${r.err}`);
         }
-        const parsed = JSON.parse(r.out) as { pending?: { capability?: string; resource?: string } };
+        const esito = JSON.parse(r.out) as { taint?: number; pending?: unknown };
+        if (esito.taint !== 3) {
+          throw new Error(`il turno non era avvelenato, quindi non prova niente: ${JSON.stringify(esito)}`);
+        }
+        if (esito.pending !== undefined) {
+          throw new Error(`qualcosa ha comunque chiesto: ${JSON.stringify(esito.pending)}`);
+        }
+
+        // (2) E il cancello e' una **manopola**, non una riga tolta: un
+        // `rot/policy.json` che riabbassa `searchMaxTaint` lo rimette, e
+        // l'`ask` torna con la query intera. Senza questa meta', ADR-0072
+        // sarebbe indistinguibile da «il gate e' stato cancellato» — che e'
+        // esattamente la differenza che questo repository ha gia' pagato per
+        // non saper vedere.
+        writeFileSync(
+          join(paths(inst.home).rot, 'policy.json'),
+          JSON.stringify({ schemaVersion: 1, searchMaxTaint: 2 }, null, 2),
+        );
+        seal(inst.home, '1', new Date());
+
+        const stretto = await inst.muffin(['run', '--json', '--timeout', '20', domanda]);
+        if (stretto.code !== 3) {
+          throw new Error(
+            `con searchMaxTaint 2 il cancello doveva tornare: exit ${stretto.code}\n${stretto.out}\n${stretto.err}`,
+          );
+        }
+        const parsed = JSON.parse(stretto.out) as { pending?: { capability?: string; resource?: string } };
         if (parsed.pending?.capability !== 'sys.search') {
           throw new Error(`pending inatteso: ${JSON.stringify(parsed.pending)}`);
         }
@@ -460,7 +624,15 @@ describe('acceptance · D · capability e sicurezza', () => {
    * la prova che quella sonda ha funzionato qui, prima ancora di qualunque
    * asserzione sotto.
    *
-   * `sys.shell` è dichiarato `high` risk (ADR-0027) e in modalità
+   * Dal 06/09 (ADR-0074 punto 4) il tool che questo scenario chiama è
+   * `shell_run_write`: `shell_run` è la corsia in sola lettura e non produce
+   * più nessun ASK, quindi uno scenario che la usasse misurerebbe il contrario
+   * di ciò che dice. Che *entrambe* siano offerte al modello resta la prova che
+   * la sonda del sandbox ha funzionato qui, ed è asserito sotto — su tutte e
+   * due, perché registrarne una sola sarebbe la degradazione silenziosa che
+   * l'ADR vieta.
+   *
+   * `sys.shell.write` è dichiarato `high` risk (ADR-0027) e in modalità
    * single-user — l'unica che `install()` costruisce, mai richiesta
    * `--hardened` — il ramo `high` di `decide()` chiede **sempre**
    * l'approvazione del owner (`core/policy/decide.ts`), e `muffin run`
@@ -485,7 +657,7 @@ describe('acceptance · D · capability e sicurezza', () => {
     async () => {
       const inst = await install({
         main: [
-          { tool: { name: 'shell_run', args: { command: 'echo ciao-dal-sandbox', cwd: 'sub' } } },
+          { tool: { name: 'shell_run_write', args: { command: 'echo ciao-dal-sandbox', cwd: 'sub' } } },
           { text: 'QUESTA RISPOSTA NON DEVE MAI COMPARIRE — il comando non deve girare senza un sì' },
         ],
       });
@@ -496,18 +668,21 @@ describe('acceptance · D · capability e sicurezza', () => {
 
         const call = inst.provider.main()[0];
         if (!call) throw new Error('il modello non è mai stato chiamato');
-        if (!call.tools.includes('shell_run')) {
-          throw new Error(
-            `shell_run non era nella lista tool offerta al modello: la sonda del sandbox non ha ` +
-              `dato esito positivo su questo host: ${call.tools.join(', ')}`,
-          );
+        for (const atteso of ['shell_run', 'shell_run_write']) {
+          if (!call.tools.includes(atteso)) {
+            throw new Error(
+              `${atteso} non era nella lista tool offerta al modello: la sonda del sandbox non ha ` +
+                `dato esito positivo su questo host, oppure le due corsie non si registrano più ` +
+                `insieme: ${call.tools.join(', ')}`,
+            );
+          }
         }
 
         if (r.code !== 3) {
           throw new Error(`atteso exit 3 (serve approvazione, headless non ha canale): ${r.code}\n${r.out}\n${r.err}`);
         }
         const parsed = JSON.parse(r.out) as { pending?: { capability?: string; resource?: string } };
-        if (parsed.pending?.capability !== 'sys.shell') {
+        if (parsed.pending?.capability !== 'sys.shell.write') {
           throw new Error(`pending inatteso: ${JSON.stringify(parsed.pending)}`);
         }
         const resource = parsed.pending.resource ?? '';
@@ -520,8 +695,54 @@ describe('acceptance · D · capability e sicurezza', () => {
       } finally {
         await inst.cleanup();
       }
+
+      /**
+       * **L'altra metà, dal 06/09 (ADR-0074 punto 4): la corsia che non chiede.**
+       *
+       * Fino a oggi questo scenario poteva provare solo il confine di sopra —
+       * il tool è offerto, l'ASK mostra comando e cwd — perché `muffin run`
+       * headless non ha un canale per rispondere e ogni comando finiva lì. È
+       * la riga che ha reso D13 un BLOCKER e che ha fatto fallire 5 delle 6
+       * prove `agentic` della character eval: un turno fermo su un `ask` che
+       * nessuno può dare.
+       *
+       * `shell_run` gira davvero, headless, senza approvatore, e il suo output
+       * torna nella risposta. Nessun `install()` qui costruisce `--hardened`,
+       * quindi non c'è nessuna scorciatoia a spiegarlo: passa perché la
+       * capability è `low`/`reversible: 'yes'`, e lo è perché il sandbox la
+       * tiene dentro un confine — provato in `core/sandbox/confine-sola-lettura.test.ts`,
+       * su Linux nel container di ci:local.
+       */
+      const sola = await install({
+        main: [
+          { tool: { name: 'shell_run', args: { command: 'ls', cwd: 'sub' } } },
+          { text: 'nella sottocartella sub ho trovato il file segnalino.txt' },
+        ],
+      });
+      try {
+        mkdirSync(join(sola.workspace, 'sub'), { recursive: true });
+        writeFileSync(join(sola.workspace, 'sub', 'segnalino.txt'), 'ciao\n', 'utf8');
+
+        const r = await sola.muffin(['run', '--json', '--timeout', '20', 'guarda cosa c\'è in sub']);
+        if (r.code !== 0) {
+          throw new Error(
+            `la shell in sola lettura si è fermata invece di girare (exit ${r.code}): headless non ha ` +
+              `approvatore, quindi un exit 3 qui vuol dire che chiede ancora.\n${r.out}\n${r.err}`,
+          );
+        }
+        // E il comando è girato davvero: l'output del secondo giro contiene il
+        // risultato del primo, cioè il tool ha visto il filesystem.
+        const secondo = sola.provider.main()[1];
+        if (!secondo) throw new Error('il modello non è stato richiamato col risultato del tool');
+        const testo = JSON.stringify(secondo);
+        if (!testo.includes('segnalino.txt')) {
+          throw new Error(`il risultato di \`ls\` non è tornato al modello: ${testo.slice(0, 400)}`);
+        }
+      } finally {
+        await sola.cleanup();
+      }
     },
-    30_000,
+    60_000,
     () => {
       const esito = hostContiene();
       return esito.ok ? null : esito.perche;
@@ -608,5 +829,150 @@ describe('acceptance · D · capability e sicurezza', () => {
       }
     },
     30_000,
+  );
+
+  /**
+   * **D16 — dopo una ricerca web, nella stessa conversazione, la shell
+   * risponde ancora (ADR-0075).**
+   *
+   * La riga nasce da una misura, non da un'idea: il 06/09, sul `muffin.db`
+   * dell'owner, nove turni su quattordici in privato erano a taint 3, l'ultima
+   * chiamata vera alla shell era del 03/09, e l'ultimo turno si era chiuso con
+   * `context taint 3 exceeds 2 for sys.shell (host)`. Dopo una ricerca web,
+   * niente shell e niente scrittura fino a una conversazione nuova — e il
+   * modello lo raccontava come «non ho la shell».
+   *
+   * Perché passa dal binario e non dal kernel: `solo-irreversibile.test.ts`
+   * prova che il kernel non risponde piu' `taint_exceeded` sulla riga `host`,
+   * ed e' un'affermazione sul kernel. Questa e' l'altra: che il **turno vero**
+   * — un processo headless, senza approvatore, con il taint composto dal
+   * loop e non passato a mano — arrivi in fondo. Sono due claim diverse, ed e'
+   * la distinzione che questo repository chiama «un meccanismo che funziona non
+   * e' l'esito giusto».
+   *
+   * Il taint 3 e' reale e non simulato: `web_search` porta il turno a 3 sia
+   * quando risponde sia quando fallisce (`agent/tools/search.ts` dichiara
+   * `throwTier: 3`), che e' esattamente la ragione per cui questo scenario non
+   * ha bisogno di rete vera — la chiave finta e' registrata come in D7, e
+   * l'asserzione guarda il `taint` del turno, non il contenuto dei risultati.
+   *
+   * La seconda meta' e' il cancello come **manopola**: un `rot/policy.json`
+   * che rimette `host.denyAbove: 2` fa tornare il rifiuto, sullo stesso
+   * binario e sullo stesso giro. Senza, ADR-0075 sarebbe indistinguibile da
+   * «il soffitto e' stato cancellato dal codice», e la mutazione che l'ADR
+   * nomina come falsificatore resterebbe una promessa.
+   */
+  scenario(
+    'D16',
+    async () => {
+      // Lo stesso giro due volte: la seconda corsa e' quella col soffitto
+      // rimesso giu' dal file sigillato, e il provider finto consuma il
+      // copione in ordine attraverso entrambe (come in D7).
+      //
+      // **Perche' due porte e non solo `web_search`.** La ricerca c'e', ed e'
+      // la porta della storia: il turno la chiama per prima, e il fatto che
+      // possa chiamarla e' gia' meta' della riga. Ma il **livello 3** non puo'
+      // venire da lei in questa suite: l'endpoint di Tavily e' una costante
+      // verificata alla registrazione (`core/config/providers.ts`), quindi
+      // senza rete vera la chiamata torna con `tier: 0` e il turno resterebbe
+      // a 2 — un verde che proverebbe il contrario di cio' che dice. Il
+      // livello arriva quindi dalla stessa porta che D7 usa: un episodio di
+      // livello 3 piantato nello store e ripescato da `memory_search`, cioe'
+      // il residuo di una ricerca web fatta prima. Per il kernel e' lo stesso
+      // numero e la stessa domanda («questo turno contiene contenuto di
+      // livello 3»), e per lo scenario e' la differenza fra misurare il
+      // soffitto e misurare la connessione di chi esegue la suite.
+      const giro = [
+        { tool: { name: 'web_search', args: { query: 'come si legge una directory' } } },
+        { tool: { name: 'memory_search', args: { query: 'promemoria estraneo' } } },
+        { tool: { name: 'shell_run', args: { command: 'ls', cwd: 'sub' } } },
+        { text: 'ho cercato, e poi in sub ho trovato segnalino.txt' },
+      ];
+      const inst = await install({ main: [...giro, ...giro] });
+      try {
+        mkdirSync(join(inst.workspace, 'sub'), { recursive: true });
+        writeFileSync(join(inst.workspace, 'sub', 'segnalino.txt'), 'ciao\n', 'utf8');
+
+        // Accende `web_search`, come D7: una chiave che risolve e l'endpoint
+        // in allowlist, cosi la registrazione riesce (`agent/runtime.ts`).
+        const configPath = paths(inst.home).config;
+        const config = JSON.parse(readFileSync(configPath, 'utf8'));
+        config.search = { provider: 'tavily', apiKeyRef: 'secret://tavily' };
+        writeFileSync(configPath, JSON.stringify(config, null, 2));
+        writeSecret('tavily', 'tvly-fake-key-never-sent', inst.home);
+        const egressPath = join(paths(inst.home).rot, 'egress.json');
+        const egress = JSON.parse(readFileSync(egressPath, 'utf8'));
+        egress.allow = ['api.tavily.com'];
+        writeFileSync(egressPath, JSON.stringify(egress, null, 2));
+        seal(inst.home, '1', new Date());
+        plantTier3Episode(inst.home, 'fixture-d16');
+
+        const domanda = 'cerca come si legge una directory e poi guardami cosa c\'e\' in sub';
+        const r = await inst.muffin(['run', '--json', '--timeout', '30', domanda]);
+
+        if (r.code !== 0) {
+          throw new Error(
+            `il turno non arriva in fondo (exit ${r.code}): headless non ha approvatore, quindi un ` +
+              `exit 3 qui vuol dire che qualcosa chiede, e un altro codice che qualcosa nega.\n${r.out}\n${r.err}`,
+          );
+        }
+        const esito = JSON.parse(r.out) as { taint?: number; pending?: unknown };
+        // Senza questa riga lo scenario sarebbe verde anche su un turno pulito,
+        // dove non c'e' mai stato nessun soffitto da attraversare.
+        if (esito.taint !== 3) {
+          throw new Error(`il turno non era a livello 3, quindi non prova niente: ${JSON.stringify(esito)}`);
+        }
+        if (esito.pending !== undefined) {
+          throw new Error(`qualcosa ha comunque chiesto: ${JSON.stringify(esito.pending)}`);
+        }
+
+        // E la shell ha risposto **davvero**: il suo risultato e' tornato al
+        // modello. «Il turno e' arrivato in fondo» sarebbe vero anche se il
+        // tool avesse restituito un rifiuto come contenuto.
+        const chiamate = inst.provider.main();
+        const testo = JSON.stringify(chiamate.slice(1));
+        if (!testo.includes('segnalino.txt')) {
+          throw new Error(`il risultato di \`ls\` non e' tornato al modello: ${testo.slice(0, 600)}`);
+        }
+        if (/taint_exceeded/.test(testo)) {
+          throw new Error(`il kernel ha comunque rifiutato per taint dentro il turno: ${testo.slice(0, 600)}`);
+        }
+
+        const riga = inst.db(
+          (db) =>
+            db
+              .prepare(`SELECT tool, is_error AS isError FROM turn_tool_calls WHERE tool = 'shell_run' ORDER BY started_at DESC LIMIT 1`)
+              .get() as { tool: string; isError: number | null } | undefined,
+        );
+        if (!riga || riga.isError === 1) {
+          throw new Error(`nessuna shell_run riuscita registrata: ${JSON.stringify(riga)}`);
+        }
+
+        // La manopola: rimesso il soffitto a 2 in un `policy.json` sigillato,
+        // lo stesso giro torna a essere rifiutato.
+        writeFileSync(
+          join(paths(inst.home).rot, 'policy.json'),
+          JSON.stringify({ schemaVersion: 1, rows: { host: { denyAbove: 2 } } }, null, 2),
+        );
+        seal(inst.home, '1', new Date());
+
+        const primeChiamate = chiamate.length;
+        const stretto = await inst.muffin(['run', '--json', '--timeout', '30', domanda]);
+        const dopo = JSON.stringify(inst.provider.main().slice(primeChiamate));
+        if (!/taint_exceeded/.test(dopo)) {
+          throw new Error(
+            `con host.denyAbove 2 il rifiuto doveva tornare, e non e' tornato: il soffitto non e' piu' ` +
+              `una manopola del file sigillato.\nexit ${stretto.code}\n${dopo.slice(0, 800)}`,
+          );
+        }
+      } finally {
+        await inst.cleanup();
+      }
+    },
+    90_000,
+    () => {
+      const esito = hostContiene();
+      return esito.ok ? null : esito.perche;
+    },
   );
 });

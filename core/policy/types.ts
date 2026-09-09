@@ -103,10 +103,34 @@ export type DecisionRequest = {
   args: Readonly<Record<string, unknown>>;
   /** Recomputed at every call, never frozen for the turn (blueprint 03 §2). */
   taint: TrustTier;
+  /**
+   * Questi byte erano **già** nel turno prima che il modello li scrivesse?
+   *
+   * La domanda che `taint` da solo non sa fare, e la ragione per cui il gate
+   * sui parametri si comportava come un guasto. `hasParams` non distingue una
+   * query che il modello si è **inventato** — il canale di esfiltrazione — da
+   * un URL che ha **copiato** da un risultato di ricerca, e nella ricerca vera
+   * quasi ogni link ha un `?`. Risultato misurato: dopo la prima pagina letta,
+   * seguire un link chiedeva un'approvazione ogni volta, per sempre.
+   *
+   * L'argomento di sicurezza è che questo *non* è una comodità. Non si può
+   * esfiltrare un dato attraverso una stringa che esisteva già **prima** che
+   * il dato fosse visto: chi ha scritto quella pagina non conosceva il
+   * segreto quando l'ha scritta. Se il modello aggiunge un byte suo, la
+   * stringa non è più citata e il cancello torna.
+   *
+   * Contano solo gli **ingressi** — il messaggio della persona e i risultati
+   * dei tool — mai il testo che il modello ha prodotto: altrimenti basterebbe
+   * scrivere l'URL in un turno e «citarlo» in quello dopo per lavarlo.
+   *
+   * `undefined` significa «chi chiama non lo sa», ed è trattato come `false`:
+   * un chiamante che non misura la provenienza non guadagna niente.
+   */
+  quoted?: boolean | undefined;
 };
 
 export type RiskClass = 'low' | 'medium' | 'high';
-type Reversibility = 'yes' | 'undoable' | 'no';
+export type Reversibility = 'yes' | 'undoable' | 'no';
 
 /**
  * **Where the bytes of this effect end up** — the row of the threat model's own
@@ -125,9 +149,12 @@ type Reversibility = 'yes' | 'undoable' | 'no';
  * sink, the safer one shut. See ADR-0053.
  *
  * `risk` and `effect` are different questions and both are needed: risk says how
- * bad it is to get this wrong (and drives allow/draft/ask), effect says where
- * the result lands (and drives the ceiling and the floor above which nothing is
- * unattended). A capability that answers only one of the two is the shape the
+ * bad it is to get this wrong, effect says where the result lands. The row
+ * drives the ceiling and — since ADR-0074, via `RowPolicy.asksForIrreversible`
+ * — whether an irreversible declaration on it is worth a human's confirmation.
+ * `risk` still decides safe mode, the budget gate, whether an `undoable` write
+ * is a `draft`, and the queue for autonomous principals; it no longer decides
+ * the `ask`. A capability that answers only one of the two is the shape the
  * drift came in.
  *
  * `core/policy/effect-rows.test.ts` asserts every shipped declaration against
@@ -144,6 +171,28 @@ export type EffectRow =
   | 'egress'
   /** A durable write to the tenant's own memory. */
   | 'memory'
+  /**
+   * A deliberate durable write **inside the writing tenant's own vault** —
+   * ADR-0073 punto 2, la riga che rende una stanza uno spazio invece di una
+   * sola conversazione.
+   *
+   * Perché non `memory` e perché non `host`. Non `memory`: quella riga è
+   * l'episodio che ogni turno scrive da sé, automatico e senza un file
+   * dietro; qui c'è un file, un giornale e un `muffin undo`, e chi scrive lo
+   * ha chiesto. Non `host`: `host` è la macchina dell'owner — il suo disco,
+   * la sua shell, i suoi processi — e una stanza non ne ha una. `fs.*` resta
+   * `hostOnly` e non concedibile proprio perché le due cose non sono la
+   * stessa.
+   *
+   * Il soffitto della riga è **esplicito e alto** (`denyAbove: 3`,
+   * `asksForIrreversible: false`): byte che restano dentro il confine del
+   * tenant che li scrive, senza lettura cross-tenant e senza host esterno,
+   * non attraversano mai un `ask` a nessun taint. Ciò che rende la scrittura
+   * sicura è il confine, non la fiducia in chi scrive — e il confine lo
+   * costruisce il tool (`agent/tools/vault-save.ts`: il tenant è quello del
+   * turno, mai un argomento), non questo numero.
+   */
+  | 'vault'
   /** Third-party code or services outside the allowlist model (MCP). */
   | 'external'
   /** A **new** recipient: mail, a message to someone else, publication. */
@@ -159,6 +208,19 @@ export type EffectRow =
  */
 export type CapabilityDecl = {
   readonly id: CapabilityId;
+  /**
+   * How bad it is to get this wrong. **Not** how hard it is to undo — that is
+   * `reversible`, one field down, and conflating the two is what ADR-0074
+   * unwound.
+   *
+   * What it still decides, exhaustively, so nobody has to guess whether the
+   * field is dead: safe mode refuses anything above `low` when the root of
+   * trust diverged; the budget gate is consulted for anything above `low`; an
+   * `undoable` write becomes a `draft` only above `low` (a low-risk undoable
+   * has no file for the loop to photograph); and a `high` request from a
+   * `system`/`agent` principal is queued for a human instead of granted at
+   * 3am. What it no longer decides is the `ask` — see `decide.ts`.
+   */
   readonly risk: RiskClass;
   readonly reversible: Reversibility;
   /**
@@ -257,8 +319,34 @@ export interface PermissionSnapshot {
   readonly principal: Principal;
   readonly tenant: TenantId;
   currentTaint(): TrustTier;
-  /** What this turn is gated on right now — every raise, ceiling-only included. */
-  raiseTaint(tier: TrustTier): void;
+  /**
+   * **Da dove viene il livello che `currentTaint` riporta**, in parole, o
+   * `null` per un turno che non è mai salito sopra ciò con cui è nato.
+   *
+   * ADR-0075 punto 4: il taint torna a essere provenienza, e una provenienza
+   * che non si può nominare non la vede nessuno. Il prompt di ogni `ask` la
+   * porta (`agent/loop/tool-call.ts`) come già porta l'irreversibilità
+   * dell'effetto — «questo turno contiene contenuto di livello 3: il risultato
+   * di web_search» — così l'owner decide sapendo *perché* la domanda arriva
+   * adesso.
+   *
+   * **Non è un secondo registro**: è l'etichetta che accompagna l'unico
+   * valore, scritta dallo stesso `raiseTaint`/`raiseCeiling` che lo alza e
+   * sostituita solo quando il livello sale davvero. Un registro a parte
+   * potrebbe dire una cosa mentre il numero ne dice un'altra, ed è la cucitura
+   * che `docs/JUDGE.md` chiama per nome.
+   */
+  taintOrigin(): string | null;
+  /**
+   * What this turn is gated on right now — every raise, ceiling-only included.
+   *
+   * `origin` names, in the caller's own words, what carried these bytes in —
+   * `il risultato di web_search`, `la memoria richiamata`. Optional because a
+   * raise with no name is still a raise and must never be dropped; it is
+   * recorded only when the tier actually moves the level, so the label and the
+   * number cannot disagree (`taintOrigin` above).
+   */
+  raiseTaint(tier: TrustTier, origin?: string): void;
   /**
    * Raises the ceiling `currentTaint` reads, without raising what
    * `intrinsicTaint` reports — for taint that is reinjected from a *past*
@@ -266,8 +354,10 @@ export interface PermissionSnapshot {
    * produced or observed. The turn still may not act freely on it (the
    * ceiling gates every `check()` below); its own new output does not inherit
    * it as if this turn had caused it.
+   *
+   * `origin`: same contract as `raiseTaint`'s.
    */
-  raiseCeiling(tier: TrustTier): void;
+  raiseCeiling(tier: TrustTier, origin?: string): void;
   /**
    * What this turn's own newly-written content should be stamped with, for a
    * later turn's reinjection to read back — the ceiling, minus whatever
@@ -283,4 +373,11 @@ export interface PermissionSnapshot {
    */
   invalidate(): void;
   check(capability: CapabilityId, resource: Resource, args: Readonly<Record<string, unknown>>): Decision;
+  /**
+   * Registra byte che sono **entrati** nel turno: il messaggio della persona,
+   * il risultato di un tool. Mai l'output del modello — vedi
+   * `DecisionRequest.quoted` per perché quella distinzione è il meccanismo e
+   * non un dettaglio.
+   */
+  recordInput(text: string): void;
 }
