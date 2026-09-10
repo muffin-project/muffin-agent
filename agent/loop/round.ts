@@ -274,7 +274,9 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // `requestChatResult` below never touches `chatStream` at all.
       stream: Boolean(input.onDelta && deps.provider.chatStream),
     };
-    const modelLease = execution.beginModelCall(input.signal);
+    const modelLease = execution.beginModelCall(input.signal, (progress) => {
+      input.onProgress?.({ type: 'model_status', ...progress });
+    });
     const callWithBudget: ChatCall = { ...call, signal: modelLease.signal };
 
     const chatSpan = deps.tracer.start(
@@ -335,13 +337,17 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     const requestChatResult = async (): Promise<ChatResult> => {
       if (!call.stream || !deps.provider.chatStream) return deps.provider.chat(callWithBudget);
       try {
-        return await drainStream(deps.provider.chatStream(callWithBudget), (text) => {
+        return await drainStream(
+          deps.provider.chatStream(callWithBudget),
+          (text) => {
           if (!input.onDelta) return;
           const out = trim(text);
           if (out === null) return; // finora solo spazio: non è ancora niente
           emittedLive = true;
           input.onDelta({ type: 'text', text: out });
-        });
+          },
+          (kind) => modelLease.activity(kind),
+        );
       } catch (error) {
         if (!(error instanceof ProviderStreamError)) throw error;
         closeLive('superseded');
@@ -435,6 +441,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     }
     chatSpan.setAttributes({
       [ATTR.responseModel]: result.model,
+      ...(result.requestId === undefined ? {} : { 'muffin.chat_call.request_id': result.requestId }),
       // L'attributo era dichiarato in `core/tracing/types.ts` e **non lo
       // scriveva nessuno**: il difetto di serie di questa repo, un
       // meccanismo senza chiamante. Ora porta chi ha risposto davvero,

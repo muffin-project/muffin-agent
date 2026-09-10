@@ -506,14 +506,14 @@ describe('execution budget', () => {
     const h = harness({
       provider,
       profile: { ...CONSERVATIVE, recovery: ['retryOnce'] },
-      execution: new ExecutionBudget({ modelCallDeadlineMs: 10, turnWallDeadlineMs: 100 }),
+      execution: new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 200, firstActivityTimeoutMs: 10, stallTimeoutMs: 20 }),
     });
 
     const result = await runRounds(h.scope);
 
     expect(calls).toBe(1);
     expect(result.stopped).toBe('error');
-    expect(result.reason).toBe('model_deadline');
-    expect(h.span.attrs['muffin.turn.stop_reason']).toBe('model_deadline');
+    expect(result.reason).toBe('model_first_activity_timeout');
+    expect(h.span.attrs['muffin.turn.stop_reason']).toBe('model_first_activity_timeout');
   });
 });

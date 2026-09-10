@@ -791,6 +791,12 @@ export type TurnDelta =
 export type TurnEvent =
   | { type: 'round'; n: number }
   | {
+      type: 'model_status';
+      status: 'waiting_for_model' | 'thinking' | 'receiving' | 'stalled';
+      elapsedMs: number;
+      idleMs: number;
+    }
+  | {
       type: 'model';
       model: string;
       ms: number;

@@ -295,6 +295,8 @@ export type ChatResult = {
   stopReason: StopReason;
   usage: Usage;
   model: string;
+  /** Provider request/generation id, when the upstream returns one. */
+  requestId?: string;
   /**
    * Chi ha risposto davvero, quando fra noi e il modello c'è uno smistatore.
    *

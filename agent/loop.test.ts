@@ -1582,10 +1582,11 @@ describe('agent loop · progress (B13)', () => {
     const events: TurnEvent[] = [];
     await runTurn(d, { ...input(store), onProgress: (e) => events.push(e) });
 
-    expect(events.map((e) => e.type)).toEqual(['round', 'model', 'tool_start', 'tool_end', 'round', 'model']);
+    expect(events.filter((e) => e.type !== 'model_status').map((e) => e.type)).toEqual(['round', 'model', 'tool_start', 'tool_end', 'round', 'model']);
+    expect(events.filter((e) => e.type === 'model_status').length).toBeGreaterThan(0);
     // The round that called the tool is tagged `tool_use` — the same value
     // `checkCompletion`/the transcript itself would agree on, not a guess.
-    expect(events[1]).toMatchObject({ type: 'model', stopReason: 'tool_use' });
+    expect(events.filter((e) => e.type === 'model')[0]).toMatchObject({ type: 'model', stopReason: 'tool_use' });
   });
 
   it('tool_start carries the name and capability; tool_end carries how long it took and whether it errored', async () => {
