@@ -142,6 +142,29 @@ describe('muffin init infers the provider from the key — headless, no TTY requ
   });
 });
 
+describe('the owner-facing command surface', () => {
+  it('keeps primary help small while the full control plane remains reachable', () => {
+    const { dir, xdg } = scratchHome();
+    const primary = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['--help']);
+    expect(primary.code).toBe(0);
+    expect(primary.out).toContain('muffin surface');
+    expect(primary.out).not.toContain('muffin orientamento');
+    expect(primary.out.split('\n').length).toBeLessThan(20);
+
+    const all = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['help', '--all']);
+    expect(all.out).toContain('muffin orientamento');
+    expect(all.out).toContain('muffin secret');
+  });
+
+  it('generates completion from the same command vocabulary', () => {
+    const { dir, xdg } = scratchHome();
+    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['completion', 'bash']);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('surface');
+    expect(r.out).toContain('orientamento');
+  });
+});
+
 describe('selective Italian command aliases (ADR-0036)', () => {
   it('memoria behaves exactly like memory', () => {
     const { dir, xdg } = scratchHome();
@@ -172,29 +195,20 @@ describe('selective Italian command aliases (ADR-0036)', () => {
     expect(alias.err).toBe(canonical.err);
   });
 
-  it('scrivere una seconda copia di un segreto lo dice subito, e dice quale delle due viene letta', () => {
-    // Il caso vero (install dell'owner, 26/08/2026): `secret set --persist`
-    // finito dietro una copia in home scritta da `init` mesi prima. La catena
-    // di lettura prende la PRIMA che esiste, quindi la scrittura nuova non
-    // veniva mai letta e l'unico a dirlo era `doctor`.
+  it('secret set converges an old home copy onto the one durable authority', () => {
     const { dir, xdg } = scratchHome();
     const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
 
     const primo = muffin(env, ['secret', 'set', 'provider_api_key'], 'sk-in-home\n');
     expect(primo.code).toBe(0);
-    expect(primo.err).toBe(''); // una sola copia: niente da dire
+    expect(primo.out).toContain(join(xdg, 'muffin', 'secrets', 'provider_api_key'));
 
-    // La copia ombreggiata: scritta, ma `home` ha la precedenza.
+    // The old spelling remains compatible but cannot create a second location.
     const ombreggiata = muffin(env, ['secret', 'set', 'provider_api_key', '--persist'], 'sk-persisted\n');
     expect(ombreggiata.code).toBe(0);
-    expect(ombreggiata.err).toContain('non verrà mai usata');
-    expect(ombreggiata.err).toContain(join(dir, 'secrets', 'provider_api_key'));
-
-    // E il verso opposto: riscrivere quella che vince nomina l'altra come morta.
-    const vincente = muffin(env, ['secret', 'set', 'provider_api_key'], 'sk-in-home-2\n');
-    expect(vincente.code).toBe(0);
-    expect(vincente.err).toContain('non viene più letta');
-    expect(vincente.err).toContain(join(xdg, 'muffin', 'secrets', 'provider_api_key'));
+    expect(ombreggiata.err).toBe('');
+    expect(readFileSync(join(xdg, 'muffin', 'secrets', 'provider_api_key'), 'utf8')).toContain('sk-persisted');
+    expect(existsSync(join(dir, 'secrets', 'provider_api_key'))).toBe(false);
   });
 
   it('a word that merely resembles an alias is not resolved — the map is exact, not fuzzy', () => {
@@ -220,17 +234,18 @@ describe('the top-level error and usage surface, in Italian (ADR-0036)', () => {
     const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['frobnicate']);
     expect(r.code).toBe(78);
     expect(r.err).toContain('comando sconosciuto: frobnicate');
-    expect(r.err).toContain('muffin config');
+    expect(r.err).toContain('muffin help --all');
   });
 
-  it('--help lists muffin config and the alias table', () => {
+  it('--help is the compact owner surface; --all keeps the compatible control plane discoverable', () => {
     const { dir, xdg } = scratchHome();
     const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['--help']);
     expect(r.code).toBe(0);
-    expect(r.out).toContain('muffin config');
-    expect(r.out).toContain('memoria=memory');
-    expect(r.out).toContain('lavori=jobs');
-    expect(r.out).toContain('segreto=secret');
+    expect(r.out).not.toContain('muffin config');
+    expect(r.out).toContain('muffin surface');
+    const all = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['help', '--all']);
+    expect(all.out).toContain('muffin config');
+    expect(all.out).toContain('muffin memory');
   });
 });
 
@@ -561,10 +576,10 @@ describe('muffin rot harden — spiega e propone, non esegue mai (wiring reale)'
     expect(r.err).toContain('harden');
   });
 
-  it('--help elenca `harden` accanto a verify | reseal', () => {
+  it('the advanced help keeps rot recovery discoverable without putting it in the owner help', () => {
     const { dir, xdg } = scratchHome();
-    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['--help']);
-    expect(r.out).toContain('muffin rot verify | reseal | harden');
+    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['help', '--all']);
+    expect(r.out).toContain('muffin rot');
   });
 
   it('un errore che nessuno ha previsto resta una frase, non uno stack', () => {

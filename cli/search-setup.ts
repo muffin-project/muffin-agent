@@ -1,4 +1,4 @@
-import { loadConfig, saveConfig, writeSecret, locateSecret } from '../core/config/config.js';
+import { loadConfig, saveConfig, writeAuthoritativeSecret, writeSecret, locateSecret, type SecretBackend } from '../core/config/config.js';
 import { SEARCH_PROVIDERS, SEARCH_PROVIDER_IDS, type SearchProviderId } from '../core/config/providers.js';
 import { widenEgressForCapability } from '../core/rot/egress-writer.js';
 
@@ -59,6 +59,8 @@ export type SearchDeps = {
    * rimedio stampato.
    */
   chiediConferma?: (domanda: string) => Promise<string | undefined>;
+  /** CLI owner flow selects persistent authority; isolated callers retain Home fixtures. */
+  secretBackend?: SecretBackend;
 };
 
 function stato(home: string, out: (l: string) => void): number {
@@ -146,7 +148,9 @@ export async function cmdSearch(home: string, argv: string[], deps: SearchDeps):
     return 78;
   }
 
-  const at = writeSecret(entry.secretName, chiave, home, 'home');
+  const at = deps.secretBackend === 'persistent'
+    ? writeAuthoritativeSecret(entry.secretName, chiave, home)
+    : writeSecret(entry.secretName, chiave, home, 'home');
   const config = loadConfig(home);
   saveConfig({ ...config, search: { provider: entry.id, apiKeyRef: `secret://${entry.secretName}` } }, home);
   out(`ricerca web: ${entry.label} · chiave (${chiave.length} caratteri, 0600) → ${at}`);
