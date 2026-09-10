@@ -124,6 +124,7 @@ describe('le preferenze di instradamento', () => {
       data_collection: 'deny',
     });
     expect(routingBody({ requireParameters: true })).toEqual({ require_parameters: true });
+    expect(routingBody({ only: ['Alibaba'], allowFallbacks: false })).toEqual({ only: ['Alibaba'], allow_fallbacks: false });
   });
 
   /**

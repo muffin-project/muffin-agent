@@ -257,6 +257,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // `undefined` is not the same as an absent field, and the difference is
       // exactly what the newest models reject.
       ...(deps.profile.sampling === 'deterministic' ? { temperature: 0 } : {}),
+      ...(deps.samplingOverride === undefined ? {} : { sampling: deps.samplingOverride }),
       // Backward-compatible profile/config vocabulary is normalized once at
       // the loop boundary. Adapters no longer need to interpret profile
       // strings; they receive the provider-agnostic reasoning intent.
