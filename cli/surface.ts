@@ -14,6 +14,7 @@ import {
   paths,
   readSecret,
   saveConfig,
+  writeAuthoritativeSecret,
   ConfigError,
   type Config,
 } from '../core/config/config.js';
@@ -289,25 +290,41 @@ export async function cmdSurfaceEnable(
   id: string,
   ownerFlag?: string,
   apiBaseFlag?: string,
+  promptSecret?: ((question: string) => Promise<string | undefined>) | undefined,
 ): Promise<number> {
   if (id === 'cli') {
     process.stderr.write(`la CLI è sempre abilitata\n`);
     return 0;
   }
   const reg = INGRESS_PORTS.find((r) => r.id === id);
+  if (id === 'telegram') return enableTelegram(home, ownerFlag, apiBaseFlag, promptSecret);
   if (reg) return reg.enable(home, ownerFlag, apiBaseFlag);
   process.stderr.write(`superficie sconosciuta: ${id}\n${SURFACE_USAGE}`);
   return 78;
 }
 
-async function enableTelegram(home: string, ownerFlag?: string, apiBaseFlag?: string): Promise<number> {
+async function enableTelegram(
+  home: string,
+  ownerFlag?: string,
+  apiBaseFlag?: string,
+  promptSecret?: ((question: string) => Promise<string | undefined>) | undefined,
+): Promise<number> {
   let token: string;
   try {
     token = readSecret('secret://telegram_token', home);
   } catch (error) {
-    process.stderr.write(`${(error as ConfigError).message}\n`);
-    process.stderr.write(`  → prendi un token da @BotFather, poi:\n    echo -n "<token>" | muffin secret set telegram_token\n`);
-    return 78;
+    if (!promptSecret) {
+      process.stderr.write(`${(error as ConfigError).message}\n`);
+      process.stderr.write(`  → passa il token su stdin: muffin secret set telegram_token\n`);
+      return 78;
+    }
+    const entered = await promptSecret('Token Telegram (nascosto — da @BotFather): ');
+    if (!entered) {
+      process.stderr.write('Telegram non abilitata: manca il token.\n');
+      return 78;
+    }
+    writeAuthoritativeSecret('telegram_token', entered, home);
+    token = entered;
   }
 
   const config = loadConfig(home);

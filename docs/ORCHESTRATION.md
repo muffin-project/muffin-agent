@@ -72,6 +72,21 @@ A slice should make one coherent falsifiable claim. FAST maintenance items may b
 clustered when they remain independently readable; STANDARD/CRITICAL work should
 normally have one primary claim.
 
+### Scope follows the outcome, not a firewall
+
+One primary outcome is a centre of gravity, not a prohibition on repairing what
+the work exposes. Fix an opportunistic finding in the current slice when it is
+local, reversible, well understood, economically testable, does not collide
+with another writer, and neither changes product behaviour nor silently changes
+authority, privacy, security or durable-data semantics. Keep the repair visibly
+isolated in the diff when it is technically unrelated.
+
+Escalate rather than absorb a finding when it needs an owner/product choice, a
+security/authority decision, a risky migration/data-loss trade-off, or an
+architecture costly to reverse. Bring the evidence and a recommendation; do not
+turn an obvious one-line repair into a new issue merely to preserve a ceremonial
+scope boundary.
+
 Do not use PR/session boundaries to define the product architecture. A claim can
 survive a compact, rate limit or new worker because its evidence and Git state
 survive them.

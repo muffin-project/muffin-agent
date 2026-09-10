@@ -92,6 +92,21 @@ MUFFIN_API_KEY_FILE=/run/secrets/muffin-key sh install.sh
 
 That is a *path* in the environment, not a secret. See ADR-0048.
 
+## Native first; Docker is not a second installer yet
+
+The supported personal Home path is native: it is the only path exercised by
+the Ubuntu acceptance, including the generated user service, update/rollback
+and the actual launcher. A Docker/Compose Home would still need an explicit
+answer for persistent owner data, a supervisor and updates; adding an unproved
+second path would duplicate those boundaries while not replacing Muffin's
+separate tool-execution sandbox. Do not infer that a container makes model tool
+execution contained, and do not use privileged containers, broad host mounts or
+the Docker socket as a shortcut.
+
+For a VPS, Docker remains a candidate only when a composed path can prove a
+smaller owner journey end-to-end than this native one. That evidence does not
+exist at this commit, so no official Docker path is advertised.
+
 ## Overrides
 
 | Variable | Default | What it changes |
@@ -138,8 +153,10 @@ muffin uninstall          # ~/.muffin: config, keys, memory
 rm -rf ~/.local/share/muffin   # the checkout and the bundled Node
 ```
 
-A key stored with `--persist` lives outside `~/.muffin` on purpose and survives
-`muffin uninstall`; the command says where it is so you can delete it too.
+New values entered through an owner-facing capability setup are stored in the
+persistent secret location; the old `--persist` spelling remains a compatibility
+no-op. `muffin uninstall` names a persistent key it leaves behind so it is never
+surprising.
 
 ## How this page stays true
 

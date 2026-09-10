@@ -123,6 +123,7 @@ export function buildContext(
    * wrong direction entirely.
    */
   undoneTraceIds: ReadonlySet<string>,
+  firstEncounter = false,
 ): Message[] {
   const { kept, dropped } = spoken;
 
@@ -213,6 +214,7 @@ export function buildContext(
     profilo,
     ...(istanza ? { istanza } : {}),
     ...(timeZone !== undefined ? { timeZone } : {}),
+    ...(firstEncounter ? { firstEncounter } : {}),
   });
 
   // Recalled memory rides in the same turn as the message it is context for, not
