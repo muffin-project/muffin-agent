@@ -280,7 +280,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       },
       turn,
     );
-    const reasoningResolution = deps.provider.resolveReasoning?.(call);
+    const reasoningResolution = await deps.provider.resolveReasoning?.(call);
     if (reasoningResolution !== undefined) {
       chatSpan.setAttributes({
         'muffin.chat_call.reasoning_capability_source': reasoningResolution.capabilitySource,
@@ -718,6 +718,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
         ...(result.text ? [{ type: 'text' as const, text: result.text }] : []),
         ...result.toolCalls.map((c) => ({ type: 'tool_use' as const, id: c.id, name: c.name, input: c.args })),
       ],
+      ...(result.providerMetadata === undefined ? {} : { providerMetadata: result.providerMetadata }),
     });
     // Checkpointed **here**, and not only at the top of the next iteration.
     //

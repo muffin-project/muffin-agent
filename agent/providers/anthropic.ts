@@ -249,7 +249,7 @@ function requestBody(call: ChatCall): Omit<Anthropic.MessageCreateParamsNonStrea
 
 function resolveAnthropicReasoning(call: ChatCall): ReasoningResolution {
   const capabilities: ReasoningCapabilities = {
-    supported: true,
+    support: 'supported',
     canDisable: true,
     supportedEfforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
     supportsMaxTokens: /claude-(?:haiku|sonnet|opus)-4[.-]5(?:$|[-:])/.test(call.model),
