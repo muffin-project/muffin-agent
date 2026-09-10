@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { z } from 'zod';
 import { SEARCH_PROVIDER_IDS } from './providers.js';
 import { homedir } from 'node:os';
@@ -584,7 +584,7 @@ export function readSecret(ref: string, home = muffinHome()): string {
   if (!found) {
     throw new ConfigError(
       `missing secret "${name}" — cercato in ${SECRET_BACKENDS.map((b) => secretDir(b, home)).join(' e ')}`,
-      `write it with \`muffin secret set ${name}\` (aggiungi --persist perché sopravviva a \`muffin uninstall\`)`,
+      `write it with \`muffin secret set ${name}\``,
     );
   }
   return readFileSync(found.path, 'utf8').trim();
@@ -603,6 +603,16 @@ export function writeSecret(
   writeFileSync(file, `${value}\n`, { encoding: 'utf8', mode: 0o600 });
   chmodSync(file, 0o600);
   return file;
+}
+
+/** One durable authority for values entered by an owner-facing flow. */
+export function writeAuthoritativeSecret(name: string, value: string, home = muffinHome()): string {
+  const persistent = writeSecret(name, value, home, 'persistent');
+  // Compatibility reads of an old home copy remain supported until this path
+  // acquires a replacement. Once it does, keeping a shadow would make the
+  // winner depend on precedence instead of the owner's latest action.
+  rmSync(join(secretDir('home', home), name), { force: true });
+  return persistent;
 }
 
 export function requireSecretRef(ref: string): string {

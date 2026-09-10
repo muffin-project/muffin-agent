@@ -13,6 +13,7 @@ import {
   readDefaultChannel,
   readSecret,
   secretDir,
+  writeAuthoritativeSecret,
   writeSecret,
 } from './config.js';
 
@@ -142,17 +143,16 @@ describe('the secret chain says which link answered', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("this install's own store wins, so `muffin secret set` is never a no-op", () => {
+  it('an authoritative rewrite removes the stale home shadow', () => {
     const dir = mkdtempSync(join(tmpdir(), 'muffin-shadow-'));
     vi.stubEnv('XDG_CONFIG_HOME', join(dir, 'xdg'));
     const muffinHome = join(dir, '.muffin');
     writeSecret('provider_api_key', 'vecchia', muffinHome, 'persistent');
     writeSecret('provider_api_key', 'nuova', muffinHome, 'home');
+    writeAuthoritativeSecret('provider_api_key', 'authoritative', muffinHome);
 
-    expect(readSecret('secret://provider_api_key', muffinHome)).toBe('nuova');
-    // Both are visible, which is what lets `doctor` warn instead of the losing
-    // copy sitting there forever looking like the key in use.
-    expect(locateSecretAll('secret://provider_api_key', muffinHome)).toHaveLength(2);
+    expect(readSecret('secret://provider_api_key', muffinHome)).toBe('authoritative');
+    expect(locateSecretAll('secret://provider_api_key', muffinHome).map((item) => item.backend)).toEqual(['persistent']);
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -168,7 +168,7 @@ describe('the secret chain says which link answered', () => {
     }
     expect(caught?.message).toContain(secretDir('home', muffinHome));
     expect(caught?.message).toContain(secretDir('persistent', muffinHome));
-    expect(caught?.remedy).toContain('--persist');
+    expect(caught?.remedy).toContain('muffin secret set provider_api_key');
     rmSync(dir, { recursive: true, force: true });
   });
 
