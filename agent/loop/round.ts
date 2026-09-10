@@ -14,6 +14,7 @@ import {
   ProviderError,
   ProviderStreamError,
 } from '../providers/types.js';
+import { ReasoningConfigurationError, reasoningFromLegacyThinking } from '../providers/reasoning.js';
 import { checkpoint, finish, suspendHere, type TurnScope } from './durability.js';
 import type { ExecutionBudget, ModelCallLease, ModelCallTelemetry } from './execution-budget.js';
 import { drainStream, edgeTrimmer, retryDelayMs } from './stream.js';
@@ -233,6 +234,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       });
     }
 
+    const reasoning = reasoningFromLegacyThinking(deps.profile.thinking);
     const call: ChatCall = {
       model: deps.model,
       system: [{ type: 'text', text: deps.systemPrompts[turnClass], cache: 'stable' }],
@@ -246,9 +248,8 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       ...(exposed.length > 0 ? { tools: exposed.map((t) => t.spec), toolChoice: 'auto' as const } : {}),
       maxOutputTokens: 4096,
       // The profile decides both, and until this slice neither reached the
-      // wire: `thinking` was declared in every profile and passed by nobody
-      // (the ninth "mechanism with no caller" in this repo's list), and
-      // `temperature: 0` was hardcoded here — a 400 on every model
+      // wire: the profile's legacy `thinking` vocabulary is normalized into
+      // canonical reasoning above, and `temperature: 0` was hardcoded here — a 400 on every model
       // frontier.json matches, on the config `muffin init` writes by default.
       //
       // Spread rather than `temperature: profile.sampling === ... ? 0 :
@@ -256,17 +257,10 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // `undefined` is not the same as an absent field, and the difference is
       // exactly what the newest models reject.
       ...(deps.profile.sampling === 'deterministic' ? { temperature: 0 } : {}),
-      // D2 (judge, 2026-08-13): this was `thinking: deps.profile.thinking`
-      // unconditionally, so ADR-0037's own documented escape hatch — "si
-      // spegne il campo (`thinking` assente resta una forma valida e
-      // l'adapter la supporta già)" — was unreachable from any profile:
-      // `Profile.thinking` was a required two-value field and this line
-      // never omitted it. 'unset' is the profile value that reaches the
-      // branch below; spread rather than `thinking: … ? undefined : …` for
-      // the same exactOptionalPropertyTypes reason as `temperature` above —
-      // an explicit `undefined` can still be a key on the wire, an absent
-      // key never is.
-      ...(deps.profile.thinking !== 'unset' ? { thinking: deps.profile.thinking } : {}),
+      // Backward-compatible profile/config vocabulary is normalized once at
+      // the loop boundary. Adapters no longer need to interpret profile
+      // strings; they receive the provider-agnostic reasoning intent.
+      ...(reasoning === undefined ? {} : { reasoning }),
       // B11: streaming is requested exactly when someone can hear it. A turn
       // with no `onDelta` sink (a job, a headless `muffin run`, a provider
       // that never implements `chatStream`) sends this `false`, the request
@@ -280,10 +274,23 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
         [ATTR.requestModel]: deps.model,
         [ATTR.turnIteration]: run.iterations,
         'muffin.chat_call.requested_max_output_tokens': call.maxOutputTokens,
-        'muffin.chat_call.requested_thinking': call.thinking ?? 'unset',
+        'muffin.chat_call.reasoning_requested_mode': call.reasoning?.mode ?? 'unset',
+        ...(call.reasoning?.effort === undefined ? {} : { 'muffin.chat_call.reasoning_requested_effort': call.reasoning.effort }),
+        ...(call.reasoning?.maxTokens === undefined ? {} : { 'muffin.chat_call.reasoning_requested_max_tokens': call.reasoning.maxTokens }),
       },
       turn,
     );
+    const reasoningResolution = deps.provider.resolveReasoning?.(call);
+    if (reasoningResolution !== undefined) {
+      chatSpan.setAttributes({
+        'muffin.chat_call.reasoning_capability_source': reasoningResolution.capabilitySource,
+        'muffin.chat_call.reasoning_effective_mode': reasoningResolution.effective?.mode ?? 'omitted',
+        ...(reasoningResolution.effective?.effort === undefined ? {} : { 'muffin.chat_call.reasoning_effective_effort': reasoningResolution.effective.effort }),
+        ...(reasoningResolution.effective?.maxTokens === undefined ? {} : { 'muffin.chat_call.reasoning_effective_max_tokens': reasoningResolution.effective.maxTokens }),
+        'muffin.chat_call.reasoning_constraint_degraded': reasoningResolution.status !== 'applied',
+        ...(reasoningResolution.reason === undefined ? {} : { 'muffin.chat_call.reasoning_resolution_reason': reasoningResolution.reason }),
+      });
+    }
     // `chatSpan`'s own clock is not readable back from `SpanHandle` (it only
     // exposes `setAttributes`/`end`), so `ms` for the `model` progress event
     // below is timed here, at the same call site that starts the span it
@@ -357,6 +364,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       modelLease = lease;
       const callWithBudget: ChatCall = { ...call, stream, signal: lease.signal };
       try {
+        if (reasoningResolution?.status === 'unsupported') throw new ReasoningConfigurationError(reasoningResolution);
         // A lease can be born already exhausted. Do not call the provider just
         // to discover its signal is aborted: this is a governor decision, not
         // a transport failure and must not enter retry.

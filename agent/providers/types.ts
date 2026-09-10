@@ -10,6 +10,8 @@
  * See docs/decisions/0008-provider-adapter-unico.md.
  */
 
+import type { ReasoningRequest, ReasoningResolution } from './reasoning.js';
+
 type Role = 'user' | 'assistant';
 
 /**
@@ -156,31 +158,9 @@ export type ToolSpec = {
 };
 
 /**
- * How much reasoning to ask for — in the only vocabulary the API still has.
- *
- * There is no budget any more. `thinking: {type:'enabled', budget_tokens: N}` is
- * deprecated on the 4.6 models and **returns a 400 on 4.7 and later**, which is
- * every model `agent/profiles/frontier.json` matches (Sonnet 5, Opus 5, Fable 5)
- * — verified on the extended-thinking page, 2026-08-13. What replaced it is a
- * mode plus `output_config.effort`, and `effort` has no per-request meaning for
- * us: `"high"` is the API default, so sending it is identical to omitting it.
- * Hence two values and no number. A knob the API does not have is a knob that
- * lies about what it controls.
- *
- * `'off'` is `{type:'disabled'}` at the wire, not "send nothing": on a 5-series
- * model sending nothing means thinking is **on**, so the old `'off'` was a
- * declaration the request contradicted. Not universal, though: Claude Fable 5
- * and Claude Mythos 5 have no disable switch at all — thinking is always on
- * and both `{type:'enabled'}` and `{type:'disabled'}` are a 400 (per-model
- * table, read 2026-08-13). `Profile.thinking`'s third value, `'unset'`, is for
- * exactly that model shape: the field omitted, never sent as `'off'`.
- *
- * N3 (judge, 2026-08-13): Claude Haiku 4.5 has no honest value in this type at
- * all — it supports only manual extended thinking (the `budget_tokens` shape
- * this vocabulary deliberately has no number for) and returns a 400 on
- * `{type:'adaptive'}`. Do not add it to a profile's `match` list that declares
- * `thinking: 'adaptive'`. Harmless today only because the light lane — the one
- * place Haiku 4.5 runs — never consults a profile at all.
+ * Legacy profile vocabulary. New callers should use `ReasoningRequest` from
+ * `agent/providers/reasoning.ts`; this type remains because shipped profiles
+ * and direct adapter callers still use `thinking`.
  */
 type ThinkingMode = 'adaptive' | 'off';
 
@@ -234,6 +214,9 @@ export type ChatCall = {
    * the only shape those models accept.
    */
   temperature?: number;
+  /** Canonical provider-agnostic reasoning intent. */
+  reasoning?: ReasoningRequest;
+  /** @deprecated Compatibility input; adapters normalize it into `reasoning`. */
   thinking?: ThinkingMode;
   /**
    * Quale conversazione è questa — un'identità opaca, non un'istruzione.
@@ -380,6 +363,7 @@ export class ProviderStreamError extends Error {
 export interface Provider {
   readonly kind: 'anthropic' | 'openai-compat';
   chat(call: ChatCall): Promise<ChatResult>;
+  resolveReasoning?(call: ChatCall): ReasoningResolution;
   /**
    * Optional: a provider that can stream implements this. Absent means "this
    * provider cannot stream" and the loop falls back to `chat()` unconditionally

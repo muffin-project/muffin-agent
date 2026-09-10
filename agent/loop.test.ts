@@ -1170,7 +1170,7 @@ describe('the loop hands the model its own reasoning back', () => {
     });
     await runTurn(d, input(store));
 
-    expect(provider.seen[0]?.thinking).toBe('adaptive');
+    expect(provider.seen[0]?.reasoning).toEqual({ mode: 'adaptive' });
     // …and the sampling parameter the 5-series rejects is *absent*, not
     // undefined: `'temperature' in call` is the assertion, because a key
     // holding undefined is a key on the wire for some serialisers.
@@ -1185,7 +1185,7 @@ describe('the loop hands the model its own reasoning back', () => {
     await runTurn(d, input(store));
 
     expect(provider.seen[0]?.temperature).toBe(0);
-    expect(provider.seen[0]?.thinking).toBe('off');
+    expect(provider.seen[0]?.reasoning).toEqual({ mode: 'off' });
   });
 
   it("omits thinking entirely for 'unset' — the ADR's own escape hatch, made reachable", async () => {
