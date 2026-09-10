@@ -243,6 +243,7 @@ export const OPENROUTER_MODEL_FAMILIES: readonly ModelChoice[] = [
   { label: 'Anthropic', main: 'anthropic/claude-sonnet-5', light: 'anthropic/claude-haiku-4.5' },
   { label: 'GPT', main: 'openai/gpt-5.6-terra', light: 'openai/gpt-5-nano' },
   { label: 'Gemma', main: 'google/gemma-4-31b-it', light: 'google/gemma-4-26b-a4b-it' },
+  { label: 'OpenRouter Free', main: 'openrouter/free', light: 'openrouter/free' },
 ];
 
 /** A locally probed model has no separate main/light tier on offer — same id serves both. */

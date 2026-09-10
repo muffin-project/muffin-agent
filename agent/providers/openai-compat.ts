@@ -173,6 +173,7 @@ export type Routing = {
   sort?: 'price' | 'throughput' | 'latency' | undefined;
   requireParameters?: boolean | undefined;
   dataCollection?: 'allow' | 'deny' | undefined;
+  allowFallbacks?: boolean | undefined;
   quantizations?: readonly string[] | undefined;
 };
 
@@ -193,6 +194,7 @@ export function routingBody(r: Routing | undefined): Record<string, unknown> | u
     ...(r.sort !== undefined ? { sort: r.sort } : {}),
     ...(r.requireParameters !== undefined ? { require_parameters: r.requireParameters } : {}),
     ...(r.dataCollection !== undefined ? { data_collection: r.dataCollection } : {}),
+    ...(r.allowFallbacks !== undefined ? { allow_fallbacks: r.allowFallbacks } : {}),
     ...(r.quantizations ? { quantizations: [...r.quantizations] } : {}),
   };
   return Object.keys(fuori).length > 0 ? fuori : undefined;
@@ -456,6 +458,14 @@ export class OpenAICompatProvider implements Provider {
       // — `temperature` is not in claude-sonnet-5's supported_parameters
       // there — but "the gateway forgives us" is not a contract.)
       ...(call.temperature !== undefined ? { temperature: call.temperature } : {}),
+      ...(call.sampling === undefined ? {} : {
+        ...(call.sampling.temperature !== undefined ? { temperature: call.sampling.temperature } : {}),
+        ...(call.sampling.topP !== undefined ? { top_p: call.sampling.topP } : {}),
+        ...(call.sampling.topK !== undefined ? { top_k: call.sampling.topK } : {}),
+        ...(call.sampling.minP !== undefined ? { min_p: call.sampling.minP } : {}),
+        ...(call.sampling.presencePenalty !== undefined ? { presence_penalty: call.sampling.presencePenalty } : {}),
+        ...(call.sampling.repetitionPenalty !== undefined ? { repetition_penalty: call.sampling.repetitionPenalty } : {}),
+      }),
       // `thinking: 'off'` stops being a declared no-op here — but only where the
       // endpoint speaks the field. The measured cost of the no-op was not the
       // lost text: it was 1502 output tokens spent reasoning, per extraction,

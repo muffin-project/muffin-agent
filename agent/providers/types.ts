@@ -219,6 +219,15 @@ export type ChatCall = {
    * the only shape those models accept.
    */
   temperature?: number;
+  /** Experimental eval-only sampling override; absent on all production calls. */
+  sampling?: {
+    temperature?: number;
+    topP?: number;
+    topK?: number;
+    minP?: number;
+    presencePenalty?: number;
+    repetitionPenalty?: number;
+  };
   /** Canonical provider-agnostic reasoning intent. */
   reasoning?: ReasoningRequest;
   /** @deprecated Compatibility input; adapters normalize it into `reasoning`. */

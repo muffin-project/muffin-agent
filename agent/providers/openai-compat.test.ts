@@ -85,6 +85,51 @@ describe('wantsExplicitCache · the endpoint decides, and the default is the dec
   });
 });
 
+describe('experimental sampling overrides', () => {
+  it('translate every Qwen sampling field to the OpenAI-compatible wire names', async () => {
+    const h = harness(false, false);
+    await h.provider.chat({
+      ...CALL,
+      sampling: { temperature: 1, topP: 0.95, topK: 20, minP: 0, presencePenalty: 0, repetitionPenalty: 1 },
+    });
+    expect(h.bodies[0]).toMatchObject({ temperature: 1, top_p: 0.95, top_k: 20, min_p: 0, presence_penalty: 0, repetition_penalty: 1 });
+  });
+});
+
+describe('OpenRouter model router', () => {
+  it('keeps openrouter/free an ordinary OpenAI-compatible model with tools', async () => {
+    const h = harness(false, false, {
+      ...A_COMPLETION,
+      model: 'openrouter/free',
+      choices: [{ message: { content: 'uso il tool', tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'demo_read', arguments: '{}' } }] }, finish_reason: 'tool_calls' }],
+    });
+    const result = await h.provider.chat({
+      ...CALL,
+      model: 'openrouter/free',
+      tools: [{ name: 'demo_read', description: 'read', inputSchema: { type: 'object' } }],
+    });
+    expect(result.toolCalls).toEqual([{ id: 'call_1', name: 'demo_read', args: {} }]);
+    expect(h.bodies[0]).toMatchObject({
+      model: 'openrouter/free',
+      tools: [{ type: 'function', function: { name: 'demo_read' } }],
+    });
+  });
+
+  it('does not reject the conservative off request when the router omits reasoning metadata', async () => {
+    const bodies: unknown[] = [];
+    const provider = new OpenAICompatProvider('sk-test', 'https://openrouter.ai/api/v1', {}, {
+      metadataFetch: async () => new Response(JSON.stringify({ data: { id: 'openrouter/free' } }), { status: 200 }),
+      fetch: async (_url: unknown, init?: { body?: string }) => {
+        bodies.push(JSON.parse(init?.body ?? '{}'));
+        return new Response(JSON.stringify(A_COMPLETION), { status: 200, headers: { 'content-type': 'application/json' } });
+      },
+    });
+
+    await provider.chat({ ...CALL, model: 'openrouter/free', thinking: 'off' });
+    expect(bodies[0]).not.toHaveProperty('reasoning');
+  });
+});
+
 describe('openai-compat · explicit prompt caching', () => {
   it('carries the stable marker as a cache_control breakpoint when the endpoint understands it', async () => {
     const h = harness(true);
