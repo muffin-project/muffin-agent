@@ -15,6 +15,7 @@ import { buildContext, userAudios, userImages } from './context.js';
 import { announceEnd, checkpoint, closeRecord, finish, reconcile } from './durability.js';
 import { makeSnapshot } from './permissions.js';
 import { runRounds, type RoundScope } from './round.js';
+import { ExecutionBudget } from './execution-budget.js';
 import { TurnRun } from './run-state.js';
 import {
   assertNever,
@@ -271,6 +272,9 @@ export async function guidaIlTurno(
     resumed: options.resumed === true,
     wokenFromWait: options.wokenFromWait === true,
   });
+  const execution = new ExecutionBudget(
+    deps.profile.execution ?? { modelCallDeadlineMs: 90_000, turnWallDeadlineMs: 180_000 },
+  );
   /**
    * What every handler is told about the turn it is running in — built once,
    * because the barrier has to be the same object across the whole turn.
@@ -370,6 +374,7 @@ export async function guidaIlTurno(
     doorRefusal,
     refusalLabel,
     memoryDoorOpen,
+    execution,
   };
 
   if (!run.contextBuilt) {
@@ -621,6 +626,8 @@ export async function guidaIlTurno(
     // is not a property anyone would have chosen.
     announceEnd(scope, 'error');
     throw error;
+  } finally {
+    execution.close();
   }
 }
 

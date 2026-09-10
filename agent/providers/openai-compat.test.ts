@@ -27,6 +27,7 @@ const A_COMPLETION = {
     prompt_tokens: 3000,
     completion_tokens: 5,
     prompt_tokens_details: { cached_tokens: 2800, cache_write_tokens: 150 },
+    completion_tokens_details: { reasoning_tokens: 3 },
   },
   model: 'anthropic/claude-sonnet-5',
 };
@@ -121,6 +122,19 @@ describe('openai-compat · explicit prompt caching', () => {
 
     expect(result.usage.cacheReadTokens).toBe(2800);
     expect(result.usage.cacheWriteTokens).toBe(150);
+  });
+
+  it('puts the requested output ceiling on the wire', async () => {
+    const h = harness(true);
+    await h.provider.chat(CALL);
+    expect(h.bodies[0]).toMatchObject({ max_tokens: 100 });
+  });
+
+  it('preserves the provider-reported reasoning subset instead of calling it plain completion', async () => {
+    const h = harness(true);
+    const result = await h.provider.chat(CALL);
+    expect(result.usage.outputTokens).toBe(5);
+    expect(result.usage.reasoningTokens).toBe(3);
   });
 
   it('a block without the marker gets no breakpoint', async () => {

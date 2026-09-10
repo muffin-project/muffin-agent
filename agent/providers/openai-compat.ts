@@ -217,6 +217,7 @@ export class OpenAICompatProvider implements Provider {
     this.reasoningEffort = opts.reasoningEffort ?? speaksReasoningEffort(baseURL);
     this.client = new OpenAI({
       apiKey,
+      maxRetries: 0,
       ...(baseURL ? { baseURL } : {}),
       defaultHeaders: headers,
       ...(opts.fetch ? { fetch: opts.fetch } : {}),
@@ -248,6 +249,9 @@ export class OpenAICompatProvider implements Provider {
         usage: {
           inputTokens: response.usage?.prompt_tokens ?? 0,
           outputTokens: response.usage?.completion_tokens ?? 0,
+          ...(response.usage?.completion_tokens_details?.reasoning_tokens === undefined
+            ? {}
+            : { reasoningTokens: response.usage.completion_tokens_details.reasoning_tokens }),
           cacheReadTokens: response.usage?.prompt_tokens_details?.cached_tokens ?? 0,
           // On the SDK's own type since v7 (CompletionUsage). The hardcoded 0
           // that stood here is how a missing feature stayed invisible: zero
@@ -350,6 +354,9 @@ export class OpenAICompatProvider implements Provider {
         usage: {
           inputTokens: usage?.prompt_tokens ?? 0,
           outputTokens: usage?.completion_tokens ?? 0,
+          ...(usage?.completion_tokens_details?.reasoning_tokens === undefined
+            ? {}
+            : { reasoningTokens: usage.completion_tokens_details.reasoning_tokens }),
           cacheReadTokens: usage?.prompt_tokens_details?.cached_tokens ?? 0,
           cacheWriteTokens: usage?.prompt_tokens_details?.cache_write_tokens ?? 0,
         },
@@ -489,7 +496,13 @@ function toChatResult(response: {
   text: string | null;
   toolCalls: RawToolCall[];
   finishReason: string | null;
-  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    reasoningTokens?: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+  };
   model: string;
   upstream?: string | undefined;
 }): ChatResult {
