@@ -52,7 +52,7 @@ export class TurnRun {
    * not a budget: attempt N runs strategy N.
    */
   recoveriesUsed: number;
-  /** The other budget. See MAX_TRANSPORT_RETRIES for why it is not the same one. */
+  /** The transport retry budget owned by the loop, not by an SDK. */
   transportRetriesLeft: number;
   toolCallsMade: number;
   nudgedForCompletion: boolean;

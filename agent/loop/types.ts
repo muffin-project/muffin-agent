@@ -161,15 +161,11 @@ export const MAX_HISTORY_TURNS = 40;
  * to spend.
  *
  * Two, matching what the shortest declared cascade bought before this split,
- * and small on purpose: both SDKs already retry twice underneath us
- * (`maxRetries ?? 2` — `@anthropic-ai/sdk/client.js`, `openai/client.js`) —
- * and those retries run INSIDE each provider.chat() call, so the budgets
- * multiply: on a persistent 502 this constant means 3 loop-level calls × 3
- * wire attempts = **9 requests**, of which our jitter governs 2 gaps and the
- * SDKs' own backoff the other 6. Stated because the first version of this
- * comment said "third and fourth attempt", which reads additive and is not.
- * If 9 is ever too many, the move is `maxRetries: 0` on both clients and the
- * loop owning the whole budget — its own slice, not a constant tweak.
+ * and small on purpose. The provider constructors set `maxRetries: 0`, so this
+ * is now the only transport retry budget: on a persistent 502 it means three
+ * wire attempts total, with two loop-owned backoff gaps. Keeping that ownership
+ * here prevents a model deadline or a transport retry from multiplying inside
+ * an SDK.
  */
 export const MAX_TRANSPORT_RETRIES = 2;
 
@@ -865,6 +861,8 @@ export type TurnResult = {
    * one place is how every consumer had to answer for it.
    */
   stopped: TurnStopped;
+  /** Fine-grained reason for a non-success stop; tracing carries the same value. */
+  reason?: string;
   /**
    * The taint the turn ended at — the max tier of everything that was physically
    * in its context (03 §2).
