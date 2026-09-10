@@ -25,9 +25,18 @@ export function retryDelayMs(attempt: number): number {
  * already parsed, off the `done` event), and a surface receives text only —
  * see `TurnDelta`.
  */
-export async function drainStream(events: AsyncIterable<StreamEvent>, onChunk: (text: string) => void): Promise<ChatResult> {
+export async function drainStream(
+  events: AsyncIterable<StreamEvent>,
+  onChunk: (text: string) => void,
+  onActivity?: (kind: 'thinking' | 'text' | 'tool_call') => void,
+): Promise<ChatResult> {
   for await (const event of events) {
-    if (event.type === 'text_delta') onChunk(event.text);
+    if (event.type === 'text_delta') {
+      onActivity?.('text');
+      onChunk(event.text);
+    }
+    if (event.type === 'thinking_delta') onActivity?.('thinking');
+    if (event.type === 'tool_call_delta') onActivity?.('tool_call');
     if (event.type === 'done') return event.result;
   }
   // A well-behaved provider's last event is always `done` (its own contract —
@@ -78,4 +87,3 @@ export function edgeTrimmer(): (chunk: string) => string | null {
     return body;
   };
 }
-

@@ -273,7 +273,13 @@ export async function guidaIlTurno(
     wokenFromWait: options.wokenFromWait === true,
   });
   const execution = new ExecutionBudget(
-    deps.profile.execution ?? { modelCallDeadlineMs: 90_000, turnWallDeadlineMs: 180_000 },
+    deps.profile.execution ?? {
+      modelCallDeadlineMs: 90_000,
+      turnWallDeadlineMs: 180_000,
+      firstActivityTimeoutMs: 30_000,
+      stallTimeoutMs: 25_000,
+      heartbeatIntervalMs: 15_000,
+    },
   );
   /**
    * What every handler is told about the turn it is running in — built once,
