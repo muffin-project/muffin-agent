@@ -8,8 +8,10 @@ export type ReasoningRequest = {
   maxTokens?: number;
 };
 
+export type ReasoningSupport = 'supported' | 'unsupported' | 'unknown';
+
 export type ReasoningCapabilities = {
-  supported: boolean;
+  support: ReasoningSupport;
   canDisable: boolean;
   supportedEfforts?: readonly ReasoningEffort[];
   defaultEnabled?: boolean;
@@ -18,7 +20,13 @@ export type ReasoningCapabilities = {
   mandatory: boolean;
 };
 
-export type ReasoningCapabilitySource = 'openrouter-model-snapshot' | 'openrouter-gateway-defaults' | 'endpoint-defaults' | 'unknown';
+export type ReasoningCapabilitySource =
+  | 'openrouter-live'
+  | 'openrouter-cache'
+  | 'static-snapshot'
+  | 'provider-default'
+  | 'endpoint-defaults'
+  | 'unknown';
 
 export type ReasoningResolution = {
   requested?: ReasoningRequest;
@@ -59,18 +67,28 @@ export function resolveReasoningPolicy(
     return unsupported(requested, capabilitySource, 'reasoning off cannot carry effort or maxTokens');
   }
   if (requested.maxTokens !== undefined && !capabilities.supportsMaxTokens) {
-    return unsupported(requested, capabilitySource, 'provider/model does not expose an exact reasoning token budget');
+    return unsupported(
+      requested,
+      capabilitySource,
+      capabilities.support === 'unknown'
+        ? 'reasoning capability is unknown; refusing an exact token budget until metadata is available'
+        : 'provider/model does not expose an exact reasoning token budget',
+    );
   }
   if (requested.effort !== undefined && capabilities.supportedEfforts !== undefined && !capabilities.supportedEfforts.includes(requested.effort)) {
     return unsupported(requested, capabilitySource, `reasoning effort ${requested.effort} is not supported`);
   }
   if (requested.mode === 'off') {
-    if (!capabilities.supported) return { requested, status: 'omitted', capabilitySource, reason: 'endpoint has no reasoning capability; omission is the off state' };
+    if (capabilities.support === 'unsupported') return { requested, status: 'omitted', capabilitySource, reason: 'endpoint has no reasoning capability; omission is the off state' };
+    if (capabilities.support === 'unknown') return unsupported(requested, capabilitySource, 'reasoning capability is unknown; refusing to claim that off was applied');
     if (capabilities.mandatory || !capabilities.canDisable) return unsupported(requested, capabilitySource, 'model/provider requires reasoning and cannot disable it');
     return { requested, effective: requested, status: 'applied', capabilitySource };
   }
-  if (!capabilities.supported) {
+  if (capabilities.support === 'unsupported') {
     return { requested, effective: { mode: 'adaptive' }, status: 'omitted', capabilitySource, reason: 'endpoint has no reasoning capability; provider default remains in control' };
+  }
+  if (capabilities.support === 'unknown') {
+    return { requested, effective: { mode: 'adaptive' }, status: 'omitted', capabilitySource, reason: 'reasoning capability is unknown; provider default remains in control' };
   }
   return { requested, effective: requested, status: 'applied', capabilitySource };
 }

@@ -8,6 +8,7 @@ import {
   type ChatResult,
   type ContentBlock,
   type Message,
+  type ProviderMessageMetadata,
   type Provider,
   type StopReason,
   type StreamEvent,
@@ -19,6 +20,7 @@ import {
   type ReasoningCapabilities,
   type ReasoningResolution,
 } from './reasoning.js';
+import { OpenRouterReasoningDiscovery, type OpenRouterDiscoveryResult } from './openrouter-reasoning.js';
 
 /**
  * OpenAI-compatible chat completions.
@@ -125,18 +127,18 @@ function speaksReasoningEffort(baseURL?: string): boolean {
 /** Small, dated capability snapshot; discovery is intentionally not per call. */
 export function openRouterReasoningCapabilities(model: string, baseURL?: string): {
   capabilities: ReasoningCapabilities;
-  source: 'openrouter-model-snapshot' | 'openrouter-gateway-defaults' | 'endpoint-defaults';
+  source: 'static-snapshot' | 'endpoint-defaults' | 'unknown';
 } {
   if (!speaksReasoningEffort(baseURL)) {
     return {
-      capabilities: { supported: false, canDisable: true, supportsMaxTokens: false, mandatory: false },
+      capabilities: { support: 'unsupported', canDisable: true, supportsMaxTokens: false, mandatory: false },
       source: 'endpoint-defaults',
     };
   }
   if (model.toLowerCase() === 'qwen/qwen3.8-27b') {
     return {
       capabilities: {
-        supported: true,
+        support: 'supported',
         canDisable: true,
         supportedEfforts: ['xhigh', 'medium', 'low'],
         defaultEnabled: true,
@@ -144,12 +146,12 @@ export function openRouterReasoningCapabilities(model: string, baseURL?: string)
         supportsMaxTokens: false,
         mandatory: false,
       },
-      source: 'openrouter-model-snapshot',
+      source: 'static-snapshot',
     };
   }
   return {
-    capabilities: { supported: true, canDisable: true, supportsMaxTokens: false, mandatory: false },
-    source: 'openrouter-gateway-defaults',
+    capabilities: { support: 'unknown', canDisable: false, supportsMaxTokens: false, mandatory: false },
+    source: 'unknown',
   };
 }
 
@@ -206,6 +208,8 @@ export class OpenAICompatProvider implements Provider {
   /** Le preferenze di instradamento dell'owner, già nella forma del corpo. */
   private readonly routing: Record<string, unknown> | undefined;
   private readonly baseURL: string | undefined;
+  private readonly reasoningDiscovery: OpenRouterReasoningDiscovery | undefined;
+  private discoveredReasoning: OpenRouterDiscoveryResult | undefined;
   /** Public for the same reason: the wiring is the part that must be provable. */
   readonly reasoningEffort: boolean;
 
@@ -219,9 +223,18 @@ export class OpenAICompatProvider implements Provider {
       stickySession?: boolean;
       routing?: Routing;
       fetch?: typeof globalThis.fetch;
+      metadataFetch?: typeof globalThis.fetch;
+      reasoningDiscovery?: OpenRouterReasoningDiscovery;
+      discoverReasoning?: boolean;
+      routerMetadata?: boolean;
     } = {},
   ) {
     this.baseURL = baseURL;
+    this.reasoningDiscovery = opts.discoverReasoning === false
+      ? undefined
+      : opts.reasoningDiscovery ?? (speaksReasoningEffort(baseURL)
+        ? new OpenRouterReasoningDiscovery({ ...(opts.metadataFetch === undefined ? {} : { fetch: opts.metadataFetch }), headers })
+        : undefined);
     this.explicitCache = opts.explicitCache ?? wantsExplicitCache(baseURL);
     this.stickySession = opts.stickySession ?? speaksStickySession(baseURL);
     // Le preferenze si mandano solo a chi smista. Su un Ollama locale non c'è
@@ -233,18 +246,43 @@ export class OpenAICompatProvider implements Provider {
       apiKey,
       maxRetries: 0,
       ...(baseURL ? { baseURL } : {}),
-      defaultHeaders: headers,
+      defaultHeaders: { ...headers, ...(opts.routerMetadata === true ? { 'X-OpenRouter-Metadata': 'enabled' } : {}) },
       ...(opts.fetch ? { fetch: opts.fetch } : {}),
     });
   }
 
-  resolveReasoning(call: ChatCall): ReasoningResolution {
+  async resolveReasoning(call: ChatCall): Promise<ReasoningResolution> {
+    await this.discoverReasoning(call.model);
+    return this.resolveReasoningFromCache(call);
+  }
+
+  private resolveReasoningFromCache(call: ChatCall): ReasoningResolution {
+    if (this.discoveredReasoning !== undefined) return resolveReasoningPolicy(reasoningRequest(call), this.discoveredReasoning.capabilities, this.discoveredReasoning.source);
     const { capabilities, source } = openRouterReasoningCapabilities(call.model, this.baseURL);
     return resolveReasoningPolicy(reasoningRequest(call), capabilities, source);
   }
 
+  private async discoverReasoning(model: string): Promise<void> {
+    if (this.reasoningDiscovery === undefined || this.baseURL === undefined) return;
+    this.discoveredReasoning = await this.reasoningDiscovery.resolve(this.baseURL, model);
+    if (this.discoveredReasoning.capabilities.support === 'unknown') {
+      const fallback = openRouterReasoningCapabilities(model, this.baseURL);
+      if (fallback.source === 'static-snapshot') this.discoveredReasoning = { ...this.discoveredReasoning, ...fallback };
+    }
+  }
+
+  private reasoningMetadata(message: unknown): ProviderMessageMetadata | undefined {
+    if (!this.reasoningEffort || message === undefined || message === null || typeof message !== 'object') return undefined;
+    const raw = message as { reasoning_details?: unknown; reasoning?: unknown; reasoning_content?: unknown };
+    const details = Array.isArray(raw.reasoning_details) ? raw.reasoning_details : undefined;
+    const content = typeof raw.reasoning === 'string' && raw.reasoning.length > 0 ? raw.reasoning : typeof raw.reasoning_content === 'string' && raw.reasoning_content.length > 0 ? raw.reasoning_content : undefined;
+    if (details === undefined && content === undefined) return undefined;
+    return { reasoning: { provider: 'openrouter', ...(details === undefined ? {} : { details }), ...(content === undefined ? {} : { content }) } };
+  }
+
   async chat(call: ChatCall): Promise<ChatResult> {
     try {
+      await this.discoverReasoning(call.model);
       const response = await this.client.chat.completions.create(this.requestBody(call), call.signal ? { signal: call.signal } : {});
 
       const choice = response.choices[0];
@@ -280,6 +318,7 @@ export class OpenAICompatProvider implements Provider {
         upstream: upstreamOf(response),
         model: response.model,
         requestId: response.id,
+        providerMetadata: this.reasoningMetadata(choice.message),
       });
     } catch (error) {
       throw wrap(error);
@@ -308,6 +347,7 @@ export class OpenAICompatProvider implements Provider {
    * until the stream itself ends — so there is nothing to parse until then.
    */
   async *chatStream(call: ChatCall): AsyncIterable<StreamEvent> {
+    await this.discoverReasoning(call.model);
     let stream: AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>;
     try {
       stream = await this.client.chat.completions.create(
@@ -329,6 +369,8 @@ export class OpenAICompatProvider implements Provider {
     let requestId: string | undefined;
     // Lo smistatore mette `provider` su ogni chunk; basta l'ultimo che lo porta.
     let upstream: string | undefined;
+    const reasoningDetails: unknown[] = [];
+    let reasoningContent = '';
     // See `ProviderStreamError.partial`.
     let receivedAnyEvent = false;
 
@@ -343,6 +385,10 @@ export class OpenAICompatProvider implements Provider {
         if (choice?.finish_reason) finishReason = choice.finish_reason;
 
         const delta = choice?.delta;
+        const rawDelta = delta as unknown as { reasoning_details?: unknown[]; reasoning?: unknown; reasoning_content?: unknown } | undefined;
+        if (Array.isArray(rawDelta?.reasoning_details)) reasoningDetails.push(...rawDelta.reasoning_details);
+        if (typeof rawDelta?.reasoning === 'string') reasoningContent += rawDelta.reasoning;
+        if (typeof rawDelta?.reasoning_content === 'string') reasoningContent += rawDelta.reasoning_content;
         if (delta?.content) {
           text += delta.content;
           yield { type: 'text_delta', text: delta.content };
@@ -385,13 +431,14 @@ export class OpenAICompatProvider implements Provider {
         model,
         upstream,
         requestId,
+        providerMetadata: this.reasoningMetadata({ reasoning_details: reasoningDetails, reasoning: reasoningContent }),
       }),
     };
   }
 
   /** The request body `chat()` and `chatStream()` share — everything but `stream` itself. */
   private requestBody(call: ChatCall): Omit<OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, 'stream'> {
-    const reasoning = this.resolveReasoning(call);
+    const reasoning = this.resolveReasoningFromCache(call);
     if (reasoning.status === 'unsupported') throw new ReasoningConfigurationError(reasoning);
     const effective = reasoning.effective;
     const explicitReasoningConstraint = effective !== undefined && (effective.mode === 'off' || effective.mode === 'on' || effective.effort !== undefined || effective.maxTokens !== undefined);
@@ -458,7 +505,7 @@ export class OpenAICompatProvider implements Provider {
             unknown
           >)
         : {}),
-      messages: [this.systemMessage(call), ...call.messages.flatMap(toChatMessages)],
+      messages: [this.systemMessage(call), ...call.messages.flatMap((message) => toChatMessages(message, this.reasoningEffort))],
       ...(call.tools && call.tools.length > 0
         ? {
             tools: call.tools.map((t) => ({
@@ -541,6 +588,7 @@ function toChatResult(response: {
   model: string;
   upstream?: string | undefined;
   requestId?: string | undefined;
+  providerMetadata?: ProviderMessageMetadata | undefined;
 }): ChatResult {
   const toolCalls = response.toolCalls.map((tc) => {
     let args: unknown;
@@ -557,15 +605,16 @@ function toChatResult(response: {
   return {
     text: response.text,
     toolCalls,
-    // Empty, said out loud rather than omitted: this adapter never asks for
-    // reasoning, so there is never any to carry. If that changes, this is
-    // the line that has to change with it — see the header.
+    // OpenAI-compatible reasoning is provider metadata rather than an
+    // Anthropic-style thinking block. It is carried opaquely below when the
+    // endpoint is OpenRouter; it is never exposed as user-visible text.
     thinking: [],
     stopReason: mapStopReason(response.finishReason, toolCalls.length > 0),
     usage: response.usage,
     model: response.model,
     ...(response.requestId === undefined ? {} : { requestId: response.requestId }),
     ...(response.upstream !== undefined ? { upstream: response.upstream } : {}),
+    ...(response.providerMetadata === undefined ? {} : { providerMetadata: response.providerMetadata }),
   };
 }
 
@@ -590,7 +639,7 @@ function flatten(block: ContentBlock): string {
  * produced them"). What would be wrong is dropping them on the *Anthropic*
  * path, which is what ADR-0037 fixed.
  */
-function toChatMessages(message: Message): OpenAI.Chat.ChatCompletionMessageParam[] {
+function toChatMessages(message: Message, preserveReasoning: boolean): OpenAI.Chat.ChatCompletionMessageParam[] {
   const out: OpenAI.Chat.ChatCompletionMessageParam[] = [];
   const text = message.content.filter((b) => b.type === 'text').map(flatten).join('\n');
   const toolUses = message.content.filter((b) => b.type === 'tool_use');
@@ -599,9 +648,12 @@ function toChatMessages(message: Message): OpenAI.Chat.ChatCompletionMessagePara
   const audio = message.content.filter((b) => b.type === 'audio');
 
   if (message.role === 'assistant') {
+    const reasoning = preserveReasoning ? message.providerMetadata?.reasoning : undefined;
     out.push({
       role: 'assistant',
       content: text.length > 0 ? text : null,
+      ...(reasoning?.details !== undefined ? ({ reasoning_details: reasoning.details } as Record<string, unknown>) : {}),
+      ...(reasoning?.details === undefined && reasoning?.content !== undefined ? ({ reasoning: reasoning.content } as Record<string, unknown>) : {}),
       ...(toolUses.length > 0
         ? {
             tool_calls: toolUses.map((b) => ({
