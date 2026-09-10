@@ -89,4 +89,93 @@ describe('ExecutionBudget activity watchdogs', () => {
     expect(lease.signal.aborted).toBe(false);
     budget.close();
   });
+
+  it('accumulates only active model time across leases', () => {
+    vi.useFakeTimers();
+    const budget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 500, activeModelBudgetMs: 100, firstActivityTimeoutMs: 10, stallTimeoutMs: 20 });
+
+    const first = budget.beginModelCall();
+    vi.advanceTimersByTime(40);
+    first.release();
+    expect(budget.activeModelMsUsed()).toBe(40);
+
+    vi.advanceTimersByTime(100); // local/tool/backoff time is outside the lease
+    const second = budget.beginModelCall();
+    vi.advanceTimersByTime(35);
+    second.release();
+    const third = budget.beginModelCall();
+    vi.advanceTimersByTime(20);
+    third.release();
+
+    expect(budget.activeModelMsUsed()).toBe(95);
+    expect(third.telemetry().activeModelMsRemaining).toBe(5);
+    budget.close();
+  });
+
+  it('refuses a provider invocation once the active budget is exhausted', () => {
+    vi.useFakeTimers();
+    const budget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 500, activeModelBudgetMs: 40 });
+    const first = budget.beginModelCall();
+    vi.advanceTimersByTime(40);
+    first.release();
+
+    const exhausted = budget.beginModelCall();
+    expect(exhausted.signal.aborted).toBe(true);
+    expect(exhausted.reason()).toBe('active_model_budget_exhausted');
+    expect(exhausted.telemetry().effectiveDeadlineSource).toBe('active_model_budget_exhausted');
+    exhausted.release();
+    budget.close();
+  });
+
+  it('uses the active budget when it is smaller than the normal deadline', async () => {
+    vi.useFakeTimers();
+    const budget = new ExecutionBudget({ modelCallDeadlineMs: 90, turnWallDeadlineMs: 500, activeModelBudgetMs: 10 });
+    const lease = budget.beginModelCall();
+    const aborted = waitForAbort(lease.signal);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(await aborted).toBe('active_model_budget_exhausted');
+    expect(lease.telemetry().effectiveDeadlineMs).toBe(10);
+    lease.release();
+    budget.close();
+  });
+
+  it('counts stalled and user-stopped calls, while preserving their causes', () => {
+    vi.useFakeTimers();
+    const budget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 500, activeModelBudgetMs: 100, firstActivityTimeoutMs: 10, stallTimeoutMs: 20 });
+    const stalled = budget.beginModelCall(undefined, undefined);
+    vi.advanceTimersByTime(7);
+    stalled.activity('thinking');
+    vi.advanceTimersByTime(20);
+    expect(stalled.reason()).toBe('model_stall');
+    stalled.release();
+
+    const user = new AbortController();
+    const stopped = budget.beginModelCall(user.signal);
+    vi.advanceTimersByTime(8);
+    user.abort();
+    expect(stopped.reason()).toBe('user_stop');
+    stopped.release();
+
+    expect(budget.activeModelMsUsed()).toBe(35);
+    budget.close();
+  });
+
+  it('has deterministic precedence when active and wall deadlines race', async () => {
+    vi.useFakeTimers();
+    const activeWins = new ExecutionBudget({ modelCallDeadlineMs: 90, turnWallDeadlineMs: 100, activeModelBudgetMs: 20 });
+    const activeLease = activeWins.beginModelCall();
+    const activeAbort = waitForAbort(activeLease.signal);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(await activeAbort).toBe('active_model_budget_exhausted');
+    activeLease.release();
+    activeWins.close();
+
+    const tie = new ExecutionBudget({ modelCallDeadlineMs: 90, turnWallDeadlineMs: 20, activeModelBudgetMs: 20 });
+    const tieLease = tie.beginModelCall();
+    const tieAbort = waitForAbort(tieLease.signal);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(await tieAbort).toBe('turn_deadline');
+    tieLease.release();
+    tie.close();
+  });
 });

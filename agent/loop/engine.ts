@@ -280,6 +280,13 @@ export async function guidaIlTurno(
       stallTimeoutMs: 25_000,
       heartbeatIntervalMs: 15_000,
     },
+    Date.now,
+    {
+      initialActiveModelMs: run.activeModelMs,
+      onActiveModelMs: (activeModelMs) => {
+        run.activeModelMs = activeModelMs;
+      },
+    },
   );
   /**
    * What every handler is told about the turn it is running in — built once,

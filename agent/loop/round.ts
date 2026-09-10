@@ -15,7 +15,7 @@ import {
   ProviderStreamError,
 } from '../providers/types.js';
 import { checkpoint, finish, suspendHere, type TurnScope } from './durability.js';
-import type { ExecutionBudget } from './execution-budget.js';
+import type { ExecutionBudget, ModelCallLease, ModelCallTelemetry } from './execution-budget.js';
 import { drainStream, edgeTrimmer, retryDelayMs } from './stream.js';
 import { runTool } from './tool-call.js';
 import {
@@ -274,11 +274,6 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // `requestChatResult` below never touches `chatStream` at all.
       stream: Boolean(input.onDelta && deps.provider.chatStream),
     };
-    const modelLease = execution.beginModelCall(input.signal, (progress) => {
-      input.onProgress?.({ type: 'model_status', ...progress });
-    });
-    const callWithBudget: ChatCall = { ...call, signal: modelLease.signal };
-
     const chatSpan = deps.tracer.start(
       'muffin.chat_call',
       {
@@ -295,6 +290,27 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     // describes — not a second stopwatch with its own idea of when the
     // request began.
     const chatCallStartedAt = Date.now();
+    let modelLease: ModelCallLease | undefined;
+    let lastAbortReason: ReturnType<ModelCallLease['reason']>;
+    let lastTelemetry: ModelCallTelemetry | undefined;
+
+    const recordTelemetry = (telemetry: ModelCallTelemetry): void => {
+      const prefix = `muffin.chat_call.invocation.${telemetry.modelCallIndex}`;
+      chatSpan.setAttributes({
+        'muffin.chat_call.model_call_index': telemetry.modelCallIndex,
+        'muffin.chat_call.active_model_ms_before': telemetry.activeModelMsBefore,
+        'muffin.chat_call.active_model_ms_this_call': telemetry.durationMs,
+        'muffin.chat_call.active_model_ms_after': telemetry.activeModelMsAfter,
+        'muffin.chat_call.effective_deadline_ms': telemetry.effectiveDeadlineMs,
+        'muffin.chat_call.effective_deadline_source': telemetry.effectiveDeadlineSource,
+        [`${prefix}.started_at`]: telemetry.startedAt,
+        [`${prefix}.duration_ms`]: telemetry.durationMs,
+        [`${prefix}.active_model_ms_before`]: telemetry.activeModelMsBefore,
+        [`${prefix}.active_model_ms_after`]: telemetry.activeModelMsAfter,
+        ...(telemetry.activeModelBudgetMs === undefined ? {} : { 'muffin.chat_call.active_model_budget_ms': telemetry.activeModelBudgetMs }),
+        ...(telemetry.activeModelMsRemaining === undefined ? {} : { 'muffin.chat_call.active_model_ms_remaining': telemetry.activeModelMsRemaining }),
+      });
+    };
 
     /**
      * This round's live text: forwarded to `input.onDelta` in the
@@ -334,20 +350,41 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
      * request that never finished, so what the surface already showed of it
      * is closed as `'superseded'` before the replacement starts arriving.
      */
-    const requestChatResult = async (): Promise<ChatResult> => {
-      if (!call.stream || !deps.provider.chatStream) return deps.provider.chat(callWithBudget);
+    const invoke = async (stream: boolean): Promise<ChatResult> => {
+      const lease = execution.beginModelCall(input.signal, (progress) => {
+        input.onProgress?.({ type: 'model_status', ...progress });
+      });
+      modelLease = lease;
+      const callWithBudget: ChatCall = { ...call, stream, signal: lease.signal };
       try {
+        // A lease can be born already exhausted. Do not call the provider just
+        // to discover its signal is aborted: this is a governor decision, not
+        // a transport failure and must not enter retry.
+        if (lease.signal.aborted) throw new Error('model invocation not authorized by execution budget');
+        if (!stream) return await deps.provider.chat(callWithBudget);
         return await drainStream(
-          deps.provider.chatStream(callWithBudget),
+          deps.provider.chatStream!(callWithBudget),
           (text) => {
-          if (!input.onDelta) return;
-          const out = trim(text);
-          if (out === null) return; // finora solo spazio: non è ancora niente
-          emittedLive = true;
-          input.onDelta({ type: 'text', text: out });
+            if (!input.onDelta) return;
+            const out = trim(text);
+            if (out === null) return; // finora solo spazio: non è ancora niente
+            emittedLive = true;
+            input.onDelta({ type: 'text', text: out });
           },
-          (kind) => modelLease.activity(kind),
+          (kind) => lease.activity(kind),
         );
+      } finally {
+        lastAbortReason = lease.reason();
+        lease.release();
+        lastTelemetry = lease.telemetry();
+        recordTelemetry(lastTelemetry);
+      }
+    };
+
+    const requestChatResult = async (): Promise<ChatResult> => {
+      if (!call.stream || !deps.provider.chatStream) return invoke(false);
+      try {
+        return await invoke(true);
       } catch (error) {
         if (!(error instanceof ProviderStreamError)) throw error;
         closeLive('superseded');
@@ -355,7 +392,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
           'muffin.stream.fell_back_to_non_stream': true,
           'muffin.stream.partial': error.partial,
         });
-        return deps.provider.chat({ ...callWithBudget, stream: false });
+        return invoke(false);
       }
     };
 
@@ -363,8 +400,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     try {
       result = await requestChatResult();
     } catch (error) {
-      const abortReason = modelLease.reason();
-      modelLease.release();
+      const abortReason = lastAbortReason;
       chatSpan.setAttributes({
         'muffin.chat_call.duration_ms': Date.now() - chatCallStartedAt,
         ...(abortReason === undefined ? {} : { 'muffin.chat_call.abort_reason': abortReason }),
@@ -411,7 +447,10 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       }
       throw error;
     }
-    modelLease.release();
+    chatSpan.setAttributes({
+      'muffin.chat_call.duration_ms': Date.now() - chatCallStartedAt,
+      ...(lastTelemetry === undefined ? {} : { 'muffin.chat_call.active_model_ms_after': lastTelemetry.activeModelMsAfter }),
+    });
 
     run.usage.inputTokens += result.usage.inputTokens;
     run.usage.outputTokens += result.usage.outputTokens;

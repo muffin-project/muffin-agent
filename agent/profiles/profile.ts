@@ -89,6 +89,7 @@ export type Profile = {
   execution?: {
     modelCallDeadlineMs: number;
     turnWallDeadlineMs: number;
+    activeModelBudgetMs: number;
     firstActivityTimeoutMs: number;
     stallTimeoutMs: number;
     heartbeatIntervalMs: number;
@@ -119,7 +120,7 @@ export const CONSERVATIVE: Profile = {
   // right kind of wrong for an unrecognised id.
   sampling: 'deterministic',
   recovery: ['nudge', 'reinjectTools', 'retryOnce', 'strictJson'],
-  execution: { modelCallDeadlineMs: 90_000, turnWallDeadlineMs: 180_000, firstActivityTimeoutMs: 30_000, stallTimeoutMs: 25_000, heartbeatIntervalMs: 15_000 },
+  execution: { modelCallDeadlineMs: 90_000, turnWallDeadlineMs: 180_000, activeModelBudgetMs: 120_000, firstActivityTimeoutMs: 30_000, stallTimeoutMs: 25_000, heartbeatIntervalMs: 15_000 },
   notes: 'Unknown model: the capability floor, with every crutch enabled.',
 };
 
@@ -153,6 +154,9 @@ const ProfileSchema = z.object({
   execution: z
     .object({ modelCallDeadlineMs: z.number().int().positive(), turnWallDeadlineMs: z.number().int().positive() })
     .extend({
+      // Old third-party profiles keep loading with the explicit interactive
+      // baseline; shipped profiles pin their model-specific value below.
+      activeModelBudgetMs: z.number().int().positive().default(120_000),
       firstActivityTimeoutMs: z.number().int().positive(),
       stallTimeoutMs: z.number().int().positive(),
       heartbeatIntervalMs: z.number().int().positive(),
