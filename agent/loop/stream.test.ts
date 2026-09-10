@@ -50,6 +50,7 @@ describe('drainStream', () => {
 
   it('drops thinking_delta, tool_call_delta and usage events without forwarding them', async () => {
     const seen: string[] = [];
+    const activity: string[] = [];
     await drainStream(
       streamOf([
         { type: 'thinking_delta', text: 'hmm' },
@@ -59,8 +60,10 @@ describe('drainStream', () => {
         { type: 'done', result: doneResult('ok') },
       ]),
       (text) => seen.push(text),
+      (kind) => activity.push(kind),
     );
     expect(seen).toEqual(['ok']);
+    expect(activity).toEqual(['thinking', 'tool_call', 'text']);
   });
 
   it('throws ProviderStreamError(partial: true) when the stream ends without a done event — MUTATION: returning instead of throwing must go red', async () => {

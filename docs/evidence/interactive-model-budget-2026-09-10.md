@@ -35,5 +35,14 @@ also did not preserve a provider-reported reasoning-token subset.
 
 The new path records the requested output ceiling, requested thinking mode,
 duration, abort reason, provider-reported reasoning tokens when available, and
-the response model/upstream provider. It still does not log prompts, reasoning
-content, or tool results merely to diagnose token accounting.
+the provider request/generation id when returned, plus the response
+model/upstream provider. It still does not log prompts, reasoning content, or
+tool results merely to diagnose token accounting.
+
+## Activity-aware follow-up
+
+The follow-up slice keeps the same budget owner and adds first-activity and
+stall watchdogs. Semantic stream events count as activity: text, reasoning and
+incremental tool-call arguments. Usage-only or keepalive traffic does not.
+The surface-facing `model_status` progress event reports waiting, thinking,
+receiving and stalled state without making another model call.

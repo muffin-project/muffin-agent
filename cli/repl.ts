@@ -63,6 +63,8 @@ export function statusFor(event: TurnEvent): string | null {
       return '  penso…';
     case 'tool_start':
       return `  ${toolLine(event.name, event.args)}…`;
+    case 'model_status':
+      return event.status === 'stalled' ? `  modello fermo (${Math.round(event.idleMs / 1000)}s)…` : `  ${event.status.replaceAll('_', ' ')} (${Math.round(event.elapsedMs / 1000)}s)…`;
     default:
       return null;
   }
@@ -183,6 +185,8 @@ export function formatProgressLine(event: TurnEvent, verbosity: Verbosity): stri
         return `· giro ${event.n}`;
       case 'model':
         return `· modello: ${event.ms}ms, ${event.inputTokens}→${event.outputTokens} token, stop: ${event.stopReason}`;
+      case 'model_status':
+        return `· modello ${event.status}, ${Math.round(event.idleMs / 1000)}s inattivo`;
       case 'tool_start':
         return `· ${event.name}…`;
       case 'tool_retry':
@@ -202,6 +206,8 @@ export function formatProgressLine(event: TurnEvent, verbosity: Verbosity): stri
     case 'round':
     case 'model':
       return null;
+    case 'model_status':
+      return event.status === 'stalled' ? `  ⚠ nessuna attività del modello da ${Math.round(event.idleMs / 1000)}s` : null;
     // Nemmeno l'inizio di un tool: `statusFor` lo mostra vivo, e stampare
     // «cerco in memoria…» e poi «✓ cerco in memoria» sarebbe la stessa cosa
     // detta due volte.

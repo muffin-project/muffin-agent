@@ -260,6 +260,7 @@ export class OpenAICompatProvider implements Provider {
         },
         upstream: upstreamOf(response),
         model: response.model,
+        requestId: response.id,
       });
     } catch (error) {
       throw wrap(error);
@@ -306,6 +307,7 @@ export class OpenAICompatProvider implements Provider {
     let finishReason: string | null = null;
     let usage: OpenAI.Chat.Completions.ChatCompletionChunk['usage'];
     let model = call.model;
+    let requestId: string | undefined;
     // Lo smistatore mette `provider` su ogni chunk; basta l'ultimo che lo porta.
     let upstream: string | undefined;
     // See `ProviderStreamError.partial`.
@@ -315,6 +317,7 @@ export class OpenAICompatProvider implements Provider {
       for await (const chunk of stream) {
         receivedAnyEvent = true;
         model = chunk.model;
+        requestId = chunk.id ?? requestId;
         upstream = upstreamOf(chunk) ?? upstream;
         if (chunk.usage) usage = chunk.usage;
         const choice = chunk.choices[0];
@@ -362,6 +365,7 @@ export class OpenAICompatProvider implements Provider {
         },
         model,
         upstream,
+        requestId,
       }),
     };
   }
@@ -505,6 +509,7 @@ function toChatResult(response: {
   };
   model: string;
   upstream?: string | undefined;
+  requestId?: string | undefined;
 }): ChatResult {
   const toolCalls = response.toolCalls.map((tc) => {
     let args: unknown;
@@ -528,6 +533,7 @@ function toChatResult(response: {
     stopReason: mapStopReason(response.finishReason, toolCalls.length > 0),
     usage: response.usage,
     model: response.model,
+    ...(response.requestId === undefined ? {} : { requestId: response.requestId }),
     ...(response.upstream !== undefined ? { upstream: response.upstream } : {}),
   };
 }

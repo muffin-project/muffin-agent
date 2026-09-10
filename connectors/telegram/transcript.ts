@@ -505,6 +505,9 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         case 'model':
           status = event.stopReason === 'tool_use' ? 'ho deciso i prossimi passi' : 'sto scrivendo la risposta';
           break;
+        case 'model_status':
+          status = event.status === 'stalled' ? `nessuna attività del modello da ${Math.round(event.idleMs / 1000)}s` : event.status === 'thinking' ? 'sto pensando' : event.status === 'receiving' ? 'sto ricevendo la risposta' : 'aspetto il modello';
+          break;
         case 'tool_start':
           status = null;
           addStep({ line: escapeHtml(toolLine(event.name, event.args)), state: 'running', startedAt: now() });

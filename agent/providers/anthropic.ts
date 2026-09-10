@@ -179,7 +179,15 @@ export class AnthropicProvider implements Provider {
       throw new ProviderStreamError(error instanceof Error ? error.message : String(error), receivedAnyEvent, error);
     }
 
-    yield { type: 'done', result: toChatResult({ content: blocks, stop_reason: stopReason, usage, model }) };
+    yield {
+      type: 'done',
+      result: toChatResult({
+        content: blocks,
+        stop_reason: stopReason,
+        usage,
+        model,
+      }),
+    };
   }
 }
 
@@ -238,6 +246,7 @@ function requestBody(call: ChatCall): Omit<Anthropic.MessageCreateParamsNonStrea
  * decoupled from a type this file does not own the evolution of.
  */
 type ResultSource = {
+  id?: string;
   content: Anthropic.ContentBlock[];
   stop_reason: string | null;
   usage: {
