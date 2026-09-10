@@ -12,6 +12,13 @@ import {
   type StopReason,
   type StreamEvent,
 } from './types.js';
+import {
+  ReasoningConfigurationError,
+  reasoningRequest,
+  resolveReasoningPolicy,
+  type ReasoningCapabilities,
+  type ReasoningResolution,
+} from './reasoning.js';
 
 /**
  * OpenAI-compatible chat completions.
@@ -21,37 +28,11 @@ import {
  * project cannot demand one vendor, and this is how you avoid it without
  * paying for a framework.
  *
- * What it does not carry: reasoning. Established rather than assumed
- * (2026-08-13, ADR-0037) because the production install routes
- * `anthropic/claude-sonnet-5` through here, so a wrong guess costs the owner
- * and not a hypothetical user:
- *
- *  - OpenRouter *does* expose reasoning for that model — `reasoning`,
- *    `include_reasoning` and `reasoning_effort` are all in its
- *    `supported_parameters`, and it returns `reasoning` / `reasoning_details`
- *    with the same "pass the sequence back unmodified during tool use" rule
- *    Anthropic states natively.
- *  - It is **opt-in**. Nothing here sends any of those parameters, so nothing
- *    comes back, so nothing is being dropped today. The defect on this path is
- *    latent, not active — which is a different sentence from "this path is
- *    fine", and the difference is one request parameter away.
- *  - The OpenAI SDK's own types have no `reasoning` field on the response
- *    message (checked, v7.4.0), so turning it on is not a one-line change: it
- *    needs a schema at the boundary (PRACTICES.md#parse-at-boundaries-preserve-provenance) and it costs reasoning
- *    tokens that are not being billed now. That is a decision with a price, so
- *    it is not smuggled into a correctness fix.
- *
- * Reading reasoning back is still not done, for the reasons above. **Asking for
- * none of it now is** (2026-08-27, behind `reasoningEffort`), and it is the
- * opposite trade: no schema at the boundary, no tokens billed — it removes the
- * ones already being billed. The production install moved to
- * `qwen/qwen3.8-27b` on 25/08, a model that reasons by DEFAULT, and the
- * profile has declared `"thinking": "off"` for `*qwen3*` the whole time. The
- * no-op was costing 1502 output tokens per extraction for an empty answer.
- *
- * So `ChatCall.thinking` is honoured here for `'off'` and only there:
- * `'adaptive'` sends nothing, because "whatever the model does by default" is
- * what sending nothing already means.
+ * Reasoning is carried through the canonical provider-agnostic
+ * `ChatCall.reasoning` intent. OpenRouter receives the supported subset; local
+ * OpenAI-compatible endpoints omit the field because unknown request fields
+ * are commonly rejected. Legacy `ChatCall.thinking` is normalized at the
+ * boundary for direct callers.
  *
  * Prompt-cache breakpoints it DOES carry now, behind `explicitCache`, and the
  * history of that flag is the reason it exists. This file used to say
@@ -141,6 +122,37 @@ function speaksReasoningEffort(baseURL?: string): boolean {
   }
 }
 
+/** Small, dated capability snapshot; discovery is intentionally not per call. */
+export function openRouterReasoningCapabilities(model: string, baseURL?: string): {
+  capabilities: ReasoningCapabilities;
+  source: 'openrouter-model-snapshot' | 'openrouter-gateway-defaults' | 'endpoint-defaults';
+} {
+  if (!speaksReasoningEffort(baseURL)) {
+    return {
+      capabilities: { supported: false, canDisable: true, supportsMaxTokens: false, mandatory: false },
+      source: 'endpoint-defaults',
+    };
+  }
+  if (model.toLowerCase() === 'qwen/qwen3.8-27b') {
+    return {
+      capabilities: {
+        supported: true,
+        canDisable: true,
+        supportedEfforts: ['xhigh', 'medium', 'low'],
+        defaultEnabled: true,
+        defaultEffort: 'xhigh',
+        supportsMaxTokens: false,
+        mandatory: false,
+      },
+      source: 'openrouter-model-snapshot',
+    };
+  }
+  return {
+    capabilities: { supported: true, canDisable: true, supportsMaxTokens: false, mandatory: false },
+    source: 'openrouter-gateway-defaults',
+  };
+}
+
 /**
  * Le preferenze di instradamento, coi **nostri** nomi.
  *
@@ -193,6 +205,7 @@ export class OpenAICompatProvider implements Provider {
   readonly stickySession: boolean;
   /** Le preferenze di instradamento dell'owner, già nella forma del corpo. */
   private readonly routing: Record<string, unknown> | undefined;
+  private readonly baseURL: string | undefined;
   /** Public for the same reason: the wiring is the part that must be provable. */
   readonly reasoningEffort: boolean;
 
@@ -208,6 +221,7 @@ export class OpenAICompatProvider implements Provider {
       fetch?: typeof globalThis.fetch;
     } = {},
   ) {
+    this.baseURL = baseURL;
     this.explicitCache = opts.explicitCache ?? wantsExplicitCache(baseURL);
     this.stickySession = opts.stickySession ?? speaksStickySession(baseURL);
     // Le preferenze si mandano solo a chi smista. Su un Ollama locale non c'è
@@ -222,6 +236,11 @@ export class OpenAICompatProvider implements Provider {
       defaultHeaders: headers,
       ...(opts.fetch ? { fetch: opts.fetch } : {}),
     });
+  }
+
+  resolveReasoning(call: ChatCall): ReasoningResolution {
+    const { capabilities, source } = openRouterReasoningCapabilities(call.model, this.baseURL);
+    return resolveReasoningPolicy(reasoningRequest(call), capabilities, source);
   }
 
   async chat(call: ChatCall): Promise<ChatResult> {
@@ -372,6 +391,14 @@ export class OpenAICompatProvider implements Provider {
 
   /** The request body `chat()` and `chatStream()` share — everything but `stream` itself. */
   private requestBody(call: ChatCall): Omit<OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, 'stream'> {
+    const reasoning = this.resolveReasoning(call);
+    if (reasoning.status === 'unsupported') throw new ReasoningConfigurationError(reasoning);
+    const effective = reasoning.effective;
+    const explicitReasoningConstraint = effective !== undefined && (effective.mode === 'off' || effective.mode === 'on' || effective.effort !== undefined || effective.maxTokens !== undefined);
+    const configuredRouting = this.routing;
+    const providerRouting = explicitReasoningConstraint
+      ? { ...(configuredRouting ?? {}), require_parameters: true }
+      : configuredRouting;
     return {
       model: call.model,
       max_tokens: call.maxOutputTokens,
@@ -392,8 +419,12 @@ export class OpenAICompatProvider implements Provider {
       // so it goes through the same cast `cache_control` uses below. Only 'off'
       // is sent: 'adaptive' means "whatever the model does by default", which is
       // exactly what sending nothing already means.
-      ...(this.reasoningEffort && call.thinking === 'off'
-        ? ({ reasoning: { effort: 'none' } } as Record<string, unknown>)
+      ...(this.reasoningEffort && effective?.mode === 'off' ? ({ reasoning: { effort: 'none' } } as Record<string, unknown>) : {}),
+      ...(this.reasoningEffort && effective?.mode === 'on' && effective.maxTokens !== undefined
+        ? ({ reasoning: { max_tokens: effective.maxTokens } } as Record<string, unknown>)
+        : {}),
+      ...(this.reasoningEffort && effective?.mode === 'on' && effective.maxTokens === undefined
+        ? ({ reasoning: effective.effort === undefined ? { enabled: true } : { effort: effective.effort } } as Record<string, unknown>)
         : {}),
       // **Tieni questa conversazione sullo stesso provider a monte.**
       //
@@ -420,7 +451,7 @@ export class OpenAICompatProvider implements Provider {
       // Dove instradare, quando l'owner l'ha detto. Vedi `config.provider.routing`:
       // un modello su uno smistatore non è una macchina, e chi risponde decide
       // prezzo, quantizzazione, politica sui dati e se la cache prende.
-      ...(this.routing !== undefined ? ({ provider: this.routing } as Record<string, unknown>) : {}),
+      ...(providerRouting !== undefined || explicitReasoningConstraint ? ({ provider: providerRouting ?? { require_parameters: true } } as Record<string, unknown>) : {}),
       ...(this.stickySession && call.conversation !== undefined && call.conversation !== ''
         ? ({ session_id: createHash('sha256').update(call.conversation).digest('hex').slice(0, 32) } as Record<
             string,

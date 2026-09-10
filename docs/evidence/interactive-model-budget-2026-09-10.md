@@ -72,3 +72,50 @@ in-flight provider call can only persist the time once the lease is released;
 the exact uncommitted interval is not recoverable without a separate heartbeat
 or database write on every activity event, which is deliberately outside this
 slice.
+
+## P3 normalized reasoning capability
+
+The reasoning slice separates three things that had previously been mixed in
+`thinking` strings:
+
+- `ReasoningRequest` is Muffin's provider-agnostic intent: `off`, `adaptive` or
+  `on`, with optional effort or an exact token budget.
+- `ReasoningCapabilities` describes what the adapter can prove for the selected
+  model/endpoint, including whether reasoning is mandatory and whether it can
+  be disabled.
+- `ReasoningResolution` records whether the intent was applied, deliberately
+  omitted, or rejected as unsupported. Unsupported explicit constraints fail
+  before a provider request; omission carries a reason and is emitted in the
+  chat trace.
+
+Shipped profiles remain backward compatible: `Profile.thinking` is normalized
+once at the loop boundary, while direct adapter callers may still use the
+legacy field. Production `ChatCall`s carry only the canonical `reasoning`
+intent. `/think` changes the same profile value consumed by that boundary, so
+the interactive command and the profile path now share the resolver rather than
+having separate wire behavior.
+
+The OpenRouter adapter uses a small dated capability snapshot for
+`qwen/qwen3.8-27b` (queried from the public model metadata on 2026-09-10):
+reasoning is optional, enabled by default, with `xhigh`, `medium` and `low`
+efforts; an exact reasoning token budget is not declared. Other OpenRouter
+models use a gateway-default capability with no per-call metadata fetch, so an
+effort may be sent only when the gateway cannot prove a model-specific list.
+An explicit reasoning constraint also sets provider routing
+`require_parameters: true`, which intentionally narrows fallback to providers
+that accept the requested parameter. Local OpenAI-compatible endpoints omit
+the reasoning field; `off` is an explicit, traced omission there rather than a
+claim that the endpoint disabled hidden reasoning.
+
+The Anthropic adapter maps adaptive/on to `thinking: {type:'adaptive'}`, off to
+`disabled`, effort to `output_config.effort`, and exact budgets only for the
+known 4.5 model shape. It does not turn a reasoning budget into a latency
+deadline. Sampling remains unchanged: the current profiles still request their
+existing deterministic behavior, and no Qwen decoding retune or live model
+acceptance was performed in this slice.
+
+The public metadata lookup was read-only. No owner credentials or live model
+inference were used, so acceptance on the actual OpenRouter account remains
+open. The remaining risks are capability metadata drift and the absence of a
+cached live discovery layer. Those belong with P4 discovery/acceptance, not a
+silent fallback in the request path.

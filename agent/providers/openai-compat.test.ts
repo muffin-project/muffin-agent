@@ -106,7 +106,7 @@ describe('openai-compat · explicit prompt caching', () => {
     // Ollama, llama.cpp, vLLM: implicit caching, strict-ish parsers. The
     // default is off, and off means a plain string — not parts without the
     // field, which some servers also reject.
-    const h = harness(false);
+    const h = harness(false, true);
     await h.provider.chat(CALL);
 
     const system = (h.bodies[0] as Body).messages[0]!;
@@ -299,6 +299,21 @@ describe("thinking:'off' smette di essere un no-op, dove l'endpoint capisce", ()
     const h = harness(false, true);
     await h.provider.chat({ ...CALL, thinking: 'off' });
     expect((h.bodies[0] as { reasoning?: unknown }).reasoning).toEqual({ effort: 'none' });
+  });
+
+  it('uses the canonical reasoning intent and requires routed providers to support it', async () => {
+    const h = harness(false, true);
+    await h.provider.chat({ ...CALL, model: 'qwen/qwen3.8-27b', reasoning: { mode: 'on', effort: 'low' } });
+    expect((h.bodies[0] as { reasoning?: unknown }).reasoning).toEqual({ effort: 'low' });
+    expect((h.bodies[0] as { provider?: unknown }).provider).toEqual({ require_parameters: true });
+  });
+
+  it('rejects an exact reasoning token budget when the model snapshot does not support it', async () => {
+    const h = harness(false, true);
+    await expect(h.provider.chat({ ...CALL, model: 'qwen/qwen3.8-27b', reasoning: { mode: 'on', maxTokens: 2048 } })).rejects.toThrow(
+      'exact reasoning token budget',
+    );
+    expect(h.bodies).toHaveLength(0);
   });
 
   it("non manda niente per 'adaptive': è già ciò che significa non mandare niente", async () => {
