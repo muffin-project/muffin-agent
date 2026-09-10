@@ -10,6 +10,13 @@ import {
   type StreamEvent,
   type ThinkingBlock,
 } from './types.js';
+import {
+  ReasoningConfigurationError,
+  reasoningRequest,
+  resolveReasoningPolicy,
+  type ReasoningCapabilities,
+  type ReasoningResolution,
+} from './reasoning.js';
 
 /**
  * Anthropic native.
@@ -20,10 +27,9 @@ import {
  * system prompt being affordable or not), reasoning continuity across a
  * tool-use turn, and the 1M context window.
  *
- * The middle one used to say "extended thinking budgets" and that was wrong in
- * both halves — see ADR-0037. Budgets are gone from the API, and what this
- * adapter has to carry is not a request knob but the *response*: the thinking
- * blocks, back out and back in unmodified.
+ * The request side uses the canonical reasoning intent and resolves it against
+ * the model shape this adapter knows. The response side still carries thinking
+ * blocks back out and back in unmodified for tool-use continuity.
  */
 export class AnthropicProvider implements Provider {
   readonly kind = 'anthropic' as const;
@@ -40,6 +46,10 @@ export class AnthropicProvider implements Provider {
       ...(baseURL ? { baseURL } : {}),
       ...(opts.fetch ? { fetch: opts.fetch } : {}),
     });
+  }
+
+  resolveReasoning(call: ChatCall): ReasoningResolution {
+    return resolveAnthropicReasoning(call);
   }
 
   async chat(call: ChatCall): Promise<ChatResult> {
@@ -193,6 +203,9 @@ export class AnthropicProvider implements Provider {
 
 /** The request body `chat()` and `chatStream()` share — everything but `stream` itself. */
 function requestBody(call: ChatCall): Omit<Anthropic.MessageCreateParamsNonStreaming, 'stream'> {
+  const reasoning = resolveAnthropicReasoning(call);
+  if (reasoning.status === 'unsupported') throw new ReasoningConfigurationError(reasoning);
+  const effective = reasoning.effective;
   return {
     model: call.model,
     max_tokens: call.maxOutputTokens,
@@ -223,10 +236,26 @@ function requestBody(call: ChatCall): Omit<Anthropic.MessageCreateParamsNonStrea
     // deliberately not sent: `"high"` is the API default and sending the
     // default is identical to omitting it, so adding the field would only
     // give us a value to drift.
-    ...(call.thinking
-      ? { thinking: { type: call.thinking === 'off' ? ('disabled' as const) : ('adaptive' as const) } }
-      : {}),
+    ...(effective?.mode === 'off'
+      ? { thinking: { type: 'disabled' as const } }
+      : effective?.maxTokens !== undefined
+        ? { thinking: { type: 'enabled' as const, budget_tokens: effective.maxTokens } }
+        : effective?.mode === 'on' || effective?.mode === 'adaptive'
+          ? { thinking: { type: 'adaptive' as const } }
+          : {}),
+    ...(effective?.effort === undefined ? {} : ({ output_config: { effort: effective.effort } } as Record<string, unknown>)),
   };
+}
+
+function resolveAnthropicReasoning(call: ChatCall): ReasoningResolution {
+  const capabilities: ReasoningCapabilities = {
+    supported: true,
+    canDisable: true,
+    supportedEfforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    supportsMaxTokens: /claude-(?:haiku|sonnet|opus)-4[.-]5(?:$|[-:])/.test(call.model),
+    mandatory: false,
+  };
+  return resolveReasoningPolicy(reasoningRequest(call), capabilities, 'endpoint-defaults');
 }
 
 /**
