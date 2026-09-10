@@ -316,6 +316,22 @@ ln -sf "$BIN" "$BINDIR/$CMD"
 MUFFIN="$BINDIR/$CMD"
 say "installed: $MUFFIN -> $BIN"
 
+# Completion is a projection of Muffin's command authority, not another command
+# list the installer owns.  These user-local locations are discovered by the
+# usual bash/fish integrations; zsh gets the small fpath marker only when the
+# owner already uses zsh.
+COMPLETION_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
+mkdir -p "$COMPLETION_HOME/bash-completion/completions" "$COMPLETION_HOME/zsh/site-functions" "$HOME/.config/fish/completions"
+"$MUFFIN" completion bash >"$COMPLETION_HOME/bash-completion/completions/$CMD"
+"$MUFFIN" completion zsh >"$COMPLETION_HOME/zsh/site-functions/_$CMD"
+"$MUFFIN" completion fish >"$HOME/.config/fish/completions/$CMD.fish"
+if [ "${SHELL##*/}" = zsh ]; then
+  ZSH_MARK="# muffin (install.sh): completion"
+  if ! grep -qF "$ZSH_MARK" "$HOME/.zshrc" 2>/dev/null; then
+    printf '\n%s\nfpath=("%s/zsh/site-functions" $fpath)\nautoload -Uz compinit; compinit\n' "$ZSH_MARK" "$COMPLETION_HOME" >>"$HOME/.zshrc" || die "could not write $HOME/.zshrc"
+  fi
+fi
+
 # The contract of this section is «install → `muffin` works», in the next
 # shell too, not only inside this script. Two directories have to be on the
 # login shell's PATH for that: the launcher's, and — measured on a fresh VPS

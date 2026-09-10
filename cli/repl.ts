@@ -564,6 +564,16 @@ export async function runRepl(
       [
         `${style.accent('✳')} ${style.bold('muffin')}`,
         style.dim(`${runtime.config.models.main} · profilo ${runtime.deps.profile.name}`),
+        style.dim(
+          runtime.config.provider.kind === 'anthropic'
+            ? 'Anthropic diretto'
+            : runtime.config.provider.baseUrl?.includes('openrouter.ai')
+              ? 'OpenRouter · OpenAI-compatible'
+              : `OpenAI-compatible · ${runtime.config.provider.baseUrl ?? 'endpoint non dichiarato'}`,
+        ),
+        style.dim(`superfici: ${runtime.config.surfaces.enabled.join(', ')}`),
+        style.dim(gateway === null ? 'gateway: questa sessione' : `gateway: attivo (pid ${gateway.pid})`),
+        style.dim('scrivi quello che vuoi fare · /help mostra i controlli · Tab completa'),
       ],
       style.dim,
       process.stderr.columns ?? 80,

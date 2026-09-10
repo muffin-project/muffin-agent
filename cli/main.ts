@@ -56,7 +56,7 @@ import {
   locateSecret,
   locateSecretAll,
   paths,
-  writeSecret,
+  writeAuthoritativeSecret,
   ConfigError,
   type ProviderKind,
 } from '../core/config/config.js';
@@ -78,6 +78,7 @@ import {
   probeLocalRuntime,
   type ModelChoiceReason,
 } from './onboarding.js';
+import { allHelp, canonicalCommand, completion, primaryHelp } from './command-surface.js';
 
 /**
  * Entry point.
@@ -85,133 +86,6 @@ import {
  * stdout carries the answer, stderr carries everything else, and the exit code
  * means something — this thing has to be scriptable before it is conversational.
  */
-
-const USAGE = `muffin — agente personale, sempre acceso
-alias italiani sui nomi comando: memoria=memory · lavori=jobs · segreto=secret
-
-  muffin (o: muffin repl)       avvia l'agente: REPL + ogni surface abilitata
-                                [--stream|--no-stream] forza la risposta a
-                                comparire mentre si forma, o solo a fine
-                                turno (di default: sì su un terminale reale,
-                                mai su una pipe)
-                                [--debug] giri, token, millisecondi e stop
-                                reason invece dei soli passi (a caldo: /debug)
-  muffin model [<corsia>] <slug> scegli il modello: main (default), light o
-                                embed. Senza argomenti mostra i tre e cosa
-                                costano; --list [filtro] sfoglia il catalogo
-                                del provider. A caldo: /model
-  muffin search [<motore>|off]  accendi la ricerca web scegliendo il motore
-                                (la chiave in pipe, mai in argv); senza
-                                argomenti dice com'e' messa
-  muffin run "<obiettivo>"      un obiettivo, senza REPL, exit code parlante
-                                [--json] [--session ID] [--timeout S]
-                                [--image FILE] mostra un'immagine al modello
-                                (JPEG/PNG/GIF/WebP, ripetibile)
-
-comandi operatore:
-  muffin init [--hardened] [--force] [--provider anthropic|openai-compat]
-              [--base-url URL] [--model NOME] [--light-model NOME]
-                                la chiave arriva da stdin o dal prompt nascosto,
-                                mai da argv: echo -n "$KEY" | muffin init
-              [--local [DIR]]  home di prova separata (default ~/.muffin-local),
-                                riusa il segreto persistito — mai una copia
-  muffin config [--json]        ogni manopola: valore, dove vive, se è sigillata
-  muffin config set <chiave> <valore>
-                                cambia una delle poche manopole scrivibili da qui
-                                (le altre hanno un comando dedicato, o si toccano a mano)
-  muffin doctor [--json]
-  muffin adopt [<file>|--tutto] i file di defaults/ (persona.md, voice.md, le
-                                skill) che l'installazione ha lasciato indietro.
-                                Senza argomenti dice solo com'e' messa; adotta
-                                solo cio' che non hai mai toccato tu, e mai
-                                dentro il sigillo
-  muffin backup [--dir DIR]     copia online del database (VACUUM INTO), validata
-  muffin undo [<turno>|--last] [--yes]
-                                i file che Muffin ha scritto tornano com'erano
-                                prima di quel turno; senza --yes stampa cosa
-                                farebbe. Lo stato attuale viene messo da parte,
-                                quindi l'undo si disfà a sua volta.
-  muffin restore <file> --yes   ripristina un backup: rifiuta col gateway vivo,
-                                mette da parte il db corrente, riapplica le
-                                migrazioni
-  muffin update [--dry-run] [--yes]
-                                aggiorna da origin/main: release affiancata
-                                (git worktree + npm ci), backup, poi scambio
-                                atomico del launcher — il gateway vivo resta
-                                sul codice vecchio finché non riparte
-  muffin update --rollback [--yes]
-                                torna alla release precedente (flip inverso)
-  muffin surface list | enable telegram [--owner <chat-id>] | disable telegram
-  muffin surface default <id>   dove Muffin parla quando nessuno ha chiesto
-  muffin gateway status | stop | start | restart | install [--write]
-                                il processo che tiene vivi i job quando non hai
-                                nessuna finestra aperta. \`muffin init\` propone
-                                di installarlo; \`run\` lo lancia il supervisore.
-                                \`restart\` fa kickstart/systemctl restart e
-                                verifica lo stato dopo, non l'exit code.
-  muffin mcp list [--verify] | add <name> [--env K=V]... -- <cmd> [args...] | remove <name>
-  muffin prompt show [--surface cli|telegram|discord] [--member] [--tenant ID] [--blocks]
-                                il system prompt che il modello riceverebbe
-                                davvero, sulla home corrente — niente chiamate
-                                al modello, segreti redatti
-  muffin prompt version [v1|v2]
-                                quale prompt assembla questa installazione. v1 e
-                                il default e non si muove; v2 riscrive carattere,
-                                voce e regole di lavoro. Vale dal prossimo boot.
-  muffin secret set NOME [--persist]
-                                (valore su stdin) --persist lo scrive fuori da
-                                ~/.muffin, così sopravvive a \`uninstall\` e
-                                \`init\` lo ritrova senza re-incollarlo
-  muffin rot verify | reseal | harden
-                                \`harden\` non esegue nulla: stampa i comandi
-                                per rendere vera la modalità hardened su
-                                questa macchina, e cosa cambia una volta fatto
-  muffin uninstall [--yes]      rimuove ~/.muffin (config, chiavi, memoria). Una
-                                chiave scritta con --persist vive fuori: resta,
-                                e il comando lo dice.
-
-ispezione:
-  muffin memory why <fact-id> | search "<query>" | extract | stats | check
-  muffin memory review [keep <fact-id>]
-                                le contraddizioni che il giudice ha lasciato a
-                                te. \`keep\` ritira l'altra: niente si cancella
-  muffin vault reindex | add <file> | ls | check
-  muffin jobs list | add --cron "<expr>" [--tz] [--channel] "<obiettivo>" | remove <id>
-  muffin observe [--send]       cosa è rimasto in silenzio, e cosa farebbe il
-                                cancello di proattività. Manda solo con --send.
-  muffin trace tail [-n N] [--errors] | grep PATTERN
-  muffin trace turn <id>        il turno passo per passo: cosa ha fatto, quanto
-                                ci ha messo, quanti token — l'id è quello che il
-                                turno stampa alla fine ("trace c22cb4445952")
-  muffin effects [--turn <id> | --day YYYY-MM-DD] [--db <path>]
-                                il registro degli effetti (D15): cosa e' passato
-                                senza domanda, con riga della matrice, risorsa e
-                                classe di reversibilita'. Interfaccia da
-                                operatore: l'owner la stessa cosa la chiede
-                                parlando ("cosa hai fatto oggi?").
-  muffin orientamento --db <path> [--cap N]
-                                quota di chiamate "di orientamento"
-                                (fs_list/fs_read/fs_search/sys_inspect) su
-                                turn_tool_calls di un database esplicito, mai
-                                la home di default; --cap conta i turni che
-                                l'hanno toccata (default 15)
-
-Exit code: 0 ok · 1 avvisi · 2 errore bloccante · 3 serve conferma · 70 errore imprevisto
-           77 permesso negato · 78 configurazione non valida
-`;
-
-/**
- * Selective, not exhaustive (ADR-0036, emendamento lingua): an alias only
- * where Italian has the word an owner would actually say — not a translation
- * table for every command. English keeps working; this is a lookup consulted
- * once, in front of the switch, never a second command table to keep in sync.
- */
-const COMMAND_ALIASES: Readonly<Record<string, string>> = {
-  memoria: 'memory',
-  lavori: 'jobs',
-  segreto: 'secret',
-  annulla: 'undo',
-};
 
 /**
  * package.json sits one level above `cli/` in source but two levels above once
@@ -298,7 +172,7 @@ async function main(rawArgv: string[]): Promise<number> {
   // Resolved once, here, so every branch below — including the error path —
   // only ever sees canonical command names. `typed` itself is undefined for a
   // bare `muffin`, which must not become the string "undefined" in a lookup.
-  const command = typed !== undefined ? (COMMAND_ALIASES[typed] ?? typed) : typed;
+  const command = typed !== undefined ? canonicalCommand(typed) : typed;
   switch (command) {
     case 'run':
       return cmdRun(rest);
@@ -320,6 +194,7 @@ async function main(rawArgv: string[]): Promise<number> {
       process.stdout.write(`${styleFor(process.stdout).header('muffin search')}\n`);
       return cmdSearch(paths().home, rest, {
         out: (l) => process.stdout.write(`${l}\n`),
+        secretBackend: 'persistent',
         // Su un terminale stdin non e' una pipe: leggerlo vorrebbe dire
         // aspettare byte che nessuno sta scrivendo, e poi stampare un errore
         // di scadenza al posto della domanda. `isatty(0)` divide i due mondi,
@@ -389,6 +264,18 @@ async function main(rawArgv: string[]): Promise<number> {
       return cmdOrientamento(rest);
     case 'effects':
       return cmdEffects(rest);
+    case 'completion': {
+      const script = completion(rest[0] ?? '');
+      if (script === null) {
+        process.stderr.write('usage: muffin completion <bash|zsh|fish>\n');
+        return 78;
+      }
+      process.stdout.write(script);
+      return 0;
+    }
+    case 'help':
+      process.stdout.write(rest.includes('--all') ? allHelp() : primaryHelp());
+      return 0;
     case undefined: {
       // Bare `muffin` opens the REPL — but on a first run there is no config to
       // open it with. Detect that and route into setup instead of failing with a
@@ -398,7 +285,7 @@ async function main(rawArgv: string[]): Promise<number> {
     }
     case '--help':
     case '-h':
-      process.stdout.write(USAGE);
+      process.stdout.write(primaryHelp());
       return 0;
     case '--version':
     case '-v': {
@@ -407,7 +294,7 @@ async function main(rawArgv: string[]): Promise<number> {
       return 0;
     }
     default:
-      process.stderr.write(`comando sconosciuto: ${typed}\n\n${USAGE}`);
+      process.stderr.write(`comando sconosciuto: ${typed}\n\n${primaryHelp()}`);
       return 78;
   }
 }
@@ -735,6 +622,10 @@ async function cmdInit(argv: string[]): Promise<number> {
     ...(mainModel ? { mainModel } : {}),
     ...(lightModel ? { lightModel } : {}),
     ...(apiKey ? { apiKey } : {}),
+    // The interactive owner flow has one durable source of truth. `runInit`
+    // keeps its home default for isolated programmatic fixtures and legacy API
+    // callers; the public CLI must not create a competing copy.
+    secretBackend: 'persistent',
     home,
   });
 
@@ -1209,7 +1100,13 @@ async function cmdSurface(argv: string[]): Promise<number> {
       args: rest,
       options: { owner: { type: 'string' }, 'api-base': { type: 'string' } },
     });
-    return cmdSurfaceEnable(home, id, values.owner, values['api-base']);
+    return cmdSurfaceEnable(
+      home,
+      id,
+      values.owner,
+      values['api-base'],
+      isatty(0) ? (question) => promptSecret(question) : undefined,
+    );
   }
   if (sub === 'disable' && id) return cmdSurfaceDisable(home, id);
   // ADR-0060: la manopola che `surfaces.default` dichiarava da sempre e che
@@ -1221,10 +1118,9 @@ async function cmdSurface(argv: string[]): Promise<number> {
 
 function cmdSecret(argv: string[]): number {
   const [sub, ...rest] = argv;
-  const persist = rest.includes('--persist');
   const name = rest.find((a) => !a.startsWith('-'));
   if (sub !== 'set' || !name) {
-    process.stderr.write(`usage: muffin secret set NAME [--persist]  (value on stdin)\n`);
+    process.stderr.write(`usage: muffin secret set NAME  (value on stdin)\n`);
     return 78;
   }
   // Read from stdin, never from argv: a key in a shell argument is a key in the
@@ -1242,19 +1138,13 @@ function cmdSecret(argv: string[]): number {
     process.stderr.write(`no value on stdin — pipe it: echo -n "$KEY" | muffin secret set ${name}\n`);
     return 78;
   }
-  // Default is this home's own store, so the command keeps meaning what it
-  // meant and `muffin uninstall` keeps deleting what it says it deletes.
-  // `--persist` is the opt-in that replaces the `.env`: outside the wiped home,
-  // outside the working directory, 0700/0600, and on the tools' deny-read list.
-  const at = writeSecret(name, value, paths().home, persist ? 'persistent' : 'home');
+  // The durable store is the sole target for a newly supplied value. `--persist`
+  // remains accepted as a compatibility no-op, never a choice an owner needs.
+  const at = writeAuthoritativeSecret(name, value, paths().home);
   process.stdout.write(`stored ${name} (0600), ${value.length} chars → ${at}\n`);
-  // Said here, not only by `doctor`, because here is the moment the person is
-  // holding the key: the read chain takes the FIRST location that exists
-  // (`locateSecret`), so writing a second copy can be a write into a file
-  // nothing ever reads — and every symptom of that is somewhere else ("ho
-  // cambiato la chiave e usa ancora quella vecchia"). Observed on the owner's
-  // own install, 2026-08-26: `secret set --persist` landed behind a home copy
-  // written months earlier by `init`, and only `doctor` ever said so.
+  // A legacy installation may still have a second copy under its old home.
+  // Do not silently pretend that it disappeared: make the remaining migration
+  // visible, but never create a new competing copy from this command.
   const copies = locateSecretAll(`secret://${name}`, paths().home);
   const winner = copies[0];
   if (copies.length > 1 && winner) {
