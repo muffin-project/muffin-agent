@@ -21,6 +21,7 @@
   "execution": {
     "modelCallDeadlineMs": 90000,
     "turnWallDeadlineMs": 180000,
+    "activeModelBudgetMs": 120000,
     "firstActivityTimeoutMs": 30000,
     "stallTimeoutMs": 25000,
     "heartbeatIntervalMs": 15000
