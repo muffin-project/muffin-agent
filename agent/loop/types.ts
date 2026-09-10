@@ -409,6 +409,8 @@ export type RegisteredTool = {
 export type LoopDeps = {
   provider: Provider;
   profile: Profile;
+  /** Optional experimental sampling override used by evaluation harnesses. */
+  samplingOverride?: NonNullable<import('../providers/types.js').ChatCall['sampling']> | undefined;
   model: string;
   tools: RegisteredTool[];
   decide: Decide;

@@ -40,7 +40,7 @@ export class OpenRouterReasoningDiscovery {
     const key = this.key(baseURL, model);
     const cached = this.cache.get(key);
     if (cached !== undefined && cached.expiresAt > this.now()) {
-      return this.fromMetadata(cached.metadata, 'openrouter-cache');
+      return this.fromMetadata(cached.metadata, 'openrouter-cache', model);
     }
 
     try {
@@ -49,7 +49,7 @@ export class OpenRouterReasoningDiscovery {
       this.cache.set(key, { metadata, expiresAt });
       const canonical = metadata.canonical_slug ?? metadata.id;
       if (canonical !== undefined) this.cache.set(this.key(baseURL, canonical), { metadata, expiresAt });
-      const discovered = this.fromMetadata(metadata, 'openrouter-live');
+      const discovered = this.fromMetadata(metadata, 'openrouter-live', model);
       if (discovered.capabilities.support === 'unknown') return discovered;
       return discovered;
     } catch {
@@ -81,9 +81,16 @@ export class OpenRouterReasoningDiscovery {
     }
   }
 
-  private fromMetadata(metadata: OpenRouterReasoningMetadata, source: ReasoningCapabilitySource): OpenRouterDiscoveryResult {
+  private fromMetadata(metadata: OpenRouterReasoningMetadata, source: ReasoningCapabilitySource, model?: string): OpenRouterDiscoveryResult {
     const reasoning = metadata.reasoning;
-    if (reasoning === undefined) return { capabilities: unknownCapabilities(), source, ...(metadata.canonical_slug ?? metadata.id ? { canonicalModel: metadata.canonical_slug ?? metadata.id } : {}) };
+    if (reasoning === undefined) {
+      // OpenRouter documents `openrouter/free` as a dynamic router: it chooses
+      // the upstream model after inspecting the request and omits the
+      // reasoning field. There is no fixed capability to claim, so omission
+      // remains the safe no-configuration state for this router.
+      const capabilities = model?.toLowerCase() === 'openrouter/free' ? unsupportedCapabilities() : unknownCapabilities();
+      return { capabilities, source, ...(metadata.canonical_slug ?? metadata.id ? { canonicalModel: metadata.canonical_slug ?? metadata.id } : {}) };
+    }
     return {
       source,
       ...(metadata.canonical_slug ?? metadata.id ? { canonicalModel: metadata.canonical_slug ?? metadata.id } : {}),
@@ -110,6 +117,10 @@ export class OpenRouterReasoningDiscovery {
 
 function unknownCapabilities(): ReasoningCapabilities {
   return { support: 'unknown', canDisable: false, supportsMaxTokens: false, mandatory: false };
+}
+
+function unsupportedCapabilities(): ReasoningCapabilities {
+  return { support: 'unsupported', canDisable: true, supportsMaxTokens: false, mandatory: false };
 }
 
 function isReasoningEffort(value: string): value is NonNullable<ReasoningCapabilities['supportedEfforts']>[number] {
