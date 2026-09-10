@@ -326,6 +326,8 @@ export function ambienteSection(a: {
   model: string;
   profilo: string;
   timeZone?: string;
+  /** True only until canonical owner memory contains its first active fact. */
+  firstEncounter?: boolean;
   /**
    * I fatti d'istanza di Parte 0. Assente = niente di nuovo aggiunto (i test
    * esistenti su questa funzione non li passano, e continuano a valere).
@@ -371,6 +373,11 @@ export function ambienteSection(a: {
   ];
   if (a.istanza && a.classe === 'owner') {
     righe.push(...istanzaRighe(a.istanza));
+  }
+  if (a.firstEncounter && a.classe === 'owner') {
+    righe.push(
+      '- È il primo incontro: non fingere di conoscere questa persona, presentati senza cataloghi di capability e fai al massimo una domanda umana utile al contesto. Ascolta la risposta: la memoria canonica la raccoglie normalmente.',
+    );
   }
   return righe.join('\n');
 }

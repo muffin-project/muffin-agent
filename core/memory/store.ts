@@ -990,6 +990,14 @@ export class MemoryStore {
       .all(tenantId, `%${name.trim()}%`, limit) as { id: number; name: string; kind: string }[];
   }
 
+  /** Whether this tenant has learned one active fact from its canonical memory. */
+  hasActiveFacts(tenantId: string): boolean {
+    const row = this.db
+      .prepare(`SELECT 1 AS present FROM facts WHERE tenant_id = ? AND expired_at IS NULL LIMIT 1`)
+      .get(tenantId) as { present: number } | undefined;
+    return row !== undefined;
+  }
+
   // ---- review -----------------------------------------------------------------
 
   /**
