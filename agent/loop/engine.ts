@@ -548,6 +548,7 @@ export async function guidaIlTurno(
         deps.istanza?.(),
         deps.timeZone,
         undoneTraceIds,
+        turnClass === 'owner' && deps.memory !== undefined && !deps.memory.store.hasActiveFacts(input.tenant),
       ),
     );
 

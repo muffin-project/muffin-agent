@@ -14,6 +14,7 @@ import {
   locateSecret,
   paths,
   saveConfig,
+  writeAuthoritativeSecret,
   writeSecret,
   type Config,
   type ProviderKind,
@@ -142,7 +143,10 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   // è esattamente il rename secco che questa forma esiste per non fare.
   let riferimento = `secret://${nomeChiave}`;
   if (apiKey) {
-    const at = writeSecret(nomeChiave, apiKey, home, options.secretBackend ?? 'home');
+    const backend = options.secretBackend ?? 'home';
+    const at = backend === 'persistent'
+      ? writeAuthoritativeSecret(nomeChiave, apiKey, home)
+      : writeSecret(nomeChiave, apiKey, home, backend);
     step('api key', `stored 0600 in ${at}`);
   } else {
     // The dev loop `muffin uninstall --yes && muffin init` wipes `home` and then

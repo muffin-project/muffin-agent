@@ -123,6 +123,15 @@ describe('con chi stai parlando', () => {
   });
 });
 
+describe('primo incontro', () => {
+  it('is a volatile owner-only instruction, not another durable profile', () => {
+    const fresh = ambienteSection({ ...base, firstEncounter: true });
+    expect(fresh).toContain('primo incontro');
+    expect(fresh).toContain('al massimo una domanda');
+    expect(ambienteSection({ ...base, classe: 'group', firstEncounter: true })).not.toContain('primo incontro');
+  });
+});
+
 describe('con cosa stai rispondendo', () => {
   /**
    * «Non so quale modello mi esegue» è una risposta che Muffin dava e che non
