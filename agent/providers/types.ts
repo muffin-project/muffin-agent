@@ -120,7 +120,12 @@ export type ContentBlock =
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | ThinkingBlock;
 
-export type Message = { role: Role; content: ContentBlock[] };
+/** Opaque provider-owned continuation data; never rendered or interpreted by the loop. */
+export type ProviderMessageMetadata = {
+  reasoning?: { provider: string; details?: unknown; content?: unknown };
+};
+
+export type Message = { role: Role; content: ContentBlock[]; providerMetadata?: ProviderMessageMetadata };
 
 export type ToolSpec = {
   name: string;
@@ -294,6 +299,8 @@ export type ChatResult = {
    * e dirlo due volte non aggiunge niente.
    */
   upstream?: string;
+  /** Opaque provider metadata needed when the next request continues reasoning. */
+  providerMetadata?: ProviderMessageMetadata;
 };
 
 /**
@@ -363,7 +370,7 @@ export class ProviderStreamError extends Error {
 export interface Provider {
   readonly kind: 'anthropic' | 'openai-compat';
   chat(call: ChatCall): Promise<ChatResult>;
-  resolveReasoning?(call: ChatCall): ReasoningResolution;
+  resolveReasoning?(call: ChatCall): ReasoningResolution | Promise<ReasoningResolution>;
   /**
    * Optional: a provider that can stream implements this. Absent means "this
    * provider cannot stream" and the loop falls back to `chat()` unconditionally

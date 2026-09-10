@@ -114,8 +114,56 @@ deadline. Sampling remains unchanged: the current profiles still request their
 existing deterministic behavior, and no Qwen decoding retune or live model
 acceptance was performed in this slice.
 
-The public metadata lookup was read-only. No owner credentials or live model
-inference were used, so acceptance on the actual OpenRouter account remains
-open. The remaining risks are capability metadata drift and the absence of a
-cached live discovery layer. Those belong with P4 discovery/acceptance, not a
-silent fallback in the request path.
+At the P3 boundary the public metadata lookup was read-only and no owner
+credentials or live inference were used. The remaining risks identified there
+— capability metadata drift and the absence of a cached live discovery layer —
+are addressed by the P4 section below.
+
+## P4 capability discovery and continuity
+
+P4 replaces the single OpenRouter snapshot path with an in-memory discovery
+cache. The provider looks up the single-model endpoint
+`/api/v1/model/{author}/{slug}` once per `baseURL + requested/canonical model`
+and caches valid metadata for six hours. A fresh live result wins over cache;
+cache wins over the static Qwen compatibility snapshot; otherwise the result is
+`unknown`. Discovery errors do not become `unsupported`, and a known static
+snapshot remains usable. The cache is intentionally process-local: no metadata
+database or background refresh service was added.
+
+`ReasoningCapabilities` now distinguishes `supported`, `unsupported` and
+`unknown`. Explicit `off`, effort and exact-budget constraints are rejected
+when capability is unknown rather than silently claimed. An unconstrained
+adaptive/default request may proceed with provider defaults and is traced as
+omitted/degraded. Explicit constraints still force OpenRouter
+`require_parameters: true`.
+
+OpenRouter reasoning continuation is now opaque provider metadata on the
+canonical `Message`/`ChatResult` path. Non-stream responses capture
+`reasoning_details` (or the string aliases only when details are absent), and
+stream chunks reconstruct the ordered details array. The loop persists the
+metadata beside the assistant message before tool execution; the OpenRouter
+adapter sends it back as `reasoning_details` on the next assistant message.
+Local/non-OpenRouter adapters do not receive those fields. The loop never
+renders this metadata as user text, and it is not added to logs or traces.
+
+The live public metadata response for `qwen/qwen3.8-27b` on 2026-09-10
+returned canonical slug `qwen/qwen3.8-27b-20260814`, `mandatory:false`,
+`default_enabled:true`, default `xhigh`, efforts `xhigh/medium/low`, and no
+declared `supports_max_tokens`. A live owner acceptance using the configured
+secret accepted adaptive, low, medium, xhigh and off. All five calls were
+served by `Alibaba`; reasoning tokens observed were 26, 17, 27, 36 and 0
+respectively. Request IDs, served model, finish reason and token usage were
+captured without printing response content or secrets.
+
+A separate live safe-tool acceptance produced one Qwen tool call, preserved
+opaque reasoning metadata, and sent `reasoning_details` on the continuation
+request. The continuation was served by `Alibaba`, ended normally, and reported
+28 reasoning tokens. The full durable Muffin loop remains covered by the
+deterministic P0/P1/P2/P3 tests; the live acceptance was intentionally kept at
+the provider boundary to avoid executing an owner-side tool effect.
+
+Qwen's `preserve_thinking` default is a provider/model context behavior, not a
+new Muffin policy in this slice. Muffin now preserves the returned continuation
+metadata when OpenRouter supplies it, but does not force or disable
+`preserve_thinking`. Possible duplicate/context-growth behavior belongs in P5
+alongside sampling/effort evaluation.
