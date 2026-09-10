@@ -491,6 +491,27 @@ describe('il gate di completezza spinge una volta sola', () => {
 });
 
 describe('execution budget', () => {
+  it('does not invoke the provider when the cumulative model budget is already spent', async () => {
+    let calls = 0;
+    const provider: Provider = {
+      kind: 'openai-compat',
+      async chat() {
+        calls += 1;
+        return reply('non dovrebbe partire');
+      },
+    };
+    const h = harness({
+      provider,
+      execution: new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 200, activeModelBudgetMs: 0 }),
+    });
+
+    const result = await runRounds(h.scope);
+
+    expect(calls).toBe(0);
+    expect(result.stopped).toBe('error');
+    expect(result.reason).toBe('active_model_budget_exhausted');
+  });
+
   it('aborta una model call lunga senza trasformarla in un transport retry', async () => {
     let calls = 0;
     const provider: Provider = {

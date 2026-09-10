@@ -46,3 +46,29 @@ stall watchdogs. Semantic stream events count as activity: text, reasoning and
 incremental tool-call arguments. Usage-only or keepalive traffic does not.
 The surface-facing `model_status` progress event reports waiting, thinking,
 receiving and stalled state without making another model call.
+
+## P2 cumulative active model budget
+
+The execution envelope now also owns cumulative active model time for one
+durable turn:
+
+- `consumer-local`: 120 seconds active model time inside a 180 second wall budget;
+- `frontier`: 240 seconds active model time inside a 300 second wall budget.
+
+Only time while a model lease is active is counted. Tool execution, local
+orchestration, retry backoff and waiting outside the provider are not counted,
+but they remain inside the wall-clock deadline. The effective deadline for a
+new call is the minimum of normal call, remaining active-model and remaining
+wall-clock budget. Exhaustion has its own reason,
+`active_model_budget_exhausted`, and does not enter transport retry.
+
+The stream attempt and its non-stream fallback acquire separate leases, as do
+later transport retries. The chat trace records an invocation index and the
+before/this/after active-time values for each lease.
+
+`activeModelMs` is an additive field in durable turn counters. A resumed turn
+therefore cannot reset the cumulative envelope. A process crash during an
+in-flight provider call can only persist the time once the lease is released;
+the exact uncommitted interval is not recoverable without a separate heartbeat
+or database write on every activity event, which is deliberately outside this
+slice.
