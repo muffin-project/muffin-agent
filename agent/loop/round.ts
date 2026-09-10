@@ -15,6 +15,7 @@ import {
   ProviderStreamError,
 } from '../providers/types.js';
 import { checkpoint, finish, suspendHere, type TurnScope } from './durability.js';
+import type { ExecutionBudget } from './execution-budget.js';
 import { drainStream, edgeTrimmer, retryDelayMs } from './stream.js';
 import { runTool } from './tool-call.js';
 import {
@@ -61,6 +62,7 @@ import {
  * every string in here moved without an edit.
  */
 export type RoundScope = TurnScope & {
+  readonly execution: ExecutionBudget;
   /**
    * The pre-loop's own bindings that the round reads. Not state — `run` is the
    * state (`agent/loop/run-state.ts`) — but values resolved once, before
@@ -140,6 +142,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     record,
     refusalLabel,
     run,
+    execution,
     snapshot,
     toolContext,
     turn,
@@ -169,6 +172,9 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     }
     if (input.signal?.aborted) {
       return finish(scope, 'aborted', 'Interrotto.');
+    }
+    if (execution.expired()) {
+      return finish(scope, 'error', 'Il turno ha raggiunto il limite di tempo.', 'turn_deadline');
     }
     /**
      * May what this round produces reach the channel? Asked **before** the
@@ -267,12 +273,18 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // is byte-identical to before this field could ever be `true`, and
       // `requestChatResult` below never touches `chatStream` at all.
       stream: Boolean(input.onDelta && deps.provider.chatStream),
-      ...(input.signal ? { signal: input.signal } : {}),
     };
+    const modelLease = execution.beginModelCall(input.signal);
+    const callWithBudget: ChatCall = { ...call, signal: modelLease.signal };
 
     const chatSpan = deps.tracer.start(
       'muffin.chat_call',
-      { [ATTR.requestModel]: deps.model, [ATTR.turnIteration]: run.iterations },
+      {
+        [ATTR.requestModel]: deps.model,
+        [ATTR.turnIteration]: run.iterations,
+        'muffin.chat_call.requested_max_output_tokens': call.maxOutputTokens,
+        'muffin.chat_call.requested_thinking': call.thinking ?? 'unset',
+      },
       turn,
     );
     // `chatSpan`'s own clock is not readable back from `SpanHandle` (it only
@@ -321,9 +333,9 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
      * is closed as `'superseded'` before the replacement starts arriving.
      */
     const requestChatResult = async (): Promise<ChatResult> => {
-      if (!call.stream || !deps.provider.chatStream) return deps.provider.chat(call);
+      if (!call.stream || !deps.provider.chatStream) return deps.provider.chat(callWithBudget);
       try {
-        return await drainStream(deps.provider.chatStream(call), (text) => {
+        return await drainStream(deps.provider.chatStream(callWithBudget), (text) => {
           if (!input.onDelta) return;
           const out = trim(text);
           if (out === null) return; // finora solo spazio: non è ancora niente
@@ -337,7 +349,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
           'muffin.stream.fell_back_to_non_stream': true,
           'muffin.stream.partial': error.partial,
         });
-        return deps.provider.chat({ ...call, stream: false });
+        return deps.provider.chat({ ...callWithBudget, stream: false });
       }
     };
 
@@ -345,6 +357,12 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     try {
       result = await requestChatResult();
     } catch (error) {
+      const abortReason = modelLease.reason();
+      modelLease.release();
+      chatSpan.setAttributes({
+        'muffin.chat_call.duration_ms': Date.now() - chatCallStartedAt,
+        ...(abortReason === undefined ? {} : { 'muffin.chat_call.abort_reason': abortReason }),
+      });
       chatSpan.end({ error });
       // Whatever door this takes below — a retry, the profile's cascade, or
       // out of the turn entirely — the text this attempt already put on a
@@ -356,7 +374,10 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // rejection fell through to `throw error` — the turn ended `error`
       // and the owner read «esito error» for a stop they had asked for.
       // The signal is the fact; the exception is only how it arrived.
-      if (input.signal?.aborted) return finish(scope, 'aborted', 'Interrotto.');
+      if (abortReason === 'user_stop' || input.signal?.aborted) return finish(scope, 'aborted', 'Interrotto.', 'user_stop');
+      if (abortReason !== undefined) {
+        return finish(scope, 'error', 'La chiamata al modello ha raggiunto il suo limite di tempo.', abortReason);
+      }
       // Two failures wearing one type, and they take different doors.
       //
       // `output` is the model's own doing — arguments the adapter could not
@@ -384,6 +405,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       }
       throw error;
     }
+    modelLease.release();
 
     run.usage.inputTokens += result.usage.inputTokens;
     run.usage.outputTokens += result.usage.outputTokens;
@@ -423,6 +445,9 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       ...(result.upstream !== undefined ? { [ATTR.providerName]: result.upstream } : {}),
       [ATTR.usageInputTokens]: result.usage.inputTokens,
       [ATTR.usageOutputTokens]: result.usage.outputTokens,
+      ...(result.usage.reasoningTokens === undefined
+        ? {}
+        : { 'muffin.chat_call.reasoning_tokens': result.usage.reasoningTokens }),
       [ATTR.cacheReadTokens]: result.usage.cacheReadTokens,
       // The attribute existed with zero writers while the adapter hardcoded
       // the value to 0. Honesty note: no test asserts chat-span attributes

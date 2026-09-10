@@ -269,6 +269,8 @@ export type StopReason = 'end' | 'tool_use' | 'max_tokens' | 'refusal' | 'error'
 type Usage = {
   inputTokens: number;
   outputTokens: number;
+  /** Provider-reported reasoning subset of output tokens, when available. */
+  reasoningTokens?: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
 };

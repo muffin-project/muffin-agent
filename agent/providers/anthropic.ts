@@ -36,6 +36,7 @@ export class AnthropicProvider implements Provider {
     // record the request. See anthropic.test.ts.
     this.client = new Anthropic({
       apiKey,
+      maxRetries: 0,
       ...(baseURL ? { baseURL } : {}),
       ...(opts.fetch ? { fetch: opts.fetch } : {}),
     });

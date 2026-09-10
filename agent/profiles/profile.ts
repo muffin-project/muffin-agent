@@ -86,6 +86,10 @@ export type Profile = {
    */
   sampling: 'deterministic' | 'model-default';
   recovery: RecoveryStrategy[];
+  execution?: {
+    modelCallDeadlineMs: number;
+    turnWallDeadlineMs: number;
+  } | undefined;
   notes: string;
 };
 
@@ -112,6 +116,7 @@ export const CONSERVATIVE: Profile = {
   // right kind of wrong for an unrecognised id.
   sampling: 'deterministic',
   recovery: ['nudge', 'reinjectTools', 'retryOnce', 'strictJson'],
+  execution: { modelCallDeadlineMs: 90_000, turnWallDeadlineMs: 180_000 },
   notes: 'Unknown model: the capability floor, with every crutch enabled.',
 };
 
@@ -142,6 +147,9 @@ const ProfileSchema = z.object({
   // exactly the behaviour it had instead of silently acquiring a new one.
   sampling: z.enum(['deterministic', 'model-default']).default('deterministic'),
   recovery: z.array(z.enum(['nudge', 'reinjectTools', 'retryOnce', 'strictJson'])),
+  execution: z
+    .object({ modelCallDeadlineMs: z.number().int().positive(), turnWallDeadlineMs: z.number().int().positive() })
+    .optional(),
   notes: z.string().default(''),
 });
 
