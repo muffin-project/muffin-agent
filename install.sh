@@ -325,7 +325,8 @@ mkdir -p "$COMPLETION_HOME/bash-completion/completions" "$COMPLETION_HOME/zsh/si
 "$MUFFIN" completion bash >"$COMPLETION_HOME/bash-completion/completions/$CMD"
 "$MUFFIN" completion zsh >"$COMPLETION_HOME/zsh/site-functions/_$CMD"
 "$MUFFIN" completion fish >"$HOME/.config/fish/completions/$CMD.fish"
-if [ "${SHELL##*/}" = zsh ]; then
+OWNER_SHELL=${SHELL:-}
+if [ "${OWNER_SHELL##*/}" = zsh ]; then
   ZSH_MARK="# muffin (install.sh): completion"
   if ! grep -qF "$ZSH_MARK" "$HOME/.zshrc" 2>/dev/null; then
     printf '\n%s\nfpath=("%s/zsh/site-functions" $fpath)\nautoload -Uz compinit; compinit\n' "$ZSH_MARK" "$COMPLETION_HOME" >>"$HOME/.zshrc" || die "could not write $HOME/.zshrc"
