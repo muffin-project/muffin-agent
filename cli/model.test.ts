@@ -107,7 +107,7 @@ describe('priceNote', () => {
 });
 
 describe('muffin model', () => {
-  it('senza argomenti mostra le tre corsie e il provider', async () => {
+  it('senza argomenti mostra le tre corsie e il provider, distinguendo un router dal modello servito', async () => {
     const { out, sink } = raccogli();
     expect(await cmdModel(home(), [], { out: sink })).toBe(0);
     const testo = out.join('\n');
@@ -115,6 +115,8 @@ describe('muffin model', () => {
     expect(testo).toMatch(/^main /m);
     expect(testo).toMatch(/^light /m);
     expect(testo).toMatch(/^embed /m);
+    expect(testo).toContain('openrouter/free — fatturato $0/$0 per MTok');
+    expect(testo).toContain('router gratuito (il modello servito può cambiare per richiesta)');
   });
 
   it('uno slug che esiste viene scritto, col prezzo vero accanto', async () => {
