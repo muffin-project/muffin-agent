@@ -307,7 +307,7 @@ describe('the owner-class prompt does not move', () => {
    * qualcun altro entra per definizione. Pin precedente:
    * `23aa24da39dc582dd7909f750fed59b165a71ce70dc549428b5df634ced0ed9b`.
    */
-  const GROUP_PROMPT_SHA_V1 = '292d65153a5cacfc370ac05120c15c164b2acb7e4da2a3655db887a75cf55cc4';
+  const GROUP_PROMPT_SHA_V1 = 'a365b0fc5f1b40c4c2ef787e95f094bb4754597d9073d51d73a93c9cbcf10ae3';
 
   it('e la stanza riceve lo stesso prompt di ieri, byte per byte', () => {
     const runtime = boot(bootHome());
@@ -500,9 +500,9 @@ describe('what a group turn is allowed to be told', () => {
       expect(group).toContain('## Dove sei adesso');
       // `\s+` across the phrases that wrap: the assertion is about the rule
       // being stated, not about where the paragraph happens to break.
-      expect(group).toMatch(/non sto costruendo il ritratto di\s+nessuno/);
+      expect(group).toMatch(/non faccio domande per conoscere\s+chi c'è/);
       expect(group).toMatch(/Quello che so del mio owner non è materiale di conversazione/);
-      expect(group).toMatch(/Chi scrive qui non è il mio owner/);
+      expect(group).toMatch(/Non tratto chi scrive come il mio owner/);
     } finally {
       runtime.close();
     }

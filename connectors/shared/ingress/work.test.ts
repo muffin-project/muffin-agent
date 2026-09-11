@@ -130,11 +130,11 @@ describe('identità e taint arrivano già decisi', () => {
     expect(env.sessions.open('owner').id).toBe(row?.sessionId);
   });
 
-  it('chi non è l owner è un `member` del tenant della stanza', async () => {
+  it('chi non è l owner resta `member`, ma una DM conserva la topologia `direct`', async () => {
     const env = ambiente();
     const row = await gira(env, porta('telegram'), { ownerId: '999' });
     expect(row?.principal.kind).toBe('member');
-    expect(row?.tenant).toBe('group:telegram:7');
+    expect(row?.tenant).toBe('direct:telegram:7');
   });
 
   it('il contentTaint alza il tier di partenza del turno, e il turno lo registra', async () => {

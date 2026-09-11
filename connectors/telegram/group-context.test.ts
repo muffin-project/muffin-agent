@@ -151,7 +151,7 @@ describe('a group turn arriving off the wire', () => {
       // `voice.md`, which both classes carry — so it stayed green with the
       // whole posture block deleted.
       expect(text).toContain('## Dove sei adesso');
-      expect(text).toContain('Chi scrive qui non è il mio owner');
+      expect(text).toContain('Non tratto chi scrive come il mio owner');
 
       expect(text).toBe(h.prompts.group);
       expect(text).not.toBe(h.prompts.owner);
