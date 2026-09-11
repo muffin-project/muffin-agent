@@ -766,7 +766,16 @@ describe('acceptance · F7 · una stanza ha le sue capacità, e dentro il suo va
 
         // La stessa cosa dal lato del tool che il modello userebbe:
         // `document_read` della stanza lo ritrova, quello di `host` no.
-        const runtime = buildRuntime(inst.home, inst.workspace);
+        const runtime = (() => {
+          const previousXdg = process.env['XDG_CONFIG_HOME'];
+          process.env['XDG_CONFIG_HOME'] = inst.xdg;
+          try {
+            return buildRuntime(inst.home, inst.workspace);
+          } finally {
+            if (previousXdg === undefined) delete process.env['XDG_CONFIG_HOME'];
+            else process.env['XDG_CONFIG_HOME'] = previousXdg;
+          }
+        })();
         try {
           const daStanza = await readDocument(runtime.vault, runtime.memory.store, TENANT, { path: salvato });
           if (daStanza.isError === true || !daStanza.content.includes(TESTO)) {
