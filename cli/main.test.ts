@@ -510,7 +510,8 @@ describe('una chiave non passa mai per argv né per l\'environment (owner 2026-0
         { env: { ...process.env, MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, encoding: 'utf8' },
       );
       expect(r.status).toBe(0);
-      expect(existsSync(join(dir, 'secrets', 'provider_api_key'))).toBe(true);
+      expect(existsSync(join(xdg, 'muffin', 'secrets', 'provider_api_key'))).toBe(true);
+      expect(existsSync(join(dir, 'secrets', 'provider_api_key'))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(xdg, { recursive: true, force: true });
