@@ -45,7 +45,11 @@ import { spendeIlBudget } from './permissions.js';
  * questa estrazione, e resta tale: la riga durevole è byte-identica.
  */
 export class TurnRun {
-  /** Giri di modello già fatti. Il `cap` del profilo li limita, non li possiede. */
+  /**
+   * Giri di modello già fatti. È telemetria/stato di resume, non il normale
+   * criterio di fine: il round cap arbitrario è stato rimosso. Eventuali fuse
+   * catastrofici futuri restano una policy separata (ADR-0076 / EXECUTION.md).
+   */
   iterations: number;
   /**
    * How far down the profile's declared cascade this turn has walked. An index,
