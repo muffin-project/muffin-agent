@@ -107,44 +107,41 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
           throw new Error(`rot/manifest.json assente — il root of trust non risulta sigillato in ${inst.home}`);
         }
         const homeSecretPath = join(inst.home, 'secrets', 'provider_api_key');
-        if (!existsSync(homeSecretPath)) {
-          throw new Error(`la chiave scritta da \`muffin init\` non è nella home — fixture rotta: ${homeSecretPath}`);
+        const expectedPersistentSecretPath = join(inst.xdg, 'muffin', 'secrets', 'provider_api_key');
+
+        if (existsSync(homeSecretPath)) {
+          throw new Error(
+            `muffin init ha creato una seconda copia della chiave nella home: ${homeSecretPath}`,
+          );
+        }
+        if (!existsSync(expectedPersistentSecretPath)) {
+          throw new Error(
+            `la chiave scritta da muffin init non è nel backend persistente: ${expectedPersistentSecretPath}`,
+          );
         }
 
         // === 2. The key through the real chain ================================
         //
-        // A second copy, written with `--persist` (ADR-0039's backend, outside
-        // `MUFFIN_HOME`). `SECRET_BACKENDS` (core/config/config.ts) puts `home`
-        // first on purpose — a per-install secret must be able to shadow a
-        // shared one — so this second copy is shadowed the moment it is
-        // written, and `secret set` has to say so instead of storing it
-        // silently (PR #124, `bde3c02`, landed on `dev` while this slice was
-        // being written — the exact "note" this scenario's own brief warned
-        // might still be missing).
+        // `init` e `secret set` convergono sulla stessa autorità persistente:
+        // aggiornare la chiave non deve creare una seconda copia in MUFFIN_HOME.
         const persisted = await inst.muffin(
           ['secret', 'set', 'provider_api_key', '--persist'],
           'sk-acceptance-persisted-key\n',
         );
         if (persisted.code !== 0) {
-          throw new Error(`\`secret set --persist\` non riuscito: exit ${persisted.code}\n${persisted.err}`);
+          throw new Error(`secret set --persist non riuscito: exit ${persisted.code}\n${persisted.err}`);
         }
-        if (!persisted.err.includes('non verrà mai usata')) {
+        if (!persisted.out.includes(expectedPersistentSecretPath)) {
           throw new Error(
-            `\`secret set --persist\` non avvisa che la copia home ha la precedenza (SECRET_BACKENDS, ` +
-              `core/config/config.ts):\n${persisted.err}`,
+            `secret set non nomina l'autorità persistente aggiornata (${expectedPersistentSecretPath}):\n${persisted.out}`,
           );
         }
-        if (!persisted.err.includes(homeSecretPath)) {
-          throw new Error(`l'avviso non nomina la copia che vince davvero (${homeSecretPath}):\n${persisted.err}`);
+        if (existsSync(homeSecretPath)) {
+          throw new Error(`secret set ha creato una copia concorrente nella home: ${homeSecretPath}`);
         }
-        // Resolve the duplicate the way the owner reading that warning would:
-        // keep exactly one copy. The **persistent** one is kept alive on
-        // purpose — it is what ring 8 needs to still be there after
-        // `uninstall` wipes the home — so it is the home copy that gives way,
-        // which is also what flips "shadowed" into "the only copy left,
-        // reached through the same `locateSecret` chain, never a duplicate
-        // read path".
-        rmSync(homeSecretPath);
+        if (!existsSync(expectedPersistentSecretPath)) {
+          throw new Error(`la secret persistente è sparita dopo secret set: ${expectedPersistentSecretPath}`);
+        }
 
         // === 3. `muffin doctor`, green for the reason it should be =============
         //
