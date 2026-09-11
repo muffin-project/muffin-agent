@@ -18,6 +18,8 @@ context is a resource, and history is not startup context.
 
 For a non-mechanical change to runtime, harness, security and authority, memory,
 processes or durable schema, follow `docs/RESEARCH.md` **before** implementing.
+For model/tool-loop lifetime, timeout/retry ownership, progress/stagnation or
+reasoning-budget work, load `docs/EXECUTION.md` as the current scoped contract.
 
 A previous Muffin decision is a hypothesis with history, not a fact that must be
 preserved. A peer implementation is prior art, not authority. Simplifying or
