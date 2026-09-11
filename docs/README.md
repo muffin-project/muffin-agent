@@ -2,7 +2,7 @@
 
 This repository is the system of record for Muffin, but **not every file has the
 same kind of authority**. The fastest way to create drift is to let an ADR, an
-audit, a product vision, a generated map and the runtime all answer the same
+audit, a product vision, a generated view and the runtime all answer the same
 question.
 
 The rule is simple:
@@ -24,6 +24,7 @@ unused manifest would be another source of drift.
 | Which cognitive/human hypotheses is Muffin exploring, with what evidence status and kill criteria? | `docs/COGNITIVE-DESIGN.md` |
 | In which phase should a deliberately deferred capability be reconsidered? | `docs/ROADMAP.md` |
 | How is Muffin shaped now? | `docs/ARCHITECTURE.md` |
+| How is long-running model/tool execution bounded and made observable? | `docs/EXECUTION.md` |
 | What security boundary does Muffin claim now? | `docs/SECURITY.md` |
 | How should design choices be made? | `docs/DESIGN-PRINCIPLES.md` |
 | How is Muffin installed, updated and rolled back on a real machine? | `install.sh`, with `docs/INSTALL.md` for what it does and why |
@@ -66,9 +67,9 @@ READY/BLOCKER, the next implementation slice, or whether an item is already
 shipped. Those questions stay with the DAY-1 requirements, the critical path, Git and executable
 authority respectively.
 
-Scoped current design documents such as `EXTENSIONS.md` are loaded only when
-that domain matters. Product/distribution/public-narrative strategy does not
-become runtime truth simply because it is current strategy.
+Scoped current design documents such as `EXECUTION.md` and `EXTENSIONS.md` are
+loaded only when that domain matters. Product/distribution/public-narrative
+strategy does not become runtime truth simply because it is current strategy.
 
 Current authority documents must:
 
@@ -122,15 +123,16 @@ Observed Git state wins over an operational handoff when they disagree.
 
 ## Derived views
 
-Maps, generated indexes, status counts and other projections are outputs. Their
-job is navigation, not authority. If a value cannot be generated reliably from
-its authoritative source, prefer omitting the value to maintaining a manual
-copy that can drift.
+Generated indexes, status counts and other projections are outputs. Their job is
+navigation, not authority. If a value cannot be generated reliably from its
+authoritative source, prefer omitting the value to maintaining a manual copy
+that can drift.
 
-The current architecture map has a narrower guarantee than its old wording
-implied: its anchor machinery verifies that cited source text still resolves,
-not that every surrounding editorial sentence is semantically current. See
-`docs/derived/architecture-map/README.md` before using it for exact mechanics.
+The old generated architecture map was deliberately retired and deleted. There
+is **no current architecture-map artifact or regeneration command** to consult.
+Architecture navigation starts from this authority table and
+`docs/ARCHITECTURE.md`; historical versions remain recoverable from Git. A live
+document that points to the retired artifact is stale by definition.
 
 ## A name is the first thing read
 
@@ -163,6 +165,8 @@ Agents and humans should start with a map, not a manual.
 - Root `AGENTS.md` and `CLAUDE.md` are routers, not encyclopedias.
 - Global semantics live in the small authority set above.
 - Domain-specific detail is loaded when the task makes it relevant.
+- `EXECUTION.md` is loaded for model/tool loop lifetime, timeout/retry ownership,
+  runtime progress/stagnation or reasoning-budget questions.
 - `COGNITIVE-DESIGN.md` is loaded when a task proposes or evaluates a cognitive
   mechanism, person-model behaviour, memory salience/decay or proactivity claim.
 - `ROADMAP.md` is loaded when the question is when a deliberate deferral should
@@ -184,9 +188,11 @@ The inherited foundations corpus went to `docs/history/foundations/legacy/`.
 
 The architectural decisions moved to `docs/decisions/` and the durable cognitive
 corpus to `docs/knowledge/`: neither is history, and neither needed the blueprint
-name to be found. The dated evidence went to `docs/evidence/`, the design lineage
-to `docs/history/design-notes/`, and the architecture map to
-`docs/derived/architecture-map/` — derived, not merely generated.
+name to be found. The dated evidence went to `docs/evidence/` and the design
+lineage to `docs/history/design-notes/`. A generated architecture projection
+existed for a period of the rebuild and was later removed once it stopped
+earning its maintenance cost; Git preserves that lineage rather than a live
+compatibility path pretending it still exists.
 
 `docs/blueprint/` and `docs/foundations/` **no longer exist**. Both had shrunk to
 a single compatibility redirect, and on 2026-09-01 both were removed. The retired
