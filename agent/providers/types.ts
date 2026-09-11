@@ -156,65 +156,53 @@ export type ToolSpec = {
 };
 
 /**
- * How much reasoning to ask for — in the only vocabulary the API still has.
+ * The **current narrow wire vocabulary** for reasoning, not Muffin's durable
+ * provider-agnostic reasoning model.
  *
- * There is no budget any more. `thinking: {type:'enabled', budget_tokens: N}` is
- * deprecated on the 4.6 models and **returns a 400 on 4.7 and later**, which is
- * every model `agent/profiles/frontier.json` matches (Sonnet 5, Opus 5, Fable 5)
- * — verified on the extended-thinking page, 2026-08-13. What replaced it is a
- * mode plus `output_config.effort`, and `effort` has no per-request meaning for
- * us: `"high"` is the API default, so sending it is identical to omitting it.
- * Hence two values and no number. A knob the API does not have is a knob that
- * lies about what it controls.
+ * This type was shaped around the native Anthropic frontier path. On those
+ * models the old manual `budget_tokens` form is deprecated/invalid and the
+ * current request is principally mode-based. That justified removing a fake
+ * numeric knob from this type at the time; it does **not** justify the broader
+ * sentence "there is no reasoning budget" across every provider Muffin can
+ * speak to. OpenRouter currently exposes reasoning effort and, for supported
+ * models including Qwen families, a maximum reasoning-token budget.
  *
- * `'off'` is `{type:'disabled'}` at the wire, not "send nothing": on a 5-series
- * model sending nothing means thinking is **on**, so the old `'off'` was a
- * declaration the request contradicted. Not universal, though: Claude Fable 5
- * and Claude Mythos 5 have no disable switch at all — thinking is always on
- * and both `{type:'enabled'}` and `{type:'disabled'}` are a 400 (per-model
- * table, read 2026-08-13). `Profile.thinking`'s third value, `'unset'`, is for
- * exactly that model shape: the field omitted, never sent as `'off'`.
+ * Therefore `adaptive | off` remains the mechanics shipped by the existing
+ * adapters, while ADR-0076 / `docs/EXECUTION.md` own the next boundary:
+ * model/provider reasoning capability (disable/efforts/token-budget/mandatory)
+ * is separate from the execution policy that asks for mode/effort/max tokens.
+ * Do not grow model-family exceptions here to simulate that future contract.
  *
- * N3 (judge, 2026-08-13): Claude Haiku 4.5 has no honest value in this type at
- * all — it supports only manual extended thinking (the `budget_tokens` shape
- * this vocabulary deliberately has no number for) and returns a 400 on
- * `{type:'adaptive'}`. Do not add it to a profile's `match` list that declares
- * `thinking: 'adaptive'`. Harmless today only because the light lane — the one
- * place Haiku 4.5 runs — never consults a profile at all.
+ * `'off'` is `{type:'disabled'}` on the native Anthropic wire and maps to an
+ * endpoint-specific disable request where the compat adapter knows that dialect.
+ * It is not universally legal: models with mandatory reasoning require the
+ * field to remain absent, which is why `Profile.thinking` also has `unset` even
+ * though `ChatCall` itself only carries a request when one is actually sent.
  */
 type ThinkingMode = 'adaptive' | 'off';
 
 /**
- * Spazio per il reasoning che chiediamo spento e non riusciamo a spegnere.
+ * Output headroom for reasoning-capable models that may consume generation
+ * budget before emitting the payload the caller actually needs.
  *
- * `agent/profiles/consumer-local.json` dichiara `"thinking": "off"` proprio per
- * `*qwen3*`, e le sue stesse note dicono che l'adapter openai-compat non porta
- * quel comando: è un no-op **dichiarato** (ADR-0008), non nascosto. Quello che
- * non era stato tracciato è il prezzo, due livelli più in là.
+ * The original evidence remains valid: on 27/08 the owner install running
+ * `qwen/qwen3.8-27b` could spend a small output ceiling entirely on reasoning
+ * and return empty content; raising the ceiling let the same extraction reach
+ * useful output. `max_tokens` is a ceiling, not a request, so the headroom is
+ * harmless for a model that stops earlier.
  *
- * Misurato sull'installazione dell'owner il 27/08 con `qwen/qwen3.8-27b`:
- * l'estrazione con tetto 1500 tornava `stop=max_tokens` dopo **1502 token in
- * uscita** e `content` vuoto — il modello spendeva l'intero budget a ragionare
- * e non arrivava a scrivere un carattere di JSON. Stesso episodio, stesso
- * modello, tetto 8000: **un fatto estratto**. La risposta grezza del giudice
- * nel registro è `[vuota]` per la stessa ragione, con un tetto di 500.
+ * The old comment claimed `consumer-local` still declared `thinking: off`.
+ * That stopped being true on 27/08 after `off` became a real OpenRouter request
+ * and dogfood showed a quality/continuity regression; the current profile is
+ * `adaptive`. Local Ollama/llama.cpp/vLLM endpoints can also lack a compatible
+ * reasoning-control field. So this constant remains a compatibility floor for
+ * today's callers, **not** the architecture for reasoning governance.
  *
- * Alzare un tetto non è chiedere più token: `max_tokens` è un limite, non una
- * richiesta, quindi per un modello che non ragiona questo non costa niente. Per
- * uno che ragiona sostituisce «paghi 1502 token per NIENTE, a ogni giro, per
- * sempre» con «paghi e ottieni un fatto, e l'episodio smette di tornare».
- *
- * **Non va più via, e ora si sa per chi resta.** Da 27/08 l'adapter chiede
- * davvero di non ragionare (`reasoning: {effort:'none'}`) e le tre corsie
- * glielo chiedono — misurato sull'installazione viva, 204 token in uscita
- * contro 85 sullo stesso prompt. Ma lo chiede **solo dove l'endpoint capisce
- * il campo**: su Ollama, llama.cpp e vLLM — cioè proprio i server del profilo
- * `consumer-local` — un campo ignoto è un 400, quindi lì `off` è ancora un
- * no-op dichiarato e questo margine è l'unica cosa che tiene viva la corsia.
- *
- * Il prezzo di tenerlo è zero: `max_tokens` è un limite, non una richiesta.
- * Il prezzo di toglierlo sarebbe il 25/08 di nuovo, sulla prima macchina che
- * gira un modello che ragiona dietro un server che non sa spegnerlo.
+ * ADR-0076 records the replacement direction: reason-capability negotiation,
+ * explicit compute/time envelopes and measured execution policy. Do not remove
+ * this headroom merely because one remote endpoint can now disable or bound
+ * reasoning; remove it only when every caller that needs the margin has a
+ * proven alternative.
  */
 export const REASONING_HEADROOM = 6_000;
 
