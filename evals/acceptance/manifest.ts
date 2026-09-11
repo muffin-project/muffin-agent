@@ -175,7 +175,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // red here too.
   verde(
     'A10',
-    "e2e owner journey: clean machine to a delivered reply on a real surface — `secret set --persist` warns when a home copy shadows it, `doctor` is honest about exactly which warnings are expected at each step, `gateway install`'s unit passes the platform's own parser (systemd-analyze on Linux, plutil on macOS — never the real launchd label on this machine), a live gateway pairs Telegram and delivers a real turn, a second process recalls it, and `uninstall` leaves only the `--persist`ed secret behind",
+    "e2e owner journey: clean machine to a delivered reply on a real surface — `init` and `secret set` converge on one persistent secret authority, `doctor` is honest about exactly which warnings are expected at each step, `gateway install`'s unit passes the platform's own parser (systemd-analyze on Linux, plutil on macOS — never the real launchd label on this machine), a live gateway pairs Telegram and delivers a real turn, a second process recalls it, and `uninstall` leaves only the `--persist`ed secret behind",
   ),
   verde('B1', 'continuity: what was said in one process is recalled by a later one, same session'),
   verde(
