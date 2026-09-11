@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { costUsd, priceOf } from './pricing.js';
+import { costUsd, isOpenRouterFreeRoute, priceOf } from './pricing.js';
+
+const OPENROUTER = 'https://openrouter.ai/api/v1';
 
 describe('pricing', () => {
   it('charges nothing for a model running on this machine', () => {
@@ -7,6 +9,24 @@ describe('pricing', () => {
     // spending is not a risk.
     expect(priceOf('qwen3.6:27b', 'http://127.0.0.1:11434/v1')).toBeNull();
     expect(costUsd('gemma4:26b', { inputTokens: 1e6, outputTokens: 1e6 }, 'http://localhost:11434')).toBe(0);
+  });
+
+  it('recognizes OpenRouter free routing as an explicit zero-price contract', () => {
+    expect(isOpenRouterFreeRoute('openrouter/free', OPENROUTER)).toBe(true);
+    expect(priceOf('openrouter/free', OPENROUTER)).toEqual({ inputPerMTok: 0, outputPerMTok: 0 });
+    expect(costUsd('openrouter/free', { inputTokens: 1e6, outputTokens: 1e6 }, OPENROUTER)).toBe(0);
+  });
+
+  it('recognizes explicit :free variants only on the OpenRouter endpoint', () => {
+    expect(isOpenRouterFreeRoute('qwen/qwen3.8-27b:free', OPENROUTER)).toBe(true);
+    expect(costUsd('qwen/qwen3.8-27b:free', { inputTokens: 1e6, outputTokens: 1e6 }, OPENROUTER)).toBe(0);
+    expect(isOpenRouterFreeRoute('qwen/qwen3.8-27b:free', 'https://example.invalid/v1')).toBe(false);
+    expect(costUsd('qwen/qwen3.8-27b:free', { inputTokens: 1e6, outputTokens: 1e6 }, 'https://example.invalid/v1')).toBeCloseTo(8, 5);
+  });
+
+  it('does not confuse OpenRouter auto routing with the free router', () => {
+    expect(isOpenRouterFreeRoute('openrouter/auto', OPENROUTER)).toBe(false);
+    expect(priceOf('openrouter/auto', OPENROUTER)).toEqual({ inputPerMTok: 15, outputPerMTok: 75 });
   });
 
   it('charges an unknown model at the highest rate it knows', () => {
