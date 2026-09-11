@@ -125,9 +125,9 @@ on them. Empty/placeholder output is failure, not completion.
 
 ### What parallel workers actually share
 
-A worktree isolates the checkout. It does not isolate anything else, and three
-things collide silently. All three were measured on 2026-08-26, with several
-workers in flight at once.
+A worktree isolates the checkout. It does not isolate anything else. Two shared
+resources have already produced silent collisions under several workers in
+flight at once.
 
 **The scratchpad directory.** Two workers each wrote `pr-body.md` at the same
 path; one of them found its PR body replaced by another slice's. Nothing
@@ -140,17 +140,11 @@ files alone before diagnosing: a timeout under contention is not a defect, and
 an assertion failure is one even under load. Whichever way it goes, declare the
 path in the PR instead of showing only the final green.
 
-**The generated map.** `ancore.json` and `mappa.html` conflict between any two
-slices that move cited lines — which is most of them. `npm install` now
-registers a local git driver plus post-merge/post-rewrite hooks (see
-`docs/derived/architecture-map/README.md`) that keep "ours" through the
-conflict and then regenerate — and, when clean, commit — the map once the
-merge/rebase has actually finished, refusing instead of committing when a
-citation shows genuine drift rather than a moved line. If a clone never
-registered that, or you are resolving by hand, run `npm run mappa:regen` —
-one command, both generators, `git add` included — never hand-edit the
-artefacts. This is cheaper for the orchestrator to do once at merge time than
-for each worker to attempt against a moving base.
+A generated architecture map used to be a third shared collision and had custom
+merge/regeneration machinery. That artifact and its regeneration command were
+deliberately retired; they are not part of the current workflow. Do not restore
+that machinery from an old handoff or historical commit merely because this
+section once described it.
 
 ## Research budget
 
@@ -348,6 +342,7 @@ Update only the authoritative home whose meaning changed:
 |---|---|
 | literal mechanics/config/schema | executable source |
 | current architecture semantics | `docs/ARCHITECTURE.md` |
+| current execution-governance semantics | `docs/EXECUTION.md` |
 | current security promise | `docs/SECURITY.md` |
 | durable architectural decision/rationale | ADR |
 | DAY-1 row/status/evidence | `docs/work/day1/requirements-status.md` |
@@ -356,7 +351,7 @@ Update only the authoritative home whose meaning changed:
 | product destination | `docs/VISION.md` |
 | general engineering lesson | `docs/evidence/lessons.md` |
 | external/research evidence | dated `docs/evidence/` |
-| generated/visual view | regenerate/update the derived artifact if relevant |
+| generated/visual view | regenerate/update the derived artifact if one currently exists and is relevant |
 
 Do not update history merely so it reads like HEAD. Do not put DAY-1 counts in the
 handoff or critical path. Do not put PR chronology in architecture/ADR. A current
@@ -378,7 +373,7 @@ After integration:
 2. update the DAY-1 requirements only if status/evidence changed;
 3. update critical path only if order/dependency changed;
 4. keep LAVORO as the smallest useful next-session handoff;
-5. regenerate relevant derived views;
+5. regenerate a relevant derived view only when that current artifact has a generator/checker and still exists;
 6. do not refresh historical audits into current state.
 
 For a multi-slice goal (notably DAY-1), individual green PRs do not replace an
