@@ -21,6 +21,7 @@ import {
 import { cliSurface, type CliWriter } from '../core/surface/cli.js';
 import { SurfaceRegistry } from '../core/surface/registry.js';
 import type { Surface } from '../core/surface/types.js';
+import { adoptOwnerState } from '../core/surface/adopt-owner.js';
 import { TelegramApi } from '../connectors/telegram/api.js';
 import { TelegramConnector, type ConnectorDeps } from '../connectors/telegram/connector.js';
 import { TelegramDeliveryStore } from '../connectors/telegram/delivery.js';
@@ -1148,6 +1149,20 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
   const legato = telegramOwner(sealedOwner, tg);
   const ownerUserId = legato.userId;
   const ownerChatId = legato.chatId;
+
+  // Repair installations that already accumulated a private conversation
+  // before this release classified it correctly. Idempotent, so boot is also
+  // the retry path if the process died immediately after pairing.
+  if (ownerUserId !== undefined) {
+    const conversationId = ownerChatId ?? ownerUserId;
+    const adopted = adoptOwnerState(runtime.db, home, TELEGRAM_ID, String(conversationId));
+    if (adopted.movedRows > 0 || adopted.transcriptRows > 0) {
+      log(
+        `telegram: adottata la conversazione pre-pairing ` +
+        `(${adopted.movedRows} righe, ${adopted.transcriptRows} messaggi)`,
+      );
+    }
+  }
   // Unpaired but with a code outstanding is a legitimate running state: the
   // surface has to be up to receive the code. What it must not do is treat
   // anyone as the owner while it waits.
@@ -1223,6 +1238,18 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
           { telegram: { userId: next.ownerUserId, chatId: next.ownerChatId ?? next.ownerUserId } },
           { out: (riga) => log(`telegram: ${riga}`) },
         );
+
+        // The code that proves who the owner is is also the boundary at which
+        // their pre-pairing private state becomes owner state. Evidence keeps
+        // its old tier; historical work is deliberately not promoted.
+        const conversationId = next.ownerChatId ?? next.ownerUserId;
+        const adopted = adoptOwnerState(runtime.db, home, TELEGRAM_ID, String(conversationId));
+        if (adopted.movedRows > 0 || adopted.transcriptRows > 0) {
+          log(
+            `telegram: adottata la conversazione pre-pairing ` +
+            `(${adopted.movedRows} righe, ${adopted.transcriptRows} messaggi)`,
+          );
+        }
       }
     },
     log,

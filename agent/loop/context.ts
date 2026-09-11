@@ -210,6 +210,7 @@ export function buildContext(
     adesso,
     surface: input.surface,
     classe: tenantClass(input.principal, input.tenant),
+    tenant: input.tenant,
     model: modello,
     profilo,
     ...(istanza ? { istanza } : {}),
