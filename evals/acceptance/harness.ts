@@ -125,6 +125,8 @@ function spawnAsync(
 
 export type Install = {
   home: string;
+  /** Persistent config root isolated from the developer's real machine. */
+  xdg: string;
   /** The scratch directory the child runs in — the agent's filesystem scope. */
   workspace: string;
   provider: FakeProvider;
@@ -222,6 +224,7 @@ export async function install(options: InstallOptions): Promise<Install> {
 
   return {
     home,
+    xdg,
     workspace,
     provider,
     muffin: run,
