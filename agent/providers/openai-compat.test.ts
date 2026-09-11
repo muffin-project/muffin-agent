@@ -119,8 +119,9 @@ describe('OpenRouter model router', () => {
     const bodies: unknown[] = [];
     const provider = new OpenAICompatProvider('sk-test', 'https://openrouter.ai/api/v1', {}, {
       metadataFetch: async () => new Response(JSON.stringify({ data: { id: 'openrouter/free' } }), { status: 200 }),
-      fetch: async (_url: unknown, init?: { body?: string }) => {
-        bodies.push(JSON.parse(init?.body ?? '{}'));
+      fetch: async (_input: string | URL | Request, init?: RequestInit) => {
+        const body = typeof init?.body === 'string' ? init.body : '{}';
+        bodies.push(JSON.parse(body));
         return new Response(JSON.stringify(A_COMPLETION), { status: 200, headers: { 'content-type': 'application/json' } });
       },
     });
