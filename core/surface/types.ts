@@ -544,7 +544,13 @@ export function identify(incoming: IncomingIdentity, ownerId: string | undefined
     };
   }
 
-  const tenant = `group:${incoming.connector}:${incoming.conversationId}`;
+  // Topology and authority are independent. A private conversation whose
+  // sender has not been paired is still private; it simply has no owner
+  // authority yet. Keeping it under `direct:*` prevents both the prompt and
+  // durable memory from pretending there are other people in the room.
+  const tenant = incoming.direct
+    ? `direct:${incoming.connector}:${incoming.conversationId}`
+    : `group:${incoming.connector}:${incoming.conversationId}`;
   return {
     principal: {
       kind: 'member',
