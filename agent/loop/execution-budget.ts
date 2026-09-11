@@ -64,6 +64,10 @@ export class ExecutionBudget {
     this.startedAt = now();
     this.activeModelMs = Math.max(0, options.initialActiveModelMs ?? 0);
     this.turnTimer = setTimeout(() => this.turnController.abort('turn_deadline'), config.turnWallDeadlineMs);
+    // The wall deadline must govern live work, not keep an otherwise finished
+    // short-lived process alive solely because its cleanup path returned early.
+    // If any real work/IO is still alive, the timer still fires normally.
+    this.turnTimer.unref?.();
   }
 
   get signal(): AbortSignal {
