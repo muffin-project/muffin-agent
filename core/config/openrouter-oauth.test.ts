@@ -105,6 +105,36 @@ describe('OpenRouter OAuth PKCE', () => {
     }
   });
 
+  it('keeps provider/browser error text out of the rejected value', async () => {
+    const session = await beginLocalOpenRouterOAuth({ timeoutMs: 5_000 });
+    const injected = 'attacker-controlled-error-text';
+    const rejection = session.code.catch((error: unknown) => error instanceof Error ? error.message : String(error));
+
+    try {
+      const response = await fetch(`${session.callbackUrl}?error=${encodeURIComponent(injected)}`);
+      expect(response.status).toBe(400);
+      const message = await rejection;
+      expect(message).toBe('OpenRouter OAuth authorization failed');
+      expect(message).not.toContain(injected);
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('does not resolve an absurdly large callback code into durable state', async () => {
+    const session = await beginLocalOpenRouterOAuth({ timeoutMs: 5_000 });
+    try {
+      const response = await fetch(`${session.callbackUrl}?code=${'x'.repeat(9_000)}`);
+      expect(response.status).toBe(400);
+
+      const valid = await fetch(`${session.callbackUrl}?code=normal-code`);
+      expect(valid.status).toBe(200);
+      await expect(session.code).resolves.toBe('normal-code');
+    } finally {
+      await session.close();
+    }
+  });
+
   it('fails closed when the local callback expires', async () => {
     const session = await beginLocalOpenRouterOAuth({ timeoutMs: 20 });
     try {
