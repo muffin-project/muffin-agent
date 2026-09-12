@@ -75,6 +75,7 @@ export async function startOpenRouterLoopback(options: {
   const timeoutMs = options.timeoutMs ?? OPENROUTER_OAUTH_TIMEOUT_MS;
 
   let server: Server | undefined;
+  let timer: NodeJS.Timeout | undefined;
   let settled = false;
   let resolveCode!: (code: string) => void;
   let rejectCode!: (error: Error) => void;
@@ -82,8 +83,12 @@ export async function startOpenRouterLoopback(options: {
     resolveCode = resolve;
     rejectCode = reject;
   });
+  // A caller may cancel before it starts awaiting the result. Keep that from
+  // becoming an unhandled-rejection side channel while preserving rejection
+  // for any real waiter attached through waitForCode().
+  void code.catch(() => {});
 
-  const close = async (): Promise<void> => {
+  const closeServer = async (): Promise<void> => {
     const current = server;
     if (!current?.listening) return;
     await new Promise<void>((resolve) => current.close(() => resolve()));
@@ -92,8 +97,8 @@ export async function startOpenRouterLoopback(options: {
   const finish = (outcome: { code: string } | { error: Error }): void => {
     if (settled) return;
     settled = true;
-    clearTimeout(timer);
-    void close();
+    if (timer !== undefined) clearTimeout(timer);
+    void closeServer();
     if ('code' in outcome) resolveCode(outcome.code);
     else rejectCode(outcome.error);
   };
@@ -114,8 +119,7 @@ export async function startOpenRouterLoopback(options: {
       return;
     }
 
-    const oauthError = requestUrl.searchParams.get('error');
-    if (oauthError) {
+    if (requestUrl.searchParams.has('error')) {
       response.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
       response.end('OpenRouter authorization was not completed. You can close this tab.');
       finish({ error: new Error('OpenRouter authorization was not completed') });
@@ -134,24 +138,34 @@ export async function startOpenRouterLoopback(options: {
     finish({ code: authorizationCode });
   });
 
-  server.on('error', (error) => finish({ error: new Error(`OpenRouter callback failed: ${error.message}`) }));
-
+  // Bind errors happen before a LoopbackCallback exists, so reject the start
+  // operation itself. Only after `listening` is established do later server
+  // errors belong to the returned OAuth attempt and reject waitForCode().
   await new Promise<void>((resolve, reject) => {
-    server!.once('listening', resolve);
-    server!.once('error', reject);
+    const onError = (error: Error) => {
+      server!.off('listening', onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server!.off('error', onError);
+      resolve();
+    };
+    server!.once('error', onError);
+    server!.once('listening', onListening);
     server!.listen(0, '127.0.0.1');
   });
+  server.on('error', (error) => finish({ error: new Error(`OpenRouter callback failed: ${error.message}`) }));
 
   const address = server.address();
   if (address === null || typeof address === 'string') {
-    await close();
+    await closeServer();
     throw new Error('OpenRouter callback did not bind a TCP port');
   }
 
   const callback = new URL(`http://127.0.0.1:${(address as AddressInfo).port}${OPENROUTER_CALLBACK_PATH}`);
   callback.searchParams.set('state', state);
 
-  const timer = setTimeout(() => {
+  timer = setTimeout(() => {
     finish({ error: new Error('OpenRouter authorization timed out') });
   }, timeoutMs);
   timer.unref?.();
@@ -163,10 +177,10 @@ export async function startOpenRouterLoopback(options: {
     close: async () => {
       if (!settled) {
         settled = true;
-        clearTimeout(timer);
+        if (timer !== undefined) clearTimeout(timer);
         rejectCode(new Error('OpenRouter authorization cancelled'));
       }
-      await close();
+      await closeServer();
     },
   };
 }
