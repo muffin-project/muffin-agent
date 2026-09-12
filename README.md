@@ -146,14 +146,16 @@ The detailed DAY-1 state moves too quickly to duplicate here.
 Node is not one: the installer brings its own if the machine has none.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/GiustoPiedimonte/muffin-agent/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/GiustoPiedimonte/muffin-agent/main/bootstrap.sh | sh
 ```
 
-One command, from an empty box to a running agent: it installs Node 22 if
-needed, clones and builds the source, puts `muffin` on your `PATH`, asks for
-your API key (on stdin — never argv, never the environment), and installs the
-gateway as a supervised service. Updates and rollbacks go through the same
-path afterwards:
+One command, from an empty box into first-run setup: the tiny bootstrap stages
+the canonical installer and preserves the controlling terminal even though the
+public command itself is a pipe. The installer brings Node 22 when needed,
+clones and builds the source, puts `muffin` on your `PATH`, hands directly into
+the masked setup flow, and installs the gateway as a supervised service where
+the platform supports it. Secrets never travel through argv or the generic
+environment. Updates and rollbacks go through the same path afterwards:
 
 ```bash
 muffin update              # a release built alongside, then an atomic swap
@@ -161,7 +163,7 @@ muffin update --rollback   # the inverse flip
 ```
 
 From a clone instead — `git clone …` then `./install.sh` — if you would rather
-read the script before running it.
+read the canonical installer before running it.
 
 [What the installer does, and how to undo it →](docs/INSTALL.md)
 
