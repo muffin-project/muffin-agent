@@ -202,7 +202,7 @@ export async function exchangeOpenRouterAuthorizationCode(options: {
       code_verifier: options.verifier,
       code_challenge_method: 'S256',
     }),
-    signal: options.signal,
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
   });
 
   if (!response.ok) {
