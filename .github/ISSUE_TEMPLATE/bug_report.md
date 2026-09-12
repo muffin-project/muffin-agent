@@ -11,11 +11,19 @@ This project's review discipline (docs/ORCHESTRATION.md) treats an observed
 failure as evidence and an unverified description as a guess. The same bar
 applies to a bug report: what did you actually run, and what did you actually
 see — not what you assume must be happening.
+
+IMPORTANT BEFORE PASTING VERBATIM OUTPUT:
+redact credentials/tokens/API keys, private conversations, private files or
+Muffin Home contents, personal identifiers, and absolute machine/user paths.
+Preserve the shape needed to reproduce the failure with placeholders such as
+<API_KEY>, <PRIVATE_TEXT>, <MUFFIN_HOME> and <USER_HOME>. Never attach a real
+Home/database/secret file merely because the template asks for exact evidence.
 -->
 
 ## What you did
 
-<!-- The exact command(s) or steps, verbatim. -->
+<!-- The exact command(s) or steps, verbatim AFTER redacting private/sensitive
+values as described above. -->
 
 ## What you expected
 
@@ -24,8 +32,8 @@ reference if you have one. -->
 
 ## What actually happened
 
-<!-- The exact output, error message, or observed behaviour — paste it, don't
-paraphrase it. -->
+<!-- The exact output, error message, or observed behaviour — paste it rather
+than paraphrasing it, but redact secrets/private content/personal paths first. -->
 
 ## Version / commit
 
@@ -40,4 +48,5 @@ project's production target is Linux). Include `node --version`. -->
 ## Anything else that could falsify a fix
 
 <!-- A repeatable reproduction beats a one-time observation. If you have a
-minimal reproduction (a script, a small config), include it or attach it. -->
+minimal reproduction (a script, a small config), include it or attach it only
+after replacing any secret/private values with safe fixtures/placeholders. -->
