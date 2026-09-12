@@ -188,7 +188,11 @@ export class ExecutionBudget {
         if (callController.signal.aborted) return;
         if (firstActivityAt === undefined) firstActivityAt = this.now();
         lastActivityAt = this.now();
-        status = kind === 'thinking' ? 'thinking' : 'receiving';
+        const nextStatus: ModelProgress['status'] = kind === 'thinking' ? 'thinking' : 'receiving';
+        if (nextStatus !== status) {
+          status = nextStatus;
+          emit();
+        }
         armWatchdog();
       },
       telemetry,
