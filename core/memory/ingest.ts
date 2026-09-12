@@ -4,6 +4,7 @@ import type { SpanHandle, Tracer } from '../tracing/types.js';
 import type { VectorIndex } from './vectors.js';
 import { ATTR } from '../tracing/types.js';
 import { extractFacts } from './extract.js';
+import { speakerAttributedContent } from './authorship.js';
 import { describeFailureReason, judgeContradiction, type JudgeOutcome } from './judge.js';
 import { EXTRACTION_VERSION } from './schema.js';
 import type { MemoryStore } from './store.js';
@@ -334,6 +335,14 @@ export async function ingestPending(
         continue;
       }
 
+      const attributedContent =
+        episode.role === 'user' ? speakerAttributedContent(episode.content) : episode.content;
+
+      if (episode.role === 'user' && attributedContent === '') {
+        mark(episode.id);
+        continue;
+      }
+
       report.episodes += 1;
 
       // The step that costs the most and was the only one nobody could see.
@@ -352,7 +361,7 @@ export async function ingestPending(
       let extraction: Awaited<ReturnType<typeof extractFacts>>;
       try {
         extraction = await extractFacts(deps.provider, deps.model, {
-          content: episode.content,
+          content: attributedContent,
           speakerName: episode.role === 'user' ? 'owner' : episode.role,
           trustTier: episode.trustTier,
         });
