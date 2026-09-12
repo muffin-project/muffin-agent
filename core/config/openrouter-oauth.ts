@@ -4,6 +4,7 @@ import { createServer, type Server } from 'node:http';
 export const OPENROUTER_AUTH_URL = 'https://openrouter.ai/auth';
 export const OPENROUTER_AUTH_KEYS_URL = 'https://openrouter.ai/api/v1/auth/keys';
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1_000;
+const MAX_AUTH_CODE_CHARS = 8_192;
 
 /**
  * OAuth PKCE for the low-friction OpenRouter onboarding path.
@@ -107,10 +108,11 @@ function closeServer(server: Server): Promise<void> {
 /**
  * Starts a localhost OAuth callback without opening a browser.
  *
- * The callback uses 127.0.0.1 rather than an all-interface bind. The random path
- * is a request-correlation secret: an unrelated localhost request cannot finish
- * the OAuth flow merely by guessing `/callback`. PKCE independently makes a
- * stolen authorization code useless without the verifier.
+ * OpenRouter explicitly supports localhost/127.0.0.1 callbacks on arbitrary
+ * ports for CLI tools. We bind only 127.0.0.1, never all interfaces. The random
+ * path is a request-correlation secret: an unrelated localhost request cannot
+ * finish the OAuth flow merely by guessing `/callback`. PKCE independently
+ * makes a stolen authorization code useless without the verifier.
  */
 export async function beginLocalOpenRouterOAuth(input: {
   timeoutMs?: number;
@@ -129,10 +131,11 @@ export async function beginLocalOpenRouterOAuth(input: {
   });
 
   const server = createServer((request, response) => {
-    const host = request.headers.host ?? '127.0.0.1';
     let incoming: URL;
     try {
-      incoming = new URL(request.url ?? '/', `http://${host}`);
+      // Only the path/query are relevant. Do not let an untrusted Host header
+      // become part of the security decision or an error string.
+      incoming = new URL(request.url ?? '/', 'http://127.0.0.1');
     } catch {
       response.writeHead(400).end('Invalid OAuth callback.');
       return;
@@ -151,18 +154,24 @@ export async function beginLocalOpenRouterOAuth(input: {
     const authCode = incoming.searchParams.get('code');
     if (providerError) {
       settled = true;
-      response.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }).end('OpenRouter authorization was not completed. You can close this tab.');
-      rejectCode(new Error(`OpenRouter OAuth authorization failed (${providerError})`));
+      response
+        .writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' })
+        .end('OpenRouter authorization was not completed. You can close this tab.');
+      // The query value is provider/browser input. Keep it out of logs/errors;
+      // the only durable fact the caller needs is that authorization failed.
+      rejectCode(new Error('OpenRouter OAuth authorization failed'));
       void closeServer(server);
       return;
     }
-    if (!authCode) {
-      response.writeHead(400).end('Missing OAuth authorization code.');
+    if (!authCode || authCode.length > MAX_AUTH_CODE_CHARS) {
+      response.writeHead(400).end('Missing or invalid OAuth authorization code.');
       return;
     }
 
     settled = true;
-    response.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }).end('Muffin is connected to OpenRouter. You can close this tab.');
+    response
+      .writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' })
+      .end('Muffin is connected to OpenRouter. You can close this tab.');
     resolveCode(authCode);
     void closeServer(server);
   });
@@ -212,7 +221,9 @@ export async function beginLocalOpenRouterOAuth(input: {
 
 /**
  * Headless authorization uses the same PKCE pair but no callback URL. OpenRouter
- * then displays the one-use authorization code to the user for paste-back.
+ * then displays the one-use authorization code to the user for paste-back. The
+ * provider currently documents those codes as single-use and 10-minute-lived;
+ * this primitive intentionally leaves the terminal prompt/UI to its caller.
  */
 export function beginHeadlessOpenRouterOAuth(keyLabel = 'Muffin'): {
   authorizeUrl: string;
