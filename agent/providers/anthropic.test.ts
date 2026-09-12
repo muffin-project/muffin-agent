@@ -126,6 +126,22 @@ describe('anthropic adapter · the request shape the 5-series accepts', () => {
     expect(h.sent[0]).not.toHaveProperty('output_config');
   });
 
+  it('translates canonical effort without falling back to a legacy budget', async () => {
+    const h = harness();
+    await h.provider.chat({ ...CALL, reasoning: { mode: 'adaptive', effort: 'low' } });
+
+    expect(h.sent[0]!.thinking).toEqual({ type: 'adaptive' });
+    expect(h.sent[0]!.output_config).toEqual({ effort: 'low' });
+    expect(JSON.stringify(h.sent[0])).not.toContain('budget_tokens');
+  });
+
+  it('allows an exact manual budget only for a model family that advertises it', async () => {
+    const h = harness({ ...A_MESSAGE, model: 'claude-sonnet-4.5' });
+    await h.provider.chat({ ...CALL, model: 'claude-sonnet-4.5', reasoning: { mode: 'on', maxTokens: 2048 } });
+
+    expect(h.sent[0]!.thinking).toEqual({ type: 'enabled', budget_tokens: 2048 });
+  });
+
   it("spells 'off' as disabled, because omitting the field means thinking is ON", async () => {
     const h = harness();
     await h.provider.chat({ ...CALL, thinking: 'off' });

@@ -380,9 +380,10 @@ export function announceEnd(scope: TurnScope, stopped: TurnOutcome): void {
   }
 }
 
-export function finish(scope: TurnScope, stopped: TurnOutcome, text: string): TurnResult {
+export function finish(scope: TurnScope, stopped: TurnOutcome, text: string, reason?: string): TurnResult {
   const { record, run, snapshot, turn: span } = scope;
   span.setAttributes({ [ATTR.stopReason]: stopped, [ATTR.turnIteration]: run.iterations });
+  if (reason !== undefined) span.setAttributes({ 'muffin.turn.stop_reason': reason });
   // Nessun drain di `/steer` qui, ed è la differenza fra questa versione e
   // le tre riparazioni site-specific che l'hanno preceduta. `finish` era uno
   // dei siti che svuotavano la porta da sé, e il rethrow del provider non
@@ -430,6 +431,7 @@ export function finish(scope: TurnScope, stopped: TurnOutcome, text: string): Tu
     // exist. The row's identity is the one thing a resume must not lose.
     turnId: record.id,
     stopped,
+    ...(reason === undefined ? {} : { reason }),
     // Read here rather than at any earlier point, because the whole property
     // is that it can still rise: a tool result on the last iteration taints
     // the answer exactly as much as one on the first.

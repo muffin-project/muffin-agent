@@ -91,6 +91,7 @@ function freshCounters(): TurnCounters {
     spentUsd: 0,
     resumes: 0,
     contextBuilt: false,
+    activeModelMs: 0,
   };
 }
 

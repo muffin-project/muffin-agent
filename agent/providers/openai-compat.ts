@@ -8,10 +8,19 @@ import {
   type ChatResult,
   type ContentBlock,
   type Message,
+  type ProviderMessageMetadata,
   type Provider,
   type StopReason,
   type StreamEvent,
 } from './types.js';
+import {
+  ReasoningConfigurationError,
+  reasoningRequest,
+  resolveReasoningPolicy,
+  type ReasoningCapabilities,
+  type ReasoningResolution,
+} from './reasoning.js';
+import { OpenRouterReasoningDiscovery, type OpenRouterDiscoveryResult } from './openrouter-reasoning.js';
 
 /**
  * OpenAI-compatible chat completions.
@@ -21,37 +30,11 @@ import {
  * project cannot demand one vendor, and this is how you avoid it without
  * paying for a framework.
  *
- * What it does not carry: reasoning. Established rather than assumed
- * (2026-08-13, ADR-0037) because the production install routes
- * `anthropic/claude-sonnet-5` through here, so a wrong guess costs the owner
- * and not a hypothetical user:
- *
- *  - OpenRouter *does* expose reasoning for that model — `reasoning`,
- *    `include_reasoning` and `reasoning_effort` are all in its
- *    `supported_parameters`, and it returns `reasoning` / `reasoning_details`
- *    with the same "pass the sequence back unmodified during tool use" rule
- *    Anthropic states natively.
- *  - It is **opt-in**. Nothing here sends any of those parameters, so nothing
- *    comes back, so nothing is being dropped today. The defect on this path is
- *    latent, not active — which is a different sentence from "this path is
- *    fine", and the difference is one request parameter away.
- *  - The OpenAI SDK's own types have no `reasoning` field on the response
- *    message (checked, v7.4.0), so turning it on is not a one-line change: it
- *    needs a schema at the boundary (PRACTICES.md#parse-at-boundaries-preserve-provenance) and it costs reasoning
- *    tokens that are not being billed now. That is a decision with a price, so
- *    it is not smuggled into a correctness fix.
- *
- * Reading reasoning back is still not done, for the reasons above. **Asking for
- * none of it now is** (2026-08-27, behind `reasoningEffort`), and it is the
- * opposite trade: no schema at the boundary, no tokens billed — it removes the
- * ones already being billed. The production install moved to
- * `qwen/qwen3.8-27b` on 25/08, a model that reasons by DEFAULT, and the
- * profile has declared `"thinking": "off"` for `*qwen3*` the whole time. The
- * no-op was costing 1502 output tokens per extraction for an empty answer.
- *
- * So `ChatCall.thinking` is honoured here for `'off'` and only there:
- * `'adaptive'` sends nothing, because "whatever the model does by default" is
- * what sending nothing already means.
+ * Reasoning is carried through the canonical provider-agnostic
+ * `ChatCall.reasoning` intent. OpenRouter receives the supported subset; local
+ * OpenAI-compatible endpoints omit the field because unknown request fields
+ * are commonly rejected. Legacy `ChatCall.thinking` is normalized at the
+ * boundary for direct callers.
  *
  * Prompt-cache breakpoints it DOES carry now, behind `explicitCache`, and the
  * history of that flag is the reason it exists. This file used to say
@@ -141,6 +124,37 @@ function speaksReasoningEffort(baseURL?: string): boolean {
   }
 }
 
+/** Small, dated capability snapshot; discovery is intentionally not per call. */
+export function openRouterReasoningCapabilities(model: string, baseURL?: string): {
+  capabilities: ReasoningCapabilities;
+  source: 'static-snapshot' | 'endpoint-defaults' | 'unknown';
+} {
+  if (!speaksReasoningEffort(baseURL)) {
+    return {
+      capabilities: { support: 'unsupported', canDisable: true, supportsMaxTokens: false, mandatory: false },
+      source: 'endpoint-defaults',
+    };
+  }
+  if (model.toLowerCase() === 'qwen/qwen3.8-27b') {
+    return {
+      capabilities: {
+        support: 'supported',
+        canDisable: true,
+        supportedEfforts: ['xhigh', 'medium', 'low'],
+        defaultEnabled: true,
+        defaultEffort: 'xhigh',
+        supportsMaxTokens: false,
+        mandatory: false,
+      },
+      source: 'static-snapshot',
+    };
+  }
+  return {
+    capabilities: { support: 'unknown', canDisable: false, supportsMaxTokens: false, mandatory: false },
+    source: 'unknown',
+  };
+}
+
 /**
  * Le preferenze di instradamento, coi **nostri** nomi.
  *
@@ -159,6 +173,7 @@ export type Routing = {
   sort?: 'price' | 'throughput' | 'latency' | undefined;
   requireParameters?: boolean | undefined;
   dataCollection?: 'allow' | 'deny' | undefined;
+  allowFallbacks?: boolean | undefined;
   quantizations?: readonly string[] | undefined;
 };
 
@@ -179,6 +194,7 @@ export function routingBody(r: Routing | undefined): Record<string, unknown> | u
     ...(r.sort !== undefined ? { sort: r.sort } : {}),
     ...(r.requireParameters !== undefined ? { require_parameters: r.requireParameters } : {}),
     ...(r.dataCollection !== undefined ? { data_collection: r.dataCollection } : {}),
+    ...(r.allowFallbacks !== undefined ? { allow_fallbacks: r.allowFallbacks } : {}),
     ...(r.quantizations ? { quantizations: [...r.quantizations] } : {}),
   };
   return Object.keys(fuori).length > 0 ? fuori : undefined;
@@ -193,6 +209,9 @@ export class OpenAICompatProvider implements Provider {
   readonly stickySession: boolean;
   /** Le preferenze di instradamento dell'owner, già nella forma del corpo. */
   private readonly routing: Record<string, unknown> | undefined;
+  private readonly baseURL: string | undefined;
+  private readonly reasoningDiscovery: OpenRouterReasoningDiscovery | undefined;
+  private discoveredReasoning: OpenRouterDiscoveryResult | undefined;
   /** Public for the same reason: the wiring is the part that must be provable. */
   readonly reasoningEffort: boolean;
 
@@ -206,8 +225,18 @@ export class OpenAICompatProvider implements Provider {
       stickySession?: boolean;
       routing?: Routing;
       fetch?: typeof globalThis.fetch;
+      metadataFetch?: typeof globalThis.fetch;
+      reasoningDiscovery?: OpenRouterReasoningDiscovery;
+      discoverReasoning?: boolean;
+      routerMetadata?: boolean;
     } = {},
   ) {
+    this.baseURL = baseURL;
+    this.reasoningDiscovery = opts.discoverReasoning === false
+      ? undefined
+      : opts.reasoningDiscovery ?? (speaksReasoningEffort(baseURL)
+        ? new OpenRouterReasoningDiscovery({ ...(opts.metadataFetch === undefined ? {} : { fetch: opts.metadataFetch }), headers })
+        : undefined);
     this.explicitCache = opts.explicitCache ?? wantsExplicitCache(baseURL);
     this.stickySession = opts.stickySession ?? speaksStickySession(baseURL);
     // Le preferenze si mandano solo a chi smista. Su un Ollama locale non c'è
@@ -217,14 +246,45 @@ export class OpenAICompatProvider implements Provider {
     this.reasoningEffort = opts.reasoningEffort ?? speaksReasoningEffort(baseURL);
     this.client = new OpenAI({
       apiKey,
+      maxRetries: 0,
       ...(baseURL ? { baseURL } : {}),
-      defaultHeaders: headers,
+      defaultHeaders: { ...headers, ...(opts.routerMetadata === true ? { 'X-OpenRouter-Metadata': 'enabled' } : {}) },
       ...(opts.fetch ? { fetch: opts.fetch } : {}),
     });
   }
 
+  async resolveReasoning(call: ChatCall): Promise<ReasoningResolution> {
+    await this.discoverReasoning(call.model);
+    return this.resolveReasoningFromCache(call);
+  }
+
+  private resolveReasoningFromCache(call: ChatCall): ReasoningResolution {
+    if (this.discoveredReasoning !== undefined) return resolveReasoningPolicy(reasoningRequest(call), this.discoveredReasoning.capabilities, this.discoveredReasoning.source);
+    const { capabilities, source } = openRouterReasoningCapabilities(call.model, this.baseURL);
+    return resolveReasoningPolicy(reasoningRequest(call), capabilities, source);
+  }
+
+  private async discoverReasoning(model: string): Promise<void> {
+    if (this.reasoningDiscovery === undefined || this.baseURL === undefined) return;
+    this.discoveredReasoning = await this.reasoningDiscovery.resolve(this.baseURL, model);
+    if (this.discoveredReasoning.capabilities.support === 'unknown') {
+      const fallback = openRouterReasoningCapabilities(model, this.baseURL);
+      if (fallback.source === 'static-snapshot') this.discoveredReasoning = { ...this.discoveredReasoning, ...fallback };
+    }
+  }
+
+  private reasoningMetadata(message: unknown): ProviderMessageMetadata | undefined {
+    if (!this.reasoningEffort || message === undefined || message === null || typeof message !== 'object') return undefined;
+    const raw = message as { reasoning_details?: unknown; reasoning?: unknown; reasoning_content?: unknown };
+    const details = Array.isArray(raw.reasoning_details) ? raw.reasoning_details : undefined;
+    const content = typeof raw.reasoning === 'string' && raw.reasoning.length > 0 ? raw.reasoning : typeof raw.reasoning_content === 'string' && raw.reasoning_content.length > 0 ? raw.reasoning_content : undefined;
+    if (details === undefined && content === undefined) return undefined;
+    return { reasoning: { provider: 'openrouter', ...(details === undefined ? {} : { details }), ...(content === undefined ? {} : { content }) } };
+  }
+
   async chat(call: ChatCall): Promise<ChatResult> {
     try {
+      await this.discoverReasoning(call.model);
       const response = await this.client.chat.completions.create(this.requestBody(call), call.signal ? { signal: call.signal } : {});
 
       const choice = response.choices[0];
@@ -248,6 +308,9 @@ export class OpenAICompatProvider implements Provider {
         usage: {
           inputTokens: response.usage?.prompt_tokens ?? 0,
           outputTokens: response.usage?.completion_tokens ?? 0,
+          ...(response.usage?.completion_tokens_details?.reasoning_tokens === undefined
+            ? {}
+            : { reasoningTokens: response.usage.completion_tokens_details.reasoning_tokens }),
           cacheReadTokens: response.usage?.prompt_tokens_details?.cached_tokens ?? 0,
           // On the SDK's own type since v7 (CompletionUsage). The hardcoded 0
           // that stood here is how a missing feature stayed invisible: zero
@@ -256,6 +319,8 @@ export class OpenAICompatProvider implements Provider {
         },
         upstream: upstreamOf(response),
         model: response.model,
+        requestId: response.id,
+        providerMetadata: this.reasoningMetadata(choice.message),
       });
     } catch (error) {
       throw wrap(error);
@@ -284,6 +349,7 @@ export class OpenAICompatProvider implements Provider {
    * until the stream itself ends — so there is nothing to parse until then.
    */
   async *chatStream(call: ChatCall): AsyncIterable<StreamEvent> {
+    await this.discoverReasoning(call.model);
     let stream: AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>;
     try {
       stream = await this.client.chat.completions.create(
@@ -302,8 +368,11 @@ export class OpenAICompatProvider implements Provider {
     let finishReason: string | null = null;
     let usage: OpenAI.Chat.Completions.ChatCompletionChunk['usage'];
     let model = call.model;
+    let requestId: string | undefined;
     // Lo smistatore mette `provider` su ogni chunk; basta l'ultimo che lo porta.
     let upstream: string | undefined;
+    const reasoningDetails: unknown[] = [];
+    let reasoningContent = '';
     // See `ProviderStreamError.partial`.
     let receivedAnyEvent = false;
 
@@ -311,12 +380,17 @@ export class OpenAICompatProvider implements Provider {
       for await (const chunk of stream) {
         receivedAnyEvent = true;
         model = chunk.model;
+        requestId = chunk.id ?? requestId;
         upstream = upstreamOf(chunk) ?? upstream;
         if (chunk.usage) usage = chunk.usage;
         const choice = chunk.choices[0];
         if (choice?.finish_reason) finishReason = choice.finish_reason;
 
         const delta = choice?.delta;
+        const rawDelta = delta as unknown as { reasoning_details?: unknown[]; reasoning?: unknown; reasoning_content?: unknown } | undefined;
+        if (Array.isArray(rawDelta?.reasoning_details)) reasoningDetails.push(...rawDelta.reasoning_details);
+        if (typeof rawDelta?.reasoning === 'string') reasoningContent += rawDelta.reasoning;
+        if (typeof rawDelta?.reasoning_content === 'string') reasoningContent += rawDelta.reasoning_content;
         if (delta?.content) {
           text += delta.content;
           yield { type: 'text_delta', text: delta.content };
@@ -350,17 +424,30 @@ export class OpenAICompatProvider implements Provider {
         usage: {
           inputTokens: usage?.prompt_tokens ?? 0,
           outputTokens: usage?.completion_tokens ?? 0,
+          ...(usage?.completion_tokens_details?.reasoning_tokens === undefined
+            ? {}
+            : { reasoningTokens: usage.completion_tokens_details.reasoning_tokens }),
           cacheReadTokens: usage?.prompt_tokens_details?.cached_tokens ?? 0,
           cacheWriteTokens: usage?.prompt_tokens_details?.cache_write_tokens ?? 0,
         },
         model,
         upstream,
+        requestId,
+        providerMetadata: this.reasoningMetadata({ reasoning_details: reasoningDetails, reasoning: reasoningContent }),
       }),
     };
   }
 
   /** The request body `chat()` and `chatStream()` share — everything but `stream` itself. */
   private requestBody(call: ChatCall): Omit<OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, 'stream'> {
+    const reasoning = this.resolveReasoningFromCache(call);
+    if (reasoning.status === 'unsupported') throw new ReasoningConfigurationError(reasoning);
+    const effective = reasoning.effective;
+    const explicitReasoningConstraint = effective !== undefined && (effective.mode === 'off' || effective.mode === 'on' || effective.effort !== undefined || effective.maxTokens !== undefined);
+    const configuredRouting = this.routing;
+    const providerRouting = explicitReasoningConstraint
+      ? { ...(configuredRouting ?? {}), require_parameters: true }
+      : configuredRouting;
     return {
       model: call.model,
       max_tokens: call.maxOutputTokens,
@@ -371,6 +458,14 @@ export class OpenAICompatProvider implements Provider {
       // — `temperature` is not in claude-sonnet-5's supported_parameters
       // there — but "the gateway forgives us" is not a contract.)
       ...(call.temperature !== undefined ? { temperature: call.temperature } : {}),
+      ...(call.sampling === undefined ? {} : {
+        ...(call.sampling.temperature !== undefined ? { temperature: call.sampling.temperature } : {}),
+        ...(call.sampling.topP !== undefined ? { top_p: call.sampling.topP } : {}),
+        ...(call.sampling.topK !== undefined ? { top_k: call.sampling.topK } : {}),
+        ...(call.sampling.minP !== undefined ? { min_p: call.sampling.minP } : {}),
+        ...(call.sampling.presencePenalty !== undefined ? { presence_penalty: call.sampling.presencePenalty } : {}),
+        ...(call.sampling.repetitionPenalty !== undefined ? { repetition_penalty: call.sampling.repetitionPenalty } : {}),
+      }),
       // `thinking: 'off'` stops being a declared no-op here — but only where the
       // endpoint speaks the field. The measured cost of the no-op was not the
       // lost text: it was 1502 output tokens spent reasoning, per extraction,
@@ -381,8 +476,12 @@ export class OpenAICompatProvider implements Provider {
       // so it goes through the same cast `cache_control` uses below. Only 'off'
       // is sent: 'adaptive' means "whatever the model does by default", which is
       // exactly what sending nothing already means.
-      ...(this.reasoningEffort && call.thinking === 'off'
-        ? ({ reasoning: { effort: 'none' } } as Record<string, unknown>)
+      ...(this.reasoningEffort && effective?.mode === 'off' ? ({ reasoning: { effort: 'none' } } as Record<string, unknown>) : {}),
+      ...(this.reasoningEffort && effective?.mode === 'on' && effective.maxTokens !== undefined
+        ? ({ reasoning: { max_tokens: effective.maxTokens } } as Record<string, unknown>)
+        : {}),
+      ...(this.reasoningEffort && effective?.mode === 'on' && effective.maxTokens === undefined
+        ? ({ reasoning: effective.effort === undefined ? { enabled: true } : { effort: effective.effort } } as Record<string, unknown>)
         : {}),
       // **Tieni questa conversazione sullo stesso provider a monte.**
       //
@@ -409,14 +508,14 @@ export class OpenAICompatProvider implements Provider {
       // Dove instradare, quando l'owner l'ha detto. Vedi `config.provider.routing`:
       // un modello su uno smistatore non è una macchina, e chi risponde decide
       // prezzo, quantizzazione, politica sui dati e se la cache prende.
-      ...(this.routing !== undefined ? ({ provider: this.routing } as Record<string, unknown>) : {}),
+      ...(providerRouting !== undefined || explicitReasoningConstraint ? ({ provider: providerRouting ?? { require_parameters: true } } as Record<string, unknown>) : {}),
       ...(this.stickySession && call.conversation !== undefined && call.conversation !== ''
         ? ({ session_id: createHash('sha256').update(call.conversation).digest('hex').slice(0, 32) } as Record<
             string,
             unknown
           >)
         : {}),
-      messages: [this.systemMessage(call), ...call.messages.flatMap(toChatMessages)],
+      messages: [this.systemMessage(call), ...call.messages.flatMap((message) => toChatMessages(message, this.reasoningEffort))],
       ...(call.tools && call.tools.length > 0
         ? {
             tools: call.tools.map((t) => ({
@@ -489,9 +588,17 @@ function toChatResult(response: {
   text: string | null;
   toolCalls: RawToolCall[];
   finishReason: string | null;
-  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    reasoningTokens?: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+  };
   model: string;
   upstream?: string | undefined;
+  requestId?: string | undefined;
+  providerMetadata?: ProviderMessageMetadata | undefined;
 }): ChatResult {
   const toolCalls = response.toolCalls.map((tc) => {
     let args: unknown;
@@ -508,14 +615,16 @@ function toChatResult(response: {
   return {
     text: response.text,
     toolCalls,
-    // Empty, said out loud rather than omitted: this adapter never asks for
-    // reasoning, so there is never any to carry. If that changes, this is
-    // the line that has to change with it — see the header.
+    // OpenAI-compatible reasoning is provider metadata rather than an
+    // Anthropic-style thinking block. It is carried opaquely below when the
+    // endpoint is OpenRouter; it is never exposed as user-visible text.
     thinking: [],
     stopReason: mapStopReason(response.finishReason, toolCalls.length > 0),
     usage: response.usage,
     model: response.model,
+    ...(response.requestId === undefined ? {} : { requestId: response.requestId }),
     ...(response.upstream !== undefined ? { upstream: response.upstream } : {}),
+    ...(response.providerMetadata === undefined ? {} : { providerMetadata: response.providerMetadata }),
   };
 }
 
@@ -540,7 +649,7 @@ function flatten(block: ContentBlock): string {
  * produced them"). What would be wrong is dropping them on the *Anthropic*
  * path, which is what ADR-0037 fixed.
  */
-function toChatMessages(message: Message): OpenAI.Chat.ChatCompletionMessageParam[] {
+function toChatMessages(message: Message, preserveReasoning: boolean): OpenAI.Chat.ChatCompletionMessageParam[] {
   const out: OpenAI.Chat.ChatCompletionMessageParam[] = [];
   const text = message.content.filter((b) => b.type === 'text').map(flatten).join('\n');
   const toolUses = message.content.filter((b) => b.type === 'tool_use');
@@ -549,9 +658,12 @@ function toChatMessages(message: Message): OpenAI.Chat.ChatCompletionMessagePara
   const audio = message.content.filter((b) => b.type === 'audio');
 
   if (message.role === 'assistant') {
+    const reasoning = preserveReasoning ? message.providerMetadata?.reasoning : undefined;
     out.push({
       role: 'assistant',
       content: text.length > 0 ? text : null,
+      ...(reasoning?.details !== undefined ? ({ reasoning_details: reasoning.details } as Record<string, unknown>) : {}),
+      ...(reasoning?.details === undefined && reasoning?.content !== undefined ? ({ reasoning: reasoning.content } as Record<string, unknown>) : {}),
       ...(toolUses.length > 0
         ? {
             tool_calls: toolUses.map((b) => ({

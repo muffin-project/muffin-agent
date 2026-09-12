@@ -27,16 +27,17 @@ const A_COMPLETION = {
     prompt_tokens: 3000,
     completion_tokens: 5,
     prompt_tokens_details: { cached_tokens: 2800, cache_write_tokens: 150 },
+    completion_tokens_details: { reasoning_tokens: 3 },
   },
   model: 'anthropic/claude-sonnet-5',
 };
 
 /** A provider whose network is a recorder: returns the body it would have sent. */
-function harness(explicitCache: boolean, reasoningEffort = false) {
+function harness(explicitCache: boolean, reasoningEffort = false, completion: unknown = A_COMPLETION) {
   const bodies: unknown[] = [];
   const fetchFake = async (_url: unknown, init?: { body?: string }): Promise<Response> => {
     bodies.push(JSON.parse(init?.body ?? '{}'));
-    return new Response(JSON.stringify(A_COMPLETION), {
+    return new Response(JSON.stringify(completion), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     });
@@ -44,6 +45,7 @@ function harness(explicitCache: boolean, reasoningEffort = false) {
   const provider = new OpenAICompatProvider('sk-test', 'https://openrouter.ai/api/v1', {}, {
     explicitCache,
     reasoningEffort,
+    discoverReasoning: false,
     fetch: fetchFake as never,
   });
   return { provider, bodies };
@@ -83,6 +85,52 @@ describe('wantsExplicitCache · the endpoint decides, and the default is the dec
   });
 });
 
+describe('experimental sampling overrides', () => {
+  it('translate every Qwen sampling field to the OpenAI-compatible wire names', async () => {
+    const h = harness(false, false);
+    await h.provider.chat({
+      ...CALL,
+      sampling: { temperature: 1, topP: 0.95, topK: 20, minP: 0, presencePenalty: 0, repetitionPenalty: 1 },
+    });
+    expect(h.bodies[0]).toMatchObject({ temperature: 1, top_p: 0.95, top_k: 20, min_p: 0, presence_penalty: 0, repetition_penalty: 1 });
+  });
+});
+
+describe('OpenRouter model router', () => {
+  it('keeps openrouter/free an ordinary OpenAI-compatible model with tools', async () => {
+    const h = harness(false, false, {
+      ...A_COMPLETION,
+      model: 'openrouter/free',
+      choices: [{ message: { content: 'uso il tool', tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'demo_read', arguments: '{}' } }] }, finish_reason: 'tool_calls' }],
+    });
+    const result = await h.provider.chat({
+      ...CALL,
+      model: 'openrouter/free',
+      tools: [{ name: 'demo_read', description: 'read', inputSchema: { type: 'object' } }],
+    });
+    expect(result.toolCalls).toEqual([{ id: 'call_1', name: 'demo_read', args: {} }]);
+    expect(h.bodies[0]).toMatchObject({
+      model: 'openrouter/free',
+      tools: [{ type: 'function', function: { name: 'demo_read' } }],
+    });
+  });
+
+  it('does not reject the conservative off request when the router omits reasoning metadata', async () => {
+    const bodies: unknown[] = [];
+    const provider = new OpenAICompatProvider('sk-test', 'https://openrouter.ai/api/v1', {}, {
+      metadataFetch: async () => new Response(JSON.stringify({ data: { id: 'openrouter/free' } }), { status: 200 }),
+      fetch: async (_input: string | URL | Request, init?: RequestInit) => {
+        const body = typeof init?.body === 'string' ? init.body : '{}';
+        bodies.push(JSON.parse(body));
+        return new Response(JSON.stringify(A_COMPLETION), { status: 200, headers: { 'content-type': 'application/json' } });
+      },
+    });
+
+    await provider.chat({ ...CALL, model: 'openrouter/free', thinking: 'off' });
+    expect(bodies[0]).not.toHaveProperty('reasoning');
+  });
+});
+
 describe('openai-compat · explicit prompt caching', () => {
   it('carries the stable marker as a cache_control breakpoint when the endpoint understands it', async () => {
     const h = harness(true);
@@ -105,7 +153,7 @@ describe('openai-compat · explicit prompt caching', () => {
     // Ollama, llama.cpp, vLLM: implicit caching, strict-ish parsers. The
     // default is off, and off means a plain string — not parts without the
     // field, which some servers also reject.
-    const h = harness(false);
+    const h = harness(false, true);
     await h.provider.chat(CALL);
 
     const system = (h.bodies[0] as Body).messages[0]!;
@@ -121,6 +169,19 @@ describe('openai-compat · explicit prompt caching', () => {
 
     expect(result.usage.cacheReadTokens).toBe(2800);
     expect(result.usage.cacheWriteTokens).toBe(150);
+  });
+
+  it('puts the requested output ceiling on the wire', async () => {
+    const h = harness(true);
+    await h.provider.chat(CALL);
+    expect(h.bodies[0]).toMatchObject({ max_tokens: 100 });
+  });
+
+  it('preserves the provider-reported reasoning subset instead of calling it plain completion', async () => {
+    const h = harness(true);
+    const result = await h.provider.chat(CALL);
+    expect(result.usage.outputTokens).toBe(5);
+    expect(result.usage.reasoningTokens).toBe(3);
   });
 
   it('a block without the marker gets no breakpoint', async () => {
@@ -173,7 +234,7 @@ function streamedResponse(chunks: string[], breakAfter?: number): Response {
 
 function streamHarness(response: Response) {
   const fetchFake = async (): Promise<Response> => response;
-  return new OpenAICompatProvider('sk-test', 'https://openrouter.test/v1', {}, { fetch: fetchFake as never });
+  return new OpenAICompatProvider('sk-test', 'https://openrouter.test/v1', {}, { fetch: fetchFake as never, reasoningEffort: true, discoverReasoning: false });
 }
 
 async function collect(events: AsyncIterable<StreamEvent>): Promise<StreamEvent[]> {
@@ -197,6 +258,27 @@ const FULL_STREAM_CHUNKS: string[] = [
 ];
 
 describe('openai-compat · chatStream (B11)', () => {
+  it('reconstructs reasoning_details chunks without emitting them to the text surface', async () => {
+    const details = [{ type: 'reasoning.text', id: 'r1', text: 'prima' }, { type: 'reasoning.text', id: 'r1', text: ' poi' }];
+    const events = await collect(
+      streamHarness(
+        streamedResponse([
+          sseLine(CHUNK({ role: 'assistant', reasoning_details: [details[0]] })),
+          sseLine(CHUNK({ reasoning_details: [details[1]], content: 'risposta' }, 'stop')),
+          sseLine({ id: 'chatcmpl-1', object: 'chat.completion.chunk', created: 1, model: 'qwen/qwen3.8-27b', choices: [], usage: { prompt_tokens: 1, completion_tokens: 3 } }),
+          'data: [DONE]\n\n',
+        ]),
+      ).chatStream(CALL),
+    );
+
+    const done = events.at(-1);
+    expect(done?.type).toBe('done');
+    if (done?.type !== 'done') throw new Error('unreachable');
+    expect(done.result.providerMetadata).toEqual({ reasoning: { provider: 'openrouter', details } });
+    expect(events.filter((event) => event.type === 'text_delta')).toHaveLength(1);
+    expect((events.find((event) => event.type === 'text_delta') as { text: string }).text).toBe('risposta');
+  });
+
   it('yields text deltas as they arrive and a done event with the same ChatResult chat() would return', async () => {
     const provider = streamHarness(streamedResponse(FULL_STREAM_CHUNKS));
     const events = await collect(provider.chatStream(CALL));
@@ -283,8 +365,43 @@ describe('openai-compat · chatStream (B11)', () => {
 describe("thinking:'off' smette di essere un no-op, dove l'endpoint capisce", () => {
   it("manda reasoning.effort 'none' quando la corsia chiede di non ragionare", async () => {
     const h = harness(false, true);
-    await h.provider.chat({ ...CALL, thinking: 'off' });
+    await h.provider.chat({ ...CALL, model: 'qwen/qwen3.8-27b', thinking: 'off' });
     expect((h.bodies[0] as { reasoning?: unknown }).reasoning).toEqual({ effort: 'none' });
+  });
+
+  it('uses the canonical reasoning intent and requires routed providers to support it', async () => {
+    const h = harness(false, true);
+    await h.provider.chat({ ...CALL, model: 'qwen/qwen3.8-27b', reasoning: { mode: 'on', effort: 'low' } });
+    expect((h.bodies[0] as { reasoning?: unknown }).reasoning).toEqual({ effort: 'low' });
+    expect((h.bodies[0] as { provider?: unknown }).provider).toEqual({ require_parameters: true });
+  });
+
+  it('rejects an exact reasoning token budget when the model snapshot does not support it', async () => {
+    const h = harness(false, true);
+    await expect(h.provider.chat({ ...CALL, model: 'qwen/qwen3.8-27b', reasoning: { mode: 'on', maxTokens: 2048 } })).rejects.toThrow(
+      'exact reasoning token budget',
+    );
+    expect(h.bodies).toHaveLength(0);
+  });
+
+  it('falls back to the known snapshot when live metadata is unavailable', async () => {
+    const provider = new OpenAICompatProvider('sk-test', 'https://openrouter.ai/api/v1', {}, {
+      reasoningEffort: true,
+      metadataFetch: async () => { throw new Error('metadata unavailable'); },
+      fetch: async () => new Response(JSON.stringify(A_COMPLETION), { status: 200 }) as never,
+    });
+    expect((await provider.resolveReasoning({ ...CALL, model: 'qwen/qwen3.8-27b', reasoning: { mode: 'on', effort: 'low' } })).capabilitySource).toBe('static-snapshot');
+  });
+
+  it('lets fresh live metadata override the static snapshot', async () => {
+    const provider = new OpenAICompatProvider('sk-test', 'https://openrouter.ai/api/v1', {}, {
+      reasoningEffort: true,
+      metadataFetch: async () => new Response(JSON.stringify({ data: { id: 'qwen/qwen3.8-27b', reasoning: { mandatory: false, supported_efforts: ['low'], default_effort: 'low' } } }), { status: 200 }),
+      fetch: async () => new Response(JSON.stringify(A_COMPLETION), { status: 200 }),
+    });
+    const resolution = await provider.resolveReasoning({ ...CALL, model: 'qwen/qwen3.8-27b', reasoning: { mode: 'on', effort: 'xhigh' } });
+    expect(resolution.capabilitySource).toBe('openrouter-live');
+    expect(resolution.status).toBe('unsupported');
   });
 
   it("non manda niente per 'adaptive': è già ciò che significa non mandare niente", async () => {
@@ -298,7 +415,7 @@ describe("thinking:'off' smette di essere un no-op, dove l'endpoint capisce", ()
     // sono esattamente i server del profilo `consumer-local`. Il tetto di
     // `REASONING_HEADROOM` resta per loro: lì `off` è ancora un no-op.
     const h = harness(false, false);
-    await h.provider.chat({ ...CALL, thinking: 'off' });
+    await h.provider.chat({ ...CALL, model: 'qwen/qwen3.8-27b', thinking: 'off' });
     expect(h.bodies[0]).not.toHaveProperty('reasoning');
   });
 
@@ -322,9 +439,43 @@ describe("thinking:'off' smette di essere un no-op, dove l'endpoint capisce", ()
         bodies.push(JSON.parse(init?.body ?? '{}'));
         return streamedResponse(FULL_STREAM_CHUNKS);
       }) as never,
+      discoverReasoning: false,
+      reasoningEffort: true,
     });
-    await collect(provider.chatStream({ ...CALL, thinking: 'off', stream: true }));
+    await collect(provider.chatStream({ ...CALL, model: 'qwen/qwen3.8-27b', thinking: 'off', stream: true }));
     expect((bodies[0] as { reasoning?: unknown }).reasoning).toEqual({ effort: 'none' });
+  });
+});
+
+describe('openrouter reasoning continuity', () => {
+  it('preserves opaque reasoning_details through a non-stream tool round-trip', async () => {
+    const details = [{ type: 'reasoning.encrypted', id: 'r1', data: 'opaque' }];
+    const h = harness(false, true, {
+      ...A_COMPLETION,
+      choices: [{ message: { content: 'uso il tool', reasoning_details: details, tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'demo_read', arguments: '{}' } }] }, finish_reason: 'tool_calls' }],
+    });
+
+    const first = await h.provider.chat({ ...CALL, model: 'qwen/qwen3.8-27b' });
+    expect(first.providerMetadata).toEqual({ reasoning: { provider: 'openrouter', details } });
+
+    await h.provider.chat({
+      ...CALL,
+      model: 'qwen/qwen3.8-27b',
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'leggi' }] },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'uso il tool' },
+            { type: 'tool_use', id: 'call_1', name: 'demo_read', input: {} },
+          ],
+          ...(first.providerMetadata === undefined ? {} : { providerMetadata: first.providerMetadata }),
+        },
+        { role: 'user', content: [{ type: 'tool_result', toolCallId: 'call_1', content: 'letto' }] },
+      ],
+    });
+
+    expect((h.bodies[1] as { messages: Record<string, unknown>[] }).messages[2]).toMatchObject({ reasoning_details: details });
   });
 });
 

@@ -38,6 +38,33 @@ export type RecoveryStrategy =
   /** Prose where a call was needed: a two-option contract, no third shape. */
   | 'strictJson';
 
+export type ProfileExecution = {
+  modelCallDeadlineMs: number;
+  turnWallDeadlineMs: number;
+  activeModelBudgetMs: number;
+  firstActivityTimeoutMs: number;
+  stallTimeoutMs: number;
+  heartbeatIntervalMs: number;
+};
+
+/**
+ * The bounded interactive floor for a profile that predates execution policy.
+ *
+ * One exported value because this is compatibility behavior, not a model
+ * preset: the profile parser and the runtime fallback must never grow two
+ * almost-identical literals where one silently forgets a fuse. Shipped model
+ * profiles may override it explicitly; old schema-v1 files inherit all six
+ * bounds rather than only the two that existed in the first P0 draft.
+ */
+export const DEFAULT_EXECUTION: ProfileExecution = {
+  modelCallDeadlineMs: 90_000,
+  turnWallDeadlineMs: 180_000,
+  activeModelBudgetMs: 120_000,
+  firstActivityTimeoutMs: 30_000,
+  stallTimeoutMs: 25_000,
+  heartbeatIntervalMs: 15_000,
+};
+
 /**
  * What the loop asks the provider for. Two fields, both of them corrections.
  *
@@ -86,6 +113,8 @@ export type Profile = {
    */
   sampling: 'deterministic' | 'model-default';
   recovery: RecoveryStrategy[];
+  /** Optional only for programmatic/backward-compatible callers; loadProfiles materializes DEFAULT_EXECUTION. */
+  execution?: ProfileExecution | undefined;
   notes: string;
 };
 
@@ -112,6 +141,7 @@ export const CONSERVATIVE: Profile = {
   // right kind of wrong for an unrecognised id.
   sampling: 'deterministic',
   recovery: ['nudge', 'reinjectTools', 'retryOnce', 'strictJson'],
+  execution: DEFAULT_EXECUTION,
   notes: 'Unknown model: the capability floor, with every crutch enabled.',
 };
 
@@ -123,6 +153,15 @@ export const CONSERVATIVE: Profile = {
  * recovery it names was needed. Profiles are a documented extension point, so
  * the boundary has to refuse what the switch cannot honor, out loud.
  */
+const ExecutionSchema = z.object({
+  modelCallDeadlineMs: z.number().int().positive().default(DEFAULT_EXECUTION.modelCallDeadlineMs),
+  turnWallDeadlineMs: z.number().int().positive().default(DEFAULT_EXECUTION.turnWallDeadlineMs),
+  activeModelBudgetMs: z.number().int().positive().default(DEFAULT_EXECUTION.activeModelBudgetMs),
+  firstActivityTimeoutMs: z.number().int().positive().default(DEFAULT_EXECUTION.firstActivityTimeoutMs),
+  stallTimeoutMs: z.number().int().positive().default(DEFAULT_EXECUTION.stallTimeoutMs),
+  heartbeatIntervalMs: z.number().int().positive().default(DEFAULT_EXECUTION.heartbeatIntervalMs),
+});
+
 const ProfileSchema = z.object({
   schemaVersion: z.literal(1),
   name: z.string().min(1),
@@ -142,6 +181,11 @@ const ProfileSchema = z.object({
   // exactly the behaviour it had instead of silently acquiring a new one.
   sampling: z.enum(['deterministic', 'model-default']).default('deterministic'),
   recovery: z.array(z.enum(['nudge', 'reinjectTools', 'retryOnce', 'strictJson'])),
+  // Whole-field default closes the upgrade path: a schema-v1 profile from
+  // before P0 gets the same six bounded values as the conservative runtime
+  // floor. Per-field defaults also make a partially migrated profile converge
+  // instead of silently losing whichever fuse it omitted.
+  execution: ExecutionSchema.default(DEFAULT_EXECUTION),
   notes: z.string().default(''),
 });
 

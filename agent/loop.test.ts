@@ -1170,7 +1170,7 @@ describe('the loop hands the model its own reasoning back', () => {
     });
     await runTurn(d, input(store));
 
-    expect(provider.seen[0]?.thinking).toBe('adaptive');
+    expect(provider.seen[0]?.reasoning).toEqual({ mode: 'adaptive' });
     // …and the sampling parameter the 5-series rejects is *absent*, not
     // undefined: `'temperature' in call` is the assertion, because a key
     // holding undefined is a key on the wire for some serialisers.
@@ -1185,7 +1185,7 @@ describe('the loop hands the model its own reasoning back', () => {
     await runTurn(d, input(store));
 
     expect(provider.seen[0]?.temperature).toBe(0);
-    expect(provider.seen[0]?.thinking).toBe('off');
+    expect(provider.seen[0]?.reasoning).toEqual({ mode: 'off' });
   });
 
   it("omits thinking entirely for 'unset' — the ADR's own escape hatch, made reachable", async () => {
@@ -1582,10 +1582,11 @@ describe('agent loop · progress (B13)', () => {
     const events: TurnEvent[] = [];
     await runTurn(d, { ...input(store), onProgress: (e) => events.push(e) });
 
-    expect(events.map((e) => e.type)).toEqual(['round', 'model', 'tool_start', 'tool_end', 'round', 'model']);
+    expect(events.filter((e) => e.type !== 'model_status').map((e) => e.type)).toEqual(['round', 'model', 'tool_start', 'tool_end', 'round', 'model']);
+    expect(events.filter((e) => e.type === 'model_status').length).toBeGreaterThan(0);
     // The round that called the tool is tagged `tool_use` — the same value
     // `checkCompletion`/the transcript itself would agree on, not a guess.
-    expect(events[1]).toMatchObject({ type: 'model', stopReason: 'tool_use' });
+    expect(events.filter((e) => e.type === 'model')[0]).toMatchObject({ type: 'model', stopReason: 'tool_use' });
   });
 
   it('tool_start carries the name and capability; tool_end carries how long it took and whether it errored', async () => {
