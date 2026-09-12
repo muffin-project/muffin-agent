@@ -52,12 +52,13 @@ export class TurnRun {
    * not a budget: attempt N runs strategy N.
    */
   recoveriesUsed: number;
-  /** The other budget. See MAX_TRANSPORT_RETRIES for why it is not the same one. */
+  /** The transport retry budget owned by the loop, not by an SDK. */
   transportRetriesLeft: number;
   toolCallsMade: number;
   nudgedForCompletion: boolean;
   spentUsd: number;
   contextBuilt: boolean;
+  activeModelMs: number;
 
   /**
    * I token accumulati, mutati sul posto giro dopo giro.
@@ -109,6 +110,7 @@ export class TurnRun {
     this.nudgedForCompletion = record.counters.nudgedForCompletion;
     this.spentUsd = record.counters.spentUsd;
     this.contextBuilt = record.counters.contextBuilt;
+    this.activeModelMs = Math.max(0, record.counters.activeModelMs ?? 0);
     this.usage = { ...record.counters.usage };
     this.messages = [...record.messages];
     this.#resumes = record.counters.resumes + (spendeIlBudget(ripresa.resumed, ripresa.wokenFromWait) ? 1 : 0);
@@ -134,6 +136,7 @@ export class TurnRun {
       spentUsd: this.spentUsd,
       resumes: this.resumes,
       contextBuilt: this.contextBuilt,
+      activeModelMs: this.activeModelMs,
     };
   }
 }

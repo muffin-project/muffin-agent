@@ -1,5 +1,8 @@
+import { sleep } from '../../core/net/sleep.js';
+import { retryDelayMs } from '../loop/stream.js';
+import { MAX_TRANSPORT_RETRIES } from '../loop/types.js';
 import type { Profile } from '../profiles/profile.js';
-import type { ChatCall, ChatResult, Provider } from './types.js';
+import { ProviderError, type ChatCall, type ChatResult, type Provider } from './types.js';
 
 /**
  * The light lane's missing half of the loop.
@@ -22,17 +25,25 @@ import type { ChatCall, ChatResult, Provider } from './types.js';
  *    `--light-model` points at anything 4.7 or later, and — the part that makes
  *    it worse than the loop's old hardcode — *no profile edit can reach it*,
  *    because that lane never loads a profile at all.
+ *  - **Retry ownership.** Both SDKs are constructed with `maxRetries: 0` now,
+ *    which is correct for the main loop because `RoundScope` owns an explicit
+ *    transport-retry budget. The light lane does not enter that loop. Without
+ *    an owner here, turning off SDK retries silently changes extraction/judge/
+ *    rerank from three bounded wire attempts to one. This wrapper therefore
+ *    owns the same two retry gaps for this entry point — transport failures
+ *    only, never malformed model output — and uses the same backoff primitive
+ *    and constant as the main lane so the two budgets cannot drift by copy.
  *
  * ## Why a wrapper and not a parameter threaded through the three files
  *
- * Threading `sampling` and a spend callback through `extractFacts`,
+ * Threading `sampling`, retry and a spend callback through `extractFacts`,
  * `judgeContradiction` and `LlmReranker` fixes the three call sites that exist
  * today. It does nothing for the fourth. This repo's recorded failure is not a
  * wrong line, it is *a mechanism a later caller did not know to reach* — four
  * defences with correct logic and no caller (`AGENTS.md`). A boundary the light
  * provider is constructed behind cannot be forgotten by code that has not been
- * written yet: whatever calls `runtime.light.provider` is billed and is legal on
- * the wire, without knowing this file exists.
+ * written yet: whatever calls `runtime.light.provider` is billed, retried and
+ * legal on the wire, without knowing this file exists.
  *
  * The three `temperature: 0` literals stay where they are and keep meaning what
  * they say — *this job wants determinism*. This boundary is where that request
@@ -60,25 +71,59 @@ export type LightLaneOptions = {
 };
 
 /**
- * Wraps a provider so every call on the light lane is billed and carries the
- * sampling parameter its model accepts.
+ * One logical light-lane request with Muffin — not an SDK — owning retry.
+ *
+ * `ProviderError.source === 'output'` is deliberately excluded even when the
+ * adapter marks it retryable: malformed tool/JSON output is a model-recovery
+ * problem, and waiting before asking the same thing again cannot repair bytes
+ * the model already generated. The main loop makes the identical distinction.
+ *
+ * `sleep` resolves when the signal aborts, so the explicit check immediately
+ * after it is load-bearing: without it an owner stop during backoff would wake
+ * the loop and launch one more paid request with an already-aborted signal.
+ */
+async function chatWithTransportRetries(inner: Provider, call: ChatCall): Promise<ChatResult> {
+  let retriesLeft = MAX_TRANSPORT_RETRIES;
+  while (true) {
+    try {
+      return await inner.chat(call);
+    } catch (error) {
+      if (
+        !(error instanceof ProviderError) ||
+        !error.retryable ||
+        error.source !== 'transport' ||
+        retriesLeft <= 0
+      ) {
+        throw error;
+      }
+      retriesLeft -= 1;
+      const attempt = MAX_TRANSPORT_RETRIES - retriesLeft;
+      await sleep(retryDelayMs(attempt), call.signal);
+      if (call.signal?.aborted) throw error;
+    }
+  }
+}
+
+/**
+ * Wraps a provider so every call on the light lane is billed, retried and
+ * carries the sampling parameter its model accepts.
  *
  * Returns the provider unchanged in neither case — always a wrapper, even when
- * `record` is absent, because the sampling correction is not optional and a
- * conditional wrapper is a second code path that only the unconfigured install
- * exercises.
+ * `record` is absent, because sampling and retry ownership are not optional and
+ * a conditional wrapper is a second code path that only the unconfigured
+ * install exercises.
  */
 export function lightLane(inner: Provider, options: LightLaneOptions): Provider {
   return {
     kind: inner.kind,
     async chat(call: ChatCall): Promise<ChatResult> {
-      const result = await inner.chat(sampled(call, options.profile));
-      // Billed after the call returns, like the loop: a call that threw cost
-      // nothing we can measure, and inventing a number for it would make the
-      // cap trip on failures.
+      const result = await chatWithTransportRetries(inner, sampled(call, options.profile));
+      // Billed after the logical call returns, like the loop: retries are one
+      // request outcome, not three charges invented from failures whose usage
+      // the provider never returned.
       options.record?.({
-        // `result.model` and not `call.model`: the provider is the authority on
-        // what actually served the request, and the price table is keyed on it.
+        // `result.model` and not `call.model`: the price table is keyed on what served
+        // the request, and the two differ on every alias.
         model: result.model || call.model,
         inputTokens: result.usage.inputTokens,
         outputTokens: result.usage.outputTokens,

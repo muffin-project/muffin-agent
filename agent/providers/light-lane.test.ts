@@ -1,15 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MAX_TRANSPORT_RETRIES } from '../loop/types.js';
 import { CONSERVATIVE, loadProfiles, selectProfile } from '../profiles/profile.js';
 import { lightLane, type LightSpend } from './light-lane.js';
-import type { ChatCall, ChatResult, Provider } from './types.js';
+import { ProviderError, type ChatCall, type ChatResult, type Provider } from './types.js';
 
 /**
  * The boundary the memory lane never had.
  *
- * Two things the loop does around every model call — bill it, and send the
- * sampling parameter the model accepts — reached only the main lane.
- * `core/memory/{extract,judge,rerank}.ts` are a second entry point to the same
- * provider, and got neither.
+ * Three things the loop does around every model call — bill it, own transport
+ * retries, and send only the sampling parameter the model accepts — reached
+ * only the main lane. `core/memory/{extract,judge,rerank}.ts` are a second
+ * entry point to the same provider and need all three at this boundary.
  */
 
 class Echo implements Provider {
@@ -36,6 +37,16 @@ const call = (over: Partial<ChatCall> = {}): ChatCall => ({
   stream: false,
   ...over,
 });
+
+const ok = (): ChatResult => ({
+  text: 'ok',
+  toolCalls: [],
+  stopReason: 'end',
+  usage: { inputTokens: 2, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+  model: 'light-served',
+});
+
+afterEach(() => vi.restoreAllMocks());
 
 describe('billing the light lane', () => {
   it('records what the call cost, with the model the provider actually served', async () => {
@@ -71,6 +82,100 @@ describe('billing the light lane', () => {
     );
     await expect(lane.chat(call())).rejects.toThrow('502');
     expect(billed).toEqual([]);
+  });
+});
+
+describe('transport retry ownership', () => {
+  it('retries a transient transport failure twice, then bills the one successful logical call', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    let attempts = 0;
+    const billed: LightSpend[] = [];
+    const lane = lightLane(
+      {
+        kind: 'openai-compat',
+        chat: async () => {
+          attempts += 1;
+          if (attempts <= MAX_TRANSPORT_RETRIES) throw new ProviderError('502', true, 502, 'transport');
+          return ok();
+        },
+      },
+      { profile: CONSERVATIVE, record: (e) => billed.push(e) },
+    );
+
+    await expect(lane.chat(call())).resolves.toMatchObject({ text: 'ok' });
+    expect(attempts).toBe(MAX_TRANSPORT_RETRIES + 1);
+    expect(billed).toHaveLength(1);
+  });
+
+  it('stops after the bounded transport budget instead of multiplying attempts below the lane', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    let attempts = 0;
+    const lane = lightLane(
+      {
+        kind: 'anthropic',
+        chat: async () => {
+          attempts += 1;
+          throw new ProviderError('429', true, 429, 'transport');
+        },
+      },
+      { profile: CONSERVATIVE },
+    );
+
+    await expect(lane.chat(call())).rejects.toThrow('429');
+    expect(attempts).toBe(MAX_TRANSPORT_RETRIES + 1);
+  });
+
+  it('never retries malformed model output even when the adapter marks it retryable', async () => {
+    let attempts = 0;
+    const lane = lightLane(
+      {
+        kind: 'openai-compat',
+        chat: async () => {
+          attempts += 1;
+          throw new ProviderError('malformed tool arguments', true, undefined, 'output');
+        },
+      },
+      { profile: CONSERVATIVE },
+    );
+
+    await expect(lane.chat(call())).rejects.toThrow('malformed tool arguments');
+    expect(attempts).toBe(1);
+  });
+
+  it('never retries a permanent transport refusal', async () => {
+    let attempts = 0;
+    const lane = lightLane(
+      {
+        kind: 'openai-compat',
+        chat: async () => {
+          attempts += 1;
+          throw new ProviderError('401', false, 401, 'transport');
+        },
+      },
+      { profile: CONSERVATIVE },
+    );
+
+    await expect(lane.chat(call())).rejects.toThrow('401');
+    expect(attempts).toBe(1);
+  });
+
+  it('an abort during the failed attempt cancels the backoff and no second wire attempt starts', async () => {
+    const controller = new AbortController();
+    let attempts = 0;
+    const lane = lightLane(
+      {
+        kind: 'openai-compat',
+        chat: async () => {
+          attempts += 1;
+          controller.abort('owner-stop');
+          throw new ProviderError('502', true, 502, 'transport');
+        },
+      },
+      { profile: CONSERVATIVE },
+    );
+
+    await expect(lane.chat(call({ signal: controller.signal }))).rejects.toThrow('502');
+    expect(attempts).toBe(1);
   });
 });
 

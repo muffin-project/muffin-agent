@@ -14,7 +14,9 @@ import {
   ProviderError,
   ProviderStreamError,
 } from '../providers/types.js';
+import { ReasoningConfigurationError, reasoningFromLegacyThinking } from '../providers/reasoning.js';
 import { checkpoint, finish, suspendHere, type TurnScope } from './durability.js';
+import type { ExecutionBudget, ModelCallLease, ModelCallTelemetry } from './execution-budget.js';
 import { drainStream, edgeTrimmer, retryDelayMs } from './stream.js';
 import { runTool } from './tool-call.js';
 import {
@@ -61,6 +63,7 @@ import {
  * every string in here moved without an edit.
  */
 export type RoundScope = TurnScope & {
+  readonly execution: ExecutionBudget;
   /**
    * The pre-loop's own bindings that the round reads. Not state — `run` is the
    * state (`agent/loop/run-state.ts`) — but values resolved once, before
@@ -140,6 +143,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     record,
     refusalLabel,
     run,
+    execution,
     snapshot,
     toolContext,
     turn,
@@ -169,6 +173,9 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     }
     if (input.signal?.aborted) {
       return finish(scope, 'aborted', 'Interrotto.');
+    }
+    if (execution.expired()) {
+      return finish(scope, 'error', 'Il turno ha raggiunto il limite di tempo.', 'turn_deadline');
     }
     /**
      * May what this round produces reach the channel? Asked **before** the
@@ -227,6 +234,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       });
     }
 
+    const reasoning = reasoningFromLegacyThinking(deps.profile.thinking);
     const call: ChatCall = {
       model: deps.model,
       system: [{ type: 'text', text: deps.systemPrompts[turnClass], cache: 'stable' }],
@@ -240,9 +248,8 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       ...(exposed.length > 0 ? { tools: exposed.map((t) => t.spec), toolChoice: 'auto' as const } : {}),
       maxOutputTokens: 4096,
       // The profile decides both, and until this slice neither reached the
-      // wire: `thinking` was declared in every profile and passed by nobody
-      // (the ninth "mechanism with no caller" in this repo's list), and
-      // `temperature: 0` was hardcoded here — a 400 on every model
+      // wire: the profile's legacy `thinking` vocabulary is normalized into
+      // canonical reasoning above, and `temperature: 0` was hardcoded here — a 400 on every model
       // frontier.json matches, on the config `muffin init` writes by default.
       //
       // Spread rather than `temperature: profile.sampling === ... ? 0 :
@@ -250,37 +257,68 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // `undefined` is not the same as an absent field, and the difference is
       // exactly what the newest models reject.
       ...(deps.profile.sampling === 'deterministic' ? { temperature: 0 } : {}),
-      // D2 (judge, 2026-08-13): this was `thinking: deps.profile.thinking`
-      // unconditionally, so ADR-0037's own documented escape hatch — "si
-      // spegne il campo (`thinking` assente resta una forma valida e
-      // l'adapter la supporta già)" — was unreachable from any profile:
-      // `Profile.thinking` was a required two-value field and this line
-      // never omitted it. 'unset' is the profile value that reaches the
-      // branch below; spread rather than `thinking: … ? undefined : …` for
-      // the same exactOptionalPropertyTypes reason as `temperature` above —
-      // an explicit `undefined` can still be a key on the wire, an absent
-      // key never is.
-      ...(deps.profile.thinking !== 'unset' ? { thinking: deps.profile.thinking } : {}),
+      ...(deps.samplingOverride === undefined ? {} : { sampling: deps.samplingOverride }),
+      // Backward-compatible profile/config vocabulary is normalized once at
+      // the loop boundary. Adapters no longer need to interpret profile
+      // strings; they receive the provider-agnostic reasoning intent.
+      ...(reasoning === undefined ? {} : { reasoning }),
       // B11: streaming is requested exactly when someone can hear it. A turn
       // with no `onDelta` sink (a job, a headless `muffin run`, a provider
       // that never implements `chatStream`) sends this `false`, the request
       // is byte-identical to before this field could ever be `true`, and
       // `requestChatResult` below never touches `chatStream` at all.
       stream: Boolean(input.onDelta && deps.provider.chatStream),
-      ...(input.signal ? { signal: input.signal } : {}),
     };
-
     const chatSpan = deps.tracer.start(
       'muffin.chat_call',
-      { [ATTR.requestModel]: deps.model, [ATTR.turnIteration]: run.iterations },
+      {
+        [ATTR.requestModel]: deps.model,
+        [ATTR.turnIteration]: run.iterations,
+        'muffin.chat_call.requested_max_output_tokens': call.maxOutputTokens,
+        'muffin.chat_call.reasoning_requested_mode': call.reasoning?.mode ?? 'unset',
+        ...(call.reasoning?.effort === undefined ? {} : { 'muffin.chat_call.reasoning_requested_effort': call.reasoning.effort }),
+        ...(call.reasoning?.maxTokens === undefined ? {} : { 'muffin.chat_call.reasoning_requested_max_tokens': call.reasoning.maxTokens }),
+      },
       turn,
     );
+    const reasoningResolution = await deps.provider.resolveReasoning?.(call);
+    if (reasoningResolution !== undefined) {
+      chatSpan.setAttributes({
+        'muffin.chat_call.reasoning_capability_source': reasoningResolution.capabilitySource,
+        'muffin.chat_call.reasoning_effective_mode': reasoningResolution.effective?.mode ?? 'omitted',
+        ...(reasoningResolution.effective?.effort === undefined ? {} : { 'muffin.chat_call.reasoning_effective_effort': reasoningResolution.effective.effort }),
+        ...(reasoningResolution.effective?.maxTokens === undefined ? {} : { 'muffin.chat_call.reasoning_effective_max_tokens': reasoningResolution.effective.maxTokens }),
+        'muffin.chat_call.reasoning_constraint_degraded': reasoningResolution.status !== 'applied',
+        ...(reasoningResolution.reason === undefined ? {} : { 'muffin.chat_call.reasoning_resolution_reason': reasoningResolution.reason }),
+      });
+    }
     // `chatSpan`'s own clock is not readable back from `SpanHandle` (it only
     // exposes `setAttributes`/`end`), so `ms` for the `model` progress event
     // below is timed here, at the same call site that starts the span it
     // describes — not a second stopwatch with its own idea of when the
     // request began.
     const chatCallStartedAt = Date.now();
+    let modelLease: ModelCallLease | undefined;
+    let lastAbortReason: ReturnType<ModelCallLease['reason']>;
+    let lastTelemetry: ModelCallTelemetry | undefined;
+
+    const recordTelemetry = (telemetry: ModelCallTelemetry): void => {
+      const prefix = `muffin.chat_call.invocation.${telemetry.modelCallIndex}`;
+      chatSpan.setAttributes({
+        'muffin.chat_call.model_call_index': telemetry.modelCallIndex,
+        'muffin.chat_call.active_model_ms_before': telemetry.activeModelMsBefore,
+        'muffin.chat_call.active_model_ms_this_call': telemetry.durationMs,
+        'muffin.chat_call.active_model_ms_after': telemetry.activeModelMsAfter,
+        'muffin.chat_call.effective_deadline_ms': telemetry.effectiveDeadlineMs,
+        'muffin.chat_call.effective_deadline_source': telemetry.effectiveDeadlineSource,
+        [`${prefix}.started_at`]: telemetry.startedAt,
+        [`${prefix}.duration_ms`]: telemetry.durationMs,
+        [`${prefix}.active_model_ms_before`]: telemetry.activeModelMsBefore,
+        [`${prefix}.active_model_ms_after`]: telemetry.activeModelMsAfter,
+        ...(telemetry.activeModelBudgetMs === undefined ? {} : { 'muffin.chat_call.active_model_budget_ms': telemetry.activeModelBudgetMs }),
+        ...(telemetry.activeModelMsRemaining === undefined ? {} : { 'muffin.chat_call.active_model_ms_remaining': telemetry.activeModelMsRemaining }),
+      });
+    };
 
     /**
      * This round's live text: forwarded to `input.onDelta` in the
@@ -320,16 +358,42 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
      * request that never finished, so what the surface already showed of it
      * is closed as `'superseded'` before the replacement starts arriving.
      */
-    const requestChatResult = async (): Promise<ChatResult> => {
-      if (!call.stream || !deps.provider.chatStream) return deps.provider.chat(call);
+    const invoke = async (stream: boolean): Promise<ChatResult> => {
+      const lease = execution.beginModelCall(input.signal, (progress) => {
+        input.onProgress?.({ type: 'model_status', ...progress });
+      });
+      modelLease = lease;
+      const callWithBudget: ChatCall = { ...call, stream, signal: lease.signal };
       try {
-        return await drainStream(deps.provider.chatStream(call), (text) => {
-          if (!input.onDelta) return;
-          const out = trim(text);
-          if (out === null) return; // finora solo spazio: non è ancora niente
-          emittedLive = true;
-          input.onDelta({ type: 'text', text: out });
-        });
+        if (reasoningResolution?.status === 'unsupported') throw new ReasoningConfigurationError(reasoningResolution);
+        // A lease can be born already exhausted. Do not call the provider just
+        // to discover its signal is aborted: this is a governor decision, not
+        // a transport failure and must not enter retry.
+        if (lease.signal.aborted) throw new Error('model invocation not authorized by execution budget');
+        if (!stream) return await deps.provider.chat(callWithBudget);
+        return await drainStream(
+          deps.provider.chatStream!(callWithBudget),
+          (text) => {
+            if (!input.onDelta) return;
+            const out = trim(text);
+            if (out === null) return; // finora solo spazio: non è ancora niente
+            emittedLive = true;
+            input.onDelta({ type: 'text', text: out });
+          },
+          (kind) => lease.activity(kind),
+        );
+      } finally {
+        lastAbortReason = lease.reason();
+        lease.release();
+        lastTelemetry = lease.telemetry();
+        recordTelemetry(lastTelemetry);
+      }
+    };
+
+    const requestChatResult = async (): Promise<ChatResult> => {
+      if (!call.stream || !deps.provider.chatStream) return invoke(false);
+      try {
+        return await invoke(true);
       } catch (error) {
         if (!(error instanceof ProviderStreamError)) throw error;
         closeLive('superseded');
@@ -337,7 +401,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
           'muffin.stream.fell_back_to_non_stream': true,
           'muffin.stream.partial': error.partial,
         });
-        return deps.provider.chat({ ...call, stream: false });
+        return invoke(false);
       }
     };
 
@@ -345,6 +409,11 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     try {
       result = await requestChatResult();
     } catch (error) {
+      const abortReason = lastAbortReason;
+      chatSpan.setAttributes({
+        'muffin.chat_call.duration_ms': Date.now() - chatCallStartedAt,
+        ...(abortReason === undefined ? {} : { 'muffin.chat_call.abort_reason': abortReason }),
+      });
       chatSpan.end({ error });
       // Whatever door this takes below — a retry, the profile's cascade, or
       // out of the turn entirely — the text this attempt already put on a
@@ -356,7 +425,10 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // rejection fell through to `throw error` — the turn ended `error`
       // and the owner read «esito error» for a stop they had asked for.
       // The signal is the fact; the exception is only how it arrived.
-      if (input.signal?.aborted) return finish(scope, 'aborted', 'Interrotto.');
+      if (abortReason === 'user_stop' || input.signal?.aborted) return finish(scope, 'aborted', 'Interrotto.', 'user_stop');
+      if (abortReason !== undefined) {
+        return finish(scope, 'error', 'La chiamata al modello ha raggiunto il suo limite di tempo.', abortReason);
+      }
       // Two failures wearing one type, and they take different doors.
       //
       // `output` is the model's own doing — arguments the adapter could not
@@ -384,6 +456,10 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       }
       throw error;
     }
+    chatSpan.setAttributes({
+      'muffin.chat_call.duration_ms': Date.now() - chatCallStartedAt,
+      ...(lastTelemetry === undefined ? {} : { 'muffin.chat_call.active_model_ms_after': lastTelemetry.activeModelMsAfter }),
+    });
 
     run.usage.inputTokens += result.usage.inputTokens;
     run.usage.outputTokens += result.usage.outputTokens;
@@ -413,6 +489,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     }
     chatSpan.setAttributes({
       [ATTR.responseModel]: result.model,
+      ...(result.requestId === undefined ? {} : { 'muffin.chat_call.request_id': result.requestId }),
       // L'attributo era dichiarato in `core/tracing/types.ts` e **non lo
       // scriveva nessuno**: il difetto di serie di questa repo, un
       // meccanismo senza chiamante. Ora porta chi ha risposto davvero,
@@ -423,6 +500,9 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       ...(result.upstream !== undefined ? { [ATTR.providerName]: result.upstream } : {}),
       [ATTR.usageInputTokens]: result.usage.inputTokens,
       [ATTR.usageOutputTokens]: result.usage.outputTokens,
+      ...(result.usage.reasoningTokens === undefined
+        ? {}
+        : { 'muffin.chat_call.reasoning_tokens': result.usage.reasoningTokens }),
       [ATTR.cacheReadTokens]: result.usage.cacheReadTokens,
       // The attribute existed with zero writers while the adapter hardcoded
       // the value to 0. Honesty note: no test asserts chat-span attributes
@@ -639,6 +719,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
         ...(result.text ? [{ type: 'text' as const, text: result.text }] : []),
         ...result.toolCalls.map((c) => ({ type: 'tool_use' as const, id: c.id, name: c.name, input: c.args })),
       ],
+      ...(result.providerMetadata === undefined ? {} : { providerMetadata: result.providerMetadata }),
     });
     // Checkpointed **here**, and not only at the top of the next iteration.
     //
