@@ -247,18 +247,21 @@ const ALLOW_ARGV = ['--ro-bind', '/', '/', '--unshare-all', '--die-with-parent',
  * not a README or a second hand-rolled check.
  */
 /**
- * I binari che il sandbox pretende, tutti e tre, con il comando per averli.
+ * Linux and macOS do not have the same sandbox dependencies.
  *
- * Un rimedio che ne nomina due su tre non è un rimedio più corto: è un rimedio
- * che non funziona, e che manda l'owner a cercare la differenza fra «li ho
- * installati» e «non parte lo stesso».
+ * `@anthropic-ai/sandbox-runtime` uses Bubblewrap + Socat + ripgrep on Linux;
+ * on macOS the containment mechanism is the OS-provided Seatbelt and only
+ * ripgrep is an extra package dependency. Keep both instructions in one
+ * runtime-owned remedy because `SandboxManager` may report the missing binary
+ * before its higher-level error tells the caller which platform branch it was
+ * taking — but never tell a macOS owner to install Linux-only Bubblewrap.
  */
 export const SANDBOX_BINARIES = ['bwrap', 'socat', 'rg'] as const;
 
 export const SANDBOX_BINARIES_REMEDY =
-  'il sandbox ha bisogno di tre binari: bubblewrap, socat e ripgrep. ' +
-  'Debian/Ubuntu: `sudo apt-get install bubblewrap socat ripgrep`; ' +
-  'Fedora: `sudo dnf install bubblewrap socat ripgrep`; macOS: `brew install bubblewrap socat ripgrep`';
+  'macOS usa Seatbelt integrato: non installare bubblewrap o socat; dei tre nomi citati qui serve solo ripgrep: `brew install ripgrep`. ' +
+  'Linux usa tre binari: bubblewrap, socat e ripgrep. Debian/Ubuntu: `sudo apt-get install bubblewrap socat ripgrep`; ' +
+  'Fedora: `sudo dnf install bubblewrap socat ripgrep`';
 
 export const APPARMOR_REMEDY =
   'unprivileged user namespaces are restricted (Ubuntu 24.04+ default). ' +
