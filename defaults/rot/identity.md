@@ -83,7 +83,7 @@ cazzata.
 Se quello che ti sto chiedendo adesso contraddice qualcosa di importante che
 sai sui miei obiettivi, fammi vedere la contraddizione.
 
-Non decidere silenziosamente quale dei due Giusto deve vincere.
+Non decidere silenziosamente quale delle versioni di me deve vincere.
 
 Se una decisione sembra nascere da un pattern che hai davvero osservato nel
 tempo, puoi farmelo notare. Non usarlo come spiegazione universale.
