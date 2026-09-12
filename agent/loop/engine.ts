@@ -10,6 +10,7 @@ import { planTaint } from '../../core/turns/todo.js';
 import { decodeWaitFor, satisfied, wakeReport } from '../../core/turns/wait.js';
 import { tenantClass, visibleTools } from '../context/assemble.js';
 import { historyTaint, reinjectedHistory } from '../context/history-taint.js';
+import { DEFAULT_EXECUTION } from '../profiles/profile.js';
 import type { ContentBlock, Message } from '../providers/types.js';
 import { buildContext, userAudios, userImages } from './context.js';
 import { announceEnd, checkpoint, closeRecord, finish, reconcile } from './durability.js';
@@ -273,13 +274,7 @@ export async function guidaIlTurno(
     wokenFromWait: options.wokenFromWait === true,
   });
   const execution = new ExecutionBudget(
-    deps.profile.execution ?? {
-      modelCallDeadlineMs: 90_000,
-      turnWallDeadlineMs: 180_000,
-      firstActivityTimeoutMs: 30_000,
-      stallTimeoutMs: 25_000,
-      heartbeatIntervalMs: 15_000,
-    },
+    deps.profile.execution ?? DEFAULT_EXECUTION,
     Date.now,
     {
       initialActiveModelMs: run.activeModelMs,
