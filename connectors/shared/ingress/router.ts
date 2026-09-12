@@ -410,7 +410,19 @@ async function runStage(
       // where the pre-slice `composeTurnText(incoming, arrival)` prepended it:
       // it is Muffin's own accounting of what happened to the sender's own
       // attachment, not foreign content a fence would warn the model about.
-      ctx.parts = [{ source: 'author', tier: 0, text: arrival.line }, ...ctx.parts];
+      const statusPart: IngressPart =
+        arrival.part === undefined
+          ? { source: 'author', tier: 0, text: arrival.line }
+          : {
+              source: 'derived',
+              tier: 0,
+              text: arrival.line,
+              detail:
+                'stato generato da Muffin durante l ingest dell allegato — non parole del mittente',
+            };
+      const arrivalParts: IngressPart[] = [statusPart];
+      if (arrival.part !== undefined) arrivalParts.push(arrival.part);
+      ctx.parts = [...arrivalParts, ...ctx.parts];
       ctx.text = composeTurnText(ctx.parts);
       return step(CONTINUE);
     }
