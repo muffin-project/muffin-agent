@@ -24,7 +24,7 @@ import type { AddressInfo } from 'node:net';
 export const OPENROUTER_AUTH_URL = 'https://openrouter.ai/auth';
 export const OPENROUTER_EXCHANGE_URL = 'https://openrouter.ai/api/v1/auth/keys';
 export const OPENROUTER_CALLBACK_PATH = '/callback';
-export const OPENROUTER_OAUTH_TIMEOUT_MS = 120_000;
+export const OPENROUTER_OAUTH_TIMEOUT_MS = 300_000;
 
 export type PkcePair = {
   verifier: string;
@@ -104,8 +104,10 @@ export async function startOpenRouterLoopback(options: {
   };
 
   server = createServer((request, response) => {
-    const host = request.headers.host ?? '127.0.0.1';
-    const requestUrl = new URL(request.url ?? '/', `http://${host}`);
+    // The listener is already pinned to loopback. Do not use the client-supplied
+    // Host header as parser authority: a local process can choose it freely, and
+    // malformed/unexpected Host text should not be able to crash the callback.
+    const requestUrl = new URL(request.url ?? '/', 'http://127.0.0.1');
 
     if (request.method !== 'GET' || requestUrl.pathname !== OPENROUTER_CALLBACK_PATH) {
       response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
