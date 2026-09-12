@@ -173,6 +173,8 @@ export type TurnCounters = {
    * built yet" rather than as `NaN`-shaped nonsense.
    */
   contextBuilt: boolean;
+  /** Cumulative provider-invocation time spent by this turn's execution budget. */
+  activeModelMs?: number;
 };
 
 /**
@@ -190,6 +192,7 @@ function toCounters(raw: string): TurnCounters {
     ...parsed,
     resumes: Number.isFinite(parsed.resumes) ? parsed.resumes : 0,
     contextBuilt: parsed.contextBuilt === true,
+    ...(Number.isFinite(parsed.activeModelMs) ? { activeModelMs: Math.max(0, parsed.activeModelMs as number) } : {}),
   };
 }
 

@@ -325,6 +325,13 @@ describe('askModelChoice — one numbered menu, reused for OpenRouter families a
     await expect(pending).resolves.toEqual({ main: 'openai/gpt-5.6-terra', light: 'openai/gpt-5-nano' });
   });
 
+  it('can choose the OpenRouter Free router by number', async () => {
+    const { input, output } = fakeTty();
+    const pending = askModelChoice(OPENROUTER_MODEL_FAMILIES, 'header', input, output);
+    input.write('5\n');
+    await expect(pending).resolves.toEqual({ main: 'openrouter/free', light: 'openrouter/free' });
+  });
+
   it('unrecognised text is taken as a model id typed by hand — "altro" is not a second prompt', async () => {
     const { input, output } = fakeTty();
     const pending = askModelChoice(OPENROUTER_MODEL_FAMILIES, 'header', input, output);
@@ -371,9 +378,13 @@ describe('OPENROUTER_MODEL_FAMILIES — the owner\'s verbatim default first', ()
     });
   });
 
-  it('offers 4 families — 3-4 numbered choices, per the brief', () => {
-    expect(OPENROUTER_MODEL_FAMILIES.length).toBeGreaterThanOrEqual(3);
-    expect(OPENROUTER_MODEL_FAMILIES.length).toBeLessThanOrEqual(4);
+  it('offers the existing families plus the provider router as an explicit opt-in', () => {
+    expect(OPENROUTER_MODEL_FAMILIES.length).toBe(5);
+    expect(OPENROUTER_MODEL_FAMILIES.find((f) => f.label === 'OpenRouter Free')).toEqual({
+      label: 'OpenRouter Free',
+      main: 'openrouter/free',
+      light: 'openrouter/free',
+    });
   });
 
   it('Anthropic mirrors defaultModels\' own compat pair — picking it changes nothing silently', () => {

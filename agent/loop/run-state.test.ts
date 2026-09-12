@@ -110,6 +110,7 @@ describe('TurnRun: counters() consegna una copia', () => {
       'spentUsd',
       'resumes',
       'contextBuilt',
+      'activeModelMs',
     ]);
   });
 });

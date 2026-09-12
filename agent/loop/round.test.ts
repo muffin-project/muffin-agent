@@ -32,6 +32,7 @@ import { searchCapability, searchSpec } from '../tools/search.js';
 import { makeSnapshot } from './permissions.js';
 import { type RoundScope, recover, runRounds } from './round.js';
 import { TurnRun } from './run-state.js';
+import { ExecutionBudget } from './execution-budget.js';
 import {
   assertNever,
   type LoopDeps,
@@ -189,6 +190,7 @@ function harness(options: {
   onDelta?: (delta: TurnDelta) => void;
   log?: string[];
   messages?: Message[];
+  execution?: ExecutionBudget;
 }) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-round-'));
   const decls = options.decls ?? [];
@@ -294,6 +296,7 @@ function harness(options: {
     doorRefusal,
     refusalLabel: (refusal) => (refusal.effect === 'deny' ? refusal.code : refusal.effect),
     memoryDoorOpen: () => true,
+    execution: options.execution ?? new ExecutionBudget({ modelCallDeadlineMs: 90_000, turnWallDeadlineMs: 180_000 }),
   };
   return { scope, deps, turns, record, span, run, id };
 }
@@ -484,5 +487,54 @@ describe('il gate di completezza spinge una volta sola', () => {
     expect(h.run.nudgedForCompletion).toBe(true);
     expect(h.span.attrs['muffin.completion.unresolved']).toBe(true);
     expect(result.text).toBe('Ho usato fs_write, davvero.');
+  });
+});
+
+describe('execution budget', () => {
+  it('does not invoke the provider when the cumulative model budget is already spent', async () => {
+    let calls = 0;
+    const provider: Provider = {
+      kind: 'openai-compat',
+      async chat() {
+        calls += 1;
+        return reply('non dovrebbe partire');
+      },
+    };
+    const h = harness({
+      provider,
+      execution: new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 200, activeModelBudgetMs: 0 }),
+    });
+
+    const result = await runRounds(h.scope);
+
+    expect(calls).toBe(0);
+    expect(result.stopped).toBe('error');
+    expect(result.reason).toBe('active_model_budget_exhausted');
+  });
+
+  it('aborta una model call lunga senza trasformarla in un transport retry', async () => {
+    let calls = 0;
+    const provider: Provider = {
+      kind: 'openai-compat',
+      async chat(call) {
+        calls += 1;
+        await new Promise<never>((_, reject) => {
+          call.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+        });
+        throw new Error('unreachable');
+      },
+    };
+    const h = harness({
+      provider,
+      profile: { ...CONSERVATIVE, recovery: ['retryOnce'] },
+      execution: new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 200, firstActivityTimeoutMs: 10, stallTimeoutMs: 20 }),
+    });
+
+    const result = await runRounds(h.scope);
+
+    expect(calls).toBe(1);
+    expect(result.stopped).toBe('error');
+    expect(result.reason).toBe('model_first_activity_timeout');
+    expect(h.span.attrs['muffin.turn.stop_reason']).toBe('model_first_activity_timeout');
   });
 });

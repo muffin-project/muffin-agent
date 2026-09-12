@@ -337,11 +337,13 @@ describe('the REPL renders progress on stderr, gated on stderr being a TTY (B13)
         .join('')
         .split('\n')
         .filter((l) => l.startsWith('· '));
-      // Exactly one round, no tool call: `round 1` then the `model` line —
-      // never a `tool_start`/`tool_end` this script never triggered.
-      expect(progressLines).toHaveLength(2);
+      // Exactly one round, no tool call: the round opens, the execution
+      // governor reports that the model is initially awaited, then the
+      // completed model event closes it. No tool event exists in this script.
+      expect(progressLines).toHaveLength(3);
       expect(progressLines[0]).toBe('· giro 1');
-      expect(progressLines[1]).toMatch(/^· modello: \d+ms, \d+→\d+ token, stop: end$/);
+      expect(progressLines[1]).toBe('· modello waiting_for_model, 0s inattivo');
+      expect(progressLines[2]).toMatch(/^· modello: \d+ms, \d+→\d+ token, stop: end$/);
     } finally {
       process.stderr.isTTY = originalIsTTY;
       await provider.close();
