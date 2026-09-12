@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # muffin installer — one command, from an empty machine to a supervised agent.
 #
-#   curl -fsSL https://raw.githubusercontent.com/GiustoPiedimonte/muffin-agent/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/GiustoPiedimonte/muffin-agent/main/bootstrap.sh | sh
 #   bash install.sh          # from a clone or an unpacked tarball
 #
 # ## What this script owns, and why it grew
@@ -14,7 +14,7 @@
 # opposite claim: an empty Ubuntu VPS, one command, `muffin doctor` green and
 # the gateway running under systemd. So the script owns the whole line now:
 #
-#   1. OS packages     git/curl/xz for itself, bubblewrap/socat/ripgrep for the sandbox
+#   1. OS packages     fetch/build prerequisites + platform-specific sandbox deps
 #   2. Node >= 22      the official tarball under MUFFIN_PREFIX, never a system package
 #   3. the source      git clone (or reuse) — `muffin update` needs a real checkout
 #   4. the build       npm ci/install -> dist/
@@ -24,7 +24,9 @@
 #
 # Steps 1-5 are unattended. Steps 6-7 need something only the owner has (an API
 # key) or something only a real login session has (a user systemd instance), so
-# each one degrades to a printed command rather than to a lie.
+# each one degrades to a printed command rather than to a lie. The public
+# `bootstrap.sh` exists solely to stage this file and restore the controlling
+# terminal to stdin when the outer `curl | sh` consumed fd 0.
 #
 # ## Why the code does not live in the data home
 #
@@ -118,16 +120,16 @@ say "muffin installer — source: $SRC ($MODE)"
 #
 #   REQUIRED  git/curl/ca-certificates/xz-utils — without them this script
 #             cannot fetch or unpack anything, so a failure here is fatal.
-#   SANDBOX   bubblewrap/socat/ripgrep — Muffin boots without them and `doctor`
-#             says so, but it degrades to asking for confirmation on every
-#             single command, which is the difference between an agent that
-#             does things on a VPS and one that only chats. Three binaries and
-#             not two: SandboxManager needs ripgrep as well, and the remedy
-#             that named only bubblewrap and socat sent people round in circles.
+#   SANDBOX   Linux: bubblewrap/socat/ripgrep. macOS: Seatbelt ships with the
+#             OS and the sandbox runtime only needs ripgrep. These lists come
+#             from the same platform split the runtime uses; recommending
+#             bubblewrap on Darwin is not a harmless extra — it tells an owner
+#             to install a Linux-only package for a mechanism Muffin never calls.
 #
-# `sudo -n` and never a password prompt: `curl … | sh` has no terminal on
-# stdin, so a prompting sudo would hang forever instead of printing the one
-# line the reader can act on.
+# `sudo -n` and never an installer-owned password prompt: even when bootstrap
+# restored a controlling TTY, privilege escalation is a distinct owner action.
+# A missing privileged package should produce one explicit remedy rather than
+# silently turning installation into a root-interactive wizard.
 # ---------------------------------------------------------------------------
 apt_install() {
   # usage: apt_install <purpose> <fatal 0|1> <pkg...>
@@ -173,20 +175,29 @@ fi
 have git || die "git not found and could not be installed — install it, then re-run."
 have curl || die "curl not found and could not be installed — install it, then re-run."
 
-missing_sandbox=''
-for b in bwrap socat rg; do
-  have "$b" || missing_sandbox="$missing_sandbox $b"
-done
-if [ -n "$missing_sandbox" ]; then
-  case "$(uname -s)" in
-    Linux)
+case "$(uname -s)" in
+  Linux)
+    missing_sandbox=''
+    for b in bwrap socat rg; do
+      have "$b" || missing_sandbox="$missing_sandbox $b"
+    done
+    if [ -n "$missing_sandbox" ]; then
       apt_install "the sandbox — without it every command asks you first" 0 bubblewrap socat ripgrep || true
       say "      On Ubuntu 24.04+ bwrap also needs an AppArmor profile granting userns."
-      ;;
-    Darwin) say "note: the sandbox needs:$missing_sandbox — brew install bubblewrap socat ripgrep" ;;
-    *) say "note: the sandbox needs:$missing_sandbox — install them with your package manager" ;;
-  esac
-fi
+    fi
+    ;;
+  Darwin)
+    # @anthropic-ai/sandbox-runtime uses the built-in sandbox-exec/Seatbelt
+    # mechanism on macOS. Its only additional binary dependency is ripgrep;
+    # socat is part of the Linux network-namespace bridge and bwrap is Linux-only.
+    if ! have rg; then
+      say "note: the macOS sandbox uses built-in Seatbelt; ripgrep is missing — brew install ripgrep"
+    fi
+    ;;
+  *)
+    say "note: no supported automatic sandbox dependency setup for $(uname -s); muffin doctor will report the actual containment state"
+    ;;
+esac
 
 # ---------------------------------------------------------------------------
 # 2. Node >= 22.

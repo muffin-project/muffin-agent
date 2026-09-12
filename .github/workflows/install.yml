@@ -16,9 +16,13 @@
 # osservate, non dedotte: `install.sh` arriva in fondo da solo, `muffin doctor`
 # non ha righe rosse, la unit del supervisore esiste ed è accettata da systemd,
 # `muffin update` costruisce una release affiancata e `--rollback` torna
-# indietro. Il limite del container (nessuna istanza systemd utente) lo
-# dichiara lo script stesso, e nel caso prova la unit con `systemd-analyze
-# verify` più un avvio in primo piano del suo `ExecStart`.
+# indietro. `evals/install/pipe-tty.sh` copre invece la forma che un container
+# headless non può esprimere da solo: il bootstrap pubblico è letto da una pipe
+# ma conserva il controlling TTY per il vero installer, così il first-run può
+# chiedere segreti/consenso senza trasformare la promessa «one command» in due.
+# Il limite del container (nessuna istanza systemd utente) lo dichiara lo script
+# stesso, e nel caso prova la unit con `systemd-analyze verify` più un avvio in
+# primo piano del suo `ExecStart`.
 #
 # ## Il costo, detto e non nascosto
 #
@@ -32,7 +36,7 @@
 # ## Il filtro
 #
 # `paths` nomina ciò che può rompere l'installazione e nient'altro:
-# l'installer, la prova, i comandi che l'installer esegue (`cli/init`,
+# il bootstrap/installer, la prova, i comandi che l'installer esegue (`cli/init`,
 # `cli/doctor`, `cli/update`, `cli/gateway`), la unit del supervisore, e il
 # manifesto/lock da cui dipende il build. Una PR che tocca solo il runtime
 # dell'agente non paga questo giro.
@@ -42,6 +46,7 @@ name: install
 on:
   pull_request:
     paths:
+      - 'bootstrap.sh'
       - 'install.sh'
       - 'evals/install/**'
       - 'cli/**'
@@ -53,6 +58,7 @@ on:
   push:
     branches: [main]
     paths:
+      - 'bootstrap.sh'
       - 'install.sh'
       - 'evals/install/**'
       - 'cli/**'
@@ -96,6 +102,9 @@ jobs:
       # `evals/acceptance/gate-linux.sh` lo installa).
       - name: systemd, per verificare la unit
         run: sudo apt-get update -qq && sudo apt-get install -y -qq systemd
+
+      - name: la pipe pubblica conserva il controlling tty
+        run: bash evals/install/pipe-tty.sh
 
       - name: da una macchina vuota a un agente supervisionato
         run: bash evals/install/ubuntu.sh
