@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# DAY-1 A11 — "on an empty Ubuntu box, installing Muffin is one command".
+# DAY-1 A11 — install Muffin on an empty Ubuntu box without inheriting the
+# runner's home or service manager.
 #
 # This script is the *proof*, not the installer. It rehearses the claim end to
 # end on a machine that has never seen Muffin: no Node, no checkout, no
@@ -24,12 +25,13 @@
 # link path and `muffin update`'s `.releases/<sha>` path against *this commit*,
 # and a fetch of github.com/main would silently test a different tree.
 #
-# ## What this container cannot prove, declared and not papered over
+# ## What this eval cannot prove, declared and not papered over
 #
-# A Docker container has no user systemd instance: PID 1 is the job's shell,
-# `systemctl --user` has no bus to talk to, and no amount of privilege changes
-# that. So the supervisor half of the claim is proved in two pieces instead of
-# one, and the script says which piece it got:
+# This eval owns a throwaway HOME. A host's user systemd manager belongs to its
+# real login home and cannot supervise the unit written into this lab. So the
+# eval gives its subprocesses a private, absent user-bus socket and proves the
+# supervisor half in two pieces instead of accidentally querying the host's
+# unrelated manager:
 #
 #   · `systemd-analyze verify` on the unit `muffin gateway install` actually
 #     wrote — systemd's own parser, so a malformed or unloadable unit is red;
@@ -37,10 +39,9 @@
 #     `muffin gateway status` reports a live pid — which is the thing systemd
 #     would have done, minus systemd.
 #
-# If a real user systemd instance *is* reachable (a VM, a systemd-enabled
-# container), the script takes the stronger path instead and asserts
-# `systemctl --user is-active muffin-gateway`. Either way it prints which one
-# ran, so a green here can never be mistaken for more than it is.
+# This deliberately does not prove that a service is active under systemd or
+# survives logout. That needs a separate disposable VM with a user manager
+# configured for this HOME; a green here proves the no-user-bus install path.
 #
 # ## The provider key
 #
@@ -97,7 +98,15 @@ finish() {
 # ---------------------------------------------------------------------------
 LAB=$(mktemp -d /tmp/muffin-install-eval.XXXXXX)
 export HOME="$LAB/home"
-mkdir -p "$HOME"
+export XDG_CONFIG_HOME="$HOME/.config"
+# GitHub-hosted runners can expose both a user XDG directory and a live
+# systemd user bus. This eval owns a throwaway home, so neither may leak in.
+# An empty private bus path intentionally exercises install.sh's documented
+# no-user-manager path; a host manager for /home/runner cannot supervise this
+# temporary installation.
+export XDG_RUNTIME_DIR="$LAB/runtime"
+mkdir -p "$HOME" "$XDG_RUNTIME_DIR"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
 export MUFFIN_PREFIX="$HOME/.local/share/muffin"
 BINDIR="$HOME/.local/bin"
 MUFFIN="$BINDIR/muffin"
@@ -162,6 +171,9 @@ INSTALL_LOG="$LAB/install.log"
 set +e
 env -i \
   HOME="$HOME" \
+  XDG_CONFIG_HOME="$XDG_CONFIG_HOME" \
+  XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+  DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" \
   PATH="$CLEAN_PATH" \
   TERM="${TERM:-dumb}" \
   MUFFIN_PREFIX="$MUFFIN_PREFIX" \
@@ -284,76 +296,57 @@ else
   bad "no unit at $UNIT — \`muffin gateway install --write --start\` never got as far as writing one"
 fi
 
-SYSTEMD_USER=0
-if command -v systemctl >/dev/null 2>&1 && systemctl --user is-system-running >/dev/null 2>&1; then
-  SYSTEMD_USER=1
+echo "  NO USER BUS: checking the written unit with systemd and running its ExecStart in the foreground."
+if [ "$INSTALL_RC" != 3 ]; then
+  bad "install.sh exited $INSTALL_RC on a machine with no user systemd — it should exit 3 and say so"
+fi
+# The two reasons this can be unavailable are different problems and must not
+# print the same sentence: a wrong remedy is worse than no remedy, because it
+# gets followed. (`[ -f "$UNIT" ]` already failed above with its own line.)
+if ! command -v systemd-analyze >/dev/null 2>&1; then
+  bad "systemd-analyze is not installed — the unit could not be checked by systemd itself"
+elif [ -f "$UNIT" ]; then
+  if systemd-analyze verify "$UNIT" 2>&1 | sed 's/^/  | /'; then
+    ok "systemd-analyze verify accepts the unit"
+  else
+    bad "systemd-analyze rejected the unit"
+  fi
 fi
 
-if [ "$SYSTEMD_USER" = 1 ]; then
-  echo "  (a user systemd instance is reachable — taking the strong path)"
-  if systemctl --user is-active --quiet muffin-gateway.service; then
-    ok "systemctl --user is-active muffin-gateway: yes"
+if [ -f "$UNIT" ]; then
+  EXECSTART=$(sed -n 's/^ExecStart=//p' "$UNIT" | head -1)
+  UNIT_PATH=$(sed -n 's/^Environment=PATH=//p' "$UNIT" | head -1)
+  UNIT_HOME=$(sed -n 's/^Environment=MUFFIN_HOME=//p' "$UNIT" | head -1)
+  if [ -z "$EXECSTART" ]; then
+    bad "the unit has no ExecStart"
   else
-    bad "the unit is not active under systemd --user"
-  fi
-  if loginctl show-user "$(id -un)" -p Linger 2>/dev/null | grep -q 'Linger=yes'; then
-    ok "loginctl enable-linger is on — the unit survives logout"
-  else
-    bad "linger is off: the user unit dies at logout (ADR-0035)"
-  fi
-else
-  echo "  CONTAINER LIMIT: no user systemd instance here (no bus for \`systemctl --user\`),"
-  echo "  so the unit is proved by systemd's own parser plus a foreground run of its ExecStart."
-  if [ "$INSTALL_RC" != 3 ]; then
-    bad "install.sh exited $INSTALL_RC on a machine with no user systemd — it should exit 3 and say so"
-  fi
-  # The two reasons this can be unavailable are different problems and must not
-  # print the same sentence: a wrong remedy is worse than no remedy, because it
-  # gets followed. (`[ -f "$UNIT" ]` already failed above with its own line.)
-  if ! command -v systemd-analyze >/dev/null 2>&1; then
-    bad "systemd-analyze is not installed — the unit could not be checked by systemd itself"
-  elif [ -f "$UNIT" ]; then
-    if systemd-analyze verify "$UNIT" 2>&1 | sed 's/^/  | /'; then
-      ok "systemd-analyze verify accepts the unit"
-    else
-      bad "systemd-analyze rejected the unit"
-    fi
-  fi
-
-  if [ -f "$UNIT" ]; then
-    EXECSTART=$(sed -n 's/^ExecStart=//p' "$UNIT" | head -1)
-    UNIT_PATH=$(sed -n 's/^Environment=PATH=//p' "$UNIT" | head -1)
-    UNIT_HOME=$(sed -n 's/^Environment=MUFFIN_HOME=//p' "$UNIT" | head -1)
-    if [ -z "$EXECSTART" ]; then
-      bad "the unit has no ExecStart"
-    else
-      echo "  starting the unit's own ExecStart in the foreground: $EXECSTART"
-      # Exactly what systemd would exec, with exactly the environment the unit
-      # declares — anything else would prove a command this machine will never
-      # actually run.
-      env -i HOME="$HOME" PATH="${UNIT_PATH:-$PATH}" MUFFIN_HOME="${UNIT_HOME:-$HOME/.muffin}" \
-        $EXECSTART >"$LAB/gateway.out" 2>&1 &
-      GATEWAY_PID=$!
-      up=0
-      for _ in $(seq 1 30); do
-        if muffin gateway status >/dev/null 2>&1; then
-          up=1
-          break
-        fi
-        kill -0 "$GATEWAY_PID" 2>/dev/null || break
-        sleep 1
-      done
-      if [ "$up" = 1 ]; then
-        ok "the gateway came up: $(muffin gateway status 2>/dev/null | head -1)"
-      else
-        bad "the unit's ExecStart did not produce a live gateway within 30s"
-        tail -25 "$LAB/gateway.out" | sed 's/^/  | /'
+    echo "  starting the unit's own ExecStart in the foreground: $EXECSTART"
+    # Exactly what systemd would exec, with exactly the environment the unit
+    # declares — anything else would prove a command this machine will never
+    # actually run.
+    env -i HOME="$HOME" PATH="${UNIT_PATH:-$PATH}" MUFFIN_HOME="${UNIT_HOME:-$HOME/.muffin}" \
+      XDG_CONFIG_HOME="$XDG_CONFIG_HOME" \
+      $EXECSTART >"$LAB/gateway.out" 2>&1 &
+    GATEWAY_PID=$!
+    up=0
+    for _ in $(seq 1 30); do
+      if muffin gateway status >/dev/null 2>&1; then
+        up=1
+        break
       fi
-      # By pid, never by pattern.
-      kill "$GATEWAY_PID" 2>/dev/null || true
-      wait "$GATEWAY_PID" 2>/dev/null || true
-      GATEWAY_PID=""
+      kill -0 "$GATEWAY_PID" 2>/dev/null || break
+      sleep 1
+    done
+    if [ "$up" = 1 ]; then
+      ok "the gateway came up: $(muffin gateway status 2>/dev/null | head -1)"
+    else
+      bad "the unit's ExecStart did not produce a live gateway within 30s"
+      tail -25 "$LAB/gateway.out" | sed 's/^/  | /'
     fi
+    # By pid, never by pattern.
+    kill "$GATEWAY_PID" 2>/dev/null || true
+    wait "$GATEWAY_PID" 2>/dev/null || true
+    GATEWAY_PID=""
   fi
 fi
 
