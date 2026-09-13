@@ -303,6 +303,7 @@ export async function guidaIlTurno(
     principal: input.principal,
     turnId: record.id,
     sessionId: input.session.id,
+    runtimeInfo: deps.runtimeInfo,
     taint: () => snapshot.currentTaint(),
     intrinsicTaint: () => snapshot.intrinsicTaint(),
     suspend: (spec) => {

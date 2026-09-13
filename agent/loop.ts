@@ -45,6 +45,7 @@ export {
   type SpendEntry,
   type ToolContext,
   type ToolOutcome,
+  type TurnRuntimeInfo,
   type TurnDelta,
   type TurnEvent,
   type TurnInput,

@@ -171,6 +171,8 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
       inspectArgs.parse(args);
       const principal: Principal = ctx.principal;
       const cls = tenantClass(principal, ctx.tenant);
+      const runtimeInfo = ctx.runtimeInfo;
+      const profile = runtimeInfo?.profile ?? sources.profile;
       const [report, build] = await Promise.all([sources.doctor(), sources.build()]);
       // Filtro poi tetto — lo stesso ordine di `agent/loop.ts` (`exposed =
       // visibleTools(...).slice(0, maxToolsExposed)`), non solo il filtro. La
@@ -184,8 +186,8 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
         sources.capabilities,
         sources.grants?.get(ctx.tenant),
       );
-      const esposti = filtrati.slice(0, sources.profile.maxToolsExposed);
-      const tagliatiDalTetto = filtrati.slice(sources.profile.maxToolsExposed);
+      const esposti = filtrati.slice(0, profile.maxToolsExposed);
+      const tagliatiDalTetto = filtrati.slice(profile.maxToolsExposed);
       // Solo le spente qui: le tagliate dal tetto sono calcolate sopra, per
       // *questo* principal e *questo* turno — più accurato del calcolo
       // all'avvio in `sources.capabilityGaps` (che vale per il registro
@@ -200,15 +202,15 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
         '# Questa istanza, adesso',
         '',
         `build: ${build ? `${build.sha.slice(0, 12)} (${build.date})${build.dirty ? ' +modificato' : ''}` : 'sconosciuta — non è un checkout git'}`,
-        `provider: ${sources.config.provider.kind}${sources.config.provider.baseUrl ? ` · ${sources.config.provider.baseUrl}` : ''}`,
-        `modello: ${sources.config.models.main} (main) · ${sources.config.models.light} (light)`,
+        `provider: ${runtimeInfo?.providerKind ?? sources.config.provider.kind}${(runtimeInfo?.providerBaseUrl ?? sources.config.provider.baseUrl) ? ` · ${runtimeInfo?.providerBaseUrl ?? sources.config.provider.baseUrl}` : ''}`,
+        `modello: ${runtimeInfo?.mainModel ?? sources.config.models.main} (main) · ${runtimeInfo?.lightModel ?? sources.config.models.light} (light)`,
         // Dove atterra la scrittura di *questo* turno — non «l'installazione»
         // in generale, che è la domanda a cui risponde `muffin doctor`. Stessa
         // fonte di `Runtime.workspace`: mai una seconda cartella calcolata qui.
         `cartella di lavoro: ${sources.workspace}`,
         // Il profilo non è cosmetico: decide quanti tool vede il modello e se
         // il reasoning viene chiesto spento (#167).
-        `profilo: ${sources.profile.name} — max ${sources.profile.maxToolsExposed} tool esposti, ${sources.profile.maxToolCallsPerTurn} call/turno, thinking ${sources.profile.thinking}`,
+        `profilo: ${profile.name} — max ${profile.maxToolsExposed} tool esposti, ${profile.maxToolCallsPerTurn} call/turno, thinking ${profile.thinking}`,
         `root of trust: ${sources.safeMode ? `SAFE MODE (${sources.safeMode.reason}: ${sources.safeMode.diverged.join(', ')}) — capability sopra 'low' negate` : `${sources.config.rot.mode}, integro`}`,
         '',
         `# Questo turno`,
@@ -220,7 +222,7 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
           : `  (${sources.tools.length - filtrati.length} registrate ma non esposte a questo principal)`,
         tagliatiDalTetto.length === 0
           ? ''
-          : `  (${tagliatiDalTetto.length} tagliate dal tetto di ${sources.profile.maxToolsExposed} tool del profilo "${sources.profile.name}": ${tagliatiDalTetto.map((t) => t.name).join(', ')} — alza maxToolsExposed in agent/profiles/${sources.profile.name}.json, oppure riduci quanti tool sono registrati prima di questi)`,
+          : `  (${tagliatiDalTetto.length} tagliate dal tetto di ${profile.maxToolsExposed} tool del profilo "${profile.name}": ${tagliatiDalTetto.map((t) => t.name).join(', ')} — alza maxToolsExposed in agent/profiles/${profile.name}.json, oppure riduci quanti tool sono registrati prima di questi)`,
         '',
         // Distinto da quanto sopra apposta: qui non è «non visto da questo
         // principal» né «tagliato dal tetto», è «non esiste in questa
