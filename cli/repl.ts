@@ -896,7 +896,7 @@ export async function runRepl(
           home,
           config: runtime.config,
           onConfig: (next) => {
-            runtime.config = next;
+            Object.assign(runtime.config, next);
           },
           profilo: { name: runtime.deps.profile.name, thinking: runtime.deps.profile.thinking },
           onThinking: (t) => {

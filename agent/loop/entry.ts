@@ -61,6 +61,7 @@ import {
  * step, and `counters.contextBuilt` is how it knows it has not yet.
  */
 export function enqueueTurn(deps: LoopDeps, input: TurnInput): string {
+  deps.prepareTurn?.();
   const id = randomBytes(16).toString('hex');
   deps.turns.enqueue({
     id,
@@ -95,7 +96,23 @@ function freshCounters(): TurnCounters {
   };
 }
 
+/** Freeze model-facing runtime facts with the provider/model/profile snapshot. */
+function snapshotTurnDeps(deps: LoopDeps): LoopDeps {
+  const profile = { ...deps.profile };
+  return {
+    ...deps,
+    profile,
+    ...(deps.runtimeInfo === undefined
+      ? {}
+      : { runtimeInfo: { ...deps.runtimeInfo, profile } }),
+  };
+}
+
 export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnResult> {
+  deps.prepareTurn?.();
+  // Provider/model/profile are one per-turn snapshot. Runtime refreshes may
+  // replace them for the next turn, but never move a retry or later round.
+  deps = snapshotTurnDeps(deps);
   const turn = deps.tracer.start(
     'muffin.turn',
     {
@@ -266,6 +283,8 @@ export async function resumeTurn(
    */
   stream?: ResumeStream,
 ): Promise<TurnResult | ResumeRefusal> {
+  deps.prepareTurn?.();
+  deps = snapshotTurnDeps(deps);
   const existing = deps.turns.get(turnId);
   if (existing === null) {
     return { turnId, why: 'not_found', detail: `nessun turno ${turnId}` };
@@ -308,7 +327,12 @@ export async function resumeTurn(
    * — which is the failure the counter exists for.
    */
   const firstAttempt = existing.status === 'runnable' && !existing.counters.contextBuilt;
-
+  if (firstAttempt && existing.model !== deps.model) {
+    // No provider state exists yet to resume. Move only this untouched queued
+    // row to the model selected at the turn boundary; suspended/started rows
+    // stay pinned and are refused below if their model differs.
+    deps.turns.reassignUnstartedModel(turnId, existing.model, deps.model);
+  }
 
   const record = deps.turns.claim(turnId, process.pid, (deps.now ?? (() => new Date()))());
   if (record === null) {

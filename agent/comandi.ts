@@ -215,7 +215,7 @@ export async function eseguiComando(riga: string, ctx: ContestoComandi): Promise
       const righe: string[] = [];
       await ctx.model(arg === '' ? [] : arg.split(/\s+/), (l) => righe.push(l));
       ctx.onConfig?.(loadConfig(ctx.home));
-      return { testo: `${righe.join('\n')}\n(il modello nuovo vale dal prossimo avvio)`.trim() };
+      return { testo: `${righe.join('\n')}\n(il modello nuovo vale dal prossimo turno)`.trim() };
     }
 
     // La stessa funzione di `muffin config set` (`core/config/settings.ts`):

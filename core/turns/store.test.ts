@@ -47,6 +47,18 @@ const store = (alive: (pid: number) => boolean = () => true, clock: () => Date =
   new TurnStore(new DatabaseCtor(':memory:'), clock, alive);
 
 describe('the turn record', () => {
+  it('reassigns only a never-started runnable row to the newly selected model', () => {
+    const s = store();
+    s.enqueue(spec());
+
+    expect(s.reassignUnstartedModel('turn-1', 'claude-opus-5', 'openrouter/free')).toBe(true);
+    expect(s.get('turn-1')?.model).toBe('openrouter/free');
+
+    expect(s.claim('turn-1', 4242)).not.toBeNull();
+    expect(s.reassignUnstartedModel('turn-1', 'openrouter/free', 'another/model')).toBe(false);
+    expect(s.get('turn-1')?.model).toBe('openrouter/free');
+  });
+
   it('exists as soon as it is created: running, claimed by this process, model pinned', () => {
     const s = store();
     const created = s.create(spec(), 4242);
