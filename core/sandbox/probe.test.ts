@@ -496,33 +496,20 @@ describe('tmpdirBreaksSandboxSockets — the #213 check', () => {
 });
 
 describe('il rimedio nomina tutto ciò che serve', () => {
-  // Un rimedio che elenca due binari su tre non è più corto: è sbagliato.
-  // L'owner lo esegue alla lettera, riprova, e resta fermo — con un errore
-  // diverso, che è il modo più veloce di far sembrare rotto ciò che manca.
-  it('elenca bubblewrap, socat e ripgrep, e come averli', () => {
-    for (const nome of ['bubblewrap', 'socat', 'ripgrep']) {
-      expect(SANDBOX_BINARIES_REMEDY).toContain(nome);
-    }
-    expect(SANDBOX_BINARIES_REMEDY).toMatch(/apt-get|dnf|brew/);
-    // Non basta che i tre nomi compaiano da qualche parte nella stringa: un
-    // testo che dichiara «due binari» e poi elenca comunque i tre comandi
-    // apt-get passerebbe i controlli sopra. La dichiarazione del conteggio va
-    // verificata a sé, ed è quella che la mutazione «torna a nominare solo due
-    // binari» cambia davvero.
-    // «tre», in lettere. La mutazione che riporta questo a «due binari» deve
-    // fallire qui, non sulla presenza dei nomi — che restano tutti nel testo
-    // dei comandi anche quando il conteggio dichiarato mente.
-    expect(SANDBOX_BINARIES_REMEDY).toMatch(/\btre\b/);
-    expect(SANDBOX_BINARIES_REMEDY).not.toMatch(/\bdue binari\b/);
-    // E ogni comando dato deve nominare i tre insieme, non solo l'unione dei
-    // frammenti sparsi nel testo.
-    for (const riga of SANDBOX_BINARIES_REMEDY.split(';')) {
-      if (/install|apt-get|dnf|brew/.test(riga)) {
-        expect(riga).toContain('bubblewrap');
-        expect(riga).toContain('socat');
-        expect(riga).toContain('ripgrep');
-      }
-    }
+  // The requirements differ by platform: don't make the macOS owner install
+  // Linux-only packages, and don't omit one of Linux's three dependencies.
+  it('elenca il rimedio corretto per ciascuna piattaforma', () => {
+    expect(SANDBOX_BINARIES_REMEDY).toMatch(/macOS usa Seatbelt integrato/i);
+    expect(SANDBOX_BINARIES_REMEDY).toMatch(/brew install ripgrep/);
+    expect(SANDBOX_BINARIES_REMEDY).not.toMatch(/brew install (?:bubblewrap|socat)/);
+    expect(SANDBOX_BINARIES_REMEDY).toMatch(/Linux usa tre binari: bubblewrap, socat e ripgrep/i);
+
+    const commands = [...SANDBOX_BINARIES_REMEDY.matchAll(/`([^`]+)`/g)].map(
+      ([, command]) => command,
+    );
+    expect(commands).toContain('brew install ripgrep');
+    expect(commands).toContain('sudo apt-get install bubblewrap socat ripgrep');
+    expect(commands).toContain('sudo dnf install bubblewrap socat ripgrep');
   });
 
   it('e `SANDBOX_BINARIES` elenca gli stessi tre, coi nomi dei comandi', () => {
