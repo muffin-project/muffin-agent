@@ -1,21 +1,34 @@
-import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
+import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
+import type { AttributeValue, SpanHandle, SpanName, Tracer } from '../core/tracing/types.js';
 import { TurnStore } from '../core/turns/store.js';
 import { TodoStore } from '../core/turns/todo.js';
 import { UndoJournal } from '../core/undo/journal.js';
-import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
-import type { AttributeValue, SpanHandle, SpanName, Tracer } from '../core/tracing/types.js';
-import { runTurn, type LoopDeps, type RegisteredTool, type TurnDelta, type TurnEvent } from './loop.js';
+import {
+  type LoopDeps,
+  type RegisteredTool,
+  runTurn,
+  type TurnDelta,
+  type TurnEvent,
+} from './loop.js';
 import { CONSERVATIVE, type Profile, type RecoveryStrategy } from './profiles/profile.js';
 import { OpenAICompatProvider } from './providers/openai-compat.js';
-import { ProviderError, ProviderStreamError, type ChatCall, type ChatResult, type Provider, type StreamEvent } from './providers/types.js';
+import {
+  type ChatCall,
+  type ChatResult,
+  type Provider,
+  ProviderError,
+  ProviderStreamError,
+  type StreamEvent,
+} from './providers/types.js';
 
 /** A provider that replays a script, so the loop is tested and not the model. */
 class ScriptedProvider implements Provider {
@@ -72,14 +85,43 @@ const lastSaid = (call: ChatCall): string => {
 };
 
 const decls: CapabilityDecl[] = [
-  { id: 'demo.read', effect: 'context', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: false },
+  {
+    id: 'demo.read',
+    effect: 'context',
+    risk: 'low',
+    reversible: 'yes',
+    rerunnable: true,
+    resourceKind: 'none',
+    policyArgs: [],
+    hostOnly: false,
+  },
   // era il default della classe: la riga 'context' non lo eredita più
-  { id: 'demo.write', effect: 'context', maxTaint: 1, risk: 'medium', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
+  {
+    id: 'demo.write',
+    effect: 'context',
+    maxTaint: 1,
+    risk: 'medium',
+    reversible: 'no',
+    rerunnable: false,
+    resourceKind: 'none',
+    policyArgs: [],
+    hostOnly: true,
+  },
   // `medium` + `undoable` è la coppia che il kernel mappa su `draft`, ed è
   // esattamente quella di `fs.write` in produzione. Serve a esercitare un ramo
   // del loop che non aveva nessun test: vedi il describe in fondo al file.
   // era il default della classe: la riga 'context' non lo eredita più
-  { id: 'demo.draft', effect: 'context', maxTaint: 1, risk: 'medium', reversible: 'undoable', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: true },
+  {
+    id: 'demo.draft',
+    effect: 'context',
+    maxTaint: 1,
+    risk: 'medium',
+    reversible: 'undoable',
+    rerunnable: true,
+    resourceKind: 'none',
+    policyArgs: [],
+    hostOnly: true,
+  },
 ];
 
 function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDeps> = {}) {
@@ -88,7 +130,11 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
   const tools: RegisteredTool[] = [
     {
       capability: 'demo.read',
-      spec: { name: 'demo_read', description: 'read', inputSchema: { type: 'object', properties: {} } },
+      spec: {
+        name: 'demo_read',
+        description: 'read',
+        inputSchema: { type: 'object', properties: {} },
+      },
       // `tier: 0` on the fakes in this file, deliberately: these tools exist to
       // exercise sequencing, caps and recovery, and a tier they do not need
       // would make every one of those tests also a taint test by accident.
@@ -103,13 +149,21 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
     },
     {
       capability: 'demo.read',
-      spec: { name: 'demo_web', description: 'fetch', inputSchema: { type: 'object', properties: {} } },
+      spec: {
+        name: 'demo_web',
+        description: 'fetch',
+        inputSchema: { type: 'object', properties: {} },
+      },
       throwTier: 0,
       handler: () => ({ content: 'contenuto dal web', tier: 3 as const }),
     },
     {
       capability: 'demo.write',
-      spec: { name: 'demo_write', description: 'write', inputSchema: { type: 'object', properties: {} } },
+      spec: {
+        name: 'demo_write',
+        description: 'write',
+        inputSchema: { type: 'object', properties: {} },
+      },
       throwTier: 0,
       handler: () => {
         calls.push('demo_write');
@@ -118,7 +172,11 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
     },
     {
       capability: 'demo.draft',
-      spec: { name: 'demo_draft', description: 'undoable write', inputSchema: { type: 'object', properties: {} } },
+      spec: {
+        name: 'demo_draft',
+        description: 'undoable write',
+        inputSchema: { type: 'object', properties: {} },
+      },
       throwTier: 0,
       handler: () => {
         calls.push('demo_draft');
@@ -127,7 +185,11 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
     },
     {
       capability: 'demo.read',
-      spec: { name: 'demo_boom', description: 'throws', inputSchema: { type: 'object', properties: {} } },
+      spec: {
+        name: 'demo_boom',
+        description: 'throws',
+        inputSchema: { type: 'object', properties: {} },
+      },
       // The one fake that actually exercises the catch path below — still
       // `throwTier: 0`, since `il tool è esploso` is this file's own literal,
       // not third-party text. The dedicated non-zero-`throwTier` wiring test
@@ -170,7 +232,10 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
   return { deps: base, store, turns, todos, home, calls };
 }
 
-const input = (store: SessionStore, principal: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' }) => ({
+const input = (
+  store: SessionStore,
+  principal: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' },
+) => ({
   principal,
   tenant: principal.kind === 'member' ? principal.tenantId : 'host',
   surface: 'cli',
@@ -232,10 +297,24 @@ describe('agent loop', () => {
       externalId: 'u9',
     };
     const hostDecl = (id: string): CapabilityDecl => ({
-      id, effect: 'context', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: true,
+      id,
+      effect: 'context',
+      risk: 'low',
+      reversible: 'yes',
+      rerunnable: true,
+      resourceKind: 'none',
+      policyArgs: [],
+      hostOnly: true,
     });
     const openDecl = (id: string): CapabilityDecl => ({
-      id, effect: 'context', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: false,
+      id,
+      effect: 'context',
+      risk: 'low',
+      reversible: 'yes',
+      rerunnable: true,
+      resourceKind: 'none',
+      policyArgs: [],
+      hostOnly: false,
     });
     const tool = (name: string, capability: string): RegisteredTool => ({
       capability,
@@ -262,11 +341,11 @@ describe('agent loop', () => {
 
   it('closes a medium-risk tool once a web result raised the taint', async () => {
     // fetch-then-act: the same write is fine before the fetch and refused after.
-    const { deps: d, store, calls } = deps([
-      callTool('demo_web'),
-      callTool('demo_write'),
-      answer('mi sono fermato'),
-    ]);
+    const {
+      deps: d,
+      store,
+      calls,
+    } = deps([callTool('demo_web'), callTool('demo_write'), answer('mi sono fermato')]);
     await runTurn(d, input(store));
     expect(calls).not.toContain('demo_write');
   });
@@ -288,10 +367,16 @@ describe('agent loop', () => {
 
   it('retries a transient provider failure, then gives up rather than pretending', async () => {
     const { deps: d, store } = deps([new ProviderError('502 upstream', true), answer('ripreso')]);
-    await expect(runTurn(d, input(store))).resolves.toMatchObject({ stopped: 'answered', text: 'ripreso' });
+    await expect(runTurn(d, input(store))).resolves.toMatchObject({
+      stopped: 'answered',
+      text: 'ripreso',
+    });
 
     const fatal = deps([new ProviderError('401 unauthorized', false)]);
-    await expect(runTurn(fatal.deps, input(fatal.store))).rejects.toThrow(/401/);
+    const failed = await runTurn(fatal.deps, input(fatal.store));
+    expect(failed).toMatchObject({ stopped: 'error', reason: 'provider_error' });
+    expect(failed.text).toContain('contattare il provider');
+    expect(failed.text).not.toContain('unauthorized');
   });
 
   it('writes the exchange to the transcript so a restart keeps it', async () => {
@@ -311,17 +396,20 @@ describe('agent loop', () => {
       ...r,
       usage: { ...r.usage, cacheReadTokens: 200, cacheWriteTokens: 150 },
     });
-    const { deps: d, store } = deps([withCache(callTool('demo_read')), withCache(answer('fatto'))], {
-      recordSpend: (entry) => {
-        billed.push({
-          model: entry.model,
-          tenant: entry.tenant,
-          reads: entry.cacheReadTokens,
-          writes: entry.cacheWriteTokens,
-        });
-        return 0.01;
+    const { deps: d, store } = deps(
+      [withCache(callTool('demo_read')), withCache(answer('fatto'))],
+      {
+        recordSpend: (entry) => {
+          billed.push({
+            model: entry.model,
+            tenant: entry.tenant,
+            reads: entry.cacheReadTokens,
+            writes: entry.cacheWriteTokens,
+          });
+          return 0.01;
+        },
       },
-    });
+    );
     await runTurn(d, input(store));
     // Two model calls in this turn, two billing records, both with the tenant.
     expect(billed).toHaveLength(2);
@@ -370,7 +458,11 @@ describe('agent loop', () => {
     // The taint invalidates the decision cache for itself; the budget is the
     // other input the kernel reads, and it can run out mid-turn.
     let exhausted = false;
-    const { deps: d, store, calls } = deps(
+    const {
+      deps: d,
+      store,
+      calls,
+    } = deps(
       [callTool('demo_read'), callTool('demo_read'), callTool('demo_read'), answer('fine')],
       {
         budgetExhausted: () => exhausted,
@@ -415,7 +507,11 @@ describe('agent loop', () => {
       tools: [
         {
           capability: 'demo.read',
-          spec: { name: 'demo_read', description: 'r', inputSchema: { type: 'object', properties: {} } },
+          spec: {
+            name: 'demo_read',
+            description: 'r',
+            inputSchema: { type: 'object', properties: {} },
+          },
           throwTier: 0,
           handler: () => ({ content: big, tier: 0 as const }),
         },
@@ -452,7 +548,11 @@ describe('agent loop', () => {
   });
 
   it('nudges once when the answer narrates a call it never made', async () => {
-    const { deps: d, store, calls } = deps([
+    const {
+      deps: d,
+      store,
+      calls,
+    } = deps([
       answer('[Eseguo `demo_write`] Fatto, ho scritto il file.'),
       callTool('demo_write'),
       answer('scritto per davvero'),
@@ -482,7 +582,16 @@ describe('agent loop', () => {
     const asking: CapabilityDecl[] = [
       // era il default della classe: la riga 'context' non lo eredita più
       // ADR-0074: l'ask nasce da `reversible: 'no'` su una riga che chiede, non da `risk: 'high'`.
-      { id: 'demo.ask', effect: 'host', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
+      {
+        id: 'demo.ask',
+        effect: 'host',
+        risk: 'high',
+        reversible: 'no',
+        rerunnable: false,
+        resourceKind: 'none',
+        policyArgs: [],
+        hostOnly: true,
+      },
     ];
     const ran: string[] = [];
     const { deps: d, store } = deps([callTool('demo_ask'), answer('mai')], {
@@ -495,7 +604,11 @@ describe('agent loop', () => {
       tools: [
         {
           capability: 'demo.ask',
-          spec: { name: 'demo_ask', description: 'a', inputSchema: { type: 'object', properties: {} } },
+          spec: {
+            name: 'demo_ask',
+            description: 'a',
+            inputSchema: { type: 'object', properties: {} },
+          },
           throwTier: 0,
           handler: () => {
             ran.push('demo_ask');
@@ -514,7 +627,16 @@ describe('agent loop', () => {
     const asking: CapabilityDecl[] = [
       // era il default della classe: la riga 'context' non lo eredita più
       // ADR-0074: l'ask nasce da `reversible: 'no'` su una riga che chiede, non da `risk: 'high'`.
-      { id: 'demo.ask', effect: 'host', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
+      {
+        id: 'demo.ask',
+        effect: 'host',
+        risk: 'high',
+        reversible: 'no',
+        rerunnable: false,
+        resourceKind: 'none',
+        policyArgs: [],
+        hostOnly: true,
+      },
     ];
     const asked: string[] = [];
     const ran: string[] = [];
@@ -533,7 +655,11 @@ describe('agent loop', () => {
         tools: [
           {
             capability: 'demo.ask',
-            spec: { name: 'demo_ask', description: 'a', inputSchema: { type: 'object', properties: {} } },
+            spec: {
+              name: 'demo_ask',
+              description: 'a',
+              inputSchema: { type: 'object', properties: {} },
+            },
             throwTier: 0,
             handler: () => {
               ran.push('demo_ask');
@@ -562,7 +688,17 @@ describe('agent loop', () => {
     // happened immediately, with no undo journal and no window.
     const undoable: CapabilityDecl[] = [
       // era il default della classe: la riga 'context' non lo eredita più
-      { id: 'demo.draft', effect: 'context', maxTaint: 1, risk: 'medium', reversible: 'undoable', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: true },
+      {
+        id: 'demo.draft',
+        effect: 'context',
+        maxTaint: 1,
+        risk: 'medium',
+        reversible: 'undoable',
+        rerunnable: true,
+        resourceKind: 'none',
+        policyArgs: [],
+        hostOnly: true,
+      },
     ];
     const ran: string[] = [];
     const { deps: d, store } = deps([callTool('demo_draft'), answer('ok')], {
@@ -575,7 +711,11 @@ describe('agent loop', () => {
       tools: [
         {
           capability: 'demo.draft',
-          spec: { name: 'demo_draft', description: 'd', inputSchema: { type: 'object', properties: {} } },
+          spec: {
+            name: 'demo_draft',
+            description: 'd',
+            inputSchema: { type: 'object', properties: {} },
+          },
           throwTier: 0,
           handler: () => {
             ran.push('demo_draft');
@@ -588,7 +728,7 @@ describe('agent loop', () => {
     expect(ran).toEqual([]);
   });
 
-  describe('draft: la copia prima dell\'effetto', () => {
+  describe("draft: la copia prima dell'effetto", () => {
     // Il ramo `draft` esiste perché il kernel distingue «fallo» da «fallo in
     // modo che si possa disfare». Per un anno la distinzione non aveva
     // implementazione e il loop rifiutava: `fs_write` era offerto al modello e
@@ -597,7 +737,17 @@ describe('agent loop', () => {
     // prendere è un effetto che non deve avvenire.**
     const undoable: CapabilityDecl[] = [
       // era il default della classe: la riga 'context' non lo eredita più
-      { id: 'demo.draft', effect: 'context', maxTaint: 1, risk: 'medium', reversible: 'undoable', rerunnable: true, resourceKind: 'path', policyArgs: ['path'], hostOnly: true },
+      {
+        id: 'demo.draft',
+        effect: 'context',
+        maxTaint: 1,
+        risk: 'medium',
+        reversible: 'undoable',
+        rerunnable: true,
+        resourceKind: 'path',
+        policyArgs: ['path'],
+        hostOnly: true,
+      },
     ];
     const kernelDraft = () =>
       createDecide({
@@ -614,7 +764,11 @@ describe('agent loop', () => {
     ): RegisteredTool {
       return {
         capability: 'demo.draft',
-        spec: { name: 'demo_draft', description: 'd', inputSchema: { type: 'object', properties: {} } },
+        spec: {
+          name: 'demo_draft',
+          description: 'd',
+          inputSchema: { type: 'object', properties: {} },
+        },
         throwTier: 0,
         ...(resolveEffectPath ? { resolveEffectPath } : {}),
         handler: () => {
@@ -677,7 +831,7 @@ describe('agent loop', () => {
       expect(detto).toContain('senza copia non si torna indietro');
     });
 
-    it('consegna all\'handler lo stesso percorso che ha fotografato', async () => {
+    it("consegna all'handler lo stesso percorso che ha fotografato", async () => {
       // La cucitura, e l'unica cosa che la tiene: il loop risolve il percorso
       // UNA volta per la copia, e l'handler deve riusare quello invece di
       // ricalcolarlo. Senza questo test la mutazione «il loop non passa il
@@ -698,7 +852,11 @@ describe('agent loop', () => {
         tools: [
           {
             capability: 'demo.draft',
-            spec: { name: 'demo_draft', description: 'd', inputSchema: { type: 'object', properties: {} } },
+            spec: {
+              name: 'demo_draft',
+              description: 'd',
+              inputSchema: { type: 'object', properties: {} },
+            },
             throwTier: 0,
             resolveEffectPath: () => target,
             handler: (_args, ctx) => {
@@ -765,7 +923,11 @@ describe('agent loop', () => {
       tools: [
         {
           capability: 'demo.unknown',
-          spec: { name: 'demo_unknown', description: 'u', inputSchema: { type: 'object', properties: {} } },
+          spec: {
+            name: 'demo_unknown',
+            description: 'u',
+            inputSchema: { type: 'object', properties: {} },
+          },
           throwTier: 0,
           handler: () => {
             ran.push('demo_unknown');
@@ -866,9 +1028,12 @@ describe('the recovery cascade', () => {
   const cascade = (recovery: RecoveryStrategy[]): Profile => ({ ...CONSERVATIVE, recovery });
 
   it('runs attempt N with strategy N, in the order the profile declared', async () => {
-    const { deps: d, store } = deps([nothing(), nothing(), nothing(), nothing(), answer('finalmente')], {
-      profile: cascade(['nudge', 'reinjectTools', 'retryOnce', 'strictJson']),
-    });
+    const { deps: d, store } = deps(
+      [nothing(), nothing(), nothing(), nothing(), answer('finalmente')],
+      {
+        profile: cascade(['nudge', 'reinjectTools', 'retryOnce', 'strictJson']),
+      },
+    );
     const provider = d.provider as ScriptedProvider;
 
     const result = await runTurn(d, input(store));
@@ -877,7 +1042,9 @@ describe('the recovery cascade', () => {
 
     const [, first, second, third, fourth] = provider.seen as ChatCall[];
     // 1 — nudge: the corrective turn that already existed, unchanged.
-    expect(lastSaid(first!)).toBe('Non ho ricevuto risposta. Continua, oppure dimmi che hai finito.');
+    expect(lastSaid(first!)).toBe(
+      'Non ho ricevuto risposta. Continua, oppure dimmi che hai finito.',
+    );
     // 2 — reinjectTools: the names of this turn's tools, inline at the tail.
     expect(lastSaid(second!)).toContain('demo_read');
     expect(lastSaid(second!)).toContain('demo_boom');
@@ -901,11 +1068,15 @@ describe('the recovery cascade', () => {
     // Declared first, so it runs first: the loop walks the list, it does not
     // know that a nudge is the gentle one.
     expect(lastSaid(provider.seen[1]!)).toMatch(/JSON/);
-    expect(lastSaid(provider.seen[2]!)).toBe('Non ho ricevuto risposta. Continua, oppure dimmi che hai finito.');
+    expect(lastSaid(provider.seen[2]!)).toBe(
+      'Non ho ricevuto risposta. Continua, oppure dimmi che hai finito.',
+    );
   });
 
   it('stops when the declared cascade is spent instead of repeating its last step', async () => {
-    const { deps: d, store } = deps([nothing(), nothing(), nothing()], { profile: cascade(['nudge']) });
+    const { deps: d, store } = deps([nothing(), nothing(), nothing()], {
+      profile: cascade(['nudge']),
+    });
     const provider = d.provider as ScriptedProvider;
 
     const result = await runTurn(d, input(store));
@@ -920,7 +1091,10 @@ describe('the recovery cascade', () => {
     // was answered by waiting. Waiting cannot improve JSON the model already
     // emitted; the cascade can, and the wording says what actually broke.
     const { deps: d, store } = deps(
-      [new ProviderError('malformed tool arguments from demo_read', true, undefined, 'output'), answer('ok')],
+      [
+        new ProviderError('malformed tool arguments from demo_read', true, undefined, 'output'),
+        answer('ok'),
+      ],
       { profile: cascade(['nudge']) },
     );
     const provider = d.provider as ScriptedProvider;
@@ -930,15 +1104,20 @@ describe('the recovery cascade', () => {
     // The transport path pushes no message at all, so a new corrective turn is
     // the proof this went through the profile instead.
     expect(provider.seen[1]!.messages.length).toBe(provider.seen[0]!.messages.length + 1);
-    expect(lastSaid(provider.seen[1]!)).not.toBe('Non ho ricevuto risposta. Continua, oppure dimmi che hai finito.');
+    expect(lastSaid(provider.seen[1]!)).not.toBe(
+      'Non ho ricevuto risposta. Continua, oppure dimmi che hai finito.',
+    );
   });
 
   it('does not spend a cascade step on a transport failure', async () => {
     // One shared counter meant a 502 ate the profile's only nudge and the empty
     // turn that followed had nothing left. Two failures, two budgets.
-    const { deps: d, store } = deps([new ProviderError('502 upstream', true), nothing(), answer('ripreso')], {
-      profile: cascade(['nudge']),
-    });
+    const { deps: d, store } = deps(
+      [new ProviderError('502 upstream', true), nothing(), answer('ripreso')],
+      {
+        profile: cascade(['nudge']),
+      },
+    );
     const result = await runTurn(d, input(store));
     expect(result).toMatchObject({ stopped: 'answered', text: 'ripreso' });
   });
@@ -977,8 +1156,12 @@ describe('the recovery cascade', () => {
 
     // And the transport retry survives the neutral profile, because a 429 is a
     // property of the endpoint and never was a crutch for a weak model.
-    const flaky = deps([new ProviderError('502 upstream', true), answer('ripreso')], { profile: neutral });
-    await expect(runTurn(flaky.deps, input(flaky.store))).resolves.toMatchObject({ text: 'ripreso' });
+    const flaky = deps([new ProviderError('502 upstream', true), answer('ripreso')], {
+      profile: neutral,
+    });
+    await expect(runTurn(flaky.deps, input(flaky.store))).resolves.toMatchObject({
+      text: 'ripreso',
+    });
   });
 
   it('keeps the completion nudge out of the cascade, on a profile that declares none', async () => {
@@ -986,8 +1169,16 @@ describe('the recovery cascade', () => {
     // measured false-success rate on every model) and is not a step a profile
     // may decline; the cascade is scaffolding a profile declares. Deleting the
     // cascade must not delete the gate.
-    const { deps: d, store, calls } = deps(
-      [answer('[Eseguo `demo_write`] Fatto.'), callTool('demo_write'), answer('scritto per davvero')],
+    const {
+      deps: d,
+      store,
+      calls,
+    } = deps(
+      [
+        answer('[Eseguo `demo_write`] Fatto.'),
+        callTool('demo_write'),
+        answer('scritto per davvero'),
+      ],
       { profile: cascade([]) },
     );
     const result = await runTurn(d, input(store));
@@ -995,7 +1186,7 @@ describe('the recovery cascade', () => {
     expect(result.text).toBe('scritto per davvero');
   });
 
-  it('routes a real adapter\'s malformed output to the cascade, from the wire up', async () => {
+  it("routes a real adapter's malformed output to the cascade, from the wire up", async () => {
     // The join, and it was the one thing the rest of this block could not see.
     // Mutation: deleting `'output'` from the adapter's throw
     // (`agent/providers/openai-compat.ts`) left every other test here green —
@@ -1025,7 +1216,11 @@ describe('the recovery cascade', () => {
                     // Truncated mid-object: the shape a small model emits when
                     // it runs out of tokens or loses the brace.
                     tool_calls: [
-                      { id: 'c1', type: 'function', function: { name: 'demo_read', arguments: '{"q": ' } },
+                      {
+                        id: 'c1',
+                        type: 'function',
+                        function: { name: 'demo_read', arguments: '{"q": ' },
+                      },
                     ],
                   },
                 },
@@ -1035,13 +1230,23 @@ describe('the recovery cascade', () => {
               id: 'x',
               model: 'qwen3-local',
               usage,
-              choices: [{ finish_reason: 'stop', message: { content: 'ok, ripreso', tool_calls: [] } }],
+              choices: [
+                { finish_reason: 'stop', message: { content: 'ok, ripreso', tool_calls: [] } },
+              ],
             };
-      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
     };
 
     const { deps: d, store } = deps([], {
-      provider: new OpenAICompatProvider('sk-test', 'http://localhost:11434/v1', {}, { fetch: fetchFake as never }),
+      provider: new OpenAICompatProvider(
+        'sk-test',
+        'http://localhost:11434/v1',
+        {},
+        { fetch: fetchFake as never },
+      ),
       profile: cascade(['nudge']),
     });
 
@@ -1052,7 +1257,8 @@ describe('the recovery cascade', () => {
     const retried = bodies[1]!.messages;
     expect(retried[retried.length - 1]).toMatchObject({
       role: 'user',
-      content: 'La tua ultima tool call non era leggibile: gli argomenti non erano JSON valido. Rifalla per intero.',
+      content:
+        'La tua ultima tool call non era leggibile: gli argomenti non erano JSON valido. Rifalla per intero.',
     });
   });
 
@@ -1156,11 +1362,16 @@ describe('the loop hands the model its own reasoning back', () => {
     const assistantTurns = third.messages.filter((m) => m.role === 'assistant');
     expect(assistantTurns).toHaveLength(2);
     for (const turn of assistantTurns) {
-      expect(turn.content.map((b) => b.type)).toEqual(['thinking', 'redacted_thinking', 'text', 'tool_use']);
+      expect(turn.content.map((b) => b.type)).toEqual([
+        'thinking',
+        'redacted_thinking',
+        'text',
+        'tool_use',
+      ]);
     }
   });
 
-  it('sends the profile\'s thinking mode, instead of declaring it and passing nothing', async () => {
+  it("sends the profile's thinking mode, instead of declaring it and passing nothing", async () => {
     // The defect this closes: every profile carried `thinking`, the adapter knew
     // how to spell it, and no request ever contained it.
     const provider = new ScriptedProvider([answer('ok')]);
@@ -1224,13 +1435,29 @@ describe('the loop hands the model its own reasoning back', () => {
       tools: [
         {
           capability: 'demo.read',
-          spec: { name: 'demo_big', description: 'big', inputSchema: { type: 'object', properties: {} } },
+          spec: {
+            name: 'demo_big',
+            description: 'big',
+            inputSchema: { type: 'object', properties: {} },
+          },
           throwTier: 0,
           handler: () => ({ content: big, tier: 0 as const }),
         },
       ],
       capabilities: new Map([
-        ['demo.read', { id: 'demo.read', effect: 'context', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: false } as CapabilityDecl],
+        [
+          'demo.read',
+          {
+            id: 'demo.read',
+            effect: 'context',
+            risk: 'low',
+            reversible: 'yes',
+            rerunnable: true,
+            resourceKind: 'none',
+            policyArgs: [],
+            hostOnly: false,
+          } as CapabilityDecl,
+        ],
       ]),
     });
     await runTurn(d, input(store));
@@ -1242,7 +1469,9 @@ describe('the loop hands the model its own reasoning back', () => {
     );
     expect(cleared).toBe(true);
     // …and every reasoning block is byte-identical to what came out.
-    const kept = third.messages.flatMap((m) => m.content).filter((b) => b.type === 'thinking' || b.type === 'redacted_thinking');
+    const kept = third.messages
+      .flatMap((m) => m.content)
+      .filter((b) => b.type === 'thinking' || b.type === 'redacted_thinking');
     expect(kept).toEqual([THINKING, REDACTED, THINKING, REDACTED]);
   });
 });
@@ -1293,10 +1522,15 @@ describe('agent loop · streaming (B11)', () => {
   const testo = (d: TurnDelta[]): string[] => d.flatMap((x) => (x.type === 'text' ? [x.text] : []));
 
   it("streams the answer's text as it forms, in the chunks the provider yielded", async () => {
-    const provider = new StreamCapableProvider([{ chunks: ['ecco ', 'la ', 'risposta'], result: answer('ecco la risposta') }]);
+    const provider = new StreamCapableProvider([
+      { chunks: ['ecco ', 'la ', 'risposta'], result: answer('ecco la risposta') },
+    ]);
     const { deps: d, store } = deps([], { provider });
     const received: TurnDelta[] = [];
-    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta) });
+    const result = await runTurn(d, {
+      ...input(store),
+      onDelta: (delta: TurnDelta) => received.push(delta),
+    });
 
     // I byte sono quelli del filo; i **confini** no, ed è il prezzo dichiarato
     // del taglio dal vivo: lo spazio in coda a un chunk viene trattenuto
@@ -1336,12 +1570,19 @@ describe('agent loop · streaming (B11)', () => {
       liberaIlDone = r;
     });
     const provider = new StreamCapableProvider([
-      { chunks: ['la prima metà'], result: answer('la prima metà e la seconda'), attendiPrimaDelDone: doneSbloccabile },
+      {
+        chunks: ['la prima metà'],
+        result: answer('la prima metà e la seconda'),
+        attendiPrimaDelDone: doneSbloccabile,
+      },
     ]);
     const { deps: d, store } = deps([], { provider });
     const received: TurnDelta[] = [];
     let finito = false;
-    const turno = runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta) }).then((r) => {
+    const turno = runTurn(d, {
+      ...input(store),
+      onDelta: (delta: TurnDelta) => received.push(delta),
+    }).then((r) => {
       finito = true;
       return r;
     });
@@ -1361,14 +1602,17 @@ describe('agent loop · streaming (B11)', () => {
    * prima del 28/08/2026 non lo vedeva nessuno — né a schermo né nella
    * sessione. Il confine dice cos'era, e sotto ci finisce la riga del tool.
    */
-  it('shows a tool round\'s thinking aloud, then draws the line under it', async () => {
+  it("shows a tool round's thinking aloud, then draws the line under it", async () => {
     const provider = new StreamCapableProvider([
       { chunks: ['guardo il file...'], result: callTool('demo_read', { q: 1 }) },
       { chunks: ['ecco il risultato'], result: answer('ecco il risultato') },
     ]);
     const { deps: d, store, calls } = deps([], { provider });
     const received: TurnDelta[] = [];
-    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta) });
+    const result = await runTurn(d, {
+      ...input(store),
+      onDelta: (delta: TurnDelta) => received.push(delta),
+    });
 
     expect(calls).toEqual(['demo_read:{"q":1}']);
     expect(received).toEqual([
@@ -1381,16 +1625,22 @@ describe('agent loop · streaming (B11)', () => {
     expect(dopoLUltimoConfine(received)).toBe(result.text);
   });
 
-  it("says a completion-nudged draft was superseded, instead of hiding the whole turn to avoid saying it", async () => {
+  it('says a completion-nudged draft was superseded, instead of hiding the whole turn to avoid saying it', async () => {
     // Stesso innesco del test non-streaming più sopra (una chiamata narrata
     // che il turno non ha mai fatto), così questo ne è il gemello streaming.
     const provider = new StreamCapableProvider([
-      { chunks: ['[Eseguo ', '`demo_write`] fatto'], result: answer('[Eseguo `demo_write`] fatto') },
+      {
+        chunks: ['[Eseguo ', '`demo_write`] fatto'],
+        result: answer('[Eseguo `demo_write`] fatto'),
+      },
       { chunks: ['scritto ', 'per davvero'], result: answer('scritto per davvero') },
     ]);
     const { deps: d, store } = deps([], { provider });
     const received: TurnDelta[] = [];
-    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta) });
+    const result = await runTurn(d, {
+      ...input(store),
+      onDelta: (delta: TurnDelta) => received.push(delta),
+    });
 
     expect(received).toEqual([
       { type: 'text', text: '[Eseguo' },
@@ -1407,7 +1657,10 @@ describe('agent loop · streaming (B11)', () => {
     // Only `chatScript` is reachable here: with no sink, `call.stream` is
     // `false` and `requestChatResult` goes straight to `chat()` — a
     // `streamScript` entry sitting unconsumed is itself part of the proof.
-    const provider = new StreamCapableProvider([{ chunks: ['x'], result: answer('mai visto') }], [answer('ecco')]);
+    const provider = new StreamCapableProvider(
+      [{ chunks: ['x'], result: answer('mai visto') }],
+      [answer('ecco')],
+    );
     const { deps: d, store } = deps([], { provider });
     const result = await runTurn(d, input(store)); // no onDelta
 
@@ -1423,7 +1676,10 @@ describe('agent loop · streaming (B11)', () => {
     );
     const { deps: d, store } = deps([], { provider });
     const received: TurnDelta[] = [];
-    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta) });
+    const result = await runTurn(d, {
+      ...input(store),
+      onDelta: (delta: TurnDelta) => received.push(delta),
+    });
 
     expect(provider.streamCalls).toBe(1);
     expect(provider.chatCalls).toBe(1); // exactly one fallback — the whole point of ProviderStreamError
@@ -1442,7 +1698,10 @@ describe('agent loop · streaming (B11)', () => {
   it('does not stream when the provider has no chatStream at all, even with a sink attached', async () => {
     const { deps: d, store } = deps([answer('ok senza streaming')]); // ScriptedProvider has no chatStream
     const received: TurnDelta[] = [];
-    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta) });
+    const result = await runTurn(d, {
+      ...input(store),
+      onDelta: (delta: TurnDelta) => received.push(delta),
+    });
 
     // Nessun delta: un turno che non ha mai chiesto di streammare resta
     // esattamente com'era, e la sua risposta passa da `result.text`.
@@ -1461,7 +1720,10 @@ describe('agent loop · streaming (B11)', () => {
     ]);
     const { deps: d, store } = deps([], { provider });
     const received: TurnDelta[] = [];
-    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta) });
+    const result = await runTurn(d, {
+      ...input(store),
+      onDelta: (delta: TurnDelta) => received.push(delta),
+    });
 
     expect(testo(received).join('')).toBe(result.text);
     expect(result.text).toBe('ecco la risposta');
@@ -1481,11 +1743,17 @@ describe('agent loop · streaming (B11)', () => {
    */
   it('holds trailing whitespace until real text proves it was internal, and drops it when nothing follows', async () => {
     const provider = new StreamCapableProvider([
-      { chunks: ['prima riga', '\n\n', 'seconda riga', '   '], result: answer('prima riga\n\nseconda riga') },
+      {
+        chunks: ['prima riga', '\n\n', 'seconda riga', '   '],
+        result: answer('prima riga\n\nseconda riga'),
+      },
     ]);
     const { deps: d, store } = deps([], { provider });
     const received: TurnDelta[] = [];
-    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta) });
+    const result = await runTurn(d, {
+      ...input(store),
+      onDelta: (delta: TurnDelta) => received.push(delta),
+    });
 
     expect(testo(received).join('')).toBe(result.text);
     // La riga vuota di mezzo è uscita — attaccata al pezzo che l'ha
@@ -1504,7 +1772,10 @@ function dopoLUltimoConfine(deltas: TurnDelta[]): string {
 }
 
 /** Every event of one kind, narrowed — so a test can read `.ms`/`.capability`/etc without an `as`. */
-function byType<T extends TurnEvent['type']>(events: TurnEvent[], type: T): Extract<TurnEvent, { type: T }>[] {
+function byType<T extends TurnEvent['type']>(
+  events: TurnEvent[],
+  type: T,
+): Extract<TurnEvent, { type: T }>[] {
   return events.filter((e): e is Extract<TurnEvent, { type: T }> => e.type === type);
 }
 
@@ -1582,11 +1853,21 @@ describe('agent loop · progress (B13)', () => {
     const events: TurnEvent[] = [];
     await runTurn(d, { ...input(store), onProgress: (e) => events.push(e) });
 
-    expect(events.filter((e) => e.type !== 'model_status').map((e) => e.type)).toEqual(['round', 'model', 'tool_start', 'tool_end', 'round', 'model']);
+    expect(events.filter((e) => e.type !== 'model_status').map((e) => e.type)).toEqual([
+      'round',
+      'model',
+      'tool_start',
+      'tool_end',
+      'round',
+      'model',
+    ]);
     expect(events.filter((e) => e.type === 'model_status').length).toBeGreaterThan(0);
     // The round that called the tool is tagged `tool_use` — the same value
     // `checkCompletion`/the transcript itself would agree on, not a guess.
-    expect(events.filter((e) => e.type === 'model')[0]).toMatchObject({ type: 'model', stopReason: 'tool_use' });
+    expect(events.filter((e) => e.type === 'model')[0]).toMatchObject({
+      type: 'model',
+      stopReason: 'tool_use',
+    });
   });
 
   it('tool_start carries the name and capability; tool_end carries how long it took and whether it errored', async () => {
@@ -1603,7 +1884,12 @@ describe('agent loop · progress (B13)', () => {
       { type: 'tool_start', name: 'demo_read', capability: 'demo.read', args: { q: 1 } },
     ]);
     const [end] = byType(events, 'tool_end');
-    expect(end).toMatchObject({ type: 'tool_end', name: 'demo_read', isError: false, args: { q: 1 } });
+    expect(end).toMatchObject({
+      type: 'tool_end',
+      name: 'demo_read',
+      isError: false,
+      args: { q: 1 },
+    });
     expect(typeof end?.ms).toBe('number');
     expect(end?.ms).toBeGreaterThanOrEqual(0);
   });
@@ -1615,7 +1901,11 @@ describe('agent loop · progress (B13)', () => {
 
     expect(result.text).toBe('recuperato');
     expect(byType(events, 'tool_end')).toEqual([
-      expect.objectContaining({ type: 'tool_end', name: 'demo_boom', isError: true }) as unknown as TurnEvent,
+      expect.objectContaining({
+        type: 'tool_end',
+        name: 'demo_boom',
+        isError: true,
+      }) as unknown as TurnEvent,
     ]);
   });
 
@@ -1654,11 +1944,30 @@ describe('agent loop · progress (B13)', () => {
     const high: CapabilityDecl[] = [
       // era il default della classe: la riga 'context' non lo eredita più
       // ADR-0074: l'ask nasce da `reversible: 'no'` su una riga che chiede, non da `risk: 'high'`.
-      { id: 'demo.high', effect: 'host', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
+      {
+        id: 'demo.high',
+        effect: 'host',
+        risk: 'high',
+        reversible: 'no',
+        rerunnable: false,
+        resourceKind: 'none',
+        policyArgs: [],
+        hostOnly: true,
+      },
     ];
     const undoable: CapabilityDecl[] = [
       // era il default della classe: la riga 'context' non lo eredita più
-      { id: 'demo.draft', effect: 'context', maxTaint: 1, risk: 'medium', reversible: 'undoable', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: true },
+      {
+        id: 'demo.draft',
+        effect: 'context',
+        maxTaint: 1,
+        risk: 'medium',
+        reversible: 'undoable',
+        rerunnable: true,
+        resourceKind: 'none',
+        policyArgs: [],
+        hostOnly: true,
+      },
     ];
 
     /** A tool that records if it ran, so "refused" is proved and not assumed. */
@@ -1692,7 +2001,11 @@ describe('agent loop · progress (B13)', () => {
       expect(ran).toEqual([]);
       expect(byType(events, 'tool_start')).toHaveLength(1);
       expect(byType(events, 'tool_end')).toEqual([
-        expect.objectContaining({ type: 'tool_end', name: 'demo_high', isError: true }) as unknown as TurnEvent,
+        expect.objectContaining({
+          type: 'tool_end',
+          name: 'demo_high',
+          isError: true,
+        }) as unknown as TurnEvent,
       ]);
     });
 
@@ -1708,7 +2021,11 @@ describe('agent loop · progress (B13)', () => {
       expect(ran).toEqual([]);
       expect(byType(events, 'tool_start')).toHaveLength(1);
       expect(byType(events, 'tool_end')).toEqual([
-        expect.objectContaining({ type: 'tool_end', name: 'demo_draft', isError: true }) as unknown as TurnEvent,
+        expect.objectContaining({
+          type: 'tool_end',
+          name: 'demo_draft',
+          isError: true,
+        }) as unknown as TurnEvent,
       ]);
     });
 
@@ -1725,7 +2042,11 @@ describe('agent loop · progress (B13)', () => {
       expect(ran).toEqual([]);
       expect(byType(events, 'tool_start')).toHaveLength(1);
       expect(byType(events, 'tool_end')).toEqual([
-        expect.objectContaining({ type: 'tool_end', name: 'demo_high', isError: true }) as unknown as TurnEvent,
+        expect.objectContaining({
+          type: 'tool_end',
+          name: 'demo_high',
+          isError: true,
+        }) as unknown as TurnEvent,
       ]);
     });
 
@@ -1741,13 +2062,20 @@ describe('agent loop · progress (B13)', () => {
       });
       const noApprover = { ...d, approve: undefined };
       const events: TurnEvent[] = [];
-      const result = await runTurn(noApprover, { ...input(store), onProgress: (e) => events.push(e) });
+      const result = await runTurn(noApprover, {
+        ...input(store),
+        onProgress: (e) => events.push(e),
+      });
 
       expect(ran).toEqual([]);
       expect(result.stopped).toBe('ask');
       expect(byType(events, 'tool_start')).toHaveLength(1);
       expect(byType(events, 'tool_end')).toEqual([
-        expect.objectContaining({ type: 'tool_end', name: 'demo_high', isError: true }) as unknown as TurnEvent,
+        expect.objectContaining({
+          type: 'tool_end',
+          name: 'demo_high',
+          isError: true,
+        }) as unknown as TurnEvent,
       ]);
     });
   });
@@ -1823,14 +2151,24 @@ describe('the sensitive-resource echo floor (4-bis)', () => {
 
   const fsReadTool = (contentByPath: Record<string, string>): RegisteredTool => ({
     capability: 'demo.read',
-    spec: { name: 'fs_read', description: 'read a path', inputSchema: { type: 'object', properties: { path: { type: 'string' } } } },
+    spec: {
+      name: 'fs_read',
+      description: 'read a path',
+      inputSchema: { type: 'object', properties: { path: { type: 'string' } } },
+    },
     throwTier: 0,
-    handler: (args) => ({ content: contentByPath[String((args as { path?: unknown }).path ?? '')] ?? '', tier: 0 as const }),
+    handler: (args) => ({
+      content: contentByPath[String((args as { path?: unknown }).path ?? '')] ?? '',
+      tier: 0 as const,
+    }),
   });
 
   it('scrubs a verbatim echo of content read from a secret-named path out of the final reply', async () => {
     const { deps: d, store } = deps(
-      [callTool('fs_read', { path: 'segreto.txt' }), answer(`ecco quello che ho trovato: ${SEGRETO}`)],
+      [
+        callTool('fs_read', { path: 'segreto.txt' }),
+        answer(`ecco quello che ho trovato: ${SEGRETO}`),
+      ],
       { tools: [fsReadTool({ 'segreto.txt': SEGRETO })] },
     );
     const result = await runTurn(d, input(store));
@@ -1870,7 +2208,11 @@ describe('the sensitive-resource echo floor (4-bis)', () => {
         tools: [
           {
             capability: 'demo.read',
-            spec: { name: 'fs_read', description: 'read a path', inputSchema: { type: 'object', properties: { path: { type: 'string' } } } },
+            spec: {
+              name: 'fs_read',
+              description: 'read a path',
+              inputSchema: { type: 'object', properties: { path: { type: 'string' } } },
+            },
             throwTier: 0,
             handler: () => {
               throw new Error('ENOENT');

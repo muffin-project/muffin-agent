@@ -1,27 +1,28 @@
+import { recall, recallTaint, renderForPrompt } from '../../core/memory/recall.js';
 import { memoryWriteCapability } from '../../core/policy/doors.js';
 import type { CapabilityId, Decision, DecisionRequest } from '../../core/policy/types.js';
-import { recall, recallTaint, renderForPrompt } from '../../core/memory/recall.js';
 import type { SessionRef } from '../../core/session/store.js';
 import { isSensitiveResourceName } from '../../core/tracing/redact.js';
-import { ATTR } from '../../core/tracing/types.js';
 import type { SpanHandle } from '../../core/tracing/types.js';
+import { ATTR } from '../../core/tracing/types.js';
 import type { TurnRecord } from '../../core/turns/store.js';
 import { planTaint } from '../../core/turns/todo.js';
 import { decodeWaitFor, satisfied, wakeReport } from '../../core/turns/wait.js';
 import { tenantClass, visibleTools } from '../context/assemble.js';
 import { historyTaint, reinjectedHistory } from '../context/history-taint.js';
 import { DEFAULT_EXECUTION } from '../profiles/profile.js';
-import type { ContentBlock, Message } from '../providers/types.js';
+import { type ContentBlock, type Message, ProviderError } from '../providers/types.js';
 import { buildContext, userAudios, userImages } from './context.js';
 import { announceEnd, checkpoint, closeRecord, finish, reconcile } from './durability.js';
-import { makeSnapshot } from './permissions.js';
-import { runRounds, type RoundScope } from './round.js';
 import { ExecutionBudget } from './execution-budget.js';
+import { makeSnapshot } from './permissions.js';
+import { markProviderErrorReplyForRecovery, providerErrorReply } from './provider-error-reply.js';
+import { type RoundScope, runRounds } from './round.js';
 import { TurnRun } from './run-state.js';
 import {
   assertNever,
-  MAX_HISTORY_TURNS,
   type LoopDeps,
+  MAX_HISTORY_TURNS,
   type ToolContext,
   type TurnDelta,
   type TurnEvent,
@@ -250,7 +251,9 @@ export async function guidaIlTurno(
    * to see.
    */
   const memoryDoorOpen = (): boolean => {
-    const refusal = doorRefusal(door(memoryWriteCapability.id, { kind: 'tenant', value: input.tenant }));
+    const refusal = doorRefusal(
+      door(memoryWriteCapability.id, { kind: 'tenant', value: input.tenant }),
+    );
     if (refusal === undefined) return true;
     turn.setAttributes({ 'muffin.memory.write_refused': refusalLabel(refusal) });
     return false;
@@ -273,16 +276,12 @@ export async function guidaIlTurno(
     resumed: options.resumed === true,
     wokenFromWait: options.wokenFromWait === true,
   });
-  const execution = new ExecutionBudget(
-    deps.profile.execution ?? DEFAULT_EXECUTION,
-    Date.now,
-    {
-      initialActiveModelMs: run.activeModelMs,
-      onActiveModelMs: (activeModelMs) => {
-        run.activeModelMs = activeModelMs;
-      },
+  const execution = new ExecutionBudget(deps.profile.execution ?? DEFAULT_EXECUTION, Date.now, {
+    initialActiveModelMs: run.activeModelMs,
+    onActiveModelMs: (activeModelMs) => {
+      run.activeModelMs = activeModelMs;
     },
-  );
+  });
   /**
    * What every handler is told about the turn it is running in — built once,
    * because the barrier has to be the same object across the whole turn.
@@ -318,11 +317,19 @@ export async function guidaIlTurno(
    * results, no single resource this call named).
    */
   const RESOURCE_READ_TOOLS = new Set(['fs_read', 'http_get', 'document_read', 'skill_read']);
-  const noteSensitiveResourceEcho = (call: { name: string; args: unknown }, outcome: ContentBlock): void => {
+  const noteSensitiveResourceEcho = (
+    call: { name: string; args: unknown },
+    outcome: ContentBlock,
+  ): void => {
     if (!RESOURCE_READ_TOOLS.has(call.name)) return;
     if (outcome.type !== 'tool_result' || outcome.isError) return;
     const args = (call.args ?? {}) as Record<string, unknown>;
-    const resourceId = typeof args.path === 'string' ? args.path : typeof args.url === 'string' ? args.url : undefined;
+    const resourceId =
+      typeof args.path === 'string'
+        ? args.path
+        : typeof args.url === 'string'
+          ? args.url
+          : undefined;
     if (resourceId === undefined || !isSensitiveResourceName(resourceId)) return;
     if (typeof outcome.content === 'string') run.sensitiveResourceEchoes.push(outcome.content);
   };
@@ -344,11 +351,11 @@ export async function guidaIlTurno(
     // `input.tenant` e non il tenant del principal: sono lo stesso valore, e
     // questo è quello su cui il kernel deciderà fra due righe.
     deps.grants?.get(input.tenant),
-  ).slice(
-    0,
-    deps.profile.maxToolsExposed,
-  );
-  turn.setAttributes({ 'muffin.context.class': turnClass, 'muffin.context.tools_exposed': exposed.length });
+  ).slice(0, deps.profile.maxToolsExposed);
+  turn.setAttributes({
+    'muffin.context.class': turnClass,
+    'muffin.context.tools_exposed': exposed.length,
+  });
 
   /**
    * Ciò che le scritture durevoli e il corpo del giro leggevano per chiusura,
@@ -450,20 +457,19 @@ export async function guidaIlTurno(
     // taint of this turn exactly as if they had just spoken.
     const recalled: ContentBlock[] = [];
     if (deps.memory) {
-      const recallSpan = deps.tracer.start('muffin.tool_call', { [ATTR.operationName]: 'memory.recall' }, turn);
+      const recallSpan = deps.tracer.start(
+        'muffin.tool_call',
+        { [ATTR.operationName]: 'memory.recall' },
+        turn,
+      );
       try {
-        const result = await recall(
-          deps.memory.recall,
-          input.tenant,
-          input.text,
-          {
-            excludeTurnIds: turniInContesto,
-            // Tenuto accanto al lineage e non sostituito da lui: e la garanzia
-            // che non dipende dalla colonna nuova, quindi vale anche su una
-            // riga che il lineage non ce l ha.
-            ...(currentEpisodeId !== undefined ? { excludeEpisodeId: currentEpisodeId } : {}),
-          },
-        );
+        const result = await recall(deps.memory.recall, input.tenant, input.text, {
+          excludeTurnIds: turniInContesto,
+          // Tenuto accanto al lineage e non sostituito da lui: e la garanzia
+          // che non dipende dalla colonna nuova, quindi vale anche su una
+          // riga che il lineage non ce l ha.
+          ...(currentEpisodeId !== undefined ? { excludeEpisodeId: currentEpisodeId } : {}),
+        });
         const inherited = recallTaint(result);
         // Il nome accanto al numero (ADR-0075 punto 4): un fatto che uno
         // sconosciuto ha piantato mesi fa alza questo turno esattamente come se
@@ -535,9 +541,14 @@ export async function guidaIlTurno(
      * `check()` below — only the *stamp this turn leaves for the next one* no
      * longer inherits a tier this turn did not itself produce.
      */
-    const traceIdsInWindow = spoken.kept.map((m) => m.traceId).filter((id): id is string => id !== undefined);
+    const traceIdsInWindow = spoken.kept
+      .map((m) => m.traceId)
+      .filter((id): id is string => id !== undefined);
     const taintByTrace = deps.turns.taintForIds(traceIdsInWindow);
-    snapshot.raiseCeiling(historyTaint(spoken.kept, taintByTrace), 'la conversazione precedente, riletta in questo turno');
+    snapshot.raiseCeiling(
+      historyTaint(spoken.kept, taintByTrace),
+      'la conversazione precedente, riletta in questo turno',
+    );
 
     /**
      * D11's other half: which turns in this window `muffin undo` has already
@@ -562,7 +573,9 @@ export async function guidaIlTurno(
         deps.istanza?.(),
         deps.timeZone,
         undoneTraceIds,
-        turnClass === 'owner' && deps.memory !== undefined && !deps.memory.store.hasActiveFacts(input.tenant),
+        turnClass === 'owner' &&
+          deps.memory !== undefined &&
+          !deps.memory.store.hasActiveFacts(input.tenant),
       ),
     );
 
@@ -610,18 +623,46 @@ export async function guidaIlTurno(
       const why =
         waitFor !== null &&
         satisfied(waitFor, {
-          ...(deps.approvals === undefined ? {} : { answered: (id: string) => deps.approvals?.answered(id) === true }),
+          ...(deps.approvals === undefined
+            ? {}
+            : { answered: (id: string) => deps.approvals?.answered(id) === true }),
         })
           ? 'event'
           : 'timer';
       turn.setAttributes({ 'muffin.turn.woken_by': why });
-      run.messages.push({ role: 'user', content: [{ type: 'text', text: wakeReport(waitFor, why) }] });
+      run.messages.push({
+        role: 'user',
+        content: [{ type: 'text', text: wakeReport(waitFor, why) }],
+      });
     }
   }
 
   try {
     return await runRounds(scope);
   } catch (error) {
+    if (error instanceof ProviderError) {
+      // Retry exhaustion is a terminal turn result, not a connector exception.
+      // Persist a marked copy in TurnRecord before delivery so a failed send or
+      // restart can recover this exact notice without invoking the provider.
+      const text = providerErrorReply(error);
+      scope.run.messages.push(markProviderErrorReplyForRecovery(text));
+      const result = finish(scope, 'error', text, 'provider_error');
+      if (result.text !== '') {
+        try {
+          deps.sessions.append(input.session, {
+            role: 'assistant',
+            content: text,
+            surface: input.surface,
+            createdAt: (deps.now ?? (() => new Date()))().toISOString(),
+            traceId: record.id,
+            tier: snapshot.intrinsicTaint(),
+          });
+        } catch {
+          // The marked turn record is already durable and remains recoverable.
+        }
+      }
+      return result;
+    }
     turn.end({ error });
     // Same reason `announceEnd` is repeated here: a provider that exhausted its
     // retries never reaches `finish`, and a row left `running` by a turn that
