@@ -1,8 +1,8 @@
-import DatabaseCtor from 'better-sqlite3';
-import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { createDecide } from '../../core/policy/decide.js';
 import { POLICY_FLOOR } from '../../core/policy/matrix.js';
@@ -11,9 +11,14 @@ import { SessionStore } from '../../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../../core/tracing/tracer.js';
 import { TurnStore } from '../../core/turns/store.js';
 import { TodoStore } from '../../core/turns/todo.js';
-import { runTurn, type LoopDeps } from '../loop.js';
+import { type LoopDeps, runTurn } from '../loop.js';
 import { CONSERVATIVE } from '../profiles/profile.js';
-import { ProviderError, type ChatCall, type ChatResult, type Provider } from '../providers/types.js';
+import {
+  type ChatCall,
+  type ChatResult,
+  type Provider,
+  ProviderError,
+} from '../providers/types.js';
 
 /**
  * Slice 9 (Fase A, §3) moves the last of `guidaIlTurno` — the deterministic
@@ -41,7 +46,13 @@ const usage = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteT
 const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
 const NOW = () => new Date('2026-09-05T10:00:00.000Z');
 
-const answer = (text: string): ChatResult => ({ text, toolCalls: [], stopReason: 'end', usage, model: 'test-model' });
+const answer = (text: string): ChatResult => ({
+  text,
+  toolCalls: [],
+  stopReason: 'end',
+  usage,
+  model: 'test-model',
+});
 
 /** Registra ogni chiamata, e cosa la sessione conteneva nell'istante in cui è partita. */
 class Scripted implements Provider {
@@ -75,7 +86,12 @@ function world(script: (ChatResult | Error)[], durante: (n: number) => void = ()
     model: 'test-model',
     tools: [],
     capabilities,
-    decide: createDecide({ matrix: POLICY_FLOOR, capabilities, budgetExhausted: () => false, hardened: true }),
+    decide: createDecide({
+      matrix: POLICY_FLOOR,
+      capabilities,
+      budgetExhausted: () => false,
+      hardened: true,
+    }),
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions,
     turns,
@@ -106,10 +122,14 @@ describe('il pre-loop decide prima che il modello generi', () => {
     expect(r.stopped).toBe('answered');
     // Scritta **prima** della generazione, non dopo: è la proprietà, non
     // l'ordine casuale di due scritture.
-    expect(JSON.stringify(sessioneAllaPrimaChiamata)).toContain('una domanda che deve sopravvivere a un crash');
+    expect(JSON.stringify(sessioneAllaPrimaChiamata)).toContain(
+      'una domanda che deve sopravvivere a un crash',
+    );
     // E il contesto che il pre-loop ha montato è quello che il modello vede.
     const primo = w.provider.seen[0]!;
-    expect(JSON.stringify(primo.messages)).toContain('una domanda che deve sopravvivere a un crash');
+    expect(JSON.stringify(primo.messages)).toContain(
+      'una domanda che deve sopravvivere a un crash',
+    );
     expect(JSON.stringify(primo.system)).toContain('Sei Muffin.');
     // Il segno durevole che il preambolo è girato: senza, ogni ripresa lo
     // rifarebbe e conterebbe la prima esecuzione come un resume.
@@ -118,12 +138,19 @@ describe('il pre-loop decide prima che il modello generi', () => {
 });
 
 describe('il catch esterno: un turno che lancia chiude comunque la sua riga', () => {
-  it('il provider esaurisce i ritentativi e la riga non resta running', async () => {
+  it('il provider esaurisce i ritentativi, restituisce un errore sicuro e chiude la riga', async () => {
     const w = world([new ProviderError('502 dal provider', true, 502, 'transport')]);
     const session = w.sessions.open('rethrow');
-    await expect(
-      runTurn(w.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: 'cerca' }),
-    ).rejects.toThrow('502 dal provider');
+    const result = await runTurn(w.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session,
+      text: 'cerca',
+    });
+    expect(result.stopped).toBe('error');
+    expect(result.text).toContain('HTTP 502');
+    expect(result.text).not.toContain('502 dal provider');
     // `closeRecord(scope, 'error')` è girato dentro il `catch` di
     // `guidaIlTurno`: senza, questa riga sarebbe ancora `running` e il boot
     // successivo la reclamerebbe come *interrupted*.
@@ -137,7 +164,9 @@ describe('il motore ha un solo chiamante', () => {
     const qui = dirname(fileURLToPath(import.meta.url));
     const importatori = readdirSync(qui)
       .filter((nome) => nome.endsWith('.ts') && !nome.endsWith('.test.ts'))
-      .filter((nome) => /from\s+['"]\.\/engine\.js['"]/.test(readFileSync(join(qui, nome), 'utf8')));
+      .filter((nome) =>
+        /from\s+['"]\.\/engine\.js['"]/.test(readFileSync(join(qui, nome), 'utf8')),
+      );
     // `drive()` è l'imbuto, ed è imbuto solo finché è l'unica porta: un
     // secondo importatore sarebbe un'uscita che nessuno drena.
     expect(importatori).toEqual(['entry.ts']);

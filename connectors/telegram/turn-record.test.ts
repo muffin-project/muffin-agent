@@ -1,16 +1,15 @@
-import DatabaseCtor from 'better-sqlite3';
-import type { Update } from '@grammyjs/types';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Update } from '@grammyjs/types';
 import { describe, expect, it } from 'vitest';
-import { runInit } from '../../cli/init.js';
-import { buildRuntime } from '../../agent/runtime.js';
 import type { LoopDeps } from '../../agent/loop.js';
-import type { ChatResult, Provider } from '../../agent/providers/types.js';
+import { type ChatResult, type Provider, ProviderError } from '../../agent/providers/types.js';
+import { buildRuntime } from '../../agent/runtime.js';
+import { runInit } from '../../cli/init.js';
 import type { TurnRecord } from '../../core/turns/store.js';
-import { TelegramConnector, type TelegramConfig } from './connector.js';
-import { TelegramError, type TelegramApi } from './api.js';
+import { type TelegramApi, TelegramError } from './api.js';
+import { type TelegramConfig, TelegramConnector } from './connector.js';
 import { TelegramDeliveryStore } from './delivery.js';
 import { UpdateInbox } from './updates.js';
 
@@ -52,19 +51,32 @@ const reply = (text: string): ChatResult => ({
 
 const config: TelegramConfig = { token: 't', ownerUserId: OWNER, ownerChatId: OWNER };
 
-function harness(over: { send?: () => Promise<never>; breakDeliveryRecord?: boolean; provider?: Provider } = {}) {
+function harness(
+  over: {
+    send?: (chatId: number, text: string) => Promise<never>;
+    breakDeliveryRecord?: boolean;
+    provider?: Provider;
+  } = {},
+) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-tgrec-'));
   const workspace = mkdtempSync(join(tmpdir(), 'muffin-tgrec-ws-'));
   runInit({ home, apiKey: 'sk-tgrec-never-called' });
   const runtime = buildRuntime(home, workspace);
 
-  const provider: Provider = over.provider ?? { kind: 'openai-compat', chat: async () => reply('ecco la risposta') };
+  const provider: Provider = over.provider ?? {
+    kind: 'openai-compat',
+    chat: async () => reply('ecco la risposta'),
+  };
   const turns = over.breakDeliveryRecord
-    ? Object.assign(Object.create(Object.getPrototypeOf(runtime.deps.turns) as object), runtime.deps.turns, {
-        delivered: () => {
-          throw new Error('database is not open');
+    ? Object.assign(
+        Object.create(Object.getPrototypeOf(runtime.deps.turns) as object),
+        runtime.deps.turns,
+        {
+          delivered: () => {
+            throw new Error('database is not open');
+          },
         },
-      })
+      )
     : runtime.deps.turns;
   const loop: LoopDeps = { ...runtime.deps, provider, turns };
 
@@ -104,7 +116,9 @@ function harness(over: { send?: () => Promise<never>; breakDeliveryRecord?: bool
     runtime,
     /** The single turn the drain produced, read from the production store. */
     row: (): TurnRecord | null => {
-      const id = (runtime.db.prepare(`SELECT id FROM turns LIMIT 1`).get() as { id: string } | undefined)?.id;
+      const id = (
+        runtime.db.prepare(`SELECT id FROM turns LIMIT 1`).get() as { id: string } | undefined
+      )?.id;
       return id === undefined ? null : runtime.deps.turns.get(id);
     },
   };
@@ -126,7 +140,11 @@ describe('a telegram turn records where the answer goes and whether it got there
     // the SurfaceRegistry address that day's lane (#41, turno sospeso) needs —
     // without it the row has Telegram's own addressing but nothing saying
     // which registry entry to deliver through.
-    expect(row?.replyTo).toMatchObject({ chatId: OWNER, messageId: 10, channel: `telegram:${OWNER}` });
+    expect(row?.replyTo).toMatchObject({
+      chatId: OWNER,
+      messageId: 10,
+      channel: `telegram:${OWNER}`,
+    });
     expect(row?.outcome).toBe('answered');
     expect(row?.delivery).toBe('sent');
     h.runtime.close();
@@ -148,6 +166,84 @@ describe('a telegram turn records where the answer goes and whether it got there
     // slice — it only stops the two outcomes from being one.
     expect(h.inbox.pending()).toHaveLength(1);
     h.runtime.close();
+  });
+
+  it('delivers a bounded terminal reply after provider retries fail', async () => {
+    let calls = 0;
+    const provider: Provider = {
+      kind: 'openai-compat',
+      chat: async () => {
+        calls += 1;
+        throw new ProviderError('secret provider response must not escape', true, 502, 'transport');
+      },
+    };
+    const h = harness({ provider });
+
+    await deliver(h, [privateMsg(9)]);
+
+    const row = h.row();
+    expect(calls).toBe(3);
+    expect(h.outbound).toHaveLength(1);
+    expect(h.outbound[0]).toMatch(/connessione|provider/i);
+    expect(h.outbound[0]).toContain('502');
+    expect(h.outbound[0]).not.toContain('secret provider response');
+    expect(row?.status).toBe('done');
+    expect(row?.outcome).toBe('error');
+    expect(row?.delivery).toBe('sent');
+    expect(h.inbox.pending()).toHaveLength(0);
+  });
+
+  it('recovers a failed provider-error reply without another model call', async () => {
+    let calls = 0;
+    let sends = 0;
+    const attempts: string[] = [];
+    const provider: Provider = {
+      kind: 'openai-compat',
+      chat: async () => {
+        calls += 1;
+        throw new ProviderError('connection details stay private', true, 502, 'transport');
+      },
+    };
+    const h = harness({
+      provider,
+      send: async (_chatId: number, text: string) => {
+        attempts.push(text);
+        sends += 1;
+        if (sends === 1) throw new TelegramError(429, 'Too Many Requests', 1);
+        return {} as never;
+      },
+    });
+
+    await deliver(h, [privateMsg(10)]);
+    expect(h.inbox.pending()).toHaveLength(1);
+    expect(h.row()?.outcome).toBe('error');
+    expect(h.row()?.delivery).toContain('failed:');
+
+    await (h.connector as unknown as { drain: () => Promise<void> }).drain();
+
+    expect(calls).toBe(3);
+    expect(attempts).toHaveLength(2);
+    expect(attempts[1]).toBe(attempts[0]);
+    expect(attempts[0]).not.toContain('connection details stay private');
+    expect(h.inbox.pending()).toHaveLength(0);
+    expect(h.row()?.delivery).toBe('sent');
+  });
+
+  it('does not expose an unknown internal exception as a Telegram answer', async () => {
+    const h = harness({
+      provider: {
+        kind: 'openai-compat',
+        chat: async () => {
+          throw new Error('private internal detail');
+        },
+      },
+    });
+
+    await deliver(h, [privateMsg(11)]);
+
+    expect(h.outbound).toEqual([]);
+    expect(h.inbox.pending()).toHaveLength(1);
+    expect(h.logged.join('\n')).toContain('private internal detail');
   });
 
   it('a delivery that cannot be recorded is still a delivery', async () => {
@@ -175,7 +271,9 @@ describe('a telegram turn records where the answer goes and whether it got there
         if (calls === 1) {
           return {
             ...reply(''),
-            toolCalls: [{ id: 'c1', name: 'wait', args: { seconds: 3600, why: 'aspetto il report' } }],
+            toolCalls: [
+              { id: 'c1', name: 'wait', args: { seconds: 3600, why: 'aspetto il report' } },
+            ],
             stopReason: 'tool_use',
           };
         }
@@ -190,7 +288,9 @@ describe('a telegram turn records where the answer goes and whether it got there
     // The presence placeholder ("sto guardando…") and, since 03/09/2026, the
     // transcript of the one step the turn took before suspending — a real
     // message that stays (`transcript.ts`). No answer, no empty send.
-    expect(h.outbound.filter((o) => o !== 'send:sto guardando…')).toEqual(['send:✓ mi metto in attesa']);
+    expect(h.outbound.filter((o) => o !== 'send:sto guardando…')).toEqual([
+      'send:✓ mi metto in attesa',
+    ]);
     h.runtime.close();
   });
 });
