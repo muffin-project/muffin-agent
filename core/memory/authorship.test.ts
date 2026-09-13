@@ -40,7 +40,7 @@ describe('speakerAttributedContent', () => {
     expect(speakerAttributedContent(content)).toBe('guarda questa foto\n\nquesta è casa mia a Roma');
   });
 
-  it('keeps voice transcription as sender speech while dropping surrounding foreign evidence', () => {
+  it('does not promote derived voice transcription to sender speech', () => {
     const content = [
       '[nota vocale ricevuta]',
       fenced('trascrizione', 'domani sono a Firenze per lavoro'),
@@ -48,7 +48,7 @@ describe('speakerAttributedContent', () => {
     ].join('\n\n');
 
     const selected = speakerAttributedContent(content);
-    expect(selected).toContain('domani sono a Firenze per lavoro');
+    expect(selected).not.toContain('domani sono a Firenze per lavoro');
     expect(selected).not.toContain('Giusto vive a Napoli');
   });
 

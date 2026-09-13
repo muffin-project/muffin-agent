@@ -59,7 +59,7 @@ export type Downloaded = { readonly vaultPath: string; readonly bytes: number };
 
 export const ATTACHMENT_CONTENT_TIER: TrustTier = 2;
 
-function atLeastAttachmentTier(tier: TrustTier): TrustTier {
+export function atLeastAttachmentTier(tier: TrustTier): TrustTier {
   return tier < ATTACHMENT_CONTENT_TIER ? ATTACHMENT_CONTENT_TIER : tier;
 }
 
