@@ -215,9 +215,13 @@ describe('the owner-class prompt does not move', () => {
    * (roughly double — see the PR body for the full before/after and the
    * `group` class' smaller delta). Pin before that one:
    * `3ebf2cfc307bdda5c73fff6ed4d60d5a9db2eceffac754164b220a86214cabf2`.
+   *
+   * Re-captured 2026-09-13 after `defaults/rot/identity.md` became owner-generic
+   * so a fresh install no longer puts the founder's identity in the prompt.
+   * Previous pin: `45a73d354ec5b8d52b30fa1b306f96d35b04959c3ddf9d10e831e3beb73ffbbf`.
    */
   const OWNER_PROMPT_SHA_AT_SPLIT =
-    '45a73d354ec5b8d52b30fa1b306f96d35b04959c3ddf9d10e831e3beb73ffbbf';
+    '9af210080d8814b2236adbaf6049d7f7aae5563c968ebd4c3340af1aa074005a';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
