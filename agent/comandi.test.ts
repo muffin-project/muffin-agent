@@ -145,6 +145,20 @@ function contestoConHome(home: string): ContestoComandi {
   };
 }
 
+describe('/model', () => {
+  it('dice che la scelta si applica al turno successivo', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-comandi-model-'));
+    runInit({ home: dir, apiKey: 'sk-fixture' });
+    const ctx = contestoConHome(dir);
+    ctx.model = async () => undefined;
+
+    const result = await eseguiComando('/model main example/model', ctx);
+
+    expect(result.testo).toContain('dal prossimo turno');
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe('/config', () => {
   it('è nell elenco condiviso — una volta, per tutte le superfici', () => {
     expect(COMANDI.map((c) => c.nome)).toContain('config');

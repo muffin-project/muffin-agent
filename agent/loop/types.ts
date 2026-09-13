@@ -47,6 +47,8 @@ export type ToolContext = {
    * a plan that died with the turn that wrote it would not be a plan.
    */
   sessionId: string;
+  /** Runtime facts pinned with this turn, for truthful tools such as sys_inspect. */
+  runtimeInfo?: TurnRuntimeInfo | undefined;
   /**
    * The turn's taint **right now**.
    *
@@ -253,6 +255,15 @@ type ApprovalAnswer = 'allow' | 'deny' | 'asked' | 'unavailable';
 
 export type Approver = (request: ApprovalRequest, where: ApprovalWhere) => Promise<ApprovalAnswer>;
 
+/** Model-facing runtime identity captured at the boundary of one turn. */
+export type TurnRuntimeInfo = {
+  providerKind: string;
+  providerBaseUrl?: string | undefined;
+  mainModel: string;
+  lightModel: string;
+  profile: Profile;
+};
+
 /** Thrown by a tool call that needs an approval this surface cannot obtain. */
 export class ApprovalRequired extends Error {
   constructor(readonly request: ApprovalRequest) {
@@ -407,6 +418,10 @@ export type RegisteredTool = {
 };
 
 export type LoopDeps = {
+  /** Refresh persisted main-model settings immediately before a turn enters execution. */
+  prepareTurn?: (() => void) | undefined;
+  /** The active runtime facts; entry points snapshot these before running. */
+  runtimeInfo?: TurnRuntimeInfo | undefined;
   provider: Provider;
   profile: Profile;
   /** Optional experimental sampling override used by evaluation harnesses. */

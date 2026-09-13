@@ -4,14 +4,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runInit } from '../cli/init.js';
-import { paths, secretDir } from '../core/config/config.js';
+import { loadConfig, paths, saveConfig, secretDir } from '../core/config/config.js';
 import { UndoJournal } from '../core/undo/journal.js';
 import { cmdUndo } from '../cli/undo.js';
 import { seal } from '../core/rot/verify.js';
 import { buildRuntime } from './runtime.js';
 import { runDoctor } from '../cli/doctor.js';
 import { muffinWorkspace } from '../core/config/workspace.js';
-import { runTurn, type LoopDeps, type ToolContext } from './loop.js';
+import { enqueueTurn, runTurn, type LoopDeps, type ToolContext } from './loop.js';
 import type { ChatCall, ChatResult, Provider } from './providers/types.js';
 import type { Principal } from '../core/policy/types.js';
 
@@ -846,6 +846,173 @@ describe('l\'embedder della config raggiunge la tabella vettoriale', () => {
       expect(ddl).not.toContain('float[1024]');
     } finally {
       db.close();
+    }
+  });
+});
+
+
+describe('main model config is a turn-boundary input', () => {
+  it('a fresh queued turn sees a model and routing change written after this runtime booted', () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-live-model-'));
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-live-model-ws-'));
+
+    runInit({
+      home,
+      apiKey: 'sk-fixture',
+      provider: 'openai-compat',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      mainModel: 'qwen/qwen3.8-27b',
+      lightModel: 'qwen/qwen3.8-27b',
+    });
+
+    const before = loadConfig(home);
+    saveConfig(
+      {
+        ...before,
+        provider: {
+          ...before.provider,
+          routing: { only: ['alibaba'] },
+        },
+      },
+      home,
+    );
+
+    const runtime = buildRuntime(home, workspace);
+    const bootProvider = runtime.deps.provider;
+    const bootProfile = runtime.deps.profile.name;
+    const bootLightProvider = runtime.light.provider;
+    const bootLightModel = runtime.light.model;
+
+    expect(runtime.deps.model).toBe('qwen/qwen3.8-27b');
+    expect(
+      (runtime.deps.provider as unknown as { routing?: unknown }).routing,
+    ).toEqual({ only: ['alibaba'] });
+
+    const changed = loadConfig(home);
+    const { routing: _oldRouting, ...providerWithoutRouting } = changed.provider;
+
+    saveConfig(
+      {
+        ...changed,
+        provider: providerWithoutRouting,
+        models: {
+          ...changed.models,
+          main: 'openrouter/free',
+        },
+      },
+      home,
+    );
+
+    const id = enqueueTurn(runtime.deps, {
+      principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
+      tenant: 'host',
+      surface: 'cli',
+      session: runtime.deps.sessions.open('live-model-refresh'),
+      text: 'usa il modello nuovo',
+    });
+
+    expect(runtime.deps.turns.get(id)?.model).toBe('openrouter/free');
+    expect(runtime.deps.model).toBe('openrouter/free');
+    expect(runtime.config.models.main).toBe('openrouter/free');
+
+    expect(runtime.deps.provider).not.toBe(bootProvider);
+    expect(
+      (runtime.deps.provider as unknown as { routing?: unknown }).routing,
+    ).toBeUndefined();
+
+    expect(runtime.deps.profile.name).not.toBe(bootProfile);
+    expect(runtime.deps.profile.name).toBe('conservative');
+    expect(runtime.deps.profile.maxToolsExposed).toBe(10);
+    expect(runtime.light.provider).toBe(bootLightProvider);
+    expect(runtime.light.model).toBe(bootLightModel);
+    expect(
+      runtime.capabilityGaps.some(
+        (gap) => gap.kind === 'truncated' && gap.reason.includes('profilo "conservative"'),
+      ),
+    ).toBe(true);
+
+    runtime.close();
+  });
+
+  it('keeps sys_inspect and spend pricing pinned while another turn refreshes config', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-turn-snapshot-'));
+    runInit({
+      home,
+      apiKey: 'sk-fixture',
+      provider: 'openai-compat',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      mainModel: 'anthropic/claude-opus-5',
+      lightModel: 'qwen/qwen3.8-27b',
+    });
+    const runtime = buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-turn-snapshot-ws-')));
+    const originalModel = runtime.deps.model;
+    const originalProfile = runtime.deps.profile.name;
+    const originalBaseUrl = runtime.config.provider.baseUrl;
+    const calls: ChatCall[] = [];
+    let queuedId: string | undefined;
+    let useStubProvider = true;
+    const prepareTurn = runtime.deps.prepareTurn;
+    const usage = { inputTokens: 1_000, outputTokens: 1_000, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    const provider: Provider = {
+      kind: 'openai-compat',
+      async chat(call) {
+        calls.push(call);
+        if (calls.length === 1) {
+          useStubProvider = false;
+          const current = loadConfig(home);
+          saveConfig(
+            {
+              ...current,
+              provider: { ...current.provider, baseUrl: 'http://localhost:11434/v1' },
+              models: { ...current.models, main: 'qwen/qwen3.8-27b' },
+            },
+            home,
+          );
+          queuedId = enqueueTurn(runtime.deps, {
+            principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
+            tenant: 'host',
+            surface: 'cli',
+            session: runtime.deps.sessions.open('queued-on-new-model'),
+            text: 'second turn',
+          });
+          return {
+            text: null,
+            toolCalls: [{ id: 'inspect-1', name: 'sys_inspect', args: {} }],
+            stopReason: 'tool_use',
+            usage,
+            model: 'anthropic/claude-haiku-4.5',
+          };
+        }
+        return { text: 'fatto', toolCalls: [], stopReason: 'end', usage, model: 'anthropic/claude-haiku-4.5' };
+      },
+    };
+    runtime.deps.provider = provider;
+    runtime.deps.prepareTurn = () => {
+      prepareTurn?.();
+      if (useStubProvider) runtime.deps.provider = provider;
+    };
+
+    try {
+      const result = await runTurn(runtime.deps, {
+        principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
+        tenant: 'host',
+        surface: 'cli',
+        session: runtime.deps.sessions.open('active-model-a'),
+        text: 'ispeziona il turno corrente',
+      });
+
+      expect(result.stopped).toBe('answered');
+      if (queuedId === undefined) throw new Error('il turno B non è stato accodato');
+      expect(runtime.deps.turns.get(queuedId)?.model).toBe('qwen/qwen3.8-27b');
+      expect(calls).toHaveLength(2);
+      const nextRequest = JSON.stringify(calls[1]);
+      expect(nextRequest).toContain(originalModel);
+      expect(nextRequest).toContain(originalProfile);
+      expect(nextRequest).toContain(originalBaseUrl);
+      expect(nextRequest).not.toContain('http://localhost:11434/v1');
+      expect(runtime.budget.monthToDateUsd()).toBeCloseTo(0.012, 6);
+    } finally {
+      runtime.close();
     }
   });
 });
