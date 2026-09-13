@@ -20,9 +20,12 @@
 # headless non può esprimere da solo: il bootstrap pubblico è letto da una pipe
 # ma conserva il controlling TTY per il vero installer, così il first-run può
 # chiedere segreti/consenso senza trasformare la promessa «one command» in due.
-# Il limite del container (nessuna istanza systemd utente) lo dichiara lo script
-# stesso, e nel caso prova la unit con `systemd-analyze verify` più un avvio in
-# primo piano del suo `ExecStart`.
+# L'eval isola il bus dell'eventuale systemd utente del runner: quel manager
+# appartiene alla home reale e non può caricare la unit scritta nella HOME
+# temporanea. Perciò prova `systemd-analyze verify` e avvia il vero `ExecStart`
+# in primo piano; non afferma che systemd abbia attivato il servizio o che
+# questo sopravviva al logout. Quella prova richiede una VM usa e getta con un
+# manager utente associato alla stessa HOME.
 #
 # ## Il costo, detto e non nascosto
 #
@@ -106,5 +109,5 @@ jobs:
       - name: la pipe pubblica conserva il controlling tty
         run: bash evals/install/pipe-tty.sh
 
-      - name: da una macchina vuota a un agente supervisionato
+      - name: installazione da macchina vuota, unità, update e rollback
         run: bash evals/install/ubuntu.sh
