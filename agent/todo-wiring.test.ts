@@ -364,8 +364,8 @@ describe("l'ambiente è davanti al modello, senza che nessuno lo chieda", () => 
   /**
    * Il fuso è quello dell'owner (RoT sigillato), mai quello del processo.
    *
-   * `defaults/rot/budgets.json` sigilla `Europe/Rome` per ogni installazione
-   * fresca (`runInit`, dentro `bootHome`), e questo test forza il fuso del
+   * `defaults/rot/budgets.json` sigilla il fallback neutro `UTC` per ogni
+   * installazione fresca (`runInit`, dentro `bootHome`), e questo test forza il fuso del
    * *processo* su qualcos'altro — la forma esatta della VPS dell'owner, che
    * gira in un fuso diverso dal suo. Prima di `LoopDeps.timeZone`,
    * `ambienteSection` (`agent/context/assemble.ts`) cadeva su
@@ -380,7 +380,7 @@ describe("l'ambiente è davanti al modello, senza che nessuno lo chieda", () => 
    */
   it("il fuso mostrato al modello è quello sigillato dell'owner, non quello del processo", async () => {
     const fusoProcesso = process.env['TZ'];
-    process.env['TZ'] = 'Pacific/Kiritimati'; // UTC+14, mai uguale a Europe/Rome
+    process.env['TZ'] = 'Pacific/Kiritimati'; // UTC+14, distinto dal fallback UTC sigillato
     try {
       const home = bootHome();
       const runtime = buildRuntime(home, workspace());
@@ -392,7 +392,7 @@ describe("l'ambiente è davanti al modello, senza che nessuno lo chieda", () => 
       runtime.close();
 
       const p = prompt(provider.seen[0]);
-      expect(p).toContain('Europe/Rome');
+      expect(p).toContain('UTC');
       expect(p).not.toContain('Pacific/Kiritimati');
     } finally {
       if (fusoProcesso === undefined) delete process.env['TZ'];
