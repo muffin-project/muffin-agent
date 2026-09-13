@@ -1,10 +1,10 @@
 import { readFileSync, readdirSync } from 'node:fs';
-import { dirname, extname, join, relative } from 'node:path';
+import { dirname, extname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { QUIET_FLOOR } from '../core/rot/budgets.js';
+import { QUIET_FLOOR } from './budgets.js';
 
-const ROOT = dirname(fileURLToPath(import.meta.url));
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../defaults');
 
 function shippedTextFiles(dir = ROOT): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
