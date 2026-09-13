@@ -66,14 +66,14 @@ describe('muffin jobs', () => {
     expect(activeJobs(home)).toEqual([]);
   });
 
-  it('defaults the timezone to the owner zone in the root of trust', () => {
+  it('defaults the timezone to the neutral fallback sealed in the root of trust', () => {
     const home = bootHome();
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
 
-    // no --tz: falls back to budgets.json quietHours.timezone (Europe/Rome default)
+    // no --tz: falls back to budgets.json quietHours.timezone (neutral UTC default)
     expect(cmdJobsAdd(home, ['--cron', '0 8 * * *', 'brief'])).toBe(0);
-    expect(activeJobs(home)[0]!.timezone).toBe('Europe/Rome');
+    expect(activeJobs(home)[0]!.timezone).toBe('UTC');
   });
 });
 
