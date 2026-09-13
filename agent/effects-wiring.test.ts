@@ -50,10 +50,10 @@ describe('il registro degli effetti, dal runtime vero', () => {
      * niente per quasi tutta la giornata, che è lo stesso guasto che sta
      * provando a impedire.
      *
-     * Le 23:30 UTC del 7 sono già lo **08** a Roma. `defaults/rot/budgets.json`
-     * sigilla `Europe/Rome` per ogni installazione fresca, e il fuso del
-     * processo è forzato su `UTC`: le due risposte sono due giorni diversi, e
-     * restano tali a qualunque ora si esegua la suite.
+     * Le 23:30 UTC del 7 sono ancora il **07** in UTC ma l'08 a Roma.
+     * `defaults/rot/budgets.json` sigilla il fallback neutro `UTC` per ogni
+     * installazione fresca, e il fuso del processo è forzato su `Europe/Rome`:
+     * le due risposte sono due giorni diversi, a qualunque ora giri la suite.
      *
      * Solo `Date` è finto (`toFake`): `better-sqlite3` e il resto del runtime
      * girano con i loro timer veri.
@@ -61,7 +61,7 @@ describe('il registro degli effetti, dal runtime vero', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-09-07T23:30:00.000Z'));
     const fusoProcesso = process.env['TZ'];
-    process.env['TZ'] = 'UTC';
+    process.env['TZ'] = 'Europe/Rome';
     try {
       const runtime = buildRuntime(bootHome(), workspace());
       try {
@@ -109,9 +109,9 @@ describe('il registro degli effetti, dal runtime vero', () => {
 
         const out = await tool!.handler({ scope: 'today' }, ctx('t1'));
         // L'intestazione dichiara la giornata che il runtime ha davvero usato.
-        expect(out.content, 'la giornata non è quella dell’owner').toContain('giornata 2026-09-08');
+        expect(out.content, 'la giornata non è quella del RoT').toContain('giornata 2026-09-07');
         expect(out.content, 'la giornata è quella del processo, non dell’owner').not.toContain(
-          'giornata 2026-09-07',
+          'giornata 2026-09-08',
         );
         // E la riga c'è davvero: senza questa, l'asserzione sopra passerebbe
         // anche su un report vuoto con l'intestazione giusta.

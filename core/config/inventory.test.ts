@@ -68,7 +68,7 @@ describe('every knob the mandate names as a minimum shows up', () => {
     expect(find(knobs, 'budgets.perTenantDailyUsd')).toMatchObject({ value: '2', sealed: true });
     expect(find(knobs, 'budgets.quietHours.from')).toMatchObject({ value: '23:00', sealed: true });
     expect(find(knobs, 'budgets.quietHours.to')).toMatchObject({ value: '08:00', sealed: true });
-    expect(find(knobs, 'budgets.quietHours.timezone')).toMatchObject({ value: 'Europe/Rome', sealed: true });
+    expect(find(knobs, 'budgets.quietHours.timezone')).toMatchObject({ value: 'UTC', sealed: true });
     rmSync(dir, { recursive: true, force: true });
   });
 
