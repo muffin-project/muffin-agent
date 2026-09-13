@@ -25,7 +25,7 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-/** Una home vera — `runInit` sigilla `Europe/Rome` in `rot/budgets.json`. */
+/** Una home vera — `runInit` sigilla il fallback neutro `UTC` in `rot/budgets.json`. */
 function home(): string {
   const dir = mkdtempSync(join(tmpdir(), 'muffin-effects-cli-'));
   dirs.push(dir);
@@ -68,23 +68,23 @@ function cattura(): { out: string[]; err: string[] } {
 
 describe('muffin effects', () => {
   it("«oggi» è la giornata dell'owner sigillata, non quella del processo", () => {
-    // Le 23:30 UTC del 7 sono già l'08 a Roma, che `runInit` sigilla. Il fuso
-    // del processo è forzato su UTC, dove la stessa riga è ancora del 7: i due
-    // non possono essere d'accordo, a qualunque ora giri la suite.
+    // Le 23:30 UTC del 7 sono ancora il 07 nel RoT (`UTC`) ma l'08 a Roma.
+    // Il fuso del processo è forzato su Europe/Rome, quindi i due non possono
+    // essere d'accordo, a qualunque ora giri la suite.
     const dir = home();
     const file = join(dir, 'registro.db');
     scrivi(file, '2026-09-07T23:30:00.000Z');
     const fusoProcesso = process.env['TZ'];
     const homeProcesso = process.env['MUFFIN_HOME'];
-    process.env['TZ'] = 'UTC';
+    process.env['TZ'] = 'Europe/Rome';
     process.env['MUFFIN_HOME'] = dir;
     try {
       const { out } = cattura();
       const code = cmdEffects(['--db', file], () => new Date('2026-09-07T23:30:00.000Z'));
       expect(code).toBe(0);
       const testo = out.join('');
-      expect(testo).toContain('giornata 2026-09-08');
-      expect(testo).not.toContain('giornata 2026-09-07');
+      expect(testo).toContain('giornata 2026-09-07');
+      expect(testo).not.toContain('giornata 2026-09-08');
       expect(testo).toContain('diario-di-oggi.md');
     } finally {
       if (fusoProcesso === undefined) delete process.env['TZ'];
