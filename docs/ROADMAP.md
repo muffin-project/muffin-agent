@@ -311,6 +311,21 @@ Do not build this merely because external agent SDKs support tool search/deferre
 
 **Trigger observed (2026-09-07).** The static exposure cap has been raised three times on the owner's installation to stop cutting base tools (evidence: `docs/evidence/personal-agent-ecosystem-audit-2026-09-07.md` §6 and the `consumer-local` profile notes). This is the catalogue pressure the entry asked for, so the item is a candidate claim; it is not an authorization to implement. The D13 re-measurement with the read-only shell comes first, and the shape must be chosen against the character eval.
 
+**Owner direction recorded 2026-09-13 (planned; semantics not yet researched).**
+Slash-command discovery and capability discovery should improve together. The
+owner should be able to ask Muffin for maintenance work, such as updating
+Muffin, from Telegram and continue it through an explicit durable pending or
+approval state. A future search/discovery tool is a way to find and load a
+capability, never an authorization grant: execution still uses the same
+principal, capability and policy checks on every surface. Any unavoidable HITL
+step, such as approving a restart, must be explicit in the capability contract
+and interaction rather than hidden in a surface-specific hardcode. Before
+implementation, a `docs/RESEARCH.md` pass must challenge the discovery shape and
+settle pending-turn identity, update/restart/rollback, idempotency and approval
+resumption. This adds an owner-stated candidate requirement to this
+MVP/trusted-alpha item; it does not change DAY-1 scope or choose an
+implementation.
+
 ### Persistent specialist facets and steerable workers
 
 Default placement: **MVP / trusted alpha, hypothesis only** (evidence: `docs/evidence/personal-agent-ecosystem-audit-2026-09-07.md` §8-9). One canonical Muffin identity may carry persistent specialist facets that are neither replaceable workers nor separate Muffins; delegated work may need a small control surface (spawn, status, steer, stop, resume) rather than spawn-only delegation. Muffin has no subagents today, by choice (ADR-0045). Trigger: an observed dogfood need that a single context cannot serve, or a delegated task the owner could not steer without losing work. Nothing here authorizes a multi-agent society.
