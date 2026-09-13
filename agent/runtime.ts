@@ -53,7 +53,7 @@ import {
   renderSystemPrompts,
   type SystemPromptBlocks,
 } from './context/assemble.js';
-import type { Approver, LoopDeps, RegisteredTool, SpendEntry } from './loop.js';
+import type { Approver, LoopDeps, RegisteredTool, SpendEntry, TurnRuntimeInfo } from './loop.js';
 import { loadProfiles, selectProfile, withThinking } from './profiles/profile.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { lightLane } from './providers/light-lane.js';
@@ -568,12 +568,12 @@ export function buildRuntime(
   })();
 
   // One connection, two lanes: the endpoint is the same, the model id is not.
-  const provider: Provider =
-    config.provider.kind === 'anthropic'
-      ? new AnthropicProvider(readSecret(config.provider.apiKeyRef, home), config.provider.baseUrl)
+  const createMainProvider = (source: Config): Provider =>
+    source.provider.kind === 'anthropic'
+      ? new AnthropicProvider(readSecret(source.provider.apiKeyRef, home), source.provider.baseUrl)
       : new OpenAICompatProvider(
-          readSecret(config.provider.apiKeyRef, home),
-          config.provider.baseUrl,
+          readSecret(source.provider.apiKeyRef, home),
+          source.provider.baseUrl,
           { 'HTTP-Referer': 'https://github.com/muffin-ai/muffin', 'X-Title': 'muffin' },
           // Cache breakpoints are the provider's own decision, defaulted from
           // the endpoint (`wantsExplicitCache`): the first version made every
@@ -585,8 +585,10 @@ export function buildRuntime(
           // dati, e sceglierla al posto suo qui sarebbe deciderla in silenzio.
           // Assente = quello che fa il gateway da sé; `muffin doctor` dice
           // cosa vuol dire.
-          config.provider.routing ? { routing: config.provider.routing } : {},
+          source.provider.routing ? { routing: source.provider.routing } : {},
         );
+  let provider: Provider = createMainProvider(config);
+  let providerFingerprint = JSON.stringify(config.provider);
 
   const profileProblems: string[] = [];
   const profiles = loadProfiles(undefined, (line) => profileProblems.push(line));
@@ -595,8 +597,8 @@ export function buildRuntime(
   // corsie della memoria chiedono `off` da sé.
   const profile = withThinking(selectProfile(config.models.main, profiles), config.thinking);
 
-  const recordSpend = (entry: SpendEntry): number => {
-    const usd = costUsd(entry.model, entry, config.provider.baseUrl);
+  const recordSpendWithBaseUrl = (entry: SpendEntry, baseUrl: string | undefined): number => {
+    const usd = costUsd(entry.model, entry, baseUrl);
     // `entry` porta già `jobId` quando il turno è il giro di un job
     // (`agent/loop.ts`), e lo spread lo passa dritto alla riga di `spend`:
     // niente da tenere in sincrono qui, e nessun secondo posto in cui
@@ -604,6 +606,10 @@ export function buildRuntime(
     budget.record({ ...entry, usd });
     return usd;
   };
+  const makeRecordSpend = (baseUrl: string | undefined) =>
+    (entry: SpendEntry): number => recordSpendWithBaseUrl(entry, baseUrl);
+  let recordSpend = makeRecordSpend(config.provider.baseUrl);
+  const lightBaseUrl = config.provider.baseUrl;
 
   /**
    * The light lane, behind the boundary that bills it and makes its requests
@@ -619,11 +625,14 @@ export function buildRuntime(
   const light = lightLane(provider, {
     profile: selectProfile(config.models.light, profiles),
     record: (entry) =>
-      void recordSpend({
-        ...entry,
-        tenant: CONSOLIDATION_TENANT,
-        capability: CONSOLIDATION_CAPABILITY,
-      }),
+      void recordSpendWithBaseUrl(
+        {
+          ...entry,
+          tenant: CONSOLIDATION_TENANT,
+          capability: CONSOLIDATION_CAPABILITY,
+        },
+        lightBaseUrl,
+      ),
   });
 
   // Memory. The vector half is optional and its absence is reported rather than
@@ -1127,6 +1136,44 @@ export function buildRuntime(
   };
   computeExposureGaps();
 
+  let loopDeps: LoopDeps | null = null;
+  const refreshMainModel = (): void => {
+    const persisted = loadConfig(home);
+    const fingerprint = JSON.stringify(persisted.provider);
+    if (fingerprint !== providerFingerprint) {
+      provider = createMainProvider(persisted);
+      providerFingerprint = fingerprint;
+    }
+
+    const nextProfile = withThinking(
+      selectProfile(persisted.models.main, loadProfiles()),
+      persisted.thinking,
+    );
+    // Keep the config and profile objects stable for their existing readers
+    // (`Runtime.config`, `sys_inspect`, and exposure calculation). A running
+    // turn owns shallow snapshots made by `runTurn`/`resumeTurn`.
+    Object.assign(config, {
+      provider: persisted.provider,
+      models: { ...config.models, main: persisted.models.main },
+      thinking: persisted.thinking,
+    });
+    Object.assign(profile, nextProfile);
+    recordSpend = makeRecordSpend(persisted.provider.baseUrl);
+    if (loopDeps !== null) {
+      loopDeps.provider = provider;
+      loopDeps.model = persisted.models.main;
+      loopDeps.recordSpend = recordSpend;
+      loopDeps.runtimeInfo = {
+        providerKind: persisted.provider.kind,
+        providerBaseUrl: persisted.provider.baseUrl,
+        mainModel: persisted.models.main,
+        lightModel: persisted.models.light,
+        profile,
+      };
+    }
+    computeExposureGaps();
+  };
+
   /**
    * I fatti d'istanza di `docs/evidence/orizzonte-del-turno-2026-09-03.md`
    * Parte 0, letti dalle **stesse fonti** che `makeInspectTool` sopra passa a
@@ -1150,7 +1197,7 @@ export function buildRuntime(
     safeMode: safeMode ? { reason: safeMode.reason } : null,
   });
 
-  return {
+  const runtime: Runtime = {
     executor: contained ? executor : null,
     workspace,
     config,
@@ -1198,6 +1245,14 @@ export function buildRuntime(
     memory: { store: memoryStore, recall: recallDeps },
     vault,
     deps: {
+      prepareTurn: refreshMainModel,
+      runtimeInfo: {
+        providerKind: config.provider.kind,
+        providerBaseUrl: config.provider.baseUrl,
+        mainModel: config.models.main,
+        lightModel: config.models.light,
+        profile,
+      } satisfies TurnRuntimeInfo,
       provider,
       profile,
       model: config.models.main,
@@ -1267,6 +1322,8 @@ export function buildRuntime(
       db.close();
     },
   };
+  loopDeps = runtime.deps;
+  return runtime;
 }
 
 /**

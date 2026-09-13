@@ -587,6 +587,7 @@ export class TurnStore {
   private readonly countStmt: Database.Statement;
   private readonly waitingStmt: Database.Statement;
   private readonly claimStmt: Database.Statement;
+  private readonly reassignUnstartedModelStmt: Database.Statement;
   private readonly suspendStmt: Database.Statement;
   private readonly dueStmt: Database.Statement;
   private readonly armedStmt: Database.Statement;
@@ -778,6 +779,14 @@ export class TurnStore {
                         wake_at = NULL, wait_for = NULL, updated_at = @now
        WHERE id = @id AND status IN ('runnable','waiting','interrupted')`,
     );
+    // A queued turn that has never built context has no model-produced state
+    // to pin. Let the newly selected main model own it, but only while it is
+    // still runnable and untouched; a competing claim or a started turn wins.
+    this.reassignUnstartedModelStmt = db.prepare(
+      `UPDATE turns SET model = @nextModel, updated_at = @now
+       WHERE id = @id AND model = @expectedModel AND status = 'runnable'
+         AND json_extract(counters, '$.contextBuilt') = 0`,
+    );
     /**
      * The write that suspends, and it releases the claim in the same statement.
      *
@@ -927,6 +936,19 @@ export class TurnStore {
     const token = randomUUID();
     if (this.claimStmt.run({ id, pid, token, now: at }).changes === 0) return null;
     return this.get(id);
+  }
+
+  /** Rebind only a queued row that has never entered the model context. */
+  reassignUnstartedModel(id: string, expectedModel: string, nextModel: string): boolean {
+    if (expectedModel === nextModel) return true;
+    return (
+      this.reassignUnstartedModelStmt.run({
+        id,
+        expectedModel,
+        nextModel,
+        now: this.clock().toISOString(),
+      }).changes === 1
+    );
   }
 
   /**

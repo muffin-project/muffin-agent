@@ -230,3 +230,80 @@ describe('i rifiuti terminali restano con le porte d ingresso', () => {
     });
   });
 });
+
+describe('a live model switch is atomic at the turn boundary', () => {
+  it('moves a never-started queued turn to the model selected before its first attempt', async () => {
+    const providerA = new Scripted([answer('risposta A')]);
+    const providerB = new Scripted([answer('risposta B')]);
+    const w = world([]);
+    w.deps.provider = providerA;
+    w.deps.model = 'model-a';
+    const session = w.sessions.open('queued-model-switch');
+    const id = barrel.enqueueTurn(w.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session,
+      text: 'domanda accodata',
+    });
+
+    // Simula il cambio config persistito tra enqueue e il primo tick della lane.
+    w.deps.prepareTurn = () => {
+      w.deps.model = 'model-b';
+      w.deps.provider = providerB;
+    };
+
+    const result = await barrel.resumeTurn(w.deps, id);
+
+    expect('stopped' in result && result.stopped).toBe('answered');
+    expect(w.turns.get(id)).toMatchObject({ model: 'model-b', status: 'done' });
+    expect(providerB.seen).toHaveLength(1);
+    expect(providerA.seen).toHaveLength(0);
+  });
+
+  it('a turn already inside provider A keeps provider, model and profile A for its retry', async () => {
+    const providerB = new Scripted([answer('risposta B')]);
+    let w!: ReturnType<typeof world>;
+
+    w = world(
+      [
+        new ProviderError('output malformato', true, 400, 'output'),
+        answer('risposta A'),
+      ],
+      (n) => {
+        if (n !== 1) return;
+
+        w.deps.provider = providerB;
+        w.deps.model = 'model-b';
+        w.deps.profile = {
+          ...CONSERVATIVE,
+          name: 'profile-b',
+          sampling: 'model-default',
+        };
+      },
+    );
+
+    const providerA = w.deps.provider as Scripted;
+    const session = w.sessions.open('turn-boundary-model');
+
+    const result = await barrel.runTurn(w.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session,
+      text: 'resta sul modello con cui hai iniziato',
+    });
+
+    expect(result.stopped).toBe('answered');
+    expect(result.text).toBe('risposta A');
+
+    expect(providerA.seen).toHaveLength(2);
+    expect(providerA.seen.map((call) => call.model)).toEqual([
+      'test-model',
+      'test-model',
+    ]);
+
+    expect(providerA.seen[1]?.temperature).toBe(0);
+    expect(providerB.seen).toHaveLength(0);
+  });
+});
