@@ -116,3 +116,38 @@ describe('foreign-only user evidence', () => {
     expect(provider.seen).toHaveLength(0);
   });
 });
+
+describe('derived voice evidence', () => {
+  it('keeps the transcript in the episode but does not send it to owner fact extraction', async () => {
+    const db = new DatabaseCtor(':memory:');
+    const store = new MemoryStore(db);
+    const provider = new CapturingProvider();
+    const home = mkdtempSync(join(tmpdir(), 'muffin-authorship-voice-'));
+    const transcript = 'domani sono a Firenze per lavoro';
+    const id = store.addEpisode({
+      tenantId: 'host',
+      connector: 'telegram',
+      threadKey: 'owner',
+      role: 'user',
+      kind: 'message',
+      content: fence('trascrizione', transcript, 'derived voice input').block,
+      trustTier: 2,
+      createdAt: '2026-09-11T20:00:00.000Z',
+    });
+
+    const result = await ingestPending(
+      {
+        store,
+        provider,
+        model: 'test-light',
+        tracer: new SimpleTracer(new JsonlExporter(home)),
+        now: () => new Date('2026-09-11T20:01:00.000Z'),
+      },
+      'host',
+    );
+
+    expect(provider.seen).toHaveLength(0);
+    expect(result.marked).toBe(1);
+    expect(store.episodeById('host', id)?.content).toContain(transcript);
+  });
+});

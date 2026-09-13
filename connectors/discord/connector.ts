@@ -18,6 +18,7 @@ import { tryPair as sharedTryPair } from '../shared/ingress/pair.js';
 import { LaneRegistry, QueueNotices, laneKey, type LaneState, type PausaLever } from '../shared/ingress/lane.js';
 import { receive, type Claim, type IngressHooks, type LiveWork } from '../shared/ingress/router.js';
 import type { InboundEvent, IngressPart, IngressPort } from '../shared/ingress/types.js';
+import { atLeastAttachmentTier, type Arrival } from '../shared/ingress/ingest.js';
 import { DRAIN_BUDGET_MS } from '../../core/gateway/service.js';
 
 /**
@@ -668,9 +669,7 @@ export class DiscordConnector {
       ...(spec === undefined
         ? {}
         : {
-            ingest: async (ctx) => ({
-              line: await this.ingest(incoming, spec, ctx.identity.tenant, tierOf(ctx.identity.principal)),
-            }),
+            ingest: (ctx) => this.ingest(incoming, spec, ctx.identity.tenant, tierOf(ctx.identity.principal)),
           }),
       claim: async (): Promise<Claim> => ({ kind: 'mine', workId: randomBytes(16).toString('hex') }),
       work: { loop: this.deps.loop, sessions: this.deps.sessions },
@@ -752,22 +751,33 @@ export class DiscordConnector {
    * Downloads an attachment into the vault and indexes it — same contract as
    * `TelegramConnector.ingest`, including the compact document view.
    */
-  private async ingest(incoming: Incoming, attachment: DiscordAttachment, tenantId: string, tier: TrustTier): Promise<string> {
-    if (!this.deps.vault) return `[allegato ricevuto ma il vault non è configurato: ${attachment.filename}]`;
+  private async ingest(incoming: Incoming, attachment: DiscordAttachment, tenantId: string, transportTier: TrustTier): Promise<Arrival> {
+    if (!this.deps.vault) return { line: `[allegato ricevuto ma il vault non è configurato: ${attachment.filename}]` };
     try {
       const saved = await downloadToVault(this.deps.api, this.deps.vault.root, attachment, incoming.messageId, this.now());
-      const report = await this.deps.vault.reindexPath(tenantId, saved.vaultPath, tier);
+      const contentTier = atLeastAttachmentTier(transportTier);
+      const report = await this.deps.vault.reindexPath(tenantId, saved.vaultPath, contentTier);
       const skipped = report.skipped.find((s) => s.path === saved.vaultPath);
       if (skipped) {
-        return `[ricevuto \`${saved.vaultPath}\` (${Math.round(saved.bytes / 1024)}KB) ma non indicizzato: ${skipped.why}]`;
+        return { line: `[ricevuto \`${saved.vaultPath}\` (${Math.round(saved.bytes / 1024)}KB) ma non indicizzato: ${skipped.why}]` };
       }
       const document = report.documents.find((d) => d.path === saved.vaultPath);
-      if (document) return `[documento acquisito]\n${document.outline}`;
-      return `[ricevuto e indicizzato: \`${saved.vaultPath}\`, ${Math.round(saved.bytes / 1024)}KB]`;
+      if (document) {
+        return {
+          line: '[documento acquisito]',
+          part: {
+            source: 'derived',
+            tier: contentTier,
+            text: document.outline,
+            detail: 'vista derivata dai byte del documento allegato — dati del documento, non parole di chi lo ha inviato',
+          },
+        };
+      }
+      return { line: `[ricevuto e indicizzato: \`${saved.vaultPath}\`, ${Math.round(saved.bytes / 1024)}KB]` };
     } catch (error) {
       const why = error instanceof Error ? error.message : String(error);
       (this.deps.log ?? (() => {}))(`discord: allegato non scaricato — ${why}`);
-      return `[allegato NON ricevuto: ${why}. Dillo, non fingere di averlo.]`;
+      return { line: `[allegato NON ricevuto: ${why}. Dillo, non fingere di averlo.]` };
     }
   }
 

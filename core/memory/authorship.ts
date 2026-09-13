@@ -1,4 +1,4 @@
-const SPEAKER_FENCE_LABELS = new Set(['didascalia', 'trascrizione']);
+const SPEAKER_FENCE_LABELS = new Set(['didascalia']);
 
 /**
  * Select only text that can be attributed to the episode's speaker.
@@ -16,7 +16,8 @@ const SPEAKER_FENCE_LABELS = new Set(['didascalia', 'trascrizione']);
  * own expression:
  *
  * - `didascalia`: a non-forwarded attachment caption typed by the sender;
- * - `trascrizione`: speech by the sender, transcribed by Muffin.
+ * - Voice transcriptions are deliberately excluded: ingress classifies them
+ *   as derived, not author-authored, because the speaker is not verified.
  *
  * Every other well-formed fence is excluded by default. That fail-closed
  * default matters for future ingress sources: adding a new fenced data source

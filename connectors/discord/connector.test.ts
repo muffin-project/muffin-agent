@@ -120,11 +120,12 @@ describe('who is speaking', () => {
   });
 });
 
-function harness(over: { attachment?: { filename: string; content: string }; suspend?: boolean; inPausa?: boolean } = {}) {
+function harness(over: { attachment?: { filename: string; content: string }; outline?: string; suspend?: boolean; inPausa?: boolean } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-discord-connector-'));
   const sent: { channelId: string; text: string }[] = [];
   const delivered: [string, DeliveryState][] = [];
   const reindexed: { tenantId: string; path: string; tier: number }[] = [];
+  const calls: unknown[] = [];
 
   const api = {
     sendMessage: async (channelId: string, text: string) => {
@@ -139,7 +140,9 @@ function harness(over: { attachment?: { filename: string; content: string }; sus
   const loop = {
     provider: {
       kind: 'openai-compat' as const,
-      chat: async () => ({
+      chat: async (call: unknown) => {
+        calls.push(call);
+        return ({
         // `suspend`: the model asks to wait on its first call, which parks the
         // turn inside `runTurn` (`stopped: 'suspended'`, empty text).
         text: over.suspend ? '' : 'fatto',
@@ -147,7 +150,8 @@ function harness(over: { attachment?: { filename: string; content: string }; sus
         stopReason: over.suspend ? ('tool_use' as const) : ('end' as const),
         usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
         model: 't',
-      }),
+        });
+      },
     },
     profile: CONSERVATIVE,
     model: 't',
@@ -180,12 +184,12 @@ function harness(over: { attachment?: { filename: string; content: string }; sus
       root: vaultRoot,
       reindexPath: async (tenantId, path, tier) => {
         reindexed.push({ tenantId, path, tier });
-        return { skipped: [], documents: [] };
+        return { skipped: [], documents: over.outline === undefined ? [] : [{ path, outline: over.outline }] };
       },
     },
   };
   const connector = new DiscordConnector(deps);
-  return { connector, sent, delivered, reindexed, deps };
+  return { connector, sent, delivered, reindexed, deps, calls };
 }
 
 async function deliver(h: ReturnType<typeof harness>, messages: DiscordMessage[]): Promise<void> {
@@ -214,8 +218,9 @@ describe('handling a DM end to end', () => {
     expect(h.delivered.map(([, state]) => state)).not.toContain('sent');
   });
 
-  it('ingests an attachment into the vault before the turn runs, tagged with the sender tenant', async () => {
-    const h = harness({ attachment: { filename: 'nota.txt', content: 'hello' } });
+  it('keeps an extracted document available to the turn without calling it the owner\'s words', async () => {
+    const outline = 'Il mittente del PDF dice di vivere a Milano';
+    const h = harness({ attachment: { filename: 'nota.txt', content: 'hello' }, outline });
     await deliver(h, [
       {
         id: '1',
@@ -229,7 +234,10 @@ describe('handling a DM end to end', () => {
 
     expect(h.reindexed).toHaveLength(1);
     expect(h.reindexed[0]?.tenantId).toBe('host'); // the owner's DM
-    expect(h.reindexed[0]?.tier).toBe(0); // owner-sent, tier 0
+    expect(h.reindexed[0]?.tier).toBe(2); // uploader identity does not prove document authorship
+    expect(JSON.stringify(h.calls[0])).toContain(outline);
+    expect(JSON.stringify(h.calls[0])).toContain('derivato_');
+    expect(JSON.stringify(h.calls[0])).not.toMatch(/autore\s*:\s*owner/i);
   });
 });
 

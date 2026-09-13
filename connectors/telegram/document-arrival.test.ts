@@ -15,6 +15,7 @@ import { TelegramConnector } from './connector.js';
 import type { TelegramApi } from './api.js';
 import { UpdateInbox } from './updates.js';
 import { TelegramDeliveryStore } from './delivery.js';
+import { ingestPending } from '../../core/memory/ingest.js';
 
 /**
  * The acceptance scenario, run the way the owner runs it: a PDF sent to the bot.
@@ -216,6 +217,50 @@ describe('a PDF sent to the bot', () => {
       // The caption is still a message: the file did not swallow what was said
       // with it.
       expect(text).toContain('tieni questo');
+    } finally {
+      h.runtime.close();
+    }
+  });
+
+  it('keeps attachment claims out of owner extraction across connector, router, durable episode, and ingestion', async () => {
+    const foreignCanary = 'ESTERNO_NON_OWNER_74c2 dice che il proprietario vive a Milano';
+    const pdf = buildPdf({ title: 'Nota', pages: [[foreignCanary]] });
+    const h = harness(pdf);
+    const extractionCalls: ChatCall[] = [];
+    const extractor: Provider = {
+      kind: 'openai-compat',
+      chat: async (call) => {
+        extractionCalls.push(call);
+        return reply('{"facts":[]}');
+      },
+    };
+
+    try {
+      await deliver(h, [withDocument(41, 'nota.pdf')]);
+
+      const store = h.runtime.memory.store;
+      const userEvidence = store
+        .searchEpisodes('host', 'ESTERNO_NON_OWNER_74c2')
+        .map((hit) => store.episodeById('host', hit.id))
+        .find((episode) => episode?.role === 'user' && episode.kind === 'message');
+      expect(userEvidence?.content).toContain(foreignCanary);
+      expect(userEvidence?.content).toContain('tieni questo');
+
+      await ingestPending(
+        {
+          store,
+          provider: extractor,
+          model: 'test-light',
+          tracer: h.runtime.deps.tracer,
+          now: () => new Date(RECEIVED_AT),
+        },
+        'host',
+      );
+
+      expect(extractionCalls.length).toBeGreaterThan(0);
+      expect(JSON.stringify(extractionCalls)).toContain('tieni questo');
+      expect(JSON.stringify(extractionCalls)).not.toContain(foreignCanary);
+      expect(store.episodeById('host', userEvidence!.id)?.content).toContain(foreignCanary);
     } finally {
       h.runtime.close();
     }
