@@ -1,7 +1,7 @@
 {
-  "_comment": "Spend caps and quiet hours. Dimensional, not sacred — but the agent cannot raise them itself: this file is the ONLY source of the caps (core/rot/budgets.ts), config.json no longer carries a copy. Editing it takes effect after `muffin rot reseal` and a restart.",
+  "_comment": "Spend caps and quiet hours. Dimensional, not sacred — but the agent cannot raise them itself: this file is the ONLY source of the caps (core/rot/budgets.ts), config.json no longer carries a copy. Editing it takes effect after `muffin rot reseal` and a restart. UTC is the neutral shipped fallback; first-run/setup owns replacing it with the detected owner timezone before calling the install configured.",
   "schemaVersion": 1,
   "monthlyUsd": 80,
   "perTenantDailyUsd": 2,
-  "quietHours": { "from": "23:00", "to": "08:00", "timezone": "Europe/Rome" }
+  "quietHours": { "from": "23:00", "to": "08:00", "timezone": "UTC" }
 }
