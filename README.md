@@ -245,6 +245,10 @@ which supposedly clever mechanisms do not help.
 
 [Open-source strategy →](docs/OPEN-SOURCE-STRATEGY.md) · [Public narrative →](docs/PUBLIC-NARRATIVE.md)
 
+Copyright (c) 2026 Giusto Piedimonte. License:
+[AGPL-3.0-or-later](LICENSE) — the `Muffin` name and logo are not covered, see
+[TRADEMARK.md](TRADEMARK.md).
+
 ---
 
 <div align="center">
