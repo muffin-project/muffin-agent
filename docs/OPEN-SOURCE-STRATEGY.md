@@ -339,18 +339,21 @@ Do not write compatibility promises, support SLAs or a detailed security
 disclosure process before the corresponding public product boundary is actually
 known.
 
-## 13. Licensing is an explicit pre-public decision
+## 13. Licensing: decided pre-public (ADR-0078)
 
-The current repository declares MIT. Earlier Muffin notes considered a
-non-commercial source-available license plus DCO/trademark policy.
+On 2026-09-14 the owner chose **AGPL-3.0-or-later**, superseding ADR-0019 (MIT).
+Rationale, rejected alternatives (GPLv3, MIT/Apache, source-available) and the
+dependency consequences live in `docs/decisions/0078-licenza-agpl.md`; the grant
+is `LICENSE`, the SPDX field is in `package.json`, inbound rules are in
+`CONTRIBUTING.md`.
 
-Those are materially different community strategies. A non-commercial license
-is not OSI open source and would change adoption, commercial use and contributor
-expectations.
+Two things remain deliberately open and must not be silently assumed closed:
 
-Do not let the package metadata decide this accidentally. Before making the
-repository public, the owner must confirm the intended model and record a new ADR
-if it differs from ADR-0019/current MIT.
+- the `Muffin` name/logo are outside the copyright grant (`TRADEMARK.md`);
+  formal registration is deferred for budget, first-use evidence from 2026-09-14;
+- without a CLA, relaxing the license later needs every external author's
+  consent — the DCO-minimal vs CLA-light decision is due before accepting
+  external PRs post-25.
 
 ## 14. Telegram as early distribution/surface leverage
 
