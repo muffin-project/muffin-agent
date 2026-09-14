@@ -5,7 +5,7 @@
 > installation path:
 >
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/GiustoPiedimonte/muffin-agent/main/bootstrap.sh | sh
+> curl -fsSL https://raw.githubusercontent.com/muffin-project/muffin-agent/main/bootstrap.sh | sh
 > ```
 >
 > `bootstrap.sh` is intentionally tiny: it stages the canonical `install.sh`
@@ -186,7 +186,7 @@ Running the canonical installer from a checkout skips the clone and builds that
 tree:
 
 ```bash
-git clone https://github.com/GiustoPiedimonte/muffin-agent.git
+git clone https://github.com/muffin-project/muffin-agent.git
 cd muffin-agent
 ./install.sh
 ```
