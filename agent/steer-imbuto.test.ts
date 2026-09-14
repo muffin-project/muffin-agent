@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import DatabaseCtor from 'better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
@@ -14,6 +14,8 @@ import { type LoopDeps, type RegisteredTool, resumeTurn, runTurn } from './loop.
 import { CONSERVATIVE } from './profiles/profile.js';
 import { type ChatCall, type ChatResult, type Provider, ProviderError } from './providers/types.js';
 import { makeWaitTool, waitCapability } from './tools/wait.js';
+
+afterEach(() => vi.restoreAllMocks());
 
 /**
  * L'imbuto (ADR-0054 §2, emendamento 03/09c).
@@ -144,6 +146,7 @@ const prompt = (c: ChatCall | undefined): string =>
 
 describe('l imbuto: una uscita sola per le correzioni', () => {
   it('il provider termina con errore: la correzione resta, e il turno dopo la vede', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
     // Il ProviderError terminale chiude la riga con `error` e resta un errore
     // utente leggibile senza perdere il contenuto di `/steer`.
     const coda: string[] = [];

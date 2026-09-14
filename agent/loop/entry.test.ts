@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import DatabaseCtor from 'better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDecide } from '../../core/policy/decide.js';
 import { POLICY_FLOOR } from '../../core/policy/matrix.js';
 import type { Principal } from '../../core/policy/types.js';
@@ -19,6 +19,8 @@ import {
   type Provider,
   ProviderError,
 } from '../providers/types.js';
+
+afterEach(() => vi.restoreAllMocks());
 
 /**
  * Slice 9 (Fase A, §3) takes the ways in — `enqueueTurn`, `runTurn`,
@@ -134,6 +136,7 @@ describe('agent/loop.ts è un barile, e niente altro', () => {
 
 describe('l imbuto: il drain sta su drive(), non su finish()', () => {
   it('provider error terminale: la correzione resta durevole e l’errore ha forma sicura', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
     // L'errore terminale passa da `finish`; la correzione deve comunque essere
     // salvata esattamente una volta e non deve esporre il testo del provider.
     const coda: string[] = [];
