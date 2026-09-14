@@ -162,14 +162,17 @@ export const MAX_HISTORY_TURNS = 40;
  * the model-recovery cascade, so the empty turn that followed had nothing left
  * to spend.
  *
- * Two, matching what the shortest declared cascade bought before this split,
- * and small on purpose. The provider constructors set `maxRetries: 0`, so this
- * is now the only transport retry budget: on a persistent 502 it means three
- * wire attempts total, with two loop-owned backoff gaps. Keeping that ownership
- * here prevents a model deadline or a transport retry from multiplying inside
- * an SDK.
+ * Ten retries for an interactive turn, after the initial request. The
+ * provider constructors set `maxRetries: 0`, so this is the only retry budget
+ * for a provider call: the loop owns the attempts, the backoff and the durable
+ * counter. The turn wall/model budgets and tenant spend limits remain the hard
+ * bounds. Auxiliary memory calls deliberately keep their smaller independent
+ * budget below so background recall does not inherit chat's longer horizon.
  */
-export const MAX_TRANSPORT_RETRIES = 2;
+export const MAX_TRANSPORT_RETRIES = 10;
+
+/** Small independent retry budget for auxiliary memory-provider calls. */
+export const MAX_LIGHT_TRANSPORT_RETRIES = 2;
 
 /**
  * How a surface asks the owner.

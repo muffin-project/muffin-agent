@@ -90,10 +90,9 @@ function descriptionOf(args: unknown): string | undefined {
 /**
  * Quante volte si riprova, oltre al primo tentativo.
  *
- * Due, come `MAX_TRANSPORT_RETRIES`, e per la stessa ragione: tre tentativi
- * coprono il guasto transitorio vero (un 429 che passa, una connessione che
- * cade una volta) senza trasformare un servizio giu' in un turno che non
- * finisce piu'. Un tetto piu' alto sposta il costo su chi aspetta.
+ * Two retries, independently bounded from the provider-call budget: a tool's
+ * own effects and idempotency contract decide whether repeating it is safe.
+ * Provider-call retry policy must never silently change tool executions.
  */
 const MAX_TOOL_RETRIES = 2;
 

@@ -8,7 +8,7 @@ import { ProviderStreamError, type ChatResult, type StreamEvent } from '../provi
  * limit trips again on the same tick.
  */
 export function retryDelayMs(attempt: number): number {
-  const ceiling = Math.min(8_000, 500 * 2 ** (attempt - 1));
+  const ceiling = Math.min(120_000, 500 * 2 ** (attempt - 1));
   return Math.floor(Math.random() * ceiling);
 }
 
