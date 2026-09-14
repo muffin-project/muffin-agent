@@ -318,25 +318,17 @@ describe("the owner's own chat is untouched by the split", () => {
     }
   });
 
-  it('does not grant owner context to a stranger in the owner chat', async () => {
-    // This starts where production starts. Calling parseUpdate/principalFor by
-    // hand proved their logic but did not prove that drain() uses that result
-    // for the real loop. Regressing from message.from.id to message.chat.id
-    // must make this test expose the owner prompt and host-only tools.
+  it('silently drops a stranger DM before the model, even when the chat id matches the owner', async () => {
+    // This starts where production starts. A principal with member authority
+    // is not enough for this single-owner bot: an unknown private sender must
+    // not get even a member-scoped reply.
     const h = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER });
     try {
       await deliver(h, [privateMsg(1, STRANGER)]);
-      expect(h.seen).toHaveLength(1);
-
-      const block = h.seen[0]!.system[0]!;
-      expect(block.type === 'text' && block.text).toBe(h.prompts.group);
-      expect(block.type === 'text' && block.text).not.toBe(h.prompts.owner);
-
-      const names = (h.seen[0]!.tools ?? []).map((t) => t.name);
-      expect(names).toContain('memory_search');
-      expect(names).not.toContain('fs_read');
-      expect(names).not.toContain('fs_write');
-      expect(names).not.toContain('process_kill');
+      expect(h.seen).toHaveLength(0);
+      const inbox = (h.connector as unknown as { deps: { inbox: UpdateInbox } }).deps.inbox;
+      expect(inbox.pending()).toHaveLength(0);
+      expect(inbox.get(1)?.payload).toBe('{}');
     } finally {
       h.runtime.close();
     }

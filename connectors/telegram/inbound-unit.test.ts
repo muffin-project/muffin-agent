@@ -90,6 +90,18 @@ const privateMsg = (id: number, text = 'ciao'): Update =>
     },
   }) as unknown as Update;
 
+const privateMsgFrom = (id: number, senderId: number, text = 'ciao'): Update =>
+  ({
+    update_id: id,
+    message: {
+      message_id: id * 10,
+      date: 0,
+      chat: { id: senderId, type: 'private' },
+      from: { id: senderId, is_bot: false, first_name: 'x' },
+      text,
+    },
+  }) as unknown as Update;
+
 function fixture(script: ChatResult[] = []) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-inbound-unit-'));
   const db = new DatabaseCtor(':memory:');
@@ -170,6 +182,48 @@ describe('resolve — a fresh update binds and runs exactly one turn', () => {
     expect((h.db.prepare(`SELECT count(*) AS n FROM turns`).get() as { n: number }).n).toBe(1);
     expect(h.turns.get(row.turnId!)?.delivery).toBe('sent');
     expect(h.inbox.pending()).toHaveLength(0);
+  });
+});
+
+describe('resolve — a private Telegram chat is owner-only', () => {
+  it.each(['ciao', '/pause'])('silently consumes a non-owner DM (%s) before memory, commands, or the model', async (text) => {
+    const h = fixture([answer('questa risposta non deve partire')]);
+    const { stored, incoming } = acceptOne(h, privateMsgFrom(2, OWNER + 1, text));
+    const remember = vi.spyOn(
+      h.connector as unknown as {
+        ricordaSenzaRispondere: (incoming: Incoming, log: (line: string) => void) => void;
+      },
+      'ricordaSenzaRispondere',
+    );
+
+    await resolveOnce(h, stored, incoming);
+
+    expect(h.provider.calls).toBe(0);
+    expect(remember).not.toHaveBeenCalled();
+    expect(h.sent).toEqual([]);
+    expect(h.sendMessage).not.toHaveBeenCalled();
+    expect(h.editMessageText).not.toHaveBeenCalled();
+    expect(h.sendMessageDraft).not.toHaveBeenCalled();
+    expect((h.db.prepare(`SELECT count(*) AS n FROM turns`).get() as { n: number }).n).toBe(0);
+    expect(h.inbox.get(2)?.turnId).toBeNull();
+    expect(h.inbox.pending()).toHaveLength(0);
+    expect(h.inbox.get(2)?.payload).toBe('{}');
+  });
+
+  it('does not recover or redeliver a non-owner DM already bound by an older run', async () => {
+    const h = fixture([answer('una vecchia risposta non va ripresa')]);
+    const { incoming } = acceptOne(h, privateMsgFrom(3, OWNER + 1));
+    h.inbox.bind(3, 'turn-from-permissive-run');
+    const stored = h.inbox.get(3);
+    if (!stored) throw new Error('update di test non presente nell’inbox');
+
+    await resolveOnce(h, stored, incoming);
+
+    expect(h.provider.calls).toBe(0);
+    expect(h.sent).toEqual([]);
+    expect(h.sendMessage).not.toHaveBeenCalled();
+    expect(h.inbox.pending()).toHaveLength(0);
+    expect(h.inbox.get(3)?.payload).toBe('{}');
   });
 });
 
