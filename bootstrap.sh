@@ -14,7 +14,7 @@
 # reads, stores or forwards a secret itself.
 set -eu
 
-INSTALL_URL=${MUFFIN_INSTALL_URL:-https://raw.githubusercontent.com/GiustoPiedimonte/muffin-agent/main/install.sh}
+INSTALL_URL=${MUFFIN_INSTALL_URL:-https://raw.githubusercontent.com/muffin-project/muffin-agent/main/install.sh}
 TMP_ROOT=${TMPDIR:-/tmp}
 TMP=$(mktemp -d "$TMP_ROOT/muffin-bootstrap.XXXXXX")
 INSTALLER="$TMP/install.sh"
