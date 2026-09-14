@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "bin": {
     "muffin": "./dist/cli/main.js"
   },
@@ -30,6 +30,7 @@
     "lint:all": "biome check .",
     "format": "biome format --write --changed",
     "igiene": "node scripts/igiene.mjs",
+    "licenses": "node scripts/check-dep-licenses.mjs",
     "merge": "tsx scripts/merge.ts"
   },
   "devDependencies": {
