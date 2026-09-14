@@ -56,7 +56,8 @@ singolo edit sembra FAST. Gate unico di uscita: §6.
 
 - [ ] Assorbire PR mergiabili (§2.1) in `dev` via `npm run merge -- <pr>` (unica porta;
       `gh pr merge` a mano è bloccato dall'hook; host quieto o `DISCARDED`→rerun).
-- [ ] Promozione `dev`→`main` con review integrata del boundary (BRANCHING.md §4):
+- [ ] Promozione `dev`→`main` con review integrata del boundary (BRANCHING.md,
+  sezione "Slice -> `dev`" e seguenti):
       suite/journey sul boundary + review della composizione (oggi `main` è 63
       commit indietro a `dev`: chi installa da `main` installerebbe runtime vecchio).
 - [ ] Clean-clone gate: da clone pulito, `bootstrap.sh`/`install.sh` da URL org,
@@ -76,8 +77,8 @@ singolo edit sembra FAST. Gate unico di uscita: §6.
       accessi espliciti.
 - [ ] Potatura branch remoti (~17): `park/`, `wip/handoff-*`, `integrazione-locale`,
       `codex/*` chiusi → delete dopo il cutover. `slice/*` vive solo se con PR aperta.
-- [ ] Worktree: assorbire/chiudere `.worktrees/telegram-*` e
-      `/home/user/dev/muffin-memory-authorship` (ahead 1 → dentro #530 o ramo
+- [ ] Worktree: assorbire/chiudere `.worktrees/telegram-*` e il worktree esterno
+      `muffin-memory-authorship` (ahead 1 → dentro #530 o ramo
       pushato e PR). Al gate: nessun lavoro solo-locale. Mai stash come deposito
       (BRANCHING.md: pila condivisa tra worktree).
 
@@ -170,7 +171,7 @@ il 25 salvo gate rotto.
   metodo (PRESERVE, non implementare); #482 audit storico (owner ChatGPT, non delegare).
 - **Runtime debts (schedulare contro failure osservati):** #533 gateway autorevole
   (architettura, CRITICAL quando schedulata — research pass obbligatoria per
-  RESEARCH.md §1) · #496 retry ownership · #497 governor · #498 reasoning ·
+  RESEARCH.md, sezione "When this pass is mandatory") · #496 retry ownership · #497 governor · #498 reasoning ·
   #499+#377 spend/pricing · #371 SendLock · #372 registry · #374 taint-window
   (stringere o accettare in ADR-0060+SECURITY) · #375 steer-append · #373 anno.
 - **Placement ROADMAP invariato** salvo evidence nuova dal dogfood.
@@ -213,5 +214,6 @@ il 25 salvo gate rotto.
 | ZDR / DAY-1 / dogfood / #518 | track separato, §0 |
 
 Profili di verifica per ORCHESTRATION.md; branching per BRANCHING.md
-(`slice/<claim>` → `npm run merge` → `dev` → promozione `main`); si aggiorna solo
+(`slice/<claim>` → `npm run merge` → `dev` → promozione `main`, vedi
+BRANCHING.md "Slice rules" e la sezione sugli integration checkpoint); si aggiorna solo
 la home autorevole resa stolta dal cambio (niente "consistency pass" globali).

@@ -10,7 +10,8 @@ verdict; it does not replace the remaining manual steps (§Residual).
   `gitleaks detect --source .` on the full clone.
 - Range: **1124 commits**, ~72.6 MB scanned.
 - Complement: `git ls-files` for tracked `*.db`/dumps/`*.pem`/`id_rsa`/`*.key`/
-  backups; `git grep /home/user` over HEAD for owner machine paths.
+  backups; `git grep` over HEAD for the owner home path and other machine
+  specifics.
 
 ## Verdict: no real secret in HEAD or history (default ruleset)
 
@@ -30,7 +31,7 @@ verdict; it does not replace the remaining manual steps (§Residual).
 Rule breakdown: 97 `generic-api-key`, 2 `curl-auth-header`, 1 `github-pat` —
 all rows above. Tracked-file check: no `.db`, dump, pem, key or backup files
 (excluding the `cli/backup.*` *source* files, matched by name only). No
-`/home/user` path in any tracked file at HEAD.
+owner home path in any tracked file at HEAD.
 
 ## Residual (not covered by a scanner, still required before the flip)
 
