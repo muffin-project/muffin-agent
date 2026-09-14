@@ -1729,6 +1729,16 @@ export class TelegramConnector {
     }
   }
 
+  /** Silently discard an unauthorised DM without retaining its message body. */
+  private discardNonOwnerDM(updateId: number, log: (line: string) => void): void {
+    try {
+      this.deps.inbox.discard(updateId, this.now());
+    } catch (error) {
+      if (!this.stopping) throw error;
+      log(`telegram: DM non-owner non eliminato dall'inbox durante lo spegnimento — resta da elaborare al prossimo avvio`);
+    }
+  }
+
   /**
    * The one place this connector enters the shared ingress path.
    *
@@ -1756,6 +1766,15 @@ export class TelegramConnector {
     const ganci = this.ganci(stored, incoming);
     const riga: StoredIngressEvent = { eventId: String(stored.updateId), settledAt: stored.settledAt };
 
+    // Recovery normally re-enters after the gate because the identity was
+    // committed before the first model call. Re-check authorization before
+    // recovery so an update bound by an older permissive release cannot resume
+    // a model call or delivery under the new owner-only rule.
+    if (stored.turnId !== null && incoming.isPrivate && principalFor(incoming, this.deps.config.ownerUserId).principal.kind !== 'owner') {
+      this.discardNonOwnerDM(stored.updateId, log);
+      return;
+    }
+
     let esito =
       stored.turnId !== null
         ? await recover(this.port, riga, stored.turnId, evento, ganci)
@@ -1780,7 +1799,13 @@ export class TelegramConnector {
     // Il gate di gruppo (ADR-0063). Marcato elaborato, non lasciato pendente:
     // un update che non apre un turno non lo aprirà mai, e una coda che non si
     // svuota nasconde quelli che contano.
-    if (esito.kind === 'ignored') this.markProcessedQuietly(stored.updateId, log);
+    if (esito.kind === 'ignored') {
+      if (incoming.isPrivate && principalFor(incoming, this.deps.config.ownerUserId).principal.kind !== 'owner') {
+        this.discardNonOwnerDM(stored.updateId, log);
+      } else {
+        this.markProcessedQuietly(stored.updateId, log);
+      }
+    }
     // `queued` (in pausa) non scrive niente e non fa settle, ed è esattamente
     // ciò che lo fa ri-drenare al `/resume`. Ogni altro esito ha già scritto
     // quello che doveva, dentro il router.
@@ -1843,7 +1868,8 @@ export class TelegramConnector {
       // delivers (`/x@nomebot`, `reply_to_message.from.id`, an `@username`
       // mention, and ADR-0063 on privacy mode), and Discord has no branch that
       // could reach the non-private side of it.
-      opensATurn: () =>
+      opensATurn: (ctx) =>
+        (!incoming.isPrivate || ctx.identity.principal.kind === 'owner') &&
         apreUnTurno({
           isPrivate: incoming.isPrivate,
           testo: 'text' in incoming ? incoming.text : undefined,
@@ -1855,7 +1881,7 @@ export class TelegramConnector {
       // messaggio che non apre un turno non deve sparire, o «@Muffin cosa
       // avevamo deciso?» arriva a una memoria che non ha mai visto la
       // conversazione.
-      remember: () => this.ricordaSenzaRispondere(incoming, log),
+      ...(incoming.isPrivate ? {} : { remember: () => this.ricordaSenzaRispondere(incoming, log) }),
       command: () => this.tryCommand(incoming),
       laneState: () => ({
         inPausa: this.deps.pausa?.attiva() === true,

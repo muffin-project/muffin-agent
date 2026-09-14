@@ -70,6 +70,13 @@ The first deployment is single-owner, but principal, tenant and surface remain
 explicit dimensions so accumulated data is not retrofitted from an implicit
 `host == owner == everyone` model later.
 
+For Telegram private chats, the authenticated sender must resolve to that owner
+before Muffin may open a turn. An unknown or unpaired sender is silently
+discarded before commands, the model or memory; `chat.type === 'private'` alone
+does not grant access. Group membership remains a separate tenant and follows
+the group gate in ADR-0063. The decision and peer comparison are in ADR-0077 and
+`docs/evidence/telegram-dm-owner-boundary-2026-09-14.md`.
+
 A Node identity is another orthogonal identity. "This is the paired MacBook" is
 not the same claim as "the owner authorised every capability on this MacBook".
 
