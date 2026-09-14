@@ -86,26 +86,45 @@ describe('acceptance · telegram · nessuno è owner finché non lo dimostra', (
         const salvato = await inst.muffin(['config', '--json']);
         expect(salvato.out).not.toContain(code);
 
-        // --- (b) uno sconosciuto scrive per primo.
+        // --- (b) uno sconosciuto scrive per primo: non deve ricevere una
+        //     risposta né diventare owner, anche durante il pairing.
         const gateway = await inst.gateway();
         await gateway.waitFor(/muffin gateway/, 20_000);
         tg.deliver(privateMessage({ id: 777, name: 'Sconosciuto' }, 'ciao, chi sei?'));
 
-        await until(() => tg.messages().length >= 1, 30_000);
-        const primo = tg.messages()[0];
-        if (!primo) throw new Error('nessuna risposta allo sconosciuto');
-        expect(primo.chatId).toBe(777);
+        const updateEsaurito = (id: number): boolean =>
+          inst.db((db) => {
+            const row = db
+              .prepare(`SELECT payload, processed_at FROM telegram_updates WHERE update_id = ?`)
+              .get(id) as { payload: string; processed_at: string | null } | undefined;
+            return row?.processed_at !== null && row?.processed_at !== undefined;
+          });
+        await until(() => updateEsaurito(1), 30_000);
+        expect(tg.messages()).toEqual([]);
+        expect(
+          inst.db((db) =>
+            (db.prepare(`SELECT payload FROM telegram_updates WHERE update_id = 1`).get() as
+              | { payload: string }
+              | undefined)?.payload,
+          ),
+        ).toBe('{}');
 
         // La riga che conta: dopo il messaggio dello sconosciuto, la
         // configurazione non ha un owner. Nessun messaggio conferisce autorità.
         expect(ownerDalFile(inst.home)).toBeUndefined();
 
-        // --- (b2) un codice SBAGLIATO. Se questo bastasse, il pairing non
-        //     sarebbe un confine di autorità ma una formalità: chiunque
-        //     potrebbe tentare finché non indovina, e la garanzia dichiarata
-        //     («cinque tentativi e brucia») sarebbe vuota.
+        // --- (b2) un codice SBAGLIATO. Non deve rispondere né associare
+        //     l'account: il pairing non è una conversazione aperta.
         tg.deliver(privateMessage({ id: 888, name: 'Impostore' }, 'AAAA-BBBB'));
-        await until(() => tg.messages().length >= 2, 30_000);
+        await until(() => updateEsaurito(2), 30_000);
+        expect(tg.messages()).toEqual([]);
+        expect(
+          inst.db((db) =>
+            (db.prepare(`SELECT payload FROM telegram_updates WHERE update_id = 2`).get() as
+              | { payload: string }
+              | undefined)?.payload,
+          ),
+        ).toBe('{}');
         expect(ownerDalFile(inst.home)).toBeUndefined();
 
         // --- (c) ora il codice giusto, dall'account che diventerà owner.

@@ -19,9 +19,12 @@ sconosciuti, anonimi o non appaiati vengono scartati senza risposta, comandi,
 modello, strumenti, sessione o scrittura in memoria. Dopo la decisione, il
 payload grezzo del DM scartato viene rimosso dalla riga attiva dell’inbox.
 
-La fase di pairing resta prima del gate: un codice pendente valido può ancora
-legare l’owner. Il pairing non autorizza altri mittenti. La regola dei gruppi
-di ADR-0063 resta invariata: tenant separati e gate su comando, menzione o reply.
+Prima del primo pairing, l’unica risposta privata ammessa è la conferma dopo
+che un account presenta il codice segreto valido. Codici errati o scaduti
+consumano e registrano il tentativo, ma non ricevono risposta; i normali DM
+restano silenziosi. Il pairing non autorizza altri mittenti. La regola dei
+gruppi di ADR-0063 resta invariata: tenant separati e gate su comando,
+menzione o reply.
 
 ## Alternative considerate
 

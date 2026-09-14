@@ -58,6 +58,8 @@ export type PairingActions<TId> = {
   /** Persist an attempt's outcome — `next` is `checkPairing`'s own next state, `null` once burned. */
   readonly onAttempt: (next: PendingPairing | null) => void;
   readonly say: (text: string) => Promise<unknown> | void;
+  /** Optional separate failure channel; omitted to preserve the connector's normal `say` behavior. */
+  readonly sayOnFailure?: (text: string) => Promise<unknown> | void;
 };
 
 /** Only a candidate matching this shape burns an attempt — a stranger saying "ciao" must not spend the owner's tries. */
@@ -99,7 +101,8 @@ export async function tryPair<TId>(
   if (!LOOKS_LIKE_A_CODE.test(candidate.text.trim())) return false;
 
   actions.onAttempt(next);
-  if (outcome.status === 'wrong') await actions.say(`Non è quello. Tentativi rimasti: ${outcome.remaining}.`);
-  else await actions.say('Quel codice non vale più. Rigenerane uno dalla CLI.');
+  const sayOnFailure = actions.sayOnFailure ?? actions.say;
+  if (outcome.status === 'wrong') await sayOnFailure(`Non è quello. Tentativi rimasti: ${outcome.remaining}.`);
+  else await sayOnFailure('Quel codice non vale più. Rigenerane uno dalla CLI.');
   return true;
 }
