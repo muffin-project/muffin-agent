@@ -17,8 +17,12 @@ it is not a claim of stability, compatibility or production readiness.
 The code in this repository is licensed under the **GNU Affero General Public
 License v3 or later** (`LICENSE`, SPDX `AGPL-3.0-or-later`; rationale in
 `docs/decisions/0078-licenza-agpl.md`). By contributing you agree your
-contributions enter under the same license. The `Muffin` name and logo are
-**not** covered by that grant — see `TRADEMARK.md`.
+contributions enter under the same license. Before submitting a PR, read and
+accept `CONTRIBUTOR_AGREEMENT.md`, then sign off every commit with
+`git commit -s`. The agreement contains the standard DCO 1.1 plus the narrow
+owner-approved grant that permits a future move to another OSI-approved license.
+The `Muffin` name and logo are **not** covered by that grant — see
+`TRADEMARK.md`.
 
 ## Start here
 
