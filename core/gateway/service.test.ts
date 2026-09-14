@@ -190,8 +190,11 @@ describe('a drain does not lose work', () => {
   it('SIGTERM stops new work, waits for what is in flight, then closes', async () => {
     let release!: () => void;
     const inFlight = new Promise<void>((r) => (release = r));
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => (markStarted = resolve));
     const h = harness({
       runJob: async () => {
+        markStarted();
         await inFlight;
         return { stopped: 'answered', text: 'fatto', turnId: 'turn-test' };
       },
@@ -200,6 +203,10 @@ describe('a drain does not lose work', () => {
 
     const served = h.gateway.serve();
     await vi.waitFor(() => expect(h.gateway.scheduler.isRunning()).toBe(true));
+    // `isRunning()` can become true before the scheduler has entered runJob.
+    // Drain only after the controlled job is actually in flight, so this test
+    // proves the wait rather than racing the scheduler's first microtask.
+    await started;
 
     h.signals.emit('SIGTERM');
     // The drain is a wait, not a kill: while the turn is in flight the gateway
