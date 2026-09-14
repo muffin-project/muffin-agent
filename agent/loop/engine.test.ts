@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import DatabaseCtor from 'better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDecide } from '../../core/policy/decide.js';
 import { POLICY_FLOOR } from '../../core/policy/matrix.js';
 import type { Principal } from '../../core/policy/types.js';
@@ -19,6 +19,8 @@ import {
   type Provider,
   ProviderError,
 } from '../providers/types.js';
+
+afterEach(() => vi.restoreAllMocks());
 
 /**
  * Slice 9 (Fase A, §3) moves the last of `guidaIlTurno` — the deterministic
@@ -139,6 +141,7 @@ describe('il pre-loop decide prima che il modello generi', () => {
 
 describe('il catch esterno: un turno che lancia chiude comunque la sua riga', () => {
   it('il provider esaurisce i ritentativi, restituisce un errore sicuro e chiude la riga', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
     const w = world([new ProviderError('502 dal provider', true, 502, 'transport')]);
     const session = w.sessions.open('rethrow');
     const result = await runTurn(w.deps, {
