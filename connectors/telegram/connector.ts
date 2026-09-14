@@ -1729,13 +1729,13 @@ export class TelegramConnector {
     }
   }
 
-  /** Silently discard an unauthorised DM without retaining its message body. */
-  private discardNonOwnerDM(updateId: number, log: (line: string) => void): void {
+  /** Consume a private update without retaining its message body. */
+  private discardPrivateDM(updateId: number, log: (line: string) => void): void {
     try {
       this.deps.inbox.discard(updateId, this.now());
     } catch (error) {
       if (!this.stopping) throw error;
-      log(`telegram: DM non-owner non eliminato dall'inbox durante lo spegnimento — resta da elaborare al prossimo avvio`);
+      log(`telegram: DM privato non eliminato dall'inbox durante lo spegnimento — resta da elaborare al prossimo avvio`);
     }
   }
 
@@ -1771,7 +1771,7 @@ export class TelegramConnector {
     // recovery so an update bound by an older permissive release cannot resume
     // a model call or delivery under the new owner-only rule.
     if (stored.turnId !== null && incoming.isPrivate && principalFor(incoming, this.deps.config.ownerUserId).principal.kind !== 'owner') {
-      this.discardNonOwnerDM(stored.updateId, log);
+      this.discardPrivateDM(stored.updateId, log);
       return;
     }
 
@@ -1793,7 +1793,11 @@ export class TelegramConnector {
     // passare da tutta la macchina di ripresa e consegna costruita per una
     // risposta che non arriverà.
     if (esito.kind === 'paired' || esito.kind === 'commanded') {
-      this.deps.inbox.markProcessed(stored.updateId, this.now());
+      if (esito.kind === 'paired' && incoming.isPrivate) {
+        this.discardPrivateDM(stored.updateId, log);
+      } else {
+        this.deps.inbox.markProcessed(stored.updateId, this.now());
+      }
       return;
     }
     // Il gate di gruppo (ADR-0063). Marcato elaborato, non lasciato pendente:
@@ -1801,7 +1805,7 @@ export class TelegramConnector {
     // svuota nasconde quelli che contano.
     if (esito.kind === 'ignored') {
       if (incoming.isPrivate && principalFor(incoming, this.deps.config.ownerUserId).principal.kind !== 'owner') {
-        this.discardNonOwnerDM(stored.updateId, log);
+        this.discardPrivateDM(stored.updateId, log);
       } else {
         this.markProcessedQuietly(stored.updateId, log);
       }
@@ -2081,9 +2085,8 @@ export class TelegramConnector {
    * so the drain loop stops rather than handing a code to the model.
    *
    * A code arrives as an ordinary private message, so this must not answer with
-   * a turn: an unpaired stranger typing anything gets the normal member path,
-   * but the one who types the right eight characters becomes the owner and
-   * nothing else does.
+   * a turn: an unpaired stranger stays silent, while the one who types the
+   * right secret becomes the owner and receives the pairing confirmation.
    *
    * Slice 12: the algorithm itself — the guard clauses, the branch on
    * `checkPairing`'s outcome, the three sentences — now lives once in
@@ -2118,6 +2121,10 @@ export class TelegramConnector {
           this.deps.config.pairing = next ?? undefined;
         },
         say: (text) => this.deps.api.sendMessage(incoming.chatId, text),
+        // A wrong or expired code must not turn the personal bot into a reply
+        // surface for strangers. The valid one-time secret still confirms
+        // pairing to the account that proved it.
+        sayOnFailure: () => {},
       },
       new Date(this.now()),
     );
