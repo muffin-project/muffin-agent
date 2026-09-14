@@ -138,9 +138,9 @@ describe('l imbuto: il drain sta su drive(), non su finish()', () => {
     // salvata esattamente una volta e non deve esporre il testo del provider.
     const coda: string[] = [];
     const w = world([new ProviderError('502 dal provider', true, 502, 'transport')], (n) => {
-      // Il terzo tentativo è l'ultimo (`MAX_TRANSPORT_RETRIES` = 2): nessun
+      // L'undicesimo tentativo è l'ultimo (`MAX_TRANSPORT_RETRIES` = 10): nessun
       // giro successivo la drena, quindi al `throw` è ancora nella porta.
-      if (n === 3) coda.push(CORREZIONE);
+      if (n === 11) coda.push(CORREZIONE);
     });
     const session = w.sessions.open('ramo-throw');
 

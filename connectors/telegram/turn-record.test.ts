@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Update } from '@grammyjs/types';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LoopDeps } from '../../agent/loop.js';
 import { type ChatResult, type Provider, ProviderError } from '../../agent/providers/types.js';
 import { buildRuntime } from '../../agent/runtime.js';
@@ -50,6 +50,8 @@ const reply = (text: string): ChatResult => ({
 });
 
 const config: TelegramConfig = { token: 't', ownerUserId: OWNER, ownerChatId: OWNER };
+
+afterEach(() => vi.restoreAllMocks());
 
 function harness(
   over: {
@@ -169,6 +171,7 @@ describe('a telegram turn records where the answer goes and whether it got there
   });
 
   it('delivers a bounded terminal reply after provider retries fail', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
     let calls = 0;
     const provider: Provider = {
       kind: 'openai-compat',
@@ -182,7 +185,7 @@ describe('a telegram turn records where the answer goes and whether it got there
     await deliver(h, [privateMsg(9)]);
 
     const row = h.row();
-    expect(calls).toBe(3);
+    expect(calls).toBe(11);
     expect(h.outbound).toHaveLength(1);
     expect(h.outbound[0]).toMatch(/connessione|provider/i);
     expect(h.outbound[0]).toContain('502');
@@ -194,6 +197,7 @@ describe('a telegram turn records where the answer goes and whether it got there
   });
 
   it('recovers a failed provider-error reply without another model call', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
     let calls = 0;
     let sends = 0;
     const attempts: string[] = [];
@@ -221,7 +225,7 @@ describe('a telegram turn records where the answer goes and whether it got there
 
     await (h.connector as unknown as { drain: () => Promise<void> }).drain();
 
-    expect(calls).toBe(3);
+    expect(calls).toBe(11);
     expect(attempts).toHaveLength(2);
     expect(attempts[1]).toBe(attempts[0]);
     expect(attempts[0]).not.toContain('connection details stay private');

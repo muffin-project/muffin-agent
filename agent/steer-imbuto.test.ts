@@ -147,11 +147,10 @@ describe('l imbuto: una uscita sola per le correzioni', () => {
     // Il ProviderError terminale chiude la riga con `error` e resta un errore
     // utente leggibile senza perdere il contenuto di `/steer`.
     const coda: string[] = [];
-    // Scritta durante il **terzo** tentativo, che è l'ultimo: nessun giro
-    // successivo la drena (`MAX_TRANSPORT_RETRIES` = 2, quindi tre chiamate e
-    // poi il rilancio), quindi al `throw` è ancora nella porta del connettore.
+    // Scritta durante l'ultimo retry: nessun giro successivo la drena, quindi
+    // al risultato terminale è ancora nella porta del connettore.
     const w = world([new ProviderError('502 dal provider', true, 502, 'transport')], (n) => {
-      if (n === 3) coda.push(CORREZIONE);
+      if (n === 11) coda.push(CORREZIONE);
     });
     const session = w.sessions.open('rethrow');
 
