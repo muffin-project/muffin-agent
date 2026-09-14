@@ -138,6 +138,13 @@ jobs:
       # risolve le versioni da sé verifica un albero che nessuno ha in locale.
       - run: npm ci
 
+      # ADR-0078: ADR-0019 prometteva questo controllo ma non è mai esistito —
+      # nessuna CI lo implementava. Ora è reale ed entra nel merge gate via
+      # ci:local: proprietario/UNLICENSED/mancante fallisce, il copyleft è
+      # segnalato nel log (usabile inbound sotto AGPL, ma da sapere).
+      - name: licenze delle dipendenze
+        run: node scripts/check-dep-licenses.mjs
+
       - name: typecheck
         run: npx tsc --noEmit
 
