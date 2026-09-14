@@ -40,15 +40,23 @@ export function commitsBetween(base: string, head: string, cwd = process.cwd()):
       encoding: 'utf8',
     },
   );
-  return output
-    .split(RECORD)
-    .filter(Boolean)
-    .map((record) => {
-      const [sha, authorName, authorEmail, ...body] = record.split(FIELD);
-      if (!sha || !authorName || !authorEmail)
-        throw new Error(`could not parse commit in ${base}..${head}`);
-      return { sha, authorName, authorEmail, body: body.join(FIELD) };
-    });
+  return parseCommitLog(output, base, head);
+}
+
+export function parseCommitLog(output: string, base: string, head: string): Commit[] {
+  return (
+    output
+      .split(RECORD)
+      // Git leaves a newline after the final record separator. It is not a
+      // malformed commit; treating it as one would reject every real range.
+      .filter((record) => record.trim().length > 0)
+      .map((record) => {
+        const [sha, authorName, authorEmail, ...body] = record.split(FIELD);
+        if (!sha || !authorName || !authorEmail)
+          throw new Error(`could not parse commit in ${base}..${head}`);
+        return { sha, authorName, authorEmail, body: body.join(FIELD) };
+      })
+  );
 }
 
 export function checkDco(base: string, head: string, cwd = process.cwd()): string[] {
