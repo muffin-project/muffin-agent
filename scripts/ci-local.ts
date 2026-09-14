@@ -72,9 +72,9 @@
  * the container — like `actions/checkout`, uncommitted changes do not run.
  */
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { load as yamlLoad } from 'js-yaml';
-import { cpus, loadavg, tmpdir } from 'node:os';
+import { cpus, homedir, loadavg, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -370,6 +370,13 @@ export const CI_USER = 'ci-runner';
  * which a real GitHub runner ships preinstalled; `evals/acceptance/gate-linux.sh`
  * installs the same package for the identical reason (read there, not
  * copied).
+ *
+ * `/npm-cache` is the host's persistent npm cache, mounted per job (see
+ * NPM_CACHE_DIR): without it every one of the five jobs re-downloads the
+ * same ~143 packages from the registry. The cache is content-addressed, so a
+ * warm cache changes timing, never resolution — `npm ci` still verifies
+ * integrity against the lockfile. No `prefer-offline`: on a cache miss the
+ * behaviour must stay identical to a cold runner.
  */
 export function buildBootstrapScript(nodeVersion: string, opts: { runnerTemp: string }): string {
   return [
@@ -399,6 +406,11 @@ export function buildBootstrapScript(nodeVersion: string, opts: { runnerTemp: st
     `echo '${CI_USER} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/${CI_USER}`,
     `chmod 0440 /etc/sudoers.d/${CI_USER}`,
     `chown -R ${CI_USER}:${CI_USER} /app ${shSingleQuote(opts.runnerTemp)}`,
+    // The npm cache mount (see NPM_CACHE_DIR): a dedicated host directory,
+    // so chowning it to the in-container user is harmless — it holds nothing
+    // but content-addressed tarballs.
+    'mkdir -p /npm-cache',
+    `chown ${CI_USER}:${CI_USER} /npm-cache`,
     echoLine('=== bootstrap done — the workflow-derived steps run below, as a non-root user ==='),
     'echo "===BOOTSTRAP_OK==="',
   ].join('\n');
@@ -580,6 +592,13 @@ export function runContainer(opts: {
   bootstrapFile: string;
   jobScriptFile: string;
   timeoutMs: number | null;
+  /**
+   * Host directory mounted at `/npm-cache` with `npm_config_cache` pointing
+   * at it (see the `buildBootstrapScript` note). Dedicated to this runner —
+   * never the user's real `~/.npm`, so in-container chown cannot surprise
+   * anything outside these runs.
+   */
+  npmCacheDir: string;
 }): Promise<RunResult> {
   return new Promise((resolvePromise) => {
     // Bootstrap runs as root (it needs to be: creating a user, apt-get,
@@ -590,7 +609,7 @@ export function runContainer(opts: {
     // optional.
     const launcher =
       `set -e; . /bootstrap.sh; ` +
-      `exec runuser -u ${CI_USER} -- env HOME=/home/${CI_USER} PATH="$PATH" bash /job.sh`;
+      `exec runuser -u ${CI_USER} -- env HOME=/home/${CI_USER} PATH="$PATH" npm_config_cache=/npm-cache bash /job.sh`;
     const args = [
       'run',
       '--rm',
@@ -604,6 +623,8 @@ export function runContainer(opts: {
       `${opts.bootstrapFile}:/bootstrap.sh:ro`,
       '-v',
       `${opts.jobScriptFile}:/job.sh:ro`,
+      '-v',
+      `${opts.npmCacheDir}:/npm-cache`,
       opts.image,
       'bash',
       '-c',
@@ -648,6 +669,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..');
 const IMAGE = 'ubuntu:24.04';
 const RUNNER_TEMP = '/runner-temp';
+/** Host-side persistent npm cache shared by every job container (see above). */
+const NPM_CACHE_DIR = join(homedir(), '.cache', 'muffin-ci-local', 'npm');
 
 type JobVerdict =
   | { readonly kind: 'pass' }
@@ -699,6 +722,8 @@ async function main(): Promise<void> {
 
   const campioni: CampioneDiCarico[] = [campionaCarico('inizio')];
   console.log(`host load:    ${campioni[0]!.load1.toFixed(1)} on ${campioni[0]!.cpu} cpu, ${campioni[0]!.altriVitest} other vitest`);
+  mkdirSync(NPM_CACHE_DIR, { recursive: true });
+  console.log(`npm cache:    ${NPM_CACHE_DIR} (persistent across jobs, content-addressed only)`);
 
   const scratch = mkdtempSync(join(tmpdir(), 'muffin-ci-local-'));
   const keep = process.env['MUFFIN_CI_LOCAL_KEEP'] === '1';
@@ -785,6 +810,7 @@ async function main(): Promise<void> {
         bootstrapFile,
         jobScriptFile,
         timeoutMs,
+        npmCacheDir: NPM_CACHE_DIR,
       });
 
       if (result.timedOut) {
