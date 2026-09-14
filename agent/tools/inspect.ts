@@ -210,7 +210,7 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
         `cartella di lavoro: ${sources.workspace}`,
         // Il profilo non è cosmetico: decide quanti tool vede il modello e se
         // il reasoning viene chiesto spento (#167).
-        `profilo: ${profile.name} — max ${profile.maxToolsExposed} tool esposti, ${profile.maxToolCallsPerTurn} call/turno, thinking ${profile.thinking}`,
+        `profilo: ${profile.name} — max ${profile.maxToolsExposed} tool esposti, ${profile.maxToolCallsPerTurn === null ? 'nessun tetto numerico di tool call' : `${profile.maxToolCallsPerTurn} call/turno`}, thinking ${profile.thinking}`,
         `root of trust: ${sources.safeMode ? `SAFE MODE (${sources.safeMode.reason}: ${sources.safeMode.diverged.join(', ')}) — capability sopra 'low' negate` : `${sources.config.rot.mode}, integro`}`,
         '',
         `# Questo turno`,
