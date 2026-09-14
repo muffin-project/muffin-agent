@@ -759,7 +759,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // (E6, RETURN S3). Refused calls still get a tool_result: a hole in the
       // batch is a protocol error every provider rejects, and the model should
       // read why it was stopped instead of retrying blind.
-      if (run.toolCallsMade >= deps.profile.maxToolCallsPerTurn) {
+      if (deps.profile.maxToolCallsPerTurn !== null && run.toolCallsMade >= deps.profile.maxToolCallsPerTurn) {
         results.push({
           type: 'tool_result',
           toolCallId: call_.id,
