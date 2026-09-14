@@ -18,6 +18,7 @@ import { JsonlExporter, SimpleTracer } from '../../core/tracing/tracer.js';
 import type { AttributeValue, SpanHandle } from '../../core/tracing/types.js';
 import { TurnStore } from '../../core/turns/store.js';
 import { TodoStore } from '../../core/turns/todo.js';
+import { MAX_TRANSPORT_RETRIES } from './types.js';
 import { CONSERVATIVE, type Profile } from '../profiles/profile.js';
 import {
   type ChatCall,
@@ -92,7 +93,7 @@ function freshCounters() {
   return {
     iterations: 0,
     recoveriesUsed: 0,
-    transportRetriesLeft: 2,
+    transportRetriesLeft: MAX_TRANSPORT_RETRIES,
     toolCallsMade: 0,
     nudgedForCompletion: false,
     usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
@@ -403,7 +404,8 @@ describe('un solo fallback, mai un secondo tentativo in streaming', () => {
     expect(provider.streamCalls).toHaveLength(2);
     expect(provider.chatCalls).toHaveLength(0);
     expect(result.text).toBe('alla seconda');
-    expect(h.run.transportRetriesLeft).toBe(1);
+    expect(h.run.transportRetriesLeft).toBe(9);
+    expect(h.turns.get(h.id)?.counters.transportRetriesLeft).toBe(9);
     expect(result.iterations).toBe(2);
   });
 });

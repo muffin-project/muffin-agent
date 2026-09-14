@@ -16,9 +16,9 @@ async function* streamOf(events: StreamEvent[]): AsyncIterable<StreamEvent> {
 }
 
 describe('retryDelayMs', () => {
-  it('is 1-based and never exceeds the 8s ceiling, doubling the ceiling each attempt', () => {
-    for (let attempt = 1; attempt <= 6; attempt++) {
-      const ceiling = Math.min(8_000, 500 * 2 ** (attempt - 1));
+  it('is 1-based and doubles the ceiling to two minutes, then stays bounded', () => {
+    for (let attempt = 1; attempt <= 12; attempt++) {
+      const ceiling = Math.min(120_000, 500 * 2 ** (attempt - 1));
       for (let i = 0; i < 50; i++) {
         const delay = retryDelayMs(attempt);
         expect(delay).toBeGreaterThanOrEqual(0);
