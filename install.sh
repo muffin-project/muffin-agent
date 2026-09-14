@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # muffin installer — one command, from an empty machine to a supervised agent.
 #
-#   curl -fsSL https://raw.githubusercontent.com/GiustoPiedimonte/muffin-agent/main/bootstrap.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/muffin-project/muffin-agent/main/bootstrap.sh | sh
 #   bash install.sh          # from a clone or an unpacked tarball
 #
 # ## What this script owns, and why it grew
@@ -56,7 +56,7 @@
 set -eu
 
 MUFFIN_PREFIX=${MUFFIN_PREFIX:-$HOME/.local/share/muffin}
-MUFFIN_REPO=${MUFFIN_REPO:-https://github.com/GiustoPiedimonte/muffin-agent.git}
+MUFFIN_REPO=${MUFFIN_REPO:-https://github.com/muffin-project/muffin-agent.git}
 MUFFIN_CHANNEL=${MUFFIN_CHANNEL:-main}
 NODE_MAJOR_REQUIRED=22
 EXIT_GATEWAY_NOT_ACTIVE=3
