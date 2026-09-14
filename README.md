@@ -146,7 +146,7 @@ The detailed DAY-1 state moves too quickly to duplicate here.
 Node is not one: the installer brings its own if the machine has none.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/GiustoPiedimonte/muffin-agent/main/bootstrap.sh | sh
+curl -fsSL https://raw.githubusercontent.com/muffin-project/muffin-agent/main/bootstrap.sh | sh
 ```
 
 One command, from an empty box into first-run setup: the tiny bootstrap stages
