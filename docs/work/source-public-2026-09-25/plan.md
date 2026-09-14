@@ -39,7 +39,10 @@ singolo edit sembra FAST. Gate unico di uscita: §6.
       dual BSD/GPL, usabile inbound). Trovato misurando: ADR-0019 prometteva un
       check che non è mai esistito.
 - [x] `TRADEMARK.md` (notice) + first-use evidence (annuncio 14/09, flip 25/09).
-- [ ] Resta owner (pre-accettazione esterne post-25): DCO-minimale vs CLA-light.
+- [x] DCO + grant relicense OSI scelto owner il 14/09: ADR-0079,
+      `CONTRIBUTOR_AGREEMENT.md`, PR template e controllo nel merge gate per PR
+      esterne. I rami storici dell'owner sono esclusi; un nuovo maintainer con
+      write richiede una nuova decisione.
 - [ ] Resta: verifica rilevamento licenza GitHub dopo il push.
 
 ### 1.2 Audit storia + segreti (HEAD + history completa) — scanner FATTO il 14/09
