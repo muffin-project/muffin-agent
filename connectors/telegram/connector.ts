@@ -1729,6 +1729,16 @@ export class TelegramConnector {
     }
   }
 
+  /** Consume a private update without retaining its message body. */
+  private discardPrivateDM(updateId: number, log: (line: string) => void): void {
+    try {
+      this.deps.inbox.discard(updateId, this.now());
+    } catch (error) {
+      if (!this.stopping) throw error;
+      log(`telegram: DM privato non eliminato dall'inbox durante lo spegnimento — resta da elaborare al prossimo avvio`);
+    }
+  }
+
   /**
    * The one place this connector enters the shared ingress path.
    *
@@ -1756,6 +1766,15 @@ export class TelegramConnector {
     const ganci = this.ganci(stored, incoming);
     const riga: StoredIngressEvent = { eventId: String(stored.updateId), settledAt: stored.settledAt };
 
+    // Recovery normally re-enters after the gate because the identity was
+    // committed before the first model call. Re-check authorization before
+    // recovery so an update bound by an older permissive release cannot resume
+    // a model call or delivery under the new owner-only rule.
+    if (stored.turnId !== null && incoming.isPrivate && principalFor(incoming, this.deps.config.ownerUserId).principal.kind !== 'owner') {
+      this.discardPrivateDM(stored.updateId, log);
+      return;
+    }
+
     let esito =
       stored.turnId !== null
         ? await recover(this.port, riga, stored.turnId, evento, ganci)
@@ -1774,13 +1793,23 @@ export class TelegramConnector {
     // passare da tutta la macchina di ripresa e consegna costruita per una
     // risposta che non arriverà.
     if (esito.kind === 'paired' || esito.kind === 'commanded') {
-      this.deps.inbox.markProcessed(stored.updateId, this.now());
+      if (esito.kind === 'paired' && incoming.isPrivate) {
+        this.discardPrivateDM(stored.updateId, log);
+      } else {
+        this.deps.inbox.markProcessed(stored.updateId, this.now());
+      }
       return;
     }
     // Il gate di gruppo (ADR-0063). Marcato elaborato, non lasciato pendente:
     // un update che non apre un turno non lo aprirà mai, e una coda che non si
     // svuota nasconde quelli che contano.
-    if (esito.kind === 'ignored') this.markProcessedQuietly(stored.updateId, log);
+    if (esito.kind === 'ignored') {
+      if (incoming.isPrivate && principalFor(incoming, this.deps.config.ownerUserId).principal.kind !== 'owner') {
+        this.discardPrivateDM(stored.updateId, log);
+      } else {
+        this.markProcessedQuietly(stored.updateId, log);
+      }
+    }
     // `queued` (in pausa) non scrive niente e non fa settle, ed è esattamente
     // ciò che lo fa ri-drenare al `/resume`. Ogni altro esito ha già scritto
     // quello che doveva, dentro il router.
@@ -1843,7 +1872,8 @@ export class TelegramConnector {
       // delivers (`/x@nomebot`, `reply_to_message.from.id`, an `@username`
       // mention, and ADR-0063 on privacy mode), and Discord has no branch that
       // could reach the non-private side of it.
-      opensATurn: () =>
+      opensATurn: (ctx) =>
+        (!incoming.isPrivate || ctx.identity.principal.kind === 'owner') &&
         apreUnTurno({
           isPrivate: incoming.isPrivate,
           testo: 'text' in incoming ? incoming.text : undefined,
@@ -1855,7 +1885,7 @@ export class TelegramConnector {
       // messaggio che non apre un turno non deve sparire, o «@Muffin cosa
       // avevamo deciso?» arriva a una memoria che non ha mai visto la
       // conversazione.
-      remember: () => this.ricordaSenzaRispondere(incoming, log),
+      ...(incoming.isPrivate ? {} : { remember: () => this.ricordaSenzaRispondere(incoming, log) }),
       command: () => this.tryCommand(incoming),
       laneState: () => ({
         inPausa: this.deps.pausa?.attiva() === true,
@@ -2055,9 +2085,8 @@ export class TelegramConnector {
    * so the drain loop stops rather than handing a code to the model.
    *
    * A code arrives as an ordinary private message, so this must not answer with
-   * a turn: an unpaired stranger typing anything gets the normal member path,
-   * but the one who types the right eight characters becomes the owner and
-   * nothing else does.
+   * a turn: an unpaired stranger stays silent, while the one who types the
+   * right secret becomes the owner and receives the pairing confirmation.
    *
    * Slice 12: the algorithm itself — the guard clauses, the branch on
    * `checkPairing`'s outcome, the three sentences — now lives once in
@@ -2092,6 +2121,10 @@ export class TelegramConnector {
           this.deps.config.pairing = next ?? undefined;
         },
         say: (text) => this.deps.api.sendMessage(incoming.chatId, text),
+        // A wrong or expired code must not turn the personal bot into a reply
+        // surface for strangers. The valid one-time secret still confirms
+        // pairing to the account that proved it.
+        sayOnFailure: () => {},
       },
       new Date(this.now()),
     );

@@ -279,13 +279,11 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
       'model profile',
       `${profileProblems.join(' · ')} — ${config.models.main} caduto sul profilo conservativo: ` +
         `thinking ${resolvedProfile.thinking}, sampling ${resolvedProfile.sampling}, ` +
-        // Due numeri distinti, spesso uguali di valore (`consumer-local.json`:
-        // 15 e 15) e per questo confondibili se non nominati per ciò che sono:
+        // Due numeri distinti e per questo confondibili se non nominati per ciò che sono:
         // `maxToolsExposed` è quanti tool il modello *vede*, `maxToolCallsPerTurn`
-        // è quante *chiamate* fa in un turno. "orizzonte" qui accanto a "tool
-        // esposti" leggeva come un terzo numero indefinito — stessa etichetta
-        // di `sys_inspect` (agent/tools/inspect.ts), non una nuova.
-        `${resolvedProfile.maxToolsExposed} tool esposti, ${resolvedProfile.maxToolCallsPerTurn} call/turno, ` +
+        // è quante *chiamate* può fare; `null` lascia il conteggio libero e
+        // sono tempo e spesa a porre il limite.
+        `${resolvedProfile.maxToolsExposed} tool esposti, ${resolvedProfile.maxToolCallsPerTurn === null ? 'nessun tetto numerico di tool call' : `${resolvedProfile.maxToolCallsPerTurn} call/turno`}, ` +
         `stampelle [${resolvedProfile.recovery.join(', ')}]`,
       'ripara o rimuovi il profilo scartato sopra, sotto agent/profiles/',
     );

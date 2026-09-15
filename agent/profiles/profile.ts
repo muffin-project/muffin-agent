@@ -8,9 +8,9 @@ import { fileURLToPath } from 'node:url';
  *
  * The harness is built for the weakest model we intend to support, not for the
  * strongest one available — otherwise every capability quietly assumes a
- * frontier model and the local option becomes a label. What a weaker model
- * needs (fewer tools in front of it, a shorter horizon, retries, stricter
- * output) lives here as data, never as `if (model === ...)` in the loop.
+ * frontier model and the local option becomes a label. Each model's tool
+ * visibility, bounded or count-unbounded task horizon, retries and output
+ * constraints live here as data, never as `if (model === ...)` in the loop.
  *
  * That is what makes it scaffolding you can remove: when a model stops needing
  * the crutches, you delete a profile, not a code path. See
@@ -105,7 +105,8 @@ export type Profile = {
   /** Glob patterns on the model id. First match wins. */
   match: string[];
   maxToolsExposed: number;
-  maxToolCallsPerTurn: number;
+  /** `null` leaves call count unbounded; execution time and spend budgets still apply. */
+  maxToolCallsPerTurn: number | null;
   thinking: 'adaptive' | 'off' | 'unset';
   /**
    * `'deterministic'` sends `temperature: 0`; `'model-default'` sends no
@@ -167,7 +168,7 @@ const ProfileSchema = z.object({
   name: z.string().min(1),
   match: z.array(z.string().min(1)).min(1),
   maxToolsExposed: z.number().int().positive(),
-  maxToolCallsPerTurn: z.number().int().positive(),
+  maxToolCallsPerTurn: z.number().int().positive().nullable(),
   // No `'allowed'` alias. A third-party profile still saying it is dropped at
   // the boundary and named in `doctor`, which is the point: the word described
   // a budget that no longer exists, and keeping it working would keep it true.

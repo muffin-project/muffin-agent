@@ -2,13 +2,13 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { runInit } from './init.js';
-import { connectSurfaces } from './surface.js';
 import { buildRuntime } from '../agent/runtime.js';
 import { loadConfig, saveConfig, writeSecret } from '../core/config/config.js';
 import { sealOwnerBinding } from '../core/rot/owner.js';
 import { startFakeProvider } from '../evals/acceptance/provider.js';
 import { privateMessage, startFakeTelegram } from '../evals/acceptance/telegram.js';
+import { runInit } from './init.js';
+import { connectSurfaces } from './surface.js';
 
 /**
  * Il cablaggio di B15: chi decide l'owner è il sigillo, non `config.json`.
@@ -24,17 +24,15 @@ import { privateMessage, startFakeTelegram } from '../evals/acceptance/telegram.
  *
  * ## La discriminante
  *
- * `rot/owner.json` nomina A. `config.json` nomina B. `/pause` è un comando di
- * controllo che **solo l'owner** esegue (`tryCommand`,
- * `connectors/telegram/connector.ts`): per chiunque altro il testo prosegue
- * verso il modello come una frase qualunque, e nessuno gli dice che quel
- * comando esiste. Quindi:
+ * `rot/owner.json` nomina A. `config.json` nomina B. Un DM di B non è
+ * autorizzato dalla configurazione legacy: il gate owner-only lo scarta prima
+ * di comandi e modello. Un DM di A resta abilitato, incluso `/pause`.
  *
- *  - se il sigillo vince, A riceve la conferma della pausa e B la risposta del
- *    modello finto;
+ *  - se il sigillo vince, A riceve la conferma della pausa e B non riceve
+ *    alcuna risposta né raggiunge il modello;
  *  - se `config.json` vincesse — cioè se qualcuno togliesse la lettura
- *    sigillata da `connectSurfaces` — le due risposte si scambiano, e questo
- *    test diventa rosso.
+ *    sigillata da `connectSurfaces` — B riceverebbe una risposta, e questo
+ *    test diventerebbe rosso.
  *
  * Non un'asserzione su una riga di log: un'asserzione su **cosa il connettore
  * ha lasciato fare a chi**.
@@ -86,7 +84,7 @@ function casa(botUrl: string, providerUrl: string): string {
 
 describe('owner binding · il sigillo decide chi è owner, non config.json', () => {
   it(
-    "l'account sigillato comanda; quello nominato solo da config.json è uno sconosciuto",
+    'the sealed account can use Telegram; a config-only DM is ignored',
     async () => {
       const provider = await startFakeProvider({ main: [{ text: 'risposta a uno sconosciuto' }] });
       const bot = await startFakeTelegram();
@@ -94,19 +92,16 @@ describe('owner binding · il sigillo decide chi è owner, non config.json', () 
       const runtime = buildRuntime(home, home);
       const superfici = connectSurfaces(runtime, home, () => {}, undefined, () => {});
       try {
-        // B, che `config.json` chiama owner, prova un comando di controllo.
+        // B, che solo `config.json` chiama owner, prova un comando di controllo.
         bot.deliver(privateMessage({ id: B_IN_CONFIG, name: 'Legacy' }, '/pause'));
-        await finche(() => bot.messages().some((m) => m.chatId === B_IN_CONFIG));
 
         // A, che il sigillo chiama owner, prova lo stesso comando.
         bot.deliver(privateMessage({ id: A_SIGILLATO, name: 'Sigillato' }, '/pause'));
         await finche(() => bot.messages().some((m) => m.chatId === A_SIGILLATO && /in pausa/.test(m.text)));
 
         const aB = bot.messages().filter((m) => m.chatId === B_IN_CONFIG);
-        // Nessuna conferma di pausa per B: il comando non è stato eseguito, e
-        // non gli è stato nemmeno detto che esiste.
-        expect(aB.some((m) => /in pausa: nessun job/.test(m.text))).toBe(false);
-        expect(aB.some((m) => m.text.includes('risposta a uno sconosciuto'))).toBe(true);
+        // Nessuna risposta: B non arriva né al command handler né al provider.
+        expect(aB).toEqual([]);
 
         // Ultima, e volutamente dopo il comportamento: la riga d'avvio dice
         // la stessa cosa, ma una riga di log è prosa e il rosso deve arrivare
