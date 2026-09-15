@@ -2,6 +2,7 @@ import DatabaseCtor from 'better-sqlite3';
 import { join } from 'node:path';
 import { describe } from 'vitest';
 import { install } from '../harness.js';
+import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
 import { scenario } from '../scenario.js';
 
 /**
@@ -24,12 +25,12 @@ describe('acceptance · B · continuità del runtime', () => {
         main: [{ text: 'il tuo colore preferito è il verde, capito' }, { text: 'mi hai detto il verde' }],
       });
       try {
-        const first = await inst.muffin(['run', '--session', 'continuity-1', '--timeout', '20', 'il mio colore preferito è il verde']);
+        const first = await inst.muffin(['run', '--session', 'continuity-1', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'il mio colore preferito è il verde']);
         if (first.code !== 0) throw new Error(`primo processo: exit ${first.code}\n${first.err}`);
 
         // A second, unrelated process — nothing in common with the first but
         // the files under `inst.home` and the `--session` id.
-        const second = await inst.muffin(['run', '--session', 'continuity-1', '--timeout', '20', 'che colore ho detto?']);
+        const second = await inst.muffin(['run', '--session', 'continuity-1', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'che colore ho detto?']);
         if (second.code !== 0) throw new Error(`secondo processo: exit ${second.code}\n${second.err}`);
 
         const sentToSecondCall = inst.provider.main()[1];
@@ -67,7 +68,7 @@ describe('acceptance · B · continuità del runtime', () => {
         await inst.cleanup();
       }
     },
-    30_000,
+    headlessTestTimeoutMs(2),
   );
 
   scenario(
@@ -192,7 +193,7 @@ describe('acceptance · B · il turno sospendibile', () => {
       });
       try {
         const started = Date.now();
-        const run = await inst.muffin(['run', '--session', 'wait-1', '--timeout', '25', 'controlla fra un’ora']);
+        const run = await inst.muffin(['run', '--session', 'wait-1', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'controlla fra un’ora']);
         const elapsed = Date.now() - started;
 
         // Exit 6 is "suspended", and it has its own code precisely so a script
@@ -223,7 +224,7 @@ describe('acceptance · B · il turno sospendibile', () => {
         await inst.cleanup();
       }
     },
-    60_000,
+    headlessTestTimeoutMs(1),
   );
 
   scenario(
@@ -237,13 +238,13 @@ describe('acceptance · B · il turno sospendibile', () => {
         ],
       });
       try {
-        const first = await inst.muffin(['run', '--session', 'piano-1', '--timeout', '25', 'organizzati']);
+        const first = await inst.muffin(['run', '--session', 'piano-1', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'organizzati']);
         if (first.code !== 0) throw new Error(`primo processo: exit ${first.code}\n${first.err}`);
 
         // A second, unrelated process. Nothing survives between them but the
         // files under `inst.home` and the `--session` id — which is the whole
         // claim: a plan that died with the process that wrote it is not a plan.
-        const second = await inst.muffin(['run', '--session', 'piano-1', '--timeout', '25', 'a che punto sei?']);
+        const second = await inst.muffin(['run', '--session', 'piano-1', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'a che punto sei?']);
         if (second.code !== 0) throw new Error(`secondo processo: exit ${second.code}\n${second.err}`);
 
         const sent = inst.provider.main().at(-1);
@@ -266,7 +267,7 @@ describe('acceptance · B · il turno sospendibile', () => {
         await inst.cleanup();
       }
     },
-    60_000,
+    headlessTestTimeoutMs(2),
   );
 
   scenario(
@@ -285,7 +286,7 @@ describe('acceptance · B · il turno sospendibile', () => {
         ],
       });
       try {
-        const victim = inst.spawnRaw(['run', '--session', 'crash-1', '--timeout', '60', 'fai il lavoro lungo']);
+        const victim = inst.spawnRaw(['run', '--session', 'crash-1', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'fai il lavoro lungo']);
         // Wait until the row exists and is claimed — that is "the turn really
         // started", written by production code before the first model call.
         const turnId = await pollFor(() =>
@@ -340,7 +341,7 @@ describe('acceptance · B · il turno sospendibile', () => {
         await inst.cleanup();
       }
     },
-    90_000,
+    headlessTestTimeoutMs(2),
   );
 });
 

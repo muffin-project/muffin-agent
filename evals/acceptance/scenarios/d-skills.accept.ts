@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe } from 'vitest';
 import { install } from '../harness.js';
+import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
 import { scenario } from '../scenario.js';
 
 /**
@@ -43,7 +44,7 @@ describe('acceptance · D9 · skill', () => {
         }
 
         // 2. Uso: il modello la attiva e riceve il corpo, non il riassunto.
-        const r = await inst.muffin(['run', '--timeout', '20', 'collegami telegram']);
+        const r = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'collegami telegram']);
         if (r.code !== 0) throw new Error(`il turno non completa: exit ${r.code}\n${r.err}`);
         const chiamata = inst.provider.main()[0];
         if (!chiamata) throw new Error('il modello non è mai stato chiamato');
@@ -78,6 +79,6 @@ describe('acceptance · D9 · skill', () => {
         await inst.cleanup();
       }
     },
-    60_000,
+    headlessTestTimeoutMs(1),
   );
 });
