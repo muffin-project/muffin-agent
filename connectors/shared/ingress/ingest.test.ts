@@ -123,7 +123,12 @@ describe('un documento indicizzato consegna la vista compatta, non un riassunto'
       'host',
       0,
     );
-    expect(arrival.line).toBe('[documento acquisito]\np1\np2');
+    expect(arrival.line).toBe('[documento acquisito]');
+    expect(arrival.part).toMatchObject({
+      source: 'derived',
+      tier: 2,
+      text: 'p1\np2',
+    });
   });
 
   it('e senza né skip né documento la riga dice comunque dove sono finiti i byte', async () => {
