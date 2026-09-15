@@ -445,10 +445,13 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
           if (recover(scope, 'malformed')) continue;
         } else if (run.transportRetriesLeft > 0) {
           run.transportRetriesLeft -= 1;
-          // Backoff, because the retryable case is mostly 429 and hammering a
-          // rate limit four times in a row is how a soft limit becomes a hard
-          // one. Exponential with jitter: the jitter matters when several turns
-          // are throttled at once and would otherwise retry in lockstep.
+          // Persist the reduced budget before waiting. If the gateway exits in
+          // this gap, startup recovery resumes the same transcript with the
+          // retries still owed; it cannot reset the counter and loop forever.
+          if (!checkpoint(scope)) return finish(scope, 'error', '');
+          // Full jitter keeps concurrent turns from retrying in lockstep. The
+          // ceiling doubles from 500ms to two minutes, bounded by the turn's
+          // wall/model budget and spend governor.
           const attempt = MAX_TRANSPORT_RETRIES - run.transportRetriesLeft;
           await sleep(retryDelayMs(attempt), input.signal);
           continue;

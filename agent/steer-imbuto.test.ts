@@ -1,19 +1,21 @@
-import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import DatabaseCtor from 'better-sqlite3';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
+import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { TurnStore } from '../core/turns/store.js';
 import { TodoStore } from '../core/turns/todo.js';
-import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
-import { makeWaitTool, waitCapability } from './tools/wait.js';
-import { resumeTurn, runTurn, type LoopDeps, type RegisteredTool } from './loop.js';
+import { type LoopDeps, type RegisteredTool, resumeTurn, runTurn } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
-import { ProviderError, type ChatCall, type ChatResult, type Provider } from './providers/types.js';
+import { type ChatCall, type ChatResult, type Provider, ProviderError } from './providers/types.js';
+import { makeWaitTool, waitCapability } from './tools/wait.js';
+
+afterEach(() => vi.restoreAllMocks());
 
 /**
  * L'imbuto (ADR-0054 §2, emendamento 03/09c).
@@ -39,7 +41,13 @@ const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' 
 const NOW = () => new Date('2026-09-03T10:00:00.000Z');
 const CORREZIONE = 'no, fermati e dimmi solo il titolo';
 
-const answer = (text: string): ChatResult => ({ text, toolCalls: [], stopReason: 'end', usage, model: 'test-model' });
+const answer = (text: string): ChatResult => ({
+  text,
+  toolCalls: [],
+  stopReason: 'end',
+  usage,
+  model: 'test-model',
+});
 const call = (name: string, args: unknown = {}, id = 'c1'): ChatResult => ({
   text: null,
   toolCalls: [{ id, name, args }],
@@ -58,7 +66,10 @@ class Scripted implements Provider {
     private readonly durante: (n: number) => void = () => {},
   ) {}
   async chat(request: ChatCall): Promise<ChatResult> {
-    this.seen.push({ ...request, messages: JSON.parse(JSON.stringify(request.messages)) as ChatCall['messages'] });
+    this.seen.push({
+      ...request,
+      messages: JSON.parse(JSON.stringify(request.messages)) as ChatCall['messages'],
+    });
     this.durante(this.seen.length);
     const next = this.script[this.i++] ?? this.script.at(-1);
     if (next === undefined) throw new Error('lo script è finito');
@@ -90,7 +101,11 @@ function world(script: (ChatResult | Error)[], durante: (n: number) => void = ()
     makeWaitTool(turns, NOW),
     {
       capability: webCapability.id,
-      spec: { name: 'http_get', description: 'fetch', inputSchema: { type: 'object', properties: {} } },
+      spec: {
+        name: 'http_get',
+        description: 'fetch',
+        inputSchema: { type: 'object', properties: {} },
+      },
       throwTier: 0,
       handler: () => ({ content: 'la pagina dice X', tier: 3 as const }),
     },
@@ -102,7 +117,12 @@ function world(script: (ChatResult | Error)[], durante: (n: number) => void = ()
     model: 'test-model',
     tools,
     capabilities,
-    decide: createDecide({ matrix: POLICY_FLOOR, capabilities, budgetExhausted: () => false, hardened: true }),
+    decide: createDecide({
+      matrix: POLICY_FLOOR,
+      capabilities,
+      budgetExhausted: () => false,
+      hardened: true,
+    }),
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions,
     turns,
@@ -125,29 +145,29 @@ const prompt = (c: ChatCall | undefined): string =>
     .join('\n');
 
 describe('l imbuto: una uscita sola per le correzioni', () => {
-  it('il provider esaurisce i ritentativi e rilancia: la correzione resta, e il turno dopo la vede', async () => {
-    // La strada che nessuno dei cinque siti copriva. `drive` non arriva mai a
-    // `finish`: chiude la riga con `error`, annuncia la fine e **rilancia** —
-    // e il `finally` del connettore cancella subito dopo l'array `correzioni`.
+  it('il provider termina con errore: la correzione resta, e il turno dopo la vede', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    // Il ProviderError terminale chiude la riga con `error` e resta un errore
+    // utente leggibile senza perdere il contenuto di `/steer`.
     const coda: string[] = [];
-    // Scritta durante il **terzo** tentativo, che è l'ultimo: nessun giro
-    // successivo la drena (`MAX_TRANSPORT_RETRIES` = 2, quindi tre chiamate e
-    // poi il rilancio), quindi al `throw` è ancora nella porta del connettore.
+    // Scritta durante l'ultimo retry: nessun giro successivo la drena, quindi
+    // al risultato terminale è ancora nella porta del connettore.
     const w = world([new ProviderError('502 dal provider', true, 502, 'transport')], (n) => {
-      if (n === 3) coda.push(CORREZIONE);
+      if (n === 11) coda.push(CORREZIONE);
     });
     const session = w.sessions.open('rethrow');
 
-    await expect(
-      runTurn(w.deps, {
-        principal: owner,
-        tenant: 'host',
-        surface: 'telegram',
-        session,
-        text: 'cerca una cosa',
-        steer: () => coda.splice(0),
-      }),
-    ).rejects.toThrow('502 dal provider');
+    const result = await runTurn(w.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'telegram',
+      session,
+      text: 'cerca una cosa',
+      steer: () => coda.splice(0),
+    });
+    expect(result).toMatchObject({ stopped: 'error', reason: 'provider_error' });
+    expect(result.text).toContain('HTTP 502');
+    expect(result.text).not.toContain('502 dal provider');
 
     // Metà 1 — durevole. Una volta sola, e fuori dalla porta.
     expect(quante(w.sessions.read(session), CORREZIONE)).toBe(1);
@@ -181,14 +201,17 @@ describe('l imbuto: una uscita sola per le correzioni', () => {
       SessionStore.prototype.append.call(w.sessions, ref, m);
     };
 
-    const result = await runTurn({ ...w.deps, sessions: rotte }, {
-      principal: owner,
-      tenant: 'host',
-      surface: 'telegram',
-      session: rotte.open('scrittura-rotta'),
-      text: 'dimmi una cosa',
-      steer: () => coda.splice(0),
-    });
+    const result = await runTurn(
+      { ...w.deps, sessions: rotte },
+      {
+        principal: owner,
+        tenant: 'host',
+        surface: 'telegram',
+        session: rotte.open('scrittura-rotta'),
+        text: 'dimmi una cosa',
+        steer: () => coda.splice(0),
+      },
+    );
 
     expect(result.stopped).toBe('answered');
     expect(result.text).toContain('ecco la risposta');

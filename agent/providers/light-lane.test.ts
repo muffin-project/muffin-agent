@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MAX_TRANSPORT_RETRIES } from '../loop/types.js';
+import { MAX_LIGHT_TRANSPORT_RETRIES } from '../loop/types.js';
 import { CONSERVATIVE, loadProfiles, selectProfile } from '../profiles/profile.js';
 import { lightLane, type LightSpend } from './light-lane.js';
 import { ProviderError, type ChatCall, type ChatResult, type Provider } from './types.js';
@@ -95,7 +95,9 @@ describe('transport retry ownership', () => {
         kind: 'openai-compat',
         chat: async () => {
           attempts += 1;
-          if (attempts <= MAX_TRANSPORT_RETRIES) throw new ProviderError('502', true, 502, 'transport');
+          if (attempts <= MAX_LIGHT_TRANSPORT_RETRIES) {
+            throw new ProviderError('502', true, 502, 'transport');
+          }
           return ok();
         },
       },
@@ -103,7 +105,7 @@ describe('transport retry ownership', () => {
     );
 
     await expect(lane.chat(call())).resolves.toMatchObject({ text: 'ok' });
-    expect(attempts).toBe(MAX_TRANSPORT_RETRIES + 1);
+    expect(attempts).toBe(MAX_LIGHT_TRANSPORT_RETRIES + 1);
     expect(billed).toHaveLength(1);
   });
 
@@ -122,7 +124,7 @@ describe('transport retry ownership', () => {
     );
 
     await expect(lane.chat(call())).rejects.toThrow('429');
-    expect(attempts).toBe(MAX_TRANSPORT_RETRIES + 1);
+    expect(attempts).toBe(MAX_LIGHT_TRANSPORT_RETRIES + 1);
   });
 
   it('never retries malformed model output even when the adapter marks it retryable', async () => {
