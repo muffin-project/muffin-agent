@@ -1,5 +1,6 @@
 import { describe } from 'vitest';
 import { install } from '../harness.js';
+import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
 import { scenario } from '../scenario.js';
 
 /**
@@ -62,7 +63,7 @@ describe('acceptance · D15 · registro degli effetti', () => {
         ],
       });
       try {
-        const scrittura = await inst.muffin(['run', '--timeout', '20', 'scrivi il diario di oggi']);
+        const scrittura = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'scrivi il diario di oggi']);
         if (scrittura.code !== 0) {
           throw new Error(
             `il turno di scrittura non completa: exit ${scrittura.code}\n${scrittura.err}`,
@@ -160,7 +161,7 @@ describe('acceptance · D15 · registro degli effetti', () => {
         }
 
         // ── 3. la strada dell'owner: chiedendolo, senza sapere un comando ───
-        const domanda = await inst.muffin(['run', '--timeout', '20', 'cosa hai fatto oggi?']);
+        const domanda = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'cosa hai fatto oggi?']);
         if (domanda.code !== 0) {
           throw new Error(
             `il turno della domanda non completa: exit ${domanda.code}\n${domanda.err}`,
@@ -202,6 +203,6 @@ describe('acceptance · D15 · registro degli effetti', () => {
         await inst.cleanup();
       }
     },
-    60_000,
+    headlessTestTimeoutMs(2),
   );
 });

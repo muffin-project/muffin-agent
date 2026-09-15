@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'vitest';
 import { install, until, type Install } from '../harness.js';
+import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
 import { callbackQuery, privateMessage, startFakeTelegram, type FakeTelegram } from '../telegram.js';
 import { scenario } from '../scenario.js';
 import { MemoryStore } from '../../../core/memory/store.js';
@@ -192,7 +193,7 @@ describe('acceptance · B1 telegram · un fatto detto su Telegram torna a un `ru
         // tenant's memory. Dopo ADR-0056 è **questa** la porta che isola, ed è
         // isolata di proposito: `--session owner` sarebbe la scelta esplicita
         // di entrare nella conversazione.
-        const second = await inst.muffin(['run', '--timeout', '20', 'qual è il mio animale preferito?']);
+        const second = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'qual è il mio animale preferito?']);
         if (second.code !== 0) throw new Error(`secondo processo CLI: exit ${second.code}\n${second.err}`);
         const sent = inst.provider.main().at(-1);
         if (!sent) throw new Error('il secondo processo CLI non ha mai chiamato il modello');
@@ -220,7 +221,7 @@ describe('acceptance · B1 telegram · un fatto detto su Telegram torna a un `ru
         await tg.close();
       }
     },
-    60_000,
+    headlessTestTimeoutMs(2),
   );
 });
 

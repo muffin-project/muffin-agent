@@ -2,6 +2,7 @@ import DatabaseCtor from 'better-sqlite3';
 import { join } from 'node:path';
 import { describe } from 'vitest';
 import { install } from '../harness.js';
+import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
 import { scenario } from '../scenario.js';
 import { MemoryStore } from '../../../core/memory/store.js';
 
@@ -134,7 +135,7 @@ describe('acceptance · C6 · il grafo temporale — "chi era X a maggio"', () =
         // with `as_of` for May, and the model's own next request — built
         // from the tool's real result, not a stub — carries Anna into the
         // reply.
-        const turn = await inst.muffin(['run', '--session', 'c6', '--timeout', '20', 'chi era il capo progetto a maggio 2024?']);
+        const turn = await inst.muffin(['run', '--session', 'c6', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'chi era il capo progetto a maggio 2024?']);
         if (turn.code !== 0) throw new Error(`run: exit ${turn.code}\n${turn.err}`);
 
         const afterTool = inst.provider.main()[1];
@@ -146,6 +147,6 @@ describe('acceptance · C6 · il grafo temporale — "chi era X a maggio"', () =
         await inst.cleanup();
       }
     },
-    30_000,
+    headlessTestTimeoutMs(1),
   );
 });

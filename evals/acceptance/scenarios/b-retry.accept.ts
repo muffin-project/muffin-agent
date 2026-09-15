@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe } from 'vitest';
 import DatabaseCtor from 'better-sqlite3';
 import { install } from '../harness.js';
+import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
 import { scenario } from '../scenario.js';
 import { paths } from '../../../core/config/config.js';
 import { seal } from '../../../core/rot/verify.js';
@@ -86,7 +87,7 @@ describe('acceptance · B · retry per-tool (limite SSRF misurato)', () => {
         writeFileSync(egressPath, JSON.stringify(egress, null, 2));
         seal(inst.home, '1', new Date());
 
-        const r = await inst.muffin(['run', '--timeout', '20', 'apri quell indirizzo']);
+        const r = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'apri quell indirizzo']);
         if (r.code !== 0) {
           throw new Error(`il turno non completa (l'esito è un tool_result, non un crash): exit ${r.code}\n${r.err}`);
         }
@@ -128,6 +129,6 @@ describe('acceptance · B · retry per-tool (limite SSRF misurato)', () => {
         await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
       }
     },
-    30_000,
+    headlessTestTimeoutMs(1),
   );
 });
