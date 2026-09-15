@@ -1,4 +1,4 @@
-# ADR-0079 — I turni interattivi ritentano il trasporto con un bilancio durevole
+# ADR-0080 — I turni interattivi ritentano il trasporto con un bilancio durevole
 
 **Stato:** accettato · 2026-09-14 · richiesta esplicita dell'owner («ritenta fino a
 10 volte, a distanze crescenti, e riprendi da solo»), verificata contro i turni
