@@ -446,6 +446,31 @@ describe('il tetto conta le chiamate, non i giri', () => {
     // Ogni blocco `tool_use` ha il suo `tool_result`: nessun buco nel batch.
     expect(batch?.content).toHaveLength(3);
   });
+
+  it('un profilo senza tetto numerico completa oltre 15 step consecutivi', async () => {
+    const { tool, decl } = okTool('noop');
+    const steps: ChatResult[] = Array.from({ length: 20 }, (_, index) => ({
+      text: null,
+      toolCalls: [{ id: `step-${index}`, name: 'noop', args: {} }],
+      stopReason: 'tool_use',
+      usage,
+      model: 'test',
+    }));
+    const provider = scriptedProvider({ chat: [...steps, reply('completato')] });
+    const h = harness({
+      provider,
+      profile: { ...CONSERVATIVE, maxToolCallsPerTurn: null },
+      tools: [tool],
+      decls: [decl],
+    });
+
+    const result = await runRounds(h.scope);
+
+    expect(result.stopped).toBe('answered');
+    expect(h.run.toolCallsMade).toBe(20);
+    expect(result.iterations).toBe(21);
+    expect(result.text).toBe('completato');
+  });
 });
 
 describe('recover cammina la cascata del profilo, un passo per tentativo', () => {

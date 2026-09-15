@@ -136,7 +136,7 @@ describe('pairing through the connector', () => {
     expect(h.turns).toEqual([]);
   });
 
-  it('a stranger guessing burns an attempt and stays a stranger', async () => {
+  it('a stranger guessing burns an attempt silently and stays a stranger', async () => {
     const code = generatePairingCode();
     const h = harness({ token: 't', pairing: startPairing(code, new Date()) });
 
@@ -144,7 +144,7 @@ describe('pairing through the connector', () => {
 
     expect(h.saved[0]?.pairing?.attempts).toBe(1);
     expect(h.saved[0]?.ownerUserId).toBeUndefined();
-    expect(h.sent[0]?.text).toMatch(/Non è quello/);
+    expect(h.sent).toEqual([]);
   });
 
   it('ordinary conversation does not burn the owner tries', async () => {

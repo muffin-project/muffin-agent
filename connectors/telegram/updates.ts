@@ -313,6 +313,21 @@ export class UpdateInbox {
       .run(at, updateId, updateId);
   }
 
+  /**
+   * Consume a private update that failed the owner's authorization check.
+   * Keep the native id and timestamps for offset/idempotency evidence, but do
+   * not retain the untrusted sender's message body in the active inbox row.
+   */
+  discard(updateId: number, at: string): void {
+    this.db
+      .prepare(
+        `UPDATE telegram_updates
+         SET payload = '{}', processed_at = ?, failure = NULL
+         WHERE update_id = ?`,
+      )
+      .run(at, updateId);
+  }
+
   /** A failure is evidence about this native event; it stays pending for retry. */
   markFailed(updateId: number, reason: string): void {
     this.db.prepare(`UPDATE telegram_updates SET failure = ? WHERE update_id = ?`).run(reason, updateId);
