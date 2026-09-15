@@ -63,8 +63,9 @@ singolo edit sembra FAST. Gate unico di uscita: §6.
 - [ ] Clean-clone gate: da clone pulito, `bootstrap.sh`/`install.sh` da URL org,
       `muffin doctor` verde (o WARN compresi e accettati), primo turno reale con
       risposta. `configured != working` vale anche qui.
-- [ ] URL canonici → org: `README.md:149`, `install.sh:4,59`, `bootstrap.sh:17`,
-      `docs/INSTALL.md:8,189` da `GiustoPiedimonte/` a `muffin-project/`.
+- [x] URL canonici → org: installer e README mergiati con PR #541; il residuo
+      produttivo successivo era lo User-Agent Discord, chiuso da questa slice.
+      I riferimenti storici in evidence/history restano volutamente non aggiornati.
 
 ### 1.4 Superficie repo e org (residuo #531)
 
@@ -77,10 +78,12 @@ singolo edit sembra FAST. Gate unico di uscita: §6.
       accessi espliciti.
 - [ ] Potatura branch remoti (~17): `park/`, `wip/handoff-*`, `integrazione-locale`,
       `codex/*` chiusi → delete dopo il cutover. `slice/*` vive solo se con PR aperta.
-- [ ] Worktree: assorbire/chiudere `.worktrees/telegram-*` e il worktree esterno
-      `muffin-memory-authorship` (ahead 1 → dentro #530 o ramo
-      pushato e PR). Al gate: nessun lavoro solo-locale. Mai stash come deposito
-      (BRANCHING.md: pila condivisa tra worktree).
+- [ ] Worktree: tutti i rami di lavoro sono normalizzati sotto `.worktrees/`;
+      assorbire/chiudere `.worktrees/telegram-*`,
+      `.worktrees/memory-authorship-provenance-v2` (ahead 1 → dentro #530 o ramo
+      pushato e PR) e `.worktrees/acceptance-turn-timeout` (#543). Al gate: nessun
+      lavoro solo-locale. Mai stash come deposito (BRANCHING.md: pila condivisa tra
+      worktree).
 
 ## §2. Fase 2 — Preview installabile (14→24/09, in parallelo alla Fase 1)
 
@@ -90,7 +93,8 @@ il 25 salvo gate rotto.
 ### 2.1 PR aperte (ordine di merge consigliato)
 
 1. #514 OAuth PKCE core (CRITICAL, non-draft) → sblocca S3.
-2. #530 memory authorship (non-draft, mutation-checked) → assorbe anche il worktree esterno.
+2. #530 memory authorship (non-draft, mutation-checked) → assorbe anche il commit locale in
+   `.worktrees/memory-authorship-provenance-v2`.
 3. #494 pricing free-router (draft→ready; residuo #499 dentro la stessa slice o
    follow-up dichiarato) → sblocca display onboarding S2.
 4. #537 telegram provider failures (draft→finire; nota billing CI sotto).
