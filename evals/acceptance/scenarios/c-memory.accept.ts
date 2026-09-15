@@ -2,6 +2,7 @@ import DatabaseCtor from 'better-sqlite3';
 import { join } from 'node:path';
 import { describe } from 'vitest';
 import { install } from '../harness.js';
+import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
 import { scenario } from '../scenario.js';
 import { MemoryStore } from '../../../core/memory/store.js';
 
@@ -46,13 +47,13 @@ describe('acceptance · C · memoria e acquisizione', () => {
         ],
       });
       try {
-        const said = await inst.muffin(['run', '--session', 'c1-a', '--timeout', '20', 'ho un pesce rosso, si chiama Bolla']);
+        const said = await inst.muffin(['run', '--session', 'c1-a', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'ho un pesce rosso, si chiama Bolla']);
         if (said.code !== 0) throw new Error(`primo turno: exit ${said.code}\n${said.err}`);
 
         // A brand-new, unrelated session: nothing but the tenant ('host', both
         // CLI turns) connects the two. If this recalls "Bolla" it is memory
         // doing it, not session transcript (that is B1's separate claim).
-        const asked = await inst.muffin(['run', '--session', 'c1-b', '--timeout', '20', 'come si chiama il mio pesce?']);
+        const asked = await inst.muffin(['run', '--session', 'c1-b', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'come si chiama il mio pesce?']);
         if (asked.code !== 0) throw new Error(`secondo turno: exit ${asked.code}\n${asked.err}`);
 
         const sentToSecondTurn = inst.provider.main()[1];
@@ -66,7 +67,7 @@ describe('acceptance · C · memoria e acquisizione', () => {
         await inst.cleanup();
       }
     },
-    30_000,
+    headlessTestTimeoutMs(2),
   );
 
   scenario(
@@ -277,6 +278,6 @@ describe('acceptance · C · memoria e acquisizione', () => {
         await inst.cleanup();
       }
     },
-    30_000,
+    headlessTestTimeoutMs(1),
   );
 });

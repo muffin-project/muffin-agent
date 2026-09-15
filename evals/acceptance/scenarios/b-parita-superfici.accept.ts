@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'vitest';
 import { install, until, type Install } from '../harness.js';
+import { HEADLESS_TURN_TIMEOUT_SECONDS } from '../turn-budget.js';
 import type { ScriptedReply } from '../provider.js';
 import { privateMessage, startFakeTelegram, type FakeTelegram } from '../telegram.js';
 
@@ -212,9 +213,9 @@ describe('acceptance · parità di superficie · stesso principal, stessa histor
       const cli = await install({ main: SCRIPT });
       try {
         semina(cli);
-        const uno = await cli.muffin(['run', '--session', 'parita', '--timeout', '20', LEGGI]);
+        const uno = await cli.muffin(['run', '--session', 'parita', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), LEGGI]);
         if (uno.code !== 0) throw new Error(`CLI turno 1: exit ${uno.code}\n${uno.err}`);
-        const due = await cli.muffin(['run', '--session', 'parita', '--timeout', '20', SCRIVI]);
+        const due = await cli.muffin(['run', '--session', 'parita', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), SCRIVI]);
         // 3 = «serve un'approvazione» (`cli/run.ts`): dopo ADR-0053 questa è la
         // risposta attesa, non un errore.
         if (![0, 1, 3].includes(due.code)) throw new Error(`CLI turno 2: exit ${due.code}\n${due.err}`);
@@ -285,9 +286,9 @@ describe('acceptance · parità di superficie · stesso principal, stessa histor
       const fresca = await install({ main: SCRIPT });
       try {
         semina(fresca);
-        const uno = await fresca.muffin(['run', '--session', 'parita-a', '--timeout', '20', LEGGI]);
+        const uno = await fresca.muffin(['run', '--session', 'parita-a', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), LEGGI]);
         if (uno.code !== 0) throw new Error(`CLI sessione fresca turno 1: exit ${uno.code}\n${uno.err}`);
-        const due = await fresca.muffin(['run', '--session', 'parita-b', '--timeout', '20', SCRIVI]);
+        const due = await fresca.muffin(['run', '--session', 'parita-b', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), SCRIVI]);
         if (due.code !== 0) throw new Error(`CLI sessione fresca turno 2: exit ${due.code}\n${due.err}`);
         misure.push(esito(fresca, 'cli sessione nuova'));
       } finally {
@@ -428,7 +429,7 @@ describe('acceptance · il giro DAY-1 dentro un turno solo · sessione nuova, ne
       const inst = await install({ main: SCRIPT_UN_TURNO });
       try {
         semina(inst);
-        const r = await inst.muffin(['run', '--timeout', '20', 'leggi dati.txt e scrivi il totale in esito.txt']);
+        const r = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'leggi dati.txt e scrivi il totale in esito.txt']);
         if (![0, 1].includes(r.code)) throw new Error(`exit inatteso: ${r.code}\n${r.err}`);
         const m = esito(inst, 'cli un turno');
         process.stderr.write(

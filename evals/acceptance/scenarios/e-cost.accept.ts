@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe } from 'vitest';
 import { install, until, type Run } from '../harness.js';
+import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
 import { extraction } from '../provider.js';
 import { scenario } from '../scenario.js';
 
@@ -185,7 +186,7 @@ describe('acceptance · E · economia e osservabilità', () => {
           db.close();
         }
 
-        const r = await inst.muffin(['run', '--timeout', '20', 'qualsiasi cosa']);
+        const r = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'qualsiasi cosa']);
         if (r.code !== 4) {
           throw new Error(`atteso exit 4 (budget) con il mese già sopra il tetto, trovato ${r.code}\nout: ${r.out}\nerr: ${r.err}`);
         }
@@ -212,7 +213,7 @@ describe('acceptance · E · economia e osservabilità', () => {
     async () => {
       const inst = await install({ main: [{ text: 'una spesa da leggere dopo' }] });
       try {
-        const said = await inst.muffin(['run', '--timeout', '20', 'ciao']);
+        const said = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'ciao']);
         if (said.code !== 0) throw new Error(`turno per generare spesa: exit ${said.code}\n${said.err}`);
 
         // `/spend` is the one owner-facing surface that answers "how much has
@@ -258,7 +259,7 @@ describe('acceptance · E · economia e osservabilità', () => {
         await inst.cleanup();
       }
     },
-    30_000,
+    headlessTestTimeoutMs(1),
   );
 
   scenario(
@@ -297,9 +298,9 @@ describe('acceptance · E · economia e osservabilità', () => {
         },
       });
       try {
-        const first = await inst.muffin(['run', '--timeout', '20', 'Marco è il mio commercialista']);
+        const first = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'Marco è il mio commercialista']);
         if (first.code !== 0) throw new Error(`primo turno: exit ${first.code}\n${first.err}`);
-        const second = await inst.muffin(['run', '--timeout', '20', 'ho cambiato commercialista, ora è Lucia']);
+        const second = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'ho cambiato commercialista, ora è Lucia']);
         if (second.code !== 0) throw new Error(`secondo turno: exit ${second.code}\n${second.err}`);
 
         // `muffin run` headless never consolidates on its own (the idle timer
@@ -367,7 +368,7 @@ describe('acceptance · E · economia e osservabilità', () => {
         await inst.cleanup();
       }
     },
-    30_000,
+    headlessTestTimeoutMs(2),
   );
 
   /**
@@ -409,7 +410,7 @@ describe('acceptance · E · economia e osservabilità', () => {
       try {
         writeFileSync(join(inst.workspace, 'appunti.txt'), `password: "${SECRET}"\naltro testo innocuo\n`);
 
-        const r = await inst.muffin(['run', '--timeout', '20', 'leggi appunti.txt']);
+        const r = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'leggi appunti.txt']);
         if (r.code !== 0) throw new Error(`il turno non completa: exit ${r.code}\n${r.err}`);
         if (r.out.includes(SECRET)) {
           throw new Error(`la chiave finta è arrivata nella risposta finale: ${JSON.stringify(r.out)}`);
@@ -439,7 +440,7 @@ describe('acceptance · E · economia e osservabilità', () => {
         // --- reconstruction: an arbitrary (second) turn, found again by its
         //     own printed id, and only that turn's evidence ------------------
         mkdirSync(join(inst.workspace, 'una-sottocartella'), { recursive: true });
-        const second = await inst.muffin(['run', '--timeout', '20', 'elenca il contenuto di una-sottocartella']);
+        const second = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'elenca il contenuto di una-sottocartella']);
         if (second.code !== 0) throw new Error(`il secondo turno non completa: exit ${second.code}\n${second.err}`);
 
         const traceIdOf = (run: Run): string => {
@@ -482,7 +483,7 @@ describe('acceptance · E · economia e osservabilità', () => {
         await inst.cleanup();
       }
     },
-    20_000,
+    headlessTestTimeoutMs(2),
   );
 
   /**
@@ -516,7 +517,7 @@ describe('acceptance · E · economia e osservabilità', () => {
         ],
       });
       try {
-        const first = await inst.muffin(['run', '--timeout', '20', 'spiegami tecnicamente come funzioni e cosa stai usando adesso']);
+        const first = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'spiegami tecnicamente come funzioni e cosa stai usando adesso']);
         if (first.code !== 0) throw new Error(`primo turno: exit ${first.code}\n${first.err}`);
 
         // Il tool_result di sys_inspect viaggia dentro la SECONDA richiesta al
@@ -547,7 +548,7 @@ describe('acceptance · E · economia e osservabilità', () => {
           throw new Error(`muffin model non conferma la scrittura: ${JSON.stringify(cambiato.out)}`);
         }
 
-        const second = await inst.muffin(['run', '--timeout', '20', 'spiegami di nuovo tecnicamente cosa stai usando adesso']);
+        const second = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'spiegami di nuovo tecnicamente cosa stai usando adesso']);
         if (second.code !== 0) throw new Error(`secondo turno: exit ${second.code}\n${second.err}`);
 
         const afterCalls = inst.provider.main();
@@ -570,6 +571,6 @@ describe('acceptance · E · economia e osservabilità', () => {
         await inst.cleanup();
       }
     },
-    30_000,
+    headlessTestTimeoutMs(2),
   );
 });

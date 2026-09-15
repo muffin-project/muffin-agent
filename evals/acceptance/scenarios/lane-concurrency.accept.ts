@@ -2,6 +2,7 @@ import DatabaseCtor from 'better-sqlite3';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { install, until } from '../harness.js';
+import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
 
 /**
  * D1 (judge round 2) — the model lane, proven on the real path.
@@ -49,7 +50,7 @@ describe('acceptance · D1 · una sola corsia del modello', () => {
       });
       try {
         // Arm a suspended turn — a real `waiting` row, the way B3 gets one.
-        const armed = await inst.muffin(['run', '--session', 'lane-race-1', '--timeout', '25', 'controlla fra un’ora']);
+        const armed = await inst.muffin(['run', '--session', 'lane-race-1', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'controlla fra un’ora']);
         if (armed.code !== 6) throw new Error(`atteso exit 6 (sospeso), ricevuto ${armed.code}\n${armed.err}`);
 
         // Add a job — a real `jobs` row, the way B8 gets one.
@@ -143,6 +144,6 @@ describe('acceptance · D1 · una sola corsia del modello', () => {
         await inst.cleanup();
       }
     },
-    75_000,
+    headlessTestTimeoutMs(1),
   );
 });
