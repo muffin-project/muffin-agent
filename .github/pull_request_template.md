@@ -47,3 +47,8 @@ should name that instruction rather than hiding it in the diff. -->
 "refreshed" into current state; generated views are regenerated when relevant. -->
 
 - [ ] None
+
+## Contributor agreement
+
+- [ ] I have read `CONTRIBUTOR_AGREEMENT.md` and signed off every commit in this
+      PR with `git commit -s`.

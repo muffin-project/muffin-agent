@@ -44,12 +44,9 @@ Conseguenze pratiche che vincolano il codice:
 - **Marchio fuori dal grant**: nome e logo non sono coperti dalla licenza, vedi
   `TRADEMARK.md`. Registrazione rinviata per budget; first-use evidence raccolta
   dal 14/09 (annuncio) + 25/09 (flip).
-- **Niente CLA, ma con un costo registrato**: i contributi entrano sotto
-  AGPL-3.0-or-later (nota in `CONTRIBUTING.md`). Senza CLA, un futuro "relax" delle
-  restrizioni richiederà il consenso di ogni autore esterno o la riscrittura delle
-  sue parti — ogni PR mergiata senza accordo inbound alza quel prezzo. Prima di
-  accettare contributi esterni post-25 serve la decisione DCO-minimale vs CLA-light
-  con clausola di relicense (tracciata nel piano source-public §1.1, non qui).
+- **Contributi: DCO + grant OSI**: ADR-0079 chiude il costo registrato qui. Ogni
+  contributo esterno entra sotto AGPL-3.0-or-later con DCO e un grant stretto verso
+  future licenze OSI: niente copyright assignment, niente relicense proprietario.
 
 **Conseguenze.** Più facile: chi hosta contribuisce indietro; deterrenza sui cloni
 parassitari; patent grant esplicito. Più difficile: chill sull'adozione aziendale
