@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { describe } from 'vitest';
 import { install } from '../harness.js';
+import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
 import { scenario } from '../scenario.js';
 import { hostContiene } from '../sandbox-host.js';
 import { MemoryStore } from '../../../core/memory/store.js';
@@ -37,7 +38,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         writeFileSync(secretPath, 'SEGRETO-FUORI-SCOPE\n');
         symlinkSync(secretPath, join(inst.workspace, 'scorciatoia'));
 
-        const r = await inst.muffin(['run', '--timeout', '20', 'leggi scorciatoia']);
+        const r = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'leggi scorciatoia']);
         if (r.code !== 0) throw new Error(`il turno non completa (dovrebbe: il rifiuto è un tool result, non un crash): exit ${r.code}\n${r.err}`);
 
         // The strongest assertion this scenario can make: the byte string
@@ -66,7 +67,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         await inst.cleanup();
       }
     },
-    30_000,
+    headlessTestTimeoutMs(1),
   );
 
   scenario(
@@ -85,7 +86,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         ],
       });
       try {
-        const r = await inst.muffin(['run', '--timeout', '20', 'scrivi "ciao" in nuovo.txt']);
+        const r = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'scrivi "ciao" in nuovo.txt']);
         if (r.code !== 0) throw new Error(`il turno non completa: exit ${r.code}\n${r.err}`);
 
         const call = inst.provider.main()[0];
@@ -114,7 +115,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         await inst.cleanup();
       }
     },
-    30_000,
+    headlessTestTimeoutMs(1),
   );
 
   scenario(
@@ -134,7 +135,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         const file = join(inst.workspace, 'nota.md');
         writeFileSync(file, 'prima', 'utf8');
 
-        const r = await inst.muffin(['run', '--timeout', '20', 'riscrivi nota.md']);
+        const r = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'riscrivi nota.md']);
         if (r.code !== 0) throw new Error(`il turno non completa: exit ${r.code}\n${r.err}`);
         if (readFileSync(file, 'utf8') !== 'dopo') {
           throw new Error(`fs_write non ha scritto: ${JSON.stringify(readFileSync(file, 'utf8'))}`);
@@ -159,7 +160,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         await inst.cleanup();
       }
     },
-    30_000,
+    headlessTestTimeoutMs(1),
   );
 
   scenario(
@@ -190,7 +191,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         const file = join(inst.workspace, 'nota.md');
         writeFileSync(file, 'prima', 'utf8');
 
-        const r = await inst.muffin(['run', '--timeout', '20', 'riscrivi nota.md']);
+        const r = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'riscrivi nota.md']);
         if (r.code !== 0) throw new Error(`il turno non completa: exit ${r.code}\n${r.err}`);
 
         const prima = inst.db(
@@ -245,7 +246,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         await inst.cleanup();
       }
     },
-    30_000,
+    headlessTestTimeoutMs(1),
   );
 
   /**
@@ -437,7 +438,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         await inst.cleanup();
       }
     },
-    30_000,
+    headlessTestTimeoutMs(3),
   );
 
   /**
@@ -517,7 +518,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         await inst.cleanup();
       }
     },
-    30_000,
+    headlessTestTimeoutMs(1),
   );
 
   scenario(
@@ -563,7 +564,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         // sempre. Su un processo headless quell'`ask` e' proprio questo
         // `exit 3`: **un'approvazione che nessuno puo' dare e' un divieto
         // travestito**, e per una VPS quello e' il modo di fallire sbagliato.
-        const r = await inst.muffin(['run', '--json', '--timeout', '20', domanda]);
+        const r = await inst.muffin(['run', '--json', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), domanda]);
 
         // (1) Il comportamento spedito: la ricerca gira, e gira **con il turno
         // gia' a taint 3**. Le due meta' insieme, perche' «la ricerca ha
@@ -592,7 +593,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         );
         seal(inst.home, '1', new Date());
 
-        const stretto = await inst.muffin(['run', '--json', '--timeout', '20', domanda]);
+        const stretto = await inst.muffin(['run', '--json', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), domanda]);
         if (stretto.code !== 3) {
           throw new Error(
             `con searchMaxTaint 2 il cancello doveva tornare: exit ${stretto.code}\n${stretto.out}\n${stretto.err}`,
@@ -609,7 +610,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         await inst.cleanup();
       }
     },
-    30_000,
+    headlessTestTimeoutMs(2),
   );
 
   /**
@@ -664,7 +665,7 @@ describe('acceptance · D · capability e sicurezza', () => {
       try {
         mkdirSync(join(inst.workspace, 'sub'), { recursive: true });
 
-        const r = await inst.muffin(['run', '--json', '--timeout', '20', 'esegui echo ciao-dal-sandbox nella sottocartella sub']);
+        const r = await inst.muffin(['run', '--json', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'esegui echo ciao-dal-sandbox nella sottocartella sub']);
 
         const call = inst.provider.main()[0];
         if (!call) throw new Error('il modello non è mai stato chiamato');
@@ -723,7 +724,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         mkdirSync(join(sola.workspace, 'sub'), { recursive: true });
         writeFileSync(join(sola.workspace, 'sub', 'segnalino.txt'), 'ciao\n', 'utf8');
 
-        const r = await sola.muffin(['run', '--json', '--timeout', '20', 'guarda cosa c\'è in sub']);
+        const r = await sola.muffin(['run', '--json', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'guarda cosa c\'è in sub']);
         if (r.code !== 0) {
           throw new Error(
             `la shell in sola lettura si è fermata invece di girare (exit ${r.code}): headless non ha ` +
@@ -742,7 +743,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         await sola.cleanup();
       }
     },
-    60_000,
+    headlessTestTimeoutMs(2),
     () => {
       const esito = hostContiene();
       return esito.ok ? null : esito.perche;
@@ -782,7 +783,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         ],
       });
       try {
-        const r = await inst.muffin(['run', '--json', '--timeout', '20', 'elenca i processi con sleep e poi fermalo']);
+        const r = await inst.muffin(['run', '--json', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'elenca i processi con sleep e poi fermalo']);
 
         // Il primo giro: process_list, low risk, auto-allow — il suo
         // tool_result finisce nella SECONDA richiesta al modello finto.
@@ -828,7 +829,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         await inst.cleanup();
       }
     },
-    30_000,
+    headlessTestTimeoutMs(1),
   );
 
   /**
@@ -908,7 +909,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         plantTier3Episode(inst.home, 'fixture-d16');
 
         const domanda = 'cerca come si legge una directory e poi guardami cosa c\'e\' in sub';
-        const r = await inst.muffin(['run', '--json', '--timeout', '30', domanda]);
+        const r = await inst.muffin(['run', '--json', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), domanda]);
 
         if (r.code !== 0) {
           throw new Error(
@@ -957,7 +958,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         seal(inst.home, '1', new Date());
 
         const primeChiamate = chiamate.length;
-        const stretto = await inst.muffin(['run', '--json', '--timeout', '30', domanda]);
+        const stretto = await inst.muffin(['run', '--json', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), domanda]);
         const dopo = JSON.stringify(inst.provider.main().slice(primeChiamate));
         if (!/taint_exceeded/.test(dopo)) {
           throw new Error(
@@ -969,7 +970,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         await inst.cleanup();
       }
     },
-    90_000,
+    headlessTestTimeoutMs(2),
     () => {
       const esito = hostContiene();
       return esito.ok ? null : esito.perche;
