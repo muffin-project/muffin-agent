@@ -39,7 +39,7 @@ import { sleep } from '../../core/net/sleep.js';
 const API = 'https://discord.com/api/v10';
 
 /** Required by Discord's reference, in this exact shape. */
-const USER_AGENT = 'DiscordBot (https://github.com/GiustoPiedimonte/muffin-agent, 0.0.0)';
+const USER_AGENT = 'DiscordBot (https://github.com/muffin-project/muffin-agent, 0.0.0)';
 
 class DiscordError extends Error {
   constructor(
