@@ -1,5 +1,5 @@
 import { loadConfig, saveConfig, readSecret, type Config } from '../core/config/config.js';
-import { priceOf } from '../core/budget/pricing.js';
+import { isOpenRouterFreeRoute, priceOf } from '../core/budget/pricing.js';
 import { makeEmbedder } from '../core/memory/embed.js';
 import { PROVIDERS, providerFor, type ProviderEntry } from '../core/config/providers.js';
 
@@ -13,21 +13,22 @@ import { PROVIDERS, providerFor, type ProviderEntry } from '../core/config/provi
  * `core/budget/pricing.ts` fattura davvero.
  *
  * Quel secondo confronto è la ragione per cui il comando vale la pena. La
- * tabella dei prezzi fa match **per sottostringa di famiglia**, e misurato
- * contro il catalogo vivo il 2026-08-27 sottostima in cinque famiglie su otto:
- * `qwen3` è in tabella a 0.1/0.3 per MTok e il `qwen/qwen3.8-27b` che
- * l'installazione dell'owner usava costa 0.425/2.55, mentre nella stessa
- * famiglia si arriva a 2/6. L'intestazione di `pricing.ts` dichiara che essere
- * approssimativi è sicuro «in the direction that matters» perché un modello
- * sconosciuto viene addebitato al massimo tariffario — vero per uno slug che
- * **non matcha nessun pattern**, falso per uno che matcha il pattern della sua
- * famiglia e costa più della voce. Lì il tetto in `rot/budgets.json` scatta
- * tardi invece che presto, che è la direzione che quel file chiama pericolosa.
+ * tabella dei prezzi fa match **per sottostringa di famiglia**; il passaggio del
+ * 04/09 l'ha riallineata verso il ceiling conservativo delle famiglie
+ * open-weight proprio perché prima sottostimava diversi host reali. Il catalogo
+ * vivo resta utile per contraddire quella tabella quando cambia di nuovo.
  *
  * Perché allora non prendere il prezzo dal catalogo e basta? Perché sarebbe un
  * tetto di spesa che cambia senza un diff, e `pricing.ts` è hardcoded per
  * scelta dichiarata. Il catalogo serve a **contraddire** la tabella e a farlo
  * vedere, non a sostituirla.
+ *
+ * Un router è una terza forma che il vecchio output non nominava: lo slug
+ * configurato (`openrouter/free`) può non essere il modello che il provider
+ * restituisce (`qwen/...`). Il primo è la richiesta/contratto, il secondo è
+ * ciò che ha realmente servito il turno. Il comando mostra quindi esplicitamente
+ * quando una corsia è un router gratuito invece di far sembrare che Qwen abbia
+ * sostituito di nascosto la configurazione.
  */
 
 /** Le tre corsie che un'installazione ha, e che fino a oggi si cambiavano solo a mano. */
@@ -157,9 +158,13 @@ function mostra(config: Config, entry: ProviderEntry | null, out: (l: string) =>
     const price = priceOf(slug, config.provider.baseUrl);
     return price === null ? 'locale, non fatturato' : `${usd(price.inputPerMTok)}/${usd(price.outputPerMTok)} per MTok`;
   };
+  const route = (slug: string): string =>
+    isOpenRouterFreeRoute(slug, config.provider.baseUrl)
+      ? ' · router gratuito (il modello servito può cambiare per richiesta)'
+      : '';
   out(`provider   ${entry === null ? `${config.provider.kind} · ${config.provider.baseUrl ?? 'default'}` : entry.label}`);
-  out(`main       ${config.models.main} — fatturato ${p(config.models.main)}`);
-  out(`light      ${config.models.light} — fatturato ${p(config.models.light)}`);
+  out(`main       ${config.models.main} — fatturato ${p(config.models.main)}${route(config.models.main)}`);
+  out(`light      ${config.models.light} — fatturato ${p(config.models.light)}${route(config.models.light)}`);
   const emb = config.embedder;
   out(
     emb === undefined
