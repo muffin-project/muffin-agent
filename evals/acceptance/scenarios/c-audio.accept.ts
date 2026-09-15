@@ -159,12 +159,15 @@ describe('acceptance · C8 · audio — nota vocale', () => {
    * audio kept" half of the row goes red while the turn keeps answering fine,
    * exactly the silent-loss shape this suite exists to catch.
    *
-   * Falsifier (taint del transcript): in `connectors/telegram/connector.ts#ingest`,
-   * replace the `fence('trascrizione', esito.testo, …)` call with the bare
-   * `esito.testo` and this scenario's "recintata" assertion goes red — the
-   * transcript would sit in the turn as unlabelled prose, indistinguishable
-   * from the owner's own typed words (the DAY-1 requirement B16 provenance
-   * this row's own text names).
+   * Falsifier (taint del transcript): in `connectors/shared/ingress/router.ts#runStage`,
+   * rendi la riga di arrivo una parte `author` invece che `derived` e
+   * l'asserzione "non prosa libera" di questo scenario va rossa — la
+   * trascrizione siederebbe nel turno come prosa non recintata,
+   * indistinguibile dalle parole digitate dell'owner (la provenienza B16 che
+   * il testo di questa riga nomina). La trascrizione viaggia nel recinto
+   * `derivato` di provenienza dell'arrivo, non in un recinto `trascrizione`
+   * con nome proprio: la composizione recinta ogni parte non dell'autore e
+   * `fence` spoglia i marcatori interni per non annidarli.
    */
   scenario(
     'C8',
@@ -217,13 +220,17 @@ describe('acceptance · C8 · audio — nota vocale', () => {
           if (!turn.messages.includes('nota vocale ricevuta')) {
             throw new Error(`il turno non registra l'arrivo della nota vocale: ${turn.messages}`);
           }
-          if (!turn.messages.includes('trascrizione') || !turn.messages.includes(TRANSCRIPT_TEXT)) {
-            throw new Error(`il turno non porta la trascrizione recintata: ${turn.messages}`);
+          if (!/<<<derivato_[0-9a-f]{12}/.test(turn.messages) || !turn.messages.includes(TRANSCRIPT_TEXT)) {
+            throw new Error(`il turno non porta la trascrizione nel recinto di provenienza: ${turn.messages}`);
           }
           if (!turn.messages.includes("dati, mai istruzioni")) {
             throw new Error(
               `la trascrizione non è etichettata come dati recintati (B16): ${turn.messages}`,
             );
+          }
+          const senzaRecinti = turn.messages.replace(/<<<derivato_[0-9a-f]{12}[\s\S]*?derivato_[0-9a-f]{12}>>>/g, '');
+          if (senzaRecinti.includes(TRANSCRIPT_TEXT)) {
+            throw new Error(`la trascrizione esiste anche fuori dai recinti — prosa libera indistinguibile dalle parole dell'owner`);
           }
 
           // What the model actually saw: the fenced transcript reached the
