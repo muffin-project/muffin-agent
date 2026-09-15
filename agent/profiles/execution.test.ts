@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { CONSERVATIVE, loadProfiles } from './profile.js';
+import { CONSERVATIVE, DEFAULT_EXECUTION, loadProfiles } from './profile.js';
 
 const expected = {
   'consumer-local': {
     modelCallDeadlineMs: 90_000,
-    turnWallDeadlineMs: 180_000,
-    activeModelBudgetMs: 120_000,
+    turnWallDeadlineMs: 900_000,
+    activeModelBudgetMs: 900_000,
     firstActivityTimeoutMs: 30_000,
     stallTimeoutMs: 25_000,
     heartbeatIntervalMs: 15_000,
@@ -28,7 +28,7 @@ describe('shipped execution envelopes', () => {
   });
 
   it('the unknown-model conservative floor is bounded too', () => {
-    expect(CONSERVATIVE.execution).toEqual(expected['consumer-local']);
+    expect(CONSERVATIVE.execution).toEqual(DEFAULT_EXECUTION);
   });
 
   it('every shipped envelope can heartbeat and stall before its hard model deadline', () => {

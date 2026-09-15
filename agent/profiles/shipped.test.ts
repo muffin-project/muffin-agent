@@ -66,6 +66,18 @@ describe('shipped profiles', () => {
     expect(consumer?.sampling).toBe('deterministic');
   });
 
+  it('consumer-local: has no arbitrary call ceiling and allows a 15-minute horizon', () => {
+    const consumer = profiles.find((p) => p.name === 'consumer-local');
+
+    // Multi-step work is bounded by time, spend and explicit cancellation,
+    // not by an arbitrary number of tool calls.
+    expect(consumer?.maxToolCallsPerTurn).toBeNull();
+    expect(consumer?.execution).toMatchObject({
+      turnWallDeadlineMs: 900_000,
+      activeModelBudgetMs: 900_000,
+    });
+  });
+
   it('a profile from before `sampling` existed keeps the behaviour it had', () => {
     // The field is defaulted rather than required precisely so a third-party
     // profile does not silently acquire a new request shape on upgrade.
