@@ -1,9 +1,9 @@
-import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import DatabaseCtor from 'better-sqlite3';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDecide } from '../../core/policy/decide.js';
 import { POLICY_FLOOR } from '../../core/policy/matrix.js';
 import type { Principal } from '../../core/policy/types.js';
@@ -13,7 +13,14 @@ import { TurnStore } from '../../core/turns/store.js';
 import { TodoStore } from '../../core/turns/todo.js';
 import * as barrel from '../loop.js';
 import { CONSERVATIVE } from '../profiles/profile.js';
-import { ProviderError, type ChatCall, type ChatResult, type Provider } from '../providers/types.js';
+import {
+  type ChatCall,
+  type ChatResult,
+  type Provider,
+  ProviderError,
+} from '../providers/types.js';
+
+afterEach(() => vi.restoreAllMocks());
 
 /**
  * Slice 9 (Fase A, §3) takes the ways in — `enqueueTurn`, `runTurn`,
@@ -41,7 +48,13 @@ const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' 
 const NOW = () => new Date('2026-09-05T10:00:00.000Z');
 const CORREZIONE = 'no, fermati e dimmi solo il titolo';
 
-const answer = (text: string): ChatResult => ({ text, toolCalls: [], stopReason: 'end', usage, model: 'test-model' });
+const answer = (text: string): ChatResult => ({
+  text,
+  toolCalls: [],
+  stopReason: 'end',
+  usage,
+  model: 'test-model',
+});
 
 /** Registra ogni chiamata e lascia agire l'owner *durante* la n-esima. */
 class Scripted implements Provider {
@@ -74,7 +87,12 @@ function world(script: (ChatResult | Error)[], durante: (n: number) => void = ()
     model: 'test-model',
     tools: [],
     capabilities,
-    decide: createDecide({ matrix: POLICY_FLOOR, capabilities, budgetExhausted: () => false, hardened: true }),
+    decide: createDecide({
+      matrix: POLICY_FLOOR,
+      capabilities,
+      budgetExhausted: () => false,
+      hardened: true,
+    }),
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions,
     turns,
@@ -100,10 +118,15 @@ describe('agent/loop.ts è un barile, e niente altro', () => {
   });
 
   it('non dichiara più niente da sé: solo commento e ri-esportazioni', () => {
-    const testo = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'loop.ts'), 'utf8');
+    const testo = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', 'loop.ts'),
+      'utf8',
+    );
     const dichiarazioni = testo
       .split('\n')
-      .filter((riga) => /^(export )?(async )?(function|class|const|let|var|type|interface) /.test(riga));
+      .filter((riga) =>
+        /^(export )?(async )?(function|class|const|let|var|type|interface) /.test(riga),
+      );
     expect(dichiarazioni).toEqual([]);
     // Il tetto che la fetta dichiara. Non è estetica: una riga di logica qui
     // è una riga che nessuno dei nove moduli possiede.
@@ -112,29 +135,30 @@ describe('agent/loop.ts è un barile, e niente altro', () => {
 });
 
 describe('l imbuto: il drain sta su drive(), non su finish()', () => {
-  it('ramo throw: il provider esaurisce i ritentativi e la correzione finisce in conversazione', async () => {
-    // La strada che non passa da `finish` **mai**: `guidaIlTurno` rilancia,
-    // e senza il drain nel `catch` di `drive()` la correzione muore con
-    // l'array che il connettore sta per cancellare nel suo `finally`.
+  it('provider error terminale: la correzione resta durevole e l’errore ha forma sicura', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    // L'errore terminale passa da `finish`; la correzione deve comunque essere
+    // salvata esattamente una volta e non deve esporre il testo del provider.
     const coda: string[] = [];
     const w = world([new ProviderError('502 dal provider', true, 502, 'transport')], (n) => {
-      // Il terzo tentativo è l'ultimo (`MAX_TRANSPORT_RETRIES` = 2): nessun
+      // L'undicesimo tentativo è l'ultimo (`MAX_TRANSPORT_RETRIES` = 10): nessun
       // giro successivo la drena, quindi al `throw` è ancora nella porta.
-      if (n === 3) coda.push(CORREZIONE);
+      if (n === 11) coda.push(CORREZIONE);
     });
     const session = w.sessions.open('ramo-throw');
 
-    await expect(
-      barrel.runTurn(w.deps, {
-        principal: owner,
-        tenant: 'host',
-        surface: 'cli',
-        session,
-        text: 'cerca una cosa',
-        steer: () => coda.splice(0),
-      }),
-    ).rejects.toThrow('502 dal provider');
+    const result = await barrel.runTurn(w.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session,
+      text: 'cerca una cosa',
+      steer: () => coda.splice(0),
+    });
 
+    expect(result).toMatchObject({ stopped: 'error', reason: 'provider_error' });
+    expect(result.text).toContain('HTTP 502');
+    expect(result.text).not.toContain('502 dal provider');
     expect(quante(w.sessions.read(session), CORREZIONE)).toBe(1);
     expect(coda).toEqual([]);
   });
@@ -266,10 +290,7 @@ describe('a live model switch is atomic at the turn boundary', () => {
     let w!: ReturnType<typeof world>;
 
     w = world(
-      [
-        new ProviderError('output malformato', true, 400, 'output'),
-        answer('risposta A'),
-      ],
+      [new ProviderError('output malformato', true, 400, 'output'), answer('risposta A')],
       (n) => {
         if (n !== 1) return;
 
@@ -298,10 +319,7 @@ describe('a live model switch is atomic at the turn boundary', () => {
     expect(result.text).toBe('risposta A');
 
     expect(providerA.seen).toHaveLength(2);
-    expect(providerA.seen.map((call) => call.model)).toEqual([
-      'test-model',
-      'test-model',
-    ]);
+    expect(providerA.seen.map((call) => call.model)).toEqual(['test-model', 'test-model']);
 
     expect(providerA.seen[1]?.temperature).toBe(0);
     expect(providerB.seen).toHaveLength(0);
