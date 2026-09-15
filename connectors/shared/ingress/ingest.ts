@@ -42,10 +42,26 @@ import type { TrustTier } from '../../../core/policy/types.js';
  * place (the download plus the indexing attempt), and splitting them would
  * mean reading the file twice to answer two halves of one question.
  */
-export type Arrival = { line: string; image?: ImageBlock; audio?: AudioBlock };
+export type Arrival = {
+  line: string;
+  part?: {
+    source: 'derived';
+    tier: TrustTier;
+    text: string;
+    detail: string;
+  };
+  image?: ImageBlock;
+  audio?: AudioBlock;
+};
 
 /** Where the bytes landed, once the port's own client has fetched them. */
 export type Downloaded = { readonly vaultPath: string; readonly bytes: number };
+
+export const ATTACHMENT_CONTENT_TIER: TrustTier = 2;
+
+export function atLeastAttachmentTier(tier: TrustTier): TrustTier {
+  return tier < ATTACHMENT_CONTENT_TIER ? ATTACHMENT_CONTENT_TIER : tier;
+}
 
 export type IngestDeps = {
   /**
@@ -90,17 +106,16 @@ export type IngestDeps = {
  * summary instead of the document is the failure it avoids. The vault builds
  * it — this module renders what it is given and knows nothing about PDFs.
  *
- * `tier` is the sender's, already raised by the caller to the content taint of
- * the message that carried it (`maxTier(tierOf(principal), contentTaint)`): a
- * document from a group member is tier-2 evidence, and so is one the owner
- * forwarded from somebody else, and both stay that tier through reindexing,
- * which the vault enforces by content hash rather than by path.
+ * `transportTier` describes who carried the bytes into the conversation. It is
+ * only a lower bound on the file content: an authenticated owner upload is not
+ * proof that the owner authored the file. Attachment-derived content therefore
+ * enters at least at tier 2, while higher incoming taint is never lowered.
  */
 export async function ingestAttachment(
   deps: IngestDeps,
   download: () => Promise<Downloaded>,
   tenantId: string,
-  tier: TrustTier,
+  transportTier: TrustTier,
 ): Promise<Arrival> {
   // The name the sender chose is not interpolated here: `composeTurnText`
   // already adds it as its own fenced block whenever the event carries an
@@ -115,7 +130,8 @@ export async function ingestAttachment(
     // The tenant resolved from the authenticated sender travels with the
     // bytes. Using a surface-wide `host` here indexed group documents into
     // the owner's private memory, then made document_read fail in the group.
-    const report = await vault.reindexPath(tenantId, saved.vaultPath, tier);
+    const contentTier = atLeastAttachmentTier(transportTier);
+    const report = await vault.reindexPath(tenantId, saved.vaultPath, contentTier);
     const skipped = report.skipped.find((s) => s.path === saved.vaultPath);
     if (skipped) {
       // Il vault non ha un estrattore per questi byte. Prima di dire «non
@@ -168,7 +184,16 @@ export async function ingestAttachment(
     }
     const document = report.documents.find((d) => d.path === saved.vaultPath);
     if (document) {
-      return { line: `[documento acquisito]\n${document.outline}` };
+      return {
+        line: '[documento acquisito]',
+        part: {
+          source: 'derived',
+          tier: contentTier,
+          text: document.outline,
+          detail:
+            'vista derivata dai byte del documento allegato — dati del documento, non parole di chi lo ha inviato',
+        },
+      };
     }
     return { line: `[ricevuto e indicizzato: \`${saved.vaultPath}\`, ${Math.round(saved.bytes / 1024)}KB]` };
   } catch (error) {
