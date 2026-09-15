@@ -1,6 +1,6 @@
 import { sleep } from '../../core/net/sleep.js';
 import { retryDelayMs } from '../loop/stream.js';
-import { MAX_TRANSPORT_RETRIES } from '../loop/types.js';
+import { MAX_LIGHT_TRANSPORT_RETRIES } from '../loop/types.js';
 import type { Profile } from '../profiles/profile.js';
 import { ProviderError, type ChatCall, type ChatResult, type Provider } from './types.js';
 
@@ -30,9 +30,9 @@ import { ProviderError, type ChatCall, type ChatResult, type Provider } from './
  *    transport-retry budget. The light lane does not enter that loop. Without
  *    an owner here, turning off SDK retries silently changes extraction/judge/
  *    rerank from three bounded wire attempts to one. This wrapper therefore
- *    owns the same two retry gaps for this entry point — transport failures
- *    only, never malformed model output — and uses the same backoff primitive
- *    and constant as the main lane so the two budgets cannot drift by copy.
+ *    owns a separate, smaller retry budget for this entry point — transport
+ *    failures only, never malformed model output — and shares the main lane's
+ *    backoff primitive without inheriting its longer interactive budget.
  *
  * ## Why a wrapper and not a parameter threaded through the three files
  *
@@ -83,7 +83,7 @@ export type LightLaneOptions = {
  * the loop and launch one more paid request with an already-aborted signal.
  */
 async function chatWithTransportRetries(inner: Provider, call: ChatCall): Promise<ChatResult> {
-  let retriesLeft = MAX_TRANSPORT_RETRIES;
+  let retriesLeft = MAX_LIGHT_TRANSPORT_RETRIES;
   while (true) {
     try {
       return await inner.chat(call);
@@ -97,7 +97,7 @@ async function chatWithTransportRetries(inner: Provider, call: ChatCall): Promis
         throw error;
       }
       retriesLeft -= 1;
-      const attempt = MAX_TRANSPORT_RETRIES - retriesLeft;
+      const attempt = MAX_LIGHT_TRANSPORT_RETRIES - retriesLeft;
       await sleep(retryDelayMs(attempt), call.signal);
       if (call.signal?.aborted) throw error;
     }
