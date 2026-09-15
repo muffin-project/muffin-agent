@@ -15,7 +15,9 @@
  *
  * Being wrong here is not dangerous in the direction that matters: an unknown
  * model is charged at the highest known rate, so the cap trips early rather
- * than never.
+ * than never. Explicit zero-price contracts are different: a provider-owned
+ * free router is not an unknown model, and charging it at UNKNOWN would make a
+ * budget claim money was spent when the provider contract says it was not.
  */
 
 export type Price = { inputPerMTok: number; outputPerMTok: number; cachedInputPerMTok?: number };
@@ -84,10 +86,33 @@ const LOCAL_HINTS = ['ollama', 'localhost', '127.0.0.1', 'llama.cpp'];
 
 /** The most expensive thing we know about, for models we do not recognise. */
 const UNKNOWN: Price = { inputPerMTok: 15, outputPerMTok: 75 };
+const FREE: Price = { inputPerMTok: 0, outputPerMTok: 0 };
+
+/**
+ * Provider-owned zero-price routes are contracts, not model-family guesses.
+ *
+ * OpenRouter documents `openrouter/free` as a router whose prompt and completion
+ * price are both zero, and `:free` variants are explicit zero-price model
+ * variants. Scope this to the OpenRouter hostname: a random OpenAI-compatible
+ * endpoint is allowed to use the same slug with completely different billing.
+ */
+export function isOpenRouterFreeRoute(model: string, baseUrl?: string): boolean {
+  if (!baseUrl) return false;
+  let host: string;
+  try {
+    host = new URL(baseUrl).hostname.toLowerCase().replace(/\.$/, '');
+  } catch {
+    return false;
+  }
+  if (!/(^|\.)openrouter\.ai$/.test(host)) return false;
+  const id = model.toLowerCase();
+  return id === 'openrouter/free' || id.endsWith(':free');
+}
 
 export function priceOf(model: string, baseUrl?: string): Price | null {
   const haystack = `${model} ${baseUrl ?? ''}`.toLowerCase();
   if (LOCAL_HINTS.some((h) => haystack.includes(h))) return null;
+  if (isOpenRouterFreeRoute(model, baseUrl)) return FREE;
   const id = model.toLowerCase();
   for (const [pattern, price] of PRICES) {
     if (id.includes(pattern)) return price;
