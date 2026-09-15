@@ -6,6 +6,7 @@ import { describe } from 'vitest';
 import { EXIT_STOPPED } from '../../../core/gateway/service.js';
 import { planUnit } from '../../../core/gateway/unit.js';
 import { install, until } from '../harness.js';
+import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
 import { privateMessage, startFakeTelegram } from '../telegram.js';
 import { scenario } from '../scenario.js';
 
@@ -443,7 +444,7 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
           // Then the property that actually matters to the owner: a second,
           // unrelated process remembers it — same shape as c-memory.accept.ts's
           // C1, reused here across a surface boundary instead of a session one.
-          const recall = await inst.muffin(['run', '--session', 'a10-recall', '--timeout', '20', 'qual è il mio piatto preferito?']);
+          const recall = await inst.muffin(['run', '--session', 'a10-recall', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'qual è il mio piatto preferito?']);
           if (recall.code !== 0) throw new Error(`il turno di richiamo: exit ${recall.code}\n${recall.err}`);
           const sentToRecall = inst.provider.main().at(-1);
           if (!sentToRecall) throw new Error('il turno di richiamo non ha mai chiamato il modello');
@@ -492,6 +493,6 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
         await tg.close();
       }
     },
-    30_000,
+    headlessTestTimeoutMs(2),
   );
 });

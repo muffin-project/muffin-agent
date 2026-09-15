@@ -20,6 +20,7 @@ import { runUpdate } from '../../../cli/update.js';
 import { currentSchemaVersion } from '../../../core/db/migrate.js';
 import { EXIT_STOPPED } from '../../../core/gateway/service.js';
 import { install, type Install, type Run } from '../harness.js';
+import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
 import type { RecordedRequest } from '../provider.js';
 import { scenario } from '../scenario.js';
 
@@ -102,7 +103,7 @@ describe('acceptance · A · installazione e ciclo di vita', () => {
         // A turn that suspends on `wait`, straight from the CLI — no gateway
         // involved, same shape as B3. An hour out is "clearly not due yet",
         // not a real wait: backdated below, once no gateway is alive to race.
-        const suspended = await inst.muffin(['run', '--session', 'a1-recovery', '--timeout', '20', 'avvisami fra un’ora']);
+        const suspended = await inst.muffin(['run', '--session', 'a1-recovery', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'avvisami fra un’ora']);
         if (suspended.code !== 6) {
           throw new Error(`atteso exit 6 (sospeso) dal turno che aspetta, ricevuto ${suspended.code}\n${suspended.err}`);
         }
@@ -228,7 +229,7 @@ describe('acceptance · A · installazione e ciclo di vita', () => {
         await inst.cleanup();
       }
     },
-    60_000,
+    headlessTestTimeoutMs(2),
   );
 });
 
@@ -257,7 +258,7 @@ describe('acceptance · A2/A3 · identity + persona wiring', () => {
 
   beforeAll(async () => {
     inst = await install({ main: [{ text: 'ciao, sono Muffin' }] });
-    const run = await inst.muffin(['run', '--timeout', '20', 'ciao']);
+    const run = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'ciao']);
     if (run.code !== 0) throw new Error(`turno iniziale: exit ${run.code}\n${run.err}`);
 
     const mainCalls = inst.provider.main();
@@ -268,7 +269,7 @@ describe('acceptance · A2/A3 · identity + persona wiring', () => {
     const promptShow = await inst.muffin(['prompt', 'show']);
     if (promptShow.code !== 0) throw new Error(`muffin prompt show: exit ${promptShow.code}\n${promptShow.err}`);
     shown = promptShow.out;
-  }, 30_000);
+  }, headlessTestTimeoutMs(1));
 
   afterAll(async () => {
     await inst.cleanup();
@@ -402,7 +403,7 @@ describe('acceptance · A · doctor, backup', () => {
         ],
       });
       try {
-        const said = await inst.muffin(['run', '--timeout', '20', 'il mio numero fortunato è 42, ricordatelo']);
+        const said = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'il mio numero fortunato è 42, ricordatelo']);
         if (said.code !== 0) throw new Error(`turno iniziale: exit ${said.code}\n${said.err}`);
 
         const before = await inst.muffin(['memory', 'search', 'numero fortunato']);
@@ -425,7 +426,7 @@ describe('acceptance · A · doctor, backup', () => {
 
         // Written AFTER the backup — the property this proves is that
         // restore *replaces*, not merges: this must vanish once restored.
-        const said2 = await inst.muffin(['run', '--timeout', '20', 'la mia squadra del cuore è il Milan, ricordatelo']);
+        const said2 = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'la mia squadra del cuore è il Milan, ricordatelo']);
         if (said2.code !== 0) throw new Error(`secondo turno: exit ${said2.code}\n${said2.err}`);
         const midway = await inst.muffin(['memory', 'search', 'Milan']);
         if (midway.code !== 0 || !midway.out.includes('Milan')) {
@@ -464,7 +465,7 @@ describe('acceptance · A · doctor, backup', () => {
         await inst.cleanup();
       }
     },
-    30_000,
+    headlessTestTimeoutMs(2),
   );
 
   scenario(
@@ -588,7 +589,7 @@ describe('acceptance · A6 · update: backup before swap', () => {
     async () => {
       const inst = await install({ main: [{ text: 'segnato: 42' }] });
       try {
-        const said = await inst.muffin(['run', '--timeout', '20', 'il mio numero fortunato è 42, ricordatelo']);
+        const said = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'il mio numero fortunato è 42, ricordatelo']);
         if (said.code !== 0) throw new Error(`turno iniziale: exit ${said.code}\n${said.err}`);
         const before = await inst.muffin(['memory', 'search', 'numero fortunato']);
         if (before.code !== 0 || !before.out.includes('42')) {
@@ -739,7 +740,7 @@ describe('acceptance · A6 · update: backup before swap', () => {
         await inst.cleanup();
       }
     },
-    60_000,
+    headlessTestTimeoutMs(1),
   );
 });
 
@@ -771,7 +772,7 @@ describe('acceptance · A4 · config: hand-edit + reseal, end to end', () => {
         const baseline = JSON.parse(readFileSync(configPath, 'utf8')) as { models: { main: string } };
         const originalModel = baseline.models.main;
 
-        const first = await inst.muffin(['run', '--timeout', '20', 'ciao']);
+        const first = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'ciao']);
         if (first.code !== 0) throw new Error(`turno iniziale: exit ${first.code}\n${first.err}`);
         const firstModelSent = inst.provider.main().at(-1)?.model;
         if (firstModelSent !== originalModel) {
@@ -798,7 +799,7 @@ describe('acceptance · A4 · config: hand-edit + reseal, end to end', () => {
         // The edited value is what the BINARY actually uses next — not just
         // what a reader of config.json would show. No `rot reseal` in
         // between: an unsealed knob must not need one.
-        const second = await inst.muffin(['run', '--timeout', '20', 'ciao di nuovo']);
+        const second = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'ciao di nuovo']);
         if (second.code !== 0) throw new Error(`turno dopo l'hand-edit: exit ${second.code}\n${second.err}`);
         const secondModelSent = inst.provider.main().at(-1)?.model;
         if (secondModelSent !== EDITED_MODEL) {
@@ -825,7 +826,7 @@ describe('acceptance · A4 · config: hand-edit + reseal, end to end', () => {
         // turno si ferma"). This is what tells apart "the seal enforces a
         // real cap" from "the seal is decorative and the real cap is
         // somewhere unsealed can reach".
-        const stoppedByCap = await inst.muffin(['run', '--timeout', '20', 'un turno qualsiasi']);
+        const stoppedByCap = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'un turno qualsiasi']);
         if (stoppedByCap.code !== 4) {
           throw new Error(`atteso exit 4 (budget) col tetto azzerato a mano, ricevuto ${stoppedByCap.code}\n${stoppedByCap.out}${stoppedByCap.err}`);
         }
@@ -866,7 +867,7 @@ describe('acceptance · A4 · config: hand-edit + reseal, end to end', () => {
         await inst.cleanup();
       }
     },
-    30_000,
+    headlessTestTimeoutMs(3),
   );
 });
 
@@ -899,7 +900,7 @@ describe('acceptance · A7 · migration: additive migration on populated data, a
     async () => {
       const inst = await install({ main: [{ text: 'ciao' }] });
       try {
-        const said = await inst.muffin(['run', '--timeout', '20', 'ciao']);
+        const said = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'ciao']);
         if (said.code !== 0) throw new Error(`turno iniziale: exit ${said.code}\n${said.err}`);
 
         const dbFile = join(inst.home, 'muffin.db');
@@ -1034,6 +1035,6 @@ describe('acceptance · A7 · migration: additive migration on populated data, a
         await inst.cleanup();
       }
     },
-    30_000,
+    headlessTestTimeoutMs(1),
   );
 });
