@@ -30,7 +30,7 @@
  *
  * ## The hard part: bwrap inside Docker on macOS
  *
- * `ci.yml` and `accettazione.yml` install an AppArmor profile on the runner so
+ * Both jobs of `ci.yml` install an AppArmor profile on the runner so
  * `bwrap` can create a user namespace. That step cannot succeed inside *any*
  * Docker container — there is no kernel AppArmor interface to write to
  * (`/etc/apparmor.d` exists, `apparmor_parser` has nothing to talk to) —
