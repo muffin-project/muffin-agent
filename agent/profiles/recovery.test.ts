@@ -11,7 +11,7 @@ import { recoveryStep } from './recovery.js';
  * exactly what the loop used to execute.
  */
 describe('the recovery steps', () => {
-  const ALL: RecoveryStrategy[] = ['nudge', 'reinjectTools', 'retryOnce', 'strictJson'];
+  const ALL: RecoveryStrategy[] = ['nudge', 'reinjectTools', 'retryOnce', 'strictJson', 'requireTool'];
   const ctx = { failure: 'empty' as const, tools: ['fs_read', 'fs_write'] };
 
   it('gives a different intervention for every declared strategy', () => {
@@ -57,8 +57,17 @@ describe('the recovery steps', () => {
 
     expect(malformed('nudge')).not.toBe(empty('nudge'));
     expect(malformed('nudge')).toMatch(/JSON/);
-    for (const s of ['reinjectTools', 'retryOnce', 'strictJson'] as RecoveryStrategy[]) {
+    for (const s of ['reinjectTools', 'retryOnce', 'strictJson', 'requireTool'] as RecoveryStrategy[]) {
       expect(malformed(s)).toBe(empty(s));
     }
+  });
+
+  it('demands a call on requireTool, with no third shape', () => {
+    // The wire flag (`tool_choice: required`) is armed by the loop, not by
+    // this message — but the transcript must still say a call is due, or the
+    // forced request arrives unexplained.
+    const said = recoveryStep('requireTool', ctx).message ?? '';
+    expect(said).toMatch(/tool call/);
+    expect(said).toMatch(/non puoi/);
   });
 });
