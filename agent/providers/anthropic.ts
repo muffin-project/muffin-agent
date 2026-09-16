@@ -225,7 +225,7 @@ function requestBody(call: ChatCall): Omit<Anthropic.MessageCreateParamsNonStrea
             description: t.description,
             input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
           })),
-          tool_choice: { type: call.toolChoice === 'none' ? ('none' as const) : ('auto' as const) },
+          tool_choice: { type: call.toolChoice === 'none' ? ('none' as const) : call.toolChoice === 'required' ? ('any' as const) : ('auto' as const) },
         }
       : {}),
     // `{type:'enabled', budget_tokens}` used to stand here. It is

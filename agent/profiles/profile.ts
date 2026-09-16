@@ -36,7 +36,14 @@ export type RecoveryStrategy =
   /** Transient garbage from the model: ask again, adding nothing. */
   | 'retryOnce'
   /** Prose where a call was needed: a two-option contract, no third shape. */
-  | 'strictJson';
+  | 'strictJson'
+  /**
+   * Stall after gentler rungs: the next attempt sends `tool_choice: required`
+   * at the wire (ADR-0082) plus a message saying a call is due. Last resort
+   * before the turn fails — never first, because forcing a call manufactures
+   * an action the model never chose.
+   */
+  | 'requireTool';
 
 export type ProfileExecution = {
   modelCallDeadlineMs: number;
@@ -181,7 +188,7 @@ const ProfileSchema = z.object({
   // this field existed — so a profile written against the old schema keeps
   // exactly the behaviour it had instead of silently acquiring a new one.
   sampling: z.enum(['deterministic', 'model-default']).default('deterministic'),
-  recovery: z.array(z.enum(['nudge', 'reinjectTools', 'retryOnce', 'strictJson'])),
+  recovery: z.array(z.enum(['nudge', 'reinjectTools', 'retryOnce', 'strictJson', 'requireTool'])),
   // Whole-field default closes the upgrade path: a schema-v1 profile from
   // before P0 gets the same six bounded values as the conservative runtime
   // floor. Per-field defaults also make a partially migrated profile converge

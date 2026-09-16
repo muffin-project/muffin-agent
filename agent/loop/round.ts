@@ -111,7 +111,12 @@ export function recover(scope: TurnScope, failure: RecoveryFailure): boolean {
   const strategy = deps.profile.recovery[run.recoveriesUsed];
   if (strategy === undefined) return false;
   run.recoveriesUsed += 1;
-  const step = recoveryStep(strategy, { failure, tools: exposed.map((t) => t.spec.name) });
+  // The wire half of `requireTool`: the next attempt demands a call. The
+  // message half is in `recoveryStep` below; both travel together.
+  if (strategy === 'requireTool') {
+    run.requireToolOnce = true;
+    turn.setAttributes({ 'muffin.recovery.tool_choice': 'required' });
+  }  const step = recoveryStep(strategy, { failure, tools: exposed.map((t) => t.spec.name) });
   if (step.message !== undefined) {
     run.messages.push({ role: 'user', content: [{ type: 'text', text: step.message }] });
   }
@@ -245,7 +250,10 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // compra — una cache che, misurata, prendeva 0% fra un turno e
       // l'altro.
       conversation: input.session.id,
-      ...(exposed.length > 0 ? { tools: exposed.map((t) => t.spec), toolChoice: 'auto' as const } : {}),
+      // One attempt, demanded by the `requireTool` rung (ADR-0082). `auto`
+      // everywhere else: forcing a tool on a turn that needs none
+      // manufactures an action the model never chose.
+      ...(exposed.length > 0 ? { tools: exposed.map((t) => t.spec), toolChoice: (run.requireToolOnce ? 'required' as const : 'auto' as const) } : {}),
       maxOutputTokens: 4096,
       // The profile decides both, and until this slice neither reached the
       // wire: the profile's legacy `thinking` vocabulary is normalized into
@@ -281,6 +289,9 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       },
       turn,
     );
+    if (run.requireToolOnce) {
+      chatSpan.setAttributes({ 'muffin.recovery.tool_choice': 'required' });
+    }
     const reasoningResolution = await deps.provider.resolveReasoning?.(call);
     if (reasoningResolution !== undefined) {
       chatSpan.setAttributes({
@@ -459,6 +470,10 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       }
       throw error;
     }
+    // Consumed: the escalation lasts exactly one provider response. A
+    // transport retry that `continue`d above rebuilds `call` with the flag
+    // still armed, so the retry keeps `required`.
+    run.requireToolOnce = false;
     chatSpan.setAttributes({
       'muffin.chat_call.duration_ms': Date.now() - chatCallStartedAt,
       ...(lastTelemetry === undefined ? {} : { 'muffin.chat_call.active_model_ms_after': lastTelemetry.activeModelMsAfter }),
