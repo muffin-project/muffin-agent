@@ -6,6 +6,8 @@ import { homedir, userInfo } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { attachMcp, buildRuntime } from '../agent/runtime.js';
+import { runTurn } from '../agent/loop.js';
+import { ForwardHost } from '../core/gateway/forward.js';
 import { makeCommitmentLane } from '../agent/commitment-run.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
 import { makeLaneRunner, NO_SURFACE, type AttachStream, type LaneDeliver } from '../agent/turn-lane.js';
@@ -13,7 +15,8 @@ import { TurnLane, type LaneEvent } from '../core/turns/lane.js';
 import { ModelLane } from '../core/turns/model-lane.js';
 import { ConfigError, paths } from '../core/config/config.js';
 import { GatewayLock, readGateway, type GatewayInfo } from '../core/gateway/lock.js';
-import { CONTROL_PROTOCOL, serveControlSocket, type ControlServer } from '../core/gateway/control-socket.js';
+import { askRaw, CONTROL_PROTOCOL, serveControlSocket, type ControlServer } from '../core/gateway/control-socket.js';
+import type { ExecutionQuery } from '../core/gateway/forward.js';
 import { currentGatewayPid, describeBuild, restartCommand, restartVerdict, run, waitForGatewayPid } from './update.js';
 import { checkSupervisor, realSupervisorProbes, type SupervisorProbes } from '../core/gateway/supervisor.js';
 import { createNotifier, describeSupervision } from '../core/gateway/notify.js';
@@ -60,8 +63,52 @@ import type { SaluteSuperfici } from '../core/surface/salute.js';
  *    know that it is permanent.
  */
 
+export async function cmdGatewayTurn(home: string, id: string): Promise<number> {
+  /**
+   * L'esito di un turno per id, dopo un disconnect o un cancel ambiguo.
+   *
+   * Prima il socket (il gateway vivo sa anche delle execution appena finite,
+   * oltre la riga), poi la riga letta direttamente — che resta vera anche a
+   * gateway spento. Mai una riesecuzione: questa è una domanda, non un turno.
+   */
+  const viaSocket = (await askRaw(home, { verb: 'query', id })) as ExecutionQuery | null;
+  const esito: ExecutionQuery | null =
+    viaSocket ??
+    (() => {
+      const file = paths(home).db;
+      if (!existsSync(file)) return null;
+      const db = new DatabaseCtor(file, { readonly: true });
+      try {
+        const row = db
+          .prepare(`SELECT id, status, turn_outcome AS outcome FROM turns WHERE id = ?`)
+          .get(id) as { id: string; status: string; outcome: string | null } | undefined;
+        if (!row) return { found: false } as ExecutionQuery;
+        if (row.status === 'done') {
+          return { found: true, status: 'done', stopped: row.outcome, text: null, turnId: row.id } as ExecutionQuery;
+        }
+        return { found: true, status: row.status, stopped: null, text: null, turnId: row.id } as ExecutionQuery;
+      } catch {
+        return null;
+      } finally {
+        db.close();
+      }
+    })();
+  if (!esito || !esito.found) {
+    process.stderr.write(`nessun turno ${id}\n`);
+    return 1;
+  }
+  if (esito.stopped) {
+    process.stdout.write(`turno ${id.slice(0, 12)}: ${esito.stopped}\n`);
+    if (esito.text) process.stdout.write(`${esito.text.slice(0, 2000)}\n`);
+    return 0;
+  }
+  process.stdout.write(`turno ${id.slice(0, 12)}: ${esito.status} — esito non ancora noto, non rimandare alla cieca\n`);
+  return 0;
+}
+
 export const GATEWAY_USAGE = `usage:
   muffin gateway status         attivo? da quando? cosa sta facendo?
+  muffin gateway turn <id>      esito di un turno (dopo un disconnect ambiguo)
   muffin gateway stop           drena i turni in volo e lo ferma — e lo tiene
                                 giù, anche su macOS
   muffin gateway start          lo riaccende dopo uno stop
@@ -811,6 +858,33 @@ export async function cmdGatewayRun(
   const modelLane = new ModelLane();
 
   /**
+   * Il terminale come cliente, non come secondo runtime (#533).
+   *
+   * Quando il gateway è vivo è l'unico execution owner: un `muffin` in un
+   * terminale non ricostruisce provider/model/profile/budget in proprio, ma
+   * chiede `run` sul socket di controllo. L'esecuzione avviene qui, sulla
+   * stessa `ModelLane` di scheduler e turn lane — un turno del terminale e
+   * uno di Telegram non chiamano mai il modello insieme. L'autorità non si
+   * muove: il kernel decide come prima, il gateway esegue soltanto.
+   */
+  const forward = new ForwardHost({
+    modelLane,
+    stillOwner: () => lock.isCurrentClaim(),
+    turns: runtime.deps.turns,
+    openSession: (id) => runtime.deps.sessions.open(id),
+    execute: (input) => runTurn(runtime.deps, input),
+    model: () => runtime.config.models.main,
+    log: (line) => process.stderr.write(`${line}\n`),
+  });
+  /**
+   * Le domande del kernel per i turni `cli` che questo gateway esegue per un
+   * terminale: instradate per turnId all'execution viva, sullo stesso socket.
+   * Senza execution viva resta `unavailable` — il comportamento di prima per
+   * il gateway, che un approvatore `cli` non l'ha mai avuto.
+   */
+  runtime.approvers.set('cli', (request, where) => forward.approve(request, where));
+
+  /**
    * The registry exists only after the claim is won — `connectSurfaces` starts
    * polling Telegram, and a second gateway must not do that before it finds out
    * it lost. So the scheduler is handed an indirection rather than the registry,
@@ -1043,39 +1117,56 @@ export async function cmdGatewayRun(
    * diagnosticare e' la coda che scodinzola il cane.
    */
   try {
-    controlSocket = await serveControlSocket(home, (verb) => {
-      if (verb === 'identify') {
-        return {
-          protocol: CONTROL_PROTOCOL,
-          pid: process.pid,
-          home,
-          codeSha: describeBuild(dirname(fileURLToPath(import.meta.url)))?.sha ?? null,
-          startedAt: avviatoAlle,
-        };
-      }
-      if (verb === 'superfici') {
-        // La domanda che nessuno sapeva fare: una superficie abilitata sta
-        // rispondendo adesso? Il gateway e' l'unico processo che lo sa, e la
-        // risposta non sopravvive a lui — per questo si chiede qui e non a una
-        // riga nel database. Prima che le superfici siano su, `null` dice
-        // «non ancora», che e' diverso da «nessuna».
-        return saluteSuperfici === null ? null : { superfici: saluteSuperfici.stato() };
-      }
-      if (verb === 'status') {
-        // Risposto dal processo stesso, race-free: e' la differenza fra questo
-        // e leggere una riga che puo' essere sopravvissuta a chi l'ha scritta.
-        const info = readGateway(runtime.db);
-        return { pid: process.pid, since: info?.since ?? avviatoAlle, status: info?.status ?? 'unknown' };
-      }
-      return null;
-    });
+    controlSocket = await serveControlSocket(
+      home,
+      (verb, body) => {
+        if (verb === 'identify') {
+          return {
+            protocol: CONTROL_PROTOCOL,
+            pid: process.pid,
+            home,
+            codeSha: describeBuild(dirname(fileURLToPath(import.meta.url)))?.sha ?? null,
+            startedAt: avviatoAlle,
+          };
+        }
+        if (verb === 'superfici') {
+          // La domanda che nessuno sapeva fare: una superficie abilitata sta
+          // rispondendo adesso? Il gateway e' l'unico processo che lo sa, e la
+          // risposta non sopravvive a lui — per questo si chiede qui e non a una
+          // riga nel database. Prima che le superfici siano su, `null` dice
+          // «non ancora», che e' diverso da «nessuna».
+          return saluteSuperfici === null ? null : { superfici: saluteSuperfici.stato() };
+        }
+        if (verb === 'status') {
+          // Risposto dal processo stesso, race-free: e' la differenza fra questo
+          // e leggere una riga che puo' essere sopravvissuta a chi l'ha scritta.
+          const info = readGateway(runtime.db);
+          return { pid: process.pid, since: info?.since ?? avviatoAlle, status: info?.status ?? 'unknown' };
+        }
+        if (verb === 'query') {
+          // L'esito di un'execution per id: la risposta a «ha fatto o no?»
+          // dopo un disconnect, senza rieseguire niente.
+          const id = body.id;
+          if (typeof id !== 'string' || id === '') return null;
+          return forward.query(id);
+        }
+        return null;
+      },
+      {
+        // Un `run` non si risponde: si esegue, in streaming, sulla stessa
+        // connessione — vedi `core/gateway/forward.ts`.
+        onStream: (sock, first) => forward.handleRun(sock, first),
+      },
+    );
   } catch (error) {
     process.stderr.write(`socket di controllo non aperto: ${error instanceof Error ? error.message : String(error)}\n`);
   }
 
   // La spinta alla corsia: quando l'owner risponde a un'approvazione da
   // Telegram, il turno riparte subito invece che al prossimo battito.
-  const surfaces = connectSurfaces(runtime, home, gatewayCliWrite, () => {
+  // La stessa istanza di scheduler, turn lane, turni in arrivo (`runWork`)
+  // e turni inoltrati dal terminale (`forward`): una Home, una corsia (#533).
+  const surfaces = connectSurfaces(runtime, home, modelLane, gatewayCliWrite, () => {
     turnLane.tick();
   });
   stopSurfaces = surfaces.stop;
@@ -1089,8 +1180,12 @@ export async function cmdGatewayRun(
   registry = surfaces.registry;
   saluteSuperfici = surfaces.salute;
   // DAY-1 requirement B14, same as runRepl: a file the model produces during a job's
-  // turn can reach the owner as a real attachment.
-  attachSendFile(runtime, home, surfaces.registry);
+  // turn can reach the owner as a real attachment. I canali `forward:<id>` non
+  // appartengono a nessuna superficie: li serve l'execution che il terminale
+  // ha chiesto, con un frame al client invece di una consegna nel journal.
+  attachSendFile(runtime, home, surfaces.registry, (channel, file) =>
+    forward.ownsChannel(channel) ? forward.deliverFile(channel, file) : surfaces.registry.deliverFile(channel, file),
+  );
   let mcpLines: string[] = [];
   try {
     mcpLines = await attachMcp(runtime, home);

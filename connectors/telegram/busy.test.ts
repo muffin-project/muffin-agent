@@ -11,6 +11,7 @@ import { runInit } from '../../cli/init.js';
 import { Pausa } from '../../core/runtime/pausa.js';
 import type { TelegramApi } from './api.js';
 import { TelegramConnector } from './connector.js';
+import { ModelLane } from '../../core/turns/model-lane.js';
 import { TelegramDeliveryStore } from './delivery.js';
 import { UpdateInbox } from './updates.js';
 import type { TurnRecord } from '../../core/turns/store.js';
@@ -109,6 +110,7 @@ function harness(script: Risposta[]) {
   const connector = new TelegramConnector({
     loop: { ...runtime.deps, provider } satisfies LoopDeps,
     sessions: runtime.deps.sessions,
+    lane: new ModelLane(),
     inbox: new UpdateInbox(runtime.db),
     delivery: new TelegramDeliveryStore(runtime.db),
     api,

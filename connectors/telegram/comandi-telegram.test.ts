@@ -10,6 +10,7 @@ import { buildRuntime } from '../../agent/runtime.js';
 import { runInit } from '../../cli/init.js';
 import type { TelegramApi } from './api.js';
 import { TelegramConnector } from './connector.js';
+import { ModelLane } from '../../core/turns/model-lane.js';
 import { TelegramDeliveryStore } from './delivery.js';
 import { UpdateInbox } from './updates.js';
 
@@ -90,6 +91,7 @@ function harness(comandi?: (riga: string, sessionId: string) => Promise<{ testo:
   const connector = new TelegramConnector({
     loop: { ...runtime.deps, provider } satisfies LoopDeps,
     sessions: runtime.deps.sessions,
+    lane: new ModelLane(),
     inbox: new UpdateInbox(runtime.db),
     delivery: new TelegramDeliveryStore(runtime.db),
     api,

@@ -5,6 +5,7 @@ import type { SessionStore } from '../../core/session/store.js';
 import { SaluteSuperfici } from '../../core/surface/salute.js';
 import type { DiscordApi } from './api.js';
 import { DiscordConnector } from './connector.js';
+import { ModelLane } from '../../core/turns/model-lane.js';
 import { DiscordInbox } from './inbox.js';
 import { FakeSocket } from './fake-socket.js';
 
@@ -30,6 +31,7 @@ function connettore(salute: SaluteSuperfici, sockets: FakeSocket[]) {
   return new DiscordConnector({
     loop: {} as LoopDeps,
     sessions: {} as SessionStore,
+    lane: new ModelLane(),
     inbox: new DiscordInbox(new DatabaseCtor(':memory:')),
     api,
     salute,

@@ -12,6 +12,7 @@ import { telegramVault } from '../../cli/surface.js';
 import { paths } from '../../core/config/config.js';
 import { buildPdf, pagesWithoutText } from '../../core/documents/fixtures/pdf.js';
 import { TelegramConnector } from './connector.js';
+import { ModelLane } from '../../core/turns/model-lane.js';
 import type { TelegramApi } from './api.js';
 import { UpdateInbox } from './updates.js';
 import { TelegramDeliveryStore } from './delivery.js';
@@ -136,6 +137,7 @@ function harness(bytes: Buffer | Buffer[], script: ChatResult[] = []) {
   const connector = new TelegramConnector({
     loop: { ...runtime.deps, provider } satisfies LoopDeps,
     sessions: runtime.deps.sessions,
+    lane: new ModelLane(),
     inbox: new UpdateInbox(runtime.db),
     delivery: new TelegramDeliveryStore(runtime.db),
     api,
