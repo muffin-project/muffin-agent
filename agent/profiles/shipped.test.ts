@@ -54,7 +54,9 @@ describe('shipped profiles', () => {
 
   it('consumer-local: the full cascade, in the declared order', () => {
     const consumer = profiles.find((p) => p.name === 'consumer-local');
-    expect(consumer?.recovery).toEqual(['nudge', 'reinjectTools', 'retryOnce', 'strictJson']);
+    // `requireTool` last (ADR-0082): the wire escalation that answers the
+    // Gemma stall — `stop` + prose + zero calls — after the gentler rungs ran.
+    expect(consumer?.recovery).toEqual(['nudge', 'reinjectTools', 'retryOnce', 'strictJson', 'requireTool']);
     // `adaptive` dal 27/08, per decisione dell'owner, e il cambio è vero: da
     // #167 l'adapter openai-compat manda davvero `reasoning:{effort:none}` su
     // OpenRouter, quindi `off` su una famiglia a reasoning ibrido spegneva il
@@ -162,6 +164,7 @@ describe('shipped profiles', () => {
     // downstream — cap, thinking, cascade.
     expect(selectProfile('anthropic/claude-sonnet-5', profiles).name).toBe('frontier');
     expect(selectProfile('qwen/qwen3-max', profiles).name).toBe('consumer-local');
+    expect(selectProfile('google/gemma-4-31b-it', profiles).name).toBe('consumer-local');
     expect(selectProfile('some-model-nobody-knows', profiles).name).toBe('conservative');
   });
 
