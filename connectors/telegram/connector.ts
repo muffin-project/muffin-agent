@@ -5,6 +5,7 @@ import type { AttachStream } from '../../agent/turn-lane.js';
 import { COMANDI, sembraComando, type Controlli } from '../../agent/comandi.js';
 import { recoveredText } from '../../agent/recovered-text.js';
 import type { PendingPairing } from '../../core/config/pairing.js';
+import type { ModelLane } from '../../core/turns/model-lane.js';
 import { fence } from '../../core/memory/spotlight.js';
 import type { SessionStore } from '../../core/session/store.js';
 import type { TrustTier } from '../../core/policy/types.js';
@@ -122,6 +123,14 @@ export type TelegramConfig = {
 
 export type ConnectorDeps = {
   loop: LoopDeps;
+  /**
+   * La ModelLane dell'execution owner di questo processo (#533), girata a
+   * `runWork`: un turno in arrivo la prende prima di chiamare il modello,
+   * sulla stessa istanza di scheduler, lane dei risvegli e turni inoltrati
+   * dal terminale. Obbligatoria: un connettore senza è una porta che esegue
+   * fuori dalla corsia unica della Home.
+   */
+  lane: ModelLane;
   /**
    * Persists the outcome of a pairing attempt. Injected rather than reached for
    * so the connector stays testable without a config file, and so the write is
@@ -1918,7 +1927,7 @@ export class TelegramConnector {
         await testStall('MUFFIN_TELEGRAM_INBOUND_STALL_AFTER_BIND_MS');
         return winner === minted ? { kind: 'mine', workId: minted } : { kind: 'taken', workId: winner };
       },
-      work: { loop: this.deps.loop, sessions: this.deps.sessions },
+      work: { loop: this.deps.loop, sessions: this.deps.sessions, lane: this.deps.lane },
       openLive: () => this.apriIlVivo(incoming),
       deliver: async (_ctx, turnId, text) => {
         // Fault point 5, made observable: a real crash here lands after the

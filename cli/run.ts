@@ -3,6 +3,9 @@ import { attachMcp, buildRuntime } from '../agent/runtime.js';
 import { runTurn, type TurnResult } from '../agent/loop.js';
 import { loadImage } from '../agent/images.js';
 import { paths } from '../core/config/config.js';
+import { resolveExecutionOwner } from '../core/gateway/ownership.js';
+import { mintExecutionId, runViaGateway, UnknownOutcomeError } from '../core/gateway/forward.js';
+import { describeAbort } from './abort.js';
 
 /**
  * Headless single turn.
@@ -84,18 +87,63 @@ export async function runHeadless(options: RunOptions): Promise<RunExit> {
     ? setTimeout(() => controller.abort(), options.timeoutSeconds * 1000)
     : null;
 
+  // #533: un solo execution owner per Home. Con un gateway vivo il turno
+  // gira lì — stesso runtime, stessa ModelLane e stesso budget di Telegram —
+  // non in un secondo runtime costruito qui. Senza gateway, owner locale
+  // esplicito. Un conflitto non esegue affatto: fail closed.
+  const proprietario = await resolveExecutionOwner(home, runtime.db);
+  if (proprietario.kind === 'conflict') {
+    process.stderr.write(`non eseguo: ${proprietario.reason}\n→ ${proprietario.remedy}\n`);
+    if (timeout) clearTimeout(timeout);
+    runtime.close();
+    return 1;
+  }
+  if (proprietario.kind === 'gateway') {
+    process.stderr.write(`esecuzione sul gateway (pid ${proprietario.pid})\n`);
+  } else {
+    // Esplicito, su stderr (stdout resta la risposta e basta): con un gateway
+    // vivo questo comando non eseguirebbe mai in proprio — se lo fa, lo dice.
+    process.stderr.write(`esecuzione locale (nessun gateway attivo)\n`);
+  }
+
   let result: TurnResult;
   try {
-    result = await runTurn(runtime.deps, {
-      principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
-      tenant: 'host',
-      surface: 'cli',
-      session,
-      text: options.goal,
-      ...(images.length > 0 ? { images } : {}),
-      signal: controller.signal,
-    });
+    result =
+      proprietario.kind === 'gateway'
+        ? await runViaGateway(
+            home,
+            {
+              id: mintExecutionId(),
+              text: options.goal,
+              sessionId: session.id,
+              ...(images.length > 0 ? { images } : {}),
+            },
+            {
+              onFile: (file) => process.stderr.write(`[allegato pronto: ${file.absolutePath}]\n`),
+              // Headless non ha un canale per chiedere: come in locale (dove
+              // `deps.approve` è assente), un `ask` ferma il turno con exit 3
+              // invece di inventare un consenso.
+              approve: async () => 'unavailable',
+              signal: controller.signal,
+            },
+          )
+        : await runTurn(runtime.deps, {
+            principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
+            tenant: 'host',
+            surface: 'cli',
+            session,
+            text: options.goal,
+            ...(images.length > 0 ? { images } : {}),
+            signal: controller.signal,
+          });
   } catch (error) {
+    if (error instanceof UnknownOutcomeError) {
+      process.stderr.write(
+        `esito sconosciuto — il turno ${error.turnId.slice(0, 12)} potrebbe aver completato, effetti inclusi\n` +
+          `→ \`muffin gateway turn ${error.turnId}\` per l'esito, non rilanciare alla cieca\n`,
+      );
+      return 1;
+    }
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
   } finally {
@@ -153,7 +201,7 @@ export async function runHeadless(options: RunOptions): Promise<RunExit> {
       );
       return 6;
     case 'aborted':
-      process.stderr.write(`interrotto dopo ${options.timeoutSeconds}s\n`);
+      process.stderr.write(`${describeAbort(result)}\n`);
       return 1;
     case 'error':
       return 1;

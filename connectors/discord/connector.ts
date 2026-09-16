@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { z } from 'zod';
 import type { LoopDeps } from '../../agent/loop.js';
 import type { PendingPairing } from '../../core/config/pairing.js';
+import type { ModelLane } from '../../core/turns/model-lane.js';
 import type { SessionStore } from '../../core/session/store.js';
 import type { TrustTier } from '../../core/policy/types.js';
 import { identify, tierOf, type SurfaceIdentity } from '../../core/surface/types.js';
@@ -87,6 +88,11 @@ export type DiscordConfig = {
 
 export type ConnectorDeps = {
   loop: LoopDeps;
+  /**
+   * La ModelLane dell'execution owner di questo processo (#533) — vedi
+   * `connectors/telegram/connector.ts` per il perché è obbligatoria.
+   */
+  lane: ModelLane;
   /** Persists a pairing outcome. Absent disables pairing — the surface never becomes owned, the safe direction. */
   savePairing?: ((next: { ownerUserId?: string; pairing: PendingPairing | null }) => void) | undefined;
   sessions: SessionStore;
@@ -672,7 +678,7 @@ export class DiscordConnector {
             ingest: (ctx) => this.ingest(incoming, spec, ctx.identity.tenant, tierOf(ctx.identity.principal)),
           }),
       claim: async (): Promise<Claim> => ({ kind: 'mine', workId: randomBytes(16).toString('hex') }),
-      work: { loop: this.deps.loop, sessions: this.deps.sessions },
+      work: { loop: this.deps.loop, sessions: this.deps.sessions, lane: this.deps.lane },
       openLive: async () => this.apriIlVivo(incoming),
       deliver: async (_ctx, _workId, text) => {
         for (const part of renderForDiscord(text)) {

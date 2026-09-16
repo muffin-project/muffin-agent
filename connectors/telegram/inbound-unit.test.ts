@@ -14,6 +14,7 @@ import type { LoopDeps } from '../../agent/loop.js';
 import { CONSERVATIVE } from '../../agent/profiles/profile.js';
 import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types.js';
 import { parseUpdate, TelegramConnector, type Incoming, type TelegramConfig } from './connector.js';
+import { ModelLane } from '../../core/turns/model-lane.js';
 import { TelegramError, type TelegramApiLike } from './api.js';
 import { TelegramDeliveryStore } from './delivery.js';
 import { UpdateInbox, type StoredUpdate } from './updates.js';
@@ -147,6 +148,7 @@ function fixture(script: ChatResult[] = []) {
   const connector = new TelegramConnector({
     loop,
     sessions: loop.sessions,
+    lane: new ModelLane(),
     inbox,
     delivery,
     api,

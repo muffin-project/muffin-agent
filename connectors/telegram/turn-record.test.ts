@@ -10,6 +10,7 @@ import { runInit } from '../../cli/init.js';
 import type { TurnRecord } from '../../core/turns/store.js';
 import { type TelegramApi, TelegramError } from './api.js';
 import { type TelegramConfig, TelegramConnector } from './connector.js';
+import { ModelLane } from '../../core/turns/model-lane.js';
 import { TelegramDeliveryStore } from './delivery.js';
 import { UpdateInbox } from './updates.js';
 
@@ -103,6 +104,7 @@ function harness(
   const connector = new TelegramConnector({
     loop,
     sessions: runtime.deps.sessions,
+    lane: new ModelLane(),
     inbox,
     delivery: new TelegramDeliveryStore(runtime.db),
     api,
