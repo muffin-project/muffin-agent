@@ -1,6 +1,7 @@
 import { runTurn, type LoopDeps, type TurnDelta, type TurnEvent, type TurnResult } from '../../../agent/loop.js';
 import type { AudioBlock, ImageBlock } from '../../../agent/providers/types.js';
 import type { TrustTier } from '../../../core/policy/types.js';
+import { LANE_TURNS, type ModelLane } from '../../../core/turns/model-lane.js';
 import type { SessionStore } from '../../../core/session/store.js';
 import type { SurfaceIdentity } from '../../../core/surface/types.js';
 import type { InboundEvent, IngressPort } from './types.js';
@@ -36,6 +37,17 @@ export type WorkDeps = {
    * same object.
    */
   readonly sessions: SessionStore;
+  /**
+   * La ModelLane dell'execution owner di questo processo (#533).
+   *
+   * Obbligatoria, per la stessa ragione per cui `TurnLane` e `Scheduler` la
+   * pretendono: un turno in arrivo che non la prende è una chiamata al modello
+   * fuori dalla corsia unica della Home — il terminale aspetterebbe Telegram
+   * e Telegram non aspetterebbe nessuno, e la «singola ModelLane» sarebbe una
+   * frase su due token diversi. Il processo che costruisce la porta passa la
+   * sua: il gateway la sua condivisa, il REPL senza gateway la sua.
+   */
+  readonly lane: ModelLane;
 };
 
 export type WorkRequest = {
@@ -77,7 +89,23 @@ export async function runWork(
   event: InboundEvent,
   req: WorkRequest,
 ): Promise<TurnResult> {
-  return runTurn(deps.loop, {
+  /**
+   * La corsia prima della riga, come i turni inoltrati dal terminale
+   * (`core/gateway/forward.ts`): niente parte finché non la teniamo, quindi
+   * due stanze diverse (o il terminale e Telegram) non chiamano mai il
+   * modello insieme sulla stessa Home.
+   *
+   * Attesa pollata e non rifiuto: un aggiornamento rifiutato andrebbe
+   * riaccodato da qualche parte, e quel «da qualche parte» è una seconda
+   * coda accanto a quella che la lane già possiede. Se il segnale scatta
+   * mentre si aspetta, si procede comunque verso `runTurn`, che con un
+   * segnale abortito torna subito `aborted` senza chiamare il modello.
+   */
+  while (!req.signal.aborted && deps.lane.take(LANE_TURNS) !== null) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  try {
+    return await runTurn(deps.loop, {
     signal: req.signal,
     steer: req.steer,
     principal: req.identity.principal,
@@ -115,5 +143,8 @@ export async function runWork(
     replyChannel: event.address.channel,
     ...(req.onDelta === undefined ? {} : { onDelta: req.onDelta }),
     ...(req.onProgress === undefined ? {} : { onProgress: req.onProgress }),
-  });
+    });
+  } finally {
+    deps.lane.release(LANE_TURNS);
+  }
 }

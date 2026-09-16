@@ -5,6 +5,7 @@ import { generatePairingCode, startPairing, type PendingPairing } from '../../co
 import type { LoopDeps } from '../../agent/loop.js';
 import { SessionStore } from '../../core/session/store.js';
 import { TelegramConnector, type TelegramConfig, parseUpdate, principalFor } from './connector.js';
+import { ModelLane } from '../../core/turns/model-lane.js';
 import { UpdateInbox } from './updates.js';
 import { TelegramDeliveryStore } from './delivery.js';
 import type { TelegramApi } from './api.js';
@@ -82,6 +83,7 @@ function harness(config: TelegramConfig) {
   const connector = new TelegramConnector({
     loop,
     sessions: loop.sessions,
+    lane: new ModelLane(),
     inbox: new UpdateInbox(db),
     delivery: new TelegramDeliveryStore(db),
     api,

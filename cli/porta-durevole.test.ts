@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runInit } from './init.js';
 import { connectSurfaces, INGRESS_PORT_IDS } from './surface.js';
+import { ModelLane } from '../core/turns/model-lane.js';
 import { buildRuntime } from '../agent/runtime.js';
 import { loadConfig, saveConfig, writeSecret } from '../core/config/config.js';
 
@@ -96,6 +97,7 @@ describe('un turno sospeso ritrova la sua porta attraverso l assemblaggio', () =
       const surfaces = connectSurfaces(
         runtime,
         home,
+        new ModelLane(),
         () => {},
         undefined,
         () => {},
@@ -130,7 +132,15 @@ describe('un turno sospeso ritrova la sua porta attraverso l assemblaggio', () =
     const home = casa(bot.baseUrl);
     try {
       const runtime = buildRuntime(home, home);
-      const surfaces = connectSurfaces(runtime, home, () => {}, undefined, () => {}, () => ({ pid: 4242 }));
+      const surfaces = connectSurfaces(
+        runtime,
+        home,
+        new ModelLane(),
+        () => {},
+        undefined,
+        () => {},
+        () => ({ pid: 4242 }),
+      );
       try {
         await expect(
           surfaces.deliver({ id: 'x', surface: 'una-porta-che-non-esiste', replyTo: {} } as never, 'testo'),

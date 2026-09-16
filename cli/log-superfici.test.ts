@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runInit } from './init.js';
 import { connectSurfaces, rigaDiLog } from './surface.js';
+import { ModelLane } from '../core/turns/model-lane.js';
 import { buildRuntime } from '../agent/runtime.js';
 import { loadConfig, saveConfig, writeSecret } from '../core/config/config.js';
 import { startFakeProvider } from '../evals/acceptance/provider.js';
@@ -75,7 +76,9 @@ describe('il sink di log di `connectSurfaces` arriva fino al connettore', () => 
         err.push(String(chunk));
         return true;
       });
-      const surfaces = connectSurfaces(runtime, home, () => {}, undefined, (l) => righe.push(l));
+      const surfaces = connectSurfaces(runtime, home, new ModelLane(), () => {}, undefined, (l) =>
+        righe.push(l),
+      );
       try {
         // La riga arriva dopo un `getMe` vero contro il finto server: si aspetta
         // che compaia, non un tempo fisso.

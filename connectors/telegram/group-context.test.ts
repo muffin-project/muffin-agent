@@ -9,6 +9,7 @@ import { buildRuntime } from '../../agent/runtime.js';
 import type { LoopDeps } from '../../agent/loop.js';
 import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types.js';
 import { TelegramConnector, type TelegramConfig } from './connector.js';
+import { ModelLane } from '../../core/turns/model-lane.js';
 import type { TelegramApi } from './api.js';
 import { UpdateInbox } from './updates.js';
 import { TelegramDeliveryStore } from './delivery.js';
@@ -106,6 +107,7 @@ function harness(config: TelegramConfig, script: ChatResult[] = []) {
   const connector = new TelegramConnector({
     loop,
     sessions: runtime.deps.sessions,
+    lane: new ModelLane(),
     inbox: new UpdateInbox(runtime.db),
     delivery: new TelegramDeliveryStore(runtime.db),
     api,
