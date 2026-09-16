@@ -11,6 +11,7 @@ import { SendLock } from '../core/scheduler/sendlock.js';
 import { observe, recordFired, type Observation } from '../core/scheduler/observe.js';
 import { decideProactive } from '../core/scheduler/proactivity.js';
 import type { Deliver } from '../core/scheduler/scheduler.js';
+import { ModelLane } from '../core/turns/model-lane.js';
 import type { Runtime } from '../agent/runtime.js';
 import type { SurfaceRegistry } from '../core/surface/registry.js';
 import { connectSurfaces } from './surface.js';
@@ -230,7 +231,11 @@ async function sendAllowed(
       // The surfaces this home actually has, connected for the length of this
       // command. `--send` is the only path that reaches here, which is why a
       // plain `muffin observe` still opens no connection to anything.
-      const surfaces = connectSurfaces(runtime, home, (text) => process.stdout.write(`\n${text}\n`));
+      // Processo breve senza scheduler né turni eseguiti: la sua corsia non
+      // si condivide con nessuno, ed è per questo che può costruirla qui.
+      const surfaces = connectSurfaces(runtime, home, new ModelLane(), (text) =>
+        process.stdout.write(`\n${text}\n`),
+      );
       stopSurfaces = surfaces.stop;
       deliver = printDeliver(surfaces.registry);
     }

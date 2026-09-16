@@ -30,6 +30,15 @@ import { DELIVERED, MUTA, type DeliveryOutcome, type FileSpec, type Negotiation,
 export type CliWriter = (text: string) => void;
 
 /**
+ * Come un file si annuncia sul terminale — la stessa riga ovunque: qui, e nel
+ * client che riceve un turno dal gateway (`cli/repl.ts`, frame `file`). Una
+ * sola forma perché due forme divergono.
+ */
+export function formatFileReady(absolutePath: string, bytes: number, caption?: string): string {
+  return `[allegato pronto: ${absolutePath} (${Math.round(bytes / 1024)}KB)]` + (caption ? `\n${caption}` : '');
+}
+
+/**
  * L0-1: the surface of last resort, which is why it cannot be disabled and why
  * it is the only one whose `handles` does not depend on configuration.
  *
@@ -101,10 +110,7 @@ export function cliSurface(
       } catch (error) {
         return { delivered: false, why: `${file.absolutePath} non è leggibile: ${error instanceof Error ? error.message : String(error)}` };
       }
-      write(
-        `[allegato pronto: ${file.absolutePath} (${Math.round(bytes / 1024)}KB)]` +
-          (file.caption ? `\n${file.caption}` : ''),
-      );
+      write(formatFileReady(file.absolutePath, bytes, file.caption));
       return DELIVERED;
     },
   };

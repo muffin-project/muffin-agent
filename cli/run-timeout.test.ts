@@ -9,7 +9,10 @@ describe('muffin run --timeout', () => {
       try {
         const r = await inst.muffin(['run', '--timeout', '1', 'dimmi qualcosa']);
         expect(r.code).toBe(1);
-        expect(r.err).toContain('interrotto dopo 1s');
+        // #533: il cancel dice se qualcosa potrebbe essere partito (qui un
+        // passaggio c'è stato) invece di «interrotto dopo Xs» e basta — vedi
+        // `describeAbort`. L'id serve a controllare, non a riprovare.
+        expect(r.err).toContain('annullato dopo 1 passaggi — potrebbe aver già eseguito qualcosa');
       } finally {
         await inst.cleanup();
       }

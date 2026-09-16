@@ -10,6 +10,7 @@ import { SessionStore } from '../../core/session/store.js';
 import { TurnStore } from '../../core/turns/store.js';
 import type { TelegramApi } from './api.js';
 import { TelegramConnector } from './connector.js';
+import { ModelLane } from '../../core/turns/model-lane.js';
 import { TelegramDeliveryStore } from './delivery.js';
 import { UpdateInbox } from './updates.js';
 
@@ -85,6 +86,7 @@ function harness() {
   const connector = new TelegramConnector({
     loop,
     sessions: loop.sessions,
+    lane: new ModelLane(),
     inbox: new UpdateInbox(db),
     delivery: new TelegramDeliveryStore(db),
     api,

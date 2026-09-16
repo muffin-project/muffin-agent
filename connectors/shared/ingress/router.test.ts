@@ -8,6 +8,7 @@ import type { LoopDeps } from '../../../agent/loop.js';
 import type { Provider } from '../../../agent/providers/types.js';
 import type { SessionStore } from '../../../core/session/store.js';
 import type { TurnRecord } from '../../../core/turns/store.js';
+import { ModelLane } from '../../../core/turns/model-lane.js';
 import { QueueNotices } from './lane.js';
 import { INGRESS_STAGES, receive, recover, type IngressHooks, type IngressStage, type RecoverHooks } from './router.js';
 import { makeIngressPort, type InboundEvent, type IngressPort } from './types.js';
@@ -66,7 +67,7 @@ type Traccia = {
  * fingere il turno, «l'unico sito d'ingresso di `runTurn`» sarebbe una frase
  * invece di un fatto.
  */
-function runtimeVero(): { loop: LoopDeps; sessions: SessionStore } {
+function runtimeVero(): { loop: LoopDeps; sessions: SessionStore; lane: ModelLane } {
   const home = mkdtempSync(join(tmpdir(), 'muffin-router-'));
   const workspace = mkdtempSync(join(tmpdir(), 'muffin-router-ws-'));
   runInit({ home, apiKey: 'sk-router-mai-usata' });
@@ -82,7 +83,7 @@ function runtimeVero(): { loop: LoopDeps; sessions: SessionStore } {
         model: 'test-model',
       }) as never,
   };
-  return { loop: { ...runtime.deps, provider }, sessions: runtime.deps.sessions };
+  return { loop: { ...runtime.deps, provider }, sessions: runtime.deps.sessions, lane: new ModelLane() };
 }
 
 function ganci(
