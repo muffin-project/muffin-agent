@@ -75,9 +75,9 @@ import { describe, expect, it } from 'vitest';
  * ## Perché vive qui, con questo nome
  *
  * `.github/workflows/collegamenti.yml` è l'unico job che triggera anche su
- * una PR di soli documenti (`ci.yml` e `accettazione.yml` hanno `docs/**` in
- * `paths-ignore`, per la ragione già scritta in testa a quel workflow) — ed è
- * esattamente il caso che conta: un dato personale rientra quasi sempre
+ * una PR di soli documenti (`ci.yml` ha `docs/**` in `paths-ignore` per
+ * entrambi i suoi job, per la ragione già scritta in testa a quel workflow) —
+ * ed è esattamente il caso che conta: un dato personale rientra quasi sempre
  * editando un documento, mai il codice. Questa slice non può toccare
  * `.github/workflows/` (vincolo del mandato), quindi il guardiano non può
  * aggiungere un proprio step lì: deve entrare nello step già esistente,
