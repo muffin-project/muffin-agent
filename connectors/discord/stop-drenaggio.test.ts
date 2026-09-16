@@ -5,6 +5,7 @@ import type { SessionStore } from '../../core/session/store.js';
 import type { DiscordApi } from './api.js';
 import { DiscordConnector, type ConnectorDeps } from './connector.js';
 import { DiscordInbox } from './inbox.js';
+import { ModelLane } from '../../core/turns/model-lane.js';
 
 /**
  * `TelegramConnector`'s own `stop-drenaggio.test.ts`, over the Discord shape:
@@ -16,6 +17,7 @@ function deps(over: Partial<ConnectorDeps> & Pick<ConnectorDeps, 'api' | 'inbox'
   return {
     loop: {} as LoopDeps,
     sessions: {} as SessionStore,
+    lane: new ModelLane(),
     config: { token: 't' },
     ...over,
   };

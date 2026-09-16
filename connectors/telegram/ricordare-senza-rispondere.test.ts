@@ -11,6 +11,7 @@ import type { Decision } from '../../core/policy/types.js';
 import { Consolidator, CONSOLIDATION_TENANT } from '../../core/memory/consolidator.js';
 import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types.js';
 import { TelegramConnector, type TelegramConfig } from './connector.js';
+import { ModelLane } from '../../core/turns/model-lane.js';
 import type { TelegramApi } from './api.js';
 import { UpdateInbox } from './updates.js';
 import { TelegramDeliveryStore } from './delivery.js';
@@ -70,6 +71,7 @@ function harness(config: TelegramConfig, decide?: LoopDeps['decide']) {
   const connector = new TelegramConnector({
     loop,
     sessions: runtime.deps.sessions,
+    lane: new ModelLane(),
     inbox: new UpdateInbox(runtime.db),
     delivery: new TelegramDeliveryStore(runtime.db),
     api,

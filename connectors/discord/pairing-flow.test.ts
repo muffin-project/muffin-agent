@@ -7,6 +7,7 @@ import { generatePairingCode, startPairing, type PendingPairing } from '../../co
 import type { LoopDeps } from '../../agent/loop.js';
 import { SessionStore } from '../../core/session/store.js';
 import { DiscordConnector, type DiscordConfig, parseMessage, principalFor } from './connector.js';
+import { ModelLane } from '../../core/turns/model-lane.js';
 import { DiscordInbox } from './inbox.js';
 import type { DiscordApi } from './api.js';
 import type { DiscordMessage } from './api.js';
@@ -70,6 +71,7 @@ function harness(config: DiscordConfig) {
   const connector = new DiscordConnector({
     loop,
     sessions: loop.sessions,
+    lane: new ModelLane(),
     inbox: new DiscordInbox(new DatabaseCtor(':memory:')),
     api,
     config,

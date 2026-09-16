@@ -5,6 +5,7 @@ import type { SessionStore } from '../../core/session/store.js';
 import { SaluteSuperfici } from '../../core/surface/salute.js';
 import { TelegramError, type TelegramApiLike } from './api.js';
 import { TelegramConnector, type ConnectorDeps } from './connector.js';
+import { ModelLane } from '../../core/turns/model-lane.js';
 import { UpdateInbox } from './updates.js';
 import { TelegramDeliveryStore } from './delivery.js';
 
@@ -21,6 +22,7 @@ function deps(over: Partial<ConnectorDeps> & Pick<ConnectorDeps, 'api' | 'inbox'
   return {
     loop: {} as LoopDeps,
     sessions: {} as SessionStore,
+    lane: new ModelLane(),
     delivery: new TelegramDeliveryStore(new DatabaseCtor(':memory:')),
     config: { token: 't' },
     sleep: async () => {},

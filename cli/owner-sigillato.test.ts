@@ -9,6 +9,7 @@ import { startFakeProvider } from '../evals/acceptance/provider.js';
 import { privateMessage, startFakeTelegram } from '../evals/acceptance/telegram.js';
 import { runInit } from './init.js';
 import { connectSurfaces } from './surface.js';
+import { ModelLane } from '../core/turns/model-lane.js';
 
 /**
  * Il cablaggio di B15: chi decide l'owner è il sigillo, non `config.json`.
@@ -90,7 +91,7 @@ describe('owner binding · il sigillo decide chi è owner, non config.json', () 
       const bot = await startFakeTelegram();
       const home = casa(bot.url, provider.baseUrl);
       const runtime = buildRuntime(home, home);
-      const superfici = connectSurfaces(runtime, home, () => {}, undefined, () => {});
+      const superfici = connectSurfaces(runtime, home, new ModelLane(), () => {}, undefined, () => {});
       try {
         // B, che solo `config.json` chiama owner, prova un comando di controllo.
         bot.deliver(privateMessage({ id: B_IN_CONFIG, name: 'Legacy' }, '/pause'));

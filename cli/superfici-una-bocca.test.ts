@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runInit } from './init.js';
 import { connectSurfaces } from './surface.js';
+import { ModelLane } from '../core/turns/model-lane.js';
 import { surfaceStandDown } from './repl.js';
 import { buildRuntime } from '../agent/runtime.js';
 import { GatewayLock } from '../core/gateway/lock.js';
@@ -123,6 +124,7 @@ describe('con un gateway vivo, il REPL non apre una seconda bocca su Telegram', 
       const surfaces = connectSurfaces(
         runtime,
         home,
+        new ModelLane(),
         () => {},
         undefined,
         (l) => righe.push(l),
@@ -158,6 +160,7 @@ describe('con un gateway vivo, il REPL non apre una seconda bocca su Telegram', 
       const surfaces = connectSurfaces(
         runtime,
         home,
+        new ModelLane(),
         () => {},
         undefined,
         () => {},
@@ -186,6 +189,7 @@ describe('con un gateway vivo, il REPL non apre una seconda bocca su Telegram', 
       const surfaces = connectSurfaces(
         runtime,
         home,
+        new ModelLane(),
         () => {},
         undefined,
         () => {},

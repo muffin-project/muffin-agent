@@ -5,6 +5,7 @@ import type { SessionStore } from '../../core/session/store.js';
 import { causaDiRete } from '../../core/net/causa.js';
 import { TelegramError, type TelegramApiLike } from './api.js';
 import { TelegramConnector, type ConnectorDeps } from './connector.js';
+import { ModelLane } from '../../core/turns/model-lane.js';
 import { UpdateInbox } from './updates.js';
 import { TelegramDeliveryStore } from './delivery.js';
 
@@ -31,6 +32,7 @@ function baseDeps(over: Partial<ConnectorDeps> & Pick<ConnectorDeps, 'api' | 'in
   return {
     loop: {} as LoopDeps,
     sessions: {} as SessionStore,
+    lane: new ModelLane(),
     delivery: new TelegramDeliveryStore(new DatabaseCtor(':memory:')),
     config: { token: 't' },
     ...over,

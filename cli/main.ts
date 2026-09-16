@@ -40,6 +40,7 @@ import {
   cmdGatewayStart,
   cmdGatewayStatus,
   cmdGatewayStop,
+  cmdGatewayTurn,
   GATEWAY_USAGE,
 } from './gateway.js';
 import { cmdObserve } from './observe.js';
@@ -1014,6 +1015,7 @@ async function cmdGateway(argv: string[]): Promise<number> {
   const home = paths().home;
   if (sub === 'run') return cmdGatewayRun(home);
   if (sub === 'status' || sub === undefined) return cmdGatewayStatus(home);
+  if (sub === 'turn' && rest[0]) return cmdGatewayTurn(home, rest[0]);
   if (sub === 'stop') return cmdGatewayStop(home);
   if (sub === 'start') return cmdGatewayStart(home);
   if (sub === 'restart') return cmdGatewayRestart(home);

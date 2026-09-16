@@ -8,6 +8,7 @@ import type { LoopDeps } from '../../../agent/loop.js';
 import type { Provider } from '../../../agent/providers/types.js';
 import { identify } from '../../../core/surface/types.js';
 import type { TurnRecord } from '../../../core/turns/store.js';
+import { ModelLane } from '../../../core/turns/model-lane.js';
 import { runWork } from './work.js';
 import { makeIngressPort, type InboundEvent, type IngressPort } from './types.js';
 
@@ -83,7 +84,7 @@ async function gira(
 ): Promise<TurnRecord | null> {
   const ev = evento(port);
   const workId = over.workId ?? 'w-uno';
-  await runWork({ loop: env.loop, sessions: env.sessions }, port, ev, {
+  await runWork({ loop: env.loop, sessions: env.sessions, lane: new ModelLane() }, port, ev, {
     workId,
     identity: identify(ev.identity, over.ownerId ?? '7'),
     text: 'ciao',

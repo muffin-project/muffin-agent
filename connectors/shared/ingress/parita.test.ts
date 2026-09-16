@@ -13,6 +13,7 @@ import { INGRESS_PORT_IDS } from '../../../cli/surface.js';
 import { Pausa } from '../../../core/runtime/pausa.js';
 import type { DiscordApi, DiscordMessage } from '../../discord/api.js';
 import { DiscordConnector } from '../../discord/connector.js';
+import { ModelLane } from '../../../core/turns/model-lane.js';
 import { FakeSocket, HELLO, READY } from '../../discord/fake-socket.js';
 import { DiscordInbox } from '../../discord/inbox.js';
 import type { TelegramApi } from '../../telegram/api.js';
@@ -152,6 +153,7 @@ const apriTelegram: Apri = async (over = {}) => {
   const connector = new TelegramConnector({
     loop,
     sessions: runtime.deps.sessions,
+    lane: new ModelLane(),
     inbox,
     delivery: new TelegramDeliveryStore(runtime.db),
     api,
@@ -219,6 +221,7 @@ const apriDiscord: Apri = async (over = {}) => {
   const connector = new DiscordConnector({
     loop,
     sessions: runtime.deps.sessions,
+    lane: new ModelLane(),
     inbox,
     api,
     config: { token: 't', ownerUserId: OWNER_DC },
@@ -522,15 +525,19 @@ function importaComeValore(sorgente: string, nome: string): boolean {
 }
 
 /**
- * Le due bocche che chiamano `runTurn` **senza** essere porte d'ingresso: il
- * terminale interattivo e `muffin run`.
+ * Le bocche che chiamano `runTurn` **senza** essere porte d'ingresso.
  *
  * Enumerate e non escluse per pattern: il terminale non ha un inbox, non ha un
  * evento durevole da legare e non ha una consegna da recuperare dopo un crash,
  * quindi non ha niente da guadagnare dagli stadi — ma il giorno in cui una
  * terza riga comparisse qui sarebbe una decisione, non una svista.
+ *
+ * Quel giorno è #533: `cli/gateway.ts` esegue i turni che il terminale gli
+ * inoltra sul socket di controllo, sullo stesso runtime e la stessa ModelLane
+ * di Telegram — è l'execution owner che esegue, non una terza bocca
+ * indipendente. Il REPL resta in lista per i turni locali senza gateway.
  */
-const BOCCHE_SENZA_INGRESSO = ['cli/repl.ts', 'cli/run.ts'];
+const BOCCHE_SENZA_INGRESSO = ['cli/gateway.ts', 'cli/repl.ts', 'cli/run.ts'];
 
 describe('3. nessun connettore possiede il loop', () => {
   const sorgenti = [...fileNonTest('connectors'), ...fileNonTest('cli')].map((f) => ({
