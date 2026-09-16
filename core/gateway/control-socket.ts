@@ -1,4 +1,4 @@
-import { createServer, connect, type Server } from 'node:net';
+import { createServer, connect, type Server, type Socket } from 'node:net';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -22,11 +22,12 @@ import { join } from 'node:path';
  * chiama `pidAlive`. Un record che può sopravvivere a chi l'ha scritto, più
  * un'euristica sul riuso dei pid. È esattamente quella frase.
  *
- * **v1 è sola osservazione, e la disciplina è deliberata.** Due verbi,
- * `identify` e `status`, che non cambiano niente; `readGateway` non è ancora
- * toccato. Ribaltare la liveness sul socket è un passo separato e piccolo, e
- * separarlo è quello che rende questa slice rivedibile: se il canale ha un
- * difetto, lo si scopre senza che nessuna decisione dipenda ancora da lui.
+ * **v1 era sola osservazione, e la disciplina era deliberata.** Due verbi,
+ * `identify` e `status`, che non cambiavano niente. **v2 aggiunge
+ * l'esecuzione**: `run` (un turno del terminale eseguito dal gateway, in
+ * streaming sulla stessa connessione) e `query` (l'esito di un'execution per
+ * id). La liveness resta dove v1 l'ha messa — `identify` più il claim — e
+ * `run` non la reinventa.
  *
  * **Mai una porta TCP.** Gli ACL del filesystem *sono* il confine di
  * autenticazione — lo stesso modello di fiducia del database che affianca, e
@@ -35,8 +36,16 @@ import { join } from 'node:path';
  * aprire per fare il suo lavoro.
  */
 
-/** Il contratto è versionato: un client che legge un numero che non conosce lo dice, invece di indovinare. */
-export const CONTROL_PROTOCOL = 1;
+/**
+ * Il contratto è versionato: un client che legge un numero che non conosce lo dice, invece di indovinare.
+ *
+ * 2 = v1 (identify/status/superfici, una riga dentro e una fuori) più `run`
+ * (connessione persistente, NDJSON in entrambe le direzioni — vedi
+ * `core/gateway/forward.ts`) e `query` (una riga dentro e una fuori). Un
+ * client che vuole `run` e legge `protocol: 1` sa che deve chiedere il
+ * riavvio del gateway invece di eseguire in locale e sdoppiare il runtime.
+ */
+export const CONTROL_PROTOCOL = 2;
 
 export type Identify = {
   protocol: number;
@@ -97,12 +106,24 @@ export type ControlServer = { path: string; close: () => Promise<void> };
  */
 export async function serveControlSocket(
   home: string,
-  answer: (verb: string) => unknown,
+  answer: (verb: string, body: Record<string, unknown>) => unknown,
+  opts: {
+    /**
+     * Chi esegue un `run`, e tiene la connessione aperta.
+     *
+     * Assente = nessun `run` servito: la prima riga con `verb: 'run'` riceve
+     * un errore e la connessione si chiude, come un verbo sconosciuto. Il
+     * gateway passa l'host di `core/gateway/forward.ts`; chi non ha un
+     * runtime da offrire (i test di v1) non passa niente e il comportamento
+     * resta quello di prima, una riga dentro e una fuori.
+     */
+    onStream?: (sock: Socket, first: Record<string, unknown>) => void;
+  } = {},
 ): Promise<ControlServer> {
   const { path, pointer } = socketPathFor(home);
 
   if (existsSync(path)) {
-    const vivo = await ask(path, 'identify', 500).then(
+    const vivo = await ask(path, { verb: 'identify' }, 500).then(
       (r) => r.ok,
       () => false,
     );
@@ -112,24 +133,42 @@ export async function serveControlSocket(
 
   const server: Server = createServer((sock) => {
     // Un contratto per connessione: una riga JSON dentro, una fuori, e si
-    // chiude. Niente sessioni, niente stato — è la forma che rende un client
-    // sbagliato incapace di tenere il gateway occupato.
+    // chiude — tranne `run`, che tiene la connessione aperta e la consegna a
+    // `onStream`. Niente sessioni oltre quella, niente stato — è la forma che
+    // rende un client sbagliato incapace di tenere il gateway occupato.
     let buf = '';
+    let handedOver = false;
     sock.setEncoding('utf8');
     sock.on('data', (chunk: string) => {
+      if (handedOver) return;
       buf += chunk;
       const nl = buf.indexOf('\n');
       if (nl === -1) {
         // Una riga che non arriva mai è un client rotto o ostile: si tronca
-        // invece di far crescere un buffer per sempre.
-        if (buf.length > 4096) sock.destroy();
+        // invece di far crescere un buffer per sempre. (`run` alza il tetto
+        // una volta consegnato — vedi `forward.ts` — non qui, dove una prima
+        // riga è sempre piccola.)
+        if (buf.length > 65536) sock.destroy();
+        return;
+      }
+      let richiesta: Record<string, unknown>;
+      try {
+        richiesta = JSON.parse(buf.slice(0, nl)) as Record<string, unknown>;
+      } catch (error) {
+        sock.end(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`);
+        return;
+      }
+      const verb = typeof richiesta.verb === 'string' ? richiesta.verb : '';
+      if (verb === 'run' && opts.onStream) {
+        handedOver = true;
+        // Il resto della connessione non passa più di qui.
+        sock.removeAllListeners('data');
+        opts.onStream(sock, richiesta);
         return;
       }
       let risposta: ControlAnswer;
       try {
-        const richiesta = JSON.parse(buf.slice(0, nl)) as { verb?: unknown };
-        const verb = typeof richiesta.verb === 'string' ? richiesta.verb : '';
-        risposta = { ok: true, verb, data: answer(verb) };
+        risposta = { ok: true, verb, data: answer(verb, richiesta) };
       } catch (error) {
         risposta = { ok: false, error: error instanceof Error ? error.message : String(error) };
       }
@@ -164,7 +203,7 @@ export async function serveControlSocket(
 /** Il timeout esiste perché un socket che accetta e non risponde è indistinguibile da uno vivo, senza. */
 const ASK_TIMEOUT_MS = 1_000;
 
-async function ask(path: string, verb: string, timeoutMs: number): Promise<ControlAnswer> {
+async function ask(path: string, payload: Record<string, unknown>, timeoutMs: number): Promise<ControlAnswer> {
   return new Promise<ControlAnswer>((res, rej) => {
     const sock = connect(path);
     let buf = '';
@@ -179,7 +218,7 @@ async function ask(path: string, verb: string, timeoutMs: number): Promise<Contr
       fn();
     };
     sock.setEncoding('utf8');
-    sock.on('connect', () => sock.write(`${JSON.stringify({ verb })}\n`));
+    sock.on('connect', () => sock.write(`${JSON.stringify(payload)}\n`));
     sock.on('data', (chunk: string) => {
       buf += chunk;
       if (!buf.includes('\n')) return;
@@ -198,21 +237,33 @@ async function ask(path: string, verb: string, timeoutMs: number): Promise<Contr
 }
 
 /**
- * Chiede al gateway di questa home.
+ * Una domanda sola, una risposta sola — il corpo dei verbi che non tengono
+ * la connessione aperta (`identify`, `status`, `superfici`, `query`).
  *
  * Restituisce `null` quando non c'è nessuno da chiedere — socket assente,
- * rifiutato, muto. **`null` non significa «gateway morto»**, e chi lo legge non
- * deve trattarlo così finché la liveness non passa di qui (v2): significa
- * «questo canale non ha risposto», che su un gateway avviato prima di questa
- * versione è la risposta normale.
+ * rifiutato, muto. **`null` non significa «gateway morto»**: significa
+ * «questo canale non ha risposto», che su un gateway avviato prima della v2
+ * è la risposta normale.
  */
-export async function askGateway(home: string, verb: 'identify' | 'status' | 'superfici'): Promise<unknown | null> {
+export async function askRaw(home: string, payload: Record<string, unknown>, timeoutMs = ASK_TIMEOUT_MS): Promise<unknown | null> {
   const path = resolveSocketPath(home);
   if (!existsSync(path)) return null;
   try {
-    const r = await ask(path, verb, ASK_TIMEOUT_MS);
+    const r = await ask(path, payload, timeoutMs);
     return r.ok ? r.data : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * Chiede al gateway di questa home.
+ *
+ * Restituisce `null` quando non c'è nessuno da chiedere — socket assente,
+ * rifiutato, muto. **`null` non significa «gateway morto»**, e chi lo legge non
+ * deve trattarlo così: significa «questo canale non ha risposto», che su un
+ * gateway avviato prima di questa versione è la risposta normale.
+ */
+export async function askGateway(home: string, verb: 'identify' | 'status' | 'superfici'): Promise<unknown | null> {
+  return askRaw(home, { verb });
 }

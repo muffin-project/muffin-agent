@@ -19,8 +19,9 @@ import {
   type Config,
 } from '../core/config/config.js';
 import { cliSurface, type CliWriter } from '../core/surface/cli.js';
+import type { ModelLane } from '../core/turns/model-lane.js';
 import { SurfaceRegistry } from '../core/surface/registry.js';
-import type { Surface } from '../core/surface/types.js';
+import type { DeliveryOutcome, FileSpec, Surface } from '../core/surface/types.js';
 import { adoptOwnerState } from '../core/surface/adopt-owner.js';
 import { TelegramApi } from '../connectors/telegram/api.js';
 import { TelegramConnector, type ConnectorDeps } from '../connectors/telegram/connector.js';
@@ -116,6 +117,8 @@ type PortConnectContext = {
   readonly onWork: (() => void) | undefined;
   /** Le righe d'avvio, per la porta che deve dire perché **non** parte. */
   readonly lines: string[];
+  /** La ModelLane dell'execution owner — da `connectSurfaces`, mai ricostruita qui dentro. */
+  readonly lane: ModelLane;
 };
 
 type PortConnection = {
@@ -759,6 +762,16 @@ export function connectSurfaces(
   runtime: Runtime,
   home: string,
   /**
+   * La ModelLane dell'execution owner di questo processo (#533).
+   *
+   * Terzo parametro e obbligatorio — prima degli opzionali — perché
+   * dimenticarla deve essere un errore di compilazione, non un default che
+   * esegue turni in arrivo fuori dalla corsia unica della Home. Il gateway
+   * passa la sua condivisa, il REPL la sua (la stessa dello scheduler che
+   * gira qui quando nessun gateway c'è).
+   */
+  lane: ModelLane,
+  /**
    * Where the CLI surface writes. The REPL has to reprint its prompt after, and
    * a gateway's stdout is the journal — so the destination is the caller's, and
    * only the decision to *have* a CLI surface is made here (L0-1: it is the
@@ -943,6 +956,7 @@ export function connectSurfaces(
         gatewayAtBoot,
         onWork,
         lines,
+        lane,
       });
       // La porta è abilitata ma non può partire, e l'ha già detto con la sua
       // frase e la sua caduta: niente da registrare.
@@ -1066,11 +1080,16 @@ export function connectSurfaces(
  * `connectSurfaces`, so a home with no surfaces enabled still gets `send_file`
  * wired to `cliSurface` — the terminal is always in the registry (L0-1).
  */
-export function attachSendFile(runtime: Runtime, home: string, registry: SurfaceRegistry): void {
+export function attachSendFile(
+  runtime: Runtime,
+  home: string,
+  registry: SurfaceRegistry,
+  deliverFile: (channel: string, file: FileSpec) => Promise<DeliveryOutcome> = registry.deliverFile,
+): void {
   const vaultRoot = paths(home).vault;
   const guards = mandatoryGuards(home, vaultRoot);
   const scope: FsScope = { root: vaultRoot, denyWrite: guards.denyWrite, denyRead: guards.denyRead };
-  runtime.register(makeSendFileTool({ scope, deliverFile: registry.deliverFile }), sendFileCapability);
+  runtime.register(makeSendFileTool({ scope, deliverFile }), sendFileCapability);
 }
 
 /**
@@ -1139,7 +1158,7 @@ function inboxStats(home: string, table: 'telegram_updates' | 'discord_messages'
  * stream e approvatore** (`port.surface.id`, non un letterale).
  */
 function connectTelegram(ctx: PortConnectContext): PortConnection | null {
-  const { runtime, home, log, salute, adesso, sealedOwner, gatewayAtBoot, onWork, lines } = ctx;
+  const { runtime, home, log, salute, adesso, sealedOwner, gatewayAtBoot, onWork, lines, lane } = ctx;
   const token = readSecret('secret://telegram_token', home);
   const tg = runtime.config.surfaces.telegram;
   // Il legame owner viene dal sigillo quando il sigillo ne ha uno; da
@@ -1184,6 +1203,7 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
   const connector = new TelegramConnector({
     loop: runtime.deps,
     sessions: runtime.deps.sessions,
+    lane,
     inbox,
     delivery,
     api,
@@ -1306,7 +1326,7 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
 
 /** Discord, stessa forma e stesso ciclo. Invariato dalla slice 14: la porta arriva alla fetta 15. */
 function connectDiscord(ctx: PortConnectContext): PortConnection | null {
-  const { runtime, home, log, salute, adesso, sealedOwner, gatewayAtBoot, lines } = ctx;
+  const { runtime, home, log, salute, adesso, sealedOwner, gatewayAtBoot, lines, lane } = ctx;
   const token = readSecret('secret://discord_token', home);
   const dc = runtime.config.surfaces.discord;
   // Stessa precedenza di Telegram, stessa funzione: il sigillo prima.
@@ -1323,6 +1343,7 @@ function connectDiscord(ctx: PortConnectContext): PortConnection | null {
   const connector = new DiscordConnector({
     loop: runtime.deps,
     sessions: runtime.deps.sessions,
+    lane,
     inbox,
     api,
     vault: discordVault(runtime, vaultRoot),

@@ -11,6 +11,7 @@ import { buildRuntime } from '../../agent/runtime.js';
 import type { LoopDeps } from '../../agent/loop.js';
 import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types.js';
 import { composeTurnText, contentTaintOf, parseUpdate, principalFor, TelegramConnector, type TelegramConfig } from './connector.js';
+import { ModelLane } from '../../core/turns/model-lane.js';
 import type { TelegramApi } from './api.js';
 import { UpdateInbox } from './updates.js';
 import { TelegramDeliveryStore } from './delivery.js';
@@ -131,6 +132,7 @@ function harness(script: ChatResult[] = []) {
   const connector = new TelegramConnector({
     loop: { ...runtime.deps, provider } satisfies LoopDeps,
     sessions: runtime.deps.sessions,
+    lane: new ModelLane(),
     inbox: new UpdateInbox(runtime.db),
     delivery: new TelegramDeliveryStore(runtime.db),
     api,
@@ -436,6 +438,7 @@ describe('(c, with a real vault) filename fencing does not depend on the arrival
     const connector = new TelegramConnector({
       loop: { ...runtime.deps, provider } satisfies LoopDeps,
       sessions: runtime.deps.sessions,
+      lane: new ModelLane(),
       inbox: new UpdateInbox(runtime.db),
       delivery: new TelegramDeliveryStore(runtime.db),
       api,

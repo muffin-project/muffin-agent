@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseMessage, principalFor, type ConnectorDeps, DiscordConnector } from './connector.js';
+import { ModelLane } from '../../core/turns/model-lane.js';
 import { DiscordInbox } from './inbox.js';
 import { runInit } from '../../cli/init.js';
 import { buildRuntime } from '../../agent/runtime.js';
@@ -176,6 +177,7 @@ function harness(over: { attachment?: { filename: string; content: string }; out
   const deps: ConnectorDeps = {
     loop,
     sessions: loop.sessions,
+    lane: new ModelLane(),
     inbox: new DiscordInbox(new DatabaseCtor(':memory:')),
     api,
     config: { token: 't', ownerUserId: OWNER },
@@ -260,7 +262,14 @@ describe('durability — a message survives a failure mid-turn', () => {
       systemPrompts: { owner: 'x', group: 'x' },
     } as unknown as LoopDeps;
     const api = { sendMessage: async () => ({}) as never, typing: async () => undefined } as unknown as DiscordApi;
-    const connector = new DiscordConnector({ loop, sessions: loop.sessions, inbox, api, config: { token: 't', ownerUserId: OWNER } });
+    const connector = new DiscordConnector({
+      loop,
+      sessions: loop.sessions,
+      lane: new ModelLane(),
+      inbox,
+      api,
+      config: { token: 't', ownerUserId: OWNER },
+    });
 
     const raw: DiscordMessage = { id: '1', channel_id: '42', channel_type: 1, author: { id: OWNER, bot: false }, content: 'ciao' };
     inbox.accept(raw.id, raw, new Date().toISOString());
@@ -325,7 +334,14 @@ describe('concurrency — two dispatches close together (D2)', () => {
       },
       typing: async () => undefined,
     } as unknown as DiscordApi;
-    const connector = new DiscordConnector({ loop, sessions: loop.sessions, inbox, api, config: { token: 't', ownerUserId: OWNER } });
+    const connector = new DiscordConnector({
+      loop,
+      sessions: loop.sessions,
+      lane: new ModelLane(),
+      inbox,
+      api,
+      config: { token: 't', ownerUserId: OWNER },
+    });
     const drain = () => (connector as unknown as { drain: () => Promise<void> }).drain();
 
     const msg1: DiscordMessage = { id: '1', channel_id: '42', channel_type: 1, author: { id: OWNER, bot: false }, content: 'uno' };
@@ -417,6 +433,7 @@ describe('a discord turn records the SurfaceRegistry address (#41 stitching)', (
     const connector = new DiscordConnector({
       loop,
       sessions: runtime.deps.sessions,
+      lane: new ModelLane(),
       inbox,
       api,
       config: { token: 't', ownerUserId: OWNER },
