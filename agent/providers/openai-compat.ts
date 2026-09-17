@@ -412,6 +412,44 @@ export class OpenAICompatProvider implements Provider {
         }
       }
     } catch (error) {
+      /**
+       * L'errore in-band di OpenRouter, riconosciuto da come l'SDK lo porta.
+       *
+       * La documentazione primaria (openrouter.ai/docs, errori e debug): il
+       * 200 parte quando il provider accetta la richiesta, prima che il
+       * modello produca un token — ogni fallimento dopo viaggia DENTRO la
+       * risposta, con un oggetto `error` top-level e `finish_reason: "error"`,
+       * e lo status resta 200. L'SDK solleva quel chunk come `APIError` prima
+       * ancora di cederlo al loop, e lo si riconosce da `status ===
+       * undefined`: un fallimento HTTP vero ha sempre uno status, uno
+       * incorporato nello stream no (misurato contro l'SDK installato).
+       *
+       * Senza questo ramo l'errore cade nel `ProviderStreamError` qui sotto:
+       * "stream rotto", un solo fallback non-streaming, e poi errore secco —
+       * senza mai toccare il budget di trasporto. Invece è un fallimento del
+       * fornitore con un codice, quindi `ProviderError` con la retryability
+       * del codice: 408/429/5xx fanno backoff durevole, 4xx falliscono subito
+       * invece di bruciare 10 retry su una chiave morta.
+       *
+       * Il caso gemello — `finish_reason: 'error'` senza oggetto top-level,
+       * che l'SDK cede normalmente — lo intercetta `toChatResult` qui sotto.
+       * Senza entrambi, un fallimento del fornitore attraversava il loop come
+       * un completamento vuoto con `stopReason: 'end'` (misurato il
+       * 16/09/2026: cinque vuoti da 30,00s, zero retry consumati, quattro
+       * nudge sprecati e poi `error`).
+       */
+      if (error instanceof OpenAI.APIError && error.status === undefined) {
+        const payload = (error as unknown as { error?: unknown }).error;
+        throw providerErrorFromWire(
+          payload !== undefined && payload !== null ? payload : { code: error.code, message: error.message },
+          model,
+        );
+      }
+      // Un ProviderError resta tale: è già classificato (retryable o no,
+      // transport o output) e il chiamante sa instradarlo. Avvolgerlo in un
+      // ProviderStreamError lo degraderebbe a "stream rotto" con un solo
+      // fallback — la stessa forma di mascheramento chiusa qui sopra.
+      if (error instanceof ProviderError) throw error;
       throw new ProviderStreamError(error instanceof Error ? error.message : String(error), receivedAnyEvent, error);
     }
 
@@ -621,6 +659,17 @@ function toChatResult(response: {
     throw new ProviderError('tool_calls announced but no tool call parsed', true, undefined, 'output');
   }
 
+  /**
+   * La metà non-streaming dello stesso fallimento: una 200 con
+   * `finish_reason: 'error'` e contenuto vuoto non è una risposta, è il
+   * fornitore che ha fallito dopo aver accettato la richiesta (stessa
+   * documentazione del controllo `wireError` nello stream). Chiuderla come
+   * risposta alimenta la cascade dei vuoti invece del budget di trasporto.
+   */
+  if (response.finishReason === 'error' && response.text === null && toolCalls.length === 0) {
+    throw new ProviderError('provider reported error finish reason with no content', true, undefined, 'transport');
+  }
+
   return {
     text: response.text,
     toolCalls,
@@ -754,8 +803,41 @@ function mapStopReason(reason: string | null, hasToolCalls: boolean): StopReason
     case 'tool_calls':
       return 'tool_use';
     default:
-      return 'end';
+      // Mai 'end' presunto: una reason che nessuno conosce non è un successo,
+      // è un fallimento con un nome nuovo (il caso `finish_reason: "error"`
+      // non arriva fin qui — lo intercetta il controllo qui sopra — ma il
+      // prossimo sì). `StopReason` ha il braccio `'error'` apposta; è solo
+      // telemetria (il loop instrada su testo/tool call, mai su questo), ma
+      // una telemetria che mente rende il prossimo debug come questo.
+      return 'error';
   }
+}
+
+/**
+ * La forma d'errore in-band di OpenRouter in un `ProviderError` instradabile.
+ *
+ * `{code, message, metadata}` sul chunk (streaming) o nel body (una 200 senza
+ * choices la intercetta già `chat()`). Retryable per codice, con la stessa
+ * regola di `wrap` sotto (429 o 5xx) più il 408 — e codice assente uguale
+ * retryable: senza codice non si sa che non lo sia, e la direzione sicura è
+ * il budget con backoff (finito il quale l'errore resta onesto), non il
+ * silenzio. 400/401/402/403 non riprovano: una chiave morta o una richiesta
+ * malformata non guariscono aspettando.
+ */
+function providerErrorFromWire(wireError: unknown, model: string): ProviderError {
+  const raw = (typeof wireError === 'object' && wireError !== null ? wireError : {}) as {
+    code?: unknown;
+    message?: unknown;
+  };
+  const code = typeof raw.code === 'number' ? raw.code : undefined;
+  const message = typeof raw.message === 'string' && raw.message !== '' ? raw.message : 'provider error';
+  const retryable = code === undefined || code === 408 || code === 429 || code >= 500;
+  return new ProviderError(
+    `${code === undefined ? '' : `${code} `}${message} (${model})`,
+    retryable,
+    code,
+    'transport',
+  );
 }
 
 function wrap(error: unknown): ProviderError {
