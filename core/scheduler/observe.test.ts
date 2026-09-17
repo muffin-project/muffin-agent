@@ -38,6 +38,7 @@ function deps(over: Partial<ObserveDeps> = {}): ObserveDeps {
     absences: () => [absence()],
     decide: decideProactive,
     fires: new FireLog(new DatabaseCtor(':memory:')),
+    tenant: 'host',
     ctx: { now: NOON, quietHours: QUIET, budgetExhausted: false },
     channel: 'cli',
     ...over,
@@ -48,7 +49,7 @@ describe('observe', () => {
   it('arms the real gate and gets an allow — the owner\'s own evidence, awake, under budget', () => {
     const [seen] = observe(deps());
     expect(seen?.decision).toEqual({ effect: 'allow' });
-    expect(seen?.anchor).toBe('absence:7:2026-07-01T09:00:00.000Z');
+    expect(seen?.anchor).toBe('absence:host:7:2026-07-01T09:00:00.000Z');
   });
 
   it('builds the trigger from the absence: closed kind, owner tier, the channel it would speak on', () => {
@@ -69,14 +70,14 @@ describe('observe', () => {
       tier: 0,
       channel: 'telegram',
       kind: 'gone_quiet',
-      anchor: 'absence:7:2026-07-01T09:00:00.000Z',
+      anchor: 'absence:host:7:2026-07-01T09:00:00.000Z',
     });
   });
 
   it('an anchor already fired is skipped and never re-decided', () => {
     const fires = new FireLog(new DatabaseCtor(':memory:'));
     const a = absence();
-    recordFired(fires, { absence: a, anchor: absenceAnchor(a), decision: { effect: 'allow' } }, NOON);
+    recordFired(fires, { absence: a, anchor: absenceAnchor(a, 'host'), decision: { effect: 'allow' } }, NOON);
     const decide = vi.fn(decideProactive);
 
     const [seen] = observe(deps({ fires, decide }));
@@ -90,7 +91,7 @@ describe('observe', () => {
   it('a new silence after the topic came back is a different anchor and may speak', () => {
     const fires = new FireLog(new DatabaseCtor(':memory:'));
     const old = absence();
-    recordFired(fires, { absence: old, anchor: absenceAnchor(old), decision: { effect: 'allow' } }, NOON);
+    recordFired(fires, { absence: old, anchor: absenceAnchor(old, 'host'), decision: { effect: 'allow' } }, NOON);
 
     // Same entity: it was mentioned again in July and then went quiet again.
     const fresh = absence({ lastSeen: '2026-07-20T09:00:00.000Z' });
@@ -128,6 +129,24 @@ describe('observe', () => {
     expect(observe(deps({ absences: () => rows })).map((o) => o.absence.name)).toEqual(['a', 'b']);
   });
 
+  it('the same-numbered silence in two tenants is two anchors: no cross-room suppression', () => {
+    // Entity ids are one autoincrement shared by every tenant: entity 7 here
+    // and entity 7 in a group would otherwise share one dedup row, and a
+    // nudge fired in one room would silence the other forever.
+    const fires = new FireLog(new DatabaseCtor(':memory:'));
+    const a = absence();
+    const hostAnchor = absenceAnchor(a, 'host');
+    const groupAnchor = absenceAnchor(a, 'group:telegram:-100');
+    expect(groupAnchor).not.toBe(hostAnchor);
+
+    recordFired(fires, { absence: a, anchor: hostAnchor, decision: { effect: 'allow' } }, NOON);
+    expect(fires.has(groupAnchor)).toBe(false);
+
+    const [seen] = observe(deps({ fires, tenant: 'group:telegram:-100' }));
+    expect(seen?.anchor).toBe(groupAnchor);
+    expect(seen?.decision).toEqual({ effect: 'allow' });
+  });
+
   it('the ceiling counts decisions, so what was already said cannot crowd out what was not', () => {
     /**
      * The starvation this exists to stop. `p` only shrinks as a silence
@@ -143,7 +162,7 @@ describe('observe', () => {
       absence({ entityId: i, name: `e${i}`, p: 0.001 * i }),
     );
     for (const a of rows.slice(0, 3)) {
-      fires.record({ anchor: absenceAnchor(a), kind: 'gone_quiet', decidedAt: NOON, effect: 'allow', reason: 'x' });
+      fires.record({ anchor: absenceAnchor(a, 'host'), kind: 'gone_quiet', decidedAt: NOON, effect: 'allow', reason: 'x' });
     }
 
     const out = observe(deps({ absences: () => rows, fires }));
@@ -166,9 +185,9 @@ describe('recordFired', () => {
   it('writes the anchor, the kind and the numbers that justified it', () => {
     const fires = new FireLog(new DatabaseCtor(':memory:'));
     const a = absence();
-    recordFired(fires, { absence: a, anchor: absenceAnchor(a), decision: { effect: 'allow' } }, NOON);
+    recordFired(fires, { absence: a, anchor: absenceAnchor(a, 'host'), decision: { effect: 'allow' } }, NOON);
 
-    const row = fires.get(absenceAnchor(a));
+    const row = fires.get(absenceAnchor(a, 'host'));
     expect(row?.kind).toBe('gone_quiet');
     expect(row?.effect).toBe('allow');
     expect(row?.reason).toContain('0.004');
@@ -183,8 +202,8 @@ describe('recordFired', () => {
     // reading as the weakest, permanently.
     const fires = new FireLog(new DatabaseCtor(':memory:'));
     const a = absence({ p: overdueProbability(500, 100, 10), occasions: 11, gapDays: 500 });
-    recordFired(fires, { absence: a, anchor: absenceAnchor(a), decision: { effect: 'allow' } }, NOON);
+    recordFired(fires, { absence: a, anchor: absenceAnchor(a, 'host'), decision: { effect: 'allow' } }, NOON);
 
-    expect(fires.get(absenceAnchor(a))?.reason).not.toContain('0.0000');
+    expect(fires.get(absenceAnchor(a, 'host'))?.reason).not.toContain('0.0000');
   });
 });

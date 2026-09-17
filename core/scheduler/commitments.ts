@@ -165,6 +165,12 @@ export type CommitmentDeps = {
   /** Read here, written by the caller after delivery — see `recordCommitmentFired`. */
   fires: FireLog;
   /**
+   * Whose promises these are. Required, never defaulted: the decision history
+   * is namespaced by it, and a forgotten tenant here would reintroduce exactly
+   * the cross-tenant dedup this namespacing closes.
+   */
+  tenant: string;
+  /**
    * History, not dedup: every evaluation below is appended here (see
    * `decisions.ts`), while `fires` keeps deciding what may speak. Optional so
    * the seam stays testable without a database; production always passes it.
@@ -194,6 +200,7 @@ export function observeCommitments(deps: CommitmentDeps): CommitmentObservation[
         source: 'commitments',
         kind: 'commitment_due',
         anchor,
+        tenant: deps.tenant,
         tier: commitment.tier,
         channel: deps.channel,
         ...decisionParts(decision),
@@ -218,6 +225,7 @@ export function observeCommitments(deps: CommitmentDeps): CommitmentObservation[
       source: 'commitments',
       kind: 'commitment_due',
       anchor,
+      tenant: deps.tenant,
       tier: trigger.tier,
       channel: deps.channel,
       ...decisionParts(decision),
@@ -509,6 +517,7 @@ export class CommitmentLane {
       due: () => this.deps.todos.dueCommitments(this.deps.tenant, now),
       decide: this.deps.decide ?? decideProactive,
       fires: this.deps.fires,
+      tenant: this.deps.tenant,
       ...(this.deps.decisions === undefined ? {} : { decisions: this.deps.decisions }),
       ctx: this.deps.context(now),
       channel,

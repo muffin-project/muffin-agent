@@ -251,6 +251,7 @@ describe('il taint viaggia con la riga', () => {
       due: () => todos.dueCommitments('host', ON_TIME),
       decide: decideProactive,
       fires: new FireLog(db),
+      tenant: 'host',
       ctx: { now: ON_TIME, quietHours: QUIET, budgetExhausted: false },
       channel: 'cli',
     });
