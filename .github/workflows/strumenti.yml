@@ -10,8 +10,8 @@
 #    larga `**/.claude/**` aveva già lasciato passare un cap non testato. Con
 #    l'include di default di vitest (`**/*.test.ts`), i file di test sotto
 #    `.claude/` **fanno parte della suite** e girano su ogni `npm test`.
-#  · ma `ci.yml` e `accettazione.yml` hanno entrambi `.claude/**` in
-#    `paths-ignore`.
+#  · ma `ci.yml` ha `.claude/**` in `paths-ignore` — per entrambi i suoi job
+#    (`verifica` e `accettazione`, un solo workflow dal 2026-09-16).
 #
 # Conseguenza: una PR che tocca **solo** roba sotto `.claude/` non fa partire
 # nessun workflow. Quei test non girano esattamente nel momento in cui il

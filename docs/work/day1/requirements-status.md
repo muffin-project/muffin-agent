@@ -681,9 +681,10 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 > (`ScenarioEntry['expectFailure']`), non contro "ha lanciato qualcosa": uno
 > che fallisce per un motivo diverso da quello scritto è `rosso-inatteso`, non
 > "va bene così". `npm run test:acceptance` gira la sola suite (17 scenari,
-> **~60s** misurati in locale). Job CI dedicato scritto
-> (`.github/workflows/accettazione.yml`), ora anche su `pull_request` verso
-> `dev`/`main` oltre che su `push`/`workflow_dispatch`.
+ > **~60s** misurati in locale). Job CI dedicato: il job `accettazione` di
+ > `.github/workflows/ci.yml` (dal 16/09 unito a `verifica` e gated sul suo
+ > verde), su `pull_request` verso `dev`/`main`, `push` a `main` e
+ > `workflow_dispatch`.
 >
 > **La copertura evolve con l'inventario.** Un verde può provare solo una metà
 > della claim e lasciare la riga BLOCKER (A2/A3, B1, E3/E5). `C8` e le
