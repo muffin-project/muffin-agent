@@ -47,7 +47,7 @@
 # `test:acceptance:linux` (`GATE LINUX` sotto) resta chiamato da qui per
 # `install.sh`/non-root, che nessun workflow prova nemmeno: anche quello non è
 # doppione del job "accettazione" di `ci:local`, che esegue solo i passi che
-# `accettazione.yml` dichiara.
+# il job `accettazione` di `ci.yml` dichiara.
 #
 set -euo pipefail
 
