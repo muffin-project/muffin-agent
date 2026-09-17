@@ -2,7 +2,6 @@
   "schemaVersion": 1,
   "name": "consumer-local",
   "match": [
-    "*gemma*",
     "*qwen3*",
     "*gpt-oss*",
     "*mistral-small*",

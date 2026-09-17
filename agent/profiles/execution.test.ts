@@ -18,6 +18,16 @@ const expected = {
     stallTimeoutMs: 25_000,
     heartbeatIntervalMs: 15_000,
   },
+  // Come consumer-local: il profilo gemma cambia solo il sampling misurato,
+  // non l'orizzonte temporale.
+  gemma: {
+    modelCallDeadlineMs: 90_000,
+    turnWallDeadlineMs: 900_000,
+    activeModelBudgetMs: 900_000,
+    firstActivityTimeoutMs: 30_000,
+    stallTimeoutMs: 25_000,
+    heartbeatIntervalMs: 15_000,
+  },
 } as const;
 
 describe('shipped execution envelopes', () => {

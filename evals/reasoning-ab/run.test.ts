@@ -18,7 +18,7 @@ describe('reasoning-ab fixtures', () => {
       expect(t.turns.length).toBeGreaterThan(0);
       expect(t.reps).toBeGreaterThanOrEqual(1);
     }
-    expect(ARMS).toEqual(['A', 'C']);
+    expect(ARMS).toEqual(['A', 'C', 'T0', 'DEF', 'T07']);
   });
 
   it('T3c: ricorda beta senza rilettura, dimentica senza', () => {

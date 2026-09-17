@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "name": "gemma",
+  "match": ["*gemma*"],
+  "maxToolsExposed": 21,
+  "maxToolCallsPerTurn": null,
+  "thinking": "adaptive",
+  "sampling": "model-default",
+  "recovery": ["nudge", "reinjectTools", "retryOnce", "strictJson", "requireTool"],
+  "execution": {
+    "modelCallDeadlineMs": 90000,
+    "turnWallDeadlineMs": 900000,
+    "activeModelBudgetMs": 900000,
+    "firstActivityTimeoutMs": 30000,
+    "stallTimeoutMs": 25000,
+    "heartbeatIntervalMs": 15000
+  },
+  "notes": "Come consumer-local in tutto tranne il sampling, misurato (non copiato): l'A/B del 18/09/2026 (docs/evidence/reasoning-ab-gemma-2026-09-18.md) mostra che pinnare la temperature — 0 come 0.7 — correla con stop precoci narrati su Gemma 4, mentre il default del provider fa 6/6. Il default resta la direzione sicura anche se la misura è sottile (n=2): non forza niente. La light Gemma perde con questo il temperature: 0 hardcoded delle corsie memoria (strippato come frontier); quel determinismo resta non misurato per Gemma."
+}

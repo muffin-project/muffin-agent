@@ -23,7 +23,7 @@ describe('shipped profiles', () => {
   const profiles = loadProfiles();
 
   it('both load, through the same parser production uses', () => {
-    expect(profiles.map((p) => p.name).sort()).toEqual(['consumer-local', 'frontier']);
+    expect(profiles.map((p) => p.name).sort()).toEqual(['consumer-local', 'frontier', 'gemma']);
   });
 
   it('frontier: a nudge and one retry, in that order', () => {
@@ -78,6 +78,18 @@ describe('shipped profiles', () => {
       turnWallDeadlineMs: 900_000,
       activeModelBudgetMs: 900_000,
     });
+  });
+
+  it('gemma: come consumer-local tranne il sampling misurato', () => {
+    // A/B del 18/09 (reasoning-ab-gemma): pinnare la temperature — 0 come
+    // 0.7 — correla con stop narrati; il default fa 6/6. Il resto è identico
+    // di proposito: stessa cascade (Gemma inciampa uguale), stessi tetti.
+    const gemma = profiles.find((p) => p.name === 'gemma');
+    expect(gemma?.sampling).toBe('model-default');
+    expect(gemma?.thinking).toBe('adaptive');
+    expect(gemma?.recovery).toEqual(['nudge', 'reinjectTools', 'retryOnce', 'strictJson', 'requireTool']);
+    expect(gemma?.maxToolsExposed).toBe(21);
+    expect(gemma?.maxToolCallsPerTurn).toBeNull();
   });
 
   it('a profile from before `sampling` existed keeps the behaviour it had', () => {
@@ -164,7 +176,7 @@ describe('shipped profiles', () => {
     // downstream — cap, thinking, cascade.
     expect(selectProfile('anthropic/claude-sonnet-5', profiles).name).toBe('frontier');
     expect(selectProfile('qwen/qwen3-max', profiles).name).toBe('consumer-local');
-    expect(selectProfile('google/gemma-4-31b-it', profiles).name).toBe('consumer-local');
+    expect(selectProfile('google/gemma-4-31b-it', profiles).name).toBe('gemma');
     expect(selectProfile('some-model-nobody-knows', profiles).name).toBe('conservative');
   });
 

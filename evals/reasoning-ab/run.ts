@@ -1,13 +1,17 @@
 /**
  * Pilot A/B sull'execution policy (issue #498): stessa domanda, tre modi di chiederla.
  *
- * Bracci, a parità di modello (`--model`, di default il main dell'installazione):
+ * Bracci, a parità di modello (`--model`, di default il main dell'installazione;
+ * `--light-model` di default il light):
  *
- * - `A` — status quo: `adaptive` + `deterministic` (il profilo shipped, intatto);
- * - `C` — `off` + `deterministic` (il default che la #498 vieta senza misura).
+ * - `A` — status quo Qwen: `adaptive` + `deterministic` (profilo intatto);
+ * - `C` — `off` + `deterministic`;
+ * - `T0` — profilo intatto (il comportamento di oggi per il modello sotto test);
+ * - `DEF` — campionamento di default del provider;
+ * - `T07` — temperature esplicita 0.7 dal nuovo vocabolario dei profili.
  *
- * (`B` — `adaptive` + `model-default` — misurato nel round 1: indistinguibile
- * da A sui task tool. Fuori per budget, non per dimenticanza.)
+ * (`B` — `adaptive` + `model-default` su Qwen — misurato nel round 1:
+ * indistinguibile da A. `DEF` ne è il gemello generico.)
  *
  * Il quarto braccio della issue (`low/bounded reasoning`) non è esprimibile:
  * `ReasoningRequest.effort/maxTokens` non ha superficie in profilo/config
@@ -35,8 +39,23 @@ import { loadConfig, muffinHome, saveConfig } from '../../core/config/config.js'
 import { runTurn } from '../../agent/loop.js';
 import { buildRuntime, type Runtime } from '../../agent/runtime.js';
 
-type Arm = 'A' | 'C';
-export const ARMS: Arm[] = ['A', 'C'];
+type Arm = 'A' | 'C' | 'T0' | 'DEF' | 'T07';
+export const ARMS: Arm[] = ['A', 'C', 'T0', 'DEF', 'T07'];
+
+/**
+ * Cosa cambia ogni braccio rispetto al profilo shipped, applicato dopo
+ * `buildRuntime` (misura, non configurazione installata):
+ *
+ * - A/C: i bracci Qwen (thinking via config, sampling dal profilo);
+ * - T0: profilo intatto (il comportamento di oggi per il modello sotto test);
+ * - DEF: solo campionamento di default del provider;
+ * - T07: temperature esplicita dal nuovo vocabolario dei profili.
+ */
+const ARM_THINKING: Partial<Record<Arm, 'off'>> = { C: 'off' };
+const ARM_SAMPLING: Partial<Record<Arm, 'model-default' | { temperature: number }>> = {
+  DEF: 'model-default',
+  T07: { temperature: 0.7 },
+};
 
 type TaskDef = {
   id: string;
@@ -166,6 +185,7 @@ const OWNER = { kind: 'owner', connector: 'cli', externalId: 'ab-pilot' } as con
 async function runArm(
   arm: Arm,
   model: string,
+  lightModel: string,
   baseUrl: string,
   apiKey: string,
   out: (l: string) => void,
@@ -175,12 +195,15 @@ async function runArm(
   const home = mkdtempSync(join(tmpdir(), 'muffin-ab-home-'));
   const ws = mkdtempSync(join(tmpdir(), 'muffin-ab-ws-'));
   try {
-    runInit({ home, apiKey, provider: 'openai-compat', baseUrl, mainModel: model, lightModel: model });
-    if (arm === 'C') {
+    runInit({ home, apiKey, provider: 'openai-compat', baseUrl, mainModel: model, lightModel });
+    if (ARM_THINKING[arm] !== undefined) {
       const cfg = loadConfig(home);
-      saveConfig({ ...cfg, thinking: 'off' }, home);
+      saveConfig({ ...cfg, thinking: ARM_THINKING[arm] }, home);
     }
     const runtime: Runtime = buildRuntime(home, ws);
+    if (ARM_SAMPLING[arm] !== undefined) {
+      runtime.deps.profile = { ...runtime.deps.profile, sampling: ARM_SAMPLING[arm] };
+    }
     let asks = 0;
     runtime.approvers.set('cli', async () => {
       asks += 1;
@@ -281,6 +304,7 @@ async function main(): Promise<void> {
   const { values } = parseArgs({
     options: {
       model: { type: 'string' },
+      'light-model': { type: 'string' },
       'base-url': { type: 'string' },
       'api-key-env': { type: 'string', default: 'MUFFIN_AB_KEY' },
       arms: { type: 'string', default: 'A,C' },
@@ -291,6 +315,7 @@ async function main(): Promise<void> {
   });
   const install = loadConfig(muffinHome());
   const model = values.model ?? install.models.main;
+  const lightModel = values['light-model'] ?? install.models.light;
   const baseUrl = values['base-url'] ?? install.provider.baseUrl ?? 'https://openrouter.ai/api/v1';
   const arms = String(values.arms)
     .split(',')
@@ -316,7 +341,7 @@ async function main(): Promise<void> {
   const rows: Row[] = [];
   for (const arm of arms) {
     out(`## braccio ${arm}`);
-    rows.push(...(await runArm(arm, model, baseUrl, key, out, maxUsd, signalMs)));
+    rows.push(...(await runArm(arm, model, lightModel, baseUrl, key, out, maxUsd, signalMs)));
   }
   out('');
   out(table(rows));
