@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { findCheckoutRoot } from './update.js';
+import { findCheckoutRoot } from './git-root.js';
 import { PLAIN, type Style } from './ui.js';
 import {
   REAL_GIT,
