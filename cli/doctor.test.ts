@@ -1933,3 +1933,60 @@ describe('doctor names where the owner binding lives', () => {
     expect(c?.detail).toMatch(/nessuna superficie riconosce più un owner/);
   });
 });
+
+describe('model routing (issue #501)', () => {
+  it('warns, with remedy, when pins derive from another model era', async () => {
+    const dir = home();
+    const c = loadConfig(dir);
+    saveConfig(
+      {
+        ...c,
+        models: { main: 'google/gemma-4-31b-it', light: 'google/gemma-4-26b-a4b-it' },
+        provider: { ...c.provider, routing: { only: ['alibaba'] }, routingForFamily: 'qwen' },
+      },
+      dir,
+    );
+    const found = await check(dir, 'model routing');
+    expect(found?.level).toBe('warn');
+    expect(found?.detail).toContain('alibaba');
+    expect(found?.remedy).toContain('muffin model google/gemma-4-31b-it');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is silent with no pins or marker, ok when the marker confirms', async () => {
+    const plain = home();
+    expect(await check(plain, 'model routing')).toBeUndefined();
+    rmSync(plain, { recursive: true, force: true });
+
+    const dir = home();
+    const c = loadConfig(dir);
+    saveConfig(
+      {
+        ...c,
+        provider: { ...c.provider, routing: { dataCollection: 'deny' }, routingForFamily: 'qwen' },
+        models: { main: 'qwen/qwen3.8-27b', light: 'qwen/qwen3.8-flash' },
+      },
+      dir,
+    );
+    // Solo policy, niente pin: niente da confrontare, nemmeno col marcatore.
+    expect(await check(dir, 'model routing')).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('ok quando il marcatore conferma i pin', async () => {
+    const dir = home();
+    const c = loadConfig(dir);
+    saveConfig(
+      {
+        ...c,
+        provider: { ...c.provider, routing: { only: ['alibaba'] }, routingForFamily: 'qwen' },
+        models: { main: 'qwen/qwen3.8-27b', light: 'qwen/qwen3.8-flash' },
+      },
+      dir,
+    );
+    const found = await check(dir, 'model routing');
+    expect(found?.level).toBe('ok');
+    expect(found?.detail).toContain('qwen');
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
