@@ -1,5 +1,6 @@
-import { readFileSync, readdirSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
@@ -94,22 +95,30 @@ import { describe, expect, it } from 'vitest';
 const QUI = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(QUI, '..');
 
-const IGNORA = new Set(['node_modules', 'dist', '.git', '.releases', '.codex']);
-
-function esclusa(rel: string): boolean {
-  return rel === '.claude/worktrees' || rel.startsWith('.claude/worktrees/');
-}
-
-function tuttiIFile(dir: string, acc: string[] = []): string[] {
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (IGNORA.has(e.name) || e.name.startsWith('.DS')) continue;
-    const p = join(dir, e.name);
-    if (e.isDirectory()) {
-      if (esclusa(relative(REPO, p))) continue;
-      tuttiIFile(p, acc);
-    } else acc.push(p);
-  }
-  return acc;
+/**
+ * Il corpus è il confine di pubblicazione, e il confine di pubblicazione è
+ * Git: ciò che è ignorato non parte mai con un push. La passeggiata grezza
+ * della directory ci cascava: i digest `.claude/deleghe/*.md` — ignorati da
+ * `.gitignore`, rigenerabili, vivi solo sulla macchina del founder — portano
+ * i percorsi assoluti di quella macchina e facevano fallire il guardiano in
+ * locale (18/09/2026, 10 reperti) su un albero verde in CI, dove il checkout
+ * è pulito e quei file non esistono.
+ *
+ * Ma i soli file tracciati non bastano: un leak in un file nuovo non ancora
+ * committato deve fallire *prima* del commit. Quindi tracciati più
+ * non-tracciati-non-ignorati: esattamente ciò che un `git add -A` potrebbe
+ * pubblicare. Se git non risponde, il test fallisce forte invece di
+ * scansionare il confine sbagliato in silenzio.
+ */
+function fileCommittabili(): string[] {
+  const tracked = execFileSync('git', ['ls-files'], { cwd: REPO, encoding: 'utf8' });
+  const fresh = execFileSync('git', ['ls-files', '--others', '--exclude-standard'], {
+    cwd: REPO,
+    encoding: 'utf8',
+  });
+  return [...tracked.split('\n'), ...fresh.split('\n')]
+    .map((s) => s.trim())
+    .filter((s) => s !== '');
 }
 
 // Deliberatamente più largo di `VIVO`/`ARCHIVIATO` di `docs/collegamenti.test.ts`:
@@ -118,8 +127,7 @@ function tuttiIFile(dir: string, acc: string[] = []): string[] {
 // proprio lì vivevano i due leak misurati.
 const LEGGIBILE = /\.(md|ts|tsx|mjs|js|yml|yaml|json|txt)$/;
 
-const file = tuttiIFile(REPO)
-  .map((p) => relative(REPO, p))
+const file = fileCommittabili()
   .filter((p) => LEGGIBILE.test(p))
   .sort();
 
