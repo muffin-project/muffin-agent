@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { decideGitHubMerge } from './guard-merge-gate.mjs';
+import { decideGitHubMerge, type GitHubDecision } from './guard-merge-gate.mjs';
 
 /**
  * Il guard che manda ogni merge da un gate vero. Vedi la testa di
@@ -59,7 +59,7 @@ describe('decideGitHubMerge', () => {
     mergeStateStatus: 'CLEAN',
     ...over,
   });
-  const run = (name: string, status = 'completed', conclusion = 'success') => ({ name, status, conclusion });
+  const run = (name: string, status = 'completed', conclusion: string | null = 'success') => ({ name, status, conclusion });
   const finta = (infoOver = {}, runs = [run('verifica'), run('accettazione'), run('collegamenti'), run('install')]) => {
     const i = info(infoOver);
     return (args: string[]) => {
@@ -78,37 +78,31 @@ describe('decideGitHubMerge', () => {
     const d = decideGitHubMerge('553', () => {
       throw new Error('rete giu');
     });
-    expect(d.ok).toBe(false);
-    expect(d.message).toContain('npm run merge -- 553');
+    expect(no(d)).toContain('npm run merge -- 553');
   });
 
   it('PR chiusa o base non-dev non passano di qui', () => {
     expect(decideGitHubMerge('553', finta({ state: 'MERGED' })).ok).toBe(false);
     const main = decideGitHubMerge('10', finta({ baseRefName: 'main' }));
-    expect(main.ok).toBe(false);
-    expect(main.message).toContain('npm run merge');
+    expect(no(main)).toContain('npm run merge');
   });
 
   it('base mossa o stato non CLEAN: aggiorna il ramo', () => {
     const d = decideGitHubMerge('553', finta({ mergeStateStatus: 'BEHIND' }));
-    expect(d.ok).toBe(false);
-    expect(d.message).toContain('Aggiorna il ramo');
+    expect(no(d)).toContain('Aggiorna il ramo');
   });
 
   it('zero check-run: nessuna evidenza, nessuna scorciatoia', () => {
     const d = decideGitHubMerge('553', finta({}, []));
-    expect(d.ok).toBe(false);
-    expect(d.message).toContain('npm run merge -- 553');
+    expect(no(d)).toContain('npm run merge -- 553');
   });
 
   it('rossi e in-corso bloccano, con nomi che dicono quali', () => {
     const rosso = decideGitHubMerge('553', finta({}, [run('verifica'), run('accettazione', 'completed', 'failure')]));
-    expect(rosso.ok).toBe(false);
-    expect(rosso.message).toContain('accettazione');
+    expect(no(rosso)).toContain('accettazione');
 
     const corso = decideGitHubMerge('553', finta({}, [run('verifica'), run('accettazione', 'in_progress', null)]));
-    expect(corso.ok).toBe(false);
-    expect(corso.message).toContain('in corso');
+    expect(no(corso)).toContain('in corso');
   });
 
   it('skipped e neutral non bloccano, il rerun non resuscita il rosso', () => {
@@ -130,7 +124,12 @@ describe('decideGitHubMerge', () => {
       return 'muffin-project/muffin-agent';
     };
     const d = decideGitHubMerge('553', strana);
-    expect(d.ok).toBe(false);
-    expect(d.message).toContain('npm run merge -- 553');
+    expect(no(d)).toContain('npm run merge -- 553');
   });
 });
+
+function no(d: GitHubDecision): string {
+  expect(d.ok).toBe(false);
+  if (d.ok) throw new Error('atteso un rifiuto');
+  return d.message;
+}
