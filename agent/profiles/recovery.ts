@@ -179,6 +179,34 @@ export function recoveryStep(strategy: RecoveryStrategy, ctx: RecoveryContext): 
           'Due sole risposte sono ammesse: una tool call con argomenti JSON validi, ' +
           "oppure una riga che dice che non puoi e perché. Nient'altro.",
       };
+    /**
+     * Failure class: every gentler rung already ran and the turn still came
+     * back unusable — an empty turn, an announced-but-absent call, prose
+     * where a call was needed.
+     *
+     * The message is the contract; the wire flag is the enforcement. The loop
+     * (`recover()` in `agent/loop/round.ts`) sends the next attempt with
+     * `tool_choice: required` when this strategy runs, once, then back to
+     * `auto`. Message and flag travel together so a transcript reader sees
+     * why the request demanded a call.
+     *
+     * Amendment to this file's own `strictJson` note (ADR-0082): that note
+     * rejected `tool_choice: 'required'` because `ChatCall.toolChoice` was
+     * `'auto' | 'none'` and both adapters mapped anything-not-`'none'` to
+     * `'auto'` — the flag would have degraded silently, on the weakest
+     * endpoints. The flag now exists on the type and both adapters map it
+     * (`required` on openai-compat, `{type:'any'}` on Anthropic), and it runs
+     * only here, as the last rung, after the transcript already holds the
+     * gentler corrections — never after an empty turn as a first resort, so
+     * it cannot manufacture an action out of silence without the model first
+     * being told a call is due.
+     */
+    case 'requireTool':
+      return {
+        message:
+          'Devi rispondere con una tool call adesso, oppure con una riga che dice ' +
+          "che non puoi e perché. Nient'altro.",
+      };
     default:
       // Unreachable through production: `loadProfiles` refuses a profile whose
       // recovery names anything outside the union. The belt exists for the

@@ -208,8 +208,15 @@ export type ChatCall = {
   system: ContentBlock[];
   messages: Message[];
   tools?: ToolSpec[];
-  /** Never 'required' by default: forcing a tool breaks legitimate short answers. */
-  toolChoice?: 'auto' | 'none';
+  /**
+   * `'auto'` is the default: the model may answer in prose or call a tool.
+   * `'none'` exposes the schemas but forbids calls.
+   * `'required'` forces one tool call at the wire — escalation only, never the
+   * default: on a turn that legitimately needs no tool it manufactures an
+   * action the model never chose. The only writer is the loop's recovery
+   * cascade (`requireTool` rung, ADR-0082), one attempt, then back to `auto`.
+   */
+  toolChoice?: 'auto' | 'none' | 'required';
   maxOutputTokens: number;
   /**
    * Optional because "do not send it" is a value the caller must be able to say.

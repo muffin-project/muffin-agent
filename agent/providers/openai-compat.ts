@@ -522,7 +522,7 @@ export class OpenAICompatProvider implements Provider {
               type: 'function' as const,
               function: { name: t.name, description: t.description, parameters: t.inputSchema },
             })),
-            tool_choice: call.toolChoice === 'none' ? ('none' as const) : ('auto' as const),
+            tool_choice: call.toolChoice === 'none' ? ('none' as const) : call.toolChoice === 'required' ? ('required' as const) : ('auto' as const),
           }
         : {}),
     };
@@ -611,6 +611,15 @@ function toChatResult(response: {
     }
     return { id: tc.id, name: tc.name, args };
   });
+
+  // `finish_reason: tool_calls` with zero parsed calls is the serving-stack
+  // bug measured on Gemma 4 / Qwen 3 (vLLM #53363, Particula matrix): the
+  // router announces a call and delivers an empty array plus prose. Accepting
+  // it as an answer closes the turn on a stall; `output`, not transport, so
+  // the loop routes it to the profile's cascade instead of backing off.
+  if (response.finishReason === 'tool_calls' && toolCalls.length === 0) {
+    throw new ProviderError('tool_calls announced but no tool call parsed', true, undefined, 'output');
+  }
 
   return {
     text: response.text,

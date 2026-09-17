@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { OpenAICompatProvider, wantsExplicitCache } from './openai-compat.js';
-import { ProviderStreamError, type ChatCall, type StreamEvent } from './types.js';
+import { ProviderError, ProviderStreamError, type ChatCall, type StreamEvent } from './types.js';
 
 /**
  * The adapter's caching contract, tested against the bytes it actually sends.
@@ -600,5 +600,42 @@ describe('openai-compat · una nota vocale non può sparire in silenzio', () => 
     const h = harness(false);
     await h.provider.chat({ ...CALL, messages: [{ role: 'user', content: [{ type: 'text', text: 'ciao' }] }] });
     expect((h.bodies[0] as Body).messages[1]!.content).toBe('ciao');
+  });
+});
+
+describe('openai-compat · tool_choice escalation (ADR-0082)', () => {
+  const TOOLS = [{ name: 'demo_read', description: 'read', inputSchema: { type: 'object' } }];
+
+  it("auto di default: la forma di prima, byte identici quando nessuno chiede l'escalation", async () => {
+    const h = harness(false);
+    await h.provider.chat({ ...CALL, tools: TOOLS });
+    expect(h.bodies[0]).toMatchObject({ tool_choice: 'auto' });
+  });
+
+  it('none resta none', async () => {
+    const h = harness(false);
+    await h.provider.chat({ ...CALL, tools: TOOLS, toolChoice: 'none' });
+    expect(h.bodies[0]).toMatchObject({ tool_choice: 'none' });
+  });
+
+  it('required viaggia sul filo, solo quando il rung requireTool lo arma', async () => {
+    const h = harness(false);
+    await h.provider.chat({ ...CALL, tools: TOOLS, toolChoice: 'required' });
+    expect(h.bodies[0]).toMatchObject({ tool_choice: 'required' });
+  });
+
+  it('finish_reason tool_calls senza call non chiude il turno: è output, va in cascade', async () => {
+    // La forma del bug vLLM su Gemma 4: annuncia la call, array vuoto, prosa
+    // nel content. Accettarlo come risposta chiudeva il turno sullo stallo.
+    const h = harness(false, false, {
+      ...A_COMPLETION,
+      choices: [{ message: { content: 'ecco fatto', tool_calls: [] }, finish_reason: 'tool_calls' }],
+    });
+    const failed = await h.provider.chat({ ...CALL, tools: TOOLS }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(failed).toBeInstanceOf(ProviderError);
+    expect((failed as ProviderError).source).toBe('output');
   });
 });

@@ -16,7 +16,8 @@
     "nudge",
     "reinjectTools",
     "retryOnce",
-    "strictJson"
+    "strictJson",
+    "requireTool"
   ],
   "execution": {
     "modelCallDeadlineMs": 90000,
