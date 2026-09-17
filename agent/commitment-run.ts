@@ -1,7 +1,8 @@
-import { CommitmentLane, type CommitmentEvent } from '../core/scheduler/commitments.js';
+import { type CommitmentEvent, CommitmentLane } from '../core/scheduler/commitments.js';
+import { DecisionLog } from '../core/scheduler/decisions.js';
 import { FireLog } from '../core/scheduler/firelog.js';
-import { SendLock } from '../core/scheduler/sendlock.js';
 import type { Deliver } from '../core/scheduler/scheduler.js';
+import { SendLock } from '../core/scheduler/sendlock.js';
 import type { Runtime } from './runtime.js';
 
 /**
@@ -65,6 +66,9 @@ export function makeCommitmentLane(
     // The same table `muffin observe` writes: one anchor namespace, so a
     // commitment and an absence can never collide and neither can speak twice.
     fires: new FireLog(runtime.db),
+    // History beside dedup (see `core/scheduler/decisions.ts`): what the gate
+    // decided on this beat, including the defers `FireLog` must never record.
+    decisions: new DecisionLog(runtime.db),
     deliver,
     // Closes the check-then-act race `SendLock`'s own docstring names for
     // `muffin observe --send` — measured 2026-09-04 to be equally real here:
