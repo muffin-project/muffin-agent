@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS proactive_decisions (
   source     TEXT NOT NULL,
   kind       TEXT NOT NULL,
   anchor     TEXT NOT NULL,
+  tenant_id  TEXT NOT NULL DEFAULT 'host',
   tier       INTEGER NOT NULL,
   channel    TEXT NOT NULL,
   effect     TEXT NOT NULL,
@@ -40,6 +41,19 @@ CREATE INDEX IF NOT EXISTS idx_proactive_decisions_anchor
   ON proactive_decisions(anchor, id DESC);
 `;
 
+/**
+ * Additive migration for tables created before the tenant column existed
+ * (slice/tenant-anchors). The table is days old and observability-only; rows
+ * that predate the column keep the host default. Never DROP: rows are history
+ * (§I-8), even when the history is young.
+ */
+function ensureTenantColumn(db: Database.Database): void {
+  const cols = db.prepare(`PRAGMA table_info(proactive_decisions)`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === 'tenant_id')) {
+    db.exec(`ALTER TABLE proactive_decisions ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'host'`);
+  }
+}
+
 export type DecisionSource = 'observe' | 'commitments';
 
 export type DecisionEffect = ProactiveDecision['effect'] | 'skip';
@@ -49,6 +63,8 @@ export type Decision = {
   source: DecisionSource;
   kind: ProactiveKind;
   anchor: string;
+  /** Owning tenant. Anchors are namespaced by it, so transitions never cross rooms. */
+  tenant: string;
   tier: number;
   channel: string;
   effect: DecisionEffect;
@@ -64,6 +80,7 @@ type Row = {
   source: string;
   kind: string;
   anchor: string;
+  tenant_id: string;
   tier: number;
   channel: string;
   effect: string;
@@ -77,6 +94,7 @@ function toDecision(row: Row): Decision {
     source: row.source as DecisionSource,
     kind: row.kind as ProactiveKind,
     anchor: row.anchor,
+    tenant: row.tenant_id,
     tier: row.tier,
     channel: row.channel,
     effect: row.effect as DecisionEffect,
@@ -106,10 +124,11 @@ export class DecisionLog {
 
   constructor(db: Database.Database) {
     db.exec(SCHEMA);
+    ensureTenantColumn(db);
     this.insertStmt = db.prepare(
       `INSERT INTO proactive_decisions
-        (decided_at, source, kind, anchor, tier, channel, effect, reason, until_at)
-       VALUES (@decidedAt, @source, @kind, @anchor, @tier, @channel, @effect, @reason, @untilAt)`,
+        (decided_at, source, kind, anchor, tenant_id, tier, channel, effect, reason, until_at)
+       VALUES (@decidedAt, @source, @kind, @anchor, @tenant, @tier, @channel, @effect, @reason, @untilAt)`,
     );
     this.latestStmt = db.prepare(
       `SELECT effect, reason, until_at FROM proactive_decisions
@@ -140,6 +159,7 @@ export class DecisionLog {
       source: d.source,
       kind: d.kind,
       anchor: d.anchor,
+      tenant: d.tenant,
       tier: d.tier,
       channel: d.channel,
       effect: d.effect,

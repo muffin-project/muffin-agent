@@ -394,16 +394,16 @@ describe('absenceAnchor', () => {
   it('changes when the silence is a new silence', () => {
     const h = harness();
     for (const d of [600, 602, 604, 606, 608, 610]) mention(h, 'palestra', d);
-    const first = absenceAnchor(detectAbsences(h.db, HOST, now(630))[0]!);
+    const first = absenceAnchor(detectAbsences(h.db, HOST, now(630))[0]!, HOST);
 
     // You talk about it again, then go quiet again: that is another silence and
     // it may speak.
     mention(h, 'palestra', 640);
-    const second = absenceAnchor(detectAbsences(h.db, HOST, now(680))[0]!);
+    const second = absenceAnchor(detectAbsences(h.db, HOST, now(680))[0]!, HOST);
 
     expect(second).not.toBe(first);
     // But the same silence, read again, stays the same: it is what the gate's
     // dedup rests on, and without this half you notice one thing forever.
-    expect(absenceAnchor(detectAbsences(h.db, HOST, now(690))[0]!)).toBe(second);
+    expect(absenceAnchor(detectAbsences(h.db, HOST, now(690))[0]!, HOST)).toBe(second);
   });
 });

@@ -40,6 +40,12 @@ export type ObserveDeps = {
   /** Read here, written by the caller — see `recordFired`. */
   fires: FireLog;
   /**
+   * The tenant whose silence is being observed. Required, never defaulted:
+   * the anchor carries it (see `absenceAnchor`), and a forgotten tenant here
+   * would reintroduce exactly the cross-tenant dedup this namespacing closes.
+   */
+  tenant: string;
+  /**
    * History, not dedup: every evaluation below is appended here (see
    * `decisions.ts`), while `fires` keeps deciding what may speak. Optional so
    * the seam stays testable without a database; production always passes it.
@@ -99,7 +105,7 @@ export function observe(deps: ObserveDeps): Observation[] {
   let decided = 0;
   for (const absence of deps.absences()) {
     if (decided >= limit) break;
-    const anchor = absenceAnchor(absence);
+    const anchor = absenceAnchor(absence, deps.tenant);
 
     // Dedup before the gate, not after: a repeat must not even be decided.
     // The anchor carries `lastSeen`, so this suppresses *this* silence and not
@@ -112,6 +118,7 @@ export function observe(deps: ObserveDeps): Observation[] {
         source: 'observe',
         kind: 'gone_quiet',
         anchor,
+        tenant: deps.tenant,
         tier: 0,
         channel: deps.channel,
         ...decisionParts(decision),
@@ -137,6 +144,7 @@ export function observe(deps: ObserveDeps): Observation[] {
       source: 'observe',
       kind: 'gone_quiet',
       anchor,
+      tenant: deps.tenant,
       tier: trigger.tier,
       channel: deps.channel,
       ...decisionParts(decision),
