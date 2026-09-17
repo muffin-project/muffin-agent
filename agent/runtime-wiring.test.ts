@@ -923,7 +923,10 @@ describe('main model config is a turn-boundary input', () => {
     expect(runtime.deps.profile.name).not.toBe(bootProfile);
     expect(runtime.deps.profile.name).toBe('conservative');
     expect(runtime.deps.profile.maxToolsExposed).toBe(10);
-    expect(runtime.light.provider).toBe(bootLightProvider);
+    // #500: la light segue il trasporto anche a slug invariato — il wrapper
+    // catturava provider+routing del boot e li teneva per sempre. Lo slug no:
+    // qui non è cambiato, e resta quello.
+    expect(runtime.light.provider).not.toBe(bootLightProvider);
     expect(runtime.light.model).toBe(bootLightModel);
     expect(
       runtime.capabilityGaps.some(
@@ -1011,6 +1014,53 @@ describe('main model config is a turn-boundary input', () => {
       expect(nextRequest).toContain(originalBaseUrl);
       expect(nextRequest).not.toContain('http://localhost:11434/v1');
       expect(runtime.budget.monthToDateUsd()).toBeCloseTo(0.012, 6);
+    } finally {
+      runtime.close();
+    }
+  });
+});
+
+/**
+ * La metà light dell'applicazione a caldo (issue #500).
+ *
+ * La main si riagganciava già a `prepareTurn`; la light restava quella del
+ * boot — wrapper, profilo, base di spesa, reranker e snapshot esposto. Su un
+ * cambio famiglia (qui: qwen -> claude-haiku, che nessun profilo shipped
+ * riconosce) la memoria avrebbe continuato sul modello e sul profilo vecchi.
+ */
+describe('prepareTurn riaggancia anche la corsia light', () => {
+  it('profilo, wrapper, reranker e snapshot seguono il nuovo slug senza riavvio', () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-light-refresh-'));
+    runInit({
+      home,
+      apiKey: 'sk-fixture',
+      provider: 'openai-compat',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      mainModel: 'qwen/qwen3.8-27b',
+      lightModel: 'qwen/qwen3.8-flash',
+    });
+    const runtime = buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-light-refresh-ws-')));
+    try {
+      expect(runtime.light.model).toBe('qwen/qwen3.8-flash');
+      const rerankerPrima = runtime.memory.recall.reranker;
+      expect(rerankerPrima).toBeDefined();
+
+      const current = loadConfig(home);
+      saveConfig({ ...current, models: { ...current.models, light: 'anthropic/claude-haiku-4.5' } }, home);
+      runtime.deps.prepareTurn?.();
+
+      expect(runtime.light.model).toBe('anthropic/claude-haiku-4.5');
+      expect(runtime.deps.runtimeInfo?.lightModel).toBe('anthropic/claude-haiku-4.5');
+      expect(runtime.memory.recall.reranker).toBeDefined();
+      expect(runtime.memory.recall.reranker).not.toBe(rerankerPrima);
+      // La main non è stata toccata dal cambio light.
+      expect(runtime.deps.model).toBe('qwen/qwen3.8-27b');
+      expect(runtime.light.model).not.toBe('qwen/qwen3.8-flash');
+
+      // A config ferma il secondo giro non ricostruisce niente.
+      const rerankerDopo = runtime.memory.recall.reranker;
+      runtime.deps.prepareTurn?.();
+      expect(runtime.memory.recall.reranker).toBe(rerankerDopo);
     } finally {
       runtime.close();
     }

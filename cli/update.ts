@@ -22,6 +22,8 @@ import { styleFor } from './ui.js';
 import { backupNow } from './backup.js';
 import { realishPath } from './init.js';
 import { reconcileDefaults, rigaRiconciliazione } from './adopt.js';
+import { findCheckoutRoot } from './git-root.js';
+export { findCheckoutRoot };
 import { promptLine } from './prompt.js';
 import { paths, loadConfig, saveConfig } from '../core/config/config.js';
 import { providerFor } from '../core/config/providers.js';
@@ -377,30 +379,12 @@ export function describeBuild(moduleDir: string, gitRunner: GitRunner = git): Bu
  * dove si sta girando. Il fallback su `--show-toplevel` resta per il caso in cui
  * `worktree list` non risponda — su un checkout normale le due risposte
  * coincidono, quindi il fallback non cambia niente per chi non ha mai aggiornato.
+ *
+ * Vive in `./git-root.js` con la sua docstring: `adopt.ts` la usa senza
+ * importare questo modulo, e l'import inverso era il ciclo update↔adopt
+ * (issue #558). Riesportata qui sopra perché i test la chiedono a questo
+ * modulo — il verso resta `update` → `git-root`, mai il contrario.
  */
-export function findCheckoutRoot(moduleDir: string, gitRunner: GitRunner = git): string | null {
-  const wt = gitRunner(['worktree', 'list', '--porcelain'], moduleDir);
-  if (wt.status === 0) {
-    const prima = wt.stdout.split('\n').find((l) => l.startsWith('worktree '));
-    const principale = prima?.slice('worktree '.length).trim();
-    if (principale !== undefined && principale !== '') {
-      try {
-        return realpathSync(principale);
-      } catch {
-        return principale;
-      }
-    }
-  }
-  const r = gitRunner(['rev-parse', '--show-toplevel'], moduleDir);
-  if (r.status !== 0) return null;
-  const top = r.stdout.trim();
-  if (top === '') return null;
-  try {
-    return realpathSync(top);
-  } catch {
-    return top;
-  }
-}
 
 const LAUNCHER_NAMES = ['muffin', 'muffin-agent'] as const;
 
