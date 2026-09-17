@@ -1,5 +1,10 @@
 /**
- * L'unica porta per unire una PR in `dev`: `npm run merge -- <pr>`.
+ * La porta locale per unire una PR in `dev`: `npm run merge -- <pr>`.
+ *
+ * L'altra porta e' il verde GitHub verificato dal guard
+ * (`.claude/hooks/guard-merge-gate.mjs`, `docs/BRANCHING.md` §3): questa resta
+ * la porta per dev→main e per tutto ciò che GitHub non prova, oltre al
+ * fallback quando i minuti finiscono di nuovo.
  *
  * Costruisce **il risultato unito** — `origin/dev` più la testa della PR — in
  * un worktree usa-e-getta, ci fa girare `ci:local` (i job veri, nei container
