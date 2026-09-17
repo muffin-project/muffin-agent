@@ -589,6 +589,7 @@ export function buildRuntime(
         );
   let provider: Provider = createMainProvider(config);
   let providerFingerprint = JSON.stringify(config.provider);
+  let lightFingerprint = JSON.stringify({ provider: config.provider, light: config.models.light });
 
   const profileProblems: string[] = [];
   const profiles = loadProfiles(undefined, (line) => profileProblems.push(line));
@@ -609,7 +610,7 @@ export function buildRuntime(
   const makeRecordSpend = (baseUrl: string | undefined) =>
     (entry: SpendEntry): number => recordSpendWithBaseUrl(entry, baseUrl);
   let recordSpend = makeRecordSpend(config.provider.baseUrl);
-  const lightBaseUrl = config.provider.baseUrl;
+  let lightBaseUrl = config.provider.baseUrl;
 
   /**
    * The light lane, behind the boundary that bills it and makes its requests
@@ -621,8 +622,13 @@ export function buildRuntime(
    * lane spent invisibly and would 400 on any light model from 4.7 onward. See
    * `agent/providers/light-lane.ts` for why this is a wrapper and not three
    * parameters.
+   *
+   * `let`, ricovered by `refreshLightModel`: a light switch must reach new
+   * turns without a restart (#500), and every consumer below reads this
+   * binding — never a copy — so the swap is atomic per call. In-flight calls
+   * keep the old wrapper, which is the safe direction.
    */
-  const light = lightLane(provider, {
+  let light = lightLane(provider, {
     profile: selectProfile(config.models.light, profiles),
     record: (entry) =>
       void recordSpendWithBaseUrl(
@@ -634,6 +640,7 @@ export function buildRuntime(
         lightBaseUrl,
       ),
   });
+  const lightInfo: { provider: Provider; model: string } = { provider: light, model: config.models.light };
 
   // Memory. The vector half is optional and its absence is reported rather than
   // hidden: an embedder that is not running turns semantic recall into keyword
@@ -1154,7 +1161,7 @@ export function buildRuntime(
     // turn owns shallow snapshots made by `runTurn`/`resumeTurn`.
     Object.assign(config, {
       provider: persisted.provider,
-      models: { ...config.models, main: persisted.models.main },
+      models: { ...config.models, main: persisted.models.main, light: persisted.models.light },
       thinking: persisted.thinking,
     });
     Object.assign(profile, nextProfile);
@@ -1172,6 +1179,42 @@ export function buildRuntime(
       };
     }
     computeExposureGaps();
+  };
+
+  /**
+   * The light half of hot model application (#500): profile, wrapper, spend
+   * base, reranker and the exposed snapshot follow `config.models.light`
+   * without a restart.
+   *
+   * Runs on `prepareTurn`, i.e. between turns — never inside one. A
+   * consolidation in flight keeps the old wrapper and the old reranker through
+   * its own closures, which is the safe direction; the fingerprint skips the
+   * rebuild when nothing changed, so the steady state costs one config read.
+   */
+  const refreshLightModel = (): void => {
+    const persisted = loadConfig(home);
+    const fingerprint = JSON.stringify({ provider: persisted.provider, light: persisted.models.light });
+    if (fingerprint === lightFingerprint) return;
+    lightFingerprint = fingerprint;
+    lightBaseUrl = persisted.provider.baseUrl;
+    light = lightLane(provider, {
+      profile: selectProfile(persisted.models.light, profiles),
+      record: (entry) =>
+        void recordSpendWithBaseUrl(
+          {
+            ...entry,
+            tenant: CONSOLIDATION_TENANT,
+            capability: CONSOLIDATION_CAPABILITY,
+          },
+          lightBaseUrl,
+        ),
+    });
+    recallDeps.reranker = new LlmReranker(light, persisted.models.light);
+    lightInfo.provider = light;
+    lightInfo.model = persisted.models.light;
+    if (loopDeps !== null && loopDeps.runtimeInfo !== undefined) {
+      loopDeps.runtimeInfo = { ...loopDeps.runtimeInfo, lightModel: persisted.models.light };
+    }
   };
 
   /**
@@ -1241,11 +1284,14 @@ export function buildRuntime(
     onClose: (hook) => {
       closeHooks.push(hook);
     },
-    light: { provider: light, model: config.models.light },
+    light: lightInfo,
     memory: { store: memoryStore, recall: recallDeps },
     vault,
     deps: {
-      prepareTurn: refreshMainModel,
+      prepareTurn: () => {
+        refreshMainModel();
+        refreshLightModel();
+      },
       runtimeInfo: {
         providerKind: config.provider.kind,
         providerBaseUrl: config.provider.baseUrl,
