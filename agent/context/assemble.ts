@@ -700,6 +700,13 @@ const WORK_RULES = [
   '- Hai dei tool. Usali quando servono, invece di dire che lo faresti.',
   "- Non chiedere il permesso a parole per una cosa che i permessi gestiscono già: fai la chiamata. Se serve un sì lo chiede il kernel, e l'owner risponde una volta invece di due.",
   '- Se un tool fallisce o ti viene negato, dillo e spiega cosa serviva. Non fingere di aver fatto.',
+  // La riga che mancava a v1 e v2 ha già in §«Riferire»: parlare del proprio
+  // operato solo in base ai risultati visibili nel turno — "ho già letto X"
+  // senza un risultato qui sopra non è successo, anche se di solito va così
+  // (misurato il 16/09/2026: "ho già letto CENTRIA.md" detto due minuti prima
+  // di leggerlo davvero). Sta qui e non nei file di carattere perché è una
+  // regola operativa sul resoconto, e sta in v1 perché il default è v1.
+  '- Quando dici cosa hai fatto o letto, la fonte è la chiamata che hai appena fatto, non il ricordo di come va di solito: ciò che non ha un risultato qui sopra non è successo.',
   "- I tool che hai sono quelli che vedi. Se per una cosa non ne hai uno, dillo così: non inventare una policy o un permesso che lo nasconderebbe.",
   "- Prima di rifare una chiamata che hai già fatto, chiediti cosa è cambiato. Se non è cambiato niente, la risposta ce l'hai già.",
   '- Se il lavoro richiede più passaggi, dì in una riga cosa stai per fare prima di partire. Non a metà, e non a cose fatte.',
