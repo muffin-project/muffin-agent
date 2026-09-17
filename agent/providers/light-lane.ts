@@ -98,7 +98,12 @@ async function chatWithTransportRetries(inner: Provider, call: ChatCall): Promis
       }
       retriesLeft -= 1;
       const attempt = MAX_LIGHT_TRANSPORT_RETRIES - retriesLeft;
-      await sleep(retryDelayMs(attempt), call.signal);
+      // Come la corsia main (`round.ts`): una finestra `Retry-After`
+      // dichiarata dal provider allunga l'attesa oltre il backoff cieco
+      // quando è più lunga (#496). Stessa semantica, stesso tetto esterno
+      // (qui: l'abort del chiamante; il budget di muro del turno non esiste
+      // su questa corsia, ma la finestra è comunque cappata in parsing).
+      await sleep(Math.max(retryDelayMs(attempt), error.retryAfterMs ?? 0), call.signal);
       if (call.signal?.aborted) throw error;
     }
   }

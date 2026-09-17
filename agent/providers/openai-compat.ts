@@ -3,6 +3,7 @@ import OpenAI from 'openai';
 import {
   ProviderError,
   ProviderStreamError,
+  parseRetryAfterMs,
   type AudioMediaType,
   type ChatCall,
   type ChatResult,
@@ -443,6 +444,7 @@ export class OpenAICompatProvider implements Provider {
         throw providerErrorFromWire(
           payload !== undefined && payload !== null ? payload : { code: error.code, message: error.message },
           model,
+          error.headers,
         );
       }
       // Un ProviderError resta tale: è già classificato (retryable o no,
@@ -824,7 +826,11 @@ function mapStopReason(reason: string | null, hasToolCalls: boolean): StopReason
  * silenzio. 400/401/402/403 non riprovano: una chiave morta o una richiesta
  * malformata non guariscono aspettando.
  */
-function providerErrorFromWire(wireError: unknown, model: string): ProviderError {
+function providerErrorFromWire(
+  wireError: unknown,
+  model: string,
+  headers?: { get(name: string): string | null },
+): ProviderError {
   const raw = (typeof wireError === 'object' && wireError !== null ? wireError : {}) as {
     code?: unknown;
     message?: unknown;
@@ -837,6 +843,7 @@ function providerErrorFromWire(wireError: unknown, model: string): ProviderError
     retryable,
     code,
     'transport',
+    parseRetryAfterMs(headers ?? null),
   );
 }
 
@@ -844,7 +851,13 @@ function wrap(error: unknown): ProviderError {
   if (error instanceof ProviderError) return error;
   if (error instanceof OpenAI.APIError) {
     const status = error.status ?? 0;
-    return new ProviderError(`${status} ${error.message}`, status === 429 || status >= 500, status);
+    return new ProviderError(
+      `${status} ${error.message}`,
+      status === 429 || status >= 500,
+      status,
+      'transport',
+      parseRetryAfterMs(error.headers),
+    );
   }
   if (error instanceof Error && error.name === 'AbortError') {
     return new ProviderError('aborted', false);
