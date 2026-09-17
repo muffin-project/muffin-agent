@@ -1990,3 +1990,81 @@ describe('model routing (issue #501)', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+/**
+ * DT-09 §3: il drift del vault in una riga — l'etichetta stale finché il
+ * watcher non è cablato in un processo longevo.
+ *
+ * La forma è quella che `audit()` già garantisce (`core/vault/vault.ts`):
+ * directory contro indice, stesso censimento del reindex. Qui si prova solo
+ * che `doctor` la riporta col rimedio giusto, sul tenant `host` come
+ * `muffin vault check`.
+ */
+describe('doctor reports vault drift with the reindex remedy', () => {
+  it('is ok on a fresh home — empty vault, nothing to drift', async () => {
+    const dir = home();
+    const c = await check(dir, 'vault');
+    expect(c?.level).toBe('ok');
+    expect(c?.remedy).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is ok, naming the alignment, once the index matches the directory', async () => {
+    const dir = home();
+    writeFileSync(join(paths(dir).vault, 'nota.md'), '# Nota\n\ntesto\n');
+    const runtime = buildRuntime(dir, dir);
+    await runtime.vault.reindex('host');
+    runtime.close();
+
+    const c = await check(dir, 'vault');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('allineato');
+    expect(c?.remedy).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('warns with the reindex remedy when a hand edit made the index stale', async () => {
+    const dir = home();
+    writeFileSync(join(paths(dir).vault, 'nota.md'), '# Nota\n\nprima\n');
+    const runtime = buildRuntime(dir, dir);
+    await runtime.vault.reindex('host');
+    runtime.close();
+    writeFileSync(join(paths(dir).vault, 'nota.md'), '# Nota\n\nseconda, a mano\n');
+
+    const c = await check(dir, 'vault');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain("cambiati dopo l'indice");
+    expect(c?.remedy).toContain('muffin vault reindex');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('warns when a file was never indexed at all', async () => {
+    const dir = home();
+    writeFileSync(join(paths(dir).vault, 'nota.md'), '# Nota\n\ntesto\n');
+    const runtime = buildRuntime(dir, dir);
+    await runtime.vault.reindex('host');
+    runtime.close();
+    writeFileSync(join(paths(dir).vault, 'altra.md'), '# Altra\n\nmai vista\n');
+
+    const c = await check(dir, 'vault');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('non indicizzati');
+    expect(c?.remedy).toContain('muffin vault reindex');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('warns when an indexed file disappeared from disk', async () => {
+    const dir = home();
+    writeFileSync(join(paths(dir).vault, 'nota.md'), '# Nota\n\ntesto\n');
+    const runtime = buildRuntime(dir, dir);
+    await runtime.vault.reindex('host');
+    runtime.close();
+    rmSync(join(paths(dir).vault, 'nota.md'));
+
+    const c = await check(dir, 'vault');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('file spariti');
+    expect(c?.remedy).toContain('muffin vault reindex');
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
