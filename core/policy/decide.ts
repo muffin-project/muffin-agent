@@ -307,32 +307,25 @@ export function createDecide(ctx: PolicyContext): Decide {
       }
       // The allowlist (or, for `url-read`, the open destination) only ever
       // says something about the HOST, so a turn that had read tier-2+
-      // content could still put those bytes in the query string or fragment
-      // and nothing here noticed (audit 2026-08-16, P04-1). A clean
-      // destination is not the same claim as a clean request: the model chose
-      // everything after it.
-      // Un buco aperto, dichiarato invece che lasciato implicito: `hasParams`
-      // guarda `search` e `hash` e dice a voce alta di **non** guardare il
-      // path. ADR-0066 ha tolto l'allowlist alla lettura e non ha messo
-      // niente al suo posto per il path, quindi `https://evil/<segreto>` non
-      // incontra nessun cancello — ed e' la ragione per cui lo scenario di
-      // accettazione D10 e' rosso su `dev` da allora (asseriva la protezione
-      // vecchia, ritirata da ADR-0066 senza che la prova la seguisse).
+      // content could still put those bytes in the query string, the fragment
+      // — or the path — and nothing here noticed (audit 2026-08-16, P04-1).
+      // A clean destination is not the same claim as a clean request: the
+      // model chose everything after it.
       //
-      // Chiuderlo con la provenienza funziona — «ogni URL non citato passa
-      // dal cancello» — ma **chiude anche ogni lettura in un gruppo** che non
-      // sia un link incollato alla lettera, misurato su
-      // `runtime-wiring.test.ts` e `egress-gate.test.ts`. E' il contrario
-      // della direzione dell'owner del 04/09 (*«non puo non entrare»*), ed e'
-      // un'inversione di ADR-0066: va decisa da lui, non qui.
-      if (hasParams(resource.value)) {
+      // Chiuso qui sotto (slice/url-path-gate): il cancello guarda anche i
+      // segmenti del path, con la stessa regola dei parametri — citato passa,
+      // composto sopra il soffitto chiede (owner) o nega (altri). Le letture
+      // citate restano aperte ovunque (ADR-0066 intatto); per i non-owner un
+      // URL composto nega a qualunque taint, come già faceva per le query.
+      if (hasComposedParts(resource.value)) {
+        const cosa = hasParams(resource.value) ? 'parametri scelti' : 'percorso scelto';
         const gated = gateParams(
           principal,
           taint,
           ctx.matrix.paramsMaxTaint,
           decl.resourceKind === 'url-read'
-            ? `lettura con parametri scelti dal contenuto: ${resource.value}`
-            : `egress con parametri verso host allowlisted: ${resource.value}`,
+            ? `lettura con ${cosa} dal contenuto: ${resource.value}`
+            : `egress con ${cosa} verso host allowlisted: ${resource.value}`,
           // Solo qui, e solo sull'URL **intero**. Un aggressore che
           // concatena un suo prefisso con byte letti altrove non produce una
           // stringa che era già presente; uno che pubblica l'URL completo
@@ -551,17 +544,30 @@ function gateParams(
 }
 
 /**
- * True when a URL carries bytes beyond its host: a non-empty query or
- * fragment. Not the path: today's allowlist (`rot/egress.json`) is
- * hostname-only, with no notion of "the path the owner allowlisted", so there
- * is no "beyond the allowlisted path" to compare against yet — declared here
- * rather than silently assumed, and the smaller of the two forms named in the
- * mandate.
+ * True when a URL carries a non-empty query or fragment. Used only to choose
+ * the gate's wording (`parametri scelti` vs `percorso scelto`): whether the
+ * gate fires is `hasComposedParts` below, which also sees path segments.
  */
 function hasParams(url: string): boolean {
   try {
     const parsed = new URL(url);
     return parsed.search !== '' || parsed.hash !== '';
+  } catch {
+    return false; // unreachable here: hostOf() above already refused an unparseable url
+  }
+}
+
+/**
+ * Whether the URL carries bytes the model may have composed: a query string,
+ * a fragment, or path segments beyond the root. A bare `https://host/` has
+ * nothing to choose; anything more specific might be where tainted bytes were
+ * put — `https://evil/<segreto>` met no gate before this slice.
+ */
+function hasComposedParts(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.search !== '' || parsed.hash !== '') return true;
+    return parsed.pathname.split('/').some((seg) => seg !== '');
   } catch {
     return false; // unreachable here: hostOf() above already refused an unparseable url
   }

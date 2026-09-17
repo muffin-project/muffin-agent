@@ -155,11 +155,12 @@ describe('reading is open, through a real turn (ADR-0066)', () => {
 
   it('a junk path argument cannot shadow the url — resourceFor reads policyArgs, not argument order', async () => {
     // Historical exploit, kept as a regression probe even though its outcome
-    // changed: `http_get({url, path:'x'})` used to matter because a hardcoded
+    // changed twice: `http_get({url, path:'x'})` used to matter because a hardcoded
     // loop checked `path` before `url`. `resourceFor` (agent/loop.ts) reads
     // `decl.policyArgs` — `['url']` for `sys.http` — so an unrelated extra key
-    // was already inert before ADR-0066, and reading being open now means the
-    // observable fact is simply that the fetch still happens.
+    // was already inert before ADR-0066. Since slice/url-path-gate a member's
+    // *composed* URL denies, the probe uses a quoted one: the junk key must
+    // not change what is fetched, and quoting must still open it.
     const h = harness(false, [
       callTool('http_get', { url: 'https://evil.example.com/steal', path: 'anything' }),
     ]);
@@ -169,7 +170,7 @@ describe('reading is open, through a real turn (ADR-0066)', () => {
       tenant: 'group:telegram:42',
       surface: 'telegram',
       session: h.deps.sessions.open('s-read-junk'),
-      text: 'leggi',
+      text: 'leggi https://evil.example.com/steal',
     });
 
     expect(h.fetched).toEqual(['https://evil.example.com/steal']);

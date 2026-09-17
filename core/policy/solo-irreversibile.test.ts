@@ -149,9 +149,13 @@ function resourceFor(decl: CapabilityDecl): DecisionRequest['resource'] {
     case 'path':
       return { kind: 'path', value: '/tmp/scope/nota.txt' };
     case 'url':
-      return { kind: 'url', value: 'https://esempio.test/pagina' };
+      return { kind: 'url', value: 'https://esempio.test/' };
     case 'url-read':
-      return { kind: 'url-read', value: 'https://esempio.test/pagina' };
+      // Host nudo di proposito (vedi riga 170: il gate di egress è fuori da
+      // questa fetta): un path/query composto chiede sopra il soffitto per
+      // ADR-0071, e con un path qui dentro ogni riga misurerebbe quel gate
+      // invece dell'irreversibilità.
+      return { kind: 'url-read', value: 'https://esempio.test/' };
     case 'query':
       return { kind: 'query', value: 'il tempo di domani' };
     case 'tenant':

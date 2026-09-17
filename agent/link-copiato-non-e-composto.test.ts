@@ -356,3 +356,100 @@ describe('il giro che l\'owner ha chiesto: cerca, poi apri un risultato', () => 
     expect(h.approvals).toEqual([]);
   });
 });
+
+describe('il percorso conta come i parametri (slice/url-path-gate)', () => {
+  // Byte che il modello si è inventato nel percorso: niente `?`, niente `#`.
+  // Prima di questa fetta `https://host/<segreto>` non incontrava nessun
+  // cancello — `hasParams` guardava solo search e hash e diceva di non
+  // guardare il path.
+  const PERCORSO_SEGRETO = `https://${HOST}/esfiltra/SEGRETO-CHE-NESSUNO-HA-SCRITTO`;
+
+  it('un percorso inventato chiede, come una query inventata', async () => {
+    const h = harness([callTool('http_get', { url: RISULTATI }), callTool('http_get', { url: PERCORSO_SEGRETO })]);
+
+    await runTurn(h.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session: h.deps.sessions.open('s-path-1'),
+      text: 'leggi quella pagina e apri altro',
+    });
+
+    // La prima fetch alza il taint a 3; la seconda ha un percorso composto e
+    // non citato: chiede, e la domanda nomina il percorso, non i parametri.
+    expect(h.approvals).toEqual([
+      `lettura con percorso scelto dal contenuto: ${PERCORSO_SEGRETO}\n\n` +
+        'questo turno contiene contenuto di livello 3: il risultato di http_get',
+    ]);
+    // L'approvazione dell'harness è 'allow': chiesto e concesso, non negato.
+    expect(h.fetched).toEqual([RISULTATI, PERCORSO_SEGRETO]);
+  });
+
+  it('un percorso incollato dalla persona passa, a qualunque taint', async () => {
+    const h = harness([callTool('http_get', { url: RISULTATI }), callTool('http_get', { url: PERCORSO_SEGRETO })]);
+
+    await runTurn(h.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session: h.deps.sessions.open('s-path-2'),
+      text: `leggi ${RISULTATI} e poi ${PERCORSO_SEGRETO}`,
+    });
+
+    expect(h.fetched).toEqual([RISULTATI, PERCORSO_SEGRETO]);
+    expect(h.approvals).toEqual([]);
+  });
+
+  it("l'host nudo non chiede: non c'è niente da comporre", async () => {
+    const NUDO = `https://${HOST}/`;
+    const h = harness([callTool('http_get', { url: RISULTATI }), callTool('http_get', { url: NUDO })]);
+
+    await runTurn(h.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session: h.deps.sessions.open('s-path-3'),
+      text: 'leggi quella pagina e apri la radice',
+    });
+
+    expect(h.fetched).toEqual([RISULTATI, NUDO]);
+    expect(h.approvals).toEqual([]);
+  });
+
+  it('un membro non esce con un percorso inventato, a nessun taint (come le query)', async () => {
+    const PAGINA = `https://${HOST}/pagina-pubblica`;
+    const h = harness([callTool('http_get', { url: PAGINA })]);
+
+    await runTurn(h.deps, {
+      principal: membro,
+      tenant: TENANT_GRUPPO,
+      surface: 'telegram',
+      session: h.deps.sessions.open('g-path-1'),
+      text: 'apri questa pagina',
+    });
+
+    // Stessa regola delle query composte (g-link-1): per un non-owner un URL
+    // composto e non citato nega a qualunque taint — anche a taint di stanza.
+    // I gruppi leggono i link citati (g-link-2), non quelli inventati.
+    expect(h.fetched).toEqual([]);
+    expect(h.approvals).toEqual([]);
+  });
+
+  it('un membro che ha letto tier-3 non esce con un percorso inventato', async () => {
+    const h = harness([callTool('http_get', { url: RISULTATI }), callTool('http_get', { url: PERCORSO_SEGRETO })]);
+
+    await runTurn(h.deps, {
+      principal: membro,
+      tenant: TENANT_GRUPPO,
+      surface: 'telegram',
+      session: h.deps.sessions.open('g-path-2'),
+      text: 'leggi quella pagina e apri altro',
+    });
+
+    // Sopra il soffitto, composto, non-owner: nega senza chiedere — in un
+    // gruppo non c'è nessuno che possa rispondere. Nega già la prima fetch:
+    // per i member il composto nega a qualunque taint, non solo sopra.
+    expect(h.fetched).toEqual([]);
+    expect(h.approvals).toEqual([]);
+  });
+});
