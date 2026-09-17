@@ -253,20 +253,48 @@ export const fsCapabilities: CapabilityDecl[] = [
     policyArgs: ['path'],
     hostOnly: true,
   },
+  /**
+   * La modifica chirurgica, e perché non eredita il `rerunnable` di `fs.write`.
+   *
+   * Una riscrittura intera è idempotente (stessi byte due volte, stesso file);
+   * una sostituzione a match unico no: se `newText` contiene a sua volta
+   * `oldText`, una riesecuzione dopo un crash fra scrittura e outcome
+   * applicherebbe due volte. Con `rerunnable: false` quella ripresa dichiara
+   * "forse fatto" invece di rieseguire (`agent/loop/entry.ts`) — la direzione
+   * onesta, la stessa che #533 chiede per gli effetti incerti. Il resto è
+   * identico a `fs.write`: stesso gate del kernel, stessa copia di undo, e
+   * nessuna stanza la raggiunge senza un grant esplicito (`hostOnly`).
+   */
+  {
+    id: 'fs.edit',
+    effect: 'host',
+    risk: 'medium',
+    reversible: 'undoable',
+    rerunnable: false,
+    resourceKind: 'path',
+    policyArgs: ['path'],
+    hostOnly: true,
+  },
 ];
 
 export const fsToolSpecs: ToolSpec[] = [
   {
     name: 'fs_read',
     description:
-      'Read a UTF-8 text file whole. Use it when you already know the path (or found it with fs_search/fs_list) ' +
+      'Read a UTF-8 text file, whole or in a line window. Use it when you already know the path (or found it with fs_search/fs_list) ' +
       'and need its exact text — before editing it, before answering about its content, before deciding what to ' +
       'do with it. Not for a binary file (image, archive), and not for finding a file whose path you do not know ' +
       '— use fs_search for that instead of `cat`/`find` in shell_run. Paths are relative to the working directory. ' +
-      'Returns the full file content as text, or an error naming the missing path. e.g. fs_read({path: "docs/README.md"}).',
+      'Without offset/limit returns the full file content as text. With offset (1-based first line) and limit (max ' +
+      'lines) returns only that window, each line prefixed with its number — use the window for files too large to ' +
+      'read whole, anchoring on fs_search `path:line:` hits. Returns the full file content as text, or an error naming the missing path. e.g. fs_read({path: "docs/README.md"}).',
     inputSchema: {
       type: 'object',
-      properties: { path: { type: 'string', description: 'Path relative to the working directory' } },
+      properties: {
+        path: { type: 'string', description: 'Path relative to the working directory' },
+        offset: { type: 'number', description: 'First line to return, 1-based. Omit to read from the start.' },
+        limit: { type: 'number', description: 'Maximum lines to return. Omit to read to the end.' },
+      },
       required: ['path'],
     },
   },
@@ -317,6 +345,31 @@ export const fsToolSpecs: ToolSpec[] = [
         content: { type: 'string' },
       },
       required: ['path', 'content'],
+    },
+  },
+  /**
+   * In coda e non in mezzo, per la ragione scritta su `spec()` qui sotto:
+   * inserire una spec sposterebbe gli indici posizionali su cui qualcuno,
+   * da qualche parte, potrebbe ancora contare.
+   */
+  {
+    name: 'fs_edit',
+    description:
+      'Replace one exact block of text inside a UTF-8 file, without rewriting the file. Use it when you need to change ' +
+      'a few lines of a file you have (partly) read — a fix, a rename, a config value — instead of fs_write, which ' +
+      'would make you reproduce the whole file and risk dropping the parts you meant to keep. oldText must occur ' +
+      'exactly once in the file: zero matches means the text is not there (paths and line numbers from fs_read ' +
+      'windows go WITHOUT their numbers), two or more means you must narrow oldText until it is unique — in both ' +
+      'cases nothing is written. Not for creating a file (use fs_write), not for binary files, and not for ' +
+      'multi-spot replacements: one call, one block. Returns the replaced line span, or an error naming what blocked it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Path relative to the working directory' },
+        oldText: { type: 'string', description: 'The exact current block, character for character. Must match exactly once.' },
+        newText: { type: 'string', description: 'What it becomes. May be empty to delete the block.' },
+      },
+      required: ['path', 'oldText', 'newText'],
     },
   },
 ];
@@ -507,7 +560,7 @@ export function resolveInScope(scope: FsScope, requested: string, forWrite: bool
   return target;
 }
 
-export function fsRead(scope: FsScope, path: string): string {
+export function fsRead(scope: FsScope, path: string, window?: { offset?: number; limit?: number }): string {
   const full = resolveInScope(scope, path, false);
   // Opened with `O_NOFOLLOW` rather than checked-then-read on a path string:
   // `resolveInScope` above and this open are still two syscalls (a TOCTOU
@@ -535,7 +588,28 @@ export function fsRead(scope: FsScope, path: string): string {
     if (stat.size > MAX_READ_BYTES) {
       throw new PathDenied(`${path} is ${(stat.size / 1e6).toFixed(1)}MB, over the ${MAX_READ_BYTES / 1e6}MB read limit`);
     }
-    return readFileSync(fd, 'utf8');
+    const text = readFileSync(fd, 'utf8');
+    if (window === undefined || (window.offset === undefined && window.limit === undefined)) return text;
+    /**
+     * La finestra per righe, e perché i numeri ci sono solo qui.
+     *
+     * Una lettura intera resta byte-identica a prima — nessun prefisso, nessun
+     * header — così ogni flusso esistente (e ogni test) non cambia di una
+     * virgola. La finestra invece numera: senza numeri il modello non saprebbe
+     * dove la finestra comincia e `fs_edit` riceverebbe numeri copiati dentro
+     * `oldText` senza poterli distinguere dal contenuto. L'header dice
+     * l'intervallo e il totale. Un offset oltre l'ultima riga lancia come
+     * ogni altro fuori-limite di questo file (manca, directory, troppo
+     * grande): navigare a tentativi resta possibile, fallire in silenzio no.
+     */
+    const offset = window.offset ?? 1;
+    const lines = text.split('\n');
+    if (offset > lines.length) {
+      throw new PathDenied(`${path} ha ${lines.length} righe: offset ${offset} oltre la fine`);
+    }
+    const end = window.limit === undefined ? lines.length : Math.min(lines.length, offset - 1 + window.limit);
+    const numbered = lines.slice(offset - 1, end).map((line, i) => `${offset + i}: ${line}`);
+    return [`righe ${offset}–${end} di ${lines.length} (${path})`, ...numbered].join('\n');
   } finally {
     closeSync(fd);
   }
@@ -829,6 +903,67 @@ export function fsWrite(scope: FsScope, path: string, content: string, resolved?
 }
 
 /**
+ * Una sostituzione a match unico, e perché il match è unico o niente.
+ *
+ * Zero match: il testo non c'è (o ha i numeri di riga copiati da una finestra
+ * di `fs_read` — la descrizione lo dice, l'errore lo ripete). Due o più: il
+ * modello deve restringere `oldText` finché non è unico. In entrambi i casi
+ * non si scrive niente: un edit ambiguo che "sceglie la prima" è il modo in
+ * cui una modifica chirurgica diventa una modifica al posto sbagliato, e un
+ * edit che crea il testo quando manca è `fs_write` con un altro nome.
+ *
+ * Stesso hardening di `fsWrite` (stesso `openSync` con `O_NOFOLLOW`, stessa
+ * `resolveInScope` — mai una seconda derivazione del percorso) e stessa
+ * direzione di `fsRead` sui lanci: solo `PathDenied` costruiti qui, mai byte
+ * del disco in un messaggio d'errore.
+ */
+export function fsEdit(scope: FsScope, path: string, oldText: string, newText: string, resolved?: string): string {
+  const full = resolved ?? resolveInScope(scope, path, true);
+  // Lo stesso tetto di `fsRead`, per la stessa ragione: senza, un file da 2 GB
+  // qui ucciderebbe il processo invece di rispondere con un rifiuto.
+  const size = statSync(full, { throwIfNoEntry: false })?.size;
+  if (size !== undefined && size > MAX_READ_BYTES) {
+    throw new PathDenied(`${path} is ${(size / 1e6).toFixed(1)}MB, over the ${MAX_READ_BYTES / 1e6}MB read limit`);
+  }
+  let current: string;
+  try {
+    current = readFileSync(full, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new PathDenied(`no such file: ${path}`);
+    throw error;
+  }
+  // Conteggio senza regex: `oldText` è testo letterale, e una regex costruita
+  // da input del modello è una seconda grammatica dove non serve.
+  const occurrences = current.split(oldText).length - 1;
+  if (occurrences === 0) {
+    throw new PathDenied(
+      `"${oldText.slice(0, 120)}" non trovato in ${path} — se lo hai copiato da una finestra di fs_read, togli i numeri di riga`,
+    );
+  }
+  if (occurrences > 1) {
+    throw new PathDenied(`"${oldText.slice(0, 120)}" compare ${occurrences} volte in ${path}: restringi il blocco finché non è unico, niente è stato scritto`);
+  }
+  const updated = current.replace(oldText, newText);
+  let fd: number;
+  try {
+    fd = openSync(full, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW, 0o666);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ELOOP') {
+      throw new PathDenied(`a symlink appeared at ${path} between the check and the write`);
+    }
+    throw error;
+  }
+  try {
+    writeFileSync(fd, updated, 'utf8');
+  } finally {
+    closeSync(fd);
+  }
+  const startLine = current.slice(0, current.indexOf(oldText)).split('\n').length;
+  const spanLines = oldText.split('\n').length;
+  return `sostituito 1 blocco (righe ${startLine}–${startLine + spanLines - 1}) in ${path}`;
+}
+
+/**
  * The three tools, assembled once.
  *
  * They used to be three object literals in `agent/runtime.ts` and three more in
@@ -860,6 +995,12 @@ export function fsWrite(scope: FsScope, path: string, content: string, resolved?
  * uno.
  */
 const pathArgs = z.object({ path: z.string().min(1) });
+const readArgs = z.object({
+  path: z.string().min(1),
+  offset: z.number().int().min(1).optional(),
+  limit: z.number().int().min(1).optional(),
+});
+const editArgs = z.object({ path: z.string().min(1), oldText: z.string().min(1), newText: z.string() });
 const writeArgs = z.object({ path: z.string().min(1), content: z.string() });
 /**
  * Tutto opzionale, e il rifiuto di «né l'uno né l'altro» sta dentro `fsSearch`
@@ -900,13 +1041,23 @@ export function makeFsTools(scope: FsScope): RegisteredTool[] {
       // throws with them, it returns them, which is the success path above.
       throwTier: 0,
       handler: (args) => {
-        const path = pathArgs.parse(args).path;
+        const a = readArgs.parse(args);
+        // Costruita per presenza e non passata con `undefined` espliciti:
+        // `exactOptionalPropertyTypes` li rifiuta, e un oggetto con chiavi a
+        // `undefined` è anche il modo in cui un default inatteso si nasconde.
+        const window =
+          a.offset === undefined && a.limit === undefined
+            ? undefined
+            : {
+                ...(a.offset === undefined ? {} : { offset: a.offset }),
+                ...(a.limit === undefined ? {} : { limit: a.limit }),
+              };
         return {
           // Fenced, and the whole body is inside it: `fsRead` returns disk
           // bytes and nothing else — no header of Muffin's own to keep out,
           // unlike `http.ts`, which leaves its status line above the fence.
           // The note names the path the *model* typed, never a byte off disk.
-          content: fenceDisk(fsRead(scope, path), `contenuto di ${path}`),
+          content: fenceDisk(fsRead(scope, a.path, window), `contenuto di ${a.path}`),
           tier: DISK_TIER,
         };
       },
@@ -997,6 +1148,21 @@ export function makeFsTools(scope: FsScope): RegisteredTool[] {
         // fotografato quel file: riusarlo è ciò che rende copia e scrittura lo
         // stesso file per costruzione invece che per coincidenza.
         return { content: fsWrite(scope, a.path, a.content, ctx.effectPath), tier: 0 };
+      },
+    },
+    {
+      capability: 'fs.edit',
+      spec: spec('fs_edit'),
+      // Tier 0 e throwTier 0 come `fs_write`: il risultato è una frase nostra
+      // (righe sostituite, non contenuto), e gli errori dicono solo conteggi
+      // — mai un byte del disco, che altrimenti trascinerebbe tier con sé.
+      throwTier: 0,
+      // La stessa cucitura di `fs_write`: la copia di undo e la modifica
+      // devono parlare dello stesso file, per costruzione.
+      resolveEffectPath: (args) => resolveInScope(scope, editArgs.parse(args).path, true),
+      handler: (args, ctx) => {
+        const a = editArgs.parse(args);
+        return { content: fsEdit(scope, a.path, a.oldText, a.newText, ctx.effectPath), tier: 0 };
       },
     },
   ];
