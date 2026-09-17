@@ -215,3 +215,38 @@ describe('sampling, which no profile edit could reach', () => {
     expect(inner.seen[0]).toEqual(bare);
   });
 });
+
+describe('honoring the provider-declared wait', () => {
+  it('waits out the server Retry-After instead of the blind backoff (#496)', async () => {
+    // Backoff azzerato (random 0): se la corsia onora la finestra del server,
+    // l'unica attesa possibile è quella dichiarata dal provider.
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    let attempts = 0;
+    const lane = lightLane(
+      {
+        kind: 'openai-compat',
+        chat: async () => {
+          attempts += 1;
+          if (attempts === 1) {
+            throw new ProviderError(
+              '429 lento',
+              true,
+              429,
+              'transport',
+              400,
+            );
+          }
+          return ok();
+        },
+      },
+      { profile: CONSERVATIVE },
+    );
+
+    const started = Date.now();
+    await expect(lane.chat(call())).resolves.toMatchObject({ text: 'ok' });
+    // Soglia sotto i 400ms dichiarati: i timer anticipano, non posticipano —
+    // sotto carico l'attesa cresce, mai il contrario.
+    expect(Date.now() - started).toBeGreaterThanOrEqual(300);
+    expect(attempts).toBe(2);
+  });
+});

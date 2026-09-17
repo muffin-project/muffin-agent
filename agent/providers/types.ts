@@ -430,8 +430,57 @@ export class ProviderError extends Error {
     readonly retryable: boolean,
     readonly status?: number,
     readonly source: ProviderErrorSource = 'transport',
+    /**
+     * Milliseconds the provider asked us to wait (`Retry-After`), parsed and
+     * capped by `parseRetryAfterMs` at the adapter boundary. `undefined`
+     * means the provider declared no window and the retry owners fall back
+     * to the blind backoff. Additive and optional: every existing
+     * construction site keeps the behaviour it had.
+     */
+    readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = 'ProviderError';
   }
+}
+
+/**
+ * Tetto della finestra dichiarata dal server: 600s, non la nostra.
+ *
+ * Preso da come Hermes ha chiuso lo stesso deadlock sugli account Anthropic
+ * Tier 1 (il bucket si ricarica in ~171s; il loro cap precedente di 120s
+ * rifaceva scattare il limite): sotto, si onora alla lettera; sopra, è un
+ * valore patologico e lo si tronca invece di parcheggiare un turno per ore.
+ * Il budget di muro del turno resta il limite esterno in entrambi i casi.
+ */
+export const MAX_RETRY_AFTER_MS = 600_000;
+
+/**
+ * `Retry-After` (`retry-after`, secondi, o `retry-after-ms`) in millisecondi,
+ * o `undefined` quando il provider non dichiara nessuna finestra.
+ *
+ * Accetta la forma minima che gli header degli SDK espongono (`.get`), non
+ * `Headers`: i test costruiscono risposte finte e non devono importare il
+ * DOM per un numero. Una data HTTP non numerica che non si interpreta non
+ * diventa zero — diventa assente, e la corsia usa il backoff.
+ */
+export function parseRetryAfterMs(
+  headers: { get(name: string): string | null } | undefined | null,
+): number | undefined {
+  if (!headers) return undefined;
+  const ms = headers.get('retry-after-ms');
+  if (ms !== null) {
+    const n = Number(ms);
+    if (Number.isFinite(n) && n >= 0) return Math.min(Math.floor(n), MAX_RETRY_AFTER_MS);
+    return undefined;
+  }
+  const raw = headers.get('retry-after');
+  if (raw === null) return undefined;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(Math.floor(seconds * 1000), MAX_RETRY_AFTER_MS);
+  }
+  const at = Date.parse(raw);
+  if (!Number.isNaN(at)) return Math.min(Math.max(at - Date.now(), 0), MAX_RETRY_AFTER_MS);
+  return undefined;
 }
