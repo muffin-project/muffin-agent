@@ -227,12 +227,13 @@ The full suite runs once at the integrated PR/head gate (normally CI), not after
 every local commit. A fresh judge is not required; the orchestrator may integrate
 an unambiguous STANDARD claim when its evidence budget is satisfied.
 
-Integration into `dev` goes through one door: `npm run merge -- <pr>`. It
-builds the **merged result** (origin/dev plus the PR head) in a throwaway
-worktree, runs `ci:local` on that result, and merges only on PASS. A
-DISCARDED verdict (contended host) is not a verdict: rerun it. A direct
-`gh pr merge` is blocked by `.claude/hooks/guard-merge-gate.mjs`: the gate is
-a condition the tool checks, never a printed line the orchestrator reads.
+Integration into `dev` goes through the two-tier gate in `docs/BRANCHING.md`
+§3: `npm run merge -- <pr>` (merged result in a throwaway worktree, `ci:local`,
+merges only on PASS) or a GitHub-green head on a static base, both enforced by
+`.claude/hooks/guard-merge-gate.mjs`. A DISCARDED verdict (contended host) is
+not a verdict: rerun it. A direct `gh pr merge` outside either door is
+blocked: the gate is a condition the tool checks, never a printed line the
+orchestrator reads.
 
 ### CRITICAL
 

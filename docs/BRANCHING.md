@@ -64,6 +64,18 @@ run when the actual merge gate requires CI. Report what was actually observed.
 
 ### 3. Slice -> `dev`
 
+Two doors, one guarantee — a merge lands only on evidence the hook can verify
+in that moment (`.claude/hooks/guard-merge-gate.mjs`):
+
+- **local**: `npm run merge -- <pr>` builds the merged result in a throwaway
+  worktree, runs `ci:local` on it, merges only on PASS;
+- **GitHub**: `gh pr merge` passes the hook when the PR is OPEN on `dev`,
+  `mergeStateStatus` is CLEAN (base ferma: il risultato unito coincide con la
+  head), and every check-run on the head is green with none pending — any
+  doubt falls back to the local door.
+
+Required evidence still follows the profile:
+
 - **FAST**: orchestrator integrates after relevant checks + diff review.
 - **STANDARD**: orchestrator integrates after claim-appropriate evidence and the
   normal integration checks available for the repository.
@@ -101,6 +113,14 @@ plan limits as permanent branching policy.
 At integration time, observe which checks/protections actually exist and report
 limitations. A convention is not an enforced gate merely because this file says
 it should be one.
+
+Observed 2026-09-26: GitHub minutes are back and CI runs per-PR, but branch
+protection is unavailable (private repo on the free plan — 403 from the API),
+so nothing server-side enforces green checks or blocks direct pushes; the hook
+above is the enforcement for agent sessions until the 25/09 source-public
+milestone unlocks protection. `ci.yml` skips `verifica` on docs/`.claude`-only
+changes (`paths-ignore`): a PR that touches only those paths has almost no
+GitHub evidence, and the hook's zero-check-run rule sends it to the local door.
 
 ## Commits are recovery points, not activity counters
 
