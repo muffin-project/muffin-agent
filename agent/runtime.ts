@@ -1038,7 +1038,7 @@ export function buildRuntime(
       // `muffin doctor` (#159). Una seconda lettura di git direbbe la stessa
       // cosa fino al giorno che non la dice più.
       build: async () => {
-        const { describeBuild } = await import('../cli/update.js');
+        const { describeBuild } = await import('../cli/build-stamp.js');
         const { fileURLToPath } = await import('node:url');
         const { dirname } = await import('node:path');
         return describeBuild(dirname(fileURLToPath(import.meta.url)));

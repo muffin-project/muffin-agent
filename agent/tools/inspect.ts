@@ -7,7 +7,7 @@ import { visibleTools } from '../context/assemble.js';
 import { tenantClass } from '../context/assemble.js';
 import type { Profile } from '../profiles/profile.js';
 import type { RegisteredTool } from '../loop.js';
-import type { BuildStamp } from '../../cli/update.js';
+import type { BuildStamp } from '../../cli/build-stamp.js';
 import type { TurnHealth } from '../../core/turns/store.js';
 import { jobPayload, type Job } from '../../core/scheduler/jobs.js';
 import type { CapabilityGap } from './capability-status.js';

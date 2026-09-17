@@ -87,7 +87,13 @@ describe('una capacità spenta lo dice, non solo al log', () => {
 
       const inspect = runtime.deps.tools.find((t) => t.spec.name === 'sys_inspect');
       const out = await inspect!.handler({}, toolContext());
-      expect(out.content).not.toContain('Capacità spente');
+      // Solo web_search qui: le altre capacità spente dipendono dalla
+      // piattaforma (es. sandbox assente nel container → altri gap legittimi),
+      // e la riga sopra dice già che web_search non è fra i gap. La sezione
+      // intera era verde solo dove il resto non mancava; le righe `✗ <nome>:`
+      // dicono invece esattamente chi risulta spento.
+      const righeSpente = out.content.split('\n').filter((l) => l.startsWith('  ✗ '));
+      expect(righeSpente.filter((l) => /^  ✗ web_search\b/.test(l))).toEqual([]);
     } finally {
       runtime.close();
     }

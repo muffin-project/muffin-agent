@@ -27,7 +27,7 @@ import { describeWorkspace } from '../core/config/workspace.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { diagnoseDefaultsDrift, type DefaultDrift } from '../core/config/defaults-drift.js';
 import { ALL_API_KEY_NAMES } from '../core/config/providers.js';
-import { describeBuild, findCheckoutRoot, type BuildStamp } from './update.js';
+import { describeBuild, findCheckoutRoot, type BuildStamp } from './build-stamp.js';
 import type { StatoSuperficie } from '../core/surface/salute.js';
 import { audioAccettato } from '../agent/providers/modalita.js';
 import { prerequisitiTrascrizione, type Prerequisito } from '../core/audio/trascrivi.js';
