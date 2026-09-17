@@ -219,9 +219,19 @@ describe('the owner-class prompt does not move', () => {
    * Re-captured 2026-09-13 after `defaults/rot/identity.md` became owner-generic
    * so a fresh install no longer puts the founder's identity in the prompt.
    * Previous pin: `45a73d354ec5b8d52b30fa1b306f96d35b04959c3ddf9d10e831e3beb73ffbbf`.
+   *
+   * Ri-fissato 2026-09-17 (`slice/prompt-action-grounding`): una riga in più
+   * in `WORK_RULES` — parlare del proprio operato solo in base ai risultati
+   * visibili nel turno, mai dal ricordo di come va di solito. La misura del
+   * 16/09 sui turni dell'owner ("ho già letto CENTRIA.md" detto due minuti
+   * prima di leggerlo davvero): v1 non aveva l'equivalente di §«Riferire» di
+   * v2, e "Detto e dedotto" copre i fatti sul mondo, non le affermazioni sulle
+   * proprie azioni. La riga sta in v1 (il default) e arriva anche alla stanza,
+   * che riceve le stesse regole operative. Pin precedente:
+   * `9af210080d8814b2236adbaf6049d7f7aae5563c968ebd4c3340af1aa074005a`.
    */
   const OWNER_PROMPT_SHA_AT_SPLIT =
-    '9af210080d8814b2236adbaf6049d7f7aae5563c968ebd4c3340af1aa074005a';
+    'dbf59068d47b46697a338ae1ce2295222fc11c4d7b5ed715b5b35a715fff93ea';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
@@ -310,8 +320,12 @@ describe('the owner-class prompt does not move', () => {
    * la regola sul recinto arriva anche alla stanza — che è dove il contenuto di
    * qualcun altro entra per definizione. Pin precedente:
    * `23aa24da39dc582dd7909f750fed59b165a71ce70dc549428b5df634ced0ed9b`.
+   *
+   * Ri-fissato 2026-09-17 (`slice/prompt-action-grounding`) insieme al pin
+   * owner, per la stessa riga sul resoconto fondato. Pin precedente:
+   * `a365b0fc5f1b40c4c2ef787e95f094bb4754597d9073d51d73a93c9cbcf10ae3`.
    */
-  const GROUP_PROMPT_SHA_V1 = 'a365b0fc5f1b40c4c2ef787e95f094bb4754597d9073d51d73a93c9cbcf10ae3';
+  const GROUP_PROMPT_SHA_V1 = 'cf939151204ac65e746c739814a460cc8e016191243c0a52242e934e8977e829';
 
   it('e la stanza riceve lo stesso prompt di ieri, byte per byte', () => {
     const runtime = boot(bootHome());
@@ -422,7 +436,12 @@ describe('quale versione del prompt assembla questa installazione', () => {
     // il difetto misurato in REPL viva quel giorno — (1.715 → 1.858 caratteri),
     // rapporto 10,41 (19.335 / 1.858). Stessa regola: la soglia scende con la
     // misura, e v1 resta pesantemente carattere contro il `< 8` di v2.
-    expect(v1.chiSei / v1.comeLavori).toBeGreaterThan(10);
+    // Ri-misurato 2026-09-17 (`slice/prompt-action-grounding`): la riga sul
+    // resoconto fondato sulle chiamate visibili (1.858 → 2.031 caratteri),
+    // rapporto 9,52 (19.335 / 2.031). Stessa regola ancora: v1 resta
+    // pesantemente carattere contro il `< 8` di v2, che è la riga che porta
+    // il peso dell'affermazione.
+    expect(v1.chiSei / v1.comeLavori).toBeGreaterThan(9);
     expect(v2.chiSei / v2.comeLavori).toBeLessThan(8);
     // E il prompt non è cresciuto per farlo: il peso si è spostato.
     expect(v2.chiSei + v2.comeLavori).toBeLessThan((v1.chiSei + v1.comeLavori) * 1.02);
