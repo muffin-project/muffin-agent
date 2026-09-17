@@ -4,8 +4,10 @@
  * Bracci, a parità di modello (`--model`, di default il main dell'installazione):
  *
  * - `A` — status quo: `adaptive` + `deterministic` (il profilo shipped, intatto);
- * - `B` — `adaptive` + `model-default` (nessuna temperature sul filo);
  * - `C` — `off` + `deterministic` (il default che la #498 vieta senza misura).
+ *
+ * (`B` — `adaptive` + `model-default` — misurato nel round 1: indistinguibile
+ * da A sui task tool. Fuori per budget, non per dimenticanza.)
  *
  * Il quarto braccio della issue (`low/bounded reasoning`) non è esprimibile:
  * `ReasoningRequest.effort/maxTokens` non ha superficie in profilo/config
@@ -33,14 +35,22 @@ import { loadConfig, muffinHome, saveConfig } from '../../core/config/config.js'
 import { runTurn } from '../../agent/loop.js';
 import { buildRuntime, type Runtime } from '../../agent/runtime.js';
 
-type Arm = 'A' | 'B' | 'C';
-export const ARMS: Arm[] = ['A', 'B', 'C'];
+type Arm = 'A' | 'C';
+export const ARMS: Arm[] = ['A', 'C'];
 
-export type TaskDef = {
+type TaskDef = {
   id: string;
-  prompt: string;
+  /** I turni in sequenza, stessa sessione: dal secondo in poi servono la history. */
+  turns: string[];
+  /** Repliche a sessioni fresche: separano segnale da rumore. */
+  reps: number;
   seed: (ws: string) => void;
-  check: (ws: string, answer: string) => { pass: boolean; detail: string };
+  /**
+   * Giudizio meccanico, mai un LLM (che si lascia convincere dal tono).
+   * `answers` una per turno; `toolCallsPerTurn` dice se il modello ha
+   * riusato la conversazione o è tornato sul disco.
+   */
+  check: (ws: string, answers: string[], toolCallsPerTurn: number[]) => { pass: boolean; detail: string };
 };
 
 const RIGHE_CSV = [
@@ -51,77 +61,85 @@ const SOMMA_ATTESA = RIGHE_CSV.slice(1).reduce((n, r) => n + Number(r[1]), 0);
 
 export const TASKS: TaskDef[] = [
   {
+    // Prima i conversazionali: se il tetto di spesa scatta, i dati nuovi
+    // sopravvivono (gli ancoraggi file esistono già dal round 1).
+    id: 'T3c-storia-senza-rilettura',
+    turns: ['Leggi docs/a.txt ed elenca le righe.', 'Senza rileggere il file: qual era la seconda riga?'],
+    reps: 2,
+    seed: (ws) => {
+      mkdirSync(join(ws, 'docs'), { recursive: true });
+      writeFileSync(join(ws, 'docs', 'a.txt'), 'alfa\nbeta\ngamma\n');
+      writeFileSync(join(ws, 'docs', 'b.txt'), 'uno\n');
+    },
+    check: (_ws, answers, toolCallsPerTurn) => {
+      const seconda = answers[1] ?? '';
+      const ricorda = seconda.toLowerCase().includes('beta');
+      const riuso = (toolCallsPerTurn[1] ?? 1) === 0 ? 'senza rilettura' : 'rileggendo';
+      return ricorda
+        ? { pass: true, detail: `ricorda beta ${riuso}` }
+        : { pass: false, detail: `dimentica la history (${riuso}): ${seconda.slice(0, 160)}` };
+    },
+  },
+  {
+    id: 'T4c-correzione-con-memoria',
+    turns: ["Scrivi data/nota.txt con scritto 'bozza'.", "Cambialo in 'finale' e dimmi cosa c'era scritto prima."],
+    reps: 2,
+    seed: (ws) => {
+      mkdirSync(join(ws, 'data'), { recursive: true });
+    },
+    check: (ws, answers, _toolCallsPerTurn) => {
+      let file = '';
+      try {
+        file = readFileSync(join(ws, 'data', 'nota.txt'), 'utf8').trim();
+      } catch {
+        return { pass: false, detail: 'nota.txt assente' };
+      }
+      const seconda = answers[1] ?? '';
+      return file === 'finale' && seconda.toLowerCase().includes('bozza')
+        ? { pass: true, detail: 'finale su disco, bozza ricordata' }
+        : { pass: false, detail: `file=${file}, ricorda-bozza=${seconda.toLowerCase().includes('bozza')}` };
+    },
+  },
+  {
     id: 'T1-somma-csv',
-    prompt: 'Leggi data/numeri.csv e scrivi data/somma.txt con la somma della colonna importo, solo il numero.',
+    turns: ['Leggi data/numeri.csv e scrivi data/somma.txt con la somma della colonna importo, solo il numero.'],
+    reps: 1,
     seed: (ws) => {
       mkdirSync(join(ws, 'data'), { recursive: true });
       writeFileSync(join(ws, 'data', 'numeri.csv'), `${RIGHE_CSV.map((r) => r.join(',')).join('\n')}\n`);
     },
-    check: (ws, answer) => {
+    check: (ws, answers, _toolCallsPerTurn) => {
       let file = '';
       try {
         file = readFileSync(join(ws, 'data', 'somma.txt'), 'utf8').trim();
       } catch {
-        return { pass: false, detail: `somma.txt assente; risposta: ${answer.slice(0, 160)}` };
+        return { pass: false, detail: `somma.txt assente; risposta: ${(answers[0] ?? '').slice(0, 160)}` };
       }
       return file === String(SOMMA_ATTESA)
         ? { pass: true, detail: `somma ${file}` }
-        : { pass: false, detail: `file dice ${file}, atteso ${SOMMA_ATTESA}; risposta: ${answer.slice(0, 160)}` };
-    },
-  },
-  {
-    id: 'T1b-somma-csv-bis',
-    prompt: 'Leggi data/numeri.csv e scrivi data/somma2.txt con la somma della colonna importo, solo il numero.',
-    seed: (ws) => {
-      mkdirSync(join(ws, 'data'), { recursive: true });
-      writeFileSync(join(ws, 'data', 'numeri.csv'), `${RIGHE_CSV.map((r) => r.join(',')).join('\n')}\n`);
-    },
-    check: (ws, answer) => {
-      let file = '';
-      try {
-        file = readFileSync(join(ws, 'data', 'somma2.txt'), 'utf8').trim();
-      } catch {
-        return { pass: false, detail: `somma2.txt assente; risposta: ${answer.slice(0, 160)}` };
-      }
-      return file === String(SOMMA_ATTESA)
-        ? { pass: true, detail: `somma ${file}` }
-        : { pass: false, detail: `file dice ${file}, atteso ${SOMMA_ATTESA}; risposta: ${answer.slice(0, 160)}` };
+        : { pass: false, detail: `file dice ${file}, atteso ${SOMMA_ATTESA}` };
     },
   },
   {
     id: 'T2-report-txt',
-    prompt: 'Conta le righe di ogni .txt in docs/ e scrivi report.txt con una riga per file "nome: N righe" più una riga finale "totale: M righe".',
+    turns: ['Conta le righe di ogni .txt in docs/ e scrivi report.txt con una riga per file "nome: N righe" più una riga finale "totale: M righe".'],
+    reps: 1,
     seed: (ws) => {
       mkdirSync(join(ws, 'docs'), { recursive: true });
       writeFileSync(join(ws, 'docs', 'a.txt'), 'uno\ndue\ntre\n');
       writeFileSync(join(ws, 'docs', 'b.txt'), 'uno\n');
       writeFileSync(join(ws, 'docs', 'c.txt'), 'uno\ndue\ntre\nquattro\ncinque\n');
     },
-    check: (ws, answer) => {
+    check: (ws, answers, _toolCallsPerTurn) => {
+      void answers;
       let file = '';
       try {
         file = readFileSync(join(ws, 'report.txt'), 'utf8');
       } catch {
-        return { pass: false, detail: `report.txt assente; risposta: ${answer.slice(0, 160)}` };
+        return { pass: false, detail: 'report.txt assente' };
       }
       const ok = file.includes('a.txt') && file.includes('3') && file.includes('b.txt') && file.includes('totale');
-      return ok
-        ? { pass: true, detail: 'report con nomi, conteggi e totale' }
-        : { pass: false, detail: `report incompleto: ${file.slice(0, 200)}` };
-    },
-  },
-  {
-    id: 'T3-spiega-script',
-    prompt: 'In due righe al massimo: cosa fa lo script operazioni.py?',
-    seed: (ws) => {
-      writeFileSync(join(ws, 'operazioni.py'), 'import sys\n\ndef raddoppia(numeri):\n    return [n * 2 for n in numeri]\n\nif __name__ == "__main__":\n    print(raddoppia([1, 2, 3]))\n');
-    },
-    check: (_ws, answer) => {
-      const a = answer.toLowerCase();
-      const ok = a.includes('raddoppia') || (a.includes('doppi') && a.includes('lista'));
-      return ok
-        ? { pass: true, detail: 'descrive il raddoppio' }
-        : { pass: false, detail: `non descrive: ${answer.slice(0, 200)}` };
+      return ok ? { pass: true, detail: 'report con nomi, conteggi e totale' } : { pass: false, detail: `incompleto: ${file.slice(0, 200)}` };
     },
   },
 ];
@@ -129,6 +147,7 @@ export const TASKS: TaskDef[] = [
 export type Row = {
   arm: Arm;
   task: string;
+  rep: number;
   pass: boolean;
   detail: string;
   outcome: string;
@@ -162,11 +181,6 @@ async function runArm(
       saveConfig({ ...cfg, thinking: 'off' }, home);
     }
     const runtime: Runtime = buildRuntime(home, ws);
-    if (arm === 'B') {
-      // Solo campionamento di default del provider: il profilo shipped resta
-      // quello selezionato, cambia solo la manopola che manda temperature.
-      runtime.deps.profile = { ...runtime.deps.profile, sampling: 'model-default' };
-    }
     let asks = 0;
     runtime.approvers.set('cli', async () => {
       asks += 1;
@@ -174,63 +188,74 @@ async function runArm(
     });
     const rows: Row[] = [];
     for (const task of TASKS) {
-      if (runtime.budget.monthToDateUsd() > maxUsd) {
-        out(`tetto $${maxUsd} superato: stop`);
-        break;
-      }
-      task.seed(ws);
-      const session = runtime.deps.sessions.open(`ab-${arm}-${task.id}`);
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), signalMs);
-      const t0 = Date.now();
-      let outcome = '';
-      let text = '';
-      try {
-        const result = await runTurn(
-          runtime.deps,
-          { principal: { ...OWNER }, tenant: 'host', surface: 'cli', session, text: task.prompt, signal: ctrl.signal },
-        );
-        outcome = result.stopped;
-        text = result.text;
-        const row = runtime.deps.turns.get(result.turnId);
-        const c = row?.counters;
-        const chk = task.check(ws, text);
+      for (let rep = 1; rep <= task.reps; rep += 1) {
+        if (runtime.budget.monthToDateUsd() > maxUsd) {
+          out(`tetto $${maxUsd} superato: stop`);
+          break;
+        }
+        task.seed(ws);
+        const session = runtime.deps.sessions.open(`ab-${arm}-${task.id}-r${rep}`);
+        const answers: string[] = [];
+        const callsPerTurn: number[] = [];
+        let outcome = '';
+        let iters = 0;
+        let tools = 0;
+        let recs = 0;
+        let input = 0;
+        let output = 0;
+        let spent = 0;
+        let wall = 0;
+        let threw: string | null = null;
+        for (const prompt of task.turns) {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), signalMs);
+          const t0 = Date.now();
+          try {
+            const result = await runTurn(
+              runtime.deps,
+              { principal: { ...OWNER }, tenant: 'host', surface: 'cli', session, text: prompt, signal: ctrl.signal },
+            );
+            outcome = result.stopped;
+            answers.push(result.text);
+            const row = runtime.deps.turns.get(result.turnId);
+            const c = row?.counters;
+            callsPerTurn.push(c?.toolCallsMade ?? -1);
+            iters += c?.iterations ?? 0;
+            tools += c?.toolCallsMade ?? 0;
+            recs += c?.recoveriesUsed ?? 0;
+            input += c?.usage.inputTokens ?? 0;
+            output += c?.usage.outputTokens ?? 0;
+            spent += c?.spentUsd ?? 0;
+          } catch (error) {
+            threw = error instanceof Error ? error.message : String(error);
+            outcome = 'threw';
+            break;
+          } finally {
+            clearTimeout(timer);
+            wall += Date.now() - t0;
+          }
+        }
+        const chk = threw !== null ? { pass: false, detail: `throw: ${threw}` } : task.check(ws, answers, callsPerTurn);
         rows.push({
           arm,
           task: task.id,
+          rep,
           pass: chk.pass && outcome === 'answered',
           detail: chk.detail,
           outcome,
-          iterations: c?.iterations ?? -1,
-          toolCalls: c?.toolCallsMade ?? -1,
-          recoveries: c?.recoveriesUsed ?? -1,
+          iterations: iters,
+          toolCalls: tools,
+          recoveries: recs,
           asks,
-          inputTokens: c?.usage.inputTokens ?? -1,
-          outputTokens: c?.usage.outputTokens ?? -1,
-          spentUsd: c?.spentUsd ?? -1,
-          wallMs: Date.now() - t0,
+          inputTokens: input,
+          outputTokens: output,
+          spentUsd: spent,
+          wallMs: wall,
         });
-      } catch (error) {
-        rows.push({
-          arm,
-          task: task.id,
-          pass: false,
-          detail: `throw: ${error instanceof Error ? error.message : String(error)}`,
-          outcome: 'threw',
-          iterations: -1,
-          toolCalls: -1,
-          recoveries: -1,
-          asks,
-          inputTokens: -1,
-          outputTokens: -1,
-          spentUsd: -1,
-          wallMs: Date.now() - t0,
-        });
-      } finally {
-        clearTimeout(timer);
+        asks = 0;
+        const last = rows[rows.length - 1];
+        out(`${arm} ${task.id} r${rep}: ${last?.pass === true ? 'PASS' : 'FAIL'} (${last?.detail})`);
       }
-      asks = 0;
-      out(`${arm} ${task.id}: ${rows[rows.length - 1]?.pass === true ? 'PASS' : 'FAIL'} (${rows[rows.length - 1]?.detail})`);
     }
     out(`spesa cumulata home: $${runtime.budget.monthToDateUsd().toFixed(4)}`);
     runtime.close();
@@ -242,11 +267,11 @@ async function runArm(
 }
 
 export function table(rows: Row[]): string {
-  const head = '| braccio | task | esito | iter | tool | rec | ask | in | out | $ | muro_ms |';
-  const lines = [head, '|---|---|---|---|---|---|---|---|---|---|---|'];
+  const head = '| braccio | task | rep | esito | iter | tool | rec | ask | in | out | $ | muro_ms |';
+  const lines = [head, '|---|---|---|---|---|---|---|---|---|---|---|---|'];
   for (const r of rows) {
     lines.push(
-      `| ${r.arm} | ${r.task} | ${r.pass ? 'PASS' : 'FAIL'} (${r.outcome}) | ${r.iterations} | ${r.toolCalls} | ${r.recoveries} | ${r.asks} | ${r.inputTokens} | ${r.outputTokens} | ${r.spentUsd.toFixed(4)} | ${r.wallMs} |`,
+      `| ${r.arm} | ${r.task} | ${r.rep} | ${r.pass ? 'PASS' : 'FAIL'} (${r.outcome}) | ${r.iterations} | ${r.toolCalls} | ${r.recoveries} | ${r.asks} | ${r.inputTokens} | ${r.outputTokens} | ${r.spentUsd.toFixed(4)} | ${r.wallMs} |`,
     );
   }
   return lines.join('\n');
@@ -258,8 +283,8 @@ async function main(): Promise<void> {
       model: { type: 'string' },
       'base-url': { type: 'string' },
       'api-key-env': { type: 'string', default: 'MUFFIN_AB_KEY' },
-      arms: { type: 'string', default: 'A,B,C' },
-      'max-usd': { type: 'string', default: '2' },
+      arms: { type: 'string', default: 'A,C' },
+      'max-usd': { type: 'string', default: '1' },
       'signal-ms': { type: 'string', default: `${6 * 60_000}` },
       'dry-run': { type: 'boolean', default: false },
     },
