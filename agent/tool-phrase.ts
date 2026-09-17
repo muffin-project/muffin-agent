@@ -38,6 +38,7 @@ const TOOL_PHRASE: Readonly<Record<string, string>> = {
   fs_list: 'guardo una cartella',
   fs_search: 'cerco nei file',
   fs_write: 'scrivo un file',
+  fs_edit: 'modifico un pezzo di file',
   vault_save: 'salvo nel vault della stanza',
   document_read: 'leggo un documento',
   http_get: 'apro una pagina',
@@ -81,6 +82,10 @@ const TOOL_SUBJECT: Readonly<Record<string, string | readonly string[]>> = {
   // `name`. Un solo campo lascerebbe muta metà delle chiamate.
   fs_search: ['query', 'name'],
   fs_write: 'path',
+  // `path` e non `oldText`: la stessa ragione di `fs_write` qui sopra — gli
+  // argomenti li scrive il modello e rovesciare il blocco modificato nello
+  // scrollback a ogni edit è il difetto che questa mappa esiste per evitare.
+  fs_edit: 'path',
   vault_save: 'titolo',
   document_read: 'path',
   http_get: 'url',

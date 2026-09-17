@@ -1066,3 +1066,53 @@ describe('prepareTurn riaggancia anche la corsia light', () => {
     }
   });
 });
+
+/**
+ * `fs_edit` attraversa il kernel come `fs.edit`, con l'undo dietro.
+ *
+ * La cucitura che si prova: la dichiarazione nuova (`agent/tools/fs.ts`,
+ * `rerunnable: false`) arriva davvero al kernel attraverso `buildRuntime` —
+ * un verdetto `draft` per l'owner senza approvazioni, la copia scattata prima
+ * della modifica, il resto del file intatto. Senza questa prova una riga
+ * dimenticata in `buildRuntime` offrirebbe il tool e il kernel lo rifiuterebbe
+ * sempre (o viceversa), e la suite resterebbe verde perché nessuno chiama mai
+ * `fs_edit` davvero.
+ */
+describe('fs_edit reaches the kernel as fs.edit, with undo behind it', () => {
+  const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
+
+  it('a scripted turn replaces one block: draft verdict, snapshot taken, rest intact', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-wiring-edit-'));
+    runInit({ home, apiKey: 'sk-never-called' });
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-wiring-edit-ws-'));
+    writeFileSync(join(workspace, 'bersaglio.txt'), 'alfa\nBETA\nomega\n');
+
+    const runtime = buildRuntime(home, workspace);
+    // Offerto con la capability giusta: il menu del modello e il kernel
+    // leggono la stessa dichiarazione, o uno dei due mente.
+    const tool = runtime.deps.tools.find((t) => t.spec.name === 'fs_edit');
+    expect(tool?.capability).toBe('fs.edit');
+
+    const editCall: ChatResult = {
+      text: null,
+      toolCalls: [{ id: 'c1', name: 'fs_edit', args: { path: 'bersaglio.txt', oldText: 'BETA', newText: 'beta' } }],
+      stopReason: 'tool_use',
+      usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      model: 't',
+    };
+    const deps: LoopDeps = { ...runtime.deps, provider: new Scripted([editCall]) };
+
+    const result = await runTurn(deps, {
+      principal: owner, tenant: 'host', surface: 'cli',
+      session: deps.sessions.open('w-edit-1'), text: 'sistema la riga in maiuscolo',
+    });
+
+    // Chirurgico: il resto del file non è stato toccato.
+    expect(readFileSync(join(workspace, 'bersaglio.txt'), 'utf8')).toBe('alfa\nbeta\nomega\n');
+    expect(result.stopped).toBe('answered');
+    // E la copia c'era prima: l'undo può tornare indietro.
+    const journal = new UndoJournal(join(home, 'undo'));
+    const entry = journal.read(result.turnId);
+    expect(entry?.snapshots.length).toBeGreaterThan(0);
+  });
+});

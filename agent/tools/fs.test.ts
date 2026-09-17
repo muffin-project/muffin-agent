@@ -496,3 +496,129 @@ describe('draft: la copia e la scrittura sono lo stesso file', () => {
     );
   });
 });
+
+/**
+ * Leggere a finestre e modificare un pezzo solo.
+ *
+ * Misurato sui turni dell'owner: per cambiare tre righe il modello rileggeva
+ * il file intero e lo riscriveva intero — contesto bruciato e, oltre i 2 MB,
+ * un rifiuto secco. `fs_read` ora pagina (`offset`/`limit`) e `fs_edit`
+ * sostituisce un blocco a match unico. Le regole di sicurezza non si muovono:
+ * stesso scope, stesso recinto, stesso tier, stesso undo.
+ */
+describe('fs_read a finestre, fs_edit chirurgico', () => {
+  const byName = (scope: FsScope, name: string) =>
+    makeFsTools(scope).find((t) => t.spec.name === name)!;
+
+  it('una finestra numera le righe e dice intervallo e totale', async () => {
+    const { scope, root } = scoped();
+    writeFileSync(join(root, 'lungo.txt'), ['uno', 'due', 'tre', 'quattro', 'cinque'].join('\n'));
+    const out = await byName(scope, 'fs_read').handler({ path: 'lungo.txt', offset: 2, limit: 2 }, toolContext());
+    expect(out.content).toContain('righe 2–3 di 5');
+    expect(out.content).toContain('2: due');
+    expect(out.content).toContain('3: tre');
+    expect(out.content).not.toContain('1: uno');
+    expect(out.tier).toBe(DISK_TIER);
+  });
+
+  it('senza offset/limit la lettura resta byte-identica a prima — nessun numero, nessun header', async () => {
+    const { scope, root } = scoped();
+    writeFileSync(join(root, 'breve.txt'), 'a\nb\n');
+    const out = await byName(scope, 'fs_read').handler({ path: 'breve.txt' }, toolContext());
+    expect(out.content).toContain('a\nb\n');
+    expect(out.content).not.toContain('righe');
+    expect(out.content).not.toContain('1: a');
+  });
+
+  it('offset oltre la fine lancia invece di restituire vuoto', () => {
+    const { scope, root } = scoped();
+    writeFileSync(join(root, 'corto.txt'), 'solo\n');
+    expect(() => byName(scope, 'fs_read').handler({ path: 'corto.txt', offset: 9 }, toolContext())).toThrow(
+      /oltre la fine/,
+    );
+  });
+
+  it('offset e limit non interi o minori di 1 non passano lo schema', () => {
+    const { scope } = scoped();
+    expect(() => byName(scope, 'fs_read').handler({ path: 'x', offset: 0 }, toolContext())).toThrow();
+    expect(() => byName(scope, 'fs_read').handler({ path: 'x', limit: 1.5 }, toolContext())).toThrow();
+  });
+
+  it('fs_edit sostituisce il blocco unico e dice le righe', async () => {
+    const { scope, root } = scoped();
+    const f = join(root, 'codice.txt');
+    writeFileSync(f, ['prima', 'vecchia chiamata()', 'dopo'].join('\n'));
+    const out = await byName(scope, 'fs_edit').handler(
+      { path: 'codice.txt', oldText: 'vecchia chiamata()', newText: 'nuova chiamata()' },
+      toolContext(),
+    );
+    expect(readFileSync(f, 'utf8')).toBe(['prima', 'nuova chiamata()', 'dopo'].join('\n'));
+    expect(out.content).toContain('righe 2–2');
+    expect(out.tier).toBe(0);
+  });
+
+  it('zero match: niente scritto, e lo dice', () => {
+    const { scope, root } = scoped();
+    const f = join(root, 'fermo.txt');
+    writeFileSync(f, 'contenuto vero\n');
+    // Sincrono come gli altri rifiuti di questo file: niente è successo al file
+    // prima ancora che una promise esista.
+    expect(() =>
+      byName(scope, 'fs_edit').handler({ path: 'fermo.txt', oldText: 'inesistente', newText: 'x' }, toolContext()),
+    ).toThrow(/non trovato/);
+    expect(readFileSync(f, 'utf8')).toBe('contenuto vero\n');
+  });
+
+  it('due match: niente scritto finché oldText non è unico', () => {
+    const { scope, root } = scoped();
+    const f = join(root, 'doppio.txt');
+    writeFileSync(f, 'chiave: 1\nchiave: 2\n');
+    expect(() =>
+      byName(scope, 'fs_edit').handler({ path: 'doppio.txt', oldText: 'chiave', newText: 'x' }, toolContext()),
+    ).toThrow(/2 volte/);
+    // Il file è intatto: un edit ambiguo che "sceglie la prima" modificherebbe
+    // al posto sbagliato, ed è proprio ciò che il vincolo vieta.
+    expect(readFileSync(f, 'utf8')).toBe('chiave: 1\nchiave: 2\n');
+  });
+
+  it('newText vuoto cancella il blocco', async () => {
+    const { scope, root } = scoped();
+    const f = join(root, 'pulisci.txt');
+    writeFileSync(f, ['tieni', 'togli questa riga', 'tieni'].join('\n'));
+    await byName(scope, 'fs_edit').handler(
+      { path: 'pulisci.txt', oldText: 'togli questa riga\n', newText: '' },
+      toolContext(),
+    );
+    expect(readFileSync(f, 'utf8')).toBe(['tieni', 'tieni'].join('\n'));
+  });
+
+  it('oldText vuoto non passa lo schema: matcherebbe ovunque', () => {
+    const { scope } = scoped();
+    expect(() => byName(scope, 'fs_edit').handler({ path: 'x', oldText: '', newText: 'y' }, toolContext())).toThrow();
+  });
+
+  it('`fs_edit` scrive dove il journal ha fotografato, come `fs_write`', async () => {
+    const { scope, root } = scoped();
+    const fotografato = join(root, 'fotografato.md');
+    writeFileSync(fotografato, 'vecchio blocco\n', 'utf8');
+    writeFileSync(join(root, 'altro.md'), 'vecchio blocco\n', 'utf8');
+
+    await byName(scope, 'fs_edit').handler(
+      { path: 'altro.md', oldText: 'vecchio blocco', newText: 'nuovo blocco' },
+      { ...toolContext(), effectPath: fotografato },
+    );
+
+    expect(readFileSync(fotografato, 'utf8')).toBe('nuovo blocco\n');
+    expect(readFileSync(join(root, 'altro.md'), 'utf8')).toBe('vecchio blocco\n');
+  });
+
+  it('la capability fs.edit esiste ed è l’unica non rieseguibile: la riesecuzione potrebbe applicare due volte', async () => {
+    const { scope } = scoped();
+    const tool = byName(scope, 'fs_edit');
+    expect(tool.capability).toBe('fs.edit');
+    expect(tool.resolveEffectPath).toBeDefined();
+    const { fsCapabilities } = await import('./fs.js');
+    const decl = fsCapabilities.find((d) => d.id === 'fs.edit')!;
+    expect(decl).toMatchObject({ risk: 'medium', reversible: 'undoable', rerunnable: false, hostOnly: true });
+  });
+});
