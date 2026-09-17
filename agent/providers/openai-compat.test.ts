@@ -716,3 +716,32 @@ describe('openai-compat · tool_choice escalation (ADR-0082)', () => {
     expect((failed as ProviderError).source).toBe('output');
   });
 });
+
+/**
+ * `Retry-After` del provider (#496), lato openai-compat: stessa pretesa del
+ * gemello Anthropic — un 429 con finestra dichiarata arriva come
+ * `retryAfterMs`, senza header non si inventa nulla.
+ */
+describe('openai-compat · Retry-After sopravvive a wrap', () => {
+  function statusHarness(status: number, headers: Record<string, string>, body: unknown) {
+    const fetchFake = async (): Promise<Response> =>
+      new Response(JSON.stringify(body), { status, headers });
+    return new OpenAICompatProvider('sk-test', 'https://openrouter.ai/api/v1', {}, {
+      explicitCache: false,
+      reasoningEffort: false,
+      discoverReasoning: false,
+      fetch: fetchFake as never,
+    });
+  }
+
+  it('un 429 con retry-after: 45 porta retryAfterMs 45000', async () => {
+    const provider = statusHarness(429, { 'retry-after': '45' }, { error: { message: 'lento', code: 429 } });
+    const failed = await provider.chat(CALL).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(failed).toBeInstanceOf(ProviderError);
+    expect((failed as ProviderError).retryable).toBe(true);
+    expect((failed as unknown as { retryAfterMs?: number }).retryAfterMs).toBe(45_000);
+  });
+});

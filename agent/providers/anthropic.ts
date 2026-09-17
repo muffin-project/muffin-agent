@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import {
   ProviderError,
   ProviderStreamError,
+  parseRetryAfterMs,
   type ChatCall,
   type ChatResult,
   type ContentBlock,
@@ -186,6 +187,18 @@ export class AnthropicProvider implements Provider {
       }
     } catch (error) {
       if (error instanceof ProviderError) throw error;
+      // L'errore in-band di Anthropic: l'SDK solleva un evento SSE `error`
+      // come `APIError` con `status === undefined` (stessa forma dell'in-band
+      // OpenRouter chiuso in `253634b` sull'altro adapter — misurato il
+      // 17/09/2026 contro l'SDK installato: senza questo ramo cadeva in
+      // `ProviderStreamError`, "stream rotto" con un solo fallback
+      // non-streaming, senza mai toccare il budget di trasporto). La
+      // retryability viene dal tipo via cavo, non dallo status che non c'è:
+      // `rate_limit`/`overloaded`/`api`/`gateway_timeout` fanno backoff
+      // durevole, gli errori di richiesta/autenticazione falliscono subito.
+      if (error instanceof Anthropic.APIError && error.status === undefined) {
+        throw providerErrorFromWire(error, call.model);
+      }
       throw new ProviderStreamError(error instanceof Error ? error.message : String(error), receivedAnyEvent, error);
     }
 
@@ -409,7 +422,13 @@ function mapStopReason(reason: string | null): StopReason {
     case 'refusal':
       return 'refusal';
     default:
-      return 'end';
+      // Mai 'end' presunto: una reason che nessuno conosce non è un successo,
+      // è un fallimento con un nome nuovo. Parità con `openai-compat.ts`, che
+      // ha chiuso la stessa presunzione in `253634b`: `StopReason` qui è solo
+      // telemetria (il loop instrada su testo/tool call, mai su questo), ma
+      // una telemetria che mente rende il prossimo debug come quello del
+      // 16/09.
+      return 'error';
   }
 }
 
@@ -422,11 +441,53 @@ function wrap(error: unknown): ProviderError {
   if (error instanceof Anthropic.APIError) {
     const status = error.status ?? 0;
     const retryable = status === 429 || status >= 500;
-    return new ProviderError(`${status} ${error.message}`, retryable, status);
+    return new ProviderError(
+      `${status} ${error.message}`,
+      retryable,
+      status,
+      'transport',
+      parseRetryAfterMs(error.headers),
+    );
   }
   if (error instanceof Error && error.name === 'AbortError') {
     return new ProviderError('aborted', false);
   }
   // Network-level failures (DNS, reset, timeout) are worth one more try.
   return new ProviderError(error instanceof Error ? error.message : String(error), true);
+}
+
+/**
+ * L'errore in-band di Anthropic in un `ProviderError` instradabile.
+ *
+ * L'SDK lo porta come `APIError` con `status === undefined` e il tipo via
+ * cavo in `.type` (`body.error.type`: `overloaded_error`, `rate_limit_error`,
+ * `api_error`, `gateway_timeout_error` contro `invalid_request_error`,
+ * `authentication_error`, `permission_error`, `not_found_error` —
+ * platform.claude.com/docs/en/api/errors). Retryable per tipo, con la stessa
+ * regola di `providerErrorFromWire` in `openai-compat.ts`: tipo assente
+ * uguale retryable — senza tipo non si sa che non lo sia, e la direzione
+ * sicura è il budget con backoff, non il silenzio. La finestra `Retry-After`
+ * viaggia negli header della 200 che portava lo stream.
+ */
+function providerErrorFromWire(
+  error: Error & {
+    type?: unknown;
+    headers?: { get(name: string): string | null } | undefined;
+  },
+  model: string,
+): ProviderError {
+  const type = typeof error.type === 'string' ? error.type : undefined;
+  const retryable =
+    type === undefined ||
+    type === 'rate_limit_error' ||
+    type === 'overloaded_error' ||
+    type === 'api_error' ||
+    type === 'gateway_timeout_error';
+  return new ProviderError(
+    `${type ?? 'provider error'}: ${error.message} (${model})`,
+    retryable,
+    undefined,
+    'transport',
+    parseRetryAfterMs(error.headers),
+  );
 }

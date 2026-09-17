@@ -57,6 +57,8 @@ export type RecordedRequest = {
   transcript: string;
   /** Whether this call asked for SSE (DAY-1 requirement B11) — the ground truth for "did streaming actually turn on", not an assumption from the answer arriving correctly (which a non-streaming fallback would also produce). */
   stream: boolean;
+  /** Arrival time (`Date.now()`) — the ground truth for "how long did the harness wait between two attempts", immune to boot-time variance that a wall-clock assertion would absorb. */
+  at: number;
 };
 
 export type FakeProvider = {
@@ -76,6 +78,14 @@ export type FakeProviderOptions = {
    * one more time than expected does not hang.
    */
   main: ScriptedReply[];
+  /**
+   * HTTP-level failures for main-lane calls, consumed in order before the
+   * scripted replies begin (#496: 429 + `Retry-After`). Each entry answers
+   * one main call with the given status/headers/body instead of a completion
+   * — the attempt is still recorded in `requests`, exactly like production
+   * counts a failed wire attempt. Light-lane calls never take this door.
+   */
+  failMain?: Array<{ status: number; headers?: Record<string, string>; body?: unknown }>;
   /**
    * The light lane — extraction, the contradiction judge, the reranker. It gets
    * its own hook because its replies are JSON with a schema, not prose, and
@@ -181,6 +191,7 @@ function record(body: Body): RecordedRequest {
     tools,
     transcript: messages.map((m) => `${m.role}: ${flattenContent(m.content)}`).join('\n'),
     stream: body.stream === true,
+    at: Date.now(),
   };
 }
 
@@ -280,6 +291,16 @@ export async function startFakeProvider(options: FakeProviderOptions): Promise<F
       // The lane is decided by the model id, exactly as production bills it:
       // `config.models.light` for extraction and friends, `main` for turns.
       const isLight = /haiku|light/i.test(entry.model);
+      // A scripted HTTP failure wins over the scripted reply, once per entry
+      // and main-lane only: this is how a scenario puts a 429 in front of a
+      // turn without teaching the fake new dialects.
+      if (!isLight && options.failMain !== undefined && options.failMain.length > 0) {
+        const fail = options.failMain.shift();
+        if (fail === undefined) throw new Error('failMain esaurito fra il controllo e lo shift');
+        res.writeHead(fail.status, { 'content-type': 'application/json', ...(fail.headers ?? {}) });
+        res.end(JSON.stringify(fail.body ?? { error: { message: 'finto', code: fail.status } }));
+        return;
+      }
       let reply: ScriptedReply;
       if (isLight) {
         reply = options.light ? options.light(entry) : extraction([]);

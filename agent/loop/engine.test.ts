@@ -175,3 +175,30 @@ describe('il motore ha un solo chiamante', () => {
     expect(importatori).toEqual(['entry.ts']);
   });
 });
+
+describe('la corsia main onora il Retry-After del provider (#496)', () => {
+  it('attende la finestra dichiarata dal server prima di ritentare, poi risponde', async () => {
+    // Backoff azzerato (random 0): l'unica attesa possibile è i 400ms che il
+    // provider dichiara. Soglia a 300: i timer anticipano, non posticipano.
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const w = world([
+      new ProviderError('429 lento', true, 429, 'transport', 400),
+      answer('eccomi dopo la finestra'),
+    ]);
+    const session = w.sessions.open('retry-after');
+
+    const started = Date.now();
+    const result = await runTurn(w.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session,
+      text: 'cerca',
+    });
+
+    expect(result.stopped).toBe('answered');
+    expect(result.text).toContain('eccomi dopo la finestra');
+    expect(Date.now() - started).toBeGreaterThanOrEqual(300);
+    expect(w.provider.seen).toHaveLength(2);
+  });
+});

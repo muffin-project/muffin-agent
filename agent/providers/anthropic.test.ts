@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { BudgetEngine } from '../../core/budget/budget.js';
 import { costUsd } from '../../core/budget/pricing.js';
 import { AnthropicProvider } from './anthropic.js';
-import { ProviderStreamError, type ChatCall, type StreamEvent } from './types.js';
+import { ProviderError, ProviderStreamError, type ChatCall, type StreamEvent } from './types.js';
 
 /**
  * The Anthropic adapter, tested against the bytes it actually sends and the
@@ -555,5 +555,127 @@ describe('anthropic adapter · tool_choice escalation (ADR-0082)', () => {
     const h = harness();
     await h.provider.chat({ ...CALL, tools: TOOLS, toolChoice: 'required' });
     expect(h.sent[0]).toMatchObject({ tool_choice: { type: 'any' } });
+  });
+});
+
+/**
+ * Errori in-band di Anthropic dentro lo stream (issue #565).
+ *
+ * L'SDK installato (`@anthropic-ai/sdk` v0.115.0, `core/streaming.mjs`) solleva
+ * un evento SSE `error` come `APIError` con `status === undefined` — la stessa
+ * forma dell'in-band di OpenRouter che `253634b` ha chiuso sull'altro adapter
+ * (cinque vuoti da 30s, zero retry, quattro nudge sprecati). La domanda di
+ * #565 è se questo adapter ha lo stesso buco: senza un ramo dedicato,
+ * l'errore cade in `ProviderStreamError` ("stream rotto", un solo fallback
+ * non-streaming) invece del budget di trasporto con la retryability del tipo.
+ */
+describe('anthropic adapter · errori in-band dentro lo stream (#565)', () => {
+  const MESSAGE_START = FULL_STREAM_EVENTS[0]!;
+  const errorStream = (type: string) =>
+    sse([
+      MESSAGE_START,
+      {
+        event: 'error',
+        data: { type: 'error', error: { type, message: 'qualcosa si è rotto a monte' } },
+      },
+    ]);
+
+  it('overloaded in-band lancia ProviderError transport retryable, non ProviderStreamError', async () => {
+    const provider = streamHarness(streamedResponse([errorStream('overloaded_error')]));
+    let caught: unknown;
+    try {
+      await collect(provider.chatStream(CALL));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ProviderError);
+    expect(caught).not.toBeInstanceOf(ProviderStreamError);
+    expect((caught as ProviderError).retryable).toBe(true);
+    expect((caught as ProviderError).source).toBe('transport');
+  });
+
+  it('rate_limit in-band è retryable: è il caso che il budget di trasporto deve assorbire', async () => {
+    const provider = streamHarness(streamedResponse([errorStream('rate_limit_error')]));
+    let caught: unknown;
+    try {
+      await collect(provider.chatStream(CALL));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ProviderError);
+    expect((caught as ProviderError).retryable).toBe(true);
+  });
+
+  it('authentication in-band non è retryable — una chiave morta non guarisce aspettando', async () => {
+    const provider = streamHarness(streamedResponse([errorStream('authentication_error')]));
+    let caught: unknown;
+    try {
+      await collect(provider.chatStream(CALL));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ProviderError);
+    expect((caught as ProviderError).retryable).toBe(false);
+  });
+
+  it("una stop reason sconosciuta non diventa end: il default è error, mai un successo presunto", async () => {
+    const events = FULL_STREAM_EVENTS.map((e) =>
+      e.event === 'message_delta'
+        ? {
+            ...e,
+            data: {
+              type: 'message_delta',
+              delta: { stop_reason: 'ragione-futura-sconosciuta', stop_sequence: null },
+              usage: { output_tokens: 8 },
+            },
+          }
+        : e,
+    );
+    const provider = streamHarness(streamedResponse([sse(events)]));
+    const done = (await collect(provider.chatStream(CALL))).at(-1)!;
+    expect(done.type).toBe('done');
+    if (done.type === 'done') expect(done.result.stopReason).toBe('error');
+  });
+});
+
+/**
+ * `Retry-After` del provider (#496): un 429 con finestra dichiarata dal
+ * server deve arrivarci come dato (`retryAfterMs`), non perdersi in `wrap`.
+ * Senza, i retry owner di entrambe le corsie attendono il backoff cieco e
+ * ritentano contro un bucket non ancora ricaricato — la stessa classe di
+ * deadlock che ha colpito Hermes sugli account Anthropic Tier 1.
+ */
+describe('anthropic adapter · Retry-After sopravvive a wrap', () => {
+  function statusHarness(status: number, headers: Record<string, string>, body: unknown) {
+    const fetchFake = async (): Promise<Response> =>
+      new Response(JSON.stringify(body), { status, headers });
+    return new AnthropicProvider('sk-test', 'https://api.anthropic.test', {
+      fetch: fetchFake as never,
+    });
+  }
+
+  it('un 429 con retry-after: 120 porta retryAfterMs 120000', async () => {
+    const provider = statusHarness(429, { 'retry-after': '120' }, { error: { type: 'rate_limit_error', message: 'lento' } });
+    let caught: unknown;
+    try {
+      await provider.chat(CALL);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ProviderError);
+    expect((caught as ProviderError).retryable).toBe(true);
+    expect((caught as unknown as { retryAfterMs?: number }).retryAfterMs).toBe(120_000);
+  });
+
+  it('senza header non si inventa nessuna attesa', async () => {
+    const provider = statusHarness(429, {}, { error: { type: 'rate_limit_error', message: 'lento' } });
+    let caught: unknown;
+    try {
+      await provider.chat(CALL);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ProviderError);
+    expect((caught as unknown as { retryAfterMs?: number }).retryAfterMs).toBeUndefined();
   });
 });
