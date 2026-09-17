@@ -463,8 +463,16 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
           // Full jitter keeps concurrent turns from retrying in lockstep. The
           // ceiling doubles from 500ms to two minutes, bounded by the turn's
           // wall/model budget and spend governor.
+          //
+          // A provider-declared `Retry-After` wins over the blind backoff
+          // when it is longer (#496): retrying inside the server's own
+          // window burns attempts against a bucket that has not refilled —
+          // the deadlock Hermes hit on rate-limited Anthropic accounts. The
+          // window is parsed and capped at the adapter boundary
+          // (`parseRetryAfterMs`); here it only ever lengthens the wait, and
+          // the turn's wall/model budget still bounds it from outside.
           const attempt = MAX_TRANSPORT_RETRIES - run.transportRetriesLeft;
-          await sleep(retryDelayMs(attempt), input.signal);
+          await sleep(Math.max(retryDelayMs(attempt), error.retryAfterMs ?? 0), input.signal);
           continue;
         }
       }
