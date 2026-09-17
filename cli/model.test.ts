@@ -319,3 +319,57 @@ describe('muffin model rivalida il routing (issue #501)', () => {
     expect(out.join('\n')).toContain('non verificato');
   });
 });
+
+describe('muffin model distingue persistito da attivo (issue #500)', () => {
+  const casa = (main: string, light: string) => {
+    const h = home();
+    const base = loadConfig(h);
+    saveConfig({ ...base, models: { main, light } }, h);
+    return h;
+  };
+  const rete = catalogo(['google/gemma-4-31b-it', '0', '0']);
+  const vivo = (main: string, light: string) => async () => ({ pid: 4242, models: { main, light } });
+
+  it('senza gateway: vale dal prossimo avvio', async () => {
+    const { out, sink } = raccogli();
+    await cmdModel(casa('qwen/qwen3.8-27b', 'qwen/qwen3.8-flash'), ['google/gemma-4-31b-it'], {
+      out: sink,
+      fetchImpl: rete,
+      gatewayStatus: async () => null,
+    });
+    expect(out.join('\n')).toContain('Nessun gateway vivo');
+    expect(out.join('\n')).toContain('prossimo avvio');
+  });
+
+  it('gateway già allineato: niente riavvio', async () => {
+    const { out, sink } = raccogli();
+    await cmdModel(casa('qwen/qwen3.8-27b', 'qwen/qwen3.8-flash'), ['google/gemma-4-31b-it'], {
+      out: sink,
+      fetchImpl: rete,
+      gatewayStatus: vivo('google/gemma-4-31b-it', 'qwen/qwen3.8-flash'),
+    });
+    expect(out.join('\n')).toContain('niente riavvio');
+  });
+
+  it('gateway indietro: passa al prossimo turno, il volo finisce sul vecchio', async () => {
+    const { out, sink } = raccogli();
+    await cmdModel(casa('qwen/qwen3.8-27b', 'qwen/qwen3.8-flash'), ['google/gemma-4-31b-it'], {
+      out: sink,
+      fetchImpl: rete,
+      gatewayStatus: vivo('qwen/qwen3.8-27b', 'qwen/qwen3.8-flash'),
+    });
+    const testo = out.join('\n');
+    expect(testo).toContain('dal prossimo turno');
+    expect(testo).toContain('in volo');
+  });
+
+  it('gateway muto sul modello: dice come verificare invece di indovinare', async () => {
+    const { out, sink } = raccogli();
+    await cmdModel(casa('qwen/qwen3.8-27b', 'qwen/qwen3.8-flash'), ['google/gemma-4-31b-it'], {
+      out: sink,
+      fetchImpl: rete,
+      gatewayStatus: async () => ({ pid: 4242 }),
+    });
+    expect(out.join('\n')).toContain('gen_ai.request.model');
+  });
+});
