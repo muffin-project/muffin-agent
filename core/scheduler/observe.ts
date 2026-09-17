@@ -1,6 +1,12 @@
-import { absenceAnchor, formatP, type Absence } from '../memory/absence.js';
+import { type Absence, absenceAnchor, formatP } from '../memory/absence.js';
+import { type DecisionLog, decisionParts } from './decisions.js';
 import type { FireLog } from './firelog.js';
-import type { decideProactive, ProactiveContext, ProactiveDecision, ProactiveTrigger } from './proactivity.js';
+import type {
+  decideProactive,
+  ProactiveContext,
+  ProactiveDecision,
+  ProactiveTrigger,
+} from './proactivity.js';
 
 /**
  * Stage 1, joined to the gate.
@@ -33,6 +39,12 @@ export type ObserveDeps = {
   decide: typeof decideProactive;
   /** Read here, written by the caller — see `recordFired`. */
   fires: FireLog;
+  /**
+   * History, not dedup: every evaluation below is appended here (see
+   * `decisions.ts`), while `fires` keeps deciding what may speak. Optional so
+   * the seam stays testable without a database; production always passes it.
+   */
+  decisions?: DecisionLog;
   ctx: ProactiveContext;
   /** The surface a message would go out on; part of the trigger the gate sees. */
   channel: string;
@@ -94,7 +106,17 @@ export function observe(deps: ObserveDeps): Observation[] {
     // the entity — if the subject comes back and then goes quiet again, that is
     // a new anchor and it may speak. Remembering versus insisting.
     if (deps.fires.has(anchor)) {
-      out.push({ absence, anchor, decision: { effect: 'skip', reason: 'already_fired' } });
+      const decision = { effect: 'skip', reason: 'already_fired' } as const;
+      deps.decisions?.record({
+        decidedAt: deps.ctx.now,
+        source: 'observe',
+        kind: 'gone_quiet',
+        anchor,
+        tier: 0,
+        channel: deps.channel,
+        ...decisionParts(decision),
+      });
+      out.push({ absence, anchor, decision });
       continue;
     }
 
@@ -109,7 +131,17 @@ export function observe(deps: ObserveDeps): Observation[] {
       kind: 'gone_quiet',
       anchor,
     };
-    out.push({ absence, anchor, decision: deps.decide(trigger, deps.ctx) });
+    const decision = deps.decide(trigger, deps.ctx);
+    deps.decisions?.record({
+      decidedAt: deps.ctx.now,
+      source: 'observe',
+      kind: 'gone_quiet',
+      anchor,
+      tier: trigger.tier,
+      channel: deps.channel,
+      ...decisionParts(decision),
+    });
+    out.push({ absence, anchor, decision });
     decided += 1;
   }
   return out;

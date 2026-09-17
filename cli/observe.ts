@@ -1,19 +1,20 @@
-import DatabaseCtor from 'better-sqlite3';
 import { parseArgs } from 'node:util';
+import DatabaseCtor from 'better-sqlite3';
 import type { LoopDeps } from '../agent/loop.js';
+import type { Runtime } from '../agent/runtime.js';
 import { BudgetEngine } from '../core/budget/budget.js';
-import { ConfigError, loadConfig, paths } from '../core/config/config.js';
-import { loadSealedBudgets } from '../core/rot/budgets.js';
+import { type Config, ConfigError, loadConfig, paths } from '../core/config/config.js';
 import { detectAbsences, formatP } from '../core/memory/absence.js';
 import { MemoryStore } from '../core/memory/store.js';
+import { loadSealedBudgets } from '../core/rot/budgets.js';
+import { DecisionLog } from '../core/scheduler/decisions.js';
 import { FireLog } from '../core/scheduler/firelog.js';
-import { SendLock } from '../core/scheduler/sendlock.js';
-import { observe, recordFired, type Observation } from '../core/scheduler/observe.js';
+import { type Observation, observe, recordFired } from '../core/scheduler/observe.js';
 import { decideProactive } from '../core/scheduler/proactivity.js';
 import type { Deliver } from '../core/scheduler/scheduler.js';
-import { ModelLane } from '../core/turns/model-lane.js';
-import type { Runtime } from '../agent/runtime.js';
+import { SendLock } from '../core/scheduler/sendlock.js';
 import type { SurfaceRegistry } from '../core/surface/registry.js';
+import { ModelLane } from '../core/turns/model-lane.js';
 import { connectSurfaces } from './surface.js';
 
 /**
@@ -34,8 +35,9 @@ import { connectSurfaces } from './surface.js';
 const TENANT = 'host';
 
 const OBSERVE_USAGE = `usage:
-  muffin observe           cosa è diventato silenzioso, e cosa ne farebbe il gate
-  muffin observe --send    compone e consegna quello che il gate consente
+  muffin observe              cosa è diventato silenzioso, e cosa ne farebbe il gate
+  muffin observe --send       compone e consegna quello che il gate consente
+  muffin observe --decisions  cosa ha deciso il gate di recente, e perché
 `;
 
 export type ObserveOverrides = {
@@ -44,6 +46,30 @@ export type ObserveOverrides = {
   deliver?: Deliver;
   now?: Date;
 };
+
+/** One durable evaluation, for the `--decisions` reader (see `decisions.ts`). */
+function formatDecision(d: {
+  decidedAt: Date;
+  source: string;
+  kind: string;
+  anchor: string;
+  tier: number;
+  channel: string;
+  effect: string;
+  reason: string;
+  untilAt?: Date;
+}): string {
+  const when = d.decidedAt.toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' });
+  const what =
+    d.effect === 'allow'
+      ? 'parlerebbe'
+      : d.effect === 'skip'
+        ? 'già detto'
+        : d.effect === 'deny'
+          ? `negato (${d.reason})`
+          : `rimandato${d.untilAt ? ` a ${d.untilAt.toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' })}` : ''} (${d.reason})`;
+  return `${when} · ${d.source}/${d.kind} · ${what}\n    ancora ${d.anchor} · tier ${d.tier} · ${d.channel}`;
+}
 
 /**
  * Delivery for a one-shot command, from the same registry the gateway uses.
@@ -98,16 +124,28 @@ function verdict(obs: Observation, fires: FireLog, sent: Map<string, string>): s
   return sent.get(obs.anchor) ?? 'parlerebbe';
 }
 
-export async function cmdObserve(home: string, argv: string[], over: ObserveOverrides = {}): Promise<number> {
-  let values: { send?: boolean };
+export async function cmdObserve(
+  home: string,
+  argv: string[],
+  over: ObserveOverrides = {},
+): Promise<number> {
+  let values: { send?: boolean; decisions?: boolean };
   try {
-    ({ values } = parseArgs({ args: argv, options: { send: { type: 'boolean' } }, allowPositionals: false }));
+    ({ values } = parseArgs({
+      args: argv,
+      options: { send: { type: 'boolean' }, decisions: { type: 'boolean' } },
+      allowPositionals: false,
+    }));
   } catch {
     process.stderr.write(OBSERVE_USAGE);
     return 78;
   }
+  if (values.send === true && values.decisions === true) {
+    process.stderr.write('scegli: --send oppure --decisions, non entrambi.\n');
+    return 78;
+  }
 
-  let config;
+  let config: Config;
   try {
     config = loadConfig(home);
   } catch (error) {
@@ -130,6 +168,21 @@ export async function cmdObserve(home: string, argv: string[], over: ObserveOver
     // turn has no memory schema, and no home has ever had a fires table.
     new MemoryStore(db);
     const fires = new FireLog(db);
+    // History beside dedup (see `core/scheduler/decisions.ts`): every gate
+    // evaluation below is appended here, including the defers `FireLog` must
+    // never record — same table the commitment lane writes, one history.
+    const decisions = new DecisionLog(db);
+    if (values.decisions === true) {
+      const rows = decisions.list(20);
+      if (rows.length === 0) {
+        process.stdout.write('il gate non ha ancora deciso niente su questa home.\n');
+        return 0;
+      }
+      process.stdout.write(
+        `${rows.length} ultime decisioni del gate\n\n${rows.map(formatDecision).join('\n')}\n`,
+      );
+      return 0;
+    }
     // One read of the sealed file for both rails this command needs: the spend
     // cap and the quiet window. They used to come from two places — the cap from
     // `config.json`, outside the seal, and the window from `rot/budgets.json` —
@@ -160,6 +213,7 @@ export async function cmdObserve(home: string, argv: string[], over: ObserveOver
       absences: () => detectAbsences(db, TENANT, now),
       decide: decideProactive,
       fires,
+      decisions,
       // The same budget engine the kernel reads, not a second opinion about it.
       ctx: { now, quietHours: quiet, budgetExhausted: budget.exhausted() },
       channel,
@@ -182,10 +236,14 @@ export async function cmdObserve(home: string, argv: string[], over: ObserveOver
         `    ${evidence(o)}\n` +
         `    ancora ${o.anchor}`,
     );
-    process.stdout.write(`${observations.length} sopra soglia · canale ${channel}\n\n${lines.join('\n')}\n`);
+    process.stdout.write(
+      `${observations.length} sopra soglia · canale ${channel}\n\n${lines.join('\n')}\n`,
+    );
 
     if (!values.send && observations.some((o) => o.decision.effect === 'allow')) {
-      process.stderr.write('\nniente è stato inviato. `muffin observe --send` per farlo parlare.\n');
+      process.stderr.write(
+        '\nniente è stato inviato. `muffin observe --send` per farlo parlare.\n',
+      );
     }
     return failures > 0 ? 1 : 0;
   } finally {
@@ -266,7 +324,10 @@ async function sendAllowed(
         sent.set(obs.anchor, 'inviato');
       } catch (error) {
         failures += 1;
-        sent.set(obs.anchor, `non inviato: ${error instanceof Error ? error.message : String(error)}`);
+        sent.set(
+          obs.anchor,
+          `non inviato: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     }
   } finally {

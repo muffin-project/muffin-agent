@@ -1,19 +1,19 @@
-import DatabaseCtor from 'better-sqlite3';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import DatabaseCtor from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildRuntime } from '../agent/runtime.js';
-import { loadConfig, paths, saveConfig, type Config } from '../core/config/config.js';
-import { MemoryStore } from '../core/memory/store.js';
-import { FireLog } from '../core/scheduler/firelog.js';
-import { SendLock } from '../core/scheduler/sendlock.js';
 import type { LoopDeps } from '../agent/loop.js';
 import type { ChatResult, Provider } from '../agent/providers/types.js';
+import { buildRuntime } from '../agent/runtime.js';
+import { type Config, loadConfig, paths, saveConfig } from '../core/config/config.js';
+import { MemoryStore } from '../core/memory/store.js';
 import { seal } from '../core/rot/verify.js';
+import { FireLog } from '../core/scheduler/firelog.js';
+import { SendLock } from '../core/scheduler/sendlock.js';
+import { DELIVERED } from '../core/surface/types.js';
 import { runInit } from './init.js';
-import { DELIVERED, notDelivered } from '../core/surface/types.js';
 import { cmdObserve } from './observe.js';
 
 /**
@@ -106,7 +106,9 @@ function firedAnchors(home: string): string[] {
   const db = new DatabaseCtor(paths(home).db);
   try {
     new FireLog(db); // ensures the table exists even if nothing ever wrote
-    return (db.prepare(`SELECT anchor FROM proactive_fires`).all() as { anchor: string }[]).map((r) => r.anchor);
+    return (db.prepare(`SELECT anchor FROM proactive_fires`).all() as { anchor: string }[]).map(
+      (r) => r.anchor,
+    );
   } finally {
     db.close();
   }
@@ -120,9 +122,15 @@ function patchConfig(home: string, patch: (c: Config) => Config): void {
 }
 
 /** Edits the sealed file and reseals, the way an owner legitimately would. */
-function patchBudgets(home: string, patch: (b: Record<string, unknown>) => Record<string, unknown>): void {
+function patchBudgets(
+  home: string,
+  patch: (b: Record<string, unknown>) => Record<string, unknown>,
+): void {
   const file = budgetsFile(home);
-  writeFileSync(file, `${JSON.stringify(patch(JSON.parse(readFileSync(file, 'utf8'))), null, 2)}\n`);
+  writeFileSync(
+    file,
+    `${JSON.stringify(patch(JSON.parse(readFileSync(file, 'utf8'))), null, 2)}\n`,
+  );
   seal(home, '1', new Date());
 }
 
@@ -186,7 +194,13 @@ describe('muffin observe', () => {
     const delivered: string[] = [];
 
     // No `deps`: if this path touched the model it could not even build a turn.
-    const code = await cmdObserve(home, [], { now: NOW, deliver: async (_c, t) => (delivered.push(t), DELIVERED) });
+    const code = await cmdObserve(home, [], {
+      now: NOW,
+      deliver: async (_c, t) => {
+        delivered.push(t);
+        return DELIVERED;
+      },
+    });
 
     const text = out.join('');
     expect(code).toBe(0);
@@ -208,7 +222,10 @@ describe('muffin observe', () => {
       const code = await cmdObserve(home, ['--send'], {
         now: NOW,
         deps: { ...runtime.deps, provider: new Scripted(['da quanto non tocchi la tesi?']) },
-        deliver: async (_c, t) => (delivered.push(t), DELIVERED),
+        deliver: async (_c, t) => {
+          delivered.push(t);
+          return DELIVERED;
+        },
       });
       expect(code).toBe(0);
       expect(delivered).toEqual(['da quanto non tocchi la tesi?']);
@@ -229,7 +246,10 @@ describe('muffin observe', () => {
         cmdObserve(home, ['--send'], {
           now: NOW,
           deps: { ...runtime.deps, provider: new Scripted(['primo', 'secondo']) },
-          deliver: async (_c, t) => (delivered.push(t), DELIVERED),
+          deliver: async (_c, t) => {
+            delivered.push(t);
+            return DELIVERED;
+          },
         });
       await send();
       await send();
@@ -292,7 +312,10 @@ describe('muffin observe · the gate rules, and delivery obeys', () => {
       const code = await cmdObserve(home, ['--send'], {
         now: NIGHT,
         deps: rt.deps,
-        deliver: async (_c, t) => (delivered.push(t), DELIVERED),
+        deliver: async (_c, t) => {
+          delivered.push(t);
+          return DELIVERED;
+        },
       });
       expect(delivered).toEqual([]);
       // A defer that burns the anchor is a permanent silence about that entity.
@@ -325,7 +348,10 @@ describe('muffin observe · the gate rules, and delivery obeys', () => {
       const code = await cmdObserve(home, ['--send'], {
         now: NOW, // midday: the only reason to stay quiet is the budget
         deps: rt.deps,
-        deliver: async (_c, t) => (delivered.push(t), DELIVERED),
+        deliver: async (_c, t) => {
+          delivered.push(t);
+          return DELIVERED;
+        },
       });
       expect(delivered).toEqual([]);
       expect(firedAnchors(home)).toEqual([]);
@@ -339,7 +365,10 @@ describe('muffin observe · the gate rules, and delivery obeys', () => {
 
   it('delivers on the configured surface, not on one written here by hand', async () => {
     const home = homeWithSilence();
-    patchConfig(home, (c) => ({ ...c, surfaces: { ...c.surfaces, default: 'telegram', enabled: ['cli', 'telegram'] } }));
+    patchConfig(home, (c) => ({
+      ...c,
+      surfaces: { ...c.surfaces, default: 'telegram', enabled: ['cli', 'telegram'] },
+    }));
     const rt = scriptedRuntime(home, ['da quanto non tocchi la tesi?']);
     const { out } = capture();
     const channels: string[] = [];
@@ -347,7 +376,10 @@ describe('muffin observe · the gate rules, and delivery obeys', () => {
       const code = await cmdObserve(home, ['--send'], {
         now: NOW,
         deps: rt.deps,
-        deliver: async (c) => (channels.push(c), DELIVERED),
+        deliver: async (c) => {
+          channels.push(c);
+          return DELIVERED;
+        },
       });
       expect(code).toBe(0);
       expect(channels).toEqual(['telegram']);
@@ -491,29 +523,35 @@ describe('muffin observe · quiet hours come from the RoT', () => {
     ['unreadable', (home) => writeFileSync(budgetsFile(home), '{ "quietHours": '), 'illeggibile'],
   ];
 
-  it.each(broken)('budgets.json %s → the fallback, noted, and 03:00 still stays quiet', async (_case, breakIt, note) => {
-    const home = homeWithSilence();
-    breakIt(home);
-    const rt = scriptedRuntime(home, ['non doveva uscire']);
-    const { out, err } = capture();
-    const delivered: string[] = [];
-    try {
-      const code = await cmdObserve(home, ['--send'], {
-        now: NIGHT,
-        deps: rt.deps,
-        deliver: async (_c, t) => (delivered.push(t), DELIVERED),
-      });
-      expect(code).toBe(0);
-      expect(err.join('')).toContain(note);
-      // The note alone would pass with an empty fallback window, which is the
-      // fallback not existing. This is the half that says it is a real window.
-      expect(delivered).toEqual([]);
-      expect(firedAnchors(home)).toEqual([]);
-      expect(out.join('')).toContain('rimandato');
-    } finally {
-      rt.close();
-    }
-  });
+  it.each(broken)(
+    'budgets.json %s → the fallback, noted, and 03:00 still stays quiet',
+    async (_case, breakIt, note) => {
+      const home = homeWithSilence();
+      breakIt(home);
+      const rt = scriptedRuntime(home, ['non doveva uscire']);
+      const { out, err } = capture();
+      const delivered: string[] = [];
+      try {
+        const code = await cmdObserve(home, ['--send'], {
+          now: NIGHT,
+          deps: rt.deps,
+          deliver: async (_c, t) => {
+            delivered.push(t);
+            return DELIVERED;
+          },
+        });
+        expect(code).toBe(0);
+        expect(err.join('')).toContain(note);
+        // The note alone would pass with an empty fallback window, which is the
+        // fallback not existing. This is the half that says it is a real window.
+        expect(delivered).toEqual([]);
+        expect(firedAnchors(home)).toEqual([]);
+        expect(out.join('')).toContain('rimandato');
+      } finally {
+        rt.close();
+      }
+    },
+  );
 
   it('a valid window inside the seal is the one that rules, and notes nothing', async () => {
     const home = homeWithSilence();
@@ -535,7 +573,10 @@ describe('muffin observe · quiet hours come from the RoT', () => {
       const code = await cmdObserve(home, ['--send'], {
         now: NOW, // 13:00 in Rome: inside the file's window, outside the fallback's
         deps: rt.deps,
-        deliver: async (_c, t) => (delivered.push(t), DELIVERED),
+        deliver: async (_c, t) => {
+          delivered.push(t);
+          return DELIVERED;
+        },
       });
       expect(code).toBe(0);
       expect(delivered).toEqual([]);
@@ -568,7 +609,14 @@ describe('muffin observe --send · one at a time', () => {
     const delivered: string[] = [];
     try {
       const send = () =>
-        cmdObserve(home, ['--send'], { now: NOW, deps: rt.deps, deliver: async (_c, t) => (delivered.push(t), DELIVERED) });
+        cmdObserve(home, ['--send'], {
+          now: NOW,
+          deps: rt.deps,
+          deliver: async (_c, t) => {
+            delivered.push(t);
+            return DELIVERED;
+          },
+        });
       const codes = (await Promise.all([send(), send()])).sort((a, b) => a - b);
 
       expect(delivered).toEqual(['primo']);
@@ -597,7 +645,10 @@ describe('muffin observe --send · one at a time', () => {
       const code = await cmdObserve(home, ['--send'], {
         now: NOW,
         deps: rt.deps,
-        deliver: async (_c, t) => (delivered.push(t), DELIVERED),
+        deliver: async (_c, t) => {
+          delivered.push(t);
+          return DELIVERED;
+        },
       });
       expect(delivered).toEqual([]);
       expect(firedAnchors(home)).toEqual([]);
@@ -620,7 +671,10 @@ describe('muffin observe --send · one at a time', () => {
       const code = await cmdObserve(home, ['--send'], {
         now: NOW,
         deps: rt.deps,
-        deliver: async (_c, t) => (delivered.push(t), DELIVERED),
+        deliver: async (_c, t) => {
+          delivered.push(t);
+          return DELIVERED;
+        },
       });
       expect(code).toBe(0);
       expect(delivered).toEqual(['da quanto non tocchi la tesi?']);
@@ -643,5 +697,38 @@ describe('muffin observe --send · one at a time', () => {
     expect(code).toBe(0);
     expect(out.join('')).toContain('la tesi');
     expect(lockHolder(home)).toBe(process.pid);
+  });
+});
+
+describe('muffin observe --decisions', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('on a home where the gate never ran says so instead of dying on no such table', async () => {
+    const home = homeWithSilence();
+    const { out } = capture();
+    const code = await cmdObserve(home, ['--decisions'], { now: NOW });
+    expect(code).toBe(0);
+    expect(out.join('')).toContain('non ha ancora deciso niente');
+  });
+
+  it('after a run, lists what the gate decided and why', async () => {
+    const home = homeWithSilence();
+    capture();
+    await cmdObserve(home, [], { now: NOW });
+    const second = capture();
+    const code = await cmdObserve(home, ['--decisions'], { now: NOW });
+    const text = second.out.join('');
+    expect(code).toBe(0);
+    expect(text).toContain('decisioni del gate');
+    expect(text).toContain('gone_quiet');
+    expect(text).toContain('absence:');
+  });
+
+  it('refuses --send together with --decisions: looking and talking are different acts', async () => {
+    const home = homeWithSilence();
+    const { err } = capture();
+    const code = await cmdObserve(home, ['--send', '--decisions'], { now: NOW });
+    expect(code).toBe(78);
+    expect(err.join('')).toContain('non entrambi');
   });
 });
