@@ -354,6 +354,83 @@ describe('openai-compat · chatStream (B11)', () => {
 });
 
 /**
+ * Errori in-band di OpenRouter su HTTP 200.
+ *
+ * Dalla documentazione primaria (openrouter.ai/docs, errori e debug): il 200
+ * viene inviato appena il provider accetta la richiesta, prima che il modello
+ * produca un token — ogni fallimento dopo quel punto viaggia DENTRO la
+ * risposta, con un oggetto `error` top-level e `finish_reason: "error"`, e lo
+ * status resta 200. Chi controlla solo lo status legge un successo.
+ *
+ * Misurato sull'installazione viva il 16/09/2026: cinque chiamate di fila da
+ * 30,00 secondi, tutte 200 con contenuto vuoto, zero retry consumati, quattro
+ * nudge sprecati a sgridare un modello innocente e poi `error`. Il fornitore
+ * aveva fallito; l'adapter lo aveva ribattezzato "risposta vuota".
+ */
+describe('openai-compat · errori in-band del provider su 200', () => {
+  it('stream: un chunk con error top-level lancia ProviderError transport retryable, non un done vuoto', async () => {
+    const provider = streamHarness(
+      streamedResponse([
+        sseLine({
+          ...CHUNK({ content: '' }, 'error'),
+          error: { code: 504, message: 'upstream timeout', metadata: { error_type: 'timeout' } },
+        }),
+        'data: [DONE]\n\n',
+      ]),
+    );
+    let caught: unknown;
+    try {
+      await collect(provider.chatStream(CALL));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ProviderError);
+    expect(caught).not.toBeInstanceOf(ProviderStreamError);
+    expect((caught as ProviderError).retryable).toBe(true);
+    expect((caught as ProviderError).source).toBe('transport');
+  });
+
+  it('stream: un 401 in-band non è retryable — bruciare 10 retry su una chiave morta è peggio', async () => {
+    const provider = streamHarness(
+      streamedResponse([
+        sseLine({
+          ...CHUNK({ content: '' }, 'error'),
+          error: { code: 401, message: 'invalid key', metadata: {} },
+        }),
+        'data: [DONE]\n\n',
+      ]),
+    );
+    let caught: unknown;
+    try {
+      await collect(provider.chatStream(CALL));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ProviderError);
+    expect((caught as ProviderError).retryable).toBe(false);
+  });
+
+  it('non-stream: finish_reason error con contenuto vuoto lancia invece di chiudere end', async () => {
+    const completion = {
+      ...A_COMPLETION,
+      choices: [{ message: { content: '', tool_calls: [] }, finish_reason: 'error' }],
+    };
+    const { provider } = harness(false, false, completion);
+    await expect(provider.chat(CALL)).rejects.toBeInstanceOf(ProviderError);
+  });
+
+  it("una finish reason sconosciuta non diventa end: il default è error, mai un successo presunto", async () => {
+    const completion = {
+      ...A_COMPLETION,
+      choices: [{ message: { content: 'ciao', tool_calls: [] }, finish_reason: 'ragione-futura-sconosciuta' }],
+    };
+    const { provider } = harness(false, false, completion);
+    const result = await provider.chat(CALL);
+    expect(result.stopReason).toBe('error');
+  });
+});
+
+/**
  * Chiedere di NON ragionare.
  *
  * Misurato sull'installazione viva il 27/08, stesso prompt, `qwen/qwen3.8-27b`:
