@@ -60,13 +60,13 @@
 #
 # Il costo, detto e non nascosto: su una PR verde il segnale completo arriva
 # in sequenza (~19 min di wall invece di ~11 in parallelo). Accettato
-# dall'owner il 16/09: con i minuti esauriti il gate vero è comunque
-# `npm run merge` (che esegue questi stessi job in Docker, gratis, uno alla
-# volta), e la CI GitHub resta il segnale Linux che quel Docker su macOS non
-# può riprodurre per intero (bwrap/AppArmor — vedi `scripts/ci-local.ts`).
-# Quando il repo diventa pubblico e i minuti illimitati, tornare al parallelismo
-# è spostare questo job in un workflow col trigger di prima: la struttura a
-# job lo rende reversibile senza toccare gli step.
+# dall'owner il 16/09. Dal 17/09 il gate locale non esiste più (`scripts/
+# merge.ts` rimosso su decisione owner): i check GitHub qui sopra sono
+# l'unico segnale automatico, e `npm run ci:local` resta per chi vuole
+# rieseguirli in Docker a mano. Quando il repo diventa pubblico e i minuti
+# illimitati, tornare al parallelismo è spostare questo job in un workflow
+# col trigger di prima: la struttura a job lo rende reversibile senza
+# toccare gli step.
 #
 # Il filtro `branches: [dev, main]` che `accettazione.yml` aveva sul
 # `pull_request` sopravvive come `if:` sul job — stesse PR di prima, stessa

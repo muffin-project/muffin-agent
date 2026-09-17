@@ -64,15 +64,15 @@ run when the actual merge gate requires CI. Report what was actually observed.
 
 ### 3. Slice -> `dev`
 
-Two doors, one guarantee — a merge lands only on evidence the hook can verify
-in that moment (`.claude/hooks/guard-merge-gate.mjs`):
-
-- **local**: `npm run merge -- <pr>` builds the merged result in a throwaway
-  worktree, runs `ci:local` on it, merges only on PASS;
-- **GitHub**: `gh pr merge` passes the hook when the PR is OPEN on `dev`,
-  `mergeStateStatus` is CLEAN (base ferma: il risultato unito coincide con la
-  head), and every check-run on the head is green with none pending — any
-  doubt falls back to the local door.
+A merge lands on green GitHub checks: `gh pr merge` una volta che tutti i
+check sul head sono verdi e nessuno è pending. Fino al 17/09 c'erano due
+porte (locale + GitHub) con un hook a farle rispettare; l'owner ha tolto la
+porta locale e l'hook (`scripts/merge.ts` e `guard-merge-gate.mjs` rimossi).
+Resta una verità scomoda scritta qui perché è vera finché il repo è privato
+su piano free: la protection dei branch non è attivabile (403 dalle API),
+quindi niente sul server impedisce un merge su check rossi — vale la
+disciplina, non un vincolo. Dal source-public (25/09) si riaccende la
+protection e questa frase torna a essere garantita da una macchina.
 
 Required evidence still follows the profile:
 
@@ -114,13 +114,14 @@ At integration time, observe which checks/protections actually exist and report
 limitations. A convention is not an enforced gate merely because this file says
 it should be one.
 
-Observed 2026-09-26: GitHub minutes are back and CI runs per-PR, but branch
+Observed 2026-09-17: GitHub minutes are back and CI runs per-PR, but branch
 protection is unavailable (private repo on the free plan — 403 from the API),
-so nothing server-side enforces green checks or blocks direct pushes; the hook
-above is the enforcement for agent sessions until the 25/09 source-public
-milestone unlocks protection. `ci.yml` skips `verifica` on docs/`.claude`-only
+so nothing server-side enforces green checks or blocks direct pushes; fino al
+17/09 l'enforcement per le sessioni agent era l'hook (ora rimosso con la porta
+locale, vedi §3 sopra). `ci.yml` skips `verifica` on docs/`.claude`-only
 changes (`paths-ignore`): a PR that touches only those paths has almost no
-GitHub evidence, and the hook's zero-check-run rule sends it to the local door.
+GitHub evidence — in quel caso la verifica è locale (`npm run ci:local`,
+`npm test`) e va detta nella PR invece di restare implicita.
 
 ## Commits are recovery points, not activity counters
 
