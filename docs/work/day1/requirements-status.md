@@ -82,6 +82,13 @@ authority/data/effect correctness.
 
 ## La finestra si chiude, ed è questo che ordina il lavoro
 
+> **Nota storica 17/09/2026 (#522).** Le frecce «→ open source» in questa
+> sezione sono del 15/08, quando source-public e open source erano un'unica
+> scadenza futura. Modello canonico ora: `docs/OPEN-SOURCE-STRATEGY.md` §10 —
+> **source-public/pre-alpha (25/09) e product Public Alpha sono milestone
+> separate**, e nessuna delle due sta dopo i 14 giorni. La sequenza sotto resta
+> vera con «open source» letto come «installazioni di altri».
+
 Direttiva owner, 2026-08-15: *«le "cose che non devono cambiare" possono ancora
 cambiare fino a quando non andiamo opensource, per questo importante partire
 dalle fondamenta e rendere muffin usabile per davvero, così da testarlo due
