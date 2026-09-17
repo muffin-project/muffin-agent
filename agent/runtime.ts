@@ -326,6 +326,7 @@ export function baseToolOrder(input: {
     'fs_list',
     'fs_search',
     'fs_write',
+    'fs_edit',
     'memory_search',
     'memory_why',
     'memory_forget',
