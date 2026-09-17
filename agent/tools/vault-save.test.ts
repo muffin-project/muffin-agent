@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -158,8 +158,7 @@ describe('vault_save — «salva questo», nel vault di questa stanza', () => {
     expect(existsSync(risolto)).toBe(true);
   });
 
-  it('la dichiarazione dice le tre cose da cui dipende tutto il resto', () => {
-    // `undoable` + `medium` è ciò che fa rispondere `draft` al kernel (e non
+  it('la dichiarazione dice le tre cose da cui dipende tutto il resto', () => {    // `undoable` + `medium` è ciò che fa rispondere `draft` al kernel (e non
     // `allow`): senza `medium`, una scrittura durevole passerebbe senza copia.
     expect(vaultWriteCapability.reversible).toBe('undoable');
     expect(vaultWriteCapability.risk).toBe('medium');
@@ -167,5 +166,47 @@ describe('vault_save — «salva questo», nel vault di questa stanza', () => {
     expect(vaultWriteCapability.effect).toBe('vault');
     // E chiusa di default: la riceve solo una stanza che il sigillo nomina.
     expect(vaultWriteCapability.hostOnly).toBe(true);
+  });
+
+  /**
+   * DT-09 §4: il tier viaggia sui write e sopravvive al reindex — solo test,
+   * perché il flusso è già corretto.
+   *
+   * `salva()` passa `defaultTier: ctx.taint()` a `reindexPath`, e `reindexPath`
+   * non alza mai il tier delle righe esistenti: eredita per contenuto (prima
+   * per percorso, poi per hash via `maxTierForContent`), mai per default. La
+   * mutazione che fa cadere questo test è passare `defaultTier: 0` fisso o
+   * reindicizzare senza ereditarietà — allora una nota scritta in un turno
+   * tainted tornerebbe owner-grade al primo giro di manutenzione, che è il
+   * laundering che `core/vault/vault.ts` documenta di dover impedire.
+   */
+  it('un write tainted resta tainted dopo un reindex', async () => {
+    const f = fixture();
+    const out = await f.tool.handler(
+      { titolo: 'link letto', testo: 'offerta irripetibile solo per oggi' },
+      toolContext({ tenant: STANZA, taint: () => 3 }),
+    );
+    expect(out.isError).not.toBe(true);
+    const rel = vaultPathPer(STANZA, 'link letto');
+
+    const before = f.store.episodesForVaultPath(STANZA, rel);
+    expect(before.length).toBeGreaterThan(0);
+    for (const row of before) {
+      expect(f.store.episodeById(STANZA, row.id)?.trustTier).toBe(3);
+    }
+
+    // Mano sul file dopo la scrittura: il reindex aggiorna il contenuto ma
+    // non deve lavare il tier.
+    writeFileSync(join(f.root, rel), '# link letto\n\nofferta irripetibile solo per oggi, dettagli aggiunti a mano\n');
+    const report = await f.vault.reindex(STANZA);
+    expect(report.updated).toBe(1);
+
+    const after = f.store.episodesForVaultPath(STANZA, rel);
+    expect(after.length).toBeGreaterThan(0);
+    for (const row of after) {
+      expect(f.store.episodeById(STANZA, row.id)?.trustTier).toBe(3);
+    }
+    // E il nuovo testo risponde davvero al recall della stanza.
+    expect(f.store.searchEpisodes(STANZA, 'dettagli aggiunti')).toHaveLength(1);
   });
 });
