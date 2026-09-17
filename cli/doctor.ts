@@ -35,6 +35,8 @@ import { loadEgress, type EgressPolicy } from '../core/net/egress.js';
 import { diagnoseRoutingStaleness } from '../core/config/model-resolve.js';
 import { diagnoseSearch } from '../agent/tools/search.js';
 import { baseToolOrder } from '../agent/runtime.js';
+import { Vault, type VaultAudit, type VaultStore } from '../core/vault/vault.js';
+import type { TrustTier } from '../core/policy/types.js';
 
 /**
  * Diagnosis that executes instead of assuming.
@@ -685,6 +687,14 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
         }
       }
     }
+    // Il vault: la directory è la fonte, l'indice è derivato — e finché il
+    // watcher (DT-09, `core/vault/watcher.ts`) non gira dentro un processo
+    // longevo, ogni modifica a mano resta disallineata fino al prossimo
+    // `reindex` esplicito. Questa riga è l'etichetta stale di quel disegno:
+    // dice che il recall sta rispondendo da un indice vecchio, e con cosa lo
+    // si riallinea. Solo il tenant `host`, come `muffin vault check` — il
+    // drift di una stanza lo vede la stanza, non questa riga.
+    await vaultDriftCheck(ok, warn, db, p.vault);
     // Has the memory lane ever run? Third of the same shape, and the one that
     // was the whole defect: `ingestPending` had a single hand-typed caller, so
     // an install could sit for weeks with 0 facts and nothing anywhere said
@@ -1432,6 +1442,126 @@ export function sandboxOkDetail(sandbox: Extract<SandboxProbe, { available: true
   return sandbox.mechanism === 'bubblewrap'
     ? `${base} — weaker than macOS: Unix-socket hardening is off on Linux (allowAllUnixSockets, #428/#429)`
     : base;
+}
+
+/**
+ * `audit()` sopra un handle di sola lettura.
+ *
+ * `new MemoryStore(db)` esegue DDL nel costruttore, quindi non si può
+ * costruire su questo handle — e una diagnosi non deve poter scrivere
+ * comunque. L'adattatore risponde alle due letture che `audit()` fa
+ * (`episodesForVaultPath`, `vaultPaths`, più `maxTierForContent` che il tipo
+ * chiede) con le stesse SELECT di `core/memory/store.ts`: se quelle cambiano,
+ * queste le devono seguire. Le scritture lanciano: `audit()` non le chiama
+ * mai, e se un giorno lo facesse, `doctor` deve cadere in modo visibile, non
+ * scrivere in silenzio.
+ */
+function readOnlyVaultStore(db: DatabaseCtor.Database): VaultStore {
+  const solaLettura = (cosa: string): never => {
+    throw new Error(`doctor legge il vault, non lo scrive (${cosa})`);
+  };
+  return {
+    episodesForVaultPath: (tenantId, vaultPath) =>
+      db
+        .prepare(
+          `SELECT id, media_meta AS mediaMeta FROM episodes
+           WHERE tenant_id = ? AND vault_path = ? AND superseded_at IS NULL ORDER BY id`,
+        )
+        .all(tenantId, vaultPath) as { id: number; mediaMeta: string | null }[],
+    vaultPaths: (tenantId) =>
+      db
+        .prepare(
+          `SELECT vault_path AS vaultPath, count(*) AS chunks, max(trust_tier) AS trustTier
+           FROM episodes
+           WHERE tenant_id = ? AND vault_path IS NOT NULL AND superseded_at IS NULL
+           GROUP BY vault_path ORDER BY vault_path`,
+        )
+        .all(tenantId) as { vaultPath: string; chunks: number; trustTier: TrustTier }[],
+    maxTierForContent: (tenantId, hash) =>
+      (
+        db
+          .prepare(
+            `SELECT max(trust_tier) AS tier FROM episodes
+             WHERE tenant_id = ? AND json_extract(media_meta, '$.hash') = ?`,
+          )
+          .get(tenantId, hash) as { tier: TrustTier | null }
+      ).tier,
+    tenantsForVaultPath: (vaultPath) =>
+      (
+        db
+          .prepare(
+            `SELECT DISTINCT tenant_id AS tenantId FROM episodes
+             WHERE vault_path = ? AND superseded_at IS NULL ORDER BY tenant_id`,
+          )
+          .all(vaultPath) as { tenantId: string }[]
+      ).map((r) => r.tenantId),
+    addEpisode: () => solaLettura('addEpisode'),
+    supersedeEpisodes: () => solaLettura('supersedeEpisodes'),
+  };
+}
+
+/**
+ * Il drift del vault, in una riga: file cambiati a mano e non reindicizzati.
+ *
+ * `warn` e mai `fail` di proposito: finché il watcher non è cablato nel
+ * gateway, *ogni* modifica a mano fa drift fino al prossimo reindex esplicito
+ * — un `fail` sarebbe rosso di default, e un rosso di default insegna a
+ * scorrere oltre `doctor`. Il rimedio nomina il verbo, non la spiegazione:
+ * `muffin vault check` elenca, `muffin vault reindex` riallinea.
+ */
+async function vaultDriftCheck(
+  ok: (name: string, detail: string) => void,
+  warn: (name: string, detail: string, remedy: string) => void,
+  db: DatabaseCtor.Database,
+  root: string,
+): Promise<void> {
+  if (!existsSync(root)) {
+    ok('vault', 'nessuna cartella vault — niente da indicizzare');
+    return;
+  }
+  const vault = new Vault(readOnlyVaultStore(db), root);
+  // Senza la tabella `episodes` nessun runtime ha mai costruito un indice qui:
+  // `audit()` lancerebbe sulla tabella che manca, e "mai indicizzato" non è
+  // drift — è uno stato che ha il suo rimedio.
+  if (countOrNull(db, 'episodes') === null) {
+    const files = vault.list().files.length;
+    if (files === 0) {
+      ok('vault', 'vuoto — niente da indicizzare');
+    } else {
+      warn(
+        'vault',
+        `${files} file sul disco, mai indicizzati (tenant host) — il recall non li vede`,
+        'run `muffin vault reindex`',
+      );
+    }
+    return;
+  }
+  let audit: VaultAudit;
+  try {
+    audit = await vault.audit('host');
+  } catch (error) {
+    warn(
+      'vault',
+      `non verificabile: ${error instanceof Error ? error.message : String(error)}`,
+      'run `muffin vault check` per il dettaglio',
+    );
+    return;
+  }
+  const drift = audit.missing.length + audit.stale.length + audit.orphaned.length + audit.unreadable.length;
+  if (drift === 0) {
+    ok('vault', `${audit.files} file · indice allineato (tenant host)`);
+    return;
+  }
+  const parts: string[] = [];
+  if (audit.missing.length > 0) parts.push(`${audit.missing.length} sul disco, non indicizzati`);
+  if (audit.stale.length > 0) parts.push(`${audit.stale.length} cambiati dopo l'indice`);
+  if (audit.orphaned.length > 0) parts.push(`${audit.orphaned.length} indicizzati, file spariti`);
+  if (audit.unreadable.length > 0) parts.push(`${audit.unreadable.length} illeggibili ora`);
+  warn(
+    'vault',
+    `${drift} disallineamenti (tenant host): ${parts.join(' · ')} — il recall risponde da un indice vecchio`,
+    '`muffin vault reindex` li risolve (`muffin vault check` li elenca)',
+  );
 }
 
 /** `null` means the table is not there, which is a different fact from "zero rows". */
