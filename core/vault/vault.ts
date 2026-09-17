@@ -186,6 +186,21 @@ export type ReindexOptions = {
   vectors?: VectorIndex | undefined;
 };
 
+/**
+ * The slice of `MemoryStore` this module actually touches.
+ *
+ * Named — rather than `MemoryStore` directly — for one reader: `doctor`, which
+ * runs `audit()` over a **read-only** handle. `new MemoryStore(db)` runs DDL
+ * in its constructor, so it cannot be built on that handle; a structural type
+ * lets a read-only adapter answer the two queries `audit()` asks without
+ * pretending to be a store that can write. Every real call site still passes a
+ * `MemoryStore`, unchanged.
+ */
+export type VaultStore = Pick<
+  MemoryStore,
+  'episodesForVaultPath' | 'vaultPaths' | 'maxTierForContent' | 'tenantsForVaultPath' | 'addEpisode' | 'supersedeEpisodes'
+>;
+
 type VaultScan = {
   files: VaultFile[];
   skipped: { path: string; why: string }[];
@@ -193,7 +208,7 @@ type VaultScan = {
 
 export class Vault {
   constructor(
-    private readonly store: MemoryStore,
+    private readonly store: VaultStore,
     private readonly root: string,
   ) {}
 

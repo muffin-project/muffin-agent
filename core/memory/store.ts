@@ -1133,6 +1133,26 @@ export class MemoryStore {
   }
 
   /**
+   * Tenants with live evidence for one vault file.
+   *
+   * Read-only and additive: the one question a vault watcher can answer that
+   * `vaultPaths` (per-tenant) cannot — a filesystem event names a path, never
+   * a tenant, so reindexing a hand edit has to start from who references it.
+   * A path nobody references has no correct tenant to index it under, and the
+   * watcher leaves it to `audit()` rather than guessing one.
+   */
+  tenantsForVaultPath(vaultPath: string): string[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT DISTINCT tenant_id AS tenantId FROM episodes
+           WHERE vault_path = ? AND superseded_at IS NULL ORDER BY tenant_id`,
+        )
+        .all(vaultPath) as { tenantId: string }[]
+    ).map((r) => r.tenantId);
+  }
+
+  /**
    * Retires evidence without deleting it. Used when a vault file changes: the
    * old text stops being recalled but stays answerable for "what did that note
    * say in May".
