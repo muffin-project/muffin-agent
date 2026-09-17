@@ -1,7 +1,9 @@
 import { loadConfig, saveConfig, readSecret, type Config } from '../core/config/config.js';
+import { buildEndpointsUrl, parseEndpointTags } from '../core/config/endpoints.js';
+import { resolveModelSwitch, type EndpointEvidence } from '../core/config/model-resolve.js';
 import { isOpenRouterFreeRoute, priceOf } from '../core/budget/pricing.js';
 import { makeEmbedder } from '../core/memory/embed.js';
-import { PROVIDERS, providerFor, type ProviderEntry } from '../core/config/providers.js';
+import { PROVIDERS, providerFor, apiKeyCandidates, type ProviderEntry } from '../core/config/providers.js';
 
 /**
  * `muffin model` — scegliere un modello, e sapere cosa costa prima di sceglierlo.
@@ -78,6 +80,58 @@ export async function fetchCatalogue(
 }
 
 const usd = (n: number): string => (Number.isFinite(n) ? `$${Number(n.toFixed(4))}` : '?');
+
+/**
+ * Gli slug dei provider che servono un modello, o `null` quando non lo si sa.
+ *
+ * `GET {baseUrl}/models/:author/:slug/endpoints` (autenticato: la risposta
+ * varia per chiave) → `data.endpoints[]` con `tag` (lo slug usato in
+ * `provider.routing`) e `provider_name` (il nome display). Si raccolgono
+ * entrambi, minuscoli; se non se ne ricava nessuno si restituisce `null` —
+ * un insieme vuoto fabbricherebbe la prova che nessun pin serve il modello,
+ * e il resolver cancellerebbe un routing sano.
+ *
+ * `fetchImpl` iniettabile come il catalogo: stesso motivo, stessa forma.
+ */
+export async function fetchEndpointTags(
+  entry: ProviderEntry,
+  model: string,
+  apiKey: string | undefined,
+  fetchImpl: typeof globalThis.fetch = globalThis.fetch,
+): Promise<string[] | null> {
+  const url = buildEndpointsUrl(entry.baseUrl, model);
+  if (url === null) return null;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetchImpl(url, {
+      headers: {
+        accept: 'application/json',
+        ...(apiKey === undefined ? {} : { Authorization: `Bearer ${apiKey}` }),
+      },
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    return parseEndpointTags(await res.json());
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** L'evidenza che il resolver vuole, o `null` quando non la si è potuta costruire. */
+async function endpointEvidence(
+  entry: ProviderEntry,
+  slug: string,
+  apiKey: string | undefined,
+  fetchImpl: typeof globalThis.fetch | undefined,
+): Promise<EndpointEvidence> {
+  const tags = await fetchEndpointTags(entry, slug, apiKey, fetchImpl ?? globalThis.fetch);
+  if (tags === null) return null;
+  const set = new Set(tags);
+  return { serves: (pin) => set.has(pin.toLowerCase()) };
+}
 
 /**
  * Cosa dire del divario fra il prezzo del catalogo e quello con cui si fattura.
@@ -243,7 +297,11 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
 
   if (entry === null) {
     out(`endpoint fuori dal catalogo: scrivo "${slug}" su ${lane} senza poterlo verificare.`);
-    saveConfig({ ...config, models: { ...config.models, [lane]: slug } }, home);
+    // Senza provider noto non c'è evidenza: il resolver tiene tutto e lo dice
+    // solo se c'è davvero un routing da rivalidare.
+    const switched = resolveModelSwitch(config, lane, slug, null);
+    saveConfig(switched.config, home);
+    for (const note of switched.notes) out(note);
     return 0;
   }
 
@@ -255,8 +313,10 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
     // stato verificato: rifiutare qui bloccherebbe un owner offline su una
     // scelta perfettamente valida.
     out(`catalogo di ${entry.label} irraggiungibile (${error instanceof Error ? error.message : String(error)}).`);
-    saveConfig({ ...config, models: { ...config.models, [lane]: slug } }, home);
+    const switched = resolveModelSwitch(config, lane, slug, null);
+    saveConfig(switched.config, home);
     out(`${lane} → ${slug}, NON verificato.`);
+    for (const note of switched.notes) out(note);
     return 0;
   }
 
@@ -268,10 +328,16 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
     return 1;
   }
 
-  saveConfig({ ...config, models: { ...config.models, [lane]: slug } }, home);
+  // Lo slug esiste: prima di scriverlo si rivalida il routing contro gli
+  // endpoint vivi del modello nuovo (issue #501). Senza evidenza il resolver
+  // tiene tutto e lo dice — la riga NON verificato qui sotto resta vera.
+  const live = await endpointEvidence(entry, slug, keyForEndpoints(config, home), deps.fetchImpl);
+  const switched = resolveModelSwitch(config, lane, slug, live);
+  saveConfig(switched.config, home);
   out(`${lane} → ${slug} · ${usd(trovato.inputPerMTok)}/${usd(trovato.outputPerMTok)} per MTok su ${entry.label}`);
   const nota = priceNote(trovato, config.provider.baseUrl);
   if (nota !== null) out(nota);
+  for (const note of switched.notes) out(note);
   if (lane === 'main') out('Il profilo si risceglie da solo dal nome del modello: `muffin doctor` dice quale.');
   return 0;
 }
@@ -285,4 +351,21 @@ function keyOf(config: Config, home: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * La chiave per gli endpoint del modello, che a differenza del catalogo la
+ * pretendono (BearerAuth nella spec OpenRouter). Si prova ogni nome noto, in
+ * ordine di migrazione — senza, la rivalidazione del routing sarebbe morta
+ * proprio sull'installazione che ne ha bisogno. Non si stampa mai.
+ */
+export function keyForEndpoints(config: Config, home: string): string | undefined {
+  for (const name of apiKeyCandidates(config.provider)) {
+    try {
+      return readSecret(`secret://${name}`, home);
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
 }
