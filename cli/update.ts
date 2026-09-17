@@ -23,7 +23,11 @@ import { backupNow } from './backup.js';
 import { realishPath } from './init.js';
 import { reconcileDefaults, rigaRiconciliazione } from './adopt.js';
 import { promptLine } from './prompt.js';
-import { paths } from '../core/config/config.js';
+import { paths, loadConfig, saveConfig } from '../core/config/config.js';
+import { providerFor } from '../core/config/providers.js';
+import { buildEndpointsUrl, parseEndpointTags } from '../core/config/endpoints.js';
+import { repairStaleRouting, tagsToEvidence } from '../core/config/model-resolve.js';
+import { keyForEndpoints } from './model.js';
 import { readGateway } from '../core/gateway/lock.js';
 import { checkSupervisor, realSupervisorProbes, type SupervisorProbes } from '../core/gateway/supervisor.js';
 import { LAUNCHD_LABEL, SERVICE_NAME } from '../core/gateway/unit.js';
@@ -242,6 +246,13 @@ export type UpdateDeps = {
   onBegin?: (name: string) => void;
   /** Un passo finito — con il suo esito. Fired man mano, non alla fine. */
   onStep?: (step: UpdateStep) => void;
+  /**
+   * Il JSON degli endpoint vivi, per la riparazione del routing (issue #501).
+   * Default sincrono su un figlio `node` — tutto questo file è spawnSync, e il
+   * runtime che esegue questo comando è sempre presente. I test iniettano il
+   * fixture; senza rete o senza chiave torna `null` e non si tocca niente.
+   */
+  fetchJson?: ((url: string, key: string | undefined) => unknown | null) | undefined;
 };
 
 /**
@@ -568,6 +579,84 @@ function migrationsDetail(dbPath: string, newVersion: number | null): string {
     return `database a v${have}, il codice nuovo arriva a v${newVersion} — ${newVersion - have} migrazione/i in sospeso: partirà al prossimo avvio (repl o gateway)`;
   }
   return `database a v${have}, il codice nuovo arriva solo a v${newVersion} — non dovrebbe succedere dopo un aggiornamento: non avviarlo finché non controlli`;
+}
+
+/**
+ * Il JSON di un URL, in sincrono, per un file che è tutto spawnSync.
+ *
+ * Un figlio `node -e`: lo stesso runtime che esegue questo comando, nessuna
+ * dipendenza nuova (niente curl da pretendere), timeout dentro e fuori. Tutto
+ * ciò che può andare storto torna `null`, e `null` per il chiamante vuol dire
+ * «non lo so» — mai «non esiste».
+ */
+function fetchJsonSync(url: string, key: string | undefined): unknown | null {
+  const script = [
+    'const[u,k]=process.argv.slice(1);',
+    'const c=new AbortController();',
+    'const t=setTimeout(()=>c.abort(),10000);',
+    "fetch(u,{headers:{accept:'application/json',...(k?{Authorization:'Bearer '+k}:{})},signal:c.signal})",
+    ".then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.text()})",
+    '.then(t=>{clearTimeout(t);process.stdout.write(t)})',
+    '.catch(e=>{clearTimeout(t);process.stderr.write(String((e&&e.message)||e));process.exit(1)})',
+  ].join('');
+  const r = run('node', ['-e', script, url, key ?? ''], process.cwd(), 15000);
+  if (r.status !== 0) return null;
+  try {
+    return JSON.parse(r.stdout) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Il routing che una release vecchia ha lasciato alla casa (issue #501).
+ *
+ * Stessa funzione pura di `muffin model`, applicata ai modelli già
+ * configurati contro gli endpoint vivi di oggi. Senza rete, senza chiave o
+ * senza config non si tocca niente — un aggiornamento offline deve riuscire —
+ * e lo si dice in una riga. Il file si riscrive solo quando qualcosa è
+ * davvero cambiato.
+ */
+export function repairRoutingStep(
+  home: string,
+  fetchJson: (url: string, key: string | undefined) => unknown | null = fetchJsonSync,
+): { text: string; ok: boolean } {
+  let config;
+  try {
+    config = loadConfig(home);
+  } catch {
+    return { text: 'niente da riparare (nessuna config leggibile)', ok: true };
+  }
+  const entry = providerFor(config.provider);
+  if (entry === null) return { text: 'niente da riparare (endpoint fuori catalogo)', ok: true };
+  if (config.provider.routing === undefined) {
+    return { text: 'routing coerente coi modelli, niente da riparare', ok: true };
+  }
+  const key = keyForEndpoints(config, home);
+  let out = config;
+  const notes: string[] = [];
+  for (const lane of ['main', 'light'] as const) {
+    const slug = out.models[lane];
+    const url = buildEndpointsUrl(entry.baseUrl, slug);
+    let live: ReturnType<typeof tagsToEvidence> = null;
+    if (url !== null) {
+      try {
+        live = tagsToEvidence(parseEndpointTags(fetchJson(url, key)));
+      } catch {
+        live = null;
+      }
+    }
+    const repaired = repairStaleRouting(out, lane, live);
+    out = repaired.config;
+    notes.push(...repaired.notes);
+  }
+  if (JSON.stringify(out.provider) !== JSON.stringify(config.provider)) {
+    saveConfig(out, home);
+  }
+  return {
+    text: notes.length > 0 ? notes.join(' ') : 'routing coerente coi modelli, niente da riparare',
+    ok: true,
+  };
 }
 
 /**
@@ -1081,6 +1170,12 @@ export function runUpdate(deps: UpdateDeps = {}): UpdateResult {
 
   const readNewSchemaVersion = deps.readNewSchemaVersion ?? defaultReadNewSchemaVersion;
   step('schema', migrationsDetail(p.db, readNewSchemaVersion(releaseDir)));
+
+  // Il routing che una release vecchia ha lasciato alla casa: stessa
+  // riparazione di `muffin model`, sui modelli già configurati. Dopo lo step
+  // `schema` e prima dei default: la config che riparte deve già essere sana.
+  const rigaRouting = repairRoutingStep(home, deps.fetchJson);
+  step('config routing', rigaRouting.text, rigaRouting.ok);
 
   // **I default della release nuova, portati in una casa vecchia.**
   //

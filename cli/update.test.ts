@@ -14,7 +14,8 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { arrivalsSummary, atomicSymlink, channelLagNote, cmdUpdate, fetchFailureRemedy, findCheckoutRoot, findOwnedLaunchers, noteDopoLoSwing, offerGatewayRestart, restartVerdict, run, runUpdate, describeBuild } from './update.js';
+import { arrivalsSummary, atomicSymlink, channelLagNote, cmdUpdate, fetchFailureRemedy, findCheckoutRoot, findOwnedLaunchers, noteDopoLoSwing, offerGatewayRestart, repairRoutingStep, restartVerdict, run, runUpdate, describeBuild } from './update.js';
+import { loadConfig, saveConfig, type Config } from '../core/config/config.js';
 
 /**
  * `muffin update` — release built alongside (git worktree), never in place;
@@ -23,7 +24,8 @@ import { arrivalsSummary, atomicSymlink, channelLagNote, cmdUpdate, fetchFailure
  * repositories (cheap, and it is exactly the part worth not mocking); only
  * `npm ci`, the smoke test and "read the new schema version" — the three
  * seams that would otherwise shell out to a real `npm install` or spawn a
- * real node subprocess per test — are faked.
+ * real node subprocess per test — are faked, plus the endpoint JSON fetch
+ * behind the `config routing` step (same reason: no network in tests).
  */
 
 type FakeResult = { status: number; stdout: string; stderr: string };
@@ -1194,8 +1196,7 @@ describe('runUpdate — l\'elenco di cosa è arrivato', () => {
   });
 });
 
-describe('arrivalsSummary', () => {
-  it('taglia a un numero sano e conta il resto', () => {
+describe('arrivalsSummary', () => {  it('taglia a un numero sano e conta il resto', () => {
     const subjects = Array.from({ length: 25 }, (_, i) => `soggetto ${i + 1}`);
     const t = arrivalsSummary({ subjects, fallbackCount: 25, max: 10 });
     expect(t.split('\n').filter((l) => l.startsWith('  · ')).length).toBe(10);
@@ -1205,5 +1206,77 @@ describe('arrivalsSummary', () => {
   it('senza elenco degrada al conteggio invece di saltare', () => {
     expect(() => arrivalsSummary({ subjects: null, fallbackCount: 4 })).not.toThrow();
     expect(arrivalsSummary({ subjects: null, fallbackCount: 4 })).toMatch(/4 commit/);
+  });
+});
+
+/**
+ * Il routing che una release vecchia ha lasciato alla casa (issue #501).
+ *
+ * Stessa funzione pura di `muffin model`, sui modelli già configurati: un pin
+ * di un'altra era cade con evidenza viva, senza rete non si tocca niente, e
+ * lo step gira dentro il flusso vero di `runUpdate` — un meccanismo senza
+ * chiamante è il guasto di serie di questa repo.
+ */
+describe('repairRoutingStep', () => {
+  const casa = (models: Config['models'], routing: Config['provider']['routing']): string => {
+    const h = dir('muffin-update-routing-');
+    saveConfig(
+      {
+        schemaVersion: 2,
+        provider: { kind: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1', apiKeyRef: 'secret://k', routing },
+        models,
+        rot: { mode: 'single-user' },
+        traces: { retentionDays: 90 },
+        surfaces: { default: 'cli', enabled: ['cli'] },
+      },
+      h,
+    );
+    return h;
+  };
+  const vivi = () => ({ data: { endpoints: [{ tag: 'google', provider_name: 'Google' }] } });
+
+  it('ripara il pin morto e lo dice, tenendo la policy', () => {
+    const h = casa(
+      { main: 'google/gemma-4-31b-it', light: 'google/gemma-4-26b-a4b-it' },
+      { only: ['chutes'], dataCollection: 'deny' },
+    );
+    const r = repairRoutingStep(h, vivi);
+    expect(r.ok).toBe(true);
+    expect(r.text).toContain('chutes');
+    expect(loadConfig(h).provider.routing).toEqual({ dataCollection: 'deny' });
+  });
+
+  it('senza rete o senza config non tocca niente e non fallisce', () => {
+    const h = casa({ main: 'google/gemma-4-31b-it', light: 'qwen/qwen3.8-flash' }, { only: ['chutes'] });
+    const offline = repairRoutingStep(h, () => {
+      throw new Error('fetch failed');
+    });
+    expect(offline.ok).toBe(true);
+    expect(loadConfig(h).provider.routing).toEqual({ only: ['chutes'] });
+
+    const vuota = repairRoutingStep(dir('muffin-update-noconfig-'), vivi);
+    expect(vuota.ok).toBe(true);
+  });
+
+  it('gira dentro runUpdate: lo step cè nel riepilogo e la casa è riparata', () => {
+    const d = fakeDeps();
+    if (d?.home === undefined) throw new Error('fakeDeps senza home');
+    const h = d.home;
+    saveConfig(
+      {
+        schemaVersion: 2,
+        provider: { kind: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1', apiKeyRef: 'secret://k', routing: { only: ['chutes'] } },
+        models: { main: 'google/gemma-4-31b-it', light: 'google/gemma-4-26b-a4b-it' },
+        rot: { mode: 'single-user' },
+        traces: { retentionDays: 90 },
+        surfaces: { default: 'cli', enabled: ['cli'] },
+      },
+      h,
+    );
+    const r = runUpdate({ ...d, fetchJson: vivi });
+    const passo = r.steps.find((s) => s.name === 'config routing');
+    expect(passo?.done).toBe(true);
+    expect(passo?.detail).toContain('chutes');
+    expect(loadConfig(h).provider.routing).toEqual({});
   });
 });

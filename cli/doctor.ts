@@ -32,6 +32,7 @@ import type { StatoSuperficie } from '../core/surface/salute.js';
 import { audioAccettato } from '../agent/providers/modalita.js';
 import { prerequisitiTrascrizione, type Prerequisito } from '../core/audio/trascrivi.js';
 import { loadEgress, type EgressPolicy } from '../core/net/egress.js';
+import { diagnoseRoutingStaleness } from '../core/config/model-resolve.js';
 import { diagnoseSearch } from '../agent/tools/search.js';
 import { baseToolOrder } from '../agent/runtime.js';
 
@@ -295,6 +296,19 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
       `${profileProblems.join(' · ')} — ${config.models.main} risolve comunque su "${resolvedProfile.name}"`,
       'ripara o rimuovi il profilo scartato sopra, sotto agent/profiles/',
     );
+  }
+
+  // I pin di routing che derivano da un'altra era del modello (issue #501):
+  // confronto offline contro il marcatore, senza rete. Quando non lo si può
+  // provare si tace — un avviso che piange al lupo insegna a ignorare doctor.
+  const routingDiag = diagnoseRoutingStaleness(config);
+  if (routingDiag !== null) {
+    warn('model routing', routingDiag.detail, routingDiag.remedy);
+  } else {
+    const pins = [...(config.provider.routing?.only ?? []), ...(config.provider.routing?.order ?? []), ...(config.provider.routing?.ignore ?? [])];
+    if (pins.length > 0 && config.provider.routingForFamily !== undefined) {
+      ok('model routing', `pin validati per la famiglia "${config.provider.routingForFamily}"`);
+    }
   }
 
   // Root of trust: integrity, and an honest statement of which guarantee the
