@@ -599,3 +599,35 @@ describe('requireTool arma il filo una volta sola (ADR-0082)', () => {
     expect(h.run.requireToolOnce).toBe(false);
   });
 });
+
+describe('sampling esplicito del profilo (issue #498)', () => {
+  it("viaggia nell'oggetto sampling, mai nel campo legacy, e resta in traccia", async () => {
+    const { tool, decl } = okTool('noop');
+    const provider = scriptedProvider({ chat: [reply('fatto')] });
+    const h = harness({
+      provider,
+      profile: { ...CONSERVATIVE, sampling: { temperature: 0.7, topP: 0.95 } },
+      tools: [tool],
+      decls: [decl],
+    });
+
+    const result = await runRounds(h.scope);
+
+    expect(result.stopped).toBe('answered');
+    expect(provider.chatCalls).toHaveLength(1);
+    expect(provider.chatCalls[0]!.sampling).toEqual({ temperature: 0.7, topP: 0.95 });
+    expect('temperature' in provider.chatCalls[0]!).toBe(false);
+    expect(h.span.attrs['muffin.turn.sampling']).toBe('{"temperature":0.7,"topP":0.95}');
+  });
+
+  it('deterministic resta byte-identico a prima', async () => {
+    const provider = scriptedProvider({ chat: [reply('fatto')] });
+    const h = harness({ provider, profile: { ...CONSERVATIVE, sampling: 'deterministic' } });
+
+    await runRounds(h.scope);
+
+    expect(provider.chatCalls[0]!.temperature).toBe(0);
+    expect(provider.chatCalls[0]!.sampling).toBeUndefined();
+    expect(h.span.attrs['muffin.turn.sampling']).toBeUndefined();
+  });
+});

@@ -215,3 +215,16 @@ describe('sampling, which no profile edit could reach', () => {
     expect(inner.seen[0]).toEqual(bare);
   });
 });
+
+describe('sampling esplicito (issue #498)', () => {
+  it('non tocca la chiamata: le corsie memoria tengono il determinismo misurato', async () => {
+    // L'explicit governa la conversazione (misurata dall'A/B); qui la memoria
+    // manda temperature: 0 di sua scelta e la corsia non la sovrascrive.
+    const inner = new Echo();
+    const esplicito = { ...CONSERVATIVE, sampling: { temperature: 0.7 } as const };
+    const c = call();
+    await lightLane(inner, { profile: esplicito }).chat(c);
+    expect(inner.seen[0]?.temperature).toBe(0);
+    expect(inner.seen[0]?.sampling).toBeUndefined();
+  });
+});

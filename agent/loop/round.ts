@@ -265,6 +265,20 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // `undefined` is not the same as an absent field, and the difference is
       // exactly what the newest models reject.
       ...(deps.profile.sampling === 'deterministic' ? { temperature: 0 } : {}),
+      // Explicit per-family values (measured, never copied): through the
+      // `sampling` object the adapter maps to wire names, never the legacy
+      // top-level field, so the two doors cannot disagree on one request.
+      ...(typeof deps.profile.sampling === 'object'
+        ? {
+            sampling: {
+              ...(deps.profile.sampling.temperature === undefined
+                ? {}
+                : { temperature: deps.profile.sampling.temperature }),
+              ...(deps.profile.sampling.topP === undefined ? {} : { topP: deps.profile.sampling.topP }),
+              ...(deps.profile.sampling.topK === undefined ? {} : { topK: deps.profile.sampling.topK }),
+            },
+          }
+        : {}),
       ...(deps.samplingOverride === undefined ? {} : { sampling: deps.samplingOverride }),
       // Backward-compatible profile/config vocabulary is normalized once at
       // the loop boundary. Adapters no longer need to interpret profile
@@ -291,6 +305,16 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     );
     if (run.requireToolOnce) {
       chatSpan.setAttributes({ 'muffin.recovery.tool_choice': 'required' });
+    }
+    if (typeof deps.profile.sampling === 'object') {
+      // Which sampling the profile demanded, on the trace where the A/B gets
+      // read back: without this the measurement in `evals/reasoning-ab/` could
+      // not tell arms apart from traces alone. On both spans: `chatSpan` is
+      // what production traces carry per call, `turn` is what the recovery
+      // attributes already use as the turn-level record.
+      const sampling = JSON.stringify(deps.profile.sampling);
+      chatSpan.setAttributes({ 'muffin.chat_call.sampling': sampling });
+      turn.setAttributes({ 'muffin.turn.sampling': sampling });
     }
     const reasoningResolution = await deps.provider.resolveReasoning?.(call);
     if (reasoningResolution !== undefined) {

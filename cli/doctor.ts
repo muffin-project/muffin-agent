@@ -8,7 +8,7 @@ import { tmpdirBreaksSandboxSockets, SANDBOX_TMPDIR_OVERHEAD, TMPDIR_SUN_PATH_LI
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { wantsExplicitCache } from '../agent/providers/openai-compat.js';
 import { currentSchemaVersion, schemaVersionOf } from '../core/db/migrate.js';
-import { CONSERVATIVE, loadProfiles, selectProfile } from '../agent/profiles/profile.js';
+import { CONSERVATIVE, describeSampling, loadProfiles, selectProfile } from '../agent/profiles/profile.js';
 import { hardeningHolds, verify } from '../core/rot/verify.js';
 import { checkRotReaders } from '../core/rot/readers.js';
 import { loadSealedOwner } from '../core/rot/owner.js';
@@ -279,7 +279,7 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
     fail(
       'model profile',
       `${profileProblems.join(' · ')} — ${config.models.main} caduto sul profilo conservativo: ` +
-        `thinking ${resolvedProfile.thinking}, sampling ${resolvedProfile.sampling}, ` +
+        `thinking ${resolvedProfile.thinking}, sampling ${describeSampling(resolvedProfile.sampling)}, ` +
         // Due numeri distinti e per questo confondibili se non nominati per ciò che sono:
         // `maxToolsExposed` è quanti tool il modello *vede*, `maxToolCallsPerTurn`
         // è quante *chiamate* può fare; `null` lascia il conteggio libero e

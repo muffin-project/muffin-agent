@@ -55,6 +55,27 @@ export type ProfileExecution = {
 };
 
 /**
+ * What the loop sends for sampling, as data matched per model family —
+ * never as `if (model === ...)` in the loop. The Aider precedent
+ * (`model-settings.yml`, `use_temperature` per model, including literal
+ * values like 0.7 for qwen3): every harness that survives contact with more
+ * than one family keeps one of these tables somewhere. Ours lives here.
+ */
+export type ProfileSampling =
+  /** `temperature: 0` on the legacy top-level field — byte-identical to before. */
+  | 'deterministic'
+  /** Nothing sent: the model rejects any sampling parameter. */
+  | 'model-default'
+  /**
+   * Explicit values, camelCase like `ChatCall.sampling`, mapped to wire names
+   * by the adapter. A value here must be MEASURED (harness in
+   * `evals/reasoning-ab/`), never copied from a model's marketing page: the
+   * default that "sounds right" is how Gemma got temperature 0, off its own
+   * canonical distribution.
+   */
+  | { temperature?: number | undefined; topP?: number | undefined; topK?: number | undefined };
+
+/**
  * The bounded interactive floor for a profile that predates execution policy.
  *
  * One exported value because this is compatibility behavior, not a model
@@ -117,9 +138,10 @@ export type Profile = {
   thinking: 'adaptive' | 'off' | 'unset';
   /**
    * `'deterministic'` sends `temperature: 0`; `'model-default'` sends no
-   * sampling parameter at all, because the model rejects one.
+   * sampling parameter at all, because the model rejects one; an object sends
+   * exactly the values it names, through `ChatCall.sampling`.
    */
-  sampling: 'deterministic' | 'model-default';
+  sampling: ProfileSampling;
   recovery: RecoveryStrategy[];
   /** Optional only for programmatic/backward-compatible callers; loadProfiles materializes DEFAULT_EXECUTION. */
   execution?: ProfileExecution | undefined;
@@ -187,7 +209,20 @@ const ProfileSchema = z.object({
   // Defaulted, not required, and the default is what the loop hardcoded before
   // this field existed — so a profile written against the old schema keeps
   // exactly the behaviour it had instead of silently acquiring a new one.
-  sampling: z.enum(['deterministic', 'model-default']).default('deterministic'),
+  // The object form is strict: `top_p` for `topP` would send nothing and look
+  // like it worked, which is exactly the silent miss this boundary exists to refuse.
+  sampling: z
+    .union([
+      z.enum(['deterministic', 'model-default']),
+      z
+        .object({
+          temperature: z.number().min(0).max(2).optional(),
+          topP: z.number().gt(0).max(1).optional(),
+          topK: z.number().int().positive().optional(),
+        })
+        .strict(),
+    ])
+    .default('deterministic'),
   recovery: z.array(z.enum(['nudge', 'reinjectTools', 'retryOnce', 'strictJson', 'requireTool'])),
   // Whole-field default closes the upgrade path: a schema-v1 profile from
   // before P0 gets the same six bounded values as the conservative runtime
@@ -241,6 +276,20 @@ export function selectProfile(model: string, profiles: Profile[]): Profile {
 function globMatch(pattern: string, value: string): boolean {
   const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
   return new RegExp(`^${escaped}$`, 'i').test(value);
+}
+
+/**
+ * The sampling line `doctor` prints: words for the words, values for the
+ * object — never `[object Object]` where the owner decides about models.
+ */
+export function describeSampling(sampling: ProfileSampling): string {
+  if (sampling === 'deterministic') return 'deterministic (temperature 0)';
+  if (sampling === 'model-default') return 'model-default (nothing sent)';
+  const parts: string[] = [];
+  if (sampling.temperature !== undefined) parts.push(`temperature ${sampling.temperature}`);
+  if (sampling.topP !== undefined) parts.push(`topP ${sampling.topP}`);
+  if (sampling.topK !== undefined) parts.push(`topK ${sampling.topK}`);
+  return parts.length > 0 ? `explicit (${parts.join(', ')})` : 'explicit (no values — behaves as model-default)';
 }
 
 /**

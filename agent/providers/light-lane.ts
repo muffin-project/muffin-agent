@@ -142,9 +142,15 @@ export function lightLane(inner: Provider, options: LightLaneOptions): Provider 
  * spells out at its own spread: under `exactOptionalPropertyTypes` an explicit
  * `undefined` can still be serialised as a key, and a present key is exactly
  * what the newest models reject.
+ *
+ * Only `model-default` strips: `deterministic` passes through, and so does an
+ * explicit per-family object — the memory lanes hardcode their own
+ * `temperature: 0` by measured choice (extraction, judge, rerank), and this
+ * boundary does not overrule a Determinism that was measured for those jobs.
+ * Explicit profile sampling governs the conversation lane the A/B measured.
  */
 function sampled(call: ChatCall, profile: Profile): ChatCall {
-  if (profile.sampling === 'deterministic') return call;
+  if (profile.sampling !== 'model-default') return call;
   if (call.temperature === undefined) return call;
   const { temperature: _dropped, ...rest } = call;
   return rest;
