@@ -16,7 +16,10 @@ il main sì. Nessun cambio a provider o routing è stato fatto.
 vero (`sqlite3 <db> ".backup <dest>"`, mai `cp`); processi di prova fermati per
 PID. **Il gate è una porta sola:** `npm run merge -- <pr>` (ci:local in Docker,
 cinque job; una PR alla volta, host quieto o `DISCARDED`; `gh pr merge` a mano
-è bloccato dal hook). I minuti GitHub sono finiti.
+è bloccato dal hook). Minuti GitHub tornati il 17/09 (two-tier gate #555:
+per slice→dev conta anche il verde hosted). Piano pre-25/09:
+`docs/work/source-public-2026-09-25/plan.md`; questo handoff resta solo
+l'operativo vivo.
 
 ## Le decisioni dell'owner
 
@@ -31,11 +34,18 @@ in `docs/VISION.md` ed è **autoritativa sui criteri**: D15 chiedeva `muffin
 effetti` come comando normale, e il criterio è stato corretto dentro la sua
 claim. Repository **source-public/pre-alpha appena è sicuro** (#464).
 
-**Azioni owner senza codice:** billing GitHub Actions · `npm run e2e:telegram`
-con un bot vero (non rieseguita a 4521f83) · scelta modello/provider ZDR · VPS
-Hetzner rifatta (x86_64, utente `muffin`, deploy key read-only): install
+**Azioni owner senza codice:** billing GitHub Actions · scelta modello/provider ZDR (track separato dal 25/09, vedi #481 e piano §0/§7) · VPS Hetzner rifatta (x86_64, utente `muffin`, deploy key read-only): install
 arrivata a `init`, gateway e sandbox a mano come in `cutover-2026-09-08.md`.
 Mac a 4521f83, memoria al backup pre-prova. `rot harden` fatto (06/09).
+Risolte e verificate a codice il 17/09 (non più azioni): `origin` già
+`muffin-project/muffin-agent` · URL canonici installer già org (PR #541) ·
+`e2e:telegram` eseguita due volte, 04/09 (`e2e-telegram-2026-09-04.md`) e 08/09
+(`e2e-telegram-2026-09-08.md` + cutover) · base permission org `None` (17/09) ·
+merge post-move provati dai gate #534→#552 · description repo impostata,
+`delete_branch_on_merge` on · cutover dev→main 17/09 (ok owner, main=3a38a29,
+hosted CI verde su push: collegamenti/install/verifica/accettazione; strada:
+main rosso su describeBuild→#558→fix #559→re-cutover) · #522 chiusa · #560
+chiusa senza merge (superata da #559).
 
 ## Aperto
 
