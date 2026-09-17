@@ -113,6 +113,18 @@ export const ConfigSchema = z.object({
         quantizations: z.array(z.string().min(1)).nonempty().optional(),
       })
       .optional(),
+    /**
+     * La famiglia per cui i pin di `routing` sono stati validati l'ultima volta.
+     *
+     * La scrive `resolveModelSwitch` (`core/config/model-resolve.ts`) ogni volta
+     * che rivalida con evidenza viva, mai a mano e mai senza evidenza: è il
+     * marcatore che permette a `doctor` e a `muffin update` di *dire* — offline
+     * e senza indovinare — che i pin derivano da un'altra era
+     * (`routingForFamily: "qwen"`, modelli di oggi `"google"`), invece di
+     * scoprirlo al primo turno fallito. Assente = mai validato: nessuna
+     * accusa, nessun silenzio complice — solo niente da confrontare.
+     */
+    routingForFamily: z.string().min(1).optional(),
   }),
   models: z.object({ main: z.string().min(1), light: z.string().min(1), deep: z.string().min(1).optional() }),
   /**
