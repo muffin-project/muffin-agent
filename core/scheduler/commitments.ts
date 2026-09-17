@@ -1,8 +1,9 @@
 import type { DueCommitment, TodoStore } from '../turns/todo.js';
+import { type DecisionLog, decisionParts } from './decisions.js';
 import type { FireLog } from './firelog.js';
-import type { Deliver } from './scheduler.js';
-import { decideProactive } from './proactivity.js';
 import type { ProactiveContext, ProactiveDecision, ProactiveTrigger } from './proactivity.js';
+import { decideProactive } from './proactivity.js';
+import type { Deliver } from './scheduler.js';
 import type { LockOutcome } from './sendlock.js';
 
 /**
@@ -163,6 +164,12 @@ export type CommitmentDeps = {
   decide: typeof decideProactive;
   /** Read here, written by the caller after delivery — see `recordCommitmentFired`. */
   fires: FireLog;
+  /**
+   * History, not dedup: every evaluation below is appended here (see
+   * `decisions.ts`), while `fires` keeps deciding what may speak. Optional so
+   * the seam stays testable without a database; production always passes it.
+   */
+  decisions?: DecisionLog;
   ctx: ProactiveContext;
   /** The surface a message would go out on; part of the trigger the gate sees. */
   channel: string;
@@ -181,7 +188,17 @@ export function observeCommitments(deps: CommitmentDeps): CommitmentObservation[
     // This is also the whole of "a commitment is not a recurrence" — the row
     // stays where it is and the anchor is what makes it silent for ever.
     if (deps.fires.has(anchor)) {
-      out.push({ commitment, anchor, decision: { effect: 'skip', reason: 'already_fired' } });
+      const decision = { effect: 'skip', reason: 'already_fired' } as const;
+      deps.decisions?.record({
+        decidedAt: deps.ctx.now,
+        source: 'commitments',
+        kind: 'commitment_due',
+        anchor,
+        tier: commitment.tier,
+        channel: deps.channel,
+        ...decisionParts(decision),
+      });
+      out.push({ commitment, anchor, decision });
       continue;
     }
 
@@ -196,6 +213,15 @@ export function observeCommitments(deps: CommitmentDeps): CommitmentObservation[
       anchor,
     };
     const decision = deps.decide(trigger, deps.ctx);
+    deps.decisions?.record({
+      decidedAt: deps.ctx.now,
+      source: 'commitments',
+      kind: 'commitment_due',
+      anchor,
+      tier: trigger.tier,
+      channel: deps.channel,
+      ...decisionParts(decision),
+    });
     out.push({ commitment, anchor, decision });
     if (decision.effect === 'allow') allowed += 1;
   }
@@ -299,6 +325,12 @@ export type CommitmentLaneDeps = {
   todos: TodoStore;
   tenant: string;
   fires: FireLog;
+  /**
+   * History, not dedup (see `CommitmentDeps.decisions`): forwarded to
+   * `observeCommitments` so the tick path records what the gate decided.
+   * Optional; production always passes it.
+   */
+  decisions?: DecisionLog;
   deliver: Deliver;
   /**
    * Where the owner reads, **asked per pass** — not captured once.
@@ -477,6 +509,7 @@ export class CommitmentLane {
       due: () => this.deps.todos.dueCommitments(this.deps.tenant, now),
       decide: this.deps.decide ?? decideProactive,
       fires: this.deps.fires,
+      ...(this.deps.decisions === undefined ? {} : { decisions: this.deps.decisions }),
       ctx: this.deps.context(now),
       channel,
     });
