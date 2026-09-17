@@ -60,6 +60,10 @@ export function makeBaselineHarness(options: BaselineHarnessOptions) {
         resource: action.resource,
         args: action.args,
         taint,
+        // La provenienza viaggia con l'azione normalizzata: senza, una scena
+        // con URL citato misurerebbe il cancello invece della riga
+        // (slice/url-path-gate). `undefined` resta `false` per il kernel.
+        ...(action.quoted === undefined ? {} : { quoted: action.quoted }),
       }),
     });
 

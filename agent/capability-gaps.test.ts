@@ -275,9 +275,13 @@ describe('cosa raggiunge un membro, con e senza grant (ADR-0073)', () => {
           decl.resourceKind === 'path'
             ? { kind: 'path', value: '/tmp/x' }
             : decl.resourceKind === 'url-read'
-              ? { kind: 'url-read', value: 'https://esempio.test/p' }
+              ? // Host nudo di proposito: qui si misura la raggiungibilità di
+                // riga (il grant apre la capability?), non il cancello di
+                // provenienza — un path composto nega per ADR-0071 anche a
+                // taint di stanza (provato in link-copiato-non-e-composto).
+                { kind: 'url-read', value: 'https://esempio.test/' }
               : decl.resourceKind === 'url'
-                ? { kind: 'url', value: 'https://esempio.test/p' }
+                ? { kind: 'url', value: 'https://esempio.test/' }
                 : decl.resourceKind === 'query'
                   ? { kind: 'query', value: 'q' }
                   : decl.resourceKind === 'tenant'

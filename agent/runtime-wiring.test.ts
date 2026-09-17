@@ -94,7 +94,11 @@ describe('buildRuntime hands the kernel what it needs', () => {
     const { fetched, deps } = turnAgainst(home, 'https://evil.example.com/steal');
     await runTurn(deps, {
       principal: member, tenant: 'group:telegram:42', surface: 'telegram',
-      session: deps.sessions.open('w1'), text: 'leggi',
+      session: deps.sessions.open('w1'),
+      // Citato di proposito: da slice/url-path-gate un URL composto e non
+      // citato nega per un membro — qui si prova che l'allowlist non conta,
+      // non il cancello di provenienza (provato altrove).
+      text: 'leggi https://evil.example.com/steal',
     });
     expect(fetched).toEqual(['https://evil.example.com/steal']);
   });
@@ -110,7 +114,9 @@ describe('buildRuntime hands the kernel what it needs', () => {
     const { fetched, deps } = turnAgainst(home, 'https://ok.example.com/page');
     await runTurn(deps, {
       principal: member, tenant: 'group:telegram:42', surface: 'telegram',
-      session: deps.sessions.open('w2'), text: 'leggi',
+      session: deps.sessions.open('w2'),
+      // Citato come sopra: si isola "l'allowlist non conta", non il gate.
+      text: 'leggi https://ok.example.com/page',
     });
     expect(fetched).toEqual(['https://ok.example.com/page']);
   });

@@ -222,7 +222,8 @@ export const SECURITY_BASELINE_SCENARIOS: readonly SecurityBaselineScenario[] = 
     id: 's5-external-value-read-more',
     family: 'external-value',
     claim:
-      'ADR-0066: ambient tier 3 does not prevent another read-only HTTP action either, now by decision rather than by per-capability exception — sys.http is url-read, open regardless of taint, so the scalar reaches the same allow for a different reason than before',
+      'ADR-0066: ambient tier 3 does not prevent another read-only HTTP action either, now by decision rather than by per-capability exception — sys.http is url-read, open regardless of taint, so the scalar reaches the same allow for a different reason than before. ' +
+      'La URL è citata (l’owner l’ha nominata: vedi annotazione flow `owner`): un path composto e non citato a taint 3 chiede per ADR-0071 (slice/url-path-gate, provato in link-copiato-non-e-composto), e quella è una scena diversa, non questa.',
     action: {
       principal: OWNER,
       tenant: 'host',
@@ -230,6 +231,7 @@ export const SECURITY_BASELINE_SCENARIOS: readonly SecurityBaselineScenario[] = 
       resource: { kind: 'url-read', value: 'https://docs.example.test/releases' },
       args: { url: 'https://docs.example.test/releases' },
       ambientTaint: 3,
+      quoted: true,
     },
     expect: { ambient: 'allow', noAmbient: 'allow' },
   },
