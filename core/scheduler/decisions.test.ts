@@ -48,7 +48,8 @@ function decision(over: Partial<Decision> = {}): Decision {
     decidedAt: NOON,
     source: 'observe',
     kind: 'gone_quiet',
-    anchor: 'absence:7:2026-07-01T09:00:00.000Z',
+    anchor: 'absence:host:7:2026-07-01T09:00:00.000Z',
+    tenant: 'host',
     tier: 0,
     channel: 'cli',
     effect: 'allow',
@@ -129,6 +130,7 @@ describe('wiring: the record happens on the real decide path', () => {
       decide: decideProactive,
       fires: new FireLog(db),
       decisions,
+      tenant: 'host',
       ctx: { now: NOON, quietHours: QUIET, budgetExhausted: false },
       channel: 'cli',
     });
@@ -137,7 +139,8 @@ describe('wiring: the record happens on the real decide path', () => {
     expect(row).toMatchObject({
       source: 'observe',
       kind: 'gone_quiet',
-      anchor: 'absence:7:2026-07-01T09:00:00.000Z',
+      anchor: 'absence:host:7:2026-07-01T09:00:00.000Z',
+      tenant: 'host',
       tier: 0,
       channel: 'cli',
       effect: 'allow',
@@ -151,7 +154,7 @@ describe('wiring: the record happens on the real decide path', () => {
     const decisions = new DecisionLog(db);
     const a = absence();
     fires.record({
-      anchor: absenceAnchor(a),
+      anchor: absenceAnchor(a, 'host'),
       kind: 'gone_quiet',
       decidedAt: NOON,
       effect: 'allow',
@@ -162,6 +165,7 @@ describe('wiring: the record happens on the real decide path', () => {
       decide: decideProactive,
       fires,
       decisions,
+      tenant: 'host',
       ctx: { now: NOON, quietHours: QUIET, budgetExhausted: false },
       channel: 'cli',
     });
@@ -178,6 +182,7 @@ describe('wiring: the record happens on the real decide path', () => {
       decide: decideProactive,
       fires: new FireLog(db),
       decisions,
+      tenant: 'host',
       ctx: { now: NOON, quietHours: QUIET, budgetExhausted: false },
       channel: 'cli',
     });
@@ -200,6 +205,7 @@ describe('wiring: the record happens on the real decide path', () => {
       decide: decideProactive,
       fires: new FireLog(db),
       decisions,
+      tenant: 'host',
       ctx: { now: NIGHT, quietHours: QUIET, budgetExhausted: false },
       channel: 'cli',
     };

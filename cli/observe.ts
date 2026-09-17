@@ -53,6 +53,7 @@ function formatDecision(d: {
   source: string;
   kind: string;
   anchor: string;
+  tenant: string;
   tier: number;
   channel: string;
   effect: string;
@@ -68,7 +69,7 @@ function formatDecision(d: {
         : d.effect === 'deny'
           ? `negato (${d.reason})`
           : `rimandato${d.untilAt ? ` a ${d.untilAt.toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' })}` : ''} (${d.reason})`;
-  return `${when} · ${d.source}/${d.kind} · ${what}\n    ancora ${d.anchor} · tier ${d.tier} · ${d.channel}`;
+  return `${when} · ${d.source}/${d.kind} · ${what}\n    ancora ${d.anchor} · ${d.tenant} · tier ${d.tier} · ${d.channel}`;
 }
 
 /**
@@ -214,6 +215,10 @@ export async function cmdObserve(
       decide: decideProactive,
       fires,
       decisions,
+      // The tenant this command observes. Same constant the detector above
+      // reads: the anchor, the evidence and the decision must agree on whose
+      // silence this is, or cross-tenant dedup leaks back in.
+      tenant: TENANT,
       // The same budget engine the kernel reads, not a second opinion about it.
       ctx: { now, quietHours: quiet, budgetExhausted: budget.exhausted() },
       channel,

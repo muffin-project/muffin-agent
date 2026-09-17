@@ -311,7 +311,12 @@ export function formatP(p: number): string {
  * not repeat, but if you talk about it again and then go quiet again, that is a
  * new silence and it may speak. It is the difference between remembering and
  * insisting.
+ *
+ * Namespaced by tenant: entity ids are one autoincrement shared by every
+ * tenant, so `absence:7:…` in two tenants is two silences, not one. Without
+ * the tenant a nudge fired in one room would forever silence the same-numbered
+ * entity in every other room (slice/tenant-anchors).
  */
-export function absenceAnchor(a: Absence): string {
-  return `absence:${a.entityId}:${a.lastSeen}`;
+export function absenceAnchor(a: Absence, tenantId: string): string {
+  return `absence:${tenantId}:${a.entityId}:${a.lastSeen}`;
 }
