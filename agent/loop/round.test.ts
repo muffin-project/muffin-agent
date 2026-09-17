@@ -489,7 +489,6 @@ describe('recover cammina la cascata del profilo, un passo per tentativo', () =>
     expect(recover(h.scope, 'empty')).toBe(false);
     expect(h.run.recoveriesUsed).toBe(2);
   });
-
   /** Un profilo senza stampelle è una modifica di JSON, non un ramo di codice. */
   it('un profilo con recovery vuota non recupera mai', () => {
     const h = harness({
@@ -563,5 +562,40 @@ describe('execution budget', () => {
     expect(result.stopped).toBe('error');
     expect(result.reason).toBe('model_first_activity_timeout');
     expect(h.span.attrs['muffin.turn.stop_reason']).toBe('model_first_activity_timeout');
+  });
+});
+
+describe('requireTool arma il filo una volta sola (ADR-0082)', () => {
+  const vuota: ChatResult = { text: null, toolCalls: [], stopReason: 'end', usage, model: 'test' };
+
+  it('il giro dopo un vuoto chiede required, poi torna auto', async () => {
+    const { tool, decl } = okTool('noop');
+    const provider = scriptedProvider({ chat: [vuota, reply('fatto')] });
+    const h = harness({
+      provider,
+      profile: { ...CONSERVATIVE, recovery: ['requireTool'] },
+      tools: [tool],
+      decls: [decl],
+    });
+
+    const result = await runRounds(h.scope);
+
+    expect(result.stopped).toBe('answered');
+    expect(provider.chatCalls).toHaveLength(2);
+    expect(provider.chatCalls[0]!.toolChoice).toBe('auto');
+    expect(provider.chatCalls[1]!.toolChoice).toBe('required');
+    // Consumato: non resta armato sul turno.
+    expect(h.run.requireToolOnce).toBe(false);
+    expect(h.span.attrs['muffin.recovery.strategy']).toBe('requireTool');
+    expect(h.span.attrs['muffin.recovery.tool_choice']).toBe('required');
+  });
+
+  it('a cascata esaurita non arma niente', () => {
+    const h = harness({
+      provider: scriptedProvider({}),
+      profile: { ...CONSERVATIVE, recovery: [] },
+    });
+    expect(recover(h.scope, 'empty')).toBe(false);
+    expect(h.run.requireToolOnce).toBe(false);
   });
 });
