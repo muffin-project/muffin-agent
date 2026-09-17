@@ -14,7 +14,7 @@
  * gira per-PR in ~10 minuti, mentre il gate locale serializza un host
  * (~40-60 minuti a PR, Docker, host quieto) e un contributore esterno non puo'
  * eseguirlo proprio. Tenere una sola porta locale non scala all'open source.
- * Da qui il gate a due livelli (`docs/BRANCHING.md` §3): per slice→dev vale
+ * Da qui il gate a due livelli (`docs/BRANCHING.md`, sezione «Slice -> dev»): per slice→dev vale
  * anche il verde GitHub verificato qui sotto; `npm run merge` resta la porta
  * per dev→main e per tutto ciò che GitHub non prova.
  *
@@ -52,7 +52,7 @@ function localGateMessage(pr) {
     `questo merge salterebbe il gate: \`gh pr merge\` unisce senza che nessun gate abbia visto il risultato unito.`,
     `Il 04/09 e' costato tre giorni di rossi invisibili (collegamenti, D10, D11, D7).`,
     ``,
-    `Le porte sono due (\`docs/BRANCHING.md\` §3):`,
+    `Le porte sono due (docs/BRANCHING.md, sezione «Slice -> dev»):`,
     `  npm run merge -- ${pr ?? '<pr>'}`,
     `costruisce dev + la PR in un worktree usa-e-getta, fa girare ci:local, e unisce solo su PASS;`,
     `oppure il verde GitHub sulla head a base ferma, che questo hook verifica da solo prima di lasciarti passare.`,
@@ -138,7 +138,7 @@ export function decideGitHubMerge(pr, query = defaultQuery) {
   }
   return {
     ok: true,
-    note: `GitHub verde su ${String(info.headRefOid).slice(0, 10)} + base ferma — merge via GitHub (two-tier gate, BRANCHING.md §3).`,
+    note: `GitHub verde su ${String(info.headRefOid).slice(0, 10)} + base ferma — merge via GitHub (two-tier gate, BRANCHING.md sezione «Slice -> dev»).`,
   };
 }
 
