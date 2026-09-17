@@ -100,6 +100,18 @@ export class TurnRun {
    */
   barrier: WaitSpec | null = null;
 
+  /**
+   * One-shot wire escalation, armed by the `requireTool` recovery rung and
+   * consumed by the next model call (`tool_choice: required`, then back to
+   * `auto`).
+   *
+   * Deliberately **not** in `counters()`: a resume that loses it degrades to
+   * one more `auto` attempt, which is safe; persisting it would let a
+   * crash-loop force calls on transcripts that never saw the message
+   * explaining why a call is due.
+   */
+  requireToolOnce = false;
+
   readonly #resumes: number;
 
   constructor(record: TurnRecord, ripresa: { resumed: boolean; wokenFromWait: boolean }) {

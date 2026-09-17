@@ -537,3 +537,23 @@ describe("anthropic adapter · un'immagine sul filo", () => {
     expect(JSON.stringify(h.sent[0])).not.toContain('"type":"url"');
   });
 });
+
+describe('anthropic adapter · tool_choice escalation (ADR-0082)', () => {
+  const TOOLS = [{ name: 'demo_read', description: 'read', inputSchema: { type: 'object' } }];
+
+  it('auto di default, none quando chiesto', async () => {
+    const auto = harness();
+    await auto.provider.chat({ ...CALL, tools: TOOLS });
+    expect(auto.sent[0]).toMatchObject({ tool_choice: { type: 'auto' } });
+
+    const none = harness();
+    await none.provider.chat({ ...CALL, tools: TOOLS, toolChoice: 'none' });
+    expect(none.sent[0]).toMatchObject({ tool_choice: { type: 'none' } });
+  });
+
+  it('required diventa any: la forma Anthropic per forzare una call', async () => {
+    const h = harness();
+    await h.provider.chat({ ...CALL, tools: TOOLS, toolChoice: 'required' });
+    expect(h.sent[0]).toMatchObject({ tool_choice: { type: 'any' } });
+  });
+});
