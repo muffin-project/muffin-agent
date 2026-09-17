@@ -1140,8 +1140,16 @@ export async function cmdGatewayRun(
         if (verb === 'status') {
           // Risposto dal processo stesso, race-free: e' la differenza fra questo
           // e leggere una riga che puo' essere sopravvissuta a chi l'ha scritta.
+          // I modelli sono letti dall'oggetto config vivo — quello che
+          // refreshMainModel/refreshLightModel tengono aggiornato a ogni turno
+          // (#500) — mai da uno snapshot del boot.
           const info = readGateway(runtime.db);
-          return { pid: process.pid, since: info?.since ?? avviatoAlle, status: info?.status ?? 'unknown' };
+          return {
+            pid: process.pid,
+            since: info?.since ?? avviatoAlle,
+            status: info?.status ?? 'unknown',
+            models: { main: runtime.config.models.main, light: runtime.config.models.light },
+          };
         }
         if (verb === 'query') {
           // L'esito di un'execution per id: la risposta a «ha fatto o no?»
