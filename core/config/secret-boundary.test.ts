@@ -99,6 +99,17 @@ const ALLOWED_CALLERS: Readonly<Record<string, string>> = {
   'evals/e2e/telegram.ts':
     'installa una home usa-e-getta: chiave del provider a `muffin init` e token a `muffin secret set`, entrambi da stdin, mai da argv',
   'evals/floor/run.ts': 'runs the real loop against the real model — the key goes straight into the provider constructor and onto the wire, same shape as agent/runtime.ts; env vars still win, this is the fallback so nobody has to paste a secret into a shell to measure something',
+  /**
+   * Aggiunto il 18/09/2026 per l'A/B sull'execution policy (issue #498).
+   *
+   * Stessa forma di `evals/character/con-la-chiave.ts` qui sopra, riga per
+   * riga: la chiave dell'installazione passa solo nell'ambiente del figlio
+   * (`MUFFIN_AB_KEY`), mai in argv, mai su disco fuori dalla home usa-e-getta
+   * che il pilot rimuove alla fine. Senza questo, misurare costringerebbe a
+   * esportare la chiave a mano in una shell.
+   */
+  'evals/reasoning-ab/con-la-chiave.ts':
+    'launches the reasoning A/B pilot with the installation model key in the CHILD ENV only — run.ts never reads ~/.muffin by design, and the key never touches argv (same shape as evals/character/con-la-chiave.ts)',
 };
 
 /** Files matching this are never walked for callers: tests exercise the primitive on purpose. */
