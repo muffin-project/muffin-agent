@@ -1,6 +1,7 @@
 import { loadConfig, saveConfig, readSecret, type Config } from '../core/config/config.js';
 import { buildEndpointsUrl, parseEndpointTags } from '../core/config/endpoints.js';
 import { resolveModelSwitch, type EndpointEvidence } from '../core/config/model-resolve.js';
+import { askGateway } from '../core/gateway/control-socket.js';
 import { isOpenRouterFreeRoute, priceOf } from '../core/budget/pricing.js';
 import { makeEmbedder } from '../core/memory/embed.js';
 import { PROVIDERS, providerFor, apiKeyCandidates, type ProviderEntry } from '../core/config/providers.js';
@@ -186,7 +187,56 @@ export type ModelDeps = {
   fetchImpl?: typeof globalThis.fetch;
   /** Sonda l'embedder per misurarne la dimensione. Iniettabile: un test non ha un embedder acceso. */
   probe?: (config: Config, slug: string, home: string) => Promise<number>;
+  /**
+   * Il modello attivo del gateway, quando ce n'è uno vivo. Iniettabile: un
+   * test non apre un socket. Default: domanda vera al gateway di questa home
+   * (`status`, con timeout e `null` quando non risponde nessuno).
+   */
+  gatewayStatus?: () => Promise<GatewayStatus | null>;
 };
+
+/** Il sottoinsieme di `status` che a `muffin model` serve: chi è vivo e su cosa gira. */
+export type GatewayStatus = {
+  pid?: number | undefined;
+  models?: { main?: string | undefined; light?: string | undefined } | undefined;
+};
+
+/**
+ * Persistito contro attivo, senza ambiguità (issue #500).
+ *
+ * Pura: il chiamante ha già chiesto al gateway (o ha deciso di non farlo) e
+ * passa ciò che sa. `null` = nessun gateway ha risposto — socket assente,
+ * build vecchia che tace, timeout — mai «gateway morto», e le righe lo
+ * dicono di conseguenza. Argomenti piatti perché `models` non ha la corsia
+ * `embed` e indicizzarlo per `Lane` non compila né avrebbe senso.
+ */
+export function activationNotes(
+  lane: string,
+  slug: string,
+  main: string,
+  light: string,
+  status: GatewayStatus | null,
+): string[] {
+  if (status === null) {
+    return [`Nessun gateway vivo su questa home: ${lane} → ${slug} vale dal prossimo avvio.`];
+  }
+  const pid = status.pid !== undefined ? ` (pid ${status.pid})` : '';
+  const active = status.models;
+  if (active?.main === undefined || active?.light === undefined) {
+    return [
+      `Gateway vivo${pid}, di una build che non dichiara il modello: i nuovi turni applicano la config; ` +
+        `verifica sul trace (gen_ai.request.model).`,
+    ];
+  }
+  if (active.main === main && active.light === light) {
+    return [`Gateway vivo${pid}: i nuovi turni usano già ${active.main} · ${active.light} — niente riavvio.`];
+  }
+  return [
+    `Gateway vivo${pid} ancora su ${active.main} · ${active.light}: ` +
+      `dal prossimo turno passa a ${main} · ${light}, senza riavvio. ` +
+      `Un turno già in volo finisce sul vecchio.`,
+  ];
+}
 
 /**
  * Misura la dimensione di un embedder invece di chiederla all'owner.
@@ -272,6 +322,21 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
     return 2;
   }
 
+  // Persistito contro attivo (issue #500), su ogni strada che scrive: il
+  // gateway vivo applica ai nuovi turni senza riavvio, e lo si dice con i
+  // valori che il gateway stesso dichiara — mai indovinando. Qui `slug` è
+  // ristretto a stringa dal ramo qui sopra.
+  const attiva = async (cfg: Config): Promise<void> => {
+    const query = deps.gatewayStatus ?? (() => askGateway(home, 'status') as Promise<GatewayStatus | null>);
+    let status: GatewayStatus | null = null;
+    try {
+      status = await query();
+    } catch {
+      status = null;
+    }
+    for (const line of activationNotes(lane, slug, cfg.models.main, cfg.models.light, status)) out(line);
+  };
+
   if (lane === 'embed') {
     // Nessun catalogo da interrogare: OpenRouter instrada chat, non embedding.
     // Quello che si può fare — ed è di più — è **chiamarlo**: se risponde
@@ -302,6 +367,7 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
     const switched = resolveModelSwitch(config, lane, slug, null);
     saveConfig(switched.config, home);
     for (const note of switched.notes) out(note);
+    await attiva(switched.config);
     return 0;
   }
 
@@ -317,6 +383,7 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
     saveConfig(switched.config, home);
     out(`${lane} → ${slug}, NON verificato.`);
     for (const note of switched.notes) out(note);
+    await attiva(switched.config);
     return 0;
   }
 
@@ -338,6 +405,7 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
   const nota = priceNote(trovato, config.provider.baseUrl);
   if (nota !== null) out(nota);
   for (const note of switched.notes) out(note);
+  await attiva(switched.config);
   if (lane === 'main') out('Il profilo si risceglie da solo dal nome del modello: `muffin doctor` dice quale.');
   return 0;
 }
