@@ -2,7 +2,7 @@ import DatabaseCtor from 'better-sqlite3';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync, chmodSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import { MemoryStore } from '../core/memory/store.js';
@@ -26,13 +26,37 @@ function scratchHome(): { dir: string; xdg: string } {
 }
 
 function muffin(env: Record<string, string>, args: string[], stdin = ''): { code: number; out: string; err: string } {
+  // Il figlio gira in una directory vuota, mai nel checkout: `cli/main.ts`
+  // carica `${cwd}/.env` quando c'è (comodità di sviluppo documentata), e un
+  // `.env` del founder nella radice del repo avvelenerebbe ogni scenario —
+  // misurato il 18/09/2026: 18 rossi locali con exit 78
+  // ("MUFFIN_API_KEY non è più una sorgente") su un albero verde in CI,
+  // dove il checkout è pulito e il file non esiste. Lo script si trova via
+  // percorso assoluto, quindi nessuna chiamata perde nulla.
+  //
+  // La directory vuota sta DENTRO la radice del repo, non in /tmp:
+  // `node --import tsx` risolve il pacchetto dalla cwd verso l'alto, e in
+  // /tmp il figlio muore con ERR_MODULE_NOT_FOUND (misurato: 37/39 rossi con
+  // exit 1). Il loader invece legge solo `${cwd}/.env`, mai i genitori —
+  // quindi una sottodirectory fresca non ha nessun `.env` e `tsx` risolve
+  // comunque dai node_modules del checkout. Stessa assunzione che questi test
+  // fanno già (`join(process.cwd(), 'cli/main.ts')`).
+  const cwd = cwdSenzaDotenv();
   const result = spawnSync('node', ['--import', 'tsx', join(process.cwd(), 'cli/main.ts'), ...args], {
     env: { ...process.env, NO_COLOR: '1', ...env },
     input: stdin,
     encoding: 'utf8',
     timeout: 60_000,
+    cwd,
   });
   return { code: result.status ?? -1, out: result.stdout ?? '', err: result.stderr ?? '' };
+}
+
+/** Una cwd fresca dentro il repo: niente `.env`, `tsx` risolvibile. Vedi sopra. */
+function cwdSenzaDotenv(): string {
+  const cwd = mkdtempSync(join(process.cwd(), 'muffin-test-cwd-'));
+  homes.push(cwd);
+  return cwd;
 }
 
 describe('muffin init infers the provider from the key — headless, no TTY required', () => {
@@ -504,10 +528,25 @@ describe('una chiave non passa mai per argv né per l\'environment (owner 2026-0
     const xdg = mkdtempSync(join(tmpdir(), 'muffin-slow-xdg-'));
     try {
       const cli = join(dirname(fileURLToPath(import.meta.url)), 'main.ts');
+      // `cwd` isolata come in `muffin()` qui sopra (stesso `.env` del
+      // founder, stesso exit 78); `npx` trova comunque `tsx` perché il
+      // PATH eredita `.bin` del checkout — la risoluzione del binario non
+      // dipende dalla directory di lavoro.
+      const cwd = mkdtempSync(join(tmpdir(), 'muffin-slow-cwd-'));
+      homes.push(cwd);
       const r = spawnSync(
         'bash',
         ['-c', `(sleep 1; printf 'sk-ant-api03-produttore-lento') | npx tsx ${cli} init`],
-        { env: { ...process.env, MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, encoding: 'utf8' },
+        {
+          env: {
+            ...process.env,
+            PATH: `${join(process.cwd(), 'node_modules', '.bin')}${delimiter}${process.env.PATH ?? ''}`,
+            MUFFIN_HOME: dir,
+            XDG_CONFIG_HOME: xdg,
+          },
+          encoding: 'utf8',
+          cwd,
+        },
       );
       expect(r.status).toBe(0);
       expect(existsSync(join(xdg, 'muffin', 'secrets', 'provider_api_key'))).toBe(true);
@@ -782,7 +821,15 @@ function muffinTty(env: Record<string, string>, args: string[], attesa: string):
     // test diceva «appeso» (-1) a un comando che stava solo finendo tardi
     // (05/09/2026, due giri). Il tetto serve solo a non aspettare per
     // sempre, non a misurare la velocita' della macchina.
+    //
+    // `cwdSenzaDotenv()` per la stessa ragione del `muffin()` headless qui
+    // sopra: il figlio eredita la directory di vitest (la radice del repo in
+    // locale) e un `.env` del founder lì dentro avvelena gli scenari di
+    // `init` con exit 78. `lavoro` resta per gli artefatti (fifo, schermo:
+    // tutto a percorsi assoluti), la cwd è una directory a parte — `lavoro`
+    // in /tmp non risolverebbe `tsx` (vedi `muffin()` sopra).
     env: { ...process.env, NO_COLOR: '1', ...env }, encoding: 'utf8', timeout: 120_000,
+    cwd: cwdSenzaDotenv(),
   });
   // La trascrizione si legge dal **file**, non da `r.stdout`: sul ramo
   // util-linux lo stdout della `sh` arriva tutto in fondo, con un `cat`, e un
