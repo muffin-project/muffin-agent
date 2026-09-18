@@ -70,6 +70,27 @@ done
 [ "$PORT" != 0 ] || { bad "loopback file server never served the fake dist (see $LAB/http.log)"; finish; }
 ok "fake dist served at http://127.0.0.1:$PORT/ ($FILE)"
 
+# The installer must take its DOWNLOAD path here: a system Node >= 22 would
+# be reused as-is and verification would never run — the correct behaviour
+# in production, a vacuous test here. So build a clean PATH exactly like
+# evals/install/ubuntu.sh does (drop every dir holding node/npm) and refuse
+# to continue if Node is still reachable. (Caught by CI: ubuntu-latest
+# carries /usr/local/bin/node from actions/setup-node.)
+CLEAN_PATH=""
+for d in /usr/local/bin /usr/bin /bin /usr/sbin /sbin; do
+  [ -d "$d" ] || continue
+  if [ -x "$d/node" ] || [ -x "$d/npm" ]; then continue; fi
+  CLEAN_PATH="${CLEAN_PATH:+$CLEAN_PATH:}$d"
+done
+[ -n "$CLEAN_PATH" ] || { bad "nothing left in the clean PATH"; finish; }
+if PATH="$CLEAN_PATH" command -v node >/dev/null 2>&1; then
+  bad "node still reachable under the clean PATH ($CLEAN_PATH) — refusals would never be exercised"
+  finish
+fi
+for t in sh curl python3 mktemp grep awk; do
+  PATH="$CLEAN_PATH" command -v "$t" >/dev/null 2>&1 || { bad "clean PATH lacks $t ($CLEAN_PATH)"; finish; }
+done
+
 # One attempt = a throwaway HOME+PREFIX with a pre-seeded sentinel inside the
 # Node directory: the sentinel must survive every refusal (verify-before-rm).
 attempt() {
@@ -82,7 +103,7 @@ attempt() {
   echo sentinel >"$prefix/node/SENTINEL"
   log="$LAB/$label.log"
   set +e
-  env -i HOME="$home" PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+  env -i HOME="$home" PATH="$CLEAN_PATH" \
     MUFFIN_PREFIX="$prefix" MUFFIN_NO_APT=1 \
     MUFFIN_NODE_DIST_BASE="http://127.0.0.1:$PORT" \
     sh "$LAB/install.sh" </dev/null >"$log" 2>&1
