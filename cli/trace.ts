@@ -150,9 +150,24 @@ function salient(span: Span): string {
     'gen_ai.operation.name',
     'gen_ai.tool.name',
     'gen_ai.request.model',
+    // Who actually served the request behind the router: twelve upstreams
+    // share one model id, and a zero without this name is undiagnosable.
+    'gen_ai.provider.name',
     'gen_ai.usage.input_tokens',
     'gen_ai.usage.output_tokens',
+    'muffin.chat_call.reasoning_tokens',
     'muffin.stop_reason',
+    // The verbatim wire reason beside the mapped stop: an unmapped provider
+    // reason reads `error` while this names what actually arrived.
+    'muffin.chat_call.finish_reason',
+    // Which recovery rung (if any) this attempt ran, and which provider-side
+    // failure class (if any) was classified instead of the semantic cascade.
+    'muffin.recovery.strategy',
+    'muffin.provider_failure.class',
+    // How the model call ended at the lease level: watchdog cause and which
+    // budget set the effective deadline.
+    'muffin.chat_call.abort_reason',
+    'muffin.chat_call.effective_deadline_source',
   ]
     .map((k) => (span.attributes[k] === undefined ? null : `${short(k)}=${span.attributes[k]}`))
     .filter((x): x is string => x !== null)
@@ -170,6 +185,13 @@ const SHORTER: Readonly<Record<string, string>> = {
   'gen_ai.tool.name': 'tool',
   'gen_ai.operation.name': 'op',
   'muffin.stop_reason': 'stop',
+  'gen_ai.provider.name': 'upstream',
+  'muffin.chat_call.reasoning_tokens': 'reasoning',
+  'muffin.chat_call.finish_reason': 'finish',
+  'muffin.recovery.strategy': 'recovery',
+  'muffin.provider_failure.class': 'provfail',
+  'muffin.chat_call.abort_reason': 'abort',
+  'muffin.chat_call.effective_deadline_source': 'deadline',
 };
 
 function short(attributeName: string): string {

@@ -636,6 +636,15 @@ describe('anthropic adapter · errori in-band dentro lo stream (#565)', () => {
     expect(done.type).toBe('done');
     if (done.type === 'done') expect(done.result.stopReason).toBe('error');
   });
+
+  it('la stop reason grezza viaggia sul risultato per telemetria e classificazione', async () => {
+    // P0-A, gemello del caso openai-compat: mappata o no, il valore grezzo
+    // resta disponibile al loop oltre a `stopReason`.
+    const provider = streamHarness(streamedResponse([sse(FULL_STREAM_EVENTS)]));
+    const done = (await collect(provider.chatStream(CALL))).at(-1)!;
+    expect(done.type).toBe('done');
+    if (done.type === 'done') expect(done.result.finishReason).toBe('end_turn');
+  });
 });
 
 /**

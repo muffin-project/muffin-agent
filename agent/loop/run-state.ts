@@ -112,6 +112,16 @@ export class TurnRun {
    */
   requireToolOnce = false;
 
+  /**
+   * Consecutive provider-empty responses in this lease (P0-A).
+   *
+   * Deliberately **not** in `counters()`: it bounds one stall cluster, and a
+   * crash resetting it is safe because the persisted `transportRetriesLeft`
+   * still bounds the total. What must survive a crash is the money/attempt
+   * budget, not the shape of the last three failures.
+   */
+  providerEmptyStreak = 0;
+
   readonly #resumes: number;
 
   constructor(record: TurnRecord, ripresa: { resumed: boolean; wokenFromWait: boolean }) {
