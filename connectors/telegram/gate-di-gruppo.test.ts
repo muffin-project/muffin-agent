@@ -61,11 +61,26 @@ describe('il gate di gruppo', () => {
     expect(apreUnTurno({ ...gruppo, testo: undefined, citato: { da: 'muffin' } })).toBe(true);
   });
 
-  it('un allegato apre sempre, anche senza una parola', () => {
-    // Scartarlo qui significherebbe non indicizzarlo: «i dati che entrano non
-    // si perdono in silenzio» e' una regola dura, e questo repository ha gia'
-    // pagato «zero documenti indicizzati, da sempre» per un filtro innocuo.
-    expect(apreUnTurno({ ...gruppo, testo: undefined, haAllegato: true })).toBe(true);
-    expect(apreUnTurno({ ...gruppo, testo: 'guarda qua', haAllegato: true })).toBe(true);
+  /**
+   * PRE-21 PILOT — observer-off (owner decision, 2026-09-18): nei gruppi un
+   * allegato o una posizione NON aprono un turno da soli. Il vecchio «un
+   * allegato apre sempre» (non perdere il file) appartiene al futuro disegno
+   * del contesto passivo di stanza. Un file apre quando e' indirizzato come
+   * qualunque riga: reply a Muffin, @menzione, comando.
+   */
+  it('un allegato da solo, in gruppo, non apre niente — osservatore spento', () => {
+    expect(apreUnTurno({ ...gruppo, testo: undefined, haAllegato: true })).toBe(false);
+    expect(apreUnTurno({ ...gruppo, testo: 'guarda qua', haAllegato: true })).toBe(false);
+    expect(apreUnTurno({ ...gruppo, testo: undefined, haAllegato: true, citato: { da: 'altri' } })).toBe(false);
+  });
+
+  it('un allegato indirizzato apre: reply a Muffin, menzione, comando', () => {
+    expect(apreUnTurno({ ...gruppo, testo: undefined, haAllegato: true, citato: { da: 'muffin' } })).toBe(true);
+    expect(apreUnTurno({ ...gruppo, testo: 'ehi @MuffinAgentTestBot guarda questo', haAllegato: true })).toBe(true);
+    expect(apreUnTurno({ ...gruppo, testo: '/riassumi', haAllegato: true })).toBe(true);
+  });
+
+  it('in privata resta tutto aperto, allegato o no: non c\'e\' niente da indovinare', () => {
+    expect(apreUnTurno({ isPrivate: true, testo: undefined, haAllegato: true })).toBe(true);
   });
 });

@@ -333,6 +333,45 @@ export class UpdateInbox {
     this.db.prepare(`UPDATE telegram_updates SET failure = ? WHERE update_id = ?`).run(reason, updateId);
   }
 
+  /**
+   * Terminal gate refusal: the group gate deterministically ignored this
+   * update, and no Work will ever exist for it (observer-off pilot).
+   *
+   * One atomic statement takes the row to its terminal state: settled and
+   * processed with the human body retired. What remains is exactly the
+   * recovery/idempotency evidence — update id, received/processed/settled
+   * timestamps, composition membership (untouched), offset — and no content
+   * copy. A crash before this statement leaves the row pending with its body
+   * intact (re-driveable); there is no window in which the body is gone but
+   * the terminal state is not recorded.
+   *
+   * Narrow on purpose: uncomposed rows only (`composition_id IS NULL` — the
+   * gate runs before any claim/bind, so a refused row is never composed; a
+   * composed row is left alone, fail-closed). NOT for pairing, commands,
+   * callbacks or invites: those keep their existing terminal handling
+   * tonight. NOT a second `discard()`: a discarded private DM means
+   * "consumed without ever running" while a sealed refusal means
+   * "deterministically refused by the gate after seeing it" — the stub keeps
+   * the two forensically distinct (`'{}'` vs a self-identifying stub).
+   *
+   * The stub has the same shape as `scrubSettledPayload`'s (a deliberate
+   * one-line duplication, not a shared helper, so the observer-off boundary
+   * and the general addressed-turn scrub stay independently shippable; if
+   * both land, canonicalise behind one constructor).
+   */
+  sealIgnored(updateId: number, at: string): void {
+    this.db
+      .prepare(
+        `UPDATE telegram_updates
+         SET settled_at = COALESCE(settled_at, ?),
+             processed_at = ?,
+             failure = NULL,
+             payload = ?
+         WHERE update_id = ? AND composition_id IS NULL`,
+      )
+      .run(at, at, JSON.stringify({ scrubbed: true, update_id: updateId }), updateId);
+  }
+
   stats(): { total: number; pending: number; failed: number } {
     const one = (sql: string): number => (this.db.prepare(sql).get() as { n: number }).n;
     return {

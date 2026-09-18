@@ -101,6 +101,11 @@ async function deliver(h: ReturnType<typeof harness>, updates: Update[]): Promis
   await (h.connector as unknown as { drain: () => Promise<void> }).drain();
 }
 
+function inboxRow(h: ReturnType<typeof harness>, updateId: number) {
+  const inbox = (h.connector as unknown as { deps: { inbox: UpdateInbox } }).deps.inbox;
+  return { row: inbox.get(updateId), pending: inbox.pending().map((u) => u.updateId) };
+}
+
 type EpisodeRow = {
   tenant_id: string;
   connector: string;
@@ -131,6 +136,18 @@ const groupMsg = (id: number, text: string): Update =>
     },
   }) as unknown as Update;
 
+const groupLocation = (id: number): Update =>
+  ({
+    update_id: id,
+    message: {
+      message_id: id,
+      date: 0,
+      chat: { id: GROUP, type: 'supergroup' },
+      from: { id: STRANGER, is_bot: false, first_name: 'x' },
+      location: { latitude: 41.90278, longitude: 12.49636 },
+    },
+  }) as unknown as Update;
+
 const privateMsg = (id: number, text: string): Update =>
   ({
     update_id: id,
@@ -150,11 +167,40 @@ describe('osservatore passivo spento — un gruppo che non chiama Muffin non las
       await deliver(h, [groupMsg(1, 'il criceto di Sara è scappato di nuovo stasera')]);
 
       // Il gate di gruppo (ADR-0063) resta intatto: nessun turno, nessuna
-      // chiamata al provider — e, con l'osservatore passivo spento, nessuna
+      // chiamata al provider — e, con l'osservatore spento, nessuna
       // scrittura durevole: la conversazione non indirizzata non entra in
       // memoria per il solo fatto di essere stata consegnata.
       expect(h.seen).toHaveLength(0);
       expect(episodes(h)).toHaveLength(0);
+
+      // Il rifiuto del gate e' anche sigillato (`sealIgnored`): riga terminale
+      // con il corpo ritirato — id, timestamp e metadati restano, il testo no —
+      // e niente resta pendente da rieseguire.
+      const { row, pending } = inboxRow(h, 1);
+      expect(pending).toHaveLength(0);
+      expect(JSON.parse(row!.payload)).toEqual({ scrubbed: true, update_id: 1 });
+      expect(row!.payload).not.toContain('criceto');
+      expect(row!.settledAt).not.toBeNull();
+      expect(row!.turnId).toBeNull();
+    } finally {
+      h.runtime.close();
+    }
+  });
+
+  it('una posizione di gruppo non indirizzata non apre turni e non lascia corpo', async () => {
+    // Senza testo non c'e' menzione possibile: solo una reply a Muffin
+    // aprirebbe — qui non ce n'e', quindi sigillo come per il testo.
+    const h = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER });
+    try {
+      await deliver(h, [groupLocation(1)]);
+      expect(h.seen).toHaveLength(0);
+      expect(episodes(h)).toHaveLength(0);
+      const { row, pending } = inboxRow(h, 1);
+      expect(pending).toHaveLength(0);
+      expect(JSON.parse(row!.payload)).toEqual({ scrubbed: true, update_id: 1 });
+      expect(row!.payload).not.toContain('41.90278');
+      expect(row!.settledAt).not.toBeNull();
+      expect(row!.turnId).toBeNull();
     } finally {
       h.runtime.close();
     }
