@@ -66,6 +66,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { classifyDocsOnly, evaluateChecks } from '../../scripts/gate-evidence.mjs';
 
 function localGateMessage(pr) {
   return [
@@ -81,25 +82,8 @@ function localGateMessage(pr) {
   ].join('\n');
 }
 
-/**
- * L'insieme esentato da `ci.yml` (`paths-ignore` del trigger `pull_request`),
- * specchiato qui per l'eccezione docs-only. Parita' esatta, non interpretazione:
- * `docs/**` e `.claude/**` corrispondono ai path sotto quelle directory, i tre
- * nomi corrispondono ai file in root. Qualunque path fuori da qui — o non
- * leggibile — chiude la porta GitHub.
- */
-function fuoriInsiemeEsentato(path) {
-  if (path === 'README.md' || path === 'AGENTS.md' || path === 'CLAUDE.md') return false;
-  if (path.startsWith('docs/') || path.startsWith('.claude/')) return false;
-  return true;
-}
-
-/** Nome del check-run con eventuale prefisso `<workflow> /` tolto (dal vivo i nomi sono nudi, ma non si giura). */
-function nomeNudo(name) {
-  const i = name.lastIndexOf('/');
-  return (i === -1 ? name : name.slice(i + 1)).trim();
-}
-
+// La semantica di valutazione (allowlist, nomi, completezza) vive in
+// `scripts/gate-evidence.mjs`, condivisa con la porta dev→main.
 function ghJson(args) {
   if (process.env['MUFFIN_GATE_OFFLINE'] === '1') throw new Error('offline (tests)');
   const out = execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 });
@@ -143,28 +127,22 @@ export function decideGitHubMerge(pr, query = defaultQuery) {
       ].join('\n'),
     };
   }
-  // Ultimo run per nome: i rerun non resuscitano un rosso vecchio.
-  // Chiave sul nome nudo: dal vivo i nomi sono gli id dei job (`verifica`,
-  // non `workflow / job`), ma il prefisso non si giura.
-  const latest = new Map();
-  let repo;
+  // La valutazione dell'evidenza vive in `scripts/gate-evidence.mjs`,
+  // condivisa con la porta dev→main: qui restano solo i messaggi di questa
+  // porta. `skipped` non soddisfa un check richiesto (da quando l'accettazione
+  // gira solo sulle non-bozza, uno `skipped` qui e' una bozza — gia' rifiutata
+  // sopra — o un run che non ha provato il profondo: mai un via libera).
   let runs;
   try {
-    repo = query(['repo', 'view', '--json', 'nameWithOwner']).nameWithOwner;
+    const repo = query(['repo', 'view', '--json', 'nameWithOwner']).nameWithOwner;
     const payload = query(['api', `repos/${repo}/commits/${info.headRefOid}/check-runs?per_page=100`]);
     runs = Array.isArray(payload?.check_runs) ? payload.check_runs : payload;
     if (!Array.isArray(runs)) throw new Error('no check_runs');
   } catch {
     return { ok: false, message: localGateMessage(pr) };
   }
-  for (const run of runs) {
-    if (run?.name === undefined) continue;
-    const at = Date.parse(run.completed_at ?? run.started_at ?? 0) || 0;
-    const key = nomeNudo(run.name);
-    if ((latest.get(key)?.at ?? -1) <= at) latest.set(key, { at, run });
-  }
-  const current = [...latest.values()].map((v) => v.run);
-  if (current.length === 0) {
+  const valutati = evaluateChecks(runs, ['verifica', 'accettazione']);
+  if (!valutati.ok && valutati.kind === 'empty') {
     return {
       ok: false,
       message: [
@@ -174,62 +152,41 @@ export function decideGitHubMerge(pr, query = defaultQuery) {
       ].join('\n'),
     };
   }
-  const pending = current.filter((r) => r.status !== 'completed').map((r) => r.name);
-  if (pending.length > 0) {
+  if (!valutati.ok && valutati.kind === 'pending') {
     return {
       ok: false,
-      message: `PR #${pr}: check in corso (${pending.join(', ')}) — aspetta il verde, oppure la porta locale:\n  npm run merge -- ${pr}`,
+      message: `PR #${pr}: check in corso (${valutati.names.join(', ')}) — aspetta il verde, oppure la porta locale:\n  npm run merge -- ${pr}`,
     };
   }
-  const bad = current
-    .filter((r) => !['success', 'skipped', 'neutral'].includes(r.conclusion))
-    .map((r) => `${r.name} (${r.conclusion})`);
-  if (bad.length > 0) {
+  if (!valutati.ok && valutati.kind === 'red') {
     return {
       ok: false,
-      message: `PR #${pr}: check rossi (${bad.join(', ')}) — la porta locale non li renderebbe verdi: ripara sul ramo.`,
+      message: `PR #${pr}: check rossi (${valutati.names.join(', ')}) — la porta locale non li renderebbe verdi: ripara sul ramo.`,
     };
   }
-  // FAST e DEEP richiesti, per nome, con successo vero: `skipped` non
-  // soddisfa. Da quando l'accettazione gira solo sulle PR non-bozza, uno
-  // `skipped` qui e' il caso normale di una bozza — che e' gia' rifiutata
-  // sopra — o di un run che non ha provato il profondo: mai un via libera.
-  const esito = (nome) => latest.get(nome)?.run?.conclusion;
-  const mancanti = ['verifica', 'accettazione'].filter((n) => esito(n) !== 'success');
-  if (mancanti.length === 0) {
+  if (valutati.ok) {
     return {
       ok: true,
       note: `GitHub verde FAST+DEEP su ${String(info.headRefOid).slice(0, 10)} (verifica + accettazione success sulla head; CI sul merge-ref di quell'evento) — merge via GitHub (two-tier gate, BRANCHING.md sezione «Slice -> dev»).`,
     };
   }
   // Eccezione docs-only, fail-closed: l'assenza di un check non dice perche'
-  // manca, quindi si leggono i path cambiati veri e si pretende che OGNI file
-  // stia nell'insieme esentato di `ci.yml`. File illeggibili, incompleti o
-  // fuori insieme — anche uno solo — chiudono la porta GitHub.
-  //
-  // Sulla completezza, senza scorciatoie: `gh pr view --json files` tronca
-  // silenziosamente oltre 100 voci (bug upstream aperto), quindi la lista da
-  // sola non prova niente. Si chiede anche `changedFiles` e l'eccezione vale
-  // solo se `files.length === changedFiles`: conteggio diverso, assente o
-  // illeggibile chiude la porta, senza paginazione eroica.
-  const files = info.files;
-  const attesi = info.changedFiles;
-  if (!Array.isArray(files) || typeof attesi !== 'number' || files.length !== attesi) {
+  // manca — allowlist e completezza (`files.length === changedFiles`, contro
+  // il troncamento silenzioso oltre 100 voci) le decide il modulo condiviso.
+  const mancanti = valutati.kind === 'missing' ? valutati.names : [];
+  const docs = classifyDocsOnly(info.files, info.changedFiles);
+  if (!docs.ok && docs.reason === 'incomplete') {
     return {
       ok: false,
       message: [
-        `PR #${pr}: manca il successo ${mancanti.join(' + ')} sulla head e la lista file non e' completa e verificabile (restituiti ${Array.isArray(files) ? files.length : '?'}, dichiarati ${typeof attesi === 'number' ? attesi : '?'}).`,
+        `PR #${pr}: manca il successo ${mancanti.join(' + ')} sulla head e la lista file non e' completa e verificabile (restituiti ${docs.got ?? '?'}, dichiarati ${docs.want ?? '?'}).`,
         `Senza evidenza vale la porta locale:`,
         `  npm run merge -- ${pr}`,
       ].join('\n'),
     };
   }
-  const fuori = [];
-  for (const f of files) {
-    const path = typeof f === 'string' ? f : f?.path;
-    if (typeof path !== 'string' || fuoriInsiemeEsentato(path)) fuori.push(String(path));
-  }
-  if (fuori.length > 0) {
+  if (!docs.ok) {
+    const fuori = docs.reason === 'outside' ? (docs.offending ?? []) : [];
     return {
       ok: false,
       message: [
@@ -241,7 +198,7 @@ export function decideGitHubMerge(pr, query = defaultQuery) {
   }
   return {
     ok: true,
-    note: `GitHub verde docs-only su ${String(info.headRefOid).slice(0, 10)} (${files.length}/${attesi} file, tutti nell'insieme esentato di ci.yml, check leggeri verdi) — merge via GitHub (two-tier gate, BRANCHING.md sezione «Slice -> dev»).`,
+    note: `GitHub verde docs-only su ${String(info.headRefOid).slice(0, 10)} (${docs.count}/${info.changedFiles} file, tutti nell'insieme esentato di ci.yml, check leggeri verdi) — merge via GitHub (two-tier gate, BRANCHING.md sezione «Slice -> dev»).`,
   };
 }
 
