@@ -81,6 +81,15 @@ export type CompositionBinding = {
   workId: string | null;
 };
 
+/**
+ * What a scrubbed body looks like: the native id stays inside, so the row is
+ * self-identifying without its original bytes — and unmistakable next to
+ * `discard()`'s `'{}'`.
+ */
+export function scrubStub(updateId: number): string {
+  return JSON.stringify({ scrubbed: true, update_id: updateId });
+}
+
 export class UpdateInbox {
   private readonly includeStmt: Database.Statement;
   private readonly bindWorkStmt: Database.Statement;
@@ -317,6 +326,12 @@ export class UpdateInbox {
    * Consume a private update that failed the owner's authorization check.
    * Keep the native id and timestamps for offset/idempotency evidence, but do
    * not retain the untrusted sender's message body in the active inbox row.
+   *
+   * Deliberately NOT reused for post-settlement hygiene: a discarded row means
+   * "consumed without ever running" while a scrubbed row means "settled work
+   * whose body was retired after its downstream evidence existed". Merging the
+   * two would make forensics unable to tell them apart. See
+   * `scrubSettledPayload` below.
    */
   discard(updateId: number, at: string): void {
     this.db
@@ -326,6 +341,60 @@ export class UpdateInbox {
          WHERE update_id = ?`,
       )
       .run(at, updateId);
+  }
+
+  /**
+   * Retire the raw body of settled work, keeping every byte of evidence around
+   * it. Only rows that are BOTH settled and processed lose their body — never
+   * a pending row, never a failed one (those stay pending for retry), never a
+   * row that was merely marked processed without settlement (pairing,
+   * commands, gated-out group text, callbacks: terminal, but unsettled).
+   *
+   * Why this is safe to call the moment processing completes:
+   *
+   * - the sole production reader of `payload` is `drain()`'s
+   *   `JSON.parse(stored.payload)`, which only ever sees `pending()` rows
+   *   (`processed_at IS NULL`) — a scrubbed row is processed by construction
+   *   and can never re-enter that path, including after a restart;
+   * - crash recovery of a finished turn reads the turn row, the frozen
+   *   delivery plan and the session transcript (`recoveredText`), never the
+   *   inbox body; idempotency across redelivery rests on the `update_id`
+   *   primary key plus `processed_at`, both untouched here;
+   * - settlement itself only happens after the send landed (`router.ts`
+   *   `deliver` stage: deliver → settle → recordDelivery), so the turn's
+   *   durable downstream (turn row, frozen delivery plan, session transcript,
+   *   episodes) always predates any scrub;
+   * - like `settle`/`markProcessed`, a sealed composition scrubs as one
+   *   unit; unsealed membership never drags siblings along.
+   *
+   * The stub keeps the native id inside the body so a scrubbed row stays
+   * self-identifying, and stays distinct from `discard()`'s `'{}'`: forensics
+   * can tell "settled and retired" apart from "consumed without running".
+   * Returns how many rows were scrubbed; re-running is a no-op.
+   */
+  scrubSettledPayload(updateId: number): number {
+    const members = this.db
+      .prepare(
+        `SELECT update_id AS updateId, payload
+         FROM telegram_updates
+         WHERE processed_at IS NOT NULL
+           AND settled_at IS NOT NULL
+           AND (update_id = ?
+             OR composition_id = (
+               SELECT u.composition_id
+               FROM telegram_updates u
+               JOIN telegram_compositions c ON c.composition_id = u.composition_id
+               WHERE u.update_id = ? AND c.work_id IS NOT NULL
+             ))`,
+      )
+      .all(updateId, updateId) as { updateId: number; payload: string }[];
+    const due = members.filter((row) => row.payload !== scrubStub(row.updateId));
+    if (due.length === 0) return 0;
+    const scrub = this.db.prepare(`UPDATE telegram_updates SET payload = ? WHERE update_id = ?`);
+    this.db.transaction(() => {
+      for (const row of due) scrub.run(scrubStub(row.updateId), row.updateId);
+    })();
+    return due.length;
   }
 
   /** A failure is evidence about this native event; it stays pending for retry. */

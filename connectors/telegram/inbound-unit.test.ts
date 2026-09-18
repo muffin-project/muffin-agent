@@ -170,6 +170,24 @@ function resolveOnce(h: ReturnType<typeof fixture>, stored: StoredUpdate, incomi
 }
 
 describe('resolve — a fresh update binds and runs exactly one turn', () => {
+  it('retires the raw body once settled: downstream evidence first, stub second', async () => {
+    const h = fixture([answer('ciao a te')]);
+    const { stored, incoming } = acceptOne(h, privateMsg(1));
+
+    await resolveOnce(h, stored, incoming);
+
+    const row = h.inbox.get(1)!;
+    // The turn ran and delivered — the durable downstream exists.
+    expect(row.turnId).toBeTruthy();
+    expect(h.turns.get(row.turnId!)?.delivery).toBe('sent');
+    expect(h.sent).toEqual(['send:ciao a te']);
+    // …and only then did the body retire: stub in place of bytes, every
+    // evidence column intact, nothing left pending.
+    expect(JSON.parse(row.payload)).toEqual({ scrubbed: true, update_id: 1 });
+    expect(row.settledAt).toBeTruthy();
+    expect(h.inbox.pending()).toHaveLength(0);
+  });
+
   it('creates one turn, binds the update to it, sends once, settles, marks processed', async () => {
     const h = fixture([answer('ciao a te')]);
     const { stored, incoming } = acceptOne(h, privateMsg(1));

@@ -1938,7 +1938,15 @@ export class TelegramConnector {
       recordDelivery: (turnId, delivery) => this.recordDelivery(turnId, delivery),
       finish: () => this.finish(stored.updateId, this.now()),
       settle: () => this.deps.inbox.settle(stored.updateId, this.now()),
-      markProcessed: () => this.deps.inbox.markProcessed(stored.updateId, this.now()),
+      markProcessed: () => {
+        this.deps.inbox.markProcessed(stored.updateId, this.now());
+        // Hygiene at the exact point semantic consumption completes: only a
+        // row that is already settled AND processed loses its body
+        // (`scrubSettledPayload` enforces both — pending, failed and merely
+        // processed rows are no-ops here), and settlement itself only happens
+        // after the send landed with the turn's downstream already durable.
+        this.deps.inbox.scrubSettledPayload(stored.updateId);
+      },
       log: (riga) => log(`telegram: ${riga}`),
       turn: (id) => this.deps.loop.turns.get(id),
       recoveredText: (record) => recoveredText(this.deps.loop.sessions, record),
@@ -2079,11 +2087,14 @@ export class TelegramConnector {
    * The last two writes for an update, always together and always in this
    * order — settle, then mark processed — mirroring `job_fires`'s own "solo
    * dopo il settlement avanza la schedule" (fault point 7), applied to an
-   * update instead of a fire.
+   * update instead of a fire. The scrub third: this row is settled and
+   * processed as of the two lines above, so its raw body retires here — the
+   * suspended turn itself resumes from its turn row, never from this body.
    */
   private finish(updateId: number, at: string): void {
     this.deps.inbox.settle(updateId, at);
     this.deps.inbox.markProcessed(updateId, at);
+    this.deps.inbox.scrubSettledPayload(updateId);
   }
 
   /**
