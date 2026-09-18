@@ -512,8 +512,46 @@ describe('defect B — a long first tool is visible while it runs, alone', () =>
     await t.stop();
   });
 
-  it('still one message, still throttled afterwards: a burst after the first paint coalesces', async () => {
+  /**
+   * STRONGER FALSIFIER (owner, 2026-09-18): microtask-only is not enough. A
+   * tool handler that blocks the event loop synchronously runs before any
+   * `.then()` queued by `report()` — so the first send must be INVOKED inside
+   * `report()`'s own stack, not merely scheduled from it. Zero awaits between
+   * the fact and the assertion, on purpose.
+   */
+  it('DM: api.sendMessage is INVOKED synchronously inside report(), before any microtask', async () => {
     const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    t.report(start('memory_search', { query: 'q' }));
+    // No await of any kind above: if a blocking handler started on the next
+    // line, the send is already on the wire.
+    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
+    expect(calls[0]!.text).toContain('⏳');
+    await t.stop();
+  });
+
+  it('group: same synchronous invocation under the group floor', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
+    t.report(start('memory_search', { query: 'q' }));
+    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
+    expect(calls[0]!.text).toContain('⏳');
+    await t.stop();
+  });
+
+  it('a first preamble paints synchronously too — the tool that follows only edits', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    t.spoke('Prima leggo la spesa.', 'tool-call');
+    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
+    t.report(start('fs_read', { path: 'spesa.txt' }));
+    // Still one message: the step joins it via edit, never a second send.
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
+    await t.stop();
+  });
+
+  it('still one message, still throttled afterwards: a burst after the first paint coalesces', async () => {    const { api, calls } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
     t.report(start('fs_read', { path: 'a' }));
     await microtasks();
