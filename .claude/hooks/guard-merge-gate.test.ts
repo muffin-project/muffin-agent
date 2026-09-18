@@ -59,6 +59,7 @@ describe('decideGitHubMerge', () => {
     headRefOid: 'fc2b15f2b4c894080ed1ddc98c9d9ec443282859',
     mergeable: 'MERGEABLE',
     mergeStateStatus: 'CLEAN',
+    changedFiles: 0,
     files: [],
     ...over,
   });
@@ -160,27 +161,59 @@ describe('decideGitHubMerge', () => {
     if (d.ok) expect(d.note).toContain('FAST+DEEP');
   });
 
-  it('docs-only + collegamenti verde: eccezione con allowlist sui file veri', () => {
+  it('docs-only + collegamenti verde: eccezione con allowlist e conteggio provato', () => {
     const d = decideGitHubMerge(
       '553',
       finta(
-        { files: [{ path: 'docs/piano.md' }, { path: '.claude/hooks/g.mjs' }, 'README.md'] },
+        {
+          changedFiles: 3,
+          files: [{ path: 'docs/piano.md' }, { path: '.claude/hooks/g.mjs' }, 'README.md'],
+        },
         [run('collegamenti')],
       ),
     );
+    expect(d.ok).toBe(true);
+    if (d.ok) expect(d.note).toContain('3/3');
+  });
+
+  it('lista troncata (101 dichiarati, 100 restituiti): rifiuto, mai docs-only presunto', () => {
+    const cento = Array.from({ length: 100 }, (_, i) => ({ path: `docs/pagina-${i}.md` }));
+    const d = decideGitHubMerge('553', finta({ changedFiles: 101, files: cento }, [run('collegamenti')]));
+    expect(no(d)).toContain('100');
+    expect(no(decideGitHubMerge('553', finta({ changedFiles: 101, files: cento }, [run('collegamenti')])))).toContain(
+      'npm run merge -- 553',
+    );
+  });
+
+  it('changedFiles assente: rifiuto, la completezza non si presume', () => {
+    const senza = { ...info({ changedFiles: 1, files: [{ path: 'docs/piano.md' }] }) };
+    delete (senza as Record<string, unknown>).changedFiles;
+    const d = decideGitHubMerge('553', (args: string[]) => {
+      if (args[0] === 'pr') return senza;
+      if (args[0] === 'repo') return 'muffin-project/muffin-agent';
+      return { check_runs: [run('collegamenti')] };
+    });
+    expect(no(d)).toContain('npm run merge -- 553');
+  });
+
+  it('il percorso FAST+DEEP ordinario non dipende dai file: lista illeggibile ma verde pieno', () => {
+    const d = decideGitHubMerge('553', finta({ changedFiles: undefined, files: null }, [run('verifica'), run('accettazione')]));
     expect(d.ok).toBe(true);
   });
 
   it('docs + codice senza verifica: rifiuto, e nomina il path fuori insieme', () => {
     const d = decideGitHubMerge(
       '553',
-      finta({ files: [{ path: 'docs/piano.md' }, { path: 'core/policy/gate.ts' }] }, [run('collegamenti')]),
+      finta(
+        { changedFiles: 2, files: [{ path: 'docs/piano.md' }, { path: 'core/policy/gate.ts' }] },
+        [run('collegamenti')],
+      ),
     );
     expect(no(d)).toContain('core/policy/gate.ts');
   });
 
   it('file cambiati illeggibili: rifiuto fail-closed, mai inferenza', () => {
-    const d = decideGitHubMerge('553', finta({ files: null }, [run('collegamenti')]));
+    const d = decideGitHubMerge('553', finta({ changedFiles: 1, files: null }, [run('collegamenti')]));
     expect(no(d)).toContain('npm run merge -- 553');
   });
 
