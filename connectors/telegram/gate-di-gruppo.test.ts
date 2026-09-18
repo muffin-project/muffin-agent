@@ -30,6 +30,30 @@ describe('il gate di gruppo', () => {
     expect(apreUnTurno({ ...gruppo, testo: '/steer@MuffinAgentTestBot fai altro' })).toBe(true);
   });
 
+  /**
+   * Observer-off, 2026-09-18: Telegram consegna `/stop@OtherBot` anche a noi,
+   * e il suffisso dice a chi era rivolto. Risvegliarsi per un ordine dato a
+   * un altro bot e' la stessa classe di difetto del risvegliarsi per una
+   * riga non indirizzata.
+   */
+  it('un comando con bersaglio esplicito apre solo se nomina noi', () => {
+    expect(apreUnTurno({ ...gruppo, testo: '/stop@MuffinAgentTestBot' })).toBe(true);
+    expect(apreUnTurno({ ...gruppo, testo: '/stop@muffinagenttestbot' })).toBe(true);
+    expect(apreUnTurno({ ...gruppo, testo: '/stop@MUFFINAGENTTESTBOT ora' })).toBe(true);
+    expect(apreUnTurno({ ...gruppo, testo: '/stop@OtherBot' })).toBe(false);
+    expect(apreUnTurno({ ...gruppo, testo: '/stop@OtherBot ora' })).toBe(false);
+    expect(apreUnTurno({ ...gruppo, testo: '/stop@MuffinAgentTestBot2' })).toBe(false);
+  });
+
+  it('con bersaglio esplicito e username sconosciuto resta chiuso: fallire chiuso', () => {
+    // Prima che `getMe` risponda non sappiamo chi siamo: un comando che nomina
+    // qualcun altro non puo' essere verificato, quindi non apre. Senza
+    // bersaglio vale la regola di sempre.
+    expect(apreUnTurno({ isPrivate: false, testo: '/stop@OtherBot' })).toBe(false);
+    expect(apreUnTurno({ isPrivate: false, testo: '/stop@MuffinAgentTestBot' })).toBe(false);
+    expect(apreUnTurno({ isPrivate: false, testo: '/stop' })).toBe(true);
+  });
+
   it('una reply a Muffin apre; una reply a qualcun altro no', () => {
     expect(apreUnTurno({ ...gruppo, testo: 'e questo?', citato: { da: 'muffin' } })).toBe(true);
     expect(apreUnTurno({ ...gruppo, testo: 'e questo?', citato: { da: 'altri' } })).toBe(false);
@@ -61,11 +85,28 @@ describe('il gate di gruppo', () => {
     expect(apreUnTurno({ ...gruppo, testo: undefined, citato: { da: 'muffin' } })).toBe(true);
   });
 
-  it('un allegato apre sempre, anche senza una parola', () => {
-    // Scartarlo qui significherebbe non indicizzarlo: «i dati che entrano non
-    // si perdono in silenzio» e' una regola dura, e questo repository ha gia'
-    // pagato «zero documenti indicizzati, da sempre» per un filtro innocuo.
-    expect(apreUnTurno({ ...gruppo, testo: undefined, haAllegato: true })).toBe(true);
-    expect(apreUnTurno({ ...gruppo, testo: 'guarda qua', haAllegato: true })).toBe(true);
+  /**
+   * PRE-21 PILOT — observer-off (owner decision, 2026-09-18): nei gruppi un
+   * allegato o una posizione NON aprono un turno da soli. Il vecchio «un
+   * allegato apre sempre» (non perdere il file) appartiene al futuro disegno
+   * del contesto passivo di stanza. Un file apre quando e' indirizzato come
+   * qualunque riga: reply a Muffin, @menzione, comando.
+   */
+  it('un allegato da solo, in gruppo, non apre niente — osservatore spento', () => {
+    expect(apreUnTurno({ ...gruppo, testo: undefined, haAllegato: true })).toBe(false);
+    expect(apreUnTurno({ ...gruppo, testo: 'guarda qua', haAllegato: true })).toBe(false);
+    expect(apreUnTurno({ ...gruppo, testo: undefined, haAllegato: true, citato: { da: 'altri' } })).toBe(false);
+  });
+
+  it('un allegato indirizzato apre: reply a Muffin, menzione, comando', () => {
+    expect(apreUnTurno({ ...gruppo, testo: undefined, haAllegato: true, citato: { da: 'muffin' } })).toBe(true);
+    expect(apreUnTurno({ ...gruppo, testo: 'ehi @MuffinAgentTestBot guarda questo', haAllegato: true })).toBe(true);
+    expect(apreUnTurno({ ...gruppo, testo: '/riassumi', haAllegato: true })).toBe(true);
+    expect(apreUnTurno({ ...gruppo, testo: '/riassumi@MuffinAgentTestBot', haAllegato: true })).toBe(true);
+    expect(apreUnTurno({ ...gruppo, testo: '/riassumi@OtherBot', haAllegato: true })).toBe(false);
+  });
+
+  it('in privata resta tutto aperto, allegato o no: non c\'e\' niente da indovinare', () => {
+    expect(apreUnTurno({ isPrivate: true, testo: undefined, haAllegato: true })).toBe(true);
   });
 });

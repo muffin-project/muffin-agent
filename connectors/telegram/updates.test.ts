@@ -365,3 +365,72 @@ describe('UpdateInbox.scrubSettledPayload — the body retires, the evidence sta
     expect(box.get(11)!.payload).toBe(scrubStub(11));
   });
 });
+
+describe('UpdateInbox.sealIgnored — a gate refusal ends terminal, body retired', () => {
+  it('one statement takes an ignored update terminal: settled, processed, body stubbed', () => {
+    const box = inbox();
+    box.accept([{ update_id: 10, message: { text: 'ragazzi che si fa stasera' } } as never], NOW);
+    box.sealIgnored(10, NOW);
+    const row = box.get(10)!;
+    expect(JSON.parse(row.payload)).toEqual({ scrubbed: true, update_id: 10 });
+    expect(row.payload).not.toContain('stasera');
+    expect(row.updateId).toBe(10);
+    expect(row.receivedAt).toBe(NOW);
+    expect(row.settledAt).toBe(NOW);
+    expect(row.turnId).toBeNull();
+    expect(box.pending()).toHaveLength(0);
+    expect(box.stats()).toEqual({ total: 1, pending: 0, failed: 0 });
+  });
+
+  it('a crash before the seal leaves the row pending with its body recoverable', () => {
+    const box = inbox();
+    box.accept([{ update_id: 10, message: { text: 'ragazzi che si fa stasera' } } as never], NOW);
+    // Nothing terminal ran: still pending, body intact for the re-drive.
+    expect(box.pending().map((u) => u.updateId)).toEqual([10]);
+    expect(JSON.parse(box.get(10)!.payload)).toMatchObject({ update_id: 10 });
+  });
+
+  it('a restart never re-runs a sealed refusal, and a redelivery is absorbed', () => {
+    const db = new DatabaseCtor(':memory:');
+    const first = new UpdateInbox(db);
+    first.accept([{ update_id: 10 }], NOW);
+    first.sealIgnored(10, NOW);
+
+    const afterRestart = new UpdateInbox(db);
+    expect(afterRestart.pending()).toHaveLength(0);
+    expect(afterRestart.nextOffset()).toBe(11);
+    expect(afterRestart.get(10)?.settledAt).toBe(NOW);
+    const again = afterRestart.accept([{ update_id: 10 }], NOW);
+    expect(again).toEqual({ stored: 0, duplicates: 1, accepted: [] });
+    expect(afterRestart.pending()).toHaveLength(0);
+  });
+
+  it('a prior failure is cleared: terminal means no retry', () => {
+    const box = inbox();
+    box.accept([{ update_id: 10 }], NOW);
+    box.markFailed(10, 'provider 500');
+    box.sealIgnored(10, NOW);
+    expect(box.stats()).toEqual({ total: 1, pending: 0, failed: 0 });
+  });
+
+  it('fail-closed: a composed row is left alone', () => {
+    const box = inbox();
+    box.accept([{ update_id: 10 }], NOW);
+    box.bind(10, 'turn-a');
+    box.sealIgnored(10, NOW);
+    const row = box.get(10)!;
+    expect(row.payload).toBe(JSON.stringify({ update_id: 10 }));
+    expect(row.settledAt).toBeNull();
+    expect(row.turnId).toBe('turn-a');
+    expect(box.pending().map((u) => u.updateId)).toEqual([10]);
+  });
+
+  it('re-sealing keeps the first settlement timestamp', () => {
+    const box = inbox();
+    box.accept([{ update_id: 10 }], NOW);
+    box.sealIgnored(10, NOW);
+    box.sealIgnored(10, '2026-08-06T11:00:00Z');
+    expect(box.get(10)?.settledAt).toBe(NOW);
+  });
+});
+

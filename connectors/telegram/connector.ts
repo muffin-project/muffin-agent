@@ -332,6 +332,30 @@ export type Incoming = {
 const CONTROLLO: ReadonlySet<string> = new Set(['stop', 'steer', 'pause', 'resume']);
 
 /**
+ * PRE-21 PILOT — PASSIVE GROUP OBSERVATION IS OFF (owner decision, 2026-09-18).
+ *
+ * Muffin may work in Telegram groups on Sep 21, but passive observation stays
+ * OFF for the pilot: an unaddressed human conversation must not be silently
+ * persisted merely because Telegram delivered it. Telegram Privacy Mode is
+ * deployment defense-in-depth, not the product invariant — admins receive
+ * broader traffic and configuration can change — so the product fails closed
+ * itself, here, by name.
+ *
+ * `false` means the ingress router's `remember` divert has no hook to call
+ * (`ganci()` below): a group message that opens no turn is marked processed
+ * and nothing durable is written for it — no episode, no actor, no profile,
+ * no room event, no consent UX. Those are post-21. What still opens a turn is
+ * unchanged and decided by `apreUnTurno` alone: a mention of the bot, a reply
+ * to one of its messages, a command, or an attachment (which always opens, so
+ * ingested bytes are never silently lost).
+ *
+ * Re-enabling is a deliberate product decision, not a refactor: flip this to
+ * `true` and the `remember` hook below rewires through the kernel's
+ * `memory.write` door exactly as before.
+ */
+const PASSIVE_GROUP_OBSERVATION_ENABLED = false;
+
+/**
  * Un update di gruppo apre un turno, oppure no.
  *
  * In privata **sempre**: chi scrive al bot in privata sta parlando col bot, e
@@ -361,28 +385,29 @@ export function apreUnTurno(i: {
   readonly testo: string | undefined;
   readonly citato?: { readonly da: 'muffin' | 'chi-scrive' | 'altri' } | undefined;
   readonly meUsername?: string | undefined;
-  /** L'update porta un allegato (documento, media, posizione). */
+  /**
+   * L'update porta un allegato (documento, media, posizione). Fatto del filo,
+   * conservato per il futuro disegno del contesto passivo di stanza — per il
+   * pilota observer-off NON apre niente da solo (vedi sotto).
+   */
   readonly haAllegato?: boolean | undefined;
 }): boolean {
   if (i.isPrivate) return true;
-  // 0. Un allegato apre sempre, e non e' un'eccezione di comodo.
-  //
-  //    Una riga di conversazione fra persone non e' rivolta a Muffin; un file
-  //    lasciato in una stanza lo e' abbastanza spesso, ed e' un atto
-  //    deliberato con un costo, non rumore. Ma la ragione decisiva e' un'altra:
-  //    scartare l'update qui significa che il documento non viene **indicizzato**
-  //    — e «i dati che entrano non si perdono in silenzio» e' una regola dura di
-  //    questo progetto, che ha gia' pagato «zero documenti indicizzati, da
-  //    sempre» per un filtro che sembrava innocuo.
-  //
-  //    Il costo e' un turno per file. Se un giorno diventa troppo, la risposta
-  //    non e' scartare: e' indicizzare senza aprire un turno — il «ricordare
-  //    senza rispondere» che resta il seguito aperto di ADR-0063.
-  if (i.haAllegato === true) return true;
+  // PRE-21 PILOT — nessun «un allegato apre sempre» (owner decision,
+  // 2026-09-18): nei gruppi l'osservazione passiva e' OFF, e un file o una
+  // posizione lasciati in stanza non sono un indirizzo. Fino al pilota
+  // questa regola apriva un turno per non perdere il documento («i dati che
+  // entrano non si perdono in silenzio»); quel comportamento appartiene al
+  // futuro disegno del contesto passivo di stanza, non al pilota. Un allegato
+  // apre quando e' indirizzato come qualunque altro messaggio — reply a
+  // Muffin, @menzione (anche in didascalia: il chiamante passa la didascalia
+  // come `testo`, vedi `ganci()`), comando — e lo dicono le tre regole sotto,
+  // non questa.
   const testo = i.testo ?? '';
-  // 1. Un comando. `/x` e `/x@nomebot` — la seconda forma e' quella che
-  //    Telegram consegna quando in un gruppo ci sono piu' bot.
-  if (nomeComando(testo) !== '') return true;
+  // 1. Un comando per noi. `/x` e `/x@nomebot` — la seconda forma e' quella
+  //    che Telegram consegna quando in un gruppo ci sono piu' bot, e la forma
+  //    che ci salva dal risvegliarci per `/x@altrobot` (`comandoPerNoi`).
+  if (comandoPerNoi(testo, i.meUsername) !== '') return true;
   // 2. Una reply a un messaggio di Muffin. Il dato c'e' gia': `citazione()`
   //    calcola `da: 'muffin'` per etichettare la citazione, e la stessa
   //    condizione risponde a «stanno parlando con me».
@@ -396,8 +421,26 @@ export function apreUnTurno(i: {
   return false;
 }
 
-function nomeComando(testo: string): string {
-  return /^\/([a-z]+)/i.exec(testo.trim())?.[1]?.toLowerCase() ?? '';
+/**
+ * Il nome del comando, solo se e' per noi (observer-off, 2026-09-18).
+ *
+ * Telegram consegna `/stop@OtherBot` anche a noi quando siamo nella stessa
+ * stanza: il suffisso `@...` dice a chi era rivolto, e leggerci solo il nome
+ * svegliava Muffin per un ordine dato a un altro bot. Senza suffisso il
+ * comando e' per il bot della stanza; con suffisso vale solo se nomina noi,
+ * senza distinzione di maiuscole (Telegram garantisce lo username unico).
+ * Con un bersaglio esplicito e `meUsername` ancora sconosciuto (prima di
+ * `getMe`) non si apre niente: fallire chiuso e' l'unica direzione
+ * accettabile — un turno in piu' in un gruppo lo vedono tutti.
+ */
+function comandoPerNoi(testo: string, meUsername: string | undefined): string {
+  const m = /^\/([a-z]+)(?:@([A-Za-z0-9_]+))?/i.exec(testo.trim());
+  const nome = m?.[1]?.toLowerCase() ?? '';
+  if (nome === '') return '';
+  const bersaglio = m?.[2];
+  if (bersaglio === undefined) return nome;
+  if (meUsername === undefined || meUsername === '') return '';
+  return bersaglio.toLowerCase() === meUsername.toLowerCase() ? nome : '';
 }
 
 export function parseUpdate(update: Update, botId?: number): Incoming | null {
@@ -1461,7 +1504,7 @@ export class TelegramConnector {
       if (!incoming) continue;
       const { principal } = principalFor(incoming, this.deps.config.ownerUserId);
       if (principal.kind !== 'owner') continue;
-      if (sembraComando(incoming.text) && CONTROLLO.has(nomeComando(incoming.text))) {
+      if (sembraComando(incoming.text) && CONTROLLO.has(comandoPerNoi(incoming.text, this.meUsername))) {
         this.gestiti.add(incoming.updateId);
         controlli.push(incoming);
       }
@@ -1472,7 +1515,7 @@ export class TelegramConnector {
         await this.tryCommand(incoming);
       } catch (error) {
         (this.deps.log ?? (() => {}))(
-          `telegram: comando ${nomeComando(incoming.text)} fallito — ${error instanceof Error ? error.message : String(error)}`,
+          `telegram: comando ${comandoPerNoi(incoming.text, this.meUsername)} fallito — ${error instanceof Error ? error.message : String(error)}`,
         );
       }
       this.deps.inbox.markProcessed(incoming.updateId, this.now());
@@ -1674,11 +1717,17 @@ export class TelegramConnector {
    * ADR-0063's own named follow-up: «il "ricordare senza rispondere" che resta
    * il seguito aperto». Un messaggio di gruppo che non apre un turno arriva
    * comunque — la privacy mode è spenta per direttiva dell'owner («il sistema
-   * riceve tutti i messaggi, semplicemente non usiamo token per tutti») — e
-   * fino a questa slice `drain()` lo marcava elaborato senza scriverlo da
-   * nessuna parte: la conversazione sparisce, e una menzione tardiva
-   * («@Muffin cosa avevamo deciso?») trova una memoria che non ha mai visto
-   * niente.
+   * riceve tutti i messaggi, semplicemente non usiamo token per tutti»).
+   *
+   * PRE-21 PILOT: PASSIVE OBSERVATION IS OFF — currently UNWIRED (see
+   * `PASSIVE_GROUP_OBSERVATION_ENABLED` below and the `remember` hook in
+   * `ganci()`). An unaddressed human conversation must not be silently
+   * persisted merely because Telegram delivered it: Telegram Privacy Mode is
+   * deployment defense-in-depth, not the product invariant (admins receive
+   * broader traffic and configuration can change), so the product fails closed
+   * itself. This method is kept for the post-21 re-enable path — it still
+   * passes the kernel's `memory.write` door like `runTurn` does — but nothing
+   * calls it while the flag is off.
    *
    * A costo di modello zero, non per costruzione ottimistica ma per un fatto
    * già vero altrove: `CONSOLIDATION_TENANT` (`core/memory/consolidator.ts`)
@@ -1748,6 +1797,16 @@ export class TelegramConnector {
     }
   }
 
+  /** Seal a gate refusal, tolerant of a database that closed out from under a drain running past `stop()`'s budget. */
+  private sealIgnoredQuietly(updateId: number, log: (line: string) => void): void {
+    try {
+      this.deps.inbox.sealIgnored(updateId, this.now());
+    } catch (error) {
+      if (!this.stopping) throw error;
+      log(`telegram: update ${updateId} interrotto dallo spegnimento — resta da elaborare al prossimo avvio`);
+    }
+  }
+
   /**
    * The one place this connector enters the shared ingress path.
    *
@@ -1811,12 +1870,15 @@ export class TelegramConnector {
     }
     // Il gate di gruppo (ADR-0063). Marcato elaborato, non lasciato pendente:
     // un update che non apre un turno non lo aprirà mai, e una coda che non si
-    // svuota nasconde quelli che contano.
+    // svuota nasconde quelli che contano. Con l'osservatore spento il rifiuto
+    // e' anche sigillato (`sealIgnored`): stato terminale con il corpo ritirato,
+    // mai una copia durevole del contenuto umano — vedi
+    // `PASSIVE_GROUP_OBSERVATION_ENABLED`.
     if (esito.kind === 'ignored') {
       if (incoming.isPrivate && principalFor(incoming, this.deps.config.ownerUserId).principal.kind !== 'owner') {
         this.discardPrivateDM(stored.updateId, log);
       } else {
-        this.markProcessedQuietly(stored.updateId, log);
+        this.sealIgnoredQuietly(stored.updateId, log);
       }
     }
     // `queued` (in pausa) non scrive niente e non fa settle, ed è esattamente
@@ -1885,7 +1947,12 @@ export class TelegramConnector {
         (!incoming.isPrivate || ctx.identity.principal.kind === 'owner') &&
         apreUnTurno({
           isPrivate: incoming.isPrivate,
-          testo: 'text' in incoming ? incoming.text : undefined,
+          // Il testo proprio del mittente, in ordine di preferenza: la riga
+          // scritta, poi la didascalia che ha messo lui sul file — mai il
+          // contenuto di un inoltro (parole di qualcun altro portate qui:
+          // consegna, non indirizzo — ADR-0046 §2), che resta in
+          // `incoming.forwarded` e non arriva mai a questa domanda.
+          testo: incoming.text !== '' ? incoming.text : incoming.caption,
           citato: incoming.citato,
           haAllegato: 'attachment' in incoming || 'posizione' in incoming,
           meUsername: this.meUsername,
@@ -1893,8 +1960,12 @@ export class TelegramConnector {
       // Il seguito che ADR-0063 nomina esplicitamente come aperto: un
       // messaggio che non apre un turno non deve sparire, o «@Muffin cosa
       // avevamo deciso?» arriva a una memoria che non ha mai visto la
-      // conversazione.
-      ...(incoming.isPrivate ? {} : { remember: () => this.ricordaSenzaRispondere(incoming, log) }),
+      // conversazione. PRE-21 E' SPENTO (`PASSIVE_GROUP_OBSERVATION_ENABLED`):
+      // un messaggio non indirizzato viene marcato elaborato senza scrivere
+      // niente di durevole — vedi il flag per il perché.
+      ...(PASSIVE_GROUP_OBSERVATION_ENABLED && !incoming.isPrivate
+        ? { remember: () => this.ricordaSenzaRispondere(incoming, log) }
+        : {}),
       command: () => this.tryCommand(incoming),
       laneState: () => ({
         inPausa: this.deps.pausa?.attiva() === true,

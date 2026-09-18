@@ -62,6 +62,7 @@ const withDocument = (
     fromId: OWNER,
     type: 'private',
   },
+  caption = 'tieni questo',
 ): Update =>
   ({
     update_id: id,
@@ -70,7 +71,7 @@ const withDocument = (
       date: 0,
       chat: { id: sender.chatId, type: sender.type },
       from: { id: sender.fromId, is_bot: false, first_name: 'o' },
-      caption: 'tieni questo',
+      caption,
       document: { file_id: `f${id}`, file_unique_id: `u${id}`, file_name: name, file_size: 4096 },
     },
   }) as unknown as Update;
@@ -150,7 +151,12 @@ function harness(bytes: Buffer | Buffer[], script: ChatResult[] = []) {
     now: () => new Date(RECEIVED_AT),
   });
 
-  return { connector, seen, runtime, vaultRoot };
+  // Lo username che `connect()` prenderebbe da `getMe`: serve al gate di
+  // gruppo per riconoscere una menzione in didascalia (osservatore spento: un
+  // documento di gruppo apre un turno solo se indirizzato).
+  (connector as unknown as { meUsername: string }).meUsername = 'MuffinBot';
+
+  return { connector, seen, runtime, vaultRoot, downloads: () => download };
 }
 
 async function deliver(h: ReturnType<typeof harness>, updates: Update[]): Promise<void> {
@@ -316,8 +322,16 @@ describe('a PDF sent to the bot', () => {
       reply('Nel gruppo: canone 850 euro.'),
     ]);
     try {
+      // PRE-21 observer-off: un documento di gruppo apre SOLO se indirizzato —
+      // qui la menzione in didascalia. Senza, il gate lo sigilla senza turno,
+      // download o indice (prova nel test sotto).
       await deliver(h, [
-        withDocument(5, 'contratto.pdf', { chatId: GROUP, fromId: STRANGER, type: 'supergroup' }),
+        withDocument(
+          5,
+          'contratto.pdf',
+          { chatId: GROUP, fromId: STRANGER, type: 'supergroup' },
+          '@MuffinBot tieni questo, serve per il contratto',
+        ),
       ]);
 
       const store = h.runtime.memory.store;
@@ -349,10 +363,20 @@ describe('a PDF sent to the bot', () => {
       await h.runtime.vault.reindexPath('host', hostPath);
 
       await deliver(h, [
-        withDocument(6, 'altro.pdf', { chatId: OTHER_GROUP, fromId: STRANGER, type: 'supergroup' }),
+        withDocument(
+          6,
+          'altro.pdf',
+          { chatId: OTHER_GROUP, fromId: STRANGER, type: 'supergroup' },
+            "@MuffinBot tieni questo per l'altro gruppo",
+        ),
       ]);
       await deliver(h, [
-        withDocument(7, 'contratto.pdf', { chatId: GROUP, fromId: STRANGER, type: 'supergroup' }),
+        withDocument(
+          7,
+          'contratto.pdf',
+          { chatId: GROUP, fromId: STRANGER, type: 'supergroup' },
+          '@MuffinBot tieni questo per noi',
+        ),
       ]);
 
       const store = h.runtime.memory.store;
@@ -371,6 +395,101 @@ describe('a PDF sent to the bot', () => {
       expect(await h.runtime.vault.document('host', groupPath)).toBeNull();
       expect(await h.runtime.vault.document(tenant, otherPath)).toBeNull();
       expect(await h.runtime.vault.document(otherTenant, groupPath)).toBeNull();
+    } finally {
+      h.runtime.close();
+    }
+  });
+
+  it('un documento di gruppo non indirizzato non apre turni, non scarica, non indicizza — e sigilla la riga', async () => {
+    // PRE-21 observer-off: un file lasciato in stanza non e' un indirizzo. Il
+    // vecchio «non perdere il file» appartiene al futuro contesto passivo.
+    const h = harness([CONTRATTO]);
+    try {
+      await deliver(h, [
+        withDocument(8, 'contratto.pdf', { chatId: GROUP, fromId: STRANGER, type: 'supergroup' }),
+      ]);
+
+      // Nessun turno, quindi nessuna chiamata al modello…
+      expect(h.seen).toHaveLength(0);
+      // …nessun download tentato (lo stub `fetch` lancerebbe su un byte in piu')…
+      expect(h.downloads()).toBe(0);
+      // …niente in memoria e niente nel vault…
+      const store = h.runtime.memory.store;
+      expect(store.searchEpisodes(`group:telegram:${GROUP}`, 'Canone')).toHaveLength(0);
+      expect(await h.runtime.vault.document(`group:telegram:${GROUP}`, 'inbox/2026-08-15-8-contratto.pdf')).toBeNull();
+      // …e la riga nativa e' terminale col corpo ritirato: id e timestamp
+      // restano, il contenuto umano no, niente resta pendente.
+      const inbox = (h.connector as unknown as { deps: { inbox: UpdateInbox } }).deps.inbox;
+      const row = inbox.get(8)!;
+      expect(JSON.parse(row.payload)).toEqual({ scrubbed: true, update_id: 8 });
+      expect(row.payload).not.toContain('contratto');
+      expect(row.settledAt).not.toBeNull();
+      expect(row.turnId).toBeNull();
+      expect(inbox.pending()).toHaveLength(0);
+    } finally {
+      h.runtime.close();
+    }
+  });
+
+  it('una foto di gruppo non indirizzata non apre turni e non scarica — e sigilla la riga', async () => {    // Stessa regola del documento, altra forma sul filo (`photo` invece di
+    // `document`): senza indirizzo non si tocca niente.
+    const h = harness([PNG_1x1]);
+    try {
+      await deliver(h, [
+        {
+          update_id: 9,
+          message: {
+            message_id: 9,
+            date: 0,
+            chat: { id: GROUP, type: 'supergroup' },
+            from: { id: STRANGER, is_bot: false, first_name: 'x' },
+            caption: 'guardate che bella',
+            photo: [{ file_id: 'fp9', file_unique_id: 'up9', file_size: 70 }],
+          },
+        } as unknown as Update,
+      ]);
+
+      expect(h.seen).toHaveLength(0);
+      expect(h.downloads()).toBe(0);
+      expect(
+        (h.runtime.db.prepare('SELECT count(*) AS n FROM episodes').get() as { n: number }).n,
+      ).toBe(0);
+      const inbox = (h.connector as unknown as { deps: { inbox: UpdateInbox } }).deps.inbox;
+      const row = inbox.get(9)!;
+      expect(JSON.parse(row.payload)).toEqual({ scrubbed: true, update_id: 9 });
+      expect(row.settledAt).not.toBeNull();
+      expect(row.turnId).toBeNull();
+      expect(inbox.pending()).toHaveLength(0);
+    } finally {
+      h.runtime.close();
+    }
+  });
+
+  it('una didascalia con comando per un altro bot non scarica niente — e sigilla la riga', async () => {
+    // `/riassumi@OtherBot` e' un ordine dato a un altro bot: stessa regola del
+    // testo, anche quando viaggia come didascalia di un file.
+    const h = harness([CONTRATTO]);
+    try {
+      await deliver(h, [
+        withDocument(
+          10,
+          'contratto.pdf',
+          { chatId: GROUP, fromId: STRANGER, type: 'supergroup' },
+          '/riassumi@OtherBot per favore',
+        ),
+      ]);
+
+      expect(h.seen).toHaveLength(0);
+      expect(h.downloads()).toBe(0);
+      expect(
+        (h.runtime.db.prepare('SELECT count(*) AS n FROM episodes').get() as { n: number }).n,
+      ).toBe(0);
+      const inbox = (h.connector as unknown as { deps: { inbox: UpdateInbox } }).deps.inbox;
+      const row = inbox.get(10)!;
+      expect(JSON.parse(row.payload)).toEqual({ scrubbed: true, update_id: 10 });
+      expect(row.settledAt).not.toBeNull();
+      expect(row.turnId).toBeNull();
+      expect(inbox.pending()).toHaveLength(0);
     } finally {
       h.runtime.close();
     }
