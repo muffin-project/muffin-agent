@@ -404,9 +404,10 @@ export function apreUnTurno(i: {
   // come `testo`, vedi `ganci()`), comando — e lo dicono le tre regole sotto,
   // non questa.
   const testo = i.testo ?? '';
-  // 1. Un comando. `/x` e `/x@nomebot` — la seconda forma e' quella che
-  //    Telegram consegna quando in un gruppo ci sono piu' bot.
-  if (nomeComando(testo) !== '') return true;
+  // 1. Un comando per noi. `/x` e `/x@nomebot` — la seconda forma e' quella
+  //    che Telegram consegna quando in un gruppo ci sono piu' bot, e la forma
+  //    che ci salva dal risvegliarci per `/x@altrobot` (`comandoPerNoi`).
+  if (comandoPerNoi(testo, i.meUsername) !== '') return true;
   // 2. Una reply a un messaggio di Muffin. Il dato c'e' gia': `citazione()`
   //    calcola `da: 'muffin'` per etichettare la citazione, e la stessa
   //    condizione risponde a «stanno parlando con me».
@@ -420,8 +421,26 @@ export function apreUnTurno(i: {
   return false;
 }
 
-function nomeComando(testo: string): string {
-  return /^\/([a-z]+)/i.exec(testo.trim())?.[1]?.toLowerCase() ?? '';
+/**
+ * Il nome del comando, solo se e' per noi (observer-off, 2026-09-18).
+ *
+ * Telegram consegna `/stop@OtherBot` anche a noi quando siamo nella stessa
+ * stanza: il suffisso `@...` dice a chi era rivolto, e leggerci solo il nome
+ * svegliava Muffin per un ordine dato a un altro bot. Senza suffisso il
+ * comando e' per il bot della stanza; con suffisso vale solo se nomina noi,
+ * senza distinzione di maiuscole (Telegram garantisce lo username unico).
+ * Con un bersaglio esplicito e `meUsername` ancora sconosciuto (prima di
+ * `getMe`) non si apre niente: fallire chiuso e' l'unica direzione
+ * accettabile — un turno in piu' in un gruppo lo vedono tutti.
+ */
+function comandoPerNoi(testo: string, meUsername: string | undefined): string {
+  const m = /^\/([a-z]+)(?:@([A-Za-z0-9_]+))?/i.exec(testo.trim());
+  const nome = m?.[1]?.toLowerCase() ?? '';
+  if (nome === '') return '';
+  const bersaglio = m?.[2];
+  if (bersaglio === undefined) return nome;
+  if (meUsername === undefined || meUsername === '') return '';
+  return bersaglio.toLowerCase() === meUsername.toLowerCase() ? nome : '';
 }
 
 export function parseUpdate(update: Update, botId?: number): Incoming | null {
@@ -1485,7 +1504,7 @@ export class TelegramConnector {
       if (!incoming) continue;
       const { principal } = principalFor(incoming, this.deps.config.ownerUserId);
       if (principal.kind !== 'owner') continue;
-      if (sembraComando(incoming.text) && CONTROLLO.has(nomeComando(incoming.text))) {
+      if (sembraComando(incoming.text) && CONTROLLO.has(comandoPerNoi(incoming.text, this.meUsername))) {
         this.gestiti.add(incoming.updateId);
         controlli.push(incoming);
       }
@@ -1496,7 +1515,7 @@ export class TelegramConnector {
         await this.tryCommand(incoming);
       } catch (error) {
         (this.deps.log ?? (() => {}))(
-          `telegram: comando ${nomeComando(incoming.text)} fallito — ${error instanceof Error ? error.message : String(error)}`,
+          `telegram: comando ${comandoPerNoi(incoming.text, this.meUsername)} fallito — ${error instanceof Error ? error.message : String(error)}`,
         );
       }
       this.deps.inbox.markProcessed(incoming.updateId, this.now());
@@ -1990,7 +2009,15 @@ export class TelegramConnector {
       recordDelivery: (turnId, delivery) => this.recordDelivery(turnId, delivery),
       finish: () => this.finish(stored.updateId, this.now()),
       settle: () => this.deps.inbox.settle(stored.updateId, this.now()),
-      markProcessed: () => this.deps.inbox.markProcessed(stored.updateId, this.now()),
+      markProcessed: () => {
+        this.deps.inbox.markProcessed(stored.updateId, this.now());
+        // Hygiene at the exact point semantic consumption completes: only a
+        // row that is already settled AND processed loses its body
+        // (`scrubSettledPayload` enforces both — pending, failed and merely
+        // processed rows are no-ops here), and settlement itself only happens
+        // after the send landed with the turn's downstream already durable.
+        this.deps.inbox.scrubSettledPayload(stored.updateId);
+      },
       log: (riga) => log(`telegram: ${riga}`),
       turn: (id) => this.deps.loop.turns.get(id),
       recoveredText: (record) => recoveredText(this.deps.loop.sessions, record),
@@ -2131,11 +2158,14 @@ export class TelegramConnector {
    * The last two writes for an update, always together and always in this
    * order — settle, then mark processed — mirroring `job_fires`'s own "solo
    * dopo il settlement avanza la schedule" (fault point 7), applied to an
-   * update instead of a fire.
+   * update instead of a fire. The scrub third: this row is settled and
+   * processed as of the two lines above, so its raw body retires here — the
+   * suspended turn itself resumes from its turn row, never from this body.
    */
   private finish(updateId: number, at: string): void {
     this.deps.inbox.settle(updateId, at);
     this.deps.inbox.markProcessed(updateId, at);
+    this.deps.inbox.scrubSettledPayload(updateId);
   }
 
   /**

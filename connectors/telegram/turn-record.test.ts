@@ -294,8 +294,17 @@ describe('a telegram turn records where the answer goes and whether it got there
     // The presence placeholder ("sto guardando…") and, since 03/09/2026, the
     // transcript of the one step the turn took before suspending — a real
     // message that stays (`transcript.ts`). No answer, no empty send.
+    //
+    // Since the first-paint fix (defect B, 2026-09-18) that message is painted
+    // running the moment the step starts (`send:⏳ … · 0s`) and settled to done
+    // by the final edit (`edit:✓ …`) — before, the whole turn collapsed into a
+    // single `send:✓ …` because the provider resolves through pure microtasks
+    // with no real gap for the old coalescing timer to fire in. The
+    // load-bearing properties are unchanged: no answer text, delivery still
+    // pending, the transcript message is the truth until the lane resumes.
     expect(h.outbound.filter((o) => o !== 'send:sto guardando…')).toEqual([
-      'send:✓ mi metto in attesa',
+      'send:⏳ mi metto in attesa · 0s',
+      'edit:✓ mi metto in attesa',
     ]);
     h.runtime.close();
   });
