@@ -234,13 +234,17 @@ sha256_file() {
   fi
 }
 
-# Fail-closed integrity gate for the Node tarball. The checksum list comes
-# from the same distribution directory as the tarball itself, over the same
-# HTTPS: this stops transit tampering, mirror poisoning and truncated
-# downloads — the realistic vectors — but it is NOT an origin-key proof. A
-# `.asc`/GPG verification against ad-hoc fetched keys would move the same
-# trust (this network, right now) into a second file without adding any, so
-# it is deliberately not that; see the branch/PR that introduced this gate.
+# Fail-closed integrity gate for the Node tarball. The tarball AND the
+# checksum list come from the same MUFFIN_NODE_DIST_BASE, so this check
+# verifies the PAIR as served — it does not authenticate the origin.
+# It stops: corrupted/truncated downloads, mismatched artifacts, accidental
+# mirror inconsistency, a tarball modified without a matching modification
+# to the checksum manifest. It does NOT stop: a malicious/compromised mirror
+# that replaces both files consistently, or compromise of the distribution
+# origin itself. A `.asc`/GPG verification against ad-hoc fetched keys would
+# move the same trust (this network, right now) into a second file without
+# adding any, so it is deliberately not that; stronger origin authenticity
+# needs a pinned/maintained trust root, tracked separately if required.
 # Runs BEFORE anything under $NODE_DIR is touched, so a refused download can
 # never wipe a working Node.
 verify_node_tarball() {
