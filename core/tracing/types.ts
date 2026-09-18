@@ -19,7 +19,8 @@ export type SpanName =
   | 'muffin.turn'
   | 'muffin.chat_call'
   | 'muffin.tool_call'
-  | 'muffin.policy_decision';
+  | 'muffin.policy_decision'
+  | 'muffin.light.attempt';
 
 export type SpanStatus = 'ok' | 'error';
 

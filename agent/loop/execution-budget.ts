@@ -27,6 +27,22 @@ export type ModelCallTelemetry = {
   normalDeadlineMs: number;
   effectiveDeadlineMs: number;
   effectiveDeadlineSource: 'model_deadline' | 'turn_deadline' | 'active_model_budget_exhausted';
+  /** First real provider activity, when any arrived (#497 residue). */
+  firstActivityAt?: number;
+  /**
+   * `firstActivityAt - startedAt`: time to first *observable* provider
+   * activity — thinking, text or tool-call deltas as the adapters support
+   * them, not strictly the first visible text token. Carried under the
+   * issue's `ttft_ms` vocabulary with that precise meaning.
+   */
+  ttftMs?: number;
+  /**
+   * Most recent real provider activity. Absent — like the two fields above,
+   * never defaulted to `startedAt` — when `activity(...)` never fired: the
+   * internal watchdog keeps its own `startedAt` baseline for idle math, but
+   * that baseline is not evidence the provider produced anything.
+   */
+  lastActivityAt?: number;
 };
 
 export type ExecutionBudgetOptions = {
@@ -127,6 +143,13 @@ export class ExecutionBudget {
         normalDeadlineMs: this.config.modelCallDeadlineMs,
         effectiveDeadlineMs: deadline,
         effectiveDeadlineSource,
+        ...(firstActivityAt === undefined
+          ? {}
+          : {
+              firstActivityAt,
+              ttftMs: Math.max(0, firstActivityAt - startedAt),
+              lastActivityAt,
+            }),
       };
     };
 

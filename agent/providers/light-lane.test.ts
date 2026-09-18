@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_LIGHT_TRANSPORT_RETRIES } from '../loop/types.js';
 import { CONSERVATIVE, DEFAULT_EXECUTION, loadProfiles, selectProfile, type Profile } from '../profiles/profile.js';
-import { lightLane, LightRequestDeadlineError, type LightSpend } from './light-lane.js';
+import { lightLane, LightRequestDeadlineError, type LightAttemptReport, type LightSpend } from './light-lane.js';
 import { ProviderError, type ChatCall, type ChatResult, type Provider } from './types.js';
 
 /**
@@ -361,5 +361,128 @@ describe('la lifetime logica della richiesta leggera (#497)', () => {
     );
     expect(erroreStretta).toBeInstanceOf(LightRequestDeadlineError);
     expect(erroreStretta).not.toBeInstanceOf(ProviderError);
+  });
+});
+
+describe('il conteggio dei tentativi fisici (#496)', () => {
+  it('ogni tentativo partito è riportato, anche se la richiesta fallisce', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const visti: LightAttemptReport[] = [];
+    const lane = lightLane(
+      {
+        kind: 'openai-compat',
+        chat: async () => {
+          throw new ProviderError('502 stanco', true, 502, 'transport');
+        },
+      },
+      { profile: CONSERVATIVE, onAttempt: (a) => visti.push(a) },
+    );
+    await expect(lane.chat(call())).rejects.toThrow('502 stanco');
+    // Due retry = tre tentativi fisici, tutti riportati: la prova esiste
+    // anche se la spesa non registra niente (nessun addebito sul fallimento).
+    // Stessa richiesta logica per tutti: un solo requestId.
+    expect(visti.map(({ attempt, model }) => ({ attempt, model }))).toEqual([
+      { attempt: 1, model: 'light' },
+      { attempt: 2, model: 'light' },
+      { attempt: 3, model: 'light' },
+    ]);
+    const richieste = new Set(visti.map((v) => v.requestId));
+    expect(richieste.size).toBe(1);
+    expect([...richieste][0]).toMatch(/^[0-9a-f-]{10,}$/);
+  });
+
+  it('successo al secondo tentativo: due riporti, una spesa', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const visti: LightAttemptReport[] = [];
+    const spese: LightSpend[] = [];
+    let tentativi = 0;
+    const lane = lightLane(
+      {
+        kind: 'openai-compat',
+        chat: async () => {
+          tentativi += 1;
+          if (tentativi === 1) throw new ProviderError('429 lento', true, 429, 'transport', 10);
+          return ok();
+        },
+      },
+      { profile: CONSERVATIVE, onAttempt: (a) => visti.push(a), record: (e) => spese.push(e) },
+    );
+    await expect(lane.chat(call())).resolves.toMatchObject({ text: 'ok' });
+    expect(visti.map(({ attempt, model }) => ({ attempt, model }))).toEqual([
+      { attempt: 1, model: 'light' },
+      { attempt: 2, model: 'light' },
+    ]);
+    expect(new Set(visti.map((v) => v.requestId)).size).toBe(1);
+    expect(spese).toHaveLength(1);
+  });
+
+  it('deadline prima del secondo tentativo: solo il primo è riportato', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(Math, 'random').mockReturnValue(0);
+      const visti: LightAttemptReport[] = [];
+      const lane = lightLane(
+        {
+          kind: 'openai-compat',
+          chat: async () => {
+            throw new ProviderError('429 lungo', true, 429, 'transport', 10_000);
+          },
+        },
+        {
+          profile: { ...CONSERVATIVE, execution: { ...DEFAULT_EXECUTION, turnWallDeadlineMs: 300 } },
+          onAttempt: (a) => visti.push(a),
+        },
+      );
+      const promessa = lane.chat(call());
+      const attesa = expect(promessa).rejects.toThrow(/deadline/);
+      await vi.advanceTimersByTimeAsync(2000);
+      await attesa;
+      // Il secondo tentativo non è mai partito: giusto non riportarlo.
+      expect(visti.map(({ attempt, model }) => ({ attempt, model }))).toEqual([
+        { attempt: 1, model: 'light' },
+      ]);
+      expect(new Set(visti.map((v) => v.requestId)).size).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('due richieste concorrenti si raggruppano per requestId', async () => {
+    // A fallisce una volta e ritenta (1,2), B riesce subito (1): i riporti
+    // si intercalano, ma ogni requestId ricostruisce la sua sola sequenza.
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(Math, 'random').mockReturnValue(0);
+      const visti: LightAttemptReport[] = [];
+      let tentativiA = 0;
+      const lane = lightLane(
+        {
+          kind: 'openai-compat',
+          chat: async (chiamata: ChatCall) => {
+            if (chiamata.model === 'a') {
+              tentativiA += 1;
+              if (tentativiA === 1) throw new ProviderError('429', true, 429, 'transport', 10);
+            }
+            return ok();
+          },
+        },
+        { profile: CONSERVATIVE, onAttempt: (a) => visti.push(a) },
+      );
+      const pa = lane.chat(call({ model: 'a' }));
+      const pb = lane.chat(call({ model: 'b' }));
+      const attesaA = expect(pa).resolves.toMatchObject({ text: 'ok' });
+      const attesaB = expect(pb).resolves.toMatchObject({ text: 'ok' });
+      await vi.advanceTimersByTimeAsync(2000);
+      await attesaA;
+      await attesaB;
+      const perRichiesta = new Map<string, number[]>();
+      for (const v of visti) {
+        perRichiesta.set(v.requestId, [...(perRichiesta.get(v.requestId) ?? []), v.attempt]);
+      }
+      expect(perRichiesta.size).toBe(2);
+      expect([...perRichiesta.values()].sort()).toEqual([[1], [1, 2]]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

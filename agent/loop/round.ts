@@ -332,6 +332,15 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
         [`${prefix}.active_model_ms_after`]: telemetry.activeModelMsAfter,
         ...(telemetry.activeModelBudgetMs === undefined ? {} : { 'muffin.chat_call.active_model_budget_ms': telemetry.activeModelBudgetMs }),
         ...(telemetry.activeModelMsRemaining === undefined ? {} : { 'muffin.chat_call.active_model_ms_remaining': telemetry.activeModelMsRemaining }),
+        ...(telemetry.firstActivityAt === undefined
+          ? {}
+          : {
+              'muffin.chat_call.first_activity_at': telemetry.firstActivityAt,
+              'muffin.chat_call.ttft_ms': telemetry.ttftMs ?? Math.max(0, telemetry.firstActivityAt - telemetry.startedAt),
+            }),
+        ...(telemetry.lastActivityAt === undefined
+          ? {}
+          : { 'muffin.chat_call.last_activity_at': telemetry.lastActivityAt }),
       });
     };
 

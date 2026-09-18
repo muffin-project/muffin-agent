@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { sleep } from '../../core/net/sleep.js';
 import { retryDelayMs } from '../loop/stream.js';
 import { MAX_LIGHT_TRANSPORT_RETRIES } from '../loop/types.js';
@@ -68,6 +69,34 @@ export type LightLaneOptions = {
    * caps are decorative, which is what `doctor` reports.
    */
   record?: ((entry: LightSpend) => void) | undefined;
+  /**
+   * Fires synchronously as each physical attempt starts (#496): 1-based
+   * within the logical request, with the model the attempt actually asks
+   * for, and the id of the logical request it belongs to. Attempts that
+   * start are reported even when the logical request ultimately fails —
+   * success-only spend accounting cannot carry that — and an attempt that
+   * never starts (deadline won the wait first) is correctly absent.
+   * Concurrent logical requests interleave reports; group by `requestId`
+   * to recover each request's own attempt sequence. Optional like
+   * `record`; a lane nobody listens to still retries exactly the same way.
+   */
+  onAttempt?: ((attempt: LightAttemptReport) => void) | undefined;
+};
+
+/** One physical attempt beginning inside a logical light request. */
+export type LightAttemptReport = {
+  /** 1-based physical attempt number within this logical request. */
+  attempt: number;
+  /** The model id this attempt asks for. */
+  model: string;
+  /**
+   * The logical request this attempt belongs to: generated once per
+   * `chat()`, identical for every attempt (and retry wait) of that
+   * request, distinct across concurrent requests. Correlation without a
+   * tracing framework — and without faking parentage the lane does not
+   * have.
+   */
+  requestId: string;
 };
 
 /**
@@ -118,6 +147,8 @@ async function chatWithTransportRetries(
   inner: Provider,
   call: ChatCall,
   requestDeadlineMs: number,
+  requestId: string,
+  onAttempt?: ((attempt: LightAttemptReport) => void) | undefined,
 ): Promise<ChatResult> {
   const deadline = new AbortController();
   const timer = setTimeout(() => deadline.abort('light_request_deadline'), requestDeadlineMs);
@@ -130,8 +161,11 @@ async function chatWithTransportRetries(
     new LightRequestDeadlineError(requestDeadlineMs);
   try {
     let retriesLeft = MAX_LIGHT_TRANSPORT_RETRIES;
+    let attempt = 0;
     while (true) {
       try {
+        attempt += 1;
+        onAttempt?.({ attempt, model: call.model, requestId });
         return await inner.chat({ ...call, signal: requestSignal });
       } catch (error) {
         // A deadline-aborted attempt is not a transport failure and not a
@@ -147,13 +181,13 @@ async function chatWithTransportRetries(
           throw error;
         }
         retriesLeft -= 1;
-        const attempt = MAX_LIGHT_TRANSPORT_RETRIES - retriesLeft;
+        const backoffAttempt = MAX_LIGHT_TRANSPORT_RETRIES - retriesLeft;
         // Come la corsia main (`round.ts`): una finestra `Retry-After`
         // dichiarata dal provider allunga l'attesa oltre il backoff cieco
         // quando è più lunga (#496). Stessa semantica, tetto diverso (qui:
         // la lifetime logica della richiesta, non il muro del turno —
         // questa corsia non entra in quella gabbia).
-        await sleep(Math.max(retryDelayMs(attempt), error.retryAfterMs ?? 0), requestSignal);
+        await sleep(Math.max(retryDelayMs(backoffAttempt), error.retryAfterMs ?? 0), requestSignal);
         if (call.signal?.aborted) throw error;
         if (deadline.signal.aborted) throw deadlineExceeded();
       }
@@ -181,7 +215,16 @@ export function lightLane(inner: Provider, options: LightLaneOptions): Provider 
   return {
     kind: inner.kind,
     async chat(call: ChatCall): Promise<ChatResult> {
-      const result = await chatWithTransportRetries(inner, sampled(call, options.profile), requestDeadlineMs);
+      // One id per logical request, shared by every attempt it starts:
+      // without it, concurrent requests are ungroupable attempt streams.
+      const requestId = randomUUID();
+      const result = await chatWithTransportRetries(
+        inner,
+        sampled(call, options.profile),
+        requestDeadlineMs,
+        requestId,
+        options.onAttempt,
+      );
       // Billed after the logical call returns, like the loop: retries are one
       // request outcome, not three charges invented from failures whose usage
       // the provider never returned.
