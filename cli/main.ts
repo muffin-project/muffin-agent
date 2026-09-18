@@ -61,8 +61,10 @@ import {
   requireSecretRef,
   saveConfig,
   secretsBackend,
+  secretDir,
   writeAuthoritativeSecret,
   ConfigError,
+  SECRET_BACKENDS,
   type ProviderKind,
 } from '../core/config/config.js';
 import {
@@ -1324,7 +1326,9 @@ async function cmdSecretMigrate(yes: boolean): Promise<number> {
   } else {
     process.stdout.write(`service not installed yet — proof deferred to first start; blobs verified by decrypt round-trip above.\n`);
   }
-  // 5. Only now delete the legacy copies.
+  // 5. Only now delete the legacy copies — then the directories themselves
+  // when they are empty, so no store (not just no secret) is left behind.
+  // rmdir fails on non-empty dirs by design: never recursive, never a guess.
   const leftovers: string[] = [];
   for (const n of values.keys()) {
     for (const loc of locateSecretAll(`secret://${n}`, home)) {
@@ -1332,6 +1336,16 @@ async function cmdSecretMigrate(yes: boolean): Promise<number> {
         rmSync(loc.path, { force: true });
       } catch {
         leftovers.push(loc.path);
+      }
+    }
+  }
+  if (leftovers.length === 0) {
+    for (const backend of SECRET_BACKENDS) {
+      try {
+        rmSync(secretDir(backend, home), { recursive: false });
+      } catch {
+        // Non-empty or already gone: either way nothing of ours remains inside
+        // that we know about (doctor's shadow check watches regardless).
       }
     }
   }
