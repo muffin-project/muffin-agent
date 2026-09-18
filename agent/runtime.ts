@@ -639,6 +639,7 @@ export function buildRuntime(
     const span = tracer.start('muffin.light.attempt', {
       'gen_ai.request.model': attempt.model,
       'muffin.light.attempt': attempt.attempt,
+      'muffin.light.request_id': attempt.requestId,
     });
     span.end();
   };

@@ -1151,5 +1151,9 @@ describe('la corsia light riporta i tentativi fisici nelle tracce (#496)', () =>
     expect(tentativi.length).toBeGreaterThanOrEqual(1);
     expect(tentativi[0]?.attributes['muffin.light.attempt']).toBe(1);
     expect(tentativi[0]?.attributes['gen_ai.request.model']).toBe('test-light');
+    // Una sola richiesta logica: tutti gli span condividono il suo id.
+    const richieste = new Set(tentativi.map((s) => s.attributes['muffin.light.request_id']));
+    expect(richieste.size).toBe(1);
+    expect([...richieste][0]).toBeDefined();
   }, 60_000);
 });
