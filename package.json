@@ -31,7 +31,8 @@
     "format": "biome format --write --changed",
     "igiene": "node scripts/igiene.mjs",
     "licenses": "node scripts/check-dep-licenses.mjs",
-    "merge": "tsx scripts/merge.ts"
+    "merge": "tsx scripts/merge.ts",
+    "promote": "tsx scripts/promote.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.12",
