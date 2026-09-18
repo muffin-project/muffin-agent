@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import DatabaseCtor from 'better-sqlite3';
@@ -299,7 +299,7 @@ function harness(options: {
     memoryDoorOpen: () => true,
     execution: options.execution ?? new ExecutionBudget({ modelCallDeadlineMs: 90_000, turnWallDeadlineMs: 180_000 }),
   };
-  return { scope, deps, turns, record, span, run, id };
+  return { scope, deps, turns, record, span, run, id, home };
 }
 
 describe('la porta di risposta è chiesta prima della chiamata al modello', () => {
@@ -597,5 +597,54 @@ describe('requireTool arma il filo una volta sola (ADR-0082)', () => {
     });
     expect(recover(h.scope, 'empty')).toBe(false);
     expect(h.run.requireToolOnce).toBe(false);
+  });
+});
+
+describe('la telemetria di first activity arriva sullo span (#497)', () => {
+  function spanChatCall(home: string) {
+    // Lo span di chiamata è figlio di quello di turno: gli attributi
+    // `muffin.chat_call.*` vivono nell'esportazione JSONL, non su `h.span`.
+    const dir = join(home, 'traces');
+    const righe = readdirSync(dir)
+      .filter((f) => f.endsWith('.jsonl'))
+      .flatMap((f) => readFileSync(join(dir, f), 'utf8').split('\n'))
+      .filter((l) => l.trim() !== '')
+      .map((l) => JSON.parse(l) as { name: string; attributes: Record<string, number> });
+    const chiamate = righe.filter((r) => r.name === 'muffin.chat_call');
+    if (chiamate.length === 0) throw new Error('nessuno span muffin.chat_call esportato');
+    return chiamate.at(-1)!.attributes;
+  }
+
+  it('uno stream con delta registra first/last activity e ttft', async () => {
+    const provider = scriptedProvider({
+      stream: [[{ type: 'text_delta', text: 'ciao' }, { type: 'done', result: reply('ciao') }]],
+    });
+    // Con onDelta la corsia chiede lo stream: senza, andrebbe di chat() e non
+    // ci sarebbe nessuna activity da registrare (vedi il test sotto).
+    const h = harness({ provider, onDelta: () => undefined });
+
+    const result = await runRounds(h.scope);
+
+    expect(result.stopped).toBe('answered');
+    const attrs = spanChatCall(h.home);
+    expect(attrs['muffin.chat_call.first_activity_at']).toBeDefined();
+    expect(attrs['muffin.chat_call.ttft_ms']).toBeDefined();
+    expect(attrs['muffin.chat_call.last_activity_at']).toBeDefined();
+    const started = Number(attrs['muffin.chat_call.invocation.1.started_at']);
+    expect(Number(attrs['muffin.chat_call.first_activity_at'])).toBeGreaterThanOrEqual(started);
+    expect(Number(attrs['muffin.chat_call.last_activity_at'])).toBeGreaterThanOrEqual(
+      Number(attrs['muffin.chat_call.first_activity_at']),
+    );
+  });
+
+  it('una chat non streaming non inventa first activity', async () => {
+    const provider = scriptedProvider({ chat: [reply('secca')] });
+    const h = harness({ provider });
+
+    await runRounds(h.scope);
+
+    const attrs = spanChatCall(h.home);
+    expect(attrs['muffin.chat_call.first_activity_at']).toBeUndefined();
+    expect(attrs['muffin.chat_call.ttft_ms']).toBeUndefined();
   });
 });
