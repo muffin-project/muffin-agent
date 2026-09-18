@@ -262,14 +262,13 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
   /** The call currently on the wire, so two never overlap and `messageId` is written by one send at a time. */
   let inFlight: Promise<void> | null = null;
   /**
-   * La prima pittura è già partita (difetto B). Resta falso finché nessun
-   * contenuto ha mai chiesto il filo: finché è falso, `scheduleSoon()` non
-   * accoda dietro un timer ma chiama `flush()` subito, così un primo tool
-   * lungo è visibile mentre gira — da solo, senza aspettare un secondo evento
-   * né lo scadere di una finestra. Da vero in poi, tutto torna al pavimento
-   * della stanza (`schedule()`), contatore compreso.
+   * A `sendMessage` for this turn has started (difetto B, forma forte). Set
+   * synchronously next to the `finestra` push — i.e. at invocation, not at
+   * completion — so it also covers a send whose response has not landed yet.
+   * While false, `scheduleSoon()` owes the first paint with no timer at all;
+   * once true, everything is throttled by the room's own floor (`schedule()`).
    */
-  let firstPaintQueued = false;
+  let everSent = false;
 
   function current(): Segment {
     const last = segments[segments.length - 1];
@@ -362,6 +361,7 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     if (text === seg.shown) return;
     lastCallAt = now();
     finestra.push(lastCallAt);
+    everSent = true;
     try {
       if (seg.messageId === null) {
         const message = await api.sendMessage(chatId, text, {
@@ -490,25 +490,95 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
   }
 
   /**
-   * Come `schedule()`, ma la prima volta non aspetta il pavimento (difetto B).
+   * Come `schedule()`, ma la prima pittura non aspetta niente (difetto B,
+   * forma forte — vedi `trySyncFirstPaint`).
    *
    * Il pavimento (`editEveryMs`) e il tetto (`maxEditsPerMinute`) limitano la
    * *frequenza* degli edit su un messaggio che esiste già; non devono
    * ritardare la *nascita* del primo messaggio di un turno. La prima chiamata
    * è una sola `sendMessage` — sempre dentro entrambi i limiti, perché la
-   * finestra parte vuota — quindi farla partire subito non viola niente e
-   * toglie alla visibilità ogni dipendenza dal timer: con l'orologio finto
-   * fermo e senza un secondo evento, il passo risulta comunque partito (solo
-   * microtask, mai un macrotask).
+   * finestra parte vuota — quindi non viola niente.
    */
   function scheduleSoon(): void {
     if (stopped || disabled || flushTimer !== null) return;
-    if (!firstPaintQueued) {
-      firstPaintQueued = true;
-      void flush();
+    if (!everSent) {
+      // Prima del primo send il timer non esiste proprio: o la pittura parte
+      // dentro questo stesso stack (`trySyncFirstPaint`), o — solo quando il
+      // contenuto è spaccato su più segmenti e l'ordine sullo schermo chiede
+      // la sequenza — parte accodata subito, senza finestra (`void flush()`).
+      // Mai `schedule()`: un pavimento prima della nascita è il difetto.
+      if (trySyncFirstPaint()) return;
+      if (hasContent(current())) void flush();
       return;
     }
     schedule();
+  }
+
+  /**
+   * The first visible send, invoked synchronously from the first durable
+   * progress fact (difetto B, forma forte dell'owner, 2026-09-18).
+   *
+   * `runTool` emits `tool_start` synchronously and invokes the handler in the
+   * same stack, right after `onProgress` returns — so anything deferred past
+   * `report()`'s own stack (a `setTimeout` of any length, even 0, or even a
+   * `.then()` microtask) has not run when a blocking handler takes the event
+   * loop, and the first progress dies for exactly as long as the tool runs
+   * (the owner's ~70 s). Hence this path calls `api.sendMessage` HERE, in
+   * this stack: invocation — not completion — is what puts the request on the
+   * wire before the handler can monopolise the loop.
+   *
+   * Narrow on purpose: exactly one open segment, never sent, never shown.
+   * Anything else (a preamble split across messages, an in-flight first send
+   * a racing event joined) keeps the immediate-but-sequenced `flush()` path,
+   * so on-screen order and the never-two-on-the-wire rule never weaken.
+   *
+   * Completion still lands through `inFlight`, so a racing `flush()` chains
+   * behind this send instead of doubling it: by the time it runs, `messageId`
+   * is set and it edits. Failure disables the turn exactly like
+   * `sendSegment`'s own failure — this IS the first send, not an extra one.
+   */
+  function trySyncFirstPaint(): boolean {
+    if (segments.length !== 1) return false;
+    const seg = segments[0]!;
+    if (seg.closed || seg.messageId !== null || seg.shown !== undefined || !hasContent(seg)) return false;
+    const text = render(seg, true, now(), liveText);
+    if (text === '') return false;
+    lastCallAt = now();
+    finestra.push(lastCallAt);
+    everSent = true;
+    // Shown optimistically and first: a flush chaining behind this send must
+    // see the paint as already started, never as a second message to create.
+    seg.shown = text;
+    let started: Promise<{ message_id: number }>;
+    try {
+      started = api.sendMessage(chatId, text, {
+        ...(options.threadId === undefined ? {} : { threadId: options.threadId }),
+      }) as Promise<{ message_id: number }>;
+    } catch (error) {
+      // A synchronous throw (e.g. unserialisable payload) is a failed first
+      // send like any other: decoration stays down, the answer does not.
+      disabled = true;
+      log(`telegram: trascrizione del turno sospesa — ${error instanceof Error ? error.message : String(error)}`);
+      return true;
+    }
+    const occupant: Promise<void> = started.then(
+      (message) => {
+        seg.messageId = message.message_id;
+        // The counter keeps moving exactly as after a `flush()`-driven first
+        // paint — one edit per window while something runs.
+        if (!stopped && !disabled && (running(current()) || status !== null) && hasContent(current())) schedule();
+      },
+      (error: unknown) => {
+        if (nonModificato(error)) return;
+        disabled = true;
+        log(`telegram: trascrizione del turno sospesa — ${error instanceof Error ? error.message : String(error)}`);
+      },
+    );
+    const tracked: Promise<void> = occupant.finally(() => {
+      if (inFlight === tracked) inFlight = null;
+    });
+    inFlight = tracked;
+    return true;
   }
 
   return {
