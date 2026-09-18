@@ -7,7 +7,8 @@ import { decideGitHubMerge, type GitHubDecision } from './guard-merge-gate.mjs';
 /**
  * Il guard che manda ogni merge da un gate vero. Vedi la testa di
  * `guard-merge-gate.mjs` per i due guasti che l'hanno reso necessario
- * (04/09 cieco senza CI, 26/09 collo di bottiglia locale con CI tornata).
+ * (04/09 cieco senza CI, e il collo di bottiglia locale una volta tornata la
+ * CI a meta' settembre 2026).
  */
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), 'guard-merge-gate.mjs');
 
@@ -53,10 +54,13 @@ describe('decideGitHubMerge', () => {
   const info = (over = {}) => ({
     number: 553,
     state: 'OPEN',
+    isDraft: false,
     baseRefName: 'dev',
     headRefOid: 'fc2b15f2b4c894080ed1ddc98c9d9ec443282859',
     mergeable: 'MERGEABLE',
     mergeStateStatus: 'CLEAN',
+    changedFiles: 0,
+    files: [],
     ...over,
   });
   const run = (name: string, status = 'completed', conclusion: string | null = 'success') => ({ name, status, conclusion });
@@ -105,15 +109,123 @@ describe('decideGitHubMerge', () => {
     expect(no(corso)).toContain('in corso');
   });
 
-  it('skipped e neutral non bloccano, il rerun non resuscita il rosso', () => {
-    const d = decideGitHubMerge('553', finta({}, [run('verifica'), run('collegamenti', 'completed', 'skipped')]));
+  it('skipped e neutral sui sidecar non bloccano quando FAST+DEEP sono success', () => {
+    const d = decideGitHubMerge(
+      '553',
+      finta({}, [run('verifica'), run('accettazione'), run('collegamenti', 'completed', 'skipped')]),
+    );
     expect(d.ok).toBe(true);
 
     const rerun = [
-      { name: 'verifica', status: 'completed', conclusion: 'failure', completed_at: '2026-09-26T10:00:00Z' },
-      { name: 'verifica', status: 'completed', conclusion: 'success', completed_at: '2026-09-26T09:00:00Z' },
+      { name: 'verifica', status: 'completed', conclusion: 'failure', completed_at: '2026-09-17T10:00:00Z' },
+      { name: 'verifica', status: 'completed', conclusion: 'success', completed_at: '2026-09-17T09:00:00Z' },
     ];
     expect(decideGitHubMerge('553', finta({}, rerun)).ok).toBe(false);
+  });
+
+  it('una bozza non passa di qui: DEEP non gira sulle bozze per disegno', () => {
+    const d = decideGitHubMerge('553', finta({ isDraft: true }));
+    expect(no(d)).toContain('bozza');
+  });
+
+  it('un isDraft assente o inatteso vale come dubbio: rifiuto fail-closed', () => {
+    const senza = { ...info() };
+    delete (senza as Record<string, unknown>).isDraft;
+    const d = decideGitHubMerge('553', (args: string[]) => {
+      if (args[0] === 'pr') return senza;
+      if (args[0] === 'repo') return 'muffin-project/muffin-agent';
+      return { check_runs: [run('verifica'), run('accettazione')] };
+    });
+    expect(no(d)).toContain('bozza');
+  });
+
+  it('accettazione skippata su PR di codice: rifiuto, skipped non e\' evidenza', () => {
+    const d = decideGitHubMerge(
+      '553',
+      finta({ files: [{ path: 'core/policy/gate.ts' }] }, [run('verifica'), run('accettazione', 'completed', 'skipped')]),
+    );
+    expect(no(d)).toContain('accettazione');
+  });
+
+  it('accettazione mancante su PR di codice: rifiuto', () => {
+    const d = decideGitHubMerge('553', finta({ files: [{ path: 'core/policy/gate.ts' }] }, [run('verifica')]));
+    expect(no(d)).toContain('accettazione');
+  });
+
+  it('FAST+DEEP success sulla head: via libera con nota che nomina entrambi', () => {
+    const d = decideGitHubMerge(
+      '553',
+      finta({ files: [{ path: 'core/policy/gate.ts' }] }, [run('verifica'), run('accettazione')]),
+    );
+    expect(d.ok).toBe(true);
+    if (d.ok) expect(d.note).toContain('FAST+DEEP');
+  });
+
+  it('docs-only + collegamenti verde: eccezione con allowlist e conteggio provato', () => {
+    const d = decideGitHubMerge(
+      '553',
+      finta(
+        {
+          changedFiles: 3,
+          files: [{ path: 'docs/piano.md' }, { path: '.claude/hooks/g.mjs' }, 'README.md'],
+        },
+        [run('collegamenti')],
+      ),
+    );
+    expect(d.ok).toBe(true);
+    if (d.ok) expect(d.note).toContain('3/3');
+  });
+
+  it('lista troncata (101 dichiarati, 100 restituiti): rifiuto, mai docs-only presunto', () => {
+    const cento = Array.from({ length: 100 }, (_, i) => ({ path: `docs/pagina-${i}.md` }));
+    const d = decideGitHubMerge('553', finta({ changedFiles: 101, files: cento }, [run('collegamenti')]));
+    expect(no(d)).toContain('100');
+    expect(no(decideGitHubMerge('553', finta({ changedFiles: 101, files: cento }, [run('collegamenti')])))).toContain(
+      'npm run merge -- 553',
+    );
+  });
+
+  it('changedFiles assente: rifiuto, la completezza non si presume', () => {
+    const senza = { ...info({ changedFiles: 1, files: [{ path: 'docs/piano.md' }] }) };
+    delete (senza as Record<string, unknown>).changedFiles;
+    const d = decideGitHubMerge('553', (args: string[]) => {
+      if (args[0] === 'pr') return senza;
+      if (args[0] === 'repo') return 'muffin-project/muffin-agent';
+      return { check_runs: [run('collegamenti')] };
+    });
+    expect(no(d)).toContain('npm run merge -- 553');
+  });
+
+  it('il percorso FAST+DEEP ordinario non dipende dai file: lista illeggibile ma verde pieno', () => {
+    const d = decideGitHubMerge('553', finta({ changedFiles: undefined, files: null }, [run('verifica'), run('accettazione')]));
+    expect(d.ok).toBe(true);
+  });
+
+  it('docs + codice senza verifica: rifiuto, e nomina il path fuori insieme', () => {
+    const d = decideGitHubMerge(
+      '553',
+      finta(
+        { changedFiles: 2, files: [{ path: 'docs/piano.md' }, { path: 'core/policy/gate.ts' }] },
+        [run('collegamenti')],
+      ),
+    );
+    expect(no(d)).toContain('core/policy/gate.ts');
+  });
+
+  it('file cambiati illeggibili: rifiuto fail-closed, mai inferenza', () => {
+    const d = decideGitHubMerge('553', finta({ changedFiles: 1, files: null }, [run('collegamenti')]));
+    expect(no(d)).toContain('npm run merge -- 553');
+  });
+
+  it('un sidecar rosso blocca anche con FAST+DEEP verdi', () => {
+    const d = decideGitHubMerge(
+      '553',
+      finta(
+        { files: [{ path: '.claude/hooks/g.mjs' }] },
+        [run('verifica'), run('accettazione'), run('strumenti', 'completed', 'failure')],
+      ),
+    );
+    expect(no(d)).toContain('strumenti');
   });
 
   it('una risposta non-oggetto non fa mai passare: fail-closed, non crash', () => {
