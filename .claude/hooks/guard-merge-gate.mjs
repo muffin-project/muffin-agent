@@ -51,7 +51,9 @@
  * (`docs/**`, `.claude/**`, `README.md`, `AGENTS.md`, `CLAUDE.md`) e che i
  * check leggeri che ci sono (es. `collegamenti`) siano verdi. L'assenza di un
  * check non e' evidenza del perche' manca: file illeggibili o incompleti
- * ricadono sulla porta locale.
+ * ricadono sulla porta locale — e "completi" e' provato, non presunto
+ * (`files.length === changedFiles`, per il troncamento silenzioso oltre 100
+ * voci di `gh pr view --json files`).
  *
  * Tutto il resto — rete giu', PR non OPEN o bozza, base mossa, zero check,
  * check in corso o rossi, DEEP mancante o skippato su PR di codice — ricade
@@ -113,7 +115,7 @@ const defaultQuery = (args) => ghJson(args);
 export function decideGitHubMerge(pr, query = defaultQuery) {
   let info;
   try {
-    info = query(['pr', 'view', pr, '--json', 'number,state,isDraft,baseRefName,headRefOid,mergeable,mergeStateStatus,files']);
+    info = query(['pr', 'view', pr, '--json', 'number,state,isDraft,baseRefName,headRefOid,mergeable,mergeStateStatus,changedFiles,files']);
   } catch {
     return { ok: false, message: localGateMessage(pr) };
   }
@@ -204,12 +206,19 @@ export function decideGitHubMerge(pr, query = defaultQuery) {
   // manca, quindi si leggono i path cambiati veri e si pretende che OGNI file
   // stia nell'insieme esentato di `ci.yml`. File illeggibili, incompleti o
   // fuori insieme — anche uno solo — chiudono la porta GitHub.
+  //
+  // Sulla completezza, senza scorciatoie: `gh pr view --json files` tronca
+  // silenziosamente oltre 100 voci (bug upstream aperto), quindi la lista da
+  // sola non prova niente. Si chiede anche `changedFiles` e l'eccezione vale
+  // solo se `files.length === changedFiles`: conteggio diverso, assente o
+  // illeggibile chiude la porta, senza paginazione eroica.
   const files = info.files;
-  if (!Array.isArray(files)) {
+  const attesi = info.changedFiles;
+  if (!Array.isArray(files) || typeof attesi !== 'number' || files.length !== attesi) {
     return {
       ok: false,
       message: [
-        `PR #${pr}: manca il successo ${mancanti.join(' + ')} sulla head e i file cambiati non sono leggibili.`,
+        `PR #${pr}: manca il successo ${mancanti.join(' + ')} sulla head e la lista file non e' completa e verificabile (restituiti ${Array.isArray(files) ? files.length : '?'}, dichiarati ${typeof attesi === 'number' ? attesi : '?'}).`,
         `Senza evidenza vale la porta locale:`,
         `  npm run merge -- ${pr}`,
       ].join('\n'),
@@ -232,7 +241,7 @@ export function decideGitHubMerge(pr, query = defaultQuery) {
   }
   return {
     ok: true,
-    note: `GitHub verde docs-only su ${String(info.headRefOid).slice(0, 10)} (${files.length} file tutti nell'insieme esentato di ci.yml, check leggeri verdi) — merge via GitHub (two-tier gate, BRANCHING.md sezione «Slice -> dev»).`,
+    note: `GitHub verde docs-only su ${String(info.headRefOid).slice(0, 10)} (${files.length}/${attesi} file, tutti nell'insieme esentato di ci.yml, check leggeri verdi) — merge via GitHub (two-tier gate, BRANCHING.md sezione «Slice -> dev»).`,
   };
 }
 
