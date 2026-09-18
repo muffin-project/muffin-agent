@@ -2,7 +2,7 @@ import DatabaseCtor from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir, userInfo } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -543,6 +543,52 @@ describe('doctor on the systemd backend (D2/D3)', () => {
     expect(missing?.level).toBe('warn');
     expect(missing?.detail).toContain('secret://tavily_api_key');
     expect(missing?.remedy).toContain('--force');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('unknown presence with a live gateway reads in use, not missing', async () => {
+    // After a reboot systemd secures the store to 0700: an unprivileged
+    // presence check can neither confirm nor deny. A live service proves
+    // materialisation (PID 1 refuses to start the process otherwise), so the
+    // row is ok — not a false red, and not silence either.
+    if (process.getuid?.() === 0) return;
+    const dir = systemdHome();
+    const store = join(dir, 'credstore');
+    mkdirSync(store, { recursive: true });
+    chmodSync(store, 0o000);
+    try {
+      const db = new DatabaseCtor(paths(dir).db);
+      db.exec(
+        `CREATE TABLE IF NOT EXISTS gateway_lock (id INTEGER PRIMARY KEY CHECK (id = 1), pid INTEGER, taken_at TEXT, since TEXT, status TEXT)`,
+      );
+      db.prepare(`INSERT INTO gateway_lock (id, pid, taken_at, since, status) VALUES (1, ?, ?, ?, 'in attesa')`).run(
+        process.pid,
+        new Date().toISOString(),
+        new Date().toISOString(),
+      );
+      db.close();
+      const key = await check(dir, 'api key');
+      expect(key?.level).toBe('ok');
+      expect(key?.detail).toContain('in uso');
+    } finally {
+      chmodSync(store, 0o755);
+    }
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('unknown presence with no gateway warns bounded, never fails', async () => {
+    if (process.getuid?.() === 0) return;
+    const dir = systemdHome();
+    const store = join(dir, 'credstore');
+    mkdirSync(store, { recursive: true });
+    chmodSync(store, 0o000);
+    try {
+      const key = await check(dir, 'api key');
+      expect(key?.level).toBe('warn');
+      expect(key?.remedy).toMatch(/start|sudo ls/);
+    } finally {
+      chmodSync(store, 0o755);
+    }
     rmSync(dir, { recursive: true, force: true });
   });
 });

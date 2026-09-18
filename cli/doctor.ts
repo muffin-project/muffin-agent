@@ -23,7 +23,7 @@ import { makeEmbedder, OllamaEmbedder, type Embedder } from '../core/memory/embe
 import { quantiNonIndicizzati } from '../core/memory/vectors.js';
 import { readOpenContradictions } from '../core/memory/maintenance.js';
 import { CREDSTORE_ENCRYPTED_DIR, loadConfig, locateSecretAll, paths, readSecret, secretsBackend, secretDir, ConfigError, type Config } from '../core/config/config.js';
-import { listLegacySecretNames, requiredSecretRefs, secretExists } from '../core/config/systemd.js';
+import { listLegacySecretNames, requiredSecretRefs, secretPresence } from '../core/config/systemd.js';
 import { describeWorkspace } from '../core/config/workspace.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { diagnoseDefaultsDrift, type DefaultDrift } from '../core/config/defaults-drift.js';
@@ -496,9 +496,16 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
   // backend this process runs outside the service and must not hold the host
   // key, so presence is ciphertext existence — and emptiness is refused at
   // provisioning time, which is what makes presence imply usable.
+  //
+  // One case cannot be decided here: after a reboot systemd secures the store
+  // to 0700 and an unprivileged presence check is `unknown` (proven live, not
+  // assumed). That row is emitted after the gateway section below, where a
+  // live service proves materialisation and a dead one bounds the warning.
+  let deferredApiKeyUnknown: string | null = null;
   if (secretsBackend(home) === 'systemd') {
     ok('segreti', `backend systemd — encrypted credentials in ${CREDSTORE_ENCRYPTED_DIR}, mai in file`);
-    if (secretExists(config.provider.apiKeyRef, home)) {
+    const presence = secretPresence(config.provider.apiKeyRef, home);
+    if (presence === 'present') {
       const shadows = locateSecretAll(config.provider.apiKeyRef, home);
       if (shadows.length > 0) {
         fail(
@@ -509,12 +516,14 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
       } else {
         ok('api key', `${config.provider.apiKeyRef} provisionato (systemd encrypted credential), mai stampata`);
       }
-    } else {
+    } else if (presence === 'absent') {
       fail(
         'api key',
         `${config.provider.apiKeyRef} non provisionato come systemd credential`,
         `provisiona: \`muffin secret set --systemd <nome>\`; poi riavvia: \`sudo systemctl restart muffin-gateway.service\``,
       );
+    } else {
+      deferredApiKeyUnknown = config.provider.apiKeyRef;
     }
     const legacy = listLegacySecretNames(home);
     if (legacy.length > 0) {
@@ -524,7 +533,10 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
         '`muffin secret migrate --yes`, oppure cancellale a mano',
       );
     }
-    const missing = requiredSecretRefs(home).filter((r) => !secretExists(r, home));
+    // Only verified absence warns: `unknown` (boot-secured store) is not a
+    // missing credential, and crying wolf on every post-boot doctor would
+    // teach the owner to ignore the row that matters.
+    const missing = requiredSecretRefs(home).filter((r) => secretPresence(r, home) === 'absent');
     if (missing.length > 0) {
       warn(
         'segreti (mancanti)',
@@ -1133,8 +1145,33 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
     } else {
       warn('supervisore', supervisor.detail, supervisor.remedy);
     }
+    // Deferred from the secrets section: an `unknown` provider-key presence
+    // (boot-secured store) is decided by liveness. A live service proves
+    // materialisation — PID 1 refuses to start the process otherwise — and a
+    // dead one bounds the warning to what is actually unknown.
+    if (deferredApiKeyUnknown !== null) {
+      if (gateway !== null) {
+        ok(
+          'api key',
+          `${deferredApiKeyUnknown} in uso (servizio attivo — lo store è blindato al boot, la presenza non è verificabile da qui)`,
+        );
+      } else {
+        warn(
+          'api key',
+          `${deferredApiKeyUnknown}: presenza non verificabile (store blindato al boot, servizio spento)`,
+          'avvia il servizio (se il blob manca davvero fallisce ad alta voce), oppure verifica da root: sudo ls /etc/credstore.encrypted/',
+        );
+      }
+    }
     db.close();
   } catch (error) {
+    if (deferredApiKeyUnknown !== null) {
+      warn(
+        'api key',
+        `${deferredApiKeyUnknown}: presenza non verificabile e database illeggibile`,
+        'sistema prima il database, poi rileggi questa riga',
+      );
+    }
     fail('database', String(error), 'run `muffin init` to create it');
   }
 

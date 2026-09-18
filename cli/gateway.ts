@@ -14,7 +14,7 @@ import { makeLaneRunner, NO_SURFACE, type AttachStream, type LaneDeliver } from 
 import { TurnLane, type LaneEvent } from '../core/turns/lane.js';
 import { ModelLane } from '../core/turns/model-lane.js';
 import { ConfigError, paths, secretsBackend } from '../core/config/config.js';
-import { requiredSecretRefs, secretExists } from '../core/config/systemd.js';
+import { requiredSecretRefs, secretPresence } from '../core/config/systemd.js';
 import { GatewayLock, readGateway, type GatewayInfo } from '../core/gateway/lock.js';
 import { askRaw, CONTROL_PROTOCOL, serveControlSocket, type ControlServer } from '../core/gateway/control-socket.js';
 import type { ExecutionQuery } from '../core/gateway/forward.js';
@@ -589,18 +589,18 @@ export async function cmdGatewayInstall(
     // the dedicated user by contract, so this is that user.
     ...(installPlatform === 'linux' ? { serviceUser: deps.identity?.user ?? userInfo().username } : {}),
     // Credential lines only when this Home is explicitly on the systemd
-    // backend — and only for names actually provisioned. A line for a blob
-    // that does not exist fails the service at activation (243) for a file
-    // that was never the problem; required-but-unprovisioned names are
-    // doctor's drift warning, not unit lines. requiredSecretRefs never throws
-    // (an unreadable config contributes no names), so print-before-init stays
-    // plannable.
+    // backend — and never for verified-absent names (a line for a blob that
+    // provably does not exist fails the service at activation for nothing).
+    // `unknown` (boot-secured store) follows config intent: activation
+    // enforces reality (243), and doctor watches the drift. requiredSecretRefs
+    // never throws (an unreadable config contributes no names), so
+    // print-before-init stays plannable.
     ...(installPlatform === 'linux' && secretsBackend(home) === 'systemd'
       ? {
           credentials: requiredSecretRefs(home)
             .filter((r) => {
               try {
-                return secretExists(r, home);
+                return secretPresence(r, home) !== 'absent';
               } catch {
                 return false;
               }

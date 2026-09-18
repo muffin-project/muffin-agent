@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -18,6 +18,7 @@ import {
   provisionSystemdSecret,
   requiredSecretRefs,
   secretExists,
+  secretPresence,
   storeSecret,
   type ProvisionRunner,
 } from './systemd.js';
@@ -142,6 +143,26 @@ describe('secretExists asks presence, never value', () => {
     mkdirSync(dirname(blob), { recursive: true });
     writeFileSync(blob, 'BLOB');
     expect(secretExists(ref, dir)).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('systemd backend: an unreadable store is unknown, and unknown reads present', () => {
+    // systemd secures /etc/credstore.encrypted to 0700 at boot: collapsing
+    // that into "absent" would unprovision healthy installs on every reboot
+    // (measured live). Skipped for root, which reads through any mode.
+    if (typeof process.getuid === 'function' && process.getuid() === 0) return;
+    const dir = home();
+    const ref = providerRef(dir);
+    flipToSystemd(dir);
+    const store = join(dir, 'credstore');
+    mkdirSync(store, { recursive: true });
+    chmodSync(store, 0o000);
+    try {
+      expect(secretPresence(ref, dir)).toBe('unknown');
+      expect(secretExists(ref, dir)).toBe(true);
+    } finally {
+      chmodSync(store, 0o755);
+    }
     rmSync(dir, { recursive: true, force: true });
   });
 });

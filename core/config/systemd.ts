@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, rmSync } from 'node:fs';
+import { readdirSync, rmSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import {
   ConfigError,
@@ -41,11 +41,37 @@ const realRunner: ProvisionRunner = (argv, input) => {
  * Presence without value — the only question `doctor`, `surface list` and
  * pairing pre-checks may ask. Under the systemd backend this is ciphertext
  * existence, which proves provisioning, never content.
+ *
+ * Tri-state, and the third state is load-bearing: systemd secures
+ * `/etc/credstore.encrypted` to 0700 at boot, so after every reboot an
+ * unprivileged process can neither confirm nor deny a blob. Collapsing that
+ * into "absent" would unprovision healthy installs (unit lines dropped,
+ * doctor red) on every boot — measured live. `unknown` callers decide
+ * explicitly: unit lines follow config intent (activation enforces),
+ * liveness proves use, and only verified absence is a hard no.
+ */
+export type SecretPresence = 'present' | 'absent' | 'unknown';
+
+export function secretPresence(ref: string, home = muffinHome()): SecretPresence {
+  const name = requireSecretRef(ref);
+  if (secretsBackend(home) !== 'systemd') return locateSecret(ref, home) !== null ? 'present' : 'absent';
+  try {
+    return statSync(credstoreEncryptedPath(name)).isFile() ? 'present' : 'absent';
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return 'absent';
+    return 'unknown';
+  }
+}
+
+/**
+ * Boolean presence for display/pre-check call sites (`surface list`,
+ * search status). `unknown` reads as present: post-boot healthy installs
+ * must display healthy, and activation (243) plus doctor enforce reality.
+ * Callers that decide anything structural use `secretPresence` instead.
  */
 export function secretExists(ref: string, home = muffinHome()): boolean {
-  const name = requireSecretRef(ref);
-  if (secretsBackend(home) === 'systemd') return existsSync(credstoreEncryptedPath(name));
-  return locateSecret(ref, home) !== null;
+  return secretPresence(ref, home) !== 'absent';
 }
 
 /**
