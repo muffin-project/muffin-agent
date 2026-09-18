@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -1115,4 +1115,45 @@ describe('fs_edit reaches the kernel as fs.edit, with undo behind it', () => {
     const entry = journal.read(result.turnId);
     expect(entry?.snapshots.length).toBeGreaterThan(0);
   });
+});
+
+describe('la corsia light riporta i tentativi fisici nelle tracce (#496)', () => {
+  it('una richiesta leggera fallita lascia comunque gli span dei tentativi', async () => {
+    // Nessuna rete: la porta 9 su loopback rifiuta subito, e il rifiuto è un
+    // fallimento di trasporto deterministico — la corsia esaurisce i retry e
+    // la richiesta fallisce, ma ogni tentativo partito deve aver lasciato la
+    // sua traccia (precedente: nessuna prova dei tentativi leggeri da nessuna
+    // parte, né in caso di successo fuori dalla spesa, né in caso di fallimento).
+    const home = mkdtempSync(join(tmpdir(), 'muffin-light-attempts-'));
+    runInit({ home, apiKey: 'sk-never-called' });
+    const current = loadConfig(home);
+    saveConfig(
+      { ...current, provider: { ...current.provider, kind: 'openai-compat', baseUrl: 'http://127.0.0.1:9' } },
+      home,
+    );
+    const runtime = buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-light-attempts-ws-')));
+    await expect(
+      runtime.light.provider.chat({
+        model: 'test-light',
+        system: [],
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'x' }] }],
+        maxOutputTokens: 10,
+        stream: false,
+      }),
+    ).rejects.toThrow();
+    const dir = join(home, 'traces');
+    const tentativi = readdirSync(dir)
+      .filter((f) => f.endsWith('.jsonl'))
+      .flatMap((f) => readFileSync(join(dir, f), 'utf8').split('\n'))
+      .filter((l) => l.trim() !== '')
+      .map((l) => JSON.parse(l) as { name: string; attributes: Record<string, unknown> })
+      .filter((s) => s.name === 'muffin.light.attempt');
+    expect(tentativi.length).toBeGreaterThanOrEqual(1);
+    expect(tentativi[0]?.attributes['muffin.light.attempt']).toBe(1);
+    expect(tentativi[0]?.attributes['gen_ai.request.model']).toBe('test-light');
+    // Una sola richiesta logica: tutti gli span condividono il suo id.
+    const richieste = new Set(tentativi.map((s) => s.attributes['muffin.light.request_id']));
+    expect(richieste.size).toBe(1);
+    expect([...richieste][0]).toBeDefined();
+  }, 60_000);
 });
