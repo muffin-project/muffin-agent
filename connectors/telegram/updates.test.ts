@@ -1,6 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import { UpdateInbox } from './updates.js';
+import { scrubStub, UpdateInbox } from './updates.js';
 
 /**
  * The property under test is the one that loses data when it is wrong, and it
@@ -247,5 +247,121 @@ describe('UpdateInbox — additive schema evolution', () => {
     expect(relation.workId).toBe('turn-old');
     expect(relation.compositionId).not.toBe('turn-old');
     expect(box.bind(5, 'turn-new')).toBe('turn-old');
+  });
+});
+
+describe('UpdateInbox.scrubSettledPayload — the body retires, the evidence stays', () => {
+  const raw = (id: number) => JSON.stringify({ update_id: id, message: { text: 'ciao' } });
+
+  it('a pending update keeps its payload', () => {
+    const box = inbox();
+    box.accept([{ update_id: 10, message: { text: 'ciao' } } as never], NOW);
+    expect(box.scrubSettledPayload(10)).toBe(0);
+    expect(JSON.parse(box.get(10)!.payload)).toMatchObject({ update_id: 10 });
+    expect(box.pending().map((u) => u.updateId)).toEqual([10]);
+  });
+
+  it('a failed update keeps its payload for retry', () => {
+    const box = inbox();
+    box.accept([{ update_id: 10 }], NOW);
+    box.bind(10, 'turn-a');
+    box.markFailed(10, 'provider 500');
+    expect(box.scrubSettledPayload(10)).toBe(0);
+    expect(box.get(10)!.payload).toBe(JSON.stringify({ update_id: 10 }));
+    expect(box.pending().map((u) => u.updateId)).toEqual([10]);
+  });
+
+  it('nothing is scrubbed before settlement: processed-but-unsettled rows keep their body', () => {
+    const box = inbox();
+    box.accept([{ update_id: 10 }], NOW);
+    // Pairing / command / gated-out shape: processed, never settled.
+    box.markProcessed(10, NOW);
+    expect(box.scrubSettledPayload(10)).toBe(0);
+    expect(box.get(10)!.payload).toBe(JSON.stringify({ update_id: 10 }));
+  });
+
+  it('a settled crash-window row (settled, still pending) keeps its payload', () => {
+    const box = inbox();
+    box.accept([{ update_id: 10 }], NOW);
+    box.bind(10, 'turn-a');
+    box.settle(10, NOW);
+    // markProcessed has not run yet: still pending, still needed.
+    expect(box.pending().map((u) => u.updateId)).toEqual([10]);
+    expect(box.scrubSettledPayload(10)).toBe(0);
+    expect(box.get(10)!.payload).toBe(JSON.stringify({ update_id: 10 }));
+  });
+
+  it('settled AND processed: the body becomes a self-identifying stub, everything else stays', () => {
+    const box = inbox();
+    box.accept([{ update_id: 10, message: { text: 'ciao 🧁' } } as never], NOW);
+    box.bind(10, 'turn-a');
+    box.settle(10, NOW);
+    box.markProcessed(10, NOW);
+    expect(box.scrubSettledPayload(10)).toBe(1);
+    const row = box.get(10)!;
+    expect(row.payload).toBe(scrubStub(10));
+    expect(JSON.parse(row.payload)).toEqual({ scrubbed: true, update_id: 10 });
+    expect(row.payload).not.toContain('ciao');
+    // Id / timestamps / composition / work binding / offset evidence untouched.
+    expect(row.updateId).toBe(10);
+    expect(row.receivedAt).toBe(NOW);
+    expect(row.settledAt).toBe(NOW);
+    expect(row.turnId).toBe('turn-a');
+    expect(box.compositionOf(10)?.workId).toBe('turn-a');
+    expect(box.nextOffset()).toBe(11);
+    expect(box.pending()).toHaveLength(0);
+    // Idempotent.
+    expect(box.scrubSettledPayload(10)).toBe(0);
+  });
+
+  it('a sealed composition scrubs as one unit; unsealed siblings are left alone', () => {
+    const box = inbox();
+    box.accept([{ update_id: 10 }, { update_id: 11 }, { update_id: 12 }], NOW);
+    box.include(10, 'album:77');
+    box.include(11, 'album:77');
+    box.bind(10, 'turn-a');
+    for (const id of [10, 11, 12]) {
+      box.settle(id, NOW);
+      box.markProcessed(id, NOW);
+    }
+    expect(box.scrubSettledPayload(10)).toBe(2);
+    expect(box.get(10)!.payload).toBe(scrubStub(10));
+    expect(box.get(11)!.payload).toBe(scrubStub(11));
+    // 12 was never composed with the album: its own call scrubs only itself.
+    expect(box.get(12)!.payload).toBe(JSON.stringify({ update_id: 12 }));
+    expect(box.scrubSettledPayload(12)).toBe(1);
+  });
+
+  it('restart recovery stays correct across a scrub: offset, binding, idempotency', () => {
+    const db = new DatabaseCtor(':memory:');
+    const first = new UpdateInbox(db);
+    first.accept([{ update_id: 10, message: { text: 'ciao' } } as never], NOW);
+    first.bind(10, 'turn-a');
+    first.settle(10, NOW);
+    first.markProcessed(10, NOW);
+    expect(first.scrubSettledPayload(10)).toBe(1);
+
+    const afterRestart = new UpdateInbox(db);
+    expect(afterRestart.pending()).toHaveLength(0);
+    expect(afterRestart.nextOffset()).toBe(11);
+    expect(afterRestart.get(10)?.turnId).toBe('turn-a');
+    expect(afterRestart.get(10)?.settledAt).toBe(NOW);
+    // A redelivery after the scrub is absorbed by id and processed state,
+    // never by re-reading the body.
+    const again = afterRestart.accept([{ update_id: 10, message: { text: 'ciao' } } as never], NOW);
+    expect(again).toEqual({ stored: 0, duplicates: 1, accepted: [] });
+    expect(afterRestart.pending()).toHaveLength(0);
+  });
+
+  it('stays distinct from discard(): settled-retired vs consumed-without-running', () => {
+    const box = inbox();
+    box.accept([{ update_id: 10 }, { update_id: 11 }], NOW);
+    box.discard(10, NOW);
+    box.bind(11, 'turn-a');
+    box.settle(11, NOW);
+    box.markProcessed(11, NOW);
+    expect(box.scrubSettledPayload(11)).toBe(1);
+    expect(box.get(10)!.payload).toBe('{}');
+    expect(box.get(11)!.payload).toBe(scrubStub(11));
   });
 });
