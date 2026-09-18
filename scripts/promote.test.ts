@@ -90,22 +90,38 @@ describe('decidePromotion', () => {
     }
   });
 
-  it('docs-only senza verifica: via libera solo con allowlist e check leggeri verdi', () => {
+  it('docs-only senza verifica: via libera solo con allowlist e conteggio provato', () => {
     const v = decidi(
-      { pr: pr({ files: [{ path: 'docs/piano.md' }, { path: '.claude/x.mjs' }, 'README.md'] }) },
+      {
+        pr: pr({
+          changedFiles: 3,
+          files: [{ path: 'docs/piano.md' }, { path: '.claude/x.mjs' }, 'README.md'],
+        }),
+      },
       [run('collegamenti')],
     );
     expect(v.ok).toBe(true);
   });
 
+  it('lista troncata (101 dichiarati, 100 restituiti): rifiuto', () => {
+    const cento = Array.from({ length: 100 }, (_, i) => ({ path: `docs/pagina-${i}.md` }));
+    const v = no(decidi({ pr: pr({ changedFiles: 101, files: cento }) }, [run('collegamenti')]));
+    expect(v).toContain('100');
+  });
+
   it('misto docs+codice senza verifica: rifiuto che nomina il path', () => {
     const v = no(
-      decidi({ pr: pr({ files: [{ path: 'docs/piano.md' }, { path: 'core/x.ts' }] }) }, [run('collegamenti')]),
+      decidi(
+        { pr: pr({ changedFiles: 2, files: [{ path: 'docs/piano.md' }, { path: 'core/x.ts' }] }) },
+        [run('collegamenti')],
+      ),
     );
     expect(v).toContain('core/x.ts');
   });
 
   it('file illeggibili con DEEP mancante: rifiuto fail-closed', () => {
-    expect(no(decidi({ pr: pr({ files: null }) }, [run('collegamenti')]))).toContain('non sono leggibili');
+    expect(no(decidi({ pr: pr({ changedFiles: 1, files: null }) }, [run('collegamenti')]))).toContain(
+      "non e' completa",
+    );
   });
 });
