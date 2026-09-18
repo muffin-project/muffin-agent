@@ -35,7 +35,7 @@ const finto = (over: Partial<InspectSources> = {}): InspectSources => ({
     checks: [{ name: 'vector index', level: 'ok', detail: 'in sync' }],
     exitCode: 0,
   }),
-  turns: () => ({ total: 3, waiting: { count: 1, oldestWakeAt: null }, undeliverable: { count: 0 }, interrupted: [] }),
+  turns: () => ({ total: 3, waiting: { count: 1, oldestWakeAt: null }, continuable: { count: 0, oldest: null }, undeliverable: { count: 0 }, interrupted: [] }),
   jobs: () => [],
   capabilityGaps: [],
   ...over,

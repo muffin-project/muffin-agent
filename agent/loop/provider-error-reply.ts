@@ -1,4 +1,5 @@
 import type { Message, ProviderError } from '../providers/types.js';
+import { harnessMessage } from './message-origin.js';
 
 /** Internal record marker: lets recovery distinguish this terminal reply from partial model output. */
 const RECOVERY_MARKER = '[MUFFIN_PROVIDER_ERROR_REPLY_V1]\n';
@@ -15,7 +16,7 @@ export function providerErrorReply(error: ProviderError): string {
 }
 
 export function markProviderErrorReplyForRecovery(text: string): Message {
-  return { role: 'assistant', content: [{ type: 'text', text: `${RECOVERY_MARKER}${text}` }] };
+  return harnessMessage('assistant', [{ type: 'text', text: `${RECOVERY_MARKER}${text}` }]);
 }
 
 /** Return only the explicitly marked terminal reply, never an earlier partial assistant round. */

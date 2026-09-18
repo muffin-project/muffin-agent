@@ -2,7 +2,6 @@ import { recall, recallTaint, renderForPrompt } from '../../core/memory/recall.j
 import { memoryWriteCapability } from '../../core/policy/doors.js';
 import type { CapabilityId, Decision, DecisionRequest } from '../../core/policy/types.js';
 import type { SessionRef } from '../../core/session/store.js';
-import { isSensitiveResourceName } from '../../core/tracing/redact.js';
 import type { SpanHandle } from '../../core/tracing/types.js';
 import { ATTR } from '../../core/tracing/types.js';
 import type { TurnRecord } from '../../core/turns/store.js';
@@ -15,6 +14,8 @@ import { type ContentBlock, type Message, ProviderError } from '../providers/typ
 import { buildContext, userAudios, userImages } from './context.js';
 import { announceEnd, checkpoint, closeRecord, finish, reconcile } from './durability.js';
 import { ExecutionBudget } from './execution-budget.js';
+import { harnessMessage } from './message-origin.js';
+import { echoContentFor } from './sensitive-echo.js';
 import { makeSnapshot } from './permissions.js';
 import { markProviderErrorReplyForRecovery, providerErrorReply } from './provider-error-reply.js';
 import { type RoundScope, runRounds } from './round.js';
@@ -310,28 +311,20 @@ export async function guidaIlTurno(
   };
 
   /**
-   * Tool names whose single argument (`path` or `url`) names one resource
-   * and whose successful result *is* that resource's content — as opposed to
-   * `fs_write` (same `path` shape, opposite direction: nothing to echo from
-   * an argument the tool never reads back) or `fs_search`/`web_search` (many
-   * results, no single resource this call named).
+   * The live half of the echo protection: whatever this lease reads from a
+   * secret-flavoured name is collected so the answering round can scrub it.
+   *
+   * *When*, not *what*: the classification is the single shared predicate in
+   * `agent/loop/sensitive-echo.ts` (also read by the durable rehydration), so
+   * the two can never disagree. A repaired call reads a resource exactly like
+   * a fresh one does, so a repair must feed the same sink.
    */
-  const RESOURCE_READ_TOOLS = new Set(['fs_read', 'http_get', 'document_read', 'skill_read']);
   const noteSensitiveResourceEcho = (
     call: { name: string; args: unknown },
     outcome: ContentBlock,
   ): void => {
-    if (!RESOURCE_READ_TOOLS.has(call.name)) return;
-    if (outcome.type !== 'tool_result' || outcome.isError) return;
-    const args = (call.args ?? {}) as Record<string, unknown>;
-    const resourceId =
-      typeof args.path === 'string'
-        ? args.path
-        : typeof args.url === 'string'
-          ? args.url
-          : undefined;
-    if (resourceId === undefined || !isSensitiveResourceName(resourceId)) return;
-    if (typeof outcome.content === 'string') run.sensitiveResourceEchoes.push(outcome.content);
+    const echo = echoContentFor(call.name, call.args, outcome);
+    if (echo !== undefined) run.sensitiveResourceEchoes.push(echo);
   };
 
   // What this turn is shown, decided from who is speaking and where — never
@@ -630,10 +623,12 @@ export async function guidaIlTurno(
           ? 'event'
           : 'timer';
       turn.setAttributes({ 'muffin.turn.woken_by': why });
-      run.messages.push({
-        role: 'user',
-        content: [{ type: 'text', text: wakeReport(waitFor, why) }],
-      });
+      // Harness control (a transition report for this resume), not owner
+      // words: a continuation to a new lease archives it instead of replaying
+      // it — the approved work it refers to already completed.
+      run.messages.push(
+        harnessMessage('user', [{ type: 'text', text: wakeReport(waitFor, why) }]),
+      );
     }
   }
 

@@ -1,6 +1,7 @@
 import type { TurnCounters, TurnRecord } from '../../core/turns/store.js';
 import type { WaitSpec } from '../../core/turns/wait.js';
 import type { Message } from '../providers/types.js';
+import { rehydrateSensitiveEchoes } from './echo-rehydrate.js';
 import { spendeIlBudget } from './permissions.js';
 
 /**
@@ -124,7 +125,21 @@ export class TurnRun {
 
   readonly #resumes: number;
 
-  constructor(record: TurnRecord, ripresa: { resumed: boolean; wokenFromWait: boolean }) {
+  /**
+   * Whether this drive is an owner-granted continuation to a new execution
+   * lease (P0-B) rather than a crash/wait resume of the current one.
+   *
+   * A continuation needs the same transcript repair as a resume (`reconcile`)
+   * but must NOT spend the crash-recovery budget (`MAX_RESUMES` guards a
+   * process that keeps dying, not an owner who keeps asking). The flag
+   * travels beside `resumed`/`wokenFromWait` for exactly that one distinction.
+   */
+  readonly continued: boolean;
+
+  constructor(
+    record: TurnRecord,
+    ripresa: { resumed: boolean; wokenFromWait: boolean; continued?: boolean },
+  ) {
     this.iterations = record.counters.iterations;
     this.recoveriesUsed = record.counters.recoveriesUsed;
     this.transportRetriesLeft = record.counters.transportRetriesLeft;
@@ -135,7 +150,14 @@ export class TurnRun {
     this.activeModelMs = Math.max(0, record.counters.activeModelMs ?? 0);
     this.usage = { ...record.counters.usage };
     this.messages = [...record.messages];
-    this.#resumes = record.counters.resumes + (spendeIlBudget(ripresa.resumed, ripresa.wokenFromWait) ? 1 : 0);
+    // Deterministic replay of the live echo collector over durable pairs —
+    // without this, any resume (crash or continuation) silently drops the
+    // scrub protection for secrets this turn already read. No second copy is
+    // persisted; the transcript is the source.
+    this.sensitiveResourceEchoes.push(...rehydrateSensitiveEchoes(this.messages));
+    this.continued = ripresa.continued === true;
+    this.#resumes =
+      record.counters.resumes + (this.continued || !spendeIlBudget(ripresa.resumed, ripresa.wokenFromWait) ? 0 : 1);
   }
 
   /**

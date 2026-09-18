@@ -1,12 +1,14 @@
 import type { PermissionSnapshot } from '../../core/policy/types.js';
 import { ATTR, type SpanHandle } from '../../core/tracing/types.js';
-import type { TurnOutcome, TurnRecord } from '../../core/turns/store.js';
+import type { DeliveryState, TurnOutcome, TurnRecord } from '../../core/turns/store.js';
 import { encodeWaitFor, type WaitSpec } from '../../core/turns/wait.js';
 import type { ContentBlock, Message } from '../providers/types.js';
+import { harnessMessage, splitWorkEvidence } from './message-origin.js';
 import type { TurnRun } from './run-state.js';
 import { runTool } from './tool-call.js';
 import {
   ApprovalRequired,
+  MAX_TRANSPORT_RETRIES,
   type LoopDeps,
   type RegisteredTool,
   type ToolContext,
@@ -332,6 +334,35 @@ export async function reconcile(scope: TurnScope): Promise<TurnResult | null> {
 }
 
 /**
+ * The current lease's audit close, for terminal finishes (P0-B authority).
+ *
+ * `contextBuilt` gating lives with the callers: only a lease that started
+ * executing folds anything into lifetime. Transport spent assumes the lease
+ * allowance starts at MAX_TRANSPORT_RETRIES — true for fresh rows
+ * (`freshCounters` in `entry.ts`) and enforced for granted leases by
+ * `grantContinuation`. Delivery is the row's snapshot at close time (best
+ * effort: the send usually lands after the finish, via the port's own
+ * bookkeeping).
+ */
+function closeLeasePatch(
+  deps: LoopDeps,
+  record: TurnRecord,
+  state: { messages: readonly Message[]; transportRetriesLeft: number },
+): {
+  startedAt: string;
+  harnessMessages: Message[];
+  transportUsed: number;
+  delivery: DeliveryState | null;
+} {
+  return {
+    startedAt: deps.turns.leaseStartedAt(record.id, record.leaseIndex) ?? record.createdAt,
+    harnessMessages: splitWorkEvidence(state.messages).harness,
+    transportUsed: Math.max(0, MAX_TRANSPORT_RETRIES - state.transportRetriesLeft),
+    delivery: record.delivery,
+  };
+}
+
+/**
  * The single write that ends the row. Same exception-swallow, same reason,
  * one caveat — and, since P19, a second return path that is not swallowed.
  *
@@ -347,6 +378,12 @@ export function closeRecord(scope: TurnScope, outcome: TurnOutcome): boolean {
       record.id,
       { outcome, messages: run.messages, taint: snapshot.currentTaint(), counters: run.counters() },
       record.claimToken,
+      // A terminal finish folds the current lease into lifetime exactly when
+      // it started executing (`contextBuilt` is "this turn has already
+      // started", per `resumeTurn`): a lease that never got going folds
+      // nothing and counts nothing. Same transaction as the finish itself —
+      // the audit never depends on a second write landing later.
+      ...(run.contextBuilt ? [closeLeasePatch(deps, record, run)] : []),
     );
   } catch (error) {
     // The caveat: unlike a checkpoint, nothing comes after this one. The row
@@ -465,15 +502,26 @@ export function closeRow(
     // anywhere else: `changes === 0`, nothing overwritten, and there is
     // nothing further this function needs to do about it — the refusal it
     // reports to its own caller does not depend on this write having landed.
+    // The refusal report joins the transcript first, so the lease archive
+    // below sees the same array the row keeps — including the report itself
+    // (harness-marked, so it archives as control, not as model output).
+    const closed = [...record.messages, harnessMessage('assistant', [{ type: 'text', text: detail }])];
     deps.turns.finish(
       record.id,
       {
         outcome,
-        messages: [...record.messages, { role: 'assistant', content: [{ type: 'text', text: detail }] }],
+        // Harness control (a refusal report, not model output): marked so no
+        // future reader mistakes it for something the model said.
+        messages: closed,
         taint: record.taint,
         counters: record.counters,
       },
       record.claimToken,
+      // A refused resume can still close a lease that ran: same started-lease
+      // rule as `closeRecord`, read off the row instead of a live run.
+      ...(record.counters.contextBuilt
+        ? [closeLeasePatch(deps, record, { messages: closed, transportRetriesLeft: record.counters.transportRetriesLeft })]
+        : []),
     );
   } catch (error) {
     span.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
