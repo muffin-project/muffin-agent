@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_LIGHT_TRANSPORT_RETRIES } from '../loop/types.js';
 import { CONSERVATIVE, DEFAULT_EXECUTION, loadProfiles, selectProfile, type Profile } from '../profiles/profile.js';
-import { lightLane, type LightSpend } from './light-lane.js';
+import { lightLane, LightRequestDeadlineError, type LightSpend } from './light-lane.js';
 import { ProviderError, type ChatCall, type ChatResult, type Provider } from './types.js';
 
 /**
@@ -314,10 +314,16 @@ describe('la lifetime logica della richiesta leggera (#497)', () => {
       () => null,
       (e: unknown) => e,
     );
-    expect(errore).toBeInstanceOf(ProviderError);
+    // Una scadenza di esecuzione di Muffin, non un fallimento del provider:
+    // distinguibile per programma da transport/output, mai retryable, mai
+    // confusa con l'abort del chiamante. Se la scadenza tornasse a essere un
+    // ProviderError, entrambe le asserzioni di istanza fallirebbero.
+    expect(errore).toBeInstanceOf(LightRequestDeadlineError);
+    expect(errore).not.toBeInstanceOf(ProviderError);
+    expect((errore as LightRequestDeadlineError).reason).toBe('light_request_deadline');
     // Non riclassificato come fallimento di trasporto: nessun chiamante deve
     // ripetere una richiesta la cui lifetime è già finita.
-    expect((errore as ProviderError).retryable).toBe(false);
+    expect((errore as LightRequestDeadlineError).retryable).toBe(false);
   });
 
   it("l'abort del chiamante vince subito, senza aspettare la finestra", async () => {
@@ -349,5 +355,11 @@ describe('la lifetime logica della richiesta leggera (#497)', () => {
     await attesaLarga;
     expect(stretta.tentativi()).toBe(1);
     expect(larga.tentativi()).toBe(2);
+    const erroreStretta = await pStretta.then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(erroreStretta).toBeInstanceOf(LightRequestDeadlineError);
+    expect(erroreStretta).not.toBeInstanceOf(ProviderError);
   });
 });

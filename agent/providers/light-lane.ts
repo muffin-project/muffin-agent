@@ -71,6 +71,26 @@ export type LightLaneOptions = {
 };
 
 /**
+ * A Muffin-owned logical execution deadline, not a provider failure.
+ *
+ * Deliberately NOT a `ProviderError`: `ProviderError.source` only knows
+ * provider-originated failures (`transport`/`output`), and a runtime-owned
+ * deadline belongs to neither — widening that union would let a local
+ * lifetime masquerade as something the provider did. Structural
+ * `retryable: false` (not a retryable transport failure for any caller to
+ * repeat) plus a stable `reason` for programmatic distinction; caller abort
+ * keeps flowing through the provider-abort shape, never through here.
+ */
+export class LightRequestDeadlineError extends Error {
+  readonly reason = 'light_request_deadline' as const;
+  readonly retryable = false as const;
+  constructor(readonly deadlineMs: number) {
+    super(`light request exceeded its ${deadlineMs}ms deadline without a usable reply`);
+    this.name = 'LightRequestDeadlineError';
+  }
+}
+
+/**
  * One logical light-lane request with Muffin — not an SDK — owning retry.
  *
  * `ProviderError.source === 'output'` is deliberately excluded even when the
@@ -90,8 +110,8 @@ export type LightLaneOptions = {
  * request would silently change its meaning. The bound is independent from
  * main by construction: it is read from this lane's profile, never the main
  * one, with no shared governor and no lane mutex. A Retry-After longer than
- * the remaining request lifetime wakes at the lifetime and throws a
- * non-retryable deadline error — never another provider attempt, and never a
+ * the remaining request lifetime wakes at the lifetime and throws
+ * `LightRequestDeadlineError` — never another provider attempt, and never a
  * retryable transport failure for the caller to repeat.
  */
 async function chatWithTransportRetries(
@@ -106,8 +126,8 @@ async function chatWithTransportRetries(
   timer.unref?.();
   const requestSignal =
     call.signal === undefined ? deadline.signal : AbortSignal.any([call.signal, deadline.signal]);
-  const deadlineExceeded = (): ProviderError =>
-    new ProviderError(`light request exceeded its ${requestDeadlineMs}ms deadline without a usable reply`, false);
+  const deadlineExceeded = (): LightRequestDeadlineError =>
+    new LightRequestDeadlineError(requestDeadlineMs);
   try {
     let retriesLeft = MAX_LIGHT_TRANSPORT_RETRIES;
     while (true) {
