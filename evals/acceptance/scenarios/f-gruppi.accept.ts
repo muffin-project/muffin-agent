@@ -453,13 +453,16 @@ describe('acceptance · F5 · un link copiato non è un link composto, anche in 
   );
 });
 
-describe('acceptance · F6 · ricordare senza rispondere', () => {
+describe('acceptance · F6 · osservatore spento: non indirizzato non lascia niente', () => {
   /**
-   * PR #425, `ricordaSenzaRispondere` nel ramo chiuso di `drain()`
-   * (`connectors/telegram/connector.ts`). `ricordare-senza-rispondere.test.ts`
-   * prova il ramo in-process; qui il messaggio entra dal gateway vero e la
-   * prova è la riga in `episodes` del tenant del gruppo — senza turno, senza
-   * chiamata al provider, senza risposta.
+   * PRE-21 PILOT — observer-off (owner decision, 2026-09-18). PR #425's
+   * `ricordaSenzaRispondere` proved here that a gated-out group message still
+   * became a group-tenant episode; that product rule is reversed for the
+   * pilot: nothing unaddressed is persisted merely because Telegram delivered
+   * it. `ricordare-senza-rispondere.test.ts` proves the branch in-process;
+   * here the message enters through the real gateway and the proof is the
+   * sealed native row — settled, processed, body retired — with zero
+   * episodes, zero turns, zero provider calls, zero replies.
    */
   scenario(
     'F6',
@@ -487,13 +490,14 @@ describe('acceptance · F6 · ricordare senza rispondere', () => {
               text: FRASE,
             },
           });
-          // La prova positiva: l'episodio compare. Il tetto è generoso perché
-          // il polling del finto Bot API è a 200ms e il drain scrive subito.
+          // La prova terminale: la riga nativa e' sigillata. Il tetto è
+          // generoso perché il polling del finto Bot API è a 200ms e il
+          // sigillo atterra subito dopo il rifiuto del gate.
           await until(
             () =>
               inst.db(
                 (db) =>
-                  (db.prepare(`SELECT COUNT(*) AS n FROM episodes WHERE tenant_id = ? AND content LIKE ?`).get(`group:telegram:${GROUP}`, `%criceto%`) as {
+                  (db.prepare(`SELECT COUNT(*) AS n FROM telegram_updates WHERE settled_at IS NOT NULL AND payload LIKE '%\"scrubbed\":true%'`).get() as {
                     n: number;
                   }).n > 0,
               ),
@@ -504,17 +508,28 @@ describe('acceptance · F6 · ricordare senza rispondere', () => {
           await gw.stop();
         }
 
-        const ep = inst.db(
+        const riga = inst.db(
           (db) =>
             db
-              .prepare(`SELECT tenant_id, connector, thread_key, role, trust_tier, turn_id FROM episodes WHERE tenant_id = ? AND content LIKE ?`)
-              .all(`group:telegram:${GROUP}`, `%criceto%`) as Array<Record<string, unknown>>,
+              .prepare(`SELECT update_id, received_at, processed_at, settled_at, payload FROM telegram_updates ORDER BY update_id DESC LIMIT 1`)
+              .get() as Record<string, unknown>,
         );
-        if (ep.length !== 1) throw new Error(`atteso un episodio del gruppo, visti ${ep.length}: ${JSON.stringify(ep)}`);
-        const riga = ep[0]!;
-        if (riga['role'] !== 'user' || riga['turn_id'] !== null || riga['thread_key'] !== `telegram:${GROUP}` || riga['connector'] !== 'telegram') {
-          throw new Error(`l'episodio non ha la forma attesa (user, senza turno, sessione del gruppo): ${JSON.stringify(riga)}`);
+        if (riga['settled_at'] == null || riga['processed_at'] == null) {
+          throw new Error(`la riga ignorata non e' terminale (settled+processed): ${JSON.stringify(riga)}`);
         }
+        if (typeof riga['payload'] !== 'string' || riga['payload'].includes('criceto')) {
+          throw new Error(`il corpo umano e' ancora nella riga nativa: ${JSON.stringify(riga)}`);
+        }
+        if (JSON.parse(riga['payload'] as string).update_id !== riga['update_id']) {
+          throw new Error(`lo stub non identifica la sua riga: ${JSON.stringify(riga)}`);
+        }
+        const pendenti = inst.db(
+          (db) => db.prepare(`SELECT COUNT(*) AS n FROM telegram_updates WHERE processed_at IS NULL`).get() as { n: number },
+        );
+        if (pendenti.n !== 0) throw new Error(`atteso niente di pendente, viste ${pendenti.n} righe`);
+
+        const ep = inst.db((db) => db.prepare(`SELECT COUNT(*) AS n FROM episodes`).get() as { n: number });
+        if (ep.n !== 0) throw new Error(`un messaggio non indirizzato ha scritto ${ep.n} episodi`);
         if (inst.provider.main().length !== 0) {
           throw new Error(`il provider è stato chiamato per un messaggio non indirizzato: ${inst.provider.main().length} volte`);
         }
