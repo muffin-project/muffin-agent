@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_LIGHT_TRANSPORT_RETRIES } from '../loop/types.js';
-import { CONSERVATIVE, loadProfiles, selectProfile } from '../profiles/profile.js';
+import { CONSERVATIVE, DEFAULT_EXECUTION, loadProfiles, selectProfile, type Profile } from '../profiles/profile.js';
 import { lightLane, type LightSpend } from './light-lane.js';
 import { ProviderError, type ChatCall, type ChatResult, type Provider } from './types.js';
 
@@ -212,7 +212,11 @@ describe('sampling, which no profile edit could reach', () => {
     const bare = call();
     delete bare.temperature;
     await lightLane(inner, { profile: frontier }).chat(bare);
-    expect(inner.seen[0]).toEqual(bare);
+    // The lane attaches its logical-request signal to every attempt (#497);
+    // that is the deadline owner's business, not sampling's: compare the
+    // payload without it.
+    const { signal: _segnale, ...visto } = inner.seen[0] ?? {};
+    expect(visto).toEqual(bare);
   });
 });
 
@@ -248,5 +252,102 @@ describe('honoring the provider-declared wait', () => {
     // sotto carico l'attesa cresce, mai il contrario.
     expect(Date.now() - started).toBeGreaterThanOrEqual(300);
     expect(attempts).toBe(2);
+  });
+});
+
+/** Profilo leggero con sola lifetime logica della richiesta da `ms`. */
+function corsiaConLifetime(ms: number): Profile {
+  return { ...CONSERVATIVE, execution: { ...DEFAULT_EXECUTION, turnWallDeadlineMs: ms } };
+}
+
+function fallisciUnaVoltaPoi(messaggio: string, retryAfterMs: number, dopo: () => ChatResult) {
+  let tentativi = 0;
+  const inner = {
+    kind: 'openai-compat',
+    chat: async () => {
+      tentativi += 1;
+      if (tentativi === 1) throw new ProviderError(messaggio, true, 429, 'transport', retryAfterMs);
+      return dopo();
+    },
+    tentativi: () => tentativi,
+  } as unknown as Provider & { tentativi: () => number };
+  return inner;
+}
+
+/**
+ * La richiesta logica leggera ha una lifetime propria (#497): presa dalla
+ * `execution` del profilo leggero — mai da quello main, mai da un governatore
+ * condiviso, mai dalla ModelLane (questi test costruiscono la corsia sopra un
+ * finto diretto, senza nient'altro).
+ */
+describe('la lifetime logica della richiesta leggera (#497)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('Retry-After sotto la lifetime: ritenta e risponde', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const inner = fallisciUnaVoltaPoi('429 lento', 300, ok);
+    const lane = lightLane(inner, { profile: corsiaConLifetime(5000) });
+    const promessa = lane.chat(call());
+    const attesa = expect(promessa).resolves.toMatchObject({ text: 'ok' });
+    await vi.advanceTimersByTimeAsync(2000);
+    await attesa;
+    expect(inner.tentativi()).toBe(2);
+  });
+
+  it('Retry-After oltre la lifetime: nessun secondo tentativo, errore non-retryable', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const inner = fallisciUnaVoltaPoi('429 lungo', 10_000, ok);
+    const lane = lightLane(inner, { profile: corsiaConLifetime(300) });
+    const promessa = lane.chat(call());
+    const attesa = expect(promessa).rejects.toThrow(/deadline/);
+    // Oltre la finestra intera: senza lifetime il secondo tentativo
+    // partirebbe qui e la promessa si risolverebbe invece di rigettare.
+    await vi.advanceTimersByTimeAsync(15_000);
+    await attesa;
+    expect(inner.tentativi()).toBe(1);
+    const errore = await promessa.then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(errore).toBeInstanceOf(ProviderError);
+    // Non riclassificato come fallimento di trasporto: nessun chiamante deve
+    // ripetere una richiesta la cui lifetime è già finita.
+    expect((errore as ProviderError).retryable).toBe(false);
+  });
+
+  it("l'abort del chiamante vince subito, senza aspettare la finestra", async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const controller = new AbortController();
+    const inner = fallisciUnaVoltaPoi('429 lento', 5000, ok);
+    const lane = lightLane(inner, { profile: corsiaConLifetime(60_000) });
+    const promessa = lane.chat(call({ signal: controller.signal }));
+    const attesa = expect(promessa).rejects.toThrow();
+    await vi.advanceTimersByTimeAsync(50);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(50);
+    await attesa;
+    expect(inner.tentativi()).toBe(1);
+  });
+
+  it('profili leggeri diversi, limiti diversi — indipendente dal main', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const stretta = fallisciUnaVoltaPoi('429 lungo', 5000, ok);
+    const larga = fallisciUnaVoltaPoi('429 lungo', 5000, ok);
+    const laneStretta = lightLane(stretta, { profile: corsiaConLifetime(200) });
+    const laneLarga = lightLane(larga, { profile: corsiaConLifetime(60_000) });
+    const pStretta = laneStretta.chat(call());
+    const pLarga = laneLarga.chat(call());
+    const attesaStretta = expect(pStretta).rejects.toThrow(/deadline/);
+    const attesaLarga = expect(pLarga).resolves.toMatchObject({ text: 'ok' });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await attesaStretta;
+    await attesaLarga;
+    expect(stretta.tentativi()).toBe(1);
+    expect(larga.tentativi()).toBe(2);
   });
 });
