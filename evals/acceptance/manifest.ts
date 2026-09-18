@@ -647,7 +647,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   ),
   verde(
     'F6',
-    'remember without replying: a group message that opens no turn still becomes an episode of the group tenant — no provider call, no reply, no turn',
+    'observer-off (pre-21 pilot): a group message that opens no turn leaves zero episodes, turns, provider calls and replies — the native row ends sealed (settled+processed, body retired)',
   ),
   verde(
     'F7',
