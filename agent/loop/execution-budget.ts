@@ -27,6 +27,12 @@ export type ModelCallTelemetry = {
   normalDeadlineMs: number;
   effectiveDeadlineMs: number;
   effectiveDeadlineSource: 'model_deadline' | 'turn_deadline' | 'active_model_budget_exhausted';
+  /** First real provider activity, when any arrived (#497 residue). */
+  firstActivityAt?: number;
+  /** `firstActivityAt - startedAt`: time to first provider byte. */
+  ttftMs?: number;
+  /** Most recent real provider activity, `startedAt` when none arrived yet. */
+  lastActivityAt?: number;
 };
 
 export type ExecutionBudgetOptions = {
@@ -127,6 +133,10 @@ export class ExecutionBudget {
         normalDeadlineMs: this.config.modelCallDeadlineMs,
         effectiveDeadlineMs: deadline,
         effectiveDeadlineSource,
+        ...(firstActivityAt === undefined
+          ? {}
+          : { firstActivityAt, ttftMs: Math.max(0, firstActivityAt - startedAt) }),
+        lastActivityAt,
       };
     };
 

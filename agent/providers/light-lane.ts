@@ -68,6 +68,24 @@ export type LightLaneOptions = {
    * caps are decorative, which is what `doctor` reports.
    */
   record?: ((entry: LightSpend) => void) | undefined;
+  /**
+   * Fires synchronously as each physical attempt starts (#496): 1-based
+   * within the logical request, with the model the attempt actually asks
+   * for. Attempts that start are reported even when the logical request
+   * ultimately fails — success-only spend accounting cannot carry that —
+   * and an attempt that never starts (deadline won the wait first) is
+   * correctly absent. Optional like `record`; a lane nobody listens to
+   * still retries exactly the same way.
+   */
+  onAttempt?: ((attempt: LightAttemptReport) => void) | undefined;
+};
+
+/** One physical attempt beginning inside a logical light request. */
+export type LightAttemptReport = {
+  /** 1-based physical attempt number within this logical request. */
+  attempt: number;
+  /** The model id this attempt asks for. */
+  model: string;
 };
 
 /**
@@ -118,6 +136,7 @@ async function chatWithTransportRetries(
   inner: Provider,
   call: ChatCall,
   requestDeadlineMs: number,
+  onAttempt?: ((attempt: LightAttemptReport) => void) | undefined,
 ): Promise<ChatResult> {
   const deadline = new AbortController();
   const timer = setTimeout(() => deadline.abort('light_request_deadline'), requestDeadlineMs);
@@ -130,8 +149,11 @@ async function chatWithTransportRetries(
     new LightRequestDeadlineError(requestDeadlineMs);
   try {
     let retriesLeft = MAX_LIGHT_TRANSPORT_RETRIES;
+    let attempt = 0;
     while (true) {
       try {
+        attempt += 1;
+        onAttempt?.({ attempt, model: call.model });
         return await inner.chat({ ...call, signal: requestSignal });
       } catch (error) {
         // A deadline-aborted attempt is not a transport failure and not a
@@ -147,13 +169,13 @@ async function chatWithTransportRetries(
           throw error;
         }
         retriesLeft -= 1;
-        const attempt = MAX_LIGHT_TRANSPORT_RETRIES - retriesLeft;
+        const backoffAttempt = MAX_LIGHT_TRANSPORT_RETRIES - retriesLeft;
         // Come la corsia main (`round.ts`): una finestra `Retry-After`
         // dichiarata dal provider allunga l'attesa oltre il backoff cieco
         // quando è più lunga (#496). Stessa semantica, tetto diverso (qui:
         // la lifetime logica della richiesta, non il muro del turno —
         // questa corsia non entra in quella gabbia).
-        await sleep(Math.max(retryDelayMs(attempt), error.retryAfterMs ?? 0), requestSignal);
+        await sleep(Math.max(retryDelayMs(backoffAttempt), error.retryAfterMs ?? 0), requestSignal);
         if (call.signal?.aborted) throw error;
         if (deadline.signal.aborted) throw deadlineExceeded();
       }
@@ -181,7 +203,12 @@ export function lightLane(inner: Provider, options: LightLaneOptions): Provider 
   return {
     kind: inner.kind,
     async chat(call: ChatCall): Promise<ChatResult> {
-      const result = await chatWithTransportRetries(inner, sampled(call, options.profile), requestDeadlineMs);
+      const result = await chatWithTransportRetries(
+        inner,
+        sampled(call, options.profile),
+        requestDeadlineMs,
+        options.onAttempt,
+      );
       // Billed after the logical call returns, like the loop: retries are one
       // request outcome, not three charges invented from failures whose usage
       // the provider never returned.

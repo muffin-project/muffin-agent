@@ -56,7 +56,7 @@ import {
 import type { Approver, LoopDeps, RegisteredTool, SpendEntry, TurnRuntimeInfo } from './loop.js';
 import { loadProfiles, selectProfile, withThinking } from './profiles/profile.js';
 import { AnthropicProvider } from './providers/anthropic.js';
-import { lightLane } from './providers/light-lane.js';
+import { lightLane, type LightAttemptReport } from './providers/light-lane.js';
 import { OpenAICompatProvider } from './providers/openai-compat.js';
 import type { Provider } from './providers/types.js';
 import {
@@ -629,6 +629,19 @@ export function buildRuntime(
    * binding — never a copy — so the swap is atomic per call. In-flight calls
    * keep the old wrapper, which is the safe direction.
    */
+  /**
+   * Physical light attempts as point spans (#496): one per attempt that
+   * starts, including attempts of requests that ultimately fail — the count
+   * success-only spend accounting cannot carry. Start and end coincide
+   * because the lane reports beginnings; the count IS the number of spans.
+   */
+  const reportLightAttempt = (attempt: LightAttemptReport): void => {
+    const span = tracer.start('muffin.light.attempt', {
+      'gen_ai.request.model': attempt.model,
+      'muffin.light.attempt': attempt.attempt,
+    });
+    span.end();
+  };
   let light = lightLane(provider, {
     profile: selectProfile(config.models.light, profiles),
     record: (entry) =>
@@ -640,6 +653,7 @@ export function buildRuntime(
         },
         lightBaseUrl,
       ),
+    onAttempt: reportLightAttempt,
   });
   const lightInfo: { provider: Provider; model: string } = { provider: light, model: config.models.light };
 
@@ -1209,6 +1223,7 @@ export function buildRuntime(
           },
           lightBaseUrl,
         ),
+      onAttempt: reportLightAttempt,
     });
     recallDeps.reranker = new LlmReranker(light, persisted.models.light);
     lightInfo.provider = light;

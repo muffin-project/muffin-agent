@@ -179,3 +179,36 @@ describe('ExecutionBudget activity watchdogs', () => {
     tie.close();
   });
 });
+
+describe('ExecutionBudget call-activity telemetry (#497)', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('reports first activity, ttft and last activity from the owned clocks', async () => {
+    vi.useFakeTimers();
+    const budget = new ExecutionBudget({ modelCallDeadlineMs: 1000, turnWallDeadlineMs: 5000, firstActivityTimeoutMs: 100, stallTimeoutMs: 100 });
+    const lease = budget.beginModelCall();
+    await vi.advanceTimersByTimeAsync(12);
+    lease.activity('text');
+    await vi.advanceTimersByTimeAsync(8);
+    lease.activity('tool_call');
+    const telemetry = lease.telemetry();
+    expect(telemetry.firstActivityAt).toBe(telemetry.startedAt + 12);
+    expect(telemetry.ttftMs).toBe(12);
+    expect(telemetry.lastActivityAt).toBe(telemetry.startedAt + 20);
+    lease.release();
+    budget.close();
+  });
+
+  it('leaves first-activity fields absent when the provider never spoke', async () => {
+    vi.useFakeTimers();
+    const budget = new ExecutionBudget({ modelCallDeadlineMs: 1000, turnWallDeadlineMs: 5000, firstActivityTimeoutMs: 100, stallTimeoutMs: 100 });
+    const lease = budget.beginModelCall();
+    await vi.advanceTimersByTimeAsync(10);
+    const telemetry = lease.telemetry();
+    expect(telemetry.firstActivityAt).toBeUndefined();
+    expect(telemetry.ttftMs).toBeUndefined();
+    expect(telemetry.lastActivityAt).toBe(telemetry.startedAt);
+    lease.release();
+    budget.close();
+  });
+});
