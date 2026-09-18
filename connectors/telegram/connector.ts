@@ -385,24 +385,24 @@ export function apreUnTurno(i: {
   readonly testo: string | undefined;
   readonly citato?: { readonly da: 'muffin' | 'chi-scrive' | 'altri' } | undefined;
   readonly meUsername?: string | undefined;
-  /** L'update porta un allegato (documento, media, posizione). */
+  /**
+   * L'update porta un allegato (documento, media, posizione). Fatto del filo,
+   * conservato per il futuro disegno del contesto passivo di stanza — per il
+   * pilota observer-off NON apre niente da solo (vedi sotto).
+   */
   readonly haAllegato?: boolean | undefined;
 }): boolean {
   if (i.isPrivate) return true;
-  // 0. Un allegato apre sempre, e non e' un'eccezione di comodo.
-  //
-  //    Una riga di conversazione fra persone non e' rivolta a Muffin; un file
-  //    lasciato in una stanza lo e' abbastanza spesso, ed e' un atto
-  //    deliberato con un costo, non rumore. Ma la ragione decisiva e' un'altra:
-  //    scartare l'update qui significa che il documento non viene **indicizzato**
-  //    — e «i dati che entrano non si perdono in silenzio» e' una regola dura di
-  //    questo progetto, che ha gia' pagato «zero documenti indicizzati, da
-  //    sempre» per un filtro che sembrava innocuo.
-  //
-  //    Il costo e' un turno per file. Se un giorno diventa troppo, la risposta
-  //    non e' scartare: e' indicizzare senza aprire un turno — il «ricordare
-  //    senza rispondere» che resta il seguito aperto di ADR-0063.
-  if (i.haAllegato === true) return true;
+  // PRE-21 PILOT — nessun «un allegato apre sempre» (owner decision,
+  // 2026-09-18): nei gruppi l'osservazione passiva e' OFF, e un file o una
+  // posizione lasciati in stanza non sono un indirizzo. Fino al pilota
+  // questa regola apriva un turno per non perdere il documento («i dati che
+  // entrano non si perdono in silenzio»); quel comportamento appartiene al
+  // futuro disegno del contesto passivo di stanza, non al pilota. Un allegato
+  // apre quando e' indirizzato come qualunque altro messaggio — reply a
+  // Muffin, @menzione (anche in didascalia: il chiamante passa la didascalia
+  // come `testo`, vedi `ganci()`), comando — e lo dicono le tre regole sotto,
+  // non questa.
   const testo = i.testo ?? '';
   // 1. Un comando. `/x` e `/x@nomebot` — la seconda forma e' quella che
   //    Telegram consegna quando in un gruppo ci sono piu' bot.
@@ -1778,6 +1778,16 @@ export class TelegramConnector {
     }
   }
 
+  /** Seal a gate refusal, tolerant of a database that closed out from under a drain running past `stop()`'s budget. */
+  private sealIgnoredQuietly(updateId: number, log: (line: string) => void): void {
+    try {
+      this.deps.inbox.sealIgnored(updateId, this.now());
+    } catch (error) {
+      if (!this.stopping) throw error;
+      log(`telegram: update ${updateId} interrotto dallo spegnimento — resta da elaborare al prossimo avvio`);
+    }
+  }
+
   /**
    * The one place this connector enters the shared ingress path.
    *
@@ -1841,12 +1851,15 @@ export class TelegramConnector {
     }
     // Il gate di gruppo (ADR-0063). Marcato elaborato, non lasciato pendente:
     // un update che non apre un turno non lo aprirà mai, e una coda che non si
-    // svuota nasconde quelli che contano.
+    // svuota nasconde quelli che contano. Con l'osservatore spento il rifiuto
+    // e' anche sigillato (`sealIgnored`): stato terminale con il corpo ritirato,
+    // mai una copia durevole del contenuto umano — vedi
+    // `PASSIVE_GROUP_OBSERVATION_ENABLED`.
     if (esito.kind === 'ignored') {
       if (incoming.isPrivate && principalFor(incoming, this.deps.config.ownerUserId).principal.kind !== 'owner') {
         this.discardPrivateDM(stored.updateId, log);
       } else {
-        this.markProcessedQuietly(stored.updateId, log);
+        this.sealIgnoredQuietly(stored.updateId, log);
       }
     }
     // `queued` (in pausa) non scrive niente e non fa settle, ed è esattamente
@@ -1915,7 +1928,12 @@ export class TelegramConnector {
         (!incoming.isPrivate || ctx.identity.principal.kind === 'owner') &&
         apreUnTurno({
           isPrivate: incoming.isPrivate,
-          testo: 'text' in incoming ? incoming.text : undefined,
+          // Il testo proprio del mittente, in ordine di preferenza: la riga
+          // scritta, poi la didascalia che ha messo lui sul file — mai il
+          // contenuto di un inoltro (parole di qualcun altro portate qui:
+          // consegna, non indirizzo — ADR-0046 §2), che resta in
+          // `incoming.forwarded` e non arriva mai a questa domanda.
+          testo: incoming.text !== '' ? incoming.text : incoming.caption,
           citato: incoming.citato,
           haAllegato: 'attachment' in incoming || 'posizione' in incoming,
           meUsername: this.meUsername,
