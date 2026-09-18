@@ -832,9 +832,12 @@ describe('muffin gateway install', () => {
 
   it('writes nothing unless asked, then writes exactly what it printed', () => {
     const dir = home();
-    const printed = muffin(dir, ['gateway', 'install']).out;
+    // The Linux system unit never lands in /etc from a test (see
+    // MUFFIN_SYSTEM_DIR above); the print path needs no hook.
+    const sysenv = process.platform === 'linux' ? { MUFFIN_SYSTEM_DIR: join(dir, 'systemd-system') } : {};
+    const printed = muffin(dir, ['gateway', 'install'], '', sysenv).out;
 
-    const written = muffin(dir, ['gateway', 'install', '--write']);
+    const written = muffin(dir, ['gateway', 'install', '--write'], '', sysenv);
     const path = /scritto (.+)/.exec(written.err)?.[1];
     expect(path).toBeTruthy();
     expect(readFileSync(path!, 'utf8')).toBe(printed);
@@ -845,17 +848,18 @@ describe('muffin gateway install', () => {
     // Environment line). Regenerating over the top would eat the edit silently
     // and the owner would find out at the next restart.
     const dir = home();
-    const path = /scritto (.+)/.exec(muffin(dir, ['gateway', 'install', '--write']).err)?.[1];
+    const sysenv = process.platform === 'linux' ? { MUFFIN_SYSTEM_DIR: join(dir, 'systemd-system') } : {};
+    const path = /scritto (.+)/.exec(muffin(dir, ['gateway', 'install', '--write'], '', sysenv).err)?.[1];
     expect(path).toBeTruthy();
     writeFileSync(path!, '# mio\n');
 
-    const again = muffin(dir, ['gateway', 'install', '--write']);
+    const again = muffin(dir, ['gateway', 'install', '--write'], '', sysenv);
     // 2, the "I did not do it" code — distinct from the 1 the command returns
     // when it wrote the unit but had a caveat about ExecStart.
     expect(again.code).toBe(2);
     expect(readFileSync(path!, 'utf8')).toBe('# mio\n');
 
-    const forced = muffin(dir, ['gateway', 'install', '--write', '--force']);
+    const forced = muffin(dir, ['gateway', 'install', '--write', '--force'], '', sysenv);
     expect(forced.code).not.toBe(2);
     expect(readFileSync(path!, 'utf8')).not.toBe('# mio\n');
   });
