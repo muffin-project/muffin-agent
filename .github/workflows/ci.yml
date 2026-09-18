@@ -83,7 +83,15 @@
 name: verifica
 
 on:
+  # Tipi espliciti, e `ready_for_review` non e' decorativo. Di default un
+  # evento `pull_request` crea un run solo su `opened`, `synchronize` e
+  # `reopened` (docs GitHub, "events that trigger workflows"): senza la riga
+  # `types:` qui sotto, il passaggio draft → ready non farebbe partire niente
+  # e qualunque `if:` sul job `accettazione` che menziona lo stato draft non
+  # verrebbe mai valutato su quella transizione. `labeled` resta fuori di
+  # proposito: scatterebbe su ogni etichetta e comprerebbe solo rumore.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths-ignore:
       - 'docs/**'
       - '.claude/**'
@@ -228,12 +236,30 @@ jobs:
   accettazione:
     runs-on: ubuntu-latest
     needs: verifica
-    # Il filtro che `accettazione.yml` aveva sul trigger, diventato condizione:
-    # su `pull_request` solo verso `dev`/`main` (una PR verso un'altra base non
-    # paga l'accettazione); su push a `main` e su dispatch manuale sempre.
+    # Il filtro che `accettazione.yml` aveva sul trigger, diventato condizione,
+    # piu' il gate draft (repo privato finche' non e' pubblico): su `pull_request`
+    # solo verso `dev`/`main` (una PR verso un'altra base non paga
+    # l'accettazione) e solo a PR non-bozza; su push a `main` e su dispatch
+    # manuale sempre.
+    #
+    # L'ordine conta e non e' stile: `github.event.pull_request` esiste solo
+    # sugli eventi `pull_request`, quindi il discriminante `event_name` viene
+    # per primo — la forma inversa leggerebbe `draft` su un payload
+    # (`workflow_dispatch`, `push`) che non ce l'ha.
+    #
+    # Il contratto degli eventi, verificato su run veri (non dedotto dallo YAML):
+    # push su bozza → FAST verde, DEEP skippato; `ready_for_review` (tipo
+    # esplicito nel trigger sopra: di default non creerebbe alcun run) → un run
+    # nuovo dove DEEP esegue; push successivi a PR pronta → FAST + DEEP;
+    # `workflow_dispatch` e push a `main` → DEEP sempre (il secondo finche' non
+    # esiste un gate reale pre-promozione: e' la prima esecuzione della CI sul
+    # commit promosso, vedi docs/BRANCHING.md).
     if: >-
       github.event_name != 'pull_request' ||
-      contains(fromJSON('["dev", "main"]'), github.base_ref)
+      (
+        github.event.pull_request.draft == false &&
+        contains(fromJSON('["dev", "main"]'), github.base_ref)
+      )
     # **Venti, e la ragione è che questo tetto ha già sbagliato due volte.**
     #
     # Il 02/09/2026 era cinque: la suite chiudeva a 5:03, tre PR verdi sono
