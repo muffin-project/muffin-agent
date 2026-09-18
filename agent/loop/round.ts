@@ -176,8 +176,12 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     if (deps.budgetExhausted(input.tenant)) {
       return finish(scope, 'budget', 'Budget esaurito: mi fermo prima di spendere altro.');
     }
+    // An abort discovered here — e.g. the owner stopped during a retry wait,
+    // which wakes and `continue`s into this guard — is a user stop with a
+    // typed reason, not a silent one: the mid-call door below already reports
+    // `user_stop`, and the two doors must agree (#497).
     if (input.signal?.aborted) {
-      return finish(scope, 'aborted', 'Interrotto.');
+      return finish(scope, 'aborted', 'Interrotto.', 'user_stop');
     }
     if (execution.expired()) {
       return finish(scope, 'error', 'Il turno ha raggiunto il limite di tempo.', 'turn_deadline');
@@ -461,18 +465,28 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
           // retries still owed; it cannot reset the counter and loop forever.
           if (!checkpoint(scope)) return finish(scope, 'error', '');
           // Full jitter keeps concurrent turns from retrying in lockstep. The
-          // ceiling doubles from 500ms to two minutes, bounded by the turn's
-          // wall/model budget and spend governor.
+          // ceiling doubles from 500ms to two minutes.
           //
           // A provider-declared `Retry-After` wins over the blind backoff
           // when it is longer (#496): retrying inside the server's own
           // window burns attempts against a bucket that has not refilled —
           // the deadlock Hermes hit on rate-limited Anthropic accounts. The
           // window is parsed and capped at the adapter boundary
-          // (`parseRetryAfterMs`); here it only ever lengthens the wait, and
-          // the turn's wall/model budget still bounds it from outside.
+          // (`parseRetryAfterMs`); here it only ever lengthens the wait.
+          //
+          // The wait is turn-wall time, not model-active time (#497): the
+          // failed lease already released — its active-model accounting
+          // stopped there — and no new lease exists yet, so the wait must
+          // neither consume `activeModelMs` nor inherit the old lease's
+          // deadline. It ends on user cancellation OR the turn deadline,
+          // whichever comes first: a Retry-After longer than the remaining
+          // wall wakes at the wall, and the loop-top `execution.expired()`
+          // guard then finishes `turn_deadline` before any new provider
+          // attempt is built. The wait itself is never a transport failure
+          // eligible for another retry.
           const attempt = MAX_TRANSPORT_RETRIES - run.transportRetriesLeft;
-          await sleep(Math.max(retryDelayMs(attempt), error.retryAfterMs ?? 0), input.signal);
+          const waitSignals = input.signal === undefined ? [execution.signal] : [input.signal, execution.signal];
+          await sleep(Math.max(retryDelayMs(attempt), error.retryAfterMs ?? 0), AbortSignal.any(waitSignals));
           continue;
         }
       }
