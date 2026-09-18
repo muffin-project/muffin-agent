@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import type { Message } from '../../agent/providers/types.js';
 import { HARD_STALE_MULTIPLIER } from '../lock/durable.js';
 import type { Principal } from '../policy/types.js';
-import { TURN_STALE_AFTER_MS, TurnStore, describeInterrupted, foldLifetime, readTurnHealth, type NewTurn } from './store.js';
+import { TURN_STALE_AFTER_MS, TurnStore, describeInterrupted, readTurnHealth, type NewTurn, type TurnCounters } from './store.js';
 
 /**
  * The row, and the four things it exists to hold that nothing else can.
@@ -475,7 +475,7 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     return s.releaseContinuable(id, { messages: rec.messages, taint: rec.taint, counters: rec.counters, reason }, rec.claimToken);
   };
 
-  const grantIt = (s: TurnStore, id = 'turn-1') => {
+  const grantIt = (s: TurnStore, id = 'turn-1', fresh?: TurnCounters) => {
     const rec = s.get(id);
     if (rec === null) throw new Error('no row');
     return s.grantContinuation(
@@ -483,20 +483,21 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
       {
         messages: [...rec.messages, { role: 'user', content: [{ type: 'text', text: 'riprendi' }] }],
         taint: rec.taint,
-        counters: { ...rec.counters, recoveriesUsed: 0, transportRetriesLeft: 10, toolCallsMade: 0 },
-        // The caller folds with the shared arithmetic — the store persists,
-        // never computes. `foldLifetime` is that arithmetic.
-        lifetime: foldLifetime(rec.lifetime, rec.counters, 3),
-        leaseIndex: 1,
-        prevLease: {
-          index: 0,
-          startedAt: rec.createdAt,
-          endedAt: '2026-09-18T17:14:09.000Z',
-          outcome: 'provider_empty',
-          harnessMessages: [],
-          counters: rec.counters,
-          transportUsed: 3,
-          delivery: rec.delivery,
+        // Fresh lease-local capacity. iterations and resumes ride along
+        // unchanged: iterations stays cumulative, resumes is the crash-loop
+        // bound, not a lease allowance (see the reset-contract test below).
+        // contextBuilt stays true: the preamble ran in lease 0 and never
+        // re-runs (it would duplicate the owner episode and session lines).
+        counters: fresh ?? {
+          ...rec.counters,
+          recoveriesUsed: 0,
+          transportRetriesLeft: 10,
+          toolCallsMade: 0,
+          nudgedForCompletion: false,
+          usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          spentUsd: 0,
+          activeModelMs: 0,
+          contextBuilt: true,
         },
         newLeaseStartedAt: '2026-09-18T17:16:35.000Z',
       },
@@ -515,6 +516,23 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     expect(created.claimToken).not.toBeNull();
   });
 
+  it('a released-and-never-granted lease is fully archived: falsifier for close-at-release', () => {
+    // Blocker 1: the finished lease must be in the declared source of truth
+    // from the release moment on — not only once somebody grants.
+    const s = store();
+    s.create(spec({ counters: { ...spec().counters, toolCallsMade: 16, contextBuilt: true } }), 4242);
+    expect(releaseIt(s)).toBe(true);
+
+    const leases = s.leasesFor('turn-1');
+    expect(leases).toHaveLength(1);
+    expect(leases[0]).toMatchObject({ leaseIndex: 0, outcome: 'provider_empty', endedAt: expect.any(String) });
+    expect(leases[0]?.counters).toMatchObject({ toolCallsMade: 16 });
+    expect(leases[0]?.transportAllowance).toBe(2);
+    const rec = s.get('turn-1');
+    expect(rec?.lifetime).toEqual(s.recomputeLifetime('turn-1'));
+    expect(rec?.lifetime).toMatchObject({ leases: 1, toolCallsMade: 16 });
+  });
+
   it('refuses release from waiting and done: barrier pending and endings stay what they are', () => {
     const s = store();
     const created = s.create(spec(), 4242);
@@ -526,25 +544,35 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     expect(s.get('turn-1')?.status).toBe('waiting');
   });
 
-  it('grants the next lease atomically: claim, counter reset, lifetime fold, lease audit', () => {
+  it('grants the next lease without touching lifetime: claim, reset, open', () => {
     const s = store();
     s.create(spec(), 4242);
     expect(releaseIt(s)).toBe(true);
+    const releasedLifetime = s.get('turn-1')?.lifetime;
 
     const granted = grantIt(s);
     expect(granted).not.toBeNull();
     expect(granted).toMatchObject({ status: 'running', claimedBy: 4242, leaseIndex: 1, continuableReason: null });
     expect(granted?.claimToken).not.toBeNull();
-    // Fresh lease-local capacity, folded lifetime.
+    // Fresh lease-local capacity.
     expect(granted?.counters).toMatchObject({ recoveriesUsed: 0, transportRetriesLeft: 10, toolCallsMade: 0 });
-    expect(granted?.lifetime).toMatchObject({ leases: 1, transportRetriesUsed: 3 });
+    // Lifetime untouched by the grant: the previous lease was already
+    // closed and folded at release. A grant that also folded would count
+    // it twice.
+    expect(granted?.lifetime).toEqual(releasedLifetime);
     // The owner's continuation message is on the durable transcript.
     expect(granted?.messages.at(-1)).toMatchObject({ role: 'user' });
-    // Previous lease audit: outcome, counters, delivery as left.
+    // New lease opened with the fresh allowance; previous lease stays as
+    // the release left it.
     const leases = s.leasesFor('turn-1');
     expect(leases).toHaveLength(2);
-    expect(leases[0]).toMatchObject({ leaseIndex: 0, outcome: 'provider_empty', endedAt: '2026-09-18T17:14:09.000Z', transportUsed: 3 });
-    expect(leases[1]).toMatchObject({ leaseIndex: 1, startedAt: '2026-09-18T17:16:35.000Z', endedAt: null });
+    expect(leases[0]).toMatchObject({ leaseIndex: 0, outcome: 'provider_empty', endedAt: expect.any(String) });
+    expect(leases[1]).toMatchObject({
+      leaseIndex: 1,
+      startedAt: '2026-09-18T17:16:35.000Z',
+      endedAt: null,
+      transportAllowance: 10,
+    });
   });
 
   it('two processes cannot win the same continuation', () => {
@@ -589,18 +617,13 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
   it('a terminal finish closes the current lease audit in the same write', () => {
     const s = store();
     const created = s.create(spec(), 4242);
-    const counters = { ...spec().counters, toolCallsMade: 16 };
-    expect(
-      s.finish('turn-1', { outcome: 'answered', messages: [], taint: 0, counters }, created.claimToken, {
-        startedAt: created.createdAt,
-        harnessMessages: [],
-        transportUsed: 1,
-        delivery: 'sent',
-      }),
-    ).toBe(true);
+    // Allowance 2 (spec), one retry spent: derived used is 1, from the
+    // persisted open row — no caller-supplied summary anywhere.
+    const counters = { ...spec().counters, toolCallsMade: 16, transportRetriesLeft: 1, contextBuilt: true };
+    expect(s.finish('turn-1', { outcome: 'answered', messages: [], taint: 0, counters }, created.claimToken)).toBe(true);
     const leases = s.leasesFor('turn-1');
     expect(leases).toHaveLength(1);
-    expect(leases[0]).toMatchObject({ leaseIndex: 0, outcome: 'answered', transportUsed: 1 });
+    expect(leases[0]).toMatchObject({ leaseIndex: 0, outcome: 'answered', transportUsed: 1, transportAllowance: 2 });
     expect(leases[0]?.counters).toMatchObject({ toolCallsMade: 16 });
     // And the terminal fold lands in the same write: stored equals recomputed.
     expect(s.get('turn-1')?.lifetime).toEqual(s.recomputeLifetime('turn-1'));
@@ -613,16 +636,12 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     expect(releaseIt(s)).toBe(true);
     const granted = grantIt(s);
     if (granted === null) throw new Error('grant failed');
-    // Lease 2 does work, then finishes terminally.
+    // Lease 2 does work, then finishes terminally. The finish derives its
+    // close from these exact counters — there is no second input to disagree.
     const worked = { ...granted.counters, toolCallsMade: 4, usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 } };
-    expect(
-      s.finish('turn-1', { outcome: 'answered', messages: granted.messages, taint: 0, counters: worked }, granted.claimToken, {
-        startedAt: '2026-09-18T17:16:35.000Z',
-        harnessMessages: [],
-        transportUsed: 0,
-        delivery: 'sent',
-      }),
-    ).toBe(true);
+    expect(s.finish('turn-1', { outcome: 'answered', messages: granted.messages, taint: 0, counters: worked }, granted.claimToken)).toBe(
+      true,
+    );
     const final = s.get('turn-1');
     expect(final?.lifetime).toEqual(s.recomputeLifetime('turn-1'));
     expect(final?.lifetime).toMatchObject({ leases: 2, toolCallsMade: 4 });
@@ -642,14 +661,110 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     expect(after?.leaseIndex).toBe(1);
   });
 
-  it('a finish on a row that never ran folds nothing and opens no lease', () => {
+  it('a finish on a row that never ran folds nothing and closes nothing', () => {
     const s = store();
     const created = s.create(spec(), 4242);
     expect(s.finish('turn-1', { outcome: 'budget', messages: [], taint: 0, counters: spec().counters }, created.claimToken)).toBe(
       true,
     );
-    expect(s.leasesFor('turn-1')).toEqual([]);
+    // The lease-0 open row from creation is still open (never closed), the
+    // fold sees no finished lease, lifetime stays zero.
+    const leases = s.leasesFor('turn-1');
+    expect(leases).toHaveLength(1);
+    expect(leases[0]).toMatchObject({ leaseIndex: 0, endedAt: null, outcome: null });
     expect(s.get('turn-1')?.lifetime).toMatchObject({ leases: 0, toolCallsMade: 0 });
+    expect(s.get('turn-1')?.lifetime).toEqual(s.recomputeLifetime('turn-1'));
+  });
+
+  it('reset contract: every field class behaves exactly once across two leases', () => {
+    // The Incident-A shape at store level: lease 0 ends with full counters.
+    const lease0 = {
+      ...spec().counters,
+      iterations: 19,
+      recoveriesUsed: 5,
+      transportRetriesLeft: 7,
+      toolCallsMade: 16,
+      nudgedForCompletion: true,
+      usage: { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 50, cacheWriteTokens: 5 },
+      spentUsd: 1.5,
+      resumes: 2,
+      contextBuilt: true,
+      activeModelMs: 394201,
+    };
+    const s = store();
+    // Allowance 10: the open row records what the lease started with.
+    s.create(spec({ counters: { ...spec().counters, transportRetriesLeft: 10, contextBuilt: true } }), 4242);
+    const running = s.get('turn-1');
+    expect(
+      s.releaseContinuable(
+        'turn-1',
+        { messages: [], taint: 3, counters: lease0, reason },
+        running?.claimToken ?? null,
+      ),
+    ).toBe(true);
+    // Release folded lease 0 exactly once.
+    expect(s.get('turn-1')?.lifetime).toEqual(s.recomputeLifetime('turn-1'));
+    expect(s.get('turn-1')?.lifetime).toMatchObject({
+      leases: 1,
+      toolCallsMade: 16,
+      recoveriesUsed: 5,
+      transportRetriesUsed: 3,
+      usage: { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 50, cacheWriteTokens: 5 },
+      spentUsd: 1.5,
+      activeModelMs: 394201,
+    });
+
+    // Grant: lease-local capacity fresh, everything else preserved.
+    const fresh: TurnCounters = {
+      iterations: 19,
+      recoveriesUsed: 0,
+      transportRetriesLeft: 10,
+      toolCallsMade: 0,
+      nudgedForCompletion: false,
+      usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      spentUsd: 0,
+      resumes: 2,
+      contextBuilt: true,
+      activeModelMs: 0,
+    };
+    const granted = grantIt(s, 'turn-1', fresh);
+    if (granted === null) throw new Error('grant failed');
+    expect(granted.counters).toEqual(fresh);
+    expect(granted.leaseIndex).toBe(1);
+    // No double fold at grant: lifetime is still exactly lease 0.
+    expect(granted.lifetime).toEqual(s.recomputeLifetime('turn-1'));
+    expect(granted.lifetime).toMatchObject({ leases: 1, toolCallsMade: 16 });
+
+    // Lease 1 works and finishes: each lease lands in lifetime exactly once.
+    const lease1: TurnCounters = {
+      ...fresh,
+      iterations: 25,
+      recoveriesUsed: 1,
+      transportRetriesLeft: 9,
+      toolCallsMade: 5,
+      nudgedForCompletion: true,
+      usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      spentUsd: 0.5,
+      activeModelMs: 60000,
+    };
+    expect(
+      s.finish('turn-1', { outcome: 'answered', messages: [], taint: 3, counters: lease1 }, granted.claimToken),
+    ).toBe(true);
+    const final = s.get('turn-1');
+    expect(final?.lifetime).toEqual(s.recomputeLifetime('turn-1'));
+    expect(final?.lifetime).toEqual({
+      leases: 2,
+      toolCallsMade: 21,
+      recoveriesUsed: 6,
+      transportRetriesUsed: 4,
+      usage: { inputTokens: 1100, outputTokens: 220, cacheReadTokens: 50, cacheWriteTokens: 5 },
+      spentUsd: 2,
+      activeModelMs: 454201,
+    });
+    // Cumulative stays on the row, out of the rollup; crash budget untouched.
+    expect(final?.counters.iterations).toBe(25);
+    expect(final?.counters.resumes).toBe(2);
+    expect(final?.counters.nudgedForCompletion).toBe(true);
   });
 
   it('health counts continuable work like waiting: owed, unwindowed', () => {
