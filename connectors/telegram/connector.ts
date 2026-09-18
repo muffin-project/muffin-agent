@@ -332,6 +332,30 @@ export type Incoming = {
 const CONTROLLO: ReadonlySet<string> = new Set(['stop', 'steer', 'pause', 'resume']);
 
 /**
+ * PRE-21 PILOT — PASSIVE GROUP OBSERVATION IS OFF (owner decision, 2026-09-18).
+ *
+ * Muffin may work in Telegram groups on Sep 21, but passive observation stays
+ * OFF for the pilot: an unaddressed human conversation must not be silently
+ * persisted merely because Telegram delivered it. Telegram Privacy Mode is
+ * deployment defense-in-depth, not the product invariant — admins receive
+ * broader traffic and configuration can change — so the product fails closed
+ * itself, here, by name.
+ *
+ * `false` means the ingress router's `remember` divert has no hook to call
+ * (`ganci()` below): a group message that opens no turn is marked processed
+ * and nothing durable is written for it — no episode, no actor, no profile,
+ * no room event, no consent UX. Those are post-21. What still opens a turn is
+ * unchanged and decided by `apreUnTurno` alone: a mention of the bot, a reply
+ * to one of its messages, a command, or an attachment (which always opens, so
+ * ingested bytes are never silently lost).
+ *
+ * Re-enabling is a deliberate product decision, not a refactor: flip this to
+ * `true` and the `remember` hook below rewires through the kernel's
+ * `memory.write` door exactly as before.
+ */
+const PASSIVE_GROUP_OBSERVATION_ENABLED = false;
+
+/**
  * Un update di gruppo apre un turno, oppure no.
  *
  * In privata **sempre**: chi scrive al bot in privata sta parlando col bot, e
@@ -1674,11 +1698,17 @@ export class TelegramConnector {
    * ADR-0063's own named follow-up: «il "ricordare senza rispondere" che resta
    * il seguito aperto». Un messaggio di gruppo che non apre un turno arriva
    * comunque — la privacy mode è spenta per direttiva dell'owner («il sistema
-   * riceve tutti i messaggi, semplicemente non usiamo token per tutti») — e
-   * fino a questa slice `drain()` lo marcava elaborato senza scriverlo da
-   * nessuna parte: la conversazione sparisce, e una menzione tardiva
-   * («@Muffin cosa avevamo deciso?») trova una memoria che non ha mai visto
-   * niente.
+   * riceve tutti i messaggi, semplicemente non usiamo token per tutti»).
+   *
+   * PRE-21 PILOT: PASSIVE OBSERVATION IS OFF — currently UNWIRED (see
+   * `PASSIVE_GROUP_OBSERVATION_ENABLED` below and the `remember` hook in
+   * `ganci()`). An unaddressed human conversation must not be silently
+   * persisted merely because Telegram delivered it: Telegram Privacy Mode is
+   * deployment defense-in-depth, not the product invariant (admins receive
+   * broader traffic and configuration can change), so the product fails closed
+   * itself. This method is kept for the post-21 re-enable path — it still
+   * passes the kernel's `memory.write` door like `runTurn` does — but nothing
+   * calls it while the flag is off.
    *
    * A costo di modello zero, non per costruzione ottimistica ma per un fatto
    * già vero altrove: `CONSOLIDATION_TENANT` (`core/memory/consolidator.ts`)
@@ -1893,8 +1923,12 @@ export class TelegramConnector {
       // Il seguito che ADR-0063 nomina esplicitamente come aperto: un
       // messaggio che non apre un turno non deve sparire, o «@Muffin cosa
       // avevamo deciso?» arriva a una memoria che non ha mai visto la
-      // conversazione.
-      ...(incoming.isPrivate ? {} : { remember: () => this.ricordaSenzaRispondere(incoming, log) }),
+      // conversazione. PRE-21 E' SPENTO (`PASSIVE_GROUP_OBSERVATION_ENABLED`):
+      // un messaggio non indirizzato viene marcato elaborato senza scrivere
+      // niente di durevole — vedi il flag per il perché.
+      ...(PASSIVE_GROUP_OBSERVATION_ENABLED && !incoming.isPrivate
+        ? { remember: () => this.ricordaSenzaRispondere(incoming, log) }
+        : {}),
       command: () => this.tryCommand(incoming),
       laneState: () => ({
         inPausa: this.deps.pausa?.attiva() === true,

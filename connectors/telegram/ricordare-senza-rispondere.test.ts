@@ -17,18 +17,27 @@ import { UpdateInbox } from './updates.js';
 import { TelegramDeliveryStore } from './delivery.js';
 
 /**
- * ADR-0063 opens no turn for a group message that does not address Muffin —
- * correct, it saves tokens. Until this slice `drain()`'s gated-out branch
- * called `markProcessedQuietly` and nothing else: the message vanished, so a
- * later "@Muffin cosa avevamo deciso?" found a memory that had never seen the
- * conversation. The owner's directive (privacy mode off): «il sistema riceve
- * tutti i messaggi, semplicemente non usiamo token per tutti».
+ * PRE-21 PILOT — PASSIVE GROUP OBSERVATION IS OFF (owner decision, 2026-09-18;
+ * product boundary: `PASSIVE_GROUP_OBSERVATION_ENABLED` in `connector.ts`).
  *
- * This file proves the repair from the wire, the same shape
+ * ADR-0063 opens no turn for a group message that does not address Muffin.
+ * From 2026-09-05 to 2026-09-18 the gated-out branch additionally persisted
+ * the message (`ricordaSenzaRispondere`, zero model cost) so a later mention
+ * could recall it. For the Sep 21 pilot the owner switched that off: an
+ * unaddressed human conversation must not be silently persisted merely
+ * because Telegram delivered it — Privacy Mode is deployment
+ * defense-in-depth, not the product invariant, so the product fails closed
+ * itself.
+ *
+ * This file proves the off-posture from the wire, the same shape
  * `group-context.test.ts` uses: a real `TelegramConnector` over a real
  * `buildRuntime`, only the provider replaced. The distinction that matters is
  * not "does an episode-writing function exist" — it is "does `drain()` call
- * it, through the kernel door, only where `apreUnTurno` says no".
+ * it for a message `apreUnTurno` refused". While the flag is off, the answer
+ * must be no: zero model calls AND zero durable episodes for unaddressed
+ * group text. Addressed traffic (mention, reply, command, attachment) still
+ * opens a real turn and writes exactly that turn's own episodes — nothing
+ * more.
  */
 
 const OWNER = 4242;
@@ -134,56 +143,48 @@ const privateMsg = (id: number, text: string): Update =>
     },
   }) as unknown as Update;
 
-describe('ricordare senza rispondere — un gruppo che non chiama Muffin non sparisce', () => {
-  it('un messaggio di gruppo non indirizzato: zero chiamate al modello, un episodio nel tenant del gruppo', async () => {
+describe('osservatore passivo spento — un gruppo che non chiama Muffin non lascia niente', () => {
+  it('un messaggio di gruppo non indirizzato: zero chiamate al modello, zero episodi', async () => {
     const h = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER });
     try {
       await deliver(h, [groupMsg(1, 'il criceto di Sara è scappato di nuovo stasera')]);
 
       // Il gate di gruppo (ADR-0063) resta intatto: nessun turno, nessuna
-      // chiamata al provider.
+      // chiamata al provider — e, con l'osservatore passivo spento, nessuna
+      // scrittura durevole: la conversazione non indirizzata non entra in
+      // memoria per il solo fatto di essere stata consegnata.
       expect(h.seen).toHaveLength(0);
-
-      const rows = episodes(h);
-      expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatchObject({
-        tenant_id: `group:telegram:${GROUP}`,
-        connector: 'telegram',
-        thread_key: `telegram:${GROUP}`,
-        role: 'user',
-        trust_tier: 2,
-        turn_id: null,
-      });
-      expect(rows[0]!.content).toContain('criceto');
+      expect(episodes(h)).toHaveLength(0);
     } finally {
       h.runtime.close();
     }
   });
 
-  it('una menzione dopo trova la conversazione: il richiamo la ripesca grezza', async () => {
+  it('una menzione apre comunque un turno vero, con solo gli episodi di quel turno', async () => {
     const h = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER });
     try {
       await deliver(h, [groupMsg(1, 'il criceto di Sara è scappato di nuovo stasera')]);
       expect(h.seen).toHaveLength(0);
+      expect(episodes(h)).toHaveLength(0);
 
       await deliver(h, [groupMsg(2, '@MuffinBot avete più saputo niente del criceto?')]);
       expect(h.seen).toHaveLength(1);
 
-      // "Il primo messaggio del provider" — il richiamo precede sempre il
-      // testo dell'utente nello stesso messaggio (`buildContext`,
-      // `agent/loop.ts`), quindi e' qui che il testo di prima deve comparire.
+      // Il turno indirizzato scrive i suoi due episodi (utente + risposta,
+      // `agent/loop.ts`), e solo quelli: niente `turn_id NULL` da un ramo
+      // silenzioso, che con l'osservatore spento non esiste proprio.
+      const rows = episodes(h);
+      expect(rows).toHaveLength(2);
+      for (const row of rows) expect(row.turn_id).not.toBeNull();
+
+      // E la riga non indirizzata di prima non è richiamabile: non è mai
+      // entrata in memoria.
       const firstMessage = h.seen[0]!.messages[0]!;
       const text = firstMessage.content
         .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
         .map((b) => b.text)
         .join('\n');
-      expect(text).toContain('criceto di Sara è scappato');
-
-      // Tre episodi ora: quello non indirizzato di prima (questo slice), e i
-      // due che il turno vero scrive per il messaggio con la menzione
-      // (l'utente e la risposta dell'agente, `agent/loop.ts`).
-      const rows = episodes(h);
-      expect(rows).toHaveLength(3);
+      expect(text).not.toContain('criceto di Sara è scappato');
     } finally {
       h.runtime.close();
     }
@@ -219,6 +220,8 @@ describe('ricordare senza rispondere — un gruppo che non chiama Muffin non spa
       req.capability === 'memory.write' ? { effect: 'deny', code: 'no_capability' } : { effect: 'allow' };
     const h = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER }, denyMemoryWrite);
     try {
+      // Con l'osservatore spento questo vale due volte: il ramo silenzioso non
+      // esiste proprio, e il turno indirizzato continua a chiedere alla porta.
       await deliver(h, [groupMsg(1, 'il criceto di Sara è scappato di nuovo stasera')]);
       expect(h.seen).toHaveLength(0);
       expect(episodes(h)).toHaveLength(0);
@@ -282,29 +285,30 @@ describe('il costo modello resta zero per un tenant di gruppo', () => {
   });
 });
 
-describe('un errore di memoria non spegne la superficie', () => {
-  it("se addEpisode lancia, l'update viene comunque archiviato e il prossimo elaborato", async () => {
+describe('un non-indirizzato non tocca mai lo store, nemmeno se lo store è rotto', () => {
+  it("il ramo silenzioso non chiama addEpisode: il drain archivia e passa oltre", async () => {
     const h = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER });
     try {
       const store = h.runtime.deps.memory!.store;
       const originale = store.addEpisode.bind(store);
-      let lanci = 0;
-      // Lancia **una volta sola**, sul ramo silenzioso; poi torna vero.
-      // Altrimenti il turno aperto dal secondo update, che scrive il suo
-      // episodio dal loop, incontrerebbe lo stesso errore e proverebbe
-      // un'altra cosa.
+      const visti: unknown[][] = [];
       (store as unknown as { addEpisode: unknown }).addEpisode = (...args: unknown[]) => {
-        lanci += 1;
-        if (lanci === 1) throw new Error('FOREIGN KEY constraint failed');
+        visti.push(args);
+        // Si rompe solo per la riga non indirizzata: se il ramo silenzioso la
+        // toccasse, il drain lancerebbe qui.
+        const riga = args[0] as { content?: unknown };
+        if (typeof riga?.content === 'string' && riga.content.includes('prima riga')) {
+          throw new Error('FOREIGN KEY constraint failed');
+        }
         return (originale as (...a: unknown[]) => unknown)(...args);
       };
       await deliver(h, [groupMsg(1, 'prima riga'), groupMsg(2, '@MuffinBot ci sei?')]);
       (store as unknown as { addEpisode: unknown }).addEpisode = originale;
 
-      expect(lanci).toBeGreaterThanOrEqual(2);
-      // Il secondo update — quello che apre un turno — e' stato elaborato lo
-      // stesso: senza il `try`, l'eccezione del primo fermava `drain()` e il
-      // provider non veniva mai chiamato.
+      // Nessuna chiamata per la riga non indirizzata — con l'osservatore
+      // spento il ramo che la scriveva non esiste proprio — e il turno
+      // indirizzato è stato elaborato lo stesso.
+      expect(visti.every((a) => !String((a[0] as { content?: unknown })?.content ?? '').includes('prima riga'))).toBe(true);
       expect(h.seen).toHaveLength(1);
     } finally {
       h.runtime.close();
