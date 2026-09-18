@@ -205,9 +205,11 @@ describe('ExecutionBudget call-activity telemetry (#497)', () => {
     const lease = budget.beginModelCall();
     await vi.advanceTimersByTimeAsync(10);
     const telemetry = lease.telemetry();
+    // Silence is silence: no first, no ttft — and no fake "last" defaulted
+    // to the start. The watchdog's internal baseline is not evidence.
     expect(telemetry.firstActivityAt).toBeUndefined();
     expect(telemetry.ttftMs).toBeUndefined();
-    expect(telemetry.lastActivityAt).toBe(telemetry.startedAt);
+    expect(telemetry.lastActivityAt).toBeUndefined();
     lease.release();
     budget.close();
   });

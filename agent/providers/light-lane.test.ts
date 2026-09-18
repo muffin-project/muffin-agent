@@ -380,11 +380,15 @@ describe('il conteggio dei tentativi fisici (#496)', () => {
     await expect(lane.chat(call())).rejects.toThrow('502 stanco');
     // Due retry = tre tentativi fisici, tutti riportati: la prova esiste
     // anche se la spesa non registra niente (nessun addebito sul fallimento).
-    expect(visti).toEqual([
+    // Stessa richiesta logica per tutti: un solo requestId.
+    expect(visti.map(({ attempt, model }) => ({ attempt, model }))).toEqual([
       { attempt: 1, model: 'light' },
       { attempt: 2, model: 'light' },
       { attempt: 3, model: 'light' },
     ]);
+    const richieste = new Set(visti.map((v) => v.requestId));
+    expect(richieste.size).toBe(1);
+    expect([...richieste][0]).toMatch(/^[0-9a-f-]{10,}$/);
   });
 
   it('successo al secondo tentativo: due riporti, una spesa', async () => {
@@ -404,10 +408,11 @@ describe('il conteggio dei tentativi fisici (#496)', () => {
       { profile: CONSERVATIVE, onAttempt: (a) => visti.push(a), record: (e) => spese.push(e) },
     );
     await expect(lane.chat(call())).resolves.toMatchObject({ text: 'ok' });
-    expect(visti).toEqual([
+    expect(visti.map(({ attempt, model }) => ({ attempt, model }))).toEqual([
       { attempt: 1, model: 'light' },
       { attempt: 2, model: 'light' },
     ]);
+    expect(new Set(visti.map((v) => v.requestId)).size).toBe(1);
     expect(spese).toHaveLength(1);
   });
 
@@ -433,7 +438,49 @@ describe('il conteggio dei tentativi fisici (#496)', () => {
       await vi.advanceTimersByTimeAsync(2000);
       await attesa;
       // Il secondo tentativo non è mai partito: giusto non riportarlo.
-      expect(visti).toEqual([{ attempt: 1, model: 'light' }]);
+      expect(visti.map(({ attempt, model }) => ({ attempt, model }))).toEqual([
+        { attempt: 1, model: 'light' },
+      ]);
+      expect(new Set(visti.map((v) => v.requestId)).size).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('due richieste concorrenti si raggruppano per requestId', async () => {
+    // A fallisce una volta e ritenta (1,2), B riesce subito (1): i riporti
+    // si intercalano, ma ogni requestId ricostruisce la sua sola sequenza.
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(Math, 'random').mockReturnValue(0);
+      const visti: LightAttemptReport[] = [];
+      let tentativiA = 0;
+      const lane = lightLane(
+        {
+          kind: 'openai-compat',
+          chat: async (chiamata: ChatCall) => {
+            if (chiamata.model === 'a') {
+              tentativiA += 1;
+              if (tentativiA === 1) throw new ProviderError('429', true, 429, 'transport', 10);
+            }
+            return ok();
+          },
+        },
+        { profile: CONSERVATIVE, onAttempt: (a) => visti.push(a) },
+      );
+      const pa = lane.chat(call({ model: 'a' }));
+      const pb = lane.chat(call({ model: 'b' }));
+      const attesaA = expect(pa).resolves.toMatchObject({ text: 'ok' });
+      const attesaB = expect(pb).resolves.toMatchObject({ text: 'ok' });
+      await vi.advanceTimersByTimeAsync(2000);
+      await attesaA;
+      await attesaB;
+      const perRichiesta = new Map<string, number[]>();
+      for (const v of visti) {
+        perRichiesta.set(v.requestId, [...(perRichiesta.get(v.requestId) ?? []), v.attempt]);
+      }
+      expect(perRichiesta.size).toBe(2);
+      expect([...perRichiesta.values()].sort()).toEqual([[1], [1, 2]]);
     } finally {
       vi.useRealTimers();
     }

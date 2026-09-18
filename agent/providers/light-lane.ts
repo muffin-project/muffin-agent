@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { sleep } from '../../core/net/sleep.js';
 import { retryDelayMs } from '../loop/stream.js';
 import { MAX_LIGHT_TRANSPORT_RETRIES } from '../loop/types.js';
@@ -71,11 +72,13 @@ export type LightLaneOptions = {
   /**
    * Fires synchronously as each physical attempt starts (#496): 1-based
    * within the logical request, with the model the attempt actually asks
-   * for. Attempts that start are reported even when the logical request
-   * ultimately fails — success-only spend accounting cannot carry that —
-   * and an attempt that never starts (deadline won the wait first) is
-   * correctly absent. Optional like `record`; a lane nobody listens to
-   * still retries exactly the same way.
+   * for, and the id of the logical request it belongs to. Attempts that
+   * start are reported even when the logical request ultimately fails —
+   * success-only spend accounting cannot carry that — and an attempt that
+   * never starts (deadline won the wait first) is correctly absent.
+   * Concurrent logical requests interleave reports; group by `requestId`
+   * to recover each request's own attempt sequence. Optional like
+   * `record`; a lane nobody listens to still retries exactly the same way.
    */
   onAttempt?: ((attempt: LightAttemptReport) => void) | undefined;
 };
@@ -86,6 +89,14 @@ export type LightAttemptReport = {
   attempt: number;
   /** The model id this attempt asks for. */
   model: string;
+  /**
+   * The logical request this attempt belongs to: generated once per
+   * `chat()`, identical for every attempt (and retry wait) of that
+   * request, distinct across concurrent requests. Correlation without a
+   * tracing framework — and without faking parentage the lane does not
+   * have.
+   */
+  requestId: string;
 };
 
 /**
@@ -136,6 +147,7 @@ async function chatWithTransportRetries(
   inner: Provider,
   call: ChatCall,
   requestDeadlineMs: number,
+  requestId: string,
   onAttempt?: ((attempt: LightAttemptReport) => void) | undefined,
 ): Promise<ChatResult> {
   const deadline = new AbortController();
@@ -153,7 +165,7 @@ async function chatWithTransportRetries(
     while (true) {
       try {
         attempt += 1;
-        onAttempt?.({ attempt, model: call.model });
+        onAttempt?.({ attempt, model: call.model, requestId });
         return await inner.chat({ ...call, signal: requestSignal });
       } catch (error) {
         // A deadline-aborted attempt is not a transport failure and not a
@@ -203,10 +215,14 @@ export function lightLane(inner: Provider, options: LightLaneOptions): Provider 
   return {
     kind: inner.kind,
     async chat(call: ChatCall): Promise<ChatResult> {
+      // One id per logical request, shared by every attempt it starts:
+      // without it, concurrent requests are ungroupable attempt streams.
+      const requestId = randomUUID();
       const result = await chatWithTransportRetries(
         inner,
         sampled(call, options.profile),
         requestDeadlineMs,
+        requestId,
         options.onAttempt,
       );
       // Billed after the logical call returns, like the loop: retries are one

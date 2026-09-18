@@ -646,5 +646,6 @@ describe('la telemetria di first activity arriva sullo span (#497)', () => {
     const attrs = spanChatCall(h.home);
     expect(attrs['muffin.chat_call.first_activity_at']).toBeUndefined();
     expect(attrs['muffin.chat_call.ttft_ms']).toBeUndefined();
+    expect(attrs['muffin.chat_call.last_activity_at']).toBeUndefined();
   });
 });
