@@ -267,7 +267,8 @@ fi
 if "$NODE" -e 'process.exit(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).secrets?.backend === "systemd" ? 0 : 1)' "$HOME/.muffin/config.json" 2>/dev/null; then
   ok "secrets backend is systemd (fresh Linux Home, no canonical plaintext store)"
   if [ -e "$HOME/.muffin/secrets" ] || [ -e "$XDG_CONFIG_HOME/muffin/secrets" ]; then
-    bad "file secret stores still present after migration: $(ls -d "$HOME/.muffin/secrets" "$XDG_CONFIG_HOME/muffin/secrets" 2>/dev/null)"
+    bad "file secret stores still present after migration"
+    ls -laR "$HOME/.muffin/secrets" "$XDG_CONFIG_HOME/muffin/secrets" 2>/dev/null | sed 's/^/  | /'
   else
     ok "no file secret store left behind"
   fi
