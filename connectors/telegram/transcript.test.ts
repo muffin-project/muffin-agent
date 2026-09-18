@@ -432,8 +432,7 @@ describe('un processo che smette di chiamare questo file non lascia niente a met
   });
 });
 
-describe('handoff() — what deliverTo extends instead of sending beside', () => {
-  it('is null when nothing this turn ever produced a real message', () => {
+describe('handoff() — what deliverTo extends instead of sending beside', () => {  it('is null when nothing this turn ever produced a real message', () => {
     const { api } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
     expect(t.handoff()).toBeNull();
@@ -465,6 +464,165 @@ describe('handoff() — what deliverTo extends instead of sending beside', () =>
     await vi.advanceTimersByTimeAsync(0);
     expect(calls).toEqual([]); // the send failed and was swallowed
     await t.stop();
+    expect(t.handoff()).toBeNull();
+  });
+});
+
+/**
+ * DEFECT B — il primo tool resta invisibile finché non arriva un secondo evento.
+ *
+ * Misurato dall'owner (memory search ~70 s senza niente di visibile, poi tutto
+ * insieme al secondo tool): la prima pittura dipendeva da un timer
+ * (`schedule()` → `setTimeout(attesa())`), quindi senza avanzamento del clock
+ * — o senza un secondo evento che facesse scattare un flush — niente arrivava
+ * sul filo mentre il tool girava davvero.
+ *
+ * L'invariante: un primo tool lungo è visibile mentre gira, da solo, senza
+ * aspettare né un secondo tool né lo scadere di un timer. Il test non avanza i
+ * timer di proposito: concede solo microtask (la pittura immediata), mai un
+ * macrotask. Su `transcript.ts` prima della correzione fallisce (zero chiamate
+ * persistenti); dopo, il primo `sendMessage` è già partito.
+ */
+describe('defect B — a long first tool is visible while it runs, alone', () => {
+  async function microtasks(n = 25): Promise<void> {
+    for (let i = 0; i < n; i++) await Promise.resolve();
+  }
+
+  it('DM: tool_start is on the wire before the handler resolves, with no second tool and no timer advance', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    t.report(start('memory_search', { query: 'q' }));
+    // Il tool resta appeso: nessun tool_end, nessun secondo tool, nessun
+    // avanzamento dell'orologio finto — solo microtask.
+    await microtasks();
+    const persistent = calls.filter((c) => c.method === 'sendMessage' || c.method === 'editMessageText');
+    expect(persistent.length).toBeGreaterThanOrEqual(1);
+    expect(persistent[0]!.text).toContain('⏳');
+    await t.stop();
+  });
+
+  it('group: same invariant under the group floor', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
+    t.report(start('memory_search', { query: 'q' }));
+    await microtasks();
+    const persistent = calls.filter((c) => c.method === 'sendMessage' || c.method === 'editMessageText');
+    expect(persistent.length).toBeGreaterThanOrEqual(1);
+    expect(persistent[0]!.text).toContain('⏳');
+    await t.stop();
+  });
+
+  /**
+   * STRONGER FALSIFIER (owner, 2026-09-18): microtask-only is not enough. A
+   * tool handler that blocks the event loop synchronously runs before any
+   * `.then()` queued by `report()` — so the first send must be INVOKED inside
+   * `report()`'s own stack, not merely scheduled from it. Zero awaits between
+   * the fact and the assertion, on purpose.
+   */
+  it('DM: api.sendMessage is INVOKED synchronously inside report(), before any microtask', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    t.report(start('memory_search', { query: 'q' }));
+    // No await of any kind above: if a blocking handler started on the next
+    // line, the send is already on the wire.
+    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
+    expect(calls[0]!.text).toContain('⏳');
+    await t.stop();
+  });
+
+  it('group: same synchronous invocation under the group floor', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
+    t.report(start('memory_search', { query: 'q' }));
+    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
+    expect(calls[0]!.text).toContain('⏳');
+    await t.stop();
+  });
+
+  it('a first preamble paints synchronously too — the tool that follows only edits', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    t.spoke('Prima leggo la spesa.', 'tool-call');
+    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
+    t.report(start('fs_read', { path: 'spesa.txt' }));
+    // Still one message: the step joins it via edit, never a second send.
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
+    await t.stop();
+  });
+
+  it('still one message, still throttled afterwards: a burst after the first paint coalesces', async () => {    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    t.report(start('fs_read', { path: 'a' }));
+    await microtasks();
+    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
+    // Una raffica subito dopo non apre un secondo messaggio: si accoda in edit.
+    t.report(end('fs_read', false, { path: 'a' }));
+    t.report(start('fs_read', { path: 'b' }));
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
+    await t.stop();
+  });
+});
+
+/**
+ * DEFECT A — dopo la risposta resta una bolla «Thinking…».
+ *
+ * Fatto API primario (`core.telegram.org/bots/api#sendmessagedraft`, Bot API
+ * 10.0 2026-05-08 «Allowed bots to pass an empty text»): `text` 0–4096, e un
+ * testo vuoto mostra il placeholder «Thinking…» — non cancella la bozza. La
+ * bozza è un'anteprima effimera (~30 s): sparisce per TTL o quando un normale
+ * `sendMessage` arriva nella stessa chat/topic; un `editMessageText` non la
+ * tocca. Quindi `stop()` che manda `sendMessageDraft(draftId, '')` non pulisce:
+ * accende un «Thinking…» post-risposta, e quando `deliverTo` estende il
+ * messaggio persistente con un edit (turno con tool), niente lo sostituisce.
+ *
+ * Ciclo corretto: la bozza vive solo finché non esiste un messaggio vero; dal
+ * primo segmento persistente in poi il testo va nel segmento (edit), mai in una
+ * nuova bozza; `stop()` non manda mai un testo vuoto; un turno senza tool
+ * consegna con un normale `sendMessage` che sostituisce la bozza da solo.
+ */
+describe('defect A — no stale post-answer Thinking preview', () => {
+  it('stop() never sends an empty-text draft', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    t.live('Sto preparando la risposta');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls.some((c) => c.method === 'sendMessageDraft')).toBe(true);
+    await t.stop();
+    expect(calls.filter((c) => c.method === 'sendMessageDraft' && c.text === '')).toHaveLength(0);
+  });
+
+  it('once a persistent segment exists, live() no longer renews the draft', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    t.live('Sto preparando');
+    await vi.advanceTimersByTimeAsync(0);
+    t.spoke('Sto preparando', 'tool-call');
+    t.report(start('fs_read', { path: 'x' }));
+    await vi.advanceTimersByTimeAsync(2_000);
+    const draftsAfterPersistent = calls.filter((c) => c.method === 'sendMessageDraft').length;
+    // La risposta finale arriva DOPO i tool: deve andare nel messaggio vero.
+    t.live('Ecco la risposta finale che si forma');
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(draftsAfterPersistent);
+    // …e infatti è nel segmento persistente, come coda live.
+    expect(calls.filter((c) => c.method !== 'sendMessageDraft').at(-1)!.text).toContain('Ecco la risposta finale');
+    await t.stop();
+    expect(calls.filter((c) => c.method === 'sendMessageDraft' && c.text === '')).toHaveLength(0);
+  });
+
+  it('tool-free turn: only the draft while forming, never an empty one at the end', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    t.live('Ciao, ecco');
+    await vi.advanceTimersByTimeAsync(0);
+    await t.stop();
+    expect(calls.some((c) => c.method === 'sendMessageDraft')).toBe(true);
+    expect(calls.filter((c) => c.method === 'sendMessageDraft' && c.text === '')).toHaveLength(0);
+    // Niente di durevole da qui: la risposta vera arriva con un normale
+    // sendMessage di deliverTo, che sostituisce la bozza da solo.
+    expect(calls.some((c) => c.method === 'sendMessage' || c.method === 'editMessageText')).toBe(false);
     expect(t.handoff()).toBeNull();
   });
 });
