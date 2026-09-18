@@ -431,8 +431,7 @@ describe('a PDF sent to the bot', () => {
     }
   });
 
-  it('una foto di gruppo non indirizzata non apre turni e non scarica — e sigilla la riga', async () => {
-    // Stessa regola del documento, altra forma sul filo (`photo` invece di
+  it('una foto di gruppo non indirizzata non apre turni e non scarica — e sigilla la riga', async () => {    // Stessa regola del documento, altra forma sul filo (`photo` invece di
     // `document`): senza indirizzo non si tocca niente.
     const h = harness([PNG_1x1]);
     try {
@@ -458,6 +457,36 @@ describe('a PDF sent to the bot', () => {
       const inbox = (h.connector as unknown as { deps: { inbox: UpdateInbox } }).deps.inbox;
       const row = inbox.get(9)!;
       expect(JSON.parse(row.payload)).toEqual({ scrubbed: true, update_id: 9 });
+      expect(row.settledAt).not.toBeNull();
+      expect(row.turnId).toBeNull();
+      expect(inbox.pending()).toHaveLength(0);
+    } finally {
+      h.runtime.close();
+    }
+  });
+
+  it('una didascalia con comando per un altro bot non scarica niente — e sigilla la riga', async () => {
+    // `/riassumi@OtherBot` e' un ordine dato a un altro bot: stessa regola del
+    // testo, anche quando viaggia come didascalia di un file.
+    const h = harness([CONTRATTO]);
+    try {
+      await deliver(h, [
+        withDocument(
+          10,
+          'contratto.pdf',
+          { chatId: GROUP, fromId: STRANGER, type: 'supergroup' },
+          '/riassumi@OtherBot per favore',
+        ),
+      ]);
+
+      expect(h.seen).toHaveLength(0);
+      expect(h.downloads()).toBe(0);
+      expect(
+        (h.runtime.db.prepare('SELECT count(*) AS n FROM episodes').get() as { n: number }).n,
+      ).toBe(0);
+      const inbox = (h.connector as unknown as { deps: { inbox: UpdateInbox } }).deps.inbox;
+      const row = inbox.get(10)!;
+      expect(JSON.parse(row.payload)).toEqual({ scrubbed: true, update_id: 10 });
       expect(row.settledAt).not.toBeNull();
       expect(row.turnId).toBeNull();
       expect(inbox.pending()).toHaveLength(0);
