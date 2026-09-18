@@ -188,13 +188,24 @@ export function provisionSystemdSecret(
   // The store directory is root-owned by design; creating it is part of the
   // same privileged step, not a prerequisite the owner must guess. dirname of
   // the target (not the production const) so the MUFFIN_CREDSTORE_ENCRYPTED
-  // test hook moves both together.
+  // test hook moves both together. Mode 755: ciphertext and names are
+  // public-safe, and unprivileged readers (gateway install, doctor presence
+  // checks) must traverse it — a 0700 dir here silently unprovisions every
+  // secret for everyone but root (measured live: secretExists false,
+  // credential lines missing, service dead at boot).
   const mkdir = run([...prefix, 'mkdir', '-p', dirname(target)], '');
   if (mkdir.status !== 0) {
     const why = mkdir.status === null ? `could not run: ${mkdir.stderr}` : mkdir.stderr.trim();
     throw new ConfigError(
       `cannot create ${dirname(target)}${why ? ` — ${why}` : ''}`,
       'needs privilege for the root-owned credential store (`sudo`)',
+    );
+  }
+  const chmodDir = run([...prefix, 'chmod', '755', dirname(target)], '');
+  if (chmodDir.status !== 0) {
+    throw new ConfigError(
+      `cannot chmod ${dirname(target)} (${chmodDir.stderr.trim() || 'unknown error'})`,
+      'the store directory must stay traversable or unprivileged presence checks fail closed',
     );
   }
   const encrypt = run([...prefix, 'systemd-creds', 'encrypt', `--name=${clean}`, '-', target], value);

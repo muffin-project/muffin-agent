@@ -203,19 +203,20 @@ describe('provisionSystemdSecret', () => {
     };
     const { path } = provisionSystemdSecret('provider_api_key', 'sk-nuova', { runner, useSudo: true });
     expect(path).toContain('provider_api_key.cred');
-    expect(seen).toHaveLength(3);
+    expect(seen).toHaveLength(4);
     expect(seen[0]?.argv.slice(0, 3)).toEqual(['sudo', 'mkdir', '-p']);
-    expect(seen[1]?.argv).toEqual(['sudo', 'systemd-creds', 'encrypt', '--name=provider_api_key', '-', path]);
-    expect(seen[1]?.input).toBe('sk-nuova');
+    expect(seen[1]?.argv).toEqual(['sudo', 'chmod', '755', dirname(path)]);
+    expect(seen[2]?.argv).toEqual(['sudo', 'systemd-creds', 'encrypt', '--name=provider_api_key', '-', path]);
+    expect(seen[2]?.input).toBe('sk-nuova');
     // The value travels as stdin only: no argv element carries it.
     expect(seen.flatMap((s) => s.argv).join(' ')).not.toContain('sk-nuova');
-    expect(seen[2]?.argv).toEqual(['sudo', 'chmod', '644', path]);
+    expect(seen[3]?.argv).toEqual(['sudo', 'chmod', '644', path]);
   });
 
   it('skips sudo when already root', () => {
     const seen: string[][] = [];
     provisionSystemdSecret('k', 'v', { runner: (argv) => { seen.push(argv); return { status: 0, stderr: '', stdout: '' }; }, useSudo: false });
-    expect(seen[1]?.[0]).toBe('systemd-creds');
+    expect(seen.map((a) => a[0])).toEqual(['mkdir', 'chmod', 'systemd-creds', 'chmod']);
   });
 
   it('refuses empty values and malformed names before touching anything', () => {
@@ -230,7 +231,9 @@ describe('provisionSystemdSecret', () => {
     const dir = home();
     flipToSystemd(dir);
     const runner: ProvisionRunner = (argv) =>
-      argv.includes('mkdir') ? { status: 0, stderr: '', stdout: '' } : { status: 1, stderr: 'boom', stdout: '' };
+      argv[0] === 'mkdir' || argv[0] === 'chmod'
+        ? { status: 0, stderr: '', stdout: '' }
+        : { status: 1, stderr: 'boom', stdout: '' };
     expect(() => provisionSystemdSecret('k', 'v', { runner, useSudo: false })).toThrow(/systemd-creds encrypt failed/);
     expect(secretExists('secret://k', dir)).toBe(false);
     rmSync(dir, { recursive: true, force: true });
@@ -286,7 +289,7 @@ describe('storeSecret routes by flag, never by platform', () => {
     });
     expect(stored.kind).toBe('systemd');
     expect(stored.note).toMatch(/restart/);
-    expect(seen[0]).toContain('systemd-creds');
+    expect(seen.some((a) => a.includes('systemd-creds'))).toBe(true);
     // And no file copy was left behind as a consolation prize.
     expect(listLegacySecretNames(dir)).toEqual([initName]);
     rmSync(dir, { recursive: true, force: true });
