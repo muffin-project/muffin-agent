@@ -69,10 +69,31 @@ in that moment (`.claude/hooks/guard-merge-gate.mjs`):
 
 - **local**: `npm run merge -- <pr>` builds the merged result in a throwaway
   worktree, runs `ci:local` on it, merges only on PASS;
-- **GitHub**: `gh pr merge` passes the hook when the PR is OPEN on `dev`,
-  `mergeStateStatus` is CLEAN (base ferma: il risultato unito coincide con la
-  head), and every check-run on the head is green with none pending — any
-  doubt falls back to the local door.
+- **GitHub**: `gh pr merge` passes the hook when the PR is OPEN, not a draft,
+  on `dev`, `mergeStateStatus` is CLEAN, and the head carries the nominal
+  FAST (`verifica`) and DEEP (`accettazione`) successes — `skipped` satisfies
+  neither — with every other check-run on the head green and none pending.
+  Any doubt falls back to the local door.
+
+What CLEAN does and does not prove: it says no conflict is known with the
+base right now and the associated status is green. GitHub CI runs on the PR
+merge-ref snapshot of that event, so this is evidence about the composition
+tested in that run — not proof the base stood still afterwards, and not
+byte-identity with the tree the server will merge. Strict up-to-date
+semantics waits for branch protection or a merge queue. Until then the local
+door stays the composition-strong door: it executes the merged tree itself.
+
+Docs-only exception, fail-closed: when FAST/DEEP are absent because `ci.yml`
+skipped the PR entirely, the GitHub door passes only after reading the PR's
+real changed files and finding every one inside `ci.yml`'s exempt set
+(`docs/**`, `.claude/**`, `README.md`, `AGENTS.md`, `CLAUDE.md`), with the
+lightweight checks that did run green. Absent files, or any file outside the
+set, mean the local door.
+
+Draft convention for substantial agent work: open the PR as a draft early
+(durable remote checkpoint, per above), so intermediate pushes pay FAST only;
+mark ready when the claim is integration-grade — `ready_for_review` starts a
+fresh run with DEEP. A draft never passes the GitHub door.
 
 Required evidence still follows the profile:
 
@@ -91,6 +112,17 @@ by every merge.
 This is an integrated-system checkpoint, not a replay of every slice review.
 Run the suite/journeys appropriate to the release boundary and review the
 composition of changes since the previous promotion.
+
+Honest current mechanics (reconstructed from git history, 2026-09-18 — not a
+policy, a fact): promotion is a fast-forward of `main` to a `dev` commit,
+outside both merge doors. Neither the hook (which only sees `gh pr merge`
+commands) nor `npm run merge` (which refuses non-`dev` bases) participates,
+and with branch protection unavailable nothing server-side checks anything
+before the ref moves. The `main`-push CI fan-out is therefore kept on purpose:
+it is the first execution of CI on the exact promoted commit, since nothing
+runs on pushes to `dev`. Do not narrow the `main` push trigger until a real
+pre-promotion gate tests the promotion commit and proves the post-push run
+adds no signal.
 
 ## Current-state reconciliation is part of integration
 
@@ -114,13 +146,16 @@ At integration time, observe which checks/protections actually exist and report
 limitations. A convention is not an enforced gate merely because this file says
 it should be one.
 
-Observed 2026-09-26: GitHub minutes are back and CI runs per-PR, but branch
+Observed 2026-09-18: GitHub minutes are back and CI runs per-PR (FAST ~8 min,
+FAST+DEEP ~19 min sequential while the repo is private), but branch
 protection is unavailable (private repo on the free plan — 403 from the API),
 so nothing server-side enforces green checks or blocks direct pushes; the hook
 above is the enforcement for agent sessions until the 25/09 source-public
 milestone unlocks protection. `ci.yml` skips `verifica` on docs/`.claude`-only
-changes (`paths-ignore`): a PR that touches only those paths has almost no
-GitHub evidence, and the hook's zero-check-run rule sends it to the local door.
+changes (`paths-ignore`) and `accettazione` on draft PRs: a PR that touches
+only exempt paths carries almost no GitHub evidence, and the hook's
+docs-only file-allowlist rule (or the local door, when even that fails)
+decides instead of a zero-evidence pass.
 
 ## Commits are recovery points, not activity counters
 
