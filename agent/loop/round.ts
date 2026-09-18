@@ -17,6 +17,7 @@ import {
 import { ReasoningConfigurationError, reasoningFromLegacyThinking } from '../providers/reasoning.js';
 import { checkpoint, finish, suspendHere, type TurnScope } from './durability.js';
 import type { ExecutionAbortReason, ExecutionBudget, ModelCallLease, ModelCallTelemetry } from './execution-budget.js';
+import { harnessMessage } from './message-origin.js';
 import { drainStream, edgeTrimmer, retryDelayMs } from './stream.js';
 import { runTool } from './tool-call.js';
 import {
@@ -199,7 +200,9 @@ export function recover(scope: TurnScope, failure: RecoveryFailure): boolean {  
     turn.setAttributes({ 'muffin.recovery.tool_choice': 'required' });
   }  const step = recoveryStep(strategy, { failure, tools: exposed.map((t) => t.spec.name) });
   if (step.message !== undefined) {
-    run.messages.push({ role: 'user', content: [{ type: 'text', text: step.message }] });
+    // Lease-local control, not conversation: marked so a continuation to a
+    // new lease can drop it without touching evidence (`message-origin.ts`).
+    run.messages.push(harnessMessage('user', [{ type: 'text', text: step.message }]));
   }
   turn.setAttributes({
     'muffin.recovery.attempt': run.recoveriesUsed,
@@ -772,9 +775,10 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
           // One attempt, with the specific tools named. Vague feedback gets a
           // vague retry, and this is measured as the highest-value check in the
           // design — but it is a nudge, never a rewrite of what the agent said.
+          // Harness control (see `recover` above), not owner words.
           run.nudgedForCompletion = true;
           closeLive('superseded');
-          run.messages.push({ role: 'user', content: [{ type: 'text', text: completionNudge(completion.named) }] });
+          run.messages.push(harnessMessage('user', [{ type: 'text', text: completionNudge(completion.named) }]));
           continue;
         }
         // It stands. Recorded rather than corrected: silently editing the

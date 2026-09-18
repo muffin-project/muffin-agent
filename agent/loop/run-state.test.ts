@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TurnCounters, TurnRecord, TurnStatus } from '../../core/turns/store.js';
+import { zeroLifetime } from '../../core/turns/store.js';
 import { TurnRun } from './run-state.js';
 
 /**
@@ -50,6 +51,9 @@ const record = (over: { counters?: Partial<TurnCounters>; status?: TurnStatus } 
   claimToken: null,
   outcome: null,
   delivery: null,
+  leaseIndex: 0,
+  continuableReason: null,
+  lifetime: zeroLifetime(),
   createdAt: '2026-09-05T00:00:00.000Z',
   updatedAt: '2026-09-05T00:00:00.000Z',
 });

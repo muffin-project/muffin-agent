@@ -431,9 +431,13 @@ describe('closeRow closes a row from outside the engine', () => {
 
     const row = h.turns.get(h.id);
     expect(row?.outcome).toBe('error');
+    // Harness-marked: a refusal report is loop control, never model output —
+    // no future reader (continuation filter included) may mistake it for
+    // something the model said.
     expect(row?.messages.at(-1)).toEqual({
       role: 'assistant',
       content: [{ type: 'text', text: 'il modello è cambiato: non riprendo' }],
+      origin: 'harness',
     });
     // No counters advanced: the refusal did not run anything.
     expect(row?.counters.iterations).toBe(0);

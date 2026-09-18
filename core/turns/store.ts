@@ -69,14 +69,27 @@ import {
  *    from `waiting`. Written by `enqueue` and `wake`; read by `due`.
  *  - `waiting` — the turn released the runtime and is owed a wake-up. Written
  *    by `suspend`, which is also the only writer of `wake_at` and `wait_for`.
+ *  - `continuable` — the execution lease ended on a recoverable failure, the
+ *    work itself did not. Written by `releaseContinuable`, read by
+ *    `continuableFor`, claimed only by `grantContinuation`. Never picked up
+ *    by the lane (`due`/`armed` exclude it), never reclaimed as `interrupted`,
+ *    never auto-retried: only an explicit owner continuation mints the next
+ *    lease. A `waiting` row must never become `continuable` (its barrier is
+ *    still pending) and a `done` row never comes back.
  *
  * The last two arrived with the consumers (`slice/turno-sospeso`) and were in
  * the `CHECK` before them, which is the whole reason this list was written for
  * the consumers that were coming rather than for the one writer that existed:
  * adding them now cost nothing, and after day 1 of the fourteen it would have
  * cost a table rebuild.
+ *
+ * `continuable` is that rebuild, arriving late: a sixth status on an
+ * installed database costs the `migrateContinuable` copy below (one
+ * transaction, all columns explicit, new columns defaulted). The alternative —
+ * overloading `done` or `waiting` — was rejected: `resumeTurn` structurally
+ * refuses every `done` row, and `waiting` means a known wake condition exists.
  */
-export type TurnStatus = 'runnable' | 'running' | 'waiting' | 'interrupted' | 'done';
+export type TurnStatus = 'runnable' | 'running' | 'waiting' | 'interrupted' | 'done' | 'continuable';
 
 /** How the turn itself ended. The `stopped` value of `TurnResult`, verbatim. */
 export type TurnOutcome = 'answered' | 'cap' | 'budget' | 'aborted' | 'error' | 'ask';
@@ -178,6 +191,139 @@ export type TurnCounters = {
 };
 
 /**
+ * The closed vocabulary of recoverable lease endings — the only classes that
+ * may release a row as `continuable`.
+ *
+ * A durable carrier of "the lease ended, the work did not", and deliberately
+ * not `TurnOutcome`: the outcome column says how the turn ended, and a
+ * continuable turn has not ended. Anything not in this union (answered,
+ * aborted, denied, spent, refused, non-retryable provider failure, uncertain
+ * effect) stays terminal through `finish`.
+ */
+export type ContinuableClass =
+  | 'provider_empty'
+  | 'truncated'
+  | 'provider_transport'
+  | 'model_first_activity_timeout'
+  | 'model_stall'
+  | 'model_deadline'
+  | 'turn_deadline'
+  | 'active_model_budget';
+
+/** Typed durable evidence carried by a `continuable` row. Never message content, never secrets. */
+export type ContinuableReason = {
+  class: ContinuableClass;
+  /** Which lease ended (0-based). */
+  lease: number;
+  /** Consecutive failed attempts behind the release, when the class counts them. */
+  attempts?: number;
+  /** Provider request ids behind the release, for the OpenRouter dashboard. */
+  requestIds?: string[];
+  /** What the ended lease had completed. */
+  completed?: { toolCalls: number };
+  at: string;
+};
+
+/**
+ * Lifetime audit across leases. `counters` (`TurnCounters`) is the CURRENT
+ * lease's capacity and work-in-progress; this is what finished leases spent
+ * and did.
+ *
+ * DERIVED, not independently mutable: folded from exactly one closed lease
+ * at a time — at `grantContinuation` (previous lease) and at terminal
+ * `finish`/`closeRow` (current lease, when it started) — in the same
+ * transaction as the `turn_leases` row it summarizes. `recomputeLifetime`
+ * re-derives it from those rows; on any inconsistency the rows win.
+ *
+ * `iterations` is intentionally absent: it stays cumulative on the lease
+ * counters (no profile caps iterations, and monotonic numbering keeps
+ * `muffin.chat_call` spans unambiguous across leases).
+ */
+export type LifetimeCounters = {
+  /** Finished leases folded in so far. */
+  leases: number;
+  toolCallsMade: number;
+  recoveriesUsed: number;
+  transportRetriesUsed: number;
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+  };
+  spentUsd: number;
+  activeModelMs: number;
+};
+
+export function zeroLifetime(): LifetimeCounters {
+  return {
+    leases: 0,
+    toolCallsMade: 0,
+    recoveriesUsed: 0,
+    transportRetriesUsed: 0,
+    usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    spentUsd: 0,
+    activeModelMs: 0,
+  };
+}
+
+/**
+ * Fold one closed lease into a lifetime rollup (P0-B authority).
+ *
+ * The single arithmetic both `grantContinuation` callers and terminal
+ * `finish` share: `turns.lifetime` is always this function applied to the
+ * previous value plus exactly one closed lease — never an independent
+ * computation, so the stored fold and `recomputeLifetime` cannot disagree
+ * by construction. (`iterations` stays out on both sides: cumulative on the
+ * row, absent from the rollup.)
+ */
+export function foldLifetime(
+  base: LifetimeCounters,
+  closed: TurnCounters,
+  transportUsed: number,
+): LifetimeCounters {
+  return {
+    leases: base.leases + 1,
+    toolCallsMade: base.toolCallsMade + closed.toolCallsMade,
+    recoveriesUsed: base.recoveriesUsed + closed.recoveriesUsed,
+    transportRetriesUsed: base.transportRetriesUsed + transportUsed,
+    usage: {
+      inputTokens: base.usage.inputTokens + closed.usage.inputTokens,
+      outputTokens: base.usage.outputTokens + closed.usage.outputTokens,
+      cacheReadTokens: base.usage.cacheReadTokens + closed.usage.cacheReadTokens,
+      cacheWriteTokens: base.usage.cacheWriteTokens + closed.usage.cacheWriteTokens,
+    },
+    spentUsd: base.spentUsd + closed.spentUsd,
+    activeModelMs: base.activeModelMs + (closed.activeModelMs ?? 0),
+  };
+}
+
+/** Rows written before `lifetime` existed read as "no finished lease yet". */
+function toLifetime(raw: string | null): LifetimeCounters {
+  const base = zeroLifetime();
+  if (raw === null) return base;
+  try {
+    const parsed = JSON.parse(raw) as Partial<LifetimeCounters>;
+    return {
+      leases: Number.isFinite(parsed.leases) ? (parsed.leases as number) : 0,
+      toolCallsMade: Number.isFinite(parsed.toolCallsMade) ? (parsed.toolCallsMade as number) : 0,
+      recoveriesUsed: Number.isFinite(parsed.recoveriesUsed) ? (parsed.recoveriesUsed as number) : 0,
+      transportRetriesUsed: Number.isFinite(parsed.transportRetriesUsed) ? (parsed.transportRetriesUsed as number) : 0,
+      usage: {
+        inputTokens: Number.isFinite(parsed.usage?.inputTokens) ? (parsed.usage?.inputTokens as number) : 0,
+        outputTokens: Number.isFinite(parsed.usage?.outputTokens) ? (parsed.usage?.outputTokens as number) : 0,
+        cacheReadTokens: Number.isFinite(parsed.usage?.cacheReadTokens) ? (parsed.usage?.cacheReadTokens as number) : 0,
+        cacheWriteTokens: Number.isFinite(parsed.usage?.cacheWriteTokens) ? (parsed.usage?.cacheWriteTokens as number) : 0,
+      },
+      spentUsd: Number.isFinite(parsed.spentUsd) ? (parsed.spentUsd as number) : 0,
+      activeModelMs: Number.isFinite(parsed.activeModelMs) ? Math.max(0, parsed.activeModelMs as number) : 0,
+    };
+  } catch {
+    return base;
+  }
+}
+
+/**
  * Counters as they come off disk, with the fields a row may predate filled in.
  *
  * A `JSON.parse(...) as TurnCounters` is a claim, not a check, and the one
@@ -261,6 +407,16 @@ export type TurnRecord = {
   claimToken: string | null;
   outcome: TurnOutcome | null;
   delivery: DeliveryState | null;
+  /**
+   * Which execution lease this row is on (0-based; the first lease is 0).
+   * A new lease is minted only by `grantContinuation`, never by a crash
+   * resume — `resumes` keeps counting those, this counts owner-granted ones.
+   */
+  leaseIndex: number;
+  /** Typed reason while `status` is `continuable`; `null` otherwise. */
+  continuableReason: ContinuableReason | null;
+  /** What finished leases spent and did — folded at grant and at terminal finish, never reset. */
+  lifetime: LifetimeCounters;
   createdAt: string;
   updatedAt: string;
 };
@@ -323,6 +479,12 @@ export type TurnHealth = {
   total: number;
   waiting: { count: number; oldestWakeAt: string | null };
   /**
+   * Turns whose lease ended recoverably and nobody continued yet (P0-B).
+   * Unwindowed like `waiting`: a continuable row is owed work, however old —
+   * the resolver's own TTL decides eligibility, not this inventory.
+   */
+  continuable: { count: number; oldest: string | null };
+  /**
    * Turns that finished with an answer and no address to send it to (D2,
    * judge round 2). Counted the same way `waiting` is — unwindowed, because a
    * reply stranded last week is exactly as owed as one from ten minutes ago —
@@ -345,6 +507,36 @@ export type InterruptedTurn = {
   delivery: DeliveryState | null;
   uncertain: UncertainCall[];
 };
+
+/** One finished execution lease, as `turn_leases` reads back. */
+export type LeaseAuditRow = {
+  turnId: string;
+  leaseIndex: number;
+  startedAt: string;
+  endedAt: string | null;
+  /** ContinuableClass while the turn went continuable, TurnOutcome on terminal finish. */
+  outcome: string | null;
+  /** Harness control archived off the live transcript at grant time. */
+  harnessMessages: Message[];
+  /** Counters as the lease left them. */
+  counters: TurnCounters | null;
+  /** Transport retries this lease spent. */
+  transportUsed: number | null;
+  delivery: DeliveryState | null;
+};
+
+/**
+ * Same speaker, by identity fields rather than JSON bytes: `owner` by
+ * connector+external id, `member` additionally by tenant, `system` by source.
+ * Key order in the stored JSON must never split one speaker in two.
+ */
+function sameSpeaker(a: Principal, b: Principal): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'owner' && b.kind === 'owner') return a.connector === b.connector && a.externalId === b.externalId;
+  if (a.kind === 'member' && b.kind === 'member')
+    return a.connector === b.connector && a.externalId === b.externalId && a.tenantId === b.tenantId;
+  return a.kind === 'system' && b.kind === 'system' && a.source === b.source;
+}
 
 /**
  * Il valore di `model` per un turno che non ha un modello.
@@ -404,7 +596,7 @@ CREATE TABLE IF NOT EXISTS turns (
   -- interattivo, che è la maggioranza. Additiva e nullable: nessuna riga già
   -- scritta acquisisce un'appartenenza che non aveva.
   job_id        TEXT,
-  status        TEXT NOT NULL CHECK (status IN ('runnable','running','waiting','interrupted','done')),
+  status        TEXT NOT NULL CHECK (status IN ('runnable','running','waiting','interrupted','done','continuable')),
   wake_at       TEXT,
   wait_for      TEXT,
   claimed_by    INTEGER,
@@ -412,11 +604,56 @@ CREATE TABLE IF NOT EXISTS turns (
   claim_token   TEXT,
   turn_outcome  TEXT,
   delivery      TEXT,
+  -- P0-B: which execution lease the row is on (0-based). Additive with a
+  -- zero default: every row written before leases existed is on lease 0.
+  lease_index   INTEGER NOT NULL DEFAULT 0,
+  -- P0-B: typed durable reason while status is 'continuable', else NULL.
+  -- Additive and nullable: terminal history carries no lease evidence.
+  continuable_reason TEXT,
+  -- P0-B: lifetime audit across finished leases (JSON). Additive and
+  -- nullable: old rows read as "no finished lease yet" (see toLifetime).
+  lifetime      TEXT,
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_turns_status ON turns(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_turns_due ON turns(status, wake_at);
+-- P0-B: one audit row per finished execution lease. The turns row carries the
+-- live lease; this table carries what ended leases spent, said as harness
+-- control, and how they ended — so a continuation can strip lease-local
+-- control from the live transcript without destroying evidence, and so
+-- cumulative audit survives the counter reset a new lease requires.
+--
+-- AUTHORITY (with turns.lifetime): these rows are the source of truth for
+-- per-lease detail; lifetime is their derived fold (same transaction,
+-- never an independent write). On any inconsistency these rows win:
+-- recomputeLifetime re-derives the fold from them. Every terminal finish
+-- of a started lease and every grant closes exactly one row here.
+--
+-- Additive (CREATE TABLE IF NOT EXISTS): zero migration cost by construction.
+CREATE TABLE IF NOT EXISTS turn_leases (
+  turn_id     TEXT NOT NULL,
+  lease_index INTEGER NOT NULL,
+  started_at  TEXT NOT NULL,
+  ended_at    TEXT,
+  -- Terminal class of the ended lease: a ContinuableClass while the turn
+  -- went continuable, a TurnOutcome when it finished outright.
+  outcome     TEXT,
+  -- Harness control messages archived off the live transcript at grant time
+  -- (JSON array of Message). Evidence stays on the turns row; this keeps the
+  -- directives that must not govern the next lease.
+  harness_messages TEXT,
+  -- Counters as the lease left them (JSON TurnCounters).
+  counters    TEXT,
+  -- Transport retries this lease spent (start allowance minus what was left:
+  -- the allowance itself is profile data and is not re-derived here).
+  transport_used INTEGER,
+  -- Delivery state as the lease left it: the diagnostic went out under this
+  -- lease even when the final answer goes out under a later one.
+  delivery    TEXT,
+  PRIMARY KEY (turn_id, lease_index)
+);
+CREATE INDEX IF NOT EXISTS idx_turn_leases_turn ON turn_leases(turn_id, lease_index);
 CREATE TABLE IF NOT EXISTS turn_tool_calls (
   turn_id     TEXT NOT NULL,
   call_id     TEXT NOT NULL,
@@ -500,11 +737,22 @@ type Row = {
   claim_token: string | null;
   turn_outcome: string | null;
   delivery: string | null;
+  lease_index: number | null;
+  continuable_reason: string | null;
+  lifetime: string | null;
   created_at: string;
   updated_at: string;
 };
 
 function toRecord(row: Row): TurnRecord {
+  let continuableReason: ContinuableReason | null = null;
+  if (row.continuable_reason !== null) {
+    try {
+      continuableReason = JSON.parse(row.continuable_reason) as ContinuableReason;
+    } catch {
+      continuableReason = null;
+    }
+  }
   return {
     id: row.id,
     principal: JSON.parse(row.principal) as Principal,
@@ -525,6 +773,9 @@ function toRecord(row: Row): TurnRecord {
     claimToken: row.claim_token,
     outcome: row.turn_outcome as TurnOutcome | null,
     delivery: row.delivery as DeliveryState | null,
+    leaseIndex: Number.isFinite(row.lease_index) ? (row.lease_index as number) : 0,
+    continuableReason,
+    lifetime: toLifetime(row.lifetime),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -570,11 +821,66 @@ function serializzaMessaggi(messages: readonly Message[]): string {
   return redactText(JSON.stringify(messages));
 }
 
+/**
+ * The sixth status, arriving late, on databases that already have rows.
+ *
+ * `status` carries a `CHECK`, and SQLite cannot alter one — so a value added
+ * after day one costs a table rebuild. Exactly one transaction, columns
+ * explicit on both sides, new columns defaulted (`lease_index` 0,
+ * `continuable_reason`/`lifetime` NULL, which read as "first lease, no
+ * finished lease yet"). Old statuses are a subset of the new CHECK, so no row
+ * can fail the copy.
+ *
+ * Runs in the constructor like `ensureColumn`, and for the same reason: every
+ * opener (gateway, REPL, `doctor`'s read-only handle) must see the same
+ * table. A concurrent opener mid-copy hits `DROP TABLE IF EXISTS turns_new`
+ * + transactional DDL; a lock failure re-reads, and only rethrows when the
+ * table still lacks the value — so the loser of a boot race either proceeds
+ * on the migrated table or fails loudly, never on a half copy.
+ */
+function migrateContinuable(db: Database.Database): void {
+  const table = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='turns'`).get() as
+    | { sql: string }
+    | undefined;
+  if (table === undefined || table.sql.includes("'continuable'")) return;
+  const start = SCHEMA.indexOf('CREATE TABLE IF NOT EXISTS turns (');
+  const end = SCHEMA.indexOf(');', start);
+  if (start < 0 || end < 0) throw new Error('migrateContinuable: turns schema not found');
+  const createNew = `${SCHEMA.slice(start, end)});`.replace(
+    'CREATE TABLE IF NOT EXISTS turns (',
+    'CREATE TABLE turns_new (',
+  );
+  const columns =
+    'id, principal, tenant, surface, session_id, model, messages, taint, counters, ' +
+    'reply_to, job_id, status, wake_at, wait_for, claimed_by, claimed_at, claim_token, ' +
+    'turn_outcome, delivery, created_at, updated_at';
+  const migrate = db.transaction(() => {
+    db.exec('DROP TABLE IF EXISTS turns_new');
+    db.exec(createNew);
+    db.exec(
+      `INSERT INTO turns_new (${columns}, lease_index, continuable_reason, lifetime) ` +
+        `SELECT ${columns}, 0, NULL, NULL FROM turns`,
+    );
+    db.exec('DROP TABLE turns');
+    db.exec('ALTER TABLE turns_new RENAME TO turns');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_turns_status ON turns(status, updated_at)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_turns_due ON turns(status, wake_at)');
+  });
+  try {
+    migrate();
+  } catch (error) {
+    const again = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='turns'`).get() as
+      | { sql: string }
+      | undefined;
+    if (again !== undefined && again.sql.includes("'continuable'")) return;
+    throw error;
+  }
+}
+
 export class TurnStore {
   private readonly insertStmt: Database.Statement;
   private readonly getStmt: Database.Statement;
   private readonly checkpointStmt: Database.Statement;
-  private readonly finishStmt: Database.Statement;
   private readonly deliveryStmt: Database.Statement;
   private readonly intentStmt: Database.Statement;
   private readonly outcomeStmt: Database.Statement;
@@ -596,14 +902,46 @@ export class TurnStore {
   private readonly outcomesStmt: Database.Statement;
   private readonly undeliverableCountStmt: Database.Statement;
   private readonly markUndoneStmt: Database.Statement;
+  private readonly continuableCountStmt: Database.Statement;
+  /**
+   * P0-B statements, prepared lazily on first use rather than in the
+   * constructor: they name `turn_leases` and the new `turns` columns, which
+   * do not exist on a pre-migration database — and a genuinely read-only
+   * handle (`{ readOnly: true }`, e.g. `doctor`) must open such a database
+   * without tripping over a `prepare` that throws on a missing table. Any
+   * caller that reaches these on a handle that cannot see them fails loudly
+   * here instead of halfway through a write.
+   */
+  private leaseAreaCache?: {
+    finish: Database.Statement;
+    release: Database.Statement;
+    grant: Database.Statement;
+    open: Database.Statement;
+    close: Database.Statement;
+    started: Database.Statement;
+    leases: Database.Statement;
+    continuable: Database.Statement;
+  };
 
   constructor(
     private readonly db: Database.Database,
     private readonly clock: () => Date = () => new Date(),
     /** Injected so a test can exercise dead, live and reused holders. */
     private readonly alive: (pid: number) => boolean = pidAlive,
+    /**
+     * P0-B migration boundary: genuinely read-only consumers (`doctor`, boot
+     * probes) must never trigger a write migration as a side effect of
+     * looking. With `readOnly`, the constructor prepares statements but runs
+     * no `exec`, no `ensureColumn`, no rebuild — reads tolerate old schemas
+     * (`toRecord`/`toLifetime` default every additive field). Writers keep
+     * the default: open, migrate, then work.
+     */
+    options: { readOnly?: boolean } = {},
   ) {
-    db.exec(SCHEMA);
+    // Read-only handles prepare statements below but run no schema write:
+    // no exec, no ensureColumn, no rebuild (see the option's docstring).
+    if (options.readOnly !== true) {
+      db.exec(SCHEMA);
     // Additive, for a database written before `claim_token` existed — see
     // `ensureColumn`'s own docstring in `core/lock/durable.ts`.
     ensureColumn(db, 'turns', 'claim_token', 'claim_token TEXT');
@@ -620,6 +958,13 @@ export class TurnStore {
     ensureColumn(db, 'turn_tool_calls', 'reversible', 'reversible TEXT');
     ensureColumn(db, 'turn_tool_calls', 'resource', 'resource TEXT');
     ensureColumn(db, 'turn_tool_calls', 'decision', 'decision TEXT');
+    // P0-B, additive columns first (an old table may predate even these),
+    // then the status rebuild, which copies every column by name.
+    ensureColumn(db, 'turns', 'lease_index', 'lease_index INTEGER NOT NULL DEFAULT 0');
+    ensureColumn(db, 'turns', 'continuable_reason', 'continuable_reason TEXT');
+    ensureColumn(db, 'turns', 'lifetime', 'lifetime TEXT');
+    migrateContinuable(db);
+    }
     // `CREATE INDEX IF NOT EXISTS` in `SCHEMA` non basta per un database che
     // ha gia' la tabella e non la colonna: l'indice sopra nomina `started_at`,
     // che esiste da sempre, quindi qui non serve un secondo `ensureIndex`.
@@ -650,11 +995,7 @@ export class TurnStore {
     // a finished turn is nobody's, so the reclaim below can never see it as
     // abandoned, and no stale token can ever fence a write back in later.
     // Fenced the same way as `checkpoint` — see that statement's comment.
-    this.finishStmt = db.prepare(
-      `UPDATE turns SET status = 'done', turn_outcome = @outcome, messages = @messages, taint = @taint,
-                        counters = @counters, claimed_by = NULL, claim_token = NULL, updated_at = @now
-       WHERE id = @id AND claim_token = @claimToken`,
-    );
+    // (Prepared in `leaseArea`, not here: it names the `lifetime` column.)
     this.deliveryStmt = db.prepare(
       `UPDATE turns SET delivery = @delivery, updated_at = @now WHERE id = @id`,
     );
@@ -849,6 +1190,105 @@ export class TurnStore {
       `UPDATE turn_tool_calls SET undone_at = @now
        WHERE turn_id = @turnId AND call_id = @callId AND ended_at IS NOT NULL`,
     );
+    this.continuableCountStmt = db.prepare(
+      `SELECT count(*) AS n, min(updated_at) AS oldest FROM turns WHERE status = 'continuable'`,
+    );
+  }
+
+  /**
+   * The P0-B statement group — see the field's own docstring for why this is
+   * lazy rather than constructed.
+   */
+  private leaseArea(): {
+    finish: Database.Statement;
+    release: Database.Statement;
+    grant: Database.Statement;
+    open: Database.Statement;
+    close: Database.Statement;
+    started: Database.Statement;
+    leases: Database.Statement;
+    continuable: Database.Statement;
+  } {
+    const hit = this.leaseAreaCache;
+    if (hit !== undefined) return hit;
+    const db = this.db;
+    const built = {
+      /**
+       * The terminal write (see `finish`): sets `lifetime` alongside the
+       * outcome because a terminal finish folds the current lease in the
+       * same transaction. Lives in this lazy group — not the constructor —
+       * because it names the `lifetime` column, which a pre-migration table
+       * does not have; a read-only handle on such a table must still open.
+       */
+      finish: db.prepare(
+        `UPDATE turns SET status = 'done', turn_outcome = @outcome, messages = @messages, taint = @taint,
+                          counters = @counters, lifetime = @lifetime, claimed_by = NULL, claim_token = NULL, updated_at = @now
+         WHERE id = @id AND claim_token = @claimToken`,
+      ),
+      /**
+       * The write that ends a lease without ending the work (P0-B).
+       *
+       * Same fencing as `finish`/`suspend`, same claim release, one deliberate
+       * difference: the row becomes `continuable` with a typed reason instead
+       * of `done` with an outcome. Guarded on `running` so a `waiting` row
+       * (barrier still pending) can never slide here, and a `done` row never
+       * comes back.
+       */
+      release: db.prepare(
+        `UPDATE turns SET status = 'continuable', turn_outcome = NULL, continuable_reason = @reason,
+                          messages = @messages, taint = @taint, counters = @counters,
+                          claimed_by = NULL, claim_token = NULL, updated_at = @now
+         WHERE id = @id AND status = 'running' AND claim_token = @claimToken`,
+      ),
+      /**
+       * The claim half of `grantContinuation`, as one statement: only a
+       * `continuable` row can be taken, and taking it clears the reason (the
+       * row is work-in-progress again, not owed work). The full grant wraps
+       * this with the counters reset and the lease-audit writes in one
+       * transaction — see `grantContinuation`.
+       */
+      grant: db.prepare(
+        `UPDATE turns SET status = 'running', claimed_by = @pid, claimed_at = @now, claim_token = @token,
+                          messages = @messages, taint = @taint, counters = @counters,
+                          lease_index = @leaseIndex, continuable_reason = NULL, lifetime = @lifetime,
+                          updated_at = @now
+         WHERE id = @id AND status = 'continuable'`,
+      ),
+      open: db.prepare(
+        `INSERT OR IGNORE INTO turn_leases (turn_id, lease_index, started_at) VALUES (@turnId, @leaseIndex, @now)`,
+      ),
+      /**
+       * Close (or backfill) one lease audit row. `INSERT ... ON CONFLICT DO
+       * UPDATE` because the opener and the closer are different moments: a
+       * grant opens the new lease, the next grant or the terminal finish
+       * closes it — and lease 0, which no grant ever opened, is backfilled by
+       * its first close with `started_at` falling back to the row's birth.
+       */
+      close: db.prepare(
+        `INSERT INTO turn_leases (turn_id, lease_index, started_at, ended_at, outcome, harness_messages, counters, transport_used, delivery)
+         VALUES (@turnId, @leaseIndex, @startedAt, @now, @outcome, @harness, @counters, @transportUsed, @delivery)
+         ON CONFLICT(turn_id, lease_index) DO UPDATE SET
+           ended_at = excluded.ended_at, outcome = excluded.outcome,
+           harness_messages = excluded.harness_messages, counters = excluded.counters,
+           transport_used = excluded.transport_used, delivery = excluded.delivery`,
+      ),
+      started: db.prepare(
+        `SELECT started_at AS startedAt FROM turn_leases WHERE turn_id = ? AND lease_index = ?`,
+      ),
+      /** Eligible continuable rows for one conversation, newest first. Principal matched in JS. */
+      continuable: db.prepare(
+        `SELECT id, principal, updated_at, continuable_reason FROM turns
+         WHERE status = 'continuable' AND session_id = @session AND updated_at >= @since
+         ORDER BY updated_at DESC`,
+      ),
+      leases: db.prepare(
+        `SELECT turn_id AS turnId, lease_index AS leaseIndex, started_at AS startedAt, ended_at AS endedAt,
+                outcome, harness_messages AS harnessMessages, counters, transport_used AS transportUsed, delivery
+         FROM turn_leases WHERE turn_id = ? ORDER BY lease_index`,
+      ),
+    };
+    this.leaseAreaCache = built;
+    return built;
   }
 
   /**
@@ -994,11 +1434,219 @@ export class TurnStore {
     );
   }
 
-  /** Rows the lane may pick up now: enqueued, expired, or left by a dead process. */
+  /** Rows the lane may pick up now: enqueued, expired, or left by a dead process.
+   *
+   * `continuable` is deliberately absent: no automatic pickup, ever — only an
+   * explicit owner continuation mints the next lease (`grantContinuation`).
+   */
   due(now: Date = this.clock(), limit = 20): TurnRecord[] {
     return (this.dueStmt.all({ now: now.toISOString(), limit }) as Row[]).map(toRecord);
   }
 
+  /**
+   * End the execution lease, keep the work (P0-B).
+   *
+   * The caller (`agent/loop/durability.ts`) has already decided this failure
+   * is recoverable-by-continuation: provider-side emptiness exhausted,
+   * execution budgets spent. Terminal endings (answered, aborted, denied,
+   * spent, refused, uncertain effect) go through `finish` and never here.
+   *
+   * Guarded on `running`, so a `waiting` row — whose barrier is still
+   * pending — can never slide into `continuable`, and a `done` row never
+   * comes back. Releases the claim like `finish`/`suspend`: nobody holds a
+   * continuable row, so no fenced write may land on it later either.
+   */
+  releaseContinuable(
+    id: string,
+    patch: { messages: Message[]; taint: TrustTier; counters: TurnCounters; reason: ContinuableReason },
+    claimToken: string | null,
+  ): boolean {
+    return (
+      this.leaseArea().release.run({
+        id,
+        reason: JSON.stringify(patch.reason),
+        messages: serializzaMessaggi(patch.messages),
+        taint: patch.taint,
+        counters: JSON.stringify(patch.counters),
+        claimToken,
+        now: this.clock().toISOString(),
+      }).changes === 1
+    );
+  }
+
+  /**
+   * Mint the next execution lease on an explicit owner continuation (P0-B).
+   *
+   * The one operation that constructs fresh lease-local budgets: the caller
+   * (`agent/loop/continuation.ts`) folds the ended lease into `lifetime`,
+   * resets the lease counters from the profile, filters harness control out
+   * of `messages` (archived in `prevLease`), and appends the owner's
+   * continuation message. This method persists that decision atomically —
+   * claim the row, close the previous lease audit, open the new one — and
+   * returns `null` when another process won the race, so two processes can
+   * never hold the same continuation.
+   */
+  grantContinuation(
+    id: string,
+    patch: {
+      messages: Message[];
+      taint: TrustTier;
+      counters: TurnCounters;
+      lifetime: LifetimeCounters;
+      leaseIndex: number;
+      prevLease: {
+        index: number;
+        startedAt: string;
+        endedAt: string;
+        outcome: string;
+        harnessMessages: Message[];
+        counters: TurnCounters;
+        transportUsed: number;
+        delivery: DeliveryState | null;
+      };
+      newLeaseStartedAt: string;
+    },
+    pid: number = process.pid,
+  ): TurnRecord | null {
+    const at = this.clock().toISOString();
+    const token = randomUUID();
+    let won = false;
+    const tx = this.db.transaction(() => {
+      const r = this.leaseArea().grant.run({
+        id,
+        pid,
+        token,
+        now: at,
+        messages: serializzaMessaggi(patch.messages),
+        taint: patch.taint,
+        counters: JSON.stringify(patch.counters),
+        leaseIndex: patch.leaseIndex,
+        lifetime: JSON.stringify(patch.lifetime),
+      });
+      if (r.changes !== 1) return;
+      won = true;
+      this.leaseArea().close.run({
+        turnId: id,
+        leaseIndex: patch.prevLease.index,
+        startedAt: patch.prevLease.startedAt,
+        now: patch.prevLease.endedAt,
+        outcome: patch.prevLease.outcome,
+        harness: redactText(JSON.stringify(patch.prevLease.harnessMessages)),
+        counters: JSON.stringify(patch.prevLease.counters),
+        transportUsed: patch.prevLease.transportUsed,
+        delivery: patch.prevLease.delivery,
+      });
+      this.leaseArea().open.run({ turnId: id, leaseIndex: patch.leaseIndex, now: patch.newLeaseStartedAt });
+    });
+    tx();
+    if (!won) return null;
+    return this.get(id);
+  }
+
+  /** Open a lease audit row without closing anything (used only by tests/seeds). */
+  openLease(turnId: string, leaseIndex: number, startedAt: string): void {
+    this.leaseArea().open.run({ turnId, leaseIndex, now: startedAt });
+  }
+
+  /** When a lease audit row started, if it was ever opened. */
+  leaseStartedAt(turnId: string, leaseIndex: number): string | null {
+    const row = this.leaseArea().started.get(turnId, leaseIndex) as { startedAt: string } | undefined;
+    return row?.startedAt ?? null;
+  }
+
+  /** Finished-lease audit for one turn, oldest first. */
+  leasesFor(turnId: string): LeaseAuditRow[] {
+    const rows = this.leaseArea().leases.all(turnId) as {
+      turnId: string;
+      leaseIndex: number;
+      startedAt: string;
+      endedAt: string | null;
+      outcome: string | null;
+      harnessMessages: string | null;
+      counters: string | null;
+      transportUsed: number | null;
+      delivery: string | null;
+    }[];
+    return rows.map((r) => ({
+      turnId: r.turnId,
+      leaseIndex: r.leaseIndex,
+      startedAt: r.startedAt,
+      endedAt: r.endedAt,
+      outcome: r.outcome,
+      harnessMessages: r.harnessMessages === null ? [] : (JSON.parse(r.harnessMessages) as Message[]),
+      counters: r.counters === null ? null : (JSON.parse(r.counters) as TurnCounters),
+      transportUsed: r.transportUsed,
+      delivery: r.delivery as DeliveryState | null,
+    }));
+  }
+
+  /**
+   * Re-derive the lifetime fold from the lease audit rows (P0-B authority
+   * proof).
+   *
+   * `turns.lifetime` is a derived cache, not a second truth: this function
+   * recomputes exactly what `grantContinuation` and terminal `finish` fold
+   * in, from the same rows. Tests assert stored equals recomputed after
+   * every lifecycle; on any inconsistency these rows win and this function
+   * is the repair.
+   */
+  recomputeLifetime(turnId: string): LifetimeCounters {
+    const folded = zeroLifetime();
+    for (const lease of this.leasesFor(turnId)) {
+      if (lease.endedAt === null) continue;
+      folded.leases += 1;
+      folded.toolCallsMade += lease.counters?.toolCallsMade ?? 0;
+      folded.recoveriesUsed += lease.counters?.recoveriesUsed ?? 0;
+      folded.transportRetriesUsed += lease.transportUsed ?? 0;
+      folded.usage.inputTokens += lease.counters?.usage.inputTokens ?? 0;
+      folded.usage.outputTokens += lease.counters?.usage.outputTokens ?? 0;
+      folded.usage.cacheReadTokens += lease.counters?.usage.cacheReadTokens ?? 0;
+      folded.usage.cacheWriteTokens += lease.counters?.usage.cacheWriteTokens ?? 0;
+      folded.spentUsd += lease.counters?.spentUsd ?? 0;
+      folded.activeModelMs += lease.counters?.activeModelMs ?? 0;
+    }
+    return folded;
+  }
+
+  /**
+   * Eligible continuable rows for one conversation, newest first (P0-B).
+   *
+   * The conversational resolver (`agent/loop/continuation.ts`) decides on
+   * these; the principal is matched in JS on identity fields rather than raw
+   * JSON equality, so key order can never split one speaker in two.
+   */
+  continuableFor(
+    sessionId: string,
+    principal: Principal,
+    since: string,
+  ): { id: string; updatedAt: string; reason: ContinuableReason | null }[] {
+    const rows = this.leaseArea().continuable.all({ session: sessionId, since }) as {
+      id: string;
+      principal: string;
+      updated_at: string;
+      continuable_reason: string | null;
+    }[];
+    const out: { id: string; updatedAt: string; reason: ContinuableReason | null }[] = [];
+    for (const row of rows) {
+      let stored: Principal;
+      try {
+        stored = JSON.parse(row.principal) as Principal;
+      } catch {
+        continue;
+      }
+      if (!sameSpeaker(stored, principal)) continue;
+      let reason: ContinuableReason | null = null;
+      if (row.continuable_reason !== null) {
+        try {
+          reason = JSON.parse(row.continuable_reason) as ContinuableReason;
+        } catch {
+          reason = null;
+        }
+      }
+      out.push({ id: row.id, updatedAt: row.updated_at, reason });
+    }
+    return out;
+  }
   /** Suspended rows carrying an event barrier, for the lane to evaluate. */
   armed(limit = 50): TurnRecord[] {
     return (this.armedStmt.all({ limit }) as Row[]).map(toRecord);
@@ -1123,23 +1771,62 @@ export class TurnStore {
    * `agent/loop.ts`'s `finish` closure treats `false` as "the claim is gone,
    * report nothing further" rather than retrying or pretending the outcome
    * this call was about to record is now durable.
+   *
+   * P0-B: `lease` closes the current lease audit row in the same transaction —
+   * a finished turn always settles which lease ended it, so cumulative audit
+   * never depends on a second write landing later. Absent for rows that never
+   * ran a lease (script/capped refuses, unstarted claims).
    */
   finish(
     id: string,
     end: { outcome: TurnOutcome; messages: Message[]; taint: TrustTier; counters: TurnCounters },
     claimToken: string | null,
+    lease?: {
+      startedAt: string;
+      harnessMessages: Message[];
+      transportUsed: number;
+      delivery: DeliveryState | null;
+    },
   ): boolean {
-    return (
-      this.finishStmt.run({
+    const at = this.clock().toISOString();
+    let landed = 0;
+    const tx = this.db.transaction(() => {
+      // The lifetime fold rides the same write: a terminal finish settles
+      // which lease ended it AND what all finished leases cost, atomically.
+      // Rows that never ran pass no lease and keep whatever lifetime they
+      // have (usually zeros) — folding zeros would mint a phantom lease.
+      const before = this.getStmt.get(id) as Row | undefined;
+      const lifetime =
+        lease === undefined
+          ? (before?.lifetime ?? null)
+          : JSON.stringify(foldLifetime(toLifetime(before?.lifetime ?? null), end.counters, lease.transportUsed));
+      const r = this.leaseArea().finish.run({
         id,
         outcome: end.outcome,
         messages: serializzaMessaggi(end.messages),
         taint: end.taint,
         counters: JSON.stringify(end.counters),
+        lifetime,
         claimToken,
-        now: this.clock().toISOString(),
-      }).changes === 1
-    );
+        now: at,
+      });
+      landed = r.changes;
+      if (r.changes !== 1 || lease === undefined) return;
+      const leaseIndex = before?.lease_index ?? 0;
+      this.leaseArea().close.run({
+        turnId: id,
+        leaseIndex: Number.isFinite(leaseIndex) ? (leaseIndex as number) : 0,
+        startedAt: lease.startedAt,
+        now: at,
+        outcome: end.outcome,
+        harness: redactText(JSON.stringify(lease.harnessMessages)),
+        counters: JSON.stringify(end.counters),
+        transportUsed: lease.transportUsed,
+        delivery: lease.delivery,
+      });
+    });
+    tx();
+    return landed === 1;
   }
 
   /** The other outcome. Never merged with the one above — see `DeliveryState`. */
@@ -1485,6 +2172,7 @@ export class TurnStore {
         heldBy(r, now.getTime(), TURN_STALE_AFTER_MS, this.alive) === null,
     );
     const waiting = this.waitingStmt.get() as { n: number; oldest: string | null };
+    const continuable = this.continuableCountStmt.get() as { n: number; oldest: string | null };
     const undeliverable = this.undeliverableCountStmt.get() as { n: number };
     return {
       total,
@@ -1492,6 +2180,10 @@ export class TurnStore {
       // but a turn still suspended from last month is a turn still owed — the
       // window would hide exactly the worst case.
       waiting: { count: waiting.n, oldestWakeAt: waiting.oldest },
+      // Same reasoning: a lease that ended recoverably last month is still
+      // continuable work until the owner says otherwise or the resolver TTL
+      // excludes it.
+      continuable: { count: continuable.n, oldest: continuable.oldest },
       // Same reasoning, same absence of a window: a reply nobody could send
       // last month is still a reply nobody sent.
       undeliverable: { count: undeliverable.n },
@@ -1542,6 +2234,11 @@ export function describeInterrupted(turn: InterruptedTurn): string {
  * `doctor` opens its own handle, the way it does for the gateway lock and the
  * consolidation register. `null` means the table is not there at all, which is
  * a different fact from "no turns yet".
+ *
+ * Read-only by construction: the store is opened with `{ readOnly: true }`,
+ * so looking never migrates, backfills, or otherwise writes — on an old
+ * database this reports zeros for the new shapes instead of rebuilding the
+ * table as a side effect of a diagnosis.
  */
 export function readTurnHealth(
   db: Database.Database,
@@ -1552,9 +2249,7 @@ export function readTurnHealth(
   } catch {
     return null;
   }
-  // Read-only: the constructor's `CREATE TABLE IF NOT EXISTS` is a no-op here
-  // because the probe above already proved the table exists.
-  return new TurnStore(db).health({ windowMs });
+  return new TurnStore(db, () => new Date(), pidAlive, { readOnly: true }).health({ windowMs });
 }
 
 /**
@@ -1576,7 +2271,7 @@ export function readUndelivered(
   } catch {
     return null;
   }
-  return new TurnStore(db).undelivered({ windowMs });
+  return new TurnStore(db, () => new Date(), pidAlive, { readOnly: true }).undelivered({ windowMs });
 }
 
 /**
