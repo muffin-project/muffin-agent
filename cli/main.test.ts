@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync, chmodSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync, chmodSync, readdirSync, statSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
@@ -23,6 +23,48 @@ function scratchHome(): { dir: string; xdg: string } {
   const dir = mkdtempSync(join(tmpdir(), 'muffin-main-cli-'));
   homes.push(dir);
   return { dir, xdg: join(dir, '.config-xdg') };
+}
+
+/** Test-only helpers for the secret-backend slice (D2/D3). */
+function flipBackend(dir: string, backend: 'file' | 'systemd'): void {
+  const file = join(dir, 'config.json');
+  const config = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+  config['secrets'] = { backend };
+  writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+}
+
+function backendOf(dir: string): string {
+  const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')) as {
+    secrets?: { backend?: string };
+  };
+  return config.secrets?.backend ?? 'file';
+}
+
+/** Every legacy secret file under both file stores (home + persistent-under-XDG). */
+function listHomeSecrets(dir: string): string[] {
+  const out: string[] = [];
+  for (const d of [join(dir, 'secrets'), join(dir, '.config-xdg', 'muffin', 'secrets')]) {
+    let entries: string[] = [];
+    try {
+      entries = readdirSync(d);
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      const full = join(d, e);
+      try {
+        if (statSync(full).isFile()) out.push(full);
+      } catch {
+        // Vanished mid-listing: ignore, the command under test re-reads anyway.
+      }
+    }
+  }
+  return out.sort();
+}
+
+function haveSystemdCreds(): boolean {
+  const r = spawnSync('systemd-creds', ['--version'], { stdio: 'ignore' });
+  return r.error === undefined && r.status === 0;
 }
 
 function muffin(env: Record<string, string>, args: string[], stdin = ''): { code: number; out: string; err: string } {
@@ -233,6 +275,89 @@ describe('selective Italian command aliases (ADR-0036)', () => {
     expect(ombreggiata.err).toBe('');
     expect(readFileSync(join(xdg, 'muffin', 'secrets', 'provider_api_key'), 'utf8')).toContain('sk-persisted');
     expect(existsSync(join(dir, 'secrets', 'provider_api_key'))).toBe(false);
+  });
+
+  it('secret set --systemd and --file are exclusive', () => {
+    const { dir, xdg } = scratchHome();
+    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['secret', 'set', 'k', '--systemd', '--file'], 'v\n');
+    expect(r.code).toBe(78);
+    expect(r.err).toContain('exclusive');
+  });
+
+  it('on a systemd-backend Home, plain and --file set refuse instead of shadowing', () => {
+    const { dir, xdg } = scratchHome();
+    const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
+    expect(muffin(env, ['init'], 'sk-ant-fixture\n').code).toBe(0);
+    flipBackend(dir, 'systemd');
+    const before = listHomeSecrets(dir);
+    expect(before.length).toBeGreaterThan(0);
+    const plain = muffin(env, ['secret', 'set', 'nuova'], 'sk-nuova\n');
+    expect(plain.code).toBe(78);
+    expect(plain.err).toContain('--systemd');
+    const file = muffin(env, ['secret', 'set', 'nuova', '--file'], 'sk-nuova\n');
+    expect(file.code).toBe(78);
+    expect(file.err).toContain('shadow');
+    // And neither refusal wrote anything anywhere.
+    expect(listHomeSecrets(dir)).toEqual(before);
+  });
+
+  it('secret set --systemd refuses while legacy file secrets exist', () => {
+    // Provisioning one secret to systemd with the rest on files would strand
+    // them. On Linux the refusal precedes any sudo/provisioning, so it runs
+    // anywhere; elsewhere the platform gate fires first (still a refusal,
+    // never a file write).
+    const { dir, xdg } = scratchHome();
+    const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
+    expect(muffin(env, ['init'], 'sk-ant-fixture\n').code).toBe(0);
+    const r = muffin(env, ['secret', 'set', 'nuova', '--systemd'], 'sk-nuova\n');
+    expect(r.code).toBe(78);
+    expect(r.err).toMatch(process.platform === 'linux' ? /migrate/ : /Linux-only/);
+    expect(listHomeSecrets(dir).length).toBeGreaterThan(0);
+  });
+
+  it('secret migrate without --yes is usage, not a migration', () => {
+    const { dir, xdg } = scratchHome();
+    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['secret', 'migrate']);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('--yes');
+  });
+
+  it('secret migrate --yes with nothing legacy is a no-op', () => {
+    // Empty store migrates vacuously. Platform-gated below: without legacy
+    // names the only remaining branch is the Linux-only provisioning gate.
+    if (process.platform !== 'linux') {
+      const { dir, xdg } = scratchHome();
+      const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['secret', 'migrate', '--yes']);
+      expect(r.code).toBe(78);
+      expect(r.err).toContain('Linux-only');
+      return;
+    }
+    const { dir, xdg } = scratchHome();
+    const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
+    expect(muffin(env, ['init'], 'sk-ant-fixture\n').code).toBe(0);
+    // Remove the init-written key so the store is genuinely empty.
+    for (const f of listHomeSecrets(dir)) rmSync(f, { force: true });
+    const r = muffin(env, ['secret', 'migrate', '--yes']);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('nothing to migrate');
+  });
+
+  it('secret migrate --yes fails closed without systemd-creds, legacy intact', () => {
+    // Full provisioning needs root + systemd-creds (the VM proves it); here
+    // the binary is absent, so the run must abort BEFORE flipping or
+    // deleting anything. Skipped where the binary exists — that machine
+    // proves the positive path instead (disposable VM receipt).
+    if (process.platform !== 'linux' || haveSystemdCreds()) return;
+    const { dir, xdg } = scratchHome();
+    const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
+    expect(muffin(env, ['init'], 'sk-ant-fixture\n').code).toBe(0);
+    const before = listHomeSecrets(dir);
+    expect(before.length).toBeGreaterThan(0);
+    const r = muffin(env, ['secret', 'migrate', '--yes']);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('legacy');
+    expect(listHomeSecrets(dir)).toEqual(before);
+    expect(backendOf(dir)).toBe('file');
   });
 
   it('a word that merely resembles an alias is not resolved — the map is exact, not fuzzy', () => {

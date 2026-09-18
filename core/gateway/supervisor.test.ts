@@ -16,14 +16,20 @@ import { checkSupervisor, type SupervisorProbes } from './supervisor.js';
 
 const HOME = '/tmp/muffin-fake-home';
 const HOME_DIR = '/tmp/fake-owner';
+const SERVICE_USER = 'owner';
 
 function probes(over: Partial<SupervisorProbes>): SupervisorProbes {
   return { unitFileExists: () => false, ...over };
 }
 
+/** Linux check with the dedicated user plumbed, like doctor does. */
+function linux(home: string, running: boolean, over: Partial<SupervisorProbes>) {
+  return checkSupervisor('linux', home, running, probes(over), HOME_DIR, undefined, SERVICE_USER);
+}
+
 describe('checkSupervisor — never fail, always ok or a named remedy', () => {
   it('says so plainly when nothing is installed and no gateway is running', () => {
-    const status = checkSupervisor('linux', HOME, false, probes({}), HOME_DIR);
+    const status = linux(HOME, false, {});
     expect(status.engaged).toBe(false);
     if (!status.engaged) {
       expect(status.detail).toContain('non riparte da solo');
@@ -34,7 +40,7 @@ describe('checkSupervisor — never fail, always ok or a named remedy', () => {
   it('names the live-but-unsupervised case when a gateway is up with no unit installed', () => {
     // The exact case the brief names: `muffin gateway run` by hand — alive,
     // reachable, and gone the moment this terminal closes.
-    const status = checkSupervisor('linux', HOME, true, probes({}), HOME_DIR);
+    const status = linux(HOME, true, {});
     expect(status.engaged).toBe(false);
     if (!status.engaged) expect(status.detail).toContain('vive finché il terminale');
   });
@@ -73,42 +79,63 @@ describe('checkSupervisor — never fail, always ok or a named remedy', () => {
   });
 
   describe('linux', () => {
-    it('is ok when the unit is enabled and linger is on', () => {
-      const status = checkSupervisor(
-        'linux',
+    it('is ok when the system unit is enabled and runs as the dedicated user', () => {
+      const status = linux(
         HOME,
         false,
-        probes({ unitFileExists: () => true, systemdEnabled: () => true, lingerEnabled: () => true }),
-        HOME_DIR,
+        { unitFileExists: () => true, systemdEnabled: () => true, serviceUser: () => SERVICE_USER },
       );
       expect(status).toMatchObject({ engaged: true });
     });
 
-    it('warns with the enable command when the unit exists but is not enabled', () => {
-      const status = checkSupervisor(
-        'linux',
-        HOME,
-        false,
-        probes({ unitFileExists: () => true, systemdEnabled: () => false }),
-        HOME_DIR,
-      );
+    it('warns with the sudo enable command when the unit exists but is not enabled', () => {
+      const status = linux(HOME, false, { unitFileExists: () => true, systemdEnabled: () => false });
       expect(status.engaged).toBe(false);
-      if (!status.engaged) expect(status.remedy).toBe(`systemctl --user enable --now ${SERVICE_NAME}.service`);
+      if (!status.engaged) expect(status.remedy).toBe(`sudo systemctl enable --now ${SERVICE_NAME}.service`);
     });
 
-    it('warns about linger specifically when enabled but the user unit would die at logout', () => {
-      const status = checkSupervisor(
-        'linux',
-        HOME,
-        false,
-        probes({ unitFileExists: () => true, systemdEnabled: () => true, lingerEnabled: () => false }),
-        HOME_DIR,
-      );
+    it('names a unit running as the wrong user — and an empty User= never passes', () => {
+      // Empty string is what `systemctl show -p User` reports for a unit with
+      // no User= at all, i.e. running as root. It must mismatch every
+      // dedicated user rather than collapse into "not confirmed".
+      for (const runsAs of ['root', 'someone-else', '']) {
+        const status = linux(
+          HOME,
+          false,
+          { unitFileExists: () => true, systemdEnabled: () => true, serviceUser: () => runsAs },
+        );
+        expect(status.engaged).toBe(false);
+        if (!status.engaged) expect(status.detail).toContain(SERVICE_USER);
+      }
+    });
+
+    it('an unanswered serviceUser probe is "not confirmed", never a false red', () => {
+      const status = linux(HOME, false, { unitFileExists: () => true, systemdEnabled: () => true });
+      expect(status).toMatchObject({ engaged: true });
+    });
+
+    it('names the retired user unit when only it exists', () => {
+      const status = linux(HOME, false, { userUnitShadow: () => true });
       expect(status.engaged).toBe(false);
       if (!status.engaged) {
-        expect(status.remedy).toContain('enable-linger');
-        expect(status.detail).toContain('logout');
+        expect(status.detail).toContain('user unit');
+        expect(status.remedy).toContain('gateway install --write');
       }
+    });
+
+    it('warns while a user-unit corpse shadows a healthy system unit', () => {
+      const status = linux(
+        HOME,
+        false,
+        {
+          unitFileExists: () => true,
+          systemdEnabled: () => true,
+          serviceUser: () => SERVICE_USER,
+          userUnitShadow: () => true,
+        },
+      );
+      expect(status.engaged).toBe(false);
+      if (!status.engaged) expect(status.detail).toContain('user unit');
     });
 
     it('a failed unit is named even when enabled — enabled parla del futuro, failed del presente', () => {
@@ -117,40 +144,37 @@ describe('checkSupervisor — never fail, always ok or a named remedy', () => {
       // «non torna da solo», perché RestartPreventExitStatus tiene giù le
       // uscite permanenti di proposito. Il rimedio deve portare al journal,
       // che è dove sta scritto il perché.
-      const status = checkSupervisor(
-        'linux',
+      const status = linux(
         HOME,
         false,
-        probes({
+        {
           unitFileExists: () => true,
           systemdEnabled: () => true,
           systemdFailed: () => true,
-          lingerEnabled: () => true,
-        }),
-        HOME_DIR,
+          serviceUser: () => SERVICE_USER,
+        },
       );
       expect(status.engaged).toBe(false);
       if (!status.engaged) {
         expect(status.detail).toContain('failed');
         expect(status.remedy).toContain('journalctl');
+        expect(status.remedy).not.toContain('--user');
       }
     });
 
-    it('failed vince sul linger: «è giù adesso» prima di «morirà al logout»', () => {
+    it('failed vince su tutto il resto: «è giù adesso» prima di ogni altra considerazione', () => {
       // Entrambi i difetti presenti: il messaggio deve nominare quello che è
-      // già successo, non quello previsto. Un owner che riceve solo la remedy
-      // del linger la applica e crede di aver finito.
-      const status = checkSupervisor(
-        'linux',
+      // già successo, non quello previsto.
+      const status = linux(
         HOME,
         false,
-        probes({
+        {
           unitFileExists: () => true,
           systemdEnabled: () => true,
           systemdFailed: () => true,
-          lingerEnabled: () => false,
-        }),
-        HOME_DIR,
+          serviceUser: () => 'root',
+          userUnitShadow: () => true,
+        },
       );
       expect(status.engaged).toBe(false);
       if (!status.engaged) expect(status.detail).toContain('failed');
@@ -159,19 +183,17 @@ describe('checkSupervisor — never fail, always ok or a named remedy', () => {
     it('una sonda is-failed assente non inventa un guasto', () => {
       // La sonda è opzionale come le altre: un test Linux-shaped che non la
       // fornisce, o una macchina dove `systemctl` non parte, degradano a «non
-      // confermato» — cioè al percorso linger/ok, mai a un falso rosso.
-      const status = checkSupervisor(
-        'linux',
+      // confermato» — mai a un falso rosso.
+      const status = linux(
         HOME,
         false,
-        probes({ unitFileExists: () => true, systemdEnabled: () => true, lingerEnabled: () => true }),
-        HOME_DIR,
+        { unitFileExists: () => true, systemdEnabled: () => true, serviceUser: () => SERVICE_USER },
       );
       expect(status).toMatchObject({ engaged: true });
     });
   });
 
-  it('reads the same path planUnit would write, XDG_CONFIG_HOME included', () => {
+  it('reads the same path planUnit would write', () => {
     // Regression guard for the one way this check could silently look at the
     // wrong file: a divergent path computation between `install` and `doctor`.
     const seen: string[] = [];
@@ -179,11 +201,20 @@ describe('checkSupervisor — never fail, always ok or a named remedy', () => {
       'linux',
       HOME,
       false,
-      probes({ unitFileExists: (p) => { seen.push(p); return true; }, systemdEnabled: () => true, lingerEnabled: () => true }),
+      probes({ unitFileExists: (p) => { seen.push(p); return true; }, systemdEnabled: () => true }),
       HOME_DIR,
-      '/tmp/fake-xdg',
+      undefined,
+      SERVICE_USER,
+      '/tmp/fake-system',
     );
-    const expected = planUnit({ platform: 'linux', home: HOME, exec: ['x'], homeDir: HOME_DIR, configHome: '/tmp/fake-xdg' });
+    const expected = planUnit({
+      platform: 'linux',
+      home: HOME,
+      exec: ['x'],
+      homeDir: HOME_DIR,
+      serviceUser: SERVICE_USER,
+      systemDir: '/tmp/fake-system',
+    });
     expect(seen).toEqual([expected.path]);
   });
 });

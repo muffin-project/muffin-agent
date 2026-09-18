@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { describe } from 'vitest';
 import { EXIT_STOPPED } from '../../../core/gateway/service.js';
 import { planUnit } from '../../../core/gateway/unit.js';
@@ -240,21 +240,18 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
 
         // === 4. `muffin gateway install` — the unit meets the real parser =====
         //
-        // Never through the CLI's own `gateway install`: `cli/gateway.ts:194`
-        // (`cmdGatewayInstall`) always derives `homeDir` from the real
-        // `homedir()`, on *both* platforms — `XDG_CONFIG_HOME` only reaches
-        // the systemd branch (`configHome`), and the launchd branch never
-        // reads it at all. So a real `muffin gateway install --write` on this
-        // machine would land on the *actual* owner path, and on macOS its
-        // label (`LAUNCHD_LABEL` = `ai.muffin.gateway`) is the one this
+        // Never through the CLI's own `gateway install`: on Linux it would
+        // target `/etc/systemd/system` (a system unit since D2), and on macOS
+        // its label (`LAUNCHD_LABEL` = `ai.muffin.gateway`) is the one this
         // machine's real, live Muffin gateway is registered under — verified
         // moments ago in this same slice's own probing: `doctor`'s
         // `supervisore` line above reads this machine's real launchd state
         // for exactly that reason. This ring calls the pure planner
         // (`core/gateway/unit.ts`'s `planUnit`, the function `cmdGatewayInstall`
-        // itself calls) directly, with an explicit **scratch** `homeDir` — the
-        // same seam `core/gateway/unit.test.ts` already uses — and never
-        // writes to a real path or shells out to `launchctl`/`systemctl`.
+        // itself calls) directly — the Linux leg with an explicit
+        // `serviceUser` (the planner refuses to guess it) — and never writes
+        // to a real path or shells out to `launchctl`/`systemctl` (activation
+        // aside: only the unit *text* meets a parser below).
         const scratchHomeDir = mkdtempSync(join(inst.workspace, 'fake-homedir-'));
         const launcher = join(inst.workspace, 'fake-muffin-launcher');
         writeFileSync(launcher, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
@@ -262,13 +259,15 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
         // Both plans are computed on *every* machine — `planUnit` takes the
         // platform as data, not as `process.platform` — so the structural
         // assertions below run everywhere; only the two live-parser legs are
-        // gated on which parser this machine actually has.
+        // gated on which parser this machine actually has. The Linux plan is
+        // a SYSTEM unit (D2): it needs an explicit serviceUser (the planner
+        // refuses to guess) and never touches a home-relative systemd path.
         const systemdPlan = planUnit({
           platform: 'linux',
           home: inst.home,
           exec: [launcher, 'gateway', 'run'],
           homeDir: scratchHomeDir,
-          configHome: join(scratchHomeDir, '.config'),
+          serviceUser: userInfo().username,
         });
         const launchdPlan = planUnit({
           platform: 'darwin',
@@ -278,21 +277,24 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
         });
 
         // The commands an owner would paste are instructions, and a wrong
-        // instruction is a defect exactly as real as wrong code: both must
-        // literally name what the plan itself computed. systemd addresses a
-        // unit by directory (`mkdir -p`) plus service *name* (`systemctl
-        // …<name>.service`) — never the raw file path, that is just how
-        // `systemctl` works — while launchd's own verbs take the plist path
-        // literally (`launchctl bootstrap … <path>`), so the two checks are
-        // shaped differently on purpose, not an inconsistency.
-        if (!systemdPlan.path.endsWith(join('systemd', 'user', 'muffin-gateway.service'))) {
+        // instruction is a defect exactly as real as wrong code: they must
+        // literally name what the plan itself computed. The system unit is
+        // addressed by service *name* (`systemctl …muffin-gateway.service`,
+        // with sudo for the mutating verbs) — never a raw file path, that is
+        // just how `systemctl` works — while launchd's own verbs take the
+        // plist path literally (`launchctl bootstrap … <path>`), so the two
+        // checks are shaped differently on purpose, not an inconsistency.
+        if (!systemdPlan.path.endsWith(join('systemd', 'system', 'muffin-gateway.service'))) {
           throw new Error(`il percorso della unit systemd non ha la forma attesa: ${systemdPlan.path}`);
         }
-        if (!systemdPlan.commands.some((c) => c.includes(dirname(systemdPlan.path)))) {
-          throw new Error(`i comandi stampati non creano la directory vera della unit:\n${systemdPlan.commands.join('\n')}`);
-        }
-        if (!systemdPlan.commands.some((c) => c.includes(basename(systemdPlan.path)))) {
+        if (!systemdPlan.commands.some((c) => c.includes('muffin-gateway.service'))) {
           throw new Error(`i comandi systemctl non nominano il vero nome della unit:\n${systemdPlan.commands.join('\n')}`);
+        }
+        if (!systemdPlan.commands.some((c) => c.startsWith('sudo systemctl'))) {
+          throw new Error(`i comandi di attivazione devono portare sudo (unit di sistema):\n${systemdPlan.commands.join('\n')}`);
+        }
+        if (!systemdPlan.text.match(/^User=\S+$/m)) {
+          throw new Error(`la unit di sistema non dichiara User=:\n${systemdPlan.text.split('\n').slice(0, 20).join('\n')}`);
         }
         if (!launchdPlan.path.endsWith(join('Library', 'LaunchAgents', 'ai.muffin.gateway.plist'))) {
           throw new Error(`il percorso del plist non ha la forma attesa: ${launchdPlan.path}`);

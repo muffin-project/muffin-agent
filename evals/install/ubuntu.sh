@@ -27,21 +27,24 @@
 #
 # ## What this eval cannot prove, declared and not papered over
 #
-# This eval owns a throwaway HOME. A host's user systemd manager belongs to its
-# real login home and cannot supervise the unit written into this lab. So the
-# eval gives its subprocesses a private, absent user-bus socket and proves the
-# supervisor half in two pieces instead of accidentally querying the host's
-# unrelated manager:
+# This eval owns a throwaway HOME. There is no PID 1 systemd in a container,
+# so no service can be enabled or started here — and the lab must never touch
+# the host's /etc. So the eval moves the unit write into the lab
+# (MUFFIN_SYSTEM_DIR, a test hook, not a second production path) and proves
+# the supervisor half in three pieces:
 #
+#   · an unprivileged write to the real /etc path is refused with the exact
+#     sudo remedy (never a unit written where systemd never reads);
 #   · `systemd-analyze verify` on the unit `muffin gateway install` actually
 #     wrote — systemd's own parser, so a malformed or unloadable unit is red;
 #   · the unit's own `ExecStart`, run in the foreground, until
 #     `muffin gateway status` reports a live pid — which is the thing systemd
 #     would have done, minus systemd.
 #
-# This deliberately does not prove that a service is active under systemd or
-# survives logout. That needs a separate disposable VM with a user manager
-# configured for this HOME; a green here proves the no-user-bus install path.
+# This deliberately does not prove that the service is active under systemd,
+# survives reboot, or decrypts host-key credentials. That needs a disposable
+# VM with a system manager (the VPS acceptance harness, not this container);
+# a green here proves the install path short of PID 1.
 #
 # ## The provider key
 #
@@ -99,18 +102,20 @@ finish() {
 LAB=$(mktemp -d /tmp/muffin-install-eval.XXXXXX)
 export HOME="$LAB/home"
 export XDG_CONFIG_HOME="$HOME/.config"
-# GitHub-hosted runners can expose both a user XDG directory and a live
-# systemd user bus. This eval owns a throwaway home, so neither may leak in.
-# An empty private bus path intentionally exercises install.sh's documented
-# no-user-manager path; a host manager for /home/runner cannot supervise this
-# temporary installation.
-export XDG_RUNTIME_DIR="$LAB/runtime"
-mkdir -p "$HOME" "$XDG_RUNTIME_DIR"
-export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+# No private user bus anymore: the Linux Home is a system service (D2), which
+# lives on the system bus and needs no per-shell runtime dir. A host manager
+# for /home/runner is irrelevant to this installation either way.
+mkdir -p "$HOME"
 export MUFFIN_PREFIX="$HOME/.local/share/muffin"
 BINDIR="$HOME/.local/bin"
 MUFFIN="$BINDIR/muffin"
-UNIT="$HOME/.config/systemd/user/muffin-gateway.service"
+# The system unit never lands in /etc from this eval: MUFFIN_SYSTEM_DIR moves
+# the write into the lab (test hook, same family as MUFFIN_BINDIR). A separate
+# fast check below proves the unprivileged-/etc path refuses with the sudo
+# remedy instead of writing somewhere systemd never reads.
+SYSDIR="$LAB/system"
+export MUFFIN_SYSTEM_DIR="$SYSDIR"
+UNIT="$SYSDIR/muffin-gateway.service"
 
 cleanup() {
   # Only our own pid, never a pattern: the owner's real gateway runs on the
@@ -172,11 +177,10 @@ set +e
 env -i \
   HOME="$HOME" \
   XDG_CONFIG_HOME="$XDG_CONFIG_HOME" \
-  XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
-  DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" \
   PATH="$CLEAN_PATH" \
   TERM="${TERM:-dumb}" \
   MUFFIN_PREFIX="$MUFFIN_PREFIX" \
+  MUFFIN_SYSTEM_DIR="$SYSDIR" \
   MUFFIN_REPO="$ORIGIN" \
   MUFFIN_CHANNEL=main \
   MUFFIN_API_KEY_FILE="$KEYFILE" \
@@ -256,6 +260,20 @@ if [ -f "$HOME/.muffin/config.json" ]; then
 else
   bad "no $HOME/.muffin/config.json — \`muffin init\` never completed"
 fi
+# D2 end-state on a Linux install with passwordless sudo: install.sh migrates
+# the just-written file key to encrypted systemd credentials IN the same
+# session, so no canonical plaintext store remains. Assert the backend flag
+# and the absence of both file stores (home + persistent-under-XDG).
+if "$NODE" -e 'process.exit(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).secrets?.backend === "systemd" ? 0 : 1)' "$HOME/.muffin/config.json" 2>/dev/null; then
+  ok "secrets backend is systemd (fresh Linux Home, no canonical plaintext store)"
+  if [ -e "$HOME/.muffin/secrets" ] || [ -e "$XDG_CONFIG_HOME/muffin/secrets" ]; then
+    bad "file secret stores still present after migration: $(ls -d "$HOME/.muffin/secrets" "$XDG_CONFIG_HOME/muffin/secrets" 2>/dev/null)"
+  else
+    ok "no file secret store left behind"
+  fi
+else
+  bad "secrets backend is not systemd — install.sh did not migrate the key (sudo unavailable? see install log)"
+fi
 if grep -q 'installeval' "$INSTALL_LOG" 2>/dev/null; then
   bad "the API key leaked into install.sh's own output"
 fi
@@ -300,14 +318,27 @@ step "the gateway as a supervised service"
 # ---------------------------------------------------------------------------
 if [ -f "$UNIT" ]; then
   ok "unit written: $UNIT"
-  grep -E '^(ExecStart|WorkingDirectory|Environment)=' "$UNIT" | sed 's/^/  | /'
+  grep -E '^(ExecStart|WorkingDirectory|Environment|User)=' "$UNIT" | sed 's/^/  | /'
 else
   bad "no unit at $UNIT — \`muffin gateway install --write --start\` never got as far as writing one"
 fi
 
-echo "  NO USER BUS: checking the written unit with systemd and running its ExecStart in the foreground."
+echo "  NO PID 1: checking the written unit with systemd and running its ExecStart in the foreground."
 if [ "$INSTALL_RC" != 3 ]; then
-  bad "install.sh exited $INSTALL_RC on a machine with no user systemd — it should exit 3 and say so"
+  bad "install.sh exited $INSTALL_RC on a machine with no system bus — it should exit 3 and say which privileged steps are left"
+fi
+# Unprivileged /etc is a refusal with a remedy, never a unit written
+# somewhere systemd never reads. Fast and side-effect free: the write dies
+# before anything is created (skipped for root, which can write anywhere).
+if [ "$(id -u)" != 0 ]; then
+  if env -u MUFFIN_SYSTEM_DIR "$MUFFIN" gateway install --write >"$LAB/nowrite.log" 2>&1; then
+    bad "\`muffin gateway install --write\` exited 0 writing to /etc unprivileged — expected the sudo remedy"
+  elif grep -q 'sudo install' "$LAB/nowrite.log"; then
+    ok "unprivileged /etc write refused with the exact sudo remedy"
+  else
+    bad "unprivileged /etc write refused without naming the sudo remedy"
+    tail -6 "$LAB/nowrite.log" | sed 's/^/  | /'
+  fi
 fi
 # The two reasons this can be unavailable are different problems and must not
 # print the same sentence: a wrong remedy is worse than no remedy, because it
@@ -330,11 +361,29 @@ if [ -f "$UNIT" ]; then
     bad "the unit has no ExecStart"
   else
     echo "  starting the unit's own ExecStart in the foreground: $EXECSTART"
+    # The backend is systemd here, and only PID 1 materialises
+    # $CREDENTIALS_DIRECTORY — which a container does not have. Emulate
+    # exactly what PID 1 would hand over: a directory holding one file per
+    # provisioned name, with the bytes install.sh itself used. This proves
+    # the resolver path the supervised service will take, nothing more.
+    CREDS="$LAB/creds"
+    mkdir -p "$CREDS"
+    for blob in /etc/credstore.encrypted/*.cred; do
+      [ -f "$blob" ] || continue
+      name=$(basename "$blob" .cred)
+      cp "$KEYFILE" "$CREDS/$name"
+    done
+    if [ -z "$(ls -A "$CREDS" 2>/dev/null)" ]; then
+      bad "no provisioned credential to emulate \$CREDENTIALS_DIRECTORY with (is /etc/credstore.encrypted empty?)"
+    else
+      ok "emulating PID 1 materialisation for: $(ls "$CREDS" | tr '\n' ' ')"
+    fi
     # Exactly what systemd would exec, with exactly the environment the unit
     # declares — anything else would prove a command this machine will never
     # actually run.
     env -i HOME="$HOME" PATH="${UNIT_PATH:-$PATH}" MUFFIN_HOME="${UNIT_HOME:-$HOME/.muffin}" \
       XDG_CONFIG_HOME="$XDG_CONFIG_HOME" \
+      CREDENTIALS_DIRECTORY="$CREDS" \
       $EXECSTART >"$LAB/gateway.out" 2>&1 &
     GATEWAY_PID=$!
     up=0

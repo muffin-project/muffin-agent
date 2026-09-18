@@ -14,10 +14,10 @@ import {
   paths,
   readSecret,
   saveConfig,
-  writeAuthoritativeSecret,
   ConfigError,
   type Config,
 } from '../core/config/config.js';
+import { secretExists, storeSecret } from '../core/config/systemd.js';
 import { cliSurface, type CliWriter } from '../core/surface/cli.js';
 import type { ModelLane } from '../core/turns/model-lane.js';
 import { SurfaceRegistry } from '../core/surface/registry.js';
@@ -327,7 +327,10 @@ async function enableTelegram(
       process.stderr.write('Telegram non abilitata: manca il token.\n');
       return 78;
     }
-    writeAuthoritativeSecret('telegram_token', entered, home);
+    // Routes by the explicit backend flag (persistent file store as before,
+    // encrypted systemd provisioning otherwise) — pairing never chooses.
+    const stored = storeSecret('telegram_token', entered, home, 'persistent');
+    if (stored.note) process.stderr.write(`${stored.note}\n`);
     token = entered;
   }
 
@@ -1123,12 +1126,11 @@ function discordVault(runtime: Runtime, root: string): NonNullable<DiscordConnec
 }
 
 function hasSecret(ref: string, home: string): boolean {
-  try {
-    readSecret(ref, home);
-    return true;
-  } catch {
-    return false;
-  }
+  // Presence, never value: under the systemd backend this CLI runs outside
+  // the service and has no $CREDENTIALS_DIRECTORY, so resolving here would
+  // fail closed on a healthy install. Ciphertext existence proves
+  // provisioning; emptiness is refused at provisioning time.
+  return secretExists(ref, home);
 }
 
 function inboxStats(home: string, table: 'telegram_updates' | 'discord_messages'): { pending: number; failed: number } | null {

@@ -1,4 +1,5 @@
-import { loadConfig, saveConfig, writeAuthoritativeSecret, writeSecret, locateSecret, type SecretBackend } from '../core/config/config.js';
+import { loadConfig, saveConfig, secretsBackend, writeAuthoritativeSecret, writeSecret, locateSecret, type SecretBackend } from '../core/config/config.js';
+import { secretExists, storeSecret } from '../core/config/systemd.js';
 import { SEARCH_PROVIDERS, SEARCH_PROVIDER_IDS, type SearchProviderId } from '../core/config/providers.js';
 import { widenEgressForCapability } from '../core/rot/egress-writer.js';
 
@@ -76,13 +77,34 @@ function stato(home: string, out: (l: string) => void): number {
   out(`ricerca web: ${entry.label} · chiave ${config.search.apiKeyRef}`);
   // Una `apiKeyRef` che punta a un segreto che non c'e' e' esattamente lo stato
   // in cui il runtime si degrada in silenzio con un `! web_search spento` che
-  // non dice perche'. Dirlo qui, dove si sta guardando la ricerca.
+  // non dice perche'. Dirlo qui, dove si sta guardando la ricerca. Presence,
+  // never value — and backend-aware: under systemd the file chain is not
+  // where the secret lives, so asking it would cry wolf on a healthy install.
+  const presente = secretsBackend(home) === 'systemd' ? secretExists(config.search.apiKeyRef, home) : dove !== null;
   out(
-    dove === null
+    !presente
       ? `⚠ quel segreto non esiste: la ricerca è configurata e spenta. Riscrivi la chiave con \`muffin search ${entry.id}\`.`
-      : `chiave trovata in ${dove.path}`,
+      : dove
+        ? `chiave trovata in ${dove.path}`
+        : `chiave provisionata (systemd encrypted credential)`,
   );
   return 0;
+}
+
+/**
+ * Store routing for the search key: the explicit backend flag decides, the
+ * `secretBackend` dep only chooses *which* file backend. Pairing never
+ * chooses the store, and a provisioning failure fails closed (no file copy
+ * left behind as a consolation prize).
+ */
+function storeSecretForSetup(
+  name: string,
+  chiave: string,
+  home: string,
+  backend: SecretBackend | undefined,
+): { path: string; note: string | null } {
+  const stored = storeSecret(name, chiave, home, backend ?? 'home');
+  return { path: stored.path, note: stored.note };
 }
 
 export async function cmdSearch(home: string, argv: string[], deps: SearchDeps): Promise<number> {
@@ -148,12 +170,17 @@ export async function cmdSearch(home: string, argv: string[], deps: SearchDeps):
     return 78;
   }
 
-  const at = deps.secretBackend === 'persistent'
-    ? writeAuthoritativeSecret(entry.secretName, chiave, home)
-    : writeSecret(entry.secretName, chiave, home, 'home');
+  // Store routing follows the explicit backend flag: the systemd backend
+  // provisions encrypted (and the service needs a unit regen + restart for a
+  // new name), the file backends write 0600 exactly as before. Pairing never
+  // chooses the store, and provisioning failures fail closed here — no file
+  // copy is left behind as a consolation prize.
+  const stored = storeSecretForSetup(entry.secretName, chiave, home, deps.secretBackend);
+  if (stored.note) out(stored.note);
+  const at = stored.path;
   const config = loadConfig(home);
   saveConfig({ ...config, search: { provider: entry.id, apiKeyRef: `secret://${entry.secretName}` } }, home);
-  out(`ricerca web: ${entry.label} · chiave (${chiave.length} caratteri, 0600) → ${at}`);
+  out(`ricerca web: ${entry.label} · chiave (${chiave.length} caratteri) → ${at}`);
   out('Vale dal prossimo avvio: il tool `web_search` si registra al boot del runtime.');
 
   // La stessa domanda, chiesta subito e non scoperta al boot: chiedere questo

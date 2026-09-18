@@ -1,6 +1,7 @@
 import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { CREDSTORE_ENCRYPTED_DIR } from '../config/config.js';
 import { DRAIN_BUDGET_MS, EXIT_STOPPED } from './service.js';
 
 /**
@@ -83,6 +84,13 @@ export type UnitPlan = {
   path: string;
   text: string;
   /**
+   * Whether writing/activating this plan needs privilege the installer may
+   * not have (the Linux system unit lives under /etc and is enabled on the
+   * system bus). Callers print `sudo` forms and fail with a remedy instead
+   * of dying on EACCES mid-sequence.
+   */
+  needsRoot: boolean;
+  /**
    * What the owner reads to make it live — prose, for a terminal.
    *
    * Not a program: the list carries a comment line, a shell substitution
@@ -116,12 +124,39 @@ export type UnitOptions = {
   /**
    * Chi sta installando, per la forma eseguibile dell'attivazione.
    *
-   * `launchctl bootstrap gui/<uid>` e `loginctl enable-linger <user>` nominano
-   * un utente: nella lista stampata lo fa la shell, qui deve farlo il chiamante.
-   * Il planner resta puro, e senza questo campo `activation` è vuota invece di
-   * contenere un indovinello.
+   * `launchctl bootstrap gui/<uid>` nomina un utente: nella lista stampata
+   * lo fa la shell, qui deve farlo il chiamante. Il planner resta puro, e
+   * senza questo campo `activation` è vuota invece di contenere un
+   * indovinello. (La riga `loginctl enable-linger` che viveva qui è andata
+   * con le user unit: il servizio di sistema parte al boot senza linger.)
    */
   identity?: { user: string; uid: number } | undefined;
+  /**
+   * Where the Linux system unit is written. Production default is
+   * `/etc/systemd/system`; tests inject a scratch directory the same way
+   * `configHome`/`homeDir` already let them avoid the owner's real paths.
+   * launchd ignores it.
+   */
+  systemDir?: string | undefined;
+  /**
+   * The dedicated unprivileged user the Linux system service runs as
+   * (`User=`). REQUIRED on Linux: refusing to guess is the whole point — a
+   * wrong user here is a wrong privilege, and `root` is refused outright
+   * (D1: the Muffin process never runs as root). The caller passes the
+   * installing user (install.sh runs as the dedicated user by contract).
+   * launchd ignores it.
+   */
+  serviceUser?: string | undefined;
+  /**
+   * Secret names materialised as `LoadCredentialEncrypted=<name>:
+   * /etc/credstore.encrypted/<name>.cred`, one line each. Empty (the default)
+   * means no credential lines at all — a unit that does not name a secret it
+   * was never given is honest, and a service whose backend is the file store
+   * reads its 0600 files exactly as before. Names come from validated
+   * `secret://` references (`requiredSecretRefs`); the planner maps them
+   * mechanically and validates nothing new.
+   */
+  credentials?: string[] | undefined;
   /**
    * The directory of the Node interpreter this install is running under —
    * `dirname(process.execPath)`. The caller probes, the planner stays pure.
@@ -231,17 +266,56 @@ export function planUnit(options: UnitOptions): UnitPlan {
   return options.platform === 'darwin' ? launchdPlan(options) : systemdPlan(options);
 }
 
+/** Where a Linux system unit belongs in production. Tests inject their own. */
+export const SYSTEM_UNIT_DIR = '/etc/systemd/system';
+
+/**
+ * One `LoadCredentialEncrypted` line per secret name, or nothing at all.
+ * Empty means the service gets no credentials from systemd — the file-store
+ * backend keeps working exactly as before, and a unit that does not name a
+ * secret it was never given is honest. Names arrive already validated
+ * (`secret://` references via `requiredSecretRefs`); the planner maps them
+ * mechanically and validates nothing new.
+ */
+function credentialLines(names: readonly string[]): string {
+  const lines = names
+    .filter((n) => n !== '')
+    .map((n) => `LoadCredentialEncrypted=${n}:${CREDSTORE_ENCRYPTED_DIR}/${n}.cred`);
+  if (lines.length === 0) return '';
+  return (
+    `\n# Segreti cifrati con la host key (\`systemd-creds encrypt\`, D2): il plaintext\n` +
+    `# esiste solo in $CREDENTIALS_DIRECTORY a servizio attivo, mai in un file\n` +
+    `# della home, mai in argv/env. Una riga per nome — aggiungere un segreto\n` +
+    `# (es. un server MCP con secret://) richiede rigenerare la unit.\n${lines.join('\n')}`
+  );
+}
+
 function systemdPlan({
   home,
   exec,
-  configHome,
-  homeDir,
   systemdNotify = true,
   interpreterDir,
   identity,
+  systemDir = SYSTEM_UNIT_DIR,
+  serviceUser,
+  credentials = [],
 }: UnitOptions): UnitPlan {
-  const dir = join(configHome ?? join(homeDir ?? homedir(), '.config'), 'systemd', 'user');
-  const path = join(dir, `${SERVICE_NAME}.service`);
+  // The Linux Home is a SYSTEM service under a dedicated unprivileged user
+  // (D2). The `--user` + linger model is retired deliberately, not drifted
+  // away from: the VM proof showed an unprivileged user manager cannot
+  // decrypt host-key credentials (243/CREDENTIALS — EACCES at 0400, and a
+  // strict-perms EPERM refusal once group-readable), while PID 1 decrypts
+  // and drops to User= cleanly, with no login, no linger and no user bus.
+  // macOS launchd below is untouched by this decision.
+  if (serviceUser === undefined || serviceUser === '') {
+    throw new Error(
+      'systemd system units need serviceUser: the User= the service runs as (refusing to guess — a wrong user here is a wrong privilege).',
+    );
+  }
+  if (serviceUser === 'root' || serviceUser === '0') {
+    throw new Error('refusing User=root: the Muffin process runs as a dedicated unprivileged user, never as root (D1).');
+  }
+  const path = join(systemDir, `${SERVICE_NAME}.service`);
   const supervision = systemdNotify
     ? `# notify e non simple: READY=1 distingue "il processo è partito" da "sta
 # servendo", e WATCHDOG=1 è l'unica cosa che vede un processo su ma piantato.
@@ -262,7 +336,7 @@ WatchdogSec=${WATCHDOG_SEC}`
 Type=exec`;
   const text = `[Unit]
 Description=Muffin — runtime dell'agente personale
-Documentation=https://github.com/muffin-ai/muffin
+Documentation=https://github.com/muffin-project/muffin-agent
 # La rete serve al primo turno, non all'avvio: Wants e non Requires, così un
 # boot senza rete lascia comunque partire lo scheduler.
 Wants=network-online.target
@@ -271,13 +345,17 @@ After=network-online.target
 [Service]
 ${supervision}
 
+# The process runs as this user and no one else. There is deliberately no
+# Group=: the service inherits the user's default group, and one fewer knob
+# is one fewer privilege to get wrong. Never root (the planner refuses it).
+User=${serviceUser}
 ExecStart=${exec.join(' ')}
 # Ancorato alla home dei dati, MAI al checkout del codice: un checkout che si
 # sposta fa fallire systemd allo CHDIR prima ancora che il runtime carichi, e
 # Restart=always va in crash-loop su una directory morta (ADR-0035).
 WorkingDirectory=${home}
 Environment=MUFFIN_HOME=${home}${unitPath(interpreterDir) === null ? '' : `
-Environment=PATH=${unitPath(interpreterDir)}`}
+Environment=PATH=${unitPath(interpreterDir)}`}${credentialLines(credentials)}
 
 Restart=always
 RestartSec=${RESTART_SEC}
@@ -299,7 +377,7 @@ RestartPreventExitStatus=${EXIT_PERMANENT} ${EXIT_STOPPED}
 # ${EXIT_STOPPED} qui e NON ${EXIT_PERMANENT}, ed è la riga che decide cosa vede chi guarda.
 # \`RestartPreventExitStatus\` dice a systemd di non riavviare; non dice che
 # l'uscita andava bene. Senza questa riga un normale \`muffin gateway stop\`
-# lascia la unit in stato \`failed\`: \`systemctl --user --failed\` la elenca e
+# lascia la unit in stato \`failed\`: \`systemctl --failed\` la elenca e
 # \`doctor\` — che da questa slice chiede davvero \`is-failed\` — allarmerebbe a
 # ogni arresto voluto, che è il modo più rapido per insegnare a ignorarlo.
 # ${EXIT_PERMANENT} resta fuori di proposito: config assente, secret mancante o root of
@@ -313,42 +391,35 @@ KillMode=mixed
 TimeoutStopSec=${STOP_TIMEOUT_SEC}
 
 [Install]
-WantedBy=default.target
+# System services boot with multi-user.target (systemd.special(7)).
+# The system manager starts this at boot with zero sessions — no login,
+# no per-user bus, which is exactly the unattended VPS promise.
+WantedBy=multi-user.target
 `;
 
   return {
     kind: 'systemd',
+    needsRoot: true,
     path,
     text,
     commands: [
-      `mkdir -p ${dir}`,
       `muffin gateway install --write`,
-      `systemctl --user daemon-reload`,
-      `systemctl --user enable --now ${SERVICE_NAME}.service`,
-      `systemctl --user status ${SERVICE_NAME}.service`,
-      // Named because a user unit without it dies at logout, which presents as
-      // "il gateway si ferma da solo ogni tanto" (ADR-0035).
-      `loginctl enable-linger "$USER"   # senza questo la unit utente muore al logout`,
+      `sudo systemctl daemon-reload`,
+      `sudo systemctl enable --now ${SERVICE_NAME}.service`,
+      `systemctl status ${SERVICE_NAME}.service`,
     ],
-    // Senza `mkdir` e senza `gateway install --write`: quei due passi `--start`
-    // li ha già fatti quando arriva qui. Restano i tre che trasformano un file
-    // in un servizio, nell'ordine in cui la lista sopra li nomina.
+    // Senza `--write` preliminare non c'è niente da attivare; senza `identity`
+    // non si sa... anzi, `identity` qui non serve più a nominare un utente
+    // (User= è già nel file): serve a dire che `--start` è stato chiesto
+    // davvero, e allora i passi sono questi due, nell'ordine.
     activation:
       identity === undefined
         ? []
         : [
-            { argv: ['systemctl', '--user', 'daemon-reload'], why: 'perché systemd rilegga la unit appena scritta' },
+            { argv: ['sudo', 'systemctl', 'daemon-reload'], why: 'perché systemd rilegga la unit appena scritta' },
             {
-              argv: ['systemctl', '--user', 'enable', '--now', `${SERVICE_NAME}.service`],
-              why: "abilita all'avvio e la fa partire adesso",
-            },
-            {
-              // Il passo che si salta, e il suo sintomo è il più difficile da
-              // ricollegare alla causa: "il gateway si ferma da solo ogni
-              // tanto" (ADR-0035). In una lista da copiare è l'ultima riga e
-              // ha un commento in coda; qui non è saltabile.
-              argv: ['loginctl', 'enable-linger', identity.user],
-              why: 'senza, la unit utente muore al logout',
+              argv: ['sudo', 'systemctl', 'enable', '--now', `${SERVICE_NAME}.service`],
+              why: "abilita al boot e la fa partire adesso — senza login né user bus",
             },
           ],
     warnings: systemdNotify
@@ -359,6 +430,14 @@ WantedBy=default.target
         ],
   };
 }
+
+/**
+ * One `LoadCredentialEncrypted` line per secret name, or nothing at all.
+ * Empty means the service gets no credentials from systemd — the file-store
+ * backend keeps working exactly as before, and a unit that names no secret
+ * it was never given is honest. Names arrive already validated
+ * (`secret://` references); the planner maps them mechanically.
+ */
 
 function launchdPlan({ home, exec, homeDir, interpreterDir, identity }: UnitOptions): UnitPlan {
   const path = join(homeDir ?? homedir(), 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`);
@@ -429,6 +508,7 @@ ${args}
 
   return {
     kind: 'launchd',
+    needsRoot: false,
     path,
     text,
     commands: [

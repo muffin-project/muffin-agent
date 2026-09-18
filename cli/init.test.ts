@@ -153,8 +153,20 @@ describe('runInit — the defaults registry it hands `muffin doctor` (core/confi
  * e si legge il vecchio finché esiste.
  */
 describe('il nome della chiave dice di chi è', () => {
+  // Stesso isolamento del describe sopra: senza, la catena dei segreti cade
+  // nel `~/.config` reale di chi lancia la suite, e il risultato dipende dai
+  // nomi che quella macchina ha (misurato: rosso su una macchina con
+  // `openrouter_api_key` persistente, verde in CI).
+  afterEach(() => vi.unstubAllEnvs());
+
+  function isolatedHome(prefix: string): string {
+    const dir = scratchDir(prefix);
+    vi.stubEnv('XDG_CONFIG_HOME', join(dir, 'xdg'));
+    return dir;
+  }
+
   it('un install nuovo su OpenRouter registra `openrouter_api_key`', () => {
-    const dir = scratchDir('muffin-init-nome-nuovo-');
+    const dir = isolatedHome('muffin-init-nome-nuovo-');
     runInit({ home: dir, apiKey: 'sk-or-nuova', provider: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1' });
 
     const config = JSON.parse(readFileSync(paths(dir).config, 'utf8')) as { provider: { apiKeyRef: string } };
@@ -168,7 +180,7 @@ describe('il nome della chiave dice di chi è', () => {
    * esiste — che è esattamente come si spegne un'installazione funzionante.
    */
   it("e su un'installazione che ha già la chiave col nome vecchio, il riferimento resta quello", () => {
-    const dir = scratchDir('muffin-init-nome-vecchio-');
+    const dir = isolatedHome('muffin-init-nome-vecchio-');
     runInit({ home: dir, apiKey: 'sk-vecchia' }); // provider di default: nome generico
     expect(readFileSync(join(dir, 'secrets', 'provider_api_key'), 'utf8').trim()).toBe('sk-vecchia');
 
@@ -182,7 +194,7 @@ describe('il nome della chiave dice di chi è', () => {
   });
 
   it('fuori dal catalogo il nome generico resta quello giusto', () => {
-    const dir = scratchDir('muffin-init-nome-locale-');
+    const dir = isolatedHome('muffin-init-nome-locale-');
     runInit({ home: dir, apiKey: 'sk-locale', provider: 'openai-compat', baseUrl: 'http://localhost:11434/v1' });
 
     const config = JSON.parse(readFileSync(paths(dir).config, 'utf8')) as { provider: { apiKeyRef: string } };

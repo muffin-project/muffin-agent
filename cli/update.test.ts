@@ -636,7 +636,8 @@ describe('offerGatewayRestart', () => {
         yes: false,
         platform: 'linux',
         gatewayRunning: false,
-        supervisorProbes: { unitFileExists: () => true, systemdEnabled: () => true, systemdFailed: () => false, lingerEnabled: () => true },
+        serviceUser: 'owner',
+        supervisorProbes: { unitFileExists: () => true, systemdEnabled: () => true, systemdFailed: () => false, serviceUser: () => 'owner' },
         promptFn: async () => 'n',
       }),
     );

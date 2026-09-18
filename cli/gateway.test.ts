@@ -1,13 +1,13 @@
 import DatabaseCtor from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { DELIVERED } from '../core/surface/types.js';
-import { loadConfig, paths } from '../core/config/config.js';
+import { loadConfig, paths, saveConfig } from '../core/config/config.js';
 import { GatewayLock, readGateway, STALE_AFTER_MS } from '../core/gateway/lock.js';
 import { describeSupervision } from '../core/gateway/notify.js';
 import { LAUNCHD_LABEL } from '../core/gateway/unit.js';
@@ -46,6 +46,12 @@ function home(): string {
   homes.push(dir);
   runInit({ home: dir, apiKey: 'sk-never-called' });
   return dir;
+}
+
+/** Flip a fixture home to the systemd backend (explicit, like the CLI does). */
+function flipBackendSystemd(dir: string): void {
+  const config = loadConfig(dir);
+  saveConfig({ ...config, secrets: { backend: 'systemd' } }, dir);
 }
 
 /** Pretend a gateway is up, held by this very process — a pid that is alive. */
@@ -1103,17 +1109,13 @@ describe('muffin gateway run — la riga di supervisione', () => {
 });
 
 /**
- * `--start`: dal file al servizio, e il passo che nessuno ricorda dentro.
+ * `--start`: dal file al servizio, con sudo.
  *
- * Fino a qui `install` finiva stampando quattro righe da copiare. Una di quelle
- * — `loginctl enable-linger` — se salta non rompe niente subito: il gateway
- * muore al logout, settimane dopo, e si presenta come «si ferma da solo ogni
- * tanto» (ADR-0035). È il difetto peggiore da diagnosticare della lista, ed è
- * l'ultima riga con un commento in coda.
- *
- * Quello che `init` offre resta `--write` e basta: scrivere un file in casa
- * propria è una cosa, accendere un servizio un'altra, e quella decisione è
- * scritta in `cli/main.ts`. `--start` è l'owner che la prende, digitandola.
+ * Su Linux la unit è di sistema (D2): scriverla e attivarla chiede root, che
+ * si vede come `sudo` in ogni passo stampato prima di eseguirlo. Quello che
+ * `init` offre resta `--write` e basta: scrivere un file in casa propria è
+ * una cosa, accendere un servizio un'altra, e quella decisione è scritta in
+ * `cli/main.ts`. `--start` è l'owner che la prende, digitandola.
  */
 describe('muffin gateway install --start', () => {
   const zitto = () => {
@@ -1122,8 +1124,9 @@ describe('muffin gateway install --start', () => {
     const spyOut = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     return { righe, ripristina: () => { spy.mockRestore(); spyOut.mockRestore(); } };
   };
+  const sysdir = (dir: string) => join(dir, 'systemd-system');
 
-  it('esegue la sequenza systemd nell ordine, linger compreso', async () => {
+  it('esegue la sequenza systemd nell ordine, con sudo e senza linger', async () => {
     const dir = home();
     const visti: string[][] = [];
     const s = zitto();
@@ -1131,7 +1134,7 @@ describe('muffin gateway install --start', () => {
       const code = await cmdGatewayInstall(dir, ['--start'], {
         platform: 'linux',
         homeDir: dir,
-        configHome: join(dir, '.config'),
+        systemDir: sysdir(dir),
         identity: { user: 'owner', uid: 1000 },
         run: (argv) => { visti.push(argv); return { status: 0, stderr: '' }; },
         // Lo STATO che la verifica post-attivazione (regola della casa,
@@ -1148,18 +1151,36 @@ describe('muffin gateway install --start', () => {
       expect(code).not.toBe(EXIT_NOT_ACTIVATED);
     } finally { s.ripristina(); }
     expect(visti).toEqual([
-      ['systemctl', '--user', 'daemon-reload'],
-      ['systemctl', '--user', 'enable', '--now', 'muffin-gateway.service'],
-      ['loginctl', 'enable-linger', 'owner'],
+      ['sudo', 'systemctl', 'daemon-reload'],
+      ['sudo', 'systemctl', 'enable', '--now', 'muffin-gateway.service'],
     ]);
     expect(s.righe.join('')).toContain('è un servizio adesso');
   });
 
-it('stampa il passo prima di eseguirlo, non dopo', async () => {
-    // `systemctl --user` su una macchina senza bus di sessione non fallisce:
-    // aspetta. Se la riga si stampasse dopo, l'owner guarderebbe un cursore
-    // fermo senza sapere su quale dei tre comandi. Un runner che lancia è il
-    // modo di chiedere «eri già passato dalla stampa?» senza appendere il test.
+  it('rifiuta User=root prima ancora di pianificare', async () => {
+    // D1: il processo Muffin non gira mai come root. Installare DA root è
+    // già un errore con rimedio, non una unit scritta con User=root.
+    const dir = home();
+    const s = zitto();
+    try {
+      const code = await cmdGatewayInstall(dir, ['--start'], {
+        platform: 'linux',
+        homeDir: dir,
+        systemDir: sysdir(dir),
+        identity: { user: 'root', uid: 0 },
+        run: () => ({ status: 0, stderr: '' }),
+      });
+      expect(code).toBe(2);
+    } finally { s.ripristina(); }
+    expect(s.righe.join('')).toContain('non installare come root');
+    expect(existsSync(join(sysdir(dir), 'muffin-gateway.service'))).toBe(false);
+  });
+
+  it('stampa il passo prima di eseguirlo, non dopo', async () => {
+    // Senza sudo sul PATH il primo passo non parte nemmeno: se la riga si
+    // stampasse dopo, l'owner guarderebbe un cursore fermo senza sapere su
+    // quale comando. Un runner che lancia è il modo di chiedere «eri già
+    // passato dalla stampa?» senza appendere il test.
     //
     // `cmdGatewayInstall` è `async` (la verifica post-attivazione aspetta un
     // pid): una funzione async non lancia mai in modo sincrono, un `throw`
@@ -1172,13 +1193,13 @@ it('stampa il passo prima di eseguirlo, non dopo', async () => {
         cmdGatewayInstall(dir, ['--start'], {
           platform: 'linux',
           homeDir: dir,
-          configHome: join(dir, '.config'),
+          systemDir: sysdir(dir),
           identity: { user: 'owner', uid: 1000 },
           run: () => { throw new Error('come se non tornasse mai'); },
         }),
       ).rejects.toThrow('come se non tornasse mai');
     } finally { s.ripristina(); }
-    expect(s.righe.join('')).toContain('systemctl --user daemon-reload');
+    expect(s.righe.join('')).toContain('sudo systemctl daemon-reload');
   });
 
   it('si ferma al primo che fallisce, invece di abilitare una unit non riletta', async () => {
@@ -1190,7 +1211,7 @@ it('stampa il passo prima di eseguirlo, non dopo', async () => {
       code = await cmdGatewayInstall(dir, ['--start'], {
         platform: 'linux',
         homeDir: dir,
-        configHome: join(dir, '.config'),
+        systemDir: sysdir(dir),
         identity: { user: 'owner', uid: 1000 },
         run: (argv) => { visti.push(argv); return { status: 1, stderr: 'Failed to connect to bus' }; },
       });
@@ -1200,71 +1221,36 @@ it('stampa il passo prima di eseguirlo, non dopo', async () => {
     const detto = s.righe.join('');
     // Il comando che si è fermato, il suo errore vero, e i passi rimasti: senza
     // i tre insieme «uscita 3» è un numero che non dice cosa fare adesso.
-    expect(detto).toContain('systemctl --user daemon-reload');
+    expect(detto).toContain('sudo systemctl daemon-reload');
     expect(detto).toContain('Failed to connect to bus');
     expect(detto).toContain('la unit è scritta in');
-    expect(detto).toContain('loginctl enable-linger');
   });
 
-  // Misurato sulla VPS dell'owner l'08/09/2026: `adduser muffin && su - muffin`,
-  // poi install.sh — unit scritta, `daemon-reload` morto con «No medium
-  // found». Una shell da `su -` non ha XDG_RUNTIME_DIR, ma se l'istanza
-  // systemd dell'utente gira (login vero, o linger dato da root) esiste
-  // /run/user/<uid>, e nominarlo basta. Se non esiste, lo crea solo root:
-  // quella è l'unica riga da stampare.
-  it('da una shell senza XDG_RUNTIME_DIR nomina /run/user/<uid> quando esiste, e attiva', async () => {
+  it('senza privilegi di scrittura dice esattamente cosa far fare a root', async () => {
+    // La unit di sistema vive sotto /etc: senza privilegi la scrittura muore
+    // con EACCES, e quello è un rimedio stampato — mai una unit scritta
+    // altrove che systemd non leggerebbe mai. (Saltato da root: root scrive
+    // ovunque, e il test proverebbe il permesso sbagliato.)
+    if (process.getuid?.() === 0) return;
     const dir = home();
-    const visti: string[][] = [];
-    const env: NodeJS.ProcessEnv = {};
+    const sys = sysdir(dir);
+    mkdirSync(sys, { recursive: true });
+    chmodSync(sys, 0o555);
     const s = zitto();
-    let code: number;
     try {
-      code = await cmdGatewayInstall(dir, ['--start'], {
+      const code = await cmdGatewayInstall(dir, ['--write'], {
         platform: 'linux',
         homeDir: dir,
-        configHome: join(dir, '.config'),
+        systemDir: sys,
         identity: { user: 'owner', uid: 1000 },
-        env,
-        runtimeDirExists: (p) => p === '/run/user/1000',
-        run: (argv) => { visti.push(argv); return { status: 0, stderr: '' }; },
-        readGatewayPid: () => 4242,
-        verifyAttempts: 1,
-        sleep: async () => {},
+        run: () => ({ status: 0, stderr: '' }),
       });
-    } finally { s.ripristina(); }
-    expect(env['XDG_RUNTIME_DIR']).toBe('/run/user/1000');
-    expect(env['DBUS_SESSION_BUS_ADDRESS']).toBe('unix:path=/run/user/1000/bus');
-    expect(visti.map((a) => a.join(' '))).toEqual([
-      'systemctl --user daemon-reload',
-      'systemctl --user enable --now muffin-gateway.service',
-      'loginctl enable-linger owner',
-    ]);
-    expect(code).not.toBe(EXIT_NOT_ACTIVATED);
-    expect(s.righe.join('')).toContain('uso /run/user/1000');
-  });
-
-  it('senza XDG_RUNTIME_DIR e senza /run/user/<uid> dice che serve root con enable-linger, per nome', async () => {
-    const dir = home();
-    const env: NodeJS.ProcessEnv = {};
-    const s = zitto();
-    let code: number;
-    try {
-      code = await cmdGatewayInstall(dir, ['--start'], {
-        platform: 'linux',
-        homeDir: dir,
-        configHome: join(dir, '.config'),
-        identity: { user: 'muffin', uid: 1000 },
-        env,
-        runtimeDirExists: () => false,
-        run: () => ({ status: 1, stderr: 'Failed to connect to bus: No medium found' }),
-      });
-    } finally { s.ripristina(); }
-    expect(code).toBe(EXIT_NOT_ACTIVATED);
-    expect(env['XDG_RUNTIME_DIR']).toBeUndefined();
-    const detto = s.righe.join('');
-    expect(detto).toContain('loginctl enable-linger muffin');
-    expect(detto).toContain('/run/user/1000 non esiste');
-    expect(detto).toContain('su -');
+      expect(code).toBe(2);
+      expect(s.righe.join('')).toContain('sudo install');
+    } finally {
+      chmodSync(sys, 0o755);
+      s.ripristina();
+    }
   });
 
   it('scrive la unit anche senza --write, perché non si accende un file che non c è', async () => {
@@ -1274,7 +1260,7 @@ it('stampa il passo prima di eseguirlo, non dopo', async () => {
       await cmdGatewayInstall(dir, ['--start'], {
         platform: 'linux',
         homeDir: dir,
-        configHome: join(dir, '.config'),
+        systemDir: sysdir(dir),
         identity: { user: 'owner', uid: 1000 },
         run: () => ({ status: 0, stderr: '' }),
         // Questo test prova solo la scrittura del file, non l'esito
@@ -1284,7 +1270,69 @@ it('stampa il passo prima di eseguirlo, non dopo', async () => {
         verifyIntervalMs: 0,
       });
     } finally { s.ripristina(); }
-    expect(existsSync(join(dir, '.config', 'systemd', 'user', 'muffin-gateway.service'))).toBe(true);
+    const written = readFileSync(join(sysdir(dir), 'muffin-gateway.service'), 'utf8');
+    expect(written).toMatch(/^User=\S+$/m);
+    expect(written).not.toMatch(/^User=root$/m);
+  });
+
+  it('nomi provisionati diventano LoadCredentialEncrypted, gli altri no', async () => {
+    // Il planner scrive righe solo per i nomi provisionati E richiesti: una
+    // riga per un blob assente ucciderebbe il servizio all'attivazione (243)
+    // per un file che non era mai il problema.
+    const dir = home();
+    process.env['MUFFIN_CREDSTORE_ENCRYPTED'] = join(dir, 'credstore');
+    try {
+      const ref = loadConfig(dir).provider.apiKeyRef;
+      const name = ref.slice('secret://'.length);
+      mkdirSync(join(dir, 'credstore'), { recursive: true });
+      writeFileSync(join(dir, 'credstore', `${name}.cred`), 'BLOB');
+      const s = zitto();
+      try {
+        await cmdGatewayInstall(dir, ['--write', '--force'], {
+          platform: 'linux',
+          homeDir: dir,
+          systemDir: sysdir(dir),
+          identity: { user: 'owner', uid: 1000 },
+          run: () => ({ status: 0, stderr: '' }),
+        });
+      } finally { s.ripristina(); }
+      // Backend file qui: nessuna riga, anche se il blob esiste — le righe
+      // seguono il flag esplicito, mai la presenza del file.
+      const fileBackend = readFileSync(join(sysdir(dir), 'muffin-gateway.service'), 'utf8');
+      expect(fileBackend).not.toContain('LoadCredentialEncrypted');
+      flipBackendSystemd(dir);
+      const s2 = zitto();
+      try {
+        await cmdGatewayInstall(dir, ['--write', '--force'], {
+          platform: 'linux',
+          homeDir: dir,
+          systemDir: sysdir(dir),
+          identity: { user: 'owner', uid: 1000 },
+          run: () => ({ status: 0, stderr: '' }),
+        });
+      } finally { s2.ripristina(); }
+      const systemdBackend = readFileSync(join(sysdir(dir), 'muffin-gateway.service'), 'utf8');
+      expect(systemdBackend).toContain(`LoadCredentialEncrypted=${name}:/etc/credstore.encrypted/${name}.cred`);
+      // Un riferimento richiesto ma mai provisionato non diventa una riga: la
+      // riga ucciderebbe il servizio all'attivazione, e a nominarlo ci pensa
+      // il drift warning di doctor, non la unit.
+      const withSearch = loadConfig(dir);
+      saveConfig({ ...withSearch, search: { provider: 'tavily', apiKeyRef: 'secret://tavily_api_key' } }, dir);
+      const s3 = zitto();
+      try {
+        await cmdGatewayInstall(dir, ['--write', '--force'], {
+          platform: 'linux',
+          homeDir: dir,
+          systemDir: sysdir(dir),
+          identity: { user: 'owner', uid: 1000 },
+          run: () => ({ status: 0, stderr: '' }),
+        });
+      } finally { s3.ripristina(); }
+      const filtered = readFileSync(join(sysdir(dir), 'muffin-gateway.service'), 'utf8');
+      expect(filtered).not.toContain('tavily_api_key');
+    } finally {
+      delete process.env['MUFFIN_CREDSTORE_ENCRYPTED'];
+    }
   });
 
   it('col binario vero, e senza il supervisore sul PATH, dice cosa manca ed esce 3', () => {
@@ -1297,14 +1345,18 @@ it('stampa il passo prima di eseguirlo, non dopo', async () => {
     const soloNode = mkdtempSync(join(tmpdir(), 'muffin-solo-node-'));
     homes.push(soloNode);
     symlinkSync(process.execPath, join(soloNode, 'node'));
+    // La unit di sistema non si scrive mai in /etc da un test: MUFFIN_SYSTEM_DIR
+    // la sposta in scratch (hook di test, stessa famiglia di MUFFIN_BINDIR).
+    const sysdir = mkdtempSync(join(tmpdir(), 'muffin-sysdir-'));
+    homes.push(sysdir);
 
-    const r = muffin(dir, ['gateway', 'install', '--start'], '', { PATH: soloNode });
+    const r = muffin(dir, ['gateway', 'install', '--start'], '', { PATH: soloNode, MUFFIN_SYSTEM_DIR: sysdir });
 
     expect(r.code).toBe(EXIT_NOT_ACTIVATED);
     expect(r.err).toContain('si è fermato qui');
     const unit = process.platform === 'darwin'
       ? join(dir, 'Library', 'LaunchAgents', 'ai.muffin.gateway.plist')
-      : join(dir, '.config', 'systemd', 'user', 'muffin-gateway.service');
+      : join(sysdir, 'muffin-gateway.service');
     expect(existsSync(unit)).toBe(true);
   });
 });

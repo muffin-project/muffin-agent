@@ -1,6 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
 import { existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, userInfo } from 'node:os';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as sqliteVec from 'sqlite-vec';
@@ -22,7 +22,8 @@ import { readConsolidation } from '../core/memory/consolidator.js';
 import { makeEmbedder, OllamaEmbedder, type Embedder } from '../core/memory/embed.js';
 import { quantiNonIndicizzati } from '../core/memory/vectors.js';
 import { readOpenContradictions } from '../core/memory/maintenance.js';
-import { loadConfig, locateSecretAll, paths, readSecret, ConfigError, type Config } from '../core/config/config.js';
+import { CREDSTORE_ENCRYPTED_DIR, loadConfig, locateSecretAll, paths, readSecret, secretsBackend, secretDir, ConfigError, type Config } from '../core/config/config.js';
+import { listLegacySecretNames, requiredSecretRefs, secretExists } from '../core/config/systemd.js';
 import { describeWorkspace } from '../core/config/workspace.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { diagnoseDefaultsDrift, type DefaultDrift } from '../core/config/defaults-drift.js';
@@ -485,47 +486,90 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
     );
   }
 
-  // Key presence only. A network call costs money and needs an explicit opt-in.
-  // *Which backend answered* is part of the check, not decoration: the read
-  // chain has two links now, and a chain that does not say which one spoke is
-  // how an install that believes it has moved its key keeps reading the old
-  // copy forever. Both locations are named when both exist, because that is the
-  // shadowing case and it is silent from every other angle.
-  try {
-    const key = readSecret(config.provider.apiKeyRef, home);
-    const where = locateSecretAll(config.provider.apiKeyRef, home);
-    const answered = where[0];
-    if (key.length === 0) {
-      fail('api key', 'secret file is empty', `write it with \`muffin secret set\``);
-    } else if (where.length > 1) {
-      warn(
-        'api key',
-        `${key.length} chars (mai stampata) — legge ${answered?.path}, ma esiste anche ${where[1]?.path}: la seconda non viene mai usata`,
-        'cancella la copia che non vuoi, così resta una sola chiave da ruotare',
-      );
+  // Key presence. Which backend answers is part of the check, not decoration:
+  // the read chain has two links, and a chain that does not say which one
+  // spoke is how an install that believes it has moved its key keeps reading
+  // the old copy forever.
+  //
+  // Doctor reports facts without resolving secret bytes. On the file backend
+  // the value is at hand (length/empty checks, never content); on the systemd
+  // backend this process runs outside the service and must not hold the host
+  // key, so presence is ciphertext existence — and emptiness is refused at
+  // provisioning time, which is what makes presence imply usable.
+  if (secretsBackend(home) === 'systemd') {
+    ok('segreti', `backend systemd — encrypted credentials in ${CREDSTORE_ENCRYPTED_DIR}, mai in file`);
+    if (secretExists(config.provider.apiKeyRef, home)) {
+      const shadows = locateSecretAll(config.provider.apiKeyRef, home);
+      if (shadows.length > 0) {
+        fail(
+          'api key',
+          `${config.provider.apiKeyRef} provisionato, ma esiste un'ombra in chiaro in ${shadows.map((s) => s.path).join(' e ')} — con backend systemd non viene mai letta`,
+          'cancella le copie in chiaro, così resta una sola chiave da ruotare',
+        );
+      } else {
+        ok('api key', `${config.provider.apiKeyRef} provisionato (systemd encrypted credential), mai stampata`);
+      }
     } else {
-      ok('api key', `${config.provider.apiKeyRef} (${answered?.backend}) — ${answered?.path}, ${key.length} chars, mai stampata`);
+      fail(
+        'api key',
+        `${config.provider.apiKeyRef} non provisionato come systemd credential`,
+        `provisiona: \`muffin secret set --systemd <nome>\`; poi riavvia: \`sudo systemctl restart muffin-gateway.service\``,
+      );
     }
-  } catch (error) {
-    const e = error as ConfigError;
-    fail('api key', e.message, e.remedy ?? 'set the key');
-  }
-  // Una copia sotto un **altro nome**, che è il caso che il rename di
-  // `provider_api_key` -> `<provider>_api_key` crea e che il controllo qui
-  // sopra non può vedere: quello guarda i backend di *un* riferimento, questo
-  // guarda i nomi. Una chiave dimenticata sotto un nome che nessuno legge più
-  // è comunque una credenziale valida da qualche parte sul disco, ed è quella
-  // che alla rotazione successiva resta indietro.
-  const altriNomi = ALL_API_KEY_NAMES.filter((n) => `secret://${n}` !== config.provider.apiKeyRef).flatMap((n) =>
-    locateSecretAll(`secret://${n}`, home).map((l) => ({ nome: n, path: l.path })),
-  );
-  if (altriNomi.length > 0) {
-    warn(
-      'api key (nomi)',
-      `esiste una chiave anche col nome ${altriNomi.map((a) => `\`${a.nome}\` (${a.path})`).join(', ')} — ` +
-        `questa installazione legge ${config.provider.apiKeyRef} e quella non la usa mai`,
-      'cancella la copia che non serve più: una chiave valida che nessuno legge è una che alla rotazione resta indietro',
+    const legacy = listLegacySecretNames(home);
+    if (legacy.length > 0) {
+      fail(
+        'api key (nomi)',
+        `copie in chiaro legacy (${legacy.join(', ')}) — con backend systemd non vengono mai lette, e alla rotazione restano indietro`,
+        '`muffin secret migrate --yes`, oppure cancellale a mano',
+      );
+    }
+    const missing = requiredSecretRefs(home).filter((r) => !secretExists(r, home));
+    if (missing.length > 0) {
+      warn(
+        'segreti (mancanti)',
+        `riferimenti senza credential provisionata: ${missing.join(', ')}`,
+        'provisiona ciascuno (`muffin secret set --systemd <nome>`), poi rigenera la unit (`muffin gateway install --write --force`) e riavvia',
+      );
+    }
+  } else {
+    ok('segreti', `backend file — 0600 in ${secretDir('home', home)} e ${secretDir('persistent', home)}`);
+    try {
+      const key = readSecret(config.provider.apiKeyRef, home);
+      const where = locateSecretAll(config.provider.apiKeyRef, home);
+      const answered = where[0];
+      if (key.length === 0) {
+        fail('api key', 'secret file is empty', `write it with \`muffin secret set\``);
+      } else if (where.length > 1) {
+        warn(
+          'api key',
+          `${key.length} chars (mai stampata) — legge ${answered?.path}, ma esiste anche ${where[1]?.path}: la seconda non viene mai usata`,
+          'cancella la copia che non vuoi, così resta una sola chiave da ruotare',
+        );
+      } else {
+        ok('api key', `${config.provider.apiKeyRef} (${answered?.backend}) — ${answered?.path}, ${key.length} chars, mai stampata`);
+      }
+    } catch (error) {
+      const e = error as ConfigError;
+      fail('api key', e.message, e.remedy ?? 'set the key');
+    }
+    // Una copia sotto un **altro nome**, che è il caso che il rename di
+    // `provider_api_key` -> `<provider>_api_key` crea e che il controllo qui
+    // sopra non può vedere: quello guarda i backend di *un* riferimento, questo
+    // guarda i nomi. Una chiave dimenticata sotto un nome che nessuno legge più
+    // è comunque una credenziale valida da qualche parte sul disco, ed è quella
+    // che alla rotazione successiva resta indietro.
+    const altriNomi = ALL_API_KEY_NAMES.filter((n) => `secret://${n}` !== config.provider.apiKeyRef).flatMap((n) =>
+      locateSecretAll(`secret://${n}`, home).map((l) => ({ nome: n, path: l.path })),
     );
+    if (altriNomi.length > 0) {
+      warn(
+        'api key (nomi)',
+        `esiste una chiave anche col nome ${altriNomi.map((a) => `\`${a.nome}\` (${a.path})`).join(', ')} — ` +
+          `questa installazione legge ${config.provider.apiKeyRef} e quella non la usa mai`,
+        'cancella la copia che non serve più: una chiave valida che nessuno legge è una che alla rotazione resta indietro',
+      );
+    }
   }
   if (options.online) {
     warn('api reachability', 'online check not implemented in M0', 'omit --online');
@@ -1068,10 +1112,22 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
     // which is exactly the state ADR-0035 (A1, owner's words) says continuity
     // must not depend on. Never `fail` (see supervisor.ts) — a missing unit is
     // a gap to close before trusting a reboot, not a broken install today.
-    const supervisor = checkSupervisor(process.platform, home, gateway !== null, {
-      ...realSupervisorProbes(),
-      ...options.supervisorProbes,
-    });
+    //
+    // serviceUser is always the user doctor itself runs as: the Linux system
+    // unit must run as the Home user, and anyone else (including root, which
+    // arrives here as an empty User=) is a mismatch worth a warning.
+    const supervisor = checkSupervisor(
+      process.platform,
+      home,
+      gateway !== null,
+      {
+        ...realSupervisorProbes(),
+        ...options.supervisorProbes,
+      },
+      undefined,
+      undefined,
+      process.platform === 'linux' ? userInfo().username : undefined,
+    );
     if (supervisor.engaged) {
       ok('supervisore', supervisor.detail);
     } else {

@@ -334,9 +334,28 @@ export const ConfigSchema = z.object({
       })
       .optional(),
   }),
+  /**
+   * Which durable store answers `secret://` references. Absent means `file`
+   * (the 0600 home/persistent chain) — every existing config keeps parsing
+   * byte-identical, and no install changes backend by upgrading.
+   *
+   * `systemd` means: values live ONLY as encrypted blobs in
+   * `/etc/credstore.encrypted/` and are materialised by PID 1 into
+   * `$CREDENTIALS_DIRECTORY` at service activation (D2, Linux system
+   * service). The flag flips exclusively through explicit owner commands
+   * (`muffin secret set --systemd`, `muffin secret migrate`) — never by
+   * inference, never as a fallback: an unavailable systemd store is a
+   * fail-closed error, not a quiet return to files (D3).
+   */
+  secrets: z
+    .object({
+      backend: z.enum(['file', 'systemd']),
+    })
+    .optional(),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
+export type SecretStoreBackend = 'file' | 'systemd';
 
 export const DEFAULT_CONFIG: Omit<Config, 'provider' | 'models'> = {
   schemaVersion: CONFIG_SCHEMA_VERSION,
@@ -579,6 +598,40 @@ export function locateSecretAll(ref: string, home = muffinHome()): SecretLocatio
 }
 
 /**
+ * Durable home of encrypted credential blobs on Linux (`systemd-creds
+ * encrypt`, D2). Canonical here, in the secrets' own module: `unit.ts`
+ * imports it rather than carrying a second copy that could drift.
+ *
+ * `MUFFIN_CREDSTORE_ENCRYPTED` moves it — test hook, same family as
+ * `MUFFIN_SYSTEM_DIR`/`MUFFIN_HOME`: without it no test can provision or
+ * observe a blob without touching the real `/etc`.
+ */
+export const CREDSTORE_ENCRYPTED_DIR = '/etc/credstore.encrypted';
+
+/** Ciphertext path for a validated secret name. Never a value, just a path. */
+export function credstoreEncryptedPath(name: string): string {
+  const dir = process.env['MUFFIN_CREDSTORE_ENCRYPTED'] ?? CREDSTORE_ENCRYPTED_DIR;
+  return join(dir, `${name}.cred`);
+}
+
+/**
+ * Which durable store answers `secret://` for this Home. `file` is the 0600
+ * home/persistent chain (and every config that predates this flag); `systemd`
+ * is the encrypted credential store (Linux system service, D2). Flipped
+ * exclusively by explicit owner commands — never inferred, never a fallback.
+ */
+export function secretsBackend(home = muffinHome()): SecretStoreBackend {
+  try {
+    return loadConfig(home).secrets?.backend ?? 'file';
+  } catch {
+    // An unreadable config is loadConfig's own fail-closed error, not a
+    // backend decision this function gets to make: file is the conservative
+    // reading, and loadConfig still throws where a value is actually needed.
+    return 'file';
+  }
+}
+
+/**
  * Secrets live in a 0600 file, referenced by name from the config.
  *
  * Stated plainly rather than dressed up: this is filesystem permissions, not
@@ -589,9 +642,38 @@ export function locateSecretAll(ref: string, home = muffinHome()): SecretLocatio
  * Both directories are on the tools' `denyRead` list (`agent/runtime.ts`), so
  * adding a backend here without adding it there re-opens the hole this chain was
  * built to close.
+ *
+ * When this Home is configured for the systemd store, this function reads
+ * ONLY `$CREDENTIALS_DIRECTORY` — materialised by PID 1 at service activation
+ * — and never falls through to the files (D3: no silent plaintext fallback).
  */
 export function readSecret(ref: string, home = muffinHome()): string {
   const name = requireSecretRef(ref);
+  if (secretsBackend(home) === 'systemd') {
+    const dir = process.env['CREDENTIALS_DIRECTORY'];
+    if (!dir) {
+      throw new ConfigError(
+        `missing secret "${name}" — backend systemd ma CREDENTIALS_DIRECTORY non impostata (questo processo non è il servizio supervisionato)`,
+        'avvia il gateway dal servizio di sistema (`sudo systemctl start muffin-gateway.service`); se il segreto non è ancora provisionato: `muffin secret set --systemd ' + name + '`',
+      );
+    }
+    let value: string;
+    try {
+      value = readFileSync(join(dir, name), 'utf8').trim();
+    } catch {
+      throw new ConfigError(
+        `missing secret "${name}" — non materializzato in $CREDENTIALS_DIRECTORY dal servizio`,
+        `provisiona (\`muffin secret set --systemd ${name}\`) e riavvia il servizio (\`sudo systemctl restart muffin-gateway.service\`)`,
+      );
+    }
+    if (!value) {
+      throw new ConfigError(
+        `missing secret "${name}" — materializzato ma vuoto`,
+        `reimposta: \`muffin secret set --systemd ${name}\` (i valori vuoti sono rifiutati al provisioning)`,
+      );
+    }
+    return value;
+  }
   const found = locateSecret(ref, home);
   if (!found) {
     throw new ConfigError(

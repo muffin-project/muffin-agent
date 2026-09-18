@@ -3,11 +3,11 @@ import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, userInfo } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { loadConfig, paths, saveConfig, writeSecret } from '../core/config/config.js';
+import { loadConfig, locateSecretAll, paths, saveConfig, writeSecret } from '../core/config/config.js';
 import { WORKSPACE_ENV, muffinWorkspace } from '../core/config/workspace.js';
 import { TurnStore } from '../core/turns/store.js';
 import { MemoryStore } from '../core/memory/store.js';
@@ -479,6 +479,74 @@ describe('doctor names which secret store answered', () => {
   });
 });
 
+describe('doctor on the systemd backend (D2/D3)', () => {
+  const systemdHome = (): string => {
+    const dir = home();
+    const config = loadConfig(dir);
+    saveConfig({ ...config, secrets: { backend: 'systemd' } }, dir);
+    vi.stubEnv('MUFFIN_CREDSTORE_ENCRYPTED', join(dir, 'credstore'));
+    return dir;
+  };
+  const refOf = (dir: string): string => loadConfig(dir).provider.apiKeyRef;
+
+  it('names the systemd backend without resolving bytes', async () => {
+    const dir = systemdHome();
+    const backend = await check(dir, 'segreti');
+    expect(backend?.level).toBe('ok');
+    expect(backend?.detail).toContain('systemd');
+    const key = await check(dir, 'api key');
+    // Nothing provisioned: fail with the provisioning remedy, never a value.
+    expect(key?.level).toBe('fail');
+    expect(key?.remedy).toContain('secret set --systemd');
+    expect(key?.detail).not.toContain('sk-never-called');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('ciphertext presence is ok, and never prints the value', async () => {
+    const dir = systemdHome();
+    const name = refOf(dir).slice('secret://'.length);
+    mkdirSync(join(dir, 'credstore'), { recursive: true });
+    writeFileSync(join(dir, 'credstore', `${name}.cred`), 'BLOB-NON-DECIFRABILE-QUI');
+    // Post-migration state: the file copy is gone (its presence would be the
+    // shadow case below, correctly red — not this test).
+    for (const loc of locateSecretAll(`secret://${name}`, dir)) rmSync(loc.path, { force: true });
+    const key = await check(dir, 'api key');
+    expect(key?.level).toBe('ok');
+    expect(key?.detail).toContain('mai stampata');
+    expect(key?.detail).not.toContain('BLOB');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('a plaintext shadow next to a provisioned credential is fail, not warn', async () => {
+    // Falsifier 7: with backend=systemd a file copy sits unread forever —
+    // until someone flips the flag back and it silently wins. That state is
+    // red, not yellow.
+    const dir = systemdHome();
+    const ref = refOf(dir);
+    const name = ref.slice('secret://'.length);
+    mkdirSync(join(dir, 'credstore'), { recursive: true });
+    writeFileSync(join(dir, 'credstore', `${name}.cred`), 'BLOB');
+    writeSecret(name, 'sk-shadow', dir, 'home');
+    const key = await check(dir, 'api key');
+    expect(key?.level).toBe('fail');
+    expect(key?.detail).toContain('ombra');
+    const nomi = await check(dir, 'api key (nomi)');
+    expect(nomi?.level).toBe('fail');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('required-but-unprovisioned refs warn with the regen remedy', async () => {
+    const dir = systemdHome();
+    const config = loadConfig(dir);
+    saveConfig({ ...config, search: { provider: 'tavily', apiKeyRef: 'secret://tavily_api_key' } }, dir);
+    const missing = await check(dir, 'segreti (mancanti)');
+    expect(missing?.level).toBe('warn');
+    expect(missing?.detail).toContain('secret://tavily_api_key');
+    expect(missing?.remedy).toContain('--force');
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe('doctor names the memory questions waiting on the owner', () => {
   /**
    * The one memory state that cannot resolve itself. A judge `review` verdict
@@ -807,7 +875,7 @@ describe('doctor asks whether a supervisor, not just a process, is behind the ga
     const engaged: Partial<SupervisorProbes> =
       process.platform === 'darwin'
         ? { unitFileExists: () => true, launchdLoaded: () => true }
-        : { unitFileExists: () => true, systemdEnabled: () => true, lingerEnabled: () => true };
+        : { unitFileExists: () => true, systemdEnabled: () => true, serviceUser: () => userInfo().username };
     const report = await runDoctor(dir, { supervisorProbes: engaged });
     const supervisor = report.checks.find((x) => x.name === 'supervisore');
     expect(supervisor?.level).toBe('ok');

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, readSync, rmSync } from 'node:fs';
+import { userInfo } from 'node:os';
 import { isatty } from 'node:tty';
 import { parseArgs } from 'node:util';
 import { formatReport, runDoctor } from './doctor.js';
@@ -45,7 +46,7 @@ import {
 } from './gateway.js';
 import { cmdObserve } from './observe.js';
 import { cmdBackup, cmdRestore } from './backup.js';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cmdUpdate, describeBuild } from './update.js';
 import { cmdConfig } from './config.js';
@@ -57,10 +58,19 @@ import {
   locateSecret,
   locateSecretAll,
   paths,
+  requireSecretRef,
+  saveConfig,
+  secretsBackend,
   writeAuthoritativeSecret,
   ConfigError,
   type ProviderKind,
 } from '../core/config/config.js';
+import {
+  decryptSystemdSecret,
+  listLegacySecretNames,
+  provisionSystemdSecret,
+} from '../core/config/systemd.js';
+import { SYSTEM_UNIT_DIR, SERVICE_NAME } from '../core/gateway/unit.js';
 import { promptLine, promptSecret } from './prompt.js';
 import { cmdPromptShow, cmdPromptVersion, PROMPT_USAGE } from './prompt-show.js';
 import {
@@ -1118,11 +1128,21 @@ async function cmdSurface(argv: string[]): Promise<number> {
   return 78;
 }
 
-function cmdSecret(argv: string[]): number {
+async function cmdSecret(argv: string[]): Promise<number> {
   const [sub, ...rest] = argv;
+  if (sub === 'migrate') return cmdSecretMigrate(rest.includes('--yes'));
   const name = rest.find((a) => !a.startsWith('-'));
+  const wantSystemd = rest.includes('--systemd');
+  const wantFile = rest.includes('--file');
   if (sub !== 'set' || !name) {
-    process.stderr.write(`usage: muffin secret set NAME  (value on stdin)\n`);
+    process.stderr.write(
+      `usage: muffin secret set NAME [--systemd|--file]  (value on stdin)\n` +
+        `       muffin secret migrate --yes\n`,
+    );
+    return 78;
+  }
+  if (wantSystemd && wantFile) {
+    process.stderr.write(`--systemd and --file are exclusive: one store answers per Home, never both.\n`);
     return 78;
   }
   // Read from stdin, never from argv: a key in a shell argument is a key in the
@@ -1140,14 +1160,32 @@ function cmdSecret(argv: string[]): number {
     process.stderr.write(`no value on stdin — pipe it: echo -n "$KEY" | muffin secret set ${name}\n`);
     return 78;
   }
+  const home = paths().home;
+  if (wantSystemd) return cmdSecretSetSystemd(home, name, value);
+  if (wantFile && secretsBackend(home) === 'systemd') {
+    // Anti-shadow: with the systemd backend active, a file copy would sit
+    // unread forever — until someone flips the flag back and it silently wins.
+    process.stderr.write(
+      `this Home uses the systemd credential backend: --file would create an unread shadow.\n` +
+        `  Rotate with:  echo -n "$KEY" | muffin secret set --systemd ${name}\n`,
+    );
+    return 78;
+  }
+  if (!wantFile && secretsBackend(home) === 'systemd') {
+    process.stderr.write(
+      `this Home uses the systemd credential backend: plain \`secret set\` would write an unread file copy.\n` +
+        `  Rotate with:  echo -n "$KEY" | muffin secret set --systemd ${name}\n`,
+    );
+    return 78;
+  }
   // The durable store is the sole target for a newly supplied value. `--persist`
   // remains accepted as a compatibility no-op, never a choice an owner needs.
-  const at = writeAuthoritativeSecret(name, value, paths().home);
+  const at = writeAuthoritativeSecret(name, value, home);
   process.stdout.write(`stored ${name} (0600), ${value.length} chars → ${at}\n`);
   // A legacy installation may still have a second copy under its old home.
   // Do not silently pretend that it disappeared: make the remaining migration
   // visible, but never create a new competing copy from this command.
-  const copies = locateSecretAll(`secret://${name}`, paths().home);
+  const copies = locateSecretAll(`secret://${name}`, home);
   const winner = copies[0];
   if (copies.length > 1 && winner) {
     process.stderr.write(
@@ -1157,6 +1195,170 @@ function cmdSecret(argv: string[]): number {
     );
   }
   return 0;
+}
+
+/**
+ * `muffin secret set --systemd NAME`: provision (or rotate) one encrypted
+ * blob and flip this Home to the systemd backend. Linux-only; refuses when
+ * legacy file secrets exist (that is `migrate`'s job — a single provision
+ * must never strand the others unreachable).
+ */
+async function cmdSecretSetSystemd(home: string, name: string, value: string): Promise<number> {
+  if (process.platform !== 'linux') {
+    process.stderr.write(`the systemd credential backend is Linux-only (this machine is ${process.platform}).\n`);
+    return 78;
+  }
+  const legacy = listLegacySecretNames(home);
+  if (secretsBackend(home) !== 'systemd' && legacy.length > 0) {
+    process.stderr.write(
+      `legacy file secrets exist (${legacy.join(', ')}): provisioning one secret to systemd would strand the rest.\n` +
+        `  Move them all first:  muffin secret migrate --yes\n`,
+    );
+    return 78;
+  }
+  try {
+    requireSecretRefOrThrow(name);
+    const { path } = provisionSystemdSecret(name, value);
+    const config = loadConfig(home);
+    saveConfig({ ...config, secrets: { backend: 'systemd' } }, home);
+    process.stdout.write(`stored ${name} encrypted → ${path}\n`);
+    process.stdout.write(`takes effect at next service start: sudo systemctl restart ${SERVICE_NAME}.service\n`);
+    return 0;
+  } catch (error) {
+    return failSecretOp(error);
+  }
+}
+
+/** `muffin secret migrate --yes`: file stores → encrypted systemd store. */
+async function cmdSecretMigrate(yes: boolean): Promise<number> {
+  const home = paths().home;
+  if (!yes) {
+    process.stderr.write(
+      `migrate moves every legacy file secret to encrypted systemd credentials, proves the new path, then deletes the file copies.\n` +
+        `  Re-run with --yes:  muffin secret migrate --yes\n`,
+    );
+    return 1;
+  }
+  if (process.platform !== 'linux') {
+    process.stderr.write(`migration to systemd credentials is Linux-only (this machine is ${process.platform}).\n`);
+    return 78;
+  }
+  const names = listLegacySecretNames(home);
+  if (names.length === 0) {
+    process.stdout.write(
+      secretsBackend(home) === 'systemd'
+        ? `nothing legacy left — backend is already systemd.\n`
+        : `no legacy file secrets — nothing to migrate.\n`,
+    );
+    return 0;
+  }
+  // 1. Read every legacy value through the file chain (the same precedence
+  // `readSecret` uses while the backend is still `file`) — values live in
+  // memory only from here on, never on disk, never in argv/env.
+  const values = new Map<string, string>();
+  try {
+    for (const n of names) {
+      const found = locateSecret(`secret://${n}`, home);
+      if (!found) continue;
+      values.set(n, readFileSync(found.path, 'utf8').trim());
+    }
+  } catch (error) {
+    return failSecretOp(error);
+  }
+  if (values.size === 0) {
+    process.stderr.write(`legacy names found but none readable — aborting, nothing was changed.\n`);
+    return 1;
+  }
+  // 2. Provision every blob. Any failure aborts with the backend untouched
+  // and the legacy copies intact (falsifier 12: migration failure preserves
+  // the old working credential).
+  try {
+    for (const [n, v] of values) {
+      if (!v) throw new ConfigError(`legacy secret "${n}" is empty — refusing to migrate emptiness`, `delete it or set a value first: muffin secret set ${n} --file`);
+      provisionSystemdSecret(n, v);
+    }
+  } catch (error) {
+    process.stderr.write(`migration aborted before any switch: legacy file secrets intact and still authoritative.\n`);
+    return failSecretOp(error);
+  }
+  // 3. Prove the new path by decrypting every blob back and comparing (in
+  // memory, never printed) — a corrupt blob must surface here, not at the
+  // next boot with the legacy copies already gone.
+  try {
+    for (const [n, v] of values) {
+      if (decryptSystemdSecret(n) !== v) {
+        throw new ConfigError(
+          `round-trip mismatch for "${n}" — the blob does not decrypt to the legacy value`,
+          'legacy file secrets intact and still authoritative; inspect the blob, then re-run',
+        );
+      }
+    }
+  } catch (error) {
+    return failSecretOp(error);
+  }
+  // 4. Flip the backend, then prove the service on it.
+  const previous = loadConfig(home);
+  saveConfig({ ...previous, secrets: { backend: 'systemd' } }, home);
+  let flipped = true;
+  const rollback = (why: string): number => {
+    if (flipped) {
+      try {
+        saveConfig({ ...loadConfig(home), secrets: { backend: 'file' } }, home);
+      } catch {
+        // The flag file itself is broken — say so loudly, legacy files below
+        // are still intact regardless.
+      }
+      flipped = false;
+    }
+    process.stderr.write(`${why}\nlegacy file secrets intact and authoritative again — fix the cause, then re-run migrate.\n`);
+    return 1;
+  };
+  const unitInstalled = existsSync(join(SYSTEM_UNIT_DIR, `${SERVICE_NAME}.service`));
+  if (unitInstalled) {
+    // The restart/verify logic lives in exactly one place (cmdGatewayRestart):
+    // pid change proven, failures reported with the supervisor's own remedy.
+    const code = await cmdGatewayRestart(home, { platform: 'linux', serviceUser: userInfo().username });
+    if (code !== 0) {
+      return rollback(`service restart on the new backend failed (exit ${code}).`);
+    }
+  } else {
+    process.stdout.write(`service not installed yet — proof deferred to first start; blobs verified by decrypt round-trip above.\n`);
+  }
+  // 5. Only now delete the legacy copies.
+  const leftovers: string[] = [];
+  for (const n of values.keys()) {
+    for (const loc of locateSecretAll(`secret://${n}`, home)) {
+      try {
+        rmSync(loc.path, { force: true });
+      } catch {
+        leftovers.push(loc.path);
+      }
+    }
+  }
+  if (leftovers.length > 0) {
+    process.stderr.write(`migrated, but these legacy copies could not be deleted: ${leftovers.join(', ')}\n`);
+    process.stderr.write(`  doctor reports them as a shadow until they are gone.\n`);
+    return 1;
+  }
+  process.stdout.write(`migrated ${values.size} secret(s) to systemd encrypted credentials; legacy file copies deleted.\n`);
+  if (!unitInstalled) {
+    process.stdout.write(`takes effect when the service is installed and started.\n`);
+  }
+  return 0;
+}
+
+function failSecretOp(error: unknown): number {
+  if (error instanceof ConfigError) {
+    process.stderr.write(`${error.message}\n  → ${error.remedy}\n`);
+    return 1;
+  }
+  throw error;
+}
+
+function requireSecretRefOrThrow(name: string): void {
+  // Reuse the reference grammar so provisioning can never mint a name the
+  // resolver would refuse to read back.
+  requireSecretRef(`secret://${name}`);
 }
 
 function cmdTrace(argv: string[]): number {

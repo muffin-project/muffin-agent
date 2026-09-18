@@ -13,7 +13,7 @@ import {
   writeFileSync,
   realpathSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -99,7 +99,7 @@ import { schemaVersionOf } from '../core/db/migrate.js';
  * updated to* — measured on the owner's own machine, 26/08/2026, which was
  * installed the day before. That first hop is manual and looks exactly like
  * what this command automates, minus the release directory: stop the
- * supervised gateway (`launchctl bootout` / `systemctl --user stop`, because
+ * supervised gateway (`launchctl bootout` / `systemctl stop`, because
  * `npm ci` deletes `node_modules` under a live process), fast-forward the
  * checkout to `origin/main`, `npm ci && npm run compile`, bring the gateway
  * back. From then on the launcher points at a checkout this command
@@ -694,10 +694,15 @@ export function noteDopoLoSwing(args: {
 
 /**
  * Exported so `cli/gateway.ts`'s `muffin gateway restart` can build the exact
- * same `launchctl kickstart -k`/`systemctl --user restart` this file's own
+ * same `launchctl kickstart -k`/`sudo systemctl restart` this file's own
  * `offerGatewayRestart` runs after `muffin update` — one mechanism, not a
  * second `launchctl` string that could drift from this one on the next macOS
  * quirk.
+ *
+ * On Linux the service is a SYSTEM unit, so the restart needs privilege the
+ * invoking user may not have in this shell: `sudo` is part of the argv,
+ * printed before it runs (the house rule), and its own failure is reported
+ * by `restartVerdict` like any other — never silently retried unprivileged.
  */
 export function restartCommand(platform: NodeJS.Platform): { printable: string; argv: string[] } {
   if (platform === 'darwin') {
@@ -706,7 +711,7 @@ export function restartCommand(platform: NodeJS.Platform): { printable: string; 
     return { argv: ['launchctl', 'kickstart', '-k', target], printable: `launchctl kickstart -k ${target}` };
   }
   const unit = `${SERVICE_NAME}.service`;
-  return { argv: ['systemctl', '--user', 'restart', unit], printable: `systemctl --user restart ${unit}` };
+  return { argv: ['sudo', 'systemctl', 'restart', unit], printable: `sudo systemctl restart ${unit}` };
 }
 
 /**
@@ -821,6 +826,8 @@ export async function offerGatewayRestart(
     restart?: (argv: string[]) => SpawnResult;
     /** Same injection seam `cli/doctor.ts` uses for `checkSupervisor` — real OS probes by default, overridden so a test never shells out to a real systemctl/launchctl. */
     supervisorProbes?: Partial<SupervisorProbes>;
+    /** Expected User= of the Linux system service. Defaults to the invoking user (the Home user by contract). */
+    serviceUser?: string;
     gatewayRunning?: boolean;
     /** «Chi sta servendo, adesso?» — reale `currentGatewayPid(home)` di default, una coda in test. */
     readGatewayPid?: () => number | null;
@@ -833,10 +840,18 @@ export async function offerGatewayRestart(
   const promptFn = opts.promptFn ?? promptLine;
   const restart = opts.restart ?? ((argv: string[]) => run(argv[0]!, argv.slice(1), home, 30_000));
   const readGatewayPid = opts.readGatewayPid ?? (() => currentGatewayPid(home));
-  const status = checkSupervisor(opts.platform, home, opts.gatewayRunning ?? readGatewayPid() !== null, {
-    ...realSupervisorProbes(),
-    ...opts.supervisorProbes,
-  });
+  const status = checkSupervisor(
+    opts.platform,
+    home,
+    opts.gatewayRunning ?? readGatewayPid() !== null,
+    {
+      ...realSupervisorProbes(),
+      ...opts.supervisorProbes,
+    },
+    undefined,
+    undefined,
+    opts.platform === 'linux' ? (opts.serviceUser ?? userInfo().username) : undefined,
+  );
 
   const carryOn = (): void => {
     process.stderr.write(

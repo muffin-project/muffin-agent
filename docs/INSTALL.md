@@ -35,7 +35,7 @@ to undo it.
 | Build | `npm ci` in that checkout, producing `dist/` |
 | Command | `~/.local/bin/muffin` → a symlink into that build |
 | Setup | `muffin init` — creates `~/.muffin`, stores your key `0600`, seals the root of trust |
-| Supervisor | `muffin gateway install --write --start` — writes the user unit, loads it, enables linger where applicable |
+| Supervisor | `muffin gateway install --write --start` — writes the system unit (`User=` = you), loads it on the system bus, no linger step exists |
 
 Nothing is installed outside your home directory except optional OS packages.
 If passwordless `sudo` is not available on Linux the installer prints the one
@@ -126,6 +126,15 @@ MUFFIN_API_KEY_FILE=/run/secrets/muffin-key sh install.sh
 
 That is a *path* in the environment, not a secret. See ADR-0048.
 
+On Linux the installer then moves the key to encrypted systemd credentials
+in the same session (`muffin secret migrate --yes` when sudo is available):
+the durable form is a host-key-encrypted blob under
+`/etc/credstore.encrypted/`, materialised by PID 1 into
+`$CREDENTIALS_DIRECTORY` at service activation — never a file in the home,
+never argv/env. Same stdin discipline throughout; `doctor` reports the
+backend, and a missing/unavailable store fails closed with a remedy instead
+of silently falling back to files.
+
 The Alpha onboarding plan adds a lower-friction recommended path — OpenRouter
 OAuth PKCE — without weakening this invariant. Until that slice lands, the
 masked-stdin key path remains the supported credential path.
@@ -133,7 +142,7 @@ masked-stdin key path remains the supported credential path.
 ## Native first; Docker is not a second installer yet
 
 The supported personal Home path is native: it is the only path exercised by
-the Ubuntu acceptance, including the generated user service, update/rollback
+the Ubuntu acceptance, including the generated system service, update/rollback
 and the actual launcher. A Docker/Compose Home would still need an explicit
 answer for persistent owner data, a supervisor and updates; adding an unproved
 second path would duplicate those boundaries while not replacing Muffin's
@@ -168,10 +177,10 @@ The canonical installer keeps the existing operational overrides:
 | `MUFFIN_NO_GATEWAY` | — | `1` installs the command but not the service |
 
 Exit codes from `install.sh`: `0` done · `1` something failed · `3` installed
-and working, but the gateway could not be activated on this machine (no user
-systemd instance — a container, or a shell that never logged in). `3` and not
-`1` so a script can tell "nothing works" from "everything works except the part
-this machine cannot do". `bootstrap.sh` preserves that exit code.
+and working, but the gateway could not be activated on this machine (usually
+the privileged steps need root — a container, or a shell without sudo).
+`3` and not `1` so a script can tell "nothing works" from "everything works
+except the part this machine cannot do". `bootstrap.sh` preserves that exit code.
 
 ### The name collision
 
@@ -216,13 +225,17 @@ Two install evals own two different claims:
   controlling terminal on stdin;
 - `evals/install/ubuntu.sh` starts from an Ubuntu 24.04 machine with `PATH`
   stripped of every Node, a throwaway `HOME` and a local git origin pinned to
-  the commit under test, then asserts that `install.sh` finishes on its own,
-  that `muffin doctor` reports no red lines, that the generated unit is accepted
-  by `systemd-analyze verify` and produces a live gateway, and that
+  the commit under test, then asserts that `install.sh` finishes on its own
+  (including migrating the key to encrypted systemd credentials when sudo is
+  available, leaving no file secret store behind), that `muffin doctor`
+  reports no red lines, that the generated system unit is accepted by
+  `systemd-analyze verify` and produces a live gateway, and that
   `muffin update` and `muffin update --rollback` move the launcher and move it
   back.
 
-The Ubuntu eval also declares what a container cannot prove: there is no user
-systemd instance inside one, so `systemctl --user is-active` is only asserted
-when a real one is reachable. Everywhere else the unit is proved by systemd's
-parser plus a foreground run of its own `ExecStart`.
+The Ubuntu eval also declares what a container cannot prove: there is no PID 1
+systemd inside one, so the service is proved by systemd's parser plus a
+foreground run of its own `ExecStart` (with an emulated
+`$CREDENTIALS_DIRECTORY`, exactly what PID 1 would hand over), never by
+`systemctl is-active`. Reboot, linger-free survival and host-key decryption
+belong to the VPS acceptance harness on a disposable VM, not to this container.

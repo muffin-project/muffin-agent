@@ -13,7 +13,8 @@ import { makeJobRunner } from '../agent/scheduler-run.js';
 import { makeLaneRunner, NO_SURFACE, type AttachStream, type LaneDeliver } from '../agent/turn-lane.js';
 import { TurnLane, type LaneEvent } from '../core/turns/lane.js';
 import { ModelLane } from '../core/turns/model-lane.js';
-import { ConfigError, paths } from '../core/config/config.js';
+import { ConfigError, paths, secretsBackend } from '../core/config/config.js';
+import { requiredSecretRefs, secretExists } from '../core/config/systemd.js';
 import { GatewayLock, readGateway, type GatewayInfo } from '../core/gateway/lock.js';
 import { askRaw, CONTROL_PROTOCOL, serveControlSocket, type ControlServer } from '../core/gateway/control-socket.js';
 import type { ExecutionQuery } from '../core/gateway/forward.js';
@@ -31,6 +32,7 @@ import {
   EXIT_PERMANENT,
   LAUNCHD_LABEL,
   RESTART_SEC,
+  SERVICE_NAME,
   STOP_TIMEOUT_SEC,
 } from '../core/gateway/unit.js';
 import { Scheduler, type Deliver } from '../core/scheduler/scheduler.js';
@@ -299,7 +301,7 @@ export async function cmdGatewayStart(
   if (pid === null) {
     process.stderr.write(
       `${supervisore.join(' ')} è uscito 0, ma nessun gateway risulta attivo entro il tempo di attesa\n` +
-        `→ \`muffin gateway status\` per il dettaglio, i log del supervisore (\`journalctl --user -u muffin\`/Console.app) per il perché\n`,
+        `→ \`muffin gateway status\` per il dettaglio, i log del supervisore (\`journalctl -u muffin-gateway.service\`/Console.app) per il perché\n`,
     );
     return 2;
   }
@@ -319,8 +321,13 @@ function supervisorStart(home: string): string[] | null {
   if (process.platform === 'darwin') {
     return existsSync(launchAgentPath()) ? ['launchctl', 'kickstart', `gui/${String(userInfo().uid)}/${LAUNCHD_LABEL}`] : null;
   }
-  return existsSync(join(homedir(), '.config', 'systemd', 'user', `${LAUNCHD_LABEL}.service`))
-    ? ['systemctl', '--user', 'start', `${LAUNCHD_LABEL}.service`]
+  // System unit (D2): `start` needs privilege, so `sudo` is part of the argv
+  // and printed before it runs. (This also retires a latent bug: the old code
+  // looked for `${LAUNCHD_LABEL}.service` — the macOS label — in the Linux
+  // user directory, a file that never exists, so `gateway start` on Linux
+  // always concluded no supervisor was installed.)
+  return existsSync(join('/etc/systemd/system', `${SERVICE_NAME}.service`))
+    ? ['sudo', 'systemctl', 'start', `${SERVICE_NAME}.service`]
     : null;
 }
 
@@ -418,6 +425,8 @@ export async function cmdGatewayRestart(
   deps: {
     platform?: NodeJS.Platform;
     supervisorProbes?: Partial<SupervisorProbes>;
+    /** Expected User= of the Linux system service. Defaults to the invoking user (the Home user by contract). */
+    serviceUser?: string;
     restart?: (argv: string[]) => { status: number; stdout: string; stderr: string };
     readGatewayPid?: () => number | null;
     sleep?: (ms: number) => Promise<void>;
@@ -429,10 +438,18 @@ export async function cmdGatewayRestart(
   const readGatewayPid = deps.readGatewayPid ?? (() => currentGatewayPid(home));
   const restart = deps.restart ?? ((argv: string[]) => run(argv[0]!, argv.slice(1), home, 30_000));
 
-  const status = checkSupervisor(platform, home, readGatewayPid() !== null, {
-    ...realSupervisorProbes(),
-    ...deps.supervisorProbes,
-  });
+  const status = checkSupervisor(
+    platform,
+    home,
+    readGatewayPid() !== null,
+    {
+      ...realSupervisorProbes(),
+      ...deps.supervisorProbes,
+    },
+    undefined,
+    undefined,
+    platform === 'linux' ? (deps.serviceUser ?? userInfo().username) : undefined,
+  );
   if (!status.engaged) {
     process.stderr.write(`nessun gateway supervisionato: ${status.detail}\n  → ${status.remedy}\n`);
     return 1;
@@ -502,10 +519,13 @@ export async function cmdGatewayInstall(
     sleep?: (ms: number) => Promise<void>;
     verifyAttempts?: number;
     verifyIntervalMs?: number;
-    /** The environment the activation steps run in. Tests hand in their own; production is `process.env`. */
-    env?: NodeJS.ProcessEnv;
-    /** Whether `/run/user/<uid>` exists — i.e. a user systemd instance is up (login or linger). */
-    runtimeDirExists?: (path: string) => boolean;
+    /**
+     * Dove va la unit di sistema su Linux. Default `/etc/systemd/system`
+     * (`SYSTEM_UNIT_DIR`); `MUFFIN_SYSTEM_DIR` lo sposta — hook di test,
+     * stessa famiglia di `MUFFIN_BINDIR`/`MUFFIN_HOME`, perché senza non si
+     * può provare `--write` senza scrivere in `/etc` per davvero.
+     */
+    systemDir?: string;
   } = {},
 ): Promise<number> {
   let values: { write?: boolean; force?: boolean; start?: boolean };
@@ -523,6 +543,22 @@ export async function cmdGatewayInstall(
   // rifiuto di sovrascrivere (uscita 2) vale identico — accendere una unit
   // diversa da quella che l'owner ha in mano sarebbe peggio, non meglio.
   const write = values.write === true || values.start === true;
+  const installPlatform = deps.platform ?? process.platform;
+
+  // D1, applied at install time: on Linux the service runs as a dedicated
+  // unprivileged user via User=. Installing AS root would bake User=root
+  // into the unit (the planner refuses it) — and a root-owned
+  // ~/.muffin-serving install is not a thing this command creates. Re-run
+  // as the dedicated user; root is only ever needed for the printed `sudo`
+  // lines, never for this process.
+  if (installPlatform === 'linux' && (deps.identity?.uid ?? userInfo().uid) === 0) {
+    process.stderr.write(
+      `non installare come root: il servizio deve girare come utente dedicato (User=), mai come root.\n` +
+        `  Crea l'utente se non c'è (\`adduser muffin\`), poi rilancia da quella shell: \`muffin gateway install --write --start\`\n` +
+        `  Solo le righe \`sudo ...\` che quel comando stampa vanno eseguite come root.\n`,
+    );
+    return 2;
+  }
 
   const launcher = currentLauncher();
   const plan = planUnit({
@@ -548,6 +584,34 @@ export async function cmdGatewayInstall(
     // compariva nella `~/.config` vera, con `WorkingDirectory` su una home
     // temporanea. Ora la destinazione è un argomento anche qui.
     homeDir: deps.homeDir ?? homedir(),
+    // Linux system units run as the installing user — always, on print and
+    // write paths alike (the planner refuses to guess). install.sh runs as
+    // the dedicated user by contract, so this is that user.
+    ...(installPlatform === 'linux' ? { serviceUser: deps.identity?.user ?? userInfo().username } : {}),
+    // Credential lines only when this Home is explicitly on the systemd
+    // backend — and only for names actually provisioned. A line for a blob
+    // that does not exist fails the service at activation (243) for a file
+    // that was never the problem; required-but-unprovisioned names are
+    // doctor's drift warning, not unit lines. requiredSecretRefs never throws
+    // (an unreadable config contributes no names), so print-before-init stays
+    // plannable.
+    ...(installPlatform === 'linux' && secretsBackend(home) === 'systemd'
+      ? {
+          credentials: requiredSecretRefs(home)
+            .filter((r) => {
+              try {
+                return secretExists(r, home);
+              } catch {
+                return false;
+              }
+            })
+            .map((r) => r.slice('secret://'.length)),
+        }
+      : {}),
+    // Test hook (see the `systemDir` dep): never a second production path.
+    ...(installPlatform === 'linux' && (deps.systemDir ?? process.env['MUFFIN_SYSTEM_DIR'])
+      ? { systemDir: (deps.systemDir ?? process.env['MUFFIN_SYSTEM_DIR'])! }
+      : {}),
     // Where this install's Node lives. Without it launchd/systemd hand the
     // launcher a PATH that has no `node` in it at all — and with the *wrong*
     // one it hands it a path that expires (see `resolveInterpreterDir`).
@@ -578,8 +642,25 @@ export async function cmdGatewayInstall(
         return 2;
       }
     }
-    mkdirSync(dirname(plan.path), { recursive: true });
-    writeFileSync(plan.path, plan.text, 'utf8');
+    try {
+      mkdirSync(dirname(plan.path), { recursive: true });
+      writeFileSync(plan.path, plan.text, 'utf8');
+    } catch (error) {
+      // The Linux system unit lives under /etc: writing it needs privilege
+      // this process may not have. That is a remedy, not a crash — and never
+      // a reason to write the unit somewhere else (a unit systemd never reads
+      // is worse than no unit). Print the exact privileged write, run nothing.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (plan.needsRoot && (code === 'EACCES' || code === 'EPERM')) {
+        process.stderr.write(`non posso scrivere ${plan.path} da questo utente (${code}).\n`);
+        process.stderr.write(`  Esegui come root (l'unit resta questa, byte per byte):\n`);
+        process.stderr.write(`  mkdir -p ${dirname(plan.path)}\n`);
+        process.stderr.write(`  muffin gateway install > /tmp/muffin-gateway.service\n`);
+        process.stderr.write(`  sudo install -o root -g root -m 644 /tmp/muffin-gateway.service ${plan.path}\n`);
+        return 2;
+      }
+      throw error;
+    }
     process.stderr.write(`scritto ${plan.path}\n`);
   } else {
     // stdout is the result (house rule), so `muffin gateway install > file`
@@ -596,37 +677,15 @@ export async function cmdGatewayInstall(
       return EXIT_NOT_ACTIVATED;
     }
     const run = deps.run ?? REAL_RUNNER;
-    // Measured on the owner's VPS, 08/09/2026: `adduser muffin && su - muffin`
-    // then `install.sh` — the unit was written and `systemctl --user
-    // daemon-reload` died with «Failed to connect to bus: No medium found».
-    // A `su -`/`sudo -i` shell has no XDG_RUNTIME_DIR, but the user's systemd
-    // instance may well be running (a real login, or `loginctl
-    // enable-linger` done by root): then `/run/user/<uid>` exists and naming it
-    // is all systemctl needs. When it does not exist, no command this user can
-    // run creates it — only root's `enable-linger` does — so that is the one
-    // remedy worth printing, instead of «a container, or a shell that never
-    // logged in».
-    const platform = deps.platform ?? process.platform;
-    const env = deps.env ?? process.env;
-    let noUserBus: string | null = null;
-    if (platform === 'linux' && !env['XDG_RUNTIME_DIR'] && plan.activation.length > 0) {
-      const uid = deps.identity?.uid ?? userInfo().uid;
-      const runtimeDir = `/run/user/${uid}`;
-      if ((deps.runtimeDirExists ?? existsSync)(runtimeDir)) {
-        env['XDG_RUNTIME_DIR'] = runtimeDir;
-        if (!env['DBUS_SESSION_BUS_ADDRESS']) env['DBUS_SESSION_BUS_ADDRESS'] = `unix:path=${runtimeDir}/bus`;
-        process.stderr.write(`\nquesta shell non aveva XDG_RUNTIME_DIR (su -, sudo): uso ${runtimeDir}\n`);
-      } else {
-        const user = deps.identity?.user ?? userInfo().username;
-        noUserBus =
-          `nessun bus systemd per l'utente ${user} in questa shell (tipico di \`su -\`/\`sudo -i\`), e ${runtimeDir} non esiste: ` +
-          `lo crea solo root con \`loginctl enable-linger ${user}\` — poi rilancia \`muffin gateway install --write --start\` da questa stessa shell.`;
-      }
-    }
+    // No XDG_RUNTIME_DIR/user-bus repair here anymore: system units live on
+    // the system bus, which needs no per-shell runtime dir — only privilege,
+    // which is already visible as `sudo` in every activation step below.
+    // (The `su -` shell that used to die with «No medium found» now dies, if
+    // at all, on `sudo` telling it exactly what is missing.)
     process.stderr.write(`\nl'accendo:\n`);
     for (const step of plan.activation) {
       // Stampato PRIMA di eseguirlo, non dopo: se il passo si pianta (systemctl
-      // che attende un bus che non c'è) l'owner vede su cosa, non un cursore.
+      // che attende qualcosa che non c'è) l'owner vede su cosa, non un cursore.
       process.stderr.write(`  ${step.argv.join(' ')}   # ${step.why}\n`);
       const r = run(step.argv);
       if (r.status !== 0) {
@@ -636,7 +695,6 @@ export async function cmdGatewayInstall(
         process.stderr.write(`\n! si è fermato qui: ${step.argv.join(' ')}\n`);
         const detail = r.stderr.trim();
         if (detail !== '') process.stderr.write(`  ${detail.split('\n').join('\n  ')}\n`);
-        if (noUserBus !== null) process.stderr.write(`\n! ${noUserBus}\n`);
         process.stderr.write(`\nla unit è scritta in ${plan.path}; il servizio no. I passi rimasti:\n`);
         for (const c of plan.commands) process.stderr.write(`  ${c}\n`);
         for (const w of plan.warnings) process.stderr.write(`\n! ${w}\n`);
@@ -660,7 +718,7 @@ export async function cmdGatewayInstall(
       process.stderr.write(
         `\nogni passo è uscito 0, ma nessun gateway risulta attivo entro il tempo di attesa.\n` +
           `la unit è scritta e caricata in ${plan.path}; il processo no — \`muffin gateway status\` per il dettaglio, ` +
-          `i log del supervisore (\`journalctl --user -u muffin\`/Console.app) per il perché.\n`,
+          `i log del supervisore (\`journalctl -u muffin-gateway.service\`/Console.app) per il perché.\n`,
       );
       for (const w of plan.warnings) process.stderr.write(`\n! ${w}\n`);
       return EXIT_NOT_ACTIVATED;

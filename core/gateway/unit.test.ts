@@ -27,7 +27,10 @@ const plan = (over: Parameters<typeof planUnit>[0] extends infer T ? Partial<T> 
     platform: 'linux',
     home: DATA_HOME,
     exec: ['/home/g/.local/bin/muffin', 'gateway', 'run'],
-    configHome: '/home/g/.config',
+    homeDir: '/home/g',
+    // The Linux Home is a system service: the planner refuses to guess the
+    // user, so every linux plan in this file names it explicitly.
+    serviceUser: 'g',
     ...over,
   });
 
@@ -102,16 +105,38 @@ describe('the systemd unit is anchored to the data home', () => {
     expect(plan().text).toContain(`Environment=MUFFIN_HOME=${DATA_HOME}`);
   });
 
-  it('lands in the user unit directory, not a system one', () => {
-    // Constraint 4 of the ADR: it runs as the owner, with no elevation. A system
-    // unit needs root and would give the gateway a different identity than the
-    // one that owns ~/.muffin.
-    expect(plan().path).toBe('/home/g/.config/systemd/user/muffin-gateway.service');
-    expect(plan().commands.join(' ')).toContain('--user');
+  it('lands in the system unit directory, with User= and no linger anywhere', () => {
+    // D2: the Linux Home is a system service under a dedicated unprivileged
+    // user — the `--user` + linger model is retired, not deprecated. A path
+    // under `systemd/user`, a linger command, or a missing User= is the old
+    // architecture coming back.
+    const p = plan();
+    expect(p.path).toBe('/etc/systemd/system/muffin-gateway.service');
+    expect(p.text).toMatch(/^User=g$/m);
+    expect(p.text).toContain('WantedBy=multi-user.target');
+    expect(p.text).not.toContain('--user');
+    expect(p.text).not.toContain('linger');
+    expect(p.commands.join(' ')).not.toContain('linger');
+    expect(p.needsRoot).toBe(true);
   });
 
-  it('tells the owner about linger, without which a user unit dies at logout', () => {
-    expect(plan().commands.join(' ')).toContain('enable-linger');
+  it('refuses to guess the user, and refuses root most of all', () => {
+    // A unit without User= runs as root. The planner fails closed instead of
+    // emitting it: this is falsifier 3 wearing a unit test.
+    expect(() => plan({ serviceUser: undefined })).toThrow(/serviceUser/);
+    expect(() => plan({ serviceUser: '' })).toThrow(/serviceUser/);
+    expect(() => plan({ serviceUser: 'root' })).toThrow(/root/);
+  });
+
+  it('names encrypted credentials explicitly, or names none at all', () => {
+    // One LoadCredentialEncrypted line per provisioned name; zero lines when
+    // the backend is the file store — a unit that names no secret it was
+    // never given is honest, and a file-backend service reads its 0600 files
+    // exactly as before.
+    expect(plan().text).not.toContain('LoadCredentialEncrypted');
+    const p = plan({ credentials: ['provider_api_key', 'telegram_token'] });
+    expect(p.text).toContain('LoadCredentialEncrypted=provider_api_key:/etc/credstore.encrypted/provider_api_key.cred');
+    expect(p.text).toContain('LoadCredentialEncrypted=telegram_token:/etc/credstore.encrypted/telegram_token.cred');
   });
 });
 
@@ -183,7 +208,7 @@ describe('what the supervisor does with each exit code', () => {
   it('systemd: uno stop voluto non lascia la unit in `failed`, un guasto permanente sì', () => {
     // `RestartPreventExitStatus` dice solo di non riavviare — non dice che
     // l'uscita andava bene. Senza `SuccessExitStatus=143` ogni `muffin gateway
-    // stop` lasciava la unit in stato failed: `systemctl --user --failed` la
+    // stop` lasciava la unit in stato failed: `systemctl --failed` la
     // elencava, e la sonda is-failed di doctor avrebbe allarmato a ogni arresto
     // voluto — il modo più rapido per insegnare a ignorarla. Il guasto
     // permanente invece DEVE restare failed: è il rosso che qualcuno deve
@@ -288,7 +313,7 @@ describe('la unit systemd passa il parser di systemd', () => {
    * Il plist aveva un test che lo dà in pasto al parser vero; la unit systemd —
    * cioè il file di **produzione**, perché Muffin vive su una VPS Linux — era
    * verificata solo da `toContain` su stringhe. Una direttiva scritta male non
-   * degrada: `systemctl --user enable --now` fallisce, oppure la unit carica e
+   * degrada: `systemctl enable --now` fallisce, oppure la unit carica e
    * `Restart=always` cicla. Ed è lo stesso difetto che questa slice ha già
    * trovato altrove: la prova esisteva per la piattaforma di sviluppo.
    *
@@ -326,7 +351,10 @@ describe('la unit systemd passa il parser di systemd', () => {
     const launcher = join(dir, 'muffin');
     writeFileSync(launcher, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     const file = join(dir, 'muffin-gateway.service');
-    writeFileSync(file, plan({ home: dir, exec: [launcher, 'gateway', 'run'] }).text);
+    writeFileSync(
+      file,
+      plan({ home: dir, exec: [launcher, 'gateway', 'run'], serviceUser: 'g', credentials: ['provider_api_key'] }).text,
+    );
 
     const verify = spawnSync('systemd-analyze', ['verify', file], { encoding: 'utf8' });
     // L'output intero nel messaggio: un fallimento qui deve dire *quale*
@@ -478,6 +506,7 @@ describe('la unit deve dire dove sta node', () => {
     home: '/home/x/.muffin',
     exec: ['/home/x/.local/bin/muffin', 'gateway', 'run'],
     homeDir: '/home/x',
+    serviceUser: 'x',
     interpreterDir: '/opt/homebrew/bin',
   };
 
@@ -590,6 +619,7 @@ describe("l'interprete della unit non deve scadere", () => {
         home: '/tmp/muffin-home',
         exec: ['/tmp/muffin-home/bin/muffin', 'gateway', 'run'],
         homeDir: '/tmp/fakehome',
+        serviceUser: 't',
         interpreterDir: stable,
       });
       expect(plan.text).toContain('/opt/homebrew/bin');
@@ -608,7 +638,12 @@ describe("l'interprete della unit non deve scadere", () => {
  * accanto perché non possano divergere.
  */
 describe('activation — la forma eseguibile, accanto a quella da leggere', () => {
-  const base = { home: '/home/o/.muffin', exec: ['/home/o/.local/bin/muffin', 'gateway', 'run'], homeDir: '/home/o' };
+  const base = {
+    home: '/home/o/.muffin',
+    exec: ['/home/o/.local/bin/muffin', 'gateway', 'run'],
+    homeDir: '/home/o',
+    serviceUser: 'o',
+  };
 
   it('senza sapere chi installa non indovina: la lista resta da leggere', () => {
     // `gui/$(id -u)` va benissimo stampato. Qui no: sbagliare uid vuol dire
@@ -617,18 +652,19 @@ describe('activation — la forma eseguibile, accanto a quella da leggere', () =
     expect(planUnit({ ...base, platform: 'darwin' }).activation).toEqual([]);
   });
 
-  it('systemd: rilegge, abilita, e non lascia indietro il linger', () => {
+  it('systemd: rilegge e abilita sul bus di sistema, con sudo, senza linger', () => {
     const plan = planUnit({ ...base, platform: 'linux', identity: { user: 'owner', uid: 1000 } });
     expect(plan.activation.map((s) => s.argv)).toEqual([
-      ['systemctl', '--user', 'daemon-reload'],
-      ['systemctl', '--user', 'enable', '--now', `${SERVICE_NAME}.service`],
-      // Il passo che si salta, e il cui sintomo — «si ferma da solo ogni
-      // tanto» — è il più difficile da ricollegare alla causa (ADR-0035).
-      ['loginctl', 'enable-linger', 'owner'],
+      ['sudo', 'systemctl', 'daemon-reload'],
+      ['sudo', 'systemctl', 'enable', '--now', `${SERVICE_NAME}.service`],
     ]);
-    // Nessuno dei tre porta metacaratteri: se ne comparisse uno vorrebbe dire
-    // che qualcuno ha copiato una riga dalla lista stampata.
-    for (const s of plan.activation) for (const a of s.argv) expect(a).not.toMatch(/[$#"]/);
+    // La user unit è andata in pensione con D2: nessun --user, nessun linger.
+    // Se tornano, è la vecchia architettura che rientra dalla finestra.
+    for (const s of plan.activation) {
+      expect(s.argv).not.toContain('--user');
+      expect(s.argv).not.toContain('enable-linger');
+      for (const a of s.argv) expect(a).not.toMatch(/[$#"]/);
+    }
   });
 
   it("launchd: solo il bootstrap — `print` è per gli occhi e `bootout` spegnerebbe", () => {

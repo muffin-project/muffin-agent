@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadConfig, locateSecret, muffinHome, paths, secretDir } from './config.js';
+import { loadConfig, locateSecret, muffinHome, paths, secretsBackend, secretDir, credstoreEncryptedPath } from './config.js';
 import { loadSealedBudgets } from '../rot/budgets.js';
 import { EgressError, loadEgress } from '../net/egress.js';
 import { loadPolicyMatrix } from '../policy/matrix.js';
@@ -75,17 +75,28 @@ export function listConfigKnobs(home: string = muffinHome()): ConfigKnob[] {
     // A config value that is a secret reference (`secret://name`) is never the
     // secret itself — `ConfigSchema` only ever stores the reference — so it is
     // always safe to print. What is worth a second row is *where the chain
-    // resolved it*, through `locateSecret` rather than a second lookup written
-    // here: the whole point of ADR-0039's chain is one implementation that
-    // knows the order, not a copy that could disagree with it.
+    // resolved it*: through `locateSecret` on the file backend (which names
+    // the winning copy), or statically on the systemd backend (ciphertext
+    // path by construction — presence itself is `doctor`'s live check, not
+    // this listing's, because this listing must stay readable outside the
+    // service without holding the host key).
     if (value.startsWith('secret://')) {
-      const loc = locateSecret(value, home);
-      knobs.push({
-        key: `${key}.resolved`,
-        value: loc ? `presente (${loc.backend})` : 'non impostata',
-        source: loc ? loc.path : `${secretDir('home', home)} · ${secretDir('persistent', home)}`,
-        sealed: false,
-      });
+      if (secretsBackend(home) === 'systemd') {
+        knobs.push({
+          key: `${key}.resolved`,
+          value: `systemd encrypted credential (${value.slice('secret://'.length)}.cred)`,
+          source: credstoreEncryptedPath(value.slice('secret://'.length)),
+          sealed: false,
+        });
+      } else {
+        const loc = locateSecret(value, home);
+        knobs.push({
+          key: `${key}.resolved`,
+          value: loc ? `presente (${loc.backend})` : 'non impostata',
+          source: loc ? loc.path : `${secretDir('home', home)} · ${secretDir('persistent', home)}`,
+          sealed: false,
+        });
+      }
     }
   }
   for (const { prefix, note } of OPTIONAL_GROUPS) {

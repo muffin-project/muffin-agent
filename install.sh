@@ -483,21 +483,54 @@ if [ "$did_init" = 0 ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 6b. Secrets onto the systemd backend (Linux only).
+#
+# Fresh Linux Homes must end with NO canonical plaintext store (D2): the key
+# `init` just wrote to a 0600 file is migrated to encrypted systemd
+# credentials in the same setup session, then the file copies are deleted by
+# the migration itself — after provisioning every blob, decrypt-verifying it,
+# flipping the backend flag and proving the switch. When passwordless sudo is
+# unavailable this step cannot run unattended: it prints the exact command
+# instead of downgrading silently, and the install continues (the service
+# starts on the file backend, loudly documented by `muffin doctor`'s backend
+# row, until the owner runs the printed migrate).
+# ---------------------------------------------------------------------------
+migrate_secrets() {
+  [ "$(uname -s)" = Linux ] || return 0
+  if have sudo && sudo -n true 2>/dev/null; then
+    say ""
+    say "moving secrets to encrypted systemd credentials…"
+    if "$MUFFIN" secret migrate --yes >/dev/null 2>&1; then
+      say "secrets: systemd encrypted backend active, no plaintext store left"
+    else
+      say "! automatic secret migration did not complete."
+      say "  Run it by hand when ready (nothing was deleted):  $CMD secret migrate --yes"
+    fi
+  else
+    say ""
+    say "secrets stay in 0600 files for now (no passwordless sudo for the one-time migration)."
+    say "  Move them when ready:  $CMD secret migrate --yes"
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # 7. The supervisor.
 #
 # `muffin init` on a terminal already offers to *write* the unit; what it
 # deliberately does not do is load it into the supervisor (ADR-0035: writing a
-# file in your home and starting a service are different acts). At the end of a
-# one-command install the answer is unambiguous — the whole promise of the
-# command is a running agent — so this step does both, through the single
-# command that also runs `loginctl enable-linger` and then *verifies a pid*
-# instead of trusting `systemctl`'s exit code.
+# file and starting a service are different acts). At the end of a one-command
+# install the answer is unambiguous — the whole promise of the command is a
+# running agent — so this step does both, through the single command that
+# verifies a pid instead of trusting `systemctl`'s exit code.
 #
-# When there is no user systemd instance to talk to (a container, a
-# `sudo`-without-login shell), this cannot succeed and must not claim to: the
-# script exits 3 and says which command is left. Three and not one, so a script
-# driving this installer can tell "nothing works" from "everything works except
-# the part this machine cannot do".
+# On Linux the unit is a SYSTEM service (`User=` + no linger + no user bus):
+# writing it to /etc and enabling it needs root, which this script never
+# takes by itself (`sudo -n` only, never an installer-owned password prompt —
+# privilege escalation is a distinct owner action). When activation cannot
+# complete here, this step exits 3 and says which privileged commands are
+# left. Three and not one, so a script driving this installer can tell
+# "nothing works" from "everything works except the part this machine
+# cannot do without root".
 # ---------------------------------------------------------------------------
 if [ "${MUFFIN_NO_GATEWAY:-}" = 1 ]; then
   say ""
@@ -505,6 +538,8 @@ if [ "${MUFFIN_NO_GATEWAY:-}" = 1 ]; then
   say "  $CMD gateway install --write --start"
   exit 0
 fi
+
+migrate_secrets
 
 say ""
 say "installing the gateway as a supervised service…"
@@ -518,11 +553,10 @@ say ""
 say "! the gateway is NOT active on this machine."
 if [ "$(uname -s)" = Linux ]; then
   if ! have systemctl; then
-    say "  systemd is not installed here, so there is no user service to load."
-  elif ! systemctl --user is-system-running >/dev/null 2>&1; then
-    say "  this shell has no user systemd bus (a container, or a \`su -\`/\`sudo -i\`"
-    say "  shell): the line above says whether \`loginctl enable-linger $(id -un)\`"
-    say "  from root is what is missing. Then re-run, in this same shell:"
+    say "  systemd is not installed here, so there is no system service to load."
+  else
+    say "  most likely the privileged steps need root: run the \`sudo ...\` lines"
+    say "  \`$CMD gateway install --write --start\` printed above, then re-run it."
   fi
 fi
 say "    $CMD gateway install --write --start"
