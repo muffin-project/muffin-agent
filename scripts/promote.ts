@@ -17,10 +17,14 @@
  *    successo nominale sulla PR dev→main la cui head E' `target`. Se `dev`
  *    si muove dopo il verde, la head non coincide piu' e il gate si chiude:
  *    rieseguire ri-risolve il target (fail-closed sulla corsa, non sul riuso).
- * 3. Il push e' `git push origin <target>:main`, senza force: e' un
- *    compare-and-swap atomico del ref — se `main` si e' mosso nel frattempo,
- *    il push fallisce e il gate resta chiuso. Nessuna branch protection
- *    richiesta, nessuna inventata.
+  * 3. Il push e' `git push origin <target>:main`, senza force: aggiornamento
+  *    atomico del ref con fast-forward imposto dal server. Rifiuta se `main`
+  *    contiene commit fuori da `target` (divergenza vera) — ma puo' riuscire
+  *    se `main` e' nel frattempo avanzata a un altro antenato di `target`:
+  *    quello resta sicuro perche' `target` contiene gia' quella storia, e il
+  *    verdetto registra entrambi gli SHA. Non e' un compare-and-swap
+  *    sull'esatto `mainSha` osservato, e non finge di esserlo: niente force,
+  *    mai. Nessuna branch protection richiesta, nessuna inventata.
  *
  * Sull'uguaglianza degli alberi, detta una volta sola: la CI della PR
  * dev→main gira sul merge-ref sintetico di quell'evento. Con `main` antenato
@@ -42,7 +46,8 @@
  *   evidenza), salvo l'eccezione docs-only: ogni file cambiato dentro
  *   l'insieme esentato di `ci.yml` (`docs/**`, `.claude/**`, i tre md in
  *   root) e i check leggeri verdi — file illeggibili chiudono;
- * - push non fast-forward (main mossa sotto i piedi).
+  * - push rifiutato dal server (main con storia fuori da target: divergenza
+  *   vera, serve una mano umana).
  *
  * ## Cosa NON fa
  *
@@ -53,33 +58,22 @@
  *   `--execute` muove il ref. Il verdetto finisce in `.ci-local/verdicts/`
  *   (per macchina, ignorato da Git) con gli SHA esatti, come `merge.ts`.
  *
- * ## Parentela dichiarata (non duplicazione silenziosa)
+  * ## Parentela (una sola semantica, due porte)
  *
- * La valutazione dei check (ultimo per nome, richiesti nominali, eccezione
- * docs-only sull'allowlist) specchia `.claude/hooks/guard-merge-gate.mjs`
- * (porta slice→dev) adattata a base `main` e target pinnato. Due porte con
- * basi diverse, una regola condivisa da unificare dietro un'unica funzione
- * quando entrambe saranno atterrate — non prima, per non accoppiare due PR.
- */
+  * La valutazione dei check (ultimo per nome, richiesti nominali, rossi/
+  * pendenti che chiudono, eccezione docs-only con completezza provata
+  * `files.length === changedFiles`) vive in `scripts/gate-evidence.mjs`,
+  * condivisa con lo hook slice→dev. Qui restano solo target pinnato, base
+  * `main`, antenato e push.
+  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { classifyDocsOnly, evaluateChecks } from './gate-evidence.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..');
-
-/** L'insieme esentato di `ci.yml` — stessa parita' esatta dello hook slice→dev (vedi testa file). */
-function fuoriInsiemeEsentato(path: string): boolean {
-  if (path === 'README.md' || path === 'AGENTS.md' || path === 'CLAUDE.md') return false;
-  if (path.startsWith('docs/') || path.startsWith('.claude/')) return false;
-  return true;
-}
-
-function nomeNudo(name: string): string {
-  const i = name.lastIndexOf('/');
-  return (i === -1 ? name : name.slice(i + 1)).trim();
-}
 
 export interface PromotionPr {
   readonly number: number;
@@ -90,6 +84,7 @@ export interface PromotionPr {
   readonly headRefOid: string;
   readonly mergeable?: string;
   readonly mergeStateStatus?: string;
+  readonly changedFiles?: unknown;
   readonly files?: unknown;
 }
 
@@ -172,48 +167,36 @@ export function decidePromotion(args: {
     };
   }
 
-  const latest = new Map<string, { at: number; run: PromotionCheckRun }>();
-  for (const run of runs) {
-    if (run?.name === undefined) continue;
-    const at = Date.parse(run.completed_at ?? run.started_at ?? '0') || 0;
-    const key = nomeNudo(run.name);
-    if ((latest.get(key)?.at ?? -1) <= at) latest.set(key, { at, run });
-  }
-  const current = [...latest.values()].map((v) => v.run);
-  if (current.length === 0) {
+  // Valutazione dal modulo condiviso con lo hook slice→dev; qui solo i
+  // messaggi di questa porta. `skipped` non soddisfa un check richiesto.
+  const valutati = evaluateChecks(runs, ['verifica', 'accettazione']);
+  if (!valutati.ok && valutati.kind === 'empty') {
     return { ok: false, message: `nessun check sulla head ${corta(targetSha)}: senza evidenza il gate resta chiuso.` };
   }
-  const pending = current.filter((r) => r.status !== 'completed').map((r) => r.name);
-  if (pending.length > 0) {
-    return { ok: false, message: `check in corso (${pending.join(', ')}): aspettare il verde e rieseguire.` };
+  if (!valutati.ok && valutati.kind === 'pending') {
+    return { ok: false, message: `check in corso (${valutati.names.join(', ')}): aspettare il verde e rieseguire.` };
   }
-  const bad = current
-    .filter((r) => !['success', 'skipped', 'neutral'].includes(r.conclusion ?? ''))
-    .map((r) => `${r.name} (${r.conclusion})`);
-  if (bad.length > 0) {
-    return { ok: false, message: `check rossi (${bad.join(', ')}): ripara sul ramo, nessuna promozione.` };
+  if (!valutati.ok && valutati.kind === 'red') {
+    return { ok: false, message: `check rossi (${valutati.names.join(', ')}): ripara sul ramo, nessuna promozione.` };
   }
-  const esito = (nome: string) => latest.get(nome)?.run?.conclusion;
-  const mancanti = ['verifica', 'accettazione'].filter((n) => esito(n) !== 'success');
-  if (mancanti.length === 0) {
+  if (valutati.ok) {
     return {
       ok: true,
       note: `promozione pronta: main ${corta(mainSha)} → ${corta(targetSha)} (antenato verificato, PR #${pr.number} con verifica + accettazione success sulla head ${corta(targetSha)}).`,
     };
   }
-  const files = pr.files;
-  if (!Array.isArray(files)) {
+  // Eccezione docs-only con completezza provata (stesso modulo condiviso:
+  // `files.length === changedFiles`, contro il troncamento oltre 100 voci).
+  const mancanti = valutati.kind === 'missing' ? valutati.names : [];
+  const docs = classifyDocsOnly(pr.files, pr.changedFiles);
+  if (!docs.ok && docs.reason === 'incomplete') {
     return {
       ok: false,
-      message: `manca il successo ${mancanti.join(' + ')} e i file cambiati non sono leggibili: gate chiuso.`,
+      message: `manca il successo ${mancanti.join(' + ')} e la lista file non e' completa e verificabile (restituiti ${docs.got ?? '?'}, dichiarati ${docs.want ?? '?'}): gate chiuso.`,
     };
   }
-  const fuori: string[] = [];
-  for (const f of files) {
-    const path = typeof f === 'string' ? f : (f as { path?: unknown })?.path;
-    if (typeof path !== 'string' || fuoriInsiemeEsentato(path)) fuori.push(String(path));
-  }
-  if (fuori.length > 0) {
+  if (!docs.ok) {
+    const fuori = docs.reason === 'outside' ? (docs.offending ?? []) : [];
     return {
       ok: false,
       message: `manca il successo ${mancanti.join(' + ')} e la promozione tocca file fuori dall'insieme esentato (${fuori.slice(0, 3).join(', ')}${fuori.length > 3 ? ', …' : ''}): gate chiuso.`,
@@ -221,7 +204,7 @@ export function decidePromotion(args: {
   }
   return {
     ok: true,
-    note: `promozione docs-only pronta: main ${corta(mainSha)} → ${corta(targetSha)} (${files.length} file tutti esentati, check leggeri verdi, PR #${pr.number}).`,
+    note: `promozione docs-only pronta: main ${corta(mainSha)} → ${corta(targetSha)} (${docs.count}/${pr.changedFiles} file tutti esentati, check leggeri verdi, PR #${pr.number}).`,
   };
 }
 
@@ -269,7 +252,7 @@ function main(): void {
         'view',
         String(list[0]!.number),
         '--json',
-        'number,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,files',
+        'number,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,changedFiles,files',
       ]) as PromotionPr;
     }
   }
@@ -304,7 +287,7 @@ function main(): void {
   }
   const push = spawnSync('git', ['-C', REPO_ROOT, 'push', 'origin', `${targetSha}:main`], { encoding: 'utf8' });
   if (push.status !== 0) {
-    process.stderr.write(`push rifiutato (main mossa sotto i piedi?):\n${push.stderr ?? ''}\nGATE CHIUSO: main non si e' mosso.\n`);
+    process.stderr.write(`push rifiutato dal server (divergenza vera: main con storia fuori da target):\n${push.stderr ?? ''}\nGATE CHIUSO: main non si e' mosso.\n`);
     process.exit(1);
   }
   const remoto = git(['ls-remote', 'origin', 'refs/heads/main']).split('\t')[0];
