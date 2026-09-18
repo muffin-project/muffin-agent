@@ -61,18 +61,16 @@ import {
   requireSecretRef,
   saveConfig,
   secretsBackend,
-  secretDir,
   writeAuthoritativeSecret,
   ConfigError,
-  SECRET_BACKENDS,
   type ProviderKind,
 } from '../core/config/config.js';
 import {
-  decryptSystemdSecret,
   listLegacySecretNames,
   provisionSystemdSecret,
 } from '../core/config/systemd.js';
-import { SYSTEM_UNIT_DIR, SERVICE_NAME } from '../core/gateway/unit.js';
+import { runSecretMigrate } from '../core/config/migrate.js';
+import { SERVICE_NAME } from '../core/gateway/unit.js';
 import { promptLine, promptSecret } from './prompt.js';
 import { cmdPromptShow, cmdPromptVersion, PROMPT_USAGE } from './prompt-show.js';
 import {
@@ -1245,8 +1243,8 @@ async function cmdSecretMigrate(yes: boolean): Promise<number> {
     process.stderr.write(`migration to systemd credentials is Linux-only (this machine is ${process.platform}).\n`);
     return 78;
   }
-  const names = listLegacySecretNames(home);
-  if (names.length === 0) {
+  // Fast path without touching privilege: nothing legacy, nothing to do.
+  if (listLegacySecretNames(home).length === 0) {
     process.stdout.write(
       secretsBackend(home) === 'systemd'
         ? `nothing legacy left — backend is already systemd.\n`
@@ -1254,111 +1252,25 @@ async function cmdSecretMigrate(yes: boolean): Promise<number> {
     );
     return 0;
   }
-  // 1. Read every legacy value through the file chain (the same precedence
-  // `readSecret` uses while the backend is still `file`) — values live in
-  // memory only from here on, never on disk, never in argv/env.
-  const values = new Map<string, string>();
-  try {
-    for (const n of names) {
-      const found = locateSecret(`secret://${n}`, home);
-      if (!found) continue;
-      values.set(n, readFileSync(found.path, 'utf8').trim());
-    }
-  } catch (error) {
-    return failSecretOp(error);
+  // The orchestration (order is the guarantee — read, provision, prove,
+  // flip, prove the service, only then delete) lives in core/config/
+  // migrate.ts where a stubbed runner proves it anywhere; this stays the
+  // thin flag-parser with the real privilege and the real restart.
+  const result = await runSecretMigrate(home, {
+    restart: () => cmdGatewayRestart(home, { platform: 'linux', serviceUser: userInfo().username }),
+    out: (line) => process.stdout.write(`${line}\n`),
+  });
+  if (result.ok) {
+    process.stdout.write(
+      `migrated ${result.migrated.length} secret(s) to systemd encrypted credentials; legacy file copies deleted.\n` +
+        (result.serviceProven
+          ? `service restarted on the new backend and verified.\n`
+          : `takes effect when the service is installed and started.\n`),
+    );
+    return 0;
   }
-  if (values.size === 0) {
-    process.stderr.write(`legacy names found but none readable — aborting, nothing was changed.\n`);
-    return 1;
-  }
-  // 2. Provision every blob. Any failure aborts with the backend untouched
-  // and the legacy copies intact (falsifier 12: migration failure preserves
-  // the old working credential).
-  try {
-    for (const [n, v] of values) {
-      if (!v) throw new ConfigError(`legacy secret "${n}" is empty — refusing to migrate emptiness`, `delete it or set a value first: muffin secret set ${n} --file`);
-      provisionSystemdSecret(n, v);
-    }
-  } catch (error) {
-    process.stderr.write(`migration aborted before any switch: legacy file secrets intact and still authoritative.\n`);
-    return failSecretOp(error);
-  }
-  // 3. Prove the new path by decrypting every blob back and comparing (in
-  // memory, never printed) — a corrupt blob must surface here, not at the
-  // next boot with the legacy copies already gone.
-  try {
-    for (const [n, v] of values) {
-      if (decryptSystemdSecret(n) !== v) {
-        throw new ConfigError(
-          `round-trip mismatch for "${n}" — the blob does not decrypt to the legacy value`,
-          'legacy file secrets intact and still authoritative; inspect the blob, then re-run',
-        );
-      }
-    }
-  } catch (error) {
-    return failSecretOp(error);
-  }
-  // 4. Flip the backend, then prove the service on it.
-  const previous = loadConfig(home);
-  saveConfig({ ...previous, secrets: { backend: 'systemd' } }, home);
-  let flipped = true;
-  const rollback = (why: string): number => {
-    if (flipped) {
-      try {
-        saveConfig({ ...loadConfig(home), secrets: { backend: 'file' } }, home);
-      } catch {
-        // The flag file itself is broken — say so loudly, legacy files below
-        // are still intact regardless.
-      }
-      flipped = false;
-    }
-    process.stderr.write(`${why}\nlegacy file secrets intact and authoritative again — fix the cause, then re-run migrate.\n`);
-    return 1;
-  };
-  const unitInstalled = existsSync(join(SYSTEM_UNIT_DIR, `${SERVICE_NAME}.service`));
-  if (unitInstalled) {
-    // The restart/verify logic lives in exactly one place (cmdGatewayRestart):
-    // pid change proven, failures reported with the supervisor's own remedy.
-    const code = await cmdGatewayRestart(home, { platform: 'linux', serviceUser: userInfo().username });
-    if (code !== 0) {
-      return rollback(`service restart on the new backend failed (exit ${code}).`);
-    }
-  } else {
-    process.stdout.write(`service not installed yet — proof deferred to first start; blobs verified by decrypt round-trip above.\n`);
-  }
-  // 5. Only now delete the legacy copies — then the directories themselves
-  // when they are empty, so no store (not just no secret) is left behind.
-  // rmdir fails on non-empty dirs by design: never recursive, never a guess.
-  const leftovers: string[] = [];
-  for (const n of values.keys()) {
-    for (const loc of locateSecretAll(`secret://${n}`, home)) {
-      try {
-        rmSync(loc.path, { force: true });
-      } catch {
-        leftovers.push(loc.path);
-      }
-    }
-  }
-  if (leftovers.length === 0) {
-    for (const backend of SECRET_BACKENDS) {
-      try {
-        rmSync(secretDir(backend, home), { recursive: false });
-      } catch {
-        // Non-empty or already gone: either way nothing of ours remains inside
-        // that we know about (doctor's shadow check watches regardless).
-      }
-    }
-  }
-  if (leftovers.length > 0) {
-    process.stderr.write(`migrated, but these legacy copies could not be deleted: ${leftovers.join(', ')}\n`);
-    process.stderr.write(`  doctor reports them as a shadow until they are gone.\n`);
-    return 1;
-  }
-  process.stdout.write(`migrated ${values.size} secret(s) to systemd encrypted credentials; legacy file copies deleted.\n`);
-  if (!unitInstalled) {
-    process.stdout.write(`takes effect when the service is installed and started.\n`);
-  }
-  return 0;
+  process.stderr.write(`${result.message}\n  → ${result.remedy}\n`);
+  return 1;
 }
 
 function failSecretOp(error: unknown): number {
