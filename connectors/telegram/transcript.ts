@@ -261,6 +261,15 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
   let flushTimer: NodeJS.Timeout | null = null;
   /** The call currently on the wire, so two never overlap and `messageId` is written by one send at a time. */
   let inFlight: Promise<void> | null = null;
+  /**
+   * La prima pittura è già partita (difetto B). Resta falso finché nessun
+   * contenuto ha mai chiesto il filo: finché è falso, `scheduleSoon()` non
+   * accoda dietro un timer ma chiama `flush()` subito, così un primo tool
+   * lungo è visibile mentre gira — da solo, senza aspettare un secondo evento
+   * né lo scadere di una finestra. Da vero in poi, tutto torna al pavimento
+   * della stanza (`schedule()`), contatore compreso.
+   */
+  let firstPaintQueued = false;
 
   function current(): Segment {
     const last = segments[segments.length - 1];
@@ -331,6 +340,13 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
   }
 
   function addStep(step: Step): void {
+    // Il persistente vince sulla bozza: dal primo passo vero in poi il turno
+    // possiede un messaggio reale, e rinnovare ancora l'anteprima effimera
+    // significherebbe due superfici per lo stesso turno — quella che resta
+    // appesa dopo la risposta (difetto A). Vedi `live()`: finché nessun
+    // segmento ha contenuto la bozza è l'unica cosa viva; da qui in poi non
+    // lo è più.
+    if (draftEnabled) abbandonaDraft();
     let seg = current();
     if (hasContent(seg) && !fits(seg, step)) {
       seg.closed = true;
@@ -365,6 +381,19 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       }
       disabled = true;
       log(`telegram: trascrizione del turno sospesa — ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * La bozza ha finito il suo lavoro: il testo ora vive (o vivrà) in un
+   * messaggio vero. Ferma il rinnovo e dimentica il testo, così `pushDraft`
+   * diventa un no-op e `scheduleDraft` non si ri-programma. Idempotente.
+   */
+  function abbandonaDraft(): void {
+    draftText = '';
+    if (draftTimer !== null) {
+      clearTimeout(draftTimer);
+      draftTimer = null;
     }
   }
 
@@ -460,6 +489,28 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     flushTimer = setTimeout(() => void flush(), attesa());
   }
 
+  /**
+   * Come `schedule()`, ma la prima volta non aspetta il pavimento (difetto B).
+   *
+   * Il pavimento (`editEveryMs`) e il tetto (`maxEditsPerMinute`) limitano la
+   * *frequenza* degli edit su un messaggio che esiste già; non devono
+   * ritardare la *nascita* del primo messaggio di un turno. La prima chiamata
+   * è una sola `sendMessage` — sempre dentro entrambi i limiti, perché la
+   * finestra parte vuota — quindi farla partire subito non viola niente e
+   * toglie alla visibilità ogni dipendenza dal timer: con l'orologio finto
+   * fermo e senza un secondo evento, il passo risulta comunque partito (solo
+   * microtask, mai un macrotask).
+   */
+  function scheduleSoon(): void {
+    if (stopped || disabled || flushTimer !== null) return;
+    if (!firstPaintQueued) {
+      firstPaintQueued = true;
+      void flush();
+      return;
+    }
+    schedule();
+  }
+
   return {
     spoke(text, reason) {
       if (stopped || disabled) return;
@@ -470,8 +521,9 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       // never render the tail a second time once it is also `seg.html`.
       liveText = '';
       // Quel testo ora vive in un messaggio vero: l'anteprima ha finito il
-      // suo lavoro per questo giro e non va rinnovata oltre.
-      draftText = '';
+      // suo lavoro per questo giro e non va rinnovata oltre (ferma anche il
+      // timer, non solo il testo — difetto A).
+      abbandonaDraft();
       const trimmed = text.trim();
       if (trimmed !== '') {
         const parts = splitHtml(toTelegramHtml(trimmed));
@@ -493,7 +545,7 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       if (reason === 'superseded' && trimmed !== '') {
         addStep({ line: '↺ quel tentativo è stato sostituito', state: 'note', startedAt: now() });
       }
-      schedule();
+      scheduleSoon();
     },
 
     report(event) {
@@ -540,7 +592,7 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         default:
           return assertNever(event);
       }
-      if (hasContent(current())) schedule();
+      if (hasContent(current())) scheduleSoon();
     },
 
     resolveAsk(capability, allowed) {
@@ -554,7 +606,7 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         if (step === undefined) continue;
         step.state = allowed ? 'done' : 'error';
         step.line = escapeHtml(`${capability}: ${allowed ? 'consentito' : 'rifiutato'}`);
-        schedule();
+        scheduleSoon();
         return;
       }
     },
@@ -562,7 +614,13 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     live(text) {
       if (stopped || disabled || !liveEnabled) return;
       const trimmed = text.trim();
-      if (draftEnabled) {
+      // La bozza vive solo finché non esiste un messaggio vero (difetto A):
+      // dal primo segmento con contenuto in poi il testo che si forma va nel
+      // segmento persistente (edit), mai in una nuova bozza. Solo così la
+      // risposta finale di un turno con tool non lascia un'anteprima appesa
+      // che nessun `sendMessage` verrà a sostituire (`deliverTo` in quel caso
+      // fa un edit, e un edit non tocca la bozza).
+      if (draftEnabled && !segments.some(hasContent)) {
         // La stanza preferisce l'anteprima: il testo che sta arrivando non
         // tocca nessun messaggio vero, e la risposta finale resta l'unico
         // messaggio che la chat conserva.
@@ -583,7 +641,7 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       if (trimmed === '') {
         if (liveText !== '') {
           liveText = '';
-          schedule();
+          scheduleSoon();
         }
         return;
       }
@@ -595,14 +653,15 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       // vedere un pezzo di frase. È ciò che tiene una stanza condivisa senza
       // un messaggio a metà che un processo morto lascerebbe lì — la stessa
       // ragione per cui l'anteprima, che non è un messaggio, può invece
-      // partire dal nulla.
+      // partire dal nulla. In una DM dopo il primo passo vero è anche dove va
+      // la risposta che si forma una volta che la bozza ha finito (vedi sopra).
       if (!hasContent(seg)) return;
       // Overflow: stay with whatever is already shown rather than force a
       // rotation mid-round — `deliverTo`'s own render is what makes the
       // final, complete, correctly-split answer right regardless.
       if (!fitsTail(seg, rendered)) return;
       liveText = rendered;
-      schedule();
+      scheduleSoon();
     },
 
     handoff() {
@@ -615,21 +674,26 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     async stop() {
       if (stopped) return;
       stopped = true;
+      // La bozza si spegne smettendo di rinnovarla, mai mandando un testo
+      // vuoto (difetto A). Fatto API primario
+      // (`core.telegram.org/bots/api#sendmessagedraft`, Bot API 10.0 del
+      // 2026-05-08 «Allowed bots to pass an empty text in the method
+      // sendMessageDraft»): `text` 0–4096 e un testo vuoto mostra il
+      // placeholder «Thinking…», non cancella la bozza. La bozza è
+      // un'anteprima effimera (~30 s): sparisce per TTL, o quando un normale
+      // `sendMessage` arriva nella stessa chat/topic — un `editMessageText`
+      // non la tocca. Quindi mandare `''` qui accendeva un «Thinking…»
+      // post-risposta che, nei turni con tool (dove `deliverTo` fa un edit del
+      // messaggio persistente invece di un send), niente veniva a sostituire.
+      // Il ciclo corretto: un turno senza tool consegna con un `sendMessage`
+      // che sostituisce la bozza da solo; un turno con tool ha già smesso di
+      // rinnovarla dal primo passo vero (`addStep` → `abbandonaDraft`), e il
+      // resto lo fa la scadenza.
       if (draftTimer !== null) {
         clearTimeout(draftTimer);
         draftTimer = null;
       }
-      // Best-effort: un'anteprima vuota la fa sparire subito invece di
-      // lasciarla sotto la risposta finché scade da sola. Se la Bot API
-      // rifiuta un testo vuoto non è successo niente — scadrà lei.
-      if (draftEnabled && !draftDisabled && draftText !== '') {
-        draftText = '';
-        try {
-          await api.sendMessageDraft(chatId, draftId, '');
-        } catch {
-          // Vedi sopra: scade da sola.
-        }
-      }
+      draftText = '';
       if (flushTimer !== null) {
         clearTimeout(flushTimer);
         flushTimer = null;
