@@ -237,7 +237,12 @@ export function decryptSystemdSecret(
   const target = credstoreEncryptedPath(clean);
   const sudo = opts.useSudo ?? (typeof process.getuid === 'function' && process.getuid() !== 0);
   const run = opts.runner ?? realRunner;
-  const r = run([...(sudo ? ['sudo'] : []), 'systemd-creds', 'decrypt', target, '-'], '');
+  // `--name` is load-bearing, not decorative: decrypt compares the embedded
+  // name against the INPUT FILENAME, which carries our `.cred` suffix, and
+  // refuses the round-trip without it (measured: "does not match filename
+  // '….cred', refusing"). The encrypt side binds the same name at creation,
+  // so rename-and-reuse is still refused — by the embedded name, as designed.
+  const r = run([...(sudo ? ['sudo'] : []), 'systemd-creds', 'decrypt', `--name=${clean}`, target, '-'], '');
   if (r.status !== 0) {
     const why = r.status === null ? `could not run: ${r.stderr}` : r.stderr.trim();
     throw new ConfigError(

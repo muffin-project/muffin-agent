@@ -239,11 +239,16 @@ describe('provisionSystemdSecret', () => {
 
 describe('decryptSystemdSecret', () => {
   it('returns the value to the caller for comparison, never printing it', () => {
+    let seen: string[] = [];
     const runner: ProvisionRunner = (argv) => {
-      expect(argv).toContain('decrypt');
+      seen = argv;
       return { status: 0, stderr: '', stdout: 'sk-nuova' };
     };
     expect(decryptSystemdSecret('provider_api_key', { runner, useSudo: false })).toBe('sk-nuova');
+    // `--name` is load-bearing: decrypt compares the embedded name against
+    // the input FILENAME (which carries our `.cred` suffix) and refuses the
+    // round-trip without it — measured live, migration failed closed on it.
+    expect(seen).toEqual(['systemd-creds', 'decrypt', '--name=provider_api_key', credstoreEncryptedPath('provider_api_key'), '-']);
   });
 
   it('a failed decrypt is an error, not an empty value', () => {

@@ -500,12 +500,15 @@ migrate_secrets() {
   if have sudo && sudo -n true 2>/dev/null; then
     say ""
     say "moving secrets to encrypted systemd credentials…"
-    if "$MUFFIN" secret migrate --yes >/dev/null 2>&1; then
+    migrate_log=$(mktemp)
+    if "$MUFFIN" secret migrate --yes >"$migrate_log" 2>&1; then
       say "secrets: systemd encrypted backend active, no plaintext store left"
     else
-      say "! automatic secret migration did not complete."
-      say "  Run it by hand when ready (nothing was deleted):  $CMD secret migrate --yes"
+      say "! automatic secret migration did not complete:"
+      sed 's/^/    /' "$migrate_log"
+      say "  Nothing was deleted. Run it by hand when ready:  $CMD secret migrate --yes"
     fi
+    rm -f "$migrate_log"
   else
     say ""
     say "secrets stay in 0600 files for now (no passwordless sudo for the one-time migration)."
