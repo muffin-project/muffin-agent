@@ -51,6 +51,10 @@
 #                                         up in shell history (ADR-0048).
 #   MUFFIN_NO_APT=1                       never call apt-get
 #   MUFFIN_NO_GATEWAY=1                   install, but do not touch the supervisor
+#   MUFFIN_NODE_DIST_BASE=<url>           test/mirror hook: distribution directory
+#                                         the Node tarball AND its SHASUMS256.txt
+#                                         are fetched from (default: nodejs.org).
+#                                         The checksum gate applies either way.
 #
 # Exit codes: 0 done · 1 something failed · 3 installed, gateway NOT active.
 set -eu
@@ -217,6 +221,46 @@ esac
 # ---------------------------------------------------------------------------
 node_major() { node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0; }
 
+# Portable SHA-256 of one file, hex on stdout. `sha256sum` (coreutils, Linux)
+# first, `shasum -a 256` (macOS) second; neither is optional here — an
+# unverifiable download is a download that does not get extracted.
+sha256_file() {
+  if have sha256sum; then
+    sha256sum "$1" | awk '{print $1}'
+  elif have shasum; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    die "neither sha256sum nor shasum is available — cannot verify the Node download, refusing to continue."
+  fi
+}
+
+# Fail-closed integrity gate for the Node tarball. The checksum list comes
+# from the same distribution directory as the tarball itself, over the same
+# HTTPS: this stops transit tampering, mirror poisoning and truncated
+# downloads — the realistic vectors — but it is NOT an origin-key proof. A
+# `.asc`/GPG verification against ad-hoc fetched keys would move the same
+# trust (this network, right now) into a second file without adding any, so
+# it is deliberately not that; see the branch/PR that introduced this gate.
+# Runs BEFORE anything under $NODE_DIR is touched, so a refused download can
+# never wipe a working Node.
+verify_node_tarball() {
+  # usage: verify_node_tarball <tarball-path> <shasums-path> <expected-filename>
+  tarball=$1
+  sums=$2
+  name=$3
+  want=$(grep -F "  $name" "$sums" | awk '{print $1}' | head -1)
+  [ -n "$want" ] || die "no checksum entry for $name in $(basename "$sums") — refusing to install an unlisted file."
+  case "$want" in
+    *[!0-9a-f]* | '') die "malformed checksum entry for $name — refusing to install." ;;
+  esac
+  [ "${#want}" = 64 ] || die "malformed checksum entry for $name — refusing to install."
+  have_sum=$(sha256_file "$tarball")
+  if [ "$have_sum" != "$want" ]; then
+    die "checksum mismatch for $name (downloaded $have_sum, expected $want) — the file is discarded, nothing was installed."
+  fi
+  say "node checksum ok: $name"
+}
+
 install_node() {
   arch=$(uname -m)
   case "$arch" in
@@ -229,13 +273,15 @@ install_node() {
     Darwin) os=darwin ;;
     *) die "unsupported OS for the Node tarball: $(uname -s) — install Node >= $NODE_MAJOR_REQUIRED yourself." ;;
   esac
-  base="https://nodejs.org/dist/latest-v$NODE_MAJOR_REQUIRED.x"
+  base=${MUFFIN_NODE_DIST_BASE:-https://nodejs.org/dist/latest-v$NODE_MAJOR_REQUIRED.x}
   say "installing Node $NODE_MAJOR_REQUIRED.x into $NODE_DIR (nothing outside your home is touched)"
-  listing=$(curl -fsSL "$base/") || die "cannot reach nodejs.org — no network?"
+  listing=$(curl -fsSL "$base/") || die "cannot reach $base — no network?"
   file=$(printf '%s' "$listing" | grep -oE "node-v$NODE_MAJOR_REQUIRED\.[0-9]+\.[0-9]+-$os-$arch\.tar\.xz" | head -1)
   [ -n "$file" ] || die "no node-v$NODE_MAJOR_REQUIRED.x-$os-$arch.tar.xz on $base/"
   tmp=$(mktemp -d)
   curl -fsSL "$base/$file" -o "$tmp/node.tar.xz" || die "download failed: $base/$file"
+  curl -fsSL "$base/SHASUMS256.txt" -o "$tmp/SHASUMS256.txt" || die "download failed: $base/SHASUMS256.txt (no checksum list, no install)"
+  verify_node_tarball "$tmp/node.tar.xz" "$tmp/SHASUMS256.txt" "$file"
   rm -rf "$NODE_DIR"
   mkdir -p "$NODE_DIR"
   tar xJf "$tmp/node.tar.xz" -C "$NODE_DIR" --strip-components=1 || die "could not unpack $file"
