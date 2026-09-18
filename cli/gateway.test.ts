@@ -143,15 +143,30 @@ function muffin(
   extraEnv: Record<string, string> = {},
   timeout = 60_000,
 ): { code: number; out: string; err: string } {
+  // Il figlio gira in una directory vuota, mai nel checkout: vedi il commento
+  // dentro l'oggetto qui sotto. La directory si registra per la pulizia come
+  // le home. Sta DENTRO la radice del repo, non in /tmp: `node --import tsx`
+  // risolve il pacchetto dalla cwd verso l'alto e in /tmp il figlio muore con
+  // ERR_MODULE_NOT_FOUND; il loader `.env` legge solo `${cwd}/.env`, mai i
+  // genitori, quindi la sottodirectory fresca non ha nessun `.env`.
+  const cwd = mkdtempSync(join(process.cwd(), 'muffin-test-cwd-'));
+  homes.push(cwd);
   const result = spawnSync('node', ['--import', 'tsx', join(process.cwd(), 'cli/main.ts'), ...args], {
     // HOME and XDG_CONFIG_HOME are redirected into the temp home so `install
     // --write` can never put a real service unit in the owner's `~/Library` or
     // `~/.config`. It did exactly that once, and the file outlived the run
     // because the cleanup was after a failing assertion.
+    //
+    // Il figlio gira in una directory vuota, mai nel checkout: `cli/main.ts`
+    // carica `${cwd}/.env` quando c'è, e un `.env` del founder nella radice
+    // del repo avvelenava lo scenario "off a terminal" con il messaggio di
+    // rifiuto della chiave invece del comando stampato (18/09/2026, stessa
+    // radice dei 18 rossi di `cli/main.test.ts`, verdi in CI).
     env: { ...process.env, MUFFIN_HOME: dir, HOME: dir, XDG_CONFIG_HOME: join(dir, '.config'), NO_COLOR: '1', ...extraEnv },
     input: stdin,
     encoding: 'utf8',
     timeout,
+    cwd,
   });
   return { code: result.status ?? -1, out: result.stdout ?? '', err: result.stderr ?? '' };
 }
