@@ -16,11 +16,12 @@ import {
 } from '../providers/types.js';
 import { ReasoningConfigurationError, reasoningFromLegacyThinking } from '../providers/reasoning.js';
 import { checkpoint, finish, suspendHere, type TurnScope } from './durability.js';
-import type { ExecutionBudget, ModelCallLease, ModelCallTelemetry } from './execution-budget.js';
+import type { ExecutionAbortReason, ExecutionBudget, ModelCallLease, ModelCallTelemetry } from './execution-budget.js';
 import { drainStream, edgeTrimmer, retryDelayMs } from './stream.js';
 import { runTool } from './tool-call.js';
 import {
   ApprovalRequired,
+  MAX_PROVIDER_EMPTY_RETRIES,
   MAX_TRANSPORT_RETRIES,
   TOOL_RESULT_BUDGET_CHARS,
   type TurnResult,
@@ -93,21 +94,101 @@ function replyRefusedText(decision: Exclude<Decision, { effect: 'allow' }>): str
 }
 
 /**
+ * What the lease watchdog concluded, in the owner's words.
+ *
+ * One sentence per cause, because "ha raggiunto il suo limite di tempo" for a
+ * 30s first-activity stall sent every diagnosis after a 90s deadline that
+ * never fired. The reason code travels on the span unchanged; this is only
+ * the sentence.
+ */
+function abortText(reason: ExecutionAbortReason): string {
+  switch (reason) {
+    case 'model_first_activity_timeout':
+      return 'Il provider non ha inviato alcun segnale di attività in tempo (nessun token entro il limite di prima attività).';
+    case 'model_stall':
+      return 'Il provider ha smesso di inviare dati a metà risposta (stallo).';
+    default:
+      return 'La chiamata al modello ha raggiunto il suo limite di tempo.';
+  }
+}
+
+/**
+ * A completed response that failed before the model could say anything useful.
+ *
+ * Three classes, decided from the mapped stop reason plus the two facts a
+ * success-shaped provider failure cannot fake — output tokens and observed
+ * activity — and from nothing else:
+ *
+ * - `provider_empty`: `stopReason: 'error'`, no text, no calls, zero output
+ *   tokens, no first activity. Measured 2026-09-18: ~30.0s upstream stalls
+ *   arriving as completed responses (in=0/out=0, unmapped finish reason).
+ *   The strictness is the point: a reasoning-only response carries tokens and
+ *   activity, so it stays out of this bucket and keeps the semantic cascade.
+ * - `truncated`: `max_tokens` with nothing to show for it — same bucket,
+ *   different sentence.
+ * - `refused`: the model refused with no text and no call. Re-asking a filter
+ *   is futile, so this one is terminal immediately, never re-driven.
+ *
+ * Returns `undefined` for everything the semantic cascade still owns: genuine
+ * empty completions, reasoning-only responses, malformed calls (which throw
+ * earlier, inside the adapters).
+ */
+export type ProviderFailureClass = 'provider_empty' | 'truncated' | 'refused';
+
+export function classifyProviderFailure(
+  result: ChatResult,
+  telemetry: ModelCallTelemetry | undefined,
+): { class: ProviderFailureClass; finishReason: string | null } | undefined {
+  if (result.text || result.toolCalls.length > 0) return undefined;
+  const noOutput = result.usage.outputTokens === 0;
+  const noActivity = telemetry?.firstActivityAt === undefined;
+  switch (result.stopReason) {
+    case 'error':
+      if (noOutput && noActivity) return { class: 'provider_empty', finishReason: result.finishReason ?? null };
+      return undefined;
+    case 'max_tokens':
+      if (noOutput && noActivity) return { class: 'truncated', finishReason: result.finishReason ?? null };
+      return undefined;
+    case 'refusal':
+      return { class: 'refused', finishReason: result.finishReason ?? null };
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * The terminal sentence for an exhausted provider failure (P0-A).
+ *
+ * States observable facts — attempts, the failure class, completed work, the
+ * turn id — and invents no cause. It deliberately promises no resumption:
+ * that is PR B's sentence to write, once continuation exists.
+ */
+function providerFailureText(
+  scope: TurnScope,
+  failureClass: 'provider_empty' | 'truncated',
+  attempts: number,
+): string {
+  const completed =
+    scope.run.toolCallsMade > 0 ? `${scope.run.toolCallsMade} tool call completate` : 'nessuna tool call ancora completata';
+  const cause =
+    failureClass === 'truncated'
+      ? 'il modello ha esaurito il limite di output senza produrre contenuto'
+      : 'risposta vuota dal provider (nessun testo, nessuna tool call, nessun token, nessuna attività)';
+  return (
+    `Il provider non ha prodotto una risposta utilizzabile dopo ${attempts} tentativi (${cause}). ` +
+    `Il lavoro già fatto resta registrato nel turno ${scope.record.id.slice(0, 12)}: ${completed}.`
+  );
+}
+/**
  * One step down the cascade the profile declared, or false when it is spent.
  *
- * Attempt N runs strategy N, in the order the JSON lists them — the property
- * this function exists to hold. What each strategy *does* is in
- * `agent/profiles/recovery.ts`; nothing here knows a strategy by name, so a
- * profile can reorder or drop steps and the loop is unaffected, and turning
- * every crutch off (`recovery: []`) is a profile edit rather than a code path
- * (07 §3).
- *
- * Not the same mechanism as the completion gate in `runRounds`, which nudges once when
- * an answer narrates a call the turn never made: that one is durable, applies
- * to every model, keeps its own flag, and a profile may not decline it.
+ * Attempt N runs strategy N, in the order the JSON lists them. What each
+ * strategy *does* is in `agent/profiles/recovery.ts`; nothing here knows a
+ * strategy by name. Provider-side failures never reach this function — they
+ * are classified by `classifyProviderFailure` above and re-driven on the
+ * transport budget instead.
  */
-export function recover(scope: TurnScope, failure: RecoveryFailure): boolean {
-  const { deps, exposed, run, turn } = scope;
+export function recover(scope: TurnScope, failure: RecoveryFailure): boolean {  const { deps, exposed, run, turn } = scope;
   const strategy = deps.profile.recovery[run.recoveriesUsed];
   if (strategy === undefined) return false;
   run.recoveriesUsed += 1;
@@ -451,7 +532,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // The signal is the fact; the exception is only how it arrived.
       if (abortReason === 'user_stop' || input.signal?.aborted) return finish(scope, 'aborted', 'Interrotto.', 'user_stop');
       if (abortReason !== undefined) {
-        return finish(scope, 'error', 'La chiamata al modello ha raggiunto il suo limite di tempo.', abortReason);
+        return finish(scope, 'error', abortText(abortReason), abortReason);
       }
       // Two failures wearing one type, and they take different doors.
       //
@@ -505,6 +586,17 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     // transport retry that `continue`d above rebuilds `call` with the flag
     // still armed, so the retry keeps `required`.
     run.requireToolOnce = false;
+    // Provider/result failure truth (P0-A): classify while this span is still
+    // open, because the verdict belongs on it. Handled further down, after
+    // usage accounting and the progress event — the classification never
+    // moves, only the span closes.
+    const providerFailure = classifyProviderFailure(result, lastTelemetry);
+    if (providerFailure !== undefined) {
+      chatSpan.setAttributes({
+        'muffin.provider_failure.class': providerFailure.class,
+        'muffin.provider_failure.finish_reason': providerFailure.finishReason ?? 'null',
+      });
+    }
     chatSpan.setAttributes({
       'muffin.chat_call.duration_ms': Date.now() - chatCallStartedAt,
       ...(lastTelemetry === undefined ? {} : { 'muffin.chat_call.active_model_ms_after': lastTelemetry.activeModelMsAfter }),
@@ -559,6 +651,12 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // TurnResult and the spend record, not the trace.
       [ATTR.cacheWriteTokens]: result.usage.cacheWriteTokens,
       [ATTR.stopReason]: result.stopReason,
+      // The verbatim wire reason beside the mapped one above: when the
+      // provider returns a reason nobody mapped (or none), `stopReason` reads
+      // `error` while this is the only evidence of what actually arrived.
+      // `'null'` names an absent reason explicitly — an absent attribute
+      // would read as "not recorded" instead of "recorded as absent".
+      ...(result.finishReason === undefined ? {} : { 'muffin.chat_call.finish_reason': result.finishReason ?? 'null' }),
     });
     chatSpan.end();
     // Same values as the attributes just above, read off the same `result`
@@ -577,6 +675,44 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       cacheReadTokens: result.usage.cacheReadTokens,
       stopReason: result.stopReason,
     });
+
+    // Provider/result failure truth (P0-A): the verdict computed above, before
+    // the semantic empty check below. A provider-empty response must never
+    // reach `recover(scope, 'empty')` merely because text and toolCalls are
+    // empty — that path scolds an innocent model and burns all five rungs on
+    // an upstream stall. The bounded re-drive below spends the transport
+    // budget (provider flakiness), never the semantic cascade (model
+    // misbehavior).
+    if (providerFailure !== undefined) {
+      if (providerFailure.class === 'refused') {
+        return finish(
+          scope,
+          'error',
+          `Il modello ha rifiutato di rispondere senza produrre testo né chiamate. Turno ${record.id.slice(0, 12)}.`,
+          'refusal',
+        );
+      }
+      if (run.providerEmptyStreak < MAX_PROVIDER_EMPTY_RETRIES && run.transportRetriesLeft > 0) {
+        run.providerEmptyStreak += 1;
+        run.transportRetriesLeft -= 1;
+        turn.setAttributes({ 'muffin.provider_failure.attempt': run.providerEmptyStreak });
+        // Persist the reduced budget before waiting: same reason as the
+        // transport path below — a gateway exit in this gap must resume with
+        // the retries still owed, never reset.
+        if (!checkpoint(scope)) return finish(scope, 'error', '');
+        // Same backoff vocabulary as transport retries: full jitter, doubling
+        // ceiling. No server-declared window exists on this path (there was
+        // no error response to carry one), so the blind backoff stands alone.
+        const attempt = MAX_TRANSPORT_RETRIES - run.transportRetriesLeft;
+        const waitSignals = input.signal === undefined ? [execution.signal] : [input.signal, execution.signal];
+        await sleep(retryDelayMs(attempt), AbortSignal.any(waitSignals));
+        continue;
+      }
+      return finish(scope, 'error', providerFailureText(scope, providerFailure.class, run.providerEmptyStreak + 1), providerFailure.class);
+    }
+    // Anything the provider actually produced resets the consecutive-empty
+    // count: the streak bounds one stall cluster, not the lease.
+    run.providerEmptyStreak = 0;
 
     // Nothing at all: recover rather than presenting silence as an answer.
     if (!result.text && result.toolCalls.length === 0) {
