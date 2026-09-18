@@ -199,6 +199,15 @@ if [ -x "$NODE" ]; then
   ok "Node provisioned by the installer: $("$NODE" --version) at $NODE"
   NODE_MAJOR=$("$NODE" -p 'process.versions.node.split(".")[0]')
   [ "$NODE_MAJOR" -ge 22 ] || bad "the installer provisioned Node $NODE_MAJOR, and the runtime needs >= 22"
+  # The tarball must have passed the checksum gate before extraction: this
+  # machine had no Node, so a download necessarily happened (see "a machine
+  # with no Node" above — a skipped download here would mean the PATH
+  # isolation silently broke, not that verification was unnecessary).
+  if grep -q 'node checksum ok' "$INSTALL_LOG"; then
+    ok "the Node tarball was checksum-verified before extraction"
+  else
+    bad "no 'node checksum ok' in install.sh output — the tarball may have been installed unverified"
+  fi
 else
   bad "no Node under $MUFFIN_PREFIX/node — install.sh did not resolve the Node 22 prerequisite"
   NODE=node
