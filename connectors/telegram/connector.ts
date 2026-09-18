@@ -345,9 +345,10 @@ const CONTROLLO: ReadonlySet<string> = new Set(['stop', 'steer', 'pause', 'resum
  * (`ganci()` below): a group message that opens no turn is marked processed
  * and nothing durable is written for it — no episode, no actor, no profile,
  * no room event, no consent UX. Those are post-21. What still opens a turn is
- * unchanged and decided by `apreUnTurno` alone: a mention of the bot, a reply
- * to one of its messages, a command, or an attachment (which always opens, so
- * ingested bytes are never silently lost).
+ * decided by `apreUnTurno` alone: a mention of the bot, a reply to one of
+ * its messages, or a command for Muffin (`/x@OtherBot` stays shut) — an
+ * attachment or location included, which opens only when addressed like any
+ * other message, so nothing unaddressed is downloaded or indexed either.
  *
  * Re-enabling is a deliberate product decision, not a refactor: flip this to
  * `true` and the `remember` hook below rewires through the kernel's
@@ -368,11 +369,14 @@ const PASSIVE_GROUP_OBSERVATION_ENABLED = false;
  * la *privacy mode* di Telegram, accesa per default, che a un bot non-admin
  * non consegna nemmeno una menzione nuda.
  *
- * L'owner ha deciso di **spegnerla**, per far vedere a Muffin la conversazione
- * e non solo cio' che gli e' indirizzato. Quella decisione sposta il filtro
- * qui dentro, e da quel momento questa funzione e' l'unica cosa fra un gruppo
- * attivo e un turno per messaggio. Va quindi installata **prima** che la
- * privacy mode venga spenta, mai dopo.
+ * L'owner aveva deciso di **spegnerla**, per far vedere a Muffin la conversazione
+ * e non solo cio' che gli e' indirizzato (storico, 04/09/2026). Da quel giorno
+ * il filtro vive qui dentro, e questa funzione e' l'unica cosa fra un gruppo
+ * attivo e un turno per messaggio. Regola corrente (pre-21): la privacy mode
+ * resta ACCESA dove compatibile, il bot resta non-admin salvo privilegi
+ * davvero necessari, e la configurazione della piattaforma NON e' il confine
+ * di sicurezza del prodotto — qualunque cosa Telegram consegni (privacy mode,
+ * admin, configurazione), solo un messaggio indirizzato apre un turno.
  *
  * Tre criteri, tutti deterministici, nessuna euristica sul testo e nessun
  * modello — vedi ADR-0063: un gate che «capisce» se il messaggio meritava
@@ -1716,8 +1720,8 @@ export class TelegramConnector {
   /**
    * ADR-0063's own named follow-up: «il "ricordare senza rispondere" che resta
    * il seguito aperto». Un messaggio di gruppo che non apre un turno arriva
-   * comunque — la privacy mode è spenta per direttiva dell'owner («il sistema
-   * riceve tutti i messaggi, semplicemente non usiamo token per tutti»).
+   * comunque — a seconda di privacy mode, privilegi e configurazione, che sono
+   * difesa in profondità del deployment, non l'invariante di prodotto.
    *
    * PRE-21 PILOT: PASSIVE OBSERVATION IS OFF — currently UNWIRED (see
    * `PASSIVE_GROUP_OBSERVATION_ENABLED` below and the `remember` hook in
@@ -1744,10 +1748,9 @@ export class TelegramConnector {
    */
   private ricordaSenzaRispondere(incoming: Incoming, log: (line: string) => void): void {
     // Le stesse tre fonti che `composeTurnText` considera testo proprio del
-    // messaggio, in ordine di preferenza — mai i byte di un allegato: se
-    // questo ramo è stato raggiunto, `apreUnTurno` ha già escluso ogni
-    // messaggio con un allegato (apre sempre un turno), quindi non c'è mai
-    // niente da scaricare qui.
+    // messaggio, in ordine di preferenza — mai i byte di un allegato: un
+    // allegato indirizzato apre un turno altrove (`apreUnTurno`), quindi se
+    // questo ramo viene raggiunto non c'è mai niente da scaricare qui.
     const content = incoming.text !== '' ? incoming.text : (incoming.caption ?? incoming.forwarded?.content);
     if (content === undefined || content === '') return;
 
@@ -1939,9 +1942,10 @@ export class TelegramConnector {
     return {
       ownerId: this.deps.config.ownerUserId === undefined ? undefined : String(this.deps.config.ownerUserId),
       pair: () => this.tryPair(incoming),
-      // §2.5: `apreUnTurno` stays here. Its four rules are facts Telegram
-      // delivers (`/x@nomebot`, `reply_to_message.from.id`, an `@username`
-      // mention, and ADR-0063 on privacy mode), and Discord has no branch that
+      // §2.5: `apreUnTurno` stays here. Its three rules are facts Telegram
+      // delivers (`/x` or `/x@ourbot`, `reply_to_message.from.id`, an
+      // `@username` mention — ADR-0063's deterministic gate, independent of
+      // what privacy mode happens to deliver), and Discord has no branch that
       // could reach the non-private side of it.
       opensATurn: (ctx) =>
         (!incoming.isPrivate || ctx.identity.principal.kind === 'owner') &&
