@@ -38,9 +38,12 @@ WARNS=0
 
 step() { printf '\n=== %s ===\n' "$1"; }
 rec() { # rec <PASS|FAIL|SKIP> <id> <text>  — to stdout AND the receipt file
+  # Always returns 0: callers use `check && rec PASS ... || rec FAIL ...` and
+  # a non-zero return from the PASS branch would fire the FAIL branch too.
   printf '%s %s %s\n' "$1" "$2" "$3" | tee -a "$RECEIPT"
   [ "$1" = FAIL ] && FAILURES=$((FAILURES + 1))
   [ "$1" = SKIP ] && WARNS=$((WARNS + 1))
+  return 0
 }
 finish() {
   printf '\n============================================================\n'
@@ -148,8 +151,11 @@ step "V1 install artefacts"
 need muffin V1-cmd || { rec FAIL V1-skip "muffin not installed — install first (documented one-command path), then re-run"; finish; }
 rec PASS V1-cmd "muffin at $(command -v muffin): $(muffin --version 2>/dev/null || echo 'version unknown')"
 LAUNCHER=$(readlink -f "$(command -v muffin)" 2>/dev/null || echo "")
-ROOT=$(dirname "$(dirname "$LAUNCHER")")
-[ -d "$ROOT/.git" ] && rec PASS V1-src "source checkout with .git at $ROOT (update/rollback need it)" || rec FAIL V1-src "no git checkout above launcher ($LAUNCHER)"
+# Launcher shape: <checkout>[/.releases/<sha>]/dist/cli/main.js — three levels
+# above the file is the checkout (a two-level strip lands in dist/ and every
+# git check fails for the wrong reason; measured on the first VM run).
+ROOT=$(dirname "$(dirname "$(dirname "$LAUNCHER")")")
+[ -e "$ROOT/.git" ] && rec PASS V1-src "source checkout with .git at $ROOT (update/rollback need it)" || rec FAIL V1-src "no git checkout above launcher ($LAUNCHER)"
 [ -f "$HOME_DIR/config.json" ] && rec PASS V1-home "data home configured ($HOME_DIR/config.json)" || rec FAIL V1-home "no $HOME_DIR/config.json"
 [ -f "$HOME_DIR/muffin.db" ] && rec PASS V1-db "database present" || rec FAIL V1-db "no $HOME_DIR/muffin.db"
 UNIT_PATH="$HOME/.config/systemd/user/$UNIT_NAME"
