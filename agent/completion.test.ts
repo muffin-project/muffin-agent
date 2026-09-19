@@ -68,4 +68,42 @@ describe('completion gate', () => {
     expect(nudge).toContain('`send_email`');
     expect(nudge).toContain('non hai chiamato nessun tool');
   });
+
+  it('never reprimands an answer that explicitly explains it did not need a tool', () => {
+    // The structured invariant: a disclaimed mention is not a false claim.
+    // Each of these names a tool with zero calls made, and each must pass.
+    for (const text of [
+      'Non ho avuto bisogno di `fs_write`: la risposta era già nel contesto.',
+      'Non ho usato fs_write perché il file non esiste ancora.',
+      'Non ho chiamato memory_search, ho risposto da quello che mi hai scritto.',
+      'I did not use fs_write: no file operation was needed.',
+      'There was no need for memory_search here.',
+    ]) {
+      const verdict = checkCompletion({ text, available: AVAILABLE, toolCallsMade: 0 });
+      expect(verdict.ok).toBe(true);
+      expect(verdict.named).toEqual([]);
+    }
+  });
+
+  it('still fires on the undisclaimed tool when one mention is disclaimed', () => {
+    const verdict = checkCompletion({
+      text: 'Non ho usato fs_write. Ho chiamato fs_read e ho finito.',
+      available: AVAILABLE,
+      toolCallsMade: 0,
+    });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.named).toEqual(['fs_read']);
+  });
+
+  it('still fires when the disclaimer implies an attempt that never happened', () => {
+    // "Non ho potuto" claims an attempt: with zero calls in the turn there is
+    // no result backing it, so the gate fires rather than exempting blindly.
+    const verdict = checkCompletion({
+      text: 'Ho provato con `fs_write` ma non ho potuto completare.',
+      available: AVAILABLE,
+      toolCallsMade: 0,
+    });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.named).toEqual(['fs_write']);
+  });
 });

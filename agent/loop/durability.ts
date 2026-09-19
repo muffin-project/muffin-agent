@@ -3,7 +3,7 @@ import { ATTR, type SpanHandle } from '../../core/tracing/types.js';
 import type { ContinuableClass, ContinuableReason, TurnOutcome, TurnRecord } from '../../core/turns/store.js';
 import { encodeWaitFor, type WaitSpec } from '../../core/turns/wait.js';
 import type { ContentBlock, Message } from '../providers/types.js';
-import { harnessMessage } from './message-origin.js';
+import { harnessMessage, toolMessage } from './message-origin.js';
 import type { TurnRun } from './run-state.js';
 import { runTool } from './tool-call.js';
 import {
@@ -328,7 +328,10 @@ export async function reconcile(scope: TurnScope): Promise<TurnResult | null> {
     }
   }
 
-  run.messages.push({ role: 'user', content: repaired });
+  // Repaired evidence, same provenance as a fresh result: the blocks below
+  // are `tool_result`s the transcript owes the next provider call, not words
+  // anyone spoke.
+  run.messages.push(toolMessage(repaired));
   return checkpoint(scope) ? null : finish(scope, 'error', '');
 }
 
