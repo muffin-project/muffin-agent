@@ -2,7 +2,6 @@ import { recall, recallTaint, renderForPrompt } from '../../core/memory/recall.j
 import { memoryWriteCapability } from '../../core/policy/doors.js';
 import type { CapabilityId, Decision, DecisionRequest } from '../../core/policy/types.js';
 import type { SessionRef } from '../../core/session/store.js';
-import { isSensitiveResourceName } from '../../core/tracing/redact.js';
 import type { SpanHandle } from '../../core/tracing/types.js';
 import { ATTR } from '../../core/tracing/types.js';
 import type { TurnRecord } from '../../core/turns/store.js';
@@ -13,8 +12,10 @@ import { historyTaint, reinjectedHistory } from '../context/history-taint.js';
 import { DEFAULT_EXECUTION } from '../profiles/profile.js';
 import { type ContentBlock, type Message, ProviderError } from '../providers/types.js';
 import { buildContext, userAudios, userImages } from './context.js';
-import { announceEnd, checkpoint, closeRecord, finish, reconcile } from './durability.js';
+import { announceEnd, checkpoint, closeRecord, finish, reconcile, releaseContinuable } from './durability.js';
 import { ExecutionBudget } from './execution-budget.js';
+import { harnessMessage } from './message-origin.js';
+import { echoContentFor } from './sensitive-echo.js';
 import { makeSnapshot } from './permissions.js';
 import { markProviderErrorReplyForRecovery, providerErrorReply } from './provider-error-reply.js';
 import { type RoundScope, runRounds } from './round.js';
@@ -23,6 +24,7 @@ import {
   assertNever,
   type LoopDeps,
   MAX_HISTORY_TURNS,
+  MAX_TRANSPORT_RETRIES,
   type ToolContext,
   type TurnDelta,
   type TurnEvent,
@@ -60,6 +62,15 @@ export type DriveOptions = {
   signal?: AbortSignal | undefined;
   resumed?: boolean;
   wokenFromWait?: boolean;
+  /**
+   * Owner-granted continuation to a new execution lease (P0-B), as opposed
+   * to a crash/wait resume of the current one. Repair (`reconcile`) still
+   * applies — the transcript may end mid-batch — but the crash-recovery
+   * budget does not move (`TurnRun.continued`, `MAX_RESUMES` untouched).
+   * Set only by `continueTurn`, which already granted the lease and
+   * appended the grant message before `drive`.
+   */
+  continued?: boolean;
   /** La barriera com'era prima del claim: vedi `resumeTurn`. */
   waitForAtWake?: string | null;
   /** The ref the caller already opened. Absent on a resume — see `input.session`. */
@@ -275,6 +286,7 @@ export async function guidaIlTurno(
   const run = new TurnRun(record, {
     resumed: options.resumed === true,
     wokenFromWait: options.wokenFromWait === true,
+    continued: options.continued === true,
   });
   const execution = new ExecutionBudget(deps.profile.execution ?? DEFAULT_EXECUTION, Date.now, {
     initialActiveModelMs: run.activeModelMs,
@@ -310,28 +322,20 @@ export async function guidaIlTurno(
   };
 
   /**
-   * Tool names whose single argument (`path` or `url`) names one resource
-   * and whose successful result *is* that resource's content — as opposed to
-   * `fs_write` (same `path` shape, opposite direction: nothing to echo from
-   * an argument the tool never reads back) or `fs_search`/`web_search` (many
-   * results, no single resource this call named).
+   * The live half of the echo protection: whatever this lease reads from a
+   * secret-flavoured name is collected so the answering round can scrub it.
+   *
+   * *When*, not *what*: the classification is the single shared predicate in
+   * `agent/loop/sensitive-echo.ts` (also read by the durable rehydration), so
+   * the two can never disagree. A repaired call reads a resource exactly like
+   * a fresh one does, so a repair must feed the same sink.
    */
-  const RESOURCE_READ_TOOLS = new Set(['fs_read', 'http_get', 'document_read', 'skill_read']);
   const noteSensitiveResourceEcho = (
     call: { name: string; args: unknown },
     outcome: ContentBlock,
   ): void => {
-    if (!RESOURCE_READ_TOOLS.has(call.name)) return;
-    if (outcome.type !== 'tool_result' || outcome.isError) return;
-    const args = (call.args ?? {}) as Record<string, unknown>;
-    const resourceId =
-      typeof args.path === 'string'
-        ? args.path
-        : typeof args.url === 'string'
-          ? args.url
-          : undefined;
-    if (resourceId === undefined || !isSensitiveResourceName(resourceId)) return;
-    if (typeof outcome.content === 'string') run.sensitiveResourceEchoes.push(outcome.content);
+    const echo = echoContentFor(call.name, call.args, outcome);
+    if (echo !== undefined) run.sensitiveResourceEchoes.push(echo);
   };
 
   // What this turn is shown, decided from who is speaking and where — never
@@ -630,10 +634,12 @@ export async function guidaIlTurno(
           ? 'event'
           : 'timer';
       turn.setAttributes({ 'muffin.turn.woken_by': why });
-      run.messages.push({
-        role: 'user',
-        content: [{ type: 'text', text: wakeReport(waitFor, why) }],
-      });
+      // Harness control (a transition report for this resume), not owner
+      // words: a continuation to a new lease archives it instead of replaying
+      // it — the approved work it refers to already completed.
+      run.messages.push(
+        harnessMessage('user', [{ type: 'text', text: wakeReport(waitFor, why) }]),
+      );
     }
   }
 
@@ -641,6 +647,22 @@ export async function guidaIlTurno(
     return await runRounds(scope);
   } catch (error) {
     if (error instanceof ProviderError) {
+      // Retry exhaustion is a yielded lease, not a connector exception — when
+      // another attempt could still help. A retryable transport failure (or a
+      // malformed-output cascade that spent itself in the loop) releases the
+      // turn as continuable with the work intact and no session chatter: the
+      // diagnostic is execution truth, delivered structurally, not a message
+      // Muffin supposedly said. Only a non-retryable provider failure stays
+      // terminal, on the pre-existing path below.
+      if (error.retryable) {
+        return releaseContinuable(
+          scope,
+          error.source === 'output' ? 'recovery_exhausted' : 'provider_transport',
+          error.source === 'output'
+            ? scope.run.recoveriesUsed
+            : MAX_TRANSPORT_RETRIES - scope.run.transportRetriesLeft,
+        );
+      }
       // Retry exhaustion is a terminal turn result, not a connector exception.
       // Persist a marked copy in TurnRecord before delivery so a failed send or
       // restart can recover this exact notice without invoking the provider.

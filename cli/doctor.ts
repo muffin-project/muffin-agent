@@ -893,6 +893,21 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
     }
 
     /**
+     * P0-B: una lease esaurita non è un guasto — è lavoro dovuto in attesa di
+     * una continuazione esplicita. `ok`, non `warn`: niente si è rotto, ma
+     * solo un umano che legge questo può chiuderla ("riprendi" in
+     * conversazione, o `muffin resume <id>`).
+     */
+    if (turns !== null && turns.continuable.count > 0) {
+      const oldest = turns.continuable.oldest;
+      const due = oldest === null ? '' : ` · in attesa da ${oldest.slice(0, 16).replace('T', ' ')}`;
+      ok(
+        'turni continuabili',
+        `${turns.continuable.count} lease esaurite con lavoro salvato${due} · continua con "riprendi" o \`muffin resume <id>\``,
+      );
+    }
+
+    /**
      * D2, judge round 2: `LaneEvent.undeliverable` was emitted and reached only
      * the gateway's own stderr — real inside that one process, invisible to
      * everything else, including this command opening a fresh handle on the

@@ -1,8 +1,9 @@
 import type { PermissionSnapshot } from '../../core/policy/types.js';
 import { ATTR, type SpanHandle } from '../../core/tracing/types.js';
-import type { TurnOutcome, TurnRecord } from '../../core/turns/store.js';
+import type { ContinuableClass, ContinuableReason, TurnOutcome, TurnRecord } from '../../core/turns/store.js';
 import { encodeWaitFor, type WaitSpec } from '../../core/turns/wait.js';
 import type { ContentBlock, Message } from '../providers/types.js';
+import { harnessMessage } from './message-origin.js';
 import type { TurnRun } from './run-state.js';
 import { runTool } from './tool-call.js';
 import {
@@ -343,6 +344,10 @@ export async function reconcile(scope: TurnScope): Promise<TurnResult | null> {
 export function closeRecord(scope: TurnScope, outcome: TurnOutcome): boolean {
   const { deps, record, run, snapshot, turn } = scope;
   try {
+    // P0-B: no lease audit arguments — the store derives the close (started
+    // lease? harness split? transport spent? lifetime fold?) inside the same
+    // transaction from the row plus these exact counters. Callers cannot
+    // supply a competing version.
     return deps.turns.finish(
       record.id,
       { outcome, messages: run.messages, taint: snapshot.currentTaint(), counters: run.counters() },
@@ -380,8 +385,112 @@ export function announceEnd(scope: TurnScope, stopped: TurnOutcome): void {
   }
 }
 
-export function finish(scope: TurnScope, stopped: TurnOutcome, text: string, reason?: string): TurnResult {
-  const { record, run, snapshot, turn: span } = scope;
+/**
+ * The single sentence for a yielded lease (P0-B) — the one owner-visible
+ * diagnostic for every continuable ending, built here and nowhere else.
+ *
+ * States observable facts only: the failure class, what the ended lease had
+ * completed, that the work is preserved under the turn id, and the one
+ * instruction that mints the next lease. It promises resumption because
+ * `releaseContinuable` below only returns this text when the release write
+ * actually landed.
+ */
+function continuableText(scope: TurnScope, failureClass: ContinuableClass, attempts: number): string {
+  const done = scope.run.toolCallsMade;
+  const completed = done > 0 ? `${done} tool call completate` : 'nessuna tool call ancora completata';
+  const cause = ((): string => {
+    switch (failureClass) {
+      case 'provider_empty':
+        return 'il provider ha restituito risposte vuote (nessun testo, nessuna tool call, nessun token, nessuna attività)';
+      case 'truncated':
+        return 'il modello ha esaurito il limite di output senza produrre contenuto';
+      case 'provider_transport':
+        return 'il provider non ha completato le richieste (errori di trasporto)';
+      case 'model_first_activity_timeout':
+        return 'il provider non ha inviato alcun segnale di attività in tempo';
+      case 'model_stall':
+        return 'il provider ha smesso di inviare dati a metà risposta';
+      case 'model_deadline':
+      case 'turn_deadline':
+        return 'il turno ha esaurito il suo limite di tempo';
+      case 'active_model_budget':
+        return 'il turno ha esaurito il budget di attività del modello';
+      case 'recovery_exhausted':
+        return 'il modello non ha prodotto una risposta utilizzabile dopo la cascata di recupero';
+    }
+  })();
+  return (
+    `Mi sono fermato qui (${cause})${attempts > 0 ? ` dopo ${attempts} ${attempts === 1 ? 'tentativo' : 'tentativi'}` : ''}. ` +
+    `Il lavoro fatto fin qui è salvato nel turno ${scope.record.id.slice(0, 12)} (${completed}); ` +
+    `scrivi "riprendi" per continuarlo.`
+  );
+}
+
+/**
+ * End the execution lease, keep the work (P0-B).
+ *
+ * The counterpart to `finish` for recoverable endings: releases the row as
+ * `continuable` with a typed reason instead of closing it as `done`, and
+ * returns the diagnostic that tells the owner exactly that. Like
+ * `suspendHere` — and unlike `finish` — it does NOT `announceEnd`: the
+ * memory lane is told when a turn ends, and this one has not.
+ *
+ * A fenced-out write takes the same honest road as `finish`'s: the claim is
+ * gone, so neither the text nor the state may be returned as this turn's.
+ */
+export function releaseContinuable(
+  scope: TurnScope,
+  failureClass: ContinuableClass,
+  attempts: number,
+): TurnResult {
+  const { deps, record, run, snapshot, turn: span } = scope;
+  const reason: ContinuableReason = {
+    class: failureClass,
+    lease: record.leaseIndex,
+    ...(attempts > 0 ? { attempts } : {}),
+    ...(run.providerFailureRequestIds.length > 0 ? { requestIds: [...run.providerFailureRequestIds] } : {}),
+    completed: { toolCalls: run.toolCallsMade },
+    at: new Date().toISOString(),
+  };
+  span.setAttributes({
+    [ATTR.stopReason]: 'continuable',
+    [ATTR.turnIteration]: run.iterations,
+    'muffin.turn.stop_reason': failureClass,
+    'muffin.turn.lease': record.leaseIndex,
+  });
+  const text = continuableText(scope, failureClass, attempts);
+  const written = deps.turns.releaseContinuable(
+    record.id,
+    { messages: run.messages, taint: snapshot.currentTaint(), counters: run.counters(), reason },
+    record.claimToken,
+  );
+  if (!written) {
+    span.setAttributes({ 'muffin.turn.lost_claim': true });
+    span.end({ status: 'error' });
+    return {
+      text: '',
+      iterations: run.iterations,
+      traceId: span.traceId,
+      turnId: record.id,
+      stopped: 'error',
+      taint: snapshot.currentTaint(),
+      usage: run.usage,
+    };
+  }
+  span.end({ status: 'ok' });
+  return {
+    text,
+    iterations: run.iterations,
+    traceId: span.traceId,
+    turnId: record.id,
+    stopped: 'continuable',
+    reason: failureClass,
+    taint: snapshot.currentTaint(),
+    usage: run.usage,
+  };
+}
+
+export function finish(scope: TurnScope, stopped: TurnOutcome, text: string, reason?: string): TurnResult {  const { record, run, snapshot, turn: span } = scope;
   span.setAttributes({ [ATTR.stopReason]: stopped, [ATTR.turnIteration]: run.iterations });
   if (reason !== undefined) span.setAttributes({ 'muffin.turn.stop_reason': reason });
   // Nessun drain di `/steer` qui, ed è la differenza fra questa versione e
@@ -465,11 +574,17 @@ export function closeRow(
     // anywhere else: `changes === 0`, nothing overwritten, and there is
     // nothing further this function needs to do about it — the refusal it
     // reports to its own caller does not depend on this write having landed.
+    // The refusal report joins the transcript first, so the row keeps the
+    // same array a reader sees — including the report itself
+    // (harness-marked, so it archives as control, not as model output).
+    const closed = [...record.messages, harnessMessage('assistant', [{ type: 'text', text: detail }])];
     deps.turns.finish(
       record.id,
       {
         outcome,
-        messages: [...record.messages, { role: 'assistant', content: [{ type: 'text', text: detail }] }],
+        // Harness control (a refusal report, not model output): marked so no
+        // future reader mistakes it for something the model said.
+        messages: closed,
         taint: record.taint,
         counters: record.counters,
       },

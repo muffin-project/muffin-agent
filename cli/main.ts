@@ -259,6 +259,15 @@ async function main(rawArgv: string[]): Promise<number> {
       return cmdSecret(rest);
     case 'trace':
       return cmdTrace(rest);
+    case 'resume': {
+      const target = rest.find((a) => !a.startsWith('--'));
+      if (target === undefined || rest.includes('--help') || rest.includes('-h')) {
+        process.stderr.write(`usage: muffin resume <turn-id> [--json]\n`);
+        return 78;
+      }
+      const { runResume } = await import('./resume.js');
+      return runResume({ turnId: target, ...(rest.includes('--json') ? { json: true } : {}) });
+    }
     case 'undo':
       return cmdUndo(rest);
     case 'orientamento':

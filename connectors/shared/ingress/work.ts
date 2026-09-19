@@ -1,4 +1,4 @@
-import { runTurn, type LoopDeps, type TurnDelta, type TurnEvent, type TurnResult } from '../../../agent/loop.js';
+import { ContinuationGone, askWhichContinuation, continueTurn, resolveContinuation, resolveFollowup, runTurn, type LoopDeps, type TurnDelta, type TurnEvent, type TurnResult } from '../../../agent/loop.js';
 import type { AudioBlock, ImageBlock } from '../../../agent/providers/types.js';
 import type { TrustTier } from '../../../core/policy/types.js';
 import { LANE_TURNS, type ModelLane } from '../../../core/turns/model-lane.js';
@@ -105,6 +105,57 @@ export async function runWork(
     await new Promise((r) => setTimeout(r, 50));
   }
   try {
+    // P0-B: an event naming previous work continues it instead of duplicating
+    // it. The claim may already have bound this event to the continuable row;
+    // either way the decision is re-derived here from the shared resolver —
+    // the bind is an identity, never an execution order.
+    const session = deps.sessions.open(req.identity.sessionKey);
+    const hasAttachment = req.images !== undefined || req.audios !== undefined;
+    const match = resolveContinuation({
+      turns: deps.loop.turns,
+      principal: req.identity.principal,
+      sessionId: req.identity.sessionKey,
+      text: req.text,
+      hasAttachment,
+      nowMs: Date.now(),
+    });
+    if (match.kind === 'ambiguous') {
+      return askWhichContinuation(
+        { turns: deps.loop.turns, sessions: deps.sessions, model: deps.loop.model },
+        {
+          principal: req.identity.principal,
+          tenant: req.identity.tenant,
+          surface: port.surface.id,
+          sessionId: req.identity.sessionKey,
+          session,
+          text: req.text,
+          replyTo: req.replyTo,
+          candidates: match.candidates,
+        },
+      );
+    }
+    const follow = match.kind === 'none' ? resolveFollowup(req.identity.sessionKey, req.text, Date.now()) : null;
+    const target = match.kind === 'single' ? match.turnId : follow?.turnId;
+    if (target !== undefined) {
+      const row = deps.loop.turns.get(target);
+      // Bound to a row that is no longer continuable (completed or claimed
+      // elsewhere since the bind): never recompute under a foreign identity —
+      // defer and let `recover` resolve against the durable row.
+      if (row === null || row.status !== 'continuable') throw new ContinuationGone(req.workId);
+      const continued = await continueTurn(deps.loop, target, {
+        message: { role: 'user', content: [{ type: 'text', text: req.text }] },
+        session,
+        signal: req.signal,
+        steer: req.steer,
+        replyChannel: event.address.channel,
+        ...(req.onDelta === undefined ? {} : { onDelta: req.onDelta }),
+        ...(req.onProgress === undefined ? {} : { onProgress: req.onProgress }),
+      });
+      // Lost the grant race after the re-check (narrow, but real under two
+      // overlapping drains): same road as above — defer, never recompute.
+      if ('why' in continued) throw new ContinuationGone(req.workId);
+      return continued;
+    }
     return await runTurn(deps.loop, {
     signal: req.signal,
     steer: req.steer,
@@ -120,7 +171,7 @@ export async function runWork(
     // 03/09 «non sembra lo stesso muffin»); per un gruppo è la stanza — due
     // stanze non condividono mai una sessione, e l'owner che parla *dentro* un
     // gruppo è un `member` di quel tenant.
-    session: deps.sessions.open(req.identity.sessionKey),
+    session,
     text: req.text,
     // I byte dell'immagine viaggiano nello stesso messaggio della domanda. Non
     // serve alzare niente a mano: il turno parte già a `max(tierOf(principal),

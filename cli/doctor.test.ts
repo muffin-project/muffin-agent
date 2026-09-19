@@ -585,6 +585,75 @@ describe('doctor names turns whose answer has nowhere to go', () => {
   });
 });
 
+describe('doctor names continuable leases awaiting the owner', () => {
+  const seedContinuable = (dir: string): void => {
+    const db = new DatabaseCtor(paths(dir).db);
+    const store = new TurnStore(db);
+    const created = store.create({
+      id: 'turn-continuabile',
+      principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
+      tenant: 'host',
+      surface: 'telegram',
+      sessionId: 's1',
+      model: 'claude-opus-5',
+      messages: [],
+      taint: 0,
+      counters: {
+        iterations: 3,
+        recoveriesUsed: 5,
+        transportRetriesLeft: 7,
+        toolCallsMade: 2,
+        nudgedForCompletion: false,
+        usage: { inputTokens: 1, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        spentUsd: 0,
+        resumes: 0,
+        contextBuilt: true,
+        activeModelMs: 0,
+      },
+    });
+    expect(
+      store.releaseContinuable(
+        'turn-continuabile',
+        {
+          messages: [],
+          taint: 0,
+          counters: {
+            iterations: 3,
+            recoveriesUsed: 5,
+            transportRetriesLeft: 7,
+            toolCallsMade: 2,
+            nudgedForCompletion: false,
+            usage: { inputTokens: 1, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+            spentUsd: 0,
+            resumes: 0,
+            contextBuilt: true,
+            activeModelMs: 0,
+          },
+          reason: { class: 'provider_empty', lease: 0, at: '2026-09-18T17:14:09.000Z' },
+        },
+        created.claimToken,
+      ),
+    ).toBe(true);
+    db.close();
+  };
+
+  it('says nothing when no lease is awaiting continuation', async () => {
+    const dir = home();
+    expect(await check(dir, 'turni continuabili')).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('names the count and the way back when one is', async () => {
+    const dir = home();
+    seedContinuable(dir);
+    const c = await check(dir, 'turni continuabili');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('1 lease esaurite');
+    expect(c?.detail).toContain('muffin resume');
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe('doctor tells the four consolidation outcomes apart', () => {
   /**
    * The four outcomes are four different facts about the lane, and for a long
