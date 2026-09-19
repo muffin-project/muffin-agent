@@ -48,6 +48,13 @@ belongs under the Muffin home, not in Git.
 Do not reopen a recorded decision merely because another design is possible.
 Bring new evidence; a material reversal is a new ADR, not a rewrite of the old.
 
+## Engineering harness
+
+Procedures: `.agents/skills/` (`engineering-loop`, `jev-shadow`). Entry points:
+`/start`, `/checkpoint`, `/close` in `.opencode/commands/`; roles in
+`.opencode/agents/`. Snapshot: `scripts/agent/repo-state.mjs`. Current program:
+the open issue with the `program/current` label. OpenCode V1 stays.
+
 ## The failure pattern to remember
 
 Muffin has repeatedly had mechanisms that existed, had unit tests, and were
