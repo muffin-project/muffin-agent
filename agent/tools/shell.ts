@@ -135,7 +135,9 @@ const shellSpec: ToolSpec = {
     'with a permission error, which is the boundary working, not a bug. Re-run that one with shell_run_write, ' +
     'which asks the owner every time, so do not reach for it out of habit. The working directory does NOT persist ' +
     'between calls — pass cwd each time. Returns the exit code, stdout and stderr; output over ~30k characters is ' +
-    'cut head-and-tail with an explicit marker.',
+    'cut head-and-tail with an explicit marker. An unhandled failure anywhere fails the whole call — a pipeline ' +
+    'fails if any stage fails, and a sequence stops at the first failing command. A failure you handle in the ' +
+    'command itself (`cmd || fallback`, `if cmd`, `! cmd`) may still succeed.',
   inputSchema: {
     type: 'object',
     properties: { ...commonProperties },
@@ -153,7 +155,10 @@ const shellWriteSpec: ToolSpec = {
     'genuinely needs a program none of the above wraps — a build, a test suite, an install, a one-off script that ' +
     'writes. Writes are confined to the working directory and a scratch TMPDIR; there is no network access. The ' +
     'working directory does NOT persist between calls — pass cwd each time. Returns the exit code, stdout and ' +
-    'stderr; output over ~30k characters is cut head-and-tail with an explicit marker. If the sandbox blocks the ' +
+    'stderr; output over ~30k characters is cut head-and-tail with an explicit marker. An unhandled failure ' +
+    'anywhere fails the whole call — a pipeline fails if any stage fails, and a sequence stops at the first ' +
+    'failing command, so check the effect happened instead of reading on past it. A failure you handle in the ' +
+    'command itself (`cmd || fallback`, `if cmd`, `! cmd`) may still succeed. If the sandbox blocks the ' +
     'command, say so and tell the owner what to run themselves; there is no unsandboxed retry.',
   inputSchema: {
     type: 'object',
@@ -345,9 +350,18 @@ function formatExecOutcome(
   result: ExecResult,
 ): { content: string; isError?: true; tier: TrustTier } {
   const stderr = annotateSandboxFailures(command, result.stderr);
+  // Three exits, three sentences. A signal kill (`code: null`, not a timeout)
+  // used to read `exit ?` — a truthful character and a misleading sentence,
+  // inviting the model to treat an interruption as an ambiguous result. The
+  // command behind it runs under `set -eo pipefail` (see `STRICT_SHELL_PREFIX`
+  // in `core/sandbox/executor.ts`), so any other non-zero code already means
+  // an unhandled failure somewhere in the sequence, not just in the last
+  // process.
   const header = result.timedOut
     ? `killed at ${result.durationMs}ms: the command did not complete — nothing after this ran`
-    : `exit ${result.code ?? '?'} · ${result.durationMs}ms`;
+    : result.code === null
+      ? `killed by a signal after ${result.durationMs}ms: the command did not complete — nothing after this ran`
+      : `exit ${result.code} · ${result.durationMs}ms`;
   const parts: string[] = [];
   if (result.stdout.length > 0) parts.push(result.stdout);
   if (stderr.length > 0) parts.push(`--- stderr ---\n${stderr}`);
