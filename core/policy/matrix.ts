@@ -522,7 +522,20 @@ export const POLICY_FLOOR: PolicyMatrix = {
   /** No principal may ever exercise these at runtime, whatever the taint. */
   neverAtRuntime: new Set<CapabilityId>(['rot.write', 'rot.*']),
   /** Excluded from autonomous principals regardless of taint (blueprint 03 §3). */
-  forbiddenForSystem: new Set<CapabilityId>(['outward.send', 'outward.*', 'config.ratchet']),
+  forbiddenForSystem: new Set<CapabilityId>([
+    'outward.send',
+    'outward.*',
+    'config.ratchet',
+    /**
+     * Un fire gira con il runtime completo: senza questa riga il kernel
+     * risponderebbe `allow` e un job creerebbe nuovi recurring job —
+     * un'autonomia delegata che crea nuova autonomia durevole: cardinalità,
+     * durata e spesa senza una nuova decisione owner. L'owner resta libero di
+     * creare ricorrenze; i grant di stanza restano la manopola per i member
+     * (questa lista non tocca `hostOnly`).
+     */
+    'jobs.schedule',
+  ]),
   /**
    * **Il pavimento non concede niente a nessuna stanza**, e questa riga è
    * quella che rende il fallback fail-closed nel senso di ADR-0073: se il

@@ -279,3 +279,27 @@ describe('JobStore — il tetto per-job', () => {
     }
   });
 });
+
+describe('JobStore — provenance corrotta legge default noti, mai stringhe vuote', () => {
+  /**
+   * S3 (delta review): `toJob` è il decoder canonico della riga. Una stringa
+   * vuota scritta a mano (`origin_tenant = ''`) non è un tenant e non deve
+   * arrivare al fire come indirizzo vuoto: ricade sui default legacy
+   * (host/cli/owner), la stessa direzione fail-closed della migrazione 7.
+   * Per `channel` nessun default canonico esiste nel decoder (è un indirizzo
+   * di consegna, non provenance): resta follow-up, non reinterpretazione.
+   */
+  it("origin_* vuoti tornano host/cli/owner, tier assurdo torna 0", () => {
+    const db = new DatabaseCtor(':memory:');
+    try {
+      const store = new JobStore(db, () => new Date('2026-06-15T05:00:00Z'));
+      const job = store.add({ cron: '0 8 * * *', timezone: 'Europe/Rome', channel: 'cli', goal: 'brief' });
+      db.prepare(`UPDATE jobs SET origin_tenant = '', origin_surface = '', origin_principal = '', origin_turn = '', tier = 9 WHERE id = ?`).run(job.id);
+      const riletto = store.get(job.id);
+      expect(riletto?.origin).toEqual({ tenant: 'host', surface: 'cli', principal: 'owner', turnId: null });
+      expect(riletto?.tier).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+});

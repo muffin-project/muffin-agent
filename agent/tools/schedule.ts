@@ -33,6 +33,11 @@ import type { ToolSpec } from '../providers/types.js';
  * - il canale di consegna NON è un argomento: è `ctx.replyChannel` o il
  *   default di superficie. Un destinatario scelto dal modello sarebbe un nuovo
  *   recipient — effetto `outward` — dentro una capability `context`.
++ *
++ * Contratto di cardinalità: one accepted durable schedule effect → one Job.
++ * Due chiamate distinte con gli stessi argomenti sono due richieste
++ * legittime (due righe); la STESSA identity `(turn_id, call_id)` non
++ * riesegue mai (`runTool` rigioca l'outcome registrato).
  */
 
 const CLEAN: 0 = 0;
@@ -47,11 +52,22 @@ export const scheduleCapability: CapabilityDecl = {
    */
   effect: 'context',
   /**
-   * `medium`, come `wait` e per la stessa ragione: la chiamata costa una riga,
-   * ma impegna lavoro e spesa futuri — ogni occorrenza chiama il modello e
-   * consegna su un canale. Valutato per ciò che impegna, non per ciò che fa.
+   * `low`, come `todo` e per la stessa ragione: scrive una riga in una
+   * tabella nostra, delimitata al tenant chiamante dall'handler e non da un
+   * argomento — niente sull'host, niente in rete adesso.
+   *
+   * NON `medium`: la classe di rischio decide anche il verdetto, e
+   * `medium` + `undoable` è `draft` — un checkpoint che per un tool senza
+   * `resolveEffectPath` (una riga DB non è un file fotografabile
+   * dall'`UndoJournal`) rifiuta ogni chiamata con `draft_unsnapshottable`.
+   * Il precedente che sembrava dire `medium`, `wait`, è `reversible: 'yes'`
+   * ed è proprio quel `'yes'` a tenerlo eseguibile; qui le righe non si
+   * cancellano mai (§I-8), quindi `undoable` è onesto e il rischio a renderlo
+   * eseguibile deve essere `low`. Ciò che la riga impegna per domani (lavoro
+   * e spesa dei giri futuri) resta misurato dove avviene: tetto per-job,
+   * sigillo mensile e gate dello scheduler, non in questa dichiarazione.
    */
-  risk: 'medium',
+  risk: 'low',
   /**
    * `undoable`: la riga resta (`jobs` non cancella mai, §I-8) ma `jobs remove`
    * la spegne — le occorrenze future non partono più. Quelle già girate
@@ -89,8 +105,8 @@ const scheduleSpec: ToolSpec = {
   description:
     'Create a recurring reminder or job from conversation ("remind me every day at 9", "ogni lunedì alle 18 ricordami X"). ' +
     'Use it when the owner asks for something repeated on a schedule. ' +
-    'Takes a 5-field cron expression and the reminder text, validates both deterministically, and persists exactly one durable job ' +
-    'on the same store as `muffin jobs add` — the job survives restarts and fires on schedule. ' +
+    'Takes a 5-field cron expression and the reminder text, validates both deterministically, and each accepted call persists ' +
+    'one durable job on the same store as `muffin jobs add` — the job survives restarts and fires on schedule. ' +
     "`timezone` is an IANA zone and defaults to the owner's own zone; never guess one from the process environment. " +
     "Delivery goes to this conversation's surface. " +
     'Not for one-shots ("il 3 ottobre devo…": that is `todo` + `due`) or for waiting inside this turn (that is `wait`). ' +
