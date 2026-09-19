@@ -47,7 +47,11 @@ import {
  */
 
 export type ExecRequest = {
-  /** The command line, run non-interactively (no PTY — upstream #419 cluster). */
+  /**
+   * The command line, run non-interactively (no PTY — upstream #419 cluster)
+   * under `set -eo pipefail` (see `STRICT_SHELL_PREFIX`): the reported exit is
+   * the operation's, not the last process's.
+   */
   command: string;
   /** Absolute. Where the command runs; also anchors srt profile generation. */
   cwd: string;
@@ -107,6 +111,63 @@ const SELFTEST_OVERALL_TIMEOUT_MS = 25_000;
 const EXEC_MAX_OUTPUT_CHARS = 30_000;
 /** Hard buffering cap per stream so a firehose cannot eat the process heap. */
 const BUFFER_HARD_CAP = 200_000;
+
+/**
+ * **The exit of a command is the exit of the operation, not of the last process.**
+ *
+ * Every command runs under `set -eo pipefail`, prepended here — the one door
+ * all sandboxed execution passes through (`runReadOnly`, `run`, the scheduler,
+ * the evals) — and not in any single tool, so no lane can drift back to the
+ * old semantics on its own.
+ *
+ * Measured false-success, owner runtime: `vitest ... | tail` failed while
+ * `tail` succeeded and the tool recorded `exit=0, is_error=false`; `git add` /
+ * `git commit` failed while a later `git status` succeeded and the whole call
+ * read as success. The model compensated by reading `fatal` on stderr — an
+ * heuristic over words, not a contract. The shell's defaults made both true:
+ * a pipeline's status is its LAST stage, and a `;`-list's status is its LAST
+ * command, so any important effect followed by a succeeding inspection
+ * vanished from the outcome.
+ *
+ * What the two flags do, and what they deliberately do not:
+ *
+ * - `pipefail`: a pipeline fails when ANY stage fails (rightmost non-zero
+ *   wins), instead of reporting only the last stage. This alone fixes the
+ *   `vitest | tail` class.
+ * - `errexit` (`-e`): the first failing command stops the sequence with ITS
+ *   code — `false; true` fails, and `false; touch sentinel` never touches
+ *   anything. This fixes the sequential-shell class, which `pipefail` alone
+ *   cannot reach (a `;`-list is not a pipeline).
+ *
+ * An explicitly handled failure still succeeds, by bash's own rules rather
+ * than by a second mechanism invented here: a failing command in an `||`
+ * list (except the final one), in an `if`/`while`/`until` test, or negated
+ * with `!` does not trigger the exit — `foo || fallback`, `if foo; …`,
+ * `! foo` keep working, and `set +e` inside the command opts out openly
+ * instead of masking silently. The contract the model reads is one sentence:
+ * an unhandled failure anywhere fails the whole call.
+ *
+ * Why a prefix and not the alternatives: forbidding compound commands (or a
+ * structured per-segment representation) would break real work
+ * (`build && test`) for no fault-tolerance gain — there is no structured
+ * command form anywhere in this interface, and parsing shell to recover one
+ * is fragile. Baking strict mode at the head of the same command is also the
+ * peer-accepted repair for this exact class (claude-code-action#1136, same
+ * `curl | bash` masking fixed with `pipefail`; the 2026-05-20 exit-code
+ * pitfalls note for `vitest | jq`). Portability holds because the shell IS
+ * bash on both platforms — srt resolves it via `whichSync('bash')` and
+ * refuses to run without it — and `pipefail`/`errexit` need nothing newer
+ * than the macOS bash 3.2.
+ *
+ * Known residual, stated rather than patched: `cmd | head -n 5` on a
+ * producer that never finishes now reports 141 (SIGPIPE) instead of 0 — that
+ * IS the producer's fate, and swallowing 141 would be the same sin in the
+ * other direction. Where truncation is the intent, the command says so
+ * (`… | head -n 5 || true`). Command substitution without `inherit_errexit`
+ * (absent on bash 3.2) can still mask an inner failure behind an outer
+ * success; that corner is documented in the ADR, not fixed here.
+ */
+const STRICT_SHELL_PREFIX = 'set -eo pipefail; ';
 
 /** What the real self-test found wrong — same reason taxonomy `probe.ts` uses. */
 type ContainmentFailure = {
@@ -761,7 +822,13 @@ export class SandboxExecutor {
     };
 
     const wrapped = await SandboxManager.wrapWithSandboxArgv(
-      req.command,
+      // The strict prefix is part of the COMMAND, not of the wrapping: srt
+      // quotes this whole string into its own `bash -c`, so what the inner
+      // shell executes is `set -eo pipefail; <the caller's command>`. `req`
+      // itself keeps the caller's text — `spawnCollect` only reads `cwd` and
+      // `signal` from it, and the self-test legs below bypass `execute()` on
+      // purpose (they probe raw containment, not the outcome contract).
+      STRICT_SHELL_PREFIX + req.command,
       undefined,
       perCall,
       req.signal,
@@ -818,8 +885,55 @@ export class SandboxExecutor {
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout: timeoutMs,
         killSignal: 'SIGKILL',
+        // A fresh process GROUP per command (POSIX only): the timeout and
+        // abort kills below target the whole group, never just the directly
+        // spawned shell. Killing the leader alone orphans grandchildren that
+        // keep the stdio pipes open — and `close` waits for pipe EOF, so the
+        // call resolves only when the longest orphan exits on its own.
+        // Measured 2026-09-19 (macOS seatbelt): `echo x && sleep 27` with a
+        // 1.5s timeout resolved at 27s, with the `sleep` reparented to init
+        // still holding the pipes. The strict-mode prefix
+        // (`STRICT_SHELL_PREFIX`) makes this systematic rather than marginal:
+        // a shell under `errexit`/`pipefail` must survive its trailing
+        // command for exit-status bookkeeping instead of exec'ing it, so the
+        // timeout kill lands on a waiting shell while the real long-runner
+        // keeps going detached. Without the group kill, `timeoutMs` would stop
+        // bounding compound commands the day the outcome contract landed.
+        ...(process.platform === 'win32' ? {} : { detached: true }),
         ...(req.signal ? { signal: req.signal } : {}),
       });
+
+      /**
+       * SIGKILL to every member of the command's group, best effort. The
+       * `exitCode` guard keeps a timer that fires a moment after a natural
+       * exit from signalling a recycled PID; ESRCH (nothing left to kill) is
+       * the normal case, not an error worth surfacing.
+       */
+      const killGroup = (): void => {
+        if (process.platform === 'win32') return;
+        if (child.exitCode !== null || child.signalCode !== null) return;
+        const pgid = child.pid;
+        if (pgid === undefined) return;
+        try {
+          process.kill(-pgid, 'SIGKILL');
+        } catch {
+          // Gone between the check and the kill — the outcome below already
+          // says what happened.
+        }
+      };
+      // Prompt group reaping on both kill paths. Node's own `timeout` above
+      // still kills the leader; this timer reaps the rest at the same
+      // deadline instead of at the longest orphan's natural exit. The abort
+      // path keeps its current shape — Node kills the leader with SIGTERM
+      // and the `error` event below rejects — with the group reaped
+      // alongside so no orphan survives the turn's Ctrl-C either.
+      const watchdog = setTimeout(killGroup, timeoutMs);
+      const onAbort = (): void => killGroup();
+      req.signal?.addEventListener('abort', onAbort, { once: true });
+      const disinnesca = (): void => {
+        clearTimeout(watchdog);
+        req.signal?.removeEventListener('abort', onAbort);
+      };
 
       let stdout = '';
       let stderr = '';
@@ -830,8 +944,12 @@ export class SandboxExecutor {
         if (stderr.length < BUFFER_HARD_CAP) stderr += chunk.toString('utf8');
       });
 
-      child.on('error', (error) => rejectPromise(error));
+      child.on('error', (error) => {
+        disinnesca();
+        rejectPromise(error);
+      });
       child.on('close', (code, signal) => {
+        disinnesca();
         const durationMs = Date.now() - started;
         const timedOut = signal === 'SIGKILL' && durationMs >= timeoutMs;
         const so = clip(stdout);

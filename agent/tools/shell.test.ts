@@ -253,6 +253,18 @@ describe('shell_run argument boundary', () => {
     expect(out.content).toContain('partial');
   });
 
+  it('a signal kill (no exit code, not a timeout) is reported as an incomplete run, not `exit ?`', async () => {
+    // Un abort del turno o un kill esterno: `code` è null e `timedOut` è
+    // false. L'esito deve dire che il comando non ha finito — un header
+    // `exit ?` invita il modello a leggerlo come un risultato ambiguo
+    // invece che come un'interruzione.
+    const exec = fakeExec({ code: null, timedOut: false, durationMs: 120, stdout: 'partial' });
+    const out = await makeShellTool(exec, { root }).handler({ command: 'sleep 99' }, ctx);
+    expect(out.isError).toBe(true);
+    expect(out.content).toContain('did not complete');
+    expect(out.content).toContain('partial');
+  });
+
   it('a non-zero exit is an error with stderr attached', async () => {
     const exec = fakeExec({ code: 2, stderr: 'boom' });
     const out = await makeShellTool(exec, { root }).handler({ command: 'false' }, ctx);
