@@ -5,7 +5,9 @@ import type { FireDeferred, FireSettleOnly, JobOutcome, RunJob } from '../core/s
 import type { ExecResult } from '../core/sandbox/executor.js';
 import type { TrustTier } from '../core/policy/types.js';
 import { CAPPED_MODEL, SCRIPT_MODEL, type TurnCounters, type TurnOutcome } from '../core/turns/store.js';
-import { runTurn, type LoopDeps, type TurnResult } from './loop.js';
+import { continueTurn, runTurn, type LoopDeps, type TurnResult } from './loop.js';
+import { harnessMessage } from './loop/message-origin.js';
+import type { Message } from './providers/types.js';
 import { recoveredText } from './recovered-text.js';
 
 /**
@@ -50,9 +52,13 @@ import { recoveredText } from './recovered-text.js';
  *       `Scheduler` either a normal delivery or a settle-only sentinel,
  *       depending on whether something already delivered it (fault points 5
  *       and 6).
- *     - anything else (`runnable`/`running`/`waiting`/`interrupted`) → not
- *       this call's turn to touch; say so and let the turn lane's own
- *       machinery finish it (fault point 4, unchanged).
+ *     - anything else (`runnable`/`running`/`waiting`/`interrupted`, o
+ *       `continuable` di un ALTRO lavoro) → not this call's turn to touch;
+ *       say so and let the turn lane's own machinery finish it (fault
+ *       point 4, unchanged).
+ *     - `continuable` legata a questo job → lo stesso lavoro interrotto a
+ *       metà goal: continua da sola sulla stessa identità con
+ *       `continueAutonomous` (P0, Autonomy #598), mai un secondo turn.
  *  3. Not yet bound → mint an id, bind it *before* the turn is created or the
  *     model is ever called (fault point 3's precondition), then run.
  */
@@ -126,6 +132,41 @@ export function jobOutcomeFromTurn(result: TurnResult): JobOutcome {
 }
 
 /**
+ * Quante lease autonome oltre la prima un fire può concedersi da solo (P0,
+ * Autonomy #598).
+ *
+ * Senza un tetto una ricorrenza che cade sempre in `continuable` spenderebbe
+ * per sempre senza mai una decisione owner; con un tetto la lease che resta
+ * continuabile oltre il conto torna al comportamento precedente — diagnostica
+ * consegnata, fire settled, riga owner-continuabile via "riprendi". Il numero
+ * è una policy P0 reversibile, non un invariante: ogni lease resta comunque
+ * sotto i ceiling del profilo e sotto il sigillo mensile.
+ */
+const MAX_AUTONOMOUS_LEASES = 3;
+
+/**
+ * Il grant che continua un giro di job senza un nuovo messaggio owner.
+ *
+ * Harness-marked (`message-origin.ts`): alla continuation successiva resta
+ * fuori dalla nuova lease come controllo e resta archiviato in `turn_leases`
+ * — mai scambiato per parole dell'owner, mai riproposto al modello come
+ * evidenza di lavoro. Il principal resta `system@scheduler` (la riga lo
+ * porta già): nessuna impersonificazione, nessun mint di autonomia futura —
+ * `jobs.schedule` resta `principal_forbidden` dal kernel in ogni lease.
+ */
+function autonomousResumeMessage(job: Job, nextLease: number): Message {
+  return harnessMessage('user', [
+    {
+      type: 'text',
+      text:
+        `Continuazione autonoma del job ${job.id.slice(0, 8)} (lease ${nextLease}, senza nuovo messaggio owner): ` +
+        `la lease precedente è finita su una boundary recuperabile. Continua lo stesso lavoro dallo stato ` +
+        `durevole, senza ripetere gli effetti già registrati.`,
+    },
+  ]);
+}
+
+/**
  * Test-only pause, a no-op unless a scenario sets the env var — the same
  * precedent as `MUFFIN_GATEWAY_TICK_MS` (`cli/gateway.ts`). The two windows it
  * can widen are real production races (a real `SIGKILL` between two writes),
@@ -151,7 +192,7 @@ async function runFresh(
   exec: JobExec | null,
   scope: ScriptScope | null,
   jobBudget: JobBudget | null,
-): Promise<JobOutcome> {
+): Promise<JobOutcome | FireDeferred | FireSettleOnly> {
   /**
    * **Il tetto per-job, e sta qui perché qui è l'unico punto che chiama il
    * modello** (DAY-1 E1, ADR-0035 emendamento №2).
@@ -238,9 +279,84 @@ async function runFresh(
   // Fault point 5, made observable: a real `SIGKILL` here lands after the
   // turn reaches `done` and before `Scheduler` ever calls `deliver`/`markRan`.
   // Skipped for a turn that suspended — there is nothing "done" about it yet,
-  // and `Scheduler`'s own suspended branch does not call `deliver` either.
+  // and `Scheduler`'s own suspended branch does not call `deliver` either —
+  // and for a turn that released as `continuable`: the release is already
+  // persisted, and the autonomous loop below (not `Scheduler`) owns what
+  // happens next, so there is no "between done and settle" instant to widen.
+  if (result.stopped === 'continuable') {
+    return continueAutonomous(deps, job, result.turnId, signal, exec, scope, jobBudget);
+  }
   if (result.stopped !== 'suspended') await testStall('MUFFIN_JOB_FIRES_STALL_AFTER_DONE_MS');
   return jobOutcomeFromTurn(result);
+}
+
+/**
+ * Continua da solo lo stesso lavoro durevole finché non termina (P0, Autonomy
+ * #598) — l'unica aggiunta di questa slice al percorso dei fire.
+ *
+ * Non è un secondo loop e non è un secondo scheduler: ogni lease passa da
+ * `continueTurn` (il primitivo canonico, stessi counter freschi, stesso WAL
+ * con replay degli outcome, stessi budget di esecuzione) sullo STESSO
+ * `turn_id` già legato al fire. `Scheduler` non vede mai le diagnostiche
+ * intermedie: riceve solo l'esito finale, che consegna e fa avanzare come
+ * prima. Nessuna riga nuova, nessuna tabella nuova: Job + JobFire + Turn +
+ * `turn_leases` bastano a dire armed/running/continuable/done/needs-owner
+ * (`ask`)/failed (`error`).
+ *
+ * I budget non sono bypassati: il tetto per-job è ricontrollato prima di ogni
+ * lease (la lease autonoma che lo sforerebbe non parte e torna `budget`
+ * lasciando la riga continuabile — l'owner alza il tetto e dice "riprendi");
+ * sigillo mensile, budget tenant e ceiling di profilo restano dentro ogni
+ * `drive`, come per qualunque turno.
+ */
+async function continueAutonomous(
+  deps: LoopDeps,
+  job: Job,
+  turnId: string,
+  signal: AbortSignal | undefined,
+  exec: JobExec | null,
+  scope: ScriptScope | null,
+  jobBudget: JobBudget | null,
+): Promise<JobOutcome | FireDeferred | FireSettleOnly> {
+  let current = turnId;
+  let last: TurnResult | null = null;
+  for (let lease = 0; lease < MAX_AUTONOMOUS_LEASES; lease += 1) {
+    // Il tetto per-job vale anche dentro l'occorrenza, non solo al suo
+    // ingresso: una continuation che partisse oltre il tetto spenderebbe i
+    // soldi che `runFresh` aveva appena rifiutato di spendere.
+    if (job.perJobUsd !== null && (jobBudget === null || jobBudget.jobMonthUsd(job.id) >= job.perJobUsd)) {
+      const breve = job.id.slice(0, 8);
+      return {
+        stopped: 'budget',
+        text:
+          `Job "${breve}" fermato a lease autonoma: ha raggiunto il tetto per-job di $${job.perJobUsd} questo mese. ` +
+          `Il lavoro resta continuabile nel turno ${current.slice(0, 12)}.`,
+        turnId: current,
+      };
+    }
+    const next = await continueTurn(deps, current, {
+      message: autonomousResumeMessage(job, lease + 1),
+      ...(signal ? { signal } : {}),
+    });
+    // Il rifiuto non è un esito del lavoro: la riga appartiene a qualcun
+    // altro adesso (`claimed`) oppure ha già cambiato stato sotto di noi —
+    // in entrambi i casi la verità sta nella riga, e `resolveBound` è il
+    // lettore canonico di quella verità (done+pending→recupero, done+settled→
+    // settle-only, altrimenti deferred al prossimo tick).
+    if ('why' in next) {
+      if (next.why === 'claimed') return { deferred: true };
+      return resolveBound(deps, job, current, signal, exec, scope, jobBudget);
+    }
+    if (next.stopped !== 'continuable') return jobOutcomeFromTurn(next);
+    last = next;
+    current = next.turnId;
+  }
+  // Tetto di lease esaurito e lavoro ancora continuabile: torna al
+  // comportamento precedente — la diagnostica dell'ultima lease viene
+  // consegnata, il fire settled, e la riga resta owner-continuabile via
+  // "riprendi".
+  if (last === null) throw new Error('continueAutonomous: nessuna lease autonoma eseguita');
+  return jobOutcomeFromTurn(last);
 }
 
 /**
@@ -262,7 +378,21 @@ async function resolveBound(
   // between the two (fault point 2). Nothing has run yet, so this is not a
   // duplicate: finish exactly what was interrupted, with the same identity.
   if (existing === null) return runFresh(deps, job, turnId, signal, exec, scope, jobBudget);
-  if (existing.status !== 'done') return { deferred: true };
+  if (existing.status !== 'done') {
+    // Una riga continuabile legata a QUESTO job è lo stesso lavoro durevole
+    // interrotto a metà goal — per esempio un crash atterrato fra la release
+    // e la continuation autonoma, con il fire già settled o no. Il mandato B7
+    // in testa al file vale anche qui: dopo un crash Muffin continua quella
+    // stessa identità, non crea un secondo turn. Deferire per sempre
+    // orfanerebbe il lavoro: la lane non raccoglie mai le righe continuable,
+    // e nessun owner conversa nella sessione fresca di un job per dire
+    // "riprendi". Il vincolo `jobId` è ciò che impedisce di rubare il lavoro
+    // di qualcun altro: solo il turno di questa occorrenza continua da solo.
+    if (existing.status === 'continuable' && existing.jobId === job.id) {
+      return continueAutonomous(deps, job, existing.id, signal, exec, scope, jobBudget);
+    }
+    return { deferred: true };
+  }
   // `done`, and delivery already resolved by someone else (a live run's own
   // `Scheduler.settle`, or a completed one this same check is re-observing) —
   // never call `deliver` again for text that already went out or already
