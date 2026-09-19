@@ -32,9 +32,9 @@ import { describe, expect, it } from 'vitest';
  * codice che il gate reale non esercita mai. Costruire quel ramo qui
  * comprerebbe complessità senza comprare copertura.
  *
- * ## Le quattro forme, e perché ciascuna
- *
- *  - **percorso di home assoluto** — `/Users/<segmento>` o `/home/<segmento>`.
+  * ## Le cinque forme, e perché ciascuna
+  *
+  *  - **percorso di home assoluto** — `/Users/<segmento>` o `/home/<segmento>`.
  *    È la forma del leak misurato il 2026-09-04 (il segmento uguale allo
  *    username Unix dell'owner, in 7 file) e la più stabile: qualunque OS,
  *    qualunque contributor, `id -un` finisce lì.
@@ -49,9 +49,21 @@ import { describe, expect, it } from 'vitest';
  *    stretta della precedente apposta: un numero fra backtick da solo prende
  *    anche run id di CI e altri identificatori pubblici non personali (misura
  *    sotto), mentre l'adiacenza col nome del campo è il segnale che sta
- *    mostrando un *valore* di quel campo — il caso di
- *    `docs/history/foundations/legacy/INVARIANTS.md:265`.
- *  - **email fuori da un dominio riservato alla documentazione** — RFC 2606
+  *    mostrando un *valore* di quel campo — il caso di
+  *    `docs/history/foundations/legacy/INVARIANTS.md:265`.
+  *  - **cifre lunghe in posizione di campo id esterno** — il nome del campo
+  *    `externalId` seguito da una sequenza di almeno cinque cifre, fra apici
+  *    singoli/doppi/backtick o senza apici. È la forma con cui un Principal
+  *    reale finisce nei fixture dei test del loop, e la regola che mancava
+  *    quando il valore vero è rientrato dopo il purge del 17 settembre:
+  *    le regole precedenti coprivano la chiave di scope del connettore e le
+  *    cifre adiacenti al nome del campo chat, ma non il campo del Principal.
+  *    La soglia resta a cinque cifre per coerenza con la regola del
+  *    connettore e resta sopra gli id fittizi corti già in uso nei test.
+  *    Il segnaposto noto resta accettato tramite lo stesso insieme di
+  *    eccezioni per valore esatto usato dalle altre regole numeriche, senza
+  *    indebolire la forma.
+  *  - **email fuori da un dominio riservato alla documentazione** — RFC 2606
  *    riserva `example.com/.net/.org` e i TLD `.example`/`.test`/`.invalid`
  *    proprio perché non risolvono mai a un indirizzo vero; `.local` è
  *    aggiunto perché il repo lo usa già con lo stesso intento
@@ -66,12 +78,14 @@ import { describe, expect, it } from 'vitest';
  * cifre di `gh run list` (citato due volte in
  * `docs/evidence/triage-2026-08-17/c-d.md`) — pubblico ma non personale, ed è
  * il motivo per cui quella regola resta vincolata all'adiacenza col nome del
- * campo, non a "qualunque numero lungo fra backtick". Con le quattro regole
- * finali, il corpus intero richiede la lista di eccezioni sotto e nessun'altra:
- * una manciata di segmenti-home, un indirizzo email e il segnaposto numerico
- * introdotto da questa stessa PR — già in uso come dati fittizi nei test o
- * appena scelti come sostituto, ciascuno verificato a mano — non una soglia
- * scelta per abbassare il conteggio.
+  * campo, non a "qualunque numero lungo fra backtick". Con le cinque regole
+  * finali, il corpus intero richiede la lista di eccezioni sotto e nessun'altra:
+  * una manciata di segmenti-home, un indirizzo email e il segnaposto numerico
+  * già in uso come dati fittizi nei test, ciascuno verificato a mano — non una
+  * soglia scelta per abbassare il conteggio. La quinta regola è stata calibrata
+  * contro l'intero corpus prima di essere scritta così: un solo reperto nella
+  * forma campo-più-cifre lunghe nel fixture del loop, oltre al segnaposto noto
+  * già in eccezione; nessun altro reperto.
  *
  * ## Perché vive qui, con questo nome
  *
@@ -186,6 +200,15 @@ const ID_CONNETTORE = /`(?:telegram|discord):(\d{5,})`/g;
 const CHAT_ID_NUDO = /`(\d{6,12})`/g;
 
 /**
+ * Forma del campo id esterno con valore numerico lungo, fra apici o senza.
+ * È come un Principal reale finisce nei fixture del loop: la regola guarda
+ * la forma campo-più-cifre, mai un valore specifico, e riusa l'insieme dei
+ * segnaposto noti sotto. Soglia a cinque cifre per coerenza con la regola
+ * del connettore, sopra gli id fittizi corti già in uso nei test.
+ */
+const EXTERNAL_ID_NUMERICO = /externalId\s*:\s*['"`]?(\d{5,})['"`]?/g;
+
+/**
  * Il segnaposto scelto da questa stessa PR per l'id Telegram reale
  * dell'owner, in `docs/decisions/0044-il-disco-non-ha-provenienza.md:608` e
  * `docs/history/foundations/legacy/INVARIANTS.md:265`. Cifre scelte a caso,
@@ -247,6 +270,16 @@ function scansiona(): Reperto[] {
       });
     }
 
+    for (const m of testo.matchAll(EXTERNAL_ID_NUMERICO)) {
+      if (ID_INNOCUI.has(m[1]!)) continue;
+      out.push({
+        file: f,
+        riga: numeroRiga(testo, m.index!),
+        testo: m[0]!,
+        motivo: 'externalId numerico lungo in posizione di campo principal',
+      });
+    }
+
     for (const m of testo.matchAll(EMAIL)) {
       const dominio = m[1]!;
       if (dominioInnocuo(dominio)) continue;
@@ -292,5 +325,20 @@ describe('dati personali dell\'owner fuori dal repo', () => {
       (r) => `${r.file}:${r.riga} — ${r.motivo}: ${r.testo}`,
     );
     expect(trovati).toEqual([]);
+  });
+});
+
+describe('forma externalId numerico', () => {
+  it('la forma lunga è intercettata, il segnaposto noto passa', () => {
+    // Costruito per concatenazione: il sorgente di questo stesso file non deve
+    // contenere letteralmente la forma cercata, altrimenti il guardiano
+    // segnalerebbe se stesso.
+    const campo = ['external', 'Id'].join('');
+    const campione = (cifre: string) => `${campo}: '${cifre}'`;
+    const trova = (s: string) =>
+      [...s.matchAll(EXTERNAL_ID_NUMERICO)].map((m) => m[1]!).filter((d) => !ID_INNOCUI.has(d));
+    expect(trova(campione('555666777'))).toEqual(['555666777']);
+    expect(trova(campione('987654321'))).toEqual([]);
+    expect(trova(campione('local'))).toEqual([]);
   });
 });
