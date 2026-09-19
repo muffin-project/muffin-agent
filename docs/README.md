@@ -35,7 +35,7 @@ unused manifest would be another source of drift.
 | Is a DAY-1 requirement currently satisfied? | `docs/work/day1/requirements-status.md` |
 | In which order do remaining DAY-1 blockers get attacked? | `docs/work/day1/critical-path.md` |
 | What work is active right now? | Observed Git/PR state first, then `docs/work/handoff.md` as the handoff. |
-| How is repository work orchestrated and verified? | `docs/ORCHESTRATION.md`, with `BRANCHING.md`, `JUDGE.md` and `PRACTICES.md` for their scoped concerns. |
+| How is repository work orchestrated and verified? | `docs/ORCHESTRATION.md`, with `BRANCHING.md`, `JUDGE.md` and `PRACTICES.md` for their scoped concerns. Reusable procedures live in `.agents/skills/`; OpenCode entry points in `.opencode/commands/` and role adapters in `.opencode/agents/`. |
 | What evidence informed a decision? | `docs/evidence/`, audits and `docs/evidence/lessons.md` |
 | What did the project believe or do at an earlier point? | `docs/history/` and rebuild-era material; never a claim about HEAD |
 
