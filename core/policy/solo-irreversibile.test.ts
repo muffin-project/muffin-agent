@@ -22,6 +22,7 @@ import { documentCapability } from '../../agent/tools/document.js';
 import { inspectCapability } from '../../agent/tools/inspect.js';
 import { todoCapability } from '../../agent/tools/todo.js';
 import { waitCapability } from '../../agent/tools/wait.js';
+import { scheduleCapability } from '../../agent/tools/schedule.js';
 import { vaultWriteCapability } from '../../agent/tools/vault-save.js';
 import { mcpCapabilityFor } from '../../agent/tools/mcp.js';
 import { DOORS } from './doors.js';
@@ -139,6 +140,7 @@ const ALL: readonly CapabilityDecl[] = [
   inspectCapability,
   todoCapability,
   waitCapability,
+  scheduleCapability,
   vaultWriteCapability,
   mcpCapabilityFor('esempio'),
   ...DOORS,
