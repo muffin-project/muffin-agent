@@ -775,3 +775,32 @@ describe('openai-compat · Retry-After sopravvive a wrap', () => {
     expect((failed as unknown as { retryAfterMs?: number }).retryAfterMs).toBe(45_000);
   });
 });
+
+describe('openai-compat adapter · provenance compiles to a valid wire', () => {
+  it('a tool-originated result becomes role:tool with tool_call_id, harness stays user text', async () => {
+    // Same semantic items as the Anthropic twin above: one item, two valid
+    // renderings. Here the protocol HAS a tool slot, so the result leaves
+    // the user lane entirely.
+    const h = harness(false, false);
+    await h.provider.chat({
+      ...CALL,
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'leggi a' }], origin: 'owner' },
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'call_9', name: 'fs_read', input: { path: 'a' } }],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'tool_result', toolCallId: 'call_9', content: 'contenuto' }],
+          origin: 'tool',
+        },
+        { role: 'user', content: [{ type: 'text', text: 'avviso di controllo' }], origin: 'harness' },
+      ],
+    });
+    const messages = (h.bodies[0] as { messages: Record<string, unknown>[] }).messages;
+    expect(messages.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'tool', 'user']);
+    expect(messages[3]).toMatchObject({ role: 'tool', tool_call_id: 'call_9', content: 'contenuto' });
+    expect(messages[4]).toMatchObject({ role: 'user', content: 'avviso di controllo' });
+  });
+});

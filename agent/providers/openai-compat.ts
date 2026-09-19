@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
+import { compileForOpenAI } from './compile.js';
 import {
   ProviderError,
   ProviderStreamError,
@@ -555,7 +556,7 @@ export class OpenAICompatProvider implements Provider {
             unknown
           >)
         : {}),
-      messages: [this.systemMessage(call), ...call.messages.flatMap((message) => toChatMessages(message, this.reasoningEffort))],
+      messages: [this.systemMessage(call), ...compileForOpenAI(call.messages).flatMap((message) => toChatMessages(message, this.reasoningEffort))],
       ...(call.tools && call.tools.length > 0
         ? {
             tools: call.tools.map((t) => ({

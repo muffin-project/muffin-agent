@@ -1,18 +1,35 @@
-import type { ContentBlock, Message, Role } from '../providers/types.js';
+import type { ContentBlock, Message, MessageOrigin, Role } from '../providers/types.js';
 
 /**
  * Which messages are lease-local control, and which are durable work evidence.
  *
- * One constructor, one predicate, one splitter — the whole structural
- * distinction P0-B rests on. `Message.origin` carries it; everything else
- * reads it here rather than re-deriving it from role or content (a user can
- * type the same words as a nudge, so content matching would strip owner
- * words; role matching would strip tool results).
+ * One constructor per provenance, one predicate, one splitter — the whole
+ * structural distinction P0-B rests on, generalised by Context P0 from
+ * "harness vs everything" to the full internal vocabulary (`MessageOrigin`).
+ * `Message.origin` carries it; everything else reads it here rather than
+ * re-deriving it from role or content (a user can type the same words as a
+ * nudge, so content matching would strip owner words; role matching would
+ * strip tool results).
  */
+
+/** Build a message of a given provenance: the only legal way to mark one. */
+export function provenanceMessage(role: Role, origin: MessageOrigin, content: ContentBlock[]): Message {
+  return { role, content, origin };
+}
 
 /** Build a harness control message: the only legal way to write one. */
 export function harnessMessage(role: Role, content: ContentBlock[]): Message {
-  return { role, content, origin: 'harness' };
+  return provenanceMessage(role, 'harness', content);
+}
+
+/** Build the current turn's owner-input message: only owner bytes may enter. */
+export function ownerMessage(content: ContentBlock[]): Message {
+  return provenanceMessage('user', 'owner', content);
+}
+
+/** Build a tool-evidence message: results, refusals, repairs. Wire role stays `user`. */
+export function toolMessage(content: ContentBlock[]): Message {
+  return provenanceMessage('user', 'tool', content);
 }
 
 /** True for loop-written lease control, never for owner/model/tool evidence. */
