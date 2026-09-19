@@ -428,6 +428,36 @@ describe('openai-compat · errori in-band del provider su 200', () => {
     const result = await provider.chat(CALL);
     expect(result.stopReason).toBe('error');
   });
+
+  it('la finish reason grezza viaggia sul risultato per telemetria e classificazione, mappata o no', async () => {
+    // P0-A: quando il router restituisce una reason che nessuno mappa (o
+    // nessuna), `stopReason` dice `error` mentre il valore grezzo è l'unica
+    // evidenza di cosa sia arrivato davvero — il loop lo registra sullo span
+    // invece di doverlo indovinare.
+    const mapped = harness(false, false, {
+      ...A_COMPLETION,
+      choices: [{ message: { content: 'ciao', tool_calls: [] }, finish_reason: 'stop' }],
+    });
+    expect((await mapped.provider.chat(CALL)).finishReason).toBe('stop');
+
+    const unmapped = harness(false, false, {
+      ...A_COMPLETION,
+      choices: [{ message: { content: 'ciao', tool_calls: [] }, finish_reason: 'ragione-futura-sconosciuta' }],
+    });
+    const viaWire = await unmapped.provider.chat(CALL);
+    expect(viaWire.stopReason).toBe('error');
+    expect(viaWire.finishReason).toBe('ragione-futura-sconosciuta');
+  });
+
+  it('stream: la finish reason grezza arriva sul done come su chat()', async () => {
+    const provider = streamHarness(
+      streamedResponse([sseLine(CHUNK({ content: 'ciao' })), sseLine(CHUNK({}, 'stop')), 'data: [DONE]\n\n']),
+    );
+    const events = await collect(provider.chatStream(CALL));
+    const done = events.at(-1);
+    if (done?.type !== 'done') throw new Error('unreachable');
+    expect(done.result.finishReason).toBe('stop');
+  });
 });
 
 /**

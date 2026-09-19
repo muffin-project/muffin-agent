@@ -649,3 +649,177 @@ describe('la telemetria di first activity arriva sullo span (#497)', () => {
     expect(attrs['muffin.chat_call.last_activity_at']).toBeUndefined();
   });
 });
+
+describe('verità del fallimento provider/risultato (P0-A)', () => {
+  /**
+   * La forma dell'incidente 2026-09-18: una risposta completata con
+   * `stop=error`, zero token e nessuna attività — uno stallo upstream dentro
+   * una forma di successo. Non deve mai entrare nella cascata semantica solo
+   * perché testo e tool call sono vuoti: quella sgrida un modello innocente
+   * e brucia tutte e cinque le stampelle su uno stallo.
+   *
+   * La mutazione che questo blocco uccide è la rimozione della
+   * classificazione: senza, gli stessi script finiscono nella cascata con
+   * `recoveriesUsed` pieno e il testo generico.
+   */
+  const zeroUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+  const stall = (finishReason: string | null = null): ChatResult => ({
+    text: null,
+    toolCalls: [],
+    stopReason: 'error',
+    ...(finishReason === null ? {} : { finishReason }),
+    usage: zeroUsage,
+    model: 'test',
+  });
+
+  it('stop=error + zero token + nessuna attività non consuma la cascata semantica', async () => {
+    const provider = scriptedProvider({ chat: [stall(), stall(), stall(), stall(), stall(), stall()] });
+    const h = harness({ provider });
+
+    const result = await runRounds(h.scope);
+
+    expect(result.stopped).toBe('error');
+    expect(result.reason).toBe('provider_empty');
+    expect(h.run.recoveriesUsed).toBe(0);
+    // Un tentativo iniziale + tre re-drive limitati, poi stop veritiero.
+    expect(provider.chatCalls).toHaveLength(4);
+    expect(h.run.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES - 3);
+    expect(result.text).toContain('risposta vuota dal provider');
+    expect(result.text).toContain(h.id.slice(0, 12));
+    expect(result.text).toContain('nessuna tool call ancora completata');
+  });
+
+  it('neanche con requireTool in cascata il filo viene armato su uno stallo', async () => {
+    const { tool, decl } = okTool('noop');
+    const provider = scriptedProvider({ chat: [stall(), stall(), stall(), stall()] });
+    const h = harness({
+      provider,
+      profile: { ...CONSERVATIVE, recovery: ['nudge', 'reinjectTools', 'retryOnce', 'strictJson', 'requireTool'] },
+      tools: [tool],
+      decls: [decl],
+    });
+
+    const result = await runRounds(h.scope);
+
+    expect(result.reason).toBe('provider_empty');
+    expect(h.run.recoveriesUsed).toBe(0);
+    for (const call of provider.chatCalls) expect(call.toolChoice).not.toBe('required');
+    expect(h.run.requireToolOnce).toBe(false);
+  });
+
+  it('il testo veritiero conta il lavoro già completato, senza segreti', async () => {
+    const { tool, decl } = okTool('noop');
+    // Due giri utili, poi lo stallo: la diagnosi deve nominare il completato.
+    const provider = scriptedProvider({
+      chat: [calls('noop'), calls('noop'), stall(), stall(), stall(), stall(), reply('fatto')],
+    });
+    const h = harness({ provider, tools: [tool], decls: [decl] });
+
+    const result = await runRounds(h.scope);
+
+    expect(result.reason).toBe('provider_empty');
+    expect(result.text).toContain('2 tool call completate');
+    expect(result.text).toContain(h.id.slice(0, 12));
+    expect(h.run.recoveriesUsed).toBe(0);
+  });
+
+  it('max_tokens vuoto è troncamento, non un modello che tace', async () => {
+    const troncato: ChatResult = { ...stall(), stopReason: 'max_tokens' };
+    const provider = scriptedProvider({ chat: [troncato, troncato, troncato, troncato] });
+    const h = harness({ provider });
+
+    const result = await runRounds(h.scope);
+
+    expect(result.stopped).toBe('error');
+    expect(result.reason).toBe('truncated');
+    expect(h.run.recoveriesUsed).toBe(0);
+    expect(result.text).toContain('limite di output');
+  });
+
+  it('un rifiuto vuoto è terminale subito, senza re-drive', async () => {
+    const rifiuto: ChatResult = { ...stall(), stopReason: 'refusal' };
+    const provider = scriptedProvider({ chat: [rifiuto, reply('non deve uscire')] });
+    const h = harness({ provider });
+
+    const result = await runRounds(h.scope);
+
+    expect(result.stopped).toBe('error');
+    expect(result.reason).toBe('refusal');
+    expect(provider.chatCalls).toHaveLength(1);
+    expect(result.text).toContain('rifiutato');
+  });
+
+  it('una risposta con solo reasoning tiene la cascata semantica', async () => {
+    // Il modello HA lavorato (token + thinking): la strettezza della
+    // classificazione sta tutta qui — solo zero output E zero attività
+    // lasciano la cascata.
+    const soloReasoning: ChatResult = {
+      text: null,
+      toolCalls: [],
+      thinking: [{ type: 'thinking', thinking: 'sto pensando', signature: 'sig' }],
+      stopReason: 'error',
+      usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      model: 'test',
+    };
+    const provider = scriptedProvider({ chat: [soloReasoning, reply('eccomi')] });
+    const h = harness({ provider });
+
+    const result = await runRounds(h.scope);
+
+    expect(result.stopped).toBe('answered');
+    expect(result.text).toBe('eccomi');
+    expect(h.run.recoveriesUsed).toBe(1);
+  });
+
+  it('un vuoto genuino (stop=end con token) resta della cascata', async () => {
+    const genuino: ChatResult = { text: null, toolCalls: [], stopReason: 'end', usage, model: 'test' };
+    const provider = scriptedProvider({ chat: [genuino, reply('eccomi')] });
+    const h = harness({ provider });
+
+    const result = await runRounds(h.scope);
+
+    expect(result.stopped).toBe('answered');
+    expect(h.run.recoveriesUsed).toBe(1);
+  });
+
+  it('la finish reason grezza arriva sullo span della chiamata', async () => {
+    const provider = scriptedProvider({
+      chat: [{ ...reply('secca'), finishReason: 'ragione-futura-sconosciuta' }],
+    });
+    const h = harness({ provider });
+
+    await runRounds(h.scope);
+
+    const dir = join(h.home, 'traces');
+    const righe = readdirSync(dir)
+      .filter((f) => f.endsWith('.jsonl'))
+      .flatMap((f) => readFileSync(join(dir, f), 'utf8').split('\n'))
+      .filter((l) => l.trim() !== '')
+      .map((l) => JSON.parse(l) as { name: string; attributes: Record<string, unknown> });
+    const chiamata = righe.filter((r) => r.name === 'muffin.chat_call').at(-1)!;
+    expect(chiamata.attributes['muffin.chat_call.finish_reason']).toBe('ragione-futura-sconosciuta');
+    expect(chiamata.attributes['muffin.stop_reason']).toBe('end');
+  });
+
+  it('la classe di fallimento provider arriva sullo span della chiamata', async () => {
+    // Chiude il buco per cui il blocco di handling girava ma il verdetto non
+    // atterrava mai sullo span (classificazione senza telemetria).
+    const provider = scriptedProvider({ chat: [stall('unmapped-xyz'), stall(), stall(), stall()] });
+    const h = harness({ provider });
+
+    await runRounds(h.scope);
+
+    const dir = join(h.home, 'traces');
+    const righe = readdirSync(dir)
+      .filter((f) => f.endsWith('.jsonl'))
+      .flatMap((f) => readFileSync(join(dir, f), 'utf8').split('\n'))
+      .filter((l) => l.trim() !== '')
+      .map((l) => JSON.parse(l) as { name: string; attributes: Record<string, unknown> });
+    const chiamate = righe.filter((r) => r.name === 'muffin.chat_call');
+    expect(chiamate).toHaveLength(4);
+    for (const c of chiamate) {
+      expect(c.attributes['muffin.provider_failure.class']).toBe('provider_empty');
+    }
+    expect(chiamate[0]!.attributes['muffin.provider_failure.finish_reason']).toBe('unmapped-xyz');
+  });
+});

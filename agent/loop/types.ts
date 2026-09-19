@@ -171,6 +171,24 @@ export const MAX_HISTORY_TURNS = 40;
  */
 export const MAX_TRANSPORT_RETRIES = 10;
 
+/**
+ * Bounded re-drives for a provider-side empty response (P0-A).
+ *
+ * A completed response carrying `stopReason: 'error'` (or a truncating
+ * `max_tokens`) with zero output tokens and no observed activity is the
+ * provider failing inside a success shape — an upstream stall, not a model
+ * that "said nothing". Re-driving it is a transport-shaped remedy (same
+ * backoff, same persisted `transportRetriesLeft` bound), never the semantic
+ * recovery cascade, which is written for failures the model itself produced.
+ *
+ * Three re-drives after the initial attempt: four consecutive 30s stalls is
+ * the measured incident shape (2026-09-18, four then a reroute), so the
+ * fourth consecutive empty stops the turn truthfully instead of burning the
+ * five semantic rungs on an innocent model. The persisted transport budget
+ * remains the crash-safe total bound.
+ */
+export const MAX_PROVIDER_EMPTY_RETRIES = 3;
+
 /** Small independent retry budget for auxiliary memory-provider calls. */
 export const MAX_LIGHT_TRANSPORT_RETRIES = 2;
 
