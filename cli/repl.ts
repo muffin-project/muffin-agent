@@ -753,10 +753,12 @@ export async function runRepl(
    * conversazione a parte, e per di più senza continuità nemmeno con sé stesso
    * fra due lanci (ADR-0056, il failure del 03/09).
    *
-   * `const`, non `let`: `/new` non apre più un id nuovo, lo ruota — vedi il
-   * ramo `nuovaSessione` più sotto.
+   * `let`, non `const`: `/new` non apre un id nuovo, lo ruota — vedi il
+   * ramo `nuovaSessione` più sotto — ma la generazione della conversazione
+   * va riletta dopo la rotazione, altrimenti il turno dopo parlerebbe ancora
+   * nella conversazione di prima.
    */
-  const session = runtime.deps.sessions.open(OWNER_SESSION_KEY);
+  let session = runtime.deps.sessions.open(OWNER_SESSION_KEY);
   /**
    * Chi possiede l'esecuzione, l'ultima volta che si è chiesto (#533).
    *
@@ -970,8 +972,10 @@ export async function runRepl(
           // diversa — sarebbe una conversazione altrui. È ciò che `/new`
           // significa già su Telegram (`cli/surface.ts`), e ora le due porte
           // dicono la stessa cosa. Il file di prima viene archiviato con la
-          // data, mai cancellato.
-          runtime.deps.sessions.rotate(session);
+          // data, mai cancellato — e la generazione avanza anche quando non
+          // c'era niente da archiviare: l'intento decide il confine, non il file.
+          runtime.deps.sessions.newConversation(session);
+          session = runtime.deps.sessions.open(session.id);
         }
         if (esito.verbosity !== undefined) verbosity = esito.verbosity;
         // `status.line` e non `stderr.write`: lo spinner possiede il terminale

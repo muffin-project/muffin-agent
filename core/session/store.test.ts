@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -84,5 +84,102 @@ describe('rotate: la conversazione di prima si chiude senza cambiare id', () => 
   it('e su una conversazione mai cominciata non archivia niente', () => {
     const store = new SessionStore(home());
     expect(store.rotate(store.open('telegram:123'))).toBeNull();
+  });
+});
+
+describe('conversation generation · principal != session != conversation != turn', () => {
+  it('legacy senza sidecar: generation 0, e open() non scrive niente', () => {
+    const dir = home();
+    const store = new SessionStore(dir);
+    const ref = store.open('owner');
+    expect(ref.generation).toBe(0);
+    expect(store.generationOf(ref)).toBe(0);
+    // Aprire non crea identità: nessun sidecar nasce da una read.
+    expect(readdirSync(join(dir, 'sessions'))).toEqual([]);
+  });
+
+  it('sopravvive al restart: una seconda istanza rilegge la stessa generation', () => {
+    const dir = home();
+    const store = new SessionStore(dir);
+    const ref = store.open('owner');
+    store.append(ref, msg('user', 'ciao'));
+    expect(store.newConversation(ref)).not.toBeNull();
+
+    const restarted = new SessionStore(dir);
+    expect(restarted.open('owner').generation).toBe(1);
+  });
+
+  it('/new avanza g0 -> g1 -> g2', () => {
+    const dir = home();
+    const store = new SessionStore(dir);
+    const ref = store.open('owner');
+    store.append(ref, msg('user', 'uno'));
+    store.newConversation(ref);
+    expect(store.open('owner').generation).toBe(1);
+    store.append(ref, msg('user', 'due'));
+    store.newConversation(ref);
+    expect(store.open('owner').generation).toBe(2);
+  });
+
+  it('/new con transcript assente incrementa comunque e non archivia niente', () => {
+    // L'intento decide il confine, non il file: un `/new` a conversazione
+    // vuota chiude comunque lo stickiness della precedente.
+    const dir = home();
+    const store = new SessionStore(dir);
+    const ref = store.open('owner');
+    expect(store.newConversation(ref)).toBeNull();
+    expect(store.open('owner').generation).toBe(1);
+  });
+
+  it('quando il transcript esiste viene archiviato come prima, senza distruzione', () => {
+    const dir = home();
+    const store = new SessionStore(dir);
+    const ref = store.open('owner');
+    store.append(ref, msg('user', 'ciao'));
+    const archivio = store.newConversation(ref, new Date('2026-09-19T10:00:00.000Z'));
+    expect(archivio).not.toBeNull();
+    expect(readFileSync(archivio!, 'utf8')).toContain('ciao');
+    expect(store.read(ref)).toEqual([]);
+    expect(store.open('owner').generation).toBe(1);
+  });
+
+  it('sessioni diverse hanno generation indipendenti', () => {
+    const dir = home();
+    const store = new SessionStore(dir);
+    store.newConversation(store.open('owner'));
+    store.newConversation(store.open('owner'));
+    store.newConversation(store.open('telegram:-100'));
+    expect(store.open('owner').generation).toBe(2);
+    expect(store.open('telegram:-100').generation).toBe(1);
+    expect(store.open('telegram:-200').generation).toBe(0);
+  });
+
+  it('metadata corrotto non degrada a g0: fallisce loud, su read e su open', () => {
+    const dir = home();
+    const store = new SessionStore(dir);
+    const ref = store.open('owner');
+    for (const [name, body] of [
+      ['non-json', '{von'],
+      ['forma sbagliata', '{"version":1}'],
+      ['versione futura', '{"version":999,"generation":2}'],
+      ['generation negativa', '{"version":1,"generation":-1}'],
+      ['generation non intera', '{"version":1,"generation":"molte"}'],
+    ] as const) {
+      writeFileSync(join(dir, 'sessions', 'owner.conv.json'), body);
+      expect(() => store.generationOf(ref), name).toThrow(/conversation metadata/);
+      expect(() => store.open('owner'), name).toThrow(/conversation metadata/);
+      // E nemmeno `/new` avanza alla cieca sopra un'identità che non sa leggere.
+      expect(() => store.newConversation(ref), name).toThrow(/conversation metadata/);
+    }
+  });
+
+  it('il sidecar è versionato e non è un transcript', () => {
+    const dir = home();
+    const store = new SessionStore(dir);
+    const ref = store.open('owner');
+    store.append(ref, msg('user', 'ciao'));
+    store.newConversation(ref);
+    const sidecar = JSON.parse(readFileSync(join(dir, 'sessions', 'owner.conv.json'), 'utf8'));
+    expect(sidecar).toEqual({ version: 1, generation: 1 });
   });
 });
