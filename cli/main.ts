@@ -8,7 +8,7 @@ import { ALL_API_KEY_NAMES, LEGACY_API_KEY_NAME } from '../core/config/providers
 import { cmdUndo } from './undo.js';
 import { cmdOrientamento } from './orientamento.js';
 import { cmdEffects } from './effects.js';
-import { defaultModels, isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
+import { defaultModels, isSameOrNestedPath, resolveLocalHome, runInit, type InitStep } from './init.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { seal, verify } from '../core/rot/verify.js';
 import { buildHardenPlan, formatHardenPlan } from '../core/rot/harden.js';
@@ -61,7 +61,7 @@ import {
   ConfigError,
   type ProviderKind,
 } from '../core/config/config.js';
-import { promptLine, promptSecret } from './prompt.js';
+import { promptLine, promptSecret, resolveSecretInput } from './prompt.js';
 import { cmdPromptShow, cmdPromptVersion, PROMPT_USAGE } from './prompt-show.js';
 import {
   askLocalOrApi,
@@ -615,20 +615,47 @@ async function cmdInit(argv: string[]): Promise<number> {
   });
   process.stderr.write(describeModelChoice(resolvedModels.main, resolvedModels.light, modelReason));
 
-  const steps = runInit({
-    ...(values.hardened ? { hardened: true } : {}),
-    ...(values.force ? { force: true } : {}),
-    provider: choice.provider,
-    ...(choice.baseUrl ? { baseUrl: choice.baseUrl } : {}),
-    ...(mainModel ? { mainModel } : {}),
-    ...(lightModel ? { lightModel } : {}),
-    ...(apiKey ? { apiKey } : {}),
+  // An existing Home keeps its provider unless explicitly re-flagged: `choice`
+  // carries inference/defaults for fresh setup, and passing those through
+  // unconditionally would rename the provider out from under a working config
+  // (same clobber class as the 2026-09-18 incident — `runInit` itself now
+  // also prefers the prior provider, this keeps the intent explicit at the
+  // call site). A corrupt config reads as no-prior here; `runInit` then fails
+  // closed with the real error instead of silently rebuilding.
+  let priorProvider: { kind: ProviderKind; baseUrl?: string } | undefined;
+  try {
+    const prior = loadConfig(home);
+    priorProvider = { kind: prior.provider.kind, ...(prior.provider.baseUrl ? { baseUrl: prior.provider.baseUrl } : {}) };
+  } catch {
+    priorProvider = undefined;
+  }
+  const effProvider = providerFlag ?? priorProvider?.kind ?? choice.provider;
+  const effBaseUrl = values['base-url'] ?? priorProvider?.baseUrl ?? choice.baseUrl;
+  let steps: InitStep[];
+  try {
+    steps = runInit({
+      ...(values.hardened ? { hardened: true } : {}),
+      ...(values.force ? { force: true } : {}),
+      provider: effProvider,
+      ...(effBaseUrl ? { baseUrl: effBaseUrl } : {}),
+      ...(mainModel ? { mainModel } : {}),
+      ...(lightModel ? { lightModel } : {}),
+      ...(apiKey ? { apiKey } : {}),
     // The interactive owner flow has one durable source of truth. `runInit`
     // keeps its home default for isolated programmatic fixtures and legacy API
     // callers; the public CLI must not create a competing copy.
     secretBackend: 'persistent',
     home,
-  });
+    });
+  } catch (error) {
+    // A corrupt/clashing existing config fails closed with its own remedy —
+    // never a stack trace, and never a silent rebuild over the evidence.
+    if (error instanceof ConfigError) {
+      process.stderr.write(`${error.message}\n  → ${error.remedy}\n`);
+      return 78;
+    }
+    throw error;
+  }
 
   for (const s of steps) process.stderr.write(`${s.done ? '✓' : '!'} ${s.name.padEnd(16)} ${s.detail}\n`);
   const incomplete = steps.filter((s) => !s.done);
@@ -1118,28 +1145,31 @@ async function cmdSurface(argv: string[]): Promise<number> {
   return 78;
 }
 
-function cmdSecret(argv: string[]): number {
+async function cmdSecret(argv: string[]): Promise<number> {
   const [sub, ...rest] = argv;
   const name = rest.find((a) => !a.startsWith('-'));
   if (sub !== 'set' || !name) {
-    process.stderr.write(`usage: muffin secret set NAME  (value on stdin)\n`);
+    process.stderr.write(`usage: muffin secret set NAME  (value on stdin, or interactive prompt on a TTY)\n`);
     return 78;
   }
-  // Read from stdin, never from argv: a key in a shell argument is a key in the
-  // shell history and in every `ps` on the machine.
-  let value = '';
-  try {
-    value = readAllStdin().trim();
-  } catch (error) {
+  // Value from the masked TTY prompt or from piped stdin — never from argv
+  // (a key in a shell argument is a key in the shell history and in every
+  // `ps` on the machine) and never from the environment (no variable is
+  // read anywhere on this path). `resolveSecretInput` owns the TTY-vs-pipe
+  // decision and is unit-tested; this stays the thin writer.
+  const input = await resolveSecretInput({
+    stdinIsTTY: isatty(0),
+    name,
+    readPiped: () => readAllStdin().trim(),
+    prompt: (question) => promptSecret(question),
+  });
+  if (!input.ok) {
     // Un errore di lettura non e «nessun valore»: dirlo com'e, invece di
     // suggerire una pipe che l'utente ha appena usato.
-    process.stderr.write(`non riesco a leggere stdin: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(`${input.message}\n`);
     return 78;
   }
-  if (!value) {
-    process.stderr.write(`no value on stdin — pipe it: echo -n "$KEY" | muffin secret set ${name}\n`);
-    return 78;
-  }
+  const value = input.value;
   // The durable store is the sole target for a newly supplied value. `--persist`
   // remains accepted as a compatibility no-op, never a choice an owner needs.
   const at = writeAuthoritativeSecret(name, value, paths().home);
