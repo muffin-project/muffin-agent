@@ -25,6 +25,16 @@ import type { SandboxProbe } from './probe.js';
  * observable outcome `SandboxExecutor` would produce against the real
  * vendored package, without needing bwrap/sandbox-exec installed on the
  * machine running the suite.
+ *
+ * Where the stand-in forwards the caller's command it runs it under
+ * `/bin/bash`, not `/bin/sh` — the same shell the real `wrapWithSandboxArgv`
+ * uses in production. Since ADR-0087 every command arrives with the
+ * `set -eo pipefail` preamble, which dash (CI's `/bin/sh`) rejects with
+ * `Illegal option -o pipefail` and exit 2: a stand-in running `sh` would fail
+ * for the runner, not for the command, and the failure would be Linux-only
+ * (macOS `/bin/sh` is bash). `BROKEN_INVOCATION` below stays on `/bin/sh` on
+ * purpose — it never forwards caller text, it models bwrap's own death
+ * rattle.
  */
 
 const initialize = vi.fn<(config: SandboxRuntimeConfig) => Promise<void>>();
@@ -85,7 +95,7 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     // disk; the deny leg ignores it and always refuses — exactly what a held
     // deny through the real door looks like from the outside.
     wrapWithSandboxArgv.mockImplementation(async (command, _binShell, customConfig) => ({
-      argv: denyReadOf(customConfig).length > 0 ? ['/bin/sh', '-c', 'exit 1'] : ['/bin/sh', '-c', command],
+      argv: denyReadOf(customConfig).length > 0 ? ['/bin/sh', '-c', 'exit 1'] : ['/bin/bash', '-c', command],
       env: {},
     }));
 
@@ -127,7 +137,7 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
   });
 
   it('a deny-configured leg that still reads (the real door is not containing anything): contain_failed, the control leg never runs', async () => {
-    wrapWithSandboxArgv.mockImplementation(async (command) => ({ argv: ['/bin/sh', '-c', command], env: {} }));
+    wrapWithSandboxArgv.mockImplementation(async (command) => ({ argv: ['/bin/bash', '-c', command], env: {} }));
 
     const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
     toClose = executor;
@@ -229,7 +239,7 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
 
   it('due chiamate sovrapposte mentre il self-test è in volo condividono un solo giro', async () => {
     wrapWithSandboxArgv.mockImplementation(async (command, _shell, customConfig) => ({
-      argv: denyReadOf(customConfig).length > 0 ? BROKEN_INVOCATION : ['/bin/sh', '-c', command],
+      argv: denyReadOf(customConfig).length > 0 ? BROKEN_INVOCATION : ['/bin/bash', '-c', command],
       env: {},
     }));
     const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
