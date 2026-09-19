@@ -26,8 +26,8 @@ export type RunOptions = {
   images?: string[];
 };
 
-/** 0 answered · 1 error · 3 needs approval · 4 budget · 5 iteration cap · 6 suspended */
-export type RunExit = 0 | 1 | 3 | 4 | 5 | 6;
+/** 0 answered · 1 error · 3 needs approval · 4 budget · 5 iteration cap · 6 suspended · 7 continuable */
+export type RunExit = 0 | 1 | 3 | 4 | 5 | 6 | 7;
 
 export async function runHeadless(options: RunOptions): Promise<RunExit> {
   const home = options.home ?? paths().home;
@@ -203,6 +203,18 @@ export async function runHeadless(options: RunOptions): Promise<RunExit> {
     case 'aborted':
       process.stderr.write(`${describeAbort(result)}\n`);
       return 1;
+    case 'continuable':
+      /**
+       * Its own code, like `suspended` above: a script that cannot tell a
+       * yielded lease from an answer would print a diagnostic and call it a
+       * result. Nothing was lost — the row is `continuable` and durable —
+       * and the remedy names the exact recovery (`muffin resume`), because a
+       * headless caller has no conversational "riprendi" to send.
+       */
+      process.stderr.write(
+        `lease esaurita, lavoro salvato — continua con \`muffin resume ${result.turnId}\` (turno ${result.turnId.slice(0, 12)})\n`,
+      );
+      return 7;
     case 'error':
       return 1;
   }

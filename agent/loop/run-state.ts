@@ -123,6 +123,16 @@ export class TurnRun {
    */
   providerEmptyStreak = 0;
 
+  /**
+   * Provider request ids behind the current stall cluster (P0-B).
+   *
+   * Run-only, like the streak: evidence for the release reason and the
+   * owner diagnostic (resolvable on the provider dashboard), not budget.
+   * Capped in practice by the streak bound; a crash loses them, which only
+   * costs dashboard links, never correctness.
+   */
+  readonly providerFailureRequestIds: string[] = [];
+
   readonly #resumes: number;
 
   /**

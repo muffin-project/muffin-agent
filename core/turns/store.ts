@@ -95,8 +95,8 @@ export type TurnStatus = 'runnable' | 'running' | 'waiting' | 'interrupted' | 'd
 export type TurnOutcome = 'answered' | 'cap' | 'budget' | 'aborted' | 'error' | 'ask';
 
 /**
- * How a *step* of a turn stopped — the outcomes above, plus the one that is not
- * an ending at all.
+ * How a *step* of a turn stopped — the outcomes above, plus the ones that are
+ * not an ending at all.
  *
  * `suspended` is deliberately **not** a `TurnOutcome`: `turn_outcome` is the
  * column that says how the turn ended, and a suspended turn has not ended. It
@@ -104,13 +104,18 @@ export type TurnOutcome = 'answered' | 'cap' | 'budget' | 'aborted' | 'error' | 
  * is what stops `finish` from ever writing an outcome for a turn that is coming
  * back.
  *
+ * `continuable` joins it for the same reason: the execution lease ended on a
+ * recoverable failure and the work is owed a new lease on explicit owner
+ * continuation. Surfaces deliver its diagnostic text like any answer; the
+ * lane never picks it up on its own.
+ *
  * Declared here, in `core`, because it had grown **three** literal copies —
  * `TurnResult['stopped']`, `JobOutcome['stopped']` and this file's own
  * `TurnOutcome` — and the design that produced this table named the divergence
  * as this repo's typical defect (`docs/evidence/turno-sospendibile.md` §Domanda 6,
  * row 9). One reference each now; adding an arm reaches every consumer.
  */
-export type TurnStopped = TurnOutcome | 'suspended';
+export type TurnStopped = TurnOutcome | 'suspended' | 'continuable';
 
 /**
  * How the *delivery* went, which is a second question and never the same one.
@@ -232,7 +237,8 @@ export type ContinuableClass =
   | 'model_stall'
   | 'model_deadline'
   | 'turn_deadline'
-  | 'active_model_budget';
+  | 'active_model_budget'
+  | 'recovery_exhausted';
 
 /** Typed durable evidence carried by a `continuable` row. Never message content, never secrets. */
 export type ContinuableReason = {

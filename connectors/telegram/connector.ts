@@ -1,6 +1,7 @@
 import type { CallbackQuery, ChatMemberUpdated, Message, MessageOrigin, Update } from '@grammyjs/types';
 import { randomBytes } from 'node:crypto';
 import type { LoopDeps, TurnDelta, TurnEvent } from '../../agent/loop.js';
+import { routeContinuationTarget } from '../../agent/loop.js';
 import type { AttachStream } from '../../agent/turn-lane.js';
 import { COMANDI, sembraComando, type Controlli } from '../../agent/comandi.js';
 import { recoveredText } from '../../agent/recovered-text.js';
@@ -1992,8 +1993,20 @@ export class TelegramConnector {
                 maxTier(tierOf(ctx.identity.principal), contentTaintOf(incoming)),
               ),
           }),
-      claim: async () => {
-        const minted = randomBytes(16).toString('hex');
+      claim: async (ctx) => {
+        // P0-B: an event naming previous work binds to that work's row
+        // instead of minting a competing identity. The resolver is shared
+        // (`agent/loop/continuation.ts`) — this only invokes it, and `runWork`
+        // re-verifies before executing anything.
+        const target = routeContinuationTarget({
+          turns: this.deps.loop.turns,
+          principal: ctx.identity.principal,
+          sessionId: ctx.identity.sessionKey,
+          text: ctx.text ?? '',
+          hasAttachment: ctx.arrival !== null,
+          nowMs: Date.parse(this.now()),
+        });
+        const minted = target ?? randomBytes(16).toString('hex');
         const winner = this.deps.inbox.bind(stored.updateId, minted);
         // Fault point 2, made observable: a real crash here lands after `bind`
         // committed this update's identity and before the turn row exists at

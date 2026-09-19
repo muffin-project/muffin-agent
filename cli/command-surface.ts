@@ -39,6 +39,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: 'prompt', summary: 'ispezione del prompt effettivo', audience: 'inspection', subcommands: ['show', 'version'] },
   { name: 'secret', summary: 'ingresso headless di segreti', audience: 'operator', aliases: ['segreto'], subcommands: ['set'] },
   { name: 'trace', summary: 'tracce e diagnostica dei turni', audience: 'inspection', subcommands: ['tail', 'grep', 'turn'] },
+  { name: 'resume', summary: 'continua un turno con lease esaurita', audience: 'recovery' },
   { name: 'undo', summary: 'annulla gli effetti reversibili di un turno', audience: 'recovery', aliases: ['annulla'] },
   { name: 'orientamento', summary: 'metrica di orientamento su un database esplicito', audience: 'inspection' },
   { name: 'effects', summary: 'registro tecnico degli effetti', audience: 'inspection' },

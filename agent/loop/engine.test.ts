@@ -145,7 +145,7 @@ describe('il pre-loop decide prima che il modello generi', () => {
 });
 
 describe('il catch esterno: un turno che lancia chiude comunque la sua riga', () => {
-  it('il provider esaurisce i ritentativi, restituisce un errore sicuro e chiude la riga', async () => {
+  it('il provider esaurisce i ritentativi, cede da continuable con diagnosi sicura', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);
     const w = world([new ProviderError('502 dal provider', true, 502, 'transport')]);
     const session = w.sessions.open('rethrow');
@@ -156,12 +156,14 @@ describe('il catch esterno: un turno che lancia chiude comunque la sua riga', ()
       session,
       text: 'cerca',
     });
-    expect(result.stopped).toBe('error');
-    expect(result.text).toContain('HTTP 502');
+    // P0-B: l'esaurimento retryable cede la lease invece di chiudere il
+    // lavoro — diagnosi veritiera, niente testo del provider.
+    expect(result).toMatchObject({ stopped: 'continuable', reason: 'provider_transport' });
+    expect(result.text).toContain('riprendi');
     expect(result.text).not.toContain('502 dal provider');
-    // `closeRecord(scope, 'error')` è girato dentro il `catch` di
-    // `guidaIlTurno`: senza, questa riga sarebbe ancora `running` e il boot
-    // successivo la reclamerebbe come *interrupted*.
+    expect(w.turns.get(result.turnId)?.status).toBe('continuable');
+    // La riga è chiusa come continuable, non abbandonata: il boot successivo
+    // non la reclama come *interrupted*.
     const righe = w.turns.reclaim(new Date('2026-09-06T10:00:00.000Z'));
     expect(righe).toEqual([]);
   });
@@ -301,7 +303,8 @@ describe('la attesa di retry non supera il muro del turno (#497)', () => {
     expect(chiusa).toBe(true);
     expect(w.provider.seen).toHaveLength(1);
     const risultato = await promessa;
-    expect(risultato.stopped).toBe('error');
+    // P0-B: il muro è un confine di lease, non un verdetto sul lavoro.
+    expect(risultato.stopped).toBe('continuable');
     expect(risultato.reason).toBe('turn_deadline');
   });
 
@@ -321,7 +324,7 @@ describe('la attesa di retry non supera il muro del turno (#497)', () => {
     expect(chiusa).toBe(true);
     expect(w.provider.seen).toHaveLength(1);
     const risultato = await promessa;
-    expect(risultato.stopped).toBe('error');
+    expect(risultato.stopped).toBe('continuable');
     expect(risultato.reason).toBe('turn_deadline');
   });
 
@@ -365,7 +368,7 @@ describe('la attesa di retry non supera il muro del turno (#497)', () => {
     );
     const risultato = await promessa;
     expect(w.provider.seen).toHaveLength(1);
-    expect(risultato.stopped).toBe('error');
+    expect(risultato.stopped).toBe('continuable');
     expect(risultato.reason).toBe('turn_deadline');
   });
 

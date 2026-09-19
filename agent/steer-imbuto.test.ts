@@ -147,11 +147,12 @@ const prompt = (c: ChatCall | undefined): string =>
 describe('l imbuto: una uscita sola per le correzioni', () => {
   it('il provider termina con errore: la correzione resta, e il turno dopo la vede', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);
-    // Il ProviderError terminale chiude la riga con `error` e resta un errore
-    // utente leggibile senza perdere il contenuto di `/steer`.
+    // P0-B: l'esaurimento retryable cede la lease da continuable invece di
+    // chiudere in errore — ma l'invariante dell'imbuto non si muove: la
+    // correzione resta durevole esattamente una volta, fuori dalla porta.
     const coda: string[] = [];
     // Scritta durante l'ultimo retry: nessun giro successivo la drena, quindi
-    // al risultato terminale è ancora nella porta del connettore.
+    // al rilascio è ancora nella porta del connettore.
     const w = world([new ProviderError('502 dal provider', true, 502, 'transport')], (n) => {
       if (n === 11) coda.push(CORREZIONE);
     });
@@ -165,8 +166,8 @@ describe('l imbuto: una uscita sola per le correzioni', () => {
       text: 'cerca una cosa',
       steer: () => coda.splice(0),
     });
-    expect(result).toMatchObject({ stopped: 'error', reason: 'provider_error' });
-    expect(result.text).toContain('HTTP 502');
+    expect(result).toMatchObject({ stopped: 'continuable', reason: 'provider_transport' });
+    expect(result.text).toContain('riprendi');
     expect(result.text).not.toContain('502 dal provider');
 
     // Metà 1 — durevole. Una volta sola, e fuori dalla porta.

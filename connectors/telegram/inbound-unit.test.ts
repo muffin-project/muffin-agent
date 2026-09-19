@@ -599,3 +599,77 @@ describe('resolve — fault points 2/3/5 against a real crash window (fake-timer
     expect(stalled.settled()).toBe(false); // still parked
   });
 });
+
+describe('resolve — "riprendi" continua la riga continuabile, non ne apre una', () => {
+  /**
+   * P0-B acceptance on the real connector path: a bare "riprendi" in the
+   * owner's DM binds the update to the existing continuable row (no second
+   * turn, no recomputation of settled work) and delivers the continued
+   * answer through the normal stages.
+   */
+  it('binds the update to the old turn and delivers the continuation', async () => {
+    const h = fixture([answer('continuo da dove ero rimasto')]);
+    const created = h.turns.create(
+      {
+        id: 'vecchia-lease',
+        principal: { kind: 'owner', connector: 'telegram', externalId: String(OWNER) },
+        tenant: 'host',
+        surface: 'telegram',
+        sessionId: 'owner',
+        model: 'test-model',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'fai' }] }],
+        taint: 0,
+        counters: {
+          iterations: 3,
+          recoveriesUsed: 5,
+          transportRetriesLeft: 7,
+          toolCallsMade: 2,
+          nudgedForCompletion: false,
+          usage: { inputTokens: 1, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          spentUsd: 0,
+          resumes: 0,
+          contextBuilt: true,
+          activeModelMs: 0,
+        },
+      },
+      4242,
+    );
+    expect(
+      h.turns.releaseContinuable(
+        'vecchia-lease',
+        {
+          messages: created.messages,
+          taint: 0,
+          counters: {
+            iterations: 3,
+            recoveriesUsed: 5,
+            transportRetriesLeft: 7,
+            toolCallsMade: 2,
+            nudgedForCompletion: false,
+            usage: { inputTokens: 1, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+            spentUsd: 0,
+            resumes: 0,
+            contextBuilt: true,
+            activeModelMs: 0,
+          },
+          reason: { class: 'provider_empty' as const, lease: 0, at: '2026-09-18T17:14:09.000Z' },
+        },
+        created.claimToken,
+      ),
+    ).toBe(true);
+
+    const { stored, incoming } = acceptOne(h, privateMsg(9, 'riprendi'));
+    await resolveOnce(h, stored, incoming);
+
+    // Same durable identity, new lease — and nothing else was created.
+    const row = h.inbox.get(9)!;
+    expect(row.turnId).toBe('vecchia-lease');
+    const ids = (h.db.prepare(`SELECT id FROM turns`).all() as { id: string }[]).map((r) => r.id);
+    expect(ids).toEqual(['vecchia-lease']);
+    // One model call (the continuation itself), answer delivered, settled.
+    expect(h.provider.calls).toBe(1);
+    expect(h.sent).toEqual(['send:continuo da dove ero rimasto']);
+    expect(h.turns.get('vecchia-lease')).toMatchObject({ status: 'done', outcome: 'answered', leaseIndex: 1 });
+    expect(h.inbox.pending()).toHaveLength(0);
+  });
+});

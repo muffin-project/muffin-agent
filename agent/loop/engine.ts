@@ -12,7 +12,7 @@ import { historyTaint, reinjectedHistory } from '../context/history-taint.js';
 import { DEFAULT_EXECUTION } from '../profiles/profile.js';
 import { type ContentBlock, type Message, ProviderError } from '../providers/types.js';
 import { buildContext, userAudios, userImages } from './context.js';
-import { announceEnd, checkpoint, closeRecord, finish, reconcile } from './durability.js';
+import { announceEnd, checkpoint, closeRecord, finish, reconcile, releaseContinuable } from './durability.js';
 import { ExecutionBudget } from './execution-budget.js';
 import { harnessMessage } from './message-origin.js';
 import { echoContentFor } from './sensitive-echo.js';
@@ -24,6 +24,7 @@ import {
   assertNever,
   type LoopDeps,
   MAX_HISTORY_TURNS,
+  MAX_TRANSPORT_RETRIES,
   type ToolContext,
   type TurnDelta,
   type TurnEvent,
@@ -61,6 +62,15 @@ export type DriveOptions = {
   signal?: AbortSignal | undefined;
   resumed?: boolean;
   wokenFromWait?: boolean;
+  /**
+   * Owner-granted continuation to a new execution lease (P0-B), as opposed
+   * to a crash/wait resume of the current one. Repair (`reconcile`) still
+   * applies — the transcript may end mid-batch — but the crash-recovery
+   * budget does not move (`TurnRun.continued`, `MAX_RESUMES` untouched).
+   * Set only by `continueTurn`, which already granted the lease and
+   * appended the grant message before `drive`.
+   */
+  continued?: boolean;
   /** La barriera com'era prima del claim: vedi `resumeTurn`. */
   waitForAtWake?: string | null;
   /** The ref the caller already opened. Absent on a resume — see `input.session`. */
@@ -276,6 +286,7 @@ export async function guidaIlTurno(
   const run = new TurnRun(record, {
     resumed: options.resumed === true,
     wokenFromWait: options.wokenFromWait === true,
+    continued: options.continued === true,
   });
   const execution = new ExecutionBudget(deps.profile.execution ?? DEFAULT_EXECUTION, Date.now, {
     initialActiveModelMs: run.activeModelMs,
@@ -636,6 +647,22 @@ export async function guidaIlTurno(
     return await runRounds(scope);
   } catch (error) {
     if (error instanceof ProviderError) {
+      // Retry exhaustion is a yielded lease, not a connector exception — when
+      // another attempt could still help. A retryable transport failure (or a
+      // malformed-output cascade that spent itself in the loop) releases the
+      // turn as continuable with the work intact and no session chatter: the
+      // diagnostic is execution truth, delivered structurally, not a message
+      // Muffin supposedly said. Only a non-retryable provider failure stays
+      // terminal, on the pre-existing path below.
+      if (error.retryable) {
+        return releaseContinuable(
+          scope,
+          error.source === 'output' ? 'recovery_exhausted' : 'provider_transport',
+          error.source === 'output'
+            ? scope.run.recoveriesUsed
+            : MAX_TRANSPORT_RETRIES - scope.run.transportRetriesLeft,
+        );
+      }
       // Retry exhaustion is a terminal turn result, not a connector exception.
       // Persist a marked copy in TurnRecord before delivery so a failed send or
       // restart can recover this exact notice without invoking the provider.

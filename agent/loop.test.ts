@@ -1080,8 +1080,10 @@ describe('the recovery cascade', () => {
     const provider = d.provider as ScriptedProvider;
 
     const result = await runTurn(d, input(store));
-    expect(result.stopped).toBe('error');
-    // One declared attempt: the first call, one recovery, and no third.
+    // P0-B: a spent cascade yields the lease instead of closing the work —
+    // the owner may grant a fresh one. The call count is unchanged: the
+    // first call, one recovery, and no third.
+    expect(result).toMatchObject({ stopped: 'continuable', reason: 'recovery_exhausted' });
     expect(provider.calls).toBe(2);
   });
 
@@ -1151,7 +1153,9 @@ describe('the recovery cascade', () => {
 
     const empty = deps([nothing()], { profile: neutral });
     const gaveUp = await runTurn(empty.deps, input(empty.store));
-    expect(gaveUp.stopped).toBe('error');
+    // P0-B: with no crutch to spend, the first empty yields the lease at
+    // once — still continuable work, still one call and nothing else.
+    expect(gaveUp).toMatchObject({ stopped: 'continuable', reason: 'recovery_exhausted' });
     expect((empty.deps.provider as ScriptedProvider).calls).toBe(1);
 
     // And the transport retry survives the neutral profile, because a 429 is a
