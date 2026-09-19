@@ -4,13 +4,14 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SCHEMA as BUDGET_SCHEMA } from '../core/budget/budget.js';
-import { stampFresh } from '../core/db/migrate.js';
+import { schemaVersionOf, stampFresh } from '../core/db/migrate.js';
 import { seal } from '../core/rot/verify.js';
 import { isShippedDefault, recordCopied } from '../core/config/defaults-drift.js';
 import { LEGACY_API_KEY_NAME, apiKeyCandidates, apiKeyNameFor } from '../core/config/providers.js';
 import {
   CONFIG_SCHEMA_VERSION,
   DEFAULT_CONFIG,
+  loadConfig,
   locateSecret,
   paths,
   saveConfig,
@@ -130,24 +131,55 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   // prompt — and its validation (e.g. rejecting a pasted Telegram token). Reading
   // the env here too would silently resurrect a key cmdInit deliberately dropped.
   const apiKey = options.apiKey;
+  // An existing Home is NEVER rebuilt from defaults here. `runInit` is
+  // idempotent/resumable by contract: on an existing Home it fills missing
+  // bootstrap state only and preserves every existing owner field — models,
+  // surfaces, provider routing, thinking, search/embedder, prompt, audio,
+  // traces, rot mode. Replacing all of that with DEFAULT_CONFIG is what the
+  // 2026-09-18 incident did (installer re-ran init on a configured Home and
+  // every custom field silently became a default). Deliberate destruction is
+  // `muffin uninstall` + init, never a re-run; `--force` only re-copies
+  // shipped files, never the config.
+  //
+  // `loadConfig` throwing here is fail-closed, not a cue to overwrite: a
+  // corrupt config is evidence the owner must see (cmdInit prints message +
+  // remedy, exit 78), and overwriting it would destroy both the evidence and
+  // any surviving fields.
+  const prior = existsSync(p.config) ? loadConfig(home) : null;
+  // Effective provider: explicit flags win; otherwise the existing Home's
+  // provider stays — inference (key prefix, compiled default) is for fresh
+  // setup only and must not rename a working config's provider out from
+  // under it.
+  const effProviderKind = options.provider ?? prior?.provider.kind ?? 'anthropic';
+  const effBaseUrl = options.baseUrl ?? prior?.provider.baseUrl;
+  const provider = { kind: effProviderKind, ...(effBaseUrl !== undefined ? { baseUrl: effBaseUrl } : {}) };
   // Il nome viene dal catalogo — `openrouter_api_key`, non `provider_api_key` —
   // e sotto quel nome si **scrive**. Cercare, invece, si fa sotto entrambi:
   // `apiKeyCandidates` mette prima il nome del provider e poi il generico, e
   // quell'ordine è tutta la migrazione. Un'installazione già fatta trova solo
   // il secondo e continua a funzionare senza che nessuno tocchi niente.
-  const provider = { kind: options.provider ?? 'anthropic', ...(options.baseUrl ? { baseUrl: options.baseUrl } : {}) };
   const nomeChiave = apiKeyNameFor(provider);
-  // Il riferimento scritto in config è quello del nome **davvero trovato**, non
-  // il nome nuovo per principio: scrivere `secret://openrouter_api_key` su
-  // un'installazione che ha la chiave sotto il vecchio nome la spegnerebbe, ed
-  // è esattamente il rename secco che questa forma esiste per non fare.
-  let riferimento = `secret://${nomeChiave}`;
+  // Secret-reference invariant: a rename must never point the config at a new
+  // name without atomically migrating the value. So on an existing Home the
+  // current reference wins whenever it still resolves — even if a
+  // "newer" candidate file also exists (doctor already reports that
+  // duplication); a supplied key writes first and then points (migration);
+  // a stale reference with no value anywhere is KEPT as-is (missing step,
+  // honest) rather than invented anew — inventing the new name is exactly
+  // the silent credential loss this rule exists to prevent.
+  let riferimento: string;
+  let chiaveDettaglio: string;
+  let chiaveOk = true;
   if (apiKey) {
     const backend = options.secretBackend ?? 'home';
     const at = backend === 'persistent'
       ? writeAuthoritativeSecret(nomeChiave, apiKey, home)
       : writeSecret(nomeChiave, apiKey, home, backend);
-    step('api key', `stored 0600 in ${at}`);
+    riferimento = `secret://${nomeChiave}`;
+    chiaveDettaglio = `stored 0600 in ${at}`;
+  } else if (prior?.provider.apiKeyRef && locateSecret(prior.provider.apiKeyRef, home) !== null) {
+    riferimento = prior.provider.apiKeyRef;
+    chiaveDettaglio = `già presente: ${locateSecret(prior.provider.apiKeyRef, home)?.path} (riferimento esistente conservato)`;
   } else {
     // The dev loop `muffin uninstall --yes && muffin init` wipes `home` and then
     // arrives here with nothing. It used to be rescued by `MUFFIN_API_KEY` out of
@@ -163,29 +195,41 @@ export function runInit(options: InitOptions = {}): InitStep[] {
     if (trovato) {
       riferimento = `secret://${trovato.nome}`;
       const eredita = trovato.nome === LEGACY_API_KEY_NAME && nomeChiave !== LEGACY_API_KEY_NAME;
-      step(
-        'api key',
+      chiaveDettaglio =
         `già presente (${trovato.dove?.backend ?? '?'}): ${trovato.dove?.path ?? '?'}` +
-          (eredita ? ` — col nome vecchio \`${LEGACY_API_KEY_NAME}\`, che resta valido` : ''),
-      );
+        (eredita ? ` — col nome vecchio \`${LEGACY_API_KEY_NAME}\`, che resta valido` : '');
+    } else if (prior?.provider.apiKeyRef) {
+      riferimento = prior.provider.apiKeyRef;
+      chiaveDettaglio = 'missing — riferimento esistente conservato, ma nessun valore trovato: echo -n "$KEY" | muffin init, oppure lanciala in un terminale e incollala al prompt';
+      chiaveOk = false;
     } else {
-      step('api key', 'missing — echo -n "$KEY" | muffin init, oppure lanciala in un terminale e incollala al prompt', false);
+      riferimento = `secret://${nomeChiave}`;
+      chiaveDettaglio = 'missing — echo -n "$KEY" | muffin init, oppure lanciala in un terminale e incollala al prompt';
+      chiaveOk = false;
     }
   }
+  step('api key', chiaveDettaglio, chiaveOk);
 
+  const defaults = defaultModels({ provider: effProviderKind });
   const config: Config = {
     ...DEFAULT_CONFIG,
+    ...prior,
     schemaVersion: CONFIG_SCHEMA_VERSION,
     provider: {
-      kind: options.provider ?? 'anthropic',
-      ...(options.baseUrl ? { baseUrl: options.baseUrl } : {}),
+      ...prior?.provider,
+      kind: effProviderKind,
+      ...(effBaseUrl !== undefined ? { baseUrl: effBaseUrl } : {}),
       apiKeyRef: riferimento,
     },
-    models: defaultModels(options),
-    rot: { mode: options.hardened ? 'hardened' : 'single-user' },
+    models: {
+      ...prior?.models,
+      main: options.mainModel ?? prior?.models.main ?? defaults.main,
+      light: options.lightModel ?? prior?.models.light ?? defaults.light,
+    },
+    rot: { mode: options.hardened ? 'hardened' : (prior?.rot.mode ?? 'single-user') },
   };
   saveConfig(config, home);
-  step('config', p.config);
+  step('config', prior ? 'esistente conservata (solo bootstrap/mancanti)' : p.config);
 
   const db = new DatabaseCtor(p.db);
   db.pragma('journal_mode = WAL');
@@ -194,7 +238,11 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   // A fresh install is born at HEAD: stamp every version without running
   // migrations written for yesterday's populated data (RETURN S2). Later
   // boots go through `migrate()` in buildRuntime and find nothing pending.
-  stampFresh(db);
+  // On an EXISTING database stamping would mark migrations applied that never
+  // ran on that data (backfills skipped, version claims current) — so stamp
+  // only when no schema version exists yet and leave real data to boot-time
+  // migrate(). Same clobber class as the config reset above, quieter.
+  if (schemaVersionOf(db) === null) stampFresh(db);
   db.close();
   step('database', `${p.db} (WAL)`);
 

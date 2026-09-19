@@ -147,3 +147,39 @@ export function promptLine(
     });
   });
 }
+
+/**
+ * Where a `secret set NAME` value comes from — one decision, tested here.
+ *
+ * P0 2026-09-18: `cmdSecret` always called `readAllStdin()` first, which
+ * waits ~3s for a first byte that an interactive terminal never sends on its
+ * own — so `muffin secret set NAME` typed by the owner errored
+ * ("stdin non ha prodotto niente entro 3s") instead of prompting. The rule:
+ * a TTY gets the masked prompt immediately; a pipe keeps the stdin path.
+ * Never argv (callers have no value slot), never env (no variable is read
+ * anywhere on this path), Ctrl+D/empty refuses cleanly with nothing written.
+ */
+export type SecretInput = { ok: true; value: string } | { ok: false; message: string };
+
+export async function resolveSecretInput(deps: {
+  stdinIsTTY: boolean;
+  name: string;
+  readPiped: () => string;
+  prompt: (question: string) => Promise<string | undefined>;
+}): Promise<SecretInput> {
+  if (deps.stdinIsTTY) {
+    const entered = await deps.prompt('Valore del segreto (nascosto — Ctrl+D per annullare): ');
+    if (!entered) return { ok: false, message: 'nessun valore inserito — niente scritto, niente cambiato.' };
+    return { ok: true, value: entered };
+  }
+  let value: string;
+  try {
+    value = deps.readPiped().trim();
+  } catch (error) {
+    return { ok: false, message: `non riesco a leggere stdin: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  if (!value) {
+    return { ok: false, message: `no value on stdin — pipe it: echo -n "$KEY" | muffin secret set ${deps.name}` };
+  }
+  return { ok: true, value };
+}
