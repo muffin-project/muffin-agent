@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { CapabilityDecl } from '../../core/policy/types.js';
+import { armingTier, type CapabilityDecl } from '../../core/policy/types.js';
 import { MAX_OPEN_TODOS, renderTodos, TODO_STATES, type TodoStore } from '../../core/turns/todo.js';
 import type { RegisteredTool } from '../loop.js';
 import type { ToolSpec } from '../providers/types.js';
@@ -310,7 +310,7 @@ export function makeTodoTool(todos: TodoStore): RegisteredTool {
            * rather than `taint()` alone: the ceiling should already dominate,
            * and a spelled-out `max` does not depend on that staying true.
            */
-          const arming = Math.max(ctx.taint(), tier) as typeof tier;
+          const arming = armingTier(ctx.taint(), tier);
           const dated = todos.setDue(tenant, sessionId, step, when, { intrinsic: tier, arming });
           if (!dated) {
             return {

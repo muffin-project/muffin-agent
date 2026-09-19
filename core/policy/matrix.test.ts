@@ -199,7 +199,7 @@ describe('a policy file that cannot be trusted never widens anything', () => {
     // literal list only ever grows in the deny direction, which is why this
     // assertion stays literal.
     expect([...matrix.neverAtRuntime]).toEqual(['rot.write', 'rot.*']);
-    expect([...matrix.forbiddenForSystem]).toEqual(['outward.send', 'outward.*', 'config.ratchet']);
+    expect([...matrix.forbiddenForSystem]).toEqual(['outward.send', 'outward.*', 'config.ratchet', 'jobs.schedule']);
   };
 
   it('an absent file degrades to the floor and says so', () => {

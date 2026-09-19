@@ -620,6 +620,32 @@ export async function runTool(
     };
   }
 
+  /**
+   * La stessa identity `(turn_id, call_id)` non riesegue mai: un outcome già
+   * registrato va rigiocato, mai ricalcolato.
+   *
+   * L'intent qui sopra è `ON CONFLICT DO NOTHING`, quindi una seconda
+   * consegna dello stesso `call.id` — retry della stessa call, duplicate id
+   * nello stesso batch — arriverebbe all'handler una seconda volta: per un
+   * tool non-rerunnable come `schedule_recurring` quella è una seconda riga
+   * durevole da un singolo effect accettato. La ripresa (`reconcile`) copre
+   * già questo caso sul percorso di resume; questo ramo lo copre sul percorso
+   * vivo, con la stessa lettura (`recordedOutcomes`) e lo stesso raise del
+   * taint registrato — mai un secondo verdetto, mai una seconda esecuzione.
+   */
+  const giaRisolta = deps.turns.recordedOutcomes(ctx.turnId).get(call.id);
+  if (giaRisolta !== undefined) {
+    if (giaRisolta.tier !== null) snapshot.raiseTaint(giaRisolta.tier, 'un risultato già registrato per questa chiamata');
+    span.end({ status: giaRisolta.isError ? 'error' : 'ok' });
+    emitToolEnd(giaRisolta.isError);
+    return {
+      type: 'tool_result',
+      toolCallId: call.id,
+      content: giaRisolta.content,
+      ...(giaRisolta.isError ? { isError: true } : {}),
+    };
+  }
+
   try {
     // `ctx` carries everything `input.tenant`/`input.principal`/`replyChannel`
     // would have (it is built from exactly those, plus `turnId`, `sessionId`,

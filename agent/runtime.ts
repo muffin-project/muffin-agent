@@ -80,6 +80,7 @@ import {
 import { forgetMemory, memoryForgetCapability, memoryForgetSpec } from './tools/memory-forget.js';
 import { makeProcessTools, processCapabilities } from './tools/process.js';
 import { diagnoseSearch, makeSearchTool, searchCapability } from './tools/search.js';
+import { makeScheduleTool, scheduleCapability } from './tools/schedule.js';
 import {
   makeShellTool,
   makeShellWriteTool,
@@ -362,6 +363,7 @@ export function baseToolOrder(input: {
     'sys_effects',
     'wait',
     'todo',
+    'schedule_recurring',
     'sys_inspect',
   ];
 }
@@ -920,6 +922,16 @@ export function buildRuntime(
     makeWaitTool(turns),
     makeTodoTool(todos),
     makeEffectsTool(turns, budgets.quietHours.timezone),
+    // La porta conversazionale sui job ricorrenti («ricordamelo ogni giorno
+    // alle 9»): valida e persiste sullo stesso `JobStore` della CLI, con la
+    // provenance del turno che ha chiesto. Accanto a `wait`/`todo` e non in
+    // coda per la stessa ragione per cui quelli stanno in fondo — sono le
+    // primitive del runtime, e il tetto di profilo prende da qui.
+    makeScheduleTool({
+      jobs,
+      defaultTimezone: budgets.quietHours.timezone,
+      defaultChannel: () => readDefaultChannel(home, config.surfaces.default),
+    }),
   );
 
   const capabilities = new Map<string, CapabilityDecl>(
@@ -943,6 +955,7 @@ export function buildRuntime(
       // built-ins get the same treatment.
       waitCapability,
       todoCapability,
+      scheduleCapability,
       effectsCapability,
       vaultWriteCapability,
       // Declared only when the tool exists. A capability the kernel knows about
