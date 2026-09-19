@@ -767,6 +767,46 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     expect(final?.counters.nudgedForCompletion).toBe(true);
   });
 
+  it('a released lease survives the process boundary: close, reopen, resolve, grant', () => {
+    // Continuable is a durable status with nobody holding it — a dead
+    // process changes nothing about it. File-backed, because :memory: cannot
+    // express "another process".
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-boundary-'));
+    const path = join(dir, 'muffin.db');
+    const first = new DatabaseCtor(path);
+    const s1 = new TurnStore(first, () => new Date(), () => true);
+    const created = s1.create(spec(), 4242);
+    expect(
+      s1.releaseContinuable(
+        'turn-1',
+        { messages: [], taint: 0, counters: { ...spec().counters, contextBuilt: true }, reason },
+        created.claimToken,
+      ),
+    ).toBe(true);
+    first.close();
+
+    const second = new DatabaseCtor(path);
+    const s2 = new TurnStore(second, () => new Date(), () => true);
+    expect(s2.get('turn-1')?.status).toBe('continuable');
+    expect(s2.continuableFor('s1', owner, '2026-01-01T00:00:00.000Z').map((r) => r.id)).toEqual(['turn-1']);
+    const before = s2.get('turn-1');
+    const granted = s2.grantContinuation(
+      'turn-1',
+      {
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'riprendi' }] }],
+        taint: 0,
+        counters: { ...spec().counters, contextBuilt: true },
+        newLeaseStartedAt: '2026-09-18T17:16:35.000Z',
+      },
+      9999,
+    );
+    expect(granted).not.toBeNull();
+    expect(granted?.leaseIndex).toBe(1);
+    expect(granted?.lifetime).toEqual(s2.recomputeLifetime('turn-1'));
+    expect(before?.lifetime).toEqual(granted?.lifetime);
+    second.close();
+  });
+
   it('health counts continuable work like waiting: owed, unwindowed', () => {
     const s = store();
     s.create(spec(), 4242);
