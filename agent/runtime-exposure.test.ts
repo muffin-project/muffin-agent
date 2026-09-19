@@ -138,7 +138,12 @@ describe('quali tool vede davvero un turno', () => {
     //
     // 21 dall'08/09 sera: `memory_forget` («dimentica X», il verbo che il
     // cutover ha trovato senza meccanismo) è un tool registrato in più.
-    expect(profile.maxToolsExposed).toBe(21);
+    //
+    // 22 dal 18/09: `schedule_recurring` (la porta conversazionale sui job
+    // ricorrenti — «ricordamelo ogni giorno alle 9»): un tool registrato in
+    // più, contato, non stimato. Senza il +1 il tetto tornerebbe a tagliare
+    // in silenzio, e il primo a sparire sarebbe l'ultimo della lista.
+    expect(profile.maxToolsExposed).toBe(22);
 
     const rt = realRuntime();
     rt.close();
@@ -180,6 +185,9 @@ describe('quali tool vede davvero un turno', () => {
       'sys_effects',
       // 08/09: «dimentica X» non esiste su un'installazione dove questo cade.
       'memory_forget',
+      // 18/09: «ricordamelo ogni giorno alle 9» non esiste su
+      // un'installazione dove questo cade.
+      'schedule_recurring',
     ]) {
       expect(rt.names, `${kept} deve restare esposto`).toContain(kept);
     }

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { CronExpressionParser } from 'cron-parser';
 import { ensureColumn } from '../lock/durable.js';
+import type { TrustTier } from '../policy/types.js';
 
 /**
  * The durable core of M5: jobs that survive a restart, and a next-fire that is
@@ -43,7 +44,17 @@ CREATE TABLE IF NOT EXISTS jobs (
   created_at   TEXT NOT NULL,
   next_fire_at TEXT NOT NULL,
   last_run_at  TEXT,
-  active       INTEGER NOT NULL DEFAULT 1
+  active       INTEGER NOT NULL DEFAULT 1,
+  -- Provenance dell'intento che ha creato la riga (migrazione 7). Chi ha
+  -- chiesto la ricorrenza, da quale superficie, in quale turno e con quanto
+  -- taint addosso — perché il giro futuro deve partire da lì, non da zero.
+  -- Default da legacy: i job nati da CLI prima di queste colonne arrivano da
+  -- un owner al terminale, e i default li descrivono come tali.
+  origin_tenant    TEXT NOT NULL DEFAULT 'host',
+  origin_surface   TEXT NOT NULL DEFAULT 'cli',
+  origin_principal TEXT NOT NULL DEFAULT 'owner',
+  origin_turn      TEXT,
+  tier             INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs(active, next_fire_at);
 `;
@@ -71,6 +82,26 @@ type JobCommon = {
    * value written here can never buy more model time than the seal allows.
    */
   perJobUsd: number | null;
+  /**
+   * Da dove viene questa riga: il tenant, la superficie, il principal e il
+   * turno dell'intento che l'ha creata. Scritta una volta sola, mai
+   * aggiornata: è la risposta a «chi ha chiesto che questo parli da solo ogni
+   * mattina», letta a ogni giro futuro invece di essere dedotta.
+   */
+  origin: {
+    tenant: string;
+    surface: string;
+    principal: string;
+    turnId: string | null;
+  };
+  /**
+   * Il soffitto del turno che ha creato la riga (`max(taint, intrinsicTaint)`
+   * come `due_tier` di `core/turns/todo.ts`). Il giro futuro parte da qui,
+   * non da zero: partire da zero laverebbe la provenienza del turno che ha
+   * scritto l'intento. `0` sulle righe legacy, che è esattamente ciò che il
+   * vecchio codice faceva — per quelle niente cambia.
+   */
+  tier: TrustTier;
 };
 
 /**
@@ -104,6 +135,18 @@ export type NewJob = {
   channel: string;
   /** See `Job.perJobUsd`. Omitted means no per-job ceiling. */
   perJobUsd?: number | null;
+  /**
+   * Chi ha chiesto la ricorrenza. La CLI passa l'owner al terminale; il tool
+   * conversazionale passa il turno che ha ricevuto l'intento. Assente = riga
+   * legacy/operator: i default dello schema la descrivono come owner su cli.
+   */
+  origin?: {
+    tenant: string;
+    surface: string;
+    principal: string;
+    turnId?: string | null;
+    tier?: TrustTier;
+  };
 } & ({ kind?: 'goal'; goal: string } | { kind: 'script'; script: string });
 
 /** What this job runs, whichever kind it is — for logs and list output. */
@@ -157,7 +200,16 @@ type Row = {
   last_run_at: string | null;
   active: number;
   per_job_usd: number | null;
+  origin_tenant?: string | null;
+  origin_surface?: string | null;
+  origin_principal?: string | null;
+  origin_turn?: string | null;
+  tier?: number | null;
 };
+
+function asTier(v: unknown): TrustTier {
+  return v === 1 || v === 2 || v === 3 ? v : 0;
+}
 
 function toJob(row: Row): Job {
   const common = {
@@ -176,6 +228,16 @@ function toJob(row: Row): Job {
     // «non impostato». Sono lo stesso valore, e questa riga li rende lo stesso
     // *tipo*.
     perJobUsd: row.per_job_usd ?? null,
+    // Stessa disciplina sulle colonne di provenance (migrazione 7): una riga
+    // legacy descrive un owner al terminale, e i default dello schema dicono
+    // già così — qui si rende solo lo stesso *tipo*, mai un valore inventato.
+    origin: {
+      tenant: row.origin_tenant ?? 'host',
+      surface: row.origin_surface ?? 'cli',
+      principal: row.origin_principal ?? 'owner',
+      turnId: row.origin_turn ?? null,
+    },
+    tier: asTier(row.tier),
   };
   // Anything that is not exactly 'script' is a goal. A row with a `kind` this
   // build does not know must not become an executable script by accident —
@@ -215,9 +277,23 @@ export class JobStore {
     // «table jobs has no column named per_job_usd» su un'installazione che
     // funzionava un minuto prima.
     ensureColumn(db, 'jobs', 'per_job_usd', 'per_job_usd REAL');
+    // Stessa rete, stessa ragione, per la provenance dell'intento
+    // (migrazione 7): `cli/jobs.ts` apre il database direttamente e non passa
+    // da `migrate()`, e un `SELECT *` con colonne mancanti non fallisce —
+    // restituisce righe senza quelle chiavi, che `toJob` legge come legacy.
+    // Ma l'`INSERT` qui sotto le nomina, e senza queste righe morirebbe con
+    // «table jobs has no column named origin_tenant» sul primo job creato da
+    // conversazione dopo l'aggiornamento.
+    ensureColumn(db, 'jobs', 'origin_tenant', `origin_tenant TEXT NOT NULL DEFAULT 'host'`);
+    ensureColumn(db, 'jobs', 'origin_surface', `origin_surface TEXT NOT NULL DEFAULT 'cli'`);
+    ensureColumn(db, 'jobs', 'origin_principal', `origin_principal TEXT NOT NULL DEFAULT 'owner'`);
+    ensureColumn(db, 'jobs', 'origin_turn', 'origin_turn TEXT');
+    ensureColumn(db, 'jobs', 'tier', 'tier INTEGER NOT NULL DEFAULT 0');
     this.insertStmt = db.prepare(
-      `INSERT INTO jobs (id, cron, timezone, goal, channel, kind, per_job_usd, created_at, next_fire_at, last_run_at, active)
-       VALUES (@id, @cron, @timezone, @goal, @channel, @kind, @perJobUsd, @createdAt, @nextFireAt, NULL, 1)`,
+      `INSERT INTO jobs (id, cron, timezone, goal, channel, kind, per_job_usd, created_at, next_fire_at, last_run_at, active,
+                         origin_tenant, origin_surface, origin_principal, origin_turn, tier)
+       VALUES (@id, @cron, @timezone, @goal, @channel, @kind, @perJobUsd, @createdAt, @nextFireAt, NULL, 1,
+               @originTenant, @originSurface, @originPrincipal, @originTurn, @tier)`,
     );
     this.listStmt = db.prepare(`SELECT * FROM jobs WHERE active = 1 ORDER BY next_fire_at`);
     this.dueStmt = db.prepare(
@@ -243,6 +319,7 @@ export class JobStore {
       }
     }
     const next = nextFire(spec.cron, spec.timezone, now); // throws before any write
+    const origin = spec.origin;
     const common = {
       id: randomUUID(),
       cron: spec.cron,
@@ -253,6 +330,15 @@ export class JobStore {
       lastRunAt: null,
       active: true,
       perJobUsd: spec.perJobUsd ?? null,
+      // Scritta una volta sola, qui: nessun UPDATE la tocca mai, quindi un
+      // giro futuro non può riscrivere da dove è venuto l'intento.
+      origin: {
+        tenant: origin?.tenant ?? 'host',
+        surface: origin?.surface ?? 'cli',
+        principal: origin?.principal ?? 'owner',
+        turnId: origin?.turnId ?? null,
+      },
+      tier: origin?.tier ?? 0,
     };
     const job: Job =
       spec.kind === 'script'
@@ -268,6 +354,11 @@ export class JobStore {
       perJobUsd: job.perJobUsd,
       createdAt: now.toISOString(),
       nextFireAt: next.toISOString(),
+      originTenant: job.origin.tenant,
+      originSurface: job.origin.surface,
+      originPrincipal: job.origin.principal,
+      originTurn: job.origin.turnId,
+      tier: job.tier,
     });
     return job;
   }

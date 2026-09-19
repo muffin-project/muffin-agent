@@ -251,7 +251,7 @@ describe('migrazione 2 — jobs.kind', () => {
     // (`slice/una-promessa-torna`) are genuine no-ops here — but `migrate()` still runs and stamps them, the
     // same way migration 2 itself no-ops (and still counts) on a database where
     // `jobs` is absent, two tests below.
-    expect(res.applied).toEqual([2, 3, 4, 5, 6]);
+    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7]);
     const riga = db.prepare(`SELECT goal, kind FROM jobs WHERE id = 'j1'`).get() as {
       goal: string;
       kind: string;
@@ -271,7 +271,7 @@ describe('migrazione 2 — jobs.kind', () => {
     // e prima che `MemoryStore` crei `facts` e `TodoStore` crei `todos`,
     // motivo per cui la 3 e la 4 arrivano fin qui allo stesso modo.
     expect(() => migrate(db, { backupDir: backups })).not.toThrow();
-    expect(schemaVersionOf(db)).toBe(6);
+    expect(schemaVersionOf(db)).toBe(7);
   });
 });
 
@@ -314,7 +314,7 @@ describe('migrazione 3 — facts.pinned', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([2, 3, 4, 5, 6]);
+    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7]);
     const pinned = db.prepare(`SELECT id FROM facts WHERE pinned = 1 ORDER BY id`).all() as { id: number }[];
     expect(pinned.map((r) => r.id)).toEqual([1, 2, 3]);
     // Rows survive untouched — this is a backfill, not a rewrite.
@@ -362,7 +362,7 @@ describe('migrazione 3 — facts.pinned', () => {
     // The fresh-install case: `MemoryStore` has not run yet, so `facts` is not
     // there for this migration to touch — same guard, same reason as jobs.kind.
     expect(() => migrate(db, { backupDir: backups })).not.toThrow();
-    expect(schemaVersionOf(db)).toBe(6);
+    expect(schemaVersionOf(db)).toBe(7);
   });
 });
 
@@ -390,7 +390,7 @@ describe('migrazioni 4 e 5 — todos.due_at, poi todos.due_tier', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([2, 3, 4, 5, 6]);
+    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7]);
     const colonne = (db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>).map((c) => c.name);
     expect(colonne).toContain('due_at');
     expect(colonne).toContain('due_tier');
@@ -433,7 +433,7 @@ describe('migrazioni 4 e 5 — todos.due_at, poi todos.due_tier', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([5, 6]);
+    expect(res.applied).toEqual([5, 6, 7]);
     const colonne = (db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>).map((c) => c.name);
     expect(colonne).toContain('due_tier');
     // La query che moriva: è questa a rendere l'asserzione un comportamento e
@@ -492,6 +492,57 @@ describe('migrazione 6 — jobs.per_job_usd, spend.job_id, turns.job_id', () => 
       expect(db.prepare(`SELECT per_job_usd FROM jobs WHERE id = 'j1'`).get()).toEqual({ per_job_usd: null });
       expect(db.prepare(`SELECT usd, job_id FROM spend`).get()).toEqual({ usd: 2.5, job_id: null });
       expect(db.prepare(`SELECT job_id FROM turns WHERE id = 't1'`).get()).toEqual({ job_id: null });
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * Migrazione 7 — la provenance dell'intento su una casa con tenure.
+ *
+ * Non «la migrazione gira»: che una casa con job scritti dallo schema
+ * **vecchio** — senza `origin_*`, senza `tier`, con dentro righe vere —
+ * arrivi dall'altra parte con le colonne, senza perdere una riga e senza che
+ * nessun giro futuro cambi taint per effetto dell'aggiornamento (tier 0 è ciò
+ * che il vecchio codice faceva comunque).
+ */
+describe('migrazione 7 — jobs.origin_*, jobs.tier', () => {
+  it('aggiunge le cinque colonne a una casa con tenure, e le righe restano owner-a-zero', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-migrate-7-'));
+    const db = new DatabaseCtor(join(dir, 'muffin.db'));
+    try {
+      db.exec(`
+        CREATE TABLE jobs (
+          id TEXT PRIMARY KEY, cron TEXT NOT NULL, timezone TEXT NOT NULL, goal TEXT NOT NULL,
+          channel TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'goal', per_job_usd REAL,
+          created_at TEXT NOT NULL, next_fire_at TEXT NOT NULL, last_run_at TEXT,
+          active INTEGER NOT NULL DEFAULT 1
+        );
+        INSERT INTO jobs (id, cron, timezone, goal, channel, kind, created_at, next_fire_at, active)
+          VALUES ('j1', '0 8 * * *', 'Europe/Rome', 'brief', 'cli', 'goal', '2026-06-01', '2026-06-15', 1);
+      `);
+      migrate(db, { backupDir: join(dir, 'backups'), migrations: [] }); // baseline v1, come un'installazione vecchia
+
+      const res = migrate(db, { backupDir: join(dir, 'backups') });
+      expect(res.applied).toContain(7);
+
+      const colonne = (db.prepare(`PRAGMA table_info(jobs)`).all() as Array<{ name: string }>).map((c) => c.name);
+      for (const colonna of ['origin_tenant', 'origin_surface', 'origin_principal', 'origin_turn', 'tier']) {
+        expect(colonne).toContain(colonna);
+      }
+      // La riga sopravvive e descrive un owner al terminale a taint 0 — i
+      // default, non un'attribuzione inventata. Il contrario — un taint
+      // diverso da zero su una riga che nessuno ha scritto così — cambierebbe
+      // da solo cosa il giro futuro può fare.
+      expect(db.prepare(`SELECT origin_tenant, origin_surface, origin_principal, origin_turn, tier FROM jobs WHERE id = 'j1'`).get()).toEqual({
+        origin_tenant: 'host',
+        origin_surface: 'cli',
+        origin_principal: 'owner',
+        origin_turn: null,
+        tier: 0,
+      });
     } finally {
       db.close();
       rmSync(dir, { recursive: true, force: true });

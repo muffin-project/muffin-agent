@@ -5,34 +5,30 @@ import { loadConfig, paths } from '../core/config/config.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { JobError, JobStore, type Job, jobPayload } from '../core/scheduler/jobs.js';
 
-/**
- * `muffin jobs` — the operator surface over scheduled work.
- *
- * Opens the database directly rather than through buildRuntime: listing or
- * removing a job has no reason to need the model provider or the whole runtime,
- * and `jobs list` must work on a home whose API key is absent.
- *
- * ## `add` takes an explicit cron, and this is the only door that creates a job
- *
- * These lines used to claim, in the present indicative, that *"the
- * natural-language path ('ogni mattina alle 8') is a loop tool that turns the
- * phrase into this cron after confirming it with the owner, and lands on the
- * same store"*. **No such tool has ever existed.** `agent/tools/` has never
- * contained a `jobs` tool, and `JobStore.add` has exactly one caller outside
- * tests and evals — the `add` in this file, typed by the owner at a terminal
- * (`docs/evidence/fuori-dal-turno-2026-09-03.md` §1). The sentence described a
- * door that was never built, in a file whose job is to say where the doors are.
- *
- * Whether the model should get that door is an open owner decision («Bivio
- * owner n. 2»), and the research note argues it is the wrong next step as it
- * stands: a job today fires with a system principal at a literal `taint: 0`
- * (`agent/scheduler-run.ts`), so a job created by a turn would hand a later,
- * unattended turn a clean provenance the writing turn never had. ADR-0060 took
- * the other road for the capability that was actually wanted — a dated
- * commitment on `todos`, whose row carries the writing turn's tier into
- * `decideProactive` — and left this one closed. If it is ever opened, the first
- * change is that `taint: 0` becoming a value read from the row.
- */
+ /**
+  * `muffin jobs` — the operator surface over scheduled work.
+  *
+  * Opens the database directly rather than through buildRuntime: listing or
+  * removing a job has no reason to need the model provider or the whole runtime,
+  * and `jobs list` must work on a home whose API key is absent.
+  *
+  * ## `add` takes an explicit cron, and this is one of two doors that create a job
+  *
+  * The other is the conversational one: `schedule_recurring`
+  * (`agent/tools/schedule.ts`), the loop tool that turns the owner's phrase
+  * into this cron and lands on the same store. Both doors validate through the
+  * same `JobStore.add` — one cron engine, one persistence path — and both
+  * write the intent's provenance onto the row (`origin_*`, `tier`), because a
+  * job fires with a system principal and the fire reads its taint from the row
+  * instead of a literal `0` (`agent/scheduler-run.ts`). A job created by a
+  * turn no longer hands a later, unattended turn a clean provenance the
+  * writing turn never had — which is the condition `docs/evidence/fuori-dal-turno-2026-09-03.md`
+  * §1 set for opening this door at all.
+  *
+  * What still holds from the earlier warning: there is no shell path to the
+  * scheduler, on any surface. The model reaches jobs through the typed tool,
+  * never through `muffin jobs add --cron`.
+  */
 
 export const JOBS_USAGE = `usage:
   muffin jobs list

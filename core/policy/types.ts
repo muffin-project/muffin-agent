@@ -37,6 +37,28 @@ export type ConnectorId = string;
  */
 export type TrustTier = 0 | 1 | 2 | 3;
 
+/**
+ * The ceiling that arms a future trigger — `taint` and `intrinsicTaint` at
+ * their maximum.
+ *
+ * One invariant, one owner. Two durable writers need this number and they need
+ * the same one: `todo due` stores it as `due_tier` beside the plan's own
+ * `tier`, a recurring job stores it as the row's `tier` — and in both cases
+ * the reason is ADR-0044 §Riconciliazione: `intrinsicTaint()` excludes by
+ * construction what arrived via reinjection from an earlier turn, which is
+ * precisely the delayed-trigger case (a page read at turn N, a promise or a
+ * recurrence asked at turn N+1). Taking only the intrinsic would arm the
+ * future at 0; taking only the ceiling would ratchet every open plan row
+ * (which is why `todo` keeps the two numbers split and the job keeps one).
+ *
+ * A plain comparison and not `Math.max`: the max of two tiers is a `number`
+ * to TypeScript, and every caller so far has bridged the gap with a cast or a
+ * chain of `===` — a second spelling of the same invariant each time.
+ */
+export function armingTier(taint: TrustTier, intrinsic: TrustTier): TrustTier {
+  return taint > intrinsic ? taint : intrinsic;
+}
+
 /** Dotted, stable, versioned with the repo. e.g. 'fs.write', 'sys.shell'. */
 export type CapabilityId = string;
 

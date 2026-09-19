@@ -245,6 +245,43 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 7,
+    description: "jobs.origin_* + jobs.tier — un job creato da conversazione porta la provenance dell'intento",
+    up: (db) => {
+      // La stessa guardia delle migrazioni 2 e 6, per la stessa ragione: `jobs`
+      // è creata da `JobStore`, che gira dopo questo runner. Su
+      // un'installazione fresca la tabella non esiste ancora e la creerà
+      // `SCHEMA` con le colonne già dentro.
+      const haTabella = (nome: string): boolean =>
+        db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(nome) !== undefined;
+      const haColonna = (tabella: string, colonna: string): boolean =>
+        (db.prepare(`PRAGMA table_info(${tabella})`).all() as Array<{ name: string }>).some((c) => c.name === colonna);
+      if (!haTabella('jobs')) return;
+
+      // Additive con default, e la direzione è il punto — come la migrazione
+      // 2 per `kind` e la 6 per `per_job_usd`. Ogni riga scritta prima di oggi
+      // descrive un owner al terminale, e i default dicono già così: nessuna
+      // riga esistente acquisisce una provenance diversa, e nessun giro futuro
+      // cambia taint per effetto di questa migrazione (`tier` 0 è ciò che il
+      // vecchio codice faceva comunque).
+      if (!haColonna('jobs', 'origin_tenant')) {
+        db.exec(`ALTER TABLE jobs ADD COLUMN origin_tenant TEXT NOT NULL DEFAULT 'host'`);
+      }
+      if (!haColonna('jobs', 'origin_surface')) {
+        db.exec(`ALTER TABLE jobs ADD COLUMN origin_surface TEXT NOT NULL DEFAULT 'cli'`);
+      }
+      if (!haColonna('jobs', 'origin_principal')) {
+        db.exec(`ALTER TABLE jobs ADD COLUMN origin_principal TEXT NOT NULL DEFAULT 'owner'`);
+      }
+      if (!haColonna('jobs', 'origin_turn')) {
+        db.exec(`ALTER TABLE jobs ADD COLUMN origin_turn TEXT`);
+      }
+      if (!haColonna('jobs', 'tier')) {
+        db.exec(`ALTER TABLE jobs ADD COLUMN tier INTEGER NOT NULL DEFAULT 0`);
+      }
+    },
+  },
 ];
 
 const BASELINE_VERSION = 1;

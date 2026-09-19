@@ -53,6 +53,7 @@ const TOOL_PHRASE: Readonly<Record<string, string>> = {
   sys_effects: 'rileggo cosa ho fatto',
   todo: 'aggiorno il piano',
   wait: 'mi metto in attesa',
+  schedule_recurring: 'programmo un promemoria ricorrente',
 };
 
 /**
@@ -93,6 +94,7 @@ const TOOL_SUBJECT: Readonly<Record<string, string | readonly string[]>> = {
   shell_run_write: 'command',
   skill_read: 'name',
   send_file: 'path',
+  schedule_recurring: 'goal',
 };
 
 /** Quanto sta su una riga accanto alla frase, senza mandarla a capo. */
