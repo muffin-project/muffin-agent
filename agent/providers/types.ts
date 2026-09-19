@@ -12,7 +12,7 @@
 
 import type { ReasoningRequest, ReasoningResolution } from './reasoning.js';
 
-type Role = 'user' | 'assistant';
+export type Role = 'user' | 'assistant';
 
 /**
  * `cache: 'stable'` marks the end of a cacheable prefix. Positional, not a
@@ -125,7 +125,31 @@ export type ProviderMessageMetadata = {
   reasoning?: { provider: string; details?: unknown; content?: unknown };
 };
 
-export type Message = { role: Role; content: ContentBlock[]; providerMetadata?: ProviderMessageMetadata };
+export type Message = {
+  role: Role;
+  content: ContentBlock[];
+  providerMetadata?: ProviderMessageMetadata;
+  /**
+   * Harness-generated control, not conversation.
+   *
+   * Absent means work evidence or owner/model words: user messages (owner
+   * text, steer corrections, tool results), assistant turns (text, thinking,
+   * tool_use). Present (`'harness'`) means the loop wrote it to steer the
+   * model within one execution lease: recovery rungs, the completion nudge,
+   * wake reports, terminal provider-error markers.
+   *
+   * The distinction is structural, not prose: on continuation to a new lease
+   * the live transcript keeps evidence and drops harness control (preserved
+   * in the per-lease audit instead), so an expired recovery directive cannot
+   * silently constrain the next lease. Writers must use the single
+   * `harnessMessage` constructor (`agent/loop/message-origin.ts`) — a
+   * hand-built literal without the marker misclassifies silently.
+   *
+   * Never sent on the wire: both adapters map messages to provider shapes
+   * explicitly and ignore this field.
+   */
+  origin?: 'harness';
+};
 
 export type ToolSpec = {
   name: string;

@@ -52,4 +52,20 @@ export {
   type TurnResult,
 } from './loop/types.js';
 export { denyText } from './loop/permissions.js';
-export { enqueueTurn, resumeTurn, runTurn } from './loop/entry.js';
+export { continueTurn, enqueueTurn, resumeTurn, runTurn, type ContinuationRefusal } from './loop/entry.js';
+export {
+  CONTINUATION_TTL_MS,
+  ContinuationGone,
+  askWhichContinuation,
+  buildFreshCounters,
+  describeCandidate,
+  evidenceForContinuation,
+  explicitResumeMessage,
+  isContinuationAsk,
+  noteAmbiguity,
+  resolveContinuation,
+  resolveFollowup,
+  routeContinuationTarget,
+  type ContinuationCandidate,
+  type ContinuationMatch,
+} from './loop/continuation.js';

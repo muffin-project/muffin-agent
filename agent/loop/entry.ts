@@ -5,6 +5,7 @@ import { ATTR } from '../../core/tracing/types.js';
 import { CAPPED_MODEL, SCRIPT_MODEL } from '../../core/turns/store.js';
 import type { TurnCounters, TurnRecord } from '../../core/turns/store.js';
 import type { Message } from '../providers/types.js';
+import { buildFreshCounters, evidenceForContinuation } from './continuation.js';
 import { primoMessaggio } from './context.js';
 import { closeRow } from './durability.js';
 import { type DriveOptions, guidaIlTurno } from './engine.js';
@@ -293,6 +294,24 @@ export async function resumeTurn(
     return { turnId, why: 'finished', detail: `il turno ${turnId} è già chiuso (${existing.outcome ?? '?'})` };
   }
   /**
+   * A continuable row is not resumed — it is continued, which is a different
+   * primitive (`continueTurn` below): a new execution lease with fresh
+   * budgets, not a crash/wait recovery of the current one. Routing a
+   * continuable row through `resumeTurn` would inherit spent recovery
+   * budgets and skip the owner-grant accounting. Refused loudly, row left
+   * intact for the real primitive.
+   */
+  if (existing.status === 'continuable') {
+    return {
+      turnId,
+      why: 'continuable',
+      detail:
+        `il turno ${turnId} ha una lease esaurita ma il lavoro è continuabile ` +
+        `(${existing.continuableReason?.class ?? 'motivo ignoto'}): non si riprende, si continua ` +
+        `con una nuova lease esplicita (messaggio "riprendi" o \`muffin resume ${turnId.slice(0, 12)}\`)`,
+    };
+  }
+  /**
    * Questo turno sta tornando da una sospensione?
    *
    * **Non lo dice lo stato.** Un turno svegliato da un *evento* — la lane che
@@ -415,6 +434,7 @@ export async function resumeTurn(
       [ATTR.surface]: record.surface,
       [ATTR.requestModel]: record.model,
       [ATTR.turnId]: record.id,
+      'muffin.turn.lease': record.leaseIndex,
       // What the counter will be after this attempt, so a trace of a first
       // execution reads 0 rather than claiming a resume that did not happen.
       [ATTR.turnResume]: record.counters.resumes + (spendeIlBudget(!firstAttempt, wasWaiting) ? 1 : 0),
@@ -483,6 +503,142 @@ export async function resumeTurn(
     // passava fin qui per un turno ripreso dalla corsia.
     ...(stream?.signal ? { signal: stream.signal } : {}),
     ...(stream?.steer ? { steer: stream.steer } : {}),
+  });
+}
+
+/**
+ * Why a continuation could not be granted. Never a throw: the caller has to
+ * be able to say so, and the row is always left intact for another attempt.
+ */
+export type ContinuationRefusal = {
+  turnId: string;
+  why: 'not_found' | 'not_continuable' | 'claimed' | 'model_changed' | 'unstarted';
+  detail: string;
+};
+
+function ownerMessageText(message: Message): string {
+  return message.content
+    .filter((b): b is Extract<(typeof message.content)[number], { type: 'text' }> => b.type === 'text')
+    .map((b) => b.text)
+    .join('\n')
+    .trim();
+}
+
+/**
+ * Continue a continuable turn on an explicit grant: the one
+ * surface-independent primitive for minting the next execution lease.
+ *
+ * Grant (filtered evidence + the grant message + fresh lease-local budgets,
+ * persisted atomically by the store) then `drive` on the claimed row — the
+ * same funnel every other entry uses, so `/steer` corrections landing
+ * mid-lease behave identically. Crash/wait recovery stays in `resumeTurn`;
+ * the two never share a path, which is what keeps a continuation from
+ * inheriting spent budgets and a resume from minting leases.
+ *
+ * The grant message is the owner's actual words on the conversational path,
+ * or the harness-marked resume marker on the explicit-command path — either
+ * way appended to the durable transcript (so the model sees why it is back)
+ * and to the session (so the conversation record stays complete). Failure
+ * diagnostics are never appended: execution truth travels structurally, on
+ * the row and in the delivered text, not as something Muffin supposedly
+ * said.
+ */
+export async function continueTurn(
+  deps: LoopDeps,
+  turnId: string,
+  opts: {
+    message: Message;
+    session?: SessionRef;
+    signal?: AbortSignal;
+    steer?: () => string[];
+    onDelta?: (delta: import('./types.js').TurnDelta) => void;
+    onProgress?: (event: import('./types.js').TurnEvent) => void;
+    replyChannel?: string;
+  },
+): Promise<TurnResult | ContinuationRefusal> {
+  deps.prepareTurn?.();
+  deps = snapshotTurnDeps(deps);
+  const now = deps.now ?? (() => new Date());
+  const existing = deps.turns.get(turnId);
+  if (existing === null) {
+    return { turnId, why: 'not_found', detail: `nessun turno ${turnId}` };
+  }
+  if (existing.status !== 'continuable') {
+    return {
+      turnId,
+      why: 'not_continuable',
+      detail: `il turno ${turnId} non è continuabile (stato ${existing.status})`,
+    };
+  }
+  if (existing.model !== deps.model) {
+    return {
+      turnId,
+      why: 'model_changed',
+      detail:
+        `il turno ${turnId.slice(0, 12)} è stato aperto su ${existing.model} e adesso il modello è ${deps.model}: ` +
+        `non è una continuazione. La riga resta continuabile per il modello originale.`,
+    };
+  }
+  if (!existing.counters.contextBuilt) {
+    // The preamble never ran, so there is no transcript worth continuing —
+    // only the owner's question. Refused rather than rebuilt here: rebuilding
+    // would duplicate the episode and session lines the preamble writes.
+    return {
+      turnId,
+      why: 'unstarted',
+      detail: `il turno ${turnId} non ha mai avviato il contesto: niente da continuare, apri un turno nuovo.`,
+    };
+  }
+  const session = opts.session ?? deps.sessions.open(existing.sessionId);
+  const granted = deps.turns.grantContinuation(
+    turnId,
+    {
+      messages: [...evidenceForContinuation(existing.messages), opts.message],
+      taint: existing.taint,
+      counters: buildFreshCounters(existing.counters),
+      newLeaseStartedAt: now().toISOString(),
+    },
+    process.pid,
+  );
+  if (granted === null) {
+    return { turnId, why: 'claimed', detail: `il turno ${turnId} è stato preso da un altro processo` };
+  }
+  const span = deps.tracer.start(
+    'muffin.turn',
+    {
+      [ATTR.principalKind]: granted.principal.kind,
+      [ATTR.tenant]: granted.tenant,
+      [ATTR.surface]: granted.surface,
+      [ATTR.requestModel]: granted.model,
+      [ATTR.turnId]: granted.id,
+      [ATTR.turnResume]: granted.counters.resumes,
+      'muffin.turn.lease': granted.leaseIndex,
+      'muffin.turn.continued': true,
+    },
+    remoteParent(granted.id),
+  );
+  try {
+    deps.sessions.append(session, {
+      role: 'user',
+      content: ownerMessageText(opts.message),
+      surface: granted.surface,
+      createdAt: now().toISOString(),
+      traceId: granted.id,
+      tier: existing.taint,
+    });
+  } catch (error) {
+    span.setAttributes({ 'muffin.turn.session_append_error': error instanceof Error ? error.message : String(error) });
+  }
+  return drive(deps, granted, span, {
+    resumed: true,
+    continued: true,
+    wokenFromWait: false,
+    session,
+    ...(opts.signal ? { signal: opts.signal } : {}),
+    ...(opts.replyChannel !== undefined ? { replyChannel: opts.replyChannel } : {}),
+    ...(opts.onDelta ? { onDelta: opts.onDelta } : {}),
+    ...(opts.onProgress ? { onProgress: opts.onProgress } : {}),
+    ...(opts.steer ? { steer: opts.steer } : {}),
   });
 }
 

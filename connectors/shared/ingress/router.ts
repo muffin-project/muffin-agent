@@ -1,4 +1,5 @@
 import type { TurnDelta, TurnEvent, TurnResult } from '../../../agent/loop.js';
+import { ContinuationGone } from '../../../agent/loop.js';
 import type { TurnRecord } from '../../../core/turns/store.js';
 import { identify, type SurfaceIdentity } from '../../../core/surface/types.js';
 import { composeTurnText } from './compose.js';
@@ -435,19 +436,30 @@ async function runStage(
       if (ctx.text === undefined) throw new Error('ingress: the work stage ran without a composed text');
       const sinks = await openLive();
       const lane = sinks.arm();
-      ctx.result = await runWork(hooks.work, ctx.port, ctx.event, {
-        workId: claim.workId,
-        identity: ctx.identity,
-        text: ctx.text,
-        contentTaint: contentTierOf(ctx.parts),
-        replyTo: replyRecordOf(ctx),
-        signal: lane.signal,
-        steer: lane.steer,
-        ...(ctx.arrival?.image === undefined ? {} : { images: [ctx.arrival.image] }),
-        ...(ctx.arrival?.audio === undefined ? {} : { audios: [ctx.arrival.audio] }),
-        ...(sinks.onDelta === undefined ? {} : { onDelta: sinks.onDelta }),
-        ...(sinks.onProgress === undefined ? {} : { onProgress: sinks.onProgress }),
-      });
+      try {
+        ctx.result = await runWork(hooks.work, ctx.port, ctx.event, {
+          workId: claim.workId,
+          identity: ctx.identity,
+          text: ctx.text,
+          contentTaint: contentTierOf(ctx.parts),
+          replyTo: replyRecordOf(ctx),
+          signal: lane.signal,
+          steer: lane.steer,
+          ...(ctx.arrival?.image === undefined ? {} : { images: [ctx.arrival.image] }),
+          ...(ctx.arrival?.audio === undefined ? {} : { audios: [ctx.arrival.audio] }),
+          ...(sinks.onDelta === undefined ? {} : { onDelta: sinks.onDelta }),
+          ...(sinks.onProgress === undefined ? {} : { onProgress: sinks.onProgress }),
+        });
+      } catch (error) {
+        // The continuation target vanished between bind and execution. Never
+        // recompute under this event's identity: the event stays pending and
+        // `recover` resolves it against the durable row — already delivered,
+        // or still running elsewhere and re-checked on the next drain.
+        if (error instanceof ContinuationGone) {
+          return step({ kind: 'deferred', workId: ctx.workId ?? claim.workId, why: 'still-running' });
+        }
+        throw error;
+      }
       await sinks.ran?.(ctx.result);
       return step(CONTINUE);
     }

@@ -168,6 +168,10 @@ function salient(span: Span): string {
     // budget set the effective deadline.
     'muffin.chat_call.abort_reason',
     'muffin.chat_call.effective_deadline_source',
+    // Which execution lease a span belongs to: iterations restart their
+    // meaning per lease only in combination with this.
+    'muffin.turn.lease',
+    'muffin.turn.continued',
   ]
     .map((k) => (span.attributes[k] === undefined ? null : `${short(k)}=${span.attributes[k]}`))
     .filter((x): x is string => x !== null)
@@ -192,6 +196,8 @@ const SHORTER: Readonly<Record<string, string>> = {
   'muffin.provider_failure.class': 'provfail',
   'muffin.chat_call.abort_reason': 'abort',
   'muffin.chat_call.effective_deadline_source': 'deadline',
+  'muffin.turn.lease': 'lease',
+  'muffin.turn.continued': 'continued',
 };
 
 function short(attributeName: string): string {

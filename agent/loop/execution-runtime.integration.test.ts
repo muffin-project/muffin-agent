@@ -112,8 +112,10 @@ describe('execution runtime integration', () => {
       const result = await runTurn(h.deps, input(h.sessions));
 
       expect(chatCalls).toBe(0);
-      expect(result.stopped).toBe('error');
-      expect(result.reason).toBe('active_model_budget_exhausted');
+      // P0-B: budget esaurito prima di partire — la lease cede da
+      // continuable invece di chiudersi in errore.
+      expect(result.stopped).toBe('continuable');
+      expect(result.reason).toBe('active_model_budget');
     } finally {
       DEFAULT_EXECUTION.activeModelBudgetMs = previous;
     }

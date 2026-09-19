@@ -534,8 +534,9 @@ describe('execution budget', () => {
     const result = await runRounds(h.scope);
 
     expect(calls).toBe(0);
-    expect(result.stopped).toBe('error');
-    expect(result.reason).toBe('active_model_budget_exhausted');
+    // P0-B: budget esaurito prima di partire — la lease cede da continuable,
+    // il lavoro (qui: niente) resta dov'è invece di chiudersi in errore.
+    expect(result).toMatchObject({ stopped: 'continuable', reason: 'active_model_budget' });
   });
 
   it('aborta una model call lunga senza trasformarla in un transport retry', async () => {
@@ -559,8 +560,9 @@ describe('execution budget', () => {
     const result = await runRounds(h.scope);
 
     expect(calls).toBe(1);
-    expect(result.stopped).toBe('error');
-    expect(result.reason).toBe('model_first_activity_timeout');
+    // P0-B: lo stallo cede la lease con la sua classe, senza bruciare retry
+    // di trasporto né rung semantici.
+    expect(result).toMatchObject({ stopped: 'continuable', reason: 'model_first_activity_timeout' });
     expect(h.span.attrs['muffin.turn.stop_reason']).toBe('model_first_activity_timeout');
   });
 });
@@ -678,15 +680,18 @@ describe('verità del fallimento provider/risultato (P0-A)', () => {
 
     const result = await runRounds(h.scope);
 
-    expect(result.stopped).toBe('error');
+    // P0-B: esaurito il re-drive limitato, la lease cede da continuable —
+    // mai la cascata semantica, mai un errore terminale generico.
+    expect(result.stopped).toBe('continuable');
     expect(result.reason).toBe('provider_empty');
     expect(h.run.recoveriesUsed).toBe(0);
     // Un tentativo iniziale + tre re-drive limitati, poi stop veritiero.
     expect(provider.chatCalls).toHaveLength(4);
     expect(h.run.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES - 3);
-    expect(result.text).toContain('risposta vuota dal provider');
+    expect(result.text).toContain('risposte vuote');
     expect(result.text).toContain(h.id.slice(0, 12));
     expect(result.text).toContain('nessuna tool call ancora completata');
+    expect(result.text).toContain('riprendi');
   });
 
   it('neanche con requireTool in cascata il filo viene armato su uno stallo', async () => {
@@ -730,7 +735,7 @@ describe('verità del fallimento provider/risultato (P0-A)', () => {
 
     const result = await runRounds(h.scope);
 
-    expect(result.stopped).toBe('error');
+    expect(result.stopped).toBe('continuable');
     expect(result.reason).toBe('truncated');
     expect(h.run.recoveriesUsed).toBe(0);
     expect(result.text).toContain('limite di output');

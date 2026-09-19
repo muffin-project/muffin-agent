@@ -16,6 +16,7 @@ import { CONSERVATIVE } from '../profiles/profile.js';
 import {
   type ChatCall,
   type ChatResult,
+  type Message,
   type Provider,
   ProviderError,
 } from '../providers/types.js';
@@ -135,14 +136,16 @@ describe('agent/loop.ts è un barile, e niente altro', () => {
 });
 
 describe('l imbuto: il drain sta su drive(), non su finish()', () => {
-  it('provider error terminale: la correzione resta durevole e l’errore ha forma sicura', async () => {
+  it('provider error retryable: la lease si arrende da continuable e la correzione resta durevole', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);
-    // L'errore terminale passa da `finish`; la correzione deve comunque essere
-    // salvata esattamente una volta e non deve esporre il testo del provider.
+    // P0-B: l'esaurimento retryable non è più un errore terminale — la lease
+    // cede da continuable con il lavoro intatto. La correzione deve comunque
+    // essere salvata esattamente una volta dall'imbuto, e il testo non deve
+    // esporre quello del provider.
     const coda: string[] = [];
     const w = world([new ProviderError('502 dal provider', true, 502, 'transport')], (n) => {
       // L'undicesimo tentativo è l'ultimo (`MAX_TRANSPORT_RETRIES` = 10): nessun
-      // giro successivo la drena, quindi al `throw` è ancora nella porta.
+      // giro successivo la drena, quindi al rilascio è ancora nella porta.
       if (n === 11) coda.push(CORREZIONE);
     });
     const session = w.sessions.open('ramo-throw');
@@ -156,11 +159,31 @@ describe('l imbuto: il drain sta su drive(), non su finish()', () => {
       steer: () => coda.splice(0),
     });
 
-    expect(result).toMatchObject({ stopped: 'error', reason: 'provider_error' });
-    expect(result.text).toContain('HTTP 502');
+    expect(result).toMatchObject({ stopped: 'continuable', reason: 'provider_transport' });
+    expect(result.text).toContain('riprendi');
     expect(result.text).not.toContain('502 dal provider');
+    expect(w.turns.get(result.turnId)?.status).toBe('continuable');
     expect(quante(w.sessions.read(session), CORREZIONE)).toBe(1);
     expect(coda).toEqual([]);
+  });
+
+  it('provider error non-retryable: resta terminale, forma sicura', async () => {
+    // Una chiave morta non guarisce con una nuova lease: errore terminale,
+    // testo tipizzato senza il testo del provider.
+    const w = world([new ProviderError('chiave morta', false, 401, 'transport')]);
+    const session = w.sessions.open('ramo-terminal');
+
+    const result = await barrel.runTurn(w.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session,
+      text: 'cerca una cosa',
+    });
+
+    expect(result).toMatchObject({ stopped: 'error', reason: 'provider_error' });
+    expect(result.text).toContain('HTTP 401');
+    expect(result.text).not.toContain('chiave morta');
   });
 
   it('ramo di ritorno: una volta sola, e nessun secondo scrittore', async () => {
@@ -323,5 +346,104 @@ describe('a live model switch is atomic at the turn boundary', () => {
 
     expect(providerA.seen[1]?.temperature).toBe(0);
     expect(providerB.seen).toHaveLength(0);
+  });
+});
+
+describe('continueTurn rifiuta senza toccare la riga', () => {
+  const grant: Message = { role: 'user', content: [{ type: 'text', text: 'riprendi' }] };
+  const counters = {
+    iterations: 3,
+    recoveriesUsed: 5,
+    transportRetriesLeft: 7,
+    toolCallsMade: 2,
+    nudgedForCompletion: false,
+    usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    spentUsd: 0,
+    resumes: 0,
+    contextBuilt: true,
+    activeModelMs: 0,
+  };
+  const reason = { class: 'provider_empty' as const, lease: 0, at: '2026-09-18T17:14:09.000Z' };
+
+  /** Una riga continuabile pronta, costruita dalle API durevoli come un rilascio vero. */
+  function continuableRow(
+    w: ReturnType<typeof world>,
+    over: { model?: string; contextBuilt?: boolean } = {},
+  ) {
+    const created = w.turns.create(
+      {
+        id: 'cont-1',
+        principal: owner,
+        tenant: 'host',
+        surface: 'cli',
+        sessionId: 's1',
+        model: over.model ?? 'test-model',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'fai' }] }],
+        taint: 0,
+        counters: { ...counters, contextBuilt: over.contextBuilt ?? true },
+      },
+      4242,
+    );
+    expect(
+      w.turns.releaseContinuable(
+        'cont-1',
+        { messages: created.messages, taint: 0, counters: { ...counters, contextBuilt: over.contextBuilt ?? true }, reason },
+        created.claimToken,
+      ),
+    ).toBe(true);
+    return w.turns.get('cont-1')!;
+  }
+
+  it('not_found su id ignoto', async () => {
+    const w = world([answer('ok')]);
+    const r = await barrel.continueTurn(w.deps, 'nope', { message: { ...grant } });
+    expect(r).toMatchObject({ turnId: 'nope', why: 'not_found' });
+  });
+
+  it('not_continuable su riga running o done, senza scriverci niente', async () => {
+    const w = world([answer('ok')]);
+    const running = w.turns.create(
+      {
+        id: 'run-1',
+        principal: owner,
+        tenant: 'host',
+        surface: 'cli',
+        sessionId: 's1',
+        model: 'test-model',
+        messages: [],
+        taint: 0,
+        counters,
+      },
+      4242,
+    );
+    const r = await barrel.continueTurn(w.deps, 'run-1', { message: { ...grant } });
+    expect(r).toMatchObject({ why: 'not_continuable' });
+    expect(w.turns.get('run-1')?.status).toBe('running');
+    expect(w.turns.leasesFor('run-1')).toHaveLength(1);
+  });
+
+  it('model_changed rifiuta e lascia la riga continuabile per il modello originale', async () => {
+    const w = world([answer('ok')]);
+    continuableRow(w, { model: 'other-model' });
+    const r = await barrel.continueTurn(w.deps, 'cont-1', { message: { ...grant } });
+    expect(r).toMatchObject({ why: 'model_changed' });
+    expect(w.turns.get('cont-1')?.status).toBe('continuable');
+  });
+
+  it('unstarted rifiuta: senza preambolo non c è transcript da continuare', async () => {
+    const w = world([answer('ok')]);
+    continuableRow(w, { contextBuilt: false });
+    const r = await barrel.continueTurn(w.deps, 'cont-1', { message: { ...grant } });
+    expect(r).toMatchObject({ why: 'unstarted' });
+    expect(w.turns.get('cont-1')?.status).toBe('continuable');
+  });
+
+  it('resumeTurn su riga continuable rifiuta con la strada giusta, senza consumare resume', async () => {
+    const w = world([answer('ok')]);
+    continuableRow(w);
+    const r = await barrel.resumeTurn(w.deps, 'cont-1');
+    expect(r).toMatchObject({ turnId: 'cont-1', why: 'continuable' });
+    expect(w.turns.get('cont-1')?.status).toBe('continuable');
+    expect(w.turns.get('cont-1')?.counters.resumes).toBe(0);
   });
 });

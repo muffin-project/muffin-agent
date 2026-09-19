@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TurnCounters, TurnRecord, TurnStatus } from '../../core/turns/store.js';
+import { zeroLifetime } from '../../core/turns/store.js';
 import { TurnRun } from './run-state.js';
 
 /**
@@ -50,6 +51,9 @@ const record = (over: { counters?: Partial<TurnCounters>; status?: TurnStatus } 
   claimToken: null,
   outcome: null,
   delivery: null,
+  leaseIndex: 0,
+  continuableReason: null,
+  lifetime: zeroLifetime(),
   createdAt: '2026-09-05T00:00:00.000Z',
   updatedAt: '2026-09-05T00:00:00.000Z',
 });
@@ -158,6 +162,25 @@ describe('TurnRun: `resumes` è calcolato una volta e non si muove', () => {
     expect(wokenFromWait.resumes).toBe(3);
     expect(crashResume.resumes).toBe(4);
     expect(primaEsecuzione.resumes).toBe(3);
+  });
+
+  it("una continuazione concessa dall'owner non spende il budget anti-crash-loop", () => {
+    // P0-B, decisione `resumes`: MAX_RESUMES limita i giri che uccidono il
+    // processo, non le continuazioni esplicite (autenticate, a ritmo umano).
+    // Azzerarlo qui cancellerebbe l'evidenza dei crash in mezzo alle
+    // continuazioni — la stessa forma vietata per `suspend` — e un turno che
+    // alterna continuazioni e crash non scatterebbe mai. Le continuazioni si
+    // contano a parte, in `lifetime.leases`.
+    const continued = new TurnRun(record({ counters: { resumes: 2 } }), {
+      resumed: true,
+      wokenFromWait: false,
+      continued: true,
+    });
+    expect(continued.resumes).toBe(2);
+    expect(continued.continued).toBe(true);
+    // E un crash dentro la lease continuata paga come sempre.
+    const crashInside = new TurnRun(record({ counters: { resumes: 2 } }), { resumed: true, wokenFromWait: false });
+    expect(crashInside.resumes).toBe(3);
   });
 });
 
