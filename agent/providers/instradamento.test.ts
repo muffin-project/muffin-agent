@@ -88,6 +88,34 @@ describe('la conversazione resta sullo stesso provider a monte', () => {
     expect(await fai(uno, 'sessione-a')).not.toBe(await fai(tre, 'sessione-b'));
   });
 
+  it('/new cambia session_id, un turno nuovo senza /new no', async () => {
+    // La generation della conversazione (`owner#g0` -> `owner#g1`) è l'unica
+    // cosa che muove lo stickiness: due turni della stessa conversazione
+    // restano incollati allo stesso upstream, senza spendere un token.
+    const fai = async (c: string): Promise<Record<string, unknown>> => {
+      const s = spia();
+      await new OpenAICompatProvider('k', 'https://openrouter.ai/api/v1', {}, { fetch: s.fetch }).chat(
+        chiamata({ conversation: c }),
+      );
+      return s.body();
+    };
+    const turno1 = await fai('owner#g0');
+    const turno2 = await fai('owner#g0');
+    const dopoNew = await fai('owner#g1');
+    expect(turno2['session_id']).toBe(turno1['session_id']);
+    expect(dopoNew['session_id']).not.toBe(turno1['session_id']);
+  });
+
+  it("l'id di sessione/conversazione non viaggia mai in chiaro: solo l'hash opaco", async () => {
+    const s = spia();
+    const p = new OpenAICompatProvider('k', 'https://openrouter.ai/api/v1', {}, { fetch: s.fetch });
+    await p.chat(chiamata({ conversation: 'owner#g0' }));
+    const raw = JSON.stringify(s.body());
+    expect(raw).not.toContain('owner#g0');
+    expect(raw).not.toContain('owner');
+    expect(s.body()['session_id']).toMatch(/^[0-9a-f]{32}$/);
+  });
+
   /**
    * Un Ollama locale non smista niente, e un campo che non conosce è un campo
    * su cui può inciampare. Stesso argomento di `cache_control` e `reasoning`,

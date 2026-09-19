@@ -729,7 +729,10 @@ function comandiPerTelegram(
     });
     if (esito.sconosciuto === true) return { testo: `comando sconosciuto.\n${aiuto(false)}` };
     if (esito.nuovaSessione === true) {
-      const archivio = runtime.deps.sessions.rotate(runtime.deps.sessions.open(sessionId));
+      // Stessa semantica del REPL qui sopra: rotazione del transcript quando
+      // c'è, generazione sempre avanti — anche a transcript assente, perché
+      // è l'intento `/new` a chiudere la conversazione, non il file.
+      const archivio = runtime.deps.sessions.newConversation(runtime.deps.sessions.open(sessionId));
       return {
         testo:
           archivio === null
