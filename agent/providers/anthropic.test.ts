@@ -688,3 +688,37 @@ describe('anthropic adapter · Retry-After sopravvive a wrap', () => {
     expect((caught as unknown as { retryAfterMs?: number }).retryAfterMs).toBeUndefined();
   });
 });
+
+describe('anthropic adapter · provenance compiles to a valid wire', () => {
+  it('a tool-originated result stays wire-valid under role:user, harness stays text', async () => {
+    // The same semantic items the loop now produces: an owner input, an
+    // assistant tool_use, a tool-originated result, a harness notice. The
+    // protocol forces `tool_result` under `role: 'user'` — `origin` is what
+    // keeps it tool evidence anyway.
+    const h = harness();
+    await h.provider.chat({
+      ...CALL,
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'leggi a' }], origin: 'owner' },
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'toolu_9', name: 'fs_read', input: { path: 'a' } }],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'tool_result', toolCallId: 'toolu_9', content: 'contenuto' }],
+          origin: 'tool',
+        },
+        { role: 'user', content: [{ type: 'text', text: 'avviso di controllo' }], origin: 'harness' },
+      ],
+    });
+    const messages = h.sent[0]!.messages as { role: string; content: Record<string, unknown>[] }[];
+    // owner input and harness notice do NOT fold: different origins stay
+    // separate messages even at the same role.
+    expect(messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'user']);
+    expect(messages[2]!.content).toEqual([
+      { type: 'tool_result', tool_use_id: 'toolu_9', content: 'contenuto' },
+    ]);
+    expect(messages[3]!.content).toEqual([{ type: 'text', text: 'avviso di controllo' }]);
+  });
+});

@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { compileForAnthropic } from './compile.js';
 import {
   ProviderError,
   ProviderStreamError,
@@ -227,7 +228,10 @@ function requestBody(call: ChatCall): Omit<Anthropic.MessageCreateParamsNonStrea
     // the absent case has to be an absent *field*, not `undefined`.
     ...(call.temperature !== undefined ? { temperature: call.temperature } : {}),
     system: call.system.map(toSystemBlock),
-    messages: call.messages.map((m) => ({
+    // Compiled, not mapped 1:1: consecutive same-role turns fold into one
+    // (the documented server semantics, applied deterministically), while
+    // origin stays on each message so provenance never depends on `role`.
+    messages: compileForAnthropic(call.messages).map((m) => ({
       role: m.role,
       content: m.content.map(toContentBlock),
     })),

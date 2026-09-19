@@ -17,8 +17,9 @@ import {
 } from '../providers/types.js';
 import { ReasoningConfigurationError, reasoningFromLegacyThinking } from '../providers/reasoning.js';
 import { checkpoint, finish, releaseContinuable, suspendHere, type TurnScope } from './durability.js';
+import { resolveConversationId } from './conversation.js';
 import type { ExecutionAbortReason, ExecutionBudget, ModelCallLease, ModelCallTelemetry } from './execution-budget.js';
-import { harnessMessage } from './message-origin.js';
+import { harnessMessage, ownerMessage, toolMessage } from './message-origin.js';
 import { drainStream, edgeTrimmer, retryDelayMs } from './stream.js';
 import { runTool } from './tool-call.js';
 import {
@@ -286,8 +287,9 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     // messaggio dell'owner, nel transcript che il checkpoint sopra
     // persiste, così un turno ripreso dopo un crash la ricorda. Mai a metà
     // di una tool call: un effect avviato non si finge non avvenuto.
+    // Marcata owner: sono parole arrivate dalla superficie, non sintesi del loop.
     for (const correzione of input.steer?.() ?? []) {
-      run.messages.push({ role: 'user', content: [{ type: 'text', text: correzione }] });
+      run.messages.push(ownerMessage([{ type: 'text', text: correzione }]));
     }
     run.iterations += 1;
     // Reports the number this line just committed to — the same counter
@@ -320,8 +322,9 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // monte: la sessione, che è già l'identità che dura quanto dura il
       // filo del discorso. Vedi `ChatCall.conversation` per cosa ci si
       // compra — una cache che, misurata, prendeva 0% fra un turno e
-      // l'altro.
-      conversation: input.session.id,
+      // l'altro. Risolta in `conversation.ts`, mai dal principal e mai dal
+      // turno: l'hash opaco verso `session_id` lo fa l'adapter.
+      conversation: resolveConversationId(input.session),
       // One attempt, demanded by the `requireTool` rung (ADR-0082). `auto`
       // everywhere else: forcing a tool on a turn that needs none
       // manufactures an action the model never chose.
@@ -972,6 +975,10 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
         throw error;
       }
     }
-    run.messages.push({ role: 'user', content: results });
+    // Tool evidence, not owner words: the provider compiler may be forced to
+    // render this as `role: 'user'` (Anthropic carries `tool_result` inside a
+    // user message), but internally it stays tool-originated — `role` is never
+    // the source of truth for what a block is.
+    run.messages.push(toolMessage(results));
   }
 }

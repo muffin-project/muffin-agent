@@ -1,7 +1,8 @@
 import { ambienteSection, tenantClass, todoSection, type IstanzaFacts } from '../context/assemble.js';
 import type { ReinjectedHistory } from '../context/history-taint.js';
 import type { TodoItem } from '../../core/turns/todo.js';
-import type { AudioBlock, ContentBlock, ImageBlock, Message } from '../providers/types.js';
+import type { AudioBlock, ContentBlock, ImageBlock, Message, MessageOrigin } from '../providers/types.js';
+import { harnessMessage, ownerMessage, provenanceMessage } from './message-origin.js';
 import type { TurnInput } from './types.js';
 
 /**
@@ -63,7 +64,53 @@ export function userAudios(messages: Message[]): AudioBlock[] {
  * Context assembly, outermost-stable first: identity, then tool definitions,
  * then recalled memory, then the message. Variable content never precedes
  * stable content, or the cache prefix is invalidated on every turn.
+ *
+ * Since Context P0 the assembly is typed BEFORE it is flattened: `assembleSemantic`
+ * returns one section per provenance (memory, runtime facts, open work, owner
+ * bytes, history replay, truncation notice) and `buildContext` flattens the
+ * sections into the wire-neutral `Message[]` every existing caller reads.
+ * Provider `role` is never the source of truth for what a section is — see
+ * `MessageOrigin` and the per-provider compiler (`agent/providers/compile.ts`).
  */
+export type SemanticSectionKey = 'announcement' | 'history' | 'memory' | 'runtime' | 'work' | 'owner';
+
+/**
+ * One turn's context as typed sections, stable first, volatile last.
+ *
+ * The stable prefix itself (constitution/system prompt, tool schemas) lives
+ * OUTSIDE this structure — `ChatCall.system` (boot-built, byte-identical per
+ * tenant class) and `ChatCall.tools` — so every section here is volatile by
+ * construction and the owner input is always last. A Context Receipt observer
+ * (see `describeAssembly`) reads the sections, never the flattened array.
+ */
+export type SemanticContext = {
+  /** History-truncation notice, or null when nothing was cut. Harness control, not owner words. */
+  announcement: Message | null;
+  /** Replayed session lines. Rebuilt from the session file, which stores no origin: legacy evidence. */
+  history: Message[];
+  /** Rendered recall, or null when recall returned nothing. */
+  memory: Message | null;
+  /** Per-turn facts: clock, surface, model, instance. Always present. */
+  runtime: Message;
+  /** Open plan rows, or null when no row is open (zero cost). */
+  work: Message | null;
+  /** The current owner input: surface bytes and media ONLY. Always last. */
+  owner: Message;
+};
+
+export type SemanticArgs = {
+  input: TurnInput;
+  recalled: ContentBlock[];
+  open: TodoItem[];
+  spoken: ReinjectedHistory;
+  adesso: Date;
+  modello: string;
+  profilo: string;
+  istanza: IstanzaFacts | undefined;
+  timeZone: string | undefined;
+  undoneTraceIds: ReadonlySet<string>;
+  firstEncounter?: boolean;
+};
 export function buildContext(
   input: TurnInput,
   recalled: ContentBlock[],
@@ -125,6 +172,47 @@ export function buildContext(
   undoneTraceIds: ReadonlySet<string>,
   firstEncounter = false,
 ): Message[] {
+  return flattenSemantic(
+    assembleSemantic({
+      input,
+      recalled,
+      open,
+      spoken,
+      adesso,
+      modello,
+      profilo,
+      istanza,
+      timeZone,
+      undoneTraceIds,
+      firstEncounter,
+    }),
+  );
+}
+
+/** Sections in wire-neutral order: stable first, owner input last. */
+export function flattenSemantic(ctx: SemanticContext): Message[] {
+  return [
+    ...(ctx.announcement === null ? [] : [ctx.announcement]),
+    ...ctx.history,
+    ...(ctx.memory === null ? [] : [ctx.memory]),
+    ctx.runtime,
+    ...(ctx.work === null ? [] : [ctx.work]),
+    ctx.owner,
+  ];
+}
+
+/**
+ * One turn's context as typed sections.
+ *
+ * Same inputs as `buildContext` (which delegates here and flattens): the
+ * split is the invariant. Memory, runtime facts and open work each ride in
+ * their own message with their own provenance, and the current owner input
+ * carries ONLY surface bytes and media — never `role: 'user'` as a sack for
+ * everything the loop knows.
+ */
+export function assembleSemantic(args: SemanticArgs): SemanticContext {
+  const { input, recalled, open, spoken, adesso, modello, profilo, istanza, timeZone, undoneTraceIds } = args;
+  const firstEncounter = args.firstEncounter ?? false;
   const { kept, dropped } = spoken;
 
   // A REPL session used all afternoon would otherwise grow until the provider
@@ -135,18 +223,19 @@ export function buildContext(
   // The cut is at the front and it is announced, so the model knows there is a
   // before rather than believing the conversation started here. Recall is what
   // brings back the parts that mattered, which is the whole reason it exists.
-  const messages: Message[] = [];
-  if (dropped > 0) {
-    messages.push({
-      role: 'user',
-      content: [
-        {
-          type: 'text',
-          text: `[${dropped} messaggi precedenti di questa sessione non sono nel contesto. Se ti serve qualcosa di prima, cercalo in memoria invece di indovinare.]`,
-        },
-      ],
-    });
-  }
+  //
+  // The notice is loop-written, not owner-authored: it goes out marked
+  // harness, so a continuation to a new lease archives it instead of replaying
+  // a stale count, and no synthetic line ever reads as the owner's words.
+  const announcement: Message | null =
+    dropped > 0
+      ? harnessMessage('user', [
+          {
+            type: 'text',
+            text: `[${dropped} messaggi precedenti di questa sessione non sono nel contesto. Se ti serve qualcosa di prima, cercalo in memoria invece di indovinare.]`,
+          },
+        ])
+      : null;
   /**
    * Da dove viene questa riga, quando non viene da qui.
    *
@@ -162,7 +251,13 @@ export function buildContext(
    * `core/memory/recall.ts` porta già scritta per `temporalLabel`. Una riga
    * vecchia senza `surface` non viene marcata: dire `[undefined]` sarebbe
    * peggio del silenzio.
+   *
+   * Replayed lines keep their legacy (absent) origin on purpose: the session
+   * file stores no provenance, so reconstructing one here would be guessing.
+   * Absent reads as durable evidence — never harness control, never the
+   * current owner input — which is exactly what a replayed line is.
    */
+  const history: Message[] = [];
   for (const m of kept) {
     const altrove = m.surface !== undefined && m.surface !== '' && m.surface !== input.surface;
     const testo = altrove ? `[${m.surface}] ${m.content}` : m.content;
@@ -174,7 +269,7 @@ export function buildContext(
      * append-only) non deve mai essere toccata per restare vera.
      */
     const disfatto = m.role === 'assistant' && m.traceId !== undefined && undoneTraceIds.has(m.traceId);
-    messages.push({
+    history.push({
       role: m.role as 'user' | 'assistant',
       content: [
         {
@@ -219,31 +314,117 @@ export function buildContext(
   });
 
   // Recalled memory rides in the same turn as the message it is context for, not
-  // as a separate user turn the model might answer. It is already fenced and
-  // framed as low-authority context (renderForPrompt); here it simply precedes
-  // the actual words.
-  messages.push({
-    role: 'user',
-    content: [
-      ...recalled,
-      { type: 'text' as const, text: ambiente },
-      ...(plan === '' ? [] : [{ type: 'text' as const, text: plan }]),
-      // Le immagini stanno **qui**, non nel record.
-      //
-      // `drive` svuota `messages` e lo ricostruisce da questa funzione a ogni
-      // giro: cio' che sta nel record e' cio' che e' successo, cio' che sta qui
-      // e' cio' che il modello vede. Metterle solo nel record — che e' quello
-      // che avevo fatto — le faceva sparire in silenzio, e il modello
-      // rispondeva «non vedo nessuna immagine» a una domanda su una foto che
-      // era arrivata davvero. Misurato contro il modello vero il 28/08/2026.
-      //
-      // Subito prima del testo, dopo il ricordato e il piano: le docs di
-      // entrambi i provider raccomandano immagine-poi-testo, e questa e'
-      // l'unica posizione che lo rispetta senza separare la domanda dal suo
-      // contesto.
-      ...media(input),
-      { type: 'text', text: input.text },
-    ],
+  // as a separate user turn the model might answer — but in its OWN message,
+  // marked as retrieved evidence. It is already fenced and framed as
+  // low-authority context (renderForPrompt); the marker is what keeps the
+  // fencing structural instead of prose the model must notice.
+  const memory: Message | null =
+    recalled.length > 0 ? provenanceMessage('user', 'memory', [...recalled]) : null;
+
+  const runtime = provenanceMessage('user', 'runtime', [{ type: 'text' as const, text: ambiente }]);
+
+  const work: Message | null =
+    plan === '' ? null : provenanceMessage('user', 'work', [{ type: 'text' as const, text: plan }]);
+
+  // Le immagini stanno **qui**, non nel record.
+  //
+  // `drive` svuota `messages` e lo ricostruisce da questa funzione a ogni
+  // giro: cio' che sta nel record e' cio' che e' successo, cio' che sta qui
+  // e' cio' che il modello vede. Metterle solo nel record — che e' quello
+  // che avevo fatto — le faceva sparire in silenzio, e il modello
+  // rispondeva «non vedo nessuna immagine» a una domanda su una foto che
+  // era arrivata davvero. Misurato contro il modello vero il 28/08/2026.
+  //
+  // Subito prima del testo, dopo il ricordato e il piano: le docs di
+  // entrambi i provider raccomandano immagine-poi-testo, e questa e'
+  // l'unica posizione che lo rispetta senza separare la domanda dal suo
+  // contesto.
+  //
+  // Solo i byte della superficie: niente memoria richiamata, niente fatti di
+  // runtime, niente piano. Ciò che l'owner ha scritto, e nient'altro.
+  const owner = ownerMessage([...media(input), { type: 'text', text: input.text }]);
+
+  return { announcement, history, memory, runtime, work, owner };
+}
+
+/**
+ * What a Context Receipt observer can see of one assembly — and nothing else.
+ *
+ * Pure shaping over the sections: per-section source (`origin`), a fixed
+ * inclusion reason, block count and byte/char sizes, and the stability class.
+ * No raw text, no memory content, no owner words, no paths, no secrets cross
+ * this boundary by construction: sizes are measured, never retained.
+ *
+ * Deliberately NOT the full Context Receipt (`agent/context/receipt.ts`,
+ * #592): that module owns the turn-wide rollup (taint, strategies,
+ * tool accounting, redaction counts) and recomputes nothing. This is the
+ * assembly half of its future input — sections this function built, described
+ * where they were built, so no second reader can disagree about what was
+ * selected.
+ */
+export type AssemblySectionDescriptor = {
+  key: SemanticSectionKey;
+  origin: MessageOrigin | 'legacy';
+  /** Why this section entered, fixed vocabulary. */
+  reason:
+    | 'history-truncated-notice'
+    | 'session-replay'
+    | 'recall-rendered'
+    | 'turn-facts'
+    | 'open-plan-rows'
+    | 'surface-input';
+  /** Every section here is volatile: the stable prefix lives outside this structure. */
+  stability: 'stable' | 'volatile';
+  blocks: number;
+  bytes: number;
+  chars: number;
+};
+
+const SECTION_REASON: Record<SemanticSectionKey, AssemblySectionDescriptor['reason']> = {
+  announcement: 'history-truncated-notice',
+  history: 'session-replay',
+  memory: 'recall-rendered',
+  runtime: 'turn-facts',
+  work: 'open-plan-rows',
+  owner: 'surface-input',
+};
+
+function measureBlocks(content: ContentBlock[]): { blocks: number; bytes: number; chars: number } {
+  let bytes = 0;
+  let chars = 0;
+  for (const b of content) {
+    if (b.type === 'text') {
+      bytes += Buffer.byteLength(b.text, 'utf8');
+      chars += [...b.text].length;
+    } else if (b.type === 'image' || b.type === 'audio') {
+      // Base64 payload size, never the payload: enough to weigh the section.
+      chars += b.data.length;
+      bytes += b.data.length;
+    }
+    // tool_use / tool_result / thinking carry identity, not bulk: counted as blocks only.
+  }
+  return { blocks: content.length, bytes, chars };
+}
+
+export function describeAssembly(ctx: SemanticContext): AssemblySectionDescriptor[] {
+  const sections: { key: SemanticSectionKey; message: Message }[] = [
+    ...(ctx.announcement === null ? [] : [{ key: 'announcement' as const, message: ctx.announcement }]),
+    ...ctx.history.map((message) => ({ key: 'history' as const, message })),
+    ...(ctx.memory === null ? [] : [{ key: 'memory' as const, message: ctx.memory }]),
+    { key: 'runtime' as const, message: ctx.runtime },
+    ...(ctx.work === null ? [] : [{ key: 'work' as const, message: ctx.work }]),
+    { key: 'owner' as const, message: ctx.owner },
+  ];
+  return sections.map(({ key, message }) => {
+    const { blocks, bytes, chars } = measureBlocks(message.content);
+    return {
+      key,
+      origin: message.origin ?? 'legacy',
+      reason: SECTION_REASON[key],
+      stability: 'volatile' as const,
+      blocks,
+      bytes,
+      chars,
+    };
   });
-  return messages;
 }
