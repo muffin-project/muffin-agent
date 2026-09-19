@@ -12,7 +12,7 @@ import {
   type ContinuationCandidate,
 } from './continuation.js';
 
-const owner: Principal = { kind: 'owner', connector: 'telegram', externalId: '130493441' };
+const owner: Principal = { kind: 'owner', connector: 'telegram', externalId: '987654321' };
 const NOW = Date.parse('2026-09-18T17:16:35.000Z');
 
 const reason = (over: Partial<ContinuableReason> = {}): ContinuableReason => ({
