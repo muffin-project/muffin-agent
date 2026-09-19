@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { TrustTier } from '../policy/types.js';
@@ -50,7 +50,23 @@ export type SessionMessage = {
   tier?: TrustTier;
 };
 
-export type SessionRef = { id: string; file: string };
+export type SessionRef = {
+  id: string;
+  file: string;
+  /**
+   * Which conversation of this session the ref was opened in.
+   *
+   * Resolved by the store, never invented by callers: `open()` reads it from
+   * the sidecar (absent sidecar means 0, the legacy default), `/new` bumps it
+   * through `newConversation()`. Additive and optional, so every literal
+   * `{id, file}` built in tests and gateways keeps compiling — a ref without
+   * it reads as generation 0 wherever a conversation identity is derived.
+   */
+  generation?: number;
+};
+
+/** Version of the conversation-metadata sidecar. Bumped only for breaking shape changes. */
+export const CONVERSATION_METADATA_VERSION = 1;
 
 export class SessionStore {
   private readonly dir: string;
@@ -62,7 +78,72 @@ export class SessionStore {
 
   open(id?: string): SessionRef {
     const sessionId = id ?? `${new Date().toISOString().slice(0, 10)}-${randomBytes(4).toString('hex')}`;
-    return { id: sessionId, file: join(this.dir, `${sessionId}.jsonl`) };
+    const ref: SessionRef = { id: sessionId, file: join(this.dir, `${sessionId}.jsonl`) };
+    // Read only, never a write: opening a session must not create identity.
+    // A missing sidecar is generation 0 (every session that predates it);
+    // a corrupt one throws — collapsing two conversations into one without
+    // saying so would be the silent direction.
+    ref.generation = this.generationOf(ref);
+    return ref;
+  }
+
+  /**
+   * Which conversation generation this session is in, from the sidecar.
+   *
+   * Missing metadata is 0, never an error: that is every legacy session and
+   * every fresh one. Present-but-unreadable metadata is an ERROR, never 0 —
+   * `missing` and `corrupt` are different facts, and treating a torn write
+   * as "no history" would merge two conversations' provider stickiness
+   * without a word. Loud here so `/new` and `open` both refuse to proceed
+   * on an identity nobody can state.
+   */
+  generationOf(session: SessionRef): number {
+    const file = this.generationFile(session.id);
+    if (!existsSync(file)) return 0;
+    let raw: string;
+    try {
+      raw = readFileSync(file, 'utf8');
+    } catch (error) {
+      throw new Error(`session ${session.id}: cannot read conversation metadata at ${file}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error(`session ${session.id}: corrupt conversation metadata at ${file}: not JSON`);
+    }
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      (parsed as { version?: unknown }).version !== CONVERSATION_METADATA_VERSION ||
+      !Number.isInteger((parsed as { generation?: unknown }).generation) ||
+      ((parsed as { generation?: number }).generation as number) < 0
+    ) {
+      throw new Error(
+        `session ${session.id}: corrupt conversation metadata at ${file}: expected {"version":${CONVERSATION_METADATA_VERSION},"generation":<non-negative int>}`,
+      );
+    }
+    return (parsed as { generation: number }).generation;
+  }
+
+  /**
+   * `/new` accettato: chiude la conversazione corrente e ne apre la successiva.
+   *
+   * Transcript rotation keeps its current semantics (archive when there is
+   * one, destroy nothing, same session id) AND the generation always moves —
+   * even when no `.jsonl` exists to archive. The `/new` intent draws the
+   * conversation boundary, not the physical transcript: a bare `/new`
+   * (`rotate` returning null) still ends the provider stickiness of the
+   * previous conversation.
+   *
+   * Corrupt metadata aborts BEFORE any state changes: neither the transcript
+   * nor the generation moves when the current generation cannot be stated.
+   */
+  newConversation(session: SessionRef, now: Date = new Date()): string | null {
+    const generation = this.generationOf(session);
+    const archivio = this.rotate(session, now);
+    this.writeGeneration(session, generation + 1);
+    return archivio;
   }
 
   /**
@@ -89,6 +170,30 @@ export class SessionStore {
     const archivio = session.file.replace(/\.jsonl$/, `.${marca}.jsonl`);
     renameSync(session.file, archivio);
     return archivio;
+  }
+
+  /**
+   * Where this session's conversation generation lives.
+   *
+   * A sibling of the transcript, keyed by session id — so the private owner
+   * scope (`owner` on every surface) shares one generation, while every
+   * group/topic key carries its own. Never `.jsonl`, so `rotate()`'s suffix
+   * replacement can never touch it, and transcript readers never see it.
+   */
+  private generationFile(sessionId: string): string {
+    return join(this.dir, `${sessionId}.conv.json`);
+  }
+
+  /**
+   * Durable bump, atomic: temporary file on the same filesystem, then rename.
+   * A torn write must leave either the old generation or the new one behind —
+   * never a half file that `generationOf` would then have to interpret.
+   */
+  private writeGeneration(session: SessionRef, generation: number): void {
+    const dest = this.generationFile(session.id);
+    const tmp = `${dest}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify({ version: CONVERSATION_METADATA_VERSION, generation }), 'utf8');
+    renameSync(tmp, dest);
   }
 
   append(session: SessionRef, message: SessionMessage): void {
