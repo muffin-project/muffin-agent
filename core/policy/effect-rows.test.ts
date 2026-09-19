@@ -21,6 +21,7 @@ import { todoCapability } from '../../agent/tools/todo.js';
 import { waitCapability } from '../../agent/tools/wait.js';
 import { vaultWriteCapability } from '../../agent/tools/vault-save.js';
 import { mcpCapabilityFor } from '../../agent/tools/mcp.js';
+import { scheduleCapability } from '../../agent/tools/schedule.js';
 import { DOORS } from './doors.js';
 
 /**
@@ -71,6 +72,7 @@ const ALL: readonly CapabilityDecl[] = [
   effectsCapability,
   todoCapability,
   waitCapability,
+  scheduleCapability,
   vaultWriteCapability,
   mcpCapabilityFor('esempio'),
   // The two doors: declared without a tool, asserted against their rows like
@@ -302,6 +304,7 @@ describe('la matrice normativa è eseguibile', () => {
         'todo.ts:todoCapability',
         'vault-save.ts:vaultWriteCapability',
         'wait.ts:waitCapability',
+        'schedule.ts:scheduleCapability',
       ].sort(),
     );
   });

@@ -3,6 +3,7 @@ import type { JobFireStore } from '../core/scheduler/job-fires.js';
 import { jobPayload, type Job } from '../core/scheduler/jobs.js';
 import type { FireDeferred, FireSettleOnly, JobOutcome, RunJob } from '../core/scheduler/scheduler.js';
 import type { ExecResult } from '../core/sandbox/executor.js';
+import type { TrustTier } from '../core/policy/types.js';
 import { CAPPED_MODEL, SCRIPT_MODEL, type TurnCounters, type TurnOutcome } from '../core/turns/store.js';
 import { runTurn, type LoopDeps, type TurnResult } from './loop.js';
 import { recoveredText } from './recovered-text.js';
@@ -13,8 +14,10 @@ import { recoveredText } from './recovered-text.js';
  * A job runs as the scheduler principal — `{ kind: 'system', source:
  * 'scheduler' }` — so the kernel treats it as itself, not as the owner: a
  * high-risk capability it would ask the owner for becomes an ASK queued for the
- * owner's return (threat model §3), and `outward.*` / `config.ratchet` are
- * denied outright. It never inherits the owner's column. Each fire gets a fresh
+ * owner's return (threat model §3), and `outward.*` / `config.ratchet` /
+ * `jobs.schedule` are denied outright (`forbiddenForSystem` — a fire runs
+ * with the full runtime, so without that row a job could mint new recurring
+ * jobs with no new owner decision). It never inherits the owner's column. Each fire gets a fresh
  * session: a daily brief is not one growing conversation.
  *
  * It does get the **owner-class context** (`agent/context/assemble.ts`), and
@@ -53,6 +56,31 @@ import { recoveredText } from './recovered-text.js';
  *  3. Not yet bound → mint an id, bind it *before* the turn is created or the
  *     model is ever called (fault point 3's precondition), then run.
  */
+
+/**
+ * Il taint con cui gira un'occasione: quello della riga, non un letterale.
+ *
+ * Era `0` scritto a mano in tre punti di questo file, e `cli/jobs.ts` diceva
+ * da dove sarebbe dovuto venire — «il primo cambiamento è quel `taint: 0`
+ * che diventa un valore letto dalla riga». Un intento scritto da un turno a
+ * taint 2 non diventa un giro futuro pulito: il kernel vede gli stessi tool
+ * con lo stesso soffitto del turno che ha chiesto la ricorrenza. Sulle righe
+ * legacy (`tier` 0) niente cambia, per costruzione.
+ */
+function fireTaint(job: Job): TrustTier {
+  return job.tier;
+}
+
+/**
+ * Il tenant in cui gira un'occasione: quello che ha chiesto la ricorrenza.
+ *
+ * Stessa direzione del taint qui sopra — il giro torna dove è nato, non
+ * guadagna un tenant che nessuno ha nominato. Sulle righe legacy è `host`,
+ * ed è ciò che il codice faceva già.
+ */
+function fireTenant(job: Job): string {
+  return job.origin.tenant;
+}
 
 /**
  * Map a turn's end to a delivery. Kept pure and separate from the runner so the
@@ -158,10 +186,17 @@ async function runFresh(
   const session = deps.sessions.open(`job-${job.id.slice(0, 8)}-${randomBytes(3).toString('hex')}`);
   const result = await runTurn(deps, {
     principal: { kind: 'system', source: 'scheduler' },
-    tenant: 'host',
+    tenant: fireTenant(job),
     surface: job.channel,
     session,
     text: job.goal,
+    /**
+     * Il taint della riga, oltre quello del principal: il testo dell'obiettivo
+     * porta la provenance del turno che ha chiesto la ricorrenza, ed è ciò
+     * che alza il taint iniziale del giro futuro. Assente/0 sulle righe
+     * legacy — indistinguibile da prima, per dichiarazione del campo stesso.
+     */
+    contentTaint: fireTaint(job),
     // L'attribuzione della spesa, e non un'etichetta: ogni riga di `spend`
     // che questo turno scrive porta questo id, ed è ciò che il gate qui sopra
     // legge al giro successivo. Toglierla non rompe niente oggi e rende il
@@ -396,7 +431,7 @@ function skipForBudget(
   const aperta = deps.turns.create({
     id: turnId,
     principal: { kind: 'system', source: 'scheduler' },
-    tenant: 'host',
+    tenant: fireTenant(job),
     surface: job.channel,
     sessionId: session.id,
     // `CAPPED_MODEL`, non `SCRIPT_MODEL` e non una stringa a mano: dice quale
@@ -408,7 +443,9 @@ function skipForBudget(
     // query invece di una deduzione dal nome della sessione.
     jobId: job.id,
     messages: [{ role: 'user', content: [{ type: 'text', text: jobPayload(job) }] }],
-    taint: 0,
+    // Il taint della riga, non un letterale: anche un giro che non parte
+    // resta attribuito alla provenance che l'ha chiesto.
+    taint: fireTaint(job),
     counters,
     replyTo: { channel: job.channel },
   });
@@ -420,7 +457,7 @@ function skipForBudget(
         { role: 'user', content: [{ type: 'text', text: jobPayload(job) }] },
         { role: 'assistant', content: [{ type: 'text', text: testo }] },
       ],
-      taint: 0,
+      taint: fireTaint(job),
       counters,
     },
     aperta.claimToken,
@@ -491,7 +528,7 @@ async function runScript(
   const aperta = deps.turns.create({
     id: turnId,
     principal: { kind: 'system', source: 'scheduler' },
-    tenant: 'host',
+    tenant: fireTenant(job),
     surface: job.channel,
     sessionId: session.id,
     // `SCRIPT_MODEL`, non una stringa scritta a mano: `agent/loop.ts` la legge
@@ -500,7 +537,7 @@ async function runScript(
     model: SCRIPT_MODEL,
     jobId: job.id,
     messages: [{ role: 'user', content: [{ type: 'text', text: `script: ${comando}` }] }],
-    taint: 0,
+    taint: fireTaint(job),
     counters,
     replyTo: { channel: job.channel },
   });
@@ -517,7 +554,7 @@ async function runScript(
           { role: 'user', content: [{ type: 'text', text: `script: ${comando}` }] },
           { role: 'assistant', content: [{ type: 'text', text }] },
         ],
-        taint: 0,
+        taint: fireTaint(job),
         counters,
       },
       aperta.claimToken,
