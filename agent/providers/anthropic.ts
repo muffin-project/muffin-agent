@@ -320,6 +320,8 @@ function toChatResult(response: ResultSource): ChatResult {
     // filtered to text+tool_use here and everything else fell on the floor.
     thinking: response.content.flatMap(toThinkingBlock),
     stopReason: mapStopReason(response.stop_reason),
+    // Verbatim wire reason beside the mapped one — see `ChatResult.finishReason`.
+    finishReason: response.stop_reason,
     usage: {
       // core/budget/pricing.ts's costUsd() treats inputTokens as the GRAND
       // TOTAL of input processed (true of the OpenRouter-compat wire's

@@ -680,6 +680,10 @@ function toChatResult(response: {
     // endpoint is OpenRouter; it is never exposed as user-visible text.
     thinking: [],
     stopReason: mapStopReason(response.finishReason, toolCalls.length > 0),
+    // The verbatim wire reason, beside the mapped one: when the router
+    // returns a reason nobody mapped (or none), `stopReason` reads `error`
+    // while this is the only evidence of what actually arrived.
+    finishReason: response.finishReason,
     usage: response.usage,
     model: response.model,
     ...(response.requestId === undefined ? {} : { requestId: response.requestId }),

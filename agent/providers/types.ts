@@ -284,6 +284,16 @@ export type ChatResult = {
   /** Arguments already parsed: a tool call that will not parse is an error here, not downstream. */
   toolCalls: { id: string; name: string; args: unknown }[];
   /**
+   * The raw wire finish reason (`finish_reason` / `stop_reason`), verbatim and
+   * unmapped — for telemetry and failure classification, never for display.
+   *
+   * `stopReason` below is the mapped vocabulary the loop routes on; when a
+   * provider returns a reason nobody mapped (or none at all) the mapped value
+   * says `error` while the *wire* value is the only evidence of what actually
+   * arrived. Recorded on the `muffin.chat_call` span; the owner never reads it.
+   */
+  finishReason?: string | null;
+  /**
    * The reasoning blocks this response opened with, in the order received.
    *
    * Separate from `text` and `toolCalls` because those are *normalised* — text
