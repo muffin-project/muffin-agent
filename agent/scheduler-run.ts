@@ -14,8 +14,10 @@ import { recoveredText } from './recovered-text.js';
  * A job runs as the scheduler principal — `{ kind: 'system', source:
  * 'scheduler' }` — so the kernel treats it as itself, not as the owner: a
  * high-risk capability it would ask the owner for becomes an ASK queued for the
- * owner's return (threat model §3), and `outward.*` / `config.ratchet` are
- * denied outright. It never inherits the owner's column. Each fire gets a fresh
+ * owner's return (threat model §3), and `outward.*` / `config.ratchet` /
+ * `jobs.schedule` are denied outright (`forbiddenForSystem` — a fire runs
+ * with the full runtime, so without that row a job could mint new recurring
+ * jobs with no new owner decision). It never inherits the owner's column. Each fire gets a fresh
  * session: a daily brief is not one growing conversation.
  *
  * It does get the **owner-class context** (`agent/context/assemble.ts`), and

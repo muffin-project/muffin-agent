@@ -15,7 +15,9 @@ import { TurnStore } from '../../core/turns/store.js';
 import { TodoStore } from '../../core/turns/todo.js';
 import { visibleTools } from '../context/assemble.js';
 import { toolContext } from '../fixtures/tool-context.js';
-import type { LoopDeps } from '../loop.js';
+import type { LoopDeps, RegisteredTool, ToolContext, TurnInput } from '../loop.js';
+import { runTool } from '../loop/tool-call.js';
+import { makeSnapshot } from '../loop/permissions.js';
 import { CONSERVATIVE } from '../profiles/profile.js';
 import type { ChatCall, ChatResult, Provider } from '../providers/types.js';
 import { buildRuntime } from '../runtime.js';
@@ -347,6 +349,146 @@ describe('la capability è registrata, surface-agnostic e chiusa ai membri', () 
       const src = readFileSync(join(root, file), 'utf8');
       expect(src, `${file} importa un parser cron proprio`).not.toContain('CronExpressionParser');
       void ammessi;
+    }
+  });
+});
+
+describe('un principal autonomo non arma ricorrenze (S1)', () => {
+  /**
+   * Amplification boundary: un'autonomia già delegata (il fire gira con il
+   * runtime completo) non deve creare nuova autonomia durevole. Cardinalità,
+   * durata e spesa crescerebbero senza una nuova decisione owner — e il taint
+   * che non sale non è la misura di questo guasto.
+   *
+   * La chiusura vive nel proprietario canonico (`forbiddenForSystem`,
+   * `core/policy/matrix.ts`), non in un `if` dentro l'handler: il kernel nega
+   * `principal_forbidden` a qualunque `system`, qualunque sia il taint.
+   */
+  function decideConSchedule() {
+    const caps = new Map([[scheduleCapability.id, scheduleCapability]] as const);
+    return createDecide({
+      matrix: POLICY_FLOOR,
+      capabilities: new Map(caps),
+      budgetExhausted: () => false,
+      hardened: true,
+    });
+  }
+
+  it('system@scheduler riceve principal_forbidden su jobs.schedule', () => {
+    const decide = decideConSchedule();
+    for (const taint of [0, 2, 3] as const) {
+      expect(
+        decide({
+          principal: { kind: 'system', source: 'scheduler' },
+          tenant: 'host',
+          capability: 'jobs.schedule',
+          resource: { kind: 'none' },
+          args: {},
+          taint,
+        }),
+      ).toEqual({ effect: 'deny', code: 'principal_forbidden', detail: 'not available to autonomous principals' });
+    }
+  });
+
+  it("l'owner normale continua a poter creare recurring jobs", () => {
+    const decide = decideConSchedule();
+    const d = decide({
+      principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
+      tenant: 'host',
+      capability: 'jobs.schedule',
+      resource: { kind: 'none' },
+      args: {},
+      taint: 0,
+    });
+    // `allow`: (context, low, undoable) esegue — `medium` sarebbe `draft` e
+    // `draft` senza `resolveEffectPath` rifiuta ogni chiamata, quindi un
+    // rischio diverso renderebbe il tool ineseguibile nel loop.
+    expect(d.effect).toBe('allow');
+  });
+});
+
+describe('one accepted effect → one Job (effect identity)', () => {
+  /**
+   * Il contract, stretto: UNA riga per ogni effect durevole accettato — non
+   * «una riga per intento umano». Due tool call distinte con gli stessi
+   * argomenti restano due richieste legittime (l'owner può volerlo davvero
+   * due volte); ma la STESSA identity `(turn_id, call_id)` — retry della
+   * stessa call, resume, duplicate id nello stesso batch — non deve mai
+   * raggiungere l'handler due volte.
+   *
+   * Il WAL scrive intent prima e outcome dopo: un outcome già registrato per
+   * questo `call.id` va rigiocato, mai ricalcolato (la stessa proprietà che
+   * `reconcile` garantisce alla ripresa — qui sul percorso vivo).
+   */
+  it('stesso call id consegnato due volte: handler una volta sola, una riga sola', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-schedule-effect-id-'));
+    const db = new DatabaseCtor(':memory:');
+    const turns = new TurnStore(db);
+    const jobs = new JobStore(db);
+    const tool: RegisteredTool = makeScheduleTool({ jobs, defaultTimezone: 'Europe/Rome', defaultChannel: 'cli' });
+    const caps = new Map([[scheduleCapability.id, scheduleCapability]] as const);
+    const deps: LoopDeps = {
+      provider: undefined as never,
+      profile: CONSERVATIVE,
+      model: 'test',
+      tools: [tool],
+      capabilities: new Map(caps),
+      decide: createDecide({ matrix: POLICY_FLOOR, capabilities: new Map(caps), budgetExhausted: () => false, hardened: true }),
+      tracer: new SimpleTracer(new JsonlExporter(home)),
+      sessions: new SessionStore(home),
+      turns,
+      todos: new TodoStore(new DatabaseCtor(':memory:')),
+      budgetExhausted: () => false,
+      systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin.' },
+    };
+    const owner = { kind: 'owner', connector: 'cli', externalId: 'local' } as const;
+    const snapshot = makeSnapshot(deps.decide, owner, 'host', 0);
+    const parent = deps.tracer.start('muffin.turn', {});
+    const input: TurnInput = {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session: { id: 's1', file: '/dev/null' },
+      text: 'ricordamelo ogni giorno alle 9',
+    };
+    const ctx: ToolContext = {
+      tenant: 'host',
+      principal: owner,
+      turnId: 'turn-1',
+      sessionId: 's1',
+      taint: () => snapshot.currentTaint(),
+      intrinsicTaint: () => snapshot.intrinsicTaint(),
+      suspend: () => {
+        throw new Error('questo test non sospende');
+      },
+      replyChannel: 'cli',
+    };
+    const call = { id: 'c1', name: 'schedule_recurring', args: { cron: '0 9 * * *', goal: 'bere acqua' } };
+
+    const first = await runTool(deps, snapshot, parent, call, input, [tool], ctx);
+    if (first.type !== 'tool_result') throw new Error(`atteso un tool_result, ricevuto ${first.type}`);
+    expect(first.isError).not.toBe(true);
+    const second = await runTool(deps, snapshot, parent, call, input, [tool], ctx);
+    if (second.type !== 'tool_result') throw new Error(`atteso un tool_result, ricevuto ${second.type}`);
+    // Stesso contenuto rigiocato — nessuna seconda esecuzione.
+    expect(second.content).toBe(first.content);
+    expect(second.isError).toBe(first.isError);
+    expect(jobs.list()).toHaveLength(1);
+    db.close();
+  });
+
+  it('due call id distinte con stessi args restano due richieste: due righe', async () => {
+    const db = new DatabaseCtor(':memory:');
+    try {
+      const jobs = new JobStore(db);
+      const tool = makeScheduleTool({ jobs, defaultTimezone: 'Europe/Rome', defaultChannel: 'cli' });
+      const ctx = toolContext({ sessionId: 'owner' });
+      const args = { cron: '0 9 * * *', goal: 'acqua' };
+      await tool.handler(args, ctx);
+      await tool.handler(args, ctx);
+      expect(jobs.list()).toHaveLength(2);
+    } finally {
+      db.close();
     }
   });
 });

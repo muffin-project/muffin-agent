@@ -13,6 +13,7 @@ import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { TodoStore } from '../core/turns/todo.js';
 import { CAPPED_MODEL, SCRIPT_MODEL, TurnStore } from '../core/turns/store.js';
 import { jobOutcomeFromTurn, makeJobRunner } from './scheduler-run.js';
+import { makeScheduleTool, scheduleCapability } from './tools/schedule.js';
 import { resumeTurn } from './loop.js';
 import type { LoopDeps, TurnResult } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
@@ -629,5 +630,81 @@ describe('makeJobRunner — il tetto per-job (E1)', () => {
     budget.record({ tenant: 'host', capability: 'llm.chat', model: 'test', inputTokens: 1, outputTokens: 1, usd: 9 });
     expect(budget.jobMonthUsd(job.id)).toBe(0.75);
     expect(budget.monthToDateUsd()).toBe(9.75);
+  });
+});
+
+describe('un fire non arma ricorrenze (S1, production path)', () => {
+  /**
+   * La prova che il divieto del kernel è sul percorso che il prodotto usa
+   * davvero: un job padre gira con il runtime completo (il tool
+   * `schedule_recurring` è registrato, come in `cli/gateway.ts`), il modello
+   * chiama `schedule_recurring`, e il giro deve finire con un rifiuto
+   * deterministico e **zero** nuove righe in `jobs`.
+   *
+   * Senza `jobs.schedule` in `forbiddenForSystem` il kernel risponderebbe
+   * `draft` (medium + undoable procede) e questa prova troverebbe due righe:
+   * è la mutazione load-bearing che la tiene rossa.
+   */
+  it('il giro tenta schedule_recurring, legge principal_forbidden, non scrive', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-fire-no-selfsched-'));
+    const db = new DatabaseCtor(':memory:');
+    const turns = new TurnStore(db);
+    const todos = new TodoStore(db);
+    const jobs = new JobStore(db);
+    const fires = new JobFireStore(db);
+    const visti: string[] = [];
+    const provider: Provider = {
+      kind: 'openai-compat',
+      chat: async (call?: ChatCall): Promise<ChatResult> => {
+        for (const m of call?.messages ?? []) {
+          for (const b of m.content as Array<{ type: string; text?: string; content?: string }>) {
+            if (b.type === 'tool_result' && b.content) visti.push(b.content);
+          }
+        }
+        if (visti.length === 0) {
+          return {
+            text: null,
+            toolCalls: [{ id: 'c1', name: 'schedule_recurring', args: { cron: '0 9 * * *', goal: 'figlio' } }],
+            stopReason: 'tool_use',
+            usage: { inputTokens: 3, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 },
+            model: 'test',
+          };
+        }
+        return {
+          text: 'ricevuto',
+          toolCalls: [],
+          stopReason: 'end',
+          usage: { inputTokens: 3, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          model: 'test',
+        };
+      },
+    };
+    const tool = makeScheduleTool({ jobs, defaultTimezone: 'Europe/Rome', defaultChannel: 'cli' });
+    const caps = new Map([[scheduleCapability.id, scheduleCapability]] as const);
+    const deps: LoopDeps = {
+      provider,
+      profile: CONSERVATIVE,
+      model: 'test-model',
+      tools: [tool],
+      decide: createDecide({ matrix: POLICY_FLOOR, capabilities: new Map(caps), budgetExhausted: () => false, hardened: true }),
+      capabilities: new Map(caps),
+      tracer: new SimpleTracer(new JsonlExporter(home)),
+      sessions: new SessionStore(home),
+      turns,
+      todos,
+      budgetExhausted: () => false,
+      systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin.' },
+    };
+    const padre = jobs.add(SPEC);
+
+    const outcome = await makeJobRunner(deps, fires)(padre, undefined);
+
+    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
+    expect(outcome.stopped).toBe('answered');
+    // Deterministico: il rifiuto del kernel, non un testo del modello.
+    expect(visti.some((t) => t.includes('principal_forbidden'))).toBe(true);
+    // Zero nuove righe: resta solo il padre.
+    expect(jobs.list().map((j) => j.id)).toEqual([padre.id]);
+    db.close();
   });
 });

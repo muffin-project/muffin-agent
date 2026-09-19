@@ -231,11 +231,15 @@ function toJob(row: Row): Job {
     // Stessa disciplina sulle colonne di provenance (migrazione 7): una riga
     // legacy descrive un owner al terminale, e i default dello schema dicono
     // già così — qui si rende solo lo stesso *tipo*, mai un valore inventato.
+    // `||` e non `??`: una stringa vuota (riga corrotta a mano — lo schema la
+    // impedisce sulle colonne nuove ma non su quelle vecchie) non è un tenant
+    // né una superficie, e al fire arriverebbe come indirizzo vuoto invece
+    // che come default noto.
     origin: {
-      tenant: row.origin_tenant ?? 'host',
-      surface: row.origin_surface ?? 'cli',
-      principal: row.origin_principal ?? 'owner',
-      turnId: row.origin_turn ?? null,
+      tenant: row.origin_tenant || 'host',
+      surface: row.origin_surface || 'cli',
+      principal: row.origin_principal || 'owner',
+      turnId: row.origin_turn || null,
     },
     tier: asTier(row.tier),
   };
