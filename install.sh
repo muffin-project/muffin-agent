@@ -444,7 +444,15 @@ fi
 # and inherited by every child). `cmdInit` refuses both by name, so this is not
 # a convention this file could quietly break — ADR-0048.
 #
+# An existing Home is NEVER re-initialised here, on any input mode: `init`
+# used to rebuild the config from defaults, so accepting the prompt on an
+# existing Home silently reset models/surfaces/provider routing and more
+# (incident 2026-09-18 — `runInit` now preserves, but the installer still has
+# no business re-running setup unasked). A deliberate reconfiguration is
+# `muffin init` typed by the owner, never this prompt's default.
+#
 # Three cases, and the one that cannot get a key does not pretend:
+#   · setup already exists → skip, continue to upgrade/supervisor/migration
 #   · MUFFIN_API_KEY_FILE set → unattended, the file is piped in
 #   · a terminal              → `init` runs and asks, hidden
 #   · a pipe with no key file → print the one command and stop here
@@ -452,7 +460,12 @@ fi
 already_configured() { [ -f "${MUFFIN_HOME:-$HOME/.muffin}/config.json" ]; }
 
 did_init=0
-if [ -n "${MUFFIN_API_KEY_FILE:-}" ]; then
+if already_configured; then
+  say ""
+  say "setup already exists (${MUFFIN_HOME:-$HOME/.muffin}/config.json) — skipping init, continuing to upgrade/supervisor steps"
+  say "  to reconfigure deliberately:  $CMD init"
+  did_init=1
+elif [ -n "${MUFFIN_API_KEY_FILE:-}" ]; then
   [ -f "$MUFFIN_API_KEY_FILE" ] || die "MUFFIN_API_KEY_FILE=$MUFFIN_API_KEY_FILE does not exist."
   say ""
   say "setting up (key read from $MUFFIN_API_KEY_FILE, never from argv or the environment)…"
@@ -468,8 +481,6 @@ elif [ -t 0 ]; then
       did_init=1
       ;;
   esac
-elif already_configured; then
-  did_init=1
 fi
 
 if [ "$did_init" = 0 ]; then

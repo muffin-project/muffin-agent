@@ -432,4 +432,60 @@ else
   bad "the rolled-back build cannot run \`muffin doctor\` (exit $AFTER_RC)"
 fi
 
+# ---------------------------------------------------------------------------
+step "an existing Home is never re-initialised (P0 2026-09-18)"
+# ---------------------------------------------------------------------------
+# The incident: accepting install.sh's TTY setup prompt on a CONFIGURED Home
+# re-ran `muffin init`, which rebuilt config.json from defaults — models,
+# surfaces, provider routing, search, embedder, prompt, all reset. The fix has
+# two halves: install.sh skips setup when config.json exists (THIS phase, on
+# the real installer path), and runInit preserves (unit falsifiers in
+# cli/init.test.ts). This phase replays the exact trigger — a second
+# install.sh run WITH a controlling TTY answering the default (empty Enter) —
+# and asserts config.json plus every secret file byte-identical afterwards.
+# Against the old installer this is red: the prompt fires, init rebuilds,
+# the sha moves.
+if ! command -v script >/dev/null 2>&1; then
+  bad "the 'script' command is missing — the interactive rerun cannot be proven here (failing, not silently skipping: this phase is the P0 falsifier)"
+else
+  BEFORE_SHA=$(sha256sum "$HOME/.muffin/config.json" | awk '{print $1}')
+  find "$HOME/.muffin/secrets" "$XDG_CONFIG_HOME/muffin/secrets" -type f 2>/dev/null | sort >"$LAB/secrets-before.txt"
+  RERUN_LOG="$LAB/rerun.log"
+  set +e
+  # The single newline is the default-Enter answer IF the old prompt ever
+  # fires (no `</dev/null` here: it would override the pipe and feed EOF —
+  # which also defaults to yes, but the Enter is the honest trigger).
+  printf '\n' | script -qec "env -i HOME=\"$HOME\" XDG_CONFIG_HOME=\"$XDG_CONFIG_HOME\" PATH=\"$CLEAN_PATH\" TERM=\"${TERM:-dumb}\" MUFFIN_PREFIX=\"$MUFFIN_PREFIX\" MUFFIN_REPO=\"$ORIGIN\" MUFFIN_CHANNEL=main sh \"$LAB/install.sh\"" /dev/null >"$RERUN_LOG" 2>&1
+  RERUN_RC=$?
+  set -e
+  tail -12 "$RERUN_LOG" | sed 's/^/  | /'
+  case "$RERUN_RC" in
+    0 | 3) ok "rerun exited $RERUN_RC (0 active, 3 installed-but-no-user-bus — both legitimate here)" ;;
+    *) bad "rerun install.sh exited $RERUN_RC (see $LAB/rerun.log)" ;;
+  esac
+  if grep -q 'skipping init' "$RERUN_LOG"; then
+    ok "rerun skipped setup on the existing Home"
+  else
+    bad "rerun never said 'skipping init' — the setup guard did not fire"
+  fi
+  if grep -q 'set up muffin now?' "$RERUN_LOG"; then
+    bad "rerun ASKED the setup prompt on an existing Home — the TTY branch was entered"
+  else
+    ok "no setup prompt on the rerun (TTY branch not entered)"
+  fi
+  AFTER_SHA=$(sha256sum "$HOME/.muffin/config.json" | awk '{print $1}')
+  if [ "$AFTER_SHA" = "$BEFORE_SHA" ]; then
+    ok "config.json byte-identical after the interactive rerun"
+  else
+    bad "config.json CHANGED by the rerun ($BEFORE_SHA -> $AFTER_SHA)"
+  fi
+  find "$HOME/.muffin/secrets" "$XDG_CONFIG_HOME/muffin/secrets" -type f 2>/dev/null | sort >"$LAB/secrets-after.txt"
+  if cmp -s "$LAB/secrets-before.txt" "$LAB/secrets-after.txt"; then
+    ok "secret files untouched by the rerun"
+  else
+    bad "secret files changed by the rerun"
+    diff "$LAB/secrets-before.txt" "$LAB/secrets-after.txt" | sed 's/^/  | /'
+  fi
+fi
+
 finish

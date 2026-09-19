@@ -1,6 +1,6 @@
 import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
-import { promptLine, promptSecret } from './prompt.js';
+import { promptLine, promptSecret, resolveSecretInput } from './prompt.js';
 import { applica } from './schermo.js';
 
 /** A writable/readable pair that claims to be a TTY, so the prompts engage. */
@@ -196,5 +196,88 @@ describe('la domanda di un prompt nascosto resta a schermo', () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+/**
+ * P0 2026-09-18 — `muffin secret set NAME` secure input semantics.
+ *
+ * Red-before: `cmdSecret` always called `readAllStdin()` first, which waits
+ * ~3s for a first byte an interactive terminal never sends on its own — the
+ * owner got "stdin non ha prodotto niente entro 3s" instead of a prompt.
+ * Green-after: TTY resolves via the masked prompt immediately (no stdin
+ * wait at all — the piped reader is never even called); pipes keep the
+ * stdin path; argv/env are not sources anywhere on this path (there is no
+ * value slot in argv and no variable read — asserted by construction, and by
+ * the refusals below never touching them).
+ */
+describe('resolveSecretInput — TTY prompt vs piped stdin (P0 2026-09-18)', () => {
+  it('TTY: prompts masked immediately, never waits on stdin', async () => {
+    let pipedCalled = false;
+    let prompted: string | null = null;
+    const out = await resolveSecretInput({
+      stdinIsTTY: true,
+      name: 'k',
+      readPiped: () => { pipedCalled = true; return 'mai'; },
+      prompt: async (q) => { prompted = q; return 'sk-dal-terminale'; },
+    });
+    expect(out).toEqual({ ok: true, value: 'sk-dal-terminale' });
+    expect(prompted).toMatch(/nascosto/i);
+    expect(pipedCalled).toBe(false);
+  });
+
+  it('TTY + empty input refuses cleanly (nothing to write)', async () => {
+    const out = await resolveSecretInput({
+      stdinIsTTY: true,
+      name: 'k',
+      readPiped: () => { throw new Error('must not read stdin on a TTY'); },
+      prompt: async () => '',
+    });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.message).toMatch(/niente scritto/);
+  });
+
+  it('TTY + Ctrl+D (undefined) refuses cleanly', async () => {
+    const out = await resolveSecretInput({
+      stdinIsTTY: true,
+      name: 'k',
+      readPiped: () => { throw new Error('must not read stdin on a TTY'); },
+      prompt: async () => undefined,
+    });
+    expect(out.ok).toBe(false);
+  });
+
+  it('piped: reads stdin, never prompts', async () => {
+    let prompted = false;
+    const out = await resolveSecretInput({
+      stdinIsTTY: false,
+      name: 'k',
+      readPiped: () => '  sk-dalla-pipe  \n',
+      prompt: async () => { prompted = true; return 'mai'; },
+    });
+    expect(out).toEqual({ ok: true, value: 'sk-dalla-pipe' });
+    expect(prompted).toBe(false);
+  });
+
+  it('piped + empty stdin names the pipe remedy, not a prompt', async () => {
+    const out = await resolveSecretInput({
+      stdinIsTTY: false,
+      name: 'mia_chiave',
+      readPiped: () => '   \n',
+      prompt: async () => 'mai',
+    });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.message).toContain('muffin secret set mia_chiave');
+  });
+
+  it('piped + read error reports the error, never an empty value', async () => {
+    const out = await resolveSecretInput({
+      stdinIsTTY: false,
+      name: 'k',
+      readPiped: () => { throw new Error('stdin non ha prodotto niente entro 3s'); },
+      prompt: async () => 'mai',
+    });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.message).toContain('non riesco a leggere stdin');
   });
 });
