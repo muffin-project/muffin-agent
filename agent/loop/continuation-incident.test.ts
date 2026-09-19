@@ -65,7 +65,10 @@ class Scripted implements Provider {
   }
 }
 
-function readTool(callsByPath: Map<string, number>): { tool: LoopDeps['tools'][number]; decl: CapabilityDecl } {
+function readTool(
+  callsByPath: Map<string, number>,
+  contentFor: (path: string) => string = (path) => `contenuto di ${path}`,
+): { tool: LoopDeps['tools'][number]; decl: CapabilityDecl } {
   const decl: CapabilityDecl = { ...searchCapability, id: 'sys.fs_read', hostOnly: false };
   return {
     decl,
@@ -80,20 +83,25 @@ function readTool(callsByPath: Map<string, number>): { tool: LoopDeps['tools'][n
       handler: (args) => {
         const path = ((args ?? {}) as Record<string, unknown>).path;
         if (typeof path === 'string') callsByPath.set(path, (callsByPath.get(path) ?? 0) + 1);
-        return { content: `contenuto di ${String(path)}`, tier: 2 };
+        return { content: contentFor(String(path)), tier: 2 };
       },
       throwTier: 0,
     },
   };
 }
 
-function world(script: (ChatResult | Error)[], callsByPath: Map<string, number>, profile = CONSERVATIVE) {
+function world(
+  script: (ChatResult | Error)[],
+  callsByPath: Map<string, number>,
+  profile = CONSERVATIVE,
+  contentFor: (path: string) => string = (path) => `contenuto di ${path}`,
+) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-incident-'));
   const db = new DatabaseCtor(':memory:');
   const turns = new TurnStore(db);
   const sessions = new SessionStore(home);
   const capabilities = new Map();
-  const { tool, decl } = readTool(callsByPath);
+  const { tool, decl } = readTool(callsByPath, contentFor);
   capabilities.set(decl.id, decl);
   const provider = new Scripted(script);
   const deps: LoopDeps = {
@@ -227,8 +235,7 @@ describe('Incident A · useful work then provider stalls', () => {
     expect(row?.counters.recoveriesUsed).toBe(0);
   });
 
-  it('requireTool exhaustion becomes continuable; the next lease starts auto', async () => {
-    // Mandate regression: lease 1 walks the whole cascade to requireTool
+  it('requireTool exhaustion becomes continuable; the next lease starts auto', async () => {    // Mandate regression: lease 1 walks the whole cascade to requireTool
     // (the wire IS demanded once, there), becomes continuable, and lease 2
     // runs with fresh recovery state and toolChoice=auto — stale
     // requireTool/strict-json/nudge directives from lease 1 are archived,
@@ -404,5 +411,55 @@ describe('Incident A · useful work then provider stalls', () => {
     const wire = JSON.stringify(turns.get('dangle')?.messages);
     expect(wire).not.toContain('non è possibile sapere');
     expect(turns.recordedOutcomes('dangle').get('c-dangle')?.content).toBe('scritto');
+  });
+
+  it('sensitive echoes survive the lease boundary: read, fail, resume, echo attempt, scrubbed', async () => {
+    // The mandated six-step proof. Lease 1 reads a credentials file (the
+    // handler returns the secret itself), then stalls into continuable
+    // WITHOUT re-reading. Lease 2's model tries to echo the secret verbatim
+    // into its answer. The reply must come back scrubbed — proving
+    // rehydration rebuilt the RAM-only protection from durable pairs.
+    // Deleting the rehydrate call in TurnRun turns this red.
+    const SECRET = 'password-supersegreta-del-router-99';
+    const reads = new Map<string, number>();
+    const w = world(
+      [
+        calls('fs_read', 'c1', { query: 'router', path: 'credenziali-router.txt' }),
+        stall(),
+        stall(),
+        stall(),
+        stall(),
+        {
+          text: `la password è ${SECRET}, eccola`,
+          toolCalls: [],
+          stopReason: 'end',
+          usage: someUsage,
+          model: 'test-model',
+        },
+      ],
+      reads,
+      CONSERVATIVE,
+      () => SECRET,
+    );
+    const session = w.sessions.open('owner');
+    const first = await runTurn(w.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session,
+      text: 'leggi le credenziali del router',
+    });
+    expect(first.stopped).toBe('continuable');
+    expect(reads.get('credenziali-router.txt')).toBe(1);
+
+    const second = await continueTurn(w.deps, first.turnId, {
+      message: { role: 'user', content: [{ type: 'text', text: 'riprendi' }] },
+      session: w.sessions.open('owner'),
+    });
+    if ('why' in second) throw new Error(`refused: ${second.why}`);
+    expect(second.stopped).toBe('answered');
+    expect(second.text).not.toContain(SECRET);
+    // And the secret was never re-read to rebuild the protection.
+    expect(reads.get('credenziali-router.txt')).toBe(1);
   });
 });
