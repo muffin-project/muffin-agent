@@ -100,6 +100,13 @@ export type DoctorOptions = {
    * the developer's machine, not the product.
    */
   voce?: { accettaAudio?: () => Promise<boolean>; path?: string };
+  /**
+   * Test-only: overrides the real `hardeningHolds(home)` probe for the
+   * owner-binding remedy below, so the hardened branch runs in the suite
+   * without needing a rot/ owned by another OS user — the same reason
+   * `supervisorProbes` exists above. `undefined` means the real probe.
+   */
+  hardened?: boolean;
 };
 
 /**
@@ -323,7 +330,7 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
   } else {
     warn('root of trust', `${rot.reason}: ${rot.diverged.join(', ')} — safe mode`, rot.remedy);
   }
-  ownerBindingCheck(ok, warn, fail, home, config);
+  ownerBindingCheck(ok, warn, fail, home, config, options.hardened);
 
   // Where the permission matrix came from. Same shape of invisible fact as the
   // cache dialect above: the sealed file and the compiled fallback behave
@@ -1712,6 +1719,7 @@ function ownerBindingCheck(
   fail: (name: string, detail: string, remedy: string) => void,
   home: string,
   config: Config,
+  hardenedOverride?: boolean,
 ): void {
   const sealed = loadSealedOwner(home);
   const tgConfig = config.surfaces.telegram?.ownerUserId;
@@ -1764,11 +1772,20 @@ function ownerBindingCheck(
   if (dcSealed === undefined && dcConfig !== undefined) legacy.push(`discord ${dcConfig}`);
   if (legacy.length === 0) return;
 
+  // Su hardened questo processo non può scrivere rot/: promettere che `enable`
+  // "scrive e risigilla nello stesso giro" è la bugia misurata in #569 —
+  // l'enable gira, non scrive niente, e al doctor dopo il check è ancora
+  // giallo. Il rimedio nomina il privilegio che possiede rot/ invece di
+  // promettere il giro automatico (la stessa diramazione che
+  // `sealOwnerBinding` già stampa quando rifiuta).
+  const hardened = hardenedOverride ?? hardeningHolds(home).holds;
   warn(
     'owner binding legacy',
     `${legacy.join(', ')} — il legame vive solo in config.json, fuori dal sigillo: qualunque processo che gira come te ` +
       'può riscriverlo e diventare owner, e nessun hash se ne accorgerebbe' +
       (sealed.note === undefined ? '' : ` (${sealed.note})`),
-    'rifai `muffin surface enable telegram` (o `discord`): scrive rot/owner.json e risigilla nello stesso giro',
+    hardened
+      ? 'rot/ non è scrivibile da questo processo (hardened): `muffin surface enable telegram` (o `discord`) da solo non può scrivere rot/owner.json né risigillare — rieseguilo con il privilegio che possiede rot/, e sarà quel giro a scrivere e risigillare'
+      : 'rifai `muffin surface enable telegram` (o `discord`): scrive rot/owner.json e risigilla nello stesso giro',
   );
 }

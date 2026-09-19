@@ -1980,6 +1980,28 @@ describe('doctor names where the owner binding lives', () => {
     expect(c?.remedy).toContain('muffin surface enable telegram');
   });
 
+  it('on hardened does not promise an automatic reseal — it names the privilege owning rot/', async () => {
+    const dir = home();
+    conConfigTelegram(dir, 111);
+    const c = await checkWith(dir, 'owner binding legacy', { hardened: true });
+    expect(c?.level).toBe('warn');
+    expect(c?.remedy).toContain('muffin surface enable telegram');
+    // La bugia misurata in #569: su hardened l'enable girato da questo
+    // processo non scrive rot/owner.json né risigilla, quindi il rimedio non
+    // può promettere il giro automatico — deve nominare il privilegio.
+    expect(c?.remedy).not.toContain('scrive rot/owner.json e risigilla nello stesso giro');
+    expect(c?.remedy).toMatch(/hardened/);
+    expect(c?.remedy).toMatch(/privilegio che possiede rot\//);
+  });
+
+  it('with the single-user override keeps promising the automatic reseal', async () => {
+    const dir = home();
+    conConfigTelegram(dir, 111);
+    const c = await checkWith(dir, 'owner binding legacy', { hardened: false });
+    expect(c?.level).toBe('warn');
+    expect(c?.remedy).toContain('scrive rot/owner.json e risigilla nello stesso giro');
+  });
+
   it('says which of two disagreeing bindings wins', async () => {
     const dir = home();
     conConfigTelegram(dir, 111);
