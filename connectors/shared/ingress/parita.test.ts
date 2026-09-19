@@ -557,6 +557,19 @@ describe('3. nessun connettore possiede il loop', () => {
     expect(colpevoli.map((s) => s.path)).toEqual(['connectors/shared/ingress/work.ts']);
   });
 
+  it('sotto connectors/ solo lo stadio work importa continueTurn come valore', () => {
+    // P0-B: la seconda bocca verso il modello (la nuova lease) ha lo stesso
+    // domicilio obbligato della prima — il connettore invoca il resolver per
+    // la bind, mai la continuazione per l'esecuzione.
+    const colpevoli = sorgenti.filter((s) => s.path.startsWith('connectors/') && importaComeValore(s.testo, 'continueTurn'));
+    expect(colpevoli.map((s) => s.path)).toEqual(['connectors/shared/ingress/work.ts']);
+  });
+
+  it('sotto cli/ solo resume importa continueTurn come valore', () => {
+    const colpevoli = sorgenti.filter((s) => s.path.startsWith('cli/') && importaComeValore(s.testo, 'continueTurn'));
+    expect(colpevoli.map((s) => s.path)).toEqual(['cli/resume.ts']);
+  });
+
   it('sotto cli/ solo il terminale lo fa, e i due file sono nominati', () => {
     const colpevoli = sorgenti.filter((s) => s.path.startsWith('cli/') && importaComeValore(s.testo, 'runTurn'));
     expect(colpevoli.map((s) => s.path).sort()).toEqual([...BOCCHE_SENZA_INGRESSO].sort());

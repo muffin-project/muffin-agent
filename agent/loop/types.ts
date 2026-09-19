@@ -945,7 +945,7 @@ export const MAX_RESUMES = 3;
 /** Why a resume could not happen. Never a throw: the caller has to be able to say so. */
 export type ResumeRefusal = {
   turnId: string;
-  why: 'not_found' | 'claimed' | 'model_changed' | 'exhausted' | 'finished';
+  why: 'not_found' | 'claimed' | 'model_changed' | 'exhausted' | 'finished' | 'continuable';
   detail: string;
 };
 

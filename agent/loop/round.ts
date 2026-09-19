@@ -3,6 +3,7 @@ import { replyCapability } from '../../core/policy/doors.js';
 import type { CapabilityId, Decision, DecisionRequest } from '../../core/policy/types.js';
 import { redactText, scrubResourceEchoes } from '../../core/tracing/redact.js';
 import { ATTR } from '../../core/tracing/types.js';
+import type { ContinuableClass } from '../../core/turns/store.js';
 import { checkCompletion, completionNudge } from '../completion.js';
 import type { TenantClass } from '../context/assemble.js';
 import { compactToolResults } from '../context/compact.js';
@@ -15,7 +16,7 @@ import {
   ProviderStreamError,
 } from '../providers/types.js';
 import { ReasoningConfigurationError, reasoningFromLegacyThinking } from '../providers/reasoning.js';
-import { checkpoint, finish, suspendHere, type TurnScope } from './durability.js';
+import { checkpoint, finish, releaseContinuable, suspendHere, type TurnScope } from './durability.js';
 import type { ExecutionAbortReason, ExecutionBudget, ModelCallLease, ModelCallTelemetry } from './execution-budget.js';
 import { harnessMessage } from './message-origin.js';
 import { drainStream, edgeTrimmer, retryDelayMs } from './stream.js';
@@ -95,21 +96,24 @@ function replyRefusedText(decision: Exclude<Decision, { effect: 'allow' }>): str
 }
 
 /**
- * What the lease watchdog concluded, in the owner's words.
+ * Lease watchdog causes are continuable classes with one rename.
  *
- * One sentence per cause, because "ha raggiunto il suo limite di tempo" for a
- * 30s first-activity stall sent every diagnosis after a 90s deadline that
- * never fired. The reason code travels on the span unchanged; this is only
- * the sentence.
+ * `user_stop` never reaches here (it returns `aborted` above); the switch
+ * stays exhaustive without a default so the next watchdog cause breaks the
+ * build at this site instead of silently becoming a terminal error.
  */
-function abortText(reason: ExecutionAbortReason): string {
+function leaseAbortClass(reason: Exclude<ExecutionAbortReason, 'user_stop'>): ContinuableClass {
   switch (reason) {
     case 'model_first_activity_timeout':
-      return 'Il provider non ha inviato alcun segnale di attività in tempo (nessun token entro il limite di prima attività).';
+      return 'model_first_activity_timeout';
     case 'model_stall':
-      return 'Il provider ha smesso di inviare dati a metà risposta (stallo).';
-    default:
-      return 'La chiamata al modello ha raggiunto il suo limite di tempo.';
+      return 'model_stall';
+    case 'model_deadline':
+      return 'model_deadline';
+    case 'turn_deadline':
+      return 'turn_deadline';
+    case 'active_model_budget_exhausted':
+      return 'active_model_budget';
   }
 }
 
@@ -157,29 +161,6 @@ export function classifyProviderFailure(
   }
 }
 
-/**
- * The terminal sentence for an exhausted provider failure (P0-A).
- *
- * States observable facts — attempts, the failure class, completed work, the
- * turn id — and invents no cause. It deliberately promises no resumption:
- * that is PR B's sentence to write, once continuation exists.
- */
-function providerFailureText(
-  scope: TurnScope,
-  failureClass: 'provider_empty' | 'truncated',
-  attempts: number,
-): string {
-  const completed =
-    scope.run.toolCallsMade > 0 ? `${scope.run.toolCallsMade} tool call completate` : 'nessuna tool call ancora completata';
-  const cause =
-    failureClass === 'truncated'
-      ? 'il modello ha esaurito il limite di output senza produrre contenuto'
-      : 'risposta vuota dal provider (nessun testo, nessuna tool call, nessun token, nessuna attività)';
-  return (
-    `Il provider non ha prodotto una risposta utilizzabile dopo ${attempts} tentativi (${cause}). ` +
-    `Il lavoro già fatto resta registrato nel turno ${scope.record.id.slice(0, 12)}: ${completed}.`
-  );
-}
 /**
  * One step down the cascade the profile declared, or false when it is spent.
  *
@@ -268,7 +249,10 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       return finish(scope, 'aborted', 'Interrotto.', 'user_stop');
     }
     if (execution.expired()) {
-      return finish(scope, 'error', 'Il turno ha raggiunto il limite di tempo.', 'turn_deadline');
+      // The wall is a lease boundary, not a verdict on the work: release so
+      // the owner may grant the next lease instead of reading a deadline as
+      // a failure of what was done so far.
+      return releaseContinuable(scope, 'turn_deadline', run.iterations);
     }
     /**
      * May what this round produces reach the channel? Asked **before** the
@@ -535,7 +519,10 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // The signal is the fact; the exception is only how it arrived.
       if (abortReason === 'user_stop' || input.signal?.aborted) return finish(scope, 'aborted', 'Interrotto.', 'user_stop');
       if (abortReason !== undefined) {
-        return finish(scope, 'error', abortText(abortReason), abortReason);
+        // A spent lease is a yield, not an ending: the work checkpoints
+        // durably and the owner may grant the next lease. Only an explicit
+        // stop ends the work itself here.
+        return releaseContinuable(scope, leaseAbortClass(abortReason), run.iterations);
       }
       // Two failures wearing one type, and they take different doors.
       //
@@ -687,6 +674,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     // budget (provider flakiness), never the semantic cascade (model
     // misbehavior).
     if (providerFailure !== undefined) {
+      if (result.requestId !== undefined) run.providerFailureRequestIds.push(result.requestId);
       if (providerFailure.class === 'refused') {
         return finish(
           scope,
@@ -711,7 +699,10 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
         await sleep(retryDelayMs(attempt), AbortSignal.any(waitSignals));
         continue;
       }
-      return finish(scope, 'error', providerFailureText(scope, providerFailure.class, run.providerEmptyStreak + 1), providerFailure.class);
+      // Bounded re-drive spent: the lease ends recoverably, with the work
+      // intact and a truthful diagnostic — never the semantic cascade, never
+      // a generic sentence.
+      return releaseContinuable(scope, providerFailure.class, run.providerEmptyStreak + 1);
     }
     // Anything the provider actually produced resets the consecutive-empty
     // count: the streak bounds one stall cluster, not the lease.
@@ -720,7 +711,11 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     // Nothing at all: recover rather than presenting silence as an answer.
     if (!result.text && result.toolCalls.length === 0) {
       if (recover(scope, 'empty')) continue;
-      return finish(scope, 'error', 'Il modello non ha prodotto una risposta utilizzabile.');
+      // The cascade is spent and the model still produced nothing usable. A
+      // fresh lease with fresh recovery state may succeed where this one did
+      // not — and only the owner grants it, so this releases instead of
+      // closing the work as a failure.
+      return releaseContinuable(scope, 'recovery_exhausted', run.recoveriesUsed);
     }
 
     if (result.toolCalls.length === 0) {

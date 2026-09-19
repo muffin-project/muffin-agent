@@ -1,9 +1,10 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { runInit } from '../../../cli/init.js';
 import { buildRuntime } from '../../../agent/runtime.js';
+import { ContinuationGone } from '../../../agent/loop.js';
 import type { LoopDeps } from '../../../agent/loop.js';
 import type { Provider } from '../../../agent/providers/types.js';
 import { identify } from '../../../core/surface/types.js';
@@ -154,5 +155,108 @@ describe('l identità già impegnata è la riga scritta', () => {
     expect(row?.id).toBe('identita-impegnata');
     // E una sola riga: se `runWork` ne coniasse una sua, qui ce ne sarebbero due.
     expect(env.turns.get('identita-impegnata')).not.toBeNull();
+  });
+});
+
+describe('continuazione conversazionale (P0-B)', () => {
+  const counters = {
+    iterations: 3,
+    recoveriesUsed: 5,
+    transportRetriesLeft: 7,
+    toolCallsMade: 2,
+    nudgedForCompletion: false,
+    usage: { inputTokens: 1, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    spentUsd: 0,
+    resumes: 0,
+    contextBuilt: true,
+    activeModelMs: 0,
+  };
+
+  function rigaContinuabile(env: ReturnType<typeof ambiente>): void {
+    const created = env.turns.create(
+      {
+        id: 'cont-1',
+        principal: { kind: 'owner', connector: 'telegram', externalId: '7' },
+        tenant: 'host',
+        surface: 'telegram',
+        sessionId: 'owner',
+        model: env.loop.model,
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'fai' }] }],
+        taint: 0,
+        counters,
+      },
+      4242,
+    );
+    expect(
+      env.turns.releaseContinuable(
+        'cont-1',
+        {
+          messages: created.messages,
+          taint: 0,
+          counters,
+          reason: { class: 'provider_empty' as const, lease: 0, at: '2026-09-18T17:14:09.000Z' },
+        },
+        created.claimToken,
+      ),
+    ).toBe(true);
+  }
+
+  function giraRiprendi(env: ReturnType<typeof ambiente>, port: IngressPort, workId: string) {
+    const ev = evento(port, { parts: [{ source: 'author', tier: 0, text: 'riprendi' }] });
+    return runWork({ loop: env.loop, sessions: env.sessions, lane: new ModelLane() }, port, ev, {
+      workId,
+      identity: identify(ev.identity, '7'),
+      text: 'riprendi',
+      contentTaint: 0,
+      replyTo: ev.address.record,
+      signal: new AbortController().signal,
+      steer: () => [],
+    });
+  }
+
+  it('"riprendi" continua la riga continuabile sulla stessa identità', async () => {
+    const env = ambiente();
+    rigaContinuabile(env);
+    const out = await giraRiprendi(env, porta('telegram'), 'w9');
+    expect(out.turnId).toBe('cont-1');
+    expect(out.stopped).toBe('answered');
+    const row = env.turns.get('cont-1');
+    expect(row?.status).toBe('done');
+    expect(row?.leaseIndex).toBe(1);
+    // E nessuna riga per l'evento: un "riprendi" non è un lavoro nuovo.
+    expect(env.turns.get('w9')).toBeNull();
+  });
+
+  it('un target sparito fra bind ed esecuzione rimanda senza ricalcolare', async () => {
+    const env = ambiente();
+    rigaContinuabile(env);
+    // Il resolver vede la riga continuabile (continuableFor reale); la
+    // rilettura di `runWork` la trova già presa altrove. Lo spy è la
+    // seconda corsia che vince la race fra bind ed esecuzione.
+    const reale = env.turns.get('cont-1')!;
+    const originale = env.turns.get.bind(env.turns);
+    const spy = vi.spyOn(env.turns, 'get').mockImplementation((id: string) =>
+      id === 'cont-1' ? { ...reale, status: 'running' as const } : originale(id),
+    );
+    try {
+      const port = porta('telegram');
+      const ev = evento(port, { parts: [{ source: 'author', tier: 0, text: 'riprendi' }] });
+      await expect(
+        runWork({ loop: env.loop, sessions: env.sessions, lane: new ModelLane() }, port, ev, {
+          workId: 'w9',
+          identity: identify(ev.identity, '7'),
+          text: 'riprendi',
+          contentTaint: 0,
+          replyTo: ev.address.record,
+          signal: new AbortController().signal,
+          steer: () => [],
+        }),
+      ).rejects.toBeInstanceOf(ContinuationGone);
+    } finally {
+      spy.mockRestore();
+    }
+    // Niente ricalcolo: nessuna riga per l'evento, la continuabile intatta.
+    expect(env.turns.get('w9')).toBeNull();
+    expect(env.turns.get('cont-1')?.status).toBe('continuable');
   });
 });

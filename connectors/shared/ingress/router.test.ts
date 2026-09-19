@@ -281,8 +281,7 @@ describe('consegna e settle', () => {
   });
 });
 
-describe('`recover` non chiama mai il modello', () => {
-  const riga = { eventId: '11', settledAt: null };
+describe('`recover` non chiama mai il modello', () => {  const riga = { eventId: '11', settledAt: null };
 
   it('un turno ancora in volo rimanda, e non tocca niente', async () => {
     const traccia = nuovaTraccia();
@@ -401,5 +400,93 @@ describe('a port whose declaration and hooks disagree never walks (§2.3)', () =
     const esito = await receive(senzaComandi, evento({ port: senzaComandi }), senzaGancio);
     expect(esito.kind).toBe('answered');
     expect(traccia.stadi).not.toContain('command');
+  });
+});
+
+describe('continuazione conversazionale (P0-B)', () => {
+  /**
+   * Un "riprendi" legato a una riga continuabile continua QUELLA riga sulla
+   * corsia condivisa — non ne apre una seconda. La scena guida
+   * `drain → receive → work → continueTurn` con un runtime vero: ciò che si
+   * misura è che l'evento si risolve sulla riga esistente (stesso workId,
+   * lease successiva, nessun effetto duplicato) e che la consegna avviene
+   * per la strada normale.
+   */
+  it('"riprendi" continua la riga continuabile invece di duplicare il lavoro', async () => {
+    const traccia = nuovaTraccia();
+    const w = runtimeVero();
+    const counters = {
+      iterations: 3,
+      recoveriesUsed: 5,
+      transportRetriesLeft: 7,
+      toolCallsMade: 2,
+      nudgedForCompletion: false,
+      usage: { inputTokens: 1, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      spentUsd: 0,
+      resumes: 0,
+      contextBuilt: true,
+      activeModelMs: 0,
+    };
+    const created = w.loop.turns.create(
+      {
+        id: 'cont-1',
+        principal: { kind: 'owner', connector: 'telegram', externalId: '7' },
+        tenant: 'host',
+        surface: 'prova',
+        sessionId: 'owner',
+        model: w.loop.model,
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'fai' }] }],
+        taint: 0,
+        counters,
+      },
+      4242,
+    );
+    expect(
+      w.loop.turns.releaseContinuable(
+        'cont-1',
+        {
+          messages: created.messages,
+          taint: 0,
+          counters,
+          reason: { class: 'provider_empty' as const, lease: 0, at: '2026-09-18T17:14:09.000Z' },
+        },
+        created.claimToken,
+      ),
+    ).toBe(true);
+
+    const esito = await receive(
+      PORT,
+      evento({ parts: [{ source: 'author', tier: 0, text: 'riprendi' }] }),
+      ganci(traccia, {
+        work: w,
+        claim: async () => ({ kind: 'mine' as const, workId: 'cont-1' }),
+      }),
+    );
+
+    expect(esito).toEqual({ kind: 'answered', workId: 'cont-1', delivery: 'sent' });
+    const row = w.loop.turns.get('cont-1');
+    expect(row?.status).toBe('done');
+    expect(row?.leaseIndex).toBe(1);
+    expect(row?.lifetime).toMatchObject({ leases: 2, toolCallsMade: 2 });
+    expect(traccia.scritture).toContain('delivery cont-1 sent');
+  });
+
+  it('senza candidati procede come turno fresco ordinario, senza ricalcoli', async () => {
+    // Nessuna riga continuabile in questa sessione: il testo "riprendi" non
+    // risolve e l'evento cammina come un turno nuovo. (La strada
+    // bind→sparito→defer è coperta in work.test.ts contro `runWork`.)
+    const traccia = nuovaTraccia();
+    const w = runtimeVero();
+    const esito = await receive(
+      PORT,
+      evento({ parts: [{ source: 'author', tier: 0, text: 'riprendi' }] }),
+      ganci(traccia, {
+        work: w,
+        claim: async () => ({ kind: 'mine' as const, workId: 'riga-fantasma' }),
+      }),
+    );
+    // Nessuna riga continuabile in questa sessione: il testo procede come un
+    // turno fresco ordinario (nessun match = nessuna continuazione).
+    expect(esito.kind).toBe('answered');
   });
 });

@@ -172,7 +172,7 @@ describe('a telegram turn records where the answer goes and whether it got there
     h.runtime.close();
   });
 
-  it('delivers a bounded terminal reply after provider retries fail', async () => {
+  it('delivers a bounded continuable diagnostic after provider retries fail', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);
     let calls = 0;
     const provider: Provider = {
@@ -189,16 +189,17 @@ describe('a telegram turn records where the answer goes and whether it got there
     const row = h.row();
     expect(calls).toBe(11);
     expect(h.outbound).toHaveLength(1);
-    expect(h.outbound[0]).toMatch(/connessione|provider/i);
-    expect(h.outbound[0]).toContain('502');
+    expect(h.outbound[0]).toMatch(/provider|riprendi/i);
     expect(h.outbound[0]).not.toContain('secret provider response');
-    expect(row?.status).toBe('done');
-    expect(row?.outcome).toBe('error');
+    // P0-B: the lease yielded instead of closing — same bounded delivery,
+    // different row state.
+    expect(row?.status).toBe('continuable');
+    expect(row?.outcome).toBeNull();
     expect(row?.delivery).toBe('sent');
     expect(h.inbox.pending()).toHaveLength(0);
   });
 
-  it('recovers a failed provider-error reply without another model call', async () => {
+  it('a failed diagnostic send stays deferred without recomputing', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);
     let calls = 0;
     let sends = 0;
@@ -222,17 +223,21 @@ describe('a telegram turn records where the answer goes and whether it got there
 
     await deliver(h, [privateMsg(10)]);
     expect(h.inbox.pending()).toHaveLength(1);
-    expect(h.row()?.outcome).toBe('error');
+    // P0-B: the work yielded as continuable; the *delivery* failed.
+    expect(h.row()?.status).toBe('continuable');
     expect(h.row()?.delivery).toContain('failed:');
 
     await (h.connector as unknown as { drain: () => Promise<void> }).drain();
 
+    // No recompute, no redelivery of a diagnostic the row does not store as
+    // text: the event stays pending, the failure stays recorded, the doctor
+    // still sees both. Redelivery happens for the final answer, once the
+    // owner continues the work to `done`.
     expect(calls).toBe(11);
-    expect(attempts).toHaveLength(2);
-    expect(attempts[1]).toBe(attempts[0]);
+    expect(attempts).toHaveLength(1);
     expect(attempts[0]).not.toContain('connection details stay private');
-    expect(h.inbox.pending()).toHaveLength(0);
-    expect(h.row()?.delivery).toBe('sent');
+    expect(h.inbox.pending()).toHaveLength(1);
+    expect(h.row()?.delivery).toContain('failed:');
   });
 
   it('does not expose an unknown internal exception as a Telegram answer', async () => {
