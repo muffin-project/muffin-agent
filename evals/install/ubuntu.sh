@@ -452,7 +452,10 @@ else
   find "$HOME/.muffin/secrets" "$XDG_CONFIG_HOME/muffin/secrets" -type f 2>/dev/null | sort >"$LAB/secrets-before.txt"
   RERUN_LOG="$LAB/rerun.log"
   set +e
-  printf '\n' | script -qec "env -i HOME=\"$HOME\" XDG_CONFIG_HOME=\"$XDG_CONFIG_HOME\" PATH=\"$CLEAN_PATH\" TERM=\"${TERM:-dumb}\" MUFFIN_PREFIX=\"$MUFFIN_PREFIX\" MUFFIN_REPO=\"$ORIGIN\" MUFFIN_CHANNEL=main sh \"$LAB/install.sh\"" /dev/null </dev/null >"$RERUN_LOG" 2>&1
+  # The single newline is the default-Enter answer IF the old prompt ever
+  # fires (no `</dev/null` here: it would override the pipe and feed EOF —
+  # which also defaults to yes, but the Enter is the honest trigger).
+  printf '\n' | script -qec "env -i HOME=\"$HOME\" XDG_CONFIG_HOME=\"$XDG_CONFIG_HOME\" PATH=\"$CLEAN_PATH\" TERM=\"${TERM:-dumb}\" MUFFIN_PREFIX=\"$MUFFIN_PREFIX\" MUFFIN_REPO=\"$ORIGIN\" MUFFIN_CHANNEL=main sh \"$LAB/install.sh\"" /dev/null >"$RERUN_LOG" 2>&1
   RERUN_RC=$?
   set -e
   tail -12 "$RERUN_LOG" | sed 's/^/  | /'
