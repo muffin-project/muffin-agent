@@ -9,7 +9,7 @@ import { buildFreshCounters, evidenceForContinuation } from './continuation.js';
 import { primoMessaggio } from './context.js';
 import { closeRow } from './durability.js';
 import { type DriveOptions, guidaIlTurno } from './engine.js';
-import { ownerMessage } from './message-origin.js';
+import { directiveMessage } from './message-origin.js';
 import { initialTaint, spendeIlBudget } from './permissions.js';
 import {
   MAX_RESUMES,
@@ -72,7 +72,9 @@ export function enqueueTurn(deps: LoopDeps, input: TurnInput): string {
     surface: input.surface,
     sessionId: input.session.id,
     model: deps.model,
-    messages: [ownerMessage(primoMessaggio(input))],
+    // Honest provenance from the first byte: automation directives ride as
+    // work evidence via the P1-A seam, never as impersonated owner words.
+    messages: [directiveMessage(input.principal, primoMessaggio(input))],
     taint: initialTaint(input),
     counters: freshCounters(),
     // Sulla riga, non solo nell'input: vedi `TurnRecord.jobId`.
@@ -164,7 +166,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     // back thinking signatures it cannot read, and ADR-0037 records that this
     // fails silently rather than loudly.
     model: deps.model,
-    messages: [ownerMessage(primoMessaggio(input))],
+    messages: [directiveMessage(input.principal, primoMessaggio(input))],
     taint: initialTaint(input),
     counters: freshCounters(),
     // Sulla riga, non solo nell'input: vedi `TurnRecord.jobId`.

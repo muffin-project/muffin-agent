@@ -182,17 +182,29 @@ export function visibleTools<T extends { capability: CapabilityId }>(
  *    by reading rows, not by the model declaring itself done. It is written
  *    here because this is the only place the model reads about the plan at all.
  *
+ * P1-A (#529) adds the fourth, load-bearing decision: **plan state is not
+ * conversational reminder state.** An undated open item stays available for
+ * continuity (and compaction survival) but renders explicitly as silent
+ * background context. Voluntary surfacing needs a reason — relevance, an
+ * explicit plan question, blocking current work, due/overdue through the
+ * existing commitment mechanism (`dueAt`), or another explicit proactivity
+ * policy. "Still pending" alone is never sufficient. Dated rows stay governed
+ * by the commitment/scheduler path; this section creates no cooldown and no
+ * parallel scheduler.
+ *
  * Empty in, empty out — a session with nothing open costs zero tokens, which is
  * what lets the loop call it unconditionally.
  */
 export function todoSection(open: TodoItem[]): string {
   if (open.length === 0) return '';
   return [
-    '## Piano di questa conversazione',
+    '## Stato di lavoro interno (continuità, non promemoria)',
     '',
-    'Questi passi li hai scritti tu con `todo` e sopravvivono ai riavvii. Sono aperti:',
+    'Questi passi li hai scritti tu con `todo` e sopravvivono ai riavvii. Restano disponibili come stato interno di continuità:',
     '',
     renderTodos(open),
+    '',
+    'Restano in sottofondo: non menzionarli né ricordarli all\u2019owner a meno che servano davvero — cioè quando sono direttamente pertinenti al messaggio corrente, quando l\u2019owner chiede cosa resta da fare o lo stato del piano, quando bloccano il lavoro corrente, quando sono diventati dovuti tramite il meccanismo di commitment esistente (dueAt), o quando un\u2019altra policy esplicita di proattività dice che è il momento. Il solo fatto di essere ancora aperti non è un motivo per menzionarli.',
     '',
     'Aggiorna lo stato con `todo set` appena qualcosa cambia — è la sola traccia che resta ' +
       'se il processo muore. Il lavoro è finito quando nessun passo è più `pending` o `retry`.',

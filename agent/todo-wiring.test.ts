@@ -110,7 +110,10 @@ describe('il piano torna nel contesto del turno dopo, senza che nessuno lo chied
     runtime.close();
 
     const second = prompt(provider.seen[provider.seen.length - 1]);
-    expect(second).toContain('Piano di questa conversazione');
+    // P1-A (#529): plan state stays available but renders as silent background
+    // continuity, never as a conversational reminder.
+    expect(second).toContain('Stato di lavoro interno (continuità, non promemoria)');
+    expect(second).not.toContain('Piano di questa conversazione');
     expect(second).toContain('1. [pending] leggere il contratto');
     expect(second).toContain('2. [pending] rispondere a Marco');
     // The deterministic completion criterion is stated where the model reads
@@ -175,6 +178,7 @@ describe('il piano torna nel contesto del turno dopo, senza che nessuno lo chied
     const last = prompt(provider.seen[provider.seen.length - 1]);
     // The row is still there — nothing is ever deleted — it simply stops being
     // pushed at a turn that has nothing to do with it.
+    expect(last).not.toContain('Stato di lavoro interno');
     expect(last).not.toContain('Piano di questa conversazione');
     expect(last).not.toContain('una cosa sola');
   });
@@ -193,6 +197,7 @@ describe('il piano torna nel contesto del turno dopo, senza che nessuno lo chied
       },
     );
     runtime.close();
+    expect(prompt(provider.seen[0])).not.toContain('Stato di lavoro interno');
     expect(prompt(provider.seen[0])).not.toContain('Piano di questa conversazione');
   });
 

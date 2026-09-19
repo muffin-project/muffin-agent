@@ -1,4 +1,5 @@
 import type { ContentBlock, Message, MessageOrigin, Role } from '../providers/types.js';
+import type { Principal } from '../../core/policy/types.js';
 
 /**
  * Which messages are lease-local control, and which are durable work evidence.
@@ -25,6 +26,31 @@ export function harnessMessage(role: Role, content: ContentBlock[]): Message {
 /** Build the current turn's owner-input message: only owner bytes may enter. */
 export function ownerMessage(content: ContentBlock[]): Message {
   return provenanceMessage('user', 'owner', content);
+}
+
+/**
+ * P1-A (#529) seam: whose directive opens this turn — a person, or automation.
+ *
+ * Human principals (`owner`, `member`) speak as themselves: `owner` origin,
+ * surface bytes only. Automation principals (`system` — scheduler, `agent` —
+ * dev) never impersonate the owner: their directive rides as `work` evidence,
+ * framed at the assembly boundary as WORK/RUNTIME context (see
+ * `agent/loop/context.ts`), never as fresh owner words.
+ *
+ * Minimal on purpose: no new Work schema, no dependency on Autonomy #598's
+ * not-yet-landed primitive. When that primitive lands, this is the single
+ * call site to re-point; until then every producer of a turn-opening message
+ * (`assembleSemantic`, `enqueueTurn`/`runTurn`) goes through here instead of
+ * calling `ownerMessage` directly for non-human input.
+ */
+export function isAutomationPrincipal(principal: Principal): boolean {
+  return principal.kind === 'system' || principal.kind === 'agent';
+}
+
+/** The turn-opening directive with honest provenance: owner bytes, or automation work. */
+export function directiveMessage(principal: Principal, content: ContentBlock[]): Message {
+  if (isAutomationPrincipal(principal)) return provenanceMessage('user', 'work', content);
+  return ownerMessage(content);
 }
 
 /** Build a tool-evidence message: results, refusals, repairs. Wire role stays `user`. */

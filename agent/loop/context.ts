@@ -1,8 +1,9 @@
 import { ambienteSection, tenantClass, todoSection, type IstanzaFacts } from '../context/assemble.js';
 import type { ReinjectedHistory } from '../context/history-taint.js';
 import type { TodoItem } from '../../core/turns/todo.js';
+import type { SessionMessage } from '../../core/session/store.js';
 import type { AudioBlock, ContentBlock, ImageBlock, Message, MessageOrigin } from '../providers/types.js';
-import { harnessMessage, ownerMessage, provenanceMessage } from './message-origin.js';
+import { directiveMessage, harnessMessage, isAutomationPrincipal, ownerMessage, provenanceMessage } from './message-origin.js';
 import type { TurnInput } from './types.js';
 
 /**
@@ -86,7 +87,16 @@ export type SemanticSectionKey = 'announcement' | 'history' | 'memory' | 'runtim
 export type SemanticContext = {
   /** History-truncation notice, or null when nothing was cut. Harness control, not owner words. */
   announcement: Message | null;
-  /** Replayed session lines. Rebuilt from the session file, which stores no origin: legacy evidence. */
+  /**
+   * Replayed session lines plus sparse temporal gap markers.
+   *
+   * Rebuilt from the session file, which stores no origin: replayed lines keep
+   * their legacy (absent) origin on purpose — durable evidence, never harness
+   * control, never the current owner input. Gap markers derived at render time
+   * from `SessionMessage.createdAt` ride interleaved as harness control, so a
+   * resumption after hours/days is legible without timestamping every line and
+   * without laundering derived metadata as owner words (P1-A #529).
+   */
   history: Message[];
   /** Rendered recall, or null when recall returned nothing. */
   memory: Message | null;
@@ -94,7 +104,15 @@ export type SemanticContext = {
   runtime: Message;
   /** Open plan rows, or null when no row is open (zero cost). */
   work: Message | null;
-  /** The current owner input: surface bytes and media ONLY. Always last. */
+  /**
+   * The current directive, always last.
+   *
+   * Human turns carry ONLY surface bytes and media with `owner` origin. An
+   * automation directive (`system`/`agent` principal — scheduler, dev) rides
+   * here instead as `work` with explicit automation framing: WORK/RUNTIME
+   * context, never impersonated owner input (P1-A #529 autonomy seam, via
+   * `directiveMessage`).
+   */
   owner: Message;
 };
 
@@ -202,13 +220,49 @@ export function flattenSemantic(ctx: SemanticContext): Message[] {
 }
 
 /**
+ * P1-A #529 temporal salience rules (exact, tested in `context-salience.test.ts`).
+ *
+ * - R1 background plan: undated open todos render as silent internal continuity
+ *   (`todoSection`); surfacing needs relevance, an explicit plan question,
+ *   blocking, due via the existing commitment path, or another explicit
+ *   proactivity policy. "Still pending" alone never suffices.
+ * - R2 temporal gaps: `SessionMessage.createdAt` + turn `adesso` derive sparse
+ *   harness gap markers. Gaps below `HISTORY_GAP_MIN_MS` render nothing, so
+ *   rapid chat stays clean; larger gaps render one marker each (`pausa` between
+ *   lines, `ripresa` before the current turn), never a timestamp on every line.
+ * - R3 provenance: replayed lines stay legacy evidence, markers stay harness
+ *   control, plan stays `work`, facts stay `runtime`, automation directives
+ *   ride as `work` (never `owner`). `describeAssembly` + provider compiler are
+ *   reused unchanged; no parallel scheduler/cooldown exists.
+ */
+
+/** Below this gap, history renders with no temporal metadata at all. */
+export const HISTORY_GAP_MIN_MS = 5 * 60 * 1000;
+
+/** Human duration for a gap marker: minutes under an hour, hours under a day, days beyond. */
+export function formatHistoryGapDuration(gapMs: number): string {
+  const minutes = Math.round(gapMs / 60_000);
+  if (minutes < 60) return `${minutes} minut${minutes === 1 ? 'o' : 'i'}`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} or${hours === 1 ? 'a' : 'e'}`;
+  const days = Math.round(hours / 24);
+  return `${days} giorn${days === 1 ? 'o' : 'i'}`;
+}
+
+function historyTimeOf(m: SessionMessage): number | undefined {
+  const at = Date.parse(m.createdAt);
+  return Number.isNaN(at) ? undefined : at;
+}
+
+/**
  * One turn's context as typed sections.
  *
  * Same inputs as `buildContext` (which delegates here and flattens): the
  * split is the invariant. Memory, runtime facts and open work each ride in
- * their own message with their own provenance, and the current owner input
- * carries ONLY surface bytes and media — never `role: 'user'` as a sack for
- * everything the loop knows.
+ * their own message with their own provenance, and the current directive
+ * carries ONLY its own bytes — owner surface bytes for a person, framed
+ * WORK/RUNTIME automation context for a system/agent principal — never
+ * `role: 'user'` as a sack for everything the loop knows.
  */
 export function assembleSemantic(args: SemanticArgs): SemanticContext {
   const { input, recalled, open, spoken, adesso, modello, profilo, istanza, timeZone, undoneTraceIds } = args;
@@ -258,7 +312,20 @@ export function assembleSemantic(args: SemanticArgs): SemanticContext {
    * current owner input — which is exactly what a replayed line is.
    */
   const history: Message[] = [];
+  let previousAt: number | undefined;
   for (const m of kept) {
+    const at = historyTimeOf(m);
+    if (at !== undefined && previousAt !== undefined) {
+      const gap = at - previousAt;
+      if (gap >= HISTORY_GAP_MIN_MS) {
+        history.push(
+          harnessMessage('user', [
+            { type: 'text' as const, text: `[pausa di circa ${formatHistoryGapDuration(gap)} nella conversazione]` },
+          ]),
+        );
+      }
+    }
+    if (at !== undefined) previousAt = at;
     const altrove = m.surface !== undefined && m.surface !== '' && m.surface !== input.surface;
     const testo = altrove ? `[${m.surface}] ${m.content}` : m.content;
     /**
@@ -281,6 +348,23 @@ export function assembleSemantic(args: SemanticArgs): SemanticContext {
       ],
     });
   }
+  // Trailing gap: the last replayed line may be hours/days before this turn.
+  // The turn already knows `adesso` (runtime facts), but without this marker
+  // the model cannot tell whether the replayed exchange ended seconds or days
+  // ago. Sparse like the inter-line markers above: silence when recent.
+  if (previousAt !== undefined) {
+    const trailing = adesso.getTime() - previousAt;
+    if (trailing >= HISTORY_GAP_MIN_MS) {
+      history.push(
+        harnessMessage('user', [
+          {
+            type: 'text' as const,
+            text: `[ripresa dopo circa ${formatHistoryGapDuration(trailing)} — l'ultimo scambio risale a prima di questo turno]`,
+          },
+        ]),
+      );
+    }
+  }
   /**
    * The plan, on every turn of the session, whether or not anyone asked.
    *
@@ -292,8 +376,10 @@ export function assembleSemantic(args: SemanticArgs): SemanticContext {
    * avoiding. So it rides in the volatile tail, next to recalled memory, for
    * the same reason recall does.
    *
-   * Unconditional, and that is the point: a plan the model has to remember to
-   * ask for is a plan it forgets the moment its own earlier prose is compacted.
+   * Unconditional availability, background salience (P1-A #529): a plan the
+   * model has to remember to ask for is a plan it forgets the moment its own
+   * earlier prose is compacted — but mere presence must not nag. See
+   * `todoSection` for the quiet-state framing.
    */
   const plan = todoSection(open);
 
@@ -340,9 +426,22 @@ export function assembleSemantic(args: SemanticArgs): SemanticContext {
   // l'unica posizione che lo rispetta senza separare la domanda dal suo
   // contesto.
   //
-  // Solo i byte della superficie: niente memoria richiamata, niente fatti di
-  // runtime, niente piano. Ciò che l'owner ha scritto, e nient'altro.
-  const owner = ownerMessage([...media(input), { type: 'text', text: input.text }]);
+  // Persona umana: solo i byte della superficie — niente memoria richiamata,
+  // niente fatti di runtime, niente piano. Ciò che l'owner ha scritto, e
+  // nient'altro. Automazione (`system`/`agent`): WORK/RUNTIME context con
+  // framing esplicito, mai parole dell'owner (P1-A #529 — la provenienza è
+  // strutturale via `directiveMessage`, la distinguibilità per il modello è
+  // testuale via il prefisso qui sotto, perché `origin` non viaggia sul filo).
+  const owner = isAutomationPrincipal(input.principal)
+    ? directiveMessage(input.principal, [
+        ...media(input),
+        {
+          type: 'text' as const,
+          text:
+            `[lavoro automatico — non è l'owner a parlare; contesto WORK/RUNTIME, mai input dell'owner]\n${input.text}`,
+        },
+      ])
+    : ownerMessage([...media(input), { type: 'text', text: input.text }]);
 
   return { announcement, history, memory, runtime, work, owner };
 }
@@ -372,7 +471,8 @@ export type AssemblySectionDescriptor = {
     | 'recall-rendered'
     | 'turn-facts'
     | 'open-plan-rows'
-    | 'surface-input';
+    | 'surface-input'
+    | 'automation-directive';
   /** Every section here is volatile: the stable prefix lives outside this structure. */
   stability: 'stable' | 'volatile';
   blocks: number;
@@ -417,10 +517,15 @@ export function describeAssembly(ctx: SemanticContext): AssemblySectionDescripto
   ];
   return sections.map(({ key, message }) => {
     const { blocks, bytes, chars } = measureBlocks(message.content);
+    // The terminal section is keyed `owner` for shape stability, but an
+    // automation directive rides it as `work`: the reason says what it is, so
+    // a receipt reader never mistakes scheduled work for surface input.
+    const reason =
+      key === 'owner' && (message.origin ?? 'legacy') === 'work' ? 'automation-directive' : SECTION_REASON[key];
     return {
       key,
       origin: message.origin ?? 'legacy',
-      reason: SECTION_REASON[key],
+      reason,
       stability: 'volatile' as const,
       blocks,
       bytes,
