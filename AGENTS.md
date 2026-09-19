@@ -50,11 +50,10 @@ Bring new evidence; a material reversal is a new ADR, not a rewrite of the old.
 
 ## Engineering harness
 
-Reusable procedures live in `.agents/skills/` (`engineering-loop`, `jev-shadow`).
-OpenCode entry points: `/start`, `/checkpoint`, `/close` in `.opencode/commands/`,
-role adapters in `.opencode/agents/`. Deterministic snapshot:
-`scripts/agent/repo-state.mjs`. Current program: the open issue carrying the
-`program/current` label. OpenCode V1 stays; do not migrate its syntax to V2.
+Procedures: `.agents/skills/` (`engineering-loop`, `jev-shadow`). Entry points:
+`/start`, `/checkpoint`, `/close` in `.opencode/commands/`; roles in
+`.opencode/agents/`. Snapshot: `scripts/agent/repo-state.mjs`. Current program:
+the open issue with the `program/current` label. OpenCode V1 stays.
 
 ## The failure pattern to remember
 
