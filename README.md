@@ -225,11 +225,13 @@ it. What you do not install should not exist in your Muffin.
 ```text
 owner DAY-1
     ↓
+source-public / pre-alpha — inspectable and contributable, not product alpha
+    ↓
 14 days of real daily use
     ↓
 small trusted alpha
     ↓
-public alpha
+product public alpha
     ↓
 community breadth + earned maintainership
 ```
