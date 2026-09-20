@@ -121,9 +121,13 @@ describe('una correzione a metà turno', () => {
       text: 'ehi',
       steer: () => [],
     });
-    // Il primo messaggio utente porta anche il contesto del turno davanti
-    // alle parole dell'owner: conta l'ultimo blocco, e che non ce ne sia uno in più.
+    // Le parole dell'owner viaggiano isolate nel messaggio owner, ultimo della
+    // sequenza: il contesto del turno (fatti di runtime) sta in un messaggio
+    // proprio, marcato runtime, mai più fuso dentro le parole dell'owner.
+    const userMessages = provider.chiamate[0]!.messages.filter((m) => m.role === 'user');
+    const ownerMsg = userMessages.at(-1)!;
+    expect(ownerMsg.origin).toBe('owner');
     expect(testiUtente(provider.chiamate[0]!).at(-1)).toBe('ehi');
-    expect(provider.chiamate[0]!.messages.filter((m) => m.role === 'user')).toHaveLength(1);
+    expect(userMessages.slice(0, -1).every((m) => m.origin !== 'owner')).toBe(true);
   });
 });

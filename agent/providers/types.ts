@@ -125,30 +125,53 @@ export type ProviderMessageMetadata = {
   reasoning?: { provider: string; details?: unknown; content?: unknown };
 };
 
+/**
+ * Where a message's bytes came from — the internal provenance, never the wire.
+ *
+ * Provider `role` is NOT the source of truth for this distinction: a tool
+ * result travels as `role: 'user'` on the Anthropic wire and as `role:
+ * 'tool'` on the OpenAI-compatible one, while harness control travels as
+ * `role: 'user'` on both. What a block IS is carried here; what the protocol
+ * forces it to LOOK like is decided per provider by `agent/providers/compile.ts`.
+ *
+ * Absent means legacy or replayed evidence (owner/model words written before
+ * this marker existed, or history lines rebuilt from the session file, which
+ * stores no origin): durable work evidence, never harness control and never
+ * the current owner input. That is the fail-safe direction — an old row can
+ * neither steer the model as control nor impersonate fresh owner words.
+ */
+export type MessageOrigin =
+  /** Loop-written lease control: recovery rungs, nudges, wake reports, error markers. */
+  | 'harness'
+  /** Bytes actually authored by the owner on a surface this turn (or the turn's opening line). */
+  | 'owner'
+  /** Tool evidence: results, refusals, repairs of missing results. */
+  | 'tool'
+  /** Retrieved memory rendered for the prompt. */
+  | 'memory'
+  /** Per-turn runtime facts (clock, surface, model, instance). */
+  | 'runtime'
+  /** Open work/plan state reinjected for the turn. */
+  | 'work';
+
 export type Message = {
   role: Role;
   content: ContentBlock[];
   providerMetadata?: ProviderMessageMetadata;
   /**
-   * Harness-generated control, not conversation.
-   *
-   * Absent means work evidence or owner/model words: user messages (owner
-   * text, steer corrections, tool results), assistant turns (text, thinking,
-   * tool_use). Present (`'harness'`) means the loop wrote it to steer the
-   * model within one execution lease: recovery rungs, the completion nudge,
-   * wake reports, terminal provider-error markers.
+   * The provenance of this message's bytes (see `MessageOrigin`).
    *
    * The distinction is structural, not prose: on continuation to a new lease
    * the live transcript keeps evidence and drops harness control (preserved
    * in the per-lease audit instead), so an expired recovery directive cannot
    * silently constrain the next lease. Writers must use the single
-   * `harnessMessage` constructor (`agent/loop/message-origin.ts`) — a
-   * hand-built literal without the marker misclassifies silently.
+   * constructors in `agent/loop/message-origin.ts` — a hand-built literal
+   * without the marker misclassifies silently.
    *
    * Never sent on the wire: both adapters map messages to provider shapes
    * explicitly and ignore this field.
    */
-  origin?: 'harness';
+  origin?: MessageOrigin;
 };
 
 export type ToolSpec = {
