@@ -11,14 +11,15 @@
 Preview 21 Sep** (`program/current`). Questo file è solo un hint usa-e-getta:
 se contraddice Git/PR/issue osservati, vince l'osservato.
 
-**Osservato 2026-09-20:** `dev` @ `7d5f2c9` (includes #593). 4 PR aperte:
-#596 (ready), #601, #597 (draft), #609 (ready, docs preview). Tutte UNSTABLE
+**Osservato 2026-09-20:** `dev` @ `449ca6c` (includes #596). 3 PR aperte:
+#601, #597 (draft), #609 (ready, docs preview). Tutte UNSTABLE
 su CI al momento dell'osservazione (verificare se per basi ferme pre-fix).
 #599 chiusa/parcheggiata (coda della lane in #608 da riconciliare).
 
-**Lane di landing (#608): #593 FATTA (merge 7d5f2c9, gate PASS su composizione
-`61cd8689`) → prossima #596 → #601 → #597** (+ fix publication/docs piccoli
-solo se esplicitamente accettati). Prossima azione: canonical gate su #596,
+**Lane di landing (#608): #593 FATTA (merge 7d5f2c9) → #596 FATTA (merge
+449ca6c, gate PASS su composizione `df170db`, doctor 106/106 su HEAD
+integrato) → prossima #601 → #597** (+ fix publication/docs piccoli
+solo se esplicitamente accettati). Prossima azione: canonical gate su #601,
 poi proseguire in ordine. Freeze + riscrittura history finale + rescan +
 purge solo a landing convergente. Ramo `slice/shell-outcome-integrity`
 integrato ma non ancora cancellato (follow-up igiene #608).
