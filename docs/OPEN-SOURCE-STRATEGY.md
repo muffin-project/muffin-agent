@@ -233,6 +233,33 @@ Early contribution does not imply maintainer authority. A contributor can submit
 useful work before the product is publicly released; maintainership is earned
 through observed work and judgement over time.
 
+### Community roles and authority
+
+GitHub organization membership is an access boundary, not a participation badge.
+The intended community shape is:
+
+| Role | GitHub shape | Default repository authority |
+|---|---|---|
+| **Project owner(s)** | Organization owner | Admin; security, release and destructive organization/repository decisions |
+| **Maintainers** | Visible `maintainers` team | Maintain; repository stewardship without organization-owner authority |
+| **Community moderators** | Visible `community-moderators` team | Triage; issue/PR/community moderation, no code-push requirement |
+| **Contributors** | External fork/PR by default; recurring contributors may later join a visible `contributors` team | No authority merely from interest or one contribution |
+| **Supporters** | Sponsorship/donation relationship, not an organization team | None |
+
+A person who wants to contribute should not need organization membership. Start
+with the normal public fork → signed-off commits → pull request path. Invite a
+recurring contributor into the organization only when membership itself provides
+real coordination value.
+
+Financial support is intentionally orthogonal to governance. A supporter may be
+recognized publicly (for example through GitHub Sponsors or an opt-in supporters
+list), but payment never grants repository access, merge/release authority,
+maintainer status or a stronger voice over product decisions.
+
+For private preview, least privilege still applies: moderators normally need
+Triage, code contributors need Write only when a fork/PR path is unavailable for
+a concrete reason, and Admin remains owner-only.
+
 ## 10. Source-public/pre-alpha and product public-alpha are separate milestones
 
 The owner wants the repository open source as soon as it is safe to publish, and
