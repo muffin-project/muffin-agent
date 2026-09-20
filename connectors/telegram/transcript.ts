@@ -3,6 +3,7 @@ import { toolLine, toolPhrase } from '../../agent/tool-phrase.js';
 import type { Negotiation } from '../../core/surface/types.js';
 import type { TelegramApiLike } from './api.js';
 import { escapeHtml, splitHtml, TELEGRAM_MAX, toTelegramHtml } from './render.js';
+import { planRich, type OutboundRich } from './rich.js';
 
 /**
  * What the agent said and did on its way to the answer, kept — DAY-1
@@ -238,6 +239,21 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
   const draftEveryMs = Math.max(1, Math.min(minEditMs, Math.floor(negotiation.draftTtlMs / 3) || minEditMs));
   const draftId = prossimoDraftId++;
   let draftText = '';
+  /**
+   * The rich preview, Bot API 10.1+. Mutually exclusive with `draftText` by
+   * construction (each tick sets exactly one): a structurally rich partial
+   * (a table taking shape, a checklist) previews as rich blocks, ordinary
+   * prose as legacy text. A mid-stream switch changes method under the same
+   * `draft_id` — the client replaces without animation, which is the honest
+   * rendering of "the preview changed shape", and it is still ephemeral:
+   * the final send is the only durable delivery either way.
+   *
+   * Bounded like the legacy preview (`TELEGRAM_MAX`): a preview is small by
+   * nature, and a 400 on an oversized preview would disable previews for the
+   * whole turn. The FINAL may ride rich up to the compat ceiling
+   * (`rich.ts`); the preview never needs to.
+   */
+  let draftRich: OutboundRich | null = null;
   let draftTimer: NodeJS.Timeout | null = null;
   let draftDisabled = !draftEnabled;
   const turnStartedAt = now();
@@ -391,6 +407,7 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
    */
   function abbandonaDraft(): void {
     draftText = '';
+    draftRich = null;
     if (draftTimer !== null) {
       clearTimeout(draftTimer);
       draftTimer = null;
@@ -401,11 +418,17 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
    * Manda (o rinnova) l'anteprima. Un guasto qui spegne **solo** l'anteprima:
    * la trascrizione vera e la risposta non dipendono da una bolla che scade
    * da sola.
+   *
+   * `canStop: true` su OGNI anteprima (Bot API 10.3): è il controllo Stop
+   * dell'owner, e premerlo arriva come `stopped_message_generation` — un
+   * segnale strutturale che il connettore instrada all'abort canonico del
+   * turno (`connector.ts#handleStopGenerazione`), mai come testo.
    */
   async function pushDraft(): Promise<void> {
-    if (stopped || draftDisabled || draftText === '') return;
+    if (stopped || draftDisabled || (draftText === '' && draftRich === null)) return;
     try {
-      await api.sendMessageDraft(chatId, draftId, draftText);
+      if (draftRich !== null) await api.sendRichMessageDraft(chatId, draftId, draftRich, { canStop: true });
+      else await api.sendMessageDraft(chatId, draftId, draftText, { canStop: true });
     } catch (error) {
       if (nonModificato(error)) return;
       draftDisabled = true;
@@ -695,11 +718,27 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         // tocca nessun messaggio vero, e la risposta finale resta l'unico
         // messaggio che la chat conserva.
         if (draftDisabled) return;
-        const nuovo = trimmed === '' ? '' : toTelegramHtml(trimmed);
-        if (nuovo.length > TELEGRAM_MAX) return;
-        const primo = draftText === '' && nuovo !== '';
-        draftText = nuovo;
-        if (primo) {
+        const had = draftText !== '' || draftRich !== null;
+        if (trimmed === '') {
+          draftText = '';
+          draftRich = null;
+          return;
+        }
+        // Un parziale strutturalmente ricco (una tabella che prende forma)
+        // merita l'anteprima ricca; la prosa resta testo legacy. Un parziale
+        // a metà (tabella senza delimitatore, fence non chiuso) ricade da
+        // solo sul legacy — `rich.ts` non emette mai strutture spezzate.
+        const candidate = planRich(trimmed);
+        if (candidate.mode === 'rich' && candidate.chars <= TELEGRAM_MAX) {
+          draftText = '';
+          draftRich = candidate.message;
+        } else {
+          const nuovo = toTelegramHtml(trimmed);
+          if (nuovo.length > TELEGRAM_MAX) return;
+          draftText = nuovo;
+          draftRich = null;
+        }
+        if (!had) {
           // Subito, così l'anteprima compare al primo token invece che dopo
           // una finestra intera di attesa.
           void pushDraft().then(() => scheduleDraft());
@@ -764,6 +803,7 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         draftTimer = null;
       }
       draftText = '';
+      draftRich = null;
       if (flushTimer !== null) {
         clearTimeout(flushTimer);
         flushTimer = null;

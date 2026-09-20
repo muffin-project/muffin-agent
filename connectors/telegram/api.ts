@@ -1,6 +1,7 @@
 import type { Message, Update, User } from '@grammyjs/types';
 import { causaDiRete } from '../../core/net/causa.js';
 import { sleep } from '../../core/net/sleep.js';
+import { richFitsHard, type OutboundRich } from './rich.js';
 
 /**
  * The Bot API, over `fetch`, with no library between.
@@ -74,6 +75,24 @@ export type SendOptions = {
 };
 
 /**
+ * Draft-preview options, Bot API 10.3.
+ *
+ * `canStop` shows the owner Telegram's own Stop-generation control on the
+ * draft; pressing it arrives as a `stopped_message_generation` update, which
+ * the connector routes as a structural abort — never as injected text
+ * (`connector.ts`). Absent (the default) means no control, exactly as
+ * before: previews stay previews.
+ *
+ * `keepOnStop` is left false by every caller: on stop the draft vanishes and
+ * the turn's own aborted outcome ("Interrotto.") is the durable record. A
+ * kept-around partial draft plus a final message would read as two answers.
+ */
+export type DraftOptions = {
+  canStop?: boolean;
+  keepOnStop?: boolean;
+};
+
+/**
  * The subset of `TelegramApi` every caller actually uses — extracted so a
  * test can hand `presence.ts`/`connector.ts` a fake that records calls and
  * timing (DAY-1 requirement B11) without instantiating the real class, which `private
@@ -87,11 +106,29 @@ export interface TelegramApiLike {
   getMe(): Promise<User>;
   getUpdates(offset: number, allowed?: string[], signal?: AbortSignal): Promise<Update[]>;
   sendMessage(chatId: number, html: string, options?: SendOptions): Promise<Message>;
+  /**
+   * Bot API 10.1+. Rich and legacy are SEPARATE delivery modes with separate
+   * limits (32768 chars / 500 blocks vs 4096 chars): this method takes ONLY
+   * the rich payload, never `text` alongside it — Telegram requires exactly
+   * one, and the type makes passing both unrepresentable.
+   */
+  sendRichMessage(chatId: number, rich: OutboundRich, options?: SendOptions): Promise<Message>;
   editMessageText(chatId: number, messageId: number, html: string): Promise<Message | boolean>;
+  /**
+   * Bot API 10.1+: `editMessageText` with `rich_message` instead of `text`.
+   * Same exclusivity as the send pair: rich OR text, never both.
+   */
+  editMessageRichText(chatId: number, messageId: number, rich: OutboundRich): Promise<Message | boolean>;
   editMessageReplyMarkup(chatId: number, messageId: number): Promise<Message | boolean>;
   deleteMessage(chatId: number, messageId: number): Promise<boolean>;
   sendChatAction(chatId: number, action?: string, threadId?: number): Promise<boolean>;
-  sendMessageDraft(chatId: number, draftId: number, text: string): Promise<boolean>;
+  sendMessageDraft(chatId: number, draftId: number, text: string, options?: DraftOptions): Promise<boolean>;
+  /**
+   * Bot API 10.1+ (draft), 10.3 (`can_stop`/`keep_on_stop`): the rich
+   * preview. Ephemeral like its legacy sibling — never durable delivery,
+   * never a second answer next to the final.
+   */
+  sendRichMessageDraft(chatId: number, draftId: number, rich: OutboundRich, options?: DraftOptions): Promise<boolean>;
   fileUrl(fileId: string): Promise<string>;
   setMyCommands(commands: { command: string; description: string }[]): Promise<boolean>;
   answerCallbackQuery(callbackQueryId: string, text?: string): Promise<boolean>;
@@ -253,7 +290,11 @@ export class TelegramApi implements TelegramApiLike {
     // è esplicito di proposito (vedi sopra), quindi un tipo che non si nomina
     // non viene mai consegnato — e un pulsante che nessuno riceve è un pulsante
     // che gira per sempre.
-    allowed: string[] = ['message', 'edited_message', 'callback_query', 'my_chat_member'],
+    //
+    // `stopped_message_generation` (Bot API 10.3) per la stessa ragione: senza,
+    // il controllo Stop dell'owner non arriva mai e un turno non fermabile è
+    // un turno che si può fermare solo con `/stop` digitato.
+    allowed: string[] = ['message', 'edited_message', 'callback_query', 'my_chat_member', 'stopped_message_generation'],
     // Il gancio che rende il long poll interrompibile davvero: senza, uno
     // `stop()` durante l'attesa non poteva far altro che aspettare fino a
     // `REQUEST_TIMEOUT_MS` — e il database, chiuso nel frattempo, riceveva la
@@ -310,6 +351,33 @@ export class TelegramApi implements TelegramApiLike {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
     });
+  }
+
+  /**
+   * The rich edit, Bot API 10.1+: converts or refreshes a message's content
+   * to rich blocks. `effect()`, like its legacy sibling — and like it, a
+   * 400 «message is not modified» on an identical edit is a delivery, not a
+   * failure (handled in `delivery.ts`, not here).
+   */
+  editMessageRichText(chatId: number, messageId: number, rich: OutboundRich): Promise<Message | boolean> {
+    this.assertRichFits(rich);
+    return this.effect<Message | boolean>('editMessageText', {
+      chat_id: chatId,
+      message_id: messageId,
+      rich_message: rich,
+    });
+  }
+
+  /**
+   * Client-side protocol guard: an oversized rich payload is rejected here,
+   * deterministically, without touching the network — shaped as the same
+   * 400-class `TelegramError` a server refusal produces, so `delivery.ts`
+   * routes it through the same legacy-chunks fallback instead of learning a
+   * second failure taxonomy.
+   */
+  private assertRichFits(rich: OutboundRich): void {
+    const why = richFitsHard(rich);
+    if (why !== null) throw new TelegramError(400, `Bad Request: ${why}`);
   }
 
   /**
@@ -405,8 +473,51 @@ export class TelegramApi implements TelegramApiLike {
    * `presence.ts`'s own choice to call this at least once a second either
    * way, comfortably inside any reading of "30 seconds," is asserted.
    */
-  sendMessageDraft(chatId: number, draftId: number, text: string): Promise<boolean> {
-    return this.call<boolean>('sendMessageDraft', { chat_id: chatId, draft_id: draftId, text, parse_mode: 'HTML' });
+  sendMessageDraft(chatId: number, draftId: number, text: string, options: DraftOptions = {}): Promise<boolean> {
+    return this.call<boolean>('sendMessageDraft', {
+      chat_id: chatId,
+      draft_id: draftId,
+      text,
+      parse_mode: 'HTML',
+      ...(options.canStop === true ? { can_stop: true } : {}),
+      ...(options.keepOnStop === true ? { keep_on_stop: true } : {}),
+    });
+  }
+
+  /**
+   * The rich preview, Bot API 10.1+ (10.3 for the stop control). Same
+   * ephemerality contract as `sendMessageDraft`: a temporary preview the
+   * final `sendRichMessage` must persist, never delivery itself.
+   *
+   * `call()`, not `effect()`, like its legacy sibling: a redelivered preview
+   * under the same `draft_id` replaces rather than duplicates.
+   */
+  sendRichMessageDraft(chatId: number, draftId: number, rich: OutboundRich, options: DraftOptions = {}): Promise<boolean> {
+    this.assertRichFits(rich);
+    return this.call<boolean>('sendRichMessageDraft', {
+      chat_id: chatId,
+      draft_id: draftId,
+      rich_message: rich,
+      ...(options.canStop === true ? { can_stop: true } : {}),
+      ...(options.keepOnStop === true ? { keep_on_stop: true } : {}),
+    });
+  }
+
+  /**
+   * The rich final, Bot API 10.1+. `effect()`, like `sendMessage`: on an
+   * ambiguous transport failure a blind retry could become a second visible
+   * message, so there is exactly one attempt and the delivery WAL
+   * (`delivery.ts`) owns what uncertainty means.
+   */
+  sendRichMessage(chatId: number, rich: OutboundRich, options: SendOptions = {}): Promise<Message> {
+    this.assertRichFits(rich);
+    return this.effect<Message>('sendRichMessage', {
+      chat_id: chatId,
+      rich_message: rich,
+      ...(options.threadId === undefined ? {} : { message_thread_id: options.threadId }),
+      ...(options.replyTo ? { reply_parameters: { message_id: options.replyTo } } : {}),
+      ...(options.keyboard ? { reply_markup: { inline_keyboard: options.keyboard } } : {}),
+    });
   }
 
   /**

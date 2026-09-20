@@ -4,6 +4,7 @@ import { negoziazioneTelegram, stanzaDi, TELEGRAM_PLACES } from './negoziazione.
 import type { TelegramApiLike } from './api.js';
 import { MAX_DOWNLOAD_BYTES, sendDocument } from './media.js';
 import { renderForTelegram, TELEGRAM_MAX } from './render.js';
+import { RICH_MAX_CHARS } from './rich.js';
 import { makeIngressPort, type IngressPort } from '../shared/ingress/types.js';
 
 /**
@@ -55,7 +56,14 @@ export function telegramSurface(api: TelegramApiLike, ownerChatId: number | unde
   // declared here — two literals that agreed today and had no reason to keep
   // agreeing tomorrow. One value, read back from the object callers see.
   const limits = {
+    // Legacy mode: 4096 rendered HTML characters per message, split
+    // post-render (`render.ts`). The proven fallback — NOT the platform fact.
     maxMessageChars: TELEGRAM_MAX,
+    // Rich mode, Bot API 10.1+ (this surface targets
+    // `rich.ts#TELEGRAM_BOT_API_TARGET`, floor `TELEGRAM_BOT_API_RICH_FLOOR`
+    // for the rich lane): 32768 UTF-8 characters / 500 blocks in ONE message
+    // (`rich.ts`). Separate mode, separate limit — see `SurfaceLimits`.
+    maxRichMessageChars: RICH_MAX_CHARS,
     // sendDocument's ceiling on the public Bot API. Photos are 10MB but a
     // document is how anything that must survive byte-for-byte goes out
     // (`docs/evidence/capability-output-telegram-e-discord.md`: sendPhoto
