@@ -59,15 +59,13 @@ appointed representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported through **GitHub's private vulnerability reporting** on this
-repository (the **Security** tab → **Report a vulnerability**) once the
-repository is public and that feature is enabled — see `SECURITY.md` for the
-same channel used for security disclosures. It is the same private,
-maintainer-only inbox: a report there is not a security bug, and using it for
-a conduct report is the correct use, not an abuse of the channel. All
-complaints will be reviewed and investigated promptly and fairly.
+reported confidentially to **[ciao@giusto.dev](mailto:ciao@giusto.dev)**.
+Conduct reports are kept separate from public issue discussion. Please include
+only the information needed to investigate the incident and avoid forwarding
+unrelated private material.
 
-All community leaders are obligated to respect the privacy and security of the
+All complaints will be reviewed and investigated promptly and fairly. All
+community leaders are obligated to respect the privacy and security of the
 reporter of any incident.
 
 ## Enforcement Guidelines
