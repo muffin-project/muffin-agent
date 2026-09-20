@@ -1,0 +1,48 @@
+name: Feature or capability request
+description: Propose a capability, integration, or product change grounded in a real problem
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What real limitation, friction, or missing capability are you trying to solve?
+      placeholder: Describe the user/workflow problem before proposing the implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence or motivating example
+      description: What did you observe, try, or compare that makes this worth solving?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed shape
+      description: A concrete sketch is useful, but the problem matters more than a preselected implementation.
+    validations:
+      required: true
+  - type: dropdown
+    id: boundary
+    attributes:
+      label: Does this touch a trust or durable-state boundary?
+      description: Authority, permissions, provenance/taint, egress, sandboxing, secrets, memory, approvals, or durable schema/protocol.
+      options:
+        - "No / not sure"
+        - "Yes"
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches, including what peer systems do and why that does or does not transfer to Muffin.
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and non-goals
+      description: What should this request explicitly not expand into?
