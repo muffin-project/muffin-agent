@@ -1,5 +1,9 @@
 # Handoff operativo
 
+> **Snapshot operativo, non stato corrente.** Questo file può contenere branch,
+> SHA e priorità già superati. Prima di agire, osservare GitHub/Git; per il
+> lettore esterno il router corrente è `docs/STATUS.md`.
+
 > Purge 17/09: origin riscritto (force-push dev/main). Ogni clone/worktree va
 > riagganciato (fetch + rebase `--onto` o re-clone). Resta: purge cache via
 > GitHub Support + re-clone personali. Dettagli in #464. **Aggravante 19/09

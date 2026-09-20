@@ -26,8 +26,9 @@ becomes design lineage and moves to `docs/history/design-notes/`. There is no
 permanent proposals layer in this repository, and `docs/blueprint/proposals/` was
 removed in 2026-08 precisely because the routine it implied never ran.
 
-Also not here: generated or derived views (`docs/derived/architecture-map/`), product
-vision, and operational state.
+Also not here: generated or derived views, product vision, and operational
+state. No generated architecture map is currently checked in; use
+`docs/ARCHITECTURE.md` and executable sources instead.
 
 ## Freshness: evidence is faithful to the observation, not to HEAD
 
@@ -131,4 +132,3 @@ append-only — but **not this README**. It is a router: it is edited, its secti
 renumber, and a broken link in it points a reader at nothing. An unwatched router
 inside a watched repository is the failure this project keeps rediscovering, so
 the classifier carves it out explicitly.
-

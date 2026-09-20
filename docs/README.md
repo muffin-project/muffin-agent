@@ -1,3 +1,17 @@
+# Documentation map
+
+Start here when you do not already know Muffin:
+
+- [Status](STATUS.md) — release boundary and where live state is observed.
+- [Install](INSTALL.md) — install, update and rollback.
+- [Architecture](ARCHITECTURE.md) — present semantic shape.
+- [Security](SECURITY.md) — current trust and authority boundaries.
+- [Contributing](../CONTRIBUTING.md) — contribution rules and inbound agreement.
+
+For the repository's complete authority model, continue below. Historical
+evidence and archived design material are deliberately not part of this first
+reader journey.
+
 # Repository knowledge model
 
 This repository is the system of record for Muffin, but **not every file has the
@@ -30,6 +44,7 @@ unused manifest would be another source of drift.
 | How should installable capability grow around the core? | `docs/EXTENSIONS.md` |
 | How should the owner-run project become public/community-maintained? | `docs/OPEN-SOURCE-STRATEGY.md` |
 | How do public/current/historical claims stay honest outside this repo? | `docs/PUBLIC-NARRATIVE.md` |
+| What is the current release boundary and where is live work observed? | `docs/STATUS.md` |
 | Why was an architectural choice made? | The relevant ADR in `docs/decisions/` |
 | What makes DAY-1 true? | `docs/work/day1/readiness-criteria.md` |
 | Is a DAY-1 requirement currently satisfied? | `docs/work/day1/requirements-status.md` |
@@ -127,10 +142,9 @@ job is navigation, not authority. If a value cannot be generated reliably from
 its authoritative source, prefer omitting the value to maintaining a manual
 copy that can drift.
 
-The current architecture map has a narrower guarantee than its old wording
-implied: its anchor machinery verifies that cited source text still resolves,
-not that every surrounding editorial sentence is semantically current. See
-`docs/derived/architecture-map/README.md` before using it for exact mechanics.
+There is currently no checked-in architecture-map projection. Use
+`ARCHITECTURE.md` for the semantic shape and code/tests for exact mechanics;
+do not infer a generated map from stale references.
 
 ## A name is the first thing read
 
@@ -182,11 +196,10 @@ The 00–12 rebuild corpus, the old threat model/roadmap/contracts, `BRIEF`,
 The inherited foundations corpus went to `docs/history/foundations/legacy/`.
 `docs/history/README.md` carries the old path → current home map.
 
-The architectural decisions moved to `docs/decisions/` and the durable cognitive
-corpus to `docs/knowledge/`: neither is history, and neither needed the blueprint
-name to be found. The dated evidence went to `docs/evidence/`, the design lineage
-to `docs/history/design-notes/`, and the architecture map to
-`docs/derived/architecture-map/` — derived, not merely generated.
+The architectural decisions moved to `docs/decisions/`. The retained
+`docs/knowledge/` corpus is background research, not current runtime or product
+authority; `COGNITIVE-DESIGN.md` owns the live hypotheses. The dated evidence
+went to `docs/evidence/` and the design lineage to `docs/history/design-notes/`.
 
 `docs/blueprint/` and `docs/foundations/` **no longer exist**. Both had shrunk to
 a single compatibility redirect, and on 2026-09-01 both were removed. The retired

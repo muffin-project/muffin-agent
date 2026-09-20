@@ -374,13 +374,15 @@ dependency consequences live in `docs/decisions/0078-licenza-agpl.md`; the grant
 is `LICENSE`, the SPDX field is in `package.json`, inbound rules are in
 `CONTRIBUTING.md`.
 
-Two things remain deliberately open and must not be silently assumed closed:
+One thing remains deliberately open and must not be silently assumed closed:
 
 - the `Muffin` name/logo are outside the copyright grant (`TRADEMARK.md`);
   formal registration is deferred for budget, first-use evidence from 2026-09-14;
-- without a CLA, relaxing the license later needs every external author's
-  consent — the DCO-minimal vs CLA-light decision is due before accepting
-  external PRs post-25.
+
+Inbound licensing is already decided by ADR-0079: external contributions use
+DCO sign-off plus the narrow OSI-only relicense grant in
+`CONTRIBUTOR_AGREEMENT.md`. This is neither a full CLA nor permission for a
+proprietary relicense.
 
 ## 14. Telegram as early distribution/surface leverage
 

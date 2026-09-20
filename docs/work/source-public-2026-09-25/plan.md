@@ -1,5 +1,9 @@
 # Piano esecutivo — source-public 25/09/2026 (preview supporter 21/09)
 
+> **Snapshot del 14/09/2026, non piano operativo corrente.** Conservato come
+> evidence/lineage: usare GitHub/Git osservati e `docs/STATUS.md` per lo stato
+> live e le prossime azioni.
+
 Stato operativo, non autorità semantica. Autorità: `docs/OPEN-SOURCE-STRATEGY.md`
 (distribuzione), `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, ADR, DAY-1 in
 `docs/work/day1/`, lavoro vivo in Git + `docs/work/handoff.md`.

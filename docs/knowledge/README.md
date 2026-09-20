@@ -1,4 +1,10 @@
-# Knowledge base — il corpus cognitivo del vecchio Muffin, curato per il nuovo
+# Knowledge base — corpus di contesto
+
+Questo è un corpus di ricerca e design lineage, non autorità corrente. Per le
+ipotesi cognitive vive, il loro stato e i criteri di falsificazione, partire da
+`docs/COGNITIVE-DESIGN.md`; per il runtime, da `docs/ARCHITECTURE.md` e dal
+codice. I file qui sotto restano consultabili perché spiegano il ragionamento
+storico, ma non autorizzano meccanismi o claim su HEAD.
 
 > Creato 2026-08-09 dal survey del corpus vecchio (agente). **Perché esiste**: il
 > blueprint nuovo ha portato avanti la SOTA *ingegneristica* della memoria
@@ -89,7 +95,7 @@ cartella, e non vanno citati come se lo fossero.
 Che un tema sia qui e non nella tabella non lo declassa: dice che nessuno lo ha
 ancora ri-espresso come principio vivo, e che chi lo riprende parte dalla fonte.
 
-## Cimitero rapido (dettaglio in `06-graveyard.md`) — NON ri-aggiungere
+## Cimitero rapido — NON ri-aggiungere
 
 - **Belief revision** (`bot_claims*`) — RIMOSSO 2026-06-18: 8 iniezioni/30gg, ZERO
   revisioni. Coperto da counterpoint + `/bias`.
@@ -99,10 +105,8 @@ ancora ri-espresso come principio vivo, e che chi lo riprende parte dalla fonte.
 - **Classifier deittico euristico** (`utils/deictic.ts`) — RIMOSSO ADR-153:
   bloccava ~11% di ricerche legittime. Il modello risolve la deissi nativamente.
 
-## Fonti vecchie (repo attuale, `docs/` e `src/`)
+## Fonti vecchie (path storici, non router correnti)
 
-`docs/foundations/{COGNITIVE_BASES,UNDERSTANDING,REFERENCES,THESIS,PRINCIPLES,VISION,INVARIANTS}.md`
-· `docs/pillars/{memory,planning}/…` · `context/HEARTBEAT.md` ·
-`src/memory/CLAUDE.md` · `src/memory/dream_phase_i.ts` · `docs/DECISIONS.md` (ADR-066).
-**Curatela**: allineare a `src/memory/CLAUDE.md` (fonte-codice) più che ai `.md`
-datati, che driftano.
+Le fonti del vecchio corpus sono preservate sotto `docs/history/foundations/` o
+nella storia Git. Non usare i vecchi path come collegamenti operativi: alcuni
+non esistono più nel checkout attuale.
