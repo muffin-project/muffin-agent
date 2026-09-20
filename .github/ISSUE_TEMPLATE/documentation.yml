@@ -1,6 +1,8 @@
 name: Documentation problem
 description: Report missing, stale, contradictory, or hard-to-navigate current documentation
 title: "[Docs]: "
+labels:
+  - documentation
 body:
   - type: dropdown
     id: kind
