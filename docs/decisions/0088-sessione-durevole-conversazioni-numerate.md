@@ -53,10 +53,21 @@ problema di *recupero*, e non deve mai coniare identità di Conversation.
 **Cosa non cambia oggi (di proposito):**
 
 - La regola di chiave di ADR-0056 e la semantica di `SessionStore.rotate`
-  (`core/session/store.ts`) restano invariate: nessun cambio di schema, nessun
-  contatore da aggiungere adesso. Fino a quando un consumatore avrà bisogno di
-  nominare la generation, i file archiviati da `rotate` **sono** le generation,
-  ordinate dal timestamp di archiviazione.
+  (`core/session/store.ts`) restano invariate: `/new` archivia il file e
+  riparte vuoto **sotto la stessa chiave di Session**.
+- Il consumatore che richiede di nominare la generation esiste ed è **#597**:
+  lo stickiness del provider (`ChatCall.conversation` → `session_id` su
+  OpenRouter) ha bisogno di un'identità di Conversation stabile dentro una
+  generation e diversa dopo `/new`, e l'id di Session da solo non può darla
+  (una Session dura quanto la chiave, una Conversation quanto la generation).
+  Perciò #597 persiste la generation in un sidecar `<sessionId>.conv.json`
+  `{version, generation}` accanto al transcript, mai in Git: assente = 0
+  (default legacy, `open()` non scrive mai); corrotto = errore loud su
+  read/open/bump, mai degrado silenzioso a 0; scrittura atomica tmp+rename;
+  `newConversation()` è l'unico percorso di `/new` (rotazione del transcript
+  quando c'è, generazione sempre avanti anche a transcript assente:
+  l'intento decide il confine, non il file); `resolveConversationId` rende
+  `id#gN`. Cancellare il sidecar torna al fallback session-valued: reversibile.
 - Id headless e job (`cli/run.ts`, scheduler, observe-run) restano separati
   (ADR-0056 §3): un job non è una Conversation dell'owner.
 - Il recall non filtra per generation: la generation è un confine di
@@ -67,6 +78,10 @@ problema di *recupero*, e non deve mai coniare identità di Conversation.
 test: stessa chiave di Session attraverso `/new`; incremento solo su atto
 esplicito; nessuna generation derivata dal topic. Un'implementazione che
 crea conversazioni da sola falsifica questa decisione invece di estenderla.
+#597 è la prima implementazione di questo vincolo e lo soddisfa per
+costruzione (sidecar letto da `open()`, avanzato solo da `newConversation()`,
+mai dal topic); un secondo consumatore riusa lo stesso sidecar, non un nuovo
+meccanismo.
 
 ## Come si falsifica
 
