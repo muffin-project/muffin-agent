@@ -69,6 +69,7 @@ function freshCounters() {
     iterations: 0,
     recoveriesUsed: 0,
     transportRetriesLeft: 2,
+    truncationsUsed: 0,
     toolCallsMade: 0,
     nudgedForCompletion: false,
     usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },

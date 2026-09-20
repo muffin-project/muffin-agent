@@ -152,7 +152,19 @@ export type MessageOrigin =
   /** Per-turn runtime facts (clock, surface, model, instance). */
   | 'runtime'
   /** Open work/plan state reinjected for the turn. */
-  | 'work';
+  | 'work'
+  /**
+   * An accepted prefix chunk of the CURRENT logical assistant answer,
+   * interrupted by `max_tokens` (#615).
+   *
+   * Durable work evidence, never harness control and never legacy history:
+   * it survives checkpoint/crash inside the lease and survives a granted
+   * continuation to a new lease (the evidence split keeps everything but
+   * `harness`). Replayed session history keeps its legacy absent origin on
+   * purpose, so old assistant answers can never be mistaken for it — the
+   * defect this marker exists to close.
+   */
+  | 'partial';
 
 export type Message = {
   role: Role;

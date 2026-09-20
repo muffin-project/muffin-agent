@@ -404,13 +404,13 @@ function continuableText(scope: TurnScope, failureClass: ContinuableClass, attem
   // #615: a `truncated` release after partial-text continuations already holds
   // the accepted prefix durably in the transcript. Saying "senza produrre
   // contenuto" there would be false — the prefix is saved, continuable, and
-  // must never read as a complete answer.
+  // must never read as a complete answer. Counted structurally: only explicit
+  // `partial`-origin chunks, never history or tool calls.
   const truncatedPrefixChars = (() => {
     if (failureClass !== 'truncated') return 0;
     let out = 0;
     for (const m of scope.run.messages) {
-      if (m.role !== 'assistant') continue;
-      if (m.content.some((b) => b.type === 'tool_use')) continue;
+      if (m.origin !== 'partial') continue;
       for (const b of m.content) {
         if (b.type === 'text') out += b.text.length;
       }

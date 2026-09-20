@@ -193,6 +193,25 @@ export const MAX_PROVIDER_EMPTY_RETRIES = 3;
 export const MAX_LIGHT_TRANSPORT_RETRIES = 2;
 
 /**
+ * Bounded continuations for a `max_tokens` answer interrupted with partial
+ * text (#615).
+ *
+ * Deliberately NOT the transport budget: `max_tokens` is the model stopping
+ * where it was told to stop, not a 429/502 stall, and spending transport
+ * retries on it muddies both diagnostics and the money/attempt accounting
+ * (Hermes' separation is the prior art: length-continuation gets its own
+ * bound). Ten continuations after the initial attempt — eleven accepted
+ * partials of up to 4096 output tokens each — then the lease yields
+ * truthfully continuable instead of looping. The spent count lives in
+ * `TurnCounters.truncationsUsed` (durable JSON, crash-safe total, reset only
+ * on an explicit owner-granted new lease, which is human-rate-limited like
+ * every other lease-local budget). The turn wall, model budgets and tenant
+ * spend limits remain the hard outer bounds. Not a generic retry framework:
+ * one counter, one call site, one class.
+ */
+export const MAX_TRUNCATION_CONTINUATIONS = 10;
+
+/**
  * How a surface asks the owner.
  *
  * The kernel can answer `ask`, and until now no surface could carry the

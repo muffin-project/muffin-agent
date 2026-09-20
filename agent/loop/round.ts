@@ -19,13 +19,14 @@ import { ReasoningConfigurationError, reasoningFromLegacyThinking } from '../pro
 import { checkpoint, finish, releaseContinuable, suspendHere, type TurnScope } from './durability.js';
 import { resolveConversationId } from './conversation.js';
 import type { ExecutionAbortReason, ExecutionBudget, ModelCallLease, ModelCallTelemetry } from './execution-budget.js';
-import { harnessMessage, ownerMessage, toolMessage } from './message-origin.js';
+import { harnessMessage, isPartialMessage, ownerMessage, partialMessage, toolMessage } from './message-origin.js';
 import { drainStream, edgeTrimmer, retryDelayMs } from './stream.js';
 import { runTool } from './tool-call.js';
 import {
   ApprovalRequired,
   MAX_PROVIDER_EMPTY_RETRIES,
   MAX_TRANSPORT_RETRIES,
+  MAX_TRUNCATION_CONTINUATIONS,
   TOOL_RESULT_BUDGET_CHARS,
   type TurnResult,
 } from './types.js';
@@ -159,26 +160,42 @@ export function isTruncatedPartial(result: ChatResult): boolean {
 }
 
 /**
- * Durable prefix of the current logical answer, derived from existing Turn
- * execution state — no new schema.
+ * Durable prefix of the current logical answer: the concatenation of accepted
+ * truncation partials, and ONLY those.
  *
- * Any assistant message WITHOUT a `tool_use` block in `run.messages` can only
- * be a truncation partial pushed by the block below: the tool path always
- * carries `tool_use`, recovery pushes harness user messages, and the final
- * answer is never pushed to the transcript. Concatenating those texts in order
- * therefore reconstructs the accepted prefix after a crash/resume without
- * losing or duplicating it.
+ * Explicit structural identity, never inference: a partial counts iff
+ * `isPartialMessage` (origin `partial`, written by `partialMessage` below).
+ * Role, absence of `tool_use`, text contents and historical position are NOT
+ * consulted — reinjected session history carries a legacy absent origin on
+ * purpose, tool-use assistant messages carry none, so neither can ever be
+ * mistaken for the current answer. Survives checkpoint/crash (it is the
+ * transcript) and a granted new lease (evidence, not harness control).
  */
 export function collectTruncationPrefix(messages: readonly import('../providers/types.js').Message[]): string {
   let out = '';
   for (const m of messages) {
-    if (m.role !== 'assistant') continue;
-    if (m.content.some((b) => b.type === 'tool_use')) continue;
+    if (!isPartialMessage(m)) continue;
     for (const b of m.content) {
       if (b.type === 'text') out += b.text;
     }
   }
   return out;
+}
+
+/**
+ * The most recently accepted partial chunk, for no-progress detection below.
+ * Structural like the prefix: only `partial` origin counts.
+ */
+function lastPartialChunk(messages: readonly import('../providers/types.js').Message[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (!isPartialMessage(m)) continue;
+    return m.content
+      .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
+      .map((b) => b.text)
+      .join('');
+  }
+  return undefined;
 }
 
 /**
@@ -764,41 +781,59 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
 
     // #615: max_tokens + partial text + zero tools is never a terminal
     // complete answer. Preserve the valid prefix as part of the SAME logical
-    // Turn/answer (assistant evidence in durable `run.messages`), continue
-    // from it with a bounded harness instruction, append only new text.
-    // Streaming prefix already shown stays valid: no `superseded` boundary
-    // here — that would retract bytes the owner already read correctly.
-    // Bounded by the existing durable transport budget (crash-safe total) plus
-    // the execution wall/model budgets checked at the loop top; when spent the
-    // Turn yields truthfully continuable, never `answered`.
+    // Turn/answer (assistant evidence with explicit `partial` origin in durable
+    // `run.messages`), continue from it with a bounded harness instruction,
+    // append only new text. Streaming prefix already shown stays valid: no
+    // `superseded` boundary here — that would retract bytes the owner already
+    // read correctly. Bounded by the DEDICATED durable length-continuation
+    // budget (`truncationsUsed`, never transport) plus the execution
+    // wall/model budgets checked at the loop top; when spent the Turn yields
+    // truthfully continuable, never `answered`.
     if (isTruncatedPartial(result)) {
       const currentChunk = result.text ?? '';
       const prefixSoFar = collectTruncationPrefix(run.messages);
+      // No-progress rule: a chunk byte-identical to the immediately previous
+      // accepted partial proves the model is reproducing instead of
+      // continuing. Appending it would corrupt the answer with a duplicate AND
+      // burn budget indefinitely, so the chunk is dropped — nothing new is
+      // lost, its bytes are already preserved — and the lease yields
+      // continuable with the existing prefix. Deterministic and falsifiable:
+      // repeat the same chunk twice and the turn stops after exactly 2 calls.
+      const previous = lastPartialChunk(run.messages);
+      if (previous !== undefined && previous === currentChunk) {
+        turn.setAttributes({
+          'muffin.truncation.no_progress': true,
+          'muffin.truncation.prefix_chars': prefixSoFar.length,
+          'muffin.truncation.chunk_chars': currentChunk.length,
+        });
+        return releaseContinuable(scope, 'truncated', run.truncationsUsed);
+      }
       run.messages.push({
-        role: 'assistant',
-        content: [
+        ...partialMessage([
           ...(result.thinking ?? []),
           { type: 'text' as const, text: currentChunk },
-        ],
+        ]),
         ...(result.providerMetadata === undefined ? {} : { providerMetadata: result.providerMetadata }),
       });
+      run.truncationsUsed += 1;
       if (result.requestId !== undefined) run.providerFailureRequestIds.push(result.requestId);
       turn.setAttributes({
         'muffin.truncation.continuation': true,
+        'muffin.truncation.used': run.truncationsUsed,
         'muffin.truncation.prefix_chars': prefixSoFar.length,
         'muffin.truncation.chunk_chars': currentChunk.length,
       });
-      if (run.transportRetriesLeft <= 0) {
-        // Bound spent with prefix durably preserved: honestly continuable for
-        // an owner-granted new lease (evidence split keeps the prefix, drops
-        // this harness instruction), never a partial `answered`.
-        return releaseContinuable(scope, 'truncated', run.iterations);
+      if (run.truncationsUsed > MAX_TRUNCATION_CONTINUATIONS) {
+        // Bound spent with every accepted chunk durably preserved: honestly
+        // continuable for an owner-granted new lease (the evidence split keeps
+        // the `partial` prefix as work evidence and drops only the harness
+        // instruction), never a partial `answered`.
+        return releaseContinuable(scope, 'truncated', run.truncationsUsed);
       }
-      run.transportRetriesLeft -= 1;
       run.messages.push(harnessMessage('user', [{ type: 'text', text: TRUNCATION_CONTINUE_PROMPT }]));
-      turn.setAttributes({ 'muffin.truncation.transport_left': run.transportRetriesLeft });
-      // Persist prefix + reduced budget before the next model call: a crash
-      // here resumes from the accepted prefix without loss or duplication.
+      // Persist prefix + spent budget before the next model call: a crash here
+      // resumes from the accepted prefix without loss or duplication, against
+      // the same crash-safe total.
       if (!checkpoint(scope)) return finish(scope, 'error', '');
       continue;
     }
@@ -843,10 +878,11 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
        * does not retroactively unsend a frame that already rendered.
        *
        * #615: when prior iterations ended `max_tokens` with partial text,
-       * `run.messages` already holds those accepted prefixes (assistant
-       * evidence, checkpointed). The final answer is prefix + current chunk —
-       * ONE logical assistant answer for Session/Memory — never the last
-       * chunk alone and never multiple fake exchanges.
+       * `run.messages` already holds those accepted prefixes (explicit
+       * `partial`-origin evidence, checkpointed — never inferred history).
+       * The final answer is prefix + current chunk — ONE logical assistant
+       * answer for Session/Memory — never the last chunk alone and never
+       * multiple fake exchanges.
        */
       const prefixSoFar = collectTruncationPrefix(run.messages);
       const currentRaw = result.text ?? '';

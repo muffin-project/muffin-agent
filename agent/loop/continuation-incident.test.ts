@@ -377,6 +377,7 @@ describe('Incident A · useful work then provider stalls', () => {
           iterations: 1,
           recoveriesUsed: 0,
           transportRetriesLeft: 10,
+          truncationsUsed: 0,
           toolCallsMade: 0,
           nudgedForCompletion: false,
           usage: { ...zeroUsage },

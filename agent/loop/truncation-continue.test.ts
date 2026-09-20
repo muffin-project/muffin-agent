@@ -1,23 +1,43 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { createDecide } from '../../core/policy/decide.js';
 import { POLICY_FLOOR } from '../../core/policy/matrix.js';
-import type { Principal } from '../../core/policy/types.js';
+import type { CapabilityDecl, Principal } from '../../core/policy/types.js';
+import type { Embedder } from '../../core/memory/embed.js';
+import { MemoryStore } from '../../core/memory/store.js';
+import { VectorIndex } from '../../core/memory/vectors.js';
 import { SessionStore } from '../../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../../core/tracing/tracer.js';
 import { TurnStore } from '../../core/turns/store.js';
 import { TodoStore } from '../../core/turns/todo.js';
 import { continueTurn, resumeTurn, runTurn, type LoopDeps } from '../loop.js';
 import { CONSERVATIVE } from '../profiles/profile.js';
-import type { ChatCall, ChatResult, Provider } from '../providers/types.js';
-import { MemoryStore } from '../../core/memory/store.js';
-import { VectorIndex } from '../../core/memory/vectors.js';
-import type { Embedder } from '../../core/memory/embed.js';
-import type { TurnDelta } from './types.js';
-import { MAX_TRANSPORT_RETRIES } from './types.js';
+import type { ChatCall, ChatResult, Message, Provider } from '../providers/types.js';
+import { searchCapability, searchSpec } from '../tools/search.js';
+import { harnessMessage, partialMessage } from './message-origin.js';
+import { MAX_TRANSPORT_RETRIES, MAX_TRUNCATION_CONTINUATIONS, type TurnDelta } from './types.js';
+
+/**
+ * #615 — max_tokens with partial text must continue the SAME logical
+ * answer, never settle as answered.
+ *
+ * Structural rules under test:
+ * - a truncation partial has EXPLICIT identity (origin `partial`); reinjected
+ *   session history (legacy absent origin) and tool-use messages can never be
+ *   mistaken for it;
+ * - continuation spends a DEDICATED durable budget (`truncationsUsed`), never
+ *   transport retries;
+ * - a verbatim repeated chunk is no-progress: stop, do not duplicate, do not
+ *   burn budget;
+ * - final Session/Memory holds ONE complete assistant answer.
+ */
+
+const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
+const NOW = () => new Date('2026-09-20T12:00:00.000Z');
+const usage = { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 };
 
 class FakeEmbedder implements Embedder {
   readonly id = 'fake:v1';
@@ -26,23 +46,6 @@ class FakeEmbedder implements Embedder {
     return texts.map(() => Float32Array.from([1, 0, 0, 0]));
   }
 }
-
-/**
- * #615 — max_tokens with partial text must continue, not settle as answered.
- *
- * RED-first probe for the owner-visible correctness bug:
- * provider returns `stopReason=max_tokens` with non-empty text and zero tool
- * calls. Current `classifyProviderFailure` early-returns (text non-empty) and
- * the loop settles `answered` with the fragment, persisting it to Session as
- * if complete.
- *
- * Desired: same logical Turn/answer continues from the prefix, appends only
- * new continuation text, Session holds ONE complete assistant answer.
- */
-
-const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
-const NOW = () => new Date('2026-09-20T12:00:00.000Z');
-const usage = { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 };
 
 const truncatedPartial = (text: string): ChatResult => ({
   text,
@@ -74,18 +77,36 @@ class Scripted implements Provider {
   }
 }
 
-function world(script: ChatResult[]) {
+function toolDecl(): CapabilityDecl {
+  return { ...searchCapability, id: 'sys.leggi' as CapabilityDecl['id'], hostOnly: false };
+}
+
+function world(script: ChatResult[], opts: { withMemory?: boolean; withTool?: boolean } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-615-'));
   const db = new DatabaseCtor(':memory:');
+  const memDb = new DatabaseCtor(':memory:');
   const turns = new TurnStore(db);
   const sessions = new SessionStore(home);
-  const capabilities = new Map();
+  const capabilities = new Map<CapabilityDecl['id'], CapabilityDecl>();
+  const tools: LoopDeps['tools'] = [];
+  if (opts.withTool === true) {
+    const decl = toolDecl();
+    capabilities.set(decl.id, decl);
+    tools.push({
+      capability: decl.id,
+      spec: { ...searchSpec, name: 'leggi' },
+      handler: () => ({ content: 'contenuto letto', tier: 0 as const }),
+      throwTier: 0,
+    });
+  }
   const provider = new Scripted(script);
+  const memStore = new MemoryStore(memDb);
+  const vectors = new VectorIndex(memDb, new FakeEmbedder());
   const deps: LoopDeps = {
     provider,
     profile: CONSERVATIVE,
     model: 'test-model',
-    tools: [],
+    tools,
     capabilities,
     decide: createDecide({ matrix: POLICY_FLOOR, capabilities, budgetExhausted: () => false, hardened: true }),
     tracer: new SimpleTracer(new JsonlExporter(home)),
@@ -95,11 +116,95 @@ function world(script: ChatResult[]) {
     budgetExhausted: () => false,
     systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite.' },
     now: NOW,
+    ...(opts.withMemory === true ? { memory: { store: memStore, recall: { store: memStore, vectors } } } : {}),
   };
-  return { deps, turns, sessions, provider, home };
+  return { deps, turns, sessions, provider, home, memStore };
 }
 
-describe('#615 non-streaming partial + max_tokens continues same logical answer', () => {
+/** Turn-span attributes out of the exported JSONL trace (see round.test.ts). */
+function turnSpanAttrs(home: string): Record<string, unknown>[] {
+  const dir = join(home, 'traces');
+  return readdirSync(dir)
+    .filter((f) => f.endsWith('.jsonl'))
+    .flatMap((f) => readFileSync(join(dir, f), 'utf8').split('\n'))
+    .filter((l) => l.trim() !== '')
+    .map((l) => JSON.parse(l) as { name: string; attributes: Record<string, unknown> })
+    .filter((r) => r.name === 'muffin.turn')
+    .map((r) => r.attributes);
+}
+
+const toolCall = (name: string, id: string, args: unknown = {}): ChatResult => ({
+  text: null,
+  toolCalls: [{ id, name, args }],
+  stopReason: 'tool_use',
+  usage,
+  model: 'test-model',
+});
+
+describe('#615 history can never poison the current answer', () => {
+  it('old assistant answers + tool history + A,A2(max_tokens) + B(end) => exactly A+A2+B', async () => {
+    const FULL = 'PARTE-A-PARTE-A2-PARTE-B';
+    const w = world(
+      [
+        finalAnswer('vecchia risposta uno'),
+        toolCall('leggi', 'c1', { query: 'storia', path: 'storia.txt' }),
+        finalAnswer('vecchia risposta due'),
+        finalAnswer('vecchia risposta tre'),
+        truncatedPartial('PARTE-A-'),
+        truncatedPartial('PARTE-A2-'),
+        finalAnswer('PARTE-B'),
+      ],
+      { withMemory: true, withTool: true },
+    );
+    const session = w.sessions.open('owner');
+    const mkInput = (text: string) => ({ principal: owner, tenant: 'host', surface: 'cli', session, text });
+
+    await runTurn(w.deps, mkInput('prima domanda'));
+    await runTurn(w.deps, mkInput('seconda domanda con tool'));
+    await runTurn(w.deps, mkInput('terza domanda'));
+    expect(sessionsRead(w, session, 'assistant')).toHaveLength(3);
+
+    const r = await runTurn(w.deps, mkInput('quarta domanda lunga'));
+
+    // Exactly the current chunks — no old assistant history may appear.
+    expect(r.stopped).toBe('answered');
+    expect(r.text).toBe(FULL);
+    expect(r.text).not.toContain('vecchia');
+    // Exactly one NEW assistant Session row, with the complete answer.
+    const after = sessionsRead(w, session, 'assistant');
+    expect(after).toHaveLength(4);
+    expect(after[3]).toBe(FULL);
+    // Current Memory episode contains exactly the full answer, once.
+    const agents = w.memStore.pendingEpisodes('host', 1, 30).filter((e) => e.role === 'agent');
+    expect(agents.filter((e) => e.content === FULL)).toHaveLength(1);
+    expect(agents.some((e) => (e.content ?? '').includes('vecchia') && (e.content ?? '').includes('PARTE'))).toBe(false);
+    // Structural identity: transcript partials carry origin `partial`;
+    // reinjected history never does.
+    const row = w.turns.get(r.turnId);
+    const partials = (row?.messages ?? []).filter((m) => m.origin === 'partial');
+    expect(partials.map((m) => m.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('')).join('')).toBe(
+      'PARTE-A-PARTE-A2-',
+    );
+    // seen[4]=A call (no partial yet), seen[5]=A2 call carries exactly chunk A.
+    const secondCallPartials = w.provider.seen[5]!.messages.filter((m) => m.origin === 'partial');
+    expect(secondCallPartials).toHaveLength(1);
+    expect(w.provider.seen[5]!.messages.some((m) => m.origin === undefined && m.role === 'assistant')).toBe(true);
+    // Diagnostics count only current partials: after A (8 chars), not history.
+    const spans = turnSpanAttrs(w.home);
+    const truncating = spans.filter((a) => a['muffin.truncation.continuation'] === true);
+    expect(truncating.length).toBeGreaterThan(0);
+    expect(truncating.at(-1)!['muffin.truncation.prefix_chars']).toBe('PARTE-A-'.length);
+    // Dedicated budget spent twice; transport untouched.
+    expect(row?.counters.truncationsUsed).toBe(2);
+    expect(row?.counters.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES);
+  });
+
+  function sessionsRead(w: ReturnType<typeof world>, session: { id: string; file: string }, role: string): string[] {
+    return w.sessions.read(session).filter((m) => m.role === role).map((m) => m.content);
+  }
+});
+
+describe('#615 non-streaming partial continues same logical answer', () => {
   it('appends continuation, single Session row, never settles partial as answered', async () => {
     const w = world([truncatedPartial('prima parte…'), finalAnswer('seconda parte')]);
     const session = w.sessions.open('owner');
@@ -112,34 +217,30 @@ describe('#615 non-streaming partial + max_tokens continues same logical answer'
       text: 'raccontami una storia lunga',
     });
 
-    // Same logical answer continues: two provider calls, one Turn.
     expect(w.provider.seen).toHaveLength(2);
-    // Final result is the concatenation, not the fragment.
     expect(r.stopped).toBe('answered');
     expect(r.text).toBe('prima parte…seconda parte');
 
-    // Second call continues from the exact prefix (assistant partial visible).
     const secondWire = JSON.stringify(w.provider.seen[1]!.messages);
     expect(secondWire).toContain('prima parte…');
 
-    // Session holds ONE complete assistant answer, not a partial settlement.
     const transcript = w.sessions.read(session);
     const assistantRows = transcript.filter((m) => m.role === 'assistant');
     expect(assistantRows).toHaveLength(1);
     expect(assistantRows[0]!.content).toBe('prima parte…seconda parte');
 
-    // Turn row is done/answered once, with the complete answer as result text.
     const row = w.turns.get(r.turnId);
     expect(row?.status).toBe('done');
     expect(row?.outcome).toBe('answered');
+    expect(row?.counters.truncationsUsed).toBe(1);
+    expect(row?.counters.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES);
   });
 
   it('streaming prefix stays valid, continuation appends once, no superseded', async () => {
     const deltas: TurnDelta[] = [];
-    // Streaming provider: first call streams prefix then ends max_tokens.
     const streamingProvider: Provider = {
       kind: 'openai-compat',
-      async chat(call: ChatCall): Promise<ChatResult> {
+      async chat(): Promise<ChatResult> {
         throw new Error('unreachable: streaming test uses chatStream');
       },
       async *chatStream(call: ChatCall) {
@@ -184,7 +285,6 @@ describe('#615 non-streaming partial + max_tokens continues same logical answer'
 
     expect(r.stopped).toBe('answered');
     expect(r.text).toBe('prima parte…seconda parte');
-    // Visible prefix retained, continuation appended once, never superseded.
     const texts = deltas.filter((d) => d.type === 'text').map((d) => (d as { text: string }).text).join('');
     expect(texts).toBe('prima parte…seconda parte');
     expect(deltas.filter((d) => d.type === 'boundary' && (d as { reason: string }).reason === 'superseded')).toHaveLength(0);
@@ -193,11 +293,47 @@ describe('#615 non-streaming partial + max_tokens continues same logical answer'
     expect(assistantRows).toHaveLength(1);
     expect(assistantRows[0]!.content).toBe('prima parte…seconda parte');
   });
+
+  it('streaming with history appends only current chunks, never duplicates', async () => {
+    const deltas: TurnDelta[] = [];
+    const streamingProvider: Provider = {
+      kind: 'openai-compat',
+      async chat(): Promise<ChatResult> {
+        throw new Error('unreachable');
+      },
+      async *chatStream(call: ChatCall) {
+        if (call.messages.some((m) => JSON.stringify(m).includes('PARTE-A-'))) {
+          yield { type: 'text_delta', text: 'PARTE-B' };
+          yield { type: 'done', result: finalAnswer('PARTE-B') };
+        } else {
+          yield { type: 'text_delta', text: 'PARTE-A-' };
+          yield { type: 'done', result: truncatedPartial('PARTE-A-') };
+        }
+      },
+    };
+    const w = world([finalAnswer('vecchia risposta uno')]);
+    const session = w.sessions.open('owner');
+    await runTurn(w.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: 'prima' });
+    // Swap in the streaming provider for the truncated turn.
+    (w.deps as { provider: Provider }).provider = streamingProvider;
+    const r = await runTurn(w.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session,
+      text: 'seconda lunga',
+      onDelta: (d) => deltas.push(d),
+    });
+    expect(r.text).toBe('PARTE-A-PARTE-B');
+    const texts = deltas.filter((d) => d.type === 'text').map((d) => (d as { text: string }).text).join('');
+    expect(texts).toBe('PARTE-A-PARTE-B');
+    expect(deltas.filter((d) => d.type === 'boundary')).toHaveLength(0);
+  });
 });
 
-describe('#615 repeated truncation is bounded, restart is lossless, normal paths unchanged', () => {
-  it('C: keeps returning max_tokens -> continuable truncated, never answered, no infinite loop', async () => {
-    const script = Array.from({ length: 15 }, (_, i) => truncatedPartial(`pezzo${i}…`));
+describe('#615 bounds, restart, no-progress, unchanged paths', () => {
+  it('C: repeated max_tokens exhausts the DEDICATED budget, transport untouched', async () => {
+    const script = Array.from({ length: MAX_TRUNCATION_CONTINUATIONS + 5 }, (_, i) => truncatedPartial(`pezzo${i}…`));
     const w = world(script);
     const session = w.sessions.open('owner');
     const r = await runTurn(w.deps, {
@@ -205,22 +341,19 @@ describe('#615 repeated truncation is bounded, restart is lossless, normal paths
       tenant: 'host',
       surface: 'cli',
       session,
-      text: 'raccontami una storia lunghissima',
+      text: 'storia lunghissima',
     });
-    // Bounded by the existing durable transport budget: initial + MAX retries.
     expect(r.stopped).toBe('continuable');
     expect(r.reason).toBe('truncated');
-    expect(w.provider.seen).toHaveLength(MAX_TRANSPORT_RETRIES + 1);
-    // Honestly incomplete: diagnostic names partial preservation + way back.
+    expect(w.provider.seen).toHaveLength(MAX_TRUNCATION_CONTINUATIONS + 1);
     expect(r.text).toContain('parziale');
     expect(r.text).toContain('riprendi');
-    expect(r.text).not.toContain('answered');
     const row = w.turns.get(r.turnId);
     expect(row?.status).toBe('continuable');
     expect(row?.continuableReason?.class).toBe('truncated');
-    // No partial settlement in Session: continuable releases never append.
-    const transcript = w.sessions.read(session);
-    expect(transcript.filter((m) => m.role === 'assistant')).toHaveLength(0);
+    expect(row?.counters.truncationsUsed).toBe(MAX_TRUNCATION_CONTINUATIONS + 1);
+    expect(row?.counters.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES);
+    expect(w.sessions.read(session).filter((m) => m.role === 'assistant')).toHaveLength(0);
   });
 
   it('D: crash after accepted prefix resumes same logical answer without duplication', async () => {
@@ -245,8 +378,6 @@ describe('#615 repeated truncation is bounded, restart is lossless, normal paths
       systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite.' },
       now: NOW,
     };
-    // Simulate crash after first truncation was accepted: prefix + harness
-    // instruction checkpointed, transport budget already spent once.
     const created = turns.create(
       {
         id: 'resume615',
@@ -261,6 +392,7 @@ describe('#615 repeated truncation is bounded, restart is lossless, normal paths
           iterations: 1,
           recoveriesUsed: 0,
           transportRetriesLeft: MAX_TRANSPORT_RETRIES,
+          truncationsUsed: 0,
           toolCallsMade: 0,
           nudgedForCompletion: false,
           usage: { inputTokens: 10, outputTokens: 4096, cacheReadTokens: 0, cacheWriteTokens: 0 },
@@ -272,57 +404,45 @@ describe('#615 repeated truncation is bounded, restart is lossless, normal paths
       },
       4242,
     );
-    const prefixMessages = [
+    const prefixMessages: Message[] = [
       { role: 'user', content: [{ type: 'text', text: 'raccontami una storia lunga' }] },
-      { role: 'assistant', content: [{ type: 'text', text: 'prima parte…' }] },
-      {
-        role: 'user',
-        content: [{ type: 'text', text: 'La risposta precedente si è interrotta per limite di output.' }],
-        origin: 'harness' as const,
-      },
-    ] as unknown as import('../providers/types.js').Message[];
+      partialMessage([{ type: 'text', text: 'prima parte…' }]),
+      harnessMessage('user', [{ type: 'text', text: 'La risposta precedente si è interrotta per limite di output.' }]),
+    ];
     expect(
       turns.checkpoint(
         'resume615',
         {
           messages: prefixMessages,
           taint: 0,
-          counters: { ...created.counters, iterations: 1, transportRetriesLeft: MAX_TRANSPORT_RETRIES - 1 },
+          counters: { ...created.counters, iterations: 1, truncationsUsed: 1 },
         },
         created.claimToken,
       ),
     ).toBe(true);
-    db.prepare(
-      `UPDATE turns SET status = 'interrupted', claimed_by = NULL, claim_token = NULL WHERE id = 'resume615'`,
-    ).run();
+    db.prepare(`UPDATE turns SET status = 'interrupted', claimed_by = NULL, claim_token = NULL WHERE id = 'resume615'`).run();
 
     const resumed = await resumeTurn(deps, 'resume615');
     if ('why' in resumed) throw new Error(`resume refused: ${resumed.why}`);
     expect(resumed.stopped).toBe('answered');
     expect(resumed.text).toBe('prima parte…seconda parte');
-    // Provider saw the accepted prefix exactly once (no loss, no duplication).
     const wire = JSON.stringify(provider.seen[0]!.messages);
     expect(wire.match(/prima parte…/g)).toHaveLength(1);
     const transcript = sessions.read(sessions.open('owner'));
     const assistantRows = transcript.filter((m) => m.role === 'assistant');
     expect(assistantRows).toHaveLength(1);
     expect(assistantRows[0]!.content).toBe('prima parte…seconda parte');
+    expect(turns.get('resume615')?.counters.truncationsUsed).toBe(1);
   });
 
   it('D2: continuable prefix continues on owner grant without duplicating', async () => {
-    const script = Array.from({ length: MAX_TRANSPORT_RETRIES + 1 }, (_, i) => truncatedPartial(`pezzo${i}…`));
+    const script = Array.from({ length: MAX_TRUNCATION_CONTINUATIONS + 1 }, (_, i) => truncatedPartial(`pezzo${i}…`));
     script.push(finalAnswer('finale.'));
     const w = world(script);
     const session = w.sessions.open('owner');
-    const first = await runTurn(w.deps, {
-      principal: owner,
-      tenant: 'host',
-      surface: 'cli',
-      session,
-      text: 'storia lunghissima',
-    });
+    const first = await runTurn(w.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: 'storia lunghissima' });
     expect(first.stopped).toBe('continuable');
-    // Remaining script has the final continuation for the granted lease.
+
     const second = await continueTurn(w.deps, first.turnId, {
       message: { role: 'user', content: [{ type: 'text', text: 'riprendi' }] },
       session: w.sessions.open('owner'),
@@ -330,30 +450,46 @@ describe('#615 repeated truncation is bounded, restart is lossless, normal paths
     if ('why' in second) throw new Error(`continuation refused: ${second.why}`);
     expect(second.turnId).toBe(first.turnId);
     expect(second.stopped).toBe('answered');
-    // Same Turn, one logical answer: prefix pieces + finale, no duplication.
     expect(second.text.startsWith('pezzo0…')).toBe(true);
     expect(second.text.endsWith('finale.')).toBe(true);
     expect(second.text).not.toContain('pezzo0…pezzo0…');
+    // One Turn, one logical Session answer across both leases.
+    expect(w.sessions.read(session).filter((m) => m.role === 'assistant')).toHaveLength(1);
   });
 
-  it('E: normal non-truncated answer follows current path byte-for-byte', async () => {
-    const w = world([finalAnswer('risposta completa')]);
+  it('H: verbatim repeated chunk is no-progress — stop after 2 calls, no duplicate, no budget burn', async () => {
+    const w = world([truncatedPartial('STESSO-PEZZO'), truncatedPartial('STESSO-PEZZO'), finalAnswer('MAI')]);
     const session = w.sessions.open('owner');
     const r = await runTurn(w.deps, {
       principal: owner,
       tenant: 'host',
       surface: 'cli',
       session,
-      text: 'ciao',
+      text: 'dimmi qualcosa',
     });
+    expect(r.stopped).toBe('continuable');
+    expect(r.reason).toBe('truncated');
+    expect(w.provider.seen).toHaveLength(2);
+    const row = w.turns.get(r.turnId);
+    // Second chunk dropped, not appended: single partial, single budget unit.
+    expect(row?.counters.truncationsUsed).toBe(1);
+    expect(row?.counters.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES);
+    expect((row?.messages ?? []).filter((m) => m.origin === 'partial')).toHaveLength(1);
+    expect(w.sessions.read(session).filter((m) => m.role === 'assistant')).toHaveLength(0);
+  });
+
+  it('E: normal non-truncated answer follows current path byte-for-byte', async () => {
+    const w = world([finalAnswer('risposta completa')]);
+    const session = w.sessions.open('owner');
+    const r = await runTurn(w.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: 'ciao' });
     expect(r.stopped).toBe('answered');
     expect(r.text).toBe('risposta completa');
     expect(w.provider.seen).toHaveLength(1);
     expect(w.provider.seen[0]!.maxOutputTokens).toBe(4096);
     const row = w.turns.get(r.turnId);
     expect(row?.counters.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES);
-    const transcript = w.sessions.read(session);
-    expect(transcript.filter((m) => m.role === 'assistant')).toHaveLength(1);
+    expect(row?.counters.truncationsUsed).toBe(0);
+    expect(w.sessions.read(session).filter((m) => m.role === 'assistant')).toHaveLength(1);
   });
 
   it('F: zero-output max_tokens stays continuable truncated', async () => {
@@ -368,47 +504,18 @@ describe('#615 repeated truncation is bounded, restart is lossless, normal paths
     };
     const w = world([emptyTruncated, emptyTruncated, emptyTruncated, emptyTruncated, emptyTruncated]);
     const session = w.sessions.open('owner');
-    const r = await runTurn(w.deps, {
-      principal: owner,
-      tenant: 'host',
-      surface: 'cli',
-      session,
-      text: 'ciao',
-    });
+    const r = await runTurn(w.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: 'ciao' });
     expect(r.stopped).toBe('continuable');
     expect(r.reason).toBe('truncated');
     expect(r.text).toContain('limite di output');
     expect(r.text).toContain('senza produrre contenuto');
+    expect(w.turns.get(r.turnId)?.counters.truncationsUsed).toBe(0);
   });
 
   it('G: Session and Memory end with ONE complete assistant answer', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'muffin-615-mem-'));
-    const db = new DatabaseCtor(':memory:');
-    const memDb = new DatabaseCtor(':memory:');
-    const store = new MemoryStore(memDb);
-    const vectors = new VectorIndex(memDb, new FakeEmbedder());
-    const turns = new TurnStore(db);
-    const sessions = new SessionStore(home);
-    const capabilities = new Map();
-    const provider = new Scripted([truncatedPartial('prima parte…'), finalAnswer('seconda parte')]);
-    const deps: LoopDeps = {
-      provider,
-      profile: CONSERVATIVE,
-      model: 'test-model',
-      tools: [],
-      capabilities,
-      decide: createDecide({ matrix: POLICY_FLOOR, capabilities, budgetExhausted: () => false, hardened: true }),
-      tracer: new SimpleTracer(new JsonlExporter(home)),
-      sessions,
-      turns,
-      todos: new TodoStore(db),
-      budgetExhausted: () => false,
-      systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite.' },
-      now: NOW,
-      memory: { store, recall: { store, vectors } },
-    };
-    const session = sessions.open('owner');
-    const r = await runTurn(deps, {
+    const w = world([truncatedPartial('prima parte…'), finalAnswer('seconda parte')], { withMemory: true });
+    const session = w.sessions.open('owner');
+    const r = await runTurn(w.deps, {
       principal: owner,
       tenant: 'host',
       surface: 'cli',
@@ -417,11 +524,11 @@ describe('#615 repeated truncation is bounded, restart is lossless, normal paths
     });
     expect(r.stopped).toBe('answered');
     expect(r.text).toBe('prima parte…seconda parte');
-    const transcript = sessions.read(session);
+    const transcript = w.sessions.read(session);
     const assistantRows = transcript.filter((m) => m.role === 'assistant');
     expect(assistantRows).toHaveLength(1);
     expect(assistantRows[0]!.content).toBe('prima parte…seconda parte');
-    const all = store.pendingEpisodes('host', 1, 10);
+    const all = w.memStore.pendingEpisodes('host', 1, 10);
     const agentEpisodes = all.filter((e) => e.role === 'agent');
     expect(agentEpisodes).toHaveLength(1);
     expect(agentEpisodes[0]!.content).toBe('prima parte…seconda parte');
