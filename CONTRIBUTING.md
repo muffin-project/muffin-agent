@@ -105,6 +105,9 @@ it — **observed, not asserted**.
 That normally means:
 
 - commands you actually ran and their actual output;
+- minimum local signal before opening a PR: `npx tsc --noEmit` plus the targeted
+  tests for the files you touched (`npx vitest run <paths>`); the template
+  defines the rest of the evidence budget, not this file;
 - for a bug fix, the pre-fix failure/reproduction before the green result;
 - integration/acceptance evidence when the claim crosses a real boundary;
 - for CRITICAL work, the independent judge path described in `docs/JUDGE.md`,
