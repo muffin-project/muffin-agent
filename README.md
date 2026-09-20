@@ -245,6 +245,17 @@ which supposedly clever mechanisms do not help.
 
 [Open-source strategy →](docs/OPEN-SOURCE-STRATEGY.md) · [Public narrative →](docs/PUBLIC-NARRATIVE.md)
 
+## Contributing
+
+Muffin is source-public/pre-alpha: contributions are welcome, stability is not
+promised. Start from [CONTRIBUTING.md](CONTRIBUTING.md) — it routes you to the
+current integration branch (`dev`, via `slice/<claim>` branches, see
+[BRANCHING.md](docs/BRANCHING.md)), the signed-off-commit rule (`git commit -s`,
+see [CONTRIBUTOR_AGREEMENT.md](CONTRIBUTOR_AGREEMENT.md)), and the evidence a PR
+must show. Report bugs with the issue templates; report security issues
+privately per [SECURITY.md](SECURITY.md). You do not need Claude Code to
+contribute.
+
 Copyright (c) 2026 Giusto Piedimonte. License:
 [AGPL-3.0-or-later](LICENSE) — the `Muffin` name and logo are not covered, see
 [TRADEMARK.md](TRADEMARK.md).
