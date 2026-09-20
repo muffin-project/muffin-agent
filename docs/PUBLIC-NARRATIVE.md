@@ -92,8 +92,9 @@ idea is allowed to fail.
 
 Old: open source after the personality/narrative is mature enough.
 
-Current: owner DAY-1 → 14-day real use → trusted alpha → public alpha when
-install/update/recovery/security/contributor boundaries are understandable to an
+Current: owner DAY-1 → source-public/pre-alpha (inspectable and contributable;
+not product alpha) → 14-day real use → trusted alpha → product public alpha
+when install/update/recovery/security boundaries are understandable to an
 outsider. Voice remains important; it is not the only release gate.
 
 ## 3. Root README contract — structure before copy
