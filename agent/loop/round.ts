@@ -141,6 +141,57 @@ function leaseAbortClass(reason: Exclude<ExecutionAbortReason, 'user_stop'>): Co
  */
 export type ProviderFailureClass = 'provider_empty' | 'truncated' | 'refused';
 
+/**
+ * #615: max_tokens with partial text is NOT a provider failure in the
+ * zero-output sense above — it is an incomplete success that must continue
+ * the SAME logical answer. Returns true only for the observed slice:
+ * non-empty text, zero tool calls, truncated stop.
+ *
+ * Tool-call + max_tokens is deliberately OUT of scope here: openai-compat
+ * maps any present tool calls to `tool_use` regardless of finish_reason, so
+ * that shape never arrives as `max_tokens` with calls; Anthropic maps solely
+ * on stop_reason and could legally carry completed calls alongside
+ * `max_tokens`. That boundary is characterized, not guessed — this path
+ * leaves it on the current tool-call handling.
+ */
+export function isTruncatedPartial(result: ChatResult): boolean {
+  return result.stopReason === 'max_tokens' && (result.text?.length ?? 0) > 0 && result.toolCalls.length === 0;
+}
+
+/**
+ * Durable prefix of the current logical answer, derived from existing Turn
+ * execution state — no new schema.
+ *
+ * Any assistant message WITHOUT a `tool_use` block in `run.messages` can only
+ * be a truncation partial pushed by the block below: the tool path always
+ * carries `tool_use`, recovery pushes harness user messages, and the final
+ * answer is never pushed to the transcript. Concatenating those texts in order
+ * therefore reconstructs the accepted prefix after a crash/resume without
+ * losing or duplicating it.
+ */
+export function collectTruncationPrefix(messages: readonly import('../providers/types.js').Message[]): string {
+  let out = '';
+  for (const m of messages) {
+    if (m.role !== 'assistant') continue;
+    if (m.content.some((b) => b.type === 'tool_use')) continue;
+    for (const b of m.content) {
+      if (b.type === 'text') out += b.text;
+    }
+  }
+  return out;
+}
+
+/**
+ * Harness continuation instruction for the next model call after a truncated
+ * partial. Harness origin (not owner words): archived — never behaviorally
+ * active — on continuation to a new lease, where the durable prefix plus the
+ * owner's grant carries the continuation instead. Provider-neutral: no
+ * provider-native continue primitive is assumed.
+ */
+export const TRUNCATION_CONTINUE_PROMPT =
+  'La risposta precedente si è interrotta per limite di output. Continua esattamente da dove si è interrotta, ' +
+  'aggiungendo solo il testo nuovo senza ripetere il prefisso già prodotto.';
+
 export function classifyProviderFailure(
   result: ChatResult,
   telemetry: ModelCallTelemetry | undefined,
@@ -711,6 +762,47 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     // count: the streak bounds one stall cluster, not the lease.
     run.providerEmptyStreak = 0;
 
+    // #615: max_tokens + partial text + zero tools is never a terminal
+    // complete answer. Preserve the valid prefix as part of the SAME logical
+    // Turn/answer (assistant evidence in durable `run.messages`), continue
+    // from it with a bounded harness instruction, append only new text.
+    // Streaming prefix already shown stays valid: no `superseded` boundary
+    // here — that would retract bytes the owner already read correctly.
+    // Bounded by the existing durable transport budget (crash-safe total) plus
+    // the execution wall/model budgets checked at the loop top; when spent the
+    // Turn yields truthfully continuable, never `answered`.
+    if (isTruncatedPartial(result)) {
+      const currentChunk = result.text ?? '';
+      const prefixSoFar = collectTruncationPrefix(run.messages);
+      run.messages.push({
+        role: 'assistant',
+        content: [
+          ...(result.thinking ?? []),
+          { type: 'text' as const, text: currentChunk },
+        ],
+        ...(result.providerMetadata === undefined ? {} : { providerMetadata: result.providerMetadata }),
+      });
+      if (result.requestId !== undefined) run.providerFailureRequestIds.push(result.requestId);
+      turn.setAttributes({
+        'muffin.truncation.continuation': true,
+        'muffin.truncation.prefix_chars': prefixSoFar.length,
+        'muffin.truncation.chunk_chars': currentChunk.length,
+      });
+      if (run.transportRetriesLeft <= 0) {
+        // Bound spent with prefix durably preserved: honestly continuable for
+        // an owner-granted new lease (evidence split keeps the prefix, drops
+        // this harness instruction), never a partial `answered`.
+        return releaseContinuable(scope, 'truncated', run.iterations);
+      }
+      run.transportRetriesLeft -= 1;
+      run.messages.push(harnessMessage('user', [{ type: 'text', text: TRUNCATION_CONTINUE_PROMPT }]));
+      turn.setAttributes({ 'muffin.truncation.transport_left': run.transportRetriesLeft });
+      // Persist prefix + reduced budget before the next model call: a crash
+      // here resumes from the accepted prefix without loss or duplication.
+      if (!checkpoint(scope)) return finish(scope, 'error', '');
+      continue;
+    }
+
     // Nothing at all: recover rather than presenting silence as an answer.
     if (!result.text && result.toolCalls.length === 0) {
       if (recover(scope, 'empty')) continue;
@@ -749,8 +841,22 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
        * written (the episode, the session transcript, a headless `muffin
        * run`'s stdout, and the final settled text of a streamed reply) and
        * does not retroactively unsend a frame that already rendered.
+       *
+       * #615: when prior iterations ended `max_tokens` with partial text,
+       * `run.messages` already holds those accepted prefixes (assistant
+       * evidence, checkpointed). The final answer is prefix + current chunk —
+       * ONE logical assistant answer for Session/Memory — never the last
+       * chunk alone and never multiple fake exchanges.
        */
-      const text = scrubResourceEchoes(redactText(result.text ?? ''), run.sensitiveResourceEchoes);
+      const prefixSoFar = collectTruncationPrefix(run.messages);
+      const currentRaw = result.text ?? '';
+      const fullRaw = prefixSoFar + currentRaw;
+      const text = scrubResourceEchoes(redactText(fullRaw), run.sensitiveResourceEchoes);
+      // Live fallback emission below must append, not duplicate: in streaming
+      // mode the prefix was already shown via deltas, so a `chat()` fallback
+      // for the final chunk owes only the current chunk. Durable `text` above
+      // stays the scrubbed full concatenation either way.
+      const currentText = scrubResourceEchoes(redactText(currentRaw), run.sensitiveResourceEchoes);
 
       // The completion gate: did the answer describe a call this turn never
       // made? Deterministic, tool-aware, and it only fires when *nothing* was
@@ -797,8 +903,13 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // stream (no sink, or a provider with no `chatStream` at all) is left
       // exactly as it was, delivering its answer the way every surface
       // already handles — through `result.text`, not through this sink.
+      //
+      // #615: with a truncated prefix already shown via deltas, a `chat()`
+      // fallback for the final chunk owes only that chunk — emitting the full
+      // concatenation here would duplicate the visible prefix on the surface.
       if (input.onDelta && call.stream && !emittedLive && text !== '') {
-        input.onDelta({ type: 'text', text });
+        const emitText = prefixSoFar.length > 0 ? currentText : text;
+        if (emitText !== '') input.onDelta({ type: 'text', text: emitText });
       }
 
       deps.sessions.append(input.session, {

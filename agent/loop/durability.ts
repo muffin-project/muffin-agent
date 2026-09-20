@@ -401,12 +401,30 @@ export function announceEnd(scope: TurnScope, stopped: TurnOutcome): void {
 function continuableText(scope: TurnScope, failureClass: ContinuableClass, attempts: number): string {
   const done = scope.run.toolCallsMade;
   const completed = done > 0 ? `${done} tool call completate` : 'nessuna tool call ancora completata';
+  // #615: a `truncated` release after partial-text continuations already holds
+  // the accepted prefix durably in the transcript. Saying "senza produrre
+  // contenuto" there would be false — the prefix is saved, continuable, and
+  // must never read as a complete answer.
+  const truncatedPrefixChars = (() => {
+    if (failureClass !== 'truncated') return 0;
+    let out = 0;
+    for (const m of scope.run.messages) {
+      if (m.role !== 'assistant') continue;
+      if (m.content.some((b) => b.type === 'tool_use')) continue;
+      for (const b of m.content) {
+        if (b.type === 'text') out += b.text.length;
+      }
+    }
+    return out;
+  })();
   const cause = ((): string => {
     switch (failureClass) {
       case 'provider_empty':
         return 'il provider ha restituito risposte vuote (nessun testo, nessuna tool call, nessun token, nessuna attività)';
       case 'truncated':
-        return 'il modello ha esaurito il limite di output senza produrre contenuto';
+        return truncatedPrefixChars > 0
+          ? `il modello ha esaurito il limite di output con testo parziale salvato (${truncatedPrefixChars} caratteri, da continuare — non una risposta completa)`
+          : 'il modello ha esaurito il limite di output senza produrre contenuto';
       case 'provider_transport':
         return 'il provider non ha completato le richieste (errori di trasporto)';
       case 'model_first_activity_timeout':
