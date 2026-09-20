@@ -212,9 +212,10 @@ authority documents retain what matters.
 Update only the authoritative home whose meaning changed, plus a derived view if
 it is genuinely generated/checked from that source.
 
-The architecture map under `docs/derived/architecture-map/` is a **derived editorial
+An architecture-map projection, when checked in, is a **derived editorial
 snapshot with verified anchors**, not executable truth. Its code citations can
-be checked mechanically; its prose can still age.
+be checked mechanically; its prose can still age. No such projection is present
+in this checkout.
 
 A docs-only change is not automatically harmless if it changes an instruction,
 DAY-1 contract, security promise or generated consumer. Profile the claim, not the

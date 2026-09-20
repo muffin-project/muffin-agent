@@ -18,7 +18,7 @@ while authority stays explicit and under your control.
 
 [Why Muffin](docs/THESIS.md) · [Vision](docs/VISION.md) · [Cognitive design](docs/COGNITIVE-DESIGN.md) · [Architecture](docs/ARCHITECTURE.md) · [Security](docs/SECURITY.md)
 
-<sub><strong>DEVELOPER PREVIEW · PRE-DAY-1</strong> — the runtime works; the product is still being hardened for real daily use.</sub>
+<sub><strong>COMMUNITY PREVIEW · PRE-DAY-1</strong> — the runtime works; the product is still being hardened for real daily use.</sub>
 
 </div>
 
@@ -136,9 +136,11 @@ personal agent yet.
 | Scheduling + proactive signals | **Working / experimental** |
 | Consumer onboarding | **Not yet** |
 
-The detailed DAY-1 state moves too quickly to duplicate here.
+The detailed DAY-1 state moves too quickly to duplicate here. Start with the
+short status router, then follow it to the requirement-level evidence only when
+you need it.
 
-[Current DAY-1 inventory →](docs/work/day1/requirements-status.md)
+[Current status and release boundaries →](docs/STATUS.md)
 
 ## Try Muffin — developer preview
 
