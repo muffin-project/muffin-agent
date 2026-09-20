@@ -6,7 +6,7 @@ not copy database columns, config literals or API signatures: executable code,
 schemas and shipped config own those mechanics.
 
 For why this shape exists, follow the linked ADRs. For whether a DAY-1 journey is
-currently proven, use `docs/work/day1/requirements-status.md`.
+currently proven, use `docs/status/day1/requirements-status.md`.
 
 A semantic boundary described here may intentionally be ahead of its current
 mechanical implementation. When that is true, this document names the gap rather
@@ -252,7 +252,7 @@ until a real consumer requires intent state independent of a turn.
 
 The current implementation is still predominantly text-shaped (`TurnInput.text`)
 and does not yet implement the final multimodal envelope or general surface
-assembler. DAY-1 status for those capabilities remains owned by `docs/work/day1/requirements-status.md`.
+assembler. DAY-1 status for those capabilities remains owned by `docs/status/day1/requirements-status.md`.
 
 ## 5. Work remains interactive while execution is busy
 
@@ -341,7 +341,7 @@ model context; it does not yet claim a per-evidence
 Optional local privacy transforms may reduce what reaches a remote provider,
 but a detector is not equivalent to a structural secret boundary.
 
-See `docs/SECURITY.md`.
+See `docs/architecture/SECURITY.md`.
 
 ## 9. Core is narrow; capability belongs at the edges
 
@@ -451,10 +451,10 @@ local leader election is explicitly not part of the current product phase.
 - Current policy literals — shipped Root-of-Trust config owns them.
 - Node transport choice or wire schemas — the first real implementation owns
   mechanics under ADR-0050's semantic/security contract.
-- Whether a DAY-1 capability is READY — `docs/work/day1/requirements-status.md`
+- Whether a DAY-1 capability is READY — `docs/status/day1/requirements-status.md`
   owns status.
 - Why a historical decision was made — the relevant ADR owns that history.
-- Which PR is in flight — Git + `docs/work/handoff.md` own operational state.
+- Which PR is in flight — Git + `docs/development/handoff.md` own operational state.
 
 When code and this document disagree on a mechanical detail, verify the code and
 fix this map if its **semantic claim** is wrong. Do not implement prose blindly.

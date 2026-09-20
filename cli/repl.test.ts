@@ -765,7 +765,7 @@ describe('ogni tool registrato ha una frase', () => {
 /**
  * `/debug` e `muffin --debug` sono la stessa manopola, e dietro c'è una
  * funzione sola: due implementazioni della stessa cosa sono la cucitura che
- * `docs/JUDGE.md` descrive — corrette separatamente, capaci di non essere
+ * `docs/development/JUDGE.md` descrive — corrette separatamente, capaci di non essere
  * d'accordo il giorno che una delle due cambia.
  */
 describe('/debug', () => {

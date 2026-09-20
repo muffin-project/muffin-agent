@@ -564,7 +564,7 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
           // risposta finale, perché prima non appariva niente da asserire. Le
           // due righe sotto sono lo STAND-IN dichiarato dal brief: `tg` è il
           // fake Bot API dell'harness di accettazione, non un client reale —
-          // vedi `docs/ORCHESTRATION.md` §"A stand-in cannot close a row the
+          // vedi `docs/development/ORCHESTRATION.md` §"A stand-in cannot close a row the
           // owner can see" e il report di questa slice.
           //
           // (a) La tastiera del messaggio ASK sparisce per costruzione, non

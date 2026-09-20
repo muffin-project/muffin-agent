@@ -10,7 +10,7 @@ import { inflateRawSync } from 'node:zlib';
  * §4.3.12 and §4.3.16). The alternative measured on 2026-08-15 was `mammoth`,
  * the standard choice, which brings **ten** runtime dependencies — against a
  * repo that runs on thirteen and treats each new one as the risk it is
- * (`docs/PRACTICES.md` §1).
+ * (`docs/development/PRACTICES.md` §1).
  *
  * What it deliberately does not do: ZIP64 (a `.docx` is never above 4 GB nor
  * above 65,535 entries), encryption, and multi-disk archives. Each of those

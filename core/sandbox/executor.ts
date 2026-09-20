@@ -257,7 +257,7 @@ function isMissingDependency(detail: string): boolean {
  * reachable under the read-only bind is reachable from the read-only lane too.
  * The read-only lane therefore promises *no IP network and no writes outside
  * the scratch* — not "no side effects reachable by any means". Written down in
- * `docs/SECURITY.md` §9 rather than left as a gap between what the code does
+ * `docs/architecture/SECURITY.md` §9 rather than left as a gap between what the code does
  * and what the capability declares.
  */
 function networkOff(): SandboxRuntimeConfig['network'] {

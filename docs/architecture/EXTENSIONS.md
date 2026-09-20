@@ -2,7 +2,7 @@
 
 > **Stato: DIREZIONE DI DESIGN · owner 2026-08-18.**
 > Non è una specifica runtime e non autorizza l'implementazione pre-Day1.
-> `docs/OPEN-SOURCE-STRATEGY.md` decide perché esiste un ecosistema; questo
+> `docs/project/OPEN-SOURCE-STRATEGY.md` decide perché esiste un ecosistema; questo
 > documento decide la sua forma minima per non trasformare il core in un
 > catalogo di integrazioni o il catalogo in codice arbitrario implicitamente
 > trusted.

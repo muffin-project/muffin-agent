@@ -31,13 +31,13 @@ generazione.
 
 Prima di iniziare il giorno 1 devono essere vere tutte queste proprietà:
 
-1. **Inventario personale chiuso.** `docs/work/day1/requirements-status.md` non contiene
+1. **Inventario personale chiuso.** `docs/status/day1/requirements-status.md` non contiene
    alcun `BLOCKER` per la finestra dei quattordici giorni e nessuna domanda
    lasciata senza una classificazione esplicita. Una riga `OUT` deve avere una
    ragione concreta legata alla finestra, non alla difficoltà di implementarla.
 2. **Le claim sono osservate, non dichiarate.** Ogni riga READY ha l'evidence
    budget richiesto dal proprio Verification Profile in
-   `docs/ORCHESTRATION.md`. Il profilo dipende dalla garanzia e dal blast radius,
+   `docs/development/ORCHESTRATION.md`. Il profilo dipende dalla garanzia e dal blast radius,
    non da una DoD universale.
 3. **Il percorso di produzione è quello provato.** Una primitive non chiude una
    riga se il runtime/surface reale non la raggiunge. Per security, durability,
@@ -74,12 +74,12 @@ Se esiste una risposta che soddisfa il criterio, DAY-1 non è raggiunto.
 
 ## Cosa questo mandato non possiede
 
-- **Status delle singole righe** → `docs/work/day1/requirements-status.md`.
-- **Ordine dei blocker** → `docs/work/day1/critical-path.md`.
-- **Lavoro/PR correnti** → Git osservato + `docs/work/handoff.md`.
-- **Come verificare FAST/STANDARD/CRITICAL** → `docs/ORCHESTRATION.md`.
-- **Security/architecture correnti** → `docs/SECURITY.md` e
-  `docs/ARCHITECTURE.md`.
+- **Status delle singole righe** → `docs/status/day1/requirements-status.md`.
+- **Ordine dei blocker** → `docs/status/day1/critical-path.md`.
+- **Lavoro/PR correnti** → Git osservato + `docs/development/handoff.md`.
+- **Come verificare FAST/STANDARD/CRITICAL** → `docs/development/ORCHESTRATION.md`.
+- **Security/architecture correnti** → `docs/architecture/SECURITY.md` e
+  `docs/architecture/ARCHITECTURE.md`.
 - **Findings/audit storici** → `docs/evidence/` e `docs/history/`.
 
 Se una nuova lacuna viene scoperta e soddisfa il criterio dei quattordici giorni,

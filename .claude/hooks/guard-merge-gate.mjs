@@ -15,11 +15,11 @@
  * 403 su repo privato): il gate locale serializza un host (~40-60 minuti a
  * PR, Docker, host quieto) e un contributore esterno non puo' eseguirlo
  * proprio. Tenere una sola porta locale non scala all'open source.
- * Da qui il gate a due livelli (`docs/BRANCHING.md`, sezione «Slice -> dev»): per slice→dev vale
+ * Da qui il gate a due livelli (`docs/development/BRANCHING.md`, sezione «Slice -> dev»): per slice→dev vale
  * anche il verde GitHub verificato qui sotto; `npm run merge` resta la porta
  * per tutto ciò che GitHub non prova, e per dev→main non esiste ancora
  * nessuna porta codificata (quella promozione oggi e' un fast-forward fuori
- * da entrambe — vedi docs/BRANCHING.md).
+ * da entrambe — vedi docs/development/BRANCHING.md).
  *
  * ## Cosa rifiuta, e cosa no
  *
@@ -73,7 +73,7 @@ function localGateMessage(pr) {
     `questo merge salterebbe il gate: \`gh pr merge\` unisce senza che nessun gate abbia visto il risultato unito.`,
     `Il 04/09 e' costato tre giorni di rossi invisibili (collegamenti, D10, D11, D7).`,
     ``,
-    `Le porte sono due (docs/BRANCHING.md, sezione «Slice -> dev»):`,
+    `Le porte sono due (docs/development/BRANCHING.md, sezione «Slice -> dev»):`,
     `  npm run merge -- ${pr ?? '<pr>'}`,
     `costruisce dev + la PR in un worktree usa-e-getta, fa girare ci:local, e unisce solo su PASS;`,
     `oppure il verde GitHub FAST+DEEP sulla head non-bozza, che questo hook verifica da solo prima di lasciarti passare.`,

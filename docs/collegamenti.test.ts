@@ -138,21 +138,21 @@ const file = tuttiIFile(REPO)
  * datato che cita per posizione. Non sono l'identità corrente di niente.
  */
 const ALIAS: Record<string, string> = {
-  ORCHESTRATION: 'docs/ORCHESTRATION.md',
-  PRACTICES: 'docs/PRACTICES.md',
-  Practice: 'docs/PRACTICES.md',
-  RESEARCH: 'docs/RESEARCH.md',
-  JUDGE: 'docs/JUDGE.md',
-  BRANCHING: 'docs/BRANCHING.md',
-  ROADMAP: 'docs/ROADMAP.md',
-  SECURITY: 'docs/SECURITY.md',
-  ARCHITECTURE: 'docs/ARCHITECTURE.md',
-  'DAY-1': 'docs/work/day1/readiness-criteria.md',
-  'M5-BIS': 'docs/work/day1/requirements-status.md',
-  MANDATO: 'docs/work/day1/readiness-criteria.md',
-  PERCORSO: 'docs/work/day1/critical-path.md',
-  PC: 'docs/work/day1/critical-path.md',
-  LAVORO: 'docs/work/handoff.md',
+  ORCHESTRATION: 'docs/development/ORCHESTRATION.md',
+  PRACTICES: 'docs/development/PRACTICES.md',
+  Practice: 'docs/development/PRACTICES.md',
+  RESEARCH: 'docs/development/RESEARCH.md',
+  JUDGE: 'docs/development/JUDGE.md',
+  BRANCHING: 'docs/development/BRANCHING.md',
+  ROADMAP: 'docs/product/ROADMAP.md',
+  SECURITY: 'docs/architecture/SECURITY.md',
+  ARCHITECTURE: 'docs/architecture/ARCHITECTURE.md',
+  'DAY-1': 'docs/status/day1/readiness-criteria.md',
+  'M5-BIS': 'docs/status/day1/requirements-status.md',
+  MANDATO: 'docs/status/day1/readiness-criteria.md',
+  PERCORSO: 'docs/status/day1/critical-path.md',
+  PC: 'docs/status/day1/critical-path.md',
+  LAVORO: 'docs/development/handoff.md',
 };
 
 /** Un documento vivo cercato per nome file, quando non è fra gli alias. */

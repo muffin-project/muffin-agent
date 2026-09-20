@@ -6,11 +6,11 @@ This document owns one question only:
 
 It does **not** own implementation status, DAY-1 truth, architecture or sequencing of current work.
 
-- DAY-1 status belongs to `docs/work/day1/requirements-status.md`.
-- Remaining DAY-1 order belongs to `docs/work/day1/critical-path.md`.
-- Current work belongs to observed Git/PR state + `docs/work/handoff.md`.
-- Semantic shape belongs to `docs/ARCHITECTURE.md` / `docs/SECURITY.md` and ADRs.
-- Public/community strategy belongs to `docs/OPEN-SOURCE-STRATEGY.md`.
+- DAY-1 status belongs to `docs/status/day1/requirements-status.md`.
+- Remaining DAY-1 order belongs to `docs/status/day1/critical-path.md`.
+- Current work belongs to observed Git/PR state + `docs/development/handoff.md`.
+- Semantic shape belongs to `docs/architecture/ARCHITECTURE.md` / `docs/architecture/SECURITY.md` and ADRs.
+- Public/community strategy belongs to `docs/project/OPEN-SOURCE-STRATEGY.md`.
 
 A phase placement is a commitment to **revisit**, not a promise to implement. Dogfood evidence may promote, demote or delete an item.
 
@@ -34,11 +34,11 @@ research only / consumer-triggered
 
 ### DAY-1 READY
 
-DAY-1 is intentionally not duplicated here. `docs/work/day1/readiness-criteria.md` and the reconciled DAY-1 requirements decide what must exist before the fourteen-day window starts.
+DAY-1 is intentionally not duplicated here. `docs/status/day1/readiness-criteria.md` and the reconciled DAY-1 requirements decide what must exist before the fourteen-day window starts.
 
 Architecture work may expose a new DAY-1 candidate; that candidate enters the DAY-1 requirements rather than being silently implemented from this roadmap.
 
-Current architecture findings that must be reconciled into DAY-1 include the owner-required **smart Telegram interaction**: surface-aware event composition, multipart/multimodal input (including multiple files/images and voice), and continued ingress while current work is running. The exact DAY-1 classification belongs to `docs/work/day1/requirements-status.md`.
+Current architecture findings that must be reconciled into DAY-1 include the owner-required **smart Telegram interaction**: surface-aware event composition, multipart/multimodal input (including multiple files/images and voice), and continued ingress while current work is running. The exact DAY-1 classification belongs to `docs/status/day1/requirements-status.md`.
 
 ### 14-day owner dogfood
 
@@ -119,7 +119,7 @@ message at taint 2 arriving on Telegram would, under that separation, be able
 to reach a laptop's filesystem. The boundary has to be designed before the
 capability — the owner said so himself: «ovviamente tutto questo va gestito
 bene e specialmente in modo sicuro, quindi approcciamo tutte queste cose con
-il nostro modo di lavorare» — a `docs/RESEARCH.md` pass and an ADR, not a
+il nostro modo di lavorare» — a `docs/development/RESEARCH.md` pass and an ADR, not a
 patch to this section.
 
 This touches two existing ADRs without contradicting either: **ADR-0021** has
@@ -180,7 +180,7 @@ needs new evidence, not a fresh preference.
 What it is: the owner's house rule — *keep deterministic what needs to be
 deterministic, do not lean on an LLM where code can decide* — applied where the
 corpus says it is missing. `s4` is the existence proof: a floor in code stopped
-it, asking nobody and trusting no judgement. Needs a `docs/RESEARCH.md` pass
+it, asking nobody and trusting no judgement. Needs a `docs/development/RESEARCH.md` pass
 before implementation, because it changes authority semantics on two rows.
 
 Note the ordering trap: the disk fence merged on 2026-09-04 is a **prerequisite**
@@ -195,7 +195,7 @@ Recorded in `docs/evidence/il-lavoro-che-viene-2026-09-03.md`. All five queue
 behind what is already in flight — the sandbox write scope above, the
 derived architecture map's rebase conflicts, and the character eval
 (`requirements-status.md` A2/A3, `evals/character/`, never yet on a path in
-`docs/work/day1/critical-path.md`) — because none of the five change what
+`docs/status/day1/critical-path.md`) — because none of the five change what
 closes the dogfood in progress. Ordered below by what unblocks what, not by
 which feels most wanted; no effort estimate is claimed for any of them.
 
@@ -219,7 +219,7 @@ whether anything is ever surfaced to the owner. Adjacent to, not the same as,
 those are about owning a long-lived process and about initiating dialogue;
 this is about the runtime's own liveness cadence over its own durable state.
 Record repeats of this pain the same way as any other dogfood signal
-(`docs/work/day1/critical-path.md` "Da qui ordina l'uso" already asks for
+(`docs/status/day1/critical-path.md` "Da qui ordina l'uso" already asks for
 "lavoro promesso e dimenticato").
 
 #### GitHub delivery: plan, implement, test, commit, PR
@@ -255,7 +255,7 @@ Today `rot/egress.json` is a single sealed allow-only list — in or out, with
 no perimeter scoped to a task. This is the technical form of the owner's own
 boundary: «se giri nel perimetro hai governance e quindi puoi fare cose più
 liberamente». It changes authority/egress semantics, so it needs a
-`docs/RESEARCH.md` pass before any implementation, not a direct patch to
+`docs/development/RESEARCH.md` pass before any implementation, not a direct patch to
 `core/rot/egress-writer.ts`. It is a different axis from ADR-0050's Node
 ceiling: that intersection (`Home ∩ Node ∩ OS`) narrows what a *paired
 device* may do; this would narrow what a *single task/turn* may reach on the
@@ -322,7 +322,7 @@ capability, never an authorization grant: execution still uses the same
 principal, capability and policy checks on every surface. Any unavoidable HITL
 step, such as approving a restart, must be explicit in the capability contract
 and interaction rather than hidden in a surface-specific hardcode. Before
-implementation, a `docs/RESEARCH.md` pass must challenge the discovery shape and
+implementation, a `docs/development/RESEARCH.md` pass must challenge the discovery shape and
 settle pending-turn identity, update/restart/rollback, idempotency and approval
 resumption. This adds an owner-stated candidate requirement to this
 MVP/trusted-alpha item; it does not change DAY-1 scope or choose an
@@ -483,6 +483,6 @@ new hardware/product experiment
 or explicit owner decision
 ```
 
-When an item becomes DAY-1 relevant, add/reclassify it in the DAY-1 requirements. When it becomes active work, Git + `docs/work/handoff.md` own execution state. When its semantic shape changes, update Architecture/Security or write/supersede an ADR.
+When an item becomes DAY-1 relevant, add/reclassify it in the DAY-1 requirements. When it becomes active work, Git + `docs/development/handoff.md` own execution state. When its semantic shape changes, update Architecture/Security or write/supersede an ADR.
 
 This file never says that something is implemented merely because its phase has arrived.

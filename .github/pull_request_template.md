@@ -1,6 +1,6 @@
 <!--
 A PR states one claim and shows the evidence budget that could falsify it.
-Verification profiles live in docs/ORCHESTRATION.md; do not recreate them here.
+Verification profiles live in docs/development/ORCHESTRATION.md; do not recreate them here.
 Delete optional sections, not the claim/profile/evidence record.
 -->
 

@@ -39,14 +39,14 @@ falsifiable claim → define falsifier + acceptance → IMPLEMENT → VERIFY
 
 ## Routing
 
-- Verification profile (FAST / STANDARD / CRITICAL): `docs/ORCHESTRATION.md`.
+- Verification profile (FAST / STANDARD / CRITICAL): `docs/development/ORCHESTRATION.md`.
   Budget follows the claim and its blast radius, not the diff size.
-- Research/challenge pass, only when the claim triggers it: `docs/RESEARCH.md`.
+- Research/challenge pass, only when the claim triggers it: `docs/development/RESEARCH.md`.
   Simplifying or removing a mechanism is a valid result.
-- Git/PR integration mechanics: `docs/BRANCHING.md`. Slice shape is
+- Git/PR integration mechanics: `docs/development/BRANCHING.md`. Slice shape is
   `slice/<claim>` → `dev` → `main`.
-- Independent review of CRITICAL claims: `docs/JUDGE.md`.
-- Daily practices: `docs/PRACTICES.md`.
+- Independent review of CRITICAL claims: `docs/development/JUDGE.md`.
+- Daily practices: `docs/development/PRACTICES.md`.
 - Semantic judgment assistance: the `jev-shadow` skill. Jev never approves,
   merges, overrides deterministic evidence, or grants authority.
 

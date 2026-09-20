@@ -9,7 +9,7 @@ import { type EffectsFilter, formatEffects, localDay, readEffects } from '../cor
  * `muffin effects` — il registro degli effetti (D15) da terminale.
  *
  * **Non è la porta dell'owner, ed è deliberato.** La decisione owner del
- * 07/09/2026 (`docs/VISION.md`) dice che chi usa Muffin normalmente gli parla:
+ * 07/09/2026 (`docs/product/VISION.md`) dice che chi usa Muffin normalmente gli parla:
  * «cosa hai fatto oggi?» arriva al modello, che chiama `sys_effects`. Questo
  * comando sta nel quarto secchio della VISION — *developer/operator
  * interfaces* — e serve a ciò per cui quel secchio esiste: leggere il registro

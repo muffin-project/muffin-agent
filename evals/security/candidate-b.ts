@@ -57,7 +57,7 @@ import type { BaselineAction } from './baseline.js';
  *    ogni capability, o negare alla shell la rete per costruzione.
  * 3. **Un ADR.** ADR-0053 e ADR-0055 hanno spostato la decisione sulla riga
  *    d'effetto senza cambiare un permesso; questo cambierebbe *quali* permessi
- *    esistono. `docs/SECURITY.md` §13 chiede una valutazione comparativa prima
+ *    esistono. `docs/architecture/SECURITY.md` §13 chiede una valutazione comparativa prima
  *    dell'ADR, e questo file serve a produrla — non a sostituirla.
  */
 

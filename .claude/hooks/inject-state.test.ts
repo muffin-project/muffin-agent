@@ -10,10 +10,10 @@ const MAX = 4_000;
 
 function homeWithWork(content: string): string {
   const home = mkdtempSync(join(tmpdir(), 'muffin-handoff-'));
-  mkdirSync(join(home, 'docs', 'work'), { recursive: true });
+  mkdirSync(join(home, 'docs', 'development'), { recursive: true });
   mkdirSync(join(home, '.claude', 'hooks'), { recursive: true });
   cpSync(HOOK, join(home, '.claude', 'hooks', 'inject-state.mjs'));
-  writeFileSync(join(home, 'docs', 'work', 'handoff.md'), content);
+  writeFileSync(join(home, 'docs', 'development', 'handoff.md'), content);
   return home;
 }
 

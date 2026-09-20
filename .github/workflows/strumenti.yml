@@ -148,7 +148,7 @@ on:
       # portato a 6 467 byte, è passata verde (nessun job la guardava) e la
       # promozione dev → main è andata rossa qui. Il job che possiede il test
       # possiede anche il file che il test legge.
-      - 'docs/work/handoff.md'
+      - 'docs/development/handoff.md'
   push:
     branches: [main]
     paths:
@@ -165,7 +165,7 @@ on:
       # portato a 6 467 byte, è passata verde (nessun job la guardava) e la
       # promozione dev → main è andata rossa qui. Il job che possiede il test
       # possiede anche il file che il test legge.
-      - 'docs/work/handoff.md'
+      - 'docs/development/handoff.md'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

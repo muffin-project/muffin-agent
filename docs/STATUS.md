@@ -6,21 +6,21 @@ general availability.
 
 ## Start here
 
-- To install or evaluate the current checkout: [INSTALL.md](INSTALL.md).
-- To understand the system's boundaries: [ARCHITECTURE.md](ARCHITECTURE.md) and
-  [SECURITY.md](SECURITY.md).
+- To install or evaluate the current checkout: [INSTALL.md](user/INSTALL.md).
+- To understand the system's boundaries: [ARCHITECTURE.md](architecture/ARCHITECTURE.md) and
+  [SECURITY.md](architecture/SECURITY.md).
 - To contribute: [CONTRIBUTING.md](../CONTRIBUTING.md), then the issue and PR
   routes in GitHub.
-- To understand the path to an open/community project: [OPEN-SOURCE-STRATEGY.md](OPEN-SOURCE-STRATEGY.md).
+- To understand the path to an open/community project: [OPEN-SOURCE-STRATEGY.md](project/OPEN-SOURCE-STRATEGY.md).
 
 ## What is live, and what is not
 
 Exact implementation, pull-request and check state are observed in Git and
 GitHub. They are intentionally not copied into this file. The requirement-level
-DAY-1 inventory is [work/day1/requirements-status.md](work/day1/requirements-status.md);
+DAY-1 inventory is [status/day1/requirements-status.md](status/day1/requirements-status.md);
 it is evidence-rich and should not be mistaken for a release dashboard.
 
-`docs/work/handoff.md` and dated source-public plans are operational snapshots.
+`docs/development/handoff.md` and dated source-public plans are operational snapshots.
 They may help an active maintainer recover context, but observed Git state wins
 when they disagree.
 

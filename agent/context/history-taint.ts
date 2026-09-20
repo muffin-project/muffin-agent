@@ -82,7 +82,7 @@ export type ReinjectedHistory = {
  * calls this once, raises taint from `kept`, and passes the same `kept` into
  * `buildContext` for rendering, rather than each computing its own slice of
  * `deps.sessions.read(...)`. Two independent slices of the same session would
- * be exactly the class of defect `docs/JUDGE.md` calls a cucitura: correct
+ * be exactly the class of defect `docs/development/JUDGE.md` calls a cucitura: correct
  * separately, and silently able to disagree the day one of them changes.
  *
  * Tool-role rows are excluded (`buildContext` never shows a raw tool result as

@@ -404,7 +404,7 @@ project failed.
 
 ## 8. Legacy corpus and evidence discipline
 
-The curated rebuild corpus under `docs/knowledge/` remains valuable
+The curated rebuild corpus under `docs/history/legacy-cognitive/` remains valuable
 because it preserves both useful principles and failed implementations from the
 old Muffin. It is **evidence/history**, not current authority.
 

@@ -6,10 +6,10 @@ This document owns one question only:
 
 It does not own source-public publication safety, DAY-1 status, roadmap placement or implementation ordering.
 
-- Source-public/pre-alpha safety and community strategy: `docs/OPEN-SOURCE-STRATEGY.md`.
-- DAY-1 readiness: `docs/work/day1/readiness-criteria.md`.
-- Deferred capability placement: `docs/ROADMAP.md`.
-- Current implementation/status: observed Git/PR state + `docs/work/handoff.md`.
+- Source-public/pre-alpha safety and community strategy: `docs/project/OPEN-SOURCE-STRATEGY.md`.
+- DAY-1 readiness: `docs/status/day1/readiness-criteria.md`.
+- Deferred capability placement: `docs/product/ROADMAP.md`.
+- Current implementation/status: observed Git/PR state + `docs/development/handoff.md`.
 
 ## Milestone separation
 

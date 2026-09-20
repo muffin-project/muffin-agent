@@ -1242,7 +1242,7 @@ export async function cmdGatewayRun(
  * wrote *"consegna remota da cablare"* to stderr and **returned normally**. A
  * normal return meant "delivered", so `markRan` advanced the schedule and the
  * job reported success — model paid, next fire moved, message never sent, and
- * nothing anywhere saying so. It is riga B8 of `docs/work/day1/requirements-status.md` and
+ * nothing anywhere saying so. It is riga B8 of `docs/status/day1/requirements-status.md` and
  * it survived three separate reviews because nothing about a `Promise<void>`
  * looks wrong.
  *

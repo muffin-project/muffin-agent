@@ -11,7 +11,7 @@ function git(repo: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
 }
 
-const INVENTARIO = join('docs', 'work', 'day1', 'requirements-status.md');
+const INVENTARIO = join('docs', 'status', 'day1', 'requirements-status.md');
 
 const INVENTARIO_FINTO = [
   '| A1 | Boot | parte da solo? | BLOCKER — manca lo scenario |',
@@ -61,8 +61,8 @@ function fixture(): { repo: string; env: NodeJS.ProcessEnv } {
   // `BLOCCANTI SENZA DELEGA (0 su 0)` era l'output normale della suite mentre
   // in produzione il path era sbagliato e l'inventario vero aveva 31 BLOCKER.
   // B2 è nominata dalla delega `aperta` qui sotto: resta scoperta solo A1 e C3.
-  mkdirSync(join(repo, 'docs', 'work', 'day1'), { recursive: true });
-  writeFileSync(join(repo, 'docs', 'work', 'day1', 'requirements-status.md'), inventario(INVENTARIO_FINTO));
+  mkdirSync(join(repo, 'docs', 'status', 'day1'), { recursive: true });
+  writeFileSync(join(repo, 'docs', 'status', 'day1', 'requirements-status.md'), inventario(INVENTARIO_FINTO));
 
   writeFileSync(
     join(repo, '.claude', 'deleghe', 'registro.jsonl'),

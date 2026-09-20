@@ -10,8 +10,8 @@ import type { IncomingIdentity, Surface } from '../../../core/surface/types.js';
  *
  * ## Why this lives here and not in `core/ingress/`
  *
- * `docs/VISION.md` §"Core narrow" names "new messaging platforms" as exactly
- * what does not belong in the core, and `docs/EXTENSIONS.md`:73 classes a
+ * `docs/product/VISION.md` §"Core narrow" names "new messaging platforms" as exactly
+ * what does not belong in the core, and `docs/architecture/EXTENSIONS.md`:73 classes a
  * *connector* as an extension contract. A shared module deduplicating two
  * connectors is prior art already, not a new decision:
  * `connectors/shared/stop-budget.ts` is the same move for one mechanism

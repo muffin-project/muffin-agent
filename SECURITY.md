@@ -2,10 +2,10 @@
 
 This file is **vulnerability disclosure**: where and how to report a security
 issue in this repository. It is not the same document as
-[`docs/SECURITY.md`](docs/SECURITY.md), which is Muffin's **threat model** — what
+[`docs/architecture/SECURITY.md`](docs/architecture/SECURITY.md), which is Muffin's **threat model** — what
 the system is trying to make true at its trust boundaries, and which
 guarantees exist today versus which are architecturally decided but not yet
-enforced. Read this file to report a vulnerability; read `docs/SECURITY.md` to
+enforced. Read this file to report a vulnerability; read `docs/architecture/SECURITY.md` to
 understand what Muffin defends against and why.
 
 ## Reporting a vulnerability

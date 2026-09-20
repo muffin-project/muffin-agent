@@ -8,7 +8,7 @@ context is a resource, and history is not startup context.
 
 - Reconstruct observed state first — Git, worktrees, open PRs and checks,
   delegation state. Do not infer current work from a nearby Markdown file.
-- `docs/work/handoff.md` is a disposable handoff. Observed repository state
+- `docs/development/handoff.md` is a disposable handoff. Observed repository state
   wins when the two disagree.
 - A detailed document is not evidence that HEAD still implements its claim.
   Verify load-bearing current-state claims against code, config or runtime.
@@ -17,7 +17,7 @@ context is a resource, and history is not startup context.
 ## Challenge the design before writing it
 
 For a non-mechanical change to runtime, harness, security and authority, memory,
-processes or durable schema, follow `docs/RESEARCH.md` **before** implementing.
+processes or durable schema, follow `docs/development/RESEARCH.md` **before** implementing.
 
 A previous Muffin decision is a hypothesis with history, not a fact that must be
 preserved. A peer implementation is prior art, not authority. Simplifying or
@@ -29,7 +29,7 @@ architectural assumption, the full pass becomes mandatory.
 
 ## Classify the claim before implementing it
 
-Choose FAST / STANDARD / CRITICAL using `docs/ORCHESTRATION.md`. The verification
+Choose FAST / STANDARD / CRITICAL using `docs/development/ORCHESTRATION.md`. The verification
 budget follows the claim and its blast radius, not the size of the diff.
 
 A subagent saying something is not evidence. A module existing is not proof that

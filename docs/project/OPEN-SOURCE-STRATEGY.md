@@ -11,7 +11,7 @@ for a public product recommendation.
 `THESIS.md` owns why Muffin exists. `VISION.md` owns the product destination.
 `ARCHITECTURE.md` owns the current semantic runtime shape. `EXTENSIONS.md` owns
 the extension/capability design direction. DAY-1 status remains in
-`docs/work/day1/requirements-status.md`.
+`docs/status/day1/requirements-status.md`.
 
 ## 1. Owner-run is the default product
 

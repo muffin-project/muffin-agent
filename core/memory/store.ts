@@ -157,7 +157,7 @@ export type EpisodeFilter = {
    *
    * `turn_id IS NULL` non e mai escluso: una riga senza lineage non e provato
    * che sia in history, e togliere per non-sapere e la parte che
-   * `docs/knowledge/` chiama inventare precisione all'indietro.
+   * `docs/history/legacy-cognitive/` chiama inventare precisione all'indietro.
    */
   excludeTurnIds?: readonly string[] | undefined;
 };

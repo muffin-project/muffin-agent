@@ -18,7 +18,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const LAVORO = 'docs/work/handoff.md';
+const LAVORO = 'docs/development/handoff.md';
 
 export function righeLogiche(testo) {
   const out = [];

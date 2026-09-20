@@ -480,7 +480,7 @@ describe('resolveBound — fault points 5/7: a turn already delivered settles wi
 
 /**
  * Fault points 2, 3 and 5 against the real path, with a crash injected
- * between two writes — `docs/JUDGE.md`'s own bar for a CRITICAL claim.
+ * between two writes — `docs/development/JUDGE.md`'s own bar for a CRITICAL claim.
  * `MUFFIN_TELEGRAM_INBOUND_STALL_*` widens the window `runFresh` already
  * names; fake timers make "the process died there" a promise whose
  * continuation is provably never scheduled, not a race hoped to land.
@@ -591,7 +591,7 @@ describe('resolve — fault points 2/3/5 against a real crash window (fake-timer
 
     expect(h.provider.calls).toBe(1); // never called twice
     // The strongest evidence against a duplicate message: the fake API's own
-    // call log, not an inference from the database (docs/JUDGE.md).
+    // call log, not an inference from the database (docs/development/JUDGE.md).
     expect(h.sendMessage).toHaveBeenCalledTimes(1);
     expect(h.sent).toEqual(['send:non deve mai arrivare due volte']);
     expect(h.turns.get(boundTurnId)?.delivery).toBe('sent');

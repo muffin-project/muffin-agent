@@ -4,7 +4,7 @@ This document owns Muffin's **current security model and promises**. It describe
 what the system is trying to make true at its trust boundaries. Exact literals,
 allowlists and schemas live in shipped configuration and code; proof that a
 particular DAY-1 journey currently holds lives in tests/evals and
-`docs/work/day1/requirements-status.md`.
+`docs/status/day1/requirements-status.md`.
 
 The historical threat-model lineage remains in
 `docs/history/rebuild-2026/03-threat-model.md` and related ADRs/audits. Those records explain
@@ -793,7 +793,7 @@ must not be remotely mutable merely because the Home owns its own RoT.
 ## 13. Current known boundaries
 
 This section names architectural boundaries without assigning DAY-1 status; DAY-1
-status lives only in `docs/work/day1/requirements-status.md`.
+status lives only in `docs/status/day1/requirements-status.md`.
 
 - **Configured cloud provider receives model context.** There is no per-item
   local/cloud privacy policy yet.
@@ -805,8 +805,8 @@ status lives only in `docs/work/day1/requirements-status.md`.
   override in `cli/gateway.ts` means the shell tool's write scope is the
   Muffin home on that surface, and the same request from a REPL elsewhere on
   the same machine gets a different answer. This is an open design question
-  requiring a `docs/RESEARCH.md` pass and an ADR, not a decided direction —
-  see `docs/ROADMAP.md` "First Mac capability Node" and
+  requiring a `docs/development/RESEARCH.md` pass and an ADR, not a decided direction —
+  see `docs/product/ROADMAP.md` "First Mac capability Node" and
   `docs/evidence/il-lavoro-che-viene-2026-09-03.md`.
 - **Intentional agent memory write is not implemented yet.** ADR-0051 requires a
   proposal/reconciliation boundary; current `memory_search` read surface should
@@ -959,7 +959,7 @@ status lives only in `docs/work/day1/requirements-status.md`.
 - Database columns — schema/migration code owns them.
 - Node transport/wire format — implementation may choose it only while
   preserving ADR-0050's contract.
-- Whether a specific DAY-1 requirement is READY — `docs/work/day1/requirements-status.md`
+- Whether a specific DAY-1 requirement is READY — `docs/status/day1/requirements-status.md`
   owns status.
 - Historical findings or exploit transcripts — `docs/evidence/` owns them.
 - Why a decision changed — ADRs own the rationale/history.

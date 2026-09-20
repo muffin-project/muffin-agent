@@ -5,7 +5,7 @@ rende questa cartella un esperimento invece che una spiegazione a posteriori:
 le metriche, il kill criterion e le regole di candidate B stanno scritte qui
 sotto e sono state committate prima della prima corsa del corpus.
 
-La domanda è quella che `docs/SECURITY.md` §13 tiene aperta dal 29/08 e che il
+La domanda è quella che `docs/architecture/SECURITY.md` §13 tiene aperta dal 29/08 e che il
 memo `docs/evidence/decision-memo-taint-2026-09-02.md` §7 dice mancante di tre
 artefatti: **il taint ambientale ferma un attacco vero, e qualcosa lo batte a
 parità di utility?**

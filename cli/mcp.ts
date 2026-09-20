@@ -21,7 +21,7 @@ import { widenEgressForCapability, type EgressWidenDeps } from '../core/rot/egre
  * that is what "rivedi e ri-approva" resolves to.
  *
  * **`--host` is the second door of the same lock (ADR-0058).** A local MCP
- * server is already part of the trusted computing base — `docs/SECURITY.md`
+ * server is already part of the trusted computing base — `docs/architecture/SECURITY.md`
  * §10 says so plainly, nothing here contains what it can reach — so `--host`
  * is not a containment claim. It is the declaration `rot/egress.json` already
  * promises to be honest about ("everywhere muffin can reach", comment in

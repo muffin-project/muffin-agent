@@ -274,7 +274,7 @@ describe.runIf(gate.run)(`le due corsie contengono cose diverse (${gate.why})`, 
       // qui invece che lasciata al lettore: aprire la rete a questa corsia
       // vorrebbe dire scavalcare l'allowlist di egress della RoT (ADR-0066) da
       // una porta che non la consulta, e non è questa fetta a poterlo fare.
-      // `docs/SECURITY.md` §9 lo dichiara; questa riga lo tiene vero.
+      // `docs/architecture/SECURITY.md` §9 lo dichiara; questa riga lo tiene vero.
       const r = await executor.run({
         command: bussa(port),
         cwd: workspace,
