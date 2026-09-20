@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
+import { writeFileSync } from 'node:fs';
 import { promoteMarker } from './manifest.js';
-import { chiaviEsito, outcomesOf, parseInventoryRows, summarize, type InventoryRow, type TestOutcome } from './report.js';
+import {
+  acceptanceResults,
+  chiaviEsito,
+  outcomesOf,
+  parseInventoryRows,
+  readSuiteJson,
+  summarize,
+  type InventoryRow,
+  type SuiteRunner,
+  type TestOutcome,
+} from './report.js';
 import type { ScenarioEntry } from './manifest.js';
 
 /**
@@ -158,7 +169,7 @@ describe('summarize — provata dal meccanismo (E4: la suite non può testare s�
     // No vitest outcome at all: a provata-dal-meccanismo row never registers a
     // real `it()` (scenario.ts refuses to — it would be the suite proving
     // itself), so an empty results map is the only input this kind of row can
-    // ever actually receive from runAcceptanceSuite().
+    // ever actually receive from runSuiteToJson().
     const summary = summarize([ready('E4')], [scenario], new Map());
 
     expect(summary.failed).toBe(false);
@@ -487,7 +498,7 @@ describe('outcomesOf — i modi rimasti di perdere un rosso', () => {
 
   it('dice quale file non si è caricato, non solo che uno non lo ha fatto', () => {
     // Il percorso è lungo come lo scrive vitest quando la suite gira dal
-    // laptop e non dal container: `runAcceptanceSuite` la lancia con `cwd:
+    // laptop e non dal container: `runSuiteToJson` la lancia con `cwd:
     // REPO`, e il reporter mette percorsi assoluti. Con il solo percorso in
     // testa, il troncamento a 110 caratteri della riga di `summarize` cadeva
     // dentro il prefisso e si mangiava proprio il basename — si imparava che
@@ -566,5 +577,115 @@ describe('parseInventoryRows — una barra dentro una cella non fa sparire la ri
 
   it('il separatore `|---|` continua a non essere una riga di dati', () => {
     expect(() => parseInventoryRows('|---|---|---|---|', 'finto.md')).toThrow(/parser è disallineato/);
+  });
+});
+
+describe('acceptanceResults — la suite gira una volta sola, senza timeout fragile (#556)', () => {
+  // Il guasto originale: la suite da 645s superava il `timeout: 10 * 60_000`
+  // di spawnSync, che la uccideva a 10 minuti netti — nessun JSON, exit
+  // null, report sempre rosso su laptop anche a suite verde. Questi test
+  // guidano la cucitura (`SuiteRunner`) con una finta che scrive un JSON
+  // prefabbricato nel file che vitest scriverebbe, invece di lanciare
+  // vitest davvero: "una run, un JSON, un lettore" si prova in millisecondi,
+  // senza aspettare davvero 11 minuti.
+  type SpawnCall = { command: string; args: readonly string[]; options: { cwd: string; encoding: 'utf8' } };
+
+  const canned = (titoli: string[]): string =>
+    JSON.stringify({
+      numFailedTestSuites: 0,
+      testResults: [
+        {
+          name: 'scenarios/finto.accept.ts',
+          status: 'passed',
+          assertionResults: titoli.map((fullName) => ({ fullName, status: 'passed', failureMessages: [] })),
+        },
+      ],
+    });
+
+  const fintaRun = (chiamate: SpawnCall[], payload?: string, status: number | null = 0): SuiteRunner => {
+    return (command, args, options) => {
+      chiamate.push({ command, args, options });
+      const out = args.find((a) => a.startsWith('--outputFile='))!.slice('--outputFile='.length);
+      if (payload !== undefined) writeFileSync(out, payload);
+      return { status, stdout: '', stderr: '' };
+    };
+  };
+
+  const senzaEnv = <T>(fn: () => T): T => {
+    const saved = process.env.MUFFIN_ACCEPT_RESULTS;
+    delete process.env.MUFFIN_ACCEPT_RESULTS;
+    try {
+      return fn();
+    } finally {
+      if (saved === undefined) delete process.env.MUFFIN_ACCEPT_RESULTS;
+      else process.env.MUFFIN_ACCEPT_RESULTS = saved;
+    }
+  };
+
+  it('esegue la suite esattamente una volta e ne consuma il JSON con lo stesso lettore del path CI', () => {
+    const chiamate: SpawnCall[] = [];
+    const esiti = senzaEnv(() => acceptanceResults(fintaRun(chiamate, canned(['X1 scenario finto']))));
+
+    expect(chiamate).toHaveLength(1);
+    expect(chiamate[0]!.command).toBe('npx');
+    expect(chiamate[0]!.args).toContain('--reporter=json');
+    expect(esiti.get('X1 scenario finto')).toEqual({ status: 'passed', failureMessages: [] });
+  });
+
+  it('non passa alcun timeout wall-clock allo spawn: il fragile N minuti di #556 non esiste più', () => {
+    const chiamate: SpawnCall[] = [];
+    senzaEnv(() => acceptanceResults(fintaRun(chiamate, canned(['X1 scenario finto']))));
+
+    expect(chiamate).toHaveLength(1);
+    expect(chiamate[0]!.options).not.toHaveProperty('timeout');
+  });
+
+  it('un exit non-zero con JSON valido si consuma comunque: un rosso non è un errore di harness', () => {
+    const rosso = JSON.stringify({
+      numFailedTestSuites: 1,
+      testResults: [
+        {
+          name: 'scenarios/finto.accept.ts',
+          status: 'failed',
+          assertionResults: [{ fullName: 'X1 scenario finto', status: 'failed', failureMessages: ['boom'] }],
+        },
+      ],
+    });
+    const esiti = senzaEnv(() => acceptanceResults(fintaRun([], rosso, 1)));
+
+    expect(esiti.get('X1 scenario finto')).toEqual({ status: 'failed', failureMessages: ['boom'] });
+  });
+
+  it('JSON mancante — la suite uccisa come dal timeout originale — fallisce loud nominando exit e causa', () => {
+    expect(() => senzaEnv(() => acceptanceResults(fintaRun([], undefined, null)))).toThrow(
+      /la suite di accettazione non ha prodotto un JSON leggibile \(exit null\)/,
+    );
+  });
+
+  it('JSON corrotto fallisce loud con la causa, non con un secondo giro silenzioso', () => {
+    const chiamate: SpawnCall[] = [];
+    expect(() => senzaEnv(() => acceptanceResults(fintaRun(chiamate, 'non json{', 0)))).toThrow(
+      /la suite di accettazione non ha prodotto un JSON leggibile[\s\S]*causa:/,
+    );
+    expect(chiamate).toHaveLength(1);
+  });
+
+  it('il path CI con MUFFIN_ACCEPT_RESULTS non riesegue la suite e fallisce loud su file illeggibile', () => {
+    const chiamate: SpawnCall[] = [];
+    const saved = process.env.MUFFIN_ACCEPT_RESULTS;
+    process.env.MUFFIN_ACCEPT_RESULTS = '/percorso/che/non/esiste/results.json';
+    try {
+      expect(() => acceptanceResults(fintaRun(chiamate, canned(['X1 scenario finto'])))).toThrow(
+        /MUFFIN_ACCEPT_RESULTS=\/percorso\/che\/non\/esiste\/results\.json non è un JSON/,
+      );
+      expect(chiamate).toHaveLength(0);
+    } finally {
+      if (saved === undefined) delete process.env.MUFFIN_ACCEPT_RESULTS;
+      else process.env.MUFFIN_ACCEPT_RESULTS = saved;
+    }
+  });
+
+  it('readSuiteJson lancia la causa grezza sul file mancante: sarà il chiamante a nominare la provenienza', () => {
+    expect(() => readSuiteJson('/percorso/che/non/esiste/r.json')).toThrow(/ENOENT/);
   });
 });

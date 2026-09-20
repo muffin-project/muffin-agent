@@ -31,8 +31,10 @@ import { MANIFEST, promoteMarker, type ScenarioEntry } from './manifest.js';
  * scenario that is red is not automatically "fine" — it has to be red for
  * the reason the manifest names, or this report has to say so.
  *
- * `parseInventory`/`runAcceptanceSuite` are the only functions here that
- * touch disk or spawn a process; everything downstream of them (`verdictFor`,
+ * `parseInventory`/`acceptanceResults` are the only functions here that
+ * touch disk or spawn a process (`acceptanceResults` splits further into
+ * `runSuiteToJson` and `readSuiteJson`, each driven separately); everything
+ * downstream of them (`verdictFor`,
  * `summarize`) is pure, exported, and what `report.test.ts` drives directly
  * with synthetic rows and results — real inventory text and a real vitest
  * subprocess would make "does the gate fire" a ~60s integration test instead
@@ -183,43 +185,87 @@ export type VitestJsonResult = {
  * timed-out job `cancelled` even when every step — this report included — was
  * green. When `MUFFIN_ACCEPT_RESULTS` names that file, read it; a named file
  * that cannot be read is an error, never a silent second run. Unset, run the
- * suite here: `npm run acceptance:report` on a laptop stays one command.
+ * suite here, exactly once, into a temp file: `npm run acceptance:report` on
+ * a laptop stays one command, and the report consumes that run's JSON through
+ * the same reader the CI path uses.
  */
-function acceptanceResults(): Map<string, TestOutcome> {
+export function acceptanceResults(run: SuiteRunner = spawnSync): Map<string, TestOutcome> {
   const given = process.env.MUFFIN_ACCEPT_RESULTS;
-  if (given === undefined || given === '') return runAcceptanceSuite();
-  try {
-    return outcomesOf(JSON.parse(readFileSync(given, 'utf8')) as VitestJsonResult);
-  } catch (error) {
-    throw new Error(
-      `MUFFIN_ACCEPT_RESULTS=${given} non è un JSON di vitest leggibile: ` +
-        `${error instanceof Error ? error.message : String(error)}`,
-    );
+  if (given !== undefined && given !== '') {
+    try {
+      return outcomesOf(readSuiteJson(given));
+    } catch (error) {
+      throw new Error(
+        `MUFFIN_ACCEPT_RESULTS=${given} non è un JSON di vitest leggibile: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
-}
-
-function runAcceptanceSuite(): Map<string, TestOutcome> {
   const outFile = join(mkdtempSync(join(tmpdir(), 'muffin-accept-report-')), 'results.json');
-  const result = spawnSync(
-    'npx',
-    ['vitest', 'run', '--config', 'vitest.acceptance.config.ts', '--reporter=json', `--outputFile=${outFile}`],
-    { cwd: REPO, encoding: 'utf8', timeout: 10 * 60_000 },
-  );
-  // vitest exits non-zero when any test fails, which an unexpected red
-  // legitimately does — the JSON file is written either way, so a non-zero
-  // exit here is not itself an error for this script.
-  let json: VitestJsonResult;
   try {
-    json = JSON.parse(readFileSync(outFile, 'utf8')) as VitestJsonResult;
-  } catch (error) {
-    throw new Error(
-      `la suite di accettazione non ha prodotto un JSON leggibile (exit ${result.status}):\n` +
-        `${result.stdout}\n${result.stderr}\ncausa: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    const result = runSuiteToJson(outFile, run);
+    try {
+      return outcomesOf(readSuiteJson(outFile));
+    } catch (error) {
+      throw new Error(
+        `la suite di accettazione non ha prodotto un JSON leggibile (exit ${result.status}):\n` +
+          `${result.stdout}\n${result.stderr}\ncausa: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   } finally {
     rmSync(join(outFile, '..'), { recursive: true, force: true });
   }
-  return outcomesOf(json);
+}
+
+/**
+ * The process seam `acceptanceResults` runs the suite through. A function
+ * rather than a flag so the "exactly once, no wall-clock timeout" contract
+ * stays provable in milliseconds (`report.test.ts` drives it with a fake
+ * that writes a canned JSON instead of spawning vitest) — the real
+ * `spawnSync` would make every assertion here an ~11-minute test.
+ */
+export type SuiteRunner = (
+  command: string,
+  args: readonly string[],
+  options: { cwd: string; encoding: 'utf8' },
+) => { status: number | null; stdout: string; stderr: string };
+
+/**
+ * Run: the acceptance suite, exactly once, into `outFile` as vitest
+ * `--reporter=json` — the same file the CI step hands over through
+ * `MUFFIN_ACCEPT_RESULTS`, so there is one producer shape and one consumer.
+ *
+ * Deliberately no wall-clock `timeout`: the suite outgrew a hard-coded 10
+ * minutes once already (#556), and any number here is a stima travestita da
+ * gate — a slow run is not a broken run. A hung suite is stopped the same
+ * way it is in CI, by the job's own `timeout-minutes`, or by Ctrl-C on a
+ * laptop. Raising the number instead would only schedule the next identical
+ * failure for whenever the suite outgrows the new number.
+ *
+ * A non-zero exit is NOT an error here: vitest exits non-zero when any test
+ * fails, which an unexpected red legitimately does — the JSON file is
+ * written either way, so only a missing or unreadable file fails loudly.
+ */
+export function runSuiteToJson(
+  outFile: string,
+  run: SuiteRunner = spawnSync,
+): { status: number | null; stdout: string; stderr: string } {
+  const result = run(
+    'npx',
+    ['vitest', 'run', '--config', 'vitest.acceptance.config.ts', '--reporter=json', `--outputFile=${outFile}`],
+    { cwd: REPO, encoding: 'utf8' },
+  );
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+/**
+ * Consume: one vitest `--reporter=json` file into outcomes. Throws the raw
+ * cause — missing file, unparsable JSON, misaligned shape — and each caller
+ * names where the file was supposed to come from, so a laptop run and a CI
+ * file fail with different sentences but through this one reader.
+ */
+export function readSuiteJson(path: string): VitestJsonResult {
+  return JSON.parse(readFileSync(path, 'utf8')) as VitestJsonResult;
 }
 
 /**
