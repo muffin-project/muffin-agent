@@ -274,8 +274,10 @@ authority are deliberately separate from enthusiasm or financial support:
   repository access, merge rights, maintainer status or product authority.
 
 Created and led by [Giusto Piedimonte](https://giusto.dev). Project contact:
-[ciao@giusto.dev](mailto:ciao@giusto.dev). A project-level sponsorship/support
-link will be added once the funding channel is wired into the repository.
+[ciao@giusto.dev](mailto:ciao@giusto.dev). If you want to help fund the project,
+[support Muffin via PayPal](https://www.paypal.com/donate/?hosted_button_id=MB89Z9ZLFKFSW).
+Financial support never grants repository or maintainer authority; see
+[SUPPORT.md](SUPPORT.md).
 
 Copyright (c) 2026 Giusto Piedimonte. License:
 [AGPL-3.0-or-later](LICENSE) — the `Muffin` name and logo are not covered, see
