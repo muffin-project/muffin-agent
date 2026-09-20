@@ -1,0 +1,36 @@
+name: Documentation problem
+description: Report missing, stale, contradictory, or hard-to-navigate current documentation
+title: "[Docs]: "
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Problem type
+      options:
+        - Broken or missing link
+        - Stale current claim
+        - Contradiction between current authorities
+        - Navigation or information architecture
+        - Missing explanation
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: location
+    attributes:
+      label: Location
+      description: File/path/section where you found the problem.
+      placeholder: docs/... or README section
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong or confusing?
+      description: Distinguish current documentation from intentionally historical ADR/evidence material.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should a zero-context reader be able to understand instead?
