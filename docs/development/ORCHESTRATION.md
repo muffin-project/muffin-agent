@@ -44,8 +44,8 @@ Observed Git/worktree/PR/check/delegation state is part of observation. A handof
 file is not allowed to override reality.
 
 For DAY-1, the deliverable is selected from
-`docs/work/day1/critical-path.md` and the relevant rows of
-`docs/work/day1/requirements-status.md`. A PR is an execution/checkpoint vehicle, not the
+`docs/status/day1/critical-path.md` and the relevant rows of
+`docs/status/day1/requirements-status.md`. A PR is an execution/checkpoint vehicle, not the
 product's state machine.
 
 ## Decision boundaries
@@ -227,7 +227,7 @@ The full suite runs once at the integrated PR/head gate (normally CI), not after
 every local commit. A fresh judge is not required; the orchestrator may integrate
 an unambiguous STANDARD claim when its evidence budget is satisfied.
 
-Integration into `dev` goes through the two-tier gate in `docs/BRANCHING.md`
+Integration into `dev` goes through the two-tier gate in `docs/development/BRANCHING.md`
 §3: `npm run merge -- <pr>` (merged result in a throwaway worktree, `ci:local`,
 merges only on PASS) or a GitHub-green head on a static base, both enforced by
 `.claude/hooks/guard-merge-gate.mjs`. A DISCARDED verdict (contended host) is
@@ -348,13 +348,13 @@ Update only the authoritative home whose meaning changed:
 | Change | Home |
 |---|---|
 | literal mechanics/config/schema | executable source |
-| current architecture semantics | `docs/ARCHITECTURE.md` |
-| current security promise | `docs/SECURITY.md` |
+| current architecture semantics | `docs/architecture/ARCHITECTURE.md` |
+| current security promise | `docs/architecture/SECURITY.md` |
 | durable architectural decision/rationale | ADR |
-| DAY-1 row/status/evidence | `docs/work/day1/requirements-status.md` |
-| DAY-1 ordering/dependency | `docs/work/day1/critical-path.md` |
-| current WIP/next action | `docs/work/handoff.md` |
-| product destination | `docs/VISION.md` |
+| DAY-1 row/status/evidence | `docs/status/day1/requirements-status.md` |
+| DAY-1 ordering/dependency | `docs/status/day1/critical-path.md` |
+| current WIP/next action | `docs/development/handoff.md` |
+| product destination | `docs/product/VISION.md` |
 | general engineering lesson | `docs/evidence/lessons.md` |
 | external/research evidence | dated `docs/evidence/` |
 | generated/visual view | regenerate/update the derived artifact if relevant |

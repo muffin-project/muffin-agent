@@ -13,7 +13,7 @@ import { scenario } from '../scenario.js';
  * is that elsewhere: a real gateway subprocess, killed with `SIGKILL` twice,
  * each time inside the exact window job_fires exists to close.
  *
- * `docs/JUDGE.md`: *"il difetto di casa è la garanzia provata contro un
+ * `docs/development/JUDGE.md`: *"il difetto di casa è la garanzia provata contro un
  * finto"* — so this drives `cli main.ts` as a real child process against a
  * real (temp-file) database, never `makeJobRunner`/`Scheduler` called by hand.
  * The two `MUFFIN_JOB_FIRES_STALL_*` env vars are the one test-only seam

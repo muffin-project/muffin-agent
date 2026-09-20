@@ -25,7 +25,7 @@ import { runInit } from './init.js';
 /**
  * The wiring, from the command line the owner actually types.
  *
- * `docs/JUDGE.md`: *"parti dal punto d'ingresso di produzione e prova a
+ * `docs/development/JUDGE.md`: *"parti dal punto d'ingresso di produzione e prova a
  * raggiungere il meccanismo. Se non riesci a dimostrare il percorso, la
  * garanzia è non provata."* Every test here spawns the real `cli/main.ts` — the
  * unit tests already prove the lock refuses a second holder, and none of them
@@ -275,7 +275,7 @@ describe('two schedulers must never run', () => {
  * itself). Nothing exercised whether `cmdGatewayRun` threads
  * `runtime.deps.turns.delivered` into the `Scheduler` it builds, or the
  * `SurfaceRegistry` from `connectSurfaces` into the `deliver` the scheduler
- * calls — the exact wiring `docs/work/day1/requirements-status.md` B8 is about. Checked by
+ * calls — the exact wiring `docs/status/day1/requirements-status.md` B8 is about. Checked by
  * hand first: commenting out the `recordDelivery` argument in `cli/gateway.ts`
  * left every other test in this file and in `core/gateway/service.test.ts`
  * green.

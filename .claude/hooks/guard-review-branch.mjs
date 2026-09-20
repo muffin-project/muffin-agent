@@ -30,7 +30,7 @@
  * That is this repository's own characteristic defect, committed by the
  * mechanism built to prevent it, and it is not fixable from inside a
  * branch-local file. The real cure is removing the cause: review agents share
- * this working tree and must never `git checkout` at all (docs/JUDGE.md). This
+ * this working tree and must never `git checkout` at all (docs/development/JUDGE.md). This
  * guard stays for the orchestrator's own slips on the current branch, which is
  * a smaller promise than it first appeared to make.
  */

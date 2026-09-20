@@ -32,12 +32,12 @@ Project skills and path-scoped rules live in `.claude/skills/` and
 restate it.
 
 For current work use, in this order: observed Git/worktree/PR/check/delegation
-state; `docs/work/handoff.md` as a compact handoff; then the ordering and
+state; `docs/development/handoff.md` as a compact handoff; then the ordering and
 status authority for the current goal.
 
 ## Verification profile
 
-Choose the profile from `docs/ORCHESTRATION.md`; the rules are not repeated here.
+Choose the profile from `docs/development/ORCHESTRATION.md`; the rules are not repeated here.
 The one Claude-specific note: FAST and STANDARD claims do **not** acquire extra
 ceremony merely because Claude is running them, and CRITICAL does not lose its
 independent terminal review merely because the work went quickly.

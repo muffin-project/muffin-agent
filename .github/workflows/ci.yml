@@ -1,6 +1,6 @@
 # Verifica automatica: typecheck + suite, e — solo se verde — accettazione.
 #
-# Esiste per una ragione precisa, scritta in docs/ORCHESTRATION.md#work-is-claim-oriented: «un
+# Esiste per una ragione precisa, scritta in docs/development/ORCHESTRATION.md#work-is-claim-oriented: «un
 # subagente che dice di aver fatto non è evidenza». Vale per gli umani quanto
 # per gli agenti — «i test passano» detto in una PR è un'affermazione, qui
 # diventa un fatto che qualcun altro ha eseguito.
@@ -253,7 +253,7 @@ jobs:
     # nuovo dove DEEP esegue; push successivi a PR pronta → FAST + DEEP;
     # `workflow_dispatch` e push a `main` → DEEP sempre (il secondo finche' non
     # esiste un gate reale pre-promozione: e' la prima esecuzione della CI sul
-    # commit promosso, vedi docs/BRANCHING.md).
+    # commit promosso, vedi docs/development/BRANCHING.md).
     if: >-
       github.event_name != 'pull_request' ||
       (

@@ -714,7 +714,7 @@ CREATE TABLE IF NOT EXISTS turn_tool_calls (
   -- D15, il registro degli effetti. Quattro colonne su questa tabella e non
   -- un secondo store: ogni chiamata ne scrive gia' una riga, e un registro
   -- degli effetti tenuto altrove sarebbe libero di dire una cosa mentre
-  -- questa ne dice un'altra -- la cucitura che docs/JUDGE.md chiama per nome,
+  -- questa ne dice un'altra -- la cucitura che docs/development/JUDGE.md chiama per nome,
   -- e che taintOrigin ha gia' rifiutato per il taint.
   --
   --  * effect_row   la riga della matrice (CapabilityDecl.effect) che ha
@@ -2060,7 +2060,7 @@ export class TurnStore {
    * representable, and "the type permits the wrong state" is one of those
    * levels. That rule was dropped from `ORCHESTRATION.md` by the 2026-08-19
    * documentation refactor and has no current home; it is still readable with
-   * `git show 451cd916:docs/ORCHESTRATION.md`.
+   * `git show 451cd916:docs/development/ORCHESTRATION.md`.
    * Every real caller already passes it (`agent/loop.ts`'s success and
    * throw paths both do); a future one that does not now fails `tsc` instead
    * of shipping an underestimated taint.

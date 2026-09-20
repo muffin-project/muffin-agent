@@ -383,7 +383,7 @@ export type PolicyMatrix = {
  * `core/policy/effect-rows.test.ts`.
  *
  * `context` and `external` are **not** transcriptions: the document prints no
- * "reads" row, and MCP lives in prose (`docs/SECURITY.md` §10) rather than in
+ * "reads" row, and MCP lives in prose (`docs/architecture/SECURITY.md` §10) rather than in
  * the table. `context` follows ADR-0044's own summary that reading is not
  * acting — a turn that read from disk still reads and answers — and `external`
  * keeps exactly the ceiling those capabilities already had. Both are argued in
@@ -475,7 +475,7 @@ export const ROW_FLOOR: Readonly<Record<EffectRow, RowPolicy>> = {
   vault: { asksForIrreversible: false, denyAbove: 3 },
   /**
    * Third-party code and services outside the allowlist model. The one row the
-   * document does not print: MCP is covered in prose (`docs/SECURITY.md` §10),
+   * document does not print: MCP is covered in prose (`docs/architecture/SECURITY.md` §10),
    * and this keeps the number those capabilities already had rather than
    * inventing a widening nobody reviewed.
    *

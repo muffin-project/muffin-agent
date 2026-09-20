@@ -2,7 +2,7 @@
 /**
  * PreToolUse hook: a new dependency does not get installed casually.
  *
- * This is practice §6 made deterministic (docs/PRACTICES.md): frontier models
+ * This is practice §6 made deterministic (docs/development/PRACTICES.md): frontier models
  * hallucinate package names at 4.6-6.1%, attackers register the hallucinated
  * names, and `npm install` is the moment the supply chain opens. Prose saying
  * "check the docs first" is advisory; an exit code is not.

@@ -14,13 +14,13 @@ Observe before trusting prose:
 
 1. current branch, diff and PR state;
 2. the executable source relevant to the claim;
-3. `docs/work/handoff.md` for the operational handoff;
+3. `docs/development/handoff.md` for the operational handoff;
 4. `docs/README.md` to discover the authoritative document for the question.
 
 Observed Git/runtime state beats a stale handoff. Historical documents never beat
 HEAD for mechanical facts.
 
-SessionStart injects `docs/work/handoff.md` automatically through
+SessionStart injects `docs/development/handoff.md` automatically through
 `.claude/hooks/inject-state.mjs`; it does not inject the old `STATE.md` chronicle.
 
 ## Read upstream before depending on upstream
@@ -159,7 +159,7 @@ Use `docs/README.md` to choose the owner:
 
 - DAY-1 requirement/status -> `requirements-status.md`;
 - DAY-1 ordering/dependency -> `day1/critical-path.md`;
-- active work/handoff -> `docs/work/handoff.md`;
+- active work/handoff -> `docs/development/handoff.md`;
 - durable architecture decision -> ADR;
 - current architecture/security/product promise -> its current authority doc;
 - research/audit/peer comparison -> dated evidence under `docs/evidence/`;

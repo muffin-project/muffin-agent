@@ -17,7 +17,7 @@ import type { ConnectorId, Principal, TenantId } from '../policy/types.js';
  * ## The two properties that are in the types, not in the prose
  *
  * **1. A delivery that did not happen is a value, not an omission.**
- * `docs/ORCHESTRATION.md` §14 names this exactly: *"Una firma che ritorna `void`
+ * `docs/development/ORCHESTRATION.md` §14 names this exactly: *"Una firma che ritorna `void`
  * non può dire «non ho consegnato»"*. TypeScript has no checked exceptions, so
  * no function type can require an implementation to throw — the remedy has to be
  * the shape of the returned value (`docs/evidence/tipi-contro-successo-falso.md`
@@ -369,7 +369,7 @@ export interface Surface {
    *
    * **Required, not optional, on the same principle `Deliver` was rewritten
    * for.** An optional method invites the fourth implementation to omit it
-   * silently — exactly the shape `docs/ORCHESTRATION.md` §14 already spent one
+   * silently — exactly the shape `docs/development/ORCHESTRATION.md` §14 already spent one
    * slice closing for text. A surface that has no real way to move bytes still
    * answers honestly: `cliSurface` names the path instead of a transport it
    * does not have, which is a `{ delivered: true }` that is true, not a

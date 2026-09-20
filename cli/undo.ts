@@ -188,7 +188,7 @@ scegli tu: disfare quello sbagliato non si disfà.
  * D11: dopo un restore **completo**, riallinea la cronologia del turno e la
  * memoria — mai su un restore parziale, perché una marcatura totale su un
  * disfacimento parziale sarebbe la stessa bugia che questa slice ripara,
- * solo spostata di un livello (vedi B3 in `docs/work/day1/critical-path.md`).
+ * solo spostata di un livello (vedi B3 in `docs/status/day1/critical-path.md`).
  *
  * `callIds` sono esattamente quelli che `entry.snapshots` porta per questo
  * turno — mai «ogni chiamata del turno», che marcherebbe come disfatte anche

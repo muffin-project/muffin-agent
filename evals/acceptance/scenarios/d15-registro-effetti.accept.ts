@@ -20,7 +20,7 @@ import { scenario } from '../scenario.js';
  *  3. l'owner ci arriva **parlando**: un secondo turno in cui il modello chiama
  *     `sys_effects` e il registro entra nel contesto della risposta, senza che
  *     nessuna approvazione venga chiesta e senza che l'owner debba conoscere
- *     una parola di comando (decisione owner 07/09, `docs/VISION.md`).
+ *     una parola di comando (decisione owner 07/09, `docs/product/VISION.md`).
  *
  * **La mutazione che deve arrossare questo file** è togliere la scrittura dei
  * metadata d'effetto in `agent/loop/tool-call.ts` (l'oggetto `effect` passato a

@@ -4,7 +4,7 @@
  * DAY-1 cutover, 2026-09-08 (`docs/evidence/dimentica-2026-09-08.md`): on the
  * real install "forget" had no mechanism at all, and the model improvised —
  * shell, sqlite, a recipe of `rm` and `DELETE` handed to the owner — for
- * minutes, without retiring anything. `docs/VISION.md` (07/09) lists forget
+ * minutes, without retiring anything. `docs/product/VISION.md` (07/09) lists forget
  * next to remember and correct as an ordinary conversational intent.
  *
  * Two calls, on purpose:
@@ -33,7 +33,7 @@ import type { ToolSpec } from '../providers/types.js';
 
 /**
  * Owner-only on purpose: «dimentica X» is the owner's word about the owner's
- * memory (`docs/VISION.md`). A room member keeps `memory_search`/`memory_why`
+ * memory (`docs/product/VISION.md`). A room member keeps `memory_search`/`memory_why`
  * (ADR-0073's list without grant) and does not get a door that retires what
  * the room learned. Same effect class as `memory.write` (`core/policy/doors.ts`),
  * tenant-scoped, declared next to its tool like `inspectCapability`.

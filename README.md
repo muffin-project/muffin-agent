@@ -16,7 +16,7 @@ while authority stays explicit and under your control.
 
 **One agent · your continuity · your rules**
 
-[Why Muffin](docs/THESIS.md) · [Vision](docs/VISION.md) · [Cognitive design](docs/COGNITIVE-DESIGN.md) · [Architecture](docs/ARCHITECTURE.md) · [Security](docs/SECURITY.md)
+[Why Muffin](docs/product/THESIS.md) · [Vision](docs/product/VISION.md) · [Cognitive design](docs/product/COGNITIVE-DESIGN.md) · [Architecture](docs/architecture/ARCHITECTURE.md) · [Security](docs/architecture/SECURITY.md)
 
 <sub><strong>COMMUNITY PREVIEW · PRE-DAY-1</strong> — the runtime works; the product is still being hardened for real daily use.</sub>
 
@@ -93,7 +93,7 @@ These are not scientific superpowers. Cognitive science and neuroscience are
 Legacy Muffin already supplied negative evidence: a detected pattern or absence
 can be real while the resulting intervention is still context-blind noise.
 
-[Hypotheses, evidence levels and kill criteria →](docs/COGNITIVE-DESIGN.md)
+[Hypotheses, evidence levels and kill criteria →](docs/product/COGNITIVE-DESIGN.md)
 
 ## One agent across change
 
@@ -167,7 +167,7 @@ muffin update --rollback   # the inverse flip
 From a clone instead — `git clone …` then `./install.sh` — if you would rather
 read the canonical installer before running it.
 
-[What the installer does, and how to undo it →](docs/INSTALL.md)
+[What the installer does, and how to undo it →](docs/user/INSTALL.md)
 
 <details>
 <summary><strong>Architecture — evidence, beliefs, work, effects and authority</strong></summary>
@@ -180,7 +180,7 @@ Muffin separates persistent meaning into five semantic planes:
 - **Effects** — what Muffin intended and what may have happened in the world;
 - **Authority** — which transitions Muffin may perform.
 
-[Architecture →](docs/ARCHITECTURE.md)
+[Architecture →](docs/architecture/ARCHITECTURE.md)
 
 </details>
 
@@ -191,7 +191,7 @@ The model can interpret and propose. It does not grant itself authority. Known
 secret values are designed to stay out of normal model, transcript and tool
 traffic, and a remote model provider is treated explicitly as an egress boundary.
 
-[Security →](docs/SECURITY.md)
+[Security →](docs/architecture/SECURITY.md)
 
 </details>
 
@@ -202,7 +202,7 @@ External grounding and Muffin-specific product evidence are tracked separately.
 An attractive neuroscience analogy cannot promote a mechanism, and `SHIPPED` is
 not an evidence status.
 
-[Cognitive design →](docs/COGNITIVE-DESIGN.md)
+[Cognitive design →](docs/product/COGNITIVE-DESIGN.md)
 
 </details>
 
@@ -218,7 +218,7 @@ grant       what you currently permit it to do
 The intended direction is a narrow trusted core with optional capabilities around
 it. What you do not install should not exist in your Muffin.
 
-[Extension direction →](docs/EXTENSIONS.md)
+[Extension direction →](docs/architecture/EXTENSIONS.md)
 
 </details>
 
@@ -247,14 +247,14 @@ which supposedly clever mechanisms do not help.
 > **Which mechanism actually made me more capable, and which one merely made
 > Muffin feel more clever?**
 
-[Open-source strategy →](docs/OPEN-SOURCE-STRATEGY.md) · [Public narrative →](docs/PUBLIC-NARRATIVE.md)
+[Open-source strategy →](docs/project/OPEN-SOURCE-STRATEGY.md) · [Public narrative →](docs/project/PUBLIC-NARRATIVE.md)
 
 ## Contributing
 
 Muffin is source-public/pre-alpha: contributions are welcome, stability is not
 promised. Start from [CONTRIBUTING.md](CONTRIBUTING.md) — it routes you to the
 current integration branch (`dev`, via `slice/<claim>` branches, see
-[BRANCHING.md](docs/BRANCHING.md)), the signed-off-commit rule (`git commit -s`,
+[BRANCHING.md](docs/development/BRANCHING.md)), the signed-off-commit rule (`git commit -s`,
 see [CONTRIBUTOR_AGREEMENT.md](CONTRIBUTOR_AGREEMENT.md)), and the evidence a PR
 must show. Report bugs with the issue templates; report security issues
 privately per [SECURITY.md](SECURITY.md). You do not need Claude Code to

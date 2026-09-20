@@ -11,7 +11,7 @@ import { pidAlive } from '../lock/durable.js';
  * ## What a wait is, and what it is not
  *
  * `WAIT → persist the state → RELEASE execution → scheduler/event → resume`
- * (`docs/work/day1/requirements-status.md` §2). An `await sleep()` inside the cognitive
+ * (`docs/status/day1/requirements-status.md` §2). An `await sleep()` inside the cognitive
  * process is **not** this: it is a very long async function that holds the
  * runtime, and the difference is exactly the one between a Muffin that lives
  * and a Muffin launched from a terminal. Nothing in this file sleeps.

@@ -6,7 +6,7 @@ import type { TrustTier } from '../policy/types.js';
  *
  * The operating model is not `goal → turn → done` but
  * `goal → plan → todo{done|blocked|waiting|retry|pending} → resume`
- * (`docs/work/day1/requirements-status.md` §2). Everything in that sentence except the plan
+ * (`docs/status/day1/requirements-status.md` §2). Everything in that sentence except the plan
  * already existed: a turn is a record, a suspended turn resumes. What was
  * missing is the thing that carries *intent* across a suspension — the list of
  * what is still owed.

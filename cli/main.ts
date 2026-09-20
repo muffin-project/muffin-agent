@@ -299,7 +299,7 @@ async function main(rawArgv: string[]): Promise<number> {
       return 0;
     case '--version':
     case '-v': {
-      // GNU baseline: every CLI answers --version (docs/PRACTICES.md#prior-art-before-durable-shape).
+      // GNU baseline: every CLI answers --version (docs/development/PRACTICES.md#prior-art-before-durable-shape).
       process.stdout.write(`muffin ${readOwnVersion()}\n`);
       return 0;
     }

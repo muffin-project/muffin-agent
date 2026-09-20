@@ -81,7 +81,7 @@ function parsePositiveInt(raw: string, max?: number): { ok: true; value: number 
  * L'insieme piccolo e motivato, non tutto `config.json`.
  *
  * Escluse per decisione dell'owner, testuale: **`rot.mode`** (postura di
- * sicurezza — hardened/single-user si cambia leggendo `docs/SECURITY.md`, non
+ * sicurezza — hardened/single-user si cambia leggendo `docs/architecture/SECURITY.md`, non
  * con una riga digitata di corsa), **i provider** (`provider.*`, incluso
  * `provider.routing` — instradamento e `dataCollection` sono scelte che vanno
  * lette una volta, non girate come un termostato) e **i segreti**

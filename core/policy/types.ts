@@ -356,7 +356,7 @@ export interface PermissionSnapshot {
    * valore, scritta dallo stesso `raiseTaint`/`raiseCeiling` che lo alza e
    * sostituita solo quando il livello sale davvero. Un registro a parte
    * potrebbe dire una cosa mentre il numero ne dice un'altra, ed è la cucitura
-   * che `docs/JUDGE.md` chiama per nome.
+   * che `docs/development/JUDGE.md` chiama per nome.
    */
   taintOrigin(): string | null;
   /**

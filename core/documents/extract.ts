@@ -26,7 +26,7 @@ import {
  * extracted text would index a document as if it had been read. So the result
  * is a **union the caller cannot ignore**: either a document or a named
  * failure, never a string that might be empty for a reason nobody recorded.
- * That is `docs/ORCHESTRATION.md` §14 — prefer the shape that fails on its own
+ * That is `docs/development/ORCHESTRATION.md` §14 — prefer the shape that fails on its own
  * to the one that depends on somebody remembering.
  *
  * OCR is out of scope and stays out: it is a model or a binary, and both are

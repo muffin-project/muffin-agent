@@ -10,7 +10,7 @@ import type { ToolSpec } from '../providers/types.js';
  *
  * ## Perché è un tool e non un comando
  *
- * Decisione owner del 07/09/2026, ora in `docs/VISION.md`: *il normale owner
+ * Decisione owner del 07/09/2026, ora in `docs/product/VISION.md`: *il normale owner
  * opera Muffin parlandogli, non imparando un vocabolario di comandi*. La
  * formulazione originale di D15 chiedeva `muffin effetti` «e lo stesso comando
  * in REPL e Telegram» — cioè esattamente il vocabolario che quella decisione

@@ -33,7 +33,7 @@ gh pr list --state open
 
 ## Cosa farne
 
-1. **L'osservato vince sul handoff.** Leggi `docs/work/handoff.md` e
+1. **L'osservato vince sul handoff.** Leggi `docs/development/handoff.md` e
    confrontalo con quanto sopra. Se diverge, correggi il handoff **prima** di
    scegliere il lavoro: una sessione nuova erediterebbe la bugia.
 2. **Chiudi prima ciò che è rotto.** Una review aperta, una delega morta, un
@@ -46,7 +46,7 @@ gh pr list --state open
 5. **Sfida prima di implementare** quando la claim tocca runtime, harness,
    sicurezza/authority, memoria/person model, processi o schema durevole: usa
    `/sfida`.
-6. **Classifica il profilo** con `docs/ORCHESTRATION.md` e scrivi profilo e
+6. **Classifica il profilo** con `docs/development/ORCHESTRATION.md` e scrivi profilo e
    motivo nella PR.
 
 Non fare manutenzione generica: per quella c'è `/loop`. Per portare una claim

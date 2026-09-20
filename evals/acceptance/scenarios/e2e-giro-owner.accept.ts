@@ -48,7 +48,7 @@ import { scenario } from '../scenario.js';
  *
  * The macOS half of ring 4 is a *fallback*, and it says so at the assertion
  * that names it: this repository's production target is a Linux VPS
- * (AGENTS.md, `docs/work/day1/requirements-status.md` A1), and only the Linux leg drives
+ * (AGENTS.md, `docs/status/day1/requirements-status.md` A1), and only the Linux leg drives
  * the unit through the platform's supervisor-verifying parser the way an
  * owner's `systemctl --user daemon-reload` eventually would. Neither leg ever
  * asks a real supervisor to hold a process up across a reboot — that is a

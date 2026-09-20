@@ -58,7 +58,7 @@ export const shellCapability: CapabilityDecl = {
   id: 'sys.shell',
   // Still `host`, and deliberately not `context` — which is where the ceiling
   // and the unattended-floor would be 3/3 and this lane would be as free as
-  // `fs_read`. Two residuals keep it here, both declared in `docs/SECURITY.md`
+  // `fs_read`. Two residuals keep it here, both declared in `docs/architecture/SECURITY.md`
   // §9: on Linux `allowAllUnixSockets` leaves AF_UNIX reachable (srt's seccomp
   // layer is off, upstream #428/#429), and a command still spends the host's
   // CPU and file descriptors. "Nothing leaves and nothing is written" is the

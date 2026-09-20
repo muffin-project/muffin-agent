@@ -3,14 +3,26 @@
 Start here when you do not already know Muffin:
 
 - [Status](STATUS.md) — release boundary and where live state is observed.
-- [Install](INSTALL.md) — install, update and rollback.
-- [Architecture](ARCHITECTURE.md) — present semantic shape.
-- [Security](SECURITY.md) — current trust and authority boundaries.
+- [Install](user/INSTALL.md) — install, update and rollback.
+- [Architecture](architecture/ARCHITECTURE.md) — present semantic shape.
+- [Security](architecture/SECURITY.md) — current trust and authority boundaries.
 - [Contributing](../CONTRIBUTING.md) — contribution rules and inbound agreement.
 
 For the repository's complete authority model, continue below. Historical
 evidence and archived design material are deliberately not part of this first
 reader journey.
+
+## Current documentation tree
+
+| Area | Owns |
+| --- | --- |
+| [product/](product/) | Purpose, destination, roadmap placement, and cognitive hypotheses. |
+| [architecture/](architecture/) | Semantic shape, security boundaries, Home, extensions, and design principles. |
+| [user/](user/) | Installation and the owner-facing path. |
+| [development/](development/) | Repository practice, branching, research, judgement, and volatile maintainer handoff. |
+| [project/](project/) | Community, contribution, and public-narrative direction. |
+| [status/](status/) | Current readiness ledgers and release criteria. |
+| [decisions/](decisions/), [evidence/](evidence/), [history/](history/) | Decision record, observations, and lineage; not current runtime authority. |
 
 # Repository knowledge model
 
@@ -33,24 +45,24 @@ unused manifest would be another source of drift.
 | Question | Authority |
 |---|---|
 | What does the system literally do or accept? | Executable code, schemas and shipped config; tests/evals are evidence that the path is exercised. |
-| Why does Muffin exist? | `docs/THESIS.md` |
-| Where is the product trying to go? | `docs/VISION.md` |
-| Which cognitive/human hypotheses is Muffin exploring, with what evidence status and kill criteria? | `docs/COGNITIVE-DESIGN.md` |
-| In which phase should a deliberately deferred capability be reconsidered? | `docs/ROADMAP.md` |
-| How is Muffin shaped now? | `docs/ARCHITECTURE.md` |
-| What security boundary does Muffin claim now? | `docs/SECURITY.md` |
-| How should design choices be made? | `docs/DESIGN-PRINCIPLES.md` |
-| How is Muffin installed, updated and rolled back on a real machine? | `install.sh`, with `docs/INSTALL.md` for what it does and why |
-| How should installable capability grow around the core? | `docs/EXTENSIONS.md` |
-| How should the owner-run project become public/community-maintained? | `docs/OPEN-SOURCE-STRATEGY.md` |
-| How do public/current/historical claims stay honest outside this repo? | `docs/PUBLIC-NARRATIVE.md` |
+| Why does Muffin exist? | `docs/product/THESIS.md` |
+| Where is the product trying to go? | `docs/product/VISION.md` |
+| Which cognitive/human hypotheses is Muffin exploring, with what evidence status and kill criteria? | `docs/product/COGNITIVE-DESIGN.md` |
+| In which phase should a deliberately deferred capability be reconsidered? | `docs/product/ROADMAP.md` |
+| How is Muffin shaped now? | `docs/architecture/ARCHITECTURE.md` |
+| What security boundary does Muffin claim now? | `docs/architecture/SECURITY.md` |
+| How should design choices be made? | `docs/architecture/DESIGN-PRINCIPLES.md` |
+| How is Muffin installed, updated and rolled back on a real machine? | `install.sh`, with `docs/user/INSTALL.md` for what it does and why |
+| How should installable capability grow around the core? | `docs/architecture/EXTENSIONS.md` |
+| How should the owner-run project become public/community-maintained? | `docs/project/OPEN-SOURCE-STRATEGY.md` |
+| How do public/current/historical claims stay honest outside this repo? | `docs/project/PUBLIC-NARRATIVE.md` |
 | What is the current release boundary and where is live work observed? | `docs/STATUS.md` |
 | Why was an architectural choice made? | The relevant ADR in `docs/decisions/` |
-| What makes DAY-1 true? | `docs/work/day1/readiness-criteria.md` |
-| Is a DAY-1 requirement currently satisfied? | `docs/work/day1/requirements-status.md` |
-| In which order do remaining DAY-1 blockers get attacked? | `docs/work/day1/critical-path.md` |
-| What work is active right now? | Observed Git/PR state first, then `docs/work/handoff.md` as the handoff. |
-| How is repository work orchestrated and verified? | `docs/ORCHESTRATION.md`, with `BRANCHING.md`, `JUDGE.md` and `PRACTICES.md` for their scoped concerns. Reusable procedures live in `.agents/skills/`; OpenCode entry points in `.opencode/commands/` and role adapters in `.opencode/agents/`. |
+| What makes DAY-1 true? | `docs/status/day1/readiness-criteria.md` |
+| Is a DAY-1 requirement currently satisfied? | `docs/status/day1/requirements-status.md` |
+| In which order do remaining DAY-1 blockers get attacked? | `docs/status/day1/critical-path.md` |
+| What work is active right now? | Observed Git/PR state first, then `docs/development/handoff.md` as the handoff. |
+| How is repository work orchestrated and verified? | `docs/development/ORCHESTRATION.md`, with `BRANCHING.md`, `JUDGE.md` and `PRACTICES.md` for their scoped concerns. Reusable procedures live in `.agents/skills/`; OpenCode entry points in `.opencode/commands/` and role adapters in `.opencode/agents/`. |
 | What evidence informed a decision? | `docs/evidence/`, audits and `docs/evidence/lessons.md` |
 | What did the project believe or do at an earlier point? | `docs/history/` and rebuild-era material; never a claim about HEAD |
 
@@ -71,12 +83,12 @@ SECURITY           current trust/security boundaries
 DESIGN             decision compass
 ```
 
-`COGNITIVE-DESIGN.md` is intentionally **not** runtime truth. It owns the status
+`product/COGNITIVE-DESIGN.md` is intentionally **not** runtime truth. It owns the status
 of hypotheses and their falsification criteria. A mechanism may be shipped while
 still marked experimental; robust external science may still map to a rejected
 Muffin product idea.
 
-`ROADMAP.md` owns **phase placement only**. It does not own whether a DAY-1 row is
+`product/ROADMAP.md` owns **phase placement only**. It does not own whether a DAY-1 row is
 READY/BLOCKER, the next implementation slice, or whether an item is already
 shipped. Those questions stay with the DAY-1 requirements, the critical path, Git and executable
 authority respectively.
@@ -129,7 +141,7 @@ sound.
 
 ## Operational state
 
-Operational state is deliberately small and disposable. `docs/work/handoff.md` may name the
+Operational state is deliberately small and disposable. `docs/development/handoff.md` may name the
 current objective, live PR/slice, immediate blockers, owner decisions and next
 action. It must be possible to delete it without losing product knowledge.
 
@@ -197,7 +209,7 @@ The inherited foundations corpus went to `docs/history/foundations/legacy/`.
 `docs/history/README.md` carries the old path → current home map.
 
 The architectural decisions moved to `docs/decisions/`. The retained
-`docs/knowledge/` corpus is background research, not current runtime or product
+`docs/history/legacy-cognitive/` corpus is background research, not current runtime or product
 authority; `COGNITIVE-DESIGN.md` owns the live hypotheses. The dated evidence
 went to `docs/evidence/` and the design lineage to `docs/history/design-notes/`.
 

@@ -113,7 +113,7 @@ export type RunJob = (job: Job, signal: AbortSignal | undefined) => Promise<JobO
 /**
  * Delivers text to a surface, and **says whether it arrived**.
  *
- * The return type is the whole repair, and it is the one `docs/ORCHESTRATION.md`
+ * The return type is the whole repair, and it is the one `docs/development/ORCHESTRATION.md`
  * §14 names by hand: *"Una firma che ritorna `void` non può dire «non ho
  * consegnato»: ogni implementazione deve ricordarsi di lanciare, e delle tre una
  * sola se n'è ricordata"*. This used to be `Promise<void>`, so the only channel

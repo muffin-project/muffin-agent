@@ -12,7 +12,7 @@ import { describeSettableKnobs, formatSetOutcome, setConfigKnob } from '../core/
  * `muffin config` (senza sotto-comando) answers "what can I adjust, and
  * where" completely without building a write surface anything has to guard:
  * every knob, its current value, the file it lives in, and whether that file
- * is sealed. Prior art looked at before choosing the shape (`docs/PRACTICES.md`
+ * is sealed. Prior art looked at before choosing the shape (`docs/development/PRACTICES.md`
  * §3) — `git config --list --show-origin` pairs a value with the file it came
  * from but has no sealed axis to show; `gh config list` is bare key=value
  * with no origin at all; `aws configure list` is the closest match, a table

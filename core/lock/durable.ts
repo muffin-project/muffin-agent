@@ -119,7 +119,7 @@ export type LockOutcome = { release: () => void } | { held: string; remedy: stri
  * because the right tolerance is a real choice — too small and it fires on
  * ordinary skew, too large and it buys nothing — and guessing one without a
  * measured skew budget would be exactly the unverifiable presumption
- * `docs/PRACTICES.md` §2 says to cut rather than write down.
+ * `docs/development/PRACTICES.md` §2 says to cut rather than write down.
  */
 export const HARD_STALE_MULTIPLIER = 6;
 

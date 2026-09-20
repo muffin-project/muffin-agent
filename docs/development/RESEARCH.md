@@ -184,7 +184,7 @@ and what survives a Muffin/gateway reboot before exposing a spawn primitive.
 
 Only after the challenge pass chooses a falsifiable claim:
 
-1. classify FAST / STANDARD / CRITICAL in `docs/ORCHESTRATION.md`;
+1. classify FAST / STANDARD / CRITICAL in `docs/development/ORCHESTRATION.md`;
 2. create the narrow slice/branch;
 3. implement the smallest architecture that proves the claim;
 4. verify the outcome on the production path;

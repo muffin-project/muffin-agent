@@ -38,7 +38,7 @@ import { OWNER_SESSION_KEY } from '../../core/surface/types.js';
  * is a network call. `TelegramApi.baseUrl` has no production override (`cli/
  * surface.ts:123,337` both call `new TelegramApi(token)`, no second
  * argument), so a real spawned `muffin` binary cannot be pointed at a fake
- * Bot API server — the acceptance-level scenario `docs/JUDGE.md`/the mandate
+ * Bot API server — the acceptance-level scenario `docs/development/JUDGE.md`/the mandate
  * asks for is not reachable without changing production wiring that is out
  * of scope here, so this connector-level harness is the deepest evidence
  * available, matching the precedent both sibling files already set.
@@ -219,7 +219,7 @@ function turnTaint(h: ReturnType<typeof harness>): number | undefined {
   return row?.taint;
 }
 
-describe('(a) a forwarded, hostile message — red before the fix, per docs/JUDGE.md', () => {
+describe('(a) a forwarded, hostile message — red before the fix, per docs/development/JUDGE.md', () => {
   it('starts the turn at tier >= 2, fences the forwarded text, and decides every call at that tier', async () => {
     const h = harness([callTool('skill_read', { name: 'non-esiste' }), reply('Non posso, te lo dico.')]);
     try {

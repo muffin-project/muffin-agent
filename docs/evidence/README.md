@@ -6,8 +6,8 @@ This directory owns one question:
 
 Nothing here is current authority. A document does not govern HEAD because it is
 detailed, because it is recent, or because it is the only place a subject is
-discussed at length. Current architecture lives in `docs/ARCHITECTURE.md`,
-current security in `docs/SECURITY.md`, decisions in `docs/decisions/`, and the
+discussed at length. Current architecture lives in `docs/architecture/ARCHITECTURE.md`,
+current security in `docs/architecture/SECURITY.md`, decisions in `docs/decisions/`, and the
 state of current work in `docs/work/`.
 
 Evidence **justifies** a current decision. It never becomes one by sitting here.
@@ -20,7 +20,7 @@ all backward-looking; a proposal is forward-looking, and a document that says
 instructions, not reporting.
 
 Proposal is a **lifecycle state, not a document class**. Whatever stays live in a
-proposal has a current owner — an ADR, `docs/ROADMAP.md`, `docs/ARCHITECTURE.md`.
+proposal has a current owner — an ADR, `docs/product/ROADMAP.md`, `docs/architecture/ARCHITECTURE.md`.
 Once promoted, implemented, superseded, rejected or distilled, the dated artifact
 becomes design lineage and moves to `docs/history/design-notes/`. There is no
 permanent proposals layer in this repository, and `docs/blueprint/proposals/` was
@@ -28,7 +28,7 @@ removed in 2026-08 precisely because the routine it implied never ran.
 
 Also not here: generated or derived views, product vision, and operational
 state. No generated architecture map is currently checked in; use
-`docs/ARCHITECTURE.md` and executable sources instead.
+`docs/architecture/ARCHITECTURE.md` and executable sources instead.
 
 ## Freshness: evidence is faithful to the observation, not to HEAD
 

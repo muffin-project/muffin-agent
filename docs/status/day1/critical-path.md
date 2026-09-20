@@ -1,8 +1,8 @@
 # Percorso critico DAY-1
 
 Questo file possiede **ordine e dipendenze**, non lo stato. Lo stato dei
-requisiti vive solo in `docs/work/day1/requirements-status.md`; il lavoro vivo in
-Git + `docs/work/handoff.md`; le deliberate deferral in `docs/ROADMAP.md`.
+requisiti vive solo in `docs/status/day1/requirements-status.md`; il lavoro vivo in
+Git + `docs/development/handoff.md`; le deliberate deferral in `docs/product/ROADMAP.md`.
 
 La regola è: una cosa compare qui soltanto se **deve precederne un'altra**. Se è
 solo un finding, un follow-up o una feature desiderabile, non è percorso
@@ -105,7 +105,7 @@ il corpus dice che serve. `s4` è l'esistenza di prova: si è fermato su un floo
 di codice, senza chiedere niente a nessuno e senza dipendere dal giudizio del
 modello.
 
-Il recinto del disco (ADR in `docs/SECURITY.md`, integrato il 04/09) è il
+Il recinto del disco (ADR in `docs/architecture/SECURITY.md`, integrato il 04/09) è il
 prerequisito di questo lavoro e **non** una sua parte: dà provenienza, cioè
 rende vera la frase «il contenuto esterno arriva marcato». Se il modello poi
 obbedisca lo dice il corpus, e su tre scene dice di no. Una difesa che poggia
@@ -116,7 +116,7 @@ Righe e colonne sono domande separate, e questa è la ragione dell'ordine. La
 eseguibile: la matrice normativa era prosa, il kernel decideva da una classe di
 rischio più un numero appuntato a mano, e le due erano divergiute su una cella
 che il documento chiamava `ASK` da un mese. La **colonna** è il taint
-ambientale, ed è l'ipotesi non falsificata di `docs/SECURITY.md` §13: si chiude
+ambientale, ed è l'ipotesi non falsificata di `docs/architecture/SECURITY.md` §13: si chiude
 con l'eval comparativo, non con una decisione scritta prima. Le righe
 sopravvivono a qualunque risposta l'eval dia.
 

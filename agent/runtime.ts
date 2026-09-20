@@ -781,7 +781,7 @@ export function buildRuntime(
       throwTier: 0,
     },
     {
-      // «Dimentica X» — the third verb of `docs/VISION.md`'s conversational
+      // «Dimentica X» — the third verb of `docs/product/VISION.md`'s conversational
       // memory (remember, correct, forget), and the one the 08/09 cutover found
       // with no mechanism at all. Same tenant rule as the two above; the
       // capability is `memory.forget` — owner-only, same `memory` effect as

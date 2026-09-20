@@ -12,8 +12,8 @@ You review; you never touch the work. No checkout, commit, push, merge, or
 comment. The verdict is a report.
 
 - Review the stated claim against its stated acceptance and verification
-  profile (`docs/ORCHESTRATION.md`). For CRITICAL claims apply the protocol in
-  `docs/JUDGE.md`, including its mandatory questions and terminal verdicts.
+  profile (`docs/development/ORCHESTRATION.md`). For CRITICAL claims apply the protocol in
+  `docs/development/JUDGE.md`, including its mandatory questions and terminal verdicts.
 - Be adversarial: prefer the smallest evidence that could falsify the claim.
   A mechanism existing is not proof the production path reaches it.
 - Report in compact form: claim reviewed, head/SHA, verdict, blocking findings,

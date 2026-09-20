@@ -32,12 +32,12 @@ Read, in this order:
    touch.
 2. [`docs/README.md`](docs/README.md) — tells you which document/code surface
    owns which kind of truth.
-3. [`docs/ORCHESTRATION.md`](docs/ORCHESTRATION.md) — how work is selected,
+3. [`docs/development/ORCHESTRATION.md`](docs/development/ORCHESTRATION.md) — how work is selected,
    bounded, delegated, verified and integrated.
-4. [`docs/RESEARCH.md`](docs/RESEARCH.md) — when a research/challenge pass is
+4. [`docs/development/RESEARCH.md`](docs/development/RESEARCH.md) — when a research/challenge pass is
    required before code.
-5. [`docs/BRANCHING.md`](docs/BRANCHING.md) — current Git mechanics.
-6. [`docs/JUDGE.md`](docs/JUDGE.md) — review rubric, especially for CRITICAL
+5. [`docs/development/BRANCHING.md`](docs/development/BRANCHING.md) — current Git mechanics.
+6. [`docs/development/JUDGE.md`](docs/development/JUDGE.md) — review rubric, especially for CRITICAL
    claims.
 
 Load product/security/architecture documents only when your claim makes them
@@ -77,16 +77,16 @@ missing invariant.
 ## Before you open a pull request
 
 - **Base your branch on the repository's current integration branch described in
-  `docs/BRANCHING.md`.** At the time this file was written that is `dev`; do not
+  `docs/development/BRANCHING.md`.** At the time this file was written that is `dev`; do not
   infer current branch policy from an old PR or cached contributor guide.
-- **Use the branch naming rule in `docs/BRANCHING.md`**; current claim branches use
+- **Use the branch naming rule in `docs/development/BRANCHING.md`**; current claim branches use
   `slice/<what-becomes-true>`.
 - **Name one primary falsifiable claim.** A PR is a checkpoint/integration vehicle,
   not the product state machine.
 - **Classify the verification profile** — FAST / STANDARD / CRITICAL — before
-  writing code using `docs/ORCHESTRATION.md`. Blast radius chooses the profile,
+  writing code using `docs/development/ORCHESTRATION.md`. Blast radius chooses the profile,
   not diff size.
-- **Run the research/challenge pass when required** by `docs/RESEARCH.md`,
+- **Run the research/challenge pass when required** by `docs/development/RESEARCH.md`,
   especially for runtime/harness architecture, security/authority, provenance,
   memory/person-model behaviour, processes or durable schema.
 - **Trace the production path.** A unit test around disconnected code is not
@@ -110,7 +110,7 @@ That normally means:
   defines the rest of the evidence budget, not this file;
 - for a bug fix, the pre-fix failure/reproduction before the green result;
 - integration/acceptance evidence when the claim crosses a real boundary;
-- for CRITICAL work, the independent judge path described in `docs/JUDGE.md`,
+- for CRITICAL work, the independent judge path described in `docs/development/JUDGE.md`,
   run by a fresh evaluator rather than the same session being its sole certifier.
 
 A subagent, coding assistant or reviewer saying "it works" is not itself

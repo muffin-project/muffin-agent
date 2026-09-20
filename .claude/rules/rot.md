@@ -20,8 +20,8 @@ Quindi, prima di toccare un valore qui:
 
 - **classifica la modifica per quello che è.** Tocca authority, permessi,
   provenienza/taint, egress o segreti: è un trigger del challenge pass
-  (`docs/RESEARCH.md`) e quasi mai un FAST.
-- **il literal vive qui, non nella prosa.** `docs/SECURITY.md` possiede la
+  (`docs/development/RESEARCH.md`) e quasi mai un FAST.
+- **il literal vive qui, non nella prosa.** `docs/architecture/SECURITY.md` possiede la
   *semantica* del confine; se il confine si sposta, si aggiorna anche lì. Se
   invece la prosa altrove ripete il numero, quella copia è il difetto — è già
   successo con `paramsMaxTaint`, che la mappa dichiarava `1` mentre il file

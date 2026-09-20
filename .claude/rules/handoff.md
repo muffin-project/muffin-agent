@@ -1,11 +1,11 @@
 ---
 paths:
-  - "docs/work/handoff.md"
+  - "docs/development/handoff.md"
 ---
 
 # Il handoff ha un tetto, e sopra quello viene troncato
 
-`docs/work/handoff.md` non è un documento come gli altri: un hook `SessionStart`
+`docs/development/handoff.md` non è un documento come gli altri: un hook `SessionStart`
 (`.claude/hooks/inject-state.mjs`) lo inietta **intero** nel contesto d'avvio di
 ogni sessione.
 

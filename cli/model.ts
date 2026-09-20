@@ -283,7 +283,7 @@ function mostra(config: Config, entry: ProviderEntry | null, out: (l: string) =>
  *
  * Il chiamante passa dove si scrive — stdout per la CLI, la riga di stato per il
  * REPL — e riceve un exit code. Due implementazioni della stessa manopola sono
- * la cucitura che `docs/JUDGE.md` descrive: corrette separatamente, capaci di
+ * la cucitura che `docs/development/JUDGE.md` descrive: corrette separatamente, capaci di
  * non essere d'accordo il giorno che una delle due cambia.
  */
 export async function cmdModel(home: string, argv: string[], deps: ModelDeps): Promise<number> {

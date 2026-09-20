@@ -32,6 +32,9 @@ force archaeology for material that is still consulted.
   code and by the architecture map, which is why the corpus is readable here
   rather than only in Git.
 - `foundations/` — see below; two different materials, deliberately not merged.
+- `legacy-cognitive/` — the retained cognitive corpus from the
+  predecessor; historical context, not current cognitive authority.
+- `source-public-2026-09-25/` — dated publication-plan snapshot.
 - `design-notes/` — dated design lineage. See below: it is the one family here
   that is *not* a snapshot of the past, but the residue of proposals that have
   since been decided elsewhere.
@@ -51,10 +54,10 @@ That is what these are, and who owns the live part:
 |---|---|
 | `design-notes/memory-lineage-implementation-contract-2026-08-29.md` | shipped — PR #253 owns the result |
 | `design-notes/memory-composition-contract-2026-08-29.md` | promoted into current architecture / memory ownership |
-| `design-notes/background-work-contract-2026-08-29.md` | unimplemented — `docs/ROADMAP.md` owns the status |
-| `design-notes/local-agentic-runtime-2026-08-20.md` | open experiment — `docs/ROADMAP.md` owns local compute |
+| `design-notes/background-work-contract-2026-08-29.md` | unimplemented — `docs/product/ROADMAP.md` owns the status |
+| `design-notes/local-agentic-runtime-2026-08-20.md` | open experiment — `docs/product/ROADMAP.md` owns local compute |
 | `design-notes/m3-caching-and-per-connector-timing.md` | ADR-0016 |
-| `design-notes/security-v2-eval-contract-2026-08-29.md` | `docs/SECURITY.md`, which records the hypothesis as unresolved and does **not** adopt it |
+| `design-notes/security-v2-eval-contract-2026-08-29.md` | `docs/architecture/SECURITY.md`, which records the hypothesis as unresolved and does **not** adopt it |
 
 Read one of these as a work list and you will build something whose live status
 is decided somewhere else. Their historical filenames are kept: under
@@ -63,7 +66,7 @@ is decided somewhere else. Their historical filenames are kept: under
 ## `foundations/`: two materials, one family
 
 - `VISION-pre-authority.md` — the single foundation document extracted on
-  2026-08-19, in the form it had before `docs/VISION.md` became the authority.
+  2026-08-19, in the form it had before `docs/product/VISION.md` became the authority.
   Its provenance is distinct and it is kept distinct.
 - `legacy/` — the inherited foundations corpus in full (`COGNITIVE_BASES`,
   `INVARIANTS`, `REFERENCES`, `UNDERSTANDING`, and its own `README`). It is kept
@@ -75,7 +78,7 @@ Neither governs HEAD. Nothing here was extracted, promoted or rewritten when it
 was archived.
 
 The redirect that used to sit at `docs/foundations/VISION.md` is gone: the
-current north star is `docs/VISION.md`, and it was removed on 2026-09-01 with the
+current north star is `docs/product/VISION.md`, and it was removed on 2026-09-01 with the
 rest of the legacy namespace.
 
 ## Old path → current home

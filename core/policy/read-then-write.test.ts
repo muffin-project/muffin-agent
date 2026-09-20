@@ -77,7 +77,7 @@ import { DISK_TIER } from '../../agent/tools/fs.js';
  *
  * Le due letture che il paragrafo sopra chiamava «entrambe difendibili» restano
  * tali, e la loro sede è un'altra: se il *taint ambientale* sia il segnale
- * giusto è la domanda aperta di `docs/SECURITY.md` §13, che si chiude con un
+ * giusto è la domanda aperta di `docs/architecture/SECURITY.md` §13, che si chiude con un
  * eval comparativo e non con questa ADR. Qui cambiano le righe, non le colonne.
  *
  * Nota su una frase invecchiata qui sopra: «`fs_write` non scrive un file in

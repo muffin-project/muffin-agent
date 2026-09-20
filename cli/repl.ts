@@ -85,7 +85,7 @@ export function statusFor(event: TurnEvent): string | null {
  * `'cli'`, printed anything else to stderr and **threw**, because at the time
  * throwing was the only way a `Promise<void>` could say "not delivered". Two of
  * the three implementations in the tree remembered to throw and one did not
- * (`cli/gateway.ts`), which is the asymmetry `docs/ORCHESTRATION.md` §14 uses as
+ * (`cli/gateway.ts`), which is the asymmetry `docs/development/ORCHESTRATION.md` §14 uses as
  * its worked example.
  *
  * Now the terminal only knows how to write to a terminal, and whether a channel

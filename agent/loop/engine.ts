@@ -559,7 +559,7 @@ export async function guidaIlTurno(
      * put back. Resolved through the same `traceId` join as `taintByTrace`
      * immediately above, one query for the whole window, and read by
      * `buildContext` so a turn re-reading its own past does not believe an
-     * effect that is no longer on disk (`docs/work/day1/critical-path.md`
+     * effect that is no longer on disk (`docs/status/day1/critical-path.md`
      * §"Chiudere la compensazione, non solo il restore").
      */
     const undoneTraceIds = deps.turns.undoneTraceIds(traceIdsInWindow);

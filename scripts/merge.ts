@@ -2,7 +2,7 @@
  * La porta locale per unire una PR in `dev`: `npm run merge -- <pr>`.
  *
  * L'altra porta e' il verde GitHub verificato dal guard
- * (`.claude/hooks/guard-merge-gate.mjs`, `docs/BRANCHING.md` §3): questa resta
+ * (`.claude/hooks/guard-merge-gate.mjs`, `docs/development/BRANCHING.md` §3): questa resta
  * la porta per dev→main e per tutto ciò che GitHub non prova, oltre al
  * fallback quando i minuti finiscono di nuovo.
  *
