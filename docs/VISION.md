@@ -304,7 +304,7 @@ Those observations should drive post-DAY-1 capability, Node and cognitive work.
 
 ## Public success condition
 
-Before a public alpha, Muffin must be understandable by someone who did not help
+Before product public alpha, Muffin must be understandable by someone who did not help
 build it: installable, diagnosable, updateable, recoverable and explicit about
 its authority boundaries. Contributors should be able to extend useful breadth
 without needing to understand or modify the core.
@@ -312,8 +312,9 @@ without needing to understand or modify the core.
 The route is not "find co-maintainers before the product exists". It is:
 
 ```text
-owner DAY-1 → 14-day dogfood → small trusted alpha → public alpha
-→ contributors emerge → maintainership is earned through observed work
+owner DAY-1 → source-public/pre-alpha (contributions welcome; not product alpha)
+→ 14-day dogfood → small trusted alpha → product public alpha
+→ community breadth → maintainership is earned through observed work
 ```
 
 `ROADMAP.md` owns phase placement for deliberate deferrals;
