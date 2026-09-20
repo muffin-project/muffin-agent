@@ -258,6 +258,24 @@ must show. Report bugs with the issue templates; report security issues
 privately per [SECURITY.md](SECURITY.md). You do not need Claude Code to
 contribute.
 
+## Community & support
+
+Muffin is owner-led and built in public with contributors around it. Access and
+authority are deliberately separate from enthusiasm or financial support:
+
+- **Contributors** start with issues, forks and pull requests. Repeated useful
+  contributions may earn closer project access over time.
+- **Community moderators** help keep issues, discussions and community spaces
+  healthy without receiving code-push or release authority merely because they
+  moderate.
+- **Maintainers** are trusted with repository operations after sustained,
+  observed technical judgement; maintainer authority is earned, not automatic.
+- **Supporters** help fund the project. Sponsorship or donations never buy
+  repository access, merge rights, maintainer status or product authority.
+
+Created and led by [Giusto Piedimonte](https://giusto.dev). A project-level
+sponsorship/support link will be added only once the funding channel is live.
+
 Copyright (c) 2026 Giusto Piedimonte. License:
 [AGPL-3.0-or-later](LICENSE) — the `Muffin` name and logo are not covered, see
 [TRADEMARK.md](TRADEMARK.md).
