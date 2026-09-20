@@ -234,14 +234,18 @@ function dominioInnocuo(dominio: string): boolean {
 }
 
 /**
- * Indirizzi fittizi già in uso nei test che non sono su un dominio RFC 2606
- * ma non sono comunque nessuno reale:
+ * Indirizzi già in uso nel repo che non sono su un dominio RFC 2606
+ * ma non sono comunque una fuga di dati personali:
  *  - `mario@x.it` — esempio di worked-example nel system prompt di
  *    `core/memory/extract.ts` ("mandare i report a mario@x.it"), ripreso dal
  *    suo test; `mario` è lo stesso placeholder italiano generico usato per i
  *    percorsi di home.
+ *  - `ciao@giusto.dev` — contatto canonico di progetto/sicurezza/comunità
+ *    pubblicato di proposito in README/SECURITY/SUPPORT/CODE_OF_CONDUCT;
+ *    non è una fuga di dati personali. Allowlist sul valore esatto, non sul
+ *    dominio: qualunque altra email su `giusto.dev` resta segnalata.
  */
-const EMAIL_INNOCUE = new Set(['mario@x.it']);
+const EMAIL_INNOCUE = new Set(['mario@x.it', 'ciao@giusto.dev']);
 
 function scansiona(): Reperto[] {
   const out: Reperto[] = [];
@@ -340,5 +344,27 @@ describe('forma externalId numerico', () => {
     expect(trova(campione('555666777'))).toEqual(['555666777']);
     expect(trova(campione('987654321'))).toEqual([]);
     expect(trova(campione('local'))).toEqual([]);
+  });
+});
+
+describe('forma email', () => {
+  it('il contatto canonico passa, una email reale qualunque resta intercettata', () => {
+    // Costruito per concatenazione: il sorgente di questo stesso file non deve
+    // contenere letteralmente la forma cercata, altrimenti il guardiano
+    // segnalerebbe se stesso (stessa ragione del test externalId sopra).
+    // L'unico letterale ammesso resta il valore esatto in EMAIL_INNOCUE.
+    const trova = (s: string) =>
+      [...s.matchAll(EMAIL)]
+        .filter((m) => !dominioInnocuo(m[1]!))
+        .filter((m) => !EMAIL_INNOCUE.has(m[0]!.toLowerCase()))
+        .map((m) => m[0]!.toLowerCase());
+    const canonico = ['ciao', '@', 'giusto', '.dev'].join('');
+    const altraStessoDominio = ['altro', '@', 'giusto', '.dev'].join('');
+    const altraReale = ['tizio', '@', 'gmail', '.com'].join('');
+    const riservato = ['info', '@', 'example', '.com'].join('');
+    expect(trova(canonico)).toEqual([]);
+    expect(trova(riservato)).toEqual([]);
+    expect(trova(altraReale)).toEqual([altraReale]);
+    expect(trova(altraStessoDominio)).toEqual([altraStessoDominio]);
   });
 });
