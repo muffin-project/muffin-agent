@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/muffin-project/muffin-agent/security/policy
+    about: Report vulnerabilities privately; do not open a public issue.
+  - name: Community Preview support
+    url: https://github.com/muffin-project/muffin-agent#community--support
+    about: Questions, funding, and preview-access boundaries.
