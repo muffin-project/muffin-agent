@@ -11,16 +11,21 @@
 Preview 21 Sep** (`program/current`). Questo file è solo un hint usa-e-getta:
 se contraddice Git/PR/issue osservati, vince l'osservato.
 
-**Osservato 2026-09-20:** `dev` @ `449ca6c` (includes #596). 3 PR aperte:
-#601, #597 (draft), #609 (ready, docs preview). Tutte UNSTABLE
-su CI al momento dell'osservazione (verificare se per basi ferme pre-fix).
-#599 chiusa/parcheggiata (coda della lane in #608 da riconciliare).
+**Osservato 2026-09-20:** `dev` @ `9766c33` (includes #609 + #601). 1 PR
+aperta: #597 (draft). #601 e #609 entrambe integrate durante la sessione
+(#601 via local door, verdict `pass` in `.ci-local/verdicts/`; #609
+convergenza concorrente, non assorbita nella slice #601). #599
+chiusa/parcheggiata (coda della lane in #608 da riconciliare).
 
 **Lane di landing (#608): #593 FATTA (merge 7d5f2c9) → #596 FATTA (merge
 449ca6c, gate PASS su composizione `df170db`, doctor 106/106 su HEAD
-integrato) → prossima #601 → #597** (+ fix publication/docs piccoli
-solo se esplicitamente accettati). Prossima azione: canonical gate su #601,
-poi proseguire in ordine. Freeze + riscrittura history finale + rescan +
+integrato) → #601 FATTA (merge 9766c33: slice ricomposta su `dev`
+`8e0d063`, report/scenario 54/54 + `tsc` clean sulla head, ci:local PASS
+sul risultato unito — verifica/accettazione/collegamenti/install/strumenti;
+GitHub CI ancora in outage pre-step, porta GitHub non disponibile) → #609
+FATTA (concorrente) → prossima #597** (+ fix publication/docs piccoli
+solo se esplicitamente accettati). Prossima azione: canonical gate su #597,
+poi proseguire in ordine. Slice #601 cancellata (remoto + worktree). Freeze + riscrittura history finale + rescan +
 purge solo a landing convergente. Ramo `slice/shell-outcome-integrity`
 integrato ma non ancora cancellato (follow-up igiene #608).
 
@@ -36,3 +41,6 @@ senza il suo umano saluta/avvisa/esce (F4); command surface piccola (VISION,
 ruolo Triage, non Write (#608); tre accessi esterni già attivi = superficie
 di disclosure già aperta (accettazione esplicita owner o rimozione
 temporanea).
+**ADR-0088 (20/09, ACCEPT owner):** Session durevole con Conversation
+generation numerate da `/new` esplicito; nessun auto-split per topic;
+Principal/Session/Conversation/Turn identità distinte (estende ADR-0056 §4).
