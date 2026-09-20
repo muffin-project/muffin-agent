@@ -19,11 +19,13 @@ A phase placement is a commitment to **revisit**, not a promise to implement. Do
 ```text
 DAY-1 READY
     ↓
+source-public / pre-alpha (contributable; not product alpha)
+    ↓
 14-day owner dogfood
     ↓
 MVP / trusted alpha
     ↓
-public alpha / open-source readiness
+product public alpha
     ↓
 post-MVP product & hardware
     ↓
@@ -366,9 +368,11 @@ measured before it is widened, because the failure mode it risks is the one
 
 Starting/owning long-lived background processes beyond current wait/process inspection remains consumer-triggered. Add it when a real daily workflow requires Muffin to own such a process lifecycle.
 
-## Public alpha / open-source readiness
+## Product public alpha
 
 These matter before broad public use if the corresponding surface/extension is shipped.
+Source-public/pre-alpha is the earlier, separate milestone — inspectable and
+contributable when publication is safe, without the product guarantees below.
 
 ### Stable lifecycle across supported Home platforms
 
