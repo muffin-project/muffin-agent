@@ -58,15 +58,52 @@ export type SessionRef = {
    *
    * Resolved by the store, never invented by callers: `open()` reads it from
    * the sidecar (absent sidecar means 0, the legacy default), `/new` bumps it
-   * through `newConversation()`. Additive and optional, so every literal
-   * `{id, file}` built in tests and gateways keeps compiling — a ref without
-   * it reads as generation 0 wherever a conversation identity is derived.
+   * through `newConversation()`. When a previous `/new` died mid-transition,
+   * `open()` completes that transition first and reports the resolved
+   * generation — it never initiates one. Additive and optional, so every
+   * literal `{id, file}` built in tests and gateways keeps compiling — a ref
+   * without it reads as generation 0 wherever a conversation identity is
+   * derived.
    */
   generation?: number;
 };
 
-/** Version of the conversation-metadata sidecar. Bumped only for breaking shape changes. */
-export const CONVERSATION_METADATA_VERSION = 1;
+/**
+ * Version of the conversation-metadata sidecar. Bumped to 2 when the file
+ * became transition-aware (`pending`): a v1 reader validates `version` and
+ * ignores unknown fields, so it would accept a v2 file while silently
+ * ignoring the recovery semantics — the version bump turns that into a loud
+ * rejection instead, which is exactly what the field is for.
+ */
+export const CONVERSATION_METADATA_VERSION = 2;
+
+/** Last version readable as steady state, without transition semantics. */
+const STEADY_METADATA_VERSION = 1;
+
+type PendingTransition = {
+  /** The generation this interrupted `/new` was moving to: always exactly current + 1. */
+  to: number;
+};
+
+type ConversationMetadata = {
+  version: number;
+  generation: number;
+  pending?: PendingTransition;
+};
+
+/**
+ * Fault seam for the `/new` durability protocol, test-only by convention:
+ * production callers pass nothing. Each hook runs immediately after the
+ * durable operation it names; a test that throws inside one simulates a
+ * process crash at exactly that boundary, and the recovery rule in
+ * `generationOf` must then resolve the on-disk state deterministically.
+ */
+export type NewConversationHooks = {
+  /** After the intent sidecar commit, before transcript rotation. */
+  afterIntent?: () => void;
+  /** After transcript rotation, before the generation commit. */
+  afterRotate?: () => void;
+};
 
 export class SessionStore {
   private readonly dir: string;
@@ -79,23 +116,50 @@ export class SessionStore {
   open(id?: string): SessionRef {
     const sessionId = id ?? `${new Date().toISOString().slice(0, 10)}-${randomBytes(4).toString('hex')}`;
     const ref: SessionRef = { id: sessionId, file: join(this.dir, `${sessionId}.jsonl`) };
-    // Read only, never a write: opening a session must not create identity.
-    // A missing sidecar is generation 0 (every session that predates it);
-    // a corrupt one throws — collapsing two conversations into one without
-    // saying so would be the silent direction.
+    // Completes an interrupted `/new` when one is on disk, never starts one:
+    // opening a session must not create identity. A missing sidecar is
+    // generation 0 (every session that predates it); a corrupt one throws —
+    // collapsing two conversations into one without saying so would be the
+    // silent direction.
     ref.generation = this.generationOf(ref);
     return ref;
   }
 
   /**
-   * Which conversation generation this session is in, from the sidecar.
+   * Which conversation generation this session is in, from the sidecar —
+   * and the single recovery point for an interrupted `/new`.
    *
    * Missing metadata is 0, never an error: that is every legacy session and
    * every fresh one. Present-but-unreadable metadata is an ERROR, never 0 —
    * `missing` and `corrupt` are different facts, and treating a torn write
    * as "no history" would merge two conversations' provider stickiness
-   * without a word. Loud here so `/new` and `open` both refuse to proceed
-   * on an identity nobody can state.
+   * without a word.
+   *
+   * Compatibility: a stable v1 `{version:1,generation:N}` (no `pending`)
+   * reads as steady N — every file the previous slice wrote keeps working,
+   * and new steady writes go out as v2. A v1 file carrying `pending` is
+   * corrupt: no writer this repo ever had produced one, and a v1 reader
+   * would ignore the field and reproduce the split this protocol exists to
+   * close.
+   *
+   * Recovery (process-crash/restart consistency — no fsync/power-loss claim)
+   * decides from the active-transcript/archive PAIR, never from one side
+   * alone, and only ever touches the sidecar, never transcript or archive:
+   *
+   * - active present + archive absent → rotation never committed → roll
+   *   back: clear `pending`, stay N (old conversation wholly active);
+   * - active absent + archive present → rotation committed → roll forward:
+   *   commit N+1 (new conversation wholly active);
+   * - both present or both absent → impossible/ambiguous under the protocol
+   *   (rotation is one atomic rename of a bound name) → fail loud, no guess.
+   *
+   * `pending` is valid only as exactly `to == generation + 1`: the protocol
+   * cannot produce anything else (commit clears it atomically), so anything
+   * else is hand-edit/corruption and fails loud rather than being
+   * normalised. Recovery is idempotent — resolving twice cannot advance
+   * twice — but it is NOT command-level exactly-once: a later explicit `/new`
+   * is a new intent and advances again. Cross-process concurrent `/new` on
+   * one session is out of scope (see `newConversation`).
    */
   generationOf(session: SessionRef): number {
     const file = this.generationFile(session.id);
@@ -112,37 +176,124 @@ export class SessionStore {
     } catch {
       throw new Error(`session ${session.id}: corrupt conversation metadata at ${file}: not JSON`);
     }
+    if (typeof parsed !== 'object' || parsed === null) {
+      throw new Error(
+        `session ${session.id}: corrupt conversation metadata at ${file}: expected {"version":${CONVERSATION_METADATA_VERSION},"generation":<non-negative int>}`,
+      );
+    }
+    const record = parsed as { version?: unknown; generation?: unknown; pending?: unknown };
     if (
-      typeof parsed !== 'object' ||
-      parsed === null ||
-      (parsed as { version?: unknown }).version !== CONVERSATION_METADATA_VERSION ||
-      !Number.isInteger((parsed as { generation?: unknown }).generation) ||
-      ((parsed as { generation?: number }).generation as number) < 0
+      (record.version !== STEADY_METADATA_VERSION &&
+        record.version !== CONVERSATION_METADATA_VERSION) ||
+      !Number.isInteger(record.generation) ||
+      ((record.generation as number) as number) < 0
     ) {
       throw new Error(
         `session ${session.id}: corrupt conversation metadata at ${file}: expected {"version":${CONVERSATION_METADATA_VERSION},"generation":<non-negative int>}`,
       );
     }
-    return (parsed as { generation: number }).generation;
+    const generation = record.generation as number;
+    if (record.pending === undefined) return generation;
+    // A stable v1 file must not carry transition state: no writer ever
+    // produced one, and an old reader would ignore it and split.
+    if (record.version !== CONVERSATION_METADATA_VERSION) {
+      throw new Error(
+        `session ${session.id}: corrupt conversation metadata at ${file}: version ${String(record.version)} carries transition state it cannot describe`,
+      );
+    }
+    // Pending means exactly N → N+1: the only transition the protocol writes.
+    if (
+      typeof record.pending !== 'object' ||
+      record.pending === null ||
+      Array.isArray(record.pending) ||
+      Object.keys(record.pending).join() !== 'to' ||
+      (record.pending as { to?: unknown }).to !== generation + 1
+    ) {
+      throw new Error(
+        `session ${session.id}: corrupt conversation metadata at ${file}: pending must be exactly {"to":${generation + 1}}`,
+      );
+    }
+    const active = existsSync(session.file);
+    const archived = existsSync(this.archiveFile(session.id, generation));
+    if (active && !archived) {
+      // Rotation never committed: clear the intent, old conversation stands.
+      this.writeMetadata(session.id, { version: CONVERSATION_METADATA_VERSION, generation });
+      return generation;
+    }
+    if (!active && archived) {
+      // Rotation committed: complete the bump the crash interrupted.
+      this.writeMetadata(session.id, {
+        version: CONVERSATION_METADATA_VERSION,
+        generation: generation + 1,
+      });
+      return generation + 1;
+    }
+    throw new Error(
+      `session ${session.id}: ambiguous conversation transition at ${file}: active transcript ${active ? 'present' : 'absent'} with archive ${archived ? 'present' : 'absent'} — refusing to guess which conversation is live`,
+    );
   }
 
   /**
    * `/new` accettato: chiude la conversazione corrente e ne apre la successiva.
    *
-   * Transcript rotation keeps its current semantics (archive when there is
-   * one, destroy nothing, same session id) AND the generation always moves —
-   * even when no `.jsonl` exists to archive. The `/new` intent draws the
-   * conversation boundary, not the physical transcript: a bare `/new`
-   * (`rotate` returning null) still ends the provider stickiness of the
-   * previous conversation.
+   * Crash-consistent transition (process-crash/restart scope): with a
+   * transcript present the boundary crosses two durable files, so the intent
+   * is committed BEFORE the rotation and the generation AFTER it — three
+   * atomic whole-file operations, recoverable in `generationOf` from the
+   * active/archive pair:
+   *
+   * 1. sidecar ← `{v2, g:N, pending:{to:N+1}}` (INTENT);
+   * 2. transcript renamed to the generation-bound archive `<id>.gN.jsonl`
+   *    (ROTATE — one atomic rename of a pre-bound name; refuses if the
+   *    destination already exists instead of silently replacing it);
+   * 3. sidecar ← `{v2, g:N+1}` (COMMIT — pending cleared in the same op).
+   *
+   * With no transcript there is only step 3 (single op, no partial state):
+   * a bare `/new` still ends the previous conversation's provider stickiness
+   * — the `/new` intent draws the boundary, not the physical transcript.
+   *
+   * The first read resolves any interrupted transition, so retrying after a
+   * crash completes rather than duplicates: recovery is idempotent, while a
+   * later explicit `/new` stays a new intent and advances again (no
+   * command-level exactly-once — the surface carries no dedupe id, and this
+   * slice does not invent one).
+   *
+   * Same-process serialization holds by construction (fully synchronous, no
+   * await points — concurrent async callers cannot interleave). Concurrent
+   * `/new` from separate processes on one session is NOT safe (pre-existing
+   * rotation race; CLI and gateway share one home) — documented limitation,
+   * unchanged by this protocol.
    *
    * Corrupt metadata aborts BEFORE any state changes: neither the transcript
    * nor the generation moves when the current generation cannot be stated.
    */
-  newConversation(session: SessionRef, now: Date = new Date()): string | null {
+  newConversation(session: SessionRef, hooks?: NewConversationHooks): string | null {
     const generation = this.generationOf(session);
-    const archivio = this.rotate(session, now);
-    this.writeGeneration(session, generation + 1);
+    if (!existsSync(session.file)) {
+      this.writeMetadata(session.id, {
+        version: CONVERSATION_METADATA_VERSION,
+        generation: generation + 1,
+      });
+      return null;
+    }
+    const archivio = this.archiveFile(session.id, generation);
+    if (existsSync(archivio)) {
+      throw new Error(
+        `session ${session.id}: conversation archive already exists at ${archivio} — refusing to replace generation ${generation}'s transcript`,
+      );
+    }
+    this.writeMetadata(session.id, {
+      version: CONVERSATION_METADATA_VERSION,
+      generation,
+      pending: { to: generation + 1 },
+    });
+    hooks?.afterIntent?.();
+    renameSync(session.file, archivio);
+    hooks?.afterRotate?.();
+    this.writeMetadata(session.id, {
+      version: CONVERSATION_METADATA_VERSION,
+      generation: generation + 1,
+    });
     return archivio;
   }
 
@@ -177,22 +328,39 @@ export class SessionStore {
    *
    * A sibling of the transcript, keyed by session id — so the private owner
    * scope (`owner` on every surface) shares one generation, while every
-   * group/topic key carries its own. Never `.jsonl`, so `rotate()`'s suffix
-   * replacement can never touch it, and transcript readers never see it.
+   * group/topic key carries its own. Never `.jsonl`-suffixed as the active
+   * transcript, so transcript readers never see it; the generation-bound
+   * archives below share the suffix but are addressed by exact derived
+   * names, never globbed.
    */
   private generationFile(sessionId: string): string {
     return join(this.dir, `${sessionId}.conv.json`);
   }
 
   /**
-   * Durable bump, atomic: temporary file on the same filesystem, then rename.
-   * A torn write must leave either the old generation or the new one behind —
-   * never a half file that `generationOf` would then have to interpret.
+   * Where generation N's transcript rests after the N → N+1 rotation.
+   *
+   * Deterministic per generation and derived — never persisted, never
+   * accepted from outside: recovery decides from the active/archive pair,
+   * and a persisted path would let a hand-edited sidecar point the decision
+   * at an arbitrary file under (or outside) the session directory. Rotation
+   * refuses a pre-existing destination, so POSIX rename can never silently
+   * replace one generation's archive with another's.
    */
-  private writeGeneration(session: SessionRef, generation: number): void {
-    const dest = this.generationFile(session.id);
+  private archiveFile(sessionId: string, generation: number): string {
+    return join(this.dir, `${sessionId}.g${generation}.jsonl`);
+  }
+
+  /**
+   * Durable sidecar write, atomic: temporary file on the same filesystem,
+   * then rename. A torn write leaves either the old object or the new one
+   * behind — never a half file that `generationOf` would then have to
+   * interpret (and a half file would fail its JSON parse loudly anyway).
+   */
+  private writeMetadata(sessionId: string, metadata: ConversationMetadata): void {
+    const dest = this.generationFile(sessionId);
     const tmp = `${dest}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ version: CONVERSATION_METADATA_VERSION, generation }), 'utf8');
+    writeFileSync(tmp, JSON.stringify(metadata), 'utf8');
     renameSync(tmp, dest);
   }
 

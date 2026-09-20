@@ -109,25 +109,40 @@ describe('conversation generation · principal != session != conversation != tur
     expect(restarted.open('owner').generation).toBe(1);
   });
 
-  it('/new avanza g0 -> g1 -> g2', () => {
+  it('/new avanza g0 -> g1 -> g2, un archivio deterministico per generation', () => {
     const dir = home();
     const store = new SessionStore(dir);
     const ref = store.open('owner');
     store.append(ref, msg('user', 'uno'));
-    store.newConversation(ref);
+    const a0 = store.newConversation(ref);
+    expect(a0).not.toBeNull();
+    expect(a0!).toContain('owner.g0.jsonl');
     expect(store.open('owner').generation).toBe(1);
     store.append(ref, msg('user', 'due'));
-    store.newConversation(ref);
+    const a1 = store.newConversation(ref);
+    expect(a1!).toContain('owner.g1.jsonl');
     expect(store.open('owner').generation).toBe(2);
+    // Ogni archivio tiene la sua generation, mai mescolati né saltati.
+    expect(readFileSync(a0!, 'utf8')).toContain('uno');
+    expect(readFileSync(a0!, 'utf8')).not.toContain('due');
+    expect(readFileSync(a1!, 'utf8')).toContain('due');
   });
 
   it('/new con transcript assente incrementa comunque e non archivia niente', () => {
     // L'intento decide il confine, non il file: un `/new` a conversazione
-    // vuota chiude comunque lo stickiness della precedente.
+    // vuota chiude comunque lo stickiness della precedente. Percorso a una
+    // sola operazione durevole: i ganci di faglia non scattano proprio.
     const dir = home();
     const store = new SessionStore(dir);
     const ref = store.open('owner');
-    expect(store.newConversation(ref)).toBeNull();
+    const fired: string[] = [];
+    expect(
+      store.newConversation(ref, {
+        afterIntent: () => void fired.push('intent'),
+        afterRotate: () => void fired.push('rotate'),
+      }),
+    ).toBeNull();
+    expect(fired).toEqual([]);
     expect(store.open('owner').generation).toBe(1);
   });
 
@@ -136,7 +151,7 @@ describe('conversation generation · principal != session != conversation != tur
     const store = new SessionStore(dir);
     const ref = store.open('owner');
     store.append(ref, msg('user', 'ciao'));
-    const archivio = store.newConversation(ref, new Date('2026-09-19T10:00:00.000Z'));
+    const archivio = store.newConversation(ref);
     expect(archivio).not.toBeNull();
     expect(readFileSync(archivio!, 'utf8')).toContain('ciao');
     expect(store.read(ref)).toEqual([]);
@@ -180,6 +195,169 @@ describe('conversation generation · principal != session != conversation != tur
     store.append(ref, msg('user', 'ciao'));
     store.newConversation(ref);
     const sidecar = JSON.parse(readFileSync(join(dir, 'sessions', 'owner.conv.json'), 'utf8'));
-    expect(sidecar).toEqual({ version: 1, generation: 1 });
+    expect(sidecar).toEqual({ version: 2, generation: 1 });
+  });
+
+  it('v1 stabile si legge come steady, e il primo /new lo porta a v2', () => {
+    // Backward compat: ogni file scritto dalla slice precedente resta valido.
+    const dir = home();
+    const store = new SessionStore(dir);
+    writeFileSync(join(dir, 'sessions', 'owner.conv.json'), '{"version":1,"generation":3}');
+    expect(store.open('owner').generation).toBe(3);
+    store.append(store.open('owner'), msg('user', 'dopo'));
+    store.newConversation(store.open('owner'));
+    const sidecar = JSON.parse(readFileSync(join(dir, 'sessions', 'owner.conv.json'), 'utf8'));
+    expect(sidecar).toEqual({ version: 2, generation: 4 });
+  });
+
+  it('v1 con pending è corrotto: un lettore vecchio lo ignorerebbe e splittrebbe', () => {
+    const dir = home();
+    const store = new SessionStore(dir);
+    writeFileSync(
+      join(dir, 'sessions', 'owner.conv.json'),
+      '{"version":1,"generation":0,"pending":{"to":1}}',
+    );
+    expect(() => store.open('owner')).toThrow(/transition state/);
+  });
+
+  it('un lettore v1 rifiuta i file v2 invece di ignorarne la semantica', () => {
+    // Replica del predicato di accettazione v1 (version === 1, pending
+    // ignorato): deve dire no a ciò che scriviamo adesso, ad alta voce.
+    const dir = home();
+    const store = new SessionStore(dir);
+    const ref = store.open('owner');
+    store.append(ref, msg('user', 'ciao'));
+    store.newConversation(ref);
+    const raw = readFileSync(join(dir, 'sessions', 'owner.conv.json'), 'utf8');
+    const v1Accepts = (JSON.parse(raw) as { version?: unknown }).version === 1;
+    expect(v1Accepts).toBe(false);
+  });
+});
+
+describe('conversation generation · crash-consistency del confine /new', () => {
+  const crash = () => {
+    throw new Error('simulated process crash');
+  };
+
+  it('B1: crash dopo intent, prima di rotate → vecchia conversazione interamente attiva', () => {
+    const dir = home();
+    const store = new SessionStore(dir);
+    const ref = store.open('owner');
+    store.append(ref, msg('user', 'ciao'));
+    expect(() => store.newConversation(ref, { afterIntent: crash })).toThrow('simulated process crash');
+
+    // Restart: un'altra istanza, come dopo un crash vero.
+    const restarted = new SessionStore(dir);
+    expect(restarted.open('owner').generation).toBe(0);
+    // Transcript intatto, intent ritirato, file stabile senza pending.
+    expect(restarted.read(restarted.open('owner')).map((m) => m.content)).toEqual(['ciao']);
+    expect(JSON.parse(readFileSync(join(dir, 'sessions', 'owner.conv.json'), 'utf8'))).toEqual({
+      version: 2,
+      generation: 0,
+    });
+    // Idempotente: riaprire non avanza mai una seconda volta.
+    expect(restarted.open('owner').generation).toBe(0);
+    expect(restarted.open('owner').generation).toBe(0);
+    // E il /new successivo funziona da capo, una sola volta.
+    restarted.newConversation(restarted.open('owner'));
+    expect(restarted.open('owner').generation).toBe(1);
+  });
+
+  it('B2: crash dopo rotate, prima di commit → nuova conversazione interamente attiva', () => {
+    const dir = home();
+    const store = new SessionStore(dir);
+    const ref = store.open('owner');
+    store.append(ref, msg('user', 'ciao'));
+    expect(() => store.newConversation(ref, { afterRotate: crash })).toThrow('simulated process crash');
+
+    // Il falsifier originale: MAI vecchia identità + transcript svuotato.
+    const restarted = new SessionStore(dir);
+    const reopened = restarted.open('owner');
+    expect(reopened.generation).toBe(1);
+    expect(restarted.read(reopened)).toEqual([]);
+    expect(readFileSync(join(dir, 'sessions', 'owner.g0.jsonl'), 'utf8')).toContain('ciao');
+    expect(JSON.parse(readFileSync(join(dir, 'sessions', 'owner.conv.json'), 'utf8'))).toEqual({
+      version: 2,
+      generation: 1,
+    });
+    // Idempotente: nessun doppio avanzamento al riaprire.
+    expect(restarted.open('owner').generation).toBe(1);
+    expect(restarted.open('owner').generation).toBe(1);
+  });
+
+  it('B3: crash dopo commit → open è no-op, un /new dopo è un nuovo intento', () => {
+    const dir = home();
+    const store = new SessionStore(dir);
+    const ref = store.open('owner');
+    store.append(ref, msg('user', 'ciao'));
+    store.newConversation(ref);
+    const committed = readFileSync(join(dir, 'sessions', 'owner.conv.json'), 'utf8');
+
+    // Il caller è morto prima di osservare, ma lo stato è intero: reopen non tocca niente.
+    const restarted = new SessionStore(dir);
+    expect(restarted.open('owner').generation).toBe(1);
+    expect(readFileSync(join(dir, 'sessions', 'owner.conv.json'), 'utf8')).toBe(committed);
+    // Un /new esplicito dopo è un nuovo confine, non un retry: avanza, non duplica.
+    restarted.newConversation(restarted.open('owner'));
+    expect(restarted.open('owner').generation).toBe(2);
+  });
+
+  it('coppia ambigua attiva+archivio → fail loud, mai un guess', () => {
+    const dir = home();
+    const store = new SessionStore(dir);
+    const ref = store.open('owner');
+    store.append(ref, msg('user', 'ciao'));
+    // Stato che il protocollo non può produrre: intent + transcript ancora
+    // attivo + archivio già presente (mano esterna o interleave fuori scope).
+    writeFileSync(join(dir, 'sessions', 'owner.conv.json'), '{"version":2,"generation":0,"pending":{"to":1}}');
+    writeFileSync(join(dir, 'sessions', 'owner.g0.jsonl'), 'archivio piantato');
+    expect(() => store.open('owner')).toThrow(/ambiguous conversation transition/);
+    expect(() => store.newConversation(ref)).toThrow(/ambiguous conversation transition/);
+    // Loud non distrugge: niente si è mosso.
+    expect(store.read(ref).map((m) => m.content)).toEqual(['ciao']);
+  });
+
+  it('coppia ambigua né attiva né archivio → fail loud, mai g0 silenzioso', () => {
+    const dir = home();
+    const store = new SessionStore(dir);
+    store.open('owner');
+    // Intent senza né transcript né archivio: il transcript è sparito fuori
+    // dal protocollo. Tornare g0 in silenzio sarebbe il merge che chiudiamo.
+    writeFileSync(join(dir, 'sessions', 'owner.conv.json'), '{"version":2,"generation":0,"pending":{"to":1}}');
+    expect(() => store.open('owner')).toThrow(/ambiguous conversation transition/);
+  });
+
+  it('pending diverso da N → N+1 è mano esterna: fail loud', () => {
+    const dir = home();
+    const store = new SessionStore(dir);
+    const ref = store.open('owner');
+    for (const [name, pending] of [
+      ['stale (to == g)', '{"to":0}'],
+      ['salto (to == g+2)', '{"to":2}'],
+      ['negativo', '{"to":-1}'],
+      ['non intero', '{"to":"1"}'],
+      ['chiavi extra', '{"to":1,"archive":"x"}'],
+      ['non oggetto', '[1]'],
+      ['null', 'null'],
+    ] as const) {
+      writeFileSync(join(dir, 'sessions', 'owner.conv.json'), `{"version":2,"generation":0,"pending":${pending}}`);
+      expect(() => store.generationOf(ref), name).toThrow(/conversation metadata/);
+      expect(() => store.open('owner'), name).toThrow(/conversation metadata/);
+      expect(() => store.newConversation(ref), name).toThrow(/conversation metadata/);
+    }
+  });
+
+  it('destinazione archivio preesistente → /new rifiuta, niente viene sostituito', () => {
+    // POSIX rename rimpiazzerebbe in silenzio: il confine lo vieta.
+    const dir = home();
+    const store = new SessionStore(dir);
+    const ref = store.open('owner');
+    store.append(ref, msg('user', 'ciao'));
+    writeFileSync(join(dir, 'sessions', 'owner.g0.jsonl'), 'archivio piantato');
+    expect(() => store.newConversation(ref)).toThrow(/already exists/);
+    // Niente si è mosso: né transcript né sidecar.
+    expect(store.read(ref).map((m) => m.content)).toEqual(['ciao']);
+    expect(existsSync(join(dir, 'sessions', 'owner.conv.json'))).toBe(false);
+    expect(store.open('owner').generation).toBe(0);
   });
 });

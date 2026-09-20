@@ -115,4 +115,28 @@ describe('conversation identity end to end · loop to provider call', () => {
     expect(provider.seen[2]!.conversation).toBe('owner#g1');
     expect(provider.seen[2]!.conversation).not.toBe(provider.seen[0]!.conversation);
   });
+
+  it('a /new interrupted after rotation never sends the old identity with a cleared transcript', async () => {
+    // B2 at the loop level: the transcript moved, the commit died, the
+    // process restarted. Recovery must hand the turn the NEW identity —
+    // sending `owner#g0` now would merge two conversations upstream.
+    const { deps, sessions, provider } = world();
+    const first = sessions.open('owner');
+    sessions.append(first, {
+      role: 'user',
+      content: 'ciao',
+      surface: 'cli',
+      createdAt: '2026-09-20T10:00:00.000Z',
+    });
+    expect(() =>
+      sessions.newConversation(first, {
+        afterRotate: () => {
+          throw new Error('simulated process crash');
+        },
+      }),
+    ).toThrow('simulated process crash');
+
+    await runTurn(deps, inputFor(sessions.open('owner')));
+    expect(provider.seen[0]!.conversation).toBe('owner#g1');
+  });
 });
