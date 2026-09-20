@@ -1,0 +1,4 @@
+# Default review owner while Muffin has a single maintainer.
+# Keep this intentionally small; add path-specific owners only when real
+# maintainers exist for those areas.
+* @GiustoPiedimonte
