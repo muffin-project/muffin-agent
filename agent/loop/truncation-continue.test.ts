@@ -832,3 +832,134 @@ describe('#615 streaming continuation: visible == durable, never duplicated', ()
     expect(w.turns.get(r.turnId)?.counters.truncationsUsed).toBe(0);
   });
 });
+
+/**
+ * #615 multi-prior/full-prefix fix: shared `resolveContinuationSuffix`
+ * (FULL then LAST, exact bytes only) for durable + live.
+ *
+ * Canonical judge counterexamples, locked exactly:
+ * - A: AAA-, BBB-, AAA-BBB-CCC-, DDD => AAA-BBB-CCC-DDD (non-streaming).
+ * - B: same shape streaming, visible == durable == expected.
+ * - C: AAA-, BBB-, AAA-BBB- exact full repeat => no-progress (no append,
+ *   no budget burn, no extra provider call).
+ * - D: multi-prior LAST-only repeat still strips (AAA-, BBB-, BBB-CCC-).
+ * - E: divergent new chunks pass through whole.
+ */
+describe('#615 multi-prior full-prefix (shared FULL-then-LAST rule)', () => {
+  it('A: multi-prior full-prefix continuation appends only new bytes', async () => {
+    const w = world(
+      [truncatedPartial('AAA-'), truncatedPartial('BBB-'), truncatedPartial('AAA-BBB-CCC-'), finalAnswer('DDD')],
+      { withMemory: true },
+    );
+    const session = w.sessions.open('owner');
+    const r = await runTurn(w.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: 'vai' });
+    expect(r.stopped).toBe('answered');
+    expect(r.text).toBe('AAA-BBB-CCC-DDD');
+    expect(w.provider.seen).toHaveLength(4);
+    const row = w.turns.get(r.turnId);
+    // 3 accepted partials (AAA-, BBB-, CCC-), transport untouched.
+    expect(row?.counters.truncationsUsed).toBe(3);
+    expect(row?.counters.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES);
+    expect((row?.messages ?? []).filter((m) => m.origin === 'partial')).toHaveLength(3);
+    // One logical Turn, one final Session answer, one final Memory answer.
+    expect(w.sessions.read(session).filter((m) => m.role === 'assistant')).toHaveLength(1);
+    expect(w.sessions.read(session).filter((m) => m.role === 'assistant')[0]!.content).toBe('AAA-BBB-CCC-DDD');
+    const agents = w.memStore.pendingEpisodes('host', 1, 30).filter((e) => e.role === 'agent');
+    expect(agents.filter((e) => e.content === 'AAA-BBB-CCC-DDD')).toHaveLength(1);
+  });
+
+  it('B: same shape streaming — visible == durable == expected, never duplicated', async () => {
+    const deltas: TurnDelta[] = [];
+    let n = 0;
+    const provider: Provider = {
+      kind: 'openai-compat',
+      async chat(): Promise<ChatResult> {
+        throw new Error('unreachable');
+      },
+      async *chatStream() {
+        n += 1;
+        if (n === 1) {
+          yield { type: 'text_delta', text: 'AAA-' };
+          yield { type: 'done', result: truncatedPartial('AAA-') };
+        } else if (n === 2) {
+          yield { type: 'text_delta', text: 'BBB-' };
+          yield { type: 'done', result: truncatedPartial('BBB-') };
+        } else if (n === 3) {
+          yield { type: 'text_delta', text: 'AAA-' };
+          yield { type: 'text_delta', text: 'BBB-' };
+          yield { type: 'text_delta', text: 'CCC-' };
+          yield { type: 'done', result: truncatedPartial('AAA-BBB-CCC-') };
+        } else {
+          yield { type: 'text_delta', text: 'DDD' };
+          yield { type: 'done', result: finalAnswer('DDD') };
+        }
+      },
+    };
+    const w = world([finalAnswer('unused')], { withMemory: true });
+    (w.deps as { provider: Provider }).provider = provider;
+    const session = w.sessions.open('owner');
+    // Isolate to the truncated turn: prior history must not leak, but the
+    // streaming turn itself starts clean in this session for exactness.
+    const r = await runTurn(w.deps, {
+      principal: owner, tenant: 'host', surface: 'cli', session, text: 'vai', onDelta: (d) => deltas.push(d),
+    });
+    // First turn in this session used the streaming script from call 1.
+    expect(r.stopped).toBe('answered');
+    expect(r.text).toBe('AAA-BBB-CCC-DDD');
+    expect(visibleText(deltas)).toBe('AAA-BBB-CCC-DDD');
+    expect(visibleText(deltas)).not.toContain('AAA-BBB-AAA-BBB-');
+    expect(durablePartials(w.deps, r.turnId)).toBe('AAA-BBB-CCC-');
+    expect(w.sessions.read(session).filter((m) => m.role === 'assistant').map((m) => m.content)).toEqual([
+      'AAA-BBB-CCC-DDD',
+    ]);
+    expect(w.turns.get(r.turnId)?.counters.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES);
+  });
+
+  it('C: multi-prior exact full-prefix repeat is no-progress — no append, no budget, no extra call', async () => {
+    const w = world([truncatedPartial('AAA-'), truncatedPartial('BBB-'), truncatedPartial('AAA-BBB-')]);
+    const session = w.sessions.open('owner');
+    const r = await runTurn(w.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: 'vai' });
+    expect(r.stopped).toBe('continuable');
+    expect(r.reason).toBe('truncated');
+    // Exactly 3 provider calls: the third proved zero new bytes and stopped.
+    expect(w.provider.seen).toHaveLength(3);
+    const row = w.turns.get(r.turnId);
+    // Third chunk dropped, not appended: 2 partials, 2 budget units.
+    expect((row?.messages ?? []).filter((m) => m.origin === 'partial')).toHaveLength(2);
+    expect(row?.counters.truncationsUsed).toBe(2);
+    expect(row?.counters.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES);
+    expect(w.sessions.read(session).filter((m) => m.role === 'assistant')).toHaveLength(0);
+  });
+
+  it('D: multi-prior LAST-only repeat still strips to new bytes', async () => {
+    const w = world(
+      [truncatedPartial('AAA-'), truncatedPartial('BBB-'), truncatedPartial('BBB-CCC-'), finalAnswer('DDD')],
+      { withMemory: true },
+    );
+    const session = w.sessions.open('owner');
+    const r = await runTurn(w.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: 'vai' });
+    expect(r.stopped).toBe('answered');
+    expect(r.text).toBe('AAA-BBB-CCC-DDD');
+    expect(w.provider.seen).toHaveLength(4);
+    const row = w.turns.get(r.turnId);
+    expect(row?.counters.truncationsUsed).toBe(3);
+    expect(row?.counters.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES);
+    expect(w.sessions.read(session).filter((m) => m.role === 'assistant')[0]!.content).toBe('AAA-BBB-CCC-DDD');
+  });
+
+  it('E: divergent new chunks pass through whole, unchanged', async () => {
+    const w = world(
+      [truncatedPartial('AAA-'), truncatedPartial('BBB-'), truncatedPartial('CCC-'), finalAnswer('DDD')],
+      { withMemory: true },
+    );
+    const session = w.sessions.open('owner');
+    const r = await runTurn(w.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: 'vai' });
+    expect(r.stopped).toBe('answered');
+    expect(r.text).toBe('AAA-BBB-CCC-DDD');
+    expect(w.provider.seen).toHaveLength(4);
+    const row = w.turns.get(r.turnId);
+    expect(row?.counters.truncationsUsed).toBe(3);
+    expect(row?.counters.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES);
+    expect((row?.messages ?? []).filter((m) => m.origin === 'partial')).toHaveLength(3);
+  });
+});

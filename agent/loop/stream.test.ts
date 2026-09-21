@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatResult, StreamEvent } from '../providers/types.js';
 import { ProviderStreamError } from '../providers/types.js';
-import { continuationDedup, drainStream, edgeTrimmer, retryDelayMs, stripRepeatedPrefix } from './stream.js';
+import { continuationDedup, drainStream, edgeTrimmer, resolveContinuationSuffix, retryDelayMs, stripRepeatedPrefix } from './stream.js';
 
 const doneResult = (text: string): ChatResult => ({
   text,
@@ -169,6 +169,47 @@ describe('continuationDedup · hold-while-matching, exact mirror of the strip', 
     ];
     for (const [ref, pieces] of cases) {
       expect(shown(ref, pieces)).toBe(stripRepeatedPrefix(ref, pieces.join('')));
+    }
+  });
+});
+
+describe('resolveContinuationSuffix · shared FULL-then-LAST rule (multi-prior fix)', () => {
+  it('FULL first, then LAST, exact bytes only', () => {
+    // Full-prefix repeat + new strips FULL.
+    expect(resolveContinuationSuffix('AAA-BBB-', 'BBB-', 'AAA-BBB-CCC-')).toBe('CCC-');
+    // LAST-only repeat + new strips LAST when FULL does not match.
+    expect(resolveContinuationSuffix('AAA-BBB-', 'BBB-', 'BBB-CCC-')).toBe('CCC-');
+    // Exact FULL repeat is no-progress.
+    expect(resolveContinuationSuffix('AAA-BBB-', 'BBB-', 'AAA-BBB-')).toBe('');
+    // Exact LAST repeat is no-progress.
+    expect(resolveContinuationSuffix('AAA-BBB-', 'BBB-', 'BBB-')).toBe('');
+    // Strict prefix of FULL is no-progress.
+    expect(resolveContinuationSuffix('AAA-BBB-', 'BBB-', 'AAA-')).toBe('');
+    // Divergent passes through whole.
+    expect(resolveContinuationSuffix('AAA-BBB-', 'BBB-', 'XYZ-')).toBe('XYZ-');
+    expect(resolveContinuationSuffix('AAA-', 'AAA-', 'BBB-')).toBe('BBB-');
+    // No prior: unchanged.
+    expect(resolveContinuationSuffix(undefined, undefined, 'NUOVO')).toBe('NUOVO');
+    expect(resolveContinuationSuffix('', '', 'NUOVO')).toBe('NUOVO');
+  });
+
+  it('two-reference gate output always equals shared suffix over the concatenation', () => {
+    function shown2(full: string, last: string, pieces: string[]): string {
+      const gate = continuationDedup(full, last);
+      return pieces.map((p) => gate.push(p)).filter((x): x is string => x !== null).join('');
+    }
+    const cases: [string, string, string[]][] = [
+      ['AAA-BBB-', 'BBB-', ['AAA-', 'BBB-', 'CCC-']],
+      ['AAA-BBB-', 'BBB-', ['AAA-BBB-CCC-']],
+      ['AAA-BBB-', 'BBB-', ['AAA-BBB-']],
+      ['AAA-BBB-', 'BBB-', ['BBB-', 'CCC-']],
+      ['AAA-BBB-', 'BBB-', ['BBB-']],
+      ['AAA-BBB-', 'BBB-', ['XYZ-']],
+      ['AAA-', 'AAA-', ['AAA-', 'BB']],
+      ['AAA-', 'AAA-', ['AA']],
+    ];
+    for (const [full, last, pieces] of cases) {
+      expect(shown2(full, last, pieces)).toBe(resolveContinuationSuffix(full, last, pieces.join('')));
     }
   });
 });

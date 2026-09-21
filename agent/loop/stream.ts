@@ -74,64 +74,150 @@ export function stripRepeatedPrefix(reference: string | undefined, chunk: string
 }
 
 /**
+ * Shared continuation-suffix rule for #615 multi-prior/full-prefix fix.
+ *
+ * ONE pure primitive used by BOTH durable acceptance (`round.ts` truncation
+ * and final-answer paths) and live streaming (`continuationDedup` below), so
+ * the two can never diverge again.
+ *
+ * Exact structural byte-prefix semantics only — never fuzzy, never paraphrase:
+ * - try FULL current logical prefix first (`full` = concatenation of all
+ *   accepted `partial` chunks). If the candidate starts with it, only the
+ *   bytes beyond it are new. If the candidate is itself a strict prefix of
+ *   it, it carries zero bytes beyond what is preserved.
+ * - otherwise try LAST accepted partial chunk (`last`). Same exact rule.
+ * - otherwise the candidate diverges from both: it is real new output whole,
+ *   even the bytes that happen to overlap.
+ * - if EITHER proof leaves zero new bytes (`''`), the candidate is
+ *   no-progress: nothing new is lost (its bytes are already preserved) and
+ *   the caller must drop it without budget burn or extra provider call.
+ *
+ * `undefined`/empty references disable that proof (ordinary first call).
+ */
+export function resolveContinuationSuffix(
+  full: string | undefined,
+  last: string | undefined,
+  chunk: string,
+): string {
+  if (full !== undefined && full !== '') {
+    const viaFull = stripRepeatedPrefix(full, chunk);
+    if (viaFull === '') return '';
+    if (viaFull !== chunk) return viaFull;
+  }
+  if (last !== undefined && last !== '') {
+    const viaLast = stripRepeatedPrefix(last, chunk);
+    if (viaLast === '') return '';
+    if (viaLast !== chunk) return viaLast;
+  }
+  return chunk;
+}
+
+/**
  * Live-delta half of the exact-prefix continuation rule (#615 streaming
- * blocker).
+ * blocker, extended to multi-prior/full-prefix).
  *
- * A continuation call already has a structurally accepted previous chunk `R`
- * (origin `partial`). While the newly streamed response still exactly matches
- * the beginning of `R`, those candidate-duplicate bytes are HELD, never
- * published: emitting them would show the owner bytes the durable answer will
- * not contain, and `releaseContinuable()` retracts nothing.
+ * A continuation call already has a structurally accepted logical prefix
+ * `full` plus its last chunk `last` (both origin `partial`). The gate holds
+ * candidate-duplicate bytes while the stream could still prove to be a repeat
+ * of either, and publishes exactly `resolveContinuationSuffix(full, last, s)`
+ * over the concatenation `s` seen so far — by construction the concatenation
+ * of everything this gate publishes for a call always equals the durable
+ * suffix for that call's final `result.text`.
  *
- * - the stream diverges before fully matching `R`: the held bytes were real
- *   new output after all — flush them plus the divergent remainder;
- * - the stream matches all of `R`: suppress the repeated prefix; bytes that
- *   follow are the only new output and pass through;
- * - the stream ends having matched all of `R` with nothing after: the caller
- *   sees an empty suffix via `stripRepeatedPrefix` and treats it as
- *   no-progress, having shown nothing twice.
+ * Implemented as accumulate-and-diff over the shared primitive above (not a
+ * second matcher): `s` accumulates post-`edgeTrimmer` pieces, `cur` is the
+ * shared suffix for `s`, and each `push` publishes `cur` minus what was
+ * already published. While `s` is still a prefix of `full`/`last`, `cur` is
+ * `''` so nothing is published; on full/last completion `cur` becomes the
+ * bytes beyond it; on divergence from both `cur` becomes all of `s` (the held
+ * bytes were real new output after all). Returns `null` when nothing is
+ * showable yet, otherwise the exact bytes to publish (never `''`).
  *
  * Fed with post-`edgeTrimmer` pieces (whose concatenation is exactly the
  * result text the durable side strips), so both sides compute over the same
- * string. Returns `null` when nothing is showable yet, otherwise the exact
- * bytes to publish (never `''`). Pass-through when the caller has no
- * reference: ordinary non-continuation streaming never constructs this.
+ * string. Single-argument form `continuationDedup(reference)` is the legacy
+ * last-chunk-only shape preserved for existing unit callers: it behaves as
+ * `full=reference, last=undefined`.
  */
-export function continuationDedup(reference: string): {
+export function continuationDedup(full: string, last?: string): {
   /** Next showable bytes, or `null` while holding a candidate duplicate. */
   push(piece: string): string | null;
   /** Bytes currently held as a candidate duplicate (for tests). */
   pending(): number;
 } {
-  let matched = 0;
-  let diverged = false;
-  let complete = reference === '';
+  const hasFull = full !== '';
+  const hasLast = last !== undefined && last !== '';
+  // Fast path preserved: ordinary single-reference callers (including the
+  // pre-existing unit tests) keep the exact incremental matcher they had.
+  // Two-reference callers go through the shared-primitive accumulate-and-diff
+  // below, which is definitionally identical to durable acceptance.
+  if (hasFull && !hasLast) {
+    const reference = full;
+    let matched = 0;
+    let diverged = false;
+    let complete = reference === '';
+    return {
+      push(piece: string): string | null {
+        if (piece === '') return null;
+        if (diverged || complete) return piece;
+        const rest = reference.slice(matched);
+        let k = 0;
+        while (k < piece.length && k < rest.length && piece[k] === rest[k]) k += 1;
+        matched += k;
+        if (matched >= reference.length) {
+          // The whole previous chunk just repeated: suppress it, emit only
+          // bytes beyond it (possibly none yet — the stream may still end here,
+          // which the caller reads as no-progress).
+          complete = true;
+          const extra = piece.slice(k);
+          return extra === '' ? null : extra;
+        }
+        if (k < piece.length) {
+          // Diverged before matching R: the held bytes were real new output —
+          // flush them with the divergent remainder.
+          diverged = true;
+          return reference.slice(0, matched) + piece.slice(k);
+        }
+        return null;
+      },
+      pending(): number {
+        return diverged || complete ? 0 : matched;
+      },
+    };
+  }
+  let seen = '';
+  let published = '';
+  let settled: 'holding' | 'complete' | 'diverged' = 'holding';
   return {
     push(piece: string): string | null {
       if (piece === '') return null;
-      if (diverged || complete) return piece;
-      const rest = reference.slice(matched);
-      let k = 0;
-      while (k < piece.length && k < rest.length && piece[k] === rest[k]) k += 1;
-      matched += k;
-      if (matched >= reference.length) {
-        // The whole previous chunk just repeated: suppress it, emit only
-        // bytes beyond it (possibly none yet — the stream may still end here,
-        // which the caller reads as no-progress).
-        complete = true;
-        const extra = piece.slice(k);
-        return extra === '' ? null : extra;
+      if (settled !== 'holding') return piece;
+      seen += piece;
+      const cur = resolveContinuationSuffix(
+        hasFull ? full : undefined,
+        hasLast ? (last as string) : undefined,
+        seen,
+      );
+      // Still a prefix of full/last (or exact repeat with nothing after yet):
+      // hold everything. `cur==='' ` is exactly the shared no-progress proof
+      // for the stream seen so far.
+      if (cur === '') return null;
+      // `cur` is either the bytes beyond full/last (completion) or all of
+      // `seen` (divergence proved real). Either way only the unpublished tail
+      // is showable now; the rest was already published (divergence flush) or
+      // is the suppressed repeat itself.
+      if (cur === seen) {
+        settled = 'diverged';
+        const out = seen.slice(published.length);
+        published = seen;
+        return out === '' ? null : out;
       }
-      if (k < piece.length) {
-        // Diverged before matching R: the held bytes were real new output —
-        // flush them with the divergent remainder.
-        diverged = true;
-        return reference.slice(0, matched) + piece.slice(k);
-      }
-      return null;
+      settled = 'complete';
+      published = cur;
+      return cur;
     },
     pending(): number {
-      return diverged || complete ? 0 : matched;
+      return settled !== 'holding' ? 0 : seen.length;
     },
   };
 }

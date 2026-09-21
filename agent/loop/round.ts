@@ -20,7 +20,7 @@ import { checkpoint, finish, releaseContinuable, suspendHere, type TurnScope } f
 import { resolveConversationId } from './conversation.js';
 import type { ExecutionAbortReason, ExecutionBudget, ModelCallLease, ModelCallTelemetry } from './execution-budget.js';
 import { harnessMessage, isPartialMessage, ownerMessage, partialMessage, toolMessage } from './message-origin.js';
-import { continuationDedup, drainStream, edgeTrimmer, retryDelayMs, stripRepeatedPrefix } from './stream.js';
+import { continuationDedup, drainStream, edgeTrimmer, resolveContinuationSuffix, retryDelayMs } from './stream.js';
 import { runTool } from './tool-call.js';
 import {
   ApprovalRequired,
@@ -184,16 +184,19 @@ export function collectTruncationPrefix(messages: readonly import('../providers/
 
 /**
  * Live-delta gate for a continuation call, or `undefined` for an ordinary
- * first call. The reference is the last structurally accepted partial chunk;
- * with no accepted partial there is nothing a repeat could duplicate, so the
- * stream stays byte-for-byte identical to before this rule existed.
+ * first call. The references are the FULL current logical prefix plus the
+ * last structurally accepted partial chunk (shared `resolveContinuationSuffix`
+ * semantics: full first, then last); with no accepted partial there is nothing
+ * a repeat could duplicate, so the stream stays byte-for-byte identical to
+ * before this rule existed.
  */
 function dedupForContinuation(
   messages: readonly import('../providers/types.js').Message[],
 ): ReturnType<typeof continuationDedup> | undefined {
+  const full = collectTruncationPrefix(messages);
+  if (full === '') return undefined;
   const previous = lastPartialChunk(messages);
-  if (previous === undefined || previous === '') return undefined;
-  return continuationDedup(previous);
+  return continuationDedup(full, previous);
 }
 
 /**
@@ -819,12 +822,17 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     if (isTruncatedPartial(result)) {
       const currentChunk = result.text ?? '';
       const prefixSoFar = collectTruncationPrefix(run.messages);
-      // Exact-prefix strip, the durable mirror of the live `continuationDedup`
-      // gate above: when the model restarts by repeating the previous chunk
-      // (`R + B`), only `B` is new output and only `B` is accepted. Both sides
-      // compute over the same trimmed string, so visible and durable agree.
+      // Shared exact-prefix rule (`stream.ts:resolveContinuationSuffix`,
+      // mirrored incrementally by the live `continuationDedup` gate above):
+      // try FULL logical prefix first, then LAST accepted chunk. Either proof
+      // leaving zero new bytes is no-progress. Both sides compute over the
+      // same trimmed string, so visible and durable agree.
       const previous = lastPartialChunk(run.messages);
-      const suffix = stripRepeatedPrefix(previous, currentChunk);
+      const suffix = resolveContinuationSuffix(
+        prefixSoFar === '' ? undefined : prefixSoFar,
+        previous,
+        currentChunk,
+      );
       // No-progress rule: an empty suffix proves the model reproduced instead
       // of continuing. The chunk is dropped — nothing new is lost, its bytes
       // are already preserved — and the lease yields continuable with the
@@ -918,11 +926,15 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
        */
       const prefixSoFar = collectTruncationPrefix(run.messages);
       const currentRaw = result.text ?? '';
-      // Same exact-prefix strip as the truncation path: a final chunk that
-      // merely repeats the accepted prefix adds nothing, and the live gate
-      // already suppressed it — appending it here would diverge durable from
-      // visible.
-      const suffix = stripRepeatedPrefix(lastPartialChunk(run.messages), currentRaw);
+      // Shared exact-prefix rule, same as the truncation path: FULL prefix
+      // first, then LAST chunk. A final chunk that merely repeats already
+      // accepted bytes adds nothing, and the live gate already suppressed it —
+      // appending it here would diverge durable from visible.
+      const suffix = resolveContinuationSuffix(
+        prefixSoFar === '' ? undefined : prefixSoFar,
+        lastPartialChunk(run.messages),
+        currentRaw,
+      );
       const fullRaw = prefixSoFar + suffix;
       const text = scrubResourceEchoes(redactText(fullRaw), run.sensitiveResourceEchoes);
       // Live fallback emission below must append, not duplicate: in streaming
