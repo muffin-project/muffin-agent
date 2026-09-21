@@ -57,11 +57,11 @@ describe('deriveJob', () => {
     const job = deriveJob('fake.yml', 'build', {
       'runs-on': 'ubuntu-latest',
       steps: [
-        { uses: 'actions/checkout@v4' },
-        { uses: 'actions/setup-node@v4', with: { 'node-version': '22' } },
+        { uses: 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262' },
+        { uses: 'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020', with: { 'node-version': '22' } },
       ],
     });
-    expect(job.steps[0]?.uses).toBe('actions/checkout@v4');
+    expect(job.steps[0]?.uses).toBe('actions/checkout@11d5960a326750d5838078e36cf38b85af677262');
     expect(job.steps[1]?.usesWith?.['node-version']).toBe('22');
   });
 
@@ -188,7 +188,7 @@ describe('requestedNodeVersion', () => {
   it('reads node-version from the actions/setup-node step', () => {
     const job = deriveJob('fake.yml', 'j', {
       'runs-on': 'ubuntu-latest',
-      steps: [{ uses: 'actions/setup-node@v4', with: { 'node-version': '22' } }],
+      steps: [{ uses: 'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020', with: { 'node-version': '22' } }],
     });
     expect(requestedNodeVersion(job)).toBe('22');
   });
