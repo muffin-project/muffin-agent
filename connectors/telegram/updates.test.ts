@@ -433,4 +433,3 @@ describe('UpdateInbox.sealIgnored — a gate refusal ends terminal, body retired
     expect(box.get(10)?.settledAt).toBe(NOW);
   });
 });
-
