@@ -96,14 +96,14 @@
 # valido per un altro motivo (spezzare typecheck e suite non compra nulla), non
 # per quello scritto.
 #
-# ## Il filtro, e perché è per forma e non per nome
+# ## Il filtro rimasto sul push, e perché è per forma e non per nome
 #
-# `paths` sotto è un elenco di **forme**, non di file. `.claude/*.mjs` e
+# Sulle PR il workflow ora parte sempre, così il check può essere required senza
+# restare Pending. Il `paths` che resta sotto appartiene **solo al push su
+# main** ed è un elenco di forme, non di file: `.claude/*.mjs` e
 # `.claude/**/*.test.ts` fanno sì che uno script o un test aggiunto domani sotto
-# `.claude/` entri qui da solo. Un elenco di nomi (`deleghe.mjs`,
-# `riconcilia.mjs`, …) sarebbe invecchiato nella direzione pericolosa: il primo
-# file nuovo sarebbe tornato invisibile, che è il difetto che questo file
-# esiste per chiudere.
+# `.claude/` rientri automaticamente nel replay post-merge. Un elenco di nomi
+# sarebbe invecchiato nella direzione pericolosa.
 #
 # ## La superficie nuova (2026-08-30): rules, skills e il prompt del loop
 #
