@@ -42,7 +42,7 @@ import { MANIFEST, promoteMarker, type ScenarioEntry } from './manifest.js';
  */
 
 const REPO = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
-const DAY1_REQUIREMENTS = join(REPO, 'docs', 'work', 'day1', 'requirements-status.md');
+const DAY1_REQUIREMENTS = join(REPO, 'docs', 'status', 'day1', 'requirements-status.md');
 
 export type Stato = 'READY' | 'OUT' | 'BLOCKER' | '?';
 
