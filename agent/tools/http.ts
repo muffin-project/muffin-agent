@@ -1,4 +1,8 @@
 import { lookup as dnsLookup } from 'node:dns/promises';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
+import { isIP } from 'node:net';
+import { Readable } from 'node:stream';
 import { z } from 'zod';
 import type { CapabilityDecl } from '../../core/policy/types.js';
 import type { ToolSpec } from '../providers/types.js';
@@ -28,14 +32,15 @@ import type { RegisteredTool } from '../loop.js';
  * What did NOT move, because opening the allowlist and opening the network are
  * two different claims:
  *
- *  - **The SSRF floor.** Every hop's hostname is resolved before connecting
- *    and every address must be public (`core/net/egress.ts#isForbiddenAddress`
- *    — loopback, RFC1918, CGNAT, link-local metadata, and their v6 relatives).
- *    This is what stands between an open read and the machine's own network,
- *    and it runs on every hop, allowlist or not, exactly as it did before this
- *    slice. Declared limit, not silent: the check is resolve-then-connect, so
- *    a DNS answer that changes between the two (rebinding) is out of scope for
- *    v1.
+ *  - **The SSRF floor.** Every hop resolves its hostname, requires every
+ *    returned address to be public (`core/net/egress.ts#isForbiddenAddress`
+ *    — loopback, RFC1918, CGNAT, link-local metadata, and their v6 relatives),
+ *    and then connects to the validated answer itself — never back to the
+ *    hostname. The IP in the request line is the IP that passed the check, so
+ *    a DNS answer changing between check and connect (rebinding) has no second
+ *    lookup to land in. HTTP `Host` and TLS SNI still carry the original
+ *    hostname, so virtual hosting and certificates see exactly what `fetch`
+ *    with the hostname would have shown them.
  *  - **`paramsMaxTaint`.** A non-empty query string or fragment is bytes the
  *    model chose, wherever the host came from, and above the ceiling the owner
  *    is asked and shown the whole URL, everyone else refused (`core/policy/
@@ -49,8 +54,14 @@ import type { RegisteredTool } from '../loop.js';
  * A redirect is no longer re-checked against the allowlist (there is none to
  * check): a public page redirecting to another public page is exactly as much
  * "reading" as the first hop was. What every hop still cannot do is land
- * inside the house — the address veto below runs before every connect, first
- * hop included.
+ * inside the house — the resolve-validate-pin below runs before every
+ * connect, first hop included, and each redirect resolves and pins anew.
+ *
+ * No new networking dependency: the global `fetch` (undici) exposes no
+ * per-connection DNS hook, so pinning through it would need an extra
+ * dispatcher package. `node:http`/`node:https` are the same stack Node's
+ * fetch is built on, already in the runtime, and connecting to an IP literal
+ * performs no second DNS lookup — which is exactly the invariant.
  */
 export const httpCapability: CapabilityDecl = {
   id: 'sys.http',
@@ -124,7 +135,7 @@ export type HttpDeps = {
 };
 
 export function makeHttpTool(deps: HttpDeps = {}): RegisteredTool {
-  const fetchFn = deps.fetchFn ?? fetch;
+  const fetchFn = deps.fetchFn ?? defaultPinnedFetch;
   const lookupFn = deps.lookupFn ?? ((hostname: string) => dnsLookup(hostname, { all: true }));
   const extractFn = deps.extractFn ?? extractMainContent;
 
@@ -137,7 +148,7 @@ export function makeHttpTool(deps: HttpDeps = {}): RegisteredTool {
     // may do, and leaving it unstated is what this slice exists to end.
     //
     // `throwTier: 0`. Every `await` that touches the remote side (`fetchFn`,
-    // `addressVeto`'s `lookupFn`) is wrapped in its own `try`/`catch` and
+    // `resolvePinnedIp`'s `lookupFn`) is wrapped in its own `try`/`catch` and
     // returned as a normal `tier: 0` outcome, never re-thrown; `extractFn` is
     // likewise caught inline. The one unguarded call, `response.text()`, can
     // only fail as a transport/stream error — it has no body to fail *with*,
@@ -163,20 +174,29 @@ export function makeHttpTool(deps: HttpDeps = {}): RegisteredTool {
         }
         // Reading is open (ADR-0066): there is no allowlist left for a redirect
         // hop to leave. What every hop still cannot do — first or Nth — is
-        // resolve into the house, which the address veto below enforces
-        // unconditionally, before this loop ever calls `fetchFn`.
-        const veto = await addressVeto(current.hostname, lookupFn);
-        if (veto !== null) {
-          return { content: veto, isError: true, tier: 0 };
+        // resolve into the house. Resolve, require every answer to be public,
+        // and fetch the validated IP itself (never the hostname back): the
+        // address on the wire is the address that passed `isForbiddenAddress`,
+        // so there is no second hostname lookup for a rebinding to land in.
+        // `Host` and TLS SNI still carry the original hostname.
+        const pinned = await resolvePinnedIp(current.hostname, lookupFn);
+        if (pinned.error !== null) {
+          return { content: pinned.error, isError: true, tier: 0 };
         }
+        const pinnedUrl = buildPinnedUrl(current, pinned.address);
+        const hostHeader = current.host;
 
         let response: Response;
         try {
-          response = await fetchFn(current, {
+          response = await fetchFn(pinnedUrl, {
             method: 'GET',
             redirect: 'manual',
             signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-            headers: { 'user-agent': 'muffin/0.2 (+personal-agent)' },
+            headers: {
+              'user-agent': 'muffin/0.2 (+personal-agent)',
+              host: hostHeader,
+              'accept-encoding': 'gzip, deflate',
+            },
           });
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
@@ -236,30 +256,156 @@ export function makeHttpTool(deps: HttpDeps = {}): RegisteredTool {
   };
 }
 
-/** Every resolved address must be public — one private answer vetoes the hop. */
-async function addressVeto(
+/**
+ * Resolve, validate every candidate, and pin the address the hop will
+ * connect to. The returned `address` is the exact IP the caller must place
+ * on the wire (via {@link buildPinnedUrl}); the caller must never fetch the
+ * hostname back, otherwise a second lookup re-opens the rebinding window
+ * this exists to close. One private answer vetoes the whole hop — picking
+ * "a good one" out of a mixed set would let the hostile answer stay live
+ * for the next resolution.
+ */
+export async function resolvePinnedIp(
   hostname: string,
   lookupFn: NonNullable<HttpDeps['lookupFn']>,
-): Promise<string | null> {
+): Promise<{ address: string; error: null } | { address: null; error: string }> {
   // A literal IP skips DNS but not the check.
   const literal = hostname.replace(/^\[|\]$/g, '');
-  if (/^[\d.]+$/.test(literal) || literal.includes(':')) {
-    return isForbiddenAddress(literal) ? `address not routable from here: ${literal}` : null;
+  if (isIP(literal) !== 0) {
+    return isForbiddenAddress(literal)
+      ? { address: null, error: `address not routable from here: ${literal}` }
+      : { address: literal, error: null };
   }
   let addresses: Array<{ address: string }>;
   try {
     addresses = await lookupFn(hostname);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    return `dns failed for ${hostname}: ${detail}`;
+    return { address: null, error: `dns failed for ${hostname}: ${detail}` };
   }
-  if (addresses.length === 0) return `dns returned no addresses for ${hostname}`;
+  if (addresses.length === 0) return { address: null, error: `dns returned no addresses for ${hostname}` };
   for (const { address } of addresses) {
     if (isForbiddenAddress(address)) {
-      return `${hostname} resolves to a non-routable address (${address}) — refused`;
+      return { address: null, error: `${hostname} resolves to a non-routable address (${address}) — refused` };
     }
   }
-  return null;
+  return { address: addresses[0]!.address, error: null };
+}
+
+/**
+ * Rewrite a validated hop to its pinned IP, preserving everything else
+ * (port, userinfo, path, query). The caller sends {@link hostHeaderFor} as
+ * the `Host` header and {@link serverNameFor} as TLS SNI so the origin
+ * server sees the same hostname it would have seen for a hostname fetch.
+ */
+export function buildPinnedUrl(original: URL, pinnedIp: string): URL {
+  const pinned = new URL(original.href);
+  if (isIP(pinnedIp) === 6) pinned.hostname = `[${pinnedIp}]`;
+  else pinned.hostname = pinnedIp;
+  return pinned;
+}
+
+/** Value for the `Host` header: the original host, port included when non-default. */
+export function hostHeaderFor(original: URL): string {
+  return original.host;
+}
+
+/**
+ * TLS SNI for the pinned hop: the original hostname, or `undefined` for a
+ * literal-IP origin (SNI must not carry an IP address — RFC 6066 — and the
+ * certificate check then correctly runs against the IP itself).
+ */
+export function serverNameFor(originalHostname: string): string | undefined {
+  const bare = originalHostname.replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (isIP(bare) !== 0) return undefined;
+  return bare;
+}
+
+/**
+ * Default transport: connect to the pinned IP literal — which performs no
+ * DNS lookup of its own — while presenting the original hostname via `Host`
+ * and TLS SNI. Only `node:http`/`node:https` are used: the same stack the
+ * global fetch is built on, no new dependency. Fails closed when handed a
+ * hostname instead of an IP literal, since that would mean the caller
+ * skipped {@link resolvePinnedIp}.
+ */
+export async function defaultPinnedFetch(input: URL | string, init?: RequestInit): Promise<Response> {
+  const url = input instanceof URL ? new URL(input.href) : new URL(String(input));
+  const rawHost = url.hostname.replace(/^\[|\]$/g, '');
+  if (isIP(rawHost) === 0) {
+    throw new Error(`pinned fetch requires an IP literal, got ${url.hostname}`);
+  }
+  if (isForbiddenAddress(rawHost)) {
+    throw new Error(`address not routable from here: ${rawHost}`);
+  }
+  const isHttps = url.protocol === 'https:';
+  if (!isHttps && url.protocol !== 'http:') {
+    throw new Error(`scheme not allowed: ${url.protocol}`);
+  }
+  const headers = new Headers(init?.headers);
+  if (!headers.has('user-agent')) headers.set('user-agent', 'muffin/0.2 (+personal-agent)');
+  const hostHeader = headers.get('host') ?? url.host;
+  headers.set('host', hostHeader);
+  const servername = (() => {
+    const fromHost = hostHeader.split(':')[0]!.replace(/^\[|\]$/g, '').replace(/\.$/, '');
+    if (isIP(fromHost) !== 0) return undefined;
+    return fromHost.length > 0 ? fromHost : undefined;
+  })();
+
+  const port = url.port !== '' ? Number(url.port) : isHttps ? 443 : 80;
+  const path = `${url.pathname}${url.search}`;
+  const plainHeaders: Record<string, string> = {};
+  headers.forEach((value, key) => {
+    plainHeaders[key] = value;
+  });
+  const baseOptions = {
+    hostname: rawHost,
+    port,
+    path,
+    method: init?.method ?? 'GET',
+    headers: plainHeaders,
+    signal: init?.signal as AbortSignal | undefined,
+    auth:
+      url.username !== '' ? `${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}` : undefined,
+  };
+
+  return new Promise<Response>((resolve, reject) => {
+    const onResponse = (res: import('node:http').IncomingMessage) => {
+      const outHeaders = new Headers();
+      for (const [key, value] of Object.entries(res.headers)) {
+        if (value === undefined) continue;
+        if (Array.isArray(value)) {
+          for (const v of value) outHeaders.append(key, v);
+        } else {
+          outHeaders.set(key, value);
+        }
+      }
+      // 204/304 must not carry a body for the Response constructor.
+      if (res.statusCode === 204 || res.statusCode === 304) {
+        res.resume();
+        resolve(new Response(null, { status: res.statusCode, statusText: res.statusMessage ?? '', headers: outHeaders }));
+        return;
+      }
+      try {
+        const webBody = Readable.toWeb(res);
+        resolve(
+          new Response(webBody as ReadableStream<Uint8Array>, {
+            status: res.statusCode ?? 500,
+            statusText: res.statusMessage ?? '',
+            headers: outHeaders,
+          }),
+        );
+      } catch (error) {
+        res.destroy();
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    };
+    const req = isHttps
+      ? httpsRequest({ ...baseOptions, servername }, onResponse)
+      : httpRequest(baseOptions, onResponse);
+    req.on('error', (error) => reject(error instanceof Error ? error : new Error(String(error))));
+    req.end();
+  });
 }
 
 function clipBody(text: string): string {
