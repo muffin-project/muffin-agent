@@ -222,6 +222,15 @@ function recordingApi(): { api: TelegramApiLike; calls: Recorded[] } {
       calls.push({ method: 'sendMessageDraft', text });
       return true;
     },
+    sendRichMessage: async () => {
+      throw new Error('unused in this fake');
+    },
+    editMessageRichText: async () => {
+      throw new Error('unused in this fake');
+    },
+    sendRichMessageDraft: async () => {
+      throw new Error('unused in this fake');
+    },
     fileUrl: async () => 'https://example.test/file',
     setMyCommands: async () => true,
     answerCallbackQuery: async () => true,

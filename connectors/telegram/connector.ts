@@ -75,6 +75,7 @@ import { DRAIN_BUDGET_MS } from '../../core/gateway/service.js';
  */
 const DEFAULT_STOP_BUDGET_MS = DRAIN_BUDGET_MS;
 import { escapeHtml, renderForTelegram, splitHtml, toTelegramHtml } from './render.js';
+import { normalizeInboundRich, planRich } from './rich.js';
 import { UpdateInbox, type StoredUpdate } from './updates.js';
 
 /**
@@ -472,10 +473,17 @@ export function parseUpdate(update: Update, botId?: number): Incoming | null {
 
   const posizione = luogoDi(message);
 
+  // Bot API 10.1+: un messaggio rich non porta `text` né `caption` — solo
+  // blocchi. Senza questa riga spariva nel `return null` qui sotto in
+  // silenzio, la stessa classe di difetto per cui una foto senza didascalia
+  // e una posizione meritano le loro righe qui sopra.
+  const ricco = normalizeInboundRich(message as { rich_message?: unknown });
+  const testoRicco = ricco !== null && ricco.trim() !== '' ? ricco : undefined;
+
   // A file with no caption is still a message: "here, keep this" is a complete
   // thought. Requiring text would have made a photo silently disappear.
   // Una posizione nemmeno ha un file: senza questa riga «sono qui» spariva.
-  if ((typeof ownContent !== 'string' || ownContent.trim() === '') && attachment === null && posizione === undefined)
+  if ((typeof ownContent !== 'string' || ownContent.trim() === '') && attachment === null && posizione === undefined && testoRicco === undefined)
     return null;
 
   const citato = citazione(message, botId);
@@ -502,11 +510,16 @@ export function parseUpdate(update: Update, botId?: number): Incoming | null {
   // Forwarded wins the branch regardless of which of `text`/`caption` carried
   // the content: neither one is the forwarder's own line once `forward_origin`
   // says otherwise, so neither may reach `Incoming.text`/`.caption` below.
+  // A forwarded RICH message carries neither — its normalised blocks are the
+  // forwarded content, same shape, same taint.
   if (forwarded) {
-    return { ...base, text: '', forwarded: { origin: forwarded, content: ownContent ?? '' } };
+    return { ...base, text: '', forwarded: { origin: forwarded, content: ownContent ?? testoRicco ?? '' } };
   }
   if (typeof rawCaption === 'string' && rawCaption !== '') {
     return { ...base, text: '', caption: rawCaption };
+  }
+  if (testoRicco !== undefined) {
+    return { ...base, text: testoRicco };
   }
   return { ...base, text: typeof rawText === 'string' ? rawText : '' };
 }
@@ -568,9 +581,11 @@ function citazione(
     return { testo: quote.text, parziale: true, da };
   }
   // Un messaggio citato può non avere testo suo: una foto, un vocale, un
-  // documento. Non è un motivo per far sparire la citazione — «di questo qui»
-  // resta l'informazione che serve, e tacerla lascerebbe la domanda monca.
-  const intero = replied?.text ?? replied?.caption ?? '';
+  // documento — e dal Bot API 10.1 un messaggio rich, che non porta `text`
+  // né `caption` ma solo blocchi. Non è un motivo per far sparire la
+  // citazione — «di questo qui» resta l'informazione che serve, e tacerla
+  // lascerebbe la domanda monca.
+  const intero = replied?.text ?? replied?.caption ?? normalizeInboundRich((replied ?? {}) as { rich_message?: unknown }) ?? '';
   return { testo: intero, parziale: false, da };
 }
 
@@ -1337,7 +1352,7 @@ export class TelegramConnector {
       ? splitHtml(handoff.stepsText === '' ? toTelegramHtml(text) : `${handoff.stepsText}\n\n${toTelegramHtml(text)}`)
       : renderForTelegram(text);
 
-    const plan: TelegramDeliveryPlanPart[] = parts.map((html, i) => {
+    const legacy: TelegramDeliveryPlanPart[] = parts.map((html, i) => {
       if (i === 0 && handoff) {
         return { operation: 'edit', chatId, threadId, replyTo: null, editMessageId: handoff.messageId, html };
       }
@@ -1353,7 +1368,33 @@ export class TelegramConnector {
         html,
       };
     });
-    return deliverTelegram(this.deps.delivery, this.deps.api, turnId, plan, () => this.now());
+    return deliverTelegram(this.deps.delivery, this.deps.api, turnId, this.maybeRich(text, legacy), () => this.now());
+  }
+
+  /**
+   * Rich final, Bot API 10.3 — exactly one case, and the restriction is the
+   * guarantee: a rich final rides ONLY a fresh `send` (no transcript handoff
+   * being extended, no owned edit being rewritten). A handoff message already
+   * carries settled steps/preamble in legacy HTML, and a rich edit would
+   * replace them with the answer alone — steps lost on screen. A fresh send
+   * carries nothing yet, so nothing can be lost.
+   *
+   * That is also why a table answered after twelve tool calls still goes
+   * legacy: preserving the trail beats prettier cells. A rich final that
+   * preserves settled transcript content needs the raw step text at this
+   * boundary — a broader Turn-contract change, deliberately NOT smuggled in
+   * here.
+   *
+   * The legacy plan is computed first and always: it is the frozen fallback
+   * a deterministic rich rejection expands into (`delivery.ts`), and the
+   * path taken whole when the answer is ordinary prose.
+   */
+  private maybeRich(text: string, legacy: TelegramDeliveryPlanPart[]): TelegramDeliveryPlanPart[] {
+    const first = legacy[0];
+    if (first === undefined || first.operation !== 'send') return legacy;
+    const rich = planRich(text);
+    if (rich.mode !== 'rich') return legacy;
+    return [{ ...first, kind: 'rich' as const, rich: rich.message, fallback: legacy }];
   }
 
   /**
@@ -1484,9 +1525,14 @@ export class TelegramConnector {
   /**
    * Il poller, prima della coda (ADR-0054 §5): i quattro comandi di controllo
    * dell'owner si servono subito, anche con un turno vivo — è il solo modo
-   * in cui `/stop` può fermare qualcosa. Tutto il resto resta nell'inbox
-   * per il drain, e se un turno è vivo o il runtime è in pausa lo si dice,
-   * una volta per messaggio.
+   * in cui `/stop` può fermare qualcosa. Lo stesso vale per il controllo
+   * Stop della generazione (Bot API 10.3): `stopped_message_generation` deve
+   * raggiungere la corsia viva **qui**, non nel drain — il drain è a
+   * svuotamento singolo e mentre un turno gira è occupato proprio da quel
+   * turno, quindi un segnale servito lì aspetterebbe la fine del turno che
+   * dovrebbe interrompere. Tutto il resto resta nell'inbox per il drain, e
+   * se un turno è vivo o il runtime è in pausa lo si dice, una volta per
+   * messaggio.
    */
   private async controlla(updates: Update[]): Promise<void> {
     // Due passate, e la prima **senza un solo `await`**.
@@ -1504,7 +1550,16 @@ export class TelegramConnector {
     // costruzione: non c'è nessun punto, fra `accept` e il primo `await`, in
     // cui il drain possa osservare un batch mezzo registrato.
     const controlli: Incoming[] = [];
+    // Pressioni del controllo Stop (Bot API 10.3): update_id grezzi, non
+    // `Incoming` — non sono messaggi e `parseUpdate` non li vede.
+    const stopPremuti: number[] = [];
     for (const update of updates) {
+      const stopRichiesto = (update as { stopped_message_generation?: unknown }).stopped_message_generation;
+      if (stopRichiesto !== undefined) {
+        this.gestiti.add(update.update_id);
+        stopPremuti.push(update.update_id);
+        continue;
+      }
       const incoming = parseUpdate(update, this.meId);
       if (!incoming) continue;
       const { principal } = principalFor(incoming, this.deps.config.ownerUserId);
@@ -1537,6 +1592,27 @@ export class TelegramConnector {
       // È anche il drain che, prima della registrazione anticipata qui sopra,
       // trovava il comando *successivo* dello stesso batch ancora `pending` e
       // lo serviva una seconda volta.
+      if (this.draining === null) this.scheduleDrain();
+    }
+
+    // Il controllo Stop, subito come i comandi: `handleStopGenerazione` è
+    // sincrono (un abort sulla corsia + una riga di diario), quindi qui non
+    // si apre nessuna finestra — ma la forma a due passate resta la stessa,
+    // e `markProcessed` + `gestiti.delete` hanno la stessa ragione che sopra.
+    // Il ramo gemello dentro `drain()` resta per la ripresa dopo un riavvio:
+    // un segnale rimasto `pending` (processo morto fra `accept` e questo
+    // punto) viene servito lì, a turno non più vivo, come no-op registrato.
+    for (const updateId of stopPremuti) {
+      const segnale = updates.find((u) => u.update_id === updateId) as { stopped_message_generation?: unknown } | undefined;
+      try {
+        this.handleStopGenerazione(segnale?.stopped_message_generation, this.deps.log ?? (() => {}));
+      } catch (error) {
+        (this.deps.log ?? (() => {}))(
+          `telegram: stop della generazione non gestito — ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      this.deps.inbox.markProcessed(updateId, this.now());
+      this.gestiti.delete(updateId);
       if (this.draining === null) this.scheduleDrain();
     }
 
@@ -1634,6 +1710,52 @@ export class TelegramConnector {
     await this.deps.api.leaveChat(chat.id);
   }
 
+  /**
+   * Bot API 10.3 `stopped_message_generation` → the canonical user-stop
+   * lever, structurally. No text is injected ("stop" as owner words would be
+   * a lie the transcript would then answer), and no partial generation is
+   * marked complete: `LaneRegistry.stop` aborts the lane's controller, the
+   * execution budget classifies it `user_stop`, and the turn settles through
+   * the same `aborted` outcome `/stop` already produces ("Interrotto.").
+   *
+   * Two deliberate narrowings, both from the update's shape
+   * (`MessageGenerationStopped`: chat, optional thread, draft id — NO `from`):
+   *
+   * - attribution is by chat. When the owner chat is configured, only that
+   *   chat's signal may stop its lane: an unattributed signal must never
+   *   reach into another chat's turn. Unconfigured, a live lane in the
+   *   signalling chat may still be stopped — the update is server-authentic,
+   *   the draft it names was ours, and aborting is the safe direction.
+   * - routing is by chat, not by thread. Lanes are per-chat
+   *   (`corsia(chatId)`); the thread id is logged for forensics, not routed
+   *   on. A stop from the wrong topic of the same chat still stops the
+   *   chat's one turn — over-broad by a thread, never by a chat.
+   *
+   * A signal with no live lane is a no-op with a log line, not an error: the
+   * turn may have finished between the press and this drain.
+   */
+  private handleStopGenerazione(update: unknown, log: (line: string) => void): void {
+    const segnale = update !== null && typeof update === 'object' ? (update as Record<string, unknown>) : {};
+    const chat = segnale['chat'] !== null && typeof segnale['chat'] === 'object' ? (segnale['chat'] as Record<string, unknown>) : {};
+    const chatId = chat['id'];
+    const thread = typeof segnale['message_thread_id'] === 'number' ? ` thread ${segnale['message_thread_id']}` : '';
+    const bozza = typeof segnale['draft_id'] === 'number' ? ` bozza ${segnale['draft_id']}` : '';
+    if (typeof chatId !== 'number') {
+      log(`telegram: stop della generazione senza chat numerica — ignorato`);
+      return;
+    }
+    const ownerChat = this.deps.config.ownerChatId;
+    if (ownerChat !== undefined && chatId !== ownerChat) {
+      log(`telegram: stop della generazione dalla chat ${chatId} — non è la chat dell'owner, ignorato`);
+      return;
+    }
+    if (!this.corsie.stop(this.corsia(chatId))) {
+      log(`telegram: stop della generazione dalla chat ${chatId}${thread}${bozza} — nessun turno vivo`);
+      return;
+    }
+    log(`telegram: stop della generazione dalla chat ${chatId}${thread}${bozza} — turno interrotto`);
+  }
+
   /** Everything not yet answered, oldest first. Also the crash-recovery path. */
   private async drain(): Promise<void> {
     const log = this.deps.log ?? (() => {});
@@ -1664,6 +1786,20 @@ export class TelegramConnector {
           await this.gestisciInvito(cambioDiStato, log);
         } catch (error) {
           log(`telegram: invito non gestito — ${error instanceof Error ? error.message : String(error)}`);
+        }
+        this.markProcessedQuietly(stored.updateId, log);
+        continue;
+      }
+
+      // Bot API 10.3: l'owner ha premuto il controllo Stop della generazione
+      // sul draft di un turno vivo. Prima di `parseUpdate` come gli altri
+      // update senza `message`: non è un testo, è un segnale strutturale.
+      const stopRichiesto = (update as { stopped_message_generation?: unknown }).stopped_message_generation;
+      if (stopRichiesto !== undefined) {
+        try {
+          this.handleStopGenerazione(stopRichiesto, log);
+        } catch (error) {
+          log(`telegram: stop della generazione non gestito — ${error instanceof Error ? error.message : String(error)}`);
         }
         this.markProcessedQuietly(stored.updateId, log);
         continue;
