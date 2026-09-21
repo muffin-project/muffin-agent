@@ -1,7 +1,7 @@
 import DatabaseCtor from 'better-sqlite3';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { MemoryStore } from '../../core/memory/store.js';
 import { Vault } from '../../core/vault/vault.js';
@@ -175,6 +175,35 @@ describe('vault_save — «salva questo», nel vault di questa stanza', () => {
       const rel = vaultPathPer(STANZA, 'nota privata');
       expect(statSync(join(f.root, 'salvati', tenantSlug(STANZA))).mode & 0o777).toBe(0o700);
       expect(statSync(join(f.root, rel)).mode & 0o777).toBe(0o600);
+    } finally {
+      process.umask(prev);
+    }
+  });
+
+  /**
+   * Eredità dell'escape sugli ancestor: con `salvati -> outside-dir`
+   * l'operazione fallisce in modo veritiero — nessuna directory/file del
+   * tenant fuori da Muffin Home, target esterno immutato.
+   */
+  it('attraverso un ancestor salvati symlinked fallisce senza mutazioni fuori', async () => {
+    const prev = process.umask(0o022);
+    try {
+      const f = fixture();
+      const outside = join(dirname(f.root), 'outside');
+      mkdirSync(outside, { recursive: true });
+      chmodSync(outside, 0o755);
+      const before = statSync(outside).mode & 0o777;
+      symlinkSync(outside, join(f.root, 'salvati'));
+
+      const out = await f.tool.handler(
+        { titolo: 'nota', testo: 'segreto' },
+        toolContext({ tenant: STANZA }),
+      );
+      expect(out.isError).toBe(true);
+      expect(existsSync(join(outside, tenantSlug(STANZA)))).toBe(false);
+      expect(readdirSync(outside)).toEqual([]);
+      expect(statSync(outside).mode & 0o777).toBe(before);
+      expect(existsSync(join(f.root, vaultPathPer(STANZA, 'nota')))).toBe(false);
     } finally {
       process.umask(prev);
     }

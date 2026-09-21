@@ -244,6 +244,7 @@ describe('ensurePrivateDir never follows a leaf symlink', () => {
 
     const link = join(home, 'backups');
     symlinkSync(outside, link);
+    const outsideBefore = readdirSync(outside).sort();
     ensurePrivateDir(link);
 
     // The leaf stays a symlink — not replaced, not resolved.
@@ -251,7 +252,83 @@ describe('ensurePrivateDir never follows a leaf symlink', () => {
     // The outside target keeps its original mode: no chmod escaped.
     expect(mode(outside)).toBe(before);
     expect(mode(outside)).toBe(0o755);
+    // Zero creations outside.
+    expect(readdirSync(outside).sort()).toEqual(outsideBefore);
     // And the containing home is still ours and private.
     expect(mode(home)).toBe(0o700);
+  });
+});
+
+describe('ensurePrivateDir verifies the ancestor chain', () => {
+  function rig(): { root: string; home: string; outside: string; before: number } {
+    savedUmask = process.umask(0o022);
+    const root = tmp();
+    const home = join(root, 'home');
+    mkdirSync(home, { recursive: true });
+    ensurePrivateDir(home);
+    const outside = join(root, 'outside');
+    mkdirSync(outside, { recursive: true });
+    chmodSync(outside, 0o755);
+    return { root, home, outside, before: mode(outside) };
+  }
+
+  it('existing ancestor symlink: denied, nothing created or chmodded outside', () => {
+    const { home, outside, before } = rig();
+    symlinkSync(outside, join(home, 'a'));
+    expect(ensurePrivateDir(join(home, 'a', 'b', 'c'))).toBe(false);
+    expect(existsSync(join(outside, 'b'))).toBe(false);
+    expect(mode(outside)).toBe(before);
+    expect(lstatSync(join(home, 'a')).isSymbolicLink()).toBe(true);
+  });
+
+  it('missing suffix beneath a symlink ancestor: zero outside mutation', () => {
+    const { home, outside, before } = rig();
+    symlinkSync(outside, join(home, 'a'));
+    mkdirSync(join(outside, 'b'), { recursive: true });
+    chmodSync(join(outside, 'b'), 0o755);
+    const beforeB = mode(join(outside, 'b'));
+    expect(ensurePrivateDir(join(home, 'a', 'b', 'c'))).toBe(false);
+    expect(existsSync(join(outside, 'b', 'c'))).toBe(false);
+    expect(mode(join(outside, 'b'))).toBe(beforeB);
+    expect(mode(outside)).toBe(before);
+  });
+
+  it('dangling ancestor: fail closed, zero creation', () => {
+    const { root, home } = rig();
+    symlinkSync(join(root, 'nowhere'), join(home, 'a'));
+    expect(ensurePrivateDir(join(home, 'a', 'b'))).toBe(false);
+    expect(existsSync(join(root, 'nowhere'))).toBe(false);
+    expect(lstatSync(join(home, 'a')).isSymbolicLink()).toBe(true);
+  });
+
+  it('normal nested path: created, every level private', () => {
+    savedUmask = process.umask(0o022);
+    const home = join(tmp(), 'home');
+    expect(ensurePrivateDir(join(home, 'a', 'b', 'c'))).toBe(true);
+    expect(mode(join(home, 'a'))).toBe(0o700);
+    expect(mode(join(home, 'a', 'b'))).toBe(0o700);
+    expect(mode(join(home, 'a', 'b', 'c'))).toBe(0o700);
+  });
+
+  it('judge falsifier 1: symlinked salvati ancestor never escapes', () => {
+    const { home, outside, before } = rig();
+    const vault = join(home, 'vault');
+    mkdirSync(vault, { recursive: true });
+    ensurePrivateDir(vault);
+    symlinkSync(outside, join(vault, 'salvati'));
+    expect(ensurePrivateDir(join(vault, 'salvati', 'tenant-x'))).toBe(false);
+    expect(existsSync(join(outside, 'tenant-x'))).toBe(false);
+    expect(mode(outside)).toBe(before);
+  });
+
+  it('judge falsifier 2: symlinked vault never escapes for new children', () => {
+    const { home, outside, before } = rig();
+    const vault = join(home, 'vault');
+    mkdirSync(vault, { recursive: true });
+    rmSync(vault, { recursive: true });
+    symlinkSync(outside, vault);
+    expect(ensurePrivateDir(join(vault, 'newchild', 'sub'))).toBe(false);
+    expect(existsSync(join(outside, 'newchild'))).toBe(false);
+    expect(mode(outside)).toBe(before);
   });
 });

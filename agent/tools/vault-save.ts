@@ -236,8 +236,17 @@ export async function salva(
   }
 
   // Directory privata 0700 e nota 0600, con gli helper canonici della PR
-  // (#639): nessuna seconda policy dei permessi in questo tool.
-  ensurePrivateDir(dirname(assoluto));
+  // (#639): nessuna seconda policy dei permessi in questo tool. Il `false`
+  // fail-closed (ancestor symlink sulla catena) non è un no-op silenzioso:
+  // scrivere comunque ricreerebbe l'escape, quindi l'operazione fallisce in
+  // modo veritiero senza toccare il disco fuori dal vault.
+  if (!ensurePrivateDir(dirname(assoluto))) {
+    return {
+      content: `vault_save: non ho potuto preparare la directory privata per \`${relativo}\`, non eseguito.`,
+      isError: true,
+      tier: 0,
+    };
+  }
   writeFileSync(assoluto, `# ${parsed.titolo}\n\n${parsed.testo}\n`, { encoding: 'utf8', mode: 0o600 });
   tightenPrivateFile(assoluto);
 
