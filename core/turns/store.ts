@@ -176,6 +176,17 @@ export type TurnCounters = {
   iterations: number;
   recoveriesUsed: number;
   transportRetriesLeft: number;
+  /**
+   * Accepted `max_tokens` partial continuations in this lease (#615).
+   *
+   * The spent side of `MAX_TRUNCATION_CONTINUATIONS`: incremented once per
+   * accepted prefix chunk, checkpointed with the chunk itself, so a crash
+   * between two continuations resumes against the same total instead of
+   * resetting it. Reset only by an explicit owner-granted new lease
+   * (`buildFreshCounters`), which is human-rate-limited. Read defensively:
+   * rows written before this field existed have no value for it.
+   */
+  truncationsUsed: number;
   toolCallsMade: number;
   nudgedForCompletion: boolean;
   usage: {
@@ -366,6 +377,7 @@ function toCounters(raw: string): TurnCounters {
   const parsed = JSON.parse(raw) as TurnCounters;
   return {
     ...parsed,
+    truncationsUsed: Number.isFinite(parsed.truncationsUsed) ? (parsed.truncationsUsed as number) : 0,
     resumes: Number.isFinite(parsed.resumes) ? parsed.resumes : 0,
     contextBuilt: parsed.contextBuilt === true,
     ...(Number.isFinite(parsed.activeModelMs) ? { activeModelMs: Math.max(0, parsed.activeModelMs as number) } : {}),

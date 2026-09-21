@@ -163,6 +163,7 @@ describe('continuazione conversazionale (P0-B)', () => {
     iterations: 3,
     recoveriesUsed: 5,
     transportRetriesLeft: 7,
+    truncationsUsed: 0,
     toolCallsMade: 2,
     nudgedForCompletion: false,
     usage: { inputTokens: 1, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },

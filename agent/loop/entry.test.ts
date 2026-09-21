@@ -355,6 +355,7 @@ describe('continueTurn rifiuta senza toccare la riga', () => {
     iterations: 3,
     recoveriesUsed: 5,
     transportRetriesLeft: 7,
+    truncationsUsed: 0,
     toolCallsMade: 2,
     nudgedForCompletion: false,
     usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },

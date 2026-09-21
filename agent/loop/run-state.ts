@@ -55,6 +55,13 @@ export class TurnRun {
   recoveriesUsed: number;
   /** The transport retry budget owned by the loop, not by an SDK. */
   transportRetriesLeft: number;
+  /**
+   * Accepted `max_tokens` partials in this lease (#615): the spent side of
+   * `MAX_TRUNCATION_CONTINUATIONS`. Durable (in `counters()`), unlike
+   * `providerEmptyStreak` — what must survive a crash is the attempt budget,
+   * and a reset here would let a crash loop continue for ever.
+   */
+  truncationsUsed: number;
   toolCallsMade: number;
   nudgedForCompletion: boolean;
   spentUsd: number;
@@ -153,6 +160,9 @@ export class TurnRun {
     this.iterations = record.counters.iterations;
     this.recoveriesUsed = record.counters.recoveriesUsed;
     this.transportRetriesLeft = record.counters.transportRetriesLeft;
+    this.truncationsUsed = Number.isFinite(record.counters.truncationsUsed)
+      ? (record.counters.truncationsUsed as number)
+      : 0;
     this.toolCallsMade = record.counters.toolCallsMade;
     this.nudgedForCompletion = record.counters.nudgedForCompletion;
     this.spentUsd = record.counters.spentUsd;
@@ -184,6 +194,7 @@ export class TurnRun {
       iterations: this.iterations,
       recoveriesUsed: this.recoveriesUsed,
       transportRetriesLeft: this.transportRetriesLeft,
+      truncationsUsed: this.truncationsUsed,
       toolCallsMade: this.toolCallsMade,
       nudgedForCompletion: this.nudgedForCompletion,
       usage: { ...this.usage },

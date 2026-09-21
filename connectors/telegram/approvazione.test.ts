@@ -122,6 +122,7 @@ function turnoInAttesa(h: ReturnType<typeof harness>): { turnId: string; approva
       iterations: 1,
       recoveriesUsed: 0,
       transportRetriesLeft: 2,
+      truncationsUsed: 0,
       toolCallsMade: 1,
       nudgedForCompletion: false,
       usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },

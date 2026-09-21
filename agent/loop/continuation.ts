@@ -37,8 +37,11 @@ export const PENDING_TTL_MS = 10 * 60 * 1000;
  *
  * - turn-cumulative: `iterations` (monotonic span numbering), preserved.
  * - lease-local, profile-fresh: `recoveriesUsed` 0, `transportRetriesLeft`
- *   MAX, `toolCallsMade` 0, `nudgedForCompletion` false, `usage`/`spentUsd`/
- *   `activeModelMs` zeroed.
+ *   MAX, `truncationsUsed` 0, `toolCallsMade` 0, `nudgedForCompletion`
+ *   false, `usage`/`spentUsd`/`activeModelMs` zeroed. The length-continuation
+ *   budget resets here for the same reason transport does: the grant is
+ *   explicit, authenticated and human-rate-limited — the opposite of the
+ *   crash loop `resumes` guards.
  * - preserved, never reset: `resumes` (crash-loop bound, counted separately
  *   in `lifetime.leases`), `contextBuilt` (the preamble ran in lease 0 and
  *   never re-runs — enforced by the caller refusing unstarted rows).
@@ -48,6 +51,7 @@ export function buildFreshCounters(from: TurnCounters): TurnCounters {
     iterations: from.iterations,
     recoveriesUsed: 0,
     transportRetriesLeft: MAX_TRANSPORT_RETRIES,
+    truncationsUsed: 0,
     toolCallsMade: 0,
     nudgedForCompletion: false,
     usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
@@ -301,6 +305,7 @@ export async function askWhichContinuation(
         iterations: 0,
         recoveriesUsed: 0,
         transportRetriesLeft: MAX_TRANSPORT_RETRIES,
+        truncationsUsed: 0,
         toolCallsMade: 0,
         nudgedForCompletion: false,
         usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
