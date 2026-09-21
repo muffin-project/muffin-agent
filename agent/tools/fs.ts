@@ -12,6 +12,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fence } from '../../core/memory/spotlight.js';
 import type { CapabilityDecl, TrustTier } from '../../core/policy/types.js';
@@ -495,6 +496,446 @@ function isNestedGitHooksPath(target: string): boolean {
 }
 
 /**
+ * Repository execution-control metadata as a deny-write boundary (#646).
+ *
+ * `fs_write`/`fs_edit` already deny `.git/hooks`, but `.git/config` could
+ * still reconfigure Git to execute a hook from an attacker-chosen workspace
+ * path (`core.hooksPath = .muffin-hook`), bypassing that deny. Undoability
+ * does not close it: once the owner runs the affected Git command, the
+ * external process side effect has already happened outside the sandbox.
+ *
+ * Structural, not a blacklist of ordinary files: any path with a `.git`
+ * segment is Git control metadata (top-level `.git/config`, nested
+ * checkouts, `.git/modules/<name>/config` for submodules, worktree gitdirs,
+ * and the `.git` worktree-pointer file itself). Ordinary project files —
+ * `README.md`, `src/*`, and even `.gitignore`/`.gitattributes`/`.gitmodules`
+ * at the repo root — contain no `.git` segment and keep working.
+ *
+ * Checked on path segments so `.git-worktree` or `.gitxhooks` cannot fake a
+ * match, and case-blind where the filesystem is (same `norm` as the hooks
+ * check above).
+ */
+function isGitControlPath(target: string): boolean {
+  return target.split(sep).map(norm).includes(norm('.git'));
+}
+
+/**
+ * The two indirections that live outside `.git` but are still execution
+ * control: `include.path`/`includeIf.*.path` (an external config file Git
+ * will parse as if it were `.git/config`) and `core.hooksPath` (the
+ * directory Git will execute hooks from). Both are resolved from the
+ * enclosing repository's config at write time, so a nested checkout,
+ * worktree or submodule is covered structurally without advance knowledge
+ * of it existing.
+ *
+ * New delegations via any other command-bearing key (`core.fsmonitor`,
+ * `core.sshCommand`, `diff.*.command`, `filter.*.clean/smudge`, …) still
+ * require a `.git/config` write to take effect, which `isGitControlPath`
+ * above already denies. What this second check closes is the pre-existing
+ * indirection case: the owner already points `include` or `hooksPath` at a
+ * workspace path, and a write to that target alone would arm the next Git
+ * command without touching any config.
+ *
+ * Includes resolve **recursively**: an included file is itself a config, so
+ * its own `include.path` entries (relative to *its* directory, as Git
+ * resolves them) and its `core.hooksPath` entries are collected too, with a
+ * visited-set for cycles and a depth bound mirroring Git's own fatal
+ * `maximum include depth (10)`. Value parsing follows Git's observed
+ * semantics — unquoted `#`/`;` start a comment (even without a preceding
+ * space), quoted segments preserve them, `\"`/`\\`/`\n`/etc. unescape both
+ * inside and outside quotes — because a parser that keeps the comment while
+ * Git strips it classifies a different path than the one Git will touch.
+ *
+ * Fail-closed: a present-but-unreadable config, an unresolvable `.git`, an
+ * ambiguous control value, or a chain deeper than Git itself would follow
+ * marks the checkout `uncertain`, and an uncertain checkout denies the
+ * write. Checkouts with no such indirection stay exactly as permissive as
+ * before — ordinary editing never sees this path deny.
+ */
+function isGitExecutionControlTarget(target: string, scopeRoot: string): boolean {
+  let found: { repos: EnclosingRepo[]; uncertain: boolean };
+  try {
+    found = findEnclosingRepos(target, scopeRoot);
+  } catch {
+    // Cannot scope the write to its checkouts: deny rather than allow blind.
+    return true;
+  }
+  if (found.uncertain) return true;
+  if (found.repos.length === 0) return false;
+  const t = norm(target);
+  for (const repo of found.repos) {
+    let targets: GitExecutionTargets;
+    try {
+      targets = readGitExecutionTargets(repo.repoRoot, repo.gitdir);
+    } catch {
+      return true;
+    }
+    if (targets.uncertain) return true;
+    for (const inc of targets.includes) {
+      if (norm(inc) === t) return true;
+    }
+    for (const dir of targets.hooksDirs) {
+      const d = norm(dir);
+      if (t === d || t.startsWith(d + sep)) return true;
+    }
+  }
+  return false;
+}
+
+type GitExecutionTargets = { includes: string[]; hooksDirs: string[]; uncertain: boolean };
+
+/** Mirrors Git's own `fatal: exceeded maximum include depth (10)`. */
+const GIT_INCLUDE_MAX_DEPTH = 10;
+
+type EnclosingRepo = { repoRoot: string; gitdir: string };
+
+/**
+ * Every checkout from `target`'s directory up to (and including) the scope root.
+ *
+ * A `.git` that exists but cannot be resolved to a gitdir (unreadable or
+ * malformed pointer file) marks the walk `uncertain` instead of being
+ * silently skipped: the checkout's control files are unclassifiable, so the
+ * write must be denied. A `.git` that does not exist at all (missing or
+ * dangling link) is simply not a checkout — Git itself would agree.
+ */
+function findEnclosingRepos(target: string, scopeRoot: string): { repos: EnclosingRepo[]; uncertain: boolean } {
+  const out: EnclosingRepo[] = [];
+  let uncertain = false;
+  // `target` arrives realpath'd from `resolveInScope`; `scope.root` may still
+  // be the unresolved string the turn was built with (`/tmp` vs
+  // `/private/tmp` on macOS). Compare real to real, or no ancestor ever
+  // matches and every indirection check fails open.
+  let base: string;
+  try {
+    base = realpathSync(resolve(scopeRoot));
+  } catch {
+    base = resolve(scopeRoot);
+  }
+  let current = dirname(target);
+  for (;;) {
+    if (!containmentCheck(base, current) && norm(current) !== norm(base)) break;
+    const gitPath = join(current, '.git');
+    if (existsSync(gitPath)) {
+      const resolved = resolveGitdir(current, gitPath);
+      if (resolved !== null) out.push({ repoRoot: current, gitdir: resolved });
+      else uncertain = true;
+    }
+    if (norm(current) === norm(base)) break;
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return { repos: out, uncertain };
+}
+
+/** The real gitdir for `repoRoot`, following a `.git` worktree/submodule pointer file. */
+function resolveGitdir(repoRoot: string, gitPath: string): string | null {
+  try {
+    const st = statSync(gitPath, { throwIfNoEntry: false });
+    if (st === undefined) return null;
+    if (st.isDirectory()) return gitPath;
+    if (st.isFile()) {
+      const body = readFileSync(gitPath, 'utf8').trim();
+      const m = /^gitdir\s*:\s*(.+)\s*$/.exec(body);
+      if (!m?.[1]) return null;
+      const pointed = m[1].trim();
+      return isAbsolute(pointed) ? pointed : resolve(repoRoot, pointed);
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Config files whose values can redirect future trusted-host Git execution. */
+function gitConfigCandidates(gitdir: string): { files: string[]; uncertain: boolean } {
+  const files = [join(gitdir, 'config'), join(gitdir, 'config.worktree')];
+  let uncertain = false;
+  // Worktree gitdirs carry a `commondir` pointer back to the main `.git`:
+  // the common config lives there, not in the worktree gitdir.
+  const commondirFile = join(gitdir, 'commondir');
+  if (existsSync(commondirFile)) {
+    let body: string | null = null;
+    try {
+      body = readFileSync(commondirFile, 'utf8').trim();
+    } catch {
+      body = null;
+    }
+    if (body === null || body === '') {
+      // Present but unreadable (or empty): the common config is
+      // unclassifiable, so the checkout is uncertain. Missing entirely
+      // means there is no common config to read — certain.
+      uncertain = true;
+    } else {
+      const common = isAbsolute(body) ? body : resolve(gitdir, body);
+      files.push(join(common, 'config'));
+    }
+  }
+  return { files, uncertain };
+}
+
+function readGitExecutionTargets(repoRoot: string, gitdir: string): GitExecutionTargets {
+  const includes: string[] = [];
+  const hooksDirs: string[] = [];
+  let uncertain = false;
+  let home: string | null = null;
+  try {
+    home = homedir();
+  } catch {
+    home = null;
+  }
+  const seed = gitConfigCandidates(gitdir);
+  if (seed.uncertain) uncertain = true;
+  // By real path, so two spellings of the same file share one visit: cycles
+  // terminate with every reachable file parsed (Git itself fatals on cycles,
+  // which already makes the checkout unusable for execution).
+  const visited = new Set<string>();
+  const stack: { file: string; depth: number }[] = seed.files.map((file) => ({ file, depth: 0 }));
+  while (stack.length > 0) {
+    const { file, depth } = stack.pop()!;
+    const identity = norm(realishPath(file));
+    if (visited.has(identity)) continue;
+    visited.add(identity);
+    // Missing include targets are still denied by path (already in
+    // `includes`); Git itself silently skips files that are not there.
+    if (!existsSync(file)) continue;
+    let text: string;
+    try {
+      text = readFileSync(file, 'utf8');
+    } catch {
+      uncertain = true;
+      continue;
+    }
+    const parsed = parseGitConfigExecutionTargets(text);
+    if (parsed.uncertain) uncertain = true;
+    // Git resolves a relative include against the file that names it; the
+    // extra bases are a fail-closed over-approximation for the cases where
+    // the documented base differs by key or version.
+    const originDir = dirname(file);
+    for (const raw of parsed.includePaths) {
+      const expanded = expandTilde(raw, home);
+      if (expanded === null) {
+        uncertain = true;
+        continue;
+      }
+      for (const abs of resolveGitConfigPaths(expanded, [originDir, gitdir, repoRoot])) {
+        includes.push(abs);
+        if (depth + 1 > GIT_INCLUDE_MAX_DEPTH) uncertain = true;
+        else stack.push({ file: abs, depth: depth + 1 });
+      }
+    }
+    // `core.hooksPath` is honored relative to the repository top level when
+    // Git reads it; the extra bases deny the same over-approximation.
+    for (const raw of parsed.hooksPaths) {
+      const expanded = expandTilde(raw, home);
+      if (expanded === null) {
+        uncertain = true;
+        continue;
+      }
+      for (const abs of resolveGitConfigPaths(expanded, [repoRoot, gitdir, originDir])) hooksDirs.push(abs);
+    }
+  }
+  return { includes, hooksDirs, uncertain };
+}
+
+/**
+ * `~` (and only bare `~`, which Git expands at include time) plus the
+ * process home. `~user/` is expanded by Git against *another* user's home,
+ * which this process cannot resolve portably — encountering it marks the
+ * checkout uncertain instead of guessing. Returns `null` when the value
+ * cannot be expanded reliably.
+ */
+function expandTilde(raw: string, home: string | null): string | null {
+  if (raw === '~' || raw.startsWith('~/') || raw.startsWith('~\\')) {
+    if (home === null || home === '') return null;
+    return join(home, raw.slice(1));
+  }
+  if (raw.startsWith('~')) return null;
+  return raw;
+}
+
+/**
+ * Git-accurate `key = value` parse for the two execution-control surfaces,
+ * verified against real `git config` behaviour (see the regression tests).
+ * Keys and section names are case-insensitive. A line that cannot be a
+ * control directive is skipped without affecting certainty; a control-key
+ * line whose value cannot be classified reliably sets `uncertain` so the
+ * caller denies instead of guessing.
+ */
+function parseGitConfigExecutionTargets(text: string): {
+  includePaths: string[];
+  hooksPaths: string[];
+  uncertain: boolean;
+} {
+  const includePaths: string[] = [];
+  const hooksPaths: string[] = [];
+  let uncertain = false;
+  // A trailing `\` joins the next physical line before anything else is lexed.
+  const lines: string[] = [];
+  let pending = '';
+  for (const physical of text.split('\n')) {
+    if (physical.endsWith('\\')) {
+      pending += physical.slice(0, -1);
+    } else {
+      lines.push(pending + physical);
+      pending = '';
+    }
+  }
+  if (pending !== '') lines.push(pending);
+  let section = '';
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed === '' || trimmed.startsWith('#') || trimmed.startsWith(';')) continue;
+    const sectionMatch = /^\[([^\]]+)\]/.exec(trimmed);
+    if (sectionMatch?.[1] !== undefined) {
+      // `includeIf "gitdir:…"` carries its condition as the subsection;
+      // the section name itself is still the discriminant. Every conditional
+      // include is followed regardless of whether its condition matches
+      // now: a condition that matches later would otherwise arm silently.
+      const name = sectionMatch[1].trim().split(/\s+/)[0]?.toLowerCase() ?? '';
+      section = name;
+      continue;
+    }
+    const eq = trimmed.indexOf('=');
+    // No `=`: Git rejects the whole file, so nothing in it can arm execution.
+    if (eq === -1) continue;
+    const key = trimmed.slice(0, eq).trim().toLowerCase();
+    const rawValue = trimmed.slice(eq + 1);
+    const isIncludeKey = (section === 'include' || section === 'includeif') && key === 'path';
+    const isHooksKey = section === 'core' && key === 'hookspath';
+    if (!isIncludeKey && !isHooksKey) continue;
+    const parsed = parseGitConfigValue(rawValue);
+    if (parsed.uncertain) {
+      uncertain = true;
+      continue;
+    }
+    // An empty `include.path` is fatal to Git; an empty `hooksPath` is the
+    // default. Neither names a target.
+    if (parsed.value === '') continue;
+    if (isIncludeKey) includePaths.push(parsed.value);
+    else hooksPaths.push(parsed.value);
+  }
+  return { includePaths, hooksPaths, uncertain };
+}
+
+/**
+ * The value half of Git config syntax, as `git config` implements it:
+ * unquoted `#`/`;` starts a comment (no preceding space required), quoted
+ * segments preserve both characters, and `\"`/`\\`/`\n`/`\t`/`\b`/`\r`
+ * unescape identically inside and outside quotes (`"t1" extra` reads as
+ * `t1 extra`; `pre"mid"post` as `premidpost`). Anything else after a
+ * backslash, or an unterminated quote, is rejected by Git outright — and is
+ * `uncertain` here, so the caller denies instead of classifying a different
+ * string than the one Git would touch.
+ */
+function parseGitConfigValue(raw: string): { value: string; uncertain: boolean } {
+  const fail = { value: '', uncertain: true };
+  // 1. Quote-aware comment strip over the raw text.
+  let end = raw.length;
+  let inQuotes = false;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (inQuotes) {
+      if (c === '\\') i++;
+      else if (c === '"') inQuotes = false;
+    } else if (c === '\\') {
+      i++;
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === '#' || c === ';') {
+      end = i;
+      break;
+    }
+  }
+  if (inQuotes) return fail;
+  const core = raw.slice(0, end).trim();
+  if (core === '') return { value: '', uncertain: false };
+  // 2. Segment parse with escapes.
+  let out = '';
+  let i = 0;
+  const n = core.length;
+  while (i < n) {
+    const c = core[i];
+    if (c === '"') {
+      i++;
+      let closed = false;
+      while (i < n) {
+        const d = core[i]!;
+        if (d === '\\' && i + 1 < n) {
+          const unescaped = unescapeGitConfigChar(core[i + 1]!);
+          if (unescaped === null) return fail;
+          out += unescaped;
+          i += 2;
+        } else if (d === '"') {
+          closed = true;
+          i++;
+          break;
+        } else {
+          out += d;
+          i++;
+        }
+      }
+      if (!closed) return fail;
+    } else if (c === '\\' && i + 1 < n) {
+      const unescaped = unescapeGitConfigChar(core[i + 1]!);
+      if (unescaped === null) return fail;
+      out += unescaped;
+      i += 2;
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return { value: out, uncertain: false };
+}
+
+/** The escape table Git honors in config values, in and out of quotes. `null` = Git rejects it. */
+function unescapeGitConfigChar(c: string): string | null {
+  if (c === 'n') return '\n';
+  if (c === 't') return '\t';
+  if (c === 'b') return '\b';
+  if (c === 'r') return '\r';
+  if (c === '"' || c === '\\') return c;
+  return null;
+}
+
+/**
+ * Resolve a config-named path to the absolutes the OS could touch.
+ *
+ * `~` is expanded by the caller; absolute values stand alone; relative
+ * values resolve against every base (the naming file's directory, the
+ * gitdir and the repo root). Git's documented base differs per key and
+ * version, and denying the union is the fail-closed direction for a write
+ * that would otherwise arm execution. Each result is canonicalised through
+ * the deepest existing ancestor so a symlinked checkout compares equal to
+ * the realpath'd write target — without requiring the target itself to
+ * exist yet.
+ */
+function resolveGitConfigPaths(raw: string, bases: string[]): string[] {
+  if (isAbsolute(raw)) return [realishPath(raw)];
+  const out = new Set<string>();
+  for (const base of bases) out.add(realishPath(resolve(base, raw)));
+  return [...out];
+}
+
+/** `realpath` as far as the filesystem exists, then re-attach the rest. Never throws. */
+function realishPath(target: string): string {
+  let current = resolve(target);
+  const missing: string[] = [];
+  for (;;) {
+    try {
+      const real = realpathSync(current);
+      return missing.length > 0 ? join(real, ...missing.reverse()) : real;
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return resolve(target);
+      missing.push(current.slice(parent.length + 1));
+      current = parent;
+    }
+  }
+}
+
+/**
  * Is `target` (already real) on one of `scope`'s deny-lists?
  *
  * Shared by `resolveInScope` (the path a tool is about to touch) and `fsList`
@@ -502,13 +943,44 @@ function isNestedGitHooksPath(target: string): boolean {
  * more about a denied path than a read of that same path would allow.
  */
 function isDenied(scope: FsScope, target: string, forWrite: boolean): boolean {
-  if (forWrite && isNestedGitHooksPath(target)) return true;
-  const denied = forWrite ? [...scope.denyWrite, ...(scope.denyRead ?? [])] : (scope.denyRead ?? []);
+  if (!forWrite) {
+    const denied = scope.denyRead ?? [];
+    const t = norm(target);
+    return denied.some((path) => {
+      const deniedAbs = denyEntryAbs(path);
+      if (deniedAbs === null) return false;
+      return t === deniedAbs || t.startsWith(deniedAbs + sep);
+    });
+  }
+  // Execution-control metadata first: structural, no advance knowledge of
+  // nested checkouts needed, and independent of the per-turn deny list.
+  if (isGitControlPath(target)) return true;
+  if (isNestedGitHooksPath(target)) return true;
+  if (isGitExecutionControlTarget(target, scope.root)) return true;
+  const denied = [...scope.denyWrite, ...(scope.denyRead ?? [])];
   const t = norm(target);
   return denied.some((path) => {
-    const deniedAbs = norm(realpathDeepest(resolve(path), 'follow'));
+    const deniedAbs = denyEntryAbs(path);
+    if (deniedAbs === null) return false;
     return t === deniedAbs || t.startsWith(deniedAbs + sep);
   });
+}
+
+/**
+ * A deny-list entry as an absolute, or `null` when it cannot be resolved.
+ *
+ * Skipping is accurate, not lenient: an entry with no real path names
+ * nothing the OS will touch, so no resolved target can equal it. Without
+ * this, a worktree scope (whose `.git` is a pointer *file*) throws raw
+ * `ENOTDIR` on entries like `<wt>/.git/hooks` and every write in the
+ * worktree fails — including ordinary ones this boundary must preserve.
+ */
+function denyEntryAbs(path: string): string | null {
+  try {
+    return norm(realpathDeepest(resolve(path), 'follow'));
+  } catch {
+    return null;
+  }
 }
 
 /**
