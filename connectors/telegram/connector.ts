@@ -1525,9 +1525,14 @@ export class TelegramConnector {
   /**
    * Il poller, prima della coda (ADR-0054 §5): i quattro comandi di controllo
    * dell'owner si servono subito, anche con un turno vivo — è il solo modo
-   * in cui `/stop` può fermare qualcosa. Tutto il resto resta nell'inbox
-   * per il drain, e se un turno è vivo o il runtime è in pausa lo si dice,
-   * una volta per messaggio.
+   * in cui `/stop` può fermare qualcosa. Lo stesso vale per il controllo
+   * Stop della generazione (Bot API 10.3): `stopped_message_generation` deve
+   * raggiungere la corsia viva **qui**, non nel drain — il drain è a
+   * svuotamento singolo e mentre un turno gira è occupato proprio da quel
+   * turno, quindi un segnale servito lì aspetterebbe la fine del turno che
+   * dovrebbe interrompere. Tutto il resto resta nell'inbox per il drain, e
+   * se un turno è vivo o il runtime è in pausa lo si dice, una volta per
+   * messaggio.
    */
   private async controlla(updates: Update[]): Promise<void> {
     // Due passate, e la prima **senza un solo `await`**.
@@ -1545,7 +1550,16 @@ export class TelegramConnector {
     // costruzione: non c'è nessun punto, fra `accept` e il primo `await`, in
     // cui il drain possa osservare un batch mezzo registrato.
     const controlli: Incoming[] = [];
+    // Pressioni del controllo Stop (Bot API 10.3): update_id grezzi, non
+    // `Incoming` — non sono messaggi e `parseUpdate` non li vede.
+    const stopPremuti: number[] = [];
     for (const update of updates) {
+      const stopRichiesto = (update as { stopped_message_generation?: unknown }).stopped_message_generation;
+      if (stopRichiesto !== undefined) {
+        this.gestiti.add(update.update_id);
+        stopPremuti.push(update.update_id);
+        continue;
+      }
       const incoming = parseUpdate(update, this.meId);
       if (!incoming) continue;
       const { principal } = principalFor(incoming, this.deps.config.ownerUserId);
@@ -1578,6 +1592,27 @@ export class TelegramConnector {
       // È anche il drain che, prima della registrazione anticipata qui sopra,
       // trovava il comando *successivo* dello stesso batch ancora `pending` e
       // lo serviva una seconda volta.
+      if (this.draining === null) this.scheduleDrain();
+    }
+
+    // Il controllo Stop, subito come i comandi: `handleStopGenerazione` è
+    // sincrono (un abort sulla corsia + una riga di diario), quindi qui non
+    // si apre nessuna finestra — ma la forma a due passate resta la stessa,
+    // e `markProcessed` + `gestiti.delete` hanno la stessa ragione che sopra.
+    // Il ramo gemello dentro `drain()` resta per la ripresa dopo un riavvio:
+    // un segnale rimasto `pending` (processo morto fra `accept` e questo
+    // punto) viene servito lì, a turno non più vivo, come no-op registrato.
+    for (const updateId of stopPremuti) {
+      const segnale = updates.find((u) => u.update_id === updateId) as { stopped_message_generation?: unknown } | undefined;
+      try {
+        this.handleStopGenerazione(segnale?.stopped_message_generation, this.deps.log ?? (() => {}));
+      } catch (error) {
+        (this.deps.log ?? (() => {}))(
+          `telegram: stop della generazione non gestito — ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      this.deps.inbox.markProcessed(updateId, this.now());
+      this.gestiti.delete(updateId);
       if (this.draining === null) this.scheduleDrain();
     }
 

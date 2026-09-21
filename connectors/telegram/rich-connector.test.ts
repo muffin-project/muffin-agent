@@ -95,7 +95,7 @@ type Call = {
   rich?: OutboundRich;
   messageId?: number;
   threadId?: number | null;
-  draftOptions?: { canStop?: boolean; keepOnStop?: boolean };
+  draftOptions?: { canStop: boolean | undefined; keepOnStop: boolean | undefined };
 };
 
 function recordingApi(): { api: TelegramApiLike; calls: Call[] } {
@@ -354,10 +354,10 @@ describe('rich drafts · the preview follows the partial across fake time', () =
   });
 
   it('every legacy draft carries the Stop control', async () => {
-    const seen: ({ canStop?: boolean } | undefined)[] = [];
+    const seen: ({ canStop: boolean | undefined } | undefined)[] = [];
     const api = {
       sendMessageDraft: async (_c: number, _d: number, _t: string, options?: { canStop?: boolean }) => {
-        seen.push({ canStop: options?.canStop });
+        seen.push(options?.canStop === undefined ? undefined : { canStop: options.canStop });
         return true;
       },
       sendRichMessageDraft: async () => true,

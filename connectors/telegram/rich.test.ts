@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   countRich,
@@ -11,6 +14,7 @@ import {
   RICH_MAX_CHARS,
   RICH_MAX_NESTING,
   RICH_MAX_TABLE_COLUMNS,
+  TELEGRAM_BOT_API_RICH_FLOOR,
   TELEGRAM_BOT_API_TARGET,
   unknownRichPlaceholder,
 } from './rich.js';
@@ -38,6 +42,18 @@ describe('telegram rich · version and limits are explicit surface facts', () =>
     expect(RICH_COMPAT_CHARS).toBeLessThan(RICH_MAX_CHARS);
     expect(RICH_COMPAT_BLOCKS).toBeLessThan(RICH_MAX_BLOCKS);
   });
+
+  it('the declared floor never exceeds the target, and the type-only dependency covers the target', () => {
+    // The maintainability seam (§10): a Bot API bump starts here, not from a
+    // network call in production or CI. If the changelog moves the level,
+    // this is the test that names the new number first.
+    expect(TELEGRAM_BOT_API_RICH_FLOOR <= TELEGRAM_BOT_API_TARGET).toBe(true);
+    const pkg = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'package.json'), 'utf8')) as {
+      devDependencies?: Record<string, string>;
+    };
+    // Type-only, no runtime: the client stays direct fetch (`api.ts`).
+    expect(pkg.devDependencies?.['@grammyjs/types'] ?? '').toMatch(/^\^5\./);
+  });
 });
 
 describe('telegram rich · simple prose stays on the proven legacy path', () => {
@@ -62,8 +78,9 @@ describe('telegram rich · structured answers ride rich', () => {
     const plan = planRich('| nome | prezzo |\n| --- | ---: |\n| pane | 2 |\n| latte | 3 |');
     expect(plan.mode).toBe('rich');
     if (plan.mode !== 'rich') return;
-    expect(plan.message.blocks).toHaveLength(1);
-    const table = plan.message.blocks[0]!;
+    const blocks = plan.message.blocks ?? [];
+    expect(blocks).toHaveLength(1);
+    const table = blocks[0]!;
     expect(table.type).toBe('table');
     if (table.type !== 'table') return;
     expect(table.cells).toHaveLength(3); // header + 2 rows
@@ -75,7 +92,8 @@ describe('telegram rich · structured answers ride rich', () => {
     const plan = planRich('- [x] pane\n- [ ] latte');
     expect(plan.mode).toBe('rich');
     if (plan.mode !== 'rich') return;
-    const list = plan.message.blocks[0]!;
+    const blocks = plan.message.blocks ?? [];
+    const list = blocks[0]!;
     expect(list.type).toBe('list');
     if (list.type !== 'list') return;
     expect(list.items[0]).toMatchObject({ has_checkbox: true, is_checked: true });
@@ -87,29 +105,33 @@ describe('telegram rich · structured answers ride rich', () => {
     const plan = planRich('# Titolo\n\nUn paragrafo.');
     expect(plan.mode).toBe('rich');
     if (plan.mode !== 'rich') return;
-    expect(plan.message.blocks[0]).toMatchObject({ type: 'heading', size: 1 });
-    expect(plan.message.blocks[1]).toMatchObject({ type: 'paragraph' });
+    const blocks = plan.message.blocks ?? [];
+    expect(blocks[0]).toMatchObject({ type: 'heading', size: 1 });
+    expect(blocks[1]).toMatchObject({ type: 'paragraph' });
   });
 
   it('details become a details block with summary', () => {
     const plan = planRich('<details>\n<summary>Spiegazione</summary>\nIl contenuto.\n</details>');
     expect(plan.mode).toBe('rich');
     if (plan.mode !== 'rich') return;
-    expect(plan.message.blocks[0]).toMatchObject({ type: 'details' });
+    const blocks = plan.message.blocks ?? [];
+    expect(blocks[0]).toMatchObject({ type: 'details' });
   });
 
   it('math becomes a mathematical_expression block', () => {
     const plan = planRich('$$E = mc^2$$');
     expect(plan.mode).toBe('rich');
     if (plan.mode !== 'rich') return;
-    expect(plan.message.blocks[0]).toMatchObject({ type: 'mathematical_expression', expression: 'E = mc^2' });
+    const blocks = plan.message.blocks ?? [];
+    expect(blocks[0]).toMatchObject({ type: 'mathematical_expression', expression: 'E = mc^2' });
   });
 
   it('inline emphasis survives inside rich paragraphs', () => {
     const plan = planRich('# Nota\n\nTesto con **grassetto** e un [collegamento](https://example.test/x).');
     expect(plan.mode).toBe('rich');
     if (plan.mode !== 'rich') return;
-    const para = plan.message.blocks[1]!;
+    const blocks = plan.message.blocks ?? [];
+    const para = blocks[1]!;
     expect(para.type).toBe('paragraph');
     const flat = JSON.stringify(para);
     expect(flat).toContain('"bold"');
@@ -122,6 +144,7 @@ describe('telegram rich · structured answers ride rich', () => {
     const plan = planRich(`| nome | q | nota |\n| --- | --- | --- |\n${rows}`);
     expect(plan.mode).toBe('rich');
     if (plan.mode !== 'rich') return;
+    const blocks = plan.message.blocks ?? [];
     expect(plan.chars).toBeGreaterThan(4096);
     expect(plan.chars).toBeLessThanOrEqual(RICH_COMPAT_CHARS);
   });
