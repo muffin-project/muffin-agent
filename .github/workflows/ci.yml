@@ -131,6 +131,11 @@ jobs:
             exit 0
           fi
 
+          if [ "${GITHUB_EVENT_NAME:-}" != "pull_request" ]; then
+            echo "DCO: ${GITHUB_EVENT_NAME:-unknown} event — no contributor PR sign-off to check."
+            exit 0
+          fi
+
           mapfile -t PR_META < <(node - <<'NODE'
           const fs = require('node:fs');
           const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
