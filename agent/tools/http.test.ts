@@ -116,13 +116,17 @@ describe('http_get', () => {
   });
 
   it('clips a long body with an announced marker, keeping the head', async () => {
+    // Bounded streaming aborts at the cap: the head survives, the tail was
+    // never read (FINE absent) — the old head+tail shape required buffering
+    // the whole body first (#644).
     const big = `INIZIO${'x'.repeat(120_000)}FINE`;
     const { fetchFn } = fetchScript([new Response(big, { status: 200 })]);
     const tool = makeHttpTool({ fetchFn, lookupFn: publicLookup });
     const out = await tool.handler({ url: 'https://api.example.com/big' }, ctx);
     expect(out.content).toContain('risposta troncata');
     expect(out.content).toContain('INIZIO');
-    expect(out.content).toContain('FINE');
+    expect(out.content).not.toContain('FINE');
+    expect(out.tier).toBe(3);
   });
 
   it('a body that tries to close the fence loses the attempt', async () => {
