@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -95,11 +95,23 @@ describe('private-by-construction under a permissive umask', () => {
     const db = openDb(paths(home).db);
     db.exec(`CREATE TABLE IF NOT EXISTS t (x TEXT)`);
     db.prepare(`INSERT INTO t (x) VALUES (?)`).run('y');
-    // Force a WAL sidecar to exist, then tighten what SQLite created.
+    // Non-vacuous sidecar proof: while a WAL writer is open with
+    // un-checkpointed frames the `-wal`/`-shm` sidecars must exist — prove
+    // their modes here. A TRUNCATE checkpoint plus close lets SQLite remove
+    // them, so asserting only after close would prove nothing.
+    tightenPrivateDb(paths(home).db);
+    for (const suffix of ['-wal', '-shm']) {
+      const sidecar = `${paths(home).db}${suffix}`;
+      expect(existsSync(sidecar), `expected ${suffix} sidecar while the WAL writer is open`).toBe(true);
+      expect(mode(sidecar)).toBe(0o600);
+    }
     db.pragma('wal_checkpoint(TRUNCATE)');
     db.close();
     tightenPrivateDb(paths(home).db);
     expect(mode(paths(home).db)).toBe(0o600);
+    // A clean close after TRUNCATE reclaims the sidecars: absence here is
+    // SQLite reclaiming, not an unproven mode — the modes were proven above
+    // while the files existed.
     for (const suffix of ['-wal', '-shm', '-journal']) {
       const sidecar = `${paths(home).db}${suffix}`;
       if (existsSync(sidecar)) expect(mode(sidecar)).toBe(0o600);
@@ -214,5 +226,32 @@ describe('hardened / service-user-owned material is never chmodded', () => {
     expect(() => tightenPrivateFile(link)).not.toThrow();
     expect(() => ensurePrivateDir(join(home, 'newdir'))).not.toThrow();
     expect(mode(join(home, 'newdir'))).toBe(0o700);
+  });
+});
+
+describe('ensurePrivateDir never follows a leaf symlink', () => {
+  it('leaves the link in place and never chmods the outside target', () => {
+    savedUmask = process.umask(0o022);
+    const root = tmp();
+    const home = join(root, 'home');
+    mkdirSync(home, { recursive: true });
+    ensurePrivateDir(home);
+    const outside = join(root, 'outside');
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, 'data.txt'), 'x\n');
+    chmodSync(outside, 0o755);
+    const before = mode(outside);
+
+    const link = join(home, 'backups');
+    symlinkSync(outside, link);
+    ensurePrivateDir(link);
+
+    // The leaf stays a symlink — not replaced, not resolved.
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    // The outside target keeps its original mode: no chmod escaped.
+    expect(mode(outside)).toBe(before);
+    expect(mode(outside)).toBe(0o755);
+    // And the containing home is still ours and private.
+    expect(mode(home)).toBe(0o700);
   });
 });

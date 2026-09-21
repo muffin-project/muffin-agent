@@ -49,13 +49,30 @@ export function isSelfOwned(
   }
 }
 
-/** `mkdir -p` that is private by construction, and tightens a pre-existing dir. */
+/**
+ * `mkdir -p` that is private by construction, and tightens a pre-existing dir.
+ *
+ * Never follows a leaf symlink: when `dir` itself is a symlink (e.g.
+ * `home/backups -> outside-dir`) there is nothing to create and nothing ours
+ * to tighten, so it returns without touching the link or its target. A
+ * stat-following ownership check plus `chmod` here would chmod the outside
+ * target through the link — the same escape `tightenHome`/`tightenPrivateFile`
+ * already refuse via `lstat`.
+ */
 export function ensurePrivateDir(
   dir: string,
   opts: { stat?: StatLike; getuid?: GetUidLike } = {},
 ): void {
+  try {
+    const before = lstatSync(dir, { throwIfNoEntry: false });
+    if (before !== undefined && before.isSymbolicLink()) return;
+  } catch {
+    return;
+  }
   mkdirSync(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
   try {
+    const st = lstatSync(dir, { throwIfNoEntry: false });
+    if (st === undefined || !st.isDirectory()) return;
     if (isSelfOwned(dir, opts.stat ?? defaultStat, opts.getuid ?? defaultGetuid)) {
       chmodSync(dir, PRIVATE_DIR_MODE);
     }

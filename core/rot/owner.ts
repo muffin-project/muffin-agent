@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { tightenPrivateFile } from '../config/private-fs.js';
 import { paths } from '../config/config.js';
 import { hardeningHolds, seal, sha256, verify, type RotManifest } from './verify.js';
 
@@ -323,7 +324,8 @@ export function sealOwnerBinding(home: string, patch: OwnerPatch, deps: OwnerSea
   // su un manifest che nessuno ha toccato.
   let scritto = false;
   try {
-    writeFileSync(file, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+    writeFileSync(file, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    tightenPrivateFile(file);
     scritto = true;
     seal(home, rotVersion, new Date());
   } catch (error) {
@@ -335,6 +337,7 @@ export function sealOwnerBinding(home: string, patch: OwnerPatch, deps: OwnerSea
     if (scritto && fileRawPrima !== undefined) {
       try {
         writeFileSync(file, fileRawPrima, 'utf8');
+        tightenPrivateFile(file);
       } catch {
         rollbackFallito = true;
       }
@@ -342,6 +345,7 @@ export function sealOwnerBinding(home: string, patch: OwnerPatch, deps: OwnerSea
     if (scritto && manifestRawPrima !== undefined) {
       try {
         writeFileSync(manifestFile, manifestRawPrima, 'utf8');
+        tightenPrivateFile(manifestFile);
       } catch {
         rollbackFallito = true;
       }

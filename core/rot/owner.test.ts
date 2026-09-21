@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -197,5 +197,18 @@ describe('rot/owner.json — scrittura', () => {
     righe.length = 0;
     expect(sealOwnerBinding(dir, { telegram: { userId: 1, chatId: 1 } }, { out }).ok).toBe(false);
     expect(righe.join('\n')).toMatch(/non esiste/);
+  });
+
+  it('rot/owner.json nasce a 0600 anche con umask 022', () => {
+    const prev = process.umask(0o022);
+    try {
+      const dir = casa();
+      const esito = sealOwnerBinding(dir, { telegram: { userId: 999, chatId: 999 } }, { out });
+      expect(esito.ok).toBe(true);
+      expect(statSync(join(dir, 'rot', OWNER_FILE)).mode & 0o777).toBe(0o600);
+      expect(verify(dir, 'single-user').ok).toBe(true);
+    } finally {
+      process.umask(prev);
+    }
   });
 });
