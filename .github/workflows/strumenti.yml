@@ -125,30 +125,18 @@
 # suggeriva una superficie che nessuno aveva. I comandi personalizzati sono
 # comunque confluiti nelle skill.
 #
-# Il trigger ricalca `ci.yml`: `pull_request` più il push su `main` soltanto,
-# così un push su una slice non paga due run per la stessa verifica, e
-# `concurrency` con `cancel-in-progress` — il risparmio più grosso e il più
-# facile da dimenticare.
+# Il trigger ricalca la postura source-public: ogni `pull_request` materializza
+# il check, mentre il push resta ristretto a `main`. Questo rende il job
+# utilizzabile come required status check senza il Pending permanente causato
+# dai trigger-level path filters. `concurrency` continua a cancellare run
+# superseded sulla stessa ref.
 
 name: strumenti
 
 on:
+  # Required public check: every PR materializes this workflow. Optimize later
+  # with job-level conditions, never trigger-level path filters.
   pull_request:
-    paths:
-      - '.claude/hooks/**'
-      - '.claude/rules/**'
-      - '.claude/skills/**'
-      - '.claude/loop.md'
-      - '.claude/*.mjs'
-      - '.claude/*.test.ts'
-      - '.claude/**/*.test.ts'
-      # Il handoff è letto dall'hook SessionStart dentro un budget di 4 000
-      # caratteri (`inject-state.mjs`), e `inject-state.test.ts` prova che il
-      # file vero ci sta. Misurato il 02/09/2026: una PR di soli documenti lo ha
-      # portato a 6 467 byte, è passata verde (nessun job la guardava) e la
-      # promozione dev → main è andata rossa qui. Il job che possiede il test
-      # possiede anche il file che il test legge.
-      - 'docs/development/handoff.md'
   push:
     branches: [main]
     paths:
@@ -179,9 +167,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
