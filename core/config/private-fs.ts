@@ -96,12 +96,20 @@ export function ensurePrivateDir(
 
     // Verify the existing chain bottom-up: each component must be a real
     // directory. Stop (exclusively) at the first foreign-owned ancestor —
-    // the trust boundary — or at the filesystem root.
+    // the trust boundary — or at the filesystem root. A symlink counts
+    // against its own link ownership (lstat, never the target): a link this
+    // user planted refuses even when it points at foreign territory, while
+    // a foreign-owned system link above the boundary (e.g. `/tmp` on macOS)
+    // ends the walk instead of failing it.
     let node = cursor;
     for (;;) {
       const st = lstatSync(node, { throwIfNoEntry: false });
       if (st === undefined) return false;
-      if (st.isSymbolicLink()) return false;
+      if (st.isSymbolicLink()) {
+        const me = getuid();
+        if (me !== undefined && st.uid !== me) break;
+        return false;
+      }
       if (!st.isDirectory()) return false;
       if (!isSelfOwned(node, stat, getuid)) break;
       const parent = dirname(node);

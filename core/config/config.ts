@@ -519,7 +519,12 @@ export function loadConfig(home = muffinHome(), onNote: (line: string) => void =
 
 export function saveConfig(config: Config, home = muffinHome()): void {
   const file = paths(home).config;
-  ensurePrivateDir(dirname(file));
+  if (!ensurePrivateDir(dirname(file))) {
+    throw new ConfigError(
+      `non posso scrivere ${file}: la directory privata non è stata stabilita (symlink sulla catena)`,
+      'rimuovi il symlink e riprova',
+    );
+  }
   writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   tightenPrivateFile(file);
 }

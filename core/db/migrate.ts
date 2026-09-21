@@ -421,8 +421,11 @@ export function migrate(
   // The backup comes BEFORE the first reshaping and never on the quiet path —
   // a boot with nothing pending costs zero. `VACUUM INTO` is synchronous,
   // atomic, valid under WAL, and refuses an existing target, which is the
-  // idempotence wanted for a file whose name carries the moment.
-  ensurePrivateDir(opts.backupDir);
+  // idempotence wanted for a file whose name carries the moment. A refused
+  // private parent stops the migration instead of snapshotting outside it.
+  if (!ensurePrivateDir(opts.backupDir)) {
+    throw new Error(`non posso scrivere il backup in ${opts.backupDir}: la directory privata non è stata stabilita (symlink sulla catena)`);
+  }
   const backup = join(
     opts.backupDir,
     `pre-migrate-v${have}-${now().toISOString().replace(/[:.]/g, '-')}.db`,

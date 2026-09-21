@@ -339,8 +339,13 @@ export async function cmdGatewayStop(home: string): Promise<number> {
   // «riportalo su» che questo evita.
   //
   // Un crash non passa di qui e non scrive niente: è così che «fermato» e
-  // «morto» restano due cose diverse per il supervisore.
-  ensurePrivateDir(home);
+  // «morto» restano due cose diverse per il supervisore. Senza parent
+  // privato verificato niente semaforo e niente segnale: scrivere altrove
+  // ricreerebbe l'escape.
+  if (!ensurePrivateDir(home)) {
+    process.stderr.write(`non posso fermare il gateway: la directory privata ${home} non è stata stabilita (symlink sulla catena)\n`);
+    return 1;
+  }
   writeFileSync(paths(home).gatewayStopped, `${new Date().toISOString()}\n`, { encoding: 'utf8', mode: 0o600 });
   tightenPrivateFile(paths(home).gatewayStopped);
 

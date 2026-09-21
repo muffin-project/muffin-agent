@@ -100,7 +100,12 @@ export function loadMcpRegistry(home: string): McpRegistry {
 
 export function saveMcpRegistry(registry: McpRegistry, home: string): void {
   const file = registryPath(home);
-  ensurePrivateDir(paths(home).home);
+  if (!ensurePrivateDir(paths(home).home)) {
+    throw new McpConfigError(
+      `non posso scrivere ${file}: la directory privata non è stata stabilita (symlink sulla catena)`,
+      'rimuovi il symlink e riprova',
+    );
+  }
   writeFileSync(file, `${JSON.stringify(registry, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   tightenPrivateFile(file);
 }

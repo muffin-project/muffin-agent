@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -12,6 +12,7 @@ import {
   paths,
   readDefaultChannel,
   readSecret,
+  saveConfig,
   secretDir,
   writeAuthoritativeSecret,
   writeSecret,
@@ -225,5 +226,28 @@ describe('readDefaultChannel', () => {
 
   it('falls back when the home has no config at all', () => {
     expect(readDefaultChannel(join(tmpdir(), 'muffin-non-esiste-mai'), 'discord')).toBe('discord');
+  });
+});
+
+describe('saveConfig fail-closed sul parent privato (#639)', () => {
+  it('attraverso un ancestor symlink fallisce senza scrivere fuori', () => {
+    const real = home();
+    const cfg = loadConfig(real);
+    const root = mkdtempSync(join(tmpdir(), 'muffin-config-esc-'));
+    try {
+      const outside = join(root, 'outside');
+      mkdirSync(outside, { recursive: true });
+      chmodSync(outside, 0o755);
+      const before = statSync(outside).mode & 0o777;
+      symlinkSync(outside, join(root, 'link'));
+      const escHome = join(root, 'link', 'home');
+      expect(() => saveConfig(cfg, escHome)).toThrow(ConfigError);
+      expect(existsSync(join(outside, 'home', 'config.json'))).toBe(false);
+      expect(existsSync(join(outside, 'config.json'))).toBe(false);
+      expect(statSync(outside).mode & 0o777).toBe(before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(real, { recursive: true, force: true });
+    }
   });
 });

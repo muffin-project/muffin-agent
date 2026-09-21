@@ -111,7 +111,9 @@ export class SessionStore {
 
   constructor(homeDir: string) {
     this.dir = join(homeDir, 'sessions');
-    ensurePrivateDir(this.dir);
+    if (!ensurePrivateDir(this.dir)) {
+      throw new Error(`non posso usare ${this.dir}: la directory privata non è stata stabilita (symlink sulla catena)`);
+    }
   }
 
   open(id?: string): SessionRef {

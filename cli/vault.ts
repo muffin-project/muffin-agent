@@ -27,7 +27,10 @@ async function open(home: string) {
   const { buildRuntime } = await import('../agent/runtime.js');
   const runtime = buildRuntime(home);
   const root = paths(home).vault;
-  ensurePrivateDir(root);
+  if (!ensurePrivateDir(root)) {
+    runtime.close();
+    throw new Error(`non posso usare ${root}: la directory privata non è stata stabilita (symlink sulla catena)`);
+  }
   return { runtime, vault: new Vault(runtime.memory.store, root), root };
 }
 

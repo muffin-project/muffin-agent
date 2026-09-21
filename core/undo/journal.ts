@@ -115,7 +115,9 @@ export class UndoJournal {
    */
   take(turnId: string, call: { callId: string; capability: string; path: string }): Snapshot {
     const dir = this.dir(turnId);
-    ensurePrivateDir(dir);
+    if (!ensurePrivateDir(dir)) {
+      throw new Error(`non posso fotografare ${call.path}: la directory privata ${dir} non è stata stabilita (symlink sulla catena)`);
+    }
     const esistente = this.read(turnId);
     const indice = esistente?.snapshots.length ?? 0;
 

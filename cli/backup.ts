@@ -26,7 +26,9 @@ export function backupNow(
   now: () => Date = () => new Date(),
 ): { file: string; bytes: number } {
   if (!existsSync(dbPath)) throw new Error(`nessun database in ${dbPath}`);
-  ensurePrivateDir(dir);
+  if (!ensurePrivateDir(dir)) {
+    throw new Error(`non posso scrivere il backup in ${dir}: la directory privata non è stata stabilita (symlink sulla catena)`);
+  }
   const file = join(dir, `muffin-${now().toISOString().replace(/[:.]/g, '-')}.db`);
   const db = new DatabaseCtor(dbPath);
   try {

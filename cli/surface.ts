@@ -1199,7 +1199,11 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
   const inbox = new UpdateInbox(telegramDb);
   const delivery = new TelegramDeliveryStore(telegramDb);
   const vaultRoot = paths(home).vault;
-  ensurePrivateDir(join(vaultRoot, 'inbox'));
+  if (!ensurePrivateDir(join(vaultRoot, 'inbox'))) {
+    salute.caduta(TELEGRAM_ID, 'inbox non scrivibile in modo privato', adesso(), 'rimuovi il symlink sotto il vault e riavvia');
+    lines.push('telegram: directory inbox non stabilita in modo privato (symlink sulla catena) — superficie non avviata');
+    return null;
+  }
   // The runtime's own vault, not a second one: `document_read` reads through
   // that instance, and a connector indexing into a different root would
   // produce documents the model cannot open.
@@ -1342,7 +1346,11 @@ function connectDiscord(ctx: PortConnectContext): PortConnection | null {
   const api = new DiscordApi(token);
   const inbox = new DiscordInbox(openDb(paths(home).db));
   const vaultRoot = paths(home).vault;
-  ensurePrivateDir(join(vaultRoot, 'inbox'));
+  if (!ensurePrivateDir(join(vaultRoot, 'inbox'))) {
+    salute.caduta(DISCORD_ID, 'inbox non scrivibile in modo privato', adesso(), 'rimuovi il symlink sotto il vault e riavvia');
+    lines.push('discord: directory inbox non stabilita in modo privato (symlink sulla catena) — superficie non avviata');
+    return null;
+  }
   const connector = new DiscordConnector({
     loop: runtime.deps,
     sessions: runtime.deps.sessions,

@@ -27,7 +27,9 @@ export class JsonlExporter implements SpanExporter {
 
   constructor(homeDir: string) {
     this.dir = join(homeDir, 'traces');
-    ensurePrivateDir(this.dir);
+    if (!ensurePrivateDir(this.dir)) {
+      throw new Error(`non posso usare ${this.dir}: la directory privata non è stata stabilita (symlink sulla catena)`);
+    }
   }
 
   export(span: Span): void {

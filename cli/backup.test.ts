@@ -1,6 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -57,6 +57,25 @@ describe('backupNow — online, validated, self-contained', () => {
     snap.close();
     writer.close();
     db.close();
+  });
+
+  it('refuses a backup dir beneath an ancestor symlink without outside mutation (#639)', () => {
+    const d = dir();
+    const { dbPath, db } = liveDb(d);
+    const root = mkdtempSync(join(tmpdir(), 'muffin-backup-esc-'));
+    try {
+      const outside = join(root, 'outside');
+      mkdirSync(outside, { recursive: true });
+      chmodSync(outside, 0o755);
+      const before = statSync(outside).mode & 0o777;
+      symlinkSync(outside, join(root, 'link'));
+      expect(() => backupNow(dbPath, join(root, 'link', 'backups'))).toThrow(/directory privata/);
+      expect(existsSync(join(outside, 'backups'))).toBe(false);
+      expect(statSync(outside).mode & 0o777).toBe(before);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

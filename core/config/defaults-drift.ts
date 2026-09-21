@@ -152,7 +152,9 @@ export function recordCopied(home: string, entries: { path: string; content: Buf
     files: [...[...byPath.values()].sort((a, b) => a.path.localeCompare(b.path)), ...(read?.unparsed ?? [])],
   };
   const file = paths(home).defaultsManifest;
-  ensurePrivateDir(home);
+  if (!ensurePrivateDir(home)) {
+    throw new Error(`non posso scrivere ${file}: la directory privata non è stata stabilita (symlink sulla catena)`);
+  }
   writeFileSync(file, `${JSON.stringify(registry, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   tightenPrivateFile(file);
 }

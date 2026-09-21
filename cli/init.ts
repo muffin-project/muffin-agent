@@ -81,12 +81,16 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   // material is skipped by construction inside `tightenHome`.
   if (existsSync(home)) tightenHome(home);
   for (const dir of [p.home, p.rot, p.vault, p.traces, p.sessions, p.secrets, p.undo]) {
-    ensurePrivateDir(dir);
+    if (!ensurePrivateDir(dir)) {
+      throw new Error(`non posso inizializzare ${dir}: la directory privata non è stata stabilita (symlink sulla catena)`);
+    }
   }
   step('directories', `${p.home} (0700)`);
   // A pre-existing home may also carry a backups dir and a database with
   // sidecars from an older build: same tightening, same ownership guard.
-  ensurePrivateDir(join(p.home, 'backups'));
+  if (!ensurePrivateDir(join(p.home, 'backups'))) {
+    throw new Error(`non posso inizializzare ${join(p.home, 'backups')}: la directory privata non è stata stabilita (symlink sulla catena)`);
+  }
   if (existsSync(p.db)) tightenPrivateDb(p.db);
 
   const installed = installTree('rot', p.rot, options.force ?? false);
@@ -309,7 +313,9 @@ export function defaultModels(options: InitOptions): { main: string; light: stri
 /** Never overwrites a personalised file: a second `init` must not undo your edits. */
 function installFile(name: string, dest: string, force: boolean): boolean {
   if (!force && existsSync(dest)) return false;
-  ensurePrivateDir(dirname(dest));
+  if (!ensurePrivateDir(dirname(dest))) {
+    throw new Error(`non posso installare ${dest}: la directory privata non è stata stabilita (symlink sulla catena)`);
+  }
   copyFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'defaults', name), dest);
   tightenPrivateFile(dest);
   return true;
@@ -335,7 +341,9 @@ function installTree(sub: string, destDir: string, force: boolean): { relPath: s
   if (!existsSync(source)) return [];
   const copied: { relPath: string; dst: string }[] = [];
   const walk = (from: string, to: string, prefix: string): void => {
-    ensurePrivateDir(to);
+    if (!ensurePrivateDir(to)) {
+      throw new Error(`non posso installare in ${to}: la directory privata non è stata stabilita (symlink sulla catena)`);
+    }
     for (const entry of readdirSync(from)) {
       const src = join(from, entry);
       const dst = join(to, entry);

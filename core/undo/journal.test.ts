@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { UndoJournal, copyNameFor } from './journal.js';
@@ -247,5 +247,25 @@ describe('UndoJournal', () => {
 
     expect(j.read('t1')).toBeNull();
     expect(j.restore('t1')).toBeNull();
+  });
+
+  it('take attraverso un ancestor symlink lancia senza creare fuori (#639)', () => {
+    const { work } = scratch();
+    const f = join(work, 'a');
+    writeFileSync(f, 'a', 'utf8');
+    const escBase = mkdtempSync(join(tmpdir(), 'muffin-undo-esc-'));
+    try {
+      const out = join(escBase, 'outside');
+      mkdirSync(out, { recursive: true });
+      chmodSync(out, 0o755);
+      const before = statSync(out).mode & 0o777;
+      symlinkSync(out, join(escBase, 'link'));
+      const esc = new UndoJournal(join(escBase, 'link', 'undo'));
+      expect(() => esc.take('t1', { callId: 'c', capability: 'fs.write', path: f })).toThrow(/directory privata/);
+      expect(existsSync(join(out, 'undo'))).toBe(false);
+      expect(statSync(out).mode & 0o777).toBe(before);
+    } finally {
+      rmSync(escBase, { recursive: true, force: true });
+    }
   });
 });
