@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatResult, StreamEvent } from '../providers/types.js';
 import { ProviderStreamError } from '../providers/types.js';
-import { drainStream, edgeTrimmer, retryDelayMs } from './stream.js';
+import { continuationDedup, drainStream, edgeTrimmer, retryDelayMs, stripRepeatedPrefix } from './stream.js';
 
 const doneResult = (text: string): ChatResult => ({
   text,
@@ -116,5 +116,59 @@ describe('edgeTrimmer', () => {
 
     expect(wholeOut).toBe(whole.trim());
     expect(chunkOut).toBe(whole.trim());
+  });
+});
+
+describe('stripRepeatedPrefix · exact bytes, never fuzzy', () => {
+  it('strips R+B down to B, leaves divergent text whole, maps exact repeat to empty', () => {
+    expect(stripRepeatedPrefix('AAAA', 'AAAA' + 'BBBB')).toBe('BBBB');
+    expect(stripRepeatedPrefix('AAAA', 'AXYZ')).toBe('AXYZ');
+    expect(stripRepeatedPrefix('AAAA', 'AAAA')).toBe('');
+    expect(stripRepeatedPrefix(undefined, 'AAAA')).toBe('AAAA');
+    expect(stripRepeatedPrefix('', 'AAAA')).toBe('AAAA');
+  });
+
+  it('a chunk that is itself a prefix of R carries no new bytes', () => {
+    // The live gate holds these bytes as a candidate duplicate and the stream
+    // ends: nothing was shown, so nothing may be accepted either.
+    expect(stripRepeatedPrefix('AAAA', 'AA')).toBe('');
+  });
+});
+
+describe('continuationDedup · hold-while-matching, exact mirror of the strip', () => {
+  /** Run pieces through the gate; returns exactly what would be published. */
+  function shown(reference: string, pieces: string[]): string {
+    const gate = continuationDedup(reference);
+    return pieces.map((p) => gate.push(p)).filter((x): x is string => x !== null).join('');
+  }
+
+  it('whole repeat chunk-by-chunk publishes nothing', () => {
+    expect(shown('STESSO-PEZZO-', ['STESSO-', 'PEZZO-'])).toBe('');
+  });
+
+  it('repeat-then-progress publishes only the progress, whatever the splits', () => {
+    expect(shown('AAAA', ['AA', 'AA', 'BB'])).toBe('BB');
+    expect(shown('AAAA', ['AAAABB'])).toBe('BB');
+    expect(shown('AAAA', ['A', 'A', 'A', 'A', 'B', 'B'])).toBe('BB');
+  });
+
+  it('divergence flushes the held bytes: new output is never swallowed', () => {
+    expect(shown('ABCDEF', ['ABC', 'XYZ'])).toBe('ABCXYZ');
+    expect(shown('ABCDEF', ['Z'])).toBe('Z');
+  });
+
+  it('gate output always equals stripRepeatedPrefix over the concatenation', () => {
+    const cases: [string, string[]][] = [
+      ['AAAA', ['AA', 'AA', 'BB']],
+      ['AAAA', ['AAAA']],
+      ['AAAA', ['AX', 'YZ']],
+      ['AAAA', ['BB']],
+      ['RIPETI-', ['RIPETI-', 'RIPETI-']],
+      ['RIPETI-', ['RIPETI-']],
+      ['AAAA', ['AA']],
+    ];
+    for (const [ref, pieces] of cases) {
+      expect(shown(ref, pieces)).toBe(stripRepeatedPrefix(ref, pieces.join('')));
+    }
   });
 });

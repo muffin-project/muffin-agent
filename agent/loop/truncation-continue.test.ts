@@ -534,3 +534,301 @@ describe('#615 bounds, restart, no-progress, unchanged paths', () => {
     expect(agentEpisodes[0]!.content).toBe('prima parte…seconda parte');
   });
 });
+
+/**
+ * Streaming no-progress divergence blocker: the live `onDelta` path and the
+ * durable partial path compute the SAME exact-prefix rule — one
+ * incrementally (`continuationDedup`), one at result time
+ * (`stripRepeatedPrefix`) — so visible and durable can never disagree.
+ */
+function streamingWorld() {
+  const home = mkdtempSync(join(tmpdir(), 'muffin-615-sb-'));
+  const db = new DatabaseCtor(':memory:');
+  const turns = new TurnStore(db);
+  const sessions = new SessionStore(home);
+  const capabilities = new Map();
+  const deps: LoopDeps = {
+    provider: undefined as never,
+    profile: CONSERVATIVE,
+    model: 'test-model',
+    tools: [],
+    capabilities,
+    decide: createDecide({ matrix: POLICY_FLOOR, capabilities, budgetExhausted: () => false, hardened: true }),
+    tracer: new SimpleTracer(new JsonlExporter(home)),
+    sessions,
+    turns,
+    todos: new TodoStore(db),
+    budgetExhausted: () => false,
+    systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite.' },
+    now: NOW,
+  };
+  return { deps, turns, sessions, home };
+}
+
+function visibleText(deltas: TurnDelta[]): string {
+  return deltas.filter((d) => d.type === 'text').map((d) => (d as { text: string }).text).join('');
+}
+
+function durablePartials(deps: LoopDeps, turnId: string): string {
+  const store = deps.turns;
+  const row = store.get(turnId);
+  return (row?.messages ?? [])
+    .filter((m) => m.origin === 'partial')
+    .flatMap((m) => m.content)
+    .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+    .map((b) => b.text)
+    .join('');
+}
+
+describe('#615 streaming continuation: visible == durable, never duplicated', () => {
+  it('A: A then B streams exactly once on both sides', async () => {
+    const deltas: TurnDelta[] = [];
+    let n = 0;
+    const provider: Provider = {
+      kind: 'openai-compat',
+      async chat(): Promise<ChatResult> {
+        throw new Error('unreachable');
+      },
+      async *chatStream() {
+        n += 1;
+        if (n === 1) {
+          yield { type: 'text_delta', text: 'PRIMA-' };
+          yield { type: 'done', result: truncatedPartial('PRIMA-') };
+        } else {
+          yield { type: 'text_delta', text: 'SECONDA' };
+          yield { type: 'done', result: finalAnswer('SECONDA') };
+        }
+      },
+    };
+    const w = streamingWorld();
+    (w.deps as { provider: Provider }).provider = provider;
+    const session = w.sessions.open('owner');
+    const r = await runTurn(w.deps, {
+      principal: owner, tenant: 'host', surface: 'cli', session, text: 'vai', onDelta: (d) => deltas.push(d),
+    });
+    expect(r.stopped).toBe('answered');
+    expect(r.text).toBe('PRIMA-SECONDA');
+    expect(visibleText(deltas)).toBe('PRIMA-SECONDA');
+    expect(durablePartials(w.deps, r.turnId)).toBe('PRIMA-');
+    expect(deltas.filter((d) => d.type === 'boundary')).toHaveLength(0);
+    expect(w.sessions.read(session).filter((m) => m.role === 'assistant')).toHaveLength(1);
+  });
+
+  it('B: exact repeat A->A truncates: visible A once, durable A once, honestly continuable', async () => {
+    const A = 'STESSO-PEZZO-';
+    const deltas: TurnDelta[] = [];
+    let n = 0;
+    const provider: Provider = {
+      kind: 'openai-compat',
+      async chat(): Promise<ChatResult> {
+        throw new Error('unreachable');
+      },
+      async *chatStream() {
+        n += 1;
+        yield { type: 'text_delta', text: A };
+        yield { type: 'done', result: truncatedPartial(A) };
+      },
+    };
+    const w = streamingWorld();
+    (w.deps as { provider: Provider }).provider = provider;
+    const session = w.sessions.open('owner');
+    const r = await runTurn(w.deps, {
+      principal: owner, tenant: 'host', surface: 'cli', session, text: 'dimmi', onDelta: (d) => deltas.push(d),
+    });
+    expect(r.stopped).toBe('continuable');
+    expect(r.reason).toBe('truncated');
+    expect(visibleText(deltas)).toBe(A);
+    expect(durablePartials(w.deps, r.turnId)).toBe(A);
+    expect(deltas.filter((d) => d.type === 'boundary' && (d as { reason: string }).reason === 'superseded')).toHaveLength(0);
+    expect(w.sessions.read(session).filter((m) => m.role === 'assistant')).toHaveLength(0);
+    const row = w.turns.get(r.turnId);
+    expect(row?.counters.truncationsUsed).toBe(1);
+    expect(row?.counters.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES);
+  });
+
+  it('C: repeat-then-progress A->A+B->C never becomes A+A+B anywhere', async () => {
+    const deltas: TurnDelta[] = [];
+    let n = 0;
+    const provider: Provider = {
+      kind: 'openai-compat',
+      async chat(): Promise<ChatResult> {
+        throw new Error('unreachable');
+      },
+      async *chatStream() {
+        n += 1;
+        if (n === 1) {
+          yield { type: 'text_delta', text: 'PARTE-A-' };
+          yield { type: 'done', result: truncatedPartial('PARTE-A-') };
+        } else if (n === 2) {
+          yield { type: 'text_delta', text: 'PARTE-A-' };
+          yield { type: 'text_delta', text: 'PARTE-B-' };
+          yield { type: 'done', result: truncatedPartial('PARTE-A-PARTE-B-') };
+        } else {
+          yield { type: 'text_delta', text: 'PARTE-C' };
+          yield { type: 'done', result: finalAnswer('PARTE-C') };
+        }
+      },
+    };
+    const w = streamingWorld();
+    (w.deps as { provider: Provider }).provider = provider;
+    const session = w.sessions.open('owner');
+    const r = await runTurn(w.deps, {
+      principal: owner, tenant: 'host', surface: 'cli', session, text: 'vai', onDelta: (d) => deltas.push(d),
+    });
+    expect(r.stopped).toBe('answered');
+    expect(r.text).toBe('PARTE-A-PARTE-B-PARTE-C');
+    expect(visibleText(deltas)).toBe('PARTE-A-PARTE-B-PARTE-C');
+    expect(visibleText(deltas)).not.toContain('PARTE-A-PARTE-A-');
+    expect(durablePartials(w.deps, r.turnId)).toBe('PARTE-A-PARTE-B-');
+    expect(w.sessions.read(session).filter((m) => m.role === 'assistant').map((m) => m.content)).toEqual([
+      'PARTE-A-PARTE-B-PARTE-C',
+    ]);
+  });
+
+  it('D1: repetition after crash/resume never duplicates on the new sink', async () => {
+    const deltas: TurnDelta[] = [];
+    let n = 0;
+    const streamProvider: Provider = {
+      kind: 'openai-compat',
+      async chat(): Promise<ChatResult> {
+        throw new Error('unreachable');
+      },
+      async *chatStream() {
+        n += 1;
+        if (n === 1) {
+          yield { type: 'text_delta', text: 'PRIMA-' };
+          yield { type: 'text_delta', text: 'SECONDA-' };
+          yield { type: 'done', result: truncatedPartial('PRIMA-SECONDA-') };
+        } else {
+          yield { type: 'text_delta', text: 'TERZA' };
+          yield { type: 'done', result: finalAnswer('TERZA') };
+        }
+      },
+    };
+    const home = mkdtempSync(join(tmpdir(), 'muffin-615-d1-'));
+    const db = new DatabaseCtor(':memory:');
+    const turns = new TurnStore(db);
+    const sessions = new SessionStore(home);
+    const capabilities = new Map();
+    const deps: LoopDeps = {
+      provider: streamProvider,
+      profile: CONSERVATIVE,
+      model: 'test-model',
+      tools: [],
+      capabilities,
+      decide: createDecide({ matrix: POLICY_FLOOR, capabilities, budgetExhausted: () => false, hardened: true }),
+      tracer: new SimpleTracer(new JsonlExporter(home)),
+      sessions,
+      turns,
+      todos: new TodoStore(db),
+      budgetExhausted: () => false,
+      systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite.' },
+      now: NOW,
+    };
+    const created = turns.create(
+      {
+        id: 'crashstream615',
+        principal: owner,
+        tenant: 'host',
+        surface: 'cli',
+        sessionId: 'owner',
+        model: 'test-model',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'racconta' }] }],
+        taint: 0,
+        counters: {
+          iterations: 1,
+          recoveriesUsed: 0,
+          transportRetriesLeft: MAX_TRANSPORT_RETRIES,
+          truncationsUsed: 1,
+          toolCallsMade: 0,
+          nudgedForCompletion: false,
+          usage: { inputTokens: 10, outputTokens: 4096, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          spentUsd: 0,
+          resumes: 0,
+          contextBuilt: true,
+          activeModelMs: 0,
+        },
+      },
+      4242,
+    );
+    const prefixMessages: Message[] = [
+      { role: 'user', content: [{ type: 'text', text: 'racconta' }] },
+      partialMessage([{ type: 'text', text: 'PRIMA-' }]),
+      harnessMessage('user', [{ type: 'text', text: 'La risposta precedente si è interrotta per limite di output.' }]),
+    ];
+    expect(
+      turns.checkpoint('crashstream615', { messages: prefixMessages, taint: 0, counters: created.counters }, created.claimToken),
+    ).toBe(true);
+    db.prepare(`UPDATE turns SET status = 'interrupted', claimed_by = NULL, claim_token = NULL WHERE id = 'crashstream615'`).run();
+
+    const resumed = await resumeTurn(deps, 'crashstream615', { onDelta: (d) => deltas.push(d) });
+    if ('why' in resumed) throw new Error(`resume refused: ${resumed.why}`);
+    expect(resumed.stopped).toBe('answered');
+    expect(resumed.text).toBe('PRIMA-SECONDA-TERZA');
+    // New sink shows only genuinely new bytes: the accepted prefix is not repeated.
+    expect(visibleText(deltas)).toBe('SECONDA-TERZA');
+    expect(visibleText(deltas)).not.toContain('PRIMA-PRIMA-');
+    expect(durablePartials(deps, 'crashstream615')).toBe('PRIMA-SECONDA-');
+  });
+
+  it('D2: repetition on an owner-granted new lease obeys the same invariant', async () => {
+    const deltas: TurnDelta[] = [];
+    const w = world([truncatedPartial('RIP-'), truncatedPartial('RIP-')]);
+    const session = w.sessions.open('owner');
+    const first = await runTurn(w.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: 'dimmi' });
+    expect(first.stopped).toBe('continuable');
+
+    let n = 0;
+    const streamProvider: Provider = {
+      kind: 'openai-compat',
+      async chat(): Promise<ChatResult> {
+        throw new Error('unreachable');
+      },
+      async *chatStream() {
+        n += 1;
+        yield { type: 'text_delta', text: 'RIP-' };
+        yield { type: 'text_delta', text: 'FINE' };
+        yield { type: 'done', result: finalAnswer('RIP-FINE') };
+      },
+    };
+    (w.deps as { provider: Provider }).provider = streamProvider;
+    const second = await continueTurn(w.deps, first.turnId, {
+      message: { role: 'user', content: [{ type: 'text', text: 'riprendi' }] },
+      session: w.sessions.open('owner'),
+      onDelta: (d) => deltas.push(d),
+    });
+    if ('why' in second) throw new Error(`continuation refused: ${second.why}`);
+    expect(second.turnId).toBe(first.turnId);
+    expect(second.stopped).toBe('answered');
+    expect(second.text).toBe('RIP-FINE');
+    expect(visibleText(deltas)).toBe('FINE');
+    expect(durablePartials(w.deps, first.turnId)).toBe('RIP-');
+    expect(w.sessions.read(session).filter((m) => m.role === 'assistant').map((m) => m.content)).toEqual(['RIP-FINE']);
+  });
+
+  it('E: ordinary first-call streaming is byte-for-byte unchanged', async () => {
+    const deltas: TurnDelta[] = [];
+    const provider: Provider = {
+      kind: 'openai-compat',
+      async chat(): Promise<ChatResult> {
+        throw new Error('unreachable');
+      },
+      async *chatStream() {
+        yield { type: 'text_delta', text: 'RISPOSTA-' };
+        yield { type: 'text_delta', text: 'SECCA' };
+        yield { type: 'done', result: finalAnswer('RISPOSTA-SECCA') };
+      },
+    };
+    const w = streamingWorld();
+    (w.deps as { provider: Provider }).provider = provider;
+    const session = w.sessions.open('owner');
+    const r = await runTurn(w.deps, {
+      principal: owner, tenant: 'host', surface: 'cli', session, text: 'ciao', onDelta: (d) => deltas.push(d),
+    });
+    expect(r.stopped).toBe('answered');
+    expect(r.text).toBe('RISPOSTA-SECCA');
+    expect(visibleText(deltas)).toBe('RISPOSTA-SECCA');
+    expect(deltas.filter((d) => d.type === 'boundary')).toHaveLength(0);
+    expect(w.turns.get(r.turnId)?.counters.truncationsUsed).toBe(0);
+  });
+});

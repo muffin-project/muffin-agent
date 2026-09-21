@@ -49,6 +49,94 @@ export async function drainStream(
 }
 
 /**
+ * Strip an exact repeated prefix from a length-continuation chunk (#615
+ * streaming blocker).
+ *
+ * Deterministic byte-prefix handling, never fuzzy overlap: when the model
+ * restarts a continuation by repeating the previously accepted chunk `R` and
+ * then continues (`R + B`), only `B` is new output. Returns `B`; returns the
+ * chunk unchanged when it diverges from `R` (a divergent chunk is real new
+ * output, even the bytes that happen to overlap); returns `''` for an exact
+ * whole repeat AND for a chunk that is itself a strict prefix of `R` — both
+ * carry zero bytes beyond what is already preserved, which the caller reads
+ * as no-progress. An absent or empty reference disables the rule (ordinary
+ * first-call streaming).
+ *
+ * The exact mirror of `continuationDedup` below, which applies the same rule
+ * incrementally to the live deltas: both must agree, or visible and durable
+ * diverge.
+ */
+export function stripRepeatedPrefix(reference: string | undefined, chunk: string): string {
+  if (reference === undefined || reference === '') return chunk;
+  if (chunk.startsWith(reference)) return chunk.slice(reference.length);
+  if (reference.startsWith(chunk)) return '';
+  return chunk;
+}
+
+/**
+ * Live-delta half of the exact-prefix continuation rule (#615 streaming
+ * blocker).
+ *
+ * A continuation call already has a structurally accepted previous chunk `R`
+ * (origin `partial`). While the newly streamed response still exactly matches
+ * the beginning of `R`, those candidate-duplicate bytes are HELD, never
+ * published: emitting them would show the owner bytes the durable answer will
+ * not contain, and `releaseContinuable()` retracts nothing.
+ *
+ * - the stream diverges before fully matching `R`: the held bytes were real
+ *   new output after all — flush them plus the divergent remainder;
+ * - the stream matches all of `R`: suppress the repeated prefix; bytes that
+ *   follow are the only new output and pass through;
+ * - the stream ends having matched all of `R` with nothing after: the caller
+ *   sees an empty suffix via `stripRepeatedPrefix` and treats it as
+ *   no-progress, having shown nothing twice.
+ *
+ * Fed with post-`edgeTrimmer` pieces (whose concatenation is exactly the
+ * result text the durable side strips), so both sides compute over the same
+ * string. Returns `null` when nothing is showable yet, otherwise the exact
+ * bytes to publish (never `''`). Pass-through when the caller has no
+ * reference: ordinary non-continuation streaming never constructs this.
+ */
+export function continuationDedup(reference: string): {
+  /** Next showable bytes, or `null` while holding a candidate duplicate. */
+  push(piece: string): string | null;
+  /** Bytes currently held as a candidate duplicate (for tests). */
+  pending(): number;
+} {
+  let matched = 0;
+  let diverged = false;
+  let complete = reference === '';
+  return {
+    push(piece: string): string | null {
+      if (piece === '') return null;
+      if (diverged || complete) return piece;
+      const rest = reference.slice(matched);
+      let k = 0;
+      while (k < piece.length && k < rest.length && piece[k] === rest[k]) k += 1;
+      matched += k;
+      if (matched >= reference.length) {
+        // The whole previous chunk just repeated: suppress it, emit only
+        // bytes beyond it (possibly none yet — the stream may still end here,
+        // which the caller reads as no-progress).
+        complete = true;
+        const extra = piece.slice(k);
+        return extra === '' ? null : extra;
+      }
+      if (k < piece.length) {
+        // Diverged before matching R: the held bytes were real new output —
+        // flush them with the divergent remainder.
+        diverged = true;
+        return reference.slice(0, matched) + piece.slice(k);
+      }
+      return null;
+    },
+    pending(): number {
+      return diverged || complete ? 0 : matched;
+    },
+  };
+}
+
+/**
  * `String.prototype.trim`, for a string you are only ever handed one piece at
  * a time. Returns the next piece to emit, or `null` when there is nothing to
  * say yet — and concatenating everything it returns gives exactly `full.trim()`.

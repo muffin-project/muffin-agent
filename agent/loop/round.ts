@@ -20,7 +20,7 @@ import { checkpoint, finish, releaseContinuable, suspendHere, type TurnScope } f
 import { resolveConversationId } from './conversation.js';
 import type { ExecutionAbortReason, ExecutionBudget, ModelCallLease, ModelCallTelemetry } from './execution-budget.js';
 import { harnessMessage, isPartialMessage, ownerMessage, partialMessage, toolMessage } from './message-origin.js';
-import { drainStream, edgeTrimmer, retryDelayMs } from './stream.js';
+import { continuationDedup, drainStream, edgeTrimmer, retryDelayMs, stripRepeatedPrefix } from './stream.js';
 import { runTool } from './tool-call.js';
 import {
   ApprovalRequired,
@@ -180,6 +180,20 @@ export function collectTruncationPrefix(messages: readonly import('../providers/
     }
   }
   return out;
+}
+
+/**
+ * Live-delta gate for a continuation call, or `undefined` for an ordinary
+ * first call. The reference is the last structurally accepted partial chunk;
+ * with no accepted partial there is nothing a repeat could duplicate, so the
+ * stream stays byte-for-byte identical to before this rule existed.
+ */
+function dedupForContinuation(
+  messages: readonly import('../providers/types.js').Message[],
+): ReturnType<typeof continuationDedup> | undefined {
+  const previous = lastPartialChunk(messages);
+  if (previous === undefined || previous === '') return undefined;
+  return continuationDedup(previous);
 }
 
 /**
@@ -534,14 +548,27 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
         // a transport failure and must not enter retry.
         if (lease.signal.aborted) throw new Error('model invocation not authorized by execution budget');
         if (!stream) return await deps.provider.chat(callWithBudget);
+        // #615 streaming blocker: a continuation call already has a
+        // structurally accepted previous chunk. While the new stream still
+        // exactly matches the beginning of that chunk, hold the candidate
+        // duplicate bytes instead of publishing them — publishing first and
+        // detecting no-progress after would show bytes the durable answer
+        // will never contain. First calls (no accepted partial) stream
+        // byte-for-byte exactly as before.
+        const dedup =
+          input.onDelta === undefined ? undefined : dedupForContinuation(run.messages);
         return await drainStream(
           deps.provider.chatStream!(callWithBudget),
           (text) => {
             if (!input.onDelta) return;
             const out = trim(text);
             if (out === null) return; // finora solo spazio: non è ancora niente
+            // NOTE: no `?? out` here — the gate reports "hold" as `null`,
+            // and nullish coalescing would republish the held bytes.
+            const shown = dedup === undefined ? out : dedup.push(out);
+            if (shown === null) return; // candidate duplicate held, nothing showable
             emittedLive = true;
-            input.onDelta({ type: 'text', text: out });
+            input.onDelta({ type: 'text', text: shown });
           },
           (kind) => lease.activity(kind),
         );
@@ -792,15 +819,19 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     if (isTruncatedPartial(result)) {
       const currentChunk = result.text ?? '';
       const prefixSoFar = collectTruncationPrefix(run.messages);
-      // No-progress rule: a chunk byte-identical to the immediately previous
-      // accepted partial proves the model is reproducing instead of
-      // continuing. Appending it would corrupt the answer with a duplicate AND
-      // burn budget indefinitely, so the chunk is dropped — nothing new is
-      // lost, its bytes are already preserved — and the lease yields
-      // continuable with the existing prefix. Deterministic and falsifiable:
-      // repeat the same chunk twice and the turn stops after exactly 2 calls.
+      // Exact-prefix strip, the durable mirror of the live `continuationDedup`
+      // gate above: when the model restarts by repeating the previous chunk
+      // (`R + B`), only `B` is new output and only `B` is accepted. Both sides
+      // compute over the same trimmed string, so visible and durable agree.
       const previous = lastPartialChunk(run.messages);
-      if (previous !== undefined && previous === currentChunk) {
+      const suffix = stripRepeatedPrefix(previous, currentChunk);
+      // No-progress rule: an empty suffix proves the model reproduced instead
+      // of continuing. The chunk is dropped — nothing new is lost, its bytes
+      // are already preserved — and the lease yields continuable with the
+      // existing prefix. The live gate already suppressed the repeat, so the
+      // surface showed nothing twice. Deterministic and falsifiable: repeat
+      // the same chunk twice and the turn stops after exactly 2 calls.
+      if (suffix === '') {
         turn.setAttributes({
           'muffin.truncation.no_progress': true,
           'muffin.truncation.prefix_chars': prefixSoFar.length,
@@ -811,7 +842,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       run.messages.push({
         ...partialMessage([
           ...(result.thinking ?? []),
-          { type: 'text' as const, text: currentChunk },
+          { type: 'text' as const, text: suffix },
         ]),
         ...(result.providerMetadata === undefined ? {} : { providerMetadata: result.providerMetadata }),
       });
@@ -822,6 +853,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
         'muffin.truncation.used': run.truncationsUsed,
         'muffin.truncation.prefix_chars': prefixSoFar.length,
         'muffin.truncation.chunk_chars': currentChunk.length,
+        'muffin.truncation.suffix_chars': suffix.length,
       });
       if (run.truncationsUsed > MAX_TRUNCATION_CONTINUATIONS) {
         // Bound spent with every accepted chunk durably preserved: honestly
@@ -886,13 +918,18 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
        */
       const prefixSoFar = collectTruncationPrefix(run.messages);
       const currentRaw = result.text ?? '';
-      const fullRaw = prefixSoFar + currentRaw;
+      // Same exact-prefix strip as the truncation path: a final chunk that
+      // merely repeats the accepted prefix adds nothing, and the live gate
+      // already suppressed it — appending it here would diverge durable from
+      // visible.
+      const suffix = stripRepeatedPrefix(lastPartialChunk(run.messages), currentRaw);
+      const fullRaw = prefixSoFar + suffix;
       const text = scrubResourceEchoes(redactText(fullRaw), run.sensitiveResourceEchoes);
       // Live fallback emission below must append, not duplicate: in streaming
       // mode the prefix was already shown via deltas, so a `chat()` fallback
-      // for the final chunk owes only the current chunk. Durable `text` above
+      // for the final chunk owes only the new suffix. Durable `text` above
       // stays the scrubbed full concatenation either way.
-      const currentText = scrubResourceEchoes(redactText(currentRaw), run.sensitiveResourceEchoes);
+      const currentText = scrubResourceEchoes(redactText(suffix), run.sensitiveResourceEchoes);
 
       // The completion gate: did the answer describe a call this turn never
       // made? Deterministic, tool-aware, and it only fires when *nothing* was
