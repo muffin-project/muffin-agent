@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
+import { isSelfOwned, tightenPrivateFile } from '../config/private-fs.js';
 
 /**
  * Root of Trust — data tier.
@@ -199,8 +200,17 @@ export function seal(homeDir: string, rotVersion: string, now: Date): RotManifes
   const rotDir = join(homeDir, 'rot');
   const manifest = buildManifest(rotDir, rotVersion, now.toISOString());
   const serialized = `${JSON.stringify(manifest, null, 2)}\n`;
-  writeFileSync(join(rotDir, MANIFEST), serialized, 'utf8');
-  writeFileSync(join(homeDir, ANCHOR), `${sha256(serialized)}\n`, 'utf8');
+  const manifestPath = join(rotDir, MANIFEST);
+  const anchorPath = join(homeDir, ANCHOR);
+  writeFileSync(manifestPath, serialized, { encoding: 'utf8', mode: 0o600 });
+  writeFileSync(anchorPath, `${sha256(serialized)}\n`, { encoding: 'utf8', mode: 0o600 });
+  // Never chmod hardened service-user-owned material: `seal` runs as the
+  // owner resealing their own files in the common case, and as privileged
+  // `sudo` only when hardening is being set up. `tightenPrivateFile` already
+  // skips foreign-owned paths, and the double-check here keeps the intent
+  // explicit at the call site that owns the seal.
+  if (isSelfOwned(manifestPath)) tightenPrivateFile(manifestPath);
+  if (isSelfOwned(anchorPath)) tightenPrivateFile(anchorPath);
   return manifest;
 }
 

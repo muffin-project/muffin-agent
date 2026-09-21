@@ -1,5 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { ensurePrivateDir, tightenHome, tightenPrivateDb, tightenPrivateFile } from '../core/config/private-fs.js';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -74,10 +75,19 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   const steps: InitStep[] = [];
   const step = (name: string, detail: string, done = true) => steps.push({ name, done, detail });
 
-  for (const dir of [p.home, p.rot, p.vault, p.traces, p.sessions, p.secrets]) {
-    mkdirSync(dir, { recursive: true });
+  // Migration first: a pre-existing home created under a permissive umask is
+  // tightened before anything new is written, and a fresh home gets its
+  // private modes from the same helpers below. Foreign-owned (hardened)
+  // material is skipped by construction inside `tightenHome`.
+  if (existsSync(home)) tightenHome(home);
+  for (const dir of [p.home, p.rot, p.vault, p.traces, p.sessions, p.secrets, p.undo]) {
+    ensurePrivateDir(dir);
   }
-  step('directories', p.home);
+  step('directories', `${p.home} (0700)`);
+  // A pre-existing home may also carry a backups dir and a database with
+  // sidecars from an older build: same tightening, same ownership guard.
+  ensurePrivateDir(join(p.home, 'backups'));
+  if (existsSync(p.db)) tightenPrivateDb(p.db);
 
   const installed = installTree('rot', p.rot, options.force ?? false);
   step('root of trust', installed.length > 0 ? `installed ${installed.length} files` : 'already present');
@@ -229,7 +239,7 @@ export function runInit(options: InitOptions = {}): InitStep[] {
     rot: { mode: options.hardened ? 'hardened' : (prior?.rot.mode ?? 'single-user') },
   };
   saveConfig(config, home);
-  step('config', prior ? 'esistente conservata (solo bootstrap/mancanti)' : p.config);
+  step('config', prior ? 'esistente conservata (solo bootstrap/mancanti, 0600)' : `${p.config} (0600)`);
 
   const db = new DatabaseCtor(p.db);
   db.pragma('journal_mode = WAL');
@@ -244,7 +254,8 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   // migrate(). Same clobber class as the config reset above, quieter.
   if (schemaVersionOf(db) === null) stampFresh(db);
   db.close();
-  step('database', `${p.db} (WAL)`);
+  tightenPrivateDb(p.db);
+  step('database', `${p.db} (WAL, 0600)`);
 
   // Sealing last: the manifest has to describe the files as they ended up,
   // including anything the steps above wrote into the root of trust.
@@ -298,7 +309,9 @@ export function defaultModels(options: InitOptions): { main: string; light: stri
 /** Never overwrites a personalised file: a second `init` must not undo your edits. */
 function installFile(name: string, dest: string, force: boolean): boolean {
   if (!force && existsSync(dest)) return false;
+  ensurePrivateDir(dirname(dest));
   copyFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'defaults', name), dest);
+  tightenPrivateFile(dest);
   return true;
 }
 
@@ -322,7 +335,7 @@ function installTree(sub: string, destDir: string, force: boolean): { relPath: s
   if (!existsSync(source)) return [];
   const copied: { relPath: string; dst: string }[] = [];
   const walk = (from: string, to: string, prefix: string): void => {
-    mkdirSync(to, { recursive: true });
+    ensurePrivateDir(to);
     for (const entry of readdirSync(from)) {
       const src = join(from, entry);
       const dst = join(to, entry);
@@ -333,6 +346,7 @@ function installTree(sub: string, destDir: string, force: boolean): { relPath: s
       // alberi che questo walk copia e' `defaults/rot/`, che e' sigillato.
       else if (isShippedDefault(relPath) && (force || !existsSync(dst))) {
         copyFileSync(src, dst);
+        tightenPrivateFile(dst);
         copied.push({ relPath, dst });
       }
     }

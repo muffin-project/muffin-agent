@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { appendFileSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { appendFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { ensurePrivateDir, tightenPrivateFile } from '../config/private-fs.js';
 import { redactAttributes, redactValue } from './redact.js';
 import {
   SEMCONV_VERSION,
@@ -26,12 +27,14 @@ export class JsonlExporter implements SpanExporter {
 
   constructor(homeDir: string) {
     this.dir = join(homeDir, 'traces');
-    mkdirSync(this.dir, { recursive: true });
+    ensurePrivateDir(this.dir);
   }
 
   export(span: Span): void {
     const day = new Date(span.startTimeUnixNano / 1e6).toISOString().slice(0, 10);
-    appendFileSync(join(this.dir, `${day}.jsonl`), `${JSON.stringify(span)}\n`, 'utf8');
+    const file = join(this.dir, `${day}.jsonl`);
+    appendFileSync(file, `${JSON.stringify(span)}\n`, { encoding: 'utf8', mode: 0o600 });
+    tightenPrivateFile(file);
   }
 
   flush(): void {

@@ -1,4 +1,5 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { ensurePrivateDir, tightenPrivateFile } from './private-fs.js';
 import { z } from 'zod';
 import { SEARCH_PROVIDER_IDS } from './providers.js';
 import { homedir } from 'node:os';
@@ -518,8 +519,9 @@ export function loadConfig(home = muffinHome(), onNote: (line: string) => void =
 
 export function saveConfig(config: Config, home = muffinHome()): void {
   const file = paths(home).config;
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+  ensurePrivateDir(dirname(file));
+  writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  tightenPrivateFile(file);
 }
 
 /**

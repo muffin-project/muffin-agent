@@ -4,7 +4,7 @@ import { Pausa } from '../core/runtime/pausa.js';
 import { decidiVoce, type Voce } from '../core/audio/voce.js';
 import { openDb } from '../core/db/open.js';
 import { generatePairingCode, startPairing } from '../core/config/pairing.js';
-import { mkdirSync } from 'node:fs';
+import { ensurePrivateDir } from '../core/config/private-fs.js';
 import { join } from 'node:path';
 import type { Runtime } from '../agent/runtime.js';
 import type { AttachStream, LaneDeliver } from '../agent/turn-lane.js';
@@ -1199,7 +1199,7 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
   const inbox = new UpdateInbox(telegramDb);
   const delivery = new TelegramDeliveryStore(telegramDb);
   const vaultRoot = paths(home).vault;
-  mkdirSync(join(vaultRoot, 'inbox'), { recursive: true });
+  ensurePrivateDir(join(vaultRoot, 'inbox'));
   // The runtime's own vault, not a second one: `document_read` reads through
   // that instance, and a connector indexing into a different root would
   // produce documents the model cannot open.
@@ -1342,7 +1342,7 @@ function connectDiscord(ctx: PortConnectContext): PortConnection | null {
   const api = new DiscordApi(token);
   const inbox = new DiscordInbox(openDb(paths(home).db));
   const vaultRoot = paths(home).vault;
-  mkdirSync(join(vaultRoot, 'inbox'), { recursive: true });
+  ensurePrivateDir(join(vaultRoot, 'inbox'));
   const connector = new DiscordConnector({
     loop: runtime.deps,
     sessions: runtime.deps.sessions,

@@ -1,7 +1,8 @@
 import DatabaseCtor from 'better-sqlite3';
 import type Database from 'better-sqlite3';
-import { mkdirSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { ensurePrivateDir, tightenPrivateFile } from '../config/private-fs.js';
 
 /**
  * Versioned schema lifecycle for the one SQLite file every store shares.
@@ -367,12 +368,14 @@ export function assertSnapshotOk(file: string): void {
  */
 export function snapshotTo(db: Database.Database, file: string): void {
   db.prepare(`VACUUM INTO ?`).run(file);
+  tightenPrivateFile(file);
   try {
     assertSnapshotOk(file);
   } catch (e) {
     rmSync(file, { force: true });
     throw e;
   }
+  tightenPrivateFile(file);
 }
 
 export type MigrateResult = { applied: number[]; backup: string | null; version: number };
@@ -419,7 +422,7 @@ export function migrate(
   // a boot with nothing pending costs zero. `VACUUM INTO` is synchronous,
   // atomic, valid under WAL, and refuses an existing target, which is the
   // idempotence wanted for a file whose name carries the moment.
-  mkdirSync(opts.backupDir, { recursive: true });
+  ensurePrivateDir(opts.backupDir);
   const backup = join(
     opts.backupDir,
     `pre-migrate-v${have}-${now().toISOString().replace(/[:.]/g, '-')}.db`,

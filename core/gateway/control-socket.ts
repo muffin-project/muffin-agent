@@ -3,6 +3,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
+import { tightenPrivateFile } from '../config/private-fs.js';
 
 /**
  * Il socket di controllo — la superficie di coordinamento **posseduta dal
@@ -185,7 +186,10 @@ export async function serveControlSocket(
     server.once('error', rej);
     server.listen(path, res);
   });
-  if (pointer !== null) writeFileSync(pointer, `${path}\n`, 'utf8');
+  if (pointer !== null) {
+    writeFileSync(pointer, `${path}\n`, { encoding: 'utf8', mode: 0o600 });
+    tightenPrivateFile(pointer);
+  }
 
   return {
     path,

@@ -1,5 +1,6 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { ensurePrivateDir, tightenPrivateFile } from '../config/private-fs.js';
 
 /**
  * Il registro di undo: la copia presa **prima** che qualcosa cambi.
@@ -114,7 +115,7 @@ export class UndoJournal {
    */
   take(turnId: string, call: { callId: string; capability: string; path: string }): Snapshot {
     const dir = this.dir(turnId);
-    mkdirSync(dir, { recursive: true });
+    ensurePrivateDir(dir);
     const esistente = this.read(turnId);
     const indice = esistente?.snapshots.length ?? 0;
 
@@ -129,7 +130,9 @@ export class UndoJournal {
         throw new Error(`${call.path} esiste e non è un file regolare: non posso fotografarlo`);
       }
       copy = copyNameFor(call.callId, indice);
-      copyFileSync(call.path, join(dir, copy));
+      const dst = join(dir, copy);
+      copyFileSync(call.path, dst);
+      tightenPrivateFile(dst);
     }
 
     const snapshot: Snapshot = {
@@ -159,8 +162,10 @@ export class UndoJournal {
   private write(turnId: string, entry: UndoEntry): void {
     const finale = this.manifestPath(turnId);
     const tmp = `${finale}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify(entry, null, 2)}\n`, 'utf8');
+    writeFileSync(tmp, `${JSON.stringify(entry, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    tightenPrivateFile(tmp);
     renameSync(tmp, finale);
+    tightenPrivateFile(finale);
   }
 
   /**

@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { sha256 } from '../rot/verify.js';
 import { paths } from './config.js';
+import { ensurePrivateDir, tightenPrivateFile } from './private-fs.js';
 
 /**
  * Drift between what `muffin init` copied into `~/.muffin` and what HEAD
@@ -150,7 +151,10 @@ export function recordCopied(home: string, entries: { path: string; content: Buf
     installedAt: read?.registry.installedAt ?? new Date().toISOString(),
     files: [...[...byPath.values()].sort((a, b) => a.path.localeCompare(b.path)), ...(read?.unparsed ?? [])],
   };
-  writeFileSync(paths(home).defaultsManifest, `${JSON.stringify(registry, null, 2)}\n`, 'utf8');
+  const file = paths(home).defaultsManifest;
+  ensurePrivateDir(home);
+  writeFileSync(file, `${JSON.stringify(registry, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  tightenPrivateFile(file);
 }
 
 /**

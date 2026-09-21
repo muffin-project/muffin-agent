@@ -1,7 +1,8 @@
 import DatabaseCtor from 'better-sqlite3';
-import { copyFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { paths } from '../core/config/config.js';
+import { ensurePrivateDir, tightenPrivateDb } from '../core/config/private-fs.js';
 import { readGateway } from '../core/gateway/lock.js';
 import { currentSchemaVersion, migrate, schemaVersionOf, snapshotTo } from '../core/db/migrate.js';
 
@@ -25,7 +26,7 @@ export function backupNow(
   now: () => Date = () => new Date(),
 ): { file: string; bytes: number } {
   if (!existsSync(dbPath)) throw new Error(`nessun database in ${dbPath}`);
-  mkdirSync(dir, { recursive: true });
+  ensurePrivateDir(dir);
   const file = join(dir, `muffin-${now().toISOString().replace(/[:.]/g, '-')}.db`);
   const db = new DatabaseCtor(dbPath);
   try {
@@ -109,6 +110,7 @@ export function restoreFrom(
   rmSync(`${dbPath}-wal`, { force: true });
   rmSync(`${dbPath}-shm`, { force: true });
   copyFileSync(backupFile, dbPath);
+  tightenPrivateDb(dbPath);
   const db = new DatabaseCtor(dbPath);
   try {
     db.pragma('journal_mode = WAL');

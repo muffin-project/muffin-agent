@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { looksLikeSecretValue } from '../tracing/redact.js';
 import { paths } from '../config/config.js';
+import { ensurePrivateDir, tightenPrivateFile } from '../config/private-fs.js';
 
 /**
  * The MCP server allowlist, with tool pinning — threat model §c-bis.
@@ -98,7 +99,10 @@ export function loadMcpRegistry(home: string): McpRegistry {
 }
 
 export function saveMcpRegistry(registry: McpRegistry, home: string): void {
-  writeFileSync(registryPath(home), `${JSON.stringify(registry, null, 2)}\n`, 'utf8');
+  const file = registryPath(home);
+  ensurePrivateDir(paths(home).home);
+  writeFileSync(file, `${JSON.stringify(registry, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  tightenPrivateFile(file);
 }
 
 /** What gets hashed. Everything the model will see, nothing volatile. */
