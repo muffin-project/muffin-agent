@@ -372,7 +372,7 @@ export const CI_USER = 'ci-runner';
  * copied).
  *
  * `/npm-cache` is the host's persistent npm cache, mounted per job (see
- * NPM_CACHE_DIR): without it every one of the five jobs re-downloads the
+ * NPM_CACHE_DIR): without it every workflow-derived job re-downloads the
  * same ~143 packages from the registry. The cache is content-addressed, so a
  * warm cache changes timing, never resolution — `npm ci` still verifies
  * integrity against the lockfile. No `prefer-offline`: on a cache miss the
