@@ -10,11 +10,11 @@
 #    larga `**/.claude/**` aveva già lasciato passare un cap non testato. Con
 #    l'include di default di vitest (`**/*.test.ts`), i file di test sotto
 #    `.claude/` **fanno parte della suite** e girano su ogni `npm test`.
-#  · ma `ci.yml` ha `.claude/**` in `paths-ignore` — per entrambi i suoi job
-#    (`verifica` e `accettazione`, un solo workflow dal 2026-09-16).
+#  · all'epoca `ci.yml` aveva `.claude/**` in `paths-ignore` — per entrambi
+#    i suoi job (`verifica` e `accettazione`, un solo workflow dal 2026-09-16).
 #
-# Conseguenza: una PR che tocca **solo** roba sotto `.claude/` non fa partire
-# nessun workflow. Quei test non girano esattamente nel momento in cui il
+# Conseguenza storica: una PR che toccava **solo** roba sotto `.claude/` non
+# faceva partire nessun workflow. Quei test non giravano nel momento in cui il
 # codice che provano è cambiato — l'unico momento in cui contano. Non è
 # ipotetico: la PR #107 (`guard-restore-discard.mjs`, più il suo test) è stata
 # mergiata con **zero check**, provata solo in locale.
@@ -37,7 +37,7 @@
 #
 # ## Perché non le due soluzioni più corte
 #
-# **Togliere `.claude/**` da `paths-ignore`.** Riporterebbe sotto CI tutto
+# **Togliere `.claude/**` da `paths-ignore`.** All'epoca avrebbe riportato sotto CI tutto
 # `.claude/`: comandi, impostazioni, digest delle deleghe, worktree. È
 # precisamente ciò che quell'ignore comprava, e niente di tutto ciò ha un test
 # da eseguire.
