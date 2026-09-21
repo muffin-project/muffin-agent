@@ -30,6 +30,7 @@ import { ALL_API_KEY_NAMES } from '../core/config/providers.js';
 import { describeBuild, findCheckoutRoot, type BuildStamp } from './update.js';
 import type { StatoSuperficie } from '../core/surface/salute.js';
 import { audioAccettato } from '../agent/providers/modalita.js';
+import { verifyInferenceRoute, type VerificationResult } from '../agent/providers/verify.js';
 import { prerequisitiTrascrizione, type Prerequisito } from '../core/audio/trascrivi.js';
 import { loadEgress, type EgressPolicy } from '../core/net/egress.js';
 import { diagnoseRoutingStaleness } from '../core/config/model-resolve.js';
@@ -107,6 +108,13 @@ export type DoctorOptions = {
    * `supervisorProbes` exists above. `undefined` means the real probe.
    */
   hardened?: boolean;
+  /**
+   * Test-only: replaces the real inference-verification probe
+   * (`agent/providers/verify.ts`) behind `doctor --online`, so the suite can
+   * assert the wiring without spending the owner's money. Plain `doctor`
+   * never calls it either way.
+   */
+  verifyInference?: () => Promise<VerificationResult>;
 };
 
 /**
@@ -181,6 +189,47 @@ export function quantoDura(daIso: string, ora: Date): string {
   const ore = Math.floor(minuti / 60);
   if (ore < 48) return `${String(ore)} ${ore === 1 ? 'ora' : 'ore'}`;
   return `${String(Math.floor(ore / 24))} giorni`;
+}
+
+/**
+ * Renders the inference-verification result (#523) as doctor checks.
+ *
+ * `working` is the only green: the route answered a real request with a
+ * structurally valid probe tool call. `incompatible` is its own verdict —
+ * reachable prose is not working inference — and never reads as reachable.
+ * Auth/config failures are `fail` (the route cannot work until the owner
+ * acts); transient network/provider failures are `warn` (nothing is proven
+ * either way). Details come verbatim from the primitive's redacted
+ * diagnostic, so no secret can leak through this renderer.
+ */
+export function renderInferenceCheck(
+  ok: (name: string, detail: string) => void,
+  warn: (name: string, detail: string, remedy: string) => void,
+  fail: (name: string, detail: string, remedy: string) => void,
+  verification: VerificationResult,
+): void {
+  const route =
+    verification.resolvedModel === undefined || verification.resolvedModel === verification.requestedModel
+      ? verification.requestedModel
+      : `${verification.requestedModel} (served as ${verification.resolvedModel})`;
+  const ms = `${String(verification.durationMs)}ms`;
+  switch (verification.status) {
+    case 'working':
+      ok('inference', `${route} — probe tool call pass in ${ms}: ${verification.diagnostic}`);
+      return;
+    case 'incompatible':
+      fail('inference', `${route} — incompatible in ${ms}: ${verification.diagnostic}`, verification.remedy ?? 'pick a route that supports tool calls');
+      return;
+    case 'misconfigured':
+    case 'auth_failed':
+      fail('inference', `${route} — ${verification.status} in ${ms}: ${verification.diagnostic}`, verification.remedy ?? 'set the key');
+      return;
+    case 'unreachable':
+    case 'timeout':
+    case 'provider_error':
+      warn('inference', `${route} — ${verification.status} in ${ms}: ${verification.diagnostic}`, verification.remedy ?? 'retry later');
+      return;
+  }
 }
 
 export async function runDoctor(home = paths().home, options: DoctorOptions = {}): Promise<DoctorReport> {
@@ -534,8 +583,15 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
       'cancella la copia che non serve più: una chiave valida che nessuno legge è una che alla rotazione resta indietro',
     );
   }
+  // The inference route, proven rather than parsed. Plain `doctor` stays
+  // offline and cost-free: the probe performs one real minimal model request
+  // and runs ONLY behind the explicit `--online` opt-in. Doctor is a
+  // renderer — every provider semantic lives in `agent/providers/verify.ts`,
+  // which already returns redacted diagnostics, so nothing here touches keys,
+  // bodies or prompts.
   if (options.online) {
-    warn('api reachability', 'online check not implemented in M0', 'omit --online');
+    const verification = await (options.verifyInference ?? (() => verifyInferenceRoute({ home })))();
+    renderInferenceCheck(ok, warn, fail, verification);
   }
 
   try {
