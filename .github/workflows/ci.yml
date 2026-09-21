@@ -22,20 +22,12 @@
 #     quel verde, quindi il run ripeteva ciò che era appena stato provato.
 #     Finestra accettata e nominata: se `dev` è avanzato tra il run della PR e
 #     il merge, il merge commit resta non provato fino alla PR successiva.
-#  2b. `paths-ignore`: una PR di soli documenti (blueprint, handoff, mappa) non
-#     esercita nulla che la suite copra. `defaults/**` NON è qui dentro:
-#     persona/voice/RoT sono prodotto, non documentazione.
-#     **`.claude/**` è un'eccezione a metà: va letta con `strumenti.yml`
-#     accanto, o si conclude il contrario di quello che è vero.**
-#     `vitest.config.ts` non esclude `.claude/` (solo `worktrees/`), quindi i
-#     53 test di hook, `deleghe.mjs` e `riconcilia.mjs` stanno nella suite che
-#     gira qui sotto — ma questo `paths-ignore` li spegneva proprio sulle PR
-#     che cambiavano quei file (la #107 è passata con zero check). Il rimedio
-#     non è togliere `.claude/**` di qui, che rimetterebbe sotto CI comandi e
-#     impostazioni che non hanno test: è `.github/workflows/strumenti.yml`,
-#     che gira solo sui file di `.claude/` che un test copre e costa 42s
-#     invece dei ~205s del job `verifica`. Il perché per esteso è in testa a
-#     quel file.
+#  2b. Le PR NON hanno filtri di percorso. Dal source-public questi job diventano
+#     required checks: GitHub lascia Pending un workflow richiesto che non parte
+#     per `paths` / `paths-ignore`. Un job saltato da una condizione invece
+#     conclude Success, quindi l'ottimizzazione futura va fatta a livello di job,
+#     non spegnendo l'intero workflow. Fino ad allora preferiamo check stabili e
+#     auditabili al risparmio di runner; sui push a `main` i filtri restano.
 #  3. Solo `ubuntu-latest`. macOS conta 10× i minuti e Windows 2×, e non
 #     abbiamo ancora una ragione misurata per pagarli — la macchina di sviluppo
 #     è macOS e la produzione è una VPS Linux, quindi Linux è il lato che
@@ -92,12 +84,6 @@ on:
   # proposito: scatterebbe su ogni etichetta e comprerebbe solo rumore.
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore:
-      - 'docs/**'
-      - '.claude/**'
-      - 'README.md'
-      - 'AGENTS.md'
-      - 'CLAUDE.md'
   push:
     branches: [main]
     paths-ignore:
@@ -116,13 +102,77 @@ permissions:
   contents: read
 
 jobs:
+  # Public-contributor preflight. This deliberately runs before the expensive
+  # suite. scripts/merge.ts already applies the same check at the local merge
+  # door; when ci:local derives this job there is no GITHUB_EVENT_PATH, so the
+  # step records that fact and exits green instead of duplicating policy.
+  dco:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: install DCO checker dependencies only
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: contributor agreement / DCO
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GITHUB_EVENT_PATH:-}" ]; then
+            echo "DCO: local merge door already checks external PRs before ci:local."
+            exit 0
+          fi
+
+          if [ "${GITHUB_EVENT_NAME:-}" != "pull_request" ]; then
+            echo "DCO: ${GITHUB_EVENT_NAME:-unknown} event — no contributor PR sign-off to check."
+            exit 0
+          fi
+
+          mapfile -t PR_META < <(node - <<'NODE'
+          const fs = require('node:fs');
+          const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+          const pr = event.pull_request;
+          if (!pr) process.exit(64);
+          console.log(pr.user.login);
+          console.log(pr.base.sha);
+          console.log(pr.head.sha);
+          NODE
+          )
+
+          author="${PR_META[0]:-}"
+          base="${PR_META[1]:-}"
+          head="${PR_META[2]:-}"
+
+          [ -n "$author" ] && [ -n "$base" ] && [ -n "$head" ] || {
+            echo "DCO: could not resolve PR author/base/head from GITHUB_EVENT_PATH" >&2
+            exit 64
+          }
+
+          # Existing owner branches predate the contributor-agreement policy;
+          # scripts/merge.ts carries the same explicit exemption.
+          if [ "$author" = "GiustoPiedimonte" ]; then
+            echo "DCO: owner PR — legacy owner exemption."
+            exit 0
+          fi
+
+          npx tsx scripts/check-dco.ts "$base" "$head"
+
   verifica:
+    needs: dco
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
@@ -284,9 +334,9 @@ jobs:
     # nessun runner lento raggiunge per caso.
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm

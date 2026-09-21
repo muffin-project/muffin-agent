@@ -36,28 +36,22 @@
 # proposito: un `timeout-minutes` non è un budget, è ciò che uccide un run
 # appeso (stessa ragione scritta per esteso in `accettazione.yml`).
 #
-# ## Il filtro
+# ## Required check vs push filter
 #
-# `paths` nomina ciò che può rompere l'installazione e nient'altro:
-# il bootstrap/installer, la prova, i comandi che l'installer esegue (`cli/init`,
-# `cli/doctor`, `cli/update`, `cli/gateway`), la unit del supervisore, e il
-# manifesto/lock da cui dipende il build. Una PR che tocca solo il runtime
-# dell'agente non paga questo giro.
+# Dal source-public questo job deve esistere su ogni PR, perché un workflow
+# required saltato da `paths` resta Pending e può bloccare il merge. Per questo
+# il trigger `pull_request` è intenzionalmente senza filtro. Il filtro qui sotto
+# resta solo sul push a `main`, dove evita replay inutili quando l'installazione
+# non può essere stata toccata. Se in futuro vogliamo evitare il job su PR non
+# rilevanti, va fatto con una condizione di job che conclude `skipped`, non
+# spegnendo il workflow al trigger.
 
 name: install
 
 on:
+  # Required public check: every PR materializes this workflow. Optimize later
+  # with job-level conditions, never trigger-level path filters.
   pull_request:
-    paths:
-      - 'bootstrap.sh'
-      - 'install.sh'
-      - 'evals/install/**'
-      - 'cli/**'
-      - 'core/gateway/**'
-      - 'core/config/config.ts'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/install.yml'
   push:
     branches: [main]
     paths:
@@ -87,7 +81,7 @@ jobs:
       # questo checkout e ci fa girare `muffin update`, che conta i commit fra
       # due sha. Con un clone superficiale quel conteggio non ha una storia da
       # attraversare.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
@@ -96,7 +90,7 @@ jobs:
       # costruisce un PATH ripulito da cui `node` è irraggiungibile, e si
       # rifiuta di proseguire se lo trova ancora. È esattamente il prerequisito
       # che `install.sh` deve risolvere da solo.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
 
