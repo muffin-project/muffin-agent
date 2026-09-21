@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadMcpRegistry } from './registry.js';
+import { loadMcpRegistry, saveMcpRegistry } from './registry.js';
 
 describe('un token letterale in mcp.json scritto a mano (classe 3, ADR-0048)', () => {
   it('viene rifiutato dallo schema, non solo dal parser della CLI', () => {
@@ -50,6 +50,24 @@ describe('un token letterale in mcp.json scritto a mano (classe 3, ADR-0048)', (
       expect(Object.keys(loadMcpRegistry(dir).servers)).toEqual(['echo']);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('saveMcpRegistry fail-closed sul parent privato (#639)', () => {
+  it('attraverso un ancestor symlink lancia senza scrivere fuori', () => {
+    const root = mkdtempSync(join(tmpdir(), 'muffin-mcpreg-esc-'));
+    try {
+      const outside = join(root, 'outside');
+      mkdirSync(outside, { recursive: true });
+      chmodSync(outside, 0o755);
+      const before = statSync(outside).mode & 0o777;
+      symlinkSync(outside, join(root, 'link'));
+      expect(() => saveMcpRegistry({ schemaVersion: 1, servers: {} }, join(root, 'link'))).toThrow();
+      expect(existsSync(join(outside, 'mcp.json'))).toBe(false);
+      expect(statSync(outside).mode & 0o777).toBe(before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

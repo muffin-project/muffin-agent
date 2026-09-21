@@ -1,5 +1,6 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { dirname, resolve, sep } from 'node:path';
+import { ensurePrivateDir, tightenPrivateFile } from '../../core/config/private-fs.js';
 import type { CapabilityDecl, TrustTier } from '../../core/policy/types.js';
 import type { Vault } from '../../core/vault/vault.js';
 import type { VectorIndex } from '../../core/memory/vectors.js';
@@ -234,8 +235,20 @@ export async function salva(
     return { content: 'vault_save: percorso fuori dal vault, non eseguito.', isError: true, tier: 0 };
   }
 
-  mkdirSync(dirname(assoluto), { recursive: true });
-  writeFileSync(assoluto, `# ${parsed.titolo}\n\n${parsed.testo}\n`, 'utf8');
+  // Directory privata 0700 e nota 0600, con gli helper canonici della PR
+  // (#639): nessuna seconda policy dei permessi in questo tool. Il `false`
+  // fail-closed (ancestor symlink sulla catena) non è un no-op silenzioso:
+  // scrivere comunque ricreerebbe l'escape, quindi l'operazione fallisce in
+  // modo veritiero senza toccare il disco fuori dal vault.
+  if (!ensurePrivateDir(dirname(assoluto))) {
+    return {
+      content: `vault_save: non ho potuto preparare la directory privata per \`${relativo}\`, non eseguito.`,
+      isError: true,
+      tier: 0,
+    };
+  }
+  writeFileSync(assoluto, `# ${parsed.titolo}\n\n${parsed.testo}\n`, { encoding: 'utf8', mode: 0o600 });
+  tightenPrivateFile(assoluto);
 
   // Il tenant del turno viaggia con i byte: è la riga che decide chi potrà
   // rileggerli con `document_read`, e passarci `host` qui è esattamente il

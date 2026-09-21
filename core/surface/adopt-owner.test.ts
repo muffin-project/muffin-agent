@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -110,5 +110,34 @@ describe('adoptOwnerState', () => {
     adoptOwnerState(db, h, 'telegram', '99');
     expect((db.prepare(`SELECT tenant_id AS t, trust_tier AS tier FROM episodes WHERE id = 1`).get() as { t: string; tier: number })).toEqual({ t: 'host', tier: 2 });
     db.close();
+  });
+
+  it('adoption never downgrades a 0600 owner.jsonl, even under umask 022', () => {
+    const prev = process.umask(0o022);
+    try {
+      const h = home();
+      const db = new DatabaseCtor(':memory:');
+      db.exec(MEMORY_SCHEMA);
+      const target = join(h, 'sessions', 'owner.jsonl');
+      writeFileSync(
+        target,
+        `${JSON.stringify({ role: 'user', content: 'dal terminale', surface: 'cli', createdAt: '2026-09-11T09:00:00.000Z' })}\n`,
+      );
+      chmodSync(target, 0o600);
+      writeFileSync(
+        join(h, 'sessions', 'telegram:4242.jsonl'),
+        `${JSON.stringify({ role: 'user', content: 'ciao', surface: 'telegram', createdAt: '2026-09-11T10:00:00.000Z', tier: 2 })}\n`,
+      );
+
+      const report = adoptOwnerState(db, h, 'telegram', '4242');
+      expect(report.transcriptRows).toBe(2);
+      // The tmp + rename path must not turn 0600 into 0644.
+      expect(statSync(target).mode & 0o777).toBe(0o600);
+      // No tmp residue left behind.
+      expect(readdirSync(join(h, 'sessions')).some((name) => name.includes('.adopting-'))).toBe(false);
+      db.close();
+    } finally {
+      process.umask(prev);
+    }
   });
 });

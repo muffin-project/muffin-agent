@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -359,5 +359,23 @@ describe('conversation generation · crash-consistency del confine /new', () => 
     expect(store.read(ref).map((m) => m.content)).toEqual(['ciao']);
     expect(existsSync(join(dir, 'sessions', 'owner.conv.json'))).toBe(false);
     expect(store.open('owner').generation).toBe(0);
+  });
+});
+
+describe('SessionStore fail-closed sul parent privato (#639)', () => {
+  it('il costruttore attraverso un ancestor symlink lancia senza creare fuori', () => {
+    const root = mkdtempSync(join(tmpdir(), 'muffin-session-esc-'));
+    try {
+      const outside = join(root, 'outside');
+      mkdirSync(outside, { recursive: true });
+      chmodSync(outside, 0o755);
+      const before = statSync(outside).mode & 0o777;
+      symlinkSync(outside, join(root, 'link'));
+      expect(() => new SessionStore(join(root, 'link'))).toThrow(/directory privata/);
+      expect(existsSync(join(outside, 'sessions'))).toBe(false);
+      expect(statSync(outside).mode & 0o777).toBe(before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

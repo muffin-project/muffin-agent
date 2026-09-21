@@ -13,6 +13,7 @@ import {
   secretDir,
 } from '../core/config/config.js';
 import { resolveWorkspace } from '../core/config/workspace.js';
+import { tightenHome } from '../core/config/private-fs.js';
 import { migrate } from '../core/db/migrate.js';
 import { openDb } from '../core/db/open.js';
 import { loadMcpRegistry } from '../core/mcp/registry.js';
@@ -409,6 +410,15 @@ export function buildRuntime(
   } = {},
 ): Runtime {
   const p = paths(home);
+  // Startup migration (#639): tighten a pre-existing same-user home before
+  // anything reads or writes state. Fresh homes are already private by
+  // construction; this is the upgrade path for installs created under a
+  // permissive umask. Foreign-owned (hardened) material is skipped inside.
+  try {
+    tightenHome(home);
+  } catch {
+    /* best-effort: tightening must not break boot */
+  }
   /**
    * Where this turn may write — never where Muffin is installed.
    *

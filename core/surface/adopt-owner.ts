@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tightenPrivateFile } from '../config/private-fs.js';
 
 /**
  * State written before a private surface has proved who the owner is must not
@@ -85,8 +86,13 @@ function adoptTranscript(home: string, sourceId: string, targetId = 'owner'): nu
   const merged = [...unique.values()].sort((a, b) => createdAtOf(a).localeCompare(createdAtOf(b)));
 
   const tmp = `${target}.adopting-${process.pid}`;
-  writeFileSync(tmp, merged.map((row) => JSON.stringify(row)).join('\n') + (merged.length > 0 ? '\n' : ''), 'utf8');
+  writeFileSync(tmp, merged.map((row) => JSON.stringify(row)).join('\n') + (merged.length > 0 ? '\n' : ''), {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+  tightenPrivateFile(tmp);
   renameSync(tmp, target);
+  tightenPrivateFile(target);
 
   // Archive, never delete: evidence that existed before pairing remains
   // inspectable even after the canonical session has adopted it.

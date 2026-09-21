@@ -1,6 +1,7 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { ensurePrivateDir, tightenPrivateFile } from '../config/private-fs.js';
 import type { TrustTier } from '../policy/types.js';
 
 /**
@@ -110,7 +111,9 @@ export class SessionStore {
 
   constructor(homeDir: string) {
     this.dir = join(homeDir, 'sessions');
-    mkdirSync(this.dir, { recursive: true });
+    if (!ensurePrivateDir(this.dir)) {
+      throw new Error(`non posso usare ${this.dir}: la directory privata non è stata stabilita (symlink sulla catena)`);
+    }
   }
 
   open(id?: string): SessionRef {
@@ -360,12 +363,15 @@ export class SessionStore {
   private writeMetadata(sessionId: string, metadata: ConversationMetadata): void {
     const dest = this.generationFile(sessionId);
     const tmp = `${dest}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify(metadata), 'utf8');
+    writeFileSync(tmp, JSON.stringify(metadata), { encoding: 'utf8', mode: 0o600 });
+    tightenPrivateFile(tmp);
     renameSync(tmp, dest);
+    tightenPrivateFile(dest);
   }
 
   append(session: SessionRef, message: SessionMessage): void {
-    appendFileSync(session.file, `${JSON.stringify(message)}\n`, 'utf8');
+    appendFileSync(session.file, `${JSON.stringify(message)}\n`, { encoding: 'utf8', mode: 0o600 });
+    tightenPrivateFile(session.file);
   }
 
   /**
