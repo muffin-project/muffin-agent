@@ -73,7 +73,10 @@ in that moment (`.claude/hooks/guard-merge-gate.mjs`):
   on `dev`, `mergeStateStatus` is CLEAN, and the head carries the nominal
   FAST (`verifica`) and DEEP (`accettazione`) successes — `skipped` satisfies
   neither — with every other check-run on the head green and none pending.
-  Any doubt falls back to the local door.
+  Source-public preparation deliberately makes the PR workflows materialize on
+  every PR: `dco`, `verifica`, `accettazione`, `install`, `collegamenti`
+  and `strumenti` are stable check names instead of trigger-level path-filter
+  accidents. Any doubt falls back to the local door.
 
 What CLEAN does and does not prove: it says no conflict is known with the
 base right now and the associated status is green. GitHub CI runs on the PR
@@ -83,12 +86,12 @@ byte-identity with the tree the server will merge. Strict up-to-date
 semantics waits for branch protection or a merge queue. Until then the local
 door stays the composition-strong door: it executes the merged tree itself.
 
-Docs-only exception, fail-closed: when FAST/DEEP are absent because `ci.yml`
-skipped the PR entirely, the GitHub door passes only after reading the PR's
-real changed files and finding every one inside `ci.yml`'s exempt set
-(`docs/**`, `.claude/**`, `README.md`, `AGENTS.md`, `CLAUDE.md`), with the
-lightweight checks that did run green. Absent files, or any file outside the
-set, mean the local door.
+The old docs-only exception is retired. GitHub documents a workflow skipped by
+trigger-level `paths` / `paths-ignore` as a permanently Pending required
+check; by contrast a conditionally skipped **job** concludes successfully.
+Therefore PR-level path filters are not part of the source-public gate. If
+runner optimization returns later, do it at job level while preserving the
+stable required-check surface.
 
 Draft convention for substantial agent work: open the PR as a draft early
 (durable remote checkpoint, per above), so intermediate pushes pay FAST only;
@@ -146,16 +149,19 @@ At integration time, observe which checks/protections actually exist and report
 limitations. A convention is not an enforced gate merely because this file says
 it should be one.
 
-Observed 2026-09-18: GitHub minutes are back and CI runs per-PR (FAST ~8 min,
-FAST+DEEP ~19 min sequential while the repo is private), but branch
-protection is unavailable (private repo on the free plan — 403 from the API),
-so nothing server-side enforces green checks or blocks direct pushes; the hook
-above is the enforcement for agent sessions until the 25/09 source-public
-milestone unlocks protection. `ci.yml` skips `verifica` on docs/`.claude`-only
-changes (`paths-ignore`) and `accettazione` on draft PRs: a PR that touches
-only exempt paths carries almost no GitHub evidence, and the hook's
-docs-only file-allowlist rule (or the local door, when even that fails)
-decides instead of a zero-evidence pass.
+Observed 2026-09-21: the repository is still private on GitHub Free for
+organizations. Hosted jobs are currently failing before useful execution under
+the account billing/quota state, and branch protection/rulesets are unavailable
+for this private repository (GitHub returns 403 and requires a paid plan or a
+public repository). The local `npm run merge -- <pr>` door therefore remains
+the enforceable integration gate before source-public.
+
+The workflow shape is nevertheless prepared for the visibility cutover:
+pull-request workflows have no trigger-level path filters; external PRs get an
+early DCO preflight before the expensive `verifica` job; and first-party
+Actions are pinned to immutable commit SHAs. Once public hosted CI has produced
+real green checks, configure branch/ruleset protection against the stable check
+names rather than treating this prose as enforcement.
 
 ## Commits are recovery points, not activity counters
 
