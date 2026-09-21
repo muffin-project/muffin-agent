@@ -9,10 +9,10 @@
 # richiesto che viene saltato al trigger. Questo job resta separato perché la
 # sua claim è stretta e leggibile, non per nascondersi dietro un path filter.
 #
-# La conseguenza, però, è che fino al 2026-08-30 **niente** verificava i
-# riferimenti — proprio sulle PR che li cambiano. È lo stesso punto cieco che
-# `strumenti.yml` ha chiuso per `.claude/`, con la stessa forma di rimedio: un
-# job che gira solo sui file che copre e costa quanto un `npm ci` più un test.
+# La conseguenza storica è che fino al 2026-08-30 **niente** verificava i
+# riferimenti proprio sulle PR che li cambiavano. Il job nacque stretto sui file
+# che copriva; in preparazione al source-public il trigger PR è diventato
+# intenzionalmente universale, così il check può essere required senza sparire.
 #
 # Misurato al primo giro, non stimato: vedi il run di questa PR.
 #
@@ -23,9 +23,10 @@
 # datati: un `§N` scaduto lì dentro è un documento storico che cita com'era il
 # mondo allora, e correggerlo sarebbe riscrivere la storia.
 #
-# `paths` include i sorgenti perché la metà dei riferimenti vive nei commenti
-# del codice di prodotto: un filtro sui soli `docs/**` avrebbe lasciato fuori
-# proprio i file in cui il drift del 19/08 si è depositato.
+# Il filtro `paths` rimasto sul **push a main** include anche i sorgenti perché
+# la metà dei riferimenti vive nei commenti del codice di prodotto: un filtro sui
+# soli `docs/**` avrebbe lasciato fuori proprio i file in cui il drift del
+# 19/08 si è depositato. Sulle PR il job gira sempre.
 
 name: collegamenti
 
