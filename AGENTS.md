@@ -51,8 +51,7 @@ Bring new evidence; a material reversal is a new ADR, not a rewrite of the old.
 ## Engineering harness
 
 Procedures: `.agents/skills/` (`engineering-loop`, `jev-shadow`). Entry points:
-`/start`, `/checkpoint`, task bookkeeping via the closure contract in
-`docs/development/ORCHESTRATION.md`, and `/close` in `.opencode/commands/`; roles in
+`/start`, `/checkpoint`, `/bookkeep`, `/close` in `.opencode/commands/`; roles in
 `.opencode/agents/`. Snapshot: `scripts/agent/repo-state.mjs`. Current program:
 the open issue with the `program/current` label. OpenCode V1 stays.
 
