@@ -14,7 +14,7 @@ points to; this file does not restate them. If they diverge, the document wins.
 OBSERVE → RECONSTRUCT CURRENT → CHOOSE ONE DELIVERABLE → identify decision forks
 → research only what can change the decision → classify routing → state one
 falsifiable claim → define falsifier + acceptance → IMPLEMENT → VERIFY
-→ INTEGRATE → reconcile only authority surfaces made stale → OBSERVE AGAIN
+→ INTEGRATE → BOOKKEEP → OBSERVE AGAIN
 ```
 
 ## Rules
@@ -34,6 +34,10 @@ falsifiable claim → define falsifier + acceptance → IMPLEMENT → VERIFY
 - **Git / issue / PR state carries work across sessions.** No important state
   may exist only in conversation memory. Commit coherent units; push durable
   checkpoints; keep the active PR and the current program issue truthful.
+- **Bookkeeping closes tasks, not sessions.** After every completed deliverable,
+  run the closure contract in `docs/development/ORCHESTRATION.md` before calling
+  it done or selecting the next claim. A merge is an integration event, not the
+  bookkeeping boundary.
 - **Conversation and compaction summaries are disposable caches.** They never
   override re-observed state.
 
