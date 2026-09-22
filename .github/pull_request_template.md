@@ -41,12 +41,16 @@ should name that instruction rather than hiding it in the diff. -->
 
 <!-- Findings outside the claim stay visible without silently expanding scope. -->
 
-## Authoritative homes made stale
+## Bookkeeping inputs
 
-<!-- Update only sources whose meaning changed. Research/history is not
-"refreshed" into current state; generated views are regenerated when relevant. -->
+<!-- Before merge, name the authoritative homes this change makes stale and any
+residual finding that must survive the session. Update only sources whose
+meaning changed; research/history is not "refreshed" into current state.
+After merge, the owning task is not DONE until the repository-level bookkeeping
+closure in docs/development/ORCHESTRATION.md has been completed. -->
 
-- [ ] None
+- [ ] Authoritative homes made stale: none
+- [ ] Residual/follow-up state is either empty or durably owned
 
 ## Contributor agreement
 
