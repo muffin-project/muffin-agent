@@ -488,10 +488,13 @@ describe('params gate — model-chosen bytes above a ceiling, whichever tool car
     expect(d.effect === 'deny' && d.detail).toMatch(/declares a query resource but received/);
   });
 
-  it('the owner can raise the ceiling from the sealed policy file, and it only moves the ask threshold', () => {
-    // Owner decision open per the mandate (1 vs 2): whichever way it lands,
-    // the raised ceiling must never turn into a silent allow above it — only
-    // ask moves.
+  it('a matrix with a higher ceiling still only moves the ask threshold — but the sealed file can no longer build one', () => {
+    // Direct-matrix seam, not the file: since the HOLD resolution the sealed
+    // policy is monotone (`tighter()` in `merge()`, pinned in
+    // `matrix.test.ts`), so a ceiling of 2 here is a construction the kernel
+    // answers, not a file an owner can reseal. What this still proves: a
+    // raised ceiling never turns into a silent allow above itself — only ask
+    // moves.
     const raised = kernel({
       matrix: { ...POLICY_FLOOR, paramsMaxTaint: 2 },
       egressAllowed: (host) => host === 'allowed.example.com',

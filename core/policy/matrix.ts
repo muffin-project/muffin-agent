@@ -264,15 +264,19 @@ export type PolicyMatrix = {
    * always — never a silent allow, the shape `sys.shell` already uses above
    * its own ceiling (ADR-0044 §revisione).
    *
-   * Unlike `defaultMaxTaint`, the sealed file may RAISE this, not only lower
-   * it (`merge()` reads it directly, no `tighter()` clamp). Deliberate, not
-   * an oversight of the tighten-only rule one field up: `defaultMaxTaint` is
-   * inherited by every capability that pins no `maxTaint` of its own, so one
-   * widened number in a resealed file silently loosens capabilities nobody
-   * reviewed for it (the `mcp.*` measurement in this file's docstring).
-   * `paramsMaxTaint` has exactly two callers, both named above, and raising
-   * it never grants anyone but the owner anything — it only moves the taint
-   * value at which the owner starts being asked.
+   * Unlike `defaultMaxTaint`, this field's history needs one honest paragraph.
+   * Until lane #624 + #641 the sealed file could RAISE it, not only lower it
+   * (`merge()` read it directly, no clamp): the argument was that
+   * `paramsMaxTaint` has exactly two callers and raising it never grants
+   * anyone but the owner anything — it only moves the taint value at which
+   * the owner starts being asked. That argument died with the HOLD
+   * resolution: a home sealed with the previous shipped `"paramsMaxTaint": 2`
+   * kept ceiling 2 after upgrade and preserved the P0 owner+tier-2
+   * silent-egress path. So since 2026-09-22 this threshold is monotone
+   * like every other: `merge()` applies the same `tighter()` clamp, the file
+   * may tighten below the floor and never re-widen above it. Reopening the
+   * boundary is a separate, explicit, versioned product decision — not a
+   * reseal.
    *
    * **Ships 1** (lane #624 + #641, 2026-09-22, reversing the owner decision
    * of 2026-08-17 that shipped 2). The old rationale read tier 2 as "the
@@ -704,9 +708,14 @@ function merge(file: z.infer<typeof PolicyFileSchema>): PolicyMatrix {
       medium: tighter(file.defaultMaxTaint?.medium, POLICY_FLOOR.defaultMaxTaint.medium),
       high: tighter(file.defaultMaxTaint?.high, POLICY_FLOOR.defaultMaxTaint.high),
     },
-    // NOT `tighter()` — see the field's own doc comment on `PolicyMatrix` for
-    // why this one threshold may move in both directions from the file.
-    paramsMaxTaint: file.paramsMaxTaint ?? POLICY_FLOOR.paramsMaxTaint,
+    // `tighter()` — the lane #624 + #641 HOLD resolution: this threshold is a
+    // monotone security floor, not an owner dial. A sealed file may tighten
+    // below 1, never re-widen above it: a home sealed with the previous
+    // shipped `"paramsMaxTaint": 2` loads confined to 1, otherwise the upgrade
+    // would preserve the P0 owner+tier-2 silent-egress path it exists to
+    // close. A future explicit, versioned product decision to reopen the
+    // boundary is a separate change, not a reseal.
+    paramsMaxTaint: tighter(file.paramsMaxTaint, POLICY_FLOOR.paramsMaxTaint),
     // `tighter()` qui sì: il pavimento è già il massimo, quindi l'unico
     // movimento possibile da un file sigillato è rimettere il cancello.
     searchMaxTaint: tighter(file.searchMaxTaint, POLICY_FLOOR.searchMaxTaint),

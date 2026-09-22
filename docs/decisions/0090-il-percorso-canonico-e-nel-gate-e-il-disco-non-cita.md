@@ -26,8 +26,12 @@ componente:
 
 1. **`paramsMaxTaint`: 2 → 1** (pavimento e template `defaults/rot/policy.json`).
    Byte composti dal modello in uscita a taint ≥ 2 chiedono all'owner
-   mostrando l'URL intero; a chi non è owner sono negati. Il file sigillato
-   può ancora alzarlo: è il dial dell'owner, non la correzione.
+   mostrando l'URL intero; a chi non è owner sono negati. Il soffitto è
+   **monotono** come ogni altro (`tighter()` nel merge, risoluzione HOLD del
+   22/09): il file sigillato può stringere sotto 1, mai riallargare sopra —
+   una home sigillata col vecchio shipped 2 carica confinata a 1, altrimenti
+   l'upgrade conserverebbe il path P0 che la lane chiude. Riaprire il confine
+   è una decisione/prodotto separata, esplicita e versionata — non un reseal.
 2. **Il pathname entra nella stessa decisione** (`hasComposedBytes`):
    path non banale, userinfo, query, fragment — letti dal parse canonico
    (`new URL`, lo stesso parser che il tool esegue: nessuna seconda
@@ -54,8 +58,9 @@ componente:
   intatto): i byte del `Location` li sceglie il server, non il modello —
   qualunque segreto del modello deve già stare nella first-hop URL, che è
   gattata.
-- Home sigillate con `paramsMaxTaint: 2` esplicito lo conservano finché
-  l'owner non lo abbassa: il file può alzare per disegno.
+- Home sigillate con `paramsMaxTaint: 2` esplicito caricano confinate a 1: il
+  monotone floor vale anche per loro, ed è pinnato da un falsifier
+  upgrade/legacy-home (`core/policy/matrix.test.ts`).
 
 ## Prove
 
