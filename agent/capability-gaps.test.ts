@@ -275,9 +275,14 @@ describe('cosa raggiunge un membro, con e senza grant (ADR-0073)', () => {
           decl.resourceKind === 'path'
             ? { kind: 'path', value: '/tmp/x' }
             : decl.resourceKind === 'url-read'
-              ? { kind: 'url-read', value: 'https://esempio.test/p' }
+              // Bare host on purpose: this file proves ADR-0073 grant
+              // mechanics (which capabilities a member reaches), and composed
+              // URL bytes answer to the params gate instead (`decide.ts`,
+              // lane #624 + #641) — a fixture with a path would measure the
+              // gate here instead of the grant.
+              ? { kind: 'url-read', value: 'https://esempio.test/' }
               : decl.resourceKind === 'url'
-                ? { kind: 'url', value: 'https://esempio.test/p' }
+                ? { kind: 'url', value: 'https://esempio.test/' }
                 : decl.resourceKind === 'query'
                   ? { kind: 'query', value: 'q' }
                   : decl.resourceKind === 'tenant'

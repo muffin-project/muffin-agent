@@ -89,14 +89,19 @@ function turnAgainst(home: string, url: string): { fetched: string[]; deps: Loop
 }
 
 describe('buildRuntime hands the kernel what it needs', () => {
+  // Lane #624 + #641: both URLs below are BARE hosts on purpose. A composed
+  // pathname a member did not paste now meets the egress gate (non-owner
+  // composed bytes are refused outright) — which would prove the gate instead
+  // of the wiring these two tests exist for (that `url-read` never consults
+  // the allowlist, through a real installed home).
   it('reads a host the root of trust does not list — url-read never consults it, through the real runtime', async () => {
     const home = homeAllowing('ok.example.com');
-    const { fetched, deps } = turnAgainst(home, 'https://evil.example.com/steal');
+    const { fetched, deps } = turnAgainst(home, 'https://evil.example.com/');
     await runTurn(deps, {
       principal: member, tenant: 'group:telegram:42', surface: 'telegram',
       session: deps.sessions.open('w1'), text: 'leggi',
     });
-    expect(fetched).toEqual(['https://evil.example.com/steal']);
+    expect(fetched).toEqual(['https://evil.example.com/']);
   });
 
   it('reads the one it does list too — same outcome, so the allowlist is not silently doing anything here any more', async () => {
@@ -107,12 +112,12 @@ describe('buildRuntime hands the kernel what it needs', () => {
     // or not it is on the list is what actually isolates "the allowlist
     // stopped being consulted" from "the wiring is broken".
     const home = homeAllowing('ok.example.com');
-    const { fetched, deps } = turnAgainst(home, 'https://ok.example.com/page');
+    const { fetched, deps } = turnAgainst(home, 'https://ok.example.com/');
     await runTurn(deps, {
       principal: member, tenant: 'group:telegram:42', surface: 'telegram',
       session: deps.sessions.open('w2'), text: 'leggi',
     });
-    expect(fetched).toEqual(['https://ok.example.com/page']);
+    expect(fetched).toEqual(['https://ok.example.com/']);
   });
 });
 
@@ -147,15 +152,16 @@ describe('the tier of a file read reaches the kernel', () => {
     fetchCall(url),
   ];
 
-  it("a real turn that reads a real file can then fetch anywhere — reading a file arms no gate `sys.http` still has", async () => {
-    // ADR-0066: `sys.http` is `url-read`, open regardless of `rot/egress.json`.
-    // `DISK_TIER` (`agent/tools/fs.ts`) is 2, and `paramsMaxTaint` (`POLICY_FLOOR`)
-    // is also 2 — a disk read alone never exceeds it, by the owner's own
-    // 2026-08-17 decision ("Ships 2": the owner's own disk should not make
-    // every following web call a reflex `ask`). So a plain fetch right after a
-    // real `fs_read`, through the real runtime, succeeds with no approval at
-    // all — this is the decision working as documented, not a hole this test
-    // discovers.
+  it("a real turn that reads a real file asks before fetching a composed path — the disk read arms the gate `sys.http` still has", async () => {
+    // Lane #624 + #641: `sys.http` is `url-read`, open on the host regardless
+    // of `rot/egress.json` — but the composed BYTES ride along only past the
+    // params gate. `DISK_TIER` (`agent/tools/fs.ts`) is 2 and
+    // `paramsMaxTaint` (`POLICY_FLOOR`) is now 1, so a disk read alone arms
+    // it; and the pathname (`/steal`) is gated exactly like a query string.
+    // The file below even quotes the URL verbatim, and that changes nothing:
+    // tier-2 disk content does not manufacture owner provenance (F5). Through
+    // the real runtime, the owner is asked with the whole executed URL — and
+    // this harness says yes, so the fetch still runs after the question.
     const home = homeAllowing('ok.example.com');
     const workspace = mkdtempSync(join(tmpdir(), 'muffin-wiring-read-'));
     writeFileSync(
@@ -170,7 +176,7 @@ describe('the tier of a file read reaches the kernel', () => {
       ...runtime.deps,
       provider: new Scripted(readThenFetch('nota.md', 'https://evil.example.com/steal')),
       approve: async (r) => {
-        asked.push(r.capability);
+        asked.push(r.prompt);
         return 'allow';
       },
       tools: runtime.deps.tools.map((t) =>
@@ -186,7 +192,10 @@ describe('the tier of a file read reaches the kernel', () => {
     });
 
     expect(fetched).toEqual(['https://evil.example.com/steal']);
-    expect(asked).toEqual([]);
+    expect(asked).toEqual([
+      'lettura con parametri scelti dal contenuto: https://evil.example.com/steal\n\n' +
+        'questo turno contiene contenuto di livello 2: il risultato di fs_read',
+    ]);
   });
 });
 

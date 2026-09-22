@@ -150,10 +150,16 @@ function resourceFor(decl: CapabilityDecl): DecisionRequest['resource'] {
   switch (decl.resourceKind) {
     case 'path':
       return { kind: 'path', value: '/tmp/scope/nota.txt' };
+    // Bare hosts on purpose, same reason as `effect-rows.test.ts`: this file
+    // proves the irreversibility rule, and composed URL bytes answer to the
+    // params gate (`decide.ts`, lane #624 + #641) instead — taint-dependent
+    // below the row ceiling by design, pinned in `decide.test.ts` and
+    // `agent/url-provenance-624-641.test.ts`. (The comment below already
+    // names ADR-0071/0072 as out of this slice; the fixture now honours it.)
     case 'url':
-      return { kind: 'url', value: 'https://esempio.test/pagina' };
+      return { kind: 'url', value: 'https://esempio.test/' };
     case 'url-read':
-      return { kind: 'url-read', value: 'https://esempio.test/pagina' };
+      return { kind: 'url-read', value: 'https://esempio.test/' };
     case 'query':
       return { kind: 'query', value: 'il tempo di domani' };
     case 'tenant':

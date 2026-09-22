@@ -311,21 +311,21 @@ export function createDecide(ctx: PolicyContext): Decide {
       // and nothing here noticed (audit 2026-08-16, P04-1). A clean
       // destination is not the same claim as a clean request: the model chose
       // everything after it.
-      // Un buco aperto, dichiarato invece che lasciato implicito: `hasParams`
-      // guarda `search` e `hash` e dice a voce alta di **non** guardare il
-      // path. ADR-0066 ha tolto l'allowlist alla lettura e non ha messo
-      // niente al suo posto per il path, quindi `https://evil/<segreto>` non
-      // incontra nessun cancello — ed e' la ragione per cui lo scenario di
-      // accettazione D10 e' rosso su `dev` da allora (asseriva la protezione
-      // vecchia, ritirata da ADR-0066 senza che la prova la seguisse).
-      //
-      // Chiuderlo con la provenienza funziona — «ogni URL non citato passa
-      // dal cancello» — ma **chiude anche ogni lettura in un gruppo** che non
-      // sia un link incollato alla lettera, misurato su
-      // `runtime-wiring.test.ts` e `egress-gate.test.ts`. E' il contrario
-      // della direzione dell'owner del 04/09 (*«non puo non entrare»*), ed e'
-      // un'inversione di ADR-0066: va decisa da lui, non qui.
-      if (hasParams(resource.value)) {
+      // Lane #624 + #641 (2026-09-22) closed the two halves that were left:
+      // the pathname was never inspected at all (an explicitly declared open
+      // hole since ADR-0066 — `https://evil/<segreto>` met no gate), and the
+      // ceiling sat at 2, so tier-2 disk content — attacker-influenced by the
+      // current threat model, not owner-authored — composed query/fragment
+      // bytes silently. `hasComposedBytes` now covers every canonical URL
+      // component the model chooses and the wire carries: path, userinfo,
+      // query, and fragment. The fragment is gated conservatively even though
+      // the transport drops it before connect (`agent/tools/http.ts`
+      // sends `pathname + search` only): the policy must not use a
+      // representation that disagrees with what leaves, in either direction.
+      // Userinfo rides the wire as the request's credentials, so it gates
+      // with the rest. A bare host (`https://h`, `https://h/`) carries no
+      // model-chosen bytes and stays silent — reading is still open.
+      if (hasComposedBytes(resource.value)) {
         const gated = gateParams(
           principal,
           taint,
@@ -538,11 +538,13 @@ function gateParams(
   //
   // Questo chiude il buco misurato in `muffin-nei-gruppi-2026-09-04.md` §6.1:
   // `taint <= ceiling` era vero **per costruzione** per ogni turno di gruppo
-  // (`tierOf(member)` è 2, `paramsMaxTaint` è 2), quindi la prima query
+  // (`tierOf(member)` è 2, `paramsMaxTaint` era 2), quindi la prima query
   // inventata usciva sempre senza che nessuno la vedesse. Con la provenienza
   // il criterio smette di essere un numero che i gruppi hanno già raggiunto
   // in partenza e diventa una domanda a cui si può rispondere: questi byte
-  // vengono da qualche parte, o se li è inventati adesso?
+  // vengono da qualche parte, o se li è inventati adesso? (Lane #624 + #641:
+  // il soffitto è 1, quindi la distinzione per provenienza vale anche per
+  // l'owner a taint >= 2.)
   return {
     effect: 'deny',
     code: 'resource_denied',
@@ -551,17 +553,42 @@ function gateParams(
 }
 
 /**
- * True when a URL carries bytes beyond its host: a non-empty query or
- * fragment. Not the path: today's allowlist (`rot/egress.json`) is
- * hostname-only, with no notion of "the path the owner allowlisted", so there
- * is no "beyond the allowlisted path" to compare against yet — declared here
- * rather than silently assumed, and the smaller of the two forms named in the
- * mandate.
+ * True when a URL carries model-chosen bytes beyond its host: a non-trivial
+ * path, userinfo, a non-empty query, or a fragment — read off the canonical
+ * parse, not the raw string.
+ *
+ * Lane #624 put the pathname here: gating only `search`/`hash` left
+ * `https://evil/<segreto>` with no gate at any taint. Lane #641 lowered the
+ * ceiling so the gate actually fires at tier 2. Userinfo joins the same
+ * predicate because it reaches the wire as request credentials
+ * (`agent/tools/http.ts` derives the auth header from it): same seam, same
+ * exfiltration class, no new architecture.
+ *
+ * The parse is `new URL` — the same parser the tool executes
+ * (`agent/tools/http.ts` builds the request from `new URL(url)`), so the
+ * decision and the executed resource cannot disagree on which component a
+ * byte sits in. Detection is encoding-agnostic on purpose: percent-encoded
+ * path bytes (`/%73ecret`), dot segments (`/a/../x`, normalised by the
+ * parser to `/x`), repeated slashes, and encoded separators (`%2F`) are all
+ * still pathname bytes, and any non-trivial pathname gates. No second
+ * canonicalization is introduced or duplicated.
+ *
+ * What this does NOT do, deliberately: compare canonically for the `quoted`
+ * exception. Quoting stays a whole-URL byte-literal match
+ * (`agent/loop/permissions.ts`): a canonically-equivalent-but-byte-different
+ * URL misses and costs one approval, while a tolerant match would open the
+ * splice channel the gate exists to close.
  */
-function hasParams(url: string): boolean {
+function hasComposedBytes(url: string): boolean {
   try {
     const parsed = new URL(url);
-    return parsed.search !== '' || parsed.hash !== '';
+    if (parsed.search !== '' || parsed.hash !== '') return true;
+    if (parsed.username !== '' || parsed.password !== '') return true;
+    // `new URL('https://h').pathname` is `/`: the bare host — the only shape
+    // with no model-chosen bytes — is exactly `'/'` (or `''` for a
+    // non-special scheme, unreachable here since `hostOf` already refused
+    // anything but http(s)).
+    return parsed.pathname !== '' && parsed.pathname !== '/';
   } catch {
     return false; // unreachable here: hostOf() above already refused an unparseable url
   }

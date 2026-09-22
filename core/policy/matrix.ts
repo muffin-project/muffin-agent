@@ -252,34 +252,48 @@ export type PolicyMatrix = {
   readonly defaultMaxTaint: Readonly<Record<RiskClass, TrustTier>>;
   /**
    * Ceiling for model-chosen bytes riding out in a resource the model
-   * controls: a `url` resource's query/fragment once its host has already
-   * cleared the egress allowlist, and the full text of a `query` resource
-   * (`sys.search`). One scalar for both, because `decide.ts`'s `gateParams`
-   * asks the identical question of each — is this turn's taint low enough
-   * that a destination already fixed (by the allowlist, or by the search
+   * controls: a `url`/`url-read` resource's path, userinfo, query or fragment
+   * once its host has already cleared the egress decision, and the full text
+   * of a `query` resource (`sys.search`). One scalar for the URL side and the
+   * search side, because `decide.ts`'s `gateParams` asks the identical
+   * question of each — is this turn's taint low enough that a destination
+   * already fixed (by the allowlist, by open-read, or by the search
    * endpoint's own registration) may also carry bytes the model chose? Above
    * the ceiling: `ask` for the owner, showing the exact bytes
    * (`ApprovalRequest.resource`, `agent/loop.ts`); `deny` for anyone else,
    * always — never a silent allow, the shape `sys.shell` already uses above
    * its own ceiling (ADR-0044 §revisione).
    *
-   * Unlike `defaultMaxTaint`, the sealed file may RAISE this, not only lower
-   * it (`merge()` reads it directly, no `tighter()` clamp). Deliberate, not
-   * an oversight of the tighten-only rule one field up: `defaultMaxTaint` is
-   * inherited by every capability that pins no `maxTaint` of its own, so one
-   * widened number in a resealed file silently loosens capabilities nobody
-   * reviewed for it (the `mcp.*` measurement in this file's docstring).
-   * `paramsMaxTaint` has exactly two callers, both named above, and raising
-   * it never grants anyone but the owner anything — it only moves the taint
-   * value at which the owner starts being asked.
+   * Unlike `defaultMaxTaint`, this field's history needs one honest paragraph.
+   * Until lane #624 + #641 the sealed file could RAISE it, not only lower it
+   * (`merge()` read it directly, no clamp): the argument was that
+   * `paramsMaxTaint` has exactly two callers and raising it never grants
+   * anyone but the owner anything — it only moves the taint value at which
+   * the owner starts being asked. That argument died with the HOLD
+   * resolution: a home sealed with the previous shipped `"paramsMaxTaint": 2`
+   * kept ceiling 2 after upgrade and preserved the P0 owner+tier-2
+   * silent-egress path. So since 2026-09-22 this threshold is monotone
+   * like every other: `merge()` applies the same `tighter()` clamp, the file
+   * may tighten below the floor and never re-widen above it. Reopening the
+   * boundary is a separate, explicit, versioned product decision — not a
+   * reseal.
    *
-   * **Ships 2** (decisione owner, 2026-08-17): tier 2 is the owner's own disk
-   * and local data, and asking about every search that follows a file read
-   * would make the ASK a reflex to dismiss rather than a decision — the
-   * failure mode the mandate's §D12 names. Tier 3 is the outside world (web,
-   * search results, MCP, forwarded content), and that is the taint at which
-   * model-chosen bytes in a query stop being the owner's own words. Whichever
-   * the value, a non-owner principal is refused, never asked.
+   * **Ships 1** (lane #624 + #641, 2026-09-22, reversing the owner decision
+   * of 2026-08-17 that shipped 2). The old rationale read tier 2 as "the
+   * owner's own disk and local data", so asking after every file read would
+   * make the ASK a reflex. The threat model since established the opposite
+   * fact for provenance: disk reads are fenced precisely because files on the
+   * owner's disk can be attacker-controlled (`fs_read`, `fs_list`,
+   * `fs_search`, `shell_run` all return `DISK_TIER = 2` as prompt-injection
+   * entry points; `docs/architecture/SECURITY.md` counts four of seven
+   * adversarial scenes entering through disk content). Tier 2 is local, but
+   * it is not owner-authored — so model-composed URL bytes at taint >= 2 ask
+   * the owner (showing the whole executed URL) and are refused to anyone
+   * else. The narrow exception is an exact, whole URL already quoted from
+   * trusted owner/input provenance (`DecisionRequest.quoted`); a tier-2
+   * document containing or inventing the same URL does not acquire owner
+   * provenance. Whichever the value, a non-owner principal is refused, never
+   * asked.
    */
   readonly paramsMaxTaint: TrustTier;
   /**
@@ -516,7 +530,7 @@ export const ROW_FLOOR: Readonly<Record<EffectRow, RowPolicy>> = {
 export const POLICY_FLOOR: PolicyMatrix = {
   rows: ROW_FLOOR,
   defaultMaxTaint: { low: 3, medium: 1, high: 1 },
-  paramsMaxTaint: 2,
+  paramsMaxTaint: 1,
   /** 3 = mai. Vedi `PolicyMatrix.searchMaxTaint` e ADR-0072. */
   searchMaxTaint: 3,
   /** No principal may ever exercise these at runtime, whatever the taint. */
@@ -694,9 +708,14 @@ function merge(file: z.infer<typeof PolicyFileSchema>): PolicyMatrix {
       medium: tighter(file.defaultMaxTaint?.medium, POLICY_FLOOR.defaultMaxTaint.medium),
       high: tighter(file.defaultMaxTaint?.high, POLICY_FLOOR.defaultMaxTaint.high),
     },
-    // NOT `tighter()` — see the field's own doc comment on `PolicyMatrix` for
-    // why this one threshold may move in both directions from the file.
-    paramsMaxTaint: file.paramsMaxTaint ?? POLICY_FLOOR.paramsMaxTaint,
+    // `tighter()` — the lane #624 + #641 HOLD resolution: this threshold is a
+    // monotone security floor, not an owner dial. A sealed file may tighten
+    // below 1, never re-widen above it: a home sealed with the previous
+    // shipped `"paramsMaxTaint": 2` loads confined to 1, otherwise the upgrade
+    // would preserve the P0 owner+tier-2 silent-egress path it exists to
+    // close. A future explicit, versioned product decision to reopen the
+    // boundary is a separate change, not a reseal.
+    paramsMaxTaint: tighter(file.paramsMaxTaint, POLICY_FLOOR.paramsMaxTaint),
     // `tighter()` qui sì: il pavimento è già il massimo, quindi l'unico
     // movimento possibile da un file sigillato è rimettere il cancello.
     searchMaxTaint: tighter(file.searchMaxTaint, POLICY_FLOOR.searchMaxTaint),

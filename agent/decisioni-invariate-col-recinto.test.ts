@@ -214,16 +214,21 @@ describe('una decisione non dipende da come è impacchettato il contenuto', () =
     const pulito = await scena(INNOCUO, script, 'allow');
     const sporco = await scena(AVVELENATO, [...script], 'allow');
 
-    // ADR-0066: `sys.http` è `url-read`, aperta per costruzione — il fatto
-    // misurato non è più "i byte non escono", è "escono ugualmente nei due
-    // casi", perché la decisione guarda il **taint**, non il testo. `EXFIL`
-    // porta una query (`?x=1`) e `DISK_TIER` (2) non supera `paramsMaxTaint`
-    // (2, `POLICY_FLOOR`): il gate sui parametri non scatta, in nessuno dei
-    // due file.
+    // Lane #624 + #641 (2026-09-22): `EXFIL` porta una query (`?x=1`) e un
+    // percorso composto, e `DISK_TIER` (2) supera il nuovo `paramsMaxTaint`
+    // (1, `POLICY_FLOOR`) — il gate sui parametri scatta in tutti e due i
+    // casi, e l'harness approva, quindi i byte escono DOPO la domanda. Il
+    // fatto misurato resta l'invarianza: il recinto marca senza muovere, ed
+    // è per questo che pulito e avvelenato chiedono la stessa cosa, parola
+    // per parola — anche quando il file avvelenato contiene l'URL alla
+    // lettera, perché il disco tier-2 non fabbrica provenienza owner (F5).
     expect(pulito.usciti).toEqual([EXFIL]);
     expect(sporco.usciti).toEqual([EXFIL]);
-    expect(pulito.domande).toEqual([]);
-    expect(sporco.domande).toEqual([]);
+    expect(pulito.domande).toEqual([
+      `lettura con parametri scelti dal contenuto: ${EXFIL}\n\n` +
+        'questo turno contiene contenuto di livello 2: il risultato di fs_read',
+    ]);
+    expect(sporco.domande).toEqual(pulito.domande);
     // E il tier che la lettura dichiara è quello di sempre, in tutti e due —
     // seguito ora dal tier 3 della fetch, che prima di questa fetta non veniva
     // mai dichiarato perché il kernel rifiutava prima che il tool girasse.

@@ -356,15 +356,22 @@ describe('params gate — model-chosen bytes above a ceiling, whichever tool car
   });
   const withList = () => kernel({ egressAllowed: (host) => host === 'allowed.example.com' });
 
-  it('http_get: an allowlisted host with a query string is fine at taint <= paramsMaxTaint (ships 2)', () => {
+  it('http_get: an allowlisted host with a query string is fine at taint <= paramsMaxTaint (ships 1)', () => {
     expect(withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=hello', 1))).toMatchObject({
       effect: 'allow',
     });
-    // Tier 2 is the owner's own disk: a search after reading a local file must
-    // not become an ASK (decisione owner 2026-08-17).
-    expect(withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=hello', 2))).toMatchObject({
-      effect: 'allow',
-    });
+    // Lane #624 + #641: tier 2 is attacker-influenced disk content, not the
+    // owner's own words — a composed query at taint 2 asks the owner and
+    // shows the whole URL (reversing the 2026-08-17 "Ships 2" decision).
+    expect(withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=hello', 2)).effect).toBe(
+      'ask',
+    );
+  });
+
+  it('http_get: a composed query at taint 2 shows the whole URL in the ask', () => {
+    const d = withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=MUFFIN-SECRET', 2));
+    expect(d.effect).toBe('ask');
+    if (d.effect === 'ask') expect(d.ask.prompt).toContain('https://allowed.example.com/?q=MUFFIN-SECRET');
   });
 
   it('http_get: the same URL past the ceiling asks the owner and shows the whole URL', () => {
@@ -377,6 +384,40 @@ describe('params gate — model-chosen bytes above a ceiling, whichever tool car
     expect(
       withList()(paramsUrlReq(member, 'group:telegram:42', 'https://allowed.example.com/?q=MUFFIN-SECRET', 3)),
     ).toMatchObject({ effect: 'deny', code: 'resource_denied' });
+  });
+
+  it('url with a composed pathname answers to the same gate as query/fragment (#624)', () => {
+    // The pathname gap: before lane #624 + #641 only search/hash were
+    // inspected, so a model-composed path on an allowlisted host never met
+    // the gate at any taint. Now path, userinfo, query and fragment are one
+    // predicate over the canonical parse.
+    const pathReq = (p: Principal, taint: 0 | 1 | 2 | 3, quoted = false) => ({
+      principal: p,
+      tenant: 'host',
+      capability: 'sys.http' as CapabilityId,
+      resource: { kind: 'url', value: 'https://allowed.example.com/MUFFIN-SECRET' } as const,
+      args: { url: 'https://allowed.example.com/MUFFIN-SECRET' },
+      taint,
+      quoted,
+    });
+    expect(withList()(pathReq(owner, 1)).effect).toBe('allow');
+    expect(withList()(pathReq(owner, 2)).effect).toBe('ask');
+    expect(withList()(pathReq(owner, 3)).effect).toBe('ask');
+    // A non-owner never gets asked: composed path bytes are refused outright.
+    expect(
+      withList()({ ...pathReq(owner, 2), principal: member, tenant: 'group:telegram:42' }),
+    ).toMatchObject({ effect: 'deny', code: 'resource_denied' });
+    // The narrow exception is whole-URL and literal: quoted passes at any taint…
+    expect(withList()(pathReq(owner, 3, true)).effect).toBe('allow');
+    // …but quoting the host alone does not excuse composed components (F6):
+    // a different whole URL is simply not quoted.
+    expect(
+      withList()({
+        ...pathReq(owner, 2),
+        resource: { kind: 'url', value: 'https://allowed.example.com/other?x=1' } as const,
+        quoted: false,
+      }).effect,
+    ).toBe('ask');
   });
 
   it('http_get: an allowlisted host with NO params is unaffected by the ceiling, at any taint', () => {
@@ -419,7 +460,7 @@ describe('params gate — model-chosen bytes above a ceiling, whichever tool car
     if (d.effect === 'ask') expect(d.ask.prompt).toContain('MUFFIN-SECRET-sk-live-9f3a7c21');
   });
 
-  it("e i parametri di un URL restano a 2: sono i due numeri separati da ADR-0072", () => {
+  it("e i parametri di un URL restano a 1: sono i due numeri separati da ADR-0072, con il primo abbassato dalla lane #624 + #641", () => {
     // Il confine che regge il rischio: il *dove* di una ricerca e\' una
     // costante allowlisted, quello di un URL lo sceglie il modello.
     expect(withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/c?q=SEGRETO', 3)).effect).toBe(
@@ -447,10 +488,13 @@ describe('params gate — model-chosen bytes above a ceiling, whichever tool car
     expect(d.effect === 'deny' && d.detail).toMatch(/declares a query resource but received/);
   });
 
-  it('the owner can raise the ceiling from the sealed policy file, and it only moves the ask threshold', () => {
-    // Owner decision open per the mandate (1 vs 2): whichever way it lands,
-    // the raised ceiling must never turn into a silent allow above it — only
-    // ask moves.
+  it('a matrix with a higher ceiling still only moves the ask threshold — but the sealed file can no longer build one', () => {
+    // Direct-matrix seam, not the file: since the HOLD resolution the sealed
+    // policy is monotone (`tighter()` in `merge()`, pinned in
+    // `matrix.test.ts`), so a ceiling of 2 here is a construction the kernel
+    // answers, not a file an owner can reseal. What this still proves: a
+    // raised ceiling never turns into a silent allow above itself — only ask
+    // moves.
     const raised = kernel({
       matrix: { ...POLICY_FLOOR, paramsMaxTaint: 2 },
       egressAllowed: (host) => host === 'allowed.example.com',
