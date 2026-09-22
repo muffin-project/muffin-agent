@@ -127,18 +127,20 @@ runs on pushes to `dev`. Do not narrow the `main` push trigger until a real
 pre-promotion gate tests the promotion commit and proves the post-push run
 adds no signal.
 
-## Current-state reconciliation is part of integration
+## Integration is not the end of the task
 
-After an integration that changes active work, DAY-1 status or ordering:
+After a successful merge, run the task-bookkeeping closure owned by
+`ORCHESTRATION.md` before calling the deliverable DONE or selecting the next
+one. That closure owns issue/PR truth, authoritative-home reconciliation,
+residual classification, branch hygiene and the final re-observation.
 
-- update the authoritative DAY-1 requirement only if its evidence/status changed;
-- update `critical-path.md` only if ordering/dependency changed;
-- update `docs/development/handoff.md` when live work/next action changed;
-- do not update the retired `STATE.md` chronicle.
+Useful narrow helpers may detect drift (for example the current handoff
+reconciliation checker and `npm run igiene`), but they are evidence for the
+portable bookkeeping contract, not the contract itself. Do not make a
+Claude-specific hook the only way task closure happens.
 
-Run `.claude/riconcilia.mjs` when its checked surfaces are affected. Keep that
-checker narrow: its job is to catch known handoff/PR/branch drift, not to become
-a universal consistency engine.
+A task whose code is merged but whose issue/docs/branch state still describes the
+pre-merge world is **integrated but not closed**.
 
 ## CI and branch protection are observed facts
 
