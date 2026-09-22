@@ -35,7 +35,7 @@ VERIFY THE CLAIM
   ↓
 INTEGRATE
   ↓
-UPDATE ONLY THE AUTHORITATIVE HOMES MADE STALE
+BOOKKEEP THE COMPLETED TASK
   ↓
 OBSERVE AGAIN
 ```
@@ -47,6 +47,51 @@ For DAY-1, the deliverable is selected from
 `docs/status/day1/critical-path.md` and the relevant rows of
 `docs/status/day1/requirements-status.md`. A PR is an execution/checkpoint vehicle, not the
 product's state machine.
+
+## Bookkeeping is part of task completion
+
+A merge, green test run or worker return is **not** the end of a task. The task
+is complete only after the state it changed is durable and the repository no
+longer tells the next worker an obsolete story.
+
+Run this closure after **every completed deliverable**, not only when a session
+ends:
+
+1. **Re-observe the result.** Record the actual merged/integrated SHA, PR state,
+   current `dev`, branch state and current `program/current`; never close from
+   the writer's pre-merge summary.
+2. **Close the claim truthfully.** Persist final evidence on the PR/owning issue.
+   Close the issue only when its acceptance is actually satisfied; otherwise
+   leave the exact residual/blocker and next action.
+3. **Reconcile authoritative homes.** Update only the semantic/status documents
+   whose meaning changed. If none changed, say `authoritative homes: none`
+   explicitly rather than silently skipping the question. Update
+   `docs/development/handoff.md` only when live work or the next accepted action
+   changed.
+4. **Classify every residual.** A finding is either absorbed by an existing
+   owner, becomes a genuinely independent issue, or is explicitly rejected /
+   non-actionable. No residual may live only in chat.
+5. **Do branch/worktree hygiene.** Integrated work branches should disappear;
+   run the repository hygiene census and give every unowned non-integrated branch
+   an explicit keep/park/delete verdict. Never delete unintegrated work merely
+   because its name looks stale.
+6. **Re-observe once more.** The next worker should be able to start from Git,
+   GitHub and the authority docs without reconstructing the just-finished task
+   from conversation history.
+
+The portable entry point is the repository contract above. Agent-specific
+commands may automate it, but no hidden hook or one vendor's session lifecycle is
+allowed to be the only thing that performs bookkeeping.
+
+**Definition of done:**
+
+```text
+claim/evidence green + integrated
+        != DONE
+
+claim/evidence green + integrated + bookkeeping closure
+        = DONE
+```
 
 ## Decision boundaries
 
