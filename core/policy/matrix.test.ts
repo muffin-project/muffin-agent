@@ -192,7 +192,7 @@ describe('a policy file that cannot be trusted never widens anything', () => {
     expect(matrix.source).toBe('fallback');
     expect(matrix.note).toMatch(why);
     expect(matrix.defaultMaxTaint).toEqual({ low: 3, medium: 1, high: 1 });
-    expect(matrix.paramsMaxTaint).toBe(2);
+    expect(matrix.paramsMaxTaint).toBe(1);
     // The namespace entries joined the bare ids when the lookup learned to
     // read them (`denyListCovers`): 03 §3 says `outward.*`, and the Root of
     // Trust row says the RoT, not one verb of it. Both are tightenings — the
@@ -271,7 +271,7 @@ describe('paramsMaxTaint — the one ceiling the file may also raise (mandato in
    * tests exist so that clamping it later — making it match `defaultMaxTaint`
    * by accident — goes red instead of silently taking away the owner's dial.
    */
-  it('defaults to 2 when the file is genuinely silent — tier 2 is the owner\'s own disk (owner, 17/08)', () => {
+  it('defaults to 1 when the file is genuinely silent — tier-2 disk is attacker-influenced, not owner-authored (lane #624 + #641)', () => {
     const dir = home();
     // `home()` installa `defaults/rot/policy.json`, che la chiave la CONTIENE:
     // asserire sul file installato non prova il default, prova il default del
@@ -281,7 +281,7 @@ describe('paramsMaxTaint — the one ceiling the file may also raise (mandato in
     writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, neverAtRuntime: ['rot.write'] }));
     const matrix = loadPolicyMatrix(dir);
     expect(matrix.source).toBe('sealed');
-    expect(matrix.paramsMaxTaint).toBe(2);
+    expect(matrix.paramsMaxTaint).toBe(1);
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -305,7 +305,7 @@ describe('paramsMaxTaint — the one ceiling the file may also raise (mandato in
     const matrix = loadPolicyMatrix(dir);
     expect(matrix.source).toBe('fallback');
     expect(matrix.note).toMatch(/paramsMaxTaint/);
-    expect(matrix.paramsMaxTaint).toBe(2);
+    expect(matrix.paramsMaxTaint).toBe(1);
     rmSync(dir, { recursive: true, force: true });
   });
 });

@@ -61,12 +61,14 @@ describe('Security v2 A/B baseline — ambient taint only', () => {
       };
     });
 
-    // Ambient taint is not merely "stricter everywhere": the allowlisted
-    // read-only case is intentionally identical because sys.http declares a
-    // higher ceiling. That exception is itself evidence that useful dataflow
-    // already forced the scalar policy to become capability-specific.
+    // Ambient taint is not merely "stricter everywhere": the bare-host
+    // read-only case stays identical by decision (no model-chosen bytes, no
+    // gate). What changed on 22/09 (lane #624 + #641) is exactly one cell: a
+    // read with a composed PATH at ambient taint now asks, so s5 is the
+    // visible price of closing the exfiltration channel — measured here
+    // rather than scored.
     expect(results.find((r) => r.id === 's5-external-value-read-more')).toMatchObject({
-      ambient: 'allow',
+      ambient: 'ask',
       noAmbient: 'allow',
     });
 
@@ -90,8 +92,15 @@ describe('Security v2 A/B baseline — ambient taint only', () => {
     // (`core/policy/solo-irreversibile.test.ts`), e il livello continua a
     // marchiare gli episodi e a comparire in ogni domanda. Il taint non è
     // sparito: ha smesso di essere l'autorità in carica sull'host.
+    //
+    // Rimisurata il 22/09 (lane #624 + #641): A e B coincidono su ogni scena
+    // TRANNE la lettura con percorso composto (s5) — ambient chiede,
+    // noAmbient lascia passare. Quella singola divergenza è l'impronta della
+    // decisione: byte scelti dal modello in uscita a taint >= 2 chiedono
+    // all'owner. Se un giorno diverge altro, è una regressione o una nuova
+    // decisione, e questa riga è il posto dove si vede.
     const differenti = results.filter((r) => r.ambient !== r.noAmbient);
-    expect(differenti).toEqual([]);
+    expect(differenti.map((r) => r.id)).toEqual(['s5-external-value-read-more']);
 
     // La stessa cosa detta per nome sulle due celle che ADR-0075 ha spostato,
     // perché un `filter` vuoto sarebbe verde anche se l'elenco delle scene si

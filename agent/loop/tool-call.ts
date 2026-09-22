@@ -685,7 +685,11 @@ export async function runTool(
     // un URL copiato da qui non è un URL composto (`DecisionRequest.quoted`).
     // Da `safeContent` e non da `outcome.content`, così ciò che è stato
     // oscurato non può essere «citato» da una richiesta successiva.
-    snapshot.recordInput(safeContent);
+    // Con la capability di chi li ha portati: solo il web aperto rende una
+    // URL «citata» per il gate di egress — un risultato dal disco tier-2 (o
+    // da qualunque altro tool fuori dalla classe web) entra e alza il taint,
+    // ma non fabbrica provenienza owner (lane #624 + #641, F5).
+    snapshot.recordInput(safeContent, tool.capability);
     /**
      * The failure twin of `giaFatte`, read **before** this call's own row is
      * written — same reason: the count has to mean "how many times before",

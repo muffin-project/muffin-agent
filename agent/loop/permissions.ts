@@ -1,5 +1,5 @@
 import type { Decide, DecisionRequest, Decision, PermissionSnapshot, Principal, TenantId, TrustTier } from '../../core/policy/types.js';
-import type { CapabilityDecl } from '../../core/policy/types.js';
+import type { CapabilityDecl, CapabilityId } from '../../core/policy/types.js';
 import { tierOf } from '../../core/surface/types.js';
 import type { TurnInput } from './types.js';
 
@@ -10,6 +10,29 @@ import type { TurnInput } from './types.js';
  * permission snapshot itself (`makeSnapshot`/`citato`). See `agent/loop.ts`'s
  * own module docstring for what the loop is.
  */
+
+/**
+ * Tool capabilities whose results may confer `quoted` provenance on an exact,
+ * whole URL (`DecisionRequest.quoted`, `core/policy/decide.ts`'s `gateParams`).
+ *
+ * Following a link found on the web is the job; minting owner provenance
+ * from a local file is the attack (#641). So the quoting class is exactly:
+ * the human's message (recorded without a capability, `agent/loop/engine.ts`)
+ * plus the two capabilities that read the open web. Everything else a tool
+ * brings in — disk, memory, MCP, shell, documents — still enters the turn
+ * and still raises its taint; it just cannot silence the egress gate for a
+ * URL it happens to spell out (lane #624 + #641, F5).
+ *
+ * This is deliberately not per-component provenance (no scheme/host/path
+ * tracking): the exception stays a whole-URL byte-literal match, and the
+ * only question added is *which ingress class* the literal came from — the
+ * smallest primitive that represents the exact-owner-URL exception without
+ * letting tier-2 content manufacture it.
+ */
+export const QUOTABLE_TOOL_CAPABILITIES: ReadonlySet<CapabilityId> = new Set([
+  'sys.http',
+  'sys.search',
+]);
 
 /**
  * Questa ripresa spende il budget, o no?
@@ -186,10 +209,17 @@ export function makeSnapshot(
    *
    * Un array e non un `Set`: la domanda non e' «e' uguale a» ma «e' contenuto
    * in», perche' un URL vive dentro una pagina, non da solo.
+   *
+   * Ogni ingresso porta la sua classe di provenienza (`citabile`): solo il
+   * messaggio umano e i risultati del web aperto possono rendere «citata» una
+   * URL per il gate di egress — un file tier-2 che la contiene alla lettera
+   * non acquisisce provenienza owner (lane #624 + #641, F5). Vedi
+   * `QUOTABLE_TOOL_CAPABILITIES` per la linea e la sua ragione.
    */
-  const ingressi: string[] = [];
+  const ingressi: Array<{ testo: string; citabile: boolean }> = [];
   /**
-   * Questi byte erano gia' qui prima che il modello scrivesse?
+   * Questi byte erano gia' qui prima che il modello scrivesse, **e da una
+   * fonte che può dirlo**?
    *
    * Confronto letterale, di proposito. Una versione tollerante (normalizzare
    * l'escaping, riordinare i parametri) allargherebbe la finestra a cose che
@@ -198,7 +228,7 @@ export function makeSnapshot(
    * positivo aprirebbe il canale che questo gate esiste per chiudere.
    */
   const citato = (valore: string): boolean =>
-    valore !== '' && ingressi.some((testo) => testo.includes(valore));
+    valore !== '' && ingressi.some((ing) => ing.citabile && ing.testo.includes(valore));
   return {
     principal,
     tenant,
@@ -228,8 +258,16 @@ export function makeSnapshot(
       // must not reach it.
     },
     invalidate: () => cache.clear(),
-    recordInput(text) {
-      if (text !== '') ingressi.push(text);
+    recordInput(text, toolCapability) {
+      if (text === '') return;
+      // Senza capability è il messaggio della persona: citabile per
+      // costruzione. Con capability lo è solo se appartiene alla classe che
+      // legge il web aperto — un risultato di tool che non sta in
+      // `QUOTABLE_TOOL_CAPABILITIES` (disco tier-2 in primis) entra e alza il
+      // taint, ma non rende «citata» nessuna URL.
+      const citabile =
+        toolCapability === undefined || QUOTABLE_TOOL_CAPABILITIES.has(toolCapability);
+      ingressi.push({ testo: text, citabile });
     },
     check(capability, resource, args) {
       const quoted = 'value' in resource && citato(resource.value);

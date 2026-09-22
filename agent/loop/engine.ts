@@ -196,7 +196,9 @@ export async function guidaIlTurno(
   const snapshot = makeSnapshot(deps.decide, input.principal, input.tenant, record.taint);
   // La prima cosa entrata in questo turno: le parole della persona. Un URL che
   // l'owner incolla lui stesso non è «scelto dal modello», ed è il caso più
-  // ovvio che il gate sui parametri trattava come tale.
+  // ovvio che il gate sui parametri trattava come tale. Senza capability:
+  // il messaggio umano è la classe di provenienza che rende «citata» una URL
+  // intera (lane #624 + #641 — un file tier-2 non lo è).
   snapshot.recordInput(input.text);
   const turnClass = tenantClass(input.principal, input.tenant);
 

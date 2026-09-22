@@ -84,10 +84,16 @@ function resourceFor(decl: CapabilityDecl): DecisionRequest['resource'] {
   switch (decl.resourceKind) {
     case 'path':
       return { kind: 'path', value: '/tmp/scope/nota.txt' };
+    // Bare hosts on purpose: this oracle asserts ROW behaviour (ceiling and
+    // irreversibility), and any composed URL bytes — path, query, fragment —
+    // answer to the params gate instead (`decide.ts`, lane #624 + #641),
+    // which is taint-dependent below the row ceiling BY DESIGN and pinned in
+    // `decide.test.ts` plus `agent/url-provenance-624-641.test.ts`. A fixture
+    // with a path would measure the gate here instead of the row.
     case 'url':
-      return { kind: 'url', value: 'https://esempio.test/pagina' };
+      return { kind: 'url', value: 'https://esempio.test/' };
     case 'url-read':
-      return { kind: 'url-read', value: 'https://esempio.test/pagina' };
+      return { kind: 'url-read', value: 'https://esempio.test/' };
     case 'query':
       return { kind: 'query', value: 'il tempo di domani' };
     case 'tenant':

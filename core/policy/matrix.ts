@@ -252,11 +252,12 @@ export type PolicyMatrix = {
   readonly defaultMaxTaint: Readonly<Record<RiskClass, TrustTier>>;
   /**
    * Ceiling for model-chosen bytes riding out in a resource the model
-   * controls: a `url` resource's query/fragment once its host has already
-   * cleared the egress allowlist, and the full text of a `query` resource
-   * (`sys.search`). One scalar for both, because `decide.ts`'s `gateParams`
-   * asks the identical question of each — is this turn's taint low enough
-   * that a destination already fixed (by the allowlist, or by the search
+   * controls: a `url`/`url-read` resource's path, userinfo, query or fragment
+   * once its host has already cleared the egress decision, and the full text
+   * of a `query` resource (`sys.search`). One scalar for the URL side and the
+   * search side, because `decide.ts`'s `gateParams` asks the identical
+   * question of each — is this turn's taint low enough that a destination
+   * already fixed (by the allowlist, by open-read, or by the search
    * endpoint's own registration) may also carry bytes the model chose? Above
    * the ceiling: `ask` for the owner, showing the exact bytes
    * (`ApprovalRequest.resource`, `agent/loop.ts`); `deny` for anyone else,
@@ -273,13 +274,22 @@ export type PolicyMatrix = {
    * it never grants anyone but the owner anything — it only moves the taint
    * value at which the owner starts being asked.
    *
-   * **Ships 2** (decisione owner, 2026-08-17): tier 2 is the owner's own disk
-   * and local data, and asking about every search that follows a file read
-   * would make the ASK a reflex to dismiss rather than a decision — the
-   * failure mode the mandate's §D12 names. Tier 3 is the outside world (web,
-   * search results, MCP, forwarded content), and that is the taint at which
-   * model-chosen bytes in a query stop being the owner's own words. Whichever
-   * the value, a non-owner principal is refused, never asked.
+   * **Ships 1** (lane #624 + #641, 2026-09-22, reversing the owner decision
+   * of 2026-08-17 that shipped 2). The old rationale read tier 2 as "the
+   * owner's own disk and local data", so asking after every file read would
+   * make the ASK a reflex. The threat model since established the opposite
+   * fact for provenance: disk reads are fenced precisely because files on the
+   * owner's disk can be attacker-controlled (`fs_read`, `fs_list`,
+   * `fs_search`, `shell_run` all return `DISK_TIER = 2` as prompt-injection
+   * entry points; `docs/architecture/SECURITY.md` counts four of seven
+   * adversarial scenes entering through disk content). Tier 2 is local, but
+   * it is not owner-authored — so model-composed URL bytes at taint >= 2 ask
+   * the owner (showing the whole executed URL) and are refused to anyone
+   * else. The narrow exception is an exact, whole URL already quoted from
+   * trusted owner/input provenance (`DecisionRequest.quoted`); a tier-2
+   * document containing or inventing the same URL does not acquire owner
+   * provenance. Whichever the value, a non-owner principal is refused, never
+   * asked.
    */
   readonly paramsMaxTaint: TrustTier;
   /**
@@ -516,7 +526,7 @@ export const ROW_FLOOR: Readonly<Record<EffectRow, RowPolicy>> = {
 export const POLICY_FLOOR: PolicyMatrix = {
   rows: ROW_FLOOR,
   defaultMaxTaint: { low: 3, medium: 1, high: 1 },
-  paramsMaxTaint: 2,
+  paramsMaxTaint: 1,
   /** 3 = mai. Vedi `PolicyMatrix.searchMaxTaint` e ADR-0072. */
   searchMaxTaint: 3,
   /** No principal may ever exercise these at runtime, whatever the taint. */
