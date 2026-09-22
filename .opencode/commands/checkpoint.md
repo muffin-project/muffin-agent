@@ -14,7 +14,11 @@ Do not exit, compact, rebase or merge until all of these hold:
    acceptance boxes checked only with evidence pointers.
 4. **Acceptance preserved.** The falsifier and acceptance for the current claim
    are written in the PR or issue — recoverable without this session.
-5. Report any owner-only boundary you are stopped at (destructive action,
+5. **Completed-task closure.** If a deliverable was integrated or otherwise
+   completed since the previous checkpoint, run the task-bookkeeping contract in
+   `docs/development/ORCHESTRATION.md` before reporting it DONE. A durable branch
+   and a truthful PR are necessary but not sufficient.
+6. Report any owner-only boundary you are stopped at (destructive action,
    privacy/security, product scope) with the exact evidence and action required.
 
 Session and compaction summaries are disposable caches. Durability lives in
