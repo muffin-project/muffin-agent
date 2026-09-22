@@ -6,16 +6,21 @@
 
 ## Snapshot 2026-09-22
 
-- `dev`: `35bde7b1ce438663becbf6931067d7035011f8a4`
-  (merge #633, real runtime-path inference verification).
+- `dev`: `d21d7dfdb0ef5425eb1a324a434d9de5508a75d0`
+  (merge #659, URL egress provenance #624/#641).
 - `main`: ancora il candidato Community Preview; non promuovere implicitamente.
-- PR aperte: **#650** soltanto, draft/HOLD
-  (`slice/shell-containment-638-642-645`).
+- PR aperte: **#650** draft/HOLD
+  (`slice/shell-containment-638-642-645`) e **#658** draft
+  (bookkeeping/repo hygiene; questo snapshot vive lì finché non viene integrata).
 - #608 Community Preview: **chiusa**. Il programma attivo verso il 25 Sep è la
   boundary source-public/pre-alpha in **#464**.
 
 ## Appena integrato
 
+- **#659 / #624 + #641** — URL egress provenance: path/userinfo/query/fragment
+  nel gate, disk tier-2 non può fabbricare quoted provenance, floor
+  `paramsMaxTaint=1` monotono anche per Home legacy con il vecchio valore 2.
+  Merge `d21d7dfdb0ef5425eb1a324a434d9de5508a75d0`.
 - **#648 / #639** — Muffin Home privato: directory 0700, file 0600,
   migrazione same-owner, symlink/ancestor fail-closed. Merge
   `30f401654620d1576b7a62e2bafad53f257584a2`.
@@ -33,20 +38,15 @@ non interpretarli come test eseguiti falliti.
 
 ## Prossimo percorso critico verso il 25 Sep
 
-1. **#624 + #641** — una lane CRITICAL, due claim distinti:
-   pathname canonico nella provenance/egress policy + tier-2 disk content non
-   può comporre silenziosamente query/path/fragment di rete. Policy già decisa:
-   `paramsMaxTaint 2 -> 1`, exact whole owner/input URL exception, nessuna nuova
-   provenance architecture salvo necessità provata.
-2. **#650 / #638 + #642 + #645** — shell containment. Non merge finché mancano
+1. **#650 / #638 + #642 + #645** — shell containment. Non merge finché mancano
    evidence Linux/bwrap e una decisione onesta su whole-host read visibility.
-3. **#654** — fresh Ubuntu VPS: da login provider/root a runtime Muffin
+2. **#654** — fresh Ubuntu VPS: da login provider/root a runtime Muffin
    non-root, supervisionato, one-command, senza plumbing Unix manuale.
-4. **#614**, slice pre-25 bounded — fermare la contaminazione di durable memory
+3. **#614**, slice pre-25 bounded — fermare la contaminazione di durable memory
    da request/event one-shot e pinned palesemente errati. La Memory Maintenance /
    dreaming v1 completa resta lavoro da chiudere entro circa un mese, non un
    redesign pre-25.
-5. **#464** — publication boundary finale: purge GitHub di cached/dangling
+4. **#464** — publication boundary finale: purge GitHub di cached/dangling
    objects contenenti vecchi dati personali + fresh external retrieval check,
    governance/check pubblici e triage delle vulnerabilità npm osservate nel
    merge gate. Non eseguire `npm audit fix --force` alla cieca.
@@ -59,8 +59,11 @@ Remote heads osservate in questo snapshot:
 - `dev`
 - `docs/community-preview-ready`
 - `slice/shell-containment-638-642-645`
+- `chore/repo-hygiene-20260922`
 
 `slice/shell-containment-638-642-645` è posseduta da PR #650: **non toccare**.
+`chore/repo-hygiene-20260922` è posseduta da PR #658: **non toccare**.
+La branch integrata `slice/624-641-url-provenance` non è più presente su origin.
 
 `docs/community-preview-ready` è 1 commit ahead / 62 behind `dev`, senza PR
 aperta. La sua unica sostanza è già superseded su `dev`: FUNDING è identico,
