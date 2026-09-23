@@ -48,7 +48,7 @@ Bring new evidence; a material reversal is a new ADR, not a rewrite of the old.
 Procedures: `.agents/skills/` (`engineering-loop`, `jev-shadow`); entry points
 `/start`, `/checkpoint`, `/close` in `.opencode/commands/`; roles in
 `.opencode/agents/`. `scripts/agent/repo-state.mjs` summarizes GitHub issues,
-claims, open PRs and checks. GitHub issue/PR state owns contributor claims; no
+claims and open PRs. GitHub issue/PR state owns contributor claims; no
 global `program/current` queue. Disjoint scopes may proceed in parallel.
 OpenCode commands/roles are optional; repository invariants are harness-neutral.
 
