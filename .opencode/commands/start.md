@@ -14,14 +14,12 @@ You are starting fresh. You have NOT read any previous session. Do this now:
 2. **Read the current program issue** named in the snapshot (it carries the
    `program/current` label). That issue — not any handoff file — owns what
    matters now.
-3. **Read `docs/development/handoff.md` only as a disposable hint**, and fix it first
-   if it contradicts what you just observed.
-4. **Select exactly ONE deliverable**, then state in your reply:
+3. **Select exactly ONE deliverable**, then state in your reply:
    - the falsifiable claim (one sentence — what becomes true);
    - the falsifier (what observation would prove it false);
    - the acceptance (what closes it);
    - the verification profile (FAST / STANDARD / CRITICAL per
      `docs/development/ORCHESTRATION.md`) and why.
-5. Load deeper authority (`docs/development/ORCHESTRATION.md`, `docs/development/RESEARCH.md`,
+4. Load deeper authority (`docs/development/ORCHESTRATION.md`, `docs/development/RESEARCH.md`,
    `docs/development/BRANCHING.md`, `docs/development/JUDGE.md`) only when the claim makes it relevant.
    Follow `.agents/skills/engineering-loop/SKILL.md` from here on.

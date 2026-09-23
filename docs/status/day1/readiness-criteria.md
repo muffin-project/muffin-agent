@@ -76,7 +76,7 @@ Se esiste una risposta che soddisfa il criterio, DAY-1 non è raggiunto.
 
 - **Status delle singole righe** → `docs/status/day1/requirements-status.md`.
 - **Ordine dei blocker** → `docs/status/day1/critical-path.md`.
-- **Lavoro/PR correnti** → Git osservato + `docs/development/handoff.md`.
+- **Lavoro/PR correnti** → Git/GitHub osservati.
 - **Come verificare FAST/STANDARD/CRITICAL** → `docs/development/ORCHESTRATION.md`.
 - **Security/architecture correnti** → `docs/architecture/SECURITY.md` e
   `docs/architecture/ARCHITECTURE.md`.

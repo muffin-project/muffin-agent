@@ -20,9 +20,8 @@ GitHub. They are intentionally not copied into this file. The requirement-level
 DAY-1 inventory is [status/day1/requirements-status.md](status/day1/requirements-status.md);
 it is evidence-rich and should not be mistaken for a release dashboard.
 
-`docs/development/handoff.md` and dated source-public plans are operational snapshots.
-They may help an active maintainer recover context, but observed Git state wins
-when they disagree.
+Current work is observed from Git/GitHub, with `scripts/agent/repo-state.mjs`
+providing a deterministic fresh-session summary. Dated plans are historical.
 
 ## Release boundaries
 

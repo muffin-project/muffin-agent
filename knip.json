@@ -4,7 +4,6 @@
     "cli/main.ts",
     ".claude/hooks/*.mjs",
     ".claude/deleghe.mjs",
-    ".claude/riconcilia.mjs",
     "docs/derived/architecture-map/build.mjs",
     "docs/derived/architecture-map/ancore.mjs",
     "core/mcp/fixtures/echo-server.mjs",

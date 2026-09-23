@@ -133,12 +133,7 @@ After an integration that changes active work, DAY-1 status or ordering:
 
 - update the authoritative DAY-1 requirement only if its evidence/status changed;
 - update `critical-path.md` only if ordering/dependency changed;
-- update `docs/development/handoff.md` when live work/next action changed;
 - do not update the retired `STATE.md` chronicle.
-
-Run `.claude/riconcilia.mjs` when its checked surfaces are affected. Keep that
-checker narrow: its job is to catch known handoff/PR/branch drift, not to become
-a universal consistency engine.
 
 ## CI and branch protection are observed facts
 
