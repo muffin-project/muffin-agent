@@ -55,7 +55,7 @@ Procedures: `.agents/skills/` (`engineering-loop`, `jev-shadow`). Entry points:
 GitHub issue graph, claims, open PRs and observed checks. GitHub issue/PR state
 is contributor work authority; there is no repository-wide `program/current`
 queue. Contributors may work in parallel when issue scopes and changed files are
-disjoint. OpenCode V1 stays.
+disjoint. OpenCode-specific commands and roles remain optional adapters; repository invariants stay harness-neutral.
 
 ## The failure pattern to remember
 
