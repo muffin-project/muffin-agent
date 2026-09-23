@@ -64,7 +64,7 @@ const prRaw = gh([
   '--limit',
   '50',
   '--json',
-  'number,title,isDraft,headRefName,baseRefName',
+  'number,title,isDraft,headRefName,baseRefName,files',
 ]);
 let prs = [];
 try {
@@ -81,16 +81,13 @@ const issueRaw = gh([
   '--limit',
   '100',
   '--json',
-  'number,title,labels',
+  'number,title,labels,assignees',
 ]);
-let program = [];
+let issues = [];
 try {
-  const issues = JSON.parse(issueRaw || '[]');
-  program = issues.filter((i) =>
-    (i.labels || []).some((l) => l.name === 'program/current'),
-  );
+  issues = JSON.parse(issueRaw || '[]');
 } catch {
-  program = [];
+  issues = [];
 }
 
 const jevKey = process.env.TYPESAFE_API_KEY ? 'present' : 'absent';
@@ -110,10 +107,32 @@ section('open PRs', [
     : 'none (or gh unavailable)',
 ]);
 
-section('current program', [
-  program.length === 1
-    ? `program/current → #${program[0].number} ${program[0].title}`
-    : `INCONSISTENT: ${program.length} open issues carry program/current (want exactly 1)`,
+const claimed = issues.filter((i) => (i.assignees || []).length > 0);
+section('open issue graph', [
+  issues.length
+    ? `${issues.length} open issues loaded; ${claimed.length} have GitHub assignees`
+    : 'none (or gh unavailable)',
+  ...issues.slice(0, 12).map((i) => {
+    const owners = (i.assignees || []).map((a) => a.login).join(', ') || 'unclaimed';
+    return `#${i.number} [${owners}] ${i.title}`;
+  }),
+]);
+
+const filePaths = (pr) => (pr.files || [])
+  .map((f) => (typeof f === 'string' ? f : f.path))
+  .filter(Boolean);
+const overlaps = [];
+for (let i = 0; i < prs.length; i += 1) {
+  const left = new Set(filePaths(prs[i]));
+  for (let j = i + 1; j < prs.length; j += 1) {
+    const common = filePaths(prs[j]).filter((path) => left.has(path));
+    if (common.length) overlaps.push(`#${prs[i].number} / #${prs[j].number}: ${common.join(', ')}`);
+  }
+}
+section('open PR file-scope overlaps', [
+  prs.length
+    ? overlaps.length ? ...overlaps : 'none observed; unpublished worktree/branch claims still need coordination'
+    : 'unknown (or gh unavailable)',
 ]);
 
 const closedRaw = gh([
