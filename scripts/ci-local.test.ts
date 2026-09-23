@@ -170,10 +170,10 @@ describe('loadJobs', () => {
 // ---------------------------------------------------------------------------
 
 describe('needsSandboxProbe', () => {
-  it('is true only for a job that installs bubblewrap', () => {
+  it('is true only for a job that installs pinned upstream bubblewrap', () => {
     const withSandbox = deriveJob('fake.yml', 'j', {
       'runs-on': 'ubuntu-latest',
-      steps: [{ run: 'sudo apt-get install -y bubblewrap socat ripgrep' }],
+      steps: [{ run: 'sudo bash scripts/install-ci-bubblewrap.sh' }],
     });
     const without = deriveJob('fake.yml', 'j', {
       'runs-on': 'ubuntu-latest',

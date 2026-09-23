@@ -188,7 +188,7 @@ jobs:
       # `SandboxManager.initialize` lancia «Sandbox dependencies not available»
       # e il contenimento non parte affatto.
       - name: prerequisiti del sandbox Linux (bwrap, socat, ripgrep)
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap socat ripgrep
+        run: sudo bash scripts/install-ci-bubblewrap.sh
 
       # Il quarto prerequisito, e non lo sapevamo perché non l'avevamo mai
       # misurato. Primo giro di questa PR, dal log del probe su ubuntu-latest:
@@ -346,7 +346,7 @@ jobs:
       # sono peggio di nessuna. Il perché di ciascuno è misurato e documentato
       # lì, una volta sola.
       - name: prerequisiti del sandbox Linux (bwrap, socat, ripgrep)
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap socat ripgrep
+        run: sudo bash scripts/install-ci-bubblewrap.sh
 
       - name: profilo AppArmor per bwrap (il rimedio che il probe stampa)
         run: |

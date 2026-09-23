@@ -445,16 +445,19 @@ export function chooseDockerPrivileges(
 }
 
 /** The real probe: does `bwrap` mount `/proc` in a nested namespace with these extra `docker run` args? */
-function realDockerProbe(image: string): (dockerArgs: readonly string[]) => boolean {
+function realDockerProbe(image: string, repoTar: string): (dockerArgs: readonly string[]) => boolean {
   return (dockerArgs) => {
     const result = spawnSyncCapture('docker', [
       'run',
       '--rm',
       ...dockerArgs,
+      '-v',
+      `${repoTar}:/repo.tar:ro`,
       image,
       'bash',
       '-c',
-      'command -v bwrap >/dev/null 2>&1 || (apt-get update -qq >/dev/null && apt-get install -y -qq bubblewrap >/dev/null); ' +
+      'mkdir -p /repo && tar xf /repo.tar -C /repo && ' +
+        'bash /repo/scripts/install-ci-bubblewrap.sh && ' +
         'bwrap --unshare-all --proc /proc --dev-bind / / true',
     ]);
     return result.status === 0;
@@ -776,7 +779,7 @@ async function main(): Promise<void> {
       if (needsSandboxProbe(job)) {
         if (privilegeChoice === null) {
           console.log('probing this Docker host: can bwrap mount /proc in a nested namespace?');
-          privilegeChoice = chooseDockerPrivileges(realDockerProbe(IMAGE));
+          privilegeChoice = chooseDockerPrivileges(realDockerProbe(IMAGE, repoTar));
         }
         if ('unavailable' in privilegeChoice) {
           console.log(`NOT EXECUTABLE: ${privilegeChoice.reason}`);
