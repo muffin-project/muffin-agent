@@ -24,16 +24,19 @@ falsifiable claim → define falsifier + acceptance → IMPLEMENT → VERIFY
   contradicts observation is stale: fix it before choosing work.
 - **Evidence precedence:** runtime / observed output > source / schema > tests >
   Git > canonical contracts > issue/PR state > handoff prose > history.
-- **WIP write limit = 1 per repository.** One writer lane. A second writer
-  needs genuinely disjoint ownership and independent acceptance. Read-only
-  evidence workers are allowed alongside the writer.
+- **Ownership is per issue and scope, not per repository.** Contributors may
+  write in parallel when claimed behavior/paths and acceptance are disjoint.
+  Before starting, compare issue claims, active worktrees and files changed by
+  open PRs. Coordinate or narrow overlapping scopes; do not create a global
+  queue to serialize unrelated work. Read-only investigation can run in parallel.
 - **A worker summary is not evidence.** Verify load-bearing claims yourself.
   A deterministic result is not re-audited without new evidence.
 - **One claim per slice.** State it in one falsifiable sentence plus what would
   falsify it and the acceptance that closes it. No claim, no implementation.
-- **Git / issue / PR state carries work across sessions.** No important state
-  may exist only in conversation memory. Commit coherent units; push durable
-  checkpoints; keep the active PR and the current program issue truthful.
+- **GitHub carries contributor work across sessions.** Use the issue for its
+  claim/dependencies, its assignee or a comment for scope ownership, and the
+  linked PR/branch/SHA/checks for execution evidence. Keep those objects truthful;
+  there is no repository-wide current issue.
 - **Conversation and compaction summaries are disposable caches.** They never
   override re-observed state.
 
