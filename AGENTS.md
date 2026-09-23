@@ -51,8 +51,11 @@ Bring new evidence; a material reversal is a new ADR, not a rewrite of the old.
 
 Procedures: `.agents/skills/` (`engineering-loop`, `jev-shadow`). Entry points:
 `/start`, `/checkpoint`, `/close` in `.opencode/commands/`; roles in
-`.opencode/agents/`. Snapshot: `scripts/agent/repo-state.mjs`. Current program:
-the open issue with the `program/current` label. OpenCode V1 stays.
+`.opencode/agents/`. Snapshot: `scripts/agent/repo-state.mjs` summarizes the
+GitHub issue graph, claims, open PRs and observed checks. GitHub issue/PR state
+is contributor work authority; there is no repository-wide `program/current`
+queue. Contributors may work in parallel when issue scopes and changed files are
+disjoint. OpenCode V1 stays.
 
 ## The failure pattern to remember
 
