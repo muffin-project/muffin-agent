@@ -140,7 +140,7 @@ process.stderr.write(`importati ${imported} episodi (${ownerImported} da estrarr
 
 const tracer = new SimpleTracer(new JsonlExporter(dirname(out)));
 const provider = new OpenAICompatProvider(apiKey, values['base-url'] ?? 'https://openrouter.ai/api/v1', {
-  'HTTP-Referer': 'https://github.com/muffin-ai/muffin',
+  'HTTP-Referer': 'https://github.com/muffin-project/muffin-agent',
   'X-Title': 'muffin-eval-corpus',
 });
 const model = values.model ?? 'anthropic/claude-haiku-4.5';

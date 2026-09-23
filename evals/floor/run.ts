@@ -113,7 +113,7 @@ async function runScenario(
     const result = await runTurn(
       {
         provider: new OpenAICompatProvider(apiKey, baseUrl, {
-          'HTTP-Referer': 'https://github.com/muffin-ai/muffin',
+          'HTTP-Referer': 'https://github.com/muffin-project/muffin-agent',
           'X-Title': 'muffin-floor',
         }),
         // Il tetto è il parametro sotto misura, quindi qui si sovrascrive

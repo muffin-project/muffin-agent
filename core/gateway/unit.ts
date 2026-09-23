@@ -262,7 +262,7 @@ WatchdogSec=${WATCHDOG_SEC}`
 Type=exec`;
   const text = `[Unit]
 Description=Muffin — runtime dell'agente personale
-Documentation=https://github.com/muffin-ai/muffin
+Documentation=https://github.com/muffin-project/muffin-agent
 # La rete serve al primo turno, non all'avvio: Wants e non Requires, così un
 # boot senza rete lascia comunque partire lo scheduler.
 Wants=network-online.target
