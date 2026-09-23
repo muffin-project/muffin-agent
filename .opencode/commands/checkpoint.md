@@ -9,9 +9,9 @@ Do not exit, compact, rebase or merge until all of these hold:
    the stash (shared across worktrees — never a store), or conversation memory.
 2. **PR truthful.** The active PR's title, description, claim, profile and head
    match the actual branch. Draft status matches integration-readiness.
-3. **Issue current.** The current program issue (label `program/current`) and
-   any claim issue reflect real state: blockers observed (not rumored),
-   acceptance boxes checked only with evidence pointers.
+3. **Issue claim truthful.** The issue owned by this branch reflects actual
+   scope and blockers; linked PR/head SHA/check state is current. Do not update
+   or select a repository-wide current issue. Acceptance boxes need evidence pointers.
 4. **Acceptance preserved.** The falsifier and acceptance for the current claim
    are written in the PR or issue — recoverable without this session.
 5. Report any owner-only boundary you are stopped at (destructive action,
