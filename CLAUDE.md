@@ -31,9 +31,8 @@ Project skills and path-scoped rules live in `.claude/skills/` and
 `.claude/rules/`. Their bodies invoke the authoritative document; they do not
 restate it.
 
-For current work use, in this order: observed Git/worktree/PR/check/delegation
-state; `docs/development/handoff.md` as a compact handoff; then the ordering and
-status authority for the current goal.
+For current work use observed Git/worktree/PR/check/delegation state and
+`scripts/agent/repo-state.mjs`; then load the ordering and status authority.
 
 ## Verification profile
 

@@ -2,7 +2,7 @@
 
 Questo file possiede **ordine e dipendenze**, non lo stato. Lo stato dei
 requisiti vive solo in `docs/status/day1/requirements-status.md`; il lavoro vivo in
-Git + `docs/development/handoff.md`; le deliberate deferral in `docs/product/ROADMAP.md`.
+Git/GitHub; le deliberate deferral in `docs/product/ROADMAP.md`.
 
 La regola è: una cosa compare qui soltanto se **deve precederne un'altra**. Se è
 solo un finding, un follow-up o una feature desiderabile, non è percorso

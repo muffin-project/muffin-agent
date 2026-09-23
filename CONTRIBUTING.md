@@ -74,6 +74,27 @@ Propose a new core primitive only when a concrete need cannot be expressed safel
 through the current boundaries or when multiple capabilities expose the same
 missing invariant.
 
+## Choose and claim work
+
+GitHub issues are a navigable claim and dependency graph, not a single
+repository-wide queue. There is no required `current` issue or global
+`program/current` label. Contributors can choose any open issue whose stated
+prerequisites are satisfied and whose acceptance is clear enough to implement.
+
+Before writing:
+
+- claim the issue with its GitHub assignee; if assignment is unavailable, comment
+  with the contributor/agent identity, bounded scope, and branch;
+- link the branch and PR to the issue so maintainers can reconcile the same claim;
+- compare the scope with other active claims, worktrees and files changed in open
+  PRs. Independent scopes may proceed in parallel; coordinate or narrow overlap.
+
+Use the issue body for durable dependencies and acceptance, and the linked PR for
+candidate SHA and check/review evidence. When work is duplicated or superseded,
+link the surviving issue/PR and close the stale claim with a short reason. Do not
+close a valid issue just because another issue is currently attracting maintainer
+attention.
+
 ## Before you open a pull request
 
 - **Base your branch on the repository's current integration branch described in

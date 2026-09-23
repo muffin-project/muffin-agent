@@ -25,14 +25,12 @@
 #     .claude/hooks/guard-review-branch.test.ts     16 test
 #     .claude/deleghe.test.ts                       19 test
 #     .claude/hooks/guard-restore-discard.test.ts    7 test
-#     .claude/riconcilia.test.ts                     6 test
-#     .claude/hooks/inject-state.test.ts             5 test
 #                                                   -------
-#                                              5 file, 53 test
+#                                              3 file, 42 test
 #
-# Non solo gli hook, quindi: anche `deleghe.mjs` e `riconcilia.mjs`, che sono
+# Non solo gli hook, quindi: anche `deleghe.mjs`, che e'
 # gli script da cui una sessione nuova ricostruisce lo stato. Un filtro sui
-# soli `hooks/**` avrebbe lasciato 25 test su 53 nello stesso buco — cioè
+# soli `hooks/**` avrebbe lasciato 19 test su 42 nello stesso buco — cioe'
 # avrebbe rifatto il difetto mentre diceva di chiuderlo.
 #
 # ## Perché non le due soluzioni più corte
@@ -147,13 +145,6 @@ on:
       - '.claude/*.mjs'
       - '.claude/*.test.ts'
       - '.claude/**/*.test.ts'
-      # Il handoff è letto dall'hook SessionStart dentro un budget di 4 000
-      # caratteri (`inject-state.mjs`), e `inject-state.test.ts` prova che il
-      # file vero ci sta. Misurato il 02/09/2026: una PR di soli documenti lo ha
-      # portato a 6 467 byte, è passata verde (nessun job la guardava) e la
-      # promozione dev → main è andata rossa qui. Il job che possiede il test
-      # possiede anche il file che il test legge.
-      - 'docs/development/handoff.md'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

@@ -1,27 +1,16 @@
 ---
-description: Deterministic fresh-session bootstrap. Reconstructs current repo state and selects one deliverable with claim, falsifier and acceptance.
+description: Deterministic fresh-session bootstrap. Reconstructs repository state and helps a contributor choose a compatible claim.
 ---
 
-Current deterministic snapshot (do not trust handoff prose over this):
+Current deterministic snapshot:
 
 !`scripts/agent/repo-state.mjs`
 
 You are starting fresh. You have NOT read any previous session. Do this now:
 
-1. **Re-observe before acting.** If the snapshot above looks stale (you just
-   pulled, merged, or time passed), rerun `scripts/agent/repo-state.mjs` and
-   `gh pr list --state open` yourself.
-2. **Read the current program issue** named in the snapshot (it carries the
-   `program/current` label). That issue — not any handoff file — owns what
-   matters now.
-3. **Read `docs/development/handoff.md` only as a disposable hint**, and fix it first
-   if it contradicts what you just observed.
-4. **Select exactly ONE deliverable**, then state in your reply:
-   - the falsifiable claim (one sentence — what becomes true);
-   - the falsifier (what observation would prove it false);
-   - the acceptance (what closes it);
-   - the verification profile (FAST / STANDARD / CRITICAL per
-     `docs/development/ORCHESTRATION.md`) and why.
-5. Load deeper authority (`docs/development/ORCHESTRATION.md`, `docs/development/RESEARCH.md`,
-   `docs/development/BRANCHING.md`, `docs/development/JUDGE.md`) only when the claim makes it relevant.
-   Follow `.agents/skills/engineering-loop/SKILL.md` from here on.
+1. **Re-observe before acting.** If the snapshot may be stale, rerun `scripts/agent/repo-state.mjs`, `gh issue list --state open`, and `gh pr list --state open`.
+2. **Navigate the issue graph.** Read candidate issue acceptance and its linked dependencies/PRs. There is no global current issue or required next issue.
+3. **Claim one bounded scope in GitHub.** Assign yourself to the issue; if you cannot, comment with the contributor/agent identity, exact owned paths or behavior, and branch. Link the branch/PR back to the issue.
+4. **Check for collisions.** Compare the proposed scope with other active issue claims, worktrees and changed files on open PRs. Parallel writers are fine when ownership and acceptance are disjoint. Coordinate or narrow scope when they overlap.
+5. State the claim, falsifier, acceptance and FAST / STANDARD / CRITICAL verification profile from `docs/development/ORCHESTRATION.md`.
+6. Load `docs/development/RESEARCH.md`, `BRANCHING.md` and `JUDGE.md` only when the claim makes them relevant. Follow `.agents/skills/engineering-loop/SKILL.md`.

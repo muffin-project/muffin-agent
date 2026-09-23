@@ -353,7 +353,7 @@ Update only the authoritative home whose meaning changed:
 | durable architectural decision/rationale | ADR |
 | DAY-1 row/status/evidence | `docs/status/day1/requirements-status.md` |
 | DAY-1 ordering/dependency | `docs/status/day1/critical-path.md` |
-| current WIP/next action | `docs/development/handoff.md` |
+| current WIP/next action | observed Git/GitHub, summarized by `scripts/agent/repo-state.mjs` |
 | product destination | `docs/product/VISION.md` |
 | general engineering lesson | `docs/evidence/lessons.md` |
 | external/research evidence | dated `docs/evidence/` |
@@ -378,7 +378,7 @@ After integration:
 1. observe the resulting Git/runtime state;
 2. update the DAY-1 requirements only if status/evidence changed;
 3. update critical path only if order/dependency changed;
-4. keep LAVORO as the smallest useful next-session handoff;
+4. leave issue/PR/SHA/check state truthful for the next fresh session;
 5. regenerate relevant derived views;
 6. do not refresh historical audits into current state.
 

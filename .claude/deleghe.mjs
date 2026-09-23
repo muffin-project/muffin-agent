@@ -829,7 +829,7 @@ function riprendi() {
     console.log(`\n═══ BLOCCANTI SENZA DELEGA (${scoperte.length} su ${inv.bloccanti.length}) ═══`);
     for (const b of scoperte) console.log(`  ${b.id.padEnd(4)} ${b.area.padEnd(16)} ${b.stato}`);
   }
-  console.log(`\nHandoff: docs/development/handoff.md · Requisiti DAY-1: ${INVENTARIO_DAY1}`);
+  console.log(`\nStato corrente: Git/GitHub + scripts/agent/repo-state.mjs · Requisiti DAY-1: ${INVENTARIO_DAY1}`);
   console.log('Recupero di una delega morta: node .claude/deleghe.mjs raccogli <id>\n');
 }
 

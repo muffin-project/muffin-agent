@@ -152,7 +152,6 @@ const ALIAS: Record<string, string> = {
   MANDATO: 'docs/status/day1/readiness-criteria.md',
   PERCORSO: 'docs/status/day1/critical-path.md',
   PC: 'docs/status/day1/critical-path.md',
-  LAVORO: 'docs/development/handoff.md',
 };
 
 /** Un documento vivo cercato per nome file, quando non è fra gli alias. */
