@@ -19,7 +19,7 @@ reader journey.
 | [product/](product/) | Purpose, destination, roadmap placement, and cognitive hypotheses. |
 | [architecture/](architecture/) | Semantic shape, security boundaries, Home, extensions, and design principles. |
 | [user/](user/) | Installation and the owner-facing path. |
-| [development/](development/) | Repository practice, branching, research, judgement, and volatile maintainer handoff. |
+| [development/](development/) | Repository practice, branching, research, judgement, and contributor workflow. |
 | [project/](project/) | Community, contribution, and public-narrative direction. |
 | [status/](status/) | Current readiness ledgers and release criteria. |
 | [decisions/](decisions/), [evidence/](evidence/), [history/](history/) | Decision record, observations, and lineage; not current runtime authority. |
