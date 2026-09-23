@@ -130,9 +130,11 @@ for (let i = 0; i < prs.length; i += 1) {
   }
 }
 section('open PR file-scope overlaps', [
-  prs.length
-    ? overlaps.length ? ...overlaps : 'none observed; unpublished worktree/branch claims still need coordination'
-    : 'unknown (or gh unavailable)',
+  ...(prs.length
+    ? overlaps.length
+      ? overlaps
+      : ['none observed; unpublished worktree/branch claims still need coordination']
+    : ['unknown (or gh unavailable)']),
 ]);
 
 const closedRaw = gh([
