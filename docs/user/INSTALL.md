@@ -146,6 +146,15 @@ MUFFIN_API_KEY_FILE=/run/secrets/muffin-key sh install.sh
 ```
 
 That is a *path* in the environment, not a secret. See ADR-0048.
+For a root-launched install, the file must be a regular file in directories
+owned by root or the account that invoked `sudo`; shared writable directories
+and symbolic-link paths are refused. This stops another local account from
+swapping the file while root copies it. To keep a key file in your own private
+home when installing as root, pass its path through `sudo`:
+
+```bash
+sudo MUFFIN_API_KEY_FILE="$HOME/.config/muffin/key" sh bootstrap.sh
+```
 
 The Alpha onboarding plan adds a lower-friction recommended path — OpenRouter
 OAuth PKCE — without weakening this invariant. Until that slice lands, the

@@ -60,6 +60,117 @@
 set -eu
 say() { printf '%s\n' "$*" >&2; }
 
+# Copy an API-key file without resolving an attacker-controlled pathname as
+# root. Every path component is opened from a directory descriptor with
+# symlink following disabled; after fstat, the same open file is copied into
+# the private staging directory. The key bytes never enter argv or env.
+root_copy_api_key_file() {
+  ROOT_COPY_SOURCE=$1
+  ROOT_COPY_DEST=$2
+  ROOT_COPY_CALLER_UID=$3
+  python3 - "$ROOT_COPY_SOURCE" "$ROOT_COPY_DEST" "$ROOT_COPY_CALLER_UID" <<'PY'
+import os
+import stat
+import sys
+
+
+def reject(message):
+    raise RuntimeError(message)
+
+
+source_raw, destination, caller_raw = sys.argv[1:]
+open_fds = []
+destination_created = False
+try:
+    caller_uid = int(caller_raw, 10)
+    if caller_uid < 0:
+        reject("invalid invoking-user id")
+    # Keep '..' components in the walk instead of normalizing away path
+    # components before checking them for symlinks.
+    source = source_raw if os.path.isabs(source_raw) else os.path.join(os.getcwd(), source_raw)
+    components = [part for part in source.split(os.sep) if part not in ("", ".")]
+    if not components:
+        reject("the source must name a regular file")
+
+    path_flag = getattr(os, "O_PATH", None)
+    if path_flag is None or not hasattr(os, "O_NOFOLLOW"):
+        reject("this Linux system lacks safe no-follow file opens")
+    trusted_owners = {0, caller_uid}
+    walk_flags = path_flag | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    parent_fd = os.open(os.sep, walk_flags)
+    open_fds.append(parent_fd)
+
+    for component in components[:-1]:
+        child_fd = os.open(component, walk_flags, dir_fd=parent_fd)
+        open_fds.append(child_fd)
+        directory = os.fstat(child_fd)
+        if not stat.S_ISDIR(directory.st_mode) or directory.st_uid not in trusted_owners:
+            reject("a source directory is not owned by root or the invoking user")
+        writable_by_others = directory.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        root_sticky_directory = directory.st_uid == 0 and directory.st_mode & stat.S_ISVTX
+        if writable_by_others and not root_sticky_directory:
+            reject("a source directory is writable by an unrelated identity")
+        parent_fd = child_fd
+
+    source_fd = os.open(components[-1], path_flag | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent_fd)
+    open_fds.append(source_fd)
+    source_stat = os.fstat(source_fd)
+    if not stat.S_ISREG(source_stat.st_mode):
+        reject("the source is not a regular file")
+    if source_stat.st_uid not in trusted_owners:
+        reject("the source is not owned by root or the invoking user")
+    if source_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        reject("the source file is writable by an unrelated identity")
+
+    # O_PATH lets us validate the exact inode before opening it for reading;
+    # /proc/self/fd then refers to that already-open object even if its name is
+    # replaced after the validation.
+    read_fd = os.open(f"/proc/self/fd/{source_fd}", os.O_RDONLY | os.O_CLOEXEC)
+    open_fds.append(read_fd)
+    read_stat = os.fstat(read_fd)
+    if (read_stat.st_dev, read_stat.st_ino) != (source_stat.st_dev, source_stat.st_ino):
+        reject("the opened source changed during validation")
+
+    destination_fd = os.open(
+        destination,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+        0o600,
+    )
+    open_fds.append(destination_fd)
+    destination_created = True
+    os.fchmod(destination_fd, 0o600)
+    while True:
+        chunk = os.read(read_fd, 65536)
+        if not chunk:
+            break
+        view = memoryview(chunk)
+        while view:
+            view = view[os.write(destination_fd, view):]
+    os.fsync(destination_fd)
+    destination_stat = os.fstat(destination_fd)
+    if not stat.S_ISREG(destination_stat.st_mode) or destination_stat.st_uid != 0 or stat.S_IMODE(destination_stat.st_mode) != 0o600:
+        reject("the staged file did not retain root ownership and mode 0600")
+except (OSError, RuntimeError, ValueError) as error:
+    if destination_created:
+        try:
+            os.unlink(destination)
+        except OSError:
+            pass
+    if isinstance(error, OSError):
+        reason = error.strerror or "filesystem operation failed"
+    else:
+        reason = str(error)
+    print(f"error: refusing API-key file copy ({reason}).", file=sys.stderr)
+    sys.exit(1)
+finally:
+    for descriptor in reversed(open_fds):
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+PY
+}
+
 # Root account invariants live in this installer so the public bootstrap can
 # hand off from the one staged file without downloading a second root program.
 # This private mode is also the production function exercised by the account
@@ -230,6 +341,12 @@ if [ "${1:-}" = --muffin-root-account ]; then
   root_account_run "$@"
   exit 0
 fi
+if [ "${1:-}" = --muffin-secure-copy-key ]; then
+  [ "$(id -u)" = 0 ] || root_account_fail "root is required to stage the API-key file."
+  [ "$#" = 4 ] || root_account_fail "usage: install.sh --muffin-secure-copy-key <source> <destination> <invoking-uid>"
+  root_copy_api_key_file "$2" "$3" "$4"
+  exit 0
+fi
 
 # Root provisions the host boundary, then this same staged installer re-execs
 # under the dedicated account. No source/build/Muffin command runs at UID 0.
@@ -298,6 +415,9 @@ if [ "$(id -u)" = 0 ]; then
     binary=${spec#*:}
     command -v "$binary" >/dev/null 2>&1 || ROOT_PACKAGES="$ROOT_PACKAGES $package"
   done
+  if [ -n "${MUFFIN_API_KEY_FILE:-}" ] && ! command -v python3 >/dev/null 2>&1; then
+    ROOT_PACKAGES="$ROOT_PACKAGES python3-minimal"
+  fi
   if [ -n "$ROOT_PACKAGES" ]; then
     command -v apt-get >/dev/null 2>&1 || root_fail "missing required host tools and apt-get is unavailable:$ROOT_PACKAGES"
     DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null || root_fail "apt package index update failed."
@@ -331,7 +451,13 @@ if [ "$(id -u)" = 0 ]; then
   if [ -n "${MUFFIN_API_KEY_FILE:-}" ]; then
     [ -f "$MUFFIN_API_KEY_FILE" ] && [ ! -L "$MUFFIN_API_KEY_FILE" ] || root_fail "MUFFIN_API_KEY_FILE must be a regular non-symlink file."
     KEY_COPY=$ROOT_STAGE/api-key
-    cp "$MUFFIN_API_KEY_FILE" "$KEY_COPY" || root_fail "could not copy the API key into the private stage."
+    ROOT_CALLER_UID=0
+    if [ -n "${SUDO_UID:-}" ]; then
+      case "$SUDO_UID" in *[!0-9]*) root_fail "SUDO_UID is not a valid numeric user id." ;; esac
+      ROOT_CALLER_UID=$SUDO_UID
+    fi
+    root_copy_api_key_file "$MUFFIN_API_KEY_FILE" "$KEY_COPY" "$ROOT_CALLER_UID" ||
+      root_fail "could not securely copy the API key into the private stage."
     chown muffin:muffin "$KEY_COPY" || root_fail "could not set service ownership on the staged API key."
     chmod 0600 "$KEY_COPY" || root_fail "could not restrict permissions on the staged API key."
     [ "$(stat -c '%u:%g:%a' "$KEY_COPY" 2>/dev/null || true)" = "$(id -u muffin):$(id -g muffin):600" ] ||

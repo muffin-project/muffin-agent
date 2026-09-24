@@ -148,3 +148,45 @@ Official behavior references: [systemd `loginctl`](https://www.freedesktop.org/s
    Draft PR #678 updates it to `0.9.12` and reports a zero-vulnerability audit
    on its own head. This branch does not include that change; verify the
    integrated lockfile and audit before publishing.
+
+## Root API-key file copy review
+
+**Observed head:** `e5395f4a9299ce28e6e0d4874770b10e37047d35`.
+
+The root path checked `MUFFIN_API_KEY_FILE` with `[ -f ]` and `[ ! -L ]`, then
+copied the pathname in a separate `cp` process. An untrusted user able to change
+an ancestor directory could replace a path component between those operations.
+The second command would resolve the new path with root privileges. That breaks
+the promise to pass a *path* across the privilege boundary without letting a
+path substitution redirect root to a different file.
+
+| Candidate | Evidence and cost | Decision |
+|---|---|---|
+| A. Keep pathname checks and `cp`, adding more `stat` checks. | Checks still inspect names at separate times; they cannot bind the later read to the object that was checked. | Rejected: it leaves the race. |
+| B. Walk the path using open directory descriptors and no-follow opens, verify the opened regular file, then copy from that same open object into the private root stage. | Python's standard `os.open(..., dir_fd=...)` exposes the directory-relative open needed for this; Linux `O_NOFOLLOW` rejects symbolic-link components. It preserves the existing optional file-based setup while keeping key bytes out of arguments and environment. It needs Python 3 only when this optional input is used. | **Selected.** The helper rejects symlinked path components and directories writable by an unrelated identity, verifies the opened file, and copies from its file descriptor. It creates the stage copy exclusively with mode `0600`; the existing owner/mode checks still run before the stage is made traversable. |
+| C. Remove `MUFFIN_API_KEY_FILE` from root installs and require masked interactive setup. | It removes this privileged file handoff entirely, but breaks the documented headless install input and still needs separate handling for automation. | Not selected for this slice: it changes a supported setup contract rather than repairing its trust boundary. |
+
+The chosen boundary is limited: the file's owner can still change bytes in a
+file they own while it is being copied. The installer rejects a source writable
+by group/other identities and reads through an already-open descriptor, so a
+pathname change cannot redirect the read. The adversarial eval points a
+component of the key path at `/etc`; it must fail before the helper creates a
+destination file. The production root handoff eval separately proves that a
+valid key still reaches `muffin init` through stdin and is not placed in argv or
+the environment. It also accepts a valid user-owned key path containing `..`
+and rejects a symlink component followed by `..`, so path normalization cannot
+erase the no-symlink check.
+
+**Disposable Ubuntu 24.04 eval (2026-09-24):** the complete `root-handoff.sh`
+passed after adding those cases. It verified root-owned copy mode `0600`, the
+invoking user's private key ownership through `SUDO_UID`, refusal with the
+wrong UID, both traversal cases above, and the existing build/setup/gateway,
+uninstall and data-preservation checks.
+
+For the selected mechanics, Python documents directory-relative `os.open`
+through its [`dir_fd` parameter](https://docs.python.org/3/library/os.html#os.open).
+Linux documents that `O_NOFOLLOW` rejects a final symlink and that directory
+file descriptors let callers avoid races on path-prefix components in its
+[`openat(2)` manual](https://man7.org/linux/man-pages/man2/openat.2.html).
+These references establish the OS APIs; the evals establish that Muffin's
+installer wires them into the actual root handoff.
