@@ -2,11 +2,11 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { httpCapability } from '../../agent/tools/http.js';
 import { runInit } from '../../cli/init.js';
 import { paths } from '../config/config.js';
-import { POLICY_FLOOR, grantedTo, loadPolicyMatrix } from './matrix.js';
 import { createDecide } from './decide.js';
-import { httpCapability } from '../../agent/tools/http.js';
+import { grantedTo, loadPolicyMatrix, POLICY_FLOOR } from './matrix.js';
 import type { Principal } from './types.js';
 
 /**
@@ -34,7 +34,10 @@ const policyOf = (dir: string) => join(paths(dir).rot, 'policy.json');
 describe('le righe della matrice sigillata', () => {
   it('lascia che il file stringa una riga', () => {
     const dir = home();
-    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, rows: { host: { denyAbove: 1 } } }));
+    writeFileSync(
+      policyOf(dir),
+      JSON.stringify({ schemaVersion: 1, rows: { host: { denyAbove: 1 } } }),
+    );
     expect(loadPolicyMatrix(dir).rows.host).toEqual({ asksForIrreversible: true, denyAbove: 1 });
     // E le altre righe restano quelle del pavimento: un file parziale eredita.
     expect(loadPolicyMatrix(dir).rows.context).toEqual(POLICY_FLOOR.rows.context);
@@ -49,14 +52,20 @@ describe('le righe della matrice sigillata', () => {
     // file più un reseal.
     writeFileSync(
       policyOf(dir),
-      JSON.stringify({ schemaVersion: 1, rows: { host: { asksForIrreversible: false, denyAbove: 3 } } }),
+      JSON.stringify({
+        schemaVersion: 1,
+        rows: { host: { asksForIrreversible: false, denyAbove: 3 } },
+      }),
     );
     expect(loadPolicyMatrix(dir).rows.host).toEqual(POLICY_FLOOR.rows.host);
 
     // Mista: la metà che stringe atterra, quella che allarga no.
     writeFileSync(
       policyOf(dir),
-      JSON.stringify({ schemaVersion: 1, rows: { host: { asksForIrreversible: false, denyAbove: 1 } } }),
+      JSON.stringify({
+        schemaVersion: 1,
+        rows: { host: { asksForIrreversible: false, denyAbove: 1 } },
+      }),
     );
     expect(loadPolicyMatrix(dir).rows.host).toEqual({
       asksForIrreversible: POLICY_FLOOR.rows.host.asksForIrreversible,
@@ -76,7 +85,10 @@ describe('le righe della matrice sigillata', () => {
    */
   it('rifiuta un file che porta ancora `askAbove`, nominando il campo', () => {
     const dir = home();
-    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, rows: { host: { askAbove: 1, denyAbove: 2 } } }));
+    writeFileSync(
+      policyOf(dir),
+      JSON.stringify({ schemaVersion: 1, rows: { host: { askAbove: 1, denyAbove: 2 } } }),
+    );
     const m = loadPolicyMatrix(dir);
     expect(m.source).toBe('fallback');
     expect(m.note ?? '').toContain('askAbove');
@@ -101,7 +113,10 @@ describe('le righe della matrice sigillata', () => {
     const dir = home();
     writeFileSync(
       policyOf(dir),
-      JSON.stringify({ schemaVersion: 1, rows: { hostt: { denyAbove: 0 }, inventata: { denyAbove: 0 } } }),
+      JSON.stringify({
+        schemaVersion: 1,
+        rows: { hostt: { denyAbove: 0 }, inventata: { denyAbove: 0 } },
+      }),
     );
     const rows = loadPolicyMatrix(dir).rows;
     expect(Object.keys(rows).sort()).toEqual(Object.keys(POLICY_FLOOR.rows).sort());
@@ -114,14 +129,20 @@ describe('le righe della matrice sigillata', () => {
     const dir = home();
     // `rot` sta a -1: irraggiungibile a ogni taint. Il tipo del file è 0-3,
     // quindi qualunque valore scrivibile è più largo — e viene scartato.
-    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, rows: { rot: { denyAbove: 3 } } }));
+    writeFileSync(
+      policyOf(dir),
+      JSON.stringify({ schemaVersion: 1, rows: { rot: { denyAbove: 3 } } }),
+    );
     expect(loadPolicyMatrix(dir).rows.rot.denyAbove).toBe(-1);
     rmSync(dir, { recursive: true, force: true });
   });
 
   it('un file illeggibile non allarga niente: si torna al pavimento, e si dice', () => {
     const dir = home();
-    writeFileSync(policyOf(dir), '{ "schemaVersion": 1, "rows": { "host": { "denyAbove": "tre" } } }');
+    writeFileSync(
+      policyOf(dir),
+      '{ "schemaVersion": 1, "rows": { "host": { "denyAbove": "tre" } } }',
+    );
     const m = loadPolicyMatrix(dir);
     expect(m.source).toBe('fallback');
     expect(m.note).toBeTruthy();
@@ -141,14 +162,23 @@ describe('the sealed permission matrix', () => {
     // lists may only grow.
     const dir = home();
 
-    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, defaultMaxTaint: { low: 3, medium: 3, high: 3 } }));
+    writeFileSync(
+      policyOf(dir),
+      JSON.stringify({ schemaVersion: 1, defaultMaxTaint: { low: 3, medium: 3, high: 3 } }),
+    );
     expect(loadPolicyMatrix(dir).defaultMaxTaint).toEqual(POLICY_FLOOR.defaultMaxTaint);
 
-    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, defaultMaxTaint: { low: 1, medium: 0, high: 0 } }));
+    writeFileSync(
+      policyOf(dir),
+      JSON.stringify({ schemaVersion: 1, defaultMaxTaint: { low: 1, medium: 0, high: 0 } }),
+    );
     expect(loadPolicyMatrix(dir).defaultMaxTaint).toEqual({ low: 1, medium: 0, high: 0 });
 
     // And a mixed file: the tightening half lands, the widening half does not.
-    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, defaultMaxTaint: { low: 0, medium: 3 } }));
+    writeFileSync(
+      policyOf(dir),
+      JSON.stringify({ schemaVersion: 1, defaultMaxTaint: { low: 0, medium: 3 } }),
+    );
     const mixed = loadPolicyMatrix(dir).defaultMaxTaint;
     expect(mixed.low).toBe(0);
     expect(mixed.medium).toBe(POLICY_FLOOR.defaultMaxTaint.medium);
@@ -202,7 +232,12 @@ describe('a policy file that cannot be trusted never widens anything', () => {
     // literal list only ever grows in the deny direction, which is why this
     // assertion stays literal.
     expect([...matrix.neverAtRuntime]).toEqual(['rot.write', 'rot.*']);
-    expect([...matrix.forbiddenForSystem]).toEqual(['outward.send', 'outward.*', 'config.ratchet', 'jobs.schedule']);
+    expect([...matrix.forbiddenForSystem]).toEqual([
+      'outward.send',
+      'outward.*',
+      'config.ratchet',
+      'jobs.schedule',
+    ]);
   };
 
   it('an absent file degrades to the floor and says so', () => {
@@ -282,7 +317,10 @@ describe('paramsMaxTaint — monotone floor since lane #624 + #641 (HOLD resolut
     // file. Qui si riscrive il file **senza** la chiave — la forma che ha
     // davvero la `~/.muffin` dell'owner, sigillata prima di questa slice —
     // così togliere il `?? POLICY_FLOOR.paramsMaxTaint` in `merge()` va rosso.
-    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, neverAtRuntime: ['rot.write'] }));
+    writeFileSync(
+      policyOf(dir),
+      JSON.stringify({ schemaVersion: 1, neverAtRuntime: ['rot.write'] }),
+    );
     const matrix = loadPolicyMatrix(dir);
     expect(matrix.source).toBe('sealed');
     expect(matrix.paramsMaxTaint).toBe(1);
