@@ -381,6 +381,10 @@ describe('grant per stanza nel sigillo (ADR-0073)', () => {
     ['rot.write', 'la radice di fiducia'],
     ['outward.send', 'un destinatario nuovo'],
     ['config.ratchet', 'la configurazione'],
+    ['surface.send_file', 'il vault condiviso tra stanze'],
+    ['skill.read', 'il catalogo install-wide delle skill'],
+    ['sys.inspect', 'lo stato host dell’installazione'],
+    ['jobs.schedule', 'la semantica di gruppo non ancora definita'],
   ])('nessun sigillo concede %s a una stanza (%s)', (capability) => {
     const dir = conTenants({ 'group:telegram:42': { grants: ['vault.write', capability] } });
     const matrix = loadPolicyMatrix(dir);
