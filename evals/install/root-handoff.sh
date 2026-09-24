@@ -172,6 +172,71 @@ printf '%s\n' "$NODE_FILE" >"$LAB/node-dist/index.html"
 chmod -R a+rX "$LAB/node-dist"
 printf 'fixture-secret\n' >"$LAB/api-key"
 chmod 0600 "$LAB/api-key"
+
+# Exercise the installer's exact root copy helper: a valid file is copied with
+# private mode, while a symlinked parent and a shared writable parent are
+# refused before they can redirect or race the privileged read.
+SAFE_KEY_COPY=$LAB/safely-copied-key
+env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  sh "$REPO/install.sh" --muffin-secure-copy-key "$LAB/api-key" "$SAFE_KEY_COPY" 0
+cmp -s "$LAB/api-key" "$SAFE_KEY_COPY"
+[ "$(stat -c '%u:%a' "$SAFE_KEY_COPY")" = 0:600 ]
+
+getent passwd nobody >/dev/null || { echo 'root handoff eval: Ubuntu fixture has no nobody account' >&2; exit 1; }
+KEY_OWNER_UID=$(id -u nobody)
+KEY_OWNER_GID=$(id -g nobody)
+mkdir "$LAB/user-key-dir"
+chown "$KEY_OWNER_UID:$KEY_OWNER_GID" "$LAB/user-key-dir"
+chmod 0700 "$LAB/user-key-dir"
+cp "$LAB/api-key" "$LAB/user-key-dir/key"
+chown "$KEY_OWNER_UID:$KEY_OWNER_GID" "$LAB/user-key-dir/key"
+chmod 0600 "$LAB/user-key-dir/key"
+DOTDOT_KEY_COPY=$LAB/dotdot-copied-key
+env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  sh "$REPO/install.sh" --muffin-secure-copy-key "$LAB/user-key-dir/../user-key-dir/key" "$DOTDOT_KEY_COPY" "$KEY_OWNER_UID"
+cmp -s "$LAB/api-key" "$DOTDOT_KEY_COPY"
+USER_KEY_COPY=$LAB/sudo-user-key-copy
+env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  sh "$REPO/install.sh" --muffin-secure-copy-key "$LAB/user-key-dir/key" "$USER_KEY_COPY" "$KEY_OWNER_UID"
+cmp -s "$LAB/api-key" "$USER_KEY_COPY"
+if env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  sh "$REPO/install.sh" --muffin-secure-copy-key "$LAB/user-key-dir/key" "$LAB/wrong-owner-key-copy" 0 \
+  >"$LAB/wrong-owner-key-copy.log" 2>&1; then
+  echo 'root handoff eval: accepted the sudo-owned key without its invoking UID' >&2
+  exit 1
+fi
+[ ! -e "$LAB/wrong-owner-key-copy" ]
+
+ln -s /etc "$LAB/key-parent-link"
+if env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  sh "$REPO/install.sh" --muffin-secure-copy-key "$LAB/key-parent-link/passwd" "$LAB/linked-key-copy" 0 \
+  >"$LAB/linked-key-copy.log" 2>&1; then
+  echo 'root handoff eval: secure key copy followed a symlinked directory' >&2
+  exit 1
+fi
+[ ! -e "$LAB/linked-key-copy" ]
+
+printf 'normalization-trap\n' >"$LAB/decoy-key"
+chmod 0600 "$LAB/decoy-key"
+if env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  sh "$REPO/install.sh" --muffin-secure-copy-key "$LAB/key-parent-link/../decoy-key" "$LAB/normalized-linked-key-copy" 0 \
+  >"$LAB/normalized-linked-key-copy.log" 2>&1; then
+  echo 'root handoff eval: normalized away a symlinked key-path component' >&2
+  exit 1
+fi
+[ ! -e "$LAB/normalized-linked-key-copy" ]
+
+mkdir "$LAB/shared-key-dir"
+chmod 0777 "$LAB/shared-key-dir"
+cp "$LAB/api-key" "$LAB/shared-key-dir/key"
+if env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  sh "$REPO/install.sh" --muffin-secure-copy-key "$LAB/shared-key-dir/key" "$LAB/shared-key-copy" 0 \
+  >"$LAB/shared-key-copy.log" 2>&1; then
+  echo 'root handoff eval: secure key copy accepted an unrelated-writable directory' >&2
+  exit 1
+fi
+[ ! -e "$LAB/shared-key-copy" ]
+
 mkdir -p "$LAB/bootstrap-tmp"
 
 COMMON_ENV=(
@@ -183,8 +248,9 @@ COMMON_ENV=(
   MUFFIN_CHANNEL=main
   "MUFFIN_NODE_DIST_BASE=file://$LAB/node-dist"
   "MUFFIN_INSTALL_URL=file://$REPO/install.sh"
+  "SUDO_UID=$KEY_OWNER_UID"
 )
-env -i "${COMMON_ENV[@]}" MUFFIN_API_KEY_FILE="$LAB/api-key" sh "$REPO/bootstrap.sh" >"$LAB/install.log" 2>&1 || {
+env -i "${COMMON_ENV[@]}" MUFFIN_API_KEY_FILE="$LAB/user-key-dir/key" sh "$REPO/bootstrap.sh" >"$LAB/install.log" 2>&1 || {
   cat "$LAB/install.log" >&2; cat "$EVENTS" >&2; echo 'root handoff eval: public bootstrap install failed' >&2; exit 1;
 }
 
