@@ -142,7 +142,15 @@ you need it.
 
 [Current status and release boundaries →](docs/STATUS.md)
 
-## Try Muffin — developer preview
+## Try Muffin — private developer preview
+
+Muffin is currently a **private Community Preview**. The unauthenticated install
+command below will not work while the repository is private; invited preview
+users need the access and installation instructions supplied with their
+invitation. Source access is planned before product public alpha, but neither
+milestone means the product is generally available.
+
+### Intended public installation path, after source-public opens
 
 **Requirements:** a Linux or macOS machine, and a supported model provider.
 Node is not one: the installer brings its own if the machine has none.
@@ -151,13 +159,14 @@ Node is not one: the installer brings its own if the machine has none.
 curl -fsSL https://raw.githubusercontent.com/muffin-project/muffin-agent/main/bootstrap.sh | sh
 ```
 
-One command, from an empty box into first-run setup: the tiny bootstrap stages
-the canonical installer and preserves the controlling terminal even though the
-public command itself is a pipe. The installer brings Node 22 when needed,
-clones and builds the source, puts `muffin` on your `PATH`, hands directly into
-the masked setup flow, and installs the gateway as a supervised service where
-the platform supports it. Secrets never travel through argv or the generic
-environment. Updates and rollbacks go through the same path afterwards:
+Once the repository is public, this is intended to take a fresh machine through
+first-run setup in one command. The tiny bootstrap stages the canonical
+installer and preserves the controlling terminal even though the command is a
+pipe. The installer brings Node 22 when needed, clones and builds the source,
+puts `muffin` on your `PATH`, hands directly into the masked setup flow, and
+installs the gateway as a supervised service where the platform supports it.
+Secrets never travel through argv or the generic environment. Updates and
+rollbacks go through the same path afterwards:
 
 ```bash
 muffin update              # a release built alongside, then an atomic swap
