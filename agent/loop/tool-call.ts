@@ -176,6 +176,18 @@ export async function runTool(
     { [ATTR.toolName]: call.name, [ATTR.toolCallId]: call.id },
     parent,
   );
+  const durabilityFailure = ctx.durability?.failure() ?? null;
+  if (durabilityFailure !== null) {
+    span.end({ status: 'error', error: 'durability_unavailable' });
+    return {
+      type: 'tool_result',
+      toolCallId: call.id,
+      content:
+        'La persistenza del turno non è disponibile. Ho fermato le chiamate agli strumenti; posso continuare ' +
+        'solo senza nuove azioni finché il turno termina.',
+      isError: true,
+    };
+  }
   // Resolved against every registered tool, not against `exposed`, and that is
   // the load-bearing half of "defence in depth, not replacement": a member who
   // names a host-only tool anyway must meet `decide.ts:132` and be refused
@@ -546,10 +558,24 @@ export async function runTool(
    * (stessa intenzione, argomenti riscritti) passano indenni, ed e il limite
    * noto di ogni confronto per uguaglianza esatta.
    */
-  const giaFatte =
-    decl?.progress === 'idempotent_read'
-      ? deps.turns.identicalCallsDone(ctx.turnId, call.name, args)
-      : 0;
+  let giaFatte = 0;
+  if (decl?.progress === 'idempotent_read') {
+    try {
+      giaFatte = deps.turns.identicalCallsDone(ctx.turnId, call.name, args);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      ctx.durability?.fail(reason);
+      span.setAttributes({ 'muffin.turn.record_error': reason });
+      span.end({ status: 'error', error: 'durability_unavailable' });
+      emitToolEnd(true);
+      return {
+        type: 'tool_result',
+        toolCallId: call.id,
+        content: `La persistenza del turno non è disponibile; chiamata non eseguita. ${reason}`,
+        isError: true,
+      };
+    }
+  }
   /**
    * Il registro degli effetti (D15), scritto sulla stessa riga d'intento.
    *
@@ -596,14 +622,20 @@ export async function runTool(
     resource: effectResource(risolto, resource, call.args),
     decision: decision.effect as EffectDecision,
   };
-  const intentError = recordIntent(deps, ctx.turnId, span, {
-    callId: call.id,
-    tool: call.name,
-    capability,
-    rerunnable: decl?.rerunnable === true,
-    args,
-    effect,
-  });
+  const intentError = recordIntent(
+    deps,
+    ctx.turnId,
+    span,
+    {
+      callId: call.id,
+      tool: call.name,
+      capability,
+      rerunnable: decl?.rerunnable === true,
+      args,
+      effect,
+    },
+    ctx,
+  );
   if (intentError !== null) {
     // EFFECT WAL, a DAY-1 readiness invariant: the write above did not land, so
     // the handler must not run — a missing intent row has to mean "never
@@ -633,9 +665,25 @@ export async function runTool(
    * vivo, con la stessa lettura (`recordedOutcomes`) e lo stesso raise del
    * taint registrato — mai un secondo verdetto, mai una seconda esecuzione.
    */
-  const giaRisolta = deps.turns.recordedOutcomes(ctx.turnId).get(call.id);
+  let giaRisolta: { content: string; isError: boolean; tier: TrustTier | null } | undefined;
+  try {
+    giaRisolta = deps.turns.recordedOutcomes(ctx.turnId).get(call.id);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    ctx.durability?.fail(reason);
+    span.setAttributes({ 'muffin.turn.record_error': reason });
+    span.end({ status: 'error', error: 'durability_unavailable' });
+    emitToolEnd(true);
+    return {
+      type: 'tool_result',
+      toolCallId: call.id,
+      content: `Non posso verificare se questa chiamata abbia già prodotto un effetto. L'ho fermata senza eseguirla. ${reason}`,
+      isError: true,
+    };
+  }
   if (giaRisolta !== undefined) {
-    if (giaRisolta.tier !== null) snapshot.raiseTaint(giaRisolta.tier, 'un risultato già registrato per questa chiamata');
+    if (giaRisolta.tier !== null)
+      snapshot.raiseTaint(giaRisolta.tier, 'un risultato già registrato per questa chiamata');
     span.end({ status: giaRisolta.isError ? 'error' : 'ok' });
     emitToolEnd(giaRisolta.isError);
     return {
@@ -700,10 +748,21 @@ export async function runTool(
      * `content` says they are the same wall). `0` on a success, since there
      * is nothing to compare.
      */
-    const fallimentiIdentici =
-      outcome.isError === true
-        ? deps.turns.identicalFailuresDone(ctx.turnId, call.name, args, safeContent)
-        : 0;
+    let fallimentiIdentici = 0;
+    if (outcome.isError === true) {
+      try {
+        fallimentiIdentici = deps.turns.identicalFailuresDone(
+          ctx.turnId,
+          call.name,
+          args,
+          safeContent,
+        );
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        ctx.durability?.fail(reason);
+        span.setAttributes({ 'muffin.turn.record_error': reason });
+      }
+    }
     // The outcome and the taint it dragged in, in one transaction: a tier-3
     // result raises the turn's taint, and the two facts must not be able to
     // land apart — a record that had read the web at a tier saying it had not
@@ -715,26 +774,43 @@ export async function runTool(
     // `tier` required on `ToolOutcome` (ADR-0044) the row can no longer be
     // written with the tier absent, which is the version of that same argument
     // one level down: a resumed turn cannot inherit a provenance nobody stated.
-    recordOutcome(deps, ctx.turnId, span, call.id, {
-      content: safeContent,
-      isError: outcome.isError === true,
-      tier: outcome.tier,
-    });
-    deps.sessions.append(input.session, {
-      role: 'tool',
-      content: safeContent,
-      toolCallId: call.id,
-      toolName: call.name,
-      surface: input.surface,
-      createdAt: (deps.now ?? (() => new Date()))().toISOString(),
-      traceId: parent.traceId,
-      // The outcome's own declared provenance — not reinjected as history by
-      // `buildContext` today (it filters to user/assistant only), set anyway
-      // so the row is never a silent "clean" for whatever reads it next.
-      tier: outcome.tier,
-    } satisfies SessionMessage);
-    span.end({ status: outcome.isError ? 'error' : 'ok' });
-    emitToolEnd(outcome.isError === true);
+    const outcomeRecorded = recordOutcome(
+      deps,
+      ctx.turnId,
+      span,
+      call.id,
+      {
+        content: safeContent,
+        isError: outcome.isError === true,
+        tier: outcome.tier,
+      },
+      ctx,
+    );
+    let sessionRecorded = true;
+    try {
+      deps.sessions.append(input.session, {
+        role: 'tool',
+        content: safeContent,
+        toolCallId: call.id,
+        toolName: call.name,
+        surface: input.surface,
+        createdAt: (deps.now ?? (() => new Date()))().toISOString(),
+        traceId: parent.traceId,
+        // The outcome's own declared provenance — not reinjected as history by
+        // `buildContext` today (it filters to user/assistant only), set anyway
+        // so the row is never a silent "clean" for whatever reads it next.
+        tier: outcome.tier,
+      } satisfies SessionMessage);
+    } catch (error) {
+      sessionRecorded = false;
+      const reason = error instanceof Error ? error.message : String(error);
+      ctx.durability?.fail(reason);
+      span.setAttributes({ 'muffin.session.record_error': reason });
+    }
+    const durabilityFailure = ctx.durability?.failure() ?? null;
+    const resultIsError = outcome.isError === true || !outcomeRecorded || !sessionRecorded;
+    span.end({ status: resultIsError ? 'error' : 'ok' });
+    emitToolEnd(resultIsError);
     if (giaFatte > 0 && outcome.isError !== true) {
       span.setAttributes({ 'muffin.tool.repeated': giaFatte });
     }
@@ -764,13 +840,18 @@ export async function runTool(
        * conta solo righe con `is_error = 0`, `fallimentiIdentici` solo righe
        * con `is_error = 1`, e questa stessa chiamata e o l'uno o l'altro.
        */
-      content:
-        giaFatte > 0 && outcome.isError !== true
-          ? `${safeContent}\n\n${avvisoRipetizione(call.name, giaFatte)}`
-          : fallimentiIdentici > 0
-            ? `${safeContent}\n\n${avvisoFallimentoRipetuto(call.name, fallimentiIdentici)}`
-            : safeContent,
-      ...(outcome.isError ? { isError: true } : {}),
+      content: !outcomeRecorded
+        ? `${safeContent}\n\nL'azione potrebbe essere riuscita, ma non ho potuto salvarne l'esito. Non eseguirò altre chiamate agli strumenti in questo turno.`
+        : !sessionRecorded
+          ? `${safeContent}\n\nL'esito è nel record del turno, ma non nella trascrizione. La persistenza è degradata e non eseguirò altre chiamate agli strumenti in questo turno.`
+          : durabilityFailure !== null
+            ? `${safeContent}\n\nLa persistenza è degradata; non eseguirò altre chiamate agli strumenti in questo turno.`
+            : giaFatte > 0 && outcome.isError !== true
+              ? `${safeContent}\n\n${avvisoRipetizione(call.name, giaFatte)}`
+              : fallimentiIdentici > 0
+                ? `${safeContent}\n\n${avvisoFallimentoRipetuto(call.name, fallimentiIdentici)}`
+                : safeContent,
+      ...(resultIsError ? { isError: true } : {}),
     };
   } catch (error) {
     // A failing tool is information for the model, not a crash for the turn.
@@ -783,12 +864,14 @@ export async function runTool(
     // Same counter as the success path's error exit, read before this call's
     // own row lands, for the same reason: `identicalFailuresDone` compares
     // `content` too, and `detail` is this call's content.
-    const fallimentiIdentici = deps.turns.identicalFailuresDone(
-      ctx.turnId,
-      call.name,
-      args,
-      detail,
-    );
+    let fallimentiIdentici = 0;
+    try {
+      fallimentiIdentici = deps.turns.identicalFailuresDone(ctx.turnId, call.name, args, detail);
+    } catch (readError) {
+      const reason = readError instanceof Error ? readError.message : String(readError);
+      ctx.durability?.fail(reason);
+      span.setAttributes({ 'muffin.turn.record_error': reason });
+    }
     // Unconditional, and the same call the success path makes a few lines up
     // — a judge's round-1 finding was that this branch never raised taint at
     // all, so a handler that threw was invisible to the ledger no matter whose
@@ -802,11 +885,18 @@ export async function runTool(
     // `ctx.turnId` for the same reason as the success path above; `tier:
     // tool.throwTier`, never `undefined` — the record and the taint it
     // produced must agree, exactly as ADR-0044 requires of the success path.
-    recordOutcome(deps, ctx.turnId, span, call.id, {
-      content: detail,
-      isError: true,
-      tier: tool.throwTier,
-    });
+    const outcomeRecorded = recordOutcome(
+      deps,
+      ctx.turnId,
+      span,
+      call.id,
+      {
+        content: detail,
+        isError: true,
+        tier: tool.throwTier,
+      },
+      ctx,
+    );
     span.end({ status: 'error', error: detail });
     emitToolEnd(true);
     if (fallimentiIdentici > 0) {
@@ -815,10 +905,13 @@ export async function runTool(
     return {
       type: 'tool_result',
       toolCallId: call.id,
-      content:
-        fallimentiIdentici > 0
-          ? `${detail}\n\n${avvisoFallimentoRipetuto(call.name, fallimentiIdentici)}`
-          : detail,
+      content: !outcomeRecorded
+        ? `${detail}\n\nL'azione potrebbe aver avuto effetto, ma non ho potuto salvarne l'esito. Non eseguirò altre chiamate agli strumenti in questo turno.`
+        : ctx.durability?.failure() != null
+          ? `${detail}\n\nLa persistenza è degradata; non eseguirò altre chiamate agli strumenti in questo turno.`
+          : fallimentiIdentici > 0
+            ? `${detail}\n\n${avvisoFallimentoRipetuto(call.name, fallimentiIdentici)}`
+            : detail,
       isError: true,
     };
   }
@@ -912,12 +1005,14 @@ function recordIntent(
     args: unknown;
     effect: EffectMetadata;
   },
+  ctx: ToolContext,
 ): string | null {
   try {
     deps.turns.startToolCall(turnId, call);
     return null;
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
+    ctx.durability?.fail(detail);
     span.setAttributes({ 'muffin.turn.record_error': detail });
     return detail;
   }
@@ -940,12 +1035,17 @@ function recordOutcome(
   // field on success, `throwTier` on the catch path below) — narrowed to match
   // so a third call site could not reintroduce the omission silently.
   result: { content: string; isError: boolean; tier: TrustTier },
-): void {
+  ctx: ToolContext,
+): boolean {
   try {
     deps.turns.endToolCall(turnId, callId, result);
+    return true;
   } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    ctx.durability?.fail(reason);
     span.setAttributes({
-      'muffin.turn.record_error': error instanceof Error ? error.message : String(error),
+      'muffin.turn.record_error': reason,
     });
+    return false;
   }
 }

@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import type { Message } from '../../agent/providers/types.js';
-import { ensureColumn, heldBy, pidAlive } from '../lock/durable.js';
+import { heldBy, pidAlive } from '../lock/durable.js';
 import type { Principal, TrustTier } from '../policy/types.js';
 import { redactText } from '../tracing/redact.js';
 import {
@@ -10,86 +9,18 @@ import {
   type EffectsReport,
   readEffects,
 } from './effects.js';
+import { TURN_STORE_SCHEMA } from './schema.js';
 
 /**
- * A turn is a durable record with an identity, not a stack frame.
+ * Durable turn lifecycle, authority snapshot, and tool-effect journal.
  *
- * That sentence is the whole design (`docs/evidence/turno-sospendibile.md`),
- * and it is the substrate under three separate blockers: a connector that must
- * not block for minutes (B2), a `wait` primitive (B3) and a resume after a crash
- * (B5). None of those three is built here. What is built is the row they all
- * read: identity, the pinned model, the transcript, the taint, the counters and
- * where the answer goes.
- *
- * ## Why a new table and not the session JSONL
- *
- * `core/session/store.ts` says what that file is for: *"the raw record of what
- * was said, which memory will later be built from"*. It is **evidence** —
- * append-only, monotone, never rewritten. A turn's state is **mutable**: taint
- * rises, counters advance, status moves. Two different things, two places. The
- * measured half of the argument is in the design §Domanda 1: `SessionMessage.content`
- * is a `string` so a tool-using assistant turn has nowhere to go, thinking
- * blocks never reach the file at all, intermediate assistant turns are not
- * written, and the reader filters tool rows back out.
- *
- * ## Migration cost, declared
- *
- * **Zero, today and on a populated database.** This repo has no migration
- * runner: every store runs its own `db.exec(SCHEMA)` in its constructor, and
- * `CREATE TABLE IF NOT EXISTS` *creates* a new table on an installed database.
- * That is how `jobs`, `spend` and `gateway_lock` arrived, and it is why nothing
- * here touches `episodes` — whose `kind` carries a five-value `CHECK` SQLite
- * cannot alter (`core/memory/schema.ts:34`).
- *
- * **The one cost that is not zero, and it is ours**: `status` carries a `CHECK`
- * for the same reason `episodes.kind` does, and it inherits the same trap. A
- * status value not in the list below cannot be added to an installed database
- * without rebuilding the table. So the list is written for the consumers that
- * are coming, not only for the one caller that exists today — `waiting` and
- * `runnable` have no writer in this slice and are in the `CHECK` anyway. After
- * day 1 of the fourteen, a sixth status costs a table rebuild; before it, it
- * costs an edit to this line.
- */
-
-/**
- * Where a turn can be.
- *
- * A closed set with a `CHECK`, because a free string here rebuilds exactly the
- * ambiguity the enum removes. Only three of the five have a writer today:
- *
- *  - `running` — claimed by a live process, being executed now. Written by `create`.
- *  - `done` — the turn ended, however it ended. Written by `finish`.
- *  - `interrupted` — the row was claimed by a process that is gone, and **no
- *    outcome was ever recorded**. This is the state that makes the defect in
- *    `connectors/telegram/connector.ts:230-239` visible: today a process that
- *    dies inside `handle()` leaves the update pending and the restart re-runs
- *    the turn from the top, tool calls and their effects included, with nothing
- *    anywhere saying so.
- *  - `runnable` — created by a surface that will not execute it (B2), or woken
- *    from `waiting`. Written by `enqueue` and `wake`; read by `due`.
- *  - `waiting` — the turn released the runtime and is owed a wake-up. Written
- *    by `suspend`, which is also the only writer of `wake_at` and `wait_for`.
- *  - `continuable` — the execution lease ended on a recoverable failure, the
- *    work itself did not. Written by `releaseContinuable`, read by
- *    `continuableFor`, claimed only by `grantContinuation`. Never picked up
- *    by the lane (`due`/`armed` exclude it), never reclaimed as `interrupted`,
- *    never auto-retried: only an explicit owner continuation mints the next
- *    lease. A `waiting` row must never become `continuable` (its barrier is
- *    still pending) and a `done` row never comes back.
- *
- * The last two arrived with the consumers (`slice/turno-sospeso`) and were in
- * the `CHECK` before them, which is the whole reason this list was written for
- * the consumers that were coming rather than for the one writer that existed:
- * adding them now cost nothing, and after day 1 of the fourteen it would have
- * cost a table rebuild.
- *
- * `continuable` is that rebuild, arriving late: a sixth status on an
- * installed database costs the `migrateContinuable` copy below (one
- * transaction, all columns explicit, new columns defaulted). The alternative —
- * overloading `done` or `waiting` — was rejected: `resumeTurn` structurally
- * refuses every `done` row, and `waiting` means a known wake condition exists.
+ * Session JSONL remains append-only conversation evidence; this mutable record
+ * tracks execution and recovery. Provider checkpoint data is opaque to this
+ * module. Fresh-install DDL lives in `schema.ts`; versioned upgrades belong to
+ * `core/db/migrate.ts`.
  */
 export type TurnStatus = 'runnable' | 'running' | 'waiting' | 'interrupted' | 'done' | 'continuable';
+
 
 /** How the turn itself ended. The `stopped` value of `TurnResult`, verbatim. */
 export type TurnOutcome = 'answered' | 'cap' | 'budget' | 'aborted' | 'error' | 'ask';
@@ -161,8 +92,8 @@ export type DeliveryState =
  *   budget would start already-exhausted.
  * - derived-lifetime (folded, never written directly): `lifetime.*` — see
  *   the AUTHORITY note on `turn_leases`.
- * - durable-once (preserved verbatim): `contextBuilt`, taint, model,
- *   messages (evidence half), the tool WAL, approvals, replyTo, jobId.
+ * - durable-once (preserved verbatim): `contextBuilt`, taint, the pinned
+ *   provider lease checkpoint, the tool WAL, approvals, replyTo and jobId.
  * - crash/wait budget (untouched by continuation): `resumes`.
  *   `MAX_RESUMES` bounds a resume loop that keeps killing the process
  *   (`spendeIlBudget`: attempts *in the presence of failures*). An
@@ -390,17 +321,18 @@ export type TurnRecord = {
   tenant: string;
   surface: string;
   sessionId: string;
+  /** Canonical semantic text of the ingress; null only for legacy/non-text rows. */
+  inputText: string | null;
   /**
-   * Pinned, and a resume on a different one is a refusal rather than an attempt.
+   * State owned by the provider execution lease. The semantic turn record
+   * carries identity, authority and lifecycle; the provider payload is kept
+   * opaque here and interpreted only at the provider boundary. `model` stays
+   * pinned for compatibility with the current continuation contract.
    *
-   * A `thinking` block carries a `signature` belonging to the model that
-   * produced it (`agent/providers/types.ts`). ADR-0037 documents what happens
-   * when those are sent to a model that cannot read them: the server strips
-   * them or turns thinking off — **no 400, no noise**, just a worse agent. That
-   * is this repo's documented way of failing, so the model is a column.
+   * The on-disk `model`/`messages` columns predate this boundary and remain
+   * unchanged for now; `toRecord` is the single compatibility projection.
    */
-  model: string;
-  messages: Message[];
+  providerLease: { model: string; checkpoint: unknown };
   /**
    * The turn's taint, as a column and never derived.
    *
@@ -559,7 +491,7 @@ export type LeaseAuditRow = {
   /** ContinuableClass while the turn went continuable, TurnOutcome on terminal finish. */
   outcome: string | null;
   /** Harness control archived off the live transcript at grant time. */
-  harnessMessages: Message[];
+  harnessMessages: unknown[];
   /** Counters as the lease left them. */
   counters: TurnCounters | null;
   /** Transport retries this lease spent. */
@@ -608,15 +540,15 @@ export const SCRIPT_MODEL = '(script: nessun modello)';
  */
 export const CAPPED_MODEL = '(tetto per-job: nessun modello)';
 
-export type NewTurn = {
+type NewTurnFields = {
   /** The trace id of the turn's root span: one identity, so "why" is a join. */
   id: string;
   principal: Principal;
   tenant: string;
   surface: string;
   sessionId: string;
-  model: string;
-  messages: Message[];
+  /** Provider-independent ingress text, stored with the turn before projections run. */
+  inputText?: string | undefined;
   taint: TrustTier;
   counters: TurnCounters;
   replyTo?: Record<string, unknown> | undefined;
@@ -624,137 +556,18 @@ export type NewTurn = {
   jobId?: string | undefined;
 };
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS turns (
-  id            TEXT PRIMARY KEY,
-  principal     TEXT NOT NULL,
-  tenant        TEXT NOT NULL,
-  surface       TEXT NOT NULL,
-  session_id    TEXT NOT NULL,
-  model         TEXT NOT NULL,
-  messages      TEXT NOT NULL,
-  taint         INTEGER NOT NULL CHECK (taint BETWEEN 0 AND 3),
-  counters      TEXT NOT NULL,
-  reply_to      TEXT,
-  -- Il job di cui questo turno è un'occorrenza; NULL per ogni turno
-  -- interattivo, che è la maggioranza. Additiva e nullable: nessuna riga già
-  -- scritta acquisisce un'appartenenza che non aveva.
-  job_id        TEXT,
-  status        TEXT NOT NULL CHECK (status IN ('runnable','running','waiting','interrupted','done','continuable')),
-  wake_at       TEXT,
-  wait_for      TEXT,
-  claimed_by    INTEGER,
-  claimed_at    TEXT,
-  claim_token   TEXT,
-  turn_outcome  TEXT,
-  delivery      TEXT,
-  -- P0-B: which execution lease the row is on (0-based). Additive with a
-  -- zero default: every row written before leases existed is on lease 0.
-  lease_index   INTEGER NOT NULL DEFAULT 0,
-  -- P0-B: typed durable reason while status is 'continuable', else NULL.
-  -- Additive and nullable: terminal history carries no lease evidence.
-  continuable_reason TEXT,
-  -- P0-B: lifetime audit across finished leases (JSON). Additive and
-  -- nullable: old rows read as "no finished lease yet" (see toLifetime).
-  lifetime      TEXT,
-  created_at    TEXT NOT NULL,
-  updated_at    TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_turns_status ON turns(status, updated_at);
-CREATE INDEX IF NOT EXISTS idx_turns_due ON turns(status, wake_at);
--- P0-B: one audit row per finished execution lease. The turns row carries the
--- live lease; this table carries what ended leases spent, said as harness
--- control, and how they ended — so a continuation can strip lease-local
--- control from the live transcript without destroying evidence, and so
--- cumulative audit survives the counter reset a new lease requires.
---
--- AUTHORITY (with turns.lifetime): these rows are the source of truth for
--- per-lease detail; lifetime is their derived fold (same transaction,
--- never an independent write). On any inconsistency these rows win:
--- recomputeLifetime re-derives the fold from them. Every terminal finish
--- of a started lease and every grant closes exactly one row here.
---
--- Additive (CREATE TABLE IF NOT EXISTS): zero migration cost by construction.
-CREATE TABLE IF NOT EXISTS turn_leases (
-  turn_id     TEXT NOT NULL,
-  lease_index INTEGER NOT NULL,
-  started_at  TEXT NOT NULL,
-  ended_at    TEXT,
-  -- Terminal class of the ended lease: a ContinuableClass while the turn
-  -- went continuable, a TurnOutcome when it finished outright.
-  outcome     TEXT,
-  -- Harness control messages archived off the live transcript at grant time
-  -- (JSON array of Message). Evidence stays on the turns row; this keeps the
-  -- directives that must not govern the next lease.
-  harness_messages TEXT,
-  -- Counters as the lease left them (JSON TurnCounters).
-  counters    TEXT,
-  -- Transport retries this lease spent. Derived at close time as
-  -- allowance-minus-left, where the allowance is the persisted
-  -- transport_allowance below — never re-derived from profile constants.
-  -- NULL when the lease predates audit rows (backfilled close with no open
-  -- row); the fold treats NULL as 0 rather than inventing a number.
-  transport_used INTEGER,
-  -- The allowance this lease started with (from the live counters at open:
-  -- fresh rows and granted leases alike). The close needs it because only
-  -- the remainder is observable at close time.
-  transport_allowance INTEGER,
-  -- Delivery state as the lease left it: the diagnostic went out under this
-  -- lease even when the final answer goes out under a later one.
-  delivery    TEXT,
-  PRIMARY KEY (turn_id, lease_index)
-);
-CREATE INDEX IF NOT EXISTS idx_turn_leases_turn ON turn_leases(turn_id, lease_index);
-CREATE TABLE IF NOT EXISTS turn_tool_calls (
-  turn_id     TEXT NOT NULL,
-  call_id     TEXT NOT NULL,
-  tool        TEXT NOT NULL,
-  capability  TEXT NOT NULL,
-  rerunnable  INTEGER NOT NULL,
-  args_digest TEXT NOT NULL,
-  started_at  TEXT NOT NULL,
-  ended_at    TEXT,
-  content     TEXT,
-  is_error    INTEGER,
-  tier        INTEGER,
-  -- D11, the half that PR #186 measured missing: the moment "muffin undo"
-  -- put this call's file back. Additive (ensureColumn below, for a database
-  -- that already has this table) and never cleared once set -- an undo that
-  -- gets undone ("muffin undo annulla-<turno>") is a *different* row's
-  -- undone_at, on the reversing turn, not an erasure of this one's.
-  undone_at   TEXT,
-  -- D15, il registro degli effetti. Quattro colonne su questa tabella e non
-  -- un secondo store: ogni chiamata ne scrive gia' una riga, e un registro
-  -- degli effetti tenuto altrove sarebbe libero di dire una cosa mentre
-  -- questa ne dice un'altra -- la cucitura che docs/development/JUDGE.md chiama per nome,
-  -- e che taintOrigin ha gia' rifiutato per il taint.
-  --
-  --  * effect_row   la riga della matrice (CapabilityDecl.effect) che ha
-  --                 deciso il soffitto: e' *questa* che ha ammesso la
-  --                 chiamata, non la classe di rischio (ADR-0053/0074).
-  --  * reversible   la classe di reversibilita' dichiarata dalla capability.
-  --  * resource     su cosa: il percorso/URL che il kernel ha giudicato, non
-  --                 il digest degli argomenti -- args_digest confronta due
-  --                 chiamate, non racconta nessuna delle due.
-  --  * decision     allow | draft | ask: cio' che e' passato **senza domanda**
-  --                 sono le prime due, ed e' la distinzione per cui D15
-  --                 esiste. La tabella approvals registra solo cio' che e'
-  --                 stato chiesto, quindi da sola non sa nominare il resto.
-  --
-  -- Additive come undone_at (ensureColumn sotto), quindi un database gia'
-  -- popolato le acquisisce vuote: le righe scritte prima di questa versione
-  -- restano leggibili e si dichiarano "non registrato" invece di fingere.
-  effect_row  TEXT,
-  reversible  TEXT,
-  resource    TEXT,
-  decision    TEXT,
-  PRIMARY KEY (turn_id, call_id)
-);
-CREATE INDEX IF NOT EXISTS idx_turn_tool_calls_open ON turn_tool_calls(turn_id, ended_at);
--- La lettura per giornata di D15 (readEffects) filtra su started_at; senza
--- indice sarebbe una scansione dell'intera tabella a ogni domanda dell'owner.
-CREATE INDEX IF NOT EXISTS idx_turn_tool_calls_started ON turn_tool_calls(started_at);
-`;
+/**
+ * New writes should use `providerLease`, keeping execution state grouped and
+ * opaque. The flat shape remains accepted as a narrow migration adapter for
+ * existing connectors and test fixtures; TurnStore normalizes it immediately.
+ */
+export type NewTurn = NewTurnFields & {
+  providerLease?: { model: string; checkpoint: unknown };
+  /** @deprecated Use `providerLease` for new writes. */
+  model?: string;
+  /** @deprecated Use `providerLease.checkpoint` for new writes. */
+  messages?: unknown;
+};
 
 /**
  * A turn untouched for this long is gone, whatever its pid says.
@@ -774,6 +587,7 @@ type Row = {
   tenant: string;
   surface: string;
   session_id: string;
+  input_text: string | null;
   model: string;
   messages: string;
   taint: number;
@@ -810,8 +624,8 @@ function toRecord(row: Row): TurnRecord {
     tenant: row.tenant,
     surface: row.surface,
     sessionId: row.session_id,
-    model: row.model,
-    messages: JSON.parse(row.messages) as Message[],
+    inputText: row.input_text ?? null,
+    providerLease: { model: row.model, checkpoint: JSON.parse(row.messages) as unknown },
     taint: row.taint as TrustTier,
     counters: toCounters(row.counters),
     replyTo: row.reply_to === null ? null : (JSON.parse(row.reply_to) as Record<string, unknown>),
@@ -868,68 +682,12 @@ function argsDigest(args: unknown): string {
  * sostituzione non può produrre JSON invalido. Non è un'assunzione:
  * `store.test.ts` lo rilegge con `JSON.parse` dopo aver piantato una chiave.
  */
-function serializzaMessaggi(messages: readonly Message[]): string {
-  return redactText(JSON.stringify(messages));
-}
-
-/**
- * The sixth status, arriving late, on databases that already have rows.
- *
- * `status` carries a `CHECK`, and SQLite cannot alter one — so a value added
- * after day one costs a table rebuild. Exactly one transaction, columns
- * explicit on both sides, new columns defaulted (`lease_index` 0,
- * `continuable_reason`/`lifetime` NULL, which read as "first lease, no
- * finished lease yet"). Old statuses are a subset of the new CHECK, so no row
- * can fail the copy.
- *
- * Runs in the constructor like `ensureColumn`, and for the same reason: every
- * opener (gateway, REPL, `doctor`'s read-only handle) must see the same
- * table. A concurrent opener mid-copy hits `DROP TABLE IF EXISTS turns_new`
- * + transactional DDL; a lock failure re-reads, and only rethrows when the
- * table still lacks the value — so the loser of a boot race either proceeds
- * on the migrated table or fails loudly, never on a half copy.
- */
-function migrateContinuable(db: Database.Database): void {
-  const table = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='turns'`).get() as
-    | { sql: string }
-    | undefined;
-  if (table === undefined || table.sql.includes("'continuable'")) return;
-  const start = SCHEMA.indexOf('CREATE TABLE IF NOT EXISTS turns (');
-  const end = SCHEMA.indexOf(');', start);
-  if (start < 0 || end < 0) throw new Error('migrateContinuable: turns schema not found');
-  const createNew = `${SCHEMA.slice(start, end)});`.replace(
-    'CREATE TABLE IF NOT EXISTS turns (',
-    'CREATE TABLE turns_new (',
-  );
-  const columns =
-    'id, principal, tenant, surface, session_id, model, messages, taint, counters, ' +
-    'reply_to, job_id, status, wake_at, wait_for, claimed_by, claimed_at, claim_token, ' +
-    'turn_outcome, delivery, created_at, updated_at';
-  const migrate = db.transaction(() => {
-    db.exec('DROP TABLE IF EXISTS turns_new');
-    db.exec(createNew);
-    db.exec(
-      `INSERT INTO turns_new (${columns}, lease_index, continuable_reason, lifetime) ` +
-        `SELECT ${columns}, 0, NULL, NULL FROM turns`,
-    );
-    db.exec('DROP TABLE turns');
-    db.exec('ALTER TABLE turns_new RENAME TO turns');
-    db.exec('CREATE INDEX IF NOT EXISTS idx_turns_status ON turns(status, updated_at)');
-    db.exec('CREATE INDEX IF NOT EXISTS idx_turns_due ON turns(status, wake_at)');
-  });
-  try {
-    migrate();
-  } catch (error) {
-    const again = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='turns'`).get() as
-      | { sql: string }
-      | undefined;
-    if (again !== undefined && again.sql.includes("'continuable'")) return;
-    throw error;
-  }
+function serializzaCheckpoint(checkpoint: unknown): string {
+  return redactText(JSON.stringify(checkpoint));
 }
 
 export class TurnStore {
-  private readonly insertStmt: Database.Statement;
+  private readonly insertStmt: Database.Statement | null;
   private readonly getStmt: Database.Statement;
   private readonly checkpointStmt: Database.Statement;
   private readonly deliveryStmt: Database.Statement;
@@ -980,44 +738,18 @@ export class TurnStore {
     /** Injected so a test can exercise dead, live and reused holders. */
     private readonly alive: (pid: number) => boolean = pidAlive,
     /**
-     * P0-B migration boundary: genuinely read-only consumers (`doctor`, boot
-     * probes) must never trigger a write migration as a side effect of
-     * looking. With `readOnly`, the constructor prepares statements but runs
-     * no `exec`, no `ensureColumn`, no rebuild — reads tolerate old schemas
-     * (`toRecord`/`toLifetime` default every additive field). Writers keep
-     * the default: open, migrate, then work.
+     * Read-only consumers (`doctor`, boot probes) never trigger schema writes.
+     * Writable callers must run the central `migrate()` lifecycle before
+     * constructing the store; this constructor only creates fresh-install DDL.
      */
     options: { readOnly?: boolean } = {},
   ) {
-    // Read-only handles prepare statements below but run no schema write:
-    // no exec, no ensureColumn, no rebuild (see the option's docstring).
+    // Migrations are owned by `core/db/migrate.ts`; the store constructor only
+    // applies idempotent fresh-install DDL on writable handles.
     if (options.readOnly !== true) {
-      db.exec(SCHEMA);
-    // Additive, for a database written before `claim_token` existed — see
-    // `ensureColumn`'s own docstring in `core/lock/durable.ts`.
-    ensureColumn(db, 'turns', 'claim_token', 'claim_token TEXT');
-    // Stessa rete, stessa ragione: `CREATE TABLE IF NOT EXISTS` non aggiunge
-    // una colonna a una tabella che esiste già, e `turns` è scritta a ogni
-    // turno — non solo dai job.
-    ensureColumn(db, 'turns', 'job_id', 'job_id TEXT');
-    // Additive, for a database written before D11's undo-realigns-the-turn
-    // half existed. See the column's own comment in `SCHEMA` above.
-    ensureColumn(db, 'turn_tool_calls', 'undone_at', 'undone_at TEXT');
-    // D15: stessa rete, stessa ragione. Vedi il commento delle quattro colonne
-    // dentro `SCHEMA` per cosa sono e perche' stanno qui e non altrove.
-    ensureColumn(db, 'turn_tool_calls', 'effect_row', 'effect_row TEXT');
-    ensureColumn(db, 'turn_tool_calls', 'reversible', 'reversible TEXT');
-    ensureColumn(db, 'turn_tool_calls', 'resource', 'resource TEXT');
-    ensureColumn(db, 'turn_tool_calls', 'decision', 'decision TEXT');
-    // P0-B, additive columns first (an old table may predate even these),
-    // then the status rebuild, which copies every column by name.
-    ensureColumn(db, 'turns', 'lease_index', 'lease_index INTEGER NOT NULL DEFAULT 0');
-    ensureColumn(db, 'turns', 'continuable_reason', 'continuable_reason TEXT');
-    ensureColumn(db, 'turns', 'lifetime', 'lifetime TEXT');
-    ensureColumn(db, 'turn_leases', 'transport_allowance', 'transport_allowance INTEGER');
-    migrateContinuable(db);
+      db.exec(TURN_STORE_SCHEMA);
     }
-    // `CREATE INDEX IF NOT EXISTS` in `SCHEMA` non basta per un database che
+    // `CREATE INDEX IF NOT EXISTS` in `TURN_STORE_SCHEMA` non basta per un database che
     // ha gia' la tabella e non la colonna: l'indice sopra nomina `started_at`,
     // che esiste da sempre, quindi qui non serve un secondo `ensureIndex`.
     // `@status` and a nullable `@pid`, where both used to be the literal
@@ -1028,10 +760,10 @@ export class TurnStore {
     // `@claimToken` travels with `@pid`: a row created already `running` (a
     // fresh `runTurn`) needs a token from the start, exactly as much as one
     // `claim()` hands the lane later — see `insert`.
-    this.insertStmt = db.prepare(
-      `INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint, counters,
+    this.insertStmt = options.readOnly === true ? null : db.prepare(
+      `INSERT INTO turns (id, principal, tenant, surface, session_id, input_text, model, messages, taint, counters,
                           reply_to, job_id, status, claimed_by, claimed_at, claim_token, delivery, created_at, updated_at)
-       VALUES (@id, @principal, @tenant, @surface, @sessionId, @model, @messages, @taint, @counters,
+       VALUES (@id, @principal, @tenant, @surface, @sessionId, @inputText, @model, @messages, @taint, @counters,
                @replyTo, @jobId, @status, @pid, @claimedAt, @claimToken, @delivery, @now, @now)`,
     );
     this.getStmt = db.prepare(`SELECT * FROM turns WHERE id = ?`);
@@ -1381,20 +1113,28 @@ export class TurnStore {
 
   private insert(spec: NewTurn, status: TurnStatus, pid: number | null): TurnRecord {
     const now = this.clock().toISOString();
+    const providerLease = spec.providerLease ??
+      (typeof spec.model === 'string' && 'messages' in spec
+        ? { model: spec.model, checkpoint: spec.messages }
+        : undefined);
+    if (providerLease === undefined) throw new Error('new turn requires an opaque providerLease checkpoint');
     // A row created already `running` needs a fencing token from the start,
     // for the same reason `claim()` mints one below: `checkpoint`, the very
     // first one, is only a few lines away. `enqueue` (pid `null`) gets none —
     // nobody holds the row yet, so there is nothing to fence.
     const token = pid === null ? null : randomUUID();
+    const insertStmt = this.insertStmt;
+    if (insertStmt === null) throw new Error('turn store is read-only');
     const tx = this.db.transaction(() => {
-      this.insertStmt.run({
+      insertStmt.run({
         id: spec.id,
         principal: JSON.stringify(spec.principal),
         tenant: spec.tenant,
         surface: spec.surface,
         sessionId: spec.sessionId,
-        model: spec.model,
-        messages: serializzaMessaggi(spec.messages),
+        inputText: spec.inputText == null ? null : redactText(spec.inputText),
+        model: providerLease.model,
+        messages: serializzaCheckpoint(providerLease.checkpoint),
         taint: spec.taint,
         counters: JSON.stringify(spec.counters),
         replyTo: spec.replyTo === undefined ? null : JSON.stringify(spec.replyTo),
@@ -1482,7 +1222,7 @@ export class TurnStore {
   suspend(
     id: string,
     patch: {
-      messages: Message[];
+      messages: unknown;
       taint: TrustTier;
       counters: TurnCounters;
       wakeAt: string;
@@ -1493,7 +1233,7 @@ export class TurnStore {
     return (
       this.suspendStmt.run({
         id,
-        messages: serializzaMessaggi(patch.messages),
+        messages: serializzaCheckpoint(patch.messages),
         taint: patch.taint,
         counters: JSON.stringify(patch.counters),
         wakeAt: patch.wakeAt,
@@ -1537,7 +1277,13 @@ export class TurnStore {
    */
   releaseContinuable(
     id: string,
-    patch: { messages: Message[]; taint: TrustTier; counters: TurnCounters; reason: ContinuableReason },
+    patch: {
+      messages: unknown;
+      harnessMessages?: unknown[];
+      taint: TrustTier;
+      counters: TurnCounters;
+      reason: ContinuableReason;
+    },
     claimToken: string | null,
   ): boolean {
     const at = this.clock().toISOString();
@@ -1555,7 +1301,7 @@ export class TurnStore {
       const r = this.leaseArea().release.run({
         id,
         reason: JSON.stringify(patch.reason),
-        messages: serializzaMessaggi(patch.messages),
+        messages: serializzaCheckpoint(patch.messages),
         taint: patch.taint,
         counters: JSON.stringify(patch.counters),
         lifetime,
@@ -1570,7 +1316,7 @@ export class TurnStore {
         startedAt,
         now: at,
         outcome: patch.reason.class,
-        harness: redactText(JSON.stringify(patch.messages.filter((m) => m.origin === 'harness'))),
+        harness: redactText(JSON.stringify(patch.harnessMessages ?? [])),
         counters: JSON.stringify(patch.counters),
         transportUsed: used,
         delivery: before.delivery,
@@ -1597,7 +1343,7 @@ export class TurnStore {
   grantContinuation(
     id: string,
     patch: {
-      messages: Message[];
+      messages: unknown;
       taint: TrustTier;
       counters: TurnCounters;
       newLeaseStartedAt: string;
@@ -1616,7 +1362,7 @@ export class TurnStore {
         pid,
         token,
         now: at,
-        messages: serializzaMessaggi(patch.messages),
+        messages: serializzaCheckpoint(patch.messages),
         taint: patch.taint,
         counters: JSON.stringify(patch.counters),
         leaseIndex,
@@ -1667,7 +1413,7 @@ export class TurnStore {
       startedAt: r.startedAt,
       endedAt: r.endedAt,
       outcome: r.outcome,
-      harnessMessages: r.harnessMessages === null ? [] : (JSON.parse(r.harnessMessages) as Message[]),
+      harnessMessages: r.harnessMessages === null ? [] : (JSON.parse(r.harnessMessages) as unknown[]),
       counters: r.counters === null ? null : (JSON.parse(r.counters) as TurnCounters),
       transportUsed: r.transportUsed,
       transportAllowance: r.transportAllowance,
@@ -1837,13 +1583,13 @@ export class TurnStore {
    */
   checkpoint(
     id: string,
-    patch: { messages: Message[]; taint: TrustTier; counters: TurnCounters },
+    patch: { messages: unknown; taint: TrustTier; counters: TurnCounters },
     claimToken: string | null,
   ): boolean {
     return (
       this.checkpointStmt.run({
         id,
-        messages: serializzaMessaggi(patch.messages),
+        messages: serializzaCheckpoint(patch.messages),
         taint: patch.taint,
         counters: JSON.stringify(patch.counters),
         claimToken,
@@ -1873,7 +1619,13 @@ export class TurnStore {
    */
   finish(
     id: string,
-    end: { outcome: TurnOutcome; messages: Message[]; taint: TrustTier; counters: TurnCounters },
+    end: {
+      outcome: TurnOutcome;
+      messages: unknown;
+      harnessMessages?: unknown[];
+      taint: TrustTier;
+      counters: TurnCounters;
+    },
     claimToken: string | null,
   ): boolean {
     const at = this.clock().toISOString();
@@ -1898,7 +1650,7 @@ export class TurnStore {
       const r = this.leaseArea().finish.run({
         id,
         outcome: end.outcome,
-        messages: serializzaMessaggi(end.messages),
+        messages: serializzaCheckpoint(end.messages),
         taint: end.taint,
         counters: JSON.stringify(end.counters),
         lifetime,
@@ -1913,7 +1665,7 @@ export class TurnStore {
         startedAt: open?.startedAt ?? before.created_at,
         now: at,
         outcome: end.outcome,
-        harness: redactText(JSON.stringify(end.messages.filter((m) => m.origin === 'harness'))),
+        harness: redactText(JSON.stringify(end.harnessMessages ?? [])),
         counters: JSON.stringify(end.counters),
         transportUsed: used,
         delivery: before.delivery,
@@ -2176,7 +1928,7 @@ export class TurnStore {
         surface: record.surface,
         tenant: record.tenant,
         sessionId: record.sessionId,
-        model: record.model,
+        model: record.providerLease.model,
         startedAt: record.createdAt,
         delivery: record.delivery,
         uncertain: this.uncertainCalls(record.id),

@@ -18,6 +18,7 @@ import { ModelLane } from '../../core/turns/model-lane.js';
 import { TelegramError, type TelegramApiLike } from './api.js';
 import { TelegramDeliveryStore } from './delivery.js';
 import { UpdateInbox, type StoredUpdate } from './updates.js';
+import { providerMessages } from '../../agent/loop/provider-checkpoint.js';
 
 /**
  * `slice/inbound-unit` — the fault matrix the owner named, verbatim: *"Ogni
@@ -360,7 +361,7 @@ describe('resolveBound — fault points 5/7: a turn already delivered settles wi
       },
       99999,
     );
-    h.turns.finish(rec.id, { outcome: 'answered', messages: rec.messages, taint: 0, counters: rec.counters }, rec.claimToken);
+    h.turns.finish(rec.id, { outcome: 'answered', messages: providerMessages(rec), taint: 0, counters: rec.counters }, rec.claimToken);
     h.turns.delivered(rec.id, 'sent'); // some other pass already delivered it
 
     await resolveOnce(h, h.inbox.get(1)!, incoming);
@@ -390,7 +391,7 @@ describe('resolveBound — fault points 5/7: a turn already delivered settles wi
       },
       99999,
     );
-    h.turns.finish(rec.id, { outcome: 'answered', messages: rec.messages, taint: 0, counters: rec.counters }, rec.claimToken);
+    h.turns.finish(rec.id, { outcome: 'answered', messages: providerMessages(rec), taint: 0, counters: rec.counters }, rec.claimToken);
     h.turns.delivered(rec.id, 'undeliverable');
 
     await resolveOnce(h, h.inbox.get(1)!, incoming);
@@ -432,7 +433,7 @@ describe('resolveBound — fault points 5/7: a turn already delivered settles wi
       },
       99999,
     );
-    h.turns.finish(rec.id, { outcome: 'answered', messages: rec.messages, taint: 0, counters: rec.counters }, rec.claimToken);
+    h.turns.finish(rec.id, { outcome: 'answered', messages: providerMessages(rec), taint: 0, counters: rec.counters }, rec.claimToken);
     // delivery is still 'pending' — nothing has told the channel yet.
 
     await resolveOnce(h, h.inbox.get(1)!, incoming);
@@ -466,7 +467,7 @@ describe('resolveBound — fault points 5/7: a turn already delivered settles wi
       },
       99999,
     );
-    h.turns.finish(rec.id, { outcome: 'answered', messages: rec.messages, taint: 0, counters: rec.counters }, rec.claimToken);
+    h.turns.finish(rec.id, { outcome: 'answered', messages: providerMessages(rec), taint: 0, counters: rec.counters }, rec.claimToken);
     h.inbox.settle(1, '2026-08-18T09:05:00Z'); // the send already happened; only the bookkeeping did not land
     // delivery is still 'pending' on the turns row — that is the whole point.
 
@@ -640,7 +641,7 @@ describe('resolve — "riprendi" continua la riga continuabile, non ne apre una'
       h.turns.releaseContinuable(
         'vecchia-lease',
         {
-          messages: created.messages,
+          messages: providerMessages(created),
           taint: 0,
           counters: {
             iterations: 3,

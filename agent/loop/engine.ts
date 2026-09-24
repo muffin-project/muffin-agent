@@ -18,6 +18,7 @@ import { harnessMessage } from './message-origin.js';
 import { echoContentFor } from './sensitive-echo.js';
 import { makeSnapshot } from './permissions.js';
 import { markProviderErrorReplyForRecovery, providerErrorReply } from './provider-error-reply.js';
+import { providerMessages } from './provider-checkpoint.js';
 import { type RoundScope, runRounds } from './round.js';
 import { TurnRun } from './run-state.js';
 import {
@@ -136,6 +137,7 @@ export async function guidaIlTurno(
   recupero: string[],
 ): Promise<TurnResult> {
   const now = deps.now ?? (() => new Date());
+  const messages = providerMessages(record);
   const input: TurnInput = {
     principal: record.principal,
     tenant: record.tenant,
@@ -153,7 +155,7 @@ export async function guidaIlTurno(
      * because it cannot disagree with the caller about where the transcript is.
      */
     session: options.session ?? deps.sessions.open(record.sessionId),
-    text: lastUserText(record.messages),
+    text: record.inputText ?? lastUserText(messages),
     // Riprese **dal record**, esattamente come il testo qui sopra, e per la
     // stessa ragione: `drive` non riceve il `TurnInput` originale — lo
     // ricostruisce — quindi tutto cio' che il modello deve vedere deve essere
@@ -162,12 +164,12 @@ export async function guidaIlTurno(
     // vedo nessuna immagine» a una domanda su una foto arrivata davvero
     // (misurato contro il modello vero il 28/08/2026). Passare dal record e'
     // anche cio' che fa sopravvivere l'immagine a una ripresa dopo un crash.
-    ...(userImages(record.messages).length > 0 ? { images: userImages(record.messages) } : {}),
+    ...(userImages(messages).length > 0 ? { images: userImages(messages) } : {}),
     // Stessa strada delle immagini, e non per simmetria: e' la riga che quel
     // commento qui sopra dice di non dimenticare. Un audio passato solo nel
     // `TurnInput` di `runTurn` sparirebbe fra le due funzioni senza un errore,
     // e il modello risponderebbe a una nota vocale che non ha mai sentito.
-    ...(userAudios(record.messages).length > 0 ? { audios: userAudios(record.messages) } : {}),
+    ...(userAudios(messages).length > 0 ? { audios: userAudios(messages) } : {}),
     ...(options.signal ? { signal: options.signal } : {}),
     // **Dal record**, come il testo e le immagini qui sopra, e non dal
     // `TurnInput` di `runTurn`: `drive` ricostruisce l'input, quindi un
@@ -317,6 +319,12 @@ export async function guidaIlTurno(
     suspend: (spec) => {
       run.barrier = spec;
     },
+    durability: {
+      failure: () => run.durabilityFailure,
+      fail: (reason) => {
+        run.durabilityFailure ??= reason;
+      },
+    },
     // `input.replyChannel` threaded through, per `ToolContext.replyChannel`'s
     // own docstring: the one field `send_file` (DAY-1 requirement B14) reads, absent
     // everywhere else.
@@ -432,7 +440,7 @@ export async function guidaIlTurno(
     // a crash mid-turn cannot lose the input that caused it.
     let currentEpisodeId: number | undefined;
     if (deps.memory && memoryDoorOpen()) {
-      currentEpisodeId = deps.memory.store.addEpisode({
+      currentEpisodeId = deps.memory.store.addTurnIngressOnce({
         tenantId: input.tenant,
         connector: input.surface,
         threadKey: input.session.id,
@@ -594,7 +602,7 @@ export async function guidaIlTurno(
     // clean once a later turn in the same conversation reinjects it
     // (`agent/context/history-taint.ts`, ADR-0044 §"la history non lava la
     // provenienza").
-    deps.sessions.append(input.session, {
+    deps.sessions.appendTurnIngress(input.session, {
       role: 'user',
       content: input.text,
       surface: input.surface,

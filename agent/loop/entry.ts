@@ -11,6 +11,7 @@ import { closeRow } from './durability.js';
 import { type DriveOptions, guidaIlTurno } from './engine.js';
 import { ownerMessage } from './message-origin.js';
 import { initialTaint, spendeIlBudget } from './permissions.js';
+import { providerMessages } from './provider-checkpoint.js';
 import {
   MAX_RESUMES,
   MAX_TRANSPORT_RETRIES,
@@ -71,8 +72,8 @@ export function enqueueTurn(deps: LoopDeps, input: TurnInput): string {
     tenant: input.tenant,
     surface: input.surface,
     sessionId: input.session.id,
-    model: deps.model,
-    messages: [ownerMessage(primoMessaggio(input))],
+    inputText: input.text,
+    providerLease: { model: deps.model, checkpoint: [ownerMessage(primoMessaggio(input))] },
     taint: initialTaint(input),
     counters: freshCounters(),
     // Sulla riga, non solo nell'input: vedi `TurnRecord.jobId`.
@@ -161,11 +162,11 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     tenant: input.tenant,
     surface: input.surface,
     sessionId: input.session.id,
+    inputText: input.text,
     // Pinned here and never re-derived: a resume onto a different model sends
     // back thinking signatures it cannot read, and ADR-0037 records that this
     // fails silently rather than loudly.
-    model: deps.model,
-    messages: [ownerMessage(primoMessaggio(input))],
+    providerLease: { model: deps.model, checkpoint: [ownerMessage(primoMessaggio(input))] },
     taint: initialTaint(input),
     counters: freshCounters(),
     // Sulla riga, non solo nell'input: vedi `TurnRecord.jobId`.
@@ -242,7 +243,7 @@ function messaggiMaiVisti(messages: Message[]): string[] {
 
 /** La coda che un rifiuto di ripresa aggiunge al suo `detail`. Vuota se non c'è niente. */
 function codaMaiVista(record: TurnRecord): string {
-  const fuori = messaggiMaiVisti(record.messages);
+  const fuori = messaggiMaiVisti(providerMessages(record));
   if (fuori.length === 0) return '';
   return (
     `\n\nQuesto turno si portava dietro parole tue che il modello non ha mai visto — di solito una ` +
@@ -348,11 +349,11 @@ export async function resumeTurn(
    * — which is the failure the counter exists for.
    */
   const firstAttempt = existing.status === 'runnable' && !existing.counters.contextBuilt;
-  if (firstAttempt && existing.model !== deps.model) {
+  if (firstAttempt && existing.providerLease.model !== deps.model) {
     // No provider state exists yet to resume. Move only this untouched queued
     // row to the model selected at the turn boundary; suspended/started rows
     // stay pinned and are refused below if their model differs.
-    deps.turns.reassignUnstartedModel(turnId, existing.model, deps.model);
+    deps.turns.reassignUnstartedModel(turnId, existing.providerLease.model, deps.model);
   }
 
   const record = deps.turns.claim(turnId, process.pid, (deps.now ?? (() => new Date()))());
@@ -389,10 +390,10 @@ export async function resumeTurn(
    * soldi che il tetto aveva appena rifiutato. Il rifiuto si chiude, non si
    * riprende.
    */
-  if (record.model === CAPPED_MODEL) {
+  if (record.providerLease.model === CAPPED_MODEL) {
     deps.turns.finish(
       record.id,
-      { outcome: 'budget', messages: record.messages, taint: record.taint, counters: record.counters },
+      { outcome: 'budget', messages: providerMessages(record), taint: record.taint, counters: record.counters },
       record.claimToken,
     );
     return {
@@ -405,8 +406,8 @@ export async function resumeTurn(
       usage: record.counters.usage,
     };
   }
-  if (record.model === SCRIPT_MODEL) {
-    const comando = textOfFirstUserMessage(record.messages);
+  if (record.providerLease.model === SCRIPT_MODEL) {
+    const comando = textOfFirstUserMessage(providerMessages(record));
     const testo =
       `Un job script era partito quando il processo è morto, e non è ri-eseguibile: ` +
       `**non posso sapere se ha avuto effetto**. Non l'ho rifatto.` +
@@ -414,7 +415,7 @@ export async function resumeTurn(
       `\n\nControlla lo stato prima di rilanciarlo.`;
     deps.turns.finish(
       record.id,
-      { outcome: 'error', messages: record.messages, taint: record.taint, counters: record.counters },
+      { outcome: 'error', messages: providerMessages(record), taint: record.taint, counters: record.counters },
       record.claimToken,
     );
     return {
@@ -434,7 +435,7 @@ export async function resumeTurn(
       [ATTR.principalKind]: record.principal.kind,
       [ATTR.tenant]: record.tenant,
       [ATTR.surface]: record.surface,
-      [ATTR.requestModel]: record.model,
+      [ATTR.requestModel]: record.providerLease.model,
       [ATTR.turnId]: record.id,
       'muffin.turn.lease': record.leaseIndex,
       // What the counter will be after this attempt, so a trace of a first
@@ -449,12 +450,12 @@ export async function resumeTurn(
     remoteParent(record.id),
   );
 
-  if (record.model !== deps.model) {
+  if (record.providerLease.model !== deps.model) {
     // Explicit, and terminal. Retrying would mean a row that wakes every boot
     // to be refused again, which is the silent-forever failure this whole
     // record was built to stop producing.
     const detail =
-      `il turno ${record.id.slice(0, 12)} è stato aperto su ${record.model} e adesso il modello è ${deps.model}: ` +
+      `il turno ${record.id.slice(0, 12)} è stato aperto su ${record.providerLease.model} e adesso il modello è ${deps.model}: ` +
       `non è un resume. Le firme di thinking appartengono al modello che le ha prodotte, e rimandarle a un altro ` +
       `non dà un errore — dà un agente peggiore in silenzio (ADR-0037).` +
       codaMaiVista(record);
@@ -572,12 +573,12 @@ export async function continueTurn(
       detail: `il turno ${turnId} non è continuabile (stato ${existing.status})`,
     };
   }
-  if (existing.model !== deps.model) {
+  if (existing.providerLease.model !== deps.model) {
     return {
       turnId,
       why: 'model_changed',
       detail:
-        `il turno ${turnId.slice(0, 12)} è stato aperto su ${existing.model} e adesso il modello è ${deps.model}: ` +
+        `il turno ${turnId.slice(0, 12)} è stato aperto su ${existing.providerLease.model} e adesso il modello è ${deps.model}: ` +
         `non è una continuazione. La riga resta continuabile per il modello originale.`,
     };
   }
@@ -595,7 +596,7 @@ export async function continueTurn(
   const granted = deps.turns.grantContinuation(
     turnId,
     {
-      messages: [...evidenceForContinuation(existing.messages), opts.message],
+      messages: [...evidenceForContinuation(providerMessages(existing)), opts.message],
       taint: existing.taint,
       counters: buildFreshCounters(existing.counters),
       newLeaseStartedAt: now().toISOString(),
@@ -611,7 +612,7 @@ export async function continueTurn(
       [ATTR.principalKind]: granted.principal.kind,
       [ATTR.tenant]: granted.tenant,
       [ATTR.surface]: granted.surface,
-      [ATTR.requestModel]: granted.model,
+      [ATTR.requestModel]: granted.providerLease.model,
       [ATTR.turnId]: granted.id,
       [ATTR.turnResume]: granted.counters.resumes,
       'muffin.turn.lease': granted.leaseIndex,

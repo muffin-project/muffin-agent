@@ -14,6 +14,7 @@ import { makeWaitTool, waitCapability } from './tools/wait.js';
 import { resumeTurn, runTurn, MAX_RESUMES, type LoopDeps, type RegisteredTool } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
 import type { ChatCall, ChatResult, Message, Provider, StreamEvent } from './providers/types.js';
+import { providerMessages } from './loop/provider-checkpoint.js';
 
 /**
  * A turn that releases the runtime, and comes back.
@@ -199,7 +200,7 @@ function world(
          WHERE id = @id`,
       ).run({
         id: turnId,
-        messages: JSON.stringify(patch.messages ?? row.messages),
+        messages: JSON.stringify(patch.messages ?? providerMessages(row)),
         counters: JSON.stringify({ ...row.counters, ...(patch.resumes === undefined ? {} : { resumes: patch.resumes }) }),
       });
     },
@@ -282,7 +283,7 @@ describe('un turno che aspetta rilascia il runtime', () => {
     expect(result.stopped).toBe('suspended');
 
     const row = w.turns.get(result.turnId)!;
-    const results = row.messages
+    const results = providerMessages(row)
       .flatMap((m) => m.content)
       .filter((b) => b.type === 'tool_result')
       .map((b) => (b.type === 'tool_result' ? b.toolCallId : ''));
@@ -398,7 +399,7 @@ describe('e poi torna', () => {
     // silent-forever failure the record exists to stop producing.
     expect(w.turns.get(first.turnId)?.status).toBe('done');
     // And the reason is in the transcript, so the surface has something to say.
-    expect(JSON.stringify(w.turns.get(first.turnId)?.messages)).toMatch(/non è un resume/);
+    expect(JSON.stringify(providerMessages(w.turns.get(first.turnId)))).toMatch(/non è un resume/);
   });
 
   it('dice di no a un turno già chiuso e a uno che non esiste', async () => {
@@ -490,7 +491,7 @@ describe('una chiamata in volo quando il processo muore', () => {
     // *second* call id, so the recorded outcome of `m1` cannot be what saves
     // this — the assertion below is about `rerunnable`, not about replay.
     const row = w.turns.get(first.turnId)!;
-    const truncated = beforeTheResults(row.messages).map((m) => ({
+    const truncated = beforeTheResults(providerMessages(row)).map((m) => ({
       ...m,
       content: m.content.map((b) => (b.type === 'tool_use' ? { ...b, id: 'm2' } : b)),
     }));
@@ -522,7 +523,7 @@ describe('una chiamata in volo quando il processo muore', () => {
     // This time the outcome *was* recorded — the crash happened after it. A
     // resume replays it: Temporal's property in our own words, "during replay
     // that result is reused, not recomputed".
-    w.crash(first.turnId, { messages: beforeTheResults(w.turns.get(first.turnId)!.messages) });
+    w.crash(first.turnId, { messages: beforeTheResults(providerMessages(w.turns.get(first.turnId)!)) });
 
     await resumeTurn(w.deps, first.turnId);
     expect(w.sends).toBe(1);

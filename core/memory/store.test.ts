@@ -24,6 +24,59 @@ function episode(s: MemoryStore, tenant: string, content: string, tier: 0 | 1 | 
 }
 
 describe('memory store', () => {
+  it('projects a turn ingress once, tenant-scoped, and rejects a conflicting replay', () => {
+    const s = store();
+    const ingress = {
+      tenantId: HOST,
+      connector: 'cli',
+      threadKey: 's1',
+      role: 'user' as const,
+      kind: 'message' as const,
+      content: 'richiesta iniziale',
+      trustTier: 0 as const,
+      createdAt: '2026-08-04T10:00:00Z',
+      turnId: 'turn-ingress-1',
+    };
+    const first = s.addTurnIngressOnce(ingress);
+    const replay = s.addTurnIngressOnce({ ...ingress, createdAt: '2026-08-05T10:00:00Z' });
+    expect(replay).toBe(first);
+    expect(s.episodeById(HOST, first)?.content).toBe('richiesta iniziale');
+    expect(() => s.addTurnIngressOnce({ ...ingress, content: 'contenuto diverso' })).toThrow(
+      /conflicting ingress projection/,
+    );
+    expect(s.addTurnIngressOnce({ ...ingress, tenantId: GROUP })).not.toBe(first);
+  });
+
+  it('does not mistake another episode kind for an already projected ingress', () => {
+    const s = store();
+    const prior = s.addEpisode({
+      tenantId: HOST,
+      connector: 'cli',
+      threadKey: 's1',
+      role: 'agent',
+      kind: 'message',
+      content: 'risposta',
+      trustTier: 0,
+      createdAt: '2026-08-04T10:00:00Z',
+      turnId: 'turn-collision',
+    });
+    expect(prior).toBeGreaterThan(0);
+    expect(() =>
+      s.addTurnIngressOnce({
+        tenantId: HOST,
+        connector: 'cli',
+        threadKey: 's1',
+        role: 'user',
+        kind: 'message',
+        content: 'richiesta',
+        trustTier: 0,
+        createdAt: '2026-08-04T10:00:00Z',
+        turnId: 'turn-collision',
+      }),
+    ).toThrow(/conflicting ingress projection/);
+    expect(s.pendingEpisodes(HOST, 1)).toHaveLength(1);
+  });
+
   it('migrates a database that predates origin and importance, without losing its rows', () => {
     // The real migration path, not a simulation of it: an existing `facts`
     // table means CREATE TABLE IF NOT EXISTS does nothing, so the two columns

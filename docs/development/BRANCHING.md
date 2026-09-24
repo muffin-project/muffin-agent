@@ -27,10 +27,8 @@ it by tradition.
 4. Do not build deep PR stacks. If slice B materially depends on A, integrate A
    into `dev`, then rebase/branch B from the new integration state.
 5. Delete the work branch after merge.
-6. Integrate with a merge commit, not a squash. Once the branch is gone, the
-   subject `Merge pull request #NN from <owner>/<branch>` is the local witness
-   `node .claude/deleghe.mjs riprendi` uses to derive that a delegation's work
-   is integrated; a squash erases it and finished work shows up as live again.
+6. Integrate with a merge commit, not a squash. It preserves the reviewed
+   branch boundary in Git history and keeps the integration event inspectable.
 
 A good slice title can state the claim without an unrelated "and".
 
@@ -64,19 +62,20 @@ run when the actual merge gate requires CI. Report what was actually observed.
 
 ### 3. Slice -> `dev`
 
-Two doors, one guarantee — a merge lands only on evidence the hook can verify
-in that moment (`.claude/hooks/guard-merge-gate.mjs`):
+Two evidence paths support integration:
 
 - **local**: `npm run merge -- <pr>` builds the merged result in a throwaway
   worktree, runs `ci:local` on it, merges only on PASS;
-- **GitHub**: `gh pr merge` passes the hook when the PR is OPEN, not a draft,
-  on `dev`, `mergeStateStatus` is CLEAN, and the head carries the nominal
-  FAST (`verifica`) and DEEP (`accettazione`) successes — `skipped` satisfies
-  neither — with every other check-run on the head green and none pending.
+- **GitHub**: merge only when the PR is open, reviewable, based on `dev`, and
+  the required checks and current repository merge policy are satisfied.
   Source-public preparation deliberately makes the PR workflows materialize on
   every PR: `dco`, `verifica`, `accettazione`, `install`, `collegamenti`
   and `strumenti` are stable check names instead of trigger-level path-filter
   accidents. Any doubt falls back to the local door.
+
+These are maintainer integration practices. External contributors do not need
+the local hooks or a particular CLI installed; submit a reviewable PR and report
+the checks that actually ran.
 
 What CLEAN does and does not prove: it says no conflict is known with the
 base right now and the associated status is green. GitHub CI runs on the PR

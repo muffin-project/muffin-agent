@@ -1,15 +1,15 @@
-import { redactText } from '../tracing/redact.js';
 import type Database from 'better-sqlite3';
+import { ensureColumn } from '../lock/durable.js';
+import type { TrustTier } from '../policy/types.js';
+import { redactText } from '../tracing/redact.js';
 import { IngestLock, type LockOutcome } from './ingest-lock.js';
 import {
   DEFAULT_FUNCTIONAL_PREDICATES,
   EXTRACTION_VERSION,
-  MEMORY_SCHEMA,
   type FactOrigin,
+  MEMORY_SCHEMA,
   type ReviewKind,
 } from './schema.js';
-import { ensureColumn } from '../lock/durable.js';
-import type { TrustTier } from '../policy/types.js';
 
 /**
  * Typed access to memory, with tenant scoping enforced here rather than
@@ -299,6 +299,54 @@ export class MemoryStore {
       mediaMeta: input.mediaMeta ? JSON.stringify(input.mediaMeta) : null,
     });
     return Number(info.lastInsertRowid);
+  }
+
+  /**
+   * Idempotent projection of a turn's canonical user ingress into evidence.
+   * The turn row owns the ingress; memory remains a tenant-scoped projection.
+   */
+  addTurnIngressOnce(input: EpisodeInput & { turnId: string }): number {
+    if (input.role !== 'user' || input.kind !== 'message') {
+      throw new Error('turn ingress projection must be a user message episode');
+    }
+    const write = this.db.transaction(() => {
+      const existing = this.db
+        .prepare(
+          `SELECT id, connector, thread_key AS threadKey, role, kind, content, trust_tier AS trustTier
+           FROM episodes
+           WHERE tenant_id = ? AND turn_id = ?
+           ORDER BY id LIMIT 2`,
+        )
+        .all(input.tenantId, input.turnId) as Array<{
+        id: number;
+        connector: string;
+        threadKey: string;
+        role: string;
+        kind: string;
+        content: string | null;
+        trustTier: number;
+      }>;
+      if (existing.length > 1) {
+        throw new Error(`memory: duplicate ingress projection for turn ${input.turnId}`);
+      }
+      const prior = existing[0];
+      if (prior !== undefined) {
+        const expectedContent = input.content === null ? null : redactText(input.content);
+        if (
+          prior.connector !== input.connector ||
+          prior.threadKey !== input.threadKey ||
+          prior.role !== input.role ||
+          prior.kind !== input.kind ||
+          prior.content !== expectedContent ||
+          prior.trustTier !== input.trustTier
+        ) {
+          throw new Error(`memory: conflicting ingress projection for turn ${input.turnId}`);
+        }
+        return Number(prior.id);
+      }
+      return this.addEpisode(input);
+    });
+    return write();
   }
 
   /** Episodes not yet processed by the current pipeline version, oldest first. */

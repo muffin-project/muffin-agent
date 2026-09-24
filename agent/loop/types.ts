@@ -107,6 +107,11 @@ export type ToolContext = {
    * so the barrier has to travel with the turn — not with the tool.
    */
   suspend: (spec: WaitSpec) => void;
+  /** Durability guard for this turn: a write failure disables later tools. */
+  durability?: {
+    failure: () => string | null;
+    fail: (reason: string) => void;
+  };
   /**
    * Where a mid-turn tool can address a follow-up delivery — the registry
    * channel this turn's conversation arrived on (`telegram:<chatId>`,

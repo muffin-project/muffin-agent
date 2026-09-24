@@ -19,6 +19,7 @@ import type { ChatCall, ChatResult, Message, Provider } from '../providers/types
 import { searchCapability, searchSpec } from '../tools/search.js';
 import { harnessMessage, partialMessage } from './message-origin.js';
 import { MAX_TRANSPORT_RETRIES, MAX_TRUNCATION_CONTINUATIONS, type TurnDelta } from './types.js';
+import { providerMessages } from './provider-checkpoint.js';
 
 /**
  * #615 — max_tokens with partial text must continue the SAME logical
@@ -181,7 +182,7 @@ describe('#615 history can never poison the current answer', () => {
     // Structural identity: transcript partials carry origin `partial`;
     // reinjected history never does.
     const row = w.turns.get(r.turnId);
-    const partials = (row?.messages ?? []).filter((m) => m.origin === 'partial');
+    const partials = (providerMessages(row) ?? []).filter((m) => m.origin === 'partial');
     expect(partials.map((m) => m.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('')).join('')).toBe(
       'PARTE-A-PARTE-A2-',
     );
@@ -474,7 +475,7 @@ describe('#615 bounds, restart, no-progress, unchanged paths', () => {
     // Second chunk dropped, not appended: single partial, single budget unit.
     expect(row?.counters.truncationsUsed).toBe(1);
     expect(row?.counters.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES);
-    expect((row?.messages ?? []).filter((m) => m.origin === 'partial')).toHaveLength(1);
+    expect((providerMessages(row) ?? []).filter((m) => m.origin === 'partial')).toHaveLength(1);
     expect(w.sessions.read(session).filter((m) => m.role === 'assistant')).toHaveLength(0);
   });
 
@@ -572,7 +573,7 @@ function visibleText(deltas: TurnDelta[]): string {
 function durablePartials(deps: LoopDeps, turnId: string): string {
   const store = deps.turns;
   const row = store.get(turnId);
-  return (row?.messages ?? [])
+  return (providerMessages(row) ?? [])
     .filter((m) => m.origin === 'partial')
     .flatMap((m) => m.content)
     .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
@@ -860,7 +861,7 @@ describe('#615 multi-prior full-prefix (shared FULL-then-LAST rule)', () => {
     // 3 accepted partials (AAA-, BBB-, CCC-), transport untouched.
     expect(row?.counters.truncationsUsed).toBe(3);
     expect(row?.counters.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES);
-    expect((row?.messages ?? []).filter((m) => m.origin === 'partial')).toHaveLength(3);
+    expect((providerMessages(row) ?? []).filter((m) => m.origin === 'partial')).toHaveLength(3);
     // One logical Turn, one final Session answer, one final Memory answer.
     expect(w.sessions.read(session).filter((m) => m.role === 'assistant')).toHaveLength(1);
     expect(w.sessions.read(session).filter((m) => m.role === 'assistant')[0]!.content).toBe('AAA-BBB-CCC-DDD');
@@ -925,7 +926,7 @@ describe('#615 multi-prior full-prefix (shared FULL-then-LAST rule)', () => {
     expect(w.provider.seen).toHaveLength(3);
     const row = w.turns.get(r.turnId);
     // Third chunk dropped, not appended: 2 partials, 2 budget units.
-    expect((row?.messages ?? []).filter((m) => m.origin === 'partial')).toHaveLength(2);
+    expect((providerMessages(row) ?? []).filter((m) => m.origin === 'partial')).toHaveLength(2);
     expect(row?.counters.truncationsUsed).toBe(2);
     expect(row?.counters.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES);
     expect(w.sessions.read(session).filter((m) => m.role === 'assistant')).toHaveLength(0);
@@ -960,6 +961,6 @@ describe('#615 multi-prior full-prefix (shared FULL-then-LAST rule)', () => {
     const row = w.turns.get(r.turnId);
     expect(row?.counters.truncationsUsed).toBe(3);
     expect(row?.counters.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES);
-    expect((row?.messages ?? []).filter((m) => m.origin === 'partial')).toHaveLength(3);
+    expect((providerMessages(row) ?? []).filter((m) => m.origin === 'partial')).toHaveLength(3);
   });
 });
