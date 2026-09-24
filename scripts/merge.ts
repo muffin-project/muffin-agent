@@ -40,6 +40,31 @@ function gh(args: string[]): string {
   return execFileSync('gh', args, { encoding: 'utf8', cwd: REPO_ROOT }).trim();
 }
 
+function recordPreflightFailure(pr: string, error: unknown): void {
+  const at = new Date().toISOString();
+  const failure = error as { code?: unknown; status?: unknown };
+  const verdicts = join(REPO_ROOT, '.ci-local', 'verdicts');
+  mkdirSync(verdicts, { recursive: true });
+  writeFileSync(
+    join(verdicts, `${pr}-preflight-${at.replaceAll(':', '-')}.json`),
+    JSON.stringify(
+      {
+        pr,
+        stage: 'github-preflight',
+        outcome: 'not_executed',
+        errorCode: typeof failure?.code === 'string' ? failure.code : undefined,
+        exitStatus: typeof failure?.status === 'number' ? failure.status : undefined,
+        at,
+      },
+      null,
+      2,
+    ),
+  );
+  process.stderr.write(
+    `MERGE GATE NOT EXECUTED: GitHub preflight failed for PR #${pr}. Check connectivity and gh authentication, then retry. Evidence: ${join(verdicts, `${pr}-preflight-${at.replaceAll(':', '-')}.json`)}\n`,
+  );
+}
+
 function main(): void {
   const pr = process.argv[2];
   if (pr === undefined || !/^\d+$/.test(pr)) {
@@ -47,9 +72,7 @@ function main(): void {
     process.exit(64);
   }
 
-  const info = JSON.parse(
-    gh(['pr', 'view', pr, '--json', 'headRefName,baseRefName,state,headRefOid,title,author']),
-  ) as {
+  let info: {
     headRefName: string;
     baseRefName: string;
     state: string;
@@ -57,6 +80,14 @@ function main(): void {
     title: string;
     author: { login: string };
   };
+  try {
+    info = JSON.parse(
+      gh(['pr', 'view', pr, '--json', 'headRefName,baseRefName,state,headRefOid,title,author']),
+    ) as typeof info;
+  } catch (error) {
+    recordPreflightFailure(pr, error);
+    process.exit(1);
+  }
   if (info.state !== 'OPEN') {
     process.stderr.write(`PR #${pr} e' ${info.state}, non OPEN\n`);
     process.exit(1);
