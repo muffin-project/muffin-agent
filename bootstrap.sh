@@ -14,11 +14,16 @@
 # reads, stores or forwards a secret itself.
 set -eu
 
+# `install.sh` owns the privilege boundary. An ordinary user gets a user-local
+# install; a root caller on Linux provisions the locked service identity and
+# runs the same installer as that identity. Keep transport/TTY handling here.
+
 INSTALL_URL=${MUFFIN_INSTALL_URL:-https://raw.githubusercontent.com/muffin-project/muffin-agent/main/install.sh}
 TMP_ROOT=${TMPDIR:-/tmp}
 TMP=$(mktemp -d "$TMP_ROOT/muffin-bootstrap.XXXXXX")
 INSTALLER="$TMP/install.sh"
 
+# shellcheck disable=SC2317,SC2329 # Called indirectly by the EXIT/HUP/INT/TERM traps.
 cleanup() {
   rm -rf "$TMP"
 }

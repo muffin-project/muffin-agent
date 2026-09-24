@@ -108,3 +108,15 @@ jobs:
 
       - name: installazione da macchina vuota, unità, update e rollback
         run: bash evals/install/ubuntu.sh
+
+      # Must run as real root inside the disposable local/hosted runner: the
+      # contract is to refuse an unmanaged `muffin` account before writing
+      # service state, changing a command, or reaching the network.
+      - name: root bootstrap reaches installer and refuses an unmanaged service account
+        run: sudo bash evals/install/root-boundary.sh
+
+      - name: service account is private, locked, and never adopted implicitly
+        run: sudo bash evals/install/root-account-state.sh
+
+      - name: public root bootstrap hands build and setup to the service account
+        run: sudo bash evals/install/root-handoff.sh
