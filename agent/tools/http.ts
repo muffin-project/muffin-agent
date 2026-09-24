@@ -352,14 +352,21 @@ export function hostHeaderFor(original: URL): string {
 }
 
 /**
- * TLS SNI for the pinned hop: the original hostname, or `undefined` for a
- * literal-IP origin (SNI must not carry an IP address — RFC 6066 — and the
- * certificate check then correctly runs against the IP itself).
+ * TLS SNI for the pinned hop: parse the original Host authority and return
+ * its hostname, or `undefined` for a literal-IP origin. SNI must not carry an
+ * IP address (RFC 6066); the certificate check then correctly runs against
+ * the IP itself.
  */
-export function serverNameFor(originalHostname: string): string | undefined {
-  const bare = originalHostname.replace(/^\[|\]$/g, '').replace(/\.$/, '');
+export function serverNameFor(originalAuthority: string): string | undefined {
+  let hostname: string;
+  try {
+    hostname = new URL(`http://${originalAuthority}`).hostname;
+  } catch {
+    return undefined;
+  }
+  const bare = hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '');
   if (isIP(bare) !== 0) return undefined;
-  return bare;
+  return bare.length > 0 ? bare : undefined;
 }
 
 /**
@@ -387,11 +394,7 @@ export async function defaultPinnedFetch(input: URL | string, init?: RequestInit
   if (!headers.has('user-agent')) headers.set('user-agent', 'muffin/0.2 (+personal-agent)');
   const hostHeader = headers.get('host') ?? url.host;
   headers.set('host', hostHeader);
-  const servername = (() => {
-    const fromHost = hostHeader.split(':')[0]!.replace(/^\[|\]$/g, '').replace(/\.$/, '');
-    if (isIP(fromHost) !== 0) return undefined;
-    return fromHost.length > 0 ? fromHost : undefined;
-  })();
+  const servername = serverNameFor(hostHeader);
 
   const port = url.port !== '' ? Number(url.port) : isHttps ? 443 : 80;
   const path = `${url.pathname}${url.search}`;
