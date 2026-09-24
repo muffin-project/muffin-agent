@@ -26,9 +26,10 @@ import { DISK_TIER, fenceDisk } from './fs.js';
  * So the tool splits along the line the ADR draws, `ask` ⇔ irreversible:
  *
  *  - **`shell_run` / `sys.shell`** — the sandbox with writes confined to the
- *    session scratch and no network (`SandboxExecutor.runReadOnly`). Nothing
- *    on the host changes, nothing leaves: `reversible: 'yes'`, `risk: 'low'`,
- *    and the kernel lets it through without asking anyone.
+ *    session scratch and IP networking disabled (`SandboxExecutor.runReadOnly`).
+ *    On Linux, reachable AF_UNIX sockets remain accessible, so this is not a
+ *    no-side-effect boundary: `reversible: 'yes'` and `risk: 'low'` describe the
+ *    filesystem/network limits, not every effect a local service may perform.
  *  - **`shell_run_write` / `sys.shell.write`** — writes into the workspace,
  *    exactly as the single lane always did. `reversible: 'no'`, `risk: 'high'`,
  *    and it asks every time.
@@ -61,9 +62,10 @@ export const shellCapability: CapabilityDecl = {
   // `fs_read`. Two residuals keep it here, both declared in `docs/architecture/SECURITY.md`
   // §9: on Linux `allowAllUnixSockets` leaves AF_UNIX reachable (srt's seccomp
   // layer is off, upstream #428/#429), and a command still spends the host's
-  // CPU and file descriptors. "Nothing leaves and nothing is written" is the
-  // claim this declaration makes; "no effect of any kind on the host" is not,
-  // and moving the row would have asserted it.
+  // CPU and file descriptors. This lane denies writes outside scratch and IP
+  // networking; it does not deny effects performed through reachable local
+  // service sockets. Keep that residual explicit rather than implying a general
+  // no-effects guarantee.
   effect: 'host',
   // The lane the sandbox makes reversible by construction, so ADR-0074 punto 4's
   // condition is met and only then does it stop asking. Not a judgement that
@@ -124,9 +126,11 @@ const commonProperties = {
 const shellSpec: ToolSpec = {
   name: 'shell_run',
   description:
-    'Run a non-interactive shell command that only LOOKS at things — the default way to run a command, and the ' +
-    'one that does not interrupt the owner. Inside the sandbox: the filesystem is readable, writes go nowhere ' +
-    'except a scratch directory, and there is no network at all. Use it when you need to observe something no ' +
+    'Run a non-interactive shell command to inspect files and process state — the default way to use shell, and the ' +
+    'one that does not interrupt the owner. Inside the sandbox, the filesystem is readable, writes are confined to ' +
+    'scratch, and IP networking is disabled. On Linux, reachable Unix-domain sockets can still be used and may ' +
+    'cause local service-side effects, so this is not a general no-side-effect boundary. Avoid commands that mutate ' +
+    'state through local sockets. Use it when you need to inspect something no ' +
     'dedicated tool wraps: `ls`, `lsof`, `sqlite3 -readonly`, `env`, `ps`, `df`, `du`, `git status`, `git log`, ' +
     '`wc`, `find`, a dry run. Not for what a dedicated tool answers better than parsed text — `cat`/`ls` of a ' +
     'known file (fs_read, fs_list), a search in the files (fs_search), `ps` (process_list), a question about this ' +
