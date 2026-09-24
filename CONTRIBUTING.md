@@ -8,9 +8,12 @@ This file is a map onto the repository's canonical working rules for an external
 contributor. It deliberately does not restate every rule: two copies drift and
 only one stays true.
 
-The repository may be **source-public/pre-alpha before Muffin is product
-public-alpha**. A public repository is an invitation to inspect and contribute;
-it is not a claim of stability, compatibility or production readiness.
+The repository is currently a **private Community Preview**. Public source
+access is planned before product public alpha, but remains pending the privacy,
+security and repository-readiness gates. Until access opens, contributions are
+limited to people invited to this repository. A future public repository will
+invite inspection and contribution; it will not claim stability, compatibility
+or production readiness.
 
 ## License
 
@@ -25,6 +28,10 @@ The `Muffin` name and logo are **not** covered by that grant — see
 `TRADEMARK.md`.
 
 ## Start here
+
+For local development, use Node.js 22 or newer. Running the test suite also
+requires Node.js 22.12 or newer, the minimum supported by the pinned Vitest
+major; the installed runtime itself continues to target Node.js 22.
 
 Read, in this order:
 

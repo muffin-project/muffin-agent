@@ -251,19 +251,23 @@ which supposedly clever mechanisms do not help.
 
 ## Contributing
 
-Muffin is source-public/pre-alpha: contributions are welcome, stability is not
-promised. Start from [CONTRIBUTING.md](CONTRIBUTING.md) — it routes you to the
-current integration branch (`dev`, via `slice/<claim>` branches, see
-[BRANCHING.md](docs/development/BRANCHING.md)), the signed-off-commit rule (`git commit -s`,
-see [CONTRIBUTOR_AGREEMENT.md](CONTRIBUTOR_AGREEMENT.md)), and the evidence a PR
-must show. Report bugs with the issue templates; report security issues
-privately per [SECURITY.md](SECURITY.md). You do not need Claude Code to
-contribute.
+Muffin is currently a controlled, private Community Preview. The source-public
+boundary is still pending the repository's privacy, security and readiness gates;
+until then, contribution access is limited to people invited to this repository.
+Once source access opens, start from [CONTRIBUTING.md](CONTRIBUTING.md) — it
+routes contributors to the current integration branch (`dev`, via
+`slice/<claim>` branches, see [BRANCHING.md](docs/development/BRANCHING.md)), the
+signed-off-commit rule (`git commit -s`, see
+[CONTRIBUTOR_AGREEMENT.md](CONTRIBUTOR_AGREEMENT.md)), and the evidence a PR must
+show. Report bugs with the issue templates; report security issues privately per
+[SECURITY.md](SECURITY.md). You do not need Claude Code to contribute.
 
 ## Community & support
 
-Muffin is owner-led and built in public with contributors around it. Access and
-authority are deliberately separate from enthusiasm or financial support:
+Muffin is owner-led and currently developed in a controlled private preview.
+Public source access will open after the repository's privacy, security and
+readiness gates are met. Access and authority are deliberately separate from
+enthusiasm or financial support:
 
 - **Contributors** start with issues, forks and pull requests. Repeated useful
   contributions may earn closer project access over time.

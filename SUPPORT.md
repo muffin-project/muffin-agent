@@ -1,6 +1,8 @@
 # Supporting Muffin
 
-Muffin is owner-led and developed in public with contributors around it.
+Muffin is owner-led and currently developed in a controlled private preview.
+Public source access will open after the repository's privacy, security and
+readiness gates are met.
 
 ## Financial support
 
