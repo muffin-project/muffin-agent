@@ -52,7 +52,14 @@ export type RerankOutcome = {
 
 export interface Reranker {
   readonly id: string;
-  rerank(query: string, candidates: RecallItem[], topK: number): Promise<RerankOutcome>;
+  /**
+   * `jobId` is spend attribution, not behaviour: when recall runs inside a
+   * scheduled job's turn, the reranker's model call must land on that job's
+   * ledger or the job's own ceiling (`BudgetEngine.jobMonthUsd`) is blind to
+   * it. Absent on every other recall — the interactive pre-turn recall, a
+   * deliberate `memory_search`, the CLI.
+   */
+  rerank(query: string, candidates: RecallItem[], topK: number, jobId?: string): Promise<RerankOutcome>;
 }
 
 /**
@@ -85,7 +92,7 @@ export class LlmReranker implements Reranker {
     this.id = `llm:${model}`;
   }
 
-  async rerank(query: string, candidates: RecallItem[], topK: number): Promise<RerankOutcome> {
+  async rerank(query: string, candidates: RecallItem[], topK: number, jobId?: string): Promise<RerankOutcome> {
     const asIs = (why: string, usage?: RerankOutcome['usage']): RerankOutcome => ({
       items: candidates.slice(0, topK),
       reordered: false,
@@ -129,6 +136,9 @@ export class LlmReranker implements Reranker {
         thinking: 'off' as const,
         temperature: 0,
         stream: false,
+        // Attribution only: the light lane copies it into the spend row. It is
+        // absent when recall is not a job's turn, which is most of the time.
+        ...(jobId === undefined ? {} : { jobId }),
       });
       text = result.text;
       usage = {

@@ -765,7 +765,7 @@ export function buildRuntime(
       spec: memorySearchSpec,
       // The tenant comes from the turn, never from this line. Baking it in here
       // is how a group member ends up reading the owner's memory.
-      handler: async (args, ctx) => searchMemory(recallDeps, ctx.tenant, args),
+      handler: async (args, ctx) => searchMemory(recallDeps, ctx.tenant, args, ctx.jobId),
       // Recalled memory is the grounding of the turn, not a payload the model
       // can re-fetch on a whim: clearing it to save context deletes the reason
       // the answer was anchored to anything.
@@ -787,7 +787,7 @@ export function buildRuntime(
       // runtime.
       capability: memoryCapability.id,
       spec: memoryWhySpec,
-      handler: async (args, ctx) => whyMemory(recallDeps, ctx.tenant, args),
+      handler: async (args, ctx) => whyMemory(recallDeps, ctx.tenant, args, ctx.jobId),
       // The provenance a "why" answer rests on is the turn's own grounding,
       // same as a `memory_search` hit — clearing it to save context would
       // strip the reason the answer was said in the first place.

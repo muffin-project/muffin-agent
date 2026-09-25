@@ -6,6 +6,8 @@ import { install, until, type Run } from '../harness.js';
 import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
 import { extraction } from '../provider.js';
 import { scenario } from '../scenario.js';
+import { MemoryStore } from '../../../core/memory/store.js';
+import { RERANK_MIN_CANDIDATES } from '../../../core/memory/rerank.js';
 
 /**
  * E · Economics and observability.
@@ -165,6 +167,100 @@ async function tettoPerJob(): Promise<void> {
   }
 }
 
+/**
+ * E1, la metà che il judge indipendente ha trovato mancante: la spesa del
+ * reranker dentro il turno di un job deve finire sul contatore di quel job.
+ *
+ * Il giro è quello vero — gateway, job schedulato, un turno che fa recall con
+ * abbastanza candidati da pagare il reranker — e l'asserzione è una riga di
+ * `spend` con `job_id` valorizzato e la capability della corsia light. Prima di
+ * questa slice quella riga aveva `job_id = NULL` (`LightSpend` non portava il
+ * job), quindi `jobMonthUsd` non la vedeva e il tetto per-job era cieco a ciò
+ * che il job aveva pagato. La riga del turno (`llm.chat`) c'era già: è la light
+ * quella che il judge chiedeva, ed è quella che si asserisce.
+ */
+async function rerankerSulJob(): Promise<void> {
+  const inst = await install({
+    main: [{ text: 'fatto' }],
+    // La corsia light serve tre chiamanti; qui conta il reranker.
+    // L'estrazione risponde vuota (il neutro onesto), il reranker ordina.
+    light: (request) =>
+      request.transcript.includes('Ordini frammenti') ? { text: '{"order":[0,1]}' } : extraction([]),
+    env: { MUFFIN_GATEWAY_TICK_MS: '300' },
+  });
+  try {
+    const gateway = await inst.gateway();
+    await gateway.waitFor(/muffin gateway/, 20_000);
+
+    const creato = await inst.muffin([
+      'jobs', 'add', '--cron', '0 8 * * *', '--channel', 'cli', '--per-job-usd', '5',
+      'riassumi la giornata',
+    ]);
+    if (creato.code !== 0) throw new Error(`jobs add --per-job-usd: exit ${creato.code}\n${creato.err}`);
+    const jobId = inst.db((d) => (d.prepare(`SELECT id FROM jobs`).get() as { id: string }).id);
+
+    // Abbastanza episodi che nominano la parola dell'obiettivo da superare
+    // `RERANK_MIN_CANDIDATES`: sotto quella soglia `recall` non paga affatto il
+    // reranker, e lo scenario non proverebbe niente.
+    const db = new DatabaseCtor(join(inst.home, 'muffin.db'));
+    try {
+      const store = new MemoryStore(db);
+      const now = new Date().toISOString();
+      for (let i = 0; i < RERANK_MIN_CANDIDATES + 4; i++) {
+        store.addEpisode({
+          tenantId: 'host',
+          connector: 'cli',
+          threadKey: 'fixture',
+          role: 'user',
+          kind: 'message',
+          content: `giornata numero ${i}`,
+          trustTier: 0,
+          createdAt: now,
+        });
+      }
+      db.prepare(`UPDATE jobs SET next_fire_at = ?`).run(new Date(Date.now() - 60_000).toISOString());
+    } finally {
+      db.close();
+    }
+
+    await until(
+      () =>
+        inst.db(
+          (d) => (d.prepare(`SELECT COUNT(*) AS n FROM turns WHERE status = 'done'`).get() as { n: number }).n,
+        ) >= 1,
+      60_000,
+    );
+
+    // Il reranker è stato davvero chiamato: se non lo fosse, la riga di spesa
+    // che cerchiamo non potrebbe esistere e lo scenario passerebbe per il
+    // motivo sbagliato.
+    const rerank = inst.provider.requests.find((r) => r.transcript.includes('Ordini frammenti'));
+    if (!rerank) throw new Error('il reranker non è stato chiamato: la fixture non supera RERANK_MIN_CANDIDATES');
+
+    const righe = inst.db(
+      (d) =>
+        d.prepare(`SELECT capability, model FROM spend WHERE job_id = ?`).all(jobId) as Array<{
+          capability: string;
+          model: string;
+        }>,
+    );
+    const light = righe.filter((r) => r.capability === 'system.consolidation');
+    if (light.length === 0) {
+      throw new Error(
+        `nessuna spesa della corsia light attribuita al job: la riga del reranker non porta job_id\n` +
+          `righe per il job: ${JSON.stringify(righe)}`,
+      );
+    }
+    if (light.some((r) => r.model !== rerank.model)) {
+      throw new Error(`la riga light non nomina il modello servito: ${JSON.stringify(light)} vs ${rerank.model}`);
+    }
+
+    await gateway.stop();
+  } finally {
+    await inst.cleanup();
+  }
+}
+
 describe('acceptance · E · economia e osservabilità', () => {
   scenario(
     'E1',
@@ -204,8 +300,12 @@ describe('acceptance · E · economia e osservabilità', () => {
 
       // --- (b) il tetto PER-JOB: un job che ha già speso il suo non parte.
       await tettoPerJob();
+
+      // --- (c) e la spesa che il job *ha* fatto conta: il reranker che il suo
+      //     turno paga finisce sul contatore del job, non su nessuno.
+      await rerankerSulJob();
     },
-    180_000,
+    240_000,
   );
 
   scenario(
