@@ -1,11 +1,17 @@
+import { randomBytes } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import type { Principal } from '../../core/policy/types.js';
-import type { ContinuableReason } from '../../core/turns/store.js';
+import { SessionStore } from '../../core/session/store.js';
+import { TurnStore, type ContinuableReason, type TurnCounters } from '../../core/turns/store.js';
 import {
   CONTINUATION_TTL_MS,
+  askWhichContinuation,
   buildFreshCounters,
   isContinuationAsk,
-  noteAmbiguity,
   resolveContinuation,
   resolveFollowup,
   routeContinuationTarget,
@@ -29,6 +35,9 @@ function rowsFor(ids: string[]) {
       ids
         .map((id, i) => ({ id, updatedAt: `2026-09-18T17:1${i}:00.000Z`, reason: reason() }))
         .filter((r) => r.updatedAt >= since),
+    // These rows carry no pending ambiguity question: the followup layer reads
+    // none, so only `single`/`none`/`ambiguous` remain for the bind-time test.
+    latestContinuationQuestion: () => null,
   };
 }
 
@@ -105,38 +114,137 @@ describe('resolveContinuation · 0 / 1 / N candidates', () => {
   });
 });
 
-describe('ambiguity followups · transient, positional or by id', () => {
+describe('ambiguity followups · durable, positional or by id', () => {
   const candidates: ContinuationCandidate[] = [
     { id: 'aaa111aaa111', updatedAt: '2026-09-18T17:10:00.000Z', summary: 'turno provider_empty' },
     { id: 'bbb222bbb222', updatedAt: '2026-09-18T17:12:00.000Z', summary: 'turno provider_empty' },
   ];
 
+  const counters: TurnCounters = {
+    iterations: 0,
+    recoveriesUsed: 0,
+    transportRetriesLeft: 10,
+    truncationsUsed: 0,
+    toolCallsMade: 0,
+    nudgedForCompletion: false,
+    usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    spentUsd: 0,
+    resumes: 0,
+    contextBuilt: false,
+    activeModelMs: 0,
+  };
+
+  /**
+   * Un vero `TurnStore` su un database SQLite in memoria, orologio fissato a
+   * `NOW`: la domanda è una riga, non una voce di mappa. `askWhichContinuation`
+   * scrive i candidati sulla riga della domanda (`setContinuationCandidates`),
+   * e qui si ripercorre esattamente quella scrittura.
+   */
+  function questionAt(now: number, sessionId = 'owner'): TurnStore {
+    const store = new TurnStore(new Database(':memory:'), () => new Date(now));
+    const record = store.create({
+      id: randomBytes(16).toString('hex'),
+      principal: owner,
+      tenant: 'host',
+      surface: 'telegram',
+      sessionId,
+      model: 'test-model',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'riprendi' }] }],
+      taint: 0,
+      counters,
+    });
+    store.setContinuationCandidates(record.id, candidates);
+    return store;
+  }
+
   it.each([['il primo', 'aaa111aaa111'], ['1', 'aaa111aaa111'], ['il secondo', 'bbb222bbb222'], ['2', 'bbb222bbb222']])(
     'positional: %s',
     (text, id) => {
-      noteAmbiguity('owner', candidates, NOW);
-      expect(resolveFollowup('owner', text, NOW + 1000)?.turnId).toBe(id);
+      expect(resolveFollowup(questionAt(NOW), 'owner', text, NOW + 1000)?.turnId).toBe(id);
     },
   );
 
   it('id prefix resolves', () => {
-    noteAmbiguity('owner', candidates, NOW);
-    expect(resolveFollowup('owner', 'bbb222', NOW + 1000)?.turnId).toBe('bbb222bbb222');
+    expect(resolveFollowup(questionAt(NOW), 'owner', 'bbb222', NOW + 1000)?.turnId).toBe('bbb222bbb222');
   });
 
   it('anything else is ordinary conversation and keeps the question pending', () => {
-    noteAmbiguity('owner', candidates, NOW);
-    expect(resolveFollowup('owner', 'lascia stare', NOW + 1000)).toBeNull();
-    expect(resolveFollowup('owner', 'il primo', NOW + 1000)?.turnId).toBe('aaa111aaa111');
+    const store = questionAt(NOW);
+    expect(resolveFollowup(store, 'owner', 'lascia stare', NOW + 1000)).toBeNull();
+    expect(resolveFollowup(store, 'owner', 'il primo', NOW + 1000)?.turnId).toBe('aaa111aaa111');
   });
 
-  it('an expired question resolves nothing', () => {
-    noteAmbiguity('owner', candidates, NOW);
-    expect(resolveFollowup('owner', 'il primo', NOW + 11 * 60 * 1000)).toBeNull();
+  it('a question older than the TTL resolves nothing', () => {
+    expect(resolveFollowup(questionAt(NOW), 'owner', 'il primo', NOW + 11 * 60 * 1000)).toBeNull();
   });
 
   it('no question resolves nothing', () => {
-    expect(resolveFollowup('sessione-mai-vista', 'il primo', NOW)).toBeNull();
+    expect(resolveFollowup(new TurnStore(new Database(':memory:')), 'owner', 'il primo', NOW)).toBeNull();
+  });
+
+  /**
+   * La durabilità è il punto della correzione. Due handle distinti sullo stesso
+   * database non condividono **niente** tranne le righe: la mappa in RAM che
+   * questa funzione sostituiva perdeva la domanda a ogni riavvio del gateway
+   * (l'owner ne fa molti), e il numero digitato diventava conversazione
+   * ordinaria. MUTATION-PROVABLE: se `resolveFollowup` rileggesse una mappa di
+   * processo invece della riga, questo handle non troverebbe nulla.
+   */
+  it('durable: a question written by one store resolves through a second handle over the same database', () => {
+    const db = new Database(':memory:');
+    const writer = new TurnStore(db, () => new Date(NOW));
+    const record = writer.create({
+      id: randomBytes(16).toString('hex'),
+      principal: owner,
+      tenant: 'host',
+      surface: 'telegram',
+      sessionId: 'owner',
+      model: 'test-model',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'riprendi' }] }],
+      taint: 0,
+      counters,
+    });
+    writer.setContinuationCandidates(record.id, candidates);
+
+    const reader = new TurnStore(db, () => new Date(NOW + 1000));
+    expect(resolveFollowup(reader, 'owner', 'il secondo', NOW + 1000)?.turnId).toBe('bbb222bbb222');
+  });
+
+  /**
+   * La scrittura è l'altra metà della cucitura, e va provata dal punto in cui
+   * la produzione la esegue: `askWhichContinuation`. Un test che chiama
+   * `setContinuationCandidates` a mano resta verde anche se quella riga
+   * sparisce dal loop (reperto della review di PR #707). Qui il file è reale e
+   * l'handle di lettura è aperto dopo la chiusura di quello di scrittura:
+   * MUTATION-PROVABLE — senza la scrittura nel loop, nessun candidato esiste
+   * sulla riga e la risposta numerica non risolve più.
+   */
+  it('the question the loop writes resolves through a fresh handle over the same file', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-continuation-'));
+    try {
+      const dbPath = join(dir, 'turns.db');
+      const writerDb = new Database(dbPath);
+      const writer = new TurnStore(writerDb, () => new Date(NOW));
+      const sessions = new SessionStore(dir);
+      await askWhichContinuation(
+        { turns: writer, sessions, model: 'test-model', now: () => new Date(NOW) },
+        {
+          principal: owner,
+          tenant: 'host',
+          surface: 'telegram',
+          sessionId: 'owner',
+          session: sessions.open('owner'),
+          text: 'riprendi',
+          candidates,
+        },
+      );
+      writerDb.close();
+
+      const reader = new TurnStore(new Database(dbPath), () => new Date(NOW + 1000));
+      expect(resolveFollowup(reader, 'owner', 'il secondo', NOW + 1000)?.turnId).toBe('bbb222bbb222');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
