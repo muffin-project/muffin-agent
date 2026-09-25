@@ -765,7 +765,7 @@ export function buildRuntime(
       spec: memorySearchSpec,
       // The tenant comes from the turn, never from this line. Baking it in here
       // is how a group member ends up reading the owner's memory.
-      handler: async (args, ctx) => searchMemory(recallDeps, ctx.tenant, args),
+      handler: async (args, ctx) => searchMemory(recallDeps, ctx.tenant, args, ctx.jobId),
       // Recalled memory is the grounding of the turn, not a payload the model
       // can re-fetch on a whim: clearing it to save context deletes the reason
       // the answer was anchored to anything.
@@ -787,7 +787,7 @@ export function buildRuntime(
       // runtime.
       capability: memoryCapability.id,
       spec: memoryWhySpec,
-      handler: async (args, ctx) => whyMemory(recallDeps, ctx.tenant, args),
+      handler: async (args, ctx) => whyMemory(recallDeps, ctx.tenant, args, ctx.jobId),
       // The provenance a "why" answer rests on is the turn's own grounding,
       // same as a `memory_search` hit — clearing it to save context would
       // strip the reason the answer was said in the first place.
@@ -805,7 +805,18 @@ export function buildRuntime(
       capability: memoryForgetCapability.id,
       spec: memoryForgetSpec,
       handler: async (args, ctx) =>
-        forgetMemory(recallDeps, { tenant: ctx.tenant, turnId: ctx.turnId }, args),
+        forgetMemory(
+          recallDeps,
+          {
+            tenant: ctx.tenant,
+            turnId: ctx.turnId,
+            // Il job di questo turno, quando c'è: la prima chiamata di
+            // `memory_forget` fa recall e paga il reranker, quindi quella spesa
+            // deve finire sul contatore del job come le altre due strade.
+            ...(ctx.jobId === undefined ? {} : { jobId: ctx.jobId }),
+          },
+          args,
+        ),
       // Its answer is either the candidate list (built from recalled text,
       // tiered to the worst source) or the durable result; only a storage or
       // lock error escapes.
