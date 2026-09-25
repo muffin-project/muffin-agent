@@ -1661,18 +1661,17 @@ function defaultsDriftCheck(
 /**
  * The `ok('sandbox', …)` line, honest about which mechanism actually held.
  *
- * A green "sandbox: contained" reads as parity between platforms, and it is
- * not: `SandboxManager.baseConfig` (core/sandbox/executor.ts) sets
- * `allowAllUnixSockets: true` on Linux only — two open upstream bugs (#428,
- * #429) block the seccomp layer that would otherwise deny them — so bubblewrap
- * holding today says less than seatbelt holding does. One line, not the essay
- * this comment is: doctor.ts owns being read at a glance.
+ * It used to append a Linux caveat — "weaker than macOS: Unix-socket hardening
+ * is off" — because `networkOff()` set `allowAllUnixSockets: true` there
+ * (upstream #428/#429). Since the filter is requested and behaviorally verified
+ * before `verify()` reports `available` (core/sandbox/executor.ts; an
+ * unfiltered or unprovable host reads as unavailable), that caveat would now
+ * be the false half: both mechanisms deny `socket(AF_UNIX, …)` by default.
+ * One line, not the essay this comment is: doctor.ts owns being read at a
+ * glance.
  */
 export function sandboxOkDetail(sandbox: Extract<SandboxProbe, { available: true }>): string {
-  const base = `${sandbox.mechanism}: a real containment ran and held`;
-  return sandbox.mechanism === 'bubblewrap'
-    ? `${base} — weaker than macOS: Unix-socket hardening is off on Linux (allowAllUnixSockets, #428/#429)`
-    : base;
+  return `${sandbox.mechanism}: a real containment ran and held`;
 }
 
 /**

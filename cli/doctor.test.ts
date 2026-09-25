@@ -985,11 +985,15 @@ describe('sandboxOkDetail — the sandbox "ok" line is honest about which platfo
     expect(line).not.toContain('weaker');
   });
 
-  it('names the Linux gap on bubblewrap — Unix-socket hardening is off there (executor.ts, #428/#429)', async () => {
+  it('claims no Linux gap on bubblewrap: `available` already means the AF_UNIX filter held', async () => {
+    // The caveat this test used to pin ("weaker than macOS") described the
+    // `allowAllUnixSockets: true` era. `verify()` now reports `available` only
+    // after the behavioral seccomp leg held, so the caveat would be false on
+    // every host doctor can print this line for.
     const line = sandboxOkDetail({ available: true, mechanism: 'bubblewrap' });
     expect(line).toContain('bubblewrap');
-    expect(line.toLowerCase()).toContain('weaker');
-    expect(line).toMatch(/unix.socket/i);
+    expect(line.toLowerCase()).not.toContain('weaker');
+    expect(line).not.toMatch(/unix.socket/i);
   });
 });
 

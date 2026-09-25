@@ -277,8 +277,10 @@ the kernel does when a request is above it now depends on the row:
 - **`host`** — there is no above any more. `denyAbove` is `3`, because every
   capability on that row is already covered by another defence: `fs.write` is a
   `draft` with a journal and `muffin undo`, `sys.shell` is the read-only lane
-  (no writes outside scratch; direct IP networking is disabled, while reachable
-  AF_UNIX sockets remain a local-service residual on Linux) and asks since
+  (no writes outside scratch; direct IP networking is disabled and, on Linux,
+  `socket(AF_UNIX, …)` is refused by a seccomp filter that is requested and
+  behaviorally verified before any command runs — a host where it cannot hold
+  refuses every contained invocation) and asks since
   ADR-0091 because whole-host reads disclose data, and `sys.shell.write` and
   `sys.process.kill` are `reversible: 'no'` and therefore ask at every tier,
   0 and 3 alike. The prohibition removed nothing from an attacker; it removed
@@ -599,13 +601,20 @@ judgement about how dangerous commands are.
 readable minus a finite deny-read list (not just the project — §9.2 names what
 that costs), writes are confined to a scratch directory this
 process creates under the system temp dir and removes when the session ends, and
-direct IP networking is disabled. This does not block every Linux AF_UNIX
-endpoint, so local-service effects are not ruled out. The Muffin gateway socket
-and pointer are deny-listed; a previous candidate proved the direct path, and
-this candidate adds the long-home fallback to the composed Linux test (pending
-the current exact-SHA Actions result; see §9.3). It declares `risk: 'high'`:
+direct IP networking is disabled. On Linux the AF_UNIX seccomp filter is
+requested and behaviorally verified (three-legged self-test: an unsandboxed
+control connects, the contained client must not), so a contained command
+cannot open `socket(AF_UNIX, …)` at all; on macOS the Seatbelt profile has
+always blocked Unix sockets by default. A host where the filter cannot be
+applied refuses every contained invocation before it runs — the shell tools
+may still be registered by the synchronous build path (which reads the narrow
+probe), and `doctor`, which verifies, prints the reason; the guarantee is
+that no command ever runs unfiltered. The Muffin gateway
+socket and pointer are additionally deny-listed, and the long-home fallback is
+covered by the composed Linux test (see §9.3). It declares `risk: 'high'`:
 although filesystem writes stay in scratch and direct IP networking is
-disabled, reachable Linux AF_UNIX sockets can still change local services.
+disabled, a contained command still reads a broad host filesystem and spends
+the host's resources.
 `risk` governs safe mode and the budget, not the ask. Since ADR-0091
 (2026-09-22, on the Linux measurement in §9.2 / issue #645), it also declares
 `reversible: 'no'`: what a command reads reaches the model and a disclosure
@@ -629,20 +638,28 @@ Three properties of this split are load-bearing:
   handed the workspace by a mistaken caller. The two lanes are two tools with
   two capability ids, decided by the kernel before a handler runs, rather than
   one tool branching on a parameter the model wrote.
-- **Neither lane exists where containment cannot be proved.** The read-only lane
+- **Neither lane runs where containment cannot be proved.** The read-only lane
   is the stricter of the two and its promise *is* the sandbox's promise, so a
   host with a negative `probeSandbox` gets no shell at all — never the read-only
   one as a "safe fallback", and never a silent fall back to the writing one. The
-  tool says the command must be run by hand or with a dedicated tool.
-- **What it does not claim.** Three residuals are declared rather than implied.
-  On Linux `network.allowAllUnixSockets` is on — srt's seccomp layer, the only
-  thing that blocks `socket(AF_UNIX, …)`, is broken on Ubuntu 24.04 (upstream
-  #428/#429) — and `--unshare-net` does not cover Unix sockets, which are
-  filesystem objects: a socket reachable under the read-only bind is reachable
-  from the read-only lane, *except* what `denyRead` hides. Since 2026-09-21
-  that list carries the gateway control socket and its pointer file (#638).
-  The gateway socket path and long-home fallback path (hashed socket under
-  Node's configured temp root plus `gateway.sock.path`) are deny-listed. The
+  tool says the command must be run by hand or with a dedicated tool. A host
+  whose probe is green but whose real invocation cannot hold (the verified half,
+  including an AF_UNIX filter that cannot be applied) refuses every contained
+  command: the lanes may be listed by the synchronous build path, and no command
+  ever runs unfiltered.
+- **What it does not claim.** Two residuals are declared rather than implied.
+  On Linux the AF_UNIX seccomp filter is requested (`allowAllUnixSockets:
+  false`) and verified at boot through the real execution door; the measured
+  refusal is `EPERM` from `socket(AF_UNIX, …)`, so a contained command cannot
+  reach *any* local service socket — including other installations' — and a
+  host where `apply-seccomp` cannot obtain its capability (Ubuntu AppArmor
+  profile, upstream #428/#429) refuses every contained invocation before it
+  runs (`doctor`, which verifies, prints the reason). The gateway control
+  socket and pointer file (#638) remain deny-listed as defence in depth and
+  because the deny is what covers macOS, where Seatbelt blocks Unix sockets
+  by default. The gateway socket path and long-home fallback path (hashed
+  socket under Node's configured temp root plus `gateway.sock.path`) are
+  deny-listed. The
   fallback resolves that root and fails closed unless each ancestor is owned
   by root/current UID, with the sticky bit required on writable shared
   ancestors; macOS additionally rejects any ACL in the ancestry and fails
@@ -652,15 +669,13 @@ Three properties of this split are load-bearing:
   socket/private-directory permissions under umask `022`, a separate-UID
   connection, and rejection of a world-writable non-sticky `TMPDIR` before
   bind/pointer publication; the macOS unit test rejects a temp ancestry with
-  an ACL granting `add_file` and `delete_child`. These checks remain
-  unverified until the required Actions run on the exact candidate with
-  `MUFFIN_REQUIRE_SANDBOX=1`.
-  Sockets of *other*
-  installations on the same machine stay reachable:
-  the deny names this home's channel, not every home's.
+  an ACL granting `add_file` and `delete_child`. The AF_UNIX filter itself is
+  measured on the production-side Linux runner (evidence
+  `docs/evidence/af-unix-seccomp-2026-09-26.md`).
   And a command still spends the host's CPU, memory and
   file descriptors. So `sys.shell` stays on the `host` effect row rather than
-  moving to `context`: "no writes outside the scratch and no IP network" is the
+  moving to `context`: "no writes outside the scratch, no IP network and no
+  reachable local socket" is the
   claim; "no effect of any kind on the host" is not — and since ADR-0091 the
   ask covers the half the boundary cannot: the read.
 
@@ -677,9 +692,9 @@ Reads are allow-by-default: `--ro-bind / /` minus a finite `denyRead`.
 Applications, credential stores and private folders appear continuously, so the
 list protects known secrets without ever expressing "this turn may inspect the
 project, not the whole machine". Stdout reaches the model (fenced, `DISK_TIER`),
-so an injected `cat ~/…` discloses to the provider. Writes stay in scratch and
-direct IP networking is disabled, but reachable AF_UNIX sockets remain a
-local-service residual as described above. The exposure is documented in
+so an injected `cat ~/…` discloses to the provider. Writes stay in scratch,
+direct IP networking is disabled, and on Linux `socket(AF_UNIX, …)` is refused
+by the verified seccomp filter as described above. The exposure is documented in
 executable form by an
 `it.fails` canary in `confine-sola-lettura.test.ts` that must be flipped to a
 plain assertion the day reads become allow-scoped. Measured on Linux

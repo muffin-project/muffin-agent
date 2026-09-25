@@ -854,10 +854,11 @@ export function buildRuntime(
   if (contained) {
     // Both lanes or neither (ADR-0074 punto 4). The read-only one is not a fallback
     // for a host where containment failed — it is the *stricter* of the two and
-    // rests on the same probe: `runReadOnly` confines writes to scratch and
-    // disables direct IP networking, but Linux AF_UNIX can still reach local
-    // services except where `denyRead` hides their sockets. A host that cannot
-    // prove the declared containment cannot offer either lane. Registering it alone there
+    // rests on the same probe: `runReadOnly` confines writes to scratch,
+    // disables direct IP networking, and on Linux cannot open Unix-domain
+    // sockets (the filter is requested and verified before any command runs).
+    // A host that cannot
+    // prove the declared containment cannot run either lane. Registering it alone there
     // would be the silent degradation the ADR forbids, pointed the other way.
     tools.push(
       makeShellTool(executor, { root: workspace }),
