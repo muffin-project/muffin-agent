@@ -277,7 +277,8 @@ the kernel does when a request is above it now depends on the row:
 - **`host`** — there is no above any more. `denyAbove` is `3`, because every
   capability on that row is already covered by another defence: `fs.write` is a
   `draft` with a journal and `muffin undo`, `sys.shell` is the read-only lane
-  (no writes outside the scratch, no network), and `sys.shell.write` and
+  (no writes outside scratch; direct IP networking is disabled, while reachable
+  AF_UNIX sockets remain a local-service residual on Linux), and `sys.shell.write` and
   `sys.process.kill` are `reversible: 'no'` and therefore ask at every tier,
   0 and 3 alike. The prohibition removed nothing from an attacker; it removed
   the owner's ability to say yes.
@@ -593,9 +594,9 @@ judgement about how dangerous commands are.
 subject to the deny-read list, writes are confined to a scratch directory this
 process creates under the system temp dir and removes when the session ends, and
 there is no IP network. It declares `reversible: 'yes'` and `risk: 'low'`, and
-the kernel therefore lets it run without asking anyone. That is the whole
-argument: a command that cannot write outside a throwaway directory has nothing
-to undo, and a command with no socket has sent nothing. Both halves are executed
+the kernel therefore lets it run without asking anyone. That policy classification bounds filesystem writes and direct IP networking;
+it is not a no-side-effects guarantee on Linux, where reachable AF_UNIX sockets
+may still interact with local services (see the residual below). Both halves are executed
 against a live sandbox in `core/sandbox/confine-sola-lettura.test.ts`, on Linux
 under `bwrap` in the GitHub Actions `verifica` job and on macOS under
 seatbelt.

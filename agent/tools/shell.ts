@@ -61,9 +61,9 @@ export const shellCapability: CapabilityDecl = {
   // `fs_read`. Two residuals keep it here, both declared in `docs/architecture/SECURITY.md`
   // §9: on Linux `allowAllUnixSockets` leaves AF_UNIX reachable (srt's seccomp
   // layer is off, upstream #428/#429), and a command still spends the host's
-  // CPU and file descriptors. "Nothing leaves and nothing is written" is the
-  // claim this declaration makes; "no effect of any kind on the host" is not,
-  // and moving the row would have asserted it.
+  // CPU and file descriptors. Its bounded guarantees are no direct IP network
+  // and no writes outside scratch; reachable AF_UNIX sockets may still affect
+  // local services. Do not describe this lane as having no possible side effects.
   effect: 'host',
   // The lane the sandbox makes reversible by construction, so ADR-0074 punto 4's
   // condition is met and only then does it stop asking. Not a judgement that
@@ -125,8 +125,10 @@ const shellSpec: ToolSpec = {
   name: 'shell_run',
   description:
     'Run a non-interactive shell command that only LOOKS at things — the default way to run a command, and the ' +
-    'one that does not interrupt the owner. Inside the sandbox: the filesystem is readable, writes go nowhere ' +
-    'except a scratch directory, and there is no network at all. Use it when you need to observe something no ' +
+    'one that does not interrupt the owner. Inside the sandbox, the host filesystem is readable subject to ' +
+    'deny-read rules, writes are confined to a temporary scratch directory, and direct IP networking is disabled. ' +
+    'On Linux, reachable AF_UNIX sockets can still interact with local services, so local-service effects are not ' +
+    'ruled out. Use it when you need to observe something no ' +
     'dedicated tool wraps: `ls`, `lsof`, `sqlite3 -readonly`, `env`, `ps`, `df`, `du`, `git status`, `git log`, ' +
     '`wc`, `find`, a dry run. Not for what a dedicated tool answers better than parsed text — `cat`/`ls` of a ' +
     'known file (fs_read, fs_list), a search in the files (fs_search), `ps` (process_list), a question about this ' +
@@ -153,8 +155,9 @@ const shellWriteSpec: ToolSpec = {
     '`grep`, `git status`): that one runs without interrupting anyone. Not for `echo … >` a single file (fs_write), ' +
     '`kill` (process_kill), or a URL you already have a tool for (http_get, web_search). Use it when the task ' +
     'genuinely needs a program none of the above wraps — a build, a test suite, an install, a one-off script that ' +
-    'writes. Writes are confined to the working directory and a scratch TMPDIR; there is no network access. The ' +
-    'working directory does NOT persist between calls — pass cwd each time. Returns the exit code, stdout and ' +
+    'writes. Writes are confined to the working directory and a scratch TMPDIR; direct IP networking is disabled. ' +
+    'On Linux, reachable AF_UNIX sockets can still interact with local services, so those effects are not ruled out. ' +
+    'The working directory does NOT persist between calls — pass cwd each time. Returns the exit code, stdout and ' +
     'stderr; output over ~30k characters is cut head-and-tail with an explicit marker. An unhandled failure ' +
     'anywhere fails the whole call — a pipeline fails if any stage fails, and a sequence stops at the first ' +
     'failing command, so check the effect happened instead of reading on past it. A failure you handle in the ' +
