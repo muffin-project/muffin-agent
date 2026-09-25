@@ -18,7 +18,7 @@ while authority stays explicit and under your control.
 
 [Why Muffin](docs/product/THESIS.md) · [Vision](docs/product/VISION.md) · [Cognitive design](docs/product/COGNITIVE-DESIGN.md) · [Architecture](docs/architecture/ARCHITECTURE.md) · [Security](docs/architecture/SECURITY.md)
 
-<sub><strong>COMMUNITY PREVIEW · PRE-DAY-1</strong> — the runtime works; the product is still being hardened for real daily use.</sub>
+<sub><strong>SOURCE-PUBLIC · PRE-ALPHA</strong> — the code is open for inspection and contributions; the product is still being hardened for real daily use.</sub>
 
 </div>
 
@@ -222,12 +222,10 @@ it. What you do not install should not exist in your Muffin.
 
 </details>
 
-## Road to open source
+## Road to product alpha
 
 ```text
-owner DAY-1
-    ↓
-source-public / pre-alpha — inspectable and contributable, not product alpha
+source-public / pre-alpha (current)
     ↓
 14 days of real daily use
     ↓

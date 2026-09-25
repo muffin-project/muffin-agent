@@ -10,26 +10,13 @@ understand what Muffin defends against and why.
 
 ## Reporting a vulnerability
 
-While this repository is private, report security issues confidentially to
-**[ciao@giusto.dev](mailto:ciao@giusto.dev)**. Do not include real owner data,
+GitHub's private vulnerability reporting is not currently enabled for this
+repository. Until it is enabled, report vulnerabilities confidentially by
+email to **[ciao@giusto.dev](mailto:ciao@giusto.dev)**.
+
+Do not open a public issue for a security report. Do not include real owner data,
 Muffin Home contents, database dumps or credentials unless they are strictly
 necessary to reproduce the issue; prefer redacted fixtures and placeholders.
-
-Once the repository becomes public, **GitHub Private Vulnerability Reporting**
-will become the preferred intake path:
-
-**Security** tab → **Report a vulnerability**.
-
-GitHub's documentation describes that private-advisory flow here:
-<https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability>.
-
-Private Vulnerability Reporting is available only for public repositories, so
-the email route above remains the confidential preview channel until the
-visibility cutover. After PVR is enabled, `ciao@giusto.dev` remains a fallback
-project contact rather than replacing the private advisory workflow.
-
-**Please do not open a public issue for a security report.** A public issue is
-readable by anyone before a fix ships.
 
 ## What to include
 
