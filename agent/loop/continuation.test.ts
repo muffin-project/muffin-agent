@@ -1,10 +1,15 @@
 import { randomBytes } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import type { Principal } from '../../core/policy/types.js';
+import { SessionStore } from '../../core/session/store.js';
 import { TurnStore, type ContinuableReason, type TurnCounters } from '../../core/turns/store.js';
 import {
   CONTINUATION_TTL_MS,
+  askWhichContinuation,
   buildFreshCounters,
   isContinuationAsk,
   resolveContinuation,
@@ -203,6 +208,43 @@ describe('ambiguity followups · durable, positional or by id', () => {
 
     const reader = new TurnStore(db, () => new Date(NOW + 1000));
     expect(resolveFollowup(reader, 'owner', 'il secondo', NOW + 1000)?.turnId).toBe('bbb222bbb222');
+  });
+
+  /**
+   * La scrittura è l'altra metà della cucitura, e va provata dal punto in cui
+   * la produzione la esegue: `askWhichContinuation`. Un test che chiama
+   * `setContinuationCandidates` a mano resta verde anche se quella riga
+   * sparisce dal loop (reperto della review di PR #707). Qui il file è reale e
+   * l'handle di lettura è aperto dopo la chiusura di quello di scrittura:
+   * MUTATION-PROVABLE — senza la scrittura nel loop, nessun candidato esiste
+   * sulla riga e la risposta numerica non risolve più.
+   */
+  it('the question the loop writes resolves through a fresh handle over the same file', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-continuation-'));
+    try {
+      const dbPath = join(dir, 'turns.db');
+      const writerDb = new Database(dbPath);
+      const writer = new TurnStore(writerDb, () => new Date(NOW));
+      const sessions = new SessionStore(dir);
+      await askWhichContinuation(
+        { turns: writer, sessions, model: 'test-model', now: () => new Date(NOW) },
+        {
+          principal: owner,
+          tenant: 'host',
+          surface: 'telegram',
+          sessionId: 'owner',
+          session: sessions.open('owner'),
+          text: 'riprendi',
+          candidates,
+        },
+      );
+      writerDb.close();
+
+      const reader = new TurnStore(new Database(dbPath), () => new Date(NOW + 1000));
+      expect(resolveFollowup(reader, 'owner', 'il secondo', NOW + 1000)?.turnId).toBe('bbb222bbb222');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
