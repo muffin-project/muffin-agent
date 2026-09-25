@@ -3,13 +3,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { runInit } from '../../cli/init.js';
 import { toolContext } from '../../agent/fixtures/tool-context.js';
 import { attachMcp, buildRuntime, type Runtime } from '../../agent/runtime.js';
-import { pinTools, saveMcpRegistry } from '../../core/mcp/registry.js';
-import { connectServer } from '../../core/mcp/connect.js';
-import { probeSandbox } from '../../core/sandbox/probe.js';
+import { runInit } from '../../cli/init.js';
 import { isSameOrNestedPath } from '../../core/config/workspace.js';
+import { connectServer } from '../../core/mcp/connect.js';
+import { pinTools, saveMcpRegistry } from '../../core/mcp/registry.js';
+import { probeSandbox } from '../../core/sandbox/probe.js';
+import { assessShellBoundary } from '../../core/sandbox/shell-boundary.js';
 
 /**
  * The M3 definition of done, asserted against the PRODUCTION assembly.
@@ -52,7 +53,15 @@ import { isSameOrNestedPath } from '../../core/config/workspace.js';
  * arrivata al file accanto.
  */
 const probe = probeSandbox();
-const contained = probe.available;
+/**
+ * The shared boundary (#642), not `probe.available`: these `runIf` gates must
+ * match what `buildRuntime` registers. A green probe on bubblewrap with an
+ * unverified patch posture exposes no shell tools — running the shell
+ * acceptance against a runtime that refused them would be a different claim
+ * than "the registered shell is contained".
+ */
+const boundary = assessShellBoundary(probe);
+const contained = boundary.usable;
 /**
  * Dove il contenimento *deve* essere dimostrabile, un salto è un difetto.
  * Impostata in CI, sul runner che sta al posto della VPS di produzione; assente
@@ -66,10 +75,12 @@ const containmentRequired = process.env['MUFFIN_REQUIRE_SANDBOX'] === '1';
 describe('questa accettazione dichiara se il sandbox ha davvero girato', () => {
   it('o il contenimento c’è, o il salto è dichiarato — e dove era richiesto, saltare è fallire', () => {
     if (contained) return;
-    const perche = probe.available ? '' : `${probe.reason}: ${probe.detail}`;
+    // The boundary's own reason — behavioral failure OR unverified patch
+    // posture (#642) — so a required-host red names the half that is missing.
+    const perche = boundary.reason;
     if (containmentRequired) {
       throw new Error(
-        `MUFFIN_REQUIRE_SANDBOX=1 e su questo host non c'è contenimento — ${perche}. ` +
+        `MUFFIN_REQUIRE_SANDBOX=1 e su questo host la shell boundary non è usable — ${perche}. ` +
           `La riga di DoD "un comando da CLI gira dentro il sandbox" non è stata verificata, ` +
           `e questo rosso è la variabile che funziona: un contenimento saltato non deve mai leggersi come passato.`,
       );
@@ -101,9 +112,25 @@ describe('M3 acceptance — through the production runtime', () => {
     // Not a hand-built kernel: runtime.deps.decide is the one buildRuntime wired
     // from the sealed root of trust. This is the DoD isolation line.
     const decide = runtime.deps.decide;
-    const chiedi = (principal: Parameters<typeof decide>[0]['principal'], tenant: string, capability: string) =>
-      decide({ principal, tenant, capability, resource: { kind: 'none' }, args: { command: 'ls' }, taint: 0 });
-    const member = { kind: 'member', connector: 'telegram', tenantId: 'group:t:1', externalId: 'u9' } as const;
+    const chiedi = (
+      principal: Parameters<typeof decide>[0]['principal'],
+      tenant: string,
+      capability: string,
+    ) =>
+      decide({
+        principal,
+        tenant,
+        capability,
+        resource: { kind: 'none' },
+        args: { command: 'ls' },
+        taint: 0,
+      });
+    const member = {
+      kind: 'member',
+      connector: 'telegram',
+      tenantId: 'group:t:1',
+      externalId: 'u9',
+    } as const;
 
     // Both lanes: `hostOnly` is what refuses a member, and it is declared on
     // each capability separately — a split that gave the new one a different
@@ -117,11 +144,13 @@ describe('M3 acceptance — through the production runtime', () => {
     // The lane that writes, for the owner in single-user mode, is an ask and
     // never a silent allow (threat model §g), proven through the same kernel.
     expect(chiedi(owner, 'host', 'sys.shell.write').effect).toBe('ask');
-    // And the lane that cannot write does not ask — the cell ADR-0074 punto 4 moved.
+    // And the read-only lane asks too — since ADR-0091 (Linux measurement
+    // 2026-09-22, #645) whole-host reads are disclosure, `reversible: 'no'`,
+    // and the cell ADR-0074 punto 4 had opened is closed again.
     // Asserted here and not only in the unit suite because this is the kernel
     // the *assembled runtime* wired from the sealed root of trust: a policy.json
-    // that put the ask back would show up here and nowhere else.
-    expect(chiedi(owner, 'host', 'sys.shell').effect).toBe('allow');
+    // that flipped this back to `allow` would show up here and nowhere else.
+    expect(chiedi(owner, 'host', 'sys.shell').effect).toBe('ask');
   });
 
   it('every M3 capability the runtime exposes is known to the kernel', () => {
@@ -138,7 +167,9 @@ describe('M3 acceptance — through the production runtime', () => {
         args: {},
         taint: 0,
       });
-      expect(d, `capability ${tool.capability} undeclared`).not.toMatchObject({ code: 'no_capability' });
+      expect(d, `capability ${tool.capability} undeclared`).not.toMatchObject({
+        code: 'no_capability',
+      });
     }
   });
 
@@ -152,7 +183,11 @@ describe('M3 acceptance — through the production runtime', () => {
     // Rebuild: discovery happens at assembly, as in production (a restart).
     const withSkill = buildRuntime(home, workspace);
     try {
-      expect(withSkill.bootLines).toEqual([]); // nothing skipped
+      // No *skill* was skipped. Other boot lines are out of scope: on a host
+      // where the shared shell boundary refuses the lanes (bwrap < 0.12.0,
+      // #642) `capabilityGaps` correctly renders into bootLines, and a
+      // blanket toEqual([]) would fail this skill claim for an unrelated gap.
+      expect(withSkill.bootLines.filter((l) => /skill/i.test(l))).toEqual([]);
       expect(withSkill.deps.systemPrompts.owner).toContain('brief-giornata');
       expect(withSkill.deps.tools.some((t) => t.spec.name === 'skill_read')).toBe(true);
     } finally {
@@ -173,7 +208,15 @@ describe('M3 acceptance — through the production runtime', () => {
   });
 
   it('an allowlisted MCP server verifies and attaches; a drifted one is suspended', async () => {
-    const fixture = join(import.meta.dirname, '..', '..', 'core', 'mcp', 'fixtures', 'echo-server.mjs');
+    const fixture = join(
+      import.meta.dirname,
+      '..',
+      '..',
+      'core',
+      'mcp',
+      'fixtures',
+      'echo-server.mjs',
+    );
     const entry = {
       command: process.execPath,
       args: [fixture],
@@ -210,20 +253,27 @@ describe('M3 acceptance — through the production runtime', () => {
     }
   }, 40_000);
 
-  it.runIf(contained)('the shell tool the runtime registered contains a write outside the workspace', async () => {
-    // Production path: not the hand-built executor of executor.test, but the
-    // shell tool buildRuntime wired, with the workspace as its scope.
-    // `shell_run_write`: the lane that *may* write, so a refusal here is the
-    // deny list talking. `shell_run` refuses every write by construction, which
-    // would make this assertion true for a reason that says nothing about the
-    // scope (`core/sandbox/confine-sola-lettura.test.ts` proves that one).
-    const shell = runtime.deps.tools.find((t) => t.spec.name === 'shell_run_write');
-    expect(shell, 'shell tool not registered — sandbox unavailable?').toBeDefined();
-    const escape = join(home, 'ESCAPED.txt');
-    const out = await shell!.handler({ command: `echo pwned > '${escape}'`, description: 'provo a uscire' }, toolContext());
-    expect(out.isError).toBe(true);
-    expect(existsSync(escape)).toBe(false);
-  }, 20_000);
+  it.runIf(contained)(
+    'the shell tool the runtime registered contains a write outside the workspace',
+    async () => {
+      // Production path: not the hand-built executor of executor.test, but the
+      // shell tool buildRuntime wired, with the workspace as its scope.
+      // `shell_run_write`: the lane that *may* write, so a refusal here is the
+      // deny list talking. `shell_run` refuses every write by construction, which
+      // would make this assertion true for a reason that says nothing about the
+      // scope (`core/sandbox/confine-sola-lettura.test.ts` proves that one).
+      const shell = runtime.deps.tools.find((t) => t.spec.name === 'shell_run_write');
+      expect(shell, 'shell tool not registered — sandbox unavailable?').toBeDefined();
+      const escape = join(home, 'ESCAPED.txt');
+      const out = await shell!.handler(
+        { command: `echo pwned > '${escape}'`, description: 'provo a uscire' },
+        toolContext(),
+      );
+      expect(out.isError).toBe(true);
+      expect(existsSync(escape)).toBe(false);
+    },
+    20_000,
+  );
 
   /**
    * The gateway's own shape, through the production assembly.
@@ -239,27 +289,31 @@ describe('M3 acceptance — through the production runtime', () => {
    * `buildRuntime(home, home)` is that shape exactly. Nothing here mocks the
    * decision: the assertion is on the tool the runtime actually registered.
    */
-  it.runIf(contained)('a runtime built with the home as its cwd works somewhere else, and says so', async () => {
-    const supervisionato = buildRuntime(home, home);
-    try {
-      expect(supervisionato.workspace).not.toBe(home);
-      expect(isSameOrNestedPath(supervisionato.workspace, home)).toBe(false);
-      expect(supervisionato.bootLines.join('\n')).toContain('cartella di lavoro');
+  it.runIf(contained)(
+    'a runtime built with the home as its cwd works somewhere else, and says so',
+    async () => {
+      const supervisionato = buildRuntime(home, home);
+      try {
+        expect(supervisionato.workspace).not.toBe(home);
+        expect(isSameOrNestedPath(supervisionato.workspace, home)).toBe(false);
+        expect(supervisionato.bootLines.join('\n')).toContain('cartella di lavoro');
 
-      const shell = supervisionato.deps.tools.find((t) => t.spec.name === 'shell_run_write');
-      expect(shell, 'shell tool not registered — sandbox unavailable?').toBeDefined();
-      const db = join(home, 'muffin.db');
-      const prima = readFileSync(db);
-      const out = await shell!.handler(
-        { command: `printf 'pwned\\n' > '${db}'`, description: 'provo a scrivere nel database' },
-        toolContext(),
-      );
-      expect(out.isError).toBe(true);
-      expect(readFileSync(db), 'the agent overwrote its own database').toEqual(prima);
-    } finally {
-      supervisionato.close();
-    }
-  }, 30_000);
+        const shell = supervisionato.deps.tools.find((t) => t.spec.name === 'shell_run_write');
+        expect(shell, 'shell tool not registered — sandbox unavailable?').toBeDefined();
+        const db = join(home, 'muffin.db');
+        const prima = readFileSync(db);
+        const out = await shell!.handler(
+          { command: `printf 'pwned\\n' > '${db}'`, description: 'provo a scrivere nel database' },
+          toolContext(),
+        );
+        expect(out.isError).toBe(true);
+        expect(readFileSync(db), 'the agent overwrote its own database').toEqual(prima);
+      } finally {
+        supervisionato.close();
+      }
+    },
+    30_000,
+  );
 
   /**
    * **The assertion that holds the wiring, and the reason it is separate.**
@@ -287,42 +341,49 @@ describe('M3 acceptance — through the production runtime', () => {
    * reverted alone: le due shell la prendono da `ShellScope.root`, `fs_write`
    * through `FsScope.root`.
    */
-  it.runIf(contained)("a turn's own writes land in runtime.workspace — the positive claim the deny cannot make", async () => {
-    const supervisionato = buildRuntime(home, home);
-    try {
-      const ws = supervisionato.workspace;
+  it.runIf(contained)(
+    "a turn's own writes land in runtime.workspace — the positive claim the deny cannot make",
+    async () => {
+      const supervisionato = buildRuntime(home, home);
+      try {
+        const ws = supervisionato.workspace;
 
-      // `shell_run_write`: the positive claim is about a *write*, and after
-      // ADR-0074 punto 4 `shell_run` cannot make one — the read-only lane's write
-      // scope is the session scratch, which is not the workspace and is not
-      // supposed to be. Both get their root from the same `ShellScope`, so this
-      // still holds the wiring the comment above describes.
-      const shell = supervisionato.deps.tools.find((t) => t.spec.name === 'shell_run_write');
-      expect(shell, 'shell tool not registered — sandbox unavailable?').toBeDefined();
-      const daShell = await shell!.handler(
-        { command: `printf 'dalla shell\\n' > nota-shell.txt`, description: 'scrivo una nota' },
-        toolContext(),
-      );
-      expect(daShell.isError, `shell_run_write failed: ${daShell.content}`).toBeUndefined();
-      expect(
-        existsSync(join(ws, 'nota-shell.txt')),
-        `shell_run_write wrote a relative path somewhere other than runtime.workspace (${ws})`,
-      ).toBe(true);
-      expect(existsSync(join(home, 'nota-shell.txt'))).toBe(false);
+        // `shell_run_write`: the positive claim is about a *write*, and after
+        // ADR-0074 punto 4 `shell_run` cannot make one — the read-only lane's write
+        // scope is the session scratch, which is not the workspace and is not
+        // supposed to be. Both get their root from the same `ShellScope`, so this
+        // still holds the wiring the comment above describes.
+        const shell = supervisionato.deps.tools.find((t) => t.spec.name === 'shell_run_write');
+        expect(shell, 'shell tool not registered — sandbox unavailable?').toBeDefined();
+        const daShell = await shell!.handler(
+          { command: `printf 'dalla shell\\n' > nota-shell.txt`, description: 'scrivo una nota' },
+          toolContext(),
+        );
+        expect(daShell.isError, `shell_run_write failed: ${daShell.content}`).toBeUndefined();
+        expect(
+          existsSync(join(ws, 'nota-shell.txt')),
+          `shell_run_write wrote a relative path somewhere other than runtime.workspace (${ws})`,
+        ).toBe(true);
+        expect(existsSync(join(home, 'nota-shell.txt'))).toBe(false);
 
-      const write = supervisionato.deps.tools.find((t) => t.spec.name === 'fs_write');
-      expect(write, 'fs_write not registered').toBeDefined();
-      const daFs = await write!.handler({ path: 'nota-fs.txt', content: 'dai tool fs\n' }, toolContext());
-      expect(daFs.isError, `fs_write failed: ${daFs.content}`).toBeUndefined();
-      expect(
-        existsSync(join(ws, 'nota-fs.txt')),
-        `fs_write wrote a relative path somewhere other than runtime.workspace (${ws})`,
-      ).toBe(true);
-      expect(existsSync(join(home, 'nota-fs.txt'))).toBe(false);
-    } finally {
-      supervisionato.close();
-    }
-  }, 30_000);
+        const write = supervisionato.deps.tools.find((t) => t.spec.name === 'fs_write');
+        expect(write, 'fs_write not registered').toBeDefined();
+        const daFs = await write!.handler(
+          { path: 'nota-fs.txt', content: 'dai tool fs\n' },
+          toolContext(),
+        );
+        expect(daFs.isError, `fs_write failed: ${daFs.content}`).toBeUndefined();
+        expect(
+          existsSync(join(ws, 'nota-fs.txt')),
+          `fs_write wrote a relative path somewhere other than runtime.workspace (${ws})`,
+        ).toBe(true);
+        expect(existsSync(join(home, 'nota-fs.txt'))).toBe(false);
+      } finally {
+        supervisionato.close();
+      }
+    },
+    30_000,
+  );
 
   afterAll(() => {
     runtime?.close();

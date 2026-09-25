@@ -1,42 +1,50 @@
-import DatabaseCtor from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import DatabaseCtor from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { buildRuntime } from '../agent/runtime.js';
 import { loadConfig, paths, saveConfig, writeSecret } from '../core/config/config.js';
-import { WORKSPACE_ENV, muffinWorkspace } from '../core/config/workspace.js';
-import { TurnStore } from '../core/turns/store.js';
-import { MemoryStore } from '../core/memory/store.js';
+import { muffinWorkspace, WORKSPACE_ENV } from '../core/config/workspace.js';
+import { type ControlServer, serveControlSocket } from '../core/gateway/control-socket.js';
+import { GatewayLock } from '../core/gateway/lock.js';
+import type { SupervisorProbes } from '../core/gateway/supervisor.js';
 import {
   ConsolidationLog,
   type ConsolidationOutcome,
   type ConsolidationRun,
 } from '../core/memory/consolidator.js';
-import { seal } from '../core/rot/verify.js';
+import type { Embedder } from '../core/memory/embed.js';
+import { MEMORY_SCHEMA } from '../core/memory/schema.js';
+import { MemoryStore } from '../core/memory/store.js';
+import { VectorIndex } from '../core/memory/vectors.js';
 import { sealOwnerBinding } from '../core/rot/owner.js';
-import type { SupervisorProbes } from '../core/gateway/supervisor.js';
-import { runInit } from './init.js';
-import { buildRuntime } from '../agent/runtime.js';
+import { seal } from '../core/rot/verify.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
+import type { StatoSuperficie } from '../core/surface/salute.js';
+import { TurnStore } from '../core/turns/store.js';
 import {
-  runDoctor,
-  sandboxOkDetail,
-  quantoDura,
-  guastoDopoMsDaEnv,
-  GUASTO_DOPO_MS,
   AVVIO_TROPPO_LUNGO_MS,
   type Check,
+  GUASTO_DOPO_MS,
+  guastoDopoMsDaEnv,
+  quantoDura,
+  runDoctor,
+  sandboxOkDetail,
 } from './doctor.js';
-import { serveControlSocket, type ControlServer } from '../core/gateway/control-socket.js';
-import { GatewayLock } from '../core/gateway/lock.js';
-import type { StatoSuperficie } from '../core/surface/salute.js';
-import { VectorIndex } from '../core/memory/vectors.js';
-import { MEMORY_SCHEMA } from '../core/memory/schema.js';
-import type { Embedder } from '../core/memory/embed.js';
+import { runInit } from './init.js';
 
 /**
  * Doctor exists to say which of two indistinguishable states you are in.
@@ -64,7 +72,11 @@ afterEach(() => vi.unstubAllEnvs());
 const check = async (dir: string, name: string): Promise<Check | undefined> =>
   (await runDoctor(dir)).checks.find((c) => c.name === name);
 
-const checkWith = async (dir: string, name: string, options: Parameters<typeof runDoctor>[1]): Promise<Check | undefined> =>
+const checkWith = async (
+  dir: string,
+  name: string,
+  options: Parameters<typeof runDoctor>[1],
+): Promise<Check | undefined> =>
   (await runDoctor(dir, options)).checks.find((c) => c.name === name);
 
 describe('doctor names the source of the permission matrix', () => {
@@ -100,7 +112,7 @@ describe('doctor names the source of the permission matrix', () => {
  * la cartella incondizionatamente).
  */
 describe('doctor nomina il workspace di ADR-0059, mai la casa', () => {
-  it('dice che non esiste ancora su un\'installazione fresca, ma resta un ok — niente da fare qui', async () => {
+  it("dice che non esiste ancora su un'installazione fresca, ma resta un ok — niente da fare qui", async () => {
     // Coordinatore, 03/09: un `warn` senza un'azione insegna a scorrere oltre
     // gli avvisi, ed è la regola che una slice mergiata oggi ha già fissato —
     // lead con la conseguenza e l'azione, mai un warn dove non c'è azione.
@@ -359,7 +371,11 @@ describe('doctor reads undelivered turns — D3 (judge, PR #42)', () => {
       counters,
       replyTo: { chatId: 1, messageId: 1 },
     });
-    store.finish('turn-undelivered-1', { outcome: 'answered', messages: [], taint: 0, counters }, undelivered.claimToken);
+    store.finish(
+      'turn-undelivered-1',
+      { outcome: 'answered', messages: [], taint: 0, counters },
+      undelivered.claimToken,
+    );
     db.close();
 
     const c = await check(dir, 'consegne');
@@ -397,7 +413,11 @@ describe('doctor reads undelivered turns — D3 (judge, PR #42)', () => {
       counters,
       replyTo: { chatId: 1, messageId: 1 },
     });
-    store.finish('turn-settled-1', { outcome: 'answered', messages: [], taint: 0, counters }, settled.claimToken);
+    store.finish(
+      'turn-settled-1',
+      { outcome: 'answered', messages: [], taint: 0, counters },
+      settled.claimToken,
+    );
     store.delivered('turn-settled-1', 'sent'); // the settlement `Scheduler.settle` writes in production
     db.close();
 
@@ -497,14 +517,27 @@ describe('doctor names the memory questions waiting on the owner', () => {
     const db = new DatabaseCtor(paths(dir).db);
     const store = new MemoryStore(db);
     const episodeId = store.addEpisode({
-      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
-      content: 'il commercialista ora è Lucia', trustTier: 0, createdAt: '2026-08-13T10:00:00Z',
+      tenantId: 'host',
+      connector: 'cli',
+      threadKey: 't',
+      role: 'user',
+      kind: 'message',
+      content: 'il commercialista ora è Lucia',
+      trustTier: 0,
+      createdAt: '2026-08-13T10:00:00Z',
     });
     const subjectId = store.upsertEntity('host', 'owner', 'person', '2026-08-13T10:00:00Z');
     const believe = (object: string, at: string) =>
       store.addFact({
-        tenantId: 'host', subjectId, predicate: 'accountant', objectValue: object,
-        episodeId, trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: at,
+        tenantId: 'host',
+        subjectId,
+        predicate: 'accountant',
+        objectValue: object,
+        episodeId,
+        trustTier: 0,
+        confidence: 0.9,
+        extractionV: 1,
+        recordedAt: at,
       });
     store.recordReview({
       tenantId: 'host',
@@ -860,11 +893,9 @@ describe('doctor asks whether a supervisor, not just a process, is behind the ga
     db.exec(
       `CREATE TABLE IF NOT EXISTS gateway_lock (id INTEGER PRIMARY KEY CHECK (id = 1), pid INTEGER, taken_at TEXT, since TEXT, status TEXT)`,
     );
-    db.prepare(`INSERT INTO gateway_lock (id, pid, taken_at, since, status) VALUES (1, ?, ?, ?, 'in attesa')`).run(
-      process.pid,
-      new Date().toISOString(),
-      new Date().toISOString(),
-    );
+    db.prepare(
+      `INSERT INTO gateway_lock (id, pid, taken_at, since, status) VALUES (1, ?, ?, ?, 'in attesa')`,
+    ).run(process.pid, new Date().toISOString(), new Date().toISOString());
     db.close();
 
     const report = await runDoctor(dir, { supervisorProbes: { unitFileExists: () => false } });
@@ -991,6 +1022,58 @@ describe('la riga sandbox di doctor viene dalla porta vera, non dal probe econom
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('un contenimento bubblewrap che regge resta un warn: il setup-time non e provato (#642)', async () => {
+    // La prova dice che il deny/allow regge; non dice niente sulla classe
+    // symlink di setup di settembre 2026 (CVE-2026-87766), che avviene prima
+    // che qualunque cosa giri. Una riga verde qui affermerebbe un confine che
+    // questa sonda non vede — quindi warn, con il livello di patch nominato.
+    // La versione è un fixture dichiarata (0.11.1 = il bwrap reale di
+    // centria-zero), non una lettura della macchina che gira il test: senza
+    // questo seam l'esito dipenderebbe da `bwrap --version` sull'host.
+    const dir = home();
+    const spia = vi.spyOn(SandboxExecutor.prototype, 'verify').mockResolvedValue({
+      available: true,
+      mechanism: 'bubblewrap',
+    });
+    try {
+      const line = await checkWith(dir, 'sandbox', { bubblewrapVersion: 'bubblewrap 0.11.1' });
+      expect(spia).toHaveBeenCalled();
+      expect(line?.level).toBe('warn');
+      expect(line?.detail).toContain('bubblewrap');
+      expect(line?.detail).toMatch(/CVE-2026-87766/);
+      expect(line?.remedy).toBeTruthy();
+      // Il rimedio non promette più che la shell continui a funzionare: su
+      // questa postura il runtime la toglie, e doctor deve dirlo lo stesso.
+      expect(line?.remedy).not.toMatch(/keeps working/i);
+    } finally {
+      spia.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('bubblewrap con postura trusted (fixture dichiarata ≥ 0.12.0): sandbox ok e shell_run ok (#642)', async () => {
+    const dir = home();
+    const spia = vi.spyOn(SandboxExecutor.prototype, 'verify').mockResolvedValue({
+      available: true,
+      mechanism: 'bubblewrap',
+    });
+    try {
+      const sandboxLine = await checkWith(dir, 'sandbox', {
+        bubblewrapVersion: 'bubblewrap 0.12.0',
+      });
+      expect(sandboxLine?.level).toBe('ok');
+      expect(sandboxLine?.detail).toContain('bubblewrap');
+      const shell = await checkWith(dir, 'capacità: shell_run', {
+        bubblewrapVersion: 'bubblewrap 0.12.0',
+      });
+      expect(shell?.level).toBe('ok');
+      expect(shell?.detail).toMatch(/intero host|whole host/i);
+    } finally {
+      spia.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-defaults-2026-08-26', () => {
@@ -1022,7 +1105,14 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
     // At minimum the files the research doc measured — a fresh `muffin init`
     // just copied them from this very checkout, so every one must read as
     // up-to-date, not merely "present".
-    for (const relPath of ['persona.md', 'voice.md', 'rot/identity.md', 'rot/policy.json', 'rot/egress.json', 'rot/budgets.json']) {
+    for (const relPath of [
+      'persona.md',
+      'voice.md',
+      'rot/identity.md',
+      'rot/policy.json',
+      'rot/egress.json',
+      'rot/budgets.json',
+    ]) {
       const c = defaultsChecks.find((x) => x.name === `default ${relPath}`);
       expect(c, `missing check for ${relPath}`).toBeTruthy();
       expect(c?.level, `${relPath}: ${c?.detail}`).toBe('ok');
@@ -1032,7 +1122,10 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
 
   it('an owner edit reads as ok — "è suo", never a proposal to overwrite it', async () => {
     const dir = home();
-    writeFileSync(paths(dir).persona, "testo scritto a mano dall'owner, non spedito da nessun commit\n");
+    writeFileSync(
+      paths(dir).persona,
+      "testo scritto a mano dall'owner, non spedito da nessun commit\n",
+    );
     const c = await check(dir, 'default persona.md');
     expect(c?.level).toBe('ok');
     expect(c?.remedy).toBeUndefined();
@@ -1067,7 +1160,10 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
     sh('git', ['config', 'user.name', 't']);
     sh('git', ['add', '.']);
     sh('git', ['commit', '-qm', 'v1']);
-    writeFileSync(join(checkout, 'defaults', 'rot', 'identity.md'), 'v2 identity — HEAD ora dice questo\n');
+    writeFileSync(
+      join(checkout, 'defaults', 'rot', 'identity.md'),
+      'v2 identity — HEAD ora dice questo\n',
+    );
     sh('git', ['add', '.']);
     sh('git', ['commit', '-qm', 'v2']);
 
@@ -1105,7 +1201,9 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
     // this slice each file produced its own full "questo file è dentro il
     // sigillo…" paragraph, `muffin rot reseal` named once per file — the
     // owner read the same explanation twice for one `muffin update`.
-    const checkout = realpathSync(mkdtempSync(join(tmpdir(), 'muffin-doctor-drift-group-checkout-')));
+    const checkout = realpathSync(
+      mkdtempSync(join(tmpdir(), 'muffin-doctor-drift-group-checkout-')),
+    );
     const sh = (cmd: string, args: string[]): void => {
       const r = spawnSync(cmd, args, { cwd: checkout, encoding: 'utf8' });
       if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} failed: ${r.stderr}`);
@@ -1118,7 +1216,10 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
     sh('git', ['config', 'user.name', 't']);
     sh('git', ['add', '.']);
     sh('git', ['commit', '-qm', 'v1']);
-    writeFileSync(join(checkout, 'defaults', 'rot', 'identity.md'), 'v2 identity — HEAD ora dice questo\n');
+    writeFileSync(
+      join(checkout, 'defaults', 'rot', 'identity.md'),
+      'v2 identity — HEAD ora dice questo\n',
+    );
     writeFileSync(join(checkout, 'defaults', 'rot', 'policy.json'), '{"v":2}\n');
     sh('git', ['add', '.']);
     sh('git', ['commit', '-qm', 'v2']);
@@ -1158,7 +1259,6 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
   });
 });
 
-
 /**
  * Contare non è chiedere.
  *
@@ -1184,7 +1284,11 @@ describe("l'indice coerente non dice che l'embedder risponda", () => {
     const dir = home();
     const db = new DatabaseCtor(paths(dir).db);
     const index = new VectorIndex(db, new Finto());
-    await index.index('host', [{ kind: 'episode', sourceId: 1, text: 'un frammento qualsiasi' }], '2026-08-27T00:00:00Z');
+    await index.index(
+      'host',
+      [{ kind: 'episode', sourceId: 1, text: 'un frammento qualsiasi' }],
+      '2026-08-27T00:00:00Z',
+    );
     db.close();
     return dir;
   }
@@ -1220,7 +1324,12 @@ describe("l'indice coerente non dice che l'embedder risponda", () => {
 
     const configPath = paths(dir).config;
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
-    config.embedder = { kind: 'ollama', model: 'qwen3-embedding:0.6b', dimensions: 7, baseUrl: `http://127.0.0.1:${porta}` };
+    config.embedder = {
+      kind: 'ollama',
+      model: 'qwen3-embedding:0.6b',
+      dimensions: 7,
+      baseUrl: `http://127.0.0.1:${porta}`,
+    };
     writeFileSync(configPath, JSON.stringify(config, null, 2));
 
     const c = await checkWith(dir, 'vector index', {});
@@ -1262,7 +1371,12 @@ describe("l'indice coerente non dice che l'embedder risponda", () => {
     const dir = await conIndice();
     const configPath = paths(dir).config;
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
-    config.embedder = { kind: 'ollama', model: 'un-modello-inventato', dimensions: 7, baseUrl: 'http://127.0.0.1:1' };
+    config.embedder = {
+      kind: 'ollama',
+      model: 'un-modello-inventato',
+      dimensions: 7,
+      baseUrl: 'http://127.0.0.1:1',
+    };
     writeFileSync(configPath, JSON.stringify(config, null, 2));
 
     const c = await checkWith(dir, 'vector index', {});
@@ -1300,7 +1414,11 @@ describe("l'indice coerente non dice che l'embedder risponda", () => {
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     // `dimensions` dimenticata: `makeEmbedder` lancia, e il suo messaggio la
     // nomina. Questo è l'unico posto che lo legge.
-    config.embedder = { kind: 'openai-compat', model: 'text-embedding-3-small', apiKeyRef: 'secret://emb' };
+    config.embedder = {
+      kind: 'openai-compat',
+      model: 'text-embedding-3-small',
+      apiKeyRef: 'secret://emb',
+    };
     writeFileSync(configPath, JSON.stringify(config, null, 2));
 
     const c = await checkWith(dir, 'vector index', {});
@@ -1337,7 +1455,11 @@ describe("l'indice coerente non dice che l'embedder risponda", () => {
 
     const configPath = paths(dir).config;
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
-    config.embedder = { kind: 'openai-compat', model: 'text-embedding-3-small', apiKeyRef: 'secret://emb' };
+    config.embedder = {
+      kind: 'openai-compat',
+      model: 'text-embedding-3-small',
+      apiKeyRef: 'secret://emb',
+    };
     writeFileSync(configPath, JSON.stringify(config, null, 2));
 
     const c = await checkWith(dir, 'vector index', { embedderProbe: async () => {} });
@@ -1366,13 +1488,22 @@ describe("l'indice coerente non dice che l'embedder risponda", () => {
       `INSERT INTO episodes (tenant_id, connector, thread_key, role, kind, content, trust_tier, created_at, extraction_v)
        VALUES (?,?,?,?,?,?,?,?,?)`,
     );
-    for (const t of ['uno', 'due', 'tre']) ins.run('host', 'cli', 't1', 'user', 'message', t, 0, '2026-08-27', 0);
+    for (const t of ['uno', 'due', 'tre'])
+      ins.run('host', 'cli', 't1', 'user', 'message', t, 0, '2026-08-27', 0);
     // La **stessa** identità che la config nomina qui sotto, o i tre episodi
     // risulterebbero pendenti per il motivo sbagliato — un id diverso — invece
     // che per il drenaggio a metà, che è il caso in prova.
-    const index = new VectorIndex(db, { id: 'ollama:test', dimensions: 4, embed: new Finto().embed });
+    const index = new VectorIndex(db, {
+      id: 'ollama:test',
+      dimensions: 4,
+      embed: new Finto().embed,
+    });
     // Uno solo dei tre: i conteggi tornano, il corpus no.
-    await index.index('host', [{ kind: 'episode', sourceId: 1, text: 'uno' }], '2026-08-27T00:00:00Z');
+    await index.index(
+      'host',
+      [{ kind: 'episode', sourceId: 1, text: 'uno' }],
+      '2026-08-27T00:00:00Z',
+    );
     db.close();
 
     const configPath = paths(dir).config;
@@ -1421,7 +1552,9 @@ describe("l'indice coerente non dice che l'embedder risponda", () => {
     // Il caso opposto alla porta chiusa, e il motivo per cui il tetto esiste:
     // `doctor` è ciò che si lancia quando la macchina è già strana.
     const dir = await conIndice();
-    const c = await checkWith(dir, 'vector index', { embedderProbe: () => new Promise<void>(() => {}) });
+    const c = await checkWith(dir, 'vector index', {
+      embedderProbe: () => new Promise<void>(() => {}),
+    });
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('nessuna risposta entro');
     rmSync(dir, { recursive: true, force: true });
@@ -1434,7 +1567,9 @@ describe("l'indice coerente non dice che l'embedder risponda", () => {
 describe('doctor dice quale commit sta girando', () => {
   it('pulito: il commit e la data, e basta', async () => {
     const dir = home();
-    const c = await checkWith(dir, 'build', { build: { sha: 'abc123def4567890', date: '2026-08-27', dirty: false } });
+    const c = await checkWith(dir, 'build', {
+      build: { sha: 'abc123def4567890', date: '2026-08-27', dirty: false },
+    });
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('abc123def456');
     expect(c?.detail).toContain('2026-08-27');
@@ -1445,7 +1580,9 @@ describe('doctor dice quale commit sta girando', () => {
     // Non un `fail`: su una macchina di sviluppo è lo stato normale. Ma neanche
     // un `ok` silenzioso, che direbbe una cosa precisa e falsa.
     const dir = home();
-    const c = await checkWith(dir, 'build', { build: { sha: 'abc123def4567890', date: '2026-08-27', dirty: true } });
+    const c = await checkWith(dir, 'build', {
+      build: { sha: 'abc123def4567890', date: '2026-08-27', dirty: true },
+    });
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('non committate');
     rmSync(dir, { recursive: true, force: true });
@@ -1459,7 +1596,6 @@ describe('doctor dice quale commit sta girando', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
-
 
 describe('MUFFIN_GUASTO_DOPO_MS — la sola manopola sulla soglia', () => {
   it('e assente su tutto quello che un installazione vera imposterebbe', () => {
@@ -1538,7 +1674,13 @@ describe('doctor guarda se una superficie abilitata sta rispondendo', () => {
     aperti.push(
       await serveControlSocket(dir, (verb) => {
         if (verb === 'identify') {
-          return { protocol: 1, pid: process.pid, home: dir, codeSha: null, startedAt: new Date().toISOString() };
+          return {
+            protocol: 1,
+            pid: process.pid,
+            home: dir,
+            codeSha: null,
+            startedAt: new Date().toISOString(),
+          };
         }
         if (verb === 'superfici') return risposta;
         return null;
@@ -1738,7 +1880,9 @@ describe('doctor guarda se una superficie abilitata sta rispondendo', () => {
     aperti.push(
       await serveControlSocket(dir, (verb) => {
         if (verb === 'superfici') chiesto = true;
-        return verb === 'identify' ? { protocol: 1, pid: process.pid, home: dir, codeSha: null, startedAt: '' } : null;
+        return verb === 'identify'
+          ? { protocol: 1, pid: process.pid, home: dir, codeSha: null, startedAt: '' }
+          : null;
       }),
     );
     await runDoctor(dir);
@@ -1759,7 +1903,9 @@ describe('doctor says whether a voice note would be understood, before the first
 
   it('says there is nothing to prepare when no voice-carrying surface is enabled', async () => {
     const dir = home();
-    const c = await checkWith(dir, 'note vocali', { voce: { accettaAudio: async () => false, path: join(dir, 'vuota') } });
+    const c = await checkWith(dir, 'note vocali', {
+      voce: { accettaAudio: async () => false, path: join(dir, 'vuota') },
+    });
     expect(c?.level).toBe('ok');
     expect(c?.detail).toMatch(/nessuna superficie vocale/);
   });
@@ -1773,7 +1919,9 @@ describe('doctor says whether a voice note would be understood, before the first
 
   it('warns, naming each missing prerequisite with its command, when the model does not listen and nothing is installed', async () => {
     const dir = conTelegram(home());
-    const c = await checkWith(dir, 'note vocali', { voce: { accettaAudio: async () => false, path: join(dir, 'vuota') } });
+    const c = await checkWith(dir, 'note vocali', {
+      voce: { accettaAudio: async () => false, path: join(dir, 'vuota') },
+    });
     expect(c?.level).toBe('warn');
     expect(c?.detail).toMatch(/ffmpeg non è installato/);
     expect(c?.detail).toMatch(/whisper\.cpp non è installato/);
@@ -1792,7 +1940,9 @@ describe('doctor says whether a voice note would be understood, before the first
     writeFileSync(join(bin, 'whisper-cli'), '');
     mkdirSync(join(dir, 'models'));
     writeFileSync(join(dir, 'models', 'ggml-base.bin'), '');
-    const c = await checkWith(dir, 'note vocali', { voce: { accettaAudio: async () => false, path: bin } });
+    const c = await checkWith(dir, 'note vocali', {
+      voce: { accettaAudio: async () => false, path: bin },
+    });
     expect(c?.level).toBe('ok');
     expect(c?.detail).toMatch(/si trascrive in casa/);
     expect(c?.detail).toContain(join(dir, 'models', 'ggml-base.bin'));
@@ -1900,11 +2050,50 @@ describe('doctor nomina le capacità spente o tagliate, come sys.inspect', () =>
     }
   });
 
+  it('shell_run: spento con postura unverified quando il probe regge, CVE nominato (#642)', async () => {
+    // Stesso shape di centria-zero: deny/allow verde, bwrap 0.11.1. Prima
+    // della boundary condivisa doctor avvertiva sulla riga `sandbox` mentre
+    // la riga capacità restava ok — i due non potevano più essere distinti
+    // senza leggere due sorgenti diverse. Ora leggono lo stesso verdetto.
+    const dir = home();
+    const spia = vi.spyOn(SandboxExecutor.prototype, 'verify').mockResolvedValue({
+      available: true,
+      mechanism: 'bubblewrap',
+    });
+    try {
+      const c = await checkWith(dir, 'capacità: shell_run', {
+        bubblewrapVersion: 'bubblewrap 0.11.1',
+      });
+      expect(c?.level).toBe('warn');
+      expect(c?.detail).toMatch(/CVE-2026-87766/);
+      expect(c?.detail).toMatch(/unverified/);
+      expect(c?.detail).not.toContain('tetto');
+      expect(c?.remedy).not.toMatch(/keeps working/i);
+    } finally {
+      spia.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('shell_run: ok quando il contenimento regge', async () => {
     const dir = home();
-    const c = await check(dir, 'capacità: shell_run');
-    expect(c?.level).toBe('ok');
-    rmSync(dir, { recursive: true, force: true });
+    // Seatbelt spia: l'esito non deve dipendere da `bwrap --version` su questa
+    // macchina (macOS senza bwrap, Linux con 0.11.1, o un host già ≥ 0.12.0).
+    const spia = vi.spyOn(SandboxExecutor.prototype, 'verify').mockResolvedValue({
+      available: true,
+      mechanism: 'seatbelt',
+    });
+    try {
+      const c = await check(dir, 'capacità: shell_run');
+      expect(c?.level).toBe('ok');
+      // …ma non silenzioso sul perimetro di lettura (#645): la corsia legge
+      // l'intero host tranne la deny-list, e la riga lo dice invece di
+      // presentarla come lettura di progetto.
+      expect(c?.detail).toMatch(/intero host|whole host/i);
+    } finally {
+      spia.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('tetto tool: nomina i tool tagliati quando il modello risolve sul profilo conservativo, e non è la stessa frase di uno spento', async () => {
@@ -1954,7 +2143,11 @@ describe('doctor names where the owner binding lives', () => {
     saveConfig(
       {
         ...config,
-        surfaces: { ...config.surfaces, enabled: [...config.surfaces.enabled, 'telegram'], telegram: { ownerUserId, ownerChatId: ownerUserId } },
+        surfaces: {
+          ...config.surfaces,
+          enabled: [...config.surfaces.enabled, 'telegram'],
+          telegram: { ownerUserId, ownerChatId: ownerUserId },
+        },
       },
       dir,
     );
@@ -1968,7 +2161,9 @@ describe('doctor names where the owner binding lives', () => {
 
   it('names the sealed file when the binding is inside the seal', async () => {
     const dir = home();
-    expect(sealOwnerBinding(dir, { telegram: { userId: 999, chatId: 999 } }, { out: () => {} }).ok).toBe(true);
+    expect(
+      sealOwnerBinding(dir, { telegram: { userId: 999, chatId: 999 } }, { out: () => {} }).ok,
+    ).toBe(true);
     const c = await check(dir, 'owner binding');
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('rot/owner.json — telegram 999');
@@ -2023,7 +2218,10 @@ describe('doctor names where the owner binding lives', () => {
     conConfigTelegram(dir, 111);
     sealOwnerBinding(dir, { telegram: { userId: 999, chatId: 999 } }, { out: () => {} });
     // La manomissione: il file sigillato riscritto, nessun reseal.
-    writeFileSync(join(dir, 'rot', 'owner.json'), JSON.stringify({ schemaVersion: 1, telegram: { userId: 111, chatId: 111 } }));
+    writeFileSync(
+      join(dir, 'rot', 'owner.json'),
+      JSON.stringify({ schemaVersion: 1, telegram: { userId: 111, chatId: 111 } }),
+    );
     const c = await check(dir, 'owner binding');
     expect(c?.level).toBe('fail');
     expect(c?.detail).toMatch(/nessuna superficie riconosce più un owner/);

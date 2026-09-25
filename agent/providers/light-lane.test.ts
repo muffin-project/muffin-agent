@@ -83,6 +83,29 @@ describe('billing the light lane', () => {
     await expect(lane.chat(call())).rejects.toThrow('502');
     expect(billed).toEqual([]);
   });
+
+  it('porta il job nella riga di spesa quando la chiamata ne dichiara uno', async () => {
+    const billed: LightSpend[] = [];
+    const lane = lightLane(new Echo(), { profile: CONSERVATIVE, record: (e) => billed.push(e) });
+
+    await lane.chat(call({ jobId: 'job-42' }));
+
+    expect(billed).toHaveLength(1);
+    expect(billed[0]!.jobId).toBe('job-42');
+  });
+
+  it('non inventa un job quando la chiamata non ne dichiara uno', async () => {
+    const billed: LightSpend[] = [];
+    const lane = lightLane(new Echo(), { profile: CONSERVATIVE, record: (e) => billed.push(e) });
+
+    await lane.chat(call());
+
+    // Assente, non `undefined` esplicito: `LightSpend` non ha un default da cui
+    // dedurre un job, e una corsia che ne inventasse uno attribuirebbe a un job
+    // una spesa che non è sua.
+    expect(billed).toHaveLength(1);
+    expect('jobId' in billed[0]!).toBe(false);
+  });
 });
 
 describe('transport retry ownership', () => {

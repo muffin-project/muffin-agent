@@ -323,6 +323,30 @@ export type ChatCall = {
    * non deve fingere di averlo.
    */
   conversation?: string;
+  /**
+   * Spend attribution, and nothing else: the scheduled job whose turn caused
+   * this call, when one did.
+   *
+   * It never reaches the wire — every adapter builds its request body field by
+   * field (`openai-compat.ts`, `anthropic.ts`), so an unknown field here is
+   * dropped, not serialized. Its one reader is the light lane
+   * (`agent/providers/light-lane.ts`), which copies it into the spend row so a
+   * job's own ceiling counts the reranker calls its turns cause (DAY-1 E1,
+   * `core/budget/budget.ts`'s `jobMonthUsd`). Absent on every main-lane call:
+   * the loop bills those itself, with `input.jobId`, at the call site.
+   */
+  jobId?: string;
+  /**
+   * Upstream providers this attempt must NOT use, when the transport is a
+   * router that exposes one.
+   *
+   * Written by the loop only after a provider-empty response: the upstream that
+   * just answered nothing (`ChatResult.upstream`) is named here so the re-drive
+   * can land on a different machine instead of the same one. Domain wording,
+   * not `provider.ignore`: the adapter decides whether its endpoint speaks it,
+   * and an endpoint with no router ignores the field entirely.
+   */
+  providerIgnore?: readonly string[];
   stream: boolean;
   signal?: AbortSignal;
 };

@@ -18,8 +18,22 @@ while authority stays explicit and under your control.
 
 [Why Muffin](docs/product/THESIS.md) · [Vision](docs/product/VISION.md) · [Cognitive design](docs/product/COGNITIVE-DESIGN.md) · [Architecture](docs/architecture/ARCHITECTURE.md) · [Security](docs/architecture/SECURITY.md)
 
-<sub><strong>COMMUNITY PREVIEW · PRE-DAY-1</strong> — the runtime works; the product is still being hardened for real daily use.</sub>
+<sub><strong>SOURCE-PUBLIC · PRE-ALPHA</strong> — the code is open for inspection and contributions; the product is still being hardened for real daily use.</sub>
 
+<p><strong>PLEASE DO NOT INSTALL OR RELY ON MUFFIN FOR REAL WORK YET.</strong><br>
+This repository is public for inspection, agent-assisted analysis, and contributions. The installer and runtime are still being hardened; we will post a separate call when installation testing is ready.</p>
+
+[![GitHub Actions](https://github.com/muffin-project/muffin-agent/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/muffin-project/muffin-agent/actions/workflows/ci.yml)
+[![Code license](https://img.shields.io/github/license/muffin-project/muffin-agent?label=code%20license&style=for-the-badge)](LICENSE)
+
+[![Created by Giusto Piedimonte](https://img.shields.io/badge/Creator-Giusto%20Piedimonte-071A3D?style=for-the-badge)](https://giusto.dev/)
+[![Instagram @giusto.dev](https://img.shields.io/badge/Instagram-%40giusto.dev-E4405F?style=for-the-badge&logo=instagram&logoColor=white)](https://www.instagram.com/giusto.dev/)
+[![Support Muffin on PayPal](https://img.shields.io/badge/Support%20Muffin-PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://www.paypal.com/donate/?hosted_button_id=MB89Z9ZLFKFSW)
+
+</div>
+
+<div align="center">
+  <img src="assets/brand/muffin-readme-hero.png" alt="Muffin mascot, with a dotted line suggesting continuity across time" width="900">
 </div>
 
 ---
@@ -222,12 +236,10 @@ it. What you do not install should not exist in your Muffin.
 
 </details>
 
-## Road to open source
+## Road to product alpha
 
 ```text
-owner DAY-1
-    ↓
-source-public / pre-alpha — inspectable and contributable, not product alpha
+source-public / pre-alpha (current)
     ↓
 14 days of real daily use
     ↓

@@ -6,14 +6,19 @@ import { describe, expect, it } from 'vitest';
 import { runInit } from '../../cli/init.js';
 import {
   loadConfig,
-  paths,
   PROMPT_VERSIONS,
-  saveConfig,
   type PromptVersion,
+  paths,
+  saveConfig,
 } from '../../core/config/config.js';
 import type { Principal } from '../../core/policy/types.js';
 import { buildRuntime, type Runtime } from '../runtime.js';
-import { buildSystemPromptBlocks, renderSystemPrompts, tenantClass, visibleTools } from './assemble.js';
+import {
+  buildSystemPromptBlocks,
+  renderSystemPrompts,
+  tenantClass,
+  visibleTools,
+} from './assemble.js';
 
 /**
  * The prompt is a function of the tenant, and the tool list is a function of the
@@ -229,9 +234,14 @@ describe('the owner-class prompt does not move', () => {
    * proprie azioni. La riga sta in v1 (il default) e arriva anche alla stanza,
    * che riceve le stesse regole operative. Pin precedente:
    * `9af210080d8814b2236adbaf6049d7f7aae5563c968ebd4c3340af1aa074005a`.
+   *
+   * Ri-fissato 2026-09-22 (ADR-0091, #645): la riga tool-poi-shell torna a
+   * dire che la shell chiede — entrambe le corsie chiedono il sì dall'8/09
+   * (misura Linux 2026-09-22). Pin precedente:
+   * `dbf59068d47b46697a338ae1ce2295222fc11c4d7b5ed715b5b35a715fff93ea`.
    */
   const OWNER_PROMPT_SHA_AT_SPLIT =
-    'dbf59068d47b46697a338ae1ce2295222fc11c4d7b5ed715b5b35a715fff93ea';
+    'c1f6ed077218a15797b8536007e045aee75c6b11a8dc7312a379a56b2ff612c8';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
@@ -283,14 +293,16 @@ describe('the owner-class prompt does not move', () => {
    * Falsificabile per costruzione: montare v2 mentre la versione dice v1 fa
    * cadere questi tre insieme.
    */
-  it("chiedere v1 esplicitamente dà la stessa stringa del default — e la stessa di ieri", () => {
+  it('chiedere v1 esplicitamente dà la stessa stringa del default — e la stessa di ieri', () => {
     const home = bootHome();
     const runtime = boot(home);
     try {
       const skills = runtime.promptBlocks.owner.find((b) => b.name === 'skills')?.text ?? '';
       const esplicito = renderSystemPrompts(buildSystemPromptBlocks(home, false, skills, 'v1'));
       expect(esplicito.owner).toBe(runtime.deps.systemPrompts.owner);
-      expect(createHash('sha256').update(esplicito.owner, 'utf8').digest('hex')).toBe(OWNER_PROMPT_SHA_AT_SPLIT);
+      expect(createHash('sha256').update(esplicito.owner, 'utf8').digest('hex')).toBe(
+        OWNER_PROMPT_SHA_AT_SPLIT,
+      );
     } finally {
       runtime.close();
     }
@@ -324,13 +336,20 @@ describe('the owner-class prompt does not move', () => {
    * Ri-fissato 2026-09-17 (`slice/prompt-action-grounding`) insieme al pin
    * owner, per la stessa riga sul resoconto fondato. Pin precedente:
    * `a365b0fc5f1b40c4c2ef787e95f094bb4754597d9073d51d73a93c9cbcf10ae3`.
+   *
+   * Ri-fissato 2026-09-22 (ADR-0091, #645) insieme al pin owner, per la stessa
+   * riga: da ADR-0091 `shell_run` chiede quanto `shell_run_write`. Pin
+   * precedente:
+   * `cf939151204ac65e746c739814a460cc8e016191243c0a52242e934e8977e829`.
    */
-  const GROUP_PROMPT_SHA_V1 = 'cf939151204ac65e746c739814a460cc8e016191243c0a52242e934e8977e829';
+  const GROUP_PROMPT_SHA_V1 = '96a4b8a78a874e21feadbb2cc09d314620a3ed912a6f6711854db78623b88737';
 
   it('e la stanza riceve lo stesso prompt di ieri, byte per byte', () => {
     const runtime = boot(bootHome());
     try {
-      const sha = createHash('sha256').update(runtime.deps.systemPrompts.group, 'utf8').digest('hex');
+      const sha = createHash('sha256')
+        .update(runtime.deps.systemPrompts.group, 'utf8')
+        .digest('hex');
       expect(sha).toBe(GROUP_PROMPT_SHA_V1);
     } finally {
       runtime.close();
@@ -378,7 +397,7 @@ describe('quale versione del prompt assembla questa installazione', () => {
     }
   });
 
-  it('v2 legge la copia spedita quando la home non ce l\'ha ancora, e sono lo stesso testo', () => {
+  it("v2 legge la copia spedita quando la home non ce l'ha ancora, e sono lo stesso testo", () => {
     // L'installazione su cui questa fetta va provata è **già fatta**: `muffin
     // init` è passato mesi fa e `~/.muffin/v2/` non esiste. Se v2 sapesse
     // leggere solo la home, la manopola sarebbe girabile e non avrebbe niente
@@ -441,6 +460,11 @@ describe('quale versione del prompt assembla questa installazione', () => {
     // rapporto 9,52 (19.335 / 2.031). Stessa regola ancora: v1 resta
     // pesantemente carattere contro il `< 8` di v2, che è la riga che porta
     // il peso dell'affermazione.
+    // Ri-misurato 2026-09-22 (ADR-0091, #645): la riga tool-poi-shell torna a
+    // dire che la shell chiede — entrambe le corsie chiedono il sì (la misura
+    // Linux del giorno: disclosure non ha undo) — e accorcia la riga (2.031 →
+    // 2.022), rapporto v1 9,57 (19.341 / 2.022) e v2 4,32 (17.301 / 4.001).
+    // Soglie invariate: la misura regge, non è stata abbassata.
     expect(v1.chiSei / v1.comeLavori).toBeGreaterThan(9);
     expect(v2.chiSei / v2.comeLavori).toBeLessThan(8);
     // E il prompt non è cresciuto per farlo: il peso si è spostato.
@@ -591,11 +615,7 @@ describe('what a group turn is allowed to be told', () => {
       // The three rules added on 26/08 are about the turn too, so they belong
       // to both classes — `WORK_RULES` is one constant in both lists, and this
       // pins that it stays that way rather than being forked per class.
-      for (const rule of [
-        'lo chiede il kernel',
-        'chiediti cosa è cambiato',
-        'prima di partire',
-      ]) {
+      for (const rule of ['lo chiede il kernel', 'chiediti cosa è cambiato', 'prima di partire']) {
         expect(group).toContain(rule);
         expect(owner).toContain(rule);
       }
@@ -638,7 +658,7 @@ describe('i pavimenti che la stanza riceve solo da voice.md', () => {
     [
       'niente azioni simulate',
       /Se descrivo un'azione al passato,?\s+deve\s+esserci\s+evidenza/,
-      "identity.md §«Cosa non fai mai»: «Non fingi di ricordare, aver visto, controllato, eseguito»",
+      'identity.md §«Cosa non fai mai»: «Non fingi di ricordare, aver visto, controllato, eseguito»',
     ],
     [
       '«non lo so» invece di una certezza falsa',
@@ -658,12 +678,12 @@ describe('i pavimenti che la stanza riceve solo da voice.md', () => {
     [
       'niente linguaggio da assistente generico',
       /come\s+posso\s+aiutarti\?/,
-      "persona.md, che al gruppo non arriva: «Un assistente cerca soprattutto di essere utile alla richiesta davanti a lui»",
+      'persona.md, che al gruppo non arriva: «Un assistente cerca soprattutto di essere utile alla richiesta davanti a lui»',
     ],
     [
       'niente emozioni o continuità finte',
       /Non\s+fingo\s+continuità\s+emotiva/,
-      "identity.md: «Non devi inventarti emozioni umane»; GROUP_PERSONA lo dice a sua volta, ed è la sola con due copie",
+      'identity.md: «Non devi inventarti emozioni umane»; GROUP_PERSONA lo dice a sua volta, ed è la sola con due copie',
     ],
     [
       'la memoria non si ostenta',
@@ -683,7 +703,10 @@ describe('i pavimenti che la stanza riceve solo da voice.md', () => {
    */
   const PAVIMENTI_OPERATIVI: readonly (readonly [string, RegExp])[] = [
     ['tre esiti distinti dopo un crash', /potrebbe\s+essere\s+successo/],
-    ['un tool negato si dice', /Non\s+fingere\s+di\s+aver\s+fatto|non\s+da\s+aggirare\s+in\s+silenzio/],
+    [
+      'un tool negato si dice',
+      /Non\s+fingere\s+di\s+aver\s+fatto|non\s+da\s+aggirare\s+in\s+silenzio/,
+    ],
     ['un limite non si inventa', /non\s+invent(o|are)\s+una\s+policy\s+o\s+un\s+permesso/],
   ];
 
@@ -749,7 +772,9 @@ describe('the tool list a principal is shown', () => {
       const all = runtime.deps.tools;
       const caps = runtime.deps.capabilities;
       expect(visibleTools(all, OWNER, caps, undefined)).toEqual(all);
-      expect(visibleTools(all, { kind: 'system', source: 'scheduler' }, caps, undefined)).toEqual(all);
+      expect(visibleTools(all, { kind: 'system', source: 'scheduler' }, caps, undefined)).toEqual(
+        all,
+      );
       expect(visibleTools(all, { kind: 'agent', role: 'dev' }, caps, undefined)).toEqual(all);
     } finally {
       runtime.close();
@@ -764,7 +789,9 @@ describe('the tool list a principal is shown', () => {
     const runtime = boot(bootHome());
     try {
       const { tools, capabilities, decide } = runtime.deps;
-      const shown = new Set(visibleTools(tools, MEMBER, capabilities, undefined).map((t) => t.spec.name));
+      const shown = new Set(
+        visibleTools(tools, MEMBER, capabilities, undefined).map((t) => t.spec.name),
+      );
       let refused = 0;
       for (const tool of tools) {
         const decision = decide({
@@ -819,7 +846,9 @@ describe('the tool list a principal is shown', () => {
       const senzaTipo = undefined as unknown as typeof runtime.deps.capabilities;
       expect(visibleTools(runtime.deps.tools, MEMBER, senzaTipo, undefined)).toEqual([]);
       // The owner is never filtered, absence of declarations or not.
-      expect(visibleTools(runtime.deps.tools, OWNER, senzaTipo, undefined)).toEqual(runtime.deps.tools);
+      expect(visibleTools(runtime.deps.tools, OWNER, senzaTipo, undefined)).toEqual(
+        runtime.deps.tools,
+      );
     } finally {
       runtime.close();
     }

@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { install, until } from '../harness.js';
 import { type FakeTelegram, privateMessage, startFakeTelegram } from '../telegram.js';
 import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
+import { shellNonDisponibileQui } from '../sandbox-host.js';
 
 /**
  * #533 — quando il gateway è vivo, è l'unico execution owner della Home.
@@ -91,7 +92,7 @@ describe('acceptance · #533 · il gateway è l unico execution owner', () => {
     headlessTestTimeoutMs(1),
   );
 
-  it(
+  it.skipIf(shellNonDisponibileQui() !== null)(
     'approvazione: domanda sul terminale, sì dentro, effetto vero, stessa execution',
     async () => {
       const inst = await install({

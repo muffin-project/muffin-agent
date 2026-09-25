@@ -12,8 +12,8 @@ import {
   readSecret,
   secretDir,
 } from '../core/config/config.js';
-import { resolveWorkspace } from '../core/config/workspace.js';
 import { tightenHome } from '../core/config/private-fs.js';
+import { resolveWorkspace } from '../core/config/workspace.js';
 import { migrate } from '../core/db/migrate.js';
 import { openDb } from '../core/db/open.js';
 import { loadMcpRegistry } from '../core/mcp/registry.js';
@@ -37,6 +37,7 @@ import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { mandatoryGuards } from '../core/rot/guards.js';
 import { type HardeningCheck, hardeningHolds, verify } from '../core/rot/verify.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
+import { assessShellBoundary } from '../core/sandbox/shell-boundary.js';
 import { JobFireStore } from '../core/scheduler/job-fires.js';
 import { JobStore } from '../core/scheduler/jobs.js';
 import type { QuietHours } from '../core/scheduler/proactivity.js';
@@ -57,7 +58,7 @@ import {
 import type { Approver, LoopDeps, RegisteredTool, SpendEntry, TurnRuntimeInfo } from './loop.js';
 import { loadProfiles, selectProfile, withThinking } from './profiles/profile.js';
 import { AnthropicProvider } from './providers/anthropic.js';
-import { lightLane, type LightAttemptReport } from './providers/light-lane.js';
+import { type LightAttemptReport, lightLane } from './providers/light-lane.js';
 import { OpenAICompatProvider } from './providers/openai-compat.js';
 import type { Provider } from './providers/types.js';
 import {
@@ -80,8 +81,8 @@ import {
 } from './tools/memory.js';
 import { forgetMemory, memoryForgetCapability, memoryForgetSpec } from './tools/memory-forget.js';
 import { makeProcessTools, processCapabilities } from './tools/process.js';
-import { diagnoseSearch, makeSearchTool, searchCapability } from './tools/search.js';
 import { makeScheduleTool, scheduleCapability } from './tools/schedule.js';
+import { diagnoseSearch, makeSearchTool, searchCapability } from './tools/search.js';
 import {
   makeShellTool,
   makeShellWriteTool,
@@ -341,9 +342,9 @@ export function baseToolOrder(input: {
     'vault_save',
     // Adjacent, and the read-only one first: the model reads this list in
     // order, and ADR-0074 punto 4 makes `shell_run` the default choice while
-    // `shell_run_write` is the one that interrupts the owner. If a profile's
-    // cap ever splits the pair, the half that survives must be the half that
-    // does not ask.
+    // `shell_run_write` is the one that can change things. Both ask since
+    // ADR-0091; if a profile's cap ever splits the pair, the half that
+    // survives must be the half that cannot write.
     ...(input.sandboxAvailable ? ['shell_run', 'shell_run_write'] : []),
     'process_list',
     'process_kill',
@@ -620,8 +621,10 @@ export function buildRuntime(
     budget.record({ ...entry, usd });
     return usd;
   };
-  const makeRecordSpend = (baseUrl: string | undefined) =>
-    (entry: SpendEntry): number => recordSpendWithBaseUrl(entry, baseUrl);
+  const makeRecordSpend =
+    (baseUrl: string | undefined) =>
+    (entry: SpendEntry): number =>
+      recordSpendWithBaseUrl(entry, baseUrl);
   let recordSpend = makeRecordSpend(config.provider.baseUrl);
   let lightBaseUrl = config.provider.baseUrl;
 
@@ -668,7 +671,10 @@ export function buildRuntime(
       ),
     onAttempt: reportLightAttempt,
   });
-  const lightInfo: { provider: Provider; model: string } = { provider: light, model: config.models.light };
+  const lightInfo: { provider: Provider; model: string } = {
+    provider: light,
+    model: config.models.light,
+  };
 
   // Memory. The vector half is optional and its absence is reported rather than
   // hidden: an embedder that is not running turns semantic recall into keyword
@@ -759,7 +765,7 @@ export function buildRuntime(
       spec: memorySearchSpec,
       // The tenant comes from the turn, never from this line. Baking it in here
       // is how a group member ends up reading the owner's memory.
-      handler: async (args, ctx) => searchMemory(recallDeps, ctx.tenant, args),
+      handler: async (args, ctx) => searchMemory(recallDeps, ctx.tenant, args, ctx.jobId),
       // Recalled memory is the grounding of the turn, not a payload the model
       // can re-fetch on a whim: clearing it to save context deletes the reason
       // the answer was anchored to anything.
@@ -781,7 +787,7 @@ export function buildRuntime(
       // runtime.
       capability: memoryCapability.id,
       spec: memoryWhySpec,
-      handler: async (args, ctx) => whyMemory(recallDeps, ctx.tenant, args),
+      handler: async (args, ctx) => whyMemory(recallDeps, ctx.tenant, args, ctx.jobId),
       // The provenance a "why" answer rests on is the turn's own grounding,
       // same as a `memory_search` hit — clearing it to save context would
       // strip the reason the answer was said in the first place.
@@ -798,7 +804,19 @@ export function buildRuntime(
       // `memory.write`. The turn id is the provenance of the retirement.
       capability: memoryForgetCapability.id,
       spec: memoryForgetSpec,
-      handler: async (args, ctx) => forgetMemory(recallDeps, { tenant: ctx.tenant, turnId: ctx.turnId }, args),
+      handler: async (args, ctx) =>
+        forgetMemory(
+          recallDeps,
+          {
+            tenant: ctx.tenant,
+            turnId: ctx.turnId,
+            // Il job di questo turno, quando c'è: la prima chiamata di
+            // `memory_forget` fa recall e paga il reranker, quindi quella spesa
+            // deve finire sul contatore del job come le altre due strade.
+            ...(ctx.jobId === undefined ? {} : { jobId: ctx.jobId }),
+          },
+          args,
+        ),
       // Its answer is either the candidate list (built from recalled text,
       // tiered to the worst source) or the durable result; only a storage or
       // lock error escapes.
@@ -816,24 +834,30 @@ export function buildRuntime(
     makeVaultSaveTool({ root: p.vault, vault, vectors }),
   ];
 
-  // The hands of M3. The shell tool is registered only when the probe proved a
-  // real containment on this host: absent sandbox → absent tool, declared in
-  // doctor — never a silent unsandboxed run (ADR-0018 rule 5, tightened: v1 is
-  // strict mode, the ask-gated escape hatch arrives as its own capability).
+  // The hands of M3. The shell tool is registered only when the shared
+  // boundary proves BOTH halves of the claim (#642): a real containment on
+  // this host (behavioral probe) AND — on Linux/bubblewrap — a trusted setup
+  // patch posture for CVE-2026-87766 (upstream ≥ 0.12.0). A probe-only gate
+  // exposed `shell_run` on bwrap 0.11.1 while doctor could only warn; both
+  // now read `assessShellBoundary`, so the two never describe two different
+  // machines. Absent sandbox OR unverified posture → absent tool, declared in
+  // doctor — never a silent unsandboxed run (ADR-0018 rule 5, tightened: v1
+  // is strict mode, the ask-gated escape hatch arrives as its own capability).
   // Literally the same `guards` object the fs tools got, which is what the
   // comment here used to only ask for: "two deny-lists that drift are one
   // deny-list plus a hole". They were two hand-written copies, and both were
   // missing the same two categories — so the hole was in neither copy's
   // divergence but in both of them agreeing on an incomplete list.
   const executor = new SandboxExecutor({ ...guards, denyRead });
-  const sandboxStatus = executor.status();
-  const contained = sandboxStatus.available;
+  const boundary = assessShellBoundary(executor.status());
+  const contained = boundary.usable;
   if (contained) {
     // Both lanes or neither (ADR-0074 punto 4). The read-only one is not a fallback
     // for a host where containment failed — it is the *stricter* of the two and
-    // rests on the same probe: `runReadOnly`'s promise ("no writes outside the
-    // scratch, no network") is the sandbox's promise, so a host that cannot
-    // prove containment cannot offer it either. Registering it alone there
+    // rests on the same probe: `runReadOnly` confines writes to scratch and
+    // disables direct IP networking, but Linux AF_UNIX can still reach local
+    // services except where `denyRead` hides their sockets. A host that cannot
+    // prove the declared containment cannot offer either lane. Registering it alone there
     // would be the silent degradation the ADR forbids, pointed the other way.
     tools.push(
       makeShellTool(executor, { root: workspace }),
@@ -844,15 +868,15 @@ export function buildRuntime(
   // structured record, not even the generic degrade note the search failures
   // got. `sys.shell` simply was not in the tool list, and the only way to
   // learn why was `muffin doctor`'s own, separate sandbox probe (line ~999),
-  // which nothing pointed a turn at. Same `SandboxProbe` shape doctor reads,
-  // read here instead of re-probed, so the two never describe two different
-  // machines.
+  // which nothing pointed a turn at. Same boundary doctor reads, computed
+  // here instead of re-probed/re-graded, with the reason doctor will print —
+  // behavioral failure and unverified patch posture stay distinguishable.
   if (!contained) {
     capabilityGaps.push({
       capability: 'shell_run, shell_run_write',
       kind: 'disabled',
-      reason: `${sandboxStatus.mechanism} non disponibile (${sandboxStatus.reason}): ${sandboxStatus.detail}`,
-      remedy: sandboxStatus.remedy,
+      reason: boundary.reason,
+      remedy: boundary.remedy,
     });
   }
 
@@ -1232,7 +1256,10 @@ export function buildRuntime(
    */
   const refreshLightModel = (): void => {
     const persisted = loadConfig(home);
-    const fingerprint = JSON.stringify({ provider: persisted.provider, light: persisted.models.light });
+    const fingerprint = JSON.stringify({
+      provider: persisted.provider,
+      light: persisted.models.light,
+    });
     if (fingerprint === lightFingerprint) return;
     lightFingerprint = fingerprint;
     lightBaseUrl = persisted.provider.baseUrl;
