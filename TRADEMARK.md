@@ -1,6 +1,6 @@
 # Trademark notice — Muffin
 
-The `Muffin` name, wordmark and logo are **not** covered by the repository's
+The `Muffin` name, wordmark, logo and official mascot artwork in `assets/brand/` are **not** covered by the repository's
 copyright license (`LICENSE`, AGPL-3.0-or-later). The AGPL grants rights over the
 code; it grants no right to present a fork, service or product as Muffin, to use
 the Muffin name or logo commercially, or to imply endorsement by the project.
