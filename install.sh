@@ -213,8 +213,7 @@ esac
 # versions interactively, and a systemd unit does not source a shell profile —
 # it needs one absolute interpreter directory that still exists next month
 # (`resolveInterpreterDir`, core/gateway/unit.ts). The official tarball under
-# MUFFIN_PREFIX is exactly that, and it is what `actions/setup-node` and
-# `scripts/ci-local.ts` do too.
+# MUFFIN_PREFIX is exactly that, and it is what `actions/setup-node` does as well.
 #
 # A system Node that is already >= 22 is used as-is: nothing is downloaded and
 # nothing shadows what the machine already had.

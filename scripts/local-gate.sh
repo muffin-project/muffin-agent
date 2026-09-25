@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 #
-# Il gate locale: prova un COMMIT, non la cartella di chi lo lancia.
+# Diagnostica locale facoltativa: prova un COMMIT, non la cartella di chi lo lancia.
 #
-# Perche esiste: i minuti GitHub sono finiti, quindi `.github/workflows/` non
-# gira. Questo script e il sostituto dichiarato, e il suo verde si scrive
-# `LOCAL-GATE PASS @ <sha>` — mai «CI verde», perche non e CI: gira sulla
-# macchina dell'owner, con la sua rete e la sua Docker.
+# GitHub Actions e il solo gate per integrare o promuovere il codice. Questo
+# comando non sostituisce i check richiesti e non autorizza merge; il suo verde
+# si scrive `LOCAL-GATE PASS @ <sha>` per distinguerlo dalla CI hosted.
 #
 # Perche clona invece di girare sul posto. Il 30/08/2026 la prima versione
 # girava `npm test` nel checkout dell'owner e raccoglieva **945** file di test
@@ -30,24 +29,12 @@
 #   npm run gate:local
 #   MUFFIN_GATE_TIENI=1 npm run gate:local     # non cancella il clone
 #
-# ## Relazione con `npm run ci:local` (aggiunto 2026-09-04)
+# ## Confine
 #
-# Sono due gate diversi apposta, non due porte sullo stesso meccanismo. Questo
-# script risponde "questo commit compila davvero un binario (`dist/cli/main.js`
-# scritto, non solo un `tsc --noEmit` che esce zero) e la suite gira pulita da
-# un clone esterno, senza la contaminazione di `.codex/worktrees/`/
-# `.releases/` misurata sopra" — proprietà che nessun workflow GitHub verifica
-# mai. `scripts/ci-local.ts` risponde una domanda diversa: "cosa direbbero i
-# quattro job di `.github/workflows/` su questo commit, oggi, mentre i minuti
-# sono fermi" — derivato dai file di workflow, non riscritto a mano. Fonderli
-# indebolirebbe entrambi: la difesa contro i 945 file non è un passo di CI da
-# derivare da uno YAML, e i quattro job non hanno un passo `npm run build` da
-# cui `ci:local` potrebbe derivare l'assertizione su `dist/cli/main.js` — quel
-# controllo resterebbe comunque scritto a mano, solo nel posto sbagliato.
-# `test:acceptance:linux` (`GATE LINUX` sotto) resta chiamato da qui per
-# `install.sh`/non-root, che nessun workflow prova nemmeno: anche quello non è
-# doppione del job "accettazione" di `ci:local`, che esegue solo i passi che
-# il job `accettazione` di `ci.yml` dichiara.
+# Questo è un aiuto locale facoltativo per compilazione/test su un clone pulito.
+# Non replica i workflow GitHub, non produce check GitHub e non sostituisce i
+# check richiesti dal ruleset. Per integrare o promuovere serve il PR con tutti
+# i required checks Actions riusciti.
 #
 set -euo pipefail
 
