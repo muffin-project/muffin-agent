@@ -125,14 +125,20 @@ it — **observed, not asserted**.
 
 That normally means:
 
-- commands you actually ran and their actual output;
-- minimum local signal before opening a PR: `npx tsc --noEmit` plus the targeted
-  tests for the files you touched (`npx vitest run <paths>`); the template
-  defines the rest of the evidence budget, not this file;
+- commands or GitHub Actions checks you actually observed, with their actual
+  results;
+- local typechecks and targeted tests are optional fast feedback. They do not
+  authorize integration and are not required before opening a PR. GitHub
+  Actions and the active repository ruleset are the only merge gate; every
+  required check must pass on the current, up-to-date PR candidate;
 - for a bug fix, the pre-fix failure/reproduction before the green result;
 - integration/acceptance evidence when the claim crosses a real boundary;
 - for CRITICAL work, the independent judge path described in `docs/development/JUDGE.md`,
   run by a fresh evaluator rather than the same session being its sole certifier.
+
+Green Actions are not evidence for behaviour the hosted runner cannot observe,
+such as a fresh public VPS install or an owner-controlled external service.
+Record that acceptance separately and leave it unresolved until it is observed.
 
 A subagent, coding assistant or reviewer saying "it works" is not itself
 evidence. The evidence is the executable observation.
