@@ -816,7 +816,7 @@ function muffinTty(env: Record<string, string>, args: string[], attesa: string):
     copione = `${comando} < ${shq(ctrlD)}`;
   }
   const r = spawnSync('sh', ['-c', copione], {
-    // 120 s, non 60: dentro il container di ci:local, con gli altri tre job
+    // 120 s, non 60: nel vecchio runner containerizzato, con gli altri tre job
     // in parallelo, `script` + `muffin init` a freddo passavano i 60 s e il
     // test diceva «appeso» (-1) a un comando che stava solo finendo tardi
     // (05/09/2026, due giri). Il tetto serve solo a non aspettare per

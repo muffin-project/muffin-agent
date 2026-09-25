@@ -5,7 +5,7 @@ import { puntaTmpdirAlloScratch } from './executor.js';
  * Le tre forme in cui `@anthropic-ai/sandbox-runtime` consegna `TMPDIR`,
  * fabbricate dalla forma misurata e non dalla vera macchina: la prova viva è
  * `confine-sola-lettura.test.ts`, che gira su bwrap nel job `verifica` di
- * ci:local e su seatbelt in locale. Qui si prova la *lettura* dell'argv, cioè
+ * il job Linux con `bwrap` e su seatbelt in locale. Qui si prova la *lettura* dell'argv, cioè
  * il pezzo che il 06/09 era sbagliato mentre la prova viva era rossa.
  */
 describe('puntaTmpdirAlloScratch', () => {

@@ -118,7 +118,7 @@ describe('acceptance · D1 · una sola corsia del modello', () => {
            * `finish` tocca la riga. Asserire lo stato durevole nell'istante in
            * cui si osserva l'evento *a monte* è una gara fra due osservazioni,
            * e su un host carico la si perde: misurato il 07/09/2026 nel gate
-           * (`ci:local` in container, suite in 747 s), dove questa riga ha
+           * (Linux bwrap run, suite in 747 s), dove questa riga ha
            * letto `running` mentre la seconda chiamata era appena partita.
            *
            * Ciò che la fetta afferma non cambia di una virgola: il conteggio

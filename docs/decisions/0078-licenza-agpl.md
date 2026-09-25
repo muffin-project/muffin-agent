@@ -34,7 +34,7 @@ Conseguenze pratiche che vincolano il codice:
   prometteva una verifica in CI (`license-checker` con allowlist) che non è mai
   esistita — nessun file di CI la implementava. Ora esiste davvero:
   `scripts/check-dep-licenses.mjs` + step `licenze delle dipendenze` in
-  `.github/workflows/ci.yml` (ereditato da `ci:local`, quindi dal merge gate).
+  `.github/workflows/ci.yml` (allora replayato da `ci:local`; oggi GitHub Actions è l’unica autorità d’integrazione).
   Fallisce su proprietario/`UNLICENSED`/mancante; il copyleft è segnalato, non
   fallito.
 - **Modelli e pesi non sono codice** (invariato da ADR-0019): si configurano, non

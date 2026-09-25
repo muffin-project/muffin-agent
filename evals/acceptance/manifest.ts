@@ -278,7 +278,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   provataDalMeccanismo(
     'A11',
     'install pulita: un comando su Ubuntu vuota porta a doctor senza rossi, unit systemd scritta e verificata, update e rollback dalla stessa via',
-    "la regge il job `install` (`.github/workflows/install.yml`, eseguito da ci:local in `ubuntu:24.04` senza Node preinstallato): `evals/install/ubuntu.sh` rifiuta di partire se `node` è già raggiungibile, esegue `install.sh` da utente con sudo, poi `muffin doctor` senza righe `fail`, `systemd-analyze verify` sulla unit e un avvio in foreground con il suo stesso ExecStart, poi `muffin update` e il rollback. Non è uno scenario della suite di accettazione perché il suo banco è un container pulito, non una home finta",
+    "la regge il job `install` (`.github/workflows/install.yml`, eseguito su GitHub Actions `ubuntu-latest` senza Node preinstallato): `evals/install/ubuntu.sh` rifiuta di partire se `node` è già raggiungibile, esegue `install.sh` da utente con sudo, poi `muffin doctor` senza righe `fail`, `systemd-analyze verify` sulla unit e un avvio in foreground con il suo stesso ExecStart, poi `muffin update` e il rollback. Non è uno scenario della suite di accettazione perché il suo banco è un container pulito, non una home finta",
   ),
   provataDalMeccanismo(
     'B18',

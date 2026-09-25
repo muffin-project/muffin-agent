@@ -323,7 +323,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         // owner: *«non puo non entrare»* — e la prova non l'ha seguita,
         // quindi questo scenario era **rosso su `dev`** da quel giorno senza
         // che nessuno lo vedesse (CI di GitHub ferma per fatturazione,
-        // trovato da `npm run ci:local`).
+        // trovato dal test Linux con `bwrap`).
         //
         // Le tre cose che sono vere oggi, asserite tutte e tre qui sotto
         // perche' nessuna da sola distingue «la protezione funziona» da «il
@@ -712,7 +712,7 @@ describe('acceptance · D · capability e sicurezza', () => {
        * quindi non c'è nessuna scorciatoia a spiegarlo: passa perché la
        * capability è `low`/`reversible: 'yes'`, e lo è perché il sandbox la
        * tiene dentro un confine — provato in `core/sandbox/confine-sola-lettura.test.ts`,
-       * su Linux nel container di ci:local.
+       * su Linux nel job GitHub Actions con `bwrap`.
        */
       const sola = await install({
         main: [

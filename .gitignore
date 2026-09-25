@@ -47,7 +47,6 @@ evals/character/out/
 .gate-linux/
 
 # verdetti del gate locale (scripts/merge.ts) — per macchina, mai in Git
-.ci-local/
 
 # Jev-shadow decision telemetry (see .agents/skills/jev-shadow/SKILL.md).
 # Machine-local learning data: decision ids, state hashes, routes, outcomes.
