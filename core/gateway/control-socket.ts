@@ -1,8 +1,18 @@
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  rmdirSync,
+  writeFileSync,
+} from 'node:fs';
 import { connect, createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, parse } from 'node:path';
 import { tightenPrivateFile } from '../config/private-fs.js';
 
 /**
@@ -80,7 +90,9 @@ export function socketPathFor(home: string): { path: string; pointer: string | n
   if (Buffer.byteLength(diretto) <= SUN_PATH_SAFE) return { path: diretto, pointer: null };
   const hash = createHash('sha256').update(home).digest('hex').slice(0, 12);
   const uid = process.getuid?.();
-  const directory = join(tmpdir(), `m-${uid ?? 'unknown'}-${hash}`);
+  // Resolve TMPDIR/TMP/TEMP once so a symlink at the configured temp path is
+  // not followed again between validation and bind.
+  const directory = join(realpathSync(tmpdir()), `m-${uid ?? 'unknown'}-${hash}`);
   const path = join(directory, 's');
   if (Buffer.byteLength(path) > SUN_PATH_SAFE) {
     throw new Error('la home e la directory temporanea superano il limite del socket Unix');
@@ -129,15 +141,40 @@ export function controlSocketGuardPaths(home: string): string[] {
 }
 
 /**
- * The long-home socket lives under shared temp storage. Establish its parent
- * before binding so a different UID can neither pre-create a usable path nor
- * reach the socket during the bind-to-chmod window.
+ * Every ancestor must be owned by root/the current UID; writable shared
+ * ancestors need the sticky bit. Otherwise another UID could replace the
+ * private leaf after validation and race the bind-to-chmod window.
  */
+function assertTrustedSocketTempRoot(directory: string, uid: number): void {
+  const root = parse(directory).root;
+  let current = directory;
+  while (true) {
+    const st = lstatSync(current, { throwIfNoEntry: false });
+    const mode = st?.mode ?? 0;
+    if (
+      st === undefined ||
+      !st.isDirectory() ||
+      st.isSymbolicLink() ||
+      (st.uid !== uid && st.uid !== 0) ||
+      ((mode & 0o022) !== 0 && (mode & 0o1000) === 0)
+    ) {
+      throw new Error('la directory temporanea non e’ un confine sicuro per il socket');
+    }
+    if (current === root) return;
+    const parent = dirname(current);
+    if (parent === current) return;
+    current = parent;
+  }
+}
+
+/** Establish a private leaf only after proving other UIDs cannot replace it. */
 function ensurePrivateSocketDirectory(directory: string): void {
   const uid = process.getuid?.();
   if (uid === undefined) {
     throw new Error('fallback sicuro del socket Unix non disponibile senza uid POSIX');
   }
+
+  assertTrustedSocketTempRoot(dirname(directory), uid);
 
   try {
     mkdirSync(directory, { mode: 0o700 });

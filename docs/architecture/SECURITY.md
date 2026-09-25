@@ -637,12 +637,16 @@ Three properties of this split are load-bearing:
   filesystem objects: a socket reachable under the read-only bind is reachable
   from the read-only lane, *except* what `denyRead` hides. Since 2026-09-21
   that list carries the gateway control socket and its pointer file (#638).
-  The gateway socket path and long-home fallback path (hashed socket in `/tmp`
-  plus `gateway.sock.path`) are deny-listed. This candidate extends the
-  composed Linux live test to both paths, verifies owner-only socket/private
-  directory permissions for the fallback under umask `022`, and attempts a
-  separate-UID connection. Those new checks remain unverified until the
-  required Actions run on this exact candidate with `MUFFIN_REQUIRE_SANDBOX=1`.
+  The gateway socket path and long-home fallback path (hashed socket under
+  Node's configured temp root plus `gateway.sock.path`) are deny-listed. The
+  fallback resolves that root and fails closed unless each ancestor is owned
+  by root/current UID, with the sticky bit required on writable shared
+  ancestors; this prevents another UID from replacing the private leaf after
+  validation. The composed Linux live test covers both paths, owner-only
+  socket/private-directory permissions under umask `022`, a separate-UID
+  connection, and rejection of a world-writable non-sticky `TMPDIR` before
+  bind/pointer publication. These checks remain unverified until the required
+  Actions run on the exact candidate with `MUFFIN_REQUIRE_SANDBOX=1`.
   Sockets of *other*
   installations on the same machine stay reachable:
   the deny names this home's channel, not every home's.

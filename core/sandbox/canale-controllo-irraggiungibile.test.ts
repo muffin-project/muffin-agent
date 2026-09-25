@@ -226,7 +226,9 @@ setTimeout(() => { console.error('NEGATO:timeout'); process.exit(2); }, 5000);
         expect(r.code).not.toBe(0);
         // A sandbox setup or command-launch failure is not proof of socket
         // denial: require the client itself to report the connect errno.
-        expect(r.stderr).toMatch(/NEGATO:(?:EACCES|ENOENT)\b/);
+        // ECONNREFUSED is valid too: the host just proved this exact path is
+        // listening, while the sandbox client still cannot connect to it.
+        expect(r.stderr).toMatch(/NEGATO:(?:EACCES|ENOENT|ECONNREFUSED)\b/);
         expect(r.stderr).not.toContain('NEGATO:timeout');
         if (pointer !== null) {
           expect(r.stderr).toMatch(/POINTER_HIDDEN:(?:EACCES|ENOENT)\b/);

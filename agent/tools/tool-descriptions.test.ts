@@ -114,14 +114,13 @@ describe('ogni tool esposto dice quando usarlo e quando no', () => {
       const desc = String(shell!.spec.description ?? '');
       const descWrite = String(write!.spec.description ?? '');
 
-      // Dal 06/09 (ADR-0074 punto 4) «last resort» non è più la shell: è la shell
-      // **che scrive**. Spostare la frase è metà del punto — l'altra metà è
-      // che la corsia in sola lettura si dichiari come scelta di default,
-      // altrimenti il modello continua a leggere «shell = ultima spiaggia» e
-      // a chiedere il permesso per un `ls`, che è il difetto misurato.
+      // Dal 06/09 (ADR-0074 punto 4) «last resort» è la shell che scrive.
+      // La corsia di lettura si usa per osservazioni non coperte da un tool
+      // dedicato, ma non si descrive come genericamente sicura: chiede sempre
+      // l'approvazione e Linux AF_UNIX conserva effetti locali.
       expect(descWrite).toMatch(/last resort/i);
       expect(desc).not.toMatch(/last resort/i);
-      expect(desc).toMatch(/default way to run a command/i);
+      expect(desc).toMatch(/Use it when you need to observe something no dedicated tool wraps/i);
 
       // Almeno tre dei tool dedicati che il capitolo D13 chiede di nominare,
       // uno per ciascuna famiglia (file, processo, propriocezione): togliere

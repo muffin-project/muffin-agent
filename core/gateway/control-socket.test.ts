@@ -1,4 +1,14 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -109,7 +119,7 @@ describe('sun_path e il file puntatore', () => {
   it('una home lunga sposta il socket in temp e lascia un puntatore accanto', () => {
     const lunga = `/tmp/${'a'.repeat(60)}/${'b'.repeat(60)}`;
     const p = socketPathFor(lunga);
-    expect(p.path.startsWith(tmpdir())).toBe(true);
+    expect(p.path.startsWith(realpathSync(tmpdir()))).toBe(true);
     expect(p.path).not.toContain('a'.repeat(60));
     expect(p.pointer).toBe(join(lunga, 'gateway.sock.path'));
   });
@@ -135,6 +145,26 @@ describe('sun_path e il file puntatore', () => {
     expect(controlSocketGuardPaths(lunga)).toContain(dirname(s.path));
     expect(controlSocketGuardPaths(lunga)).toContain(join(lunga, 'gateway.sock.path'));
     expect(await askGateway(lunga, 'identify')).not.toBeNull();
+  });
+
+  it.skipIf(process.getuid === undefined)('rifiuta un TMPDIR scrivibile senza sticky prima del bind', async () => {
+    const base = mkdtempSync(join('/tmp', 'm-'));
+    const tmpUnsafe = join(base, 'unsafe-tmp');
+    const homeLunga = `/tmp/${'h'.repeat(60)}/${'x'.repeat(60)}`;
+    mkdirSync(tmpUnsafe);
+    chmodSync(tmpUnsafe, 0o777);
+    const precedente = process.env.TMPDIR;
+    process.env.TMPDIR = tmpUnsafe;
+
+    try {
+      const socket = socketPathFor(homeLunga).path;
+      await expect(serveControlSocket(homeLunga, () => identify())).rejects.toThrow(/directory temporanea/);
+      expect(existsSync(dirname(socket))).toBe(false);
+    } finally {
+      if (precedente === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = precedente;
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });
 
