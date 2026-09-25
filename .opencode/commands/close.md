@@ -7,7 +7,8 @@ description: End a session cleanly. Reconciles Git, PR and issue state and repor
    (branch, clean/dirty, HEAD) is understood and stated.
 3. Final compact report, exactly:
    - branch + HEAD SHA (short) and clean/dirty;
-   - `main` / `dev` SHAs and their divergence;
+   - `main` / `dev` live GitHub SHAs and the local refs (the `repository`
+     section of `scripts/agent/repo-state.mjs`);
    - open PRs that remain and why;
    - remaining WIP, blockers, and the next accepted action;
    - owner-only actions required, if any.

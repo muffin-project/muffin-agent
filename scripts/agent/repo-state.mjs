@@ -6,6 +6,9 @@
  *
  * Prints a compact current-state snapshot derived from Git/GitHub/toolchain —
  * never from handoff prose or conversation memory. Used by /start.
+ * The `main`/`dev` SHAs are the live GitHub ones beside the local refs, and
+ * every worktree is listed, so a fresh session cannot read a stale local branch
+ * or an omitted worktree as current state.
  * Each section is best-effort: on failure it prints `unknown` rather than
  * failing, so a fresh session always gets something to work from.
  * Exit 0 = snapshot complete, 1 = git unavailable (not a repository checkout).
@@ -49,7 +52,8 @@ const localMain = git('rev-parse refs/heads/main') || 'unknown';
 const localDev = git('rev-parse refs/heads/dev') || 'unknown';
 const liveMain = githubBranch('main');
 const liveDev = githubBranch('dev');
-const worktrees = (git('worktree list --porcelain') || '')
+const worktreeList = git('worktree list --porcelain');
+const worktrees = (worktreeList ?? '')
   .split('\n')
   .filter((l) => l.startsWith('worktree '))
   .map((l) => l.slice('worktree '.length));
@@ -105,9 +109,15 @@ section('repository', [
   `checkout branch: ${branch} @ ${head} (${dirty ? 'DIRTY' : 'clean'})`,
   `GitHub main: ${short(liveMain)} | local main: ${short(localMain)}`,
   `GitHub dev: ${short(liveDev)} | local dev: ${short(localDev)}`,
-  `worktrees: ${worktrees.length} — clean ${worktrees.length - worktreeDirty.length - worktreeUnavailable.length}, dirty ${worktreeDirty.length}, unavailable ${worktreeUnavailable.length}`,
-  ...(worktreeDirty.length ? [`dirty: ${worktreeDirty.join(', ')}`] : []),
-  ...(worktreeUnavailable.length ? [`unavailable: ${worktreeUnavailable.join(', ')}`] : []),
+  // A failed `worktree list` must not read as "zero worktrees" — that is the
+  // same silent omission this script exists to prevent, one level up.
+  ...(worktreeList === null
+    ? ['worktrees: unknown (git worktree list failed)']
+    : [
+        `worktrees: ${worktrees.length} — clean ${worktrees.length - worktreeDirty.length - worktreeUnavailable.length}, dirty ${worktreeDirty.length}, unavailable ${worktreeUnavailable.length}`,
+        ...(worktreeDirty.length ? [`dirty: ${worktreeDirty.join(', ')}`] : []),
+        ...(worktreeUnavailable.length ? [`unavailable: ${worktreeUnavailable.join(', ')}`] : []),
+      ]),
 ]);
 
 section('open PRs', [
