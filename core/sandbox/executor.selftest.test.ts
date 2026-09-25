@@ -94,8 +94,18 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     // leg so it really reads the sentinel `selfTestContainment` wrote to
     // disk; the deny leg ignores it and always refuses — exactly what a held
     // deny through the real door looks like from the outside.
+    //
+    // The AF_UNIX leg gets the refusal the real `apply-seccomp` filter
+    // produces (`EPERM` from `socket(AF_UNIX, …)`): the mock never runs
+    // bwrap, so without modelling that refusal it would let the probe's
+    // client connect and `verify()` would report `unix_filter_absent`.
     wrapWithSandboxArgv.mockImplementation(async (command, _binShell, customConfig) => ({
-      argv: denyReadOf(customConfig).length > 0 ? ['/bin/sh', '-c', 'exit 1'] : ['/bin/bash', '-c', command],
+      argv:
+        denyReadOf(customConfig).length > 0
+          ? ['/bin/sh', '-c', 'exit 1']
+          : command.includes('afunix.sock')
+            ? ['/bin/sh', '-c', 'echo EPERM >&2; exit 1']
+            : ['/bin/bash', '-c', command],
       env: {},
     }));
 

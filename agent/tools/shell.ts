@@ -68,11 +68,11 @@ export const shellCapability: CapabilityDecl = {
   // `fs_read`. Residuals keep it here, all declared in `docs/architecture/SECURITY.md`
   // §9: reads cover the whole host filesystem minus a finite deny-list (not
   // just the project — measured on Linux 2026-09-22, #645); writes stay in
-  // scratch and direct IP networking is disabled. On Linux,
-  // `allowAllUnixSockets` leaves AF_UNIX reachable (srt's seccomp layer is
-  // off, upstream #428/#429). The Muffin gateway socket and pointer are
-  // deny-listed and the direct socket path has a live Linux proof (#638), but
-  // other reachable local sockets may affect services. Commands also spend
+  // scratch and direct IP networking is disabled. On Linux the AF_UNIX
+  // seccomp filter is requested and behaviorally verified before this lane is
+  // exposed at all (a host where it cannot hold gets no shell). The Muffin
+  // gateway socket and pointer are additionally deny-listed (#638, macOS).
+  // Commands also spend
   // host CPU and file descriptors. Whole-host output can disclose data, so
   // ADR-0091 makes every call ask the owner.
   effect: 'host',

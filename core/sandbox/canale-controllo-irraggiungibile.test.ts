@@ -21,8 +21,8 @@ import { probeSandbox } from './probe.js';
  * #638, falsificatore live: la corsia in sola lettura non raggiunge il
  * socket di controllo del gateway, quindi non può coniare un turno owner.
  *
- * Solo Linux: la proprietà vive in `--ro-bind / /` + `allowAllUnixSockets`
- * di bwrap, che su macOS/seatbelt è un meccanismo diverso. Su macOS la
+ * Solo Linux: la proprietà vive in `--ro-bind / /` + il filtro seccomp
+ * AF_UNIX di bwrap, che su macOS/seatbelt è un meccanismo diverso. Su macOS la
  * copertura è il test unitario (`denyRead` contiene `controlSocketGuardPaths`
  * in `core/rot/guards.test.ts`); fingere di provare bwrap da seatbelt
  * sarebbe un verde fabbricato.
@@ -42,7 +42,7 @@ const linuxGate: { run: boolean; why: string } = (() => {
   if (host !== 'linux') {
     return {
       run: false,
-      why: 'falsificatore solo Linux (bwrap --ro-bind + allowAllUnixSockets); su macOS vale il test unitario sulla deny-list',
+      why: 'falsificatore solo Linux (bwrap --ro-bind + filtro seccomp AF_UNIX); su macOS vale il test unitario sulla deny-list',
     };
   }
   const p = probeSandbox();
@@ -228,7 +228,11 @@ setTimeout(() => { console.error('NEGATO:timeout'); process.exit(2); }, 5000);
         // denial: require the client itself to report the connect errno.
         // ECONNREFUSED is valid too: the host just proved this exact path is
         // listening, while the sandbox client still cannot connect to it.
-        expect(r.stderr).toMatch(/NEGATO:(?:EACCES|ENOENT|ECONNREFUSED)\b/);
+        // EPERM is the strongest of the four and comes from the layer below
+        // `denyRead`: since `networkOff()` requests srt's AF_UNIX seccomp
+        // filter, `socket(AF_UNIX, …)` itself is refused before the deny
+        // list is ever consulted (measured on the Linux runner, 2026-09-26).
+        expect(r.stderr).toMatch(/NEGATO:(?:EACCES|ENOENT|ECONNREFUSED|EPERM)\b/);
         expect(r.stderr).not.toContain('NEGATO:timeout');
         if (pointer !== null) {
           expect(r.stderr).toMatch(/POINTER_HIDDEN:(?:EACCES|ENOENT)\b/);
