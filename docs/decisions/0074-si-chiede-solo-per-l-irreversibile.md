@@ -99,7 +99,7 @@ o senza annotazioni è `'no'` e chiede (riga `external`). Oggi tutto MCP è
 - **Punto 2:** su un'installazione `hardened`, l'owner a taint 0 esegue
   `sys.process.kill` senza un `ask` — allora la scorciatoia è tornata.
 - **Punto 4:** un comando in `sys.shell` (sola lettura) scrive fuori dallo
-  scratch o apre un socket — prova nel container di ci:local (`bwrap`):
+  scratch o apre un socket — prova nel container Linux con `bwrap` (misura storica; oggi verificata da GitHub Actions):
   `touch $WORKSPACE/x` e `curl` devono fallire dentro `sys.shell` e riuscire
   solo in `sys.shell.write` dopo l'`ask`. Una mutazione che toglie
   `--unshare-net` la fa cadere.
