@@ -112,7 +112,10 @@ function harness(script: ChatResult[], over: { reranker?: Reranker } = {}) {
       spec: memorySearchSpec,
       // Wired exactly as production wires it. A harness that hardcodes the
       // tenant tests the harness, and the previous version of this file did.
-      handler: (args, ctx) => searchMemory(recallDeps, ctx.tenant, args),
+      // Wired exactly as production wires it, job attribution included: the
+      // harness used to drop the 4th argument and so could not catch a broken
+      // `ToolContext.jobId` pass-through.
+      handler: (args, ctx) => searchMemory(recallDeps, ctx.tenant, args, ctx.jobId),
       throwTier: 0,
     },
     {
@@ -543,5 +546,39 @@ describe('E1: la spesa del reranker è attribuita al job che l\'ha causata', () 
     await runTurn(h.deps, turn(h, 'commercialista'));
 
     expect(righeLight).toEqual([null]);
+  });
+
+  it('anche il memory_search che il modello chiama dentro un turno-job è speso sul job', async () => {
+    const rerankReply: ChatResult = {
+      text: '{"order":[0,1]}',
+      toolCalls: [],
+      stopReason: 'end',
+      usage: { inputTokens: 40, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      model: 'light-served',
+    };
+    // Il testo del turno non pesca niente (`cerca` non compare negli episodi),
+    // quindi la recall automatica NON paga il reranker: l'unica chiamata light
+    // di questo turno è quella che il tool provoca. Senza il `ctx.jobId` nel
+    // cablaggio del tool, questa riga resterebbe `null`.
+    const h = harness([callTool('memory_search', { query: 'commercialista' }), rerankReply, answer('trovato')]);
+    for (let i = 0; i < RERANK_MIN_CANDIDATES + 4; i++) {
+      h.store.addEpisode({
+        tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
+        kind: 'message', content: `commercialista numero ${i}`, trustTier: 0,
+        createdAt: '2026-08-04T11:00:00Z',
+      });
+    }
+    const righeLight: Array<string | null> = [];
+    h.deps.memory!.recall.reranker = new LlmReranker(
+      lightLane(h.provider, {
+        profile: CONSERVATIVE,
+        record: (entry: LightSpend) => righeLight.push(entry.jobId ?? null),
+      }),
+      'light-model',
+    );
+
+    await runTurn(h.deps, { ...turn(h, 'cerca'), jobId: 'job-7' });
+
+    expect(righeLight).toEqual(['job-7']);
   });
 });

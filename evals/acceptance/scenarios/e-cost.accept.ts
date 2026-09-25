@@ -7,6 +7,7 @@ import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-bu
 import { extraction } from '../provider.js';
 import { scenario } from '../scenario.js';
 import { MemoryStore } from '../../../core/memory/store.js';
+import { CONSOLIDATION_CAPABILITY } from '../../../core/memory/consolidator.js';
 import { RERANK_MIN_CANDIDATES } from '../../../core/memory/rerank.js';
 
 /**
@@ -244,7 +245,7 @@ async function rerankerSulJob(): Promise<void> {
           model: string;
         }>,
     );
-    const light = righe.filter((r) => r.capability === 'system.consolidation');
+    const light = righe.filter((r) => r.capability === CONSOLIDATION_CAPABILITY);
     if (light.length === 0) {
       throw new Error(
         `nessuna spesa della corsia light attribuita al job: la riga del reranker non porta job_id\n` +

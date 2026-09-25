@@ -805,7 +805,18 @@ export function buildRuntime(
       capability: memoryForgetCapability.id,
       spec: memoryForgetSpec,
       handler: async (args, ctx) =>
-        forgetMemory(recallDeps, { tenant: ctx.tenant, turnId: ctx.turnId }, args),
+        forgetMemory(
+          recallDeps,
+          {
+            tenant: ctx.tenant,
+            turnId: ctx.turnId,
+            // Il job di questo turno, quando c'è: la prima chiamata di
+            // `memory_forget` fa recall e paga il reranker, quindi quella spesa
+            // deve finire sul contatore del job come le altre due strade.
+            ...(ctx.jobId === undefined ? {} : { jobId: ctx.jobId }),
+          },
+          args,
+        ),
       // Its answer is either the candidate list (built from recalled text,
       // tiered to the worst source) or the durable result; only a storage or
       // lock error escapes.
