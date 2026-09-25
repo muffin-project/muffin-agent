@@ -597,7 +597,7 @@ the kernel therefore lets it run without asking anyone. That is the whole
 argument: a command that cannot write outside a throwaway directory has nothing
 to undo, and a command with no socket has sent nothing. Both halves are executed
 against a live sandbox in `core/sandbox/confine-sola-lettura.test.ts`, on Linux
-under `bwrap` in the `verifica` job of `scripts/ci-local.ts` and on macOS under
+under `bwrap` in the GitHub Actions `verifica` job and on macOS under
 seatbelt.
 
 `sys.shell.write` (`shell_run_write`) is the **writing lane**: the workspace is

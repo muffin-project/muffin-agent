@@ -11,7 +11,7 @@ import { probeSandbox } from './probe.js';
  * **Il falsificatore del punto 4 di ADR-0074, eseguito.**
  *
  * L'ADR dice: *«un comando in `sys.shell` (sola lettura) scrive fuori dallo
- * scratch o apre un socket — prova nel container di ci:local (`bwrap`):
+ * scratch o apre un socket — prova nel job Linux con `bwrap`:
  * `touch $WORKSPACE/x` e `curl` devono fallire dentro `sys.shell` e riuscire
  * solo in `sys.shell.write` dopo l'`ask`»*. Questo file è quella prova, e non
  * un'asserzione sugli argomenti che `@anthropic-ai/sandbox-runtime` costruisce:
@@ -163,7 +163,7 @@ describe.runIf(gate.run)(`le due corsie contengono cose diverse (${gate.why})`, 
       // ragione per cui lo scratch esiste — smetterebbe di funzionare senza
       // che niente lo dica.
       //
-      // **E ha trovato un guasto vero il 06/09**, nel container di ci:local e
+      // **E ha trovato un guasto vero il 06/09**, nel run Linux con `bwrap` e
       // non sul portatile: su Linux `$TMPDIR` valeva `/tmp/claude`, il default
       // che `@anthropic-ai/sandbox-runtime` infila fra i `--setenv` di bwrap,
       // e non lo scratch di questo esecutore — una directory inesistente che
