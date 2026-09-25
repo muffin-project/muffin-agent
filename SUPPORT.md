@@ -1,8 +1,7 @@
 # Supporting Muffin
 
-Muffin is owner-led and currently developed in a controlled private preview.
-Public source access will open after the repository's privacy, security and
-readiness gates are met.
+Muffin is owner-led and source-public at pre-alpha. This does not imply
+product stability, support guarantees, or public alpha.
 
 ## Financial support
 
@@ -15,10 +14,10 @@ Support is appreciated, but it is deliberately separate from project authority.
 A donation does **not** grant repository write access, merge or release rights,
 maintainer status, product authority, or priority over technical decisions.
 
-Supporters may receive community recognition on an opt-in basis. During the
-private Community Preview, existing supporters may also be invited with read-only
-repository access so they can follow the project before the source-public cutover.
-That preview access is temporary community access, not governance authority.
+Supporters may receive community recognition on an opt-in basis. The repository
+is already publicly readable; donations do not grant repository write access,
+merge or release rights, maintainer status, product authority, or priority over
+technical decisions.
 
 ## Contributing is different
 
