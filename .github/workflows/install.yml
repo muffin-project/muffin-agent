@@ -48,16 +48,6 @@ name: install
 
 on:
   pull_request:
-    paths:
-      - 'bootstrap.sh'
-      - 'install.sh'
-      - 'evals/install/**'
-      - 'cli/**'
-      - 'core/gateway/**'
-      - 'core/config/config.ts'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/install.yml'
   push:
     branches: [main]
     paths:

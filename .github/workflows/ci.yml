@@ -92,12 +92,6 @@ on:
   # proposito: scatterebbe su ogni etichetta e comprerebbe solo rumore.
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore:
-      - 'docs/**'
-      - '.claude/**'
-      - 'README.md'
-      - 'AGENTS.md'
-      - 'CLAUDE.md'
   push:
     branches: [main]
     paths-ignore:
@@ -116,7 +110,61 @@ permissions:
   contents: read
 
 jobs:
+  dco:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: install DCO checker dependencies only
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: contributor agreement / DCO
+        run: |
+          set -euo pipefail
+
+          if [ "${GITHUB_EVENT_NAME:-}" != "pull_request" ]; then
+            echo "DCO: ${GITHUB_EVENT_NAME:-unknown} event — no contributor PR sign-off to check."
+            exit 0
+          fi
+
+          mapfile -t PR_META < <(node - <<'NODE'
+          const fs = require('node:fs');
+          const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+          const pr = event.pull_request;
+          if (!pr) process.exit(64);
+          console.log(pr.user.login);
+          console.log(pr.base.sha);
+          console.log(pr.head.sha);
+          NODE
+          )
+
+          author="${PR_META[0]:-}"
+          base="${PR_META[1]:-}"
+          head="${PR_META[2]:-}"
+
+          [ -n "$author" ] && [ -n "$base" ] && [ -n "$head" ] || {
+            echo "DCO: could not resolve PR author/base/head from GITHUB_EVENT_PATH" >&2
+            exit 64
+          }
+
+          # Existing owner branches predate the contributor-agreement policy.
+          if [ "$author" = "GiustoPiedimonte" ]; then
+            echo "DCO: owner PR — legacy owner exemption."
+            exit 0
+          fi
+
+          npx tsx scripts/check-dco.ts "$base" "$head"
+
   verifica:
+    needs: dco
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
