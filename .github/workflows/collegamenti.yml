@@ -3,16 +3,14 @@
 #
 # ## Perché un job a parte
 #
-# Storicamente `ci.yml` ignorava `docs/**` per risparmiare minuti privati.
-# Dal source-public la priorità cambia: i check destinati alla branch protection
-# devono materializzarsi su ogni PR, perché GitHub lascia Pending un workflow
-# richiesto che viene saltato al trigger. Questo job resta separato perché la
-# sua claim è stretta e leggibile, non per nascondersi dietro un path filter.
+# `ci.yml` e `accettazione.yml` hanno entrambi `docs/**` in `paths-ignore`, per
+# la ragione scritta lì: una PR di soli documenti non esercita nulla che quelle
+# suite coprano, e pagarle costerebbe ~7 minuti per niente.
 #
-# La conseguenza storica è che fino al 2026-08-30 **niente** verificava i
-# riferimenti proprio sulle PR che li cambiavano. Il job nacque stretto sui file
-# che copriva; in preparazione al source-public il trigger PR è diventato
-# intenzionalmente universale, così il check può essere required senza sparire.
+# La conseguenza, però, è che fino al 2026-08-30 **niente** verificava i
+# riferimenti — proprio sulle PR che li cambiano. È lo stesso punto cieco che
+# `strumenti.yml` ha chiuso per `.claude/`, con la stessa forma di rimedio: un
+# job che gira solo sui file che copre e costa quanto un `npm ci` più un test.
 #
 # Misurato al primo giro, non stimato: vedi il run di questa PR.
 #
@@ -23,16 +21,13 @@
 # datati: un `§N` scaduto lì dentro è un documento storico che cita com'era il
 # mondo allora, e correggerlo sarebbe riscrivere la storia.
 #
-# Il filtro `paths` rimasto sul **push a main** include anche i sorgenti perché
-# la metà dei riferimenti vive nei commenti del codice di prodotto: un filtro sui
-# soli `docs/**` avrebbe lasciato fuori proprio i file in cui il drift del
-# 19/08 si è depositato. Sulle PR il job gira sempre.
+# `paths` include i sorgenti perché la metà dei riferimenti vive nei commenti
+# del codice di prodotto: un filtro sui soli `docs/**` avrebbe lasciato fuori
+# proprio i file in cui il drift del 19/08 si è depositato.
 
 name: collegamenti
 
 on:
-  # Required public check: every PR materializes this workflow. Optimize later
-  # with job-level conditions, never trigger-level path filters.
   pull_request:
   push:
     branches: [main]
@@ -70,9 +65,9 @@ jobs:
     # `accettazione.yml`: un tetto uccide un run appeso, non fa da budget.
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
