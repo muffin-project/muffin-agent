@@ -82,9 +82,34 @@ env -i HOME="$LAB/home" PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/
   MUFFIN_CMD=muffin-agent sh "$LAB/install.sh" >"$LAB/conflict.log" 2>&1
 CONFLICT_RC=$?
 set -e
-if [ "$CONFLICT_RC" -eq 0 ] || ! grep -Eiq 'already belongs|refusing before changing|collision' "$LAB/conflict.log"; then
+if [ "$CONFLICT_RC" -eq 0 ]; then
   cat "$LAB/conflict.log" >&2
-  echo "root boundary eval: installer did not reject the conflicting muffin-agent command" >&2
+  echo "root boundary eval: installer accepted a conflicting muffin-agent command" >&2
+  exit 1
+fi
+if grep -Fq '/usr/local/bin is writable by an untrusted identity.' "$LAB/conflict.log"; then
+  # Hosted runners may make /usr/local/bin group-writable. The installer must
+  # reject that unsafe dispatcher path before it reaches the collision guard.
+  # Accept this earlier refusal only when the live owner/mode proves the exact
+  # precondition; otherwise keep requiring the collision-specific refusal.
+  ROOT_BIN_OWNER_GROUP=$(stat -c '%u:%g' /usr/local/bin)
+  ROOT_BIN_MODE=$(stat -c '%a' /usr/local/bin)
+  if [ "$ROOT_BIN_OWNER_GROUP" != 0:0 ]; then
+    echo "root boundary eval: writable-path refusal had unexpected owner $ROOT_BIN_OWNER_GROUP" >&2
+    exit 1
+  fi
+  case "$ROOT_BIN_MODE" in
+    *[2367][0-7] | *[0-7][2367]) COLLISION_GUARD=not-reached-untrusted-directory ;;
+    *)
+      echo "root boundary eval: installer rejected /usr/local/bin although mode $ROOT_BIN_MODE is not untrusted-writable" >&2
+      exit 1
+      ;;
+  esac
+elif grep -Eiq 'already belongs|refusing before changing|collision' "$LAB/conflict.log"; then
+  COLLISION_GUARD=exercised
+else
+  cat "$LAB/conflict.log" >&2
+  echo "root boundary eval: installer stopped for an unrelated reason before rejecting the conflicting command" >&2
   exit 1
 fi
 if getent passwd muffin >/dev/null || getent group muffin >/dev/null || [ -e /var/lib/muffin ] ||
@@ -153,4 +178,4 @@ if [ "$AFTER_SHIM" != "$SHIM_STATE" ]; then
   exit 1
 fi
 
-echo "root boundary eval: PASS — foreign muffin-agent command preserved; account collisions refuse without service-state writes; key staging order keeps the directory private until owner/mode verification"
+echo "root boundary eval: PASS — foreign muffin-agent command preserved; collision guard $COLLISION_GUARD; account collisions refuse without service-state writes; key staging order keeps the directory private until owner/mode verification"
