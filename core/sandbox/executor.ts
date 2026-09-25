@@ -1,5 +1,6 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SandboxManager, type SandboxRuntimeConfig } from '@anthropic-ai/sandbox-runtime';
@@ -171,7 +172,7 @@ const STRICT_SHELL_PREFIX = 'set -eo pipefail; ';
 
 /** What the real self-test found wrong — same reason taxonomy `probe.ts` uses. */
 type ContainmentFailure = {
-  reason: 'userns_denied' | 'contain_failed';
+  reason: 'userns_denied' | 'contain_failed' | 'unix_filter_absent';
   detail: string;
   remedy: string;
 };
@@ -248,28 +249,39 @@ function isMissingDependency(detail: string): boolean {
  * registers one today; this stops the day something does from being a silent
  * widening.
  *
- * **Declared residual: AF_UNIX on Linux.** `allowAllUnixSockets` skips srt's
- * seccomp layer, which is the only thing that blocks `socket(AF_UNIX, …)` —
- * v1 keeps it on because two open upstream bugs (#428, #429) break seccomp on
- * Ubuntu 24.04. `--unshare-net` does not cover Unix sockets: they are
- * filesystem objects, and `connect()` to one is not a write, so a socket
- * reachable under the read-only bind is reachable from the read-only lane too.
- * What is NOT reachable is what `guards.denyRead` hides: since #638 that list
- * carries the gateway control socket and its pointer file. This candidate
- * extends the composed Linux live test to both the direct path and the
- * long-home hashed `/tmp` fallback; its result is unverified until the
- * required Actions run on this exact candidate. Other reachable sockets stay
- * reachable, and the deny is also asserted statically (`core/rot/guards.test.ts`).
- * The read-only lane therefore promises *no IP network and no writes outside
- * the scratch* — not "no side effects reachable by any means". Written down in
- * `docs/architecture/SECURITY.md` §9 rather than left as a gap between what the code does
- * and what the capability declares.
+ * **AF_UNIX on Linux: requested, then verified — never assumed away.**
+ * `allowAllUnixSockets` skips srt's seccomp layer, the only thing that blocks
+ * `socket(AF_UNIX, …)`. This module used to set it `true` unconditionally
+ * because two upstream bugs (#428, #429) break the seccomp stage on Ubuntu
+ * 24.04 — but "the filter can fail there" was read as "the filter can never
+ * work there", and the setting silently traded the whole Unix-socket boundary
+ * for the ability to start. The failure mode is not silent: `apply-seccomp`
+ * either installs the filter or aborts, and when it aborts every contained
+ * command refuses to run. So the config now *requests* the filter (the srt
+ * default, `false`) and `selfTestContainment` runs a real AF_UNIX leg through
+ * the same door as any command: a contained client must be unable to reach a
+ * listener this process owns. If it reaches it, the sandbox is unavailable
+ * with reason `unix_filter_absent` (the case of a missing `apply-seccomp`
+ * binary, where srt warns and continues unfiltered); if the leg fails for an
+ * unrecognised cause, that is `contain_failed`, not a held filter.
+ * `--unshare-net` never covered Unix sockets: they are filesystem objects,
+ * and `connect()` to one is not a write, so a socket reachable under the
+ * read-only bind was reachable from the read-only lane too. `guards.denyRead`
+ * still hides the gateway control socket and its pointer (#638/#650), and the
+ * statical assertion remains in `core/rot/guards.test.ts`.
+ * The read-only lane therefore promises *no IP network, no writes outside the
+ * scratch, and (where shell is available at all) no reachable AF_UNIX socket*
+ * — written down in `docs/architecture/SECURITY.md` rather than left as a gap
+ * between what the code does and what the capability declares.
  */
 function networkOff(): SandboxRuntimeConfig['network'] {
   return {
     allowedDomains: [],
     deniedDomains: ['*'],
-    ...(process.platform === 'linux' ? { allowAllUnixSockets: true } : {}),
+    // Linux: request the seccomp filter (srt's default, stated explicitly so
+    // the next reader does not "simplify" it back to true). macOS Seatbelt
+    // expresses Unix-socket policy in its profile and ignores this key.
+    ...(process.platform === 'linux' ? { allowAllUnixSockets: false } : {}),
   };
 }
 
@@ -739,7 +751,120 @@ export class SandboxExecutor {
       };
     }
 
+    // Linux only: the seccomp stage that blocks `socket(AF_UNIX, …)` was
+    // requested by `networkOff()`, and srt silently skips it when it cannot
+    // find its `apply-seccomp` binary. A real client is the only way to know
+    // which of the two happened on this host.
+    if (process.platform === 'linux') {
+      const unix = await this.selfTestAfUnixFilter(cwd);
+      if (unix) return unix;
+    }
+
     return null;
+  }
+
+  /**
+   * Does the requested AF_UNIX seccomp filter actually block this process's
+   * own Unix socket?
+   *
+   * Two legs, same reason `selfTestContainment` has two: a single "the
+   * sandboxed client failed" cannot tell "the filter held" apart from "the
+   * command cannot run on this host at all". The control is the same connect
+   * snippet run directly: it must succeed against the listener this method
+   * owns, or the leg proves nothing and the failure is `contain_failed`.
+   *
+   * A contained client that *connects* is the dangerous reading — it is not a
+   * denial at all — and it is what a missing `apply-seccomp` binary produces
+   * (srt warns and continues unfiltered). A non-zero exit is only a held
+   * filter when it carries the kernel's refusal (`EPERM`/`SIGSYS`); a refusal
+   * from `apply-seccomp` itself (`setgroups`/`CAP_SYS_ADMIN`) is a broken
+   * containment, not a filter that held.
+   */
+  private async selfTestAfUnixFilter(cwd: string): Promise<ContainmentFailure | null> {
+    const socketPath = join(cwd, 'afunix.sock');
+    const server = createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(socketPath, () => resolve());
+    });
+    try {
+      const snippet =
+        "const net=require('node:net');const s=net.connect(process.argv[1]);" +
+        "s.on('connect',()=>{s.destroy();process.exit(0)});" +
+        "s.on('error',(e)=>{console.error(e.code||e.message);process.exit(3)});";
+      const command = `node -e ${JSON.stringify(snippet)} ${JSON.stringify(socketPath)}`;
+
+      try {
+        execFileSync(process.execPath, ['-e', snippet, socketPath], {
+          timeout: SELFTEST_LEG_TIMEOUT_MS,
+          stdio: 'pipe',
+        });
+      } catch (error) {
+        return {
+          reason: 'contain_failed',
+          detail: `the unsandboxed AF_UNIX control leg could not reach this process's own listener (${message(error)}) — the leg cannot certify anything on this host`,
+          remedy:
+            'the AF_UNIX self-test itself is not working here; shell must stay off until the leg can run — see docs/architecture/SECURITY.md',
+        };
+      }
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), SELFTEST_LEG_TIMEOUT_MS);
+      let leg: ExecResult;
+      try {
+        const legConfig: Partial<SandboxRuntimeConfig> = {
+          network: networkOff(),
+          filesystem: { denyRead: [], allowWrite: [cwd], denyWrite: [] },
+        };
+        const wrapped = await SandboxManager.wrapWithSandboxArgv(
+          command,
+          undefined,
+          legConfig,
+          controller.signal,
+          cwd,
+        );
+        leg = await this.spawnCollect(
+          wrapped.argv,
+          this.childEnv(wrapped.env, cwd),
+          { command, cwd, writeScope: [cwd], signal: controller.signal },
+          SELFTEST_LEG_TIMEOUT_MS,
+          Date.now(),
+        );
+      } finally {
+        clearTimeout(timer);
+      }
+
+      if (leg.code === 0) {
+        return {
+          reason: 'unix_filter_absent',
+          detail: `a contained process reached this process's AF_UNIX listener at ${socketPath}: the seccomp filter that blocks socket(AF_UNIX, …) is not applied on this host`,
+          remedy:
+            'the sandbox cannot prove its Unix-socket boundary here (upstream #428/#429 on Ubuntu, or a missing apply-seccomp binary) — shell and scheduled scripts stay disabled on this host; use macOS Seatbelt or a host where the filter applies',
+        };
+      }
+
+      const output = `${leg.stderr}\n${leg.stdout}`.trim();
+      if (/apply-seccomp|setgroups|CAP_SYS_ADMIN/i.test(output)) {
+        return {
+          reason: 'contain_failed',
+          detail: `the AF_UNIX leg's seccomp stage refused to start on this host (${output.slice(0, 300)}) — that is a broken containment, not a filter that held`,
+          remedy:
+            'apply-seccomp cannot obtain its capability on this host (ubuntu AppArmor bwrap profile); shell stays disabled — see docs/architecture/SECURITY.md',
+        };
+      }
+      if (/EPERM|operation not permitted|permission denied|SIGSYS|bad system call/i.test(output)) {
+        return null;
+      }
+      return {
+        reason: 'contain_failed',
+        detail: `the AF_UNIX leg exited ${leg.code} without a recognisable kernel refusal (${output.slice(0, 300) || 'no output'}) — a failure with another cause is not evidence the filter held`,
+        remedy:
+          'the AF_UNIX self-test could not attribute its failure; shell stays disabled until the leg is understood — see docs/architecture/SECURITY.md',
+      };
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      rmSync(socketPath, { force: true });
+    }
   }
 
   /**
