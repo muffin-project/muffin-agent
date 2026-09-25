@@ -119,9 +119,64 @@ done
 
 # Local source and checksum-listed fake Node keep this end-to-end path offline.
 mkdir "$LAB/source"
-printf '{"name":"muffin-agent","version":"0.0.0-test"}\n' >"$LAB/source/package.json"
+printf '{"name":"muffin-agent","version":"0.0.0-test","scripts":{"prepare":"sh ./compile-fixture.sh","compile":"sh ./compile-fixture.sh"}}\n' >"$LAB/source/package.json"
+cat >"$LAB/source/compile-fixture.sh" <<EOF
+#!/bin/sh
+set -eu
+[ "\$(id -u)" -ne 0 ] || exit 16
+mkdir -p dist/cli
+cp main-fixture.js dist/cli/main.js
+chmod 0755 dist/cli/main.js
+echo "build uid=\$(id -u)" >>"$EVENTS"
+EOF
+chmod 0755 "$LAB/source/compile-fixture.sh"
+cat >"$LAB/source/main-fixture.js" <<'EOF'
+const { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } = require('node:fs');
+
+const events = '__EVENTS_PATH__';
+const log = (line) => appendFileSync(events, line + '\n');
+const args = process.argv.slice(2);
+const command = args[0];
+
+if (args.includes('fixture-secret') || Object.values(process.env).includes('fixture-secret')) {
+  console.error('secret leaked to CLI');
+  process.exit(20);
+}
+
+switch (command) {
+  case 'completion':
+    process.stdout.write('# fixture completion\n');
+    break;
+  case 'init': {
+    if (process.getuid() === 0) process.exit(21);
+    const keyPath = process.env.MUFFIN_API_KEY_FILE;
+    if (!keyPath || statSync(keyPath).uid !== process.getuid() || (statSync(keyPath).mode & 0o777) !== 0o600) process.exit(22);
+    if ((statSync(new URL('.', 'file://' + keyPath)).mode & 0o777) !== 0o711) process.exit(23);
+    const key = readFileSync(0, 'utf8').trimEnd();
+    if (key !== 'fixture-secret') process.exit(24);
+    mkdirSync(process.env.HOME + '/.muffin', { recursive: true });
+    writeFileSync(process.env.HOME + '/.muffin/config.json', '{}\n', { mode: 0o600 });
+    log('init uid=' + process.getuid() + ' key-stdin=verified key-mode=600 stage-mode=711');
+    break;
+  }
+  case 'gateway':
+    if (process.getuid() === 0 || !readFileSync(events, 'utf8').includes('user-manager-ready')) process.exit(25);
+    mkdirSync(process.env.HOME + '/.config/systemd/user', { recursive: true });
+    writeFileSync(process.env.HOME + '/.config/systemd/user/muffin-gateway.service', '[Unit]\nDescription=Muffin eval\n');
+    log('gateway-install uid=' + process.getuid());
+    break;
+  case 'doctor':
+    log('doctor uid=' + process.getuid());
+    break;
+  default:
+    console.error('unexpected CLI fixture: ' + args.join(' '));
+    process.exit(26);
+}
+EOF
+sed -i "s|__EVENTS_PATH__|$EVENTS|" "$LAB/source/main-fixture.js"
 git -C "$LAB/source" init -q -b main
 git -C "$LAB/source" -c user.name=Eval -c user.email=eval@example.invalid add package.json
+git -C "$LAB/source" -c user.name=Eval -c user.email=eval@example.invalid add compile-fixture.sh main-fixture.js
 git -C "$LAB/source" -c user.name=Eval -c user.email=eval@example.invalid commit -qm fixture
 chmod -R a+rX "$LAB/source"
 
@@ -175,9 +230,7 @@ cat >"$LAB/node-dist/$NODE_DIR/bin/npm" <<EOF
 set -eu
 [ "\$(id -u)" -ne 0 ] || exit 15
 echo "npm uid=\$(id -u)" >>"$EVENTS"
-mkdir -p dist/cli
-printf '#!/usr/bin/env node\\n' >dist/cli/main.js
-chmod 0755 dist/cli/main.js
+sh ./compile-fixture.sh
 EOF
 chmod 0755 "$LAB/node-dist/$NODE_DIR/bin/"{node,npm}
 tar -cJf "$LAB/node-dist/$NODE_FILE" -C "$LAB/node-dist" "$NODE_DIR"
@@ -278,7 +331,7 @@ SERVICE_GID=$(id -g muffin)
 [ "$(stat -c '%u:%g:%a' /usr/local/bin/muffin)" = 0:0:755 ]
 [ ! -L /usr/local/bin/muffin ]
 grep -Fqx '# Muffin managed root dispatcher' /usr/local/bin/muffin
-grep -Fq "npm uid=$SERVICE_UID" "$EVENTS"
+grep -Fq "build uid=$SERVICE_UID" "$EVENTS"
 grep -Fq "init uid=$SERVICE_UID key-stdin=verified key-mode=600 stage-mode=711" "$EVENTS"
 grep -Fq "gateway-install uid=$SERVICE_UID" "$EVENTS"
 if grep -Fq fixture-secret "$EVENTS"; then echo 'root handoff eval: key leaked to event log' >&2; exit 1; fi
