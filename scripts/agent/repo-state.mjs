@@ -42,18 +42,23 @@ if (!git('rev-parse --show-toplevel')) {
 const branch = git('branch --show-current') || '(detached)';
 const head = git('rev-parse --short HEAD') || 'unknown';
 const dirty = git('status --porcelain');
-const main = git('rev-parse --short main') || 'unknown';
-const dev = git('rev-parse --short dev') || 'unknown';
-const div = git('rev-list --left-right --count main...dev');
+const repo = gh(['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner']);
+const githubBranch = (name) =>
+  repo ? gh(['api', `repos/${repo}/branches/${name}`, '--jq', '.commit.sha']) : null;
+const localMain = git('rev-parse refs/heads/main') || 'unknown';
+const localDev = git('rev-parse refs/heads/dev') || 'unknown';
+const liveMain = githubBranch('main');
+const liveDev = githubBranch('dev');
 const worktrees = (git('worktree list --porcelain') || '')
   .split('\n')
   .filter((l) => l.startsWith('worktree '))
   .map((l) => l.slice('worktree '.length));
 const worktreeDirty = [];
-for (const wt of worktrees.slice(0, 40)) {
+const worktreeUnavailable = [];
+for (const wt of worktrees) {
   const s = run('git', ['-C', wt, 'status', '--porcelain']);
-  if (s === null || s === '') continue;
-  worktreeDirty.push(wt);
+  if (s === null) worktreeUnavailable.push(wt);
+  else if (s !== '') worktreeDirty.push(wt);
 }
 
 const prRaw = gh([
@@ -94,10 +99,15 @@ const jevKey = process.env.TYPESAFE_API_KEY ? 'present' : 'absent';
 const jevSdk = run('node', ['-e', "require.resolve('@typesafe-ai/sdk')"]) !== null;
 const jevCli = run('which', ['jev']) !== null;
 
+const short = (sha) => (sha ? sha.slice(0, 12) : 'unknown');
+
 section('repository', [
   `checkout branch: ${branch} @ ${head} (${dirty ? 'DIRTY' : 'clean'})`,
-  `main: ${main} | dev: ${dev} | divergence main...dev (behind ahead): ${div || 'unknown'}`,
-  `worktrees: ${worktrees.length}${worktreeDirty.length ? `; dirty: ${worktreeDirty.join(', ')}` : '; all clean or unchecked'}`,
+  `GitHub main: ${short(liveMain)} | local main: ${short(localMain)}`,
+  `GitHub dev: ${short(liveDev)} | local dev: ${short(localDev)}`,
+  `worktrees: ${worktrees.length} — clean ${worktrees.length - worktreeDirty.length - worktreeUnavailable.length}, dirty ${worktreeDirty.length}, unavailable ${worktreeUnavailable.length}`,
+  ...(worktreeDirty.length ? [`dirty: ${worktreeDirty.join(', ')}`] : []),
+  ...(worktreeUnavailable.length ? [`unavailable: ${worktreeUnavailable.join(', ')}`] : []),
 ]);
 
 section('open PRs', [
