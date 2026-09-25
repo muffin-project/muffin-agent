@@ -109,6 +109,20 @@ const MAX_REDIRECTS = 5;
 const MAX_BODY_CHARS = 50_000;
 const FETCH_TIMEOUT_MS = 15_000;
 
+const DECOMPRESSOR_FACTORIES = new Map<string, () => NodeJS.ReadWriteStream>([
+  ['gzip', () => createGunzip() as unknown as NodeJS.ReadWriteStream],
+  ['x-gzip', () => createGunzip() as unknown as NodeJS.ReadWriteStream],
+  ['deflate', () => createInflate() as unknown as NodeJS.ReadWriteStream],
+  ['br', () => createBrotliDecompress() as unknown as NodeJS.ReadWriteStream],
+]);
+
+class UnsupportedContentEncodingError extends Error {
+  constructor() {
+    super('unsupported Content-Encoding');
+    this.name = 'UnsupportedContentEncodingError';
+  }
+}
+
 /**
  * Uno stato HTTP che un secondo tentativo puo' davvero cambiare.
  *
@@ -239,6 +253,9 @@ export function makeHttpTool(deps: HttpDeps = {}): RegisteredTool {
         try {
           bounded = await readBoundedBody(response, MAX_BODY_CHARS);
         } catch (error) {
+          if (error instanceof UnsupportedContentEncodingError) {
+            return { content: error.message, isError: true, tier: 0 };
+          }
           const detail = error instanceof Error ? error.message : String(error);
           return {
             content: `fetch failed for ${current.hostname}: ${detail}`,
@@ -476,7 +493,13 @@ export async function readBoundedBody(response: Response, maxChars: number): Pro
   const encodings = (response.headers.get('content-encoding') ?? '')
     .split(',')
     .map((part) => part.trim().toLowerCase())
-    .filter((part) => part !== '' && part !== 'identity' && part !== 'none');
+    .filter((part) => part !== '' && part !== 'identity');
+  const unsupported = encodings.some((encoding) => !DECOMPRESSOR_FACTORIES.has(encoding));
+  if (unsupported) {
+    // Content-Encoding defines how to recover the media-type bytes; raw fallback would mislabel them.
+    await body.cancel().catch(() => {});
+    throw new UnsupportedContentEncodingError();
+  }
   if (encodings.length === 0) {
     return readBoundedWebStream(body, maxChars);
   }
@@ -509,10 +532,7 @@ async function readBoundedWebStream(stream: ReadableStream<Uint8Array>, maxChars
 }
 
 function decompressorFor(encoding: string): NodeJS.ReadWriteStream | null {
-  if (encoding === 'gzip' || encoding === 'x-gzip') return createGunzip() as unknown as NodeJS.ReadWriteStream;
-  if (encoding === 'deflate') return createInflate() as unknown as NodeJS.ReadWriteStream;
-  if (encoding === 'br') return createBrotliDecompress() as unknown as NodeJS.ReadWriteStream;
-  return null;
+  return DECOMPRESSOR_FACTORIES.get(encoding)?.() ?? null;
 }
 
 async function readBoundedDecompressed(
