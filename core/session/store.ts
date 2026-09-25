@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ensurePrivateDir, tightenPrivateFile } from '../config/private-fs.js';
+import { isSafeControlToken } from '../gateway/control-socket.js';
 import type { TrustTier } from '../policy/types.js';
 import { redactText } from '../tracing/redact.js';
 
@@ -113,12 +114,22 @@ export class SessionStore {
   constructor(homeDir: string) {
     this.dir = join(homeDir, 'sessions');
     if (!ensurePrivateDir(this.dir)) {
-      throw new Error(`non posso usare ${this.dir}: la directory privata non è stata stabilita (symlink sulla catena)`);
+      throw new Error(
+        `non posso usare ${this.dir}: la directory privata non è stata stabilita (symlink sulla catena)`,
+      );
     }
   }
 
   open(id?: string): SessionRef {
-    const sessionId = id ?? `${new Date().toISOString().slice(0, 10)}-${randomBytes(4).toString('hex')}`;
+    const sessionId =
+      id ?? `${new Date().toISOString().slice(0, 10)}-${randomBytes(4).toString('hex')}`;
+    // The id becomes a transcript path below. Callers include the gateway
+    // control channel, whose `sessionId` is caller-controlled (#638): an id
+    // outside the token alphabet is refused here rather than joined into a
+    // path that escapes `sessions/`. Fail closed with the offending id named.
+    if (!isSafeControlToken(sessionId)) {
+      throw new Error(`refusing to open session with unsafe id ${JSON.stringify(sessionId)}`);
+    }
     const ref: SessionRef = { id: sessionId, file: join(this.dir, `${sessionId}.jsonl`) };
     // Completes an interrupted `/new` when one is on disk, never starts one:
     // opening a session must not create identity. A missing sidecar is
@@ -172,7 +183,9 @@ export class SessionStore {
     try {
       raw = readFileSync(file, 'utf8');
     } catch (error) {
-      throw new Error(`session ${session.id}: cannot read conversation metadata at ${file}: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(
+        `session ${session.id}: cannot read conversation metadata at ${file}: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
     let parsed: unknown;
     try {
@@ -190,7 +203,7 @@ export class SessionStore {
       (record.version !== STEADY_METADATA_VERSION &&
         record.version !== CONVERSATION_METADATA_VERSION) ||
       !Number.isInteger(record.generation) ||
-      ((record.generation as number) as number) < 0
+      (record.generation as number as number) < 0
     ) {
       throw new Error(
         `session ${session.id}: corrupt conversation metadata at ${file}: expected {"version":${CONVERSATION_METADATA_VERSION},"generation":<non-negative int>}`,

@@ -426,17 +426,12 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // scenario. The shell tools are registered only when the sandbox probe held
   // on this host (agent/runtime.ts).
   //
-  // 06/09, ADR-0074 punto 4: the scenario now has two halves, because the tool
-  // does. `sys.shell.write` is `high` risk — single-user (the only mode
-  // `install()` builds) always asks, and headless `muffin run` has no approval
-  // channel, so what that half proves is the ASK's content, not an end-to-end
-  // execution. `sys.shell` is the read-only lane and asks nobody: that half
-  // runs the command through the real binary, headless, and checks the output
-  // came back — which is the thing D13 could not prove before, and the reason
-  // five of the six `agentic` character-eval failures existed.
+  // ADR-0091: both shell lanes are irreversible because their output/effects
+  // cannot be recalled. The real binary must show the ASK and must not reach
+  // the executor without approval; containment is covered by sandbox tests.
   verde(
     'D4',
-    'shell: both lanes are offered only after a live sandbox probe; the writing one produces an ASK showing the real command and cwd, and the read-only one runs headless with no approver at all',
+    'shell: both lanes are offered only after a live sandbox probe; headless ASK shows the command and cwd and neither lane reaches the executor',
   ),
   // New (slice/journey-capability): same shape as D4 for sys.process.kill —
   // process_list/process_kill act on the host's real process table, not a
@@ -550,15 +545,11 @@ export const MANIFEST: readonly ScenarioEntry[] = [
       'reversibilita\' e risorsa; `muffin effects` le rilegge per turno e per giornata, e l\'owner ci arriva ' +
       'chiedendo "cosa hai fatto oggi?" senza conoscere un comando',
   ),
-  // Nuova (ADR-0075). La riga D16 nasce da una misura sul `muffin.db`
-  // dell'owner — nove turni su quattordici a taint 3 il 06/09, ultima shell
-  // vera il 03/09, ultimo turno chiuso da `context taint 3 exceeds 2 for
-  // sys.shell (host)` — e il suo criterio eseguibile ha due meta': il turno
-  // vero arriva in fondo, e il soffitto resta una manopola del file sigillato.
+  // ADR-0091: taint 3 is visible in the owner's shell ASK; a sealed lower
+  // host ceiling still denies, and the ASK does not reach the executor.
   verde(
     'D16',
-    'taint usabile: dopo una ricerca web la shell risponde nello stesso turno, e un policy.json che ' +
-      'rimette il soffitto fa tornare il rifiuto',
+    'taint 3: dopo una ricerca web shell chiede all’owner, mentre un policy.json con soffitto host a 2 nega',
   ),
   // Extended (slice/e1-budget-per-job): the row asks "cap globale **e**
   // per-job?" and only the first half had a scenario, which the file's own

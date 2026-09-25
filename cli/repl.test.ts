@@ -13,7 +13,10 @@ import { cliSurface } from '../core/surface/cli.js';
 import { SurfaceRegistry } from '../core/surface/registry.js';
 import { DELIVERED, MUTA, type Surface } from '../core/surface/types.js';
 import { startFakeProvider } from '../evals/acceptance/provider.js';
+import { shellNonDisponibileQui } from '../evals/acceptance/sandbox-host.js';
 import type { TurnEvent } from '../agent/loop.js';
+
+const itWithShell = it.skipIf(shellNonDisponibileQui() !== null);
 
 /**
  * The REPL's delivery path, in isolation from the interactive stdin loop.
@@ -446,7 +449,7 @@ describe("un'approvazione rientra nel vocabolario dei passi (§4.1/§5 della mem
   // chiede è quella che scrive, e questi due test misurano il vocabolario di un
   // ASK. Usare la corsia in sola lettura qui vorrebbe dire misurare un'attesa
   // che non arriva mai — un test verde su uno schermo che non ha niente da dire.
-  it('accettata: niente blocco ⚠, il verdetto precede subito il passo del tool, senza righe vuote fra i due', async () => {
+  itWithShell('accettata: niente blocco ⚠, il verdetto precede subito il passo del tool, senza righe vuote fra i due', async () => {
     const provider = await startFakeProvider({
       main: [
         { tool: { name: 'shell_run_write', args: { command: 'echo ciao', cwd: '.' } } },
@@ -514,7 +517,7 @@ describe("un'approvazione rientra nel vocabolario dei passi (§4.1/§5 della mem
     }
   });
 
-  it('rifiutata: il verdetto dice «rifiutato» nello stesso vocabolario, e il tool non gira mai', async () => {
+  itWithShell('rifiutata: il verdetto dice «rifiutato» nello stesso vocabolario, e il tool non gira mai', async () => {
     const provider = await startFakeProvider({
       main: [
         { tool: { name: 'shell_run_write', args: { command: 'rm -rf /tmp/x', cwd: '.' } } },

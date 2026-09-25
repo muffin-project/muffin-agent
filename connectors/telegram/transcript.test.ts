@@ -95,14 +95,23 @@ describe('one bubble per segment', () => {
     expect(calls.filter((c) => c.method === 'deleteMessage')).toHaveLength(0);
   });
 
-  it('a turn that answers with no tool call sends nothing from here at all', async () => {
+  it('a turn that answers with no tool call shows its status in the ephemeral draft, never a persistent message', async () => {
     const { api, calls } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
     t.report({ type: 'round', n: 1 });
+    // Lo stato del turno è visibile nell'anteprima subito, prima di qualunque
+    // token: è il buco di ~70 s chiuso il 2026-09-25.
+    expect(calls[0]!.method).toBe('sendMessageDraft');
+    expect(calls[0]!.text).toContain('sto pensando');
     t.report({ type: 'model', model: 'm', ms: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, stopReason: 'end_turn' });
     await vi.advanceTimersByTimeAsync(5_000);
     await t.stop();
-    expect(calls).toEqual([]);
+    // Solo anteprime effimere: la chat non conserva niente di questo turno, e
+    // la risposta vera arriverà con un normale `sendMessage` di deliverTo.
+    expect(calls.every((c) => c.method === 'sendMessageDraft')).toBe(true);
+    expect(calls.length).toBeGreaterThan(1); // il rinnovo mentre il turno pensa
+    expect(calls.filter((c) => c.method === 'sendMessageDraft' && c.text === '')).toHaveLength(0);
+    expect(t.handoff()).toBeNull();
   });
 
   it('a superseded attempt is named, not removed', async () => {

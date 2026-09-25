@@ -300,6 +300,7 @@ const MIGRATIONS: Migration[] = [
       addColumn('turns', 'lease_index', 'lease_index INTEGER NOT NULL DEFAULT 0');
       addColumn('turns', 'continuable_reason', 'continuable_reason TEXT');
       addColumn('turns', 'lifetime', 'lifetime TEXT');
+      addColumn('turns', 'continuation_candidates', 'continuation_candidates TEXT');
       addColumn('turns', 'input_text', 'input_text TEXT');
       addColumn('turn_tool_calls', 'undone_at', 'undone_at TEXT');
       addColumn('turn_tool_calls', 'effect_row', 'effect_row TEXT');
@@ -324,7 +325,7 @@ const MIGRATIONS: Migration[] = [
       const columns =
         'id, principal, tenant, surface, session_id, input_text, model, messages, taint, counters, reply_to, job_id, ' +
         'status, wake_at, wait_for, claimed_by, claimed_at, claim_token, turn_outcome, delivery, ' +
-        'lease_index, continuable_reason, lifetime, created_at, updated_at';
+        'lease_index, continuable_reason, lifetime, continuation_candidates, created_at, updated_at';
       db.exec('DROP TABLE IF EXISTS turns_new');
       db.exec(createNew);
       db.exec(`INSERT INTO turns_new (${columns}) SELECT ${columns} FROM turns`);

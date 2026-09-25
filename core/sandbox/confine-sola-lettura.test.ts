@@ -30,7 +30,7 @@ import { probeSandbox } from './probe.js';
  *  1. `networkOff()` in `core/sandbox/executor.ts` che non restituisce più il
  *     blocco `network` (o `allowedDomains` che sparisce): srt smette di
  *     mettere `--unshare-net` su Linux e di togliere `(allow network*)` dal
- *     profilo seatbelt su macOS, e «la rete è spenta» diventa rossa.
+ *     profilo seatbelt su macOS, e «l'egress IP/proxy è bloccato» diventa rossa.
  *  2. `runReadOnly` che passa il workspace in `writeScope` invece di `[]`:
  *     «la scrittura fuori dallo scratch fallisce» diventa rossa.
  *  3. `makeShellTool` che chiama `run` invece di `runReadOnly` — quella cade in
@@ -250,6 +250,21 @@ describe.runIf(gate.run)(`le due corsie contengono cose diverse (${gate.why})`, 
       });
       expect(r.stdout).not.toContain('sk-live-do-not-read');
       expect(r.code).not.toBe(0);
+    });
+
+    it.fails('un file fuori dal workspace e fuori dalla deny-list non e leggibile (ESPOSIZIONE NOTA #645)', async () => {
+      // La corsia in sola lettura lega `--ro-bind / /`: tutto l'host è
+      // leggibile tranne la deny-list finita. Questo test documenta
+      // l'esposizione in eseguibile — oggi il canarino SI legge, quindi il
+      // test fallisce ed `it.fails` resta verde. Quando la superficie di
+      // lettura sarà allow-scoped (workspace + scratch + path di sistema
+      // espliciti), il canarino diventerà illeggibile, `it.fails` andrà rosso
+      // e andrà girato in `it` normale: quel rosso sarà la prova del fix.
+      const canarino = join(base, 'fuori-dal-workspace.txt');
+      writeFileSync(canarino, 'CANARINO-FUORI-PERIMETRO-645\n');
+      const r = await executor.runReadOnly({ command: `cat '${canarino}'`, cwd: workspace });
+      expect(r.code).not.toBe(0);
+      expect(r.stdout).not.toContain('CANARINO-FUORI-PERIMETRO-645');
     });
   });
 

@@ -13,10 +13,8 @@ Support is appreciated, but it is deliberately separate from project authority.
 A donation does **not** grant repository write access, merge or release rights,
 maintainer status, product authority, or priority over technical decisions.
 
-Supporters may receive community recognition on an opt-in basis. During the
-private Community Preview, existing supporters may also be invited with read-only
-repository access so they can follow the project before the source-public cutover.
-That preview access is temporary community access, not governance authority.
+Public support acknowledgements are opt-in. Donations do not grant repository
+access or project authority.
 
 ## Contributing is different
 

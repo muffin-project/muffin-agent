@@ -319,6 +319,11 @@ export async function guidaIlTurno(
     tenant: input.tenant,
     principal: input.principal,
     turnId: record.id,
+    // The job, when this turn is one of its fires: a handler that pays for a
+    // model call on the job's behalf (the reranker behind `memory_search` /
+    // `memory_why`) has to be able to say so, or the per-job ceiling never
+    // counts it.
+    ...(input.jobId === undefined ? {} : { jobId: input.jobId }),
     sessionId: input.session.id,
     runtimeInfo: deps.runtimeInfo,
     taint: () => snapshot.currentTaint(),
@@ -490,6 +495,9 @@ export async function guidaIlTurno(
           // che non dipende dalla colonna nuova, quindi vale anche su una
           // riga che il lineage non ce l ha.
           ...(currentEpisodeId !== undefined ? { excludeEpisodeId: currentEpisodeId } : {}),
+          // Il job di questo turno, quando c'e': il reranker che questa recall
+          // paga deve finire sul contatore di quel job, non su nessuno.
+          ...(input.jobId === undefined ? {} : { jobId: input.jobId }),
         });
         const inherited = recallTaint(result);
         // Il nome accanto al numero (ADR-0075 punto 4): un fatto che uno

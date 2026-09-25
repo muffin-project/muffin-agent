@@ -24,6 +24,12 @@ export const TURN_TABLE_SCHEMA = `CREATE TABLE IF NOT EXISTS turns (
   lease_index   INTEGER NOT NULL DEFAULT 0,
   continuable_reason TEXT,
   lifetime      TEXT,
+  -- The ordered candidate ids an ambiguity question offered, written on the
+  -- question turn by askWhichContinuation. Additive and nullable; a
+  -- continuation needs it only while it is still the newest question in the
+  -- session (PR #707). Durable on purpose: the in-RAM map it replaced lost the
+  -- mapping on every gateway restart.
+  continuation_candidates TEXT,
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL
 )`;

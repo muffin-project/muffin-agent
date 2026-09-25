@@ -298,6 +298,16 @@ export type RecallOptions = {
   since?: string | undefined;
   until?: string | undefined;
   /**
+   * The scheduled job this recall runs for, when there is one.
+   *
+   * It does not change what is retrieved — it rides to the reranker so the
+   * model call it makes is billed to the job that caused it. Without it the
+   * per-job ceiling read a counter that excluded the reranker, which is the
+   * gap the independent judge found in E1: a job could pass its own cap while
+   * still paying for recall. Absent on every interactive recall.
+   */
+  jobId?: string | undefined;
+  /**
    * How many episodes before and after each recalled episode to carry, in its
    * own thread. The `vicinato` primitive, and the reason it is not a
    * convenience is in `02-ontologia.md` §9: without its surroundings a recalled
@@ -820,7 +830,7 @@ export async function recall(
   let kept: RecallItem[];
   let rerankUsage: RecallResult['rerankUsage'];
   if (deps.reranker && fused.length >= RERANK_MIN_CANDIDATES) {
-    const outcome = await deps.reranker.rerank(query, fused.slice(0, limit * 5), limit);
+    const outcome = await deps.reranker.rerank(query, fused.slice(0, limit * 5), limit, options.jobId);
     kept = outcome.items;
     // `strategies` promette di nominare «le metà che hanno davvero girato», e
     // qui diceva il falso: la riga finiva nell'elenco anche quando il rerank

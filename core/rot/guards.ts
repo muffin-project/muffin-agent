@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { paths, secretDir } from '../config/config.js';
+import { controlSocketGuardPaths } from '../gateway/control-socket.js';
 
 /**
  * The mandatory deny paths, in one place, because the threat model names five
@@ -151,6 +152,13 @@ export function mandatoryGuards(home: string, cwd: string, userHome: string = ho
       join(userHome, '.config', 'gh'),
       // `git config --global` can carry a credential helper's stored token.
       join(userHome, '.git-credentials'),
+      // The gateway control channel (#638): a sandboxed child runs as the
+      // same uid as the host, so filesystem ACLs do not separate it from the
+      // socket — only the sandbox deny surface does. A `run` accepted over
+      // that socket is reconstructed as a fresh local owner turn with no
+      // inherited taint, and approvals round-trip on the same connection, so
+      // reachability here is authority laundering, not a read-only residual.
+      ...controlSocketGuardPaths(home),
     ],
   };
 }
