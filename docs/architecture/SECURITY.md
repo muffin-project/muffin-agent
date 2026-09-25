@@ -638,7 +638,7 @@ Three properties of this split are load-bearing:
   handed the workspace by a mistaken caller. The two lanes are two tools with
   two capability ids, decided by the kernel before a handler runs, rather than
   one tool branching on a parameter the model wrote.
-- **Neither lane exists where containment cannot be proved.** The read-only lane
+- **Neither lane runs where containment cannot be proved.** The read-only lane
   is the stricter of the two and its promise *is* the sandbox's promise, so a
   host with a negative `probeSandbox` gets no shell at all — never the read-only
   one as a "safe fallback", and never a silent fall back to the writing one. The
