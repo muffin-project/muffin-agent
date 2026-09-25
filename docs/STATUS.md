@@ -1,6 +1,6 @@
 # Muffin status
 
-Muffin is in **Community Preview · PRE-DAY-1**. It is an owner-run runtime being
+Muffin's source is **public · pre-alpha**. The product remains PRE-DAY-1. It is an owner-run runtime being
 hardened for real daily use, not a product public alpha and not a promise of
 general availability.
 
@@ -27,28 +27,25 @@ providing a deterministic fresh-session summary. Dated plans are historical.
 
 | Boundary | Meaning |
 | --- | --- |
-| Community Preview | Controlled external access to the private repository/runtime; the current boundary. |
-| Source-public / pre-alpha | The source can be inspected and contributed to after privacy/history and repository-readiness gates are met. It is not product public alpha. |
+| Source-public / pre-alpha | Public source for inspection and scoped contributions; the product remains pre-alpha. |
+| Product public alpha | A later product/release commitment, earned through real use and separate readiness evidence. |
 | Product public alpha | A later product/release commitment, earned through real use and separate readiness evidence. |
 
-Before source-public, the privacy/history boundary in the release work must be
-closed. Before public alpha, claims about supported platforms, security response
-and product availability need their own evidence; this document does not create
-those promises.
+The repository is already public. Continue handling privacy, security and
+repository-readiness findings through their canonical issues; publication does
+not claim the product is public alpha. Before public alpha, claims about
+supported platforms, security response and product availability need their own
+evidence; this document does not create those promises.
 
 ## NOW vs after source-public
 
-**Now:** the repository is still a private Community Preview. Source-public is
-not authorized by this status page. The release decision is tracked in the
-canonical GitHub publication issue; its live privacy/history proof, exact-head
-security evidence and bounded VPS/group dogfood bar determine whether the
-visibility boundary is met. See [the issue graph](https://github.com/muffin-project/muffin-agent/issues/464)
-for current evidence and ownership.
+**Now:** the repository is public at source-public / pre-alpha. This opens source
+inspection and scoped contributions; it does not promise product support,
+stable interfaces or public alpha. Continue tracking publication cleanup and
+remaining release evidence in [issue #464](https://github.com/muffin-project/muffin-agent/issues/464).
 
-**At source-public:** publish the repository as pre-alpha with a contributor
-path that does not require a particular assistant or maintainer harness. This
-opens source inspection and scoped contributions; it does not promise product
-support, stable interfaces or public alpha.
+**Source-public milestone:** reached on 2026-09-25. Contributor routing and
+remaining repository cleanup continue through the issue graph.
 
 **After source-public:** continue measured product and maintainer work through
 its own issue owners. The broader maintainer control plane, capability
