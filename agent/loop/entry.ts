@@ -2,20 +2,20 @@ import { randomBytes } from 'node:crypto';
 import type { SessionRef } from '../../core/session/store.js';
 import type { SpanHandle } from '../../core/tracing/types.js';
 import { ATTR } from '../../core/tracing/types.js';
-import { CAPPED_MODEL, SCRIPT_MODEL } from '../../core/turns/store.js';
 import type { TurnCounters, TurnRecord } from '../../core/turns/store.js';
+import { CAPPED_MODEL, SCRIPT_MODEL } from '../../core/turns/store.js';
 import type { Message } from '../providers/types.js';
-import { buildFreshCounters, evidenceForContinuation } from './continuation.js';
 import { primoMessaggio } from './context.js';
+import { buildFreshCounters, evidenceForContinuation } from './continuation.js';
 import { closeRow } from './durability.js';
 import { type DriveOptions, guidaIlTurno } from './engine.js';
 import { ownerMessage } from './message-origin.js';
 import { initialTaint, spendeIlBudget } from './permissions.js';
 import { providerMessages } from './provider-checkpoint.js';
 import {
+  type LoopDeps,
   MAX_RESUMES,
   MAX_TRANSPORT_RETRIES,
-  type LoopDeps,
   type ResumeRefusal,
   type ResumeStream,
   type TurnInput,
@@ -106,9 +106,7 @@ function snapshotTurnDeps(deps: LoopDeps): LoopDeps {
   return {
     ...deps,
     profile,
-    ...(deps.runtimeInfo === undefined
-      ? {}
-      : { runtimeInfo: { ...deps.runtimeInfo, profile } }),
+    ...(deps.runtimeInfo === undefined ? {} : { runtimeInfo: { ...deps.runtimeInfo, profile } }),
   };
 }
 
@@ -253,7 +251,6 @@ function codaMaiVista(record: TurnRecord): string {
   );
 }
 
-
 /**
  * Pick a turn back up — after a wait, after a crash, or after a connector
  * handed it over without running it.
@@ -294,7 +291,11 @@ export async function resumeTurn(
     return { turnId, why: 'not_found', detail: `nessun turno ${turnId}` };
   }
   if (existing.status === 'done') {
-    return { turnId, why: 'finished', detail: `il turno ${turnId} è già chiuso (${existing.outcome ?? '?'})` };
+    return {
+      turnId,
+      why: 'finished',
+      detail: `il turno ${turnId} è già chiuso (${existing.outcome ?? '?'})`,
+    };
   }
   /**
    * A continuable row is not resumed — it is continued, which is a different
@@ -327,7 +328,8 @@ export async function resumeTurn(
    * Lo dice la barriera: se la riga ne porta ancora una, questa ripresa è la
    * sua. Vale una volta sola perché `claim`, subito qui sotto, la spegne.
    */
-  const wasWaiting = existing.status === 'waiting' || existing.waitFor !== null || existing.wakeAt !== null;
+  const wasWaiting =
+    existing.status === 'waiting' || existing.waitFor !== null || existing.wakeAt !== null;
 
   /**
    * Is this picking work **back** up, or running it for the first time?
@@ -360,7 +362,11 @@ export async function resumeTurn(
   if (record === null) {
     // Not an error: two lanes over one database is the normal case for the
     // seconds a REPL and a gateway overlap, and the loser has nothing to do.
-    return { turnId, why: 'claimed', detail: `il turno ${turnId} è stato preso da un altro processo` };
+    return {
+      turnId,
+      why: 'claimed',
+      detail: `il turno ${turnId} è stato preso da un altro processo`,
+    };
   }
 
   /**
@@ -440,7 +446,8 @@ export async function resumeTurn(
       'muffin.turn.lease': record.leaseIndex,
       // What the counter will be after this attempt, so a trace of a first
       // execution reads 0 rather than claiming a resume that did not happen.
-      [ATTR.turnResume]: record.counters.resumes + (spendeIlBudget(!firstAttempt, wasWaiting) ? 1 : 0),
+      [ATTR.turnResume]:
+        record.counters.resumes + (spendeIlBudget(!firstAttempt, wasWaiting) ? 1 : 0),
     },
     // A remote parent: the record's id *is* the trace id of the turn's first
     // span, so a resume is a child of the trace it belongs to rather than a
@@ -484,7 +491,9 @@ export async function resumeTurn(
   // indirizza una consegna di metà turno (`send_file`) durante una ripresa
   // trova quindi la stessa stanza, non `undefined`.
   const replyChannelAlRisveglio =
-    typeof record.replyTo?.['channel'] === 'string' ? (record.replyTo['channel'] as string) : undefined;
+    typeof record.replyTo?.['channel'] === 'string'
+      ? (record.replyTo['channel'] as string)
+      : undefined;
 
   return drive(deps, record, span, {
     resumed: !firstAttempt,
@@ -521,7 +530,9 @@ export type ContinuationRefusal = {
 
 function ownerMessageText(message: Message): string {
   return message.content
-    .filter((b): b is Extract<(typeof message.content)[number], { type: 'text' }> => b.type === 'text')
+    .filter(
+      (b): b is Extract<(typeof message.content)[number], { type: 'text' }> => b.type === 'text',
+    )
     .map((b) => b.text)
     .join('\n')
     .trim();
@@ -604,7 +615,11 @@ export async function continueTurn(
     process.pid,
   );
   if (granted === null) {
-    return { turnId, why: 'claimed', detail: `il turno ${turnId} è stato preso da un altro processo` };
+    return {
+      turnId,
+      why: 'claimed',
+      detail: `il turno ${turnId} è stato preso da un altro processo`,
+    };
   }
   const span = deps.tracer.start(
     'muffin.turn',
@@ -630,7 +645,9 @@ export async function continueTurn(
       tier: existing.taint,
     });
   } catch (error) {
-    span.setAttributes({ 'muffin.turn.session_append_error': error instanceof Error ? error.message : String(error) });
+    span.setAttributes({
+      'muffin.turn.session_append_error': error instanceof Error ? error.message : String(error),
+    });
   }
   return drive(deps, granted, span, {
     resumed: true,
@@ -685,7 +702,9 @@ function scriviCorrezioniInSessione(
         tier: record.taint,
       });
     } catch (error) {
-      span.setAttributes({ 'muffin.turn.steer_residuo_error': error instanceof Error ? error.message : String(error) });
+      span.setAttributes({
+        'muffin.turn.steer_residuo_error': error instanceof Error ? error.message : String(error),
+      });
       nonScritte.push(residua);
     }
   }
@@ -728,7 +747,12 @@ function scriviCorrezioniInSessione(
  * l'opposto di ciò che ha chiesto — invece di saltare il drain, così la porta
  * è vuota su **ogni** strada e nessuno può ripescarla più tardi.
  */
-async function drive(deps: LoopDeps, record: TurnRecord, turn: SpanHandle, options: DriveOptions = {}): Promise<TurnResult> {
+async function drive(
+  deps: LoopDeps,
+  record: TurnRecord,
+  turn: SpanHandle,
+  options: DriveOptions = {},
+): Promise<TurnResult> {
   /**
    * La sessione risolta **una volta sola**, qui, e passata al motore.
    *
@@ -764,10 +788,22 @@ async function drive(deps: LoopDeps, record: TurnRecord, turn: SpanHandle, optio
     // `vivi` con dentro la correzione. Qui la correzione esce dalla porta e
     // entra in conversazione, da dove la prende il turno dopo. Non c'è nessun
     // testo di turno su cui appoggiare un avviso — il turno sta lanciando —
-    // quindi un fallimento di scrittura resta sullo span e basta: è l'unico
-    // caso in cui l'owner non può essere avvisato dal turno stesso, perché il
-    // turno non ha più una voce.
-    scriviCorrezioniInSessione(deps, turn, session, record, residue());
+    // quindi il trace è l'unico canale rimasto: la superficie riceve l'errore
+    // primario, mentre `muffin trace grep steer_residuo_error` rende visibile
+    // l'eventuale errore secondario di persistenza. Il motore lascia aperto lo
+    // span proprio perché questo imbuto deve poter aggiungere quell'attributo.
+    try {
+      scriviCorrezioniInSessione(deps, turn, session, record, residue());
+    } catch (persistenceError) {
+      // Anche un errore inatteso nel drain resta secondario rispetto al guasto
+      // che ha fatto uscire il motore.
+      turn.setAttributes({
+        'muffin.turn.steer_residuo_drain_error':
+          persistenceError instanceof Error ? persistenceError.message : String(persistenceError),
+      });
+    } finally {
+      turn.end({ error });
+    }
     throw error;
   }
 
@@ -794,7 +830,7 @@ async function drive(deps: LoopDeps, record: TurnRecord, turn: SpanHandle, optio
    */
   if (risultato.stopped === 'suspended') return risultato;
   const avviso =
-    "Non sono riuscito a salvare la correzione che mi hai mandato mentre rispondevo, " +
+    'Non sono riuscito a salvare la correzione che mi hai mandato mentre rispondevo, ' +
     "quindi al prossimo turno non ce l'avrò: rimandamela.\n\n" +
     nonScritte.map((testo) => `> ${testo}`).join('\n');
   return { ...risultato, text: risultato.text === '' ? avviso : `${risultato.text}\n\n${avviso}` };

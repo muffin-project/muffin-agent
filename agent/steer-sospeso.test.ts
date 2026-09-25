@@ -1,20 +1,21 @@
-import DatabaseCtor from 'better-sqlite3';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import DatabaseCtor from 'better-sqlite3';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { formatSpan, readSpans } from '../cli/trace.js';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
+import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { TurnStore } from '../core/turns/store.js';
 import { TodoStore } from '../core/turns/todo.js';
-import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
-import { makeWaitTool, waitCapability } from './tools/wait.js';
-import { resumeTurn, runTurn, type LoopDeps, type RegisteredTool } from './loop.js';
+import { type LoopDeps, type RegisteredTool, resumeTurn, runTurn } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
 import type { ChatCall, ChatResult, Provider } from './providers/types.js';
 import { providerMessages } from './loop/provider-checkpoint.js';
+import { makeWaitTool, waitCapability } from './tools/wait.js';
 
 /**
  * `/steer` mentre il turno sta per sospendersi (ADR-0054 §2, emendamento
@@ -29,8 +30,19 @@ import { providerMessages } from './loop/provider-checkpoint.js';
 const usage = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 };
 const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
 const NOW = () => new Date('2026-09-03T10:00:00.000Z');
+const fixtureCleanups: Array<() => void> = [];
 
-const answer = (text: string): ChatResult => ({ text, toolCalls: [], stopReason: 'end', usage, model: 'test-model' });
+afterEach(() => {
+  for (const cleanup of fixtureCleanups.splice(0)) cleanup();
+});
+
+const answer = (text: string): ChatResult => ({
+  text,
+  toolCalls: [],
+  stopReason: 'end',
+  usage,
+  model: 'test-model',
+});
 const call = (name: string, args: unknown = {}, id = 'c1'): ChatResult => ({
   text: null,
   toolCalls: [{ id, name, args }],
@@ -49,7 +61,10 @@ class Scripted implements Provider {
     private readonly durante: (n: number) => void = () => {},
   ) {}
   async chat(request: ChatCall): Promise<ChatResult> {
-    this.seen.push({ ...request, messages: JSON.parse(JSON.stringify(request.messages)) as ChatCall['messages'] });
+    this.seen.push({
+      ...request,
+      messages: JSON.parse(JSON.stringify(request.messages)) as ChatCall['messages'],
+    });
     this.durante(this.seen.length);
     const next = this.script[this.i++];
     if (!next) throw new Error('lo script è finito');
@@ -75,12 +90,23 @@ function world(script: ChatResult[], durante: (n: number) => void = () => {}) {
   const turns = new TurnStore(db);
   const provider = new Scripted(script, durante);
   const sessions = new SessionStore(home);
+  fixtureCleanups.push(() => {
+    try {
+      db.close();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
   const decls = [waitCapability, webCapability];
   const tools: RegisteredTool[] = [
     makeWaitTool(turns, NOW),
     {
       capability: webCapability.id,
-      spec: { name: 'http_get', description: 'fetch', inputSchema: { type: 'object', properties: {} } },
+      spec: {
+        name: 'http_get',
+        description: 'fetch',
+        inputSchema: { type: 'object', properties: {} },
+      },
       throwTier: 0,
       handler: () => ({ content: 'la pagina dice X', tier: 3 as const }),
     },
@@ -92,7 +118,12 @@ function world(script: ChatResult[], durante: (n: number) => void = () => {}) {
     model: 'test-model',
     tools,
     capabilities,
-    decide: createDecide({ matrix: POLICY_FLOOR, capabilities, budgetExhausted: () => false, hardened: true }),
+    decide: createDecide({
+      matrix: POLICY_FLOOR,
+      capabilities,
+      budgetExhausted: () => false,
+      hardened: true,
+    }),
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions,
     turns,
@@ -101,7 +132,7 @@ function world(script: ChatResult[], durante: (n: number) => void = () => {}) {
     systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite.' },
     now: NOW,
   };
-  return { deps, turns, provider, sessions };
+  return { deps, turns, provider, sessions, home };
 }
 
 /** Ogni testo che il modello ha ricevuto in una richiesta. */
@@ -179,14 +210,17 @@ describe('una correzione pendente quando il turno si sospende', () => {
     (rotto as unknown as { suspend: TurnStore['suspend'] }).suspend = () => false;
 
     const session = w.sessions.open('sospensione-fallita');
-    const result = await runTurn({ ...w.deps, turns: rotto }, {
-      principal: owner,
-      tenant: 'host',
-      surface: 'telegram',
-      session,
-      text: 'cerca e poi aspetta',
-      steer: () => coda.splice(0),
-    });
+    const result = await runTurn(
+      { ...w.deps, turns: rotto },
+      {
+        principal: owner,
+        tenant: 'host',
+        surface: 'telegram',
+        session,
+        text: 'cerca e poi aspetta',
+        steer: () => coda.splice(0),
+      },
+    );
 
     expect(result.stopped).toBe('error');
     expect(result.text).toContain('non sono riuscito a salvare lo stato del turno');
@@ -317,18 +351,11 @@ describe('/steer durante l esecuzione di un turno che la corsia ha già ripreso'
 });
 
 /**
- * ADR-0054 §2: la correzione che nessun giro consuma viene ripescata a fine
- * turno da `finish` (`scriviCorrezioniInSessione` in `agent/loop.ts`) e
- * scritta in sessione con `deps.sessions.append`. Chiuso 2026-09-04.
- *
- * Prima di questa fix, un `sessions.append` che lanciava finiva SOLO in un
- * attributo dello span di tracing (`muffin.turn.steer_residuo_error`) — mai
- * letto da nessuna superficie, mai visto da nessun owner. La correzione
- * spariva e il turno rispondeva come se niente fosse: esattamente il
- * "silenzioso" che l'assegnazione misura. Ora `scriviCorrezioniInSessione`
- * riporta l'esito e `finish` lo aggiunge al testo che l'owner legge — lo
- * stesso canale con cui ogni altra risposta arriva, senza dover toccare
- * nessun connettore di superficie.
+ * ADR-0054 §2: residui `/steer` vengono scritti nella sessione dal funnel
+ * `drive`. Su un turno riuscito, un append fallito aggiunge un avviso alla
+ * risposta. Se il motore rilancia, non esiste una risposta da modificare: il
+ * funnel registra il guasto nello span ancora aperto e `muffin trace grep
+ * steer_residuo_error` lo mostra all'owner insieme all'errore primario.
  */
 describe('sessions.append fallito nella ripesca finale di /steer non è più silenzioso', () => {
   it('il turno finisce comunque, ma la risposta dice che la correzione non è stata salvata', async () => {
@@ -387,5 +414,38 @@ describe('sessions.append fallito nella ripesca finale di /steer non è più sil
     });
 
     expect(result.text).toBe('fatto subito');
+  });
+
+  it('un rethrow del provider lascia la scrittura fallita nel trace che l’owner può consultare', async () => {
+    const coda: string[] = [];
+    // Lo script vuoto fa rilanciare il provider dopo aver raccolto la correzione.
+    const w = world([], (n) => {
+      if (n === 1) coda.push(CORREZIONE);
+    });
+    const originaleAppend = w.sessions.append.bind(w.sessions);
+    vi.spyOn(w.sessions, 'append').mockImplementation((session, message) => {
+      if (message.content === CORREZIONE) throw new Error('disco pieno (simulato)');
+      return originaleAppend(session, message);
+    });
+
+    await expect(
+      runTurn(w.deps, {
+        principal: owner,
+        tenant: 'host',
+        surface: 'telegram',
+        session: w.sessions.open('steer-rethrow'),
+        text: 'cerca e dimmi subito',
+        steer: () => coda.splice(0),
+      }),
+    ).rejects.toThrow('lo script è finito');
+
+    const spans = readSpans(w.home, { pattern: 'steer_residuo_error', limit: 10 });
+    expect(spans).toHaveLength(1);
+    const span = spans[0];
+    if (!span) throw new Error('il trace del rethrow non è stato scritto');
+    expect(span.status).toBe('error');
+    expect(span.error).toBe('lo script è finito');
+    expect(span.attributes['muffin.turn.steer_residuo_error']).toBe('disco pieno (simulato)');
+    expect(formatSpan(span)).toContain('steer_residuo_error=disco pieno (simulato)');
   });
 });

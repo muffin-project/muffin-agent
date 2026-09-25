@@ -12,15 +12,22 @@ import { historyTaint, reinjectedHistory } from '../context/history-taint.js';
 import { DEFAULT_EXECUTION } from '../profiles/profile.js';
 import { type ContentBlock, type Message, ProviderError } from '../providers/types.js';
 import { buildContext, userAudios, userImages } from './context.js';
-import { announceEnd, checkpoint, closeRecord, finish, reconcile, releaseContinuable } from './durability.js';
+import {
+  announceEnd,
+  checkpoint,
+  closeRecord,
+  finish,
+  reconcile,
+  releaseContinuable,
+} from './durability.js';
 import { ExecutionBudget } from './execution-budget.js';
 import { harnessMessage } from './message-origin.js';
-import { echoContentFor } from './sensitive-echo.js';
 import { makeSnapshot } from './permissions.js';
 import { markProviderErrorReplyForRecovery, providerErrorReply } from './provider-error-reply.js';
 import { providerMessages } from './provider-checkpoint.js';
 import { type RoundScope, runRounds } from './round.js';
 import { TurnRun } from './run-state.js';
+import { echoContentFor } from './sensitive-echo.js';
 import {
   assertNever,
   type LoopDeps,
@@ -647,9 +654,7 @@ export async function guidaIlTurno(
       // Harness control (a transition report for this resume), not owner
       // words: a continuation to a new lease archives it instead of replaying
       // it — the approved work it refers to already completed.
-      run.messages.push(
-        harnessMessage('user', [{ type: 'text', text: wakeReport(waitFor, why) }]),
-      );
+      run.messages.push(harnessMessage('user', [{ type: 'text', text: wakeReport(waitFor, why) }]));
     }
   }
 
@@ -695,7 +700,9 @@ export async function guidaIlTurno(
       }
       return result;
     }
-    turn.end({ error });
+    // `drive` owns the last part of this failure path: it drains pending
+    // `/steer` corrections and may add diagnostics to the turn span. End the
+    // span there, after those attributes have been recorded.
     // Same reason `announceEnd` is repeated here: a provider that exhausted its
     // retries never reaches `finish`, and a row left `running` by a turn that
     // is definitely over would be reclaimed as *interrupted* — "we do not know
