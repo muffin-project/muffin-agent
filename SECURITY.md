@@ -10,13 +10,14 @@ understand what Muffin defends against and why.
 
 ## Reporting a vulnerability
 
-GitHub's private vulnerability reporting is not currently enabled for this
-repository. Until it is enabled, report vulnerabilities confidentially by
-email to **[ciao@giusto.dev](mailto:ciao@giusto.dev)**.
+Use GitHub's private vulnerability reporting: open this repository's
+**Security** tab and choose **Report a vulnerability**. Do not open a public
+issue for a security report.
 
-Do not open a public issue for a security report. Do not include real owner data,
-Muffin Home contents, database dumps or credentials unless they are strictly
-necessary to reproduce the issue; prefer redacted fixtures and placeholders.
+If you cannot use that flow, email **[ciao@giusto.dev](mailto:ciao@giusto.dev)**.
+Do not include real owner data, Muffin Home contents, database dumps or
+credentials unless they are strictly necessary to reproduce the issue; prefer
+redacted fixtures and placeholders.
 
 ## What to include
 
