@@ -1,6 +1,15 @@
 import DatabaseCtor from 'better-sqlite3';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { DurableLock, HARD_STALE_MULTIPLIER, heldBy, type DurableLockSpec } from './durable.js';
+import {
+  DurableLock,
+  HARD_STALE_MULTIPLIER,
+  ensureColumn,
+  heldBy,
+  type DurableLockSpec,
+} from './durable.js';
 
 /**
  * The shared primitive, on its own — `heldBy`'s ordering and `DurableLock`'s
@@ -211,5 +220,71 @@ describe('additive migration: holder_id reaches a table created before this colu
     expect(lock.recorded()).toMatchObject({ pid: 4242 });
     const columns = db.prepare(`PRAGMA table_info(zz_test_lock)`).all() as { name: string }[];
     expect(columns.some((c) => c.name === 'holder_id')).toBe(true);
+  });
+});
+
+/**
+ * The window between the `PRAGMA` and the `ALTER`.
+ *
+ * `ensureColumn` is two statements, not one: it reads the schema, then changes
+ * it. Two connections opening the same file at the same moment both read "the
+ * column is missing", and the second `ALTER` fails with `duplicate column
+ * name`. The window is not new — every additive column in this repository has
+ * always had it — but it became reachable once `muffin undo` started opening a
+ * second connection while the gateway runs: there the exception was already
+ * absorbed and the command degraded well, while a `throw` from a store
+ * constructor kills a process that was only opening the database.
+ *
+ * **What this proves and what it does not.** It does not reproduce the
+ * interleaving: `better-sqlite3` is synchronous, and in one process there is no
+ * way to slip *between* a call's `PRAGMA` and `ALTER` without instrumenting the
+ * function — and a test that instruments the thing it checks stops checking it.
+ * It proves the behaviour the race lands on, with the **identical error**
+ * produced deterministically: a missing `column` and a `ddl` that adds one that
+ * already exists is, to SQLite, exactly the same failed `ALTER`.
+ */
+describe('ensureColumn survives an ALTER someone else already did', () => {
+  it('does not kill the process when the column appeared in the meantime', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-ensure-column-'));
+    const file = join(dir, 'gara.db');
+    const db = new DatabaseCtor(file);
+    try {
+      db.exec(`CREATE TABLE zz_gara (id INTEGER PRIMARY KEY, undone_at TEXT);`);
+      // `mai_vista` really is missing, so the `PRAGMA` says "go ahead" as it
+      // would for the connection that lost the race; the `ALTER` that follows
+      // finds `undone_at` already there and raises `duplicate column name`.
+      expect(() => ensureColumn(db, 'zz_gara', 'mai_vista', 'undone_at TEXT')).not.toThrow();
+      const columns = db.prepare(`PRAGMA table_info(zz_gara)`).all() as { name: string }[];
+      expect(columns.filter((c) => c.name === 'undone_at').length).toBe(1);
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('the ordinary migration still adds the column', () => {
+    // The half that keeps the repair from degenerating into "does nothing":
+    // the common case must still migrate.
+    const db = new DatabaseCtor(':memory:');
+    try {
+      db.exec(`CREATE TABLE zz_normale (id INTEGER PRIMARY KEY);`);
+      ensureColumn(db, 'zz_normale', 'undone_at', 'undone_at TEXT');
+      const columns = db.prepare(`PRAGMA table_info(zz_normale)`).all() as { name: string }[];
+      expect(columns.some((c) => c.name === 'undone_at')).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('an error that is not the race stays an error', () => {
+    // The half that keeps the repair from becoming a bare `catch {}`: if it
+    // swallowed the class instead of the case, a missing table would pass in
+    // silence and the defect would surface at the first query.
+    const db = new DatabaseCtor(':memory:');
+    try {
+      expect(() => ensureColumn(db, 'zz_non_esiste', 'x', 'x TEXT')).toThrow();
+    } finally {
+      db.close();
+    }
   });
 });

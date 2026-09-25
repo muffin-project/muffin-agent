@@ -681,7 +681,12 @@ function tableToLines(o: Record<string, unknown>): string[] {
     row.map((cell) => {
       if (cell === null || typeof cell !== 'object') return '';
       const c = cell as Record<string, unknown>;
-      return richPlain(c['text'], 0).replace(/\|/g, '\\|').replace(/\n/g, ' ');
+      // Backslashes first: escaping a bare `|` by prefixing `\` is not enough
+      // when the cell already ends in `\` — that turns the prefix into an
+      // escaped backslash and leaves the `|` live as a cell separator
+      // (`js/incomplete-sanitization`). Escaping `\` first keeps every pipe
+      // escaped no matter what the sender wrote.
+      return richPlain(c['text'], 0).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\n/g, ' ');
     }),
   );
   const width = Math.max(...rows.map((r) => r.length));

@@ -64,8 +64,12 @@ import { planRich, type OutboundRich } from './rich.js';
  * - **A segment with nothing in it is not sent.** Until the model's own text
  *   starts arriving — via `spoke()` (it turned out to be preamble) or
  *   `live()` (it is still growing, fate unknown) — a turn produces no
- *   message from this file at all; `sendChatAction` is the only sign of life
- *   before that, in private chats and in groups alike.
+ *   *persistent* message from this file. In a DM the ephemeral draft now
+ *   carries the turn's status (`sto pensando · Ns`) from the first `round`
+ *   event (2026-09-25): the first model call is no longer ~70 s of silence,
+ *   and because the draft is not a message, a dead process still leaves
+ *   nothing behind. In a group — no draft — `sendChatAction` remains the only
+ *   sign of life until the first real content.
  *
  * ## Rate, and why the counter still moves
  *
@@ -423,12 +427,21 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
    * dell'owner, e premerlo arriva come `stopped_message_generation` — un
    * segnale strutturale che il connettore instrada all'abort canonico del
    * turno (`connector.ts#handleStopGenerazione`), mai come testo.
+   *
+   * Finché non è arrivato nessun token, l'anteprima mostra lo **stato del
+   * turno** («sto pensando · Ns») invece di restare invisibile: è il buco di
+   * ~70 s chiuso il 2026-09-25, quando il primo giro del modello non produceva
+   * né testo né una tool call e l'owner guardava il vuoto. Il testo che si
+   * forma vince sullo stato appena arriva, e la riga di stato è la stessa che
+   * la trascrizione persistente usa (`render`).
    */
   async function pushDraft(): Promise<void> {
-    if (stopped || draftDisabled || (draftText === '' && draftRich === null)) return;
+    if (stopped || draftDisabled) return;
+    const payload = draftText !== '' ? draftText : draftStatusText();
+    if (payload === '' && draftRich === null) return;
     try {
       if (draftRich !== null) await api.sendRichMessageDraft(chatId, draftId, draftRich, { canStop: true });
-      else await api.sendMessageDraft(chatId, draftId, draftText, { canStop: true });
+      else await api.sendMessageDraft(chatId, draftId, payload, { canStop: true });
     } catch (error) {
       if (nonModificato(error)) return;
       draftDisabled = true;
@@ -436,18 +449,40 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     }
   }
 
+  /** Lo stato del turno reso per l'anteprima: stessa forma della riga della trascrizione. */
+  function draftStatusText(): string {
+    if (status === null) return '';
+    const s = Math.max(0, Math.round((now() - turnStartedAt) / 1000));
+    return `<i>${escapeHtml(status)} · ${s}s</i>`;
+  }
+
   /**
-   * Il rinnovo. Riparte da solo finché c'è testo da mostrare, e questo è il
-   * punto dell'intera fetta: senza questa ri-programmazione l'anteprima
-   * scade dopo `draftTtlMs` e l'owner guarda il vuoto — il difetto misurato
-   * il 04/09 e chiuso allora togliendo la bolla invece che rinnovandola.
+   * L'anteprima ha qualcosa da dire appena il turno inizia a pensare, non
+   * solo al primo token: chiamata da `report` finché nessun segmento
+   * persistente esiste. Un rinnovo già in corso basta — al prossimo giro
+   * legge comunque lo stato aggiornato.
+   */
+  function ensureDraftStatus(): void {
+    if (stopped || draftDisabled || !draftEnabled) return;
+    if (segments.some(hasContent)) return;
+    if (draftTimer !== null) return;
+    void pushDraft().then(() => scheduleDraft());
+  }
+
+  /**
+   * Il rinnovo. Riparte da solo finché c'è testo **o stato** da mostrare, e
+   * questo è il punto dell'intera fetta: senza questa ri-programmazione
+   * l'anteprima scade dopo `draftTtlMs` e l'owner guarda il vuoto — il difetto
+   * misurato il 04/09 e chiuso allora togliendo la bolla invece che
+   * rinnovandola.
    */
   function scheduleDraft(): void {
     if (stopped || draftDisabled || draftTimer !== null) return;
+    if (draftText === '' && status === null) return;
     draftTimer = setTimeout(() => {
       draftTimer = null;
       void pushDraft().then(() => {
-        if (!stopped && !draftDisabled && draftText !== '') scheduleDraft();
+        if (!stopped && !draftDisabled && (draftText !== '' || status !== null)) scheduleDraft();
       });
     }, draftEveryMs);
   }
@@ -686,6 +721,10 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
           return assertNever(event);
       }
       if (hasContent(current())) scheduleSoon();
+      // Finché la superficie viva è l'anteprima (DM) e non c'è contenuto, lo
+      // stato del turno la fa comparire subito: il primo giro del modello non
+      // è più silenzio (2026-09-25).
+      else ensureDraftStatus();
     },
 
     resolveAsk(capability, allowed) {
