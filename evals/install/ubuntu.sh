@@ -5,15 +5,14 @@
 # This script is the *proof*, not the installer. It rehearses the claim end to
 # end on a machine that has never seen Muffin: no Node, no checkout, no
 # `~/.muffin`, nothing but Ubuntu and a non-root user with sudo. It is written
-# to run inside `scripts/ci-local.ts`'s `ubuntu:24.04` container (and on
-# GitHub's `ubuntu-latest`), which is the only place the claim can be tested —
+# to run on GitHub Actions' `ubuntu-latest` runner, which is the hosted place
+# this Linux-specific claim is tested —
 # the claim is about Linux, and the developer machines are Macs. "Linux prima,
 # macOS poi".
 #
 # ## What "an empty machine" means here, concretely
 #
-# The container that runs CI already has Node installed at `/opt/node/bin`
-# (`buildBootstrapScript` puts it there to emulate `actions/setup-node`), so
+# The Actions runner already has Node installed by `actions/setup-node`, so
 # simply running the installer would prove nothing about the prerequisite it is
 # supposed to solve. So this script builds a **clean PATH** out of the system
 # directories only, dropping any that contains a `node`/`npm`, and refuses to
