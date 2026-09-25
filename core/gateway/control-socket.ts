@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
@@ -140,13 +141,39 @@ export function controlSocketGuardPaths(home: string): string[] {
   return pointer === null ? [path] : [path, pointer, dirname(path)];
 }
 
+/** Reject macOS ACLs, which can grant directory writes beyond BSD mode bits. */
+function assertNoMacOsDirectoryAcls(directories: readonly string[]): void {
+  if (process.platform !== 'darwin') return;
+
+  let listing: string;
+  try {
+    listing = execFileSync('/bin/ls', ['-lde', ...directories], {
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024,
+    });
+  } catch {
+    throw new Error('non e’ stato possibile verificare le ACL della directory temporanea');
+  }
+
+  if (
+    listing.split(/\r?\n/).some((line) => {
+      const mode = line.trimStart().split(/\s+/, 1)[0] ?? '';
+      return (mode.startsWith('d') && mode.includes('+')) || /^\s+\d+:\s/.test(line);
+    })
+  ) {
+    throw new Error('la directory temporanea con ACL non e’ un confine sicuro per il socket');
+  }
+}
+
 /**
  * Every ancestor must be owned by root/the current UID; writable shared
- * ancestors need the sticky bit. Otherwise another UID could replace the
- * private leaf after validation and race the bind-to-chmod window.
+ * ancestors need the sticky bit. On macOS, any ACL is rejected because it can
+ * grant directory writes beyond BSD mode bits. Otherwise another UID could
+ * replace the private leaf after validation and race the bind-to-chmod window.
  */
 function assertTrustedSocketTempRoot(directory: string, uid: number): void {
   const root = parse(directory).root;
+  const checkedDirectories: string[] = [];
   let current = directory;
   while (true) {
     const st = lstatSync(current, { throwIfNoEntry: false });
@@ -160,11 +187,13 @@ function assertTrustedSocketTempRoot(directory: string, uid: number): void {
     ) {
       throw new Error('la directory temporanea non e’ un confine sicuro per il socket');
     }
-    if (current === root) return;
+    checkedDirectories.push(current);
+    if (current === root) break;
     const parent = dirname(current);
-    if (parent === current) return;
+    if (parent === current) break;
     current = parent;
   }
+  assertNoMacOsDirectoryAcls(checkedDirectories);
 }
 
 /** Establish a private leaf only after proving other UIDs cannot replace it. */

@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -159,6 +160,26 @@ describe('sun_path e il file puntatore', () => {
     try {
       const socket = socketPathFor(homeLunga).path;
       await expect(serveControlSocket(homeLunga, () => identify())).rejects.toThrow(/directory temporanea/);
+      expect(existsSync(dirname(socket))).toBe(false);
+    } finally {
+      if (precedente === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = precedente;
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform !== 'darwin')('rifiuta un TMPDIR con ACL che concede scrittura ad altri UID prima del bind', async () => {
+    const base = mkdtempSync(join('/tmp', 'm-'));
+    const tmpAcl = join(base, 'acl-tmp');
+    const homeLunga = `/tmp/${'h'.repeat(60)}/${'x'.repeat(60)}`;
+    mkdirSync(tmpAcl);
+    execFileSync('/bin/chmod', ['+a', 'everyone allow add_file,delete_child', tmpAcl]);
+    const precedente = process.env.TMPDIR;
+    process.env.TMPDIR = tmpAcl;
+
+    try {
+      const socket = socketPathFor(homeLunga).path;
+      await expect(serveControlSocket(homeLunga, () => identify())).rejects.toThrow(/ACL/);
       expect(existsSync(dirname(socket))).toBe(false);
     } finally {
       if (precedente === undefined) delete process.env.TMPDIR;

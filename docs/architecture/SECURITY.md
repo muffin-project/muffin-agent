@@ -641,12 +641,16 @@ Three properties of this split are load-bearing:
   Node's configured temp root plus `gateway.sock.path`) are deny-listed. The
   fallback resolves that root and fails closed unless each ancestor is owned
   by root/current UID, with the sticky bit required on writable shared
-  ancestors; this prevents another UID from replacing the private leaf after
-  validation. The composed Linux live test covers both paths, owner-only
+  ancestors; macOS additionally rejects any ACL in the ancestry and fails
+  closed if ACL inspection cannot run, because ACL grants are not represented
+  by BSD mode bits. This prevents another UID from replacing the private leaf
+  after validation. The composed Linux live test covers both paths, owner-only
   socket/private-directory permissions under umask `022`, a separate-UID
   connection, and rejection of a world-writable non-sticky `TMPDIR` before
-  bind/pointer publication. These checks remain unverified until the required
-  Actions run on the exact candidate with `MUFFIN_REQUIRE_SANDBOX=1`.
+  bind/pointer publication; the macOS unit test rejects a temp ancestry with
+  an ACL granting `add_file` and `delete_child`. These checks remain
+  unverified until the required Actions run on the exact candidate with
+  `MUFFIN_REQUIRE_SANDBOX=1`.
   Sockets of *other*
   installations on the same machine stay reachable:
   the deny names this home's channel, not every home's.
