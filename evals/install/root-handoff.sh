@@ -6,6 +6,17 @@ set -euo pipefail
 [ "$(id -u)" -eq 0 ] || { echo 'root handoff eval: run as root in isolation' >&2; exit 1; }
 REPO=${1:-$(git rev-parse --show-toplevel)}
 REPO=$(cd "$REPO" && pwd)
+# The companion root-boundary eval verifies that an untrusted /usr/local/bin
+# makes the installer fail closed. For this successful end-to-end fixture, use
+# the disposable runner's root-owned directory with its write bits removed;
+# restore its original mode after deleting every fixture command.
+ROOT_BIN_DIR=/usr/local/bin
+if [ ! -d "$ROOT_BIN_DIR" ] || [ -L "$ROOT_BIN_DIR" ] ||
+  [ "$(stat -c '%u:%g' "$ROOT_BIN_DIR")" != 0:0 ]; then
+  echo 'root handoff eval: /usr/local/bin is not root-owned; cannot establish a trusted dispatcher fixture' >&2
+  exit 1
+fi
+ROOT_BIN_ORIGINAL_MODE=$(stat -c '%a' "$ROOT_BIN_DIR")
 LAB=$(mktemp -d /tmp/muffin-root-handoff.XXXXXX)
 chmod 0755 "$LAB"
 EVENTS=$LAB/events
@@ -25,6 +36,7 @@ cleanup() {
   rm -f /var/lib/.muffin-root-install /usr/local/bin/muffin
   if ! getent passwd muffin >/dev/null && getent group muffin >/dev/null; then groupdel muffin >/dev/null 2>&1 || true; fi
   for file in "${CREATED_STUBS[@]}"; do rm -f "$file"; done
+  chmod "$ROOT_BIN_ORIGINAL_MODE" "$ROOT_BIN_DIR"
   rm -rf "$LAB"
 }
 trap cleanup EXIT HUP INT TERM
@@ -42,6 +54,8 @@ for name in "${STUBS[@]}"; do
     exit 1
   fi
 done
+
+chmod go-w "$ROOT_BIN_DIR"
 
 write_stub() {
   local name=$1
