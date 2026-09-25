@@ -140,24 +140,33 @@ jobs:
           const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
           const pr = event.pull_request;
           if (!pr) process.exit(64);
-          console.log(pr.user.login);
-          console.log(pr.base.sha);
-          console.log(pr.head.sha);
+          console.log(pr.base?.ref || '');
+          console.log(pr.head?.ref || '');
+          console.log(pr.base?.repo?.full_name || '');
+          console.log(pr.head?.repo?.full_name || '');
+          console.log(pr.base?.sha || '');
+          console.log(pr.head?.sha || '');
           NODE
           )
 
-          author="${PR_META[0]:-}"
-          base="${PR_META[1]:-}"
-          head="${PR_META[2]:-}"
+          base_branch="${PR_META[0]:-}"
+          head_branch="${PR_META[1]:-}"
+          base_repo="${PR_META[2]:-}"
+          head_repo="${PR_META[3]:-}"
+          base="${PR_META[4]:-}"
+          head="${PR_META[5]:-}"
 
-          [ -n "$author" ] && [ -n "$base" ] && [ -n "$head" ] || {
-            echo "DCO: could not resolve PR author/base/head from GITHUB_EVENT_PATH" >&2
+          [ -n "$base_branch" ] && [ -n "$head_branch" ] && [ -n "$base_repo" ] && [ -n "$head_repo" ] && [ -n "$base" ] && [ -n "$head" ] || {
+            echo "DCO: could not resolve PR base/head repository, branch, or SHA from GITHUB_EVENT_PATH" >&2
             exit 64
           }
 
-          # Existing owner branches predate the contributor-agreement policy.
-          if [ "$author" = "GiustoPiedimonte" ]; then
-            echo "DCO: owner PR — legacy owner exemption."
+          # Only the canonical same-repository dev -> main promotion inherits
+          # pre-gate history. Every contribution PR, including owner PRs, is
+          # checked by the DCO checker.
+          if [ "$base_branch" = "main" ] && [ "$head_branch" = "dev" ] && \
+             [ "$base_repo" = "muffin-project/muffin-agent" ] && [ "$head_repo" = "$base_repo" ]; then
+            echo "DCO: canonical dev -> main promotion; preserve inherited pre-gate commits."
             exit 0
           fi
 

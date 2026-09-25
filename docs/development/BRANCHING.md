@@ -64,65 +64,57 @@ run when the actual merge gate requires CI. Report what was actually observed.
 
 ### 3. Slice -> `dev`
 
-Two doors, one guarantee — a merge lands only on evidence the hook can verify
-in that moment (`.claude/hooks/guard-merge-gate.mjs`):
+Open a pull request into `dev`. GitHub Actions and the active repository
+ruleset are the sole integration gate; local commands can help diagnose a
+change but cannot merge it or substitute for a required check. The current
+ruleset requires a PR, an up-to-date branch, and these GitHub Actions checks:
+`dco`, `verifica`, `accettazione`, `install`, `collegamenti`, and `strumenti`.
+The required check source is GitHub Actions and there is no bypass actor.
+Reconcile this list against GitHub when the ruleset changes.
 
-- **local**: `npm run merge -- <pr>` builds the merged result in a throwaway
-  worktree, runs `ci:local` on it, merges only on PASS;
-- **GitHub**: `gh pr merge` passes the hook when the PR is OPEN, not a draft,
-  on `dev`, `mergeStateStatus` is CLEAN, and the head carries the nominal
-  FAST (`verifica`) and DEEP (`accettazione`) successes — `skipped` satisfies
-  neither — with every other check-run on the head green and none pending.
-  Any doubt falls back to the local door.
+A merge commit is required. Do not squash: the subject
+`Merge pull request #NN from <owner>/<branch>` is the local witness
+`node .claude/deleghe.mjs riprendi` uses to derive that a delegation's work is
+integrated; a squash erases it and finished work shows up as live again.
 
-What CLEAN does and does not prove: it says no conflict is known with the
-base right now and the associated status is green. GitHub CI runs on the PR
-merge-ref snapshot of that event, so this is evidence about the composition
-tested in that run — not proof the base stood still afterwards, and not
-byte-identity with the tree the server will merge. Strict up-to-date
-semantics waits for branch protection or a merge queue. Until then the local
-door stays the composition-strong door: it executes the merged tree itself.
+GitHub evaluates the PR merge candidate. Strict up-to-date rules require the
+branch to include the current base before merge, so a base advance invalidates
+the old candidate checks. A successful head check is evidence for the tested
+PR composition, not for a later changed head.
 
-Docs-only exception, fail-closed: when FAST/DEEP are absent because `ci.yml`
-skipped the PR entirely, the GitHub door passes only after reading the PR's
-real changed files and finding every one inside `ci.yml`'s exempt set
-(`docs/**`, `.claude/**`, `README.md`, `AGENTS.md`, `CLAUDE.md`), with the
-lightweight checks that did run green. Absent files, or any file outside the
-set, mean the local door.
+Required checks are stable on every pull request: do not use trigger-level
+`paths` / `paths-ignore` on required workflows because an unstarted workflow
+can leave a required check pending. Use job-level conditions only when skipped
+jobs produce a successful conclusion and the complete required-check surface
+remains enforced.
 
-Draft convention for substantial agent work: open the PR as a draft early
-(durable remote checkpoint, per above), so intermediate pushes pay FAST only;
-mark ready when the claim is integration-grade — `ready_for_review` starts a
-fresh run with DEEP. A draft never passes the GitHub door.
+Substantial work can open a draft PR as a durable checkpoint. Draft checks may
+skip `accettazione`; that is not complete acceptance evidence. Mark the PR ready
+when its claim is integration-grade. The `ready_for_review` trigger starts the
+full run, including acceptance.
 
 Required evidence still follows the profile:
 
-- **FAST**: orchestrator integrates after relevant checks + diff review.
-- **STANDARD**: orchestrator integrates after claim-appropriate evidence and the
-  normal integration checks available for the repository.
+- **FAST**: integrate after relevant required checks and diff review.
+- **STANDARD**: integrate after claim-appropriate evidence and all required
+  Actions checks.
 - **CRITICAL**: requires a fresh independent `JUDGE.md` verdict `MERGE` on the
   relevant head before integration.
 
-A change in `dev` invalidates only evidence whose production path/test/contract
+A change in `dev` invalidates evidence whose production path, test, or contract
 was materially touched. Evidence is reusable by commit/head, not globally reset
 by every merge.
 
 ### 4. `dev` -> `main`
 
-This is an integrated-system checkpoint, not a replay of every slice review.
-Run the suite/journeys appropriate to the release boundary and review the
-composition of changes since the previous promotion.
-
-Honest current mechanics (reconstructed from git history, 2026-09-18 — not a
-policy, a fact): promotion is a fast-forward of `main` to a `dev` commit,
-outside both merge doors. Neither the hook (which only sees `gh pr merge`
-commands) nor `npm run merge` (which refuses non-`dev` bases) participates,
-and with branch protection unavailable nothing server-side checks anything
-before the ref moves. The `main`-push CI fan-out is therefore kept on purpose:
-it is the first execution of CI on the exact promoted commit, since nothing
-runs on pushes to `dev`. Do not narrow the `main` push trigger until a real
-pre-promotion gate tests the promotion commit and proves the post-push run
-adds no signal.
+Promotion is a pull request from `dev` to `main`, subject to the same Actions
+checks and active ruleset. Review the integrated changes since the previous
+promotion and the release-boundary evidence. Do not move `main` by a local
+fast-forward or treat a push-triggered run after promotion as the gate. The
+required PR checks run against the promotion candidate; strict up-to-date rules
+require current `main` before merge. The push-to-`main` workflows remain useful
+as post-merge verification for their configured paths, but they do not authorize
+the promotion.
 
 ## Current-state reconciliation is part of integration
 
@@ -130,12 +122,7 @@ After an integration that changes active work, DAY-1 status or ordering:
 
 - update the authoritative DAY-1 requirement only if its evidence/status changed;
 - update `critical-path.md` only if ordering/dependency changed;
-- update `docs/development/handoff.md` when live work/next action changed;
 - do not update the retired `STATE.md` chronicle.
-
-Run `.claude/riconcilia.mjs` when its checked surfaces are affected. Keep that
-checker narrow: its job is to catch known handoff/PR/branch drift, not to become
-a universal consistency engine.
 
 ## CI and branch protection are observed facts
 
@@ -146,16 +133,11 @@ At integration time, observe which checks/protections actually exist and report
 limitations. A convention is not an enforced gate merely because this file says
 it should be one.
 
-Observed 2026-09-18: GitHub minutes are back and CI runs per-PR (FAST ~8 min,
-FAST+DEEP ~19 min sequential while the repo is private), but branch
-protection is unavailable (private repo on the free plan — 403 from the API),
-so nothing server-side enforces green checks or blocks direct pushes; the hook
-above is the enforcement for agent sessions until the 25/09 source-public
-milestone unlocks protection. `ci.yml` skips `verifica` on docs/`.claude`-only
-changes (`paths-ignore`) and `accettazione` on draft PRs: a PR that touches
-only exempt paths carries almost no GitHub evidence, and the hook's
-docs-only file-allowlist rule (or the local door, when even that fails)
-decides instead of a zero-evidence pass.
+Observed 2026-09-25: the repository is public and the `muffin protected
+branches` ruleset is active for `dev` and `main`. It requires pull requests,
+strict up-to-date branches, the six checks named above, and has no bypass actor.
+This is a time-bound observation, not a substitute for rechecking GitHub when
+integration settings change.
 
 ## Commits are recovery points, not activity counters
 

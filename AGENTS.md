@@ -1,17 +1,15 @@
 # Working on this repository
 
-A **router**, not the manual. `docs/README.md` maps each question to its
-authoritative home. Load deeper material only when the task makes it relevant:
-context is a resource, and history is not startup context.
+A **router**, not a manual. `docs/README.md` maps questions to authoritative
+homes. Load deeper material only when relevant; history is not startup context.
 
 ## Observe before you read, read before you change
 
-- Reconstruct observed state first — Git, worktrees, open PRs and checks,
-  delegation state. Do not infer current work from a nearby Markdown file.
-- `docs/development/handoff.md` is a disposable handoff. Observed repository state
-  wins when the two disagree.
-- A detailed document is not evidence that HEAD still implements its claim.
-  Verify load-bearing current-state claims against code, config or runtime.
+- Observe Git, worktrees, open PRs/checks and delegation first; nearby Markdown
+  does not establish current work.
+- Current work is observed from Git/GitHub and `scripts/agent/repo-state.mjs`.
+- Verify load-bearing claims against code, config or runtime; docs do not prove
+  HEAD still implements them.
 - Literal mechanics belong to code, schemas and shipped config, never to prose.
 
 ## Challenge the design before writing it
@@ -19,22 +17,19 @@ context is a resource, and history is not startup context.
 For a non-mechanical change to runtime, harness, security and authority, memory,
 processes or durable schema, follow `docs/development/RESEARCH.md` **before** implementing.
 
-A previous Muffin decision is a hypothesis with history, not a fact that must be
-preserved. A peer implementation is prior art, not authority. Simplifying or
-removing a mechanism is a valid result.
+A prior Muffin decision is a hypothesis, not binding fact; peer code is prior
+art, not authority. Simplifying or removing a mechanism is valid.
 
-A mechanical fix whose desired behaviour is already unambiguous still requires
-tracing the real production path, but not a literature review. If it exposes an
-architectural assumption, the full pass becomes mandatory.
+A mechanical fix with clear behavior still requires tracing production, not a
+literature review. If it exposes an architectural assumption, do the full pass.
 
 ## Classify the claim before implementing it
 
-Choose FAST / STANDARD / CRITICAL using `docs/development/ORCHESTRATION.md`. The verification
-budget follows the claim and its blast radius, not the size of the diff.
+Choose FAST / STANDARD / CRITICAL using `docs/development/ORCHESTRATION.md`.
+Verification follows the claim and blast radius, not diff size.
 
-A subagent saying something is not evidence. A module existing is not proof that
-production reaches it. Prefer the smallest evidence that could falsify the claim,
-and prove the wiring when the wiring is the guarantee.
+A subagent's claim is not evidence; a module's existence does not prove production
+uses it. Prefer falsifying evidence; prove wiring when wiring is the guarantee.
 
 ## Conventions that do not move
 
@@ -50,17 +45,19 @@ Bring new evidence; a material reversal is a new ADR, not a rewrite of the old.
 
 ## Engineering harness
 
-Procedures: `.agents/skills/` (`engineering-loop`, `jev-shadow`). Entry points:
+Procedures: `.agents/skills/` (`engineering-loop`, `jev-shadow`); entry points
 `/start`, `/checkpoint`, `/close` in `.opencode/commands/`; roles in
-`.opencode/agents/`. Snapshot: `scripts/agent/repo-state.mjs`. Current program:
-the open issue with the `program/current` label. OpenCode V1 stays.
+`.opencode/agents/`. `scripts/agent/repo-state.mjs` summarizes GitHub issues,
+claims and open PRs. GitHub issue/PR state owns contributor claims; no
+global `program/current` queue. Disjoint scopes may proceed in parallel.
+OpenCode commands/roles are optional; repository invariants are harness-neutral.
 
 ## The failure pattern to remember
 
-Muffin has repeatedly had mechanisms that existed, had unit tests, and were
-still not on the production path. Therefore:
+Muffin has repeatedly had mechanisms that existed and passed unit tests but were
+not on the production path. Therefore:
 
 > **A mechanism working is not the same claim as the outcome being right.**
 
-When the claim is load-bearing, trace producer → consumer → failure path, and
-make the evidence fail when the wiring is removed.
+For load-bearing claims, trace producer → consumer → failure path and ensure
+evidence fails if the wiring is removed.
