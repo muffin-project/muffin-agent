@@ -1,16 +1,15 @@
 # Installing Muffin
 
-> **One command after source-public opens.** On a fresh Linux or macOS machine
-> with a user account and the normal command-line tools needed to fetch this
-> script, this is the intended public installation path:
+> **One command from the public repository.** On a fresh Linux or macOS
+> machine with a user account and the normal command-line tools needed to fetch
+> this script, this is the current installation path:
 >
 > ```bash
 > curl -fsSL https://raw.githubusercontent.com/muffin-project/muffin-agent/main/bootstrap.sh | sh
 > ```
 >
-> The repository is currently private, so this unauthenticated raw-file command
-> is not available yet. Private Community Preview users need the repository
-> access and installation instructions supplied with their invitation.
+> The repository is public. Muffin remains pre-alpha; this command is available
+> for evaluation and does not promise production support or general availability.
 >
 > `bootstrap.sh` is intentionally tiny: it stages the canonical `install.sh`
 > first and gives that installer the terminal back on stdin. That distinction
