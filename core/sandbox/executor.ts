@@ -222,14 +222,13 @@ function isMissingDependency(detail: string): boolean {
 }
 
 /**
- * **No network, and the one place that says so.**
+ * **Direct IP networking is disabled here; AF_UNIX is a separate residual.**
  *
  * Every config this module builds — session, per-call, self-test — reads its
- * `network` block from here, so "the sandbox has no network" is one function
- * to check and one function to break. That matters more since ADR-0074 punto 4:
- * `sys.shell` (the read-only lane) declares `reversible: 'yes'` and never asks,
- * and the claim behind `'yes'` is exactly this — a command that cannot open a
- * socket cannot have sent anything that would need undoing.
+ * `network` block from here, so direct IP/proxy egress is one function to
+ * check and one function to break. `sys.shell` asks every time since ADR-0091
+ * because whole-host reads disclose data. This setting does not block AF_UNIX
+ * connections on Linux; those remain a separate local-service residual.
  *
  * **What actually does the work, measured in `@anthropic-ai/sandbox-runtime`
  * 0.0.71, not assumed from the field names.** `allowedDomains` being *defined*
@@ -255,6 +254,12 @@ function isMissingDependency(detail: string): boolean {
  * Ubuntu 24.04. `--unshare-net` does not cover Unix sockets: they are
  * filesystem objects, and `connect()` to one is not a write, so a socket
  * reachable under the read-only bind is reachable from the read-only lane too.
+ * What is NOT reachable is what `guards.denyRead` hides: since #638 that list
+ * carries the gateway control socket and its pointer file. This candidate
+ * extends the composed Linux live test to both the direct path and the
+ * long-home hashed `/tmp` fallback; its result is unverified until the
+ * required Actions run on this exact candidate. Other reachable sockets stay
+ * reachable, and the deny is also asserted statically (`core/rot/guards.test.ts`).
  * The read-only lane therefore promises *no IP network and no writes outside
  * the scratch* — not "no side effects reachable by any means". Written down in
  * `docs/architecture/SECURITY.md` §9 rather than left as a gap between what the code does
@@ -776,11 +781,10 @@ export class SandboxExecutor {
    * **The read-only lane** (`sys.shell`, ADR-0074 punto 4).
    *
    * Writes land in the session scratch and nowhere else — not the workspace,
-   * not the home, not the caller's cwd — and the network is off. That pair is
-   * the whole reason the capability may declare `reversible: 'yes'` and never
-   * ask: a command that can only touch a directory this process created under
-   * `tmpdir()` and deletes in `close()` has nothing to undo, and a command with
-   * no socket has sent nothing.
+   * not the home, not the caller's cwd — and direct IP/proxy egress is off.
+   * Linux AF_UNIX remains reachable except for paths in `denyRead`, so local
+   * service effects are possible. Whole-host reads can disclose data; ADR-0091
+   * therefore declares `reversible: 'no'` and the kernel asks on every call.
    *
    * `cwd` is still the caller's: reading is the point, and `--ro-bind / /`
    * makes the whole filesystem readable minus `guards.denyRead` either way.

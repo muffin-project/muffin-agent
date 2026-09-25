@@ -12,7 +12,7 @@ import type { SessionRef } from '../session/store.js';
 import type { DeliveryOutcome, FileSpec } from '../surface/types.js';
 import { LANE_TURNS, type ModelLane } from '../turns/model-lane.js';
 import type { TurnRecord, TurnStore } from '../turns/store.js';
-import { resolveSocketPath } from './control-socket.js';
+import { isSafeControlToken, resolveSocketPath } from './control-socket.js';
 
 /**
  * Un turno del terminale eseguito dal gateway, sul runtime del gateway.
@@ -129,7 +129,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function asTurnResult(value: unknown): TurnResult | null {
   if (!isRecord(value)) return null;
-  if (typeof value.text !== 'string' || typeof value.turnId !== 'string' || typeof value.stopped !== 'string') {
+  if (
+    typeof value.text !== 'string' ||
+    typeof value.turnId !== 'string' ||
+    typeof value.stopped !== 'string'
+  ) {
     return null;
   }
   return value as unknown as TurnResult;
@@ -463,9 +467,13 @@ function readRunRequest(first: Record<string, unknown>): RunRequest | null {
   const id = first.id;
   const text = first.text;
   const sessionId = first.sessionId;
-  if (typeof id !== 'string' || id === '' || id.length > 128) return null;
+  // Both tokens are caller-controlled and become a turn id, a reply channel
+  // and a transcript path (#638): outside the token alphabet the first line
+  // is unreadable — error, no execution, nothing to query. This is the first
+  // layer; `SessionStore.open` refuses again at the path join.
+  if (!isSafeControlToken(id)) return null;
   if (typeof text !== 'string' || text.trim() === '') return null;
-  if (typeof sessionId !== 'string' || sessionId === '') return null;
+  if (!isSafeControlToken(sessionId)) return null;
   return {
     verb: 'run',
     protocol: 2,
