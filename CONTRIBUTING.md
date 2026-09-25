@@ -8,12 +8,10 @@ This file is a map onto the repository's canonical working rules for an external
 contributor. It deliberately does not restate every rule: two copies drift and
 only one stays true.
 
-The repository is currently a **private Community Preview**. Public source
-access is planned before product public alpha, but remains pending the privacy,
-security and repository-readiness gates. Until access opens, contributions are
-limited to people invited to this repository. A future public repository will
-invite inspection and contribution; it will not claim stability, compatibility
-or production readiness.
+The repository is public at **source-public / pre-alpha**. Contributions are
+welcome through scoped issues and pull requests. This does not claim product
+stability, compatibility, or production readiness, and it is not product public
+alpha.
 
 ## License
 
