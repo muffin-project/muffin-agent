@@ -7,11 +7,22 @@ mai in `if` sul nome del modello nel loop.
 ## Bracci
 
 - `A` — status quo: profilo shipped intatto (`adaptive` + `deterministic`).
-- `B` — `adaptive` + `model-default`: solo la temperature resta al provider.
 - `C` — `off` + `deterministic` (via `thinking: 'off'` nella home usa-e-getta).
 
-Il braccio `low/bounded reasoning` della issue non è esprimibile:
-`ReasoningRequest.effort/maxTokens` non ha superficie in profilo/config.
+(`B` misurato nel round 1: indistinguibile da A. Il braccio
+`low/bounded reasoning` non è esprimibile: `effort/maxTokens` senza
+superficie.)
+
+## Task (round 2)
+
+Conversazionali multi-turno a repliche fresche — il dominio dove `off`
+perse il 27/08 — più due ancoraggi file dal round 1:
+
+- `T3c` (x2): elenca le righe, poi la seconda **senza rileggere**;
+- `T4c` (x2): scrivi `bozza`, poi `finale` ricordando cosa c'era prima;
+- `T1`, `T2` (x1): ancoraggi file.
+
+6 turni-turno per braccio (10 turni totali con repliche), tetto default $1.
 
 ## Uso
 
