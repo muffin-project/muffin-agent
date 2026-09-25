@@ -62,7 +62,6 @@ export {
   evidenceForContinuation,
   explicitResumeMessage,
   isContinuationAsk,
-  noteAmbiguity,
   resolveContinuation,
   resolveFollowup,
   routeContinuationTarget,
