@@ -85,8 +85,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Serve al runner (e a `scripts/ci-local.ts`, che deriva da qui quale Node
-      # installare nel container), NON alla prova: `evals/install/ubuntu.sh`
+      # Serve al runner, NON alla prova: `evals/install/ubuntu.sh`
       # costruisce un PATH ripulito da cui `node` è irraggiungibile, e si
       # rifiuta di proseguire se lo trova ancora. È esattamente il prerequisito
       # che `install.sh` deve risolvere da solo.
