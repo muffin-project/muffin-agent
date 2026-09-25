@@ -20,6 +20,9 @@ while authority stays explicit and under your control.
 
 <sub><strong>SOURCE-PUBLIC · PRE-ALPHA</strong> — the code is open for inspection and contributions; the product is still being hardened for real daily use.</sub>
 
+<p><strong>PLEASE DO NOT INSTALL OR RELY ON MUFFIN FOR REAL WORK YET.</strong><br>
+This repository is public for inspection, agent-assisted analysis, and contributions. The installer and runtime are still being hardened; we will post a separate call when installation testing is ready.</p>
+
 [![GitHub Actions](https://github.com/muffin-project/muffin-agent/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/muffin-project/muffin-agent/actions/workflows/ci.yml)
 [![Code license](https://img.shields.io/github/license/muffin-project/muffin-agent?label=code%20license&style=for-the-badge)](LICENSE)
 
