@@ -20,6 +20,17 @@ while authority stays explicit and under your control.
 
 <sub><strong>SOURCE-PUBLIC · PRE-ALPHA</strong> — the code is open for inspection and contributions; the product is still being hardened for real daily use.</sub>
 
+[![GitHub Actions](https://github.com/muffin-project/muffin-agent/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/muffin-project/muffin-agent/actions/workflows/ci.yml)
+[![Code license](https://img.shields.io/github/license/muffin-project/muffin-agent?label=code%20license&style=for-the-badge)](LICENSE)
+
+[![Created by Giusto Piedimonte](https://img.shields.io/badge/Creator-Giusto%20Piedimonte-071A3D?style=for-the-badge)](https://giusto.dev/)
+[![Instagram @giusto.dev](https://img.shields.io/badge/Instagram-%40giusto.dev-E4405F?style=for-the-badge&logo=instagram&logoColor=white)](https://www.instagram.com/giusto.dev/)
+[![Support Muffin on PayPal](https://img.shields.io/badge/Support%20Muffin-PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://www.paypal.com/donate/?hosted_button_id=MB89Z9ZLFKFSW)
+
+</div>
+
+<div align="center">
+  <img src="assets/brand/muffin-readme-hero.png" alt="Muffin mascot, with a dotted line suggesting continuity across time" width="900">
 </div>
 
 ---
