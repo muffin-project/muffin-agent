@@ -227,13 +227,10 @@ The full suite runs once at the integrated PR/head gate (normally CI), not after
 every local commit. A fresh judge is not required; the orchestrator may integrate
 an unambiguous STANDARD claim when its evidence budget is satisfied.
 
-Integration into `dev` goes through the two-tier gate in `docs/development/BRANCHING.md`
-§3: `npm run merge -- <pr>` (merged result in a throwaway worktree, `ci:local`,
-merges only on PASS) or a GitHub-green head on a static base, both enforced by
-`.claude/hooks/guard-merge-gate.mjs`. A DISCARDED verdict (contended host) is
-not a verdict: rerun it. A direct `gh pr merge` outside either door is
-blocked: the gate is a condition the tool checks, never a printed line the
-orchestrator reads.
+Integration into `dev` and promotion to `main` use pull requests, GitHub Actions,
+and the active ruleset described in `docs/development/BRANCHING.md` §3–4. Local
+tests and `npm run gate:local` can support investigation, but their results do
+not authorize integration or replace required Actions checks.
 
 ### CRITICAL
 
@@ -353,7 +350,7 @@ Update only the authoritative home whose meaning changed:
 | durable architectural decision/rationale | ADR |
 | DAY-1 row/status/evidence | `docs/status/day1/requirements-status.md` |
 | DAY-1 ordering/dependency | `docs/status/day1/critical-path.md` |
-| current WIP/next action | `docs/development/handoff.md` |
+| current WIP/next action | observed Git/GitHub, summarized by `scripts/agent/repo-state.mjs` |
 | product destination | `docs/product/VISION.md` |
 | general engineering lesson | `docs/evidence/lessons.md` |
 | external/research evidence | dated `docs/evidence/` |
@@ -378,7 +375,7 @@ After integration:
 1. observe the resulting Git/runtime state;
 2. update the DAY-1 requirements only if status/evidence changed;
 3. update critical path only if order/dependency changed;
-4. keep LAVORO as the smallest useful next-session handoff;
+4. leave issue/PR/SHA/check state truthful for the next fresh session;
 5. regenerate relevant derived views;
 6. do not refresh historical audits into current state.
 

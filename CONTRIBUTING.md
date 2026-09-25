@@ -74,6 +74,27 @@ Propose a new core primitive only when a concrete need cannot be expressed safel
 through the current boundaries or when multiple capabilities expose the same
 missing invariant.
 
+## Choose and claim work
+
+GitHub issues are a navigable claim and dependency graph, not a single
+repository-wide queue. There is no required `current` issue or global
+`program/current` label. Contributors can choose any open issue whose stated
+prerequisites are satisfied and whose acceptance is clear enough to implement.
+
+Before writing:
+
+- claim the issue with its GitHub assignee; if assignment is unavailable, comment
+  with the contributor/agent identity, bounded scope, and branch;
+- link the branch and PR to the issue so maintainers can reconcile the same claim;
+- compare the scope with other active claims, worktrees and files changed in open
+  PRs. Independent scopes may proceed in parallel; coordinate or narrow overlap.
+
+Use the issue body for durable dependencies and acceptance, and the linked PR for
+candidate SHA and check/review evidence. When work is duplicated or superseded,
+link the surviving issue/PR and close the stale claim with a short reason. Do not
+close a valid issue just because another issue is currently attracting maintainer
+attention.
+
 ## Before you open a pull request
 
 - **Base your branch on the repository's current integration branch described in
@@ -104,14 +125,20 @@ it — **observed, not asserted**.
 
 That normally means:
 
-- commands you actually ran and their actual output;
-- minimum local signal before opening a PR: `npx tsc --noEmit` plus the targeted
-  tests for the files you touched (`npx vitest run <paths>`); the template
-  defines the rest of the evidence budget, not this file;
+- commands or GitHub Actions checks you actually observed, with their actual
+  results;
+- local typechecks and targeted tests are optional fast feedback. They do not
+  authorize integration and are not required before opening a PR. GitHub
+  Actions and the active repository ruleset are the only merge gate; every
+  required check must pass on the current, up-to-date PR candidate;
 - for a bug fix, the pre-fix failure/reproduction before the green result;
 - integration/acceptance evidence when the claim crosses a real boundary;
 - for CRITICAL work, the independent judge path described in `docs/development/JUDGE.md`,
   run by a fresh evaluator rather than the same session being its sole certifier.
+
+Green Actions are not evidence for behaviour the hosted runner cannot observe,
+such as a fresh public VPS install or an owner-controlled external service.
+Record that acceptance separately and leave it unresolved until it is observed.
 
 A subagent, coding assistant or reviewer saying "it works" is not itself
 evidence. The evidence is the executable observation.
