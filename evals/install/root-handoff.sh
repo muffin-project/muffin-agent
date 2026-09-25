@@ -328,7 +328,15 @@ SERVICE_GID=$(id -g muffin)
 [ "$(getent passwd muffin | cut -d: -f7)" = /usr/sbin/nologin ]
 [ "$(stat -c '%u:%g:%a' /var/lib/muffin)" = "$SERVICE_UID:$SERVICE_GID:700" ]
 [ "$(stat -c '%u:%g' /var/lib/muffin/.local/share/muffin/src)" = "$SERVICE_UID:$SERVICE_GID" ]
-[ "$(stat -c '%u:%g' /var/lib/muffin/.local/share/muffin/node/bin/node)" = "$SERVICE_UID:$SERVICE_GID" ]
+SERVICE_NODE=/var/lib/muffin/.local/share/muffin/node/bin/node
+if [ -x "$SERVICE_NODE" ]; then
+  [ "$(stat -c '%u:%g' "$SERVICE_NODE")" = "$SERVICE_UID:$SERVICE_GID" ]
+else
+  SERVICE_NODE=$(runuser -u muffin -- env PATH=/usr/local/bin:/usr/bin:/bin sh -c 'command -v node' || true)
+  [ -n "$SERVICE_NODE" ]
+fi
+SERVICE_NODE_MAJOR=$(runuser -u muffin -- env PATH="$(dirname "$SERVICE_NODE"):/usr/local/bin:/usr/bin:/bin" node -p 'Number(process.versions.node.split(".")[0])')
+[ "$SERVICE_NODE_MAJOR" -ge 22 ]
 [ "$(stat -c '%u:%g:%a' /usr/local/bin/muffin)" = 0:0:755 ]
 [ ! -L /usr/local/bin/muffin ]
 grep -Fqx '# Muffin managed root dispatcher' /usr/local/bin/muffin
