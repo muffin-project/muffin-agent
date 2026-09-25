@@ -2,27 +2,27 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { createDecide } from './decide.js';
-import { POLICY_FLOOR, ROW_FLOOR } from './matrix.js';
-import type { CapabilityDecl, Decision, DecisionRequest, Principal, TrustTier } from './types.js';
-import { fsCapabilities } from '../../agent/tools/fs.js';
-import { shellCapability, shellWriteCapability } from '../../agent/tools/shell.js';
-import { processCapabilities } from '../../agent/tools/process.js';
 import { sendFileCapability } from '../../agent/tools/deliver.js';
+import { documentCapability } from '../../agent/tools/document.js';
+import { effectsCapability } from '../../agent/tools/effects.js';
+import { fsCapabilities } from '../../agent/tools/fs.js';
 import { httpCapability } from '../../agent/tools/http.js';
-import { searchCapability } from '../../agent/tools/search.js';
+import { inspectCapability } from '../../agent/tools/inspect.js';
+import { mcpCapabilityFor } from '../../agent/tools/mcp.js';
 import { memoryCapability } from '../../agent/tools/memory.js';
 import { memoryForgetCapability } from '../../agent/tools/memory-forget.js';
-import { skillCapability } from '../../agent/tools/skill.js';
-import { documentCapability } from '../../agent/tools/document.js';
-import { inspectCapability } from '../../agent/tools/inspect.js';
-import { effectsCapability } from '../../agent/tools/effects.js';
-import { todoCapability } from '../../agent/tools/todo.js';
-import { waitCapability } from '../../agent/tools/wait.js';
-import { vaultWriteCapability } from '../../agent/tools/vault-save.js';
-import { mcpCapabilityFor } from '../../agent/tools/mcp.js';
+import { processCapabilities } from '../../agent/tools/process.js';
 import { scheduleCapability } from '../../agent/tools/schedule.js';
+import { searchCapability } from '../../agent/tools/search.js';
+import { shellCapability, shellWriteCapability } from '../../agent/tools/shell.js';
+import { skillCapability } from '../../agent/tools/skill.js';
+import { todoCapability } from '../../agent/tools/todo.js';
+import { vaultWriteCapability } from '../../agent/tools/vault-save.js';
+import { waitCapability } from '../../agent/tools/wait.js';
+import { createDecide } from './decide.js';
 import { DOORS } from './doors.js';
+import { POLICY_FLOOR, ROW_FLOOR } from './matrix.js';
+import type { CapabilityDecl, Decision, DecisionRequest, Principal, TrustTier } from './types.js';
 
 /**
  * The normative matrix, executed.
@@ -198,7 +198,9 @@ describe('la matrice normativa è eseguibile', () => {
           // taint. Per ogni altra riga, e per ogni altro principal (provato in
           // `solo-irreversibile.test.ts`), il rifiuto non si muove.
           const fuori = decl.effect === 'external' || decl.effect === 'outward';
-          expect(`${decl.id}@${taint}:${d.effect}`).toBe(`${decl.id}@${taint}:${fuori ? 'ask' : 'deny'}`);
+          expect(`${decl.id}@${taint}:${d.effect}`).toBe(
+            `${decl.id}@${taint}:${fuori ? 'ask' : 'deny'}`,
+          );
           if (fuori && d.effect === 'ask') {
             expect(`${decl.id}@${taint}:${d.ask.prompt}`).toContain(`taint ${taint}`);
           }
@@ -261,7 +263,10 @@ describe('la matrice normativa è eseguibile', () => {
     expect(processCapabilities.find((d) => d.id === 'sys.process.list')?.maxTaint).toBeUndefined();
     // Il pin era la sola cosa fra queste due e un turno a livello 3: senza,
     // rispondono. È la metà che un `toBeUndefined()` da solo non prova.
-    for (const decl of [skillCapability, ...processCapabilities.filter((d) => d.id === 'sys.process.list')]) {
+    for (const decl of [
+      skillCapability,
+      ...processCapabilities.filter((d) => d.id === 'sys.process.list'),
+    ]) {
       expect(`${decl.id}@3: ${decisionAt(decl, 3).effect}`).toBe(`${decl.id}@3: allow`);
     }
     // E la regola in generale, su tutto ciò che questo repository spedisce:
@@ -318,25 +323,27 @@ describe('la matrice normativa è eseguibile', () => {
   /**
    * ADR-0074 punto 4, come cella e non come frase: le due corsie della shell stanno
    * sulla **stessa riga** (`host`, stesso soffitto, stesse conseguenze se
-   * qualcosa scappa) e danno risposte diverse allo stesso taint, perché il
-   * confine che le separa è quello che il sandbox costruisce — scrittura e
-   * rete — non il nome della capability.
+   * qualcosa scappa). E da ADR-0091 (misura Linux 2026-09-22, #645) danno
+   * anche la **stessa risposta** a ogni taint sotto il soffitto: la corsia in
+   * sola lettura non scrive e non manda pacchetti, ma legge l'intera macchina,
+   * e la disclosure non si annulla — quindi `reversible: 'no'` quanto la
+   * sorella, e la cella è `ask` su tutta la scala.
    *
-   * Con i punti 1 e 2 della stessa ADR sul kernel, la cella vale a ogni taint
+   * Con i punti 1 e 2 di ADR-0074 sul kernel, la cella vale a ogni taint
    * sotto il soffitto: il ciclo parametrizzato sopra lo prova contro l'oracolo
    * `MATRICE`, qui si nominano le due corsie una accanto all'altra.
    */
-  it('la corsia in sola lettura non chiede dove quella che scrive chiede', () => {
+  it('le due corsie della shell chiedono alla stessa riga e allo stesso modo (ADR-0091)', () => {
     for (const taint of [0, 1, 2] as const) {
       expect(`sys.shell@${taint}:${decisionAt(shellCapability, taint).effect}`).toBe(
-        `sys.shell@${taint}:allow`,
+        `sys.shell@${taint}:ask`,
       );
       expect(`sys.shell.write@${taint}:${decisionAt(shellWriteCapability, taint).effect}`).toBe(
         `sys.shell.write@${taint}:ask`,
       );
     }
-    // E il perché, dichiarato: `ask` ⇔ irreversibile.
-    expect(shellCapability.reversible).toBe('yes');
+    // E il perché, dichiarato: `ask` ⇔ irreversibile, su entrambe.
+    expect(shellCapability.reversible).toBe('no');
     expect(shellWriteCapability.reversible).toBe('no');
   });
 

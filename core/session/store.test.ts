@@ -1,8 +1,20 @@
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { SessionStore, type SessionMessage } from './store.js';
+import { type SessionMessage, SessionStore } from './store.js';
 
 const home = () => mkdtempSync(join(tmpdir(), 'muffin-session-'));
 
@@ -244,7 +256,9 @@ describe('conversation generation · crash-consistency del confine /new', () => 
     const store = new SessionStore(dir);
     const ref = store.open('owner');
     store.append(ref, msg('user', 'ciao'));
-    expect(() => store.newConversation(ref, { afterIntent: crash })).toThrow('simulated process crash');
+    expect(() => store.newConversation(ref, { afterIntent: crash })).toThrow(
+      'simulated process crash',
+    );
 
     // Restart: un'altra istanza, come dopo un crash vero.
     const restarted = new SessionStore(dir);
@@ -268,7 +282,9 @@ describe('conversation generation · crash-consistency del confine /new', () => 
     const store = new SessionStore(dir);
     const ref = store.open('owner');
     store.append(ref, msg('user', 'ciao'));
-    expect(() => store.newConversation(ref, { afterRotate: crash })).toThrow('simulated process crash');
+    expect(() => store.newConversation(ref, { afterRotate: crash })).toThrow(
+      'simulated process crash',
+    );
 
     // Il falsifier originale: MAI vecchia identità + transcript svuotato.
     const restarted = new SessionStore(dir);
@@ -309,7 +325,10 @@ describe('conversation generation · crash-consistency del confine /new', () => 
     store.append(ref, msg('user', 'ciao'));
     // Stato che il protocollo non può produrre: intent + transcript ancora
     // attivo + archivio già presente (mano esterna o interleave fuori scope).
-    writeFileSync(join(dir, 'sessions', 'owner.conv.json'), '{"version":2,"generation":0,"pending":{"to":1}}');
+    writeFileSync(
+      join(dir, 'sessions', 'owner.conv.json'),
+      '{"version":2,"generation":0,"pending":{"to":1}}',
+    );
     writeFileSync(join(dir, 'sessions', 'owner.g0.jsonl'), 'archivio piantato');
     expect(() => store.open('owner')).toThrow(/ambiguous conversation transition/);
     expect(() => store.newConversation(ref)).toThrow(/ambiguous conversation transition/);
@@ -323,7 +342,10 @@ describe('conversation generation · crash-consistency del confine /new', () => 
     store.open('owner');
     // Intent senza né transcript né archivio: il transcript è sparito fuori
     // dal protocollo. Tornare g0 in silenzio sarebbe il merge che chiudiamo.
-    writeFileSync(join(dir, 'sessions', 'owner.conv.json'), '{"version":2,"generation":0,"pending":{"to":1}}');
+    writeFileSync(
+      join(dir, 'sessions', 'owner.conv.json'),
+      '{"version":2,"generation":0,"pending":{"to":1}}',
+    );
     expect(() => store.open('owner')).toThrow(/ambiguous conversation transition/);
   });
 
@@ -340,7 +362,10 @@ describe('conversation generation · crash-consistency del confine /new', () => 
       ['non oggetto', '[1]'],
       ['null', 'null'],
     ] as const) {
-      writeFileSync(join(dir, 'sessions', 'owner.conv.json'), `{"version":2,"generation":0,"pending":${pending}}`);
+      writeFileSync(
+        join(dir, 'sessions', 'owner.conv.json'),
+        `{"version":2,"generation":0,"pending":${pending}}`,
+      );
       expect(() => store.generationOf(ref), name).toThrow(/conversation metadata/);
       expect(() => store.open('owner'), name).toThrow(/conversation metadata/);
       expect(() => store.newConversation(ref), name).toThrow(/conversation metadata/);
@@ -376,6 +401,42 @@ describe('SessionStore fail-closed sul parent privato (#639)', () => {
       expect(statSync(outside).mode & 0o777).toBe(before);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('open: un id esterno non puo diventare un percorso (#638)', () => {
+  /**
+   * `open(id)` unisce `sessions/<id>.jsonl`: un id con `/` esce dalla
+   * directory delle sessioni. Il canale di controllo accetta `sessionId` dal
+   * chiamante, quindi questo e il primo confine contro un `run` contenuto che
+   * prova a farsi aprire un transcript fuori posto.
+   */
+  it.each([
+    '../../evil',
+    '..\\evil',
+    '/assoluto',
+    'a/b',
+    '',
+    'con spazio',
+    'con\nnewline',
+    'x'.repeat(129),
+  ])('rifiuta %j', (id) => {
+    expect(() => new SessionStore(home()).open(id)).toThrow(/unsafe id/i);
+  });
+
+  it('accetta gli id che il runtime usa davvero', () => {
+    const store = new SessionStore(home());
+    for (const id of [
+      'owner',
+      's1',
+      'sess-1',
+      'telegram:123456',
+      'telegram:-100950#2',
+      'job-ab12cd34-ef5678',
+      '2026-09-21-abcdef12',
+    ]) {
+      expect(store.open(id).id).toBe(id);
     }
   });
 });

@@ -366,3 +366,41 @@ describe('forward — un turno del terminale sul runtime del gateway', () => {
     });
   });
 });
+
+describe('forward — il canale non conia turni da token che sono percorsi (#638)', () => {
+  /**
+   * `sessionId` diventa un percorso di transcript e `id` diventa id di riga
+   * e canale di risposta. Un `run` contenuto che raggiunge il socket non deve
+   * potersi far aprire un transcript fuori posto né un canale con byte di
+   * framing: prima riga illeggibile = errore, nessuna execution, nessuna
+   * chiamata al runtime.
+   */
+  it.each(['../../evil', '/assoluto', 'a/b', '', 'x'.repeat(129)])(
+    'sessionId %j: errore al client, nessuna esecuzione',
+    async (sessionId) => {
+      const s = setup(async (input) => risultato({ turnId: input.id ?? '?' }));
+      await servi(s);
+      await expect(
+        runViaGateway(
+          s.home,
+          { id: 'sess-evil-1', text: 'uno', sessionId },
+          { approve: async () => 'deny' },
+        ),
+      ).rejects.toThrow();
+      expect(s.calls).toHaveLength(0);
+      expect(s.host.query('sess-evil-1')).toEqual({ found: false });
+    },
+  );
+
+  it.each(['../evil', 'a/b', 'con spazio', 'x'.repeat(129)])(
+    'id %j: errore al client, nessuna esecuzione',
+    async (id) => {
+      const s = setup(async (input) => risultato({ turnId: input.id ?? '?' }));
+      await servi(s);
+      await expect(
+        runViaGateway(s.home, { id, text: 'uno', sessionId: 's' }, { approve: async () => 'deny' }),
+      ).rejects.toThrow();
+      expect(s.calls).toHaveLength(0);
+    },
+  );
+});

@@ -1,7 +1,6 @@
 import { isAbsolute, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import type { CapabilityDecl, TrustTier } from '../../core/policy/types.js';
-import type { ToolSpec } from '../providers/types.js';
 import {
   annotateSandboxFailures,
   EXEC_DEFAULT_TIMEOUT_MS,
@@ -10,6 +9,7 @@ import {
   type SandboxExecutor,
 } from '../../core/sandbox/executor.js';
 import type { RegisteredTool } from '../loop.js';
+import type { ToolSpec } from '../providers/types.js';
 import { DISK_TIER, fenceDisk } from './fs.js';
 
 /**
@@ -23,12 +23,19 @@ import { DISK_TIER, fenceDisk } from './fs.js';
  * decision — and the commands behind it were `ls`, `lsof`, `sqlite3`, `env`
  * (`docs/evidence/tool-use-2026-09-06.md`).
  *
- * So the tool splits along the line the ADR draws, `ask` ⇔ irreversible:
+ * The split still follows the line the ADR draws, `ask` ⇔ irreversible — and
+ * since the 2026-09-22 Linux measurement (#645, ADR-0091) both lanes stand on
+ * the asking side of it:
  *
- *  - **`shell_run` / `sys.shell`** — the sandbox with writes confined to the
- *    session scratch and no network (`SandboxExecutor.runReadOnly`). Nothing
- *    on the host changes, nothing leaves: `reversible: 'yes'`, `risk: 'low'`,
- *    and the kernel lets it through without asking anyone.
+ *  - **`shell_run` / `sys.shell`** — the sandbox confines writes to session
+ *    scratch and disables direct IP networking (`SandboxExecutor.runReadOnly`).
+ *    On Linux, reachable AF_UNIX sockets may still affect local services; the
+ *    Muffin gateway socket is deny-listed. Reads cover the whole host minus a
+ *    finite deny-list (recorded in SECURITY's “Shell read scope and sandbox
+ *    patch posture” section, measured on Linux 2026-09-22): stdout reaches
+ *    the model and disclosure has no undo.
+ *    `reversible: 'no'`, `risk: 'high'`, and the kernel asks every time
+ *    (ADR-0091 plus the AF_UNIX recovery correction below).
  *  - **`shell_run_write` / `sys.shell.write`** — writes into the workspace,
  *    exactly as the single lane always did. `reversible: 'no'`, `risk: 'high'`,
  *    and it asks every time.
@@ -58,21 +65,29 @@ export const shellCapability: CapabilityDecl = {
   id: 'sys.shell',
   // Still `host`, and deliberately not `context` — which is where the ceiling
   // and the unattended-floor would be 3/3 and this lane would be as free as
-  // `fs_read`. Two residuals keep it here, both declared in `docs/architecture/SECURITY.md`
-  // §9: on Linux `allowAllUnixSockets` leaves AF_UNIX reachable (srt's seccomp
-  // layer is off, upstream #428/#429), and a command still spends the host's
-  // CPU and file descriptors. Its bounded guarantees are no direct IP network
-  // and no writes outside scratch; reachable AF_UNIX sockets may still affect
-  // local services. Do not describe this lane as having no possible side effects.
+  // `fs_read`. Residuals keep it here, all declared in `docs/architecture/SECURITY.md`
+  // §9: reads cover the whole host filesystem minus a finite deny-list (not
+  // just the project — measured on Linux 2026-09-22, #645); writes stay in
+  // scratch and direct IP networking is disabled. On Linux,
+  // `allowAllUnixSockets` leaves AF_UNIX reachable (srt's seccomp layer is
+  // off, upstream #428/#429). The Muffin gateway socket and pointer are
+  // deny-listed and the direct socket path has a live Linux proof (#638), but
+  // other reachable local sockets may affect services. Commands also spend
+  // host CPU and file descriptors. Whole-host output can disclose data, so
+  // ADR-0091 makes every call ask the owner.
   effect: 'host',
-  // The lane the sandbox makes reversible by construction, so ADR-0074 punto 4's
-  // condition is met and only then does it stop asking. Not a judgement that
-  // running commands is cheap — a statement about *this* lane's boundary.
-  risk: 'low',
-  reversible: 'yes',
-  // Nothing landed, so re-running after a crash cannot double anything: the
-  // only thing a second run can produce is the same reading again.
-  rerunnable: true,
+  // Risk still governs safe mode and the budget, not the ask (ADR-0074 point
+  // 1). The open AF_UNIX surface can reach arbitrary local services; a command
+  // may mutate one even though filesystem writes stay in scratch and direct
+  // IP networking is disabled. High risk keeps this capability unavailable in
+  // safe mode and subject to budget limits. ADR-0091 made the read disclosure
+  // itself irreversible; the AF_UNIX recovery consequence is recorded there.
+  risk: 'high',
+  reversible: 'no',
+  // AF_UNIX may have changed a local service without writing a file. If the
+  // outcome row is missing after a crash, recovery must report “maybe done”
+  // instead of issuing the command again.
+  rerunnable: false,
   // NOT `progress: 'idempotent_read'`. That flag says a second identical call
   // returns what the model already has, and it is exactly wrong here: `ps`,
   // `lsof`, `df`, `tail` are the commands this lane exists for, and every one
@@ -121,29 +136,46 @@ const commonProperties = {
   },
 } as const;
 
+/** Shared by both specs: the owner-facing sentence shown above an approval. */
+const descriptionProperty = {
+  description: {
+    type: 'string',
+    description:
+      'One plain sentence for the owner, in their language: what this command does and why you are running it. ' +
+      'It is shown above the command when the owner is asked to approve it.',
+  },
+} as const;
+
 const shellSpec: ToolSpec = {
   name: 'shell_run',
   description:
-    'Run a non-interactive shell command that only LOOKS at things — the default way to run a command, and the ' +
-    'one that does not interrupt the owner. Inside the sandbox, the host filesystem is readable subject to ' +
-    'deny-read rules, writes are confined to a temporary scratch directory, and direct IP networking is disabled. ' +
-    'On Linux, reachable AF_UNIX sockets can still interact with local services, so local-service effects are not ' +
-    'ruled out. Use it when you need to observe something no ' +
+    'Run a non-interactive shell command in the contained read lane. ' +
+    'It asks the owner every time: what a command reads on this machine reaches the conversation and cannot be ' +
+    'taken back. The whole host filesystem is readable except for a finite deny-read list; writes stay in a ' +
+    'temporary scratch directory and direct IP networking is disabled. On Linux, reachable AF_UNIX sockets can ' +
+    'still interact with or change local services; this lane is treated as high risk and is not replayed after an ' +
+    'uncertain crash. Muffin gateway socket paths are deny-listed. Prefer project-relative reads; ' +
+    'an absolute path outside the project reads the owner\u2019s machine, ' +
+    'and its output reaches the model. Use it when you need to observe something no ' +
     'dedicated tool wraps: `ls`, `lsof`, `sqlite3 -readonly`, `env`, `ps`, `df`, `du`, `git status`, `git log`, ' +
     '`wc`, `find`, a dry run. Not for what a dedicated tool answers better than parsed text — `cat`/`ls` of a ' +
     'known file (fs_read, fs_list), a search in the files (fs_search), `ps` (process_list), a question about this ' +
     'instance (sys_inspect), an indexed document (document_read), what you already know (memory_search), a URL or ' +
     'a search (http_get, web_search) — and not for anything that WRITES: a command that changes a file fails here ' +
-    'with a permission error, which is the boundary working, not a bug. Re-run that one with shell_run_write, ' +
-    'which asks the owner every time, so do not reach for it out of habit. The working directory does NOT persist ' +
+    'with a permission error, which is the boundary working, not a bug. A command that writes belongs to ' +
+    'shell_run_write. The working directory does NOT persist ' +
     'between calls — pass cwd each time. Returns the exit code, stdout and stderr; output over ~30k characters is ' +
     'cut head-and-tail with an explicit marker. An unhandled failure anywhere fails the whole call — a pipeline ' +
     'fails if any stage fails, and a sequence stops at the first failing command. A failure you handle in the ' +
     'command itself (`cmd || fallback`, `if cmd`, `! cmd`) may still succeed.',
   inputSchema: {
     type: 'object',
-    properties: { ...commonProperties },
-    required: ['command'],
+    properties: { ...commonProperties, ...descriptionProperty },
+    // Both lanes produce an ASK since ADR-0091, so both declare the summary
+    // line the owner reads above the command. JSON-required for the model;
+    // zod keeps it optional below, because a provider that drops a field must
+    // not turn a pending approval into a failed command.
+    required: ['command', 'description'],
   },
 };
 
@@ -152,7 +184,9 @@ const shellWriteSpec: ToolSpec = {
   description:
     'Run a non-interactive shell command that CHANGES something — the last resort, and it asks the owner every ' +
     'time. Use shell_run instead whenever the command only reads (`ls`, `lsof`, `sqlite3 -readonly`, `env`, ' +
-    '`grep`, `git status`): that one runs without interrupting anyone. Not for `echo … >` a single file (fs_write), ' +
+    '`grep`, `git status`): that one confines filesystem writes, but on Linux reachable AF_UNIX sockets can still ' +
+    'change local services; it asks too and is not replayed after an uncertain crash. ' +
+    'Not for `echo … >` a single file (fs_write), ' +
     '`kill` (process_kill), or a URL you already have a tool for (http_get, web_search). Use it when the task ' +
     'genuinely needs a program none of the above wraps — a build, a test suite, an install, a one-off script that ' +
     'writes. Writes are confined to the working directory and a scratch TMPDIR; direct IP networking is disabled. ' +
@@ -165,22 +199,12 @@ const shellWriteSpec: ToolSpec = {
     'command, say so and tell the owner what to run themselves; there is no unsandboxed retry.',
   inputSchema: {
     type: 'object',
-    properties: {
-      ...commonProperties,
-      description: {
-        type: 'string',
-        description:
-          'One plain sentence for the owner, in their language: what this command does and why you are running it. ' +
-          'It is shown above the command when the owner is asked to approve it.',
-      },
-    },
+    properties: { ...commonProperties, ...descriptionProperty },
     // `description` is required of the model — the schema is what it reads —
     // and tolerated missing at parse time below: a scripted call in a test,
     // or a provider that drops a field, must not turn into a failed command.
     // The ASK simply has no summary line then (`ApprovalRequest.description`).
-    // Only on this lane: the read-only one never produces an ASK, so a
-    // sentence written for an approval prompt nobody will see is a field the
-    // model pays for on every call and no one reads.
+    // Since ADR-0091 the read-only lane declares it too: it asks as well.
     required: ['command', 'description'],
   },
 };
@@ -322,16 +346,18 @@ function sandboxAssente(tool: string, error: unknown): string {
  * stderr.
  *
  * **`fenceDisk`, the same fence `fs_read` uses, and for the same reason as the
- * tier below.** A command's stdout is disk bytes; `cat ~/Downloads/nota.md` is
+ * tier below.** A command's stdout can contain host-file bytes or responses
+ * from reachable local AF_UNIX services; `cat ~/Downloads/nota.md` is
  * `fs_read` through a different door, and a door that tiered but did not fence
  * was a door around the marking that the other one now does.
  *
  * **`DISK_TIER`, the same constant `fs_read` uses, and not a coincidence.**
- * `shell_run` has no network, so what its stdout can carry is the disk — `cat
- * ~/Downloads/nota.md` is `fs_read` with a different door, and a door that did
- * not taint was a door around the one that did. The tier is on the output, not
- * on the act: the command the model chose is not the danger, the bytes coming
- * back are.
+ * `shell_run` has no direct IP networking, but Linux AF_UNIX can reach and
+ * change local services; stdout may carry host-file bytes or local-service
+ * responses. `cat ~/Downloads/nota.md` is `fs_read` with a different door, and
+ * a door that did not taint was a door around the one that did. The tier is on
+ * the output, not on the act: the command the model chose is not the danger,
+ * the bytes coming back are.
  *
  * **The cost, as it stands after the owner's decision (ADR-0044 §Revisione
  * 2026-08-16), not the verdict that decision replaced.** `sys.shell` sits on

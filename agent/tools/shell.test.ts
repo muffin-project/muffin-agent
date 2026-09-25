@@ -60,10 +60,13 @@ const root = join(tmpdir(), 'muffin-shell-root');
 /**
  * Policy semantics for the two lanes, through the real kernel.
  *
- * `sys.shell.write` keeps the row threat model §g put it on: without OS-level
- * prevention of RoT tampering, a lane that writes can never be a silent allow.
- * `sys.shell` is the lane ADR-0074 punto 4 made reversible by construction, and the
- * only reason it may skip the ask.
+ * Both lanes sit on the asking side of ADR-0074's rule (ask ⇔ irreversible):
+ * `sys.shell.write` because a command that changes the workspace cannot be
+ * taken back, and `sys.shell` since ADR-0091 — the 2026-09-22 Linux
+ * measurement (#645) put whole-host reads there, because what a command prints
+ * reaches the conversation and disclosure has no undo. The lanes still differ
+ * where the sandbox draws them: which executor door, which write scope —
+ * asserted below as wiring, not as policy.
  */
 describe('le due corsie attraverso il kernel', () => {
   const caps = new Map([
@@ -88,11 +91,37 @@ describe('le due corsie attraverso il kernel', () => {
     expect(chiedi(shellWriteCapability.id, { hardened: false }).effect).toBe('ask');
   });
 
-  it('sys.shell, single-user: non chiede — è la cella che questa slice sposta', () => {
-    // Il confronto sta nella stessa riga di prova apposta: stesso principal,
-    // stesso taint, stesso comando, stesso kernel. L'unica differenza è la
-    // capability, e quindi il confine che il sandbox costruisce sotto di essa.
-    expect(chiedi(shellCapability.id, { hardened: false }).effect).toBe('allow');
+  it('sys.shell is high-risk and never replayed after an uncertain outcome', () => {
+    // Linux AF_UNIX can change a local service even though the sandbox keeps
+    // filesystem writes in scratch. The declaration drives both durable
+    // recovery and the kernel's safe-mode/budget floors.
+    expect(shellCapability).toMatchObject({ risk: 'high', reversible: 'no', rerunnable: false });
+
+    const request = {
+      principal: ctx.principal,
+      tenant: 'host',
+      capability: shellCapability.id,
+      resource: { kind: 'none' as const },
+      args: { command: 'send a local service request' },
+      taint: 0 as const,
+    };
+    const safeMode = createDecide({ ...base, hardened: false, safeMode: true })(request);
+    expect(safeMode).toMatchObject({ effect: 'deny', code: 'safe_mode' });
+
+    const exhaustedBudget = createDecide({
+      ...base,
+      hardened: false,
+      budgetExhausted: () => true,
+    })(request);
+    expect(exhaustedBudget).toMatchObject({ effect: 'deny', code: 'budget_exhausted' });
+  });
+
+  it('sys.shell, single-user: chiede lo stesso — la disclosure non ha undo (ADR-0091)', () => {
+    const d = chiedi(shellCapability.id, { hardened: false });
+    expect(d.effect).toBe('ask');
+    // Stessa frase della sorella: il perché è la riga, non il nome.
+    expect(d.effect === 'ask' && d.ask.prompt).toContain('non si torna indietro');
+    expect(d.effect === 'ask' && d.ask.prompt).toContain('sys.shell');
   });
 
   it('sys.shell.write, hardened, owner, taint 0: chiede lo stesso, la scorciatoia non esiste più (ADR-0074 punto 2)', () => {
@@ -102,44 +131,49 @@ describe('le due corsie attraverso il kernel', () => {
     expect(d.effect === 'ask' && d.ask.prompt).toContain('non si torna indietro');
   });
 
-  it('taint 2: la corsia in sola lettura passa ancora, il taint non chiede più (ADR-0074 punto 1)', () => {
-    expect(chiedi(shellCapability.id, { hardened: true, taint: 2 }).effect).toBe('allow');
+  it('taint 2: entrambe le corsie chiedono — il taint non è la ragione (ADR-0074 punto 1)', () => {
+    expect(chiedi(shellCapability.id, { hardened: true, taint: 2 }).effect).toBe('ask');
     expect(chiedi(shellWriteCapability.id, { hardened: true, taint: 2 }).effect).toBe('ask');
   });
 
-  it('taint 1: la corsia in sola lettura passa, quella che scrive chiede', () => {
-    expect(chiedi(shellCapability.id, { hardened: true, taint: 1 }).effect).toBe('allow');
+  it('taint 1: entrambe chiedono', () => {
+    expect(chiedi(shellCapability.id, { hardened: true, taint: 1 }).effect).toBe('ask');
     expect(chiedi(shellWriteCapability.id, { hardened: true, taint: 1 }).effect).toBe('ask');
   });
 
   /**
-   * **Riscritto da ADR-0075 punto 1.** Asseriva che a taint 3 entrambe le
-   * corsie fossero fuori dal soffitto della riga `host`. Quella riga era
-   * l'ultima cosa che il taint negava sull'host, ed è la frase che l'owner ha
-   * letto sull'installazione vera il 06/09: `context taint 3 exceeds 2 for
-   * sys.shell (host)` — dopo una ricerca web, niente shell fino a una
-   * conversazione nuova.
-   *
-   * Il divieto non comprava sicurezza: la corsia in sola lettura non scrive
-   * fuori dallo scratch e non ha rete (è la ragione per cui è `reversible:
-   * 'yes'`), e quella che scrive è `reversible: 'no'` e **chiede comunque**, a
-   * taint 0 come a taint 3. Quindi a taint 3 la prima passa e la seconda
-   * chiede, esattamente come a taint 0 — e il taint compare nella domanda come
-   * ragione visibile, non come muro (`agent/loop/tool-call.ts`).
+   * **Riscritto da ADR-0091.** Con ADR-0075 punto 1 la cella a taint 3
+   * assomigliava a taint 0 per entrambe le corsie — ma la in sola lettura
+   * passava (`reversible: 'yes'`) mentre quella che scrive chiedeva. La
+   * misura Linux del 2026-09-22 (#645) ha tolto quella differenza: leggere
+   * l'intera macchina è disclosure, disclosure non si annulla, e la corsia in
+   * sola lettura è `reversible: 'no'` quanto la sorella (ADR-0091). A taint 3
+   * entrambe chiedono, con la stessa frase — e il taint compare nella domanda
+   * come ragione visibile, non come muro (`agent/loop/tool-call.ts`).
    */
-  it('taint 3: la corsia in sola lettura passa e quella che scrive chiede, come a taint 0 (ADR-0075)', () => {
-    expect(chiedi(shellCapability.id, { hardened: true, taint: 3 }).effect).toBe('allow');
+  it('taint 3: entrambe le corsie chiedono, come a taint 0 (ADR-0075 + ADR-0091)', () => {
+    expect(chiedi(shellCapability.id, { hardened: true, taint: 3 }).effect).toBe('ask');
     expect(chiedi(shellWriteCapability.id, { hardened: true, taint: 3 }).effect).toBe('ask');
     // E il soffitto resta una manopola: un `policy.json` sigillato che rimette
     // `host.denyAbove: 2` fa tornare il rifiuto per entrambe.
     const stretto = createDecide({
       ...base,
       hardened: true,
-      matrix: { ...POLICY_FLOOR, rows: { ...POLICY_FLOOR.rows, host: { asksForIrreversible: true, denyAbove: 2 } } },
+      matrix: {
+        ...POLICY_FLOOR,
+        rows: { ...POLICY_FLOOR.rows, host: { asksForIrreversible: true, denyAbove: 2 } },
+      },
     });
     for (const id of [shellCapability.id, shellWriteCapability.id]) {
       expect(
-        stretto({ principal: ctx.principal, tenant: 'host', capability: id, resource: { kind: 'none' }, args: { command: 'ls' }, taint: 3 }),
+        stretto({
+          principal: ctx.principal,
+          tenant: 'host',
+          capability: id,
+          resource: { kind: 'none' },
+          args: { command: 'ls' },
+          taint: 3,
+        }),
       ).toMatchObject({ effect: 'deny', code: 'taint_exceeded' });
     }
   });
@@ -165,13 +199,15 @@ describe('le due corsie attraverso il kernel', () => {
     }
   });
 
-  it('un principal autonomo accoda invece di auto-approvare la corsia che scrive', () => {
-    expect(
-      chiedi(shellWriteCapability.id, {
-        hardened: true,
-        principal: { kind: 'system', source: 'scheduler' },
-      }).effect,
-    ).toBe('ask');
+  it('un principal autonomo accoda invece di auto-approvare nessuna delle due', () => {
+    for (const id of [shellCapability.id, shellWriteCapability.id]) {
+      expect(
+        chiedi(id, {
+          hardened: true,
+          principal: { kind: 'system', source: 'scheduler' },
+        }).effect,
+      ).toBe('ask');
+    }
   });
 });
 
@@ -312,9 +348,10 @@ describe('sandbox assente: si rifiuta, non si ripiega', () => {
 });
 
 /**
- * `shell_run` has no network, so what its output can carry is the disk — and
- * `cat ~/Downloads/nota.md` is `fs_read` through another door. A door that did
- * not taint was a way around the one that did (ADR-0044).
+ * `shell_run` has no direct IP networking, but Linux AF_UNIX may reach local
+ * services too. Its output can carry host-file bytes or local-service
+ * responses, and `cat ~/Downloads/nota.md` is `fs_read` through another door.
+ * A door that did not taint was a way around the one that did (ADR-0044).
  */
 describe('what a command hands back is disk content', () => {
   it('carries the same tier a file read carries — the constant, not a matching literal', async () => {
@@ -336,16 +373,17 @@ describe('what a command hands back is disk content', () => {
     expect(exec.calls.length).toBe(0);
   });
 
-  it('il costo, come test: un `fs_read` non spegne nessuna corsia, e quella che scrive chiede comunque', async () => {
+  it('il costo, come test: un `fs_read` non spegne nessuna corsia, e entrambe chiedono', async () => {
     // Prima di ADR-0074 questo blocco diceva «una lettura declassa `sys.shell`
-    // ad ask». Con i punti 1, 2 e 4 della stessa ADR sul kernel dice tre cose,
-    // una per cella: la corsia che scrive chiede a ogni taint sotto il soffitto
-    // (a 0 come a 2, con la stessa frase: il taint non è più la ragione, e la
-    // scorciatoia hardened non c'è più); la corsia in sola lettura passa a
-    // ogni taint sotto il soffitto; e — da ADR-0075 — quel soffitto sulla riga
-    // `host` è 3, cioè non c'è più nessun taint che le neghi: la stessa cella
-    // a 3 dà la stessa risposta che dà a 0. Rimetterlo giù richiede un test nel
-    // diff, come questo.
+    // ad ask». Con i punti 1, 2 e 4 della stessa ADR sul kernel, e con
+    // ADR-0091 sopra, la cella è una sola a ogni taint sotto il soffitto: la
+    // corsia che scrive chiede a 0 come a 3, e da ADR-0091 (misura Linux
+    // 2026-09-22, #645) quella in sola lettura chiede allo stesso modo —
+    // leggere l'intera macchina è disclosure, e la disclosure è il motivo per
+    // cui la riga `host` chiede. Il taint non è mai la ragione (ADR-0074/75):
+    // la stessa domanda a 0 e a 3, e — da ADR-0075 — nessun taint sopra il
+    // soffitto, perché il soffitto su `host` è 3. Rimettere giù un allow qui
+    // richiede un test nel diff, come questo.
     const decide = createDecide({
       capabilities: new Map([
         [shellCapability.id, shellCapability],
@@ -373,10 +411,14 @@ describe('what a command hands back is disk content', () => {
     // stessa domanda, non un rifiuto: è tutto ciò che ADR-0075 cambia qui.
     expect(at(shellWriteCapability.id, 3)).toEqual(dopoUnaLettura);
 
+    // Da ADR-0091 la corsia in sola lettura è nella stessa cella: chiede a ogni
+    // taint sotto il soffitto, con la stessa ragione — disclosure non ha undo.
+    // (Non `toEqual(dopoUnaLettura)`: il prompt nomina la capability, e le due
+    // hanno due nomi.)
     for (const taint of [0, 1, DISK_TIER, 3] as const) {
-      expect(`sola lettura@${taint}: ${at(shellCapability.id, taint).effect}`).toBe(
-        `sola lettura@${taint}: allow`,
-      );
+      const d = at(shellCapability.id, taint);
+      expect(`sola lettura@${taint}: ${d.effect}`).toBe(`sola lettura@${taint}: ask`);
+      expect(d.effect === 'ask' && d.ask.prompt).toContain('non si torna indietro');
     }
   });
 });

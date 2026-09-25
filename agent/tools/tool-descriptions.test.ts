@@ -1,9 +1,22 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { runInit } from '../../cli/init.js';
 import { buildRuntime } from '../runtime.js';
+
+/**
+ * Declared fixture for the #642 shell boundary: on a Linux host whose real
+ * bwrap is < 0.12.0 (centria-zero: 0.11.1) the runtime registers no shell
+ * lanes, and these description claims are then unprovable here — not wrong.
+ * The fixture makes the claim host-independent; the gate itself is tested in
+ * `agent/sandbox-gate.test.ts` and `core/sandbox/shell-boundary.test.ts`.
+ * macOS/seatbelt never reads the version, so the mock is inert there.
+ */
+vi.mock('../../core/sandbox/bubblewrap-version.js', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../../core/sandbox/bubblewrap-version.js')>();
+  return { ...mod, readBubblewrapVersion: () => 'bubblewrap 0.12.0' };
+});
 
 /**
  * DAY-1 D13 — il tool dedicato prima della shell.
@@ -64,7 +77,14 @@ describe('ogni tool esposto dice quando usarlo e quando no', () => {
       // di loro pur restando verde.
       const nomi = tools.map((t) => t.spec.name);
       expect(nomi).toEqual(
-        expect.arrayContaining(['fs_read', 'fs_search', 'process_list', 'sys_inspect', 'shell_run', 'shell_run_write']),
+        expect.arrayContaining([
+          'fs_read',
+          'fs_search',
+          'process_list',
+          'sys_inspect',
+          'shell_run',
+          'shell_run_write',
+        ]),
       );
     } finally {
       runtime.close();
@@ -83,8 +103,14 @@ describe('ogni tool esposto dice quando usarlo e quando no', () => {
       // di passare per assenza di prove (schema-conformance.test.ts nomina
       // shell_run allo stesso modo, quindi ci si aspetta che sia registrato
       // in questo harness).
-      expect(shell, 'shell_run non registrato: sandbox non disponibile su questo host, la claim D13 non è provata qui').toBeDefined();
-      expect(write, 'shell_run_write non registrato: le due corsie si registrano insieme o per niente').toBeDefined();
+      expect(
+        shell,
+        'shell_run non registrato: sandbox non disponibile su questo host, la claim D13 non è provata qui',
+      ).toBeDefined();
+      expect(
+        write,
+        'shell_run_write non registrato: le due corsie si registrano insieme o per niente',
+      ).toBeDefined();
       const desc = String(shell!.spec.description ?? '');
       const descWrite = String(write!.spec.description ?? '');
 
@@ -105,8 +131,12 @@ describe('ogni tool esposto dice quando usarlo e quando no', () => {
       }
       // E il rinvio fra le due, in tutte e due le direzioni: senza, il modello
       // sa che esistono due porte e non quale prendere.
-      expect(desc, 'shell_run non dice dove andare quando serve scrivere').toContain('shell_run_write');
-      expect(descWrite, 'shell_run_write non rimanda alla corsia che non chiede').toContain('shell_run');
+      expect(desc, 'shell_run non dice dove andare quando serve scrivere').toContain(
+        'shell_run_write',
+      );
+      expect(descWrite, 'shell_run_write non rimanda alla corsia che non chiede').toContain(
+        'shell_run',
+      );
     } finally {
       runtime.close();
     }

@@ -181,16 +181,19 @@ describe('la baseline misura la produzione, non una copia', () => {
    * silenzio si legge come «non esiste».
    *
    * Dal 06/09 (ADR-0074 punto 4) `sys.shell` è la shell in sola lettura: sandbox
-   * senza scrittura fuori dallo scratch e senza rete, quindi `reversible:
-   * 'yes'` e nessun `ask`. Non ha una riga in `SECURITY_BASELINE_CAPABILITIES`
-   * perché non c'è un gradino da misurare — ma se qualcuno la ridichiarasse
-   * `high`/`no` per «coerenza» con la sorella, o le rimettesse un tool che
-   * scrive, il rosso deve arrivare qui e non in un documento.
+   * senza scrittura fuori dallo scratch e senza rete, e per un anno la
+   * dichiarazione ne faceva la conseguenza `reversible: 'yes'` / nessun
+   * `ask`. Il 2026-09-22 la misura Linux (#645, ADR-0091) ha mostrato che le
+   * letture coprono l'intera macchina: disclosure non si annulla, quindi la
+   * corsia è `reversible: 'no'` e chiede quanto la sorella. Non ha una riga in
+   * `SECURITY_BASELINE_CAPABILITIES` perché non c'è un gradino da misurare —
+   * ma se qualcuno la ridichiarasse `yes` per «costruzione», o le rimettesse
+   * un tool che scrive, il rosso deve arrivare qui e non in un documento.
    */
-  it('la corsia in sola lettura resta reversibile per costruzione', () => {
+  it('la corsia in sola lettura è irreversibile quanto la sorella (ADR-0091)', () => {
     expect(shellCapability.id).toBe('sys.shell');
     expect(shellCapability.risk).toBe('low');
-    expect(shellCapability.reversible).toBe('yes');
+    expect(shellCapability.reversible).toBe('no');
     expect(shellCapability.effect).toBe('host');
   });
 

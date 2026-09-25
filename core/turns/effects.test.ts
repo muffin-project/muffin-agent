@@ -78,21 +78,21 @@ describe('il registro degli effetti', () => {
     db.close();
   });
 
-  it('separa ciò che è passato senza domanda da ciò che è stato chiesto', () => {
+  it('separa una lettura filesystem senza domanda dalla shell richiesta', () => {
     const { s, db } = store();
     s.create(spec('t1'));
     s.startToolCall('t1', {
       callId: 'c1',
-      tool: 'shell_run',
-      capability: 'sys.shell',
+      tool: 'fs_read',
+      capability: 'fs.read',
       rerunnable: true,
       args: {},
       effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' },
     });
     s.startToolCall('t1', {
       callId: 'c2',
-      tool: 'shell_run_write',
-      capability: 'sys.shell.write',
+      tool: 'shell_run',
+      capability: 'sys.shell',
       rerunnable: false,
       args: {},
       effect: { row: 'host', reversible: 'no', resource: null, decision: 'ask' },

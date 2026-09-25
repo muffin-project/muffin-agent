@@ -1,14 +1,16 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   askGateway,
   CONTROL_PROTOCOL,
+  type ControlServer,
+  controlSocketGuardPaths,
+  isSafeControlToken,
   resolveSocketPath,
   serveControlSocket,
   socketPathFor,
-  type ControlServer,
 } from './control-socket.js';
 
 const aperti: ControlServer[] = [];
@@ -125,7 +127,13 @@ describe('sun_path e il file puntatore', () => {
     const s = await servi(lunga, () => identify());
     expect(existsSync(join(lunga, 'gateway.sock.path'))).toBe(true);
     expect(readFileSync(join(lunga, 'gateway.sock.path'), 'utf8').trim()).toBe(s.path);
+    expect(statSync(s.path).isSocket()).toBe(true);
+    expect(statSync(s.path).mode & 0o777).toBe(0o600);
+    expect(statSync(dirname(s.path)).mode & 0o777).toBe(0o700);
     expect(resolveSocketPath(lunga)).toBe(s.path);
+    expect(controlSocketGuardPaths(lunga)).toContain(s.path);
+    expect(controlSocketGuardPaths(lunga)).toContain(dirname(s.path));
+    expect(controlSocketGuardPaths(lunga)).toContain(join(lunga, 'gateway.sock.path'));
     expect(await askGateway(lunga, 'identify')).not.toBeNull();
   });
 });
@@ -167,5 +175,48 @@ describe('chiusura pulita', () => {
     await s.close();
     expect(existsSync(s.path)).toBe(false);
     expect(await askGateway(h, 'identify')).toBeNull();
+  });
+});
+
+describe('il canale dichiara la sua superficie negata (#638)', () => {
+  /**
+   * Il socket di controllo e il suo puntatore devono stare nella superficie
+   * che il sandbox nega in lettura: un figlio contenuto gira con lo stesso
+   * uid, quindi `chmod 0600` non chiude niente e solo il deny del sandbox
+   * separa l'host dal contenuto.
+   */
+  it('controlSocketGuardPaths copre il socket servito e il puntatore', async () => {
+    const h = home();
+    const s = await servi(h, () => identify());
+    const percorsi = controlSocketGuardPaths(h);
+    expect(percorsi).toContain(s.path);
+    expect(percorsi).toContain(resolveSocketPath(h));
+    const { pointer } = socketPathFor(h);
+    if (pointer !== null) expect(percorsi).toContain(pointer);
+  });
+
+  it('isSafeControlToken accetta gli id del runtime e rifiuta i percorsi', () => {
+    for (const ok of [
+      'owner',
+      's',
+      'sess-1',
+      'telegram:-100950#2',
+      'job-ab12cd34-ef5678',
+      'a'.repeat(128),
+    ]) {
+      expect(isSafeControlToken(ok), ok).toBe(true);
+    }
+    for (const ko of [
+      '../../evil',
+      '/assoluto',
+      'a/b',
+      '',
+      'con spazio',
+      'x'.repeat(129),
+      42,
+      null,
+    ]) {
+      expect(isSafeControlToken(ko), String(ko)).toBe(false);
+    }
   });
 });
