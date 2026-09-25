@@ -331,9 +331,13 @@ reseal`. Four properties bound it, and all four are in
 - a grant names **one capability** — never a `prefix.*` family, so it cannot
   concede in advance whatever ships under that prefix tomorrow;
 - a closed list is never grantable at all: `sys.shell`, `sys.shell.*`,
-  `sys.process.*`, `fs.*`, `rot.*`, `outward.*`, `config.*`. A room has no
-  machine, and `resolveWorkspace` knows one workspace per installation
-  (ADR-0059), so `fs.*` would mean handing a group the owner's disk;
+  `sys.process.*`, `fs.*`, `rot.*`, `outward.*`, `config.*`, `sys.effects`, and
+  the four capabilities that do not yet have room-scoped semantics —
+  `surface.send_file`, `skill.read`, `sys.inspect`, `jobs.schedule` (#675) —
+  which may leave the list only together with their tenant-scoped behaviour and
+  a real room acceptance. A room has no machine, and `resolveWorkspace` knows
+  one workspace per installation (ADR-0059), so `fs.*` would mean handing a
+  group the owner's disk;
 - a file that breaks any of these is **refused whole**, naming the field
   (`tenants.group:telegram:42.grants.0`), and the kernel falls back to the
   compiled floor — which grants nothing to anybody. Same direction, and same
