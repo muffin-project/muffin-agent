@@ -29,8 +29,9 @@ import { DISK_TIER, fenceDisk } from './fs.js';
  *
  *  - **`shell_run` / `sys.shell`** — the sandbox confines writes to session
  *    scratch and disables direct IP networking (`SandboxExecutor.runReadOnly`).
- *    On Linux, reachable AF_UNIX sockets may still affect local services; the
- *    Muffin gateway socket is deny-listed. Reads cover the whole host minus a
+ *    On Linux a contained command cannot open Unix-domain sockets at all (the
+ *    filter is requested and verified); the Muffin gateway socket is
+ *    additionally deny-listed. Reads cover the whole host minus a
  *    finite deny-list (recorded in SECURITY's “Shell read scope and sandbox
  *    patch posture” section, measured on Linux 2026-09-22): stdout reaches
  *    the model and disclosure has no undo.
@@ -54,12 +55,14 @@ import { DISK_TIER, fenceDisk } from './fs.js';
  * model picks by name from two descriptions rather than by remembering to
  * leave a boolean alone.
  *
- * **Where the sandbox cannot prove containment, neither lane exists.**
+ * **Where the sandbox cannot prove containment, neither lane runs.**
  * `agent/runtime.ts` registers both only on a positive `probeSandbox`, and the
- * executor re-checks on every call (`ensureInit`). The read-only lane never
- * degrades to the writing one: absent containment, absent tool, and the answer
- * says to use a dedicated tool or to run it by hand (ADR-0018 rule 5, ADR-0074
- * §4). v1 stays strict by construction — there is no unsandboxed retry.
+ * executor re-checks on every call (`ensureInit`): a host whose real invocation
+ * cannot hold may list the tools and refuses every command. The read-only lane
+ * never degrades to the writing one: absent containment, absent run, and the
+ * answer says to use a dedicated tool or to run it by hand (ADR-0018 rule 5,
+ * ADR-0074 punto 4). v1 stays strict by construction — there is no unsandboxed
+ * retry.
  */
 export const shellCapability: CapabilityDecl = {
   id: 'sys.shell',
@@ -69,8 +72,9 @@ export const shellCapability: CapabilityDecl = {
   // §9: reads cover the whole host filesystem minus a finite deny-list (not
   // just the project — measured on Linux 2026-09-22, #645); writes stay in
   // scratch and direct IP networking is disabled. On Linux the AF_UNIX
-  // seccomp filter is requested and behaviorally verified before this lane is
-  // exposed at all (a host where it cannot hold gets no shell). The Muffin
+  // seccomp filter is requested and behaviorally verified before any
+  // contained command runs (a host where it cannot hold refuses every
+  // invocation). The Muffin
   // gateway socket and pointer are additionally deny-listed (#638, macOS).
   // Commands also spend
   // host CPU and file descriptors. Whole-host output can disclose data, so
@@ -186,13 +190,13 @@ const shellWriteSpec: ToolSpec = {
   description:
     'Run a non-interactive shell command that CHANGES something — the last resort, and it asks the owner every ' +
     'time. Use shell_run instead whenever the command only reads (`ls`, `lsof`, `sqlite3 -readonly`, `env`, ' +
-    '`grep`, `git status`): that one confines filesystem writes, but on Linux reachable AF_UNIX sockets can still ' +
-    'change local services; it asks too and is not replayed after an uncertain crash. ' +
+    '`grep`, `git status`): that one confines filesystem writes and, on Linux, cannot open Unix-domain sockets ' +
+    'either; it asks too and is not replayed after an uncertain crash. ' +
     'Not for `echo … >` a single file (fs_write), ' +
     '`kill` (process_kill), or a URL you already have a tool for (http_get, web_search). Use it when the task ' +
     'genuinely needs a program none of the above wraps — a build, a test suite, an install, a one-off script that ' +
-    'writes. Writes are confined to the working directory and a scratch TMPDIR; direct IP networking is disabled. ' +
-    'On Linux, reachable AF_UNIX sockets can still interact with local services, so those effects are not ruled out. ' +
+    'writes. Writes are confined to the working directory and a scratch TMPDIR; direct IP networking is disabled, ' +
+    'and on Linux Unix-domain sockets are blocked by the verified sandbox filter as well. ' +
     'The working directory does NOT persist between calls — pass cwd each time. Returns the exit code, stdout and ' +
     'stderr; output over ~30k characters is cut head-and-tail with an explicit marker. An unhandled failure ' +
     'anywhere fails the whole call — a pipeline fails if any stage fails, and a sequence stops at the first ' +
@@ -348,15 +352,15 @@ function sandboxAssente(tool: string, error: unknown): string {
  * stderr.
  *
  * **`fenceDisk`, the same fence `fs_read` uses, and for the same reason as the
- * tier below.** A command's stdout can contain host-file bytes or responses
- * from reachable local AF_UNIX services; `cat ~/Downloads/nota.md` is
+ * tier below.** A command's stdout can contain host-file bytes;
+ * `cat ~/Downloads/nota.md` is
  * `fs_read` through a different door, and a door that tiered but did not fence
  * was a door around the marking that the other one now does.
  *
  * **`DISK_TIER`, the same constant `fs_read` uses, and not a coincidence.**
- * `shell_run` has no direct IP networking, but Linux AF_UNIX can reach and
- * change local services; stdout may carry host-file bytes or local-service
- * responses. `cat ~/Downloads/nota.md` is `fs_read` with a different door, and
+ * `shell_run` has no direct IP networking and its Unix-domain sockets are
+ * blocked (verified on Linux, never allowed by Seatbelt); stdout still carries
+ * host-file bytes. `cat ~/Downloads/nota.md` is `fs_read` with a different door, and
  * a door that did not taint was a door around the one that did. The tier is on
  * the output, not on the act: the command the model chose is not the danger,
  * the bytes coming back are.

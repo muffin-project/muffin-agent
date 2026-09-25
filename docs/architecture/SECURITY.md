@@ -608,7 +608,7 @@ cannot open `socket(AF_UNIX, …)` at all; on macOS the Seatbelt profile has
 always blocked Unix sockets by default. A host where the filter cannot be
 applied refuses every contained invocation before it runs — the shell tools
 may still be registered by the synchronous build path (which reads the narrow
-probe), and `doctor`, which verifies, reports them as absent; the guarantee is
+probe), and `doctor`, which verifies, prints the reason; the guarantee is
 that no command ever runs unfiltered. The Muffin gateway
 socket and pointer are additionally deny-listed, and the long-home fallback is
 covered by the composed Linux test (see §9.3). It declares `risk: 'high'`:
@@ -642,14 +642,19 @@ Three properties of this split are load-bearing:
   is the stricter of the two and its promise *is* the sandbox's promise, so a
   host with a negative `probeSandbox` gets no shell at all — never the read-only
   one as a "safe fallback", and never a silent fall back to the writing one. The
-  tool says the command must be run by hand or with a dedicated tool.
+  tool says the command must be run by hand or with a dedicated tool. A host
+  whose probe is green but whose real invocation cannot hold (the verified half,
+  including an AF_UNIX filter that cannot be applied) refuses every contained
+  command: the lanes may be listed by the synchronous build path, and no command
+  ever runs unfiltered.
 - **What it does not claim.** Two residuals are declared rather than implied.
   On Linux the AF_UNIX seccomp filter is requested (`allowAllUnixSockets:
   false`) and verified at boot through the real execution door; the measured
   refusal is `EPERM` from `socket(AF_UNIX, …)`, so a contained command cannot
   reach *any* local service socket — including other installations' — and a
   host where `apply-seccomp` cannot obtain its capability (Ubuntu AppArmor
-  profile, upstream #428/#429) exposes no shell lane. The gateway control
+  profile, upstream #428/#429) refuses every contained invocation before it
+  runs (`doctor`, which verifies, prints the reason). The gateway control
   socket and pointer file (#638) remain deny-listed as defence in depth and
   because the deny is what covers macOS, where Seatbelt blocks Unix sockets
   by default. The gateway socket path and long-home fallback path (hashed

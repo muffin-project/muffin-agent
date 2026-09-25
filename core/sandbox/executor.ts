@@ -801,7 +801,7 @@ export class SandboxExecutor {
         reason: 'contain_failed',
         detail: `the AF_UNIX self-test could not listen on ${socketPath} (${message(error)})`,
         remedy:
-          'the probe scratch dir did not admit a Unix socket; shell stays disabled until the leg can run — see docs/architecture/SECURITY.md',
+          'the probe scratch dir did not admit a Unix socket; every contained invocation is refused until the leg can run — see docs/architecture/SECURITY.md',
       };
     }
     try {
@@ -824,7 +824,7 @@ export class SandboxExecutor {
           reason: 'contain_failed',
           detail: `the unsandboxed AF_UNIX control leg could not reach this process's own listener (${message(error)}) — the leg cannot certify anything on this host`,
           remedy:
-            'the AF_UNIX self-test itself is not working here; shell must stay off until the leg can run — see docs/architecture/SECURITY.md',
+            'the AF_UNIX self-test itself is not working here; every contained invocation is refused until the leg can run — see docs/architecture/SECURITY.md',
         };
       }
 
@@ -859,7 +859,7 @@ export class SandboxExecutor {
           reason: 'unix_filter_absent',
           detail: `a contained process reached this process's AF_UNIX listener at ${socketPath}: the seccomp filter that blocks socket(AF_UNIX, …) is not applied on this host`,
           remedy:
-            'the sandbox cannot prove its Unix-socket boundary here (upstream #428/#429 on Ubuntu, or a missing apply-seccomp binary) — shell and scheduled scripts stay disabled on this host; use macOS Seatbelt or a host where the filter applies',
+            'the sandbox cannot prove its Unix-socket boundary here (upstream #428/#429 on Ubuntu, or a missing apply-seccomp binary) — every contained invocation and scheduled script is refused on this host; use macOS Seatbelt or a host where the filter applies',
         };
       }
 
@@ -869,7 +869,7 @@ export class SandboxExecutor {
           reason: 'contain_failed',
           detail: `the AF_UNIX leg's seccomp stage refused to start on this host (${output.slice(0, 300)}) — that is a broken containment, not a filter that held`,
           remedy:
-            'apply-seccomp cannot obtain its capability on this host (ubuntu AppArmor bwrap profile); shell stays disabled — see docs/architecture/SECURITY.md',
+            'apply-seccomp cannot obtain its capability on this host (ubuntu AppArmor bwrap profile); every contained invocation is refused — see docs/architecture/SECURITY.md',
         };
       }
       if (/EPERM|operation not permitted|permission denied|SIGSYS|bad system call/i.test(output)) {
@@ -879,7 +879,7 @@ export class SandboxExecutor {
         reason: 'contain_failed',
         detail: `the AF_UNIX leg exited ${leg.code} without a recognisable kernel refusal (${output.slice(0, 300) || 'no output'}) — a failure with another cause is not evidence the filter held`,
         remedy:
-          'the AF_UNIX self-test could not attribute its failure; shell stays disabled until the leg is understood — see docs/architecture/SECURITY.md',
+          'the AF_UNIX self-test could not attribute its failure; every contained invocation is refused until the leg is understood — see docs/architecture/SECURITY.md',
       };
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
