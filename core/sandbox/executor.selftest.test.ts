@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SandboxRuntimeConfig } from '@anthropic-ai/sandbox-runtime';
-import { SandboxExecutor } from './executor.js';
+import { LINUX_ALLOW_ALL_UNIX_SOCKETS, SandboxExecutor } from './executor.js';
 import type { SandboxProbe } from './probe.js';
 
 /**
@@ -105,6 +105,11 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     const status = await executor.verify();
     expect(status).toEqual({ available: true, mechanism: 'bubblewrap' });
     expect(initialize).toHaveBeenCalledTimes(1);
+    if (process.platform === 'linux') {
+      expect(initialize.mock.calls[0]?.[0].network?.allowAllUnixSockets).toBe(
+        LINUX_ALLOW_ALL_UNIX_SOCKETS,
+      );
+    }
     expect(reset).not.toHaveBeenCalled();
 
     const dir = mktempWorkspace();

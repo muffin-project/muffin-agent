@@ -1273,11 +1273,9 @@ export async function runDoctor(
   // init + one contained round trip so doctor tells the truth before a session
   // starts, not after a job's output turns out to carry an unsandboxed error.
   //
-  // The shared shell boundary (#642) then grades what verify() cannot: on
-  // bubblewrap the deny/allow split can hold while the setup-time patch
-  // posture (CVE-2026-87766, upstream 0.12.0) is unverified — same verdict
-  // `agent/runtime.ts` uses to decide whether the shell tools exist, so this
-  // file can never print "shell attivo" on a host where the tools are absent.
+  // The shared shell boundary then grades what verify() cannot: the setup-time
+  // bubblewrap patch posture and Linux AF_UNIX filtering. It is the same verdict
+  // `agent/runtime.ts` uses to decide whether shell tools and job scripts exist.
   const sandboxExecutor = new SandboxExecutor({ denyWrite: [], denyRead: [] });
   const sandbox = await sandboxExecutor.verify();
   await sandboxExecutor.close();
@@ -1290,13 +1288,10 @@ export async function runDoctor(
     if (boundary.usable) {
       ok('sandbox', sandboxOkDetail(sandbox));
     } else {
-      // Fail closed on what containment alone cannot prove (#642): the
-      // deny/allow split held, but the September 2026 symlink setup class
-      // happens before anything runs, so no runtime probe observes it — and
-      // Ubuntu reverted its backport (USN-8779-2), so no Ubuntu revision
-      // below upstream 0.12.0 counts as patched. A green line here would
-      // claim a boundary this check cannot see, and the runtime refuses the
-      // shell tools on this same verdict: warn, with the patch level named.
+      // Fail closed on what containment alone cannot prove: the September
+      // 2026 symlink setup class and Linux AF_UNIX filtering. A green line here
+      // would claim a boundary this check cannot see; the runtime refuses all
+      // execution on the same verdict.
       warn('sandbox', `${sandboxOkDetail(sandbox)} — ${boundary.reason}`, boundary.remedy);
     }
   } else {
@@ -1337,7 +1332,7 @@ export async function runDoctor(
   // read again here only to give it a capability name — never a second choice
   // of how containment is proved. `usable` is the gate the runtime used to
   // register (or refuse) the lanes, so "attivo" and a registered tool cannot
-  // disagree; an unverified patch posture reads as spent, with the CVE named.
+  // disagree; degraded Linux AF_UNIX filtering is named explicitly.
   if (!boundary.usable) {
     warn('capacità: shell_run', boundary.reason, boundary.remedy);
   } else {

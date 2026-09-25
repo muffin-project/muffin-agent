@@ -84,6 +84,8 @@ export type ExecResult = {
 
 export const EXEC_DEFAULT_TIMEOUT_MS = 120_000;
 export const EXEC_MAX_TIMEOUT_MS = 600_000;
+/** The Linux SRT workaround; the shared runtime boundary fails closed while true. */
+export const LINUX_ALLOW_ALL_UNIX_SOCKETS = true;
 /**
  * The self-test's sentinel is a file THIS process creates fresh under its own
  * scratch dir — not `/etc/hosts` (what `probe.ts`'s own narrower check reads).
@@ -222,13 +224,13 @@ function isMissingDependency(detail: string): boolean {
 }
 
 /**
- * **Direct IP networking is disabled here; AF_UNIX is a separate residual.**
+ * **Direct IP networking is disabled here; AF_UNIX remains unrestricted on Linux.**
  *
  * Every config this module builds — session, per-call, self-test — reads its
  * `network` block from here, so direct IP/proxy egress is one function to
- * check and one function to break. `sys.shell` asks every time since ADR-0091
- * because whole-host reads disclose data. This setting does not block AF_UNIX
- * connections on Linux; those remain a separate local-service residual.
+ * check and one function to break. This setting does not block AF_UNIX
+ * connections on Linux. `assessShellBoundary` consumes the same flag and
+ * removes runtime execution lanes while it is enabled.
  *
  * **What actually does the work, measured in `@anthropic-ai/sandbox-runtime`
  * 0.0.71, not assumed from the field names.** `allowedDomains` being *defined*
@@ -249,27 +251,23 @@ function isMissingDependency(detail: string): boolean {
  * widening.
  *
  * **Declared residual: AF_UNIX on Linux.** `allowAllUnixSockets` skips srt's
- * seccomp layer, which is the only thing that blocks `socket(AF_UNIX, …)` —
+ * seccomp layer, which blocks creation of `socket(AF_UNIX, …)` —
  * v1 keeps it on because two open upstream bugs (#428, #429) break seccomp on
  * Ubuntu 24.04. `--unshare-net` does not cover Unix sockets: they are
  * filesystem objects, and `connect()` to one is not a write, so a socket
  * reachable under the read-only bind is reachable from the read-only lane too.
- * What is NOT reachable is what `guards.denyRead` hides: since #638 that list
- * carries the gateway control socket and its pointer file. This candidate
- * extends the composed Linux live test to both the direct path and the
- * long-home hashed `/tmp` fallback; its result is unverified until the
- * required Actions run on this exact candidate. Other reachable sockets stay
- * reachable, and the deny is also asserted statically (`core/rot/guards.test.ts`).
- * The read-only lane therefore promises *no IP network and no writes outside
- * the scratch* — not "no side effects reachable by any means". Written down in
- * `docs/architecture/SECURITY.md` §9 rather than left as a gap between what the code does
- * and what the capability declares.
+ * The gateway socket and pointer are deny-listed by `guards.denyRead` (#650),
+ * but other reachable sockets remain reachable. `assessShellBoundary` uses
+ * this exact flag to keep both shell lanes and the scheduled-script executor
+ * unavailable on Linux until socket filtering is enabled and verified. Direct
+ * executor tests still exercise filesystem and IP restrictions; they do not
+ * imply that production exposes a Linux shell lane.
  */
 function networkOff(): SandboxRuntimeConfig['network'] {
   return {
     allowedDomains: [],
     deniedDomains: ['*'],
-    ...(process.platform === 'linux' ? { allowAllUnixSockets: true } : {}),
+    ...(process.platform === 'linux' ? { allowAllUnixSockets: LINUX_ALLOW_ALL_UNIX_SOCKETS } : {}),
   };
 }
 

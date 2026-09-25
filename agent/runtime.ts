@@ -835,14 +835,11 @@ export function buildRuntime(
   ];
 
   // The hands of M3. The shell tool is registered only when the shared
-  // boundary proves BOTH halves of the claim (#642): a real containment on
-  // this host (behavioral probe) AND — on Linux/bubblewrap — a trusted setup
-  // patch posture for CVE-2026-87766 (upstream ≥ 0.12.0). A probe-only gate
-  // exposed `shell_run` on bwrap 0.11.1 while doctor could only warn; both
-  // now read `assessShellBoundary`, so the two never describe two different
-  // machines. Absent sandbox OR unverified posture → absent tool, declared in
-  // doctor — never a silent unsandboxed run (ADR-0018 rule 5, tightened: v1
-  // is strict mode, the ask-gated escape hatch arrives as its own capability).
+  // boundary proves the real containment, setup patch posture, and — on Linux
+  // — AF_UNIX filtering. `networkOff()` currently sets allowAllUnixSockets,
+  // so bubblewrap never exposes either shell lane or the script-job executor,
+  // even when its version passes the CVE floor. Doctor reads the same gate.
+  // An absent proof means no execution path, never a silent unsandboxed run.
   // Literally the same `guards` object the fs tools got, which is what the
   // comment here used to only ask for: "two deny-lists that drift are one
   // deny-list plus a hole". They were two hand-written copies, and both were
@@ -852,13 +849,10 @@ export function buildRuntime(
   const boundary = assessShellBoundary(executor.status());
   const contained = boundary.usable;
   if (contained) {
-    // Both lanes or neither (ADR-0074 punto 4). The read-only one is not a fallback
-    // for a host where containment failed — it is the *stricter* of the two and
-    // rests on the same probe: `runReadOnly` confines writes to scratch and
-    // disables direct IP networking, but Linux AF_UNIX can still reach local
-    // services except where `denyRead` hides their sockets. A host that cannot
-    // prove the declared containment cannot offer either lane. Registering it alone there
-    // would be the silent degradation the ADR forbids, pointed the other way.
+    // Both lanes or neither (ADR-0074 punto 4). The read-only lane is not a
+    // fallback when any required part of the shared containment is missing;
+    // on Linux that includes AF_UNIX filtering, since reachable local sockets
+    // can have effects outside its filesystem write scope.
     tools.push(
       makeShellTool(executor, { root: workspace }),
       makeShellWriteTool(executor, { root: workspace }),
@@ -870,7 +864,8 @@ export function buildRuntime(
   // learn why was `muffin doctor`'s own, separate sandbox probe (line ~999),
   // which nothing pointed a turn at. Same boundary doctor reads, computed
   // here instead of re-probed/re-graded, with the reason doctor will print —
-  // behavioral failure and unverified patch posture stay distinguishable.
+  // behavioral failure, unverified patch posture, and unrestricted AF_UNIX
+  // stay distinguishable.
   if (!contained) {
     capabilityGaps.push({
       capability: 'shell_run, shell_run_write',

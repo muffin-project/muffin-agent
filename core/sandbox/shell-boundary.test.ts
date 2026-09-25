@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { SandboxProbe } from './probe.js';
-import { assessShellBoundary, SHELL_BOUNDARY_REMEDY } from './shell-boundary.js';
+import {
+  assessShellBoundary,
+  LINUX_AF_UNIX_REMEDY,
+  SHELL_BOUNDARY_REMEDY,
+} from './shell-boundary.js';
 
 /**
  * #642 — shell usable ⇔ behavioral pass AND trusted patch posture.
@@ -53,12 +57,14 @@ describe('assessShellBoundary — the shared shell gate (#642)', () => {
     expect(v.calls()).toBe(0);
   });
 
-  it('bubblewrap ≥ 0.12.0 (declared fixture, not a host claim) → usable, patch trusted', () => {
+  it('trusted bubblewrap is still unusable while the AF_UNIX filter is disabled', () => {
     const v = spyVersion('bubblewrap 0.12.0');
     const b = assessShellBoundary(bubblewrapGreen, v.reader);
-    expect(b.usable).toBe(true);
+    expect(b.usable).toBe(false);
     expect(b.patch).toBe('trusted');
     expect(b.behavioral.available).toBe(true);
+    expect(b.reason).toMatch(/AF_UNIX.*unfiltered|allowAllUnixSockets/i);
+    expect(b.remedy).toMatch(/verified Linux socket filtering/);
     expect(v.calls()).toBe(1);
   });
 
@@ -68,8 +74,10 @@ describe('assessShellBoundary — the shared shell gate (#642)', () => {
     expect(b.usable).toBe(false);
     expect(b.patch).toBe('unverified');
     expect(b.reason).toMatch(/CVE-2026-87766/);
+    expect(b.reason).toMatch(/AF_UNIX.*unfiltered|allowAllUnixSockets/i);
     expect(b.reason).toMatch(/unverified/);
-    expect(b.remedy).toBe(SHELL_BOUNDARY_REMEDY);
+    expect(b.remedy).toContain(LINUX_AF_UNIX_REMEDY);
+    expect(b.remedy).toContain(SHELL_BOUNDARY_REMEDY);
     expect(b.remedy).not.toMatch(/keeps working/i);
   });
 

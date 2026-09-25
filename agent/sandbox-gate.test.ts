@@ -71,9 +71,11 @@ describe('the shell tool exists only where a containment was proved', () => {
 
   it('a probe that proved containment registers both lanes', () => {
     verdict.current = contains;
-    const names = toolNames();
+    const runtime = build();
+    const names = runtime.deps.tools.map((t) => t.spec.name);
     expect(names).toContain('shell_run');
     expect(names).toContain('shell_run_write');
+    expect(runtime.executor).not.toBeNull();
   });
 
   /**
@@ -127,11 +129,17 @@ describe('the shell tool exists only where a containment was proved', () => {
    * posture trusted, lanes return. Without this, "no tools when unverified"
    * could be satisfied by a gate that never lets the shell in at all.
    */
-  it('bubblewrap probe green + declared fixture ≥ 0.12.0 → both lanes and the job executor', () => {
+  it('bubblewrap probe green + patched fixture still exposes no execution while AF_UNIX is unrestricted', () => {
     verdict.current = containsBwrap;
     verdict.version = 'bubblewrap 0.12.0';
-    const names = toolNames();
-    expect(names).toContain('shell_run');
-    expect(names).toContain('shell_run_write');
+    const runtime = build();
+    const names = runtime.deps.tools.map((t) => t.spec.name);
+    expect(names).not.toContain('shell_run');
+    expect(names).not.toContain('shell_run_write');
+    expect(runtime.executor).toBeNull();
+    const gap = runtime.capabilityGaps.find((g) => g.capability === 'shell_run, shell_run_write');
+    expect(gap?.kind).toBe('disabled');
+    expect(gap?.reason).toMatch(/AF_UNIX.*unfiltered|allowAllUnixSockets/i);
+    expect(gap?.remedy).toMatch(/verified Linux socket filtering/);
   });
 });

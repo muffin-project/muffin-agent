@@ -1023,11 +1023,10 @@ describe('la riga sandbox di doctor viene dalla porta vera, non dal probe econom
     }
   });
 
-  it('un contenimento bubblewrap che regge resta un warn: il setup-time non e provato (#642)', async () => {
-    // La prova dice che il deny/allow regge; non dice niente sulla classe
-    // symlink di setup di settembre 2026 (CVE-2026-87766), che avviene prima
-    // che qualunque cosa giri. Una riga verde qui affermerebbe un confine che
-    // questa sonda non vede — quindi warn, con il livello di patch nominato.
+  it('bubblewrap with unrestricted AF_UNIX remains a warn even at a trusted version', async () => {
+    // A real containment round trip does not prove Linux AF_UNIX filtering.
+    // Muffin currently sets allowAllUnixSockets, so doctor and runtime must
+    // both keep execution disabled even when the bwrap CVE floor is met.
     // La versione è un fixture dichiarata (0.11.1 = il bwrap reale di
     // centria-zero), non una lettura della macchina che gira il test: senza
     // questo seam l'esito dipenderebbe da `bwrap --version` sull'host.
@@ -1042,6 +1041,7 @@ describe('la riga sandbox di doctor viene dalla porta vera, non dal probe econom
       expect(line?.level).toBe('warn');
       expect(line?.detail).toContain('bubblewrap');
       expect(line?.detail).toMatch(/CVE-2026-87766/);
+      expect(line?.detail).toMatch(/AF_UNIX.*unfiltered|allowAllUnixSockets/i);
       expect(line?.remedy).toBeTruthy();
       // Il rimedio non promette più che la shell continui a funzionare: su
       // questa postura il runtime la toglie, e doctor deve dirlo lo stesso.
@@ -1052,7 +1052,7 @@ describe('la riga sandbox di doctor viene dalla porta vera, non dal probe econom
     }
   });
 
-  it('bubblewrap con postura trusted (fixture dichiarata ≥ 0.12.0): sandbox ok e shell_run ok (#642)', async () => {
+  it('bubblewrap with a trusted version still warns while AF_UNIX is unrestricted', async () => {
     const dir = home();
     const spia = vi.spyOn(SandboxExecutor.prototype, 'verify').mockResolvedValue({
       available: true,
@@ -1062,13 +1062,15 @@ describe('la riga sandbox di doctor viene dalla porta vera, non dal probe econom
       const sandboxLine = await checkWith(dir, 'sandbox', {
         bubblewrapVersion: 'bubblewrap 0.12.0',
       });
-      expect(sandboxLine?.level).toBe('ok');
+      expect(sandboxLine?.level).toBe('warn');
       expect(sandboxLine?.detail).toContain('bubblewrap');
+      expect(sandboxLine?.detail).toMatch(/AF_UNIX.*unfiltered|allowAllUnixSockets/i);
+      expect(sandboxLine?.remedy).toMatch(/verified Linux socket filtering/);
       const shell = await checkWith(dir, 'capacità: shell_run', {
         bubblewrapVersion: 'bubblewrap 0.12.0',
       });
-      expect(shell?.level).toBe('ok');
-      expect(shell?.detail).toMatch(/intero host|whole host/i);
+      expect(shell?.level).toBe('warn');
+      expect(shell?.detail).toMatch(/AF_UNIX.*unfiltered|allowAllUnixSockets/i);
     } finally {
       spia.mockRestore();
       rmSync(dir, { recursive: true, force: true });

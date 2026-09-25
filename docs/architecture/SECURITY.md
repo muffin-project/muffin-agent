@@ -277,9 +277,9 @@ the kernel does when a request is above it now depends on the row:
 - **`host`** — there is no above any more. `denyAbove` is `3`, because every
   capability on that row is already covered by another defence: `fs.write` is a
   `draft` with a journal and `muffin undo`, `sys.shell` is the read-only lane
-  (no writes outside scratch; direct IP networking is disabled, while reachable
-  AF_UNIX sockets remain a local-service residual on Linux) and asks since
-  ADR-0091 because whole-host reads disclose data, and `sys.shell.write` and
+  where the shared boundary proves it (no writes outside scratch; direct IP
+  networking is disabled, with AF_UNIX effects treated as host effects) and
+  asks since ADR-0091 because whole-host reads disclose data, and `sys.shell.write` and
   `sys.process.kill` are `reversible: 'no'` and therefore ask at every tier,
   0 and 3 alike. The prohibition removed nothing from an attacker; it removed
   the owner's ability to say yes.
@@ -591,17 +591,21 @@ Since point 4 of the *ask only for the irreversible* decision (`docs/decisions/0
 line between them is what the sandbox can be made to guarantee rather than a
 judgement about how dangerous commands are.
 
-`sys.shell` (`shell_run`) is the **read-only lane**: the whole host filesystem is
-readable minus a finite deny-read list (not just the project — §9.2 names what
-that costs), writes are confined to a scratch directory this
-process creates under the system temp dir and removes when the session ends, and
-direct IP networking is disabled. This does not block every Linux AF_UNIX
-endpoint, so local-service effects are not ruled out. The Muffin gateway socket
-and pointer are deny-listed; a previous candidate proved the direct path, and
-this candidate adds the long-home fallback to the composed Linux test (pending
-the current exact-SHA Actions result; see §9.3). It declares `risk: 'high'`:
-although filesystem writes stay in scratch and direct IP networking is
-disabled, reachable Linux AF_UNIX sockets can still change local services.
+`sys.shell` (`shell_run`) is the **read-only lane** when the shared shell
+boundary allows execution: the whole host filesystem is readable minus a
+finite deny-read list (not just the project — §9.2 names what that costs),
+writes are confined to a scratch directory this process creates under the
+system temp dir and removes when the session ends, and direct IP networking is
+disabled. Linux currently sets `allowAllUnixSockets: true`, so its AF_UNIX
+filter is disabled; the runtime therefore exposes neither shell lane nor the
+scheduled-script executor on Linux, even with patched Bubblewrap. macOS
+Seatbelt remains available. PR #650 merged the gateway socket and pointer
+denials, including the long-home fallback; its live Linux test and required
+checks passed on the reviewed head. Those denials cover Muffin's own channel,
+not every local service socket.
+When available, `shell_run` declares `risk: 'high'`: although filesystem writes
+stay in scratch and direct IP networking is disabled, reachable AF_UNIX sockets
+can still change local services.
 `risk` governs safe mode and the budget, not the ask. Since ADR-0091
 (2026-09-22, on the Linux measurement in §9.2 / issue #645), it also declares
 `reversible: 'no'`: what a command reads reaches the model and a disclosure
@@ -625,40 +629,31 @@ Three properties of this split are load-bearing:
   handed the workspace by a mistaken caller. The two lanes are two tools with
   two capability ids, decided by the kernel before a handler runs, rather than
   one tool branching on a parameter the model wrote.
-- **Neither lane exists where containment cannot be proved.** The read-only lane
-  is the stricter of the two and its promise *is* the sandbox's promise, so a
-  host with a negative `probeSandbox` gets no shell at all — never the read-only
-  one as a "safe fallback", and never a silent fall back to the writing one. The
-  tool says the command must be run by hand or with a dedicated tool.
-- **What it does not claim.** Three residuals are declared rather than implied.
-  On Linux `network.allowAllUnixSockets` is on — srt's seccomp layer, the only
-  thing that blocks `socket(AF_UNIX, …)`, is broken on Ubuntu 24.04 (upstream
-  #428/#429) — and `--unshare-net` does not cover Unix sockets, which are
-  filesystem objects: a socket reachable under the read-only bind is reachable
-  from the read-only lane, *except* what `denyRead` hides. Since 2026-09-21
-  that list carries the gateway control socket and its pointer file (#638).
-  The gateway socket path and long-home fallback path (hashed socket under
-  Node's configured temp root plus `gateway.sock.path`) are deny-listed. The
-  fallback resolves that root and fails closed unless each ancestor is owned
-  by root/current UID, with the sticky bit required on writable shared
-  ancestors; macOS additionally rejects any ACL in the ancestry and fails
-  closed if ACL inspection cannot run, because ACL grants are not represented
-  by BSD mode bits. This prevents another UID from replacing the private leaf
-  after validation. The composed Linux live test covers both paths, owner-only
-  socket/private-directory permissions under umask `022`, a separate-UID
+- **Neither lane exists where the full boundary cannot be proved.** Both lanes
+  and scheduled scripts use the same `assessShellBoundary` result. A negative
+  probe, untrusted Bubblewrap patch posture, or unrestricted Linux AF_UNIX
+  disables them; the read-only lane is never a fallback for a weaker host.
+  `doctor` reports the same reason as the runtime.
+- **What the current Linux configuration does not prove.**
+  `network.allowAllUnixSockets` disables SRT's seccomp filter; `--unshare-net`
+  does not cover filesystem sockets. The pinned runtime uses this workaround
+  for upstream Ubuntu issues [#428](https://github.com/anthropics/sandbox-runtime/issues/428)
+  and [#429](https://github.com/anthropics/sandbox-runtime/issues/429). SRT's
+  Linux `allowUnixSockets` path list is ignored, so a gateway-only deny cannot
+  establish the broader boundary. PR #650 separately proves that Muffin's
+  control channel and pointer are denied in the live production configuration
+  on reviewed head `c434000708b081b8cb74c2c453addce810af3301`, including the
+  long-home fallback, owner-only permissions under umask `022`, a separate-UID
   connection, and rejection of a world-writable non-sticky `TMPDIR` before
-  bind/pointer publication; the macOS unit test rejects a temp ancestry with
-  an ACL granting `add_file` and `delete_child`. These checks remain
-  unverified until the required Actions run on the exact candidate with
-  `MUFFIN_REQUIRE_SANDBOX=1`.
-  Sockets of *other*
-  installations on the same machine stay reachable:
-  the deny names this home's channel, not every home's.
-  And a command still spends the host's CPU, memory and
-  file descriptors. So `sys.shell` stays on the `host` effect row rather than
-  moving to `context`: "no writes outside the scratch and no IP network" is the
-  claim; "no effect of any kind on the host" is not — and since ADR-0091 the
-  ask covers the half the boundary cannot: the read.
+  bind/pointer publication. The fallback also fails closed on unsafe path
+  ancestors; the macOS unit test rejects ACLs granting `add_file` and
+  `delete_child`. The required Actions checks passed with acceptance executed.
+  Other visible sockets
+  remain a low-level executor residual; runtime execution stays disabled on
+  Linux until a filter is actually enabled and verified. This slice does not
+  add CPU, memory, process-count or file-descriptor quotas. A command on a
+  platform where shell is available still spends host resources, so `sys.shell`
+  stays on the `host` effect row rather than moving to `context`.
 
 Direct IP networking is disabled on **both** lanes today, although that decision describes the
 writing one as writing *or* reaching the network. Opening the network there would route
@@ -674,8 +669,9 @@ Applications, credential stores and private folders appear continuously, so the
 list protects known secrets without ever expressing "this turn may inspect the
 project, not the whole machine". Stdout reaches the model (fenced, `DISK_TIER`),
 so an injected `cat ~/…` discloses to the provider. Writes stay in scratch and
-direct IP networking is disabled, but reachable AF_UNIX sockets remain a
-local-service residual as described above. The exposure is documented in
+direct IP networking is disabled. A direct low-level executor invocation can
+still reach visible AF_UNIX sockets on Linux, so the runtime shell gate stays
+closed while `allowAllUnixSockets` is enabled. The exposure is documented in
 executable form by an
 `it.fails` canary in `confine-sola-lettura.test.ts` that must be flipped to a
 plain assertion the day reads become allow-scoped. Measured on Linux
@@ -693,12 +689,12 @@ The September 2026 Bubblewrap symlink setup flaw (CVE-2026-87766) happens
 before anything runs, so no behavioral probe observes it, and Ubuntu reverted
 its backport (USN-8779-2): there is deliberately no Ubuntu-revision gate
 anywhere in this repository. Both the runtime and `doctor` read one shared
-verdict (`core/sandbox/shell-boundary.ts`): on bubblewrap, `shell_run` /
-`shell_run_write` and the job executor are exposed only when the deny/allow
-probe holds **and** the patch posture is trusted (upstream ≥ 0.12.0);
-otherwise the lanes are absent and doctor reports behavioral result and patch
-posture as separate facts — never "shell attivo" on a host where the tools do
-not exist. macOS/seatbelt gets no version floor. A first probe of Muffin's
+verdict (`core/sandbox/shell-boundary.ts`). On bubblewrap, the deny/allow probe
+and trusted patch posture (upstream ≥ 0.12.0) are necessary but not sufficient:
+while the shipped Linux config sets `allowAllUnixSockets`, all shell lanes and
+the job executor are disabled. This prevents a green `doctor` line or a trusted
+Bubblewrap version from being mistaken for AF_UNIX containment. macOS/seatbelt
+gets no version floor. A first probe of Muffin's
 exact invocation (workspace `--bind`, host mount-point stubs for absent deny
 paths, attacker-shaped symlink in the write scope) ran on Linux 2026-09-22
 (evidence §5(3)): srt's resolve-before-mask plus the allowWrite check stopped
