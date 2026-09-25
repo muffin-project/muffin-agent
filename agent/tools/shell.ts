@@ -126,7 +126,7 @@ const commonProperties = {
 const shellSpec: ToolSpec = {
   name: 'shell_run',
   description:
-    'Run a non-interactive shell command to inspect files and process state — the default way to use shell, and the ' +
+    'Run a non-interactive shell command to inspect files and process state — the default way to run a command with shell, and the ' +
     'one that does not interrupt the owner. Inside the sandbox, the filesystem is readable, writes are confined to ' +
     'scratch, and IP networking is disabled. On Linux, reachable Unix-domain sockets can still be used and may ' +
     'cause local service-side effects, so this is not a general no-side-effect boundary. Avoid commands that mutate ' +
