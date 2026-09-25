@@ -266,6 +266,15 @@ export type ContinuableReason = {
 };
 
 /**
+ * One row of a pending ambiguity question's ordered candidate list.
+ *
+ * Structurally identical to `agent/loop/continuation.ts`'s
+ * `ContinuationCandidate`; declared here so the durable home (this store) does
+ * not import from the loop. The loop aliases it.
+ */
+export type StoredContinuationCandidate = { id: string; updatedAt: string; summary: string };
+
+/**
  * Lifetime audit across leases. `counters` (`TurnCounters`) is the CURRENT
  * lease's capacity and work-in-progress; this is what finished leases spent
  * and did.
@@ -657,6 +666,13 @@ CREATE TABLE IF NOT EXISTS turns (
   -- P0-B: lifetime audit across finished leases (JSON). Additive and
   -- nullable: old rows read as "no finished lease yet" (see toLifetime).
   lifetime      TEXT,
+  -- The ordered candidate ids an ambiguity question offered, written on the
+  -- question turn by askWhichContinuation. Additive and nullable; a
+  -- continuation needs it only while it is still the newest question in the
+  -- session. Durable on purpose: the in-RAM map it replaces lost the mapping
+  -- on every gateway restart, so typing the number became ordinary
+  -- conversation (2026-09-25).
+  continuation_candidates TEXT,
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL
 );
@@ -972,6 +988,8 @@ export class TurnStore {
     close: Database.Statement;
     leases: Database.Statement;
     continuable: Database.Statement;
+    setCandidates: Database.Statement;
+    latestQuestion: Database.Statement;
   };
 
   constructor(
@@ -1014,6 +1032,10 @@ export class TurnStore {
     ensureColumn(db, 'turns', 'lease_index', 'lease_index INTEGER NOT NULL DEFAULT 0');
     ensureColumn(db, 'turns', 'continuable_reason', 'continuable_reason TEXT');
     ensureColumn(db, 'turns', 'lifetime', 'lifetime TEXT');
+    // The ambiguity question's candidate list (see the column's own comment).
+    // Additive for the same reason: an installation written before this
+    // feature simply has no pending question.
+    ensureColumn(db, 'turns', 'continuation_candidates', 'continuation_candidates TEXT');
     ensureColumn(db, 'turn_leases', 'transport_allowance', 'transport_allowance INTEGER');
     migrateContinuable(db);
     }
@@ -1260,6 +1282,8 @@ export class TurnStore {
     close: Database.Statement;
     leases: Database.Statement;
     continuable: Database.Statement;
+    setCandidates: Database.Statement;
+    latestQuestion: Database.Statement;
   } {
     const hit = this.leaseAreaCache;
     if (hit !== undefined) return hit;
@@ -1343,6 +1367,18 @@ export class TurnStore {
                 outcome, harness_messages AS harnessMessages, counters, transport_used AS transportUsed,
                 transport_allowance AS transportAllowance, delivery
          FROM turn_leases WHERE turn_id = ? ORDER BY lease_index`,
+      ),
+      /** The ambiguity question's candidate list — see `setContinuationCandidates`. */
+      setCandidates: db.prepare(`UPDATE turns SET continuation_candidates = @json WHERE id = @id`),
+      /**
+       * The newest ambiguity question still in force for one conversation.
+       * `created_at` is the question's birth, not `updated_at`: a later
+       * `recover`/delivery touch must not extend its TTL.
+       */
+      latestQuestion: db.prepare(
+        `SELECT id, continuation_candidates AS candidates FROM turns
+         WHERE session_id = @session AND continuation_candidates IS NOT NULL AND created_at >= @since
+         ORDER BY created_at DESC LIMIT 1`,
       ),
     };
     this.leaseAreaCache = built;
@@ -1742,7 +1778,54 @@ export class TurnStore {
     }
     return out;
   }
-  /** Suspended rows carrying an event barrier, for the lane to evaluate. */
+
+  /**
+   * Persist the ordered candidates an ambiguity question offered.
+   *
+   * Written on the *question* turn (the one `askWhichContinuation` creates and
+   * finishes immediately), never on the continuable work: the question is
+   * transient UI state, and a later `riprendi` simply writes a newer question
+   * that shadows this one by `created_at`.
+   *
+   * Durable on purpose. The RAM map this replaces (`pendingBySession`) made
+   * "reply with the number" fail whenever the gateway restarted between the
+   * question and the answer, and the owner restarts his often.
+   */
+  setContinuationCandidates(turnId: string, candidates: readonly StoredContinuationCandidate[]): void {
+    this.leaseArea().setCandidates.run({ id: turnId, json: JSON.stringify(candidates) });
+  }
+
+  /**
+   * The newest ambiguity question still within `since` for one conversation,
+   * with its frozen candidate list, or `null` when none is in force.
+   *
+   * Re-read from the database at answer time, so the mapping survives a restart
+   * (or a second process over the same home) and cannot drift with the live
+   * `continuableFor` set between question and answer.
+   */
+  latestContinuationQuestion(
+    sessionId: string,
+    since: string,
+  ): { id: string; candidates: StoredContinuationCandidate[] } | null {
+    const row = this.leaseArea().latestQuestion.get({ session: sessionId, since }) as
+      | { id: string; candidates: string }
+      | undefined;
+    if (row === undefined) return null;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(row.candidates);
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(parsed)) return null;
+    const candidates = parsed.filter(
+      (c): c is StoredContinuationCandidate =>
+        c !== null && typeof c === 'object' && typeof (c as { id?: unknown }).id === 'string',
+    );
+    if (candidates.length === 0) return null;
+    return { id: row.id, candidates };
+  }
+
   armed(limit = 50): TurnRecord[] {
     return (this.armedStmt.all({ limit }) as Row[]).map(toRecord);
   }
