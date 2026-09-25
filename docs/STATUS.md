@@ -29,7 +29,6 @@ providing a deterministic fresh-session summary. Dated plans are historical.
 | --- | --- |
 | Source-public / pre-alpha | Public source for inspection and scoped contributions; the product remains pre-alpha. |
 | Product public alpha | A later product/release commitment, earned through real use and separate readiness evidence. |
-| Product public alpha | A later product/release commitment, earned through real use and separate readiness evidence. |
 
 The repository is already public. Continue handling privacy, security and
 repository-readiness findings through their canonical issues; publication does
