@@ -140,6 +140,17 @@ export class TurnRun {
    */
   readonly providerFailureRequestIds: string[] = [];
 
+  /**
+   * Upstream providers that returned an empty response in this lease.
+   *
+   * Fed to the next attempt as `ChatCall.providerIgnore` so a re-drive does not
+   * land on the machine that just answered nothing (OpenRouter routes the same
+   * model to a dozen upstreams; one flaky one pinned the whole turn into
+   * `continuable` on 2026-09-25). Run-only like the streak: losing it on a
+   * crash only costs the diversity hint for the next attempt.
+   */
+  readonly providerEmptyUpstreams = new Set<string>();
+
   readonly #resumes: number;
 
   /**
