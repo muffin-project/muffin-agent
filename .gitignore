@@ -46,8 +46,6 @@ evals/character/out/
 # lo scratch del gate Linux locale (evals/acceptance/gate-linux.sh)
 .gate-linux/
 
-# verdetti del gate locale (scripts/merge.ts) — per macchina, mai in Git
-
 # Jev-shadow decision telemetry (see .agents/skills/jev-shadow/SKILL.md).
 # Machine-local learning data: decision ids, state hashes, routes, outcomes.
 # Never source, never secrets, never personal data.

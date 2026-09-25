@@ -83,12 +83,17 @@ export const ATTR = {
 
 export interface Tracer {
   /** Starts a span; the returned handle must be ended exactly once. */
-  start(name: SpanName, attributes?: Record<string, AttributeValue>, parent?: SpanHandle): SpanHandle;
+  start(
+    name: SpanName,
+    attributes?: Record<string, AttributeValue>,
+    parent?: SpanHandle,
+  ): SpanHandle;
 }
 
 export interface SpanHandle {
   readonly traceId: string;
   readonly spanId: string;
+  /** Attributes must be set before `end()`; ended spans are no longer recording. */
   setAttributes(attributes: Record<string, AttributeValue>): void;
   end(outcome?: { status?: SpanStatus; error?: unknown }): void;
 }

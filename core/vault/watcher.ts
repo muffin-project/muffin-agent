@@ -9,9 +9,11 @@ import type { Vault, VaultStore } from './vault.js';
  *
  * `reindex()` converges the index and `audit()` proves it converged, but both
  * only run when someone asks — a note edited by hand sits stale until the next
- * explicit `muffin vault reindex`. This watches the vault root and reindexes
- * each changed file for every tenant that references it, so the common case
- * (editing an already-indexed note) heals itself within about a second.
+ * explicit `muffin vault reindex`. This watches the vault root and attempts to
+ * reindex changed files for every tenant that references them. `fs.watch` is a
+ * best-effort OS notification and can omit events, so this is an opportunistic
+ * refresh, not a convergence guarantee; callers must retain explicit reindex
+ * and audit paths.
  *
  * What it deliberately does **not** do, and where that case surfaces instead:
  *
@@ -69,6 +71,8 @@ export type WatchVaultDeps = VaultWatchEvent & {
   tenantsFor: (vaultPath: string) => string[];
   reindexPath: (tenantId: string, vaultPath: string) => Promise<unknown>;
   debounceMs?: number;
+  /** Native watcher override for deterministic event-path tests. */
+  watchDirectory?: typeof watch;
 };
 
 export function watchVault(deps: WatchVaultDeps): VaultWatcher {
@@ -76,6 +80,7 @@ export function watchVault(deps: WatchVaultDeps): VaultWatcher {
   const debounceMs = deps.debounceMs ?? VAULT_WATCH_DEBOUNCE_MS;
   const watchers = new Map<string, FSWatcher>();
   const pending = new Set<string>();
+  const watchDirectory = deps.watchDirectory ?? watch;
   let timer: NodeJS.Timeout | undefined;
   let flushing = false;
   let stopped = false;
@@ -172,10 +177,16 @@ export function watchVault(deps: WatchVaultDeps): VaultWatcher {
     if (stopped || watchers.has(dir)) return;
     let watcher: FSWatcher;
     try {
-      watcher = watch(dir, (_event, filename) => {
+      watcher = watchDirectory(dir, (_event, filename) => {
         if (stopped) return;
-        if (typeof filename !== 'string' || filename === '') return;
-        const full = join(dir, filename);
+        // Node does not guarantee a filename for every fs.watch event. When
+        // it is absent, reconcile this subtree instead of losing the change.
+        const name = Buffer.isBuffer(filename) ? filename.toString() : filename;
+        if (typeof name !== 'string' || name === '') {
+          adoptDir(dir);
+          return;
+        }
+        const full = join(dir, name);
         let isDir = false;
         try {
           isDir = statSync(full).isDirectory();
@@ -234,6 +245,8 @@ export type StartVaultWatcherDeps = VaultWatchEvent & {
   vectors?: VectorIndex | undefined;
   defaultTier?: TrustTier | undefined;
   debounceMs?: number;
+  /** Native watcher override for deterministic event-path tests. */
+  watchDirectory?: typeof watch;
 };
 
 /**
@@ -270,5 +283,6 @@ export function startVaultWatcher(deps: StartVaultWatcherDeps): VaultWatcher {
     ...(deps.debounceMs === undefined ? {} : { debounceMs: deps.debounceMs }),
     ...(deps.onReindexed === undefined ? {} : { onReindexed: deps.onReindexed }),
     ...(deps.onError === undefined ? {} : { onError: deps.onError }),
+    ...(deps.watchDirectory === undefined ? {} : { watchDirectory: deps.watchDirectory }),
   });
 }

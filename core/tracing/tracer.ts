@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { ensurePrivateDir, tightenPrivateFile } from '../config/private-fs.js';
 import { redactAttributes, redactValue } from './redact.js';
 import {
-  SEMCONV_VERSION,
   type AttributeValue,
+  SEMCONV_VERSION,
   type Span,
   type SpanExporter,
   type SpanHandle,
@@ -28,7 +28,9 @@ export class JsonlExporter implements SpanExporter {
   constructor(homeDir: string) {
     this.dir = join(homeDir, 'traces');
     if (!ensurePrivateDir(this.dir)) {
-      throw new Error(`non posso usare ${this.dir}: la directory privata non è stata stabilita (symlink sulla catena)`);
+      throw new Error(
+        `non posso usare ${this.dir}: la directory privata non è stata stabilita (symlink sulla catena)`,
+      );
     }
   }
 
@@ -82,6 +84,7 @@ export class SimpleTracer implements Tracer {
       traceId,
       spanId,
       setAttributes(next) {
+        if (ended) return;
         current = { ...current, ...next };
       },
       end(outcome) {
@@ -100,7 +103,8 @@ export class SimpleTracer implements Tracer {
           semconvVersion: SEMCONV_VERSION,
         };
         if (outcome?.error !== undefined) {
-          const message = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
+          const message =
+            outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
           // redactValue always returns a string for a string input (unchanged, or the
           // «redacted:<len>» marker) — same net attributes go through at line 94, so an
           // error message carrying a key does not become the one path that skips it (P34-1).
