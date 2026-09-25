@@ -115,6 +115,47 @@ describe('http_get bounded body (#644)', () => {
     expect(out.content).not.toContain('FINE');
   });
 
+  it('rejects unsupported content encodings without exposing the encoded body', async () => {
+    let cancelled = false;
+    const marker = 'OPAQUE-ZSTD-MARKER';
+    const payload = `${marker} encoded bytes`;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(payload));
+        controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const { fetchFn } = fetchScript([
+      new Response(body, { status: 200, headers: { 'content-encoding': 'zstd' } }),
+    ]);
+    const tool = makeHttpTool({ fetchFn, lookupFn: publicLookup });
+
+    const out = await tool.handler({ url: 'https://api.example.com/zstd' }, ctx);
+
+    expect(out.isError).toBe(true);
+    expect(out.content).toContain('unsupported Content-Encoding');
+    expect(out.content).not.toContain(marker);
+    expect(out.retryable).toBeUndefined();
+    expect(out.tier).toBe(0);
+    expect(cancelled).toBe(true);
+  });
+
+  it('identity Content-Encoding remains a no-op', async () => {
+    const { fetchFn } = fetchScript([
+      new Response('identity body', { status: 200, headers: { 'content-encoding': 'identity' } }),
+    ]);
+    const tool = makeHttpTool({ fetchFn, lookupFn: publicLookup });
+
+    const out = await tool.handler({ url: 'https://api.example.com/identity' }, ctx);
+
+    expect(out.isError).toBeUndefined();
+    expect(out.content).toContain('identity body');
+    expect(out.tier).toBe(3);
+  });
+
   it('ordinary gzip still decompresses unchanged when under the cap', async () => {
     const small = 'corpo piccolo gzip';
     const gz = gzipSync(small);
