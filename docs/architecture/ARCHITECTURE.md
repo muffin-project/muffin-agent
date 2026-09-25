@@ -119,6 +119,17 @@ therefore related but not identical.
 Work does not own the truth of what happened in the outside world; that belongs
 to effects/evidence.
 
+The current runtime durably owns a turn's mutable execution state and a
+session-scoped todo plan. It does **not yet expose one typed, task-level working
+state across turns**. Conversation history and episodic memory are not substitutes
+for that missing projection: the former is Evidence and the latter feeds
+Evidence/Beliefs. If a working-state projection is introduced, it must be derived
+from canonical Work, Effects and Evidence, cite those records rather than restate
+them as new truth, and carry no Authority of its own. Whether that projection
+needs a new durable work identity above `Turn` remains an evaluation question,
+not an assumed schema. See
+`docs/evidence/working-state-reconciliation-2026-09-20.md`.
+
 ### Effects
 
 Effects own the transition between "we intend to do this" and "the world may or
