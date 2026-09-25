@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Span } from '../core/tracing/types.js';
 
@@ -112,7 +112,9 @@ export function formatTurn(spans: readonly Span[]): string {
   const root = spans.find((s) => s.parentSpanId === null && s.name === 'muffin.turn');
   // Spans are appended when they *close*, so a parent lands after its children.
   // Sorting by start is what makes an offset column mean "in this order".
-  const steps = [...spans].filter((s) => s !== root).sort((a, b) => a.startTimeUnixNano - b.startTimeUnixNano);
+  const steps = [...spans]
+    .filter((s) => s !== root)
+    .sort((a, b) => a.startTimeUnixNano - b.startTimeUnixNano);
   const header =
     `turno ${spans[0]!.traceId.slice(0, 12)} · ${steps.length} step · ${calls} chiamate al modello · ` +
     `${((last - first) / 1e9).toFixed(1)}s · ${inTok} in / ${outTok} out` +
@@ -172,6 +174,10 @@ function salient(span: Span): string {
     // meaning per lease only in combination with this.
     'muffin.turn.lease',
     'muffin.turn.continued',
+    // A failed owner correction append has no reply body to carry a warning;
+    // keep its local trace diagnostic visible in the human-readable view.
+    'muffin.turn.steer_residuo_error',
+    'muffin.turn.steer_residuo_drain_error',
   ]
     .map((k) => (span.attributes[k] === undefined ? null : `${short(k)}=${span.attributes[k]}`))
     .filter((x): x is string => x !== null)
@@ -198,6 +204,8 @@ const SHORTER: Readonly<Record<string, string>> = {
   'muffin.chat_call.effective_deadline_source': 'deadline',
   'muffin.turn.lease': 'lease',
   'muffin.turn.continued': 'continued',
+  'muffin.turn.steer_residuo_error': 'steer_residuo_error',
+  'muffin.turn.steer_residuo_drain_error': 'steer_drain_error',
 };
 
 function short(attributeName: string): string {

@@ -143,12 +143,20 @@ riscritte sopra:
   l'owner ha detto `/stop`.
 - **§2, una scrittura fallita non è silenziosa.** Un `sessions.append` fallito
   nella ripesca finiva su un attributo di span: l'owner restava con un
-  «ricevuto» che nessuno aveva onorato, e nessun modo di saperlo. Adesso
-  l'imbuto torna ciò che non è riuscito a scrivere e il turno lo dice **nel
-  proprio testo** — lo stesso canale che si usa già quando la sospensione non
-  riesce a salvare lo stato — riportando la correzione perché l'owner possa
-  rimandarla. Una frase solo nel turno in cui la scrittura è davvero fallita:
-  gli altri non diventano un rapporto.
+  «ricevuto» che nessuno aveva onorato, e nessun modo di saperlo. Quando il
+  motore torna con un risultato consegnabile, l'imbuto torna ciò che non è
+  riuscito a scrivere e il turno lo dice **nel proprio testo** — lo stesso
+  canale che si usa già quando la sospensione non riesce a salvare lo stato —
+  riportando la correzione perché l'owner possa rimandarla. Una frase solo nel
+  turno in cui la scrittura è davvero fallita: gli altri non diventano un
+  rapporto.
+
+  Se invece il motore rilancia, non c'è un testo di risposta da arricchire.
+  L'imbuto annota l'errore secondario di persistenza nello span del turno,
+  termina lo span dopo il drain e rilancia **lo stesso errore primario**. Il
+  dettaglio è consultabile nell'output leggibile con
+  `muffin trace grep steer_residuo_error`; è una diagnosi locale su richiesta,
+  non una notifica automatica sulla superficie di chat.
 - **§2, una ripresa rifiutata.** `resumeTurn` rifiuta `model_changed` o
   `resumes_exhausted` **prima** di `drive`, e `closeRow` chiude la riga: una
   correzione che la sospensione aveva parcheggiato durevolmente in
