@@ -131,6 +131,7 @@ echo "build uid=\$(id -u)" >>"$EVENTS"
 EOF
 chmod 0755 "$LAB/source/compile-fixture.sh"
 cat >"$LAB/source/main-fixture.js" <<'EOF'
+#!/usr/bin/env node
 const { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } = require('node:fs');
 
 const events = '__EVENTS_PATH__';
