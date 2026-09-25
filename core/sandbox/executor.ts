@@ -294,7 +294,7 @@ function networkOff(): SandboxRuntimeConfig['network'] {
  *    scritta in un'altra sintassi.
  *
  * **Misurato, non dedotto** (06/09/2026). Su Linux, nel job `verifica` di
- * ci:local (`ubuntu:24.04`, bwrap 0.9.0): `echo ok > "$TMPDIR/nota"` risponde
+ * Linux (`ubuntu:24.04`, bwrap 0.9.0): `echo ok > "$TMPDIR/nota"` risponde
  * `/tmp/claude/nota: No such file or directory` — una directory che non esiste
  * e che nessun `allowWrite` nomina. Su macOS lo stesso comando **riesce**, e
  * per questo la cosa è vissuta: `/tmp/claude` è fra i write path di default di

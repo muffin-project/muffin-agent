@@ -110,11 +110,10 @@ Delegate when it buys at least one of:
 Do not delegate a single obvious tool call or a small mechanical edit merely to
 create a worker hierarchy.
 
-Before material fanout, estimate the cost when the current environment provides
-delegation-budget tooling. Such tooling is an optional maintainer aid, not a
-contributor prerequisite. There is no universal magic worker count: cost depends
-on context/tool use and the work's independence. If a sequential plan buys the
-same information materially cheaper, prefer it.
+Before material fanout, use the repository's delegation budget tooling
+(`.claude/deleghe.mjs preventivo <n>` where applicable). There is no universal
+magic worker count: cost depends on context/tool use and the work's independence.
+If a sequential plan buys the same information materially cheaper, prefer it.
 
 A delegation is recorded before dispatch. A child killed by quota/session/529 is
 PARKED/resumable rather than silently lost. The durable delegation record should
@@ -228,13 +227,10 @@ The full suite runs once at the integrated PR/head gate (normally CI), not after
 every local commit. A fresh judge is not required; the orchestrator may integrate
 an unambiguous STANDARD claim when its evidence budget is satisfied.
 
-Integration into `dev` follows the two evidence paths in
-`docs/development/BRANCHING.md` §3: `npm run merge -- <pr>` evaluates the merged
-result locally, or a GitHub PR has the required checks and satisfies the live
-repository merge policy. Local guards may automate these rules in maintainer
-environments; they are not contributor prerequisites. A DISCARDED verdict
-(contended host) is not a verdict: rerun it. A printed green claim is not a
-substitute for observing the gate result.
+Integration into `dev` and promotion to `main` use pull requests, GitHub Actions,
+and the active ruleset described in `docs/development/BRANCHING.md` §3–4. Local
+tests and `npm run gate:local` can support investigation, but their results do
+not authorize integration or replace required Actions checks.
 
 ### CRITICAL
 
