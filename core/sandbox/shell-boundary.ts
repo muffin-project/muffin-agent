@@ -42,7 +42,7 @@ export const SHELL_BOUNDARY_REMEDY =
   'until then shell_run/shell_run_write stay disabled — see docs/evidence/shell-containment-2026-09-21.md';
 
 export const LINUX_AF_UNIX_REMEDY =
-  'Linux execution stays disabled while Muffin permits all AF_UNIX sockets; use macOS Seatbelt or a Muffin build with verified Linux socket filtering — see docs/architecture/SECURITY.md §9';
+  'Linux execution stays disabled while Muffin permits all AF_UNIX sockets; use macOS Seatbelt or a Muffin build with verified Linux socket filtering — see docs/architecture/SECURITY.md, "Filesystem, process and worker containment"';
 
 export function assessShellBoundary(
   probe: SandboxProbe,

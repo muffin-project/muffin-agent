@@ -6,16 +6,23 @@ import { runInit } from '../../cli/init.js';
 import { buildRuntime } from '../runtime.js';
 
 /**
- * Declared fixture for the #642 shell boundary: on a Linux host whose real
- * bwrap is < 0.12.0 (centria-zero: 0.11.1) the runtime registers no shell
- * lanes, and these description claims are then unprovable here — not wrong.
- * The fixture makes the claim host-independent; the gate itself is tested in
- * `agent/sandbox-gate.test.ts` and `core/sandbox/shell-boundary.test.ts`.
- * macOS/seatbelt never reads the version, so the mock is inert there.
+ * Declared fixtures for the shell boundary: the version mock covers a Linux
+ * host whose real bwrap is < 0.12.0 (#642) registering no shell lanes, and the
+ * AF_UNIX flag mock declares the *filtered* Linux configuration, since the
+ * shipped one is fail-closed until socket filtering is verified (#638). Both
+ * make these description claims host-independent — unprovable elsewhere is not
+ * wrong, but a Linux runner must still exercise them. The gate itself is
+ * tested in `agent/sandbox-gate.test.ts`, `core/sandbox/shell-boundary.test.ts`
+ * and `cli/doctor.test.ts`; macOS/seatbelt never reads either fixture.
  */
 vi.mock('../../core/sandbox/bubblewrap-version.js', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../../core/sandbox/bubblewrap-version.js')>();
   return { ...mod, readBubblewrapVersion: () => 'bubblewrap 0.12.0' };
+});
+
+vi.mock('../../core/sandbox/executor.js', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../../core/sandbox/executor.js')>();
+  return { ...mod, LINUX_ALLOW_ALL_UNIX_SOCKETS: false };
 });
 
 /**

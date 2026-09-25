@@ -8,14 +8,24 @@ import type { ToolContext } from '../loop.js';
 import { buildRuntime } from '../runtime.js';
 
 /**
- * Declared fixture for the #642 shell boundary (see the same mock in
- * `tool-descriptions.test.ts`): `shell_run` is named below as examined, so on
- * a host where bwrap < 0.12.0 refuses the lanes the mock keeps the claim
- * host-independent. The gate is tested in `agent/sandbox-gate.test.ts`.
+ * Declared fixture for the shell boundary (see the same mocks in
+ * `tool-descriptions.test.ts`): `shell_run` is named below as examined, so the
+ * claim must not depend on the host. The version mock covers bwrap < 0.12.0
+ * refusing the lanes (#642); the AF_UNIX flag mock declares the *filtered*
+ * Linux configuration, because the shipped one is fail-closed until socket
+ * filtering is verified (#638) and would otherwise make this claim unprovable
+ * on the Linux runner. The gate itself is tested in
+ * `agent/sandbox-gate.test.ts`, `core/sandbox/shell-boundary.test.ts` and
+ * `cli/doctor.test.ts`.
  */
 vi.mock('../../core/sandbox/bubblewrap-version.js', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../../core/sandbox/bubblewrap-version.js')>();
   return { ...mod, readBubblewrapVersion: () => 'bubblewrap 0.12.0' };
+});
+
+vi.mock('../../core/sandbox/executor.js', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../../core/sandbox/executor.js')>();
+  return { ...mod, LINUX_ALLOW_ALL_UNIX_SOCKETS: false };
 });
 
 /**
