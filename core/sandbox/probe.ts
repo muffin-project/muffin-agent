@@ -29,8 +29,9 @@ export type SandboxProbe =
         // The sandbox ran, but a contained client reached an AF_UNIX socket
         // this process owns: the seccomp filter that `networkOff()` requests
         // is not applied here (upstream #428/#429, or a missing
-        // `apply-seccomp` binary that srt skips with a warning). The runtime
-        // refuses shell and scheduled scripts on this verdict
+        // `apply-seccomp` binary that srt skips with a warning). `verify()`
+        // reports this verdict and `ensureInit` refuses every contained
+        // invocation on it — no command ever runs unfiltered
         // (`core/sandbox/executor.ts`'s AF_UNIX self-test leg).
         | 'unix_filter_absent'
         // This probe's own bwrap/sandbox-exec invocation held, but a later real

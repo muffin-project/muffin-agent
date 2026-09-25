@@ -279,8 +279,8 @@ the kernel does when a request is above it now depends on the row:
   `draft` with a journal and `muffin undo`, `sys.shell` is the read-only lane
   (no writes outside scratch; direct IP networking is disabled and, on Linux,
   `socket(AF_UNIX, …)` is refused by a seccomp filter that is requested and
-  behaviorally verified at boot — a host where it cannot hold exposes no shell
-  lane) and asks since
+  behaviorally verified before any command runs — a host where it cannot hold
+  refuses every contained invocation) and asks since
   ADR-0091 because whole-host reads disclose data, and `sys.shell.write` and
   `sys.process.kill` are `reversible: 'no'` and therefore ask at every tier,
   0 and 3 alike. The prohibition removed nothing from an attacker; it removed
@@ -602,11 +602,14 @@ readable minus a finite deny-read list (not just the project — §9.2 names wha
 that costs), writes are confined to a scratch directory this
 process creates under the system temp dir and removes when the session ends, and
 direct IP networking is disabled. On Linux the AF_UNIX seccomp filter is
-requested and behaviorally verified at boot (three-legged self-test: an
-unsandboxed control connects, the contained client must not), so a contained
-command cannot open `socket(AF_UNIX, …)` at all; on macOS the Seatbelt profile
-has always blocked Unix sockets by default. A host where the filter cannot be
-applied exposes no shell lane rather than an unfiltered one. The Muffin gateway
+requested and behaviorally verified (three-legged self-test: an unsandboxed
+control connects, the contained client must not), so a contained command
+cannot open `socket(AF_UNIX, …)` at all; on macOS the Seatbelt profile has
+always blocked Unix sockets by default. A host where the filter cannot be
+applied refuses every contained invocation before it runs — the shell tools
+may still be registered by the synchronous build path (which reads the narrow
+probe), and `doctor`, which verifies, reports them as absent; the guarantee is
+that no command ever runs unfiltered. The Muffin gateway
 socket and pointer are additionally deny-listed, and the long-home fallback is
 covered by the composed Linux test (see §9.3). It declares `risk: 'high'`:
 although filesystem writes stay in scratch and direct IP networking is

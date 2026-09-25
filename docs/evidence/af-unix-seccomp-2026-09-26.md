@@ -59,11 +59,16 @@ the filter rather than without it.
 ## Where this leaves the fail-closed gate
 
 On a host where `apply-seccomp` cannot obtain its capability, the whole sandbox
-refuses to run and `verify()` says so: no shell lane, no scheduled scripts,
-`doctor` names the reason. That is the same posture the constant gate proposed,
-but applied only where the measurement says it is needed, and with the shell
-preserved where the filter holds. The owner's own machine is the other
-production target: the boot self-test runs there too and decides.
+refuses to run and `verify()` says so: every contained invocation is refused
+before it runs, `doctor` names the reason, and no scheduled script executes.
+The shell tools can still be registered by the synchronous build path
+(`buildRuntime` reads the narrow probe, not the async verification), so the
+accurate statement is "no command ever runs unfiltered", not "no tool is
+listed" — the first invocation is the refusal. That is the same security
+posture the constant gate proposed, but applied only where the measurement
+says it is needed, and with the shell preserved where the filter holds. The
+owner's own machine is the other production target: the boot self-test runs
+there too and decides.
 
 ## Limits
 

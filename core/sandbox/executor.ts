@@ -99,7 +99,11 @@ export const EXEC_MAX_TIMEOUT_MS = 600_000;
  * symlinked ancestor to launder the match through.
  */
 const SELFTEST_SENTINEL_NAME = '.muffin-selftest-sentinel';
-/** Per leg. Two legs, so a hang here costs at most 2×. */
+/**
+ * Per leg. Three legs (deny, allow, AF_UNIX on Linux) plus the control run,
+ * bounded as a whole by `SELFTEST_OVERALL_TIMEOUT_MS`; a leg that hangs is
+ * reported as a containment failure, never as a held deny or filter.
+ */
 const SELFTEST_LEG_TIMEOUT_MS = 10_000;
 /**
  * Belt-and-suspenders over the two per-leg timeouts: bounds `initialize()`
@@ -223,13 +227,15 @@ function isMissingDependency(detail: string): boolean {
 }
 
 /**
- * **Direct IP networking is disabled here; AF_UNIX is a separate residual.**
+ * **Direct IP networking is disabled here; AF_UNIX is denied by the filter
+ * requested below.**
  *
  * Every config this module builds — session, per-call, self-test — reads its
  * `network` block from here, so direct IP/proxy egress is one function to
  * check and one function to break. `sys.shell` asks every time since ADR-0091
- * because whole-host reads disclose data. This setting does not block AF_UNIX
- * connections on Linux; those remain a separate local-service residual.
+ * because whole-host reads disclose data. On Linux the same function requests
+ * srt's AF_UNIX seccomp filter; whether it held is proven behaviorally by the
+ * self-test before any caller's command runs.
  *
  * **What actually does the work, measured in `@anthropic-ai/sandbox-runtime`
  * 0.0.71, not assumed from the field names.** `allowedDomains` being *defined*
@@ -783,16 +789,30 @@ export class SandboxExecutor {
   private async selfTestAfUnixFilter(cwd: string): Promise<ContainmentFailure | null> {
     const socketPath = join(cwd, 'afunix.sock');
     const server = createServer();
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(socketPath, () => resolve());
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(socketPath, () => resolve());
+      });
+    } catch (error) {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      rmSync(socketPath, { force: true });
+      return {
+        reason: 'contain_failed',
+        detail: `the AF_UNIX self-test could not listen on ${socketPath} (${message(error)})`,
+        remedy:
+          'the probe scratch dir did not admit a Unix socket; shell stays disabled until the leg can run — see docs/architecture/SECURITY.md',
+      };
+    }
     try {
       const snippet =
         "const net=require('node:net');const s=net.connect(process.argv[1]);" +
         "s.on('connect',()=>{s.destroy();process.exit(0)});" +
         "s.on('error',(e)=>{console.error(e.code||e.message);process.exit(3)});";
-      const command = `node -e ${JSON.stringify(snippet)} ${JSON.stringify(socketPath)}`;
+      // Both legs run the SAME binary by absolute path: resolving `node` from
+      // PATH inside the sandbox could pick a different one (or none) and turn
+      // a working probe into an indistinguishable `contain_failed`.
+      const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(snippet)} ${JSON.stringify(socketPath)}`;
 
       try {
         execFileSync(process.execPath, ['-e', snippet, socketPath], {
@@ -907,8 +927,9 @@ export class SandboxExecutor {
    *
    * Writes land in the session scratch and nowhere else — not the workspace,
    * not the home, not the caller's cwd — and direct IP/proxy egress is off.
-   * Linux AF_UNIX remains reachable except for paths in `denyRead`, so local
-   * service effects are possible. Whole-host reads can disclose data; ADR-0091
+   * On Linux a contained command cannot open `socket(AF_UNIX, …)` at all: the
+   * seccomp filter is requested and the self-test refuses the first command
+   * when it did not hold. Whole-host reads can disclose data; ADR-0091
    * therefore declares `reversible: 'no'` and the kernel asks on every call.
    *
    * `cwd` is still the caller's: reading is the point, and `--ro-bind / /`

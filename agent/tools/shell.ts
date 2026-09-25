@@ -77,16 +77,18 @@ export const shellCapability: CapabilityDecl = {
   // ADR-0091 makes every call ask the owner.
   effect: 'host',
   // Risk still governs safe mode and the budget, not the ask (ADR-0074 point
-  // 1). The open AF_UNIX surface can reach arbitrary local services; a command
-  // may mutate one even though filesystem writes stay in scratch and direct
-  // IP networking is disabled. High risk keeps this capability unavailable in
-  // safe mode and subject to budget limits. ADR-0091 made the read disclosure
-  // itself irreversible; the AF_UNIX recovery consequence is recorded there.
+  // 1). A contained command reads a broad host filesystem and spends host
+  // resources; filesystem writes stay in scratch and direct IP networking is
+  // disabled, and on Linux Unix sockets are refused by the verified seccomp
+  // filter. High risk keeps this capability unavailable in safe mode and
+  // subject to budget limits. ADR-0091 made the read disclosure itself
+  // irreversible.
   risk: 'high',
   reversible: 'no',
-  // AF_UNIX may have changed a local service without writing a file. If the
-  // outcome row is missing after a crash, recovery must report “maybe done”
-  // instead of issuing the command again.
+  // A contained command can still affect the host outside the filesystem
+  // (signals to same-UID processes, resource spend). If the outcome row is
+  // missing after a crash, recovery must report “maybe done” instead of
+  // issuing the command again.
   rerunnable: false,
   // NOT `progress: 'idempotent_read'`. That flag says a second identical call
   // returns what the model already has, and it is exactly wrong here: `ps`,
@@ -152,8 +154,8 @@ const shellSpec: ToolSpec = {
     'Run a non-interactive shell command in the contained read lane. ' +
     'It asks the owner every time: what a command reads on this machine reaches the conversation and cannot be ' +
     'taken back. The whole host filesystem is readable except for a finite deny-read list; writes stay in a ' +
-    'temporary scratch directory and direct IP networking is disabled. On Linux, reachable AF_UNIX sockets can ' +
-    'still interact with or change local services; this lane is treated as high risk and is not replayed after an ' +
+    'temporary scratch directory, direct IP networking is disabled, and on Linux Unix-domain sockets are blocked ' +
+    'by the sandbox. This lane is treated as high risk and is not replayed after an ' +
     'uncertain crash. Muffin gateway socket paths are deny-listed. Prefer project-relative reads; ' +
     'an absolute path outside the project reads the owner\u2019s machine, ' +
     'and its output reaches the model. Use it when you need to observe something no ' +
