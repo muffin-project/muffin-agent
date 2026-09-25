@@ -132,6 +132,9 @@ describe('http_get DNS pinning (#640)', () => {
 
   it('SNI carries the hostname, never an IP literal', () => {
     expect(serverNameFor('shop.example.com')).toBe('shop.example.com');
+    expect(serverNameFor('shop.example.com:8443')).toBe('shop.example.com');
+    expect(serverNameFor('[2001:db8::1]:8443')).toBeUndefined();
+    expect(serverNameFor('93.184.216.34:8443')).toBeUndefined();
     expect(serverNameFor('shop.example.com.')).toBe('shop.example.com');
     expect(serverNameFor('93.184.216.34')).toBeUndefined();
     expect(serverNameFor('::1')).toBeUndefined();
