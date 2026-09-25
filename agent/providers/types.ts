@@ -336,6 +336,17 @@ export type ChatCall = {
    * the loop bills those itself, with `input.jobId`, at the call site.
    */
   jobId?: string;
+  /**
+   * Upstream providers this attempt must NOT use, when the transport is a
+   * router that exposes one.
+   *
+   * Written by the loop only after a provider-empty response: the upstream that
+   * just answered nothing (`ChatResult.upstream`) is named here so the re-drive
+   * can land on a different machine instead of the same one. Domain wording,
+   * not `provider.ignore`: the adapter decides whether its endpoint speaks it,
+   * and an endpoint with no router ignores the field entirely.
+   */
+  providerIgnore?: readonly string[];
   stream: boolean;
   signal?: AbortSignal;
 };
