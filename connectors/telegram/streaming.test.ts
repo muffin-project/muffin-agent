@@ -335,6 +335,59 @@ describe('a group turn uses ephemeral presence and durably sends only the final 
   });
 });
 
+describe('the first model call is not silence (2026-09-25)', () => {
+  /**
+   * The owner watched ~70 s of nothing while the first model call ran, then a
+   * bubble appeared only on the second round. The fix must be observed on the
+   * production path — `drain()` → `runTurn` → `onProgress('round')` →
+   * `transcript.report` → `sendMessageDraft` — and *while the call is still in
+   * flight*, before any token or tool exists. A provider gated on a promise is
+   * the closest a test can get to the real network gap without a wall clock.
+   *
+   * MUTATION-PROVABLE: remove the `else ensureDraftStatus()` in
+   * `transcript.report` and no draft carries the status until the model
+   * returns, exactly the defect.
+   */
+  it('DM: the status is in the draft while the first model call is still pending', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const provider: Provider = {
+      kind: 'openai-compat' as const,
+      async chat(): Promise<ChatResult> {
+        throw new Error('this scenario must stream, not fall back to chat()');
+      },
+      async *chatStream(_call: ChatCall): AsyncIterable<StreamEvent> {
+        await gate; // the model has not said anything yet
+        yield { type: 'done', result: { text: 'fatto.', toolCalls: [], stopReason: 'end', usage: USAGE, model: 'test-model' } };
+      },
+    };
+    const { api, calls } = recordingApi();
+    const { connector, runtime } = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER }, provider, api);
+
+    try {
+      const inbox = (connector as unknown as { deps: { inbox: UpdateInbox } }).deps.inbox;
+      inbox.accept([privateMsg(40)], new Date().toISOString());
+      const draining = (connector as unknown as { drain: () => Promise<void> }).drain();
+
+      const deadline = Date.now() + 2_000;
+      while (!calls.some((c) => c.method === 'sendMessageDraft' && c.text?.includes('sto pensando'))) {
+        if (Date.now() > deadline) throw new Error(`nessuna anteprima di stato; calls=${JSON.stringify(calls)}`);
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      // Still nothing durable: the status is only in the ephemeral preview, so
+      // a process that dies here leaves no message behind.
+      expect(calls.some((c) => c.method === 'sendMessage' || c.method === 'editMessageText')).toBe(false);
+
+      release();
+      await draining;
+    } finally {
+      runtime.close();
+    }
+  });
+});
+
 describe('a private turn streams into a real message as the answer forms (B11)', () => {
   it("l'anteprima mostra il testo che si forma, e la chat conserva un solo messaggio vero: la risposta", async () => {
     const finalText = 'Ciao! Ecco una storia breve.';
