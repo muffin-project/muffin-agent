@@ -57,6 +57,14 @@ fi
 # (`._a-lifecycle.accept.ts`) e fallisce a caricarli. `git archive` non aveva
 # questo problema; il clone lo ha introdotto, e questa riga lo chiude.
 COPYFILE_DISABLE=1 tar cf "$OUT/repo.tar" -C "$OUT/src" .
+# The commit this gate must measure, passed into the container so the install
+# leg can prove it built THIS tree and not something downloaded from the
+# network (#702 made the personal default fetch public `main`; checkout mode is
+# how the gate binds the installer to the candidate).
+EXPECTED_SHA=$(git -C "$OUT/src" rev-parse --short=12 HEAD 2>/dev/null || echo "")
+# Fail closed: without the sha the tree-identity assertion below would silently
+# disappear, which is the failure this repository keeps paying for.
+[ -n "$EXPECTED_SHA" ] || { echo "gate-linux: non riesco a leggere lo sha in prova da $OUT/src" >&2; exit 1; }
 
 # Le due opzioni di sicurezza sono l'equivalente container del profilo AppArmor
 # che il workflow installa su ubuntu-latest: il seccomp di default di Docker
@@ -116,6 +124,7 @@ docker run --rm \
   "${PRIVILEGI[@]}" \
   --security-opt seccomp=unconfined \
   --security-opt apparmor=unconfined \
+  -e EXPECTED_SHA="${EXPECTED_SHA:-}" \
   -v "$OUT/repo.tar:/repo.tar:ro" \
   -w /app \
   "$IMAGE" \
@@ -151,8 +160,18 @@ docker run --rm \
     IAS="runuser -u nobody -- env HOME=$IHOME"
     echo "=== INSTALL.SH (non-root, da zero) ==="
     # >>> BLOCCO INSTALL PROVATO DA gate-linux.test.ts
-    $IAS bash /install-check/install.sh < /dev/null
-    $IAS env PATH="$IHOME/.local/bin:/usr/local/bin:/usr/bin:/bin" muffin --version
+    # `--checkout` (#702): the mode is explicit now, and the gate must build
+    # THIS tree. Without it a clone is a *personal* install, which clones public
+    # `main` from the network and would measure a tree nobody is testing.
+    $IAS bash /install-check/install.sh --checkout < /dev/null
+    VERSIONE=$($IAS env PATH="$IHOME/.local/bin:/usr/local/bin:/usr/bin:/bin" muffin --version)
+    echo "$VERSIONE"
+    if [ -n "${EXPECTED_SHA:-}" ]; then
+      case "$VERSIONE" in
+        *"$EXPECTED_SHA"*) ;;
+        *) echo "gate-linux: install.sh --checkout built the wrong tree: expected $EXPECTED_SHA in: $VERSIONE" >&2; exit 1 ;;
+      esac
+    fi
     # <<< BLOCCO INSTALL PROVATO DA gate-linux.test.ts
 
     npm ci --no-audit --no-fund >/dev/null

@@ -178,8 +178,10 @@ muffin update              # a release built alongside, then an atomic swap
 muffin update --rollback   # the inverse flip
 ```
 
-From a clone instead — `git clone …` then `./install.sh` — if you would rather
-read the canonical installer before running it.
+From a clone instead — `git clone …` then `./install.sh --checkout` — if you
+would rather read the canonical installer before running it. A plain
+`./install.sh` from a clone is a normal personal install; `--checkout` is the
+explicit development mode that binds the command to the checkout.
 
 [What the installer does, and how to undo it →](docs/user/INSTALL.md)
 
