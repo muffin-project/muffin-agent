@@ -304,6 +304,18 @@ export class MemoryStore {
   /**
    * Idempotent projection of a turn's canonical user ingress into evidence.
    * The turn row owns the ingress; memory remains a tenant-scoped projection.
+   *
+   * The lookup is scoped to the projection this method owns — `role='user'`
+   * and `kind='message'` — because a turn carries **two** episodes under the
+   * same `turn_id` in production: this ingress and the agent's own answer
+   * (`agent/loop/round.ts`). An unscoped read treats the answer as a competing
+   * ingress and throws `conflicting ingress projection` on any preamble replay
+   * where the answer already exists but `contextBuilt` is still false on disk
+   * (a checkpoint write that was swallowed, then a crash) — the preamble is not
+   * wrapped by the round loop's try, so the throw escapes, the row is resumed
+   * as `interrupted`, and the same throw recurs: the owner's turn is never
+   * delivered. Another kind is not this projection's business, whatever the
+   * test that used to assert the opposite said.
    */
   addTurnIngressOnce(input: EpisodeInput & { turnId: string }): number {
     if (input.role !== 'user' || input.kind !== 'message') {
@@ -314,7 +326,7 @@ export class MemoryStore {
         .prepare(
           `SELECT id, connector, thread_key AS threadKey, role, kind, content, trust_tier AS trustTier
            FROM episodes
-           WHERE tenant_id = ? AND turn_id = ?
+           WHERE tenant_id = ? AND turn_id = ? AND role = 'user' AND kind = 'message'
            ORDER BY id LIMIT 2`,
         )
         .all(input.tenantId, input.turnId) as Array<{
