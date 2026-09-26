@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { TURN_TABLE_SCHEMA } from '../turns/schema.js';
 import {
   currentSchemaVersion,
   migrate,
@@ -641,5 +642,50 @@ describe('migrazione 8 — Turn schema authority', () => {
       db.close();
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  /**
+   * The analogue of the `due_at`/`due_tier` intermediate-v4 case, for the #707
+   * reconciliation. A home stamped at the first v8 (turn schema without
+   * `continuation_candidates`) skips v8 by version and must get the column from
+   * v9 alone — otherwise the first continuation question throws
+   * `no such column: continuation_candidates`. v9 is idempotent, so a home
+   * migrated by the current v8 already having the column is a no-op.
+   */
+  it('una casa timbrata al primo v8 senza continuation_candidates riceve la colonna dalla sola v9', () => {
+    const { db, backups } = fileDb();
+    // The v8-era table: the canonical shape, status CHECK already including
+    // 'continuable', but no continuation_candidates.
+    const ddl = TURN_TABLE_SCHEMA.replace('CREATE TABLE IF NOT EXISTS turns', 'CREATE TABLE turns').replace(
+      /\n\s*continuation_candidates TEXT,/,
+      '',
+    );
+    db.exec(ddl);
+    db.prepare(
+      `INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint, counters, status, created_at, updated_at)
+       VALUES ('t1', '{"kind":"owner"}', 'host', 'cli', 's1', 'm', '[]', 0, '{}', 'done', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')`,
+    ).run();
+    // Stamped through v8, as the intermediate build would have left it.
+    migrate(db, { backupDir: backups, migrations: [] });
+    const timbra = db.prepare(
+      `INSERT INTO schema_version (version, description, applied_at) VALUES (?, ?, '2026-09-26T00:00:00Z')`,
+    );
+    for (const v of [2, 3, 4, 5, 6, 7, 8]) timbra.run(v, `v8 senza continuation_candidates (${v})`);
+    expect(schemaVersionOf(db)).toBe(8);
+    const before = (db.prepare(`PRAGMA table_info(turns)`).all() as Array<{ name: string }>).map((c) => c.name);
+    expect(before).not.toContain('continuation_candidates');
+
+    const res = migrate(db, { backupDir: backups });
+
+    expect(res.applied).toEqual([9]);
+    const colonne = (db.prepare(`PRAGMA table_info(turns)`).all() as Array<{ name: string }>).map((c) => c.name);
+    expect(colonne).toContain('continuation_candidates');
+    // Il comportamento che la colonna serve, non solo il PRAGMA.
+    expect(() =>
+      db.prepare(`UPDATE turns SET continuation_candidates = ? WHERE id = 't1'`).run('[{"id":"aaa"}]'),
+    ).not.toThrow();
+    expect(
+      (db.prepare(`SELECT continuation_candidates AS c FROM turns WHERE id = 't1'`).get() as { c: string }).c,
+    ).toBe('[{"id":"aaa"}]');
   });
 });
