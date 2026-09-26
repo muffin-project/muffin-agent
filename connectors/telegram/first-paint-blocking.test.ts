@@ -100,7 +100,7 @@ describe('first paint beats a blocking first tool handler', () => {
       spec: { name: 'sonda_bloccante_xyz', description: 'probe', inputSchema: { type: 'object' } as any },
       capability: 'probe.bloccante',
       handler: async () => {
-        enteredWithSends.push(calls.filter((c) => c.method === 'sendMessage').length);
+        enteredWithSends.push(calls.filter((c) => c.method === 'sendMessage' || c.method === 'sendRichMessage').length);
         enteredResolve();
         // Deterministic blocking seam: a synchronous monopolisation of the
         // event loop. Short on purpose — the assertion above does not depend
@@ -160,8 +160,8 @@ describe('first paint beats a blocking first tool handler', () => {
       // THE invariant: started synchronously from the first durable progress
       // fact, before tool execution could monopolise the event loop.
       expect(enteredWithSends[0]).toBeGreaterThanOrEqual(1);
-      expect(calls[0]!.method).toBe('sendMessage');
-      expect(calls[0]!.text).toContain('⏳');
+      expect(calls[0]!.method).toBe('sendRichMessage');
+      expect(JSON.stringify(calls[0]!.rich)).toContain('⏳');
       releaseTool();
       await draining;
       // …and the turn still ends as exactly one message, answer merged in —

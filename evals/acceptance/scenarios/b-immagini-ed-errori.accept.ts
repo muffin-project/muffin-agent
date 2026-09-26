@@ -237,6 +237,10 @@ describe('acceptance · B10 · telegram — immagini ed errori', () => {
           // plus a delivery `editMessageText`, and the rejection sat on the
           // edit; a rejection planted on a call the delivery no longer
           // makes is never consumed, and this scenario waited forever.
+          // Two rejections: the rich lane is tried first and falls back to
+          // the legacy one inside the same delivery, so a single planted
+          // failure is absorbed by the fallback. Both lanes are aimed here.
+          tg.guasta('sendMessage', 400, 'Bad Request: fake rejection (B10-errori)');
           tg.guasta('sendMessage', 400, 'Bad Request: fake rejection (B10-errori)');
           tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'dimmi qualcosa'));
 
@@ -254,8 +258,11 @@ describe('acceptance · B10 · telegram — immagini ed errori', () => {
           // The durable record of *why*, not just *that*: `delivery.ts`'s own
           // point is a `rejected` part, never a silently-promoted `sent` one.
           const statuses = deliveryPartStatuses(inst, turn1.id);
-          if (statuses.length !== 1 || statuses[0] !== 'rejected') {
-            throw new Error(`atteso esattamente un part 'rejected' per ${turn1.id}, trovato ${JSON.stringify(statuses)}`);
+          // The rich lane and its legacy fallback are two parts of one
+          // delivery; both are rejected. What must never appear is a silent
+          // `sent` promoted over a call that failed.
+          if (statuses.length === 0 || !statuses.every((st) => st === 'rejected')) {
+            throw new Error(`attesi part tutti 'rejected' per ${turn1.id}, trovato ${JSON.stringify(statuses)}`);
           }
 
           // === next delivery: a later message is what actually retries it ===
@@ -283,8 +290,11 @@ describe('acceptance · B10 · telegram — immagini ed errori', () => {
             throw new Error(`delivery del turno 1 dopo il retry attesa "sent", trovata ${JSON.stringify(turn1After?.delivery)}`);
           }
           const statusesAfter = deliveryPartStatuses(inst, turn1.id);
-          if (!statusesAfter.every((s) => s === 'sent')) {
-            throw new Error(`part del turno 1 non tutti 'sent' dopo il retry: ${JSON.stringify(statusesAfter)}`);
+          // The frozen plan retries through the legacy fallback, so the rich
+          // attempt stays `rejected` and the delivered chunk is `sent`. What
+          // matters is that the answer reached the owner and the record says so.
+          if (!statusesAfter.includes('sent')) {
+            throw new Error(`nessun part 'sent' per il turno 1 dopo il retry: ${JSON.stringify(statusesAfter)}`);
           }
 
           // And the model was never asked twice for the same answer: only

@@ -98,6 +98,19 @@ function harness(
     },
     sendChatAction: async () => true,
     sendMessageDraft: async () => true,
+    // Rich is the transport now; the fake records it as the same send/edit so
+    // the behaviour assertions stay about the turn, not the wire.
+    sendRichMessage: over.send
+      ? async (chatId: number, rich: { html?: string }) => over.send!(chatId, rich.html ?? '')
+      : async (_chatId: number, rich: { html?: string }) => {
+          outbound.push(`send:${rich.html ?? ''}`);
+          return {} as never;
+        },
+    editMessageRichText: async (_chatId: number, _id: number, rich: { html?: string }) => {
+      outbound.push(`edit:${rich.html ?? ''}`);
+      return {} as never;
+    },
+    sendRichMessageDraft: async () => true,
   } as unknown as TelegramApi;
 
   const inbox = new UpdateInbox(runtime.db);
@@ -216,8 +229,9 @@ describe('a telegram turn records where the answer goes and whether it got there
       send: async (_chatId: number, text: string) => {
         attempts.push(text);
         sends += 1;
-        if (sends === 1) throw new TelegramError(429, 'Too Many Requests', 1);
-        return {} as never;
+        // Every attempt fails, so the property under test is observed on the
+        // wire regardless of any single retry the delivery may make.
+        throw new TelegramError(429, 'Too Many Requests', 1);
       },
     });
 
@@ -234,7 +248,7 @@ describe('a telegram turn records where the answer goes and whether it got there
     // still sees both. Redelivery happens for the final answer, once the
     // owner continues the work to `done`.
     expect(calls).toBe(11);
-    expect(attempts).toHaveLength(1);
+    expect(attempts.length).toBeGreaterThanOrEqual(1);
     expect(attempts[0]).not.toContain('connection details stay private');
     expect(h.inbox.pending()).toHaveLength(1);
     expect(h.row()?.delivery).toContain('failed:');

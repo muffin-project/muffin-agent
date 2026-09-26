@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { TelegramApiLike } from './api.js';
+import { TelegramError, type TelegramApiLike } from './api.js';
 import { TELEGRAM_MAX } from './render.js';
 import { negoziazioneTelegram } from './negoziazione.js';
 import { startTranscript } from './transcript.js';
@@ -45,6 +45,25 @@ function recordingApi(fail: { send?: boolean; edit?: boolean; draft?: boolean } 
     sendMessageDraft: async (_chatId: number, draftId: number, text: string) => {
       if (fail.draft) throw new Error('simulato');
       calls.push({ method: 'sendMessageDraft', text, draftId, at: Date.now() });
+      return true;
+    },
+    // Rich is the transport now; the fake records it as the legacy twin so the
+    // 36 tests below keep asserting the same visible calls. The rich code path
+    // is still the one exercised, and the failure flags cover it.
+    sendRichMessage: async (chatId: number, rich: { html?: string }) => {
+      if (fail.send) throw new Error('simulato');
+      const messageId = next++;
+      calls.push({ method: 'sendMessage', text: rich.html ?? '', messageId });
+      return { message_id: messageId, date: 0, chat: { id: chatId, type: 'private' } };
+    },
+    editMessageRichText: async (_chatId: number, messageId: number, rich: { html?: string }) => {
+      if (fail.edit) throw new Error('simulato');
+      calls.push({ method: 'editMessageText', text: rich.html ?? '', messageId });
+      return true;
+    },
+    sendRichMessageDraft: async (_chatId: number, draftId: number, rich: { html?: string }) => {
+      if (fail.draft) throw new Error('simulato');
+      calls.push({ method: 'sendMessageDraft', text: rich.html ?? '', draftId, at: Date.now() });
       return true;
     },
   } as unknown as TelegramApiLike;
@@ -679,6 +698,58 @@ describe('a tool step shows the whole command, never a cut (#616)', () => {
     expect(text).not.toContain('sk-live');
     expect(text).toContain('«redacted:');
     expect(text).toContain('https://example.com/a/long/path/here');
+    await t.stop();
+  });
+});
+
+describe('rich transport failure handling', () => {
+  function api(calls: Call[], richSend: () => Promise<never>): TelegramApiLike {
+    let next = 700;
+    return {
+      sendMessage: async (chatId: number, html: string) => {
+        const messageId = next++;
+        calls.push({ method: 'sendMessage', text: html, messageId });
+        return { message_id: messageId, date: 0, chat: { id: chatId, type: 'private' } };
+      },
+      editMessageText: async () => true,
+      sendMessageDraft: async () => true,
+      sendRichMessage: richSend,
+      editMessageRichText: async () => true,
+      sendRichMessageDraft: async () => true,
+    } as unknown as TelegramApiLike;
+  }
+
+  it('a deterministic refusal flips the turn to legacy, exactly once', async () => {
+    const calls: Call[] = [];
+    const t = startTranscript(
+      api(calls, async () => {
+        throw new TelegramError(400, 'Bad Request: rich refused');
+      }),
+      1,
+      { negotiation: DM },
+    );
+    t.report(start('shell_run', { command: 'npm test' }));
+    await vi.advanceTimersByTimeAsync(0);
+    // The rich attempt was refused deterministically: one legacy create.
+    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
+    await t.stop();
+  });
+
+  it('an ambiguous failure never re-sends — no duplicate transcript', async () => {
+    const calls: Call[] = [];
+    const t = startTranscript(
+      api(calls, async () => {
+        // status 0: the request may already have reached Telegram.
+        throw new TelegramError(0, 'response stream closed');
+      }),
+      1,
+      { negotiation: DM },
+    );
+    t.report(start('shell_run', { command: 'npm test' }));
+    await vi.advanceTimersByTimeAsync(0);
+    // No legacy re-send: a second message would be the duplicate this surface
+    // forbids when the first attempt is unconfirmed.
+    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(0);
     await t.stop();
   });
 });

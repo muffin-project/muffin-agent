@@ -142,9 +142,15 @@ const apriTelegram: Apri = async (over = {}) => {
       inviati.push(text);
       return { message_id: inviati.length } as never;
     },
+    sendRichMessage: async (_chatId: number, rich: { html?: string }) => {
+      inviati.push(rich.html ?? '');
+      return { message_id: inviati.length } as never;
+    },
     sendChatAction: async () => true,
     sendMessageDraft: async () => true,
+    sendRichMessageDraft: async () => true,
     editMessageText: async () => ({}) as never,
+    editMessageRichText: async () => ({}) as never,
     deleteMessage: async () => true,
   } as unknown as TelegramApi;
 

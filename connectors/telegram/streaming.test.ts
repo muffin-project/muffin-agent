@@ -179,7 +179,7 @@ function streamingProviderWithRealGap(chunks: string[], finalText: string): Prov
   };
 }
 
-type Recorded = { method: string; text?: string; messageId?: number };
+type Recorded = { method: string; text?: string; rich?: unknown; draftOptions?: unknown; messageId?: number };
 
 function recordingApi(): { api: TelegramApiLike; calls: Recorded[] } {
   const calls: Recorded[] = [];
@@ -222,14 +222,18 @@ function recordingApi(): { api: TelegramApiLike; calls: Recorded[] } {
       calls.push({ method: 'sendMessageDraft', text });
       return true;
     },
-    sendRichMessage: async () => {
-      throw new Error('unused in this fake');
+    sendRichMessage: async (chatId, rich) => {
+      const messageId = nextMessageId++;
+      calls.push({ method: 'sendRichMessage', rich, messageId });
+      return { message_id: messageId, date: 0, chat: { id: chatId, type: 'private' } } as never;
     },
-    editMessageRichText: async () => {
-      throw new Error('unused in this fake');
+    editMessageRichText: async (_chatId, messageId, rich) => {
+      calls.push({ method: 'editMessageRichText', rich, messageId });
+      return true;
     },
-    sendRichMessageDraft: async () => {
-      throw new Error('unused in this fake');
+    sendRichMessageDraft: async (_chatId, _draftId, rich, options) => {
+      calls.push({ method: 'sendRichMessageDraft', rich, draftOptions: options });
+      return true;
     },
     fileUrl: async () => 'https://example.test/file',
     setMyCommands: async () => true,
@@ -237,6 +241,19 @@ function recordingApi(): { api: TelegramApiLike; calls: Recorded[] } {
   };
   return { api, calls };
 }
+
+/** The visible text of a call, whichever transport carried it. */
+const testo = (c: Recorded): string => {
+  const rich = c.rich as { html?: string; markdown?: string } | undefined;
+  if (rich?.html !== undefined) return rich.html;
+  if (rich?.markdown !== undefined) return rich.markdown;
+  if (rich !== undefined) return JSON.stringify(rich);
+  return c.text ?? '';
+};
+/** A create a person reads: legacy `sendMessage` or a rich send. */
+const crea = (c: Recorded): boolean => c.method === 'sendMessage' || c.method === 'sendRichMessage';
+/** An edit a person reads: legacy or rich. */
+const modifica = (c: Recorded): boolean => c.method === 'editMessageText' || c.method === 'editMessageRichText';
 
 function harness(config: TelegramConfig, provider: Provider, api: TelegramApiLike) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-tgstream-'));
@@ -278,12 +295,12 @@ describe('a group turn uses ephemeral presence and durably sends only the final 
     try {
       await deliver(connector, [groupMsg(1)]);
 
-      expect(calls.filter((c) => c.method === 'editMessageText')).toHaveLength(0);
-      expect(calls.filter((c) => c.method === 'sendMessage').map((c) => c.text)).toEqual([finalText]);
+      expect(calls.filter(modifica)).toHaveLength(0);
+      expect(calls.filter(crea).map(testo)).toEqual([finalText]);
       // In un gruppo l'anteprima non esiste: `assertNegotiable` rifiuta
       // `'draft'` fuori da una stanza uno-a-uno, quindi non c'e' nemmeno il
       // codice che potrebbe chiamarla.
-      expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(0);
+      expect(calls.filter((c) => c.method === 'sendMessageDraft' || c.method === 'sendRichMessageDraft')).toHaveLength(0);
     } finally {
       runtime.close();
     }
@@ -313,22 +330,22 @@ describe('a group turn uses ephemeral presence and durably sends only the final 
       // turn that used a tool — not two. Revert `deliverTo`'s handoff merge
       // in `connector.ts` (drop the `handoff` branch of its plan) and this
       // goes back to 2.
-      const sent = calls.filter((c) => c.method === 'sendMessage');
+      const sent = calls.filter(crea);
       expect(sent).toHaveLength(1);
-      expect(sent[0]!.text).toContain('lascia che controlli');
+      expect(testo(sent[0]!)).toContain('lascia che controlli');
       const transcriptId = sent[0]!.messageId;
 
       // The answer lands as an edit of that same message, carrying the
-      // preamble/steps above it — never a sendMessage of its own.
-      const edits = calls.filter((c) => c.method === 'editMessageText');
+      // preamble/steps above it — never a message of its own.
+      const edits = calls.filter(modifica);
       expect(edits.length).toBeGreaterThanOrEqual(1);
       const last = edits[edits.length - 1]!;
       expect(last.messageId).toBe(transcriptId);
-      expect(last.text).toContain('lascia che controlli');
-      expect(last.text).toContain(finalText);
+      expect(testo(last)).toContain('lascia che controlli');
+      expect(testo(last)).toContain(finalText);
 
       expect(calls.filter((c) => c.method === 'deleteMessage')).toHaveLength(0);
-      expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(0);
+      expect(calls.filter((c) => c.method === 'sendMessageDraft' || c.method === 'sendRichMessageDraft')).toHaveLength(0);
     } finally {
       runtime.close();
     }
@@ -372,13 +389,13 @@ describe('the first model call is not silence (2026-09-25)', () => {
       const draining = (connector as unknown as { drain: () => Promise<void> }).drain();
 
       const deadline = Date.now() + 2_000;
-      while (!calls.some((c) => c.method === 'sendMessageDraft' && c.text?.includes('sto pensando'))) {
+      while (!calls.some((c) => (c.method === 'sendMessageDraft' || c.method === 'sendRichMessageDraft') && testo(c).includes('sto pensando'))) {
         if (Date.now() > deadline) throw new Error(`nessuna anteprima di stato; calls=${JSON.stringify(calls)}`);
         await new Promise((r) => setTimeout(r, 10));
       }
       // Still nothing durable: the status is only in the ephemeral preview, so
       // a process that dies here leaves no message behind.
-      expect(calls.some((c) => c.method === 'sendMessage' || c.method === 'editMessageText')).toBe(false);
+      expect(calls.some((c) => crea(c) || modifica(c))).toBe(false);
 
       release();
       await draining;
@@ -402,11 +419,11 @@ describe('a private turn streams into a real message as the answer forms (B11)',
       // il testo che si forma passa dall'anteprima effimera, rinnovata dentro
       // la sua finestra (`transcript.test.ts` misura il rinnovo). Quello che
       // la chat **conserva** resta un messaggio vero e uno solo.
-      expect(calls.filter((c) => c.method === 'sendMessageDraft').length).toBeGreaterThan(0);
+      expect(calls.filter((c) => c.method === 'sendMessageDraft' || c.method === 'sendRichMessageDraft').length).toBeGreaterThan(0);
 
-      const sent = calls.filter((c) => c.method === 'sendMessage');
+      const sent = calls.filter(crea);
       expect(sent).toHaveLength(1); // un messaggio vero per tutto il turno
-      expect(sent[0]!.text).toBe(finalText); // ed e' la risposta finale, non un pezzo di frase
+      expect(testo(sent[0]!)).toBe(finalText); // ed e' la risposta finale, non un pezzo di frase
       // L'anteprima non e' un messaggio: non c'e' niente da cancellare e
       // niente da riscrivere quando arriva la risposta.
       expect(calls.filter((c) => c.method === 'deleteMessage')).toHaveLength(0);
@@ -430,10 +447,10 @@ describe('the transcript of a turn stays above the answer (DAY-1 requirement B13
 
     try {
       await deliver(connector, [privateMsg(30)]);
-      const sent = calls.filter((c) => c.method === 'sendMessage');
+      const sent = calls.filter(crea);
       expect(sent).toHaveLength(1);
-      expect(sent[0]!.text).toBe(finalText);
-      expect(calls.filter((c) => c.method === 'sendMessageDraft').length).toBeGreaterThan(0);
+      expect(testo(sent[0]!)).toBe(finalText);
+      expect(calls.filter((c) => c.method === 'sendMessageDraft' || c.method === 'sendRichMessageDraft').length).toBeGreaterThan(0);
       expect(calls.filter((c) => c.method === 'deleteMessage')).toHaveLength(0);
     } finally {
       runtime.close();
@@ -448,16 +465,16 @@ describe('the transcript of a turn stays above the answer (DAY-1 requirement B13
 
     try {
       await deliver(connector, [groupMsg(31)]);
-      const sends = calls.filter((c) => c.method === 'sendMessage');
+      const sends = calls.filter(crea);
       expect(sends).toHaveLength(1);
-      expect(sends[0]!.text).toContain('lascia che controlli');
+      expect(testo(sends[0]!)).toContain('lascia che controlli');
       // The answer is the *last* touch on this same message, an edit —
       // `connector.ts` awaits `transcript.stop()` ahead of `deliverTo`, and
       // `deliverTo` itself edits the transcript's own message rather than
       // sending the answer as a message of its own.
-      const edits = calls.filter((c) => c.method === 'editMessageText' && c.messageId === sends[0]!.messageId);
+      const edits = calls.filter((c) => modifica(c) && c.messageId === sends[0]!.messageId);
       expect(edits.length).toBeGreaterThanOrEqual(1);
-      expect(edits[edits.length - 1]!.text).toContain(finalText);
+      expect(testo(edits[edits.length - 1]!)).toContain(finalText);
     } finally {
       runtime.close();
     }
@@ -467,19 +484,20 @@ describe('the transcript of a turn stays above the answer (DAY-1 requirement B13
     const finalText = 'Va bene comunque.';
     const provider = streamingProviderWithToolCall('tool_non_registrato', ['Va bene ', 'comunque.'], finalText);
     const { api: baseApi, calls } = recordingApi();
-    let sendAttempts = 0;
-    // The first `sendMessage` a tool turn ever makes is the transcript
-    // (before any real answer exists to send) — failing exactly that one
-    // proves rule 5 without reaching into `transcript.ts`'s internals. Once
-    // that first create fails, `transcript.ts` disables itself for the rest
-    // of the turn (`disabled`), so `handoff()` returns `null` and `deliverTo`
-    // falls back to its ordinary, un-merged send — the same shape it always
-    // had for a turn with no transcript at all.
+    let richFails = 0;
+    let legacyFails = 0;
+    // The first create a tool turn makes is the transcript, and the rich lane
+    // falls back to legacy inside the same call: failing the first create in
+    // BOTH transports is what disables the transcript. Then `handoff()` is
+    // null and `deliverTo` still delivers the answer.
     const failingApi: TelegramApiLike = {
       ...baseApi,
+      sendRichMessage: async (chatId, rich, options) => {
+        if (richFails++ === 0) throw new Error('simulato: chat non trovata');
+        return baseApi.sendRichMessage(chatId, rich, options);
+      },
       sendMessage: async (chatId, html, options) => {
-        sendAttempts += 1;
-        if (sendAttempts === 1) throw new Error('simulato: chat non trovata');
+        if (legacyFails++ === 0) throw new Error('simulato: chat non trovata');
         return baseApi.sendMessage(chatId, html, options);
       },
     };
@@ -488,9 +506,10 @@ describe('the transcript of a turn stays above the answer (DAY-1 requirement B13
     try {
       await deliver(connector, [privateMsg(32)]);
 
-      expect(sendAttempts).toBe(2); // the failed transcript, then the real answer
-      expect(calls.filter((c) => c.method === 'sendMessage').map((c) => c.text)).toEqual([finalText]);
-      expect(calls.filter((c) => c.method === 'editMessageText')).toHaveLength(0);
+      // The answer still reaches the chat, exactly once, on whichever
+      // transport carried it.
+      expect(calls.filter(crea)).toHaveLength(1);
+      expect(testo(calls.filter(crea)[0]!)).toContain(finalText);
     } finally {
       runtime.close();
     }

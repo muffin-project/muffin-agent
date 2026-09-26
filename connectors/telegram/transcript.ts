@@ -1,9 +1,9 @@
 import type { TurnEvent } from '../../agent/loop.js';
 import { toolPhrase, toolProgress } from '../../agent/tool-phrase.js';
 import type { Negotiation } from '../../core/surface/types.js';
-import type { TelegramApiLike } from './api.js';
+import { TelegramError, type TelegramApiLike } from './api.js';
 import { escapeHtml, splitHtml, TELEGRAM_MAX, toTelegramHtml } from './render.js';
-import { planRich, type OutboundRich } from './rich.js';
+import { planRich, richFromHtml, type OutboundRich } from './rich.js';
 
 /**
  * What the agent said and did on its way to the answer, kept — DAY-1
@@ -295,6 +295,51 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
    * once true, everything is throttled by the room's own floor (`schedule()`).
    */
   let everSent = false;
+  /**
+   * The transcript rides rich (Bot API 10.1+) like everything else on this
+   * surface. A **deterministic** refusal (a `TelegramError` with a status)
+   * flips this off for the rest of the turn, and every later send/edit goes
+   * back to the legacy methods — a transport refusal must never cost the owner
+   * the transcript. An ambiguous status-0 failure (the request may already
+   * have landed) does NOT flip it and does not re-send: the turn disables the
+   * transcript instead of risking a duplicate.
+   */
+  let richTransport = true;
+
+  /** Send or edit the transcript message, rich first, legacy as the fallback. */
+  async function sendHtml(
+    kind: 'send' | 'edit',
+    messageId: number | null,
+    html: string,
+  ): Promise<{ message_id: number } | boolean> {
+    const rich = richFromHtml(html);
+    if (richTransport) {
+      try {
+        if (kind === 'send') {
+          return await api.sendRichMessage(chatId, rich, {
+            ...(options.threadId === undefined ? {} : { threadId: options.threadId }),
+          });
+        }
+        return await api.editMessageRichText(chatId, messageId!, rich);
+      } catch (error) {
+        if (nonModificato(error)) throw error;
+        // Fall back ONLY on a deterministic refusal (a status > 0). A status-0
+        // failure is ambiguous — Telegram may already have accepted the
+        // message — and re-sending here would duplicate the transcript. This
+        // mirrors `delivery.ts`, which records `possibly_sent` and does not
+        // retry. The caller disables the transcript on the rethrow.
+        if (!(error instanceof TelegramError && error.status > 0)) throw error;
+        richTransport = false;
+        log(`telegram: trasporto rich rifiutato, torno a legacy — ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (kind === 'send') {
+      return await api.sendMessage(chatId, html, {
+        ...(options.threadId === undefined ? {} : { threadId: options.threadId }),
+      });
+    }
+    return await api.editMessageText(chatId, messageId!, html);
+  }
 
   function current(): Segment {
     const last = segments[segments.length - 1];
@@ -390,12 +435,10 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     everSent = true;
     try {
       if (seg.messageId === null) {
-        const message = await api.sendMessage(chatId, text, {
-          ...(options.threadId === undefined ? {} : { threadId: options.threadId }),
-        });
+        const message = (await sendHtml('send', null, text)) as { message_id: number };
         seg.messageId = message.message_id;
       } else {
-        await api.editMessageText(chatId, seg.messageId, text);
+        await sendHtml('edit', seg.messageId, text);
       }
       seg.shown = text;
     } catch (error) {
@@ -447,9 +490,21 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     if (payload === '' && draftRich === null) return;
     try {
       if (draftRich !== null) await api.sendRichMessageDraft(chatId, draftId, draftRich, { canStop: true });
+      else if (richTransport) await api.sendRichMessageDraft(chatId, draftId, richFromHtml(payload), { canStop: true });
       else await api.sendMessageDraft(chatId, draftId, payload, { canStop: true });
     } catch (error) {
       if (nonModificato(error)) return;
+      // A text preview has a legacy payload to fall back to; a rich blocks
+      // preview does not, and stays disabled like before.
+      if (draftRich === null && richTransport) {
+        richTransport = false;
+        try {
+          await api.sendMessageDraft(chatId, draftId, payload, { canStop: true });
+          return;
+        } catch (legacyError) {
+          if (nonModificato(legacyError)) return;
+        }
+      }
       draftDisabled = true;
       log(`telegram: anteprima del turno sospesa — ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -615,9 +670,7 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     seg.shown = text;
     let started: Promise<{ message_id: number }>;
     try {
-      started = api.sendMessage(chatId, text, {
-        ...(options.threadId === undefined ? {} : { threadId: options.threadId }),
-      }) as Promise<{ message_id: number }>;
+      started = sendHtml('send', null, text) as Promise<{ message_id: number }>;
     } catch (error) {
       // A synchronous throw (e.g. unserialisable payload) is a failed first
       // send like any other: decoration stays down, the answer does not.

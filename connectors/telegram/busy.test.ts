@@ -91,9 +91,15 @@ function harness(script: Risposta[]) {
       sent.push({ text, ...(options?.replyTo === undefined ? {} : { replyTo: options.replyTo }) });
       return { message_id: sent.length } as never;
     },
+    sendRichMessage: async (_chatId: number, rich: { html?: string }, options?: { replyTo?: number }) => {
+      sent.push({ text: rich.html ?? '', ...(options?.replyTo === undefined ? {} : { replyTo: options.replyTo }) });
+      return { message_id: sent.length } as never;
+    },
     sendChatAction: async () => true,
     sendMessageDraft: async () => true,
+    sendRichMessageDraft: async () => true,
     editMessageText: async () => ({}) as never,
+    editMessageRichText: async () => ({}) as never,
     deleteMessage: async () => true,
   } as unknown as TelegramApi;
 

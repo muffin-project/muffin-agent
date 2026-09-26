@@ -299,7 +299,7 @@ describe('acceptance · B13 · la trascrizione del turno su Telegram', () => {
           // (`agent/tool-phrase.ts`) — distinct from the pairing confirmation.
           const sent = tg.sent();
           const creates = sent.filter(
-            (c) => c.method === 'sendMessage' && String(c.payload['text'] ?? '').includes('cerco in memoria'),
+            (c) => (c.method === 'sendMessage' || c.method === 'sendRichMessage') && testoDi(c).includes('cerco in memoria'),
           );
           if (creates.length !== 1) {
             throw new Error(
@@ -313,7 +313,7 @@ describe('acceptance · B13 · la trascrizione del turno su Telegram', () => {
           // Exactly one message a person would ever have read reached this
           // chat for the whole turn — the pairing confirmation plus this one
           // create, nothing else. The answer is not a second one.
-          const allCreates = sent.filter((c) => c.method === 'sendMessage');
+          const allCreates = sent.filter((c) => c.method === 'sendMessage' || c.method === 'sendRichMessage');
           if (allCreates.length !== 2) {
             throw new Error(
               `attesi esattamente 2 sendMessage in tutto lo scenario (pairing + trascrizione), trovati ${allCreates.length}:\n` +
@@ -330,7 +330,7 @@ describe('acceptance · B13 · la trascrizione del turno su Telegram', () => {
                 `abbastanza da riaprire la finestra, o il secondo passo non è mai stato appeso:\n${JSON.stringify(sent, null, 2)}`,
             );
           }
-          if (String(edits[0]!.payload['text'] ?? '') === String(creates[0]!.payload['text'] ?? '')) {
+          if (testoDi(edits[0]!) === testoDi(creates[0]!)) {
             throw new Error('editMessageText ha ripetuto lo stesso testo del create — non è un aggiornamento reale');
           }
           const finale = testoDi(edits[edits.length - 1]!);
@@ -406,8 +406,8 @@ describe('acceptance · B14 · un allegato reale su Telegram', () => {
                 .sent()
                 .some(
                   (c) =>
-                    (c.method === 'sendMessage' || c.method === 'editMessageText') &&
-                    String(c.payload['text'] ?? '').includes("l'ho mandato come allegato"),
+                    (c.method === 'sendMessage' || c.method === 'editMessageText' || c.method === 'editMessageRichText' || c.method === 'sendRichMessage') &&
+                    testoDi(c).includes("l'ho mandato come allegato"),
                 ),
             30_000,
           );

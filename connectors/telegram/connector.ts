@@ -75,7 +75,7 @@ import { DRAIN_BUDGET_MS } from '../../core/gateway/service.js';
  */
 const DEFAULT_STOP_BUDGET_MS = DRAIN_BUDGET_MS;
 import { escapeHtml, renderForTelegram, splitHtml, toTelegramHtml } from './render.js';
-import { normalizeInboundRich, planRich, richFitsHard, richFromHtml } from './rich.js';
+import { normalizeInboundRich, planRich, RICH_COMPAT_CHARS, richFitsHard, richFromHtml } from './rich.js';
 import { UpdateInbox, type StoredUpdate } from './updates.js';
 
 /**
@@ -1403,13 +1403,20 @@ export class TelegramConnector {
   ): TelegramDeliveryPlanPart[] {
     const first = legacy[0];
     if (first === undefined) return legacy;
-    if (first.operation === 'send') {
-      const rich = planRich(text);
-      if (rich.mode !== 'rich') return legacy;
+    const rich = planRich(text);
+    const richConstructs = rich.mode === 'legacy' ? rich.richConstructs : false;
+    if (first.operation === 'send' && rich.mode === 'rich') {
       return [{ ...first, kind: 'rich' as const, rich: rich.message, fallback: legacy }];
     }
-    // The answer that extends the step trail rides rich as HTML: the same
-    // bytes the legacy lane would edit in, richer transport, one message.
+    // An answer that HAS rich-native constructs but is over the compatibility
+    // ceiling stays on the proven legacy chunks — on BOTH lanes, not only the
+    // fresh send: the ceiling is a client-rendering policy with its own
+    // falsifier, not a cut. The html lane builds no native blocks, so falling
+    // back to the bounded legacy chunks costs no rendering.
+    if (richConstructs || combinedHtml.length > RICH_COMPAT_CHARS) return legacy;
+    // Ordinary prose, and the answer that extends the step trail, ride rich as
+    // HTML — the same bytes the legacy lane would send or edit, richer
+    // transport, one message.
     const payload = richFromHtml(combinedHtml);
     if (richFitsHard(payload) !== null) return legacy;
     return [{ ...first, kind: 'rich' as const, rich: payload, fallback: legacy }];

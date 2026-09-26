@@ -43,9 +43,10 @@ function fintoBotApi(): Promise<FintoBot> {
           res.end(JSON.stringify({ ok: true, result: { id: 42, is_bot: true, username: 'MuffinPorta' } }));
           return;
         }
-        if (url.includes('/sendMessage')) {
+        if (url.includes('/sendMessage') || url.includes('/sendRichMessage')) {
           try {
-            inviati.push(String((JSON.parse(body) as { text?: unknown }).text ?? ''));
+            const parsed = JSON.parse(body) as { text?: unknown; rich_message?: { html?: unknown } };
+            inviati.push(String(parsed.text ?? parsed.rich_message?.html ?? ''));
           } catch {
             inviati.push(body);
           }

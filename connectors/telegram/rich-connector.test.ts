@@ -198,7 +198,9 @@ describe('rich end to end · DM draft to rich final, no duplication (G)', () => 
       const richDrafts = calls.filter((c) => c.method === 'sendRichMessageDraft');
       expect(richDrafts.length).toBeGreaterThan(0);
       for (const draft of richDrafts) expect(draft.draftOptions?.canStop).toBe(true);
-      expect(richDrafts[0]!.rich!.blocks![0]).toMatchObject({ type: 'table' });
+      // A prose/status preview rides rich as HTML; the table-shaped one
+      // rides rich as blocks.
+      expect(richDrafts.some((d) => d.rich?.blocks?.some((b) => b.type === 'table'))).toBe(true);
 
       // The durable delivery is exactly one rich message — no legacy send
       // beside the preview (the OpenClaw/Hermes duplication shape), no edit,
@@ -247,7 +249,8 @@ describe('rich end to end · over-compat answers stay whole on legacy (D)', () =
       await deliver(connector, [privateMsg(5, 'dammi tutto')]);
 
       expect(calls.filter((c) => c.method === 'sendRichMessage')).toHaveLength(0);
-      expect(calls.filter((c) => c.method === 'sendRichMessageDraft')).toHaveLength(0);
+      // Previews are rich now; the durable delivery stays the legacy chunks
+      // because the answer is over the compatibility ceiling.
       const sends = calls.filter((c) => c.method === 'sendMessage');
       expect(sends.length).toBeGreaterThan(1);
       for (const send of sends) expect(send.text!.length).toBeLessThanOrEqual(4096);
@@ -260,8 +263,8 @@ describe('rich end to end · over-compat answers stay whole on legacy (D)', () =
   });
 });
 
-describe('rich end to end · ordinary prose stays on the legacy transport (A)', () => {
-  it('a simple answer sends legacy once, with zero rich anywhere', async () => {
+describe('rich end to end · ordinary prose also rides rich (A)', () => {
+  it('a prose answer is one rich send, never legacy', async () => {
     const provider = plainProvider('Ciao, tutto bene con **calma**.');
     const { api, calls } = recordingApi();
     const { connector, runtime } = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER }, provider, api);
@@ -269,12 +272,13 @@ describe('rich end to end · ordinary prose stays on the legacy transport (A)', 
     try {
       await deliver(connector, [privateMsg(6, 'come va?')]);
 
-      // A prose answer without rich-native constructs keeps the proven legacy
-      // path; the answer that follows a step trail is the one that becomes rich
-      // (see the handoff case). Making prose rich is a follow-up that needs the
-      // test fakes to speak the rich methods.
-      expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
-      expect(calls.filter((c) => c.method.startsWith('sendRich'))).toHaveLength(0);
+      // Owner directive 2026-09-26: everything rides rich. Prose has no
+      // rich-native constructs, but that is not a reason to stay legacy — it
+      // is the same HTML on the rich transport.
+      const richSends = calls.filter((c) => c.method === 'sendRichMessage');
+      expect(richSends).toHaveLength(1);
+      expect(JSON.stringify(richSends[0]!.rich)).toContain('calma');
+      expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(0);
       expect(calls.filter((c) => c.method.startsWith('editMessageRich'))).toHaveLength(0);
     } finally {
       runtime.close();
@@ -312,20 +316,20 @@ describe('rich drafts · the preview follows the partial across fake time', () =
 
     t.live('sto scrivendo la risposta');
     await vi.advanceTimersByTimeAsync(0);
-    expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(1);
-    expect(calls.filter((c) => c.method === 'sendRichMessageDraft')).toHaveLength(0);
+    // Everything rides rich: a prose partial is a rich HTML preview, not a
+    // legacy draft.
+    expect(calls.filter((c) => c.method === 'sendRichMessageDraft').length).toBeGreaterThan(0);
+    expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(0);
 
     // The model keeps typing and a table takes shape: the renewal switches
     // method under the same draft, legacy preview replaced, not doubled.
     t.live(`sto scrivendo la risposta\n\n${TABLE}`);
     await vi.advanceTimersByTimeAsync(2_000);
     const richDrafts = calls.filter((c) => c.method === 'sendRichMessageDraft');
-    expect(richDrafts.length).toBeGreaterThan(0);
-    expect(richDrafts[0]!.rich!.blocks!.some((b) => b.type === 'table')).toBe(true);
-    // One preview at a time: after the switch no further legacy renewal.
-    const legacyAfter = calls.filter((c) => c.method === 'sendMessageDraft').length;
+    expect(richDrafts.some((d) => d.rich?.blocks?.some((b) => b.type === 'table'))).toBe(true);
+    // Never a legacy draft on this surface.
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(legacyAfter);
+    expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(0);
     await t.stop();
   });
 
@@ -336,8 +340,8 @@ describe('rich drafts · the preview follows the partial across fake time', () =
         calls.push({ method: 'sendMessageDraft' });
         return true;
       },
-      sendRichMessageDraft: async () => {
-        calls.push({ method: 'sendRichMessageDraft' });
+      sendRichMessageDraft: async (_c: number, _d: number, rich: OutboundRich) => {
+        calls.push({ method: 'sendRichMessageDraft', rich });
         return true;
       },
       sendMessage: async () => {
@@ -352,19 +356,26 @@ describe('rich drafts · the preview follows the partial across fake time', () =
     // A table header without its delimiter row is not a table yet.
     t.live('| nome | q |');
     await vi.advanceTimersByTimeAsync(3_000);
-    expect(calls.filter((c) => c.method === 'sendRichMessageDraft')).toHaveLength(0);
-    expect(calls.filter((c) => c.method === 'sendMessageDraft').length).toBeGreaterThan(0);
+    // A prose/status preview rides rich as HTML; an unfinished table must
+    // never become a rich *blocks* preview.
+    const richPreviews = calls.filter((c) => c.method === 'sendRichMessageDraft');
+    expect(richPreviews.length).toBeGreaterThan(0);
+    expect(richPreviews.some((d) => d.rich?.blocks !== undefined)).toBe(false);
+    expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(0);
     await t.stop();
   });
 
-  it('every legacy draft carries the Stop control', async () => {
+  it('every draft carries the Stop control', async () => {
     const seen: ({ canStop: boolean | undefined } | undefined)[] = [];
     const api = {
       sendMessageDraft: async (_c: number, _d: number, _t: string, options?: { canStop?: boolean }) => {
         seen.push(options?.canStop === undefined ? undefined : { canStop: options.canStop });
         return true;
       },
-      sendRichMessageDraft: async () => true,
+      sendRichMessageDraft: async (_c: number, _d: number, _r: OutboundRich, options?: { canStop?: boolean }) => {
+        seen.push(options?.canStop === undefined ? undefined : { canStop: options.canStop });
+        return true;
+      },
       sendMessage: async () => {
         throw new Error('unused in this fake');
       },
