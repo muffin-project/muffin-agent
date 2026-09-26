@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { ensurePrivateDir, tightenPrivateFile } from '../config/private-fs.js';
 import { isSafeControlToken } from '../gateway/control-socket.js';
 import type { TrustTier } from '../policy/types.js';
+import { redactText } from '../tracing/redact.js';
 
 /**
  * Session transcripts.
@@ -385,6 +386,41 @@ export class SessionStore {
   append(session: SessionRef, message: SessionMessage): void {
     appendFileSync(session.file, `${JSON.stringify(message)}\n`, { encoding: 'utf8', mode: 0o600 });
     tightenPrivateFile(session.file);
+  }
+
+  /**
+   * Reconcile the transcript projection for a durable turn.
+   * TurnRecord.id is the idempotency key; the canonical ingress remains on the
+   * turn row, so recovery may safely repeat this append in its single-owner
+   * execution path.
+   */
+  appendTurnIngress(session: SessionRef, message: SessionMessage): boolean {
+    if (message.role !== 'user' || message.traceId === undefined) {
+      throw new Error('turn ingress requires a user message with its durable turn id');
+    }
+    const existing = this.read(session).filter(
+      (row) => row.role === 'user' && row.traceId === message.traceId,
+    );
+    if (existing.length > 1) {
+      throw new Error(
+        `session ${session.id}: duplicate ingress projection for turn ${message.traceId}`,
+      );
+    }
+    const prior = existing[0];
+    if (prior !== undefined) {
+      if (
+        redactText(prior.content) !== redactText(message.content) ||
+        prior.surface !== message.surface ||
+        prior.tier !== message.tier
+      ) {
+        throw new Error(
+          `session ${session.id}: conflicting ingress projection for turn ${message.traceId}`,
+        );
+      }
+      return false;
+    }
+    this.append(session, message);
+    return true;
   }
 
   /**

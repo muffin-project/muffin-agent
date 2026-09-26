@@ -920,7 +920,7 @@ describe('main model config is a turn-boundary input', () => {
       text: 'usa il modello nuovo',
     });
 
-    expect(runtime.deps.turns.get(id)?.model).toBe('openrouter/free');
+    expect(runtime.deps.turns.get(id)?.providerLease.model).toBe('openrouter/free');
     expect(runtime.deps.model).toBe('openrouter/free');
     expect(runtime.config.models.main).toBe('openrouter/free');
 
@@ -1015,7 +1015,7 @@ describe('main model config is a turn-boundary input', () => {
 
       expect(result.stopped).toBe('answered');
       if (queuedId === undefined) throw new Error('il turno B non è stato accodato');
-      expect(runtime.deps.turns.get(queuedId)?.model).toBe('qwen/qwen3.8-27b');
+      expect(runtime.deps.turns.get(queuedId)?.providerLease.model).toBe('qwen/qwen3.8-27b');
       expect(calls).toHaveLength(2);
       const nextRequest = JSON.stringify(calls[1]);
       expect(nextRequest).toContain(originalModel);

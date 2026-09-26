@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { TurnCounters, TurnRecord, TurnStatus } from '../../core/turns/store.js';
 import { zeroLifetime } from '../../core/turns/store.js';
 import { TurnRun } from './run-state.js';
+import { providerMessages } from './provider-checkpoint.js';
 
 /**
  * Fetta 6 della decomposizione (Fase A, §3): l'unico cambio di *forma* del
@@ -38,8 +39,8 @@ const record = (over: { counters?: Partial<TurnCounters>; status?: TurnStatus } 
   tenant: 'host',
   surface: 'cli',
   sessionId: 's1',
-  model: 'test',
-  messages: [{ role: 'user', content: [{ type: 'text', text: 'ciao' }] }],
+  inputText: null,
+  providerLease: { model: 'test', checkpoint: [{ role: 'user', content: [{ type: 'text', text: 'ciao' }] }] },
   taint: 0,
   counters: counters(over.counters),
   replyTo: null,
@@ -219,11 +220,11 @@ describe('TurnRun: il transcript parte dal record senza restarci attaccato', () 
     const riga = record();
     const run = new TurnRun(riga, fresh);
 
-    expect(run.messages).toEqual(riga.messages);
-    expect(run.messages).not.toBe(riga.messages);
+    expect(run.messages).toEqual(providerMessages(riga));
+    expect(run.messages).not.toBe(providerMessages(riga));
 
     run.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'ciao a te' }] });
-    expect(riga.messages).toHaveLength(1);
+    expect(providerMessages(riga)).toHaveLength(1);
   });
 
   it('il preambolo può ricostruirlo sul posto, e chi ne tiene il riferimento lo vede', () => {

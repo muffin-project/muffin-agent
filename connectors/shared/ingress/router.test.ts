@@ -12,6 +12,7 @@ import { ModelLane } from '../../../core/turns/model-lane.js';
 import { QueueNotices } from './lane.js';
 import { INGRESS_STAGES, receive, recover, type IngressHooks, type IngressStage, type RecoverHooks } from './router.js';
 import { makeIngressPort, type InboundEvent, type IngressPort } from './types.js';
+import { providerMessages } from '../../../agent/loop/provider-checkpoint.js';
 
 /**
  * Slice 14's router, against a port that is nothing but a recorder.
@@ -446,7 +447,7 @@ describe('continuazione conversazionale (P0-B)', () => {
       w.loop.turns.releaseContinuable(
         'cont-1',
         {
-          messages: created.messages,
+          messages: providerMessages(created),
           taint: 0,
           counters,
           reason: { class: 'provider_empty' as const, lease: 0, at: '2026-09-18T17:14:09.000Z' },

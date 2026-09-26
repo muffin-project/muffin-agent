@@ -45,12 +45,12 @@ Bring new evidence; a material reversal is a new ADR, not a rewrite of the old.
 
 ## Engineering harness
 
-Procedures: `.agents/skills/` (`engineering-loop`, `jev-shadow`); entry points
-`/start`, `/checkpoint`, `/close` in `.opencode/commands/`; roles in
-`.opencode/agents/`. `scripts/agent/repo-state.mjs` summarizes GitHub issues,
-claims and open PRs. GitHub issue/PR state owns contributor claims; no
+Repository procedures live in `docs/development/` and the code/scripts that
+enforce them. Assistant-specific skills, commands and roles are optional local
+adapters; no particular coding assistant or command set is a contributor
+requirement. `scripts/agent/repo-state.mjs` summarizes GitHub issues, claims and
+open PRs, while the GitHub issue/PR graph owns contributor claims. There is no
 global `program/current` queue. Disjoint scopes may proceed in parallel.
-OpenCode commands/roles are optional; repository invariants are harness-neutral.
 
 ## The failure pattern to remember
 

@@ -1,17 +1,18 @@
-import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
+import { MemoryStore } from '../core/memory/store.js';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal, TrustTier } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
-import { MemoryStore } from '../core/memory/store.js';
+import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { TurnStore } from '../core/turns/store.js';
 import { TodoStore } from '../core/turns/todo.js';
-import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
-import { runTurn, type LoopDeps, type RegisteredTool } from './loop.js';
+import { providerMessages } from './loop/provider-checkpoint.js';
+import { type LoopDeps, type RegisteredTool, runTurn } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
 import type { ChatCall, ChatResult, Provider } from './providers/types.js';
 
@@ -51,7 +52,13 @@ class Scripted implements Provider {
 }
 
 const usage = { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 };
-const answer = (text: string): ChatResult => ({ text, toolCalls: [], stopReason: 'end', usage, model: 'test' });
+const answer = (text: string): ChatResult => ({
+  text,
+  toolCalls: [],
+  stopReason: 'end',
+  usage,
+  model: 'test',
+});
 const callTool = (name: string, args: unknown = {}, id = 'c1'): ChatResult => ({
   text: null,
   toolCalls: [{ id, name, args }],
@@ -61,14 +68,44 @@ const callTool = (name: string, args: unknown = {}, id = 'c1'): ChatResult => ({
 });
 
 const decls: CapabilityDecl[] = [
-  { id: 'demo.read', effect: 'context', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: false },
+  {
+    id: 'demo.read',
+    effect: 'context',
+    risk: 'low',
+    reversible: 'yes',
+    rerunnable: true,
+    resourceKind: 'none',
+    policyArgs: [],
+    hostOnly: false,
+  },
   // The one that matters: not re-runnable, so a call left open is something
   // nobody may repeat on its own.
-  { id: 'demo.send', effect: 'context', risk: 'low', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: false },
+  {
+    id: 'demo.send',
+    effect: 'context',
+    risk: 'low',
+    reversible: 'no',
+    rerunnable: false,
+    resourceKind: 'none',
+    policyArgs: [],
+    hostOnly: false,
+  },
 ];
 
-type TurnRow = { id: string; status: string; model: string; taint: number; turn_outcome: string | null };
-type CallRow = { call_id: string; tool: string; rerunnable: number; ended_at: string | null; tier: number | null };
+type TurnRow = {
+  id: string;
+  status: string;
+  model: string;
+  taint: number;
+  turn_outcome: string | null;
+};
+type CallRow = {
+  call_id: string;
+  tool: string;
+  rerunnable: number;
+  ended_at: string | null;
+  tier: number | null;
+};
 
 type Harness = {
   deps: LoopDeps;
@@ -112,9 +149,12 @@ function harness(
     db,
     sessions,
     provider,
-    rows: () => db.prepare(`SELECT id, status, model, taint, turn_outcome FROM turns`).all() as TurnRow[],
+    rows: () =>
+      db.prepare(`SELECT id, status, model, taint, turn_outcome FROM turns`).all() as TurnRow[],
     calls: () =>
-      db.prepare(`SELECT call_id, tool, rerunnable, ended_at, tier FROM turn_tool_calls`).all() as CallRow[],
+      db
+        .prepare(`SELECT call_id, tool, rerunnable, ended_at, tier FROM turn_tool_calls`)
+        .all() as CallRow[],
   };
 }
 
@@ -157,7 +197,11 @@ describe('a turn writes its own record', () => {
     // A record written afterwards is a log of what happened, which is exactly
     // what the design says a turn record must not be.
     expect(atFirstCall).toHaveLength(1);
-    expect(atFirstCall[0]).toMatchObject({ status: 'running', model: 'claude-opus-5', turn_outcome: null });
+    expect(atFirstCall[0]).toMatchObject({
+      status: 'running',
+      model: 'claude-opus-5',
+      turn_outcome: null,
+    });
   });
 
   it('carries the identity of the turn, and its id is the trace id', async () => {
@@ -169,7 +213,7 @@ describe('a turn writes its own record', () => {
       tenant: 'host',
       surface: 'cli',
       sessionId: 't1',
-      model: 'claude-opus-5',
+      providerLease: { model: 'claude-opus-5' },
       principal: owner,
       status: 'done',
       outcome: 'answered',
@@ -183,7 +227,7 @@ describe('a turn writes its own record', () => {
     // The column exists so a resume onto a different model can be a refusal
     // rather than an attempt: thinking signatures belong to the model that made
     // them, and ADR-0037 records that sending them elsewhere fails silently.
-    expect(h.deps.turns.get(result.turnId)?.model).toBe('un-altro-modello');
+    expect(h.deps.turns.get(result.turnId)?.providerLease.model).toBe('un-altro-modello');
   });
 
   it('keeps the transcript, thinking blocks and signatures included', async () => {
@@ -191,7 +235,9 @@ describe('a turn writes its own record', () => {
     const withThinking: ChatResult = { ...callTool('demo_read'), thinking: [thinking] };
     const h = harness([withThinking, answer('finito')], { tools: [readTool()] });
     const result = await runTurn(h.deps, input(h.sessions));
-    const blocks = (h.deps.turns.get(result.turnId)?.messages ?? []).flatMap((m) => m.content);
+    const blocks = (providerMessages(h.deps.turns.get(result.turnId)) ?? []).flatMap(
+      (m) => m.content,
+    );
     expect(blocks).toContainEqual(thinking);
     expect(blocks.find((b) => b.type === 'tool_use')).toMatchObject({ name: 'demo_read' });
   });
@@ -231,7 +277,10 @@ describe('a turn writes its own record', () => {
 
   it('carries the reply address of a surface that delivers out of band', async () => {
     const h = harness([answer('ecco')]);
-    const result = await runTurn(h.deps, input(h.sessions, { replyTo: { chatId: 7, messageId: 9 } }));
+    const result = await runTurn(
+      h.deps,
+      input(h.sessions, { replyTo: { chatId: 7, messageId: 9 } }),
+    );
     const row = h.deps.turns.get(result.turnId);
     expect(row?.replyTo).toEqual({ chatId: 7, messageId: 9 });
     // Pending until a surface says otherwise: the turn is done, the delivery is
@@ -247,7 +296,11 @@ describe('a tool call is recorded in two halves', () => {
       tools: [
         {
           capability: 'demo.send',
-          spec: { name: 'demo_send', description: 's', inputSchema: { type: 'object', properties: {} } },
+          spec: {
+            name: 'demo_send',
+            description: 's',
+            inputSchema: { type: 'object', properties: {} },
+          },
           throwTier: 0,
           handler: () => {
             // Read from inside the handler: this is the instant a real crash
@@ -300,7 +353,11 @@ describe('a tool call is recorded in two halves', () => {
         {
           // Not in the declaration map at all, so the kernel denies it.
           capability: 'demo.unknown',
-          spec: { name: 'demo_hidden', description: 'x', inputSchema: { type: 'object', properties: {} } },
+          spec: {
+            name: 'demo_hidden',
+            description: 'x',
+            inputSchema: { type: 'object', properties: {} },
+          },
           throwTier: 0,
           handler: () => ({ content: 'mai', tier: 0 as const }),
         },
@@ -325,7 +382,13 @@ describe('when the record cannot be written', () => {
     db.close();
 
     await expect(
-      runTurn(h.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: 'fai la cosa' }),
+      runTurn(h.deps, {
+        principal: owner,
+        tenant: 'host',
+        surface: 'cli',
+        session,
+        text: 'fai la cosa',
+      }),
     ).rejects.toThrow();
 
     // Nothing was done, and that is the whole property: a turn whose record
@@ -365,9 +428,14 @@ describe('EFFECT WAL: an intent that cannot be written never reaches the handler
    * store going away. The block above already proves the DB-wide case; this
    * one isolates the one write the invariant is actually about.
    */
-  function toolResultOf(h: Harness, turnId: string): { content: string; isError?: boolean } | undefined {
-    const blocks = (h.deps.turns.get(turnId)?.messages ?? []).flatMap((m) => m.content);
-    return blocks.find((b) => b.type === 'tool_result') as { content: string; isError?: boolean } | undefined;
+  function toolResultOf(
+    h: Harness,
+    turnId: string,
+  ): { content: string; isError?: boolean } | undefined {
+    const blocks = (providerMessages(h.deps.turns.get(turnId)) ?? []).flatMap((m) => m.content);
+    return blocks.find((b) => b.type === 'tool_result') as
+      | { content: string; isError?: boolean }
+      | undefined;
   }
 
   it('(a) a non-rerunnable tool: the handler never runs, and no row is left behind', async () => {
@@ -376,7 +444,11 @@ describe('EFFECT WAL: an intent that cannot be written never reaches the handler
       tools: [
         {
           capability: 'demo.send', // declared `rerunnable: false` in `decls` above
-          spec: { name: 'demo_send', description: 's', inputSchema: { type: 'object', properties: {} } },
+          spec: {
+            name: 'demo_send',
+            description: 's',
+            inputSchema: { type: 'object', properties: {} },
+          },
           throwTier: 0,
           handler,
         },
@@ -390,14 +462,19 @@ describe('EFFECT WAL: an intent that cannot be written never reaches the handler
 
     expect(handler).not.toHaveBeenCalled();
     expect(h.calls()).toHaveLength(0); // no intent row, so nothing for endToolCall to have closed either
-    expect(toolResultOf(h, result.turnId)).toMatchObject({ isError: true, content: expect.stringContaining('non eseguita') });
+    expect(toolResultOf(h, result.turnId)).toMatchObject({
+      isError: true,
+      content: expect.stringContaining('non eseguita'),
+    });
     // The refusal is information for the model, not a crash for the turn.
     expect(result.stopped).toBe('answered');
   });
 
   it('(b) a rerunnable tool: the same gate applies — one rule, not one per tool', async () => {
     const handler = vi.fn(() => ({ content: 'letto', tier: 0 as const }));
-    const h = harness([callTool('demo_read'), answer('capito')], { tools: [readTool('demo_read', handler)] });
+    const h = harness([callTool('demo_read'), answer('capito')], {
+      tools: [readTool('demo_read', handler)],
+    });
     vi.spyOn(h.deps.turns, 'startToolCall').mockImplementation(() => {
       throw new Error('disco pieno');
     });
@@ -406,7 +483,10 @@ describe('EFFECT WAL: an intent that cannot be written never reaches the handler
 
     expect(handler).not.toHaveBeenCalled();
     expect(h.calls()).toHaveLength(0);
-    expect(toolResultOf(h, result.turnId)).toMatchObject({ isError: true, content: expect.stringContaining('non eseguita') });
+    expect(toolResultOf(h, result.turnId)).toMatchObject({
+      isError: true,
+      content: expect.stringContaining('non eseguita'),
+    });
   });
 
   it('(c) the happy path is unchanged: intent written, handler runs, outcome closes it', async () => {
@@ -415,7 +495,11 @@ describe('EFFECT WAL: an intent that cannot be written never reaches the handler
       tools: [
         {
           capability: 'demo.send',
-          spec: { name: 'demo_send', description: 's', inputSchema: { type: 'object', properties: {} } },
+          spec: {
+            name: 'demo_send',
+            description: 's',
+            inputSchema: { type: 'object', properties: {} },
+          },
           throwTier: 0,
           handler,
         },

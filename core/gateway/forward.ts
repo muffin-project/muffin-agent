@@ -494,12 +494,18 @@ function sendLine(sock: Socket, event: ServerEvent): void {
 }
 
 function lastAssistantText(row: TurnRecord): string | null {
-  for (let i = row.messages.length - 1; i >= 0; i -= 1) {
-    const m = row.messages[i];
-    if (!m || m.role !== 'assistant') continue;
-    const text = m.content
-      .filter((b): b is Extract<(typeof m.content)[number], { type: 'text' }> => b.type === 'text')
-      .map((b) => b.text)
+  const checkpoint = row.providerLease.checkpoint;
+  if (!Array.isArray(checkpoint)) return null;
+  for (let i = checkpoint.length - 1; i >= 0; i -= 1) {
+    const message: unknown = checkpoint[i];
+    if (typeof message !== 'object' || message === null || !('role' in message) || message.role !== 'assistant') continue;
+    if (!('content' in message) || !Array.isArray(message.content)) continue;
+    const text = message.content
+      .filter((block): block is { type: 'text'; text: string } =>
+        typeof block === 'object' && block !== null && 'type' in block && block.type === 'text' &&
+        'text' in block && typeof block.text === 'string',
+      )
+      .map((block) => block.text)
       .join('');
     if (text !== '') return text;
   }

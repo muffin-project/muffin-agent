@@ -2,6 +2,7 @@ import type { TurnCounters, TurnRecord } from '../../core/turns/store.js';
 import type { WaitSpec } from '../../core/turns/wait.js';
 import type { Message } from '../providers/types.js';
 import { rehydrateSensitiveEchoes } from './echo-rehydrate.js';
+import { providerMessages } from './provider-checkpoint.js';
 import { spendeIlBudget } from './permissions.js';
 
 /**
@@ -67,6 +68,8 @@ export class TurnRun {
   spentUsd: number;
   contextBuilt: boolean;
   activeModelMs: number;
+  /** A failed durable write keeps this lease read-only until it ends. */
+  durabilityFailure: string | null = null;
 
   /**
    * I token accumulati, mutati sul posto giro dopo giro.
@@ -180,7 +183,7 @@ export class TurnRun {
     this.contextBuilt = record.counters.contextBuilt;
     this.activeModelMs = Math.max(0, record.counters.activeModelMs ?? 0);
     this.usage = { ...record.counters.usage };
-    this.messages = [...record.messages];
+    this.messages = [...providerMessages(record)];
     // Deterministic replay of the live echo collector over durable pairs —
     // without this, any resume (crash or continuation) silently drops the
     // scrub protection for secrets this turn already read. No second copy is

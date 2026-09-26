@@ -298,8 +298,11 @@ export async function askWhichContinuation(
       tenant: opts.tenant,
       surface: opts.surface,
       sessionId: opts.sessionId,
-      model: deps.model,
-      messages: [{ role: 'user', content: [{ type: 'text', text: opts.text }] }],
+      inputText: opts.text,
+      providerLease: {
+        model: deps.model,
+        checkpoint: [{ role: 'user', content: [{ type: 'text', text: opts.text }] }],
+      },
       taint,
       counters: {
         iterations: 0,

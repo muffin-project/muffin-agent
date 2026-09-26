@@ -12,6 +12,7 @@ import { buildRuntime } from './runtime.js';
 import type { LoopDeps } from './loop.js';
 import { makeLaneRunner } from './turn-lane.js';
 import type { ChatResult, Provider } from './providers/types.js';
+import { providerMessages } from './loop/provider-checkpoint.js';
 
 /**
  * Accettazione · **un processo vero viene ucciso a metà turno, e al riavvio il
@@ -222,7 +223,7 @@ describe('accettazione · ucciso a metà turno, riprende al riavvio', () => {
     await settle(lane);
 
     const done = runtime.deps.turns.get(turnId)!;
-    const transcript = JSON.stringify(done.messages);
+    const transcript = JSON.stringify(providerMessages(done));
     runtime.close();
 
     // 1. It resumed, and the answer reached the surface the row named.

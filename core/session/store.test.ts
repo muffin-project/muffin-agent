@@ -61,6 +61,35 @@ describe('session transcript', () => {
     expect(store.read(ref)[0]?.content).toBe(awkward);
   });
 
+  it('projects a durable turn ingress at most once and rejects conflicting replay', () => {
+    const store = new SessionStore(home());
+    const ref = store.open('ingress');
+    const ingress: SessionMessage = {
+      ...msg('user', 'messaggio iniziale'),
+      traceId: 'turn-ingress-1',
+      tier: 0,
+    };
+    expect(store.appendTurnIngress(ref, ingress)).toBe(true);
+    expect(store.appendTurnIngress(ref, { ...ingress, createdAt: '2026-08-05T00:00:00Z' })).toBe(false);
+    expect(store.read(ref)).toHaveLength(1);
+    expect(() => store.appendTurnIngress(ref, { ...ingress, content: 'altro messaggio' })).toThrow(
+      /conflicting ingress projection/,
+    );
+  });
+
+  it('fails closed when legacy transcript data already duplicates a turn ingress', () => {
+    const store = new SessionStore(home());
+    const ref = store.open('duplicate-ingress');
+    const ingress: SessionMessage = {
+      ...msg('user', 'messaggio iniziale'),
+      traceId: 'turn-duplicate',
+      tier: 0,
+    };
+    store.append(ref, ingress);
+    store.append(ref, ingress);
+    expect(() => store.appendTurnIngress(ref, ingress)).toThrow(/duplicate ingress projection/);
+  });
+
   it('starts empty for a session that never existed', () => {
     const store = new SessionStore(home());
     expect(store.read(store.open('mai-vista'))).toEqual([]);

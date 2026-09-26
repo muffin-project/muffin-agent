@@ -60,8 +60,8 @@ Use only the modules relevant to the claim.
   passes the wrong tests. This has happened twice here, the second time after
   it had been written down, which is why it is written *here*, next to the step
   that reaches for it. A guard hook refuses the dangerous form
-  (`.claude/hooks/guard-restore-discard.mjs`), but hooks load at session start
-  and a judge cannot rely on one being armed.
+  (some maintainer environments install a guard hook), but hooks are local
+  tooling and a judge cannot rely on one being armed.
 
   To recover when it has already happened: `git checkout stash@{0} -- <file>`,
   or the reflog.

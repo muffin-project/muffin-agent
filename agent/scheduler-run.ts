@@ -435,15 +435,18 @@ function skipForBudget(
     tenant: fireTenant(job),
     surface: job.channel,
     sessionId: session.id,
+    inputText: jobPayload(job),
     // `CAPPED_MODEL`, non `SCRIPT_MODEL` e non una stringa a mano: dice quale
     // dei due motivi «senza modello» è questo, e `agent/loop.ts` la legge per
     // non riprendere col modello un turno nato dal rifiuto di chiamarlo.
-    model: CAPPED_MODEL,
+    providerLease: {
+      model: CAPPED_MODEL,
+      checkpoint: [{ role: 'user', content: [{ type: 'text', text: jobPayload(job) }] }],
+    },
     // La riga porta il job anche quando il modello non è stato chiamato: è
     // ciò che rende «quali giri di questo job sono stati rifiutati» una
     // query invece di una deduzione dal nome della sessione.
     jobId: job.id,
-    messages: [{ role: 'user', content: [{ type: 'text', text: jobPayload(job) }] }],
     // Il taint della riga, non un letterale: anche un giro che non parte
     // resta attribuito alla provenance che l'ha chiesto.
     taint: fireTaint(job),
@@ -533,12 +536,15 @@ async function runScript(
     tenant: fireTenant(job),
     surface: job.channel,
     sessionId: session.id,
+    inputText: `script: ${comando}`,
     // `SCRIPT_MODEL`, non una stringa scritta a mano: `agent/loop.ts` la legge
     // per rifiutarsi di riprendere attraverso il modello un turno che il
     // modello non ha mai visto.
-    model: SCRIPT_MODEL,
+    providerLease: {
+      model: SCRIPT_MODEL,
+      checkpoint: [{ role: 'user', content: [{ type: 'text', text: `script: ${comando}` }] }],
+    },
     jobId: job.id,
-    messages: [{ role: 'user', content: [{ type: 'text', text: `script: ${comando}` }] }],
     taint: fireTaint(job),
     counters,
     replyTo: { channel: job.channel },
@@ -552,7 +558,7 @@ async function runScript(
       turnId,
       {
         outcome,
-        messages: [
+      messages: [
           { role: 'user', content: [{ type: 'text', text: `script: ${comando}` }] },
           { role: 'assistant', content: [{ type: 'text', text }] },
         ],

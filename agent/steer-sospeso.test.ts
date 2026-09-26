@@ -14,6 +14,7 @@ import { TodoStore } from '../core/turns/todo.js';
 import { type LoopDeps, type RegisteredTool, resumeTurn, runTurn } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
 import type { ChatCall, ChatResult, Provider } from './providers/types.js';
+import { providerMessages } from './loop/provider-checkpoint.js';
 import { makeWaitTool, waitCapability } from './tools/wait.js';
 
 /**
@@ -170,7 +171,7 @@ describe('una correzione pendente quando il turno si sospende', () => {
     // `runTurn` (il `finally` del connettore cancella la voce `vivi`).
     const row = w.turns.get(first.turnId)!;
     expect(row.status).toBe('waiting');
-    expect(quante(row.messages, CORREZIONE)).toBe(1);
+    expect(quante(providerMessages(row), CORREZIONE)).toBe(1);
     // Drenata: la superficie ha già detto «ricevuto», e la porta non la tiene.
     expect(coda).toEqual([]);
 
@@ -249,13 +250,13 @@ describe('una correzione pendente quando il turno si sospende', () => {
     // Consumata in cima al giro 2, che poi chiede `wait`; il giro 3 sospende.
     expect(first.stopped).toBe('suspended');
     expect(prompt(w.provider.seen[1])).toContain(CORREZIONE);
-    expect(quante(w.turns.get(first.turnId)!.messages, CORREZIONE)).toBe(1);
+    expect(quante(providerMessages(w.turns.get(first.turnId)!), CORREZIONE)).toBe(1);
     expect(quante(w.sessions.read(session), CORREZIONE)).toBe(0);
 
     const resumed = await resumeTurn(w.deps, first.turnId);
     expect('why' in resumed).toBe(false);
     expect(quante(w.provider.seen[2]!.messages, CORREZIONE)).toBe(1);
-    expect(quante(w.turns.get(first.turnId)!.messages, CORREZIONE)).toBe(1);
+    expect(quante(providerMessages(w.turns.get(first.turnId)!), CORREZIONE)).toBe(1);
     expect(quante(w.sessions.read(session), CORREZIONE)).toBe(0);
   });
 });
