@@ -14,10 +14,13 @@
 #   - no privilege: non-root, not privileged, no Docker socket, every capability
 #     dropped, no-new-privileges, and the key in no log or inspect output.
 #   - bounded: process and memory ceilings cover everything in the gateway
-#     container, sandboxed commands included. A command that forks or allocates
-#     without end hits them, and the gateway keeps running. The load is bounded
-#     (2000 processes, 1.5 GiB), so a missing ceiling fails the check instead of
-#     exhausting the host.
+#     container, sandboxed commands included, so a runaway command cannot
+#     exhaust the host. Checked here: a fork storm, and one process that
+#     allocates without end, after which the gateway is still running. Not a
+#     claim: memory spread over smaller processes, or written to the sandbox's
+#     in-memory filesystems, gets the gateway itself killed (README). The load is
+#     bounded (2000 processes, 1.5 GiB), so a missing ceiling fails the check
+#     instead of exhausting the host.
 #
 # Postures: default (Docker defaults), then sandbox (compose.sandbox.yaml, plus
 # compose.apparmor.yaml when MUFFIN_EVAL_APPARMOR=1 on a host with the profile
@@ -134,7 +137,7 @@ check_posture() {
   local limits
   limits=$(docker inspect -f '{{.HostConfig.PidsLimit}} {{.HostConfig.Memory}} {{.HostConfig.MemorySwap}}' "$GATEWAY")
   if [ "$limits" = "$PIDS_LIMIT $MEM_BYTES $MEM_BYTES" ]; then
-    pass "ceilings set: $PIDS_LIMIT processes, $MEM_BYTES bytes of memory, no extra swap"
+    pass "ceilings set: $PIDS_LIMIT processes and threads, $MEM_BYTES bytes of memory, no extra swap"
   else
     fail "PidsLimit/Memory/MemorySwap are '$limits', expected '$PIDS_LIMIT $MEM_BYTES $MEM_BYTES'"
   fi
@@ -168,7 +171,7 @@ check_ceilings() {
   before=$(docker inspect -f '{{.State.StartedAt}} {{.RestartCount}}' "$GATEWAY")
   idle=$(docker exec "$GATEWAY" cat /sys/fs/cgroup/pids.current)
   mem_idle=$(docker exec "$GATEWAY" cat /sys/fs/cgroup/memory.current)
-  echo "  info  idle container: $idle processes, $((mem_idle / 1048576)) MiB"
+  echo "  info  idle container: $idle processes and threads, $((mem_idle / 1048576)) MiB"
   refused_before=$(docker exec "$GATEWAY" sed -n 's/^max //p' /sys/fs/cgroup/pids.events)
   local spawn='i=0; while [ $i -lt 2000 ]; do sleep 10 & i=$((i+1)); done'
   if [ "$how" = sandboxed ]; then
@@ -237,7 +240,7 @@ fi
 defaults=$( (unset MUFFIN_GATEWAY_MEM_LIMIT MUFFIN_GATEWAY_PIDS_LIMIT; compose config 2>/dev/null) |
   sed -n 's/^ *\(pids_limit\|mem_limit\|memswap_limit\): *"\{0,1\}\([0-9]*\)"\{0,1\}$/\1=\2/p' | sort | tr '\n' ' ')
 if [ "$defaults" = "mem_limit=2147483648 memswap_limit=2147483648 pids_limit=512 " ]; then
-  pass "default ceilings: 512 processes, 2 GiB of memory, no extra swap"
+  pass "default ceilings: 512 processes and threads, 2 GiB of memory, no extra swap"
 else
   fail "default ceilings are '$defaults'"
 fi
