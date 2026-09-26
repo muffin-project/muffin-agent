@@ -47,9 +47,17 @@ describe('memory store', () => {
     expect(s.addTurnIngressOnce({ ...ingress, tenantId: GROUP })).not.toBe(first);
   });
 
-  it('does not mistake another episode kind for an already projected ingress', () => {
+  /**
+   * Production writes two episodes under one `turn_id`: the owner's ingress
+   * and the agent's own answer (`agent/loop/round.ts`). The ingress projection
+   * must ignore the answer — not throw on it — or a preamble replay where the
+   * answer already exists and `contextBuilt` is still false on disk loops
+   * forever as an `interrupted` turn. This test replaces one that asserted the
+   * opposite and made the defect the contract.
+   */
+  it('projects the ingress beside the agent answer that shares the turn id', () => {
     const s = store();
-    const prior = s.addEpisode({
+    const answer = s.addEpisode({
       tenantId: HOST,
       connector: 'cli',
       threadKey: 's1',
@@ -60,21 +68,65 @@ describe('memory store', () => {
       createdAt: '2026-08-04T10:00:00Z',
       turnId: 'turn-collision',
     });
-    expect(prior).toBeGreaterThan(0);
-    expect(() =>
-      s.addTurnIngressOnce({
-        tenantId: HOST,
-        connector: 'cli',
-        threadKey: 's1',
-        role: 'user',
-        kind: 'message',
-        content: 'richiesta',
-        trustTier: 0,
-        createdAt: '2026-08-04T10:00:00Z',
-        turnId: 'turn-collision',
-      }),
-    ).toThrow(/conflicting ingress projection/);
-    expect(s.pendingEpisodes(HOST, 1)).toHaveLength(1);
+    const ingress = {
+      tenantId: HOST,
+      connector: 'cli',
+      threadKey: 's1',
+      role: 'user' as const,
+      kind: 'message' as const,
+      content: 'richiesta',
+      trustTier: 0 as const,
+      createdAt: '2026-08-04T10:00:00Z',
+      turnId: 'turn-collision',
+    };
+
+    const id = s.addTurnIngressOnce(ingress);
+    expect(id).toBeGreaterThan(0);
+    expect(id).not.toBe(answer);
+    // The resumed-preamble shape: the same projection replayed is the same row.
+    expect(s.addTurnIngressOnce({ ...ingress, createdAt: '2026-08-04T10:05:00Z' })).toBe(id);
+    // The answer is untouched, and both exchange halves share the turn.
+    expect(s.episodeById(HOST, answer)?.content).toBe('risposta');
+    expect(s.pendingEpisodes(HOST, 1)).toHaveLength(2);
+    // A genuine second ingress for the same turn is still a conflict.
+    expect(() => s.addTurnIngressOnce({ ...ingress, content: 'altra richiesta' })).toThrow(
+      /conflicting ingress projection/,
+    );
+  });
+
+  /**
+   * The exact production order, and the shape that used to loop: ingress →
+   * agent answer (same turn id) → the preamble runs again because
+   * `contextBuilt` was not persisted (a swallowed checkpoint write, then a
+   * crash). It must be a replay of the same ingress row, never a conflict.
+   */
+  it('a resumed preamble after the answer exists replays the same ingress', () => {
+    const s = store();
+    const ingress = {
+      tenantId: HOST,
+      connector: 'cli',
+      threadKey: 's1',
+      role: 'user' as const,
+      kind: 'message' as const,
+      content: 'richiesta',
+      trustTier: 0 as const,
+      createdAt: '2026-08-04T10:00:00Z',
+      turnId: 'turn-resume',
+    };
+    const first = s.addTurnIngressOnce(ingress);
+    s.addEpisode({
+      tenantId: HOST,
+      connector: 'cli',
+      threadKey: 's1',
+      role: 'agent',
+      kind: 'message',
+      content: 'risposta',
+      trustTier: 0,
+      createdAt: '2026-08-04T10:01:00Z',
+      turnId: 'turn-resume',
+    });
+
+    expect(s.addTurnIngressOnce({ ...ingress, createdAt: '2026-08-04T10:10:00Z' })).toBe(first);
   });
 
   it('migrates a database that predates origin and importance, without losing its rows', () => {
