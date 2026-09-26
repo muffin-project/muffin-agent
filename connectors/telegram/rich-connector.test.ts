@@ -260,7 +260,7 @@ describe('rich end to end · over-compat answers stay whole on legacy (D)', () =
   });
 });
 
-describe('rich end to end · ordinary prose is untouched (A)', () => {
+describe('rich end to end · ordinary prose stays on the legacy transport (A)', () => {
   it('a simple answer sends legacy once, with zero rich anywhere', async () => {
     const provider = plainProvider('Ciao, tutto bene con **calma**.');
     const { api, calls } = recordingApi();
@@ -269,6 +269,10 @@ describe('rich end to end · ordinary prose is untouched (A)', () => {
     try {
       await deliver(connector, [privateMsg(6, 'come va?')]);
 
+      // A prose answer without rich-native constructs keeps the proven legacy
+      // path; the answer that follows a step trail is the one that becomes rich
+      // (see the handoff case). Making prose rich is a follow-up that needs the
+      // test fakes to speak the rich methods.
       expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
       expect(calls.filter((c) => c.method.startsWith('sendRich'))).toHaveLength(0);
       expect(calls.filter((c) => c.method.startsWith('editMessageRich'))).toHaveLength(0);
