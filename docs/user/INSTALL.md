@@ -24,6 +24,26 @@ actually happens; `bootstrap.sh` owns only the pipe-to-controlling-TTY handoff.
 This page says what the command is for, what it will do to your machine, and how
 to undo it.
 
+## Install modes: personal (default) and checkout
+
+`install.sh` never guesses the mode from where the script happens to sit.
+
+- **personal** — the default, and what the public command uses. Code and Node
+  go under `~/.local/share/muffin`, releases under
+  `~/.local/share/muffin/src/.releases`, and the launcher in `~/.local/bin`.
+  Running `./install.sh` from a clone is a personal install: your command and
+  updater state are not bound to that checkout, and no `.releases/` is written
+  there.
+- **checkout** — development only, and explicit: `--checkout` or
+  `MUFFIN_MODE=checkout`. The launcher points at *this* checkout's `dist/`, and
+  `muffin update` stores releases under its `.releases/`. It refuses to run
+  outside a `muffin-agent` checkout, and it warns that the launcher follows that
+  checkout.
+
+`install.sh --paths` prints the resolved source, releases, Node, launcher and
+runtime data home and changes nothing on the machine — useful before an install
+and for scripts that need to know where things will land.
+
 ## What it does, in order
 
 | Step | What ends up where |
