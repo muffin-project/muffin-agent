@@ -1,7 +1,7 @@
 import type { TurnEvent } from '../../agent/loop.js';
 import { toolPhrase, toolProgress } from '../../agent/tool-phrase.js';
 import type { Negotiation } from '../../core/surface/types.js';
-import type { TelegramApiLike } from './api.js';
+import { TelegramError, type TelegramApiLike } from './api.js';
 import { escapeHtml, splitHtml, TELEGRAM_MAX, toTelegramHtml } from './render.js';
 import { planRich, richFromHtml, type OutboundRich } from './rich.js';
 
@@ -321,6 +321,12 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         return await api.editMessageRichText(chatId, messageId!, rich);
       } catch (error) {
         if (nonModificato(error)) throw error;
+        // Fall back ONLY on a deterministic refusal (a status > 0). A status-0
+        // failure is ambiguous — Telegram may already have accepted the
+        // message — and re-sending here would duplicate the transcript. This
+        // mirrors `delivery.ts`, which records `possibly_sent` and does not
+        // retry. The caller disables the transcript on the rethrow.
+        if (!(error instanceof TelegramError && error.status > 0)) throw error;
         richTransport = false;
         log(`telegram: trasporto rich rifiutato, torno a legacy — ${error instanceof Error ? error.message : String(error)}`);
       }
