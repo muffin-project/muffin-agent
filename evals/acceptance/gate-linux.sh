@@ -62,6 +62,9 @@ COPYFILE_DISABLE=1 tar cf "$OUT/repo.tar" -C "$OUT/src" .
 # network (#702 made the personal default fetch public `main`; checkout mode is
 # how the gate binds the installer to the candidate).
 EXPECTED_SHA=$(git -C "$OUT/src" rev-parse --short=12 HEAD 2>/dev/null || echo "")
+# Fail closed: without the sha the tree-identity assertion below would silently
+# disappear, which is the failure this repository keeps paying for.
+[ -n "$EXPECTED_SHA" ] || { echo "gate-linux: non riesco a leggere lo sha in prova da $OUT/src" >&2; exit 1; }
 
 # Le due opzioni di sicurezza sono l'equivalente container del profilo AppArmor
 # che il workflow installa su ubuntu-latest: il seccomp di default di Docker

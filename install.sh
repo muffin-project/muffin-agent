@@ -125,7 +125,7 @@ USAGE
 done
 
 is_clone=0
-if [ -n "$SCRIPT_DIR" ] && [ -d "$SCRIPT_DIR/.git" ] && [ -f "$SCRIPT_DIR/package.json" ] &&
+if [ -n "$SCRIPT_DIR" ] && [ -e "$SCRIPT_DIR/.git" ] && [ -f "$SCRIPT_DIR/package.json" ] &&
   grep -q '"name": *"muffin-agent"' "$SCRIPT_DIR/package.json" 2>/dev/null; then
   is_clone=1
 fi
