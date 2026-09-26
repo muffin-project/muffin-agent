@@ -1,13 +1,32 @@
 #!/bin/sh
 # Entrypoint of the experimental Muffin gateway container (contrib/docker/README.md).
 #
-# With arguments it runs them (`docker compose run --rm gateway muffin init`).
-# Without, it waits for a configured home, prints `muffin doctor` to the log and
-# runs `muffin gateway run` in the foreground: the container restart policy
-# stands in for the systemd/launchd unit, which does not exist in a container.
+#   (no arguments)     wait for a configured home, print `muffin doctor` to the
+#                      log, then run `muffin gateway run` in the foreground: the
+#                      container restart policy stands in for the systemd/launchd
+#                      unit, which does not exist in a container.
+#   init-from-secret   one-shot unattended `muffin init`, used by the `init`
+#                      service: the key is read from the compose secret on stdin
+#                      and the container exits. The long-running gateway never
+#                      has the secret mounted, so its sandboxed shell cannot read it.
+#   anything else      run as a command (`docker compose run --rm gateway muffin init`).
 set -eu
 
 log() { printf '[muffin-container] %s\n' "$*"; }
+
+if [ "${1:-}" = init-from-secret ]; then
+  KEY_FILE=/run/secrets/muffin_provider_key
+  [ -f "$KEY_FILE" ] || { log "no secret at $KEY_FILE"; exit 78; }
+  if [ -f "$MUFFIN_HOME/config.json" ]; then
+    log "home already initialised: nothing to do"
+    exit 0
+  fi
+  : "${MUFFIN_INIT_PROVIDER:?MUFFIN_INIT_PROVIDER is required}"
+  set -- --provider "$MUFFIN_INIT_PROVIDER"
+  if [ -n "${MUFFIN_INIT_BASE_URL:-}" ]; then set -- "$@" --base-url "$MUFFIN_INIT_BASE_URL"; fi
+  if [ -n "${MUFFIN_INIT_MODEL:-}" ]; then set -- "$@" --model "$MUFFIN_INIT_MODEL"; fi
+  exec muffin init "$@" < "$KEY_FILE"
+fi
 
 if [ "$#" -gt 0 ]; then
   exec "$@"
@@ -15,22 +34,7 @@ fi
 
 log "build=$(git -C /opt/muffin rev-parse --short HEAD 2>/dev/null || echo unknown) uid=$(id -u) $(bwrap --version 2>&1)"
 
-# Unattended first run: the provider key comes from a file (a compose secret),
-# never from the environment or the command line (ADR-0048).
-KEY_FILE=/run/secrets/muffin_provider_key
-if [ ! -f "$MUFFIN_HOME/config.json" ] && [ -f "$KEY_FILE" ]; then
-  : "${MUFFIN_INIT_PROVIDER:?MUFFIN_INIT_PROVIDER is required when a key file is mounted}"
-  set -- --provider "$MUFFIN_INIT_PROVIDER"
-  if [ -n "${MUFFIN_INIT_BASE_URL:-}" ]; then set -- "$@" --base-url "$MUFFIN_INIT_BASE_URL"; fi
-  if [ -n "${MUFFIN_INIT_MODEL:-}" ]; then set -- "$@" --model "$MUFFIN_INIT_MODEL"; fi
-  if muffin init "$@" < "$KEY_FILE"; then
-    log "muffin init completed from the mounted key file"
-  else
-    log "muffin init FAILED; see the lines above"
-  fi
-fi
-
-# Interactive first run: wait until `muffin init` has written and sealed the home.
+# First run: wait until `muffin init` has written and sealed the home.
 if [ ! -f "$MUFFIN_HOME/config.json" ] || [ ! -f "$MUFFIN_HOME/.rot-anchor" ]; then
   log "not configured yet. Run: docker compose exec -it gateway muffin init"
   log "the gateway starts by itself as soon as the home is initialised."
