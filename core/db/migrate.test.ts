@@ -251,7 +251,7 @@ describe('migrazione 2 — jobs.kind', () => {
     // (`slice/una-promessa-torna`) are genuine no-ops here — but `migrate()` still runs and stamps them, the
     // same way migration 2 itself no-ops (and still counts) on a database where
     // `jobs` is absent, two tests below.
-    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8]);
+    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
     const riga = db.prepare(`SELECT goal, kind FROM jobs WHERE id = 'j1'`).get() as {
       goal: string;
       kind: string;
@@ -271,7 +271,7 @@ describe('migrazione 2 — jobs.kind', () => {
     // e prima che `MemoryStore` crei `facts` e `TodoStore` crei `todos`,
     // motivo per cui la 3 e la 4 arrivano fin qui allo stesso modo.
     expect(() => migrate(db, { backupDir: backups })).not.toThrow();
-    expect(schemaVersionOf(db)).toBe(8);
+    expect(schemaVersionOf(db)).toBe(9);
   });
 });
 
@@ -314,7 +314,7 @@ describe('migrazione 3 — facts.pinned', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8]);
+    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
     const pinned = db.prepare(`SELECT id FROM facts WHERE pinned = 1 ORDER BY id`).all() as { id: number }[];
     expect(pinned.map((r) => r.id)).toEqual([1, 2, 3]);
     // Rows survive untouched — this is a backfill, not a rewrite.
@@ -362,7 +362,7 @@ describe('migrazione 3 — facts.pinned', () => {
     // The fresh-install case: `MemoryStore` has not run yet, so `facts` is not
     // there for this migration to touch — same guard, same reason as jobs.kind.
     expect(() => migrate(db, { backupDir: backups })).not.toThrow();
-    expect(schemaVersionOf(db)).toBe(8);
+    expect(schemaVersionOf(db)).toBe(9);
   });
 });
 
@@ -390,7 +390,7 @@ describe('migrazioni 4 e 5 — todos.due_at, poi todos.due_tier', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8]);
+    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
     const colonne = (db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>).map((c) => c.name);
     expect(colonne).toContain('due_at');
     expect(colonne).toContain('due_tier');
@@ -433,7 +433,7 @@ describe('migrazioni 4 e 5 — todos.due_at, poi todos.due_tier', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([5, 6, 7, 8]);
+    expect(res.applied).toEqual([5, 6, 7, 8, 9]);
     const colonne = (db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>).map((c) => c.name);
     expect(colonne).toContain('due_tier');
     // La query che moriva: è questa a rendere l'asserzione un comportamento e
@@ -584,11 +584,59 @@ describe('migrazione 8 — Turn schema authority', () => {
 
       const res = migrate(db, { backupDir: join(dir, 'backups') });
 
-      expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8]);
+      expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
       const row = db.prepare(`SELECT input_text, status, model, messages FROM turns WHERE id = 't1'`).get();
       expect(row).toEqual({ input_text: null, status: 'done', model: 'model-x', messages: '[]' });
+      const columns = (db.prepare(`PRAGMA table_info(turns)`).all() as Array<{ name: string }>).map((c) => c.name);
+      expect(columns).toContain('continuation_candidates');
       const sql = (db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'turns'`).get() as { sql: string }).sql;
       expect(sql).toContain("'continuable'");
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * The reconciliation seam, red-first. #707 added `continuation_candidates`
+   * after v8 existed; the rebuild must carry the values of a table that
+   * already has the column, not just add an empty one. Delete the column from
+   * the rebuild's derived intersection (or hand-copy a list that forgets it)
+   * and this test loses the value.
+   */
+  it('carries populated continuation_candidates through the status rebuild', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-migrate-8-cc-'));
+    const db = new DatabaseCtor(join(dir, 'muffin.db'));
+    try {
+      db.exec(`
+        CREATE TABLE turns (
+          id TEXT PRIMARY KEY, principal TEXT NOT NULL, tenant TEXT NOT NULL,
+          surface TEXT NOT NULL, session_id TEXT NOT NULL, model TEXT NOT NULL,
+          messages TEXT NOT NULL, taint INTEGER NOT NULL CHECK (taint BETWEEN 0 AND 3),
+          counters TEXT NOT NULL, reply_to TEXT, job_id TEXT,
+          status TEXT NOT NULL CHECK (status IN ('runnable','running','waiting','interrupted','done')),
+          wake_at TEXT, wait_for TEXT, claimed_by INTEGER, claimed_at TEXT,
+          turn_outcome TEXT, delivery TEXT, continuation_candidates TEXT,
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint,
+                           counters, status, continuation_candidates, created_at, updated_at)
+        VALUES ('t1', '{"kind":"owner"}', 'host', 'cli', 's1', 'model-x', '[]', 0,
+                '{}', 'done', '[{"id":"aaa111","updatedAt":"2026-09-25T00:00:00Z","summary":"turno"}]',
+                '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z');
+      `);
+      migrate(db, { backupDir: join(dir, 'backups'), migrations: [] });
+
+      const res = migrate(db, { backupDir: join(dir, 'backups') });
+
+      expect(res.applied).toContain(8);
+      const row = db
+        .prepare(`SELECT status, continuation_candidates FROM turns WHERE id = 't1'`)
+        .get() as { status: string; continuation_candidates: string };
+      expect(row.status).toBe('done');
+      expect(JSON.parse(row.continuation_candidates)).toEqual([
+        { id: 'aaa111', updatedAt: '2026-09-25T00:00:00Z', summary: 'turno' },
+      ]);
     } finally {
       db.close();
       rmSync(dir, { recursive: true, force: true });

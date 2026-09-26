@@ -315,24 +315,47 @@ const MIGRATIONS: Migration[] = [
         .get() as { sql: string } | undefined;
       if (current === undefined || current.sql.includes("'continuable'")) return;
 
+      // `rebuildTable` derives the column intersection from the two real
+      // shapes and aborts if the row count changes. A hand-copied column list
+      // was the first version here, and it carried exactly the defect this
+      // repository keeps paying for: adding a column to the canonical DDL
+      // without remembering its name in a second list loses the values
+      // silently, and no test notices because the shared intersection is
+      // implicit. The reconciliation with #707's `continuation_candidates` is
+      // the concrete case.
       const createNew = TURN_TABLE_SCHEMA.replace(
         'CREATE TABLE IF NOT EXISTS turns',
-        'CREATE TABLE turns_new',
+        'CREATE TABLE IF NOT EXISTS "{T}"',
       );
       if (createNew === TURN_TABLE_SCHEMA) {
         throw new Error('turn migration: canonical table DDL not found');
       }
-      const columns =
-        'id, principal, tenant, surface, session_id, input_text, model, messages, taint, counters, reply_to, job_id, ' +
-        'status, wake_at, wait_for, claimed_by, claimed_at, claim_token, turn_outcome, delivery, ' +
-        'lease_index, continuable_reason, lifetime, continuation_candidates, created_at, updated_at';
-      db.exec('DROP TABLE IF EXISTS turns_new');
-      db.exec(createNew);
-      db.exec(`INSERT INTO turns_new (${columns}) SELECT ${columns} FROM turns`);
-      db.exec('DROP TABLE turns');
-      db.exec('ALTER TABLE turns_new RENAME TO turns');
-      db.exec('CREATE INDEX IF NOT EXISTS idx_turns_status ON turns(status, updated_at)');
-      db.exec('CREATE INDEX IF NOT EXISTS idx_turns_due ON turns(status, wake_at)');
+      rebuildTable(db, 'turns', createNew, {
+        indexes: [
+          'CREATE INDEX IF NOT EXISTS idx_turns_status ON turns(status, updated_at)',
+          'CREATE INDEX IF NOT EXISTS idx_turns_due ON turns(status, wake_at)',
+        ],
+      });
+    },
+  },
+  {
+    // v8 shipped the turn-schema rebuild, but the reconciliation with #707
+    // added `continuation_candidates` to that same version after it had already
+    // run on some homes (the `due_at`/`due_tier` incident, migration 5's own
+    // lesson: a stamped version is never edited again). v9 re-adds the column
+    // idempotently so a home stamped at the intermediate v8 still gets it; a
+    // home migrated by the current v8 already has it and this is a no-op.
+    version: 9,
+    description: 'turns.continuation_candidates — the ambiguity question survives a restart (#707)',
+    up: (db) => {
+      const hasTable = db
+        .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'turns'`)
+        .get();
+      if (hasTable === undefined) return;
+      const hasColumn = (
+        db.prepare(`PRAGMA table_info(turns)`).all() as Array<{ name: string }>
+      ).some((c) => c.name === 'continuation_candidates');
+      if (!hasColumn) db.exec(`ALTER TABLE turns ADD COLUMN continuation_candidates TEXT`);
     },
   },
 ];

@@ -944,7 +944,7 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     expect(objects.find((o) => o.name === 'turns')?.sql).toContain("'continuable'");
   });
 
-  it('a half-finished rebuild (stray turns_new) recovers with data intact', () => {
+  it('a half-finished rebuild (stray turns__rebuild) recovers with data intact', () => {
     const db = new DatabaseCtor(':memory:');
     db.exec(`CREATE TABLE turns (
       id TEXT PRIMARY KEY, principal TEXT NOT NULL, tenant TEXT NOT NULL, surface TEXT NOT NULL,
@@ -954,7 +954,7 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
       wake_at TEXT, wait_for TEXT, claimed_by INTEGER, claimed_at TEXT, claim_token TEXT,
       turn_outcome TEXT, delivery TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
-    CREATE TABLE turns_new (id TEXT PRIMARY KEY, mezza TEXT);`);
+    CREATE TABLE turns__rebuild (id TEXT PRIMARY KEY, mezza TEXT);`);
     db.prepare(
       `INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint, counters, status, created_at, updated_at)
        VALUES ('sopravvissuto', ?, 'host', 'cli', 's1', 'm', '[]', 0, ?, 'done', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`,
@@ -963,7 +963,7 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     migrateLegacyTurns(db);
     const s = new TurnStore(db, () => new Date(), () => true);
     expect(s.get('sopravvissuto')?.status).toBe('done');
-    const leftover = db.prepare(`SELECT name FROM sqlite_master WHERE name = 'turns_new'`).get();
+    const leftover = db.prepare(`SELECT name FROM sqlite_master WHERE name = 'turns__rebuild'`).get();
     expect(leftover).toBeUndefined();
   });
 
