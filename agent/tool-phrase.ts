@@ -1,3 +1,5 @@
+import { redactText } from '../core/tracing/redact.js';
+
 /**
  * Come si dice, a una persona, quello che l'agente sta facendo.
  *
@@ -6,6 +8,13 @@
  * Le due superfici che descrivono un turno in corso — il terminale e Telegram
  * — leggono da questo file, così una frase nuova arriva a entrambe o a
  * nessuna.
+ *
+ * Da questa slice il file espone **due fatti separati** per lo stesso passo:
+ * una riga breve che dice *cosa* sta facendo (`toolProgress().summary`) e, solo
+ * quando il soggetto non ci sta, il dettaglio esatto per chi vuole guardarlo
+ * (`toolProgress().detail`). Il dettaglio è testo, non HTML: la forma (una
+ * citazione richiudibile su Telegram, qualcos'altro altrove) la sceglie la
+ * superficie, perché `agent/` non conosce Telegram.
  */
 
 /**
@@ -101,14 +110,29 @@ const TOOL_SUBJECT: Readonly<Record<string, string | readonly string[]>> = {
 const SOGGETTO_MASSIMO = 48;
 
 /**
- * Il soggetto da mostrare accanto alla frase, o `''` se non c'è.
+ * Quanto può essere lungo il dettaglio esatto. Non è il tetto di un messaggio
+ * Telegram (4096, e `splitHtml` lo rispetta): è il tetto di *questo blocco*,
+ * perché un dettaglio richiudibile da migliaia di caratteri resta un muro da
+ * leggere il giorno che qualcuno lo apre, e il transcript intero si porta
+ * dietro più di un passo. Oltre il tetto si tronca **dichiarandolo**.
+ */
+const DETTAGLIO_MASSIMO = 500;
+
+/**
+ * Il soggetto grezzo, appiattito e **redatto**, o `''` se non c'è.
  *
  * Gli argomenti li ha scritti il **modello**: possono contenere a capo, escape
- * e qualunque cosa. Si appiattiscono e si accorciano prima di toccare un
- * terminale — una sequenza di escape dentro un percorso, stampata cruda, muove
- * il cursore del riquadro che sta appena sotto.
+ * e qualunque cosa. Si appiattiscono prima di toccare un terminale — una
+ * sequenza di escape dentro un percorso, stampata cruda, muove il cursore del
+ * riquadro che sta appena sotto.
+ *
+ * La redazione è la stessa rete di ogni output visibile all'owner
+ * (`core/tracing/redact.ts`): il dettaglio esatto non è una scorciatoia intorno
+ * alle regole di privacy, quindi un valore a forma di segreto diventa un
+ * marcatore anche qui, e prima del troncamento — una chiave tagliata a 48
+ * caratteri non deve sfuggire perché il pattern finiva oltre il taglio.
  */
-export function toolSubject(name: string, args: unknown): string {
+function flattenSubject(name: string, args: unknown): string {
   const campo = TOOL_SUBJECT[name];
   if (campo === undefined || args === null || typeof args !== 'object') return '';
   const campi = typeof campo === 'string' ? [campo] : campo;
@@ -117,13 +141,40 @@ export function toolSubject(name: string, args: unknown): string {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: il modello ha scritto grezzo, i caratteri di controllo vanno tolti prima del terminale
   const piatto = grezzo.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (piatto === '') return '';
+  return redactText(piatto);
+}
+
+/** Il soggetto da mostrare accanto alla frase, accorciato, o `''` se non c'è. */
+export function toolSubject(name: string, args: unknown): string {
+  const piatto = flattenSubject(name, args);
+  if (piatto === '') return '';
   return piatto.length > SOGGETTO_MASSIMO ? `${piatto.slice(0, SOGGETTO_MASSIMO - 1)}…` : piatto;
+}
+
+/**
+ * Un passo del turno, in due pezzi: la riga breve e — solo se il soggetto non
+ * ci sta — il dettaglio esatto da mostrare a richiesta.
+ *
+ * `detail` è assente quando non aggiunge niente (soggetto corto): è la metà
+ * che tiene la promessa «nessun blocco inutile», e sta qui e non nella
+ * superficie perché due superfici non devono decidere due volte quando un
+ * dettaglio esiste.
+ */
+export type ToolProgress = { summary: string; detail?: string };
+
+export function toolProgress(name: string, args: unknown): ToolProgress {
+  const piatto = flattenSubject(name, args);
+  const soggetto = piatto === '' ? '' : toolSubject(name, args);
+  const summary = soggetto === '' ? toolPhrase(name) : `${toolPhrase(name)}: ${soggetto}`;
+  // `piatto === soggetto` significa che non è stato troncato: nessun dettaglio.
+  if (piatto === '' || piatto === soggetto) return { summary };
+  const detail = piatto.length > DETTAGLIO_MASSIMO ? `${piatto.slice(0, DETTAGLIO_MASSIMO - 1)}…` : piatto;
+  return { summary, detail };
 }
 
 /** La frase, col suo soggetto quando ce n'è uno. */
 export function toolLine(name: string, args: unknown): string {
-  const soggetto = toolSubject(name, args);
-  return soggetto === '' ? toolPhrase(name) : `${toolPhrase(name)}: ${soggetto}`;
+  return toolProgress(name, args).summary;
 }
 
 /** Il nome grezzo è il fallback, mai un errore: un tool MCP non è in questa mappa e non può esserlo. */
