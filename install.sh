@@ -37,13 +37,22 @@
 # with it. Hence MUFFIN_PREFIX (default `~/.local/share/muffin`), which
 # `uninstall` does not touch and `./install.sh --uninstall` names on request.
 #
-# ## Overrides (all optional)
+# ## Modes and overrides (all optional)
 #
-#   MUFFIN_PREFIX=~/.local/share/muffin   where the checkout and Node live
+#   --personal | --checkout               install mode; personal is the default
+#                                         and never binds to a source checkout.
+#                                         MUFFIN_MODE does the same from the env.
+#   --paths                               print the resolved paths and exit
+#   --uninstall                           remove this build's launcher symlink(s)
+#
+#   MUFFIN_PREFIX=~/.local/share/muffin   where the code and Node live
 #   MUFFIN_BINDIR=~/.local/bin            where the launcher symlink goes
 #   MUFFIN_CMD=muffin                     force the command name (see the Mint note)
 #   MUFFIN_REPO=<git url>                 where to clone from
 #   MUFFIN_CHANNEL=main                   which branch to install
+#   MUFFIN_HOME=~/.muffin                 runtime data home; reported here, read
+#                                         by the runtime, never touched by this
+#                                         installer
 #   MUFFIN_API_KEY_FILE=<path>            unattended setup: the key is read from
 #                                         this file and piped into `muffin init`.
 #                                         A path, never the value: a secret in an
@@ -70,35 +79,106 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 # ---------------------------------------------------------------------------
-# 0. Where is the source?
+# 0. Arguments, mode, and where the source is.
 #
-# Two modes, decided by a fact and not by a flag: does the directory this script
-# was read from actually contain Muffin's own package.json? Piped through
-# `sh`, `$0` is the shell itself and `dirname` gives the working directory —
-# which is why the test is the package *name* and not the mere existence of a
-# file called package.json (a `curl | sh` run inside some other project's
-# directory would otherwise try to build that project).
+# Two install modes, and the choice is **explicit** — the script never infers
+# it from where it happens to sit:
+#
+#   personal (default)  code and Node under $MUFFIN_PREFIX; the launcher and
+#                       `muffin update`'s releases stay there. A personal
+#                       install never writes `.releases/` into a source clone.
+#   checkout            only with `--checkout` (or MUFFIN_MODE=checkout): the
+#                       launcher points at THIS checkout's `dist/`, and
+#                       `muffin update` stores releases under its `.releases/`.
+#                       Development mode, named as such.
+#
+# Running this script from a clone used to select checkout mode silently, just
+# because the directory contained Muffin's package.json (#702). Now the same
+# run is a personal install and says so, with the one flag that changes it.
+#
+# `--paths` resolves and prints the same paths without touching the machine.
 # ---------------------------------------------------------------------------
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd || echo "")
-if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/package.json" ] &&
+
+FLAG_MODE=""
+UNINSTALL=0
+PATHS_ONLY=0
+for arg in "$@"; do
+  case "$arg" in
+    --checkout) FLAG_MODE=checkout ;;
+    --personal) FLAG_MODE=personal ;;
+    --paths) PATHS_ONLY=1 ;;
+    --uninstall) UNINSTALL=1 ;;
+    -h | --help)
+      cat >&2 <<'USAGE'
+muffin install.sh [--personal | --checkout] [--paths] [--uninstall]
+
+  (default)     personal install: code under $MUFFIN_PREFIX, data under ~/.muffin
+  --checkout    development install bound to this source checkout
+  --paths       print the resolved paths and exit, changing nothing
+  --uninstall   remove the launcher symlink(s) pointing at this build
+USAGE
+      exit 0
+      ;;
+    *) die "unknown argument: $arg (see --help)" ;;
+  esac
+done
+
+is_clone=0
+if [ -n "$SCRIPT_DIR" ] && [ -e "$SCRIPT_DIR/.git" ] && [ -f "$SCRIPT_DIR/package.json" ] &&
   grep -q '"name": *"muffin-agent"' "$SCRIPT_DIR/package.json" 2>/dev/null; then
+  is_clone=1
+fi
+
+# A flag beats the environment, always: `--personal` must not be silently
+# overridden by a stale MUFFIN_MODE, and vice versa.
+if [ -n "$FLAG_MODE" ]; then
+  MODE=$FLAG_MODE
+elif [ -n "${MUFFIN_MODE:-}" ]; then
+  case "$MUFFIN_MODE" in
+    personal | checkout) MODE=$MUFFIN_MODE ;;
+    *) die "MUFFIN_MODE must be 'personal' or 'checkout', got '$MUFFIN_MODE'" ;;
+  esac
+else
+  MODE=personal
+fi
+
+if [ "$UNINSTALL" = 1 ] && [ "$PATHS_ONLY" = 1 ]; then
+  die "--paths and --uninstall are different questions; run one at a time"
+fi
+
+if [ "$MODE" = checkout ]; then
+  [ "$is_clone" = 1 ] ||
+    die "--checkout needs a muffin-agent checkout; run this script from a git clone, or drop --checkout for a personal install"
   SRC=$SCRIPT_DIR
-  MODE=checkout
 else
   SRC=$MUFFIN_PREFIX/src
-  MODE=fetch
+  if [ "$is_clone" = 1 ]; then
+    say "note: this is a muffin-agent checkout, and a *personal* install is selected."
+    say "      code will live in $MUFFIN_PREFIX; pass --checkout to bind the launcher to this clone instead."
+  fi
 fi
 NODE_DIR=$MUFFIN_PREFIX/node
 BIN="$SRC/dist/cli/main.js"
+RELEASES_DIR=$SRC/.releases
+LAUNCHER_DIR=${MUFFIN_BINDIR:-$HOME/.local/bin}
+DATA_HOME=${MUFFIN_HOME:-$HOME/.muffin}
 
-# ---------------------------------------------------------------------------
-# Uninstall: remove only the launcher symlinks that point at THIS build (never a
-# foreign muffin). Data under ~/.muffin is left alone — remove it with
-# `muffin uninstall` first if you want it gone too.
-# ---------------------------------------------------------------------------
-if [ "${1:-}" = "--uninstall" ]; then
+report_paths() {
+  say "muffin installer — resolved paths"
+  say "  mode:      $MODE"
+  say "  source:    $SRC"
+  say "  releases:  $RELEASES_DIR"
+  say "  node:      $NODE_DIR"
+  # The collision check later may rename this to `muffin-agent` when another
+  # `muffin` is on PATH; the requested name is what this reports.
+  say "  launcher:  $LAUNCHER_DIR/${MUFFIN_CMD:-muffin}"
+  say "  data home: $DATA_HOME (owned by the runtime, never touched by this installer)"
+}
+
+if [ "$UNINSTALL" = 1 ]; then
   removed=0
-  for dir in "${MUFFIN_BINDIR:-$HOME/.local/bin}" /opt/homebrew/bin /usr/local/bin; do
+  for dir in "$LAUNCHER_DIR" /opt/homebrew/bin /usr/local/bin; do
     for name in muffin muffin-agent; do
       link="$dir/$name"
       if [ -L "$link" ] && [ "$(readlink "$link")" = "$BIN" ]; then
@@ -109,13 +189,18 @@ if [ "${1:-}" = "--uninstall" ]; then
   [ "$removed" = 0 ] && say "no muffin launcher pointing at this build was found"
   say "if you used 'npm link' for dev, also run: npm rm -g muffin-agent"
   say "to remove your data (config, keys, memory): muffin uninstall"
-  if [ "$MODE" = fetch ]; then
+  if [ "$MODE" = personal ]; then
     say "to remove the code and the bundled Node:  rm -rf $MUFFIN_PREFIX"
   fi
   exit 0
 fi
 
-say "muffin installer — source: $SRC ($MODE)"
+if [ "$PATHS_ONLY" = 1 ]; then
+  report_paths
+  exit 0
+fi
+
+report_paths
 
 # ---------------------------------------------------------------------------
 # 1. OS packages.
@@ -314,7 +399,7 @@ say "node: $(node -v) at $(command -v node)"
 # update and rollback path this installer promises does not exist — `muffin
 # update` says so in as many words and stops.
 # ---------------------------------------------------------------------------
-if [ "$MODE" = fetch ]; then
+if [ "$MODE" = personal ]; then
   mkdir -p "$MUFFIN_PREFIX"
   if [ -d "$SRC/.git" ]; then
     say "updating the existing checkout in $SRC ($MUFFIN_CHANNEL)"
@@ -335,7 +420,7 @@ cd "$SRC"
 #    explicit compile is a belt-and-suspenders in case prepare was disabled.
 # ---------------------------------------------------------------------------
 say "building muffin…"
-if [ "$MODE" = fetch ] && [ -f "$SRC/package-lock.json" ]; then
+if [ "$MODE" = personal ] && [ -f "$SRC/package-lock.json" ]; then
   npm ci
 else
   npm install

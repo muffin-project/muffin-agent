@@ -24,6 +24,26 @@ actually happens; `bootstrap.sh` owns only the pipe-to-controlling-TTY handoff.
 This page says what the command is for, what it will do to your machine, and how
 to undo it.
 
+## Install modes: personal (default) and checkout
+
+`install.sh` never guesses the mode from where the script happens to sit.
+
+- **personal** — the default, and what the public command uses. Code and Node
+  go under `~/.local/share/muffin`, releases under
+  `~/.local/share/muffin/src/.releases`, and the launcher in `~/.local/bin`.
+  Running `./install.sh` from a clone is a personal install: your command and
+  updater state are not bound to that checkout, and no `.releases/` is written
+  there.
+- **checkout** — development only, and explicit: `--checkout` or
+  `MUFFIN_MODE=checkout`. The launcher points at *this* checkout's `dist/`, and
+  `muffin update` stores releases under its `.releases/`. It refuses to run
+  outside a `muffin-agent` checkout, and it warns that the launcher follows that
+  checkout.
+
+`install.sh --paths` prints the resolved source, releases, Node, launcher and
+runtime data home and changes nothing on the machine — useful before an install
+and for scripts that need to know where things will land.
+
 ## What it does, in order
 
 | Step | What ends up where |
@@ -182,17 +202,20 @@ it does not, it installs as `muffin-agent` rather than shadowing your desktop.
 
 ## From a clone instead
 
-Running the canonical installer from a checkout skips the clone and builds that
-tree:
+Running a plain `./install.sh` from a clone is still a **personal** install: it
+does not build the clone, it fetches into `~/.local/share/muffin`. To build and
+bind to the checkout itself, ask for it explicitly:
 
 ```bash
 git clone https://github.com/muffin-project/muffin-agent.git
 cd muffin-agent
-./install.sh
+./install.sh --checkout
 ```
 
 The remaining steps are identical. The bootstrap is unnecessary in this shape
-because `./install.sh` already owns the terminal directly.
+because `./install.sh` already owns the terminal directly. `--paths` shows where
+each mode will put the source, releases, Node, launcher and data home before
+anything is written.
 
 ## Removing it
 
