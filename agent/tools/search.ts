@@ -174,6 +174,80 @@ export function tavilyBackend(options: TavilyOptions): SearchBackend {
   };
 }
 
+/**
+ * Keenable's `POST /v1/search` answer. `snippet` is the longer excerpt and may
+ * be absent; `description` is the short summary. Parsed like Tavily's: missing
+ * fields become empty strings, never `undefined` in the prompt.
+ */
+const KeenableResponse = z.object({
+  results: z
+    .array(
+      z.object({
+        title: z.string().default(''),
+        url: z.string().default(''),
+        description: z.string().default(''),
+        snippet: z.string().optional(),
+      }),
+    )
+    .default([]),
+});
+
+/**
+ * Status codes Keenable documents for its keyed API. The hint is ours; the
+ * response body never reaches the message, so a provider error cannot put its
+ * own text into the turn.
+ */
+const KEENABLE_STATUS_HINTS: Readonly<Record<number, string>> = {
+  401: 'chiave non valida',
+  402: 'crediti esauriti',
+  403: 'chiave disabilitata o revocata',
+  429: 'limite di richieste superato',
+};
+
+export type KeenableOptions = TavilyOptions;
+
+export function keenableBackend(options: KeenableOptions): SearchBackend {
+  const fetchFn = options.fetchFn ?? fetch;
+  const maxResults = options.maxResults ?? 5;
+
+  return {
+    id: 'keenable',
+    endpoint: SEARCH_PROVIDERS.keenable.endpoint,
+    async search(query, signal) {
+      const response = await fetchFn(SEARCH_PROVIDERS.keenable.endpoint, {
+        method: 'POST',
+        headers: {
+          'x-api-key': options.apiKey,
+          'content-type': 'application/json',
+        },
+        // Only the query and the cap. `mode`, date filters and `site` are left
+        // to the provider default: choosing them would be a model-facing knob
+        // this capability does not declare. The keyless `/public` endpoint is
+        // not used: it requires announcing an application name to the provider.
+        body: JSON.stringify({ query, max_results: maxResults }),
+        signal,
+      });
+
+      if (!response.ok) {
+        const hint = KEENABLE_STATUS_HINTS[response.status];
+        throw new Error(`keenable ${response.status}${hint === undefined ? '' : `: ${hint}`}`);
+      }
+
+      const parsed = KeenableResponse.safeParse(await response.json());
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message ?? 'schema';
+        throw new Error(`risposta non riconosciuta: ${detail}`);
+      }
+
+      return parsed.data.results.map((r) => ({
+        title: r.title,
+        url: r.url,
+        snippet: (r.snippet || r.description).slice(0, MAX_SNIPPET_CHARS),
+      }));
+    },
+  };
+}
+
 export type SearchDiagnosis =
   | { on: true; backend: SearchBackend; gap: null }
   | { on: false; backend?: undefined; gap: CapabilityGap | null };
@@ -216,6 +290,9 @@ export function diagnoseSearch(
     switch (config.search.provider) {
       case 'tavily':
         backend = tavilyBackend(opzioni);
+        break;
+      case 'keenable':
+        backend = keenableBackend(opzioni);
         break;
       default:
         throw new Error(`motore di ricerca non implementato: ${String(config.search.provider)}`);
