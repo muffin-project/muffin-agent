@@ -59,6 +59,45 @@ Altri fatti misurati:
   con `sudo`) non è leggibile dall'utente 1000 del container, e `init` si ferma
   con `Permission denied`.
 
+## Tetti di risorse del container
+
+La sandbox limita il tempo (timeout con kill del gruppo di processi) e l'output
+(30.000 caratteri), non memoria né processi: bubblewrap non crea un cgroup, e
+nemmeno la unit systemd dell'installazione nativa imposta `TasksMax` o
+`MemoryMax`. Un comando che forka o alloca senza fine consuma le risorse di chi
+ospita il gateway. Nel percorso container la risposta è un tetto sul cgroup del
+container, che i processi della sandbox ereditano.
+
+Misurato su WSL2 (Docker Engine 29.8, cgroup v2, driver `systemd`):
+
+- con `pids_limit` i processi lanciati **dentro bubblewrap** contano nello
+  stesso tetto: `pids.events` registra i fork rifiutati;
+- quando bubblewrap esce, il suo PID namespace muore e i figli spariscono
+  subito; i processi orfani fuori dalla sandbox restano zombie e occupano il
+  tetto se il PID 1 non li raccoglie (misurato con `node` come PID 1), mentre nel
+  container vero il PID 1 è `tini` e li raccoglie;
+- con il solo `mem_limit` Docker concede altrettanto swap (`memory.swap.max`
+  uguale alla memoria): `memswap_limit` uguale a `mem_limit` rende il tetto reale;
+- al tetto di memoria l'OOM killer uccide il processo più grande: un processo che
+  alloca 1,5 GiB muore (exit 137) e il gateway resta in piedi. Con molti processi
+  piccoli, ciascuno sotto il gateway, il più grande sarebbe il gateway: il
+  container si riavvia e l'host resta protetto (dedotto dalla regola dell'OOM
+  killer, non misurato);
+- container del gateway a riposo: 9 processi, 89-229 MiB. I valori di default
+  (512 processi, 2 GiB) lasciano margine per whisper, ffmpeg e i bridge MCP, che
+  però non sono stati misurati sotto carico.
+
+| | Candidata | Pro | Contro |
+|---|---|---|---|
+| A | tetti sul container nel compose (`pids_limit`, `mem_limit`, `memswap_limit`) | nessun codice, misurabile, vale anche per la sandbox | solo per il percorso container; il tetto è condiviso con il gateway |
+| B | limiti per comando nell'executor (`prlimit`) | vale anche per il nativo | `RLIMIT_NPROC` conta per utente, `RLIMIT_AS` per processo: nessuno dei due limita un albero di processi |
+| C | `TasksMax` e `MemoryMax` nella unit systemd | vale per il nativo, stesso meccanismo di A | cambia il supervisore: va proposto a monte |
+| D | nulla | zero manutenzione | ogni `shell_run` chiede conferma, ma un comando dall'aria innocua basta |
+
+Scelta: **A** qui, **C** proposta a monte. Un complemento a monte: alzare
+`oom_score_adj` dei figli della sandbox (un processo può alzarlo senza
+privilegi), così l'OOM killer sceglie loro anche quando sono tanti e piccoli.
+
 ## Peer, per problema
 
 - OpenClaw (docs.openclaw.ai/install/docker, letto il 2026-09-26): percorso
@@ -70,8 +109,15 @@ Altri fatti misurati:
   un effetto collaterale: gli strumenti di file dentro il backend scrivono in una
   copia dello stato invece che nell'originale.
 
-Entrambi trattano Docker come percorso ufficiale, ed entrambi isolano i comandi
-**con Docker**: da dentro un container questo richiede il socket del daemon,
+- OpenJarvis (github.com/2ITFounder/OpenJarvis, letto il 2026-09-26): esegue il
+  codice in un container per esecuzione, avviato con la CLI o l'SDK Docker, con
+  512 MB, 1 CPU, 100 processi, root in sola lettura e `/tmp` in tmpfs. Anche qui
+  serve il socket del daemon; il suo compose non lo monta, quindi in quel
+  percorso la sandbox non c'è. I tetti per esecuzione sono lo spunto ripreso
+  sopra, applicato al container del gateway.
+
+Tutti e tre trattano Docker come percorso ufficiale, e tutti e tre isolano
+l'esecuzione principale **con Docker**: da dentro un container questo richiede il socket del daemon,
 cioè l'equivalente di root sull'host, che `INSTALL.md` esclude. La strada qui è
 diversa: bubblewrap dentro il container, con permessi aggiuntivi opzionali e
 stretti.
@@ -107,6 +153,8 @@ Scelta: **A**.
   posture.
 - Con `compose.sandbox.yaml` su un host senza AppArmor il contenimento non
   riesce: la documentazione mentirebbe.
+- Un uso legittimo (trascrizione di note vocali, bridge MCP) che supera 512
+  processi o 2 GiB: i default sarebbero sbagliati, non solo stretti.
 - Sull'host Ubuntu 24.04 la sandbox contiene solo con il profilo
   `muffin-userns` insieme a `seccomp` e `systempaths=unconfined` (misurato). Se
   una versione di Docker o di AppArmor smettesse di permetterlo, la

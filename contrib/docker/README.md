@@ -142,6 +142,17 @@ In every posture the gateway runs as the non-root `node` user with all
 capabilities dropped and `no-new-privileges`; bubblewrap needs neither
 (measured).
 
+The container also has ceilings: 512 processes and 2 GiB of memory, with no
+extra swap. Everything in it shares them, sandboxed commands included, since
+bubblewrap creates no cgroup of its own. A command that forks or allocates
+without end hits them instead of the host: forks beyond the ceiling fail, and at
+the memory ceiling the kernel kills the largest process. For a single runaway
+process that is the runaway one (measured, with the gateway still running
+afterwards); if the load is many processes each smaller than the gateway, the
+gateway can be the one killed and the container restarts. Raise them with
+`MUFFIN_GATEWAY_PIDS_LIMIT` and `MUFFIN_GATEWAY_MEM_LIMIT` (for example `3g`
+for a larger whisper model).
+
 | Posture | Command | Effect on the container |
 |---|---|---|
 | default | `docker compose up -d` | Docker's default seccomp and AppArmor. On the engines measured, the default seccomp profile refuses user namespaces, so the shell tools are off; an engine whose defaults allow them would contain here, and `doctor` would say so |
@@ -185,6 +196,8 @@ sudo aa-status | grep muffin-userns
 | Symptom in `docker compose logs gateway` | Cause | Remedy |
 |---|---|---|
 | `not configured yet` | no `muffin init` yet | `docker compose exec -it gateway muffin init` |
+| a command fails with `Cannot fork` (or `Resource temporarily unavailable` from other programs) | the process ceiling of the container | find the runaway command; raise `MUFFIN_GATEWAY_PIDS_LIMIT` only if the load is legitimate |
+| a process ends with exit code 137 (`Killed`), or the gateway itself restarts | the memory ceiling of the container | raise `MUFFIN_GATEWAY_MEM_LIMIT`, for example for a larger whisper model |
 | the gateway restarts in a loop; `docker compose ps -a` shows exit code 78 | a permanent error: missing config, a rejected key, a Root of Trust that refuses. systemd leaves the gateway down on this code; Docker's restart policy has no per-code exception and keeps retrying | `docker compose stop gateway`, then `docker compose run --rm gateway muffin doctor` and `muffin rot verify` |
 | `bwrap: No permissions to create new namespace` | default seccomp profile | sandbox override |
 | `userns_denied ... RTM_NEWADDR` | AppArmor user-namespace restriction | load the profile, add `compose.apparmor.yaml` |
