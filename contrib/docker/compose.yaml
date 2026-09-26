@@ -30,9 +30,9 @@ services:
       MUFFIN_LOCAL_RUNTIME_URL: http://ollama:11434/v1
       TZ: ${TZ:-UTC}
     volumes:
-      - home:/home/node/.muffin                  # config, sealed rot/, database, memory
-      - config:/home/node/.config                # persistent secrets
-      - workspace:/home/node/muffin-workspace    # where turns read and write files
+      - home:/muffin/home              # config, sealed rot/, database, memory
+      - config:/muffin/config          # persistent secrets
+      - workspace:/muffin/workspace    # where turns read and write files
     # Unattended first run instead of `muffin init` (see README): the key is a
     # file, never an environment variable.
     # environment:

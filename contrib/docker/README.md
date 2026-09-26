@@ -29,8 +29,8 @@ Measurements and alternatives behind these choices:
 | supervisor | systemd user unit / launchd | the container restart policy (`unless-stopped`); `doctor` warns that no unit exists, which is expected |
 | updates | `muffin update` / `--rollback` | rebuild the image from a newer checkout; `muffin update` does not apply |
 | shell tools | on when the host sandbox works | **off by default**; on only with the sandbox override and a host that allows it |
-| data | `~/.muffin` and `~/.config/muffin/secrets` | named volumes `home` and `config` |
-| workspace | `~/muffin-workspace` | named volume `workspace` |
+| data | `~/.muffin` and `~/.config/muffin/secrets` | named volumes `home` (`/muffin/home`) and `config` (`/muffin/config`) |
+| workspace | `~/muffin-workspace` | named volume `workspace` (`/muffin/workspace`) |
 
 ## Requirements
 
@@ -144,8 +144,8 @@ sudo aa-status | grep muffin-userns
 - **Update**: `git pull`, then `docker compose build && docker compose up -d`.
   The volumes keep the home; the new image carries the new code.
 - **Backup**: `docker compose exec gateway muffin backup` writes into the `home`
-  volume (`~/.muffin/backups`); copy the `home` and `config` volumes for a full
-  copy of the installation.
+  volume, under `backups/`; copy the `home` and `config` volumes for a full copy
+  of the installation.
 - **Stop the gateway without stopping the container**: `muffin gateway stop`
   inside the container writes `gateway.stopped`; the entrypoint then idles.
   Remove that file and restart the container to resume.

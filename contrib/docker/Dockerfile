@@ -67,15 +67,17 @@ COPY --from=build /opt/muffin /opt/muffin
 RUN chmod 0755 /opt/muffin/dist/cli/main.js \
  && ln -s /opt/muffin/dist/cli/main.js /usr/local/bin/muffin \
  && git config --system --add safe.directory /opt/muffin \
- && install -d -o node -g node -m 0700 /home/node/.muffin /home/node/.config /home/node/muffin-workspace
+ && install -d -m 0755 /muffin \
+ && install -d -o node -g node -m 0700 /muffin/home /muffin/config /muffin/workspace
 COPY --chmod=0755 contrib/docker/entrypoint.sh /usr/local/bin/muffin-entrypoint
 
-ENV HOME=/home/node \
-    MUFFIN_HOME=/home/node/.muffin \
-    XDG_CONFIG_HOME=/home/node/.config \
-    MUFFIN_WORKSPACE=/home/node/muffin-workspace
+# Data lives under /muffin, one volume per directory: the home (config, sealed
+# rot/, database, memory), the persistent secrets and the workspace.
+ENV MUFFIN_HOME=/muffin/home \
+    XDG_CONFIG_HOME=/muffin/config \
+    MUFFIN_WORKSPACE=/muffin/workspace
 USER node
-WORKDIR /home/node
+WORKDIR /muffin
 LABEL org.opencontainers.image.title="muffin-gateway" \
       org.opencontainers.image.description="Experimental container image for the Muffin gateway"
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/muffin-entrypoint"]
