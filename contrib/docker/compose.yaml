@@ -28,6 +28,13 @@ services:
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
+    # Ceilings for everything in this container, sandboxed shell commands
+    # included: bubblewrap adds no cgroup of its own, so a runaway command hits
+    # these instead of the host. Swap is set equal to memory, otherwise Docker
+    # grants as much swap again and the memory ceiling is not one (measured).
+    pids_limit: ${MUFFIN_GATEWAY_PIDS_LIMIT:-512}
+    mem_limit: ${MUFFIN_GATEWAY_MEM_LIMIT:-2g}
+    memswap_limit: ${MUFFIN_GATEWAY_MEM_LIMIT:-2g}
     environment:
       # Embeddings for memory recall; reachable when the `embeddings` profile runs.
       OLLAMA_URL: http://ollama:11434
