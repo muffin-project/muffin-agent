@@ -317,3 +317,5 @@
 {"id":"codex-shell-inventory","chiuso":"interrotta: quota modello, nessuna evidenza usabile","quando":"2026-09-09T23:56:52.763Z"}
 {"id":"codex-secret-flow","chiuso":"interrotta: quota modello, nessuna evidenza usabile","quando":"2026-09-09T23:56:52.820Z"}
 {"id":"codex-repl-provider","chiuso":"interrotta: quota modello, nessuna evidenza usabile","quando":"2026-09-09T23:56:52.872Z"}
+{"id":"a0af730d761f84f5a","slug":"giudice-experimental-docker-compose","cosa":"Independent CRITICAL judge for slice/experimental-docker-compose at 7bce2544: falsify that the contrib compose path never runs shell unsandboxed, needs no privileged container or Docker socket, and reports its sandbox posture honestly; verdict only, no commits.","quando":"2026-09-26T16:36:10.206Z"}
+{"id":"a0af730d761f84f5a","chiuso":"verdict ADJUST at 7bce2544: provider key readable by the sandboxed shell via /run/secrets; untracked key file baked into the image; repaired, fresh judge follows","quando":"2026-09-26T16:51:25.546Z"}
