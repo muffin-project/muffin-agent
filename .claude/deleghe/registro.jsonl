@@ -317,3 +317,7 @@
 {"id":"codex-shell-inventory","chiuso":"interrotta: quota modello, nessuna evidenza usabile","quando":"2026-09-09T23:56:52.763Z"}
 {"id":"codex-secret-flow","chiuso":"interrotta: quota modello, nessuna evidenza usabile","quando":"2026-09-09T23:56:52.820Z"}
 {"id":"codex-repl-provider","chiuso":"interrotta: quota modello, nessuna evidenza usabile","quando":"2026-09-09T23:56:52.872Z"}
+{"id":"a8014b2b014e664bf","slug":"giudice-keenable-search-provider","cosa":"Independent CRITICAL judge (docs/development/JUDGE.md) for slice/keenable-search-provider at 7cb051f8: falsify the claim that an owner search through the Keenable backend is allow at taint 0 while gateParams and the egress allowlist still gate it; report a verdict, no commits.","quando":"2026-09-26T15:42:23.527Z"}
+{"id":"a8014b2b014e664bf","chiuso":"verdict ADJUST at 7cb051f8: Keenable key followed a cross-origin redirect; repaired in 66808751, fresh judge follows","quando":"2026-09-26T15:51:18.257Z"}
+{"id":"a29fec49e82c073e7","slug":"giudice-keenable-search-provider-2","cosa":"Fresh independent CRITICAL judge after ADJUST for slice/keenable-search-provider at 66808751: re-assess the whole claim, including the refused-redirect repair; report a verdict, no commits.","quando":"2026-09-26T15:52:01.463Z"}
+{"id":"a29fec49e82c073e7","chiuso":"verdict MERGE at 66808751: claim holds, redirect repair verified by mutation; follow-ups recorded in the PR","quando":"2026-09-26T16:00:56.571Z"}
