@@ -1405,11 +1405,17 @@ export class TelegramConnector {
     if (first === undefined) return legacy;
     if (first.operation === 'send') {
       const rich = planRich(text);
-      if (rich.mode !== 'rich') return legacy;
-      return [{ ...first, kind: 'rich' as const, rich: rich.message, fallback: legacy }];
+      if (rich.mode === 'rich') {
+        return [{ ...first, kind: 'rich' as const, rich: rich.message, fallback: legacy }];
+      }
+      // An answer that HAS rich-native constructs but is over the
+      // compatibility ceiling stays on the proven legacy chunks: that ceiling
+      // is a client-rendering policy with its own falsifier, not a cut.
+      if (rich.richConstructs) return legacy;
     }
-    // The answer that extends the step trail rides rich as HTML: the same
-    // bytes the legacy lane would edit in, richer transport, one message.
+    // Ordinary prose, and the answer that extends the step trail, ride rich as
+    // HTML — the same bytes the legacy lane would send or edit, richer
+    // transport, one message.
     const payload = richFromHtml(combinedHtml);
     if (richFitsHard(payload) !== null) return legacy;
     return [{ ...first, kind: 'rich' as const, rich: payload, fallback: legacy }];

@@ -258,6 +258,22 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
         }
       }
 
+      // Rich is the transport now; the acceptance scenarios assert on
+      // legacy-shaped records. Normalize a rich call to its legacy twin so a
+      // scenario reads `method` / `payload.text` / `payload.message_thread_id`
+      // the same way whichever lane carried it. The HTTP method stays the real
+      // one, so the transport itself is still exercised end to end.
+      let recordedMethod = method;
+      const richHtml =
+        payload['rich_message'] !== null && typeof payload['rich_message'] === 'object'
+          ? (payload['rich_message'] as { html?: unknown }).html
+          : undefined;
+      if (typeof richHtml === 'string') {
+        payload['text'] = richHtml;
+        if (method === 'sendRichMessage') recordedMethod = 'sendMessage';
+        if (method === 'sendRichMessageDraft') recordedMethod = 'sendMessageDraft';
+      }
+
       const ok = (result: unknown): void => {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: true, result }));
@@ -341,13 +357,13 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
       // Everything else is an outbound effect, and it is recorded before it is
       // answered: a scenario asserting "Muffin never sent this" needs the
       // record to exist even when the reply is uninteresting.
-      calls.push({ method, payload, ...(files ? { files } : {}), ...(createdId !== undefined ? { messageId: createdId } : {}) });
+      calls.push({ method: recordedMethod, payload, ...(files ? { files } : {}), ...(createdId !== undefined ? { messageId: createdId } : {}) });
 
       // B10-errori: a planned rejection wins over every effect branch below
       // (`sendMessage`, `editMessageText`, …). Placed after `calls.push`, on
       // purpose: a scenario asserting "Muffin tried to send this" needs the
       // record even for the attempt that got rejected.
-      const guastoInCoda = guasti.get(method)?.shift();
+      const guastoInCoda = guasti.get(recordedMethod)?.shift();
       if (guastoInCoda) {
         res.writeHead(guastoInCoda.status, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: false, description: guastoInCoda.description }));
@@ -390,8 +406,15 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
     sent: () => calls.slice(),
     messages: () =>
       calls
-        .filter((c) => c.method === 'sendMessage')
-        .map((c) => ({ chatId: Number(c.payload['chat_id'] ?? 0), text: String(c.payload['text'] ?? '') })),
+        .filter((c) => c.method === 'sendMessage' || c.method === 'sendRichMessage')
+        .map((c) => ({
+          chatId: Number(c.payload['chat_id'] ?? 0),
+          text: String(
+            c.payload['text'] ??
+              (c.payload['rich_message'] as { html?: string } | undefined)?.html ??
+              '',
+          ),
+        })),
     documents: () =>
       calls
         .filter((c) => c.method === 'sendDocument')
