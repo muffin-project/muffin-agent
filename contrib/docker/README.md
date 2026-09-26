@@ -182,6 +182,7 @@ sudo aa-status | grep muffin-userns
 | Symptom in `docker compose logs gateway` | Cause | Remedy |
 |---|---|---|
 | `not configured yet` | no `muffin init` yet | `docker compose exec -it gateway muffin init` |
+| the gateway restarts in a loop; `docker compose ps -a` shows exit code 78 | a permanent error: missing config, a rejected key, a Root of Trust that refuses. systemd leaves the gateway down on this code; Docker's restart policy has no per-code exception and keeps retrying | `docker compose stop gateway`, then `docker compose run --rm gateway muffin doctor` and `muffin rot verify` |
 | `bwrap: No permissions to create new namespace` | default seccomp profile | sandbox override |
 | `userns_denied ... RTM_NEWADDR` | AppArmor user-namespace restriction | load the profile, add `compose.apparmor.yaml` |
 | `Can't mount proc on /proc` | Docker masks `/proc` | make sure `compose.sandbox.yaml` is applied (`systempaths=unconfined`) |
