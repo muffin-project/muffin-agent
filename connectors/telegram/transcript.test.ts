@@ -644,22 +644,21 @@ describe('defect A — no stale post-answer Thinking preview', () => {
  * display choice rather than an information loss. A short command has no
  * detail to show and must not grow a pointless block.
  */
-describe('tool detail is inspectable without losing the exact command (#616)', () => {
+describe('a tool step shows the whole command, never a cut (#616)', () => {
   const command = 'grep -rn "continuation" agent/loop/round.ts connectors/telegram/transcript.ts core/turns/store.ts';
 
-  it('a long command keeps the compact line and the exact command in an expandable quote', async () => {
+  it('a long command is on the line, character for character', async () => {
     const { api, calls } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
     t.report(start('shell_run', { command }));
     await vi.advanceTimersByTimeAsync(0);
     const text = calls.at(-1)!.text!;
-    expect(text).toContain('guardo con un comando: ');
-    expect(text).toContain('…');
-    expect(text).toContain(`<blockquote expandable>${command}</blockquote>`);
+    expect(text).toContain(`guardo con un comando: ${command}`);
+    expect(text).not.toContain('…');
     await t.stop();
   });
 
-  it('a short command stays one compact line with no block', async () => {
+  it('a short command is the same line, with nothing added', async () => {
     const { api, calls } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
     t.report(start('shell_run', { command: 'npm test' }));
@@ -670,16 +669,16 @@ describe('tool detail is inspectable without losing the exact command (#616)', (
     await t.stop();
   });
 
-  it('a secret-shaped argument is redacted in the detail, never repeated', async () => {
+  it('a secret-shaped argument is redacted, and the rest of the command survives', async () => {
     const { api, calls } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
     const secret = 'sk-live-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345';
     t.report(start('shell_run', { command: `curl -H "Authorization: Bearer ${secret}" https://example.com/a/long/path/here` }));
     await vi.advanceTimersByTimeAsync(0);
     const text = calls.at(-1)!.text!;
-    // The prefix too: the compact line is a clamp, and a leak would be a head.
     expect(text).not.toContain('sk-live');
     expect(text).toContain('«redacted:');
+    expect(text).toContain('https://example.com/a/long/path/here');
     await t.stop();
   });
 });
