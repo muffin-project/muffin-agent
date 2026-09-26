@@ -1,0 +1,92 @@
+# Experimental Docker Compose path for Muffin (contrib/docker/README.md).
+# The supported installation is the native one (docs/user/INSTALL.md).
+#
+#   docker compose build
+#   docker compose run --rm -it gateway muffin init      # once, interactive
+#   docker compose up -d                                 # gateway only
+#   docker compose --profile embeddings up -d            # + Ollama for memory embeddings
+#
+# Shell tools stay OFF with this file alone: the sandbox needs user namespaces,
+# which Docker's defaults block. That is the fail-closed posture, reported by
+# `muffin doctor`. To opt in, add compose.sandbox.yaml (and compose.apparmor.yaml
+# on AppArmor-restricted hosts); read the README first.
+#
+# No ports are published: Telegram long-polls, Discord uses an outbound
+# WebSocket, and the gateway control socket is a Unix socket in the home volume.
+
+name: muffin
+
+services:
+  gateway:
+    build:
+      context: ../..
+      dockerfile: contrib/docker/Dockerfile
+    image: muffin-gateway:local
+    restart: unless-stopped
+    environment:
+      # Embeddings for memory recall; reachable when the `embeddings` profile runs.
+      OLLAMA_URL: http://ollama:11434
+      # Lets `muffin init` offer the local Ollama as the model provider.
+      MUFFIN_LOCAL_RUNTIME_URL: http://ollama:11434/v1
+      TZ: ${TZ:-UTC}
+    volumes:
+      - home:/home/node/.muffin                  # config, sealed rot/, database, memory
+      - config:/home/node/.config                # persistent secrets
+      - workspace:/home/node/muffin-workspace    # where turns read and write files
+    # Unattended first run instead of `muffin init` (see README): the key is a
+    # file, never an environment variable.
+    # environment:
+    #   MUFFIN_INIT_PROVIDER: openai-compat
+    #   MUFFIN_INIT_BASE_URL: https://openrouter.ai/api/v1
+    #   MUFFIN_INIT_MODEL: <model id>
+    # secrets:
+    #   - muffin_provider_key
+
+  ollama:
+    image: ollama/ollama:0.34.4
+    profiles: [embeddings]
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+
+  ollama-init:
+    image: ollama/ollama:0.34.4
+    profiles: [embeddings]
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    # Muffin's default embedder (core/memory/embed.ts).
+    command: ["ollama pull qwen3-embedding:0.6b"]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  # Optional model router. Uncomment to put one OpenAI-compatible endpoint in
+  # front of several providers, then point `muffin init --base-url` at
+  # http://litellm:4000/v1. Muffin estimates spend from the model name
+  # (core/budget/pricing.ts): an alias it does not recognise is billed at the
+  # most expensive known rate against the sealed daily cap, so give local models
+  # a name containing `ollama` or `llama.cpp` and paid ones their family name.
+  #
+  # litellm:
+  #   image: ghcr.io/berriai/litellm:main-stable
+  #   restart: unless-stopped
+  #   command: ["--config", "/app/config.yaml", "--port", "4000"]
+  #   volumes:
+  #     - ./litellm.yaml:/app/config.yaml:ro
+
+volumes:
+  home: {}
+  config: {}
+  workspace: {}
+  ollama-models: {}
+
+# secrets:
+#   muffin_provider_key:
+#     file: ./provider.key        # mode 0600, outside version control

@@ -1,0 +1,19 @@
+# Build context is the repository root (compose.yaml: context ../..).
+# Keep .git: `muffin doctor` reads the commit the image was built from.
+node_modules
+dist
+.releases
+.worktrees
+.gate-linux
+.ci-local
+graphify-out
+.codegraph
+.agents/telemetry
+evals/character/out
+.env
+.env.*
+!.env.example
+*.local
+*.pem
+*.key
+secrets
