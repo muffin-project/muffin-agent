@@ -40,7 +40,7 @@ DATA="$LAB/data"
 
 # A clone of Muffin: the installer plus its own package.json.
 CLONE="$LAB/clone"
-mkdir -p "$CLONE"
+mkdir -p "$CLONE/.git"
 cp "$REPO/install.sh" "$CLONE/install.sh"
 printf '{"name":"muffin-agent","version":"0.0.0"}\n' >"$CLONE/package.json"
 
@@ -95,5 +95,17 @@ step "E: --personal from a clone stays personal"
 out=$(run "$CLONE" --personal --paths 2>&1) || bad "--personal exited non-zero: $out"
 expect_contains "$out" 'mode:      personal' "explicit personal wins over the clone"
 [ ! -e "$CLONE/.releases" ] && ok "still no .releases in the clone" || bad ".releases appeared in the checkout"
+
+step "F: a flag beats MUFFIN_MODE, in both directions"
+out=$(MUFFIN_MODE=checkout run "$CLONE" --personal --paths 2>&1) || bad "--personal over env exited non-zero: $out"
+expect_contains "$out" 'mode:      personal' "--personal beats MUFFIN_MODE=checkout"
+out=$(MUFFIN_MODE=personal run "$CLONE" --checkout --paths 2>&1) || bad "--checkout over env exited non-zero: $out"
+expect_contains "$out" 'mode:      checkout' "--checkout beats MUFFIN_MODE=personal"
+
+step "G: --paths and --uninstall cannot be combined"
+rc=0
+out=$(run "$CLONE" --paths --uninstall 2>&1) || rc=$?
+[ "$rc" -ne 0 ] && ok "refused (exit $rc)" || bad "accepted --paths --uninstall"
+expect_contains "$out" 'different questions' "the refusal names the conflict"
 
 finish

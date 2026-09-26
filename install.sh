@@ -100,13 +100,13 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # ---------------------------------------------------------------------------
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd || echo "")
 
-CHECKOUT=0
+FLAG_MODE=""
 UNINSTALL=0
 PATHS_ONLY=0
 for arg in "$@"; do
   case "$arg" in
-    --checkout) CHECKOUT=1 ;;
-    --personal) CHECKOUT=0 ;;
+    --checkout) FLAG_MODE=checkout ;;
+    --personal) FLAG_MODE=personal ;;
     --paths) PATHS_ONLY=1 ;;
     --uninstall) UNINSTALL=1 ;;
     -h | --help)
@@ -125,13 +125,15 @@ USAGE
 done
 
 is_clone=0
-if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/package.json" ] &&
+if [ -n "$SCRIPT_DIR" ] && [ -d "$SCRIPT_DIR/.git" ] && [ -f "$SCRIPT_DIR/package.json" ] &&
   grep -q '"name": *"muffin-agent"' "$SCRIPT_DIR/package.json" 2>/dev/null; then
   is_clone=1
 fi
 
-if [ "$CHECKOUT" = 1 ]; then
-  MODE=checkout
+# A flag beats the environment, always: `--personal` must not be silently
+# overridden by a stale MUFFIN_MODE, and vice versa.
+if [ -n "$FLAG_MODE" ]; then
+  MODE=$FLAG_MODE
 elif [ -n "${MUFFIN_MODE:-}" ]; then
   case "$MUFFIN_MODE" in
     personal | checkout) MODE=$MUFFIN_MODE ;;
@@ -141,9 +143,13 @@ else
   MODE=personal
 fi
 
+if [ "$UNINSTALL" = 1 ] && [ "$PATHS_ONLY" = 1 ]; then
+  die "--paths and --uninstall are different questions; run one at a time"
+fi
+
 if [ "$MODE" = checkout ]; then
   [ "$is_clone" = 1 ] ||
-    die "--checkout needs a muffin-agent checkout; run this script from the clone, or drop --checkout for a personal install"
+    die "--checkout needs a muffin-agent checkout; run this script from a git clone, or drop --checkout for a personal install"
   SRC=$SCRIPT_DIR
 else
   SRC=$MUFFIN_PREFIX/src
@@ -164,7 +170,9 @@ report_paths() {
   say "  source:    $SRC"
   say "  releases:  $RELEASES_DIR"
   say "  node:      $NODE_DIR"
-  say "  launcher:  $LAUNCHER_DIR/muffin"
+  # The collision check later may rename this to `muffin-agent` when another
+  # `muffin` is on PATH; the requested name is what this reports.
+  say "  launcher:  $LAUNCHER_DIR/${MUFFIN_CMD:-muffin}"
   say "  data home: $DATA_HOME (owned by the runtime, never touched by this installer)"
 }
 

@@ -202,17 +202,20 @@ it does not, it installs as `muffin-agent` rather than shadowing your desktop.
 
 ## From a clone instead
 
-Running the canonical installer from a checkout skips the clone and builds that
-tree:
+Running a plain `./install.sh` from a clone is still a **personal** install: it
+does not build the clone, it fetches into `~/.local/share/muffin`. To build and
+bind to the checkout itself, ask for it explicitly:
 
 ```bash
 git clone https://github.com/muffin-project/muffin-agent.git
 cd muffin-agent
-./install.sh
+./install.sh --checkout
 ```
 
 The remaining steps are identical. The bootstrap is unnecessary in this shape
-because `./install.sh` already owns the terminal directly.
+because `./install.sh` already owns the terminal directly. `--paths` shows where
+each mode will put the source, releases, Node, launcher and data home before
+anything is written.
 
 ## Removing it
 
