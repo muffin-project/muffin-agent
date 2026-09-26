@@ -225,6 +225,10 @@ export function keenableBackend(options: KeenableOptions): SearchBackend {
         // this capability does not declare. The keyless `/public` endpoint is
         // not used: it requires announcing an application name to the provider.
         body: JSON.stringify({ query, max_results: maxResults }),
+        // A redirect is refused, not followed: undici keeps a custom header
+        // like `x-api-key` across origins (it strips only `authorization`), and
+        // the egress check at boot admits the constant endpoint, not a hop.
+        redirect: 'error',
         signal,
       });
 

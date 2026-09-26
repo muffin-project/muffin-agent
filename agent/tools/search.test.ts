@@ -1,4 +1,6 @@
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer, type IncomingHttpHeaders } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -273,6 +275,39 @@ describe('web_search with the Keenable backend', () => {
     });
     const hits = await backend.search('q', AbortSignal.timeout(1000));
     expect(hits[0]).toEqual({ title: '', url: '', snippet: '' });
+  });
+
+  it('never follows a redirect, so the key cannot reach another origin', async () => {
+    // Undici strips `authorization` on a cross-origin redirect but keeps a
+    // custom header like `x-api-key`, and replays the body on a 307. The boot
+    // check only admits the constant endpoint, so a hop to origin B would carry
+    // the owner's key and query to a host nobody allowlisted.
+    const seenByB: IncomingHttpHeaders[] = [];
+    const b = createServer((req, res) => {
+      seenByB.push(req.headers);
+      res.end(JSON.stringify({ results: [] }));
+    });
+    await new Promise<void>((ready) => b.listen(0, '127.0.0.1', ready));
+    const bUrl = `http://127.0.0.1:${(b.address() as AddressInfo).port}/`;
+    const a = createServer((_req, res) => {
+      res.writeHead(307, { location: bUrl });
+      res.end();
+    });
+    await new Promise<void>((ready) => a.listen(0, '127.0.0.1', ready));
+    const aUrl = `http://127.0.0.1:${(a.address() as AddressInfo).port}/v1/search`;
+    try {
+      const backend = keenableBackend({
+        apiKey: 'keen_secret',
+        // The real fetch, with the exact init the backend builds, aimed at origin A.
+        fetchFn: ((_url: string, init: RequestInit) =>
+          fetch(aUrl, init)) as unknown as typeof fetch,
+      });
+      await expect(backend.search('q', AbortSignal.timeout(2000))).rejects.toThrow();
+      expect(seenByB).toHaveLength(0);
+    } finally {
+      a.close();
+      b.close();
+    }
   });
 
   it('names the documented error statuses without echoing the response body', async () => {
