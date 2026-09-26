@@ -1,26 +1,27 @@
 #!/usr/bin/env bash
 # Smoke eval for the experimental Docker Compose path (contrib/docker/).
 #
-# The claim under test is honesty, not availability: in every posture the
-# container either runs the shell sandbox for real and exposes the shell tools,
-# or exposes neither and `muffin doctor` says why. A host that cannot provide
-# containment is not a failure; a shell tool without containment, or a
-# containment `doctor` does not report, is.
+# The claims under test:
+#   - honesty: in every posture the gateway either runs the shell sandbox for
+#     real and exposes the shell tools, or exposes neither, and both `muffin
+#     doctor` and the gateway's own boot line say which. A host that cannot
+#     provide containment is not a failure; a disagreement is.
+#   - no secret in the image: untracked files in the checkout (a key file, a
+#     .env) never reach an image layer, and the image holds exactly a commit.
+#   - no secret in the gateway: the unattended first run feeds the key through
+#     the one-shot `init` service; the long-running gateway mounts only its three
+#     volumes, so its sandboxed shell has no key file to read.
+#   - no privilege: non-root, not privileged, no Docker socket, every capability
+#     dropped, no-new-privileges, and the key in no log or inspect output.
 #
-# What it does, against the image built from THIS checkout:
-#   1. build the gateway image and initialise a throwaway home with a useless
-#      key fed on stdin (never argv, never the environment: ADR-0048);
-#   2. default posture: Docker defaults, no added security options;
-#   3. sandbox posture: compose.sandbox.yaml (+ compose.apparmor.yaml when
-#      MUFFIN_EVAL_APPARMOR=1, for hosts with the profile loaded);
-#   4. in both: the gateway comes up, `doctor --json` is consistent with the
-#      tools it reports, the container is not privileged and not root, no
-#      Docker socket is mounted, and the key appears in no log or inspect output.
+# Postures: default (Docker defaults), then sandbox (compose.sandbox.yaml, plus
+# compose.apparmor.yaml when MUFFIN_EVAL_APPARMOR=1 on a host with the profile
+# loaded). MUFFIN_EVAL_EXPECT_CONTAINED=1 makes "no containment in the sandbox
+# posture" a failure, for hosts where it is known to be possible.
 #
-# MUFFIN_EVAL_EXPECT_CONTAINED=1 turns "no containment in the sandbox posture"
-# into a failure, for hosts where it is known to be possible.
-#
-# Requirements: Linux, Docker Engine, Docker Compose v2, network for the build.
+# It builds its own image tag and removes it, its volumes and the files it
+# planted, whatever the outcome. Requirements: Linux, Docker Engine, Docker
+# Compose v2, network for the build, a regular clone (not a linked worktree).
 # Usage:  bash evals/install/docker.sh [path-to-repo]      (default: git toplevel)
 set -uo pipefail
 
@@ -39,15 +40,22 @@ REPO=$(cd "$REPO" && pwd)
 DIR="$REPO/contrib/docker"
 PROJECT="muffin-eval-$$"
 GATEWAY="${PROJECT}-gateway-1"
+export MUFFIN_IMAGE="muffin-gateway:eval-$$"
 FAILURES=0
-KEY_FILE=$(mktemp)
+SCRATCH=$(mktemp -d)
+KEY_FILE="$SCRATCH/provider.key"
 KEY_VALUE="sk-ant-eval-$(date +%s)-not-a-real-key-0000000000"
 printf '%s' "$KEY_VALUE" > "$KEY_FILE"
+chmod 0600 "$KEY_FILE"
+MARKER="muffin-eval-planted-$$-$(date +%s)"
+PLANTED=("$DIR/muffin-eval-$$.key" "$DIR/.env.muffin-eval-$$")
 
 compose() { docker compose -p "$PROJECT" -f "$DIR/compose.yaml" "$@"; }
 cleanup() {
-  compose down -v -t 2 >/dev/null 2>&1
-  rm -f "$KEY_FILE"
+  compose --profile unattended-init down -v -t 2 >/dev/null 2>&1
+  docker image rm -f "$MUFFIN_IMAGE" >/dev/null 2>&1
+  rm -f "${PLANTED[@]}"
+  rm -rf "$SCRATCH"
 }
 trap cleanup EXIT
 
@@ -70,50 +78,79 @@ check_posture() {
     fail "gateway did not start"; docker logs --tail 40 "$GATEWAY" 2>&1 | sed 's/^/        /'; return
   fi
 
-  local doctor
-  doctor=$(docker exec "$GATEWAY" muffin doctor --json 2>/dev/null)
   local verdict
-  verdict=$(printf '%s' "$doctor" | docker exec -i "$GATEWAY" node -e '
+  verdict=$(docker exec "$GATEWAY" muffin doctor --json 2>/dev/null | docker exec -i "$GATEWAY" node -e '
     let s = ""; process.stdin.on("data", (c) => (s += c)).on("end", () => {
       const checks = JSON.parse(s).checks;
       const level = (n) => (checks.find((c) => c.name === n) || { level: "missing" }).level;
       process.stdout.write(`${level("sandbox")} ${level("capacità: shell_run")}`);
     });')
   local sandbox=${verdict%% *} shell=${verdict##* }
-  case "$sandbox/$shell" in
-    ok/ok) pass "contained: doctor reports a real containment and shell tools on" ;;
-    warn/warn) pass "not contained: shell tools off, and doctor says why" ;;
-    *) fail "doctor is inconsistent: sandbox=$sandbox shell_run=$shell" ;;
+  # The gateway's own tool list, as announced at boot: it names the shell tools
+  # only when it did NOT register them.
+  local boot_off
+  boot_off=$(docker logs --since "$since" "$GATEWAY" 2>&1 | grep -c 'shell_run, shell_run_write spento' || true)
+  case "$sandbox/$shell/$boot_off" in
+    ok/ok/0) pass "contained: doctor and the gateway both report shell tools on" ;;
+    warn/warn/[1-9]*) pass "not contained: shell tools off, doctor and the gateway say why" ;;
+    *) fail "inconsistent: doctor sandbox=$sandbox shell_run=$shell, gateway boot 'off' lines=$boot_off" ;;
   esac
   if [ "$label" = sandbox ] && [ "${MUFFIN_EVAL_EXPECT_CONTAINED:-}" = 1 ] && [ "$sandbox" != ok ]; then
     fail "MUFFIN_EVAL_EXPECT_CONTAINED=1 but the sandbox posture did not contain"
   fi
 
-  local user privileged sock
+  local user privileged capdrop secopt mounts
   user=$(docker inspect -f '{{.Config.User}}' "$GATEWAY")
   privileged=$(docker inspect -f '{{.HostConfig.Privileged}}' "$GATEWAY")
-  sock=$(docker inspect -f '{{range .Mounts}}{{.Source}} {{end}}' "$GATEWAY" | grep -c 'docker.sock' || true)
+  capdrop=$(docker inspect -f '{{json .HostConfig.CapDrop}}' "$GATEWAY")
+  secopt=$(docker inspect -f '{{json .HostConfig.SecurityOpt}}' "$GATEWAY")
+  mounts=$(docker inspect -f '{{range .Mounts}}{{.Destination}} {{end}}' "$GATEWAY" | tr ' ' '\n' | sort | tr '\n' ' ')
   if [ "$user" = node ]; then pass "runs as node"; else fail "runs as '$user', expected node"; fi
   if [ "$privileged" = false ]; then pass "not privileged"; else fail "container is privileged"; fi
-  if [ "$sock" = 0 ]; then pass "no Docker socket mounted"; else fail "Docker socket mounted"; fi
+  if echo "$capdrop" | grep -q '"ALL"'; then pass "all capabilities dropped"; else fail "CapDrop is $capdrop"; fi
+  if echo "$secopt" | grep -q 'no-new-privileges'; then pass "no-new-privileges set"; else fail "SecurityOpt is $secopt"; fi
+  if [ "$mounts" = " /muffin/config /muffin/home /muffin/workspace " ] || [ "$mounts" = "/muffin/config /muffin/home /muffin/workspace " ]; then
+    pass "mounts exactly home, config, workspace (no secret, no socket, no host path)"
+  else
+    fail "unexpected mounts: $mounts"
+  fi
+  if docker exec "$GATEWAY" test -e /run/secrets/muffin_provider_key; then
+    fail "the provider key file is present in the gateway"
+  else
+    pass "no key file in the gateway"
+  fi
 
   local leaks
   leaks=$( { docker logs "$GATEWAY" 2>&1; docker inspect "$GATEWAY"; } | grep -c "$KEY_VALUE" || true)
   if [ "$leaks" = 0 ]; then pass "key absent from logs and inspect"; else fail "key found $leaks times in logs/inspect"; fi
 }
 
-echo "== build (this checkout: $(git -C "$REPO" rev-parse --short HEAD))"
-if compose build gateway >/tmp/"$PROJECT"-build.log 2>&1; then pass "image built"; else
-  fail "image build failed"; tail -30 /tmp/"$PROJECT"-build.log; exit 1
+echo "== build (last commit of this checkout: $(git -C "$REPO" rev-parse --short HEAD))"
+# Untracked files that must never reach a layer.
+for f in "${PLANTED[@]}"; do printf '%s\n' "$MARKER" > "$f"; done
+if compose build gateway >"$SCRATCH/build.log" 2>&1; then pass "image built"; else
+  fail "image build failed"; tail -30 "$SCRATCH/build.log"; exit 1
+fi
+if [ "$(docker image save "$MUFFIN_IMAGE" | grep -ac "$MARKER" || true)" = 0 ]; then
+  pass "untracked files in the checkout are absent from every image layer"
+else
+  fail "a planted untracked file reached the image"
+fi
+if [ -z "$(docker run --rm --entrypoint git "$MUFFIN_IMAGE" -C /opt/muffin status --porcelain 2>&1)" ]; then
+  pass "the image tree is exactly a commit"
+else
+  fail "the image tree differs from its commit"
 fi
 
-echo "== init (key on stdin, nothing contacts the provider)"
-if compose run --rm -T gateway muffin init --provider openai-compat \
-     --base-url http://127.0.0.1:9/v1 --model eval-model < "$KEY_FILE" >/dev/null 2>&1; then
+echo "== unattended init (one-shot service, key on stdin from a secret file)"
+if MUFFIN_PROVIDER_KEY_FILE="$KEY_FILE" MUFFIN_INIT_PROVIDER=openai-compat \
+   MUFFIN_INIT_BASE_URL=http://127.0.0.1:9/v1 MUFFIN_INIT_MODEL=eval-model \
+   compose --profile unattended-init run --rm init >"$SCRATCH/init.log" 2>&1; then
   pass "home initialised"
 else
-  fail "muffin init failed"; exit 1
+  fail "init failed"; tail -20 "$SCRATCH/init.log"; exit 1
 fi
+if grep -q "$KEY_VALUE" "$SCRATCH/init.log"; then fail "key printed by init"; else pass "key not printed by init"; fi
 
 since=$(date +%s)
 compose up -d gateway >/dev/null 2>&1
