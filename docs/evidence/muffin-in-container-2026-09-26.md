@@ -79,13 +79,41 @@ Misurato su WSL2 (Docker Engine 29.8, cgroup v2, driver `systemd`):
 - con il solo `mem_limit` Docker concede altrettanto swap (`memory.swap.max`
   uguale alla memoria): `memswap_limit` uguale a `mem_limit` rende il tetto reale;
 - al tetto di memoria l'OOM killer uccide il processo più grande: un processo che
-  alloca 1,5 GiB muore (exit 137) e il gateway resta in piedi. Con molti processi
-  piccoli, ciascuno sotto il gateway, il più grande sarebbe il gateway: il
-  container si riavvia e l'host resta protetto (dedotto dalla regola dell'OOM
-  killer, non misurato);
-- container del gateway a riposo: 9 processi, 89-229 MiB. I valori di default
-  (512 processi, 2 GiB) lasciano margine per whisper, ffmpeg e i bridge MCP, che
-  però non sono stati misurati sotto carico.
+  alloca 1,5 GiB muore (exit 137) e il gateway resta in piedi;
+- il tetto conta thread, non solo processi: a riposo il container ha 9 task
+  (`tini`, il gateway `node` con 7 thread, il processo che legge il contatore),
+  89-229 MiB.
+
+Misurato nella review indipendente del 2026-09-27, con l'executor di produzione
+(`SandboxExecutor`) dentro il container e tetto a 1g:
+
+- un fork storm tiene `pids.current` fermo al tetto per tutta la durata del
+  comando; nel frattempo nessun altro processo del container può forkare (note
+  vocali, server MCP, il comando successivo) fino al timeout del comando (120 s
+  di default, 600 al massimo);
+- 14 processi da 90 MiB, ciascuno sotto il gateway: l'OOM killer uccide il
+  gateway, il container si riavvia;
+- `dd` su `/dev/shm` dentro la sandbox: `/dev` e `/dev/shm` sono tmpfs scrivibili
+  creati da bubblewrap, le loro pagine contano nel cgroup ma non appartengono a
+  nessun processo, quindi l'OOM killer uccide il gateway. Senza tetto lo stesso
+  comando si fermerebbe alla dimensione di default del tmpfs, metà della RAM
+  (dedotto, non misurato);
+- dopo il riavvio il gateway può rifiutarsi di partire con `un gateway è già
+  attivo (pid 7)`: il lock (`core/lock/durable.ts`, `heldBy`) giudica vivo il
+  detentore dal solo pid, e in un container riavviato il nuovo gateway prende di
+  solito lo stesso pid. Il rifiuto dura finché l'ultimo heartbeat del detentore
+  morto non ha 30 minuti (6 × `STALE_AFTER_MS`). Misurato: circa 17 minuti di
+  riavvii, finiti solo perché un riavvio ha preso il pid 6. È un difetto del lock
+  che esiste per ogni kill del gateway in container, non introdotto dai tetti, ma
+  i tetti rendono il kill un esito previsto;
+- carico legittimo: ffmpeg e whisper-cli con il modello base su 60 s di audio,
+  23 task al massimo, `memory.peak` del container 627 MiB; un processo `node`
+  nudo (il minimo per un server MCP stdio) 43 MiB e 7 thread.
+
+Il tetto di memoria quindi scambia la protezione dell'host con la disponibilità
+del gateway: un comando fuori controllo non esaurisce l'host, ma in certe forme
+fa riavviare il gateway, e finché il lock non è corretto il riavvio può costare
+fino a 30 minuti.
 
 | | Candidata | Pro | Contro |
 |---|---|---|---|
@@ -94,9 +122,15 @@ Misurato su WSL2 (Docker Engine 29.8, cgroup v2, driver `systemd`):
 | C | `TasksMax` e `MemoryMax` nella unit systemd | vale per il nativo, stesso meccanismo di A | cambia il supervisore: va proposto a monte |
 | D | nulla | zero manutenzione | ogni `shell_run` chiede conferma, ma un comando dall'aria innocua basta |
 
-Scelta: **A** qui, **C** proposta a monte. Un complemento a monte: alzare
-`oom_score_adj` dei figli della sandbox (un processo può alzarlo senza
-privilegi), così l'OOM killer sceglie loro anche quando sono tanti e piccoli.
+Scelta: **A** qui, **C** proposta a monte. Complementi a monte: alzare
+`oom_score_adj` dei processi della sandbox (un processo può alzarlo senza
+privilegi), così l'OOM killer sceglie loro anche quando sono tanti e piccoli;
+limitare la dimensione dei tmpfs che la sandbox crea, perché nessun
+`oom_score_adj` libera pagine che non appartengono a un processo (in bubblewrap
+0.13.0 `--size` vale solo per `--tmpfs`, non per il `/dev` creato da `--dev`:
+per `/dev` serve un'altra strada);
+e un lock che riconosca il detentore anche dall'identità del processo (per
+esempio l'istante di avvio da `/proc`), non dal solo pid.
 
 ## Peer, per problema
 

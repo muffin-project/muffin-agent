@@ -142,16 +142,25 @@ In every posture the gateway runs as the non-root `node` user with all
 capabilities dropped and `no-new-privileges`; bubblewrap needs neither
 (measured).
 
-The container also has ceilings: 512 processes and 2 GiB of memory, with no
-extra swap. Everything in it shares them, sandboxed commands included, since
-bubblewrap creates no cgroup of its own. A command that forks or allocates
-without end hits them instead of the host: forks beyond the ceiling fail, and at
-the memory ceiling the kernel kills the largest process. For a single runaway
-process that is the runaway one (measured, with the gateway still running
-afterwards); if the load is many processes each smaller than the gateway, the
-gateway can be the one killed and the container restarts. Raise them with
-`MUFFIN_GATEWAY_PIDS_LIMIT` and `MUFFIN_GATEWAY_MEM_LIMIT` (for example `3g`
-for a larger whisper model).
+The container also has ceilings: 512 processes and threads, and 2 GiB of
+memory with no extra swap. Everything in it shares them, sandboxed commands
+included, since bubblewrap creates no cgroup of its own. They protect the host,
+not the gateway:
+
+- forks beyond the ceiling fail for every process in the container, the gateway
+  included, until the runaway command ends or reaches its timeout (120 s by
+  default);
+- at the memory ceiling the kernel kills the largest process. When the runaway
+  command is one process that allocates, that is the command, and the gateway
+  keeps running (measured). When the memory is spread over processes each
+  smaller than the gateway, or written to the sandbox's in-memory filesystems
+  (`/dev`, `/dev/shm`), whose pages belong to no process, the largest process is
+  the gateway: it is killed and the container restarts (both measured). After
+  such a restart the gateway can refuse to start for up to 30 minutes (see
+  Troubleshooting).
+
+Raise them with `MUFFIN_GATEWAY_PIDS_LIMIT` and `MUFFIN_GATEWAY_MEM_LIMIT` (for
+example `3g` for a larger whisper model).
 
 | Posture | Command | Effect on the container |
 |---|---|---|
@@ -193,11 +202,12 @@ sudo aa-status | grep muffin-userns
 
 ## Troubleshooting
 
-| Symptom in `docker compose logs gateway` | Cause | Remedy |
+| Symptom (in `docker compose logs gateway` unless stated) | Cause | Remedy |
 |---|---|---|
 | `not configured yet` | no `muffin init` yet | `docker compose exec -it gateway muffin init` |
-| a command fails with `Cannot fork` (or `Resource temporarily unavailable` from other programs) | the process ceiling of the container | find the runaway command; raise `MUFFIN_GATEWAY_PIDS_LIMIT` only if the load is legitimate |
-| a process ends with exit code 137 (`Killed`), or the gateway itself restarts | the memory ceiling of the container | raise `MUFFIN_GATEWAY_MEM_LIMIT`, for example for a larger whisper model |
+| in a shell command's result: `Cannot fork` (or `Resource temporarily unavailable` from other programs) | the process ceiling of the container | find the runaway command; raise `MUFFIN_GATEWAY_PIDS_LIMIT` only if the load is legitimate |
+| in a shell command's result: exit code 137 (`Killed`); or the gateway restarts; `docker inspect -f '{{.State.OOMKilled}}'` on the container says `true` | the memory ceiling of the container | raise `MUFFIN_GATEWAY_MEM_LIMIT` if the load is legitimate, for example a larger whisper model |
+| after the gateway was killed: `un gateway è già attivo (pid 7)`, exit code 75, and the container restarts in a loop | the gateway lock judges a holder alive by its process id alone; in a restarted container the new gateway usually gets the same id, so the dead holder's lock looks alive | none safe from outside the process: it recovers by itself once the dead holder's last heartbeat is 30 minutes old |
 | the gateway restarts in a loop; `docker compose ps -a` shows exit code 78 | a permanent error: missing config, a rejected key, a Root of Trust that refuses. systemd leaves the gateway down on this code; Docker's restart policy has no per-code exception and keeps retrying | `docker compose stop gateway`, then `docker compose run --rm gateway muffin doctor` and `muffin rot verify` |
 | `bwrap: No permissions to create new namespace` | default seccomp profile | sandbox override |
 | `userns_denied ... RTM_NEWADDR` | AppArmor user-namespace restriction | load the profile, add `compose.apparmor.yaml` |
