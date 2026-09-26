@@ -13,6 +13,11 @@
 #     volumes, so its sandboxed shell has no key file to read.
 #   - no privilege: non-root, not privileged, no Docker socket, every capability
 #     dropped, no-new-privileges, and the key in no log or inspect output.
+#   - bounded: process and memory ceilings cover everything in the gateway
+#     container, sandboxed commands included. A command that forks or allocates
+#     without end hits them, and the gateway keeps running. The load is bounded
+#     (2000 processes, 1.5 GiB), so a missing ceiling fails the check instead of
+#     exhausting the host.
 #
 # Postures: default (Docker defaults), then sandbox (compose.sandbox.yaml, plus
 # compose.apparmor.yaml when MUFFIN_EVAL_APPARMOR=1 on a host with the profile
@@ -41,6 +46,11 @@ DIR="$REPO/contrib/docker"
 PROJECT="muffin-eval-$$"
 GATEWAY="${PROJECT}-gateway-1"
 export MUFFIN_IMAGE="muffin-gateway:eval-$$"
+# Lower than the 2g default so the memory check stays cheap on small hosts;
+# the defaults themselves are checked in the rendered compose file.
+export MUFFIN_GATEWAY_MEM_LIMIT=1g
+PIDS_LIMIT=512
+MEM_BYTES=1073741824
 FAILURES=0
 SCRATCH=$(mktemp -d)
 KEY_FILE="$SCRATCH/provider.key"
@@ -121,6 +131,13 @@ check_posture() {
   else
     fail "unexpected mounts: $mounts"
   fi
+  local limits
+  limits=$(docker inspect -f '{{.HostConfig.PidsLimit}} {{.HostConfig.Memory}} {{.HostConfig.MemorySwap}}' "$GATEWAY")
+  if [ "$limits" = "$PIDS_LIMIT $MEM_BYTES $MEM_BYTES" ]; then
+    pass "ceilings set: $PIDS_LIMIT processes, $MEM_BYTES bytes of memory, no extra swap"
+  else
+    fail "PidsLimit/Memory/MemorySwap are '$limits', expected '$PIDS_LIMIT $MEM_BYTES $MEM_BYTES'"
+  fi
   if docker exec "$GATEWAY" test -e /run/secrets/muffin_provider_key; then
     fail "the provider key file is present in the gateway"
   else
@@ -130,6 +147,75 @@ check_posture() {
   local leaks
   leaks=$( { docker logs "$GATEWAY" 2>&1; docker inspect "$GATEWAY"; } | grep -c "$KEY_VALUE" || true)
   if [ "$leaks" = 0 ]; then pass "key absent from logs and inspect"; else fail "key found $leaks times in logs/inspect"; fi
+
+  check_ceilings "$label" "$sandbox"
+}
+
+# A command that forks or allocates without end, run as the container user: as
+# a plain process in the default posture, inside bubblewrap in a contained
+# sandbox posture, to show that sandboxed processes count against the same
+# ceilings. The counters are the container's own cgroup files.
+check_ceilings() {
+  local label=$1 sandbox=$2 how=plain
+  if [ "$label" = sandbox ]; then
+    if [ "$sandbox" != ok ]; then
+      echo "  info  no sandbox in this posture: ceilings checked in the default posture only"
+      return
+    fi
+    how=sandboxed
+  fi
+  local before idle mem_idle refused_before refused_after current=
+  before=$(docker inspect -f '{{.State.StartedAt}} {{.RestartCount}}' "$GATEWAY")
+  idle=$(docker exec "$GATEWAY" cat /sys/fs/cgroup/pids.current)
+  mem_idle=$(docker exec "$GATEWAY" cat /sys/fs/cgroup/memory.current)
+  echo "  info  idle container: $idle processes, $((mem_idle / 1048576)) MiB"
+  refused_before=$(docker exec "$GATEWAY" sed -n 's/^max //p' /sys/fs/cgroup/pids.events)
+  local spawn='i=0; while [ $i -lt 2000 ]; do sleep 10 & i=$((i+1)); done'
+  if [ "$how" = sandboxed ]; then
+    timeout 90 docker exec -u node "$GATEWAY" bwrap --unshare-all --ro-bind / / --dev /dev \
+      --proc /proc --die-with-parent sh -c "$spawn" >/dev/null 2>&1
+  else
+    timeout 90 docker exec -u node "$GATEWAY" sh -c "$spawn" >/dev/null 2>&1
+  fi
+  # Until the sleeps exit not even `docker exec` can fork. Orphans are
+  # reparented to tini, which reaps them.
+  for _ in $(seq 1 40); do
+    current=$(docker exec "$GATEWAY" cat /sys/fs/cgroup/pids.current 2>/dev/null) &&
+      [ "$current" -le $((idle + 10)) ] && break
+    sleep 1
+  done
+  refused_after=$(docker exec "$GATEWAY" sed -n 's/^max //p' /sys/fs/cgroup/pids.events)
+  if [ "${refused_after:-0}" -gt "${refused_before:-0}" ]; then
+    pass "$how: 2000 processes asked for, the process ceiling refused the rest"
+  else
+    fail "$how: 2000 processes asked for and none refused"
+  fi
+  if [ -n "$current" ] && [ "$current" -le $((idle + 10)) ]; then
+    pass "$how: the processes were reaped ($current now, $idle idle)"
+  else
+    fail "$how: ${current:-unreadable} processes left, $idle when idle"
+  fi
+
+  if [ "$how" = plain ]; then
+    local hog oom_before oom_after rc
+    hog='const a=[];let mb=0;while(mb<1536){a.push(Buffer.alloc(64<<20,1));mb+=64}console.log(mb)'
+    oom_before=$(docker exec "$GATEWAY" sed -n 's/^oom_kill //p' /sys/fs/cgroup/memory.events)
+    docker exec -u node "$GATEWAY" node -e "$hog" >/dev/null 2>&1
+    rc=$?
+    oom_after=$(docker exec "$GATEWAY" sed -n 's/^oom_kill //p' /sys/fs/cgroup/memory.events)
+    if [ "$rc" = 137 ] && [ "${oom_after:-0}" -gt "${oom_before:-0}" ]; then
+      pass "memory: the process allocating 1.5 GiB was killed at the ceiling"
+    else
+      fail "memory: allocating 1.5 GiB exited $rc, oom_kill ${oom_before:-?} -> ${oom_after:-?}"
+    fi
+  fi
+
+  if [ "$(docker inspect -f '{{.State.StartedAt}} {{.RestartCount}}' "$GATEWAY")" = "$before" ] &&
+    docker top "$GATEWAY" 2>/dev/null | grep -q 'gateway run'; then
+    pass "$how: the gateway kept running (same start, no restart)"
+  else
+    fail "$how: the gateway was restarted or is gone"
+  fi
 }
 
 echo "== build (last commit of this checkout: $(git -C "$REPO" rev-parse --short HEAD))"
@@ -147,6 +233,13 @@ if [ -z "$(docker run --rm --entrypoint git "$MUFFIN_IMAGE" -C /opt/muffin statu
   pass "the image tree is exactly a commit"
 else
   fail "the image tree differs from its commit"
+fi
+defaults=$( (unset MUFFIN_GATEWAY_MEM_LIMIT MUFFIN_GATEWAY_PIDS_LIMIT; compose config 2>/dev/null) |
+  sed -n 's/^ *\(pids_limit\|mem_limit\|memswap_limit\): *"\{0,1\}\([0-9]*\)"\{0,1\}$/\1=\2/p' | sort | tr '\n' ' ')
+if [ "$defaults" = "mem_limit=2147483648 memswap_limit=2147483648 pids_limit=512 " ]; then
+  pass "default ceilings: 512 processes, 2 GiB of memory, no extra swap"
+else
+  fail "default ceilings are '$defaults'"
 fi
 
 echo "== unattended init (one-shot service, key on stdin from a secret file)"
