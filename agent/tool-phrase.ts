@@ -110,6 +110,31 @@ const TOOL_SUBJECT: Readonly<Record<string, string | readonly string[]>> = {
 const SOGGETTO_MASSIMO = 48;
 
 /**
+ * Sotto questa lunghezza un taglio al confine di parola non lascia abbastanza
+ * soggetto da valere la pena: si taglia netto e si affida il resto al
+ * dettaglio (un URL lungo non ha spazi, e non c'è un confine da scegliere).
+ */
+const SOGGETTO_MINIMO = 24;
+
+/**
+ * Accorcia il soggetto **al confine di parola**, mai a metà parola.
+ *
+ * #616 lo chiede testualmente: «Do not make the summary by blindly slicing the
+ * raw argument at N characters». La prima versione tagliava a 48 caratteri
+ * esatti e lasciava righe come `notizie intelligenza artificiale 26 settembre
+ * 2…` — leggibili solo ricostruendo la parola tronca. L'ellissi resta, ma dopo
+ * uno spazio; il testo intero resta nel dettaglio, che è l'altra metà della
+ * fetta.
+ */
+function clampSubject(piatto: string): string {
+  if (piatto.length <= SOGGETTO_MASSIMO) return piatto;
+  const limite = SOGGETTO_MASSIMO - 1; // il carattere che l'ellissi sostituisce
+  const spazio = piatto.slice(0, limite + 1).lastIndexOf(' ');
+  if (spazio >= SOGGETTO_MINIMO) return `${piatto.slice(0, spazio)}…`;
+  return `${piatto.slice(0, limite)}…`;
+}
+
+/**
  * Quanto può essere lungo il dettaglio esatto. Non è il tetto di un messaggio
  * Telegram (4096, e `splitHtml` lo rispetta): è il tetto di *questo blocco*,
  * perché un dettaglio richiudibile da migliaia di caratteri resta un muro da
@@ -148,7 +173,7 @@ function flattenSubject(name: string, args: unknown): string {
 export function toolSubject(name: string, args: unknown): string {
   const piatto = flattenSubject(name, args);
   if (piatto === '') return '';
-  return piatto.length > SOGGETTO_MASSIMO ? `${piatto.slice(0, SOGGETTO_MASSIMO - 1)}…` : piatto;
+  return clampSubject(piatto);
 }
 
 /**

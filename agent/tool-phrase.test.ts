@@ -54,6 +54,26 @@ describe('toolProgress · compact line, exact detail on demand', () => {
     expect(p.detail).not.toContain('sk-live');
   });
 
+  it('cuts a long subject at a word boundary, never mid-word', () => {
+    // #616: "Do not make the summary by blindly slicing the raw argument at N
+    // characters." The old hard clamp produced `…26 settembre 2…`; the reader
+    // had to rebuild the truncated word.
+    const p = toolProgress('web_search', {
+      query: 'notizie intelligenza artificiale 26 settembre 2026 da verificare',
+    });
+    expect(p.summary).toBe('cerco sul web: notizie intelligenza artificiale 26 settembre…');
+    expect(p.detail).toBe('notizie intelligenza artificiale 26 settembre 2026 da verificare');
+  });
+
+  it('cuts an unbroken subject (a URL) hard, and the detail keeps it whole', () => {
+    const url = 'https://example.com/a/very/long/path/that/has/no/spaces/at/all/and/keeps/going';
+    const p = toolProgress('http_get', { url });
+    // No space to cut at: the hard cut is the only option, and the detail is
+    // the reason it is not an information loss.
+    expect(p.summary).toBe(`apro una pagina: ${url.slice(0, 47)}…`);
+    expect(p.detail).toBe(url);
+  });
+
   it('a pathological command is bounded and the cut is declared', () => {
     const command = `echo ${'x'.repeat(2_000)}`;
     const p = toolProgress('shell_run', { command });
