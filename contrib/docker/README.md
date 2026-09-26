@@ -11,8 +11,9 @@ What is here:
 
 | File | Purpose |
 |---|---|
-| `Dockerfile` | gateway image built from this checkout: Node 22, upstream bubblewrap, socat, ripgrep, whisper.cpp + ffmpeg, uv |
-| `compose.yaml` | the gateway; Ollama for memory embeddings as the optional `embeddings` profile; an optional model router, commented out |
+| `Dockerfile` | gateway image built from the **last commit** of this checkout: Node 22, upstream bubblewrap, socat, ripgrep, whisper.cpp + ffmpeg, uv |
+| `Dockerfile.dockerignore` | the build context is `.git` only, so untracked files (a key, a `.env`) and uncommitted edits never reach the image |
+| `compose.yaml` | the gateway; a one-shot `init` service for unattended setup; Ollama for memory embeddings as the optional `embeddings` profile; an optional model router, commented out |
 | `compose.sandbox.yaml` | opt-in override that lets the shell sandbox run inside the container |
 | `compose.apparmor.yaml` | opt-in override for hosts where AppArmor restricts user namespaces |
 | `apparmor/muffin-userns` | the host AppArmor profile that override refers to |
@@ -35,6 +36,9 @@ Measurements and alternatives behind these choices:
 ## Requirements
 
 - Docker Engine with Docker Compose v2 on Linux (the sandbox is Linux bubblewrap).
+- A regular `git clone` of this repository (not a linked worktree: the build
+  needs `.git` to be a directory). The image contains the last commit of the
+  checked-out branch; commit local changes before building them.
 - A model provider: a key (OpenRouter, Anthropic) or an OpenAI-compatible
   endpoint such as a local Ollama.
 - About 2 GB of disk for the image; more for local models.
@@ -76,18 +80,31 @@ does not apply here.
 
 ### Unattended first run
 
-For scripted setups the key can come from a file mounted as a compose secret,
-never from an environment variable or the command line (ADR-0048). Uncomment the
-`environment`/`secrets` lines in `compose.yaml`, put the key in `provider.key`
-(mode 0600, outside version control) and set:
+For scripted setups the one-shot `init` service replaces the interactive
+`muffin init`. The key comes from a file mounted as a compose secret, fed on
+stdin, never from an environment variable or the command line (ADR-0048). Keep
+the file **outside the checkout**, mode 0600:
+
+```sh
+MUFFIN_PROVIDER_KEY_FILE=/path/outside/the/checkout/provider.key \
+MUFFIN_INIT_PROVIDER=openai-compat \
+MUFFIN_INIT_BASE_URL=https://openrouter.ai/api/v1 \
+MUFFIN_INIT_MODEL=<model id> \
+docker compose --profile unattended-init run --rm init
+docker compose up -d
+```
 
 | Variable | Example |
 |---|---|
+| `MUFFIN_PROVIDER_KEY_FILE` | path of the key file |
 | `MUFFIN_INIT_PROVIDER` | `openai-compat` or `anthropic` |
 | `MUFFIN_INIT_BASE_URL` | `https://openrouter.ai/api/v1`, `http://ollama:11434/v1` |
 | `MUFFIN_INIT_MODEL` | the model id |
 
-The entrypoint runs `muffin init` once, feeding the key on stdin.
+The secret is mounted only into the `init` container, which exits when the home
+is initialised. The long-running gateway never has it: anything mounted into the
+gateway would be readable by its sandboxed shell. Muffin keeps its own copy of
+the key in the `config` volume, which the sandbox cannot read.
 
 ### Memory embeddings (optional)
 
@@ -114,11 +131,15 @@ Otherwise they are absent and `muffin doctor` says why: Muffin never runs a
 command unsandboxed. Even when present, every shell call asks the owner
 (ADR-0091).
 
+In every posture the gateway runs as the non-root `node` user with all
+capabilities dropped and `no-new-privileges`; bubblewrap needs neither
+(measured).
+
 | Posture | Command | Effect on the container |
 |---|---|---|
-| default | `docker compose up -d` | none: Docker defaults. Shell tools off |
-| sandbox | `docker compose -f compose.yaml -f compose.sandbox.yaml up -d` | `seccomp=unconfined` (user namespaces) and `systempaths=unconfined` (unmasked `/proc`); no capability, no device, still non-root |
-| sandbox + AppArmor | add `-f compose.apparmor.yaml` after loading `apparmor/muffin-userns` on the host | the container runs under a profile whose only grant is `userns` |
+| default | `docker compose up -d` | Docker's default seccomp and AppArmor. On the engines measured, the default seccomp profile refuses user namespaces, so the shell tools are off; an engine whose defaults allow them would contain here, and `doctor` would say so |
+| sandbox | `docker compose -f compose.yaml -f compose.sandbox.yaml up -d` | `seccomp=unconfined` (user namespaces) and `systempaths=unconfined` (unmasked `/proc`); no capability, no device |
+| sandbox + AppArmor | add `-f compose.apparmor.yaml` after loading `apparmor/muffin-userns` on the host | the container runs under `muffin-userns` instead of Docker's default AppArmor profile: `flags=(unconfined)` plus the `userns` grant, so Docker's default AppArmor confinement is removed as well |
 
 Measured results (details in the evidence file):
 
@@ -162,3 +183,5 @@ sudo aa-status | grep muffin-userns
 | `Can't mount proc on /proc` | Docker masks `/proc` | make sure `compose.sandbox.yaml` is applied (`systempaths=unconfined`) |
 | container does not start after adding `compose.apparmor.yaml` | profile not loaded on an AppArmor host | load it, or drop that override |
 | `bubblewrap ... predates ... 0.12.0` | wrong image | rebuild from this Dockerfile |
+| build: `.git is not a directory (linked worktree?)` | building from a `git worktree` | build from a regular clone |
+| a local change is missing from the image | the image is built from the last commit | commit it, then rebuild |
