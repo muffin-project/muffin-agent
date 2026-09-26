@@ -21,12 +21,18 @@ Build `252c1afb` (main) e `032c4ed1` (dev), immagine costruita con bubblewrap
 
 | Configurazione del container | host WSL2 | host Ubuntu 24.04 |
 |---|---|---|
-| default Docker | `bwrap: No permissions to create new namespace` | non provata |
+| default Docker | `bwrap: No permissions to create new namespace` | `bwrap: No permissions to create a new namespace`; shell spenta, `doctor` e gateway concordi |
 | `seccomp=unconfined` | contenimento riuscito (`a real containment ran and held`) | non provata |
+| `seccomp=unconfined` + `systempaths=unconfined` (override `sandbox`), AppArmor di default | contenimento riuscito | `bwrap: Failed to make / slave: Permission denied`: il profilo AppArmor di default di Docker nega i mount; shell spenta, `doctor` e gateway concordi |
 | `seccomp=unconfined` + `apparmor=unconfined` | contenimento riuscito | `userns_denied: bwrap: loopback: Failed RTM_NEWADDR`: un processo non confinato riceve il namespace senza capability |
 | `seccomp=unconfined` + profilo AppArmor `flags=(unconfined) { userns, }` | non applicabile | `Can't mount proc on /proc: Operation not permitted` (Docker oscura parti di `/proc`) |
 | come sopra + `privileged: true` | non provata | contenimento riuscito |
-| come sopra + `systempaths=unconfined` al posto di `privileged` | accettata da `docker compose` v5.5.1: `MaskedPaths` e `ReadonlyPaths` vuoti | **da verificare** |
+| come sopra + `systempaths=unconfined` al posto di `privileged` | accettata da `docker compose` v5.5.1: `MaskedPaths` e `ReadonlyPaths` vuoti | contenimento riuscito, non-root con `cap_drop: ALL` e `no-new-privileges`: strumenti shell registrati ed esposti, `doctor` e gateway concordi |
+
+Le celle dell'host Ubuntu 24.04 (Docker 29.6.0, Compose 5.1.4) vengono da due
+misure: il probe diretto di bubblewrap, che dà i messaggi di errore citati, e
+`evals/install/docker.sh` a `281148d2`, eseguito con e senza
+`MUFFIN_EVAL_APPARMOR=1`, che dà l'esito della sandbox di Muffin.
 
 Altri fatti misurati:
 
@@ -47,7 +53,11 @@ Altri fatti misurati:
 - con la checkout di proprietà di root e il processo `node`, git rifiuta il
   repository e `muffin doctor` non sa quale commit gira: serve `safe.directory`;
 - un turno reale attraverso il gateway in container ha risposto, e una richiesta
-  `shell_run` del modello si è fermata sulla conferma dell'owner (ADR-0091).
+  `shell_run` del modello si è fermata sulla conferma dell'owner (ADR-0091);
+- fuori da swarm, Compose monta il file di un segreto così com'è sull'host e ne
+  ignora `uid`, `gid` e `mode`: un file 0600 di un altro uid (per esempio creato
+  con `sudo`) non è leggibile dall'utente 1000 del container, e `init` si ferma
+  con `Permission denied`.
 
 ## Peer, per problema
 
@@ -84,7 +94,7 @@ stretti.
 |---|---|---|---|
 | A | `contrib/docker/` sperimentale: default senza permessi aggiuntivi (shell spenta, detto da `doctor`), override opzionali per la sandbox, eval di smoke | nessun cambio di posizione ufficiale; fail-closed di default; scelta esplicita di chi lo usa | un percorso in più da mantenere |
 | B | Proporlo come secondo percorso ufficiale (INSTALL + ADR) | chiarezza per gli utenti Docker | manca l'evidenza end-to-end che INSTALL chiede |
-| C | Includere `privileged: true` | funziona anche dove `systempaths` non basta | contraddice INSTALL; concede molto più del necessario |
+| C | Includere `privileged: true` | funziona anche con gli strumenti che rifiutano `systempaths` | contraddice INSTALL; concede molto più del necessario, e sugli host misurati non serve |
 | D | Nessun percorso Docker | zero manutenzione | chi usa Docker lo costruisce da solo, senza le misure sopra |
 
 Scelta: **A**.
@@ -97,6 +107,8 @@ Scelta: **A**.
   posture.
 - Con `compose.sandbox.yaml` su un host senza AppArmor il contenimento non
   riesce: la documentazione mentirebbe.
-- La cella «da verificare» dell'host Ubuntu 24.04 va chiusa con una misura; se
-  `systempaths=unconfined` non basta, la documentazione deve dire che su quegli
-  host la shell resta spenta senza `privileged`, non suggerirlo.
+- Sull'host Ubuntu 24.04 la sandbox contiene solo con il profilo
+  `muffin-userns` insieme a `seccomp` e `systempaths=unconfined` (misurato). Se
+  una versione di Docker o di AppArmor smettesse di permetterlo, la
+  documentazione deve dire che su quegli host la shell resta spenta senza
+  `privileged`, non suggerirlo.

@@ -153,7 +153,7 @@ Measured results (details in the evidence file):
 | Host | default | sandbox | sandbox + AppArmor |
 |---|---|---|---|
 | Linux without AppArmor (WSL2 kernel 6.18) | shell off | contained | n/a (option ignored) |
-| Ubuntu 24.04 with `apparmor_restrict_unprivileged_userns=1` | not yet verified | not yet verified (with `apparmor=unconfined` instead: `userns_denied`) | not yet verified |
+| Ubuntu 24.04 with `apparmor_restrict_unprivileged_userns=1` (Docker 29.6, Compose 5.1.4) | shell off | shell off: Docker's default AppArmor profile denies the mounts bubblewrap needs (with `apparmor=unconfined` instead: `userns_denied`) | contained |
 
 `privileged: true` is deliberately **not** offered: it grants every device and
 capability to the container, and `docs/user/INSTALL.md` rules it out. Never mount
@@ -188,6 +188,7 @@ sudo aa-status | grep muffin-userns
 | the gateway restarts in a loop; `docker compose ps -a` shows exit code 78 | a permanent error: missing config, a rejected key, a Root of Trust that refuses. systemd leaves the gateway down on this code; Docker's restart policy has no per-code exception and keeps retrying | `docker compose stop gateway`, then `docker compose run --rm gateway muffin doctor` and `muffin rot verify` |
 | `bwrap: No permissions to create new namespace` | default seccomp profile | sandbox override |
 | `userns_denied ... RTM_NEWADDR` | AppArmor user-namespace restriction | load the profile, add `compose.apparmor.yaml` |
+| `bwrap: Failed to make / slave: Permission denied` | Docker's default AppArmor profile denies mounts | load the profile, add `compose.apparmor.yaml` |
 | `Can't mount proc on /proc` | Docker masks `/proc` | make sure `compose.sandbox.yaml` is applied (`systempaths=unconfined`) |
 | container does not start after adding `compose.apparmor.yaml` | profile not loaded on an AppArmor host | load it, or drop that override |
 | `bubblewrap ... predates ... 0.12.0` | wrong image | rebuild from this Dockerfile |
