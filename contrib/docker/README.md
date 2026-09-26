@@ -101,6 +101,10 @@ docker compose up -d
 | `MUFFIN_INIT_BASE_URL` | `https://openrouter.ai/api/v1`, `http://ollama:11434/v1` |
 | `MUFFIN_INIT_MODEL` | the model id |
 
+Compose mounts the file as it is on the host, so it must be readable by uid
+1000, the container user (for example owned by that uid, mode 0600); otherwise
+`init` fails and says it cannot read the key.
+
 The secret is mounted only into the `init` container, which exits when the home
 is initialised. The long-running gateway never has it: anything mounted into the
 gateway would be readable by its sandboxed shell. Muffin keeps its own copy of
