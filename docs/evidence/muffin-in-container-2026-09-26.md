@@ -95,9 +95,24 @@ Misurato nella review indipendente del 2026-09-27, con l'executor di produzione
   gateway, il container si riavvia;
 - `dd` su `/dev/shm` dentro la sandbox: `/dev` e `/dev/shm` sono tmpfs scrivibili
   creati da bubblewrap, le loro pagine contano nel cgroup ma non appartengono a
-  nessun processo, quindi l'OOM killer uccide il gateway. Senza tetto lo stesso
-  comando si fermerebbe alla dimensione di default del tmpfs, metà della RAM
-  (dedotto, non misurato);
+  nessun processo, quindi l'OOM killer uccide il gateway;
+- non sono gli unici: nella sandbox sono tmpfs scrivibili e senza limite anche le
+  maschere che nascondono le directory dei segreti (le due `secrets` e
+  `/etc/ssh/ssh_config.d`), montate da sandbox-runtime con `--tmpfs`. Una
+  scrittura da 64 MiB è riuscita in ciascuna, in entrambe le corsie, e la memoria
+  del container è salita da 49 a 302 MiB con un processo da circa 3 MB di RSS
+  (seconda review indipendente, 2026-09-27). Senza tetto, quindi, un comando può
+  riempirne più d'uno, ciascuno fino a metà della RAM, e portare l'intero host in
+  OOM: la deduzione precedente («si fermerebbe a metà della RAM») sbagliava nel
+  verso pericoloso;
+- `.State.OOMKilled` non è un indicatore affidabile: se il processo ucciso è il
+  principale e il container riparte, torna `false` subito dopo il riavvio;
+  `docker events --filter event=oom` registra ogni kill (misurato nella stessa
+  review);
+- lo stop di default di Docker (10 s) è più corto del drain del gateway (60 s): un
+  `docker compose stop` durante un turno uccide il drain, e dopo il riavvio vale
+  lo stesso difetto del lock descritto sotto. Il compose imposta
+  `stop_grace_period: 75s`, come il `TimeoutStopSec` della unit systemd;
 - dopo il riavvio il gateway può rifiutarsi di partire con `un gateway è già
   attivo (pid 7)`: il lock (`core/lock/durable.ts`, `heldBy`) giudica vivo il
   detentore dal solo pid, e in un container riavviato il nuovo gateway prende di
@@ -127,8 +142,9 @@ Scelta: **A** qui, **C** proposta a monte. Complementi a monte: alzare
 privilegi), così l'OOM killer sceglie loro anche quando sono tanti e piccoli;
 limitare la dimensione dei tmpfs che la sandbox crea, perché nessun
 `oom_score_adj` libera pagine che non appartengono a un processo (in bubblewrap
-0.13.0 `--size` vale solo per `--tmpfs`, non per il `/dev` creato da `--dev`:
-per `/dev` serve un'altra strada);
+0.13.0 `--size` vale solo per `--tmpfs`: vale quindi per le maschere dei
+segreti, che possono anche essere rese di sola lettura con `--remount-ro`, non
+per il `/dev` creato da `--dev`, per cui serve un'altra strada);
 e un lock che riconosca il detentore anche dall'identità del processo (per
 esempio l'istante di avvio da `/proc`), non dal solo pid.
 
