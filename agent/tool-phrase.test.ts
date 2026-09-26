@@ -25,24 +25,33 @@ describe('toolProgress · compact line, exact detail on demand', () => {
     expect(p.detail).toBe(command);
   });
 
-  it('a secret-shaped argument is redacted before the clamp, in both pieces', () => {
+  it('a secret-shaped argument is redacted in both pieces, down to its prefix', () => {
     const command =
       'curl -H "Authorization: Bearer sk-live-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345" https://example.com/a/very/long/path/here';
     const p = toolProgress('shell_run', { command });
-    expect(p.summary).not.toContain('sk-live-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345');
-    expect(p.detail).toContain('«redacted:');
-    expect(p.detail).not.toContain('sk-live-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345');
-    expect(toolLine('shell_run', { command })).not.toContain('sk-live-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345');
-  });
-
-  it('redaction applies before the clamp, so a secret ending past 48 chars cannot slip through', () => {
-    // The token starts after the compact line's 48 characters; a clamp-first
-    // implementation would show the head of the token with nothing redacted.
-    const command = 'curl https://example.com/an/owner/path/that/is/long sk-live-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345';
-    const p = toolProgress('shell_run', { command });
+    // Asserting the prefix, not only the whole literal: a clamp-first
+    // implementation leaks the token's head, which the full literal misses.
     expect(p.summary).not.toContain('sk-live');
     expect(p.detail).toContain('«redacted:');
-    expect(p.detail).not.toContain('sk-live-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345');
+    expect(p.detail).not.toContain('sk-live');
+    expect(toolLine('shell_run', { command })).not.toContain('sk-live');
+  });
+
+  it('redaction applies before the clamp: a token cut by the clamp cannot leak its head', () => {
+    const token = 'sk-live-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345';
+    // The token begins 12 characters before the 48-char clamp (prefix length
+    // 35). Clamp-first would render `sk-live-ABCD…`: after `sk-` only 9
+    // characters survive, below the regex's 16, so the redaction would miss it
+    // and the head of the token would be shown. Redact-first replaces the whole
+    // token with the marker, and the trailing URL keeps the redacted subject
+    // long enough to have a detail.
+    const prefix = `curl https://x.co/${'a'.repeat(16)}/`;
+    const command = `${prefix}${token} https://example.com/a/very/long/path/that/exceeds/forty/eight`;
+    const p = toolProgress('shell_run', { command });
+    expect(p.summary).not.toContain('sk-live');
+    expect(p.summary).toContain('«redact');
+    expect(p.detail).toContain('«redacted:');
+    expect(p.detail).not.toContain('sk-live');
   });
 
   it('a pathological command is bounded and the cut is declared', () => {

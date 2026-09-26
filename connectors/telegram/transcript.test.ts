@@ -677,7 +677,8 @@ describe('tool detail is inspectable without losing the exact command (#616)', (
     t.report(start('shell_run', { command: `curl -H "Authorization: Bearer ${secret}" https://example.com/a/long/path/here` }));
     await vi.advanceTimersByTimeAsync(0);
     const text = calls.at(-1)!.text!;
-    expect(text).not.toContain(secret);
+    // The prefix too: the compact line is a clamp, and a leak would be a head.
+    expect(text).not.toContain('sk-live');
     expect(text).toContain('«redacted:');
     await t.stop();
   });
