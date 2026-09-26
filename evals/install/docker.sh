@@ -46,7 +46,10 @@ SCRATCH=$(mktemp -d)
 KEY_FILE="$SCRATCH/provider.key"
 KEY_VALUE="sk-ant-eval-$(date +%s)-not-a-real-key-0000000000"
 printf '%s' "$KEY_VALUE" > "$KEY_FILE"
-chmod 0600 "$KEY_FILE"
+# Compose mounts a file secret as it is on the host (outside swarm it ignores
+# uid/gid/mode), and the container user is uid 1000. 0644 inside the 0700
+# scratch directory is readable there and private here, whoever runs the eval.
+chmod 0644 "$KEY_FILE"
 MARKER="muffin-eval-planted-$$-$(date +%s)"
 PLANTED=("$DIR/muffin-eval-$$.key" "$DIR/.env.muffin-eval-$$")
 
