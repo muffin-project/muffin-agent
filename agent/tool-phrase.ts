@@ -106,43 +106,6 @@ const TOOL_SUBJECT: Readonly<Record<string, string | readonly string[]>> = {
   schedule_recurring: 'goal',
 };
 
-/** Quanto sta su una riga accanto alla frase, senza mandarla a capo. */
-const SOGGETTO_MASSIMO = 48;
-
-/**
- * Sotto questa lunghezza un taglio al confine di parola non lascia abbastanza
- * soggetto da valere la pena: si taglia netto e si affida il resto al
- * dettaglio (un URL lungo non ha spazi, e non c'è un confine da scegliere).
- */
-const SOGGETTO_MINIMO = 24;
-
-/**
- * Accorcia il soggetto **al confine di parola**, mai a metà parola.
- *
- * #616 lo chiede testualmente: «Do not make the summary by blindly slicing the
- * raw argument at N characters». La prima versione tagliava a 48 caratteri
- * esatti e lasciava righe come `notizie intelligenza artificiale 26 settembre
- * 2…` — leggibili solo ricostruendo la parola tronca. L'ellissi resta, ma dopo
- * uno spazio; il testo intero resta nel dettaglio, che è l'altra metà della
- * fetta.
- */
-function clampSubject(piatto: string): string {
-  if (piatto.length <= SOGGETTO_MASSIMO) return piatto;
-  const limite = SOGGETTO_MASSIMO - 1; // il carattere che l'ellissi sostituisce
-  const spazio = piatto.slice(0, limite + 1).lastIndexOf(' ');
-  if (spazio >= SOGGETTO_MINIMO) return `${piatto.slice(0, spazio)}…`;
-  return `${piatto.slice(0, limite)}…`;
-}
-
-/**
- * Quanto può essere lungo il dettaglio esatto. Non è il tetto di un messaggio
- * Telegram (4096, e `splitHtml` lo rispetta): è il tetto di *questo blocco*,
- * perché un dettaglio richiudibile da migliaia di caratteri resta un muro da
- * leggere il giorno che qualcuno lo apre, e il transcript intero si porta
- * dietro più di un passo. Oltre il tetto si tronca **dichiarandolo**.
- */
-const DETTAGLIO_MASSIMO = 500;
-
 /**
  * Il soggetto grezzo, appiattito e **redatto**, o `''` se non c'è.
  *
@@ -152,10 +115,15 @@ const DETTAGLIO_MASSIMO = 500;
  * riquadro che sta appena sotto.
  *
  * La redazione è la stessa rete di ogni output visibile all'owner
- * (`core/tracing/redact.ts`): il dettaglio esatto non è una scorciatoia intorno
- * alle regole di privacy, quindi un valore a forma di segreto diventa un
- * marcatore anche qui, e prima del troncamento — una chiave tagliata a 48
- * caratteri non deve sfuggire perché il pattern finiva oltre il taglio.
+ * (`core/tracing/redact.ts`): un valore a forma di segreto diventa un
+ * marcatore anche qui. Redigere non è tagliare: il testo resta intero, con il
+ * segreto sostituito.
+ *
+ * **Non si accorcia mai.** Una soglia in caratteri, per quanto «al confine di
+ * parola», è comunque una riga che l'owner deve ricostruire a mente, e la
+ * prima versione di questa fetta lo ha fatto due volte (`…26 settembre 2…`).
+ * Chi mostra il passo riceve `phrase` e `subject` separati e decide la forma:
+ * inline, citazione richiudibile, qualunque cosa — mai un pezzo in meno.
  */
 function flattenSubject(name: string, args: unknown): string {
   const campo = TOOL_SUBJECT[name];
@@ -169,37 +137,26 @@ function flattenSubject(name: string, args: unknown): string {
   return redactText(piatto);
 }
 
-/** Il soggetto da mostrare accanto alla frase, accorciato, o `''` se non c'è. */
+/** Il soggetto da mostrare accanto alla frase, intero, o `''` se non c'è. */
 export function toolSubject(name: string, args: unknown): string {
-  const piatto = flattenSubject(name, args);
-  if (piatto === '') return '';
-  return clampSubject(piatto);
+  return flattenSubject(name, args);
 }
 
 /**
- * Un passo del turno, in due pezzi: la riga breve e — solo se il soggetto non
- * ci sta — il dettaglio esatto da mostrare a richiesta.
- *
- * `detail` è assente quando non aggiunge niente (soggetto corto): è la metà
- * che tiene la promessa «nessun blocco inutile», e sta qui e non nella
- * superficie perché due superfici non devono decidere due volte quando un
- * dettaglio esiste.
+ * Un passo del turno, in due pezzi **strutturati**: la frase e il soggetto
+ * esatto, entrambi interi. La superficie compone la forma — non c'è un
+ * «riassunto» qui dentro che possa perdere informazione.
  */
-export type ToolProgress = { summary: string; detail?: string };
+export type ToolProgress = { phrase: string; subject: string };
 
 export function toolProgress(name: string, args: unknown): ToolProgress {
-  const piatto = flattenSubject(name, args);
-  const soggetto = piatto === '' ? '' : toolSubject(name, args);
-  const summary = soggetto === '' ? toolPhrase(name) : `${toolPhrase(name)}: ${soggetto}`;
-  // `piatto === soggetto` significa che non è stato troncato: nessun dettaglio.
-  if (piatto === '' || piatto === soggetto) return { summary };
-  const detail = piatto.length > DETTAGLIO_MASSIMO ? `${piatto.slice(0, DETTAGLIO_MASSIMO - 1)}…` : piatto;
-  return { summary, detail };
+  return { phrase: toolPhrase(name), subject: flattenSubject(name, args) };
 }
 
-/** La frase, col suo soggetto quando ce n'è uno. */
+/** La frase, col suo soggetto quando ce n'è uno — mai accorciata. */
 export function toolLine(name: string, args: unknown): string {
-  return toolProgress(name, args).summary;
+  const { phrase, subject } = toolProgress(name, args);
+  return subject === '' ? phrase : `${phrase}: ${subject}`;
 }
 
 /** Il nome grezzo è il fallback, mai un errore: un tool MCP non è in questa mappa e non può esserlo. */

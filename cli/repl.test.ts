@@ -705,10 +705,10 @@ describe('la riga dice anche su cosa', () => {
     expect(toolSubject('fs_read', { path: 'a\tb\nc' })).toBe('a b c');
   });
 
-  it('e accorcia invece di mandare a capo', () => {
+  it('non accorcia mai: il soggetto resta intero', () => {
     const lungo = toolSubject('memory_search', { query: 'x'.repeat(200) });
-    expect(lungo.length).toBeLessThanOrEqual(48);
-    expect(lungo.endsWith('…')).toBe(true);
+    expect(lungo).toBe('x'.repeat(200));
+    expect(lungo).not.toContain('…');
   });
 
   /** Senza soggetto la riga resta quella di prima: un tool MCP non è nella mappa. */
