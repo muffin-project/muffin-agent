@@ -15,7 +15,8 @@
 #     dropped, no-new-privileges, and the key in no log or inspect output.
 #   - bounded: process and memory ceilings cover everything in the gateway
 #     container, sandboxed commands included, so a runaway command cannot
-#     exhaust the host. Checked here: a fork storm, and one process that
+#     exhaust the host's processes or memory (disk and CPU are bounded only by
+#     the command's timeout). Checked here: a fork storm, and one process that
 #     allocates without end, after which the gateway is still running. Not a
 #     claim: memory spread over smaller processes, or written to the sandbox's
 #     in-memory filesystems, gets the gateway itself killed (README). The load is
@@ -140,6 +141,11 @@ check_posture() {
     pass "ceilings set: $PIDS_LIMIT processes and threads, $MEM_BYTES bytes of memory, no extra swap"
   else
     fail "PidsLimit/Memory/MemorySwap are '$limits', expected '$PIDS_LIMIT $MEM_BYTES $MEM_BYTES'"
+  fi
+  local grace
+  grace=$(docker inspect -f '{{.Config.StopTimeout}}' "$GATEWAY")
+  if [ "$grace" = 75 ]; then pass "stop grace 75 s, longer than the gateway's 60 s drain"; else
+    fail "StopTimeout is '$grace', expected 75 (a shorter one SIGKILLs the drain)"
   fi
   if docker exec "$GATEWAY" test -e /run/secrets/muffin_provider_key; then
     fail "the provider key file is present in the gateway"

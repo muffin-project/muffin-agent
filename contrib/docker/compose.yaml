@@ -35,6 +35,10 @@ services:
     pids_limit: ${MUFFIN_GATEWAY_PIDS_LIMIT:-512}
     mem_limit: ${MUFFIN_GATEWAY_MEM_LIMIT:-2g}
     memswap_limit: ${MUFFIN_GATEWAY_MEM_LIMIT:-2g}
+    # The gateway drains for up to 60 s on SIGTERM (a turn in flight finishes);
+    # Docker's default 10 s would SIGKILL the drain. 75 s is the stop timeout the
+    # native systemd unit uses (core/gateway/unit.ts, STOP_TIMEOUT_SEC).
+    stop_grace_period: 75s
     environment:
       # Embeddings for memory recall; reachable when the `embeddings` profile runs.
       OLLAMA_URL: http://ollama:11434
