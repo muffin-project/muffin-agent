@@ -297,10 +297,12 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
   let everSent = false;
   /**
    * The transcript rides rich (Bot API 10.1+) like everything else on this
-   * surface. One failure that is not "message is not modified" flips this off
-   * for the rest of the turn, and every later send/edit/draft goes back to the
-   * legacy methods — a transport refusal must never cost the owner the
-   * transcript.
+   * surface. A **deterministic** refusal (a `TelegramError` with a status)
+   * flips this off for the rest of the turn, and every later send/edit goes
+   * back to the legacy methods — a transport refusal must never cost the owner
+   * the transcript. An ambiguous status-0 failure (the request may already
+   * have landed) does NOT flip it and does not re-send: the turn disables the
+   * transcript instead of risking a duplicate.
    */
   let richTransport = true;
 
