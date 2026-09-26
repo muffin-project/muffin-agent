@@ -83,7 +83,7 @@ does not apply here.
 For scripted setups the one-shot `init` service replaces the interactive
 `muffin init`. The key comes from a file mounted as a compose secret, fed on
 stdin, never from an environment variable or the command line (ADR-0048). Keep
-the file **outside the checkout**, mode 0600:
+the file **outside the checkout**, where other host users cannot read it:
 
 ```sh
 MUFFIN_PROVIDER_KEY_FILE=/path/outside/the/checkout/provider.key \
@@ -101,9 +101,12 @@ docker compose up -d
 | `MUFFIN_INIT_BASE_URL` | `https://openrouter.ai/api/v1`, `http://ollama:11434/v1` |
 | `MUFFIN_INIT_MODEL` | the model id |
 
-Compose mounts the file as it is on the host, so it must be readable by uid
-1000, the container user (for example owned by that uid, mode 0600); otherwise
-`init` fails and says it cannot read the key.
+Compose mounts the file as it is on the host, and outside swarm it ignores the
+`uid`, `gid` and `mode` of a secret (measured). The file itself must therefore
+be readable by uid 1000, the container user: either owned by that uid with mode
+0600, or mode 0644 inside a directory only you can open (mode 0700). Otherwise
+`init` stops with `cannot open /run/secrets/muffin_provider_key: Permission
+denied`.
 
 The secret is mounted only into the `init` container, which exits when the home
 is initialised. The long-running gateway never has it: anything mounted into the
@@ -188,5 +191,6 @@ sudo aa-status | grep muffin-userns
 | `Can't mount proc on /proc` | Docker masks `/proc` | make sure `compose.sandbox.yaml` is applied (`systempaths=unconfined`) |
 | container does not start after adding `compose.apparmor.yaml` | profile not loaded on an AppArmor host | load it, or drop that override |
 | `bubblewrap ... predates ... 0.12.0` | wrong image | rebuild from this Dockerfile |
+| init: `cannot open /run/secrets/muffin_provider_key: Permission denied` | the key file is not readable by uid 1000 (for example created with `sudo`, mode 0600) | own it by uid 1000, or mode 0644 inside a 0700 directory |
 | build: `.git is not a directory (linked worktree?)` | building from a `git worktree` | build from a regular clone |
 | a local change is missing from the image | the image is built from the last commit | commit it, then rebuild |
