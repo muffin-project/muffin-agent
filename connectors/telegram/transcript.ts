@@ -1,5 +1,5 @@
 import type { TurnEvent } from '../../agent/loop.js';
-import { toolLine, toolPhrase } from '../../agent/tool-phrase.js';
+import { toolPhrase, toolProgress } from '../../agent/tool-phrase.js';
 import type { Negotiation } from '../../core/surface/types.js';
 import type { TelegramApiLike } from './api.js';
 import { escapeHtml, splitHtml, TELEGRAM_MAX, toTelegramHtml } from './render.js';
@@ -110,12 +110,27 @@ function nonModificato(error: unknown): boolean {
 }
 
 type Step = {
-  /** Already escaped: built from `toolLine`, which carries model-written arguments. */
+  /** Already escaped: the compact line from `toolProgress`, which carries model-written arguments. */
   line: string;
+  /**
+   * Already escaped exact detail, shown as an expandable quote under the line
+   * and only when the compact line had to shorten the subject (a long shell
+   * command, a long query). `agent/tool-phrase.ts` owns when it exists; this
+   * file owns only how it looks.
+   */
+  detail?: string;
   /** Running (`⏳`, with its own elapsed), or finished with a mark. */
   state: 'running' | 'done' | 'error' | 'waiting' | 'note';
   startedAt: number;
 };
+
+/** The compact line plus, when the subject did not fit, the inspectable detail. */
+function stepOf(name: string, args: unknown): Pick<Step, 'line'> & { detail?: string } {
+  const progress = toolProgress(name, args);
+  return progress.detail === undefined
+    ? { line: escapeHtml(progress.summary) }
+    : { line: escapeHtml(progress.summary), detail: escapeHtml(progress.detail) };
+}
 
 type Segment = {
   messageId: number | null;
@@ -333,6 +348,13 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         case 'note':
           lines.push(step.line);
           break;
+      }
+      // The exact detail under its own compact line, collapsed by default on
+      // every client: Telegram has `<blockquote expandable>` since 7.10, and
+      // the surface already relies on it for long quoted text. Nothing is
+      // pushed when the compact line did not have to shorten anything.
+      if (step.detail !== undefined) {
+        lines.push(`<blockquote expandable>${step.detail}</blockquote>`);
       }
     }
     // Redundant once the tail itself is visible below: the status line is
@@ -690,7 +712,7 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
           break;
         case 'tool_start':
           status = null;
-          addStep({ line: escapeHtml(toolLine(event.name, event.args)), state: 'running', startedAt: now() });
+          addStep({ ...stepOf(event.name, event.args), state: 'running', startedAt: now() });
           break;
         case 'tool_retry': {
           const seg = current();
@@ -706,10 +728,17 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
           if (step) {
             step.state = event.isError ? 'error' : 'done';
             // A retry rewrote the line; the closing mark carries the tool,
-            // not the wait — when the end event brings the arguments back.
-            if (event.args !== undefined) step.line = escapeHtml(toolLine(event.name, event.args));
+            // not the wait — when the end event brings the arguments back. The
+            // detail is recomputed with it, so a test that closes a step still
+            // shows the exact command that actually ran.
+            if (event.args !== undefined) {
+              const fresh = stepOf(event.name, event.args);
+              step.line = fresh.line;
+              if (fresh.detail === undefined) delete step.detail;
+              else step.detail = fresh.detail;
+            }
           } else {
-            addStep({ line: escapeHtml(toolLine(event.name, event.args)), state: event.isError ? 'error' : 'done', startedAt: now() });
+            addStep({ ...stepOf(event.name, event.args), state: event.isError ? 'error' : 'done', startedAt: now() });
           }
           break;
         }

@@ -635,3 +635,50 @@ describe('defect A — no stale post-answer Thinking preview', () => {
     expect(t.handoff()).toBeNull();
   });
 });
+
+/**
+ * #616: scanability first, inspectability on demand.
+ *
+ * The compact line stays what a person reads; the exact command lives under it
+ * in a `<blockquote expandable>` (Telegram 7.10+), so the 48-char clamp is a
+ * display choice rather than an information loss. A short command has no
+ * detail to show and must not grow a pointless block.
+ */
+describe('tool detail is inspectable without losing the exact command (#616)', () => {
+  const command = 'grep -rn "continuation" agent/loop/round.ts connectors/telegram/transcript.ts core/turns/store.ts';
+
+  it('a long command keeps the compact line and the exact command in an expandable quote', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    t.report(start('shell_run', { command }));
+    await vi.advanceTimersByTimeAsync(0);
+    const text = calls.at(-1)!.text!;
+    expect(text).toContain('guardo con un comando: ');
+    expect(text).toContain('…');
+    expect(text).toContain(`<blockquote expandable>${command}</blockquote>`);
+    await t.stop();
+  });
+
+  it('a short command stays one compact line with no block', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    t.report(start('shell_run', { command: 'npm test' }));
+    await vi.advanceTimersByTimeAsync(0);
+    const text = calls.at(-1)!.text!;
+    expect(text).toContain('guardo con un comando: npm test');
+    expect(text).not.toContain('<blockquote');
+    await t.stop();
+  });
+
+  it('a secret-shaped argument is redacted in the detail, never repeated', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    const secret = 'sk-live-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345';
+    t.report(start('shell_run', { command: `curl -H "Authorization: Bearer ${secret}" https://example.com/a/long/path/here` }));
+    await vi.advanceTimersByTimeAsync(0);
+    const text = calls.at(-1)!.text!;
+    expect(text).not.toContain(secret);
+    expect(text).toContain('«redacted:');
+    await t.stop();
+  });
+});
