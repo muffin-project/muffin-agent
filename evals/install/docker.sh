@@ -88,12 +88,16 @@ check_posture() {
   local sandbox=${verdict%% *} shell=${verdict##* }
   # The gateway's own tool list, as announced at boot: it names the shell tools
   # only when it did NOT register them.
-  local boot_off
+  local boot_off cut
   boot_off=$(docker logs --since "$since" "$GATEWAY" 2>&1 | grep -c 'shell_run, shell_run_write spento' || true)
-  case "$sandbox/$shell/$boot_off" in
-    ok/ok/0) pass "contained: doctor and the gateway both report shell tools on" ;;
-    warn/warn/[1-9]*) pass "not contained: shell tools off, doctor and the gateway say why" ;;
-    *) fail "inconsistent: doctor sandbox=$sandbox shell_run=$shell, gateway boot 'off' lines=$boot_off" ;;
+  # Registered is not exposed: a profile's tool cap can still hide the tool
+  # from the model ("shell_run tagliato"). The init model id selects a
+  # profile wide enough that nothing should be cut.
+  cut=$(docker logs --since "$since" "$GATEWAY" 2>&1 | grep -c 'shell_run tagliato' || true)
+  case "$sandbox/$shell/$boot_off/$cut" in
+    ok/ok/0/0) pass "contained: shell tools registered and exposed; doctor and the gateway agree" ;;
+    warn/warn/[1-9]*/0) pass "not contained: shell tools off, doctor and the gateway say why" ;;
+    *) fail "inconsistent: doctor sandbox=$sandbox shell_run=$shell, gateway 'off' lines=$boot_off, 'cut' lines=$cut" ;;
   esac
   if [ "$label" = sandbox ] && [ "${MUFFIN_EVAL_EXPECT_CONTAINED:-}" = 1 ] && [ "$sandbox" != ok ]; then
     fail "MUFFIN_EVAL_EXPECT_CONTAINED=1 but the sandbox posture did not contain"
@@ -144,7 +148,7 @@ fi
 
 echo "== unattended init (one-shot service, key on stdin from a secret file)"
 if MUFFIN_PROVIDER_KEY_FILE="$KEY_FILE" MUFFIN_INIT_PROVIDER=openai-compat \
-   MUFFIN_INIT_BASE_URL=http://127.0.0.1:9/v1 MUFFIN_INIT_MODEL=eval-model \
+   MUFFIN_INIT_BASE_URL=http://127.0.0.1:9/v1 MUFFIN_INIT_MODEL=eval-claude-sonnet-5 \
    compose --profile unattended-init run --rm init >"$SCRATCH/init.log" 2>&1; then
   pass "home initialised"
 else
