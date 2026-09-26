@@ -75,7 +75,7 @@ import { DRAIN_BUDGET_MS } from '../../core/gateway/service.js';
  */
 const DEFAULT_STOP_BUDGET_MS = DRAIN_BUDGET_MS;
 import { escapeHtml, renderForTelegram, splitHtml, toTelegramHtml } from './render.js';
-import { normalizeInboundRich, planRich } from './rich.js';
+import { normalizeInboundRich, planRich, richFitsHard, richFromHtml } from './rich.js';
 import { UpdateInbox, type StoredUpdate } from './updates.js';
 
 /**
@@ -1348,9 +1348,14 @@ export class TelegramConnector {
     const handoff = this.transcriptHandoff.get(turnId);
     if (handoff) this.transcriptHandoff.delete(turnId);
 
-    const parts = handoff
-      ? splitHtml(handoff.stepsText === '' ? toTelegramHtml(text) : `${handoff.stepsText}\n\n${toTelegramHtml(text)}`)
-      : renderForTelegram(text);
+    // The unsplit HTML both lanes start from: `splitHtml` is the legacy plan
+    // (and the rich fallback); the rich lane carries `combined` whole.
+    const combined = handoff
+      ? handoff.stepsText === ''
+        ? toTelegramHtml(text)
+        : `${handoff.stepsText}\n\n${toTelegramHtml(text)}`
+      : toTelegramHtml(text);
+    const parts = splitHtml(combined);
 
     const legacy: TelegramDeliveryPlanPart[] = parts.map((html, i) => {
       if (i === 0 && handoff) {
@@ -1368,33 +1373,46 @@ export class TelegramConnector {
         html,
       };
     });
-    return deliverTelegram(this.deps.delivery, this.deps.api, turnId, this.maybeRich(text, legacy), () => this.now());
+    return deliverTelegram(this.deps.delivery, this.deps.api, turnId, this.maybeRich(text, combined, legacy), () => this.now());
   }
 
   /**
-   * Rich final, Bot API 10.3 — exactly one case, and the restriction is the
-   * guarantee: a rich final rides ONLY a fresh `send` (no transcript handoff
-   * being extended, no owned edit being rewritten). A handoff message already
-   * carries settled steps/preamble in legacy HTML, and a rich edit would
-   * replace them with the answer alone — steps lost on screen. A fresh send
-   * carries nothing yet, so nothing can be lost.
+   * Rich final, Bot API 10.3 — two cases.
    *
-   * That is also why a table answered after twelve tool calls still goes
-   * legacy: preserving the trail beats prettier cells. A rich final that
-   * preserves settled transcript content needs the raw step text at this
-   * boundary — a broader Turn-contract change, deliberately NOT smuggled in
-   * here.
+   * A fresh `send` whose answer is structurally rich (tables, checklists,
+   * details, headings) rides `blocks`, as before: the richest rendering on
+   * the message that carries the answer.
    *
-   * The legacy plan is computed first and always: it is the frozen fallback
-   * a deterministic rich rejection expands into (`delivery.ts`), and the
-   * path taken whole when the answer is ordinary prose.
+   * An `edit` — the answer that extends the message already showing the step
+   * trail — rides rich as `html`: the **same bytes** the legacy path would
+   * edit in (`stepsText + answer`), so nothing of the trail is lost, and the
+   * message becomes a rich one instead of staying legacy. The owner asked for
+   * rich end to end (2026-09-26): the old rule ("a rich edit would replace the
+   * steps with the answer alone") assumed the rich payload was the answer
+   * only; carrying the combined HTML removes that reason, because the rich
+   * message IS the trail plus the answer.
+   *
+   * The legacy plan is computed first and always: it is the frozen fallback a
+   * deterministic rich rejection expands into (`delivery.ts`), and the path
+   * taken whole when rich does not fit the protocol limits.
    */
-  private maybeRich(text: string, legacy: TelegramDeliveryPlanPart[]): TelegramDeliveryPlanPart[] {
+  private maybeRich(
+    text: string,
+    combinedHtml: string,
+    legacy: TelegramDeliveryPlanPart[],
+  ): TelegramDeliveryPlanPart[] {
     const first = legacy[0];
-    if (first === undefined || first.operation !== 'send') return legacy;
-    const rich = planRich(text);
-    if (rich.mode !== 'rich') return legacy;
-    return [{ ...first, kind: 'rich' as const, rich: rich.message, fallback: legacy }];
+    if (first === undefined) return legacy;
+    if (first.operation === 'send') {
+      const rich = planRich(text);
+      if (rich.mode !== 'rich') return legacy;
+      return [{ ...first, kind: 'rich' as const, rich: rich.message, fallback: legacy }];
+    }
+    // The answer that extends the step trail rides rich as HTML: the same
+    // bytes the legacy lane would edit in, richer transport, one message.
+    const payload = richFromHtml(combinedHtml);
+    if (richFitsHard(payload) !== null) return legacy;
+    return [{ ...first, kind: 'rich' as const, rich: payload, fallback: legacy }];
   }
 
   /**

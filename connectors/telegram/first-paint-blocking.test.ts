@@ -56,7 +56,7 @@ const privateMsg = (id: number): Update =>
 
 describe('first paint beats a blocking first tool handler', () => {
   it('the first running step is sent before the handler body can block the loop', async () => {
-    type Call = { method: string; text?: string; messageId?: number };
+    type Call = { method: string; text?: string; rich?: unknown; messageId?: number };
     const calls: Call[] = [];
     let nextMessageId = 900;
     const api = {
@@ -69,8 +69,20 @@ describe('first paint beats a blocking first tool handler', () => {
         calls.push({ method: 'editMessageText', text: html, messageId });
         return true;
       },
+      // The final answer merges into the same message as a rich edit (Bot API
+      // 10.3); the fake records it so the merge is still observed.
+      sendRichMessage: async (chatId: number, rich: unknown) => {
+        const messageId = nextMessageId++;
+        calls.push({ method: 'sendRichMessage', rich, messageId });
+        return { message_id: messageId, date: 0, chat: { id: chatId, type: 'private' } } as never;
+      },
+      editMessageRichText: async (_chatId: number, messageId: number, rich: unknown) => {
+        calls.push({ method: 'editMessageRichText', rich, messageId });
+        return true;
+      },
       sendChatAction: async () => true,
       sendMessageDraft: async () => true,
+      sendRichMessageDraft: async () => true,
     } as unknown as TelegramApiLike;
 
     // The handler records, on its very first synchronous line, how many
@@ -152,11 +164,17 @@ describe('first paint beats a blocking first tool handler', () => {
       expect(calls[0]!.text).toContain('⏳');
       releaseTool();
       await draining;
-      // …and the turn still ends as exactly one message, answer merged in.
-      const sends = calls.filter((c) => c.method === 'sendMessage');
+      // …and the turn still ends as exactly one message, answer merged in —
+      // now as a rich edit of that message (Bot API 10.3), with the step trail
+      // and the answer in the same payload.
+      const sends = calls.filter((c) => c.method === 'sendMessage' || c.method === 'sendRichMessage');
       expect(sends).toHaveLength(1);
-      const last = calls.filter((c) => c.method === 'editMessageText').at(-1)!;
-      expect(last.text).toContain('fatto.');
+      const final = calls.filter((c) => c.method === 'editMessageRichText').at(-1);
+      expect(final).toBeDefined();
+      const finalText = JSON.stringify(final!.rich);
+      // One rich message carries BOTH: the settled step trail and the answer.
+      expect(finalText).toContain('sonda_bloccante_xyz');
+      expect(finalText).toContain('fatto.');
     } finally {
       runtime.close();
     }

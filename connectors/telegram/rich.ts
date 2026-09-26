@@ -148,8 +148,28 @@ export function richFitsHard(message: OutboundRich): string | null {
 
 export type RichSize = { chars: number; blocks: number; depth: number };
 
+/**
+ * Our existing HTML, carried as a rich message (Bot API 10.1 accepts `html`).
+ *
+ * Same bytes the legacy path would send with `parse_mode: HTML`; the transport
+ * changes, not the content. It is how the step trail and the answer rode rich
+ * in ONE message without a second renderer over the same data.
+ */
+export function richFromHtml(html: string): OutboundRich {
+  return { html };
+}
+
 /** Code-point count (UTF-8 characters, approximated) + official-enumeration block count + nesting depth. */
 export function countRich(message: OutboundRich): RichSize {
+  // A rich message may carry `html`/`markdown` instead of `blocks` (exactly one
+  // of the three). The text is the payload; there is one block and no nesting
+  // to walk, so the hard-limit check is a character count.
+  if (typeof message.html === 'string') {
+    return { chars: codePoints(message.html), blocks: 1, depth: 1 };
+  }
+  if (typeof message.markdown === 'string') {
+    return { chars: codePoints(message.markdown), blocks: 1, depth: 1 };
+  }
   let chars = 0;
   let blocks = 0;
   let depth = 0;
