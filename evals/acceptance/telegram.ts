@@ -336,7 +336,7 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
       // caller already names it as `message_id` in the request payload
       // (`connectors/telegram/api.ts`), so it needs no manufacturing here; a
       // scenario reads it straight off `sent()[i].payload['message_id']`.
-      const createdId = method === 'sendMessage' || method === 'sendMessageDraft' ? nextMessageId++ : undefined;
+      const createdId = method === 'sendMessage' || method === 'sendMessageDraft' || method === 'sendRichMessage' || method === 'sendRichMessageDraft' ? nextMessageId++ : undefined;
 
       // Everything else is an outbound effect, and it is recorded before it is
       // answered: a scenario asserting "Muffin never sent this" needs the
@@ -354,13 +354,14 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
         return;
       }
 
-      if (method === 'sendMessage' || method === 'editMessageText' || method === 'sendMessageDraft') {
+      if (method === 'sendMessage' || method === 'editMessageText' || method === 'sendMessageDraft' || method === 'sendRichMessage' || method === 'sendRichMessageDraft' || method === 'editMessageRichText') {
         ok({
           // An edit echoes the id it was given; a create hands out the fresh one.
           message_id: createdId ?? Number(payload['message_id'] ?? 0),
           date: Math.floor(Date.now() / 1000),
           chat: { id: Number(payload['chat_id'] ?? 0), type: 'private' },
           text: String(payload['text'] ?? ''),
+          ...(payload['rich_message'] !== undefined ? { rich_message: payload['rich_message'] } : {}),
         });
         return;
       }

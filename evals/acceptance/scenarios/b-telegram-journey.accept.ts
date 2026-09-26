@@ -125,6 +125,18 @@ function plantTier2Episode(home: string, threadKey: string): void {
   }
 }
 
+/**
+ * The visible text of one outbound call: legacy `text`, or a rich payload.
+ *
+ * `editMessageRichText` reaches the wire as `editMessageText` carrying
+ * `rich_message` instead of `text` (`connectors/telegram/api.ts`), so the
+ * discriminator is the payload key, never the method name.
+ */
+const testoDi = (c: { method: string; payload: Record<string, unknown> }): string =>
+  c.payload['rich_message'] !== undefined
+    ? JSON.stringify(c.payload['rich_message'])
+    : String(c.payload['text'] ?? '');
+
 describe('acceptance · B1 telegram · un fatto detto su Telegram torna a un `run` usa e getta per memoria, non per sessione', () => {
   /**
    * **Aggiornato da ADR-0056 (03/09).** Questo scenario asseriva
@@ -277,8 +289,8 @@ describe('acceptance · B13 · la trascrizione del turno su Telegram', () => {
                 .sent()
                 .some(
                   (c) =>
-                    (c.method === 'sendMessage' || c.method === 'editMessageText') &&
-                    String(c.payload['text'] ?? '').includes('niente di nuovo da ieri a oggi'),
+                    (c.method === 'sendMessage' || c.method === 'editMessageText' || c.method === 'editMessageRichText' || c.method === 'sendRichMessage') &&
+                    testoDi(c).includes('niente di nuovo da ieri a oggi'),
                 ),
             30_000,
           );
@@ -309,7 +321,9 @@ describe('acceptance · B13 · la trascrizione del turno su Telegram', () => {
             );
           }
 
-          const edits = sent.filter((c) => c.method === 'editMessageText' && Number(c.payload['message_id']) === transcriptId);
+          const edits = sent.filter(
+            (c) => (c.method === 'editMessageText' || c.method === 'editMessageRichText') && Number(c.payload['message_id']) === transcriptId,
+          );
           if (edits.length === 0) {
             throw new Error(
               `nessun editMessageText sulla trascrizione (id ${transcriptId}) — il turno non è durato ` +
@@ -319,7 +333,7 @@ describe('acceptance · B13 · la trascrizione del turno su Telegram', () => {
           if (String(edits[0]!.payload['text'] ?? '') === String(creates[0]!.payload['text'] ?? '')) {
             throw new Error('editMessageText ha ripetuto lo stesso testo del create — non è un aggiornamento reale');
           }
-          const finale = String(edits[edits.length - 1]!.payload['text'] ?? '');
+          const finale = testoDi(edits[edits.length - 1]!);
           if (!finale.includes('✓ cerco in memoria: appunti di ieri') || !finale.includes('✓ cerco in memoria: appunti di oggi')) {
             throw new Error(`la trascrizione finale non tiene entrambi i passi:\n${finale}`);
           }
@@ -536,8 +550,8 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
                 .sent()
                 .some(
                   (c) =>
-                    (c.method === 'sendMessage' || c.method === 'editMessageText') &&
-                    String(c.payload['text'] ?? '').includes('ha risposto ciao'),
+                    (c.method === 'sendMessage' || c.method === 'editMessageText' || c.method === 'editMessageRichText' || c.method === 'sendRichMessage') &&
+                    testoDi(c).includes('ha risposto ciao'),
                 ),
             30_000,
           );
@@ -591,13 +605,15 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
           // vocabolario di ogni altro passo (`transcript.ts`'s `resolveAsk`).
           const editSullaTrascrizione = tg
             .sent()
-            .filter((c) => c.method === 'editMessageText' && Number(c.payload['message_id']) !== askMessageId);
+            .filter(
+              (c) =>
+                (c.method === 'editMessageText' || c.method === 'editMessageRichText') &&
+                Number(c.payload['message_id']) !== askMessageId,
+            );
           if (editSullaTrascrizione.length === 0) {
             throw new Error('nessun edit sul messaggio della trascrizione (diverso da quello ASK)');
           }
-          const ultimoTestoTrascrizione = String(
-            editSullaTrascrizione[editSullaTrascrizione.length - 1]?.payload['text'] ?? '',
-          );
+          const ultimoTestoTrascrizione = testoDi(editSullaTrascrizione[editSullaTrascrizione.length - 1]!);
           if (ultimoTestoTrascrizione.includes('aspetto la tua approvazione')) {
             throw new Error(
               `la riga di attesa resta congelata a turno concluso:\n${ultimoTestoTrascrizione}`,
@@ -621,7 +637,7 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
           if (!ultimoTestoTrascrizione.includes('ha risposto ciao')) {
             throw new Error(`la risposta finale non è finita nell'ultimo edit della trascrizione:\n${ultimoTestoTrascrizione}`);
           }
-          if (tg.sent().some((c) => c.method === 'sendMessage' && String(c.payload['text'] ?? '').includes('ha risposto ciao'))) {
+          if (tg.sent().some((c) => (c.method === 'sendMessage' || c.method === 'sendRichMessage') && testoDi(c).includes('ha risposto ciao'))) {
             throw new Error('la risposta finale è arrivata anche come sendMessage a parte, non solo come edit della trascrizione');
           }
         } finally {
