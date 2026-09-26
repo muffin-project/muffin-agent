@@ -53,6 +53,15 @@ function fakeApi(makeOverrides?: (calls: Recorded[]) => Partial<TelegramApiLike>
       calls.push({ method: 'sendMessageDraft', at: Date.now() });
       return true;
     },
+    sendRichMessage: async () => {
+      throw new Error('unused in this fake');
+    },
+    editMessageRichText: async () => {
+      throw new Error('unused in this fake');
+    },
+    sendRichMessageDraft: async () => {
+      throw new Error('unused in this fake');
+    },
     fileUrl: async () => 'https://example.test/file',
     setMyCommands: async () => true,
     answerCallbackQuery: async () => true,

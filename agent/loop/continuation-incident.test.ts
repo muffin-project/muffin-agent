@@ -18,6 +18,7 @@ import {
   type Provider,
 } from '../providers/types.js';
 import { searchCapability, searchSpec } from '../tools/search.js';
+import { providerMessages } from './provider-checkpoint.js';
 
 /**
  * Incident A (Telegram 2026-09-18, turn ecba5616) as a regression probe.
@@ -377,6 +378,7 @@ describe('Incident A · useful work then provider stalls', () => {
           iterations: 1,
           recoveriesUsed: 0,
           transportRetriesLeft: 10,
+          truncationsUsed: 0,
           toolCallsMade: 0,
           nudgedForCompletion: false,
           usage: { ...zeroUsage },
@@ -408,7 +410,7 @@ describe('Incident A · useful work then provider stalls', () => {
     // Exactly one first execution — even though non-rerunnable — and no
     // "maybe happened" declaration anywhere in the transcript.
     expect(executions.get('irreversibile.txt')).toBe(1);
-    const wire = JSON.stringify(turns.get('dangle')?.messages);
+    const wire = JSON.stringify(providerMessages(turns.get('dangle')));
     expect(wire).not.toContain('non è possibile sapere');
     expect(turns.recordedOutcomes('dangle').get('c-dangle')?.content).toBe('scritto');
   });

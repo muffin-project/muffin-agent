@@ -2,9 +2,12 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { httpCapability } from '../../agent/tools/http.js';
 import { runInit } from '../../cli/init.js';
 import { paths } from '../config/config.js';
-import { POLICY_FLOOR, grantedTo, loadPolicyMatrix } from './matrix.js';
+import { createDecide } from './decide.js';
+import { grantedTo, loadPolicyMatrix, POLICY_FLOOR } from './matrix.js';
+import type { Principal } from './types.js';
 
 /**
  * `rot/policy.json` was sealed, hashed and read by nobody: the matrix it
@@ -31,7 +34,10 @@ const policyOf = (dir: string) => join(paths(dir).rot, 'policy.json');
 describe('le righe della matrice sigillata', () => {
   it('lascia che il file stringa una riga', () => {
     const dir = home();
-    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, rows: { host: { denyAbove: 1 } } }));
+    writeFileSync(
+      policyOf(dir),
+      JSON.stringify({ schemaVersion: 1, rows: { host: { denyAbove: 1 } } }),
+    );
     expect(loadPolicyMatrix(dir).rows.host).toEqual({ asksForIrreversible: true, denyAbove: 1 });
     // E le altre righe restano quelle del pavimento: un file parziale eredita.
     expect(loadPolicyMatrix(dir).rows.context).toEqual(POLICY_FLOOR.rows.context);
@@ -46,14 +52,20 @@ describe('le righe della matrice sigillata', () => {
     // file più un reseal.
     writeFileSync(
       policyOf(dir),
-      JSON.stringify({ schemaVersion: 1, rows: { host: { asksForIrreversible: false, denyAbove: 3 } } }),
+      JSON.stringify({
+        schemaVersion: 1,
+        rows: { host: { asksForIrreversible: false, denyAbove: 3 } },
+      }),
     );
     expect(loadPolicyMatrix(dir).rows.host).toEqual(POLICY_FLOOR.rows.host);
 
     // Mista: la metà che stringe atterra, quella che allarga no.
     writeFileSync(
       policyOf(dir),
-      JSON.stringify({ schemaVersion: 1, rows: { host: { asksForIrreversible: false, denyAbove: 1 } } }),
+      JSON.stringify({
+        schemaVersion: 1,
+        rows: { host: { asksForIrreversible: false, denyAbove: 1 } },
+      }),
     );
     expect(loadPolicyMatrix(dir).rows.host).toEqual({
       asksForIrreversible: POLICY_FLOOR.rows.host.asksForIrreversible,
@@ -73,7 +85,10 @@ describe('le righe della matrice sigillata', () => {
    */
   it('rifiuta un file che porta ancora `askAbove`, nominando il campo', () => {
     const dir = home();
-    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, rows: { host: { askAbove: 1, denyAbove: 2 } } }));
+    writeFileSync(
+      policyOf(dir),
+      JSON.stringify({ schemaVersion: 1, rows: { host: { askAbove: 1, denyAbove: 2 } } }),
+    );
     const m = loadPolicyMatrix(dir);
     expect(m.source).toBe('fallback');
     expect(m.note ?? '').toContain('askAbove');
@@ -98,7 +113,10 @@ describe('le righe della matrice sigillata', () => {
     const dir = home();
     writeFileSync(
       policyOf(dir),
-      JSON.stringify({ schemaVersion: 1, rows: { hostt: { denyAbove: 0 }, inventata: { denyAbove: 0 } } }),
+      JSON.stringify({
+        schemaVersion: 1,
+        rows: { hostt: { denyAbove: 0 }, inventata: { denyAbove: 0 } },
+      }),
     );
     const rows = loadPolicyMatrix(dir).rows;
     expect(Object.keys(rows).sort()).toEqual(Object.keys(POLICY_FLOOR.rows).sort());
@@ -111,14 +129,20 @@ describe('le righe della matrice sigillata', () => {
     const dir = home();
     // `rot` sta a -1: irraggiungibile a ogni taint. Il tipo del file è 0-3,
     // quindi qualunque valore scrivibile è più largo — e viene scartato.
-    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, rows: { rot: { denyAbove: 3 } } }));
+    writeFileSync(
+      policyOf(dir),
+      JSON.stringify({ schemaVersion: 1, rows: { rot: { denyAbove: 3 } } }),
+    );
     expect(loadPolicyMatrix(dir).rows.rot.denyAbove).toBe(-1);
     rmSync(dir, { recursive: true, force: true });
   });
 
   it('un file illeggibile non allarga niente: si torna al pavimento, e si dice', () => {
     const dir = home();
-    writeFileSync(policyOf(dir), '{ "schemaVersion": 1, "rows": { "host": { "denyAbove": "tre" } } }');
+    writeFileSync(
+      policyOf(dir),
+      '{ "schemaVersion": 1, "rows": { "host": { "denyAbove": "tre" } } }',
+    );
     const m = loadPolicyMatrix(dir);
     expect(m.source).toBe('fallback');
     expect(m.note).toBeTruthy();
@@ -138,14 +162,23 @@ describe('the sealed permission matrix', () => {
     // lists may only grow.
     const dir = home();
 
-    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, defaultMaxTaint: { low: 3, medium: 3, high: 3 } }));
+    writeFileSync(
+      policyOf(dir),
+      JSON.stringify({ schemaVersion: 1, defaultMaxTaint: { low: 3, medium: 3, high: 3 } }),
+    );
     expect(loadPolicyMatrix(dir).defaultMaxTaint).toEqual(POLICY_FLOOR.defaultMaxTaint);
 
-    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, defaultMaxTaint: { low: 1, medium: 0, high: 0 } }));
+    writeFileSync(
+      policyOf(dir),
+      JSON.stringify({ schemaVersion: 1, defaultMaxTaint: { low: 1, medium: 0, high: 0 } }),
+    );
     expect(loadPolicyMatrix(dir).defaultMaxTaint).toEqual({ low: 1, medium: 0, high: 0 });
 
     // And a mixed file: the tightening half lands, the widening half does not.
-    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, defaultMaxTaint: { low: 0, medium: 3 } }));
+    writeFileSync(
+      policyOf(dir),
+      JSON.stringify({ schemaVersion: 1, defaultMaxTaint: { low: 0, medium: 3 } }),
+    );
     const mixed = loadPolicyMatrix(dir).defaultMaxTaint;
     expect(mixed.low).toBe(0);
     expect(mixed.medium).toBe(POLICY_FLOOR.defaultMaxTaint.medium);
@@ -192,14 +225,19 @@ describe('a policy file that cannot be trusted never widens anything', () => {
     expect(matrix.source).toBe('fallback');
     expect(matrix.note).toMatch(why);
     expect(matrix.defaultMaxTaint).toEqual({ low: 3, medium: 1, high: 1 });
-    expect(matrix.paramsMaxTaint).toBe(2);
+    expect(matrix.paramsMaxTaint).toBe(1);
     // The namespace entries joined the bare ids when the lookup learned to
     // read them (`denyListCovers`): 03 §3 says `outward.*`, and the Root of
     // Trust row says the RoT, not one verb of it. Both are tightenings — the
     // literal list only ever grows in the deny direction, which is why this
     // assertion stays literal.
     expect([...matrix.neverAtRuntime]).toEqual(['rot.write', 'rot.*']);
-    expect([...matrix.forbiddenForSystem]).toEqual(['outward.send', 'outward.*', 'config.ratchet', 'jobs.schedule']);
+    expect([...matrix.forbiddenForSystem]).toEqual([
+      'outward.send',
+      'outward.*',
+      'config.ratchet',
+      'jobs.schedule',
+    ]);
   };
 
   it('an absent file degrades to the floor and says so', () => {
@@ -262,26 +300,30 @@ describe('the deny lists are a floor, not a setting', () => {
   });
 });
 
-describe('paramsMaxTaint — the one ceiling the file may also raise (mandato inv. 7)', () => {
+describe('paramsMaxTaint — monotone floor since lane #624 + #641 (HOLD resolution)', () => {
   /**
-   * Deliberately not `it('lets the file tighten a ceiling and refuses to let
-   * it raise one', ...)`'s shape: that test (above) pins `defaultMaxTaint`'s
-   * tighten-only clamp, and `paramsMaxTaint` is NOT under that clamp — see the
-   * field's own doc comment on `PolicyMatrix` (matrix.ts) for why. These three
-   * tests exist so that clamping it later — making it match `defaultMaxTaint`
-   * by accident — goes red instead of silently taking away the owner's dial.
+   * Fino alla HOLD resolution questo numero era l'unico che il file poteva
+   * anche ALZARE, e tre test qui sotto lo provavano. La ragione è caduta con
+   * la misura: una home sigillata col vecchio shipped 2 conservava il
+   * ceiling 2 dopo l'upgrade e con esso il path P0 owner+tier-2. Ora il
+   * clamp è lo stesso `tighter()` di ogni altro ceiling — stringere sì,
+   * riallargare mai — e il test che provava il raise prova il confine.
+   * Riaprire il confine è una decisione/prodotto separata, non un reseal.
    */
-  it('defaults to 2 when the file is genuinely silent — tier 2 is the owner\'s own disk (owner, 17/08)', () => {
+  it('defaults to 1 when the file is genuinely silent — tier-2 disk is attacker-influenced, not owner-authored (lane #624 + #641)', () => {
     const dir = home();
     // `home()` installa `defaults/rot/policy.json`, che la chiave la CONTIENE:
     // asserire sul file installato non prova il default, prova il default del
     // file. Qui si riscrive il file **senza** la chiave — la forma che ha
     // davvero la `~/.muffin` dell'owner, sigillata prima di questa slice —
     // così togliere il `?? POLICY_FLOOR.paramsMaxTaint` in `merge()` va rosso.
-    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, neverAtRuntime: ['rot.write'] }));
+    writeFileSync(
+      policyOf(dir),
+      JSON.stringify({ schemaVersion: 1, neverAtRuntime: ['rot.write'] }),
+    );
     const matrix = loadPolicyMatrix(dir);
     expect(matrix.source).toBe('sealed');
-    expect(matrix.paramsMaxTaint).toBe(2);
+    expect(matrix.paramsMaxTaint).toBe(1);
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -292,10 +334,10 @@ describe('paramsMaxTaint — the one ceiling the file may also raise (mandato in
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('an owner edit can also RAISE it, unlike defaultMaxTaint', () => {
+  it('a sealed file can no longer RAISE it above the floor — the widening is confined to 1', () => {
     const dir = home();
     writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, paramsMaxTaint: 3 }));
-    expect(loadPolicyMatrix(dir).paramsMaxTaint).toBe(3);
+    expect(loadPolicyMatrix(dir).paramsMaxTaint).toBe(1);
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -305,7 +347,7 @@ describe('paramsMaxTaint — the one ceiling the file may also raise (mandato in
     const matrix = loadPolicyMatrix(dir);
     expect(matrix.source).toBe('fallback');
     expect(matrix.note).toMatch(/paramsMaxTaint/);
-    expect(matrix.paramsMaxTaint).toBe(2);
+    expect(matrix.paramsMaxTaint).toBe(1);
     rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -377,6 +419,10 @@ describe('grant per stanza nel sigillo (ADR-0073)', () => {
     ['rot.write', 'la radice di fiducia'],
     ['outward.send', 'un destinatario nuovo'],
     ['config.ratchet', 'la configurazione'],
+    ['surface.send_file', 'il vault condiviso tra stanze'],
+    ['skill.read', 'il catalogo install-wide delle skill'],
+    ['sys.inspect', 'lo stato host dell’installazione'],
+    ['jobs.schedule', 'la semantica di gruppo non ancora definita'],
   ])('nessun sigillo concede %s a una stanza (%s)', (capability) => {
     const dir = conTenants({ 'group:telegram:42': { grants: ['vault.write', capability] } });
     const matrix = loadPolicyMatrix(dir);
@@ -413,6 +459,72 @@ describe('grant per stanza nel sigillo (ADR-0073)', () => {
     const matrix = loadPolicyMatrix(dir);
     expect(matrix.source).toBe('fallback');
     expect(matrix.note).toContain('denyAbove');
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+/**
+ * Legacy-home regression (lane #624 + #641 repair, HOLD resolution).
+ *
+ * The previous shipped template pinned `"paramsMaxTaint": 2`, and `merge()`
+ * honoured it verbatim (`file.paramsMaxTaint ?? POLICY_FLOOR`) — so an
+ * existing home kept ceiling 2 after upgrade and preserved the P0
+ * owner+tier-2 silent-egress path the lane exists to close. "Sealed
+ * explicit-2 keeps it" was declared as residual and rejected: the sealed file
+ * may tighten below the new floor, never re-widen above it (`tighter()`).
+ */
+describe('legacy home sealed with the previous shipped ceiling', () => {
+  /** The exact previous shipped `defaults/rot/policy.json` (dev@35bde7b1), `_comment` included. */
+  const LEGACY_SHIPPED = {
+    _comment:
+      'Permission matrix, read at boot by core/policy/matrix.ts. Part of the Root of Trust: the agent loop cannot change this at runtime, and your own edits take effect after `muffin rot reseal` and a restart. Since ADR-0053 the taint ceiling comes from each capability\'s EFFECT ROW — where the bytes of the effect land — and the shipped rows are ROW_FLOOR in core/policy/matrix.ts, transcribed from the threat model\'s own matrix. An optional `rows` object here may TIGHTEN a row ({"rows":{"host":{"denyAbove":1}}}) and never widen one; a row name this build does not know is ignored. `defaultMaxTaint` is kept so a home sealed before ADR-0053 still parses, and no longer decides anything. The two deny lists may only grow — removing a shipped entry from them does nothing. `paramsMaxTaint` is the one ceiling here the file may also RAISE, not just lower — it gates model-chosen bytes in a URL\'s query/fragment or a search query, above which the owner is asked and everyone else is refused. Ships 2: tier 2 is your own disk, tier 3 is the outside world (web, search, MCP, forwarded content).',
+    schemaVersion: 1,
+    defaultMaxTaint: { low: 3, medium: 1, high: 1 },
+    paramsMaxTaint: 2,
+    neverAtRuntime: ['rot.write'],
+    forbiddenForSystem: ['outward.send', 'config.ratchet'],
+  };
+
+  const legacyHome = (): string => {
+    const dir = home();
+    writeFileSync(policyOf(dir), JSON.stringify(LEGACY_SHIPPED));
+    return dir;
+  };
+
+  it('a previous-shipped policy.json pinning paramsMaxTaint 2 loads confined to the new floor 1', () => {
+    const dir = legacyHome();
+    const matrix = loadPolicyMatrix(dir);
+    expect(matrix.source).toBe('sealed');
+    expect(matrix.paramsMaxTaint).toBe(1);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('production path on the legacy ceiling: owner-composed path/query at tier 2 asks, never silently allows', () => {
+    const dir = legacyHome();
+    const matrix = loadPolicyMatrix(dir);
+    const decide = createDecide({
+      capabilities: new Map([[httpCapability.id, httpCapability]]),
+      matrix,
+      budgetExhausted: () => false,
+      hardened: true,
+    });
+    const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
+    // Owner turn after a hostile tier-2 disk read; the model composed both
+    // URLs (nothing quoted). Either one leaving silently is the P0 path.
+    for (const url of [
+      'https://public-attacker.example/?d=SECRET-BYTES',
+      'https://public-attacker.example/SECRET-BYTES',
+    ]) {
+      const d = decide({
+        principal: owner,
+        tenant: 'host',
+        capability: 'sys.http',
+        resource: { kind: 'url-read', value: url },
+        args: { url },
+        taint: 2,
+      });
+      expect(`${url}: ${d.effect}`).toBe(`${url}: ask`);
+    }
     rmSync(dir, { recursive: true, force: true });
   });
 });

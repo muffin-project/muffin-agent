@@ -222,7 +222,7 @@ export const SECURITY_BASELINE_SCENARIOS: readonly SecurityBaselineScenario[] = 
     id: 's5-external-value-read-more',
     family: 'external-value',
     claim:
-      'ADR-0066: ambient tier 3 does not prevent another read-only HTTP action either, now by decision rather than by per-capability exception — sys.http is url-read, open regardless of taint, so the scalar reaches the same allow for a different reason than before',
+      'Lane #624 + #641: ambient tier 3 turns a read with a composed path into a question — the host stays open (a bare host is still allow/allow), but model-chosen path bytes at taint >= 2 ask the owner with the whole URL. Rimisurata il 22/09: ambient e noAmbient qui divergono, ed e il prezzo deciso della chiusura del canale di esfiltrazione.',
     action: {
       principal: OWNER,
       tenant: 'host',
@@ -231,7 +231,7 @@ export const SECURITY_BASELINE_SCENARIOS: readonly SecurityBaselineScenario[] = 
       args: { url: 'https://docs.example.test/releases' },
       ambientTaint: 3,
     },
-    expect: { ambient: 'allow', noAmbient: 'allow' },
+    expect: { ambient: 'ask', noAmbient: 'allow' },
   },
   {
     id: 's5-external-destination-outward',

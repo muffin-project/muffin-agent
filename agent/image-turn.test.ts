@@ -13,6 +13,7 @@ import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { runTurn, type LoopDeps } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
 import type { ChatCall, ChatResult, Provider } from './providers/types.js';
+import { providerMessages } from './loop/provider-checkpoint.js';
 
 /**
  * B10, la metà che mancava: **il modello vede davvero l'immagine.**
@@ -139,7 +140,7 @@ describe("un'immagine arriva fino al provider", () => {
     });
 
     const record = h.deps.turns.get(r.turnId)!;
-    const nel = record.messages.flatMap((m) => m.content).filter((b) => b.type === 'image');
+    const nel = providerMessages(record).flatMap((m) => m.content).filter((b) => b.type === 'image');
     expect(nel).toEqual([IMG]);
   });
 
@@ -171,7 +172,7 @@ describe("un'immagine arriva fino al provider", () => {
     expect(arrivati).toEqual([VOCE]);
 
     const record = h.deps.turns.get(r.turnId)!;
-    expect(record.messages.flatMap((m) => m.content).filter((b) => b.type === 'audio')).toEqual([VOCE]);
+    expect(providerMessages(record).flatMap((m) => m.content).filter((b) => b.type === 'audio')).toEqual([VOCE]);
   });
 
   it('e sta prima della domanda pure lei', async () => {

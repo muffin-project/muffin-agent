@@ -1,7 +1,10 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { ensurePrivateDir, tightenPrivateFile } from '../config/private-fs.js';
+import { isSafeControlToken } from '../gateway/control-socket.js';
 import type { TrustTier } from '../policy/types.js';
+import { redactText } from '../tracing/redact.js';
 
 /**
  * Session transcripts.
@@ -110,11 +113,23 @@ export class SessionStore {
 
   constructor(homeDir: string) {
     this.dir = join(homeDir, 'sessions');
-    mkdirSync(this.dir, { recursive: true });
+    if (!ensurePrivateDir(this.dir)) {
+      throw new Error(
+        `non posso usare ${this.dir}: la directory privata non è stata stabilita (symlink sulla catena)`,
+      );
+    }
   }
 
   open(id?: string): SessionRef {
-    const sessionId = id ?? `${new Date().toISOString().slice(0, 10)}-${randomBytes(4).toString('hex')}`;
+    const sessionId =
+      id ?? `${new Date().toISOString().slice(0, 10)}-${randomBytes(4).toString('hex')}`;
+    // The id becomes a transcript path below. Callers include the gateway
+    // control channel, whose `sessionId` is caller-controlled (#638): an id
+    // outside the token alphabet is refused here rather than joined into a
+    // path that escapes `sessions/`. Fail closed with the offending id named.
+    if (!isSafeControlToken(sessionId)) {
+      throw new Error(`refusing to open session with unsafe id ${JSON.stringify(sessionId)}`);
+    }
     const ref: SessionRef = { id: sessionId, file: join(this.dir, `${sessionId}.jsonl`) };
     // Completes an interrupted `/new` when one is on disk, never starts one:
     // opening a session must not create identity. A missing sidecar is
@@ -168,7 +183,9 @@ export class SessionStore {
     try {
       raw = readFileSync(file, 'utf8');
     } catch (error) {
-      throw new Error(`session ${session.id}: cannot read conversation metadata at ${file}: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(
+        `session ${session.id}: cannot read conversation metadata at ${file}: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
     let parsed: unknown;
     try {
@@ -186,7 +203,7 @@ export class SessionStore {
       (record.version !== STEADY_METADATA_VERSION &&
         record.version !== CONVERSATION_METADATA_VERSION) ||
       !Number.isInteger(record.generation) ||
-      ((record.generation as number) as number) < 0
+      (record.generation as number as number) < 0
     ) {
       throw new Error(
         `session ${session.id}: corrupt conversation metadata at ${file}: expected {"version":${CONVERSATION_METADATA_VERSION},"generation":<non-negative int>}`,
@@ -360,12 +377,50 @@ export class SessionStore {
   private writeMetadata(sessionId: string, metadata: ConversationMetadata): void {
     const dest = this.generationFile(sessionId);
     const tmp = `${dest}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify(metadata), 'utf8');
+    writeFileSync(tmp, JSON.stringify(metadata), { encoding: 'utf8', mode: 0o600 });
+    tightenPrivateFile(tmp);
     renameSync(tmp, dest);
+    tightenPrivateFile(dest);
   }
 
   append(session: SessionRef, message: SessionMessage): void {
-    appendFileSync(session.file, `${JSON.stringify(message)}\n`, 'utf8');
+    appendFileSync(session.file, `${JSON.stringify(message)}\n`, { encoding: 'utf8', mode: 0o600 });
+    tightenPrivateFile(session.file);
+  }
+
+  /**
+   * Reconcile the transcript projection for a durable turn.
+   * TurnRecord.id is the idempotency key; the canonical ingress remains on the
+   * turn row, so recovery may safely repeat this append in its single-owner
+   * execution path.
+   */
+  appendTurnIngress(session: SessionRef, message: SessionMessage): boolean {
+    if (message.role !== 'user' || message.traceId === undefined) {
+      throw new Error('turn ingress requires a user message with its durable turn id');
+    }
+    const existing = this.read(session).filter(
+      (row) => row.role === 'user' && row.traceId === message.traceId,
+    );
+    if (existing.length > 1) {
+      throw new Error(
+        `session ${session.id}: duplicate ingress projection for turn ${message.traceId}`,
+      );
+    }
+    const prior = existing[0];
+    if (prior !== undefined) {
+      if (
+        redactText(prior.content) !== redactText(message.content) ||
+        prior.surface !== message.surface ||
+        prior.tier !== message.tier
+      ) {
+        throw new Error(
+          `session ${session.id}: conflicting ingress projection for turn ${message.traceId}`,
+        );
+      }
+      return false;
+    }
+    this.append(session, message);
+    return true;
   }
 
   /**

@@ -1,4 +1,6 @@
+import { join } from 'node:path';
 import { openDb } from '../core/db/open.js';
+import { migrate } from '../core/db/migrate.js';
 import { paths } from '../core/config/config.js';
 import { MemoryStore } from '../core/memory/store.js';
 import { TurnStore } from '../core/turns/store.js';
@@ -204,6 +206,7 @@ function marcaDisfatto(home: string, turnId: string, callIds: readonly string[])
   try {
     db = openDb(paths(home).db);
     const now = new Date().toISOString();
+    migrate(db, { backupDir: join(home, 'backups') });
     new TurnStore(db).markUndone(turnId, callIds);
     new MemoryStore(db).markEpisodesUndone(TENANT, turnId, now);
   } catch (error) {

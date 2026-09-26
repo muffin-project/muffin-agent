@@ -110,6 +110,24 @@ const ALLOWED_CALLERS: Readonly<Record<string, string>> = {
    */
   'evals/reasoning-ab/con-la-chiave.ts':
     'launches the reasoning A/B pilot with the installation model key in the CHILD ENV only — run.ts never reads ~/.muffin by design, and the key never touches argv (same shape as evals/character/con-la-chiave.ts)',
+  /**
+   * Added 2026-09-20 for #523, and the decision is on the sink, not the probe.
+   *
+   * The inference-verification probe exists to prove `configured != working`
+   * before the first turn, and the proof is only worth anything if it travels
+   * the same route real inference takes — which means resolving the same key
+   * `agent/runtime.ts` resolves and passing it straight into the same
+   * production provider constructor, onto the same wire. No intermediate
+   * structure holds it, and nothing that leaves this file can carry it: every
+   * diagnostic goes through `redact()` (verbatim excision of the resolved
+   * value plus key-shaped pattern redaction), pinned by the canary tests in
+   * `agent/providers/verify.test.ts` and `cli/doctor-online.test.ts`.
+   *
+   * The alternative — a second credential path just for setup — would be a
+   * new sink with its own review burden. This one reuses the reviewed sink.
+   */
+  'agent/providers/verify.ts':
+    'proves the configured inference route (#523): resolves the key exactly like agent/runtime.ts and passes it straight into the production provider constructor — same wire destination, no intermediate structure holds it, every diagnostic passes through redact()',
 };
 
 /** Files matching this are never walked for callers: tests exercise the primitive on purpose. */

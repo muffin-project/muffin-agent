@@ -4,6 +4,7 @@ import type { ContinuableClass, ContinuableReason, TurnOutcome, TurnRecord } fro
 import { encodeWaitFor, type WaitSpec } from '../../core/turns/wait.js';
 import type { ContentBlock, Message } from '../providers/types.js';
 import { harnessMessage, toolMessage } from './message-origin.js';
+import { harnessMessages, providerMessages } from './provider-checkpoint.js';
 import type { TurnRun } from './run-state.js';
 import { runTool } from './tool-call.js';
 import {
@@ -37,10 +38,10 @@ import {
  *    still reads the recorded outcome first (replay, tier included), then the
  *    uncertain intent (`rerunnable` decides, and only it), then falls through to
  *    `runTool` — which re-writes the intent row, so the kernel rules again.
- *  - **`checkpoint` returns `true` only when the write is not fenced out.** An
- *    exception is swallowed (stale row, next checkpoint overwrites it) and
- *    reports `true`; a fenced `changes === 0` reports `false`, and every caller
- *    stops the turn on it.
+ *  - **The provider snapshot is optional; the durability substrate is not.**
+ *    A failed checkpoint is recorded on the live run so no later tool starts.
+ *    The current model round may finish text-only; a fenced `changes === 0`
+ *    means this process lost its claim and stops immediately.
  *  - **`suspendHere` never swallows a failed `suspend`.** The steer corrections
  *    it drained are handed back to the funnel (`recupero.push`) before it falls
  *    through to `finish`, because the drain is destructive and the row nobody
@@ -81,18 +82,11 @@ export type TurnScope = {
 /**
  * The turn's state, saved at a point where nothing is in flight.
  *
- * An **exception** is still swallowed, and this is the one place in this
- * file where swallowing it is the right call — with the reason, because
- * "caught and ignored" is how guards here have died before. A checkpoint
- * that throws leaves the row **stale**, not wrong: the next one overwrites
- * it, and a process that dies before then is reclaimed as interrupted,
- * which is exactly what it was. Rethrowing would instead take down a turn
- * that is still perfectly able to answer, over a write whose only job is to
- * make a *future* failure cheaper. `Gateway.drain` closing the database
- * under a long turn is not hypothetical — it is the measured crash in
- * `core/scheduler/scheduler.ts:174-181`. The failure is on the span, so
- * "the record stopped being written" is visible in a trace instead of being
- * inferred from a stale row.
+ * A failed provider snapshot does not make the current model response
+ * impossible, so that round may finish. It does mean the turn's durability
+ * substrate is unavailable: the run latches the failure and later tools are
+ * refused before handlers start. The trace records the cause. A text-only
+ * answer remains possible; further effects do not.
  *
  * A **fenced-out write** (P19) is a different fact and is not swallowed: it
  * means another process's claim is on this row now, not that the write
@@ -109,7 +103,9 @@ export function checkpoint(scope: TurnScope): boolean {
       record.claimToken,
     );
   } catch (error) {
-    turn.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
+    const reason = error instanceof Error ? error.message : String(error);
+    run.durabilityFailure ??= reason;
+    turn.setAttributes({ 'muffin.turn.record_error': reason });
     return true;
   }
 }
@@ -137,7 +133,7 @@ export function suspendHere(scope: TurnScope, spec: WaitSpec): TurnResult {
    * letteralmente «il prossimo confine di giro» che la conferma promette.
    *
    * La strada è la riga: `suspend` persiste `messages`, e un turno ripreso
-   * riparte da `[...record.messages]`. Perciò la correzione entra
+   * riparte dal checkpoint del provider. Perciò la correzione entra
    * nell'array che sta per essere scritto, e la prima chiamata al modello
    * del risveglio la vede.
    *
@@ -353,7 +349,13 @@ export function closeRecord(scope: TurnScope, outcome: TurnOutcome): boolean {
     // supply a competing version.
     return deps.turns.finish(
       record.id,
-      { outcome, messages: run.messages, taint: snapshot.currentTaint(), counters: run.counters() },
+      {
+        outcome,
+        messages: run.messages,
+        harnessMessages: harnessMessages(run.messages),
+        taint: snapshot.currentTaint(),
+        counters: run.counters(),
+      },
       record.claimToken,
     );
   } catch (error) {
@@ -401,12 +403,30 @@ export function announceEnd(scope: TurnScope, stopped: TurnOutcome): void {
 function continuableText(scope: TurnScope, failureClass: ContinuableClass, attempts: number): string {
   const done = scope.run.toolCallsMade;
   const completed = done > 0 ? `${done} tool call completate` : 'nessuna tool call ancora completata';
+  // #615: a `truncated` release after partial-text continuations already holds
+  // the accepted prefix durably in the transcript. Saying "senza produrre
+  // contenuto" there would be false — the prefix is saved, continuable, and
+  // must never read as a complete answer. Counted structurally: only explicit
+  // `partial`-origin chunks, never history or tool calls.
+  const truncatedPrefixChars = (() => {
+    if (failureClass !== 'truncated') return 0;
+    let out = 0;
+    for (const m of scope.run.messages) {
+      if (m.origin !== 'partial') continue;
+      for (const b of m.content) {
+        if (b.type === 'text') out += b.text.length;
+      }
+    }
+    return out;
+  })();
   const cause = ((): string => {
     switch (failureClass) {
       case 'provider_empty':
         return 'il provider ha restituito risposte vuote (nessun testo, nessuna tool call, nessun token, nessuna attività)';
       case 'truncated':
-        return 'il modello ha esaurito il limite di output senza produrre contenuto';
+        return truncatedPrefixChars > 0
+          ? `il modello ha esaurito il limite di output con testo parziale salvato (${truncatedPrefixChars} caratteri, da continuare — non una risposta completa)`
+          : 'il modello ha esaurito il limite di output senza produrre contenuto';
       case 'provider_transport':
         return 'il provider non ha completato le richieste (errori di trasporto)';
       case 'model_first_activity_timeout':
@@ -464,7 +484,13 @@ export function releaseContinuable(
   const text = continuableText(scope, failureClass, attempts);
   const written = deps.turns.releaseContinuable(
     record.id,
-    { messages: run.messages, taint: snapshot.currentTaint(), counters: run.counters(), reason },
+    {
+      messages: run.messages,
+      harnessMessages: harnessMessages(run.messages),
+      taint: snapshot.currentTaint(),
+      counters: run.counters(),
+      reason,
+    },
     record.claimToken,
   );
   if (!written) {
@@ -580,7 +606,7 @@ export function closeRow(
     // The refusal report joins the transcript first, so the row keeps the
     // same array a reader sees — including the report itself
     // (harness-marked, so it archives as control, not as model output).
-    const closed = [...record.messages, harnessMessage('assistant', [{ type: 'text', text: detail }])];
+    const closed = [...providerMessages(record), harnessMessage('assistant', [{ type: 'text', text: detail }])];
     deps.turns.finish(
       record.id,
       {
@@ -588,6 +614,7 @@ export function closeRow(
         // Harness control (a refusal report, not model output): marked so no
         // future reader mistakes it for something the model said.
         messages: closed,
+        harnessMessages: harnessMessages(closed),
         taint: record.taint,
         counters: record.counters,
       },

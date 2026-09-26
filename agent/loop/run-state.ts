@@ -2,6 +2,7 @@ import type { TurnCounters, TurnRecord } from '../../core/turns/store.js';
 import type { WaitSpec } from '../../core/turns/wait.js';
 import type { Message } from '../providers/types.js';
 import { rehydrateSensitiveEchoes } from './echo-rehydrate.js';
+import { providerMessages } from './provider-checkpoint.js';
 import { spendeIlBudget } from './permissions.js';
 
 /**
@@ -55,11 +56,20 @@ export class TurnRun {
   recoveriesUsed: number;
   /** The transport retry budget owned by the loop, not by an SDK. */
   transportRetriesLeft: number;
+  /**
+   * Accepted `max_tokens` partials in this lease (#615): the spent side of
+   * `MAX_TRUNCATION_CONTINUATIONS`. Durable (in `counters()`), unlike
+   * `providerEmptyStreak` — what must survive a crash is the attempt budget,
+   * and a reset here would let a crash loop continue for ever.
+   */
+  truncationsUsed: number;
   toolCallsMade: number;
   nudgedForCompletion: boolean;
   spentUsd: number;
   contextBuilt: boolean;
   activeModelMs: number;
+  /** A failed durable write keeps this lease read-only until it ends. */
+  durabilityFailure: string | null = null;
 
   /**
    * I token accumulati, mutati sul posto giro dopo giro.
@@ -133,6 +143,17 @@ export class TurnRun {
    */
   readonly providerFailureRequestIds: string[] = [];
 
+  /**
+   * Upstream providers that returned an empty response in this lease.
+   *
+   * Fed to the next attempt as `ChatCall.providerIgnore` so a re-drive does not
+   * land on the machine that just answered nothing (OpenRouter routes the same
+   * model to a dozen upstreams; one flaky one pinned the whole turn into
+   * `continuable` on 2026-09-25). Run-only like the streak: losing it on a
+   * crash only costs the diversity hint for the next attempt.
+   */
+  readonly providerEmptyUpstreams = new Set<string>();
+
   readonly #resumes: number;
 
   /**
@@ -153,13 +174,16 @@ export class TurnRun {
     this.iterations = record.counters.iterations;
     this.recoveriesUsed = record.counters.recoveriesUsed;
     this.transportRetriesLeft = record.counters.transportRetriesLeft;
+    this.truncationsUsed = Number.isFinite(record.counters.truncationsUsed)
+      ? (record.counters.truncationsUsed as number)
+      : 0;
     this.toolCallsMade = record.counters.toolCallsMade;
     this.nudgedForCompletion = record.counters.nudgedForCompletion;
     this.spentUsd = record.counters.spentUsd;
     this.contextBuilt = record.counters.contextBuilt;
     this.activeModelMs = Math.max(0, record.counters.activeModelMs ?? 0);
     this.usage = { ...record.counters.usage };
-    this.messages = [...record.messages];
+    this.messages = [...providerMessages(record)];
     // Deterministic replay of the live echo collector over durable pairs —
     // without this, any resume (crash or continuation) silently drops the
     // scrub protection for secrets this turn already read. No second copy is
@@ -184,6 +208,7 @@ export class TurnRun {
       iterations: this.iterations,
       recoveriesUsed: this.recoveriesUsed,
       transportRetriesLeft: this.transportRetriesLeft,
+      truncationsUsed: this.truncationsUsed,
       toolCallsMade: this.toolCallsMade,
       nudgedForCompletion: this.nudgedForCompletion,
       usage: { ...this.usage },

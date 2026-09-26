@@ -20,7 +20,7 @@ import { makeSearchTool, searchCapability, type SearchBackend } from './tools/se
  * Un link **copiato** non è una query **composta**.
  *
  * Il gate sui parametri (`gateParams`) chiedeva l'approvazione per ogni URL
- * con un `?` una volta che il turno aveva superato il soffitto. `hasParams`
+ * con un `?` una volta che il turno aveva superato il soffitto. `hasComposedBytes`
  * non sa distinguere le due cose che contano davvero:
  *
  *  - una query che il modello si è **inventato** — il canale di

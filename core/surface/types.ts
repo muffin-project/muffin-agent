@@ -64,10 +64,21 @@ export function notDelivered(why: string): DeliveryOutcome {
  * (`connectors/telegram/render.ts`). Every surface states its own — Telegram
  * 4096, Discord 2000, a terminal none — so nothing above has to know which
  * surface it is talking to in order to fit inside it.
+ *
+ * Since Bot API 10.1 that sentence is true PER MODE, not per platform:
+ * Telegram's legacy `sendMessage` carries 4096 rendered characters while a
+ * Rich Message carries 32768 in one message with its own block/nesting
+ * limits (`connectors/telegram/rich.ts`). `maxMessageChars` keeps naming
+ * the legacy mode — the proven fallback every caller can assume — and
+ * `maxRichMessageChars` names the rich mode where one exists. Absent means
+ * the surface has no rich mode. "Telegram max = 4096" as a general platform
+ * fact is stale wherever it still appears.
  */
 export type SurfaceLimits = {
   /** Longest single message, in characters of the final rendered text. */
   readonly maxMessageChars: number;
+  /** Longest single rich message, in UTF-8 characters of the rich text. Absent when the surface has no rich mode. */
+  readonly maxRichMessageChars?: number;
   /** Largest attachment this surface will accept from us, in bytes. */
   readonly maxUploadBytes: number;
   /** Largest attachment we can pull *from* it, in bytes. */

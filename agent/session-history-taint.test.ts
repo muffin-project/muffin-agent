@@ -186,8 +186,8 @@ describe('(a) a clean turn in a session that read tier-3 content inherits taint 
   it("the kernel of the second turn's very first decision already sees taint 3, not 0", async () => {
     // ADR-0066: `sys.http` is `url-read` — a plain URL is open at any taint,
     // so it can no longer be the instrument that proves what taint the second
-    // turn started at. A query string still can: `paramsMaxTaint` is 2, so
-    // taint 3 (and only taint 3) turns it into an `ask` — never silently
+    // turn started at. A query string still can: `paramsMaxTaint` is 1 (lane
+    // #624 + #641), so taint 2 and 3 turn it into an `ask` — never silently
     // skipped, never a flat deny for the owner. Turn 2 calls nothing of its
     // own before reaching for it; if that `ask` fires on the very FIRST
     // decision, the taint it saw can only have come from the history.
@@ -233,6 +233,7 @@ describe('(b) an old session row with a traceId but no tier resolves through tur
         iterations: 1,
         recoveriesUsed: 0,
         transportRetriesLeft: 2,
+        truncationsUsed: 0,
         toolCallsMade: 1,
         nudgedForCompletion: false,
         usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },

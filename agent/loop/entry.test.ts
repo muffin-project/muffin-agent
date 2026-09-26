@@ -20,6 +20,7 @@ import {
   type Provider,
   ProviderError,
 } from '../providers/types.js';
+import { providerMessages } from './provider-checkpoint.js';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -231,7 +232,7 @@ describe('l imbuto: il drain sta su drive(), non su finish()', () => {
     });
     expect(r.stopped).toBe('aborted');
     expect(quante(w.sessions.read(session), CORREZIONE)).toBe(0);
-    expect(quante(w.turns.get(r.turnId)!.messages, CORREZIONE)).toBe(0);
+    expect(quante(providerMessages(w.turns.get(r.turnId)!), CORREZIONE)).toBe(0);
     expect(coda).toEqual([]);
   });
 });
@@ -258,7 +259,7 @@ describe('i rifiuti terminali restano con le porte d ingresso', () => {
       id,
       {
         messages: [
-          ...riga.messages,
+          ...providerMessages(riga),
           { role: 'assistant', content: [{ type: 'text', text: 'una risposta' }] },
           { role: 'user', content: [{ type: 'text', text: CORREZIONE }] },
         ],
@@ -303,7 +304,7 @@ describe('a live model switch is atomic at the turn boundary', () => {
     const result = await barrel.resumeTurn(w.deps, id);
 
     expect('stopped' in result && result.stopped).toBe('answered');
-    expect(w.turns.get(id)).toMatchObject({ model: 'model-b', status: 'done' });
+    expect(w.turns.get(id)).toMatchObject({ providerLease: { model: 'model-b' }, status: 'done' });
     expect(providerB.seen).toHaveLength(1);
     expect(providerA.seen).toHaveLength(0);
   });
@@ -355,6 +356,7 @@ describe('continueTurn rifiuta senza toccare la riga', () => {
     iterations: 3,
     recoveriesUsed: 5,
     transportRetriesLeft: 7,
+    truncationsUsed: 0,
     toolCallsMade: 2,
     nudgedForCompletion: false,
     usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
@@ -387,7 +389,12 @@ describe('continueTurn rifiuta senza toccare la riga', () => {
     expect(
       w.turns.releaseContinuable(
         'cont-1',
-        { messages: created.messages, taint: 0, counters: { ...counters, contextBuilt: over.contextBuilt ?? true }, reason },
+        {
+          messages: providerMessages(created),
+          taint: 0,
+          counters: { ...counters, contextBuilt: over.contextBuilt ?? true },
+          reason,
+        },
         created.claimToken,
       ),
     ).toBe(true);

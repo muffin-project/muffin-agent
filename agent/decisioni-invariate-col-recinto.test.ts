@@ -1,19 +1,19 @@
-import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
+import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { TurnStore } from '../core/turns/store.js';
 import { TodoStore } from '../core/turns/todo.js';
-import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
-import { runTurn, type LoopDeps, type RegisteredTool } from './loop.js';
+import { type LoopDeps, type RegisteredTool, runTurn } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
 import type { ChatResult, Provider } from './providers/types.js';
-import { fsCapabilities, makeFsTools, DISK_TIER, type FsScope } from './tools/fs.js';
+import { DISK_TIER, type FsScope, fsCapabilities, makeFsTools } from './tools/fs.js';
 import { httpCapability } from './tools/http.js';
 import { shellCapability, shellWriteCapability } from './tools/shell.js';
 
@@ -214,16 +214,21 @@ describe('una decisione non dipende da come è impacchettato il contenuto', () =
     const pulito = await scena(INNOCUO, script, 'allow');
     const sporco = await scena(AVVELENATO, [...script], 'allow');
 
-    // ADR-0066: `sys.http` è `url-read`, aperta per costruzione — il fatto
-    // misurato non è più "i byte non escono", è "escono ugualmente nei due
-    // casi", perché la decisione guarda il **taint**, non il testo. `EXFIL`
-    // porta una query (`?x=1`) e `DISK_TIER` (2) non supera `paramsMaxTaint`
-    // (2, `POLICY_FLOOR`): il gate sui parametri non scatta, in nessuno dei
-    // due file.
+    // Lane #624 + #641 (2026-09-22): `EXFIL` porta una query (`?x=1`) e un
+    // percorso composto, e `DISK_TIER` (2) supera il nuovo `paramsMaxTaint`
+    // (1, `POLICY_FLOOR`) — il gate sui parametri scatta in tutti e due i
+    // casi, e l'harness approva, quindi i byte escono DOPO la domanda. Il
+    // fatto misurato resta l'invarianza: il recinto marca senza muovere, ed
+    // è per questo che pulito e avvelenato chiedono la stessa cosa, parola
+    // per parola — anche quando il file avvelenato contiene l'URL alla
+    // lettera, perché il disco tier-2 non fabbrica provenienza owner (F5).
     expect(pulito.usciti).toEqual([EXFIL]);
     expect(sporco.usciti).toEqual([EXFIL]);
-    expect(pulito.domande).toEqual([]);
-    expect(sporco.domande).toEqual([]);
+    expect(pulito.domande).toEqual([
+      `lettura con parametri scelti dal contenuto: ${EXFIL}\n\n` +
+        'questo turno contiene contenuto di livello 2: il risultato di fs_read',
+    ]);
+    expect(sporco.domande).toEqual(pulito.domande);
     // E il tier che la lettura dichiara è quello di sempre, in tutti e due —
     // seguito ora dal tier 3 della fetch, che prima di questa fetta non veniva
     // mai dichiarato perché il kernel rifiutava prima che il tool girasse.
@@ -251,16 +256,25 @@ describe('una decisione non dipende da come è impacchettato il contenuto', () =
     expect(no.eseguiti).toEqual([]);
   });
 
-  it('leggere e poi la shell in sola lettura: nessuna domanda, e il recinto non la crea', async () => {
+  it('leggere e poi la shell in sola lettura: la domanda è della corsia, non del recinto (ADR-0091)', async () => {
     const script = [
       callTool('fs_read', { path: 'nota.md' }),
       callTool('shell_run', { command: 'ls' }),
     ];
-    const letto = await scena(AVVELENATO, script, 'deny');
-    // `deny` come approvatore, apposta: se una domanda arrivasse, il comando
-    // non girerebbe, e `eseguiti` lo direbbe.
-    expect(letto.domande).toEqual([]);
-    expect(letto.eseguiti).toEqual(['ls']);
+
+    const sì = await scena(AVVELENATO, script, 'allow');
+    const no = await scena(AVVELENATO, [...script], 'deny');
+
+    // Una domanda sola in tutti e due i rami, e viene dalla capability — da
+    // ADR-0091 (misura Linux 2026-09-22, #645) la corsia in sola lettura è
+    // `reversible: 'no'` quanto quella che scrive, perché leggere
+    // l'intera macchina è disclosure. Il recinto non la crea e non la
+    // spegne: stesso conteggio con approvatore `deny`, dove un comando con
+    // una domanda in più non girerebbe.
+    expect(sì.domande).toHaveLength(1);
+    expect(no.domande).toHaveLength(1);
+    expect(sì.eseguiti).toEqual(['ls']);
+    expect(no.eseguiti).toEqual([]);
   });
 
   it('uscire senza aver letto niente resta raggiungibile — è un gate, non un muro', async () => {

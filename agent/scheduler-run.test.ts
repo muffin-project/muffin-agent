@@ -18,6 +18,7 @@ import { resumeTurn } from './loop.js';
 import type { LoopDeps, TurnResult } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
 import type { ChatCall, ChatResult, Provider } from './providers/types.js';
+import { providerMessages } from './loop/provider-checkpoint.js';
 
 const base: TurnResult = {
   text: '',
@@ -130,6 +131,7 @@ function counters(): NonNullable<Parameters<TurnStore['create']>[0]>['counters']
     iterations: 0,
     recoveriesUsed: 0,
     transportRetriesLeft: 2,
+    truncationsUsed: 0,
     toolCallsMade: 0,
     nudgedForCompletion: false,
     usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
@@ -229,7 +231,7 @@ describe('makeJobRunner — B7 identity resolution', () => {
       },
       99999,
     );
-    deps.turns.finish(rec.id, { outcome: 'answered', messages: rec.messages, taint: 0, counters: rec.counters }, rec.claimToken);
+    deps.turns.finish(rec.id, { outcome: 'answered', messages: providerMessages(rec), taint: 0, counters: rec.counters }, rec.claimToken);
     deps.turns.delivered(rec.id, 'sent'); // some other pass already delivered it
 
     const outcome = await makeJobRunner(deps, fires)(job, undefined);
@@ -262,7 +264,7 @@ describe('makeJobRunner — B7 identity resolution', () => {
       },
       99999,
     );
-    deps.turns.finish(rec.id, { outcome: 'answered', messages: rec.messages, taint: 0, counters: rec.counters }, rec.claimToken);
+    deps.turns.finish(rec.id, { outcome: 'answered', messages: providerMessages(rec), taint: 0, counters: rec.counters }, rec.claimToken);
     deps.turns.delivered(rec.id, 'undeliverable');
 
     const outcome = await makeJobRunner(deps, fires)(job, undefined);
@@ -302,7 +304,7 @@ describe('makeJobRunner — B7 identity resolution', () => {
       },
       99999,
     );
-    deps.turns.finish(rec.id, { outcome: 'answered', messages: rec.messages, taint: 0, counters: rec.counters }, rec.claimToken);
+    deps.turns.finish(rec.id, { outcome: 'answered', messages: providerMessages(rec), taint: 0, counters: rec.counters }, rec.claimToken);
     // delivery is still 'pending' — nothing has told the channel yet.
 
     const outcome = await makeJobRunner(deps, fires)(job, undefined);
@@ -528,7 +530,7 @@ describe('makeJobRunner — il tetto per-job (E1)', () => {
     expect(riga?.outcome).toBe('budget');
     // (3) La riga dichiara di non aver visto il modello, e con quale dei due
     //     motivi: non è uno script, è un tetto.
-    expect(riga?.model).toBe(CAPPED_MODEL);
+    expect(riga?.providerLease.model).toBe(CAPPED_MODEL);
     expect(riga?.counters.spentUsd).toBe(0);
     expect(riga?.counters.usage.inputTokens).toBe(0);
     // (4) L'occorrenza resta legata a UNA identità, come ogni altro giro: il

@@ -32,6 +32,27 @@ export function toolMessage(content: ContentBlock[]): Message {
   return provenanceMessage('user', 'tool', content);
 }
 
+/**
+ * Build an accepted truncation-prefix chunk of the current logical answer
+ * (#615): model output interrupted by `max_tokens`, kept as durable work
+ * evidence. Always `assistant` — the model really wrote it — and always
+ * `partial`, never absent: an absent origin is what replayed session history
+ * carries, and the two must never be confused.
+ */
+export function partialMessage(content: ContentBlock[]): Message {
+  return provenanceMessage('assistant', 'partial', content);
+}
+
+/**
+ * True for an accepted truncation-prefix chunk of the current logical answer,
+ * never for replayed history, tool calls, or harness control. The ONLY
+ * predicate the truncation path reads: role, absence of `tool_use`, text
+ * contents and historical position are all explicitly NOT consulted.
+ */
+export function isPartialMessage(message: Message): boolean {
+  return message.origin === 'partial';
+}
+
 /** True for loop-written lease control, never for owner/model/tool evidence. */
 export function isHarnessMessage(message: Message): boolean {
   return message.origin === 'harness';

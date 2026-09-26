@@ -12,6 +12,7 @@ import { GatewayLock } from '../core/gateway/lock.js';
 import { buildRuntime } from './runtime.js';
 import { enqueueTurn, resumeTurn, runTurn, type LoopDeps } from './loop.js';
 import type { ChatResult, Provider } from './providers/types.js';
+import { providerMessages } from './loop/provider-checkpoint.js';
 
 /**
  * The join between `buildRuntime` and the turn record, and the failure path
@@ -145,6 +146,7 @@ describe('buildRuntime puts the turn record on the real path', () => {
         iterations: 0,
         recoveriesUsed: 0,
         transportRetriesLeft: 2,
+        truncationsUsed: 0,
         toolCallsMade: 0,
         nudgedForCompletion: false,
         usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
@@ -229,6 +231,7 @@ describe('a turn a dead process was holding', () => {
         iterations: 0,
         recoveriesUsed: 0,
         transportRetriesLeft: 2,
+        truncationsUsed: 0,
         toolCallsMade: 0,
         nudgedForCompletion: false,
         usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
@@ -273,6 +276,7 @@ describe('un turno sospeso senza gateway non è un turno perso in silenzio', () 
         iterations: 1,
         recoveriesUsed: 0,
         transportRetriesLeft: 2,
+        truncationsUsed: 0,
         toolCallsMade: 0,
         nudgedForCompletion: false,
         usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
@@ -290,6 +294,7 @@ describe('un turno sospeso senza gateway non è un turno perso in silenzio', () 
           iterations: 1,
           recoveriesUsed: 0,
           transportRetriesLeft: 2,
+          truncationsUsed: 0,
           toolCallsMade: 0,
           nudgedForCompletion: false,
           usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
@@ -486,6 +491,6 @@ describe("P19: agent/loop.ts's own reaction to losing its claim mid-run", () => 
     expect(row).toMatchObject({ status: 'running', claimedBy: process.pid + 1, claimToken: 'rubato-dal-test' });
     // The losing answer specifically never landed — not merely "some write
     // failed", but *this* write, the one the whole scenario is about.
-    expect(JSON.stringify(row?.messages)).not.toContain('non dovrebbe mai raggiungere');
+    expect(JSON.stringify(providerMessages(row))).not.toContain('non dovrebbe mai raggiungere');
   });
 });

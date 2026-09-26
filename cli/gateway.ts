@@ -1,6 +1,7 @@
 import DatabaseCtor from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { ensurePrivateDir, tightenPrivateFile } from '../core/config/private-fs.js';
 import { delimiter, dirname, join } from 'node:path';
 import { homedir, userInfo } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -338,8 +339,15 @@ export async function cmdGatewayStop(home: string): Promise<number> {
   // «riportalo su» che questo evita.
   //
   // Un crash non passa di qui e non scrive niente: è così che «fermato» e
-  // «morto» restano due cose diverse per il supervisore.
-  writeFileSync(paths(home).gatewayStopped, `${new Date().toISOString()}\n`, 'utf8');
+  // «morto» restano due cose diverse per il supervisore. Senza parent
+  // privato verificato niente semaforo e niente segnale: scrivere altrove
+  // ricreerebbe l'escape.
+  if (!ensurePrivateDir(home)) {
+    process.stderr.write(`non posso fermare il gateway: la directory privata ${home} non è stata stabilita (symlink sulla catena)\n`);
+    return 1;
+  }
+  writeFileSync(paths(home).gatewayStopped, `${new Date().toISOString()}\n`, { encoding: 'utf8', mode: 0o600 });
+  tightenPrivateFile(paths(home).gatewayStopped);
 
   try {
     // SIGTERM, which the gateway turns into a drain — not SIGKILL. The whole

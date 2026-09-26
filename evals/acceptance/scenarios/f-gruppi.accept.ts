@@ -6,6 +6,7 @@ import { seal } from '../../../core/rot/verify.js';
 import { buildRuntime } from '../../../agent/runtime.js';
 import { readDocument } from '../../../agent/tools/document.js';
 import { vaultPathPer } from '../../../agent/tools/vault-save.js';
+import { shellNonDisponibileQui } from '../sandbox-host.js';
 import { install, until } from '../harness.js';
 import { scenario } from '../scenario.js';
 import { startFakeTelegram } from '../telegram.js';
@@ -811,9 +812,7 @@ describe('acceptance · F7 · una stanza ha le sue capacità, e dentro il suo va
               messages: string;
             },
         );
-        if (!JSON.stringify(JSON.parse(ultimo.messages)).includes('principal_forbidden')) {
-          throw new Error(`shell_run doveva restare negata nella stanza con grant: ${ultimo.messages.slice(0, 800)}`);
-        }
+        const shellOfferta = inst.provider.main().some((request) => request.tools.includes('shell_run'));
         const shell = inst.db(
           (db) =>
             db.prepare(`SELECT COUNT(*) AS n FROM turn_tool_calls WHERE tool = 'shell_run'`).get() as { n: number },
@@ -821,11 +820,25 @@ describe('acceptance · F7 · una stanza ha le sue capacità, e dentro il suo va
         if (shell.n !== 0) {
           throw new Error(`una shell_run negata ha comunque raggiunto l'handler: ${shell.n} righe`);
         }
+        if (shellOfferta) {
+          if (!JSON.stringify(JSON.parse(ultimo.messages)).includes('principal_forbidden')) {
+            throw new Error(`shell_run doveva restare negata nella stanza con grant: ${ultimo.messages.slice(0, 800)}`);
+          }
+        } else {
+          // Doctor descrive il boundary dell'owner; la lista tool del membro
+          // deve comunque omettere la capability host-only nella stanza.
+          const doctor = await inst.muffin(['doctor']);
+          const shellAttiva = doctor.out.split('\n').find((line) => line.startsWith('✓ capacità: shell_run'));
+          if (!shellAttiva || !/attivo/.test(shellAttiva)) {
+            throw new Error(`F7 non prova la proiezione tenant: la shell owner non risulta attiva nel doctor:\n${doctor.out}`);
+          }
+        }
       } finally {
         await inst.cleanup();
         await tg.close();
       }
     },
     300_000,
+    shellNonDisponibileQui,
   );
 });

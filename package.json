@@ -23,20 +23,17 @@
     "prepare": "npm run compile",
     "test:acceptance:linux": "evals/acceptance/gate-linux.sh . .gate-linux",
     "gate:local": "bash scripts/local-gate.sh",
-    "ci:local": "tsx scripts/ci-local.ts",
     "e2e:telegram": "tsx evals/e2e/telegram.ts",
     "eval:character": "tsx evals/character/run.ts",
     "lint": "biome check --changed",
     "lint:all": "biome check .",
     "format": "biome format --write --changed",
     "igiene": "node scripts/igiene.mjs",
-    "licenses": "node scripts/check-dep-licenses.mjs",
-    "merge": "tsx scripts/merge.ts",
-    "promote": "tsx scripts/promote.ts"
+    "licenses": "node scripts/check-dep-licenses.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.12",
-    "@grammyjs/types": "^4.0.0",
+    "@grammyjs/types": "^5.0.0",
     "@modelcontextprotocol/server": "2.0.0",
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^22.10.0",

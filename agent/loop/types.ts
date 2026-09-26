@@ -43,6 +43,13 @@ export type ToolContext = {
    */
   turnId: string;
   /**
+   * The scheduled job this turn belongs to, when one does — `TurnInput.jobId`,
+   * threaded through like `turnId` so a handler that spends model calls on the
+   * job's behalf (`memory_search`, `memory_why` via the reranker) can attribute
+   * them to it. Absent on every interactive turn, which is the majority.
+   */
+  jobId?: string | undefined;
+  /**
    * The conversation. Multi-step work is scoped to this and never to the turn:
    * a plan that died with the turn that wrote it would not be a plan.
    */
@@ -107,6 +114,11 @@ export type ToolContext = {
    * so the barrier has to travel with the turn — not with the tool.
    */
   suspend: (spec: WaitSpec) => void;
+  /** Durability guard for this turn: a write failure disables later tools. */
+  durability?: {
+    failure: () => string | null;
+    fail: (reason: string) => void;
+  };
   /**
    * Where a mid-turn tool can address a follow-up delivery — the registry
    * channel this turn's conversation arrived on (`telegram:<chatId>`,
@@ -191,6 +203,25 @@ export const MAX_PROVIDER_EMPTY_RETRIES = 3;
 
 /** Small independent retry budget for auxiliary memory-provider calls. */
 export const MAX_LIGHT_TRANSPORT_RETRIES = 2;
+
+/**
+ * Bounded continuations for a `max_tokens` answer interrupted with partial
+ * text (#615).
+ *
+ * Deliberately NOT the transport budget: `max_tokens` is the model stopping
+ * where it was told to stop, not a 429/502 stall, and spending transport
+ * retries on it muddies both diagnostics and the money/attempt accounting
+ * (Hermes' separation is the prior art: length-continuation gets its own
+ * bound). Ten continuations after the initial attempt — eleven accepted
+ * partials of up to 4096 output tokens each — then the lease yields
+ * truthfully continuable instead of looping. The spent count lives in
+ * `TurnCounters.truncationsUsed` (durable JSON, crash-safe total, reset only
+ * on an explicit owner-granted new lease, which is human-rate-limited like
+ * every other lease-local budget). The turn wall, model budgets and tenant
+ * spend limits remain the hard outer bounds. Not a generic retry framework:
+ * one counter, one call site, one class.
+ */
+export const MAX_TRUNCATION_CONTINUATIONS = 10;
 
 /**
  * How a surface asks the owner.

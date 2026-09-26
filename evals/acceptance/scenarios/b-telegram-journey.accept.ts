@@ -8,6 +8,7 @@ import { callbackQuery, privateMessage, startFakeTelegram, type FakeTelegram } f
 import { scenario } from '../scenario.js';
 import { MemoryStore } from '../../../core/memory/store.js';
 import { paths } from '../../../core/config/config.js';
+import { shellNonDisponibileQui } from '../sandbox-host.js';
 
 /**
  * B/D · Four DAY-1 rows, all BLOCKER for the same reason: the mechanism is in
@@ -632,5 +633,6 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
       }
     },
     90_000,
+    shellNonDisponibileQui,
   );
 });

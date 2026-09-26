@@ -1,4 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
+import { tightenPrivateDb } from '../config/private-fs.js';
 
 /**
  * Open the Muffin database the way every process in this installation must
@@ -32,5 +33,10 @@ export function openDb(file: string): DatabaseCtor.Database {
   const db = new DatabaseCtor(file);
   db.pragma('journal_mode = WAL');
   db.pragma('busy_timeout = 5000');
+  // SQLite creates the main file and its `-wal`/`-shm` siblings under the
+  // process umask (typically 0644 under 022). The database holds
+  // conversations, memory and Telegram inbox data, so tighten what exists
+  // now; later sidecars are tightened again at the next boot migration.
+  tightenPrivateDb(file);
   return db;
 }

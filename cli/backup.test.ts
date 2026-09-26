@@ -1,11 +1,19 @@
-import DatabaseCtor from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import { backupNow, restoreFrom, RestoreRefused } from './backup.js';
-import { schemaVersionOf, currentSchemaVersion } from '../core/db/migrate.js';
+import { currentSchemaVersion, schemaVersionOf } from '../core/db/migrate.js';
+import { backupNow, RestoreRefused, restoreFrom } from './backup.js';
 
 /**
  * RETURN S2, A8-minimo: an online backup that is valid while a resident
@@ -58,6 +66,25 @@ describe('backupNow — online, validated, self-contained', () => {
     writer.close();
     db.close();
   });
+
+  it('refuses a backup dir beneath an ancestor symlink without outside mutation (#639)', () => {
+    const d = dir();
+    const { dbPath, db } = liveDb(d);
+    const root = mkdtempSync(join(tmpdir(), 'muffin-backup-esc-'));
+    try {
+      const outside = join(root, 'outside');
+      mkdirSync(outside, { recursive: true });
+      chmodSync(outside, 0o755);
+      const before = statSync(outside).mode & 0o777;
+      symlinkSync(outside, join(root, 'link'));
+      expect(() => backupNow(dbPath, join(root, 'link', 'backups'))).toThrow(/directory privata/);
+      expect(existsSync(join(outside, 'backups'))).toBe(false);
+      expect(statSync(outside).mode & 0o777).toBe(before);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('restoreFrom — refusals first, escape hatch always', () => {
@@ -84,12 +111,13 @@ describe('restoreFrom — refusals first, escape hatch always', () => {
     const aside = new DatabaseCtor(asideCopy!, { readonly: true });
     expect(aside.prepare(`SELECT count(*) AS n FROM notes`).get()).toEqual({ n: 2 }); // nothing destroyed
     aside.close();
-    // [2, 3, 4, 5, 6, 7]: this fixture has neither `facts` nor `todos` nor `jobs`
-    // nor `spend`, so migration 3 (`slice/memoria-appuntata`), migrations 4 and
-    // 5 (`slice/una-promessa-torna`), migration 6 (`slice/e1-budget-per-job`)
-    // and migration 7 (job provenance) no-op here the same way migration 2
-    // itself no-ops on a database with no `jobs` — all six still run and stamp.
-    expect(applied).toEqual([2, 3, 4, 5, 6, 7]);
+    // [2, 3, 4, 5, 6, 7, 8, 9]: this fixture has neither `facts` nor `todos` nor `jobs`
+    // nor `spend`, so migrations 3 (`slice/memoria-appuntata`), 4 and 5
+    // (`slice/una-promessa-torna`), 6 (`slice/e1-budget-per-job`), 7 (job
+    // provenance), and 8 (canonical turn schema) no-op here the same way
+    // migration 2 itself no-ops on a database with no `jobs` — all seven still
+    // run and stamp.
+    expect(applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
   });
 
   it('refuses while the gateway is alive', () => {
@@ -97,15 +125,17 @@ describe('restoreFrom — refusals first, escape hatch always', () => {
     const { dbPath, db } = liveDb(d);
     const { file } = backupNow(dbPath, join(d, 'backups'));
     // The lock row exactly as `readGateway` reads it, held by THIS live pid.
-    db.exec(`CREATE TABLE gateway_lock (id INTEGER PRIMARY KEY, pid INTEGER, taken_at TEXT, since TEXT, status TEXT)`);
-    db.prepare(`INSERT INTO gateway_lock (id, pid, taken_at, since, status) VALUES (1, ?, ?, ?, 'serving')`).run(
-      process.pid,
-      new Date().toISOString(),
-      new Date().toISOString(),
+    db.exec(
+      `CREATE TABLE gateway_lock (id INTEGER PRIMARY KEY, pid INTEGER, taken_at TEXT, since TEXT, status TEXT)`,
     );
+    db.prepare(
+      `INSERT INTO gateway_lock (id, pid, taken_at, since, status) VALUES (1, ?, ?, ?, 'serving')`,
+    ).run(process.pid, new Date().toISOString(), new Date().toISOString());
     db.close();
 
-    expect(() => restoreFrom(dbPath, file, { backupDir: join(d, 'backups') })).toThrow(RestoreRefused);
+    expect(() => restoreFrom(dbPath, file, { backupDir: join(d, 'backups') })).toThrow(
+      RestoreRefused,
+    );
     expect(() => restoreFrom(dbPath, file, { backupDir: join(d, 'backups') })).toThrow(/gateway/);
   });
 
@@ -114,10 +144,14 @@ describe('restoreFrom — refusals first, escape hatch always', () => {
     const { dbPath, db } = liveDb(d);
     const { file } = backupNow(dbPath, join(d, 'backups'));
     const snap = new DatabaseCtor(file);
-    snap.exec(`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL)`);
-    snap.prepare(`INSERT INTO schema_version (version, description, applied_at) VALUES (99, 'dal futuro', ?)`).run(
-      new Date().toISOString(),
+    snap.exec(
+      `CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL)`,
     );
+    snap
+      .prepare(
+        `INSERT INTO schema_version (version, description, applied_at) VALUES (99, 'dal futuro', ?)`,
+      )
+      .run(new Date().toISOString());
     snap.close();
     db.prepare(`INSERT INTO notes (body) VALUES (?)`).run('resta');
     db.close();
@@ -132,9 +166,9 @@ describe('restoreFrom — refusals first, escape hatch always', () => {
     const d = dir();
     const { dbPath, db } = liveDb(d);
     db.close();
-    expect(() => restoreFrom(dbPath, join(d, 'niente.db'), { backupDir: join(d, 'backups') })).toThrow(
-      RestoreRefused,
-    );
+    expect(() =>
+      restoreFrom(dbPath, join(d, 'niente.db'), { backupDir: join(d, 'backups') }),
+    ).toThrow(RestoreRefused);
   });
 });
 
@@ -169,7 +203,9 @@ describe('restoreFrom — the aside copy is WAL-safe (judge #93, blocking findin
     const { asideCopy } = restoreFrom(dbPath, file, { backupDir: join(d, 'backups') });
 
     const aside = new DatabaseCtor(asideCopy!, { readonly: true });
-    const bodies = (aside.prepare(`SELECT body FROM notes ORDER BY id`).all() as { body: string }[]).map((r) => r.body);
+    const bodies = (
+      aside.prepare(`SELECT body FROM notes ORDER BY id`).all() as { body: string }[]
+    ).map((r) => r.body);
     aside.close();
     expect(bodies).toEqual(['prima', 'solo-nel-wal']); // nothing lost, ever
     const restored = new DatabaseCtor(dbPath, { readonly: true });

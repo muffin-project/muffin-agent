@@ -846,15 +846,18 @@ async function s7MemoriaERicordo(): Promise<Misura> {
  * da sole: che aprire la lettura non ha anche aperto il floor SSRF, e che la
  * prima `http_get` non chiede più nessuna allowlist per essere valutata.
  *
- * **Il residuo misurato altrove, nominato qui.** Su un turno di *gruppo* (non
- * misurato da questa scena, che gira come owner come tutte le altre) il
- * secondo `http_get` — con o senza il floor — non incontrerebbe nemmeno il
- * gate sui parametri: `tierOf(member)` è 2 (`core/surface/types.ts`),
- * `paramsMaxTaint` è 2 (`POLICY_FLOOR`), e `gateParams` scatta solo sopra il
- * ceiling — mai su di esso. Misurato eseguendo il kernel vero in
- * `docs/evidence/muffin-nei-gruppi-2026-09-04.md` §6.1, non da questo file: la
- * lettura aperta non crea quel buco, lo eredita da un residuo già misurato e
- * già dichiarato, di cui questa fetta non è la correzione.
+ * **Il residuo misurato altrove, nominato qui — e chiuso il 22/09.** Su un
+ * turno di *gruppo* (non misurato da questa scena, che gira come owner come
+ * tutte le altre) il secondo `http_get` — con o senza il floor — non
+ * incontrava nemmeno il gate sui parametri: `tierOf(member)` è 2
+ * (`core/surface/types.ts`), `paramsMaxTaint` era 2 (`POLICY_FLOOR`), e
+ * `gateParams` scattava solo sopra il ceiling — mai su di esso. Misurato
+ * eseguendo il kernel vero in `docs/evidence/muffin-nei-gruppi-2026-09-04.md`
+ * §6.1. La lane #624 + #641 ha chiuso quel residuo abbassando il soffitto a
+ * 1 ed estendendo il gate al pathname: un membro che compone byte in uscita
+ * è negato sempre, un owner a taint >= 2 è chiesto. Se questa scena gira su
+ * un binario con la lane, il secondo `http_get` chiede invece di passare
+ * silenzioso — ed è la prova che la correzione è arrivata fin qui.
  */
 async function s8LetturaApertaPoiEsfiltrazione(): Promise<Misura> {
   const t = orologio();

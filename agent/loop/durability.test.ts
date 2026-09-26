@@ -15,9 +15,11 @@ import { CONSERVATIVE } from '../profiles/profile.js';
 import type { Message } from '../providers/types.js';
 import { searchCapability, searchSpec } from '../tools/search.js';
 import { checkpoint, closeRow, finish, reconcile, suspendHere, type TurnScope } from './durability.js';
+import { runTool } from './tool-call.js';
 import { makeSnapshot } from './permissions.js';
 import { TurnRun } from './run-state.js';
 import type { LoopDeps, RegisteredTool, ToolContext, TurnInput } from './types.js';
+import { providerMessages } from './provider-checkpoint.js';
 
 /**
  * Twin test for the `agent/loop/durability.ts` extraction (Fase A, fetta 7):
@@ -69,6 +71,7 @@ function freshCounters() {
     iterations: 0,
     recoveriesUsed: 0,
     transportRetriesLeft: 2,
+    truncationsUsed: 0,
     toolCallsMade: 0,
     nudgedForCompletion: false,
     usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
@@ -151,6 +154,12 @@ function harness(options: { messages?: Message[]; tools?: RegisteredTool[]; decl
     suspend: (spec) => {
       run.barrier = spec;
     },
+    durability: {
+      failure: () => run.durabilityFailure,
+      fail: (reason) => {
+        run.durabilityFailure ??= reason;
+      },
+    },
   };
   const echoes: { name: string }[] = [];
   const scope: TurnScope = {
@@ -179,7 +188,7 @@ function harness(options: { messages?: Message[]; tools?: RegisteredTool[]; decl
   return { scope, deps, turns, record, span, run, snapshot, recupero, steer, onTurnEnd, echoes, id, steal };
 }
 
-describe('checkpoint reports true only when the write landed', () => {
+describe('checkpoint fences lost claims and latches substrate failures', () => {
   it('writes the live transcript and returns true', () => {
     const h = harness();
     h.run.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'ecco' }] });
@@ -188,7 +197,7 @@ describe('checkpoint reports true only when the write landed', () => {
     expect(checkpoint(h.scope)).toBe(true);
 
     const row = h.turns.get(h.id);
-    expect(row?.messages.at(-1)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'ecco' }] });
+    expect(providerMessages(row).at(-1)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'ecco' }] });
     expect(row?.counters.iterations).toBe(3);
   });
 
@@ -206,24 +215,45 @@ describe('checkpoint reports true only when the write landed', () => {
     h.run.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'non deve atterrare' }] });
 
     expect(checkpoint(h.scope)).toBe(false);
-    expect(JSON.stringify(h.turns.get(h.id)?.messages)).not.toContain('non deve atterrare');
+    expect(JSON.stringify(providerMessages(h.turns.get(h.id)))).not.toContain('non deve atterrare');
   });
 
   /**
-   * A throw is a *different fact* from a fenced write and is deliberately not
-   * reported as one: `Gateway.drain` closing the database under a long turn
-   * leaves a stale row, which the next checkpoint overwrites. Taking the turn
-   * down for it would be the worse failure — but it is not silent either, and
-   * the span attribute is where "the record stopped being written" is visible.
+   * A throw is a different fact from a fenced write. The current model round
+   * may finish, but the live turn latches the substrate failure so no later
+   * handler can start an effect.
    */
-  it('swallows a thrown write, returns true, and leaves the failure on the span', () => {
-    const h = harness();
+  it('keeps the current round viable but blocks later tool effects after a thrown write', async () => {
+    let handlerCalled = false;
+    const decl = { ...searchCapability, hostOnly: false };
+    const tool: RegisteredTool = {
+      capability: decl.id,
+      spec: searchSpec,
+      handler: () => {
+        handlerCalled = true;
+        return { content: 'ran', tier: 0 };
+      },
+      throwTier: 0,
+    };
+    const h = harness({ tools: [tool], decls: [decl] });
     h.deps.turns.checkpoint = () => {
       throw new Error('database is closed');
     };
 
     expect(checkpoint(h.scope)).toBe(true);
+    expect(h.run.durabilityFailure).toBe('database is closed');
     expect(h.span.attrs['muffin.turn.record_error']).toBe('database is closed');
+    const result = await runTool(
+      h.deps,
+      h.snapshot,
+      h.span,
+      { id: 'c1', name: searchSpec.name, args: { query: 'x' } },
+      h.scope.input,
+      [tool],
+      h.scope.toolContext,
+    );
+    expect(handlerCalled).toBe(false);
+    expect(result).toMatchObject({ type: 'tool_result', isError: true });
   });
 });
 
@@ -240,7 +270,7 @@ describe('suspendHere does not swallow a failed suspend', () => {
     expect(h.recupero).toEqual([]);
     const row = h.turns.get(h.id);
     expect(row?.status).toBe('waiting');
-    expect(JSON.stringify(row?.messages)).toContain('anzi, fermati alle 9');
+    expect(JSON.stringify(providerMessages(row))).toContain('anzi, fermati alle 9');
     // The live array is not mutated: the correction goes onto the copy that is
     // written, so the failing branch below cannot leave it on an array nobody
     // wrote.
@@ -434,7 +464,7 @@ describe('closeRow closes a row from outside the engine', () => {
     // Harness-marked: a refusal report is loop control, never model output —
     // no future reader (continuation filter included) may mistake it for
     // something the model said.
-    expect(row?.messages.at(-1)).toEqual({
+    expect(providerMessages(row).at(-1)).toEqual({
       role: 'assistant',
       content: [{ type: 'text', text: 'il modello è cambiato: non riprendo' }],
       origin: 'harness',

@@ -94,6 +94,7 @@ function freshCounters() {
     iterations: 0,
     recoveriesUsed: 0,
     transportRetriesLeft: MAX_TRANSPORT_RETRIES,
+    truncationsUsed: 0,
     toolCallsMade: 0,
     nudgedForCompletion: false,
     usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
@@ -710,6 +711,28 @@ describe('verità del fallimento provider/risultato (P0-A)', () => {
     expect(h.run.recoveriesUsed).toBe(0);
     for (const call of provider.chatCalls) expect(call.toolChoice).not.toBe('required');
     expect(h.run.requireToolOnce).toBe(false);
+  });
+
+  /**
+   * Il 25/09/2026 l'installazione dell'owner era senza pin di routing: lo
+   * stesso modello finiva su dodici provider a monte, e uno che rispondeva
+   * vuoto inchiodava il turno per quattro tentativi identici (~2 minuti) prima
+   * di parcheggiarlo `continuable`. Il re-drive deve invece nominare chi ha
+   * taciuto, così il tentativo dopo atterra altrove.
+   *
+   * MUTATION-PROVABLE: senza la riga che aggiunge `result.upstream` a
+   * `run.providerEmptyUpstreams`, il secondo `chatCalls` non porta
+   * `providerIgnore`.
+   */
+  it('dopo una risposta vuota il re-drive ignora il provider che non ha risposto', async () => {
+    const provider = scriptedProvider({ chat: [{ ...stall(), upstream: 'Reka' }, reply('eccomi')] });
+    const h = harness({ provider });
+
+    const result = await runRounds(h.scope);
+
+    expect(result.stopped).toBe('answered');
+    expect(provider.chatCalls[0]?.providerIgnore).toBeUndefined();
+    expect(provider.chatCalls[1]?.providerIgnore).toEqual(['Reka']);
   });
 
   it('il testo veritiero conta il lavoro già completato, senza segreti', async () => {

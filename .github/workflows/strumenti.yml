@@ -10,11 +10,11 @@
 #    larga `**/.claude/**` aveva già lasciato passare un cap non testato. Con
 #    l'include di default di vitest (`**/*.test.ts`), i file di test sotto
 #    `.claude/` **fanno parte della suite** e girano su ogni `npm test`.
-#  · ma `ci.yml` ha `.claude/**` in `paths-ignore` — per entrambi i suoi job
-#    (`verifica` e `accettazione`, un solo workflow dal 2026-09-16).
+#  · all'epoca `ci.yml` aveva `.claude/**` in `paths-ignore` — per entrambi
+#    i suoi job (`verifica` e `accettazione`, un solo workflow dal 2026-09-16).
 #
-# Conseguenza: una PR che tocca **solo** roba sotto `.claude/` non fa partire
-# nessun workflow. Quei test non girano esattamente nel momento in cui il
+# Conseguenza storica: una PR che toccava **solo** roba sotto `.claude/` non
+# faceva partire nessun workflow. Quei test non giravano nel momento in cui il
 # codice che provano è cambiato — l'unico momento in cui contano. Non è
 # ipotetico: la PR #107 (`guard-restore-discard.mjs`, più il suo test) è stata
 # mergiata con **zero check**, provata solo in locale.
@@ -25,19 +25,17 @@
 #     .claude/hooks/guard-review-branch.test.ts     16 test
 #     .claude/deleghe.test.ts                       19 test
 #     .claude/hooks/guard-restore-discard.test.ts    7 test
-#     .claude/riconcilia.test.ts                     6 test
-#     .claude/hooks/inject-state.test.ts             5 test
 #                                                   -------
-#                                              5 file, 53 test
+#                                              3 file, 42 test
 #
-# Non solo gli hook, quindi: anche `deleghe.mjs` e `riconcilia.mjs`, che sono
+# Non solo gli hook, quindi: anche `deleghe.mjs`, che e'
 # gli script da cui una sessione nuova ricostruisce lo stato. Un filtro sui
-# soli `hooks/**` avrebbe lasciato 25 test su 53 nello stesso buco — cioè
+# soli `hooks/**` avrebbe lasciato 19 test su 42 nello stesso buco — cioe'
 # avrebbe rifatto il difetto mentre diceva di chiuderlo.
 #
 # ## Perché non le due soluzioni più corte
 #
-# **Togliere `.claude/**` da `paths-ignore`.** Riporterebbe sotto CI tutto
+# **Togliere `.claude/**` da `paths-ignore`.** All'epoca avrebbe riportato sotto CI tutto
 # `.claude/`: comandi, impostazioni, digest delle deleghe, worktree. È
 # precisamente ciò che quell'ignore comprava, e niente di tutto ciò ha un test
 # da eseguire.
@@ -96,14 +94,14 @@
 # valido per un altro motivo (spezzare typecheck e suite non compra nulla), non
 # per quello scritto.
 #
-# ## Il filtro, e perché è per forma e non per nome
+# ## Il filtro rimasto sul push, e perché è per forma e non per nome
 #
-# `paths` sotto è un elenco di **forme**, non di file. `.claude/*.mjs` e
+# Sulle PR il workflow ora parte sempre, così il check può essere required senza
+# restare Pending. Il `paths` che resta sotto appartiene **solo al push su
+# main** ed è un elenco di forme, non di file: `.claude/*.mjs` e
 # `.claude/**/*.test.ts` fanno sì che uno script o un test aggiunto domani sotto
-# `.claude/` entri qui da solo. Un elenco di nomi (`deleghe.mjs`,
-# `riconcilia.mjs`, …) sarebbe invecchiato nella direzione pericolosa: il primo
-# file nuovo sarebbe tornato invisibile, che è il difetto che questo file
-# esiste per chiudere.
+# `.claude/` rientri automaticamente nel replay post-merge. Un elenco di nomi
+# sarebbe invecchiato nella direzione pericolosa.
 #
 # ## La superficie nuova (2026-08-30): rules, skills e il prompt del loop
 #
@@ -125,14 +123,17 @@
 # suggeriva una superficie che nessuno aveva. I comandi personalizzati sono
 # comunque confluiti nelle skill.
 #
-# Il trigger ricalca `ci.yml`: `pull_request` più il push su `main` soltanto,
-# così un push su una slice non paga due run per la stessa verifica, e
-# `concurrency` con `cancel-in-progress` — il risparmio più grosso e il più
-# facile da dimenticare.
+# Il trigger ricalca la postura source-public: ogni `pull_request` materializza
+# il check, mentre il push resta ristretto a `main`. Questo rende il job
+# utilizzabile come required status check senza il Pending permanente causato
+# dai trigger-level path filters. `concurrency` continua a cancellare run
+# superseded sulla stessa ref.
 
 name: strumenti
 
 on:
+  # Required public check: every PR materializes this workflow. Optimize later
+  # with job-level conditions, never trigger-level path filters.
   pull_request:
   push:
     branches: [main]
@@ -144,13 +145,6 @@ on:
       - '.claude/*.mjs'
       - '.claude/*.test.ts'
       - '.claude/**/*.test.ts'
-      # Il handoff è letto dall'hook SessionStart dentro un budget di 4 000
-      # caratteri (`inject-state.mjs`), e `inject-state.test.ts` prova che il
-      # file vero ci sta. Misurato il 02/09/2026: una PR di soli documenti lo ha
-      # portato a 6 467 byte, è passata verde (nessun job la guardava) e la
-      # promozione dev → main è andata rossa qui. Il job che possiede il test
-      # possiede anche il file che il test legge.
-      - 'docs/development/handoff.md'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

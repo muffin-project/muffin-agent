@@ -129,7 +129,7 @@ export type DecisionRequest = {
    * Questi byte erano **già** nel turno prima che il modello li scrivesse?
    *
    * La domanda che `taint` da solo non sa fare, e la ragione per cui il gate
-   * sui parametri si comportava come un guasto. `hasParams` non distingue una
+   * sui parametri si comportava come un guasto. `hasComposedBytes` non distingue una
    * query che il modello si è **inventato** — il canale di esfiltrazione — da
    * un URL che ha **copiato** da un risultato di ricerca, e nella ricerca vera
    * quasi ogni link ha un `?`. Risultato misurato: dopo la prima pagina letta,
@@ -400,6 +400,16 @@ export interface PermissionSnapshot {
    * il risultato di un tool. Mai l'output del modello — vedi
    * `DecisionRequest.quoted` per perché quella distinzione è il meccanismo e
    * non un dettaglio.
+   *
+   * `toolCapability` dice **da dove** entrano: assente per il messaggio della
+   * persona, l'id della capability per un risultato di tool. Solo due classi
+   * di ingressi possono rendere una URL «citata» per il gate di egress
+   * (`agent/loop/permissions.ts`): il messaggio umano e i risultati degli
+   * strumenti che leggono il web (`sys.http`, `sys.search`) — seguire un link
+   * trovato è il mestiere. Tutto il resto — disco, memoria, MCP, shell —
+   * entra nel turno e alza il taint, ma non fabbrica provenienza owner: un
+   * documento tier-2 che contiene o inventa una URL non la rende equivalente
+   * a una URL fornita dall'owner (lane #624 + #641).
    */
-  recordInput(text: string): void;
+  recordInput(text: string, toolCapability?: CapabilityId): void;
 }

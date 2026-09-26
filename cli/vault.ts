@@ -1,6 +1,7 @@
-import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { paths } from '../core/config/config.js';
+import { ensurePrivateDir, tightenPrivateFile } from '../core/config/private-fs.js';
 import { Vault } from '../core/vault/vault.js';
 import type { TrustTier } from '../core/policy/types.js';
 
@@ -26,7 +27,10 @@ async function open(home: string) {
   const { buildRuntime } = await import('../agent/runtime.js');
   const runtime = buildRuntime(home);
   const root = paths(home).vault;
-  mkdirSync(root, { recursive: true });
+  if (!ensurePrivateDir(root)) {
+    runtime.close();
+    throw new Error(`non posso usare ${root}: la directory privata non è stata stabilita (symlink sulla catena)`);
+  }
   return { runtime, vault: new Vault(runtime.memory.store, root), root };
 }
 
@@ -69,6 +73,7 @@ export async function cmdVaultAdd(home: string, source: string, tier: TrustTier)
       return 1;
     }
     copyFileSync(from, target);
+    tightenPrivateFile(target);
     const report = await vault.reindexPath(TENANT, basename(from), {
       defaultTier: tier,
       vectors: runtime.memory.recall.vectors,

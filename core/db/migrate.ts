@@ -1,20 +1,20 @@
-import DatabaseCtor from 'better-sqlite3';
-import type Database from 'better-sqlite3';
-import { mkdirSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
+import type Database from 'better-sqlite3';
+import DatabaseCtor from 'better-sqlite3';
+import { ensurePrivateDir, tightenPrivateFile } from '../config/private-fs.js';
+import { TURN_TABLE_SCHEMA } from '../turns/schema.js';
 
 /**
  * Versioned schema lifecycle for the one SQLite file every store shares.
  *
- * Every store in this repository owns its literal DDL and applies it
- * idempotently at construction (`CREATE TABLE IF NOT EXISTS`, `ensureColumn`).
- * That additive path stays: it is what makes a fresh install and a same-shape
- * reopen free. What it cannot express is a change SQLite refuses to make in
- * place — rewriting a CHECK (`episodes.kind` is the recorded trap: a
- * five-value CHECK a new kind cannot join), reshaping columns, splitting a
- * table. Those need an ordered, versioned, run-once path — and the moment the
- * owner's installation accumulates real tenure, "reinstall" stops being a
- * migration strategy (RETURN TO OWNER, requirements-status.md §Milestone).
+ * This runner owns ordered, versioned upgrades for the shared SQLite file.
+ * Stores still declare fresh-install DDL, and some non-turn stores retain
+ * additive compatibility guards for direct CLI openers. Turn-table evolution
+ * is centralized here: TurnStore constructors no longer rebuild or add
+ * columns. Changes SQLite refuses to make in place need this versioned path;
+ * tenure makes "reinstall" an invalid migration strategy (RETURN TO OWNER,
+ * requirements-status.md §Milestone).
  *
  * Shape salvaged from the old Muffin's `src/db/init.ts`, which carried 79
  * tables for four months on this pattern: a `schema_version` table stamped
@@ -32,10 +32,9 @@ export type Migration = {
 };
 
 /**
- * The ordered list of shape changes. Deliberately empty today: the runner and
- * its evidence exist BEFORE the first real reshaping needs them — the first
- * entry added here after tenure begins finds the backup, the guard and the
- * rebuild recipe already proven instead of improvised during an upgrade.
+ * The ordered list of shape changes. Each upgrade is applied and stamped in
+ * one transaction after a validated backup. Fresh installs are stamped at
+ * HEAD and use stores' canonical create DDL.
  *
  * Rules for the first real entry here (judge #93 follow-ups): surface tables
  * (`telegram_updates`, `telegram_offset`, `discord_messages`) are created
@@ -282,6 +281,83 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 8,
+    description: 'turn schema lifecycle — migration and status CHECK under one authority',
+    up: (db) => {
+      const hasTable = (name: string): boolean =>
+        db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name) !==
+        undefined;
+      const hasColumn = (table: string, column: string): boolean =>
+        (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some(
+          (c) => c.name === column,
+        );
+      const addColumn = (table: string, column: string, ddl: string): void => {
+        if (hasTable(table) && !hasColumn(table, column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+      };
+      addColumn('turns', 'claim_token', 'claim_token TEXT');
+      addColumn('turns', 'job_id', 'job_id TEXT');
+      addColumn('turns', 'lease_index', 'lease_index INTEGER NOT NULL DEFAULT 0');
+      addColumn('turns', 'continuable_reason', 'continuable_reason TEXT');
+      addColumn('turns', 'lifetime', 'lifetime TEXT');
+      addColumn('turns', 'continuation_candidates', 'continuation_candidates TEXT');
+      addColumn('turns', 'input_text', 'input_text TEXT');
+      addColumn('turn_tool_calls', 'undone_at', 'undone_at TEXT');
+      addColumn('turn_tool_calls', 'effect_row', 'effect_row TEXT');
+      addColumn('turn_tool_calls', 'reversible', 'reversible TEXT');
+      addColumn('turn_tool_calls', 'resource', 'resource TEXT');
+      addColumn('turn_tool_calls', 'decision', 'decision TEXT');
+      addColumn('turn_leases', 'transport_allowance', 'transport_allowance INTEGER');
+
+      if (!hasTable('turns')) return;
+      const current = db
+        .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'turns'`)
+        .get() as { sql: string } | undefined;
+      if (current === undefined || current.sql.includes("'continuable'")) return;
+
+      // `rebuildTable` derives the column intersection from the two real
+      // shapes and aborts if the row count changes. A hand-copied column list
+      // was the first version here, and it carried exactly the defect this
+      // repository keeps paying for: adding a column to the canonical DDL
+      // without remembering its name in a second list loses the values
+      // silently, and no test notices because the shared intersection is
+      // implicit. The reconciliation with #707's `continuation_candidates` is
+      // the concrete case.
+      const createNew = TURN_TABLE_SCHEMA.replace(
+        'CREATE TABLE IF NOT EXISTS turns',
+        'CREATE TABLE IF NOT EXISTS "{T}"',
+      );
+      if (createNew === TURN_TABLE_SCHEMA) {
+        throw new Error('turn migration: canonical table DDL not found');
+      }
+      rebuildTable(db, 'turns', createNew, {
+        indexes: [
+          'CREATE INDEX IF NOT EXISTS idx_turns_status ON turns(status, updated_at)',
+          'CREATE INDEX IF NOT EXISTS idx_turns_due ON turns(status, wake_at)',
+        ],
+      });
+    },
+  },
+  {
+    // v8 shipped the turn-schema rebuild, but the reconciliation with #707
+    // added `continuation_candidates` to that same version after it had already
+    // run on some homes (the `due_at`/`due_tier` incident, migration 5's own
+    // lesson: a stamped version is never edited again). v9 re-adds the column
+    // idempotently so a home stamped at the intermediate v8 still gets it; a
+    // home migrated by the current v8 already has it and this is a no-op.
+    version: 9,
+    description: 'turns.continuation_candidates — the ambiguity question survives a restart (#707)',
+    up: (db) => {
+      const hasTable = db
+        .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'turns'`)
+        .get();
+      if (hasTable === undefined) return;
+      const hasColumn = (
+        db.prepare(`PRAGMA table_info(turns)`).all() as Array<{ name: string }>
+      ).some((c) => c.name === 'continuation_candidates');
+      if (!hasColumn) db.exec(`ALTER TABLE turns ADD COLUMN continuation_candidates TEXT`);
+    },
+  },
 ];
 
 const BASELINE_VERSION = 1;
@@ -339,7 +415,7 @@ export function stampFresh(
   const stamp = db.prepare(
     `INSERT OR IGNORE INTO schema_version (version, description, applied_at) VALUES (?, ?, ?)`,
   );
-  stamp.run(BASELINE_VERSION, 'baseline — store-owned idempotent DDL', now().toISOString());
+  stamp.run(BASELINE_VERSION, 'baseline — legacy schema before versioned migrations', now().toISOString());
   for (const m of migrations) {
     stamp.run(m.version, `${m.description} (fresh install — born at this shape)`, now().toISOString());
   }
@@ -367,12 +443,14 @@ export function assertSnapshotOk(file: string): void {
  */
 export function snapshotTo(db: Database.Database, file: string): void {
   db.prepare(`VACUUM INTO ?`).run(file);
+  tightenPrivateFile(file);
   try {
     assertSnapshotOk(file);
   } catch (e) {
     rmSync(file, { force: true });
     throw e;
   }
+  tightenPrivateFile(file);
 }
 
 export type MigrateResult = { applied: number[]; backup: string | null; version: number };
@@ -404,10 +482,10 @@ export function migrate(
      )`,
   );
   // The baseline is a stamp, not DDL: a fresh install and a pre-runner install
-  // are both already at the baseline by construction (store-owned DDL).
+  // are both at the legacy schema boundary by construction.
   db.prepare(`INSERT OR IGNORE INTO schema_version (version, description, applied_at) VALUES (?, ?, ?)`).run(
     BASELINE_VERSION,
-    'baseline — store-owned idempotent DDL',
+    'baseline — legacy schema before versioned migrations',
     now().toISOString(),
   );
   const have = schemaVersionOf(db) ?? BASELINE_VERSION;
@@ -418,8 +496,11 @@ export function migrate(
   // The backup comes BEFORE the first reshaping and never on the quiet path —
   // a boot with nothing pending costs zero. `VACUUM INTO` is synchronous,
   // atomic, valid under WAL, and refuses an existing target, which is the
-  // idempotence wanted for a file whose name carries the moment.
-  mkdirSync(opts.backupDir, { recursive: true });
+  // idempotence wanted for a file whose name carries the moment. A refused
+  // private parent stops the migration instead of snapshotting outside it.
+  if (!ensurePrivateDir(opts.backupDir)) {
+    throw new Error(`non posso scrivere il backup in ${opts.backupDir}: la directory privata non è stata stabilita (symlink sulla catena)`);
+  }
   const backup = join(
     opts.backupDir,
     `pre-migrate-v${have}-${now().toISOString().replace(/[:.]/g, '-')}.db`,
@@ -452,8 +533,7 @@ export function migrate(
  *
  * Copies the intersection of old and new columns unless `copyColumns` names
  * them, and asserts the row count survived: a rebuild that loses rows aborts
- * the migration's transaction instead of reporting success — this is the seam
- * `slice/schema-lifecycle`'s mutation evidence removes.
+ * the migration's transaction instead of reporting success.
  *
  * No `PRAGMA foreign_keys` dance on purpose: production connections never turn
  * that pragma on (`cli/init.ts` and `agent/runtime.ts` set only WAL and

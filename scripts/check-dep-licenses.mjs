@@ -2,10 +2,10 @@
 /**
  * Censimento licenze delle dipendenze (ADR-0078).
  *
- * ADR-0019 prometteva questo controllo in CI ma non è mai esistito: nessun
- * file lo implementava. Questo script lo rende reale e gira nel merge gate
- * (via step `licenze delle dipendenze` in `.github/workflows/ci.yml`, che
- * `ci:local` eredita dai workflow).
+ * ADR-0019 promised this check, but no CI implemented it. This script now runs
+ * in the required GitHub Actions `verifica` job of `.github/workflows/ci.yml`.
+ * GitHub Actions is the integration authority; a manual run is only local
+ * diagnostics.
  *
  * Politica sotto AGPL-3.0-or-later:
  * - FAIL: licenza proprietaria, UNLICENSED, mancante o illeggibile. Una di

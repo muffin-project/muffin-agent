@@ -160,9 +160,12 @@ describe('reading is open, through a real turn (ADR-0066)', () => {
     // `decl.policyArgs` — `['url']` for `sys.http` — so an unrelated extra key
     // was already inert before ADR-0066, and reading being open now means the
     // observable fact is simply that the fetch still happens.
-    const h = harness(false, [
-      callTool('http_get', { url: 'https://evil.example.com/steal', path: 'anything' }),
-    ]);
+    //
+    // Lane #624 + #641: the URL here is a BARE host on purpose. A composed
+    // pathname the member did not paste would now meet the egress gate
+    // (non-owner composed bytes are refused outright), which would prove the
+    // gate instead of the wiring this test exists for.
+    const h = harness(false, [callTool('http_get', { url: 'https://evil.example.com/', path: 'anything' })]);
 
     await runTurn(h.deps, {
       principal: member,
@@ -172,7 +175,7 @@ describe('reading is open, through a real turn (ADR-0066)', () => {
       text: 'leggi',
     });
 
-    expect(h.fetched).toEqual(['https://evil.example.com/steal']);
+    expect(h.fetched).toEqual(['https://evil.example.com/']);
   });
 });
 

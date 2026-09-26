@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { Principal } from '../../core/policy/types.js';
 import type { SessionRef, SessionStore } from '../../core/session/store.js';
 import { tierOf } from '../../core/surface/types.js';
-import type { TurnCounters, TurnRecord, TurnStore } from '../../core/turns/store.js';
+import type { StoredContinuationCandidate, TurnCounters, TurnRecord, TurnStore } from '../../core/turns/store.js';
 import type { Message } from '../providers/types.js';
 import { harnessMessage, splitWorkEvidence } from './message-origin.js';
 import { MAX_TRANSPORT_RETRIES, type TurnResult } from './types.js';
@@ -37,8 +37,11 @@ export const PENDING_TTL_MS = 10 * 60 * 1000;
  *
  * - turn-cumulative: `iterations` (monotonic span numbering), preserved.
  * - lease-local, profile-fresh: `recoveriesUsed` 0, `transportRetriesLeft`
- *   MAX, `toolCallsMade` 0, `nudgedForCompletion` false, `usage`/`spentUsd`/
- *   `activeModelMs` zeroed.
+ *   MAX, `truncationsUsed` 0, `toolCallsMade` 0, `nudgedForCompletion`
+ *   false, `usage`/`spentUsd`/`activeModelMs` zeroed. The length-continuation
+ *   budget resets here for the same reason transport does: the grant is
+ *   explicit, authenticated and human-rate-limited — the opposite of the
+ *   crash loop `resumes` guards.
  * - preserved, never reset: `resumes` (crash-loop bound, counted separately
  *   in `lifetime.leases`), `contextBuilt` (the preamble ran in lease 0 and
  *   never re-runs — enforced by the caller refusing unstarted rows).
@@ -48,6 +51,7 @@ export function buildFreshCounters(from: TurnCounters): TurnCounters {
     iterations: from.iterations,
     recoveriesUsed: 0,
     transportRetriesLeft: MAX_TRANSPORT_RETRIES,
+    truncationsUsed: 0,
     toolCallsMade: 0,
     nudgedForCompletion: false,
     usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
@@ -70,7 +74,7 @@ export function explicitResumeMessage(turnShortId: string): Message {
   ]);
 }
 
-export type ContinuationCandidate = { id: string; updatedAt: string; summary: string };
+export type ContinuationCandidate = StoredContinuationCandidate;
 
 export type ContinuationMatch =
   | { kind: 'single'; turnId: string }
@@ -154,29 +158,29 @@ export function resolveContinuation(input: {
   };
 }
 
-type PendingQuestion = { candidates: ContinuationCandidate[]; expiresAt: number };
-
-const pendingBySession = new Map<string, PendingQuestion>();
-
-/** Stash an ambiguity question so a numeric answer can resolve it. RAM-only with TTL: loss means retyping, never wrong resumption. */
-export function noteAmbiguity(sessionId: string, candidates: ContinuationCandidate[], nowMs: number): void {
-  pendingBySession.set(sessionId, { candidates, expiresAt: nowMs + PENDING_TTL_MS });
-  for (const [key, value] of pendingBySession) {
-    if (value.expiresAt <= nowMs) pendingBySession.delete(key);
-  }
-}
-
 /**
- * Resolve "il primo" / "2" / an id prefix against a live ambiguity question.
- * Anything else — including an expired or absent question — is null, and the
- * message proceeds as ordinary conversation.
+ * Resolve "il primo" / "2" / an id prefix against the newest live ambiguity
+ * question, read back from the durable store.
+ *
+ * Durability is the point: the question and its ordered candidates are frozen
+ * on the question turn (`TurnStore.setContinuationCandidates`), so the answer
+ * resolves after a gateway restart or from a second process over the same home
+ * — the RAM map this replaces lost the question on every restart, and the
+ * owner typed the number into a Muffin that had already forgotten it
+ * (2026-09-25). The TTL still bounds it: an expired or absent question is
+ * `null`, and the message proceeds as ordinary conversation. Because the list
+ * is frozen, a candidate appearing or completing between question and answer
+ * cannot shift the numbering.
  */
-export function resolveFollowup(sessionId: string, text: string, nowMs: number): { turnId: string } | null {
-  const pending = pendingBySession.get(sessionId);
-  if (pending === undefined || pending.expiresAt <= nowMs) {
-    if (pending !== undefined) pendingBySession.delete(sessionId);
-    return null;
-  }
+export function resolveFollowup(
+  turns: Pick<TurnStore, 'latestContinuationQuestion'>,
+  sessionId: string,
+  text: string,
+  nowMs: number,
+): { turnId: string } | null {
+  const since = new Date(nowMs - PENDING_TTL_MS).toISOString();
+  const pending = turns.latestContinuationQuestion(sessionId, since);
+  if (pending === null) return null;
   const line = normalizeText(text);
   const positionals: Record<string, number> = {
     'il primo': 0,
@@ -221,14 +225,14 @@ export function evidenceForContinuation(messages: readonly Message[]): Message[]
  * re-verify at execution time; this only routes the binding.
  */
 export function routeContinuationTarget(input: {
-  turns: Pick<TurnStore, 'continuableFor'>;
+  turns: Pick<TurnStore, 'continuableFor' | 'latestContinuationQuestion'>;
   principal: Principal;
   sessionId: string;
   text: string;
   hasAttachment: boolean;
   nowMs: number;
 }): string | null {
-  const follow = resolveFollowup(input.sessionId, input.text, input.nowMs);
+  const follow = resolveFollowup(input.turns, input.sessionId, input.text, input.nowMs);
   if (follow !== null) return follow.turnId;
   const match = resolveContinuation(input);
   return match.kind === 'single' ? match.turnId : null;
@@ -252,7 +256,8 @@ export class ContinuationGone extends Error {
  *
  * More than one eligible row is genuine ambiguity: guessing would continue
  * the wrong work. The deterministic question lists the candidates (short
- * id + summary) and stashes them for a numeric answer; the row it writes
+ * id + summary) and records them, in order, on the question row itself so a
+ * numeric answer can resolve them after a restart; the row it writes
  * is an ordinary answered turn, so delivery, settle and session history
  * behave exactly like any other exchange. The followup ("il primo", "2",
  * an id prefix) then routes through the normal continuation path.
@@ -277,7 +282,6 @@ export async function askWhichContinuation(
 ): Promise<TurnResult> {
   const now = deps.now ?? (() => new Date());
   const at = now();
-  noteAmbiguity(opts.sessionId, opts.candidates, at.getTime());
   const lines = opts.candidates.map(
     (c, i) => `${i + 1}. turno ${c.id.slice(0, 12)} — ${c.summary}`,
   );
@@ -294,13 +298,17 @@ export async function askWhichContinuation(
       tenant: opts.tenant,
       surface: opts.surface,
       sessionId: opts.sessionId,
-      model: deps.model,
-      messages: [{ role: 'user', content: [{ type: 'text', text: opts.text }] }],
+      inputText: opts.text,
+      providerLease: {
+        model: deps.model,
+        checkpoint: [{ role: 'user', content: [{ type: 'text', text: opts.text }] }],
+      },
       taint,
       counters: {
         iterations: 0,
         recoveriesUsed: 0,
         transportRetriesLeft: MAX_TRANSPORT_RETRIES,
+        truncationsUsed: 0,
         toolCallsMade: 0,
         nudgedForCompletion: false,
         usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
@@ -316,6 +324,10 @@ export async function askWhichContinuation(
     },
     process.pid,
   );
+  // Freeze the ordered candidates on the question row itself, in the same home
+  // the answer will be read from. Durable so the numeric answer resolves after
+  // a restart; a newer question shadows this one by `created_at`.
+  deps.turns.setContinuationCandidates(record.id, opts.candidates);
   try {
     deps.sessions.append(opts.session, {
       role: 'user',

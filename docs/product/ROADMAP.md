@@ -8,7 +8,7 @@ It does **not** own implementation status, DAY-1 truth, architecture or sequenci
 
 - DAY-1 status belongs to `docs/status/day1/requirements-status.md`.
 - Remaining DAY-1 order belongs to `docs/status/day1/critical-path.md`.
-- Current work belongs to observed Git/PR state + `docs/development/handoff.md`.
+- Current work belongs to observed Git/GitHub state.
 - Semantic shape belongs to `docs/architecture/ARCHITECTURE.md` / `docs/architecture/SECURITY.md` and ADRs.
 - Public/community strategy belongs to `docs/project/OPEN-SOURCE-STRATEGY.md`.
 
@@ -483,6 +483,6 @@ new hardware/product experiment
 or explicit owner decision
 ```
 
-When an item becomes DAY-1 relevant, add/reclassify it in the DAY-1 requirements. When it becomes active work, Git + `docs/development/handoff.md` own execution state. When its semantic shape changes, update Architecture/Security or write/supersede an ADR.
+When an item becomes DAY-1 relevant, add/reclassify it in the DAY-1 requirements. When it becomes active work, observed Git/GitHub own execution state. When its semantic shape changes, update Architecture/Security or write/supersede an ADR.
 
 This file never says that something is implemented merely because its phase has arrived.

@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { join } from 'node:path';
 import { paths } from '../config/config.js';
+import { tightenPrivateFile } from '../config/private-fs.js';
 import {
   EgressFileSchema,
   hostAllowed,
@@ -276,7 +277,8 @@ export async function widenEgressForCapability(
   // Ogni altra voce (e `_comment`) resta com'era: si aggiunge, non si sostituisce.
   const next = { ...parsed.data, allow: [...parsed.data.allow, ...mancanti] };
   try {
-    writeFileSync(egressFile, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+    writeFileSync(egressFile, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    tightenPrivateFile(egressFile);
     seal(home, rotVersion, new Date());
   } catch (error) {
     // Rollback, best-effort: se uno di questi due write torna a fallire (per

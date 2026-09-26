@@ -16,7 +16,7 @@ Esegui questi tre, e leggi l'output prima di decidere qualsiasi cosa:
 
 ```
 node .claude/deleghe.mjs riprendi
-node .claude/riconcilia.mjs
+node scripts/agent/repo-state.mjs
 gh pr list --state open
 ```
 
@@ -33,9 +33,8 @@ gh pr list --state open
 
 ## Cosa farne
 
-1. **L'osservato vince sul handoff.** Leggi `docs/development/handoff.md` e
-   confrontalo con quanto sopra. Se diverge, correggi il handoff **prima** di
-   scegliere il lavoro: una sessione nuova erediterebbe la bugia.
+1. **L'osservato e' il controllo.** Il programma e il lavoro attivo vengono da
+   Git/GitHub e da `repo-state.mjs`, non da una nota di sessione.
 2. **Chiudi prima ciò che è rotto.** Una review aperta, una delega morta, un
    worktree sporco o un rosso che ha davvero eseguito vengono prima di lavoro
    nuovo. Un check rosso a zero step non è un difetto del codice.

@@ -6,6 +6,9 @@
  *
  * Prints a compact current-state snapshot derived from Git/GitHub/toolchain —
  * never from handoff prose or conversation memory. Used by /start.
+ * The `main`/`dev` SHAs are the live GitHub ones beside the local refs, and
+ * every worktree is listed, so a fresh session cannot read a stale local branch
+ * or an omitted worktree as current state.
  * Each section is best-effort: on failure it prints `unknown` rather than
  * failing, so a fresh session always gets something to work from.
  * Exit 0 = snapshot complete, 1 = git unavailable (not a repository checkout).
@@ -42,18 +45,24 @@ if (!git('rev-parse --show-toplevel')) {
 const branch = git('branch --show-current') || '(detached)';
 const head = git('rev-parse --short HEAD') || 'unknown';
 const dirty = git('status --porcelain');
-const main = git('rev-parse --short main') || 'unknown';
-const dev = git('rev-parse --short dev') || 'unknown';
-const div = git('rev-list --left-right --count main...dev');
-const worktrees = (git('worktree list --porcelain') || '')
+const repo = gh(['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner']);
+const githubBranch = (name) =>
+  repo ? gh(['api', `repos/${repo}/branches/${name}`, '--jq', '.commit.sha']) : null;
+const localMain = git('rev-parse refs/heads/main') || 'unknown';
+const localDev = git('rev-parse refs/heads/dev') || 'unknown';
+const liveMain = githubBranch('main');
+const liveDev = githubBranch('dev');
+const worktreeList = git('worktree list --porcelain');
+const worktrees = (worktreeList ?? '')
   .split('\n')
   .filter((l) => l.startsWith('worktree '))
   .map((l) => l.slice('worktree '.length));
 const worktreeDirty = [];
-for (const wt of worktrees.slice(0, 40)) {
+const worktreeUnavailable = [];
+for (const wt of worktrees) {
   const s = run('git', ['-C', wt, 'status', '--porcelain']);
-  if (s === null || s === '') continue;
-  worktreeDirty.push(wt);
+  if (s === null) worktreeUnavailable.push(wt);
+  else if (s !== '') worktreeDirty.push(wt);
 }
 
 const prRaw = gh([
@@ -64,7 +73,7 @@ const prRaw = gh([
   '--limit',
   '50',
   '--json',
-  'number,title,isDraft,headRefName,baseRefName',
+  'number,title,isDraft,headRefName,baseRefName,files',
 ]);
 let prs = [];
 try {
@@ -81,26 +90,34 @@ const issueRaw = gh([
   '--limit',
   '100',
   '--json',
-  'number,title,labels',
+  'number,title,labels,assignees',
 ]);
-let program = [];
+let issues = [];
 try {
-  const issues = JSON.parse(issueRaw || '[]');
-  program = issues.filter((i) =>
-    (i.labels || []).some((l) => l.name === 'program/current'),
-  );
+  issues = JSON.parse(issueRaw || '[]');
 } catch {
-  program = [];
+  issues = [];
 }
 
 const jevKey = process.env.TYPESAFE_API_KEY ? 'present' : 'absent';
 const jevSdk = run('node', ['-e', "require.resolve('@typesafe-ai/sdk')"]) !== null;
 const jevCli = run('which', ['jev']) !== null;
 
+const short = (sha) => (sha ? sha.slice(0, 12) : 'unknown');
+
 section('repository', [
   `checkout branch: ${branch} @ ${head} (${dirty ? 'DIRTY' : 'clean'})`,
-  `main: ${main} | dev: ${dev} | divergence main...dev (behind ahead): ${div || 'unknown'}`,
-  `worktrees: ${worktrees.length}${worktreeDirty.length ? `; dirty: ${worktreeDirty.join(', ')}` : '; all clean or unchecked'}`,
+  `GitHub main: ${short(liveMain)} | local main: ${short(localMain)}`,
+  `GitHub dev: ${short(liveDev)} | local dev: ${short(localDev)}`,
+  // A failed `worktree list` must not read as "zero worktrees" — that is the
+  // same silent omission this script exists to prevent, one level up.
+  ...(worktreeList === null
+    ? ['worktrees: unknown (git worktree list failed)']
+    : [
+        `worktrees: ${worktrees.length} — clean ${worktrees.length - worktreeDirty.length - worktreeUnavailable.length}, dirty ${worktreeDirty.length}, unavailable ${worktreeUnavailable.length}`,
+        ...(worktreeDirty.length ? [`dirty: ${worktreeDirty.join(', ')}`] : []),
+        ...(worktreeUnavailable.length ? [`unavailable: ${worktreeUnavailable.join(', ')}`] : []),
+      ]),
 ]);
 
 section('open PRs', [
@@ -110,10 +127,34 @@ section('open PRs', [
     : 'none (or gh unavailable)',
 ]);
 
-section('current program', [
-  program.length === 1
-    ? `program/current → #${program[0].number} ${program[0].title}`
-    : `INCONSISTENT: ${program.length} open issues carry program/current (want exactly 1)`,
+const claimed = issues.filter((i) => (i.assignees || []).length > 0);
+section('open issue graph', [
+  issues.length
+    ? `${issues.length} open issues loaded; ${claimed.length} have GitHub assignees`
+    : 'none (or gh unavailable)',
+  ...issues.slice(0, 12).map((i) => {
+    const owners = (i.assignees || []).map((a) => a.login).join(', ') || 'unclaimed';
+    return `#${i.number} [${owners}] ${i.title}`;
+  }),
+]);
+
+const filePaths = (pr) => (pr.files || [])
+  .map((f) => (typeof f === 'string' ? f : f.path))
+  .filter(Boolean);
+const overlaps = [];
+for (let i = 0; i < prs.length; i += 1) {
+  const left = new Set(filePaths(prs[i]));
+  for (let j = i + 1; j < prs.length; j += 1) {
+    const common = filePaths(prs[j]).filter((path) => left.has(path));
+    if (common.length) overlaps.push(`#${prs[i].number} / #${prs[j].number}: ${common.join(', ')}`);
+  }
+}
+section('open PR file-scope overlaps', [
+  ...(prs.length
+    ? overlaps.length
+      ? overlaps
+      : ['none observed; unpublished worktree/branch claims still need coordination']
+    : ['unknown (or gh unavailable)']),
 ]);
 
 const closedRaw = gh([

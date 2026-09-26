@@ -259,6 +259,7 @@ function seedCrashedTurn(runtime: Runtime): string {
         iterations: 1,
         recoveriesUsed: 0,
         transportRetriesLeft: 3,
+        truncationsUsed: 0,
         toolCallsMade: 1,
         nudgedForCompletion: false,
         usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },

@@ -24,6 +24,111 @@ function episode(s: MemoryStore, tenant: string, content: string, tier: 0 | 1 | 
 }
 
 describe('memory store', () => {
+  it('projects a turn ingress once, tenant-scoped, and rejects a conflicting replay', () => {
+    const s = store();
+    const ingress = {
+      tenantId: HOST,
+      connector: 'cli',
+      threadKey: 's1',
+      role: 'user' as const,
+      kind: 'message' as const,
+      content: 'richiesta iniziale',
+      trustTier: 0 as const,
+      createdAt: '2026-08-04T10:00:00Z',
+      turnId: 'turn-ingress-1',
+    };
+    const first = s.addTurnIngressOnce(ingress);
+    const replay = s.addTurnIngressOnce({ ...ingress, createdAt: '2026-08-05T10:00:00Z' });
+    expect(replay).toBe(first);
+    expect(s.episodeById(HOST, first)?.content).toBe('richiesta iniziale');
+    expect(() => s.addTurnIngressOnce({ ...ingress, content: 'contenuto diverso' })).toThrow(
+      /conflicting ingress projection/,
+    );
+    expect(s.addTurnIngressOnce({ ...ingress, tenantId: GROUP })).not.toBe(first);
+  });
+
+  /**
+   * Production writes two episodes under one `turn_id`: the owner's ingress
+   * and the agent's own answer (`agent/loop/round.ts`). The ingress projection
+   * must ignore the answer — not throw on it — or a preamble replay where the
+   * answer already exists and `contextBuilt` is still false on disk loops
+   * forever as an `interrupted` turn. This test replaces one that asserted the
+   * opposite and made the defect the contract.
+   */
+  it('projects the ingress beside the agent answer that shares the turn id', () => {
+    const s = store();
+    const answer = s.addEpisode({
+      tenantId: HOST,
+      connector: 'cli',
+      threadKey: 's1',
+      role: 'agent',
+      kind: 'message',
+      content: 'risposta',
+      trustTier: 0,
+      createdAt: '2026-08-04T10:00:00Z',
+      turnId: 'turn-collision',
+    });
+    const ingress = {
+      tenantId: HOST,
+      connector: 'cli',
+      threadKey: 's1',
+      role: 'user' as const,
+      kind: 'message' as const,
+      content: 'richiesta',
+      trustTier: 0 as const,
+      createdAt: '2026-08-04T10:00:00Z',
+      turnId: 'turn-collision',
+    };
+
+    const id = s.addTurnIngressOnce(ingress);
+    expect(id).toBeGreaterThan(0);
+    expect(id).not.toBe(answer);
+    // The resumed-preamble shape: the same projection replayed is the same row.
+    expect(s.addTurnIngressOnce({ ...ingress, createdAt: '2026-08-04T10:05:00Z' })).toBe(id);
+    // The answer is untouched, and both exchange halves share the turn.
+    expect(s.episodeById(HOST, answer)?.content).toBe('risposta');
+    expect(s.pendingEpisodes(HOST, 1)).toHaveLength(2);
+    // A genuine second ingress for the same turn is still a conflict.
+    expect(() => s.addTurnIngressOnce({ ...ingress, content: 'altra richiesta' })).toThrow(
+      /conflicting ingress projection/,
+    );
+  });
+
+  /**
+   * The exact production order, and the shape that used to loop: ingress →
+   * agent answer (same turn id) → the preamble runs again because
+   * `contextBuilt` was not persisted (a swallowed checkpoint write, then a
+   * crash). It must be a replay of the same ingress row, never a conflict.
+   */
+  it('a resumed preamble after the answer exists replays the same ingress', () => {
+    const s = store();
+    const ingress = {
+      tenantId: HOST,
+      connector: 'cli',
+      threadKey: 's1',
+      role: 'user' as const,
+      kind: 'message' as const,
+      content: 'richiesta',
+      trustTier: 0 as const,
+      createdAt: '2026-08-04T10:00:00Z',
+      turnId: 'turn-resume',
+    };
+    const first = s.addTurnIngressOnce(ingress);
+    s.addEpisode({
+      tenantId: HOST,
+      connector: 'cli',
+      threadKey: 's1',
+      role: 'agent',
+      kind: 'message',
+      content: 'risposta',
+      trustTier: 0,
+      createdAt: '2026-08-04T10:01:00Z',
+      turnId: 'turn-resume',
+    });
+
+    expect(s.addTurnIngressOnce({ ...ingress, createdAt: '2026-08-04T10:10:00Z' })).toBe(first);
+  });
+
   it('migrates a database that predates origin and importance, without losing its rows', () => {
     // The real migration path, not a simulation of it: an existing `facts`
     // table means CREATE TABLE IF NOT EXISTS does nothing, so the two columns

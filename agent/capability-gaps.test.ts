@@ -4,10 +4,10 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runInit } from '../cli/init.js';
 import { paths, writeSecret } from '../core/config/config.js';
-import { seal } from '../core/rot/verify.js';
-import { visibleTools } from './context/assemble.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import type { Principal } from '../core/policy/types.js';
+import { seal } from '../core/rot/verify.js';
+import { visibleTools } from './context/assemble.js';
 import { toolContext } from './fixtures/tool-context.js';
 import { buildRuntime } from './runtime.js';
 import { makeSendFileTool, sendFileCapability } from './tools/deliver.js';
@@ -87,7 +87,13 @@ describe('una capacità spenta lo dice, non solo al log', () => {
 
       const inspect = runtime.deps.tools.find((t) => t.spec.name === 'sys_inspect');
       const out = await inspect!.handler({}, toolContext());
-      expect(out.content).not.toContain('Capacità spente');
+      // The claim is about *this* remedy (web_search), not "no gaps exist on
+      // the host": on Linux with bwrap < 0.12.0 the shared shell boundary
+      // (#642) correctly keeps shell_run in the same section, and a blanket
+      // `not.toContain('Capacità spente')` would fail there for a gap this
+      // test never fixed. End-to-end through the real tool, not just the
+      // structured producer asserted above.
+      expect(out.content).not.toMatch(/✗\s*web_search/);
     } finally {
       runtime.close();
     }
@@ -236,7 +242,11 @@ describe('cosa raggiunge un membro, con e senza grant (ADR-0073)', () => {
     const policy = join(paths(home).rot, 'policy.json');
     writeFileSync(
       policy,
-      JSON.stringify({ schemaVersion: 1, tenants: { [STANZA_CON_GRANT]: { grants: CONCESSE } } }, null, 2),
+      JSON.stringify(
+        { schemaVersion: 1, tenants: { [STANZA_CON_GRANT]: { grants: CONCESSE } } },
+        null,
+        2,
+      ),
     );
     // La stessa cosa che fa `muffin rot reseal`: senza, il file diverge dal
     // manifest e la home entra in safe mode invece di leggere il grant.
@@ -275,9 +285,14 @@ describe('cosa raggiunge un membro, con e senza grant (ADR-0073)', () => {
           decl.resourceKind === 'path'
             ? { kind: 'path', value: '/tmp/x' }
             : decl.resourceKind === 'url-read'
-              ? { kind: 'url-read', value: 'https://esempio.test/p' }
+              ? // Bare host on purpose: this file proves ADR-0073 grant
+                // mechanics (which capabilities a member reaches), and composed
+                // URL bytes answer to the params gate instead (`decide.ts`,
+                // lane #624 + #641) — a fixture with a path would measure the
+                // gate here instead of the grant.
+                { kind: 'url-read', value: 'https://esempio.test/' }
               : decl.resourceKind === 'url'
-                ? { kind: 'url', value: 'https://esempio.test/p' }
+                ? { kind: 'url', value: 'https://esempio.test/' }
                 : decl.resourceKind === 'query'
                   ? { kind: 'query', value: 'q' }
                   : decl.resourceKind === 'tenant'
@@ -299,8 +314,17 @@ describe('cosa raggiunge un membro, con e senza grant (ADR-0073)', () => {
     try {
       // La frase dell'ADR, eseguita. `surface.reply` e `memory.write` sono le
       // due porte del loop (`DOORS`), che non compaiono in `capabilities`.
-      expect(raggiunte(runtime, STANZA_SENZA)).toEqual(['documents.read', 'memory.read', 'sys.http']);
-      expect(menu(runtime, STANZA_SENZA)).toEqual(['document_read', 'http_get', 'memory_search', 'memory_why']);
+      expect(raggiunte(runtime, STANZA_SENZA)).toEqual([
+        'documents.read',
+        'memory.read',
+        'sys.http',
+      ]);
+      expect(menu(runtime, STANZA_SENZA)).toEqual([
+        'document_read',
+        'http_get',
+        'memory_search',
+        'memory_why',
+      ]);
       // In particolare, ciò che una stanza non riceverà mai.
       expect(raggiunte(runtime, STANZA_SENZA)).not.toContain('sys.shell');
       expect(raggiunte(runtime, STANZA_SENZA)).not.toContain('fs.write');
@@ -347,7 +371,10 @@ describe('cosa raggiunge un membro, con e senza grant (ADR-0073)', () => {
     runInit({ home, apiKey: 'sk-never-called' });
     writeFileSync(
       join(paths(home).rot, 'policy.json'),
-      JSON.stringify({ schemaVersion: 1, tenants: { [STANZA_CON_GRANT]: { grants: ['sys.shell'] } } }),
+      JSON.stringify({
+        schemaVersion: 1,
+        tenants: { [STANZA_CON_GRANT]: { grants: ['sys.shell'] } },
+      }),
     );
     seal(home, '1', new Date());
 

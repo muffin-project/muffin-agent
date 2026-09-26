@@ -1,42 +1,61 @@
-import DatabaseCtor from 'better-sqlite3';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import DatabaseCtor from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
-import { tmpdirBreaksSandboxSockets, SANDBOX_TMPDIR_OVERHEAD, TMPDIR_SUN_PATH_LIMIT, type SandboxProbe } from '../core/sandbox/probe.js';
-import { SandboxExecutor } from '../core/sandbox/executor.js';
-import { wantsExplicitCache } from '../agent/providers/openai-compat.js';
-import { currentSchemaVersion, schemaVersionOf } from '../core/db/migrate.js';
 import { CONSERVATIVE, loadProfiles, selectProfile } from '../agent/profiles/profile.js';
-import { hardeningHolds, verify } from '../core/rot/verify.js';
-import { checkRotReaders } from '../core/rot/readers.js';
-import { loadSealedOwner } from '../core/rot/owner.js';
-import { loadPolicyMatrix } from '../core/policy/matrix.js';
-import { readGateway } from '../core/gateway/lock.js';
-import { PLAIN, type Style } from './ui.js';
-import { askGateway } from '../core/gateway/control-socket.js';
-import { checkSupervisor, realSupervisorProbes, type SupervisorProbes } from '../core/gateway/supervisor.js';
-import { describeInterrupted, readTurnHealth, readUndelivered } from '../core/turns/store.js';
-import { readConsolidation } from '../core/memory/consolidator.js';
-import { makeEmbedder, OllamaEmbedder, type Embedder } from '../core/memory/embed.js';
-import { quantiNonIndicizzati } from '../core/memory/vectors.js';
-import { readOpenContradictions } from '../core/memory/maintenance.js';
-import { loadConfig, locateSecretAll, paths, readSecret, ConfigError, type Config } from '../core/config/config.js';
-import { describeWorkspace } from '../core/config/workspace.js';
-import { loadSealedBudgets } from '../core/rot/budgets.js';
-import { diagnoseDefaultsDrift, type DefaultDrift } from '../core/config/defaults-drift.js';
-import { ALL_API_KEY_NAMES } from '../core/config/providers.js';
-import { describeBuild, findCheckoutRoot, type BuildStamp } from './update.js';
-import type { StatoSuperficie } from '../core/surface/salute.js';
 import { audioAccettato } from '../agent/providers/modalita.js';
-import { prerequisitiTrascrizione, type Prerequisito } from '../core/audio/trascrivi.js';
-import { loadEgress, type EgressPolicy } from '../core/net/egress.js';
-import { diagnoseRoutingStaleness } from '../core/config/model-resolve.js';
-import { diagnoseSearch } from '../agent/tools/search.js';
+import { wantsExplicitCache } from '../agent/providers/openai-compat.js';
+import { type VerificationResult, verifyInferenceRoute } from '../agent/providers/verify.js';
 import { baseToolOrder } from '../agent/runtime.js';
-import { Vault, type VaultAudit, type VaultStore } from '../core/vault/vault.js';
+import { diagnoseSearch } from '../agent/tools/search.js';
+import { type Prerequisito, prerequisitiTrascrizione } from '../core/audio/trascrivi.js';
+import {
+  type Config,
+  type ConfigError,
+  loadConfig,
+  locateSecretAll,
+  paths,
+  readSecret,
+} from '../core/config/config.js';
+import { type DefaultDrift, diagnoseDefaultsDrift } from '../core/config/defaults-drift.js';
+import { diagnoseRoutingStaleness } from '../core/config/model-resolve.js';
+import { ALL_API_KEY_NAMES } from '../core/config/providers.js';
+import { describeWorkspace } from '../core/config/workspace.js';
+import { currentSchemaVersion, schemaVersionOf } from '../core/db/migrate.js';
+import { askGateway } from '../core/gateway/control-socket.js';
+import { readGateway } from '../core/gateway/lock.js';
+import {
+  checkSupervisor,
+  realSupervisorProbes,
+  type SupervisorProbes,
+} from '../core/gateway/supervisor.js';
+import { readConsolidation } from '../core/memory/consolidator.js';
+import { type Embedder, makeEmbedder, OllamaEmbedder } from '../core/memory/embed.js';
+import { readOpenContradictions } from '../core/memory/maintenance.js';
+import { quantiNonIndicizzati } from '../core/memory/vectors.js';
+import { type EgressPolicy, loadEgress } from '../core/net/egress.js';
+import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import type { TrustTier } from '../core/policy/types.js';
+import { loadSealedBudgets } from '../core/rot/budgets.js';
+import { loadSealedOwner } from '../core/rot/owner.js';
+import { checkRotReaders } from '../core/rot/readers.js';
+import { hardeningHolds, verify } from '../core/rot/verify.js';
+import { readBubblewrapVersion } from '../core/sandbox/bubblewrap-version.js';
+import { SandboxExecutor } from '../core/sandbox/executor.js';
+import {
+  SANDBOX_TMPDIR_OVERHEAD,
+  type SandboxProbe,
+  TMPDIR_SUN_PATH_LIMIT,
+  tmpdirBreaksSandboxSockets,
+} from '../core/sandbox/probe.js';
+import { assessShellBoundary } from '../core/sandbox/shell-boundary.js';
+import type { StatoSuperficie } from '../core/surface/salute.js';
+import { describeInterrupted, readTurnHealth, readUndelivered } from '../core/turns/store.js';
+import { Vault, type VaultAudit, type VaultStore } from '../core/vault/vault.js';
+import { PLAIN, type Style } from './ui.js';
+import { type BuildStamp, describeBuild, findCheckoutRoot } from './update.js';
 
 /**
  * Diagnosis that executes instead of assuming.
@@ -84,8 +103,16 @@ export type DoctorOptions = {
    * running outside a Git checkout.
    */
   checkoutRoot?: string | null;
-  /** Test-only: sostituisce la lettura vera del commit. `null` esercita il caso «non è un checkout». */
+  /**
+   * Test-only: sostituisce la lettura vera del commit. `null` esercita il caso «non è un checkout». */
   build?: BuildStamp | null;
+  /**
+   * Test-only: overrides `bwrap --version` for the shared shell-boundary
+   * patch posture (#642), so the suite decides that gate by fixture instead
+   * of by which host runs it — `null` exercises the unreadable path, a
+   * string ≥ 0.12.0 is a declared fixture, never a host claim.
+   */
+  bubblewrapVersion?: string | null;
   /**
    * Test-only: sostituisce la sonda vera dell'embedder, così la suite non
    * chiama `localhost:11434` millenovecento volte. Un rifiuto sta per
@@ -107,6 +134,13 @@ export type DoctorOptions = {
    * `supervisorProbes` exists above. `undefined` means the real probe.
    */
   hardened?: boolean;
+  /**
+   * Test-only: replaces the real inference-verification probe
+   * (`agent/providers/verify.ts`) behind `doctor --online`, so the suite can
+   * assert the wiring without spending the owner's money. Plain `doctor`
+   * never calls it either way.
+   */
+  verifyInference?: () => Promise<VerificationResult>;
 };
 
 /**
@@ -183,7 +217,64 @@ export function quantoDura(daIso: string, ora: Date): string {
   return `${String(Math.floor(ore / 24))} giorni`;
 }
 
-export async function runDoctor(home = paths().home, options: DoctorOptions = {}): Promise<DoctorReport> {
+/**
+ * Renders the inference-verification result (#523) as doctor checks.
+ *
+ * `working` is the only green: the route answered a real request with a
+ * structurally valid probe tool call. `incompatible` is its own verdict —
+ * reachable prose is not working inference — and never reads as reachable.
+ * Auth/config failures are `fail` (the route cannot work until the owner
+ * acts); transient network/provider failures are `warn` (nothing is proven
+ * either way). Details come verbatim from the primitive's redacted
+ * diagnostic, so no secret can leak through this renderer.
+ */
+export function renderInferenceCheck(
+  ok: (name: string, detail: string) => void,
+  warn: (name: string, detail: string, remedy: string) => void,
+  fail: (name: string, detail: string, remedy: string) => void,
+  verification: VerificationResult,
+): void {
+  const route =
+    verification.resolvedModel === undefined ||
+    verification.resolvedModel === verification.requestedModel
+      ? verification.requestedModel
+      : `${verification.requestedModel} (served as ${verification.resolvedModel})`;
+  const ms = `${String(verification.durationMs)}ms`;
+  switch (verification.status) {
+    case 'working':
+      ok('inference', `${route} — probe tool call pass in ${ms}: ${verification.diagnostic}`);
+      return;
+    case 'incompatible':
+      fail(
+        'inference',
+        `${route} — incompatible in ${ms}: ${verification.diagnostic}`,
+        verification.remedy ?? 'pick a route that supports tool calls',
+      );
+      return;
+    case 'misconfigured':
+    case 'auth_failed':
+      fail(
+        'inference',
+        `${route} — ${verification.status} in ${ms}: ${verification.diagnostic}`,
+        verification.remedy ?? 'set the key',
+      );
+      return;
+    case 'unreachable':
+    case 'timeout':
+    case 'provider_error':
+      warn(
+        'inference',
+        `${route} — ${verification.status} in ${ms}: ${verification.diagnostic}`,
+        verification.remedy ?? 'retry later',
+      );
+      return;
+  }
+}
+
+export async function runDoctor(
+  home = paths().home,
+  options: DoctorOptions = {},
+): Promise<DoctorReport> {
   const p = paths(home);
   const checks: Check[] = [];
   const ok = (name: string, detail: string) => checks.push({ name, level: 'ok', detail });
@@ -196,13 +287,24 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
   // *quale build sto guardando?* Il 27/08 la risposta si otteneva interrogando
   // i sottocomandi (`muffin trace --help` non aveva `turn`, questa riga non
   // esisteva) e deducendo l'età da ciò che mancava.
-  const build = options.build === undefined ? describeBuild(dirname(fileURLToPath(import.meta.url))) : options.build;
+  const build =
+    options.build === undefined
+      ? describeBuild(dirname(fileURLToPath(import.meta.url)))
+      : options.build;
   if (build === null) {
-    warn('build', 'nessun checkout Git: non so quale commit stia girando', 'installa da un clone Git, o dillo tu nel riportare un problema');
+    warn(
+      'build',
+      'nessun checkout Git: non so quale commit stia girando',
+      'installa da un clone Git, o dillo tu nel riportare un problema',
+    );
   } else if (build.dirty) {
     // Non un `fail`: su una macchina di sviluppo è lo stato normale. Ma neanche
     // un `ok` silenzioso — quel SHA non descrive ciò che sta girando.
-    warn('build', `${build.sha.slice(0, 12)} del ${build.date}, con modifiche non committate sopra`, 'quel commit non descrive ciò che gira: committa o riporta anche il diff');
+    warn(
+      'build',
+      `${build.sha.slice(0, 12)} del ${build.date}, con modifiche non committate sopra`,
+      'quel commit non descrive ciò che gira: committa o riporta anche il diff',
+    );
   } else {
     ok('build', `${build.sha.slice(0, 12)} del ${build.date}`);
   }
@@ -225,7 +327,7 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
     warn(
       'workspace',
       `${workspace.workspace} — MUFFIN_WORKSPACE puntava a ${workspace.envRejected.requested}, dentro l'installazione: ignorato, ` +
-        "perché dentro ~/.muffin ci sono memoria, sessioni e il sigillo, non è uno spazio di lavoro e nessun turno ci scrive",
+        'perché dentro ~/.muffin ci sono memoria, sessioni e il sigillo, non è uno spazio di lavoro e nessun turno ci scrive',
       `indica una cartella fuori dall'installazione con MUFFIN_WORKSPACE, oppure togli la variabile e lascia il default`,
     );
   } else if (!workspace.exists) {
@@ -233,7 +335,10 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
     // come si insegna a scorrere oltre gli avvisi — questo repository ha già
     // pagato il prezzo del testo di sicurezza che nessuno legge più. La nota
     // resta, dentro la riga verde.
-    ok('workspace', `${workspace.workspace} — qui atterrano le scritture di un turno (si crea da sola al primo turno che ci scrive)`);
+    ok(
+      'workspace',
+      `${workspace.workspace} — qui atterrano le scritture di un turno (si crea da sola al primo turno che ci scrive)`,
+    );
   } else {
     ok('workspace', `${workspace.workspace} — qui atterrano le scritture di un turno`);
   }
@@ -251,7 +356,10 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
         : wantsExplicitCache(config.provider.baseUrl)
           ? 'breakpoints espliciti (endpoint riconosciuto)'
           : 'implicito (nessun breakpoint richiesto)';
-    ok('config', `schemaVersion ${config.schemaVersion}, provider ${config.provider.kind}, cache ${cache}`);
+    ok(
+      'config',
+      `schemaVersion ${config.schemaVersion}, provider ${config.provider.kind}, cache ${cache}`,
+    );
   } catch (error) {
     const e = error as ConfigError;
     fail('config', e.message, e.remedy ?? 'run `muffin init`');
@@ -264,7 +372,11 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
   // that the number they raised last month stopped binding. Warn, not ok — there
   // is something for them to do (or decide not to do).
   for (const note of configNotes) {
-    warn('config migrata', note, 'la riscrittura avviene da sé alla prossima modifica di config.json');
+    warn(
+      'config migrata',
+      note,
+      'la riscrittura avviene da sé alla prossima modifica di config.json',
+    );
   }
 
   // Which per-model profile `config.models.main` actually resolves to, and
@@ -314,7 +426,11 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
   if (routingDiag !== null) {
     warn('model routing', routingDiag.detail, routingDiag.remedy);
   } else {
-    const pins = [...(config.provider.routing?.only ?? []), ...(config.provider.routing?.order ?? []), ...(config.provider.routing?.ignore ?? [])];
+    const pins = [
+      ...(config.provider.routing?.only ?? []),
+      ...(config.provider.routing?.order ?? []),
+      ...(config.provider.routing?.ignore ?? []),
+    ];
     if (pins.length > 0 && config.provider.routingForFamily !== undefined) {
       ok('model routing', `pin validati per la famiglia "${config.provider.routingForFamily}"`);
     }
@@ -391,7 +507,11 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
   // check going red.
   const readers = checkRotReaders(home);
   if (readers.skipped.length > 0) {
-    warn('rot readers', readers.skipped.map((s) => `NON verificato — ${s.why}`).join('; '), 'run `muffin rot reseal`');
+    warn(
+      'rot readers',
+      readers.skipped.map((s) => `NON verificato — ${s.why}`).join('; '),
+      'run `muffin rot reseal`',
+    );
   } else if (readers.violations.length === 0) {
     ok('rot readers', `${readers.fileCount} file sigillati, ognuno con un lettore dichiarato`);
   } else {
@@ -399,7 +519,7 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
     worst(
       'rot readers',
       readers.violations.map((v) => `${v.id}: ${v.sample.join(', ')}`).join(' · '),
-      "sembra vincolante ma non lo è, perché nessun modulo lo legge davvero: dagli un lettore, oppure toglilo da rot/ " +
+      'sembra vincolante ma non lo è, perché nessun modulo lo legge davvero: dagli un lettore, oppure toglilo da rot/ ' +
         '— poi rifai `muffin rot reseal` (è dentro il sigillo: per questo serve la tua conferma)',
     );
   }
@@ -412,9 +532,9 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
   if (config.rot.mode === 'single-user') {
     warn(
       'root of trust mode',
-      'ogni capability ad alto rischio (`sys.shell` in testa) ti chiede sempre conferma e non diventa mai un allow ' +
+      'ogni capability che non si annulla (`sys.shell` in testa) ti chiede sempre conferma e non diventa mai un allow ' +
         'silenzioso: se qualcosa modifica questi file mentre gira come te, Muffin se ne accorge solo dopo, non lo ' +
-        "impedisce prima — è la modalità single-user: le manomissioni sono rilevate, non impedite",
+        'impedisce prima — è la modalità single-user: le manomissioni sono rilevate, non impedite',
       '`muffin rot harden` stampa i comandi per rendere vero il blocco su questa macchina, e cosa cambia una volta fatto',
     );
   } else {
@@ -445,13 +565,14 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
   // nothing anywhere said so. See defaultsDriftCheck below for the two
   // opposite verdicts this can reach and why they must never be confused.
   const moduleDir = dirname(fileURLToPath(import.meta.url));
-  const checkoutRoot = options.checkoutRoot !== undefined ? options.checkoutRoot : findCheckoutRoot(moduleDir);
+  const checkoutRoot =
+    options.checkoutRoot !== undefined ? options.checkoutRoot : findCheckoutRoot(moduleDir);
   const drift = diagnoseDefaultsDrift(home, checkoutRoot);
   if (drift.length === 0) {
     warn(
       'defaults',
       "nessun registro d'installazione (installazione precedente a questa funzione) e nessun checkout Git leggibile — " +
-        'non so dire se persona.md, voice.md o i default dentro rot/ sono stati aggiornati dall\'owner o sono rimasti al giorno di `init`',
+        "non so dire se persona.md, voice.md o i default dentro rot/ sono stati aggiornati dall'owner o sono rimasti al giorno di `init`",
       'esegui da un checkout Git di questo repository per un confronto affidabile',
     );
   } else {
@@ -461,7 +582,10 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
     // `defaultsDriftCheck`, which already produces that same shape for one
     // file.
     const sealedAdoptable = drift.filter((d) => d.sealed && d.status === 'adoptable');
-    const rest = sealedAdoptable.length >= 2 ? drift.filter((d) => !(d.sealed && d.status === 'adoptable')) : drift;
+    const rest =
+      sealedAdoptable.length >= 2
+        ? drift.filter((d) => !(d.sealed && d.status === 'adoptable'))
+        : drift;
     for (const d of rest) defaultsDriftCheck(ok, warn, d);
     if (sealedAdoptable.length >= 2) sealedDriftGroupCheck(warn, sealedAdoptable);
   }
@@ -511,7 +635,10 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
         'cancella la copia che non vuoi, così resta una sola chiave da ruotare',
       );
     } else {
-      ok('api key', `${config.provider.apiKeyRef} (${answered?.backend}) — ${answered?.path}, ${key.length} chars, mai stampata`);
+      ok(
+        'api key',
+        `${config.provider.apiKeyRef} (${answered?.backend}) — ${answered?.path}, ${key.length} chars, mai stampata`,
+      );
     }
   } catch (error) {
     const e = error as ConfigError;
@@ -523,9 +650,9 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
   // guarda i nomi. Una chiave dimenticata sotto un nome che nessuno legge più
   // è comunque una credenziale valida da qualche parte sul disco, ed è quella
   // che alla rotazione successiva resta indietro.
-  const altriNomi = ALL_API_KEY_NAMES.filter((n) => `secret://${n}` !== config.provider.apiKeyRef).flatMap((n) =>
-    locateSecretAll(`secret://${n}`, home).map((l) => ({ nome: n, path: l.path })),
-  );
+  const altriNomi = ALL_API_KEY_NAMES.filter(
+    (n) => `secret://${n}` !== config.provider.apiKeyRef,
+  ).flatMap((n) => locateSecretAll(`secret://${n}`, home).map((l) => ({ nome: n, path: l.path })));
   if (altriNomi.length > 0) {
     warn(
       'api key (nomi)',
@@ -534,27 +661,50 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
       'cancella la copia che non serve più: una chiave valida che nessuno legge è una che alla rotazione resta indietro',
     );
   }
+  // The inference route, proven rather than parsed. Plain `doctor` stays
+  // offline and cost-free: the probe performs one real minimal model request
+  // and runs ONLY behind the explicit `--online` opt-in. Doctor is a
+  // renderer — every provider semantic lives in `agent/providers/verify.ts`,
+  // which already returns redacted diagnostics, so nothing here touches keys,
+  // bodies or prompts.
   if (options.online) {
-    warn('api reachability', 'online check not implemented in M0', 'omit --online');
+    const verification = await (
+      options.verifyInference ?? (() => verifyInferenceRoute({ home }))
+    )();
+    renderInferenceCheck(ok, warn, fail, verification);
   }
 
   try {
     const db = new DatabaseCtor(p.db, { readonly: true });
-    const tables = db.prepare(`SELECT count(*) AS n FROM sqlite_master WHERE type='table'`).get() as {
+    const tables = db
+      .prepare(`SELECT count(*) AS n FROM sqlite_master WHERE type='table'`)
+      .get() as {
       n: number;
     };
     ok('database', `${p.db}, ${tables.n} tables`);
 
     const schema = schemaVersionOf(db);
     if (schema === null) {
-      warn('schema', 'nessuna schema_version: database mai avviato da questo codice', 'parte al primo avvio del runtime');
+      warn(
+        'schema',
+        'nessuna schema_version: database mai avviato da questo codice',
+        'parte al primo avvio del runtime',
+      );
     } else if (schema > currentSchemaVersion()) {
-      fail('schema', `database v${schema}, codice v${currentSchemaVersion()}`, 'aggiorna il codice');
+      fail(
+        'schema',
+        `database v${schema}, codice v${currentSchemaVersion()}`,
+        'aggiorna il codice',
+      );
     } else if (schema < currentSchemaVersion()) {
       // Unreachable while MIGRATIONS is empty (baseline is the ceiling), but
       // this is the tool the restore path points at — behind must never read
       // as healthy (judge #93 follow-up).
-      warn('schema', `database v${schema}, codice v${currentSchemaVersion()} — migrazione pendente`, 'avvia il runtime (repl o gateway)');
+      warn(
+        'schema',
+        `database v${schema}, codice v${currentSchemaVersion()} — migrazione pendente`,
+        'avvia il runtime (repl o gateway)',
+      );
     } else {
       ok('schema', `v${schema} (codice v${currentSchemaVersion()})`);
     }
@@ -588,7 +738,8 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
     let configurato: Embedder | undefined;
     let configRotta: string | undefined;
     try {
-      configurato = config === null ? undefined : makeEmbedder(config.embedder, (ref) => readSecret(ref, home));
+      configurato =
+        config === null ? undefined : makeEmbedder(config.embedder, (ref) => readSecret(ref, home));
     } catch (error) {
       // Una config di embedder incompleta non deve far cadere `doctor`: è
       // proprio il momento in cui serve. Ma nemmeno sparire: qui stava un
@@ -887,7 +1038,8 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
      */
     if (turns !== null && turns.waiting.count > 0) {
       const oldest = turns.waiting.oldestWakeAt;
-      const due = oldest === null ? '' : ` · il più vecchio scade ${oldest.slice(0, 16).replace('T', ' ')}`;
+      const due =
+        oldest === null ? '' : ` · il più vecchio scade ${oldest.slice(0, 16).replace('T', ' ')}`;
       if (readGateway(db) === null) {
         warn(
           'turni sospesi',
@@ -965,7 +1117,10 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
     // the visible half.
     const gateway = readGateway(db);
     if (gateway) {
-      const since = gateway.since.toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' });
+      const since = gateway.since.toLocaleString('it-IT', {
+        dateStyle: 'short',
+        timeStyle: 'short',
+      });
       /**
        * Il socket di controllo, chiesto **oltre** alla riga, non al suo posto.
        *
@@ -1012,7 +1167,9 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
        */
       const abilitate = config.surfaces.enabled.filter((id) => id !== 'cli');
       if (abilitate.length > 0) {
-        const risposta = (await askGateway(home, 'superfici')) as { superfici?: StatoSuperficie[] } | null;
+        const risposta = (await askGateway(home, 'superfici')) as {
+          superfici?: StatoSuperficie[];
+        } | null;
         const stato = risposta?.superfici;
         if (stato !== undefined) {
           const perId = new Map(stato.map((r) => [r.id, r]));
@@ -1040,7 +1197,10 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
                   '`muffin gateway run` in primo piano mostra a che punto si e fermata la stretta di mano — riavviare la rifa partire da capo',
                 );
               }
-            } else if (Date.now() - new Date(riga.da).getTime() >= guastoDopoMsDaEnv(process.env['MUFFIN_GUASTO_DOPO_MS'])) {
+            } else if (
+              Date.now() - new Date(riga.da).getTime() >=
+              guastoDopoMsDaEnv(process.env['MUFFIN_GUASTO_DOPO_MS'])
+            ) {
               warn(
                 `superficie ${id}`,
                 `non risponde da ${quantoDura(riga.da, new Date())} (${String(riga.fallimentiDiFila)} tentativi di fila): ${riga.causa ?? 'causa non registrata'} — ` +
@@ -1112,19 +1272,38 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
   // `bwrap: Can't mount proc` inside its own exit. `verify()` pays for a real
   // init + one contained round trip so doctor tells the truth before a session
   // starts, not after a job's output turns out to carry an unsandboxed error.
+  //
+  // The shared shell boundary (#642) then grades what verify() cannot: on
+  // bubblewrap the deny/allow split can hold while the setup-time patch
+  // posture (CVE-2026-87766, upstream 0.12.0) is unverified — same verdict
+  // `agent/runtime.ts` uses to decide whether the shell tools exist, so this
+  // file can never print "shell attivo" on a host where the tools are absent.
   const sandboxExecutor = new SandboxExecutor({ denyWrite: [], denyRead: [] });
   const sandbox = await sandboxExecutor.verify();
   await sandboxExecutor.close();
+  const readVersion =
+    options.bubblewrapVersion === undefined
+      ? readBubblewrapVersion
+      : () => options.bubblewrapVersion ?? null;
+  const boundary = assessShellBoundary(sandbox, readVersion);
   if (sandbox.available) {
-    ok('sandbox', sandboxOkDetail(sandbox));
+    if (boundary.usable) {
+      ok('sandbox', sandboxOkDetail(sandbox));
+    } else {
+      // Fail closed on what containment alone cannot prove (#642): the
+      // deny/allow split held, but the September 2026 symlink setup class
+      // happens before anything runs, so no runtime probe observes it — and
+      // Ubuntu reverted its backport (USN-8779-2), so no Ubuntu revision
+      // below upstream 0.12.0 counts as patched. A green line here would
+      // claim a boundary this check cannot see, and the runtime refuses the
+      // shell tools on this same verdict: warn, with the patch level named.
+      warn('sandbox', `${sandboxOkDetail(sandbox)} — ${boundary.reason}`, boundary.remedy);
+    }
   } else {
-    // Not a hard failure: the runtime still starts, execution capabilities just
-    // degrade to ask. Silently unsandboxed is the one outcome we refuse.
-    warn(
-      'sandbox',
-      `${sandbox.mechanism} unavailable (${sandbox.reason}): ${sandbox.detail} — execution capabilities degrade to ask`,
-      sandbox.remedy,
-    );
+    // Not a hard failure: the runtime still starts, execution capabilities
+    // just degrade — shell tools and the job executor are absent, declared
+    // here. Silently unsandboxed is the one outcome we refuse.
+    warn('sandbox', `${boundary.reason} — execution capabilities degrade to ask`, boundary.remedy);
   }
 
   // `web_search`: stesso produttore di `agent/runtime.ts`, non una seconda
@@ -1154,17 +1333,23 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
     }
   }
 
-  // `shell_run`/`sys.shell`: la stessa sonda del check `sandbox` sopra, letta
-  // di nuovo qui solo per darle un nome di capacità — mai una seconda scelta
-  // di come si prova la sandbox.
-  if (!sandbox.available) {
-    warn(
-      'capacità: shell_run',
-      `${sandbox.mechanism} non disponibile (${sandbox.reason}): ${sandbox.detail}`,
-      sandbox.remedy,
-    );
+  // `shell_run`/`sys.shell`: the same boundary as the check `sandbox` above,
+  // read again here only to give it a capability name — never a second choice
+  // of how containment is proved. `usable` is the gate the runtime used to
+  // register (or refuse) the lanes, so "attivo" and a registered tool cannot
+  // disagree; an unverified patch posture reads as spent, with the CVE named.
+  if (!boundary.usable) {
+    warn('capacità: shell_run', boundary.reason, boundary.remedy);
   } else {
-    ok('capacità: shell_run', 'attivo');
+    // `attivo` è il fatto, non il confine: la corsia legge l'intero
+    // filesystem dell'host tranne la deny-list (#645) — presentarla come
+    // lettura di progetto a basso rischio sarebbe il silenzio che chiudeva
+    // l'issue. Il confine vero sta in SECURITY.md, «Filesystem, process and
+    // worker containment».
+    ok(
+      'capacità: shell_run',
+      'attivo — legge l\u2019intero host tranne la deny-list, non solo il progetto (confine: SECURITY.md, «Filesystem, process and worker containment»)',
+    );
   }
 
   // Il tetto del profilo: quali tool, fra quelli che questa installazione
@@ -1180,7 +1365,16 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
   // qui era esattamente il difetto misurato altrove (`agent/runtime.ts`): il
   // tool più a rischio di un taglio silenzioso reso invisibile alla diagnosi
   // che dovrebbe segnalarlo.
-  const ordineBase = baseToolOrder({ sandboxAvailable: sandbox.available, searchOn: ricerca.on, sendFileAvailable: true });
+  //
+  // `sandboxAvailable: boundary.usable` — not `sandbox.available`: the shell
+  // lanes enter the ordered list only where the runtime would register them
+  // (#642), otherwise the tetto check grades a tool list that boot never
+  // builds.
+  const ordineBase = baseToolOrder({
+    sandboxAvailable: boundary.usable,
+    searchOn: ricerca.on,
+    sendFileAvailable: true,
+  });
   const tagliatiDalTetto = ordineBase.slice(resolvedProfile.maxToolsExposed);
   if (tagliatiDalTetto.length === 0) {
     ok(
@@ -1250,11 +1444,18 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
   // può presentarsi — e A10 (`e2e-giro-owner.accept.ts`) lo ha misurato
   // subito: «WARN non dichiarato» su una home appena inizializzata.
   const modello = config.models.main;
-  const superficiVocali = config.surfaces.enabled.filter((id) => id === 'telegram' || id === 'discord');
+  const superficiVocali = config.surfaces.enabled.filter(
+    (id) => id === 'telegram' || id === 'discord',
+  );
   const ascolta =
-    superficiVocali.length === 0 ? false : await probeAudio(options.voce?.accettaAudio, config.provider.baseUrl, modello);
+    superficiVocali.length === 0
+      ? false
+      : await probeAudio(options.voce?.accettaAudio, config.provider.baseUrl, modello);
   if (superficiVocali.length === 0) {
-    ok('note vocali', 'nessuna superficie vocale abilitata (telegram, discord): niente da preparare');
+    ok(
+      'note vocali',
+      'nessuna superficie vocale abilitata (telegram, discord): niente da preparare',
+    );
   } else if (ascolta) {
     ok('note vocali', `${modello} accetta audio: le note vocali vanno al modello`);
   } else {
@@ -1362,8 +1563,14 @@ function sealedAdoptRemedy(files: { path: string; cmd: string }[]): string {
  * diverging sealed file already gets this shape from `defaultsDriftCheck`
  * itself, unrepeated by construction.
  */
-function sealedDriftGroupCheck(warn: (name: string, detail: string, remedy: string) => void, group: DefaultDrift[]): void {
-  const files = group.map((d) => ({ path: d.path, cmd: d.adoptCommand ?? `(comando non disponibile per ${d.path})` }));
+function sealedDriftGroupCheck(
+  warn: (name: string, detail: string, remedy: string) => void,
+  group: DefaultDrift[],
+): void {
+  const files = group.map((d) => ({
+    path: d.path,
+    cmd: d.adoptCommand ?? `(comando non disponibile per ${d.path})`,
+  }));
   warn(
     'default rot/*',
     `${String(group.length)} file dentro il sigillo sono cambiati da come li ha copiati \`muffin init\`, e HEAD è ` +
@@ -1418,7 +1625,9 @@ function defaultsDriftCheck(
         d.detail,
         d.sealed
           ? "`muffin init` lo ricopia dentro il sigillo e risigilla — oppure, se l'hai tolto di proposito, ignora questa riga"
-          : "`muffin adopt " + d.path + "` (o `muffin adopt --tutto`) lo installa e lo registra; `muffin update` lo fa da sé — oppure, se l'hai tolto di proposito, ignora questa riga",
+          : '`muffin adopt ' +
+              d.path +
+              "` (o `muffin adopt --tutto`) lo installa e lo registra; `muffin update` lo fa da sé — oppure, se l'hai tolto di proposito, ignora questa riga",
       );
       return;
     case 'unknown':
@@ -1452,18 +1661,17 @@ function defaultsDriftCheck(
 /**
  * The `ok('sandbox', …)` line, honest about which mechanism actually held.
  *
- * A green "sandbox: contained" reads as parity between platforms, and it is
- * not: `SandboxManager.baseConfig` (core/sandbox/executor.ts) sets
- * `allowAllUnixSockets: true` on Linux only — two open upstream bugs (#428,
- * #429) block the seccomp layer that would otherwise deny them — so bubblewrap
- * holding today says less than seatbelt holding does. One line, not the essay
- * this comment is: doctor.ts owns being read at a glance.
+ * It used to append a Linux caveat — "weaker than macOS: Unix-socket hardening
+ * is off" — because `networkOff()` set `allowAllUnixSockets: true` there
+ * (upstream #428/#429). Since the filter is requested and behaviorally verified
+ * before `verify()` reports `available` (core/sandbox/executor.ts; an
+ * unfiltered or unprovable host reads as unavailable), that caveat would now
+ * be the false half: both mechanisms deny `socket(AF_UNIX, …)` by default.
+ * One line, not the essay this comment is: doctor.ts owns being read at a
+ * glance.
  */
 export function sandboxOkDetail(sandbox: Extract<SandboxProbe, { available: true }>): string {
-  const base = `${sandbox.mechanism}: a real containment ran and held`;
-  return sandbox.mechanism === 'bubblewrap'
-    ? `${base} — weaker than macOS: Unix-socket hardening is off on Linux (allowAllUnixSockets, #428/#429)`
-    : base;
+  return `${sandbox.mechanism}: a real containment ran and held`;
 }
 
 /**
@@ -1569,7 +1777,8 @@ async function vaultDriftCheck(
     );
     return;
   }
-  const drift = audit.missing.length + audit.stale.length + audit.orphaned.length + audit.unreadable.length;
+  const drift =
+    audit.missing.length + audit.stale.length + audit.orphaned.length + audit.unreadable.length;
   if (drift === 0) {
     ok('vault', `${audit.files} file · indice allineato (tenant host)`);
     return;
@@ -1619,7 +1828,10 @@ function rimedioEmbedder(config: { embedder?: { kind?: string } | undefined } | 
  * Un DB senza le tabelle della memoria non è un guasto da riportare qui — lo
  * dicono già i rami sopra — quindi vale zero invece di far cadere `doctor`.
  */
-function quantiNonIndicizzatiSafe(db: DatabaseCtor.Database, embedder: Embedder | undefined): number {
+function quantiNonIndicizzatiSafe(
+  db: DatabaseCtor.Database,
+  embedder: Embedder | undefined,
+): number {
   try {
     return quantiNonIndicizzati(db, (embedder ?? new OllamaEmbedder()).id);
   } catch {
@@ -1675,13 +1887,18 @@ async function probeEmbedder(
   // interroga un embedder diverso da quello che il runtime usa, misura una cosa
   // e ne riporta un'altra — ed è così che un `doctor` verde convive con una
   // memoria che non si indicizza.
-  const run = override ?? (async (): Promise<void> => void (await (embedder ?? new OllamaEmbedder()).embed(['probe'])));
+  const run =
+    override ??
+    (async (): Promise<void> => void (await (embedder ?? new OllamaEmbedder()).embed(['probe'])));
   let timer: NodeJS.Timeout | undefined;
   try {
     await Promise.race([
       run(),
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`nessuna risposta entro ${EMBEDDER_PROBE_MS}ms`)), EMBEDDER_PROBE_MS);
+        timer = setTimeout(
+          () => reject(new Error(`nessuna risposta entro ${EMBEDDER_PROBE_MS}ms`)),
+          EMBEDDER_PROBE_MS,
+        );
         // Il tetto non deve tenere in vita il processo quando la sonda ha già
         // risposto: senza questo, ogni `muffin doctor` riuscito resterebbe
         // appeso al proprio timer.
@@ -1755,7 +1972,7 @@ function ownerBindingCheck(
     warn(
       'owner binding',
       `${diverse.join(' · ')} — vince il sigillo, e il campo in config.json non viene nemmeno letto`,
-      'se l\'owner giusto è quello sigillato non devi fare niente; se non lo è, `muffin surface enable telegram --owner <id>` lo riscrive e risigilla',
+      "se l'owner giusto è quello sigillato non devi fare niente; se non lo è, `muffin surface enable telegram --owner <id>` lo riscrive e risigilla",
     );
     return;
   }

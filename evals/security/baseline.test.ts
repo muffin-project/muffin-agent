@@ -61,12 +61,14 @@ describe('Security v2 A/B baseline — ambient taint only', () => {
       };
     });
 
-    // Ambient taint is not merely "stricter everywhere": the allowlisted
-    // read-only case is intentionally identical because sys.http declares a
-    // higher ceiling. That exception is itself evidence that useful dataflow
-    // already forced the scalar policy to become capability-specific.
+    // Ambient taint is not merely "stricter everywhere": the bare-host
+    // read-only case stays identical by decision (no model-chosen bytes, no
+    // gate). What changed on 22/09 (lane #624 + #641) is exactly one cell: a
+    // read with a composed PATH at ambient taint now asks, so s5 is the
+    // visible price of closing the exfiltration channel — measured here
+    // rather than scored.
     expect(results.find((r) => r.id === 's5-external-value-read-more')).toMatchObject({
-      ambient: 'allow',
+      ambient: 'ask',
       noAmbient: 'allow',
     });
 
@@ -90,8 +92,15 @@ describe('Security v2 A/B baseline — ambient taint only', () => {
     // (`core/policy/solo-irreversibile.test.ts`), e il livello continua a
     // marchiare gli episodi e a comparire in ogni domanda. Il taint non è
     // sparito: ha smesso di essere l'autorità in carica sull'host.
+    //
+    // Rimisurata il 22/09 (lane #624 + #641): A e B coincidono su ogni scena
+    // TRANNE la lettura con percorso composto (s5) — ambient chiede,
+    // noAmbient lascia passare. Quella singola divergenza è l'impronta della
+    // decisione: byte scelti dal modello in uscita a taint >= 2 chiedono
+    // all'owner. Se un giorno diverge altro, è una regressione o una nuova
+    // decisione, e questa riga è il posto dove si vede.
     const differenti = results.filter((r) => r.ambient !== r.noAmbient);
-    expect(differenti).toEqual([]);
+    expect(differenti.map((r) => r.id)).toEqual(['s5-external-value-read-more']);
 
     // La stessa cosa detta per nome sulle due celle che ADR-0075 ha spostato,
     // perché un `filter` vuoto sarebbe verde anche se l'elenco delle scene si
@@ -171,17 +180,19 @@ describe('la baseline misura la produzione, non una copia', () => {
    * E la corsia che questa baseline **non** misura, nominata perché il
    * silenzio si legge come «non esiste».
    *
-   * Dal 06/09 (ADR-0074 punto 4) `sys.shell` è la shell in sola lettura: sandbox
-   * senza scrittura fuori dallo scratch e senza rete, quindi `reversible:
-   * 'yes'` e nessun `ask`. Non ha una riga in `SECURITY_BASELINE_CAPABILITIES`
-   * perché non c'è un gradino da misurare — ma se qualcuno la ridichiarasse
-   * `high`/`no` per «coerenza» con la sorella, o le rimettesse un tool che
-   * scrive, il rosso deve arrivare qui e non in un documento.
+   * Dal 06/09 (ADR-0074 punto 4) `sys.shell` è la shell in sola lettura. Il
+   * 2026-09-22 la misura Linux (#645, ADR-0091) ha mostrato che le letture
+   * coprono l'intera macchina: la disclosure è irreversibile e Linux AF_UNIX
+   * può raggiungere servizi locali, quindi la corsia è `risk: 'high'`,
+   * `reversible: 'no'` e chiede quanto la sorella. Non ha una riga in
+   * `SECURITY_BASELINE_CAPABILITIES` perché non c'è un gradino da misurare —
+   * ma se qualcuno la ridichiarasse `yes` per «costruzione», o le rimettesse
+   * un tool che scrive, il rosso deve arrivare qui e non in un documento.
    */
-  it('la corsia in sola lettura resta reversibile per costruzione', () => {
+  it('la corsia in sola lettura è irreversibile quanto la sorella (ADR-0091)', () => {
     expect(shellCapability.id).toBe('sys.shell');
-    expect(shellCapability.risk).toBe('low');
-    expect(shellCapability.reversible).toBe('yes');
+    expect(shellCapability.risk).toBe('high');
+    expect(shellCapability.reversible).toBe('no');
     expect(shellCapability.effect).toBe('host');
   });
 
