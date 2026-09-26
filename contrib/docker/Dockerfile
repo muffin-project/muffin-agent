@@ -46,8 +46,17 @@ RUN git clone --depth 1 --branch "${WHISPER_REF}" https://github.com/ggml-org/wh
       "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${WHISPER_MODEL}.bin"
 
 FROM ${NODE_IMAGE} AS build
+# Only the last commit of the checked-out branch enters the image: the build
+# context is `.git` alone (Dockerfile.dockerignore) and the tree is a depth-1
+# clone of it. Untracked files (a key file, a .env), uncommitted edits and the
+# repository history cannot end up in a layer.
+COPY .git /src/.git
+RUN test -d /src/.git \
+      || { echo "build from a regular clone: .git is not a directory (linked worktree?)" >&2; exit 1; } \
+ && git clone --quiet --no-local --depth 1 file:///src /opt/muffin \
+ && git -C /opt/muffin remote remove origin \
+ && rm -rf /src
 WORKDIR /opt/muffin
-COPY . .
 # `npm ci` runs `prepare`, which compiles dist/; dev dependencies are dropped
 # afterwards because the runtime never loads them.
 RUN npm ci \
@@ -69,7 +78,7 @@ RUN chmod 0755 /opt/muffin/dist/cli/main.js \
  && git config --system --add safe.directory /opt/muffin \
  && install -d -m 0755 /muffin \
  && install -d -o node -g node -m 0700 /muffin/home /muffin/config /muffin/workspace
-COPY --chmod=0755 contrib/docker/entrypoint.sh /usr/local/bin/muffin-entrypoint
+COPY --from=build --chmod=0755 /opt/muffin/contrib/docker/entrypoint.sh /usr/local/bin/muffin-entrypoint
 
 # Data lives under /muffin, one volume per directory: the home (config, sealed
 # rot/, database, memory), the persistent secrets and the workspace.

@@ -1,19 +1,5 @@
-# Build context is the repository root (compose.yaml: context ../..).
-# Keep .git: `muffin doctor` reads the commit the image was built from.
-node_modules
-dist
-.releases
-.worktrees
-.gate-linux
-.ci-local
-graphify-out
-.codegraph
-.agents/telemetry
-evals/character/out
-.env
-.env.*
-!.env.example
-*.local
-*.pem
-*.key
-secrets
+# Allowlist: the build context is the repository's .git and nothing else. The
+# Dockerfile clones the last commit out of it, so a key file, a .env or any
+# other untracked or uncommitted file in the working tree never reaches the image.
+*
+!.git
