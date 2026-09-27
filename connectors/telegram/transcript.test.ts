@@ -507,6 +507,30 @@ describe('handoff() — what deliverTo extends instead of sending beside', () =>
     expect(gHandoff!.processHtml).toContain('✓ leggo un file: x');
   });
 
+  it('in DM handoff() covers every segment — a rich refusal must not lose an earlier one', async () => {
+    const { api } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    t.spoke('Prima cerco.', 'tool-call');
+    t.report(start('fs_read', { path: 'a' }));
+    t.report(end('fs_read', false, { path: 'a' }));
+    await vi.advanceTimersByTimeAsync(0);
+    t.spoke('Ora cerco altro.', 'tool-call');
+    t.report(start('fs_read', { path: 'b' }));
+    t.report(end('fs_read', false, { path: 'b' }));
+    await vi.advanceTimersByTimeAsync(0);
+    await t.stop();
+
+    const h = t.handoff();
+    expect(h).not.toBeNull();
+    const process = h!.process.join('\n');
+    for (const expected of ['Prima cerco.', 'leggo un file: a', 'Ora cerco altro.', 'leggo un file: b']) {
+      expect(process).toContain(expected);
+      // processHtml is the legacy fallback prefix: it must be just as complete,
+      // or a refused rich final would drop the earlier segment.
+      expect(h!.processHtml).toContain(expected);
+    }
+  });
+
   it('is null once a Bot API failure has disabled this transcript — deliverTo must not edit a message it cannot trust', async () => {
     const { api, calls } = recordingApi({ send: true });
     const t = startTranscript(api, 1, { negotiation: GRUPPO });

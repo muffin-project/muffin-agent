@@ -231,6 +231,15 @@ describe('telegram rich · the turn message: process in details, answer in block
     expect(blocks.slice(1).some((b) => (b as { type: string }).type === 'list')).toBe(true);
   });
 
+  it('skips blank process lines — no empty paragraphs in the details', () => {
+    const rich = turnRichMessage({ process: ['✓ uno', '', '   ', '✓ due'], answer: 'ok' });
+    const details = (rich!.blocks ?? []).find((b) => (b as { type: string }).type === 'details') as
+      | { blocks: { text: string }[] }
+      | undefined;
+    expect(details).toBeDefined();
+    expect(details!.blocks.map((b) => b.text)).toEqual(['✓ uno', '✓ due']);
+  });
+
   it('omits the details block when the turn had no visible process', () => {
     const rich = turnRichMessage({ process: [], answer: 'Solo la risposta.' });
     expect(rich).not.toBeNull();

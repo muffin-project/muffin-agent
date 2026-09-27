@@ -170,11 +170,15 @@ export function turnRichMessage(input: {
   const built = buildBlocks(input.answer, 0);
   if (built === null) return null;
   const blocks: InputRichBlock<never>[] = [];
-  if (input.process.length > 0) {
+  // Le righe vuote (le spaziature del markdown) non diventano paragrafi
+  // vuoti: un blocco di testo vuoto non è una struttura, e Telegram rifiuta
+  // un paragrafo senza testo.
+  const process = input.process.filter((line) => line.trim() !== '');
+  if (process.length > 0) {
     blocks.push({
       type: 'details',
       summary: 'Processo',
-      blocks: input.process.map((line) => ({ type: 'paragraph' as const, text: line })),
+      blocks: process.map((line) => ({ type: 'paragraph' as const, text: line })),
     });
   }
   blocks.push(...built.blocks);

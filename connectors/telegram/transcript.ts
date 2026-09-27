@@ -930,16 +930,23 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       if (disabled || segments.length === 0) return null;
       const seg = segments[segments.length - 1]!;
       const process = processLines();
-      const processHtml = render(seg, false, now());
       if (draftEnabled) {
         // Niente messaggio persistente da estendere: il processo è la bozza
         // (effimera) e `deliverTo` manderà un messaggio nuovo con il blocco
         // `details`. `null` solo quando non c'è proprio niente da collassare.
+        //
+        // `processHtml` copre **tutti** i segmenti: è il fallback legacy, e un
+        // rifiuto rich non deve far sparire il preambolo o i passi dei
+        // segmenti precedenti (il solo `process` non basta — è testo semplice).
+        const processHtml = segments
+          .map((s) => render(s, false, now()))
+          .filter((t) => t !== '')
+          .join('\n\n');
         if (process.length === 0 && processHtml === '') return null;
         return { messageId: null, process, processHtml };
       }
       if (seg.messageId === null) return null;
-      return { messageId: seg.messageId, process, processHtml };
+      return { messageId: seg.messageId, process, processHtml: render(seg, false, now()) };
     },
 
     async stop() {
