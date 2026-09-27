@@ -82,8 +82,10 @@ afterEach(() => {
 
 describe('one bubble per segment', () => {
   it('the preamble and its steps share one message; the model speaking again opens the next', async () => {
+    // La segmentazione in bolle persistenti è comportamento della stanza
+    // senza bozza (il gruppo). In DM il processo vive solo nell'anteprima.
     const { api, calls } = recordingApi();
-    const t = startTranscript(api, 1, { negotiation: DM });
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
 
     t.spoke('Prima leggo la spesa.', 'tool-call');
     t.report(start('fs_read', { path: 'spesa.txt' }));
@@ -187,7 +189,7 @@ describe('the counter moves on its own', () => {
 describe('nothing is cut', () => {
   it('a preamble longer than one message becomes several, in order, each within the limit', async () => {
     const { api, calls } = recordingApi();
-    const t = startTranscript(api, 1, { negotiation: DM });
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
     const long = Array.from({ length: 300 }, (_, i) => `riga ${i} di un preambolo molto lungo che non deve sparire`).join('\n');
     t.spoke(long, 'tool-call');
     t.report(start('fs_read', { path: 'x' }));
@@ -204,7 +206,7 @@ describe('nothing is cut', () => {
 
   it('a step that would overflow the segment opens the next one instead of being dropped', async () => {
     const { api, calls } = recordingApi();
-    const t = startTranscript(api, 1, { negotiation: DM });
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
     t.spoke('x'.repeat(TELEGRAM_MAX - 30), 'tool-call');
     t.report(start('fs_read', { path: 'un-percorso-lungo-abbastanza-da-non-entrare.txt' }));
     await vi.advanceTimersByTimeAsync(0);
@@ -219,7 +221,7 @@ describe('nothing is cut', () => {
 describe('stop() is the last edit, never a deletion', () => {
   it('marks a step the turn abandoned and drops the live counter', async () => {
     const { api, calls } = recordingApi();
-    const t = startTranscript(api, 1, { negotiation: DM });
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
     t.report(start('shell_run', { command: 'sleep 99' }));
     await vi.advanceTimersByTimeAsync(0);
     await t.stop();
@@ -267,7 +269,7 @@ describe('a Bot API failure is swallowed and disables the rest of the turn', () 
   it('after a failed create nothing else is attempted, and stop() makes no call', async () => {
     const log: string[] = [];
     const { api, calls } = recordingApi({ send: true });
-    const t = startTranscript(api, 1, { negotiation: DM, log: (l) => log.push(l) });
+    const t = startTranscript(api, 1, { negotiation: GRUPPO, log: (l) => log.push(l) });
     t.report(start('fs_read', { path: 'a' }));
     await vi.advanceTimersByTimeAsync(0);
     t.report(end('fs_read'));
@@ -344,20 +346,19 @@ describe('live() segue la testa della catena della stanza', () => {
     await t.stop();
   });
 
-  it('smette di rinnovare quando il testo diventa preambolo di un messaggio vero', async () => {
+  it('in un gruppo non c\'è anteprima: il preambolo vive nel messaggio persistente, una volta sola', async () => {
     const { api, calls } = recordingApi();
-    const t = startTranscript(api, 1, { negotiation: DM });
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
     t.live('Prima controllo');
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(GRUPPO.editEveryMs);
+    // `edit` non apre un messaggio per mezza frase: niente da mostrare finché
+    // il turno non possiede un passo.
+    expect(calls).toHaveLength(0);
     t.spoke('Prima controllo', 'tool-call');
     t.report(start('fs_read', { path: 'x' }));
-    await vi.advanceTimersByTimeAsync(1_500);
-    const dopoLaPromozione = calls.filter((c) => c.method === 'sendMessageDraft').length;
-
-    await vi.advanceTimersByTimeAsync(4 * DM.draftTtlMs);
-    expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(dopoLaPromozione);
+    await vi.advanceTimersByTimeAsync(GRUPPO.editEveryMs);
     await t.stop();
-    // Il testo ora sta in un messaggio vero, una volta sola.
+    expect(calls.some((c) => c.method === 'sendMessageDraft')).toBe(false);
     const ultimo = calls.filter((c) => c.method !== 'sendMessageDraft').at(-1)!.text!;
     expect(ultimo.split('Prima controllo')).toHaveLength(2);
   });
@@ -373,16 +374,23 @@ describe('live() segue la testa della catena della stanza', () => {
     expect(calls).toHaveLength(dopo);
   });
 
-  it('un\'anteprima rifiutata dalla Bot API non porta giu\' la trascrizione vera', async () => {
+  it('un\'anteprima rifiutata dalla Bot API è decorazione: il processo resta per il `details` finale', async () => {
+    const log: string[] = [];
     const { api, calls } = recordingApi({ draft: true });
-    const t = startTranscript(api, 1, { negotiation: DM });
+    const t = startTranscript(api, 1, { negotiation: DM, log: (l) => log.push(l) });
     t.live('Sto');
     await vi.advanceTimersByTimeAsync(0);
-    // L'anteprima e' decorazione: il turno continua a scrivere i suoi passi.
     t.report(start('fs_read', { path: 'x' }));
     await vi.advanceTimersByTimeAsync(1_500);
-    expect(calls.some((c) => c.method === 'sendMessage')).toBe(true);
     await t.stop();
+    // Niente messaggi persistenti: in DM non esistono. Il processo resta però
+    // in memoria, e `deliverTo` lo collassa nel `details` del messaggio finale.
+    expect(calls.filter((c) => c.method === 'sendMessage' || c.method === 'editMessageText')).toHaveLength(0);
+    expect(log.join('\n')).toContain('anteprima del turno sospesa');
+    const handoff = t.handoff();
+    expect(handoff).not.toBeNull();
+    expect(handoff!.messageId).toBeNull();
+    expect(handoff!.process.join('\n')).toContain('leggo un file: x');
   });
 
   it('in un gruppo non esiste anteprima, e il testo che si forma entra nel messaggio che il turno possiede gia\'', async () => {
@@ -438,25 +446,25 @@ describe('live() segue la testa della catena della stanza', () => {
  * gia' scritto per davvero — i passi — resta invece esattamente com'era.
  */
 describe('un processo che smette di chiamare questo file non lascia niente a meta\'', () => {
-  it('l\'anteprima smette di essere rinnovata e non c\'e\' niente da cancellare', async () => {
+  it('in DM non resta niente di persistente: solo anteprime effimere', async () => {
     const { api, calls } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
-    // Un passo gia' chiuso: cosi' il contatore non ha niente da far scorrere
-    // e cio' che resta sullo schermo e' esattamente cio' che era stato scritto.
     t.report(start('fs_read', { path: 'x' }));
     t.report(end('fs_read'));
     await vi.advanceTimersByTimeAsync(0);
     t.live('Sto preparando');
     await vi.advanceTimersByTimeAsync(DM.editEveryMs);
-    const passiMostrati = calls.filter((c) => c.method !== 'sendMessageDraft').at(-1)!.text;
+    const drafts = calls.filter((c) => c.method === 'sendMessageDraft');
+    expect(drafts.length).toBeGreaterThan(0);
+    expect(calls.some((c) => c.method === 'sendMessage' || c.method === 'editMessageText')).toBe(false);
 
     // Il processo "muore": nessuno chiama piu' niente, nemmeno `stop()`.
     // I timer del banco continuano a girare, ed e' il caso peggiore.
     await vi.advanceTimersByTimeAsync(10 * 60_000);
 
-    // Il messaggio vero e' ancora quello, e non e' stato cancellato.
-    expect(calls.filter((c) => c.method !== 'sendMessageDraft').at(-1)!.text).toBe(passiMostrati);
+    // Niente messaggi veri, niente da cancellare: la bozza sparisce per TTL.
     expect(calls.some((c) => c.method === 'deleteMessage')).toBe(false);
+    expect(calls.some((c) => c.method === 'sendMessage' || c.method === 'editMessageText')).toBe(false);
   });
 });
 
@@ -466,28 +474,42 @@ describe('handoff() — what deliverTo extends instead of sending beside', () =>
     expect(t.handoff()).toBeNull();
   });
 
-  it('names the last segment\'s message and its settled, non-live text once stop() has resolved', async () => {
+  it('in DM returns the process and no message to extend; in group it also names the message', async () => {
     const { api } = recordingApi();
-    const t = startTranscript(api, 1, { negotiation: DM });
-    t.spoke('Prima leggo.', 'tool-call');
-    t.report(start('fs_read', { path: 'x' }));
+    const dm = startTranscript(api, 1, { negotiation: DM });
+    dm.spoke('Prima leggo.', 'tool-call');
+    dm.report(start('fs_read', { path: 'x' }));
     await vi.advanceTimersByTimeAsync(0);
-    t.report(end('fs_read'));
+    dm.report(end('fs_read'));
     await vi.advanceTimersByTimeAsync(1_500);
-    await t.stop();
+    await dm.stop();
 
-    const handoff = t.handoff();
-    expect(handoff).not.toBeNull();
-    expect(handoff!.stepsText).toContain('Prima leggo.');
-    expect(handoff!.stepsText).toContain('✓ leggo un file: x');
-    // The live tail (there was none here) is deliberately excluded —
-    // `deliverTo` supplies the authoritative, freshly split answer itself.
-    expect(handoff!.stepsText).not.toMatch(/⏳|· \d+s/);
+    const dmHandoff = dm.handoff();
+    expect(dmHandoff).not.toBeNull();
+    expect(dmHandoff!.messageId).toBeNull();
+    const process = dmHandoff!.process.join('\n');
+    expect(process).toContain('Prima leggo.');
+    expect(process).toContain('✓ leggo un file: x');
+    // Il tail live è deliberatamente escluso: `deliverTo` porta la risposta
+    // autorevole per conto suo.
+    expect(process).not.toMatch(/⏳|· \d+s/);
+
+    const g = startTranscript(api, 1, { negotiation: GRUPPO });
+    g.spoke('Prima leggo.', 'tool-call');
+    g.report(start('fs_read', { path: 'x' }));
+    await vi.advanceTimersByTimeAsync(0);
+    g.report(end('fs_read'));
+    await vi.advanceTimersByTimeAsync(GRUPPO.editEveryMs);
+    await g.stop();
+    const gHandoff = g.handoff();
+    expect(gHandoff).not.toBeNull();
+    expect(typeof gHandoff!.messageId).toBe('number');
+    expect(gHandoff!.processHtml).toContain('✓ leggo un file: x');
   });
 
   it('is null once a Bot API failure has disabled this transcript — deliverTo must not edit a message it cannot trust', async () => {
     const { api, calls } = recordingApi({ send: true });
-    const t = startTranscript(api, 1, { negotiation: DM });
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
     t.report(start('fs_read', { path: 'x' }));
     await vi.advanceTimersByTimeAsync(0);
     expect(calls).toEqual([]); // the send failed and was swallowed
@@ -523,9 +545,10 @@ describe('defect B — a long first tool is visible while it runs, alone', () =>
     // Il tool resta appeso: nessun tool_end, nessun secondo tool, nessun
     // avanzamento dell'orologio finto — solo microtask.
     await microtasks();
-    const persistent = calls.filter((c) => c.method === 'sendMessage' || c.method === 'editMessageText');
-    expect(persistent.length).toBeGreaterThanOrEqual(1);
-    expect(persistent[0]!.text).toContain('⏳');
+    // In DM la prima pittura è l'anteprima (nessun messaggio persistente).
+    const drafts = calls.filter((c) => c.method === 'sendMessageDraft');
+    expect(drafts.length).toBeGreaterThanOrEqual(1);
+    expect(drafts[0]!.text).toContain('⏳');
     await t.stop();
   });
 
@@ -547,13 +570,13 @@ describe('defect B — a long first tool is visible while it runs, alone', () =>
    * `report()`'s own stack, not merely scheduled from it. Zero awaits between
    * the fact and the assertion, on purpose.
    */
-  it('DM: api.sendMessage is INVOKED synchronously inside report(), before any microtask', async () => {
+  it('DM: the first preview is INVOKED synchronously inside report(), before any microtask', async () => {
     const { api, calls } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
     t.report(start('memory_search', { query: 'q' }));
     // No await of any kind above: if a blocking handler started on the next
-    // line, the send is already on the wire.
-    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
+    // line, the preview is already on the wire.
+    expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(1);
     expect(calls[0]!.text).toContain('⏳');
     await t.stop();
   });
@@ -567,27 +590,28 @@ describe('defect B — a long first tool is visible while it runs, alone', () =>
     await t.stop();
   });
 
-  it('a first preamble paints synchronously too — the tool that follows only edits', async () => {
+  it('a first preamble paints synchronously too — and never opens a persistent message in DM', async () => {
     const { api, calls } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
     t.spoke('Prima leggo la spesa.', 'tool-call');
-    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
+    expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(1);
     t.report(start('fs_read', { path: 'spesa.txt' }));
-    // Still one message: the step joins it via edit, never a second send.
     await vi.advanceTimersByTimeAsync(DM.editEveryMs);
-    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
+    // La bozza è l'unica superficie viva in DM: nessun messaggio vero.
+    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(0);
     await t.stop();
   });
 
-  it('still one message, still throttled afterwards: a burst after the first paint coalesces', async () => {    const { api, calls } = recordingApi();
-    const t = startTranscript(api, 1, { negotiation: DM });
+  it('group: still one message, still throttled — a burst after the first paint coalesces', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
     t.report(start('fs_read', { path: 'a' }));
     await microtasks();
     expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
     // Una raffica subito dopo non apre un secondo messaggio: si accoda in edit.
     t.report(end('fs_read', false, { path: 'a' }));
     t.report(start('fs_read', { path: 'b' }));
-    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    await vi.advanceTimersByTimeAsync(GRUPPO.editEveryMs);
     expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
     await t.stop();
   });
@@ -621,23 +645,18 @@ describe('defect A — no stale post-answer Thinking preview', () => {
     expect(calls.filter((c) => c.method === 'sendMessageDraft' && c.text === '')).toHaveLength(0);
   });
 
-  it('once a persistent segment exists, live() no longer renews the draft', async () => {
+  it('in un gruppo non esiste anteprima: la risposta che si forma entra nel messaggio persistente', async () => {
     const { api, calls } = recordingApi();
-    const t = startTranscript(api, 1, { negotiation: DM });
-    t.live('Sto preparando');
-    await vi.advanceTimersByTimeAsync(0);
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
     t.spoke('Sto preparando', 'tool-call');
     t.report(start('fs_read', { path: 'x' }));
-    await vi.advanceTimersByTimeAsync(2_000);
-    const draftsAfterPersistent = calls.filter((c) => c.method === 'sendMessageDraft').length;
-    // La risposta finale arriva DOPO i tool: deve andare nel messaggio vero.
+    await vi.advanceTimersByTimeAsync(GRUPPO.editEveryMs);
+    // La risposta finale arriva DOPO i tool: entra nel messaggio vero.
     t.live('Ecco la risposta finale che si forma');
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(draftsAfterPersistent);
-    // …e infatti è nel segmento persistente, come coda live.
+    await vi.advanceTimersByTimeAsync(GRUPPO.editEveryMs);
+    expect(calls.some((c) => c.method === 'sendMessageDraft')).toBe(false);
     expect(calls.filter((c) => c.method !== 'sendMessageDraft').at(-1)!.text).toContain('Ecco la risposta finale');
     await t.stop();
-    expect(calls.filter((c) => c.method === 'sendMessageDraft' && c.text === '')).toHaveLength(0);
   });
 
   it('tool-free turn: only the draft while forming, never an empty one at the end', async () => {
@@ -726,7 +745,7 @@ describe('rich transport failure handling', () => {
         throw new TelegramError(400, 'Bad Request: rich refused');
       }),
       1,
-      { negotiation: DM },
+      { negotiation: GRUPPO },
     );
     t.report(start('shell_run', { command: 'npm test' }));
     await vi.advanceTimersByTimeAsync(0);
@@ -743,7 +762,7 @@ describe('rich transport failure handling', () => {
         throw new TelegramError(0, 'response stream closed');
       }),
       1,
-      { negotiation: DM },
+      { negotiation: GRUPPO },
     );
     t.report(start('shell_run', { command: 'npm test' }));
     await vi.advanceTimersByTimeAsync(0);

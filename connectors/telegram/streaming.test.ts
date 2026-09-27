@@ -486,19 +486,19 @@ describe('the transcript of a turn stays above the answer (DAY-1 requirement B13
     const { api: baseApi, calls } = recordingApi();
     let richFails = 0;
     let legacyFails = 0;
-    // The first create a tool turn makes is the transcript, and the rich lane
-    // falls back to legacy inside the same call: failing the first create in
-    // BOTH transports is what disables the transcript. Then `handoff()` is
-    // null and `deliverTo` still delivers the answer.
+    // In a DM the transcript's own surface is the ephemeral draft, and the
+    // rich lane falls back to legacy inside the same call: failing the first
+    // draft in BOTH transports disables the transcript. The answer is then
+    // delivered anyway (a fresh rich send; the process rides its `details`).
     const failingApi: TelegramApiLike = {
       ...baseApi,
-      sendRichMessage: async (chatId, rich, options) => {
+      sendRichMessageDraft: async (chatId, draftId, rich, options) => {
         if (richFails++ === 0) throw new Error('simulato: chat non trovata');
-        return baseApi.sendRichMessage(chatId, rich, options);
+        return baseApi.sendRichMessageDraft(chatId, draftId, rich, options);
       },
-      sendMessage: async (chatId, html, options) => {
+      sendMessageDraft: async (chatId, draftId, text, options) => {
         if (legacyFails++ === 0) throw new Error('simulato: chat non trovata');
-        return baseApi.sendMessage(chatId, html, options);
+        return baseApi.sendMessageDraft(chatId, draftId, text, options);
       },
     };
     const { connector, runtime } = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER }, provider, failingApi);

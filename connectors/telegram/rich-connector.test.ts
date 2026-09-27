@@ -198,9 +198,10 @@ describe('rich end to end · DM draft to rich final, no duplication (G)', () => 
       const richDrafts = calls.filter((c) => c.method === 'sendRichMessageDraft');
       expect(richDrafts.length).toBeGreaterThan(0);
       for (const draft of richDrafts) expect(draft.draftOptions?.canStop).toBe(true);
-      // A prose/status preview rides rich as HTML; the table-shaped one
-      // rides rich as blocks.
-      expect(richDrafts.some((d) => d.rich?.blocks?.some((b) => b.type === 'table'))).toBe(true);
+      // Option B: the preview always rides rich as HTML — a partial never
+      // becomes native blocks (only the final message builds those).
+      expect(richDrafts.some((d) => d.rich?.html !== undefined)).toBe(true);
+      expect(richDrafts.every((d) => d.rich?.blocks === undefined)).toBe(true);
 
       // The durable delivery is exactly one rich message — no legacy send
       // beside the preview (the OpenClaw/Hermes duplication shape), no edit,
@@ -321,13 +322,14 @@ describe('rich drafts · the preview follows the partial across fake time', () =
     expect(calls.filter((c) => c.method === 'sendRichMessageDraft').length).toBeGreaterThan(0);
     expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(0);
 
-    // The model keeps typing and a table takes shape: the renewal switches
-    // method under the same draft, legacy preview replaced, not doubled.
+    // The model keeps typing and a table takes shape: still rich HTML on the
+    // same draft — a partial never becomes native blocks, and never a legacy
+    // draft on this surface.
     t.live(`sto scrivendo la risposta\n\n${TABLE}`);
     await vi.advanceTimersByTimeAsync(2_000);
     const richDrafts = calls.filter((c) => c.method === 'sendRichMessageDraft');
-    expect(richDrafts.some((d) => d.rich?.blocks?.some((b) => b.type === 'table'))).toBe(true);
-    // Never a legacy draft on this surface.
+    expect(richDrafts.some((d) => d.rich?.html !== undefined)).toBe(true);
+    expect(richDrafts.every((d) => d.rich?.blocks === undefined)).toBe(true);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(0);
     await t.stop();
