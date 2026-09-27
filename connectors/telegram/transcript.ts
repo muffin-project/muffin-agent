@@ -3,7 +3,7 @@ import { toolPhrase, toolProgress } from '../../agent/tool-phrase.js';
 import type { Negotiation } from '../../core/surface/types.js';
 import { TelegramError, type TelegramApiLike } from './api.js';
 import { escapeHtml, splitHtml, TELEGRAM_MAX, toTelegramHtml } from './render.js';
-import { richFitsHard, richFromHtml, thinkingRich, turnRichMessage, type OutboundRich } from './rich.js';
+import { boundRichTail, richFitsHard, richFromHtml, thinkingRich, turnRichMessage, type OutboundRich } from './rich.js';
 
 /**
  * What the agent said and did on its way to the answer, kept — DAY-1
@@ -239,7 +239,16 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
    * cosa, e un secondo timer sarebbe la «due meccanismi a ritmi diversi» che
    * questo file ha già pagato una volta.
    */
-  const draftEveryMs = Math.max(1, Math.min(minEditMs, Math.floor(negotiation.draftTtlMs / 3) || minEditMs));
+  /**
+   * Il rinnovo della bozza ha un ritmo **suo**, non quello degli edit
+   * persistenti: gli edit costano un messaggio vero e stanno dentro il
+   * pavimento della stanza, le bozze sono anteprime animate e il loro
+   * streaming deve scorrere. 1,5 s faceva arrivare il testo a scatti.
+   */
+  const DRAFT_TICK_MS = 350;
+  const draftEveryMs = Math.max(1, Math.floor(negotiation.draftTtlMs / 3) || DRAFT_TICK_MS) < DRAFT_TICK_MS
+    ? Math.max(1, Math.floor(negotiation.draftTtlMs / 3) || DRAFT_TICK_MS)
+    : DRAFT_TICK_MS;
   const draftId = prossimoDraftId++;
   let draftText = '';
   /**
@@ -406,15 +415,18 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
   }
 
   /**
-   * The turn's whole process as plain lines, in order: what the model said
-   * before acting, then each tool with its mark. This is what the final
-   * message's collapsed `details` block shows, so it is the settled record
-   * and deliberately never the still-forming answer (`liveText`).
+   * Il processo del turno, separato in due parti — la forma che l'owner ha
+   * chiesto il 2026-09-27: **quello che sta succedendo adesso** sta sotto
+   * «Processo» (visibile), **quello già successo** entra dentro il `details`
+   * (chiuso). Il consuntivo per il finale (`settled`) non ha un passo in
+   * corso: un passo lasciato a metà diventa «interrotto», come nella
+   * trascrizione persistente.
    */
-  function processLines(live: boolean): string[] {
-    const out: string[] = [];
+  function turnProcess(settled: boolean): { done: string[]; running: string | null } {
+    const done: string[] = [];
+    let running: string | null = null;
     for (const seg of segments) {
-      if (seg.plain.trim() !== '') out.push(...seg.plain.trim().split('\n'));
+      if (seg.plain.trim() !== '') done.push(...seg.plain.trim().split('\n'));
       for (const step of seg.steps) {
         const mark =
           step.state === 'running'
@@ -426,15 +438,19 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
                 : step.state === 'waiting'
                   ? '⏸'
                   : null;
-        // La bozza (`live`) porta il contatore che avanza di un passo che
-        // gira, come la riga della trascrizione; il processo consegnato al
-        // finale (`handoff`) è il consuntivo, senza tempo.
-        const elapsed =
-          live && step.state === 'running' ? ` · ${Math.max(0, Math.round((now() - step.startedAt) / 1000))}s` : '';
-        out.push((mark === null ? step.plain : `${mark} ${step.plain}`) + elapsed);
+        if (step.state === 'running') {
+          if (settled) {
+            done.push(`✗ ${step.plain} — interrotto`);
+          } else {
+            const s = Math.max(0, Math.round((now() - step.startedAt) / 1000));
+            running = `⏳ ${step.plain} · ${s}s`;
+          }
+          continue;
+        }
+        done.push(mark === null ? step.plain : `${mark} ${step.plain}`);
       }
     }
-    return out;
+    return { done, running };
   }
 
   function addStep(step: Step): void {
@@ -507,21 +523,6 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
   }
 
   /**
-   * La riga sempre visibile del `details` nella bozza: il passo che sta
-   * girando (col suo tempo), altrimenti «Processo» — la stessa parola del
-   * messaggio finale.
-   */
-  function runningSummary(): string {
-    for (let i = segments.length - 1; i >= 0; i--) {
-      const step = [...(segments[i]!.steps)].reverse().find((s) => s.state === 'running');
-      if (step === undefined) continue;
-      const s = Math.max(0, Math.round((now() - step.startedAt) / 1000));
-      return `⏳ ${step.plain} · ${s}s`;
-    }
-    return 'Processo';
-  }
-
-  /**
    * L'unico scrittore della bozza in modalità draft: rende il processo
    * accumulato (preambolo + passi) più la risposta che si forma, e lo manda
    * come anteprima. Sostituisce, in DM, sia `syncAll` sia la vecchia logica
@@ -530,11 +531,12 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
    */
   function refreshDraft(push: boolean): void {
     if (stopped || draftDisabled) return;
-    // I passi dentro il `details` sono il consuntivo (senza contatore); il
-    // tempo vive solo nella riga di riepilogo, che è quella sempre visibile.
-    const process = processLines(false);
+    // Dentro il `details` i passi già fatti (senza contatore); sotto, la riga
+    // di quello che sta succedendo adesso, col suo tempo. Il presente si
+    // vede, il consuntivo si può chiudere.
+    const { done, running } = turnProcess(false);
     const answer = liveMarkdown;
-    const hasContentNow = process.length > 0 || answer !== '';
+    const hasContentNow = done.length > 0 || running !== null || answer !== '';
     // La prima pittura di contenuto va sul filo subito (deve battere un
     // handler che blocca il loop), il resto si coagula col timer.
     const firstContent = hasContentNow && !draftPaintedContent;
@@ -561,13 +563,14 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     // finale, con il passo in corso nella riga sempre visibile (`summary`) +
     // i blocchi della risposta. Così il passaggio bozza → finale cambia una
     // riga di riepilogo, non il rendering.
-    const turn = turnRichMessage({ process, answer, summary: runningSummary() });
+    const turn = turnRichMessage({ process: done, running, answer });
     // Il rendering HTML resta calcolato sempre: è il fallback se i blocchi
     // vengono rifiutati, e la forma per un parziale non strutturabile.
     const rendered = boundDraft(render(current(), true, now(), liveText));
-    if (turn !== null && richFitsHard(turn) === null) {
+    const tail = turn !== null && richFitsHard(turn) !== null ? boundRichTail(turn) : turn;
+    if (tail !== null) {
       draftText = rendered;
-      draftRich = turn;
+      draftRich = tail;
     } else {
       if (rendered === '') {
         draftText = '';
@@ -1011,7 +1014,7 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     handoff() {
       if (disabled || segments.length === 0) return null;
       const seg = segments[segments.length - 1]!;
-      const process = processLines(false);
+      const process = turnProcess(true).done;
       if (draftEnabled) {
         // Niente messaggio persistente da estendere: il processo è la bozza
         // (effimera) e `deliverTo` manderà un messaggio nuovo con il blocco

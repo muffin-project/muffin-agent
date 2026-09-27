@@ -243,10 +243,29 @@ function recordingApi(): { api: TelegramApiLike; calls: Recorded[] } {
 }
 
 /** The visible text of a call, whichever transport carried it. */
+
+/** Il testo visibile di un payload rich, letto dai blocchi (il finale in DM è a blocchi). */
+const richTesto = (rich: { html?: string; blocks?: unknown[] }): string => {
+  const blockText = (b: unknown): string => {
+    if (b === null || typeof b !== 'object') return '';
+    const o = b as { text?: unknown; summary?: unknown; blocks?: unknown[] };
+    const parts: string[] = [];
+    if (typeof o.summary === 'string') parts.push(o.summary);
+    if (typeof o.text === 'string') parts.push(o.text);
+    else if (Array.isArray(o.text)) parts.push(JSON.stringify(o.text));
+    if (Array.isArray(o.blocks)) parts.push(o.blocks.map(blockText).join('\n'));
+    return parts.join('\n');
+  };
+  if (typeof rich.html === 'string') return rich.html;
+  return Array.isArray(rich.blocks) ? rich.blocks.map(blockText).join('\n') : '';
+};
+
+/** The visible text of a call, whichever transport carried it. */
 const testo = (c: Recorded): string => {
-  const rich = c.rich as { html?: string; markdown?: string } | undefined;
+  const rich = c.rich as { html?: string; markdown?: string; blocks?: unknown[] } | undefined;
   if (rich?.html !== undefined) return rich.html;
   if (rich?.markdown !== undefined) return rich.markdown;
+  if (rich?.blocks !== undefined) return richTesto(rich);
   if (rich !== undefined) return JSON.stringify(rich);
   return c.text ?? '';
 };

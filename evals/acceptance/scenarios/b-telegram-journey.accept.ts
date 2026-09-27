@@ -324,10 +324,12 @@ describe('acceptance · B13 · la trascrizione del turno su Telegram', () => {
           }
 
           const finaleCall = allCreates.find(
-            (c) => c.method === 'sendRichMessage' && testoDi(c).includes('niente di nuovo da ieri a oggi'),
+            (c) =>
+              (c.payload['rich_message'] as { blocks?: Block[] } | undefined)?.blocks !== undefined &&
+              testoDi(c).includes('niente di nuovo da ieri a oggi'),
           );
           if (finaleCall === undefined) {
-            throw new Error(`la risposta non è arrivata come un solo sendRichMessage:\n${JSON.stringify(allCreates, null, 2)}`);
+            throw new Error(`la risposta non è arrivata come un solo messaggio a blocchi:\n${JSON.stringify(allCreates, null, 2)}`);
           }
           const blocks = (finaleCall.payload['rich_message'] as { blocks?: Block[] } | undefined)?.blocks ?? [];
           const details = blocks.find((b) => b.type === 'details');
@@ -598,9 +600,14 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
           // altro passo (`transcript.ts`'s `resolveAsk`).
           const finalCall = tg
             .sent()
-            .find((c) => c.method === 'sendRichMessage' && testoDi(c).includes('ha risposto ciao'));
+            .find(
+              (c) =>
+                (c.method === 'sendMessage' || c.method === 'sendRichMessage') &&
+                (c.payload['rich_message'] as { blocks?: Block[] } | undefined)?.blocks !== undefined &&
+                testoDi(c).includes('ha risposto ciao'),
+            );
           if (finalCall === undefined) {
-            throw new Error('la risposta finale non è arrivata come un solo sendRichMessage');
+            throw new Error('la risposta finale non è arrivata come un solo messaggio a blocchi');
           }
           const blocks = (finalCall.payload['rich_message'] as { blocks?: Block[] } | undefined)?.blocks ?? [];
           const details = blocks.find((b) => b.type === 'details');
@@ -627,7 +634,11 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
           }
           const risposte = tg
             .sent()
-            .filter((c) => (c.method === 'sendMessage' || c.method === 'sendRichMessage') && testoDi(c).includes('ha risposto ciao'));
+            .filter(
+              (c) =>
+                (c.method === 'sendMessage' || c.method === 'sendRichMessage') &&
+                testoDi(c).includes('ha risposto ciao'),
+            );
           if (risposte.length !== 1) {
             throw new Error(`atteso un solo invio con la risposta, trovati ${risposte.length}`);
           }

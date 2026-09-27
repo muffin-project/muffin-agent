@@ -54,6 +54,22 @@ const config: TelegramConfig = { token: 't', ownerUserId: OWNER, ownerChatId: OW
 
 afterEach(() => vi.restoreAllMocks());
 
+/** Il testo visibile di un payload rich, letto dai blocchi (il finale in DM è a blocchi). */
+function richTesto(rich: { html?: string; blocks?: unknown[] }): string {
+  const blockText = (b: unknown): string => {
+    if (b === null || typeof b !== 'object') return '';
+    const o = b as { text?: unknown; summary?: unknown; blocks?: unknown[] };
+    const parts: string[] = [];
+    if (typeof o.summary === 'string') parts.push(o.summary);
+    if (typeof o.text === 'string') parts.push(o.text);
+    else if (Array.isArray(o.text)) parts.push(JSON.stringify(o.text));
+    if (Array.isArray(o.blocks)) parts.push(o.blocks.map(blockText).join('\n'));
+    return parts.join('\n');
+  };
+  if (typeof rich.html === 'string') return rich.html;
+  return Array.isArray(rich.blocks) ? rich.blocks.map(blockText).join('\n') : '';
+}
+
 function harness(
   over: {
     send?: (chatId: number, text: string) => Promise<never>;
@@ -100,14 +116,15 @@ function harness(
     sendMessageDraft: async () => true,
     // Rich is the transport now; the fake records it as the same send/edit so
     // the behaviour assertions stay about the turn, not the wire.
+
     sendRichMessage: over.send
-      ? async (chatId: number, rich: { html?: string }) => over.send!(chatId, rich.html ?? '')
-      : async (_chatId: number, rich: { html?: string }) => {
-          outbound.push(`send:${rich.html ?? ''}`);
+      ? async (chatId: number, rich: { html?: string; blocks?: unknown[] }) => over.send!(chatId, richTesto(rich))
+      : async (_chatId: number, rich: { html?: string; blocks?: unknown[] }) => {
+          outbound.push(`send:${richTesto(rich)}`);
           return {} as never;
         },
     editMessageRichText: async (_chatId: number, _id: number, rich: { html?: string }) => {
-      outbound.push(`edit:${rich.html ?? ''}`);
+      outbound.push(`edit:${richTesto(rich)}`);
       return {} as never;
     },
     sendRichMessageDraft: async () => true,

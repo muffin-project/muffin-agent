@@ -240,8 +240,15 @@ describe('the owner-class prompt does not move', () => {
    * (misura Linux 2026-09-22). Pin precedente:
    * `dbf59068d47b46697a338ae1ce2295222fc11c4d7b5ed715b5b35a715fff93ea`.
    */
+  /**
+   * Ri-fissato 2026-09-27: la voce aggiunge «Struttura quando serve» — il
+   * markdown va usato quando il contenuto ha struttura (liste, tabelle,
+   * codice). Le superfici ricche lo rendono nativo; prima la voce non lo
+   * diceva. Pin precedente:
+   * `c1f6ed077218a15797b8536007e045aee75c6b11a8dc7312a379a56b2ff612c8`.
+   */
   const OWNER_PROMPT_SHA_AT_SPLIT =
-    'c1f6ed077218a15797b8536007e045aee75c6b11a8dc7312a379a56b2ff612c8';
+    '205a51aaa4ea013b6351235dac6a3f0563ece1f876d68e2a68346ee961407605';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
@@ -342,7 +349,12 @@ describe('the owner-class prompt does not move', () => {
    * precedente:
    * `cf939151204ac65e746c739814a460cc8e016191243c0a52242e934e8977e829`.
    */
-  const GROUP_PROMPT_SHA_V1 = '96a4b8a78a874e21feadbb2cc09d314620a3ed912a6f6711854db78623b88737';
+  /**
+   * Ri-fissato 2026-09-27 insieme al pin owner, per la stessa riga nuova della
+   * voce («Struttura quando serve»). Pin precedente:
+   * `96a4b8a78a874e21feadbb2cc09d314620a3ed912a6f6711854db78623b88737`.
+   */
+  const GROUP_PROMPT_SHA_V1 = '63c6590ed366dbb44d9e2a5ce2b018f9f0ffe3993ec5ea34d555c46cddf0b3f4';
 
   it('e la stanza riceve lo stesso prompt di ieri, byte per byte', () => {
     const runtime = boot(bootHome());
