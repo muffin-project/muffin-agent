@@ -68,10 +68,12 @@ falso «vivo» costa disponibilità.
    tool fs del modello, e il workspace di default del `muffin` interattivo è la
    directory da cui parte, `$HOME` compresa: quindi `incarnations/` sta in
    `mandatoryGuards().denyRead` (copre `fs_read`, `fs_search`, `fs_list` e la
-   sandbox, che la maschera), e l'unico lettore interno che apre percorsi scelti
-   dal contenuto, la lettura degli `include` git nel controllo di scrittura,
-   tratta un file di incarnazione come non classificabile e nega la scrittura
-   senza aprirlo.
+   sandbox, che la maschera). Il lettore interno che apre percorsi scelti dal
+   contenuto, il controllo di scrittura git dei tool fs, legge ogni file (il
+   puntatore `.git`, `commondir`, le config, gli `include`) attraverso un solo
+   helper che risolve i link, compreso `/proc/self/fd/N`, e rifiuta un file di
+   incarnazione: la scrittura viene negata senza aprirlo. Ogni nuovo lettore
+   interno di un percorso che non ha scelto deve passare dallo stesso controllo.
 
 ## Alternative scartate
 
@@ -110,3 +112,8 @@ falso «vivo» costa disponibilità.
   stesso processo libera il lock del detentore.
 - Una sonda che legge vivo un processo morto, o morto uno vivo, su un
   filesystem che Muffin dichiara supportato.
+- Un qualunque percorso del processo detentore che apre un file di
+  incarnazione fuori da SQLite. Le due revisioni indipendenti ne hanno trovati
+  in sequenza (i tool fs, poi le altre letture del controllo git): un terzo
+  vorrebbe dire che la difesa per percorsi non basta e che il lock va tenuto
+  fuori dal processo detentore.

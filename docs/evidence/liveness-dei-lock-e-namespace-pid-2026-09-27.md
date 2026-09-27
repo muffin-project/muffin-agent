@@ -113,12 +113,26 @@ lato `readGateway` sono quindi sorvegliati dall'accettazione, non dagli unit.
   era falso: la revisione indipendente ha mostrato che `fs_search` e `fs_read`,
   che girano nel processo detentore con il workspace di default `$HOME`,
   aprivano il file e liberavano il lock (un turno vivo marcato interrotto da un
-  altro processo). Riprodotto anche il terzo lettore interno, la lettura degli
-  `include` git. Correzione: `incarnations/` in `denyRead` e un controllo nella
-  lettura degli `include`; `agent/tools/fs-incarnation.test.ts` è rosso prima
-  e verde dopo, e due mutazioni (via la voce di `denyRead`, via il controllo)
-  lo fanno tornare rosso. Gli altri lettori interni (vault, skill, `send_file`,
-  allegati) sono confinati a directory che non contengono `incarnations/`.
+  altro processo). Riprodotta anche la lettura degli `include` git. Correzione:
+  `incarnations/` in `denyRead` e un controllo sugli `include`. La seconda
+  revisione indipendente ha trovato che il resto del controllo git (il
+  puntatore `.git`, `commondir`) apriva ancora percorsi scelti dal contenuto:
+  un `.git` che punta al file, a `/proc/self/fd/N` (senza nemmeno conoscere
+  l'id), o un `commondir` che punta al file liberavano il lock. Correzione:
+  tutte le letture del controllo git passano da un solo helper che risolve i
+  link e rifiuta un file di incarnazione. `agent/tools/fs-incarnation.test.ts`
+  copre i sette casi, rosso prima di ciascuna correzione e verde dopo; le
+  mutazioni (via la voce di `denyRead`, via il controllo nell'helper, via la
+  risoluzione dei link) lo fanno tornare rosso. La stessa revisione ha
+  verificato gli altri lettori interni (vault, skill, `send_file`, allegati,
+  undo, persona, trace, sessioni, backup) e li ha trovati confinati a
+  directory che non contengono `incarnations/`.
+- Fuori da questa claim, stessa classe: con un workspace che contiene la home,
+  `fs_read` di `muffin.db` è permesso, e un `.git` verso `/proc/self/fd/N` può
+  raggiungere il descrittore di `muffin.db`. Aprire e chiudere `muffin.db`
+  fuori da SQLite fa perdere al processo i suoi lock su quel file (SQLite, «How
+  To Corrupt An SQLite Database File», §2.2). Esisteva prima di questo branch;
+  va chiuso in una claim sua.
 - Solo Linux misurato (WSL2 e container Debian). macOS usa gli stessi lock
   POSIX tramite SQLite, ma non è provato.
 - Filesystem di rete: non supportati, come non lo è già `muffin.db`.
