@@ -823,6 +823,35 @@ describe('rich transport failure handling', () => {
     await t.stop();
   });
 
+  it('a refused blocks preview falls back to a text draft, not to silence', async () => {
+    const calls: Call[] = [];
+    const api = {
+      sendMessage: async () => {
+        throw new Error('unused in this fake');
+      },
+      editMessageText: async () => true,
+      sendMessageDraft: async (_c: number, draftId: number, text: string) => {
+        calls.push({ method: 'sendMessageDraft', text, draftId });
+        return true;
+      },
+      sendRichMessageDraft: async () => {
+        throw new TelegramError(400, 'Bad Request: rich refused');
+      },
+      sendRichMessage: async () => {
+        throw new TelegramError(400, 'unused in this fake');
+      },
+      editMessageRichText: async () => true,
+    } as unknown as TelegramApiLike;
+    const t = startTranscript(api, 1, { negotiation: DM });
+    t.report(start('shell_run', { command: 'npm test' }));
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    await t.stop();
+    // Il gemello di testo della bozza ha preso il posto dei blocchi rifiutati.
+    expect(calls.filter((c) => c.method === 'sendMessageDraft').length).toBeGreaterThan(0);
+    expect(calls.at(-1)!.text).toContain('guardo con un comando: npm test');
+  });
+
   it('an ambiguous failure never re-sends — no duplicate transcript', async () => {
     const calls: Call[] = [];
     const t = startTranscript(

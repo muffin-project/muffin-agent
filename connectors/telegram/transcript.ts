@@ -28,7 +28,7 @@ import { richFitsHard, richFromHtml, thinkingRich, turnRichMessage, type Outboun
  * process in a `details` block, collapsed in both, the answer as native
  * blocks), so the swap at the end changes the summary line, not the
  * rendering; while the model thinks with nothing to show, the placeholder is
- * the Bot API 10.3 `thinking` block. When the answer is ready,
+ * the Bot API 10.2 `thinking` block. When the answer is ready,
  * `connector.ts#deliverTo` sends one rich message of the same shape. A process that dies mid-turn leaves nothing
  * behind, and the chat keeps exactly one durable message per turn (choice B,
  * 2026-09-26; draft shape aligned 2026-09-27).
@@ -244,7 +244,7 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
   let draftText = '';
   /**
    * La bozza costruita come **gli stessi blocchi** del messaggio finale
-   * (processo in `details` aperto + risposta nativa), quando la risposta si
+   * (processo in `details` chiuso + risposta nativa), quando la risposta si
    * può strutturare. Ha precedenza su `draftText` (fallback HTML): così il
    * passaggio bozza → finale è una piega del processo, non un secondo
    * rendering — la lamentela dell'owner del 2026-09-27.
@@ -541,15 +541,16 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     draftPaintedContent = draftPaintedContent || hasContentNow;
 
     if (!hasContentNow) {
-      // Nessun contenuto ancora: il segnaposto è il blocco `thinking` della
-      // Bot API 10.3 (valido solo nelle bozze), non una riga corsiva.
+      // Nessun contenuto ancora: il segnaposto è il blocco `thinking` (Bot API
+      // 10.2, valido solo nelle bozze), non una riga corsiva. `draftText` resta
+      // il gemello di testo: un rifiuto rich non deve spegnere l'anteprima.
       const s = draftStatusText();
       if (s === '') {
         draftText = '';
         draftRich = null;
         return;
       }
-      draftText = '';
+      draftText = s;
       draftRich = thinkingRich(s);
       if (push) void pushDraft().then(() => scheduleDraft());
       else scheduleDraft();
@@ -561,13 +562,13 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     // i blocchi della risposta. Così il passaggio bozza → finale cambia una
     // riga di riepilogo, non il rendering.
     const turn = turnRichMessage({ process, answer, summary: runningSummary() });
+    // Il rendering HTML resta calcolato sempre: è il fallback se i blocchi
+    // vengono rifiutati, e la forma per un parziale non strutturabile.
+    const rendered = boundDraft(render(current(), true, now(), liveText));
     if (turn !== null && richFitsHard(turn) === null) {
-      draftText = '';
+      draftText = rendered;
       draftRich = turn;
     } else {
-      // Un parziale non strutturabile (immagine, annidamento profondo) o
-      // troppo grande: si resta sul rendering HTML, che è bounded.
-      const rendered = boundDraft(render(current(), true, now(), liveText));
       if (rendered === '') {
         draftText = '';
         draftRich = null;
@@ -602,7 +603,7 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     const payload = draftText;
     if (payload === '' && draftRich === null) return;
     try {
-      if (draftRich !== null) {
+      if (draftRich !== null && richTransport) {
         // La bozza strutturata: la stessa famiglia di blocchi del finale.
         await api.sendRichMessageDraft(chatId, draftId, draftRich, { canStop: true });
       } else if (richTransport) {
@@ -612,15 +613,18 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       }
     } catch (error) {
       if (nonModificato(error)) return;
-      // Un fallback di testo c'è solo se la bozza era HTML o `thinking`; una
-      // bozza a blocchi non ha un gemello legacy e resta com'è (disabilitata).
-      if (draftRich === null && richTransport) {
+      // Un rifiuto deterministico non spegne l'anteprima: `draftText` è sempre
+      // il gemello di testo (anche della bozza a blocchi e del `thinking`), e
+      // si riprova su quello.
+      if (richTransport) {
         richTransport = false;
-        try {
-          await api.sendMessageDraft(chatId, draftId, payload, { canStop: true });
-          return;
-        } catch (legacyError) {
-          if (nonModificato(legacyError)) return;
+        if (payload !== '') {
+          try {
+            await api.sendMessageDraft(chatId, draftId, payload, { canStop: true });
+            return;
+          } catch (legacyError) {
+            if (nonModificato(legacyError)) return;
+          }
         }
       }
       draftDisabled = true;

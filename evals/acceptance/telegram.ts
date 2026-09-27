@@ -188,14 +188,26 @@ function parseMultipart(
 const HOLD_MS = 150;
 const HOLD_STEP_MS = 10;
 
+function richTextPlain(t: unknown): string {
+  if (typeof t === 'string') return t;
+  // Un RichText può essere un array di stringhe/entità: il testo è la
+  // concatenazione, e per un'entità il campo `text` porta il contenuto.
+  if (Array.isArray(t)) return t.map(richTextPlain).join('');
+  if (t === null || typeof t !== 'object') return '';
+  const o = t as { text?: unknown };
+  return typeof o.text === 'string' ? o.text : '';
+}
+
 function testoDaBlocchi(blocks: unknown): string {
   if (!Array.isArray(blocks)) return '';
   const blockText = (b: unknown): string => {
     if (b === null || typeof b !== 'object') return '';
-    const o = b as { text?: unknown; blocks?: unknown[] };
-    if (typeof o.text === 'string') return o.text;
-    if (Array.isArray(o.blocks)) return o.blocks.map(blockText).join('\n');
-    return '';
+    const o = b as { text?: unknown; summary?: unknown; blocks?: unknown[] };
+    const parts: string[] = [];
+    if (o.summary !== undefined) parts.push(richTextPlain(o.summary));
+    if (o.text !== undefined) parts.push(richTextPlain(o.text));
+    if (Array.isArray(o.blocks)) parts.push(o.blocks.map(blockText).join('\n'));
+    return parts.join('\n');
   };
   return blocks.map(blockText).join('\n');
 }
