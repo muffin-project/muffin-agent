@@ -53,6 +53,12 @@ type InlineButton = { text: string; callback_data: string; style?: 'danger' | 's
 
 export type SendOptions = {
   replyTo?: number;
+  /**
+   * Send without a notification (`disable_notification`). The process rides
+   * silently while the model works; the final answer is the one message that
+   * is allowed to buzz the owner.
+   */
+  disableNotification?: boolean;
   /** Off by default: an agent quoting a link should not turn it into a card. */
   preview?: boolean;
   /**
@@ -320,6 +326,7 @@ export class TelegramApi implements TelegramApiLike {
       text: html,
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: options.preview !== true },
+      ...(options.disableNotification === true ? { disable_notification: true } : {}),
       ...(options.threadId === undefined ? {} : { message_thread_id: options.threadId }),
       ...(options.replyTo ? { reply_parameters: { message_id: options.replyTo } } : {}),
       ...(options.keyboard ? { reply_markup: { inline_keyboard: options.keyboard } } : {}),
@@ -514,6 +521,7 @@ export class TelegramApi implements TelegramApiLike {
     return this.effect<Message>('sendRichMessage', {
       chat_id: chatId,
       rich_message: rich,
+      ...(options.disableNotification === true ? { disable_notification: true } : {}),
       ...(options.threadId === undefined ? {} : { message_thread_id: options.threadId }),
       ...(options.replyTo ? { reply_parameters: { message_id: options.replyTo } } : {}),
       ...(options.keyboard ? { reply_markup: { inline_keyboard: options.keyboard } } : {}),

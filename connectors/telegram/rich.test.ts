@@ -15,6 +15,7 @@ import {
   RICH_MAX_NESTING,
   RICH_MAX_TABLE_COLUMNS,
   TELEGRAM_BOT_API_RICH_FLOOR,
+  turnRichMessage,
   TELEGRAM_BOT_API_TARGET,
   unknownRichPlaceholder,
 } from './rich.js';
@@ -213,5 +214,34 @@ describe('telegram rich · inbound smoke (full matrix in inbound-rich.test.ts)',
     const text = normalizeInboundRich({ rich_message: { blocks: [{ type: 'teletrasporto', frobnicate: 'x'.repeat(5000) }] } });
     expect(text).toBe(unknownRichPlaceholder('teletrasporto'));
     expect(text!.length).toBeLessThan(200);
+  });
+});
+
+describe('telegram rich · the turn message: process in details, answer in blocks', () => {
+  it('collapses the whole process into one details block above the answer', () => {
+    const rich = turnRichMessage({
+      process: ['✓ letto il file', '✓ cercato nel repo'],
+      answer: 'Ecco cosa ho trovato:\n\n- uno\n- due',
+    });
+    expect(rich).not.toBeNull();
+    const blocks = rich!.blocks ?? [];
+    expect(blocks[0]).toMatchObject({ type: 'details', summary: 'Processo' });
+    const details = blocks[0] as { blocks: unknown[] };
+    expect(details.blocks).toHaveLength(2);
+    expect(blocks.slice(1).some((b) => (b as { type: string }).type === 'list')).toBe(true);
+  });
+
+  it('omits the details block when the turn had no visible process', () => {
+    const rich = turnRichMessage({ process: [], answer: 'Solo la risposta.' });
+    expect(rich).not.toBeNull();
+    expect((rich!.blocks ?? []).every((b) => (b as { type: string }).type !== 'details')).toBe(true);
+  });
+
+  it('never throws on partial or unclosed content, and keeps the text whole', () => {
+    const partial = '# Titolo\n\n```\nnon chiuso\nancora dentro';
+    const rich = turnRichMessage({ process: ['✓ letto'], answer: partial });
+    expect(rich).not.toBeNull();
+    const json = JSON.stringify(rich);
+    expect(json).toContain('ancora dentro');
   });
 });
