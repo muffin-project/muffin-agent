@@ -15,6 +15,7 @@ import {
   RICH_MAX_NESTING,
   RICH_MAX_TABLE_COLUMNS,
   TELEGRAM_BOT_API_RICH_FLOOR,
+  thinkingRich,
   turnRichMessage,
   TELEGRAM_BOT_API_TARGET,
   unknownRichPlaceholder,
@@ -252,5 +253,27 @@ describe('telegram rich · the turn message: process in details, answer in block
     expect(rich).not.toBeNull();
     const json = JSON.stringify(rich);
     expect(json).toContain('ancora dentro');
+  });
+});
+
+describe('telegram rich · draft and final are one shape', () => {
+  it('the same process and answer give identical blocks; only the summary differs', () => {
+    const process = ['✓ leggo un file: spesa.txt', '✓ cerco in memoria: ieri'];
+    const answer = '# Titolo\n\n- uno\n- due';
+    const draft = turnRichMessage({ process, answer, summary: '⏳ eseguo un comando: npm test · 12s' });
+    const finale = turnRichMessage({ process, answer });
+    expect(draft).not.toBeNull();
+    expect(finale).not.toBeNull();
+    const strip = (r: typeof draft): unknown =>
+      JSON.parse(
+        JSON.stringify(r!.blocks).replace(/"summary":"[^"]*"/g, '"summary":"SUMMARY"'),
+      );
+    expect(strip(draft)).toEqual(strip(finale));
+  });
+
+  it('the thinking placeholder is the draft-only block, with its text', () => {
+    expect(thinkingRich('sto pensando · 3s')).toEqual({
+      blocks: [{ type: 'thinking', text: 'sto pensando · 3s' }],
+    });
   });
 });

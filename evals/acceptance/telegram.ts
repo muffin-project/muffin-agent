@@ -188,6 +188,30 @@ function parseMultipart(
 const HOLD_MS = 150;
 const HOLD_STEP_MS = 10;
 
+function richTextPlain(t: unknown): string {
+  if (typeof t === 'string') return t;
+  // Un RichText può essere un array di stringhe/entità: il testo è la
+  // concatenazione, e per un'entità il campo `text` porta il contenuto.
+  if (Array.isArray(t)) return t.map(richTextPlain).join('');
+  if (t === null || typeof t !== 'object') return '';
+  const o = t as { text?: unknown };
+  return typeof o.text === 'string' ? o.text : '';
+}
+
+function testoDaBlocchi(blocks: unknown): string {
+  if (!Array.isArray(blocks)) return '';
+  const blockText = (b: unknown): string => {
+    if (b === null || typeof b !== 'object') return '';
+    const o = b as { text?: unknown; summary?: unknown; blocks?: unknown[] };
+    const parts: string[] = [];
+    if (o.summary !== undefined) parts.push(richTextPlain(o.summary));
+    if (o.text !== undefined) parts.push(richTextPlain(o.text));
+    if (Array.isArray(o.blocks)) parts.push(o.blocks.map(blockText).join('\n'));
+    return parts.join('\n');
+  };
+  return blocks.map(blockText).join('\n');
+}
+
 export async function startFakeTelegram(): Promise<FakeTelegram> {
   const queue: FakeUpdate[] = [];
   const calls: SentCall[] = [];
@@ -271,8 +295,12 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
       if (typeof richHtml === 'string') {
         payload['text'] = richHtml;
         if (method === 'sendRichMessage') recordedMethod = 'sendMessage';
-        if (method === 'sendRichMessageDraft') recordedMethod = 'sendMessageDraft';
       }
+      // Una bozza è una bozza qualunque payload porti: quella a blocchi è la
+      // stessa superficie di quella legacy, e gli scenari la leggono come
+      // `sendMessageDraft`. Il messaggio finale a blocchi conserva invece il
+      // metodo reale, così `payload.rich_message.blocks` resta leggibile.
+      if (method === 'sendRichMessageDraft') recordedMethod = 'sendMessageDraft';
 
       const ok = (result: unknown): void => {
         res.writeHead(200, { 'content-type': 'application/json' });
@@ -412,6 +440,7 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
           text: String(
             c.payload['text'] ??
               (c.payload['rich_message'] as { html?: string } | undefined)?.html ??
+              testoDaBlocchi((c.payload['rich_message'] as { blocks?: unknown[] } | undefined)?.blocks) ??
               '',
           ),
         })),

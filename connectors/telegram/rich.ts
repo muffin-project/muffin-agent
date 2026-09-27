@@ -166,6 +166,12 @@ export function turnRichMessage(input: {
   process: readonly string[];
   /** The model's answer, markdown, exactly as it arrived. */
   answer: string;
+  /**
+   * Testo sempre visibile del blocco `details`. La bozza ci mette il passo in
+   * corso («⏳ eseguo un comando: npm test · 12s»), così il progresso resta
+   * visibile **senza** aprire il processo; il finale usa «Processo».
+   */
+  summary?: string;
 }): OutboundRich | null {
   const built = buildBlocks(input.answer, 0);
   if (built === null) return null;
@@ -177,12 +183,22 @@ export function turnRichMessage(input: {
   if (process.length > 0) {
     blocks.push({
       type: 'details',
-      summary: 'Processo',
+      summary: input.summary ?? 'Processo',
       blocks: process.map((line) => ({ type: 'paragraph' as const, text: line })),
     });
   }
   blocks.push(...built.blocks);
   return { blocks };
+}
+
+/**
+ * Il segnaposto mentre il modello pensa, prima di qualunque contenuto: il
+ * blocco `thinking` (Bot API 10.2, equivalente a `<tg-thinking>`, valido
+ * **solo** nelle bozze). Sostituisce la vecchia riga corsiva di stato: anche
+ * il «sto pensando» è, ora, la stessa famiglia di blocchi che il finale usa.
+ */
+export function thinkingRich(text: string): OutboundRich {
+  return { blocks: [{ type: 'thinking', text }] };
 }
 
 /**
