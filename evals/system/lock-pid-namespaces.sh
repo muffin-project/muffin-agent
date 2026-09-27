@@ -79,8 +79,20 @@ run() {
     -w /repo --entrypoint node "$@"
 }
 claim_once() { run --rm "$IMAGE" --import tsx /data/claim.mjs 2>&1 | tail -1; }
+# `start_holder NAME` runs node as pid 1, like the one-shot claimant: the restart
+# case, where the replacement gets the dead holder's pid. `start_holder NAME
+# far-pid` first burns a hundred pids, so the holder's node gets a pid that
+# names nothing in the reader's namespace: the neighbour case. A small pid would
+# pass by accident under the pid rule, because the reader's own node has threads
+# with small ids and `kill(tid, 0)` answers for a thread too (measured: pid 7).
 start_holder() {
-  run -d --name "$1" "$IMAGE" --import tsx /data/claim.mjs hold >/dev/null
+  if [ "${2:-}" = far-pid ]; then
+    docker run -d --name "$1" -u "$(id -u):$(id -g)" -v "$REPO:/repo:ro" -v "$MODULES:/repo/node_modules:ro" \
+      -v "$LAB:/data" -w /repo --entrypoint sh "$IMAGE" \
+      -c 'i=0; while [ $i -lt 100 ]; do /bin/true; i=$((i+1)); done; node --import tsx /data/claim.mjs hold; true' >/dev/null
+  else
+    run -d --name "$1" "$IMAGE" --import tsx /data/claim.mjs hold >/dev/null
+  fi
   for _ in $(seq 1 60); do
     local line
     line=$(docker logs "$1" 2>&1 | grep -E '^(got|refused) pid=' || true)
@@ -105,7 +117,7 @@ esac
 
 echo "-- neighbour: a second container reads the home while the holder runs"
 rm -f "$LAB/state/muffin.db"*
-holder=$(start_holder "$TAG-holder")
+holder=$(start_holder "$TAG-holder" far-pid)
 case "$holder" in got*) pass "holder container holds the lock ($holder)" ;; *) fail "holder container: $holder" ;; esac
 while_alive=$(claim_once)
 case "$while_alive" in
