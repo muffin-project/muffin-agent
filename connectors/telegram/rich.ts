@@ -149,6 +149,43 @@ export function richFitsHard(message: OutboundRich): string | null {
 export type RichSize = { chars: number; blocks: number; depth: number };
 
 /**
+ * The turn's one rich message: the process collapsed in a `details` block, the
+ * answer as native blocks under it.
+ *
+ * This is the shape Telegram's own streaming-replies guidance points at: the
+ * draft shows progress while the model works, and the final result is a single
+ * structured message. `details` is collapsed by default, so what a person reads
+ * is the answer, and the steps/reasoning are one tap away instead of buried in
+ * the prose (or gone, which is what truncating them would be).
+ *
+ * Returns `null` when the answer cannot become blocks (`buildBlocks` refused):
+ * the caller falls back to the legacy chunks rather than guess a structure.
+ */
+export function turnRichMessage(input: {
+  /** The step lines, in order — already plain text, whole, never truncated. */
+  process: readonly string[];
+  /** The model's answer, markdown, exactly as it arrived. */
+  answer: string;
+}): OutboundRich | null {
+  const built = buildBlocks(input.answer, 0);
+  if (built === null) return null;
+  const blocks: InputRichBlock<never>[] = [];
+  // Le righe vuote (le spaziature del markdown) non diventano paragrafi
+  // vuoti: un blocco di testo vuoto non è una struttura, e Telegram rifiuta
+  // un paragrafo senza testo.
+  const process = input.process.filter((line) => line.trim() !== '');
+  if (process.length > 0) {
+    blocks.push({
+      type: 'details',
+      summary: 'Processo',
+      blocks: process.map((line) => ({ type: 'paragraph' as const, text: line })),
+    });
+  }
+  blocks.push(...built.blocks);
+  return { blocks };
+}
+
+/**
  * Our existing HTML, carried as a rich message (Bot API 10.1 accepts `html`).
  *
  * Same bytes the legacy path would send with `parse_mode: HTML`; the transport

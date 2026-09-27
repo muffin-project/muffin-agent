@@ -3,7 +3,7 @@ import { toolPhrase, toolProgress } from '../../agent/tool-phrase.js';
 import type { Negotiation } from '../../core/surface/types.js';
 import { TelegramError, type TelegramApiLike } from './api.js';
 import { escapeHtml, splitHtml, TELEGRAM_MAX, toTelegramHtml } from './render.js';
-import { planRich, richFromHtml, type OutboundRich } from './rich.js';
+import { richFromHtml } from './rich.js';
 
 /**
  * What the agent said and did on its way to the answer, kept — DAY-1
@@ -19,57 +19,37 @@ import { planRich, richFromHtml, type OutboundRich } from './rich.js';
  * the model's own preamble — the «leggo il file…» that precedes a tool call
  * — because `connector.ts` reset the draft at every `boundary`.
  *
- * ## One bubble per segment, not per event
+ * ## One durable message per turn; the process collapses into it
  *
- * A **segment** is one Telegram message with this shape:
+ * In a **DM** the process is ephemeral. The model's preamble and the steps
+ * accumulate in a `sendMessageDraft` (Bot API 10.2+) — the owner's Stop
+ * control rides it — and **nothing persistent is created while the model
+ * works**. When the answer is ready, `connector.ts#deliverTo` sends one rich
+ * message whose first block collapses the whole process in a `details` block,
+ * the answer following as native blocks. A process that dies mid-turn leaves
+ * nothing behind, and the chat keeps exactly one durable message per turn
+ * (choice B, 2026-09-26).
  *
- *     <what the model said before acting>          ← its own words, rendered
- *
- *     ✓ leggo un file: spesa.txt                    ← the steps, one line each
- *     ⏳ eseguo un comando: npm test · 12s          ← the one still running
- *
- * The rule that bounds the number of messages: **a new segment opens only
- * when the model speaks again after tools.** Rounds made of tool calls alone
- * append their lines to the segment that is already open, so a turn with
- * twelve tool calls and two sentences of commentary is two messages plus
- * the answer — never twelve.
- *
- * The answer is not a segment of its own, but it is not a message of its own
- * either (2026-09-04): `live()` streams the growing final round's text into
- * whichever segment is still open, the same real message the steps already
- * live in — B11's "as it forms" preview, now durable instead of a
- * `sendMessageDraft` bubble that expires if a process stops renewing it
- * (`docs/evidence/turno-sospendibile.md`). `connector.ts#deliverTo` then
- * `handoff()`s that same message and, when there is one, **extends** it
- * with the authoritative final text through the durable delivery
- * (`delivery.ts`) instead of sending a message beside it — one visible
- * response per turn, not two. A turn with no tool call and a fast answer
- * still opens exactly this one message; there is never a second one for the
- * answer to arrive in.
+ * In a **group** there is no draft, so the process *is* persisted: one
+ * segment is one message, edited in place, and the answer extends that same
+ * bubble. The bound is unchanged — a new segment opens only when the model
+ * speaks again after tools — but the DM no longer needs it, because its draft
+ * is a single, disposable surface.
  *
  * ## What is never done here
  *
- * - **Nothing is deleted.** A segment, once sent, stays: it is the record
- *   of what happened, which is what the owner asked to keep. `stop()` makes
- *   a last edit that removes the live counter and marks a step the turn left
- *   running, and that is all.
+ * - **Nothing is deleted.** In a group a segment, once sent, stays.
  * - **Nothing is retracted.** `spoke()` is called at a `boundary`, i.e. after
- *   the text is known to be preamble; it lands in a real message and stays.
- *   The `'superseded'` case adds a line saying so instead of removing text.
+ *   the text is known to be preamble; in a group it lands in a real message
+ *   and stays, in a DM it becomes part of the collapsed process.
  * - **Nothing is cut.** A preamble longer than one message is split with
- *   `splitHtml` into as many segments as it needs; a step that would push a
- *   segment past `TELEGRAM_MAX` opens the next one. The old draft *froze*
- *   past one message; the old ASK truncated at 220 characters. Neither
- *   survives.
- * - **A segment with nothing in it is not sent.** Until the model's own text
- *   starts arriving — via `spoke()` (it turned out to be preamble) or
- *   `live()` (it is still growing, fate unknown) — a turn produces no
- *   *persistent* message from this file. In a DM the ephemeral draft now
- *   carries the turn's status (`sto pensando · Ns`) from the first `round`
- *   event (2026-09-25): the first model call is no longer ~70 s of silence,
- *   and because the draft is not a message, a dead process still leaves
- *   nothing behind. In a group — no draft — `sendChatAction` remains the only
- *   sign of life until the first real content.
+ *   `splitHtml` into as many segments as it needs (group), and the DM preview
+ *   drops whole leading lines to fit — never half a line; the final message
+ *   always carries every word in its `details`.
+ * - **A turn with no tool call opens no persistent message.** In a DM the
+ *   ephemeral draft carries the status (`sto pensando · Ns`) from the first
+ *   `round` event until the answer is delivered as one fresh message; in a
+ *   group `sendChatAction` remains the only sign of life until real content.
  *
  * ## Rate, and why the counter still moves
  *
@@ -112,21 +92,26 @@ function nonModificato(error: unknown): boolean {
 type Step = {
   /** Already escaped, and **whole**: the phrase plus the tool's full subject. */
   line: string;
+  /** The same, unescaped — the process `details` block is plain text, not HTML. */
+  plain: string;
   /** Running (`⏳`, with its own elapsed), or finished with a mark. */
   state: 'running' | 'done' | 'error' | 'waiting' | 'note';
   startedAt: number;
 };
 
 /** The step's one text: the phrase and the tool's subject, never shortened. */
-function stepOf(name: string, args: unknown): Pick<Step, 'line'> {
+function stepOf(name: string, args: unknown): Pick<Step, 'line' | 'plain'> {
   const { phrase, subject } = toolProgress(name, args);
-  return { line: escapeHtml(subject === '' ? phrase : `${phrase}: ${subject}`) };
+  const text = subject === '' ? phrase : `${phrase}: ${subject}`;
+  return { line: escapeHtml(text), plain: text };
 }
 
 type Segment = {
   messageId: number | null;
   /** Rendered once at `spoke()`: what the model said before acting. */
   html: string;
+  /** The same preamble, unescaped — what the collapsed process block shows. */
+  plain: string;
   steps: Step[];
   /** The last text this segment was sent with, to skip a no-op edit. */
   shown: string | undefined;
@@ -179,17 +164,22 @@ export type Transcript = {
    */
   live(text: string): void;
   /**
-   * The message a finished turn's real answer should extend, if any —
-   * `connector.ts#deliverTo`'s own seam. `null` when there is nothing to
-   * extend: no segment ever got real content this turn (the ordinary,
-   * tool-free case), or the one that did never actually reached Telegram (a
-   * swallowed send failure disabled this transcript first). Meant to be read
-   * once `stop()` has resolved, so `stepsText` is the segment's settled,
-   * non-live rendering — steps and any spoken preamble, deliberately
-   * *without* whatever `live()` last wrote, which `deliverTo` supplies fresh
-   * and properly split from the turn's own authoritative final text.
+   * The process a finished turn should collapse, and the message it should
+   * extend, if any — `connector.ts#deliverTo`'s own seam. Meant to be read
+   * once `stop()` has resolved.
+   *
+   * `messageId` is a real message only in a room with no draft (a group):
+   * there the steps were sent as a persistent, silent trail and the answer
+   * extends that same bubble. In a DM it is `null` — the process only ever
+   * lived in the ephemeral draft and nothing was persisted, so the final
+   * message is a fresh send whose `details` block carries `process`.
+   *
+   * `process` is plain text, one entry per line (the preamble, then the
+   * steps with their marks), for the `details` block. `processHtml` is the
+   * legacy-rendered trail, used only when the group answer extends the
+   * message in place.
    */
-  handoff(): { messageId: number; stepsText: string } | null;
+  handoff(): { messageId: number | null; process: string[]; processHtml: string } | null;
   /**
    * Last edit, then silence. Idempotent: the caller invokes it once right
    * after the turn and once more from its `finally`.
@@ -249,23 +239,14 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
   const draftEveryMs = Math.max(1, Math.min(minEditMs, Math.floor(negotiation.draftTtlMs / 3) || minEditMs));
   const draftId = prossimoDraftId++;
   let draftText = '';
-  /**
-   * The rich preview, Bot API 10.1+. Mutually exclusive with `draftText` by
-   * construction (each tick sets exactly one): a structurally rich partial
-   * (a table taking shape, a checklist) previews as rich blocks, ordinary
-   * prose as legacy text. A mid-stream switch changes method under the same
-   * `draft_id` — the client replaces without animation, which is the honest
-   * rendering of "the preview changed shape", and it is still ephemeral:
-   * the final send is the only durable delivery either way.
-   *
-   * Bounded like the legacy preview (`TELEGRAM_MAX`): a preview is small by
-   * nature, and a 400 on an oversized preview would disable previews for the
-   * whole turn. The FINAL may ride rich up to the compat ceiling
-   * (`rich.ts`); the preview never needs to.
-   */
-  let draftRich: OutboundRich | null = null;
   let draftTimer: NodeJS.Timeout | null = null;
   let draftDisabled = !draftEnabled;
+  /**
+   * La bozza ha già mostrato **contenuto vero** (un passo o il preambolo), non
+   * solo lo stato del turno. Distingue la prima pittura del processo — che
+   * deve partire subito, nello stack di `report()` — dal rinnovo che coagula.
+   */
+  let draftPaintedContent = false;
   const turnStartedAt = now();
 
   const segments: Segment[] = [];
@@ -344,7 +325,7 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
   function current(): Segment {
     const last = segments[segments.length - 1];
     if (last !== undefined && !last.closed) return last;
-    const fresh: Segment = { messageId: null, html: '', steps: [], shown: undefined, closed: false };
+    const fresh: Segment = { messageId: null, html: '', plain: '', steps: [], shown: undefined, closed: false };
     segments.push(fresh);
     return fresh;
   }
@@ -409,14 +390,39 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     return render(seg, true, now(), tail).length <= TELEGRAM_MAX;
   }
 
+  /**
+   * The turn's whole process as plain lines, in order: what the model said
+   * before acting, then each tool with its mark. This is what the final
+   * message's collapsed `details` block shows, so it is the settled record
+   * and deliberately never the still-forming answer (`liveText`).
+   */
+  function processLines(): string[] {
+    const out: string[] = [];
+    for (const seg of segments) {
+      if (seg.plain.trim() !== '') out.push(...seg.plain.trim().split('\n'));
+      for (const step of seg.steps) {
+        const mark =
+          step.state === 'running'
+            ? '⏳'
+            : step.state === 'done'
+              ? '✓'
+              : step.state === 'error'
+                ? '✗'
+                : step.state === 'waiting'
+                  ? '⏸'
+                  : null;
+        out.push(mark === null ? step.plain : `${mark} ${step.plain}`);
+      }
+    }
+    return out;
+  }
+
   function addStep(step: Step): void {
-    // Il persistente vince sulla bozza: dal primo passo vero in poi il turno
-    // possiede un messaggio reale, e rinnovare ancora l'anteprima effimera
-    // significherebbe due superfici per lo stesso turno — quella che resta
-    // appesa dopo la risposta (difetto A). Vedi `live()`: finché nessun
-    // segmento ha contenuto la bozza è l'unica cosa viva; da qui in poi non
-    // lo è più.
-    if (draftEnabled) abbandonaDraft();
+    // Il processo non apre più un messaggio vero quando la stanza ha la
+    // bozza: i passi restano nella bozza effimera (sotto il preambolo, sopra
+    // la risposta che si forma) e nessun `sendMessage` li persiste. È la
+    // scelta B: un turno che muore non lascia una bolla a metà, e la sola
+    // cosa durevole del turno è la risposta finale.
     let seg = current();
     if (hasContent(seg) && !fits(seg, step)) {
       seg.closed = true;
@@ -460,11 +466,51 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
    */
   function abbandonaDraft(): void {
     draftText = '';
-    draftRich = null;
     if (draftTimer !== null) {
       clearTimeout(draftTimer);
       draftTimer = null;
     }
+  }
+
+  /**
+   * La bozza tiene la **coda** del turno quando il processo intero non ci
+   * sta: si lasciano cadere righe intere dalla testa (i passi più vecchi),
+   * mai una riga tagliata a metà. La risposta completa resta comunque nel
+   * messaggio finale; l'anteprima è effimera e mostra il presente.
+   */
+  function boundDraft(html: string): string {
+    if (html.length <= TELEGRAM_MAX) return html;
+    const lines = html.split('\n');
+    while (lines.length > 1 && lines.join('\n').length > TELEGRAM_MAX) lines.shift();
+    const last = lines[lines.length - 1] ?? '';
+    return last.length <= TELEGRAM_MAX ? last : '';
+  }
+
+  /**
+   * L'unico scrittore della bozza in modalità draft: rende il processo
+   * accumulato (preambolo + passi) più la risposta che si forma, e lo manda
+   * come anteprima. Sostituisce, in DM, sia `syncAll` sia la vecchia logica
+   * «draft finché non c'è un messaggio vero»: qui non nasce mai un messaggio
+   * vero.
+   */
+  function refreshDraft(push: boolean): void {
+    if (stopped || draftDisabled) return;
+    const rendered = boundDraft(render(current(), true, now(), liveText));
+    const payload = rendered !== '' ? rendered : draftStatusText();
+    if (payload === '') {
+      draftText = '';
+      return;
+    }
+    // `isContent` distingue «la bozza mostra un passo/la risposta» da «mostra
+    // solo lo stato». La prima pittura di contenuto va sul filo subito (deve
+    // battere un handler che blocca il loop), il resto si coagula col timer.
+    // Si misura sul contenuto vero (`render` include anche la riga di stato).
+    const isContent = hasContent(current()) || liveText !== '';
+    const firstContent = isContent && !draftPaintedContent;
+    draftPaintedContent = draftPaintedContent || isContent;
+    draftText = payload;
+    if (push || firstContent) void pushDraft().then(() => scheduleDraft());
+    else scheduleDraft();
   }
 
   /**
@@ -487,16 +533,14 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
   async function pushDraft(): Promise<void> {
     if (stopped || draftDisabled) return;
     const payload = draftText !== '' ? draftText : draftStatusText();
-    if (payload === '' && draftRich === null) return;
+    if (payload === '') return;
     try {
-      if (draftRich !== null) await api.sendRichMessageDraft(chatId, draftId, draftRich, { canStop: true });
-      else if (richTransport) await api.sendRichMessageDraft(chatId, draftId, richFromHtml(payload), { canStop: true });
+      if (richTransport) await api.sendRichMessageDraft(chatId, draftId, richFromHtml(payload), { canStop: true });
       else await api.sendMessageDraft(chatId, draftId, payload, { canStop: true });
     } catch (error) {
       if (nonModificato(error)) return;
-      // A text preview has a legacy payload to fall back to; a rich blocks
-      // preview does not, and stays disabled like before.
-      if (draftRich === null && richTransport) {
+      // A rich preview has a legacy payload to fall back to.
+      if (richTransport) {
         richTransport = false;
         try {
           await api.sendMessageDraft(chatId, draftId, payload, { canStop: true });
@@ -527,7 +571,7 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     if (stopped || draftDisabled || !draftEnabled) return;
     if (segments.some(hasContent)) return;
     if (draftTimer !== null) return;
-    void pushDraft().then(() => scheduleDraft());
+    refreshDraft(true);
   }
 
   /**
@@ -542,9 +586,10 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     if (draftText === '' && status === null) return;
     draftTimer = setTimeout(() => {
       draftTimer = null;
-      void pushDraft().then(() => {
-        if (!stopped && !draftDisabled && (draftText !== '' || status !== null)) scheduleDraft();
-      });
+      // Ricalcola, non rimpiazzare: il contatore di un passo che gira deve
+      // avanzare anche se nessun evento lo tocca (era il difetto «· 2s per
+      // quaranta secondi»).
+      refreshDraft(true);
     }, draftEveryMs);
   }
 
@@ -579,6 +624,8 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
   async function flush(): Promise<void> {
     flushTimer = null;
     if (stopped || disabled) return;
+    // In DM il processo vive solo nella bozza: nessun send/edit persistente.
+    if (draftEnabled) return;
     await enqueue(() => syncAll(false));
     // Keep the counter moving while something is running or the turn is
     // between steps: one edit per window, and nothing once it is quiet.
@@ -605,6 +652,7 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
 
   function schedule(): void {
     if (stopped || disabled || flushTimer !== null) return;
+    if (draftEnabled) return;
     flushTimer = setTimeout(() => void flush(), attesa());
   }
 
@@ -620,6 +668,12 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
    */
   function scheduleSoon(): void {
     if (stopped || disabled || flushTimer !== null) return;
+    // In DM non c'è un primo send da far nascere: il processo va in bozza e
+    // basta. `refreshDraft` è l'unico scrittore lì.
+    if (draftEnabled) {
+      refreshDraft(false);
+      return;
+    }
     if (!everSent) {
       // Prima del primo send il timer non esiste proprio: o la pittura parte
       // dentro questo stesso stack (`trySyncFirstPaint`), o — solo quando il
@@ -707,10 +761,11 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       // Cleared unconditionally and first, so a flush racing this call can
       // never render the tail a second time once it is also `seg.html`.
       liveText = '';
-      // Quel testo ora vive in un messaggio vero: l'anteprima ha finito il
-      // suo lavoro per questo giro e non va rinnovata oltre (ferma anche il
-      // timer, non solo il testo — difetto A).
-      abbandonaDraft();
+      // In DM il preambolo è parte del processo: resta nella bozza, che
+      // `refreshDraft` ricompone subito con le sue righe. Solo in una stanza
+      // senza bozza il testo passa davvero in un messaggio e l'anteprima ha
+      // finito il suo lavoro (difetto A).
+      if (!draftEnabled) abbandonaDraft();
       const trimmed = text.trim();
       if (trimmed !== '') {
         const parts = splitHtml(toTelegramHtml(trimmed));
@@ -728,9 +783,12 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
           seg = current();
         }
         seg.html = parts[parts.length - 1] ?? '';
+        // The whole preamble, unescaped, once — even when it spans several
+        // messages, so the collapsed process keeps every word.
+        seg.plain = trimmed;
       }
       if (reason === 'superseded' && trimmed !== '') {
-        addStep({ line: '↺ quel tentativo è stato sostituito', state: 'note', startedAt: now() });
+        addStep({ line: '↺ quel tentativo è stato sostituito', plain: '↺ quel tentativo è stato sostituito', state: 'note', startedAt: now() });
       }
       scheduleSoon();
     },
@@ -754,9 +812,11 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         case 'tool_retry': {
           const seg = current();
           const step = [...seg.steps].reverse().find((s) => s.state === 'running');
-          const line = escapeHtml(`${toolPhrase(event.name)}: non risponde, riprovo (${event.attempt}/3)`);
-          if (step) step.line = line;
-          else addStep({ line, state: 'running', startedAt: now() });
+          const retry = `${toolPhrase(event.name)}: non risponde, riprovo (${event.attempt}/3)`;
+          if (step) {
+            step.line = escapeHtml(retry);
+            step.plain = retry;
+          } else addStep({ line: escapeHtml(retry), plain: retry, state: 'running', startedAt: now() });
           break;
         }
         case 'tool_end': {
@@ -767,7 +827,11 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
             // A retry rewrote the line; the closing mark carries the tool,
             // not the wait — when the end event brings the arguments back, the
             // full command is what closes the step.
-            if (event.args !== undefined) step.line = stepOf(event.name, event.args).line;
+            if (event.args !== undefined) {
+              const settled = stepOf(event.name, event.args);
+              step.line = settled.line;
+              step.plain = settled.plain;
+            }
           } else {
             addStep({ ...stepOf(event.name, event.args), state: event.isError ? 'error' : 'done', startedAt: now() });
           }
@@ -775,7 +839,7 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         }
         case 'ask':
           status = null;
-          addStep({ line: escapeHtml(`${toolPhrase(event.name)}: aspetto la tua approvazione`), state: 'waiting', startedAt: now() });
+          addStep({ line: escapeHtml(`${toolPhrase(event.name)}: aspetto la tua approvazione`), plain: `${toolPhrase(event.name)}: aspetto la tua approvazione`, state: 'waiting', startedAt: now() });
           break;
         default:
           return assertNever(event);
@@ -797,7 +861,9 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         const step = [...seg.steps].reverse().find((s) => s.state === 'waiting');
         if (step === undefined) continue;
         step.state = allowed ? 'done' : 'error';
-        step.line = escapeHtml(`${capability}: ${allowed ? 'consentito' : 'rifiutato'}`);
+        const resolved = `${capability}: ${allowed ? 'consentito' : 'rifiutato'}`;
+        step.line = escapeHtml(resolved);
+        step.plain = resolved;
         scheduleSoon();
         return;
       }
@@ -812,38 +878,26 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       // risposta finale di un turno con tool non lascia un'anteprima appesa
       // che nessun `sendMessage` verrà a sostituire (`deliverTo` in quel caso
       // fa un edit, e un edit non tocca la bozza).
-      if (draftEnabled && !segments.some(hasContent)) {
+      if (draftEnabled) {
         // La stanza preferisce l'anteprima: il testo che sta arrivando non
         // tocca nessun messaggio vero, e la risposta finale resta l'unico
-        // messaggio che la chat conserva.
+        // messaggio che la chat conserva. Il processo accumulato (`render`)
+        // sta sopra la coda che si forma, così la bozza mostra l'uno e
+        // l'altra insieme.
         if (draftDisabled) return;
-        const had = draftText !== '' || draftRich !== null;
         if (trimmed === '') {
-          draftText = '';
-          draftRich = null;
+          liveText = '';
+          refreshDraft(false);
           return;
         }
-        // Un parziale strutturalmente ricco (una tabella che prende forma)
-        // merita l'anteprima ricca; la prosa resta testo legacy. Un parziale
-        // a metà (tabella senza delimitatore, fence non chiuso) ricade da
-        // solo sul legacy — `rich.ts` non emette mai strutture spezzate.
-        const candidate = planRich(trimmed);
-        if (candidate.mode === 'rich' && candidate.chars <= TELEGRAM_MAX) {
-          draftText = '';
-          draftRich = candidate.message;
-        } else {
-          const nuovo = toTelegramHtml(trimmed);
-          if (nuovo.length > TELEGRAM_MAX) return;
-          draftText = nuovo;
-          draftRich = null;
-        }
-        if (!had) {
-          // Subito, così l'anteprima compare al primo token invece che dopo
-          // una finestra intera di attesa.
-          void pushDraft().then(() => scheduleDraft());
+        const rendered = toTelegramHtml(trimmed);
+        if (rendered.length > TELEGRAM_MAX) {
+          // Overflow: teniamo quello che è già in bozza invece di tagliare una
+          // riga a metà — `deliverTo` rende comunque la risposta completa.
           return;
         }
-        scheduleDraft();
+        liveText = rendered;
+        refreshDraft(false);
         return;
       }
       if (trimmed === '') {
@@ -875,8 +929,24 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     handoff() {
       if (disabled || segments.length === 0) return null;
       const seg = segments[segments.length - 1]!;
+      const process = processLines();
+      if (draftEnabled) {
+        // Niente messaggio persistente da estendere: il processo è la bozza
+        // (effimera) e `deliverTo` manderà un messaggio nuovo con il blocco
+        // `details`. `null` solo quando non c'è proprio niente da collassare.
+        //
+        // `processHtml` copre **tutti** i segmenti: è il fallback legacy, e un
+        // rifiuto rich non deve far sparire il preambolo o i passi dei
+        // segmenti precedenti (il solo `process` non basta — è testo semplice).
+        const processHtml = segments
+          .map((s) => render(s, false, now()))
+          .filter((t) => t !== '')
+          .join('\n\n');
+        if (process.length === 0 && processHtml === '') return null;
+        return { messageId: null, process, processHtml };
+      }
       if (seg.messageId === null) return null;
-      return { messageId: seg.messageId, stepsText: render(seg, false, now()) };
+      return { messageId: seg.messageId, process, processHtml: render(seg, false, now()) };
     },
 
     async stop() {
@@ -902,12 +972,15 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         draftTimer = null;
       }
       draftText = '';
-      draftRich = null;
       if (flushTimer !== null) {
         clearTimeout(flushTimer);
         flushTimer = null;
       }
       status = null;
+      // In DM non c'è nessun messaggio persistente da finalizzare: la bozza
+      // smette solo di rinnovarsi e sparisce per TTL. La risposta finale è
+      // l'unica cosa che resta.
+      if (draftEnabled) return;
       if (disabled || segments.length === 0) return;
       // The final edit: counter gone, a step the turn abandoned marked. It
       // goes on the same channel the real answer is about to use, so it is

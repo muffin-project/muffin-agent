@@ -81,8 +81,17 @@ describe('first paint beats a blocking first tool handler', () => {
         return true;
       },
       sendChatAction: async () => true,
-      sendMessageDraft: async () => true,
-      sendRichMessageDraft: async () => true,
+      // Option B: the transcript's process surface in a DM is the ephemeral
+      // draft, so the first paint is a draft and must be recorded to observe
+      // the invariant.
+      sendMessageDraft: async (_chatId: number, _draftId: number, text: string) => {
+        calls.push({ method: 'sendMessageDraft', text });
+        return true;
+      },
+      sendRichMessageDraft: async (_chatId: number, _draftId: number, rich: unknown) => {
+        calls.push({ method: 'sendRichMessageDraft', rich });
+        return true;
+      },
     } as unknown as TelegramApiLike;
 
     // The handler records, on its very first synchronous line, how many
@@ -100,7 +109,7 @@ describe('first paint beats a blocking first tool handler', () => {
       spec: { name: 'sonda_bloccante_xyz', description: 'probe', inputSchema: { type: 'object' } as any },
       capability: 'probe.bloccante',
       handler: async () => {
-        enteredWithSends.push(calls.filter((c) => c.method === 'sendMessage' || c.method === 'sendRichMessage').length);
+        enteredWithSends.push(calls.length);
         enteredResolve();
         // Deterministic blocking seam: a synchronous monopolisation of the
         // event loop. Short on purpose — the assertion above does not depend
@@ -160,19 +169,19 @@ describe('first paint beats a blocking first tool handler', () => {
       // THE invariant: started synchronously from the first durable progress
       // fact, before tool execution could monopolise the event loop.
       expect(enteredWithSends[0]).toBeGreaterThanOrEqual(1);
-      expect(calls[0]!.method).toBe('sendRichMessage');
-      expect(JSON.stringify(calls[0]!.rich)).toContain('⏳');
+      // The step's own preview is already on the wire (the status preview may
+      // have come first): the running step is visible before the handler blocks.
+      expect(
+        calls.some((c) => c.method === 'sendRichMessageDraft' && JSON.stringify(c.rich).includes('⏳')),
+      ).toBe(true);
       releaseTool();
       await draining;
-      // …and the turn still ends as exactly one message, answer merged in —
-      // now as a rich edit of that message (Bot API 10.3), with the step trail
-      // and the answer in the same payload.
+      // …and the turn ends as exactly one durable message: a fresh rich send
+      // whose `details` block collapses the process and whose answer follows.
       const sends = calls.filter((c) => c.method === 'sendMessage' || c.method === 'sendRichMessage');
       expect(sends).toHaveLength(1);
-      const final = calls.filter((c) => c.method === 'editMessageRichText').at(-1);
-      expect(final).toBeDefined();
-      const finalText = JSON.stringify(final!.rich);
-      // One rich message carries BOTH: the settled step trail and the answer.
+      const finalText = JSON.stringify(sends[0]!.rich);
+      // One rich message carries BOTH: the settled process and the answer.
       expect(finalText).toContain('sonda_bloccante_xyz');
       expect(finalText).toContain('fatto.');
     } finally {

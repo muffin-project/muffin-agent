@@ -321,10 +321,10 @@ describe('a telegram turn records where the answer goes and whether it got there
     // with no real gap for the old coalescing timer to fire in. The
     // load-bearing properties are unchanged: no answer text, delivery still
     // pending, the transcript message is the truth until the lane resumes.
-    expect(h.outbound.filter((o) => o !== 'send:sto guardando…')).toEqual([
-      'send:⏳ mi metto in attesa · 0s',
-      'edit:✓ mi metto in attesa',
-    ]);
+    // Option B: in a DM the step lives only in the ephemeral draft, so nothing
+    // durable is sent for a suspended turn — the answer message is the only
+    // durable thing, and it has not happened yet.
+    expect(h.outbound.filter((o) => o !== 'send:sto guardando…')).toEqual([]);
     h.runtime.close();
   });
 });
