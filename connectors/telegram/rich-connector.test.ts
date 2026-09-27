@@ -198,10 +198,11 @@ describe('rich end to end · DM draft to rich final, no duplication (G)', () => 
       const richDrafts = calls.filter((c) => c.method === 'sendRichMessageDraft');
       expect(richDrafts.length).toBeGreaterThan(0);
       for (const draft of richDrafts) expect(draft.draftOptions?.canStop).toBe(true);
-      // Option B: the preview always rides rich as HTML — a partial never
-      // becomes native blocks (only the final message builds those).
-      expect(richDrafts.some((d) => d.rich?.html !== undefined)).toBe(true);
-      expect(richDrafts.every((d) => d.rich?.blocks === undefined)).toBe(true);
+      // Option B, refined: the preview is built from the SAME blocks as the
+      // final, so the swap is a fold, not a second rendering — the table is
+      // already a table while streaming.
+      expect(richDrafts.some((d) => d.rich?.blocks?.some((b) => b.type === 'table'))).toBe(true);
+      expect(richDrafts.every((d) => d.rich?.html === undefined)).toBe(true);
 
       // The durable delivery is exactly one rich message — no legacy send
       // beside the preview (the OpenClaw/Hermes duplication shape), no edit,
@@ -295,7 +296,7 @@ describe('rich drafts · the preview follows the partial across fake time', () =
     vi.useRealTimers();
   });
 
-  it('a prose partial previews legacy, then a table partial switches the renewal to rich', async () => {
+  it('the preview is blocks from the first token: prose is a paragraph, then the table is a table', async () => {
     const calls: Call[] = [];
     const api = {
       sendMessageDraft: async (_c: number, _d: number, text: string) => {
@@ -317,21 +318,24 @@ describe('rich drafts · the preview follows the partial across fake time', () =
 
     t.live('sto scrivendo la risposta');
     await vi.advanceTimersByTimeAsync(0);
-    // Everything rides rich: a prose partial is a rich HTML preview, not a
-    // legacy draft.
-    expect(calls.filter((c) => c.method === 'sendRichMessageDraft').length).toBeGreaterThan(0);
+    // La bozza parla la lingua del finale: blocchi, non HTML.
+    const primeDrafts = calls.filter((c) => c.method === 'sendRichMessageDraft');
+    expect(primeDrafts.length).toBeGreaterThan(0);
+    expect(primeDrafts.every((d) => d.rich?.blocks !== undefined)).toBe(true);
+    expect(
+      primeDrafts.at(-1)!.rich!.blocks!.some((b) => b.type === 'paragraph' && String(b.text).includes('sto scrivendo')),
+    ).toBe(true);
     expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(0);
 
-    // The model keeps typing and a table takes shape: still rich HTML on the
-    // same draft — a partial never becomes native blocks, and never a legacy
-    // draft on this surface.
+    // Arriva la tabella: la bozza la rende come tabella nativa, la stessa che
+    // il finale userà — niente cambio di forma all'ultimo istante.
     t.live(`sto scrivendo la risposta\n\n${TABLE}`);
     await vi.advanceTimersByTimeAsync(2_000);
     const richDrafts = calls.filter((c) => c.method === 'sendRichMessageDraft');
-    expect(richDrafts.some((d) => d.rich?.html !== undefined)).toBe(true);
-    expect(richDrafts.every((d) => d.rich?.blocks === undefined)).toBe(true);
+    expect(richDrafts.some((d) => d.rich?.blocks?.some((b) => b.type === 'table'))).toBe(true);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(0);
+    expect(richDrafts.every((d) => d.rich?.html === undefined)).toBe(true);
     await t.stop();
   });
 
@@ -358,11 +362,12 @@ describe('rich drafts · the preview follows the partial across fake time', () =
     // A table header without its delimiter row is not a table yet.
     t.live('| nome | q |');
     await vi.advanceTimersByTimeAsync(3_000);
-    // A prose/status preview rides rich as HTML; an unfinished table must
-    // never become a rich *blocks* preview.
+    // La bozza è a blocchi, ma un parziale non emette mai una tabella
+    // traballante: resta un paragrafo finché non è completa.
     const richPreviews = calls.filter((c) => c.method === 'sendRichMessageDraft');
     expect(richPreviews.length).toBeGreaterThan(0);
-    expect(richPreviews.some((d) => d.rich?.blocks !== undefined)).toBe(false);
+    expect(richPreviews.every((d) => d.rich?.blocks !== undefined)).toBe(true);
+    expect(richPreviews.some((d) => d.rich?.blocks?.some((b) => b.type === 'table'))).toBe(false);
     expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(0);
     await t.stop();
   });

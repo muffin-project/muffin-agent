@@ -50,24 +50,41 @@ function recordingApi(fail: { send?: boolean; edit?: boolean; draft?: boolean } 
     // Rich is the transport now; the fake records it as the legacy twin so the
     // 36 tests below keep asserting the same visible calls. The rich code path
     // is still the one exercised, and the failure flags cover it.
-    sendRichMessage: async (chatId: number, rich: { html?: string }) => {
+    sendRichMessage: async (chatId: number, rich: { html?: string; blocks?: unknown[] }) => {
       if (fail.send) throw new Error('simulato');
       const messageId = next++;
-      calls.push({ method: 'sendMessage', text: rich.html ?? '', messageId });
+      calls.push({ method: 'sendMessage', text: richPlain(rich), messageId });
       return { message_id: messageId, date: 0, chat: { id: chatId, type: 'private' } };
     },
-    editMessageRichText: async (_chatId: number, messageId: number, rich: { html?: string }) => {
+    editMessageRichText: async (_chatId: number, messageId: number, rich: { html?: string; blocks?: unknown[] }) => {
       if (fail.edit) throw new Error('simulato');
-      calls.push({ method: 'editMessageText', text: rich.html ?? '', messageId });
+      calls.push({ method: 'editMessageText', text: richPlain(rich), messageId });
       return true;
     },
-    sendRichMessageDraft: async (_chatId: number, draftId: number, rich: { html?: string }) => {
+    sendRichMessageDraft: async (_chatId: number, draftId: number, rich: { html?: string; blocks?: unknown[] }) => {
       if (fail.draft) throw new Error('simulato');
-      calls.push({ method: 'sendMessageDraft', text: rich.html ?? '', draftId, at: Date.now() });
+      calls.push({ method: 'sendMessageDraft', text: richPlain(rich), draftId, at: Date.now() });
       return true;
     },
   } as unknown as TelegramApiLike;
   return { api, calls };
+}
+
+/**
+ * Il testo visibile di un payload rich, letto dai blocchi: la bozza ora parla
+ * la stessa lingua del finale (`details` + blocchi nativi), quindi le
+ * asserzioni restano sul testo che una persona legge, non sul JSON.
+ */
+function richPlain(rich: { html?: string; blocks?: unknown[] }): string {
+  const blockText = (b: unknown): string => {
+    if (b === null || typeof b !== 'object') return '';
+    const o = b as { text?: unknown; blocks?: unknown[] };
+    if (typeof o.text === 'string') return o.text;
+    if (Array.isArray(o.blocks)) return o.blocks.map(blockText).join('\n');
+    return '';
+  };
+  if (rich.html !== undefined) return rich.html;
+  return Array.isArray(rich.blocks) ? rich.blocks.map(blockText).join('\n') : '';
 }
 
 const start = (n: string, args?: unknown) => ({ type: 'tool_start' as const, name: n, capability: 'x', args });
@@ -280,14 +297,16 @@ describe('a Bot API failure is swallowed and disables the rest of the turn', () 
     expect(log.join('\n')).toContain('trascrizione del turno sospesa');
   });
 
-  it('escapes what the model wrote — the line is sent with parse_mode HTML', async () => {
+  it('what the model wrote is inert: the rich preview carries it as plain text, never as markup', async () => {
     const { api, calls } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
     t.report(start('fs_read', { path: '<b>x</b>' }));
     await vi.advanceTimersByTimeAsync(0);
     await t.stop();
-    expect(calls[0]!.text).toContain('&lt;b&gt;x&lt;/b&gt;');
-    expect(calls[0]!.text).not.toContain('<b>x</b>');
+    // Nei blocchi `RichText` è testo semplice: niente entità da produrre e
+    // niente markup da interpretare.
+    expect(calls[0]!.text).toContain('<b>x</b>');
+    expect(calls[0]!.text).not.toContain('&lt;b&gt;');
   });
 });
 
