@@ -483,15 +483,30 @@ describe('live() segue la testa della catena della stanza', () => {
     await t.stop();
   });
 
-  it('un testo oltre un messaggio Telegram non viene mostrato in diretta', async () => {
+  it('un testo oltre il limite di un messaggio legacy ma dentro il tetto rich si vede intero, a blocchi', async () => {
     const { api, calls } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
-    t.live('x'.repeat(100));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(calls).toHaveLength(1);
-    t.live('x'.repeat(TELEGRAM_MAX + 500));
-    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
-    expect(calls.at(-1)!.text).toBe('x'.repeat(100)); // resta l'ultimo che ci stava
+    const lungo = 'x'.repeat(TELEGRAM_MAX + 500);
+    t.live(lungo);
+    await vi.advanceTimersByTimeAsync(400);
+    const ultimo = calls.filter((c) => c.method === 'sendMessageDraft').at(-1)!;
+    // Nessun taglio: il testo intero, in un blocco.
+    const blocks = (ultimo.rich as { blocks?: { text?: string }[] } | undefined)?.blocks ?? [];
+    expect(blocks[0]?.text).toBe(lungo);
+    await t.stop();
+  });
+
+  it('oltre il tetto di protocollo la bozza passa alla famiglia legacy, come il finale', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    // Righe intere, come l'output reale di un modello: la coda legacy tiene
+    // le ultime che ci stanno.
+    t.live(Array.from({ length: 2_000 }, (_, i) => `riga ${i} di una risposta molto lunga`).join('\n'));
+    await vi.advanceTimersByTimeAsync(400);
+    const ultimo = calls.filter((c) => c.method === 'sendMessageDraft').at(-1)!;
+    const rich = ultimo.rich as { html?: string; blocks?: unknown[] };
+    expect(rich.blocks).toBeUndefined();
+    expect(rich.html).toBeDefined();
     await t.stop();
   });
 });

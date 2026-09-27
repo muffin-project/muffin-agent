@@ -44,6 +44,13 @@ import type { InputRichBlock, InputRichMessage, RichText } from '@grammyjs/types
  *   message — it goes through the existing bounded legacy chunks
  *   (`renderForTelegram`), which every client demonstrably renders.
  *
+ * The DM turn message (`turnRichMessage`) is the deliberate exception on the
+ * way UP: it rides one rich message up to the HARD maximum, because the draft
+ * it replaces is built from the same blocks and the shape must not change at
+ * the swap (owner, 2026-09-27). Over the hard maximum the family is decided
+ * once, for both surfaces: legacy. The COMPAT ceiling still governs
+ * `planRich`, i.e. the group lane and the HTML/legacy fallbacks.
+ *
  * Both ceilings are adjustable with real-client evidence; the falsifier is
  * named in `docs/evidence/telegram-bot-api-10-3-2026-09-20.md` §5. A
  * "magic" number with no provenance would be worse than a conservative one
@@ -158,8 +165,9 @@ export type RichSize = { chars: number; blocks: number; depth: number };
  * is the answer, and the steps/reasoning are one tap away instead of buried in
  * the prose (or gone, which is what truncating them would be).
  *
- * Returns `null` when the answer cannot become blocks (`buildBlocks` refused):
- * the caller falls back to the legacy chunks rather than guess a structure.
+ * Returns `null` only when there is nothing at all to show (no process, no
+ * running step, no answer). `buildBlocks` never refuses, so any real answer —
+ * image references and over-wide tables included — keeps the blocks shape.
  */
 export function turnRichMessage(input: {
   /** I passi **già fatti**, in ordine, plus il preambolo — testo semplice, intero. */
@@ -191,18 +199,6 @@ export function turnRichMessage(input: {
   blocks.push(...built.blocks);
   if (blocks.length === 0) return null;
   return { blocks };
-}
-
-/**
- * La coda che sta nei limiti del protocollo: si lasciano cadere **blocchi
- * interi** dalla testa (i passi più vecchi) finché il payload non ci sta. La
- * risposta completa resta nel messaggio finale; l'anteprima è effimera e
- * mostra il presente, ma non cambia mai famiglia di blocchi.
- */
-export function boundRichTail(message: OutboundRich): OutboundRich | null {
-  const blocks = [...(message.blocks ?? [])];
-  while (blocks.length > 0 && richFitsHard({ blocks }) !== null) blocks.shift();
-  return blocks.length === 0 ? null : { blocks };
 }
 
 /**

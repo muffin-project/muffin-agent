@@ -3,7 +3,7 @@ import { toolPhrase, toolProgress } from '../../agent/tool-phrase.js';
 import type { Negotiation } from '../../core/surface/types.js';
 import { TelegramError, type TelegramApiLike } from './api.js';
 import { escapeHtml, splitHtml, TELEGRAM_MAX, toTelegramHtml } from './render.js';
-import { boundRichTail, richFitsHard, richFromHtml, thinkingRich, turnRichMessage, type OutboundRich } from './rich.js';
+import { richFitsHard, richFromHtml, thinkingRich, turnRichMessage, type OutboundRich } from './rich.js';
 
 /**
  * What the agent said and did on its way to the answer, kept — DAY-1
@@ -514,6 +514,25 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
    * mai una riga tagliata a metà. La risposta completa resta comunque nel
    * messaggio finale; l'anteprima è effimera e mostra il presente.
    */
+  /**
+   * La coda del markdown resa leggibile quando il rendering HTML eccede il
+   * limite di un messaggio: si tengono le ultime righe **intere** che ci
+   * stanno. È un'anteprima, non il messaggio: il finale resta completo.
+   */
+  function legacyTail(markdown: string): string {
+    const lines = markdown.trim().split('\n');
+    const kept: string[] = [];
+    let size = 0;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i] ?? '';
+      if (size + line.length + 1 > TELEGRAM_MAX - 64) break;
+      kept.unshift(line);
+      size += line.length + 1;
+    }
+    const text = kept.join('\n');
+    return text === '' ? '' : toTelegramHtml(text);
+  }
+
   function boundDraft(html: string): string {
     if (html.length <= TELEGRAM_MAX) return html;
     const lines = html.split('\n');
@@ -567,17 +586,25 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     // Il rendering HTML resta calcolato sempre: è il fallback se i blocchi
     // vengono rifiutati, e la forma per un parziale non strutturabile.
     const rendered = boundDraft(render(current(), true, now(), liveText));
-    const tail = turn !== null && richFitsHard(turn) !== null ? boundRichTail(turn) : turn;
-    if (tail !== null) {
+    // La famiglia la decide lo stesso criterio del finale: se il turno supera
+    // il tetto di protocollo, **entrambi** restano legacy — la bozza non tiene
+    // i blocchi mentre il finale li perde, perché sarebbe di nuovo il cambio
+    // forma al momento dello swap. È l'unica eccezione a «sempre blocchi», ed
+    // è la stessa su tutte e due le superfici.
+    if (turn !== null && richFitsHard(turn) === null) {
       draftText = rendered;
-      draftRich = tail;
+      draftRich = turn;
     } else {
-      if (rendered === '') {
+      // Famiglia legacy: il testo (HTML) del processo, o la coda intera del
+      // markdown quando il rendering HTML non è disponibile (testo che supera
+      // il limite di un messaggio). Righe intere, mai tagliate a metà.
+      const legacy = rendered !== '' ? rendered : legacyTail(answer);
+      if (legacy === '') {
         draftText = '';
         draftRich = null;
         return;
       }
-      draftText = rendered;
+      draftText = legacy;
       draftRich = null;
     }
     if (push || firstContent) void pushDraft().then(() => scheduleDraft());
@@ -973,13 +1000,12 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
           refreshDraft(false);
           return;
         }
+        // Il markdown intero guida i blocchi; il gemello HTML solo finché ci
+        // sta. Oltre, `refreshDraft` decide la famiglia sul turno completo
+        // (blocchi se ci sta nel protocollo, legacy altrimenti) — mai una
+        // bozza a blocchi con un finale legacy.
         const rendered = toTelegramHtml(trimmed);
-        if (rendered.length > TELEGRAM_MAX) {
-          // Overflow: teniamo quello che è già in bozza invece di tagliare una
-          // riga a metà — `deliverTo` rende comunque la risposta completa.
-          return;
-        }
-        liveText = rendered;
+        liveText = rendered.length <= TELEGRAM_MAX ? rendered : '';
         liveMarkdown = trimmed;
         refreshDraft(false);
         return;
