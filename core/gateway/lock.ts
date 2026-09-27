@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
-import { DurableLock, heldBy, pidAlive, type LockOutcome } from '../lock/durable.js';
+import { DurableLock, heldBy, type Liveness, type LockOutcome } from '../lock/durable.js';
+import { holderLiveness } from '../lock/incarnation.js';
 
 /**
  * Who owns the scheduler.
@@ -21,7 +22,8 @@ import { DurableLock, heldBy, pidAlive, type LockOutcome } from '../lock/durable
  * stale. That keeps both halves: a live gateway is never taken over, and one
  * that was `kill -9`d never wedges `muffin` — which is the requirement the send
  * lock's own docstring pins down and which a bare pid check cannot meet,
- * because pids are reused within hours.
+ * because pids are reused: in a restarted container, at once. Whether the
+ * holder is alive is asked of its incarnation, not its pid (ADR-0092).
  *
  * Two extra columns beyond the claim, because "visibile e ammazzabile" is
  * constraint 5 of the ADR and needs data: `since` (when this holder started,
@@ -59,7 +61,14 @@ export type GatewayInfo = {
   lastBeat: Date;
 };
 
-type Row = { pid: number | null; takenAt: string | null; since: string | null; status: string | null };
+type Row = {
+  pid: number | null;
+  taken_at: string | null;
+  since: string | null;
+  status: string | null;
+  /** Absent on a table created before the column existed and not claimed since. */
+  holder_id?: string | null;
+};
 
 export class GatewayLock {
   private readonly lock: DurableLock;
@@ -69,7 +78,7 @@ export class GatewayLock {
   constructor(
     db: Database.Database,
     /** Injected so a test can exercise dead, live and not-ours holders. */
-    alive: (pid: number) => boolean = pidAlive,
+    alive?: Liveness,
   ) {
     this.lock = new DurableLock(
       db,
@@ -148,24 +157,28 @@ export class GatewayLock {
 export function readGateway(
   db: Database.Database,
   now: Date = new Date(),
-  alive: (pid: number) => boolean = pidAlive,
+  alive: Liveness = holderLiveness(db),
 ): GatewayInfo | null {
   let row: Row | undefined;
   try {
-    row = db
-      .prepare(`SELECT pid, taken_at AS takenAt, since, status FROM gateway_lock WHERE id = 1`)
-      .get() as Row | undefined;
+    // `*` and not a column list: `holder_id` reaches an installed table only
+    // when a `GatewayLock` is constructed (`ensureColumn`), and this reader
+    // creates nothing, so naming the column would turn "older table" into
+    // "no gateway".
+    row = db.prepare(`SELECT * FROM gateway_lock WHERE id = 1`).get() as Row | undefined;
   } catch {
     // No such table: nothing has ever claimed it here.
     return null;
   }
-  const pid = heldBy(row, now.getTime(), STALE_AFTER_MS, alive);
+  const judged =
+    row === undefined ? undefined : { pid: row.pid, takenAt: row.taken_at, holderId: row.holder_id ?? null };
+  const pid = heldBy(judged, now.getTime(), STALE_AFTER_MS, alive);
   if (pid === null || !row) return null;
   return {
     pid,
-    since: new Date(row.since ?? row.takenAt ?? now.toISOString()),
+    since: new Date(row.since ?? row.taken_at ?? now.toISOString()),
     status: row.status ?? 'sconosciuto',
-    lastBeat: new Date(row.takenAt ?? now.toISOString()),
+    lastBeat: new Date(row.taken_at ?? now.toISOString()),
   };
 }
 

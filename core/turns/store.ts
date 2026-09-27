@@ -1,6 +1,7 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import { heldBy, pidAlive } from '../lock/durable.js';
+import { heldBy, type Liveness } from '../lock/durable.js';
+import { holderLiveness, mintHolderId } from '../lock/incarnation.js';
 import type { Principal, TrustTier } from '../policy/types.js';
 import { redactText } from '../tracing/redact.js';
 import {
@@ -746,8 +747,11 @@ export class TurnStore {
   constructor(
     private readonly db: Database.Database,
     private readonly clock: () => Date = () => new Date(),
-    /** Injected so a test can exercise dead, live and reused holders. */
-    private readonly alive: (pid: number) => boolean = pidAlive,
+    /**
+     * Injected so a test can exercise dead, live and reused holders. The
+     * default asks the holder's incarnation, then its pid (ADR-0092).
+     */
+    private readonly alive: Liveness = holderLiveness(db),
     /**
      * Read-only consumers (`doctor`, boot probes) never trigger schema writes.
      * Writable callers must run the central `migrate()` lifecycle before
@@ -819,7 +823,7 @@ export class TurnStore {
       `UPDATE turns SET taint = max(taint, @taint), updated_at = @now WHERE id = @id`,
     );
     this.staleStmt = db.prepare(
-      `SELECT id, claimed_by AS pid, updated_at AS takenAt FROM turns WHERE status = 'running'`,
+      `SELECT id, claimed_by AS pid, updated_at AS takenAt, claim_token AS holderId FROM turns WHERE status = 'running'`,
     );
     // Clears `claim_token` along with `claimed_by`: the row is nobody's now,
     // so no write fenced on the old token may land on it later either.
@@ -838,7 +842,7 @@ export class TurnStore {
     // would make the diagnosis blind for exactly as long as nobody restarts.
     this.interruptedStmt = db.prepare(
       `SELECT id, surface, tenant, session_id AS sessionId, model, created_at AS startedAt, delivery,
-              status, claimed_by AS pid, updated_at AS takenAt
+              status, claimed_by AS pid, updated_at AS takenAt, claim_token AS holderId
        FROM turns WHERE status IN ('interrupted','running') AND updated_at >= @since
        ORDER BY updated_at DESC`,
     );
@@ -1147,7 +1151,7 @@ export class TurnStore {
     // for the same reason `claim()` mints one below: `checkpoint`, the very
     // first one, is only a few lines away. `enqueue` (pid `null`) gets none —
     // nobody holds the row yet, so there is nothing to fence.
-    const token = pid === null ? null : randomUUID();
+    const token = pid === null ? null : mintHolderId(this.db, pid);
     const insertStmt = this.insertStmt;
     if (insertStmt === null) throw new Error('turn store is read-only');
     const tx = this.db.transaction(() => {
@@ -1208,7 +1212,7 @@ export class TurnStore {
    */
   claim(id: string, pid: number = process.pid, now: Date = this.clock()): TurnRecord | null {
     const at = now.toISOString();
-    const token = randomUUID();
+    const token = mintHolderId(this.db, pid);
     if (this.claimStmt.run({ id, pid, token, now: at }).changes === 0) return null;
     return this.get(id);
   }
@@ -1376,7 +1380,7 @@ export class TurnStore {
     pid: number = process.pid,
   ): TurnRecord | null {
     const at = this.clock().toISOString();
-    const token = randomUUID();
+    const token = mintHolderId(this.db, pid);
     let record: TurnRecord | null = null;
     const tx = this.db.transaction(() => {
       const before = this.getStmt.get(id) as Row | undefined;
@@ -1988,6 +1992,7 @@ export class TurnStore {
       id: string;
       pid: number | null;
       takenAt: string | null;
+      holderId: string | null;
     }[];
     const out: InterruptedTurn[] = [];
     for (const row of candidates) {
@@ -2083,6 +2088,7 @@ export class TurnStore {
       status: string;
       pid: number | null;
       takenAt: string | null;
+      holderId: string | null;
     }[];
     const abandoned = rows.filter(
       (r) =>
@@ -2167,7 +2173,7 @@ export function readTurnHealth(
   } catch {
     return null;
   }
-  return new TurnStore(db, () => new Date(), pidAlive, { readOnly: true }).health({ windowMs });
+  return new TurnStore(db, () => new Date(), holderLiveness(db), { readOnly: true }).health({ windowMs });
 }
 
 /**
@@ -2189,7 +2195,7 @@ export function readUndelivered(
   } catch {
     return null;
   }
-  return new TurnStore(db, () => new Date(), pidAlive, { readOnly: true }).undelivered({ windowMs });
+  return new TurnStore(db, () => new Date(), holderLiveness(db), { readOnly: true }).undelivered({ windowMs });
 }
 
 /**

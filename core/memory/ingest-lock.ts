@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import { DurableLock, pidAlive, type LockOutcome } from '../lock/durable.js';
+import { DurableLock, type Liveness, type LockOutcome } from '../lock/durable.js';
 
 /**
  * One extractor at a time.
@@ -72,8 +72,11 @@ export class IngestLock {
 
   constructor(
     db: Database.Database,
-    /** Injected so a test can exercise dead, live and not-ours holders. */
-    alive: (pid: number) => boolean = pidAlive,
+    /**
+     * Injected so a test can exercise dead, live and not-ours holders. Absent,
+     * `DurableLock` asks the holder's incarnation, then its pid (ADR-0092).
+     */
+    alive?: Liveness,
   ) {
     this.lock = new DurableLock(
       db,

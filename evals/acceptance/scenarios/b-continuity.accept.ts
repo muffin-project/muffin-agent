@@ -307,6 +307,18 @@ describe('acceptance · B · il turno sospendibile', () => {
         victim.kill();
         await victim.exited;
 
+        // The row's pid now belongs to a live process that is not the one that
+        // ran the turn: what a restarted container shows (ADR-0092). This test
+        // process stands in for it. Judged by the pid alone, the turn would
+        // read as still running for up to the hard horizon (six hours) and
+        // nothing below would name or resume it.
+        const reuse = new DatabaseCtor(join(inst.home, 'muffin.db'));
+        try {
+          reuse.prepare(`UPDATE turns SET claimed_by = ? WHERE id = ?`).run(process.pid, turnId);
+        } finally {
+          reuse.close();
+        }
+
         // What the owner does first: open a terminal and ask. `doctor` only
         // **reads** — marking is `reclaim`'s job and belongs to a process that
         // opens the home for work, not to a diagnosis — so the row still says

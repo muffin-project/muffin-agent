@@ -1,5 +1,7 @@
 import type Database from 'better-sqlite3';
-import { randomUUID } from 'node:crypto';
+import { holderLiveness, mintHolderId, pidAlive, type Liveness } from './incarnation.js';
+
+export { pidAlive, type Liveness };
 
 /**
  * One holder at a time, across processes, surviving a hard kill — and, since
@@ -74,18 +76,26 @@ import { randomUUID } from 'node:crypto';
  * process that no longer owns the row (`TurnStore.checkpoint`/`finish`/
  * `suspend`, `agent/loop.ts`'s handling of their result).
  *
- * A random token and not `pid` for this, on purpose: a pid is reused by the OS
- * within hours on a busy machine, so "is this the same pid" is not "is this
- * the same holder". `pid + a real process start time` would answer that
- * precisely, but reading another process's start time has no portable, cheap
- * answer in Node without a native module or a subprocess spawned on every
- * check (`ps -o lstart=` on macOS, `/proc/<pid>/stat` on Linux, neither on
- * Windows) — exactly the missing-dependency shape PRACTICES.md#read-upstream-before-depending-on-upstream says to cut
- * loose rather than presume. A holder-local random id sidesteps the question
- * entirely: it does not need to know anything about the OS, and it is exactly
- * as strong a proof of "the same acquisition" as a monotonic generation
- * counter would be, without a second column that has to be incremented in the
- * same transaction as the first.
+ * A random token and not `pid` for this, on purpose: a pid is reused by the OS,
+ * so "is this the same pid" is not "is this the same holder". A holder-local
+ * random id does not need to know anything about the OS, and it is exactly as
+ * strong a proof of "the same acquisition" as a monotonic generation counter
+ * would be, without a second column that has to be incremented in the same
+ * transaction as the first.
+ *
+ * ## Liveness: the holder's process, not its pid (ADR-0092)
+ *
+ * The token answers "the same acquisition"; it does not answer "is that
+ * acquisition's process still running". That question used to be `kill(pid,
+ * 0)`, on the assumption that ordinary pid reuse takes hours. Containers make it
+ * immediate: a restarted container usually gives the new process the dead
+ * one's pid, and a second container on the same home cannot see the first
+ * one's pids at all. Since ADR-0092 the token also names the holder's
+ * *incarnation*, a file the holder keeps locked for its whole life, and
+ * liveness asks the kernel whether that lock is still held
+ * (`core/lock/incarnation.ts`). The pid rule remains for tokens minted without
+ * an incarnation: rows written before ADR-0092, in-memory databases, and a
+ * process that could not create its incarnation file.
  */
 
 /** Taken, or refused with the reason and what to do — the shape `ConfigError` uses. */
@@ -124,20 +134,6 @@ export type LockOutcome = { release: () => void } | { held: string; remedy: stri
 export const HARD_STALE_MULTIPLIER = 6;
 
 /**
- * Signal 0 sends nothing: it only asks whether that process still exists.
- * EPERM means it exists and belongs to another user — alive, and not ours to
- * take. Only ESRCH is proof the holder is gone.
- */
-export function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
-
-/**
  * Is anyone holding this row, right now? The single rule, so that a claim and
  * an inspection command cannot answer it differently — they would disagree
  * exactly around a crash, which is the moment the answer matters.
@@ -150,26 +146,27 @@ export function pidAlive(pid: number): boolean {
  * horizon was declared free without `alive` ever running.
  */
 export function heldBy(
-  row: { pid: number | null; takenAt: string | null } | undefined,
+  row: { pid: number | null; takenAt: string | null; holderId?: string | null } | undefined,
   nowMs: number,
   staleAfterMs: number,
-  alive: (pid: number) => boolean,
+  alive: Liveness,
   /** See `HARD_STALE_MULTIPLIER`. Explicit override exists for tests only. */
   hardStaleAfterMs: number = staleAfterMs * HARD_STALE_MULTIPLIER,
 ): number | null {
   if (row?.pid == null) return null;
-  // Dead is free immediately — no horizon to wait out. The tempting exemption
-  // — "a crashed earlier run of our own pid must not lock us out" — cannot
-  // happen (a crashed process is not this one) and silently permits two
-  // holders from *inside* one process.
-  if (!alive(row.pid)) return null;
-  // Alive is not enough by itself: a bare pid is weaker evidence than it
-  // looks (ordinary reuse after a hard kill happens in hours, not after 2³²
-  // processes), so a holder that has not proven itself — via a refreshed
-  // `taken_at` — inside the *hard* horizon is treated the same as gone. This
-  // is the backstop that keeps a corpse, or an impostor wearing a reused pid,
-  // from wedging the claim forever, now wide enough that it is never the
-  // thing that catches a holder which is actually still working.
+  // Dead is free immediately, with no horizon to wait out. The tempting
+  // exemption, "a row carrying our own pid must be a crashed earlier run of
+  // us", is wrong in both directions and is not made: in a restarted container it is
+  // true (ADR-0092 answers it with the incarnation instead), and in a second
+  // container sharing the home the "same pid" is a different, live process.
+  if (!alive(row.pid, row.holderId ?? null)) return null;
+  // Alive is not enough by itself: a holder that has not proven itself (by a
+  // refreshed `taken_at`) inside the *hard* horizon is treated the same as
+  // gone. With an incarnation the kernel says whether the process exists; it
+  // cannot say whether it is still doing anything, and a process wedged
+  // forever would otherwise hold the claim forever. For tokens without an
+  // incarnation it is also the backstop against a reused pid. Wide enough that
+  // it is never the thing that catches a holder which is actually working.
   const takenAt = row.takenAt ? Date.parse(row.takenAt) : NaN;
   if (Number.isFinite(takenAt) && nowMs - takenAt > hardStaleAfterMs) return null;
   return row.pid;
@@ -233,8 +230,11 @@ export class DurableLock {
   constructor(
     private readonly db: Database.Database,
     private readonly spec: DurableLockSpec,
-    /** Injected so a test can exercise dead, live and not-ours holders. */
-    private readonly alive: (pid: number) => boolean = pidAlive,
+    /**
+     * Injected so a test can exercise dead, live and not-ours holders. The
+     * default asks the holder's incarnation, then its pid (ADR-0092).
+     */
+    private readonly alive: Liveness = holderLiveness(db),
   ) {
     // The table name reaches SQL by interpolation because a table name cannot
     // be a bound parameter. Every caller passes a literal, so this can only
@@ -286,7 +286,9 @@ export class DurableLock {
     const claim = this.db.transaction((self: number, at: string): number | null => {
       const holder = this.currentHolder(Date.parse(at));
       if (holder !== null) return holder;
-      const holderId = randomUUID();
+      // Carries this process's incarnation, locked before the token can reach
+      // the row (core/lock/incarnation.ts).
+      const holderId = mintHolderId(this.db, self);
       this.claimStmt.run(self, at, holderId);
       this.myHolderId = holderId;
       onClaim?.();
