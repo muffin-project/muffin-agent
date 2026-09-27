@@ -44,6 +44,13 @@ import type { InputRichBlock, InputRichMessage, RichText } from '@grammyjs/types
  *   message — it goes through the existing bounded legacy chunks
  *   (`renderForTelegram`), which every client demonstrably renders.
  *
+ * The DM turn message (`turnRichMessage`) is the deliberate exception on the
+ * way UP: it rides one rich message up to the HARD maximum, because the draft
+ * it replaces is built from the same blocks and the shape must not change at
+ * the swap (owner, 2026-09-27). Over the hard maximum the family is decided
+ * once, for both surfaces: legacy. The COMPAT ceiling still governs
+ * `planRich`, i.e. the group lane and the HTML/legacy fallbacks.
+ *
  * Both ceilings are adjustable with real-client evidence; the falsifier is
  * named in `docs/evidence/telegram-bot-api-10-3-2026-09-20.md` §5. A
  * "magic" number with no provenance would be worse than a conservative one
@@ -121,7 +128,7 @@ export type RichPlan =
  */
 export function planRich(markdown: string): RichPlan {
   const built = buildBlocks(markdown, 0);
-  if (built === null || !built.native) return { mode: 'legacy', richConstructs: false };
+  if (!built.native) return { mode: 'legacy', richConstructs: false };
   const message: OutboundRich = { blocks: built.blocks };
   const { chars, blocks } = countRich(message);
   if (chars > RICH_COMPAT_CHARS || blocks > RICH_COMPAT_BLOCKS) {
@@ -158,23 +165,23 @@ export type RichSize = { chars: number; blocks: number; depth: number };
  * is the answer, and the steps/reasoning are one tap away instead of buried in
  * the prose (or gone, which is what truncating them would be).
  *
- * Returns `null` when the answer cannot become blocks (`buildBlocks` refused):
- * the caller falls back to the legacy chunks rather than guess a structure.
+ * Returns `null` only when there is nothing at all to show (no process, no
+ * running step, no answer). `buildBlocks` never refuses, so any real answer —
+ * image references and over-wide tables included — keeps the blocks shape.
  */
 export function turnRichMessage(input: {
-  /** The step lines, in order — already plain text, whole, never truncated. */
+  /** I passi **già fatti**, in ordine, plus il preambolo — testo semplice, intero. */
   process: readonly string[];
+  /**
+   * Il passo che sta succedendo **adesso**, visibile sotto «Processo» (solo
+   * bozza). Quello già successo entra dentro il `details`; questo no: il
+   * consuntivo si può chiudere, il presente deve vedersi.
+   */
+  running?: string | null;
   /** The model's answer, markdown, exactly as it arrived. */
   answer: string;
-  /**
-   * Testo sempre visibile del blocco `details`. La bozza ci mette il passo in
-   * corso («⏳ eseguo un comando: npm test · 12s»), così il progresso resta
-   * visibile **senza** aprire il processo; il finale usa «Processo».
-   */
-  summary?: string;
 }): OutboundRich | null {
   const built = buildBlocks(input.answer, 0);
-  if (built === null) return null;
   const blocks: InputRichBlock<never>[] = [];
   // Le righe vuote (le spaziature del markdown) non diventano paragrafi
   // vuoti: un blocco di testo vuoto non è una struttura, e Telegram rifiuta
@@ -183,11 +190,14 @@ export function turnRichMessage(input: {
   if (process.length > 0) {
     blocks.push({
       type: 'details',
-      summary: input.summary ?? 'Processo',
+      summary: 'Processo',
       blocks: process.map((line) => ({ type: 'paragraph' as const, text: line })),
     });
   }
+  const running = input.running?.trim() ?? '';
+  if (running !== '') blocks.push({ type: 'paragraph', text: running });
   blocks.push(...built.blocks);
+  if (blocks.length === 0) return null;
   return { blocks };
 }
 
@@ -305,13 +315,20 @@ function codePoints(s: string): number {
 /* Outbound builder: model markdown → typed blocks.                    */
 /* ------------------------------------------------------------------ */
 
-type Built = { blocks: InputRichBlock<never>[]; native: boolean } | null;
+type Built = { blocks: InputRichBlock<never>[]; native: boolean };
 
-/** Depth cap for nested structures (details > list > …). Far under the protocol 16; deeper nests stay legacy. */
+/**
+ * Depth cap for nested structures (details > list > …). Far under the
+ * protocol 16. Oltre il tetto **non si rifiuta**: il frammento diventa un
+ * paragrafo, così la risposta resta a blocchi e la bozza non cambia forma.
+ */
 const BUILD_MAX_DEPTH = 4;
 
 function buildBlocks(markdown: string, depth: number): Built {
-  if (depth > BUILD_MAX_DEPTH) return null;
+  if (depth > BUILD_MAX_DEPTH) {
+    const text = markdown.trim();
+    return { blocks: text === '' ? [] : [{ type: 'paragraph', text: inlineRich(text) }], native: false };
+  }
   const lines = markdown.split('\n');
   const blocks: InputRichBlock<never>[] = [];
   let native = false;
@@ -405,7 +422,6 @@ function buildBlocks(markdown: string, depth: number): Built {
       }
       const summaryMatch = /^\s*<summary>(.*)<\/summary>\s*$/.exec(inner[0] ?? '');
       const innerBuilt = buildBlocks(inner.slice(summaryMatch ? 1 : 0).join('\n'), depth + 1);
-      if (innerBuilt === null) return null;
       flushPara();
       blocks.push({
         type: 'details',
@@ -418,7 +434,21 @@ function buildBlocks(markdown: string, depth: number): Built {
     }
     if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|?[\s:|-]+\|?[\s:|-]*$/.test(lines[i + 1] ?? '') && (lines[i + 1] ?? '').includes('-')) {
       const table = buildTable(lines, i);
-      if (table === null) return null;
+      if (table.kind === 'over') {
+        // Oltre le colonne del protocollo una tabella valida non esiste: resta
+        // come testo monospaziato che la preserva — mai un rifiuto che
+        // cambierebbe la forma del turno a metà.
+        flushPara();
+        blocks.push({ type: 'pre', text: lines.slice(i, table.next).join('\n') });
+        i = table.next;
+        continue;
+      }
+      if (table.kind === 'plain') {
+        // Un delimitatore senza righe non è una tabella: sono paragrafi.
+        para.push(...lines.slice(i, table.next));
+        i = table.next;
+        continue;
+      }
       flushPara();
       blocks.push(table.block);
       native = true;
@@ -443,16 +473,28 @@ function buildBlocks(markdown: string, depth: number): Built {
     const listRun = takeWhile(lines, i, (l) => /^\s*[-*]\s+\[[ xX]\]\s+/.test(l) || /^\s*(?:[-*]|\d+[.)])\s+/.test(l));
     if (listRun.length > 0) {
       const list = buildList(listRun, depth);
-      if (list === null) return null;
+      if (list === null) {
+        // Oltre il tetto di annidamento la lista resta, come testo: mai un
+        // rifiuto che cambierebbe la forma.
+        flushPara();
+        blocks.push({ type: 'pre', text: listRun.join('\n') });
+        i += listRun.length;
+        continue;
+      }
       flushPara();
       blocks.push(list.block);
       if (list.checklist) native = true;
       i += listRun.length;
       continue;
     }
-    // Media references have no honest rich form here (no uploads): the whole
-    // answer stays legacy rather than shipping a dead tg:// link.
-    if (/!\[[^\]]*\]\([^)]*\)/.test(line)) return null;
+    // An image has no native form without an upload (a tg:// link would be
+    // dead), so it becomes the link it is: the answer stays blocks, and the
+    // turn's shape never changes.
+    if (/!\[[^\]]*\]\([^)]*\)/.test(line)) {
+      para.push(line.replace(/!\[([^\]]*)\]\(([^)]*)\)/g, '[$1]($2)'));
+      i++;
+      continue;
+    }
     if (line.trim() === '') {
       flushPara();
       i++;
@@ -476,7 +518,12 @@ function takeWhile(lines: string[], from: number, pred: (l: string) => boolean):
   return out;
 }
 
-function buildTable(lines: string[], from: number): { block: InputRichBlock<never>; next: number } | null {
+type TableBuild =
+  | { kind: 'table'; block: InputRichBlock<never>; next: number }
+  | { kind: 'over'; next: number }
+  | { kind: 'plain'; next: number };
+
+function buildTable(lines: string[], from: number): TableBuild {
   const rows: string[][] = [];
   let k = from;
   // Header row.
@@ -494,16 +541,15 @@ function buildTable(lines: string[], from: number): { block: InputRichBlock<neve
     k++;
   }
   const width = Math.max(...rows.map((r) => r.length));
-  // Over the protocol column count the table cannot ride rich at all — and a
-  // truncated table would be a lie, so the WHOLE answer stays legacy. Ragged
+  // Over the protocol column count the caller keeps the table as text; ragged
   // rows are padded, not rejected: a missing trailing cell is sloppy, not
   // structural.
-  if (width > RICH_MAX_TABLE_COLUMNS) return null;
+  if (width > RICH_MAX_TABLE_COLUMNS) return { kind: 'over', next: k };
   for (const r of rows) while (r.length < width) r.push('');
   const header = rows[0] ?? [];
   const body = rows.slice(1);
   // A delimiter with no body rows is not a table, it is paragraphs.
-  if (body.length === 0) return null;
+  if (body.length === 0) return { kind: 'plain', next: k };
   const cells: { text?: RichText; is_header?: true; align: 'left' | 'center' | 'right'; valign: 'top' | 'middle' | 'bottom' }[][] = [
     header.map((cell, c) => ({
       text: inlineRich(cell.trim()),
@@ -519,7 +565,7 @@ function buildTable(lines: string[], from: number): { block: InputRichBlock<neve
       })),
     ),
   ];
-  return { block: { type: 'table', cells, is_bordered: true }, next: k };
+  return { kind: 'table', block: { type: 'table', cells, is_bordered: true }, next: k };
 }
 
 function splitRow(line: string): string[] {

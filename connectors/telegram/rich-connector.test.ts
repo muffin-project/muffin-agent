@@ -239,8 +239,8 @@ describe('rich end to end · group/topic keeps thread routing (H)', () => {
   });
 });
 
-describe('rich end to end · over-compat answers stay whole on legacy (D)', () => {
-  it('a huge table never touches rich and arrives complete in bounded chunks', async () => {
+describe('rich end to end · a big DM answer keeps the one shape (D)', () => {
+  it('a huge table rides one rich message, complete — no legacy re-render', async () => {
     const rows = Array.from({ length: 400 }, (_, k) => `| voce ${k} | descrizione numero ${k} con un po di testo |`).join('\n');
     const huge = `| nome | dettaglio |\n| --- | --- |\n${rows}`;
     const provider = plainProvider(huge);
@@ -250,15 +250,14 @@ describe('rich end to end · over-compat answers stay whole on legacy (D)', () =
     try {
       await deliver(connector, [privateMsg(5, 'dammi tutto')]);
 
-      expect(calls.filter((c) => c.method === 'sendRichMessage')).toHaveLength(0);
-      // Previews are rich now; the durable delivery stays the legacy chunks
-      // because the answer is over the compatibility ceiling.
-      const sends = calls.filter((c) => c.method === 'sendMessage');
-      expect(sends.length).toBeGreaterThan(1);
-      for (const send of sends) expect(send.text!.length).toBeLessThanOrEqual(4096);
-      const joined = sends.map((s) => s.text).join('\n');
-      expect(joined).toContain('voce 0');
-      expect(joined).toContain('voce 399');
+      // In DM il finale è sempre a blocchi, come la bozza: la tabella grande
+      // resta una tabella, non torna ai chunk legacy.
+      const rich = calls.filter((c) => c.method === 'sendRichMessage');
+      expect(rich).toHaveLength(1);
+      const json = JSON.stringify(rich[0]!.rich);
+      expect(json).toContain('voce 0');
+      expect(json).toContain('voce 399');
+      expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(0);
     } finally {
       runtime.close();
     }

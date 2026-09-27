@@ -288,18 +288,20 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
       // the same way whichever lane carried it. The HTTP method stays the real
       // one, so the transport itself is still exercised end to end.
       let recordedMethod = method;
-      const richHtml =
+      const richMessage =
         payload['rich_message'] !== null && typeof payload['rich_message'] === 'object'
-          ? (payload['rich_message'] as { html?: unknown }).html
+          ? (payload['rich_message'] as { html?: unknown; blocks?: unknown })
           : undefined;
-      if (typeof richHtml === 'string') {
-        payload['text'] = richHtml;
-        if (method === 'sendRichMessage') recordedMethod = 'sendMessage';
+      if (typeof richMessage?.html === 'string') {
+        payload['text'] = richMessage.html;
+      } else if (Array.isArray(richMessage?.blocks)) {
+        // Un finale a blocchi si legge come un `sendMessage` col suo testo —
+        // `payload.rich_message.blocks` resta comunque leggibile per gli
+        // scenari che asseriscono la struttura.
+        payload['text'] = testoDaBlocchi(richMessage.blocks);
       }
-      // Una bozza è una bozza qualunque payload porti: quella a blocchi è la
-      // stessa superficie di quella legacy, e gli scenari la leggono come
-      // `sendMessageDraft`. Il messaggio finale a blocchi conserva invece il
-      // metodo reale, così `payload.rich_message.blocks` resta leggibile.
+      // Rich is the transport; the scenarios assert legacy-shaped records.
+      if (method === 'sendRichMessage') recordedMethod = 'sendMessage';
       if (method === 'sendRichMessageDraft') recordedMethod = 'sendMessageDraft';
 
       const ok = (result: unknown): void => {

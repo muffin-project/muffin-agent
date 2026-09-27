@@ -286,25 +286,32 @@ describe('stop() is the last edit, never a deletion', () => {
 });
 
 describe('the draft is the final shape (owner, 2026-09-27)', () => {
-  it('details collapsed as in the final, the running step in the always-visible summary', async () => {
+  it('done steps inside the collapsed details, the running step visible right below', async () => {
     const { api, calls } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
+    t.report(start('fs_read', { path: 'a' }));
+    t.report(end('fs_read', false, { path: 'a' }));
     t.report(start('shell_run', { command: 'npm test' }));
-    await vi.advanceTimersByTimeAsync(0);
+    // Il rinnovo della bozza ha il suo ritmo: un giro di tick mostra lo stato
+    // aggiornato (i due passi passati dentro, quello in corso sotto).
+    await vi.advanceTimersByTimeAsync(400);
     await t.stop();
 
     const draft = calls.filter((c) => c.method === 'sendMessageDraft').at(-1)!;
-    const blocks = (draft.rich as { blocks?: { type: string; summary?: string; is_open?: boolean; blocks?: unknown[] }[] })
+    const blocks = (draft.rich as { blocks?: { type: string; summary?: string; is_open?: boolean; text?: string; blocks?: unknown[] }[] })
       ?.blocks ?? [];
     const details = blocks.find((b) => b.type === 'details');
     expect(details).toBeDefined();
+    expect(details!.summary).toBe('Processo');
     // Chiuso come nel finale: il passaggio non cambia l'altezza del messaggio.
     expect(details!.is_open).toBeUndefined();
-    // Il progresso resta visibile senza aprire il processo.
-    expect(details!.summary).toContain('⏳ guardo con un comando: npm test');
-    expect(details!.summary).toMatch(/· \d+s/);
-    // Il passo dentro il processo resta il consuntivo, senza contatore.
+    // Quello già successo sta dentro, senza contatore.
+    expect(JSON.stringify(details!.blocks)).toContain('leggo un file: a');
     expect(JSON.stringify(details!.blocks)).not.toMatch(/· \d+s/);
+    // Quello che sta succedendo adesso sta sotto «Processo», col suo tempo.
+    const now = blocks.find((b) => b.type === 'paragraph');
+    expect(now!.text).toContain('⏳ guardo con un comando: npm test');
+    expect(now!.text).toMatch(/· \d+s/);
   });
 });
 
@@ -461,25 +468,45 @@ describe('live() segue la testa della catena della stanza', () => {
     const t = startTranscript(api, 1, { negotiation: DM });
     t.live('a');
     await vi.advanceTimersByTimeAsync(0);
+    const prima = calls.filter((c) => c.method === 'sendMessageDraft').length;
     t.live('a b');
     t.live('a b c');
     t.live('a b c d');
-    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    // Le chiamate rapide non producono un invio per token: prima che il timer
+    // scatti non è partito niente di nuovo (si coagulano in un rinnovo solo).
+    expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(prima);
+    // Un rinnovo porta l'ultimo valore, non quattro.
+    await vi.advanceTimersByTimeAsync(400);
     const drafts = calls.filter((c) => c.method === 'sendMessageDraft');
-    expect(drafts).toHaveLength(2); // la prima, poi una sola coalescata — non quattro
-    expect(drafts.at(-1)!.text).toBe('a b c d');
+    expect(drafts.length).toBeGreaterThan(prima);
+    expect(drafts.at(-1)!.text).toContain('a b c d');
     await t.stop();
   });
 
-  it('un testo oltre un messaggio Telegram non viene mostrato in diretta', async () => {
+  it('un testo oltre il limite di un messaggio legacy ma dentro il tetto rich si vede intero, a blocchi', async () => {
     const { api, calls } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
-    t.live('x'.repeat(100));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(calls).toHaveLength(1);
-    t.live('x'.repeat(TELEGRAM_MAX + 500));
-    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
-    expect(calls.at(-1)!.text).toBe('x'.repeat(100)); // resta l'ultimo che ci stava
+    const lungo = 'x'.repeat(TELEGRAM_MAX + 500);
+    t.live(lungo);
+    await vi.advanceTimersByTimeAsync(400);
+    const ultimo = calls.filter((c) => c.method === 'sendMessageDraft').at(-1)!;
+    // Nessun taglio: il testo intero, in un blocco.
+    const blocks = (ultimo.rich as { blocks?: { text?: string }[] } | undefined)?.blocks ?? [];
+    expect(blocks[0]?.text).toBe(lungo);
+    await t.stop();
+  });
+
+  it('oltre il tetto di protocollo la bozza passa alla famiglia legacy, come il finale', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    // Righe intere, come l'output reale di un modello: la coda legacy tiene
+    // le ultime che ci stanno.
+    t.live(Array.from({ length: 2_000 }, (_, i) => `riga ${i} di una risposta molto lunga`).join('\n'));
+    await vi.advanceTimersByTimeAsync(400);
+    const ultimo = calls.filter((c) => c.method === 'sendMessageDraft').at(-1)!;
+    const rich = ultimo.rich as { html?: string; blocks?: unknown[] };
+    expect(rich.blocks).toBeUndefined();
+    expect(rich.html).toBeDefined();
     await t.stop();
   });
 });

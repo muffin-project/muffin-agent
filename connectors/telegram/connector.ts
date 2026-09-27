@@ -1314,11 +1314,12 @@ export class TelegramConnector {
    *   thing split as one document, so the plan's first part **edits** that
    *   message (steps kept, answer appended) and only an overflow spills into
    *   further `send`s after it.
-   * - An **ephemeral** handoff (`messageId === null`, a DM): the process only
-   *   ever lived in the draft, so nothing is edited — the answer is a fresh
-   *   rich `send` whose first block collapses the process in a `details` block
-   *   (`rich.ts#turnRichMessage`). Its legacy fallback prepends the process
-   *   text, so the trail is never lost even if rich is refused.
+   * - A **DM** (positive chat id, the room with the draft): nothing is ever
+   *   edited; the answer is a fresh rich `send` whose first block collapses
+   *   the process in a `details` block (`rich.ts#turnRichMessage`), the same
+   *   shape the draft had. Its legacy fallback prepends the process text, so
+   *   the trail is never lost even if rich is refused. This holds for tool
+   *   turns and plain ones alike — no shape change at the swap.
    *
    * The one gap neither shape closes: a crash between `transcript.stop()`
    * setting the handoff and this method's own `store.plan()` call, which is
@@ -1351,7 +1352,9 @@ export class TelegramConnector {
     // A handoff with a real message (a group with no draft) edits that bubble;
     // an ephemeral one (a DM) has nothing to edit, so this is a fresh send.
     const editId = handoff !== undefined && handoff.messageId !== null ? handoff.messageId : editMessageId;
-    const ephemeral = handoff !== undefined && handoff.messageId === null;
+    // Una chat privata è la stanza con la bozza: lì il turno ha una sola forma,
+    // i blocchi, e il finale la ripete — mai il vecchio cambio forma.
+    const isPrivate = chatId > 0;
 
     // The unsplit HTML both lanes start from: `splitHtml` is the legacy plan
     // (and the rich fallback); the rich lane carries `combined` whole.
@@ -1373,13 +1376,13 @@ export class TelegramConnector {
       };
     });
 
-    // Option B: in a DM the process only ever lived in the ephemeral draft, so
-    // the turn's one durable message is a fresh rich send whose first block
-    // collapses the process in `details`, the answer following as native
-    // blocks. A group keeps the edit-merge below (its steps are a real,
-    // silent trail and the answer extends that same bubble).
-    if (ephemeral) {
-      const turn = handoff.process.length === 0 ? null : turnRichMessage({ process: handoff.process, answer: text });
+    // In a DM the turn's one message is always blocks — the same shape the
+    // draft showed (process in `details`, answer as native blocks), whether the
+    // turn had tools or not. A group keeps the edit-merge below (its steps are
+    // a real, silent trail and the answer extends that same bubble); a
+    // deliberate edit of an existing message keeps the edit lane too.
+    if (isPrivate && editId === undefined) {
+      const turn = turnRichMessage({ process: handoff?.process ?? [], answer: text });
       const first = legacy[0];
       if (turn !== null && first !== undefined && richFitsHard(turn) === null) {
         return deliverTelegram(

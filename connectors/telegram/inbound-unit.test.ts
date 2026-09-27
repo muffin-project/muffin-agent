@@ -144,9 +144,26 @@ function fixture(script: ChatResult[] = []) {
   // Rich is the transport now; the fake records it in the same `sent` log.
   // Rich delegates to the legacy spies, so every existing assertion on
   // `sendMessage`/`editMessageText` keeps observing the same effect.
-  const sendRichMessage = vi.fn((chatId: number, rich: { html?: string }) => sendMessage(chatId, rich.html ?? ''));
+
+/** Il testo visibile di un payload rich, letto dai blocchi (il finale in DM è a blocchi). */
+function richTesto(rich: { html?: string; blocks?: unknown[] }): string {
+  const blockText = (b: unknown): string => {
+    if (b === null || typeof b !== 'object') return '';
+    const o = b as { text?: unknown; summary?: unknown; blocks?: unknown[] };
+    const parts: string[] = [];
+    if (typeof o.summary === 'string') parts.push(o.summary);
+    if (typeof o.text === 'string') parts.push(o.text);
+    else if (Array.isArray(o.text)) parts.push(JSON.stringify(o.text));
+    if (Array.isArray(o.blocks)) parts.push(o.blocks.map(blockText).join('\n'));
+    return parts.join('\n');
+  };
+  if (typeof rich.html === 'string') return rich.html;
+  return Array.isArray(rich.blocks) ? rich.blocks.map(blockText).join('\n') : '';
+}
+
+  const sendRichMessage = vi.fn((chatId: number, rich: { html?: string; blocks?: unknown[] }) => sendMessage(chatId, richTesto(rich)));
   const editMessageRichText = vi.fn((_chatId: number, _id: number, rich: { html?: string }) =>
-    editMessageText(_chatId, _id, rich.html ?? ''),
+    editMessageText(_chatId, _id, richTesto(rich)),
   );
   const sendRichMessageDraft = vi.fn(async () => true);
   const api = {

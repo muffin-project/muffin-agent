@@ -239,7 +239,16 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
    * cosa, e un secondo timer sarebbe la «due meccanismi a ritmi diversi» che
    * questo file ha già pagato una volta.
    */
-  const draftEveryMs = Math.max(1, Math.min(minEditMs, Math.floor(negotiation.draftTtlMs / 3) || minEditMs));
+  /**
+   * Il rinnovo della bozza ha un ritmo **suo**, non quello degli edit
+   * persistenti: gli edit costano un messaggio vero e stanno dentro il
+   * pavimento della stanza, le bozze sono anteprime animate e il loro
+   * streaming deve scorrere. 1,5 s faceva arrivare il testo a scatti.
+   */
+  const DRAFT_TICK_MS = 350;
+  const draftEveryMs = Math.max(1, Math.floor(negotiation.draftTtlMs / 3) || DRAFT_TICK_MS) < DRAFT_TICK_MS
+    ? Math.max(1, Math.floor(negotiation.draftTtlMs / 3) || DRAFT_TICK_MS)
+    : DRAFT_TICK_MS;
   const draftId = prossimoDraftId++;
   let draftText = '';
   /**
@@ -406,15 +415,18 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
   }
 
   /**
-   * The turn's whole process as plain lines, in order: what the model said
-   * before acting, then each tool with its mark. This is what the final
-   * message's collapsed `details` block shows, so it is the settled record
-   * and deliberately never the still-forming answer (`liveText`).
+   * Il processo del turno, separato in due parti — la forma che l'owner ha
+   * chiesto il 2026-09-27: **quello che sta succedendo adesso** sta sotto
+   * «Processo» (visibile), **quello già successo** entra dentro il `details`
+   * (chiuso). Il consuntivo per il finale (`settled`) non ha un passo in
+   * corso: un passo lasciato a metà diventa «interrotto», come nella
+   * trascrizione persistente.
    */
-  function processLines(live: boolean): string[] {
-    const out: string[] = [];
+  function turnProcess(settled: boolean): { done: string[]; running: string | null } {
+    const done: string[] = [];
+    let running: string | null = null;
     for (const seg of segments) {
-      if (seg.plain.trim() !== '') out.push(...seg.plain.trim().split('\n'));
+      if (seg.plain.trim() !== '') done.push(...seg.plain.trim().split('\n'));
       for (const step of seg.steps) {
         const mark =
           step.state === 'running'
@@ -426,15 +438,19 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
                 : step.state === 'waiting'
                   ? '⏸'
                   : null;
-        // La bozza (`live`) porta il contatore che avanza di un passo che
-        // gira, come la riga della trascrizione; il processo consegnato al
-        // finale (`handoff`) è il consuntivo, senza tempo.
-        const elapsed =
-          live && step.state === 'running' ? ` · ${Math.max(0, Math.round((now() - step.startedAt) / 1000))}s` : '';
-        out.push((mark === null ? step.plain : `${mark} ${step.plain}`) + elapsed);
+        if (step.state === 'running') {
+          if (settled) {
+            done.push(`✗ ${step.plain} — interrotto`);
+          } else {
+            const s = Math.max(0, Math.round((now() - step.startedAt) / 1000));
+            running = `⏳ ${step.plain} · ${s}s`;
+          }
+          continue;
+        }
+        done.push(mark === null ? step.plain : `${mark} ${step.plain}`);
       }
     }
-    return out;
+    return { done, running };
   }
 
   function addStep(step: Step): void {
@@ -498,27 +514,31 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
    * mai una riga tagliata a metà. La risposta completa resta comunque nel
    * messaggio finale; l'anteprima è effimera e mostra il presente.
    */
+  /**
+   * La coda del markdown resa leggibile quando il rendering HTML eccede il
+   * limite di un messaggio: si tengono le ultime righe **intere** che ci
+   * stanno. È un'anteprima, non il messaggio: il finale resta completo.
+   */
+  function legacyTail(markdown: string): string {
+    const lines = markdown.trim().split('\n');
+    const kept: string[] = [];
+    let size = 0;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i] ?? '';
+      if (size + line.length + 1 > TELEGRAM_MAX - 64) break;
+      kept.unshift(line);
+      size += line.length + 1;
+    }
+    const text = kept.join('\n');
+    return text === '' ? '' : toTelegramHtml(text);
+  }
+
   function boundDraft(html: string): string {
     if (html.length <= TELEGRAM_MAX) return html;
     const lines = html.split('\n');
     while (lines.length > 1 && lines.join('\n').length > TELEGRAM_MAX) lines.shift();
     const last = lines[lines.length - 1] ?? '';
     return last.length <= TELEGRAM_MAX ? last : '';
-  }
-
-  /**
-   * La riga sempre visibile del `details` nella bozza: il passo che sta
-   * girando (col suo tempo), altrimenti «Processo» — la stessa parola del
-   * messaggio finale.
-   */
-  function runningSummary(): string {
-    for (let i = segments.length - 1; i >= 0; i--) {
-      const step = [...(segments[i]!.steps)].reverse().find((s) => s.state === 'running');
-      if (step === undefined) continue;
-      const s = Math.max(0, Math.round((now() - step.startedAt) / 1000));
-      return `⏳ ${step.plain} · ${s}s`;
-    }
-    return 'Processo';
   }
 
   /**
@@ -530,11 +550,12 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
    */
   function refreshDraft(push: boolean): void {
     if (stopped || draftDisabled) return;
-    // I passi dentro il `details` sono il consuntivo (senza contatore); il
-    // tempo vive solo nella riga di riepilogo, che è quella sempre visibile.
-    const process = processLines(false);
+    // Dentro il `details` i passi già fatti (senza contatore); sotto, la riga
+    // di quello che sta succedendo adesso, col suo tempo. Il presente si
+    // vede, il consuntivo si può chiudere.
+    const { done, running } = turnProcess(false);
     const answer = liveMarkdown;
-    const hasContentNow = process.length > 0 || answer !== '';
+    const hasContentNow = done.length > 0 || running !== null || answer !== '';
     // La prima pittura di contenuto va sul filo subito (deve battere un
     // handler che blocca il loop), il resto si coagula col timer.
     const firstContent = hasContentNow && !draftPaintedContent;
@@ -561,20 +582,29 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     // finale, con il passo in corso nella riga sempre visibile (`summary`) +
     // i blocchi della risposta. Così il passaggio bozza → finale cambia una
     // riga di riepilogo, non il rendering.
-    const turn = turnRichMessage({ process, answer, summary: runningSummary() });
+    const turn = turnRichMessage({ process: done, running, answer });
     // Il rendering HTML resta calcolato sempre: è il fallback se i blocchi
     // vengono rifiutati, e la forma per un parziale non strutturabile.
     const rendered = boundDraft(render(current(), true, now(), liveText));
+    // La famiglia la decide lo stesso criterio del finale: se il turno supera
+    // il tetto di protocollo, **entrambi** restano legacy — la bozza non tiene
+    // i blocchi mentre il finale li perde, perché sarebbe di nuovo il cambio
+    // forma al momento dello swap. È l'unica eccezione a «sempre blocchi», ed
+    // è la stessa su tutte e due le superfici.
     if (turn !== null && richFitsHard(turn) === null) {
       draftText = rendered;
       draftRich = turn;
     } else {
-      if (rendered === '') {
+      // Famiglia legacy: il testo (HTML) del processo, o la coda intera del
+      // markdown quando il rendering HTML non è disponibile (testo che supera
+      // il limite di un messaggio). Righe intere, mai tagliate a metà.
+      const legacy = rendered !== '' ? rendered : legacyTail(answer);
+      if (legacy === '') {
         draftText = '';
         draftRich = null;
         return;
       }
-      draftText = rendered;
+      draftText = legacy;
       draftRich = null;
     }
     if (push || firstContent) void pushDraft().then(() => scheduleDraft());
@@ -970,13 +1000,12 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
           refreshDraft(false);
           return;
         }
+        // Il markdown intero guida i blocchi; il gemello HTML solo finché ci
+        // sta. Oltre, `refreshDraft` decide la famiglia sul turno completo
+        // (blocchi se ci sta nel protocollo, legacy altrimenti) — mai una
+        // bozza a blocchi con un finale legacy.
         const rendered = toTelegramHtml(trimmed);
-        if (rendered.length > TELEGRAM_MAX) {
-          // Overflow: teniamo quello che è già in bozza invece di tagliare una
-          // riga a metà — `deliverTo` rende comunque la risposta completa.
-          return;
-        }
-        liveText = rendered;
+        liveText = rendered.length <= TELEGRAM_MAX ? rendered : '';
         liveMarkdown = trimmed;
         refreshDraft(false);
         return;
@@ -1011,7 +1040,7 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     handoff() {
       if (disabled || segments.length === 0) return null;
       const seg = segments[segments.length - 1]!;
-      const process = processLines(false);
+      const process = turnProcess(true).done;
       if (draftEnabled) {
         // Niente messaggio persistente da estendere: il processo è la bozza
         // (effimera) e `deliverTo` manderà un messaggio nuovo con il blocco
