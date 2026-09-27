@@ -14,6 +14,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isIncarnationFile } from '../../core/lock/incarnation.js';
 import { fence } from '../../core/memory/spotlight.js';
 import type { CapabilityDecl, TrustTier } from '../../core/policy/types.js';
 import type { ToolSpec } from '../providers/types.js';
@@ -699,6 +700,14 @@ function readGitExecutionTargets(repoRoot: string, gitdir: string): GitExecution
     // Missing include targets are still denied by path (already in
     // `includes`); Git itself silently skips files that are not there.
     if (!existsSync(file)) continue;
+    // Never opened: this walk runs in the process that holds claims, and
+    // opening its own incarnation file would free its lock (ADR-0092). An
+    // include that names one is unclassifiable by design, so the write is
+    // denied like any other uncertain checkout.
+    if (isIncarnationFile(file)) {
+      uncertain = true;
+      continue;
+    }
     let text: string;
     try {
       text = readFileSync(file, 'utf8');

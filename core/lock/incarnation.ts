@@ -1,8 +1,8 @@
 import DatabaseCtor from 'better-sqlite3';
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
-import { existsSync, readdirSync, statSync, unlinkSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { readdirSync, realpathSync, statSync, unlinkSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { ensurePrivateDir, tightenPrivateFile } from '../config/private-fs.js';
 
 /**
@@ -15,9 +15,11 @@ import { ensurePrivateDir, tightenPrivateFile } from '../config/private-fs.js';
  * A pid is a number the kernel hands out again, and in a container it hands it
  * out again at once: a restarted container starts a fresh pid namespace, so the
  * new gateway usually gets the pid the dead one had (7 behind `tini`). The dead
- * holder then reads as alive, the new gateway refuses to start until the hard
- * horizon (thirty minutes), and turns left `running` stay unreclaimed for up to
- * six hours (measured, 2026-09-27). The other direction is worse: a second
+ * holder then reads as alive and the new gateway is refused, restart after
+ * restart, until the hard horizon (thirty minutes); measured on 2026-09-27:
+ * about seventeen minutes, ended only because one restart happened to get
+ * another pid. Turns left `running` stay unreclaimed up to their own horizon
+ * (six hours, configured, not measured). The other direction is worse: a second
  * container on the same home has its own namespace, where the recorded pid means
  * nothing, so a live holder can read as dead and be stolen from.
  *
@@ -46,7 +48,14 @@ import { ensurePrivateDir, tightenPrivateFile } from '../config/private-fs.js';
  *   record locks on a file the moment it closes *any* descriptor of that file.
  *   SQLite knows this and keeps such descriptors open until its last connection
  *   to the file is gone; a plain `readFileSync` would silently release the
- *   holder's own lock. The sweep below only `stat`s and `unlink`s.
+ *   holder's own lock, and the holder could not even notice, because SQLite's
+ *   own bookkeeping would still believe it holds it. The sweep below only
+ *   `stat`s and `unlink`s. The holder process also runs the model's fs tools,
+ *   so the directory is on `mandatoryGuards().denyRead`
+ *   (`core/rot/guards.ts`), which covers `fs_read`, `fs_search`, `fs_list` and
+ *   the sandbox; the one in-process reader that opens paths named by content,
+ *   the git include walk of the fs write check, asks `isIncarnationFile` first
+ *   (`agent/tools/fs.ts`).
  * - **A file is deleted only after its lock was taken**, and only when it is older
  *   than `SWEEP_MIN_AGE_MS`, so a file a process has just created and not yet
  *   locked is never swept from under it.
@@ -83,6 +92,9 @@ export function pidAlive(pid: number): boolean {
  */
 export type Liveness = (pid: number, holderId: string | null) => boolean;
 
+/** The directory, beside the database, that holds the incarnation files. */
+export const INCARNATIONS_DIRNAME = 'incarnations';
+
 /** A file younger than this is never swept: its creator may not have locked it yet. */
 export const SWEEP_MIN_AGE_MS = 60_000;
 
@@ -108,7 +120,24 @@ export function incarnationOf(holderId: string | null | undefined): string | nul
  */
 export function incarnationDir(db: Database.Database): string | null {
   if (db.memory || db.name === '' || db.name === ':memory:') return null;
-  return join(dirname(resolve(db.name)), 'incarnations');
+  return join(dirname(resolve(db.name)), INCARNATIONS_DIRNAME);
+}
+
+/**
+ * Whether `path`, after following links, is an incarnation file: a UUID-named
+ * `.db` inside a directory called `incarnations`. For readers that open paths
+ * they did not choose (a git include, for instance) and must never open one of
+ * these; see "Only SQLite may open an incarnation file" above. A path that
+ * cannot be resolved is judged by its spelling.
+ */
+export function isIncarnationFile(path: string): boolean {
+  let real: string;
+  try {
+    real = realpathSync(path);
+  } catch {
+    real = resolve(path);
+  }
+  return INCARNATION_FILE.test(basename(real)) && basename(dirname(real)) === INCARNATIONS_DIRNAME;
 }
 
 type Owned = { id: string; db: Database.Database; file: string };
@@ -259,7 +288,14 @@ export function probeIncarnation(dir: string, id: string): 'alive' | 'dead' | 'u
   try {
     probe = new DatabaseCtor(file, { fileMustExist: true, timeout: 0 });
   } catch {
-    return existsSync(file) ? 'unknown' : 'dead';
+    // Only a file that is certainly gone is a dead incarnation. A file this
+    // reader cannot even stat (a directory it may not traverse) says nothing
+    // about the holder: that is the pid rule's case.
+    try {
+      return statSync(file, { throwIfNoEntry: false }) === undefined ? 'dead' : 'unknown';
+    } catch {
+      return 'unknown';
+    }
   }
   try {
     // A read needs a shared lock, which a holder's exclusive lock refuses at once.

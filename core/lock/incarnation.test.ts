@@ -2,6 +2,7 @@ import DatabaseCtor from 'better-sqlite3';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -159,6 +160,21 @@ describe('the probe', () => {
       const token = `${id}.${randomUUID()}`;
       expect(holderLiveness(db)(process.pid, token)).toBe(true);
     } finally {
+      db.close();
+    }
+  });
+
+  it('a directory the reader may not traverse is unknown, not dead: a live holder must not be stolen from', () => {
+    if (process.getuid?.() === 0) return; // root traverses anything; the case does not exist for it
+    const { db, home } = fileDb();
+    const dir = join(home, 'incarnations');
+    const id = deadIncarnation(dir);
+    chmodSync(dir, 0o000);
+    try {
+      expect(probeIncarnation(dir, id)).toBe('unknown');
+      expect(holderLiveness(db)(process.pid, `${id}.${randomUUID()}`)).toBe(true);
+    } finally {
+      chmodSync(dir, 0o700);
       db.close();
     }
   });
