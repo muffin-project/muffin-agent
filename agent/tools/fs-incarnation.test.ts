@@ -1,6 +1,15 @@
 import DatabaseCtor from 'better-sqlite3';
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -116,6 +125,64 @@ describe("the fs tools cannot release the holder's own incarnation lock", () => 
     } catch {
       // Denied or not, what matters is below: the lock must survive the check.
     }
+    expect(await otherProcessTries(dbPath)).toBe('refused');
+  }, 30_000);
+
+  /**
+   * Every other file the same write check reads, reached through a link a
+   * sandboxed command could have planted. Found by the second independent
+   * review: only the include walk was guarded, and `/proc/self/fd/N` needs no
+   * knowledge of the incarnation id at all.
+   */
+  const writeInto = (scope: FsScope): void => {
+    try {
+      fsWrite(scope, 'repo/nota.txt', 'ciao');
+    } catch {
+      // Denied or not, what matters is that the lock survives the check.
+    }
+  };
+
+  it('a `.git` that links to the incarnation file is never opened', async () => {
+    const { scope, dbPath, incarnationFile, root } = holdingFromHome();
+    mkdirSync(join(root, 'repo'));
+    symlinkSync(incarnationFile, join(root, 'repo', '.git'));
+    writeInto(scope);
+    expect(await otherProcessTries(dbPath)).toBe('refused');
+  }, 30_000);
+
+  it("a `.git` that links to /proc/self/fd/N, the holder's own descriptor, is never opened", async () => {
+    if (!existsSync('/proc/self/fd')) return; // Linux only: the magic link does not exist elsewhere
+    const { scope, dbPath, incarnationFile, root } = holdingFromHome();
+    const fd = readdirSync('/proc/self/fd').find((n) => {
+      try {
+        return readlinkSync(join('/proc/self/fd', n)) === incarnationFile;
+      } catch {
+        return false;
+      }
+    });
+    if (fd === undefined) throw new Error('nessun descrittore aperto sul file di incarnazione');
+    mkdirSync(join(root, 'repo'));
+    symlinkSync(`/proc/self/fd/${fd}`, join(root, 'repo', '.git'));
+    writeInto(scope);
+    expect(await otherProcessTries(dbPath)).toBe('refused');
+  }, 30_000);
+
+  it('a worktree `commondir` that links to the incarnation file is never opened', async () => {
+    const { scope, dbPath, incarnationFile, root } = holdingFromHome();
+    const gitdir = join(root, 'gitdir');
+    mkdirSync(gitdir);
+    symlinkSync(incarnationFile, join(gitdir, 'commondir'));
+    mkdirSync(join(root, 'repo'));
+    writeFileSync(join(root, 'repo', '.git'), `gitdir: ${gitdir}\n`);
+    writeInto(scope);
+    expect(await otherProcessTries(dbPath)).toBe('refused');
+  }, 30_000);
+
+  it('a `.git/config` that links to the incarnation file is never opened', async () => {
+    const { scope, dbPath, incarnationFile, root } = holdingFromHome();
+    mkdirSync(join(root, 'repo', '.git'), { recursive: true });
+    symlinkSync(incarnationFile, join(root, 'repo', '.git', 'config'));
+    writeInto(scope);
     expect(await otherProcessTries(dbPath)).toBe('refused');
   }, 30_000);
 });

@@ -53,9 +53,13 @@ import { ensurePrivateDir, tightenPrivateFile } from '../config/private-fs.js';
  *   `stat`s and `unlink`s. The holder process also runs the model's fs tools,
  *   so the directory is on `mandatoryGuards().denyRead`
  *   (`core/rot/guards.ts`), which covers `fs_read`, `fs_search`, `fs_list` and
- *   the sandbox; the one in-process reader that opens paths named by content,
- *   the git include walk of the fs write check, asks `isIncarnationFile` first
- *   (`agent/tools/fs.ts`).
+ *   the sandbox. The in-process reader that opens paths named by content, the
+ *   git write check of the fs tools, reads every file (`.git` pointer,
+ *   `commondir`, configs, includes) through one helper that resolves links,
+ *   `/proc/self/fd/N` included, and refuses an incarnation file
+ *   (`readGitControlFile` in `agent/tools/fs.ts`). Two independent reviews
+ *   found this class twice; any new in-process reader of a path it did not
+ *   choose must go through the same check.
  * - **A file is deleted only after its lock was taken**, and only when it is older
  *   than `SWEEP_MIN_AGE_MS`, so a file a process has just created and not yet
  *   locked is never swept from under it.
@@ -105,6 +109,8 @@ const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
  */
 const TOKEN_WITH_INCARNATION = new RegExp(`^(${UUID})\\.${UUID}$`);
 const INCARNATION_FILE = new RegExp(`^(${UUID})\\.db$`);
+/** For `isIncarnationFile`: on a case-insensitive filesystem any spelling opens the file. */
+const INCARNATION_FILE_ANY_CASE = new RegExp(`^(${UUID})\\.db$`, 'i');
 
 /** The incarnation id a token carries, or null for a token minted without one. */
 export function incarnationOf(holderId: string | null | undefined): string | null {
@@ -125,10 +131,11 @@ export function incarnationDir(db: Database.Database): string | null {
 
 /**
  * Whether `path`, after following links, is an incarnation file: a UUID-named
- * `.db` inside a directory called `incarnations`. For readers that open paths
- * they did not choose (a git include, for instance) and must never open one of
- * these; see "Only SQLite may open an incarnation file" above. A path that
- * cannot be resolved is judged by its spelling.
+ * `.db` inside a directory called `incarnations`, in any letter case. For
+ * readers that open paths they did not choose (the git write check in
+ * `agent/tools/fs.ts`) and must never open one of these; see "Only SQLite may
+ * open an incarnation file" above. A path that cannot be resolved is judged by
+ * its spelling.
  */
 export function isIncarnationFile(path: string): boolean {
   let real: string;
@@ -137,7 +144,10 @@ export function isIncarnationFile(path: string): boolean {
   } catch {
     real = resolve(path);
   }
-  return INCARNATION_FILE.test(basename(real)) && basename(dirname(real)) === INCARNATIONS_DIRNAME;
+  return (
+    INCARNATION_FILE_ANY_CASE.test(basename(real)) &&
+    basename(dirname(real)).toLowerCase() === INCARNATIONS_DIRNAME
+  );
 }
 
 type Owned = { id: string; db: Database.Database; file: string };

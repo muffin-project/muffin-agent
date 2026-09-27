@@ -629,6 +629,32 @@ function findEnclosingRepos(target: string, scopeRoot: string): { repos: Enclosi
   return { repos: out, uncertain };
 }
 
+/**
+ * The only way the git write check opens a file.
+ *
+ * Every file this walk reads is named by content: a `.git` pointer, a
+ * `commondir`, a config, an include. It runs in the process that holds claims,
+ * and a POSIX process drops all its locks on a file when it closes any
+ * descriptor of that file: a link planted in the workspace towards the
+ * process's own incarnation file, or towards `/proc/self/fd/N`, would free its
+ * lock and make every other process read it as dead (ADR-0092). So the path is
+ * resolved first, links and magic links included, an incarnation file is
+ * refused, and what is read is the resolved path that was checked.
+ *
+ * `null` means refused: callers treat it as an unclassifiable checkout, which
+ * denies the write.
+ */
+function readGitControlFile(path: string): string | null {
+  let real: string;
+  try {
+    real = realpathSync(path);
+  } catch {
+    real = resolve(path);
+  }
+  if (isIncarnationFile(real)) return null;
+  return readFileSync(real, 'utf8');
+}
+
 /** The real gitdir for `repoRoot`, following a `.git` worktree/submodule pointer file. */
 function resolveGitdir(repoRoot: string, gitPath: string): string | null {
   try {
@@ -636,7 +662,9 @@ function resolveGitdir(repoRoot: string, gitPath: string): string | null {
     if (st === undefined) return null;
     if (st.isDirectory()) return gitPath;
     if (st.isFile()) {
-      const body = readFileSync(gitPath, 'utf8').trim();
+      const read = readGitControlFile(gitPath);
+      if (read === null) return null;
+      const body = read.trim();
       const m = /^gitdir\s*:\s*(.+)\s*$/.exec(body);
       if (!m?.[1]) return null;
       const pointed = m[1].trim();
@@ -658,7 +686,7 @@ function gitConfigCandidates(gitdir: string): { files: string[]; uncertain: bool
   if (existsSync(commondirFile)) {
     let body: string | null = null;
     try {
-      body = readFileSync(commondirFile, 'utf8').trim();
+      body = readGitControlFile(commondirFile)?.trim() ?? null;
     } catch {
       body = null;
     }
@@ -700,17 +728,16 @@ function readGitExecutionTargets(repoRoot: string, gitdir: string): GitExecution
     // Missing include targets are still denied by path (already in
     // `includes`); Git itself silently skips files that are not there.
     if (!existsSync(file)) continue;
-    // Never opened: this walk runs in the process that holds claims, and
-    // opening its own incarnation file would free its lock (ADR-0092). An
-    // include that names one is unclassifiable by design, so the write is
-    // denied like any other uncertain checkout.
-    if (isIncarnationFile(file)) {
-      uncertain = true;
-      continue;
-    }
+    // Refused incarnation files and unreadable files alike make the checkout
+    // unclassifiable, and the write is denied (see `readGitControlFile`).
     let text: string;
     try {
-      text = readFileSync(file, 'utf8');
+      const read = readGitControlFile(file);
+      if (read === null) {
+        uncertain = true;
+        continue;
+      }
+      text = read;
     } catch {
       uncertain = true;
       continue;
