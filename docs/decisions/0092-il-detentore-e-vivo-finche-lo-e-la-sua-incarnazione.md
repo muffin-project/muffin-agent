@@ -93,6 +93,17 @@ falso «vivo» costa disponibilità.
   Su un filesystem di rete non funzionano né l'uno né l'altro.
 - Chi può scrivere nella home può cancellare il file di un detentore vivo e
   farlo risultare morto; chi può scrivere nella home ha già il database in mano.
+- Gli id di incarnazione non sono segreti: `muffin.db` è leggibile anche dalla
+  sandbox. Nessuna difesa di questo ADR ne dipende, e nessuna futura deve.
+- Residuo di race: ogni lettore interno controlla il percorso e poi lo apre
+  (`fs_read` con `O_NOFOLLOW`, che copre solo l'ultimo componente; `fs_search`,
+  `fs_edit`, la copia di undo, la consegna di `send_file`, l'helper del
+  controllo git). Uno scambio di link fra le due chiamate potrebbe ancora far
+  aprire il file. Serve un secondo processo che agisca nello stesso istante: il
+  gateway serializza il lavoro del modello, le tool call di un round sono
+  sequenziali e i comandi della sandbox non sopravvivono alla chiamata. Chiudere
+  la classe del tutto vuol dire tenere il lock fuori dal processo detentore
+  (vedi «Cosa la ribalta»).
 - Residuo: `muffin gateway stop` lanciato da un altro container manda il
   segnale a un pid del proprio namespace. Prima la regola del pid lo faceva a
   caso; ora `readGateway` vede vivo un gateway di un altro container, quindi il

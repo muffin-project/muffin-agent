@@ -121,7 +121,9 @@ lato `readGateway` sono quindi sorvegliati dall'accettazione, non dagli unit.
   l'id), o un `commondir` che punta al file liberavano il lock. Correzione:
   tutte le letture del controllo git passano da un solo helper che risolve i
   link e rifiuta un file di incarnazione. `agent/tools/fs-incarnation.test.ts`
-  copre i sette casi, rosso prima di ciascuna correzione e verde dopo; le
+  copre i sette casi, rosso prima di ciascuna correzione e verde dopo, tranne
+  «a `.git/config` that links to the incarnation file», che era già verde prima
+  della seconda correzione e sorveglia la risoluzione dei link; le
   mutazioni (via la voce di `denyRead`, via il controllo nell'helper, via la
   risoluzione dei link) lo fanno tornare rosso. La stessa revisione ha
   verificato gli altri lettori interni (vault, skill, `send_file`, allegati,
