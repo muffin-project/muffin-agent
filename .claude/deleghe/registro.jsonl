@@ -317,3 +317,5 @@
 {"id":"codex-shell-inventory","chiuso":"interrotta: quota modello, nessuna evidenza usabile","quando":"2026-09-09T23:56:52.763Z"}
 {"id":"codex-secret-flow","chiuso":"interrotta: quota modello, nessuna evidenza usabile","quando":"2026-09-09T23:56:52.820Z"}
 {"id":"codex-repl-provider","chiuso":"interrotta: quota modello, nessuna evidenza usabile","quando":"2026-09-09T23:56:52.872Z"}
+{"id":"a6c97a217e4189fed","slug":"giudice-lock-holder-liveness-by-incarnation","cosa":"Fresh independent CRITICAL judge for slice/lock-holder-liveness-by-incarnation at f67308f8: verdict only, no commits.","quando":"2026-09-27T16:11:19.385Z"}
+{"id":"a6c97a217e4189fed","chiuso":"verdict ADJUST at f67308f8: fs_search/fs_read in the holder process released its own incarnation lock (live holder read dead); repaired with denyRead, git include guard and regression test; probe EACCES and eval neighbour follow-ups applied","quando":"2026-09-27T17:00:26.709Z"}
