@@ -17,7 +17,7 @@ const GRUPPO = negoziazioneTelegram('group');
  * `now` is `Date.now` under fake timers and `setTimeout` is the faked one.
  */
 
-type Call = { method: string; text?: string; messageId?: number; draftId?: number; at?: number };
+type Call = { method: string; text?: string; messageId?: number; draftId?: number; at?: number; rich?: unknown };
 
 function recordingApi(fail: { send?: boolean; edit?: boolean; draft?: boolean } = {}): { api: TelegramApiLike; calls: Call[] } {
   const calls: Call[] = [];
@@ -63,7 +63,7 @@ function recordingApi(fail: { send?: boolean; edit?: boolean; draft?: boolean } 
     },
     sendRichMessageDraft: async (_chatId: number, draftId: number, rich: { html?: string; blocks?: unknown[] }) => {
       if (fail.draft) throw new Error('simulato');
-      calls.push({ method: 'sendMessageDraft', text: richPlain(rich), draftId, at: Date.now() });
+      calls.push({ method: 'sendMessageDraft', text: richPlain(rich), draftId, at: Date.now(), rich });
       return true;
     },
   } as unknown as TelegramApiLike;
@@ -78,10 +78,13 @@ function recordingApi(fail: { send?: boolean; edit?: boolean; draft?: boolean } 
 function richPlain(rich: { html?: string; blocks?: unknown[] }): string {
   const blockText = (b: unknown): string => {
     if (b === null || typeof b !== 'object') return '';
-    const o = b as { text?: unknown; blocks?: unknown[] };
-    if (typeof o.text === 'string') return o.text;
-    if (Array.isArray(o.blocks)) return o.blocks.map(blockText).join('\n');
-    return '';
+    const o = b as { text?: unknown; summary?: unknown; blocks?: unknown[] };
+    const parts: string[] = [];
+    // `summary` è sempre visibile: nella bozza porta il passo in corso.
+    if (typeof o.summary === 'string') parts.push(o.summary);
+    if (typeof o.text === 'string') parts.push(o.text);
+    if (Array.isArray(o.blocks)) parts.push(o.blocks.map(blockText).join('\n'));
+    return parts.join('\n');
   };
   if (rich.html !== undefined) return rich.html;
   return Array.isArray(rich.blocks) ? rich.blocks.map(blockText).join('\n') : '';
@@ -279,6 +282,29 @@ describe('stop() is the last edit, never a deletion', () => {
     const stopping = t.stop();
     await vi.advanceTimersByTimeAsync(2_000);
     await expect(stopping).resolves.toBeUndefined();
+  });
+});
+
+describe('the draft is the final shape (owner, 2026-09-27)', () => {
+  it('details collapsed as in the final, the running step in the always-visible summary', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    t.report(start('shell_run', { command: 'npm test' }));
+    await vi.advanceTimersByTimeAsync(0);
+    await t.stop();
+
+    const draft = calls.filter((c) => c.method === 'sendMessageDraft').at(-1)!;
+    const blocks = (draft.rich as { blocks?: { type: string; summary?: string; is_open?: boolean; blocks?: unknown[] }[] })
+      ?.blocks ?? [];
+    const details = blocks.find((b) => b.type === 'details');
+    expect(details).toBeDefined();
+    // Chiuso come nel finale: il passaggio non cambia l'altezza del messaggio.
+    expect(details!.is_open).toBeUndefined();
+    // Il progresso resta visibile senza aprire il processo.
+    expect(details!.summary).toContain('⏳ guardo con un comando: npm test');
+    expect(details!.summary).toMatch(/· \d+s/);
+    // Il passo dentro il processo resta il consuntivo, senza contatore.
+    expect(JSON.stringify(details!.blocks)).not.toMatch(/· \d+s/);
   });
 });
 

@@ -25,11 +25,11 @@ import { richFitsHard, richFromHtml, thinkingRich, turnRichMessage, type Outboun
  * accumulate in a `sendMessageDraft` (Bot API 10.2+) — the owner's Stop
  * control rides it — and **nothing persistent is created while the model
  * works**. The draft is built from the **same blocks as the final** (the
- * process in a `details` block, the answer as native blocks), so the swap at
- * the end is a fold of the process, not a second rendering; while the model
- * thinks with nothing to show, the placeholder is the Bot API 10.3 `thinking`
- * block. When the answer is ready, `connector.ts#deliverTo` sends one rich
- * message of the same shape. A process that dies mid-turn leaves nothing
+ * process in a `details` block, collapsed in both, the answer as native
+ * blocks), so the swap at the end changes the summary line, not the
+ * rendering; while the model thinks with nothing to show, the placeholder is
+ * the Bot API 10.3 `thinking` block. When the answer is ready,
+ * `connector.ts#deliverTo` sends one rich message of the same shape. A process that dies mid-turn leaves nothing
  * behind, and the chat keeps exactly one durable message per turn (choice B,
  * 2026-09-26; draft shape aligned 2026-09-27).
  *
@@ -507,6 +507,21 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
   }
 
   /**
+   * La riga sempre visibile del `details` nella bozza: il passo che sta
+   * girando (col suo tempo), altrimenti «Processo» — la stessa parola del
+   * messaggio finale.
+   */
+  function runningSummary(): string {
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const step = [...(segments[i]!.steps)].reverse().find((s) => s.state === 'running');
+      if (step === undefined) continue;
+      const s = Math.max(0, Math.round((now() - step.startedAt) / 1000));
+      return `⏳ ${step.plain} · ${s}s`;
+    }
+    return 'Processo';
+  }
+
+  /**
    * L'unico scrittore della bozza in modalità draft: rende il processo
    * accumulato (preambolo + passi) più la risposta che si forma, e lo manda
    * come anteprima. Sostituisce, in DM, sia `syncAll` sia la vecchia logica
@@ -515,7 +530,9 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
    */
   function refreshDraft(push: boolean): void {
     if (stopped || draftDisabled) return;
-    const process = processLines(true);
+    // I passi dentro il `details` sono il consuntivo (senza contatore); il
+    // tempo vive solo nella riga di riepilogo, che è quella sempre visibile.
+    const process = processLines(false);
     const answer = liveMarkdown;
     const hasContentNow = process.length > 0 || answer !== '';
     // La prima pittura di contenuto va sul filo subito (deve battere un
@@ -539,9 +556,11 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       return;
     }
 
-    // La stessa forma del finale: `details` aperto (i passi si vedono mentre
-    // accadono) + i blocchi della risposta. Il finale lo richiude.
-    const turn = turnRichMessage({ process, answer, detailsOpen: true });
+    // La stessa forma del finale: `details` **chiuso** come nel messaggio
+    // finale, con il passo in corso nella riga sempre visibile (`summary`) +
+    // i blocchi della risposta. Così il passaggio bozza → finale cambia una
+    // riga di riepilogo, non il rendering.
+    const turn = turnRichMessage({ process, answer, summary: runningSummary() });
     if (turn !== null && richFitsHard(turn) === null) {
       draftText = '';
       draftRich = turn;

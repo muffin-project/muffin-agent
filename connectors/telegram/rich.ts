@@ -167,10 +167,14 @@ export function turnRichMessage(input: {
   /** The model's answer, markdown, exactly as it arrived. */
   answer: string;
   /**
-   * `details` aperto. La bozza mostra il processo aperto (i passi si vedono
-   * mentre accadono); il messaggio finale lo richiude. Tutto il resto della
-   * forma è identico, così il passaggio bozza → messaggio è una piega e non
-   * un secondo rendering.
+   * Testo sempre visibile del blocco `details`. La bozza ci mette il passo in
+   * corso («⏳ eseguo un comando: npm test · 12s»), così il progresso resta
+   * visibile **senza** aprire il processo; il finale usa «Processo».
+   */
+  summary?: string;
+  /**
+   * `details` aperto. La bozza lo lascia chiuso come il finale, così il
+   * passaggio bozza → messaggio cambia una riga, non l'altezza del messaggio.
    */
   detailsOpen?: boolean;
 }): OutboundRich | null {
@@ -184,7 +188,7 @@ export function turnRichMessage(input: {
   if (process.length > 0) {
     blocks.push({
       type: 'details',
-      summary: 'Processo',
+      summary: input.summary ?? 'Processo',
       blocks: process.map((line) => ({ type: 'paragraph' as const, text: line })),
       ...(input.detailsOpen === true ? { is_open: true as const } : {}),
     });
