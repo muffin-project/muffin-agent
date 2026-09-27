@@ -20,9 +20,10 @@ richieda ore. I container lo falsificano, in due modi misurati:
 - **Riavvio.** Un container riavviato dopo un kill duro (OOM, SIGKILL) apre un
   nuovo namespace pid, e il nuovo processo prende quasi sempre il pid del
   morto. Il gateway nuovo vede vivo il detentore (sé stesso), esce con 75 e la
-  restart policy lo rilancia a vuoto: misurati 24 rifiuti in circa 17 minuti,
-  fino al limite di 30; i turni rimasti `running` non vengono marcati
-  interrotti per ore.
+  restart policy lo rilancia a vuoto. Misurati 24 rifiuti in circa 17 minuti,
+  finiti solo perché un riavvio ha preso un altro pid; il limite è
+  l'orizzonte duro di 30 minuti. I turni rimasti `running` non vengono marcati
+  interrotti fino al loro orizzonte (6 ore, configurato, non misurato).
 - **Vicino.** Un secondo container sulla stessa home ha un altro namespace: lì
   il pid della riga non indica nulla. Un detentore vivo può risultare morto e
   venire derubato, uno morto può risultare vivo.
@@ -62,7 +63,15 @@ falso «vivo» costa disponibilità.
 6. **Solo SQLite apre quei file.** Un processo POSIX perde tutti i lock su un
    file quando chiude un qualunque descrittore di quel file; SQLite lo sa e
    tiene aperti i descrittori finché la sua ultima connessione al file resta.
-   Una lettura con `fs` dal processo detentore rilascerebbe il suo lock.
+   Una lettura con `fs` dal processo detentore rilascerebbe il suo lock senza
+   che il detentore possa accorgersene. Il processo detentore esegue anche i
+   tool fs del modello, e il workspace di default del `muffin` interattivo è la
+   directory da cui parte, `$HOME` compresa: quindi `incarnations/` sta in
+   `mandatoryGuards().denyRead` (copre `fs_read`, `fs_search`, `fs_list` e la
+   sandbox, che la maschera), e l'unico lettore interno che apre percorsi scelti
+   dal contenuto, la lettura degli `include` git nel controllo di scrittura,
+   tratta un file di incarnazione come non classificabile e nega la scrittura
+   senza aprirlo.
 
 ## Alternative scartate
 
@@ -82,9 +91,11 @@ falso «vivo» costa disponibilità.
   Su un filesystem di rete non funzionano né l'uno né l'altro.
 - Chi può scrivere nella home può cancellare il file di un detentore vivo e
   farlo risultare morto; chi può scrivere nella home ha già il database in mano.
-- Residuo invariato: `muffin gateway stop` lanciato da un altro container manda
-  il segnale a un pid del proprio namespace. Il percorso documentato è
-  `exec` nello stesso container.
+- Residuo: `muffin gateway stop` lanciato da un altro container manda il
+  segnale a un pid del proprio namespace. Prima la regola del pid lo faceva a
+  caso; ora `readGateway` vede vivo un gateway di un altro container, quindi il
+  segnale parte più spesso, verso il processo locale con quel pid (sempre e
+  solo SIGTERM). Il percorso documentato è `exec` nello stesso container.
 - Residuo non toccato qui: il fencing di ogni effetto esterno fra due
   checkpoint (vedi Contesto). È una claim a parte.
 - macOS non è misurato: il meccanismo è lo stesso (lock POSIX di SQLite), la

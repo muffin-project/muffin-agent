@@ -70,8 +70,17 @@ con il `DurableLock` di produzione su una home in bind mount, immagine
 | Caso | `origin/dev` 59501fd5 | con ADR-0092 |
 |---|---|---|
 | riavvio: il rimpiazzo di un container ucciso (stesso pid 1) | rifiutato | prende il lock subito |
-| vicino, mentre il detentore vive | rifiutato | rifiutato |
+| vicino, mentre il detentore vive (pid 107 nel suo container) | **prende il lock di un detentore vivo** | rifiutato |
 | vicino, subito dopo `kill -9` del detentore | rifiutato (vede vivo il proprio pid 1) | prende il lock subito |
+
+Il detentore del caso «vicino» parte con un pid alto (107) di proposito. Con un
+pid piccolo il caso passava per caso anche sul baseline: il `node` del lettore
+ha thread con id piccoli, e `kill(tid, 0)` risponde anche per un thread
+(misurato con pid 7).
+
+Nella sandbox di produzione (`SandboxExecutor` con `mandatoryGuards`,
+bubblewrap) la cartella `incarnations/` risulta vuota mentre l'host vede il file
+dell'incarnazione: la maschera di `denyRead` la copre.
 
 Test rossi prima della modifica e verdi dopo:
 
@@ -84,7 +93,11 @@ Test rossi prima della modifica e verdi dopo:
 
 Mutazioni, ciascuna rossa: la liveness che ignora l'incarnazione (unit, A1,
 B5); il file non tenuto bloccato (unit, compreso il controllo dallo stesso
-processo); i token coniati senza incarnazione (unit).
+processo); i token coniati senza incarnazione in `incarnation.ts` (unit).
+La revisione indipendente ne ha aggiunte due, prese solo dall'accettazione: i
+token dei turni coniati senza incarnazione (`core/turns` resta verde, B5
+rosso) e `readGateway` che ignora `holder_id` (A1 rosso). Il lato turni e il
+lato `readGateway` sono quindi sorvegliati dall'accettazione, non dagli unit.
 
 ## Evidenza contraria e limiti
 
@@ -96,7 +109,16 @@ processo); i token coniati senza incarnazione (unit).
   rivendicazione fatta a nome di un altro pid (ADR-0092, punto 4).
 - La chiusura di un descrittore rilascia tutti i lock POSIX del processo sul
   file: il meccanismo regge solo se il processo detentore non apre quei file
-  fuori da SQLite. Nessun codice attuale lo fa; un test lo sorveglia.
+  fuori da SQLite. La prima versione affermava che nessun codice lo facesse, ed
+  era falso: la revisione indipendente ha mostrato che `fs_search` e `fs_read`,
+  che girano nel processo detentore con il workspace di default `$HOME`,
+  aprivano il file e liberavano il lock (un turno vivo marcato interrotto da un
+  altro processo). Riprodotto anche il terzo lettore interno, la lettura degli
+  `include` git. Correzione: `incarnations/` in `denyRead` e un controllo nella
+  lettura degli `include`; `agent/tools/fs-incarnation.test.ts` è rosso prima
+  e verde dopo, e due mutazioni (via la voce di `denyRead`, via il controllo)
+  lo fanno tornare rosso. Gli altri lettori interni (vault, skill, `send_file`,
+  allegati) sono confinati a directory che non contengono `incarnations/`.
 - Solo Linux misurato (WSL2 e container Debian). macOS usa gli stessi lock
   POSIX tramite SQLite, ma non è provato.
 - Filesystem di rete: non supportati, come non lo è già `muffin.db`.
