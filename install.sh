@@ -362,7 +362,50 @@ fi
 if [ "$(id -u)" = 0 ]; then
   root_fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
   [ "$(uname -s)" = Linux ] || root_fail "root-launched installation is supported only on Linux."
-  for tool in getent useradd usermod userdel stat runuser mktemp; do
+
+  # The `--paths` contract — print, change nothing — holds on a root login too:
+  # answer the informational invocations before touching packages, the account
+  # or the service. `--help` and an unknown flag behave like the non-root
+  # parser instead of provisioning the host first.
+  ROOT_PATHS_ONLY=0
+  for arg in "$@"; do
+    case "$arg" in
+      --paths) ROOT_PATHS_ONLY=1 ;;
+      -h | --help)
+        cat >&2 <<'USAGE'
+muffin install.sh [--personal | --checkout] [--paths] [--uninstall]
+
+  (default)     from a root login: a locked, non-login muffin account owns
+                /var/lib/muffin; build, setup and gateway run as that account
+  --paths       print the resolved root-managed paths and exit, changing nothing
+  --uninstall   remove the root dispatcher, keeping the account and data
+USAGE
+        exit 0
+        ;;
+      --personal | --checkout | --uninstall) : ;;
+      -*) root_fail "unknown argument: $arg (see --help)" ;;
+    esac
+  done
+  if [ "$ROOT_PATHS_ONLY" = 1 ]; then
+    ROOT_CMD=${MUFFIN_CMD:-muffin}
+    if getent passwd muffin >/dev/null 2>&1; then
+      [ -f /var/lib/.muffin-root-install ] && [ ! -L /var/lib/.muffin-root-install ] ||
+        root_fail "refusing to adopt an existing unmarked muffin account."
+      ROOT_CMD=$(sed -n 's/^command=//p' /var/lib/.muffin-root-install)
+    elif [ -z "${MUFFIN_CMD:-}" ] && command -v muffin >/dev/null 2>&1; then
+      ROOT_CMD=muffin-agent
+    fi
+    say "muffin installer — resolved paths (root-managed)"
+    say "  mode:      root"
+    say "  service:   muffin (locked, non-login)"
+    say "  program:   /var/lib/muffin/.local/share/muffin"
+    say "  bin:       /var/lib/muffin/.local/bin"
+    say "  data home: /var/lib/muffin/.muffin (owned by the runtime, never touched by this installer)"
+    say "  command:   /usr/local/bin/$ROOT_CMD"
+    exit 0
+  fi
+
+  for tool in getent useradd usermod userdel stat runuser mktemp passwd; do
     command -v "$tool" >/dev/null 2>&1 || root_fail "required root provisioning command is missing: $tool"
   done
   [ -f "$0" ] && [ ! -L "$0" ] || root_fail "installer must be a regular file; run the public bootstrap or a complete checkout."
@@ -428,6 +471,9 @@ if [ "$(id -u)" = 0 ]; then
     ROOT_PACKAGES="$ROOT_PACKAGES python3-minimal"
   fi
   if [ -n "$ROOT_PACKAGES" ]; then
+    if [ "${MUFFIN_NO_APT:-}" = 1 ]; then
+      root_fail "missing required host tools and MUFFIN_NO_APT=1 forbids installing them:$ROOT_PACKAGES"
+    fi
     command -v apt-get >/dev/null 2>&1 || root_fail "missing required host tools and apt-get is unavailable:$ROOT_PACKAGES"
     DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null || root_fail "apt package index update failed."
     # The value contains only package names from the fixed list above.

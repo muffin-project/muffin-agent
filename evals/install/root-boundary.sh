@@ -120,6 +120,53 @@ fi
 rm -f /usr/local/bin/muffin-agent
 CONFLICT_CREATED=0
 
+# Informational invocations must not provision anything: `--paths` is
+# "print, change nothing", `--help` is not a reason to call apt or create an
+# account, and an unknown flag must be refused before any host change.
+check_no_provisioning() {
+  if getent passwd muffin >/dev/null || getent group muffin >/dev/null || [ -e /var/lib/muffin ] ||
+    [ -e /var/lib/.muffin-root-install ] || [ -e /usr/local/bin/muffin ]; then
+    echo "root boundary eval: $1 provisioned the host (account, home, marker or command)" >&2
+    exit 1
+  fi
+}
+
+set +e
+env -i HOME="$LAB/home" PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  sh "$LAB/install.sh" --paths >"$LAB/info-paths.log" 2>&1
+PATHS_RC=$?
+set -e
+if [ "$PATHS_RC" -ne 0 ] || ! grep -Fq 'resolved paths (root-managed)' "$LAB/info-paths.log"; then
+  cat "$LAB/info-paths.log" >&2
+  echo "root boundary eval: --paths did not answer with the resolved root paths" >&2
+  exit 1
+fi
+check_no_provisioning "--paths"
+
+set +e
+env -i HOME="$LAB/home" PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  sh "$LAB/install.sh" --help >"$LAB/info-help.log" 2>&1
+HELP_RC=$?
+set -e
+if [ "$HELP_RC" -ne 0 ] || ! grep -Fq 'muffin install.sh' "$LAB/info-help.log"; then
+  cat "$LAB/info-help.log" >&2
+  echo "root boundary eval: --help did not answer with the usage" >&2
+  exit 1
+fi
+check_no_provisioning "--help"
+
+set +e
+env -i HOME="$LAB/home" PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  sh "$LAB/install.sh" --definitely-not-a-flag >"$LAB/info-unknown.log" 2>&1
+UNKNOWN_RC=$?
+set -e
+if [ "$UNKNOWN_RC" -eq 0 ] || ! grep -Fiq 'unknown argument' "$LAB/info-unknown.log"; then
+  cat "$LAB/info-unknown.log" >&2
+  echo "root boundary eval: an unknown flag was not refused" >&2
+  exit 1
+fi
+check_no_provisioning "--definitely-not-a-flag"
+
 # An intentionally unmanaged account must be rejected without creating/adopting
 # its home or marker. This falsifies the account collision path.
 useradd --system --no-create-home --home-dir /var/lib/muffin --shell /usr/sbin/nologin muffin
