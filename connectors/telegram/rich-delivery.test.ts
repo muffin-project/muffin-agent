@@ -89,7 +89,7 @@ describe('rich delivery · the happy paths', () => {
     const store = new TelegramDeliveryStore(db);
     const { api, calls } = trackingApi();
 
-    await expect(deliverTelegram(store, api, 'turn-rich', richRequest(TABLE), at)).resolves.toBe('sent');
+    await expect(deliverTelegram(store, api, 'turn-rich', richRequest(TABLE), at, 0)).resolves.toBe('sent');
 
     expect(calls.filter((c) => c.method === 'sendRichMessage')).toHaveLength(1);
     expect(calls.some((c) => c.method === 'sendMessage')).toBe(false);
@@ -104,7 +104,7 @@ describe('rich delivery · the happy paths', () => {
     const store = new TelegramDeliveryStore(db);
     const { api, calls } = trackingApi();
 
-    await expect(deliverTelegram(store, api, 'turn-rich-long', richRequest(markdown), at)).resolves.toBe('sent');
+    await expect(deliverTelegram(store, api, 'turn-rich-long', richRequest(markdown), at, 0)).resolves.toBe('sent');
 
     expect(calls.filter((c) => c.method === 'sendRichMessage')).toHaveLength(1);
     expect(calls.some((c) => c.method === 'sendMessage')).toBe(false);
@@ -116,7 +116,7 @@ describe('rich delivery · the happy paths', () => {
     const store = new TelegramDeliveryStore(db);
     const { api, calls } = trackingApi();
 
-    await expect(deliverTelegram(store, api, 'turn-plain', legacyRequest(markdown), at)).resolves.toBe('sent');
+    await expect(deliverTelegram(store, api, 'turn-plain', legacyRequest(markdown), at, 0)).resolves.toBe('sent');
 
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ method: 'sendMessage' });
@@ -131,7 +131,7 @@ describe('rich delivery · the happy paths', () => {
     const plan = planRich(TABLE);
     if (plan.mode !== 'rich') throw new Error('setup');
     expect(() =>
-      store.plan('turn-broken', [{ operation: 'send', chatId: 1, threadId: null, replyTo: null, editMessageId: null, html: 'x', kind: 'rich', rich: plan.message }], at()),
+      store.plan('turn-broken', [{ operation: 'send', chatId: 1, threadId: null, replyTo: null, editMessageId: null, html: 'x', kind: 'rich', rich: plan.message }], at(), 0),
     ).toThrow(/senza fallback/);
   });
 });
@@ -150,7 +150,7 @@ describe('rich delivery · deterministic rejection falls back without loss', () 
     const store = new TelegramDeliveryStore(db);
     const { api, calls } = rejectedOnce();
 
-    await expect(deliverTelegram(store, api, 'turn-fallback', richRequest(TABLE), at)).resolves.toBe('sent');
+    await expect(deliverTelegram(store, api, 'turn-fallback', richRequest(TABLE), at, 0)).resolves.toBe('sent');
 
     // Exactly one rich attempt — a refusal is pronounced, never retried.
     expect(calls.filter((c) => c.method === 'sendRichMessage')).toHaveLength(1);
@@ -169,7 +169,7 @@ describe('rich delivery · deterministic rejection falls back without loss', () 
     const store = new TelegramDeliveryStore(db);
     const { api, calls } = rejectedOnce();
 
-    await expect(deliverTelegram(store, api, 'turn-fallback-long', richRequest(markdown), at)).resolves.toBe('sent');
+    await expect(deliverTelegram(store, api, 'turn-fallback-long', richRequest(markdown), at, 0)).resolves.toBe('sent');
 
     const sends = calls.filter((c) => c.method === 'sendMessage');
     expect(sends.length).toBeGreaterThan(1);
@@ -185,12 +185,12 @@ describe('rich delivery · deterministic rejection falls back without loss', () 
     const first = new TelegramDeliveryStore(db);
     const { api, calls } = rejectedOnce();
 
-    await expect(deliverTelegram(first, api, 'turn-replay', richRequest(TABLE), at)).resolves.toBe('sent');
+    await expect(deliverTelegram(first, api, 'turn-replay', richRequest(TABLE), at, 0)).resolves.toBe('sent');
     const afterFirst = calls.length;
 
     // A crash and a second process: the frozen rows decide, not a re-render.
     const second = new TelegramDeliveryStore(db);
-    await expect(deliverTelegram(second, api, 'turn-replay', richRequest(TABLE), at)).resolves.toBe('sent');
+    await expect(deliverTelegram(second, api, 'turn-replay', richRequest(TABLE), at, 0)).resolves.toBe('sent');
 
     expect(calls).toHaveLength(afterFirst);
     expect(calls.filter((c) => c.method === 'sendRichMessage')).toHaveLength(1);
@@ -206,7 +206,7 @@ describe('rich delivery · deterministic rejection falls back without loss', () 
     const { api, calls } = trackingApi();
     (api.sendRichMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new TelegramError(400, 'Bad Request: rich message 40000 chars over the 32768 protocol maximum'));
 
-    await expect(deliverTelegram(store, api, 'turn-oversize', richRequest(TABLE), at)).resolves.toBe('sent');
+    await expect(deliverTelegram(store, api, 'turn-oversize', richRequest(TABLE), at, 0)).resolves.toBe('sent');
     expect(calls.some((c) => c.method === 'sendMessage')).toBe(true);
   });
 });
@@ -221,8 +221,8 @@ describe('rich delivery · ambiguous failure never duplicates', () => {
       throw new TypeError('response stream closed');
     });
 
-    await expect(deliverTelegram(store, api, 'turn-ambiguous', richRequest(TABLE), at)).resolves.toBe('possibly_sent');
-    await expect(deliverTelegram(store, api, 'turn-ambiguous', richRequest(TABLE), at)).resolves.toBe('possibly_sent');
+    await expect(deliverTelegram(store, api, 'turn-ambiguous', richRequest(TABLE), at, 0)).resolves.toBe('possibly_sent');
+    await expect(deliverTelegram(store, api, 'turn-ambiguous', richRequest(TABLE), at, 0)).resolves.toBe('possibly_sent');
 
     expect(calls.filter((c) => c.method === 'sendRichMessage')).toHaveLength(1);
     expect(calls.some((c) => c.method === 'sendMessage')).toBe(false);
@@ -264,7 +264,7 @@ describe('rich delivery · edits and thread routing', () => {
       { ...legacyEdit, kind: 'rich' as const, rich: plan.message, fallback: [legacyEdit, legacyOverflow] },
     ];
 
-    await expect(deliverTelegram(store, api, 'turn-rich-edit', requested, at)).resolves.toBe('sent');
+    await expect(deliverTelegram(store, api, 'turn-rich-edit', requested, at, 0)).resolves.toBe('sent');
 
     // One rich edit attempt on the owned message, then the frozen legacy road.
     const richEdits = calls.filter((c) => c.method === 'editMessageRichText');
@@ -303,7 +303,7 @@ describe('rich delivery · edits and thread routing', () => {
       },
     ];
 
-    await expect(deliverTelegram(store, api, 'turn-rich-same', requested, at)).resolves.toBe('sent');
+    await expect(deliverTelegram(store, api, 'turn-rich-same', requested, at, 0)).resolves.toBe('sent');
     expect(calls.some((c) => c.method === 'editMessageText')).toBe(false);
     expect(store.parts('turn-rich-same')).toMatchObject([{ kind: 'rich', status: 'sent' }]);
   });

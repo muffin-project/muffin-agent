@@ -593,7 +593,16 @@ export async function recover(
       existing.delivery === 'undeliverable';
     if (delivered) {
       // Its fire was answered (the answer may have been the "lease yielded"
-      // diagnostic): nothing left for this event to carry.
+      // diagnostic): nothing left for this event to carry. A `settledAt` that
+      // landed before the turn's own delivery column did gets repaired the
+      // same way the `done` branch below repairs it.
+      if (
+        existing.delivery !== 'sent' &&
+        existing.delivery !== 'possibly_sent' &&
+        existing.delivery !== 'undeliverable'
+      ) {
+        hooks.recordDelivery(workId, hooks.wireWasUncertain(workId) ? 'possibly_sent' : 'sent');
+      }
       hooks.finish(ctx);
       return { kind: 'recovered', workId, delivery: 'already' };
     }

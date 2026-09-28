@@ -169,6 +169,7 @@ describe('deliverTelegram: ogni pezzo, non solo quello che cita', () => {
     let n = 0;
     await deliverTelegram(store, api, 't1', [pezzo('a', 0), pezzo('b', 1), pezzo('c', 2)], () =>
       new Date(1_700_000_000_000 + n++).toISOString(),
+    0,
     );
 
     expect(opzioni).toHaveLength(3);
@@ -192,7 +193,7 @@ describe('deliverTelegram: ogni pezzo, non solo quello che cita', () => {
       PRIMARY KEY (turn_id, part_index));`);
 
     const store = new TelegramDeliveryStore(db);
-    const parti = store.plan('t1', [pezzo('a', 0)], '2026-09-04T00:00:00.000Z');
+    const parti = store.plan('t1', [pezzo('a', 0)], '2026-09-04T00:00:00.000Z', 0);
 
     expect(parti[0]!.threadId).toBe(TOPIC_BUG);
     db.close();

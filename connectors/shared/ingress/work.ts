@@ -160,6 +160,13 @@ export async function runWork(
       if ('why' in continued) throw new ContinuationGone(req.workId);
       return continued;
     }
+    // The bind committed an identity that already has a row, yet the
+    // re-derivation no longer names it as a continuation (the invitation
+    // window or the ambiguity-question TTL closed while this event waited
+    // for the lane). `runTurn` would `INSERT` under that id and die on the
+    // primary key; the durable row wins, and `recover` resolves this event
+    // against it — the same road as a vanished continuation target.
+    if (deps.loop.turns.get(req.workId) !== null) throw new ContinuationGone(req.workId);
     return await runTurn(deps.loop, {
     signal: req.signal,
     steer: req.steer,

@@ -85,6 +85,17 @@ jitter indistinguibili da uno stallo (segnalato dall'owner il 28/09).
    vuoto) emette `model_retry` con budget, tentativo e attesa dichiarata —
    lo stesso valore passato al `sleep` — prima di dormire; Telegram lo mostra
    nella bozza e nel processo, la CLI in scrollback e in `--debug`.
+8. **La consegna di un turno ripreso è una consegna nuova.** Il piano
+   write-ahead di Telegram è per (turno, lease), non per turno: il
+   diagnostico di cessione e la risposta di una lease successiva sono due
+   messaggi della stessa riga. Senza la lease nel piano, la risposta della
+   ripresa trovava le parti del diagnostico già `sent`, le saltava e
+   riferiva una consegna mai avvenuta (misurato il 28/09 con la catena
+   reale: «Riprendi» → risposta mai arrivata, turno `delivery = sent`).
+   Colonna additiva `lease_index` (default 0 sulle righe esistenti), indici
+   di parte che restano l'ordine totale del turno. La stessa guardia chiude
+   la collisione di `runTurn` su un id reclamato che la ri-derivazione non
+   nomina più: mai un `INSERT` sopra una riga che esiste.
 
 ## Alternative considerate
 

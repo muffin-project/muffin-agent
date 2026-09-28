@@ -69,7 +69,20 @@ reclamato dal bind: `telegram:update:99666304 → aafed382…` **senza riga in
 `doctor` che segnala una consegna non confermata, e un crash nella finestra
 fra bind e domanda che avrebbe rifatto la domanda invece di risolverla.
 
-## 5. Cosa non era il problema
+## 5. La risposta della ripresa non arrivava (trovato in revisione, 28/09)
+
+Il piano write-ahead di Telegram è congelato per turno. Nella catena reale la
+lease 0 consegna il diagnostico di cessione sotto il turno A; il «riprendi»
+lega l'evento ad A; la nuova lease produce la risposta; `deliverTo(A, …)`
+trova le parti di A tutte `sent`, le salta e risponde `sent` — **la risposta
+non viene mai inviata e il turno risulta consegnato**. Riprodotto con un test
+sul percorso reale del connettore (diagnostico pre-congelato per la lease 0,
+«riprendi» accettato, risposta assente da `h.sent`): rosso prima della
+correzione, verde dopo. Il difetto esiste da P0-B e non era mai emerso perché
+l'unico test di continuazione seminava la riga senza far passare il
+diagnostico dalla WAL.
+
+## 6. Cosa non era il problema
 
 I 6 «turni con risposta senza indirizzo» del banner (`delivery =
 'undeliverable'`) sono turni CLI del 27/08–08/09, stabili e vecchi: rumore,

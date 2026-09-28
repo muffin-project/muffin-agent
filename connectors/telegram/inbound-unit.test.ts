@@ -701,6 +701,30 @@ describe('resolve — "riprendi" continua la riga continuabile, non ne apre una'
       ),
     ).toBe(true);
 
+    // La diagnosi di cessione è già passata dalla WAL della superficie: in
+    // produzione è il testo del primo risultato della riga, congelato e
+    // consegnato. La risposta della ripresa è un secondo messaggio della
+    // stessa riga, e non deve essere inghiottita dal piano congelato.
+    const delivery = new TelegramDeliveryStore(h.db);
+    const at = new Date().toISOString();
+    delivery.plan(
+      'vecchia-lease',
+      [
+        {
+          operation: 'send',
+          chatId: OWNER,
+          threadId: null,
+          replyTo: null,
+          editMessageId: null,
+          html: 'Mi sono fermato qui, scrivi "riprendi"',
+        },
+      ],
+      at,
+      0,
+    );
+    expect(delivery.claim('vecchia-lease', 0, 'attempt', at)).toBe(true);
+    expect(delivery.sent('vecchia-lease', 0, 'attempt', 1, at)).toBe(true);
+
     const { stored, incoming } = acceptOne(h, privateMsg(9, 'riprendi'));
     await resolveOnce(h, stored, incoming);
 
