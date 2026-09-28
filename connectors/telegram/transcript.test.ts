@@ -155,8 +155,17 @@ describe('one bubble per segment', () => {
     expect(t.handoff()).toBeNull();
   });
 
-  it('a superseded attempt is named, not removed', async () => {
+  it('a re-drive wait is painted, not left as a silent stall', async () => {
     const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    t.report({ type: 'model_retry', class: 'provider_empty', attempt: 2, max: 3, inMs: 4200 });
+    expect(calls.at(-1)?.text).toContain('il provider ha risposto vuoto — riprovo (2/3) tra 4s');
+    t.report({ type: 'model_retry', class: 'transport', attempt: 1, max: 10, inMs: 200 });
+    expect(calls.at(-1)?.text).toContain('il provider non ha risposto — riprovo (1/10) tra 1s');
+    await t.stop();
+  });
+
+  it('a superseded attempt is named, not removed', async () => {    const { api, calls } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
     t.spoke('Provo così.', 'superseded');
     await vi.advanceTimersByTimeAsync(0);
