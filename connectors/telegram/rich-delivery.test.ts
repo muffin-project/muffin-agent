@@ -162,8 +162,24 @@ describe('rich delivery · deterministic rejection falls back without loss', () 
     expect(store.parts('turn-fallback').filter((p) => p.kind === 'rich')).toMatchObject([{ status: 'rejected' }]);
   });
 
-  it('I: a long rich answer rejected degrades to chunked legacy without loss', async () => {
-    const rows = Array.from({ length: 80 }, (_, k) => `| voce numero ${k} con descrizione estesa e dettagli | ${k} | nota ${k} |`).join('\n');
+  it('the fallback expansion keeps the rejected rich row on its own lease', async () => {
+    // Una risposta ripresa è la lease 1 della stessa riga: il rich rifiutato
+    // e i suoi pezzi di ripiego devono restare su quella lease, o il piano
+    // della lease 0 li ombreggerebbe di nuovo.
+    const db = new DatabaseCtor(':memory:');
+    const store = new TelegramDeliveryStore(db);
+    const { api, calls } = rejectedOnce();
+
+    await expect(deliverTelegram(store, api, 'turn-fallback-lease', richRequest(TABLE), at, 1)).resolves.toBe('sent');
+
+    const parts = store.parts('turn-fallback-lease', 1);
+    expect(parts.filter((p) => p.kind === 'rich')).toMatchObject([{ status: 'rejected', leaseIndex: 1 }]);
+    expect(parts.filter((p) => p.kind === 'legacy').every((p) => p.leaseIndex === 1)).toBe(true);
+    expect(store.parts('turn-fallback-lease', 0)).toEqual([]);
+    expect(calls.filter((c) => c.method === 'sendMessage').length).toBeGreaterThan(0);
+  });
+
+  it('I: a long rich answer rejected degrades to chunked legacy without loss', async () => {    const rows = Array.from({ length: 80 }, (_, k) => `| voce numero ${k} con descrizione estesa e dettagli | ${k} | nota ${k} |`).join('\n');
     const markdown = `| nome | q | nota |\n| --- | --- | --- |\n${rows}`;
     const db = new DatabaseCtor(':memory:');
     const store = new TelegramDeliveryStore(db);

@@ -191,8 +191,17 @@ describe('deliverTelegram: ogni pezzo, non solo quello che cita', () => {
       attempt_id TEXT, telegram_message_id INTEGER, error TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
       PRIMARY KEY (turn_id, part_index));`);
+    // Una riga già scritta dal processo precedente: la migrazione additiva
+    // deve lasciarla leggibile come lease 0, non solo aggiungere la colonna
+    // a una tabella vuota.
+    db.prepare(
+      `INSERT INTO telegram_delivery_parts
+        (turn_id, part_index, operation, chat_id, reply_to, edit_message_id, html, status, created_at, updated_at)
+       VALUES ('vecchio', 0, 'send', 1, NULL, NULL, 'consegnato', 'sent', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`,
+    ).run();
 
     const store = new TelegramDeliveryStore(db);
+    expect(store.parts('vecchio')).toMatchObject([{ leaseIndex: 0, status: 'sent', threadId: null }]);
     const parti = store.plan('t1', [pezzo('a', 0)], '2026-09-04T00:00:00.000Z', 0);
 
     expect(parti[0]!.threadId).toBe(TOPIC_BUG);

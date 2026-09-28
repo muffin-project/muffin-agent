@@ -791,6 +791,24 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     expect(final?.counters.nudgedForCompletion).toBe(true);
   });
 
+  it('a granted lease starts with a clean delivery: the previous lease keeps its own evidence', () => {
+    // La colonna scalare `delivery` descrive la risposta della lease
+    // corrente. Se la concessione non la azzera, un crash fra la risposta
+    // della lease nuova e la sua consegna fa leggere a `recover` il `sent`
+    // del diagnostico precedente e chiude senza mai mandare la risposta.
+    const s = store();
+    s.create(spec(), 4242);
+    expect(releaseIt(s)).toBe(true);
+    s.delivered('turn-1', 'sent');
+    expect(s.get('turn-1')?.delivery).toBe('sent');
+
+    const granted = grantIt(s);
+
+    expect(granted?.leaseIndex).toBe(1);
+    expect(granted?.delivery).toBeNull();
+    expect(s.get('turn-1')?.delivery).toBeNull();
+  });
+
   it('a released lease survives the process boundary: close, reopen, resolve, grant', () => {
     // Continuable is a durable status with nobody holding it — a dead
     // process changes nothing about it. File-backed, because :memory: cannot

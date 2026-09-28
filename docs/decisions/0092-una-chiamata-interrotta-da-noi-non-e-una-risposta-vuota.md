@@ -95,7 +95,12 @@ jitter indistinguibili da uno stallo (segnalato dall'owner il 28/09).
    Colonna additiva `lease_index` (default 0 sulle righe esistenti), indici
    di parte che restano l'ordine totale del turno. La stessa guardia chiude
    la collisione di `runTurn` su un id reclamato che la ri-derivazione non
-   nomina più: mai un `INSERT` sopra una riga che esiste.
+   nomina più: mai un `INSERT` sopra una riga che esiste. La colonna scalare
+   `turns.delivery` descrive la risposta della lease **corrente**: la
+   concessione la azzera (l'esito della precedente resta nella sua riga di
+   `turn_leases`), altrimenti un crash fra la risposta ripresa e la sua
+   consegna faceva leggere a `recover` il `sent` del diagnostico e chiudere
+   senza mandare niente.
 
 ## Alternative considerate
 

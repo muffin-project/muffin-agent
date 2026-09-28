@@ -166,13 +166,6 @@ export class TelegramDeliveryStore {
         throw new Error(`telegram delivery ${turnId}: parte rich senza payload o senza fallback limitato`);
       }
     }
-    // Il piano di una lease non riusa gli indici di un'altra: gli indici
-    // restano l'ordine totale del turno, e il filtro per lease è la colonna.
-    const base = (
-      this.db
-        .prepare(`SELECT COALESCE(MAX(part_index), -1) AS m FROM telegram_delivery_parts WHERE turn_id = ?`)
-        .get(turnId) as { m: number }
-    ).m + 1;
     const insert = this.db.prepare(
       `INSERT OR IGNORE INTO telegram_delivery_parts
           (turn_id, part_index, lease_index, operation, chat_id, thread_id, reply_to, edit_message_id, html,
@@ -184,6 +177,15 @@ export class TelegramDeliveryStore {
            'pending', @at, @at)`,
     );
     this.db.transaction(() => {
+      // Il piano di una lease non riusa gli indici di un'altra: gli indici
+      // restano l'ordine totale del turno, e il filtro per lease è la colonna.
+      // La base si legge DENTRO la transazione, o due scrittori partono dallo
+      // stesso MAX e l'`OR IGNORE` del secondo perde una parte in silenzio.
+      const base = (
+        this.db
+          .prepare(`SELECT COALESCE(MAX(part_index), -1) AS m FROM telegram_delivery_parts WHERE turn_id = ?`)
+          .get(turnId) as { m: number }
+      ).m + 1;
       requested.forEach((part, i) => {
         const kind = part.kind ?? 'legacy';
         insert.run({
@@ -204,7 +206,13 @@ export class TelegramDeliveryStore {
         });
       });
     })();
-    return this.parts(turnId, leaseIndex);
+    const planned = this.parts(turnId, leaseIndex);
+    // Un piano parziale è l'unica cosa che l'`OR IGNORE` può nascondere: se
+    // è successo, dirlo invece di consegnare metà messaggio.
+    if (planned.length !== requested.length) {
+      throw new Error(`telegram delivery ${turnId}: piano parziale (${planned.length}/${requested.length})`);
+    }
+    return planned;
   }
 
   /**

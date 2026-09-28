@@ -82,6 +82,14 @@ correzione, verde dopo. Il difetto esiste da P0-B e non era mai emerso perché
 l'unico test di continuazione seminava la riga senza far passare il
 diagnostico dalla WAL.
 
+Seconda metà, dalla stessa revisione: la colonna scalare `turns.delivery`
+restava `sent` dal diagnostico della lease 0 attraverso la concessione, così
+un crash fra la risposta della lease 1 e la sua consegna faceva chiudere
+`recover` sulla prova della lease precedente: risposta persa, turno
+`delivered`. La concessione ora azzera la colonna (la lease nuova non ha
+ancora consegnato niente) e la storia resta in `turn_leases.delivery` e nel
+piano per lease.
+
 ## 6. Cosa non era il problema
 
 I 6 «turni con risposta senza indirizzo» del banner (`delivery =

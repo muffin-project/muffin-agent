@@ -1061,6 +1061,15 @@ export class TurnStore {
         `UPDATE turns SET status = 'running', claimed_by = @pid, claimed_at = @now, claim_token = @token,
                           messages = @messages, taint = @taint, counters = @counters,
                           lease_index = @leaseIndex, continuable_reason = NULL,
+                          -- La consegna scalare descrive la RISPOSTA della lease
+                          -- corrente: la lease nuova non ha ancora consegnato
+                          -- nulla, e l'esito della precedente resta nella sua
+                          -- riga di turn_leases. Senza questo azzeramento,
+                          -- un crash fra la risposta della lease N+1 e la sua
+                          -- consegna faceva leggere a recover il sent del
+                          -- diagnostico della lease N e chiudeva senza mai
+                          -- mandare la risposta (review 2026-09-28).
+                          delivery = NULL,
                           updated_at = @now
          WHERE id = @id AND status = 'continuable'`,
       ),
