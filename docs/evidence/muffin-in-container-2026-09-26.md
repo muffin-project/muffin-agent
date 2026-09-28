@@ -59,6 +59,42 @@ Altri fatti misurati:
   con `sudo`) non è leggibile dall'utente 1000 del container, e `init` si ferma
   con `Permission denied`.
 
+## Contesto di build (2026-09-28, review di #729)
+
+La prima forma passava al builder la `.git` del checkout (contesto `.git`
+soltanto, poi un clone a profondità 1 nello stage di build). L'immagine finale
+non la conteneva, ma il layer dello stage di build e la cache di BuildKit sì:
+history, reflog, objects e `config`, che può portare un URL con credenziali ed
+esce dalla macchina con un export della cache. E da un worktree collegato, dove
+`.git` è un file, la build falliva. La review ha chiesto lo stesso invariante
+(commit esatto, niente file sporchi o non tracciati) senza `.git` nel contesto.
+
+Misurato in WSL2 (amd64, Docker 29.8.0) sul commit `34e51cbc`, con init reale e
+`muffin doctor` su volumi nuovi:
+
+- `git archive HEAD` in `docker build -`, con il Dockerfile dentro l'archivio:
+  accettato; nessuna voce `.git` nel contesto;
+- senza alcun `.git` nell'immagine `doctor` perde due cose: la riga `build`
+  diventa «nessun checkout Git: non so quale commit stia girando» e gli 11 file
+  di default copiati da `init` passano da «allineato a HEAD» a «nessun checkout
+  Git leggibile»: 12 avvisi permanenti su un'installazione sana. Anche la riga
+  di avvio dell'entrypoint diventa `build=unknown`;
+- ricostruendo nello stage di build l'oggetto commit (il testo grezzo di
+  `git cat-file commit`, passato nel contesto) sopra i file dell'archivio, lo
+  SHA è identico a quello dell'host, il repository è shallow con un commit,
+  senza remote, con la sola `config` di `git init`, e `doctor` è identico riga
+  per riga a quello della prima forma;
+- lo stesso stage confronta `git write-tree` con il tree del commit: un file in
+  più (`secret.env`) o un file tracciato modificato (`README.md`) nel contesto
+  fanno fallire la build con i due tree a confronto.
+
+Alternative scartate: il solo archivio (i 12 avvisi sopra); un worktree
+temporaneo (il suo file `.git` va escluso comunque, e la build scrive nel
+repository e va ripulita: il worktree di `muffin update` ha senso perché la
+release resta ed è ciò che gira, qui l'albero serve pochi secondi); far leggere
+a `doctor` un file di metadati al posto di git (tocca il codice runtime, fuori
+dal perimetro di questa PR).
+
 ## Tetti di risorse del container
 
 La sandbox limita il tempo (timeout con kill del gruppo di processi) e l'output

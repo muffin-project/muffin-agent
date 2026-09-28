@@ -7,7 +7,11 @@
 #     doctor` and the gateway's own boot line say which. A host that cannot
 #     provide containment is not a failure; a disagreement is.
 #   - no secret in the image: untracked files in the checkout (a key file, a
-#     .env) never reach an image layer, and the image holds exactly a commit.
+#     .env) never reach an image layer, and the image holds exactly a commit:
+#     HEAD, same SHA, one shallow commit with no remote, the only .git in the
+#     image. The build refuses a context that is not that commit (an extra file,
+#     an edited file) and a plain `docker build` of the checkout, and works from
+#     a linked worktree.
 #   - no secret in the gateway: the unattended first run feeds the key through
 #     the one-shot `init` service; the long-running gateway mounts only its three
 #     volumes, so its sandboxed shell has no key file to read.
@@ -30,7 +34,8 @@
 #
 # It builds its own image tag and removes it, its volumes and the files it
 # planted, whatever the outcome. Requirements: Linux, Docker Engine, Docker
-# Compose v2, network for the build, a regular clone (not a linked worktree).
+# Compose v2, GNU tar, network for the build. It adds a linked worktree to the
+# repository for one check and removes it.
 # Usage:  bash evals/install/docker.sh [path-to-repo]      (default: git toplevel)
 set -uo pipefail
 
@@ -65,14 +70,20 @@ printf '%s' "$KEY_VALUE" > "$KEY_FILE"
 # scratch directory is readable there and private here, whoever runs the eval.
 chmod 0644 "$KEY_FILE"
 MARKER="muffin-eval-planted-$$-$(date +%s)"
-PLANTED=("$DIR/muffin-eval-$$.key" "$DIR/.env.muffin-eval-$$")
+# Two names .gitignore covers (a key, a .env) and one it does not, which is the
+# one `git status`, and so build.sh's warning, can see.
+PLANTED=("$DIR/muffin-eval-$$.key" "$DIR/.env.muffin-eval-$$" "$DIR/muffin-eval-$$.notes")
+
+WORKTREE="$SCRATCH/worktree"
 
 compose() { docker compose -p "$PROJECT" -f "$DIR/compose.yaml" "$@"; }
 cleanup() {
   compose --profile unattended-init down -v -t 2 >/dev/null 2>&1
-  docker image rm -f "$MUFFIN_IMAGE" >/dev/null 2>&1
+  docker image rm -f "$MUFFIN_IMAGE" "$MUFFIN_IMAGE-worktree" >/dev/null 2>&1
   rm -f "${PLANTED[@]}"
+  git -C "$REPO" worktree remove --force "$WORKTREE" >/dev/null 2>&1
   rm -rf "$SCRATCH"
+  git -C "$REPO" worktree prune >/dev/null 2>&1
 }
 trap cleanup EXIT
 
@@ -227,22 +238,80 @@ check_ceilings() {
   fi
 }
 
-echo "== build (last commit of this checkout: $(git -C "$REPO" rev-parse --short HEAD))"
+HEAD_SHA=$(git -C "$REPO" rev-parse HEAD)
+echo "== build (last commit of this checkout: ${HEAD_SHA:0:12})"
 # Untracked files that must never reach a layer.
 for f in "${PLANTED[@]}"; do printf '%s\n' "$MARKER" > "$f"; done
-if compose build gateway >"$SCRATCH/build.log" 2>&1; then pass "image built"; else
+if "$DIR/build.sh" >"$SCRATCH/build.log" 2>&1; then pass "image built"; else
   fail "image build failed"; tail -30 "$SCRATCH/build.log"; exit 1
+fi
+if grep -q 'are NOT in the image' "$SCRATCH/build.log"; then
+  pass "build.sh warns that the untracked, not ignored file is left out"
+else
+  fail "build.sh said nothing about the untracked file it leaves out"
 fi
 if [ "$(docker image save "$MUFFIN_IMAGE" | grep -ac "$MARKER" || true)" = 0 ]; then
   pass "untracked files in the checkout are absent from every image layer"
 else
   fail "a planted untracked file reached the image"
 fi
-if [ -z "$(docker run --rm --entrypoint git "$MUFFIN_IMAGE" -C /opt/muffin status --porcelain 2>&1)" ]; then
-  pass "the image tree is exactly a commit"
+# The image's own git: the commit rebuilt from the archive, and nothing else.
+identity=$(docker run --rm --entrypoint sh "$MUFFIN_IMAGE" -c '
+  cd /opt/muffin
+  printf "%s|%s|%s|%s|[%s]|[%s]|[%s]" "$(git rev-parse HEAD)" "$(git rev-parse --is-shallow-repository)" \
+    "$(git rev-list --count HEAD)" "$(git status --porcelain | wc -l)" "$(git remote)" \
+    "$(ls .git/logs 2>/dev/null)" "$(find / -xdev -name .git 2>/dev/null | tr "\n" " ")"')
+label=$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$MUFFIN_IMAGE")
+expected="$HEAD_SHA|true|1|0|[]|[]|[/opt/muffin/.git ]"
+if [ "$identity" = "$expected" ]; then
+  pass "the image holds exactly HEAD: same SHA, one shallow commit, clean, no remote, no reflog, one .git"
 else
-  fail "the image tree differs from its commit"
+  fail "image git is '$identity', expected '$expected'"
 fi
+if [ "$label" = "$HEAD_SHA" ]; then pass "OCI revision label is HEAD"; else fail "OCI revision label is '$label'"; fi
+
+# A context that is not the commit must not build. Only the build stage runs:
+# its base layers are cached from the build above.
+build_stage() { docker build --target build -f contrib/docker/Dockerfile - >"$SCRATCH/neg.log" 2>&1; }
+git -C "$REPO" cat-file commit HEAD > "$SCRATCH/.muffin-build-commit"
+printf 'KEY=%s\n' "$MARKER" > "$SCRATCH/extra.env"
+if git -C "$REPO" archive --format=tar --add-file="$SCRATCH/.muffin-build-commit" \
+     --add-file="$SCRATCH/extra.env" HEAD | build_stage; then
+  fail "a context with an extra file was built"
+elif grep -q 'the build context is not the commit' "$SCRATCH/neg.log"; then
+  pass "a context with an extra file is refused"
+else
+  fail "a context with an extra file failed for another reason"; tail -5 "$SCRATCH/neg.log"
+fi
+git -C "$REPO" archive --format=tar -o "$SCRATCH/edited.tar" --add-file="$SCRATCH/.muffin-build-commit" HEAD
+mkdir -p "$SCRATCH/edit" && git -C "$REPO" show HEAD:README.md > "$SCRATCH/edit/README.md"
+echo "edited" >> "$SCRATCH/edit/README.md"
+tar --delete -f "$SCRATCH/edited.tar" README.md && tar --append -f "$SCRATCH/edited.tar" -C "$SCRATCH/edit" README.md
+if build_stage < "$SCRATCH/edited.tar"; then
+  fail "a context with an edited file was built"
+elif grep -q 'the build context is not the commit' "$SCRATCH/neg.log"; then
+  pass "a context with an edited file is refused"
+else
+  fail "a context with an edited file failed for another reason"; tail -5 "$SCRATCH/neg.log"
+fi
+if docker build --target build -f "$DIR/Dockerfile" "$REPO" >"$SCRATCH/neg.log" 2>&1; then
+  fail "a plain docker build of the checkout was built"
+elif grep -q 'muffin-build-commit' "$SCRATCH/neg.log"; then
+  pass "a plain docker build of the checkout stops at its first COPY"
+else
+  fail "a plain docker build of the checkout failed for another reason"; tail -5 "$SCRATCH/neg.log"
+fi
+
+# The same build from a linked worktree, where .git is a file.
+if git -C "$REPO" worktree add --detach "$WORKTREE" HEAD >/dev/null 2>&1 &&
+   MUFFIN_IMAGE="$MUFFIN_IMAGE-worktree" "$WORKTREE/contrib/docker/build.sh" >"$SCRATCH/wt.log" 2>&1 &&
+   [ "$(docker run --rm --entrypoint git "$MUFFIN_IMAGE-worktree" -C /opt/muffin rev-parse HEAD)" = "$HEAD_SHA" ]; then
+  pass "a linked worktree builds the same commit"
+else
+  fail "the build from a linked worktree failed"; tail -10 "$SCRATCH/wt.log" 2>/dev/null
+fi
+docker image rm -f "$MUFFIN_IMAGE-worktree" >/dev/null 2>&1
+git -C "$REPO" worktree remove --force "$WORKTREE" >/dev/null 2>&1
 defaults=$( (unset MUFFIN_GATEWAY_MEM_LIMIT MUFFIN_GATEWAY_PIDS_LIMIT; compose config 2>/dev/null) |
   sed -n 's/^ *\(pids_limit\|mem_limit\|memswap_limit\): *"\{0,1\}\([0-9]*\)"\{0,1\}$/\1=\2/p' | sort | tr '\n' ' ')
 if [ "$defaults" = "mem_limit=2147483648 memswap_limit=2147483648 pids_limit=512 " ]; then

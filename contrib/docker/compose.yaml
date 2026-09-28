@@ -1,7 +1,7 @@
 # Experimental Docker Compose path for Muffin (contrib/docker/README.md).
 # The supported installation is the native one (docs/user/INSTALL.md).
 #
-#   docker compose build
+#   ./build.sh                                           # the image, from the last commit
 #   docker compose run --rm -it gateway muffin init      # once, interactive
 #   docker compose up -d                                 # gateway only
 #   docker compose --profile embeddings up -d            # + Ollama for memory embeddings
@@ -18,10 +18,10 @@ name: muffin
 
 services:
   gateway:
-    build:
-      context: ../..
-      dockerfile: contrib/docker/Dockerfile
+    # Built by build.sh, never by compose: a `build:` section here would send the
+    # checkout as it is (untracked files, uncommitted edits) instead of a commit.
     image: ${MUFFIN_IMAGE:-muffin-gateway:local}
+    pull_policy: never
     restart: unless-stopped
     # No capability and no privilege gain, in every posture: the process is the
     # non-root `node` user, and bubblewrap needs neither (measured).
@@ -60,6 +60,7 @@ services:
   # mounted only into this container, which exits when `muffin init` is done.
   init:
     image: ${MUFFIN_IMAGE:-muffin-gateway:local}
+    pull_policy: never
     profiles: [unattended-init]
     restart: "no"
     command: ["init-from-secret"]

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 #
 # Experimental container image for the Muffin gateway (contrib/docker/README.md).
-# Built from this checkout: `docker compose build` from contrib/docker/.
+# Built from the last commit of this checkout by contrib/docker/build.sh.
 #
 # What the image has to provide, and why:
 #   - upstream bubblewrap >= 0.12.0, built from the release tarball with a pinned
@@ -46,17 +46,30 @@ RUN git clone --depth 1 --branch "${WHISPER_REF}" https://github.com/ggml-org/wh
       "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${WHISPER_MODEL}.bin"
 
 FROM ${NODE_IMAGE} AS build
-# Only the last commit of the checked-out branch enters the image: the build
-# context is `.git` alone (Dockerfile.dockerignore) and the tree is a depth-1
-# clone of it. Untracked files (a key file, a .env), uncommitted edits and the
-# repository history cannot end up in a layer.
-COPY .git /src/.git
-RUN test -d /src/.git \
-      || { echo "build from a regular clone: .git is not a directory (linked worktree?)" >&2; exit 1; } \
- && git clone --quiet --no-local --depth 1 file:///src /opt/muffin \
- && git -C /opt/muffin remote remove origin \
- && rm -rf /src
+# Only the last commit of the checkout enters the image. build.sh streams
+# `git archive` of it plus the raw commit object as the build context, so the
+# repository's .git, untracked files (a key file, a .env) and uncommitted edits
+# never reach the builder. This stage rebuilds that exact commit (same SHA, one
+# shallow commit, no remote, no reflog), which is what lets `muffin doctor` name
+# the build and compare the installed defaults, and it refuses to build when the
+# files are not exactly the commit's tree.
+# The commit object is copied first and alone: a context without it (the
+# checkout itself, given to a plain `docker build`) stops here.
+COPY .muffin-build-commit /tmp/commit
+COPY . /opt/muffin
 WORKDIR /opt/muffin
+RUN rm .muffin-build-commit \
+ && tree=$(sed -n '1s/^tree //p' /tmp/commit) \
+ && git init -q \
+ && git add -A -f \
+ && got=$(git write-tree) \
+ && { [ "$got" = "$tree" ] \
+      || { echo "the build context is not the commit (tree $got, expected $tree): build with contrib/docker/build.sh" >&2; exit 1; }; } \
+ && sha=$(git hash-object -t commit -w /tmp/commit) \
+ && git update-ref --no-deref HEAD "$sha" \
+ && { ! sed '/^$/q' /tmp/commit | grep -q '^parent ' || echo "$sha" > .git/shallow; } \
+ && rm -rf /tmp/commit .git/logs \
+ && test -z "$(git status --porcelain)"
 # `npm ci` runs `prepare`, which compiles dist/; dev dependencies are dropped
 # afterwards because the runtime never loads them.
 RUN npm ci \

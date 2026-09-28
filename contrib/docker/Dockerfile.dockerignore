@@ -1,5 +1,5 @@
-# Allowlist: the build context is the repository's .git and nothing else. The
-# Dockerfile clones the last commit out of it, so a key file, a .env or any
-# other untracked or uncommitted file in the working tree never reaches the image.
-*
-!.git
+# The context is meant to be a `git archive` of one commit (build.sh), and the
+# Dockerfile checks that it is. This file only keeps the repository's .git out
+# when the checkout itself is passed to `docker build` by mistake; that build
+# then stops at its first COPY.
+.git
