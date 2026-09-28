@@ -88,6 +88,11 @@ say() { printf '%s\n' "$*" >&2; }
 sandbox_direct() { "$@"; }
 
 sandbox_report() {
+  # The root path runs this once, as root over the service account, after the
+  # delegated install: the delegated step is told to stay quiet so the same
+  # turn never reports the capability twice (and never reports it before the
+  # privileged step had a chance to apply the profile).
+  if [ "${MUFFIN_SANDBOX_REPORT:-1}" = 0 ]; then return 0; fi
   sandbox_runner=$1
   sandbox_node=$2
   sandbox_src=$3
@@ -616,14 +621,14 @@ USAGE
       DBUS_SESSION_BUS_ADDRESS="unix:path=$SERVICE_RUNTIME/bus" MUFFIN_PREFIX="$SERVICE_PREFIX" MUFFIN_BINDIR="$SERVICE_BINDIR" \
       MUFFIN_CMD="$ROOT_CMD" MUFFIN_NO_APT=1 MUFFIN_REPO="${MUFFIN_REPO:-https://github.com/muffin-project/muffin-agent.git}" \
       MUFFIN_CHANNEL="${MUFFIN_CHANNEL:-main}" MUFFIN_REF="${MUFFIN_REF:-}" MUFFIN_NODE_DIST_BASE="${MUFFIN_NODE_DIST_BASE:-}" \
-      MUFFIN_NO_GATEWAY="${MUFFIN_NO_GATEWAY:-}" MUFFIN_API_KEY_FILE="$KEY_COPY" sh "$ROOT_STAGE/install.sh" "$@" <&0
+      MUFFIN_NO_GATEWAY="${MUFFIN_NO_GATEWAY:-}" MUFFIN_SANDBOX_REPORT=0 MUFFIN_API_KEY_FILE="$KEY_COPY" sh "$ROOT_STAGE/install.sh" "$@" <&0
   else
     runuser -u muffin -- env -i HOME="$SERVICE_HOME" USER=muffin LOGNAME=muffin SHELL=/bin/sh \
       PATH="$SERVICE_PREFIX/node/bin:/usr/local/bin:/usr/bin:/bin" XDG_RUNTIME_DIR="$SERVICE_RUNTIME" \
       DBUS_SESSION_BUS_ADDRESS="unix:path=$SERVICE_RUNTIME/bus" MUFFIN_PREFIX="$SERVICE_PREFIX" MUFFIN_BINDIR="$SERVICE_BINDIR" \
       MUFFIN_CMD="$ROOT_CMD" MUFFIN_NO_APT=1 MUFFIN_REPO="${MUFFIN_REPO:-https://github.com/muffin-project/muffin-agent.git}" \
       MUFFIN_CHANNEL="${MUFFIN_CHANNEL:-main}" MUFFIN_REF="${MUFFIN_REF:-}" MUFFIN_NODE_DIST_BASE="${MUFFIN_NODE_DIST_BASE:-}" \
-      MUFFIN_NO_GATEWAY="${MUFFIN_NO_GATEWAY:-}" sh "$ROOT_STAGE/install.sh" "$@" <&0
+      MUFFIN_NO_GATEWAY="${MUFFIN_NO_GATEWAY:-}" MUFFIN_SANDBOX_REPORT=0 sh "$ROOT_STAGE/install.sh" "$@" <&0
   fi
   ROOT_INSTALL_RC=$?
   set -e
