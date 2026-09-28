@@ -273,7 +273,8 @@ export const SANDBOX_BINARIES_REMEDY =
 
 export const APPARMOR_REMEDY =
   'unprivileged user namespaces are restricted (Ubuntu 24.04+ default). ' +
-  'Add an AppArmor profile for bwrap granting `userns` and reload it with apparmor_parser -r; ' +
+  "Re-run the installer with MUFFIN_APPLY_SANDBOX_PROFILE=1 to apply Muffin's packaged AppArmor profile for bwrap " +
+  '(scripts/install/bwrap.apparmor), or add an equivalent profile granting `userns` and reload it with apparmor_parser -r; ' +
   'lowering kernel.apparmor_restrict_unprivileged_userns works too but disarms the protection host-wide';
 
 /**

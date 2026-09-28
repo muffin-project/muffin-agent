@@ -1,0 +1,13 @@
+# Muffin's Bubblewrap AppArmor profile — version 1 (2026-09-28).
+#
+# Ubuntu 24.04+ restricts unprivileged user namespaces
+# (kernel.apparmor_restrict_unprivileged_userns=1), and an unconfined bwrap
+# then fails before containment. This profile grants the packaged bwrap the
+# namespace it needs WITHOUT lowering the kernel-wide protection.
+#
+# install.sh applies it only with explicit consent
+# (MUFFIN_APPLY_SANDBOX_PROFILE=1 or an interactive yes); when it is absent or
+# the application fails, shell and job execution stay disabled.
+profile bwrap /usr/bin/bwrap flags=(unconfined) {
+  include if exists <local/bwrap>
+}

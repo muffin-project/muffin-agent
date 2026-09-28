@@ -27,11 +27,29 @@
 > Ubuntu 24.04 VM confirmed that the gateway runs as `muffin`, returns after a
 > reboot, updates and rolls back, and can be removed while preserving the
 > account and data. This path is still not release-verified: it used an invalid
-> test key, did not exercise Telegram, and Bubblewrap needed a manually loaded
-> AppArmor profile in the VM. See the evidence report for the exact limits.
-> The root bootstrap downloads `install.sh` from the mutable `main` branch over
-> HTTPS and runs it as root. The release trust decision for that step is still
-> open, so do not treat this work branch as a production installer.
+> test key and did not exercise Telegram. See the evidence report for the exact
+> limits.
+>
+> **Immutable root code.** The bootstrap does not execute a mutable branch as
+> root: it resolves one **commit SHA** (GitHub over HTTPS is the transport/trust
+> provider), fetches `install.sh` from
+> `raw.githubusercontent.com/<repo>/<sha>/install.sh`, prints it, and passes it
+> down so the build checks out that same commit (`MUFFIN_REF` overrides it for
+> pinned runs; anything that is not a 40-hex commit is refused).
+> Signing/attestation is later hardening, not a prerequisite. The *public
+> unauthenticated* bootstrap (`curl …/main/bootstrap.sh | sh`) cannot be
+> truthfully verified while the repository is private: it is the one check
+> deferred to publication, with no simulated evidence standing in for it.
+>
+> **Containment stays fail-closed.** On Ubuntu 24.04+ the kernel restricts
+> unprivileged user namespaces, which bubblewrap needs. The installer detects
+> it and offers Muffin's packaged, versioned AppArmor profile
+> (`scripts/install/bwrap.apparmor`); it is applied only with explicit consent
+> (`MUFFIN_APPLY_SANDBOX_PROFILE=1`, or an interactive yes). With no consent, or
+> if the application fails, the installation still completes but **shell and job
+> execution stay disabled** — never an unsandboxed fallback, never a silent host
+> policy change. `muffin doctor` names the missing capability and the remedy.
+> See `docs/architecture/SECURITY.md` §9.
 >
 > A personal install stores data in `~/.muffin`. A root-managed install stores
 > it in `/var/lib/muffin/.muffin`. Where the local supervisor supports it, the

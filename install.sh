@@ -50,6 +50,9 @@
 #   MUFFIN_CMD=muffin                     force the command name (see the Mint note)
 #   MUFFIN_REPO=<git url>                 where to clone from
 #   MUFFIN_CHANNEL=main                   which branch to install
+#   MUFFIN_REF=<commit sha>               install exactly this commit (the
+#                                         bootstrap resolves one so the code
+#                                         executed as root is immutable)
 #   MUFFIN_HOME=~/.muffin                 runtime data home; reported here, read
 #                                         by the runtime, never touched by this
 #                                         installer
@@ -68,6 +71,90 @@
 # Exit codes: 0 done · 1 something failed · 3 installed, gateway NOT active.
 set -eu
 say() { printf '%s\n' "$*" >&2; }
+
+# ---------------------------------------------------------------------------
+# Sandbox containment: report it, never assume it.
+#
+# The runtime refuses shell/job execution when containment cannot be proven
+# (`core/sandbox/shell-boundary.ts`). The installer reports that honestly, and
+# on Ubuntu 24.04+ — where unprivileged user namespaces are restricted — offers
+# Muffin's packaged AppArmor profile for bubblewrap. It is applied only with
+# explicit consent (`MUFFIN_APPLY_SANDBOX_PROFILE=1`, or an interactive yes on
+# a real terminal): no silent host-policy change, no unsandboxed fallback, and
+# a failed application leaves the capability disabled.
+#
+#   sandbox_report <runner> <node> <src> <can-apply: yes|sudo|no>
+# ---------------------------------------------------------------------------
+sandbox_direct() { "$@"; }
+
+sandbox_report() {
+  sandbox_runner=$1
+  sandbox_node=$2
+  sandbox_src=$3
+  sandbox_can_apply=$4
+  sandbox_probe='const m=await import(process.argv[1]);const p=m.probeSandbox();process.stdout.write(JSON.stringify(p));process.exit(p.available?0:2);'
+  sandbox_run_probe() {
+    "$sandbox_runner" "$sandbox_node" --input-type=module -e "$sandbox_probe" \
+      "file://$sandbox_src/dist/core/sandbox/probe.js" 2>/dev/null || true
+  }
+  sandbox_json=$(sandbox_run_probe)
+  case "$sandbox_json" in
+    *'"available":true'*)
+      say "sandbox: containment verified"
+      return 0
+      ;;
+    *'"reason":"userns_denied"'*) : ;;
+    *)
+      say "sandbox: containment NOT verified — shell and job execution stay disabled."
+      [ -n "$sandbox_json" ] && say "          probe says: $sandbox_json"
+      say "          remedy: re-run this installer with MUFFIN_APPLY_SANDBOX_PROFILE=1, or apply an AppArmor profile for bwrap manually."
+      return 0
+      ;;
+  esac
+  sandbox_consent=${MUFFIN_APPLY_SANDBOX_PROFILE:-}
+  if [ -z "$sandbox_consent" ] && ( : </dev/tty ) 2>/dev/null; then
+    printf "sandbox: unprivileged user namespaces are restricted here.\n" >&2
+    printf "Apply Muffin's packaged AppArmor profile for bubblewrap? [y/N] " >&2
+    sandbox_answer=
+    read -r sandbox_answer </dev/tty || sandbox_answer=
+    case "$sandbox_answer" in y | Y | yes | YES) sandbox_consent=1 ;; esac
+  fi
+  if [ "${sandbox_consent:-}" != 1 ]; then
+    say "sandbox: the packaged AppArmor profile was not applied — shell and job execution stay disabled."
+    say "          remedy: re-run with MUFFIN_APPLY_SANDBOX_PROFILE=1 (the profile is scripts/install/bwrap.apparmor)."
+    return 0
+  fi
+  sandbox_profile="$sandbox_src/scripts/install/bwrap.apparmor"
+  if [ ! -f "$sandbox_profile" ]; then
+    say "sandbox: $sandbox_profile is missing — shell and job execution stay disabled."
+    return 0
+  fi
+  sandbox_apply="install -m 0644 '$sandbox_profile' /etc/apparmor.d/bwrap && apparmor_parser -r /etc/apparmor.d/bwrap"
+  case "$sandbox_can_apply" in
+    yes)
+      sh -c "$sandbox_apply" || {
+        say "sandbox: applying the packaged AppArmor profile failed — shell and job execution stay disabled."
+        return 0
+      }
+      ;;
+    sudo)
+      sudo -n sh -c "$sandbox_apply" || {
+        say "sandbox: sudo could not apply the packaged AppArmor profile — shell and job execution stay disabled."
+        return 0
+      }
+      ;;
+    *)
+      say "sandbox: applying the packaged AppArmor profile needs root — shell and job execution stay disabled."
+      return 0
+      ;;
+  esac
+  sandbox_json=$(sandbox_run_probe)
+  case "$sandbox_json" in
+    *'"available":true'*) say "sandbox: containment verified after applying the packaged AppArmor profile" ;;
+    *) say "sandbox: containment is still NOT verified — shell and job execution stay disabled." ;;
+  esac
+  return 0
+}
 
 # Copy an API-key file without resolving an attacker-controlled pathname as
 # root. Every path component is opened from a directory descriptor with
@@ -528,14 +615,14 @@ USAGE
       PATH="$SERVICE_PREFIX/node/bin:/usr/local/bin:/usr/bin:/bin" XDG_RUNTIME_DIR="$SERVICE_RUNTIME" \
       DBUS_SESSION_BUS_ADDRESS="unix:path=$SERVICE_RUNTIME/bus" MUFFIN_PREFIX="$SERVICE_PREFIX" MUFFIN_BINDIR="$SERVICE_BINDIR" \
       MUFFIN_CMD="$ROOT_CMD" MUFFIN_NO_APT=1 MUFFIN_REPO="${MUFFIN_REPO:-https://github.com/muffin-project/muffin-agent.git}" \
-      MUFFIN_CHANNEL="${MUFFIN_CHANNEL:-main}" MUFFIN_NODE_DIST_BASE="${MUFFIN_NODE_DIST_BASE:-}" \
+      MUFFIN_CHANNEL="${MUFFIN_CHANNEL:-main}" MUFFIN_REF="${MUFFIN_REF:-}" MUFFIN_NODE_DIST_BASE="${MUFFIN_NODE_DIST_BASE:-}" \
       MUFFIN_NO_GATEWAY="${MUFFIN_NO_GATEWAY:-}" MUFFIN_API_KEY_FILE="$KEY_COPY" sh "$ROOT_STAGE/install.sh" "$@" <&0
   else
     runuser -u muffin -- env -i HOME="$SERVICE_HOME" USER=muffin LOGNAME=muffin SHELL=/bin/sh \
       PATH="$SERVICE_PREFIX/node/bin:/usr/local/bin:/usr/bin:/bin" XDG_RUNTIME_DIR="$SERVICE_RUNTIME" \
       DBUS_SESSION_BUS_ADDRESS="unix:path=$SERVICE_RUNTIME/bus" MUFFIN_PREFIX="$SERVICE_PREFIX" MUFFIN_BINDIR="$SERVICE_BINDIR" \
       MUFFIN_CMD="$ROOT_CMD" MUFFIN_NO_APT=1 MUFFIN_REPO="${MUFFIN_REPO:-https://github.com/muffin-project/muffin-agent.git}" \
-      MUFFIN_CHANNEL="${MUFFIN_CHANNEL:-main}" MUFFIN_NODE_DIST_BASE="${MUFFIN_NODE_DIST_BASE:-}" \
+      MUFFIN_CHANNEL="${MUFFIN_CHANNEL:-main}" MUFFIN_REF="${MUFFIN_REF:-}" MUFFIN_NODE_DIST_BASE="${MUFFIN_NODE_DIST_BASE:-}" \
       MUFFIN_NO_GATEWAY="${MUFFIN_NO_GATEWAY:-}" sh "$ROOT_STAGE/install.sh" "$@" <&0
   fi
   ROOT_INSTALL_RC=$?
@@ -572,12 +659,19 @@ EOF
     root_fail "could not install the root-owned command dispatcher."
   fi
   [ "$ROOT_INSTALL_RC" -eq 0 ] || exit "$ROOT_INSTALL_RC"
+  sandbox_report root_service_run "$SERVICE_PREFIX/node/bin/node" "$SERVICE_PREFIX/src" yes
   exit 0
 fi
 
 MUFFIN_PREFIX=${MUFFIN_PREFIX:-$HOME/.local/share/muffin}
 MUFFIN_REPO=${MUFFIN_REPO:-https://github.com/muffin-project/muffin-agent.git}
 MUFFIN_CHANNEL=${MUFFIN_CHANNEL:-main}
+MUFFIN_REF=${MUFFIN_REF:-}
+case "$MUFFIN_REF" in
+  "") : ;;
+  *[!0-9a-f]* | ???????????????????????????????????????? | ?????????????????????????????????????????)
+    die "MUFFIN_REF must be a 40-character hexadecimal commit SHA, got '$MUFFIN_REF'" ;;
+esac
 NODE_MAJOR_REQUIRED=22
 EXIT_GATEWAY_NOT_ACTIVE=3
 
@@ -911,13 +1005,31 @@ say "node: $(node -v) at $(command -v node)"
 if [ "$MODE" = personal ]; then
   mkdir -p "$MUFFIN_PREFIX"
   if [ -d "$SRC/.git" ]; then
-    say "updating the existing checkout in $SRC ($MUFFIN_CHANNEL)"
     git -C "$SRC" remote set-url origin "$MUFFIN_REPO"
-    git -C "$SRC" fetch --quiet origin "$MUFFIN_CHANNEL" || die "git fetch failed from $MUFFIN_REPO"
-    git -C "$SRC" checkout --quiet -B "$MUFFIN_CHANNEL" "origin/$MUFFIN_CHANNEL"
+    if [ -n "$MUFFIN_REF" ]; then
+      # The bootstrap resolved one immutable commit: build exactly it, and prove
+      # the checkout is there before anything is compiled.
+      say "checking out the pinned commit $MUFFIN_REF in $SRC"
+      git -C "$SRC" fetch --quiet origin "$MUFFIN_REF" || die "git fetch of the pinned commit failed from $MUFFIN_REPO"
+      git -C "$SRC" checkout --quiet --detach "$MUFFIN_REF" || die "git checkout of the pinned commit failed"
+    else
+      say "updating the existing checkout in $SRC ($MUFFIN_CHANNEL)"
+      git -C "$SRC" fetch --quiet origin "$MUFFIN_CHANNEL" || die "git fetch failed from $MUFFIN_REPO"
+      git -C "$SRC" checkout --quiet -B "$MUFFIN_CHANNEL" "origin/$MUFFIN_CHANNEL"
+    fi
   else
-    say "cloning $MUFFIN_REPO ($MUFFIN_CHANNEL) into $SRC"
-    git clone --quiet --branch "$MUFFIN_CHANNEL" "$MUFFIN_REPO" "$SRC" || die "git clone failed from $MUFFIN_REPO"
+    if [ -n "$MUFFIN_REF" ]; then
+      say "cloning $MUFFIN_REPO at the pinned commit $MUFFIN_REF into $SRC"
+      git clone --quiet "$MUFFIN_REPO" "$SRC" || die "git clone failed from $MUFFIN_REPO"
+      git -C "$SRC" checkout --quiet --detach "$MUFFIN_REF" || die "git checkout of the pinned commit failed"
+    else
+      say "cloning $MUFFIN_REPO ($MUFFIN_CHANNEL) into $SRC"
+      git clone --quiet --branch "$MUFFIN_CHANNEL" "$MUFFIN_REPO" "$SRC" || die "git clone failed from $MUFFIN_REPO"
+    fi
+  fi
+  if [ -n "$MUFFIN_REF" ]; then
+    [ "$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)" = "$MUFFIN_REF" ] ||
+      die "the source checkout is not at the pinned commit $MUFFIN_REF"
   fi
 fi
 [ -f "$SRC/package.json" ] || die "no package.json in $SRC — the source is not there."
@@ -1104,6 +1216,8 @@ fi
 # driving this installer can tell "nothing works" from "everything works except
 # the part this machine cannot do".
 # ---------------------------------------------------------------------------
+sandbox_report sandbox_direct "$NODE_DIR/bin/node" "$SRC" sudo
+
 if [ "${MUFFIN_NO_GATEWAY:-}" = 1 ]; then
   say ""
   say "MUFFIN_NO_GATEWAY=1 — the supervisor was not touched. When you want it:"
