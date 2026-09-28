@@ -146,4 +146,8 @@ jitter indistinguibili da uno stallo (segnalato dall'owner il 28/09).
 
 Invito persistito per sessione; elenco dei continuabili scaduti con id
 completo in `doctor`; sweep periodico; `muffin resume` via gateway; livello
-Work/Goal esplicito.
+Work/Goal esplicito. Dalla review: la lease che ha prodotto il testo
+dovrebbe viaggiare fino al gancio di consegna invece di essere riletta da
+`turns` (una concessione da un secondo processo mentre il gateway consegna
+può chiavare il diagnostico sotto la lease sbagliata); e una prova di crash
+per lease nel recovery della consegna.
