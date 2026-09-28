@@ -19,6 +19,12 @@ readonly BWRAP_SHA256='4734237473c0e5d695e4e9034a34e43b2dbf5164655bd13fa59ae376b
 readonly BWRAP_ARCHIVE="bubblewrap-${BWRAP_VERSION}.tar.xz"
 readonly BWRAP_URL="https://github.com/containers/bubblewrap/releases/download/v${BWRAP_VERSION}/${BWRAP_ARCHIVE}"
 
+# The cleanup trap must not reference a function-local: with `set -u` an EXIT
+# trap that outlives the function is an unbound-variable failure *after* a
+# successful build (found by the CI install job).
+BWRAP_TMPDIR=''
+trap 'rm -rf -- "${BWRAP_TMPDIR:-}"' EXIT
+
 bwrap_fetch_verified() { # <workdir> -> archive path on stdout
   local workdir="$1" archive
   archive="$workdir/$BWRAP_ARCHIVE"
@@ -34,15 +40,14 @@ bwrap_verify_binary() { # <binary>
 }
 
 bwrap_build() { # <destdir> [prefix]
-  local destdir="$1" prefix="${2:-/usr/local}" workdir archive
-  workdir="$(mktemp -d)"
-  trap 'rm -rf -- "$workdir"' EXIT
-  archive="$(bwrap_fetch_verified "$workdir")"
-  tar -xJf "$archive" -C "$workdir"
-  meson setup "$workdir/build" "$workdir/bubblewrap-$BWRAP_VERSION" \
+  local destdir="$1" prefix="${2:-/usr/local}" archive
+  BWRAP_TMPDIR="$(mktemp -d)"
+  archive="$(bwrap_fetch_verified "$BWRAP_TMPDIR")"
+  tar -xJf "$archive" -C "$BWRAP_TMPDIR"
+  meson setup "$BWRAP_TMPDIR/build" "$BWRAP_TMPDIR/bubblewrap-$BWRAP_VERSION" \
     --prefix="$prefix" --buildtype=release >/dev/null
-  ninja -C "$workdir/build" >/dev/null
-  DESTDIR="$destdir" ninja -C "$workdir/build" install >/dev/null
+  ninja -C "$BWRAP_TMPDIR/build" >/dev/null
+  DESTDIR="$destdir" ninja -C "$BWRAP_TMPDIR/build" install >/dev/null
   bwrap_verify_binary "$destdir$prefix/bin/bwrap" || {
     echo "bubblewrap.sh: the installed binary is not bubblewrap ${BWRAP_VERSION}" >&2
     return 1
