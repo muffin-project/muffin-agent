@@ -12,6 +12,7 @@ import { GatewayLock } from '../core/gateway/lock.js';
 import { buildRuntime } from './runtime.js';
 import { enqueueTurn, resumeTurn, runTurn, type LoopDeps } from './loop.js';
 import type { ChatResult, Provider } from './providers/types.js';
+import { providerMessages } from './loop/provider-checkpoint.js';
 
 /**
  * The join between `buildRuntime` and the turn record, and the failure path
@@ -490,6 +491,6 @@ describe("P19: agent/loop.ts's own reaction to losing its claim mid-run", () => 
     expect(row).toMatchObject({ status: 'running', claimedBy: process.pid + 1, claimToken: 'rubato-dal-test' });
     // The losing answer specifically never landed — not merely "some write
     // failed", but *this* write, the one the whole scenario is about.
-    expect(JSON.stringify(row?.messages)).not.toContain('non dovrebbe mai raggiungere');
+    expect(JSON.stringify(providerMessages(row))).not.toContain('non dovrebbe mai raggiungere');
   });
 });

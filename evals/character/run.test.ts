@@ -1,26 +1,34 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  JUDGE_OUTPUT_TOKENS,
+  type ChatCall,
+  type ChatResult,
+  type Provider,
+  REASONING_HEADROOM,
+} from '../../agent/providers/types.js';
+import { startFakeProvider } from '../acceptance/provider.js';
+import { shellNonDisponibileQui } from '../acceptance/sandbox-host.js';
+import { PROBES } from './probes.js';
+import {
+  type AskEvent,
   buildJudgePrompt,
+  JUDGE_OUTPUT_TOKENS,
   judgeCall,
+  type ModelTarget,
   parseCli,
   parseJudgeOutput,
+  type ReportRow,
+  type RunConfig,
   renderReport,
   renderTokenReport,
   runEval,
   summarizeVerdicts,
-  type AskEvent,
-  type ModelTarget,
-  type ReportRow,
-  type RunConfig,
   type ToolCallEvent,
 } from './run.js';
-import { REASONING_HEADROOM, type ChatCall, type ChatResult, type Provider } from '../../agent/providers/types.js';
-import { startFakeProvider } from '../acceptance/provider.js';
-import { PROBES } from './probes.js';
+
+const itWithShell = it.skipIf(shellNonDisponibileQui() !== null);
 
 const OUT_DIRS: string[] = [];
 afterEach(() => {
@@ -37,9 +45,14 @@ describe('parseCli', () => {
   it('richiede provider/api-key-env/model per una corsa reale, senza --config', () => {
     expect(() => parseCli([], '/tmp/out')).toThrow(/--provider/);
     expect(() => parseCli(['--provider', 'anthropic'], '/tmp/out')).toThrow(/--api-key-env/);
-    expect(() => parseCli(['--provider', 'anthropic', '--api-key-env', 'X'], '/tmp/out')).toThrow(/--model/);
+    expect(() => parseCli(['--provider', 'anthropic', '--api-key-env', 'X'], '/tmp/out')).toThrow(
+      /--model/,
+    );
     expect(() =>
-      parseCli(['--provider', 'anthropic', '--api-key-env', 'X', '--model', 'claude-sonnet-5'], '/tmp/out'),
+      parseCli(
+        ['--provider', 'anthropic', '--api-key-env', 'X', '--model', 'claude-sonnet-5'],
+        '/tmp/out',
+      ),
     ).toThrow(/giudice/);
   });
 
@@ -53,7 +66,16 @@ describe('parseCli', () => {
 
   it('--models accetta una lista, --provider/--api-key-env condivisi, --judge-model esplicito', () => {
     const config = parseCli(
-      ['--provider', 'anthropic', '--api-key-env', 'ANTHROPIC_API_KEY', '--models', 'a,b,c', '--judge-model', 'j'],
+      [
+        '--provider',
+        'anthropic',
+        '--api-key-env',
+        'ANTHROPIC_API_KEY',
+        '--models',
+        'a,b,c',
+        '--judge-model',
+        'j',
+      ],
       '/tmp/out',
     );
     expect(config.models.map((m) => m.model)).toEqual(['a', 'b', 'c']);
@@ -86,7 +108,10 @@ describe('parseCli', () => {
 
 describe('parseJudgeOutput — tollerante a output non-JSON', () => {
   it('marca ogni proprietà "unparsed" quando il giudice non risponde JSON', () => {
-    const result = parseJudgeOutput('boh, non saprei come metterlo in JSON, sinceramente', ['natural', 'agentic']);
+    const result = parseJudgeOutput('boh, non saprei come metterlo in JSON, sinceramente', [
+      'natural',
+      'agentic',
+    ]);
     expect(result).toEqual([
       { property: 'natural', verdict: 'unparsed', evidence: expect.any(String) },
       { property: 'agentic', verdict: 'unparsed', evidence: expect.any(String) },
@@ -106,14 +131,22 @@ describe('parseJudgeOutput — tollerante a output non-JSON', () => {
       ],
     });
     const result = parseJudgeOutput(raw, ['natural', 'agentic']);
-    expect(result[0]).toEqual({ property: 'natural', verdict: 'pass', evidence: 'suona come una persona vera' });
+    expect(result[0]).toEqual({
+      property: 'natural',
+      verdict: 'pass',
+      evidence: 'suona come una persona vera',
+    });
     expect(result[1]?.verdict).toBe('unparsed');
   });
 
   it('tollera del testo prima/dopo il blocco JSON (un giudice che non ha resistito al commento)', () => {
     const raw = `Certo, ecco il giudizio:\n${JSON.stringify({ judgements: [{ property: 'natural', verdict: 'fail', evidence: 'suona da manuale' }] })}\ngrazie!`;
     const result = parseJudgeOutput(raw, ['natural']);
-    expect(result[0]).toEqual({ property: 'natural', verdict: 'fail', evidence: 'suona da manuale' });
+    expect(result[0]).toEqual({
+      property: 'natural',
+      verdict: 'fail',
+      evidence: 'suona da manuale',
+    });
   });
 });
 
@@ -172,8 +205,22 @@ describe('il giudice non paga un reasoning che nessuno legge', () => {
     try {
       await runEval(
         {
-          models: [{ label: 'm1', provider: 'openai-compat', baseUrl: fake.baseUrl, model: 'm1', apiKeyEnv: 'MUFFIN_CHARACTER_EVAL_FAKE_KEY' }],
-          judge: { label: 'j1', provider: 'openai-compat', baseUrl: fake.baseUrl, model: 'j1', apiKeyEnv: 'MUFFIN_CHARACTER_EVAL_FAKE_KEY' },
+          models: [
+            {
+              label: 'm1',
+              provider: 'openai-compat',
+              baseUrl: fake.baseUrl,
+              model: 'm1',
+              apiKeyEnv: 'MUFFIN_CHARACTER_EVAL_FAKE_KEY',
+            },
+          ],
+          judge: {
+            label: 'j1',
+            provider: 'openai-compat',
+            baseUrl: fake.baseUrl,
+            model: 'j1',
+            apiKeyEnv: 'MUFFIN_CHARACTER_EVAL_FAKE_KEY',
+          },
           dryRun: false,
           probeIds: ['casual-hey'],
           outDir,
@@ -219,19 +266,38 @@ describe('D13: --fake-approve non ferma il turno su un ask, e registra cosa ha c
   }
 
   const scriptedAsk = [
-    { tool: { name: 'shell_run_write', args: { command: 'echo ciao-dal-sandbox', description: 'prova D13' } } },
+    {
+      tool: {
+        name: 'shell_run_write',
+        args: { command: 'echo ciao-dal-sandbox', description: 'prova D13' },
+      },
+    },
     { text: 'QUESTA RISPOSTA NON DEVE MAI COMPARIRE SENZA UN Sì' },
   ];
 
-  it('senza --fake-approve: il turno si ferma sull\'ask, e non scrive asks.json', async () => {
+  itWithShell("senza --fake-approve: il turno si ferma sull'ask, e non scrive asks.json", async () => {
     const fake = await startFakeProvider({ main: scriptedAsk });
     process.env.MUFFIN_CHARACTER_D13_KEY = 'sk-character-eval-fake';
     const outDir = scratchOutDir();
     try {
       await runEval(
         {
-          models: [{ label: 'm1', provider: 'openai-compat', baseUrl: fake.baseUrl, model: 'm1', apiKeyEnv: 'MUFFIN_CHARACTER_D13_KEY' }],
-          judge: { label: 'j1', provider: 'openai-compat', baseUrl: fake.baseUrl, model: 'j1', apiKeyEnv: 'MUFFIN_CHARACTER_D13_KEY' },
+          models: [
+            {
+              label: 'm1',
+              provider: 'openai-compat',
+              baseUrl: fake.baseUrl,
+              model: 'm1',
+              apiKeyEnv: 'MUFFIN_CHARACTER_D13_KEY',
+            },
+          ],
+          judge: {
+            label: 'j1',
+            provider: 'openai-compat',
+            baseUrl: fake.baseUrl,
+            model: 'j1',
+            apiKeyEnv: 'MUFFIN_CHARACTER_D13_KEY',
+          },
           dryRun: false,
           probeIds: ['multistep-technical-task'],
           outDir,
@@ -252,19 +318,35 @@ describe('D13: --fake-approve non ferma il turno su un ask, e registra cosa ha c
     // una domanda senza risposta: un ask che nessuno approva non arriva a
     // scrivere l'intento (`agent/loop/tool-call.ts`), quindi qui è vuoto —
     // la controprova dell'assertion sotto, sullo stesso comando approvato.
-    const toolCalls = JSON.parse(readFileSync(join(runDir, 'tool-calls.json'), 'utf8')) as ToolCallEvent[];
+    const toolCalls = JSON.parse(
+      readFileSync(join(runDir, 'tool-calls.json'), 'utf8'),
+    ) as ToolCallEvent[];
     expect(toolCalls).toEqual([]);
   }, 60_000);
 
-  it('con --fake-approve: il turno passa oltre l\'ask, ed esiste un asks.json con quello che ha chiesto', async () => {
+  itWithShell("con --fake-approve: il turno passa oltre l'ask, ed esiste un asks.json con quello che ha chiesto", async () => {
     const fake = await startFakeProvider({ main: scriptedAsk });
     process.env.MUFFIN_CHARACTER_D13_KEY = 'sk-character-eval-fake';
     const outDir = scratchOutDir();
     try {
       await runEval(
         {
-          models: [{ label: 'm1', provider: 'openai-compat', baseUrl: fake.baseUrl, model: 'm1', apiKeyEnv: 'MUFFIN_CHARACTER_D13_KEY' }],
-          judge: { label: 'j1', provider: 'openai-compat', baseUrl: fake.baseUrl, model: 'j1', apiKeyEnv: 'MUFFIN_CHARACTER_D13_KEY' },
+          models: [
+            {
+              label: 'm1',
+              provider: 'openai-compat',
+              baseUrl: fake.baseUrl,
+              model: 'm1',
+              apiKeyEnv: 'MUFFIN_CHARACTER_D13_KEY',
+            },
+          ],
+          judge: {
+            label: 'j1',
+            provider: 'openai-compat',
+            baseUrl: fake.baseUrl,
+            model: 'j1',
+            apiKeyEnv: 'MUFFIN_CHARACTER_D13_KEY',
+          },
           dryRun: false,
           probeIds: ['multistep-technical-task'],
           outDir,
@@ -289,7 +371,9 @@ describe('D13: --fake-approve non ferma il turno su un ask, e registra cosa ha c
 
     // Approvata, quindi eseguita: il registro D15 la vede, e la marca
     // `decision: 'ask'` — passata, ma solo dopo una domanda (mai `allow` muto).
-    const toolCalls = JSON.parse(readFileSync(join(runDir, 'tool-calls.json'), 'utf8')) as ToolCallEvent[];
+    const toolCalls = JSON.parse(
+      readFileSync(join(runDir, 'tool-calls.json'), 'utf8'),
+    ) as ToolCallEvent[];
     expect(toolCalls).toHaveLength(1);
     expect(toolCalls[0]?.tool).toBe('shell_run_write');
     expect(toolCalls[0]?.decision).toBe('ask');
@@ -310,7 +394,7 @@ describe('confinamento: un modello remoto non legge fuori dalla home/workspace f
     }
   }
 
-  it('un sentinel fuori dalla home reale (iniettata) resta irraggiungibile da shell_run', async () => {
+  itWithShell('un sentinel fuori dalla home reale (iniettata) resta irraggiungibile da shell_run', async () => {
     // `realHome` sta per la vera $HOME dell'operatore: mai toccata, sostituita
     // da una directory iniettata per il test — la stessa ragione per cui
     // `mandatoryGuards` rende `userHome` iniettabile (`core/rot/guards.ts`).
@@ -330,11 +414,31 @@ describe('confinamento: un modello remoto non legge fuori dalla home/workspace f
     try {
       await runEval(
         {
-          models: [{ label: 'm1', provider: 'openai-compat', baseUrl: fake.baseUrl, model: 'm1', apiKeyEnv: 'MUFFIN_CHARACTER_CONFINE_KEY' }],
-          judge: { label: 'j1', provider: 'openai-compat', baseUrl: fake.baseUrl, model: 'j1', apiKeyEnv: 'MUFFIN_CHARACTER_CONFINE_KEY' },
+          models: [
+            {
+              label: 'm1',
+              provider: 'openai-compat',
+              baseUrl: fake.baseUrl,
+              model: 'm1',
+              apiKeyEnv: 'MUFFIN_CHARACTER_CONFINE_KEY',
+            },
+          ],
+          judge: {
+            label: 'j1',
+            provider: 'openai-compat',
+            baseUrl: fake.baseUrl,
+            model: 'j1',
+            apiKeyEnv: 'MUFFIN_CHARACTER_CONFINE_KEY',
+          },
           dryRun: false,
           probeIds: ['casual-hey'],
           outDir,
+          // Since ADR-0091 `shell_run` asks (whole-host reads are disclosure,
+          // #645). Without an approver the turn would stop on the gate and the
+          // denyRead of the real home would never be exercised — the claim
+          // under test is that the *command* cannot read the sentinel, so the
+          // gate is auto-passed and the ask is recorded like D13's.
+          fakeApprove: true,
         },
         { judgeProvider: new GiudiceIndifferente(), realHome },
       );
@@ -344,6 +448,13 @@ describe('confinamento: un modello remoto non legge fuori dalla home/workspace f
     }
     const runDir = join(outDir, readdirSync(outDir)[0]!, 'm1');
 
+    // Il gate c'è, ed è una domanda: da ADR-0091 la corsia in sola lettura
+    // chiede quanto quella che scrive, e la domanda è registrata come ogni
+    // altro ask di questo run.
+    const asks = JSON.parse(readFileSync(join(runDir, 'asks.json'), 'utf8')) as AskEvent[];
+    expect(asks).toHaveLength(1);
+    expect(asks[0]?.capability).toBe('sys.shell');
+
     // `isError`, non un `toContain` sul transcript: la seconda risposta è
     // scriptata ("fatto") e non ripete mai lo stdout del comando, quindi un
     // `.md` pulito non proverebbe niente — la prova reale è che il comando
@@ -351,7 +462,9 @@ describe('confinamento: un modello remoto non legge fuori dalla home/workspace f
     // restituire i byte del sentinel. Mutazione verificata a mano: senza
     // `extraDenyRead: [realHome]` questo assert torna rosso (`isError:
     // false`, il `cat` riesce) — ripristinato dopo la conferma.
-    const toolCalls = JSON.parse(readFileSync(join(runDir, 'tool-calls.json'), 'utf8')) as ToolCallEvent[];
+    const toolCalls = JSON.parse(
+      readFileSync(join(runDir, 'tool-calls.json'), 'utf8'),
+    ) as ToolCallEvent[];
     expect(toolCalls).toHaveLength(1);
     expect(toolCalls[0]?.tool).toBe('shell_run');
     expect(toolCalls[0]?.isError).toBe(true);
@@ -360,11 +473,23 @@ describe('confinamento: un modello remoto non legge fuori dalla home/workspace f
 
 describe('una misura persa non è un giudizio', () => {
   const rows = (verdicts: readonly ReportRow['verdict'][]): ReportRow[] =>
-    verdicts.map((verdict, i) => ({ model: 'm1', probe: `p${i}`, property: 'natural' as const, verdict, evidence: '' }));
+    verdicts.map((verdict, i) => ({
+      model: 'm1',
+      probe: `p${i}`,
+      property: 'natural' as const,
+      verdict,
+      evidence: '',
+    }));
 
   it('conta `unparsed` a parte da `n/a`, e solo `unparsed` fa fallire la corsa', () => {
     const solo_na = summarizeVerdicts(rows(['pass', 'n/a', 'n/a']));
-    expect(solo_na.byModel.get('m1')).toMatchObject({ pass: 1, fail: 0, na: 2, unparsed: 0, total: 3 });
+    expect(solo_na.byModel.get('m1')).toMatchObject({
+      pass: 1,
+      fail: 0,
+      na: 2,
+      unparsed: 0,
+      total: 3,
+    });
     expect(solo_na.failed).toBe(false);
 
     const con_perse = summarizeVerdicts(rows(['pass', 'n/a', 'unparsed']));
@@ -396,8 +521,22 @@ describe('una misura persa non è un giudizio', () => {
     try {
       const { summary, report } = await runEval(
         {
-          models: [{ label: 'm1', provider: 'openai-compat', baseUrl: fake.baseUrl, model: 'm1', apiKeyEnv: 'MUFFIN_CHARACTER_TRUNC_KEY' }],
-          judge: { label: 'j1', provider: 'openai-compat', baseUrl: fake.baseUrl, model: 'j1', apiKeyEnv: 'MUFFIN_CHARACTER_TRUNC_KEY' },
+          models: [
+            {
+              label: 'm1',
+              provider: 'openai-compat',
+              baseUrl: fake.baseUrl,
+              model: 'm1',
+              apiKeyEnv: 'MUFFIN_CHARACTER_TRUNC_KEY',
+            },
+          ],
+          judge: {
+            label: 'j1',
+            provider: 'openai-compat',
+            baseUrl: fake.baseUrl,
+            model: 'j1',
+            apiKeyEnv: 'MUFFIN_CHARACTER_TRUNC_KEY',
+          },
           dryRun: false,
           probeIds: ['casual-hey'],
           outDir,
@@ -420,7 +559,9 @@ describe('una misura persa non è un giudizio', () => {
   }, 60_000);
 
   it('il report grida le misure perse invece di sommarle agli n/a', () => {
-    const models: ModelTarget[] = [{ label: 'm1', provider: 'anthropic', model: 'm1', apiKeyEnv: 'X' }];
+    const models: ModelTarget[] = [
+      { label: 'm1', provider: 'anthropic', model: 'm1', apiKeyEnv: 'X' },
+    ];
     const judge: ModelTarget = { label: 'j1', provider: 'anthropic', model: 'j1', apiKeyEnv: 'X' };
     const report = renderReport(rows(['pass', 'n/a', 'unparsed']), models, judge);
     // La forma che la sintesi del 27/08 aveva e che leggeva come un successo.
@@ -437,7 +578,9 @@ describe('una misura persa non è un giudizio', () => {
 });
 
 describe('report rendering', () => {
-  const models: ModelTarget[] = [{ label: 'm1', provider: 'anthropic', model: 'm1', apiKeyEnv: 'X' }];
+  const models: ModelTarget[] = [
+    { label: 'm1', provider: 'anthropic', model: 'm1', apiKeyEnv: 'X' },
+  ];
   const judge: ModelTarget = { label: 'j1', provider: 'anthropic', model: 'j1', apiKeyEnv: 'X' };
 
   it('renderReport include una colonna "Revisione umana" vuota per riga', () => {
@@ -451,7 +594,10 @@ describe('report rendering', () => {
   });
 
   it('renderTokenReport dichiara la stima grezza e non menziona verdetti', () => {
-    const report = renderTokenReport([{ model: 'm1', probe: 'casual-hey', systemTokens: 100, turnTokens: 10, calls: 1 }], models);
+    const report = renderTokenReport(
+      [{ model: 'm1', probe: 'casual-hey', systemTokens: 100, turnTokens: 10, calls: 1 }],
+      models,
+    );
     expect(report).toContain('stima');
     expect(report).not.toContain('pass');
   });
@@ -460,11 +606,24 @@ describe('report rendering', () => {
 describe('runEval --dry-run', () => {
   it('produce il report senza nessuna chiamata reale, coprendo ogni primitiva di contesto', async () => {
     const config: RunConfig = {
-      models: [{ label: 'dry-model', provider: 'anthropic', model: 'dry-model', apiKeyEnv: 'UNUSED_UNDER_DRY_RUN' }],
+      models: [
+        {
+          label: 'dry-model',
+          provider: 'anthropic',
+          model: 'dry-model',
+          apiKeyEnv: 'UNUSED_UNDER_DRY_RUN',
+        },
+      ],
       judge: null,
       dryRun: true,
       // One probe per real context primitive (memory, seeded turns, fake tool, crashed turn) plus a bare one.
-      probeIds: ['casual-hey', 'memory-relevant', 'muffin-was-wrong', 'tool-fails', 'crash-uncertain-outcome'],
+      probeIds: [
+        'casual-hey',
+        'memory-relevant',
+        'muffin-was-wrong',
+        'tool-fails',
+        'crash-uncertain-outcome',
+      ],
       outDir: scratchOutDir(),
     };
     const { reportPath, report } = await runEval(config);
@@ -474,7 +633,13 @@ describe('runEval --dry-run', () => {
     // Per-probe transcripts landed on disk, one per probe under the model's own dir.
     const modelDir = join(join(reportPath, '..'), 'dry-model');
     const files = readdirSync(modelDir).sort();
-    expect(files).toEqual(['casual-hey.md', 'crash-uncertain-outcome.md', 'memory-relevant.md', 'muffin-was-wrong.md', 'tool-fails.md']);
+    expect(files).toEqual([
+      'casual-hey.md',
+      'crash-uncertain-outcome.md',
+      'memory-relevant.md',
+      'muffin-was-wrong.md',
+      'tool-fails.md',
+    ]);
     // The crash probe's template placeholder was substituted with a real describeInterrupted() line.
     const crashTranscript = readFileSync(join(modelDir, 'crash-uncertain-outcome.md'), 'utf8');
     expect(crashTranscript).not.toContain('{{CRASH_NOTE}}');
@@ -483,7 +648,14 @@ describe('runEval --dry-run', () => {
 
   it('rifiuta un filtro --probes che non corrisponde a nessun id', async () => {
     const config: RunConfig = {
-      models: [{ label: 'dry-model', provider: 'anthropic', model: 'dry-model', apiKeyEnv: 'UNUSED_UNDER_DRY_RUN' }],
+      models: [
+        {
+          label: 'dry-model',
+          provider: 'anthropic',
+          model: 'dry-model',
+          apiKeyEnv: 'UNUSED_UNDER_DRY_RUN',
+        },
+      ],
       judge: null,
       dryRun: true,
       probeIds: ['non-esiste'],

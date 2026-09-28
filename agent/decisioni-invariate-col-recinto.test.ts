@@ -1,19 +1,19 @@
-import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
+import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { TurnStore } from '../core/turns/store.js';
 import { TodoStore } from '../core/turns/todo.js';
-import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
-import { runTurn, type LoopDeps, type RegisteredTool } from './loop.js';
+import { type LoopDeps, type RegisteredTool, runTurn } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
 import type { ChatResult, Provider } from './providers/types.js';
-import { fsCapabilities, makeFsTools, DISK_TIER, type FsScope } from './tools/fs.js';
+import { DISK_TIER, type FsScope, fsCapabilities, makeFsTools } from './tools/fs.js';
 import { httpCapability } from './tools/http.js';
 import { shellCapability, shellWriteCapability } from './tools/shell.js';
 
@@ -256,16 +256,25 @@ describe('una decisione non dipende da come è impacchettato il contenuto', () =
     expect(no.eseguiti).toEqual([]);
   });
 
-  it('leggere e poi la shell in sola lettura: nessuna domanda, e il recinto non la crea', async () => {
+  it('leggere e poi la shell in sola lettura: la domanda è della corsia, non del recinto (ADR-0091)', async () => {
     const script = [
       callTool('fs_read', { path: 'nota.md' }),
       callTool('shell_run', { command: 'ls' }),
     ];
-    const letto = await scena(AVVELENATO, script, 'deny');
-    // `deny` come approvatore, apposta: se una domanda arrivasse, il comando
-    // non girerebbe, e `eseguiti` lo direbbe.
-    expect(letto.domande).toEqual([]);
-    expect(letto.eseguiti).toEqual(['ls']);
+
+    const sì = await scena(AVVELENATO, script, 'allow');
+    const no = await scena(AVVELENATO, [...script], 'deny');
+
+    // Una domanda sola in tutti e due i rami, e viene dalla capability — da
+    // ADR-0091 (misura Linux 2026-09-22, #645) la corsia in sola lettura è
+    // `reversible: 'no'` quanto quella che scrive, perché leggere
+    // l'intera macchina è disclosure. Il recinto non la crea e non la
+    // spegne: stesso conteggio con approvatore `deny`, dove un comando con
+    // una domanda in più non girerebbe.
+    expect(sì.domande).toHaveLength(1);
+    expect(no.domande).toHaveLength(1);
+    expect(sì.eseguiti).toEqual(['ls']);
+    expect(no.eseguiti).toEqual([]);
   });
 
   it('uscire senza aver letto niente resta raggiungibile — è un gate, non un muro', async () => {

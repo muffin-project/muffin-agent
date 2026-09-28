@@ -99,6 +99,12 @@ jobs:
       - name: systemd, per verificare la unit
         run: sudo apt-get update -qq && sudo apt-get install -y -qq systemd
 
+      # #702: la modalità è esplicita e i path sono riportati. Costa secondi —
+      # non costruisce niente — e va prima del giro completo perché è la
+      # decisione che il giro completo poi esercita.
+      - name: modalità di installazione esplicite, e path riportati (#702)
+        run: bash evals/install/modes.sh
+
       - name: la pipe pubblica conserva il controlling tty
         run: bash evals/install/pipe-tty.sh
 

@@ -173,6 +173,18 @@ export const MAI_CONCEDIBILI: readonly CapabilityId[] = [
   'rot.*',
   'outward.*',
   'config.*',
+  /**
+   * ADR-0073 lets an exact room grant override `hostOnly`; these four handlers
+   * do not yet have room-scoped semantics. `surface.send_file` can read from
+   * the shared Vault, `skill.read` exposes the install-wide catalogue,
+   * `sys.inspect` reports host/install state, and `jobs.schedule` still lacks
+   * settled group audience semantics (#613). Keep each exact ID closed until
+   * its owner issue adds tenant-scoped production behavior and acceptance.
+   */
+  'surface.send_file',
+  'skill.read',
+  'sys.inspect',
+  'jobs.schedule',
 ];
 
 const MAI_CONCEDIBILI_SET: ReadonlySet<CapabilityId> = new Set(MAI_CONCEDIBILI);

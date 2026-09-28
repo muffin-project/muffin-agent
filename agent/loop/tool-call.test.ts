@@ -62,6 +62,7 @@ function toolInput(principal: Principal): TurnInput {
 }
 
 function toolCtx(deps: LoopDeps, principal: Principal, turnId: string): ToolContext {
+  let failure: string | null = null;
   return {
     tenant: 'host',
     principal,
@@ -71,6 +72,12 @@ function toolCtx(deps: LoopDeps, principal: Principal, turnId: string): ToolCont
     intrinsicTaint: () => 0,
     suspend: () => {
       throw new Error('this test never expects a suspension');
+    },
+    durability: {
+      failure: () => failure,
+      fail: (reason) => {
+        failure ??= reason;
+      },
     },
   };
 }
@@ -140,7 +147,9 @@ describe('EFFECT WAL — recordIntent before the handler, recordOutcome after', 
       throwTier: 0,
     };
     const { deps } = harness([decl], [tool]);
+    let intentAttempts = 0;
     deps.turns.startToolCall = () => {
+      intentAttempts += 1;
       throw new Error('disk full');
     };
     const snapshot = makeSnapshot(deps.decide, owner, 'host', 0);
@@ -160,6 +169,19 @@ describe('EFFECT WAL — recordIntent before the handler, recordOutcome after', 
     expect(handlerCalled).toBe(false);
     expect(outcome).toMatchObject({ isError: true });
     expect((outcome as { content: string }).content).toContain('Intento non registrabile');
+
+    const later = await runTool(
+      deps,
+      snapshot,
+      parent,
+      { id: 'c3', name: searchSpec.name, args: { query: 'y' } },
+      toolInput(owner),
+      [tool],
+      ctx,
+    );
+    expect(handlerCalled).toBe(false);
+    expect(intentAttempts).toBe(1);
+    expect((later as { content: string }).content).toContain('persistenza del turno non è disponibile');
   });
 });
 

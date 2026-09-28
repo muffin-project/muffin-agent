@@ -1389,4 +1389,21 @@ describe('recall porta fuori quanto è costato il rerank', () => {
     const r = await recall({ store, reranker: reranker(false) }, HOST, 'commercialista');
     expect(r.rerankUsage).toBeUndefined();
   });
+
+  it('passa il job al reranker, così la sua chiamata è attribuita a quel job', async () => {
+    const { store } = popolata();
+    const visti: Array<string | undefined> = [];
+    const reranker: Reranker = {
+      id: 'finto',
+      rerank: async (_q, candidates, topK, jobId) => {
+        visti.push(jobId);
+        return { items: candidates.slice(0, topK), reordered: true };
+      },
+    };
+
+    await recall({ store, reranker }, HOST, 'commercialista', { jobId: 'job-9' });
+    await recall({ store, reranker }, HOST, 'commercialista');
+
+    expect(visti).toEqual(['job-9', undefined]);
+  });
 });

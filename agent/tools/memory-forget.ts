@@ -95,7 +95,19 @@ function idList(raw: unknown, name: string): number[] | string {
 }
 
 /** Everything a forget needs from the turn: who owns the memory and which turn asked. */
-export type ForgetContext = { tenant: string; turnId: string };
+export type ForgetContext = {
+  tenant: string;
+  turnId: string;
+  /**
+   * The scheduled job this turn belongs to, when one does.
+   *
+   * The first `memory_forget` call recalls to list candidates, and recall pays
+   * the reranker past `RERANK_MIN_CANDIDATES` — spend the job caused, so it has
+   * to land on the job's ledger like the pre-turn recall and `memory_search`.
+   * Absent on every interactive turn.
+   */
+  jobId?: string | undefined;
+};
 
 export async function forgetMemory(
   deps: RecallDeps,
@@ -140,7 +152,10 @@ export async function forgetMemory(
     };
   }
   const query = raw.query.trim();
-  const found = await recall(deps, ctx.tenant, query, { limit: 12 });
+  const found = await recall(deps, ctx.tenant, query, {
+    limit: 12,
+    ...(ctx.jobId === undefined ? {} : { jobId: ctx.jobId }),
+  });
   const items = found.items.filter((i) => (i.kind === 'fact' || i.kind === 'episode') && i.expired !== true);
   // Facts reach recall through the vector index or the entity hop. A fact
   // extracted a minute ago may have no vector yet (embedder backlog — measured

@@ -211,6 +211,14 @@ export class OpenAICompatProvider implements Provider {
   readonly stickySession: boolean;
   /** Le preferenze di instradamento dell'owner, già nella forma del corpo. */
   private readonly routing: Record<string, unknown> | undefined;
+  /** Endpoint che smista fra più provider a monte (OpenRouter). */
+  private readonly openRouter: boolean;
+  /**
+   * L'owner ha inchiodato la rotta (`only`/`order`)? Se sì, il re-drive dopo
+   * risposte vuote non deve ignorare l'unico provider ammesso: renderebbe il
+   * tentativo impossibile invece che diverso.
+   */
+  private readonly routingPinned: boolean;
   private readonly baseURL: string | undefined;
   private readonly reasoningDiscovery: OpenRouterReasoningDiscovery | undefined;
   private discoveredReasoning: OpenRouterDiscoveryResult | undefined;
@@ -245,6 +253,8 @@ export class OpenAICompatProvider implements Provider {
     // niente da instradare, e un campo che non conosce è un campo su cui può
     // inciampare — stesso argomento di `session_id` e `reasoning`.
     this.routing = speaksStickySession(baseURL) ? routingBody(opts.routing) : undefined;
+    this.openRouter = speaksStickySession(baseURL);
+    this.routingPinned = opts.routing?.only !== undefined || opts.routing?.order !== undefined;
     this.reasoningEffort = opts.reasoningEffort ?? speaksReasoningEffort(baseURL);
     this.client = new OpenAI({
       apiKey,
@@ -486,9 +496,24 @@ export class OpenAICompatProvider implements Provider {
     const effective = reasoning.effective;
     const explicitReasoningConstraint = effective !== undefined && (effective.mode === 'off' || effective.mode === 'on' || effective.effort !== undefined || effective.maxTokens !== undefined);
     const configuredRouting = this.routing;
-    const providerRouting = explicitReasoningConstraint
+    const baseRouting = explicitReasoningConstraint
       ? { ...(configuredRouting ?? {}), require_parameters: true }
       : configuredRouting;
+    /**
+     * Il re-drive dopo risposte vuote (P0-A) nomina il provider a monte che non
+     * ha risposto niente: ignorarlo fa atterrare il tentativo su una macchina
+     * diversa invece che sulla stessa. Solo su uno smistatore, e solo se l'owner
+     * non ha inchiodato la rotta: con `only`/`order` ignorare l'unico provider
+     * ammesso renderebbe il tentativo impossibile invece che diverso.
+     */
+    const ignore = call.providerIgnore ?? [];
+    const existingIgnore = Array.isArray((baseRouting as { ignore?: unknown } | undefined)?.ignore)
+      ? ((baseRouting as { ignore: unknown[] }).ignore)
+      : [];
+    const providerRouting =
+      ignore.length > 0 && this.openRouter && !this.routingPinned
+        ? { ...(baseRouting ?? {}), ignore: [...new Set([...existingIgnore, ...ignore])] }
+        : baseRouting;
     return {
       model: call.model,
       max_tokens: call.maxOutputTokens,

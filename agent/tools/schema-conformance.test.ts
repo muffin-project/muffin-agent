@@ -1,11 +1,22 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { runInit } from '../../cli/init.js';
-import { buildRuntime } from '../runtime.js';
-import type { ToolContext } from '../loop.js';
 import type { Principal } from '../../core/policy/types.js';
+import type { ToolContext } from '../loop.js';
+import { buildRuntime } from '../runtime.js';
+
+/**
+ * Declared fixture for the #642 shell boundary (see the same mock in
+ * `tool-descriptions.test.ts`): `shell_run` is named below as examined, so on
+ * a host where bwrap < 0.12.0 refuses the lanes the mock keeps the claim
+ * host-independent. The gate is tested in `agent/sandbox-gate.test.ts`.
+ */
+vi.mock('../../core/sandbox/bubblewrap-version.js', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../../core/sandbox/bubblewrap-version.js')>();
+  return { ...mod, readBubblewrapVersion: () => 'bubblewrap 0.12.0' };
+});
 
 /**
  * Lo schema dichiarato e quello preteso.
@@ -77,7 +88,9 @@ describe('un argomento dichiarato obbligatorio è preteso davvero', () => {
       // I tre `fs` sono quelli da cui è saltato fuori il difetto, quindi sono
       // nominati: se sparissero dall'esame, l'esame non direbbe niente su di
       // loro restando verde.
-      expect(esaminati).toEqual(expect.arrayContaining(['fs_read', 'fs_list', 'fs_write', 'shell_run']));
+      expect(esaminati).toEqual(
+        expect.arrayContaining(['fs_read', 'fs_list', 'fs_write', 'shell_run']),
+      );
       expect(esaminati.length).toBeGreaterThanOrEqual(5);
     } finally {
       runtime.close();

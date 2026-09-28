@@ -13,6 +13,7 @@ import type { Embedder } from '../../core/memory/embed.js';
 import { retireBeliefs } from '../../core/memory/ingest.js';
 import { describeProvenance } from '../../core/memory/provenance.js';
 import { recall, type RecallDeps } from '../../core/memory/recall.js';
+import { RERANK_MIN_CANDIDATES } from '../../core/memory/rerank.js';
 import { MemoryStore } from '../../core/memory/store.js';
 import { VectorIndex } from '../../core/memory/vectors.js';
 import { forgetMemory } from './memory-forget.js';
@@ -62,6 +63,36 @@ describe('memory_forget — «dimentica X» ritira la belief attraverso il write
     expect(out.content).toContain(`#${h.fact}`);
     expect(out.content).toContain('memory_forget con gli id');
     expect(h.store.activeFacts('host', h.me, 'dentist')).toHaveLength(1);
+  });
+
+  it('porta il job del turno alla recall, così il reranker che paga è speso sul job', async () => {
+    // Il terzo chiamante in-turno del reranker, dopo la recall automatica e
+    // `memory_search`: la prima `memory_forget` elenca i candidati con una
+    // recall. Se `ctx.jobId` non arrivasse qui, la sua spesa resterebbe su
+    // `job_id = NULL` e il tetto per-job sarebbe cieco a questa strada.
+    const h = seed();
+    const visti: Array<string | undefined> = [];
+    const deps: RecallDeps = {
+      ...h.deps,
+      reranker: {
+        id: 'finto',
+        rerank: async (_q, candidates, topK, jobId) => {
+          visti.push(jobId);
+          return { items: candidates.slice(0, topK), reordered: true };
+        },
+      },
+    };
+    // Sopra `RERANK_MIN_CANDIDATES`, o la recall non chiama il reranker.
+    for (let i = 0; i < RERANK_MIN_CANDIDATES + 4; i++) {
+      h.store.addEpisode({
+        tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
+        kind: 'message', content: `dentista numero ${i}`, trustTier: 0, createdAt: NOW,
+      });
+    }
+
+    await forgetMemory(deps, { ...CTX, jobId: 'job-forget-1' }, { query: 'dentista' });
+
+    expect(visti).toEqual(['job-forget-1']);
   });
 
   it('elenca anche un fatto che il recall non vede: senza vettore e con un episodio che non lo nomina', async () => {

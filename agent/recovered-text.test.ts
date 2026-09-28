@@ -13,7 +13,13 @@ const record = (
   sessionId: string,
   outcome: 'answered' | 'error' = 'answered',
   messages: Message[] = [],
-): TurnRecord => ({ id, sessionId, outcome, messages }) as unknown as TurnRecord;
+): TurnRecord =>
+  ({
+    id,
+    sessionId,
+    outcome,
+    providerLease: { model: 'test-model', checkpoint: messages },
+  }) as unknown as TurnRecord;
 
 function fixture() {
   const home = mkdtempSync(join(tmpdir(), 'muffin-recovered-text-'));

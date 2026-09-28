@@ -94,8 +94,18 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     // leg so it really reads the sentinel `selfTestContainment` wrote to
     // disk; the deny leg ignores it and always refuses — exactly what a held
     // deny through the real door looks like from the outside.
+    //
+    // The AF_UNIX leg gets the refusal the real `apply-seccomp` filter
+    // produces (`EPERM` from `socket(AF_UNIX, …)`): the mock never runs
+    // bwrap, so without modelling that refusal it would let the probe's
+    // client connect and `verify()` would report `unix_filter_absent`.
     wrapWithSandboxArgv.mockImplementation(async (command, _binShell, customConfig) => ({
-      argv: denyReadOf(customConfig).length > 0 ? ['/bin/sh', '-c', 'exit 1'] : ['/bin/bash', '-c', command],
+      argv:
+        denyReadOf(customConfig).length > 0
+          ? ['/bin/sh', '-c', 'exit 1']
+          : command.includes('afunix.sock')
+            ? ['/bin/sh', '-c', 'echo EPERM >&2; exit 1']
+            : ['/bin/bash', '-c', command],
       env: {},
     }));
 
@@ -113,6 +123,43 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     // ensureInit() is memoised: the self-test's own initialize() is the ONLY one.
     expect(initialize).toHaveBeenCalledTimes(1);
   });
+
+  /**
+   * The half that makes the AF_UNIX leg load-bearing: when the contained
+   * client CAN connect, the host must read as `unix_filter_absent` and no
+   * shell may be reported. Remove `selfTestAfUnixFilter` from
+   * `selfTestContainment` and this test goes red on Linux CI (the leg is
+   * Linux-only, so the case is declared skipped elsewhere) — the same
+   * mutation the security claim rests on.
+   */
+  it.runIf(process.platform === 'linux')(
+    'an unfiltered host is reported, not assumed: a contained connect that succeeds is unix_filter_absent',
+    async () => {
+      // Deny leg refuses; the allow leg and the AF_UNIX leg run the command
+      // verbatim — the mock applies no seccomp, exactly like a host where
+      // srt skipped the stage, so the AF_UNIX client reaches our listener.
+      wrapWithSandboxArgv.mockImplementation(async (command, _binShell, customConfig) => ({
+        argv: denyReadOf(customConfig).length > 0 ? ['/bin/sh', '-c', 'exit 1'] : ['/bin/bash', '-c', command],
+        env: {},
+      }));
+
+      const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+      toClose = executor;
+
+      const status = await executor.verify();
+      expect(status.available).toBe(false);
+      if (status.available) return;
+      expect(status.reason).toBe('unix_filter_absent');
+      expect(status.detail).toContain('AF_UNIX');
+
+      // And the refusal is what a caller gets: the command never runs.
+      const dir = mktempWorkspace();
+      await expect(
+        executor.run({ command: 'touch should-not-exist', cwd: dir, writeScope: [dir] }),
+      ).rejects.toThrow(/unix_filter_absent/);
+      expect(existsSync(join(dir, 'should-not-exist'))).toBe(false);
+    },
+  );
 
   it("the reperto itself: the real invocation cannot even run an unrestricted command (bwrap dies on /proc) — contain_failed, and run() never reaches the caller's command", async () => {
     wrapWithSandboxArgv.mockImplementation(async () => ({ argv: BROKEN_INVOCATION, env: {} }));
@@ -239,7 +286,12 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
 
   it('due chiamate sovrapposte mentre il self-test è in volo condividono un solo giro', async () => {
     wrapWithSandboxArgv.mockImplementation(async (command, _shell, customConfig) => ({
-      argv: denyReadOf(customConfig).length > 0 ? BROKEN_INVOCATION : ['/bin/bash', '-c', command],
+      argv:
+        denyReadOf(customConfig).length > 0
+          ? BROKEN_INVOCATION
+          : command.includes('afunix.sock')
+            ? ['/bin/sh', '-c', 'echo EPERM >&2; exit 1']
+            : ['/bin/bash', '-c', command],
       env: {},
     }));
     const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);

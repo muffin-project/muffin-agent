@@ -190,7 +190,20 @@ export function heldBy(
  */
 export function ensureColumn(db: Database.Database, table: string, column: string, ddl: string): void {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-  if (!columns.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  if (columns.some((c) => c.name === column)) return;
+  try {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  } catch (error) {
+    // `PRAGMA` and `ALTER` are two statements, not one: two connections opening
+    // the same file at the same moment both read "the column is missing", and
+    // the second `ALTER` fails with `duplicate column name`. The window is as
+    // old as this helper, but it became reachable once `muffin undo` started
+    // opening a second connection while the gateway runs. The distinction that
+    // matters: the wanted outcome is already true — the column is there. Every
+    // other error stays an error: the case is recognized, not the class.
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/duplicate column name/i.test(message)) throw error;
+  }
 }
 
 export type DurableLockSpec = {

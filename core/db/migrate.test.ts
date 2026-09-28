@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { TURN_TABLE_SCHEMA } from '../turns/schema.js';
 import {
   currentSchemaVersion,
   migrate,
@@ -251,7 +252,7 @@ describe('migrazione 2 — jobs.kind', () => {
     // (`slice/una-promessa-torna`) are genuine no-ops here — but `migrate()` still runs and stamps them, the
     // same way migration 2 itself no-ops (and still counts) on a database where
     // `jobs` is absent, two tests below.
-    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7]);
+    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
     const riga = db.prepare(`SELECT goal, kind FROM jobs WHERE id = 'j1'`).get() as {
       goal: string;
       kind: string;
@@ -271,7 +272,7 @@ describe('migrazione 2 — jobs.kind', () => {
     // e prima che `MemoryStore` crei `facts` e `TodoStore` crei `todos`,
     // motivo per cui la 3 e la 4 arrivano fin qui allo stesso modo.
     expect(() => migrate(db, { backupDir: backups })).not.toThrow();
-    expect(schemaVersionOf(db)).toBe(7);
+    expect(schemaVersionOf(db)).toBe(9);
   });
 });
 
@@ -314,7 +315,7 @@ describe('migrazione 3 — facts.pinned', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7]);
+    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
     const pinned = db.prepare(`SELECT id FROM facts WHERE pinned = 1 ORDER BY id`).all() as { id: number }[];
     expect(pinned.map((r) => r.id)).toEqual([1, 2, 3]);
     // Rows survive untouched — this is a backfill, not a rewrite.
@@ -362,7 +363,7 @@ describe('migrazione 3 — facts.pinned', () => {
     // The fresh-install case: `MemoryStore` has not run yet, so `facts` is not
     // there for this migration to touch — same guard, same reason as jobs.kind.
     expect(() => migrate(db, { backupDir: backups })).not.toThrow();
-    expect(schemaVersionOf(db)).toBe(7);
+    expect(schemaVersionOf(db)).toBe(9);
   });
 });
 
@@ -390,7 +391,7 @@ describe('migrazioni 4 e 5 — todos.due_at, poi todos.due_tier', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7]);
+    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
     const colonne = (db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>).map((c) => c.name);
     expect(colonne).toContain('due_at');
     expect(colonne).toContain('due_tier');
@@ -433,7 +434,7 @@ describe('migrazioni 4 e 5 — todos.due_at, poi todos.due_tier', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([5, 6, 7]);
+    expect(res.applied).toEqual([5, 6, 7, 8, 9]);
     const colonne = (db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>).map((c) => c.name);
     expect(colonne).toContain('due_tier');
     // La query che moriva: è questa a rendere l'asserzione un comportamento e
@@ -471,12 +472,22 @@ describe('migrazione 6 — jobs.per_job_usd, spend.job_id, turns.job_id', () => 
           input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, usd REAL NOT NULL,
           day TEXT NOT NULL, month TEXT NOT NULL, created_at TEXT NOT NULL
         );
-        CREATE TABLE turns (id TEXT PRIMARY KEY, created_at TEXT NOT NULL);
+        CREATE TABLE turns (
+          id TEXT PRIMARY KEY, principal TEXT NOT NULL, tenant TEXT NOT NULL, surface TEXT NOT NULL,
+          session_id TEXT NOT NULL, model TEXT NOT NULL, messages TEXT NOT NULL,
+          taint INTEGER NOT NULL CHECK (taint BETWEEN 0 AND 3), counters TEXT NOT NULL, reply_to TEXT,
+          status TEXT NOT NULL CHECK (status IN ('runnable','running','waiting','interrupted','done')),
+          wake_at TEXT, wait_for TEXT, claimed_by INTEGER, claimed_at TEXT, turn_outcome TEXT,
+          delivery TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
         INSERT INTO jobs (id, cron, timezone, goal, channel, kind, created_at, next_fire_at, active)
           VALUES ('j1', '0 8 * * *', 'Europe/Rome', 'brief', 'cli', 'goal', '2026-06-01', '2026-06-15', 1);
         INSERT INTO spend (tenant, capability, model, input_tokens, output_tokens, usd, day, month, created_at)
           VALUES ('host', 'llm.chat', 'test', 1, 1, 2.5, '2026-06-01', '2026-06', '2026-06-01');
-        INSERT INTO turns (id, created_at) VALUES ('t1', '2026-06-01');
+        INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint, counters,
+                           status, created_at, updated_at)
+          VALUES ('t1', '{"kind":"owner"}', 'host', 'cli', 's1', 'model-x', '[]', 0, '{}',
+                  'done', '2026-06-01', '2026-06-01');
       `);
 
       const res = migrate(db, { backupDir: join(dir, 'backups') });
@@ -547,5 +558,134 @@ describe('migrazione 7 — jobs.origin_*, jobs.tier', () => {
       db.close();
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('migrazione 8 — Turn schema authority', () => {
+  it('rebuilds the status CHECK once and adds semantic ingress beside the opaque checkpoint', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-migrate-8-'));
+    const db = new DatabaseCtor(join(dir, 'muffin.db'));
+    try {
+      db.exec(`
+        CREATE TABLE turns (
+          id TEXT PRIMARY KEY, principal TEXT NOT NULL, tenant TEXT NOT NULL,
+          surface TEXT NOT NULL, session_id TEXT NOT NULL, model TEXT NOT NULL,
+          messages TEXT NOT NULL, taint INTEGER NOT NULL CHECK (taint BETWEEN 0 AND 3),
+          counters TEXT NOT NULL, reply_to TEXT, job_id TEXT,
+          status TEXT NOT NULL CHECK (status IN ('runnable','running','waiting','interrupted','done')),
+          wake_at TEXT, wait_for TEXT, claimed_by INTEGER, claimed_at TEXT,
+          turn_outcome TEXT, delivery TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint,
+                           counters, status, created_at, updated_at)
+        VALUES ('t1', '{"kind":"owner"}', 'host', 'cli', 's1', 'model-x', '[]', 0,
+                '{}', 'done', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z');
+      `);
+      migrate(db, { backupDir: join(dir, 'backups'), migrations: [] });
+
+      const res = migrate(db, { backupDir: join(dir, 'backups') });
+
+      expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
+      const row = db.prepare(`SELECT input_text, status, model, messages FROM turns WHERE id = 't1'`).get();
+      expect(row).toEqual({ input_text: null, status: 'done', model: 'model-x', messages: '[]' });
+      const columns = (db.prepare(`PRAGMA table_info(turns)`).all() as Array<{ name: string }>).map((c) => c.name);
+      expect(columns).toContain('continuation_candidates');
+      const sql = (db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'turns'`).get() as { sql: string }).sql;
+      expect(sql).toContain("'continuable'");
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * The reconciliation seam, red-first. #707 added `continuation_candidates`
+   * after v8 existed; the rebuild must carry the values of a table that
+   * already has the column, not just add an empty one. Delete the column from
+   * the rebuild's derived intersection (or hand-copy a list that forgets it)
+   * and this test loses the value.
+   */
+  it('carries populated continuation_candidates through the status rebuild', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-migrate-8-cc-'));
+    const db = new DatabaseCtor(join(dir, 'muffin.db'));
+    try {
+      db.exec(`
+        CREATE TABLE turns (
+          id TEXT PRIMARY KEY, principal TEXT NOT NULL, tenant TEXT NOT NULL,
+          surface TEXT NOT NULL, session_id TEXT NOT NULL, model TEXT NOT NULL,
+          messages TEXT NOT NULL, taint INTEGER NOT NULL CHECK (taint BETWEEN 0 AND 3),
+          counters TEXT NOT NULL, reply_to TEXT, job_id TEXT,
+          status TEXT NOT NULL CHECK (status IN ('runnable','running','waiting','interrupted','done')),
+          wake_at TEXT, wait_for TEXT, claimed_by INTEGER, claimed_at TEXT,
+          turn_outcome TEXT, delivery TEXT, continuation_candidates TEXT,
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint,
+                           counters, status, continuation_candidates, created_at, updated_at)
+        VALUES ('t1', '{"kind":"owner"}', 'host', 'cli', 's1', 'model-x', '[]', 0,
+                '{}', 'done', '[{"id":"aaa111","updatedAt":"2026-09-25T00:00:00Z","summary":"turno"}]',
+                '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z');
+      `);
+      migrate(db, { backupDir: join(dir, 'backups'), migrations: [] });
+
+      const res = migrate(db, { backupDir: join(dir, 'backups') });
+
+      expect(res.applied).toContain(8);
+      const row = db
+        .prepare(`SELECT status, continuation_candidates FROM turns WHERE id = 't1'`)
+        .get() as { status: string; continuation_candidates: string };
+      expect(row.status).toBe('done');
+      expect(JSON.parse(row.continuation_candidates)).toEqual([
+        { id: 'aaa111', updatedAt: '2026-09-25T00:00:00Z', summary: 'turno' },
+      ]);
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * The analogue of the `due_at`/`due_tier` intermediate-v4 case, for the #707
+   * reconciliation. A home stamped at the first v8 (turn schema without
+   * `continuation_candidates`) skips v8 by version and must get the column from
+   * v9 alone — otherwise the first continuation question throws
+   * `no such column: continuation_candidates`. v9 is idempotent, so a home
+   * migrated by the current v8 already having the column is a no-op.
+   */
+  it('una casa timbrata al primo v8 senza continuation_candidates riceve la colonna dalla sola v9', () => {
+    const { db, backups } = fileDb();
+    // The v8-era table: the canonical shape, status CHECK already including
+    // 'continuable', but no continuation_candidates.
+    const ddl = TURN_TABLE_SCHEMA.replace('CREATE TABLE IF NOT EXISTS turns', 'CREATE TABLE turns').replace(
+      /\n\s*continuation_candidates TEXT,/,
+      '',
+    );
+    db.exec(ddl);
+    db.prepare(
+      `INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint, counters, status, created_at, updated_at)
+       VALUES ('t1', '{"kind":"owner"}', 'host', 'cli', 's1', 'm', '[]', 0, '{}', 'done', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')`,
+    ).run();
+    // Stamped through v8, as the intermediate build would have left it.
+    migrate(db, { backupDir: backups, migrations: [] });
+    const timbra = db.prepare(
+      `INSERT INTO schema_version (version, description, applied_at) VALUES (?, ?, '2026-09-26T00:00:00Z')`,
+    );
+    for (const v of [2, 3, 4, 5, 6, 7, 8]) timbra.run(v, `v8 senza continuation_candidates (${v})`);
+    expect(schemaVersionOf(db)).toBe(8);
+    const before = (db.prepare(`PRAGMA table_info(turns)`).all() as Array<{ name: string }>).map((c) => c.name);
+    expect(before).not.toContain('continuation_candidates');
+
+    const res = migrate(db, { backupDir: backups });
+
+    expect(res.applied).toEqual([9]);
+    const colonne = (db.prepare(`PRAGMA table_info(turns)`).all() as Array<{ name: string }>).map((c) => c.name);
+    expect(colonne).toContain('continuation_candidates');
+    // Il comportamento che la colonna serve, non solo il PRAGMA.
+    expect(() =>
+      db.prepare(`UPDATE turns SET continuation_candidates = ? WHERE id = 't1'`).run('[{"id":"aaa"}]'),
+    ).not.toThrow();
+    expect(
+      (db.prepare(`SELECT continuation_candidates AS c FROM turns WHERE id = 't1'`).get() as { c: string }).c,
+    ).toBe('[{"id":"aaa"}]');
   });
 });

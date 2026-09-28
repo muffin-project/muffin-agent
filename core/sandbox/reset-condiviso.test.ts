@@ -54,10 +54,21 @@ const available = (): SandboxProbe => ({ available: true, mechanism: 'bubblewrap
 const denyReadOf = (customConfig: Partial<SandboxRuntimeConfig> | undefined): readonly string[] =>
   customConfig?.filesystem?.denyRead ?? [];
 
-/** Contenimento che regge: la gamba con deny rifiuta, quella di controllo passa. */
+/**
+ * Contenimento che regge: la gamba con deny rifiuta, quella di controllo
+ * passa, e la gamba AF_UNIX riceve il rifiuto che il vero `apply-seccomp`
+ * produce (`EPERM` da `socket(AF_UNIX, …)`). Il mock non esegue bwrap: senza
+ * modellare quel rifiuto il client della sonda si connetterebbe e `verify()`
+ * direbbe `unix_filter_absent`.
+ */
 function contieneDavvero(): void {
   wrapWithSandboxArgv.mockImplementation(async (command, _binShell, customConfig) => ({
-    argv: denyReadOf(customConfig).length > 0 ? ['/bin/sh', '-c', 'exit 1'] : ['/bin/sh', '-c', command],
+    argv:
+      denyReadOf(customConfig).length > 0
+        ? ['/bin/sh', '-c', 'exit 1']
+        : command.includes('afunix.sock')
+          ? ['/bin/sh', '-c', 'echo EPERM >&2; exit 1']
+          : ['/bin/sh', '-c', command],
     env: {},
   }));
 }

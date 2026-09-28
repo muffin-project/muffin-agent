@@ -9,7 +9,8 @@ import type { CapabilityDecl, Principal } from '../core/policy/types.js';
 import type { Embedder } from '../core/memory/embed.js';
 import { MemoryStore } from '../core/memory/store.js';
 import type { RecallDeps } from '../core/memory/recall.js';
-import { RERANK_MIN_CANDIDATES, type Reranker } from '../core/memory/rerank.js';
+import { LlmReranker, RERANK_MIN_CANDIDATES, type Reranker } from '../core/memory/rerank.js';
+import { BudgetEngine } from '../core/budget/budget.js';
 import { VectorIndex } from '../core/memory/vectors.js';
 import { SessionStore } from '../core/session/store.js';
 import { TurnStore } from '../core/turns/store.js';
@@ -17,6 +18,7 @@ import { TodoStore } from '../core/turns/todo.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { runTurn, type LoopDeps, type RegisteredTool } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
+import { lightLane, type LightSpend } from './providers/light-lane.js';
 import type { ChatResult, Provider } from './providers/types.js';
 import { memoryCapability, memorySearchSpec, searchMemory } from './tools/memory.js';
 import { fsCapabilities } from './tools/fs.js';
@@ -110,7 +112,10 @@ function harness(script: ChatResult[], over: { reranker?: Reranker } = {}) {
       spec: memorySearchSpec,
       // Wired exactly as production wires it. A harness that hardcodes the
       // tenant tests the harness, and the previous version of this file did.
-      handler: (args, ctx) => searchMemory(recallDeps, ctx.tenant, args),
+      // Wired exactly as production wires it, job attribution included: the
+      // harness used to drop the 4th argument and so could not catch a broken
+      // `ToolContext.jobId` pass-through.
+      handler: (args, ctx) => searchMemory(recallDeps, ctx.tenant, args, ctx.jobId),
       throwTier: 0,
     },
     {
@@ -447,5 +452,133 @@ describe('lo span del recall porta il costo del reranker', () => {
       'gen_ai.usage.output_tokens': 19,
       'muffin.usage.cache_read_tokens': 5,
     });
+  });
+});
+
+/**
+ * E1, l'altra metà trovata dal judge: la spesa del reranker dentro il turno di
+ * un job deve finire sul contatore di quel job.
+ *
+ * Il difetto, tracciato: `recall()` chiama `deps.reranker` durante il turno, il
+ * reranker usa la corsia light, e la corsia light registrava la riga di spesa
+ * **senza `job_id`** (`LightSpend` non lo portava). `BudgetEngine.jobMonthUsd`
+ * filtra su `job_id`, quindi la riga era invisibile al tetto per-job: un job
+ * poteva passare il proprio cap pur pagando il reranker dei suoi turni. Questo
+ * test lo rende impossibile — la riga light, e solo quella, deve portare il job.
+ */
+describe('E1: la spesa del reranker è attribuita al job che l\'ha causata', () => {
+  it('il turno di un job spende la chiamata del reranker sul job, non su nessuno', async () => {
+    // La risposta del reranker è JSON e porta un model diverso da quello main,
+    // così la riga light è distinguibile da quella del turno.
+    const rerankReply: ChatResult = {
+      text: '{"order":[0,1,2]}',
+      toolCalls: [],
+      stopReason: 'end',
+      usage: { inputTokens: 40, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      model: 'light-served',
+    };
+    const h = harness([rerankReply, answer('fatto')]);
+    // Sopra `RERANK_MIN_CANDIDATES`, o `recall` non chiama affatto il reranker.
+    for (let i = 0; i < RERANK_MIN_CANDIDATES + 4; i++) {
+      h.store.addEpisode({
+        tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
+        kind: 'message', content: `commercialista numero ${i}`, trustTier: 0,
+        createdAt: '2026-08-04T11:00:00Z',
+      });
+    }
+
+    // La stessa forma di produzione: la corsia light avvolge il provider e
+    // fattura ogni chiamata; il loop fattura la propria con `recordSpend`. La
+    // riga light è quella che questo test interroga.
+    const budget = new BudgetEngine(new DatabaseCtor(':memory:'), { monthlyUsd: 100, perTenantDailyUsd: 100 });
+    const righeLight: Array<{ model: string; jobId: string | null }> = [];
+    h.deps.memory!.recall.reranker = new LlmReranker(
+      lightLane(h.provider, {
+        profile: CONSERVATIVE,
+        record: (entry: LightSpend) => {
+          budget.record({ ...entry, tenant: 'host', capability: 'consolidation', usd: 0.01 });
+          righeLight.push({ model: entry.model, jobId: entry.jobId ?? null });
+        },
+      }),
+      'light-model',
+    );
+    h.deps.recordSpend = (entry) => {
+      budget.record({ ...entry, usd: 0.02 });
+      return 0.02;
+    };
+
+    await runTurn(h.deps, { ...turn(h, 'commercialista'), jobId: 'job-1' });
+
+    // La riga della corsia light porta il job. Senza il threading di `jobId`
+    // questa lista è `[{ model: 'light-served', jobId: null }]` e il tetto
+    // per-job non vede la spesa.
+    expect(righeLight).toEqual([{ model: 'light-served', jobId: 'job-1' }]);
+    // E il contatore che il tetto legge la include: 0.01 del reranker + 0.02 del
+    // turno.
+    expect(budget.jobMonthUsd('job-1')).toBeCloseTo(0.03, 10);
+  });
+
+  it('un turno senza job non attribuisce la spesa del reranker a nessuno', async () => {
+    const rerankReply: ChatResult = {
+      text: '{"order":[0,1,2]}',
+      toolCalls: [],
+      stopReason: 'end',
+      usage: { inputTokens: 40, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      model: 'light-served',
+    };
+    const h = harness([rerankReply, answer('fatto')]);
+    for (let i = 0; i < RERANK_MIN_CANDIDATES + 4; i++) {
+      h.store.addEpisode({
+        tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
+        kind: 'message', content: `commercialista numero ${i}`, trustTier: 0,
+        createdAt: '2026-08-04T11:00:00Z',
+      });
+    }
+    const righeLight: Array<string | null> = [];
+    h.deps.memory!.recall.reranker = new LlmReranker(
+      lightLane(h.provider, {
+        profile: CONSERVATIVE,
+        record: (entry: LightSpend) => righeLight.push(entry.jobId ?? null),
+      }),
+      'light-model',
+    );
+
+    await runTurn(h.deps, turn(h, 'commercialista'));
+
+    expect(righeLight).toEqual([null]);
+  });
+
+  it('anche il memory_search che il modello chiama dentro un turno-job è speso sul job', async () => {
+    const rerankReply: ChatResult = {
+      text: '{"order":[0,1]}',
+      toolCalls: [],
+      stopReason: 'end',
+      usage: { inputTokens: 40, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      model: 'light-served',
+    };
+    // Il testo del turno non pesca niente (`cerca` non compare negli episodi),
+    // quindi la recall automatica NON paga il reranker: l'unica chiamata light
+    // di questo turno è quella che il tool provoca. Senza il `ctx.jobId` nel
+    // cablaggio del tool, questa riga resterebbe `null`.
+    const h = harness([callTool('memory_search', { query: 'commercialista' }), rerankReply, answer('trovato')]);
+    for (let i = 0; i < RERANK_MIN_CANDIDATES + 4; i++) {
+      h.store.addEpisode({
+        tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
+        kind: 'message', content: `commercialista numero ${i}`, trustTier: 0,
+        createdAt: '2026-08-04T11:00:00Z',
+      });
+    }
+    const righeLight: Array<string | null> = [];
+    h.deps.memory!.recall.reranker = new LlmReranker(
+      lightLane(h.provider, {
+        profile: CONSERVATIVE,
+        record: (entry: LightSpend) => righeLight.push(entry.jobId ?? null),
+      }),
+      'light-model',
+    );
+
+    await runTurn(h.deps, { ...turn(h, 'cerca'), jobId: 'job-7' });
+
+    expect(righeLight).toEqual(['job-7']);
   });
 });

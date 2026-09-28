@@ -430,6 +430,9 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // the loop boundary. Adapters no longer need to interpret profile
       // strings; they receive the provider-agnostic reasoning intent.
       ...(reasoning === undefined ? {} : { reasoning }),
+      // Dopo una risposta vuota, tenta su un'altra macchina invece che sulla
+      // stessa: vedi `ChatCall.providerIgnore` e la streak qui sotto.
+      ...(run.providerEmptyUpstreams.size > 0 ? { providerIgnore: [...run.providerEmptyUpstreams] } : {}),
       // B11: streaming is requested exactly when someone can hear it. A turn
       // with no `onDelta` sink (a job, a headless `muffin run`, a provider
       // that never implements `chatStream`) sends this `false`, the request
@@ -787,6 +790,9 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       if (run.providerEmptyStreak < MAX_PROVIDER_EMPTY_RETRIES && run.transportRetriesLeft > 0) {
         run.providerEmptyStreak += 1;
         run.transportRetriesLeft -= 1;
+        // Name the upstream that just answered nothing, so the retry below is
+        // built with `providerIgnore` instead of hammering the same machine.
+        if (result.upstream !== undefined) run.providerEmptyUpstreams.add(result.upstream);
         turn.setAttributes({ 'muffin.provider_failure.attempt': run.providerEmptyStreak });
         // Persist the reduced budget before waiting: same reason as the
         // transport path below — a gateway exit in this gap must resume with

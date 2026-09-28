@@ -58,6 +58,16 @@ export type LightSpend = {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  /**
+   * The scheduled job this call was made for, when there was one.
+   *
+   * Threaded from `ChatCall.jobId`, never invented here: this lane serves three
+   * callers (extraction, the contradiction judge, the reranker) and only the
+   * reranker runs inside a job's turn. Without this the spend row carried no
+   * `job_id`, `BudgetEngine.jobMonthUsd` never saw it, and a job's own ceiling
+   * was blind to the reranker it had paid for.
+   */
+  jobId?: string;
 };
 
 export type LightLaneOptions = {
@@ -236,6 +246,10 @@ export function lightLane(inner: Provider, options: LightLaneOptions): Provider 
         outputTokens: result.usage.outputTokens,
         cacheReadTokens: result.usage.cacheReadTokens,
         cacheWriteTokens: result.usage.cacheWriteTokens,
+        // Attribution, per call: the reranker sets it when recall runs inside a
+        // job's turn; extraction and the judge never do, because they run after
+        // the turn and belong to no job.
+        ...(call.jobId === undefined ? {} : { jobId: call.jobId }),
       });
       return result;
     },

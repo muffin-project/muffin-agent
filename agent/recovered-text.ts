@@ -1,12 +1,13 @@
 import type { SessionStore } from '../core/session/store.js';
 import type { TurnRecord } from '../core/turns/store.js';
 import { providerErrorReplyFromMessages } from './loop/provider-error-reply.js';
+import { providerMessages } from './loop/provider-checkpoint.js';
 
 /**
  * Recover the text a completed Work would have delivered after a crash.
  *
  * The final text-only assistant round lives in the append-only session file,
- * not in `TurnRecord.messages`. Session history may contain answers from many
+ * not in `TurnRecord.providerLease.checkpoint`. Session history may contain answers from many
  * Works, so recovery is deliberately bound to the Work identity written by
  * the production `drive()` path (`SessionMessage.traceId === TurnRecord.id`).
  * Falling back to the latest assistant message would let Work A redeliver
@@ -33,7 +34,7 @@ export function recoveredText(sessions: SessionStore, record: TurnRecord): strin
     }
   }
   if (record.outcome === 'error') {
-    const providerFailure = providerErrorReplyFromMessages(record.messages);
+    const providerFailure = providerErrorReplyFromMessages(providerMessages(record));
     if (providerFailure !== null) return providerFailure;
   }
   return (

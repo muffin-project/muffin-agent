@@ -7,19 +7,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { ESCLUSIONI_FISSE, escludiPerVitest, globDaIgnorati, ignoratiDaGit } from './vitest.ignored.js';
 
-/**
- * Il difetto che questo file uccide: `npm test` raccoglieva 945 file di test
- * dove il repository ne ha 201, perché due alberi annidati e completi —
- * `.releases/` (402 file, creati da `muffin update`) e `.codex/worktrees/` (342)
- * — sono invisibili a `git status` ma non a vitest. Il gate locale chiedeva
- * «working tree pulito», leggeva pulito, e certificava un commit con una misura
- * fatta al 79% su copie congelate di altri commit.
- *
- * Non basta provare la funzione sulle stringhe: la proprietà è che *vitest*
- * non entri là dentro. I due test grossi qui sotto costruiscono un repository
- * vero con un albero annidato ignorato e guardano cosa vitest raccoglie
- * davvero, prima e dopo.
- */
+/** Regression coverage: Vitest must not collect tests from Git-ignored trees
+ * nested inside the checkout. The cases use a real temporary Git repository
+ * and inspect the files Vitest discovers. */
 
 const repos: string[] = [];
 

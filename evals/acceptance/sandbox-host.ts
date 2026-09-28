@@ -1,6 +1,14 @@
 import { execFileSync } from 'node:child_process';
 import { it } from 'vitest';
+import { assessShellBoundary } from '../../core/sandbox/shell-boundary.js';
+import { probeSandbox } from '../../core/sandbox/probe.js';
 import { annunciaSalto } from './non-provabile.js';
+
+/** Require the same behavioral pass and Bubblewrap patch floor as production. */
+export function shellNonDisponibileQui(): string | null {
+  const boundary = assessShellBoundary(probeSandbox());
+  return boundary.usable ? null : `${boundary.reason}; ${boundary.remedy}`;
+}
 
 /**
  * Questo host **può** contenere, o non è attrezzato per provarlo?
@@ -99,10 +107,10 @@ export function itConSandbox(
   fn: () => Promise<void>,
   timeout?: number,
 ): void {
-  const esito = hostContiene();
-  if (esito.ok) {
+  const motivo = shellNonDisponibileQui();
+  if (motivo === null) {
     it(titolo, fn, timeout);
     return;
   }
-  it.skip(annunciaSalto(`«${titolo}»`, esito.perche, (s) => process.stderr.write(s)), fn, timeout);
+  it.skip(annunciaSalto(`«${titolo}»`, motivo, (s) => process.stderr.write(s)), fn, timeout);
 }

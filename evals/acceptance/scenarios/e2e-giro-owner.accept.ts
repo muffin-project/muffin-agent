@@ -9,6 +9,7 @@ import { install, until } from '../harness.js';
 import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
 import { privateMessage, startFakeTelegram } from '../telegram.js';
 import { scenario } from '../scenario.js';
+import { shellNonDisponibileQui } from '../sandbox-host.js';
 
 /**
  * A10 · The owner's actual journey, one house, one scenario.
@@ -185,6 +186,8 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
           // fatto dell'ospite, non del prodotto. Ammesso, mai in silenzio: la
           // riga viene stampata sotto, con la ragione che doctor ha dato.
           'sandbox',
+          // #642: behavioral pass does not clear the Bubblewrap patch floor.
+          'capacità: shell_run',
           // Riguarda il **checkout** che sta girando, non l'installazione sotto
           // esame: `ok` da un albero pulito, `warn` da uno con modifiche non
           // committate sopra — cioè da qualunque macchina di sviluppo mentre si
@@ -224,6 +227,13 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
           // Dichiarato, non saltato: chi legge il log sa che il giro è passato
           // su una macchina senza contenimento, e quale ragione ha dato doctor.
           console.warn(`[A10] questa macchina non contiene, e doctor lo dice prima di eseguire: ${sandboxWarn.trim()}`);
+        }
+        const shellWarn = warnLines.find((l) => l.startsWith('! capacità: shell_run'));
+        if (shellNonDisponibileQui() !== null && !shellWarn) {
+          throw new Error(`shell host boundary non disponibile ma doctor non lo dichiara:\n${doctor.out}`);
+        }
+        if (shellWarn && !/bubblewrap|CVE-2026-87766|unverified/i.test(shellWarn)) {
+          throw new Error(`doctor non spiega perché la shell è disabilitata:\n${shellWarn}`);
         }
         if (!warnLines.some((l) => l.startsWith('! root of trust mode') && l.includes('single-user'))) {
           throw new Error(`doctor non nomina "root of trust mode: single-user":\n${doctor.out}`);

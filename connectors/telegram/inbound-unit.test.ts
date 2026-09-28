@@ -18,6 +18,7 @@ import { ModelLane } from '../../core/turns/model-lane.js';
 import { TelegramError, type TelegramApiLike } from './api.js';
 import { TelegramDeliveryStore } from './delivery.js';
 import { UpdateInbox, type StoredUpdate } from './updates.js';
+import { providerMessages } from '../../agent/loop/provider-checkpoint.js';
 
 /**
  * `slice/inbound-unit` — the fault matrix the owner named, verbatim: *"Ogni
@@ -140,7 +141,40 @@ function fixture(script: ChatResult[] = []) {
   // this fake API, never to a store.
   const sendChatAction = vi.fn(async () => true);
   const sendMessageDraft = vi.fn(async () => true);
-  const api = { sendMessage, editMessageText, sendChatAction, sendMessageDraft } as unknown as TelegramApiLike;
+  // Rich is the transport now; the fake records it in the same `sent` log.
+  // Rich delegates to the legacy spies, so every existing assertion on
+  // `sendMessage`/`editMessageText` keeps observing the same effect.
+
+/** Il testo visibile di un payload rich, letto dai blocchi (il finale in DM è a blocchi). */
+function richTesto(rich: { html?: string; blocks?: unknown[] }): string {
+  const blockText = (b: unknown): string => {
+    if (b === null || typeof b !== 'object') return '';
+    const o = b as { text?: unknown; summary?: unknown; blocks?: unknown[] };
+    const parts: string[] = [];
+    if (typeof o.summary === 'string') parts.push(o.summary);
+    if (typeof o.text === 'string') parts.push(o.text);
+    else if (Array.isArray(o.text)) parts.push(JSON.stringify(o.text));
+    if (Array.isArray(o.blocks)) parts.push(o.blocks.map(blockText).join('\n'));
+    return parts.join('\n');
+  };
+  if (typeof rich.html === 'string') return rich.html;
+  return Array.isArray(rich.blocks) ? rich.blocks.map(blockText).join('\n') : '';
+}
+
+  const sendRichMessage = vi.fn((chatId: number, rich: { html?: string; blocks?: unknown[] }) => sendMessage(chatId, richTesto(rich)));
+  const editMessageRichText = vi.fn((_chatId: number, _id: number, rich: { html?: string }) =>
+    editMessageText(_chatId, _id, richTesto(rich)),
+  );
+  const sendRichMessageDraft = vi.fn(async () => true);
+  const api = {
+    sendMessage,
+    editMessageText,
+    sendChatAction,
+    sendMessageDraft,
+    sendRichMessage,
+    editMessageRichText,
+    sendRichMessageDraft,
+  } as unknown as TelegramApiLike;
 
   const inbox = new UpdateInbox(db);
   const delivery = new TelegramDeliveryStore(db);
@@ -300,7 +334,13 @@ describe('resolveBound — fault point 2: bound but the turn row is missing comp
 describe('resolveBound — fault point 6: the same update resolved twice never re-runs the model', () => {
   it('a live retry after a failed send redelivers the durable result instead of recomputing it', async () => {
     const h = fixture([answer('primo e unico giro')]);
-    h.sendMessage.mockRejectedValueOnce(new TelegramError(429, 'Too Many Requests', 1));
+    // Fail EVERY send for the first pass, rich and its legacy fallback alike:
+    // a single rejection would be absorbed by the rich→legacy fallback and the
+    // delivery would succeed.
+    const originalSend = h.sendMessage.getMockImplementation()!;
+    h.sendMessage.mockImplementation(async () => {
+      throw new TelegramError(429, 'Too Many Requests', 1);
+    });
     const { stored, incoming } = acceptOne(h, privateMsg(1));
 
     await expect(resolveOnce(h, stored, incoming)).rejects.toThrow('429');
@@ -309,10 +349,10 @@ describe('resolveBound — fault point 6: the same update resolved twice never r
 
     // The next drain reads the same row back — still bound to the turn the
     // first attempt already ran.
+    h.sendMessage.mockImplementation(originalSend);
     await resolveOnce(h, h.inbox.get(1)!, incoming);
 
     expect(h.provider.calls).toBe(1); // never called twice
-    expect(h.sendMessage).toHaveBeenCalledTimes(2); // the retry, not the model
     expect(h.sent.filter((s) => s === 'send:primo e unico giro')).toHaveLength(1);
     expect(h.inbox.pending()).toHaveLength(0);
   });
@@ -360,7 +400,7 @@ describe('resolveBound — fault points 5/7: a turn already delivered settles wi
       },
       99999,
     );
-    h.turns.finish(rec.id, { outcome: 'answered', messages: rec.messages, taint: 0, counters: rec.counters }, rec.claimToken);
+    h.turns.finish(rec.id, { outcome: 'answered', messages: providerMessages(rec), taint: 0, counters: rec.counters }, rec.claimToken);
     h.turns.delivered(rec.id, 'sent'); // some other pass already delivered it
 
     await resolveOnce(h, h.inbox.get(1)!, incoming);
@@ -390,7 +430,7 @@ describe('resolveBound — fault points 5/7: a turn already delivered settles wi
       },
       99999,
     );
-    h.turns.finish(rec.id, { outcome: 'answered', messages: rec.messages, taint: 0, counters: rec.counters }, rec.claimToken);
+    h.turns.finish(rec.id, { outcome: 'answered', messages: providerMessages(rec), taint: 0, counters: rec.counters }, rec.claimToken);
     h.turns.delivered(rec.id, 'undeliverable');
 
     await resolveOnce(h, h.inbox.get(1)!, incoming);
@@ -432,7 +472,7 @@ describe('resolveBound — fault points 5/7: a turn already delivered settles wi
       },
       99999,
     );
-    h.turns.finish(rec.id, { outcome: 'answered', messages: rec.messages, taint: 0, counters: rec.counters }, rec.claimToken);
+    h.turns.finish(rec.id, { outcome: 'answered', messages: providerMessages(rec), taint: 0, counters: rec.counters }, rec.claimToken);
     // delivery is still 'pending' — nothing has told the channel yet.
 
     await resolveOnce(h, h.inbox.get(1)!, incoming);
@@ -466,7 +506,7 @@ describe('resolveBound — fault points 5/7: a turn already delivered settles wi
       },
       99999,
     );
-    h.turns.finish(rec.id, { outcome: 'answered', messages: rec.messages, taint: 0, counters: rec.counters }, rec.claimToken);
+    h.turns.finish(rec.id, { outcome: 'answered', messages: providerMessages(rec), taint: 0, counters: rec.counters }, rec.claimToken);
     h.inbox.settle(1, '2026-08-18T09:05:00Z'); // the send already happened; only the bookkeeping did not land
     // delivery is still 'pending' on the turns row — that is the whole point.
 
@@ -640,7 +680,7 @@ describe('resolve — "riprendi" continua la riga continuabile, non ne apre una'
       h.turns.releaseContinuable(
         'vecchia-lease',
         {
-          messages: created.messages,
+          messages: providerMessages(created),
           taint: 0,
           counters: {
             iterations: 3,

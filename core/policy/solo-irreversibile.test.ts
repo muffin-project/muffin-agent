@@ -1,7 +1,23 @@
 import { describe, expect, it } from 'vitest';
+import { sendFileCapability } from '../../agent/tools/deliver.js';
+import { documentCapability } from '../../agent/tools/document.js';
+import { fsCapabilities } from '../../agent/tools/fs.js';
+import { httpCapability } from '../../agent/tools/http.js';
+import { inspectCapability } from '../../agent/tools/inspect.js';
+import { mcpCapabilityFor } from '../../agent/tools/mcp.js';
+import { memoryCapability } from '../../agent/tools/memory.js';
+import { processCapabilities } from '../../agent/tools/process.js';
+import { scheduleCapability } from '../../agent/tools/schedule.js';
+import { searchCapability } from '../../agent/tools/search.js';
+import { shellCapability, shellWriteCapability } from '../../agent/tools/shell.js';
+import { skillCapability } from '../../agent/tools/skill.js';
+import { todoCapability } from '../../agent/tools/todo.js';
+import { vaultWriteCapability } from '../../agent/tools/vault-save.js';
+import { waitCapability } from '../../agent/tools/wait.js';
 import { createDecide } from './decide.js';
-import { POLICY_FLOOR, ROW_FLOOR } from './matrix.js';
+import { DOORS } from './doors.js';
 import type { PolicyMatrix } from './matrix.js';
+import { POLICY_FLOOR, ROW_FLOOR } from './matrix.js';
 import type {
   CapabilityDecl,
   Decision,
@@ -10,22 +26,6 @@ import type {
   Principal,
   TrustTier,
 } from './types.js';
-import { fsCapabilities } from '../../agent/tools/fs.js';
-import { shellCapability, shellWriteCapability } from '../../agent/tools/shell.js';
-import { processCapabilities } from '../../agent/tools/process.js';
-import { sendFileCapability } from '../../agent/tools/deliver.js';
-import { httpCapability } from '../../agent/tools/http.js';
-import { searchCapability } from '../../agent/tools/search.js';
-import { memoryCapability } from '../../agent/tools/memory.js';
-import { skillCapability } from '../../agent/tools/skill.js';
-import { documentCapability } from '../../agent/tools/document.js';
-import { inspectCapability } from '../../agent/tools/inspect.js';
-import { todoCapability } from '../../agent/tools/todo.js';
-import { waitCapability } from '../../agent/tools/wait.js';
-import { scheduleCapability } from '../../agent/tools/schedule.js';
-import { vaultWriteCapability } from '../../agent/tools/vault-save.js';
-import { mcpCapabilityFor } from '../../agent/tools/mcp.js';
-import { DOORS } from './doors.js';
 
 /**
  * **ADR-0074 punto 1, eseguito su ogni capability che questo repository
@@ -288,19 +288,26 @@ describe('si chiede solo per l irreversibile — ADR-0074, ogni capability spedi
    * parametrico e un errore nell'oracolo lo attraverserebbe in silenzio: qui
    * l'elenco delle capability che chiedono e' scritto **per nome**.
    *
-   * Tre, e sono le tre cose che questa installazione non sa disfare: un
-   * comando di shell che scrive nel workspace (`sys.shell.write`; la corsia in
-   * sola lettura di ADR-0074 punto 4 non è fra loro, perché è reversibile per
-   * costruzione), un processo terminato, una chiamata a un server MCP di cui
-   * non possediamo la semantica. `mcp.*` e' `reversible: 'no'` a mano su
-   * ogni server ed e' la meta' che ADR-0074 punto 5 (altra fetta) sistema
-   * leggendo `readOnlyHint` dal protocollo; finché quella non atterra, ogni
-   * chiamata MCP chiede, ed e' la conseguenza dichiarata dell'ADR, non una
-   * sorpresa di questa.
+   * Quattro, e sono le quattro cose che questa installazione non sa disfare:
+   * un comando di shell che scrive nel workspace (`sys.shell.write`), lo
+   * stesso comando in sola lettura — da ADR-0091 (misura Linux 2026-09-22,
+   * #645) leggere l'intera macchina e' disclosure, e la disclosure non ha
+   * undo, quindi la corsia di ADR-0074 punto 4 e' entrata nella lista invece
+   * di restarne fuori per «costruzione» —, un processo terminato, una chiamata
+   * a un server MCP di cui non possediamo la semantica. `mcp.*` e'
+   * `reversible: 'no'` a mano su ogni server ed e' la meta' che ADR-0074
+   * punto 5 (altra fetta) sistema leggendo `readOnlyHint` dal protocollo;
+   * finché quella non atterra, ogni chiamata MCP chiede, ed e' la conseguenza
+   * dichiarata dell'ADR, non una sorpresa di questa.
    */
-  it('le capability che chiedono, per nome: shell che scrive, kill, MCP — e nessun altra', () => {
+  it('le capability che chiedono, per nome: shell (entrambe le corsie), kill, MCP — e nessun altra', () => {
     const chiedono = ALL.filter((d) => decisione(d, 0, OWNER).effect === 'ask').map((d) => d.id);
-    expect(chiedono.sort()).toEqual(['mcp.esempio', 'sys.process.kill', 'sys.shell.write']);
+    expect(chiedono.sort()).toEqual([
+      'mcp.esempio',
+      'sys.process.kill',
+      'sys.shell',
+      'sys.shell.write',
+    ]);
   });
 
   /**
@@ -400,9 +407,10 @@ describe('si chiede solo per l irreversibile — ADR-0074, ogni capability spedi
     }
     expect(rifiuti).toEqual([]);
     // E la meta' positiva, perche' «nessun taint_exceeded» sarebbe vero anche
-    // se la riga fosse sparita: a taint 3 la shell in sola lettura passa, la
-    // scrittura fotografa, e le due irreversibili chiedono.
-    expect(`sys.shell@3: ${decisione(shellCapability, 3, OWNER).effect}`).toBe('sys.shell@3: allow');
+    // se la riga fosse sparita: a taint 3 la corsia in sola lettura chiede
+    // (ADR-0091 — disclosure, non scrittura) e quella che scrive fotografa e
+    // chiede, come le altre irreversibili della riga.
+    expect(`sys.shell@3: ${decisione(shellCapability, 3, OWNER).effect}`).toBe('sys.shell@3: ask');
     expect(`sys.shell.write@3: ${decisione(shellWriteCapability, 3, OWNER).effect}`).toBe(
       'sys.shell.write@3: ask',
     );
@@ -429,7 +437,6 @@ describe('si chiede solo per l irreversibile — ADR-0074, ogni capability spedi
         // al posto del muro, e senza di essa la domanda non dice niente che
         // l'owner non sapesse gia'.
         expect(`${decl.id}@${taint}: ${owner.ask.prompt}`).toContain(`taint ${taint}`);
-
       }
     }
   });
@@ -466,14 +473,18 @@ describe('si chiede solo per l irreversibile — ADR-0074, ogni capability spedi
     };
     for (const taint of TIERS.filter((t) => t > ROW_FLOOR.outward.denyAbove)) {
       const membro = decisione(inviaFuori, taint, MEMBER);
-      expect(`outward.send@${taint}/member: ${membro.effect}`).toBe(`outward.send@${taint}/member: deny`);
+      expect(`outward.send@${taint}/member: ${membro.effect}`).toBe(
+        `outward.send@${taint}/member: deny`,
+      );
       expect(membro.effect === 'deny' && membro.code).toBe('taint_exceeded');
 
       // E l'owner, sulla stessa dichiarazione e allo stesso taint, e' chiesto:
       // le due meta' insieme, perche' «il membro e' negato» sarebbe verde
       // anche se il ramo di ADR-0075 non esistesse.
       const owner = decisione(inviaFuori, taint, OWNER);
-      expect(`outward.send@${taint}/owner: ${owner.effect}`).toBe(`outward.send@${taint}/owner: ask`);
+      expect(`outward.send@${taint}/owner: ${owner.effect}`).toBe(
+        `outward.send@${taint}/owner: ask`,
+      );
       expect(owner.effect === 'ask' && owner.ask.prompt).toContain(`taint ${taint}`);
     }
   });

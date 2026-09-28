@@ -160,6 +160,10 @@ describe('deliverTelegram: ogni pezzo, non solo quello che cita', () => {
         opzioni.push(o);
         return { message_id: opzioni.length } as never;
       },
+      sendRichMessage: async (_c: number, _rich: unknown, o?: SendOptions) => {
+        opzioni.push(o);
+        return { message_id: opzioni.length } as never;
+      },
     } as unknown as TelegramApiType;
 
     let n = 0;
@@ -229,7 +233,13 @@ function harness(config: TelegramConfig, script: ChatResult[] = []) {
       inviati.push({ chatId, options });
       return { message_id: inviati.length } as never;
     },
+    sendRichMessage: async (chatId: number, _rich: unknown, options?: SendOptions) => {
+      inviati.push({ chatId, options });
+      return { message_id: inviati.length } as never;
+    },
     editMessageText: async () => ({}) as never,
+    editMessageRichText: async () => ({}) as never,
+    sendRichMessageDraft: async () => true,
     sendChatAction: async (_c: number, _a?: string, threadId?: number) => {
       azioni.push(threadId);
       return true;
@@ -266,7 +276,8 @@ describe('un turno nato in un topic, dal filo', () => {
     try {
       await deliver(h, [inTopic(1, TOPIC_BUG, '@MuffinBot ciao')]);
 
-      expect(h.inviati.length).toBeGreaterThan(1);
+      // Rich: the whole answer is one message now, and it still lands in the topic.
+      expect(h.inviati.length).toBeGreaterThanOrEqual(1);
       for (const invio of h.inviati) expect(invio.options?.threadId).toBe(TOPIC_BUG);
       expect(h.azioni.length).toBeGreaterThan(0);
       for (const t of h.azioni) expect(t).toBe(TOPIC_BUG);

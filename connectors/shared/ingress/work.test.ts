@@ -12,6 +12,7 @@ import type { TurnRecord } from '../../../core/turns/store.js';
 import { ModelLane } from '../../../core/turns/model-lane.js';
 import { runWork } from './work.js';
 import { makeIngressPort, type InboundEvent, type IngressPort } from './types.js';
+import { providerMessages } from '../../../agent/loop/provider-checkpoint.js';
 
 /**
  * §4 invariant 1, the **writing** half: what the `work` stage puts in
@@ -192,7 +193,7 @@ describe('continuazione conversazionale (P0-B)', () => {
       env.turns.releaseContinuable(
         'cont-1',
         {
-          messages: created.messages,
+          messages: providerMessages(created),
           taint: 0,
           counters,
           reason: { class: 'provider_empty' as const, lease: 0, at: '2026-09-18T17:14:09.000Z' },

@@ -43,6 +43,13 @@ export type ToolContext = {
    */
   turnId: string;
   /**
+   * The scheduled job this turn belongs to, when one does — `TurnInput.jobId`,
+   * threaded through like `turnId` so a handler that spends model calls on the
+   * job's behalf (`memory_search`, `memory_why` via the reranker) can attribute
+   * them to it. Absent on every interactive turn, which is the majority.
+   */
+  jobId?: string | undefined;
+  /**
    * The conversation. Multi-step work is scoped to this and never to the turn:
    * a plan that died with the turn that wrote it would not be a plan.
    */
@@ -107,6 +114,11 @@ export type ToolContext = {
    * so the barrier has to travel with the turn — not with the tool.
    */
   suspend: (spec: WaitSpec) => void;
+  /** Durability guard for this turn: a write failure disables later tools. */
+  durability?: {
+    failure: () => string | null;
+    fail: (reason: string) => void;
+  };
   /**
    * Where a mid-turn tool can address a follow-up delivery — the registry
    * channel this turn's conversation arrived on (`telegram:<chatId>`,

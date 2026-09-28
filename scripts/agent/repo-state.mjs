@@ -6,6 +6,9 @@
  *
  * Prints a compact current-state snapshot derived from Git/GitHub/toolchain —
  * never from handoff prose or conversation memory. Used by /start.
+ * The `main`/`dev` SHAs are the live GitHub ones beside the local refs, and
+ * every worktree is listed, so a fresh session cannot read a stale local branch
+ * or an omitted worktree as current state.
  * Each section is best-effort: on failure it prints `unknown` rather than
  * failing, so a fresh session always gets something to work from.
  * Exit 0 = snapshot complete, 1 = git unavailable (not a repository checkout).
@@ -42,18 +45,24 @@ if (!git('rev-parse --show-toplevel')) {
 const branch = git('branch --show-current') || '(detached)';
 const head = git('rev-parse --short HEAD') || 'unknown';
 const dirty = git('status --porcelain');
-const main = git('rev-parse --short main') || 'unknown';
-const dev = git('rev-parse --short dev') || 'unknown';
-const div = git('rev-list --left-right --count main...dev');
-const worktrees = (git('worktree list --porcelain') || '')
+const repo = gh(['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner']);
+const githubBranch = (name) =>
+  repo ? gh(['api', `repos/${repo}/branches/${name}`, '--jq', '.commit.sha']) : null;
+const localMain = git('rev-parse refs/heads/main') || 'unknown';
+const localDev = git('rev-parse refs/heads/dev') || 'unknown';
+const liveMain = githubBranch('main');
+const liveDev = githubBranch('dev');
+const worktreeList = git('worktree list --porcelain');
+const worktrees = (worktreeList ?? '')
   .split('\n')
   .filter((l) => l.startsWith('worktree '))
   .map((l) => l.slice('worktree '.length));
 const worktreeDirty = [];
-for (const wt of worktrees.slice(0, 40)) {
+const worktreeUnavailable = [];
+for (const wt of worktrees) {
   const s = run('git', ['-C', wt, 'status', '--porcelain']);
-  if (s === null || s === '') continue;
-  worktreeDirty.push(wt);
+  if (s === null) worktreeUnavailable.push(wt);
+  else if (s !== '') worktreeDirty.push(wt);
 }
 
 const prRaw = gh([
@@ -94,10 +103,21 @@ const jevKey = process.env.TYPESAFE_API_KEY ? 'present' : 'absent';
 const jevSdk = run('node', ['-e', "require.resolve('@typesafe-ai/sdk')"]) !== null;
 const jevCli = run('which', ['jev']) !== null;
 
+const short = (sha) => (sha ? sha.slice(0, 12) : 'unknown');
+
 section('repository', [
   `checkout branch: ${branch} @ ${head} (${dirty ? 'DIRTY' : 'clean'})`,
-  `main: ${main} | dev: ${dev} | divergence main...dev (behind ahead): ${div || 'unknown'}`,
-  `worktrees: ${worktrees.length}${worktreeDirty.length ? `; dirty: ${worktreeDirty.join(', ')}` : '; all clean or unchecked'}`,
+  `GitHub main: ${short(liveMain)} | local main: ${short(localMain)}`,
+  `GitHub dev: ${short(liveDev)} | local dev: ${short(localDev)}`,
+  // A failed `worktree list` must not read as "zero worktrees" — that is the
+  // same silent omission this script exists to prevent, one level up.
+  ...(worktreeList === null
+    ? ['worktrees: unknown (git worktree list failed)']
+    : [
+        `worktrees: ${worktrees.length} — clean ${worktrees.length - worktreeDirty.length - worktreeUnavailable.length}, dirty ${worktreeDirty.length}, unavailable ${worktreeUnavailable.length}`,
+        ...(worktreeDirty.length ? [`dirty: ${worktreeDirty.join(', ')}`] : []),
+        ...(worktreeUnavailable.length ? [`unavailable: ${worktreeUnavailable.join(', ')}`] : []),
+      ]),
 ]);
 
 section('open PRs', [

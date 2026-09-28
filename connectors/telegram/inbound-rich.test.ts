@@ -92,6 +92,30 @@ describe('inbound rich · received rich messages do not disappear', () => {
     expect(content).toContain('[foto: la vetrina]');
   });
 
+  it('J: a backslash before a pipe cannot forge a table cell', () => {
+    const incoming = parseUpdate(
+      base(7, {
+        rich_message: {
+          blocks: [
+            {
+              type: 'table',
+              cells: [
+                [{ text: 'voce' }],
+                // Literal `a\|b`: a naive `|` → `\|` escape leaves the pipe
+                // live behind an escaped backslash, splitting the row into a
+                // forged extra cell (CodeQL js/incomplete-sanitization).
+                [{ text: 'a\\|b' }],
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    expect(incoming).not.toBeNull();
+    // Escaped backslash + escaped pipe: three backslashes then the literal pipe.
+    expect(incoming!.text).toContain('a\\\\\\|b');
+  });
+
   it('J: a directly typed rich message becomes the turn text', () => {
     const incoming = parseUpdate(
       base(2, {

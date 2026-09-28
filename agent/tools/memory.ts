@@ -121,6 +121,7 @@ export async function searchMemory(
   deps: RecallDeps,
   tenantId: string,
   args: unknown,
+  jobId?: string,
 ): Promise<ToolOutcome> {
   const raw = (args ?? {}) as RawArgs;
   if (typeof raw.query !== 'string' || raw.query.trim() === '') {
@@ -200,6 +201,9 @@ export async function searchMemory(
     ...(since !== undefined ? { since } : {}),
     ...(until !== undefined ? { until } : {}),
     ...(around !== undefined ? { neighbours: around } : {}),
+    // Attribution only: the reranker this search pays for lands on the job's
+    // ledger when the search runs inside one of its turns.
+    ...(jobId === undefined ? {} : { jobId }),
   });
 
   if (result.items.length === 0 && result.gaps.length === 0) {
@@ -280,6 +284,7 @@ export async function whyMemory(
   deps: RecallDeps,
   tenantId: string,
   args: unknown,
+  jobId?: string,
 ): Promise<ToolOutcome> {
   const raw = (args ?? {}) as WhyRawArgs;
   const hasFactId = raw.fact_id !== undefined;
@@ -312,7 +317,10 @@ export async function whyMemory(
     // `memory_search` runs, read here for its facts rather than rendered for
     // the prompt.
     const query = raw.query as string;
-    const found = await recall(deps, tenantId, query, { limit: 5 });
+    const found = await recall(deps, tenantId, query, {
+      limit: 5,
+      ...(jobId === undefined ? {} : { jobId }),
+    });
     const hit = found.items.find((item) => item.kind === 'fact');
     if (!hit) {
       return {

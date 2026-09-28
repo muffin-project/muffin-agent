@@ -277,7 +277,11 @@ the kernel does when a request is above it now depends on the row:
 - **`host`** — there is no above any more. `denyAbove` is `3`, because every
   capability on that row is already covered by another defence: `fs.write` is a
   `draft` with a journal and `muffin undo`, `sys.shell` is the read-only lane
-  (no writes outside the scratch, no network), and `sys.shell.write` and
+  (no writes outside scratch; direct IP networking is disabled and, on Linux,
+  `socket(AF_UNIX, …)` is refused by a seccomp filter that is requested and
+  behaviorally verified before any command runs — a host where it cannot hold
+  refuses every contained invocation) and asks since
+  ADR-0091 because whole-host reads disclose data, and `sys.shell.write` and
   `sys.process.kill` are `reversible: 'no'` and therefore ask at every tier,
   0 and 3 alike. The prohibition removed nothing from an attacker; it removed
   the owner's ability to say yes.
@@ -329,9 +333,13 @@ reseal`. Four properties bound it, and all four are in
 - a grant names **one capability** — never a `prefix.*` family, so it cannot
   concede in advance whatever ships under that prefix tomorrow;
 - a closed list is never grantable at all: `sys.shell`, `sys.shell.*`,
-  `sys.process.*`, `fs.*`, `rot.*`, `outward.*`, `config.*`. A room has no
-  machine, and `resolveWorkspace` knows one workspace per installation
-  (ADR-0059), so `fs.*` would mean handing a group the owner's disk;
+  `sys.process.*`, `fs.*`, `rot.*`, `outward.*`, `config.*`, `sys.effects`, and
+  the four capabilities that do not yet have room-scoped semantics —
+  `surface.send_file`, `skill.read`, `sys.inspect`, `jobs.schedule` (#675) —
+  which may leave the list only together with their tenant-scoped behaviour and
+  a real room acceptance. A room has no machine, and `resolveWorkspace` knows
+  one workspace per installation (ADR-0059), so `fs.*` would mean handing a
+  group the owner's disk;
 - a file that breaks any of these is **refused whole**, naming the field
   (`tenants.group:telegram:42.grants.0`), and the kernel falls back to the
   compiled floor — which grants nothing to anybody. Same direction, and same
@@ -585,20 +593,39 @@ and egress rather than by this boundary.
 
 ### 9.1 Two shell lanes, and what each one promises
 
-Since point 4 of the *ask only for the irreversible* decision (`docs/decisions/0074-si-chiede-solo-per-l-irreversibile.md` — the document lands in its own PR; this section is written against its point 4) there are two contained command capabilities, not one, and the
+Since point 4 of the *ask only for the irreversible* decision (`docs/decisions/0074-si-chiede-solo-per-l-irreversibile.md`) there are two contained command capabilities, not one, and the
 line between them is what the sandbox can be made to guarantee rather than a
 judgement about how dangerous commands are.
 
-`sys.shell` (`shell_run`) is the **read-only lane**: the filesystem is readable
-subject to the deny-read list, writes are confined to a scratch directory this
+`sys.shell` (`shell_run`) is the **read-only lane**: the whole host filesystem is
+readable minus a finite deny-read list (not just the project — §9.2 names what
+that costs), writes are confined to a scratch directory this
 process creates under the system temp dir and removes when the session ends, and
-there is no IP network. It declares `reversible: 'yes'` and `risk: 'low'`, and
-the kernel therefore lets it run without asking anyone. That is the whole
-argument: a command that cannot write outside a throwaway directory has nothing
-to undo, and a command with no socket has sent nothing. Both halves are executed
+direct IP networking is disabled. On Linux the AF_UNIX seccomp filter is
+requested and behaviorally verified (three-legged self-test: an unsandboxed
+control connects, the contained client must not), so a contained command
+cannot open `socket(AF_UNIX, …)` at all; on macOS the Seatbelt profile has
+always blocked Unix sockets by default. A host where the filter cannot be
+applied refuses every contained invocation before it runs — the shell tools
+may still be registered by the synchronous build path (which reads the narrow
+probe), and `doctor`, which verifies, prints the reason; the guarantee is
+that no command ever runs unfiltered. The Muffin gateway
+socket and pointer are additionally deny-listed, and the long-home fallback is
+covered by the composed Linux test (see §9.3). It declares `risk: 'high'`:
+although filesystem writes stay in scratch and direct IP networking is
+disabled, a contained command still reads a broad host filesystem and spends
+the host's resources.
+`risk` governs safe mode and the budget, not the ask. Since ADR-0091
+(2026-09-22, on the Linux measurement in §9.2 / issue #645), it also declares
+`reversible: 'no'`: what a command reads reaches the model and a disclosure
+cannot be taken back, so the kernel **asks the owner every time**, exactly as
+it does for the writing lane. It is also `rerunnable: false`: after a crash
+without a recorded outcome, recovery reports “maybe done” instead of repeating
+a possible local-service mutation. The write-and-no-IP-network halves are tested
 against a live sandbox in `core/sandbox/confine-sola-lettura.test.ts`, on Linux
-under `bwrap` in the GitHub Actions `verifica` job and on macOS under
-seatbelt.
+under `bwrap` in the GitHub Actions `verifica` job and on macOS under seatbelt;
+the ask is the gate over the read half the sandbox cannot bound (pinned srt
+0.0.71 has no read allowlist — §9.2).
 
 `sys.shell.write` (`shell_run_write`) is the **writing lane**: the workspace is
 its write scope, it keeps `reversible: 'no'` and `risk: 'high'`, and it asks
@@ -611,27 +638,97 @@ Three properties of this split are load-bearing:
   handed the workspace by a mistaken caller. The two lanes are two tools with
   two capability ids, decided by the kernel before a handler runs, rather than
   one tool branching on a parameter the model wrote.
-- **Neither lane exists where containment cannot be proved.** The read-only lane
+- **Neither lane runs where containment cannot be proved.** The read-only lane
   is the stricter of the two and its promise *is* the sandbox's promise, so a
   host with a negative `probeSandbox` gets no shell at all — never the read-only
   one as a "safe fallback", and never a silent fall back to the writing one. The
-  tool says the command must be run by hand or with a dedicated tool.
+  tool says the command must be run by hand or with a dedicated tool. A host
+  whose probe is green but whose real invocation cannot hold (the verified half,
+  including an AF_UNIX filter that cannot be applied) refuses every contained
+  command: the lanes may be listed by the synchronous build path, and no command
+  ever runs unfiltered.
 - **What it does not claim.** Two residuals are declared rather than implied.
-  On Linux `network.allowAllUnixSockets` is on — srt's seccomp layer, the only
-  thing that blocks `socket(AF_UNIX, …)`, is broken on Ubuntu 24.04 (upstream
-  #428/#429) — and `--unshare-net` does not cover Unix sockets, which are
-  filesystem objects: a socket reachable under the read-only bind is reachable
-  from the read-only lane. And a command still spends the host's CPU, memory and
+  On Linux the AF_UNIX seccomp filter is requested (`allowAllUnixSockets:
+  false`) and verified at boot through the real execution door; the measured
+  refusal is `EPERM` from `socket(AF_UNIX, …)`, so a contained command cannot
+  reach *any* local service socket — including other installations' — and a
+  host where `apply-seccomp` cannot obtain its capability (Ubuntu AppArmor
+  profile, upstream #428/#429) refuses every contained invocation before it
+  runs (`doctor`, which verifies, prints the reason). The gateway control
+  socket and pointer file (#638) remain deny-listed as defence in depth and
+  because the deny is what covers macOS, where Seatbelt blocks Unix sockets
+  by default. The gateway socket path and long-home fallback path (hashed
+  socket under Node's configured temp root plus `gateway.sock.path`) are
+  deny-listed. The
+  fallback resolves that root and fails closed unless each ancestor is owned
+  by root/current UID, with the sticky bit required on writable shared
+  ancestors; macOS additionally rejects any ACL in the ancestry and fails
+  closed if ACL inspection cannot run, because ACL grants are not represented
+  by BSD mode bits. This prevents another UID from replacing the private leaf
+  after validation. The composed Linux live test covers both paths, owner-only
+  socket/private-directory permissions under umask `022`, a separate-UID
+  connection, and rejection of a world-writable non-sticky `TMPDIR` before
+  bind/pointer publication; the macOS unit test rejects a temp ancestry with
+  an ACL granting `add_file` and `delete_child`. The AF_UNIX filter itself is
+  measured on the production-side Linux runner (evidence
+  `docs/evidence/af-unix-seccomp-2026-09-26.md`).
+  And a command still spends the host's CPU, memory and
   file descriptors. So `sys.shell` stays on the `host` effect row rather than
-  moving to `context`: "no writes outside the scratch and no IP network" is the
-  claim; "no effect of any kind on the host" is not.
+  moving to `context`: "no writes outside the scratch, no IP network and no
+  reachable local socket" is the
+  claim; "no effect of any kind on the host" is not — and since ADR-0091 the
+  ask covers the half the boundary cannot: the read.
 
-Network is off on **both** lanes today, although that decision describes the
+Direct IP networking is disabled on **both** lanes today, although that decision describes the
 writing one as writing *or* reaching the network. Opening the network there would route
 around the Root of Trust's egress allowlist (ADR-0066) through a door that does
 not consult it, and that is a separate decision from this split. The current
 state is asserted, not assumed: the same live containment test checks the
 writing lane cannot reach a listening host socket either.
+
+### 9.2 Shell read scope and sandbox patch posture (2026-09-21)
+
+Reads are allow-by-default: `--ro-bind / /` minus a finite `denyRead`.
+Applications, credential stores and private folders appear continuously, so the
+list protects known secrets without ever expressing "this turn may inspect the
+project, not the whole machine". Stdout reaches the model (fenced, `DISK_TIER`),
+so an injected `cat ~/…` discloses to the provider. Writes stay in scratch,
+direct IP networking is disabled, and on Linux `socket(AF_UNIX, …)` is refused
+by the verified seccomp filter as described above. The exposure is documented in
+executable form by an
+`it.fails` canary in `confine-sola-lettura.test.ts` that must be flipped to a
+plain assertion the day reads become allow-scoped. Measured on Linux
+2026-09-22 (evidence §5): a canary outside the workspace and outside the
+deny-list is readable through production `runReadOnly` — `~`, `/var/tmp` and
+host disk all in scope — while the deny itself holds. The gating half of the
+question closed the same day (ADR-0091): `sys.shell` is `reversible: 'no'` and
+asks the owner every time, so whole-host visibility is no longer an
+*unapproved* low-risk capability. The allow-scoped read surface (workspace,
+session scratch, explicit safe system paths) remains the preferred fix and is
+not constructible on pinned srt 0.0.71 — it has no read allowlist — so it
+stays a reversal condition of ADR-0091 rather than a silent default.
+
+The September 2026 Bubblewrap symlink setup flaw (CVE-2026-87766) happens
+before anything runs, so no behavioral probe observes it, and Ubuntu reverted
+its backport (USN-8779-2): there is deliberately no Ubuntu-revision gate
+anywhere in this repository. Both the runtime and `doctor` read one shared
+verdict (`core/sandbox/shell-boundary.ts`): on bubblewrap, `shell_run` /
+`shell_run_write` and the job executor are exposed only when the deny/allow
+probe holds **and** the patch posture is trusted (upstream ≥ 0.12.0);
+otherwise the lanes are absent and doctor reports behavioral result and patch
+posture as separate facts — never "shell attivo" on a host where the tools do
+not exist. macOS/seatbelt gets no version floor. A first probe of Muffin's
+exact invocation (workspace `--bind`, host mount-point stubs for absent deny
+paths, attacker-shaped symlink in the write scope) ran on Linux 2026-09-22
+(evidence §5(3)): srt's resolve-before-mask plus the allowWrite check stopped
+the deny-path shape before bwrap saw it — no host write observed — and the
+raw-bwrap control stayed on the read-only filesystem. That is one invocation
+and one shape on a host whose `bwrap` is 0.11.1 (< 0.12.0, upstream-vulnerable):
+`unverified` stays the verdict until a complete upstream fix ships, never
+`patched` by inference.
+
+The falsifiers, the decision table and the Linux results that closed the HOLD
+items live in `docs/evidence/shell-containment-2026-09-21.md`.
 
 Symlink, hardlink, ancestor-symlink and path-canonicalisation behaviour are part
 of the security claim rather than filesystem edge cases.
@@ -712,8 +809,8 @@ four below, before it says anything else:
    the owner can undo the read-only bits by itself. `rot harden` prints the OS
    commands that make prevention real — it needs `sudo`, which is why it
    prints them instead of running them. The consequence the owner feels every
-   day: without real prevention, no high-risk capability can ever become a
-   silent allow — `sys.shell` always asks.
+   day: without real prevention, no capability that cannot be undone can ever
+   become a silent allow — `sys.shell` always asks.
 
 **A capability-setup verb (`muffin search <provider>`, `muffin mcp add
 --host`) may widen `rot/egress.json` and reseal, and that is the same act as

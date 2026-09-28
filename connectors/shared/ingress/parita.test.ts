@@ -142,9 +142,15 @@ const apriTelegram: Apri = async (over = {}) => {
       inviati.push(text);
       return { message_id: inviati.length } as never;
     },
+    sendRichMessage: async (_chatId: number, rich: { html?: string; blocks?: unknown[] }) => {
+      inviati.push(rich.html ?? testoBlocchi(rich.blocks));
+      return { message_id: inviati.length } as never;
+    },
     sendChatAction: async () => true,
     sendMessageDraft: async () => true,
+    sendRichMessageDraft: async () => true,
     editMessageText: async () => ({}) as never,
+    editMessageRichText: async () => ({}) as never,
     deleteMessage: async () => true,
   } as unknown as TelegramApi;
 
@@ -373,6 +379,22 @@ const TABELLA: Record<string, Record<IngressStage, Cella>> = {
     settle: { scena: RISPONDE },
   },
 };
+
+/** Il testo visibile di un payload rich, letto dai blocchi (il finale in DM è a blocchi). */
+function testoBlocchi(blocks: unknown): string {
+  if (!Array.isArray(blocks)) return '';
+  const blockText = (b: unknown): string => {
+    if (b === null || typeof b !== 'object') return '';
+    const o = b as { text?: unknown; summary?: unknown; blocks?: unknown[] };
+    const parts: string[] = [];
+    if (typeof o.summary === 'string') parts.push(o.summary);
+    if (typeof o.text === 'string') parts.push(o.text);
+    else if (Array.isArray(o.text)) parts.push(JSON.stringify(o.text));
+    if (Array.isArray(o.blocks)) parts.push(o.blocks.map(blockText).join('\n'));
+    return parts.join('\n');
+  };
+  return blocks.map(blockText).join('\n');
+}
 
 describe('1. ogni stadio ha una scena su ogni porta', () => {
   it("l'asse delle porte è quello che cli/surface.ts registra davvero, non una lista scritta qui", () => {

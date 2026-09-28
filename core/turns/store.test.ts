@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -7,6 +7,8 @@ import type { Message } from '../../agent/providers/types.js';
 import { HARD_STALE_MULTIPLIER } from '../lock/durable.js';
 import type { Principal } from '../policy/types.js';
 import { TURN_STALE_AFTER_MS, TurnStore, describeInterrupted, readTurnHealth, type NewTurn, type TurnCounters } from './store.js';
+import { providerMessages } from '../../agent/loop/provider-checkpoint.js';
+import { migrate } from '../db/migrate.js';
 
 /**
  * The row, and the four things it exists to hold that nothing else can.
@@ -47,24 +49,41 @@ const spec = (over: Partial<NewTurn> = {}): NewTurn => ({
 const store = (alive: (pid: number) => boolean = () => true, clock: () => Date = () => new Date()) =>
   new TurnStore(new DatabaseCtor(':memory:'), clock, alive);
 
+function migrateLegacyTurns(db: DatabaseCtor.Database): void {
+  const dir = mkdtempSync(join(tmpdir(), 'muffin-turn-migrate-'));
+  try {
+    migrate(db, { backupDir: join(dir, 'backups') });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 describe('the turn record', () => {
   it('reassigns only a never-started runnable row to the newly selected model', () => {
     const s = store();
     s.enqueue(spec());
 
     expect(s.reassignUnstartedModel('turn-1', 'claude-opus-5', 'openrouter/free')).toBe(true);
-    expect(s.get('turn-1')?.model).toBe('openrouter/free');
+    expect(s.get('turn-1')?.providerLease.model).toBe('openrouter/free');
 
     expect(s.claim('turn-1', 4242)).not.toBeNull();
     expect(s.reassignUnstartedModel('turn-1', 'openrouter/free', 'another/model')).toBe(false);
-    expect(s.get('turn-1')?.model).toBe('openrouter/free');
+    expect(s.get('turn-1')?.providerLease.model).toBe('openrouter/free');
   });
 
   it('exists as soon as it is created: running, claimed by this process, model pinned', () => {
     const s = store();
-    const created = s.create(spec(), 4242);
-    expect(created).toMatchObject({ status: 'running', claimedBy: 4242, model: 'claude-opus-5', taint: 0 });
+    const created = s.create(spec({ inputText: 'ingress canonico' }), 4242);
+    expect(created).toMatchObject({ status: 'running', claimedBy: 4242, taint: 0, inputText: 'ingress canonico' });
+    expect(created.providerLease.model).toBe('claude-opus-5');
     expect(s.get('turn-1')?.outcome).toBeNull();
+  });
+
+  it('stores provider-independent ingress text under the same redaction floor as checkpoints', () => {
+    const s = store();
+    const created = s.create(spec({ inputText: '{"api_key":"sk-liveTESTKEY1234567890"}' }));
+    expect(created.inputText).toContain('«redacted:');
+    expect(created.inputText).not.toContain('sk-liveTESTKEY1234567890');
   });
 
   it('keeps the transcript verbatim — thinking blocks and their signatures included', () => {
@@ -85,7 +104,7 @@ describe('the turn record', () => {
       },
     ];
     expect(s.checkpoint('turn-1', { messages, taint: 0, counters: spec().counters }, created.claimToken)).toBe(true);
-    expect(s.get('turn-1')?.messages).toEqual(messages);
+    expect(providerMessages(s.get('turn-1'))).toEqual(messages);
   });
 
   it('raises the taint with the tool result that caused it, in one write', () => {
@@ -473,7 +492,7 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
   const releaseIt = (s: TurnStore, id = 'turn-1') => {
     const rec = s.get(id);
     if (rec === null) throw new Error('no row');
-    return s.releaseContinuable(id, { messages: rec.messages, taint: rec.taint, counters: rec.counters, reason }, rec.claimToken);
+    return s.releaseContinuable(id, { messages: providerMessages(rec), taint: rec.taint, counters: rec.counters, reason }, rec.claimToken);
   };
 
   const grantIt = (s: TurnStore, id = 'turn-1', fresh?: TurnCounters) => {
@@ -482,7 +501,7 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     return s.grantContinuation(
       id,
       {
-        messages: [...rec.messages, { role: 'user', content: [{ type: 'text', text: 'riprendi' }] }],
+        messages: [...providerMessages(rec), { role: 'user', content: [{ type: 'text', text: 'riprendi' }] }],
         taint: rec.taint,
         // Fresh lease-local capacity. iterations and resumes ride along
         // unchanged: iterations stays cumulative, resumes is the crash-loop
@@ -563,7 +582,7 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     // it twice.
     expect(granted?.lifetime).toEqual(releasedLifetime);
     // The owner's continuation message is on the durable transcript.
-    expect(granted?.messages.at(-1)).toMatchObject({ role: 'user' });
+    expect(providerMessages(granted).at(-1)).toMatchObject({ role: 'user' });
     // New lease opened with the fresh allowance; previous lease stays as
     // the release left it.
     const leases = s.leasesFor('turn-1');
@@ -641,7 +660,7 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     // Lease 2 does work, then finishes terminally. The finish derives its
     // close from these exact counters — there is no second input to disagree.
     const worked = { ...granted.counters, toolCallsMade: 4, usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 } };
-    expect(s.finish('turn-1', { outcome: 'answered', messages: granted.messages, taint: 0, counters: worked }, granted.claimToken)).toBe(
+    expect(s.finish('turn-1', { outcome: 'answered', messages: providerMessages(granted), taint: 0, counters: worked }, granted.claimToken)).toBe(
       true,
     );
     const final = s.get('turn-1');
@@ -839,6 +858,7 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
        VALUES ('vecchio', ?, 'host', 'cli', 's1', 'm', '[]', 3, ?, 'done', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`,
     ).run(JSON.stringify(owner), counters);
 
+    migrateLegacyTurns(db);
     const s = new TurnStore(db, () => new Date(), () => true);
     const rec = s.get('vecchio');
     expect(rec).toMatchObject({ status: 'done', taint: 3, leaseIndex: 0, continuableReason: null });
@@ -900,15 +920,16 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     ).run();
 
     const before = db.prepare(`SELECT * FROM turns WHERE id = 'pieno'`).get() as Record<string, unknown>;
+    migrateLegacyTurns(db);
     const s = new TurnStore(db, () => new Date(), () => true);
     const after = db.prepare(`SELECT * FROM turns WHERE id = 'pieno'`).get() as Record<string, unknown>;
-    // Every pre-existing column byte-identical; only the three additive
-    // columns differ (defaults), plus the CHECK.
+    // Every pre-existing column byte-identical; only migration-owned
+    // additive columns differ (defaults), plus the CHECK.
     for (const col of Object.keys(before)) expect(after[col]).toBe(before[col]);
-    expect(after).toMatchObject({ lease_index: 0, continuable_reason: null, lifetime: null });
+    expect(after).toMatchObject({ lease_index: 0, continuable_reason: null, lifetime: null, input_text: null });
     const rec = s.get('pieno');
-    expect(rec).toMatchObject({ status: 'waiting', taint: 3, model: 'qwen/x', jobId: 'job-9', delivery: 'pending' });
-    expect(rec?.messages).toHaveLength(3);
+    expect(rec).toMatchObject({ status: 'waiting', taint: 3, providerLease: { model: 'qwen/x' }, jobId: 'job-9', delivery: 'pending' });
+    expect(providerMessages(rec)).toHaveLength(3);
     expect(rec?.counters).toMatchObject({ toolCallsMade: 3, activeModelMs: 12345 });
     // Tool WAL untouched.
     expect(s.recordedOutcomes('pieno').get('c1')).toMatchObject({ content: 'contenuto-segreto', isError: false });
@@ -923,7 +944,7 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     expect(objects.find((o) => o.name === 'turns')?.sql).toContain("'continuable'");
   });
 
-  it('a half-finished rebuild (stray turns_new) recovers with data intact', () => {
+  it('a half-finished rebuild (stray turns__rebuild) recovers with data intact', () => {
     const db = new DatabaseCtor(':memory:');
     db.exec(`CREATE TABLE turns (
       id TEXT PRIMARY KEY, principal TEXT NOT NULL, tenant TEXT NOT NULL, surface TEXT NOT NULL,
@@ -933,15 +954,16 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
       wake_at TEXT, wait_for TEXT, claimed_by INTEGER, claimed_at TEXT, claim_token TEXT,
       turn_outcome TEXT, delivery TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
-    CREATE TABLE turns_new (id TEXT PRIMARY KEY, mezza TEXT);`);
+    CREATE TABLE turns__rebuild (id TEXT PRIMARY KEY, mezza TEXT);`);
     db.prepare(
       `INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint, counters, status, created_at, updated_at)
        VALUES ('sopravvissuto', ?, 'host', 'cli', 's1', 'm', '[]', 0, ?, 'done', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`,
     ).run(JSON.stringify(owner), JSON.stringify(spec().counters));
 
+    migrateLegacyTurns(db);
     const s = new TurnStore(db, () => new Date(), () => true);
     expect(s.get('sopravvissuto')?.status).toBe('done');
-    const leftover = db.prepare(`SELECT name FROM sqlite_master WHERE name = 'turns_new'`).get();
+    const leftover = db.prepare(`SELECT name FROM sqlite_master WHERE name = 'turns__rebuild'`).get();
     expect(leftover).toBeUndefined();
   });
 
@@ -964,11 +986,12 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     // EXCLUSIVE held by another connection: the opener cannot migrate.
     setup.exec('BEGIN EXCLUSIVE');
     const locked = new DatabaseCtor(path);
-    expect(() => new TurnStore(locked, () => new Date(), () => true)).toThrow();
+    expect(() => migrate(locked, { backupDir: join(dir, 'backups') })).toThrow();
     locked.close();
     setup.exec('ROLLBACK');
     // Nothing half-written: the old table answers, and the retry migrates.
     expect((setup.prepare(`SELECT count(*) AS n FROM turns`).get() as { n: number }).n).toBe(1);
+    migrateLegacyTurns(setup);
     const s = new TurnStore(new DatabaseCtor(path), () => new Date(), () => true);
     expect(s.get('bloccato')?.status).toBe('done');
     expect(s.get('bloccato')?.leaseIndex).toBe(0);

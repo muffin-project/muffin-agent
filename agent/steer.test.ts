@@ -14,6 +14,7 @@ import { runTurn, type LoopDeps, type RegisteredTool } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
 import type { ChatCall, ChatResult, Provider } from './providers/types.js';
 import { searchCapability, searchSpec } from './tools/search.js';
+import { providerMessages } from './loop/provider-checkpoint.js';
 
 /**
  * `/steer` (ADR-0054 §2): la correzione dell'owner entra al confine di giro,
@@ -107,7 +108,7 @@ describe('una correzione a metà turno', () => {
     expect(coda).toEqual([]);
     // E sta nel transcript persistito, così un turno ripreso la ricorda.
     const record = deps.turns.get(result.turnId);
-    expect(JSON.stringify(record?.messages)).toContain('cerca in italiano');
+    expect(JSON.stringify(providerMessages(record))).toContain('cerca in italiano');
   });
 
   it('senza correzioni non cambia niente', async () => {

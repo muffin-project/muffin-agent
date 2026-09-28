@@ -205,3 +205,37 @@ describe('chi ha risposto davvero', () => {
     expect(r.upstream).toBe('Alibaba');
   });
 });
+
+/**
+ * Il re-drive dopo una risposta vuota nomina chi ha taciuto, così il tentativo
+ * successivo non atterra sulla stessa macchina (2026-09-25). La traduzione
+ * vive qui, in un posto solo, come ogni altro nome del fornitore.
+ */
+describe('provider vuoto: il re-drive evita chi non ha risposto', () => {
+  it('traduce providerIgnore in provider.ignore, accanto alle preferenze dell owner', async () => {
+    const s = spia();
+    const p = new OpenAICompatProvider('k', 'https://openrouter.ai/api/v1', {}, {
+      fetch: s.fetch,
+      routing: { dataCollection: 'deny' },
+    });
+    await p.chat(chiamata({ providerIgnore: ['Reka'] }));
+    expect(s.body()['provider']).toEqual({ data_collection: 'deny', ignore: ['Reka'] });
+  });
+
+  it('non lo manda se l owner ha inchiodato la rotta: ignorare l unico provider ammesso non e un riprova', async () => {
+    const s = spia();
+    const p = new OpenAICompatProvider('k', 'https://openrouter.ai/api/v1', {}, {
+      fetch: s.fetch,
+      routing: { only: ['alibaba'] },
+    });
+    await p.chat(chiamata({ providerIgnore: ['alibaba'] }));
+    expect(s.body()['provider']).toEqual({ only: ['alibaba'] });
+  });
+
+  it('non lo manda a un endpoint che non smista niente', async () => {
+    const s = spia();
+    const p = new OpenAICompatProvider('k', 'http://localhost:11434/v1', {}, { fetch: s.fetch });
+    await p.chat(chiamata({ providerIgnore: ['Reka'] }));
+    expect(s.body()['provider']).toBeUndefined();
+  });
+});

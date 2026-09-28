@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir, platform } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -297,6 +298,49 @@ describe.runIf(gate.run)(`sandboxed execution holds (real containment — ${gate
     expect(r.code).not.toBe(0);
     expect(existsSync(hookPath)).toBe(false);
   }, 20_000);
+
+  /**
+   * The seccomp stage, verified against a listener this process owns.
+   *
+   * `networkOff()` requests `allowAllUnixSockets: false` on Linux, so either
+   * the filter is applied or the sandbox cannot run at all; srt silently
+   * skips the stage only when it cannot find its `apply-seccomp` binary.
+   * This is the behavioral half: a contained client must not reach our own
+   * socket. Mutation: setting `allowAllUnixSockets` back to `true` makes the
+   * connect succeed and this test red.
+   *
+   * Linux-only by construction — Seatbelt writes Unix-socket rules into its
+   * profile instead — and `it.runIf` declares the skip on macOS rather than
+   * hiding it.
+   */
+  describe.runIf(process.platform === 'linux')('the AF_UNIX seccomp filter', () => {
+    it('refuses a contained client that tries to reach this process\u2019s own socket', async () => {
+      const socketPath = join(s.base, 'afunix-exec-test.sock');
+      const server = createServer();
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(socketPath, () => resolve());
+      });
+      try {
+        const snippet =
+          "const net=require('node:net');const s=net.connect(process.argv[1]);" +
+          "s.on('connect',()=>{s.destroy();process.exit(0)});" +
+          "s.on('error',(e)=>{console.error(e.code||e.message);process.exit(3)});";
+        const r = await executor.runReadOnly({
+          command: `node -e ${JSON.stringify(snippet)} ${JSON.stringify(socketPath)}`,
+          cwd: s.workspace,
+          timeoutMs: 15_000,
+        });
+        expect(r.code).not.toBe(0);
+        expect(`${r.stderr}${r.stdout}`).toMatch(
+          /EPERM|operation not permitted|permission denied|SIGSYS|bad system call/i,
+        );
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        rmSync(socketPath, { force: true });
+      }
+    }, 20_000);
+  });
 });
 
 describe('when the sandbox is unavailable', () => {

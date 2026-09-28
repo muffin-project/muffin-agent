@@ -93,6 +93,25 @@ describe('policy kernel', () => {
       .toMatchObject({ effect: 'allow' });
   });
 
+  it('safe mode remains a deny floor across every declared risky capability, principal, and taint', () => {
+    const degraded = kernel({ safeMode: true });
+    const principals: Array<[Principal, string]> = [
+      [owner, 'host'],
+      [member, 'group:telegram:42'],
+      [scheduler, 'host'],
+    ];
+    for (const capability of decls.filter((d) => d.risk !== 'low')) {
+      for (const [principal, tenant] of principals) {
+        for (const taint of [0, 1, 2, 3] as const) {
+          expect(
+            degraded({ principal, tenant, capability: capability.id, resource: { kind: 'none' }, args: {}, taint }),
+            `${capability.id}/${principal.kind}/taint-${taint}`,
+          ).toMatchObject({ effect: 'deny', code: 'safe_mode' });
+        }
+      }
+    }
+  });
+
   it('refuses a capability that was never declared', () => {
     expect(kernel()(req(owner, 'host', 'tool.invented', 0))).toMatchObject({
       effect: 'deny',
@@ -119,6 +138,32 @@ describe('policy kernel', () => {
       effect: 'deny',
       code: 'tenant_mismatch',
     });
+  });
+
+  it('tenant contradiction always denies across declared authority and taint', () => {
+    const decide = kernel();
+    for (const capability of decls) {
+      for (const taint of [0, 1, 2, 3] as const) {
+        const verdict = decide({
+          principal: member,
+          tenant: 'host',
+          capability: capability.id,
+          resource: { kind: 'none' },
+          args: {},
+          taint,
+        });
+        // RoT writes are refused before tenant validation by design; every
+        // other declaration reaches the principal/tenant coherence gate.
+        expect(`${capability.id}/taint-${taint}: ${verdict.effect}`).toBe(
+          `${capability.id}/taint-${taint}: deny`,
+        );
+        if (capability.id === 'rot.write') {
+          expect(verdict).toMatchObject({ code: 'rot_violation' });
+        } else {
+          expect(verdict).toMatchObject({ code: 'tenant_mismatch' });
+        }
+      }
+    }
   });
 
   it('denies a medium-risk capability once the context carries untrusted content', () => {

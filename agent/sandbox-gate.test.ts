@@ -3,34 +3,48 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { runInit } from '../cli/init.js';
-import { buildRuntime } from './runtime.js';
 import type { SandboxProbe } from '../core/sandbox/probe.js';
+import { buildRuntime, type Runtime } from './runtime.js';
 
 /**
  * One line in `buildRuntime` decides whether the model is offered a way to run
  * commands at all:
  *
- *     if (executor.status().available) tools.push(makeShellTool(...));
+ *     if (assessShellBoundary(executor.status()).usable) tools.push(makeShellTool(...));
  *
  * ADR-0018 rule 5 — "sandbox non disponibile ≠ silenziosamente unsandboxed" —
- * is that line and nothing else. The containment tests prove the sandbox
- * contains; this proves the *absence* of a sandbox removes the tool, which is
- * the half no containment test can reach. Both halves were built and only one
- * was ever asserted, which is this repository's signature defect (AGENTS.md:
- * four defences with correct logic and no caller).
+ * is that line and nothing else, and #642 widened it: a behavioral pass alone
+ * is not enough when the mechanism is bubblewrap, because the setup-time class
+ * (CVE-2026-87766) is invisible to the probe. The containment tests prove the
+ * sandbox contains; this proves the *absence* of a usable boundary removes the
+ * tool — probe negative, or probe green with an unverified patch posture —
+ * which is the half no containment test can reach. Both halves were built and
+ * only one was ever asserted, which is this repository's signature defect
+ * (AGENTS.md: four defences with correct logic and no caller).
  *
  * The probe is mocked rather than the platform: what the gate reads is the
- * probe's verdict, so that is what a test must be able to set.
+ * probe's verdict, so that is what a test must be able to set. The bwrap
+ * version is mocked the same way — a fixture, never a claim about the host
+ * that runs the suite.
  */
 
-const verdict = vi.hoisted(() => ({ current: null as SandboxProbe | null }));
+const verdict = vi.hoisted(() => ({
+  current: null as SandboxProbe | null,
+  version: null as string | null,
+}));
 
 vi.mock('../core/sandbox/probe.js', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../core/sandbox/probe.js')>();
   return { ...mod, probeSandbox: () => verdict.current ?? mod.probeSandbox() };
 });
 
+vi.mock('../core/sandbox/bubblewrap-version.js', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../core/sandbox/bubblewrap-version.js')>();
+  return { ...mod, readBubblewrapVersion: () => verdict.version };
+});
+
 const contains: SandboxProbe = { available: true, mechanism: 'seatbelt' };
+const containsBwrap: SandboxProbe = { available: true, mechanism: 'bubblewrap' };
 const doesNot: SandboxProbe = {
   available: false,
   mechanism: 'bubblewrap',
@@ -39,16 +53,20 @@ const doesNot: SandboxProbe = {
   remedy: 'add an AppArmor profile for bwrap',
 };
 
-function toolNames(): string[] {
+function build(): Runtime {
   const home = mkdtempSync(join(tmpdir(), 'muffin-gate-'));
   runInit({ home, apiKey: 'sk-never-called' });
-  const runtime = buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-gate-ws-')));
-  return runtime.deps.tools.map((t) => t.spec.name);
+  return buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-gate-ws-')));
+}
+
+function toolNames(): string[] {
+  return build().deps.tools.map((t) => t.spec.name);
 }
 
 describe('the shell tool exists only where a containment was proved', () => {
   beforeEach(() => {
     verdict.current = null;
+    verdict.version = null;
   });
 
   it('a probe that proved containment registers both lanes', () => {
@@ -78,5 +96,42 @@ describe('the shell tool exists only where a containment was proved', () => {
     // Not a general outage: the rest of the toolset is untouched, so a red here
     // means the gate, not a broken runtime.
     expect(names).toContain('fs_read');
+  });
+
+  /**
+   * #642: the defect this lane exists for. Behavioral probe green, bubblewrap
+   * present, version below the upstream CVE-2026-87766 fix — the exact shape
+   * of centria-zero (bwrap 0.11.1). Before the shared boundary, this host
+   * registered both lanes while doctor could only warn. Fixture declared: the
+   * version string is pinned here, not read from the machine running the suite.
+   */
+  it('bubblewrap probe green + fixture < 0.12.0 → no shell lanes, gap says why (#642)', () => {
+    verdict.current = containsBwrap;
+    verdict.version = 'bubblewrap 0.11.1';
+    const runtime = build();
+    const names = runtime.deps.tools.map((t) => t.spec.name);
+    expect(names).not.toContain('shell_run');
+    expect(names).not.toContain('shell_run_write');
+    expect(names).toContain('fs_read');
+    const gap = runtime.capabilityGaps.find((g) => g.capability === 'shell_run, shell_run_write');
+    expect(gap?.kind).toBe('disabled');
+    expect(gap?.reason).toMatch(/CVE-2026-87766|unverified/);
+    expect(gap?.remedy).toBeTruthy();
+    // The job runner reads the same `contained` flag: no executor to run
+    // scripts outside a model turn either.
+    expect(runtime.executor).toBeNull();
+  });
+
+  /**
+   * The positive half, also a declared fixture: same green probe, patch
+   * posture trusted, lanes return. Without this, "no tools when unverified"
+   * could be satisfied by a gate that never lets the shell in at all.
+   */
+  it('bubblewrap probe green + declared fixture ≥ 0.12.0 → both lanes and the job executor', () => {
+    verdict.current = containsBwrap;
+    verdict.version = 'bubblewrap 0.12.0';
+    const names = toolNames();
+    expect(names).toContain('shell_run');
+    expect(names).toContain('shell_run_write');
   });
 });

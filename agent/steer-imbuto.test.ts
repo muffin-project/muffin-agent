@@ -14,6 +14,7 @@ import { type LoopDeps, type RegisteredTool, resumeTurn, runTurn } from './loop.
 import { CONSERVATIVE } from './profiles/profile.js';
 import { type ChatCall, type ChatResult, type Provider, ProviderError } from './providers/types.js';
 import { makeWaitTool, waitCapability } from './tools/wait.js';
+import { providerMessages } from './loop/provider-checkpoint.js';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -236,7 +237,7 @@ describe('l imbuto: una uscita sola per le correzioni', () => {
     });
     expect(r.stopped).toBe('answered');
     expect(quante(w.sessions.read(session), CORREZIONE)).toBe(1);
-    expect(quante(w.turns.get(r.turnId)!.messages, CORREZIONE)).toBe(0);
+    expect(quante(providerMessages(w.turns.get(r.turnId)!), CORREZIONE)).toBe(0);
     expect(coda).toEqual([]);
   });
 
@@ -256,7 +257,7 @@ describe('l imbuto: una uscita sola per le correzioni', () => {
     });
     expect(r.stopped).toBe('answered');
     expect(prompt(w.provider.seen[1])).toContain(CORREZIONE);
-    expect(quante(w.turns.get(r.turnId)!.messages, CORREZIONE)).toBe(1);
+    expect(quante(providerMessages(w.turns.get(r.turnId)!), CORREZIONE)).toBe(1);
     // L'imbuto ha trovato la porta vuota: è il no-op che rende sicuri i drain
     // di sito, e qui si misura invece di assumerlo.
     expect(quante(w.sessions.read(session), CORREZIONE)).toBe(0);
@@ -277,7 +278,7 @@ describe('l imbuto: una uscita sola per le correzioni', () => {
       steer: () => coda.splice(0),
     });
     expect(r.stopped).toBe('suspended');
-    expect(quante(w.turns.get(r.turnId)!.messages, CORREZIONE)).toBe(1);
+    expect(quante(providerMessages(w.turns.get(r.turnId)!), CORREZIONE)).toBe(1);
     expect(quante(w.sessions.read(session), CORREZIONE)).toBe(0);
   });
 
@@ -320,7 +321,7 @@ describe('l imbuto: una uscita sola per le correzioni', () => {
       steer: () => coda.splice(0),
     });
     expect(first.stopped).toBe('suspended');
-    expect(quante(w.turns.get(first.turnId)!.messages, CORREZIONE)).toBe(1);
+    expect(quante(providerMessages(w.turns.get(first.turnId)!), CORREZIONE)).toBe(1);
 
     // Il modello cambia: `resumeTurn` rifiuta **prima** di `drive` e `closeRow`
     // chiude la riga. La correzione era conservata e irraggiungibile.

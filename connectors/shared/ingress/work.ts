@@ -134,7 +134,7 @@ export async function runWork(
         },
       );
     }
-    const follow = match.kind === 'none' ? resolveFollowup(req.identity.sessionKey, req.text, Date.now()) : null;
+    const follow = match.kind === 'none' ? resolveFollowup(deps.loop.turns, req.identity.sessionKey, req.text, Date.now()) : null;
     const target = match.kind === 'single' ? match.turnId : follow?.turnId;
     if (target !== undefined) {
       const row = deps.loop.turns.get(target);

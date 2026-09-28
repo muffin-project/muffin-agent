@@ -56,7 +56,7 @@ const privateMsg = (id: number): Update =>
 
 describe('first paint beats a blocking first tool handler', () => {
   it('the first running step is sent before the handler body can block the loop', async () => {
-    type Call = { method: string; text?: string; messageId?: number };
+    type Call = { method: string; text?: string; rich?: unknown; messageId?: number };
     const calls: Call[] = [];
     let nextMessageId = 900;
     const api = {
@@ -69,8 +69,29 @@ describe('first paint beats a blocking first tool handler', () => {
         calls.push({ method: 'editMessageText', text: html, messageId });
         return true;
       },
+      // The final answer merges into the same message as a rich edit (Bot API
+      // 10.3); the fake records it so the merge is still observed.
+      sendRichMessage: async (chatId: number, rich: unknown) => {
+        const messageId = nextMessageId++;
+        calls.push({ method: 'sendRichMessage', rich, messageId });
+        return { message_id: messageId, date: 0, chat: { id: chatId, type: 'private' } } as never;
+      },
+      editMessageRichText: async (_chatId: number, messageId: number, rich: unknown) => {
+        calls.push({ method: 'editMessageRichText', rich, messageId });
+        return true;
+      },
       sendChatAction: async () => true,
-      sendMessageDraft: async () => true,
+      // Option B: the transcript's process surface in a DM is the ephemeral
+      // draft, so the first paint is a draft and must be recorded to observe
+      // the invariant.
+      sendMessageDraft: async (_chatId: number, _draftId: number, text: string) => {
+        calls.push({ method: 'sendMessageDraft', text });
+        return true;
+      },
+      sendRichMessageDraft: async (_chatId: number, _draftId: number, rich: unknown) => {
+        calls.push({ method: 'sendRichMessageDraft', rich });
+        return true;
+      },
     } as unknown as TelegramApiLike;
 
     // The handler records, on its very first synchronous line, how many
@@ -88,7 +109,7 @@ describe('first paint beats a blocking first tool handler', () => {
       spec: { name: 'sonda_bloccante_xyz', description: 'probe', inputSchema: { type: 'object' } as any },
       capability: 'probe.bloccante',
       handler: async () => {
-        enteredWithSends.push(calls.filter((c) => c.method === 'sendMessage').length);
+        enteredWithSends.push(calls.length);
         enteredResolve();
         // Deterministic blocking seam: a synchronous monopolisation of the
         // event loop. Short on purpose — the assertion above does not depend
@@ -148,15 +169,21 @@ describe('first paint beats a blocking first tool handler', () => {
       // THE invariant: started synchronously from the first durable progress
       // fact, before tool execution could monopolise the event loop.
       expect(enteredWithSends[0]).toBeGreaterThanOrEqual(1);
-      expect(calls[0]!.method).toBe('sendMessage');
-      expect(calls[0]!.text).toContain('⏳');
+      // The step's own preview is already on the wire (the status preview may
+      // have come first): the running step is visible before the handler blocks.
+      expect(
+        calls.some((c) => c.method === 'sendRichMessageDraft' && JSON.stringify(c.rich).includes('⏳')),
+      ).toBe(true);
       releaseTool();
       await draining;
-      // …and the turn still ends as exactly one message, answer merged in.
-      const sends = calls.filter((c) => c.method === 'sendMessage');
+      // …and the turn ends as exactly one durable message: a fresh rich send
+      // whose `details` block collapses the process and whose answer follows.
+      const sends = calls.filter((c) => c.method === 'sendMessage' || c.method === 'sendRichMessage');
       expect(sends).toHaveLength(1);
-      const last = calls.filter((c) => c.method === 'editMessageText').at(-1)!;
-      expect(last.text).toContain('fatto.');
+      const finalText = JSON.stringify(sends[0]!.rich);
+      // One rich message carries BOTH: the settled process and the answer.
+      expect(finalText).toContain('sonda_bloccante_xyz');
+      expect(finalText).toContain('fatto.');
     } finally {
       runtime.close();
     }

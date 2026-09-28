@@ -1,30 +1,9 @@
 import { execFileSync } from 'node:child_process';
 
 /**
- * Vitest non legge ciò che Git si rifiuta di tracciare.
- *
- * Perché esiste: il 30/08/2026, nel checkout dell'owner, `npm test` raccoglieva
- * **945** file di test di cui soltanto **201** appartenevano al repository. Gli
- * altri 744 venivano da due alberi annidati e completi:
- *
- *   .codex/worktrees/  342   worktree di un altro agente (`.git/info/exclude`)
- *   .releases/         402   le release affiancate di `muffin update` (`.gitignore`)
- *
- * Nessuno dei due compare in `git status`: il primo è escluso a mano, il secondo
- * è ignorato. Un gate che chiedeva «working tree pulito» leggeva quindi pulito e
- * poi certificava una misura fatta al 79% su copie congelate di *altri* commit.
- * I 97 rossi che l'owner ha visto venivano da `.codex/worktrees/pr186-*`, cioè
- * dal ramo di una PR aperta, non da HEAD.
- *
- * La lista fissa che c'era prima (`.claude/worktrees`, `.gate-linux`) inseguiva
- * i nomi uno per uno e arrivava sempre dopo il danno: `.releases/` esiste dal
- * giorno di `muffin update` e non era mai stato aggiunto. Questa versione non
- * insegue nomi — chiede a Git. L'invariante è più stretta della lista e si
- * mantiene da sola: se un albero è ignorato, non è il codice sotto misura.
- *
- * `.claude/hooks/` resta dentro, ed è la prova che l'invariante non è troppo
- * larga: è tracciato, quindi non è ignorato, quindi si continua a testare (era
- * il motivo per cui il pattern `**\/.claude/**` era stato ristretto).
+ * Exclude ignored generated trees from Vitest discovery. Deriving paths from
+ * Git keeps nested worktrees and release snapshots out without maintaining a
+ * list of directory names.
  */
 
 /**

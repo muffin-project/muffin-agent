@@ -75,7 +75,7 @@ import { DRAIN_BUDGET_MS } from '../../core/gateway/service.js';
  */
 const DEFAULT_STOP_BUDGET_MS = DRAIN_BUDGET_MS;
 import { escapeHtml, renderForTelegram, splitHtml, toTelegramHtml } from './render.js';
-import { normalizeInboundRich, planRich } from './rich.js';
+import { normalizeInboundRich, planRich, RICH_COMPAT_CHARS, richFitsHard, richFromHtml, turnRichMessage } from './rich.js';
 import { UpdateInbox, type StoredUpdate } from './updates.js';
 
 /**
@@ -982,32 +982,24 @@ export class TelegramConnector {
   private readonly transcriptInSospeso = new Map<string, Transcript>();
 
   /**
-   * The transcript message a just-finished turn's real answer should
-   * **extend** instead of arriving beside — tool steps happened this turn,
-   * so there is already a real, durable message for the answer to join.
-   * Written by `noteTranscriptHandoff` the moment a transcript closes for
-   * good (never for a turn that is merely pausing — see the two call sites),
-   * read and deleted the one time `deliverTo` builds a plan for that turn.
+   * What a just-finished turn's answer must account for: the process it
+   * showed and, when there is one, the real message it should extend.
    *
-   * This is the fix for the other half of the two-bubble defect
-   * (`docs/evidence/turno-sospendibile.md`): before this slice, the tool
-   * trail (`transcript.ts`) and the final answer (`deliverTo`) were two
-   * independent `sendMessage` calls for the same turn — measured on the
-   * owner's own chat as a stray message id sitting between the question and
-   * the answer on three turns out of eight, exactly the ones that used a
-   * tool. `deliverTo` now **edits** this message into steps-plus-answer
-   * instead, through the same durable, crash-recoverable write-ahead every
-   * other delivery already goes through — `TelegramDeliveryStore.plan()`
-   * freezes the combined text before any network call, so a crash right
-   * after does not lose the merge, only a crash *before* this map even has
-   * the entry does (see `deliverTo`'s own comment).
+   * In a group `messageId` is that message (the tool trail is persistent) and
+   * the answer **edits** it, through the durable, crash-recoverable
+   * write-ahead every delivery goes through. In a DM it is `null`: the process
+   * only ever lived in the ephemeral draft, and the answer is a fresh rich
+   * send whose `details` block carries `process`. Written by
+   * `noteTranscriptHandoff` the moment a transcript closes for good (never for
+   * a turn that is merely pausing — see the two call sites), read and deleted
+   * the one time `deliverTo` builds a plan for that turn.
    *
    * In-memory only, same accepted degradation as `transcriptInSospeso` right
    * above: a process boundary between "transcript closed" and "answer
    * delivered" loses the entry, and `deliverTo` falls back to a plain new
    * message — the pre-existing shape, never worse.
    */
-  private readonly transcriptHandoff = new Map<string, { messageId: number; stepsText: string }>();
+  private readonly transcriptHandoff = new Map<string, { messageId: number | null; process: string[]; processHtml: string }>();
 
   private noteTranscriptHandoff(turnId: string, transcript: Transcript): void {
     const handoff = transcript.handoff();
@@ -1313,25 +1305,33 @@ export class TelegramConnector {
    * Both the fresh inbound path and the lane/recovery path converge here: one
    * frozen wire plan, one first-writer-wins attempt per part.
    *
-   * **One bubble, not two.** `this.transcriptHandoff` names the message the
-   * tool trail (`transcript.ts`) already sent this turn, if any — read and
-   * cleared here, once. When present, the answer is not a message beside it:
-   * `combineWithHandoff` below prepends the steps' own settled text and the
-   * whole thing is split as one document, so the plan's first part **edits**
-   * that message (steps kept, answer appended) and only an overflow spills
-   * into further `send`s after it — never a `send` of its own for the answer.
+   * **One durable message per turn, two shapes.** `this.transcriptHandoff`
+   * names the message the tool trail (`transcript.ts`) already sent this turn,
+   * if any — read and cleared here, once.
    *
-   * The one gap this cannot close: a crash between `transcript.stop()`
+   * - A handoff with a **real message** (a group, no draft): the answer is not
+   *   a message beside it — the steps' settled text is prepended and the whole
+   *   thing split as one document, so the plan's first part **edits** that
+   *   message (steps kept, answer appended) and only an overflow spills into
+   *   further `send`s after it.
+   * - A **DM** (positive chat id, the room with the draft): nothing is ever
+   *   edited; the answer is a fresh rich `send` whose first block collapses
+   *   the process in a `details` block (`rich.ts#turnRichMessage`), the same
+   *   shape the draft had. Its legacy fallback prepends the process text, so
+   *   the trail is never lost even if rich is refused. This holds for tool
+   *   turns and plain ones alike — no shape change at the swap.
+   *
+   * The one gap neither shape closes: a crash between `transcript.stop()`
    * setting the handoff and this method's own `store.plan()` call, which is
-   * what actually freezes it durably. `store.plan()` freezes the *combined*
-   * html the very first time it runs for this `turnId` — every later replay
-   * (a retry, a recovery in a different process) reuses that frozen plan
-   * byte-for-byte regardless of what this method computes on that later call
+   * what actually freezes it durably. `store.plan()` freezes the plan the very
+   * first time it runs for this `turnId` — every later replay (a retry, a
+   * recovery in a different process) reuses that frozen plan byte-for-byte
+   * regardless of what this method computes on that later call
    * (`TelegramDeliveryStore.plan`'s own contract) — so once this method has
-   * run once with a handoff, the merge is as durable as any other delivery.
-   * Before that first run, there is nothing durable yet to lose beyond the
-   * handoff map entry itself, and losing it here means exactly what losing
-   * it meant before this slice: one extra message, never a dropped answer.
+   * run once with a handoff, the delivery is as durable as any other. Before
+   * that first run, there is nothing durable yet to lose beyond the handoff
+   * map entry itself, and losing it here means exactly what losing it meant
+   * before this slice: one extra message, never a dropped answer.
    */
   async deliverTo(turnId: string, replyTo: Record<string, unknown>, text: string): Promise<TelegramDeliveryOutcome> {
     const chatId = replyTo['chatId'];
@@ -1348,16 +1348,23 @@ export class TelegramConnector {
     const handoff = this.transcriptHandoff.get(turnId);
     if (handoff) this.transcriptHandoff.delete(turnId);
 
-    const parts = handoff
-      ? splitHtml(handoff.stepsText === '' ? toTelegramHtml(text) : `${handoff.stepsText}\n\n${toTelegramHtml(text)}`)
-      : renderForTelegram(text);
+    const processHtml = handoff?.processHtml ?? '';
+    // A handoff with a real message (a group with no draft) edits that bubble;
+    // an ephemeral one (a DM) has nothing to edit, so this is a fresh send.
+    const editId = handoff !== undefined && handoff.messageId !== null ? handoff.messageId : editMessageId;
+    // Una chat privata è la stanza con la bozza: lì il turno ha una sola forma,
+    // i blocchi, e il finale la ripete — mai il vecchio cambio forma.
+    const isPrivate = chatId > 0;
+
+    // The unsplit HTML both lanes start from: `splitHtml` is the legacy plan
+    // (and the rich fallback); the rich lane carries `combined` whole.
+    const combined =
+      processHtml === '' ? toTelegramHtml(text) : `${processHtml}\n\n${toTelegramHtml(text)}`;
+    const parts = splitHtml(combined);
 
     const legacy: TelegramDeliveryPlanPart[] = parts.map((html, i) => {
-      if (i === 0 && handoff) {
-        return { operation: 'edit', chatId, threadId, replyTo: null, editMessageId: handoff.messageId, html };
-      }
-      if (i === 0 && editMessageId !== undefined) {
-        return { operation: 'edit', chatId, threadId, replyTo: null, editMessageId, html };
+      if (i === 0 && editId !== undefined) {
+        return { operation: 'edit', chatId, threadId, replyTo: null, editMessageId: editId, html };
       }
       return {
         operation: 'send',
@@ -1368,33 +1375,73 @@ export class TelegramConnector {
         html,
       };
     });
-    return deliverTelegram(this.deps.delivery, this.deps.api, turnId, this.maybeRich(text, legacy), () => this.now());
+
+    // In a DM the turn's one message is always blocks — the same shape the
+    // draft showed (process in `details`, answer as native blocks), whether the
+    // turn had tools or not. A group keeps the edit-merge below (its steps are
+    // a real, silent trail and the answer extends that same bubble); a
+    // deliberate edit of an existing message keeps the edit lane too.
+    if (isPrivate && editId === undefined) {
+      const turn = turnRichMessage({ process: handoff?.process ?? [], answer: text });
+      const first = legacy[0];
+      if (turn !== null && first !== undefined && richFitsHard(turn) === null) {
+        return deliverTelegram(
+          this.deps.delivery,
+          this.deps.api,
+          turnId,
+          [{ ...first, kind: 'rich' as const, rich: turn, fallback: legacy }],
+          () => this.now(),
+        );
+      }
+      return deliverTelegram(this.deps.delivery, this.deps.api, turnId, legacy, () => this.now());
+    }
+    return deliverTelegram(this.deps.delivery, this.deps.api, turnId, this.maybeRich(text, combined, legacy), () => this.now());
   }
 
   /**
-   * Rich final, Bot API 10.3 — exactly one case, and the restriction is the
-   * guarantee: a rich final rides ONLY a fresh `send` (no transcript handoff
-   * being extended, no owned edit being rewritten). A handoff message already
-   * carries settled steps/preamble in legacy HTML, and a rich edit would
-   * replace them with the answer alone — steps lost on screen. A fresh send
-   * carries nothing yet, so nothing can be lost.
+   * Rich final, Bot API 10.3 — two cases.
    *
-   * That is also why a table answered after twelve tool calls still goes
-   * legacy: preserving the trail beats prettier cells. A rich final that
-   * preserves settled transcript content needs the raw step text at this
-   * boundary — a broader Turn-contract change, deliberately NOT smuggled in
-   * here.
+   * A fresh `send` whose answer is structurally rich (tables, checklists,
+   * details, headings) rides `blocks`, as before: the richest rendering on
+   * the message that carries the answer.
    *
-   * The legacy plan is computed first and always: it is the frozen fallback
-   * a deterministic rich rejection expands into (`delivery.ts`), and the
-   * path taken whole when the answer is ordinary prose.
+   * An `edit` — the answer that extends the message already showing the step
+   * trail — rides rich as `html`: the **same bytes** the legacy path would
+   * edit in (`stepsText + answer`), so nothing of the trail is lost, and the
+   * message becomes a rich one instead of staying legacy. The owner asked for
+   * rich end to end (2026-09-26): the old rule ("a rich edit would replace the
+   * steps with the answer alone") assumed the rich payload was the answer
+   * only; carrying the combined HTML removes that reason, because the rich
+   * message IS the trail plus the answer.
+   *
+   * The legacy plan is computed first and always: it is the frozen fallback a
+   * deterministic rich rejection expands into (`delivery.ts`), and the path
+   * taken whole when rich does not fit the protocol limits.
    */
-  private maybeRich(text: string, legacy: TelegramDeliveryPlanPart[]): TelegramDeliveryPlanPart[] {
+  private maybeRich(
+    text: string,
+    combinedHtml: string,
+    legacy: TelegramDeliveryPlanPart[],
+  ): TelegramDeliveryPlanPart[] {
     const first = legacy[0];
-    if (first === undefined || first.operation !== 'send') return legacy;
+    if (first === undefined) return legacy;
     const rich = planRich(text);
-    if (rich.mode !== 'rich') return legacy;
-    return [{ ...first, kind: 'rich' as const, rich: rich.message, fallback: legacy }];
+    const richConstructs = rich.mode === 'legacy' ? rich.richConstructs : false;
+    if (first.operation === 'send' && rich.mode === 'rich') {
+      return [{ ...first, kind: 'rich' as const, rich: rich.message, fallback: legacy }];
+    }
+    // An answer that HAS rich-native constructs but is over the compatibility
+    // ceiling stays on the proven legacy chunks — on BOTH lanes, not only the
+    // fresh send: the ceiling is a client-rendering policy with its own
+    // falsifier, not a cut. The html lane builds no native blocks, so falling
+    // back to the bounded legacy chunks costs no rendering.
+    if (richConstructs || combinedHtml.length > RICH_COMPAT_CHARS) return legacy;
+    // Ordinary prose, and the answer that extends the step trail, ride rich as
+    // HTML — the same bytes the legacy lane would send or edit, richer
+    // transport, one message.
+    const payload = richFromHtml(combinedHtml);
+    if (richFitsHard(payload) !== null) return legacy;
+    return [{ ...first, kind: 'rich' as const, rich: payload, fallback: legacy }];
   }
 
   /**

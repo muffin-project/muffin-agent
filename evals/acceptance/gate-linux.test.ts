@@ -333,5 +333,9 @@ describe('gate-linux.sh — il blocco che prova install.sh', () => {
     const corpo = bloccoInstall(readFileSync(GATE, 'utf8'));
     expect(corpo).not.toMatch(/\|\|\s*(true|:)/);
     expect(corpo).toContain('install.sh');
+    // The install leg must build THIS tree (#702): checkout mode, and the
+    // version must be checked against the sha the gate was handed.
+    expect(corpo).toContain('--checkout');
+    expect(corpo).toContain('EXPECTED_SHA');
   });
 });

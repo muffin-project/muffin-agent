@@ -62,7 +62,7 @@ unused manifest would be another source of drift.
 | Is a DAY-1 requirement currently satisfied? | `docs/status/day1/requirements-status.md` |
 | In which order do remaining DAY-1 blockers get attacked? | `docs/status/day1/critical-path.md` |
 | What work is active right now? | Observed Git/GitHub state, summarized by `scripts/agent/repo-state.mjs`. |
-| How is repository work orchestrated and verified? | `docs/development/ORCHESTRATION.md`, with `BRANCHING.md`, `JUDGE.md` and `PRACTICES.md` for their scoped concerns. Reusable procedures live in `.agents/skills/`; OpenCode entry points in `.opencode/commands/` and role adapters in `.opencode/agents/`. |
+| How is repository work orchestrated and verified? | `docs/development/ORCHESTRATION.md`, with `BRANCHING.md`, `JUDGE.md` and `PRACTICES.md` for their scoped concerns. Assistant-specific skills, commands and roles are optional local adapters, not contributor requirements. |
 | What evidence informed a decision? | `docs/evidence/`, audits and `docs/evidence/lessons.md` |
 | What did the project believe or do at an earlier point? | `docs/history/` and rebuild-era material; never a claim about HEAD |
 

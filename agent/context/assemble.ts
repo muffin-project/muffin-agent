@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { paths, type PromptVersion } from '../../core/config/config.js';
+import { type PromptVersion, paths } from '../../core/config/config.js';
 import type { CapabilityDecl, CapabilityId, Principal, TenantId } from '../../core/policy/types.js';
 import { renderTodos, type TodoItem } from '../../core/turns/todo.js';
 
@@ -399,7 +399,10 @@ export function ambienteSection(a: {
 function istanzaRighe(f: IstanzaFacts): string[] {
   const mostrate = f.voci.slice(0, MAX_VOCI_CWD);
   const oltre = f.voci.length - mostrate.length;
-  const elenco = mostrate.length === 0 ? '(vuota)' : mostrate.join(', ') + (oltre > 0 ? `, +${oltre} altre` : '');
+  const elenco =
+    mostrate.length === 0
+      ? '(vuota)'
+      : mostrate.join(', ') + (oltre > 0 ? `, +${oltre} altre` : '');
   const rot = f.safeMode ? `SAFE MODE (${f.safeMode.reason})` : 'RoT integro';
   return [
     `- Cartella di lavoro: ${f.cwd} — ${f.voci.length} element${f.voci.length === 1 ? 'o' : 'i'} di primo livello: ${elenco}.`,
@@ -416,7 +419,10 @@ function istanzaRighe(f: IstanzaFacts): string[] {
  * silenzio. L'offset è il dato che non richiede di sapere niente.
  */
 function offsetUtc(quando: Date, zona: string): string {
-  const parti = new Intl.DateTimeFormat('en-US', { timeZone: zona, timeZoneName: 'longOffset' }).formatToParts(quando);
+  const parti = new Intl.DateTimeFormat('en-US', {
+    timeZone: zona,
+    timeZoneName: 'longOffset',
+  }).formatToParts(quando);
   const nome = parti.find((p) => p.type === 'timeZoneName')?.value ?? '';
   // `longOffset` dà già `GMT+02:00`; a UTC dà `GMT`, che va detto per intero.
   return nome === 'GMT' ? 'UTC+00:00' : nome.replace('GMT', 'UTC');
@@ -501,11 +507,24 @@ export function buildSystemPromptBlocks(
   // sha256 in `assemble.test.ts`.
   const owner: PromptBlock[] = [
     { name: 'persona', source: src.persona.source, text: persona, file: src.persona.file },
-    { name: 'identity', source: 'rot/identity.md', text: identity, file: join(p.rot, 'identity.md') },
+    {
+      name: 'identity',
+      source: 'rot/identity.md',
+      text: identity,
+      file: join(p.rot, 'identity.md'),
+    },
     { name: 'voice', source: src.voice.source, text: voice, file: src.voice.file },
     { name: 'skills', source: 'core/skills (catalogo generato)', text: skillsSection },
-    { name: 'work-rules', source: `agent/context/assemble.ts (${src.workRulesName})`, text: src.workRules },
-    { name: 'safe-mode', source: 'agent/context/assemble.ts (SAFE_MODE_NOTE)', text: safeModeBlock },
+    {
+      name: 'work-rules',
+      source: `agent/context/assemble.ts (${src.workRulesName})`,
+      text: src.workRules,
+    },
+    {
+      name: 'safe-mode',
+      source: 'agent/context/assemble.ts (SAFE_MODE_NOTE)',
+      text: safeModeBlock,
+    },
   ];
 
   // The group class. Four differences from the owner's, each with a reason:
@@ -559,8 +578,16 @@ export function buildSystemPromptBlocks(
   const group: PromptBlock[] = [
     { name: 'persona', source: 'agent/context/assemble.ts (GROUP_PERSONA)', text: GROUP_PERSONA },
     { name: 'voice', source: src.voice.source, text: voice, file: src.voice.file },
-    { name: 'work-rules', source: `agent/context/assemble.ts (${src.workRulesName})`, text: src.workRules },
-    { name: 'safe-mode', source: 'agent/context/assemble.ts (SAFE_MODE_NOTE)', text: safeModeBlock },
+    {
+      name: 'work-rules',
+      source: `agent/context/assemble.ts (${src.workRulesName})`,
+      text: src.workRules,
+    },
+    {
+      name: 'safe-mode',
+      source: 'agent/context/assemble.ts (SAFE_MODE_NOTE)',
+      text: safeModeBlock,
+    },
   ];
 
   return { owner, group };
@@ -628,7 +655,10 @@ function promptSources(
 function versionedFile(home: string, name: string): { file: string; source: string } {
   const inHome = join(home, 'v2', name);
   if (existsSync(inHome)) return { file: inHome, source: `v2/${name}` };
-  return { file: join(SOURCE_ROOT, 'defaults', 'v2', name), source: `defaults/v2/${name} (spedito — non ancora in questa home)` };
+  return {
+    file: join(SOURCE_ROOT, 'defaults', 'v2', name),
+    source: `defaults/v2/${name} (spedito — non ancora in questa home)`,
+  };
 }
 
 /** Joins a class's blocks into the string the loop sends — `concat`'s existing rule, applied per class. */
@@ -707,11 +737,11 @@ const WORK_RULES = [
   // di leggerlo davvero). Sta qui e non nei file di carattere perché è una
   // regola operativa sul resoconto, e sta in v1 perché il default è v1.
   '- Quando dici cosa hai fatto o letto, la fonte è la chiamata che hai appena fatto, non il ricordo di come va di solito: ciò che non ha un risultato qui sopra non è successo.',
-  "- I tool che hai sono quelli che vedi. Se per una cosa non ne hai uno, dillo così: non inventare una policy o un permesso che lo nasconderebbe.",
+  '- I tool che hai sono quelli che vedi. Se per una cosa non ne hai uno, dillo così: non inventare una policy o un permesso che lo nasconderebbe.',
   "- Prima di rifare una chiamata che hai già fatto, chiediti cosa è cambiato. Se non è cambiato niente, la risposta ce l'hai già.",
   '- Se il lavoro richiede più passaggi, dì in una riga cosa stai per fare prima di partire. Non a metà, e non a cose fatte.',
   '- Quando hai finito, rispondi e basta: non chiamare altri tool per abitudine.',
-  '- Il tool dedicato viene prima della shell: leggi con `fs_read`/`fs_search`, ispeziona con `sys_inspect` o `process_list`, e se il compito nomina un servizio esterno (Linear, GitHub, …) cerca un tool caricato con quel nome prima di guardare nell\'ambiente o in un file di config. `shell_run` (sola lettura) resta l\'ultima risorsa per quello che nessun tool copre, e non chiede mai; solo `shell_run_write` chiede, sempre — per "che modello ti sta eseguendo" concateni `sys_inspect`, non un comando: `fs_read("config.json")` poi, se serve, `shell_run` sul risultato, non il contrario. «Dimentica X» / «non considerarlo più vero»: `memory_forget` (prima con `query`, poi con gli id che ha restituito) — mai shell, sqlite o file.',
+  '- Il tool dedicato viene prima della shell: leggi con `fs_read`/`fs_search`, ispeziona con `sys_inspect` o `process_list`, e se il compito nomina un servizio esterno (Linear, GitHub, …) cerca un tool caricato con quel nome prima di guardare nell\'ambiente o in un file di config. `shell_run` (sola lettura) resta l\'ultima risorsa per quello che nessun tool copre, e chiede sempre il sì, come `shell_run_write` — per "che modello ti sta eseguendo" concateni `sys_inspect`, non un comando: `fs_read("config.json")` poi, se serve, `shell_run` sul risultato, non il contrario. «Dimentica X» / «non considerarlo più vero»: `memory_forget` (prima con `query`, poi con gli id che ha restituito) — mai shell, sqlite o file.',
   // La riga sul recinto. Sta qui e non in `persona.md` perché è una regola
   // operativa su cosa fare di un risultato, non un tratto di carattere; e sta
   // in **tutte e due** le versioni perché `promptVersion` di default è `v1`
@@ -781,7 +811,7 @@ const WORK_RULES_V2 = [
   '- Chiedo a parole solo quando la decisione è davvero sua: un tradeoff irreversibile, o due strade che portano a due lavori diversi. In quel caso porto le opzioni e la mia opinione, non una domanda aperta.',
   "- Prima di rifare una chiamata che ho già fatto, mi chiedo cosa è cambiato. Se non è cambiato niente, la risposta ce l'ho già.",
   '- I tool che ho sono quelli che vedo. Se per una cosa non ne ho uno lo dico così, e non invento una policy o un permesso che lo nasconderebbe.',
-  '- Il tool dedicato viene prima della shell: leggo con `fs_read`/`fs_search`, ispeziono con `sys_inspect` o `process_list`, e se il compito nomina un servizio esterno cerco un tool caricato con quel nome prima di guardare nell\'ambiente o in un file di config. `shell_run` (sola lettura) resta l\'ultima risorsa per quello che nessun tool copre, e non chiede mai; solo `shell_run_write` chiede, sempre — per "che modello mi sta eseguendo" concateno `sys_inspect`, non un comando: prima `fs_read` sul file che mi serve, poi `shell_run` sul risultato se serve davvero, non il contrario. «Dimentica X» / «non considerarlo più vero»: `memory_forget` (prima con `query`, poi con gli id che ha restituito) — mai shell, sqlite o file.',
+  '- Il tool dedicato viene prima della shell: leggo con `fs_read`/`fs_search`, ispeziono con `sys_inspect` o `process_list`, e se il compito nomina un servizio esterno cerco un tool caricato con quel nome prima di guardare nell\'ambiente o in un file di config. `shell_run` (sola lettura) resta l\'ultima risorsa per quello che nessun tool copre, e chiede sempre il sì, come `shell_run_write` — per "che modello mi sta eseguendo" concateno `sys_inspect`, non un comando: prima `fs_read` sul file che mi serve, poi `shell_run` sul risultato se serve davvero, non il contrario. «Dimentica X» / «non considerarlo più vero»: `memory_forget` (prima con `query`, poi con gli id che ha restituito) — mai shell, sqlite o file.',
   '',
   '## Quello che leggo',
   '',
@@ -800,7 +830,7 @@ const WORK_RULES_V2 = [
   '',
   'Dico cosa ho fatto davvero, e lo tengo separato da cosa ho tentato e da cosa ho soltanto letto. Se ho fatto tre passi su cinque, il conto è tre su cinque.',
   '',
-  'Il numero, il percorso o l\'errore che riporto vengono dalla chiamata che ho appena fatto, non dal ricordo di come di solito va.',
+  "Il numero, il percorso o l'errore che riporto vengono dalla chiamata che ho appena fatto, non dal ricordo di come di solito va.",
   '',
   'Che un meccanismo abbia funzionato non è la stessa affermazione che il risultato sia giusto. Quando la garanzia dipende dal fatto che due pezzi siano collegati, guardo il collegamento, non i due pezzi.',
   '',
@@ -961,5 +991,8 @@ function authored(path: string): string {
     kept.push(line);
   }
 
-  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return kept
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
