@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto';
 import type { Principal } from '../../core/policy/types.js';
 import type { SessionRef, SessionStore } from '../../core/session/store.js';
 import { tierOf } from '../../core/surface/types.js';
@@ -28,6 +27,19 @@ import { MAX_TRANSPORT_RETRIES, type TurnResult } from './types.js';
 
 /** Only rows this recent may auto-continue: older work is ordinary conversation. */
 export const CONTINUATION_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * How recently the newest yielded row must have been updated to count as the
+ * invitation the owner is answering.
+ *
+ * Every diagnostic names its turn and ends with «scrivi "riprendi" per
+ * continuarlo», so a bare ask right after one has a deterministic target:
+ * the newest continuable row. That reading expires — after this window the
+ * ask is no longer plausibly an answer to the newest diagnostic alone, and
+ * more than one candidate becomes genuine ambiguity again (the question
+ * then lists each request's own words, never just the class).
+ */
+export const INVITATION_WINDOW_MS = 2 * 60 * 60 * 1000;
 
 /** A disambiguation question expires fast: it is transient UI state, not work. */
 export const PENDING_TTL_MS = 10 * 60 * 1000;
@@ -74,7 +86,14 @@ export function explicitResumeMessage(turnShortId: string): Message {
   ]);
 }
 
-export type ContinuationCandidate = StoredContinuationCandidate;
+export type ContinuationCandidate = StoredContinuationCandidate & {
+  /**
+   * The request that opened the yielded work. Question material only: used to
+   * make the ambiguity question answerable («Mi mandi una storia…» vs
+   * «turno provider_empty»), never to decide anything.
+   */
+  readonly inputText?: string | null;
+};
 
 export type ContinuationMatch =
   | { kind: 'single'; turnId: string }
@@ -124,20 +143,39 @@ export function isContinuationAsk(text: string): boolean {
   return MANNER_HEADS.some((h) => tail.startsWith(h));
 }
 
-export function describeCandidate(reason: TurnRecord['continuableReason'], updatedAt: string): string {
+/** First ~80 chars of the owner's request, whitespace folded; null when absent. */
+function requestSnippet(text: string | null | undefined): string | null {
+  if (text === null || text === undefined) return null;
+  const line = text.replace(/\s+/g, ' ').trim();
+  if (line === '') return null;
+  return line.length > 80 ? `${line.slice(0, 79)}…` : line;
+}
+
+export function describeCandidate(
+  reason: TurnRecord['continuableReason'],
+  updatedAt: string,
+  inputText?: string | null,
+): string {
   const when = updatedAt.slice(0, 16).replace('T', ' ');
-  if (reason === null) return `turno interrotto (${when})`;
-  const done = reason.completed !== undefined ? `, ${reason.completed.toolCalls} tool call completate` : '';
-  return `turno ${reason.class} (${when}${done})`;
+  const what = reason === null ? 'turno interrotto' : `turno ${reason.class}`;
+  const request = requestSnippet(inputText);
+  const asked = request === null ? '' : ` — «${request}»`;
+  const done = reason !== null && reason.completed !== undefined ? `, ${reason.completed.toolCalls} tool call completate` : '';
+  return `${what}${asked} (${when}${done})`;
 }
 
 /**
  * Deterministic resolution of an owner message against continuable work.
  *
- * Exactly one eligible, recent row in the same owner/session → single (the
- * caller auto-continues, no confirmation). Zero → none (ordinary
- * conversation). More than one → ambiguous (the caller asks, never guesses).
- * Messages with attachments carry new content and never resolve.
+ * Exactly one eligible, recent row in the same owner/session → single. More
+ * than one is ambiguity **unless** the newest was yielded within
+ * `INVITATION_WINDOW_MS`: the diagnostic for it just told the owner to write
+ * exactly this ask, and a stale second candidate must not turn that
+ * instruction into a question — measured 2026-09-28, when a "Riprendi"
+ * 11 seconds after the invitation met a 20-hour-old row and got a
+ * disambiguation question instead of the resume it was promised. Zero rows →
+ * ordinary conversation. Messages with attachments carry new content and
+ * never resolve.
  */
 export function resolveContinuation(input: {
   turns: Pick<TurnStore, 'continuableFor'>;
@@ -151,10 +189,18 @@ export function resolveContinuation(input: {
   const since = new Date(input.nowMs - CONTINUATION_TTL_MS).toISOString();
   const rows = input.turns.continuableFor(input.sessionId, input.principal, since);
   if (rows.length === 0) return { kind: 'none' };
-  if (rows.length === 1) return { kind: 'single', turnId: rows[0]!.id };
+  const newest = rows[0]!;
+  if (rows.length === 1 || input.nowMs - Date.parse(newest.updatedAt) <= INVITATION_WINDOW_MS) {
+    return { kind: 'single', turnId: newest.id };
+  }
   return {
     kind: 'ambiguous',
-    candidates: rows.map((r) => ({ id: r.id, updatedAt: r.updatedAt, summary: describeCandidate(r.reason, r.updatedAt) })),
+    candidates: rows.map((r) => ({
+      id: r.id,
+      updatedAt: r.updatedAt,
+      summary: describeCandidate(r.reason, r.updatedAt, r.inputText),
+      inputText: r.inputText,
+    })),
   };
 }
 
@@ -270,6 +316,14 @@ export async function askWhichContinuation(
     now?: () => Date;
   },
   opts: {
+    /**
+     * The identity the ingress already committed for this event. The question
+     * row is written under *this* id, never a fresh one: the surface's
+     * composition, the delivery bookkeeping and crash recovery all point at
+     * it, and until this change they pointed at a row that did not exist
+     * (measured 2026-09-28: update's composition → a turn id with no row).
+     */
+    workId: string;
     principal: Principal;
     tenant: string;
     surface: string;
@@ -289,7 +343,7 @@ export async function askWhichContinuation(
     `Ho trovato ${opts.candidates.length} lavori continuabili in questa conversazione — dimmi quale continuo:\n` +
     lines.join('\n') +
     `\nRispondi con il numero o con l'inizio dell'id. Oppure scrivi altro per cambiare argomento.`;
-  const id = randomBytes(16).toString('hex');
+  const id = opts.workId;
   const taint = tierOf(opts.principal);
   const record = deps.turns.create(
     {

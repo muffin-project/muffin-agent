@@ -9,6 +9,7 @@ import { SessionStore } from '../../core/session/store.js';
 import { TurnStore, type ContinuableReason, type TurnCounters } from '../../core/turns/store.js';
 import {
   CONTINUATION_TTL_MS,
+  INVITATION_WINDOW_MS,
   askWhichContinuation,
   buildFreshCounters,
   isContinuationAsk,
@@ -30,11 +31,12 @@ const reason = (over: Partial<ContinuableReason> = {}): ContinuableReason => ({
 
 function rowsFor(ids: string[]) {
   return {
-    // Like the store: only rows newer than `since` are eligible.
+    // Like the store: only rows newer than `since` are eligible, newest first.
     continuableFor: (_session: string, _principal: Principal, since: string) =>
       ids
-        .map((id, i) => ({ id, updatedAt: `2026-09-18T17:1${i}:00.000Z`, reason: reason() }))
-        .filter((r) => r.updatedAt >= since),
+        .map((id, i) => ({ id, updatedAt: `2026-09-18T17:1${i}:00.000Z`, reason: reason(), inputText: null }))
+        .filter((r) => r.updatedAt >= since)
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     // These rows carry no pending ambiguity question: the followup layer reads
     // none, so only `single`/`none`/`ambiguous` remain for the bind-time test.
     latestContinuationQuestion: () => null,
@@ -98,11 +100,38 @@ describe('resolveContinuation · 0 / 1 / N candidates', () => {
     });
   });
 
-  it('more than one is ambiguity, never a guess', () => {
-    const match = ask('riprendi', ['aaa', 'bbb']);
+  it('the newest invitation wins over an older yielded row', () => {
+    // The diagnostic the owner just read named the newest row; a stale second
+    // candidate must not turn that instruction into a question (measured
+    // 2026-09-28: "Riprendi" 11s after the invite met a 20h-old row).
+    expect(ask('riprendi', ['aaa', 'bbb'])).toEqual({ kind: 'single', turnId: 'bbb' });
+  });
+
+  it('more than one is ambiguity once the newest is beyond the invitation window', () => {
+    const match = ask('riprendi', ['aaa', 'bbb'], { nowMs: NOW + INVITATION_WINDOW_MS + 1000 });
     expect(match.kind).toBe('ambiguous');
     if (match.kind !== 'ambiguous') throw new Error('unreachable');
-    expect(match.candidates.map((c) => c.id)).toEqual(['aaa', 'bbb']);
+    expect(match.candidates.map((c) => c.id)).toEqual(['bbb', 'aaa']);
+  });
+
+  it('the ambiguity question carries the request that opened each work', () => {
+    const rows = {
+      continuableFor: () => [
+        { id: 'bbb', updatedAt: '2026-09-18T17:11:00.000Z', reason: reason(), inputText: 'Mi mandi una storia lunga 10000 caratteri?' },
+        { id: 'aaa', updatedAt: '2026-09-18T17:10:00.000Z', reason: reason(), inputText: null },
+      ],
+    };
+    const match = resolveContinuation({
+      turns: rows,
+      principal: owner,
+      sessionId: 'owner',
+      text: 'riprendi',
+      hasAttachment: false,
+      nowMs: NOW + INVITATION_WINDOW_MS + 1000,
+    });
+    if (match.kind !== 'ambiguous') throw new Error('unreachable');
+    expect(match.candidates[0]?.summary).toContain('Mi mandi una storia lunga 10000 caratteri?');
+    expect(match.candidates[1]?.summary).not.toContain('«');
   });
 
   it('attachments carry new content: never a grant', () => {
@@ -229,6 +258,7 @@ describe('ambiguity followups · durable, positional or by id', () => {
       await askWhichContinuation(
         { turns: writer, sessions, model: 'test-model', now: () => new Date(NOW) },
         {
+          workId: 'aafed38233dbaf265cf44b6d298dc73f',
           principal: owner,
           tenant: 'host',
           surface: 'telegram',
@@ -242,6 +272,9 @@ describe('ambiguity followups · durable, positional or by id', () => {
 
       const reader = new TurnStore(new Database(dbPath), () => new Date(NOW + 1000));
       expect(resolveFollowup(reader, 'owner', 'il secondo', NOW + 1000)?.turnId).toBe('bbb222bbb222');
+      // The question row is the id the ingress already committed: composition,
+      // delivery and recovery point at it.
+      expect(reader.get('aafed38233dbaf265cf44b6d298dc73f')?.status).toBe('done');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -253,7 +286,16 @@ describe('routeContinuationTarget · the bind-time answer', () => {
     const base = { turns: rowsFor(['abc123']), principal: owner, sessionId: 'owner', hasAttachment: false, nowMs: NOW };
     expect(routeContinuationTarget({ ...base, text: 'riprendi' })).toBe('abc123');
     expect(routeContinuationTarget({ ...base, turns: rowsFor([]), text: 'riprendi' })).toBeNull();
-    expect(routeContinuationTarget({ ...base, turns: rowsFor(['a', 'b']), text: 'riprendi' })).toBeNull();
+    // Ambiguity is the stale case now: beyond the invitation window the newest
+    // row is no longer the one the instruction can be read against.
+    expect(
+      routeContinuationTarget({
+        ...base,
+        turns: rowsFor(['a', 'b']),
+        text: 'riprendi',
+        nowMs: NOW + INVITATION_WINDOW_MS + 1000,
+      }),
+    ).toBeNull();
     expect(routeContinuationTarget({ ...base, text: 'riprendi quel testo' })).toBeNull();
   });
 });

@@ -123,6 +123,10 @@ export async function runWork(
       return askWhichContinuation(
         { turns: deps.loop.turns, sessions: deps.sessions, model: deps.loop.model },
         {
+          // The row the ambiguity question writes is the id this event already
+          // carries: composition, delivery and recovery point at it, so it
+          // must exist.
+          workId: req.workId,
           principal: req.identity.principal,
           tenant: req.identity.tenant,
           surface: port.surface.id,

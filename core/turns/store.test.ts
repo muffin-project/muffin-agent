@@ -415,7 +415,7 @@ describe('the reader a surface with only a database can use', () => {
     expect(readTurnHealth(empty)).toEqual({
       total: 0,
       waiting: { count: 0, oldestWakeAt: null },
-      continuable: { count: 0, oldest: null },
+      continuable: { count: 0, oldest: null, expired: null },
       undeliverable: { count: 0 },
       interrupted: [],
     });
