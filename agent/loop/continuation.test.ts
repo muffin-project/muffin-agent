@@ -117,7 +117,7 @@ describe('resolveContinuation · 0 / 1 / N candidates', () => {
   it('the ambiguity question carries the request that opened each work', () => {
     const rows = {
       continuableFor: () => [
-        { id: 'bbb', updatedAt: '2026-09-18T17:11:00.000Z', reason: reason(), inputText: 'Mi mandi una storia lunga 10000 caratteri?' },
+        { id: 'bbb', updatedAt: '2026-09-18T17:11:00.000Z', reason: reason(), inputText: 'scrivimi una storia lunga' },
         { id: 'aaa', updatedAt: '2026-09-18T17:10:00.000Z', reason: reason(), inputText: null },
       ],
     };
@@ -130,7 +130,7 @@ describe('resolveContinuation · 0 / 1 / N candidates', () => {
       nowMs: NOW + INVITATION_WINDOW_MS + 1000,
     });
     if (match.kind !== 'ambiguous') throw new Error('unreachable');
-    expect(match.candidates[0]?.summary).toContain('Mi mandi una storia lunga 10000 caratteri?');
+    expect(match.candidates[0]?.summary).toContain('scrivimi una storia lunga');
     expect(match.candidates[1]?.summary).not.toContain('«');
   });
 
