@@ -555,16 +555,48 @@ describe('execution budget', () => {
     const h = harness({
       provider,
       profile: { ...CONSERVATIVE, recovery: ['retryOnce'] },
-      execution: new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 200, firstActivityTimeoutMs: 10, stallTimeoutMs: 20 }),
+      execution: new ExecutionBudget({ modelCallDeadlineMs: 10, turnWallDeadlineMs: 200, stallTimeoutMs: 20 }),
     });
 
     const result = await runRounds(h.scope);
 
     expect(calls).toBe(1);
-    // P0-B: lo stallo cede la lease con la sua classe, senza bruciare retry
+    // P0-B: la deadline cede la lease con la sua classe, senza bruciare retry
     // di trasporto né rung semantici.
-    expect(result).toMatchObject({ stopped: 'continuable', reason: 'model_first_activity_timeout' });
-    expect(h.span.attrs['muffin.turn.stop_reason']).toBe('model_first_activity_timeout');
+    expect(result).toMatchObject({ stopped: 'continuable', reason: 'model_deadline' });
+    expect(h.span.attrs['muffin.turn.stop_reason']).toBe('model_deadline');
+  });
+
+  it('a call our own deadline aborted is never read as the provider answering empty', async () => {
+    // The SDK shape measured on the owner's install: abort swallowed, call
+    // returns success-shaped and empty. Before the loop-level guard this was
+    // classified `provider_empty` and re-driven three times against the same
+    // machine; the signal is the fact that decides.
+    let calls = 0;
+    const provider: Provider = {
+      kind: 'openai-compat',
+      async chat() {
+        calls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        return {
+          text: null,
+          toolCalls: [],
+          stopReason: 'error',
+          usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          model: 'test',
+        };
+      },
+    };
+    const h = harness({
+      provider,
+      profile: { ...CONSERVATIVE, recovery: ['retryOnce'] },
+      execution: new ExecutionBudget({ modelCallDeadlineMs: 20, turnWallDeadlineMs: 500, stallTimeoutMs: 20 }),
+    });
+
+    const result = await runRounds(h.scope);
+
+    expect(calls).toBe(1);
+    expect(result).toMatchObject({ stopped: 'continuable', reason: 'model_deadline' });
   });
 });
 

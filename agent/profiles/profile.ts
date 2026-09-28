@@ -49,7 +49,6 @@ export type ProfileExecution = {
   modelCallDeadlineMs: number;
   turnWallDeadlineMs: number;
   activeModelBudgetMs: number;
-  firstActivityTimeoutMs: number;
   stallTimeoutMs: number;
   heartbeatIntervalMs: number;
 };
@@ -60,14 +59,18 @@ export type ProfileExecution = {
  * One exported value because this is compatibility behavior, not a model
  * preset: the profile parser and the runtime fallback must never grow two
  * almost-identical literals where one silently forgets a fuse. Shipped model
- * profiles may override it explicitly; old schema-v1 files inherit all six
+ * profiles may override it explicitly; old schema-v1 files inherit all five
  * bounds rather than only the two that existed in the first P0 draft.
+ *
+ * The sixth bound — a 30s watchdog on time-to-first-activity — was removed
+ * on 2026-09-28 (ADR-0092). A schema-v1 file that still carries the key is
+ * accepted and the key ignored: the zod object strips unknown fields at the
+ * boundary, and no path reads it any more.
  */
 export const DEFAULT_EXECUTION: ProfileExecution = {
   modelCallDeadlineMs: 90_000,
   turnWallDeadlineMs: 180_000,
   activeModelBudgetMs: 120_000,
-  firstActivityTimeoutMs: 30_000,
   stallTimeoutMs: 25_000,
   heartbeatIntervalMs: 15_000,
 };
@@ -165,7 +168,6 @@ const ExecutionSchema = z.object({
   modelCallDeadlineMs: z.number().int().positive().default(DEFAULT_EXECUTION.modelCallDeadlineMs),
   turnWallDeadlineMs: z.number().int().positive().default(DEFAULT_EXECUTION.turnWallDeadlineMs),
   activeModelBudgetMs: z.number().int().positive().default(DEFAULT_EXECUTION.activeModelBudgetMs),
-  firstActivityTimeoutMs: z.number().int().positive().default(DEFAULT_EXECUTION.firstActivityTimeoutMs),
   stallTimeoutMs: z.number().int().positive().default(DEFAULT_EXECUTION.stallTimeoutMs),
   heartbeatIntervalMs: z.number().int().positive().default(DEFAULT_EXECUTION.heartbeatIntervalMs),
 });

@@ -331,6 +331,41 @@ describe('openai-compat · chatStream (B11)', () => {
     expect((caught as ProviderStreamError).partial).toBe(true);
   });
 
+  it('an aborted SSE read is an abort, not a completed empty response', async () => {
+    // Measured on the owner's install (2026-09-28): the SDK ends an aborted
+    // SSE read cleanly (`Stream.fromSSEResponse` catches the AbortError and
+    // returns), so without the adapter's own signal check this exact shape
+    // came back as a success-shaped empty completion — zero tokens, no
+    // activity — and was classified as the provider's `provider_empty` to
+    // retry against the same machine.
+    const provider = streamHarness(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(': ping\n\n'));
+            // Never a data chunk, never a close: the abort is the only ending.
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'text/event-stream' } },
+      ),
+    );
+    const controller = new AbortController();
+    const events: StreamEvent[] = [];
+    const drained = (async () => {
+      for await (const event of provider.chatStream({ ...CALL, signal: controller.signal })) events.push(event);
+    })();
+    setTimeout(() => controller.abort('model_deadline'), 10);
+    let caught: unknown;
+    try {
+      await drained;
+    } catch (error) {
+      caught = error;
+    }
+    expect(events).toEqual([]);
+    expect(caught).toBeInstanceOf(ProviderError);
+    expect((caught as ProviderError).retryable).toBe(false);
+  });
+
   it('a request that never starts streaming (no bytes at all) fails as an ordinary ProviderError, not ProviderStreamError', async () => {
     const fetchFake = async (): Promise<Response> =>
       new Response(JSON.stringify({ error: { message: 'bad key', type: 'invalid_request_error' } }), {

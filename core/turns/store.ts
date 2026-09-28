@@ -170,12 +170,17 @@ export type TurnCounters = {
  * continuable turn has not ended. Anything not in this union (answered,
  * aborted, denied, spent, refused, non-retryable provider failure, uncertain
  * effect) stays terminal through `finish`.
+ *
+ * Rows written before 2026-09-28 may carry `model_first_activity_timeout`:
+ * the 30s time-to-first-activity watchdog was removed (ADR-0092) and no
+ * writer produces that class any more. Readers keep treating the stored
+ * string opaquely — the union is the writers' vocabulary, not a guarantee
+ * about history.
  */
 export type ContinuableClass =
   | 'provider_empty'
   | 'truncated'
   | 'provider_transport'
-  | 'model_first_activity_timeout'
   | 'model_stall'
   | 'model_deadline'
   | 'turn_deadline'

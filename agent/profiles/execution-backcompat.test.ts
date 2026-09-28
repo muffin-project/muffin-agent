@@ -8,7 +8,6 @@ const BASELINE_EXECUTION = {
   modelCallDeadlineMs: 90_000,
   turnWallDeadlineMs: 180_000,
   activeModelBudgetMs: 120_000,
-  firstActivityTimeoutMs: 30_000,
   stallTimeoutMs: 25_000,
   heartbeatIntervalMs: 15_000,
 };

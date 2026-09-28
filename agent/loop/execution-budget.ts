@@ -3,14 +3,25 @@ export type ExecutionBudgetConfig = {
   modelCallDeadlineMs: number;
   turnWallDeadlineMs: number;
   activeModelBudgetMs?: number;
-  firstActivityTimeoutMs?: number;
+  /**
+   * Silence after activity, never before it.
+   *
+   * There was a second watchdog on time-to-first-activity (30s) and it was
+   * removed on 2026-09-28: the OpenAI SDK swallows the abort of an SSE read
+   * (`Stream.fromSSEResponse` catches an AbortError and ends the iteration
+   * cleanly), so every call it killed came back as a completed empty
+   * response — misread as an upstream `provider_empty`, retried against the
+   * same provider, and finally yielded to the owner as a false story. A call
+   * that never starts talking is now bounded by `modelCallDeadlineMs`, which
+   * aborts through the same signal and is read back by the loop as the abort
+   * it is.
+   */
   stallTimeoutMs?: number;
   heartbeatIntervalMs?: number;
 };
 
 export type ExecutionAbortReason =
   | 'user_stop'
-  | 'model_first_activity_timeout'
   | 'model_stall'
   | 'model_deadline'
   | 'turn_deadline'
@@ -118,7 +129,6 @@ export class ExecutionBudget {
         : remainingActive <= this.config.modelCallDeadlineMs
           ? 'active_model_budget_exhausted'
           : 'model_deadline';
-    const firstActivityTimeoutMs = this.config.firstActivityTimeoutMs ?? 30_000;
     const stallTimeoutMs = this.config.stallTimeoutMs ?? 25_000;
     const heartbeatIntervalMs = this.config.heartbeatIntervalMs ?? 15_000;
     let watchdog: ReturnType<typeof setTimeout> | undefined;
@@ -162,12 +172,14 @@ export class ExecutionBudget {
     };
     const armWatchdog = (): void => {
       clearWatchdog();
-      const timeout = firstActivityAt === undefined ? firstActivityTimeoutMs : stallTimeoutMs;
+      // No activity yet → no watchdog: a provider that never starts talking
+      // is the hard model deadline's question, not a silence to read.
+      if (firstActivityAt === undefined) return;
       watchdog = setTimeout(() => {
         status = 'stalled';
         emit();
-        callController.abort(firstActivityAt === undefined ? 'model_first_activity_timeout' : 'model_stall');
-      }, timeout);
+        callController.abort('model_stall');
+      }, stallTimeoutMs);
     };
     const armHeartbeat = (): void => {
       if (onProgress === undefined || heartbeatIntervalMs <= 0) return;
@@ -183,7 +195,6 @@ export class ExecutionBudget {
       ? undefined
       : setTimeout(() => callController.abort(effectiveDeadlineSource), deadline);
     if (!callController.signal.aborted) {
-      armWatchdog();
       armHeartbeat();
     }
     emit();
@@ -203,7 +214,7 @@ export class ExecutionBudget {
       reason: () => {
         if (externalAbort) return 'user_stop';
         const reason = signal.reason;
-        return reason === 'user_stop' || reason === 'model_first_activity_timeout' || reason === 'model_stall' || reason === 'model_deadline' || reason === 'turn_deadline' || reason === 'active_model_budget_exhausted'
+        return reason === 'user_stop' || reason === 'model_stall' || reason === 'model_deadline' || reason === 'turn_deadline' || reason === 'active_model_budget_exhausted'
           ? reason
           : undefined;
       },
