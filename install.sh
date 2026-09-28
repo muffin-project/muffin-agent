@@ -667,16 +667,21 @@ MUFFIN_PREFIX=${MUFFIN_PREFIX:-$HOME/.local/share/muffin}
 MUFFIN_REPO=${MUFFIN_REPO:-https://github.com/muffin-project/muffin-agent.git}
 MUFFIN_CHANNEL=${MUFFIN_CHANNEL:-main}
 MUFFIN_REF=${MUFFIN_REF:-}
-case "$MUFFIN_REF" in
-  "") : ;;
-  *[!0-9a-f]* | ???????????????????????????????????????? | ?????????????????????????????????????????)
-    die "MUFFIN_REF must be a 40-character hexadecimal commit SHA, got '$MUFFIN_REF'" ;;
-esac
 NODE_MAJOR_REQUIRED=22
 EXIT_GATEWAY_NOT_ACTIVE=3
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# A pinned install is one immutable commit or it is refused: the bootstrap
+# resolves it, and nothing here may silently fall back to a branch.
+case "$MUFFIN_REF" in
+  "") : ;;
+  *[!0-9a-f]*) die "MUFFIN_REF must be a hexadecimal commit SHA, got '$MUFFIN_REF'" ;;
+esac
+if [ -n "$MUFFIN_REF" ] && [ "${#MUFFIN_REF}" -ne 40 ]; then
+  die "MUFFIN_REF must be a 40-character commit SHA, got '$MUFFIN_REF'"
+fi
 
 # ---------------------------------------------------------------------------
 # 0. Arguments, mode, and where the source is.

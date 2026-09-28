@@ -64,4 +64,25 @@ if [ "$bad_rc" -eq 0 ] || [ -s "$LAB/url2.log" ]; then
   exit 1
 fi
 
+# 3. The installer itself: a pinned ref is accepted, a mutable one refused
+# with its own message (and never "die: not found").
+set +e
+MUFFIN_REF="$SHA" sh "$REPO/install.sh" --paths >"$LAB/installer-ok.log" 2>&1
+installer_ok_rc=$?
+set -e
+if [ "$installer_ok_rc" -ne 0 ] || grep -Fq 'die: not found' "$LAB/installer-ok.log"; then
+  cat "$LAB/installer-ok.log" >&2
+  echo "immutable-ref eval: installer refused a valid pinned ref" >&2
+  exit 1
+fi
+set +e
+MUFFIN_REF=main sh "$REPO/install.sh" --paths >"$LAB/installer-bad.log" 2>&1
+installer_bad_rc=$?
+set -e
+if [ "$installer_bad_rc" -eq 0 ] || ! grep -Fq 'commit SHA' "$LAB/installer-bad.log" || grep -Fq 'die: not found' "$LAB/installer-bad.log"; then
+  cat "$LAB/installer-bad.log" >&2
+  echo "immutable-ref eval: installer did not refuse a mutable ref cleanly" >&2
+  exit 1
+fi
+
 echo "immutable-ref eval: PASS — installer fetched by committed SHA, pinned ref passed down, mutable ref refused"
