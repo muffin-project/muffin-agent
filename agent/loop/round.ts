@@ -668,7 +668,9 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
           // eligible for another retry.
           const attempt = MAX_TRANSPORT_RETRIES - run.transportRetriesLeft;
           const waitSignals = input.signal === undefined ? [execution.signal] : [input.signal, execution.signal];
-          await sleep(Math.max(retryDelayMs(attempt), error.retryAfterMs ?? 0), AbortSignal.any(waitSignals));
+          const waitMs = Math.max(retryDelayMs(attempt), error.retryAfterMs ?? 0);
+          input.onProgress?.({ type: 'model_retry', class: 'transport', attempt, max: MAX_TRANSPORT_RETRIES, inMs: waitMs });
+          await sleep(waitMs, AbortSignal.any(waitSignals));
           continue;
         }
       }
@@ -820,7 +822,15 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
         // no error response to carry one), so the blind backoff stands alone.
         const attempt = MAX_TRANSPORT_RETRIES - run.transportRetriesLeft;
         const waitSignals = input.signal === undefined ? [execution.signal] : [input.signal, execution.signal];
-        await sleep(retryDelayMs(attempt), AbortSignal.any(waitSignals));
+        const waitMs = retryDelayMs(attempt);
+        input.onProgress?.({
+          type: 'model_retry',
+          class: 'provider_empty',
+          attempt: run.providerEmptyStreak,
+          max: MAX_PROVIDER_EMPTY_RETRIES,
+          inMs: waitMs,
+        });
+        await sleep(waitMs, AbortSignal.any(waitSignals));
         continue;
       }
       // Bounded re-drive spent: the lease ends recoverably, with the work
