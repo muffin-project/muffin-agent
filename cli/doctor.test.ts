@@ -690,6 +690,21 @@ describe('doctor names continuable leases awaiting the owner', () => {
     expect(c?.detail).toContain('muffin resume');
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it('splits the rows the chat resolver can no longer reach', async () => {
+    const dir = home();
+    seedContinuable(dir);
+    const db = new DatabaseCtor(paths(dir).db);
+    db.prepare(`UPDATE turns SET updated_at = ? WHERE id = 'turn-continuabile'`).run(
+      new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
+    );
+    db.close();
+    const c = await check(dir, 'turni continuabili');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('1 oltre la finestra di ripresa');
+    expect(c?.detail).toContain('nessuna riprendibile in chat');
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe('doctor tells the four consolidation outcomes apart', () => {

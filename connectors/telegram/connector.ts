@@ -1339,6 +1339,13 @@ export class TelegramConnector {
       throw new Error(`replyTo senza chatId numerico: ${JSON.stringify(replyTo)}`);
     }
     const replyToMessage = typeof replyTo['messageId'] === 'number' ? replyTo['messageId'] : undefined;
+    // La lease corrente decide quale piano congelato appartiene a QUESTA
+    // consegna. Un turno ripreso consegna la sua risposta sotto una lease
+    // successiva, e senza questo numero il piano già congelato del
+    // diagnostico la inghiottirebbe: `plan` restituirebbe le parti di prima,
+    // tutte `sent`, e la superficie riferirebbe una consegna mai avvenuta
+    // (misurato il 28/09 sulla catena reale `riprendi`).
+    const leaseIndex = this.deps.loop.turns.get(turnId)?.leaseIndex ?? 0;
     // Sta sulla riga durevole e non su questo stack, perché la ripresa dopo
     // un riavvio legge la riga: senza, un turno ripescato rispondeva in
     // *General* invece che nel topic da cui era partita la domanda.
@@ -1391,11 +1398,12 @@ export class TelegramConnector {
           turnId,
           [{ ...first, kind: 'rich' as const, rich: turn, fallback: legacy }],
           () => this.now(),
+          leaseIndex,
         );
       }
-      return deliverTelegram(this.deps.delivery, this.deps.api, turnId, legacy, () => this.now());
+      return deliverTelegram(this.deps.delivery, this.deps.api, turnId, legacy, () => this.now(), leaseIndex);
     }
-    return deliverTelegram(this.deps.delivery, this.deps.api, turnId, this.maybeRich(text, combined, legacy), () => this.now());
+    return deliverTelegram(this.deps.delivery, this.deps.api, turnId, this.maybeRich(text, combined, legacy), () => this.now(), leaseIndex);
   }
 
   /**

@@ -9,20 +9,24 @@ async function waitForAbort(signal: AbortSignal): Promise<unknown> {
 describe('ExecutionBudget activity watchdogs', () => {
   afterEach(() => vi.useRealTimers());
 
-  it('aborts a completely silent provider on first activity timeout', async () => {
+  it('leaves a provider that never spoke to the hard model deadline', async () => {
     vi.useFakeTimers();
-    const budget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 200, firstActivityTimeoutMs: 10, stallTimeoutMs: 20 });
+    const budget = new ExecutionBudget({ modelCallDeadlineMs: 80, turnWallDeadlineMs: 200, stallTimeoutMs: 10 });
     const lease = budget.beginModelCall();
     const aborted = waitForAbort(lease.signal);
+    // Well past the stall window: silence before the first activity is not
+    // a stall — that reading belongs to the model deadline.
     await vi.advanceTimersByTimeAsync(10);
-    expect(await aborted).toBe('model_first_activity_timeout');
+    expect(lease.signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(70);
+    expect(await aborted).toBe('model_deadline');
     lease.release();
     budget.close();
   });
 
   it('aborts after activity stops on the stall timeout', async () => {
     vi.useFakeTimers();
-    const budget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 200, firstActivityTimeoutMs: 10, stallTimeoutMs: 20 });
+    const budget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 200, stallTimeoutMs: 20 });
     const lease = budget.beginModelCall();
     lease.activity('thinking');
     const aborted = waitForAbort(lease.signal);
@@ -34,7 +38,7 @@ describe('ExecutionBudget activity watchdogs', () => {
 
   it('does not stall while semantic activity keeps arriving', async () => {
     vi.useFakeTimers();
-    const budget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 200, firstActivityTimeoutMs: 10, stallTimeoutMs: 20 });
+    const budget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 200, stallTimeoutMs: 20 });
     const lease = budget.beginModelCall();
     lease.activity('text');
     for (let i = 0; i < 4; i += 1) {
@@ -48,7 +52,7 @@ describe('ExecutionBudget activity watchdogs', () => {
 
   it('keeps the hard model deadline above the stall watchdog', async () => {
     vi.useFakeTimers();
-    const budget = new ExecutionBudget({ modelCallDeadlineMs: 35, turnWallDeadlineMs: 200, firstActivityTimeoutMs: 10, stallTimeoutMs: 50 });
+    const budget = new ExecutionBudget({ modelCallDeadlineMs: 35, turnWallDeadlineMs: 200, stallTimeoutMs: 50 });
     const lease = budget.beginModelCall();
     lease.activity('text');
     const aborted = waitForAbort(lease.signal);
@@ -61,7 +65,7 @@ describe('ExecutionBudget activity watchdogs', () => {
   it('preserves user stop and turn deadline causes', async () => {
     vi.useFakeTimers();
     const user = new AbortController();
-    const userBudget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 200, firstActivityTimeoutMs: 50, stallTimeoutMs: 50 });
+    const userBudget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 200, stallTimeoutMs: 50 });
     const userLease = userBudget.beginModelCall(user.signal);
     const stopped = waitForAbort(userLease.signal);
     user.abort();
@@ -70,7 +74,7 @@ describe('ExecutionBudget activity watchdogs', () => {
     userLease.release();
     userBudget.close();
 
-    const turnBudget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 20, firstActivityTimeoutMs: 50, stallTimeoutMs: 50 });
+    const turnBudget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 20, stallTimeoutMs: 50 });
     const turnLease = turnBudget.beginModelCall();
     const deadline = waitForAbort(turnLease.signal);
     await vi.advanceTimersByTimeAsync(20);
@@ -82,7 +86,7 @@ describe('ExecutionBudget activity watchdogs', () => {
 
   it('cleans watchdogs so a successful attempt cannot abort a later operation', async () => {
     vi.useFakeTimers();
-    const budget = new ExecutionBudget({ modelCallDeadlineMs: 10, turnWallDeadlineMs: 100, firstActivityTimeoutMs: 5, stallTimeoutMs: 5 });
+    const budget = new ExecutionBudget({ modelCallDeadlineMs: 10, turnWallDeadlineMs: 100, stallTimeoutMs: 5 });
     const lease = budget.beginModelCall();
     lease.release();
     await vi.advanceTimersByTimeAsync(50);
@@ -92,7 +96,7 @@ describe('ExecutionBudget activity watchdogs', () => {
 
   it('accumulates only active model time across leases', () => {
     vi.useFakeTimers();
-    const budget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 500, activeModelBudgetMs: 100, firstActivityTimeoutMs: 10, stallTimeoutMs: 20 });
+    const budget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 500, activeModelBudgetMs: 100, stallTimeoutMs: 20 });
 
     const first = budget.beginModelCall();
     vi.advanceTimersByTime(40);
@@ -141,7 +145,7 @@ describe('ExecutionBudget activity watchdogs', () => {
 
   it('counts stalled and user-stopped calls, while preserving their causes', () => {
     vi.useFakeTimers();
-    const budget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 500, activeModelBudgetMs: 100, firstActivityTimeoutMs: 10, stallTimeoutMs: 20 });
+    const budget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 500, activeModelBudgetMs: 100, stallTimeoutMs: 20 });
     const stalled = budget.beginModelCall(undefined, undefined);
     vi.advanceTimersByTime(7);
     stalled.activity('thinking');
@@ -185,7 +189,7 @@ describe('ExecutionBudget call-activity telemetry (#497)', () => {
 
   it('reports first activity, ttft and last activity from the owned clocks', async () => {
     vi.useFakeTimers();
-    const budget = new ExecutionBudget({ modelCallDeadlineMs: 1000, turnWallDeadlineMs: 5000, firstActivityTimeoutMs: 100, stallTimeoutMs: 100 });
+    const budget = new ExecutionBudget({ modelCallDeadlineMs: 1000, turnWallDeadlineMs: 5000, stallTimeoutMs: 100 });
     const lease = budget.beginModelCall();
     await vi.advanceTimersByTimeAsync(12);
     lease.activity('text');
@@ -201,7 +205,7 @@ describe('ExecutionBudget call-activity telemetry (#497)', () => {
 
   it('leaves first-activity fields absent when the provider never spoke', async () => {
     vi.useFakeTimers();
-    const budget = new ExecutionBudget({ modelCallDeadlineMs: 1000, turnWallDeadlineMs: 5000, firstActivityTimeoutMs: 100, stallTimeoutMs: 100 });
+    const budget = new ExecutionBudget({ modelCallDeadlineMs: 1000, turnWallDeadlineMs: 5000, stallTimeoutMs: 100 });
     const lease = budget.beginModelCall();
     await vi.advanceTimersByTimeAsync(10);
     const telemetry = lease.telemetry();

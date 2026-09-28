@@ -875,6 +875,18 @@ export type TurnEvent =
       stopReason: string;
     }
   /**
+   * Un tentativo verso il provider è andato male e ne parte un altro.
+   *
+   * Stessa ragione di `tool_retry`, altro budget: senza questo evento un
+   * re-drive di trasporto o una risposta vuota lasciano la superficie muta
+   * per l'attesa (full jitter, fino a due minuti) e chi guarda non può
+   * distinguerla da uno stallo o da un guasto. `class` dice quale budget si
+   * sta spendendo, `attempt` è il tentativo che sta per partire, `inMs`
+   * l'attesa dichiarata prima di ripartire — lo stesso valore che il `sleep`
+   * riceve, mai una stima.
+   */
+  | { type: 'model_retry'; class: 'transport' | 'provider_empty'; attempt: number; max: number; inMs: number }
+  /**
    * `args` sono gli argomenti **come il modello li ha chiesti**, non ripuliti.
    *
    * Ci sono perché senza, una superficie può dire solo *quale* tool è partito,

@@ -6,7 +6,6 @@ const expected = {
     modelCallDeadlineMs: 90_000,
     turnWallDeadlineMs: 900_000,
     activeModelBudgetMs: 900_000,
-    firstActivityTimeoutMs: 30_000,
     stallTimeoutMs: 25_000,
     heartbeatIntervalMs: 15_000,
   },
@@ -14,7 +13,6 @@ const expected = {
     modelCallDeadlineMs: 120_000,
     turnWallDeadlineMs: 300_000,
     activeModelBudgetMs: 240_000,
-    firstActivityTimeoutMs: 30_000,
     stallTimeoutMs: 25_000,
     heartbeatIntervalMs: 15_000,
   },
@@ -38,7 +36,6 @@ describe('shipped execution envelopes', () => {
       if (execution === undefined) continue;
       expect(execution.heartbeatIntervalMs, profile.name).toBeLessThan(execution.stallTimeoutMs);
       expect(execution.stallTimeoutMs, profile.name).toBeLessThan(execution.modelCallDeadlineMs);
-      expect(execution.firstActivityTimeoutMs, profile.name).toBeLessThan(execution.modelCallDeadlineMs);
       expect(execution.activeModelBudgetMs, profile.name).toBeLessThanOrEqual(execution.turnWallDeadlineMs);
     }
   });
