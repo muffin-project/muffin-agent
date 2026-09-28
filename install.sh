@@ -97,22 +97,32 @@ sandbox_report() {
   sandbox_node=$2
   sandbox_src=$3
   sandbox_can_apply=$4
-  sandbox_probe='const m=await import(process.argv[1]);const p=m.probeSandbox();process.stdout.write(JSON.stringify(p));process.exit(p.available?0:2);'
+  # The same gate the runtime and doctor use: behavioral probe AND patch
+  # posture (`assessShellBoundary`). Checking the probe alone reported
+  # 'containment verified' on a stock Ubuntu 24.04 whose bubblewrap 0.9.0
+  # predates the setup-time fix — while the runtime correctly kept shell
+  # disabled. One gate, three readers.
+  sandbox_probe='const p=(await import(process.argv[1])).probeSandbox();const b=(await import(process.argv[2])).assessShellBoundary(p);process.stdout.write(JSON.stringify({probe:p,boundary:b}));process.exit(b.usable?0:2);'
   sandbox_run_probe() {
     "$sandbox_runner" "$sandbox_node" --input-type=module -e "$sandbox_probe" \
-      "file://$sandbox_src/dist/core/sandbox/probe.js" 2>/dev/null || true
+      "file://$sandbox_src/dist/core/sandbox/probe.js" \
+      "file://$sandbox_src/dist/core/sandbox/shell-boundary.js" 2>/dev/null || true
   }
   sandbox_json=$(sandbox_run_probe)
   case "$sandbox_json" in
-    *'"available":true'*)
+    *'"usable":true'*)
       say "sandbox: containment verified"
       return 0
       ;;
     *'"reason":"userns_denied"'*) : ;;
     *)
       say "sandbox: containment NOT verified — shell and job execution stay disabled."
-      [ -n "$sandbox_json" ] && say "          probe says: $sandbox_json"
-      say "          remedy: re-run this installer with MUFFIN_APPLY_SANDBOX_PROFILE=1, or apply an AppArmor profile for bwrap manually."
+      if [ -n "$sandbox_json" ]; then
+        sandbox_reason=$(printf '%s' "$sandbox_json" | sed -n 's/.*"reason":"\([^"]*\)".*/\1/p' | tail -1)
+        sandbox_remedy=$(printf '%s' "$sandbox_json" | sed -n 's/.*"remedy":"\([^"]*\)".*/\1/p' | tail -1)
+        [ -n "$sandbox_reason" ] && say "          reason: $sandbox_reason"
+        [ -n "$sandbox_remedy" ] && say "          remedy: $sandbox_remedy"
+      fi
       return 0
       ;;
   esac
