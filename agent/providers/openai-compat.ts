@@ -686,7 +686,14 @@ function toChatResult(response: {
     } catch {
       // `output`, not transport: the model wrote this, and no amount of
       // waiting rewrites it. The loop routes it to the profile's cascade.
-      throw new ProviderError(`malformed tool arguments from ${tc.name}`, true, undefined, 'output');
+      throw new ProviderError(
+        `malformed tool arguments from ${tc.name}`,
+        true,
+        undefined,
+        'output',
+        undefined,
+        response.finishReason === 'length',
+      );
     }
     return { id: tc.id, name: tc.name, args };
   });

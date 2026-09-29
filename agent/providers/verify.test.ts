@@ -228,6 +228,8 @@ describe('verify · C+D: text-only or tool-rejecting routes => incompatible', ()
     expect(result.status).toBe('provider_error');
     expect(result.capability).toEqual({ completion: 'fail', toolCall: 'fail' });
     expect(result.diagnostic).toContain('output budget');
+    expect(result.remedy).toContain('Muffin\'s doctor probe exhausted its own 64-token output budget');
+    expect(result.remedy).toContain('do not change the provider route');
   });
 
   it('C: a wrong tool name is incompatible even when a tool call exists', async () => {
@@ -275,6 +277,35 @@ describe('verify · C+D: text-only or tool-rejecting routes => incompatible', ()
     };
     const result = await verifyInferenceRoute({ provider: stub, providerKind: 'openai-compat', model: 'm', timeoutMs: 5_000 });
     expect(result.status).toBe('incompatible');
+  });
+
+  it('keeps malformed partial tool JSON inconclusive when the wire says output was truncated', async () => {
+    const bodies: unknown[] = [];
+    const provider = new OpenAICompatProvider('sk-test', 'https://local.test/v1', {}, {
+      fetch: openaiFetch(
+        openaiCompletion({
+          finish: 'length',
+          toolCalls: [
+            { id: 'call_probe_partial', type: 'function', function: { name: PROBE_TOOL_NAME, arguments: '{"nonce":"test' } },
+          ],
+        }),
+        bodies,
+      ),
+    });
+
+    const result = await verifyInferenceRoute({
+      provider,
+      providerKind: 'openai-compat',
+      model: 'local-reasoning-model',
+      nonce: NONCE,
+      timeoutMs: 5_000,
+    });
+
+    expect(bodies).toHaveLength(1);
+    expect(result.status).toBe('provider_error');
+    expect(result.diagnostic).toContain('output budget');
+    expect(result.diagnostic).toContain('compatibility is unverified');
+    expect(result.remedy).toContain('Muffin\'s doctor probe exhausted its own 64-token output budget');
   });
 });
 
