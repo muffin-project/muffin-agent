@@ -221,7 +221,7 @@ case "\$cmd" in
     printf '[Unit]\\nDescription=Muffin eval\\n' >"\$HOME/.config/systemd/user/muffin-gateway.service"
     echo "gateway-install uid=\$(id -u)" >>"$EVENTS"
     exit 0 ;;
-  doctor) echo "doctor uid=\$(id -u)" >>"$EVENTS"; exit 0 ;;
+  doctor) echo "doctor uid=\$(id -u) bwrap=\$(command -v bwrap) PATH=\$PATH" >>"$EVENTS"; exit 0 ;;
   *) echo "unexpected CLI fixture: \$*" >&2; exit 14 ;;
 esac
 EOF
@@ -340,6 +340,18 @@ SERVICE_NODE_MAJOR=$(runuser -u muffin -- env PATH="$(dirname "$SERVICE_NODE"):/
 [ "$(stat -c '%u:%g:%a' /usr/local/bin/muffin)" = 0:0:755 ]
 [ ! -L /usr/local/bin/muffin ]
 grep -Fqx '# Muffin managed root dispatcher' /usr/local/bin/muffin
+# Model the verified Muffin-owned binary appearing after installation. The
+# public root dispatcher must put tool-bin first so doctor exercises the same
+# Bubblewrap that the installed AppArmor profile attaches to.
+OWNED_BWRAP=/var/lib/muffin/.local/share/muffin/bwrap/0.13.0/bin/bwrap
+mkdir -p "$(dirname "$OWNED_BWRAP")"
+cat >"$OWNED_BWRAP" <<'EOF'
+#!/bin/sh
+echo 'bubblewrap 0.13.0'
+EOF
+chmod 0755 "$OWNED_BWRAP"
+chown -R "$SERVICE_UID:$SERVICE_GID" /var/lib/muffin/.local/share/muffin/bwrap
+ln -s bwrap/0.13.0/bin /var/lib/muffin/.local/share/muffin/tool-bin
 grep -Fq "build uid=$SERVICE_UID" "$EVENTS"
 grep -Fq "init uid=$SERVICE_UID key-stdin=verified key-mode=600 stage-mode=711" "$EVENTS"
 grep -Fq "gateway-install uid=$SERVICE_UID" "$EVENTS"
@@ -347,6 +359,7 @@ if grep -Fq fixture-secret "$EVENTS"; then echo 'root handoff eval: key leaked t
 
 /usr/local/bin/muffin doctor
 grep -Fq "doctor uid=$SERVICE_UID" "$EVENTS"
+grep -Fq "doctor uid=$SERVICE_UID bwrap=/var/lib/muffin/.local/share/muffin/tool-bin/bwrap" "$EVENTS"
 useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin "$OTHER_USER"
 # The generated config exists and is readable by root, but the service home is
 # private. An ordinary local account must fail when it tries to open the data.

@@ -736,6 +736,7 @@ USAGE
     fi
   fi
   umask 022
+  DISPATCHER_PATH="$SERVICE_PREFIX/tool-bin:$SERVICE_PREFIX/node/bin:/usr/local/bin:/usr/bin:/bin"
   SHIM_TMP=$(mktemp "/usr/local/bin/.$ROOT_CMD.muffin-new.XXXXXX") ||
     root_fail "could not securely create a temporary root dispatcher."
   if ! cat >"$SHIM_TMP" <<EOF
@@ -745,7 +746,7 @@ if [ "\$(id -u)" -ne 0 ]; then
   echo "error: use sudo $ROOT_CMD to operate the Muffin service" >&2
   exit 1
 fi
-exec runuser -u muffin -- env -i HOME=/var/lib/muffin USER=muffin LOGNAME=muffin SHELL=/bin/sh PATH=/var/lib/muffin/.local/share/muffin/node/bin:/usr/local/bin:/usr/bin:/bin XDG_RUNTIME_DIR=/run/user/$SERVICE_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$SERVICE_UID/bus /var/lib/muffin/.local/bin/$ROOT_CMD "\$@"
+exec runuser -u muffin -- env -i HOME=/var/lib/muffin USER=muffin LOGNAME=muffin SHELL=/bin/sh PATH=$DISPATCHER_PATH XDG_RUNTIME_DIR=/run/user/$SERVICE_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$SERVICE_UID/bus /var/lib/muffin/.local/bin/$ROOT_CMD "\$@"
 EOF
   then
     rm -f -- "$SHIM_TMP"

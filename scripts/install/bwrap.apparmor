@@ -10,5 +10,6 @@
 # placeholder is a parser error on purpose: a profile that attaches to a path
 # no process runs would silently protect nothing.
 profile muffin-bwrap <BWRAP_BINARY> flags=(unconfined) {
+  userns,
   include if exists <local/bwrap>
 }

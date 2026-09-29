@@ -114,6 +114,9 @@ jobs:
       - name: il tarball di Node è verificato prima dell'estrazione
         run: bash evals/install/node-checksum.sh
 
+      - name: AppArmor concede userns alla realpath owned selezionata dall'installer
+        run: bash evals/install/apparmor-profile.sh
+
       - name: installazione da macchina vuota, unità, update e rollback
         run: bash evals/install/ubuntu.sh
 
