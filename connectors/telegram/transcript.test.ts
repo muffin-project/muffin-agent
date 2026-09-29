@@ -1077,10 +1077,17 @@ describe('la domanda non apre una seconda bolla, e non resta mai muta', () => {
     t.resolveAsk('sys.shell.write', true);
     await vi.advanceTimersByTimeAsync(GRUPPO.editEveryMs);
 
-    const processo = t.handoff()?.process.join('\n') ?? '';
+    const righe = t.handoff()?.process ?? [];
+    const processo = righe.join('\n');
     expect(processo).toContain('sys.shell.write: consentito');
     expect(processo).not.toContain('sys.http: consentito');
-    expect(processo).toContain('⏸'); // la seconda resta in attesa
+    // La domanda ancora in attesa è quella di `sys.http`, non l'ultima
+    // incontrata: senza il filtro per capability il verdetto atterra sul passo
+    // sbagliato, e questa riga lo distingue (review 2026-09-29).
+    const attesa = righe.find((r) => r.startsWith('⏸'));
+    expect(attesa).toBeDefined();
+    expect(attesa).toContain('chiama un servizio di terzi');
+    expect(attesa).not.toContain('cambia questa macchina');
     await t.stop();
   });
 });
