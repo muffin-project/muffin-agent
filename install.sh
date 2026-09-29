@@ -83,7 +83,7 @@ say() { printf '%s\n' "$*" >&2; }
 # a real terminal): no silent host-policy change, no unsandboxed fallback, and
 # a failed application leaves the capability disabled.
 #
-#   sandbox_report <runner> <node> <src> <can-apply: yes|sudo|no>
+#   sandbox_report <runner> <node> <src> <can-apply: yes|sudo|no> <owned-bwrap>
 # ---------------------------------------------------------------------------
 sandbox_direct() { "$@"; }
 
@@ -145,6 +145,7 @@ sandbox_report() {
   sandbox_node=$2
   sandbox_src=$3
   sandbox_can_apply=$4
+  sandbox_owned=${5:-}
   # The same gate the runtime and doctor use: behavioral probe AND patch
   # posture (`assessShellBoundary`). Checking the probe alone reported
   # 'containment verified' on a stock Ubuntu 24.04 whose bubblewrap 0.9.0
@@ -192,19 +193,38 @@ sandbox_report() {
     say "sandbox: $sandbox_profile is missing — shell and job execution stay disabled."
     return 0
   fi
-  sandbox_apply="install -m 0644 '$sandbox_profile' /etc/apparmor.d/bwrap && apparmor_parser -r /etc/apparmor.d/bwrap"
+  # The profile attaches to the binary processes actually run: the
+  # Muffin-owned path, not /usr/bin/bwrap. Without a verified owned binary
+  # there is nothing honest to attach to, so the capability stays disabled.
+  if [ -z "$sandbox_owned" ] || [ ! -x "$sandbox_owned" ]; then
+    say "sandbox: no verified Muffin-owned bubblewrap to attach the profile to — shell and job execution stay disabled."
+    return 0
+  fi
+  sandbox_rendered=$(mktemp)
+  if ! sed "s|<BWRAP_BINARY>|$sandbox_owned|" "$sandbox_profile" >"$sandbox_rendered" ||
+    grep -q '<BWRAP_BINARY>' "$sandbox_rendered"; then
+    rm -f "$sandbox_rendered"
+    say "sandbox: could not render the packaged AppArmor profile — shell and job execution stay disabled."
+    return 0
+  fi
+  sandbox_apply="install -m 0644 '$sandbox_rendered' /etc/apparmor.d/muffin-bwrap && apparmor_parser -r /etc/apparmor.d/muffin-bwrap"
+  sandbox_cleanup="rm -f '$sandbox_rendered'"
   case "$sandbox_can_apply" in
     yes)
       sh -c "$sandbox_apply" || {
+        sh -c "$sandbox_cleanup" || true
         say "sandbox: applying the packaged AppArmor profile failed — shell and job execution stay disabled."
         return 0
       }
+      sh -c "$sandbox_cleanup" || true
       ;;
     sudo)
       sudo -n sh -c "$sandbox_apply" || {
+        sudo -n sh -c "$sandbox_cleanup" || true
         say "sandbox: sudo could not apply the packaged AppArmor profile — shell and job execution stay disabled."
         return 0
       }
+      sudo -n sh -c "$sandbox_cleanup" || true
       ;;
     *)
       say "sandbox: applying the packaged AppArmor profile needs root — shell and job execution stay disabled."
@@ -733,7 +753,7 @@ EOF
     root_fail "could not install the root-owned command dispatcher."
   fi
   [ "$ROOT_INSTALL_RC" -eq 0 ] || exit "$ROOT_INSTALL_RC"
-  sandbox_report root_service_run "$SERVICE_PREFIX/node/bin/node" "$SERVICE_PREFIX/src" yes
+  sandbox_report root_service_run "$SERVICE_PREFIX/node/bin/node" "$SERVICE_PREFIX/src" yes "$SERVICE_PREFIX/tool-bin/bwrap"
   exit 0
 fi
 
@@ -1305,7 +1325,7 @@ fi
 # driving this installer can tell "nothing works" from "everything works except
 # the part this machine cannot do".
 # ---------------------------------------------------------------------------
-sandbox_report sandbox_direct "$NODE_DIR/bin/node" "$SRC" sudo
+sandbox_report sandbox_direct "$NODE_DIR/bin/node" "$SRC" sudo "$MUFFIN_PREFIX/tool-bin/bwrap"
 
 if [ "${MUFFIN_NO_GATEWAY:-}" = 1 ]; then
   say ""
