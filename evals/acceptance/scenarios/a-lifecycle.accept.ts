@@ -141,7 +141,7 @@ describe('acceptance · A · installazione e ciclo di vita', () => {
 
         // The pid on the row now belongs to a live process that is not the
         // gateway: what a restarted container shows, where the new process
-        // usually gets the dead one's pid again (ADR-0092). This test process
+        // usually gets the dead one's pid again (ADR-0094). This test process
         // stands in for it. Judged by the pid alone, the claim would stay held
         // until the hard horizon (thirty minutes) and the restart below would
         // be refused with exit 75.

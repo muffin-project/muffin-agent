@@ -74,7 +74,7 @@ export class IngestLock {
     db: Database.Database,
     /**
      * Injected so a test can exercise dead, live and not-ours holders. Absent,
-     * `DurableLock` asks the holder's incarnation, then its pid (ADR-0092).
+     * `DurableLock` asks the holder's incarnation, then its pid (ADR-0094).
      */
     alive?: Liveness,
   ) {

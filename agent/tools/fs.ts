@@ -637,7 +637,7 @@ function findEnclosingRepos(target: string, scopeRoot: string): { repos: Enclosi
  * and a POSIX process drops all its locks on a file when it closes any
  * descriptor of that file: a link planted in the workspace towards the
  * process's own incarnation file, or towards `/proc/self/fd/N`, would free its
- * lock and make every other process read it as dead (ADR-0092). So the path is
+ * lock and make every other process read it as dead (ADR-0094). So the path is
  * resolved first, links and magic links included, an incarnation file is
  * refused, and what is read is the resolved path that was checked.
  *

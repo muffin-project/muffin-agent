@@ -23,7 +23,7 @@ import { holderLiveness } from '../lock/incarnation.js';
  * that was `kill -9`d never wedges `muffin` — which is the requirement the send
  * lock's own docstring pins down and which a bare pid check cannot meet,
  * because pids are reused: in a restarted container, at once. Whether the
- * holder is alive is asked of its incarnation, not its pid (ADR-0092).
+ * holder is alive is asked of its incarnation, not its pid (ADR-0094).
  *
  * Two extra columns beyond the claim, because "visibile e ammazzabile" is
  * constraint 5 of the ADR and needs data: `since` (when this holder started,

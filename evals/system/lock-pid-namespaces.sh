@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The durable lock across real pid namespaces (ADR-0092).
+# The durable lock across real pid namespaces (ADR-0094).
 #
 # Every Muffin process that shares a home shares its lock rows. Whether the
 # holder of a row is still running used to be `kill(pid, 0)`, and a pid only
@@ -15,7 +15,7 @@
 #
 # Each container runs the production `DurableLock` (core/lock/durable.ts) from
 # this checkout against one home on a shared bind mount. Expected with
-# ADR-0092: the restarted process gets the lock at once; the neighbour is
+# ADR-0094: the restarted process gets the lock at once; the neighbour is
 # refused while the holder lives and gets the lock right after `kill -9`.
 #
 # Usage:  bash evals/system/lock-pid-namespaces.sh [path-to-repo]

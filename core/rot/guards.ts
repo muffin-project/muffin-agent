@@ -160,7 +160,7 @@ export function mandatoryGuards(home: string, cwd: string, userHome: string = ho
       // inherited taint, and approvals round-trip on the same connection, so
       // reachability here is authority laundering, not a read-only residual.
       ...controlSocketGuardPaths(home),
-      // The incarnation files (ADR-0092). Nothing secret is in them; what is at
+      // The incarnation files (ADR-0094). Nothing secret is in them; what is at
       // stake is the lock on them. The fs tools run inside the process that
       // holds claims, and a POSIX process drops all its locks on a file when it
       // closes any descriptor of it: one `fs_read` or `fs_search` that opened

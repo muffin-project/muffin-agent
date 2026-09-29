@@ -308,7 +308,7 @@ describe('acceptance · B · il turno sospendibile', () => {
         await victim.exited;
 
         // The row's pid now belongs to a live process that is not the one that
-        // ran the turn: what a restarted container shows (ADR-0092). This test
+        // ran the turn: what a restarted container shows (ADR-0094). This test
         // process stands in for it. Judged by the pid alone, the turn would
         // read as still running for up to the hard horizon (six hours) and
         // nothing below would name or resume it.

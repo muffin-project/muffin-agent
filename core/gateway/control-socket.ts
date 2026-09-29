@@ -31,9 +31,9 @@ import { tightenPrivateFile } from '../config/private-fs.js';
  * > with a well-formed `identify` answer IS liveness — no PID-reuse heuristics.
  *
  * `readGateway` (`./lock.ts`) legge una riga `gateway_lock` con dentro un pid e,
- * fino all'ADR-0092, chiamava `pidAlive`: un record che può sopravvivere a chi
+ * fino all'ADR-0094, chiamava `pidAlive`: un record che può sopravvivere a chi
  * l'ha scritto, più un'euristica sul riuso dei pid. Era esattamente quella
- * frase. Dall'ADR-0092 la riga porta anche l'incarnazione del detentore, e la
+ * frase. Dall'ADR-0094 la riga porta anche l'incarnazione del detentore, e la
  * liveness la chiede al kernel (`core/lock/incarnation.ts`); il pid resta per
  * le righe scritte senza.
  *

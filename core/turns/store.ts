@@ -760,7 +760,7 @@ export class TurnStore {
     private readonly clock: () => Date = () => new Date(),
     /**
      * Injected so a test can exercise dead, live and reused holders. The
-     * default asks the holder's incarnation, then its pid (ADR-0092).
+     * default asks the holder's incarnation, then its pid (ADR-0094).
      */
     private readonly alive: Liveness = holderLiveness(db),
     /**

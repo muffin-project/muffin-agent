@@ -83,18 +83,18 @@ export { pidAlive, type Liveness };
  * would be, without a second column that has to be incremented in the same
  * transaction as the first.
  *
- * ## Liveness: the holder's process, not its pid (ADR-0092)
+ * ## Liveness: the holder's process, not its pid (ADR-0094)
  *
  * The token answers "the same acquisition"; it does not answer "is that
  * acquisition's process still running". That question used to be `kill(pid,
  * 0)`, on the assumption that ordinary pid reuse takes hours. Containers make it
  * immediate: a restarted container usually gives the new process the dead
  * one's pid, and a second container on the same home cannot see the first
- * one's pids at all. Since ADR-0092 the token also names the holder's
+ * one's pids at all. Since ADR-0094 the token also names the holder's
  * *incarnation*, a file the holder keeps locked for its whole life, and
  * liveness asks the kernel whether that lock is still held
  * (`core/lock/incarnation.ts`). The pid rule remains for tokens minted without
- * an incarnation: rows written before ADR-0092, in-memory databases, and a
+ * an incarnation: rows written before ADR-0094, in-memory databases, and a
  * process that could not create its incarnation file.
  */
 
@@ -157,7 +157,7 @@ export function heldBy(
   // Dead is free immediately, with no horizon to wait out. The tempting
   // exemption, "a row carrying our own pid must be a crashed earlier run of
   // us", is wrong in both directions and is not made: in a restarted container it is
-  // true (ADR-0092 answers it with the incarnation instead), and in a second
+  // true (ADR-0094 answers it with the incarnation instead), and in a second
   // container sharing the home the "same pid" is a different, live process.
   if (!alive(row.pid, row.holderId ?? null)) return null;
   // Alive is not enough by itself: a holder that has not proven itself (by a
@@ -232,7 +232,7 @@ export class DurableLock {
     private readonly spec: DurableLockSpec,
     /**
      * Injected so a test can exercise dead, live and not-ours holders. The
-     * default asks the holder's incarnation, then its pid (ADR-0092).
+     * default asks the holder's incarnation, then its pid (ADR-0094).
      */
     private readonly alive: Liveness = holderLiveness(db),
   ) {

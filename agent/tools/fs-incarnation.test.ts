@@ -23,7 +23,7 @@ import { type FsScope, fsRead, fsSearch, fsWrite } from './fs.js';
  * drops *all* its record locks on a file the moment it closes *any* descriptor
  * of that file. So one `fs_read` of the process's own incarnation file, or a
  * search that happens to open it, would silently free its lock: every other
- * process would then read a live holder as dead and take its claims (ADR-0092).
+ * process would then read a live holder as dead and take its claims (ADR-0094).
  * Reachable because the interactive `muffin` defaults its workspace to the
  * directory it was started from, `$HOME` included, which contains the home.
  *

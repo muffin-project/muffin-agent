@@ -1,8 +1,8 @@
 # La liveness dei lock e i namespace pid (2026-09-27)
 
-Evidenza datata per ADR-0092 e per la claim di
+Evidenza datata per ADR-0094 e per la claim di
 `slice/lock-holder-liveness-by-incarnation`. Non è autorità corrente: la
-decisione sta in ADR-0092, il meccanismo in `core/lock/incarnation.ts`.
+decisione sta in ADR-0094, il meccanismo in `core/lock/incarnation.ts`.
 
 ## Domanda
 
@@ -67,7 +67,7 @@ Implementazione (`core/lock/incarnation.ts`), `evals/system/lock-pid-namespaces.
 con il `DurableLock` di produzione su una home in bind mount, immagine
 `node:22-bookworm`:
 
-| Caso | `origin/dev` 59501fd5 | con ADR-0092 |
+| Caso | `origin/dev` 59501fd5 | con ADR-0094 |
 |---|---|---|
 | riavvio: il rimpiazzo di un container ucciso (stesso pid 1) | rifiutato | prende il lock subito |
 | vicino, mentre il detentore vive (pid 107 nel suo container) | **prende il lock di un detentore vivo** | rifiutato |
@@ -106,7 +106,7 @@ lato `readGateway` sono quindi sorvegliati dall'accettazione, non dagli unit.
 - Tre test esistenti scrivevano righe a nome di un pid finto dal processo di
   test: con l'incarnazione del processo di test risultavano vive. Non era un
   difetto dei test: nessun processo deve mettere la propria incarnazione in una
-  rivendicazione fatta a nome di un altro pid (ADR-0092, punto 4).
+  rivendicazione fatta a nome di un altro pid (ADR-0094, punto 4).
 - La chiusura di un descrittore rilascia tutti i lock POSIX del processo sul
   file: il meccanismo regge solo se il processo detentore non apre quei file
   fuori da SQLite. La prima versione affermava che nessun codice lo facesse, ed
@@ -155,4 +155,4 @@ kernel, quindi l'orizzonte resta l'unica uscita.
 
 ## Cosa ribalterebbe la conclusione
 
-Le osservazioni elencate in ADR-0092 §«Cosa la ribalta».
+Le osservazioni elencate in ADR-0094 §«Cosa la ribalta».

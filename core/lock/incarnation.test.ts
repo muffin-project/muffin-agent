@@ -69,7 +69,7 @@ describe('the token format', () => {
     expect(incarnationOf(`${inc}.${randomUUID()}`)).toBe(inc);
   });
 
-  it('a token without one (every token minted before ADR-0092) has none', () => {
+  it('a token without one (every token minted before ADR-0094) has none', () => {
     expect(incarnationOf(randomUUID())).toBeNull();
     expect(incarnationOf(null)).toBeNull();
     expect(incarnationOf(undefined)).toBeNull();
@@ -190,7 +190,7 @@ describe('the probe', () => {
     }
   });
 
-  it('a token without an incarnation is judged by its pid, as before ADR-0092', () => {
+  it('a token without an incarnation is judged by its pid, as before ADR-0094', () => {
     const { db } = fileDb();
     try {
       const live = holderLiveness(db);

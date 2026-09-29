@@ -7,7 +7,7 @@ import { ensurePrivateDir, tightenPrivateFile } from '../config/private-fs.js';
 
 /**
  * Whether the holder of a durable claim is still running, answered by the
- * kernel rather than by a pid number (ADR-0092).
+ * kernel rather than by a pid number (ADR-0094).
  *
  * ## The problem a pid cannot answer
  *
@@ -76,7 +76,7 @@ import { ensurePrivateDir, tightenPrivateFile } from '../config/private-fs.js';
  * EPERM means it exists and belongs to another user: alive, and not ours to
  * take. Only ESRCH is proof the holder is gone.
  *
- * Still the rule for rows written before ADR-0092 (no incarnation in their
+ * Still the rule for rows written before ADR-0094 (no incarnation in their
  * token), for in-memory databases, and whenever an incarnation cannot be
  * probed.
  */
@@ -216,7 +216,7 @@ function sweep(dir: string, nowMs: number): void {
  * This process's incarnation id in `dir`, creating and locking its file on the
  * first call. Null when it cannot be established: the caller then mints a token
  * without an incarnation, and readers judge that claim by its pid, exactly as
- * every build before ADR-0092 did. Said once on stderr, because a claim that
+ * every build before ADR-0094 did. Said once on stderr, because a claim that
  * falls back silently is the kind of degradation nobody finds.
  */
 function ownIncarnation(dir: string): string | null {
@@ -275,7 +275,7 @@ function ownIncarnation(dir: string): string | null {
  * as long as *this* process lives, whoever `pid` is. Production always claims
  * for `process.pid`; the stores accept a pid only so tests and fixtures can
  * stage a row for a process that is not the caller, and such a row is judged
- * by its pid, as every row was before ADR-0092.
+ * by its pid, as every row was before ADR-0094.
  */
 export function mintHolderId(db: Database.Database, pid: number = process.pid): string {
   const dir = pid === process.pid ? incarnationDir(db) : null;

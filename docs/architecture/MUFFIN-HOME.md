@@ -68,7 +68,7 @@ The current code maps these major classes under the home:
 ├── sessions/                   session-local/durable session material
 ├── secrets/                    secret-store backing material where applicable
 ├── undo/                       pre-effect undo snapshots, grouped by turn
-├── incarnations/               one locked file per live process holding a claim (ADR-0092)
+├── incarnations/               one locked file per live process holding a claim (ADR-0094)
 └── gateway.stopped             deliberate-stop semaphore for supervision
 ```
 
@@ -135,7 +135,7 @@ Keep retention and privacy boundaries explicit.
 `incarnations/` is the exception in this class: it is not evidence of the past
 but of the present. Each file is held locked by the process that created it, and
 a claim in `muffin.db` is alive exactly while its incarnation's lock is held
-(ADR-0092). Never back it up, copy it or open it outside SQLite: a file whose
+(ADR-0094). Never back it up, copy it or open it outside SQLite: a file whose
 lock is free is a dead process, and a process that opens its own file with plain
 file APIs silently drops its lock. The files of dead processes are swept by the
 next process that claims something.

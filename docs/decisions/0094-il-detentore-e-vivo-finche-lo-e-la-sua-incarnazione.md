@@ -1,4 +1,4 @@
-# ADR-0092: il detentore di un lock è vivo finché lo è la sua incarnazione
+# ADR-0094: il detentore di un lock è vivo finché lo è la sua incarnazione
 
 **Stato:** accettato · 2026-09-27 · `slice/lock-holder-liveness-by-incarnation` ·
 evidenza: `docs/evidence/liveness-dei-lock-e-namespace-pid-2026-09-27.md` ·

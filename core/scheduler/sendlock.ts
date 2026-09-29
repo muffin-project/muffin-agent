@@ -47,7 +47,7 @@ import { DurableLock, pidAlive, type Liveness, type LockOutcome } from '../lock/
  * `sendlock.test.ts` guards the inherited default instead, which is the thing
  * that could actually stop being true.
  *
- * Liveness is asked of the holder's incarnation since ADR-0092, and of its pid
+ * Liveness is asked of the holder's incarnation since ADR-0094, and of its pid
  * for a claim written without one. A bare pid is weaker than it looks: it takes
  * ordinary reuse after a hard kill, not a 2³² wrap, for a dead holder to read as
  * alive, and in a restarted container that reuse is immediate. Left there it
@@ -92,7 +92,7 @@ export class SendLock {
     db: Database.Database,
     /**
      * Injected so a test can exercise dead, live and not-ours holders. Absent,
-     * `DurableLock` asks the holder's incarnation, then its pid (ADR-0092).
+     * `DurableLock` asks the holder's incarnation, then its pid (ADR-0094).
      */
     alive?: Liveness,
   ) {
