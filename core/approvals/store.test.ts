@@ -161,3 +161,30 @@ describe('#742 — la fine del turno ritira le domande aperte', () => {
     expect(s.get('a1')?.withdrawnAt).not.toBeNull();
   });
 });
+
+/**
+ * #745 — la stessa domanda aperta non si duplica.
+ *
+ * Un re-ask della stessa capability sulla stessa risorsa mentre la prima è
+ * ancora aperta è la **stessa** domanda: due righe aperte farebbero divergere
+ * la tastiera (che mostra l'ultima) e la barriera di ripresa (che vede la
+ * prima) — e la prima, senza pulsanti, resterebbe lì fino alla scadenza.
+ */
+describe('#745 — un re-ask a domanda aperta riusa la riga', () => {
+  it('stessa capability e risorsa: riusa; dopo la decisione ne apre una nuova', () => {
+    const s = store();
+    const primo = chiedi(s);
+
+    expect(chiedi(s)).toBe(primo);
+
+    expect(s.decide(primo, 'allow', T0)).toBe('ok');
+    expect(chiedi(s)).not.toBe(primo);
+  });
+
+  it('capability o risorsa diversa restano domande diverse', () => {
+    const s = store();
+    const primo = chiedi(s);
+    expect(chiedi(s, { capability: 'sys.http' })).not.toBe(primo);
+    expect(chiedi(s, { resource: 'altro' })).not.toBe(primo);
+  });
+});

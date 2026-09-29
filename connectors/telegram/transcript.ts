@@ -356,7 +356,7 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
    * è omesso); quando l'owner risponde (`resolveAsk`) o il turno si ferma
    * (`stop`) la tastiera si toglie per costruzione.
    */
-  let pendingAsk: { capability: string; approvalId: string; seg: Segment } | null = null;
+  const pendingAsks: { capability: string; approvalId: string; seg: Segment }[] = [];
   /**
    * Il turno ha aperto il suo messaggio vero, anche in una stanza che
    * preferirebbe la bozza.
@@ -538,10 +538,8 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     // segmento che la ospita: omesso, `reply_markup` non ha una semantica
     // promessa dalla pagina ufficiale, e un edit del processo non deve poter
     // far sparire i pulsanti.
-    const keyboard =
-      pendingAsk !== null && pendingAsk.seg === seg
-        ? askKeyboard(pendingAsk.capability, pendingAsk.approvalId)
-        : undefined;
+    const inAttesa = [...pendingAsks].reverse().find((p) => p.seg === seg);
+    const keyboard = inAttesa === undefined ? undefined : askKeyboard(inAttesa.capability, inAttesa.approvalId);
     lastCallAt = now();
     finestra.push(lastCallAt);
     everSent = true;
@@ -1051,15 +1049,23 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       if (stopped || disabled) return;
       // La tastiera appartiene alla trascrizione finché la domanda è in
       // attesa: si toglie per costruzione, e il messaggio — che è il
-      // messaggio del turno — resta con il passo risolto.
-      if (pendingAsk !== null && pendingAsk.capability === capability) {
-        const { seg } = pendingAsk;
-        pendingAsk = null;
-        if (seg.messageId !== null) {
-          void api.editMessageReplyMarkup(chatId, seg.messageId).catch((error: unknown) => {
+      // messaggio del turno — resta con il passo risolto. Con più domande
+      // sullo stesso segmento la tastiera passa a quella ancora aperta: senza,
+      // la prima resterebbe visibile ma muta (#745).
+      const toccati = new Set<Segment>();
+      for (let i = pendingAsks.length - 1; i >= 0; i--) {
+        if (pendingAsks[i]!.capability !== capability) continue;
+        toccati.add(pendingAsks[i]!.seg);
+        pendingAsks.splice(i, 1);
+      }
+      for (const seg of toccati) {
+        if (seg.messageId === null) continue;
+        const ultima = [...pendingAsks].reverse().find((p) => p.seg === seg);
+        void api
+          .editMessageReplyMarkup(chatId, seg.messageId, ultima === undefined ? [] : askKeyboard(ultima.capability, ultima.approvalId))
+          .catch((error: unknown) => {
             log(`telegram: tastiera non rimossa — ${error instanceof Error ? error.message : String(error)}`);
           });
-        }
       }
       // Dall'ultimo segmento al primo, e per **capability**: con due domande
       // diverse in attesa, il verdetto deve rientrare nel passo che lo aveva
@@ -1095,7 +1101,12 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       // ha il suo messaggio vero, e la risposta che si forma lo edita.
       messaggioDelTurno = true;
       abbandonaDraft();
-      pendingAsk = { capability: request.capability, approvalId, seg };
+      // Una voce per capability: un re-ask sostituisce l'id della tastiera
+      // (stessa domanda, riga nuova), non ne accoda una seconda.
+      const voce = pendingAsks.findIndex((p) => p.capability === request.capability);
+      const pending = { capability: request.capability, approvalId, seg };
+      if (voce === -1) pendingAsks.push(pending);
+      else pendingAsks[voce] = pending;
       // Serializzata col writer, e **dopo** una prima pittura in volo: in un
       // gruppo/topic il primo tool può aver già avviato la sua `sendMessage`
       // (`trySyncFirstPaint`), e senza aspettarla questa domanda ne manderebbe
@@ -1107,7 +1118,8 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       });
       if (disabled || seg.messageId === null) {
         // Nessun messaggio vivo: il chiamante ripiega sul messaggio autonomo.
-        pendingAsk = null;
+        const i = pendingAsks.indexOf(pending);
+        if (i !== -1) pendingAsks.splice(i, 1);
         return false;
       }
       // La tastiera si (ri)attacca quando nessun edit è partito — testo
@@ -1120,7 +1132,8 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         } catch (error) {
           if (!nonModificato(error)) {
             log(`telegram: tastiera della domanda non attaccata — ${error instanceof Error ? error.message : String(error)}`);
-            pendingAsk = null;
+            const i = pendingAsks.indexOf(pending);
+            if (i !== -1) pendingAsks.splice(i, 1);
             return false;
           }
         }
@@ -1215,14 +1228,14 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     async stop() {
       if (stopped) return;
       stopped = true;
-      // Un turno che finisce con una domanda ancora in attesa non deve
-      // lasciare pulsanti vivi su una richiesta che nessuno deciderà più.
-      if (pendingAsk !== null) {
-        const { seg } = pendingAsk;
-        const messageId = seg.messageId;
-        pendingAsk = null;
-        if (messageId !== null) {
-          void api.editMessageReplyMarkup(chatId, messageId).catch((error: unknown) => {
+      // Un turno che finisce con domande ancora in attesa non deve lasciare
+      // pulsanti vivi su richieste che nessuno deciderà più.
+      if (pendingAsks.length > 0) {
+        const conTastiera = new Set(pendingAsks.map((p) => p.seg));
+        pendingAsks.length = 0;
+        for (const seg of conTastiera) {
+          if (seg.messageId === null) continue;
+          void api.editMessageReplyMarkup(chatId, seg.messageId).catch((error: unknown) => {
             log(`telegram: tastiera non rimossa — ${error instanceof Error ? error.message : String(error)}`);
           });
         }

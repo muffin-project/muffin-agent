@@ -365,3 +365,76 @@ describe('#742 — una domanda ritirata non decide', () => {
     expect(h.inviati.some((c) => c.method === 'editMessageReplyMarkup')).toBe(true);
   });
 });
+
+/**
+ * #745 — il click di una domanda vecchia non risolve un altro turno.
+ *
+ * `handleCallback` cercava la trascrizione per **chat** come ripiego: una
+ * approvazione di un turno finito, con la stessa capability di una domanda
+ * viva di un altro turno nella stessa chat, ne risolveva il passo. La ricerca
+ * ora è per turno (la mappa si riempie quando la domanda è presa).
+ */
+describe('#745 — il click di una domanda vecchia non risolve un altro turno', () => {
+  it('una approvazione del turno A non tocca il passo in attesa del turno B', async () => {
+    const h = harness();
+    const counters = {
+      iterations: 1,
+      recoveriesUsed: 0,
+      transportRetriesLeft: 10,
+      truncationsUsed: 0,
+      toolCallsMade: 1,
+      nudgedForCompletion: false,
+      usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      spentUsd: 0,
+      resumes: 0,
+      contextBuilt: true,
+      activeModelMs: 0,
+    };
+    // Turno B vivo, con una domanda in attesa sul suo messaggio.
+    const recordB = h.turns.create(
+      {
+        id: 'b'.repeat(32),
+        principal: { kind: 'owner', connector: 'telegram', externalId: String(OWNER) },
+        tenant: 'host',
+        surface: 'telegram',
+        sessionId: `telegram:${OWNER}`,
+        model: 't',
+        messages: [],
+        taint: 0,
+        replyTo: { chatId: OWNER, messageId: 9 },
+        counters,
+      },
+      4242,
+    );
+    const streamB = h.connector.resumeStream(h.turns.get(recordB.id)!);
+    const reqB: ApprovalRequest = {
+      capability: 'sys.shell.write',
+      prompt: 'non si torna indietro: cambia questa macchina — sys.shell.write',
+      resource: 'command: echo b',
+      taint: 0,
+    };
+    const bId = h.approvals.ask({ turnId: recordB.id, capability: reqB.capability, resource: reqB.resource, prompt: reqB.prompt, taint: 0 }, new Date());
+    await expect(
+      h.connector.approval(reqB, { surface: 'telegram', turnId: recordB.id, replyTo: { chatId: OWNER, messageId: 9 }, approvalId: bId }),
+    ).resolves.toBe('asked');
+    const domandaB = h.inviati.filter((c) => c.method === 'sendMessage' && c.keyboard !== undefined).at(-1)!;
+
+    // Una domanda vecchia del turno A, stessa capability e risorsa.
+    const aId = h.approvals.ask({ turnId: 'a'.repeat(32), capability: reqB.capability, resource: reqB.resource, prompt: reqB.prompt, taint: 0 }, new Date());
+
+    await deliver(h, [premuto(`ok:${aId}`)]);
+
+    expect(h.approvals.get(aId)?.decision).toBe('allow');
+    // Il passo di B resta in attesa: `resolveAsk` non è mai stato chiamato su
+    // di lui — la rimozione della tastiera è immediata (non rate-limited),
+    // l'eventuale edit del verdetto arriva dopo il pavimento della stanza.
+    const rimozioneB = h.inviati.some(
+      (c) => c.method === 'editMessageReplyMarkup' && c.messageId === domandaB.messageId && Array.isArray(c.keyboard) && c.keyboard.length === 0,
+    );
+    expect(rimozioneB).toBe(false);
+    await new Promise((r) => setTimeout(r, 1_800));
+    const risoltoB = h.modifiche.some((m) => m.messageId === domandaB.messageId && m.html.includes('consentito'));
+    expect(risoltoB).toBe(false);
+    await streamB?.stop?.();
+  });
+});

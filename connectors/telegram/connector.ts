@@ -1583,6 +1583,7 @@ export class TelegramConnector {
           return;
         }
         await transcript.stop();
+        this.dimenticaTrascrizione(transcript);
         // Da qui in poi il turno ha finito: `stop()` è la finalizzazione, e il
         // ramo che resta è il residuo noto di una ripresa che sospende di
         // nuovo su un `wait` **non** di approvazione (la guardia qui sopra ha
@@ -1613,8 +1614,11 @@ export class TelegramConnector {
    * un'altra lane, trascrizione spenta da un rifiuto — `approvatoreTelegram`
    * manda la bolla con la tastiera come prima: la domanda non resta mai muta.
    *
-   * Il `where.turnId` non serve qui: `approvalSulTurno` è indicizzato
-   * dall'approval id, che il callback riporta verbatim.
+   * Presa la domanda, la trascrizione si registra **subito** in
+   * `transcriptInSospeso` per il suo turno: un click che arriva prima che la
+   * sospensione scriva la mappa deve trovare lo stesso passo da risolvere, e
+   * il callback lo cerca per turno — mai per chat, che risolverebbe il turno
+   * sbagliato (#745).
    */
   async approval(request: ApprovalRequest, where: ApprovalWhere): Promise<Awaited<ReturnType<Approver>>> {
     const chatId = where.replyTo?.['chatId'];
@@ -1623,10 +1627,23 @@ export class TelegramConnector {
       const presa = await transcript.ask({ request, approvalId: where.approvalId });
       if (presa) {
         this.approvalSulTurno.add(where.approvalId);
+        this.transcriptInSospeso.set(where.turnId, transcript);
         return 'asked';
       }
     }
     return approvatoreTelegram(this.deps.api)(request, where);
+  }
+
+  /**
+   * La trascrizione è stata finalizzata: nessuna voce di `transcriptInSospeso`
+   * può più puntarle. Le voci nascono quando una domanda è presa e alla
+   * sospensione; un turno che finisce senza sospendere ne lascerebbe una
+   * stantia, e la ripresa successiva riuserebbe una trascrizione spenta.
+   */
+  private dimenticaTrascrizione(transcript: Transcript): void {
+    for (const [id, t] of this.transcriptInSospeso) {
+      if (t === transcript) this.transcriptInSospeso.delete(id);
+    }
   }
 
   /**
@@ -2432,7 +2449,10 @@ export class TelegramConnector {
         // idempotente, ma qui vorrebbe dire congelare per sempre proprio il
         // segmento che `transcriptInSospeso.set(...)` ha appena promesso di
         // tenere vivo per `resolveAsk`.
-        if (!lasciataAperta) await transcript.stop();
+        if (!lasciataAperta) {
+          await transcript.stop();
+          this.dimenticaTrascrizione(transcript);
+        }
       },
     };
   }
@@ -2626,16 +2646,13 @@ export class TelegramConnector {
       }
     }
 
-    // Il verdetto rientra nel passo che lo aveva chiesto — vedi
-    // `transcriptInSospeso`, con la trascrizione viva come ripiego: un click
-    // che arriva prima che la sospensione registri la mappa (o su un turno
-    // che la lane sta ancora tenendo) trova comunque il passo da risolvere.
+    // Il verdetto rientra nel passo che lo aveva chiesto. La ricerca è **per
+    // turno**: `transcriptInSospeso` è riempita quando la domanda viene presa
+    // (`approval`), alla sospensione e alla ripresa. Un ripiego per chat
+    // risolverebbe il passo di un altro turno con la stessa capability — una
+    // approvazione vecchia che decide la domanda nuova (#745).
     if (riga !== null) {
-      const chatDellaDomanda = query.message?.chat.id;
-      const transcript =
-        this.transcriptInSospeso.get(riga.turnId) ??
-        (typeof chatDellaDomanda === 'number' ? this.transcriptVivi.get(chatDellaDomanda) : undefined);
-      transcript?.resolveAsk(riga.capability, decisione === 'allow');
+      this.transcriptInSospeso.get(riga.turnId)?.resolveAsk(riga.capability, decisione === 'allow');
     }
     if (riga !== null && this.deps.loop.turns.wake(riga.turnId, now)) {
       // Solo se la riga si è davvero mossa: svegliare la corsia per un turno

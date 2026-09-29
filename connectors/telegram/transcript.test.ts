@@ -1091,3 +1091,64 @@ describe('la domanda non apre una seconda bolla, e non resta mai muta', () => {
     await t.stop();
   });
 });
+
+/**
+ * #745 — con due domande in attesa, ogni tastiera resta corretta.
+ *
+ * `pendingAsk` era singolo: la seconda domanda sovrascriveva la prima, e
+ * risolvendo la seconda la tastiera spariva mentre la prima restava visibile
+ * ma muta — e la guardia di ripresa (#741) ri-sospendeva su quella, che
+ * nessuno poteva più decidere fino alla scadenza.
+ */
+describe('#745 — due domande in attesa, due tastiere corrette', () => {
+  const requestA: ApprovalRequest = {
+    capability: 'sys.shell.write',
+    prompt: 'non si torna indietro: cambia questa macchina — sys.shell.write',
+    resource: 'command: echo a',
+    taint: 0,
+  };
+  const requestB: ApprovalRequest = {
+    capability: 'sys.http',
+    prompt: 'non si torna indietro: chiama un servizio di terzi',
+    resource: 'https://example.test',
+    taint: 0,
+  };
+  const ultimaTastiera = (calls: Call[]) =>
+    calls.filter((c) => c.keyboard !== undefined).at(-1)!.keyboard as { callback_data: string }[][];
+
+  it('la tastiera mostra la più recente, poi passa a quella ancora aperta, poi sparisce', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+
+    await t.ask({ request: requestA, approvalId: 'aaaa' });
+    await t.ask({ request: requestB, approvalId: 'bbbb' });
+    expect(ultimaTastiera(calls).flat().map((b) => b.callback_data)).toEqual(['ok:bbbb', 'no:bbbb']);
+
+    // Risolta la seconda: la tastiera passa alla prima, ancora aperta.
+    t.resolveAsk('sys.http', true);
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    expect(ultimaTastiera(calls).flat().map((b) => b.callback_data)).toEqual(['ok:aaaa', 'no:aaaa']);
+
+    // Risolta anche la prima: nessuna domanda aperta, tastiera via.
+    t.resolveAsk('sys.shell.write', true);
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    const rimozione = calls.filter((c) => c.method === 'editMessageReplyMarkup').at(-1)!;
+    expect(rimozione.keyboard).toEqual([]);
+    await t.stop();
+  });
+
+  it('un re-ask della stessa capability sostituisce l’id della tastiera, non ne apre una seconda', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+
+    await t.ask({ request: requestA, approvalId: 'aaaa' });
+    await t.ask({ request: requestA, approvalId: 'cccc' });
+
+    expect(ultimaTastiera(calls).flat().map((b) => b.callback_data)).toEqual(['ok:cccc', 'no:cccc']);
+    // Una sola rimozione possibile: la domanda è una.
+    t.resolveAsk('sys.shell.write', true);
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    expect(calls.filter((c) => c.method === 'editMessageReplyMarkup').at(-1)!.keyboard).toEqual([]);
+    await t.stop();
+  });
+});
