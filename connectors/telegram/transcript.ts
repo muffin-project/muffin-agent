@@ -1061,12 +1061,12 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
           });
         }
       }
-      // Dall'ultimo segmento al primo, perché è dove vive quasi sempre
-      // l'unico passo `waiting` di un turno — ma non si assume: un turno può
-      // aver chiesto due approvazioni prima che la prima tornasse.
+      // Dall'ultimo segmento al primo, e per **capability**: con due domande
+      // diverse in attesa, il verdetto deve rientrare nel passo che lo aveva
+      // chiesto, non nell'ultimo `waiting` incontrato (review 2026-09-29).
       for (let i = segments.length - 1; i >= 0; i--) {
         const seg = segments[i]!;
-        const step = [...seg.steps].reverse().find((s) => s.state === 'waiting');
+        const step = [...seg.steps].reverse().find((s) => s.state === 'waiting' && s.capability === capability);
         if (step === undefined) continue;
         step.state = allowed ? 'done' : 'error';
         // Il contenuto della domanda (prompt, descrizione, comando) **resta**
@@ -1096,11 +1096,34 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       messaggioDelTurno = true;
       abbandonaDraft();
       pendingAsk = { capability: request.capability, approvalId, seg };
-      await sendSegment(seg, true, '');
+      // Serializzata col writer, e **dopo** una prima pittura in volo: in un
+      // gruppo/topic il primo tool può aver già avviato la sua `sendMessage`
+      // (`trySyncFirstPaint`), e senza aspettarla questa domanda ne manderebbe
+      // una seconda invece di editarla — e scriverebbe l'id sbagliato nel
+      // segmento (review 2026-09-29).
+      const shownPrima = seg.shown;
+      await enqueue(async () => {
+        await sendSegment(seg, true, '');
+      });
       if (disabled || seg.messageId === null) {
         // Nessun messaggio vivo: il chiamante ripiega sul messaggio autonomo.
         pendingAsk = null;
         return false;
+      }
+      // La tastiera si (ri)attacca quando nessun edit è partito — testo
+      // identico, cioè il re-ask della stessa capability dopo una decisione:
+      // `sendSegment` esce senza toccare il filo e la domanda resterebbe
+      // visibile ma muta.
+      if (seg.shown === shownPrima) {
+        try {
+          await api.editMessageReplyMarkup(chatId, seg.messageId, askKeyboard(request.capability, approvalId));
+        } catch (error) {
+          if (!nonModificato(error)) {
+            log(`telegram: tastiera della domanda non attaccata — ${error instanceof Error ? error.message : String(error)}`);
+            pendingAsk = null;
+            return false;
+          }
+        }
       }
       return true;
     },

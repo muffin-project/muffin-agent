@@ -2599,13 +2599,15 @@ export class TelegramConnector {
     }
 
     // Il verdetto rientra nel passo che lo aveva chiesto — vedi
-    // `transcriptInSospeso`. Assente per un turno che non aveva mai una
-    // trascrizione aperta (un crash nel mezzo, un altro processo che l'aveva
-    // presa): `resolveAsk` sul suo `Transcript` è l'unico modo di trovare
-    // quel passo, e senza il riferimento non c'è niente da correggere qui —
-    // il turno riprende comunque, solo con la riga `⏸` rimasta com'era.
+    // `transcriptInSospeso`, con la trascrizione viva come ripiego: un click
+    // che arriva prima che la sospensione registri la mappa (o su un turno
+    // che la lane sta ancora tenendo) trova comunque il passo da risolvere.
     if (riga !== null) {
-      this.transcriptInSospeso.get(riga.turnId)?.resolveAsk(riga.capability, decisione === 'allow');
+      const chatDellaDomanda = query.message?.chat.id;
+      const transcript =
+        this.transcriptInSospeso.get(riga.turnId) ??
+        (typeof chatDellaDomanda === 'number' ? this.transcriptVivi.get(chatDellaDomanda) : undefined);
+      transcript?.resolveAsk(riga.capability, decisione === 'allow');
     }
     if (riga !== null && this.deps.loop.turns.wake(riga.turnId, now)) {
       // Solo se la riga si è davvero mossa: svegliare la corsia per un turno

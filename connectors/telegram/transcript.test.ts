@@ -1010,3 +1010,77 @@ describe('la domanda di approvazione vive nel messaggio del turno', () => {
     await t.stop();
   });
 });
+
+/**
+ * I difetti trovati dalla review del 29/09 sul primo head di #737.
+ *
+ * Radice unica: `ask()` scriveva fuori dal writer serializzato. In un
+ * gruppo/topic il primo tool può aver già avviato la sua `sendMessage`
+ * (`trySyncFirstPaint`): la domanda ne mandava una seconda, e sotto
+ * riordino delle risposte il segmento poteva registrare l'id sbagliato — con
+ * la tastiera che sopravviveva alla decisione sul messaggio della domanda.
+ * E un re-ask della stessa capability non produce un edit (testo identico):
+ * senza riattacco esplicito la domanda restava visibile ma muta.
+ */
+describe('la domanda non apre una seconda bolla, e non resta mai muta', () => {
+  const request: ApprovalRequest = {
+    capability: 'sys.shell.write',
+    prompt: 'non si torna indietro: cambia questa macchina — sys.shell.write',
+    resource: 'command: echo ciao\ncwd: .',
+    description: 'stampa la parola ciao',
+    taint: 0,
+  };
+
+  it('in gruppo, se il primo tool ha già avviato la pittura, la domanda la edita invece di mandare una seconda bolla', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
+
+    // Il primo fatto è il tool: `trySyncFirstPaint` avvia la send nello stesso stack.
+    t.report(start('shell_run_write', { command: 'echo ciao' }));
+    await expect(t.ask({ request, approvalId: 'aabb' })).resolves.toBe(true);
+    await vi.advanceTimersByTimeAsync(GRUPPO.editEveryMs);
+
+    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
+    const edit = calls.filter((c) => c.method === 'editMessageText');
+    expect(edit.length).toBeGreaterThan(0);
+    expect(edit.at(-1)!.text).toContain('non si torna indietro');
+    expect(edit.at(-1)!.keyboard).toBeDefined();
+    await t.stop();
+  });
+
+  it('un re-ask di una capability ancora in attesa riattacca la tastiera', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    const requestB: ApprovalRequest = { ...request, capability: 'sys.http', prompt: 'non si torna indietro: chiama un servizio di terzi' };
+
+    await t.ask({ request, approvalId: 'aabb' });
+    await t.ask({ request: requestB, approvalId: 'bbcc' });
+    t.resolveAsk('sys.http', true); // risolve la seconda
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+
+    // Il modello ri-chiede la prima, ancora in attesa: stesso passo, testo identico.
+    await expect(t.ask({ request, approvalId: 'ccdd' })).resolves.toBe(true);
+
+    const ultima = calls.filter((c) => c.method === 'editMessageReplyMarkup').at(-1)!;
+    const tastiera = ultima.keyboard as { callback_data: string }[][];
+    expect(tastiera.flat().map((b) => b.callback_data)).toEqual(['ok:ccdd', 'no:ccdd']);
+    await t.stop();
+  });
+
+  it('con due domande in attesa il verdetto rientra nel passo giusto', async () => {
+    const { api } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
+    const requestB: ApprovalRequest = { ...request, capability: 'sys.http', prompt: 'non si torna indietro: chiama un servizio di terzi' };
+
+    await t.ask({ request, approvalId: 'aabb' });
+    await t.ask({ request: requestB, approvalId: 'bbcc' });
+    t.resolveAsk('sys.shell.write', true);
+    await vi.advanceTimersByTimeAsync(GRUPPO.editEveryMs);
+
+    const processo = t.handoff()?.process.join('\n') ?? '';
+    expect(processo).toContain('sys.shell.write: consentito');
+    expect(processo).not.toContain('sys.http: consentito');
+    expect(processo).toContain('⏸'); // la seconda resta in attesa
+    await t.stop();
+  });
+});
