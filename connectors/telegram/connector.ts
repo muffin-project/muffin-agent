@@ -2,6 +2,7 @@ import type { CallbackQuery, ChatMemberUpdated, Message, MessageOrigin, Update }
 import { randomBytes } from 'node:crypto';
 import type { LoopDeps, TurnDelta, TurnEvent } from '../../agent/loop.js';
 import { routeContinuationTarget } from '../../agent/loop.js';
+import type { ApprovalRequest, ApprovalWhere, Approver } from '../../agent/loop.js';
 import type { AttachStream } from '../../agent/turn-lane.js';
 import { COMANDI, sembraComando, type Controlli } from '../../agent/comandi.js';
 import { recoveredText } from '../../agent/recovered-text.js';
@@ -33,6 +34,7 @@ import {
 } from '../shared/ingress/router.js';
 import { telegramPort } from './surface.js';
 import { TelegramError, type TelegramApiLike } from './api.js';
+import { approvatoreTelegram } from './approval.js';
 import {
   deliverTelegram,
   type TelegramDeliveryOutcome,
@@ -982,6 +984,32 @@ export class TelegramConnector {
   private readonly transcriptInSospeso = new Map<string, Transcript>();
 
   /**
+   * La trascrizione viva di ogni chat, finché il turno gira.
+   *
+   * Serve all'approvatore: la domanda di approvazione è un passo del turno,
+   * non un messaggio a parte, e per scriverla — e attaccarci la tastiera — deve
+   * raggiungere il messaggio che il turno sta già usando. La lane è per chat
+   * («una chat, un turno alla volta»), quindi la chiave è il chat id.
+   *
+   * Registrata in `apriIlVivo`/`resumeStream`, tolta nei loro `stop`/`close`.
+   * Un riavvio la perde, e va bene: l'approvatore ripiega sul messaggio
+   * autonomo, che è la garanzia che la domanda esista comunque.
+   */
+  private readonly transcriptVivi = new Map<number, Transcript>();
+
+  /**
+   * Gli id delle approvazioni che la trascrizione ha preso in carico.
+   *
+   * `handleCallback` deve sapere se la decisione va scritta sulla trascrizione
+   * (`resolveAsk` toglie la tastiera e risolve il passo) o sul messaggio
+   * autonomo del ripiego (l'edit con `✓ consentito`). In-memory come
+   * `transcriptInSospeso`: dopo un riavvio l'id non c'è, e il callback torna
+   * alla strada autonoma — che è anche quella giusta, perché dopo un riavvio
+   * la trascrizione viva non esiste più.
+   */
+  private readonly approvalSulTurno = new Set<string>();
+
+  /**
    * What a just-finished turn's answer must account for: the process it
    * showed and, when there is one, the real message it should extend.
    *
@@ -1385,10 +1413,12 @@ export class TelegramConnector {
 
     // In a DM the turn's one message is always blocks — the same shape the
     // draft showed (process in `details`, answer as native blocks), whether the
-    // turn had tools or not. A group keeps the edit-merge below (its steps are
-    // a real, silent trail and the answer extends that same bubble); a
-    // deliberate edit of an existing message keeps the edit lane too.
-    if (isPrivate && editId === undefined) {
+    // turn had tools or not. Da quando una domanda di approvazione apre il
+    // messaggio del turno, anche la consegna in DM è un **edit** di quel
+    // messaggio: stessa forma a blocchi, processo ripiegato nel `details`, una
+    // sola bolla per il turno. Un gruppo tiene l'edit-merge qui sotto (i suoi
+    // passi sono una traccia silenziosa e la risposta estende quella bolla).
+    if (isPrivate) {
       const turn = turnRichMessage({ process: handoff?.process ?? [], answer: text });
       const first = legacy[0];
       if (turn !== null && first !== undefined && richFitsHard(turn) === null) {
@@ -1495,6 +1525,7 @@ export class TelegramConnector {
         ...(this.deps.log ? { log: this.deps.log } : {}),
       });
     this.transcriptInSospeso.delete(record.id);
+    this.transcriptVivi.set(chatId, transcript);
     const presencePromise = startPresence(this.deps.api, chatId, threadId);
 
     let deltaText = '';
@@ -1534,6 +1565,7 @@ export class TelegramConnector {
       signal: vivo.controller.signal,
       steer: () => vivo.correzioni.splice(0),
       stop: async () => {
+        if (this.transcriptVivi.get(chatId) === transcript) this.transcriptVivi.delete(chatId);
         release();
         const presence = await presencePromise;
         await presence.stop();
@@ -1556,6 +1588,33 @@ export class TelegramConnector {
       },
     };
   };
+
+  /**
+   * La domanda di approvazione su Telegram: prima sul messaggio del turno,
+   * poi — solo se nessuna trascrizione viva può ospitarla — su un messaggio
+   * autonomo.
+   *
+   * La trascrizione si trova per chat, non per turno: la lane è per chat
+   * («una chat, un turno alla volta»), e la stessa chat non può avere due
+   * trascrizioni vive. Se non c'è — processo riavviato, turno ripreso da
+   * un'altra lane, trascrizione spenta da un rifiuto — `approvatoreTelegram`
+   * manda la bolla con la tastiera come prima: la domanda non resta mai muta.
+   *
+   * Il `where.turnId` non serve qui: `approvalSulTurno` è indicizzato
+   * dall'approval id, che il callback riporta verbatim.
+   */
+  async approval(request: ApprovalRequest, where: ApprovalWhere): Promise<Awaited<ReturnType<Approver>>> {
+    const chatId = where.replyTo?.['chatId'];
+    const transcript = typeof chatId === 'number' ? this.transcriptVivi.get(chatId) : undefined;
+    if (transcript !== undefined && where.approvalId !== undefined) {
+      const presa = await transcript.ask({ request, approvalId: where.approvalId });
+      if (presa) {
+        this.approvalSulTurno.add(where.approvalId);
+        return 'asked';
+      }
+    }
+    return approvatoreTelegram(this.deps.api)(request, where);
+  }
 
   /**
    * Uno svuotamento alla volta, in background. Un secondo `scheduleDrain`
@@ -2274,6 +2333,8 @@ export class TelegramConnector {
       ...(incoming.threadId === undefined ? {} : { threadId: incoming.threadId }),
       ...(this.deps.log ? { log: this.deps.log } : {}),
     });
+    // L'approvatore la trova da qui: la domanda vive sul messaggio del turno.
+    this.transcriptVivi.set(incoming.chatId, transcript);
     /**
      * Set the moment this turn suspends on an approval, and read by `close()`
      * below — which unconditionally calls `transcript.stop()` as a safety net.
@@ -2351,6 +2412,7 @@ export class TelegramConnector {
         if (result.stopped !== 'suspended') this.noteTranscriptHandoff(result.turnId, transcript);
       },
       close: async () => {
+        if (this.transcriptVivi.get(incoming.chatId) === transcript) this.transcriptVivi.delete(incoming.chatId);
         this.corsie.close(this.corsia(incoming.chatId));
         await presence.stop();
         // Non su un turno lasciato aperto per l'approvazione: `stop()` è
@@ -2506,11 +2568,19 @@ export class TelegramConnector {
 
     await rispondi(decisione === 'allow' ? 'Consentito.' : 'Rifiutato.');
 
+    const riga = this.deps.approvals.get(id);
+    // Se la domanda è stata presa in carico dalla trascrizione del turno, la
+    // tastiera e il passo sono suoi: `resolveAsk` la toglie per costruzione e
+    // risolve la riga dentro il Processo. Un edit autonomo qui scriverebbe
+    // dentro il messaggio del turno, e il primo render della ripresa lo
+    // sovrascriverebbe comunque.
+    const presaDallaTrascrizione = this.approvalSulTurno.delete(id);
+
     // I pulsanti spariscono e il messaggio dice cosa è stato deciso: una
     // tastiera che resta premibile dopo la risposta invita a rispondere due
     // volte a una domanda che è già chiusa.
     const testo = query.message;
-    if (testo !== undefined && 'text' in testo && typeof testo.text === 'string') {
+    if (!presaDallaTrascrizione && testo !== undefined && 'text' in testo && typeof testo.text === 'string') {
       try {
         await this.deps.api.editMessageText(
           testo.chat.id,
@@ -2528,7 +2598,6 @@ export class TelegramConnector {
       }
     }
 
-    const riga = this.deps.approvals.get(id);
     // Il verdetto rientra nel passo che lo aveva chiesto — vedi
     // `transcriptInSospeso`. Assente per un turno che non aveva mai una
     // trascrizione aperta (un crash nel mezzo, un altro processo che l'aveva

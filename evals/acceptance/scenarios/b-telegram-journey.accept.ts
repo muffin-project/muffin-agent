@@ -482,15 +482,17 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
         try {
           tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'leggi le mie note e poi esegui echo ciao'));
 
-          // The ASK: a sendMessage with an inline keyboard, distinct from the
-          // pairing confirmation already sitting in `tg.sent()`.
+          // The ASK: the turn's own message, with an inline keyboard —
+          // distinct from the pairing confirmation already in `tg.sent()`.
+          // Dal 2026-09-29 la domanda vive sul messaggio del turno (la
+          // tastiera non sta su una bozza effimera), non su una bolla a parte.
           await until(
             () => tg.sent().some((c) => c.method === 'sendMessage' && c.payload['reply_markup'] !== undefined),
             20_000,
           );
           const askCall = tg.sent().find((c) => c.method === 'sendMessage' && c.payload['reply_markup'] !== undefined);
           if (!askCall) throw new Error('nessun messaggio ASK con tastiera trovato');
-          const askText = String(askCall.payload['text'] ?? '');
+          const askText = testoDi(askCall);
           if (!askText.includes('sys.shell.write')) throw new Error(`l'ASK non nomina la capability:\n${askText}`);
           if (!askText.includes('command: echo ciao') || !askText.includes('cwd: .')) {
             throw new Error(`l'ASK non mostra comando e cwd insieme:\n${askText}`);
@@ -593,21 +595,46 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
             throw new Error(`reply_markup non è una tastiera esplicitamente vuota: ${JSON.stringify(tastieraTolta.payload)}`);
           }
 
-          // (b) Option B: il processo del turno ripreso — la riga di attesa
-          // risolta e il tool rieseguito — vive solo nella bozza e arriva
-          // collassato nel `details` del messaggio finale. Nessuna riga di
-          // attesa congelata: il verdetto è nello stesso vocabolario di ogni
-          // altro passo (`transcript.ts`'s `resolveAsk`).
+          // (b) La domanda è un passo del turno: il processo del turno ripreso
+          // — la riga di attesa risolta e il tool rieseguito — arriva
+          // collassato nel `details` dello **stesso** messaggio che portava la
+          // tastiera. Nessuna riga di attesa congelata, nessuna seconda bolla:
+          // il verdetto è nello stesso vocabolario di ogni altro passo
+          // (`transcript.ts`'s `resolveAsk`) e la risposta finale è un edit di
+          // quel messaggio, non un invio nuovo.
           const finalCall = tg
             .sent()
             .find(
               (c) =>
-                (c.method === 'sendMessage' || c.method === 'sendRichMessage') &&
+                (c.method === 'sendMessage' ||
+                  c.method === 'sendRichMessage' ||
+                  c.method === 'editMessageText' ||
+                  c.method === 'editMessageRichText') &&
                 (c.payload['rich_message'] as { blocks?: Block[] } | undefined)?.blocks !== undefined &&
                 testoDi(c).includes('ha risposto ciao'),
             );
           if (finalCall === undefined) {
-            throw new Error('la risposta finale non è arrivata come un solo messaggio a blocchi');
+            throw new Error(
+              'la risposta finale non è arrivata come un solo messaggio a blocchi:\n' +
+                JSON.stringify(
+                  tg.sent().map((c) => ({
+                    method: c.method,
+                    messageId: c.messageId,
+                    payloadMessageId: c.payload['message_id'],
+                    hasAnswer: testoDi(c).includes('ha risposto ciao'),
+                    hasBlocks: (c.payload['rich_message'] as { blocks?: unknown } | undefined)?.blocks !== undefined,
+                    keys: Object.keys(c.payload),
+                  })),
+                  null,
+                  2,
+                ),
+            );
+          }
+          if (Number(finalCall.payload['message_id'] ?? finalCall.messageId) !== askMessageId) {
+            throw new Error(
+              `la risposta finale è un messaggio nuovo invece di un edit di quello della domanda: ` +
+                `ask=${askMessageId} final=${JSON.stringify(finalCall.payload['message_id'] ?? finalCall.messageId)}`,
+            );
           }
           const blocks = (finalCall.payload['rich_message'] as { blocks?: Block[] } | undefined)?.blocks ?? [];
           const details = blocks.find((b) => b.type === 'details');
@@ -627,7 +654,8 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
               `il passo del tool rieseguito dopo l'approvazione non è nel processo:\n${processText}`,
             );
           }
-          // (c) La risposta finale è fuori dal `details`, in un solo invio.
+          // (c) La risposta finale è fuori dal `details`, e in un solo
+          // messaggio: quello della domanda, editato.
           const answerText = JSON.stringify(blocks.filter((b) => b.type !== 'details'));
           if (!answerText.includes('ha risposto ciao')) {
             throw new Error(`la risposta finale non è fuori dal details:\n${answerText}`);
@@ -636,11 +664,20 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
             .sent()
             .filter(
               (c) =>
-                (c.method === 'sendMessage' || c.method === 'sendRichMessage') &&
+                (c.method === 'sendMessage' ||
+                  c.method === 'sendRichMessage' ||
+                  c.method === 'editMessageText' ||
+                  c.method === 'editMessageRichText') &&
                 testoDi(c).includes('ha risposto ciao'),
             );
-          if (risposte.length !== 1) {
-            throw new Error(`atteso un solo invio con la risposta, trovati ${risposte.length}`);
+          // Più edit dello stesso messaggio vanno bene — è lo streaming che si
+          // posa e poi la consegna che lo ripiega. Ciò che non deve esistere è
+          // un **secondo** messaggio con la risposta.
+          const idDellaRisposta = new Set(risposte.map((c) => Number(c.payload['message_id'] ?? c.messageId)));
+          if (idDellaRisposta.size !== 1 || !idDellaRisposta.has(askMessageId)) {
+            throw new Error(
+              `la risposta ha toccato messaggi diversi da quello della domanda: ${JSON.stringify([...idDellaRisposta])} vs ask=${askMessageId}`,
+            );
           }
         } finally {
           await gw.stop();

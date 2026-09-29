@@ -38,7 +38,6 @@ import { makeSendFileTool, sendFileCapability } from '../agent/tools/deliver.js'
 import type { FsScope } from '../agent/tools/fs.js';
 import { cmdModel } from './model.js';
 import type { Approver } from '../agent/loop.js';
-import { escapeHtml, splitHtml } from '../connectors/telegram/render.js';
 import { SaluteSuperfici } from '../core/surface/salute.js';
 import { HEARTBEAT_MS } from '../core/gateway/lock.js';
 import { DRAIN_BUDGET_MS } from '../core/gateway/service.js';
@@ -606,71 +605,6 @@ function voceFor(runtime: Runtime, home: string): (percorso: string) => Promise<
     });
 }
 
-/**
- * La domanda di approvazione, su Telegram, con i pulsanti.
- *
- * Prima di questa funzione il kernel su Telegram poteva solo dire «su questa
- * superficie non posso chiederla»: cioè dal telefono non era usabile niente di
- * ciò che chiede conferma — che oggi è quasi tutto, perché finché `muffin rot
- * harden` non è stato fatto `sys.shell` chiede **sempre**.
- *
- * **Torna `asked`, non una promessa.** La funzione manda il messaggio e finisce;
- * la risposta arriverà come un `callback_query`, forse fra un'ora, forse a un
- * altro processo dopo un riavvio. È il turno a sospendersi su una barriera
- * persistita (`approval:<id>`), e questa è l'unica forma che sopravvive a un
- * riavvio: tenere aperta una promessa in memoria vorrebbe dire che spegnere il
- * gateway perde la domanda e il lavoro dietro.
- *
- * **Cosa mostra.** L'azione concreta e il taint del turno — i due fatti che
- * DAY-1 requirement D12 chiede per non fare teatro: «approvi sys.shell?» non è una
- * domanda a cui qualcuno possa rispondere. Il testo del kernel è riportato
- * com'è: parafrasarlo è l'occasione di far sembrare la richiesta più piccola di
- * quello che è. Dal 03/09 anche la frase del modello su *cosa fa* il comando
- * (`ApprovalRequest.description`), **sopra** il comando e mai al suo posto.
- *
- * **Intera, sempre.** L'owner ha ricevuto un comando lungo tagliato nel
- * messaggio stesso che gli chiedeva se eseguirlo (`summarizeCallArgs` tagliava
- * a 220; non più). Qui il testo si spezza con `splitHtml` come una risposta
- * qualunque: se non entra in un messaggio ne prende due, e i pulsanti stanno
- * sull'ultimo — la domanda è sempre l'ultima cosa che si legge.
- */
-function approvatoreTelegram(api: TelegramApi): Approver {
-  const ETICHETTA_TAINT = ['', 'contatto noto', 'gruppo/sconosciuto', 'contenuto esterno (web o tool)'];
-  return async (request, where) => {
-    const chatId = where.replyTo?.['chatId'];
-    // Nessun indirizzo durevole vuol dire nessun posto dove far comparire la
-    // domanda. Non si inventa la chat dell'owner: un turno il cui indirizzo non
-    // sappiamo leggere è un turno di cui non sappiamo a chi stiamo parlando.
-    if (typeof chatId !== 'number' || where.approvalId === undefined) return 'unavailable';
-
-    const righe = [`⚠ <b>${escapeHtml(request.prompt)}</b>`];
-    if (request.description !== undefined && request.description !== '') {
-      righe.push(`<i>${escapeHtml(request.description)}</i>`);
-    }
-    if (request.resource !== undefined && request.resource !== '') {
-      righe.push(`<pre><code>${escapeHtml(request.resource)}</code></pre>`);
-    }
-    if (request.taint > 0) {
-      const etichetta = ETICHETTA_TAINT[request.taint];
-      righe.push(
-        `contesto: turno a taint ${request.taint}${etichetta ? ` — ${etichetta}` : ''} ` +
-          `(contenuto non tuo è già entrato in questo turno)`,
-      );
-    }
-
-    const parti = splitHtml(righe.join('\n\n'));
-    for (let i = 0; i < parti.length - 1; i++) await api.sendMessage(chatId, parti[i]!);
-    await api.sendMessage(chatId, parti[parti.length - 1] ?? '', {
-      keyboard: [
-        [
-          { text: `Consenti "${request.capability}"`, callback_data: `ok:${where.approvalId}`, style: 'success' },
-          { text: 'Rifiuta', callback_data: `no:${where.approvalId}`, style: 'danger' },
-        ],
-      ],
-    });
-    return 'asked';
-  };
-}
 
 /**
  * I comandi della CLI, eseguibili da Telegram.
@@ -1321,7 +1255,7 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
       return outcome === 'possibly_sent' ? outcome : undefined;
     },
     stream: connector.resumeStream,
-    approver: approvatoreTelegram(api),
+    approver: (request, where) => connector.approval(request, where),
     line:
       gatewayAtBoot !== null
         ? `telegram: la riceve il gateway (pid ${gatewayAtBoot.pid}) — questa finestra manda soltanto`
