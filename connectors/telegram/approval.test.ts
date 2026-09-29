@@ -1,0 +1,94 @@
+import { describe, expect, it } from 'vitest';
+import type { ApprovalRequest, ApprovalWhere } from '../../agent/loop.js';
+import type { TelegramApiLike } from './api.js';
+import { approvatoreTelegram, askHtml, askKeyboard, askPlain } from './approval.js';
+
+/**
+ * Il vocabolario della domanda, e la strada di ripiego.
+ *
+ * La strada normale — la domanda dentro il messaggio del turno — la prova
+ * `transcript.test.ts`; qui si pinna il vocabolario condiviso (le stesse
+ * parole su entrambe le strade) e il ripiego: quando nessuna trascrizione viva
+ * può ospitarla, la domanda esce come messaggio autonomo con la tastiera
+ * sull'ultimo pezzo. Mai muta, mai senza pulsanti.
+ */
+
+const request: ApprovalRequest = {
+  capability: 'sys.shell.write',
+  prompt: 'non si torna indietro: cambia questa macchina — sys.shell.write',
+  resource: 'command: echo ciao\ncwd: .',
+  description: 'stampa la parola ciao',
+  taint: 2,
+};
+
+const where: ApprovalWhere = {
+  surface: 'telegram',
+  turnId: 't1',
+  replyTo: { chatId: 42, messageId: 7 },
+  approvalId: 'aabbccdd',
+};
+
+function recordingApi(): { api: TelegramApiLike; calls: { chatId: number; text: string; keyboard?: unknown }[] } {
+  const calls: { chatId: number; text: string; keyboard?: unknown }[] = [];
+  const api = {
+    sendMessage: async (chatId: number, html: string, options?: { keyboard?: unknown }) => {
+      calls.push({ chatId, text: html, ...(options?.keyboard === undefined ? {} : { keyboard: options.keyboard }) });
+      return { message_id: calls.length, date: 0, chat: { id: chatId, type: 'private' } };
+    },
+  } as unknown as TelegramApiLike;
+  return { api, calls };
+}
+
+describe('askHtml / askPlain · le stesse parole, due rese', () => {
+  it('porta prompt, descrizione, comando e taint — in quest’ordine', () => {
+    const html = askHtml(request);
+    expect(html).toContain('non si torna indietro');
+    expect(html).toContain('stampa la parola ciao');
+    expect(html).toContain('echo ciao');
+    expect(html).toContain('taint 2');
+    expect(html.indexOf('non si torna indietro')).toBeLessThan(html.indexOf('stampa la parola ciao'));
+    expect(html.indexOf('stampa la parola ciao')).toBeLessThan(html.indexOf('echo ciao'));
+  });
+
+  it('il gemello in testo semplice dice le stesse cose, senza markup', () => {
+    const plain = askPlain(request);
+    expect(plain).toContain('non si torna indietro');
+    expect(plain).toContain('stampa la parola ciao');
+    expect(plain).toContain('echo ciao');
+    expect(plain).toContain('taint 2');
+    expect(plain).not.toContain('<b>');
+    expect(plain).not.toContain('<pre>');
+  });
+
+  it('la tastiera porta l’id dentro i due pulsanti, verbatim', () => {
+    const keyboard = askKeyboard('sys.shell.write', 'aabbccdd');
+    expect(keyboard.flat().map((b) => b.callback_data)).toEqual(['ok:aabbccdd', 'no:aabbccdd']);
+  });
+});
+
+describe('approvatoreTelegram · il ripiego, quando nessuna trascrizione può ospitarla', () => {
+  it('manda la domanda intera e mette la tastiera sull’ultimo pezzo', async () => {
+    const { api, calls } = recordingApi();
+    const esito = await approvatoreTelegram(api)(request, where);
+
+    expect(esito).toBe('asked');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.text).toContain('non si torna indietro');
+    expect(calls[0]!.text).toContain('echo ciao');
+    expect(calls[0]!.keyboard).toBeDefined();
+  });
+
+  it('senza indirizzo durevole non inventa la chat dell’owner: `unavailable`', async () => {
+    const { api, calls } = recordingApi();
+    const esito = await approvatoreTelegram(api)(request, { ...where, replyTo: undefined });
+    expect(esito).toBe('unavailable');
+    expect(calls).toEqual([]);
+  });
+
+  it('senza id nel registro non può chiedere: `unavailable`', async () => {
+    const { api, calls } = recordingApi();
+    const esito = await approvatoreTelegram(api)(request, { ...where, approvalId: undefined });
+    expect(esito).toBe('unavailable');
+    expect(calls).toEqual([]);
+  });
+});

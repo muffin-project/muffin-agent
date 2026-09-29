@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ApprovalRequest } from '../../agent/loop.js';
 import { TelegramError, type TelegramApiLike } from './api.js';
 import { TELEGRAM_MAX } from './render.js';
 import { negoziazioneTelegram } from './negoziazione.js';
@@ -17,21 +18,25 @@ const GRUPPO = negoziazioneTelegram('group');
  * `now` is `Date.now` under fake timers and `setTimeout` is the faked one.
  */
 
-type Call = { method: string; text?: string; messageId?: number; draftId?: number; at?: number; rich?: unknown };
+type Call = { method: string; text?: string; messageId?: number; draftId?: number; at?: number; rich?: unknown; keyboard?: unknown };
 
 function recordingApi(fail: { send?: boolean; edit?: boolean; draft?: boolean } = {}): { api: TelegramApiLike; calls: Call[] } {
   const calls: Call[] = [];
   let next = 500;
   const api = {
-    sendMessage: async (chatId: number, html: string) => {
+    sendMessage: async (chatId: number, html: string, options?: { keyboard?: unknown }) => {
       if (fail.send) throw new Error('simulato');
       const messageId = next++;
-      calls.push({ method: 'sendMessage', text: html, messageId });
+      calls.push({ method: 'sendMessage', text: html, messageId, ...(options?.keyboard === undefined ? {} : { keyboard: options.keyboard }) });
       return { message_id: messageId, date: 0, chat: { id: chatId, type: 'private' } };
     },
-    editMessageText: async (_chatId: number, messageId: number, html: string) => {
+    editMessageText: async (_chatId: number, messageId: number, html: string, options?: { keyboard?: unknown }) => {
       if (fail.edit) throw new Error('simulato');
-      calls.push({ method: 'editMessageText', text: html, messageId });
+      calls.push({ method: 'editMessageText', text: html, messageId, ...(options?.keyboard === undefined ? {} : { keyboard: options.keyboard }) });
+      return true;
+    },
+    editMessageReplyMarkup: async (_chatId: number, messageId: number, keyboard: unknown[] = []) => {
+      calls.push({ method: 'editMessageReplyMarkup', messageId, keyboard });
       return true;
     },
     deleteMessage: async (_chatId: number, messageId: number) => {
@@ -50,15 +55,15 @@ function recordingApi(fail: { send?: boolean; edit?: boolean; draft?: boolean } 
     // Rich is the transport now; the fake records it as the legacy twin so the
     // 36 tests below keep asserting the same visible calls. The rich code path
     // is still the one exercised, and the failure flags cover it.
-    sendRichMessage: async (chatId: number, rich: { html?: string; blocks?: unknown[] }) => {
+    sendRichMessage: async (chatId: number, rich: { html?: string; blocks?: unknown[] }, options?: { keyboard?: unknown }) => {
       if (fail.send) throw new Error('simulato');
       const messageId = next++;
-      calls.push({ method: 'sendMessage', text: richPlain(rich), messageId });
+      calls.push({ method: 'sendMessage', text: richPlain(rich), messageId, ...(options?.keyboard === undefined ? {} : { keyboard: options.keyboard }) });
       return { message_id: messageId, date: 0, chat: { id: chatId, type: 'private' } };
     },
-    editMessageRichText: async (_chatId: number, messageId: number, rich: { html?: string; blocks?: unknown[] }) => {
+    editMessageRichText: async (_chatId: number, messageId: number, rich: { html?: string; blocks?: unknown[] }, options?: { keyboard?: unknown }) => {
       if (fail.edit) throw new Error('simulato');
-      calls.push({ method: 'editMessageText', text: richPlain(rich), messageId });
+      calls.push({ method: 'editMessageText', text: richPlain(rich), messageId, ...(options?.keyboard === undefined ? {} : { keyboard: options.keyboard }) });
       return true;
     },
     sendRichMessageDraft: async (_chatId: number, draftId: number, rich: { html?: string; blocks?: unknown[] }) => {
@@ -903,6 +908,186 @@ describe('rich transport failure handling', () => {
     // No legacy re-send: a second message would be the duplicate this surface
     // forbids when the first attempt is unconfirmed.
     expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(0);
+    await t.stop();
+  });
+});
+
+/**
+ * La domanda di approvazione è un passo del turno, non una bolla a parte
+ * (owner, 2026-09-29: quattro comandi, quattro messaggi residui sotto la
+ * risposta).
+ *
+ * L'invariante: quando una trascrizione viva può ospitarla, la domanda apre il
+ * messaggio **del turno** — anche in una stanza che preferirebbe la bozza,
+ * perché i pulsanti non vivono su un'anteprima effimera — e da lì in poi la
+ * risposta che si forma edita quello stesso messaggio. `resolveAsk` toglie la
+ * tastiera per costruzione e lascia il verdetto dentro il passo, che la
+ * consegna finale ripiega nel `details`.
+ */
+describe('la domanda di approvazione vive nel messaggio del turno', () => {
+  const request: ApprovalRequest = {
+    capability: 'sys.shell.write',
+    prompt: 'non si torna indietro: cambia questa macchina — sys.shell.write',
+    resource: 'command: echo ciao\ncwd: .',
+    description: 'stampa la parola ciao',
+    taint: 2,
+  };
+
+  it('in DM apre il messaggio vero (non una bozza), visibile, con la tastiera', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+
+    await expect(t.ask({ request, approvalId: 'aabb' })).resolves.toBe(true);
+
+    const invio = calls.find((c) => c.method === 'sendMessage');
+    expect(invio).toBeDefined();
+    expect(invio!.text).toContain('non si torna indietro');
+    expect(invio!.text).toContain('echo ciao');
+    expect(invio!.text).toContain('taint 2');
+    expect(invio!.keyboard).toBeDefined();
+    // La tastiera non vive su un'anteprima effimera: niente bozza da qui in poi.
+    expect(calls.some((c) => c.method === 'sendMessageDraft')).toBe(false);
+    await t.stop();
+  });
+
+  it("il loop emette `ask` dopo: stesso passo, mai due", async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+
+    await t.ask({ request, approvalId: 'aabb' });
+    t.report({ type: 'ask', name: 'shell_run_write', capability: 'sys.shell.write' });
+    await vi.advanceTimersByTimeAsync(0);
+
+    const testo = calls
+      .filter((c) => c.method === 'sendMessage' || c.method === 'editMessageText')
+      .map((c) => c.text ?? '')
+      .join('\n');
+    expect(testo.match(/aspetto la tua approvazione/g) ?? []).toHaveLength(0);
+    expect(testo.match(/non si torna indietro/g) ?? []).toHaveLength(1);
+    await t.stop();
+  });
+
+  it('resolveAsk toglie la tastiera per costruzione e lascia il verdetto nel passo', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    await t.ask({ request, approvalId: 'aabb' });
+
+    t.resolveAsk('sys.shell.write', true);
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+
+    const tolt = calls.find((c) => c.method === 'editMessageReplyMarkup');
+    expect(tolt).toBeDefined();
+    expect(tolt!.keyboard).toEqual([]);
+    const edit = calls.filter((c) => c.method === 'editMessageText').at(-1);
+    expect(edit!.text).toContain('sys.shell.write: consentito');
+    // Il contenuto della domanda resta nel passo: il Processo è dove si ripiega.
+    expect(edit!.text).toContain('non si torna indietro');
+    await t.stop();
+  });
+
+  it('dopo la domanda la risposta che si forma edita quel messaggio, e handoff lo nomina', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    await t.ask({ request, approvalId: 'aabb' });
+    const id = calls.find((c) => c.method === 'sendMessage')!.messageId;
+    t.resolveAsk('sys.shell.write', true);
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+
+    t.live('sto scrivendo la risposta');
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+
+    expect(calls.filter((c) => c.method === 'editMessageText').every((c) => c.messageId === id)).toBe(true);
+    expect(calls.some((c) => c.method === 'sendMessageDraft')).toBe(false);
+    expect(t.handoff()?.messageId).toBe(id);
+    await t.stop();
+  });
+
+  it('senza un messaggio vivo la domanda non è presa: il chiamante ripiega', async () => {
+    const { api } = recordingApi({ send: true });
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
+
+    await expect(t.ask({ request, approvalId: 'aabb' })).resolves.toBe(false);
+    await t.stop();
+  });
+});
+
+/**
+ * I difetti trovati dalla review del 29/09 sul primo head di #737.
+ *
+ * Radice unica: `ask()` scriveva fuori dal writer serializzato. In un
+ * gruppo/topic il primo tool può aver già avviato la sua `sendMessage`
+ * (`trySyncFirstPaint`): la domanda ne mandava una seconda, e sotto
+ * riordino delle risposte il segmento poteva registrare l'id sbagliato — con
+ * la tastiera che sopravviveva alla decisione sul messaggio della domanda.
+ * E un re-ask della stessa capability non produce un edit (testo identico):
+ * senza riattacco esplicito la domanda restava visibile ma muta.
+ */
+describe('la domanda non apre una seconda bolla, e non resta mai muta', () => {
+  const request: ApprovalRequest = {
+    capability: 'sys.shell.write',
+    prompt: 'non si torna indietro: cambia questa macchina — sys.shell.write',
+    resource: 'command: echo ciao\ncwd: .',
+    description: 'stampa la parola ciao',
+    taint: 0,
+  };
+
+  it('in gruppo, se il primo tool ha già avviato la pittura, la domanda la edita invece di mandare una seconda bolla', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
+
+    // Il primo fatto è il tool: `trySyncFirstPaint` avvia la send nello stesso stack.
+    t.report(start('shell_run_write', { command: 'echo ciao' }));
+    await expect(t.ask({ request, approvalId: 'aabb' })).resolves.toBe(true);
+    await vi.advanceTimersByTimeAsync(GRUPPO.editEveryMs);
+
+    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
+    const edit = calls.filter((c) => c.method === 'editMessageText');
+    expect(edit.length).toBeGreaterThan(0);
+    expect(edit.at(-1)!.text).toContain('non si torna indietro');
+    expect(edit.at(-1)!.keyboard).toBeDefined();
+    await t.stop();
+  });
+
+  it('un re-ask di una capability ancora in attesa riattacca la tastiera', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    const requestB: ApprovalRequest = { ...request, capability: 'sys.http', prompt: 'non si torna indietro: chiama un servizio di terzi' };
+
+    await t.ask({ request, approvalId: 'aabb' });
+    await t.ask({ request: requestB, approvalId: 'bbcc' });
+    t.resolveAsk('sys.http', true); // risolve la seconda
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+
+    // Il modello ri-chiede la prima, ancora in attesa: stesso passo, testo identico.
+    await expect(t.ask({ request, approvalId: 'ccdd' })).resolves.toBe(true);
+
+    const ultima = calls.filter((c) => c.method === 'editMessageReplyMarkup').at(-1)!;
+    const tastiera = ultima.keyboard as { callback_data: string }[][];
+    expect(tastiera.flat().map((b) => b.callback_data)).toEqual(['ok:ccdd', 'no:ccdd']);
+    await t.stop();
+  });
+
+  it('con due domande in attesa il verdetto rientra nel passo giusto', async () => {
+    const { api } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
+    const requestB: ApprovalRequest = { ...request, capability: 'sys.http', prompt: 'non si torna indietro: chiama un servizio di terzi' };
+
+    await t.ask({ request, approvalId: 'aabb' });
+    await t.ask({ request: requestB, approvalId: 'bbcc' });
+    t.resolveAsk('sys.shell.write', true);
+    await vi.advanceTimersByTimeAsync(GRUPPO.editEveryMs);
+
+    const righe = t.handoff()?.process ?? [];
+    const processo = righe.join('\n');
+    expect(processo).toContain('sys.shell.write: consentito');
+    expect(processo).not.toContain('sys.http: consentito');
+    // La domanda ancora in attesa è quella di `sys.http`, non l'ultima
+    // incontrata: senza il filtro per capability il verdetto atterra sul passo
+    // sbagliato, e questa riga lo distingue (review 2026-09-29).
+    const attesa = righe.find((r) => r.startsWith('⏸'));
+    expect(attesa).toBeDefined();
+    expect(attesa).toContain('chiama un servizio di terzi');
+    expect(attesa).not.toContain('cambia questa macchina');
     await t.stop();
   });
 });
