@@ -16,7 +16,7 @@ workspace:
   root: ~/symphony-workspaces/muffin-agent
 hooks:
   after_create: |
-    git clone --branch dev --single-branch https://github.com/muffin-project/muffin-agent.git .
+    git clone --branch dev --single-branch git@github.com:muffin-project/muffin-agent.git .
 agent:
   max_concurrent_agents: 1
   max_turns: 20
@@ -62,13 +62,14 @@ Operating contract:
 5. Commit coherent checkpoints and push the owned branch. The Symphony host must
    provide Git push authentication; if it does not, this is a true external
    blocker.
-6. Create or update a PR targeting `dev`. Use `github_api` for GitHub issue,
-   PR, comment, label, and metadata operations when useful. Never merge the PR.
+6. Create or update a PR targeting `dev`. The tracker credential reads issues
+   and writes PRs; use `github_api` for PR metadata and comments. It cannot
+   write or close issues. Never merge the PR.
 7. Read the GitHub Actions/check state for the exact current PR head. Repair
    failures attributable to the change and continue until the current candidate
    satisfies the repository's required gates. Do not treat a worker summary or
    a green nearby SHA as evidence for the current candidate.
-8. When the PR is review-ready, post one compact issue comment containing the PR,
+8. When the PR is review-ready, post one compact PR comment containing the
    current head SHA, acceptance evidence, and any explicitly unverified residue.
    Then request operator input for human review. Do not continue polishing,
    refactoring, or starting another issue.
