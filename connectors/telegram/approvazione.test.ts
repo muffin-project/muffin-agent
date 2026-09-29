@@ -341,3 +341,27 @@ describe('#746 — un turno ripreso che sospende di nuovo resta approvabile', ()
     expect(h.spinte.length).toBeGreaterThan(0);
   });
 });
+
+/**
+ * #742 — un tocco su una domanda ritirata non decide niente.
+ *
+ * Il turno è finito mentre la domanda era aperta: il registro l'ha ritirata.
+ * Il pulsante può ancora essere sullo schermo (una bolla di ripiego, un
+ * client che non ha aggiornato): il tocco deve togliere la tastiera e dire
+ * che non serve più, mai scrivere «consentito» per un turno che non c'è.
+ */
+describe('#742 — una domanda ritirata non decide', () => {
+  it('risponde che non serve più, toglie la tastiera, non sveglia il turno', async () => {
+    const h = harness();
+    const { turnId, approvalId } = turnoInAttesa(h);
+    h.approvals.withdrawForTurn(turnId, new Date());
+
+    await deliver(h, [premuto(`ok:${approvalId}`)]);
+
+    expect(h.approvals.get(approvalId)?.decision).toBeNull();
+    expect(h.turns.get(turnId)?.status).toBe('waiting');
+    expect(h.spinte).toEqual([]);
+    expect(h.risposte[0]?.text).toContain('Non serve più');
+    expect(h.inviati.some((c) => c.method === 'editMessageReplyMarkup')).toBe(true);
+  });
+});

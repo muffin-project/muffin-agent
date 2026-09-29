@@ -274,10 +274,16 @@ describe('i rifiuti terminali restano con le porte d ingresso', () => {
       reclamata.claimToken,
     );
 
+    // Una domanda ancora aperta su questo turno: il rifiuto terminale la
+    // ritira (#742), o resterebbe `decision IS NULL` per sempre.
+    const aperta = w.approvals.ask({ turnId: id, capability: 'sys.shell', resource: 'rm', prompt: 'eseguo?', taint: 0 }, NOW());
+
     return barrel.resumeTurn({ ...w.deps, model: 'un-altro-modello' }, id).then((esito) => {
       expect('why' in esito && esito.why).toBe('model_changed');
       expect('detail' in esito && esito.detail).toContain(CORREZIONE);
       expect(w.turns.get(id)!.status).toBe('done');
+      expect(w.approvals.get(aperta)?.withdrawnAt).not.toBeNull();
+      expect(w.approvals.open(id)).toBeNull();
     });
   });
 });

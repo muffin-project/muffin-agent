@@ -1,5 +1,6 @@
 import type DatabaseCtor from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
+import { ensureColumn } from '../lock/durable.js';
 import type { TrustTier } from '../policy/types.js';
 
 /**
@@ -67,7 +68,11 @@ CREATE TABLE IF NOT EXISTS approvals (
   asked_at    TEXT NOT NULL,
   decision    TEXT CHECK (decision IN ('allow','deny')),
   decided_at  TEXT,
-  consumed_at TEXT
+  consumed_at TEXT,
+  -- Quando il turno è finito con la domanda ancora aperta: la riga non è
+  -- cancellata (niente si cancella) e non è decisa (nessuno ha risposto), ma
+  -- non è più una domanda — open la ignora e un tocco tardivo non decide.
+  withdrawn_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_approvals_turn ON approvals(turn_id, consumed_at);
 `;
@@ -83,6 +88,8 @@ export type ApprovalRow = {
   decision: 'allow' | 'deny' | null;
   decidedAt: string | null;
   consumedAt: string | null;
+  /** Il turno è finito mentre la domanda era aperta: vedi `withdrawForTurn`. */
+  withdrawnAt: string | null;
 };
 
 type Raw = {
@@ -96,6 +103,7 @@ type Raw = {
   decision: string | null;
   decided_at: string | null;
   consumed_at: string | null;
+  withdrawn_at: string | null;
 };
 
 const read = (r: Raw): ApprovalRow => ({
@@ -109,6 +117,7 @@ const read = (r: Raw): ApprovalRow => ({
   decision: r.decision === 'allow' || r.decision === 'deny' ? r.decision : null,
   decidedAt: r.decided_at,
   consumedAt: r.consumed_at,
+  withdrawnAt: r.withdrawn_at,
 });
 
 export class ApprovalStore {
@@ -119,9 +128,17 @@ export class ApprovalStore {
   private readonly consumeStmt: DatabaseCtor.Statement;
   private readonly openStmt: DatabaseCtor.Statement;
   private readonly decidedUnconsumedStmt: DatabaseCtor.Statement;
+  private readonly withdrawStmt: DatabaseCtor.Statement;
 
   constructor(db: DatabaseCtor.Database) {
     db.exec(SCHEMA);
+    // `CREATE TABLE IF NOT EXISTS` non tocca una tabella che esiste già: su un
+    // database installato prima di questa colonna lo schema sopra è un no-op e
+    // ogni SELECT che la nomina fallirebbe. `ensureColumn` è lo stesso meccanismo
+    // di ogni altro store che ha aggiunto una colonna — con la sua gestione
+    // della corsa fra due connessioni (`duplicate column name`), che una copia
+    // locale di PRAGMA+ALTER non avrebbe.
+    ensureColumn(db, 'approvals', 'withdrawn_at', 'withdrawn_at TEXT');
     this.askStmt = db.prepare(
       `INSERT INTO approvals (id, turn_id, capability, resource, prompt, taint, asked_at)
        VALUES (@id, @turnId, @capability, @resource, @prompt, @taint, @askedAt)`,
@@ -137,7 +154,8 @@ export class ApprovalStore {
      * come «già risposto» invece che come un errore.
      */
     this.decideStmt = db.prepare(
-      `UPDATE approvals SET decision = @decision, decided_at = @at WHERE id = @id AND decision IS NULL`,
+      `UPDATE approvals SET decision = @decision, decided_at = @at
+        WHERE id = @id AND decision IS NULL AND withdrawn_at IS NULL`,
     );
     this.matchStmt = db.prepare(
       `SELECT * FROM approvals
@@ -148,7 +166,12 @@ export class ApprovalStore {
     );
     this.consumeStmt = db.prepare(`UPDATE approvals SET consumed_at = @at WHERE id = @id AND consumed_at IS NULL`);
     this.openStmt = db.prepare(
-      `SELECT * FROM approvals WHERE turn_id = ? AND decision IS NULL ORDER BY asked_at ASC LIMIT 1`,
+      `SELECT * FROM approvals WHERE turn_id = ? AND decision IS NULL AND withdrawn_at IS NULL
+        ORDER BY asked_at ASC LIMIT 1`,
+    );
+    this.withdrawStmt = db.prepare(
+      `UPDATE approvals SET withdrawn_at = @at
+        WHERE turn_id = @turnId AND decision IS NULL AND withdrawn_at IS NULL`,
     );
     this.decidedUnconsumedStmt = db.prepare(
       `SELECT 1 AS uno FROM approvals WHERE turn_id = ? AND decision IS NOT NULL AND consumed_at IS NULL LIMIT 1`,
@@ -189,10 +212,29 @@ export class ApprovalStore {
    * già risposto, `unknown` quell'id non esiste — un pulsante di un database
    * ricreato, o qualcosa che nessuno ha chiesto.
    */
-  decide(id: string, decision: 'allow' | 'deny', now: Date): 'ok' | 'already' | 'unknown' {
+  decide(id: string, decision: 'allow' | 'deny', now: Date): 'ok' | 'already' | 'unknown' | 'withdrawn' {
     const changed = this.decideStmt.run({ id, decision, at: now.toISOString() }).changes;
     if (changed > 0) return 'ok';
-    return this.get(id) === null ? 'unknown' : 'already';
+    const row = this.get(id);
+    if (row === null) return 'unknown';
+    // Ritirata è diverso da «già risposto»: nessuno ha risposto, il turno è
+    // finito. Il messaggio del pulsante deve poterlo dire.
+    return row.withdrawnAt === null ? 'already' : 'withdrawn';
+  }
+
+  /**
+   * Il turno è finito con la domanda ancora aperta: la domanda si **ritira**.
+   *
+   * Non si cancella (la riga resta come traccia) e non si decide (nessuno ha
+   * risposto): smette di essere una domanda. `open` la ignora — quindi la
+   * guardia di ripresa non la vede più — e un tocco tardivo riceve
+   * `'withdrawn'` invece di decidere per un turno che non esiste più.
+   *
+   * Ritorna quante domande ha ritirato: zero è la risposta normale per un
+   * turno che non aveva domande aperte.
+   */
+  withdrawForTurn(turnId: string, now: Date): number {
+    return this.withdrawStmt.run({ turnId, at: now.toISOString() }).changes;
   }
 
   /** La barriera del turno: c'è una risposta per questa domanda? */
