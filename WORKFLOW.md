@@ -16,7 +16,7 @@ workspace:
   root: ~/symphony-workspaces/muffin-agent
 hooks:
   after_create: |
-    git clone --branch dev --single-branch git@github.com:muffin-project/muffin-agent.git .
+    git clone --branch dev --single-branch ssh://github.com/muffin-project/muffin-agent.git .
 agent:
   max_concurrent_agents: 1
   max_turns: 20
