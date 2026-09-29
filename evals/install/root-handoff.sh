@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
 # Run only in a disposable Ubuntu runner/container. Exercise public root
 # bootstrap with local fake Git/Node inputs; never touches the developer host.
-set -euo pipefail
+set -Eeuo pipefail
+
+# Some hosted-runner assertions can fail after earlier evals leave runner-
+# specific state. Report only the source line and status: BASH_COMMAND may
+# contain fixture secrets or private paths and is intentionally not logged.
+root_handoff_error() {
+  local status=$?
+  printf 'root handoff eval: unexpected failure at line %s (exit %s)\n' \
+    "${BASH_LINENO[0]:-${LINENO}}" "$status" >&2
+}
+trap root_handoff_error ERR
 
 [ "$(id -u)" -eq 0 ] || { echo 'root handoff eval: run as root in isolation' >&2; exit 1; }
 REPO=${1:-$(git rev-parse --show-toplevel)}
