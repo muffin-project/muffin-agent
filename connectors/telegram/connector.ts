@@ -1583,20 +1583,20 @@ export class TelegramConnector {
           return;
         }
         await transcript.stop();
-        // Unconditional, same as `runFresh`'s own call: `stop()` here cannot
-        // see whether this resume is about to suspend again (another
-        // approval, another `wait`) — that outcome is `makeLaneRunner`'s, not
-        // this closure's. A resume that *does* suspend again leaves a stale
-        // entry keyed by this same `turnId`; it is overwritten the next time
-        // this turn's transcript stops, before `deliverTo` is ever called for
-        // it (`makeLaneRunner` always stops the stream before delivering) —
-        // and if the process dies with the entry never overwritten, the map
-        // itself is gone with it, so recovery just finds none. The residual
-        // is the rarer case still: this same process resumes the turn again
-        // through a path other than `resumeStream` (no telegram connector at
-        // that moment) — `deliverTo` would then extend a stale message
-        // instead of sending a fresh one. Narrower than, and no worse than,
-        // the pre-existing gap in re-suspension handling this map already had.
+        // Da qui in poi il turno ha finito: `stop()` è la finalizzazione, e il
+        // ramo che resta è il residuo noto di una ripresa che sospende di
+        // nuovo su un `wait` **non** di approvazione (la guardia qui sopra ha
+        // già tenuto aperto il caso approval). Una voce stantia per lo stesso
+        // `turnId` viene sovrascritta al prossimo stop di questo turno, prima
+        // che `deliverTo` venga mai chiamato per lui (`makeLaneRunner` ferma
+        // sempre lo stream prima di consegnare); e se il processo muore con la
+        // voce mai sovrascritta, la mappa sparisce con lui, quindi il recovery
+        // semplicemente non la trova. Il residuo è il caso ancora più raro:
+        // questo stesso processo riprende il turno per una strada diversa da
+        // `resumeStream` (nessun connettore Telegram in quel momento) —
+        // `deliverTo` estenderebbe un messaggio stantio invece di mandarne uno
+        // nuovo. Più stretto, e non peggiore, del buco preesistente che questa
+        // mappa aveva già sulla ri-sospensione.
         this.noteTranscriptHandoff(record.id, transcript);
       },
     };
