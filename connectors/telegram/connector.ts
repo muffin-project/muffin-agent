@@ -60,7 +60,7 @@ import type { Voce } from '../../core/audio/voce.js';
 type Arrivo = Arrival;
 
 /** Solo i due metodi che questo file usa: il connettore non possiede il registro. */
-type ApprovalDecide = (id: string, decision: 'allow' | 'deny', now: Date) => 'ok' | 'already' | 'unknown';
+type ApprovalDecide = (id: string, decision: 'allow' | 'deny', now: Date) => 'ok' | 'already' | 'unknown' | 'withdrawn';
 type ApprovalGet = (id: string) => { turnId: string; capability: string; resource: string | null } | null;
 import { startPresence } from './presence.js';
 import { avvisoAllOwner, decidiInvito, SALUTO_NEL_GRUPPO, type Invito } from './invito.js';
@@ -2578,6 +2578,21 @@ export class TelegramConnector {
     const esito = this.deps.approvals.decide(id, decisione, now);
     if (esito === 'unknown') return rispondi('Questa richiesta non esiste più.');
     if (esito === 'already') return rispondi('Avevi già risposto a questa richiesta.');
+    if (esito === 'withdrawn') {
+      // Il turno è finito mentre la domanda era aperta (#742): nessuno ha
+      // risposto, quindi non si dice «consentito» né «rifiutato» — si dice che
+      // non serve più, e la tastiera si toglie per costruzione.
+      await rispondi('Non serve più: quel turno è finito.');
+      const testo = query.message;
+      if (testo !== undefined) {
+        try {
+          await this.deps.api.editMessageReplyMarkup(testo.chat.id, testo.message_id);
+        } catch {
+          /* il messaggio può essere troppo vecchio per essere modificato */
+        }
+      }
+      return;
+    }
 
     await rispondi(decisione === 'allow' ? 'Consentito.' : 'Rifiutato.');
 
