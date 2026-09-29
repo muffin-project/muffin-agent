@@ -1,9 +1,11 @@
 import { randomBytes } from 'node:crypto';
+import { APPROVAL_WINDOW_MS } from '../../core/approvals/store.js';
 import type { SessionRef } from '../../core/session/store.js';
 import type { SpanHandle } from '../../core/tracing/types.js';
 import { ATTR } from '../../core/tracing/types.js';
 import type { TurnCounters, TurnRecord } from '../../core/turns/store.js';
 import { CAPPED_MODEL, SCRIPT_MODEL } from '../../core/turns/store.js';
+import { encodeWaitFor, type WaitSpec } from '../../core/turns/wait.js';
 import type { Message } from '../providers/types.js';
 import { primoMessaggio } from './context.js';
 import { buildFreshCounters, evidenceForContinuation } from './continuation.js';
@@ -433,6 +435,59 @@ export async function resumeTurn(
       iterations: 0,
       usage: record.counters.usage,
     };
+  }
+
+  /**
+   * #741 — una sola decisione non apre un turno con più domande aperte.
+   *
+   * Un giro può chiedere più approvazioni (una per tool call che ne ha
+   * bisogno): ognuna ha la sua riga in `approvals`, e un click ne decide
+   * **una**. La barriera del turno è un `wait_for` solo, quindi `wake` lo
+   * riporta `runnable` alla prima decisione: senza questa guardia il motore
+   * leggerebbe la barriera ancora aperta come «l'owner non ha risposto» e il
+   * modello ripartirebbe con un referto falso, rifacendo le chiamate e
+   * ri-chiedendo le domande ancora aperte — con id nuovi e tastiere nuove.
+   *
+   * La condizione distingue un risveglio **da click** da uno **da scadenza**:
+   * c'è una decisione non consumata per il turno (`decidedUnconsumed`) e la
+   * prima domanda aperta (`open`) non è ancora scaduta. Alla scadenza il
+   * turno prosegue come prima — una domanda senza risposta non blocca per
+   * sempre — e un risveglio a mano senza decisioni resta il caso «timer» che
+   * `wakeReport` racconta.
+   */
+  const aperta = deps.approvals?.open(record.id) ?? null;
+  const decisioneDaConsumare = deps.approvals?.decidedUnconsumed(record.id) ?? false;
+  if (aperta !== null && decisioneDaConsumare) {
+    const ora = (deps.now ?? (() => new Date()))().getTime();
+    const scadenzaDellaDomanda = Date.parse(aperta.askedAt) + APPROVAL_WINDOW_MS;
+    if (scadenzaDellaDomanda > ora) {
+      const spec: WaitSpec = { wakeAt: new Date(scadenzaDellaDomanda).toISOString(), waitFor: { kind: 'approval', id: aperta.id } };
+      const scritto = deps.turns.suspend(
+        record.id,
+        {
+          messages: providerMessages(record),
+          taint: record.taint,
+          counters: record.counters,
+          wakeAt: spec.wakeAt,
+          waitFor: encodeWaitFor({ kind: 'approval', id: aperta.id }),
+        },
+        record.claimToken,
+      );
+      if (scritto) {
+        return {
+          text: '',
+          iterations: record.counters.iterations,
+          traceId: record.id,
+          turnId: record.id,
+          stopped: 'suspended',
+          taint: record.taint,
+          usage: record.counters.usage,
+          suspendedUntil: spec,
+        };
+      }
+      // La scrittura non è riuscita (claim perso): il funnel ha le sue
+      // guardie, e non si inventa qui un esito diverso.
+    }
   }
 
   const span = deps.tracer.start(

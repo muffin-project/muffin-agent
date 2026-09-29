@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import DatabaseCtor from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApprovalStore, APPROVAL_WINDOW_MS } from '../../core/approvals/store.js';
 import { createDecide } from '../../core/policy/decide.js';
 import { POLICY_FLOOR } from '../../core/policy/matrix.js';
 import type { Principal } from '../../core/policy/types.js';
@@ -82,6 +83,7 @@ function world(script: (ChatResult | Error)[], durante: (n: number) => void = ()
   const db = new DatabaseCtor(':memory:');
   const turns = new TurnStore(db);
   const sessions = new SessionStore(home);
+  const approvals = new ApprovalStore(db);
   const capabilities = new Map();
   const deps: barrel.LoopDeps = {
     provider: new Scripted(script, durante),
@@ -89,6 +91,7 @@ function world(script: (ChatResult | Error)[], durante: (n: number) => void = ()
     model: 'test-model',
     tools: [],
     capabilities,
+    approvals,
     decide: createDecide({
       matrix: POLICY_FLOOR,
       capabilities,
@@ -103,7 +106,7 @@ function world(script: (ChatResult | Error)[], durante: (n: number) => void = ()
     systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite.' },
     now: NOW,
   };
-  return { deps, turns, sessions };
+  return { deps, turns, sessions, approvals };
 }
 
 /** Quante volte esattamente quel testo compare, come stringa JSON esatta. */
@@ -452,5 +455,150 @@ describe('continueTurn rifiuta senza toccare la riga', () => {
     expect(r).toMatchObject({ turnId: 'cont-1', why: 'continuable' });
     expect(w.turns.get('cont-1')?.status).toBe('continuable');
     expect(w.turns.get('cont-1')?.counters.resumes).toBe(0);
+  });
+});
+
+/**
+ * #741 — con più domande aperte il turno riprende solo quando sono decise tutte.
+ *
+ * Un giro può chiedere più approvazioni (una per tool call che ne ha bisogno):
+ * ognuna ha la sua riga in `approvals`, e un click ne decide **una**. La
+ * barriera del turno è un `wait_for` solo, quindi `wake` lo riporta `runnable`
+ * alla prima decisione: senza guardia il modello ripartirebbe, rifarebbe le
+ * chiamate e ri-chiederebbe le domande ancora aperte — id nuovi, tastiere
+ * nuove, e il turno che "riprende" quando non dovrebbe.
+ *
+ * L'autorità della condizione è `ApprovalStore.open(turnId)`: la prima domanda
+ * ancora aperta. Finora non aveva chiamanti.
+ */
+describe('#741 — la ripresa aspetta tutte le domande aperte, non una', () => {
+  const counters = {
+    iterations: 2,
+    recoveriesUsed: 0,
+    transportRetriesLeft: 10,
+    truncationsUsed: 0,
+    toolCallsMade: 2,
+    nudgedForCompletion: false,
+    usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    spentUsd: 0,
+    resumes: 0,
+    contextBuilt: true,
+    activeModelMs: 0,
+  };
+
+  /** Una riga avviata, sospesa su `b`, con due domande aperte nello stesso giro. */
+  function dueDomande(w: ReturnType<typeof world>): { id: string; a: string; b: string } {
+    const record = w.turns.create(
+      {
+        id: 'c'.repeat(32),
+        principal: owner,
+        tenant: 'host',
+        surface: 'cli',
+        sessionId: 'multi-ask',
+        model: 'test-model',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'due comandi' }] }],
+        taint: 0,
+        counters,
+      },
+      4242,
+    );
+    const a = w.approvals.ask({ turnId: record.id, capability: 'sys.shell', resource: 'echo a', prompt: 'eseguo a?', taint: 0 }, NOW());
+    const b = w.approvals.ask({ turnId: record.id, capability: 'sys.shell', resource: 'echo b', prompt: 'eseguo b?', taint: 0 }, NOW());
+    w.turns.suspend(
+      record.id,
+      {
+        messages: providerMessages(record),
+        taint: 0,
+        counters: record.counters,
+        wakeAt: new Date(NOW().getTime() + APPROVAL_WINDOW_MS).toISOString(),
+        waitFor: `approval:${b}`,
+      },
+      record.claimToken,
+    );
+    return { id: record.id, a, b };
+  }
+
+  it('la prima decisione non fa partire il modello: la ripresa ri-sospende sulla domanda ancora aperta', async () => {
+    const w = world([answer('non deve partire')]);
+    const { id, a, b } = dueDomande(w);
+
+    // L'owner decide la prima; la lane lo riprende.
+    expect(w.approvals.decide(a, 'allow', NOW())).toBe('ok');
+    expect(w.turns.wake(id, NOW())).toBe(true);
+
+    const esito = await barrel.resumeTurn(w.deps, id);
+
+    expect('stopped' in esito && esito.stopped).toBe('suspended');
+    expect((w.deps.provider as Scripted).seen).toHaveLength(0);
+    expect(w.turns.get(id)).toMatchObject({ status: 'waiting', waitFor: `approval:${b}` });
+    // La decisione presa resta non consumata: vale per il tool quando riparte.
+    expect(w.approvals.get(a)).toMatchObject({ decision: 'allow', consumedAt: null });
+  });
+
+  it('decisa anche la seconda, il turno riprende davvero', async () => {
+    const w = world([answer('fatto')]);
+    const { id, a, b } = dueDomande(w);
+
+    w.approvals.decide(a, 'allow', NOW());
+    w.turns.wake(id, NOW());
+    await barrel.resumeTurn(w.deps, id); // ri-sospende su b, senza modello
+
+    expect(w.approvals.decide(b, 'allow', NOW())).toBe('ok');
+    expect(w.turns.wake(id, NOW())).toBe(true);
+
+    const esito = await barrel.resumeTurn(w.deps, id);
+
+    expect('stopped' in esito && esito.stopped).toBe('answered');
+    expect((w.deps.provider as Scripted).seen).toHaveLength(1);
+  });
+
+  /**
+   * Il braccio della scadenza: una decisione non consumata **e** una domanda
+   * aperta già oltre la finestra non devono ri-sospendere — il turno riprende
+   * e `wakeReport` racconta il timer. Senza questo caso il ramo
+   * `scadenzaDellaDomanda > ora` sopravvive a ogni mutazione (review 2026-09-29).
+   */
+  it('una domanda aperta oltre la finestra non ri-sospende: il turno riprende e il timer lo racconta', async () => {
+    const w = world([answer('te lo dico')]);
+    const record = w.turns.create(
+      {
+        id: 'd'.repeat(32),
+        principal: owner,
+        tenant: 'host',
+        surface: 'cli',
+        sessionId: 'multi-ask-scaduta',
+        model: 'test-model',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'due comandi' }] }],
+        taint: 0,
+        counters,
+      },
+      4242,
+    );
+    // A decisa, B aperta ma chiesta **oltre** la finestra: è la forma della
+    // scadenza, non del click.
+    const a = w.approvals.ask({ turnId: record.id, capability: 'sys.shell', resource: 'echo a', prompt: 'eseguo a?', taint: 0 }, NOW());
+    const b = w.approvals.ask(
+      { turnId: record.id, capability: 'sys.shell', resource: 'echo b', prompt: 'eseguo b?', taint: 0 },
+      new Date(NOW().getTime() - APPROVAL_WINDOW_MS - 60_000),
+    );
+    w.turns.suspend(
+      record.id,
+      {
+        messages: providerMessages(record),
+        taint: 0,
+        counters: record.counters,
+        wakeAt: new Date(NOW().getTime() - 60_000).toISOString(),
+        waitFor: `approval:${b}`,
+      },
+      record.claimToken,
+    );
+    w.approvals.decide(a, 'allow', NOW());
+    expect(w.turns.wake(record.id, NOW())).toBe(true);
+
+    const esito = await barrel.resumeTurn(w.deps, record.id);
+
+    // Il modello riparte col referto del timer, non ri-sospende.
+    expect('stopped' in esito && esito.stopped).toBe('answered');
+    expect((w.deps.provider as Scripted).seen).toHaveLength(1);
   });
 });
