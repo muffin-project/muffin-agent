@@ -118,6 +118,7 @@ export class ApprovalStore {
   private readonly matchStmt: DatabaseCtor.Statement;
   private readonly consumeStmt: DatabaseCtor.Statement;
   private readonly openStmt: DatabaseCtor.Statement;
+  private readonly decidedUnconsumedStmt: DatabaseCtor.Statement;
 
   constructor(db: DatabaseCtor.Database) {
     db.exec(SCHEMA);
@@ -148,6 +149,9 @@ export class ApprovalStore {
     this.consumeStmt = db.prepare(`UPDATE approvals SET consumed_at = @at WHERE id = @id AND consumed_at IS NULL`);
     this.openStmt = db.prepare(
       `SELECT * FROM approvals WHERE turn_id = ? AND decision IS NULL ORDER BY asked_at ASC LIMIT 1`,
+    );
+    this.decidedUnconsumedStmt = db.prepare(
+      `SELECT 1 AS uno FROM approvals WHERE turn_id = ? AND decision IS NOT NULL AND consumed_at IS NULL LIMIT 1`,
     );
   }
 
@@ -201,6 +205,18 @@ export class ApprovalStore {
   open(turnId: string): ApprovalRow | null {
     const row = this.openStmt.get(turnId) as Raw | undefined;
     return row === undefined ? null : read(row);
+  }
+
+  /**
+   * C'è una decisione presa e non ancora consumata per questo turno?
+   *
+   * È la firma di un risveglio **da click** (rispetto a uno da scadenza):
+   * l'owner ha deciso qualcosa, il tool non l'ha ancora consumato. La usano la
+   * ripresa per distinguere «una delle domande è stata decisa» da «è scaduto
+   * il tempo» (issue #741), senza leggere l'orologio del turno.
+   */
+  decidedUnconsumed(turnId: string): boolean {
+    return this.decidedUnconsumedStmt.get(turnId) !== undefined;
   }
 
   /**
