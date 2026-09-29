@@ -551,4 +551,54 @@ describe('#741 — la ripresa aspetta tutte le domande aperte, non una', () => {
     expect('stopped' in esito && esito.stopped).toBe('answered');
     expect((w.deps.provider as Scripted).seen).toHaveLength(1);
   });
+
+  /**
+   * Il braccio della scadenza: una decisione non consumata **e** una domanda
+   * aperta già oltre la finestra non devono ri-sospendere — il turno riprende
+   * e `wakeReport` racconta il timer. Senza questo caso il ramo
+   * `scadenzaDellaDomanda > ora` sopravvive a ogni mutazione (review 2026-09-29).
+   */
+  it('una domanda aperta oltre la finestra non ri-sospende: il turno riprende e il timer lo racconta', async () => {
+    const w = world([answer('te lo dico')]);
+    const record = w.turns.create(
+      {
+        id: 'd'.repeat(32),
+        principal: owner,
+        tenant: 'host',
+        surface: 'cli',
+        sessionId: 'multi-ask-scaduta',
+        model: 'test-model',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'due comandi' }] }],
+        taint: 0,
+        counters,
+      },
+      4242,
+    );
+    // A decisa, B aperta ma chiesta **oltre** la finestra: è la forma della
+    // scadenza, non del click.
+    const a = w.approvals.ask({ turnId: record.id, capability: 'sys.shell', resource: 'echo a', prompt: 'eseguo a?', taint: 0 }, NOW());
+    const b = w.approvals.ask(
+      { turnId: record.id, capability: 'sys.shell', resource: 'echo b', prompt: 'eseguo b?', taint: 0 },
+      new Date(NOW().getTime() - APPROVAL_WINDOW_MS - 60_000),
+    );
+    w.turns.suspend(
+      record.id,
+      {
+        messages: providerMessages(record),
+        taint: 0,
+        counters: record.counters,
+        wakeAt: new Date(NOW().getTime() - 60_000).toISOString(),
+        waitFor: `approval:${b}`,
+      },
+      record.claimToken,
+    );
+    w.approvals.decide(a, 'allow', NOW());
+    expect(w.turns.wake(record.id, NOW())).toBe(true);
+
+    const esito = await barrel.resumeTurn(w.deps, record.id);
+
+    // Il modello riparte col referto del timer, non ri-sospende.
+    expect('stopped' in esito && esito.stopped).toBe('answered');
+    expect((w.deps.provider as Scripted).seen).toHaveLength(1);
+  });
 });
