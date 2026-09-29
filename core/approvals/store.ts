@@ -129,6 +129,7 @@ export class ApprovalStore {
   private readonly openStmt: DatabaseCtor.Statement;
   private readonly decidedUnconsumedStmt: DatabaseCtor.Statement;
   private readonly withdrawStmt: DatabaseCtor.Statement;
+  private readonly openForStmt: DatabaseCtor.Statement;
 
   constructor(db: DatabaseCtor.Database) {
     db.exec(SCHEMA);
@@ -169,6 +170,12 @@ export class ApprovalStore {
       `SELECT * FROM approvals WHERE turn_id = ? AND decision IS NULL AND withdrawn_at IS NULL
         ORDER BY asked_at ASC LIMIT 1`,
     );
+    this.openForStmt = db.prepare(
+      `SELECT * FROM approvals
+        WHERE turn_id = @turnId AND capability = @capability AND resource IS @resource
+          AND decision IS NULL AND withdrawn_at IS NULL
+        ORDER BY asked_at ASC LIMIT 1`,
+    );
     this.withdrawStmt = db.prepare(
       `UPDATE approvals SET withdrawn_at = @at
         WHERE turn_id = @turnId AND decision IS NULL AND withdrawn_at IS NULL`,
@@ -178,11 +185,26 @@ export class ApprovalStore {
     );
   }
 
-  /** Registra una domanda e restituisce il suo id — che è anche la barriera del turno. */
+  /**
+   * Registra una domanda e restituisce il suo id — che è anche la barriera
+   * del turno.
+   *
+   * Se la **stessa** domanda (turno, capability, risorsa) è già aperta, ne
+   * riusa la riga: un re-ask — il modello rifà la chiamata dopo un risveglio —
+   * non deve creare una seconda domanda. Con due righe aperte la tastiera
+   * mostrerebbe l'ultima e la barriera di ripresa vedrebbe la prima, quella
+   * senza pulsanti, fino alla scadenza (#745).
+   */
   ask(
     req: { turnId: string; capability: string; resource?: string | undefined; prompt: string; taint: TrustTier },
     now: Date,
   ): string {
+    const aperta = this.openForStmt.get({
+      turnId: req.turnId,
+      capability: req.capability,
+      resource: req.resource ?? null,
+    }) as Raw | undefined;
+    if (aperta !== undefined) return aperta.id;
     // Esadecimale: l'id finisce dentro `approval:<id>` in `wait_for` e dentro
     // il `callback_data` di Telegram (64 byte in tutto), quindi non può
     // contenere `:` né avere una lunghezza a sorpresa.

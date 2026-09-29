@@ -120,6 +120,12 @@ type Step = {
    * (`ask()`), e ritrovare il passo giusto quando l'owner risponde.
    */
   capability?: string;
+  /**
+   * L'approvazione che questa attesa riguarda, quando è una domanda. La
+   * chiave è l'id, non la capability: due `sys.shell` su comandi diversi sono
+   * due domande, con due passi e due tastiere (#745).
+   */
+  approvalId?: string;
 };
 
 /** The step's one text: the phrase and the tool's subject, never shortened. */
@@ -167,13 +173,13 @@ export type Transcript = {
    *
    * Same vocabulary as `tool_end`, on purpose — an approval that resolves is
    * not a new kind of fact, it is the same `⏸`→done transition a running
-   * tool already gets. Finds the **last** `'waiting'` step across every
-   * still-open segment (never a closed one — `stop()` already finalised
+   * tool already gets. Finds the `'waiting'` step **by approval id** across
+   * every still-open segment (never a closed one — `stop()` already finalised
    * those) and rewrites it in place; a segment with no such step does
    * nothing, which is the ordinary case for every step in every OTHER turn
    * that never asked.
    */
-  resolveAsk(capability: string, allowed: boolean): void;
+  resolveAsk(ask: { approvalId: string; capability: string }, allowed: boolean): void;
   /**
    * La domanda di approvazione, **dentro il messaggio del turno**.
    *
@@ -356,7 +362,7 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
    * è omesso); quando l'owner risponde (`resolveAsk`) o il turno si ferma
    * (`stop`) la tastiera si toglie per costruzione.
    */
-  let pendingAsk: { capability: string; approvalId: string; seg: Segment } | null = null;
+  const pendingAsks: { capability: string; approvalId: string; seg: Segment }[] = [];
   /**
    * Il turno ha aperto il suo messaggio vero, anche in una stanza che
    * preferirebbe la bozza.
@@ -538,10 +544,8 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     // segmento che la ospita: omesso, `reply_markup` non ha una semantica
     // promessa dalla pagina ufficiale, e un edit del processo non deve poter
     // far sparire i pulsanti.
-    const keyboard =
-      pendingAsk !== null && pendingAsk.seg === seg
-        ? askKeyboard(pendingAsk.capability, pendingAsk.approvalId)
-        : undefined;
+    const inAttesa = [...pendingAsks].reverse().find((p) => p.seg === seg);
+    const keyboard = inAttesa === undefined ? undefined : askKeyboard(inAttesa.capability, inAttesa.approvalId);
     lastCallAt = now();
     finestra.push(lastCallAt);
     everSent = true;
@@ -1047,33 +1051,38 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       else ensureDraftStatus();
     },
 
-    resolveAsk(capability, allowed) {
+    resolveAsk(ask, allowed) {
       if (stopped || disabled) return;
-      // La tastiera appartiene alla trascrizione finché la domanda è in
-      // attesa: si toglie per costruzione, e il messaggio — che è il
-      // messaggio del turno — resta con il passo risolto.
-      if (pendingAsk !== null && pendingAsk.capability === capability) {
-        const { seg } = pendingAsk;
-        pendingAsk = null;
+      // La tastiera appartiene alla trascrizione finché **quella** domanda è
+      // in attesa: si toglie per costruzione, e il messaggio resta con il
+      // passo risolto. Con più domande sullo stesso segmento la tastiera
+      // passa a quella ancora aperta. La chiave è l'id dell'approvazione, non
+      // la capability: due `sys.shell` su comandi diversi sono due domande, e
+      // risolverne una non deve toccare la tastiera o il passo dell'altra
+      // (#745).
+      const voce = pendingAsks.findIndex((p) => p.approvalId === ask.approvalId);
+      if (voce !== -1) {
+        const { seg } = pendingAsks[voce]!;
+        pendingAsks.splice(voce, 1);
         if (seg.messageId !== null) {
-          void api.editMessageReplyMarkup(chatId, seg.messageId).catch((error: unknown) => {
-            log(`telegram: tastiera non rimossa — ${error instanceof Error ? error.message : String(error)}`);
-          });
+          const ultima = [...pendingAsks].reverse().find((p) => p.seg === seg);
+          void api
+            .editMessageReplyMarkup(chatId, seg.messageId, ultima === undefined ? [] : askKeyboard(ultima.capability, ultima.approvalId))
+            .catch((error: unknown) => {
+              log(`telegram: tastiera non rimossa — ${error instanceof Error ? error.message : String(error)}`);
+            });
         }
       }
-      // Dall'ultimo segmento al primo, e per **capability**: con due domande
-      // diverse in attesa, il verdetto deve rientrare nel passo che lo aveva
-      // chiesto, non nell'ultimo `waiting` incontrato (review 2026-09-29).
       for (let i = segments.length - 1; i >= 0; i--) {
         const seg = segments[i]!;
-        const step = [...seg.steps].reverse().find((s) => s.state === 'waiting' && s.capability === capability);
+        const step = [...seg.steps].reverse().find((s) => s.state === 'waiting' && s.approvalId === ask.approvalId);
         if (step === undefined) continue;
         step.state = allowed ? 'done' : 'error';
         // Il contenuto della domanda (prompt, descrizione, comando) **resta**
         // nel passo: il Processo è dove la domanda si ripiega, e sostituirla
         // con la sola parola «consentito» perderebbe l'unica traccia visibile
         // di cosa è stato approvato.
-        const resolved = `${capability}: ${allowed ? 'consentito' : 'rifiutato'}`;
+        const resolved = `${ask.capability}: ${allowed ? 'consentito' : 'rifiutato'}`;
         step.line = escapeHtml(`${step.plain}\n${resolved}`);
         step.plain = `${step.plain}\n${resolved}`;
         scheduleSoon();
@@ -1084,18 +1093,32 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     async ask({ request, approvalId }) {
       if (stopped || disabled) return false;
       let seg = current();
-      const already = [...seg.steps].reverse().find((s) => s.state === 'waiting' && s.capability === request.capability);
-      if (already === undefined) {
-        addStep({ line: askHtml(request), plain: askPlain(request), state: 'waiting', startedAt: now(), capability: request.capability });
+      let esistente: { seg: Segment; step: Step } | undefined;
+      for (let i = segments.length - 1; i >= 0 && esistente === undefined; i--) {
+        const s = segments[i]!;
+        const step = [...s.steps].reverse().find((x) => x.state === 'waiting' && x.approvalId === approvalId);
+        if (step !== undefined) esistente = { seg: s, step };
+      }
+      if (esistente === undefined) {
+        addStep({ line: askHtml(request), plain: askPlain(request), state: 'waiting', startedAt: now(), capability: request.capability, approvalId });
         // `addStep` può aver ruotato il segmento (overflow): la domanda vive
         // dove è stata scritta davvero.
         seg = current();
+      } else {
+        seg = esistente.seg;
       }
       // La tastiera non vive su un'anteprima effimera: da qui in poi il turno
       // ha il suo messaggio vero, e la risposta che si forma lo edita.
       messaggioDelTurno = true;
       abbandonaDraft();
-      pendingAsk = { capability: request.capability, approvalId, seg };
+      // Una voce per **approvazione**: un re-ask della stessa domanda (stesso
+      // id, riusato dallo store) riusa la voce e la sposta in coda; una
+      // seconda domanda della stessa capability su un'altra risorsa è
+      // un'altra voce, con la sua riga e la sua tastiera (#745).
+      const voce = pendingAsks.findIndex((p) => p.approvalId === approvalId);
+      const pending = { capability: request.capability, approvalId, seg };
+      if (voce !== -1) pendingAsks.splice(voce, 1);
+      pendingAsks.push(pending);
       // Serializzata col writer, e **dopo** una prima pittura in volo: in un
       // gruppo/topic il primo tool può aver già avviato la sua `sendMessage`
       // (`trySyncFirstPaint`), e senza aspettarla questa domanda ne manderebbe
@@ -1107,7 +1130,8 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       });
       if (disabled || seg.messageId === null) {
         // Nessun messaggio vivo: il chiamante ripiega sul messaggio autonomo.
-        pendingAsk = null;
+        const i = pendingAsks.indexOf(pending);
+        if (i !== -1) pendingAsks.splice(i, 1);
         return false;
       }
       // La tastiera si (ri)attacca quando nessun edit è partito — testo
@@ -1120,7 +1144,8 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         } catch (error) {
           if (!nonModificato(error)) {
             log(`telegram: tastiera della domanda non attaccata — ${error instanceof Error ? error.message : String(error)}`);
-            pendingAsk = null;
+            const i = pendingAsks.indexOf(pending);
+            if (i !== -1) pendingAsks.splice(i, 1);
             return false;
           }
         }
@@ -1215,14 +1240,14 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     async stop() {
       if (stopped) return;
       stopped = true;
-      // Un turno che finisce con una domanda ancora in attesa non deve
-      // lasciare pulsanti vivi su una richiesta che nessuno deciderà più.
-      if (pendingAsk !== null) {
-        const { seg } = pendingAsk;
-        const messageId = seg.messageId;
-        pendingAsk = null;
-        if (messageId !== null) {
-          void api.editMessageReplyMarkup(chatId, messageId).catch((error: unknown) => {
+      // Un turno che finisce con domande ancora in attesa non deve lasciare
+      // pulsanti vivi su richieste che nessuno deciderà più.
+      if (pendingAsks.length > 0) {
+        const conTastiera = new Set(pendingAsks.map((p) => p.seg));
+        pendingAsks.length = 0;
+        for (const seg of conTastiera) {
+          if (seg.messageId === null) continue;
+          void api.editMessageReplyMarkup(chatId, seg.messageId).catch((error: unknown) => {
             log(`telegram: tastiera non rimossa — ${error instanceof Error ? error.message : String(error)}`);
           });
         }
