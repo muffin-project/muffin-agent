@@ -200,8 +200,15 @@ sandbox_report() {
     say "sandbox: no verified Muffin-owned bubblewrap to attach the profile to — shell and job execution stay disabled."
     return 0
   fi
+  # AppArmor attaches by the pathname the kernel executes, and the kernel
+  # resolves the tool-bin symlink first: the profile must name the realpath.
+  sandbox_owned_real=$(readlink -f "$sandbox_owned" 2>/dev/null || true)
+  if [ -z "$sandbox_owned_real" ]; then
+    say "sandbox: could not resolve the Muffin-owned bubblewrap path — shell and job execution stay disabled."
+    return 0
+  fi
   sandbox_rendered=$(mktemp)
-  if ! sed "s|<BWRAP_BINARY>|$sandbox_owned|" "$sandbox_profile" >"$sandbox_rendered" ||
+  if ! sed "s|<BWRAP_BINARY>|$sandbox_owned_real|" "$sandbox_profile" >"$sandbox_rendered" ||
     grep -q '<BWRAP_BINARY>' "$sandbox_rendered"; then
     rm -f "$sandbox_rendered"
     say "sandbox: could not render the packaged AppArmor profile — shell and job execution stay disabled."
