@@ -14,6 +14,13 @@
 # installed binary reports exactly the pinned upstream version.
 set -euo pipefail
 
+# Bubblewrap is the Linux containment primitive; macOS uses Seatbelt. Exit 3
+# means "not applicable here", so a caller on Darwin can fail open on purpose.
+if [ "$(uname -s)" != Linux ]; then
+  echo 'bubblewrap.sh: bubblewrap is Linux-only (macOS uses seatbelt)' >&2
+  exit 3
+fi
+
 readonly BWRAP_VERSION='0.13.0'
 readonly BWRAP_SHA256='4734237473c0e5d695e4e9034a34e43b2dbf5164655bd13fa59ae376b2b7a765'
 readonly BWRAP_ARCHIVE="bubblewrap-${BWRAP_VERSION}.tar.xz"

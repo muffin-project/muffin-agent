@@ -87,6 +87,54 @@ say() { printf '%s\n' "$*" >&2; }
 # ---------------------------------------------------------------------------
 sandbox_direct() { "$@"; }
 
+# ---------------------------------------------------------------------------
+# The Muffin-owned bubblewrap.
+#
+# One versioned destination — `$MUFFIN_PREFIX/bwrap/<version>/bin/bwrap` — built
+# from the upstream release through the single authority
+# (`scripts/install/bubblewrap.sh`: version + sha256 + build + verify). Never a
+# system replacement: `/usr/bin/bwrap` is left alone and only the runtime/tool
+# PATH prefers the owned one, through the `tool-bin` pointer the unit, the
+# launcher and the root path all read.
+#
+# Idempotent: a verified binary at the versioned path is reused. If the build
+# deps or the verification are missing, the install continues and shell/job
+# execution stays fail-closed — the sandbox step reports the capability.
+# ---------------------------------------------------------------------------
+provision_owned_bubblewrap() {
+  owned_authority="$SRC/scripts/install/bubblewrap.sh"
+  if ! owned_version=$(bash "$owned_authority" version 2>/dev/null); then
+    say "bubblewrap: not provisioned here (Linux-only primitive; macOS uses seatbelt)."
+    return 0
+  fi
+  owned_bin="$MUFFIN_PREFIX/bwrap/$owned_version/bin/bwrap"
+  if bash "$owned_authority" verify "$owned_bin" >/dev/null 2>&1; then
+    say "bubblewrap: Muffin-owned $owned_version already verified at $owned_bin"
+  else
+    say "bubblewrap: building the Muffin-owned $owned_version from the pinned upstream release…"
+    if ! bash "$owned_authority" build "$MUFFIN_PREFIX/bwrap/$owned_version" / >/dev/null; then
+      say "bubblewrap: the Muffin-owned build failed — shell and job execution stay fail-closed."
+      say "            remedy: install the build dependencies (build-essential meson ninja-build pkg-config libcap-dev) and re-run."
+      return 0
+    fi
+  fi
+  owned_link="$MUFFIN_PREFIX/tool-bin"
+  rm -f "$owned_link"
+  ln -s "bwrap/$owned_version/bin" "$owned_link" || {
+    say "bubblewrap: could not point $owned_link at the verified binary; shell and job execution stay fail-closed."
+    return 0
+  }
+  if [ "$("$owned_link/bwrap" --version 2>/dev/null || true)" != "bubblewrap $owned_version" ]; then
+    say "bubblewrap: the owned binary did not verify at $owned_link; shell and job execution stay fail-closed."
+    return 0
+  fi
+  MUFFIN_TOOL_BIN="$owned_link"
+  export MUFFIN_TOOL_BIN
+  PATH="$MUFFIN_TOOL_BIN:$PATH"
+  export PATH
+  say "bubblewrap: Muffin-owned $owned_version verified and preferred ($owned_link)"
+}
+
 sandbox_report() {
   # The root path runs this once, as root over the service account, after the
   # delegated install: the delegated step is told to stay quiet so the same
@@ -349,8 +397,10 @@ root_account_run() {
 }
 
 root_service_run() {
+  root_service_path="$SERVICE_PREFIX/node/bin"
+  if [ -x "$SERVICE_PREFIX/tool-bin/bwrap" ]; then root_service_path="$SERVICE_PREFIX/tool-bin:$root_service_path"; fi
   runuser -u muffin -- env -i HOME="$SERVICE_HOME" USER=muffin LOGNAME=muffin SHELL=/bin/sh \
-    PATH="$SERVICE_PREFIX/node/bin:/usr/local/bin:/usr/bin:/bin" XDG_RUNTIME_DIR="$SERVICE_RUNTIME" \
+    PATH="$root_service_path:/usr/local/bin:/usr/bin:/bin" XDG_RUNTIME_DIR="$SERVICE_RUNTIME" \
     DBUS_SESSION_BUS_ADDRESS="unix:path=$SERVICE_RUNTIME/bus" "$@"
 }
 
@@ -564,10 +614,17 @@ USAGE
 
   ROOT_PACKAGES=
   if ! dpkg-query -W -f='${Status}' ca-certificates 2>/dev/null | grep -q 'install ok installed'; then ROOT_PACKAGES="$ROOT_PACKAGES ca-certificates"; fi
-  for spec in 'git:git' 'curl:curl' 'tar:tar' 'xz-utils:xz' 'bubblewrap:bwrap' 'socat:socat' 'ripgrep:rg'; do
+  for spec in 'git:git' 'curl:curl' 'tar:tar' 'xz-utils:xz' 'bubblewrap:bwrap' 'socat:socat' 'ripgrep:rg' \
+    'build-essential:gcc' 'meson:meson' 'ninja-build:ninja' 'pkg-config:pkg-config'; do
     package=${spec%%:*}
     binary=${spec#*:}
     command -v "$binary" >/dev/null 2>&1 || ROOT_PACKAGES="$ROOT_PACKAGES $package"
+  done
+  # The headers the Muffin-owned bubblewrap build needs, which ship no binary
+  # of their own to look for.
+  for dev in libcap-dev linux-libc-dev; do
+    dpkg-query -W -f='${Status}' "$dev" 2>/dev/null | grep -q 'install ok installed' ||
+      ROOT_PACKAGES="$ROOT_PACKAGES $dev"
   done
   if [ -n "${MUFFIN_API_KEY_FILE:-}" ] && ! command -v python3 >/dev/null 2>&1; then
     ROOT_PACKAGES="$ROOT_PACKAGES python3-minimal"
@@ -627,15 +684,17 @@ USAGE
   set +e
   if [ -n "$KEY_COPY" ]; then
     runuser -u muffin -- env -i HOME="$SERVICE_HOME" USER=muffin LOGNAME=muffin SHELL=/bin/sh \
-      PATH="$SERVICE_PREFIX/node/bin:/usr/local/bin:/usr/bin:/bin" XDG_RUNTIME_DIR="$SERVICE_RUNTIME" \
+      PATH="$SERVICE_PREFIX/tool-bin:$SERVICE_PREFIX/node/bin:/usr/local/bin:/usr/bin:/bin" XDG_RUNTIME_DIR="$SERVICE_RUNTIME" \
       DBUS_SESSION_BUS_ADDRESS="unix:path=$SERVICE_RUNTIME/bus" MUFFIN_PREFIX="$SERVICE_PREFIX" MUFFIN_BINDIR="$SERVICE_BINDIR" \
+      MUFFIN_TOOL_BIN="$SERVICE_PREFIX/tool-bin" \
       MUFFIN_CMD="$ROOT_CMD" MUFFIN_NO_APT=1 MUFFIN_REPO="${MUFFIN_REPO:-https://github.com/muffin-project/muffin-agent.git}" \
       MUFFIN_CHANNEL="${MUFFIN_CHANNEL:-main}" MUFFIN_REF="${MUFFIN_REF:-}" MUFFIN_NODE_DIST_BASE="${MUFFIN_NODE_DIST_BASE:-}" \
       MUFFIN_NO_GATEWAY="${MUFFIN_NO_GATEWAY:-}" MUFFIN_SANDBOX_REPORT=0 MUFFIN_API_KEY_FILE="$KEY_COPY" sh "$ROOT_STAGE/install.sh" "$@" <&0
   else
     runuser -u muffin -- env -i HOME="$SERVICE_HOME" USER=muffin LOGNAME=muffin SHELL=/bin/sh \
-      PATH="$SERVICE_PREFIX/node/bin:/usr/local/bin:/usr/bin:/bin" XDG_RUNTIME_DIR="$SERVICE_RUNTIME" \
+      PATH="$SERVICE_PREFIX/tool-bin:$SERVICE_PREFIX/node/bin:/usr/local/bin:/usr/bin:/bin" XDG_RUNTIME_DIR="$SERVICE_RUNTIME" \
       DBUS_SESSION_BUS_ADDRESS="unix:path=$SERVICE_RUNTIME/bus" MUFFIN_PREFIX="$SERVICE_PREFIX" MUFFIN_BINDIR="$SERVICE_BINDIR" \
+      MUFFIN_TOOL_BIN="$SERVICE_PREFIX/tool-bin" \
       MUFFIN_CMD="$ROOT_CMD" MUFFIN_NO_APT=1 MUFFIN_REPO="${MUFFIN_REPO:-https://github.com/muffin-project/muffin-agent.git}" \
       MUFFIN_CHANNEL="${MUFFIN_CHANNEL:-main}" MUFFIN_REF="${MUFFIN_REF:-}" MUFFIN_NODE_DIST_BASE="${MUFFIN_NODE_DIST_BASE:-}" \
       MUFFIN_NO_GATEWAY="${MUFFIN_NO_GATEWAY:-}" MUFFIN_SANDBOX_REPORT=0 sh "$ROOT_STAGE/install.sh" "$@" <&0
@@ -1070,6 +1129,8 @@ fi
 [ -f "$BIN" ] || die "build did not produce $BIN"
 chmod +x "$BIN"
 
+provision_owned_bubblewrap
+
 # ---------------------------------------------------------------------------
 # 5. Choose a command name that does not shadow a foreign `muffin`.
 #    Detection is by identity, not by name or version string: the Cinnamon WM
@@ -1137,6 +1198,14 @@ PERSIST=""
 case ":$PATH:" in *":$BINDIR:"*) : ;; *) PERSIST="$BINDIR" ;; esac
 if [ -x "$NODE_DIR/bin/node" ] && [ "$(command -v node 2>/dev/null)" = "$NODE_DIR/bin/node" ]; then
   PERSIST="$PERSIST${PERSIST:+:}$NODE_DIR/bin"
+fi
+# The verified Muffin-owned bubblewrap comes first for every reader that goes
+# through this launcher: the CLI, `muffin doctor`, acceptance and updates.
+if [ -x "$MUFFIN_PREFIX/tool-bin/bwrap" ]; then
+  PERSIST="$MUFFIN_PREFIX/tool-bin${PERSIST:+:$PERSIST}"
+  PATH="$MUFFIN_PREFIX/tool-bin:$PATH"
+  MUFFIN_TOOL_BIN="$MUFFIN_PREFIX/tool-bin"
+  export MUFFIN_TOOL_BIN
 fi
 PATH="$BINDIR:$PATH"
 export PATH

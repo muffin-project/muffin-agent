@@ -123,6 +123,16 @@ export type UnitOptions = {
    */
   identity?: { user: string; uid: number } | undefined;
   /**
+   * The Muffin-owned tool bin directory (verified bubblewrap), resolved once by
+   * the installer and handed to every reader — the unit, the launcher, the
+   * root-managed execution — instead of each rebuilding a PATH string. It sits
+   * immediately after the interpreter, so it wins over any system copy.
+   *
+   * The caller looks it up (`MUFFIN_TOOL_BIN`, written by `install.sh` beside
+   * the launcher PATH) and passes it explicitly; the planner stays pure.
+   */
+  toolBinDir?: string;
+  /**
    * The directory of the Node interpreter this install is running under —
    * `dirname(process.execPath)`. The caller probes, the planner stays pure.
    *
@@ -221,10 +231,21 @@ export function resolveInterpreterDir(execPath: string, probes: InterpreterProbe
 /** The system directories a service still needs, after the interpreter's own. */
 const SYSTEM_PATH = ['/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'];
 
-/** `PATH` for the unit, or `null` when the caller did not say where Node is. */
-function unitPath(interpreterDir: string | undefined): string | null {
+/**
+ * `PATH` for the unit, or `null` when the caller did not say where Node is.
+ *
+ * The Muffin tool bin dir, when the installer provisioned one, comes right
+ * after the interpreter and before every system directory: the verified
+ * bubblewrap is the one the sandbox probe and the runtime must select.
+ */
+function unitPath(interpreterDir: string | undefined, toolBinDir?: string): string | null {
   if (interpreterDir === undefined || interpreterDir === '') return null;
-  return [interpreterDir, ...SYSTEM_PATH.filter((d) => d !== interpreterDir)].join(':');
+  const owned = toolBinDir !== undefined && toolBinDir !== '' ? [toolBinDir] : [];
+  return [
+    interpreterDir,
+    ...owned,
+    ...SYSTEM_PATH.filter((d) => d !== interpreterDir && d !== toolBinDir),
+  ].join(':');
 }
 
 export function planUnit(options: UnitOptions): UnitPlan {
@@ -238,6 +259,7 @@ function systemdPlan({
   homeDir,
   systemdNotify = true,
   interpreterDir,
+  toolBinDir,
   identity,
 }: UnitOptions): UnitPlan {
   const dir = join(configHome ?? join(homeDir ?? homedir(), '.config'), 'systemd', 'user');
@@ -276,8 +298,8 @@ ExecStart=${exec.join(' ')}
 # sposta fa fallire systemd allo CHDIR prima ancora che il runtime carichi, e
 # Restart=always va in crash-loop su una directory morta (ADR-0035).
 WorkingDirectory=${home}
-Environment=MUFFIN_HOME=${home}${unitPath(interpreterDir) === null ? '' : `
-Environment=PATH=${unitPath(interpreterDir)}`}
+Environment=MUFFIN_HOME=${home}${unitPath(interpreterDir, toolBinDir) === null ? '' : `
+Environment=PATH=${unitPath(interpreterDir, toolBinDir)}`}
 
 Restart=always
 RestartSec=${RESTART_SEC}
@@ -360,7 +382,7 @@ WantedBy=default.target
   };
 }
 
-function launchdPlan({ home, exec, homeDir, interpreterDir, identity }: UnitOptions): UnitPlan {
+function launchdPlan({ home, exec, homeDir, interpreterDir, toolBinDir, identity }: UnitOptions): UnitPlan {
   const path = join(homeDir ?? homedir(), 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`);
   const args = exec.map((a) => `      <string>${xml(a)}</string>`).join('\n');
   const text = `<?xml version="1.0" encoding="UTF-8"?>
@@ -379,11 +401,11 @@ ${args}
   <dict>
     <key>MUFFIN_HOME</key>
     <string>${xml(home)}</string>${
-      unitPath(interpreterDir) === null
+      unitPath(interpreterDir, toolBinDir) === null
         ? ''
         : `
     <key>PATH</key>
-    <string>${xml(unitPath(interpreterDir) as string)}</string>`
+    <string>${xml(unitPath(interpreterDir, toolBinDir) as string)}</string>`
     }
   </dict>
   <key>RunAtLoad</key>
