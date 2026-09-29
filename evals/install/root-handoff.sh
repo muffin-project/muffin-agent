@@ -143,6 +143,7 @@ chmod 0755 "$LAB/source/compile-fixture.sh"
 cat >"$LAB/source/main-fixture.js" <<'EOF'
 #!/usr/bin/env node
 const { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } = require('node:fs');
+const { execFileSync } = require('node:child_process');
 
 const events = '__EVENTS_PATH__';
 const log = (line) => appendFileSync(events, line + '\n');
@@ -176,9 +177,11 @@ switch (command) {
     writeFileSync(process.env.HOME + '/.config/systemd/user/muffin-gateway.service', '[Unit]\nDescription=Muffin eval\n');
     log('gateway-install uid=' + process.getuid());
     break;
-  case 'doctor':
-    log('doctor uid=' + process.getuid());
+  case 'doctor': {
+    const bwrap = execFileSync('/bin/sh', ['-c', 'command -v bwrap'], { encoding: 'utf8' }).trim();
+    log('doctor uid=' + process.getuid() + ' bwrap=' + bwrap + ' PATH=' + process.env.PATH);
     break;
+  }
   default:
     console.error('unexpected CLI fixture: ' + args.join(' '));
     process.exit(26);
