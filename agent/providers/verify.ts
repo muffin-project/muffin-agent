@@ -261,6 +261,19 @@ export async function verifyInferenceRoute(opts: VerifyInferenceOptions = {}): P
         remedy: 'pick a route that returns structurally valid tool calls, not just prose',
       });
     }
+    // A provider that ends at its output cap has not completed the probe.
+    // Reasoning-capable models can spend this bounded allowance before
+    // emitting the required tool call; treating that partial response as a
+    // completed text-only answer would falsely declare the route incompatible.
+    if (result.finishReason === 'length') {
+      return finish({
+        ...base,
+        status: 'provider_error',
+        capability: { completion: 'fail', toolCall: 'fail' },
+        diagnostic: `route reached the probe output budget before returning the required ${PROBE_TOOL_NAME} tool call; compatibility is unverified`,
+        remedy: 'retry with a model or reasoning profile that can return the required tool call within the bounded probe output',
+      });
+    }
     return finish({
       ...base,
       status: 'incompatible',

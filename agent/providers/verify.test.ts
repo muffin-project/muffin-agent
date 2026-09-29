@@ -209,6 +209,27 @@ describe('verify · C+D: text-only or tool-rejecting routes => incompatible', ()
     expect(result.capability).toEqual({ completion: 'pass', toolCall: 'fail' });
   });
 
+  it('keeps a budget-truncated response inconclusive instead of declaring incompatibility', async () => {
+    const bodies: unknown[] = [];
+    const provider = new OpenAICompatProvider('sk-test', 'https://local.test/v1', {}, {
+      fetch: openaiFetch(openaiCompletion({ text: 'reasoning prefix', finish: 'length' }), bodies),
+    });
+
+    const result = await verifyInferenceRoute({
+      provider,
+      providerKind: 'openai-compat',
+      model: 'local-reasoning-model',
+      nonce: NONCE,
+      timeoutMs: 5_000,
+    });
+
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({ max_tokens: VERIFY_MAX_OUTPUT_TOKENS, tool_choice: 'required' });
+    expect(result.status).toBe('provider_error');
+    expect(result.capability).toEqual({ completion: 'fail', toolCall: 'fail' });
+    expect(result.diagnostic).toContain('output budget');
+  });
+
   it('C: a wrong tool name is incompatible even when a tool call exists', async () => {
     const bodies: unknown[] = [];
     const provider = new OpenAICompatProvider('sk-test', 'https://openrouter.ai/api/v1', {}, {
