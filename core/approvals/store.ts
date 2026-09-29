@@ -1,5 +1,6 @@
 import type DatabaseCtor from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
+import { ensureColumn } from '../lock/durable.js';
 import type { TrustTier } from '../policy/types.js';
 
 /**
@@ -133,12 +134,11 @@ export class ApprovalStore {
     db.exec(SCHEMA);
     // `CREATE TABLE IF NOT EXISTS` non tocca una tabella che esiste già: su un
     // database installato prima di questa colonna lo schema sopra è un no-op e
-    // ogni SELECT che la nomina fallirebbe. L'ALTER è idempotente perché la
-    // condizione è la presenza della colonna, non un numero di versione.
-    const colonne = db.prepare(`PRAGMA table_info(approvals)`).all() as { name: string }[];
-    if (!colonne.some((c) => c.name === 'withdrawn_at')) {
-      db.exec(`ALTER TABLE approvals ADD COLUMN withdrawn_at TEXT`);
-    }
+    // ogni SELECT che la nomina fallirebbe. `ensureColumn` è lo stesso meccanismo
+    // di ogni altro store che ha aggiunto una colonna — con la sua gestione
+    // della corsa fra due connessioni (`duplicate column name`), che una copia
+    // locale di PRAGMA+ALTER non avrebbe.
+    ensureColumn(db, 'approvals', 'withdrawn_at', 'withdrawn_at TEXT');
     this.askStmt = db.prepare(
       `INSERT INTO approvals (id, turn_id, capability, resource, prompt, taint, asked_at)
        VALUES (@id, @turnId, @capability, @resource, @prompt, @taint, @askedAt)`,
