@@ -120,6 +120,12 @@ type Step = {
    * (`ask()`), e ritrovare il passo giusto quando l'owner risponde.
    */
   capability?: string;
+  /**
+   * L'approvazione che questa attesa riguarda, quando è una domanda. La
+   * chiave è l'id, non la capability: due `sys.shell` su comandi diversi sono
+   * due domande, con due passi e due tastiere (#745).
+   */
+  approvalId?: string;
 };
 
 /** The step's one text: the phrase and the tool's subject, never shortened. */
@@ -173,7 +179,7 @@ export type Transcript = {
    * nothing, which is the ordinary case for every step in every OTHER turn
    * that never asked.
    */
-  resolveAsk(capability: string, allowed: boolean): void;
+  resolveAsk(ask: { approvalId: string; capability: string }, allowed: boolean): void;
   /**
    * La domanda di approvazione, **dentro il messaggio del turno**.
    *
@@ -1045,41 +1051,38 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       else ensureDraftStatus();
     },
 
-    resolveAsk(capability, allowed) {
+    resolveAsk(ask, allowed) {
       if (stopped || disabled) return;
-      // La tastiera appartiene alla trascrizione finché la domanda è in
-      // attesa: si toglie per costruzione, e il messaggio — che è il
-      // messaggio del turno — resta con il passo risolto. Con più domande
-      // sullo stesso segmento la tastiera passa a quella ancora aperta: senza,
-      // la prima resterebbe visibile ma muta (#745).
-      const toccati = new Set<Segment>();
-      for (let i = pendingAsks.length - 1; i >= 0; i--) {
-        if (pendingAsks[i]!.capability !== capability) continue;
-        toccati.add(pendingAsks[i]!.seg);
-        pendingAsks.splice(i, 1);
+      // La tastiera appartiene alla trascrizione finché **quella** domanda è
+      // in attesa: si toglie per costruzione, e il messaggio resta con il
+      // passo risolto. Con più domande sullo stesso segmento la tastiera
+      // passa a quella ancora aperta. La chiave è l'id dell'approvazione, non
+      // la capability: due `sys.shell` su comandi diversi sono due domande, e
+      // risolverne una non deve toccare la tastiera o il passo dell'altra
+      // (#745).
+      const voce = pendingAsks.findIndex((p) => p.approvalId === ask.approvalId);
+      if (voce !== -1) {
+        const { seg } = pendingAsks[voce]!;
+        pendingAsks.splice(voce, 1);
+        if (seg.messageId !== null) {
+          const ultima = [...pendingAsks].reverse().find((p) => p.seg === seg);
+          void api
+            .editMessageReplyMarkup(chatId, seg.messageId, ultima === undefined ? [] : askKeyboard(ultima.capability, ultima.approvalId))
+            .catch((error: unknown) => {
+              log(`telegram: tastiera non rimossa — ${error instanceof Error ? error.message : String(error)}`);
+            });
+        }
       }
-      for (const seg of toccati) {
-        if (seg.messageId === null) continue;
-        const ultima = [...pendingAsks].reverse().find((p) => p.seg === seg);
-        void api
-          .editMessageReplyMarkup(chatId, seg.messageId, ultima === undefined ? [] : askKeyboard(ultima.capability, ultima.approvalId))
-          .catch((error: unknown) => {
-            log(`telegram: tastiera non rimossa — ${error instanceof Error ? error.message : String(error)}`);
-          });
-      }
-      // Dall'ultimo segmento al primo, e per **capability**: con due domande
-      // diverse in attesa, il verdetto deve rientrare nel passo che lo aveva
-      // chiesto, non nell'ultimo `waiting` incontrato (review 2026-09-29).
       for (let i = segments.length - 1; i >= 0; i--) {
         const seg = segments[i]!;
-        const step = [...seg.steps].reverse().find((s) => s.state === 'waiting' && s.capability === capability);
+        const step = [...seg.steps].reverse().find((s) => s.state === 'waiting' && s.approvalId === ask.approvalId);
         if (step === undefined) continue;
         step.state = allowed ? 'done' : 'error';
         // Il contenuto della domanda (prompt, descrizione, comando) **resta**
         // nel passo: il Processo è dove la domanda si ripiega, e sostituirla
         // con la sola parola «consentito» perderebbe l'unica traccia visibile
         // di cosa è stato approvato.
-        const resolved = `${capability}: ${allowed ? 'consentito' : 'rifiutato'}`;
+        const resolved = `${ask.capability}: ${allowed ? 'consentito' : 'rifiutato'}`;
         step.line = escapeHtml(`${step.plain}\n${resolved}`);
         step.plain = `${step.plain}\n${resolved}`;
         scheduleSoon();
@@ -1090,23 +1093,32 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     async ask({ request, approvalId }) {
       if (stopped || disabled) return false;
       let seg = current();
-      const already = [...seg.steps].reverse().find((s) => s.state === 'waiting' && s.capability === request.capability);
-      if (already === undefined) {
-        addStep({ line: askHtml(request), plain: askPlain(request), state: 'waiting', startedAt: now(), capability: request.capability });
+      let esistente: { seg: Segment; step: Step } | undefined;
+      for (let i = segments.length - 1; i >= 0 && esistente === undefined; i--) {
+        const s = segments[i]!;
+        const step = [...s.steps].reverse().find((x) => x.state === 'waiting' && x.approvalId === approvalId);
+        if (step !== undefined) esistente = { seg: s, step };
+      }
+      if (esistente === undefined) {
+        addStep({ line: askHtml(request), plain: askPlain(request), state: 'waiting', startedAt: now(), capability: request.capability, approvalId });
         // `addStep` può aver ruotato il segmento (overflow): la domanda vive
         // dove è stata scritta davvero.
         seg = current();
+      } else {
+        seg = esistente.seg;
       }
       // La tastiera non vive su un'anteprima effimera: da qui in poi il turno
       // ha il suo messaggio vero, e la risposta che si forma lo edita.
       messaggioDelTurno = true;
       abbandonaDraft();
-      // Una voce per capability: un re-ask sostituisce l'id della tastiera
-      // (stessa domanda, riga nuova), non ne accoda una seconda.
-      const voce = pendingAsks.findIndex((p) => p.capability === request.capability);
+      // Una voce per **approvazione**: un re-ask della stessa domanda (stesso
+      // id, riusato dallo store) riusa la voce e la sposta in coda; una
+      // seconda domanda della stessa capability su un'altra risorsa è
+      // un'altra voce, con la sua riga e la sua tastiera (#745).
+      const voce = pendingAsks.findIndex((p) => p.approvalId === approvalId);
       const pending = { capability: request.capability, approvalId, seg };
-      if (voce === -1) pendingAsks.push(pending);
-      else pendingAsks[voce] = pending;
+      if (voce !== -1) pendingAsks.splice(voce, 1);
+      pendingAsks.push(pending);
       // Serializzata col writer, e **dopo** una prima pittura in volo: in un
       // gruppo/topic il primo tool può aver già avviato la sua `sendMessage`
       // (`trySyncFirstPaint`), e senza aspettarla questa domanda ne manderebbe

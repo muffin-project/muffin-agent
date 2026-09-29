@@ -972,7 +972,7 @@ describe('la domanda di approvazione vive nel messaggio del turno', () => {
     const t = startTranscript(api, 1, { negotiation: DM });
     await t.ask({ request, approvalId: 'aabb' });
 
-    t.resolveAsk('sys.shell.write', true);
+    t.resolveAsk({ approvalId: 'aabb', capability: 'sys.shell.write' }, true);
     await vi.advanceTimersByTimeAsync(DM.editEveryMs);
 
     const tolt = calls.find((c) => c.method === 'editMessageReplyMarkup');
@@ -990,7 +990,7 @@ describe('la domanda di approvazione vive nel messaggio del turno', () => {
     const t = startTranscript(api, 1, { negotiation: DM });
     await t.ask({ request, approvalId: 'aabb' });
     const id = calls.find((c) => c.method === 'sendMessage')!.messageId;
-    t.resolveAsk('sys.shell.write', true);
+    t.resolveAsk({ approvalId: 'aabb', capability: 'sys.shell.write' }, true);
     await vi.advanceTimersByTimeAsync(DM.editEveryMs);
 
     t.live('sto scrivendo la risposta');
@@ -1048,22 +1048,23 @@ describe('la domanda non apre una seconda bolla, e non resta mai muta', () => {
     await t.stop();
   });
 
-  it('un re-ask di una capability ancora in attesa riattacca la tastiera', async () => {
+  it('un re-ask della stessa domanda riattacca la tastiera', async () => {
     const { api, calls } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
     const requestB: ApprovalRequest = { ...request, capability: 'sys.http', prompt: 'non si torna indietro: chiama un servizio di terzi' };
 
     await t.ask({ request, approvalId: 'aabb' });
     await t.ask({ request: requestB, approvalId: 'bbcc' });
-    t.resolveAsk('sys.http', true); // risolve la seconda
+    t.resolveAsk({ approvalId: 'bbcc', capability: 'sys.http' }, true); // risolve la seconda
     await vi.advanceTimersByTimeAsync(DM.editEveryMs);
 
-    // Il modello ri-chiede la prima, ancora in attesa: stesso passo, testo identico.
-    await expect(t.ask({ request, approvalId: 'ccdd' })).resolves.toBe(true);
+    // Il modello ri-chiede la prima, ancora in attesa: stesso id (lo store
+    // riusa la riga aperta), stesso passo, testo identico.
+    await expect(t.ask({ request, approvalId: 'aabb' })).resolves.toBe(true);
 
     const ultima = calls.filter((c) => c.method === 'editMessageReplyMarkup').at(-1)!;
     const tastiera = ultima.keyboard as { callback_data: string }[][];
-    expect(tastiera.flat().map((b) => b.callback_data)).toEqual(['ok:ccdd', 'no:ccdd']);
+    expect(tastiera.flat().map((b) => b.callback_data)).toEqual(['ok:aabb', 'no:aabb']);
     await t.stop();
   });
 
@@ -1074,7 +1075,7 @@ describe('la domanda non apre una seconda bolla, e non resta mai muta', () => {
 
     await t.ask({ request, approvalId: 'aabb' });
     await t.ask({ request: requestB, approvalId: 'bbcc' });
-    t.resolveAsk('sys.shell.write', true);
+    t.resolveAsk({ approvalId: 'aabb', capability: 'sys.shell.write' }, true);
     await vi.advanceTimersByTimeAsync(GRUPPO.editEveryMs);
 
     const righe = t.handoff()?.process ?? [];
@@ -1125,28 +1126,82 @@ describe('#745 — due domande in attesa, due tastiere corrette', () => {
     expect(ultimaTastiera(calls).flat().map((b) => b.callback_data)).toEqual(['ok:bbbb', 'no:bbbb']);
 
     // Risolta la seconda: la tastiera passa alla prima, ancora aperta.
-    t.resolveAsk('sys.http', true);
+    t.resolveAsk({ approvalId: 'bbbb', capability: 'sys.http' }, true);
     await vi.advanceTimersByTimeAsync(DM.editEveryMs);
     expect(ultimaTastiera(calls).flat().map((b) => b.callback_data)).toEqual(['ok:aaaa', 'no:aaaa']);
 
     // Risolta anche la prima: nessuna domanda aperta, tastiera via.
-    t.resolveAsk('sys.shell.write', true);
+    t.resolveAsk({ approvalId: 'aaaa', capability: 'sys.shell.write' }, true);
     await vi.advanceTimersByTimeAsync(DM.editEveryMs);
     const rimozione = calls.filter((c) => c.method === 'editMessageReplyMarkup').at(-1)!;
     expect(rimozione.keyboard).toEqual([]);
     await t.stop();
   });
 
-  it('un re-ask della stessa capability sostituisce l’id della tastiera, non ne apre una seconda', async () => {
+  it('un re-ask della stessa domanda non apre una seconda voce', async () => {
     const { api, calls } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
 
     await t.ask({ request: requestA, approvalId: 'aaaa' });
-    await t.ask({ request: requestA, approvalId: 'cccc' });
+    await t.ask({ request: requestA, approvalId: 'aaaa' });
 
-    expect(ultimaTastiera(calls).flat().map((b) => b.callback_data)).toEqual(['ok:cccc', 'no:cccc']);
+    expect(ultimaTastiera(calls).flat().map((b) => b.callback_data)).toEqual(['ok:aaaa', 'no:aaaa']);
     // Una sola rimozione possibile: la domanda è una.
-    t.resolveAsk('sys.shell.write', true);
+    t.resolveAsk({ approvalId: 'aaaa', capability: 'sys.shell.write' }, true);
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    expect(calls.filter((c) => c.method === 'editMessageReplyMarkup').at(-1)!.keyboard).toEqual([]);
+    await t.stop();
+  });
+});
+
+/**
+ * #745 (review) — due domande della **stessa capability** su risorse diverse
+ * sono due domande.
+ *
+ * La chiave del passo e della voce in attesa era la capability: il secondo
+ * `sys.shell` riusava il passo del primo, la tastiera portava l'id della
+ * seconda domanda e il messaggio mostrava il comando della prima. Premendo
+ * Consenti si decideva un comando mai mostrato (D12) e il passo visibile
+ * registrava un consenso che non era il suo. La chiave è l'id
+ * dell'approvazione.
+ */
+describe('#745 review — stessa capability, risorse diverse', () => {
+  const requestA: ApprovalRequest = {
+    capability: 'sys.shell.write',
+    prompt: 'non si torna indietro: cambia questa macchina — sys.shell.write',
+    resource: 'command: echo uno',
+    taint: 0,
+  };
+  const requestB: ApprovalRequest = { ...requestA, resource: 'command: echo due' };
+  const ultimaTastiera = (calls: Call[]) =>
+    calls.filter((c) => c.keyboard !== undefined).at(-1)!.keyboard as { callback_data: string }[][];
+
+  it('due passi, due soggetti visibili, e ognuno risolve il suo', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+
+    await t.ask({ request: requestA, approvalId: 'aaaa' });
+    await t.ask({ request: requestB, approvalId: 'bbbb' });
+
+    const testo = calls
+      .filter((c) => c.method === 'sendMessage' || c.method === 'editMessageText')
+      .map((c) => c.text ?? '')
+      .join('\n');
+    expect(testo).toContain('echo uno');
+    expect(testo).toContain('echo due');
+    expect(ultimaTastiera(calls).flat().map((b) => b.callback_data)).toEqual(['ok:bbbb', 'no:bbbb']);
+
+    // Risolta la seconda: la tastiera passa alla prima, e il verdetto è sul
+    // passo della seconda — la prima resta `⏸` col suo comando.
+    t.resolveAsk({ approvalId: 'bbbb', capability: 'sys.shell.write' }, true);
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    expect(ultimaTastiera(calls).flat().map((b) => b.callback_data)).toEqual(['ok:aaaa', 'no:aaaa']);
+    const processo = (t.handoff()?.process ?? []).join('\n');
+    expect(processo).toMatch(/⏸[\s\S]*echo uno/);
+    expect(processo).toMatch(/✓[\s\S]*echo due[\s\S]*consentito/);
+
+    // Risolta anche la prima: tastiera via.
+    t.resolveAsk({ approvalId: 'aaaa', capability: 'sys.shell.write' }, true);
     await vi.advanceTimersByTimeAsync(DM.editEveryMs);
     expect(calls.filter((c) => c.method === 'editMessageReplyMarkup').at(-1)!.keyboard).toEqual([]);
     await t.stop();

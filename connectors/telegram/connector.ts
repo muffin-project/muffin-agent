@@ -61,7 +61,7 @@ type Arrivo = Arrival;
 
 /** Solo i due metodi che questo file usa: il connettore non possiede il registro. */
 type ApprovalDecide = (id: string, decision: 'allow' | 'deny', now: Date) => 'ok' | 'already' | 'unknown' | 'withdrawn';
-type ApprovalGet = (id: string) => { turnId: string; capability: string; resource: string | null } | null;
+type ApprovalGet = (id: string) => { id: string; turnId: string; capability: string; resource: string | null } | null;
 import { startPresence } from './presence.js';
 import { avvisoAllOwner, decidiInvito, SALUTO_NEL_GRUPPO, type Invito } from './invito.js';
 import { stanzaDi } from './negoziazione.js';
@@ -2647,12 +2647,13 @@ export class TelegramConnector {
     }
 
     // Il verdetto rientra nel passo che lo aveva chiesto. La ricerca è **per
-    // turno**: `transcriptInSospeso` è riempita quando la domanda viene presa
-    // (`approval`), alla sospensione e alla ripresa. Un ripiego per chat
-    // risolverebbe il passo di un altro turno con la stessa capability — una
-    // approvazione vecchia che decide la domanda nuova (#745).
+    // turno** e la chiave del passo è l'**id dell'approvazione**: un ripiego
+    // per chat risolverebbe il passo di un altro turno con la stessa
+    // capability, e una chiave per capability risolverebbe la domanda
+    // sbagliata quando due `sys.shell` su comandi diversi sono in attesa
+    // (#745).
     if (riga !== null) {
-      this.transcriptInSospeso.get(riga.turnId)?.resolveAsk(riga.capability, decisione === 'allow');
+      this.transcriptInSospeso.get(riga.turnId)?.resolveAsk({ approvalId: riga.id, capability: riga.capability }, decisione === 'allow');
     }
     if (riga !== null && this.deps.loop.turns.wake(riga.turnId, now)) {
       // Solo se la riga si è davvero mossa: svegliare la corsia per un turno
