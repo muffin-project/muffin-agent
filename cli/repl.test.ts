@@ -290,6 +290,15 @@ describe('formatProgressLine (B13) — in debug, i numeri restano quelli di semp
     ).toBe('· demo_boom fallito (3ms)');
   });
 
+  it('formats a model_retry event with the budget, the attempt and the declared wait', () => {
+    expect(
+      formatProgressLine({ type: 'model_retry', class: 'provider_empty', attempt: 2, max: 3, inMs: 4200 }, 'debug'),
+    ).toBe('· provider provider_empty tentativo 2/3 fra 4200ms');
+    expect(
+      formatProgressLine({ type: 'model_retry', class: 'transport', attempt: 1, max: 10, inMs: 500 }, 'debug'),
+    ).toBe('· provider transport tentativo 1/10 fra 500ms');
+  });
+
   it('throws on a variant the switch does not recognise, instead of silently rendering a blank line', () => {
     const bogus = { type: 'bogus' } as unknown as TurnEvent;
     expect(() => formatProgressLine(bogus, 'debug')).toThrow(/unreachable/);
@@ -652,6 +661,15 @@ describe('formatProgressLine — modalità normale', () => {
     expect(
       formatProgressLine({ type: 'tool_end', name: 'fs_write', ms: 3, isError: true }, 'normale'),
     ).toBe('  ✗ scrivo un file');
+  });
+
+  it("l'attesa di un re-drive si dice: senza, lo spinner fermo per due minuti sembra un guasto", () => {
+    expect(
+      formatProgressLine({ type: 'model_retry', class: 'provider_empty', attempt: 2, max: 3, inMs: 4200 }, 'normale'),
+    ).toBe('  ↻ risposta vuota dal provider — riprovo (2/3) tra 4s');
+    expect(
+      formatProgressLine({ type: 'model_retry', class: 'transport', attempt: 1, max: 10, inMs: 200 }, 'normale'),
+    ).toBe('  ↻ il provider non ha risposto — riprovo (1/10) tra 1s');
   });
 });
 

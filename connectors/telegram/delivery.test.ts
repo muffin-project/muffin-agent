@@ -43,7 +43,7 @@ describe('TelegramDeliveryStore — write ahead and crash recovery', () => {
   it('an attempting row becomes possibly_sent after restart, never pending', () => {
     const db = new DatabaseCtor(':memory:');
     const first = new TelegramDeliveryStore(db);
-    first.plan('turn-1', [sendPart('answer', 0)], at());
+    first.plan('turn-1', [sendPart('answer', 0)], at(), 0);
     expect(first.claim('turn-1', 0, 'attempt-a', at())).toBe(true);
 
     const afterRestart = new TelegramDeliveryStore(db);
@@ -56,7 +56,7 @@ describe('TelegramDeliveryStore — write ahead and crash recovery', () => {
   it('first writer wins the per-part attempt claim', () => {
     const db = new DatabaseCtor(':memory:');
     const store = new TelegramDeliveryStore(db);
-    store.plan('turn-race', [sendPart('answer', 0)], at());
+    store.plan('turn-race', [sendPart('answer', 0)], at(), 0);
 
     expect(store.claim('turn-race', 0, 'winner', at())).toBe(true);
     expect(store.claim('turn-race', 0, 'loser', at())).toBe(false);
@@ -66,10 +66,41 @@ describe('TelegramDeliveryStore — write ahead and crash recovery', () => {
   it('recovery keeps the first frozen wire plan byte-for-byte', () => {
     const db = new DatabaseCtor(':memory:');
     const store = new TelegramDeliveryStore(db);
-    store.plan('turn-frozen', [sendPart('<b>originale</b>', 0)], at());
+    store.plan('turn-frozen', [sendPart('<b>originale</b>', 0)], at(), 0);
 
-    expect(store.plan('turn-frozen', [sendPart('<i>render nuovo</i>', 0)], at())).toMatchObject([
+    expect(store.plan('turn-frozen', [sendPart('<i>render nuovo</i>', 0)], at(), 0)).toMatchObject([
       { html: '<b>originale</b>', replyTo: 7, status: 'pending' },
+    ]);
+  });
+
+  it('a continuation answer on the same turn is a new delivery, not a re-render of the diagnostic', async () => {
+    // Un turno continuabile consegna due volte sulla stessa riga: il
+    // diagnostico sotto la lease 0, la risposta sotto la lease successiva.
+    // Senza la lease nel piano, il secondo invio trovava le parti della
+    // prima già `sent`, le saltava e riferiva `sent` senza mandare niente
+    // (difetto misurato il 28/09 sulla catena reale «riprendi»).
+    const db = new DatabaseCtor(':memory:');
+    const store = new TelegramDeliveryStore(db);
+    const sendMessage = vi.fn(async (_chatId: number, _text: string) => ({ message_id: 7 }) as never);
+
+    await deliverTelegram(store, apiWith(sendMessage), 'turn-continuato', [sendPart('mi sono fermato qui', 0)], at, 0);
+    await expect(
+      deliverTelegram(store, apiWith(sendMessage), 'turn-continuato', [sendPart('ecco la risposta', 0)], at, 1),
+    ).resolves.toBe('sent');
+
+    expect(sendMessage.mock.calls.map((call) => call[1])).toEqual(['mi sono fermato qui', 'ecco la risposta']);
+    expect(store.parts('turn-continuato', 0)).toMatchObject([{ status: 'sent', leaseIndex: 0 }]);
+    expect(store.parts('turn-continuato', 1)).toMatchObject([{ status: 'sent', leaseIndex: 1 }]);
+  });
+
+  it('recovery replays the lease plan it froze, never the previous lease\'s message', () => {
+    const db = new DatabaseCtor(':memory:');
+    const store = new TelegramDeliveryStore(db);
+    store.plan('turn-continuato', [sendPart('mi sono fermato qui', 0)], at(), 0);
+    store.plan('turn-continuato', [sendPart('ecco la risposta', 0)], at(), 1);
+
+    expect(store.plan('turn-continuato', [sendPart('<i>render nuovo</i>', 0)], at(), 1)).toMatchObject([
+      { html: 'ecco la risposta', leaseIndex: 1, status: 'pending' },
     ]);
   });
 });
@@ -86,10 +117,10 @@ describe('deliverTelegram — ambiguous effects are terminal', () => {
     const plan = [sendPart('answer', 0)];
 
     await expect(
-      deliverTelegram(store, apiWith(sendMessage), 'turn-unknown', plan, at),
+      deliverTelegram(store, apiWith(sendMessage), 'turn-unknown', plan, at, 0),
     ).resolves.toBe('possibly_sent');
     await expect(
-      deliverTelegram(store, apiWith(sendMessage), 'turn-unknown', plan, at),
+      deliverTelegram(store, apiWith(sendMessage), 'turn-unknown', plan, at, 0),
     ).resolves.toBe('possibly_sent');
 
     expect(accepted).toBe(1);
@@ -129,6 +160,7 @@ describe('deliverTelegram — ambiguous effects are terminal', () => {
         'turn-edit-same',
         plan,
         at,
+        0,
       ),
     ).resolves.toBe('sent');
     expect(store.parts('turn-edit-same')[0]).toMatchObject({
@@ -147,6 +179,7 @@ describe('deliverTelegram — ambiguous effects are terminal', () => {
         'turn-edit-gone',
         plan,
         at,
+        0,
       ),
     ).rejects.toThrow('not found');
     expect(store.parts('turn-edit-gone')[0]?.status).toBe('rejected');
@@ -164,10 +197,10 @@ describe('deliverTelegram — ambiguous effects are terminal', () => {
     );
     const plan = [sendPart('answer', 0)];
 
-    const winner = deliverTelegram(store, apiWith(sendMessage), 'turn-concurrent', plan, at);
+    const winner = deliverTelegram(store, apiWith(sendMessage), 'turn-concurrent', plan, at, 0);
     await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
     await expect(
-      deliverTelegram(store, apiWith(sendMessage), 'turn-concurrent', plan, at),
+      deliverTelegram(store, apiWith(sendMessage), 'turn-concurrent', plan, at, 0),
     ).resolves.toBe('deferred');
     release({ message_id: 91 });
 
@@ -190,10 +223,10 @@ describe('deliverTelegram — ambiguous effects are terminal', () => {
     });
     const plan = ['part-0', 'part-1', 'part-2'].map(sendPart);
 
-    expect(await deliverTelegram(store, apiWith(sendMessage), 'turn-multipart', plan, at)).toBe(
+    expect(await deliverTelegram(store, apiWith(sendMessage), 'turn-multipart', plan, at, 0)).toBe(
       'possibly_sent',
     );
-    expect(await deliverTelegram(store, apiWith(sendMessage), 'turn-multipart', plan, at)).toBe(
+    expect(await deliverTelegram(store, apiWith(sendMessage), 'turn-multipart', plan, at, 0)).toBe(
       'possibly_sent',
     );
 
@@ -221,10 +254,10 @@ describe('deliverTelegram — ambiguous effects are terminal', () => {
     const plan = ['part-0', 'part-1', 'part-2'].map(sendPart);
 
     await expect(
-      deliverTelegram(store, apiWith(sendMessage), 'turn-rejected', plan, at),
+      deliverTelegram(store, apiWith(sendMessage), 'turn-rejected', plan, at, 0),
     ).rejects.toThrow('429');
     await expect(
-      deliverTelegram(store, apiWith(sendMessage), 'turn-rejected', plan, at),
+      deliverTelegram(store, apiWith(sendMessage), 'turn-rejected', plan, at, 0),
     ).resolves.toBe('sent');
 
     expect(sent).toEqual(['part-0', 'part-1', 'part-2']);

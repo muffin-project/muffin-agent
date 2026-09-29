@@ -429,8 +429,6 @@ function continuableText(scope: TurnScope, failureClass: ContinuableClass, attem
           : 'il modello ha esaurito il limite di output senza produrre contenuto';
       case 'provider_transport':
         return 'il provider non ha completato le richieste (errori di trasporto)';
-      case 'model_first_activity_timeout':
-        return 'il provider non ha inviato alcun segnale di attività in tempo';
       case 'model_stall':
         return 'il provider ha smesso di inviare dati a metà risposta';
       case 'model_deadline':

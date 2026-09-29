@@ -203,6 +203,17 @@ export class AnthropicProvider implements Provider {
       throw new ProviderStreamError(error instanceof Error ? error.message : String(error), receivedAnyEvent, error);
     }
 
+    // A stream our own signal truncated is not a completed response.
+    //
+    // Same hole as `openai-compat.ts#chatStream`: the SDK ends an aborted SSE
+    // iteration cleanly instead of throwing, so an interrupted call would
+    // otherwise come back as a success-shaped empty completion. `stop_reason`
+    // is the completion marker on this wire; absent plus an aborted signal
+    // means the interruption was ours.
+    if (call.signal?.aborted && stopReason === null) {
+      throw new ProviderError('aborted', false);
+    }
+
     yield {
       type: 'done',
       result: toChatResult({

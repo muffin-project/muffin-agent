@@ -1,5 +1,5 @@
 import type { TurnDelta, TurnEvent, TurnResult } from '../../../agent/loop.js';
-import { ContinuationGone } from '../../../agent/loop.js';
+import { CONTINUATION_TTL_MS, ContinuationGone } from '../../../agent/loop.js';
 import type { TurnRecord } from '../../../core/turns/store.js';
 import { identify, type SurfaceIdentity } from '../../../core/surface/types.js';
 import { composeTurnText } from './compose.js';
@@ -536,6 +536,12 @@ export type RecoverHooks = {
   readonly wireWasUncertain: (workId: string) => boolean;
   /** Redelivery of an already-computed answer, to the address on the durable row. */
   readonly redeliver: (workId: string, replyTo: Record<string, unknown>, text: string) => Promise<'sent' | 'possibly_sent' | 'deferred'>;
+  /**
+   * This process's clock, for the one decision `recover` makes on time:
+   * whether a yielded lease is older than the invitation TTL. Optional so
+   * every existing port keeps working; absent reads as `Date.now`.
+   */
+  readonly nowMs?: (() => number) | undefined;
 };
 
 /**
@@ -571,6 +577,51 @@ export async function recover(
     // second one. Re-enters at `compose`, because pairing, the gate and the
     // commands already had their say when this event was first seen.
     return walk(ctx, { ...hooks, claim: async () => ({ kind: 'mine', workId }) }, 'compose');
+  }
+  if (existing.status === 'continuable') {
+    // A yielded lease is not "still running": the diagnostic it produced was
+    // its own run's message, and the work being continued later is a new
+    // lease with its own delivery. Waiting for `done` here deferred the
+    // original event for ever — measured 2026-09-28: update 99666230 bound
+    // to turn ca216a6e55d2 since 2026-09-19, "rimando" on every gateway
+    // boot, while the row would never be `done` unless someone typed
+    // "riprendi" within the resolver TTL.
+    const delivered =
+      stored.settledAt !== null ||
+      existing.delivery === 'sent' ||
+      existing.delivery === 'possibly_sent' ||
+      existing.delivery === 'undeliverable';
+    if (delivered) {
+      // Its fire was answered (the answer may have been the "lease yielded"
+      // diagnostic): nothing left for this event to carry. A `settledAt` that
+      // landed before the turn's own delivery column did gets repaired the
+      // same way the `done` branch below repairs it.
+      if (
+        existing.delivery !== 'sent' &&
+        existing.delivery !== 'possibly_sent' &&
+        existing.delivery !== 'undeliverable'
+      ) {
+        hooks.recordDelivery(workId, hooks.wireWasUncertain(workId) ? 'possibly_sent' : 'sent');
+      }
+      hooks.finish(ctx);
+      return { kind: 'recovered', workId, delivery: 'already' };
+    }
+    const nowMs = hooks.nowMs?.() ?? Date.now();
+    if (nowMs - Date.parse(existing.updatedAt) > CONTINUATION_TTL_MS) {
+      // Nothing delivered this event's fire, no chat "riprendi" reaches the
+      // row any more, and the diagnostic is not durable text: say so and
+      // settle, instead of a deferral line on every boot for ever.
+      hooks.recordDelivery(workId, 'undeliverable');
+      hooks.finish(ctx);
+      hooks.log?.(
+        `evento ${stored.eventId}: il turno ${workId.slice(0, 12)} è continuabile da oltre la finestra di ripresa e nessun testo era stato consegnato — chiuso come undeliverable`,
+      );
+      return { kind: 'recovered', workId, delivery: 'undeliverable' };
+    }
+    // Fresh, not delivered: a crash window between the yield and the
+    // diagnostic. The next drain re-checks once it is delivered or expires.
+    hooks.log?.(`evento ${stored.eventId} già legato al turno ${workId.slice(0, 12)} (continuable) — rimando`);
+    return { kind: 'deferred', workId, why: 'still-running' };
   }
   if (existing.status !== 'done') {
     // Fault points 3/4: some pass already created this turn, and it belongs to

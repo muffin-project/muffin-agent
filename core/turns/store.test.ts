@@ -415,7 +415,7 @@ describe('the reader a surface with only a database can use', () => {
     expect(readTurnHealth(empty)).toEqual({
       total: 0,
       waiting: { count: 0, oldestWakeAt: null },
-      continuable: { count: 0, oldest: null },
+      continuable: { count: 0, oldest: null, expired: null },
       undeliverable: { count: 0 },
       interrupted: [],
     });
@@ -789,6 +789,24 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     expect(final?.counters.iterations).toBe(25);
     expect(final?.counters.resumes).toBe(2);
     expect(final?.counters.nudgedForCompletion).toBe(true);
+  });
+
+  it('a granted lease starts with a clean delivery: the previous lease keeps its own evidence', () => {
+    // La colonna scalare `delivery` descrive la risposta della lease
+    // corrente. Se la concessione non la azzera, un crash fra la risposta
+    // della lease nuova e la sua consegna fa leggere a `recover` il `sent`
+    // del diagnostico precedente e chiude senza mai mandare la risposta.
+    const s = store();
+    s.create(spec(), 4242);
+    expect(releaseIt(s)).toBe(true);
+    s.delivered('turn-1', 'sent');
+    expect(s.get('turn-1')?.delivery).toBe('sent');
+
+    const granted = grantIt(s);
+
+    expect(granted?.leaseIndex).toBe(1);
+    expect(granted?.delivery).toBeNull();
+    expect(s.get('turn-1')?.delivery).toBeNull();
   });
 
   it('a released lease survives the process boundary: close, reopen, resolve, grant', () => {

@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import DatabaseCtor from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
+import { CONTINUATION_TTL_MS } from '../agent/loop.js';
 import { CONSERVATIVE, loadProfiles, selectProfile } from '../agent/profiles/profile.js';
 import { audioAccettato } from '../agent/providers/modalita.js';
 import { wantsExplicitCache } from '../agent/providers/openai-compat.js';
@@ -1007,7 +1008,7 @@ export async function runDoctor(
     // call whose *outcome* was recorded and declares, rather than repeats, the
     // ones that were not — so the open question below is what a declared,
     // non-replayed call may have done to the world, never whether it runs.
-    const turns = readTurnHealth(db);
+    const turns = readTurnHealth(db, undefined, new Date(Date.now() - CONTINUATION_TTL_MS).toISOString());
     if (turns === null) {
       // Not a warning. The table is created by the first runtime that opens
       // this home, so its absence means "no turn has run here yet", which on a
@@ -1056,14 +1057,23 @@ export async function runDoctor(
      * una continuazione esplicita. `ok`, non `warn`: niente si è rotto, ma
      * solo un umano che legge questo può chiuderla ("riprendi" in
      * conversazione, o `muffin resume <id>`).
+     *
+     * Le righe oltre la finestra di ripresa non sono più raggiungibili in
+     * chat: dirle tutte "riprendibili" manderebbe l'owner a scrivere
+     * "riprendi" e ricevere una conversazione ordinaria. Il conteggio le
+     * separa, e la strada che resta è il comando esplicito.
      */
     if (turns !== null && turns.continuable.count > 0) {
       const oldest = turns.continuable.oldest;
       const due = oldest === null ? '' : ` · in attesa da ${oldest.slice(0, 16).replace('T', ' ')}`;
-      ok(
-        'turni continuabili',
-        `${turns.continuable.count} lease esaurite con lavoro salvato${due} · continua con "riprendi" o \`muffin resume <id>\``,
-      );
+      const expired = turns.continuable.expired ?? 0;
+      const live = turns.continuable.count - expired;
+      const liveText =
+        live > 0
+          ? `${live} riprendibili con "riprendi" o \`muffin resume <id>\``
+          : 'nessuna riprendibile in chat';
+      const expiredText = expired > 0 ? ` · ${expired} oltre la finestra di ripresa (solo \`muffin resume <id>\`)` : '';
+      ok('turni continuabili', `${turns.continuable.count} lease esaurite con lavoro salvato${due} · ${liveText}${expiredText}`);
     }
 
     /**

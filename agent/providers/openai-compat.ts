@@ -466,6 +466,19 @@ export class OpenAICompatProvider implements Provider {
       throw new ProviderStreamError(error instanceof Error ? error.message : String(error), receivedAnyEvent, error);
     }
 
+    // A stream our own signal truncated is not a completed response.
+    //
+    // The SDK ends an aborted SSE iteration cleanly — `Stream.fromSSEResponse`
+    // catches the AbortError and simply returns (openai v7.9.0, verified with
+    // a probe 2026-09-28) — so without this check a deadline/stall/stop that
+    // fired mid-stream would surface as a success-shaped empty completion and
+    // be classified as the provider's fault. `finish_reason` is the completion
+    // marker the wire always sends; its absence plus an aborted signal is the
+    // one honest reading: this call was interrupted by us.
+    if (call.signal?.aborted && finishReason === null) {
+      throw new ProviderError('aborted', false);
+    }
+
     yield {
       type: 'done',
       result: toChatResult({
