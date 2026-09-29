@@ -8,6 +8,7 @@ import { COMANDI, sembraComando, type Controlli } from '../../agent/comandi.js';
 import { recoveredText } from '../../agent/recovered-text.js';
 import type { PendingPairing } from '../../core/config/pairing.js';
 import type { ModelLane } from '../../core/turns/model-lane.js';
+import { decodeWaitFor } from '../../core/turns/wait.js';
 import { fence } from '../../core/memory/spotlight.js';
 import type { SessionStore } from '../../core/session/store.js';
 import type { TrustTier } from '../../core/policy/types.js';
@@ -1569,6 +1570,18 @@ export class TelegramConnector {
         release();
         const presence = await presencePromise;
         await presence.stop();
+        // Un turno ripreso che sospende **di nuovo su un'approvazione** non ha
+        // finito: la trascrizione resta viva e azionabile, come nel percorso
+        // fresco (`apriIlVivo.ran`), o `transcript.stop()` toglie la tastiera
+        // alla domanda appena mostrata e il passo si congela mentre il turno
+        // aspetta (issue #746). La riga durevole è la prova: `waiting` con
+        // barriera `approval:<id>`. `makeLaneRunner` chiama `stop()` sempre,
+        // anche sull'esito sospeso, quindi è qui che si decide di non chiudere.
+        const dopo = this.deps.loop.turns.get(record.id);
+        if (dopo !== null && dopo.status === 'waiting' && decodeWaitFor(dopo.waitFor)?.kind === 'approval') {
+          this.transcriptInSospeso.set(record.id, transcript);
+          return;
+        }
         await transcript.stop();
         // Unconditional, same as `runFresh`'s own call: `stop()` here cannot
         // see whether this resume is about to suspend again (another
