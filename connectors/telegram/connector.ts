@@ -656,8 +656,25 @@ export function indirizzoDi(incoming: Incoming): Record<string, unknown> {
     chatId: incoming.chatId,
     messageId: incoming.messageId,
     ...(incoming.threadId === undefined ? {} : { threadId: incoming.threadId }),
-    channel: `telegram:${incoming.chatId}`,
+    channel: canaleDi(incoming),
   };
+}
+
+/**
+ * Il canale di questa conversazione — la stringa che il registro superfici
+ * legge, e che `deliverFile`/`deliver` riportano al topic.
+ *
+ * `telegram:<chatId>` è la forma di sempre (DM, gruppi, ogni riga già
+ * installata); `telegram:<chatId>#<threadId>` è la stessa stanza **dentro un
+ * topic**. Scritta qui una volta e non due: `indirizzoDi` (l'indirizzo
+ * durevole) e `eventoDi` (l'indirizzo vivo che `runWork` passa come
+ * `replyChannel`) devono dire la stessa cosa, o `send_file` in un topic
+ * dipende da quale dei due ha vinto la corsa.
+ */
+export function canaleDi(incoming: Incoming): string {
+  return incoming.threadId === undefined
+    ? `telegram:${incoming.chatId}`
+    : `telegram:${incoming.chatId}#${incoming.threadId}`;
 }
 
 /**
@@ -2190,7 +2207,7 @@ export class TelegramConnector {
       compositionId: String(stored.updateId),
       identity: identitaDi(incoming),
       address: {
-        channel: `telegram:${incoming.chatId}`,
+        channel: canaleDi(incoming),
         replyTo: String(incoming.messageId),
         // The opaque durable record, unchanged: it is what `turns.replyTo`
         // already holds on this installation, and this slice does not touch

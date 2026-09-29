@@ -163,10 +163,14 @@ export async function sendDocument(
   api: TelegramApiLike,
   chatId: number,
   absolutePath: string,
-  options: { caption?: string; filename?: string } = {},
+  options: { caption?: string; filename?: string; threadId?: number } = {},
 ): Promise<void> {
   const body = new FormData();
   body.append('chat_id', String(chatId));
+  // Stessa ragione di `SendOptions.threadId` (`api.ts`): in un topic
+  // `message_thread_id` è ciò che tiene il documento dentro la
+  // sotto-conversazione invece che in *General*.
+  if (options.threadId !== undefined) body.append('message_thread_id', String(options.threadId));
   body.append('document', new Blob([readFileSync(absolutePath)]), options.filename ?? basename(absolutePath));
   if (options.caption) {
     // Captions cap at 1024, and a truncated caption is better than a rejected
