@@ -8,6 +8,7 @@ import { COMANDI, sembraComando, type Controlli } from '../../agent/comandi.js';
 import { recoveredText } from '../../agent/recovered-text.js';
 import type { PendingPairing } from '../../core/config/pairing.js';
 import type { ModelLane } from '../../core/turns/model-lane.js';
+import { decodeWaitFor } from '../../core/turns/wait.js';
 import { fence } from '../../core/memory/spotlight.js';
 import type { SessionStore } from '../../core/session/store.js';
 import type { TrustTier } from '../../core/policy/types.js';
@@ -1569,21 +1570,33 @@ export class TelegramConnector {
         release();
         const presence = await presencePromise;
         await presence.stop();
+        // Un turno ripreso che sospende **di nuovo su un'approvazione** non ha
+        // finito: la trascrizione resta viva e azionabile, come nel percorso
+        // fresco (`apriIlVivo.ran`), o `transcript.stop()` toglie la tastiera
+        // alla domanda appena mostrata e il passo si congela mentre il turno
+        // aspetta (issue #746). La riga durevole è la prova: `waiting` con
+        // barriera `approval:<id>`. `makeLaneRunner` chiama `stop()` sempre,
+        // anche sull'esito sospeso, quindi è qui che si decide di non chiudere.
+        const dopo = this.deps.loop.turns.get(record.id);
+        if (dopo !== null && dopo.status === 'waiting' && decodeWaitFor(dopo.waitFor)?.kind === 'approval') {
+          this.transcriptInSospeso.set(record.id, transcript);
+          return;
+        }
         await transcript.stop();
-        // Unconditional, same as `runFresh`'s own call: `stop()` here cannot
-        // see whether this resume is about to suspend again (another
-        // approval, another `wait`) — that outcome is `makeLaneRunner`'s, not
-        // this closure's. A resume that *does* suspend again leaves a stale
-        // entry keyed by this same `turnId`; it is overwritten the next time
-        // this turn's transcript stops, before `deliverTo` is ever called for
-        // it (`makeLaneRunner` always stops the stream before delivering) —
-        // and if the process dies with the entry never overwritten, the map
-        // itself is gone with it, so recovery just finds none. The residual
-        // is the rarer case still: this same process resumes the turn again
-        // through a path other than `resumeStream` (no telegram connector at
-        // that moment) — `deliverTo` would then extend a stale message
-        // instead of sending a fresh one. Narrower than, and no worse than,
-        // the pre-existing gap in re-suspension handling this map already had.
+        // Da qui in poi il turno ha finito: `stop()` è la finalizzazione, e il
+        // ramo che resta è il residuo noto di una ripresa che sospende di
+        // nuovo su un `wait` **non** di approvazione (la guardia qui sopra ha
+        // già tenuto aperto il caso approval). Una voce stantia per lo stesso
+        // `turnId` viene sovrascritta al prossimo stop di questo turno, prima
+        // che `deliverTo` venga mai chiamato per lui (`makeLaneRunner` ferma
+        // sempre lo stream prima di consegnare); e se il processo muore con la
+        // voce mai sovrascritta, la mappa sparisce con lui, quindi il recovery
+        // semplicemente non la trova. Il residuo è il caso ancora più raro:
+        // questo stesso processo riprende il turno per una strada diversa da
+        // `resumeStream` (nessun connettore Telegram in quel momento) —
+        // `deliverTo` estenderebbe un messaggio stantio invece di mandarne uno
+        // nuovo. Più stretto, e non peggiore, del buco preesistente che questa
+        // mappa aveva già sulla ri-sospensione.
         this.noteTranscriptHandoff(record.id, transcript);
       },
     };

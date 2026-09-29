@@ -691,3 +691,121 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
     shellNonDisponibileQui,
   );
 });
+
+describe('acceptance · #746 · una seconda approvazione in un turno ripreso resta azionabile', () => {
+  /**
+   * Falsificatore del difetto: senza la guardia in `resumeStream.stop`
+   * (`waiting` con barriera `approval:<id>` → la trascrizione resta viva), la
+   * seconda domanda perde la tastiera alla sospensione e il click non risolve
+   * più niente: l'`until` sulla seconda domanda o sulla risposta finale scade.
+   *
+   * Il turno: due comandi diversi, quindi due approvazioni reali. La prima
+   * sospende il turno fresco; il click lo riprende; il modello chiede il
+   * secondo comando; la lane finalizza l'AttachStream sull'esito sospeso; la
+   * domanda deve restare sullo **stesso messaggio** con la tastiera viva, e il
+   * secondo click deve chiudere il turno.
+   */
+  it(
+    '#746 doppia approvazione: la seconda domanda vive sullo stesso messaggio, la tastiera sopravvive alla sospensione, il turno riprende e chiude',
+    async () => {
+      const tg = await startFakeTelegram();
+      const inst = await install({
+        main: [
+          { tool: { name: 'shell_run_write', args: { command: 'echo primo', cwd: '.', description: 'primo comando' } } },
+          { tool: { name: 'shell_run_write', args: { command: 'echo secondo', cwd: '.', description: 'secondo comando' } } },
+          { text: 'fatto, entrambi i comandi hanno risposto' },
+        ],
+        env: { MUFFIN_GATEWAY_TICK_MS: '200' },
+      });
+      try {
+        plantTier2Episode(inst.home, 'fixture-746');
+        const gw = await pairOwner(inst, tg, OWNER_ID);
+        try {
+          type Tastiera = { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+          const tastieraViva = (c: { payload: Record<string, unknown> }): boolean => {
+            const kb = (c.payload['reply_markup'] as Tastiera | undefined)?.inline_keyboard;
+            return Array.isArray(kb) && kb.length > 0;
+          };
+          const idDi = (c: { messageId?: number; payload: Record<string, unknown> }): number | undefined =>
+            typeof c.payload['message_id'] === 'number' ? (c.payload['message_id'] as number) : c.messageId;
+          const ultimaDomanda = () => tg.sent().filter((c) => tastieraViva(c) && testoDi(c).includes('⚠')).at(-1);
+          const okDi = (c: { payload: Record<string, unknown> }): string => {
+            const bottoni = ((c.payload['reply_markup'] as Tastiera).inline_keyboard ?? []).flat();
+            const ok = bottoni.find((b) => b.callback_data.startsWith('ok:'));
+            if (!ok) throw new Error(`nessun pulsante ok: ${JSON.stringify(c.payload['reply_markup'])}`);
+            return ok.callback_data;
+          };
+
+          tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'esegui due comandi'));
+
+          // Prima domanda: il comando è `echo primo`.
+          await until(() => ultimaDomanda() !== undefined && testoDi(ultimaDomanda()!).includes('echo primo'), 20_000);
+          const prima = ultimaDomanda()!;
+          const messaggio = prima.messageId;
+          if (messaggio === undefined) throw new Error('la prima domanda non ha un id di messaggio');
+          tg.deliver(callbackQuery({ id: OWNER_ID, name: 'Owner' }, okDi(prima), { messageId: messaggio, chatId: OWNER_ID, text: testoDi(prima) }));
+
+          // Seconda domanda: comando diverso, nuova approvazione, e deve vivere
+          // sullo stesso messaggio del turno.
+          try {
+            await until(() => {
+              const ultima = ultimaDomanda();
+              return ultima !== undefined && idDi(ultima) === messaggio && testoDi(ultima).includes('echo secondo');
+            }, 30_000);
+          } catch (error) {
+            const righe = inst.db((db) => db.prepare('SELECT id, capability, resource, decision, consumed_at FROM approvals ORDER BY asked_at').all());
+            throw new Error(
+              `${error instanceof Error ? error.message : String(error)}\n` +
+                `approvals: ${JSON.stringify(righe)}\n` +
+                JSON.stringify(
+                  tg.sent().map((c) => ({
+                    method: c.method,
+                    messageId: c.messageId,
+                    payloadMessageId: c.payload['message_id'],
+                    tastiera: tastieraViva(c),
+                    kb: tastieraViva(c) ? JSON.stringify(c.payload['reply_markup']) : undefined,
+                    text: testoDi(c).slice(0, 160),
+                  })),
+                  null,
+                  2,
+                ),
+            );
+          }
+          const seconda = ultimaDomanda()!;
+
+          // La sospensione non deve aver tolto la tastiera: nessuna rimozione
+          // esplicita dopo la seconda domanda, prima del click.
+          const daSeconda = tg.sent().slice(tg.sent().indexOf(seconda));
+          const rimozioni = daSeconda.filter(
+            (c) => c.method === 'editMessageReplyMarkup' && Number(c.payload['message_id']) === messaggio,
+          );
+          if (rimozioni.length !== 0) {
+            throw new Error(`la tastiera della seconda domanda è stata tolta durante la sospensione: ${JSON.stringify(rimozioni)}`);
+          }
+
+          // Il secondo click risolve lo stesso passo e il turno chiude con la
+          // risposta, sullo stesso messaggio.
+          tg.deliver(callbackQuery({ id: OWNER_ID, name: 'Owner' }, okDi(seconda), { messageId: messaggio, chatId: OWNER_ID, text: testoDi(seconda) }));
+          await until(
+            () =>
+              tg
+                .sent()
+                .some(
+                  (c) =>
+                    (c.method === 'editMessageText' || c.method === 'editMessageRichText' || c.method === 'sendMessage') &&
+                    Number(c.payload['message_id'] ?? c.messageId) === messaggio &&
+                    testoDi(c).includes('entrambi i comandi hanno risposto'),
+                ),
+            30_000,
+          );
+        } finally {
+          await gw.stop();
+        }
+      } finally {
+        await inst.cleanup();
+        await tg.close();
+      }
+    },
+    120_000,
+  );
+});
