@@ -91,7 +91,7 @@ function richPlain(rich: { html?: string; blocks?: unknown[] }): string {
     if (Array.isArray(o.blocks)) parts.push(o.blocks.map(blockText).join('\n'));
     return parts.join('\n');
   };
-  if (rich.html !== undefined) return rich.html;
+  if (rich.html !== undefined) return rich.html.replace(/<br>/g, '\n');
   return Array.isArray(rich.blocks) ? rich.blocks.map(blockText).join('\n') : '';
 }
 

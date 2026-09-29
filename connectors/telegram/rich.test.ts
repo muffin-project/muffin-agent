@@ -8,6 +8,7 @@ import {
   normalizeInboundRich,
   planRich,
   richFitsHard,
+  richFromHtml,
   RICH_COMPAT_BLOCKS,
   RICH_COMPAT_CHARS,
   RICH_MAX_BLOCKS,
@@ -258,6 +259,41 @@ describe('telegram rich · the turn message: process in details, answer in block
     expect(rich).not.toBeNull();
     const json = JSON.stringify(rich);
     expect(json).toContain('ancora dentro');
+  });
+});
+
+describe('telegram rich · line breaks survive the rich lane', () => {
+  it('turns bare newlines into <br>: the documented rich-html line break', () => {
+    // Bot API 10.3, «Rich HTML style»: gli esempi spezzano le righe con
+    // `<br>`; un `\n` nudo collassa (visto dal vivo il 30/09 nella
+    // trascrizione: tutti i passi su una riga sola).
+    expect(richFromHtml('prima\nseconda')).toMatchObject({ html: 'prima<br>seconda' });
+  });
+
+  it('leaves newlines inside <pre> alone — there the block keeps them', () => {
+    expect(richFromHtml('<pre>uno\ndue</pre>')).toMatchObject({ html: '<pre>uno\ndue</pre>' });
+  });
+
+  it('keeps an unclosed <pre> literal to the end instead of injecting <br>', () => {
+    expect(richFromHtml('<pre>uno\ndue')).toMatchObject({ html: '<pre>uno\ndue' });
+  });
+
+  it('splits a multi-line process entry into one paragraph per line', () => {
+    const rich = turnRichMessage({
+      process: ['✓ aggiorno il piano\n\n⚠ comando: echo uno\necho due'],
+      answer: 'ok',
+    });
+    const details = (rich!.blocks ?? []).find((b) => (b as { type: string }).type === 'details') as
+      | { blocks: { text: string }[] }
+      | undefined;
+    expect(details!.blocks.map((b) => b.text)).toEqual(['✓ aggiorno il piano', '⚠ comando: echo uno', 'echo due']);
+  });
+
+  it('splits a multi-line running step into paragraphs too', () => {
+    const rich = turnRichMessage({ process: [], running: '⏳ comando: echo uno\necho due', answer: 'ok' });
+    const paragraphs = (rich!.blocks ?? []).filter((b) => (b as { type: string }).type === 'paragraph');
+    // I paragrafi del passo in corso vengono prima dei blocchi della risposta.
+    expect(paragraphs.map((b) => (b as { text: string }).text)).toEqual(['⏳ comando: echo uno', 'echo due', 'ok']);
   });
 });
 
