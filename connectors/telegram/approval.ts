@@ -102,9 +102,18 @@ export function approvatoreTelegram(api: TelegramApi | TelegramApiLike): Approve
     // sappiamo leggere è un turno di cui non sappiamo a chi stiamo parlando.
     if (typeof chatId !== 'number' || where.approvalId === undefined) return 'unavailable';
 
+    // Il topic del forum, quando la domanda nasce dentro uno: la bolla di
+    // ripiego è un pezzo del turno come gli altri, e senza il thread finirebbe
+    // in *General* mentre l'owner guarda il suo topic — un turno che degrada
+    // in silenzio nel gruppo padre. Su ogni pezzo, non solo sull'ultimo: una
+    // domanda lunga si spezza, e ogni metà deve restare nel topic.
+    const threadId = where.replyTo?.['threadId'];
+    const topic = typeof threadId === 'number' ? { threadId } : {};
+
     const parti = splitHtml(askHtml(request));
-    for (let i = 0; i < parti.length - 1; i++) await api.sendMessage(chatId, parti[i]!);
+    for (let i = 0; i < parti.length - 1; i++) await api.sendMessage(chatId, parti[i]!, topic);
     await api.sendMessage(chatId, parti[parti.length - 1] ?? '', {
+      ...topic,
       keyboard: askKeyboard(request.capability, where.approvalId),
     });
     return 'asked';

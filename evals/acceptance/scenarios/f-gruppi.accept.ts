@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import DatabaseCtor from 'better-sqlite3';
+import { closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe } from 'vitest';
+import { describe, it } from 'vitest';
 import { paths } from '../../../core/config/config.js';
 import { seal } from '../../../core/rot/verify.js';
 import { buildRuntime } from '../../../agent/runtime.js';
@@ -198,6 +199,300 @@ describe('acceptance · F3 · topic di forum: due sotto-conversazioni, non un in
         }
         if (sentSpesa?.payload['message_thread_id'] !== TOPIC_SPESA) {
           throw new Error(`la risposta della spesa non porta message_thread_id=${TOPIC_SPESA}: ${JSON.stringify(sentSpesa)}`);
+        }
+      } finally {
+        await inst.cleanup();
+        await tg.close();
+      }
+    },
+    240_000,
+  );
+});
+
+describe('acceptance · #744 · un turno con tool in un topic resta nel topic su ogni pezzo', () => {
+  /**
+   * Il buco che l'audit E2E del 29/09 ha trovato: `topic-di-forum.test.ts`
+   * copre invio/chunking/typing/edit di un turno **senza tool**, e `F3` lo
+   * prova dal binario vero — ma nessuno guidava un turno con una chiamata di
+   * tool in un topic e verificava che *ogni* pezzo uscisse lì. Un topic che
+   * degrada in silenzio nel gruppo padre è esattamente il difetto.
+   *
+   * Falsificatori, uno per pezzo:
+   *  - `startPresence` senza `threadId` → il `sendChatAction` perde il campo;
+   *  - `startTranscript` senza `threadId` → la traccia del tool e la risposta
+   *    che la estende finiscono in *General*;
+   *  - `canaleDi`/`indirizzoDi` senza il `#<thread>` → la riga durevole del
+   *    turno non nomina il topic (l'assert su `reply_to` sotto).
+   *
+   * Non c'è `send_file` qui, e non per dimenticanza: `surface.send_file` è in
+   * `MAI_CONCEDIBILI` (`core/policy/matrix.ts`) — un sigillo che la concede a
+   * una stanza fa cadere il file (fail-closed), quindi un membro di un topic
+   * non può raggiungerla. La metà allegato è provata a livello di superficie
+   * (`topic-di-forum.test.ts`) e di multipart (`send.test.ts`).
+   */
+  it(
+    '#744 topic: typing, traccia del tool e risposta escono nel topic, mai in *General*',
+    async () => {
+      const tg = await startFakeTelegram();
+      const GROUP = -100_744;
+      const MEMBER = 7441;
+      const TOPIC = 744;
+      const RISPOSTA = 'fatto: ho cercato e non c era niente di nuovo';
+      const inst = await install({
+        main: [
+          { tool: { name: 'memory_search', args: { query: 'appunti di ieri' } } },
+          { text: RISPOSTA },
+        ],
+        env: { MUFFIN_GATEWAY_TICK_MS: '200' },
+      });
+      try {
+        const tok = await inst.muffin(['secret', 'set', 'telegram_token'], '123456:fake-744-address');
+        if (tok.code !== 0) throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
+        const enable = await inst.muffin(['surface', 'enable', 'telegram', '--api-base', tg.url]);
+        if (enable.code !== 0) throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
+
+        const gw = await inst.gateway();
+        await gw.waitFor(/muffin gateway/, 20_000);
+        try {
+          tg.deliver({
+            message: {
+              message_id: 74401,
+              date: Math.floor(Date.now() / 1000),
+              chat: { id: GROUP, type: 'supergroup', title: 'forum 744', is_forum: true },
+              from: { id: MEMBER, is_bot: false, first_name: 'Membro' },
+              message_thread_id: TOPIC,
+              is_topic_message: true,
+              text: '@muffin_test_bot cerca i miei appunti di ieri',
+            },
+          });
+          await until(
+            () =>
+              tg
+                .sent()
+                .some(
+                  (c) =>
+                    (c.method === 'sendMessage' || c.method === 'editMessageText' || c.method === 'editMessageRichText') &&
+                    String(c.payload['text'] ?? '').includes(RISPOSTA),
+                ),
+            30_000,
+          );
+        } finally {
+          await gw.stop();
+        }
+
+        // (1) L'identità durevole del turno nomina il topic, non solo il
+        // gruppo: è la riga che `send_file` e le riprese leggono.
+        const turnRow = inst.db(
+          (db) =>
+            db.prepare(`SELECT session_id, reply_to FROM turns ORDER BY created_at DESC LIMIT 1`).get() as
+              | { session_id: string; reply_to: string }
+              | undefined,
+        );
+        if (!turnRow) throw new Error('nessun turno dopo il messaggio nel topic');
+        if (turnRow.session_id !== `telegram:${GROUP}#${TOPIC}`) {
+          throw new Error(`session_id atteso "telegram:${GROUP}#${TOPIC}", trovato ${JSON.stringify(turnRow.session_id)}`);
+        }
+        const replyTo = JSON.parse(turnRow.reply_to) as Record<string, unknown>;
+        if (replyTo['threadId'] !== TOPIC) {
+          throw new Error(`replyTo senza threadId=${TOPIC}: ${turnRow.reply_to}`);
+        }
+        if (replyTo['channel'] !== `telegram:${GROUP}#${TOPIC}`) {
+          throw new Error(`replyTo.channel non nomina il topic: ${turnRow.reply_to}`);
+        }
+
+        // (2) Ogni pezzo indirizzato al gruppo porta il topic. Il negativo —
+        // «nessun pezzo in *General*» — è la metà che il difetto produceva.
+        //
+        // Create e typing portano `message_thread_id`; gli **edit** no, e non
+        // per omissione: `editMessageText` non ha quel parametro nel Bot API —
+        // indirizza il messaggio per id, e quel messaggio è già nel topic. La
+        // prova che un edit resta nel topic è che tocca un id **nato** lì.
+        const alGruppo = tg.sent().filter((c) => Number(c.payload['chat_id'] ?? 0) === GROUP);
+        if (alGruppo.length === 0) throw new Error('nessun pezzo è uscito verso il gruppo: lo scenario non ha provato niente');
+        const natiNelTopic = new Set<number>();
+        for (const c of alGruppo) {
+          const creazione =
+            c.method === 'sendMessage' ||
+            c.method === 'sendRichMessage' ||
+            c.method === 'sendDocument' ||
+            c.method === 'sendMessageDraft';
+          if (creazione || c.method === 'sendChatAction') {
+            if (Number(c.payload['message_thread_id']) !== TOPIC) {
+              throw new Error(
+                `un pezzo del turno è uscito in *General* (message_thread_id assente o sbagliato): ${JSON.stringify(c)}`,
+              );
+            }
+            if (creazione && c.messageId !== undefined) natiNelTopic.add(c.messageId);
+          }
+        }
+        for (const c of alGruppo) {
+          if (!c.method.startsWith('edit')) continue;
+          const id = Number(c.payload['message_id'] ?? 0);
+          if (!natiNelTopic.has(id)) {
+            throw new Error(
+              `un edit tocca un messaggio che non è nato nel topic (id ${id}): ${JSON.stringify(c)} — i nati: ${JSON.stringify([...natiNelTopic])}`,
+            );
+          }
+        }
+
+        // (3) Le tre categorie ci sono davvero — un «ogni pezzo» senza pezzi
+        // sarebbe verde per costruzione.
+        const azioni = alGruppo.filter((c) => c.method === 'sendChatAction');
+        if (!azioni.some((c) => Number(c.payload['message_thread_id']) === TOPIC)) {
+          throw new Error(`il «sta scrivendo…» non è mai passato dal topic: ${JSON.stringify(tg.sent(), null, 2)}`);
+        }
+        const traccia = alGruppo.filter((c) => String(c.payload['text'] ?? '').includes('cerco in memoria'));
+        if (traccia.length === 0) {
+          throw new Error(`la traccia del tool non è mai comparsa: ${JSON.stringify(alGruppo, null, 2)}`);
+        }
+        const risposta = alGruppo.filter((c) => String(c.payload['text'] ?? '').includes(RISPOSTA));
+        if (risposta.length === 0) {
+          throw new Error(`la risposta finale non è mai comparsa nel gruppo: ${JSON.stringify(alGruppo, null, 2)}`);
+        }
+        // E nessuna anteprima effimera: in un gruppo `assertNegotiable` la
+        // rifiuta, quindi una bozza qui sarebbe un secondo meccanismo vivo.
+        if (tg.sent().some((c) => c.method === 'sendMessageDraft')) {
+          throw new Error(`una bozza effimera è comparsa in un gruppo: ${JSON.stringify(tg.sent(), null, 2)}`);
+        }
+      } finally {
+        await inst.cleanup();
+        await tg.close();
+      }
+    },
+    240_000,
+  );
+});
+
+describe('acceptance · #744 · un allegato indirizzato a un topic esce nel topic', () => {
+  /**
+   * La metà `send_file`. In un topic **conversazionale** un membro non può
+   * raggiungerla: `surface.send_file` è in `MAI_CONCEDIBILI`
+   * (`core/policy/matrix.ts`), quindi un sigillo che la concedesse a una
+   * stanza farebbe cadere il file. La strada di produzione che invece la
+   * raggiunge è il job: `scheduler-run.ts` passa `replyChannel: job.channel`,
+   * e la riga che lo commenta dice esattamente questo — «un tool call
+   * mid-job (`send_file`) reaches the same destination the job's own text
+   * answer will». Il canale di un job è dichiarato dall'owner
+   * (`jobs add --channel`), quindi può nominare un topic con la forma
+   * `telegram:<chat>#<thread>`.
+   *
+   * Falsificatori, uno per uscita: `canaleDi` senza `#` o `indirizzoPer`
+   * senza la parte dopo `#` → nessuna consegna arriva al gruppo giusto;
+   * `deliverFile`/`sendDocument`/`deliver` senza il thread → il pezzo esce
+   * con `message_thread_id` assente, e i tre assert sotto lo vedono.
+   */
+  it(
+    '#744 job: il documento e la notifica oversize escono nel topic, e la consegna del testo pure',
+    async () => {
+      const tg = await startFakeTelegram();
+      const GROUP = -100_745;
+      const TOPIC = 745;
+      const FILE = 'report.txt';
+      const CONTENUTO = 'resoconto acceptance #744 (job) — '.repeat(20);
+      const RISPOSTA = 'fatto: report mandato, il grande non ci sta';
+      const inst = await install({
+        main: [
+          { tool: { name: 'send_file', args: { path: FILE, caption: 'ecco il report' } } },
+          { tool: { name: 'send_file', args: { path: 'big.bin' } } },
+          { text: RISPOSTA },
+        ],
+        env: { MUFFIN_GATEWAY_TICK_MS: '200' },
+      });
+      try {
+        const tok = await inst.muffin(['secret', 'set', 'telegram_token'], '123456:fake-744-job');
+        if (tok.code !== 0) throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
+        const enable = await inst.muffin(['surface', 'enable', 'telegram', '--api-base', tg.url]);
+        if (enable.code !== 0) throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
+
+        // I due file: uno vero e uno oltre i 50MB di `sendDocument` — la
+        // seconda uscita di `deliverFile` è la notifica, e anche quella deve
+        // restare nel topic. `ftruncate` evita di allocare 50MB per un numero.
+        const vaultRoot = paths(inst.home).vault;
+        mkdirSync(vaultRoot, { recursive: true });
+        writeFileSync(join(vaultRoot, FILE), CONTENUTO, 'utf8');
+        const oversize = join(vaultRoot, 'big.bin');
+        const fd = openSync(oversize, 'w');
+        ftruncateSync(fd, 50 * 1024 * 1024 + 1);
+        closeSync(fd);
+
+        const added = await inst.muffin([
+          'jobs', 'add',
+          '--cron', '* * * * *',
+          '--channel', `telegram:${GROUP}#${TOPIC}`,
+          'mandami il report come allegato',
+        ]);
+        if (added.code !== 0) throw new Error(`jobs add: exit ${added.code}\n${added.err}`);
+        const jobId = inst.db((db) => (db.prepare(`SELECT id FROM jobs`).get() as { id: string } | undefined)?.id);
+        if (!jobId) throw new Error('nessuna riga jobs dopo `jobs add`');
+        // Il prossimo scatto del cron è al minuto: retrodatato prima del boot,
+        // così il primo tick lo vede dovuto. `inst.db` è in sola lettura.
+        const db = new DatabaseCtor(join(inst.home, 'muffin.db'));
+        try {
+          db.prepare(`UPDATE jobs SET next_fire_at = ? WHERE id = ?`).run(new Date(Date.now() - 60_000).toISOString(), jobId);
+        } finally {
+          db.close();
+        }
+
+        const gw = await inst.gateway();
+        await gw.waitFor(/muffin gateway/, 20_000);
+        try {
+          await until(
+            () =>
+              tg.sent().some(
+                (c) => c.method === 'sendMessage' && String(c.payload['text'] ?? '').includes(RISPOSTA),
+              ),
+            30_000,
+          );
+        } finally {
+          await gw.stop();
+        }
+
+        // (1) Il documento vero, nel topic.
+        const docs = tg.documents();
+        if (docs.length !== 1) {
+          throw new Error(`atteso esattamente 1 sendDocument, trovati ${docs.length}: ${JSON.stringify(tg.sent(), null, 2)}`);
+        }
+        const docCall = tg.sent().find((c) => c.method === 'sendDocument');
+        if (Number(docCall?.payload['chat_id'] ?? 0) !== GROUP) {
+          throw new Error(`sendDocument sulla stanza sbagliata: ${JSON.stringify(docCall)}`);
+        }
+        if (Number(docCall?.payload['message_thread_id']) !== TOPIC) {
+          throw new Error(`sendDocument senza message_thread_id=${TOPIC}: ${JSON.stringify(docCall)}`);
+        }
+        if (docs[0]!.filename !== FILE || docs[0]!.bytes !== Buffer.byteLength(CONTENUTO)) {
+          throw new Error(`documento sbagliato: ${JSON.stringify(docs[0])}`);
+        }
+
+        // (2) La notifica oversize, anche lei nel topic (ed è un `sendMessage`,
+        // non un upload: `big.bin` non deve comparire fra i documenti).
+        const notifica = tg
+          .sent()
+          .find((c) => c.method === 'sendMessage' && String(c.payload['text'] ?? '').includes('big.bin'));
+        if (!notifica) {
+          throw new Error(`nessuna notifica per big.bin: ${JSON.stringify(tg.sent(), null, 2)}`);
+        }
+        if (Number(notifica.payload['message_thread_id']) !== TOPIC) {
+          throw new Error(`la notifica oversize non nomina il topic: ${JSON.stringify(notifica)}`);
+        }
+        if (!String(notifica.payload['text'] ?? '').includes('è pronto ma pesa')) {
+          throw new Error(`la notifica non dice dove sta il file: ${JSON.stringify(notifica.payload['text'])}`);
+        }
+
+        // (3) La consegna del testo del job (`deliver`, non il turno vivo) usa
+        // lo stesso `job.channel`, quindi anche lei porta il topic.
+        const consegna = tg
+          .sent()
+          .find((c) => c.method === 'sendMessage' && String(c.payload['text'] ?? '').includes(RISPOSTA));
+        if (Number(consegna?.payload['message_thread_id']) !== TOPIC) {
+          throw new Error(`la consegna del job non nomina il topic: ${JSON.stringify(consegna)}`);
+        }
+
+        // E niente è uscito verso il gruppo fuori dal topic.
+        for (const c of tg.sent()) {
+          if (Number(c.payload['chat_id'] ?? 0) !== GROUP) continue;
+          if (Number(c.payload['message_thread_id']) !== TOPIC) {
+            throw new Error(`un pezzo del job è uscito in *General*: ${JSON.stringify(c)}`);
+          }
         }
       } finally {
         await inst.cleanup();

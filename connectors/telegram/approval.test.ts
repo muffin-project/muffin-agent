@@ -28,11 +28,16 @@ const where: ApprovalWhere = {
   approvalId: 'aabbccdd',
 };
 
-function recordingApi(): { api: TelegramApiLike; calls: { chatId: number; text: string; keyboard?: unknown }[] } {
-  const calls: { chatId: number; text: string; keyboard?: unknown }[] = [];
+function recordingApi(): { api: TelegramApiLike; calls: { chatId: number; text: string; threadId?: unknown; keyboard?: unknown }[] } {
+  const calls: { chatId: number; text: string; threadId?: unknown; keyboard?: unknown }[] = [];
   const api = {
-    sendMessage: async (chatId: number, html: string, options?: { keyboard?: unknown }) => {
-      calls.push({ chatId, text: html, ...(options?.keyboard === undefined ? {} : { keyboard: options.keyboard }) });
+    sendMessage: async (chatId: number, html: string, options?: { threadId?: unknown; keyboard?: unknown }) => {
+      calls.push({
+        chatId,
+        text: html,
+        ...(options?.threadId === undefined ? {} : { threadId: options.threadId }),
+        ...(options?.keyboard === undefined ? {} : { keyboard: options.keyboard }),
+      });
       return { message_id: calls.length, date: 0, chat: { id: chatId, type: 'private' } };
     },
   } as unknown as TelegramApiLike;
@@ -76,6 +81,28 @@ describe('approvatoreTelegram · il ripiego, quando nessuna trascrizione può os
     expect(calls[0]!.text).toContain('non si torna indietro');
     expect(calls[0]!.text).toContain('echo ciao');
     expect(calls[0]!.keyboard).toBeDefined();
+  });
+
+  it('in un topic ogni pezzo porta il thread: la domanda di ripiego non finisce in *General*', async () => {
+    const { api, calls } = recordingApi();
+    // Abbastanza lunga da spezzarsi: il difetto non è solo sul primo pezzo, è
+    // che ogni `sendMessage` del ripiego ignorava `where.replyTo.threadId`.
+    const lunga: ApprovalRequest = { ...request, resource: `command: ${'x'.repeat(9000)}` };
+    const esito = await approvatoreTelegram(api)(lunga, {
+      ...where,
+      replyTo: { chatId: 42, messageId: 7, threadId: 77 },
+    });
+
+    expect(esito).toBe('asked');
+    expect(calls.length).toBeGreaterThan(1);
+    for (const call of calls) expect(call.threadId).toBe(77);
+    expect(calls.at(-1)!.keyboard).toBeDefined();
+  });
+
+  it('fuori da un topic non aggiunge nessun thread — la DM resta la DM', async () => {
+    const { api, calls } = recordingApi();
+    await approvatoreTelegram(api)(request, where);
+    for (const call of calls) expect(call.threadId).toBeUndefined();
   });
 
   it('senza indirizzo durevole non inventa la chat dell’owner: `unavailable`', async () => {

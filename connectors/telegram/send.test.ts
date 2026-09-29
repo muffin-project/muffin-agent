@@ -61,4 +61,18 @@ describe('sending a document', () => {
     const doc = calls[0]!.body.get('document') as Blob;
     expect(await doc.text()).toBe('contenuto');
   });
+
+  it('mette `message_thread_id` quando il documento va in un topic', async () => {
+    // Senza, `sendDocument` non sa indirizzare un topic: il file comparirebbe
+    // in *General* mentre l'owner guarda la sotto-conversazione.
+    const { api, calls } = stub();
+    await sendDocument(api, 777, aFile(), { threadId: 4242 });
+    expect(calls[0]!.body.get('message_thread_id')).toBe('4242');
+  });
+
+  it('fuori da un topic non manda `message_thread_id`', async () => {
+    const { api, calls } = stub();
+    await sendDocument(api, 777, aFile());
+    expect(calls[0]!.body.get('message_thread_id')).toBeNull();
+  });
 });
