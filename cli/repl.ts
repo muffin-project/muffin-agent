@@ -192,6 +192,8 @@ export function formatProgressLine(event: TurnEvent, verbosity: Verbosity): stri
         return `· modello: ${event.ms}ms, ${event.inputTokens}→${event.outputTokens} token, stop: ${event.stopReason}`;
       case 'model_status':
         return `· modello ${event.status}, ${Math.round(event.idleMs / 1000)}s inattivo`;
+      case 'model_retry':
+        return `· provider ${event.class} tentativo ${event.attempt}/${event.max} fra ${event.inMs}ms`;
       case 'tool_start':
         return `· ${event.name}…`;
       case 'tool_retry':
@@ -213,6 +215,10 @@ export function formatProgressLine(event: TurnEvent, verbosity: Verbosity): stri
       return null;
     case 'model_status':
       return event.status === 'stalled' ? `  ⚠ nessuna attività del modello da ${Math.round(event.idleMs / 1000)}s` : null;
+    // Stessa ragione di `tool_retry`, altro budget: l'attesa del re-drive va
+    // detta, o lo spinner fermo per due minuti sembra un guasto.
+    case 'model_retry':
+      return `  ↻ ${event.class === 'provider_empty' ? 'risposta vuota dal provider' : 'il provider non ha risposto'} — riprovo (${event.attempt}/${event.max}) tra ${Math.max(1, Math.round(event.inMs / 1000))}s`;
     // Nemmeno l'inizio di un tool: `statusFor` lo mostra vivo, e stampare
     // «cerco in memoria…» e poi «✓ cerco in memoria» sarebbe la stessa cosa
     // detta due volte.

@@ -378,6 +378,41 @@ describe('anthropic adapter · chatStream (B11)', () => {
     const provider = new AnthropicProvider('sk-bad', 'https://api.anthropic.test', { fetch: fetchFake as never });
     await expect(collect(provider.chatStream(CALL))).rejects.not.toBeInstanceOf(ProviderStreamError);
   });
+
+  it('an aborted SSE read is an abort, not a completed empty response', async () => {
+    // Same hole as the OpenAI adapter and the same SDK shape: an aborted
+    // stream read exits the iteration without throwing (`core/streaming.mjs`
+    // catches `isAbortError` and returns), so without the adapter's own
+    // signal check the call would come back as a success with no stop_reason
+    // and be classified as the provider's fault. The body closes a tick
+    // after the abort, which is exactly the shape the SDK leaves behind.
+    const provider = streamHarness(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(': ping\n\n'));
+            setTimeout(() => controller.close(), 60);
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'text/event-stream' } },
+      ),
+    );
+    const controller = new AbortController();
+    const events: StreamEvent[] = [];
+    const drained = (async () => {
+      for await (const event of provider.chatStream({ ...CALL, signal: controller.signal })) events.push(event);
+    })();
+    setTimeout(() => controller.abort('model_deadline'), 10);
+    let caught: unknown;
+    try {
+      await drained;
+    } catch (error) {
+      caught = error;
+    }
+    expect(events).toEqual([]);
+    expect(caught).toBeInstanceOf(ProviderError);
+    expect((caught as ProviderError).retryable).toBe(false);
+  });
 });
 
 /**

@@ -123,6 +123,10 @@ export async function runWork(
       return askWhichContinuation(
         { turns: deps.loop.turns, sessions: deps.sessions, model: deps.loop.model },
         {
+          // The row the ambiguity question writes is the id this event already
+          // carries: composition, delivery and recovery point at it, so it
+          // must exist.
+          workId: req.workId,
           principal: req.identity.principal,
           tenant: req.identity.tenant,
           surface: port.surface.id,
@@ -156,6 +160,13 @@ export async function runWork(
       if ('why' in continued) throw new ContinuationGone(req.workId);
       return continued;
     }
+    // The bind committed an identity that already has a row, yet the
+    // re-derivation no longer names it as a continuation (the invitation
+    // window or the ambiguity-question TTL closed while this event waited
+    // for the lane). `runTurn` would `INSERT` under that id and die on the
+    // primary key; the durable row wins, and `recover` resolves this event
+    // against it — the same road as a vanished continuation target.
+    if (deps.loop.turns.get(req.workId) !== null) throw new ContinuationGone(req.workId);
     return await runTurn(deps.loop, {
     signal: req.signal,
     steer: req.steer,

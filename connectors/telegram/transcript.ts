@@ -914,6 +914,14 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         case 'model_status':
           status = event.status === 'stalled' ? `nessuna attività del modello da ${Math.round(event.idleMs / 1000)}s` : event.status === 'thinking' ? 'sto pensando' : event.status === 'receiving' ? 'sto ricevendo la risposta' : 'aspetto il modello';
           break;
+        case 'model_retry':
+          // Un retry silenzioso è indistinguibile da uno stallo: l'attesa è
+          // dichiarata, e la ragione dice quale budget si sta spendendo.
+          status =
+            event.class === 'provider_empty'
+              ? `il provider ha risposto vuoto — riprovo (${event.attempt}/${event.max}) tra ${Math.max(1, Math.round(event.inMs / 1000))}s`
+              : `il provider non ha risposto — riprovo (${event.attempt}/${event.max}) tra ${Math.max(1, Math.round(event.inMs / 1000))}s`;
+          break;
         case 'tool_start':
           status = null;
           addStep({ ...stepOf(event.name, event.args), state: 'running', startedAt: now() });
