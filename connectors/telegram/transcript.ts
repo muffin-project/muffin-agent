@@ -173,8 +173,8 @@ export type Transcript = {
    *
    * Same vocabulary as `tool_end`, on purpose — an approval that resolves is
    * not a new kind of fact, it is the same `⏸`→done transition a running
-   * tool already gets. Finds the **last** `'waiting'` step across every
-   * still-open segment (never a closed one — `stop()` already finalised
+   * tool already gets. Finds the `'waiting'` step **by approval id** across
+   * every still-open segment (never a closed one — `stop()` already finalised
    * those) and rewrites it in place; a segment with no such step does
    * nothing, which is the ordinary case for every step in every OTHER turn
    * that never asked.

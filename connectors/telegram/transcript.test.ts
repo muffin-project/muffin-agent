@@ -1206,4 +1206,28 @@ describe('#745 review — stessa capability, risorse diverse', () => {
     expect(calls.filter((c) => c.method === 'editMessageReplyMarkup').at(-1)!.keyboard).toEqual([]);
     await t.stop();
   });
+
+  /**
+   * Ordine non-LIFO (review #757): cliccare la domanda **più vecchia** mentre
+   * la più recente è ancora in attesa. Con la chiave per capability il
+   * verdetto sarebbe atterrato sull'ultimo `waiting` incontrato — il passo
+   * sbagliato. Questo caso non era coperto: la mutazione della chiave in
+   * `resolveAsk` sopravviveva alla suite.
+   */
+  it('cliccando la più vecchia, la più recente resta in attesa con la sua tastiera', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+
+    await t.ask({ request: requestA, approvalId: 'aaaa' });
+    await t.ask({ request: requestB, approvalId: 'bbbb' });
+
+    t.resolveAsk({ approvalId: 'aaaa', capability: 'sys.shell.write' }, true);
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+
+    const processo = (t.handoff()?.process ?? []).join('\n');
+    expect(processo).toMatch(/✓[\s\S]*echo uno[\s\S]*consentito/);
+    expect(processo).toMatch(/⏸[\s\S]*echo due/);
+    expect(ultimaTastiera(calls).flat().map((b) => b.callback_data)).toEqual(['ok:bbbb', 'no:bbbb']);
+    await t.stop();
+  });
 });
