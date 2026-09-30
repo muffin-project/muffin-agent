@@ -6,7 +6,8 @@ mai in `if` sul nome del modello nel loop.
 
 ## Bracci
 
-- `A` — status quo: profilo shipped intatto (`adaptive` + `deterministic`).
+- `A` — status quo: profilo shipped così com'è (per qwen3, dal 01/10/2026,
+  `consumer-qwen3` dichiara `xhigh` + `deterministic`).
 - `B` — `adaptive` + `model-default`: solo la temperature resta al provider.
 - `C` — `off` + `deterministic` (via `thinking: 'off'` nella home usa-e-getta).
 
