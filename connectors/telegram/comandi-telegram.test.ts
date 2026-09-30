@@ -9,6 +9,8 @@ import type { ChatResult, Provider } from '../../agent/providers/types.js';
 import { buildRuntime } from '../../agent/runtime.js';
 import { runInit } from '../../cli/init.js';
 import type { TelegramApi } from './api.js';
+import { TelegramError } from './api.js';
+import { TELEGRAM_MAX } from './render.js';
 import { TelegramConnector } from './connector.js';
 import { ModelLane } from '../../core/turns/model-lane.js';
 import { TelegramDeliveryStore } from './delivery.js';
@@ -47,6 +49,7 @@ function harness(comandi?: (riga: string, sessionId: string) => Promise<{ testo:
   const runtime = buildRuntime(home, workspace);
 
   const sent: { chatId: number; text: string; replyTo?: number }[] = [];
+  const failRich = { value: false };
   const turns: string[] = [];
   const menu: { command: string; description: string }[][] = [];
   const controller = new AbortController();
@@ -64,6 +67,14 @@ function harness(comandi?: (riga: string, sessionId: string) => Promise<{ testo:
       return true;
     },
     sendMessage: async (chatId: number, text: string, options?: { replyTo?: number }) => {
+      sent.push({ chatId, text, ...(options?.replyTo === undefined ? {} : { replyTo: options.replyTo }) });
+      return {} as never;
+    },
+    // La lane rich si registra come il suo gemello legacy; con `failRich` il
+    // rifiuto è deterministico e `present` scende ai pezzi sotto il limite.
+    sendRichMessage: async (chatId: number, rich: { html?: string; blocks?: unknown[] }, options?: { replyTo?: number }) => {
+      if (failRich.value) throw new TelegramError(400, 'Bad Request: ricco rifiutato (simulato)');
+      const text = rich.html ?? JSON.stringify(rich.blocks ?? []);
       sent.push({ chatId, text, ...(options?.replyTo === undefined ? {} : { replyTo: options.replyTo }) });
       return {} as never;
     },
@@ -98,7 +109,7 @@ function harness(comandi?: (riga: string, sessionId: string) => Promise<{ testo:
     config: { token: 't', ownerUserId: OWNER, ownerChatId: OWNER },
     ...(comandi ? { comandi } : {}),
   });
-  return { connector, sent, turns, menu, controller };
+  return { connector, sent, turns, menu, controller, failRich };
 }
 
 async function deliver(h: ReturnType<typeof harness>, updates: Update[]): Promise<void> {
@@ -139,20 +150,31 @@ describe('un comando dell owner non passa dal modello', () => {
   /**
    * `/model --list` supera i 4096 caratteri con una manciata di modelli.
    * Mandare solo il primo pezzo sarebbe un elenco troncato in silenzio — che
-   * è esattamente il difetto che `renderForTelegram` esiste per non avere.
+   * è esattamente il difetto che `renderForTelegram`/`splitHtml` esistono per
+   * non avere. Ricca, la risposta intera sta in un messaggio; se il ricco
+   * viene rifiutato, scende ai pezzi legacy, mai troncata.
    */
-  it('e una risposta lunga arriva tutta, non solo il primo pezzo', async () => {
+  it('e una risposta lunga arriva tutta — ricca in un messaggio, o a pezzi sotto il limite', async () => {
     const lunga = Array.from({ length: 400 }, (_, i) => `riga numero ${i} del catalogo dei modelli`).join('\n');
     const h = harness(async () => ({ testo: lunga }));
 
     await deliver(h, [msg(1, { chatId: OWNER, fromId: OWNER, text: '/model --list' })]);
 
-    expect(h.sent.length).toBeGreaterThan(1);
     expect(h.sent.map((s) => s.text).join('')).toContain('riga numero 399');
-    // La citazione sta sul primo pezzo soltanto: citarne cinque sarebbe cinque
+    // La citazione sta su un pezzo soltanto: citarne cinque sarebbe cinque
     // risposte alla stessa domanda.
     expect(h.sent.filter((s) => s.replyTo !== undefined)).toHaveLength(1);
     expect(h.sent[0]?.replyTo).toBe(1);
+
+    const h2 = harness(async () => ({ testo: lunga }));
+    h2.failRich.value = true;
+    await deliver(h2, [msg(1, { chatId: OWNER, fromId: OWNER, text: '/model --list' })]);
+
+    expect(h2.sent.length).toBeGreaterThan(1);
+    for (const s of h2.sent) expect(s.text.length).toBeLessThanOrEqual(TELEGRAM_MAX);
+    expect(h2.sent.map((s) => s.text).join('')).toContain('riga numero 399');
+    expect(h2.sent.filter((s) => s.replyTo !== undefined)).toHaveLength(1);
+    expect(h2.sent[0]?.replyTo).toBe(1);
   });
 });
 

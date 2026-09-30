@@ -209,6 +209,12 @@ describe('deliverFile: il canale di un topic porta il thread fino al documento',
         inviati.push({ chatId, options });
         return {} as never;
       },
+      // Ricca o legacy, la notifica registra le opzioni: il thread deve
+      // esserci comunque.
+      sendRichMessage: async (chatId: number, _rich: unknown, options?: SendOptions) => {
+        inviati.push({ chatId, options });
+        return {} as never;
+      },
     } as unknown as TelegramApiType;
 
     const esito = await telegramSurface(api, undefined).deliverFile(canale(TOPIC_BUG), {
@@ -247,6 +253,10 @@ describe('deliverFile: il canale di un topic porta il thread fino al documento',
     const inviati: { chatId: number; options: SendOptions | undefined }[] = [];
     const api = {
       sendMessage: async (chatId: number, _html: string, options?: SendOptions) => {
+        inviati.push({ chatId, options });
+        return {} as never;
+      },
+      sendRichMessage: async (chatId: number, _rich: unknown, options?: SendOptions) => {
         inviati.push({ chatId, options });
         return {} as never;
       },

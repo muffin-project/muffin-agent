@@ -1,5 +1,6 @@
 import type { ApprovalRequest, Approver } from '../../agent/loop.js';
-import { escapeHtml, splitHtml } from './render.js';
+import { escapeHtml } from './render.js';
+import { present, presentationOfHtml } from './present.js';
 import type { InlineButton, TelegramApi, TelegramApiLike } from './api.js';
 
 /**
@@ -110,12 +111,14 @@ export function approvatoreTelegram(api: TelegramApi | TelegramApiLike): Approve
     const threadId = where.replyTo?.['threadId'];
     const topic = typeof threadId === 'number' ? { threadId } : {};
 
-    const parti = splitHtml(askHtml(request));
-    for (let i = 0; i < parti.length - 1; i++) await api.sendMessage(chatId, parti[i]!, topic);
-    await api.sendMessage(chatId, parti[parti.length - 1] ?? '', {
-      ...topic,
-      keyboard: askKeyboard(request.capability, where.approvalId),
-    });
+    // La politica è la stessa delle altre uscite fuori-turno (`present`):
+    // ricca se entra, legacy a pezzi sotto il limite, con la tastiera
+    // sull'ultimo pezzo — la domanda è l'ultima cosa che si legge.
+    await present(
+      api,
+      { chatId, ...topic, keyboard: askKeyboard(request.capability, where.approvalId) },
+      presentationOfHtml(askHtml(request)),
+    );
     return 'asked';
   };
 }

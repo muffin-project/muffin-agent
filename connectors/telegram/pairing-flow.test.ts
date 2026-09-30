@@ -53,6 +53,12 @@ function harness(config: TelegramConfig) {
       sent.push({ chatId, text });
       return {} as never;
     },
+    // La lane rich si registra come il suo gemello legacy: l'asserzione resta
+    // sul testo visibile («Sei tu»).
+    sendRichMessage: async (chatId: number, rich: { html?: string; blocks?: unknown[] }) => {
+      sent.push({ chatId, text: rich.html ?? JSON.stringify(rich.blocks ?? []) });
+      return {} as never;
+    },
     sendChatAction: async () => true,
   } as unknown as TelegramApi;
 

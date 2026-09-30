@@ -77,7 +77,8 @@ import { DRAIN_BUDGET_MS } from '../../core/gateway/service.js';
  * `drainBudgetMs` — see `stop()`'s doc comment.
  */
 const DEFAULT_STOP_BUDGET_MS = DRAIN_BUDGET_MS;
-import { escapeHtml, renderForTelegram, splitHtml, toTelegramHtml } from './render.js';
+import { escapeHtml, splitHtml, toTelegramHtml } from './render.js';
+import { present, presentationOf, presentationOfHtml } from './present.js';
 import { normalizeInboundRich, planRich, RICH_COMPAT_CHARS, richFitsHard, richFromHtml, turnRichMessage } from './rich.js';
 import { UpdateInbox, type StoredUpdate } from './updates.js';
 
@@ -1854,7 +1855,7 @@ export class TelegramConnector {
     if (esito.azione === 'resta') return;
 
     try {
-      await this.deps.api.sendMessage(chat.id, escapeHtml(SALUTO_NEL_GRUPPO));
+      await present(this.deps.api, { chatId: chat.id }, presentationOfHtml(escapeHtml(SALUTO_NEL_GRUPPO)));
     } catch (error) {
       log(`telegram: saluto non inviato in ${chat.id} — ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -1862,7 +1863,7 @@ export class TelegramConnector {
     const ownerChat = this.deps.config.ownerChatId;
     if (ownerChat !== undefined) {
       try {
-        await this.deps.api.sendMessage(ownerChat, escapeHtml(avvisoAllOwner(invito, esito)));
+        await present(this.deps.api, { chatId: ownerChat }, presentationOfHtml(escapeHtml(avvisoAllOwner(invito, esito))));
       } catch (error) {
         log(`telegram: avviso all'owner non inviato — ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -2343,10 +2344,15 @@ export class TelegramConnector {
   /** Una frase sola, non richiesta, nella stanza da cui è arrivato questo update. */
   private async dilloA(incoming: Incoming, testo: string): Promise<void> {
     try {
-      await this.deps.api.sendMessage(incoming.chatId, testo, {
-        replyTo: incoming.messageId,
-        ...(incoming.threadId === undefined ? {} : { threadId: incoming.threadId }),
-      });
+      await present(
+        this.deps.api,
+        {
+          chatId: incoming.chatId,
+          replyTo: incoming.messageId,
+          ...(incoming.threadId === undefined ? {} : { threadId: incoming.threadId }),
+        },
+        presentationOfHtml(escapeHtml(testo)),
+      );
     } catch (error) {
       (this.deps.log ?? (() => {}))(
         `telegram: conferma di coda non inviata — ${error instanceof Error ? error.message : String(error)}`,
@@ -2531,7 +2537,7 @@ export class TelegramConnector {
           this.deps.savePairing!({ pairing: next });
           this.deps.config.pairing = next ?? undefined;
         },
-        say: (text) => this.deps.api.sendMessage(incoming.chatId, text),
+        say: (text) => present(this.deps.api, { chatId: incoming.chatId }, presentationOfHtml(escapeHtml(text))),
         // A wrong or expired code must not turn the personal bot into a reply
         // surface for strangers. The valid one-time secret still confirms
         // pairing to the account that proved it.
@@ -2647,17 +2653,17 @@ export class TelegramConnector {
     const testo = query.message;
     if (!presaDallaTrascrizione && testo !== undefined && 'text' in testo && typeof testo.text === 'string') {
       try {
-        await this.deps.api.editMessageText(
-          testo.chat.id,
-          testo.message_id,
-          `${escapeHtml(testo.text)}\n\n<b>${decisione === 'allow' ? '✓ consentito' : '✗ rifiutato'}</b>`,
+        // La tastiera si toglie con `keyboard: []` nella **stessa** chiamata
+        // che scrive il verdetto — rimozione esplicita, non per omissione:
+        // `editMessageText` non dice cosa succede alla tastiera quando
+        // `reply_markup` non è passato (`api.ts`, letta il 03/09/2026).
+        await present(
+          this.deps.api,
+          { chatId: testo.chat.id, editMessageId: testo.message_id, keyboard: [] },
+          presentationOfHtml(
+            `${escapeHtml(testo.text)}\n\n<b>${decisione === 'allow' ? '✓ consentito' : '✗ rifiutato'}</b>`,
+          ),
         );
-        // Esplicito, non per omissione: `editMessageText` non dice cosa
-        // succede alla tastiera quando `reply_markup` non è passato — non è
-        // documentato dalla fonte primaria (`api.ts`'s
-        // `editMessageReplyMarkup`, letta il 03/09/2026). Una seconda
-        // chiamata dedicata la toglie per costruzione.
-        await this.deps.api.editMessageReplyMarkup(testo.chat.id, testo.message_id);
       } catch {
         /* il messaggio può essere troppo vecchio per essere modificato: la decisione è già presa */
       }
@@ -2715,21 +2721,21 @@ export class TelegramConnector {
       // sua corsia, e `/stop` dal gruppo non ferma il turno della privata.
       controlli: controlliPerCorsia(this.corsie, this.corsia(incoming.chatId), this.deps.pausa),
       esegui: this.deps.comandi,
-      // Il dialetto resta qui. `renderForTelegram` taglia sotto il limite di
-      // Telegram: `/model --list` supera i 4096 caratteri con una manciata di
-      // modelli, e mandarne solo il primo pezzo sarebbe un elenco troncato in
-      // silenzio. La citazione sta sul primo: e' li' che si vede a quale
-      // messaggio si sta rispondendo.
+      // Il dialetto resta qui. La politica di presentazione (rich-first, con
+      // il ripiego legacy a pezzi sotto il limite) è di `present`: `/model
+      // --list` supera i 4096 caratteri con una manciata di modelli, e la
+      // citazione sta sul primo pezzo — è lì che si vede a quale messaggio si
+      // sta rispondendo.
       rispondi: async (testo) => {
-        const pezzi = renderForTelegram(testo);
-        for (const [i, pezzo] of pezzi.entries()) {
-          const topic = incoming.threadId === undefined ? {} : { threadId: incoming.threadId };
-          await this.deps.api.sendMessage(
-            incoming.chatId,
-            pezzo,
-            i === 0 ? { replyTo: incoming.messageId, ...topic } : topic,
-          );
-        }
+        await present(
+          this.deps.api,
+          {
+            chatId: incoming.chatId,
+            ...(incoming.threadId === undefined ? {} : { threadId: incoming.threadId }),
+            replyTo: incoming.messageId,
+          },
+          presentationOf(testo),
+        );
       },
     });
   }
