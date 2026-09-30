@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { z } from 'zod';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { TOOL_RESULT_BUDGET_CHARS } from '../loop/types.js';
 
 /**
  * Per-model profiles.
@@ -126,6 +127,20 @@ export type Profile = {
   recovery: RecoveryStrategy[];
   /** Optional only for programmatic/backward-compatible callers; loadProfiles materializes DEFAULT_EXECUTION. */
   execution?: ProfileExecution | undefined;
+  /**
+   * Clearable tool-result payload kept per turn, in characters.
+   *
+   * The loop's global `TOOL_RESULT_BUDGET_CHARS` is tuned for frontier
+   * models; a small local model with a 90s per-call deadline degrades long
+   * before 60k chars of old results (measured 30/09/2026: two
+   * `model_deadline` deaths at 32k input tokens with TTFT up to 35s, zero
+   * compaction). Per-profile data for the same reason `thinking` is: never
+   * an `if (model === ...)` in the loop. Optional like `execution`, and for
+   * the same reason — a third-party profile from before this field keeps the
+   * behaviour it had (`sampling` precedent). The loop falls back to the
+   * global constant when absent.
+   */
+  toolResultBudgetChars?: number | undefined;
   notes: string;
 };
 
@@ -196,6 +211,10 @@ const ProfileSchema = z.object({
   // floor. Per-field defaults also make a partially migrated profile converge
   // instead of silently losing whichever fuse it omitted.
   execution: ExecutionSchema.default(DEFAULT_EXECUTION),
+  // Defaulted, not required: the default is what the loop did before this
+  // field existed (the global compaction budget), so an old profile keeps
+  // exactly the behaviour it had instead of silently acquiring a tighter one.
+  toolResultBudgetChars: z.number().int().positive().default(TOOL_RESULT_BUDGET_CHARS),
   notes: z.string().default(''),
 });
 
