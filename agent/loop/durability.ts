@@ -426,7 +426,12 @@ export function announceEnd(scope: TurnScope, stopped: TurnOutcome): void {
  * actually landed.
  */
 function continuableText(scope: TurnScope, failureClass: ContinuableClass, attempts: number): string {
-  const done = scope.run.toolCallsMade;
+  // Turno, non lease: `run.toolCallsMade` è azzerato a ogni grant esplicito
+  // (`buildFreshCounters`), mentre `lifetime` piega le lease chiuse — senza
+  // sovrapposizioni, il fold avviene solo al release. Misurato il 30/09/2026:
+  // dopo un'ora e 17 call la lease 1 diceva «nessuna tool call», e la frase
+  // mentiva sul lavoro fatto.
+  const done = scope.record.lifetime.toolCallsMade + scope.run.toolCallsMade;
   const completed = done > 0 ? `${done} tool call completate` : 'nessuna tool call ancora completata';
   // #615: a `truncated` release after partial-text continuations already holds
   // the accepted prefix durably in the transcript. Saying "senza produrre
@@ -490,12 +495,16 @@ export function releaseContinuable(
   attempts: number,
 ): TurnResult {
   const { deps, record, run, snapshot, turn: span } = scope;
+  // Stesso totale della diagnostica qui sotto: la ragione durevole deve dire
+  // quello che l'owner legge, altrimenti `describeCandidate` («17 tool call
+  // completate» vs «nessuna») mente nella domanda di disambiguazione.
+  const completedToolCalls = record.lifetime.toolCallsMade + run.toolCallsMade;
   const reason: ContinuableReason = {
     class: failureClass,
     lease: record.leaseIndex,
     ...(attempts > 0 ? { attempts } : {}),
     ...(run.providerFailureRequestIds.length > 0 ? { requestIds: [...run.providerFailureRequestIds] } : {}),
-    completed: { toolCalls: run.toolCallsMade },
+    completed: { toolCalls: completedToolCalls },
     at: new Date().toISOString(),
   };
   span.setAttributes({
