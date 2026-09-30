@@ -28,10 +28,11 @@ const where: ApprovalWhere = {
   approvalId: 'aabbccdd',
 };
 
-function recordingApi(refuseRich = false): { api: TelegramApiLike; calls: { chatId: number; text: string; threadId?: unknown; keyboard?: unknown }[] } {
-  const calls: { chatId: number; text: string; threadId?: unknown; keyboard?: unknown }[] = [];
-  const record = (chatId: number, html: string, options?: { threadId?: unknown; keyboard?: unknown }): void => {
+function recordingApi(refuseRich = false): { api: TelegramApiLike; calls: { method: string; chatId: number; text: string; threadId?: unknown; keyboard?: unknown }[] } {
+  const calls: { method: string; chatId: number; text: string; threadId?: unknown; keyboard?: unknown }[] = [];
+  const record = (method: string, chatId: number, html: string, options?: { threadId?: unknown; keyboard?: unknown }): void => {
     calls.push({
+      method,
       chatId,
       text: html,
       ...(options?.threadId === undefined ? {} : { threadId: options.threadId }),
@@ -40,7 +41,7 @@ function recordingApi(refuseRich = false): { api: TelegramApiLike; calls: { chat
   };
   const api = {
     sendMessage: async (chatId: number, html: string, options?: { threadId?: unknown; keyboard?: unknown }) => {
-      record(chatId, html, options);
+      record('sendMessage', chatId, html, options);
       return { message_id: calls.length, date: 0, chat: { id: chatId, type: 'private' } };
     },
     // La lane rich si registra come il suo gemello legacy: le asserzioni
@@ -51,8 +52,8 @@ function recordingApi(refuseRich = false): { api: TelegramApiLike; calls: { chat
       rich: { html?: string; blocks?: unknown[] },
       options?: { threadId?: unknown; keyboard?: unknown },
     ) => {
+      record('sendRichMessage', chatId, rich.html ?? JSON.stringify(rich.blocks ?? []), options);
       if (refuseRich) throw new TelegramError(400, 'Bad Request: ricco rifiutato (simulato)');
-      record(chatId, rich.html ?? JSON.stringify(rich.blocks ?? []), options);
       return { message_id: calls.length, date: 0, chat: { id: chatId, type: 'private' } };
     },
   } as unknown as TelegramApiLike;
@@ -93,6 +94,9 @@ describe('approvatoreTelegram · il ripiego, quando nessuna trascrizione può os
 
     expect(esito).toBe('asked');
     expect(calls).toHaveLength(1);
+    // La lane è quella ricca: la politica fuori-turno non è un `sendMessage`
+    // ad hoc che per caso manda le stesse parole.
+    expect(calls[0]!.method).toBe('sendRichMessage');
     expect(calls[0]!.text).toContain('non si torna indietro');
     expect(calls[0]!.text).toContain('echo ciao');
     expect(calls[0]!.keyboard).toBeDefined();

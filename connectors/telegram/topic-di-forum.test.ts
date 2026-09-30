@@ -203,16 +203,16 @@ describe('deliverFile: il canale di un topic porta il thread fino al documento',
   });
 
   it('un file oversize lo dice nel topic, non in *General*', async () => {
-    const inviati: { chatId: number; options: SendOptions | undefined }[] = [];
+    const inviati: { method: string; chatId: number; options: SendOptions | undefined }[] = [];
     const api = {
       sendMessage: async (chatId: number, _html: string, options?: SendOptions) => {
-        inviati.push({ chatId, options });
+        inviati.push({ method: 'sendMessage', chatId, options });
         return {} as never;
       },
       // Ricca o legacy, la notifica registra le opzioni: il thread deve
       // esserci comunque.
       sendRichMessage: async (chatId: number, _rich: unknown, options?: SendOptions) => {
-        inviati.push({ chatId, options });
+        inviati.push({ method: 'sendRichMessage', chatId, options });
         return {} as never;
       },
     } as unknown as TelegramApiType;
@@ -224,6 +224,7 @@ describe('deliverFile: il canale di un topic porta il thread fino al documento',
 
     expect(esito.delivered).toBe(true);
     expect(inviati).toHaveLength(1);
+    expect(inviati[0]!.method).toBe('sendRichMessage');
     expect(inviati[0]!.chatId).toBe(GROUP);
     expect(inviati[0]!.options?.threadId).toBe(TOPIC_BUG);
   });
@@ -250,20 +251,21 @@ describe('deliverFile: il canale di un topic porta il thread fino al documento',
     // `schedule.ts` scrive `ctx.replyChannel` come canale del job: se `deliver`
     // ignorasse il `#`, un promemoria creato in un topic suonerebbe in
     // *General* — la stessa degradazione silenziosa, un giro più tardi.
-    const inviati: { chatId: number; options: SendOptions | undefined }[] = [];
+    const inviati: { method: string; chatId: number; options: SendOptions | undefined }[] = [];
     const api = {
       sendMessage: async (chatId: number, _html: string, options?: SendOptions) => {
-        inviati.push({ chatId, options });
+        inviati.push({ method: 'sendMessage', chatId, options });
         return {} as never;
       },
       sendRichMessage: async (chatId: number, _rich: unknown, options?: SendOptions) => {
-        inviati.push({ chatId, options });
+        inviati.push({ method: 'sendRichMessage', chatId, options });
         return {} as never;
       },
     } as unknown as TelegramApiType;
 
     const esito = await telegramSurface(api, undefined).deliver(canale(TOPIC_BUG), 'promemoria');
     expect(esito.delivered).toBe(true);
+    expect(inviati[0]!.method).toBe('sendRichMessage');
     expect(inviati[0]!.options?.threadId).toBe(TOPIC_BUG);
   });
 });

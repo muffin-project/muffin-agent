@@ -44,19 +44,19 @@ const msg = (id: number, over: { chatId: number; fromId: number; text: string })
 
 function harness(config: TelegramConfig) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-pairing-'));
-  const sent: { chatId: number; text: string }[] = [];
+  const sent: { method: string; chatId: number; text: string }[] = [];
   const turns: string[] = [];
   const saved: { ownerUserId?: number; ownerChatId?: number; pairing: PendingPairing | null }[] = [];
 
   const api = {
     sendMessage: async (chatId: number, text: string) => {
-      sent.push({ chatId, text });
+      sent.push({ method: 'sendMessage', chatId, text });
       return {} as never;
     },
     // La lane rich si registra come il suo gemello legacy: l'asserzione resta
     // sul testo visibile («Sei tu»).
     sendRichMessage: async (chatId: number, rich: { html?: string; blocks?: unknown[] }) => {
-      sent.push({ chatId, text: rich.html ?? JSON.stringify(rich.blocks ?? []) });
+      sent.push({ method: 'sendRichMessage', chatId, text: rich.html ?? JSON.stringify(rich.blocks ?? []) });
       return {} as never;
     },
     sendChatAction: async () => true,
@@ -139,6 +139,9 @@ describe('pairing through the connector', () => {
 
     expect(h.saved).toHaveLength(1);
     expect(h.saved[0]).toMatchObject({ ownerUserId: OWNER, ownerChatId: OWNER, pairing: null });
+    // La conferma parte dalla lane ricca: la politica fuori-turno, non un
+    // `sendMessage` ad hoc.
+    expect(h.sent[0]?.method).toBe('sendRichMessage');
     expect(h.sent[0]?.text).toMatch(/Sei tu/);
     // The code was never a question for the model.
     expect(h.turns).toEqual([]);

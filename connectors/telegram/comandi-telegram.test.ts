@@ -48,7 +48,7 @@ function harness(comandi?: (riga: string, sessionId: string) => Promise<{ testo:
   runInit({ home, apiKey: 'sk-comandi-never-called' });
   const runtime = buildRuntime(home, workspace);
 
-  const sent: { chatId: number; text: string; replyTo?: number }[] = [];
+  const sent: { method: string; chatId: number; text: string; replyTo?: number }[] = [];
   const failRich = { value: false };
   const turns: string[] = [];
   const menu: { command: string; description: string }[][] = [];
@@ -67,15 +67,14 @@ function harness(comandi?: (riga: string, sessionId: string) => Promise<{ testo:
       return true;
     },
     sendMessage: async (chatId: number, text: string, options?: { replyTo?: number }) => {
-      sent.push({ chatId, text, ...(options?.replyTo === undefined ? {} : { replyTo: options.replyTo }) });
+      sent.push({ method: 'sendMessage', chatId, text, ...(options?.replyTo === undefined ? {} : { replyTo: options.replyTo }) });
       return {} as never;
     },
     // La lane rich si registra come il suo gemello legacy; con `failRich` il
     // rifiuto è deterministico e `present` scende ai pezzi sotto il limite.
     sendRichMessage: async (chatId: number, rich: { html?: string; blocks?: unknown[] }, options?: { replyTo?: number }) => {
       if (failRich.value) throw new TelegramError(400, 'Bad Request: ricco rifiutato (simulato)');
-      const text = rich.html ?? JSON.stringify(rich.blocks ?? []);
-      sent.push({ chatId, text, ...(options?.replyTo === undefined ? {} : { replyTo: options.replyTo }) });
+      sent.push({ method: 'sendRichMessage', chatId, text: rich.html ?? JSON.stringify(rich.blocks ?? []), ...(options?.replyTo === undefined ? {} : { replyTo: options.replyTo }) });
       return {} as never;
     },
     sendChatAction: async () => true,
@@ -129,6 +128,9 @@ describe('un comando dell owner non passa dal modello', () => {
     await deliver(h, [msg(1, { chatId: OWNER, fromId: OWNER, text: '/spend' })]);
 
     expect(h.turns).toEqual([]);
+    // La risposta dei comandi esce dalla lane ricca: è la policy, non un
+    // `sendMessage` che per caso dice le stesse parole.
+    expect(h.sent[0]?.method).toBe('sendRichMessage');
     expect(h.sent[0]?.text).toContain('$0.0031');
     // La sessione è quella che il turno aprirebbe, e da ADR-0056 per la DM
     // dell'owner è `owner`: `/new` da qui deve archiviare la conversazione che

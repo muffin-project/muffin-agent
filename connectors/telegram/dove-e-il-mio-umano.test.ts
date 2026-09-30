@@ -118,17 +118,17 @@ function harness(config: TelegramConfig, ownerStatus: string | Error = 'member')
   };
   const loop: LoopDeps = { ...runtime.deps, provider };
 
-  const inviati: { chatId: number; testo: string }[] = [];
+  const inviati: { method: string; chatId: number; testo: string }[] = [];
   const usciteDa: number[] = [];
   const api = {
     sendMessage: async (chatId: number, testo: string) => {
-      inviati.push({ chatId, testo });
+      inviati.push({ method: 'sendMessage', chatId, testo });
       return { message_id: inviati.length } as never;
     },
     // La lane rich si registra come il suo gemello legacy: le asserzioni
     // restano sul testo visibile.
     sendRichMessage: async (chatId: number, rich: { html?: string; blocks?: unknown[] }) => {
-      inviati.push({ chatId, testo: rich.html ?? JSON.stringify(rich.blocks ?? []) });
+      inviati.push({ method: 'sendRichMessage', chatId, testo: rich.html ?? JSON.stringify(rich.blocks ?? []) });
       return { message_id: inviati.length } as never;
     },
     editMessageText: async () => ({}) as never,
@@ -173,6 +173,9 @@ describe('un invito che arriva dal filo', () => {
       // Il saluto **prima** dell'uscita: dopo `leaveChat` non si può più
       // scrivere lì dentro, quindi l'ordine non è cosmetico.
       expect(h.inviati[0]?.chatId).toBe(GRUPPO);
+      // E parte dalla lane ricca: la politica fuori-turno, non un
+      // `sendMessage` ad hoc.
+      expect(h.inviati[0]?.method).toBe('sendRichMessage');
       expect(h.inviati[0]?.testo).toContain('Dove è il mio umano');
       // L'avviso in privato, con chi e dove.
       expect(h.inviati[1]?.chatId).toBe(OWNER);
@@ -230,7 +233,7 @@ describe('un invito che arriva dal filo', () => {
     const h = harness(config, 'left');
     const muto = async (chatId: number): Promise<never> => {
       if (chatId === GRUPPO) throw new Error('bot is muted');
-      h.inviati.push({ chatId, testo: '(privato)' });
+      h.inviati.push({ method: 'sendRichMessage', chatId, testo: '(privato)' });
       return { message_id: 1 } as never;
     };
     (h.connector as unknown as { deps: { api: { sendMessage: unknown; sendRichMessage: unknown } } }).deps.api.sendMessage = muto;
