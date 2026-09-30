@@ -80,6 +80,51 @@ describe('shipped profiles', () => {
     });
   });
 
+  it('consumer-local: compacts tool results earlier than the global default', () => {
+    // Misurato il 30/09/2026 sull'installazione dell'owner: un debug pip da 17
+    // call è morto due volte in `model_deadline` a 32k token in ingresso con
+    // TTFT fino a 35s, mentre il budget di compattazione (60k char) non è mai
+    // scattato — tarato sui numeri Anthropic per modelli frontier, non su un
+    // qwen via OpenRouter con 90s di deadline per chiamata. Questo profilo
+    // compatta da 16k char (~4k token di risultati): i risultati recenti, quelli
+    // su cui il modello sta ragionando, restano; il resto diventa placeholder
+    // con la via del re-read.
+    const consumer = profiles.find((p) => p.name === 'consumer-local');
+    expect(consumer?.toolResultBudgetChars).toBe(16_000);
+  });
+
+  it('frontier: no per-profile compaction budget, inherits the global default', () => {
+    // Il profilo forte (deadline 120s, modello frontier) tiene il default: il
+    // campo assente nel JSON si materializza dal loader, mai come undefined.
+    const frontier = profiles.find((p) => p.name === 'frontier');
+    expect(frontier?.toolResultBudgetChars).toBe(60_000);
+  });
+
+  it('a profile written before the compaction budget existed inherits the global default', () => {
+    // Come `sampling`: il default è ciò che il loop faceva prima che il campo
+    // esistesse, così un profilo di terze parti non acquisisce in silenzio un
+    // comportamento nuovo all'upgrade.
+    const problems: string[] = [];
+    const tmp = mkdtempSync(join(tmpdir(), 'muffin-profiles-'));
+    writeFileSync(
+      join(tmp, 'old.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        name: 'old',
+        match: ['*'],
+        maxToolsExposed: 10,
+        maxToolCallsPerTurn: 15,
+        thinking: 'off',
+        recovery: [],
+        notes: '',
+      }),
+    );
+    const loaded = loadProfiles(tmp, (line) => problems.push(line));
+
+    expect(problems).toEqual([]);
+    expect(loaded[0]?.toolResultBudgetChars).toBe(60_000);
+  });
+
   it('a profile from before `sampling` existed keeps the behaviour it had', () => {
     // The field is defaulted rather than required precisely so a third-party
     // profile does not silently acquire a new request shape on upgrade.
