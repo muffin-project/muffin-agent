@@ -900,6 +900,7 @@ describe('reasoning config reaches the providers that make the calls (#789)', ()
     expect(bodies[0]?.reasoning_effort).toBe('none');
     expect(bodies[1]?.reasoning_effort).toBe('medium');
     expect(runtime.deps.profile.thinking).toBe('medium');
+    runtime.close();
   });
 
   it('without the config fields a self-hosted endpoint keeps the behaviour it always had', () => {
@@ -919,6 +920,7 @@ describe('reasoning config reaches the providers that make the calls (#789)', ()
 
     expect((runtime.deps.provider as unknown as { reasoningDialect?: unknown }).reasoningDialect).toBeUndefined();
     expect((runtime.light.provider as unknown as { reasoningDialect?: unknown }).reasoningDialect).toBeUndefined();
+    runtime.close();
   });
 });
 
