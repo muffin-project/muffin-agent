@@ -21,7 +21,9 @@ agent:
   max_concurrent_agents: 1
   max_turns: 20
 codex:
-  command: codex app-server
+  # Host command: run Codex inside an isolated container that mounts only this
+  # issue workspace and scoped pilot credentials. Fail closed if unavailable.
+  command: symphony-codex-container
   approval_policy:
     granular:
       sandbox_approval: false
@@ -29,10 +31,9 @@ codex:
       mcp_elicitations: false
       request_permissions: false
       skill_approval: false
-  thread_sandbox: workspace-write
+  thread_sandbox: danger-full-access
   turn_sandbox_policy:
-    type: workspaceWrite
-    networkAccess: true
+    type: dangerFullAccess
 ---
 
 You own the GitHub issue `{{ issue.identifier }}` until it is genuinely ready
