@@ -94,7 +94,7 @@ export const COMANDI: readonly { nome: string; aiuto: string; soloTerminale?: bo
   { nome: 'new', aiuto: 'inizia una conversazione nuova' },
   { nome: 'session', aiuto: 'mostra l\'id della conversazione' },
   { nome: 'spend', aiuto: 'quanto hai speso questo mese e oggi' },
-  { nome: 'think', aiuto: 'ragionamento: on | off | reset (senza argomenti lo mostra)' },
+  { nome: 'think', aiuto: `ragionamento: on | off | reset | un livello (${THINKING_EFFORTS.join(', ')}); senza argomenti lo mostra` },
   { nome: 'model', aiuto: 'modello: [main|light|embed] <slug>, --list, o niente per vederli' },
   { nome: 'config', aiuto: 'set <chiave> <valore> — solo le poche manopole scrivibili da qui' },
   { nome: 'debug', aiuto: 'giri, token e millisecondi: on | off (da solo, inverte)' },
@@ -260,7 +260,8 @@ export function thinkingCommand(
   override: Thinking | undefined,
   profileName: string,
 ): { line: string; set?: Thinking | null } {
-  const stato = (t: string, da: string): string => `ragionamento: ${t === 'off' ? 'off' : 'on'} (${da})`;
+  const stato = (t: string, da: string): string =>
+    `ragionamento: ${t === 'off' ? 'off' : isThinkingEffort(t) ? `on, livello ${t}` : 'on'} (${da})`;
   const da = override === undefined ? `profilo ${profileName}` : 'config.json';
   if (arg === '') return { line: stato(current, da) };
   if (arg === 'on') return { line: `${stato('adaptive', 'config.json')} — vale anche ai prossimi avvii`, set: 'adaptive' };
