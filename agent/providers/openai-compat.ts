@@ -264,7 +264,9 @@ export class OpenAICompatProvider implements Provider {
     } = {},
   ) {
     this.baseURL = baseURL;
-    this.reasoningDiscovery = opts.discoverReasoning === false
+    // An explicit dialect wins over the inferred OpenRouter shape: no metadata
+    // fetch, and its static capabilities are the ones that resolve.
+    this.reasoningDiscovery = opts.discoverReasoning === false || opts.reasoningDialect !== undefined
       ? undefined
       : opts.reasoningDiscovery ?? (speaksReasoningEffort(baseURL)
         ? new OpenRouterReasoningDiscovery({ ...(opts.metadataFetch === undefined ? {} : { fetch: opts.metadataFetch }), headers })
@@ -294,8 +296,8 @@ export class OpenAICompatProvider implements Provider {
   }
 
   private resolveReasoningFromCache(call: ChatCall): ReasoningResolution {
-    if (this.discoveredReasoning !== undefined) return resolveReasoningPolicy(reasoningRequest(call), this.discoveredReasoning.capabilities, this.discoveredReasoning.source);
     if (this.reasoningDialect !== undefined) return resolveReasoningPolicy(reasoningRequest(call), DIALECT_CAPABILITIES, 'provider-default');
+    if (this.discoveredReasoning !== undefined) return resolveReasoningPolicy(reasoningRequest(call), this.discoveredReasoning.capabilities, this.discoveredReasoning.source);
     const { capabilities, source } = openRouterReasoningCapabilities(call.model, this.baseURL);
     return resolveReasoningPolicy(reasoningRequest(call), capabilities, source);
   }

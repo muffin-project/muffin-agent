@@ -676,6 +676,28 @@ describe('openai-compat · reasoningDialect: reasoning_effort', () => {
     }
   });
 
+  it('wins over the inferred OpenRouter shape: no metadata fetch, no `reasoning`, no routing field', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    let metadataFetches = 0;
+    const provider = new OpenAICompatProvider('sk-test', 'https://openrouter.ai/api/v1', {}, {
+      reasoningDialect: 'reasoning_effort',
+      metadataFetch: (async () => {
+        metadataFetches += 1;
+        return new Response('{}', { status: 200 });
+      }) as never,
+      fetch: (async (_u: unknown, init?: { body?: string }) => {
+        bodies.push(JSON.parse(init?.body ?? '{}'));
+        return new Response(JSON.stringify(A_COMPLETION), { status: 200, headers: { 'content-type': 'application/json' } });
+      }) as never,
+    });
+    await provider.chat({ ...QWEN, model: 'qwen/qwen3.8-27b', thinking: 'off' });
+    expect(metadataFetches).toBe(0);
+    expect(bodies[0]?.reasoning_effort).toBe('none');
+    expect(bodies[0]).not.toHaveProperty('reasoning');
+    expect(bodies[0]).not.toHaveProperty('provider');
+    expect((await provider.resolveReasoning({ ...QWEN, model: 'qwen/qwen3.8-27b', thinking: 'off' })).capabilitySource).toBe('provider-default');
+  });
+
   it('does not turn OpenRouter behaviour on: the dialect is not the hostname gate', () => {
     expect(new OpenAICompatProvider('k', SELF_HOSTED, {}, { reasoningDialect: 'reasoning_effort' }).reasoningEffort).toBe(false);
   });
