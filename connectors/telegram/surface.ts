@@ -122,6 +122,15 @@ export function telegramSurface(api: TelegramApiLike, ownerChatId: number | unde
       // that lost real messages (`render.ts`). `present` tiene la stessa
       // divisione nel ripiego legacy; il ricco, quando entra, è un messaggio
       // solo.
+      const presentazione = presentationOf(text);
+      if (presentazione.fallback.length === 0) {
+        // Un testo vuoto non è una consegna: al base `sendMessage('')` veniva
+        // rifiutato dalla rete e il turno finiva `delivery_failed`
+        // (`scheduler.ts`: un esito in errore con testo vuoto **resta** da
+        // consegnare, il silenzio lì è un guasto); senza questa riga
+        // sparirebbe in un `DELIVERED` senza aver mandato niente.
+        return notDelivered('niente da consegnare: il testo è vuoto');
+      }
       try {
         await present(
           api,
@@ -132,7 +141,7 @@ export function telegramSurface(api: TelegramApiLike, ownerChatId: number | unde
             // *General*.
             ...(indirizzo.threadId === undefined ? {} : { threadId: indirizzo.threadId }),
           },
-          presentationOf(text),
+          presentazione,
         );
         return DELIVERED;
       } catch (error) {

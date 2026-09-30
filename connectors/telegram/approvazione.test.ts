@@ -31,7 +31,7 @@ import { UpdateInbox } from './updates.js';
 const OWNER = 771001;
 const STRANGER = 771002;
 
-const premuto = (data: string, from = OWNER, updateId = 1): Update =>
+const premuto = (data: string, from = OWNER, updateId = 1, message?: Record<string, unknown>): Update =>
   ({
     update_id: updateId,
     callback_query: {
@@ -39,7 +39,7 @@ const premuto = (data: string, from = OWNER, updateId = 1): Update =>
       from: { id: from, is_bot: false, first_name: 'x' },
       chat_instance: 'ci',
       data,
-      message: {
+      message: message ?? {
         message_id: 55,
         date: 0,
         chat: { id: OWNER, type: 'private' },
@@ -222,6 +222,37 @@ describe('un pulsante premuto dall owner', () => {
     expect(h.modifiche[0]?.messageId).toBe(55);
     expect(h.modifiche[0]?.html).toContain('consentito');
     expect(h.modifiche[0]?.html).toContain('eseguo rm -rf /tmp/x?');
+    // La tastiera si toglie nella stessa chiamata che scrive il verdetto:
+    // senza l'asserzione, togliere `keyboard: []` dal produttore non farebbe
+    // fallire niente (reperto del judge).
+    const verdetto = h.inviati.find((c) => c.method === 'editMessageText' && c.messageId === 55);
+    expect(verdetto?.keyboard).toEqual([]);
+  });
+
+  /**
+   * La domanda di ripiego parte ricca (`present`): il messaggio del callback
+   * non ha `text`, solo `rich_message`. Guardare solo `text` salterebbe
+   * l'edit — e la tastiera resterebbe premibile su una domanda chiusa
+   * (reperto bloccante del judge, 30/09).
+   */
+  it('una domanda partita ricca non ha `text`: il verdetto la legge dai blocchi, la tastiera sparisce', async () => {
+    const h = harness();
+    const { approvalId } = turnoInAttesa(h);
+
+    await deliver(h, [
+      premuto(`ok:${approvalId}`, OWNER, 1, {
+        message_id: 55,
+        date: 0,
+        chat: { id: OWNER, type: 'private' },
+        rich_message: { blocks: [{ type: 'paragraph', text: '⚠ eseguo rm -rf /tmp/x?' }] },
+      }),
+    ]);
+
+    expect(h.modifiche[0]?.messageId).toBe(55);
+    expect(h.modifiche[0]?.html).toContain('consentito');
+    expect(h.modifiche[0]?.html).toContain('eseguo rm -rf /tmp/x?');
+    const verdetto = h.inviati.find((c) => c.method === 'editMessageText' && c.messageId === 55);
+    expect(verdetto?.keyboard).toEqual([]);
   });
 });
 

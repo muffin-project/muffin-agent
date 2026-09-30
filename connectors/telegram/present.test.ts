@@ -105,7 +105,9 @@ describe('present · rich per primo, legacy solo su rifiuto deterministico', () 
 
   it('un rifiuto deterministico scende ai pezzi legacy: thread ovunque, citazione sul primo, tastiera sull’ultimo', async () => {
     const { api, calls } = fake({ rich: 'refuse' });
-    const lunga = Array.from({ length: 300 }, (_, i) => `riga numero ${i} di un testo che non entra in un messaggio`).join('\n');
+    // Sotto il tetto di compatibilità (così il ricco viene davvero tentato),
+    // sopra il limite legacy (così i pezzi sono più d'uno).
+    const lunga = Array.from({ length: 120 }, (_, i) => `riga numero ${i} di un testo che non entra in un messaggio`).join('\n');
     const esito = await present(api, { chatId: 7, threadId: 3, replyTo: 9, keyboard }, presentationOf(lunga));
 
     expect(esito).toBe('legacy');
@@ -120,7 +122,7 @@ describe('present · rich per primo, legacy solo su rifiuto deterministico', () 
     expect(legacy[0]!.replyTo).toBe(9);
     expect(legacy.filter((c) => c.keyboard !== undefined)).toHaveLength(1);
     expect(legacy.at(-1)!.keyboard).toBe(keyboard);
-    expect(legacy.map((c) => c.text).join('')).toContain('riga numero 299');
+    expect(legacy.map((c) => c.text).join('')).toContain('riga numero 119');
   });
 
   it('uno status 0 è ambiguo: risale, e il legacy non parte mai (niente doppioni)', async () => {
@@ -151,6 +153,14 @@ describe('present · rich per primo, legacy solo su rifiuto deterministico', () 
   it('oltre i limiti di protocollo non si tenta il ricco: si va dritti ai pezzi', async () => {
     const { api, calls } = fake();
     const esito = await present(api, { chatId: 7 }, presentationOfHtml('x'.repeat(40_000)));
+    expect(esito).toBe('legacy');
+    expect(calls.some((c) => c.method === 'sendRichMessage')).toBe(false);
+    expect(calls.length).toBeGreaterThan(1);
+  });
+
+  it('oltre il tetto di compatibilità (8192) si va ai pezzi, non a un ricco che alcuni client rendono parziale', async () => {
+    const { api, calls } = fake();
+    const esito = await present(api, { chatId: 7 }, presentationOfHtml('x'.repeat(9_000)));
     expect(esito).toBe('legacy');
     expect(calls.some((c) => c.method === 'sendRichMessage')).toBe(false);
     expect(calls.length).toBeGreaterThan(1);

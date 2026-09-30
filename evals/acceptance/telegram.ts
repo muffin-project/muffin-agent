@@ -443,7 +443,7 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
           chatId: Number(c.payload['chat_id'] ?? 0),
           text: String(
             c.payload['text'] ??
-              (c.payload['rich_message'] as { html?: string } | undefined)?.html ??
+              (c.payload['rich_message'] as { html?: string } | undefined)?.html?.replace(/<br>/g, '\n') ??
               testoDaBlocchi((c.payload['rich_message'] as { blocks?: unknown[] } | undefined)?.blocks) ??
               '',
           ),

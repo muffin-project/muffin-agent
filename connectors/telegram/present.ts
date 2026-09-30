@@ -1,6 +1,6 @@
 import { TelegramError, type InlineButton, type TelegramApiLike } from './api.js';
 import { splitHtml, toTelegramHtml } from './render.js';
-import { richFitsHard, richFromHtml, type OutboundRich } from './rich.js';
+import { richFitsHard, richFromHtml, countRich, RICH_COMPAT_CHARS, type OutboundRich } from './rich.js';
 
 /**
  * La presentazione di un messaggio owner-visible **fuori dal turno**.
@@ -35,15 +35,16 @@ import { richFitsHard, richFromHtml, type OutboundRich } from './rich.js';
  *
  * ## La scelta della famiglia
  *
- * `richFitsHard` è il guardiano di protocollo (32768 caratteri, 500 blocchi):
- * oltre, il payload ricco non parte nemmeno e si va dritti al legacy. Il tetto
- * di **compatibilità** (8192) non si applica qui: vale per i turni, dove il
- * cambio forma fra bozza e finale è visibile; un avviso è un messaggio solo, e
- * non ha una forma precedente da rispettare.
+ * Due tetti, due proprietari (`rich.ts`): `richFitsHard` è il massimo di
+ * **protocollo** (32768 caratteri, 500 blocchi) — oltre, il payload ricco non
+ * parte nemmeno; il tetto di **compatibilità** (8192) è la policy verso i
+ * client, e sopra si va ai pezzi legacy, che ogni client rende (la banda
+ * 10k–15k osservata parzialmente da Hermes). L'unica eccezione dichiarata è il
+ * messaggio del turno in DM (`turnRichMessage`), che non passa da qui.
  */
 
 export type Presentation = {
-  /** Il payload ricco, quando entra nei limiti duri; `null` quando non entra. */
+  /** Il payload ricco, quando entra nei tetti; `null` quando non entra. */
   rich: OutboundRich | null;
   /** I pezzi legacy, congelati: il fallback deterministico. */
   fallback: string[];
@@ -53,7 +54,8 @@ export type Presentation = {
 export function presentationOfHtml(html: string): Presentation {
   if (html.trim() === '') return { rich: null, fallback: [] };
   const rich = richFromHtml(html);
-  return { rich: richFitsHard(rich) === null ? rich : null, fallback: splitHtml(html) };
+  const dentro = richFitsHard(rich) === null && countRich(rich).chars <= RICH_COMPAT_CHARS;
+  return { rich: dentro ? rich : null, fallback: splitHtml(html) };
 }
 
 /** Testo/markdown: la conversione è quella di sempre (`renderForTelegram`). */

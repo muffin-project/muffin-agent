@@ -2650,22 +2650,42 @@ export class TelegramConnector {
     // I pulsanti spariscono e il messaggio dice cosa è stato deciso: una
     // tastiera che resta premibile dopo la risposta invita a rispondere due
     // volte a una domanda che è già chiusa.
+    //
+    // La domanda di ripiego ora parte ricca (`present`): il messaggio del
+    // callback può non avere `text` ma solo `rich_message` — la stessa forma
+    // che `parseMessage` già legge. Guardare solo `text` salterebbe l'edit
+    // proprio per le domande che manda Muffin, e la tastiera resterebbe viva.
     const testo = query.message;
-    if (!presaDallaTrascrizione && testo !== undefined && 'text' in testo && typeof testo.text === 'string') {
-      try {
-        // La tastiera si toglie con `keyboard: []` nella **stessa** chiamata
-        // che scrive il verdetto — rimozione esplicita, non per omissione:
-        // `editMessageText` non dice cosa succede alla tastiera quando
-        // `reply_markup` non è passato (`api.ts`, letta il 03/09/2026).
-        await present(
-          this.deps.api,
-          { chatId: testo.chat.id, editMessageId: testo.message_id, keyboard: [] },
-          presentationOfHtml(
-            `${escapeHtml(testo.text)}\n\n<b>${decisione === 'allow' ? '✓ consentito' : '✗ rifiutato'}</b>`,
-          ),
-        );
-      } catch {
-        /* il messaggio può essere troppo vecchio per essere modificato: la decisione è già presa */
+    if (!presaDallaTrascrizione && testo !== undefined) {
+      const base =
+        'text' in testo && typeof testo.text === 'string'
+          ? testo.text
+          : normalizeInboundRich(testo as { rich_message?: unknown });
+      if (base !== null) {
+        // Il thread serve al ripiego quando la domanda era spezzata: i pezzi
+        // in coda a un edit sono `sendMessage`, e senza thread finirebbero in
+        // *General*.
+        const threadId = (testo as { message_thread_id?: unknown }).message_thread_id;
+        try {
+          // La tastiera si toglie con `keyboard: []` nella **stessa** chiamata
+          // che scrive il verdetto — rimozione esplicita, non per omissione:
+          // `editMessageText` non dice cosa succede alla tastiera quando
+          // `reply_markup` non è passato (`api.ts`, letta il 03/09/2026).
+          await present(
+            this.deps.api,
+            {
+              chatId: testo.chat.id,
+              editMessageId: testo.message_id,
+              keyboard: [],
+              ...(typeof threadId === 'number' ? { threadId } : {}),
+            },
+            presentationOfHtml(
+              `${escapeHtml(base)}\n\n<b>${decisione === 'allow' ? '✓ consentito' : '✗ rifiutato'}</b>`,
+            ),
+          );
+        } catch {
+          /* il messaggio può essere troppo vecchio per essere modificato: la decisione è già presa */
+        }
       }
     }
 

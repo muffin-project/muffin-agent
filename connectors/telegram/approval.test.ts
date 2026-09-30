@@ -103,10 +103,10 @@ describe('approvatoreTelegram · il ripiego, quando nessuna trascrizione può os
   });
 
   it('in un topic ogni pezzo porta il thread: la domanda di ripiego non finisce in *General*', async () => {
-    // Ricco rifiutato: la domanda scende ai pezzi legacy — il caso che il
-    // difetto riguardava. Il ricco, quando parte, è un messaggio solo e il
-    // thread lo porta per costruzione.
-    const { api, calls } = recordingApi(true);
+    // Oltre il tetto di compatibilità la domanda non parte ricca: scende ai
+    // pezzi legacy — il caso che il difetto riguardava. Il ricco, quando
+    // parte, è un messaggio solo e il thread lo porta per costruzione.
+    const { api, calls } = recordingApi();
     // Abbastanza lunga da spezzarsi: il difetto non è solo sul primo pezzo, è
     // che ogni `sendMessage` del ripiego ignorava `where.replyTo.threadId`.
     const lunga: ApprovalRequest = { ...request, resource: `command: ${'x'.repeat(9000)}` };

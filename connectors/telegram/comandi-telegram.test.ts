@@ -153,16 +153,19 @@ describe('un comando dell owner non passa dal modello', () => {
    * `/model --list` supera i 4096 caratteri con una manciata di modelli.
    * Mandare solo il primo pezzo sarebbe un elenco troncato in silenzio — che
    * è esattamente il difetto che `renderForTelegram`/`splitHtml` esistono per
-   * non avere. Ricca, la risposta intera sta in un messaggio; se il ricco
-   * viene rifiutato, scende ai pezzi legacy, mai troncata.
+   * non avere. Sotto il tetto di compatibilità (8192) la risposta intera sta
+   * in un messaggio ricco; se il ricco viene rifiutato — o il testo lo
+   * supera — scende ai pezzi legacy, mai troncata.
    */
   it('e una risposta lunga arriva tutta — ricca in un messaggio, o a pezzi sotto il limite', async () => {
-    const lunga = Array.from({ length: 400 }, (_, i) => `riga numero ${i} del catalogo dei modelli`).join('\n');
+    const lunga = Array.from({ length: 150 }, (_, i) => `riga numero ${i} del catalogo dei modelli`).join('\n');
     const h = harness(async () => ({ testo: lunga }));
 
     await deliver(h, [msg(1, { chatId: OWNER, fromId: OWNER, text: '/model --list' })]);
 
-    expect(h.sent.map((s) => s.text).join('')).toContain('riga numero 399');
+    expect(h.sent).toHaveLength(1);
+    expect(h.sent[0]?.method).toBe('sendRichMessage');
+    expect(h.sent[0]?.text).toContain('riga numero 149');
     // La citazione sta su un pezzo soltanto: citarne cinque sarebbe cinque
     // risposte alla stessa domanda.
     expect(h.sent.filter((s) => s.replyTo !== undefined)).toHaveLength(1);
@@ -174,7 +177,7 @@ describe('un comando dell owner non passa dal modello', () => {
 
     expect(h2.sent.length).toBeGreaterThan(1);
     for (const s of h2.sent) expect(s.text.length).toBeLessThanOrEqual(TELEGRAM_MAX);
-    expect(h2.sent.map((s) => s.text).join('')).toContain('riga numero 399');
+    expect(h2.sent.map((s) => s.text).join('')).toContain('riga numero 149');
     expect(h2.sent.filter((s) => s.replyTo !== undefined)).toHaveLength(1);
     expect(h2.sent[0]?.replyTo).toBe(1);
   });
