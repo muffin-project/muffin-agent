@@ -7,7 +7,7 @@ import { runInit } from './init.js';
 import { applica } from './schermo.js';
 import { formatProgressLine, makeReplCliWrite, runRepl, closingLine, statusFor } from './repl.js';
 import { TOOL_PHRASES, toolLine, toolPhrase, toolSubject } from '../agent/tool-phrase.js';
-import { debugCommand, thinkingCommand } from '../agent/comandi.js';
+import { COMANDI, debugCommand, thinkingCommand } from '../agent/comandi.js';
 import { readdirSync, readFileSync } from 'node:fs';
 import { cliSurface } from '../core/surface/cli.js';
 import { SurfaceRegistry } from '../core/surface/registry.js';
@@ -603,6 +603,29 @@ describe('/think', () => {
     const out = thinkingCommand('reset', 'adaptive', 'adaptive', 'consumer-local');
     expect(out.set).toBeNull();
     expect(out.line).toContain('consumer-local');
+  });
+
+  it('senza argomenti dice il livello attivo, non solo `on`: è l\'unico posto dove Telegram lo mostra', () => {
+    const out = thinkingCommand('', 'medium', 'medium', 'consumer-local');
+    expect(out.line).toContain('on, livello medium');
+    expect(out.line).toContain('config.json');
+    expect(out.set).toBeUndefined();
+    // `adaptive` resta «on» e basta: non ha un livello da dire.
+    expect(thinkingCommand('', 'adaptive', undefined, 'consumer-local').line).not.toContain('livello');
+  });
+
+  it("l'aiuto del comando, da cui nasce il menu di Telegram, dice che un livello è accettato", () => {
+    const aiuto = COMANDI.find((c) => c.nome === 'think')?.aiuto ?? '';
+    expect(aiuto).toContain('livello');
+    for (const livello of ['low', 'medium', 'xhigh']) expect(aiuto).toContain(livello);
+  });
+
+  it('un livello scrive come `on` e `off`, e dice che il ragionamento resta acceso a quel livello', () => {
+    const out = thinkingCommand('medium', 'adaptive', undefined, 'consumer-local');
+    expect(out.set).toBe('medium');
+    expect(out.line).toContain('medium');
+    expect(out.line).toContain('prossimi avvii');
+    expect(thinkingCommand('xhigh', 'off', 'off', 'consumer-local').set).toBe('xhigh');
   });
 
   it('un argomento che non è nessuno dei tre non scrive niente, e li nomina', () => {
