@@ -605,6 +605,14 @@ describe('/think', () => {
     expect(out.line).toContain('consumer-local');
   });
 
+  it('un livello scrive come `on` e `off`, e dice che il ragionamento resta acceso a quel livello', () => {
+    const out = thinkingCommand('medium', 'adaptive', undefined, 'consumer-local');
+    expect(out.set).toBe('medium');
+    expect(out.line).toContain('medium');
+    expect(out.line).toContain('prossimi avvii');
+    expect(thinkingCommand('xhigh', 'off', 'off', 'consumer-local').set).toBe('xhigh');
+  });
+
   it('un argomento che non è nessuno dei tre non scrive niente, e li nomina', () => {
     const out = thinkingCommand('forse', 'adaptive', undefined, 'consumer-local');
     expect(out.set).toBeUndefined();

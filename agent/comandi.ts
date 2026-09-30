@@ -1,4 +1,5 @@
 import { loadConfig, saveConfig, type Config } from '../core/config/config.js';
+import { isThinkingEffort, THINKING_EFFORTS, type Thinking } from '../core/config/thinking.js';
 import { loadProfiles, selectProfile } from './profiles/profile.js';
 import { describeSettableKnobs, formatSetOutcome, setConfigKnob } from '../core/config/settings.js';
 
@@ -65,8 +66,8 @@ export type ContestoComandi = {
   config: Config;
   /** Riletta dopo una scrittura, così il chiamante vede cosa è cambiato. */
   onConfig?: (next: Config) => void;
-  profilo: { name: string; thinking: 'adaptive' | 'off' | 'unset' };
-  onThinking?: (t: 'adaptive' | 'off' | 'unset') => void;
+  profilo: { name: string; thinking: Thinking };
+  onThinking?: (t: Thinking) => void;
   budget: { status: () => { monthUsd: number; monthlyCapUsd: number; exhausted: boolean }; tenantTodayUsd: (t: string) => number };
   sessionId: string;
   verbosity: Verbosity;
@@ -255,15 +256,16 @@ export function debugCommand(arg: string, current: Verbosity): { line: string; s
 
 export function thinkingCommand(
   arg: string,
-  current: 'adaptive' | 'off' | 'unset',
-  override: 'adaptive' | 'off' | 'unset' | undefined,
+  current: Thinking,
+  override: Thinking | undefined,
   profileName: string,
-): { line: string; set?: 'adaptive' | 'off' | 'unset' | null } {
+): { line: string; set?: Thinking | null } {
   const stato = (t: string, da: string): string => `ragionamento: ${t === 'off' ? 'off' : 'on'} (${da})`;
   const da = override === undefined ? `profilo ${profileName}` : 'config.json';
   if (arg === '') return { line: stato(current, da) };
   if (arg === 'on') return { line: `${stato('adaptive', 'config.json')} — vale anche ai prossimi avvii`, set: 'adaptive' };
   if (arg === 'off') return { line: `${stato('off', 'config.json')} — vale anche ai prossimi avvii`, set: 'off' };
+  if (isThinkingEffort(arg)) return { line: `ragionamento: on, livello ${arg} (config.json) — vale anche ai prossimi avvii`, set: arg };
   if (arg === 'reset') return { line: `ragionamento: torna a valere il profilo ${profileName}`, set: null };
-  return { line: `/think on | off | reset — «${arg}» non è nessuno dei tre` };
+  return { line: `/think on | off | reset, oppure un livello (${THINKING_EFFORTS.join(', ')}) — «${arg}» non è nessuno di questi` };
 }

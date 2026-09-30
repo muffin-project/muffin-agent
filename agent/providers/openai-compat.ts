@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
+import type { ReasoningDialect } from '../../core/config/thinking.js';
 import { compileForOpenAI } from './compile.js';
 import {
   ProviderError,
@@ -116,7 +117,7 @@ export function speaksStickySession(baseURL?: string): boolean {
   }
 }
 
-function speaksReasoningEffort(baseURL?: string): boolean {
+export function speaksReasoningEffort(baseURL?: string): boolean {
   try {
     if (!baseURL) return false;
     const host = new URL(baseURL).hostname.toLowerCase().replace(/\.$/, '');
@@ -125,6 +126,20 @@ function speaksReasoningEffort(baseURL?: string): boolean {
     return false;
   }
 }
+
+/**
+ * What an owner-declared `reasoning_effort` dialect promises: reasoning can be
+ * switched off and given a level. No `supportedEfforts` on purpose — the levels
+ * differ per server and model (`xhigh` is legal on one vLLM, `high` a 400), so
+ * an effort is passed through and the server is the validator. No exact token
+ * budget: the field does not exist in this dialect.
+ */
+const DIALECT_CAPABILITIES: ReasoningCapabilities = {
+  support: 'supported',
+  canDisable: true,
+  supportsMaxTokens: false,
+  mandatory: false,
+};
 
 /** Small, dated capability snapshot; discovery is intentionally not per call. */
 export function openRouterReasoningCapabilities(model: string, baseURL?: string): {
@@ -224,6 +239,12 @@ export class OpenAICompatProvider implements Provider {
   private discoveredReasoning: OpenRouterDiscoveryResult | undefined;
   /** Public for the same reason: the wiring is the part that must be provable. */
   readonly reasoningEffort: boolean;
+  /**
+   * The owner's statement that this endpoint takes top-level `reasoning_effort`
+   * (#789). Independent of `reasoningEffort`, which is the OpenRouter shape and
+   * also gates OpenRouter-only body fields and message continuity.
+   */
+  readonly reasoningDialect: ReasoningDialect | undefined;
 
   constructor(
     apiKey: string,
@@ -232,6 +253,7 @@ export class OpenAICompatProvider implements Provider {
     opts: {
       explicitCache?: boolean;
       reasoningEffort?: boolean;
+      reasoningDialect?: ReasoningDialect;
       stickySession?: boolean;
       routing?: Routing;
       fetch?: typeof globalThis.fetch;
@@ -256,6 +278,7 @@ export class OpenAICompatProvider implements Provider {
     this.openRouter = speaksStickySession(baseURL);
     this.routingPinned = opts.routing?.only !== undefined || opts.routing?.order !== undefined;
     this.reasoningEffort = opts.reasoningEffort ?? speaksReasoningEffort(baseURL);
+    this.reasoningDialect = opts.reasoningDialect;
     this.client = new OpenAI({
       apiKey,
       maxRetries: 0,
@@ -272,6 +295,7 @@ export class OpenAICompatProvider implements Provider {
 
   private resolveReasoningFromCache(call: ChatCall): ReasoningResolution {
     if (this.discoveredReasoning !== undefined) return resolveReasoningPolicy(reasoningRequest(call), this.discoveredReasoning.capabilities, this.discoveredReasoning.source);
+    if (this.reasoningDialect !== undefined) return resolveReasoningPolicy(reasoningRequest(call), DIALECT_CAPABILITIES, 'provider-default');
     const { capabilities, source } = openRouterReasoningCapabilities(call.model, this.baseURL);
     return resolveReasoningPolicy(reasoningRequest(call), capabilities, source);
   }
@@ -507,7 +531,12 @@ export class OpenAICompatProvider implements Provider {
     const reasoning = this.resolveReasoningFromCache(call);
     if (reasoning.status === 'unsupported') throw new ReasoningConfigurationError(reasoning);
     const effective = reasoning.effective;
-    const explicitReasoningConstraint = effective !== undefined && (effective.mode === 'off' || effective.mode === 'on' || effective.effort !== undefined || effective.maxTokens !== undefined);
+    // `require_parameters` is an OpenRouter routing field: a dialect endpoint has
+    // no routing to constrain, and an unknown field is what this gate avoids.
+    const explicitReasoningConstraint =
+      this.reasoningDialect === undefined &&
+      effective !== undefined &&
+      (effective.mode === 'off' || effective.mode === 'on' || effective.effort !== undefined || effective.maxTokens !== undefined);
     const configuredRouting = this.routing;
     const baseRouting = explicitReasoningConstraint
       ? { ...(configuredRouting ?? {}), require_parameters: true }
@@ -555,11 +584,15 @@ export class OpenAICompatProvider implements Provider {
       // so it goes through the same cast `cache_control` uses below. Only 'off'
       // is sent: 'adaptive' means "whatever the model does by default", which is
       // exactly what sending nothing already means.
-      ...(this.reasoningEffort && effective?.mode === 'off' ? ({ reasoning: { effort: 'none' } } as Record<string, unknown>) : {}),
-      ...(this.reasoningEffort && effective?.mode === 'on' && effective.maxTokens !== undefined
+      ...(this.reasoningDialect === 'reasoning_effort' && effective?.mode === 'off' ? ({ reasoning_effort: 'none' } as Record<string, unknown>) : {}),
+      ...(this.reasoningDialect === 'reasoning_effort' && effective?.mode === 'on' && effective.effort !== undefined
+        ? ({ reasoning_effort: effective.effort } as Record<string, unknown>)
+        : {}),
+      ...(this.reasoningEffort && this.reasoningDialect === undefined && effective?.mode === 'off' ? ({ reasoning: { effort: 'none' } } as Record<string, unknown>) : {}),
+      ...(this.reasoningEffort && this.reasoningDialect === undefined && effective?.mode === 'on' && effective.maxTokens !== undefined
         ? ({ reasoning: { max_tokens: effective.maxTokens } } as Record<string, unknown>)
         : {}),
-      ...(this.reasoningEffort && effective?.mode === 'on' && effective.maxTokens === undefined
+      ...(this.reasoningEffort && this.reasoningDialect === undefined && effective?.mode === 'on' && effective.maxTokens === undefined
         ? ({ reasoning: effective.effort === undefined ? { enabled: true } : { effort: effective.effort } } as Record<string, unknown>)
         : {}),
       // **Tieni questa conversazione sullo stesso provider a monte.**
