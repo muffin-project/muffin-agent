@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ApprovalRequest, ApprovalWhere } from '../../agent/loop.js';
-import type { TelegramApiLike } from './api.js';
+import { TelegramError, type TelegramApiLike } from './api.js';
 import { approvatoreTelegram, askHtml, askKeyboard, askPlain } from './approval.js';
 
 /**
@@ -28,16 +28,32 @@ const where: ApprovalWhere = {
   approvalId: 'aabbccdd',
 };
 
-function recordingApi(): { api: TelegramApiLike; calls: { chatId: number; text: string; threadId?: unknown; keyboard?: unknown }[] } {
-  const calls: { chatId: number; text: string; threadId?: unknown; keyboard?: unknown }[] = [];
+function recordingApi(refuseRich = false): { api: TelegramApiLike; calls: { method: string; chatId: number; text: string; threadId?: unknown; keyboard?: unknown }[] } {
+  const calls: { method: string; chatId: number; text: string; threadId?: unknown; keyboard?: unknown }[] = [];
+  const record = (method: string, chatId: number, html: string, options?: { threadId?: unknown; keyboard?: unknown }): void => {
+    calls.push({
+      method,
+      chatId,
+      text: html,
+      ...(options?.threadId === undefined ? {} : { threadId: options.threadId }),
+      ...(options?.keyboard === undefined ? {} : { keyboard: options.keyboard }),
+    });
+  };
   const api = {
     sendMessage: async (chatId: number, html: string, options?: { threadId?: unknown; keyboard?: unknown }) => {
-      calls.push({
-        chatId,
-        text: html,
-        ...(options?.threadId === undefined ? {} : { threadId: options.threadId }),
-        ...(options?.keyboard === undefined ? {} : { keyboard: options.keyboard }),
-      });
+      record('sendMessage', chatId, html, options);
+      return { message_id: calls.length, date: 0, chat: { id: chatId, type: 'private' } };
+    },
+    // La lane rich si registra come il suo gemello legacy: le asserzioni
+    // restano sul testo visibile e sulla tastiera. Con `refuseRich` il
+    // rifiuto è deterministico (status > 0), e `present` scende ai pezzi.
+    sendRichMessage: async (
+      chatId: number,
+      rich: { html?: string; blocks?: unknown[] },
+      options?: { threadId?: unknown; keyboard?: unknown },
+    ) => {
+      record('sendRichMessage', chatId, rich.html ?? JSON.stringify(rich.blocks ?? []), options);
+      if (refuseRich) throw new TelegramError(400, 'Bad Request: ricco rifiutato (simulato)');
       return { message_id: calls.length, date: 0, chat: { id: chatId, type: 'private' } };
     },
   } as unknown as TelegramApiLike;
@@ -78,12 +94,18 @@ describe('approvatoreTelegram · il ripiego, quando nessuna trascrizione può os
 
     expect(esito).toBe('asked');
     expect(calls).toHaveLength(1);
+    // La lane è quella ricca: la politica fuori-turno non è un `sendMessage`
+    // ad hoc che per caso manda le stesse parole.
+    expect(calls[0]!.method).toBe('sendRichMessage');
     expect(calls[0]!.text).toContain('non si torna indietro');
     expect(calls[0]!.text).toContain('echo ciao');
     expect(calls[0]!.keyboard).toBeDefined();
   });
 
   it('in un topic ogni pezzo porta il thread: la domanda di ripiego non finisce in *General*', async () => {
+    // Oltre il tetto di compatibilità la domanda non parte ricca: scende ai
+    // pezzi legacy — il caso che il difetto riguardava. Il ricco, quando
+    // parte, è un messaggio solo e il thread lo porta per costruzione.
     const { api, calls } = recordingApi();
     // Abbastanza lunga da spezzarsi: il difetto non è solo sul primo pezzo, è
     // che ogni `sendMessage` del ripiego ignorava `where.replyTo.threadId`.

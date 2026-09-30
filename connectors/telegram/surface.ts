@@ -3,7 +3,8 @@ import { DELIVERED, fileModeFor, notDelivered, type DeliveryOutcome, type FileSp
 import { negoziazioneTelegram, stanzaDi, TELEGRAM_PLACES } from './negoziazione.js';
 import type { TelegramApiLike } from './api.js';
 import { MAX_DOWNLOAD_BYTES, sendDocument } from './media.js';
-import { renderForTelegram, TELEGRAM_MAX } from './render.js';
+import { escapeHtml, TELEGRAM_MAX } from './render.js';
+import { present, presentationOf, presentationOfHtml } from './present.js';
 import { RICH_MAX_CHARS } from './rich.js';
 import { makeIngressPort, type IngressPort } from '../shared/ingress/types.js';
 
@@ -115,31 +116,47 @@ export function telegramSurface(api: TelegramApiLike, ownerChatId: number | unde
         // alternative is inventing a destination for a message.
         return notDelivered(`"${channel}" non è un canale telegram indirizzabile`);
       }
-      // Un canale con `#<threadId>` è una stanza dentro la stanza: il testo di
-      // un job nato in un topic deve restare lì, non suonare in *General*.
-      const topic = indirizzo.threadId === undefined ? {} : { threadId: indirizzo.threadId };
-
       // Convert first, split second. The limit is on the rendered HTML, and
       // splitting the markdown at 4000 then expanding it produced messages over
       // the limit that Telegram rejected whole — a shipped, high-severity bug
-      // that lost real messages (`render.ts`).
-      const parts = renderForTelegram(text);
-      for (const [i, part] of parts.entries()) {
-        try {
-          await api.sendMessage(indirizzo.chatId, part, topic);
-        } catch (error) {
-          const why = error instanceof Error ? error.message : String(error);
-          // Which part failed is the difference between "nothing arrived" and
-          // "half of it did", and the owner needs to know which — a retry of the
-          // whole message after a partial send delivers the first half twice.
-          return notDelivered(
-            parts.length === 1
-              ? `telegram ha rifiutato il messaggio: ${why}`
-              : `telegram ha rifiutato la parte ${i + 1} di ${parts.length}${i > 0 ? ' (le precedenti sono arrivate)' : ''}: ${why}`,
-          );
-        }
+      // that lost real messages (`render.ts`). `present` tiene la stessa
+      // divisione nel ripiego legacy; il ricco, quando entra, è un messaggio
+      // solo.
+      const presentazione = presentationOf(text);
+      if (presentazione.fallback.length === 0) {
+        // Un testo vuoto non è una consegna: al base `sendMessage('')` veniva
+        // rifiutato dalla rete e il turno finiva `delivery_failed`
+        // (`scheduler.ts`: un esito in errore con testo vuoto **resta** da
+        // consegnare, il silenzio lì è un guasto); senza questa riga
+        // sparirebbe in un `DELIVERED` senza aver mandato niente.
+        return notDelivered('niente da consegnare: il testo è vuoto');
       }
-      return DELIVERED;
+      try {
+        await present(
+          api,
+          {
+            chatId: indirizzo.chatId,
+            // Un canale con `#<threadId>` è una stanza dentro la stanza: il
+            // testo di un job nato in un topic deve restare lì, non suonare in
+            // *General*.
+            ...(indirizzo.threadId === undefined ? {} : { threadId: indirizzo.threadId }),
+          },
+          presentazione,
+        );
+        return DELIVERED;
+      } catch (error) {
+        const why = error instanceof Error ? error.message : String(error);
+        // Which part failed is the difference between "nothing arrived" and
+        // "half of it did", and the owner needs to know which — a retry of the
+        // whole message after a partial send delivers the first half twice.
+        // `present` distingue «parte N di M» dal rifiuto secco: lo stesso
+        // testo che questa superficie dava prima.
+        return notDelivered(
+          why.startsWith('parte ')
+            ? `telegram ha rifiutato la ${why}`
+            : `telegram ha rifiutato il messaggio: ${why}`,
+        );
+      }
     },
 
     /**
@@ -176,7 +193,7 @@ export function telegramSurface(api: TelegramApiLike, ownerChatId: number | unde
           `${file.filename} è pronto ma pesa ${(bytes / 1e6).toFixed(1)}MB, oltre il limite di ` +
           `${(limits.maxUploadBytes / 1e6).toFixed(0)}MB di sendDocument: sta in ${file.absolutePath}`;
         try {
-          await api.sendMessage(chatId, dove, topic);
+          await present(api, { chatId, ...topic }, presentationOfHtml(escapeHtml(dove)));
           return DELIVERED;
         } catch (error) {
           return notDelivered(`telegram ha rifiutato anche il messaggio con il percorso: ${error instanceof Error ? error.message : String(error)}`);

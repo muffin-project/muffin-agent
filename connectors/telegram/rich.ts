@@ -185,8 +185,10 @@ export function turnRichMessage(input: {
   const blocks: InputRichBlock<never>[] = [];
   // Le righe vuote (le spaziature del markdown) non diventano paragrafi
   // vuoti: un blocco di testo vuoto non è una struttura, e Telegram rifiuta
-  // un paragrafo senza testo.
-  const process = input.process.filter((line) => line.trim() !== '');
+  // un paragrafo senza testo. E un passo multi-riga (un comando su più righe)
+  // è più righe, non un paragrafo solo: dentro un blocco il `\n` nudo
+  // collassa, e il comando tornerebbe su una riga.
+  const process = input.process.flatMap((line) => line.split('\n')).filter((line) => line.trim() !== '');
   if (process.length > 0) {
     blocks.push({
       type: 'details',
@@ -195,7 +197,9 @@ export function turnRichMessage(input: {
     });
   }
   const running = input.running?.trim() ?? '';
-  if (running !== '') blocks.push({ type: 'paragraph', text: running });
+  for (const line of running.split('\n')) {
+    if (line.trim() !== '') blocks.push({ type: 'paragraph', text: line });
+  }
   blocks.push(...built.blocks);
   if (blocks.length === 0) return null;
   return { blocks };
@@ -212,14 +216,38 @@ export function thinkingRich(text: string): OutboundRich {
 }
 
 /**
+ * Rich HTML collapses a bare `\n`; the documented line break is `<br>`
+ * (Bot API 10.3, «Rich HTML style»: gli esempi spezzano le righe con `<br>`).
+ * La conversione salta le regioni `<pre>` (chiuse o no): lì i newline sono il
+ * contenuto, e una `<pre>` non chiusa è una bozza parziale, non un posto dove
+ * iniettare markup.
+ */
+function richLineBreaks(html: string): string {
+  const tag = /<pre\b[^>]*>|<\/pre>/gi;
+  let out = '';
+  let last = 0;
+  let inPre = false;
+  for (const match of html.matchAll(tag)) {
+    const chunk = html.slice(last, match.index);
+    out += inPre ? chunk : chunk.replace(/\n/g, '<br>');
+    out += match[0];
+    inPre = match[0].slice(0, 4).toLowerCase() === '<pre';
+    last = match.index + match[0].length;
+  }
+  const tail = html.slice(last);
+  return out + (inPre ? tail : tail.replace(/\n/g, '<br>'));
+}
+
+/**
  * Our existing HTML, carried as a rich message (Bot API 10.1 accepts `html`).
  *
- * Same bytes the legacy path would send with `parse_mode: HTML`; the transport
- * changes, not the content. It is how the step trail and the answer rode rich
- * in ONE message without a second renderer over the same data.
+ * Same content the legacy path would send with `parse_mode: HTML`, but the
+ * rich renderer collapses bare newlines, so the line breaks become the rich
+ * ones (`<br>`, see `richLineBreaks`). It is how the step trail and the answer
+ * rode rich in ONE message without a second renderer over the same data.
  */
 export function richFromHtml(html: string): OutboundRich {
-  return { html };
+  return { html: richLineBreaks(html) };
 }
 
 /** Code-point count (UTF-8 characters, approximated) + official-enumeration block count + nesting depth. */
