@@ -901,3 +901,58 @@ describe('verità del fallimento provider/risultato (P0-A)', () => {
     expect(chiamate[0]!.attributes['muffin.provider_failure.finish_reason']).toBe('unmapped-xyz');
   });
 });
+
+describe('la compattazione segue il budget del profilo', () => {
+  /**
+   * Misurato il 30/09/2026: un turno vero morto due volte in `model_deadline`
+   * mandava 32k char di tool_result a ogni chiamata con TTFT fino a 35s,
+   * mentre la compattazione non scattava mai — il default globale (60k) è
+   * tarato su modelli frontier, non su un profilo locale con 90s di deadline.
+   * Questi casi inchiodano il filo fra profilo e chiamata: stesso transcript,
+   * due budget, due wire diversi.
+   */
+  const big = (n: number): string => 'x'.repeat(n);
+  function transcriptSporco(): Message[] {
+    return [
+      { role: 'user', content: [{ type: 'text', text: 'ciao' }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'vecchio', name: 'fs_read', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result', toolCallId: 'vecchio', content: big(12_000) }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'nuovo', name: 'fs_read', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result', toolCallId: 'nuovo', content: big(12_000) }] },
+    ];
+  }
+  function risultatiInviati(provider: { chatCalls: ChatCall[] }): string[] {
+    return provider.chatCalls[0]!.messages.flatMap((m) => m.content).flatMap((b) => (b.type === 'tool_result' ? [b.content] : []));
+  }
+
+  it('un budget stretto compatta il vecchio e tiene il recente', async () => {
+    const provider = scriptedProvider({ chat: [reply('fatto')] });
+    const h = harness({
+      provider,
+      profile: { ...CONSERVATIVE, toolResultBudgetChars: 16_000 },
+      messages: transcriptSporco(),
+    });
+
+    const result = await runRounds(h.scope);
+
+    expect(result.stopped).toBe('answered');
+    const risultati = risultatiInviati(provider);
+    // Le coppie restano intatte: due use, due result — mai un buco.
+    expect(risultati).toHaveLength(2);
+    expect(risultati.find((c) => c.includes('rimosso dal contesto'))).toBeDefined();
+    // Il più recente è quello su cui il modello sta ragionando: resta intero.
+    expect(risultati).toContain(big(12_000));
+  });
+
+  it('senza budget nel profilo vale il default globale', async () => {
+    // CONSERVATIVE non dichiara il campo: 24k < 60k passa intatto. La
+    // mutazione che legge `?? 0` invece del default fallisce qui spedendo
+    // placeholder a un profilo che non ne ha chiesto nessuno.
+    const provider = scriptedProvider({ chat: [reply('fatto')] });
+    const h = harness({ provider, messages: transcriptSporco() });
+
+    await runRounds(h.scope);
+
+    expect(risultatiInviati(provider)).toEqual([big(12_000), big(12_000)]);
+  });
+});
