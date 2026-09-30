@@ -608,3 +608,75 @@ describe('#741 — la ripresa aspetta tutte le domande aperte, non una', () => {
     expect((w.deps.provider as Scripted).seen).toHaveLength(1);
   });
 });
+
+/**
+ * #749 — un referto di `process_exit` non si perde per una decisione non
+ * consumata.
+ *
+ * La guardia multi-ask (#741) ri-sospende quando c'è una decisione non
+ * consumata e una domanda aperta nella finestra. Ma quella guardia esiste per
+ * un risveglio **da click sulla barriera di approvazione**: se la riga
+ * aspettava un processo uscito, ri-sospendere butta via il referto dell'uscita
+ * — il fatto che il modello deve ricevere — e lo sostituisce con un'attesa che
+ * nessuno ha chiesto. La decisione non consumata non si butta: resta per il
+ * tool quando riparte (`consume`).
+ */
+describe('#749 — la guardia multi-ask non scavalca un referto di processo uscito', () => {
+  const counters = {
+    iterations: 2,
+    recoveriesUsed: 0,
+    transportRetriesLeft: 10,
+    truncationsUsed: 0,
+    toolCallsMade: 2,
+    nudgedForCompletion: false,
+    usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    spentUsd: 0,
+    resumes: 0,
+    contextBuilt: true,
+    activeModelMs: 0,
+  };
+
+  it('barriera `process_exit` con pid uscito: il turno riprende col referto, non ri-sospende', async () => {
+    const w = world([answer('riparto')]);
+    const record = w.turns.create(
+      {
+        id: 'e'.repeat(32),
+        principal: owner,
+        tenant: 'host',
+        surface: 'cli',
+        sessionId: 'multi-ask-exit',
+        model: 'test-model',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'due comandi' }] }],
+        taint: 0,
+        counters,
+      },
+      4242,
+    );
+    // A decisa (non consumata), B aperta: la firma di un risveglio da click.
+    const a = w.approvals.ask({ turnId: record.id, capability: 'sys.shell', resource: 'echo a', prompt: 'eseguo a?', taint: 0 }, NOW());
+    w.approvals.ask({ turnId: record.id, capability: 'sys.shell', resource: 'echo b', prompt: 'eseguo b?', taint: 0 }, NOW());
+    // Ma la barriera della riga è un processo uscito: l'ultima attesa del giro
+    // ha vinto (`wait_for` è uno solo). Il pid non esiste — è uscito.
+    const morto = 999_999_999;
+    w.turns.suspend(
+      record.id,
+      {
+        messages: providerMessages(record),
+        taint: 0,
+        counters: record.counters,
+        wakeAt: new Date(NOW().getTime() + APPROVAL_WINDOW_MS).toISOString(),
+        waitFor: `process_exit:${morto}`,
+      },
+      record.claimToken,
+    );
+    w.approvals.decide(a, 'allow', NOW());
+    expect(w.turns.wake(record.id, NOW())).toBe(true);
+
+    const esito = await barrel.resumeTurn(w.deps, record.id);
+
+    // Il modello riparte col referto dell'uscita, non ri-sospende su B.
+    expect('stopped' in esito && esito.stopped).toBe('answered');
+    expect((w.deps.provider as Scripted).seen).toHaveLength(1);
+    expect(JSON.stringify((w.deps.provider as Scripted).seen[0])).toContain(`il processo ${morto} è uscito`);
+  });
+});

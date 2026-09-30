@@ -5,7 +5,7 @@ import type { SpanHandle } from '../../core/tracing/types.js';
 import { ATTR } from '../../core/tracing/types.js';
 import type { TurnCounters, TurnRecord } from '../../core/turns/store.js';
 import { CAPPED_MODEL, SCRIPT_MODEL } from '../../core/turns/store.js';
-import { encodeWaitFor, type WaitSpec } from '../../core/turns/wait.js';
+import { decodeWaitFor, encodeWaitFor, type WaitSpec } from '../../core/turns/wait.js';
 import type { Message } from '../providers/types.js';
 import { primoMessaggio } from './context.js';
 import { buildFreshCounters, evidenceForContinuation } from './continuation.js';
@@ -454,10 +454,18 @@ export async function resumeTurn(
    * turno prosegue come prima — una domanda senza risposta non blocca per
    * sempre — e un risveglio a mano senza decisioni resta il caso «timer» che
    * `wakeReport` racconta.
+   *
+   * #749 — e la barriera della riga dev'essere **essa stessa
+   * un'approvazione**. Se aspettava un processo, il referto dell'uscita è il
+   * fatto che il modello deve ricevere: ri-sospendere su una domanda aperta
+   * lo perderebbe e lo sostituirebbe con un'attesa che nessuno ha chiesto. La
+   * decisione non consumata non si butta — resta per il tool quando riparte
+   * (`consume`).
    */
   const aperta = deps.approvals?.open(record.id) ?? null;
   const decisioneDaConsumare = deps.approvals?.decidedUnconsumed(record.id) ?? false;
-  if (aperta !== null && decisioneDaConsumare) {
+  const barriera = decodeWaitFor(existing.waitFor);
+  if (barriera?.kind === 'approval' && aperta !== null && decisioneDaConsumare) {
     const ora = (deps.now ?? (() => new Date()))().getTime();
     const scadenzaDellaDomanda = Date.parse(aperta.askedAt) + APPROVAL_WINDOW_MS;
     if (scadenzaDellaDomanda > ora) {
