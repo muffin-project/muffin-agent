@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { ensureColumn } from '../../core/lock/durable.js';
 import { randomBytes } from 'node:crypto';
 import { TelegramError, type TelegramApiLike } from './api.js';
 import type { OutboundRich } from './rich.js';
@@ -104,25 +105,18 @@ export class TelegramDeliveryStore {
     // sopra è un no-op e ogni INSERT qui sotto fallirebbe. L'ALTER è
     // idempotente perché la condizione è la presenza della colonna, non il
     // numero di versione di qualcosa.
-    const colonne = db.prepare(`PRAGMA table_info(telegram_delivery_parts)`).all() as {
-      name: string;
-    }[];
-    if (!colonne.some((c) => c.name === 'thread_id')) {
-      db.exec(`ALTER TABLE telegram_delivery_parts ADD COLUMN thread_id INTEGER`);
-    }
+    ensureColumn(db, 'telegram_delivery_parts', 'thread_id', 'thread_id INTEGER');
     // Additive, same shape as `thread_id` above: `CREATE TABLE IF NOT
     // EXISTS` is a no-op on pre-rich databases, so each column lands via its
     // own presence check. `kind` defaults to 'legacy', which is exactly what
     // every pre-existing row is.
     for (const [nome, ddl] of [
-      ['kind', `ADD COLUMN kind TEXT NOT NULL DEFAULT 'legacy' CHECK (kind IN ('legacy','rich'))`],
-      ['rich_json', 'ADD COLUMN rich_json TEXT'],
-      ['fallback_json', 'ADD COLUMN fallback_json TEXT'],
-      ['lease_index', 'ADD COLUMN lease_index INTEGER NOT NULL DEFAULT 0 CHECK (lease_index >= 0)'],
+      ['kind', `kind TEXT NOT NULL DEFAULT 'legacy' CHECK (kind IN ('legacy','rich'))`],
+      ['rich_json', 'rich_json TEXT'],
+      ['fallback_json', 'fallback_json TEXT'],
+      ['lease_index', 'lease_index INTEGER NOT NULL DEFAULT 0 CHECK (lease_index >= 0)'],
     ] as const) {
-      if (!colonne.some((c) => c.name === nome)) {
-        db.exec(`ALTER TABLE telegram_delivery_parts ${ddl}`);
-      }
+      ensureColumn(db, 'telegram_delivery_parts', nome, ddl);
     }
     db.prepare(
       `UPDATE telegram_delivery_parts
