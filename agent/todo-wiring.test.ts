@@ -113,9 +113,10 @@ describe('il piano torna nel contesto del turno dopo, senza che nessuno lo chied
     expect(second).toContain('Piano di questa conversazione');
     expect(second).toContain('1. [pending] leggere il contratto');
     expect(second).toContain('2. [pending] rispondere a Marco');
-    // The deterministic completion criterion is stated where the model reads
-    // about the plan at all — it is the only place it appears.
-    expect(second).toMatch(/finito quando nessun passo/);
+    // The real composition root preserves readable plan state without making
+    // every pending session item an obligation of this Turn.
+    expect(second).toContain('non decidono quando il turno è finito');
+    expect(second).not.toMatch(/finito quando nessun passo/);
   });
 
   it('sopravvive al riavvio del processo: un runtime nuovo lo rimette in contesto', async () => {
