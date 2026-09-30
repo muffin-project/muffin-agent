@@ -146,9 +146,9 @@ Misurato nella review indipendente del 2026-09-27, con l'executor di produzione
   `docker events --filter event=oom` registra ogni kill (misurato nella stessa
   review);
 - lo stop di default di Docker (10 s) è più corto del drain del gateway (60 s): un
-  `docker compose stop` durante un turno uccide il drain, e dopo il riavvio vale
-  lo stesso difetto del lock descritto sotto. Il compose imposta
-  `stop_grace_period: 75s`, come il `TimeoutStopSec` della unit systemd;
+  `docker compose stop` durante un turno uccide il drain, e il riavvio perde il
+  turno in corso. Il compose imposta `stop_grace_period: 75s`, come il
+  `TimeoutStopSec` della unit systemd;
 - dopo il riavvio il gateway può rifiutarsi di partire con `un gateway è già
   attivo (pid 7)`: il lock (`core/lock/durable.ts`, `heldBy`) giudica vivo il
   detentore dal solo pid, e in un container riavviato il nuovo gateway prende di
@@ -156,15 +156,22 @@ Misurato nella review indipendente del 2026-09-27, con l'executor di produzione
   morto non ha 30 minuti (6 × `STALE_AFTER_MS`). Misurato: circa 17 minuti di
   riavvii, finiti solo perché un riavvio ha preso il pid 6. È un difetto del lock
   che esiste per ogni kill del gateway in container, non introdotto dai tetti, ma
-  i tetti rendono il kill un esito previsto;
+  i tetti rendono il kill un esito previsto. **Aggiornamento (2026-09-30): il
+  difetto è chiuso in `dev` da #728 (ADR-0094)** — il detentore è giudicato vivo
+  dalla sua incarnazione (un lock di file che il kernel rilascia alla morte del
+  processo, SIGKILL e OOM compresi), non dal solo pid; il riavvio dopo un kill
+  duro riparte subito. La regola del pid resta come ripiego per i token scritti
+  prima di ADR-0094, che una home sopravvissuta a un'immagine vecchia può ancora
+  contenere. Le misure di questo documento restano quelle del 2026-09-26;
 - carico legittimo: ffmpeg e whisper-cli con il modello base su 60 s di audio,
   23 task al massimo, `memory.peak` del container 627 MiB; un processo `node`
   nudo (il minimo per un server MCP stdio) 43 MiB e 7 thread.
 
 Il tetto di memoria quindi scambia la protezione dell'host con la disponibilità
 del gateway: un comando fuori controllo non esaurisce l'host, ma in certe forme
-fa riavviare il gateway, e finché il lock non è corretto il riavvio può costare
-fino a 30 minuti.
+fa riavviare il gateway. Al momento della misura (26/09, prima di #728) il
+riavvio dopo un kill duro poteva costare fino a 30 minuti di rifiuti; dal 30/09
+il lock riconosce il detentore dall'incarnazione e il riavvio riparte subito.
 
 | | Candidata | Pro | Contro |
 |---|---|---|---|
@@ -181,8 +188,9 @@ limitare la dimensione dei tmpfs che la sandbox crea, perché nessun
 0.13.0 `--size` vale solo per `--tmpfs`: vale quindi per le maschere dei
 segreti, che possono anche essere rese di sola lettura con `--remount-ro`, non
 per il `/dev` creato da `--dev`, per cui serve un'altra strada);
-e un lock che riconosca il detentore anche dall'identità del processo (per
-esempio l'istante di avvio da `/proc`), non dal solo pid.
+e un lock che riconosca il detentore anche dall'identità del processo, non dal
+solo pid — **fatto**: #728/ADR-0094 (incarnazione: un lock di file per processo),
+integrato in `dev` il 2026-09-29.
 
 ## Peer, per problema
 
