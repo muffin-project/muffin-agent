@@ -124,6 +124,41 @@ describe('migrate — a populated old-shape database reaches HEAD', () => {
 });
 
 describe('migrate — the backup precedes the reshaping, and failure is atomic', () => {
+  it('rechecks a pending version after another opener migrates the same database', () => {
+    const { db, d, backups } = fileDb();
+    const other = new DatabaseCtor(join(d, 'muffin.db'));
+    other.pragma('busy_timeout = 5000');
+    const addColumn: Migration = {
+      version: 2,
+      description: 'add one column once',
+      up: (connection) => connection.exec('ALTER TABLE things ADD COLUMN extra TEXT'),
+    };
+    try {
+      db.exec('CREATE TABLE things (id INTEGER PRIMARY KEY)');
+      migrate(db, { backupDir: backups, migrations: [] });
+      const transaction = db.transaction.bind(db);
+      let otherRan = false;
+      db.transaction = ((fn: () => void) => {
+        if (!otherRan) {
+          otherRan = true;
+          migrate(other, { backupDir: join(d, 'other-backups'), migrations: [addColumn] });
+        }
+        return transaction(fn);
+      }) as typeof db.transaction;
+
+      const result = migrate(db, { backupDir: backups, migrations: [addColumn] });
+      expect(otherRan).toBe(true);
+      expect(result.applied).toEqual([]);
+      expect(result.version).toBe(2);
+      expect(schemaVersionOf(db)).toBe(2);
+      const columns = db.prepare('PRAGMA table_info(things)').all() as { name: string }[];
+      expect(columns.filter((entry) => entry.name === 'extra')).toHaveLength(1);
+    } finally {
+      other.close();
+      db.close();
+    }
+  });
+
   it('writes a validated pre-migrate backup before running the first pending migration', () => {
     const { db, backups } = fileDb();
     seedOldShape(db);
