@@ -22,6 +22,13 @@ agent:
   max_turns: 20
 codex:
   command: codex app-server
+  approval_policy:
+    granular:
+      sandbox_approval: false
+      rules: false
+      mcp_elicitations: false
+      request_permissions: false
+      skill_approval: false
   thread_sandbox: workspace-write
   turn_sandbox_policy:
     type: workspaceWrite
