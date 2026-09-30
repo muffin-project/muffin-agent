@@ -385,8 +385,14 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     // Old tool payloads are cleared before the request, not after: what goes
     // out is smaller, what is on record is whole. Nothing is removed, so every
     // `tool_use` keeps its `tool_result` and the request stays well-formed.
+    // The budget is the profile's when it declares one: the global constant
+    // is tuned for frontier models, and a small local model with a 90s
+    // per-call deadline degrades long before 60k chars of old results
+    // (measured 30/09/2026: two `model_deadline` deaths at 32k input tokens
+    // with zero compaction). Absent on pre-field profiles, which keep the
+    // behaviour they had.
     const compacted = compactToolResults(run.messages, {
-      budgetChars: TOOL_RESULT_BUDGET_CHARS,
+      budgetChars: deps.profile.toolResultBudgetChars ?? TOOL_RESULT_BUDGET_CHARS,
       keep: (name) => deps.tools.find((t) => t.spec.name === name)?.keepResult === true,
     });
     if (compacted.clearedCount > 0) {
