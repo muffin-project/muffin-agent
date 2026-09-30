@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runInit } from '../../cli/init.js';
+import { loadConfig, saveConfig } from '../../core/config/config.js';
 import { AnthropicProvider } from './anthropic.js';
 import { OpenAICompatProvider } from './openai-compat.js';
 import { ReasoningConfigurationError } from './reasoning.js';
@@ -191,6 +192,36 @@ describe('verify · B: revoked credential => auth_failed, no leak', () => {
       expect(result.capability).toEqual({ completion: 'fail', toolCall: 'fail' });
       expect(JSON.stringify(result)).not.toContain(CANARY);
       expect(result.remedy).toBeTruthy();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('verify · the declared reasoning dialect reaches the route it probes (#789)', () => {
+  it('the declared dialect reaches the provider verify builds (#789 wiring)', async () => {
+    const dir = configuredHome('sk-test');
+    try {
+      const config = loadConfig(dir);
+      saveConfig({ ...config, provider: { ...config.provider, reasoningDialect: 'reasoning_effort' } }, dir);
+      const urls: string[] = [];
+      const result = await verifyInferenceRoute({
+        home: dir,
+        nonce: NONCE,
+        timeoutMs: 5_000,
+        fetch: (async (input: unknown) => {
+          const url = typeof input === 'string' ? input : String((input as { url?: string }).url ?? input);
+          urls.push(url);
+          const body = url.includes('/chat/completions')
+            ? openaiCompletion({ toolCalls: [probeToolCall()] })
+            : { data: { id: 'openrouter/free' } };
+          return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+        }) as never,
+      });
+      expect(result.status).toBe('working');
+      expect(urls.some((u) => u.includes('/chat/completions'))).toBe(true);
+      // The dialect suppressed OpenRouter discovery: with the wiring removed this is 1, not 0.
+      expect(urls.filter((u) => u.includes('/model/'))).toHaveLength(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
