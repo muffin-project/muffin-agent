@@ -116,4 +116,24 @@ describe('sys_inspect dice cosa sta usando adesso', () => {
     const testo = await chiedi({ tools: [t('alpha', 'a'), t('beta', 'b')] });
     expect(testo).toContain('alpha, beta');
   });
+
+  it('mostra da dove viene il profilo quando il runtime lo sa (#764)', async () => {
+    const testo = await chiedi();
+    const conOrigine = await makeInspectTool(finto()).handler(
+      {},
+      toolContext({
+        runtimeInfo: {
+          providerKind: 'openai-compat',
+          mainModel: 'my-lan-model',
+          lightModel: 'qwen/qwen3.7-flash',
+          profile: { ...CONSERVATIVE, name: 'owner-lan' },
+          profileSource: { origin: 'owner', file: '/home/muffin/profiles/owner-lan.json' },
+        },
+      }),
+    );
+    expect(conOrigine.content).toContain('profilo: owner-lan · owner (owner-lan.json)');
+    // Senza runtimeInfo la riga resta quella di sempre, senza suffissi inventati.
+    expect(testo).toContain('profilo: conservative — max');
+    expect(testo).not.toContain('profilo: conservative ·');
+  });
 });

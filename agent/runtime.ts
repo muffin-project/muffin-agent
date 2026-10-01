@@ -60,7 +60,13 @@ import {
   type SystemPromptBlocks,
 } from './context/assemble.js';
 import type { Approver, LoopDeps, RegisteredTool, SpendEntry, TurnRuntimeInfo } from './loop.js';
-import { loadProfiles, selectProfile, withThinking } from './profiles/profile.js';
+import {
+  CONSERVATIVE,
+  loadEffectiveProfiles,
+  selectSourcedProfile,
+  withThinking,
+  type ProfileOrigin,
+} from './profiles/profile.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { type LightAttemptReport, lightLane } from './providers/light-lane.js';
 import { OpenAICompatProvider } from './providers/openai-compat.js';
@@ -615,11 +621,19 @@ export function buildRuntime(
   let lightFingerprint = JSON.stringify({ provider: config.provider, light: config.models.light });
 
   const profileProblems: string[] = [];
-  const profiles = loadProfiles(undefined, (line) => profileProblems.push(line));
+  const sourcedProfiles = loadEffectiveProfiles(home, undefined, (line) => profileProblems.push(line));
   // L'override dell'owner (`config.json` §thinking) sulla sola corsia di
   // conversazione: la light qui sotto tiene il profilo del *suo* modello, e le
   // corsie della memoria chiedono `off` da sé.
-  const profile = withThinking(selectProfile(config.models.main, profiles), config.thinking);
+  const mainSourced = selectSourcedProfile(config.models.main, sourcedProfiles);
+  const profile = withThinking(mainSourced?.profile ?? CONSERVATIVE, config.thinking);
+  // Provenance holder, mutated alongside `profile` on refresh: readers
+  // (`sys_inspect`, exposure remedies) hold this reference, never a copy —
+  // the same stability contract `profile` itself has below.
+  const profileSource: { origin: ProfileOrigin | 'conservative'; file: string } =
+    mainSourced === undefined
+      ? { origin: 'conservative' as const, file: '' }
+      : { origin: mainSourced.origin, file: mainSourced.file };
 
   const recordSpendWithBaseUrl = (entry: SpendEntry, baseUrl: string | undefined): number => {
     // An owner-declared unmetered endpoint skips the meter entirely: the
@@ -675,7 +689,7 @@ export function buildRuntime(
     span.end();
   };
   let light = lightLane(provider, {
-    profile: selectProfile(config.models.light, profiles),
+    profile: selectSourcedProfile(config.models.light, sourcedProfiles)?.profile ?? CONSERVATIVE,
     record: (entry) =>
       void recordSpendWithBaseUrl(
         {
@@ -1278,6 +1292,8 @@ export function buildRuntime(
           tool,
           profileName: profile.name,
           maxToolsExposed: profile.maxToolsExposed,
+          profileOrigin: profileSource.origin,
+          profileFile: profileSource.file === '' ? undefined : profileSource.file,
         }),
       );
     }
@@ -1293,8 +1309,9 @@ export function buildRuntime(
       providerFingerprint = fingerprint;
     }
 
+    const refreshed = selectSourcedProfile(persisted.models.main, loadEffectiveProfiles(home));
     const nextProfile = withThinking(
-      selectProfile(persisted.models.main, loadProfiles()),
+      refreshed?.profile ?? CONSERVATIVE,
       persisted.thinking,
     );
     // Keep the config and profile objects stable for their existing readers
@@ -1306,6 +1323,12 @@ export function buildRuntime(
       thinking: persisted.thinking,
     });
     Object.assign(profile, nextProfile);
+    Object.assign(
+      profileSource,
+      refreshed === undefined
+        ? { origin: 'conservative' as const, file: '' }
+        : { origin: refreshed.origin, file: refreshed.file },
+    );
     recordSpend = makeRecordSpend(persisted.provider.baseUrl);
     if (loopDeps !== null) {
       loopDeps.provider = provider;
@@ -1317,6 +1340,7 @@ export function buildRuntime(
         mainModel: persisted.models.main,
         lightModel: persisted.models.light,
         profile,
+        profileSource,
       };
     }
     computeExposureGaps();
@@ -1342,7 +1366,7 @@ export function buildRuntime(
     lightFingerprint = fingerprint;
     lightBaseUrl = persisted.provider.baseUrl;
     light = lightLane(provider, {
-      profile: selectProfile(persisted.models.light, profiles),
+      profile: selectSourcedProfile(persisted.models.light, sourcedProfiles)?.profile ?? CONSERVATIVE,
       record: (entry) =>
         void recordSpendWithBaseUrl(
           {
@@ -1444,6 +1468,7 @@ export function buildRuntime(
         mainModel: config.models.main,
         lightModel: config.models.light,
         profile,
+        profileSource,
       } satisfies TurnRuntimeInfo,
       provider,
       profile,
