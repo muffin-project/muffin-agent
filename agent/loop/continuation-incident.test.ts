@@ -124,6 +124,42 @@ function world(
 }
 
 describe('Incident A · useful work then provider stalls', () => {
+  it('a continuation identifies the interrupted request, not the session plan', async () => {
+    const w = world([
+      stall(), stall(), stall(), stall(), stall(),
+      stall(), stall(), stall(), stall(), stall(),
+      { text: 'The brief is ready.', toolCalls: [], stopReason: 'end', usage: someUsage, model: 'test-model' },
+    ], new Map());
+    const session = w.sessions.open('owner');
+    const request = 'Summarize my open commitments. Read only; do not execute the plan.';
+    w.deps.todos.plan('host', session.id, ['Build the old animation.'], 0);
+    w.sessions.append(session, { role: 'user', content: 'Build the old animation.', surface: 'cli', createdAt: NOW().toISOString(), tier: 0 });
+    const first = await runTurn(w.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: request });
+    expect(first.stopped).toBe('continuable');
+    const correction = { role: 'user' as const, content: [{ type: 'text' as const, text: 'Instead list only two items. Still read only.' }] };
+    const second = await continueTurn(w.deps, first.turnId, { message: correction, session });
+    if ('why' in second) throw new Error(second.why);
+    expect(second.turnId).toBe(first.turnId);
+    expect(second.stopped).toBe('continuable');
+    const grant = { role: 'user' as const, content: [{ type: 'text' as const, text: 'riprendi' }] };
+    const third = await continueTurn(w.deps, first.turnId, { message: grant, session });
+    if ('why' in third) throw new Error(third.why);
+    expect(third.turnId).toBe(first.turnId);
+    const messages = w.provider.seen.at(-1)!.messages;
+    const controls = messages.filter((m) => m.origin === 'harness');
+    const control = controls.map((m) => JSON.stringify(m.content)).join('\n');
+    expect(control).toContain(first.turnId);
+    expect(control).toContain(request);
+    expect(control).not.toContain('Build the old animation.');
+    expect(controls).toHaveLength(1);
+    expect(messages).toContainEqual(correction);
+    expect(messages.at(-1)).toEqual(grant);
+    expect(w.turns.get(first.turnId)?.inputText).toBe(request);
+    // The derived reference is control, never another owner occurrence.
+    expect(w.sessions.read(session).filter((m) => m.content === request)).toHaveLength(1);
+    expect(w.sessions.read(session).filter((m) => m.content === 'riprendi')).toHaveLength(1);
+  });
+
   it('the lease ends continuable with a truthful diagnostic, not done/error', async () => {
     const reads = new Map<string, number>();
     const w = world(
