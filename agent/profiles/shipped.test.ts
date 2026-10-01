@@ -116,7 +116,9 @@ describe('shipped profiles', () => {
     // qwen via OpenRouter con 90s di deadline per chiamata. Questo profilo
     // compatta da 16k char (~4k token di risultati): i risultati recenti, quelli
     // su cui il modello sta ragionando, restano; il resto diventa placeholder
-    // con la via del re-read.
+    // con la via del re-read. (La deadline per chiamata è poi passata a 300s
+    // il 01/10/2026, #824: la compattazione resta perché riduce il prefill,
+    // non solo il rischio-fuse.)
     const consumer = profiles.find((p) => p.name === 'consumer-local');
     expect(consumer?.toolResultBudgetChars).toBe(16_000);
   });
