@@ -113,6 +113,10 @@ describe('il piano torna nel contesto del turno dopo, senza che nessuno lo chied
     expect(second).toContain('Piano di questa conversazione');
     expect(second).toContain('1. [pending] leggere il contratto');
     expect(second).toContain('2. [pending] rispondere a Marco');
+    // The real composition root preserves readable plan state without making
+    // every pending session item an obligation of this Turn.
+    expect(second).toContain('non decidono quando il turno è finito');
+    expect(second).not.toMatch(/finito quando nessun passo/);
     // No completion rule in prose: "finished" is decided by the completion
     // gate reading rows at the finish boundary
     // (`agent/loop/completion-gate.test.ts`), not by a sentence here. What
