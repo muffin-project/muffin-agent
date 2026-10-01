@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { JsonlExporter, SimpleTracer } from '../tracing/tracer.js';
 import type { AskFacts } from './envelope.js';
 import { SHADOW_PACK, SHADOW_PACK_CAPABILITIES, SHADOW_PACK_VERSION } from './pack.js';
-import type { JudgmentAnswer, JudgmentQuestion, SystemOneVerdict } from './port.js';
+import { JudgmentError, type JudgmentAnswer, type JudgmentQuestion, type SystemOneVerdict } from './port.js';
 import { makeShadowJudge } from './shadow.js';
 import { JudgmentStore } from './store.js';
 
@@ -98,6 +98,17 @@ describe('makeShadowJudge', () => {
     await attesa(() => store.forApproval('ap-10')?.status === 'error');
     expect(store.forApproval('ap-10')?.detail).toContain('provider giù');
     expect(log.some((l) => l.includes('fallito'))).toBe(true);
+  });
+
+  it('un timeout del provider è una riga timeout, non error: dati diversi per il report', async () => {
+    const { store, judge } = ambiente(async () => {
+      throw new JudgmentError({ kind: 'timeout', detail: 'timeout dopo 10s' });
+    });
+    judge.shadow(fatti, { approvalId: 'ap-12', turnId: 't-12' });
+    await attesa(() => store.forApproval('ap-12')?.status === 'timeout');
+    expect(store.forApproval('ap-12')?.detail).toContain('timeout');
+    // La latenza del fallimento è i millisecondi spesi, non zero.
+    expect(store.forApproval('ap-12')?.latencyMs).not.toBeNull();
   });
 
   it('solo le capability del pacchetto partono: le altre non generano riga', () => {

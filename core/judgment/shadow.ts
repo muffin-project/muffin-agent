@@ -1,7 +1,7 @@
 import { ATTR, type Tracer } from '../tracing/types.js';
 import { type AskFacts, buildEnvelope, stateHash } from './envelope.js';
 import { SHADOW_PACK, SHADOW_PACK_CAPABILITIES, SHADOW_PACK_VERSION } from './pack.js';
-import type { SystemOnePort } from './port.js';
+import { JudgmentError, type SystemOnePort } from './port.js';
 import type { JudgmentStore } from './store.js';
 
 /**
@@ -20,9 +20,13 @@ import type { JudgmentStore } from './store.js';
  *
  * **La chiusura**: fire-and-forget e un database che si chiude sono la
  * coppia che una volta si portava dietro il gateway (il commento di
- * `buildRuntime.close` lo nomina). Quindi i giudizi in volo si tengono in
- * un `Set`, e l'hook di chiusura li aspetta — con un tetto, perché
- * chiudere non vuol dire aspettare un provider disperso: oltre
+ * `buildRuntime.close` lo nomina). In produzione `close()` **non aspetta**
+ * i suoi hook (li lancia e chiude il db subito dopo), quindi i giudizi in
+ * volo alla chiusura restano `pending`: la riga lo dice, il report lo
+ * conta, e nessuno interpreta il buco come un verdetto — una settle contro
+ * un db chiuso fallisce e finisce nel `.catch` qui sotto, senza rejections
+ * orfane. `drain()` esiste per chi *può* aspettare (i test; un domani un
+ * `close()` che sappia attendere): aspetta i volo con un tetto, e oltre
  * `DRAIN_MAX_MS` la riga resta pending e la verità è quella.
  */
 
@@ -57,6 +61,7 @@ export function makeShadowJudge(deps: {
     });
     const envelope = buildEnvelope(facts);
     const hash = stateHash(envelope);
+    const partito = Date.now();
     const riga = deps.store.record({
       approvalId: keys.approvalId,
       turnId: keys.turnId,
@@ -89,20 +94,31 @@ export function makeShadowJudge(deps: {
         span.end({ status: 'ok' });
       })
       .catch((error: unknown) => {
+        // Il timeout è un dato diverso dall'errore: la fase 2 ne conta i due
+        // separatamente (affidabilità vs lentezza), e mescolarli qui
+        // falsificherebbe il report a monte. Il kind arriva solo dall'adapter.
+        const failure = error instanceof JudgmentError ? error.failure : null;
         const detail =
-          error instanceof Error
-            ? error.message
-            : `guasto non tipizzato: ${JSON.stringify(String(error))}`;
+          failure !== null
+            ? `${failure.kind}: ${failure.detail}`
+            : error instanceof Error
+              ? error.message
+              : `guasto non tipizzato: ${JSON.stringify(String(error))}`;
         // La latenza del fallimento si misura come i secondi spesi, non come 0.
         const chiuso = deps.store.settle(riga, {
-          status: 'error',
+          status: failure?.kind === 'timeout' ? 'timeout' : 'error',
           detail,
-          latencyMs: null,
+          latencyMs: Date.now() - partito,
           settledAt: now().toISOString(),
         });
-        if (!chiuso) return; // già chiusa: la storia non si riscrive
-        span.setAttributes({ 'muffin.judgment.status': 'error', 'muffin.judgment.error': detail });
+        // Lo span si chiude comunque: anche una settle che non può più
+        // scrivere (db già chiuso) non deve lasciare un figlio appeso.
+        span.setAttributes({
+          'muffin.judgment.status': failure?.kind === 'timeout' ? 'timeout' : 'error',
+          'muffin.judgment.error': detail,
+        });
         span.end({ status: 'error', error: detail });
+        if (!chiuso) return; // già chiusa: la storia non si riscrive
         (deps.log ?? (() => {}))(
           `system one: giudizio fallito per ${facts.capability} — ${detail}`,
         );

@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import DatabaseCtor from 'better-sqlite3';
@@ -197,6 +197,34 @@ const attesa = async (condizione: () => boolean, ms = 2000): Promise<void> => {
     await new Promise((r) => setTimeout(r, 10));
   }
 };
+
+/**
+ * La degradazione dichiarata dall'ADR-0096: config che nomina il giudice ma
+ * segreto mancato → nessun giudizio cablato, nessuna eccezione, una riga
+ * nelle bootLines. È il «capability accesa e non raggiungibile» di sempre,
+ * provato sul runtime vero e non a parole.
+ */
+describe('buildRuntime: il giudice senza segreto si dice, non si rompe', () => {
+  it('config judgment + segreto assente → bootLine, deps.judgment assente', async () => {
+    const { runInit } = await import('../cli/init.js');
+    const { buildRuntime } = await import('./runtime.js');
+    const { writeFileSync } = await import('node:fs');
+    const home = mkdtempSync(join(tmpdir(), 'muffin-shadow-degrade-'));
+    runInit({ home, apiKey: 'sk-never-called' });
+    const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as Record<string, unknown>;
+    config['judgment'] = { provider: 'typesafe', apiKeyRef: 'secret://typesafe_key' };
+    writeFileSync(join(home, 'config.json'), JSON.stringify(config, null, 2), 'utf8');
+
+    const runtime = buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-shadow-degrade-ws-')));
+    try {
+      expect(runtime.deps.judgment).toBeUndefined();
+      expect(runtime.bootLines.join('\n')).toContain('system one');
+      expect(runtime.bootLines.join('\n')).toContain('segreto manca');
+    } finally {
+      runtime.close();
+    }
+  });
+});
 
 describe('il giudizio shadow parte accanto alla domanda e non la tocca', () => {
   it('riga ok: judgment per l ask della famiglia shell, join per approval id', async () => {
