@@ -515,10 +515,13 @@ fi
 # ---------------------------------------------------------------------------
 step "a shell that already resolves muffin gets no remedy block (#808)"
 # ---------------------------------------------------------------------------
-# Third install, same HOME, but the launcher dir is on the invoking PATH this
-# time — the #808 block must stay silent. (The command name may differ from
-# the first run: with a reachable launcher dir the installer avoids clobbering
-# whatever `muffin` resolves to. The assertions below do not name the command.)
+# Third install, same HOME, but the launcher dir AND a working Node are on the
+# invoking PATH this time — the #808 block must stay silent. (The command name
+# may differ from the first run: with a reachable launcher dir the installer
+# avoids clobbering whatever `muffin` resolves to. The assertions below do not
+# name the command.) CLEAN_PATH excludes Node on purpose, so the Node dir is
+# added explicitly: without it the shell genuinely could not run the launcher
+# (shebang `env node`), and the block would rightly appear.
 REACHABLE_LOG="$LAB/reachable.log"
 set +e
 env -i \
@@ -526,7 +529,7 @@ env -i \
   XDG_CONFIG_HOME="$XDG_CONFIG_HOME" \
   XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
   DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" \
-  PATH="$CLEAN_PATH:$BINDIR" \
+  PATH="$CLEAN_PATH:$BINDIR:$MUFFIN_PREFIX/node/bin" \
   TERM="${TERM:-dumb}" \
   MUFFIN_PREFIX="$MUFFIN_PREFIX" \
   MUFFIN_REPO="$ORIGIN" \
