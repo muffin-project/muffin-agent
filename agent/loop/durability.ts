@@ -1,6 +1,7 @@
 import type { PermissionSnapshot } from '../../core/policy/types.js';
 import { ATTR, type SpanHandle } from '../../core/tracing/types.js';
 import type { ContinuableClass, ContinuableReason, TurnOutcome, TurnRecord } from '../../core/turns/store.js';
+import type { TodoItem } from '../../core/turns/todo.js';
 import { encodeWaitFor, type WaitSpec } from '../../core/turns/wait.js';
 import type { ContentBlock, Message } from '../providers/types.js';
 import { harnessMessage, toolMessage } from './message-origin.js';
@@ -425,7 +426,12 @@ export function announceEnd(scope: TurnScope, stopped: TurnOutcome): void {
  * `releaseContinuable` below only returns this text when the release write
  * actually landed.
  */
-function continuableText(scope: TurnScope, failureClass: ContinuableClass, attempts: number): string {
+function continuableText(
+  scope: TurnScope,
+  failureClass: ContinuableClass,
+  attempts: number,
+  extra?: { openRows?: TodoItem[] },
+): string {
   // Turno, non lease: `run.toolCallsMade` è azzerato a ogni grant esplicito
   // (`buildFreshCounters`), mentre `lifetime` piega le lease chiuse — senza
   // sovrapposizioni, il fold avviene solo al release. Misurato il 30/09/2026:
@@ -468,6 +474,17 @@ function continuableText(scope: TurnScope, failureClass: ContinuableClass, attem
         return 'il turno ha esaurito il budget di attività del modello';
       case 'recovery_exhausted':
         return 'il modello non ha prodotto una risposta utilizzabile dopo la cascata di recupero';
+      case 'plan_open': {
+        // Named rows, not a rule sentence: the owner reads which granted work
+        // is still open; the gate that refused the settle lives in
+        // `agent/loop/completion-gate.ts`, not in prose.
+        const nomi = (extra?.openRows ?? []).slice(0, 3).map((r) => `«${r.text.slice(0, 80)}»`);
+        const altri = (extra?.openRows ?? []).length - nomi.length;
+        return (
+          `questo turno riprendeva un lavoro i cui passi sono ancora aperti (${nomi.join(', ')}` +
+          `${altri > 0 ? ` e altri ${altri}` : ''}): chiuderli con \`todo set\`, o riprenderli — non considerarli finiti`
+        );
+      }
     }
   })();
   return (
@@ -493,6 +510,7 @@ export function releaseContinuable(
   scope: TurnScope,
   failureClass: ContinuableClass,
   attempts: number,
+  extra?: { openRows?: TodoItem[] },
 ): TurnResult {
   const { deps, record, run, snapshot, turn: span } = scope;
   // Stesso totale della diagnostica qui sotto: la ragione durevole deve dire
@@ -504,6 +522,7 @@ export function releaseContinuable(
     lease: record.leaseIndex,
     ...(attempts > 0 ? { attempts } : {}),
     ...(run.providerFailureRequestIds.length > 0 ? { requestIds: [...run.providerFailureRequestIds] } : {}),
+    ...(extra?.openRows !== undefined ? { openSteps: extra.openRows.length } : {}),
     completed: { toolCalls: completedToolCalls },
     at: new Date().toISOString(),
   };
@@ -513,7 +532,7 @@ export function releaseContinuable(
     'muffin.turn.stop_reason': failureClass,
     'muffin.turn.lease': record.leaseIndex,
   });
-  const text = continuableText(scope, failureClass, attempts);
+  const text = continuableText(scope, failureClass, attempts, extra);
   const written = deps.turns.releaseContinuable(
     record.id,
     {
