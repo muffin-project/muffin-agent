@@ -764,8 +764,11 @@ vede — con un pavimento di 60s (sotto il battito del runtime non è un'attesa,
 un `sleep` dentro un tool), un tetto di 7 giorni e un massimo di 8 turni sospesi
 per tenant. Il criterio di completamento dei `todo` è una query sulle righe, mai
 il modello che si dichiara finito: **finito = nessun passo `pending` o `retry`**,
-e la frase è scritta nel contesto perché è l'unico posto dove il modello legge
-del piano.
+applicato dal gate di completamento al confine del turno
+(`agent/loop/completion-gate.ts`, #811) — non da una frase nel contesto. Il
+contesto mostra righe e stati; a decidere è il codice che le legge: un turno
+ripreso che lascerebbe cadere lavoro concesso senza chiuderlo non si chiude
+`answered` ma `continuable`, con le righe nominate.
 
 > 🔭 **Manca il decisore, non solo la primitiva** — `docs/evidence/hermes-documentazione.md`
 > §2.1–2.3 e §3.3 (2026-08-15). Tre cose che questa sezione non diceva:

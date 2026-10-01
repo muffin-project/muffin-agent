@@ -258,10 +258,62 @@ describe('acceptance · B · il turno sospendibile', () => {
             throw new Error(`il passo "${step}" non è nel contesto del secondo processo:\n${sent.transcript}`);
           }
         }
-        // The deterministic completion criterion travels with it — requirements-status.md#wait-e-todo-sono-primitive-del-runtime-non-tool
-        // asks for one, and this is the only place the model reads about it.
-        if (!/nessun passo/.test(sent.transcript)) {
-          throw new Error(`il criterio di completamento non è nel contesto:\n${sent.transcript}`);
+        // No completion rule in prose: "finished" is decided by the
+        // completion gate reading rows at the finish boundary
+        // (`agent/loop/completion-gate.ts`, proven in
+        // `agent/loop/completion-gate.test.ts` and scenario B9 below), not by
+        // a sentence here. What this context still owes the model — and what
+        // this scenario still proves — is the rows and their states, asserted
+        // above.
+      } finally {
+        await inst.cleanup();
+      }
+    },
+    headlessTestTimeoutMs(2),
+  );
+
+  scenario(
+    'B9',
+    async () => {
+      const inst = await install({
+        main: [
+          { tool: { name: 'todo', args: { action: 'plan', items: ['leggere il contratto'] } } },
+          {},
+          {},
+          {},
+          {},
+          {},
+          { text: 'tutto fatto, nessun passo aperto' },
+        ],
+      });
+      try {
+        const first = await inst.muffin([
+          'run',
+          '--json',
+          '--session',
+          'piano-gate',
+          '--timeout',
+          String(HEADLESS_TURN_TIMEOUT_SECONDS),
+          'organizzati',
+        ]);
+        // The lease yielded with a plan row open: continuable, not answered.
+        if (first.code !== 7) {
+          throw new Error(`primo processo: atteso exit 7 (continuable), ricevuto ${first.code}\n${first.err}`);
+        }
+        let turnId: string;
+        try {
+          turnId = (JSON.parse(first.out) as { turnId: string }).turnId;
+        } catch {
+          throw new Error(`il primo processo non ha detto il turno:\n${first.out}`);
+        }
+        // Resume and drop the granted work: the gate refuses the silent settle —
+        // same exit a script can act on, with the open rows named, not implied.
+        const second = await inst.muffin(['resume', '--json', turnId]);
+        if (second.code !== 7) {
+          throw new Error(`resume: atteso exit 7 (continuable plan_open), ricevuto ${second.code}\n${second.err}`);
+        }
+        if (!/leggere il contratto/.test(second.out)) {
+          throw new Error(`il diagnostico non nomina il passo ancora aperto:\n${second.out}`);
         }
       } finally {
         await inst.cleanup();
