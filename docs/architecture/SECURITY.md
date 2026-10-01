@@ -177,6 +177,17 @@ History must preserve the taint of content that is reinjected later. A session
 transcript is not a trust laundromat. Speaker/actor metadata must also survive
 recall: "trusted" is not equivalent to "the owner said this".
 
+**Declared limit, accepted (ADR-0060 §Limiti noti 4, 2026-10-01):** the taint
+carried by a dated commitment is bounded by the reinjection window
+(`MAX_HISTORY_TURNS = 40`), not tracked absolutely. A step whose text was
+written under a higher ceiling can be dated after the source rows leave the
+window and delivered at tier 0. Accepted because the delivery runs no
+capability — the reminder is the row's own text, owner-visible in the plan
+since it was written — and the realistic laundering case (dating while the
+ceiling is still high) is closed and tested. The recorded reversal condition is
+per-row provenance: build it if this residual is measured as a real path, or if
+a commitment delivery ever gains effects beyond message text.
+
 The same rule applies to intentional memory. Under ADR-0051 the model may emit a
 `MemoryProposal`/candidate belief, but it does not choose tenant, speaker/source,
 trust/taint or active canonical status. Those are derived from runtime evidence

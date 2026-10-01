@@ -331,21 +331,44 @@ che nessuno ha visto.
    asserzioni in `core/scheduler/commitments.test.ts` che citano la frase
    sono state aggiornate e vanno rosse se l'anno viene tolto (provato
    togliendolo).
-4. **La rotaia del taint è limitata dalla finestra di reiniezione, non
-   assoluta.** `due_tier` è il soffitto del turno che ha messo la **data**, e un
-   soffitto decade: `taint()` si calcola sulla storia reiniettata, che è
-   `MAX_HISTORY_TURNS = 40` turni. Una pagina letta al turno N può vedere la
-   propria frase scritta come passo già al turno N+1 a tier 0 —
-   `intrinsicTaint()` è *definita* per escludere ciò che è tornato da un turno
-   precedente, e `agent/tools/todo.test.ts` lo asserisce come voluto — e datare
-   quel passo ancora aperto dopo che le righe sporche sono uscite dalla finestra
-   lo arma a `max(0, 0) = 0`: la corsia consegna la frase della pagina. Il caso
-   che il primo giudice aveva trovato (datare mentre il soffitto è **ancora**
-   alto) è chiuso e verificato; questo no. Chiuderlo vuol dire una **provenienza
-   per riga** invece di un'istantanea di tier, che è una decisione nuova e non
-   questa. Registrato qui perché due stesure di fila hanno affermato all'indicativo
-   una chiusura che il codice non aveva, e nel codice le due frasi sono state
-   corrette (`core/scheduler/commitments.ts`, `agent/tools/todo.ts`).
+ 4. ~~**La rotaia del taint è limitata dalla finestra di reiniezione, non
+    assoluta.**~~ **Accettato 2026-10-01 come confine permanente** (#374).
+    `due_tier` è il soffitto del turno che ha messo la **data**, e un
+    soffitto decade: `taint()` si calcola sulla storia reiniettata, che è
+    `MAX_HISTORY_TURNS = 40` turni. Una pagina letta al turno N può vedere la
+    propria frase scritta come passo già al turno N+1 a tier 0 —
+    `intrinsicTaint()` è *definita* per escludere ciò che è tornato da un turno
+    precedente, e `agent/tools/todo.test.ts` lo asserisce come voluto — e datare
+    quel passo ancora aperto dopo che le righe sporche sono uscite dalla finestra
+    lo arma a `max(0, 0) = 0`: la corsia consegna la frase della pagina. Il caso
+    che il primo giudice aveva trovato (datare mentre il soffitto è **ancora**
+    alto) è chiuso e verificato; questo no.
+
+    **Perché il confine a 40 turni è accettato come sufficiente.** Tre ragioni,
+    contate sul percorso residuo, non percepite:
+
+    - **La consegna non escalation d'agency.** Il promemoria è il testo della
+      riga, nessun tool gira, nessuna capability si muove, costa zero token
+      (§3). La rotaia del taint esiste per recintare ciò che un impegno può
+      **fare**, e questa corsia non fa niente che non fosse già possibile.
+    - **La frase è già visibile all'owner da prima.** Il passo sporco sta nella
+      lista del piano, mostrata a ogni turno finché resta aperto: il promemoria
+      re-consegna testo che l'owner ha già visto ripetutamente. L'esposizione
+      precede la data ed è indipendente da essa.
+    - **Il residuo richiede un percorso multi-step stretto.** La sorgente sporca
+      deve uscire interamente dalla finestra, la frase deve essere sopravvissuta
+      verbatim in una riga ancora aperta, e un turno successivo — il cui contesto
+      non contiene più la sorgente — deve datare proprio quella riga. L'unica
+      capacità *nuova* che il percorso acquista è ripetere testo già visibile in
+      un momento scelto.
+
+    Chiuderlo del tutto vuol dire una **provenienza per riga** invece di
+    un'istantanea di tier. È la condizione di ribaltamento registrata: la si
+    costruisce se un giudice misura questo residuo come percorso reale, o se la
+    consegna di un impegno acquista mai effetti oltre il testo del messaggio.
+    Registrato qui perché due stesure di fila hanno affermato all'indicativo
+    una chiusura che il codice non aveva, e nel codice le due frasi sono state
+    corrette (`core/scheduler/commitments.ts`, `agent/tools/todo.ts`).
 5. **Un passo `blocked` o `waiting` con una data parla comunque.** Solo `done`
    zittisce. È coerente con il modello — `blocked` significa «qualcosa lo ha
    fermato», non «non serve più», e ADR-0047 rifiuta di proposito uno stato
