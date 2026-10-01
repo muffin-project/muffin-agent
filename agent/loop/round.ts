@@ -734,6 +734,9 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       tenant: input.tenant,
       capability: 'llm.chat',
       model: result.model,
+      // The route it was asked with, for the billing contract: the ledger
+      // identity stays `result.model`, and the price seam decides (#499).
+      requestedModel: deps.model,
       // Attribuzione, non contabilità: la riga di spesa porta il job da cui
       // il turno è nato, così il tetto per-job ha un contatore da leggere.
       ...(input.jobId === undefined ? {} : { jobId: input.jobId }),

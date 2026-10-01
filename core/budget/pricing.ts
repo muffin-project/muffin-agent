@@ -128,7 +128,11 @@ export type Tokens = {
 };
 
 /** Zero for a local model — not "unknown", zero, and the caller can tell. */
-export function costUsd(model: string, tokens: Tokens, baseUrl?: string): number {
+export function costUsd(model: string, tokens: Tokens, baseUrl?: string, requestedModel?: string): number {
+  // An explicit free route is a billing contract, not a model-family guess:
+  // it wins over whatever the response resolved to. Anything else prices the
+  // served model exactly as before (#499).
+  if (requestedModel !== undefined && isOpenRouterFreeRoute(requestedModel, baseUrl)) return 0;
   const price = priceOf(model, baseUrl);
   if (price === null) return 0;
   const cached = tokens.cacheReadTokens ?? 0;

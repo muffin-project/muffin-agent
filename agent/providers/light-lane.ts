@@ -68,6 +68,13 @@ export type LightSpend = {
    * was blind to the reranker it had paid for.
    */
   jobId?: string;
+  /**
+   * The route or alias the call was requested with (e.g. `openrouter/free`),
+   * threaded from `ChatCall.model`, never invented here. `model` stays who
+   * served the request; this chooses the provider billing contract at the
+   * price seam without losing observability (#499).
+   */
+  requestedModel?: string;
 };
 
 export type LightLaneOptions = {
@@ -239,9 +246,12 @@ export function lightLane(inner: Provider, options: LightLaneOptions): Provider 
       // request outcome, not three charges invented from failures whose usage
       // the provider never returned.
       options.record?.({
-        // `result.model` and not `call.model`: the price table is keyed on what served
-        // the request, and the two differ on every alias.
+        // `model` stays who served the request; `requestedModel` carries the
+        // route it was asked with, so the price seam can choose the provider
+        // billing contract — an explicit free route bills $0 — without losing
+        // observability of what served it (#499).
         model: result.model || call.model,
+        requestedModel: call.model,
         inputTokens: result.usage.inputTokens,
         outputTokens: result.usage.outputTokens,
         cacheReadTokens: result.usage.cacheReadTokens,
