@@ -195,6 +195,7 @@ export async function verifyInferenceRoute(opts: VerifyInferenceOptions = {}): P
             { 'HTTP-Referer': 'https://github.com/muffin-ai/muffin', 'X-Title': 'muffin' },
             {
               ...(config.provider.routing ? { routing: config.provider.routing } : {}),
+              ...(config.provider.reasoningDialect ? { reasoningDialect: config.provider.reasoningDialect } : {}),
               ...(opts.fetch ? { fetch: opts.fetch, metadataFetch: opts.fetch } : {}),
             },
           );

@@ -58,6 +58,7 @@ on:
       - 'bootstrap.sh'
       - 'install.sh'
       - 'evals/install/**'
+      - 'contrib/docker/**'
       - 'cli/**'
       - 'core/gateway/**'
       - 'core/config/config.ts'
@@ -113,3 +114,39 @@ jobs:
 
       - name: installazione da macchina vuota, unità, update e rollback
         run: bash evals/install/ubuntu.sh
+
+  # L'eval del percorso Docker (`contrib/docker/`) costruisce l'immagine dai
+  # sorgenti: è pesante, e vale solo per quel percorso. Lo step che la esegue è
+  # condizionato ai file cambiati, così ogni altro PR alloca solo il runner per
+  # la decisione (secondi) e il job conclude `success` con lo step saltato —
+  # nessun check pendente, e la superficie richiesta resta quella del workflow.
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - id: scope
+        name: il percorso Docker è toccato?
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            echo run=true >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if files=$(git diff --name-only "$BASE_SHA...$HEAD_SHA" -- contrib/docker evals/install/docker.sh); then
+            if [ -n "$files" ]; then echo run=true >> "$GITHUB_OUTPUT"; else echo run=false >> "$GITHUB_OUTPUT"; fi
+          else
+            # Se il range non è calcolabile, l'eval gira: meglio un job pesante
+            # in più che un'evidenza saltata in silenzio.
+            echo run=true >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.scope.outputs.run == 'true'
+        name: eval del percorso Docker (build, runtime, containment, tetti)
+        run: bash evals/install/docker.sh

@@ -2,6 +2,8 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { z } from 'zod';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { THINKING_VALUES, type Thinking } from '../../core/config/thinking.js';
+import { TOOL_RESULT_BUDGET_CHARS } from '../loop/types.js';
 
 /**
  * Per-model profiles.
@@ -117,7 +119,7 @@ export type Profile = {
   maxToolsExposed: number;
   /** `null` leaves call count unbounded; execution time and spend budgets still apply. */
   maxToolCallsPerTurn: number | null;
-  thinking: 'adaptive' | 'off' | 'unset';
+  thinking: Thinking;
   /**
    * `'deterministic'` sends `temperature: 0`; `'model-default'` sends no
    * sampling parameter at all, because the model rejects one.
@@ -126,6 +128,20 @@ export type Profile = {
   recovery: RecoveryStrategy[];
   /** Optional only for programmatic/backward-compatible callers; loadProfiles materializes DEFAULT_EXECUTION. */
   execution?: ProfileExecution | undefined;
+  /**
+   * Clearable tool-result payload kept per turn, in characters.
+   *
+   * The loop's global `TOOL_RESULT_BUDGET_CHARS` is tuned for frontier
+   * models; a small local model with a 90s per-call deadline degrades long
+   * before 60k chars of old results (measured 30/09/2026: two
+   * `model_deadline` deaths at 32k input tokens with TTFT up to 35s, zero
+   * compaction). Per-profile data for the same reason `thinking` is: never
+   * an `if (model === ...)` in the loop. Optional like `execution`, and for
+   * the same reason — a third-party profile from before this field keeps the
+   * behaviour it had (`sampling` precedent). The loop falls back to the
+   * global constant when absent.
+   */
+  toolResultBudgetChars?: number | undefined;
   notes: string;
 };
 
@@ -185,7 +201,7 @@ const ProfileSchema = z.object({
   // 'disabled'} — is a 400 on a model with no disable switch (Fable 5, Mythos
   // 5), so a profile targeting one needs a value that omits the field instead
   // of guessing wrong (ADR-0037's correction, same day).
-  thinking: z.enum(['off', 'adaptive', 'unset']),
+  thinking: z.enum(THINKING_VALUES),
   // Defaulted, not required, and the default is what the loop hardcoded before
   // this field existed — so a profile written against the old schema keeps
   // exactly the behaviour it had instead of silently acquiring a new one.
@@ -196,6 +212,10 @@ const ProfileSchema = z.object({
   // floor. Per-field defaults also make a partially migrated profile converge
   // instead of silently losing whichever fuse it omitted.
   execution: ExecutionSchema.default(DEFAULT_EXECUTION),
+  // Defaulted, not required: the default is what the loop did before this
+  // field existed (the global compaction budget), so an old profile keeps
+  // exactly the behaviour it had instead of silently acquiring a tighter one.
+  toolResultBudgetChars: z.number().int().positive().default(TOOL_RESULT_BUDGET_CHARS),
   notes: z.string().default(''),
 });
 

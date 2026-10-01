@@ -201,6 +201,49 @@ describe('the secret chain says which link answered', () => {
  * and the remedy the agent itself had printed did nothing. Nothing in that
  * failure was visible to a test that read the config once.
  */
+describe('thinking levels and the provider reasoning dialect (#789)', () => {
+  /** Rewrites config.json with one field changed, the way an owner hand-edits it. */
+  function edit(dir: string, change: (config: Record<string, unknown> & { provider: Record<string, unknown> }) => void): void {
+    const file = paths(dir).config;
+    const config = JSON.parse(readFileSync(file, 'utf8'));
+    change(config);
+    writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+  }
+
+  it('an existing config, with neither field, loads exactly as before', () => {
+    const dir = home();
+    const config = loadConfig(dir);
+    expect(config.thinking).toBeUndefined();
+    expect(config.provider.reasoningDialect).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('accepts every level next to off/adaptive/unset, in the one `thinking` setting', () => {
+    for (const thinking of ['off', 'adaptive', 'unset', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
+      const dir = home();
+      edit(dir, (c) => { c.thinking = thinking; });
+      expect(loadConfig(dir).thinking).toBe(thinking);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a thinking value nobody defined, naming the field', () => {
+    const dir = home();
+    edit(dir, (c) => { c.thinking = 'medium-rare'; });
+    expect(() => loadConfig(dir)).toThrow(/thinking/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('accepts the declared dialect and refuses one it does not know', () => {
+    const dir = home();
+    edit(dir, (c) => { c.provider.reasoningDialect = 'reasoning_effort'; });
+    expect(loadConfig(dir).provider.reasoningDialect).toBe('reasoning_effort');
+    edit(dir, (c) => { c.provider.reasoningDialect = 'chat_template_kwargs'; });
+    expect(() => loadConfig(dir)).toThrow(/reasoningDialect/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe('readDefaultChannel', () => {
   it('sees a surfaces.default rewritten by another process, with no restart', () => {
     const dir = home();

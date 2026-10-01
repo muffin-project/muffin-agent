@@ -599,7 +599,12 @@ export function buildRuntime(
           // dati, e sceglierla al posto suo qui sarebbe deciderla in silenzio.
           // Assente = quello che fa il gateway da sé; `muffin doctor` dice
           // cosa vuol dire.
-          source.provider.routing ? { routing: source.provider.routing } : {},
+          {
+            ...(source.provider.routing ? { routing: source.provider.routing } : {}),
+            ...(source.provider.reasoningDialect
+              ? { reasoningDialect: source.provider.reasoningDialect }
+              : {}),
+          },
         );
   let provider: Provider = createMainProvider(config);
   let providerFingerprint = JSON.stringify(config.provider);

@@ -2,6 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { ensurePrivateDir, tightenPrivateFile } from './private-fs.js';
 import { z } from 'zod';
 import { SEARCH_PROVIDER_IDS } from './providers.js';
+import { REASONING_DIALECTS, THINKING_VALUES } from './thinking.js';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -72,6 +73,19 @@ export const ConfigSchema = z.object({
     baseUrl: z.string().url().optional(),
     /** `secret://name` — resolved through the secret store, never inlined here. */
     apiKeyRef: z.string().min(1),
+    /**
+     * Come dire a un endpoint che **non** è OpenRouter di ragionare meno o
+     * niente (#789). Dichiarato dall'owner, mai dedotto dall'URL: la deduzione
+     * per hostname resta solo per OpenRouter, perché su Ollama/llama.cpp/vLLM
+     * il campo giusto dipende dal server e dal modello.
+     *
+     * Assente = quello che si è sempre fatto (niente sul filo fuori da
+     * OpenRouter). `reasoning_effort` manda il campo di primo livello che vLLM e
+     * Ollama documentano: `none` per `thinking: off`, altrimenti il livello di
+     * `thinking` così com'è — i livelli ammessi cambiano da server a server, e
+     * il validatore è il server.
+     */
+    reasoningDialect: z.enum(REASONING_DIALECTS).optional(),
     /**
      * Le preferenze di instradamento, per un `baseUrl` che è uno **smistatore**
      * e non un modello.
@@ -147,7 +161,7 @@ export const ConfigSchema = z.object({
    * puro che ha già mangiato il tetto dei token una volta
    * (`core/memory/corsie-senza-reasoning.test.ts`).
    */
-  thinking: z.enum(['adaptive', 'off', 'unset']).optional(),
+  thinking: z.enum(THINKING_VALUES).optional(),
   /**
    * Absent means no web search, and the tool is simply not registered — the
    * same posture as the shell without a working sandbox. A capability that

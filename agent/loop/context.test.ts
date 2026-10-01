@@ -134,6 +134,30 @@ describe('buildContext', () => {
     const ownerIndex = messages.findIndex((m) => m.origin === 'owner');
     expect(messages.indexOf(memory)).toBeLessThan(ownerIndex);
   });
+
+  it('a stale plan reaches the model framed as ask-first, not as owed', () => {
+    // Il cablaggio, non la funzione pura: `buildContext` passa il suo `adesso`
+    // a `todoSection`, così un piano del giorno prima non esce mai come «Sono
+    // aperti» qualunque sia il chiamante. `openPlan` ha updatedAt 1970: stantio
+    // per costruzione, a qualsiasi `adesso` reale.
+    const messages = buildContext(
+      baseInput({ text: 'Buongiorno' }),
+      [],
+      openPlan,
+      noHistory,
+      new Date(2026, 8, 30, 9, 31, 0),
+      'm',
+      'p',
+      undefined,
+      undefined,
+      new Set(),
+    );
+    const work = messages.find((m) => m.origin === 'work')!;
+    const text = textOf(work.content);
+    expect(text).toContain('passo del piano');
+    expect(text).not.toContain('Sono aperti:');
+    expect(text).toContain('non riprenderli da solo');
+  });
 });
 
 const openPlan: TodoItem[] = [
