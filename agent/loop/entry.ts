@@ -11,7 +11,7 @@ import { primoMessaggio } from './context.js';
 import { buildFreshCounters, evidenceForContinuation } from './continuation.js';
 import { closeRow } from './durability.js';
 import { type DriveOptions, guidaIlTurno } from './engine.js';
-import { ownerMessage } from './message-origin.js';
+import { harnessMessage, ownerMessage } from './message-origin.js';
 import { initialTaint, spendeIlBudget } from './permissions.js';
 import { providerMessages } from './provider-checkpoint.js';
 import {
@@ -670,7 +670,20 @@ export async function continueTurn(
   const granted = deps.turns.grantContinuation(
     turnId,
     {
-      messages: [...evidenceForContinuation(providerMessages(existing)), opts.message],
+      messages: [
+        ...evidenceForContinuation(providerMessages(existing)),
+        // The grant targets this durable Turn, not whichever session plan is
+        // most salient. This reference is derived control, never owner input;
+        // subsequent owner corrections remain in the retained evidence.
+        harnessMessage('user', [{
+          type: 'text',
+          text: `Ripresa del turno ${existing.id}. ` +
+            (existing.inputText === null ? '' : `La richiesta iniziale di questo lavoro è: ${JSON.stringify(existing.inputText)}. `) +
+            'Continua il lavoro di questo turno con le correzioni successive dell’owner, ' +
+            'usando gli effetti già registrati. Il piano e la storia della conversazione sono contesto, non un altro lavoro da avviare.',
+        }]),
+        opts.message,
+      ],
       taint: existing.taint,
       counters: buildFreshCounters(existing.counters),
       newLeaseStartedAt: now().toISOString(),

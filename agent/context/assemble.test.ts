@@ -16,7 +16,6 @@ import { buildRuntime, type Runtime } from '../runtime.js';
 import {
   buildSystemPromptBlocks,
   renderSystemPrompts,
-  STALE_PLAN_MS,
   tenantClass,
   todoSection,
   visibleTools,
@@ -258,7 +257,8 @@ describe('the owner-class prompt does not move', () => {
    * `205a51aaa4ea013b6351235dac6a3f0563ece1f876d68e2a68346ee961407605`.
    */
   const OWNER_PROMPT_SHA_AT_SPLIT =
-    'd243cf54a8eda456dabb9c35c5911bba54b248d1eb287392cdead2efee90c7a2';
+    // #529: session plan rows are context, not a grant or Turn completion rule.
+    '0952125772949ff2d1db0866998a17cea8b38f68c4608b9b87872dcc56df28b2';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
@@ -371,7 +371,8 @@ describe('the owner-class prompt does not move', () => {
    * stanza. Pin precedente:
    * `63c6590ed366dbb44d9e2a5ce2b018f9f0ffe3993ec5ea34d555c46cddf0b3f4`.
    */
-  const GROUP_PROMPT_SHA_V1 = '97579e98e30d3b57a3e3372b80f26201efcf8eb1c7fe0c86fd3e4ab449f8bdfc';
+  // #529: the same scoped-work rule reaches owner and group prompts.
+  const GROUP_PROMPT_SHA_V1 = '57857222d8b56eafa48d3a583489b6a1ffce30b164bb0881f91a3af7846264c8';
 
   it('e la stanza riceve lo stesso prompt di ieri, byte per byte', () => {
     const runtime = boot(bootHome());
@@ -890,69 +891,28 @@ describe('the tool list a principal is shown', () => {
   });
 });
 
-describe('un piano stantio non si riprende da solo', () => {
-  /**
-   * Misurato il 30/09/2026: il piano video della sera prima (pending dalle
-   * 23:51) è stato reiniettato come «Sono aperti» in un «Buongiorno Muffin»
-   * delle 09:31, e il modello ci ha fatto un'ora di debug sopra senza che
-   * nessuna concessione lo avesse chiesto. Un `pending` di ieri e
-   * un'interruzione di dieci secondi fa non possono presentarsi identici.
-   */
-  const ORA = new Date('2026-09-30T09:31:00.000Z').getTime();
-  const passo = (text: string, updatedAt: string): TodoItem => ({
-    seq: 1,
-    text,
-    state: 'pending',
-    note: null,
-    tier: 0,
-    dueAt: null,
-    createdAt: updatedAt,
-    updatedAt,
+describe('session plans remain context, independent of age', () => {
+  const item = (updatedAt: string): TodoItem => ({
+    seq: 1, text: 'Build an unrelated animation.', state: 'pending', note: null,
+    tier: 0, dueAt: null, createdAt: updatedAt, updatedAt,
   });
 
-  it('la soglia di staleness è 6 ore, pinnata', () => {
-    expect(STALE_PLAN_MS).toBe(6 * 60 * 60 * 1000);
+  it('empty plans cost no context', () => {
+    expect(todoSection([])).toBe('');
   });
 
-  it('vuoto dentro, vuoto fuori — costo zero', () => {
-    expect(todoSection([], ORA)).toBe('');
-  });
-
-  it('un piano fresco si presenta come dovuto, come prima', () => {
-    const out = todoSection([passo('finire il video', new Date(ORA - 60_000).toISOString())], ORA);
-    expect(out).toContain('Sono aperti:');
-    expect(out).toContain('finire il video');
-    expect(out).not.toContain('da solo');
-  });
-
-  it('un piano di ieri non si presenta come dovuto: chiede prima', () => {
-    const out = todoSection(
-      [passo('verificare venv manim', new Date(ORA - 9.5 * 60 * 60 * 1000).toISOString())],
-      ORA,
-    );
-    expect(out).toContain('verificare venv manim');
+  it('keeps readable plan state without defining the current Turn completion', () => {
+    const out = todoSection([item('2026-09-30T09:30:00Z')]);
+    expect(out).toContain('Build an unrelated animation.');
+    expect(out).toContain('pending');
+    expect(out).toContain('contesto');
+    expect(out).not.toContain('Il lavoro è finito');
+    expect(out).not.toContain('chiedi prima');
     expect(out).not.toContain('Sono aperti:');
-    expect(out).toContain('non riprenderli da solo');
   });
 
-  it('fresco e stantio insieme: due blocchi, due verbi diversi', () => {
-    const out = todoSection(
-      [
-        passo('cosa nuova', new Date(ORA - 10_000).toISOString()),
-        passo('cosa vecchia', new Date(ORA - STALE_PLAN_MS - 1_000).toISOString()),
-      ],
-      ORA,
-    );
-    expect(out).toContain('Sono aperti:');
-    expect(out).toContain('cosa nuova');
-    expect(out).toContain('non riprenderli da solo');
-    expect(out).toContain('cosa vecchia');
-  });
-
-  it('al confine la vecchiaia vince: oltre la soglia è stantio', () => {
-    const appena = todoSection([passo('x', new Date(ORA - STALE_PLAN_MS + 60_000).toISOString())], ORA);
-    expect(appena).toContain('Sono aperti:');
-    const oltre = todoSection([passo('x', new Date(ORA - STALE_PLAN_MS - 60_000).toISOString())], ORA);
-    expect(oltre).toContain('non riprenderli da solo');
+  it('age does not change which request the plan authorizes', () => {
+    expect(todoSection([item('2026-09-30T09:30:00Z')]))
+      .toBe(todoSection([item('2020-01-01T00:00:00Z')]));
   });
 });

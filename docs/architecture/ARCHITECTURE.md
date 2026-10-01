@@ -119,6 +119,10 @@ therefore related but not identical.
 Work does not own the truth of what happened in the outside world; that belongs
 to effects/evidence.
 
+A session plan remains context shared across requests. Pending rows alone do not
+grant execution or define a Turn's completion. A continuation resumes the selected
+durable Turn and its request, subject to subsequent owner corrections.
+
 ### Effects
 
 Effects own the transition between "we intend to do this" and "the world may or
