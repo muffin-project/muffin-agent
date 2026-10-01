@@ -1,7 +1,7 @@
 import { loadConfig, saveConfig, type Config } from '../core/config/config.js';
 import { isThinkingEffort, THINKING_EFFORTS, type Thinking } from '../core/config/thinking.js';
 import type { DelegationMode, LevaDelega } from '../core/runtime/delega.js';
-import { loadProfiles, selectProfile } from './profiles/profile.js';
+import { CONSERVATIVE, loadEffectiveProfiles, selectSourcedProfile } from './profiles/profile.js';
 import { describeSettableKnobs, formatSetOutcome, setConfigKnob } from '../core/config/settings.js';
 
 /**
@@ -271,8 +271,15 @@ export async function eseguiComando(riga: string, ctx: ContestoComandi): Promise
         ctx.onConfig?.(next);
         // La corsia principale ha un `Profile` tutto suo (`withThinking` copia
         // sempre), quindi girare la manopola qui non tocca la corsia della
-        // memoria — che il ragionamento se lo spegne da sé comunque.
-        ctx.onThinking?.(out.set ?? selectProfile(next.models.main, loadProfiles()).thinking);
+        // memoria — che il ragionamento se lo spegne da sé comunque. La
+        // selezione passa dagli effective profiles come il runtime, altrimenti
+        // `/think` e il turno vedrebbero due profili diversi sullo stesso
+        // modello owner.
+        ctx.onThinking?.(
+          out.set ??
+            (selectSourcedProfile(next.models.main, loadEffectiveProfiles(ctx.home))?.profile ?? CONSERVATIVE)
+              .thinking,
+        );
       }
       return { testo: out.line };
     }

@@ -20,7 +20,7 @@ import type { TodoStore } from '../../core/turns/todo.js';
 import type { WaitSpec } from '../../core/turns/wait.js';
 import type { UndoJournal } from '../../core/undo/journal.js';
 import type { IstanzaFacts, SystemPrompts } from '../context/assemble.js';
-import type { Profile } from '../profiles/profile.js';
+import type { Profile, ProfileOrigin } from '../profiles/profile.js';
 import type { AudioBlock, ImageBlock, Provider, ToolSpec } from '../providers/types.js';
 
 /**
@@ -324,6 +324,11 @@ export type TurnRuntimeInfo = {
   mainModel: string;
   lightModel: string;
   profile: Profile;
+  /**
+   * Where the profile came from. Held by reference (like `profile` itself)
+   * so model switches update it without rebuilding the snapshot shape.
+   */
+  profileSource?: { origin: ProfileOrigin | 'conservative'; file: string } | undefined;
 };
 
 /** Thrown by a tool call that needs an approval this surface cannot obtain. */

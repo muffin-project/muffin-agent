@@ -9,8 +9,8 @@ import type { TurnHealth } from '../../core/turns/store.js';
 import type { PromptBlock } from '../context/assemble.js';
 import { tenantClass, visibleTools } from '../context/assemble.js';
 import type { RegisteredTool } from '../loop.js';
-import type { Profile } from '../profiles/profile.js';
-import type { CapabilityGap } from './capability-status.js';
+import type { Profile, ProfileOrigin } from '../profiles/profile.js';
+import { type CapabilityGap, profileEditPath } from './capability-status.js';
 
 /**
  * Propriocezione tecnica: cosa sta usando **adesso**, non cosa dice il progetto.
@@ -187,6 +187,13 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
       const cls = tenantClass(principal, ctx.tenant);
       const runtimeInfo = ctx.runtimeInfo;
       const profile = runtimeInfo?.profile ?? sources.profile;
+      const profileSource = runtimeInfo?.profileSource;
+      const profiloOrigine =
+        profileSource === undefined
+          ? ''
+          : profileSource.origin === 'conservative'
+            ? ' · conservativo (nessun profilo matcha)'
+            : ` · ${profileSource.origin} (${profileSource.file.split('/').pop()})`;
       const [report, build] = await Promise.all([sources.doctor(), sources.build()]);
       // Filtro poi tetto — lo stesso ordine di `agent/loop.ts` (`exposed =
       // visibleTools(...).slice(0, maxToolsExposed)`), non solo il filtro. La
@@ -224,7 +231,7 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
         `cartella di lavoro: ${sources.workspace}`,
         // Il profilo non è cosmetico: decide quanti tool vede il modello e se
         // il reasoning viene chiesto spento (#167).
-        `profilo: ${profile.name} — max ${profile.maxToolsExposed} tool esposti, ${profile.maxToolCallsPerTurn === null ? 'nessun tetto numerico di tool call' : `${profile.maxToolCallsPerTurn} call/turno`}, thinking ${profile.thinking}`,
+        `profilo: ${profile.name}${profiloOrigine} — max ${profile.maxToolsExposed} tool esposti, ${profile.maxToolCallsPerTurn === null ? 'nessun tetto numerico di tool call' : `${profile.maxToolCallsPerTurn} call/turno`}, thinking ${profile.thinking}`,
         `root of trust: ${sources.safeMode ? `SAFE MODE (${sources.safeMode.reason}: ${sources.safeMode.diverged.join(', ')}) — capability sopra 'low' negate` : `${sources.config.rot.mode}, integro`}`,
         ...(sources.judgment === undefined
           ? []
@@ -255,7 +262,18 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
           : `  (${sources.tools.length - filtrati.length} registrate ma non esposte a questo principal)`,
         tagliatiDalTetto.length === 0
           ? ''
-          : `  (${tagliatiDalTetto.length} tagliate dal tetto di ${profile.maxToolsExposed} tool del profilo "${profile.name}": ${tagliatiDalTetto.map((t) => t.name).join(', ')} — alza maxToolsExposed in agent/profiles/${profile.name}.json, oppure riduci quanti tool sono registrati prima di questi)`,
+          : (() => {
+              const dove = profileEditPath(
+                profile.name,
+                profileSource?.origin,
+                profileSource?.file === '' ? undefined : profileSource?.file,
+              );
+              const rimedio =
+                dove === null
+                  ? `il profilo conservativo non ha un file in cui alzare maxToolsExposed: un profilo che matcha il modello lo sostituirebbe, oppure riduci quanti tool sono registrati prima di questi`
+                  : `alza maxToolsExposed in ${dove}, oppure riduci quanti tool sono registrati prima di questi`;
+              return `  (${tagliatiDalTetto.length} tagliate dal tetto di ${profile.maxToolsExposed} tool del profilo "${profile.name}": ${tagliatiDalTetto.map((t) => t.name).join(', ')} — ${rimedio})`;
+            })(),
         '',
         // Distinto da quanto sopra apposta: qui non è «non visto da questo
         // principal» né «tagliato dal tetto», è «non esiste in questa

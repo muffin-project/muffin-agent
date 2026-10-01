@@ -19,6 +19,8 @@
  * collapsing them into one label is exactly the proprioception defect this
  * file exists to close.
  */
+import type { ProfileOrigin } from '../profiles/profile.js';
+
 type CapabilityGapKind = 'disabled' | 'truncated';
 
 export type CapabilityGap = {
@@ -44,16 +46,44 @@ export function formatCapabilityGap(gap: CapabilityGap): string {
 }
 
 /**
+ * Where the owner edits this profile's ceiling, or `null` when no file owns
+ * it. Owner profiles answer with their absolute home path (the file that
+ * survives updates); shipped profiles with the conventional source-relative
+ * path — never the compiled copy under `dist/`, which the next update
+ * rebuilds. Unknown origin keeps the historical shipped layout: never worse
+ * than today. The conservative floor has no file at all.
+ */
+export function profileEditPath(
+  profileName: string,
+  origin: ProfileOrigin | 'conservative' | undefined,
+  file: string | undefined,
+): string | null {
+  if (origin === 'owner' && file !== undefined) return file;
+  if (origin === 'conservative') return null;
+  return `agent/profiles/${profileName}.json`;
+}
+
+/**
  * A tool cut by `profile.maxToolsExposed` — the ceiling that truncates the
  * registered list **by registration order**, with no error and no log
  * (`agent/runtime.ts`, ADR-0008). Reused so the wording is the same wherever
  * the cut is reported, rather than a sentence hand-typed at each call site.
  */
-export function truncationGap(opts: { tool: string; profileName: string; maxToolsExposed: number }): CapabilityGap {
+export function truncationGap(opts: {
+  tool: string;
+  profileName: string;
+  maxToolsExposed: number;
+  profileOrigin?: ProfileOrigin | 'conservative' | undefined;
+  profileFile?: string | undefined;
+}): CapabilityGap {
+  const where = profileEditPath(opts.profileName, opts.profileOrigin, opts.profileFile);
   return {
     capability: opts.tool,
     kind: 'truncated',
     reason: `oltre il tetto di ${opts.maxToolsExposed} tool esposti dal profilo "${opts.profileName}"`,
-    remedy: `alza maxToolsExposed in agent/profiles/${opts.profileName}.json, oppure riduci quanti tool sono registrati prima di questo`,
+    remedy:
+      where === null
+        ? `il profilo conservativo non ha un file in cui alzare maxToolsExposed: un profilo che matcha il modello lo sostituirebbe, oppure riduci quanti tool sono registrati prima di questo`
+        : `alza maxToolsExposed in ${where}, oppure riduci quanti tool sono registrati prima di questo`,
   };
 }
