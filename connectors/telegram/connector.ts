@@ -1,5 +1,6 @@
 import type { CallbackQuery, ChatMemberUpdated, Message, MessageOrigin, Update } from '@grammyjs/types';
 import { randomBytes } from 'node:crypto';
+import { readFileSync, statSync } from 'node:fs';
 import type { LoopDeps, TurnDelta, TurnEvent } from '../../agent/loop.js';
 import { routeContinuationTarget } from '../../agent/loop.js';
 import type { ApprovalRequest, ApprovalWhere, Approver } from '../../agent/loop.js';
@@ -44,7 +45,8 @@ import {
   TelegramDeliveryStore,
 } from './delivery.js';
 import { join } from 'node:path';
-import { attachmentOf, downloadToVault, type MediaSpec } from './media.js';
+import { attachmentOf, downloadToVault, formatoSticker, safeVaultName, type Downloaded, type MediaSpec } from './media.js';
+import { estraiFotogramma } from '../../core/media/fotogramma.js';
 import { tipoAudio } from '../../agent/audio.js';
 import { loadImage } from '../../agent/images.js';
 import type { AudioBlock, ImageBlock } from '../../agent/providers/types.js';
@@ -2834,6 +2836,11 @@ export class TelegramConnector {
     tenantId: string,
     tier: TrustTier,
   ): Promise<Arrivo> {
+    // Gli sticker hanno tre formati e il messaggio non dice qual è: si
+    // scaricano, si leggono i byte e si instradano — webp dritto dentro,
+    // webm via fotogramma, tgs dichiarato non apribile. Il ramo condiviso
+    // sotto non sa cos'è uno sticker e non deve saperlo.
+    if (spec.kind === 'sticker') return this.ingestSticker(incoming, spec, tenantId, tier);
     const log = this.deps.log ?? (() => {});
     return ingestAttachment(
       {
@@ -2856,6 +2863,71 @@ export class TelegramConnector {
 
   private now(): string {
     return (this.deps.now ?? (() => new Date()))().toISOString();
+  }
+
+  /**
+   * Uno sticker, che il messaggio non descrive: tre formati possibili, e il
+   * tipo dichiarato non è affidabile — quindi prima si scarica, poi si leggono
+   * i byte, poi si instrada.
+   *
+   * - `webp` (statico): è un'immagine come le altre, va nel ramo condiviso e
+   *   da lì in `vista` quando collegata;
+   * - `webm` (video breve): un fotogramma in `inbox/`, e il fotogramma va nel
+   *   ramo condiviso — il cui nome dice che è un fotogramma di uno sticker;
+   * - `tgs` (Lottie) o ignoto: niente in casa lo renderizza, e la riga lo dice
+   *   con il rimedio (uno screenshot, o descriverlo a parole).
+   *
+   * Il download fallito ha la sua riga, con la stessa forma delle altre: il
+   * turno gira comunque e sa che lo sticker non c'è.
+   */
+  private async ingestSticker(
+    incoming: Incoming,
+    spec: MediaSpec,
+    tenantId: string,
+    tier: TrustTier,
+  ): Promise<Arrivo> {
+    const log = this.deps.log ?? (() => {});
+    const deps = {
+      ...(this.deps.vault === undefined ? {} : { vault: this.deps.vault }),
+      ...(this.deps.voce === undefined ? {} : { voce: this.deps.voce }),
+      ...(this.deps.vista === undefined ? {} : { vista: this.deps.vista }),
+      log: (riga: string) => log(`telegram: ${riga}`),
+    };
+    let scaricato: Downloaded;
+    try {
+      scaricato = await downloadToVault(this.deps.api, this.deps.vault?.root ?? '', spec, incoming.updateId, this.now());
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+      log(`sticker non scaricato — ${why}`);
+      return { line: `[sticker NON ricevuto: ${why}. Dillo, non fingere di averlo.]` };
+    }
+    const quanto = `\`${scaricato.vaultPath}\` (${Math.round(scaricato.bytes / 1024)}KB)`;
+    const forma = formatoSticker(readFileSync(join(this.deps.vault?.root ?? '', scaricato.vaultPath)));
+    if (forma === 'webp') {
+      return ingestAttachment(deps, async () => scaricato, tenantId, tier);
+    }
+    if (forma === 'webm') {
+      const nome = safeVaultName('sticker-frame.png', incoming.updateId, this.now());
+      const frame = join(this.deps.vault?.root ?? '', 'inbox', nome);
+      const esito = await estraiFotogramma(join(this.deps.vault?.root ?? '', scaricato.vaultPath), frame);
+      if (!esito.ok) {
+        log(`sticker video non apribile — ${esito.why}`);
+        return {
+          line: `[sticker video ricevuto (${quanto}) ma non apribile: ${esito.why}. Dillo, non inventarti cosa mostra.${
+            esito.rimedio === undefined ? '' : ` Rimedio per l'owner:\n${esito.rimedio}`
+          }]`,
+        };
+      }
+      return ingestAttachment(deps, async () => ({ vaultPath: `inbox/${nome}`, bytes: statSync(frame).size }), tenantId, tier);
+    }
+    log(`sticker non apribile — formato ${forma}`);
+    return forma === 'tgs'
+      ? {
+          line: `[sticker ricevuto (${quanto}) ma non apribile: è uno sticker animato, che non so renderizzare. Mandami uno screenshot o descrivimelo, e non inventarti cosa mostra.]`,
+        }
+      : {
+          line: `[sticker ricevuto (${quanto}) ma non apribile: formato che non riconosco. Mandami uno screenshot o descrivimelo, e non inventarti cosa mostra.]`,
+        };
   }
 }
 

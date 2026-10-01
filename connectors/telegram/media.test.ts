@@ -1,6 +1,6 @@
 import type { Message } from '@grammyjs/types';
 import { describe, expect, it } from 'vitest';
-import { attachmentOf, safeVaultName } from './media.js';
+import { attachmentOf, formatoSticker, safeVaultName } from './media.js';
 
 /**
  * The filename is written by whoever sent the message, and it becomes a path.
@@ -92,5 +92,25 @@ describe('reading an attachment', () => {
   it('copes with a document that has no name', () => {
     expect(attachmentOf(msg({ document: { file_id: 'd', file_unique_id: 'x' } })))
       .toMatchObject({ originalName: 'documento' });
+  });
+
+  it('recognises a sticker, whose format is read from the bytes later', () => {
+    // Stickers carry no usable name and no caption: the format (webp, webm,
+    // tgs) is sniffed after the download, never trusted from flags.
+    expect(attachmentOf(msg({ sticker: { file_id: 's', file_unique_id: 'x', width: 512, height: 512, is_animated: false, is_video: false } })))
+      .toMatchObject({ fileId: 's', kind: 'sticker', originalName: 'sticker' });
+  });
+});
+
+describe('reading a sticker format', () => {
+  it('webp statica, webm video, tgs compresso, resto sconosciuto', () => {
+    const webp = Buffer.concat([Buffer.from('RIFF____WEBP', 'latin1'), Buffer.alloc(16)]);
+    const webm = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.alloc(16)]);
+    const tgs = Buffer.concat([Buffer.from([0x1f, 0x8b]), Buffer.alloc(16)]);
+    expect(formatoSticker(webp)).toBe('webp');
+    expect(formatoSticker(webm)).toBe('webm');
+    expect(formatoSticker(tgs)).toBe('tgs');
+    expect(formatoSticker(Buffer.alloc(16))).toBe('sconosciuto');
+    expect(formatoSticker(Buffer.alloc(0))).toBe('sconosciuto');
   });
 });
