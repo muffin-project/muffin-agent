@@ -160,14 +160,25 @@ you need it.
 
 **Requirements:** a Linux or macOS machine, and a supported model provider.
 Node is not one: the installer brings its own if the machine has none.
+Run the command from an unprivileged user account for a personal install. On an
+Ubuntu VPS where the provider gives you only root SSH, the same bootstrap now
+creates a locked `muffin` service account and runs the build, setup and gateway
+under that account. The current work branch has been exercised in a disposable
+Ubuntu 24.04 VM: the gateway ran as `muffin`, survived reboot, completed an
+update and rollback, and uninstall preserved the account and data. This path is
+still not release-verified: the VM used a deliberately invalid provider key,
+Telegram setup has not been exercised, and Bubblewrap needed an AppArmor profile
+loaded manually in the VM. The unauthenticated public install cannot be checked
+while the repository is private. Details and limits are in
+[`docs/evidence/root-vps-bootstrap-2026-09-24.md`](docs/evidence/root-vps-bootstrap-2026-09-24.md).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/muffin-project/muffin-agent/main/bootstrap.sh | sh
 ```
 
-One command, from an empty box into first-run setup: the tiny bootstrap stages
-the canonical installer and preserves the controlling terminal even though the
-public command itself is a pipe. The installer brings Node 22 when needed,
+One command, from a normal user account into first-run setup: the tiny bootstrap
+stages the canonical installer and preserves the controlling terminal even
+though the public command itself is a pipe. The installer brings Node 22 when needed,
 clones and builds the source, puts `muffin` on your `PATH`, hands directly into
 the masked setup flow, and installs the gateway as a supervised service where
 the platform supports it. Secrets never travel through argv or the generic
