@@ -68,6 +68,13 @@
 # Exit codes: 0 done · 1 something failed · 3 installed, gateway NOT active.
 set -eu
 
+# The PATH this script inherited: the only thing that says whether the shell
+# that launched the installer will find `muffin` afterwards. A child cannot
+# change its parent's environment, so every PATH mutation below (bundled Node,
+# the launcher directory) is measured against this, never against the script's
+# own working PATH. (`first_command_note`, at the end, reads it.)
+INVOKING_PATH="$PATH"
+
 MUFFIN_PREFIX=${MUFFIN_PREFIX:-$HOME/.local/share/muffin}
 MUFFIN_REPO=${MUFFIN_REPO:-https://github.com/muffin-project/muffin-agent.git}
 MUFFIN_CHANNEL=${MUFFIN_CHANNEL:-main}
@@ -517,8 +524,30 @@ if [ -n "$PERSIST" ]; then
   done
   say ""
   say "PATH: added $PERSIST to$written"
-  say "      new login shells find muffin; in this one:  . ~/.profile"
+  say "      new login shells find muffin."
 fi
+
+# Whether the shell that launched this installer can run what it installed.
+# `PATH="$INVOKING_PATH" "$MUFFIN" --version` asks exactly that: the launcher
+# by absolute path (so a broken install fails here, not as a PATH mystery),
+# under the parent's PATH (so a missing directory fails here, not as the
+# owner's first command). Nothing about the gateway: the launcher question is
+# orthogonal to supervision, so this runs on every exit path below.
+first_command_note() {
+  if PATH="$INVOKING_PATH" "$MUFFIN" --version >/dev/null 2>&1; then
+    return 0
+  fi
+  say ""
+  say "muffin is installed, but this shell cannot run it yet: its PATH predates the install."
+  if [ -n "$PERSIST" ]; then
+    say "This shell, copy and paste:"
+    say "  export PATH=\"$PERSIST:\$PATH\" && $CMD doctor"
+  else
+    say "Run it by absolute path to see the error:"
+    say "  $MUFFIN doctor"
+  fi
+  say "Future shells: open a new login shell (the PATH line lives in$written)."
+}
 
 # ---------------------------------------------------------------------------
 # 6. Setup — `muffin init`.
@@ -598,6 +627,7 @@ if [ "${MUFFIN_NO_GATEWAY:-}" = 1 ]; then
   say ""
   say "MUFFIN_NO_GATEWAY=1 — the supervisor was not touched. When you want it:"
   say "  $CMD gateway install --write --start"
+  first_command_note
   exit 0
 fi
 
@@ -606,6 +636,7 @@ say "installing the gateway as a supervised service…"
 if "$MUFFIN" gateway install --write --start >/dev/null; then
   say ""
   say "muffin is installed and running:  $CMD"
+  first_command_note
   exit 0
 fi
 
@@ -622,4 +653,5 @@ if [ "$(uname -s)" = Linux ]; then
 fi
 say "    $CMD gateway install --write --start"
 say "  the command itself is installed and working: try  $CMD doctor"
+first_command_note
 exit "$EXIT_GATEWAY_NOT_ACTIVE"

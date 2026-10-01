@@ -114,10 +114,14 @@ Your own shells need it too: the `muffin` command is a symlink whose shebang
 resolves `node` through `PATH`. So the installer also appends one marked
 `export PATH=…` line — the launcher directory plus that Node directory — to
 `~/.profile` (and to `~/.bash_profile` or `~/.zprofile` where those are the
-files your login shell reads). New login shells find `muffin`; the shell you ran
-the installer in needs `. ~/.profile` first. Measured on a fresh VPS on
-2026-09-08, where the previous «add it yourself» hint had left `muffin` failing
-with `/usr/bin/env: 'node': No such file or directory`.
+files your login shell reads). New login shells find `muffin`; for the shell you
+ran the installer in, it checks whether that shell can actually run what was
+installed and, if not, prints one final copy-pasteable block with the exact
+export line — no `. ~/.profile` archaeology required. Measured on a fresh VPS
+on 2026-09-08, where the previous «add it yourself» hint had left `muffin`
+failing with `/usr/bin/env: 'node': No such file or directory`, and again on
+2026-10-01, where the first command typed after a green install failed with
+`command not found` because the mid-install hint scrolled by unseen (#808).
 
 If your machine already has Node ≥ 22, that one is used and nothing is
 downloaded.
