@@ -2,7 +2,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ARMS, TASKS, table } from './run.js';
+import { ARMS, TASKS, configureArm, table } from './run.js';
+import { runInit } from '../../cli/init.js';
+import { loadConfig } from '../../core/config/config.js';
 
 /**
  * L'harness A/B senza rete: i fixture si provano contro i propri check.
@@ -54,6 +56,19 @@ describe('reasoning-ab fixtures', () => {
       },
     ]);
     expect(out).toContain('| A | T1 | PASS (answered) | 3 | 2 |');
-    expect(ARMS).toEqual(['A', 'B', 'C']);
+    expect(ARMS).toEqual(['A', 'B', 'C', 'D']);
+  });
+
+  it('il braccio D scrive thinking low e il C off, gli altri non toccano la config', () => {
+    for (const [arm, atteso] of [['A', undefined], ['B', undefined], ['C', 'off'], ['D', 'low']] as const) {
+      const home = mkdtempSync(join(tmpdir(), 'muffin-ab-arm-'));
+      try {
+        runInit({ home, apiKey: 'chiave-mai-usata', provider: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1', mainModel: 'qwen/qwen3.8-27b', lightModel: 'qwen/qwen3.8-27b' });
+        configureArm(arm, home);
+        expect(loadConfig(home).thinking, arm).toBe(atteso);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    }
   });
 });
