@@ -2,6 +2,7 @@ import DatabaseCtor from 'better-sqlite3';
 import { aiuto, eseguiComando, type Controlli } from '../agent/comandi.js';
 import { Pausa } from '../core/runtime/pausa.js';
 import { decidiVoce, type Voce } from '../core/audio/voce.js';
+import { decidiVista, type Vista } from '../core/vista/vista.js';
 import { openDb } from '../core/db/open.js';
 import { generatePairingCode, startPairing } from '../core/config/pairing.js';
 import { ensurePrivateDir } from '../core/config/private-fs.js';
@@ -605,6 +606,40 @@ function voceFor(runtime: Runtime, home: string): (percorso: string) => Promise<
     });
 }
 
+/**
+ * Come questa installazione tratta le immagini che il modello non vede.
+ *
+ * Gemella di `voceFor`: la decisione la prende `decidiVista` misurando la
+ * vista sul provider, e la descrizione — l'unica parte che costa una chiamata,
+ * a tetto piccolo — passa dalla corsia leggera, che la fattura come tutto il
+ * resto che fa. Il connettore riceve la funzione già decisa, come `voce`.
+ */
+export function vistaFor(runtime: Runtime): (percorso: string) => Promise<Vista> {
+  const leggera = runtime.config.models.light;
+  return (percorso) =>
+    decidiVista(percorso, {
+      baseUrl: runtime.config.provider.baseUrl,
+      mainModel: runtime.config.models.main,
+      lightModel: leggera,
+      descrivi: async (immagine) => {
+        const esito = await runtime.light.provider.chat({
+          model: leggera,
+          system: [{ type: 'text', text: 'Descrivi immagini con precisione, in italiano.' }],
+          messages: [
+            {
+              role: 'user',
+              content: [{ type: 'text', text: 'Descrivi con precisione cosa mostra questa immagine. Solo la descrizione, niente altro.' }, immagine],
+            },
+          ],
+          maxOutputTokens: 400,
+          stream: false,
+        });
+        if (esito.text === null || esito.text.trim() === '') throw new Error('il modello leggero non ha risposto alla descrizione');
+        return esito.text;
+      },
+    });
+}
+
 
 /**
  * I comandi della CLI, eseguibili da Telegram.
@@ -1150,6 +1185,7 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
     api,
     vault: telegramVault(runtime, vaultRoot),
     voce: voceFor(runtime, home),
+    vista: vistaFor(runtime),
     comandi: comandiPerTelegram(runtime, home),
     // ADR-0054 §4: il fatto durevole che scheduler e corsia leggono.
     pausa: new Pausa(runtime.db),

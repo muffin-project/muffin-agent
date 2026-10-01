@@ -48,6 +48,7 @@ import { tipoAudio } from '../../agent/audio.js';
 import { loadImage } from '../../agent/images.js';
 import type { AudioBlock, ImageBlock } from '../../agent/providers/types.js';
 import type { Voce } from '../../core/audio/voce.js';
+import type { Vista } from '../../core/vista/vista.js';
 
 /**
  * Cosa e' arrivato con un allegato: la riga da raccontare al modello e, quando
@@ -179,6 +180,14 @@ export type ConnectorDeps = {
    * riscrive la decisione, chiama la stessa funzione.
    */
   voce?: (percorso: string) => Promise<Voce>;
+  /**
+   * Cosa fare di un'immagine — `core/vista/vista.ts`.
+   *
+   * Assente vuol dire la strada di sempre (i byte vanno al modello). Iniettata
+   * come `voce` e per la stessa ragione: il connettore non ha nessuna ragione
+   * di sapere che esistono i provider o i modelli leggeri.
+   */
+  vista?: (percorso: string) => Promise<Vista>;
   /**
    * I comandi, eseguiti dove sono scritti una volta sola
    * (`agent/comandi.ts`). `null` vuol dire «questo testo non è un comando».
@@ -2809,6 +2818,7 @@ export class TelegramConnector {
       {
         ...(this.deps.vault === undefined ? {} : { vault: this.deps.vault }),
         ...(this.deps.voce === undefined ? {} : { voce: this.deps.voce }),
+        ...(this.deps.vista === undefined ? {} : { vista: this.deps.vista }),
         // Un-prefixed on the shared side (§4 invariant 11); the port's own
         // name is added here, so the line in `gateway.err` is unchanged.
         log: (riga) => log(`telegram: ${riga}`),
