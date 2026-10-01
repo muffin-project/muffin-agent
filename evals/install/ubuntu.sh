@@ -191,6 +191,31 @@ case "$INSTALL_RC" in
 esac
 
 # ---------------------------------------------------------------------------
+step "the invoking shell is told exactly once, at the end (#808)"
+# ---------------------------------------------------------------------------
+# This run happened under CLEAN_PATH, without the launcher dir: the remedy
+# block must appear exactly once, at the end — and the old mid-install hint
+# ("in this one: ...", buried in build noise) must be gone. `grep -c` needs
+# `|| true`: with no match it exits 1, and under `set -e` that would kill the
+# eval instead of failing this check.
+block_count=$(grep -c 'but this shell cannot run it yet' "$INSTALL_LOG" || true)
+if [ "$block_count" = 1 ]; then
+  ok "the first-command remedy block appears exactly once"
+else
+  bad "remedy block count is $block_count, expected 1"
+fi
+if grep -q 'This shell, copy and paste:' "$INSTALL_LOG" && grep -q 'export PATH=' "$INSTALL_LOG"; then
+  ok "the block names the exact copy-paste line"
+else
+  bad "the remedy block does not name the copy-paste export line"
+fi
+if grep -q 'in this one:' "$INSTALL_LOG"; then
+  bad "the old mid-install 'in this one' hint is still printed"
+else
+  ok "no mid-install remedy hint (it lives in the final block now)"
+fi
+
+# ---------------------------------------------------------------------------
 step "what one command left behind"
 # ---------------------------------------------------------------------------
 NODE="$MUFFIN_PREFIX/node/bin/node"
@@ -485,6 +510,40 @@ else
     bad "secret files changed by the rerun"
     diff "$LAB/secrets-before.txt" "$LAB/secrets-after.txt" | sed 's/^/  | /'
   fi
+fi
+
+# ---------------------------------------------------------------------------
+step "a shell that already resolves muffin gets no remedy block (#808)"
+# ---------------------------------------------------------------------------
+# Third install, same HOME, but the launcher dir is on the invoking PATH this
+# time — the #808 block must stay silent. (The command name may differ from
+# the first run: with a reachable launcher dir the installer avoids clobbering
+# whatever `muffin` resolves to. The assertions below do not name the command.)
+REACHABLE_LOG="$LAB/reachable.log"
+set +e
+env -i \
+  HOME="$HOME" \
+  XDG_CONFIG_HOME="$XDG_CONFIG_HOME" \
+  XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+  DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" \
+  PATH="$CLEAN_PATH:$BINDIR" \
+  TERM="${TERM:-dumb}" \
+  MUFFIN_PREFIX="$MUFFIN_PREFIX" \
+  MUFFIN_REPO="$ORIGIN" \
+  MUFFIN_CHANNEL=main \
+  MUFFIN_API_KEY_FILE="$KEYFILE" \
+  sh "$LAB/install.sh" </dev/null >"$REACHABLE_LOG" 2>&1
+REACHABLE_RC=$?
+set -e
+case "$REACHABLE_RC" in
+  0 | 3) ok "reachable-PATH rerun exited $REACHABLE_RC" ;;
+  *) bad "reachable-PATH rerun exited $REACHABLE_RC (see $LAB/reachable.log)" ;;
+esac
+reachable_count=$(grep -c 'but this shell cannot run it yet' "$REACHABLE_LOG" || true)
+if [ "$reachable_count" = 0 ]; then
+  ok "no remedy block when the invoking shell already resolves the launcher"
+else
+  bad "remedy block printed $reachable_count time(s) although the launcher was reachable"
 fi
 
 finish
