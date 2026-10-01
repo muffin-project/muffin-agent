@@ -94,7 +94,7 @@ export const COMANDI: readonly { nome: string; aiuto: string; soloTerminale?: bo
   { nome: 'new', aiuto: 'inizia una conversazione nuova' },
   { nome: 'session', aiuto: 'mostra l\'id della conversazione' },
   { nome: 'spend', aiuto: 'quanto hai speso questo mese e oggi' },
-  { nome: 'think', aiuto: `ragionamento: on | off | reset | un livello (${THINKING_EFFORTS.join(', ')}); senza argomenti lo mostra` },
+  { nome: 'think', aiuto: `ragionamento: on | off | reset | un livello (${THINKING_EFFORTS.join(', ')}) — i valori validi dipendono dal modello; senza argomenti lo mostra` },
   { nome: 'model', aiuto: 'modello: [main|light|embed] <slug>, --list, o niente per vederli' },
   { nome: 'config', aiuto: 'set <chiave> <valore> — solo le poche manopole scrivibili da qui' },
   { nome: 'debug', aiuto: 'giri, token e millisecondi: on | off (da solo, inverte)' },
@@ -268,5 +268,5 @@ export function thinkingCommand(
   if (arg === 'off') return { line: `${stato('off', 'config.json')} — vale anche ai prossimi avvii`, set: 'off' };
   if (isThinkingEffort(arg)) return { line: `ragionamento: on, livello ${arg} (config.json) — vale anche ai prossimi avvii`, set: arg };
   if (arg === 'reset') return { line: `ragionamento: torna a valere il profilo ${profileName}`, set: null };
-  return { line: `/think on | off | reset, oppure un livello (${THINKING_EFFORTS.join(', ')}) — «${arg}» non è nessuno di questi` };
+  return { line: `/think on | off | reset, oppure un livello (${THINKING_EFFORTS.join(', ')}) — i valori validi dipendono dal modello e dal server — «${arg}» non è nessuno di questi` };
 }

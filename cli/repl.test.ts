@@ -614,10 +614,13 @@ describe('/think', () => {
     expect(thinkingCommand('', 'adaptive', undefined, 'consumer-local').line).not.toContain('livello');
   });
 
-  it("l'aiuto del comando, da cui nasce il menu di Telegram, dice che un livello è accettato", () => {
+  it("l'aiuto del comando, da cui nasce il menu di Telegram, dice che un livello è accettato — e che non tutti i modelli ne accettano gli stessi", () => {
     const aiuto = COMANDI.find((c) => c.nome === 'think')?.aiuto ?? '';
     expect(aiuto).toContain('livello');
     for (const livello of ['low', 'medium', 'xhigh']) expect(aiuto).toContain(livello);
+    // «xhigh» è di qwen3, «high» di gpt-oss: senza questa frase il menu
+    // prometterebbe livelli che il modello dell'installazione rifiuta.
+    expect(aiuto).toContain('i valori validi dipendono dal modello');
   });
 
   it('un livello scrive come `on` e `off`, e dice che il ragionamento resta acceso a quel livello', () => {
