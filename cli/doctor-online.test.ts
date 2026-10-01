@@ -115,6 +115,27 @@ describe('doctor --online renders the shared primitive (K)', () => {
     }
   });
 
+  it('renders incomplete verification as a warning, not as route incompatibility', async () => {
+    const dir = home();
+    try {
+      const check = await inference(dir, {
+        online: true,
+        verifyInference: async () => ({
+          ...working(),
+          status: 'provider_error',
+          capability: { completion: 'fail', toolCall: 'fail' },
+          diagnostic: 'route reached the probe output budget before returning the required tool call; compatibility is unverified',
+          remedy: 'retry with a model or reasoning profile that can return the required tool call within the bounded probe output',
+        }),
+      });
+      expect(check?.level).toBe('warn');
+      expect(check?.detail).toContain('compatibility is unverified');
+      expect(check?.detail).not.toContain('incompatible');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('renders auth failures as fail with an actionable remedy', async () => {
     const dir = home();
     try {

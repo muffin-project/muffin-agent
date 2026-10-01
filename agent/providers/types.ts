@@ -531,6 +531,8 @@ export class ProviderError extends Error {
      * construction site keeps the behaviour it had.
      */
     readonly retryAfterMs?: number,
+    /** The adapter saw a wire output limit while parsing a partial tool call. */
+    readonly outputTruncated = false,
   ) {
     super(message);
     this.name = 'ProviderError';
