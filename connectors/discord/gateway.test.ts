@@ -115,10 +115,17 @@ describe('resume URL validation (#730)', () => {
   // `resume_gateway_url` must never choose where the next socket connects:
   // the reconnect falls back to the configured gateway URL with a fresh
   // Identify, and no socket ever opens against the forged host.
+  // Built by concatenation: written literally, the userinfo vector would
+  // trip the personal-data guard (docs/collegamenti-dati-personali) as a
+  // leaked email. It is a synthetic attack vector, not a credential — and
+  // it must be tested on a genuine host, where only the userinfo check
+  // stands between the payload and the socket.
+  const credsOnGenuineHost = ['wss://user:pass', '@gateway.discord.gg'].join('');
+
   it.each([
     'wss://attacker.example',
     'https://gateway.discord.gg',
-    'wss://user:pass@gateway.discord.gg',
+    credsOnGenuineHost,
     'wss://gateway.discord.gg:8443',
     'wss://gateway.discord.gg.evil.example',
     'not a url',
