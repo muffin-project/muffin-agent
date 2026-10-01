@@ -6,7 +6,7 @@ import DatabaseCtor from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { CONTINUATION_TTL_MS } from '../agent/loop.js';
 import { CONSERVATIVE, loadProfiles, selectProfile } from '../agent/profiles/profile.js';
-import { audioAccettato } from '../agent/providers/modalita.js';
+import { audioAccettato, immagineAccettata } from '../agent/providers/modalita.js';
 import { speaksReasoningEffort, wantsExplicitCache } from '../agent/providers/openai-compat.js';
 import { type VerificationResult, verifyInferenceRoute } from '../agent/providers/verify.js';
 import { baseToolOrder } from '../agent/runtime.js';
@@ -128,6 +128,12 @@ export type DoctorOptions = {
    * the developer's machine, not the product.
    */
   voce?: { accettaAudio?: () => Promise<boolean>; path?: string };
+  /**
+   * Come `voce.accettaAudio`: tri-stato (`true` vede, `false` non vede,
+   * `undefined` non misurabile), con lo stesso tetto di `probeAudio`, perché
+   * anche qui un provider che non risponde non deve tenere `doctor` appeso.
+   */
+  vista?: { vedeImmagini?: (modello: string) => Promise<boolean | undefined> };
   /**
    * Test-only: overrides the real `hardeningHolds(home)` probe for the
    * owner-binding remedy below, so the hardened branch runs in the suite
@@ -1529,6 +1535,36 @@ export async function runDoctor(
     }
   }
 
+  // Le foto arrivano solo da Telegram: è l'unica superficie che collega
+  // `vista` (Discord non chiama mai `ingestAttachment`, quindi non descrive
+  // né mostra — il suo allegato resta una riga "non indicizzato"). Stesse
+  // fonti del runtime, non una copia: `immagineAccettata` è la funzione che
+  // `decidiVista` chiama.
+  const superficiFoto = config.surfaces.enabled.filter((id) => id === 'telegram');
+  if (superficiFoto.length > 0) {
+    const vede = await probeVista(options.vista?.vedeImmagini, config.provider.baseUrl, modello);
+    if (vede === true) {
+      ok('vista', `${modello} vede le immagini: arrivano al modello`);
+    } else if (vede === false) {
+      const leggera = config.models.light;
+      const descrive =
+        leggera === modello
+          ? false
+          : await probeVista(options.vista?.vedeImmagini, config.provider.baseUrl, leggera);
+      if (descrive === true) {
+        ok('vista', `${modello} non vede le immagini: le descrive ${leggera}, sullo stesso endpoint`);
+      } else {
+        warn(
+          'vista',
+          `${modello} non vede le immagini${descrive === false ? ` e neanche ${leggera}` : ''}: le foto restano fuori dal turno`,
+          'passa con /model a un modello che vede le immagini',
+        );
+      }
+    } else {
+      ok('vista', `non so se ${modello} vede le immagini (endpoint non misurabile): vanno al modello come sempre`);
+    }
+  }
+
   // Was `statSync(p.home)` with the result assigned and voided — the remains of
   // a disk-space check that was never written, which made the failure branch
   // unreachable and the check a decoration.
@@ -1918,6 +1954,33 @@ async function probeAudio(
     ]);
   } catch {
     return false;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/**
+ * Il modello vede le immagini? Tri-stato come `immagineAccettata`: a
+ * differenza dell'audio, "non so" non cade su un ramo locale ma sulla strada
+ * di sempre — ed è una risposta onesta da riportare, non un buco da tappare.
+ */
+async function probeVista(
+  override: ((modello: string) => Promise<boolean | undefined>) | undefined,
+  baseUrl: string | undefined,
+  model: string,
+): Promise<boolean | undefined> {
+  const run = override ?? ((m: string) => immagineAccettata(baseUrl, m));
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      run(model),
+      new Promise<boolean | undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), AUDIO_PROBE_MS);
+        timer.unref();
+      }),
+    ]);
+  } catch {
+    return undefined;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }

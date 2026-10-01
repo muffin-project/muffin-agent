@@ -7,6 +7,7 @@ import type { AttachStream } from '../../agent/turn-lane.js';
 import { COMANDI, sembraComando, type Controlli } from '../../agent/comandi.js';
 import { recoveredText } from '../../agent/recovered-text.js';
 import type { PendingPairing } from '../../core/config/pairing.js';
+import { levaDelega } from '../../core/runtime/delega.js';
 import type { ModelLane } from '../../core/turns/model-lane.js';
 import { decodeWaitFor } from '../../core/turns/wait.js';
 import { fence } from '../../core/memory/spotlight.js';
@@ -48,6 +49,7 @@ import { tipoAudio } from '../../agent/audio.js';
 import { loadImage } from '../../agent/images.js';
 import type { AudioBlock, ImageBlock } from '../../agent/providers/types.js';
 import type { Voce } from '../../core/audio/voce.js';
+import type { Vista } from '../../core/vista/vista.js';
 
 /**
  * Cosa e' arrivato con un allegato: la riga da raccontare al modello e, quando
@@ -60,8 +62,14 @@ import type { Voce } from '../../core/audio/voce.js';
 type Arrivo = Arrival;
 
 /** Solo i due metodi che questo file usa: il connettore non possiede il registro. */
-type ApprovalDecide = (id: string, decision: 'allow' | 'deny', now: Date) => 'ok' | 'already' | 'unknown' | 'withdrawn';
+type ApprovalDecide = (
+  id: string,
+  decision: 'allow' | 'deny',
+  now: Date,
+  by?: 'owner' | 'delegation',
+) => 'ok' | 'already' | 'unknown' | 'withdrawn';
 type ApprovalGet = (id: string) => { id: string; turnId: string; capability: string; resource: string | null } | null;
+type ApprovalOpenRows = (turnId: string) => { id: string }[];
 import { startPresence } from './presence.js';
 import { avvisoAllOwner, decidiInvito, SALUTO_NEL_GRUPPO, type Invito } from './invito.js';
 import { stanzaDi } from './negoziazione.js';
@@ -180,6 +188,14 @@ export type ConnectorDeps = {
    */
   voce?: (percorso: string) => Promise<Voce>;
   /**
+   * Cosa fare di un'immagine — `core/vista/vista.ts`.
+   *
+   * Assente vuol dire la strada di sempre (i byte vanno al modello). Iniettata
+   * come `voce` e per la stessa ragione: il connettore non ha nessuna ragione
+   * di sapere che esistono i provider o i modelli leggeri.
+   */
+  vista?: (percorso: string) => Promise<Vista>;
+  /**
    * I comandi, eseguiti dove sono scritti una volta sola
    * (`agent/comandi.ts`). `null` vuol dire «questo testo non è un comando».
    *
@@ -207,7 +223,7 @@ export type ConnectorDeps = {
    * pulsante premuto viene chiuso dicendo che non si sa di cosa si tratti —
    * mai lasciato girare.
    */
-  approvals?: { decide: ApprovalDecide; get: ApprovalGet };
+  approvals?: { decide: ApprovalDecide; get: ApprovalGet; openRows: ApprovalOpenRows };
   /**
    * «C'è un turno pronto adesso.»
    *
@@ -2733,13 +2749,27 @@ export class TelegramConnector {
     // archiviare la conversazione che il turno successivo riaprirà, non
     // un'altra con lo stesso nome.
     const sessione = this.deps.sessions.open(sessionKey);
+    // La delega (issue #740) si lega al lavoro attivo di questa conversazione:
+    // la leva legge gli stessi store del loop, quindi un comando e un ask
+    // vedono la stessa verità anche dopo un riavvio. Assente dove il runtime
+    // non l'ha cablata, e i comandi lo dicono invece di fingere.
+    const delega =
+      this.deps.loop.delega !== undefined && this.deps.approvals !== undefined
+        ? levaDelega({
+            delega: this.deps.loop.delega,
+            approvals: this.deps.approvals,
+            turns: this.deps.loop.turns,
+            sessionId: () => sessione.id,
+            ...(this.deps.onWork === undefined ? {} : { onWork: this.deps.onWork }),
+          })
+        : undefined;
     return tryControlCommand({
       principal,
       text: incoming.text,
       sessionId: sessione.id,
       // Le leve di ADR-0054, per **questa** chat: il turno vivo è quello della
       // sua corsia, e `/stop` dal gruppo non ferma il turno della privata.
-      controlli: controlliPerCorsia(this.corsie, this.corsia(incoming.chatId), this.deps.pausa),
+      controlli: controlliPerCorsia(this.corsie, this.corsia(incoming.chatId), this.deps.pausa, delega),
       esegui: this.deps.comandi,
       // Il dialetto resta qui. La politica di presentazione (rich-first, con
       // il ripiego legacy a pezzi sotto il limite) è di `present`: `/model
@@ -2809,6 +2839,7 @@ export class TelegramConnector {
       {
         ...(this.deps.vault === undefined ? {} : { vault: this.deps.vault }),
         ...(this.deps.voce === undefined ? {} : { voce: this.deps.voce }),
+        ...(this.deps.vista === undefined ? {} : { vista: this.deps.vista }),
         // Un-prefixed on the shared side (§4 invariant 11); the port's own
         // name is added here, so the line in `gateway.err` is unchanged.
         log: (riga) => log(`telegram: ${riga}`),
