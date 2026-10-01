@@ -1,0 +1,19 @@
+# Opt-in: let the gateway's shell sandbox (bubblewrap) run inside the container.
+#
+#   docker compose -f compose.yaml -f compose.sandbox.yaml up -d
+#
+# This loosens the container, deliberately and narrowly, so that Muffin's own
+# sandbox can exist (contrib/docker/README.md, "Sandbox postures"):
+#   seccomp=unconfined     Docker's default profile refuses the user namespaces
+#                          bubblewrap creates.
+#   systempaths=unconfined Docker masks parts of /proc, and the kernel then
+#                          refuses the fresh /proc bubblewrap mounts in its
+#                          namespace. This lifts only that masking; it adds no
+#                          capability and no device, unlike `privileged`.
+# The gateway still runs as a non-root user. Never add the Docker socket.
+
+services:
+  gateway:
+    security_opt:
+      - seccomp=unconfined
+      - systempaths=unconfined
