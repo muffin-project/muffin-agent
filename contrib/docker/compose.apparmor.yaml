@@ -1,0 +1,18 @@
+# Opt-in, with compose.sandbox.yaml, on hosts where AppArmor restricts
+# unprivileged user namespaces (kernel.apparmor_restrict_unprivileged_userns=1,
+# the Ubuntu 24.04+ default). There the namespace is created without
+# capabilities and bubblewrap fails with "userns_denied ... RTM_NEWADDR".
+#
+# Load the profile on the host first (contrib/docker/apparmor/muffin-userns):
+#   sudo install -m 0644 apparmor/muffin-userns /etc/apparmor.d/muffin-userns
+#   sudo apparmor_parser -r /etc/apparmor.d/muffin-userns
+# then:
+#   docker compose -f compose.yaml -f compose.sandbox.yaml -f compose.apparmor.yaml up -d
+#
+# On a host with AppArmor enabled and the profile NOT loaded, the container does
+# not start. On a host without AppArmor the option is ignored.
+
+services:
+  gateway:
+    security_opt:
+      - apparmor=muffin-userns
