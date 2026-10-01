@@ -124,15 +124,18 @@ export function readShadowEvidence(db: DatabaseCtor.Database): ShadowEvidence {
     tokens: { input: 0, output: 0 },
   };
   if (!tabella('ask_judgments')) return vuota;
-
+  // Approvals mancante (un --db parziale, mai un'installazione viva): le
+  // righe restano leggibili come giudizi senza decisione, non uno stack.
+  const conApprovals = tabella('approvals');
   const grezze = db
     .prepare(
       `SELECT j.id, j.capability, j.turn_id, j.status, j.answers, j.latency_ms,
               j.usage_input_tokens, j.usage_output_tokens,
-              a.decision AS owner_decision, a.withdrawn_at, a.resource AS owner_resource,
-              a.capability AS owner_capability
+              ${conApprovals
+                ? 'a.decision AS owner_decision, a.withdrawn_at, a.resource AS owner_resource, a.capability AS owner_capability'
+                : "NULL AS owner_decision, NULL AS withdrawn_at, NULL AS owner_resource, j.capability AS owner_capability"}
        FROM ask_judgments j
-       LEFT JOIN approvals a ON a.id = j.approval_id
+       ${conApprovals ? 'LEFT JOIN approvals a ON a.id = j.approval_id' : ''}
        ORDER BY j.id`,
     )
     .all() as Array<Record<string, unknown>>;
@@ -431,16 +434,21 @@ export function formatReport(evidence: ShadowEvidence, policy: CandidatePolicy):
     `concordo-escalazione (auto chiede: owner no, o andata male)  ${cf.counts['concordo-escalazione']}`,
     `senza esito visibile (consentito, nessuna riga d'effetto)    ${cf.counts['senza-esito']}`,
   );
+  // Gli esempi portano la risorsa **redatta**, come ogni altro sink che
+  // ristampa ciò che il modello ha scritto: il terminale dell'owner non è un
+  // posto dove un token torni in chiaro per via di un report.
+  const perEsempio = (resource: string | null): string =>
+    resource === null ? '(nessuna risorsa)' : redactText(resource.slice(0, MAX_RESOURCE_CHARS));
   if (cf.counts['falso-sicuro'] > 0) {
     righe.push('esempi falso-sicuro:');
     for (const e of cf.examples.filter((x) => x.categoria === 'falso-sicuro')) {
-      righe.push(`  · ${e.capability} · ${e.resource ?? '(nessuna risorsa)'} — ${e.dettaglio}`);
+      righe.push(`  · ${e.capability} · ${perEsempio(e.resource)} — ${e.dettaglio}`);
     }
   }
   if (cf.counts['escalation-inutile'] > 0) {
     righe.push('esempi escalation inutile:');
     for (const e of cf.examples.filter((x) => x.categoria === 'escalation-inutile')) {
-      righe.push(`  · ${e.capability} · ${e.resource ?? '(nessuna risorsa)'} — ${e.dettaglio}`);
+      righe.push(`  · ${e.capability} · ${perEsempio(e.resource)} — ${e.dettaglio}`);
     }
   }
   return righe.join('\n');

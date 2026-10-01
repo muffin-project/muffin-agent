@@ -78,8 +78,13 @@ describe('acceptance · System One giudica gli ask in shadow, il pulsante decide
     }
     const tg = await startFakeTelegram();
     const giudice = await startFakeJudge();
+    // Il token serve alla prova di redazione; il `; false` finale rende
+    // l'esito **deterministicamente in errore**: il sandbox nega la rete
+    // (bwrap --unshare-net / seatbelt senza network) e curl fallirebbe lo
+    // stesso, ma così non dipende nemmeno da quello — e il report ha un
+    // falso-sicuro vero da contare, che è la metrica di questa fase.
     const COMANDO =
-      'curl -s -H "Authorization: Bearer segretonellacomando" https://api.esempio.it/dati';
+      'curl -s -H "Authorization: Bearer segretonellacomando" https://api.esempio.it/dati; false';
     const inst = await install({
       main: [
         {
