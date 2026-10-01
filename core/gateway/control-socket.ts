@@ -30,9 +30,12 @@ import { tightenPrivateFile } from '../config/private-fs.js';
  * > `gateway_state.json` (which can outlive its writer) … A connectable socket
  * > with a well-formed `identify` answer IS liveness — no PID-reuse heuristics.
  *
- * `readGateway` (`./lock.ts`) legge una riga `gateway_lock` con dentro un pid e
- * chiama `pidAlive`. Un record che può sopravvivere a chi l'ha scritto, più
- * un'euristica sul riuso dei pid. È esattamente quella frase.
+ * `readGateway` (`./lock.ts`) legge una riga `gateway_lock` con dentro un pid e,
+ * fino all'ADR-0094, chiamava `pidAlive`: un record che può sopravvivere a chi
+ * l'ha scritto, più un'euristica sul riuso dei pid. Era esattamente quella
+ * frase. Dall'ADR-0094 la riga porta anche l'incarnazione del detentore, e la
+ * liveness la chiede al kernel (`core/lock/incarnation.ts`); il pid resta per
+ * le righe scritte senza.
  *
  * **v1 era sola osservazione, e la disciplina era deliberata.** Due verbi,
  * `identify` e `status`, che non cambiavano niente. **v2 aggiunge

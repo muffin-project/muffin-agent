@@ -45,8 +45,10 @@ function fintoBotApi(): Promise<FintoBot> {
         }
         if (url.includes('/sendMessage') || url.includes('/sendRichMessage')) {
           try {
-            const parsed = JSON.parse(body) as { text?: unknown; rich_message?: { html?: unknown } };
-            inviati.push(String(parsed.text ?? parsed.rich_message?.html ?? ''));
+            const parsed = JSON.parse(body) as { text?: unknown; rich_message?: { html?: unknown; blocks?: unknown[] } };
+            inviati.push(
+              String(parsed.text ?? parsed.rich_message?.html ?? testoBlocchi(parsed.rich_message?.blocks) ?? ''),
+            );
           } catch {
             inviati.push(body);
           }
@@ -87,6 +89,22 @@ function casa(baseUrl: string): string {
     home,
   );
   return home;
+}
+
+/** Il testo visibile di un payload rich, letto dai blocchi (il finale in DM è a blocchi). */
+function testoBlocchi(blocks: unknown): string {
+  if (!Array.isArray(blocks)) return '';
+  const blockText = (b: unknown): string => {
+    if (b === null || typeof b !== 'object') return '';
+    const o = b as { text?: unknown; summary?: unknown; blocks?: unknown[] };
+    const parts: string[] = [];
+    if (typeof o.summary === 'string') parts.push(o.summary);
+    if (typeof o.text === 'string') parts.push(o.text);
+    else if (Array.isArray(o.text)) parts.push(JSON.stringify(o.text));
+    if (Array.isArray(o.blocks)) parts.push(o.blocks.map(blockText).join('\n'));
+    return parts.join('\n');
+  };
+  return blocks.map(blockText).join('\n');
 }
 
 describe('un turno sospeso ritrova la sua porta attraverso l assemblaggio', () => {

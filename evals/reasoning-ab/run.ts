@@ -7,10 +7,10 @@
  * - `B` — `adaptive` + `model-default` (nessuna temperature sul filo);
  * - `C` — `off` + `deterministic` (il default che la #498 vieta senza misura).
  *
- * Il quarto braccio della issue (`low/bounded reasoning`) non è esprimibile:
- * `ReasoningRequest.effort/maxTokens` non ha superficie in profilo/config
- * (solo `mode`), quindi non c'è manopola da girare — finding registrato, non
- * misurabile qui.
+ * Il quarto braccio della issue (`low/bounded reasoning`) non è ancora
+ * implementato qui: l'effort ora ha una superficie (`thinking: '<livello>'` in
+ * profilo/config, #789), quindi c'è la manopola da girare; `maxTokens` resta
+ * senza superficie.
  *
  * Ogni braccio gira su home + workspace usa-e-getta (`runInit`, mai
  * `~/.muffin`), provider OpenRouter vero, tool veri su file fixture generati

@@ -139,11 +139,24 @@ describe('acceptance · A · installazione e ciclo di vita', () => {
         victim.kill();
         await victim.exited;
 
-        // --- (d) pid morto = claim libero, subito ---------------------------
+        // The pid on the row now belongs to a live process that is not the
+        // gateway: what a restarted container shows, where the new process
+        // usually gets the dead one's pid again (ADR-0094). This test process
+        // stands in for it. Judged by the pid alone, the claim would stay held
+        // until the hard horizon (thirty minutes) and the restart below would
+        // be refused with exit 75.
+        const reuse = new DatabaseCtor(join(inst.home, 'muffin.db'));
+        try {
+          reuse.prepare(`UPDATE gateway_lock SET pid = ? WHERE id = 1`).run(process.pid);
+        } finally {
+          reuse.close();
+        }
+
+        // --- (d) holder morto = claim libero, subito -------------------------
         //
         // `heldBy` (core/lock/durable.ts) judges liveness before staleness, so
         // this does not wait out STALE_AFTER_MS (five minutes) — a crash frees
-        // the claim on the very next read.
+        // the claim on the very next read, whatever pid the row carries.
         await pollGatewayStatus(inst, 1);
 
         // Only now — with no gateway alive to race — make both pieces of

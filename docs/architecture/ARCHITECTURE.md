@@ -381,6 +381,61 @@ The detailed community/extension design is post-DAY-1 product work; current code
 continues to expose tools, skills and MCP without pretending the future package
 system already exists.
 
+### The executable-composition waist (from #606)
+
+The semantic architecture is strong; the recurring failure class has been
+elsewhere:
+
+> **the semantic architecture is better than the executable composition
+> architecture.**
+
+Symptoms: a runtime capability described in several parallel places;
+scheduler-only execution modes; inbound message → Turn/LLM as the implicit
+default; late registrations that force exposure recomputation; lease vs Turn vs
+lifetime state easy to confuse; boot-snapshot vs turn-snapshot vs live config
+encoded through one-off closures; self-inspection aimed at diagnostics rather
+than a structured runtime self-model.
+
+The desired narrow waist:
+
+```text
+RuntimeEvent
+    ↓
+AutomationRule / deterministic routing
+    ↓
+ActionRequest
+    ├─ DeterministicExecutor
+    └─ AgentExecutor -> Turn / Work
+                 ↓
+          CapabilityRegistry
+                 ↓
+              Authority
+                 ↓
+             Effect WAL
+                 ↓
+         durable Result/Receipt
+```
+
+Context is a projection of durable/runtime state, not a second owner of it.
+
+**Convergence rule.** One occurrence → local fix. A second occurrence →
+investigate the common root. A repeated family across modules → stop adding leaf
+mechanisms and build the missing primitive. A new feature-specific hook,
+registry, scheduler, retry loop, effect log or provider special case is suspect
+by default when the same behaviour can be represented through the waist.
+
+**Definition of convergence.** Adding one native capability takes one canonical
+definition/registration, not edits to several independent lists; adding an event
+takes one producer, not agent-loop surgery; deterministic automation and agentic
+automation use the same Action/Effect path; adding a surface does not invent
+identity or work semantics; self-inspection derives events, executors,
+capabilities and work from runtime truth rather than restating them.
+
+This document owns the shape and the convergence rule. Risk-adaptive execution
+(FAST / STANDARD / CRITICAL, subtraction economy) belongs to
+`docs/development/ORCHESTRATION.md`; research freshness and counterevidence
+belong to `docs/development/RESEARCH.md`.
+
 ## 10. Canonical state versus derived state
 
 The continuity promise is about **meaning that survives replacement**, not one

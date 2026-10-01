@@ -55,9 +55,14 @@ function fintoBotApi(): Promise<FintoBot> {
           res.end(JSON.stringify({ ok: true, result: [] }));
           return;
         }
-        if (url.includes('/sendMessage')) {
+        if (url.includes('/sendMessage') || url.includes('/sendRichMessage')) {
           try {
-            stato.inviati.push(String((JSON.parse(body) as { text?: unknown }).text ?? ''));
+            const parsed = JSON.parse(body) as { text?: unknown; rich_message?: { html?: unknown } };
+            // La lane rich si registra come il suo gemello legacy: le
+            // asserzioni restano sul testo visibile.
+            stato.inviati.push(
+              typeof parsed.rich_message?.html === 'string' ? parsed.rich_message.html : String(parsed.text ?? ''),
+            );
           } catch {
             stato.inviati.push(body);
           }

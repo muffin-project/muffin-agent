@@ -10,7 +10,6 @@ describe('model status progress', () => {
     const budget = new ExecutionBudget({
       modelCallDeadlineMs: 1_000,
       turnWallDeadlineMs: 2_000,
-      firstActivityTimeoutMs: 200,
       stallTimeoutMs: 200,
       heartbeatIntervalMs: 50,
     });

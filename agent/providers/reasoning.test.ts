@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveReasoningPolicy, type ReasoningCapabilities, type ReasoningRequest } from './reasoning.js';
+import { reasoningFromLegacyThinking, resolveReasoningPolicy, type ReasoningCapabilities, type ReasoningRequest } from './reasoning.js';
 
 const capable: ReasoningCapabilities = {
   support: 'supported',
@@ -38,6 +38,21 @@ describe('resolveReasoningPolicy', () => {
   const noReasoning = { support: 'unsupported' as const, canDisable: true, supportsMaxTokens: false, mandatory: false };
     expect(resolve({ mode: 'off' }, noReasoning)).toMatchObject({ status: 'omitted', reason: expect.stringContaining('no reasoning') });
     expect(resolve({ mode: 'on' }, noReasoning)).toMatchObject({ status: 'omitted' });
+  });
+});
+
+describe('reasoningFromLegacyThinking · one knob for on/off and effort (#789)', () => {
+  it('keeps the three existing values meaning what they meant', () => {
+    expect(reasoningFromLegacyThinking('off')).toEqual({ mode: 'off' });
+    expect(reasoningFromLegacyThinking('adaptive')).toEqual({ mode: 'adaptive' });
+    expect(reasoningFromLegacyThinking('unset')).toBeUndefined();
+    expect(reasoningFromLegacyThinking(undefined)).toBeUndefined();
+  });
+
+  it('turns an effort level into an explicit reasoning request', () => {
+    for (const effort of ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const) {
+      expect(reasoningFromLegacyThinking(effort)).toEqual({ mode: 'on', effort });
+    }
   });
 });
 

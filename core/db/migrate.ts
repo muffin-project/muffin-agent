@@ -510,14 +510,18 @@ export function migrate(
   const stamp = db.prepare(`INSERT INTO schema_version (version, description, applied_at) VALUES (?, ?, ?)`);
   const applied: number[] = [];
   for (const m of pending) {
-    // One transaction per migration, stamp included: SQLite DDL is
-    // transactional, so a migration that throws leaves neither its reshaping
-    // nor its stamp — "not done", never "half done".
-    db.transaction(() => {
+    // Another opener can migrate after `pending` was computed. Acquire the
+    // writer lock before re-reading its stamp, then reshape and stamp in that
+    // same transaction. A skipped migration belongs to the other opener.
+    const didApply = db.transaction(() => {
+      const current = schemaVersionOf(db) ?? BASELINE_VERSION;
+      if (current > target) throw new SchemaAheadError(current, target);
+      if (current >= m.version) return false;
       m.up(db);
       stamp.run(m.version, m.description, now().toISOString());
-    })();
-    applied.push(m.version);
+      return true;
+    }).immediate();
+    if (didApply) applied.push(m.version);
   }
   return { applied, backup, version: target };
 }

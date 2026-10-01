@@ -1,12 +1,12 @@
 ---
 name: engineering-loop
-description: Run the repository development control loop — observe, reconstruct current, choose one deliverable, verify, integrate. Use when doing any multi-step engineering work in this repository.
+description: Optional repository development loop helper for observing work, choosing a claim, verifying, and integrating it.
 ---
 
 # Engineering loop
 
-This skill is the procedure. Authority for mechanics lives in the documents it
-points to; this file does not restate them. If they diverge, the document wins.
+This optional helper points to the repository procedures. Authority for mechanics
+lives in the documents it names; if they diverge, the document wins.
 
 ## The loop
 

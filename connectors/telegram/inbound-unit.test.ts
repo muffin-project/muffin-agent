@@ -144,9 +144,26 @@ function fixture(script: ChatResult[] = []) {
   // Rich is the transport now; the fake records it in the same `sent` log.
   // Rich delegates to the legacy spies, so every existing assertion on
   // `sendMessage`/`editMessageText` keeps observing the same effect.
-  const sendRichMessage = vi.fn((chatId: number, rich: { html?: string }) => sendMessage(chatId, rich.html ?? ''));
+
+/** Il testo visibile di un payload rich, letto dai blocchi (il finale in DM è a blocchi). */
+function richTesto(rich: { html?: string; blocks?: unknown[] }): string {
+  const blockText = (b: unknown): string => {
+    if (b === null || typeof b !== 'object') return '';
+    const o = b as { text?: unknown; summary?: unknown; blocks?: unknown[] };
+    const parts: string[] = [];
+    if (typeof o.summary === 'string') parts.push(o.summary);
+    if (typeof o.text === 'string') parts.push(o.text);
+    else if (Array.isArray(o.text)) parts.push(JSON.stringify(o.text));
+    if (Array.isArray(o.blocks)) parts.push(o.blocks.map(blockText).join('\n'));
+    return parts.join('\n');
+  };
+  if (typeof rich.html === 'string') return rich.html;
+  return Array.isArray(rich.blocks) ? rich.blocks.map(blockText).join('\n') : '';
+}
+
+  const sendRichMessage = vi.fn((chatId: number, rich: { html?: string; blocks?: unknown[] }) => sendMessage(chatId, richTesto(rich)));
   const editMessageRichText = vi.fn((_chatId: number, _id: number, rich: { html?: string }) =>
-    editMessageText(_chatId, _id, rich.html ?? ''),
+    editMessageText(_chatId, _id, richTesto(rich)),
   );
   const sendRichMessageDraft = vi.fn(async () => true);
   const api = {
@@ -683,6 +700,30 @@ describe('resolve — "riprendi" continua la riga continuabile, non ne apre una'
         created.claimToken,
       ),
     ).toBe(true);
+
+    // La diagnosi di cessione è già passata dalla WAL della superficie: in
+    // produzione è il testo del primo risultato della riga, congelato e
+    // consegnato. La risposta della ripresa è un secondo messaggio della
+    // stessa riga, e non deve essere inghiottita dal piano congelato.
+    const delivery = new TelegramDeliveryStore(h.db);
+    const at = new Date().toISOString();
+    delivery.plan(
+      'vecchia-lease',
+      [
+        {
+          operation: 'send',
+          chatId: OWNER,
+          threadId: null,
+          replyTo: null,
+          editMessageId: null,
+          html: 'Mi sono fermato qui, scrivi "riprendi"',
+        },
+      ],
+      at,
+      0,
+    );
+    expect(delivery.claim('vecchia-lease', 0, 'attempt', at)).toBe(true);
+    expect(delivery.sent('vecchia-lease', 0, 'attempt', 1, at)).toBe(true);
 
     const { stored, incoming } = acceptOne(h, privateMsg(9, 'riprendi'));
     await resolveOnce(h, stored, incoming);

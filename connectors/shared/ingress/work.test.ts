@@ -261,4 +261,26 @@ describe('continuazione conversazionale (P0-B)', () => {
     expect(env.turns.get('w9')).toBeNull();
     expect(env.turns.get('cont-1')?.status).toBe('continuable');
   });
+
+  it('un id già impegnato che la ri-derivazione non nomina più non collide con la riga', async () => {
+    const env = ambiente();
+    rigaContinuabile(env);
+    const port = porta('telegram');
+    // Caso della finestra chiusa durante l'attesa in corsia: il testo non è
+    // più un grant, ma l'identità reclamata dal bind è una riga che esiste.
+    // `runTurn` creerebbe sotto quell'id e morirebbe sulla primary key.
+    const ev = evento(port, { parts: [{ source: 'author', tier: 0, text: 'grazie' }] });
+    await expect(
+      runWork({ loop: env.loop, sessions: env.sessions, lane: new ModelLane() }, port, ev, {
+        workId: 'cont-1',
+        identity: identify(ev.identity, '7'),
+        text: 'grazie',
+        contentTaint: 0,
+        replyTo: ev.address.record,
+        signal: new AbortController().signal,
+        steer: () => [],
+      }),
+    ).rejects.toBeInstanceOf(ContinuationGone);
+    expect(env.turns.get('cont-1')?.status).toBe('continuable');
+  });
 });

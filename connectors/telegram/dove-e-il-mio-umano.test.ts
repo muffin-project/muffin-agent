@@ -118,11 +118,17 @@ function harness(config: TelegramConfig, ownerStatus: string | Error = 'member')
   };
   const loop: LoopDeps = { ...runtime.deps, provider };
 
-  const inviati: { chatId: number; testo: string }[] = [];
+  const inviati: { method: string; chatId: number; testo: string }[] = [];
   const usciteDa: number[] = [];
   const api = {
     sendMessage: async (chatId: number, testo: string) => {
-      inviati.push({ chatId, testo });
+      inviati.push({ method: 'sendMessage', chatId, testo });
+      return { message_id: inviati.length } as never;
+    },
+    // La lane rich si registra come il suo gemello legacy: le asserzioni
+    // restano sul testo visibile.
+    sendRichMessage: async (chatId: number, rich: { html?: string; blocks?: unknown[] }) => {
+      inviati.push({ method: 'sendRichMessage', chatId, testo: rich.html ?? JSON.stringify(rich.blocks ?? []) });
       return { message_id: inviati.length } as never;
     },
     editMessageText: async () => ({}) as never,
@@ -167,6 +173,9 @@ describe('un invito che arriva dal filo', () => {
       // Il saluto **prima** dell'uscita: dopo `leaveChat` non si può più
       // scrivere lì dentro, quindi l'ordine non è cosmetico.
       expect(h.inviati[0]?.chatId).toBe(GRUPPO);
+      // E parte dalla lane ricca: la politica fuori-turno, non un
+      // `sendMessage` ad hoc.
+      expect(h.inviati[0]?.method).toBe('sendRichMessage');
       expect(h.inviati[0]?.testo).toContain('Dove è il mio umano');
       // L'avviso in privato, con chi e dove.
       expect(h.inviati[1]?.chatId).toBe(OWNER);
@@ -219,15 +228,16 @@ describe('un invito che arriva dal filo', () => {
 
   it('esce anche se il saluto nel gruppo non parte', async () => {
     // Il caso più probabile proprio nel gruppo ostile: bot mutato, permessi
-    // stretti. Un saluto che fallisce non deve trattenerlo lì dentro.
+    // stretti. Un saluto che fallisce non deve trattenerlo lì dentro. Il
+    // saluto parte ricco: si guasta la lane ricca **e** il suo ripiego.
     const h = harness(config, 'left');
-    (h.connector as unknown as { deps: { api: { sendMessage: unknown } } }).deps.api.sendMessage = async (
-      chatId: number,
-    ) => {
+    const muto = async (chatId: number): Promise<never> => {
       if (chatId === GRUPPO) throw new Error('bot is muted');
-      h.inviati.push({ chatId, testo: '(privato)' });
+      h.inviati.push({ method: 'sendRichMessage', chatId, testo: '(privato)' });
       return { message_id: 1 } as never;
     };
+    (h.connector as unknown as { deps: { api: { sendMessage: unknown; sendRichMessage: unknown } } }).deps.api.sendMessage = muto;
+    (h.connector as unknown as { deps: { api: { sendMessage: unknown; sendRichMessage: unknown } } }).deps.api.sendRichMessage = muto;
     try {
       await deliver(h, [aggiuntoDa(1)]);
       expect(h.usciteDa).toEqual([GRUPPO]);

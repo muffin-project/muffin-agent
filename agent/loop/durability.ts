@@ -340,6 +340,29 @@ export async function reconcile(scope: TurnScope): Promise<TurnResult | null> {
  * that into the honest lost-claim result instead of returning a `TurnResult`
  * that claims an outcome this row does not, in fact, record.
  */
+/**
+ * #742 — il turno è finito: le domande rimaste aperte si ritirano.
+ *
+ * Un turno può chiudersi mentre una domanda è ancora aperta (la scadenza lo
+ * sveglia e il modello prosegue). Senza questa chiusura la riga resta
+ * `decision IS NULL` per sempre, `open` la vede ancora — e la guardia di
+ * ripresa #741 ri-sospenderebbe su una domanda di un turno che non esiste più
+ * — e un tocco tardivo decide un'approvazione per un turno finito: il pattern
+ * delle righe orfane del 2026-09-14.
+ *
+ * Chiamata solo dopo una scrittura terminale riuscita: se il claim è perso la
+ * riga non è terminale, e il processo che la possiede davvero è quello che
+ * deve ritirare le sue domande. Una scrittura di cortesia non può far fallire
+ * la fine del turno.
+ */
+function withdrawApprovals(deps: LoopDeps, record: TurnRecord, at: Date): void {
+  try {
+    deps.approvals?.withdrawForTurn(record.id, at);
+  } catch {
+    /* la fine del turno è già scritta; il registro non può disdirla */
+  }
+}
+
 export function closeRecord(scope: TurnScope, outcome: TurnOutcome): boolean {
   const { deps, record, run, snapshot, turn } = scope;
   try {
@@ -347,7 +370,7 @@ export function closeRecord(scope: TurnScope, outcome: TurnOutcome): boolean {
     // lease? harness split? transport spent? lifetime fold?) inside the same
     // transaction from the row plus these exact counters. Callers cannot
     // supply a competing version.
-    return deps.turns.finish(
+    const scritto = deps.turns.finish(
       record.id,
       {
         outcome,
@@ -358,6 +381,8 @@ export function closeRecord(scope: TurnScope, outcome: TurnOutcome): boolean {
       },
       record.claimToken,
     );
+    if (scritto) withdrawApprovals(deps, record, (deps.now ?? (() => new Date()))());
+    return scritto;
   } catch (error) {
     // The caveat: unlike a checkpoint, nothing comes after this one. The row
     // stays `running` and the next boot reclaims it as interrupted — a turn
@@ -401,7 +426,12 @@ export function announceEnd(scope: TurnScope, stopped: TurnOutcome): void {
  * actually landed.
  */
 function continuableText(scope: TurnScope, failureClass: ContinuableClass, attempts: number): string {
-  const done = scope.run.toolCallsMade;
+  // Turno, non lease: `run.toolCallsMade` è azzerato a ogni grant esplicito
+  // (`buildFreshCounters`), mentre `lifetime` piega le lease chiuse — senza
+  // sovrapposizioni, il fold avviene solo al release. Misurato il 30/09/2026:
+  // dopo un'ora e 17 call la lease 1 diceva «nessuna tool call», e la frase
+  // mentiva sul lavoro fatto.
+  const done = scope.record.lifetime.toolCallsMade + scope.run.toolCallsMade;
   const completed = done > 0 ? `${done} tool call completate` : 'nessuna tool call ancora completata';
   // #615: a `truncated` release after partial-text continuations already holds
   // the accepted prefix durably in the transcript. Saying "senza produrre
@@ -429,8 +459,6 @@ function continuableText(scope: TurnScope, failureClass: ContinuableClass, attem
           : 'il modello ha esaurito il limite di output senza produrre contenuto';
       case 'provider_transport':
         return 'il provider non ha completato le richieste (errori di trasporto)';
-      case 'model_first_activity_timeout':
-        return 'il provider non ha inviato alcun segnale di attività in tempo';
       case 'model_stall':
         return 'il provider ha smesso di inviare dati a metà risposta';
       case 'model_deadline':
@@ -467,12 +495,16 @@ export function releaseContinuable(
   attempts: number,
 ): TurnResult {
   const { deps, record, run, snapshot, turn: span } = scope;
+  // Stesso totale della diagnostica qui sotto: la ragione durevole deve dire
+  // quello che l'owner legge, altrimenti `describeCandidate` («17 tool call
+  // completate» vs «nessuna») mente nella domanda di disambiguazione.
+  const completedToolCalls = record.lifetime.toolCallsMade + run.toolCallsMade;
   const reason: ContinuableReason = {
     class: failureClass,
     lease: record.leaseIndex,
     ...(attempts > 0 ? { attempts } : {}),
     ...(run.providerFailureRequestIds.length > 0 ? { requestIds: [...run.providerFailureRequestIds] } : {}),
-    completed: { toolCalls: run.toolCallsMade },
+    completed: { toolCalls: completedToolCalls },
     at: new Date().toISOString(),
   };
   span.setAttributes({
@@ -607,7 +639,7 @@ export function closeRow(
     // same array a reader sees — including the report itself
     // (harness-marked, so it archives as control, not as model output).
     const closed = [...providerMessages(record), harnessMessage('assistant', [{ type: 'text', text: detail }])];
-    deps.turns.finish(
+    const scritto = deps.turns.finish(
       record.id,
       {
         outcome,
@@ -620,6 +652,7 @@ export function closeRow(
       },
       record.claimToken,
     );
+    if (scritto) withdrawApprovals(deps, record, (deps.now ?? (() => new Date()))());
   } catch (error) {
     span.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
   }

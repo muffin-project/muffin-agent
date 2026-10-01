@@ -106,8 +106,6 @@ function replyRefusedText(decision: Exclude<Decision, { effect: 'allow' }>): str
  */
 function leaseAbortClass(reason: Exclude<ExecutionAbortReason, 'user_stop'>): ContinuableClass {
   switch (reason) {
-    case 'model_first_activity_timeout':
-      return 'model_first_activity_timeout';
     case 'model_stall':
       return 'model_stall';
     case 'model_deadline':
@@ -387,8 +385,14 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     // Old tool payloads are cleared before the request, not after: what goes
     // out is smaller, what is on record is whole. Nothing is removed, so every
     // `tool_use` keeps its `tool_result` and the request stays well-formed.
+    // The budget is the profile's when it declares one: the global constant
+    // is tuned for frontier models, and a small local model with a 90s
+    // per-call deadline degrades long before 60k chars of old results
+    // (measured 30/09/2026: two `model_deadline` deaths at 32k input tokens
+    // with zero compaction). Absent on pre-field profiles, which keep the
+    // behaviour they had.
     const compacted = compactToolResults(run.messages, {
-      budgetChars: TOOL_RESULT_BUDGET_CHARS,
+      budgetChars: deps.profile.toolResultBudgetChars ?? TOOL_RESULT_BUDGET_CHARS,
       keep: (name) => deps.tools.find((t) => t.spec.name === name)?.keepResult === true,
     });
     if (compacted.clearedCount > 0) {
@@ -670,11 +674,32 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
           // eligible for another retry.
           const attempt = MAX_TRANSPORT_RETRIES - run.transportRetriesLeft;
           const waitSignals = input.signal === undefined ? [execution.signal] : [input.signal, execution.signal];
-          await sleep(Math.max(retryDelayMs(attempt), error.retryAfterMs ?? 0), AbortSignal.any(waitSignals));
+          const waitMs = Math.max(retryDelayMs(attempt), error.retryAfterMs ?? 0);
+          input.onProgress?.({ type: 'model_retry', class: 'transport', attempt, max: MAX_TRANSPORT_RETRIES, inMs: waitMs });
+          await sleep(waitMs, AbortSignal.any(waitSignals));
           continue;
         }
       }
       throw error;
+    }
+    // The signal is the fact; the result is only how it arrived. The OpenAI
+    // SDK ends an aborted SSE iteration cleanly instead of throwing
+    // (`Stream.fromSSEResponse` swallows the AbortError), so an aborted call
+    // can come back shaped like a success — empty. It is never a completion,
+    // and it must never become the provider's `empty` to retry against the
+    // same machine: it takes the same two doors as the catch above.
+    if (lastAbortReason !== undefined && result.text === null && result.toolCalls.length === 0) {
+      chatSpan.setAttributes({
+        'muffin.chat_call.duration_ms': Date.now() - chatCallStartedAt,
+        'muffin.chat_call.abort_reason': lastAbortReason,
+        'muffin.chat_call.abort_swallowed': true,
+      });
+      chatSpan.end();
+      closeLive('superseded');
+      if (lastAbortReason === 'user_stop' || input.signal?.aborted) {
+        return finish(scope, 'aborted', 'Interrotto.', 'user_stop');
+      }
+      return releaseContinuable(scope, leaseAbortClass(lastAbortReason), run.iterations);
     }
     // Consumed: the escalation lasts exactly one provider response. A
     // transport retry that `continue`d above rebuilds `call` with the flag
@@ -803,7 +828,15 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
         // no error response to carry one), so the blind backoff stands alone.
         const attempt = MAX_TRANSPORT_RETRIES - run.transportRetriesLeft;
         const waitSignals = input.signal === undefined ? [execution.signal] : [input.signal, execution.signal];
-        await sleep(retryDelayMs(attempt), AbortSignal.any(waitSignals));
+        const waitMs = retryDelayMs(attempt);
+        input.onProgress?.({
+          type: 'model_retry',
+          class: 'provider_empty',
+          attempt: run.providerEmptyStreak,
+          max: MAX_PROVIDER_EMPTY_RETRIES,
+          inMs: waitMs,
+        });
+        await sleep(waitMs, AbortSignal.any(waitSignals));
         continue;
       }
       // Bounded re-drive spent: the lease ends recoverably, with the work

@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { ensureColumn } from '../lock/durable.js';
 import type { ProactiveDecision, ProactiveKind } from './proactivity.js';
 
 /**
@@ -48,10 +49,7 @@ CREATE INDEX IF NOT EXISTS idx_proactive_decisions_anchor
  * (§I-8), even when the history is young.
  */
 function ensureTenantColumn(db: Database.Database): void {
-  const cols = db.prepare(`PRAGMA table_info(proactive_decisions)`).all() as { name: string }[];
-  if (!cols.some((c) => c.name === 'tenant_id')) {
-    db.exec(`ALTER TABLE proactive_decisions ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'host'`);
-  }
+  ensureColumn(db, 'proactive_decisions', 'tenant_id', "tenant_id TEXT NOT NULL DEFAULT 'host'");
 }
 
 export type DecisionSource = 'observe' | 'commitments';

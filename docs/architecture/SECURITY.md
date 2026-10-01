@@ -599,7 +599,7 @@ judgement about how dangerous commands are.
 
 `sys.shell` (`shell_run`) is the **read-only lane**: the whole host filesystem is
 readable minus a finite deny-read list (not just the project — §9.2 names what
-that costs), writes are confined to a scratch directory this
+that costs; narrowing it to workspace + justified paths is #734, non-P0), writes are confined to a scratch directory this
 process creates under the system temp dir and removes when the session ends, and
 direct IP networking is disabled. On Linux the AF_UNIX seccomp filter is
 requested and behaviorally verified (three-legged self-test: an unsandboxed

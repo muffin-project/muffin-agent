@@ -158,6 +158,19 @@ export function visibleTools<T extends { capability: CapabilityId }>(
 }
 
 /**
+ * Quanto un passo aperto può invecchiare prima di smettere di presentarsi
+ * come «dovuto».
+ *
+ * Misurato il 30/09/2026: un piano `pending` dalle 23:51, reiniettato come
+ * «Sono aperti» in un «Buongiorno Muffin» delle 09:31, ha fatto fare al
+ * modello un'ora di lavoro mai concesso. Sei ore tengono la tenacia buona
+ * (la sera stessa il piano resta dovuto) e tagliano il resume del mattino
+ * dopo: oltre la soglia il piano resta visibile e recuperabile, ma la ripresa
+ * va chiesta, non presunta. Pinnato in `assemble.test.ts`.
+ */
+export const STALE_PLAN_MS = 6 * 60 * 60 * 1000;
+
+/**
  * The open plan, rendered for the turn that is about to run.
  *
  * **This function is the whole reason `todo` is a mechanism and not a table.**
@@ -184,19 +197,38 @@ export function visibleTools<T extends { capability: CapabilityId }>(
  *
  * Empty in, empty out — a session with nothing open costs zero tokens, which is
  * what lets the loop call it unconditionally.
+ *
+ * Two verbs, by age (`updatedAt` against `nowMs`, `STALE_PLAN_MS` above). A
+ * fresh interruption still reads as owed — the tenacity that finishes long
+ * work. A stale plan stays visible and re-readable, but resuming it is a
+ * question, never a presumption: greeting the owner is not a grant.
  */
-export function todoSection(open: TodoItem[]): string {
+export function todoSection(open: TodoItem[], nowMs: number): string {
   if (open.length === 0) return '';
-  return [
-    '## Piano di questa conversazione',
-    '',
-    'Questi passi li hai scritti tu con `todo` e sopravvivono ai riavvii. Sono aperti:',
-    '',
-    renderTodos(open),
-    '',
-    'Aggiorna lo stato con `todo set` appena qualcosa cambia — è la sola traccia che resta ' +
-      'se il processo muore. Il lavoro è finito quando nessun passo è più `pending` o `retry`.',
-  ].join('\n');
+  const freschi = open.filter((item) => nowMs - Date.parse(item.updatedAt) <= STALE_PLAN_MS);
+  const stantii = open.filter((item) => nowMs - Date.parse(item.updatedAt) > STALE_PLAN_MS);
+  const blocchi: string[] = ['## Piano di questa conversazione', ''];
+  if (freschi.length > 0) {
+    blocchi.push(
+      'Questi passi li hai scritti tu con `todo` e sopravvivono ai riavvii. Sono aperti:',
+      '',
+      renderTodos(freschi),
+      '',
+      'Aggiorna lo stato con `todo set` appena qualcosa cambia — è la sola traccia che resta ' +
+        'se il processo muore. Il lavoro è finito quando nessun passo è più `pending` o `retry`.',
+    );
+  }
+  if (stantii.length > 0) {
+    if (freschi.length > 0) blocchi.push('');
+    blocchi.push(
+      'Questi altri passi sono aperti da più di sei ore — li vedi perché restano tuoi, ma non riprenderli da solo:',
+      '',
+      renderTodos(stantii),
+      '',
+      'Se quello che ti ha chiesto c\u2019entra, chiedi prima se vuoi che li riprenda. Un messaggio nuovo che non li richiama apre lavoro nuovo.',
+    );
+  }
+  return blocchi.join('\n');
 }
 
 /**
@@ -740,6 +772,7 @@ const WORK_RULES = [
   '- I tool che hai sono quelli che vedi. Se per una cosa non ne hai uno, dillo così: non inventare una policy o un permesso che lo nasconderebbe.',
   "- Prima di rifare una chiamata che hai già fatto, chiediti cosa è cambiato. Se non è cambiato niente, la risposta ce l'hai già.",
   '- Se il lavoro richiede più passaggi, dì in una riga cosa stai per fare prima di partire. Non a metà, e non a cose fatte.',
+ '- Un messaggio nuovo dell\u2019owner apre lavoro nuovo, salvo che richiami il piano: un piano aperto da ore non si riprende da solo — se c\u2019entra con quello che ti ha chiesto, chiedi prima se riprenderlo.',
   '- Quando hai finito, rispondi e basta: non chiamare altri tool per abitudine.',
   '- Il tool dedicato viene prima della shell: leggi con `fs_read`/`fs_search`, ispeziona con `sys_inspect` o `process_list`, e se il compito nomina un servizio esterno (Linear, GitHub, …) cerca un tool caricato con quel nome prima di guardare nell\'ambiente o in un file di config. `shell_run` (sola lettura) resta l\'ultima risorsa per quello che nessun tool copre, e chiede sempre il sì, come `shell_run_write` — per "che modello ti sta eseguendo" concateni `sys_inspect`, non un comando: `fs_read("config.json")` poi, se serve, `shell_run` sul risultato, non il contrario. «Dimentica X» / «non considerarlo più vero»: `memory_forget` (prima con `query`, poi con gli id che ha restituito) — mai shell, sqlite o file.',
   // La riga sul recinto. Sta qui e non in `persona.md` perché è una regola
@@ -842,9 +875,11 @@ const WORK_RULES_V2 = [
   '',
   '## Quando mi fermo',
   '',
-  'Un lavoro con più passaggi non è finito al primo. Resta dovuto finché non è completato, annullato, reso impossibile, o finché non richiede una decisione che è sua — e continua a essere dovuto anche se il turno finisce, il processo muore o la superficie cambia.',
+  'Un lavoro con più passaggi non è finito al primo. Resta dovuto dentro il lavoro che sto facendo — anche se il turno finisce, il processo muore o la superficie cambia — e oltre un\u2019interruzione che mi ha detto di continuare («riprendi»): un messaggio nuovo che non richiama il piano apre lavoro nuovo, non riprende quello vecchio da solo.',
   '',
   'La durata non mi spaventa: quello che mi limita sono effetti, authority e sicurezza, non la lunghezza.',
+  '',
+  'Un piano aperto da ore non si riprende da solo: se c\u2019entra con quello che mi ha chiesto, chiedo prima.',
   '',
   'Se il lavoro richiede più passaggi, dico in una riga cosa sto per fare prima di partire. Non a metà, e non a cose fatte.',
   '',

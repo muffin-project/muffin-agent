@@ -26,19 +26,22 @@ The `Muffin` name and logo are **not** covered by that grant — see
 
 ## Start here
 
-Read, in this order:
+Read [`AGENTS.md`](AGENTS.md) first, then use
+[`docs/README.md`](docs/README.md) to find the document or code surface that owns
+your question. Load deeper material when your claim needs it; choosing a small
+bounded issue does not require reading every development document first.
 
-1. [`AGENTS.md`](AGENTS.md) — repository router; read this regardless of what you
-   touch.
-2. [`docs/README.md`](docs/README.md) — tells you which document/code surface
-   owns which kind of truth.
-3. [`docs/development/ORCHESTRATION.md`](docs/development/ORCHESTRATION.md) — how work is selected,
-   bounded, delegated, verified and integrated.
-4. [`docs/development/RESEARCH.md`](docs/development/RESEARCH.md) — when a research/challenge pass is
-   required before code.
-5. [`docs/development/BRANCHING.md`](docs/development/BRANCHING.md) — current Git mechanics.
-6. [`docs/development/JUDGE.md`](docs/development/JUDGE.md) — review rubric, especially for CRITICAL
-   claims.
+For contribution work, consult the relevant development owner at the point it
+applies:
+
+- [`ORCHESTRATION.md`](docs/development/ORCHESTRATION.md) to classify the claim
+  as FAST / STANDARD / CRITICAL before implementation and choose its evidence.
+- [`RESEARCH.md`](docs/development/RESEARCH.md) before non-mechanical work that
+  requires a research/challenge pass under `AGENTS.md`.
+- [`BRANCHING.md`](docs/development/BRANCHING.md) when creating a branch or PR
+  and checking the integration gate.
+- [`JUDGE.md`](docs/development/JUDGE.md) when the claim requires independent
+  review; CRITICAL claims require a fresh independent judge before integration.
 
 Load product/security/architecture documents only when your claim makes them
 relevant. Research/history are evidence, not automatic authority.
