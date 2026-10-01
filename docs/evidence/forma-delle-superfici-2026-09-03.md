@@ -323,6 +323,15 @@ davvero.
    questo, il punto 2 ha comunque nulla da mostrare fra la decisione e la
    risposta finale, e la "bolla che resta" torna, solo spostata.
 
+> **Aggiornamento 2026-09-29 (ADR-0093).** I punti 2 e 3 sono stati attuati
+> (`resolveAsk`, `attachStream`); il punto 1 è stato **rovesciato**: la
+> domanda non resta un messaggio a sé con la tastiera tolta — vive sul
+> messaggio del turno, e dopo la decisione è ripiegata nel `Processo` con il
+> suo contenuto. Il motivo è la misura del 29/09: nove approvazioni in un
+> turno, nove bolle residue. La traccia che questa sezione voleva proteggere
+> non si perde: è dentro il passo, e non si cancella niente. Evidenza:
+> `docs/evidence/approvazione-nel-processo-2026-09-29.md`.
+
 ## 6. Dove va un'astrazione condivisa, e cosa non deve inghiottire
 
 **Cosa va condiviso**: il *vocabolario* del passo (`⏳`/`✓`/`✗`/`⏸`→risolto) e

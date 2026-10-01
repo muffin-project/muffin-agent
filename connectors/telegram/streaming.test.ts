@@ -243,10 +243,29 @@ function recordingApi(): { api: TelegramApiLike; calls: Recorded[] } {
 }
 
 /** The visible text of a call, whichever transport carried it. */
+
+/** Il testo visibile di un payload rich, letto dai blocchi (il finale in DM è a blocchi). */
+const richTesto = (rich: { html?: string; blocks?: unknown[] }): string => {
+  const blockText = (b: unknown): string => {
+    if (b === null || typeof b !== 'object') return '';
+    const o = b as { text?: unknown; summary?: unknown; blocks?: unknown[] };
+    const parts: string[] = [];
+    if (typeof o.summary === 'string') parts.push(o.summary);
+    if (typeof o.text === 'string') parts.push(o.text);
+    else if (Array.isArray(o.text)) parts.push(JSON.stringify(o.text));
+    if (Array.isArray(o.blocks)) parts.push(o.blocks.map(blockText).join('\n'));
+    return parts.join('\n');
+  };
+  if (typeof rich.html === 'string') return rich.html;
+  return Array.isArray(rich.blocks) ? rich.blocks.map(blockText).join('\n') : '';
+};
+
+/** The visible text of a call, whichever transport carried it. */
 const testo = (c: Recorded): string => {
-  const rich = c.rich as { html?: string; markdown?: string } | undefined;
+  const rich = c.rich as { html?: string; markdown?: string; blocks?: unknown[] } | undefined;
   if (rich?.html !== undefined) return rich.html;
   if (rich?.markdown !== undefined) return rich.markdown;
+  if (rich?.blocks !== undefined) return richTesto(rich);
   if (rich !== undefined) return JSON.stringify(rich);
   return c.text ?? '';
 };
@@ -486,19 +505,19 @@ describe('the transcript of a turn stays above the answer (DAY-1 requirement B13
     const { api: baseApi, calls } = recordingApi();
     let richFails = 0;
     let legacyFails = 0;
-    // The first create a tool turn makes is the transcript, and the rich lane
-    // falls back to legacy inside the same call: failing the first create in
-    // BOTH transports is what disables the transcript. Then `handoff()` is
-    // null and `deliverTo` still delivers the answer.
+    // In a DM the transcript's own surface is the ephemeral draft, and the
+    // rich lane falls back to legacy inside the same call: failing the first
+    // draft in BOTH transports disables the transcript. The answer is then
+    // delivered anyway (a fresh rich send; the process rides its `details`).
     const failingApi: TelegramApiLike = {
       ...baseApi,
-      sendRichMessage: async (chatId, rich, options) => {
+      sendRichMessageDraft: async (chatId, draftId, rich, options) => {
         if (richFails++ === 0) throw new Error('simulato: chat non trovata');
-        return baseApi.sendRichMessage(chatId, rich, options);
+        return baseApi.sendRichMessageDraft(chatId, draftId, rich, options);
       },
-      sendMessage: async (chatId, html, options) => {
+      sendMessageDraft: async (chatId, draftId, text, options) => {
         if (legacyFails++ === 0) throw new Error('simulato: chat non trovata');
-        return baseApi.sendMessage(chatId, html, options);
+        return baseApi.sendMessageDraft(chatId, draftId, text, options);
       },
     };
     const { connector, runtime } = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER }, provider, failingApi);

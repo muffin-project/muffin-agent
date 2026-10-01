@@ -14,7 +14,7 @@ import { JsonlExporter, SimpleTracer } from '../../core/tracing/tracer.js';
 import { CONSERVATIVE } from '../profiles/profile.js';
 import type { Message } from '../providers/types.js';
 import { searchCapability, searchSpec } from '../tools/search.js';
-import { checkpoint, closeRow, finish, reconcile, suspendHere, type TurnScope } from './durability.js';
+import { checkpoint, closeRow, finish, reconcile, releaseContinuable, suspendHere, type TurnScope } from './durability.js';
 import { runTool } from './tool-call.js';
 import { makeSnapshot } from './permissions.js';
 import { TurnRun } from './run-state.js';
@@ -481,5 +481,67 @@ describe('closeRow closes a row from outside the engine', () => {
 
     expect(() => closeRow(h.deps, h.span, h.record, 'error', 'niente')).not.toThrow();
     expect(h.span.attrs['muffin.turn.record_error']).toBe('database is closed');
+  });
+});
+
+describe('la diagnostica continuable conta tutto il turno, non la lease', () => {
+  /**
+   * Misurato il 30/09/2026: dopo un'ora e 17 shell call riuscite, la lease 1
+   * diceva «nessuna tool call ancora completata» — `continuableText` leggeva
+   * `run.toolCallsMade`, azzerato dal grant, mentre `iterations` (cumulativo)
+   * diceva «dopo 15 tentativi». Il totale vero è lifetime (lease chiuse) più
+   * run (lease viva): nessuna sovrapposizione, il fold avviene solo al
+   * release (`core/turns/store.ts`, `foldLifetime`).
+   */
+  it('su lease 1 riporta le call delle lease chiuse più quelle vive', () => {
+    const h = harness();
+    // Lease 0: 17 call completate, poi cede in model_deadline.
+    h.run.toolCallsMade = 17;
+    h.run.iterations = 14;
+    const first = releaseContinuable(h.scope, 'model_deadline', 14);
+
+    expect(first.stopped).toBe('continuable');
+    expect(first.text).toContain('17 tool call completate');
+
+    // Grant esplicito dell'owner: nuova lease, contatori freschi, lifetime
+    // intatta (il grant non rifolda: la lease 0 è già stata chiusa sopra).
+    const granted = h.turns.grantContinuation(
+      h.id,
+      {
+        messages: h.run.messages,
+        taint: 0,
+        counters: { ...freshCounters(), iterations: 14 },
+        newLeaseStartedAt: new Date().toISOString(),
+      },
+      process.pid,
+    );
+    expect(granted).not.toBeNull();
+    expect(granted?.lifetime).toMatchObject({ leases: 1, toolCallsMade: 17 });
+
+    // Il grant reclama già la riga: `granted` è il record della lease 1.
+    const run2 = new TurnRun(granted!, { resumed: true, wokenFromWait: false, continued: true });
+    expect(run2.toolCallsMade).toBe(0);
+    const scope2: TurnScope = { ...h.scope, record: granted!, run: run2 };
+
+    // Lease 1 muore senza aver completato call: la diagnostica deve comunque
+    // dire 17 — il lavoro della lease 0 non è sparito.
+    run2.iterations = 15;
+    const second = releaseContinuable(scope2, 'model_deadline', 15);
+
+    expect(second.stopped).toBe('continuable');
+    expect(second.text).toContain('dopo 15 tentativi');
+    expect(second.text).toContain('17 tool call completate');
+    expect(second.text).not.toContain('nessuna tool call');
+    const row = h.turns.get(h.id);
+    expect(row?.continuableReason).toMatchObject({ completed: { toolCalls: 17 } });
+  });
+
+  it('su lease 0 senza call resta la frase onesta di prima', () => {
+    const h = harness();
+
+    const result = releaseContinuable(h.scope, 'provider_empty', 4);
+
+    expect(result.stopped).toBe('continuable');
+    expect(result.text).toContain('nessuna tool call ancora completata');
   });
 });

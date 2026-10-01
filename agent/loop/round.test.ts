@@ -40,6 +40,7 @@ import {
   type RegisteredTool,
   type ToolContext,
   type TurnDelta,
+  type TurnEvent,
   type TurnInput,
 } from './types.js';
 
@@ -190,6 +191,7 @@ function harness(options: {
   decls?: CapabilityDecl[];
   denyReply?: boolean;
   onDelta?: (delta: TurnDelta) => void;
+  onProgress?: (event: TurnEvent) => void;
   log?: string[];
   messages?: Message[];
   execution?: ExecutionBudget;
@@ -245,6 +247,7 @@ function harness(options: {
     session: { id: 's1', file: join(home, 's1.jsonl') },
     text: 'ciao',
     ...(options.onDelta ? { onDelta: options.onDelta } : {}),
+    ...(options.onProgress ? { onProgress: options.onProgress } : {}),
   };
   const toolContext: ToolContext = {
     tenant: 'host',
@@ -398,7 +401,8 @@ describe('un solo fallback, mai un secondo tentativo in streaming', () => {
         [{ type: 'done', result: reply('alla seconda') }],
       ],
     });
-    const h = harness({ provider, onDelta: () => undefined });
+    const progress: TurnEvent[] = [];
+    const h = harness({ provider, onDelta: () => undefined, onProgress: (e) => progress.push(e) });
 
     const result = await runRounds(h.scope);
 
@@ -408,6 +412,12 @@ describe('un solo fallback, mai un secondo tentativo in streaming', () => {
     expect(h.run.transportRetriesLeft).toBe(9);
     expect(h.turns.get(h.id)?.counters.transportRetriesLeft).toBe(9);
     expect(result.iterations).toBe(2);
+    // L'attesa è dichiarata prima del `sleep`, con lo stesso valore che il
+    // sleep riceve: senza evento, due minuti di jitter sono muti.
+    const retries = progress.filter((e) => e.type === 'model_retry');
+    expect(retries).toEqual([
+      { type: 'model_retry', class: 'transport', attempt: 1, max: MAX_TRANSPORT_RETRIES, inMs: expect.any(Number) },
+    ]);
   });
 });
 
@@ -555,16 +565,48 @@ describe('execution budget', () => {
     const h = harness({
       provider,
       profile: { ...CONSERVATIVE, recovery: ['retryOnce'] },
-      execution: new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 200, firstActivityTimeoutMs: 10, stallTimeoutMs: 20 }),
+      execution: new ExecutionBudget({ modelCallDeadlineMs: 10, turnWallDeadlineMs: 200, stallTimeoutMs: 20 }),
     });
 
     const result = await runRounds(h.scope);
 
     expect(calls).toBe(1);
-    // P0-B: lo stallo cede la lease con la sua classe, senza bruciare retry
+    // P0-B: la deadline cede la lease con la sua classe, senza bruciare retry
     // di trasporto né rung semantici.
-    expect(result).toMatchObject({ stopped: 'continuable', reason: 'model_first_activity_timeout' });
-    expect(h.span.attrs['muffin.turn.stop_reason']).toBe('model_first_activity_timeout');
+    expect(result).toMatchObject({ stopped: 'continuable', reason: 'model_deadline' });
+    expect(h.span.attrs['muffin.turn.stop_reason']).toBe('model_deadline');
+  });
+
+  it('a call our own deadline aborted is never read as the provider answering empty', async () => {
+    // The SDK shape measured on the owner's install: abort swallowed, call
+    // returns success-shaped and empty. Before the loop-level guard this was
+    // classified `provider_empty` and re-driven three times against the same
+    // machine; the signal is the fact that decides.
+    let calls = 0;
+    const provider: Provider = {
+      kind: 'openai-compat',
+      async chat() {
+        calls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        return {
+          text: null,
+          toolCalls: [],
+          stopReason: 'error',
+          usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          model: 'test',
+        };
+      },
+    };
+    const h = harness({
+      provider,
+      profile: { ...CONSERVATIVE, recovery: ['retryOnce'] },
+      execution: new ExecutionBudget({ modelCallDeadlineMs: 20, turnWallDeadlineMs: 500, stallTimeoutMs: 20 }),
+    });
+
+    const result = await runRounds(h.scope);
+
+    expect(calls).toBe(1);
+    expect(result).toMatchObject({ stopped: 'continuable', reason: 'model_deadline' });
   });
 });
 
@@ -677,7 +719,8 @@ describe('verità del fallimento provider/risultato (P0-A)', () => {
 
   it('stop=error + zero token + nessuna attività non consuma la cascata semantica', async () => {
     const provider = scriptedProvider({ chat: [stall(), stall(), stall(), stall(), stall(), stall()] });
-    const h = harness({ provider });
+    const progress: TurnEvent[] = [];
+    const h = harness({ provider, onProgress: (e) => progress.push(e) });
 
     const result = await runRounds(h.scope);
 
@@ -693,6 +736,13 @@ describe('verità del fallimento provider/risultato (P0-A)', () => {
     expect(result.text).toContain(h.id.slice(0, 12));
     expect(result.text).toContain('nessuna tool call ancora completata');
     expect(result.text).toContain('riprendi');
+    // Ogni re-drive è visibile mentre accade: quale budget, quale tentativo,
+    // quale attesa — mai una pausa muta.
+    expect(progress.filter((e) => e.type === 'model_retry')).toEqual([
+      { type: 'model_retry', class: 'provider_empty', attempt: 1, max: 3, inMs: expect.any(Number) },
+      { type: 'model_retry', class: 'provider_empty', attempt: 2, max: 3, inMs: expect.any(Number) },
+      { type: 'model_retry', class: 'provider_empty', attempt: 3, max: 3, inMs: expect.any(Number) },
+    ]);
   });
 
   it('neanche con requireTool in cascata il filo viene armato su uno stallo', async () => {
@@ -849,5 +899,60 @@ describe('verità del fallimento provider/risultato (P0-A)', () => {
       expect(c.attributes['muffin.provider_failure.class']).toBe('provider_empty');
     }
     expect(chiamate[0]!.attributes['muffin.provider_failure.finish_reason']).toBe('unmapped-xyz');
+  });
+});
+
+describe('la compattazione segue il budget del profilo', () => {
+  /**
+   * Misurato il 30/09/2026: un turno vero morto due volte in `model_deadline`
+   * mandava 32k char di tool_result a ogni chiamata con TTFT fino a 35s,
+   * mentre la compattazione non scattava mai — il default globale (60k) è
+   * tarato su modelli frontier, non su un profilo locale con 90s di deadline.
+   * Questi casi inchiodano il filo fra profilo e chiamata: stesso transcript,
+   * due budget, due wire diversi.
+   */
+  const big = (n: number): string => 'x'.repeat(n);
+  function transcriptSporco(): Message[] {
+    return [
+      { role: 'user', content: [{ type: 'text', text: 'ciao' }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'vecchio', name: 'fs_read', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result', toolCallId: 'vecchio', content: big(12_000) }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'nuovo', name: 'fs_read', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result', toolCallId: 'nuovo', content: big(12_000) }] },
+    ];
+  }
+  function risultatiInviati(provider: { chatCalls: ChatCall[] }): string[] {
+    return provider.chatCalls[0]!.messages.flatMap((m) => m.content).flatMap((b) => (b.type === 'tool_result' ? [b.content] : []));
+  }
+
+  it('un budget stretto compatta il vecchio e tiene il recente', async () => {
+    const provider = scriptedProvider({ chat: [reply('fatto')] });
+    const h = harness({
+      provider,
+      profile: { ...CONSERVATIVE, toolResultBudgetChars: 16_000 },
+      messages: transcriptSporco(),
+    });
+
+    const result = await runRounds(h.scope);
+
+    expect(result.stopped).toBe('answered');
+    const risultati = risultatiInviati(provider);
+    // Le coppie restano intatte: due use, due result — mai un buco.
+    expect(risultati).toHaveLength(2);
+    expect(risultati.find((c) => c.includes('rimosso dal contesto'))).toBeDefined();
+    // Il più recente è quello su cui il modello sta ragionando: resta intero.
+    expect(risultati).toContain(big(12_000));
+  });
+
+  it('senza budget nel profilo vale il default globale', async () => {
+    // CONSERVATIVE non dichiara il campo: 24k < 60k passa intatto. La
+    // mutazione che legge `?? 0` invece del default fallisce qui spedendo
+    // placeholder a un profilo che non ne ha chiesto nessuno.
+    const provider = scriptedProvider({ chat: [reply('fatto')] });
+    const h = harness({ provider, messages: transcriptSporco() });
+
+    await runRounds(h.scope);
+
+    expect(risultatiInviati(provider)).toEqual([big(12_000), big(12_000)]);
   });
 });

@@ -1,6 +1,8 @@
 export type ReasoningMode = 'off' | 'adaptive' | 'on';
 
-export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+import { isThinkingEffort, type Thinking, type ThinkingEffort } from '../../core/config/thinking.js';
+
+export type ReasoningEffort = ThinkingEffort;
 
 export type ReasoningRequest = {
   mode: ReasoningMode;
@@ -45,12 +47,14 @@ export class ReasoningConfigurationError extends Error {
   }
 }
 
-export function reasoningFromLegacyThinking(thinking: 'adaptive' | 'off' | 'unset' | undefined): ReasoningRequest | undefined {
+export function reasoningFromLegacyThinking(thinking: Thinking | undefined): ReasoningRequest | undefined {
   if (thinking === undefined || thinking === 'unset') return undefined;
+  // An effort level is an explicit request to reason at that level.
+  if (isThinkingEffort(thinking)) return { mode: 'on', effort: thinking };
   return { mode: thinking };
 }
 
-export function reasoningRequest(call: { reasoning?: ReasoningRequest; thinking?: 'adaptive' | 'off' | 'unset' }): ReasoningRequest | undefined {
+export function reasoningRequest(call: { reasoning?: ReasoningRequest; thinking?: Thinking }): ReasoningRequest | undefined {
   return call.reasoning ?? reasoningFromLegacyThinking(call.thinking);
 }
 

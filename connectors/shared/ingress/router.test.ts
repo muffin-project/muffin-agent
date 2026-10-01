@@ -293,6 +293,40 @@ describe('`recover` non chiama mai il modello', () => {  const riga = { eventId:
     expect(traccia.scritture).toEqual([]);
   });
 
+  it('un turno continuabile già consegnato chiude: la lease ha ceduto, non è "ancora in volo"', async () => {
+    const traccia = nuovaTraccia();
+    const esito = await recover(PORT, riga, 'w1', evento(), ganci(traccia, {
+      turn: () => ({ id: 'w1', status: 'continuable', delivery: 'sent', replyTo: {}, updatedAt: '2026-09-19T22:44:43.000Z' }) as unknown as TurnRecord,
+    }));
+    // Misurato il 28/09: update 99666230 legato dal 19/09 a un turno che non
+    // sarebbe mai diventato `done` senza un "riprendi" — "rimando" a ogni boot.
+    expect(esito).toEqual({ kind: 'recovered', workId: 'w1', delivery: 'already' });
+    expect(traccia.scritture).toEqual(['finish']);
+  });
+
+  it('un turno continuabile scaduto e mai consegnato chiude come undeliverable, con la ragione nel log', async () => {
+    const traccia = nuovaTraccia();
+    const righe: string[] = [];
+    const esito = await recover(PORT, riga, 'w1', evento(), ganci(traccia, {
+      turn: () => ({ id: 'w1', status: 'continuable', delivery: 'pending', replyTo: { chatId: 7 }, updatedAt: '2026-09-19T00:00:00.000Z' }) as unknown as TurnRecord,
+      nowMs: () => Date.parse('2026-09-28T12:00:00.000Z'),
+      log: (line) => righe.push(line),
+    }));
+    expect(esito).toEqual({ kind: 'recovered', workId: 'w1', delivery: 'undeliverable' });
+    expect(traccia.scritture).toEqual(['delivery w1 undeliverable', 'finish']);
+    expect(righe.join('\n')).toContain('oltre la finestra di ripresa');
+  });
+
+  it('un turno continuabile fresco ma non consegnato rimanda ancora (finestra di crash)', async () => {
+    const traccia = nuovaTraccia();
+    const esito = await recover(PORT, riga, 'w1', evento(), ganci(traccia, {
+      turn: () => ({ id: 'w1', status: 'continuable', delivery: 'pending', replyTo: { chatId: 7 }, updatedAt: '2026-09-28T11:30:00.000Z' }) as unknown as TurnRecord,
+      nowMs: () => Date.parse('2026-09-28T12:00:00.000Z'),
+    }));
+    expect(esito).toEqual({ kind: 'deferred', workId: 'w1', why: 'still-running' });
+    expect(traccia.scritture).toEqual([]);
+  });
+
   it('un turno già consegnato chiude senza rimandare niente', async () => {
     const traccia = nuovaTraccia();
     let inviate = 0;

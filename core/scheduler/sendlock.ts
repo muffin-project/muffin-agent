@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import { DurableLock, pidAlive, type LockOutcome } from '../lock/durable.js';
+import { DurableLock, pidAlive, type Liveness, type LockOutcome } from '../lock/durable.js';
 
 /**
  * One proactive send at a time.
@@ -47,12 +47,13 @@ import { DurableLock, pidAlive, type LockOutcome } from '../lock/durable.js';
  * `sendlock.test.ts` guards the inherited default instead, which is the thing
  * that could actually stop being true.
  *
- * Liveness is a pid, and a bare pid is weaker than it looks — it takes ordinary
- * reuse after a hard kill, not a 2³² wrap, for a dead holder to read as alive,
- * and that happens in hours on a busy machine. Left there it would wedge the
- * command permanently while telling the owner to wait for a send that ended
- * days ago. So `taken_at` is the backstop: a lock older than an hour is stale
- * whatever its pid says. A proactive send is one model call, so an hour is
+ * Liveness is asked of the holder's incarnation since ADR-0094, and of its pid
+ * for a claim written without one. A bare pid is weaker than it looks: it takes
+ * ordinary reuse after a hard kill, not a 2³² wrap, for a dead holder to read as
+ * alive, and in a restarted container that reuse is immediate. Left there it
+ * would wedge the command while telling the owner to wait for a send that ended
+ * long ago. So `taken_at` is the backstop: a lock older than an hour is stale
+ * whatever its holder looks like. A proactive send is one model call, so an hour is
  * generous by two orders of magnitude, and it collapses the whole liveness
  * question into a clause the row already has the data for.
  *
@@ -89,8 +90,11 @@ export class SendLock {
 
   constructor(
     db: Database.Database,
-    /** Injected so a test can exercise dead, live and not-ours holders. */
-    alive: (pid: number) => boolean = pidAlive,
+    /**
+     * Injected so a test can exercise dead, live and not-ours holders. Absent,
+     * `DurableLock` asks the holder's incarnation, then its pid (ADR-0094).
+     */
+    alive?: Liveness,
   ) {
     this.lock = new DurableLock(
       db,

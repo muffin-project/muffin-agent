@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ApprovalRequest } from '../../agent/loop.js';
 import { TelegramError, type TelegramApiLike } from './api.js';
 import { TELEGRAM_MAX } from './render.js';
 import { negoziazioneTelegram } from './negoziazione.js';
@@ -17,21 +18,25 @@ const GRUPPO = negoziazioneTelegram('group');
  * `now` is `Date.now` under fake timers and `setTimeout` is the faked one.
  */
 
-type Call = { method: string; text?: string; messageId?: number; draftId?: number; at?: number };
+type Call = { method: string; text?: string; messageId?: number; draftId?: number; at?: number; rich?: unknown; keyboard?: unknown };
 
 function recordingApi(fail: { send?: boolean; edit?: boolean; draft?: boolean } = {}): { api: TelegramApiLike; calls: Call[] } {
   const calls: Call[] = [];
   let next = 500;
   const api = {
-    sendMessage: async (chatId: number, html: string) => {
+    sendMessage: async (chatId: number, html: string, options?: { keyboard?: unknown }) => {
       if (fail.send) throw new Error('simulato');
       const messageId = next++;
-      calls.push({ method: 'sendMessage', text: html, messageId });
+      calls.push({ method: 'sendMessage', text: html, messageId, ...(options?.keyboard === undefined ? {} : { keyboard: options.keyboard }) });
       return { message_id: messageId, date: 0, chat: { id: chatId, type: 'private' } };
     },
-    editMessageText: async (_chatId: number, messageId: number, html: string) => {
+    editMessageText: async (_chatId: number, messageId: number, html: string, options?: { keyboard?: unknown }) => {
       if (fail.edit) throw new Error('simulato');
-      calls.push({ method: 'editMessageText', text: html, messageId });
+      calls.push({ method: 'editMessageText', text: html, messageId, ...(options?.keyboard === undefined ? {} : { keyboard: options.keyboard }) });
+      return true;
+    },
+    editMessageReplyMarkup: async (_chatId: number, messageId: number, keyboard: unknown[] = []) => {
+      calls.push({ method: 'editMessageReplyMarkup', messageId, keyboard });
       return true;
     },
     deleteMessage: async (_chatId: number, messageId: number) => {
@@ -50,24 +55,44 @@ function recordingApi(fail: { send?: boolean; edit?: boolean; draft?: boolean } 
     // Rich is the transport now; the fake records it as the legacy twin so the
     // 36 tests below keep asserting the same visible calls. The rich code path
     // is still the one exercised, and the failure flags cover it.
-    sendRichMessage: async (chatId: number, rich: { html?: string }) => {
+    sendRichMessage: async (chatId: number, rich: { html?: string; blocks?: unknown[] }, options?: { keyboard?: unknown }) => {
       if (fail.send) throw new Error('simulato');
       const messageId = next++;
-      calls.push({ method: 'sendMessage', text: rich.html ?? '', messageId });
+      calls.push({ method: 'sendMessage', text: richPlain(rich), messageId, ...(options?.keyboard === undefined ? {} : { keyboard: options.keyboard }) });
       return { message_id: messageId, date: 0, chat: { id: chatId, type: 'private' } };
     },
-    editMessageRichText: async (_chatId: number, messageId: number, rich: { html?: string }) => {
+    editMessageRichText: async (_chatId: number, messageId: number, rich: { html?: string; blocks?: unknown[] }, options?: { keyboard?: unknown }) => {
       if (fail.edit) throw new Error('simulato');
-      calls.push({ method: 'editMessageText', text: rich.html ?? '', messageId });
+      calls.push({ method: 'editMessageText', text: richPlain(rich), messageId, ...(options?.keyboard === undefined ? {} : { keyboard: options.keyboard }) });
       return true;
     },
-    sendRichMessageDraft: async (_chatId: number, draftId: number, rich: { html?: string }) => {
+    sendRichMessageDraft: async (_chatId: number, draftId: number, rich: { html?: string; blocks?: unknown[] }) => {
       if (fail.draft) throw new Error('simulato');
-      calls.push({ method: 'sendMessageDraft', text: rich.html ?? '', draftId, at: Date.now() });
+      calls.push({ method: 'sendMessageDraft', text: richPlain(rich), draftId, at: Date.now(), rich });
       return true;
     },
   } as unknown as TelegramApiLike;
   return { api, calls };
+}
+
+/**
+ * Il testo visibile di un payload rich, letto dai blocchi: la bozza ora parla
+ * la stessa lingua del finale (`details` + blocchi nativi), quindi le
+ * asserzioni restano sul testo che una persona legge, non sul JSON.
+ */
+function richPlain(rich: { html?: string; blocks?: unknown[] }): string {
+  const blockText = (b: unknown): string => {
+    if (b === null || typeof b !== 'object') return '';
+    const o = b as { text?: unknown; summary?: unknown; blocks?: unknown[] };
+    const parts: string[] = [];
+    // `summary` è sempre visibile: nella bozza porta il passo in corso.
+    if (typeof o.summary === 'string') parts.push(o.summary);
+    if (typeof o.text === 'string') parts.push(o.text);
+    if (Array.isArray(o.blocks)) parts.push(o.blocks.map(blockText).join('\n'));
+    return parts.join('\n');
+  };
+  if (rich.html !== undefined) return rich.html.replace(/<br>/g, '\n');
+  return Array.isArray(rich.blocks) ? rich.blocks.map(blockText).join('\n') : '';
 }
 
 const start = (n: string, args?: unknown) => ({ type: 'tool_start' as const, name: n, capability: 'x', args });
@@ -82,8 +107,10 @@ afterEach(() => {
 
 describe('one bubble per segment', () => {
   it('the preamble and its steps share one message; the model speaking again opens the next', async () => {
+    // La segmentazione in bolle persistenti è comportamento della stanza
+    // senza bozza (il gruppo). In DM il processo vive solo nell'anteprima.
     const { api, calls } = recordingApi();
-    const t = startTranscript(api, 1, { negotiation: DM });
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
 
     t.spoke('Prima leggo la spesa.', 'tool-call');
     t.report(start('fs_read', { path: 'spesa.txt' }));
@@ -133,8 +160,17 @@ describe('one bubble per segment', () => {
     expect(t.handoff()).toBeNull();
   });
 
-  it('a superseded attempt is named, not removed', async () => {
+  it('a re-drive wait is painted, not left as a silent stall', async () => {
     const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    t.report({ type: 'model_retry', class: 'provider_empty', attempt: 2, max: 3, inMs: 4200 });
+    expect(calls.at(-1)?.text).toContain('il provider ha risposto vuoto — riprovo (2/3) tra 4s');
+    t.report({ type: 'model_retry', class: 'transport', attempt: 1, max: 10, inMs: 200 });
+    expect(calls.at(-1)?.text).toContain('il provider non ha risposto — riprovo (1/10) tra 1s');
+    await t.stop();
+  });
+
+  it('a superseded attempt is named, not removed', async () => {    const { api, calls } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
     t.spoke('Provo così.', 'superseded');
     await vi.advanceTimersByTimeAsync(0);
@@ -187,7 +223,7 @@ describe('the counter moves on its own', () => {
 describe('nothing is cut', () => {
   it('a preamble longer than one message becomes several, in order, each within the limit', async () => {
     const { api, calls } = recordingApi();
-    const t = startTranscript(api, 1, { negotiation: DM });
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
     const long = Array.from({ length: 300 }, (_, i) => `riga ${i} di un preambolo molto lungo che non deve sparire`).join('\n');
     t.spoke(long, 'tool-call');
     t.report(start('fs_read', { path: 'x' }));
@@ -204,7 +240,7 @@ describe('nothing is cut', () => {
 
   it('a step that would overflow the segment opens the next one instead of being dropped', async () => {
     const { api, calls } = recordingApi();
-    const t = startTranscript(api, 1, { negotiation: DM });
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
     t.spoke('x'.repeat(TELEGRAM_MAX - 30), 'tool-call');
     t.report(start('fs_read', { path: 'un-percorso-lungo-abbastanza-da-non-entrare.txt' }));
     await vi.advanceTimersByTimeAsync(0);
@@ -219,7 +255,7 @@ describe('nothing is cut', () => {
 describe('stop() is the last edit, never a deletion', () => {
   it('marks a step the turn abandoned and drops the live counter', async () => {
     const { api, calls } = recordingApi();
-    const t = startTranscript(api, 1, { negotiation: DM });
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
     t.report(start('shell_run', { command: 'sleep 99' }));
     await vi.advanceTimersByTimeAsync(0);
     await t.stop();
@@ -263,11 +299,41 @@ describe('stop() is the last edit, never a deletion', () => {
   });
 });
 
+describe('the draft is the final shape (owner, 2026-09-27)', () => {
+  it('done steps inside the collapsed details, the running step visible right below', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    t.report(start('fs_read', { path: 'a' }));
+    t.report(end('fs_read', false, { path: 'a' }));
+    t.report(start('shell_run', { command: 'npm test' }));
+    // Il rinnovo della bozza ha il suo ritmo: un giro di tick mostra lo stato
+    // aggiornato (i due passi passati dentro, quello in corso sotto).
+    await vi.advanceTimersByTimeAsync(400);
+    await t.stop();
+
+    const draft = calls.filter((c) => c.method === 'sendMessageDraft').at(-1)!;
+    const blocks = (draft.rich as { blocks?: { type: string; summary?: string; is_open?: boolean; text?: string; blocks?: unknown[] }[] })
+      ?.blocks ?? [];
+    const details = blocks.find((b) => b.type === 'details');
+    expect(details).toBeDefined();
+    expect(details!.summary).toBe('Processo');
+    // Chiuso come nel finale: il passaggio non cambia l'altezza del messaggio.
+    expect(details!.is_open).toBeUndefined();
+    // Quello già successo sta dentro, senza contatore.
+    expect(JSON.stringify(details!.blocks)).toContain('leggo un file: a');
+    expect(JSON.stringify(details!.blocks)).not.toMatch(/· \d+s/);
+    // Quello che sta succedendo adesso sta sotto «Processo», col suo tempo.
+    const now = blocks.find((b) => b.type === 'paragraph');
+    expect(now!.text).toContain('⏳ guardo con un comando: npm test');
+    expect(now!.text).toMatch(/· \d+s/);
+  });
+});
+
 describe('a Bot API failure is swallowed and disables the rest of the turn', () => {
   it('after a failed create nothing else is attempted, and stop() makes no call', async () => {
     const log: string[] = [];
     const { api, calls } = recordingApi({ send: true });
-    const t = startTranscript(api, 1, { negotiation: DM, log: (l) => log.push(l) });
+    const t = startTranscript(api, 1, { negotiation: GRUPPO, log: (l) => log.push(l) });
     t.report(start('fs_read', { path: 'a' }));
     await vi.advanceTimersByTimeAsync(0);
     t.report(end('fs_read'));
@@ -278,14 +344,16 @@ describe('a Bot API failure is swallowed and disables the rest of the turn', () 
     expect(log.join('\n')).toContain('trascrizione del turno sospesa');
   });
 
-  it('escapes what the model wrote — the line is sent with parse_mode HTML', async () => {
+  it('what the model wrote is inert: the rich preview carries it as plain text, never as markup', async () => {
     const { api, calls } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
     t.report(start('fs_read', { path: '<b>x</b>' }));
     await vi.advanceTimersByTimeAsync(0);
     await t.stop();
-    expect(calls[0]!.text).toContain('&lt;b&gt;x&lt;/b&gt;');
-    expect(calls[0]!.text).not.toContain('<b>x</b>');
+    // Nei blocchi `RichText` è testo semplice: niente entità da produrre e
+    // niente markup da interpretare.
+    expect(calls[0]!.text).toContain('<b>x</b>');
+    expect(calls[0]!.text).not.toContain('&lt;b&gt;');
   });
 });
 
@@ -344,20 +412,19 @@ describe('live() segue la testa della catena della stanza', () => {
     await t.stop();
   });
 
-  it('smette di rinnovare quando il testo diventa preambolo di un messaggio vero', async () => {
+  it('in un gruppo non c\'è anteprima: il preambolo vive nel messaggio persistente, una volta sola', async () => {
     const { api, calls } = recordingApi();
-    const t = startTranscript(api, 1, { negotiation: DM });
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
     t.live('Prima controllo');
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(GRUPPO.editEveryMs);
+    // `edit` non apre un messaggio per mezza frase: niente da mostrare finché
+    // il turno non possiede un passo.
+    expect(calls).toHaveLength(0);
     t.spoke('Prima controllo', 'tool-call');
     t.report(start('fs_read', { path: 'x' }));
-    await vi.advanceTimersByTimeAsync(1_500);
-    const dopoLaPromozione = calls.filter((c) => c.method === 'sendMessageDraft').length;
-
-    await vi.advanceTimersByTimeAsync(4 * DM.draftTtlMs);
-    expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(dopoLaPromozione);
+    await vi.advanceTimersByTimeAsync(GRUPPO.editEveryMs);
     await t.stop();
-    // Il testo ora sta in un messaggio vero, una volta sola.
+    expect(calls.some((c) => c.method === 'sendMessageDraft')).toBe(false);
     const ultimo = calls.filter((c) => c.method !== 'sendMessageDraft').at(-1)!.text!;
     expect(ultimo.split('Prima controllo')).toHaveLength(2);
   });
@@ -373,16 +440,23 @@ describe('live() segue la testa della catena della stanza', () => {
     expect(calls).toHaveLength(dopo);
   });
 
-  it('un\'anteprima rifiutata dalla Bot API non porta giu\' la trascrizione vera', async () => {
+  it('un\'anteprima rifiutata dalla Bot API è decorazione: il processo resta per il `details` finale', async () => {
+    const log: string[] = [];
     const { api, calls } = recordingApi({ draft: true });
-    const t = startTranscript(api, 1, { negotiation: DM });
+    const t = startTranscript(api, 1, { negotiation: DM, log: (l) => log.push(l) });
     t.live('Sto');
     await vi.advanceTimersByTimeAsync(0);
-    // L'anteprima e' decorazione: il turno continua a scrivere i suoi passi.
     t.report(start('fs_read', { path: 'x' }));
     await vi.advanceTimersByTimeAsync(1_500);
-    expect(calls.some((c) => c.method === 'sendMessage')).toBe(true);
     await t.stop();
+    // Niente messaggi persistenti: in DM non esistono. Il processo resta però
+    // in memoria, e `deliverTo` lo collassa nel `details` del messaggio finale.
+    expect(calls.filter((c) => c.method === 'sendMessage' || c.method === 'editMessageText')).toHaveLength(0);
+    expect(log.join('\n')).toContain('anteprima del turno sospesa');
+    const handoff = t.handoff();
+    expect(handoff).not.toBeNull();
+    expect(handoff!.messageId).toBeNull();
+    expect(handoff!.process.join('\n')).toContain('leggo un file: x');
   });
 
   it('in un gruppo non esiste anteprima, e il testo che si forma entra nel messaggio che il turno possiede gia\'', async () => {
@@ -408,25 +482,45 @@ describe('live() segue la testa della catena della stanza', () => {
     const t = startTranscript(api, 1, { negotiation: DM });
     t.live('a');
     await vi.advanceTimersByTimeAsync(0);
+    const prima = calls.filter((c) => c.method === 'sendMessageDraft').length;
     t.live('a b');
     t.live('a b c');
     t.live('a b c d');
-    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    // Le chiamate rapide non producono un invio per token: prima che il timer
+    // scatti non è partito niente di nuovo (si coagulano in un rinnovo solo).
+    expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(prima);
+    // Un rinnovo porta l'ultimo valore, non quattro.
+    await vi.advanceTimersByTimeAsync(400);
     const drafts = calls.filter((c) => c.method === 'sendMessageDraft');
-    expect(drafts).toHaveLength(2); // la prima, poi una sola coalescata — non quattro
-    expect(drafts.at(-1)!.text).toBe('a b c d');
+    expect(drafts.length).toBeGreaterThan(prima);
+    expect(drafts.at(-1)!.text).toContain('a b c d');
     await t.stop();
   });
 
-  it('un testo oltre un messaggio Telegram non viene mostrato in diretta', async () => {
+  it('un testo oltre il limite di un messaggio legacy ma dentro il tetto rich si vede intero, a blocchi', async () => {
     const { api, calls } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
-    t.live('x'.repeat(100));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(calls).toHaveLength(1);
-    t.live('x'.repeat(TELEGRAM_MAX + 500));
-    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
-    expect(calls.at(-1)!.text).toBe('x'.repeat(100)); // resta l'ultimo che ci stava
+    const lungo = 'x'.repeat(TELEGRAM_MAX + 500);
+    t.live(lungo);
+    await vi.advanceTimersByTimeAsync(400);
+    const ultimo = calls.filter((c) => c.method === 'sendMessageDraft').at(-1)!;
+    // Nessun taglio: il testo intero, in un blocco.
+    const blocks = (ultimo.rich as { blocks?: { text?: string }[] } | undefined)?.blocks ?? [];
+    expect(blocks[0]?.text).toBe(lungo);
+    await t.stop();
+  });
+
+  it('oltre il tetto di protocollo la bozza passa alla famiglia legacy, come il finale', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    // Righe intere, come l'output reale di un modello: la coda legacy tiene
+    // le ultime che ci stanno.
+    t.live(Array.from({ length: 2_000 }, (_, i) => `riga ${i} di una risposta molto lunga`).join('\n'));
+    await vi.advanceTimersByTimeAsync(400);
+    const ultimo = calls.filter((c) => c.method === 'sendMessageDraft').at(-1)!;
+    const rich = ultimo.rich as { html?: string; blocks?: unknown[] };
+    expect(rich.blocks).toBeUndefined();
+    expect(rich.html).toBeDefined();
     await t.stop();
   });
 });
@@ -438,25 +532,25 @@ describe('live() segue la testa della catena della stanza', () => {
  * gia' scritto per davvero — i passi — resta invece esattamente com'era.
  */
 describe('un processo che smette di chiamare questo file non lascia niente a meta\'', () => {
-  it('l\'anteprima smette di essere rinnovata e non c\'e\' niente da cancellare', async () => {
+  it('in DM non resta niente di persistente: solo anteprime effimere', async () => {
     const { api, calls } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
-    // Un passo gia' chiuso: cosi' il contatore non ha niente da far scorrere
-    // e cio' che resta sullo schermo e' esattamente cio' che era stato scritto.
     t.report(start('fs_read', { path: 'x' }));
     t.report(end('fs_read'));
     await vi.advanceTimersByTimeAsync(0);
     t.live('Sto preparando');
     await vi.advanceTimersByTimeAsync(DM.editEveryMs);
-    const passiMostrati = calls.filter((c) => c.method !== 'sendMessageDraft').at(-1)!.text;
+    const drafts = calls.filter((c) => c.method === 'sendMessageDraft');
+    expect(drafts.length).toBeGreaterThan(0);
+    expect(calls.some((c) => c.method === 'sendMessage' || c.method === 'editMessageText')).toBe(false);
 
     // Il processo "muore": nessuno chiama piu' niente, nemmeno `stop()`.
     // I timer del banco continuano a girare, ed e' il caso peggiore.
     await vi.advanceTimersByTimeAsync(10 * 60_000);
 
-    // Il messaggio vero e' ancora quello, e non e' stato cancellato.
-    expect(calls.filter((c) => c.method !== 'sendMessageDraft').at(-1)!.text).toBe(passiMostrati);
+    // Niente messaggi veri, niente da cancellare: la bozza sparisce per TTL.
     expect(calls.some((c) => c.method === 'deleteMessage')).toBe(false);
+    expect(calls.some((c) => c.method === 'sendMessage' || c.method === 'editMessageText')).toBe(false);
   });
 });
 
@@ -466,28 +560,66 @@ describe('handoff() — what deliverTo extends instead of sending beside', () =>
     expect(t.handoff()).toBeNull();
   });
 
-  it('names the last segment\'s message and its settled, non-live text once stop() has resolved', async () => {
+  it('in DM returns the process and no message to extend; in group it also names the message', async () => {
+    const { api } = recordingApi();
+    const dm = startTranscript(api, 1, { negotiation: DM });
+    dm.spoke('Prima leggo.', 'tool-call');
+    dm.report(start('fs_read', { path: 'x' }));
+    await vi.advanceTimersByTimeAsync(0);
+    dm.report(end('fs_read'));
+    await vi.advanceTimersByTimeAsync(1_500);
+    await dm.stop();
+
+    const dmHandoff = dm.handoff();
+    expect(dmHandoff).not.toBeNull();
+    expect(dmHandoff!.messageId).toBeNull();
+    const process = dmHandoff!.process.join('\n');
+    expect(process).toContain('Prima leggo.');
+    expect(process).toContain('✓ leggo un file: x');
+    // Il tail live è deliberatamente escluso: `deliverTo` porta la risposta
+    // autorevole per conto suo.
+    expect(process).not.toMatch(/⏳|· \d+s/);
+
+    const g = startTranscript(api, 1, { negotiation: GRUPPO });
+    g.spoke('Prima leggo.', 'tool-call');
+    g.report(start('fs_read', { path: 'x' }));
+    await vi.advanceTimersByTimeAsync(0);
+    g.report(end('fs_read'));
+    await vi.advanceTimersByTimeAsync(GRUPPO.editEveryMs);
+    await g.stop();
+    const gHandoff = g.handoff();
+    expect(gHandoff).not.toBeNull();
+    expect(typeof gHandoff!.messageId).toBe('number');
+    expect(gHandoff!.processHtml).toContain('✓ leggo un file: x');
+  });
+
+  it('in DM handoff() covers every segment — a rich refusal must not lose an earlier one', async () => {
     const { api } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
-    t.spoke('Prima leggo.', 'tool-call');
-    t.report(start('fs_read', { path: 'x' }));
+    t.spoke('Prima cerco.', 'tool-call');
+    t.report(start('fs_read', { path: 'a' }));
+    t.report(end('fs_read', false, { path: 'a' }));
     await vi.advanceTimersByTimeAsync(0);
-    t.report(end('fs_read'));
-    await vi.advanceTimersByTimeAsync(1_500);
+    t.spoke('Ora cerco altro.', 'tool-call');
+    t.report(start('fs_read', { path: 'b' }));
+    t.report(end('fs_read', false, { path: 'b' }));
+    await vi.advanceTimersByTimeAsync(0);
     await t.stop();
 
-    const handoff = t.handoff();
-    expect(handoff).not.toBeNull();
-    expect(handoff!.stepsText).toContain('Prima leggo.');
-    expect(handoff!.stepsText).toContain('✓ leggo un file: x');
-    // The live tail (there was none here) is deliberately excluded —
-    // `deliverTo` supplies the authoritative, freshly split answer itself.
-    expect(handoff!.stepsText).not.toMatch(/⏳|· \d+s/);
+    const h = t.handoff();
+    expect(h).not.toBeNull();
+    const process = h!.process.join('\n');
+    for (const expected of ['Prima cerco.', 'leggo un file: a', 'Ora cerco altro.', 'leggo un file: b']) {
+      expect(process).toContain(expected);
+      // processHtml is the legacy fallback prefix: it must be just as complete,
+      // or a refused rich final would drop the earlier segment.
+      expect(h!.processHtml).toContain(expected);
+    }
   });
 
   it('is null once a Bot API failure has disabled this transcript — deliverTo must not edit a message it cannot trust', async () => {
     const { api, calls } = recordingApi({ send: true });
-    const t = startTranscript(api, 1, { negotiation: DM });
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
     t.report(start('fs_read', { path: 'x' }));
     await vi.advanceTimersByTimeAsync(0);
     expect(calls).toEqual([]); // the send failed and was swallowed
@@ -523,9 +655,10 @@ describe('defect B — a long first tool is visible while it runs, alone', () =>
     // Il tool resta appeso: nessun tool_end, nessun secondo tool, nessun
     // avanzamento dell'orologio finto — solo microtask.
     await microtasks();
-    const persistent = calls.filter((c) => c.method === 'sendMessage' || c.method === 'editMessageText');
-    expect(persistent.length).toBeGreaterThanOrEqual(1);
-    expect(persistent[0]!.text).toContain('⏳');
+    // In DM la prima pittura è l'anteprima (nessun messaggio persistente).
+    const drafts = calls.filter((c) => c.method === 'sendMessageDraft');
+    expect(drafts.length).toBeGreaterThanOrEqual(1);
+    expect(drafts[0]!.text).toContain('⏳');
     await t.stop();
   });
 
@@ -547,13 +680,13 @@ describe('defect B — a long first tool is visible while it runs, alone', () =>
    * `report()`'s own stack, not merely scheduled from it. Zero awaits between
    * the fact and the assertion, on purpose.
    */
-  it('DM: api.sendMessage is INVOKED synchronously inside report(), before any microtask', async () => {
+  it('DM: the first preview is INVOKED synchronously inside report(), before any microtask', async () => {
     const { api, calls } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
     t.report(start('memory_search', { query: 'q' }));
     // No await of any kind above: if a blocking handler started on the next
-    // line, the send is already on the wire.
-    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
+    // line, the preview is already on the wire.
+    expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(1);
     expect(calls[0]!.text).toContain('⏳');
     await t.stop();
   });
@@ -567,27 +700,28 @@ describe('defect B — a long first tool is visible while it runs, alone', () =>
     await t.stop();
   });
 
-  it('a first preamble paints synchronously too — the tool that follows only edits', async () => {
+  it('a first preamble paints synchronously too — and never opens a persistent message in DM', async () => {
     const { api, calls } = recordingApi();
     const t = startTranscript(api, 1, { negotiation: DM });
     t.spoke('Prima leggo la spesa.', 'tool-call');
-    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
+    expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(1);
     t.report(start('fs_read', { path: 'spesa.txt' }));
-    // Still one message: the step joins it via edit, never a second send.
     await vi.advanceTimersByTimeAsync(DM.editEveryMs);
-    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
+    // La bozza è l'unica superficie viva in DM: nessun messaggio vero.
+    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(0);
     await t.stop();
   });
 
-  it('still one message, still throttled afterwards: a burst after the first paint coalesces', async () => {    const { api, calls } = recordingApi();
-    const t = startTranscript(api, 1, { negotiation: DM });
+  it('group: still one message, still throttled — a burst after the first paint coalesces', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
     t.report(start('fs_read', { path: 'a' }));
     await microtasks();
     expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
     // Una raffica subito dopo non apre un secondo messaggio: si accoda in edit.
     t.report(end('fs_read', false, { path: 'a' }));
     t.report(start('fs_read', { path: 'b' }));
-    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    await vi.advanceTimersByTimeAsync(GRUPPO.editEveryMs);
     expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
     await t.stop();
   });
@@ -621,23 +755,18 @@ describe('defect A — no stale post-answer Thinking preview', () => {
     expect(calls.filter((c) => c.method === 'sendMessageDraft' && c.text === '')).toHaveLength(0);
   });
 
-  it('once a persistent segment exists, live() no longer renews the draft', async () => {
+  it('in un gruppo non esiste anteprima: la risposta che si forma entra nel messaggio persistente', async () => {
     const { api, calls } = recordingApi();
-    const t = startTranscript(api, 1, { negotiation: DM });
-    t.live('Sto preparando');
-    await vi.advanceTimersByTimeAsync(0);
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
     t.spoke('Sto preparando', 'tool-call');
     t.report(start('fs_read', { path: 'x' }));
-    await vi.advanceTimersByTimeAsync(2_000);
-    const draftsAfterPersistent = calls.filter((c) => c.method === 'sendMessageDraft').length;
-    // La risposta finale arriva DOPO i tool: deve andare nel messaggio vero.
+    await vi.advanceTimersByTimeAsync(GRUPPO.editEveryMs);
+    // La risposta finale arriva DOPO i tool: entra nel messaggio vero.
     t.live('Ecco la risposta finale che si forma');
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(draftsAfterPersistent);
-    // …e infatti è nel segmento persistente, come coda live.
+    await vi.advanceTimersByTimeAsync(GRUPPO.editEveryMs);
+    expect(calls.some((c) => c.method === 'sendMessageDraft')).toBe(false);
     expect(calls.filter((c) => c.method !== 'sendMessageDraft').at(-1)!.text).toContain('Ecco la risposta finale');
     await t.stop();
-    expect(calls.filter((c) => c.method === 'sendMessageDraft' && c.text === '')).toHaveLength(0);
   });
 
   it('tool-free turn: only the draft while forming, never an empty one at the end', async () => {
@@ -726,13 +855,42 @@ describe('rich transport failure handling', () => {
         throw new TelegramError(400, 'Bad Request: rich refused');
       }),
       1,
-      { negotiation: DM },
+      { negotiation: GRUPPO },
     );
     t.report(start('shell_run', { command: 'npm test' }));
     await vi.advanceTimersByTimeAsync(0);
     // The rich attempt was refused deterministically: one legacy create.
     expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
     await t.stop();
+  });
+
+  it('a refused blocks preview falls back to a text draft, not to silence', async () => {
+    const calls: Call[] = [];
+    const api = {
+      sendMessage: async () => {
+        throw new Error('unused in this fake');
+      },
+      editMessageText: async () => true,
+      sendMessageDraft: async (_c: number, draftId: number, text: string) => {
+        calls.push({ method: 'sendMessageDraft', text, draftId });
+        return true;
+      },
+      sendRichMessageDraft: async () => {
+        throw new TelegramError(400, 'Bad Request: rich refused');
+      },
+      sendRichMessage: async () => {
+        throw new TelegramError(400, 'unused in this fake');
+      },
+      editMessageRichText: async () => true,
+    } as unknown as TelegramApiLike;
+    const t = startTranscript(api, 1, { negotiation: DM });
+    t.report(start('shell_run', { command: 'npm test' }));
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    await t.stop();
+    // Il gemello di testo della bozza ha preso il posto dei blocchi rifiutati.
+    expect(calls.filter((c) => c.method === 'sendMessageDraft').length).toBeGreaterThan(0);
+    expect(calls.at(-1)!.text).toContain('guardo con un comando: npm test');
   });
 
   it('an ambiguous failure never re-sends — no duplicate transcript', async () => {
@@ -743,13 +901,333 @@ describe('rich transport failure handling', () => {
         throw new TelegramError(0, 'response stream closed');
       }),
       1,
-      { negotiation: DM },
+      { negotiation: GRUPPO },
     );
     t.report(start('shell_run', { command: 'npm test' }));
     await vi.advanceTimersByTimeAsync(0);
     // No legacy re-send: a second message would be the duplicate this surface
     // forbids when the first attempt is unconfirmed.
     expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(0);
+    await t.stop();
+  });
+});
+
+/**
+ * La domanda di approvazione è un passo del turno, non una bolla a parte
+ * (owner, 2026-09-29: quattro comandi, quattro messaggi residui sotto la
+ * risposta).
+ *
+ * L'invariante: quando una trascrizione viva può ospitarla, la domanda apre il
+ * messaggio **del turno** — anche in una stanza che preferirebbe la bozza,
+ * perché i pulsanti non vivono su un'anteprima effimera — e da lì in poi la
+ * risposta che si forma edita quello stesso messaggio. `resolveAsk` toglie la
+ * tastiera per costruzione e lascia il verdetto dentro il passo, che la
+ * consegna finale ripiega nel `details`.
+ */
+describe('la domanda di approvazione vive nel messaggio del turno', () => {
+  const request: ApprovalRequest = {
+    capability: 'sys.shell.write',
+    prompt: 'non si torna indietro: cambia questa macchina — sys.shell.write',
+    resource: 'command: echo ciao\ncwd: .',
+    description: 'stampa la parola ciao',
+    taint: 2,
+  };
+
+  it('in DM apre il messaggio vero (non una bozza), visibile, con la tastiera', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+
+    await expect(t.ask({ request, approvalId: 'aabb' })).resolves.toBe(true);
+
+    const invio = calls.find((c) => c.method === 'sendMessage');
+    expect(invio).toBeDefined();
+    expect(invio!.text).toContain('non si torna indietro');
+    expect(invio!.text).toContain('echo ciao');
+    expect(invio!.text).toContain('taint 2');
+    expect(invio!.keyboard).toBeDefined();
+    // La tastiera non vive su un'anteprima effimera: niente bozza da qui in poi.
+    expect(calls.some((c) => c.method === 'sendMessageDraft')).toBe(false);
+    await t.stop();
+  });
+
+  it("il loop emette `ask` dopo: stesso passo, mai due", async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+
+    await t.ask({ request, approvalId: 'aabb' });
+    t.report({ type: 'ask', name: 'shell_run_write', capability: 'sys.shell.write' });
+    await vi.advanceTimersByTimeAsync(0);
+
+    const testo = calls
+      .filter((c) => c.method === 'sendMessage' || c.method === 'editMessageText')
+      .map((c) => c.text ?? '')
+      .join('\n');
+    expect(testo.match(/aspetto la tua approvazione/g) ?? []).toHaveLength(0);
+    expect(testo.match(/non si torna indietro/g) ?? []).toHaveLength(1);
+    await t.stop();
+  });
+
+  it('resolveAsk toglie la tastiera per costruzione e lascia il verdetto nel passo', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    await t.ask({ request, approvalId: 'aabb' });
+
+    t.resolveAsk({ approvalId: 'aabb', capability: 'sys.shell.write' }, true);
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+
+    const tolt = calls.find((c) => c.method === 'editMessageReplyMarkup');
+    expect(tolt).toBeDefined();
+    expect(tolt!.keyboard).toEqual([]);
+    const edit = calls.filter((c) => c.method === 'editMessageText').at(-1);
+    expect(edit!.text).toContain('sys.shell.write: consentito');
+    // Il contenuto della domanda resta nel passo: il Processo è dove si ripiega.
+    expect(edit!.text).toContain('non si torna indietro');
+    await t.stop();
+  });
+
+  it('dopo la domanda la risposta che si forma edita quel messaggio, e handoff lo nomina', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    await t.ask({ request, approvalId: 'aabb' });
+    const id = calls.find((c) => c.method === 'sendMessage')!.messageId;
+    t.resolveAsk({ approvalId: 'aabb', capability: 'sys.shell.write' }, true);
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+
+    t.live('sto scrivendo la risposta');
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+
+    expect(calls.filter((c) => c.method === 'editMessageText').every((c) => c.messageId === id)).toBe(true);
+    expect(calls.some((c) => c.method === 'sendMessageDraft')).toBe(false);
+    expect(t.handoff()?.messageId).toBe(id);
+    await t.stop();
+  });
+
+  it('senza un messaggio vivo la domanda non è presa: il chiamante ripiega', async () => {
+    const { api } = recordingApi({ send: true });
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
+
+    await expect(t.ask({ request, approvalId: 'aabb' })).resolves.toBe(false);
+    await t.stop();
+  });
+});
+
+/**
+ * I difetti trovati dalla review del 29/09 sul primo head di #737.
+ *
+ * Radice unica: `ask()` scriveva fuori dal writer serializzato. In un
+ * gruppo/topic il primo tool può aver già avviato la sua `sendMessage`
+ * (`trySyncFirstPaint`): la domanda ne mandava una seconda, e sotto
+ * riordino delle risposte il segmento poteva registrare l'id sbagliato — con
+ * la tastiera che sopravviveva alla decisione sul messaggio della domanda.
+ * E un re-ask della stessa capability non produce un edit (testo identico):
+ * senza riattacco esplicito la domanda restava visibile ma muta.
+ */
+describe('la domanda non apre una seconda bolla, e non resta mai muta', () => {
+  const request: ApprovalRequest = {
+    capability: 'sys.shell.write',
+    prompt: 'non si torna indietro: cambia questa macchina — sys.shell.write',
+    resource: 'command: echo ciao\ncwd: .',
+    description: 'stampa la parola ciao',
+    taint: 0,
+  };
+
+  it('in gruppo, se il primo tool ha già avviato la pittura, la domanda la edita invece di mandare una seconda bolla', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
+
+    // Il primo fatto è il tool: `trySyncFirstPaint` avvia la send nello stesso stack.
+    t.report(start('shell_run_write', { command: 'echo ciao' }));
+    await expect(t.ask({ request, approvalId: 'aabb' })).resolves.toBe(true);
+    await vi.advanceTimersByTimeAsync(GRUPPO.editEveryMs);
+
+    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
+    const edit = calls.filter((c) => c.method === 'editMessageText');
+    expect(edit.length).toBeGreaterThan(0);
+    expect(edit.at(-1)!.text).toContain('non si torna indietro');
+    expect(edit.at(-1)!.keyboard).toBeDefined();
+    await t.stop();
+  });
+
+  it('un re-ask della stessa domanda riattacca la tastiera', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    const requestB: ApprovalRequest = { ...request, capability: 'sys.http', prompt: 'non si torna indietro: chiama un servizio di terzi' };
+
+    await t.ask({ request, approvalId: 'aabb' });
+    await t.ask({ request: requestB, approvalId: 'bbcc' });
+    t.resolveAsk({ approvalId: 'bbcc', capability: 'sys.http' }, true); // risolve la seconda
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+
+    // Il modello ri-chiede la prima, ancora in attesa: stesso id (lo store
+    // riusa la riga aperta), stesso passo, testo identico.
+    await expect(t.ask({ request, approvalId: 'aabb' })).resolves.toBe(true);
+
+    const ultima = calls.filter((c) => c.method === 'editMessageReplyMarkup').at(-1)!;
+    const tastiera = ultima.keyboard as { callback_data: string }[][];
+    expect(tastiera.flat().map((b) => b.callback_data)).toEqual(['ok:aabb', 'no:aabb']);
+    await t.stop();
+  });
+
+  it('con due domande in attesa il verdetto rientra nel passo giusto', async () => {
+    const { api } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: GRUPPO });
+    const requestB: ApprovalRequest = { ...request, capability: 'sys.http', prompt: 'non si torna indietro: chiama un servizio di terzi' };
+
+    await t.ask({ request, approvalId: 'aabb' });
+    await t.ask({ request: requestB, approvalId: 'bbcc' });
+    t.resolveAsk({ approvalId: 'aabb', capability: 'sys.shell.write' }, true);
+    await vi.advanceTimersByTimeAsync(GRUPPO.editEveryMs);
+
+    const righe = t.handoff()?.process ?? [];
+    const processo = righe.join('\n');
+    expect(processo).toContain('sys.shell.write: consentito');
+    expect(processo).not.toContain('sys.http: consentito');
+    // La domanda ancora in attesa è quella di `sys.http`, non l'ultima
+    // incontrata: senza il filtro per capability il verdetto atterra sul passo
+    // sbagliato, e questa riga lo distingue (review 2026-09-29).
+    const attesa = righe.find((r) => r.startsWith('⏸'));
+    expect(attesa).toBeDefined();
+    expect(attesa).toContain('chiama un servizio di terzi');
+    expect(attesa).not.toContain('cambia questa macchina');
+    await t.stop();
+  });
+});
+
+/**
+ * #745 — con due domande in attesa, ogni tastiera resta corretta.
+ *
+ * `pendingAsk` era singolo: la seconda domanda sovrascriveva la prima, e
+ * risolvendo la seconda la tastiera spariva mentre la prima restava visibile
+ * ma muta — e la guardia di ripresa (#741) ri-sospendeva su quella, che
+ * nessuno poteva più decidere fino alla scadenza.
+ */
+describe('#745 — due domande in attesa, due tastiere corrette', () => {
+  const requestA: ApprovalRequest = {
+    capability: 'sys.shell.write',
+    prompt: 'non si torna indietro: cambia questa macchina — sys.shell.write',
+    resource: 'command: echo a',
+    taint: 0,
+  };
+  const requestB: ApprovalRequest = {
+    capability: 'sys.http',
+    prompt: 'non si torna indietro: chiama un servizio di terzi',
+    resource: 'https://example.test',
+    taint: 0,
+  };
+  const ultimaTastiera = (calls: Call[]) =>
+    calls.filter((c) => c.keyboard !== undefined).at(-1)!.keyboard as { callback_data: string }[][];
+
+  it('la tastiera mostra la più recente, poi passa a quella ancora aperta, poi sparisce', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+
+    await t.ask({ request: requestA, approvalId: 'aaaa' });
+    await t.ask({ request: requestB, approvalId: 'bbbb' });
+    expect(ultimaTastiera(calls).flat().map((b) => b.callback_data)).toEqual(['ok:bbbb', 'no:bbbb']);
+
+    // Risolta la seconda: la tastiera passa alla prima, ancora aperta.
+    t.resolveAsk({ approvalId: 'bbbb', capability: 'sys.http' }, true);
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    expect(ultimaTastiera(calls).flat().map((b) => b.callback_data)).toEqual(['ok:aaaa', 'no:aaaa']);
+
+    // Risolta anche la prima: nessuna domanda aperta, tastiera via.
+    t.resolveAsk({ approvalId: 'aaaa', capability: 'sys.shell.write' }, true);
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    const rimozione = calls.filter((c) => c.method === 'editMessageReplyMarkup').at(-1)!;
+    expect(rimozione.keyboard).toEqual([]);
+    await t.stop();
+  });
+
+  it('un re-ask della stessa domanda non apre una seconda voce', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+
+    await t.ask({ request: requestA, approvalId: 'aaaa' });
+    await t.ask({ request: requestA, approvalId: 'aaaa' });
+
+    expect(ultimaTastiera(calls).flat().map((b) => b.callback_data)).toEqual(['ok:aaaa', 'no:aaaa']);
+    // Una sola rimozione possibile: la domanda è una.
+    t.resolveAsk({ approvalId: 'aaaa', capability: 'sys.shell.write' }, true);
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    expect(calls.filter((c) => c.method === 'editMessageReplyMarkup').at(-1)!.keyboard).toEqual([]);
+    await t.stop();
+  });
+});
+
+/**
+ * #745 (review) — due domande della **stessa capability** su risorse diverse
+ * sono due domande.
+ *
+ * La chiave del passo e della voce in attesa era la capability: il secondo
+ * `sys.shell` riusava il passo del primo, la tastiera portava l'id della
+ * seconda domanda e il messaggio mostrava il comando della prima. Premendo
+ * Consenti si decideva un comando mai mostrato (D12) e il passo visibile
+ * registrava un consenso che non era il suo. La chiave è l'id
+ * dell'approvazione.
+ */
+describe('#745 review — stessa capability, risorse diverse', () => {
+  const requestA: ApprovalRequest = {
+    capability: 'sys.shell.write',
+    prompt: 'non si torna indietro: cambia questa macchina — sys.shell.write',
+    resource: 'command: echo uno',
+    taint: 0,
+  };
+  const requestB: ApprovalRequest = { ...requestA, resource: 'command: echo due' };
+  const ultimaTastiera = (calls: Call[]) =>
+    calls.filter((c) => c.keyboard !== undefined).at(-1)!.keyboard as { callback_data: string }[][];
+
+  it('due passi, due soggetti visibili, e ognuno risolve il suo', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+
+    await t.ask({ request: requestA, approvalId: 'aaaa' });
+    await t.ask({ request: requestB, approvalId: 'bbbb' });
+
+    const testo = calls
+      .filter((c) => c.method === 'sendMessage' || c.method === 'editMessageText')
+      .map((c) => c.text ?? '')
+      .join('\n');
+    expect(testo).toContain('echo uno');
+    expect(testo).toContain('echo due');
+    expect(ultimaTastiera(calls).flat().map((b) => b.callback_data)).toEqual(['ok:bbbb', 'no:bbbb']);
+
+    // Risolta la seconda: la tastiera passa alla prima, e il verdetto è sul
+    // passo della seconda — la prima resta `⏸` col suo comando.
+    t.resolveAsk({ approvalId: 'bbbb', capability: 'sys.shell.write' }, true);
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    expect(ultimaTastiera(calls).flat().map((b) => b.callback_data)).toEqual(['ok:aaaa', 'no:aaaa']);
+    const processo = (t.handoff()?.process ?? []).join('\n');
+    expect(processo).toMatch(/⏸[\s\S]*echo uno/);
+    expect(processo).toMatch(/✓[\s\S]*echo due[\s\S]*consentito/);
+
+    // Risolta anche la prima: tastiera via.
+    t.resolveAsk({ approvalId: 'aaaa', capability: 'sys.shell.write' }, true);
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    expect(calls.filter((c) => c.method === 'editMessageReplyMarkup').at(-1)!.keyboard).toEqual([]);
+    await t.stop();
+  });
+
+  /**
+   * Ordine non-LIFO (review #757): cliccare la domanda **più vecchia** mentre
+   * la più recente è ancora in attesa. Con la chiave per capability il
+   * verdetto sarebbe atterrato sull'ultimo `waiting` incontrato — il passo
+   * sbagliato. Questo caso non era coperto: la mutazione della chiave in
+   * `resolveAsk` sopravviveva alla suite.
+   */
+  it('cliccando la più vecchia, la più recente resta in attesa con la sua tastiera', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+
+    await t.ask({ request: requestA, approvalId: 'aaaa' });
+    await t.ask({ request: requestB, approvalId: 'bbbb' });
+
+    t.resolveAsk({ approvalId: 'aaaa', capability: 'sys.shell.write' }, true);
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+
+    const processo = (t.handoff()?.process ?? []).join('\n');
+    expect(processo).toMatch(/✓[\s\S]*echo uno[\s\S]*consentito/);
+    expect(processo).toMatch(/⏸[\s\S]*echo due/);
+    expect(ultimaTastiera(calls).flat().map((b) => b.callback_data)).toEqual(['ok:bbbb', 'no:bbbb']);
     await t.stop();
   });
 });

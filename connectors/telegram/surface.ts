@@ -3,7 +3,8 @@ import { DELIVERED, fileModeFor, notDelivered, type DeliveryOutcome, type FileSp
 import { negoziazioneTelegram, stanzaDi, TELEGRAM_PLACES } from './negoziazione.js';
 import type { TelegramApiLike } from './api.js';
 import { MAX_DOWNLOAD_BYTES, sendDocument } from './media.js';
-import { renderForTelegram, TELEGRAM_MAX } from './render.js';
+import { escapeHtml, TELEGRAM_MAX } from './render.js';
+import { present, presentationOf, presentationOfHtml } from './present.js';
 import { RICH_MAX_CHARS } from './rich.js';
 import { makeIngressPort, type IngressPort } from '../shared/ingress/types.js';
 
@@ -22,22 +23,37 @@ import { makeIngressPort, type IngressPort } from '../shared/ingress/types.js';
  *
  * `telegram` means the owner's chat — the surface's default room, which is what
  * `surfaces.default` has always meant. `telegram:<chatId>` names one explicitly
- * (ADR-0021, "ogni job schedulato dichiara il proprio target"). Nothing else
- * is accepted: a channel string that looks *almost* right is refused by
- * `handles`, so the registry reports "nessuna superficie serve" rather than this
- * file guessing which chat was meant.
+ * (ADR-0021, "ogni job schedulato dichiara il proprio target") and
+ * `telegram:<chatId>#<threadId>` names one **inside a forum topic** — the
+ * sotto-conversazione `IncomingIdentity.threadId` already distinguishes. Le due
+ * forme senza `#` restano valide per ogni riga già installata e per una DM.
+ * Nothing else is accepted: a channel string that looks *almost* right is
+ * refused by `handles`, so the registry reports "nessuna superficie serve"
+ * rather than this file guessing which room was meant.
  */
 
-/** `telegram` or `telegram:<chatId>` → the chat, or null when it is neither. */
-function chatIdFor(channel: string, ownerChatId: number | undefined): number | null {
-  if (channel === 'telegram') return ownerChatId ?? null;
+/** `telegram`, `telegram:<chatId>` or `telegram:<chatId>#<threadId>` → the room, or null when it is neither. */
+function indirizzoPer(
+  channel: string,
+  ownerChatId: number | undefined,
+): { chatId: number; threadId?: number } | null {
+  if (channel === 'telegram') return ownerChatId === undefined ? null : { chatId: ownerChatId };
   if (!channel.startsWith('telegram:')) return null;
   const raw = channel.slice('telegram:'.length);
+  const hash = raw.indexOf('#');
+  const chatRaw = hash === -1 ? raw : raw.slice(0, hash);
+  const threadRaw = hash === -1 ? undefined : raw.slice(hash + 1);
   // A chat id is an integer and group ids are negative, so `Number` is right and
   // `parseInt` is not: `parseInt('123abc')` is 123, which would deliver to a
   // chat nobody named. Empty string coerces to 0, which is not a real chat.
-  const id = Number(raw);
-  return Number.isInteger(id) && id !== 0 ? id : null;
+  const chatId = Number(chatRaw);
+  if (!Number.isInteger(chatId) || chatId === 0) return null;
+  if (threadRaw === undefined) return { chatId };
+  // Un `#` senza un id di topic (vuoto, non numerico, zero) non è una stanza:
+  // rifiutare un canale storto è meglio che consegnare nel posto sbagliato.
+  const threadId = Number(threadRaw);
+  if (!Number.isInteger(threadId) || threadId <= 0) return null;
+  return { chatId, threadId };
 }
 
 /**
@@ -91,37 +107,56 @@ export function telegramSurface(api: TelegramApiLike, ownerChatId: number | unde
     places: TELEGRAM_PLACES,
     negotiate: negoziazioneTelegram,
 
-    handles: (channel) => chatIdFor(channel, ownerChatId) !== null,
+    handles: (channel) => indirizzoPer(channel, ownerChatId) !== null,
 
     deliver: async (channel, text): Promise<DeliveryOutcome> => {
-      const chatId = chatIdFor(channel, ownerChatId);
-      if (chatId === null) {
+      const indirizzo = indirizzoPer(channel, ownerChatId);
+      if (indirizzo === null) {
         // Reachable only if a caller skipped `handles`. Refusing is right: the
         // alternative is inventing a destination for a message.
         return notDelivered(`"${channel}" non è un canale telegram indirizzabile`);
       }
-
       // Convert first, split second. The limit is on the rendered HTML, and
       // splitting the markdown at 4000 then expanding it produced messages over
       // the limit that Telegram rejected whole — a shipped, high-severity bug
-      // that lost real messages (`render.ts`).
-      const parts = renderForTelegram(text);
-      for (const [i, part] of parts.entries()) {
-        try {
-          await api.sendMessage(chatId, part);
-        } catch (error) {
-          const why = error instanceof Error ? error.message : String(error);
-          // Which part failed is the difference between "nothing arrived" and
-          // "half of it did", and the owner needs to know which — a retry of the
-          // whole message after a partial send delivers the first half twice.
-          return notDelivered(
-            parts.length === 1
-              ? `telegram ha rifiutato il messaggio: ${why}`
-              : `telegram ha rifiutato la parte ${i + 1} di ${parts.length}${i > 0 ? ' (le precedenti sono arrivate)' : ''}: ${why}`,
-          );
-        }
+      // that lost real messages (`render.ts`). `present` tiene la stessa
+      // divisione nel ripiego legacy; il ricco, quando entra, è un messaggio
+      // solo.
+      const presentazione = presentationOf(text);
+      if (presentazione.fallback.length === 0) {
+        // Un testo vuoto non è una consegna: al base `sendMessage('')` veniva
+        // rifiutato dalla rete e il turno finiva `delivery_failed`
+        // (`scheduler.ts`: un esito in errore con testo vuoto **resta** da
+        // consegnare, il silenzio lì è un guasto); senza questa riga
+        // sparirebbe in un `DELIVERED` senza aver mandato niente.
+        return notDelivered('niente da consegnare: il testo è vuoto');
       }
-      return DELIVERED;
+      try {
+        await present(
+          api,
+          {
+            chatId: indirizzo.chatId,
+            // Un canale con `#<threadId>` è una stanza dentro la stanza: il
+            // testo di un job nato in un topic deve restare lì, non suonare in
+            // *General*.
+            ...(indirizzo.threadId === undefined ? {} : { threadId: indirizzo.threadId }),
+          },
+          presentazione,
+        );
+        return DELIVERED;
+      } catch (error) {
+        const why = error instanceof Error ? error.message : String(error);
+        // Which part failed is the difference between "nothing arrived" and
+        // "half of it did", and the owner needs to know which — a retry of the
+        // whole message after a partial send delivers the first half twice.
+        // `present` distingue «parte N di M» dal rifiuto secco: lo stesso
+        // testo che questa superficie dava prima.
+        return notDelivered(
+          why.startsWith('parte ')
+            ? `telegram ha rifiutato la ${why}`
+            : `telegram ha rifiutato il messaggio: ${why}`,
+        );
+      }
     },
 
     /**
@@ -131,8 +166,14 @@ export function telegramSurface(api: TelegramApiLike, ownerChatId: number | unde
      * docstring says. This is that caller.
      */
     deliverFile: async (channel, file: FileSpec): Promise<DeliveryOutcome> => {
-      const chatId = chatIdFor(channel, ownerChatId);
-      if (chatId === null) return notDelivered(`"${channel}" non è un canale telegram indirizzabile`);
+      const indirizzo = indirizzoPer(channel, ownerChatId);
+      if (indirizzo === null) return notDelivered(`"${channel}" non è un canale telegram indirizzabile`);
+      // Il thread vale per tutte e due le uscite di questa funzione — il
+      // documento vero e la notifica «è troppo grande»: un file prodotto in un
+      // topic che finisse in *General*, in un modo o nell'altro, sarebbe la
+      // degradazione silenziosa che questa forma esiste per chiudere.
+      const topic = indirizzo.threadId === undefined ? {} : { threadId: indirizzo.threadId };
+      const chatId = indirizzo.chatId;
 
       let bytes: number;
       try {
@@ -152,7 +193,7 @@ export function telegramSurface(api: TelegramApiLike, ownerChatId: number | unde
           `${file.filename} è pronto ma pesa ${(bytes / 1e6).toFixed(1)}MB, oltre il limite di ` +
           `${(limits.maxUploadBytes / 1e6).toFixed(0)}MB di sendDocument: sta in ${file.absolutePath}`;
         try {
-          await api.sendMessage(chatId, dove);
+          await present(api, { chatId, ...topic }, presentationOfHtml(escapeHtml(dove)));
           return DELIVERED;
         } catch (error) {
           return notDelivered(`telegram ha rifiutato anche il messaggio con il percorso: ${error instanceof Error ? error.message : String(error)}`);
@@ -160,7 +201,11 @@ export function telegramSurface(api: TelegramApiLike, ownerChatId: number | unde
       }
 
       try {
-        await sendDocument(api, chatId, file.absolutePath, { filename: file.filename, ...(file.caption ? { caption: file.caption } : {}) });
+        await sendDocument(api, chatId, file.absolutePath, {
+          filename: file.filename,
+          ...(file.caption ? { caption: file.caption } : {}),
+          ...topic,
+        });
         return DELIVERED;
       } catch (error) {
         return notDelivered(`telegram ha rifiutato l'allegato: ${error instanceof Error ? error.message : String(error)}`);

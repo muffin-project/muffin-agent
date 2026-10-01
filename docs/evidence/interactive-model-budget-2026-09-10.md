@@ -47,6 +47,10 @@ incremental tool-call arguments. Usage-only or keepalive traffic does not.
 The surface-facing `model_status` progress event reports waiting, thinking,
 receiving and stalled state without making another model call.
 
+> Superato in parte il 2026-09-28: il watchdog di **prima attività** è stato
+> rimosso (l'abort locale era letto come risposta vuota del provider) —
+> ADR-0092. Il watchdog di **stallo dopo attività** e `model_status` restano.
+
 ## P2 cumulative active model budget
 
 The execution envelope now also owns cumulative active model time for one

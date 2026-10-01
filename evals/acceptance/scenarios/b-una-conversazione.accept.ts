@@ -229,18 +229,17 @@ describe('acceptance · fondere non lava · il soffitto attraversa le porte, il 
         const gw = await pairOwner(inst, tg);
         try {
           tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'leggi dati.txt e dimmi la somma'));
-          // The answer follows a tool call (`fs_read`), so it joins that
-          // tool's own transcript message as an edit rather than arriving as
-          // a fresh `sendMessage` (`connector.ts#deliverTo`'s merge) — wait
-          // on `tg.sent()` directly, not `tg.messages()`.
+          // Option B: the process is a draft, and the answer is a fresh rich
+          // send (its `details` block collapses the steps) — wait on
+          // `tg.sent()` directly and read the rich payload.
           await until(
             () =>
               tg
                 .sent()
                 .some(
                   (c) =>
-                    (c.method === 'sendMessage' || c.method === 'editMessageText') &&
-                    String(c.payload['text'] ?? '').includes('somma è 6'),
+                    (c.method === 'sendMessage' || c.method === 'sendRichMessage') &&
+                    JSON.stringify(c.payload['rich_message'] ?? c.payload['text'] ?? '').includes('somma è 6'),
                 ),
             30_000,
           );

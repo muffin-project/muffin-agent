@@ -263,6 +263,19 @@ which supposedly clever mechanisms do not help.
 
 [Open-source strategy →](docs/project/OPEN-SOURCE-STRATEGY.md) · [Public narrative →](docs/project/PUBLIC-NARRATIVE.md)
 
+## Where the work is going
+
+The roadmap is a GitHub Project with four horizons —
+**Now / Next / Later / Exploring** — and the live work status of every
+selected initiative:
+
+**[Muffin roadmap →](https://github.com/orgs/muffin-project/projects/2)**
+
+Phase horizons and deliberately deferred directions (what enters which product
+phase, and why) live in [docs/product/ROADMAP.md](docs/product/ROADMAP.md);
+current execution state is always read from Git, issues and pull requests, never
+copied from that file.
+
 ## Contributing
 
 Muffin is source-public/pre-alpha: contributions are welcome, stability is not

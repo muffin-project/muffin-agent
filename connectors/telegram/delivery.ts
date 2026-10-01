@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { ensureColumn } from '../../core/lock/durable.js';
 import { randomBytes } from 'node:crypto';
 import { TelegramError, type TelegramApiLike } from './api.js';
 import type { OutboundRich } from './rich.js';
@@ -15,6 +16,17 @@ export type TelegramDeliveryLegacyChunk = Pick<
 export type TelegramDeliveryPart = {
   turnId: string;
   partIndex: number;
+  /**
+   * Quale lease del turno ha prodotto questo messaggio (0-based).
+   *
+   * Un turno continuabile consegna più di una volta sulla stessa riga: il
+   * diagnostico di cessione sotto la lease N, la risposta finale sotto una
+   * lease successiva. Il piano congelato è per (turno, lease) — non per
+   * turno — altrimenti la risposta della ripresa sparirebbe dietro al
+   * piano già consegnato (misurato il 28/09: la risposta non usciva e il
+   * turno risultava consegnato).
+   */
+  leaseIndex: number;
   operation: 'send' | 'edit';
   chatId: number;
   /** Il topic del forum, o `null` fuori da un forum. Vedi `SendOptions.threadId`. */
@@ -49,6 +61,10 @@ const TELEGRAM_DELIVERY_SCHEMA = `
 CREATE TABLE IF NOT EXISTS telegram_delivery_parts (
   turn_id              TEXT NOT NULL,
   part_index           INTEGER NOT NULL CHECK (part_index >= 0),
+  -- Quale lease del turno ha prodotto questo messaggio; vedi
+  -- TelegramDeliveryPart.leaseIndex. Additiva con default zero: ogni riga
+  -- scritta prima che la continuazione esistesse è della lease 0.
+  lease_index          INTEGER NOT NULL DEFAULT 0 CHECK (lease_index >= 0),
   operation            TEXT NOT NULL CHECK (operation IN ('send','edit')),
   chat_id              INTEGER NOT NULL,
   thread_id            INTEGER,
@@ -89,24 +105,18 @@ export class TelegramDeliveryStore {
     // sopra è un no-op e ogni INSERT qui sotto fallirebbe. L'ALTER è
     // idempotente perché la condizione è la presenza della colonna, non il
     // numero di versione di qualcosa.
-    const colonne = db.prepare(`PRAGMA table_info(telegram_delivery_parts)`).all() as {
-      name: string;
-    }[];
-    if (!colonne.some((c) => c.name === 'thread_id')) {
-      db.exec(`ALTER TABLE telegram_delivery_parts ADD COLUMN thread_id INTEGER`);
-    }
+    ensureColumn(db, 'telegram_delivery_parts', 'thread_id', 'thread_id INTEGER');
     // Additive, same shape as `thread_id` above: `CREATE TABLE IF NOT
     // EXISTS` is a no-op on pre-rich databases, so each column lands via its
     // own presence check. `kind` defaults to 'legacy', which is exactly what
     // every pre-existing row is.
     for (const [nome, ddl] of [
-      ['kind', `ADD COLUMN kind TEXT NOT NULL DEFAULT 'legacy' CHECK (kind IN ('legacy','rich'))`],
-      ['rich_json', 'ADD COLUMN rich_json TEXT'],
-      ['fallback_json', 'ADD COLUMN fallback_json TEXT'],
+      ['kind', `kind TEXT NOT NULL DEFAULT 'legacy' CHECK (kind IN ('legacy','rich'))`],
+      ['rich_json', 'rich_json TEXT'],
+      ['fallback_json', 'fallback_json TEXT'],
+      ['lease_index', 'lease_index INTEGER NOT NULL DEFAULT 0 CHECK (lease_index >= 0)'],
     ] as const) {
-      if (!colonne.some((c) => c.name === nome)) {
-        db.exec(`ALTER TABLE telegram_delivery_parts ${ddl}`);
-      }
+      ensureColumn(db, 'telegram_delivery_parts', nome, ddl);
     }
     db.prepare(
       `UPDATE telegram_delivery_parts
@@ -124,10 +134,19 @@ export class TelegramDeliveryStore {
    * A rich part freezes BOTH payloads: the rich message and the bounded
    * legacy chunks it degrades to. The fallback is fixed here — never
    * re-rendered at rejection time, never a single oversized send.
+   *
+   * The plan is per (turn, lease): the same turn yields and later answers on
+   * a new lease, and that answer is a second message, not a re-render of the
+   * diagnostic. `parts` for a different lease never shadows it.
    */
-  plan(turnId: string, requested: TelegramDeliveryPlanPart[], at: string): TelegramDeliveryPart[] {
+  plan(
+    turnId: string,
+    requested: TelegramDeliveryPlanPart[],
+    at: string,
+    leaseIndex: number,
+  ): TelegramDeliveryPart[] {
     if (requested.length === 0) throw new Error(`telegram delivery senza parti per ${turnId}`);
-    const existing = this.parts(turnId);
+    const existing = this.parts(turnId, leaseIndex);
     if (existing.length > 0) {
       const first = requested[0]!;
       if (existing[0]!.chatId !== first.chatId) {
@@ -143,20 +162,30 @@ export class TelegramDeliveryStore {
     }
     const insert = this.db.prepare(
       `INSERT OR IGNORE INTO telegram_delivery_parts
-          (turn_id, part_index, operation, chat_id, thread_id, reply_to, edit_message_id, html,
+          (turn_id, part_index, lease_index, operation, chat_id, thread_id, reply_to, edit_message_id, html,
            kind, rich_json, fallback_json,
            status, created_at, updated_at)
         VALUES
-          (@turnId, @partIndex, @operation, @chatId, @threadId, @replyTo, @editMessageId, @html,
+          (@turnId, @partIndex, @leaseIndex, @operation, @chatId, @threadId, @replyTo, @editMessageId, @html,
            @kind, @richJson, @fallbackJson,
            'pending', @at, @at)`,
     );
     this.db.transaction(() => {
-      requested.forEach((part, partIndex) => {
+      // Il piano di una lease non riusa gli indici di un'altra: gli indici
+      // restano l'ordine totale del turno, e il filtro per lease è la colonna.
+      // La base si legge DENTRO la transazione, o due scrittori partono dallo
+      // stesso MAX e l'`OR IGNORE` del secondo perde una parte in silenzio.
+      const base = (
+        this.db
+          .prepare(`SELECT COALESCE(MAX(part_index), -1) AS m FROM telegram_delivery_parts WHERE turn_id = ?`)
+          .get(turnId) as { m: number }
+      ).m + 1;
+      requested.forEach((part, i) => {
         const kind = part.kind ?? 'legacy';
         insert.run({
           turnId,
-          partIndex,
+          partIndex: base + i,
+          leaseIndex,
           operation: part.operation,
           chatId: part.chatId,
           threadId: part.threadId,
@@ -171,21 +200,46 @@ export class TelegramDeliveryStore {
         });
       });
     })();
-    return this.parts(turnId);
+    const planned = this.parts(turnId, leaseIndex);
+    // Un piano parziale è l'unica cosa che l'`OR IGNORE` può nascondere: se
+    // è successo, dirlo invece di consegnare metà messaggio.
+    if (planned.length !== requested.length) {
+      throw new Error(`telegram delivery ${turnId}: piano parziale (${planned.length}/${requested.length})`);
+    }
+    return planned;
   }
 
-  parts(turnId: string): TelegramDeliveryPart[] {
-    const rows = this.db
-      .prepare(
-        `SELECT turn_id AS turnId, part_index AS partIndex, operation, chat_id AS chatId,
-                thread_id AS threadId,
-                reply_to AS replyTo, edit_message_id AS editMessageId, html, kind,
-                rich_json AS richJson, fallback_json AS fallbackJson, status,
-                attempt_id AS attemptId, telegram_message_id AS telegramMessageId, error
-         FROM telegram_delivery_parts
-         WHERE turn_id = ? ORDER BY part_index`,
-      )
-      .all(turnId) as (Omit<TelegramDeliveryPart, 'kind' | 'rich' | 'fallback'> & {
+  /**
+   * The rows of one turn, or of one lease of it when `leaseIndex` is given.
+   * Absent, the whole turn's history — what `wireWasUncertain` wants: any
+   * lease of this turn left an uncertain effect.
+   */
+  parts(turnId: string, leaseIndex?: number): TelegramDeliveryPart[] {
+    const rows = (
+      leaseIndex === undefined
+        ? this.db
+            .prepare(
+              `SELECT turn_id AS turnId, part_index AS partIndex, lease_index AS leaseIndex, operation, chat_id AS chatId,
+                  thread_id AS threadId,
+                  reply_to AS replyTo, edit_message_id AS editMessageId, html, kind,
+                  rich_json AS richJson, fallback_json AS fallbackJson, status,
+                  attempt_id AS attemptId, telegram_message_id AS telegramMessageId, error
+           FROM telegram_delivery_parts
+           WHERE turn_id = ? ORDER BY part_index`,
+            )
+            .all(turnId)
+        : this.db
+            .prepare(
+              `SELECT turn_id AS turnId, part_index AS partIndex, lease_index AS leaseIndex, operation, chat_id AS chatId,
+                  thread_id AS threadId,
+                  reply_to AS replyTo, edit_message_id AS editMessageId, html, kind,
+                  rich_json AS richJson, fallback_json AS fallbackJson, status,
+                  attempt_id AS attemptId, telegram_message_id AS telegramMessageId, error
+           FROM telegram_delivery_parts
+           WHERE turn_id = ? AND lease_index = ? ORDER BY part_index`,
+            )
+            .all(turnId, leaseIndex)
+    ) as (Omit<TelegramDeliveryPart, 'kind' | 'rich' | 'fallback'> & {
       kind: string;
       richJson: string | null;
       fallbackJson: string | null;
@@ -226,24 +280,27 @@ export class TelegramDeliveryStore {
         .run(reason, at, turnId, partIndex, attemptId).changes;
       if (changed !== 1) return;
       const row = this.db
-        .prepare(`SELECT fallback_json AS fallbackJson FROM telegram_delivery_parts WHERE turn_id = ? AND part_index = ?`)
-        .get(turnId, partIndex) as { fallbackJson: string | null };
+        .prepare(
+          `SELECT fallback_json AS fallbackJson, lease_index AS leaseIndex FROM telegram_delivery_parts WHERE turn_id = ? AND part_index = ?`,
+        )
+        .get(turnId, partIndex) as { fallbackJson: string | null; leaseIndex: number };
       const fallback = row.fallbackJson === null ? [] : (JSON.parse(row.fallbackJson) as TelegramDeliveryLegacyChunk[]);
       const base = this.db
         .prepare(`SELECT COALESCE(MAX(part_index), -1) AS m FROM telegram_delivery_parts WHERE turn_id = ?`)
         .get(turnId) as { m: number };
       const insert = this.db.prepare(
         `INSERT INTO telegram_delivery_parts
-            (turn_id, part_index, operation, chat_id, thread_id, reply_to, edit_message_id, html,
+            (turn_id, part_index, lease_index, operation, chat_id, thread_id, reply_to, edit_message_id, html,
              kind, status, created_at, updated_at)
          VALUES
-            (@turnId, @partIndex, @operation, @chatId, @threadId, @replyTo, @editMessageId, @html,
+            (@turnId, @partIndex, @leaseIndex, @operation, @chatId, @threadId, @replyTo, @editMessageId, @html,
              'legacy', 'pending', @at, @at)`,
       );
       fallback.forEach((chunk, k) => {
         insert.run({
           turnId,
           partIndex: base.m + 1 + k,
+          leaseIndex: row.leaseIndex,
           operation: chunk.operation,
           chatId: chunk.chatId,
           threadId: chunk.threadId,
@@ -253,7 +310,7 @@ export class TelegramDeliveryStore {
           at,
         });
       });
-      inserted = this.parts(turnId).filter((p) => p.partIndex > base.m);
+      inserted = this.parts(turnId, row.leaseIndex).filter((p) => p.partIndex > base.m);
     })();
     return inserted;
   }
@@ -344,8 +401,9 @@ export async function deliverTelegram(
   turnId: string,
   requested: TelegramDeliveryPlanPart[],
   now: () => string,
+  leaseIndex: number,
 ): Promise<TelegramDeliveryOutcome> {
-  const parts = store.plan(turnId, requested, now());
+  const parts = store.plan(turnId, requested, now(), leaseIndex);
   for (const part of parts) {
     if (part.status === 'sent') continue;
     if (part.status === 'possibly_sent') return 'possibly_sent';

@@ -98,3 +98,17 @@ non un errore terminale).
 Sweep/TTL attivo delle righe continuable; proposta proattiva; `muffin
 resume` via gateway (oggi solo locale); comando `/resume` Telegram (mai uno
 slash command globale per keyword); livello Work/Goal esplicito.
+
+## Emendamento 2026-09-28 — la misura ha risposto: il timer era nostro (ADR-0092)
+
+Le «risposte completate con `stop=error`, ~30.0s» che questo ADR leggeva come
+stalli dell'upstream erano l'abort del watchdog di prima attività (30 s) reso
+invisibile dall'SDK OpenAI: le 20 occorrenze `provider_empty` fra il 19/09 e
+il 28/09 durano tutte fra 30.000 e 30.037 s su **cinque upstream diversi**
+(evidenza: `docs/evidence/abort-locale-e-ripresa-2026-09-28.md`). ADR-0092
+rimuove quel watchdog, rende osservabile l'abort in entrambi gli adapter, lega
+la ripresa all'invito (finestra di 2 h, domanda con il testo della richiesta),
+fa chiudere a `recover()` gli update legati a righe continuabili già
+consegnate invece di rimandarli per sempre, e rende visibili le attese dei
+re-drive. I punti 1–5 di questo ADR restano validi; la tassonomia delle classi
+perde `model_first_activity_timeout`, che nessun writer produce più.

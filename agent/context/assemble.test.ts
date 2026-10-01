@@ -16,9 +16,12 @@ import { buildRuntime, type Runtime } from '../runtime.js';
 import {
   buildSystemPromptBlocks,
   renderSystemPrompts,
+  STALE_PLAN_MS,
   tenantClass,
+  todoSection,
   visibleTools,
 } from './assemble.js';
+import type { TodoItem } from '../../core/turns/todo.js';
 
 /**
  * The prompt is a function of the tenant, and the tool list is a function of the
@@ -240,8 +243,22 @@ describe('the owner-class prompt does not move', () => {
    * (misura Linux 2026-09-22). Pin precedente:
    * `dbf59068d47b46697a338ae1ce2295222fc11c4d7b5ed715b5b35a715fff93ea`.
    */
+  /**
+   * Ri-fissato 2026-09-27: la voce aggiunge «Struttura quando serve» — il
+   * markdown va usato quando il contenuto ha struttura (liste, tabelle,
+   * codice). Le superfici ricche lo rendono nativo; prima la voce non lo
+   * diceva. Pin precedente:
+   * `c1f6ed077218a15797b8536007e045aee75c6b11a8dc7312a379a56b2ff612c8`.
+   */
+  /**
+   * Ri-fissato 2026-09-30 (`slice/plan-stale-no-autoresume`): `WORK_RULES`
+   * aggiunge la riga «un messaggio nuovo apre lavoro nuovo» — un piano aperto
+   * da ore non si riprende da solo (misurato: un «Buongiorno Muffin» ha fatto
+   * un'ora di lavoro su un piano `pending` della sera prima). Pin precedente:
+   * `205a51aaa4ea013b6351235dac6a3f0563ece1f876d68e2a68346ee961407605`.
+   */
   const OWNER_PROMPT_SHA_AT_SPLIT =
-    'c1f6ed077218a15797b8536007e045aee75c6b11a8dc7312a379a56b2ff612c8';
+    'd243cf54a8eda456dabb9c35c5911bba54b248d1eb287392cdead2efee90c7a2';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
@@ -342,7 +359,19 @@ describe('the owner-class prompt does not move', () => {
    * precedente:
    * `cf939151204ac65e746c739814a460cc8e016191243c0a52242e934e8977e829`.
    */
-  const GROUP_PROMPT_SHA_V1 = '96a4b8a78a874e21feadbb2cc09d314620a3ed912a6f6711854db78623b88737';
+  /**
+   * Ri-fissato 2026-09-27 insieme al pin owner, per la stessa riga nuova della
+   * voce («Struttura quando serve»). Pin precedente:
+   * `96a4b8a78a874e21feadbb2cc09d314620a3ed912a6f6711854db78623b88737`.
+   */
+  /**
+   * Ri-fissato 2026-09-30 (`slice/plan-stale-no-autoresume`) insieme al pin
+   * owner, per la stessa riga: `WORK_RULES` spedisce a tutte e due le classi,
+   * quindi la regola «un messaggio nuovo apre lavoro nuovo» arriva anche alla
+   * stanza. Pin precedente:
+   * `63c6590ed366dbb44d9e2a5ce2b018f9f0ffe3993ec5ea34d555c46cddf0b3f4`.
+   */
+  const GROUP_PROMPT_SHA_V1 = '97579e98e30d3b57a3e3372b80f26201efcf8eb1c7fe0c86fd3e4ab449f8bdfc';
 
   it('e la stanza riceve lo stesso prompt di ieri, byte per byte', () => {
     const runtime = boot(bootHome());
@@ -465,7 +494,13 @@ describe('quale versione del prompt assembla questa installazione', () => {
     // Linux del giorno: disclosure non ha undo) — e accorcia la riga (2.031 →
     // 2.022), rapporto v1 9,57 (19.341 / 2.022) e v2 4,32 (17.301 / 4.001).
     // Soglie invariate: la misura regge, non è stata abbassata.
-    expect(v1.chiSei / v1.comeLavori).toBeGreaterThan(9);
+    // Ri-misurato 2026-09-30 (`slice/plan-stale-no-autoresume`): la riga «un
+    // messaggio nuovo apre lavoro nuovo» aggiunge testo a `WORK_RULES`
+    // (2.022 → ~2.192 caratteri), rapporto v1 8,89 (19.341 / ~2.192). Stessa
+    // regola: la soglia scende con la misura, e v1 resta pesantemente
+    // carattere contro il `< 8` di v2 — che è la riga che porta il peso
+    // dell'affermazione.
+    expect(v1.chiSei / v1.comeLavori).toBeGreaterThan(8.5);
     expect(v2.chiSei / v2.comeLavori).toBeLessThan(8);
     // E il prompt non è cresciuto per farlo: il peso si è spostato.
     expect(v2.chiSei + v2.comeLavori).toBeLessThan((v1.chiSei + v1.comeLavori) * 1.02);
@@ -852,5 +887,72 @@ describe('the tool list a principal is shown', () => {
     } finally {
       runtime.close();
     }
+  });
+});
+
+describe('un piano stantio non si riprende da solo', () => {
+  /**
+   * Misurato il 30/09/2026: il piano video della sera prima (pending dalle
+   * 23:51) è stato reiniettato come «Sono aperti» in un «Buongiorno Muffin»
+   * delle 09:31, e il modello ci ha fatto un'ora di debug sopra senza che
+   * nessuna concessione lo avesse chiesto. Un `pending` di ieri e
+   * un'interruzione di dieci secondi fa non possono presentarsi identici.
+   */
+  const ORA = new Date('2026-09-30T09:31:00.000Z').getTime();
+  const passo = (text: string, updatedAt: string): TodoItem => ({
+    seq: 1,
+    text,
+    state: 'pending',
+    note: null,
+    tier: 0,
+    dueAt: null,
+    createdAt: updatedAt,
+    updatedAt,
+  });
+
+  it('la soglia di staleness è 6 ore, pinnata', () => {
+    expect(STALE_PLAN_MS).toBe(6 * 60 * 60 * 1000);
+  });
+
+  it('vuoto dentro, vuoto fuori — costo zero', () => {
+    expect(todoSection([], ORA)).toBe('');
+  });
+
+  it('un piano fresco si presenta come dovuto, come prima', () => {
+    const out = todoSection([passo('finire il video', new Date(ORA - 60_000).toISOString())], ORA);
+    expect(out).toContain('Sono aperti:');
+    expect(out).toContain('finire il video');
+    expect(out).not.toContain('da solo');
+  });
+
+  it('un piano di ieri non si presenta come dovuto: chiede prima', () => {
+    const out = todoSection(
+      [passo('verificare venv manim', new Date(ORA - 9.5 * 60 * 60 * 1000).toISOString())],
+      ORA,
+    );
+    expect(out).toContain('verificare venv manim');
+    expect(out).not.toContain('Sono aperti:');
+    expect(out).toContain('non riprenderli da solo');
+  });
+
+  it('fresco e stantio insieme: due blocchi, due verbi diversi', () => {
+    const out = todoSection(
+      [
+        passo('cosa nuova', new Date(ORA - 10_000).toISOString()),
+        passo('cosa vecchia', new Date(ORA - STALE_PLAN_MS - 1_000).toISOString()),
+      ],
+      ORA,
+    );
+    expect(out).toContain('Sono aperti:');
+    expect(out).toContain('cosa nuova');
+    expect(out).toContain('non riprenderli da solo');
+    expect(out).toContain('cosa vecchia');
+  });
+
+  it('al confine la vecchiaia vince: oltre la soglia è stantio', () => {
+    const appena = todoSection([passo('x', new Date(ORA - STALE_PLAN_MS + 60_000).toISOString())], ORA);
+    expect(appena).toContain('Sono aperti:');
+    const oltre = todoSection([passo('x', new Date(ORA - STALE_PLAN_MS - 60_000).toISOString())], ORA);
+    expect(oltre).toContain('non riprenderli da solo');
   });
 });
