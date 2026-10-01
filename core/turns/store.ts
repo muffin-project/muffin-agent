@@ -186,13 +186,16 @@ export type ContinuableClass =
   | 'model_deadline'
   | 'turn_deadline'
   | 'active_model_budget'
-  | 'recovery_exhausted';
+  | 'recovery_exhausted'
+  | 'plan_open';
 
 /** Typed durable evidence carried by a `continuable` row. Never message content, never secrets. */
 export type ContinuableReason = {
   class: ContinuableClass;
   /** Which lease ended (0-based). */
   lease: number;
+  /** Granted plan rows still open behind a `plan_open` release: a count, never their text. */
+  openSteps?: number;
   /** Consecutive failed attempts behind the release, when the class counts them. */
   attempts?: number;
   /** Provider request ids behind the release, for the OpenRouter dashboard. */

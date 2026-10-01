@@ -113,9 +113,10 @@ describe('il piano torna nel contesto del turno dopo, senza che nessuno lo chied
     expect(second).toContain('Piano di questa conversazione');
     expect(second).toContain('1. [pending] leggere il contratto');
     expect(second).toContain('2. [pending] rispondere a Marco');
-    // The deterministic completion criterion is stated where the model reads
-    // about the plan at all — it is the only place it appears.
-    expect(second).toMatch(/finito quando nessun passo/);
+    // No completion rule in prose: "finished" is decided by the completion
+    // gate reading rows at the finish boundary
+    // (`agent/loop/completion-gate.test.ts`), not by a sentence here. What
+    // this context still owes the model is the rows and their states, above.
   });
 
   it('sopravvive al riavvio del processo: un runtime nuovo lo rimette in contesto', async () => {
