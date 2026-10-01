@@ -7,6 +7,7 @@ import { ApprovalStore } from '../core/approvals/store.js';
 import { SHADOW_PACK } from '../core/judgment/pack.js';
 import type { JudgmentAnswer } from '../core/judgment/port.js';
 import { JudgmentStore } from '../core/judgment/store.js';
+import { redactText } from '../core/tracing/redact.js';
 import { TurnStore } from '../core/turns/store.js';
 import { runInit } from './init.js';
 import { cmdJudgments } from './judgments.js';
@@ -58,7 +59,11 @@ function semina(file: string): void {
   const judgments = new JudgmentStore(db);
   const turns = new TurnStore(db);
   const turnId = 't-1';
-  const resource = 'command: npm test · cwd: .';
+  // Come produzione: la domanda porta il riassunto **grezzo**, la riga
+  // d'effetto lo stesso riassunto **redatto** — con un token dentro, le due
+  // stringhe sono diverse, e il join deve passare per la seconda forma.
+  const resource =
+    'command: curl -s -H "Authorization: Bearer segretonellacomando" https://api.esempio.it/dati · cwd: .';
   const approvalId = approvals.ask(
     { turnId, capability: 'sys.shell.write', resource, prompt: 'eseguo?', taint: 0 },
     new Date(),
@@ -90,8 +95,13 @@ function semina(file: string): void {
     tool: 'shell_run_write',
     capability: 'sys.shell.write',
     rerunnable: false,
-    args: { command: 'npm test' },
-    effect: { row: 'host', reversible: 'no', resource, decision: 'ask' },
+    args: { command: 'curl' },
+    effect: {
+      row: 'host',
+      reversible: 'no',
+      resource: redactText(resource).slice(0, 300),
+      decision: 'ask',
+    },
   });
   turns.endToolCall(turnId, 'c1', { content: 'ok', isError: false, tier: 0 });
   db.close();
@@ -149,6 +159,9 @@ describe('muffin judgments report', () => {
       expect(testo).toContain('domande: 1 · ok 1');
       expect(testo).toContain('concordo-consuma (auto consuma: owner sì, esito pulito)      1');
       expect(testo).toContain('falso-sicuro (auto consuma: owner no, o andata male)         0');
+      // Se il join dell'effetto manca, questa riga vale 1: è l'asserzione
+      // che il join ha davvero trovato la riga, non che il buco sia verde.
+      expect(testo).toContain("senza esito visibile (consentito, nessuna riga d'effetto)    0");
       expect(testo).toContain('description_matches_command    allow 0.95 (1)');
     });
   });

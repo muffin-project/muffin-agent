@@ -1,4 +1,5 @@
 import type DatabaseCtor from 'better-sqlite3';
+import { redactText } from '../tracing/redact.js';
 import { SHADOW_PACK } from './pack.js';
 import type { JudgmentAnswer } from './port.js';
 
@@ -14,12 +15,24 @@ import type { JudgmentAnswer } from './port.js';
  *
  * Il join è la parte delicata: `ask_judgments` ↔ `approvals` per
  * `approval_id` (la decisione dell'owner), e `approvals` ↔
- * `turn_tool_calls` per (turno, capability, risorsa) — l'esito reale
- * dell'effetto. Per la famiglia shell le due «risorse» coincidono per
- * costruzione (stessa `summarizeCallArgs` sugli stessi argomenti, nella
- * domanda e nella riga d'intento); una famiglia futura che non coincida lo
- * mostrerà come assenza visibile («non eseguito»), non come un join
- * silenziosamente sbagliato.
+ * `turn_tool_calls` per (turno, capability, risorsa). La «risorsa» però
+ * **non è la stessa stringa** nei due tavoli, e la prima stesura di questo
+ * report fingeva che lo fosse: la domanda all'owner porta il riassunto
+ * **grezzo** degli argomenti (`summarizeCallArgs`), la riga d'effetto porta
+ * lo stesso riassunto **redatto e tagliato a 300** (`effectResource`) —
+ * quindi ogni comando con dentro una credenziale, o lungo, semplicemente
+ * non si trovava, e un esito andato male si leggeva «pulito»:
+ * `falso-sicuro` diventava cieco proprio sui comandi che al pacchetto
+ * interessano di più (trovato dal giudice della PR #822, verificato sul
+ * comando dello scenario stesso). Qui il join prova **entrambe** le forme
+ * che produzione può aver scritto, calcolando la seconda con la stessa
+ * `redactText` dello stesso codice — mai una terza copia della regola.
+ *
+ * E quando la chiamata non ha lasciato riga d'effetto — crash dopo il sì,
+ * o un join che non trova — l'esito è **ignoto**, non pulito: sta in una
+ * categoria visibile a sé («senza esito visibile»), fuori dalle quattro,
+ * perché il controfattuale non può giudicare ciò che non ha lasciato
+ * traccia.
  */
 
 /** La politica candidata: soglie **parametro**, mai architettura (#740). */
@@ -82,56 +95,61 @@ export type ShadowEvidence = {
   tokens: { input: number; output: number };
 };
 
-/** L'evidenza grezza: join su ciò che i tre scrittori hanno già scritto. */
+/**
+ * L'evidenza grezza: join su ciò che i tre scrittori hanno già scritto.
+ *
+ * Il join dell'effetto prova le **due forme** della risorsa: la domanda
+ * all'owner porta il riassunto grezzo, la riga d'effetto lo stesso riassunto
+ * redatto e tagliato — li si calcola entrambi (la seconda con la `redactText`
+ * di `effectResource`, mai una regola terza) e si cerca per entrambi. Con
+ * `max(started_at)` si prende la riga più recente: SQLite garantisce che le
+ * colonne nude vengano dalla riga del max quando c'è un solo aggregato
+ * min/max (sqlite.org, bare columns in aggregate queries).
+ *
+ * Due giudizi possono condividere una domanda (un re-ask con la domanda
+ * ancora aperta riusa la riga `approvals` e giudizia di nuovo): ogni
+ * giudizio conta per conto suo, perché è il *verdetto* che si calibra — la
+ * decisione dell'owner è la stessa, ed è giusto che pesi due volte su due
+ * giudizi diversi.
+ */
 export function readShadowEvidence(db: DatabaseCtor.Database): ShadowEvidence {
-  const esiste =
-    (db
-      .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ask_judgments'`)
-      .get() as { 1: number } | undefined) !== undefined;
+  const tabella = (nome: string): boolean =>
+    (db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(nome) as
+      | { 1: number }
+      | undefined) !== undefined;
   const vuota: ShadowEvidence = {
     rows: [],
     coverage: { total: 0, ok: 0, pending: 0, timeout: 0, error: 0 },
     latency: { count: 0, mean: null, max: null },
     tokens: { input: 0, output: 0 },
   };
-  if (!esiste) return vuota;
+  if (!tabella('ask_judgments')) return vuota;
 
-  const righe = (
-    db
-      .prepare(
-        `SELECT j.id, j.capability, j.turn_id, j.status, j.answers, j.latency_ms,
-                j.usage_input_tokens, j.usage_output_tokens,
-                a.decision AS owner_decision, a.withdrawn_at, a.resource AS owner_resource,
-                e.is_error AS effect_error, e.undone_at AS effect_undone, max(e.started_at) AS effect_started
-         FROM ask_judgments j
-         LEFT JOIN approvals a ON a.id = j.approval_id
-         LEFT JOIN turn_tool_calls e
-           ON e.turn_id = j.turn_id AND e.capability = a.capability AND e.resource IS a.resource
-         GROUP BY j.id
-         ORDER BY j.id`,
-      )
-      .all() as Array<Record<string, unknown>>
-  ).map((r) => {
-    let answers: Record<string, JudgmentAnswer> = {};
-    if (typeof r['answers'] === 'string' && r['answers'] !== '') {
-      try {
-        answers = JSON.parse(r['answers']) as Record<string, JudgmentAnswer>;
-      } catch {
-        answers = {};
-      }
-    }
+  const grezze = db
+    .prepare(
+      `SELECT j.id, j.capability, j.turn_id, j.status, j.answers, j.latency_ms,
+              j.usage_input_tokens, j.usage_output_tokens,
+              a.decision AS owner_decision, a.withdrawn_at, a.resource AS owner_resource,
+              a.capability AS owner_capability
+       FROM ask_judgments j
+       LEFT JOIN approvals a ON a.id = j.approval_id
+       ORDER BY j.id`,
+    )
+    .all() as Array<Record<string, unknown>>;
+  if (grezze.length === 0) return vuota;
+
+  const righe: EvidenceRow[] = grezze.map((r) => {
     const ownerDecision =
       r['owner_decision'] === 'allow' || r['owner_decision'] === 'deny'
         ? (r['owner_decision'] as 'allow' | 'deny')
         : null;
-    const eseguito = r['effect_started'] !== null && r['effect_started'] !== undefined;
     return {
       judgmentId: Number(r['id']),
-      capability: String(r['capability']),
+      capability: String(r['owner_capability'] ?? r['capability'] ?? ''),
       turnId: String(r['turn_id']),
       resource: (r['owner_resource'] as string | null) ?? null,
       status: String(r['status']),
-      answers,
+      answers: leggiAnswers(r['answers']),
       latencyMs:
         r['latency_ms'] === null || r['latency_ms'] === undefined ? null : Number(r['latency_ms']),
       usageInputTokens:
@@ -144,14 +162,39 @@ export function readShadowEvidence(db: DatabaseCtor.Database): ShadowEvidence {
           : Number(r['usage_output_tokens']),
       ownerDecision:
         r['withdrawn_at'] !== null && r['withdrawn_at'] !== undefined ? null : ownerDecision,
-      effect: eseguito
-        ? {
-            isError: r['effect_error'] === 1,
-            undone: r['effect_undone'] !== null && r['effect_undone'] !== undefined,
-          }
-        : null,
+      effect: null,
     } satisfies EvidenceRow;
   });
+
+  // Il secondo passaggio porta l'esito, cercando la riga d'effetto per
+  // entrambe le chiavi: grezza (come la domanda) e redatta+tagliata (come
+  // `effectResource`). Un database --db che non ha i due tavoli amici
+  // resta leggibile: l'esito manca, e la categoria lo dice.
+  if (tabella('approvals') && tabella('turn_tool_calls')) {
+    const cerca = db.prepare(
+      `SELECT is_error, undone_at, max(started_at) AS started_at
+       FROM turn_tool_calls
+       WHERE turn_id = @turnId AND capability = @capability
+         AND (resource IS @grezza OR resource IS @redatta)`,
+    );
+    for (const riga of righe) {
+      if (riga.capability === '' || riga.resource === null) continue;
+      const esito = cerca.get({
+        turnId: riga.turnId,
+        capability: riga.capability,
+        grezza: riga.resource,
+        redatta: riga.resource.length > MAX_RESOURCE_CHARS
+          ? redactText(riga.resource.slice(0, MAX_RESOURCE_CHARS))
+          : redactText(riga.resource),
+      }) as { is_error: number | null; undone_at: string | null; started_at: string | null } | undefined;
+      if (esito !== undefined && esito['started_at'] !== null) {
+        riga.effect = {
+          isError: esito['is_error'] === 1,
+          undone: esito['undone_at'] !== null && esito['undone_at'] !== undefined,
+        };
+      }
+    }
+  }
 
   const coverage = { total: righe.length, ok: 0, pending: 0, timeout: 0, error: 0 };
   const latenze: number[] = [];
@@ -205,7 +248,8 @@ export type CategoriaControfattuale =
   | 'concordo-consuma'
   | 'falso-sicuro'
   | 'escalation-inutile'
-  | 'concordo-escalazione';
+  | 'concordo-escalazione'
+  | 'senza-esito';
 
 export type EsempioControfattuale = {
   categoria: CategoriaControfattuale;
@@ -224,6 +268,23 @@ export type Counterfactual = {
 const ESAMI_PER_CATEGORIA = 5;
 
 /**
+ * La forma che `effectResource` scrive davvero: il riassunto redatto e
+ * tagliato a 300 (`agent/loop/tool-call.ts`). Il numero è il tetto di
+ * laggiù, ripetuto qui come limite — la regola è `redactText`, condivisa
+ * per import, mai una terza copia.
+ */
+const MAX_RESOURCE_CHARS = 300;
+
+function leggiAnswers(raw: unknown): Record<string, JudgmentAnswer> {
+  if (typeof raw !== 'string' || raw === '') return {};
+  try {
+    return JSON.parse(raw) as Record<string, JudgmentAnswer>;
+  } catch {
+    return {};
+  }
+}
+
+/**
  * Il controfattuale: per ogni giudizio con risposta **e** decisione owner,
  * cosa avrebbe fatto `auto` e cosa è successo davvero. Il falso-sicuro è la
  * metrica che vieta la promozione; l'escalation inutile è il suo costo.
@@ -234,6 +295,7 @@ export function counterfactual(evidence: ShadowEvidence, policy: CandidatePolicy
     'falso-sicuro': 0,
     'escalation-inutile': 0,
     'concordo-escalazione': 0,
+    'senza-esito': 0,
   };
   const examples: EsempioControfattuale[] = [];
   let giudicabili = 0;
@@ -244,7 +306,15 @@ export function counterfactual(evidence: ShadowEvidence, policy: CandidatePolicy
     const esitoMale = riga.effect !== null && (riga.effect.isError || riga.effect.undone);
     let categoria: CategoriaControfattuale;
     let dettaglio: string;
-    if (consuma) {
+    if (riga.ownerDecision === 'allow' && riga.effect === null) {
+      // Consentito ma nessuna riga d'effetto: crash dopo il sì, oppure un
+      // join che non ha trovato. L'esito è **ignoto**, non pulito — dirlo
+      // «pulito» è il modo in cui un falso-sicuro sparisce dietro un join
+      // mancante, ed è esattamente il difetto trovato dal giudice della
+      // PR #822. Sta in una categoria a sé: visibile, fuori dalle quattro.
+      categoria = 'senza-esito';
+      dettaglio = 'consentito, nessuna riga d\'effetto trovata';
+    } else if (consuma) {
       if (riga.ownerDecision === 'deny') {
         categoria = 'falso-sicuro';
         dettaglio = "l'owner ha rifiutato";
@@ -359,6 +429,7 @@ export function formatReport(evidence: ShadowEvidence, policy: CandidatePolicy):
     `falso-sicuro (auto consuma: owner no, o andata male)         ${cf.counts['falso-sicuro']}`,
     `escalazione inutile (auto chiede: owner avrebbe detto sì)    ${cf.counts['escalation-inutile']}`,
     `concordo-escalazione (auto chiede: owner no, o andata male)  ${cf.counts['concordo-escalazione']}`,
+    `senza esito visibile (consentito, nessuna riga d'effetto)    ${cf.counts['senza-esito']}`,
   );
   if (cf.counts['falso-sicuro'] > 0) {
     righe.push('esempi falso-sicuro:');

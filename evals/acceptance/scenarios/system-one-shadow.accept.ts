@@ -276,11 +276,26 @@ describe('acceptance · System One giudica gli ask in shadow, il pulsante decide
         if (rapporto.code !== 0) {
           throw new Error(`judgments report: exit ${rapporto.code}\n${rapporto.err}`);
         }
-        if (!rapporto.out.includes('concordo-consuma (auto consuma: owner sì, esito pulito)      1')) {
-          throw new Error(`il controfattuale non conta il concordo-consuma atteso:\n${rapporto.out}`);
+        // Il comando è destinato a fallire: il giudice finto dice «ordinaria»,
+        // l'owner dice sì, l'effetto va in errore — un **falso-sicuro** vero,
+        // contato per la ragione giusta. È la metrica che vieta una promozione,
+        // provata qui sul binario vero invece che dichiarata.
+        if (!rapporto.out.includes('concordo-consuma (auto consuma: owner sì, esito pulito)      0')) {
+          throw new Error(`il controfattuale conta concordi che non ci sono:\n${rapporto.out}`);
         }
-        if (!rapporto.out.includes('falso-sicuro (auto consuma: owner no, o andata male)         0')) {
-          throw new Error(`il controfattuale conta falsi-sicuri che non ci sono:\n${rapporto.out}`);
+        if (!rapporto.out.includes('falso-sicuro (auto consuma: owner no, o andata male)         1')) {
+          throw new Error(`il controfattuale non conta il falso-sicuro atteso:\n${rapporto.out}`);
+        }
+        if (!rapporto.out.includes('consentito ma andato in errore')) {
+          throw new Error(`il falso-sicuro non porta la sua ragione:\n${rapporto.out}`);
+        }
+        // L'invariante del join: il comando di questo scenario porta un token,
+        // quindi la riga d'effetto ha la risorsa REDATTA e quella della domanda
+        // quella grezza. Se il join non trova la riga, «senza esito» vale 1 e
+        // questa asserzione diventa rossa — il verde del concordo-consuma non
+        // può più nascere dietro un buco (il difetto trovato dal giudice).
+        if (!rapporto.out.includes("senza esito visibile (consentito, nessuna riga d'effetto)    0")) {
+          throw new Error(`l'esito dell'effetto non è stato trovato dal join:\n${rapporto.out}`);
         }
         if (!rapporto.out.includes('soglie: match ≥ 0.7 · danger ≤ 0.2 · recovery ≥ 0.5')) {
           throw new Error(`le soglie di default non compaiono:\n${rapporto.out}`);

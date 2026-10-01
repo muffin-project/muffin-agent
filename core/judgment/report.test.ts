@@ -1,6 +1,7 @@
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { ApprovalStore } from '../approvals/store.js';
+import { redactText } from '../tracing/redact.js';
 import { TurnStore } from '../turns/store.js';
 import { SHADOW_PACK } from './pack.js';
 import type { JudgmentAnswer } from './port.js';
@@ -48,6 +49,8 @@ type Semi = {
   answers?: Record<string, JudgmentAnswer>;
   owner?: 'allow' | 'deny' | 'withdrawn' | 'open';
   effetto?: 'pulito' | 'errore' | 'annullato' | null;
+  /** La risorsa **come la domanda all'owner la scrive** (grezza). */
+  resource?: string;
 };
 
 function pianta(semi: Semi): { db: DatabaseCtor.Database; judgmentId: number; approvalId: string } {
@@ -58,7 +61,7 @@ function pianta(semi: Semi): { db: DatabaseCtor.Database; judgmentId: number; ap
 
   const turnId = 't-1';
   const capability = 'sys.shell.write';
-  const resource = 'command: echo ciao · cwd: .';
+  const resource = semi.resource ?? 'command: echo ciao · cwd: .';
   const approvalId = approvals.ask(
     { turnId, capability, resource, prompt: 'eseguo?', taint: 0 },
     new Date('2026-10-01T10:00:00Z'),
@@ -102,6 +105,8 @@ function pianta(semi: Semi): { db: DatabaseCtor.Database; judgmentId: number; ap
   }
 
   if (semi.effetto !== null && semi.effetto !== undefined) {
+    // Come produzione: la riga d'effetto porta il riassunto **redatto e
+    // tagliato** (`effectResource`), la domanda all'owner quello grezzo.
     const callId = 'c1';
     turns.startToolCall(turnId, {
       callId,
@@ -109,7 +114,7 @@ function pianta(semi: Semi): { db: DatabaseCtor.Database; judgmentId: number; ap
       capability,
       rerunnable: false,
       args: { command: 'echo ciao' },
-      effect: { row: 'host', reversible: 'no', resource, decision: 'ask' },
+      effect: { row: 'host', reversible: 'no', resource: redactText(resource).slice(0, 300), decision: 'ask' },
     });
     turns.endToolCall(turnId, callId, {
       content: 'fatto',
@@ -159,6 +164,96 @@ describe('readShadowEvidence — il join', () => {
     expect(ev.coverage.total).toBe(0);
     const testo = formatReport(ev, DEFAULT_POLICY);
     expect(testo).toContain('nessun giudizio registrato');
+    db.close();
+  });
+
+  /**
+   * Il difetto trovato dal giudice della PR #822, chiuso con la forma che
+   * produzione scrive davvero: la domanda porta il riassunto **grezzo**, la
+   * riga d'effetto lo stesso riassunto **redatto** — un comando con un token
+   * dentro produce due stringhe diverse, e il join della prima stesura non
+   * trovava la riga: un esito in errore si leggeva «pulito» e il
+   * falso-sicuro spariva. Qui il seme scrive le due forme vere, e l'errore
+   * DEVE contarsi — con il join a chiave sola questo test è rosso.
+   */
+  it('il join passa per la forma redatta: comando con token, esito in errore → falso-sicuro', () => {
+    const COMANDO = 'command: curl -s -H "Authorization: Bearer segretonellacomando" https://api.esempio.it/dati · cwd: .';
+    const { db } = pianta({ judgment: 'ok', owner: 'allow', effetto: 'errore', resource: COMANDO });
+    const ev = readShadowEvidence(db);
+    expect(ev.rows[0]?.effect).toEqual({ isError: true, undone: false });
+    const cf = counterfactual(ev, DEFAULT_POLICY);
+    expect(cf.counts['falso-sicuro']).toBe(1);
+    expect(cf.counts['concordo-consuma']).toBe(0);
+    expect(cf.counts['senza-esito']).toBe(0);
+    db.close();
+  });
+
+  it('consentito ma nessuna riga d\'effetto: esito ignoto, mai «pulito»', () => {
+    const { db } = pianta({ judgment: 'ok', owner: 'allow', effetto: null });
+    const cf = counterfactual(readShadowEvidence(db), DEFAULT_POLICY);
+    expect(cf.counts['senza-esito']).toBe(1);
+    expect(cf.counts['concordo-consuma']).toBe(0);
+    const testo = formatReport(readShadowEvidence(db), DEFAULT_POLICY);
+    expect(testo).toContain("senza esito visibile (consentito, nessuna riga d'effetto)    1");
+    db.close();
+  });
+
+  it('più righe d\'effetto per la stessa chiamata: vince la più recente', () => {
+    // Un orologio variabile: `started_at` si scrive all'apertura della riga,
+    // quindi si cambia l'ora **prima** di ogni startToolCall.
+    let ora = new Date('2026-10-01T10:05:00Z');
+    const orologio = (): Date => ora;
+    const db = new DatabaseCtor(':memory:');
+    const approvals = new ApprovalStore(db);
+    const judgments = new JudgmentStore(db);
+    const turns = new TurnStore(db, orologio);
+    const turnId = 't-1';
+    const capability = 'sys.shell.write';
+    const resource = 'command: npm test · cwd: .';
+    const approvalId = approvals.ask({ turnId, capability, resource, prompt: 'p', taint: 0 }, ora);
+    approvals.decide(approvalId, 'allow', ora);
+    const id = judgments.record({
+      approvalId,
+      turnId,
+      capability,
+      pack: 'shadow-shell/v1',
+      stateHash: 'h',
+      envelope: '{}',
+      provider: 'finto',
+      requestedModel: 'm',
+      delegationMode: 'manual',
+      askedAt: '2026-10-01T10:00:01Z',
+    });
+    judgments.settle(id, {
+      status: 'ok',
+      model: 'm',
+      answers: JSON.stringify(CONSUMA),
+      inputTokens: 1,
+      outputTokens: 1,
+      latencyMs: 1,
+      settledAt: '2026-10-01T10:00:02Z',
+    });
+    // Prima esecuzione (10:05) pulita, poi la ripetizione (10:06) in errore:
+    // il controfattuale deve leggere la **seconda**, che è l'esito vero.
+    for (const [callId, at, errore] of [
+      ['c1', '2026-10-01T10:05:00Z', false],
+      ['c2', '2026-10-01T10:06:00Z', true],
+    ] as const) {
+      ora = new Date(at);
+      turns.startToolCall(turnId, {
+        callId,
+        tool: 'shell_run_write',
+        capability,
+        rerunnable: false,
+        args: {},
+        effect: { row: 'host', reversible: 'no', resource, decision: 'ask' },
+      });
+      turns.endToolCall(turnId, callId, { content: 'x', isError: errore, tier: 0 });
+    }
+    const ev = readShadowEvidence(db);
+    expect(ev.rows[0]?.effect).toEqual({ isError: true, undone: false });
+    const cf = counterfactual(ev, DEFAULT_POLICY);
+    expect(cf.counts['falso-sicuro']).toBe(1);
     db.close();
   });
 });
