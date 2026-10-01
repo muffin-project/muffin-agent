@@ -122,7 +122,7 @@ async function chiedi(baseUrl: string, model: string, deps: ModalitaDeps): Promi
   const doFetch = deps.fetch ?? globalThis.fetch;
   try {
     const res = await doFetch(`${baseUrl.replace(/\/+$/, '')}/models`, {
-      headers: deps.apiKey === undefined ? {} : { authorization: `Bearer ${deps.apiKey}` },
+      headers: deps.apiKey === undefined ? {} : { Authorization: `Bearer ${deps.apiKey}` },
     });
     if (!res.ok) return null;
     const body = (await res.json()) as ModelsPayload;
