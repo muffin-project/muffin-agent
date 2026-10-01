@@ -182,7 +182,7 @@ export function providerFor(provider: { kind: string; baseUrl?: string | undefin
 /**
  * I provider di ricerca web da cui si sceglie.
  *
- * Stessa forma, stessa ragione e stesso numero di voci di `PROVIDERS` sopra:
+ * Stessa forma e stessa ragione di `PROVIDERS` sopra:
  * l'astrazione esisteva già a valle — `agent/tools/search.ts` ha
  * un'interfaccia `SearchBackend` con `id` e `endpoint`, e `tavilyBackend` ne è
  * **una** implementazione — ma a monte era cablata in due punti: lo schema di
@@ -193,8 +193,14 @@ export function providerFor(provider: { kind: string; baseUrl?: string | undefin
  * `secretName` è una convenzione, non un vincolo: `muffin search <id>` la usa
  * per proporre un nome al segreto, e `config.search.apiKeyRef` resta libero per
  * chi ne ha già uno con un altro nome.
+ *
+ * Keenable è la seconda voce, dietro la stessa capability `sys.search`: niente
+ * policy nuova, solo un endpoint in più che l'owner sceglie per nome (vedi
+ * docs/evidence/secondo-motore-di-ricerca-keenable-2026-09-26.md). Nessuna
+ * selezione automatica e nessuna modalità senza chiave: il motore lo nomina
+ * l'owner, e con lui la destinazione delle sue query.
  */
-export type SearchProviderId = 'tavily';
+export type SearchProviderId = 'tavily' | 'keenable';
 
 export type SearchProviderEntry = {
   id: SearchProviderId;
@@ -220,6 +226,13 @@ export const SEARCH_PROVIDERS: Readonly<Record<SearchProviderId, SearchProviderE
     keysUrl: 'https://app.tavily.com/home',
     secretName: 'tavily_api_key',
     endpoint: 'https://api.tavily.com/search',
+  },
+  keenable: {
+    id: 'keenable',
+    label: 'Keenable',
+    keysUrl: 'https://app.keenable.ai/console',
+    secretName: 'keenable_api_key',
+    endpoint: 'https://api.keenable.ai/v1/search',
   },
 };
 
