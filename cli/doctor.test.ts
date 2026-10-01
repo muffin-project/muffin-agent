@@ -1540,6 +1540,47 @@ describe("l'indice coerente non dice che l'embedder risponda", () => {
     rmSync(dir, { recursive: true, force: true });
   }, 60_000);
 
+  it('a indice VUOTO nomina l embedder irraggiungibile invece di prescrivere extract — installazione fresca', async () => {
+    // Il ramo `chunks === 0` prescriveva `muffin memory extract` senza chiedere
+    // se l'embedder risponde: con Ollama giù, extract ripassa da makeEmbedder
+    // e non indicizza niente — causa sbagliata, rimedio inerte (#738).
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    // La tabella c'è ed è vuota: lo stato di un'installazione fresca, non
+    // quello di un DB senza memoria.
+    new VectorIndex(db, new Finto());
+    expect((db.prepare(`SELECT count(*) AS n FROM chunks`).get() as { n: number }).n).toBe(0);
+    db.close();
+
+    const c = await checkWith(dir, 'vector index', {
+      embedderProbe: async () => {
+        throw new Error('fetch failed');
+      },
+    });
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('empty');
+    expect(c?.detail).toContain('non risponde');
+    expect(c?.detail).toContain('fetch failed');
+    // Il rimedio inerte non deve più comparire; quello locale sì.
+    expect(c?.remedy).not.toContain('memory extract');
+    expect(c?.remedy).toContain('ollama');
+    rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+
+  it('a indice VUOTO con embedder raggiungibile resta la riga empty + extract', async () => {
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    new VectorIndex(db, new Finto());
+    db.close();
+
+    const c = await checkWith(dir, 'vector index', { embedderProbe: async () => {} });
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('empty');
+    expect(c?.detail).not.toContain('non risponde');
+    expect(c?.remedy).toContain('memory extract');
+    rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+
   it('non dice «in sync» mentre delle sorgenti aspettano ancora un vettore', async () => {
     // Contare `chunks` contro `chunks_vec` dice solo che ciò che è già
     // indicizzato è coerente. Dopo un cambio di embedder il backlog si drena a
