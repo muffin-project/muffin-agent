@@ -5,10 +5,16 @@ import { fileURLToPath } from 'node:url';
 import DatabaseCtor from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { CONTINUATION_TTL_MS } from '../agent/loop.js';
-import { CONSERVATIVE, loadProfiles, selectProfile } from '../agent/profiles/profile.js';
+import {
+  CONSERVATIVE,
+  loadEffectiveProfiles,
+  ownerProfilesDir,
+  selectSourcedProfile,
+} from '../agent/profiles/profile.js';
 import { audioAccettato, immagineAccettata } from '../agent/providers/modalita.js';
 import { speaksReasoningEffort, wantsExplicitCache } from '../agent/providers/openai-compat.js';
 import { type VerificationResult, verifyInferenceRoute } from '../agent/providers/verify.js';
+import { profileEditPath } from '../agent/tools/capability-status.js';
 import { baseToolOrder } from '../agent/runtime.js';
 import { diagnoseSearch } from '../agent/tools/search.js';
 import { type Prerequisito, prerequisitiTrascrizione } from '../core/audio/trascrivi.js';
@@ -395,11 +401,28 @@ export async function runDoctor(
   // and a model silently falling back to the conservative floor — fewer
   // tools, a shorter horizon, every crutch on, possibly a 400 on every turn
   // (D4) — is exactly that class of thing.
-  const profileProblems: string[] = [];
-  const profiles = loadProfiles(options.profilesDir, (line) => profileProblems.push(line));
-  const resolvedProfile = selectProfile(config.models.main, profiles);
+  const ownerProblems: string[] = [];
+  const shippedProblems: string[] = [];
+  const effective = loadEffectiveProfiles(home, options.profilesDir, (line, origin) =>
+    (origin === 'owner' ? ownerProblems : shippedProblems).push(line),
+  );
+  const sourced = selectSourcedProfile(config.models.main, effective);
+  const resolvedProfile = sourced?.profile ?? CONSERVATIVE;
+  const provenienza =
+    sourced === undefined
+      ? 'nessun profilo matcha'
+      : sourced.origin === 'owner'
+        ? `owner: ${sourced.file.split('/').pop()}`
+        : `shipped: ${sourced.file.split('/').pop()}`;
+  // The dropped file lives in exactly one of the two stores: the remedy names
+  // the one(s) that spoke, never a guess.
+  const cartelleCadute = [
+    ...(ownerProblems.length > 0 ? [ownerProfilesDir(home)] : []),
+    ...(shippedProblems.length > 0 ? ['agent/profiles/'] : []),
+  ].join(' e ');
+  const profileProblems = [...ownerProblems, ...shippedProblems];
   if (profileProblems.length === 0) {
-    ok('model profile', `${config.models.main} -> ${resolvedProfile.name}`);
+    ok('model profile', `${config.models.main} -> ${resolvedProfile.name} · ${provenienza}`);
   } else if (resolvedProfile === CONSERVATIVE) {
     // D4: a problem fired AND the configured model landed on the floor
     // profile. Named with the cost, not just the fact — an owner reading
@@ -414,15 +437,15 @@ export async function runDoctor(
         // sono tempo e spesa a porre il limite.
         `${resolvedProfile.maxToolsExposed} tool esposti, ${resolvedProfile.maxToolCallsPerTurn === null ? 'nessun tetto numerico di tool call' : `${resolvedProfile.maxToolCallsPerTurn} call/turno`}, ` +
         `stampelle [${resolvedProfile.recovery.join(', ')}]`,
-      'ripara o rimuovi il profilo scartato sopra, sotto agent/profiles/',
+      `ripara o rimuovi il profilo scartato sopra, sotto ${cartelleCadute}`,
     );
   } else {
     // Something is wrong but the model in use was not the one that paid for
     // it — still worth a line, never a fail: the owner is not degraded today.
     warn(
       'model profile',
-      `${profileProblems.join(' · ')} — ${config.models.main} risolve comunque su "${resolvedProfile.name}"`,
-      'ripara o rimuovi il profilo scartato sopra, sotto agent/profiles/',
+      `${profileProblems.join(' · ')} — ${config.models.main} risolve comunque su "${resolvedProfile.name}" · ${provenienza}`,
+      `ripara o rimuovi il profilo scartato sopra, sotto ${cartelleCadute}`,
     );
   }
 
@@ -1449,10 +1472,17 @@ export async function runDoctor(
       `${ordineBase.length} tool entro il tetto di ${resolvedProfile.maxToolsExposed} del profilo "${resolvedProfile.name}"`,
     );
   } else {
+    const dove = profileEditPath(
+      resolvedProfile.name,
+      sourced?.origin ?? 'conservative',
+      sourced?.file === '' ? undefined : sourced?.file,
+    );
     warn(
       'capacità: tetto tool',
       `${tagliatiDalTetto.length} tool oltre il tetto di ${resolvedProfile.maxToolsExposed} del profilo "${resolvedProfile.name}" e quindi invisibili al modello — ${tagliatiDalTetto.join(', ')}`,
-      `alza maxToolsExposed in agent/profiles/${resolvedProfile.name}.json, oppure riduci quanti tool sono registrati prima di questi`,
+      dove === null
+        ? `il profilo conservativo non ha un file in cui alzare maxToolsExposed: un profilo che matcha il modello lo sostituirebbe, oppure riduci quanti tool sono registrati prima di questi`
+        : `alza maxToolsExposed in ${dove}, oppure riduci quanti tool sono registrati prima di questi`,
     );
   }
 

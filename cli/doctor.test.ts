@@ -79,6 +79,34 @@ const checkWith = async (
 ): Promise<Check | undefined> =>
   (await runDoctor(dir, options)).checks.find((c) => c.name === name);
 
+const writeOwnerProfile = (dir: string, file: string, model: string, raw?: string): void => {
+  const d = join(dir, 'profiles');
+  mkdirSync(d, { recursive: true });
+  writeFileSync(
+    join(d, file),
+    raw ??
+      JSON.stringify({
+        schemaVersion: 1,
+        name: file.replace(/\.json$/, ''),
+        match: [model],
+        maxToolsExposed: 20,
+        maxToolCallsPerTurn: 50,
+        thinking: 'off',
+        sampling: 'deterministic',
+        recovery: ['nudge'],
+        notes: 'test owner profile',
+      }),
+  );
+};
+
+const checkWithModel = async (dir: string, model: string, name: string): Promise<Check | undefined> => {
+  const configFile = join(dir, 'config.json');
+  const config = JSON.parse(readFileSync(configFile, 'utf8'));
+  config.models.main = model;
+  writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
+  return check(dir, name);
+};
+
 describe('doctor names the source of the permission matrix', () => {
   it('says the sealed file when the sealed file spoke', async () => {
     const dir = home();
@@ -212,7 +240,7 @@ describe('doctor names which profile the configured model resolves to', () => {
     const dir = home(); // cli/init.ts writes models.main = claude-sonnet-5
     const c = await check(dir, 'model profile');
     expect(c?.level).toBe('ok');
-    expect(c?.detail).toBe('claude-sonnet-5 -> frontier');
+    expect(c?.detail).toBe('claude-sonnet-5 -> frontier · shipped: frontier.json');
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -523,6 +551,59 @@ describe('doctor names the spend cap and where it came from', () => {
     const c = await check(dir, 'endpoint non conteggiati');
     expect(c?.level).toBe('warn');
     expect(c?.remedy).toContain('rot reseal');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('names an owner-resolved profile with its file, not as a silent default (#764)', async () => {
+    // The green lie this kills: an owner model falling to the conservative
+    // floor read as healthy (`model -> conservative`, no why). Now the source
+    // is on the line.
+    const dir = home();
+    writeOwnerProfile(dir, 'owner-lan.json', 'my-lan-model');
+    const c = await checkWithModel(dir, 'my-lan-model', 'model profile');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('owner-lan');
+    expect(c?.detail).toContain('owner: owner-lan.json');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('names a shipped resolution with its file (#764)', async () => {
+    const dir = home();
+    const c = await checkWithModel(dir, 'qwen3.8-27b', 'model profile');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('shipped: consumer-qwen3.json');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('says why a model lands on the floor instead of printing a green default (#764)', async () => {
+    const dir = home();
+    const c = await checkWithModel(dir, 'model-that-matches-nothing', 'model profile');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('conservative');
+    expect(c?.detail).toContain('nessun profilo matcha');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('fails, naming the home directory, when the only owner file is broken (#764)', async () => {
+    // D4: a problem fired AND the model landed on the floor. The remedy must
+    // name the home profiles dir, not the release tree.
+    const dir = home();
+    writeOwnerProfile(dir, 'broken.json', 'my-lan-model', '{ not json');
+    const c = await checkWithModel(dir, 'my-lan-model', 'model profile');
+    expect(c?.level).toBe('fail');
+    expect(c?.detail).toContain('broken.json');
+    expect(c?.remedy).toContain(join(dir, 'profiles'));
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('warns (not fails) when a broken owner file coexists with a valid resolution (#764)', async () => {
+    const dir = home();
+    writeOwnerProfile(dir, 'owner-lan.json', 'my-lan-model');
+    writeOwnerProfile(dir, 'broken.json', 'my-lan-model', '{ not json');
+    const c = await checkWithModel(dir, 'my-lan-model', 'model profile');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('owner-lan');
+    expect(c?.detail).toContain('broken.json');
     rmSync(dir, { recursive: true, force: true });
   });
 
