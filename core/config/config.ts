@@ -1,10 +1,10 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { ensurePrivateDir, tightenPrivateFile } from './private-fs.js';
-import { z } from 'zod';
-import { SEARCH_PROVIDER_IDS } from './providers.js';
-import { REASONING_DIALECTS, THINKING_VALUES } from './thinking.js';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { z } from 'zod';
+import { ensurePrivateDir, tightenPrivateFile } from './private-fs.js';
+import { SEARCH_PROVIDER_IDS } from './providers.js';
+import { REASONING_DIALECTS, THINKING_VALUES } from './thinking.js';
 
 /**
  * One home, one config file, one database. Backup, export and "delete
@@ -141,7 +141,11 @@ export const ConfigSchema = z.object({
      */
     routingForFamily: z.string().min(1).optional(),
   }),
-  models: z.object({ main: z.string().min(1), light: z.string().min(1), deep: z.string().min(1).optional() }),
+  models: z.object({
+    main: z.string().min(1),
+    light: z.string().min(1),
+    deep: z.string().min(1).optional(),
+  }),
   /**
    * Il ragionamento sul turno di conversazione, quando l'owner non vuole quello
    * che il profilo del suo modello dichiara.
@@ -235,6 +239,42 @@ export const ConfigSchema = z.object({
           apiKeyRef: z.string().min(1).optional(),
         })
         .optional(),
+    })
+    .optional(),
+  /**
+   * System One — il sensore semantico degli `ask` (issue #740, fase shadow;
+   * ADR-0096). **Spento per default e per assenza**: una config che non
+   * nomina questo campo non spinge un byte verso nessuno, e il comportamento
+   * del ramo `ask` resta quello di sempre.
+   *
+   * Quando c'è, l'runtime giudica **in shadow** ogni ask della famiglia
+   * shell: il verdetto tipizzato (con probabilità) finisce in
+   * `ask_judgments`, accanto alla decisione che l'owner prenderà comunque —
+   * mai al posto suo. Il giudizio non può consumare un ask, né toccare il
+   * kernel: la sovranità deterministica resta intera (ADR-0095/#607).
+   *
+   * Che cosa parte dalla macchina: l'envelope compatto dell'azione
+   * (richiesta dell'owner, capability e riga di effetto, comando/risorsa,
+   * descrizione del modello, taint e principal) — **redatto** con la stessa
+   * `redactText` del tracing, mai segreti, mai la conversazione intera. Chi
+   * lo accende lo fa sapendo questo; chi non lo accende non paga niente.
+   *
+   * `provider` è un literal perché l'interfaccia è di Muffin e TypeSafe è un
+   * adattatore, non il piano: altri provider arrivano come letterali nuovi,
+   * non come stringhe libere.
+   */
+  judgment: z
+    .object({
+      provider: z.literal('typesafe'),
+      /** `secret://name` — risolto dal registro dei segreti, mai inline. */
+      apiKeyRef: z.string().min(1),
+      baseUrl: z.string().url().optional(),
+      /** Il modello richiesto; assente = il default dell'adapter. */
+      model: z.string().min(1).optional(),
+      /** Timeout per tentativo; assente = quello dell'adapter. */
+      timeoutMs: z.number().int().positive().optional(),
+      /** Retries dopo il primo tentativo; assente = quello dell'adapter. */
+      maxRetries: z.number().int().min(0).max(5).optional(),
     })
     .optional(),
   // No `budget` here, deliberately. The caps are a rail, so they live inside the
@@ -338,7 +378,10 @@ export const ConfigSchema = z.object({
      */
     discord: z
       .object({
-        ownerUserId: z.string().regex(/^[0-9]+$/).optional(),
+        ownerUserId: z
+          .string()
+          .regex(/^[0-9]+$/)
+          .optional(),
         pairing: z
           .object({
             hash: z.string().min(1),
@@ -451,7 +494,10 @@ export const paths = (home = muffinHome()) => ({
  * closes, so the note says what was there and leaves the decision — and the
  * `muffin rot reseal` that carries it — to the owner.
  */
-function migrateV1(raw: Record<string, unknown>, note: (line: string) => void): Record<string, unknown> {
+function migrateV1(
+  raw: Record<string, unknown>,
+  note: (line: string) => void,
+): Record<string, unknown> {
   const { budget, ...rest } = raw;
   if (budget !== null && typeof budget === 'object') {
     const b = budget as { monthlyUsd?: unknown; perTenantDailyUsd?: unknown };
@@ -466,7 +512,10 @@ function migrateV1(raw: Record<string, unknown>, note: (line: string) => void): 
 }
 
 /** Indexed by the version being left behind, so the ladder reads in one direction. */
-const MIGRATIONS: Record<number, (raw: Record<string, unknown>, note: (line: string) => void) => Record<string, unknown>> = {
+const MIGRATIONS: Record<
+  number,
+  (raw: Record<string, unknown>, note: (line: string) => void) => Record<string, unknown>
+> = {
   1: migrateV1,
 };
 
@@ -528,7 +577,10 @@ export function loadConfig(home = muffinHome(), onNote: (line: string) => void =
     const issues = validated.error.issues
       .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
       .join('; ');
-    throw new ConfigError(`${file} is invalid — ${issues}`, 'fix those fields, or re-run `muffin init --force`');
+    throw new ConfigError(
+      `${file} is invalid — ${issues}`,
+      'fix those fields, or re-run `muffin init --force`',
+    );
   }
   return validated.data;
 }
@@ -596,9 +648,10 @@ export function locateSecret(ref: string, home = muffinHome()): SecretLocation |
 /** Every backend that holds this name. More than one means one is shadowing the other. */
 export function locateSecretAll(ref: string, home = muffinHome()): SecretLocation[] {
   const name = requireSecretRef(ref);
-  return SECRET_BACKENDS.map((backend) => ({ backend, path: join(secretDir(backend, home), name) })).filter(
-    (l) => existsSync(l.path),
-  );
+  return SECRET_BACKENDS.map((backend) => ({
+    backend,
+    path: join(secretDir(backend, home), name),
+  })).filter((l) => existsSync(l.path));
 }
 
 /**

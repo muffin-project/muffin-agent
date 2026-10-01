@@ -324,6 +324,23 @@ capability for it). Every consumed ask still passes through the single
 records the posture but keeps asking until a calibrated semantic judgment
 exists, so an uncalibrated envelope cannot silently execute.
 
+### What leaves the machine for a shadow judgment (ADR-0096)
+
+A second external destination exists only when the owner configures it
+(`judgment` section + `secret://` key; absent by default, and then no byte
+leaves and no row is written). When active, every owner-ask of the shell
+family is judged **beside** the question, never instead of it: the judgment
+cannot consume an ask, touch the kernel, or change what the owner decides.
+What is sent is the compact action envelope — the owner request, the
+capability and its effect row, the command/resource, the model's own
+description, taint, principal and the kernel's reason for asking — never the
+conversation, never the repository, and **redacted** with the same
+`redactText` the tracing layer uses, so a token riding inside a command
+leaves as `«redacted:N»`. The API key travels in the header and nowhere
+else. Every judgment — success, timeout, provider failure — lands in the
+durable `ask_judgments` queue joined to the approval and the effect outcome,
+because a failed judgment is calibration data too, not an incident.
+
 ### The tenant dimension: what a room may do (ADR-0073, 2026-09-06)
 
 Until 2026-09-06 the kernel had one answer to *may a remote tenant reach this
