@@ -1,0 +1,15 @@
+abi <abi/4.0>,
+include <tunables/global>
+
+# Lets the Muffin gateway container create user namespaces with capabilities,
+# which bubblewrap (Muffin's shell-tool sandbox) needs on hosts where
+# kernel.apparmor_restrict_unprivileged_userns=1 (Ubuntu 24.04+ default).
+# The shape Ubuntu ships for applications that need userns: no confinement,
+# one grant. Applied only to containers started with
+#   security_opt: apparmor=muffin-userns
+# so the host-wide restriction stays on for everything else.
+profile muffin-userns flags=(unconfined) {
+  userns,
+
+  include if exists <local/muffin-userns>
+}
