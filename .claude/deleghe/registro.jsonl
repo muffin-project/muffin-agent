@@ -344,3 +344,4 @@
 {"id":"oc-499-billing","chiuso":"consegnata: report -> docs/evidence/billing-identity-route-vs-served-2026-09-30.md; candidato A proposto, decisione B (endpoint owner sealed) al maintainer","quando":"2026-09-30T20:35:03.290Z"}
 {"id":"oc-764-profiles","chiuso":"consegnata: report -> docs/evidence/model-profiles-outside-the-release-tree-2026-09-30.md; difetto confermato, decisioni owner fermate prima del codice","quando":"2026-09-30T20:35:03.354Z"}
 {"id":"oc-765-update","chiuso":"consegnata: report -> docs/evidence/update-lifecycle-native-vs-docker-2026-09-30.md; gap map e 7 decisioni owner elencate","quando":"2026-09-30T20:35:03.405Z"}
+{"id":"oc-808-installer-ux","chiuso":"consegnata: survey 5 peer (Claude Code, OpenClaw, Hermes, Codex, rustup) -> docs/evidence/installer-first-command-peer-survey-2026-10-01.md; raccomandazione detection+remedy alla Codex, niente exec/shim","quando":"2026-10-01T01:39:54.898Z"}
