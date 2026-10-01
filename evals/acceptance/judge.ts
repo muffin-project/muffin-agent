@@ -64,9 +64,26 @@ export async function startFakeJudge(): Promise<FakeJudge> {
         at: Date.now(),
       });
       // Una risposta noul per ogni domanda ricevuta: la forma è quella del
-      // filo (`type: 'noul'`, `noul: <p>`), i valori fissi e innocui.
+      // filo (`type: 'noul'`, `noul: <p>`). I valori sono **per domanda** e
+      // disegnano il quadro di un'azione ordinaria — corrispondenze alte,
+      // pericoli bassi — così lo scenario del report vede un «auto avrebbe
+      // consumato» che l'owner condivide, e il controfattuale ha qualcosa
+      // da contare. Fissi, deterministici, innocui.
+      const RISPOSTE: Record<string, number> = {
+        description_matches_command: 0.95,
+        action_matches_owner_intent: 0.9,
+        scope_is_expected: 0.9,
+        destructive_to_valuable_state: 0.05,
+        unexpected_external_effect: 0.05,
+        unexpected_privilege_change: 0.02,
+        unexpected_secret_access: 0.02,
+        recovery_is_real: 0.8,
+        human_judgment_required: 0.1,
+      };
       const risposte: Record<string, { type: string; noul: number }> = {};
-      for (const id of Object.keys(questions)) risposte[id] = { type: 'noul', noul: 0.83 };
+      for (const id of Object.keys(questions)) {
+        risposte[id] = { type: 'noul', noul: RISPOSTE[id] ?? 0.83 };
+      }
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(
         JSON.stringify({

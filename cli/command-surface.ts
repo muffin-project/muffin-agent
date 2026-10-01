@@ -43,6 +43,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: 'undo', summary: 'annulla gli effetti reversibili di un turno', audience: 'recovery', aliases: ['annulla'] },
   { name: 'orientamento', summary: 'metrica di orientamento su un database esplicito', audience: 'inspection' },
   { name: 'effects', summary: 'registro tecnico degli effetti', audience: 'inspection' },
+  { name: 'judgments', summary: 'calibrazione e controfattuale dei giudizi System One', audience: 'inspection', subcommands: ['report'] },
   { name: 'completion', summary: 'genera completion per bash, zsh o fish', audience: 'operator' },
 ] as const;
 
