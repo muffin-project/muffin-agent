@@ -69,6 +69,24 @@ export function attachmentOf(message: Message): MediaSpec | null {
       kind: 'video',
     };
   }
+  if (message.animation) {
+    // Una GIF per Telegram è un video muto: stesso trattamento, nome suo.
+    return {
+      fileId: message.animation.file_id,
+      originalName: message.animation.file_name ?? 'animazione.mp4',
+      bytes: message.animation.file_size ?? 0,
+      kind: 'video',
+    };
+  }
+  if (message.video_note) {
+    // I videomessaggi tondi: mp4 anche loro, solo l'inquadratura cambia.
+    return {
+      fileId: message.video_note.file_id,
+      originalName: 'video-nota.mp4',
+      bytes: message.video_note.file_size ?? 0,
+      kind: 'video',
+    };
+  }
   if (message.sticker) {
     // Gli sticker non hanno nome né caption: il formato si legge dai byte
     // dopo il download (`formatoSticker`), non da qui. `file_size` può
