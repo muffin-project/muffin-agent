@@ -94,7 +94,7 @@ const member: Principal = {
  * `lightLane` wrapper, the same `ingestPending` closure, the same `onTurnEnd`
  * seam — so what this exercises is the arrangement, not a rehearsal of it.
  */
-function harness(script: ChatResult[]) {
+function harness(script: ChatResult[], model = 'light', baseUrl?: string) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-consolidation-'));
   const db = new DatabaseCtor(':memory:');
   const store = new MemoryStore(db);
@@ -109,7 +109,7 @@ function harness(script: ChatResult[]) {
         ...entry,
         tenant: 'host',
         capability: CONSOLIDATION_CAPABILITY,
-        usd: costUsd(entry.model, entry),
+        usd: costUsd(entry.model, entry, baseUrl, entry.requestedModel),
       }),
   });
   const tracer = new SimpleTracer(new JsonlExporter(home));
@@ -117,7 +117,7 @@ function harness(script: ChatResult[]) {
   const consolidation = new Consolidator({
     db,
     budgetExhausted: () => budget.exhausted(),
-    ingest: (limit) => ingestPending({ store, provider: light, model: 'light', tracer }, 'host', limit),
+    ingest: (limit) => ingestPending({ store, provider: light, model, tracer }, 'host', limit),
   });
 
   const deps: LoopDeps = {
@@ -296,6 +296,22 @@ describe('the memory lane is inside the budget', () => {
       .all() as { capability: string; n: number }[];
     expect(rows).toEqual([{ capability: CONSOLIDATION_CAPABILITY, n: 1 }]);
     expect(h.budget.monthToDateUsd()).toBeGreaterThan(0);
+  });
+
+  it('bills $0 for a memory-lane call requested through openrouter/free, keeping the served model on the row (#499)', async () => {
+    const served: ChatResult = {
+      ...extraction(CAGLIARI),
+      model: 'qwen/qwen3.8-27b',
+      usage: { inputTokens: 10_000, outputTokens: 2_000, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    };
+    const h = harness([reply('ok'), served], 'openrouter/free', 'https://openrouter.ai/api/v1');
+    await h.speak('mi sono trasferito a Cagliari');
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_IDLE_MS);
+    await h.consolidation.settled();
+
+    expect(h.budget.monthToDateUsd()).toBe(0);
+    const rows = h.db.prepare(`SELECT model, usd FROM spend`).all() as { model: string; usd: number }[];
+    expect(rows).toEqual([{ model: 'qwen/qwen3.8-27b', usd: 0 }]);
   });
 
   it('stops consolidating when the month is spent, instead of spending past it', async () => {

@@ -350,6 +350,14 @@ export type SpendEntry = {
    * job spent" is not a query, it is an inference from session-name prefixes.
    */
   jobId?: string | undefined;
+  /**
+   * The route or alias the call was requested with (e.g. `openrouter/free`),
+   * as opposed to `model`, which is who served it. Used only to choose the
+   * provider billing contract at the price seam; the ledger identity stays
+   * `model`, and observability keeps both. Absent on entries recorded before
+   * this field existed.
+   */
+  requestedModel?: string | undefined;
 };
 
 type ToolHandler = (args: unknown, ctx: ToolContext) => Promise<ToolOutcome> | ToolOutcome;

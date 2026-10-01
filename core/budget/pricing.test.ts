@@ -17,6 +17,22 @@ describe('pricing', () => {
     expect(costUsd('openrouter/free', { inputTokens: 1e6, outputTokens: 1e6 }, OPENROUTER)).toBe(0);
   });
 
+  it('prices the requested free route at zero even when the served model is a paid family (#499)', () => {
+    // The contract decides, not the response string: qwen3 is a $2/$6 family,
+    // but a call requested through openrouter/free must bill $0.
+    const tokens = { inputTokens: 10_000, outputTokens: 2_000 };
+    expect(costUsd('qwen/qwen3.8-27b', tokens, OPENROUTER, 'openrouter/free')).toBe(0);
+  });
+
+  it('keeps served-model pricing for auto routing and off-host free slugs (#499)', () => {
+    // qwen3 $2/$6: 10k in = $0.02, 2k out = $0.012.
+    const tokens = { inputTokens: 10_000, outputTokens: 2_000 };
+    expect(costUsd('qwen/qwen3.8-27b', tokens, OPENROUTER, 'openrouter/auto')).toBeCloseTo(0.032, 6);
+    expect(costUsd('qwen/qwen3.8-27b', tokens, 'https://my-proxy.example/v1', 'openrouter/free')).toBeCloseTo(
+      0.032, 6,
+    );
+  });
+
   it('recognizes explicit :free variants only on the OpenRouter endpoint', () => {
     expect(isOpenRouterFreeRoute('qwen/qwen3.8-27b:free', OPENROUTER)).toBe(true);
     expect(costUsd('qwen/qwen3.8-27b:free', { inputTokens: 1e6, outputTokens: 1e6 }, OPENROUTER)).toBe(0);

@@ -1230,3 +1230,70 @@ describe('la corsia light riporta i tentativi fisici nelle tracce (#496)', () =>
     expect([...richieste][0]).toBeDefined();
   }, 60_000);
 });
+
+describe('billing identity: requested route vs served model (#499)', () => {
+  const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
+  const usage = { inputTokens: 10_000, outputTokens: 2_000, cacheReadTokens: 0, cacheWriteTokens: 0 };
+
+  async function billedFor(mainModel: string, baseUrl: string, served: string) {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-billing-'));
+    runInit({
+      home,
+      apiKey: 'sk-or-test-never-called',
+      provider: 'openai-compat',
+      baseUrl,
+      mainModel,
+      lightModel: 'qwen/qwen3.7-flash',
+    });
+    const runtime = buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-billing-ws-')));
+    const stub: Provider = {
+      kind: 'openai-compat',
+      async chat(): Promise<ChatResult> {
+        return { text: 'fatto', toolCalls: [], stopReason: 'end', usage, model: served };
+      },
+    };
+    try {
+      const result = await runTurn(
+        { ...runtime.deps, provider: stub },
+        {
+          principal: owner,
+          tenant: 'host',
+          surface: 'cli',
+          session: runtime.deps.sessions.open('billing-499'),
+          text: 'ciao',
+        },
+      );
+      expect(result.stopped).toBe('answered');
+      const usd = runtime.budget.monthToDateUsd();
+      const db = new DatabaseCtor(paths(home).db, { readonly: true });
+      try {
+        const rows = db.prepare('SELECT model, usd FROM spend').all() as { model: string; usd: number }[];
+        return { usd, rows };
+      } finally {
+        db.close();
+      }
+    } finally {
+      runtime.close();
+    }
+  }
+
+  it('bills $0 for a main-lane call requested through openrouter/free, keeping the served model on the row', async () => {
+    const { usd, rows } = await billedFor(
+      'openrouter/free',
+      'https://openrouter.ai/api/v1',
+      'qwen/qwen3.8-27b',
+    );
+    expect(usd).toBe(0);
+    expect(rows).toEqual([{ model: 'qwen/qwen3.8-27b', usd: 0 }]);
+  });
+
+  it('keeps served-model pricing for openrouter/auto', async () => {
+    const { usd } = await billedFor('openrouter/auto', 'https://openrouter.ai/api/v1', 'qwen/qwen3.8-27b');
+    expect(usd).toBeGreaterThan(0);
+  });
+
+  it('does not zero-bill a free slug on a non-OpenRouter endpoint', async () => {
+    const { usd } = await billedFor('openrouter/free', 'https://my-proxy.example/v1', 'qwen/qwen3.8-27b');
+    expect(usd).toBeGreaterThan(0);
+  });
+});

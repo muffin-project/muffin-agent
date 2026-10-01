@@ -622,7 +622,7 @@ export function buildRuntime(
   const profile = withThinking(selectProfile(config.models.main, profiles), config.thinking);
 
   const recordSpendWithBaseUrl = (entry: SpendEntry, baseUrl: string | undefined): number => {
-    const usd = costUsd(entry.model, entry, baseUrl);
+    const usd = costUsd(entry.model, entry, baseUrl, entry.requestedModel);
     // `entry` porta già `jobId` quando il turno è il giro di un job
     // (`agent/loop.ts`), e lo spread lo passa dritto alla riga di `spend`:
     // niente da tenere in sincrono qui, e nessun secondo posto in cui
