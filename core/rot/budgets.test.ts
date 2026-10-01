@@ -45,6 +45,46 @@ describe('rot/budgets.json', () => {
     rmSync(home, { recursive: true, force: true });
   });
 
+  it('reads a declared unmetered-endpoint section, normalized', () => {
+    const home = rot({
+      ...GOOD,
+      unmetered: [
+        { host: '192.168.1.10', port: 8080, note: 'GPU LAN' },
+        { host: 'LLAMA-SERVER.LOCAL.' },
+      ],
+    });
+    const b = loadSealedBudgets(home);
+    expect(b.unmetered).toEqual([
+      { host: '192.168.1.10', port: 8080, note: 'GPU LAN' },
+      { host: 'llama-server.local' },
+    ]);
+    expect(b.unmeteredSource).toBe('sealed');
+    expect(b.notes).toEqual([]);
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it('treats a missing unmetered section as none declared, silently', () => {
+    // Every home sealed before this section existed lacks the key: warning
+    // here would nag on all of them. Absent means no exceptions, which is
+    // today's behavior unchanged.
+    const home = rot(GOOD);
+    const b = loadSealedBudgets(home);
+    expect(b.unmetered).toEqual([]);
+    expect(b.notes).toEqual([]);
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it('fails a malformed unmetered section safe: metered, with a note', () => {
+    for (const bad of ['all', [{ host: 42 }], [{ host: 'x', port: 99999 }]]) {
+      const home = rot({ ...GOOD, unmetered: bad });
+      const b = loadSealedBudgets(home);
+      expect(b.unmetered).toEqual([]);
+      expect(b.unmeteredSource).toBe('fallback');
+      expect(b.notes.join(' ')).toContain('unmetered');
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('keeps the caps when the quiet hours are the broken half', () => {
     const home = rot({ ...GOOD, quietHours: { from: '10pm', to: '07:00', timezone: 'Europe/Rome' } });
     const b = loadSealedBudgets(home);

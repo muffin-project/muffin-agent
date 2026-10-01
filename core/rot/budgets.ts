@@ -9,7 +9,7 @@ import type { BudgetCaps } from '../budget/budget.js';
 import type { QuietHours } from '../scheduler/proactivity.js';
 
 /**
- * `rot/budgets.json`, read once and parsed in two halves.
+ * `rot/budgets.json`, read once and parsed in three halves.
  *
  * The file is sealed and its own comment promises *"the agent cannot raise them
  * itself"*. That promise was false for the half that mattered: `BudgetEngine`
@@ -30,12 +30,17 @@ import type { QuietHours } from '../scheduler/proactivity.js';
  * hashing a *fragment* of a mutable file is not something the manifest can
  * express. So the cap lives in the sealed file and nowhere else.
  *
- * **Two halves, parsed independently.** Quiet hours and spend caps live in one
- * file and answer to two unrelated features. A single parse would make a
- * mistyped cap open the night, and a mistyped hour remove the spend ceiling —
- * a coupling nobody would choose if the two were in separate files, so the
- * shared file must not create it.
- */
+  * **Three halves, parsed independently.** Quiet hours, spend caps and the
+  * unmetered-endpoint list live in one file and answer to three unrelated
+  * features. A single parse would make a mistyped cap open the night, a
+  * mistyped hour remove the spend ceiling, and a mistyped endpoint silently
+  * bill (or silently zero-bill) — couplings nobody would choose if the three
+  * were in separate files, so the shared file must not create them. A missing
+  * `unmetered` section is not a broken half: it is how every home sealed
+  * before the section existed says "no exceptions", so it parses silently to
+  * an empty list. A present-but-malformed section fails safe to metered, with
+  * a note, for the same reason a mistyped cap falls back instead of guessing.
+  */
 
 type BudgetsSource = 'sealed' | 'fallback';
 
@@ -45,12 +50,30 @@ export type SealedBudgets = {
   readonly capsSource: BudgetsSource;
   readonly quietHours: QuietHours;
   readonly quietSource: BudgetsSource;
+  /** Owner-declared endpoint contracts the meter skips, normalized at parse. */
+  readonly unmetered: readonly UnmeteredEndpoint[];
+  readonly unmeteredSource: BudgetsSource;
   /**
    * One line per half that fell back, already phrased for a human. Empty when
-   * the sealed file answered for both — never folded into a boolean, because
-   * "the fallback answered" is the fact an owner has to be able to read.
+   * the sealed file answered for all three — never folded into a boolean,
+   * because "the fallback answered" is the fact an owner has to be able to
+   * read.
    */
   readonly notes: string[];
+};
+
+/**
+ * One exact endpoint contract the owner funds outside the metered spend
+ * (e.g. a LAN GPU box): `host` is an exact hostname or IP, matched
+ * case-insensitively with a folded trailing dot; `port`, when present,
+ * restricts the match to that port, and when absent any port on the host
+ * matches. `note` is owner documentation ("why is this free") and travels
+ * nowhere except diagnostics.
+ */
+export type UnmeteredEndpoint = {
+  readonly host: string;
+  readonly port?: number | undefined;
+  readonly note?: string | undefined;
 };
 
 /**
@@ -122,6 +145,23 @@ const QuietShape = z.object({
   timezone: z.string().min(1).refine(isRealTimezone, { message: 'fuso orario IANA sconosciuto' }),
 });
 
+/**
+ * One declared exception to metering. Hostnames normalize here — lowercase,
+ * folded trailing dot — so the price seam compares exact strings and never
+ * re-interprets owner input. Ports are validated for the same reason a bad
+ * timezone is: a typo must fail here, loudly, not bill somewhere unexpected.
+ */
+const UnmeteredShape = z.array(
+  z.object({
+    host: z
+      .string()
+      .min(1)
+      .transform((h) => h.toLowerCase().replace(/\.$/, '')),
+    port: z.number().int().min(1).max(65535).optional(),
+    note: z.string().optional(),
+  }),
+);
+
 const SCHEMA_VERSION = 1;
 
 export function loadSealedBudgets(home: string): SealedBudgets {
@@ -131,6 +171,8 @@ export function loadSealedBudgets(home: string): SealedBudgets {
     capsSource: 'fallback',
     quietHours: QUIET_FLOOR,
     quietSource: 'fallback',
+    unmetered: [],
+    unmeteredSource: 'fallback',
     notes: [`tetto di spesa e quiet hours dai valori compilati — ${why}`],
   });
 
@@ -172,14 +214,32 @@ export function loadSealedBudgets(home: string): SealedBudgets {
         `(${QUIET_FLOOR.from}–${QUIET_FLOOR.to} ${QUIET_FLOOR.timezone}, e gli orari che Muffin dice escono in ${QUIET_FLOOR.timezone})`,
     );
   }
+  const unmetered = parseUnmetered(raw, file, notes);
 
   return {
     caps: caps.success ? caps.data : BUDGET_FLOOR,
     capsSource: caps.success ? 'sealed' : 'fallback',
     quietHours: quiet.success ? quiet.data : QUIET_FLOOR,
     quietSource: quiet.success ? 'sealed' : 'fallback',
+    unmetered: unmetered.list,
+    unmeteredSource: unmetered.source,
     notes,
   };
+}
+
+function parseUnmetered(raw: unknown, file: string, notes: string[]): { list: UnmeteredEndpoint[]; source: BudgetsSource } {
+  const value = (raw as { unmetered?: unknown }).unmetered;
+  // Absent is not broken: every home sealed before this section existed says
+  // "no exceptions" by omission, and warning on all of them would be noise.
+  if (value === undefined) return { list: [], source: 'sealed' };
+  const parsed = UnmeteredShape.safeParse(value);
+  if (!parsed.success) {
+    // Present but malformed fails safe to metered, with the reason: a typo
+    // must cost the owner visibility into the typo, never a silent zero-bill.
+    notes.push(`${file}: unmetered non valido (${issue(parsed.error)}) — tutto resta a consumo`);
+    return { list: [], source: 'fallback' };
+  }
+  return { list: parsed.data, source: 'sealed' };
 }
 
 function issue(error: z.ZodError): string {

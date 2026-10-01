@@ -641,6 +641,23 @@ export async function runDoctor(
       'ripristina rot/budgets.json dai default del repo e rifai `muffin rot reseal`',
     );
   }
+  // Shown only when there is something to say: declarations come from the
+  // seal (with the host:port that actually matches), and a malformed section
+  // warns because the calls it meant to free are being metered instead.
+  if (budgets.unmetered.length > 0) {
+    ok(
+      'endpoint non conteggiati',
+      `rot/budgets.json — ${budgets.unmetered.map((e) => (e.port === undefined ? e.host : `${e.host}:${e.port}`)).join(', ')}`,
+    );
+  } else if (budgets.unmeteredSource === 'fallback' && budgets.notes.some((n) => n.includes('unmetered'))) {
+    // Only when this section itself failed: a missing file already warns
+    // through the caps and quiet-hours checks above.
+    warn(
+      'endpoint non conteggiati',
+      `sezione unmetered non valida (${budgets.notes.join(' · ')}) — tutto resta a consumo`,
+      'correggi rot/budgets.json e rifai `muffin rot reseal`',
+    );
+  }
 
   // Key presence only. A network call costs money and needs an explicit opt-in.
   // *Which backend answered* is part of the check, not decoration: the read
