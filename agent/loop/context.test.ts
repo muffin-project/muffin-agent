@@ -135,11 +135,7 @@ describe('buildContext', () => {
     expect(messages.indexOf(memory)).toBeLessThan(ownerIndex);
   });
 
-  it('a stale plan reaches the model framed as ask-first, not as owed', () => {
-    // Il cablaggio, non la funzione pura: `buildContext` passa il suo `adesso`
-    // a `todoSection`, così un piano del giorno prima non esce mai come «Sono
-    // aperti» qualunque sia il chiamante. `openPlan` ha updatedAt 1970: stantio
-    // per costruzione, a qualsiasi `adesso` reale.
+  it('the session plan remains evidence rather than work to resume', () => {
     const messages = buildContext(
       baseInput({ text: 'Buongiorno' }),
       [],
@@ -156,7 +152,9 @@ describe('buildContext', () => {
     const text = textOf(work.content);
     expect(text).toContain('passo del piano');
     expect(text).not.toContain('Sono aperti:');
-    expect(text).toContain('non riprenderli da solo');
+    expect(text).toContain('contesto');
+    expect(text).not.toContain('chiedi prima');
+    expect(text).not.toContain('Il lavoro è finito');
   });
 });
 

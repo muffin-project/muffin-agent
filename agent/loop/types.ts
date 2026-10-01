@@ -1,15 +1,24 @@
-import type { MemoryStore } from '../../core/memory/store.js';
+import type { ApprovalStore } from '../../core/approvals/store.js';
+import type { ShadowJudge } from '../../core/judgment/shadow.js';
 import type { RecallDeps } from '../../core/memory/recall.js';
-import type { Decide, Principal, TenantId, TrustTier } from '../../core/policy/types.js';
-import type { CapabilityDecl, CapabilityId, Decision, DecisionRequest } from '../../core/policy/types.js';
+import type { MemoryStore } from '../../core/memory/store.js';
+import type {
+  CapabilityDecl,
+  CapabilityId,
+  Decide,
+  Decision,
+  DecisionRequest,
+  Principal,
+  TenantId,
+  TrustTier,
+} from '../../core/policy/types.js';
+import type { Delega } from '../../core/runtime/delega.js';
 import type { SessionRef, SessionStore } from '../../core/session/store.js';
-import type { UndoJournal } from '../../core/undo/journal.js';
+import type { Tracer } from '../../core/tracing/types.js';
 import type { TurnStopped, TurnStore } from '../../core/turns/store.js';
 import type { TodoStore } from '../../core/turns/todo.js';
 import type { WaitSpec } from '../../core/turns/wait.js';
-import type { ApprovalStore } from '../../core/approvals/store.js';
-import type { Delega } from '../../core/runtime/delega.js';
-import type { Tracer } from '../../core/tracing/types.js';
+import type { UndoJournal } from '../../core/undo/journal.js';
 import type { IstanzaFacts, SystemPrompts } from '../context/assemble.js';
 import type { Profile } from '../profiles/profile.js';
 import type { AudioBlock, ImageBlock, Provider, ToolSpec } from '../providers/types.js';
@@ -550,6 +559,15 @@ export type LoopDeps = {
    */
   delega?: Delega | undefined;
   /**
+   * System One in shadow (issue #740, fase 1; ADR-0096): giudica gli ask
+   * **accanto** alla domanda all'owner — mai davanti, mai al posto.
+   *
+   * Opzionale e spento per assenza: senza questo campo il ramo `ask` è
+   * byte-per-byte quello di sempre, e nessun byte parte dalla macchina. Il
+   * verso del degrado è perdere dati di calibrazione, non sicurezza.
+   */
+  judgment?: ShadowJudge | undefined;
+  /**
    * Bills a model call and returns what it cost. Absent in tests; absent in
    * production means the caps are decorative, which is why `doctor` reports it.
    */
@@ -670,7 +688,9 @@ export type LoopDeps = {
    * were recorded before the model was asked anything, so they are owed
    * extraction regardless of how the turn went.
    */
-  onTurnEnd?: ((info: { tenant: TenantId; principal: Principal; stopped: TurnResult['stopped'] }) => void) | undefined;
+  onTurnEnd?:
+    | ((info: { tenant: TenantId; principal: Principal; stopped: TurnResult['stopped'] }) => void)
+    | undefined;
   now?: () => Date;
 };
 
@@ -904,7 +924,13 @@ export type TurnEvent =
    * l'attesa dichiarata prima di ripartire — lo stesso valore che il `sleep`
    * riceve, mai una stima.
    */
-  | { type: 'model_retry'; class: 'transport' | 'provider_empty'; attempt: number; max: number; inMs: number }
+  | {
+      type: 'model_retry';
+      class: 'transport' | 'provider_empty';
+      attempt: number;
+      max: number;
+      inMs: number;
+    }
   /**
    * `args` sono gli argomenti **come il modello li ha chiesti**, non ripuliti.
    *
@@ -985,7 +1011,12 @@ export type TurnResult = {
    * is a fact the caller needs in the same breath as `text`.
    */
   taint: TrustTier;
-  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+  };
   /** Present when `stopped` is 'ask': what the turn wanted permission for. */
   pending?: ApprovalRequest;
   /** Present when `stopped` is 'suspended': when it comes back, and why. */

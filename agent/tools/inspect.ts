@@ -1,17 +1,16 @@
 import { z } from 'zod';
-import type { CapabilityDecl, CapabilityId, Principal } from '../../core/policy/types.js';
-import type { Config } from '../../core/config/config.js';
 import type { DoctorReport } from '../../cli/doctor.js';
-import type { PromptBlock } from '../context/assemble.js';
-import { visibleTools } from '../context/assemble.js';
-import { tenantClass } from '../context/assemble.js';
-import type { Profile } from '../profiles/profile.js';
-import type { RegisteredTool } from '../loop.js';
 import type { BuildStamp } from '../../cli/update.js';
-import type { TurnHealth } from '../../core/turns/store.js';
-import { jobPayload, type Job } from '../../core/scheduler/jobs.js';
-import type { CapabilityGap } from './capability-status.js';
+import type { Config } from '../../core/config/config.js';
+import type { CapabilityDecl, CapabilityId, Principal } from '../../core/policy/types.js';
 import type { DelegationMode } from '../../core/runtime/delega.js';
+import { type Job, jobPayload } from '../../core/scheduler/jobs.js';
+import type { TurnHealth } from '../../core/turns/store.js';
+import type { PromptBlock } from '../context/assemble.js';
+import { tenantClass, visibleTools } from '../context/assemble.js';
+import type { RegisteredTool } from '../loop.js';
+import type { Profile } from '../profiles/profile.js';
+import type { CapabilityGap } from './capability-status.js';
 
 /**
  * Propriocezione tecnica: cosa sta usando **adesso**, non cosa dice il progetto.
@@ -100,6 +99,13 @@ export type InspectSources = {
   /** `JobStore.list()`, come `muffin jobs`. */
   jobs: () => Job[];
   /**
+   * System One attivo su questa installazione (issue #740 fase shadow):
+   * provider e modello richiesto, per dire «sto giudicando in shadow» invece
+   * di lasciarlo indovinare. Assente = nessun giudice configurato: la riga
+   * non compare, non compare come «off» — il silenzio è il default onesto.
+   */
+  judgment?: (() => { provider: string; model: string }) | undefined;
+  /**
    * La postura di delega di **questo** lavoro (issue #740): `manual`, `auto`
    * o `yolo`, e da quando. Letta dal registro durevole — `ctx.turnId`, mai
    * una copia — così il modello vede la stessa modalità che il loop applicherà
@@ -119,11 +125,11 @@ export type InspectSources = {
 const inspectArgs = z.object({});
 
 const SPEC_DESCRIPTION =
-  "Read-only: come è configurata QUESTA istanza adesso — build, provider e modello in uso, " +
+  'Read-only: come è configurata QUESTA istanza adesso — build, provider e modello in uso, ' +
   'profilo attivo, root of trust, stato dei check di salute, capability esposte a questo turno, ' +
   'blocchi del system prompt con la loro provenienza, turni aperti, job. ' +
-  "Usalo quando ti si chiede come funzioni o cosa stai usando (che modello ti esegue, quanti tool vedi, " +
-  "se il RoT è integro): è il tool per questo, non un comando di sistema — la risposta è misurata, non ricordata. " +
+  'Usalo quando ti si chiede come funzioni o cosa stai usando (che modello ti esegue, quanti tool vedi, ' +
+  'se il RoT è integro): è il tool per questo, non un comando di sistema — la risposta è misurata, non ricordata. ' +
   "Non per l'architettura del progetto in teoria (quella sta nei documenti), solo per lo stato vivo di questo processo. " +
   'Ritorna un report testuale a sezioni: istanza, turno corrente, capacità spente, salute, system prompt, turni, job. ' +
   'e.g. sys_inspect({}) risponde a "che modello ti sta eseguendo, di preciso?" senza lanciare nulla in shell_run.';
@@ -220,6 +226,11 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
         // il reasoning viene chiesto spento (#167).
         `profilo: ${profile.name} — max ${profile.maxToolsExposed} tool esposti, ${profile.maxToolCallsPerTurn === null ? 'nessun tetto numerico di tool call' : `${profile.maxToolCallsPerTurn} call/turno`}, thinking ${profile.thinking}`,
         `root of trust: ${sources.safeMode ? `SAFE MODE (${sources.safeMode.reason}: ${sources.safeMode.diverged.join(', ')}) — capability sopra 'low' negate` : `${sources.config.rot.mode}, integro`}`,
+        ...(sources.judgment === undefined
+          ? []
+          : [
+              `system one: ${sources.judgment().provider} · ${sources.judgment().model} — shadow: giudica accanto agli ask, non consuma`,
+            ]),
         '',
         `# Questo turno`,
         `surface: ${surfaceOf(principal)} · principal: ${principal.kind} · tenant: ${ctx.tenant} · classe prompt: ${cls}`,
@@ -229,11 +240,16 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
         // giudizio non è calibrato. Letta adesso, non ricordata.
         `delega: ${(() => {
           const d = sources.delega?.(ctx.turnId);
-          if (d === undefined || d.modo === 'manual') return "manual — ogni conferma arriva all'owner";
-          if (d.modo === 'yolo') return `yolo — ask pre-approvati per delega${d.dal === null ? '' : ` dal ${d.dal}`}`;
+          if (d === undefined || d.modo === 'manual')
+            return "manual — ogni conferma arriva all'owner";
+          if (d.modo === 'yolo')
+            return `yolo — ask pre-approvati per delega${d.dal === null ? '' : ` dal ${d.dal}`}`;
           return `auto — chiede finché il giudizio non è calibrato${d.dal === null ? '' : ` (attiva dal ${d.dal})`}`;
         })()}`,
-        `capability esposte: ${esposti.map((t) => t.name).sort().join(', ')}`,
+        `capability esposte: ${esposti
+          .map((t) => t.name)
+          .sort()
+          .join(', ')}`,
         sources.tools.length === filtrati.length
           ? ''
           : `  (${sources.tools.length - filtrati.length} registrate ma non esposte a questo principal)`,
@@ -248,7 +264,10 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
           ? []
           : [
               '# Capacità spente',
-              ...spente.map((g) => `  ✗ ${g.capability}: ${g.reason}${g.remedy === null ? '' : ` → ${g.remedy}`}`),
+              ...spente.map(
+                (g) =>
+                  `  ✗ ${g.capability}: ${g.reason}${g.remedy === null ? '' : ` → ${g.remedy}`}`,
+              ),
               '',
             ]),
         '# Salute, misurata adesso (le stesse verifiche di `muffin doctor`)',

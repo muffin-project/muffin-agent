@@ -1,7 +1,6 @@
 import { join } from 'node:path';
 import type DatabaseCtor from 'better-sqlite3';
 import { ApprovalStore } from '../core/approvals/store.js';
-import { Delega } from '../core/runtime/delega.js';
 import { BudgetEngine } from '../core/budget/budget.js';
 import { costUsd } from '../core/budget/pricing.js';
 import {
@@ -17,6 +16,9 @@ import { tightenHome } from '../core/config/private-fs.js';
 import { resolveWorkspace } from '../core/config/workspace.js';
 import { migrate } from '../core/db/migrate.js';
 import { openDb } from '../core/db/open.js';
+import { makeShadowJudge, type ShadowJudge } from '../core/judgment/shadow.js';
+import { JudgmentStore } from '../core/judgment/store.js';
+import { TypeSafePort } from '../core/judgment/typesafe.js';
 import { loadMcpRegistry } from '../core/mcp/registry.js';
 import {
   CONSOLIDATION_CAPABILITY,
@@ -37,6 +39,7 @@ import type { CapabilityDecl } from '../core/policy/types.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { mandatoryGuards } from '../core/rot/guards.js';
 import { type HardeningCheck, hardeningHolds, verify } from '../core/rot/verify.js';
+import { Delega } from '../core/runtime/delega.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { assessShellBoundary } from '../core/sandbox/shell-boundary.js';
 import { JobFireStore } from '../core/scheduler/job-fires.js';
@@ -1041,6 +1044,52 @@ export function buildRuntime(
   const delega = new Delega(db);
 
   /**
+   * System One in shadow (issue #740, fase 1; ADR-0096). Costruito **solo**
+   * se la config nomina il giudice e il segreto risponde: in ogni altro
+   * caso `LoopDeps.judgment` resta `undefined`, il ramo `ask` è quello di
+   * sempre e nessun byte parte dalla macchina. Un segreto mancato non è
+   * un errore di avvio — è una riga fra le `bootLines`, come ogni
+   * capability accesa e non raggiungibile.
+   *
+   * La coda vive sullo stesso handle del resto (ADR-0022), e i giudizi in
+   * volo alla chiusura restano `pending`: la riga lo dice, il report lo
+   * conta, e nessuno interpreta il buco come un verdetto.
+   */
+  const judgmentNotes: string[] = [];
+  let judgment: ShadowJudge | undefined;
+  if (config.judgment !== undefined) {
+    const chiave = (() => {
+      try {
+        return readSecret(config.judgment.apiKeyRef, home);
+      } catch {
+        return null;
+      }
+    })();
+    if (chiave === null) {
+      judgmentNotes.push(
+        '! system one: config presente ma il segreto manca — nessun giudizio shadow',
+      );
+    } else {
+      judgment = makeShadowJudge({
+        port: new TypeSafePort({
+          apiKey: chiave,
+          ...(config.judgment.baseUrl === undefined ? {} : { baseUrl: config.judgment.baseUrl }),
+          ...(config.judgment.model === undefined ? {} : { model: config.judgment.model }),
+          ...(config.judgment.timeoutMs === undefined
+            ? {}
+            : { timeoutMs: config.judgment.timeoutMs }),
+          ...(config.judgment.maxRetries === undefined
+            ? {}
+            : { maxRetries: config.judgment.maxRetries }),
+        }),
+        store: new JudgmentStore(db),
+        tracer,
+        log: opts.log ?? ((line) => process.stderr.write(`${line}\n`)),
+      });
+    }
+  }
+
+  /**
    * Test-only override of the trailing-edge debounce, a no-op unless a
    * scenario sets the env var — same precedent as `MUFFIN_GATEWAY_TICK_MS`
    * (`cli/gateway.ts`) and `MUFFIN_JOB_FIRES_STALL_*` (`agent/scheduler-run.ts`).
@@ -1156,6 +1205,11 @@ export function buildRuntime(
       // stessa riga che il ramo ask del loop legge, così `sys_inspect` non ha
       // una seconda risposta su «in che modalità sono».
       delega: (turnId: string) => ({ modo: delega.modo(turnId), dal: delega.da(turnId) }),
+      // System One, se attivo: visibile a `sys_inspect` come tutto il resto
+      // della postura — mai una seconda fonte, la stessa istanza del loop.
+      ...(judgment === undefined
+        ? {}
+        : { judgment: () => ({ provider: judgment.provider, model: judgment.model }) }),
     }),
   );
 
@@ -1354,6 +1408,7 @@ export function buildRuntime(
       ...budgetNotes,
       ...rotNotes,
       ...configNotes,
+      ...judgmentNotes,
     ],
     register: (tool, decl) => {
       capabilities.set(decl.id, decl);
@@ -1406,6 +1461,9 @@ export function buildRuntime(
       // La postura che consuma gli ask di ogni lavoro: letta fresca dal
       // registro a ogni domanda, mai copiata in memoria (issue #740).
       delega,
+      // System One in shadow (issue #740 fase 1): presente solo quando la
+      // config e il segreto lo dicono — assente, il ramo ask non cambia.
+      ...(judgment === undefined ? {} : { judgment }),
       /**
        * L'instradatore, e il fatto che sia qui e non su una superficie è la
        * proprietà: chi chiede è **la superficie da cui il turno è arrivato**,
