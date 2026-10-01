@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import type DatabaseCtor from 'better-sqlite3';
 import { ApprovalStore } from '../core/approvals/store.js';
+import { Delega } from '../core/runtime/delega.js';
 import { BudgetEngine } from '../core/budget/budget.js';
 import { costUsd } from '../core/budget/pricing.js';
 import {
@@ -1032,6 +1033,12 @@ export function buildRuntime(
   const closeHooks: Array<() => Promise<void>> = [];
   const approvers = new Map<string, Approver>();
   const approvals = new ApprovalStore(db);
+  /**
+   * La delega dell'owner (issue #740), sullo stesso handle di tutto il resto
+   * (ADR-0022): il loop la legge a ogni ask, i comandi la scrivono, e un
+   * processo solo non è mai la verità.
+   */
+  const delega = new Delega(db);
 
   /**
    * Test-only override of the trailing-edge debounce, a no-op unless a
@@ -1145,6 +1152,10 @@ export function buildRuntime(
       doctor: async () => (await import('../cli/doctor.js')).runDoctor(home),
       turns: () => turns.health({ windowMs: 0 }),
       jobs: () => jobs.list(),
+      // La postura di delega del lavoro che sta chiedendo (issue #740): la
+      // stessa riga che il ramo ask del loop legge, così `sys_inspect` non ha
+      // una seconda risposta su «in che modalità sono».
+      delega: (turnId: string) => ({ modo: delega.modo(turnId), dal: delega.da(turnId) }),
     }),
   );
 
@@ -1392,6 +1403,9 @@ export function buildRuntime(
       // suo in `runtime.test.ts`, non solo il ramo nel loop.
       undo: new UndoJournal(p.undo),
       approvals,
+      // La postura che consuma gli ask di ogni lavoro: letta fresca dal
+      // registro a ogni domanda, mai copiata in memoria (issue #740).
+      delega,
       /**
        * L'instradatore, e il fatto che sia qui e non su una superficie è la
        * proprietà: chi chiede è **la superficie da cui il turno è arrivato**,
