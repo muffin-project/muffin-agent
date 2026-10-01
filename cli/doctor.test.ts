@@ -500,6 +500,32 @@ describe('doctor names the spend cap and where it came from', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('names declared unmetered endpoints with their sealed source (#499)', async () => {
+    const dir = home();
+    const file = join(paths(dir).rot, 'budgets.json');
+    const budgets = JSON.parse(readFileSync(file, 'utf8'));
+    budgets.unmetered = [{ host: '192.168.1.10', port: 8080, note: 'GPU LAN' }];
+    writeFileSync(file, `${JSON.stringify(budgets, null, 2)}\n`);
+    seal(dir, '1', new Date());
+    const c = await check(dir, 'endpoint non conteggiati');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('192.168.1.10:8080');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('warns when the unmetered section is malformed, metering instead (#499)', async () => {
+    const dir = home();
+    const file = join(paths(dir).rot, 'budgets.json');
+    const budgets = JSON.parse(readFileSync(file, 'utf8'));
+    budgets.unmetered = 'all';
+    writeFileSync(file, `${JSON.stringify(budgets, null, 2)}\n`);
+    seal(dir, '1', new Date());
+    const c = await check(dir, 'endpoint non conteggiati');
+    expect(c?.level).toBe('warn');
+    expect(c?.remedy).toContain('rot reseal');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it('warns, with the reason, when the compiled floor is what answered', async () => {
     const dir = home();
     writeFileSync(join(paths(dir).rot, 'budgets.json'), 'not json at all');

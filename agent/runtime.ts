@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import type DatabaseCtor from 'better-sqlite3';
 import { ApprovalStore } from '../core/approvals/store.js';
 import { BudgetEngine } from '../core/budget/budget.js';
-import { costUsd } from '../core/budget/pricing.js';
+import { costUsd, isUnmeteredEndpoint } from '../core/budget/pricing.js';
 import {
   type Config,
   loadConfig,
@@ -622,7 +622,14 @@ export function buildRuntime(
   const profile = withThinking(selectProfile(config.models.main, profiles), config.thinking);
 
   const recordSpendWithBaseUrl = (entry: SpendEntry, baseUrl: string | undefined): number => {
-    const usd = costUsd(entry.model, entry, baseUrl, entry.requestedModel);
+    // An owner-declared unmetered endpoint skips the meter entirely: the
+    // machine behind it is funded outside the spend caps, so the served model
+    // and the requested route both stop mattering here. Only the sealed list
+    // decides — a model-reachable config.json never reaches this branch (#499).
+    const usd =
+      baseUrl !== undefined && isUnmeteredEndpoint(baseUrl, budgets.unmetered)
+        ? 0
+        : costUsd(entry.model, entry, baseUrl, entry.requestedModel);
     // `entry` porta già `jobId` quando il turno è il giro di un job
     // (`agent/loop.ts`), e lo spread lo passa dritto alla riga di `spend`:
     // niente da tenere in sincrono qui, e nessun secondo posto in cui

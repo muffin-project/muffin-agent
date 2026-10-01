@@ -1297,3 +1297,102 @@ describe('billing identity: requested route vs served model (#499)', () => {
     expect(usd).toBeGreaterThan(0);
   });
 });
+
+describe('billing identity: owner-declared unmetered endpoints (#499)', () => {
+  const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
+  const usage = { inputTokens: 10_000, outputTokens: 2_000, cacheReadTokens: 0, cacheWriteTokens: 0 };
+  const LAN = 'http://192.168.1.10:8080/v1';
+
+  // A sealed home whose rot/budgets.json declares unmetered endpoints, like an
+  // owner would after `muffin rot reseal`. The optional config poison proves
+  // the negative the whole slice stands on: a model-reachable config.json must
+  // never flip billing, only the seal decides.
+  function homeWithUnmetered(unmetered: unknown, configPoison?: unknown): string {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-unmetered-'));
+    runInit({
+      home,
+      apiKey: 'sk-never-called',
+      provider: 'openai-compat',
+      baseUrl: LAN,
+      mainModel: 'qwen/qwen3.8-27b',
+      lightModel: 'qwen/qwen3.7-flash',
+    });
+    const file = join(paths(home).rot, 'budgets.json');
+    const budgets = JSON.parse(readFileSync(file, 'utf8'));
+    if (unmetered !== undefined) budgets.unmetered = unmetered;
+    writeFileSync(file, `${JSON.stringify(budgets, null, 2)}\n`);
+    seal(home, '1', new Date());
+    if (configPoison !== undefined) {
+      const configFile = paths(home).config;
+      const config = JSON.parse(readFileSync(configFile, 'utf8'));
+      (config as Record<string, unknown>).unmetered = configPoison;
+      writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
+    }
+    return home;
+  }
+
+  async function billedOn(home: string) {
+    const runtime = buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-unmetered-ws-')));
+    const stub: Provider = {
+      kind: 'openai-compat',
+      async chat(): Promise<ChatResult> {
+        return { text: 'fatto', toolCalls: [], stopReason: 'end', usage, model: 'qwen/qwen3.8-27b' };
+      },
+    };
+    try {
+      const result = await runTurn(
+        { ...runtime.deps, provider: stub },
+        {
+          principal: owner,
+          tenant: 'host',
+          surface: 'cli',
+          session: runtime.deps.sessions.open('unmetered-499'),
+          text: 'ciao',
+        },
+      );
+      expect(result.stopped).toBe('answered');
+      const usd = runtime.budget.monthToDateUsd();
+      const db = new DatabaseCtor(paths(home).db, { readonly: true });
+      try {
+        const rows = db.prepare('SELECT model, usd FROM spend').all() as { model: string; usd: number }[];
+        return { usd, rows };
+      } finally {
+        db.close();
+      }
+    } finally {
+      runtime.close();
+    }
+  }
+
+  it('bills $0 through a sealed unmetered declaration, keeping the served model on the row', async () => {
+    const { usd, rows } = await billedOn(
+      homeWithUnmetered([{ host: '192.168.1.10', port: 8080, note: 'GPU LAN' }]),
+    );
+    expect(usd).toBe(0);
+    expect(rows).toEqual([{ model: 'qwen/qwen3.8-27b', usd: 0 }]);
+  });
+
+  it('keeps metering an endpoint the seal does not declare', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-unmetered-'));
+    runInit({
+      home,
+      apiKey: 'sk-never-called',
+      provider: 'openai-compat',
+      baseUrl: LAN,
+      mainModel: 'qwen/qwen3.8-27b',
+      lightModel: 'qwen/qwen3.7-flash',
+    });
+    const { usd } = await billedOn(home);
+    expect(usd).toBeGreaterThan(0);
+  });
+
+  it('a config.json declaration alone changes nothing: only the seal decides', async () => {
+    const { usd } = await billedOn(homeWithUnmetered(undefined, [{ host: '192.168.1.10', port: 8080 }]));
+    expect(usd).toBeGreaterThan(0);
+  });
+
+  it('a malformed sealed section fails safe to metered', async () => {
+    const { usd } = await billedOn(homeWithUnmetered('all'));
+    expect(usd).toBeGreaterThan(0);
+  });
+});

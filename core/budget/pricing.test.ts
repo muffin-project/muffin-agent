@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { costUsd, isOpenRouterFreeRoute, priceOf } from './pricing.js';
+import { costUsd, isOpenRouterFreeRoute, isUnmeteredEndpoint, priceOf } from './pricing.js';
 
 const OPENROUTER = 'https://openrouter.ai/api/v1';
 
@@ -31,6 +31,30 @@ describe('pricing', () => {
     expect(costUsd('qwen/qwen3.8-27b', tokens, 'https://my-proxy.example/v1', 'openrouter/free')).toBeCloseTo(
       0.032, 6,
     );
+  });
+
+  describe('unmetered endpoints (#499)', () => {
+    const LAN = [{ host: '192.168.1.10', port: 8080 }];
+
+    it('matches the declared endpoint, case- and trailing-dot-insensitive', () => {
+      // Declarations arrive normalized (lowercase, folded trailing dot) from
+      // loadSealedBudgets; the predicate compares exact strings, and the URL
+      // side folds the same way.
+      expect(isUnmeteredEndpoint('http://192.168.1.10:8080/v1', LAN)).toBe(true);
+      expect(isUnmeteredEndpoint('HTTP://192.168.1.10:8080/v1', LAN)).toBe(true);
+      expect(isUnmeteredEndpoint('http://192.168.1.10.:8080/v1', LAN)).toBe(true);
+    });
+
+    it('matches any port when none is declared', () => {
+      expect(isUnmeteredEndpoint('http://192.168.1.10:9090/v1', [{ host: '192.168.1.10' }])).toBe(true);
+    });
+
+    it('does not match other hosts, other ports, malformed urls, or an empty list', () => {
+      expect(isUnmeteredEndpoint('http://192.168.1.11:8080/v1', LAN)).toBe(false);
+      expect(isUnmeteredEndpoint('http://192.168.1.10:9090/v1', LAN)).toBe(false);
+      expect(isUnmeteredEndpoint('not a url', LAN)).toBe(false);
+      expect(isUnmeteredEndpoint('http://192.168.1.10:8080/v1', [])).toBe(false);
+    });
   });
 
   it('recognizes explicit :free variants only on the OpenRouter endpoint', () => {
