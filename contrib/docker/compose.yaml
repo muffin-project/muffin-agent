@@ -1,0 +1,129 @@
+# Experimental Docker Compose path for Muffin (contrib/docker/README.md).
+# The supported installation is the native one (docs/user/INSTALL.md).
+#
+#   ./build.sh                                           # the image, from the last commit
+#   docker compose run --rm -it gateway muffin init      # once, interactive
+#   docker compose up -d                                 # gateway only
+#   docker compose --profile embeddings up -d            # + Ollama for memory embeddings
+#
+# Shell tools stay OFF with this file alone: the sandbox needs user namespaces,
+# which Docker's defaults block. That is the fail-closed posture, reported by
+# `muffin doctor`. To opt in, add compose.sandbox.yaml (and compose.apparmor.yaml
+# on AppArmor-restricted hosts); read the README first.
+#
+# No ports are published: Telegram long-polls, Discord uses an outbound
+# WebSocket, and the gateway control socket is a Unix socket in the home volume.
+
+name: muffin
+
+services:
+  gateway:
+    # Built by build.sh, never by compose: a `build:` section here would send the
+    # checkout as it is (untracked files, uncommitted edits) instead of a commit.
+    image: ${MUFFIN_IMAGE:-muffin-gateway:local}
+    pull_policy: never
+    restart: unless-stopped
+    # No capability and no privilege gain, in every posture: the process is the
+    # non-root `node` user, and bubblewrap needs neither (measured).
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    # Ceilings for everything in this container, sandboxed shell commands
+    # included: bubblewrap adds no cgroup of its own, so a runaway command hits
+    # these instead of the host. Swap is set equal to memory, otherwise Docker
+    # grants as much swap again and the memory ceiling is not one (measured).
+    pids_limit: ${MUFFIN_GATEWAY_PIDS_LIMIT:-512}
+    mem_limit: ${MUFFIN_GATEWAY_MEM_LIMIT:-2g}
+    memswap_limit: ${MUFFIN_GATEWAY_MEM_LIMIT:-2g}
+    # The gateway drains for up to 60 s on SIGTERM (a turn in flight finishes);
+    # Docker's default 10 s would SIGKILL the drain. 75 s is the stop timeout the
+    # native systemd unit uses (core/gateway/unit.ts, STOP_TIMEOUT_SEC).
+    stop_grace_period: 75s
+    environment:
+      # Embeddings for memory recall; reachable when the `embeddings` profile runs.
+      OLLAMA_URL: http://ollama:11434
+      # Lets `muffin init` offer the local Ollama as the model provider.
+      MUFFIN_LOCAL_RUNTIME_URL: http://ollama:11434/v1
+      TZ: ${TZ:-UTC}
+    volumes:
+      - home:/muffin/home              # config, sealed rot/, database, memory
+      - config:/muffin/config          # persistent secrets
+      - workspace:/muffin/workspace    # where turns read and write files
+    # Deliberately no `secrets:` here: whatever is mounted into the gateway is
+    # readable by its sandboxed shell. The key reaches the home through `init`.
+
+  # One-shot unattended first run, instead of the interactive `muffin init`:
+  #   MUFFIN_PROVIDER_KEY_FILE=/path/outside/the/checkout/provider.key \
+  #   MUFFIN_INIT_PROVIDER=openai-compat MUFFIN_INIT_BASE_URL=... MUFFIN_INIT_MODEL=... \
+  #   docker compose --profile unattended-init run --rm init
+  # The key is a file fed on stdin (never an environment variable, ADR-0048),
+  # mounted only into this container, which exits when `muffin init` is done.
+  init:
+    image: ${MUFFIN_IMAGE:-muffin-gateway:local}
+    pull_policy: never
+    profiles: [unattended-init]
+    restart: "no"
+    command: ["init-from-secret"]
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      MUFFIN_INIT_PROVIDER: ${MUFFIN_INIT_PROVIDER:-}
+      MUFFIN_INIT_BASE_URL: ${MUFFIN_INIT_BASE_URL:-}
+      MUFFIN_INIT_MODEL: ${MUFFIN_INIT_MODEL:-}
+    volumes:
+      - home:/muffin/home
+      - config:/muffin/config
+      - workspace:/muffin/workspace
+    secrets:
+      - muffin_provider_key
+
+  ollama:
+    image: ollama/ollama:0.34.4
+    profiles: [embeddings]
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+
+  ollama-init:
+    image: ollama/ollama:0.34.4
+    profiles: [embeddings]
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    # Muffin's default embedder (core/memory/embed.ts).
+    command: ["ollama pull qwen3-embedding:0.6b"]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  # Optional model router. Uncomment to put one OpenAI-compatible endpoint in
+  # front of several providers, then point `muffin init --base-url` at
+  # http://litellm:4000/v1. Muffin estimates spend from the model name
+  # (core/budget/pricing.ts): an alias it does not recognise is billed at the
+  # most expensive known rate against the sealed daily cap, so give local models
+  # a name containing `ollama` or `llama.cpp` and paid ones their family name.
+  #
+  # litellm:
+  #   image: ghcr.io/berriai/litellm:main-stable
+  #   restart: unless-stopped
+  #   command: ["--config", "/app/config.yaml", "--port", "4000"]
+  #   volumes:
+  #     - ./litellm.yaml:/app/config.yaml:ro
+
+volumes:
+  home: {}
+  config: {}
+  workspace: {}
+  ollama-models: {}
+
+secrets:
+  muffin_provider_key:
+    # Only read when the `init` service runs. Keep the file outside the checkout.
+    file: ${MUFFIN_PROVIDER_KEY_FILE:-./MUFFIN_PROVIDER_KEY_FILE-is-not-set}
