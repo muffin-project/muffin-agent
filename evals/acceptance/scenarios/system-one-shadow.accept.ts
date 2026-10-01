@@ -266,6 +266,28 @@ describe('acceptance · System One giudica gli ask in shadow, il pulsante decide
             `l'approvazione non è passata come sempre: ${JSON.stringify(approvazione)}`,
           );
         }
+
+        // (4) il report della fase 2, dal binario vero, sulle righe vere:
+        // il controfattuale conta ciò che è successo — qui un concordo-consuma
+        // (il giudice finto dice «ordinaria», l'owner ha detto sì, l'esito è
+        // pulito) e nessun falso-sicuro. Le soglie di default valgono per il
+        // report soltanto: niente consumo, niente config toccata.
+        const rapporto = await inst.muffin(['judgments', 'report']);
+        if (rapporto.code !== 0) {
+          throw new Error(`judgments report: exit ${rapporto.code}\n${rapporto.err}`);
+        }
+        if (!rapporto.out.includes('concordo-consuma (auto consuma: owner sì, esito pulito)      1')) {
+          throw new Error(`il controfattuale non conta il concordo-consuma atteso:\n${rapporto.out}`);
+        }
+        if (!rapporto.out.includes('falso-sicuro (auto consuma: owner no, o andata male)         0')) {
+          throw new Error(`il controfattuale conta falsi-sicuri che non ci sono:\n${rapporto.out}`);
+        }
+        if (!rapporto.out.includes('soglie: match ≥ 0.7 · danger ≤ 0.2 · recovery ≥ 0.5')) {
+          throw new Error(`le soglie di default non compaiono:\n${rapporto.out}`);
+        }
+        if (!rapporto.out.includes('description_matches_command')) {
+          throw new Error(`la calibrazione per domanda manca:\n${rapporto.out}`);
+        }
       } finally {
         await gw.stop();
       }
