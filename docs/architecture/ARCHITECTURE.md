@@ -148,9 +148,11 @@ decision. The model may interpret meaning and propose work; it does not grant
 itself authority.
 
 The Root of Trust and shipped policy configuration set constitutional floors.
-Familiarity with the owner does not raise authority. Any future reduction in
-supervision must be scoped, observable, revocable and evidence-backed rather
-than expressed as a global trust score.
+Familiarity with the owner does not raise authority. Any reduction in
+supervision is scoped, observable, revocable and evidence-backed rather than
+expressed as a global trust score: owner delegation modes (ADR-0095) consume
+`ask` verdicts per work — never `deny` — through the single approval queue,
+and die with the work they were given to.
 
 ## 3. Semantic planes and runtime topology are orthogonal
 

@@ -117,6 +117,10 @@ describe('il piano torna nel contesto del turno dopo, senza che nessuno lo chied
     // every pending session item an obligation of this Turn.
     expect(second).toContain('non decidono quando il turno è finito');
     expect(second).not.toMatch(/finito quando nessun passo/);
+    // No completion rule in prose: "finished" is decided by the completion
+    // gate reading rows at the finish boundary
+    // (`agent/loop/completion-gate.test.ts`), not by a sentence here. What
+    // this context still owes the model is the rows and their states, above.
   });
 
   it('sopravvive al riavvio del processo: un runtime nuovo lo rimette in contesto', async () => {

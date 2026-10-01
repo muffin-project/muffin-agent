@@ -184,6 +184,10 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   ),
   verde('B3', 'wait: a turn that asks to wait persists and RELEASES the process instead of holding it'),
   verde('B4', 'todo: a plan written by one process is shown, unasked, to the next one in the session'),
+  verde(
+    'B9',
+    'todo: a resumed turn that drops granted plan rows settles continuable naming them, never answered — the completion gate, not a sentence',
+  ),
   verde('B5', 'resume: a process killed mid-turn leaves a row the next boot names and the gateway finishes'),
   // New (slice/job-fires, owner decision 2026-08-17): the fire-claim/identity
   // gap A1's own comment named as "owned elsewhere" — a real SIGKILL landed

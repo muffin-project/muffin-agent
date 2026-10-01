@@ -27,7 +27,7 @@ export type MediaSpec = {
   /** What the sender called it. Recorded, never used as a path. */
   originalName: string;
   bytes: number;
-  kind: 'photo' | 'document' | 'audio' | 'voice' | 'video';
+  kind: 'photo' | 'document' | 'audio' | 'voice' | 'video' | 'sticker';
 };
 
 /**
@@ -69,7 +69,34 @@ export function attachmentOf(message: Message): MediaSpec | null {
       kind: 'video',
     };
   }
+  if (message.sticker) {
+    // Gli sticker non hanno nome né caption: il formato si legge dai byte
+    // dopo il download (`formatoSticker`), non da qui. `file_size` può
+    // mancare: il secondo controllo sui byte veri resta in `downloadToVault`.
+    return {
+      fileId: message.sticker.file_id,
+      originalName: 'sticker',
+      bytes: message.sticker.file_size ?? 0,
+      kind: 'sticker',
+    };
+  }
   return null;
+}
+
+/**
+ * Che sticker è, dai byte: Telegram ne serve tre formati e il messaggio non
+ * lo dice — `is_animated`/`is_video` li dichiara il mittente, la magia no.
+ *
+ * - `webp`: statico, lo stesso `loadImage` delle foto lo apre;
+ * - `webm`: video breve, serve un fotogramma (`core/media/fotogramma.ts`);
+ * - `tgs`: Lottie compresso, niente in casa lo renderizza.
+ */
+export function formatoSticker(byte: Uint8Array): 'webp' | 'webm' | 'tgs' | 'sconosciuto' {
+  const b = (i: number): number => byte[i] ?? -1;
+  if (b(0) === 0x1f && b(1) === 0x8b) return 'tgs';
+  if (b(0) === 0x1a && b(1) === 0x45 && b(2) === 0xdf && b(3) === 0xa3) return 'webm';
+  if (b(0) === 0x52 && b(1) === 0x49 && b(2) === 0x46 && b(3) === 0x46 && b(8) === 0x57 && b(9) === 0x45 && b(10) === 0x42 && b(11) === 0x50) return 'webp';
+  return 'sconosciuto';
 }
 
 /**

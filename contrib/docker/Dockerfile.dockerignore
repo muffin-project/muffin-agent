@@ -1,0 +1,5 @@
+# The context is meant to be a `git archive` of one commit (build.sh), and the
+# Dockerfile checks that it is. This file only keeps the repository's .git out
+# when the checkout itself is passed to `docker build` by mistake; that build
+# then stops at its first COPY.
+.git

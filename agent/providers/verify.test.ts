@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runInit } from '../../cli/init.js';
+import { loadConfig, saveConfig } from '../../core/config/config.js';
 import { AnthropicProvider } from './anthropic.js';
 import { OpenAICompatProvider } from './openai-compat.js';
 import { ReasoningConfigurationError } from './reasoning.js';
@@ -197,6 +198,36 @@ describe('verify · B: revoked credential => auth_failed, no leak', () => {
   });
 });
 
+describe('verify · the declared reasoning dialect reaches the route it probes (#789)', () => {
+  it('the declared dialect reaches the provider verify builds (#789 wiring)', async () => {
+    const dir = configuredHome('sk-test');
+    try {
+      const config = loadConfig(dir);
+      saveConfig({ ...config, provider: { ...config.provider, reasoningDialect: 'reasoning_effort' } }, dir);
+      const urls: string[] = [];
+      const result = await verifyInferenceRoute({
+        home: dir,
+        nonce: NONCE,
+        timeoutMs: 5_000,
+        fetch: (async (input: unknown) => {
+          const url = typeof input === 'string' ? input : String((input as { url?: string }).url ?? input);
+          urls.push(url);
+          const body = url.includes('/chat/completions')
+            ? openaiCompletion({ toolCalls: [probeToolCall()] })
+            : { data: { id: 'openrouter/free' } };
+          return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+        }) as never,
+      });
+      expect(result.status).toBe('working');
+      expect(urls.some((u) => u.includes('/chat/completions'))).toBe(true);
+      // The dialect suppressed OpenRouter discovery: with the wiring removed this is 1, not 0.
+      expect(urls.filter((u) => u.includes('/model/'))).toHaveLength(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('verify · C+D: text-only or tool-rejecting routes => incompatible', () => {
   it('C: a successful prose answer without the probe tool call is incompatible, not working', async () => {
     const bodies: unknown[] = [];
@@ -207,6 +238,29 @@ describe('verify · C+D: text-only or tool-rejecting routes => incompatible', ()
     const result = await verifyInferenceRoute({ provider, providerKind: 'openai-compat', model: 'm', nonce: NONCE, timeoutMs: 5_000 });
     expect(result.status).toBe('incompatible');
     expect(result.capability).toEqual({ completion: 'pass', toolCall: 'fail' });
+  });
+
+  it('keeps a budget-truncated response inconclusive instead of declaring incompatibility', async () => {
+    const bodies: unknown[] = [];
+    const provider = new OpenAICompatProvider('sk-test', 'https://local.test/v1', {}, {
+      fetch: openaiFetch(openaiCompletion({ text: 'reasoning prefix', finish: 'length' }), bodies),
+    });
+
+    const result = await verifyInferenceRoute({
+      provider,
+      providerKind: 'openai-compat',
+      model: 'local-reasoning-model',
+      nonce: NONCE,
+      timeoutMs: 5_000,
+    });
+
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({ max_tokens: VERIFY_MAX_OUTPUT_TOKENS, tool_choice: 'required' });
+    expect(result.status).toBe('provider_error');
+    expect(result.capability).toEqual({ completion: 'fail', toolCall: 'fail' });
+    expect(result.diagnostic).toContain('output budget');
+    expect(result.remedy).toContain('Muffin\'s doctor probe exhausted its own 64-token output budget');
+    expect(result.remedy).toContain('do not change the provider route');
   });
 
   it('C: a wrong tool name is incompatible even when a tool call exists', async () => {
@@ -254,6 +308,35 @@ describe('verify · C+D: text-only or tool-rejecting routes => incompatible', ()
     };
     const result = await verifyInferenceRoute({ provider: stub, providerKind: 'openai-compat', model: 'm', timeoutMs: 5_000 });
     expect(result.status).toBe('incompatible');
+  });
+
+  it('keeps malformed partial tool JSON inconclusive when the wire says output was truncated', async () => {
+    const bodies: unknown[] = [];
+    const provider = new OpenAICompatProvider('sk-test', 'https://local.test/v1', {}, {
+      fetch: openaiFetch(
+        openaiCompletion({
+          finish: 'length',
+          toolCalls: [
+            { id: 'call_probe_partial', type: 'function', function: { name: PROBE_TOOL_NAME, arguments: '{"nonce":"test' } },
+          ],
+        }),
+        bodies,
+      ),
+    });
+
+    const result = await verifyInferenceRoute({
+      provider,
+      providerKind: 'openai-compat',
+      model: 'local-reasoning-model',
+      nonce: NONCE,
+      timeoutMs: 5_000,
+    });
+
+    expect(bodies).toHaveLength(1);
+    expect(result.status).toBe('provider_error');
+    expect(result.diagnostic).toContain('output budget');
+    expect(result.diagnostic).toContain('compatibility is unverified');
+    expect(result.remedy).toContain('Muffin\'s doctor probe exhausted its own 64-token output budget');
   });
 });
 

@@ -2,7 +2,7 @@ import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { runInit } from '../cli/init.js';
 import { loadConfig, paths, saveConfig, secretDir } from '../core/config/config.js';
 import { UndoJournal } from '../core/undo/journal.js';
@@ -859,6 +859,70 @@ describe('l\'embedder della config raggiunge la tabella vettoriale', () => {
   });
 });
 
+
+describe('reasoning config reaches the providers that make the calls (#789)', () => {
+  it('config.provider.reasoningDialect reaches the wire on the main and the light lane, and config.thinking reaches the profile', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-dialect-'));
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-dialect-ws-'));
+
+    runInit({
+      home,
+      apiKey: 'sk-fixture',
+      provider: 'openai-compat',
+      baseUrl: 'https://vllm.example.test/v1',
+      mainModel: 'qwen3.8-flash-next',
+      lightModel: 'qwen3.8-flash-next',
+    });
+    const before = loadConfig(home);
+    saveConfig({ ...before, thinking: 'medium', provider: { ...before.provider, reasoningDialect: 'reasoning_effort' } }, home);
+
+    // Behavioural, not structural: `runtime.light.provider` is a retry wrapper
+    // that does not expose the adapter under it, and the claim is about bytes —
+    // the memory lanes' `off` and the owner's level must reach the wire. The
+    // spy goes first: the SDK captures `fetch` when the client is constructed.
+    const bodies: Record<string, unknown>[] = [];
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((async (_url: unknown, init?: { body?: string }) => {
+      bodies.push(JSON.parse(init?.body ?? '{}'));
+      return new Response(
+        JSON.stringify({ id: 'x', model: 'm', choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1 } }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }) as never);
+    let runtime: ReturnType<typeof buildRuntime>;
+    try {
+      runtime = buildRuntime(home, workspace);
+      const call = { model: 'qwen3.8-flash-next', maxOutputTokens: 10, stream: false, system: [{ type: 'text' as const, text: 's' }], messages: [{ role: 'user' as const, content: [{ type: 'text' as const, text: 'q' }] }] };
+      await runtime.light.provider.chat({ ...call, thinking: 'off' });
+      await runtime.deps.provider.chat({ ...call, reasoning: { mode: 'on', effort: 'medium' } });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+    expect(bodies[0]?.reasoning_effort).toBe('none');
+    expect(bodies[1]?.reasoning_effort).toBe('medium');
+    expect(runtime.deps.profile.thinking).toBe('medium');
+    runtime.close();
+  });
+
+  it('without the config fields a self-hosted endpoint keeps the behaviour it always had', () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-nodialect-'));
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-nodialect-ws-'));
+
+    runInit({
+      home,
+      apiKey: 'sk-fixture',
+      provider: 'openai-compat',
+      baseUrl: 'https://vllm.example.test/v1',
+      mainModel: 'qwen3.8-flash-next',
+      lightModel: 'qwen3.8-flash-next',
+    });
+
+    const runtime = buildRuntime(home, workspace);
+
+    expect((runtime.deps.provider as unknown as { reasoningDialect?: unknown }).reasoningDialect).toBeUndefined();
+    expect((runtime.light.provider as unknown as { reasoningDialect?: unknown }).reasoningDialect).toBeUndefined();
+    runtime.close();
+  });
+});
 
 describe('main model config is a turn-boundary input', () => {
   it('a fresh queued turn sees a model and routing change written after this runtime booted', () => {

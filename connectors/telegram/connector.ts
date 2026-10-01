@@ -1,5 +1,6 @@
 import type { CallbackQuery, ChatMemberUpdated, Message, MessageOrigin, Update } from '@grammyjs/types';
 import { randomBytes } from 'node:crypto';
+import { readFileSync, statSync } from 'node:fs';
 import type { LoopDeps, TurnDelta, TurnEvent } from '../../agent/loop.js';
 import { routeContinuationTarget } from '../../agent/loop.js';
 import type { ApprovalRequest, ApprovalWhere, Approver } from '../../agent/loop.js';
@@ -7,6 +8,7 @@ import type { AttachStream } from '../../agent/turn-lane.js';
 import { COMANDI, sembraComando, type Controlli } from '../../agent/comandi.js';
 import { recoveredText } from '../../agent/recovered-text.js';
 import type { PendingPairing } from '../../core/config/pairing.js';
+import { levaDelega } from '../../core/runtime/delega.js';
 import type { ModelLane } from '../../core/turns/model-lane.js';
 import { decodeWaitFor } from '../../core/turns/wait.js';
 import { fence } from '../../core/memory/spotlight.js';
@@ -43,11 +45,13 @@ import {
   TelegramDeliveryStore,
 } from './delivery.js';
 import { join } from 'node:path';
-import { attachmentOf, downloadToVault, type MediaSpec } from './media.js';
+import { attachmentOf, downloadToVault, formatoSticker, safeVaultName, type Downloaded, type MediaSpec } from './media.js';
+import { estraiFotogramma } from '../../core/media/fotogramma.js';
 import { tipoAudio } from '../../agent/audio.js';
 import { loadImage } from '../../agent/images.js';
 import type { AudioBlock, ImageBlock } from '../../agent/providers/types.js';
 import type { Voce } from '../../core/audio/voce.js';
+import type { Vista } from '../../core/vista/vista.js';
 
 /**
  * Cosa e' arrivato con un allegato: la riga da raccontare al modello e, quando
@@ -60,8 +64,14 @@ import type { Voce } from '../../core/audio/voce.js';
 type Arrivo = Arrival;
 
 /** Solo i due metodi che questo file usa: il connettore non possiede il registro. */
-type ApprovalDecide = (id: string, decision: 'allow' | 'deny', now: Date) => 'ok' | 'already' | 'unknown' | 'withdrawn';
+type ApprovalDecide = (
+  id: string,
+  decision: 'allow' | 'deny',
+  now: Date,
+  by?: 'owner' | 'delegation',
+) => 'ok' | 'already' | 'unknown' | 'withdrawn';
 type ApprovalGet = (id: string) => { id: string; turnId: string; capability: string; resource: string | null } | null;
+type ApprovalOpenRows = (turnId: string) => { id: string }[];
 import { startPresence } from './presence.js';
 import { avvisoAllOwner, decidiInvito, SALUTO_NEL_GRUPPO, type Invito } from './invito.js';
 import { stanzaDi } from './negoziazione.js';
@@ -180,6 +190,14 @@ export type ConnectorDeps = {
    */
   voce?: (percorso: string) => Promise<Voce>;
   /**
+   * Cosa fare di un'immagine — `core/vista/vista.ts`.
+   *
+   * Assente vuol dire la strada di sempre (i byte vanno al modello). Iniettata
+   * come `voce` e per la stessa ragione: il connettore non ha nessuna ragione
+   * di sapere che esistono i provider o i modelli leggeri.
+   */
+  vista?: (percorso: string) => Promise<Vista>;
+  /**
    * I comandi, eseguiti dove sono scritti una volta sola
    * (`agent/comandi.ts`). `null` vuol dire «questo testo non è un comando».
    *
@@ -207,7 +225,7 @@ export type ConnectorDeps = {
    * pulsante premuto viene chiuso dicendo che non si sa di cosa si tratti —
    * mai lasciato girare.
    */
-  approvals?: { decide: ApprovalDecide; get: ApprovalGet };
+  approvals?: { decide: ApprovalDecide; get: ApprovalGet; openRows: ApprovalOpenRows };
   /**
    * «C'è un turno pronto adesso.»
    *
@@ -2733,13 +2751,27 @@ export class TelegramConnector {
     // archiviare la conversazione che il turno successivo riaprirà, non
     // un'altra con lo stesso nome.
     const sessione = this.deps.sessions.open(sessionKey);
+    // La delega (issue #740) si lega al lavoro attivo di questa conversazione:
+    // la leva legge gli stessi store del loop, quindi un comando e un ask
+    // vedono la stessa verità anche dopo un riavvio. Assente dove il runtime
+    // non l'ha cablata, e i comandi lo dicono invece di fingere.
+    const delega =
+      this.deps.loop.delega !== undefined && this.deps.approvals !== undefined
+        ? levaDelega({
+            delega: this.deps.loop.delega,
+            approvals: this.deps.approvals,
+            turns: this.deps.loop.turns,
+            sessionId: () => sessione.id,
+            ...(this.deps.onWork === undefined ? {} : { onWork: this.deps.onWork }),
+          })
+        : undefined;
     return tryControlCommand({
       principal,
       text: incoming.text,
       sessionId: sessione.id,
       // Le leve di ADR-0054, per **questa** chat: il turno vivo è quello della
       // sua corsia, e `/stop` dal gruppo non ferma il turno della privata.
-      controlli: controlliPerCorsia(this.corsie, this.corsia(incoming.chatId), this.deps.pausa),
+      controlli: controlliPerCorsia(this.corsie, this.corsia(incoming.chatId), this.deps.pausa, delega),
       esegui: this.deps.comandi,
       // Il dialetto resta qui. La politica di presentazione (rich-first, con
       // il ripiego legacy a pezzi sotto il limite) è di `present`: `/model
@@ -2804,11 +2836,17 @@ export class TelegramConnector {
     tenantId: string,
     tier: TrustTier,
   ): Promise<Arrivo> {
+    // Gli sticker hanno tre formati e il messaggio non dice qual è: si
+    // scaricano, si leggono i byte e si instradano — webp dritto dentro,
+    // webm via fotogramma, tgs dichiarato non apribile. Il ramo condiviso
+    // sotto non sa cos'è uno sticker e non deve saperlo.
+    if (spec.kind === 'sticker') return this.ingestSticker(incoming, spec, tenantId, tier);
     const log = this.deps.log ?? (() => {});
     return ingestAttachment(
       {
         ...(this.deps.vault === undefined ? {} : { vault: this.deps.vault }),
         ...(this.deps.voce === undefined ? {} : { voce: this.deps.voce }),
+        ...(this.deps.vista === undefined ? {} : { vista: this.deps.vista }),
         // Un-prefixed on the shared side (§4 invariant 11); the port's own
         // name is added here, so the line in `gateway.err` is unchanged.
         log: (riga) => log(`telegram: ${riga}`),
@@ -2825,6 +2863,71 @@ export class TelegramConnector {
 
   private now(): string {
     return (this.deps.now ?? (() => new Date()))().toISOString();
+  }
+
+  /**
+   * Uno sticker, che il messaggio non descrive: tre formati possibili, e il
+   * tipo dichiarato non è affidabile — quindi prima si scarica, poi si leggono
+   * i byte, poi si instrada.
+   *
+   * - `webp` (statico): è un'immagine come le altre, va nel ramo condiviso e
+   *   da lì in `vista` quando collegata;
+   * - `webm` (video breve): un fotogramma in `inbox/`, e il fotogramma va nel
+   *   ramo condiviso — il cui nome dice che è un fotogramma di uno sticker;
+   * - `tgs` (Lottie) o ignoto: niente in casa lo renderizza, e la riga lo dice
+   *   con il rimedio (uno screenshot, o descriverlo a parole).
+   *
+   * Il download fallito ha la sua riga, con la stessa forma delle altre: il
+   * turno gira comunque e sa che lo sticker non c'è.
+   */
+  private async ingestSticker(
+    incoming: Incoming,
+    spec: MediaSpec,
+    tenantId: string,
+    tier: TrustTier,
+  ): Promise<Arrivo> {
+    const log = this.deps.log ?? (() => {});
+    const deps = {
+      ...(this.deps.vault === undefined ? {} : { vault: this.deps.vault }),
+      ...(this.deps.voce === undefined ? {} : { voce: this.deps.voce }),
+      ...(this.deps.vista === undefined ? {} : { vista: this.deps.vista }),
+      log: (riga: string) => log(`telegram: ${riga}`),
+    };
+    let scaricato: Downloaded;
+    try {
+      scaricato = await downloadToVault(this.deps.api, this.deps.vault?.root ?? '', spec, incoming.updateId, this.now());
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+      log(`sticker non scaricato — ${why}`);
+      return { line: `[sticker NON ricevuto: ${why}. Dillo, non fingere di averlo.]` };
+    }
+    const quanto = `\`${scaricato.vaultPath}\` (${Math.round(scaricato.bytes / 1024)}KB)`;
+    const forma = formatoSticker(readFileSync(join(this.deps.vault?.root ?? '', scaricato.vaultPath)));
+    if (forma === 'webp') {
+      return ingestAttachment(deps, async () => scaricato, tenantId, tier);
+    }
+    if (forma === 'webm') {
+      const nome = safeVaultName('sticker-frame.png', incoming.updateId, this.now());
+      const frame = join(this.deps.vault?.root ?? '', 'inbox', nome);
+      const esito = await estraiFotogramma(join(this.deps.vault?.root ?? '', scaricato.vaultPath), frame);
+      if (!esito.ok) {
+        log(`sticker video non apribile — ${esito.why}`);
+        return {
+          line: `[sticker video ricevuto (${quanto}) ma non apribile: ${esito.why}. Dillo, non inventarti cosa mostra.${
+            esito.rimedio === undefined ? '' : ` Rimedio per l'owner:\n${esito.rimedio}`
+          }]`,
+        };
+      }
+      return ingestAttachment(deps, async () => ({ vaultPath: `inbox/${nome}`, bytes: statSync(frame).size }), tenantId, tier);
+    }
+    log(`sticker non apribile — formato ${forma}`);
+    return forma === 'tgs'
+      ? {
+          line: `[sticker ricevuto (${quanto}) ma non apribile: è uno sticker animato, che non so renderizzare. Mandami uno screenshot o descrivimelo, e non inventarti cosa mostra.]`,
+        }
+      : {
+          line: `[sticker ricevuto (${quanto}) ma non apribile: formato che non riconosco. Mandami uno screenshot o descrivimelo, e non inventarti cosa mostra.]`,
+        };
   }
 }
 

@@ -1,16 +1,14 @@
 /**
- * Pilot A/B sull'execution policy (issue #498): stessa domanda, tre modi di chiederla.
+ * Pilot A/B sull'execution policy (issue #498): stessa domanda, quattro modi di chiederla.
  *
  * Bracci, a parità di modello (`--model`, di default il main dell'installazione):
  *
- * - `A` — status quo: `adaptive` + `deterministic` (il profilo shipped, intatto);
- * - `B` — `adaptive` + `model-default` (nessuna temperature sul filo);
- * - `C` — `off` + `deterministic` (il default che la #498 vieta senza misura).
- *
- * Il quarto braccio della issue (`low/bounded reasoning`) non è esprimibile:
- * `ReasoningRequest.effort/maxTokens` non ha superficie in profilo/config
- * (solo `mode`), quindi non c'è manopola da girare — finding registrato, non
- * misurabile qui.
+ * - `A` — status quo: il profilo shipped così com'è (per qwen3, `consumer-qwen3`
+ *   con `xhigh`) + `deterministic`;
+ * - `B` — profilo shipped + `model-default` (nessuna temperature sul filo);
+ * - `C` — `off` + `deterministic` (il default che la #498 vieta senza misura);
+ * - `D` — `low` + `deterministic`: il ragionamento abbassato ma non spento, il
+ *   braccio che la #498 chiedeva e che non era esprimibile prima della #789.
  *
  * Ogni braccio gira su home + workspace usa-e-getta (`runInit`, mai
  * `~/.muffin`), provider OpenRouter vero, tool veri su file fixture generati
@@ -33,8 +31,8 @@ import { loadConfig, muffinHome, saveConfig } from '../../core/config/config.js'
 import { runTurn } from '../../agent/loop.js';
 import { buildRuntime, type Runtime } from '../../agent/runtime.js';
 
-type Arm = 'A' | 'B' | 'C';
-export const ARMS: Arm[] = ['A', 'B', 'C'];
+type Arm = 'A' | 'B' | 'C' | 'D';
+export const ARMS: Arm[] = ['A', 'B', 'C', 'D'];
 
 export type TaskDef = {
   id: string;
@@ -144,6 +142,19 @@ export type Row = {
 
 const OWNER = { kind: 'owner', connector: 'cli', externalId: 'ab-pilot' } as const;
 
+/**
+ * La manopola di ciascun braccio, separata dal giro così è provabile offline:
+ * `A` e `B` non toccano la config (B gira il sampling sul profilo in memoria),
+ * `C` scrive `thinking: 'off'`, `D` scrive `thinking: 'low'` — stesso sampling
+ * di A e C, così l'unica differenza fra A, C e D è il reasoning.
+ */
+export function configureArm(arm: Arm, home: string): void {
+  if (arm === 'C' || arm === 'D') {
+    const cfg = loadConfig(home);
+    saveConfig({ ...cfg, thinking: arm === 'C' ? 'off' : 'low' }, home);
+  }
+}
+
 async function runArm(
   arm: Arm,
   model: string,
@@ -157,10 +168,7 @@ async function runArm(
   const ws = mkdtempSync(join(tmpdir(), 'muffin-ab-ws-'));
   try {
     runInit({ home, apiKey, provider: 'openai-compat', baseUrl, mainModel: model, lightModel: model });
-    if (arm === 'C') {
-      const cfg = loadConfig(home);
-      saveConfig({ ...cfg, thinking: 'off' }, home);
-    }
+    configureArm(arm, home);
     const runtime: Runtime = buildRuntime(home, ws);
     if (arm === 'B') {
       // Solo campionamento di default del provider: il profilo shipped resta
@@ -258,7 +266,7 @@ async function main(): Promise<void> {
       model: { type: 'string' },
       'base-url': { type: 'string' },
       'api-key-env': { type: 'string', default: 'MUFFIN_AB_KEY' },
-      arms: { type: 'string', default: 'A,B,C' },
+      arms: { type: 'string', default: 'A,B,C,D' },
       'max-usd': { type: 'string', default: '2' },
       'signal-ms': { type: 'string', default: `${6 * 60_000}` },
       'dry-run': { type: 'boolean', default: false },

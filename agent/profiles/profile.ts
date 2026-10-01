@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { z } from 'zod';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { THINKING_VALUES, type Thinking } from '../../core/config/thinking.js';
 import { TOOL_RESULT_BUDGET_CHARS } from '../loop/types.js';
 
 /**
@@ -118,7 +119,7 @@ export type Profile = {
   maxToolsExposed: number;
   /** `null` leaves call count unbounded; execution time and spend budgets still apply. */
   maxToolCallsPerTurn: number | null;
-  thinking: 'adaptive' | 'off' | 'unset';
+  thinking: Thinking;
   /**
    * `'deterministic'` sends `temperature: 0`; `'model-default'` sends no
    * sampling parameter at all, because the model rejects one.
@@ -200,7 +201,7 @@ const ProfileSchema = z.object({
   // 'disabled'} — is a 400 on a model with no disable switch (Fable 5, Mythos
   // 5), so a profile targeting one needs a value that omits the field instead
   // of guessing wrong (ADR-0037's correction, same day).
-  thinking: z.enum(['off', 'adaptive', 'unset']),
+  thinking: z.enum(THINKING_VALUES),
   // Defaulted, not required, and the default is what the loop hardcoded before
   // this field existed — so a profile written against the old schema keeps
   // exactly the behaviour it had instead of silently acquiring a new one.

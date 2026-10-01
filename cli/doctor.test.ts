@@ -307,6 +307,56 @@ describe('doctor names which profile the configured model resolves to', () => {
   });
 });
 
+describe('doctor names whether the reasoning setting can reach the endpoint (#789)', () => {
+  const selfHosted = (over: {
+    thinking?: 'off' | 'medium';
+    reasoningDialect?: 'reasoning_effort';
+  }): string => {
+    const dir = home();
+    const config = loadConfig(dir);
+    saveConfig(
+      {
+        ...config,
+        provider: {
+          kind: 'openai-compat',
+          apiKeyRef: config.provider.apiKeyRef,
+          baseUrl: 'https://vllm.example.test/v1',
+          ...(over.reasoningDialect ? { reasoningDialect: over.reasoningDialect } : {}),
+        },
+        ...(over.thinking ? { thinking: over.thinking } : {}),
+      },
+      dir,
+    );
+    return dir;
+  };
+
+  it('says nothing when nothing is configured: the server decides, and that is not news', async () => {
+    const dir = selfHosted({});
+    expect(await check(dir, 'reasoning')).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('warns when a level or off is set on an endpoint that neither is OpenRouter nor declares a dialect', async () => {
+    for (const thinking of ['medium', 'off'] as const) {
+      const dir = selfHosted({ thinking });
+      const c = await check(dir, 'reasoning');
+      expect(c?.level).toBe('warn');
+      expect(c?.detail).toContain(`thinking ${thinking}`);
+      expect(c?.remedy).toContain('reasoningDialect');
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('is ok, naming the dialect, once the owner declared it', async () => {
+    const dir = selfHosted({ thinking: 'medium', reasoningDialect: 'reasoning_effort' });
+    const c = await check(dir, 'reasoning');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('thinking medium');
+    expect(c?.detail).toContain('reasoning_effort');
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe('doctor runs the root-of-trust readers invariant', () => {
   it('passes on a fresh install', async () => {
     const dir = home();
@@ -1490,6 +1540,47 @@ describe("l'indice coerente non dice che l'embedder risponda", () => {
     rmSync(dir, { recursive: true, force: true });
   }, 60_000);
 
+  it('a indice VUOTO nomina l embedder irraggiungibile invece di prescrivere extract — installazione fresca', async () => {
+    // Il ramo `chunks === 0` prescriveva `muffin memory extract` senza chiedere
+    // se l'embedder risponde: con Ollama giù, extract ripassa da makeEmbedder
+    // e non indicizza niente — causa sbagliata, rimedio inerte (#738).
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    // La tabella c'è ed è vuota: lo stato di un'installazione fresca, non
+    // quello di un DB senza memoria.
+    new VectorIndex(db, new Finto());
+    expect((db.prepare(`SELECT count(*) AS n FROM chunks`).get() as { n: number }).n).toBe(0);
+    db.close();
+
+    const c = await checkWith(dir, 'vector index', {
+      embedderProbe: async () => {
+        throw new Error('fetch failed');
+      },
+    });
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('empty');
+    expect(c?.detail).toContain('non risponde');
+    expect(c?.detail).toContain('fetch failed');
+    // Il rimedio inerte non deve più comparire; quello locale sì.
+    expect(c?.remedy).not.toContain('memory extract');
+    expect(c?.remedy).toContain('ollama');
+    rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+
+  it('a indice VUOTO con embedder raggiungibile resta la riga empty + extract', async () => {
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    new VectorIndex(db, new Finto());
+    db.close();
+
+    const c = await checkWith(dir, 'vector index', { embedderProbe: async () => {} });
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('empty');
+    expect(c?.detail).not.toContain('non risponde');
+    expect(c?.remedy).toContain('memory extract');
+    rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+
   it('non dice «in sync» mentre delle sorgenti aspettano ancora un vettore', async () => {
     // Contare `chunks` contro `chunks_vec` dice solo che ciò che è già
     // indicizzato è coerente. Dopo un cambio di embedder il backlog si drena a
@@ -2378,6 +2469,51 @@ describe('doctor reports vault drift with the reindex remedy', () => {
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('file spariti');
     expect(c?.remedy).toContain('muffin vault reindex');
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('doctor says whether a photo would be seen, before the first one arrives', () => {
+  const conTelegram = (dir: string): string => {
+    const file = join(paths(dir).home, 'config.json');
+    const config = JSON.parse(readFileSync(file, 'utf8')) as { surfaces: Record<string, unknown> };
+    config.surfaces = { ...config.surfaces, enabled: ['cli', 'telegram'] };
+    writeFileSync(file, JSON.stringify(config, null, 2));
+    return dir;
+  };
+
+  it('says nothing when no photo-carrying surface is enabled', async () => {
+    const dir = home();
+    const c = await checkWith(dir, 'vista', { vista: { vedeImmagini: async () => true } });
+    expect(c).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is ok, naming the model, when the configured model sees images', async () => {
+    const dir = conTelegram(home());
+    const c = await checkWith(dir, 'vista', { vista: { vedeImmagini: async () => true } });
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toMatch(/vede le immagini/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is ok, naming who describes, when the main model is blind but the light one sees', async () => {
+    const dir = conTelegram(home());
+    const config = loadConfig(dir);
+    const c = await checkWith(dir, 'vista', {
+      vista: { vedeImmagini: async (modello: string) => modello === config.models.light },
+    });
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain(config.models.light);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('warns with the remedy when nobody sees', async () => {
+    const dir = conTelegram(home());
+    const c = await checkWith(dir, 'vista', { vista: { vedeImmagini: async () => false } });
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toMatch(/restano fuori dal turno/);
+    expect(c?.remedy).toContain('/model');
     rmSync(dir, { recursive: true, force: true });
   });
 });

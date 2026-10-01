@@ -178,6 +178,7 @@ export function todoSection(open: TodoItem[]): string {
       'Usale quando servono alla richiesta corrente o quando l’owner chiede del piano; ' +
       'la sola presenza di passi aperti non richiede di ricordarli, proporne la ripresa o eseguirli.',
   ].join('\n');
+
 }
 
 /**

@@ -8,6 +8,7 @@ import type { TurnStopped, TurnStore } from '../../core/turns/store.js';
 import type { TodoStore } from '../../core/turns/todo.js';
 import type { WaitSpec } from '../../core/turns/wait.js';
 import type { ApprovalStore } from '../../core/approvals/store.js';
+import type { Delega } from '../../core/runtime/delega.js';
 import type { Tracer } from '../../core/tracing/types.js';
 import type { IstanzaFacts, SystemPrompts } from '../context/assemble.js';
 import type { Profile } from '../profiles/profile.js';
@@ -530,6 +531,16 @@ export type LoopDeps = {
    * una superficie dove l'owner non è davanti allo schermo.
    */
   approvals?: ApprovalStore | undefined;
+  /**
+   * La delega dell'owner per **questo** lavoro (issue #740): quale postura
+   * consuma gli `ask` — `manual` (chiede), `auto` (chiede finché la busta
+   * semantica è vuota), `yolo` (pre-approvati).
+   *
+   * Opzionale, e il verso in cui degrada è quello giusto: assente = `manual`
+   * ovunque, cioè domande come oggi. Un loop che si dimentica di passarla
+   * perde la comodità, non la sicurezza.
+   */
+  delega?: Delega | undefined;
   /**
    * Bills a model call and returns what it cost. Absent in tests; absent in
    * production means the caps are decorative, which is why `doctor` reports it.

@@ -69,6 +69,11 @@ CREATE TABLE IF NOT EXISTS approvals (
   decision    TEXT CHECK (decision IN ('allow','deny')),
   decided_at  TEXT,
   consumed_at TEXT,
+  -- Chi ha deciso: l'owner sul pulsante, oppure la sua delega attiva per
+  -- questo lavoro (issue #740: yolo consuma gli ask attraverso lo stesso
+  -- registro, non accanto). Righe decise prima di questa colonna: solo
+  -- l'owner poteva decidere, quindi leggono 'owner'.
+  decided_by  TEXT CHECK (decided_by IN ('owner','delegation')),
   -- Quando il turno è finito con la domanda ancora aperta: la riga non è
   -- cancellata (niente si cancella) e non è decisa (nessuno ha risposto), ma
   -- non è più una domanda — open la ignora e un tocco tardivo non decide.
@@ -88,6 +93,8 @@ export type ApprovalRow = {
   decision: 'allow' | 'deny' | null;
   decidedAt: string | null;
   consumedAt: string | null;
+  /** Solo quando `decision` non è null: chi ha risposto. */
+  decidedBy: 'owner' | 'delegation' | null;
   /** Il turno è finito mentre la domanda era aperta: vedi `withdrawForTurn`. */
   withdrawnAt: string | null;
 };
@@ -103,6 +110,7 @@ type Raw = {
   decision: string | null;
   decided_at: string | null;
   consumed_at: string | null;
+  decided_by: string | null;
   withdrawn_at: string | null;
 };
 
@@ -117,6 +125,9 @@ const read = (r: Raw): ApprovalRow => ({
   decision: r.decision === 'allow' || r.decision === 'deny' ? r.decision : null,
   decidedAt: r.decided_at,
   consumedAt: r.consumed_at,
+  // Decisa ma senza autore: righe di prima della colonna, quando solo
+  // l'owner poteva decidere — vedi lo schema.
+  decidedBy: r.decision === null ? null : r.decided_by === 'delegation' ? 'delegation' : 'owner',
   withdrawnAt: r.withdrawn_at,
 });
 
@@ -127,6 +138,7 @@ export class ApprovalStore {
   private readonly matchStmt: DatabaseCtor.Statement;
   private readonly consumeStmt: DatabaseCtor.Statement;
   private readonly openStmt: DatabaseCtor.Statement;
+  private readonly openRowsStmt: DatabaseCtor.Statement;
   private readonly decidedUnconsumedStmt: DatabaseCtor.Statement;
   private readonly withdrawStmt: DatabaseCtor.Statement;
   private readonly openForStmt: DatabaseCtor.Statement;
@@ -140,6 +152,15 @@ export class ApprovalStore {
     // della corsa fra due connessioni (`duplicate column name`), che una copia
     // locale di PRAGMA+ALTER non avrebbe.
     ensureColumn(db, 'approvals', 'withdrawn_at', 'withdrawn_at TEXT');
+    // Stesso meccanismo, stessa ragione: la delega (#740) distingue chi ha
+    // deciso, e un database installato prima di questa riga deve leggerla
+    // senza che nessuno migri niente a mano.
+    ensureColumn(
+      db,
+      'approvals',
+      'decided_by',
+      "decided_by TEXT CHECK (decided_by IN ('owner','delegation'))",
+    );
     this.askStmt = db.prepare(
       `INSERT INTO approvals (id, turn_id, capability, resource, prompt, taint, asked_at)
        VALUES (@id, @turnId, @capability, @resource, @prompt, @taint, @askedAt)`,
@@ -155,7 +176,7 @@ export class ApprovalStore {
      * come «già risposto» invece che come un errore.
      */
     this.decideStmt = db.prepare(
-      `UPDATE approvals SET decision = @decision, decided_at = @at
+      `UPDATE approvals SET decision = @decision, decided_at = @at, decided_by = @by
         WHERE id = @id AND decision IS NULL AND withdrawn_at IS NULL`,
     );
     this.matchStmt = db.prepare(
@@ -169,6 +190,17 @@ export class ApprovalStore {
     this.openStmt = db.prepare(
       `SELECT * FROM approvals WHERE turn_id = ? AND decision IS NULL AND withdrawn_at IS NULL
         ORDER BY asked_at ASC LIMIT 1`,
+    );
+    /**
+     * Tutte le domande aperte di un turno, dalla più vecchia.
+     *
+     * La usa `/yolo` su un lavoro sospeso: un giro può averne lasciate due
+     * (#741), e decidere solo la prima significherebbe risvegliare il turno
+     * su una barriera che resta aperta.
+     */
+    this.openRowsStmt = db.prepare(
+      `SELECT * FROM approvals WHERE turn_id = ? AND decision IS NULL AND withdrawn_at IS NULL
+        ORDER BY asked_at ASC`,
     );
     this.openForStmt = db.prepare(
       `SELECT * FROM approvals
@@ -227,15 +259,25 @@ export class ApprovalStore {
   }
 
   /**
-   * L'owner ha risposto.
+   * L'owner ha risposto — o la sua delega ha consumato la domanda (#740).
+   *
+   * `by` dice chi: `'owner'` il pulsante (anche il terminale), `'delegation'`
+   * l'ask consumato sotto `/yolo`. Il default è l'owner perché ogni chiamante
+   * esistente è un dito, e un dito che dimentica il parametro non deve
+   * diventare delega.
    *
    * Tre esiti distinti perché portano a tre messaggi diversi sul pulsante:
    * `ok` la risposta è stata presa, `already` qualcuno (o lo stesso dito) aveva
    * già risposto, `unknown` quell'id non esiste — un pulsante di un database
    * ricreato, o qualcosa che nessuno ha chiesto.
    */
-  decide(id: string, decision: 'allow' | 'deny', now: Date): 'ok' | 'already' | 'unknown' | 'withdrawn' {
-    const changed = this.decideStmt.run({ id, decision, at: now.toISOString() }).changes;
+  decide(
+    id: string,
+    decision: 'allow' | 'deny',
+    now: Date,
+    by: 'owner' | 'delegation' = 'owner',
+  ): 'ok' | 'already' | 'unknown' | 'withdrawn' {
+    const changed = this.decideStmt.run({ id, decision, at: now.toISOString(), by }).changes;
     if (changed > 0) return 'ok';
     const row = this.get(id);
     if (row === null) return 'unknown';
@@ -269,6 +311,12 @@ export class ApprovalStore {
   open(turnId: string): ApprovalRow | null {
     const row = this.openStmt.get(turnId) as Raw | undefined;
     return row === undefined ? null : read(row);
+  }
+
+  /** Tutte le domande aperte di un turno, dalla più vecchia — vedi `openRowsStmt`. */
+  openRows(turnId: string): ApprovalRow[] {
+    const rows = this.openRowsStmt.all(turnId) as Raw[];
+    return rows.map(read);
   }
 
   /**

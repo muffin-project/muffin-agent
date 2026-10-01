@@ -589,6 +589,120 @@ describe("thinking:'off' smette di essere un no-op, dove l'endpoint capisce", ()
   });
 });
 
+/**
+ * `provider.reasoningDialect` (#789): an owner-declared statement that this
+ * endpoint understands top-level `reasoning_effort`. The hostname gate above
+ * stays the default; the dialect is the only way a self-hosted vLLM/Ollama
+ * receives `off` or an effort at all.
+ *
+ * Measured on a self-hosted vLLM (#789): unknown top-level fields are ignored
+ * there, but an unsupported *value* is a 400 — so a configured effort is passed
+ * through and the server is the validator, and nothing else is added to the body.
+ */
+describe('openai-compat · reasoningDialect: reasoning_effort', () => {
+  const SELF_HOSTED = 'https://spark.example.ts.net:8443/v1';
+
+  function dialectHarness(reasoningDialect?: 'reasoning_effort') {
+    const bodies: unknown[] = [];
+    const fetchFake = async (_url: unknown, init?: { body?: string }): Promise<Response> => {
+      bodies.push(JSON.parse(init?.body ?? '{}'));
+      return new Response(JSON.stringify(A_COMPLETION), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const provider = new OpenAICompatProvider('sk-test', SELF_HOSTED, {}, {
+      ...(reasoningDialect === undefined ? {} : { reasoningDialect }),
+      discoverReasoning: false,
+      fetch: fetchFake as never,
+    });
+    return { provider, bodies };
+  }
+  const QWEN = { ...CALL, model: 'qwen3.8-flash-next' };
+
+  it("sends reasoning_effort 'none' for off, and nothing else new on the body", async () => {
+    const h = dialectHarness('reasoning_effort');
+    await h.provider.chat({ ...QWEN, thinking: 'off' });
+    const body = h.bodies[0] as Record<string, unknown>;
+    expect(body.reasoning_effort).toBe('none');
+    expect(body).not.toHaveProperty('reasoning');
+    expect(body).not.toHaveProperty('provider');
+  });
+
+  it('passes a configured effort through, including levels no snapshot lists', async () => {
+    const h = dialectHarness('reasoning_effort');
+    await h.provider.chat({ ...QWEN, reasoning: { mode: 'on', effort: 'medium' } });
+    await h.provider.chat({ ...QWEN, reasoning: { mode: 'on', effort: 'xhigh' } });
+    expect((h.bodies[0] as { reasoning_effort?: unknown }).reasoning_effort).toBe('medium');
+    expect((h.bodies[1] as { reasoning_effort?: unknown }).reasoning_effort).toBe('xhigh');
+    for (const body of h.bodies) {
+      expect(body).not.toHaveProperty('reasoning');
+      expect(body).not.toHaveProperty('provider');
+    }
+  });
+
+  it("sends nothing for 'adaptive' or no request: that already means the server default", async () => {
+    const h = dialectHarness('reasoning_effort');
+    await h.provider.chat({ ...QWEN, thinking: 'adaptive' });
+    await h.provider.chat(QWEN);
+    for (const body of h.bodies) expect(body).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('refuses an exact token budget: the dialect has no such field', async () => {
+    const h = dialectHarness('reasoning_effort');
+    await expect(h.provider.chat({ ...QWEN, reasoning: { mode: 'on', maxTokens: 2048 } })).rejects.toThrow('exact reasoning token budget');
+    expect(h.bodies).toHaveLength(0);
+  });
+
+  it('is on the streamed path too — the turn streams, so that is the path that matters', async () => {
+    const bodies: unknown[] = [];
+    const provider = new OpenAICompatProvider('sk-test', SELF_HOSTED, {}, {
+      reasoningDialect: 'reasoning_effort',
+      discoverReasoning: false,
+      fetch: (async (_u: unknown, init?: { body?: string }) => {
+        bodies.push(JSON.parse(init?.body ?? '{}'));
+        return streamedResponse(FULL_STREAM_CHUNKS);
+      }) as never,
+    });
+    await collect(provider.chatStream({ ...QWEN, reasoning: { mode: 'on', effort: 'low' }, stream: true }));
+    expect((bodies[0] as { reasoning_effort?: unknown }).reasoning_effort).toBe('low');
+  });
+
+  it('without a dialect a self-hosted endpoint gets byte-identical requests as before', async () => {
+    const h = dialectHarness();
+    await h.provider.chat({ ...QWEN, thinking: 'off' });
+    await h.provider.chat({ ...QWEN, reasoning: { mode: 'on', effort: 'medium' } });
+    for (const body of h.bodies) {
+      expect(body).not.toHaveProperty('reasoning');
+      expect(body).not.toHaveProperty('reasoning_effort');
+      expect(body).not.toHaveProperty('provider');
+    }
+  });
+
+  it('wins over the inferred OpenRouter shape: no metadata fetch, no `reasoning`, no routing field', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    let metadataFetches = 0;
+    const provider = new OpenAICompatProvider('sk-test', 'https://openrouter.ai/api/v1', {}, {
+      reasoningDialect: 'reasoning_effort',
+      metadataFetch: (async () => {
+        metadataFetches += 1;
+        return new Response('{}', { status: 200 });
+      }) as never,
+      fetch: (async (_u: unknown, init?: { body?: string }) => {
+        bodies.push(JSON.parse(init?.body ?? '{}'));
+        return new Response(JSON.stringify(A_COMPLETION), { status: 200, headers: { 'content-type': 'application/json' } });
+      }) as never,
+    });
+    await provider.chat({ ...QWEN, model: 'qwen/qwen3.8-27b', thinking: 'off' });
+    expect(metadataFetches).toBe(0);
+    expect(bodies[0]?.reasoning_effort).toBe('none');
+    expect(bodies[0]).not.toHaveProperty('reasoning');
+    expect(bodies[0]).not.toHaveProperty('provider');
+    expect((await provider.resolveReasoning({ ...QWEN, model: 'qwen/qwen3.8-27b', thinking: 'off' })).capabilitySource).toBe('provider-default');
+  });
+
+  it('does not turn OpenRouter behaviour on: the dialect is not the hostname gate', () => {
+    expect(new OpenAICompatProvider('k', SELF_HOSTED, {}, { reasoningDialect: 'reasoning_effort' }).reasoningEffort).toBe(false);
+  });
+});
+
 describe('openrouter reasoning continuity', () => {
   it('preserves opaque reasoning_details through a non-stream tool round-trip', async () => {
     const details = [{ type: 'reasoning.encrypted', id: 'r1', data: 'opaque' }];

@@ -23,6 +23,7 @@ import { TOOL_PHRASES, toolLine, toolPhrase, toolSubject } from '../agent/tool-p
 import { COMANDI as ELENCO_COMANDI, aiuto, debugCommand, eseguiComando, sembraComando, thinkingCommand } from '../agent/comandi.js';
 import type { Controlli, Verbosity } from '../agent/comandi.js';
 import { Pausa } from '../core/runtime/pausa.js';
+import { levaDelega } from '../core/runtime/delega.js';
 import { loadConfig, paths, saveConfig } from '../core/config/config.js';
 import { cmdModel } from './model.js';
 import { makeStatusLine, type StatusLine } from './status-line.js';
@@ -793,6 +794,21 @@ export async function runRepl(
     },
     steer: () => false,
     pausa: { attiva: () => pausa.attiva(), metti: () => pausa.metti(), togli: () => pausa.togli() },
+    // La delega sul lavoro di questa sessione (issue #740). Senza spinta alla
+    // corsia: il REPL cede i turni al gateway (ADR-0035) e non riprende mai un
+    // turno da sé — la riga risvegliata la raccoglie la corsia al battito, o
+    // `muffin resume` a mano. La sessione si legge a ogni comando perché `/new`
+    // la ruota senza ricostruire le leve.
+    ...(runtime.deps.delega === undefined || runtime.deps.approvals === undefined
+      ? {}
+      : {
+          delega: levaDelega({
+            delega: runtime.deps.delega,
+            approvals: runtime.deps.approvals,
+            turns: runtime.deps.turns,
+            sessionId: () => session.id,
+          }),
+        }),
   };
 
   /**

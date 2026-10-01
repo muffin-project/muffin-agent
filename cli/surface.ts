@@ -2,6 +2,8 @@ import DatabaseCtor from 'better-sqlite3';
 import { aiuto, eseguiComando, type Controlli } from '../agent/comandi.js';
 import { Pausa } from '../core/runtime/pausa.js';
 import { decidiVoce, type Voce } from '../core/audio/voce.js';
+import { assicuraVoce } from '../core/audio/trascrivi.js';
+import { decidiVista, type Vista } from '../core/vista/vista.js';
 import { openDb } from '../core/db/open.js';
 import { generatePairingCode, startPairing } from '../core/config/pairing.js';
 import { ensurePrivateDir } from '../core/config/private-fs.js';
@@ -300,10 +302,29 @@ export async function cmdSurfaceEnable(
     return 0;
   }
   const reg = INGRESS_PORTS.find((r) => r.id === id);
-  if (id === 'telegram') return enableTelegram(home, ownerFlag, apiBaseFlag, promptSecret);
-  if (reg) return reg.enable(home, ownerFlag, apiBaseFlag);
-  process.stderr.write(`superficie sconosciuta: ${id}\n${SURFACE_USAGE}`);
-  return 78;
+  const codice =
+    id === 'telegram'
+      ? await enableTelegram(home, ownerFlag, apiBaseFlag, promptSecret)
+      : reg === undefined
+        ? null
+        : await reg.enable(home, ownerFlag, apiBaseFlag);
+  if (codice === null) {
+    process.stderr.write(`superficie sconosciuta: ${id}\n${SURFACE_USAGE}`);
+    return 78;
+  }
+  // Abilitare una superficie vocale rende possibile la prima nota vocale: il
+  // modello whisper, se manca, arriva adesso con una riga che lo dice — non
+  // minuti di silenzio alla prima nota. Un gancio che fallisce non deve mai
+  // ribaltare un enable riuscito: il rimedio rumoroso a runtime resta.
+  if ((id === 'telegram' || id === 'discord') && codice === 0) {
+    try {
+      const riga = await assicuraVoce(home, loadConfig(home));
+      if (riga !== null) process.stderr.write(`${riga}\n`);
+    } catch (error) {
+      process.stderr.write(`voce: controllo modello whisper saltato (${error instanceof Error ? error.message : String(error)})\n`);
+    }
+  }
+  return codice;
 }
 
 async function enableTelegram(
@@ -600,8 +621,46 @@ function voceFor(runtime: Runtime, home: string): (percorso: string) => Promise<
       baseUrl: runtime.config.provider.baseUrl,
       model: runtime.config.models.main,
       whisperModel: modello,
+      // Il percorso di produzione scarica il modello se manca: è il senso di
+      // "sempre installato" — nei test e negli eval resta spento, e l'assenza
+      // resta un rimedio misurabile invece di una richiesta di rete.
+      provisiona: true,
       ...(audio?.whisperBin === undefined ? {} : { whisperBin: audio.whisperBin }),
       ...(audio?.ffmpegBin === undefined ? {} : { ffmpegBin: audio.ffmpegBin }),
+    });
+}
+
+/**
+ * Come questa installazione tratta le immagini che il modello non vede.
+ *
+ * Gemella di `voceFor`: la decisione la prende `decidiVista` misurando la
+ * vista sul provider, e la descrizione — l'unica parte che costa una chiamata,
+ * a tetto piccolo — passa dalla corsia leggera, che la fattura come tutto il
+ * resto che fa. Il connettore riceve la funzione già decisa, come `voce`.
+ */
+export function vistaFor(runtime: Runtime): (percorso: string) => Promise<Vista> {
+  const leggera = runtime.config.models.light;
+  return (percorso) =>
+    decidiVista(percorso, {
+      baseUrl: runtime.config.provider.baseUrl,
+      mainModel: runtime.config.models.main,
+      lightModel: leggera,
+      descrivi: async (immagine) => {
+        const esito = await runtime.light.provider.chat({
+          model: leggera,
+          system: [{ type: 'text', text: 'Descrivi immagini con precisione, in italiano.' }],
+          messages: [
+            {
+              role: 'user',
+              content: [{ type: 'text', text: 'Descrivi con precisione cosa mostra questa immagine. Solo la descrizione, niente altro.' }, immagine],
+            },
+          ],
+          maxOutputTokens: 400,
+          stream: false,
+        });
+        if (esito.text === null || esito.text.trim() === '') throw new Error('il modello leggero non ha risposto alla descrizione');
+        return esito.text;
+      },
     });
 }
 
@@ -1150,6 +1209,7 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
     api,
     vault: telegramVault(runtime, vaultRoot),
     voce: voceFor(runtime, home),
+    vista: vistaFor(runtime),
     comandi: comandiPerTelegram(runtime, home),
     // ADR-0054 §4: il fatto durevole che scheduler e corsia leggono.
     pausa: new Pausa(runtime.db),
