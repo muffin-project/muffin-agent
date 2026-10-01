@@ -250,3 +250,52 @@ describe('muffin search', () => {
     expect(egress.allow).toContain('api.tavily.com');
   });
 });
+
+/**
+ * Keenable goes through the same single door as Tavily (ADR-0058): one command
+ * writes the key, the config and the egress host, and the seal stays valid.
+ */
+describe('muffin search keenable', () => {
+  it('lists keenable among the available engines', async () => {
+    const { out, sink } = raccogli();
+    expect(await cmdSearch(home(), [], { out: sink })).toBe(0);
+    expect(out.join('\n')).toContain('keenable');
+  });
+
+  it('on a terminal writes key, config and its egress host, keeping the seal valid', async () => {
+    const h = home();
+    const questions: string[] = [];
+    const code = await cmdSearch(h, ['keenable'], {
+      out: () => {},
+      readKey: () => '',
+      chiediChiave: () => Promise.resolve('keen_from_terminal'),
+      chiediConferma: (q) => {
+        questions.push(q);
+        return Promise.resolve('s');
+      },
+    });
+    expect(code).toBe(0);
+
+    const c = loadConfig(h);
+    expect(c.search?.provider).toBe('keenable');
+    expect(c.search?.apiKeyRef).toBe(`secret://${SEARCH_PROVIDERS.keenable.secretName}`);
+    expect(readFileSync(paths(h).config, 'utf8')).not.toContain('keen_from_terminal');
+
+    expect(questions).toHaveLength(1);
+    expect(questions[0]).toContain('api.keenable.ai');
+    const egress = JSON.parse(readFileSync(join(paths(h).rot, 'egress.json'), 'utf8'));
+    expect(egress.allow).toEqual(['api.keenable.ai']);
+    expect(verify(h, 'single-user').ok).toBe(true);
+  });
+
+  it('without a key, the printed remedy names keenable and never another engine', async () => {
+    const h = home();
+    const { out, sink } = raccogli();
+    expect(await cmdSearch(h, ['keenable'], { out: sink, readKey: () => '' })).toBe(78);
+    const printed = out.join('\n');
+    expect(printed).toContain(SEARCH_PROVIDERS.keenable.keysUrl);
+    expect(printed).toContain('muffin search keenable < ');
+    expect(printed).toContain('| muffin search keenable');
+    expect(printed.toLowerCase()).not.toContain('tavily');
+  });
+});
