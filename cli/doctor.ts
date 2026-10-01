@@ -808,7 +808,22 @@ export async function runDoctor(
           'run `muffin memory extract` to drain the backlog',
         );
       } else if (chunks === 0) {
-        warn('vector index', 'empty: recall is full-text only', 'run `muffin memory extract`');
+        // Indice vuoto, config valida: resta da distinguere «configurato» da
+        // «raggiungibile» (#738). Con l'embedder giù, `muffin memory extract`
+        // è un rimedio inerte — ripassa da `makeEmbedder` e non indicizza
+        // niente — quindi la riga deve nominare la causa, non solo il sintomo.
+        // La sonda è la stessa del ramo indicizzato: un embedding della parola
+        // «probe» con tetto, nessun effetto su indice o memoria.
+        const down = await probeEmbedder(options.embedderProbe, configurato);
+        if (down !== null) {
+          warn(
+            'vector index',
+            `empty: recall is full-text only, e l'embedder non risponde (${down}): niente di nuovo viene indicizzato`,
+            rimedioEmbedder(config),
+          );
+        } else {
+          warn('vector index', 'empty: recall is full-text only', 'run `muffin memory extract`');
+        }
       } else {
         // Contare non è chiedere. I due numeri dicono che ciò che è **già**
         // indicizzato è coerente; non dicono niente su ciò che verrà, e
