@@ -1,3 +1,5 @@
+import { redactText } from '../core/tracing/redact.js';
+
 /**
  * Come si dice, a una persona, quello che l'agente sta facendo.
  *
@@ -6,6 +8,13 @@
  * Le due superfici che descrivono un turno in corso — il terminale e Telegram
  * — leggono da questo file, così una frase nuova arriva a entrambe o a
  * nessuna.
+ *
+ * Da questa slice il file espone **due fatti separati** per lo stesso passo:
+ * una riga breve che dice *cosa* sta facendo (`toolProgress().summary`) e, solo
+ * quando il soggetto non ci sta, il dettaglio esatto per chi vuole guardarlo
+ * (`toolProgress().detail`). Il dettaglio è testo, non HTML: la forma (una
+ * citazione richiudibile su Telegram, qualcos'altro altrove) la sceglie la
+ * superficie, perché `agent/` non conosce Telegram.
  */
 
 /**
@@ -97,18 +106,26 @@ const TOOL_SUBJECT: Readonly<Record<string, string | readonly string[]>> = {
   schedule_recurring: 'goal',
 };
 
-/** Quanto sta su una riga accanto alla frase, senza mandarla a capo. */
-const SOGGETTO_MASSIMO = 48;
-
 /**
- * Il soggetto da mostrare accanto alla frase, o `''` se non c'è.
+ * Il soggetto grezzo, appiattito e **redatto**, o `''` se non c'è.
  *
  * Gli argomenti li ha scritti il **modello**: possono contenere a capo, escape
- * e qualunque cosa. Si appiattiscono e si accorciano prima di toccare un
- * terminale — una sequenza di escape dentro un percorso, stampata cruda, muove
- * il cursore del riquadro che sta appena sotto.
+ * e qualunque cosa. Si appiattiscono prima di toccare un terminale — una
+ * sequenza di escape dentro un percorso, stampata cruda, muove il cursore del
+ * riquadro che sta appena sotto.
+ *
+ * La redazione è la stessa rete di ogni output visibile all'owner
+ * (`core/tracing/redact.ts`): un valore a forma di segreto diventa un
+ * marcatore anche qui. Redigere non è tagliare: il testo resta intero, con il
+ * segreto sostituito.
+ *
+ * **Non si accorcia mai.** Una soglia in caratteri, per quanto «al confine di
+ * parola», è comunque una riga che l'owner deve ricostruire a mente, e la
+ * prima versione di questa fetta lo ha fatto due volte (`…26 settembre 2…`).
+ * Chi mostra il passo riceve `phrase` e `subject` separati e decide la forma:
+ * inline, citazione richiudibile, qualunque cosa — mai un pezzo in meno.
  */
-export function toolSubject(name: string, args: unknown): string {
+function flattenSubject(name: string, args: unknown): string {
   const campo = TOOL_SUBJECT[name];
   if (campo === undefined || args === null || typeof args !== 'object') return '';
   const campi = typeof campo === 'string' ? [campo] : campo;
@@ -117,13 +134,29 @@ export function toolSubject(name: string, args: unknown): string {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: il modello ha scritto grezzo, i caratteri di controllo vanno tolti prima del terminale
   const piatto = grezzo.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (piatto === '') return '';
-  return piatto.length > SOGGETTO_MASSIMO ? `${piatto.slice(0, SOGGETTO_MASSIMO - 1)}…` : piatto;
+  return redactText(piatto);
 }
 
-/** La frase, col suo soggetto quando ce n'è uno. */
+/** Il soggetto da mostrare accanto alla frase, intero, o `''` se non c'è. */
+export function toolSubject(name: string, args: unknown): string {
+  return flattenSubject(name, args);
+}
+
+/**
+ * Un passo del turno, in due pezzi **strutturati**: la frase e il soggetto
+ * esatto, entrambi interi. La superficie compone la forma — non c'è un
+ * «riassunto» qui dentro che possa perdere informazione.
+ */
+export type ToolProgress = { phrase: string; subject: string };
+
+export function toolProgress(name: string, args: unknown): ToolProgress {
+  return { phrase: toolPhrase(name), subject: flattenSubject(name, args) };
+}
+
+/** La frase, col suo soggetto quando ce n'è uno — mai accorciata. */
 export function toolLine(name: string, args: unknown): string {
-  const soggetto = toolSubject(name, args);
-  return soggetto === '' ? toolPhrase(name) : `${toolPhrase(name)}: ${soggetto}`;
+  const { phrase, subject } = toolProgress(name, args);
+  return subject === '' ? phrase : `${phrase}: ${subject}`;
 }
 
 /** Il nome grezzo è il fallback, mai un errore: un tool MCP non è in questa mappa e non può esserlo. */

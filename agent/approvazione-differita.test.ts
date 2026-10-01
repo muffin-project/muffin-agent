@@ -299,3 +299,31 @@ describe("chi chiede è la superficie da cui il turno è arrivato", () => {
     expect(terminaleInterrogato).toBe(true);
   });
 });
+
+/**
+ * #742 — il turno finisce, la domanda aperta si ritira.
+ *
+ * La scadenza ha svegliato il turno senza risposta: il modello prosegue e il
+ * turno si chiude. La riga `approvals` non può restare una domanda — `open`
+ * la ignorerebbe la guardia di ripresa (#741), e un tocco tardivo deciderebbe
+ * per un turno che non esiste più. Le tre righe orfane del 2026-09-14 sono
+ * l'evidenza di cosa succede senza.
+ */
+describe('#742 — la fine del turno ritira la domanda ancora aperta', () => {
+  it('scadenza, turno chiuso, domanda ritirata: un tocco tardivo non decide', async () => {
+    const h = harness([chiamata(), risposta('te lo dico')]);
+    const primo = await parti(h.deps, h.home);
+    const aperta = h.approvals.open(primo.turnId);
+    expect(aperta).not.toBeNull();
+
+    // Nessuno risponde: la scadenza sveglia il turno, che si chiude col referto.
+    h.deps.turns.wake(primo.turnId, new Date());
+    await resumeTurn(h.deps, primo.turnId);
+
+    expect(h.deps.turns.get(primo.turnId)?.status).toBe('done');
+    expect(h.approvals.open(primo.turnId)).toBeNull();
+    expect(h.approvals.get(aperta!.id)?.withdrawnAt).not.toBeNull();
+    // «Ritirata», non «già risposto»: e il turno non si muove.
+    expect(h.approvals.decide(aperta!.id, 'allow', new Date())).toBe('withdrawn');
+  });
+});

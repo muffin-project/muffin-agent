@@ -13,4 +13,4 @@ You are starting fresh. You have NOT read any previous session. Do this now:
 3. **Claim one bounded scope in GitHub.** Assign yourself to the issue; if you cannot, comment with the contributor/agent identity, exact owned paths or behavior, and branch. Link the branch/PR back to the issue.
 4. **Check for collisions.** Compare the proposed scope with other active issue claims, worktrees and changed files on open PRs. Parallel writers are fine when ownership and acceptance are disjoint. Coordinate or narrow scope when they overlap.
 5. State the claim, falsifier, acceptance and FAST / STANDARD / CRITICAL verification profile from `docs/development/ORCHESTRATION.md`.
-6. Load `docs/development/RESEARCH.md`, `BRANCHING.md` and `JUDGE.md` only when the claim makes them relevant. Follow `.agents/skills/engineering-loop/SKILL.md`.
+6. Load `docs/development/RESEARCH.md`, `BRANCHING.md` and `JUDGE.md` only when the claim makes them relevant. The optional `.agents/skills/engineering-loop/SKILL.md` can help with a multi-step claim.

@@ -295,7 +295,7 @@ export function assembleSemantic(args: SemanticArgs): SemanticContext {
    * Unconditional, and that is the point: a plan the model has to remember to
    * ask for is a plan it forgets the moment its own earlier prose is compacted.
    */
-  const plan = todoSection(open);
+  const plan = todoSection(open, adesso.getTime());
 
   /**
    * Che momento è, e dove stai parlando. Vedi `ambienteSection`: senza,

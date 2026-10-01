@@ -178,8 +178,10 @@ muffin update              # a release built alongside, then an atomic swap
 muffin update --rollback   # the inverse flip
 ```
 
-From a clone instead — `git clone …` then `./install.sh` — if you would rather
-read the canonical installer before running it.
+From a clone instead — `git clone …` then `./install.sh --checkout` — if you
+would rather read the canonical installer before running it. A plain
+`./install.sh` from a clone is a normal personal install; `--checkout` is the
+explicit development mode that binds the command to the checkout.
 
 [What the installer does, and how to undo it →](docs/user/INSTALL.md)
 
@@ -260,6 +262,19 @@ which supposedly clever mechanisms do not help.
 > Muffin feel more clever?**
 
 [Open-source strategy →](docs/project/OPEN-SOURCE-STRATEGY.md) · [Public narrative →](docs/project/PUBLIC-NARRATIVE.md)
+
+## Where the work is going
+
+The roadmap is a GitHub Project with four horizons —
+**Now / Next / Later / Exploring** — and the live work status of every
+selected initiative:
+
+**[Muffin roadmap →](https://github.com/orgs/muffin-project/projects/2)**
+
+Phase horizons and deliberately deferred directions (what enters which product
+phase, and why) live in [docs/product/ROADMAP.md](docs/product/ROADMAP.md);
+current execution state is always read from Git, issues and pull requests, never
+copied from that file.
 
 ## Contributing
 

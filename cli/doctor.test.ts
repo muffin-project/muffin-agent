@@ -307,6 +307,56 @@ describe('doctor names which profile the configured model resolves to', () => {
   });
 });
 
+describe('doctor names whether the reasoning setting can reach the endpoint (#789)', () => {
+  const selfHosted = (over: {
+    thinking?: 'off' | 'medium';
+    reasoningDialect?: 'reasoning_effort';
+  }): string => {
+    const dir = home();
+    const config = loadConfig(dir);
+    saveConfig(
+      {
+        ...config,
+        provider: {
+          kind: 'openai-compat',
+          apiKeyRef: config.provider.apiKeyRef,
+          baseUrl: 'https://vllm.example.test/v1',
+          ...(over.reasoningDialect ? { reasoningDialect: over.reasoningDialect } : {}),
+        },
+        ...(over.thinking ? { thinking: over.thinking } : {}),
+      },
+      dir,
+    );
+    return dir;
+  };
+
+  it('says nothing when nothing is configured: the server decides, and that is not news', async () => {
+    const dir = selfHosted({});
+    expect(await check(dir, 'reasoning')).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('warns when a level or off is set on an endpoint that neither is OpenRouter nor declares a dialect', async () => {
+    for (const thinking of ['medium', 'off'] as const) {
+      const dir = selfHosted({ thinking });
+      const c = await check(dir, 'reasoning');
+      expect(c?.level).toBe('warn');
+      expect(c?.detail).toContain(`thinking ${thinking}`);
+      expect(c?.remedy).toContain('reasoningDialect');
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('is ok, naming the dialect, once the owner declared it', async () => {
+    const dir = selfHosted({ thinking: 'medium', reasoningDialect: 'reasoning_effort' });
+    const c = await check(dir, 'reasoning');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('thinking medium');
+    expect(c?.detail).toContain('reasoning_effort');
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe('doctor runs the root-of-trust readers invariant', () => {
   it('passes on a fresh install', async () => {
     const dir = home();
@@ -688,6 +738,21 @@ describe('doctor names continuable leases awaiting the owner', () => {
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('1 lease esaurite');
     expect(c?.detail).toContain('muffin resume');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('splits the rows the chat resolver can no longer reach', async () => {
+    const dir = home();
+    seedContinuable(dir);
+    const db = new DatabaseCtor(paths(dir).db);
+    db.prepare(`UPDATE turns SET updated_at = ? WHERE id = 'turn-continuabile'`).run(
+      new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
+    );
+    db.close();
+    const c = await check(dir, 'turni continuabili');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('1 oltre la finestra di ripresa');
+    expect(c?.detail).toContain('nessuna riprendibile in chat');
     rmSync(dir, { recursive: true, force: true });
   });
 });

@@ -22,8 +22,8 @@ import { loadProfiles, selectProfile } from './profile.js';
 describe('shipped profiles', () => {
   const profiles = loadProfiles();
 
-  it('both load, through the same parser production uses', () => {
-    expect(profiles.map((p) => p.name).sort()).toEqual(['consumer-local', 'frontier']);
+  it('all load, through the same parser production uses', () => {
+    expect(profiles.map((p) => p.name).sort()).toEqual(['consumer-local', 'consumer-qwen3', 'frontier']);
   });
 
   it('frontier: a nudge and one retry, in that order', () => {
@@ -61,11 +61,39 @@ describe('shipped profiles', () => {
     // #167 l'adapter openai-compat manda davvero `reasoning:{effort:none}` su
     // OpenRouter, quindi `off` su una famiglia a reasoning ibrido spegneva il
     // ragionamento sul turno di conversazione invece di non fare niente.
-    // `adaptive` qui non mette **nessun** campo sul filo (l'adapter onora solo
-    // `off`), che è anche ciò che lo rende sicuro su Ollama e vLLM.
+    // `adaptive` non chiede nessun livello, e da #789 l'adapter onora anche i
+    // livelli: resta il valore giusto QUI perché questa famiglia non ne condivide
+    // uno — `xhigh` è del solo qwen3 (catalogo OpenRouter 01/10/2026:
+    // `gpt-oss-120b` `['high','medium','low']`, `mistral-small-2603`
+    // `['high','none']`), e pinnarlo condiviso sarebbe un errore di
+    // configurazione hard a ogni turno loro.
     expect(consumer?.thinking).toBe('adaptive');
     // Small local models wander without it, and every server they run on takes it.
     expect(consumer?.sampling).toBe('deterministic');
+  });
+
+  it('consumer-qwen3: xhigh — the model own default, made explicit', () => {
+    const qwen3 = profiles.find((p) => p.name === 'consumer-qwen3');
+    // Non `off` (l'evidenza negativa dell'owner riguardava quello: la
+    // conversazione rimbalzava) e non un abbassamento: #498 resta aperta per
+    // l'A/B di `medium`/`low`. `xhigh` è ciò che il modello fa da solo quando
+    // non gli si dice niente (`default_effort: 'xhigh'` su ogni qwen3.8 del
+    // catalogo OpenRouter; il template Qwen3.8 di vLLM accetta
+    // `xhigh|medium|low`): la spesa non cambia, cambia che la manopola ha un
+    // livello da mostrare e la richiesta lo dichiara.
+    expect(qwen3?.thinking).toBe('xhigh');
+    // Il rovescio dichiarato del pinnare un livello: `adaptive` non può mai
+    // fallire, un livello sì se il server cambia l'insieme accettato. Vedi le
+    // note del file.
+    // Everything else is a copy of consumer-local, kept aligned by hand: the
+    // silent tool cut of 27/08 is the measured cost of letting them drift.
+    const consumer = profiles.find((p) => p.name === 'consumer-local');
+    expect(qwen3?.recovery).toEqual(consumer?.recovery);
+    expect(qwen3?.sampling).toBe(consumer?.sampling);
+    expect(qwen3?.maxToolsExposed).toBe(consumer?.maxToolsExposed);
+    expect(qwen3?.maxToolCallsPerTurn).toBe(consumer?.maxToolCallsPerTurn);
+    expect(qwen3?.toolResultBudgetChars).toBe(consumer?.toolResultBudgetChars);
+    expect(qwen3?.execution).toEqual(consumer?.execution);
   });
 
   it('consumer-local: has no arbitrary call ceiling and allows a 15-minute horizon', () => {
@@ -78,6 +106,51 @@ describe('shipped profiles', () => {
       turnWallDeadlineMs: 900_000,
       activeModelBudgetMs: 900_000,
     });
+  });
+
+  it('consumer-local: compacts tool results earlier than the global default', () => {
+    // Misurato il 30/09/2026 sull'installazione dell'owner: un debug pip da 17
+    // call è morto due volte in `model_deadline` a 32k token in ingresso con
+    // TTFT fino a 35s, mentre il budget di compattazione (60k char) non è mai
+    // scattato — tarato sui numeri Anthropic per modelli frontier, non su un
+    // qwen via OpenRouter con 90s di deadline per chiamata. Questo profilo
+    // compatta da 16k char (~4k token di risultati): i risultati recenti, quelli
+    // su cui il modello sta ragionando, restano; il resto diventa placeholder
+    // con la via del re-read.
+    const consumer = profiles.find((p) => p.name === 'consumer-local');
+    expect(consumer?.toolResultBudgetChars).toBe(16_000);
+  });
+
+  it('frontier: no per-profile compaction budget, inherits the global default', () => {
+    // Il profilo forte (deadline 120s, modello frontier) tiene il default: il
+    // campo assente nel JSON si materializza dal loader, mai come undefined.
+    const frontier = profiles.find((p) => p.name === 'frontier');
+    expect(frontier?.toolResultBudgetChars).toBe(60_000);
+  });
+
+  it('a profile written before the compaction budget existed inherits the global default', () => {
+    // Come `sampling`: il default è ciò che il loop faceva prima che il campo
+    // esistesse, così un profilo di terze parti non acquisisce in silenzio un
+    // comportamento nuovo all'upgrade.
+    const problems: string[] = [];
+    const tmp = mkdtempSync(join(tmpdir(), 'muffin-profiles-'));
+    writeFileSync(
+      join(tmp, 'old.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        name: 'old',
+        match: ['*'],
+        maxToolsExposed: 10,
+        maxToolCallsPerTurn: 15,
+        thinking: 'off',
+        recovery: [],
+        notes: '',
+      }),
+    );
+    const loaded = loadProfiles(tmp, (line) => problems.push(line));
+
+    expect(problems).toEqual([]);
+    expect(loaded[0]?.toolResultBudgetChars).toBe(60_000);
   });
 
   it('a profile from before `sampling` existed keeps the behaviour it had', () => {
@@ -163,7 +236,12 @@ describe('shipped profiles', () => {
     // either side breaks selection silently, and selection decides everything
     // downstream — cap, thinking, cascade.
     expect(selectProfile('anthropic/claude-sonnet-5', profiles).name).toBe('frontier');
-    expect(selectProfile('qwen/qwen3-max', profiles).name).toBe('consumer-local');
+    expect(selectProfile('qwen/qwen3-max', profiles).name).toBe('consumer-qwen3');
+    expect(selectProfile('qwen/qwen3.8-flash-next', profiles).name).toBe('consumer-qwen3');
+    // Il confine dello split del 01/10/2026: il resto della famiglia consumer
+    // NON deve ereditare il livello di qwen3, e qwen3 non deve cadere sul
+    // fallback conservativo.
+    expect(selectProfile('openai/gpt-oss-120b', profiles).name).toBe('consumer-local');
     expect(selectProfile('google/gemma-4-31b-it', profiles).name).toBe('consumer-local');
     expect(selectProfile('some-model-nobody-knows', profiles).name).toBe('conservative');
   });

@@ -105,9 +105,15 @@ function harness(script: Risposta[]) {
       sent.push(text);
       return { message_id: sent.length } as never;
     },
+    sendRichMessage: async (_chatId: number, rich: { html?: string }) => {
+      sent.push(rich.html ?? '');
+      return { message_id: sent.length } as never;
+    },
     sendChatAction: async () => true,
     sendMessageDraft: async () => true,
+    sendRichMessageDraft: async () => true,
     editMessageText: async () => ({}) as never,
+    editMessageRichText: async () => ({}) as never,
     deleteMessage: async () => true,
   } as unknown as TelegramApi;
 

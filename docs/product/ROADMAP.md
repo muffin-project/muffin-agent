@@ -6,6 +6,8 @@ This document owns one question only:
 
 It does **not** own implementation status, DAY-1 truth, architecture or sequencing of current work.
 
+- Selected initiatives and their live work status (Now / Next / Later / Exploring) are the
+  [Muffin roadmap project](https://github.com/orgs/muffin-project/projects/2).
 - DAY-1 status belongs to `docs/status/day1/requirements-status.md`.
 - Remaining DAY-1 order belongs to `docs/status/day1/critical-path.md`.
 - Current work belongs to observed Git/GitHub state.
@@ -73,6 +75,52 @@ capabilities before adding discovery/deferred-loading machinery.
 ## MVP / trusted alpha
 
 These are the strongest post-DAY-1 candidates. They are not automatically required before dogfood.
+
+### Installation, deployment and runtime direction (reconciled from #481)
+
+Owner direction captured 2026-09-08, placed here 2026-09-28. The executable
+onboarding outcome stays in #507; the Home/Node/Surface distinction stays in
+`docs/architecture/ARCHITECTURE.md` and ADR-0050.
+
+- **Three concerns, not one.** `install` guarantees a runnable `muffin`; the
+  first run configures the owner's Muffin (#507); the deployment choice decides
+  where Home runs continuously. They compose; they are not one conceptual step.
+- **Deployment follows the role of the machine (MVP / trusted alpha).** Personal
+  Mac/PC as Home prefers native installation — local capabilities (filesystem,
+  processes, notifications, Keychain, local inference) under Muffin authority.
+  A VPS Home supports native and Docker, with Docker as the likely reproducible
+  default once proven. Docker is an official deployment/execution option, not
+  the universal architecture: the personal Home is not containerized by default
+  when that immediately requires broad host mounts and privileged escapes. An
+  experimental contributor Compose path exists (PR #729); it is not a product
+  promise.
+- **Node is a different axis** from Home and Surface. Deployment answers where
+  Home runs, Node where a capability executes, Surface where the owner talks.
+  The Node protocol is not implemented yet and ADR-0050 owns it; this file only
+  keeps the placement.
+- **TypeScript core stays; Python may compute (MVP / trusted alpha,
+  capability-by-capability).** Canonical semantics, authority and durable state
+  stay in the TypeScript core. A Python compute worker is acceptable behind a
+  narrow typed local boundary for capabilities that measurably become simpler or
+  materially better there (PII/NER, embeddings, reranking, speech, vision/OCR,
+  ML evaluation). Invariant: **Python may compute; it does not become a second
+  Home or a second semantic writer.** Packaging hides the runtime (e.g. `uv`);
+  the owner installs Muffin, not a toolchain. Promote per capability with the
+  integration-cost/latency measurement #481 named — no generic plugin framework
+  first.
+- **Privacy egress (hypothesis, not a policy change).** A local reversible PII
+  pseudonymization layer could make ZDR a per-request fallback instead of a
+  global provider restriction; secrets stay deterministic and fail-closed. This
+  is not deployed and does not loosen the current claim in
+  `docs/architecture/SECURITY.md`. Falsifier: a bounded prototype measures
+  recall/false negatives on representative Italian+English personal-agent text,
+  placeholder stability and request-quality impact; if it does not give a
+  sufficiently safe boundary, ZDR or local-only routing for sensitive requests
+  stays.
+- **Do not promote before DAY-1**: full Docker productization, a generic Python
+  plugin framework, a microservice/Node mesh, automatic Node distribution, an
+  all-model privacy router, a full onboarding redesign, a capability-discovery
+  overhaul.
 
 ### First Mac capability Node
 
@@ -311,7 +359,7 @@ The point is not token optimization by itself. It is to let capability breadth g
 
 Do not build this merely because external agent SDKs support tool search/deferred loading. The trigger is Muffin-specific evidence.
 
-**Trigger observed (2026-09-07).** The static exposure cap has been raised three times on the owner's installation to stop cutting base tools (evidence: `docs/evidence/personal-agent-ecosystem-audit-2026-09-07.md` §6 and the `consumer-local` profile notes). This is the catalogue pressure the entry asked for, so the item is a candidate claim; it is not an authorization to implement. The D13 re-measurement with the read-only shell comes first, and the shape must be chosen against the character eval.
+**Trigger observed (2026-09-07).** The static exposure cap has been raised three times on the owner's installation to stop cutting base tools (evidence: `docs/evidence/personal-agent-ecosystem-audit-2026-09-07.md` §6 and the `consumer-local` profile notes). This is the catalogue pressure the entry asked for, so the item is a candidate claim; it is not an authorization to implement. The D13 re-measurement with the read-only shell comes first, and the shape must be chosen against the character eval. **#469 owns the observed problem** (keep needed authorized tools reachable beyond the profile cap); this section owns the phase placement.
 
 **Owner direction recorded 2026-09-13 (planned; semantics not yet researched).**
 Slash-command discovery and capability discovery should improve together. The
@@ -327,6 +375,23 @@ settle pending-turn identity, update/restart/rollback, idempotency and approval
 resumption. This adds an owner-stated candidate requirement to this
 MVP/trusted-alpha item; it does not change DAY-1 scope or choose an
 implementation.
+
+### Consumer-gated generalization (deferred, from #669)
+
+Generalizations with no second real consumer stay deferred; they are recorded
+here so the map that captured them can be archived without losing the placement.
+
+- **Model-provider catalog**: `ProviderId` names one product provider and
+  provider-specific behaviour should live at the adapter edge behind the stable
+  inference contract. Do not build a provider registry/plugin seam until a
+  second real provider needs it (#498 owns reasoning normalization; native
+  Anthropic features are KEEP).
+- **Search-provider catalog**: same reasoning; Tavily stays the
+  default/recommended provider (#521 is the browser-OAuth/remote-MCP consumer
+  candidate).
+- **Observability exporter**: local redacted traces stay; a general OTLP
+  exporter is added only for a concrete operator/hosting need, never by default
+  and never by exporting secrets.
 
 ### Persistent specialist facets and steerable workers
 
@@ -408,6 +473,51 @@ If Discord is a public supported Surface, finish any currently deferred parity s
 After more than the initial Telegram consumer exists, generalize only the semantics proven common: typed parts, provenance, authenticated principal, transport idempotency and surface-owned composition. Do not create a universal field catalog before consumers exist.
 
 ## Post-MVP product and hardware
+
+### Core Deep Research (deferred direction, from #595)
+
+A **core, surface-agnostic Muffin capability** — `Research(request,
+KnowledgeScope)` — is a post-MVP product direction, not an MVP requirement. It
+is not owned by Telegram, Community or any connector; an implementation whose
+research semantics branch on the surface is wrong by construction.
+
+Canonical method:
+
+```text
+research request → resolve KnowledgeScope → search owned scoped knowledge first
+→ inspect previous ResearchRuns / Vault sources / relevant Memory
+→ evaluate coverage + temporal freshness
+→ REUSE | TARGETED VERIFY | DELTA REFRESH | FULL EXTERNAL RESEARCH
+→ collect source evidence → synthesize claims → verify citations
+→ persist a versioned report in the Vault
+→ expose a concise result + the durable report through the current surface
+```
+
+- **Freshness is a model, not one TTL**: FRESH (reuse), LIKELY_FRESH (bounded
+  targeted verification), NEEDS_REFRESH (delta research, new version linked to
+  the previous one), STALE/current-request (fresh external research).
+- **Durability**: a research result is not chat text. The full report belongs in
+  the Vault as versioned durable content; Memory may know it exists, it must not
+  replace the source/report store. Original papers/documents remain canonical
+  evidence; parses/chunks/embeddings/summaries are derived and rebuildable.
+- **Knowledge scopes** must work without Community existing: owner-private is
+  first-class; a standalone group scope if policy permits; community scope
+  later. No automatic owner-personal → Community leakage.
+- **Delivery is separate from research semantics**: a long report is not pasted
+  as chat spam; progress is a Work/surface projection.
+- **It grants no special authority** because it is called research.
+
+Prerequisites before any implementation: continuation/runtime durability,
+context provenance/attention, KnowledgeScope/Vault semantics, capability
+discovery as catalogs grow, and post-context authority/taint review for
+non-owner egress.
+
+Falsifiers: web-first reflex without checking owned knowledge; reports stored
+only in chat history; separate private/group/community research engines; one
+arbitrary freshness TTL; in-place rewriting with no version; summaries treated
+as equivalent to source evidence; research conflated with personal Memory;
+community access to owner-private knowledge by default; a generic workflow
+framework added before these needs require it.
 
 ### Pendant
 

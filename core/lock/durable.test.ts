@@ -1,4 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -235,27 +236,23 @@ describe('additive migration: holder_id reaches a table created before this colu
  * absorbed and the command degraded well, while a `throw` from a store
  * constructor kills a process that was only opening the database.
  *
- * **What this proves and what it does not.** It does not reproduce the
- * interleaving: `better-sqlite3` is synchronous, and in one process there is no
- * way to slip *between* a call's `PRAGMA` and `ALTER` without instrumenting the
- * function — and a test that instruments the thing it checks stops checking it.
- * It proves the behaviour the race lands on, with the **identical error**
- * produced deterministically: a missing `column` and a `ddl` that adds one that
- * already exists is, to SQLite, exactly the same failed `ALTER`.
+ * The consumer test in core/db/column-consumers.test.ts inserts a second
+ * connection at the PRAGMA/ALTER boundary. This unit test covers the distinct
+ * failure path: a duplicate-column error must not imply our target exists.
  */
 describe('ensureColumn survives an ALTER someone else already did', () => {
-  it('does not kill the process when the column appeared in the meantime', () => {
+  it('refuses a duplicate-column error when the requested column is absent', () => {
     const dir = mkdtempSync(join(tmpdir(), 'muffin-ensure-column-'));
     const file = join(dir, 'gara.db');
     const db = new DatabaseCtor(file);
     try {
       db.exec(`CREATE TABLE zz_gara (id INTEGER PRIMARY KEY, undone_at TEXT);`);
-      // `mai_vista` really is missing, so the `PRAGMA` says "go ahead" as it
-      // would for the connection that lost the race; the `ALTER` that follows
-      // finds `undone_at` already there and raises `duplicate column name`.
-      expect(() => ensureColumn(db, 'zz_gara', 'mai_vista', 'undone_at TEXT')).not.toThrow();
+      // A mismatched DDL used to be accepted as a successful race even though
+      // the requested column remained absent for the next prepared statement.
+      expect(() => ensureColumn(db, 'zz_gara', 'mai_vista', 'undone_at TEXT')).toThrow(/duplicate column name/i);
       const columns = db.prepare(`PRAGMA table_info(zz_gara)`).all() as { name: string }[];
       expect(columns.filter((c) => c.name === 'undone_at').length).toBe(1);
+      expect(columns.some((c) => c.name === 'mai_vista')).toBe(false);
     } finally {
       db.close();
       rmSync(dir, { recursive: true, force: true });
@@ -287,4 +284,161 @@ describe('ensureColumn survives an ALTER someone else already did', () => {
       db.close();
     }
   });
+});
+
+/**
+ * The holder's death is a fact about a process, not about a pid number.
+ *
+ * Both cases below are what a pid cannot tell apart and a container makes
+ * ordinary. A restarted container starts a fresh pid namespace, so the new
+ * process usually gets the dead holder's pid (7 behind `tini`): the recorded
+ * pid is alive, and it is not the holder. A second container on the same home
+ * has its own namespace, so the recorded pid means nothing there: it may be
+ * dead while the holder runs. Neither case needs a container to reproduce: the
+ * row's `pid` is rewritten to a pid that is alive (this test process) or dead
+ * (a child that has exited), and the holder is a real process that is either
+ * SIGKILLed or kept running.
+ */
+describe('DurableLock: a holder is judged by its process, not by the number on the row', () => {
+  /** A pid that certainly belonged to a process and certainly does not any more. */
+  const deadPid = (): number => {
+    const { pid } = spawnSync('/bin/sh', ['-c', 'exit 0']);
+    if (pid === undefined) throw new Error('spawnSync non ha dato un pid');
+    return pid;
+  };
+
+  /**
+   * A real second process that takes `SPEC` on `dbPath` and stays alive until
+   * killed. It reports `got` or `refused`, then waits: a holder that exits on
+   * its own would be judged dead for the ordinary reason and prove nothing.
+   */
+  const holderProcess = async (
+    dbPath: string,
+  ): Promise<{ outcome: string; kill: () => Promise<void> }> => {
+    const child = `
+      import DatabaseCtor from 'better-sqlite3';
+      import { DurableLock } from '${join(process.cwd(), 'core/lock/durable.ts')}';
+      const db = new DatabaseCtor(process.argv[1]);
+      const spec = {
+        table: 'zz_test_lock',
+        schema: ${JSON.stringify(SPEC.schema)},
+        staleAfterMs: ${STALE_MS},
+        refusal: (h) => ({ held: 'held by ' + h, remedy: 'wait' }),
+      };
+      const got = 'release' in new DurableLock(db, spec).acquire(new Date());
+      process.stdout.write(got ? 'got\\n' : 'refused\\n');
+      setTimeout(() => process.exit(0), 20_000);
+    `;
+    const proc = spawn('node', ['--import', 'tsx', '--input-type=module', '-e', child, dbPath], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '';
+    let err = '';
+    proc.stderr.on('data', (d) => (err += String(d)));
+    const exited = new Promise<void>((r) => proc.on('close', () => r()));
+    const outcome = await new Promise<string>((resolve) => {
+      proc.stdout.on('data', (d) => {
+        out += String(d);
+        if (out.includes('\n')) resolve(out.trim());
+      });
+      proc.on('close', () => resolve(out.trim() || `exited: ${err}`));
+    });
+    return {
+      outcome,
+      kill: async () => {
+        proc.kill('SIGKILL');
+        await exited;
+      },
+    };
+  };
+
+  const withHome = async (body: (dbPath: string) => Promise<void>): Promise<void> => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-incarnation-'));
+    const dbPath = join(home, 'muffin.db');
+    // WAL, as in production (`core/db/open.ts`).
+    const seed = new DatabaseCtor(dbPath);
+    seed.pragma('journal_mode = WAL');
+    seed.close();
+    try {
+      await body(dbPath);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  };
+
+  const rewritePid = (dbPath: string, pid: number): void => {
+    const db = new DatabaseCtor(dbPath);
+    try {
+      db.prepare(`UPDATE zz_test_lock SET pid = ? WHERE id = 1`).run(pid);
+    } finally {
+      db.close();
+    }
+  };
+
+  it('a SIGKILLed holder is dead even when its pid now belongs to a live process (a restarted container)', async () => {
+    await withHome(async (dbPath) => {
+      const holder = await holderProcess(dbPath);
+      expect(holder.outcome).toBe('got');
+      await holder.kill();
+      // What the restarted container shows: the pid on the row is alive, and
+      // it is not the holder. This test process stands in for "the new
+      // gateway, which got pid 7 again".
+      rewritePid(dbPath, process.pid);
+
+      const db = new DatabaseCtor(dbPath);
+      try {
+        const outcome = new DurableLock(db, SPEC).acquire(new Date());
+        expect(outcome).toHaveProperty('release');
+      } finally {
+        db.close();
+      }
+    });
+  }, 30_000);
+
+  it('a live holder is alive even when its pid means nothing to the reader (another pid namespace)', async () => {
+    await withHome(async (dbPath) => {
+      const holder = await holderProcess(dbPath);
+      try {
+        expect(holder.outcome).toBe('got');
+        // What a reader in another container sees: a pid that is dead in its
+        // own namespace while the holder runs in a different one.
+        rewritePid(dbPath, deadPid());
+
+        const db = new DatabaseCtor(dbPath);
+        try {
+          const outcome = new DurableLock(db, SPEC).acquire(new Date());
+          expect(outcome).toHaveProperty('held');
+        } finally {
+          db.close();
+        }
+      } finally {
+        await holder.kill();
+      }
+    });
+  }, 30_000);
+
+  it('the holder checking its own claim does not release it for anybody else', async () => {
+    // POSIX record locks belong to the process and are dropped when *any*
+    // descriptor of the file is closed. A liveness check that opened and closed
+    // the holder's own file from inside the holder would silently free it.
+    // SQLite keeps such descriptors open until its last connection to the file
+    // goes, and this is the test that would notice if that stopped being true.
+    await withHome(async (dbPath) => {
+      const db = new DatabaseCtor(dbPath);
+      try {
+        expect(new DurableLock(db, SPEC).acquire(new Date())).toHaveProperty('release');
+        // The same process asks again: it must see its own claim as held.
+        expect(new DurableLock(db, SPEC).acquire(new Date())).toHaveProperty('held');
+        // And another process, after that self-check, must still see it held.
+        const other = await holderProcess(dbPath);
+        try {
+          expect(other.outcome).toBe('refused');
+        } finally {
+          await other.kill();
+        }
+      } finally {
+        db.close();
+      }
+    });
+  }, 30_000);
 });

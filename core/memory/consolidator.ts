@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { ensureColumn } from '../lock/durable.js';
 import type { TenantId } from '../policy/types.js';
 import { CONSOLIDATION_PRINCIPAL, formatConsolidationLines, IngestFailed, type IngestReport } from './ingest.js';
 
@@ -341,10 +342,7 @@ export class ConsolidationLog {
     // so the column above never reaches a database written by ADR-0038. Same
     // one-line migration `MemoryStore` uses, and it carries a default for the
     // same reason: an ALTER adding NOT NULL without one is rejected outright.
-    const columns = db.prepare(`PRAGMA table_info(consolidation_runs)`).all() as { name: string }[];
-    if (!columns.some((c) => c.name === 'merged')) {
-      db.exec(`ALTER TABLE consolidation_runs ADD COLUMN merged INTEGER NOT NULL DEFAULT 0`);
-    }
+    ensureColumn(db, 'consolidation_runs', 'merged', 'merged INTEGER NOT NULL DEFAULT 0');
     this.insertStmt = db.prepare(
       `INSERT INTO consolidation_runs
          (ran_at, trigger, outcome, episodes, facts, superseded, indexed, review, errors, ms, merged)

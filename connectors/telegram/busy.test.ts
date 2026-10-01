@@ -66,13 +66,29 @@ function tenuta(poi: Risposta): { risposta: Risposta; rilascia: () => void } {
   };
 }
 
+/** Il testo visibile di un payload rich, letto dai blocchi (il finale in DM è a blocchi). */
+function richTesto(rich: { html?: string; blocks?: unknown[] }): string {
+  const blockText = (b: unknown): string => {
+    if (b === null || typeof b !== 'object') return '';
+    const o = b as { text?: unknown; summary?: unknown; blocks?: unknown[] };
+    const parts: string[] = [];
+    if (typeof o.summary === 'string') parts.push(o.summary);
+    if (typeof o.text === 'string') parts.push(o.text);
+    else if (Array.isArray(o.text)) parts.push(JSON.stringify(o.text));
+    if (Array.isArray(o.blocks)) parts.push(o.blocks.map(blockText).join('\n'));
+    return parts.join('\n');
+  };
+  if (typeof rich.html === 'string') return rich.html;
+  return Array.isArray(rich.blocks) ? rich.blocks.map(blockText).join('\n') : '';
+}
+
 function harness(script: Risposta[]) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-busy-tg-'));
   const workspace = mkdtempSync(join(tmpdir(), 'muffin-busy-tg-ws-'));
   runInit({ home, apiKey: 'sk-busy-never-called' });
   const runtime = buildRuntime(home, workspace);
 
-  const sent: { text: string; replyTo?: number }[] = [];
+  const sent: { method: string; text: string; replyTo?: number }[] = [];
   const chiamate: ChatCall[] = [];
   const batches: Update[][] = [];
   let sveglia: (() => void) | null = null;
@@ -88,12 +104,19 @@ function harness(script: Risposta[]) {
     },
     setMyCommands: async () => true,
     sendMessage: async (_chatId: number, text: string, options?: { replyTo?: number }) => {
-      sent.push({ text, ...(options?.replyTo === undefined ? {} : { replyTo: options.replyTo }) });
+      sent.push({ method: 'sendMessage', text, ...(options?.replyTo === undefined ? {} : { replyTo: options.replyTo }) });
+      return { message_id: sent.length } as never;
+    },
+
+    sendRichMessage: async (_chatId: number, rich: { html?: string; blocks?: unknown[] }, options?: { replyTo?: number }) => {
+      sent.push({ method: 'sendRichMessage', text: richTesto(rich), ...(options?.replyTo === undefined ? {} : { replyTo: options.replyTo }) });
       return { message_id: sent.length } as never;
     },
     sendChatAction: async () => true,
     sendMessageDraft: async () => true,
+    sendRichMessageDraft: async () => true,
     editMessageText: async () => ({}) as never,
+    editMessageRichText: async () => ({}) as never,
     deleteMessage: async () => true,
   } as unknown as TelegramApi;
 
@@ -169,7 +192,11 @@ describe('il poller riceve mentre un turno gira', () => {
       await until(() => h.sent.some((s) => s.text.includes('in coda')));
       // Confermato mentre il modello è ancora fermo sulla prima: una chiamata sola.
       expect(h.chiamate).toHaveLength(1);
-      expect(h.sent.find((s) => s.text.includes('in coda'))?.replyTo).toBe(2);
+      const conferma = h.sent.find((s) => s.text.includes('in coda'))!;
+      expect(conferma.replyTo).toBe(2);
+      // La conferma di coda esce dalla lane ricca: `dilloA` non è più un
+      // `sendMessage` ad hoc.
+      expect(conferma.method).toBe('sendRichMessage');
 
       primo.rilascia();
       await until(() => h.sent.some((s) => s.text === 'seconda risposta'));

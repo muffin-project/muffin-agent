@@ -8,6 +8,7 @@ import {
   normalizeInboundRich,
   planRich,
   richFitsHard,
+  richFromHtml,
   RICH_COMPAT_BLOCKS,
   RICH_COMPAT_CHARS,
   RICH_MAX_BLOCKS,
@@ -15,6 +16,8 @@ import {
   RICH_MAX_NESTING,
   RICH_MAX_TABLE_COLUMNS,
   TELEGRAM_BOT_API_RICH_FLOOR,
+  thinkingRich,
+  turnRichMessage,
   TELEGRAM_BOT_API_TARGET,
   unknownRichPlaceholder,
 } from './rich.js';
@@ -162,8 +165,13 @@ describe('telegram rich · over-ceiling content falls back, never truncates', ()
     expect(planRich(wide).mode).toBe('legacy');
   });
 
-  it('an image reference keeps the whole answer legacy (no dead tg:// links)', () => {
-    expect(planRich('# Foto\n\n![foto](https://example.test/a.jpg)').mode).toBe('legacy');
+  it('an image reference rides blocks as the link it is — the turn never changes shape', () => {
+    const plan = planRich('# Foto\n\n![foto](https://example.test/a.jpg)');
+    expect(plan.mode).toBe('rich');
+    if (plan.mode !== 'rich') throw new Error('atteso rich');
+    const json = JSON.stringify(plan.message);
+    expect(json).toContain('https://example.test/a.jpg');
+    expect(json).not.toContain('![');
   });
 
   it('richFitsHard refuses an oversized payload with a reason', () => {
@@ -213,5 +221,109 @@ describe('telegram rich · inbound smoke (full matrix in inbound-rich.test.ts)',
     const text = normalizeInboundRich({ rich_message: { blocks: [{ type: 'teletrasporto', frobnicate: 'x'.repeat(5000) }] } });
     expect(text).toBe(unknownRichPlaceholder('teletrasporto'));
     expect(text!.length).toBeLessThan(200);
+  });
+});
+
+describe('telegram rich · the turn message: process in details, answer in blocks', () => {
+  it('collapses the whole process into one details block above the answer', () => {
+    const rich = turnRichMessage({
+      process: ['✓ letto il file', '✓ cercato nel repo'],
+      answer: 'Ecco cosa ho trovato:\n\n- uno\n- due',
+    });
+    expect(rich).not.toBeNull();
+    const blocks = rich!.blocks ?? [];
+    expect(blocks[0]).toMatchObject({ type: 'details', summary: 'Processo' });
+    const details = blocks[0] as { blocks: unknown[] };
+    expect(details.blocks).toHaveLength(2);
+    expect(blocks.slice(1).some((b) => (b as { type: string }).type === 'list')).toBe(true);
+  });
+
+  it('skips blank process lines — no empty paragraphs in the details', () => {
+    const rich = turnRichMessage({ process: ['✓ uno', '', '   ', '✓ due'], answer: 'ok' });
+    const details = (rich!.blocks ?? []).find((b) => (b as { type: string }).type === 'details') as
+      | { blocks: { text: string }[] }
+      | undefined;
+    expect(details).toBeDefined();
+    expect(details!.blocks.map((b) => b.text)).toEqual(['✓ uno', '✓ due']);
+  });
+
+  it('omits the details block when the turn had no visible process', () => {
+    const rich = turnRichMessage({ process: [], answer: 'Solo la risposta.' });
+    expect(rich).not.toBeNull();
+    expect((rich!.blocks ?? []).every((b) => (b as { type: string }).type !== 'details')).toBe(true);
+  });
+
+  it('never throws on partial or unclosed content, and keeps the text whole', () => {
+    const partial = '# Titolo\n\n```\nnon chiuso\nancora dentro';
+    const rich = turnRichMessage({ process: ['✓ letto'], answer: partial });
+    expect(rich).not.toBeNull();
+    const json = JSON.stringify(rich);
+    expect(json).toContain('ancora dentro');
+  });
+});
+
+describe('telegram rich · line breaks survive the rich lane', () => {
+  it('turns bare newlines into <br>: the documented rich-html line break', () => {
+    // Bot API 10.3, «Rich HTML style»: gli esempi spezzano le righe con
+    // `<br>`; un `\n` nudo collassa (visto dal vivo il 30/09 nella
+    // trascrizione: tutti i passi su una riga sola).
+    expect(richFromHtml('prima\nseconda')).toMatchObject({ html: 'prima<br>seconda' });
+  });
+
+  it('leaves newlines inside <pre> alone — there the block keeps them', () => {
+    expect(richFromHtml('<pre>uno\ndue</pre>')).toMatchObject({ html: '<pre>uno\ndue</pre>' });
+  });
+
+  it('keeps an unclosed <pre> literal to the end instead of injecting <br>', () => {
+    expect(richFromHtml('<pre>uno\ndue')).toMatchObject({ html: '<pre>uno\ndue' });
+  });
+
+  it('splits a multi-line process entry into one paragraph per line', () => {
+    const rich = turnRichMessage({
+      process: ['✓ aggiorno il piano\n\n⚠ comando: echo uno\necho due'],
+      answer: 'ok',
+    });
+    const details = (rich!.blocks ?? []).find((b) => (b as { type: string }).type === 'details') as
+      | { blocks: { text: string }[] }
+      | undefined;
+    expect(details!.blocks.map((b) => b.text)).toEqual(['✓ aggiorno il piano', '⚠ comando: echo uno', 'echo due']);
+  });
+
+  it('splits a multi-line running step into paragraphs too', () => {
+    const rich = turnRichMessage({ process: [], running: '⏳ comando: echo uno\necho due', answer: 'ok' });
+    const paragraphs = (rich!.blocks ?? []).filter((b) => (b as { type: string }).type === 'paragraph');
+    // I paragrafi del passo in corso vengono prima dei blocchi della risposta.
+    expect(paragraphs.map((b) => (b as { text: string }).text)).toEqual(['⏳ comando: echo uno', 'echo due', 'ok']);
+  });
+});
+
+describe('telegram rich · draft and final are one shape', () => {
+  it('with no running step the draft equals the final block for block', () => {
+    const process = ['✓ leggo un file: spesa.txt', '✓ cerco in memoria: ieri'];
+    const answer = '# Titolo\n\n- uno\n- due';
+    const draft = turnRichMessage({ process, answer });
+    const finale = turnRichMessage({ process, answer });
+    expect(draft).not.toBeNull();
+    expect(JSON.stringify(draft)).toBe(JSON.stringify(finale));
+  });
+
+  it('the running step is its own always-visible paragraph, after the closed details', () => {
+    const rich = turnRichMessage({
+      process: ['✓ leggo un file: spesa.txt'],
+      running: '⏳ eseguo un comando: npm test · 12s',
+      answer: 'quasi fatto',
+    });
+    const blocks = rich!.blocks!;
+    expect(blocks[0]).toMatchObject({ type: 'details', summary: 'Processo' });
+    expect((blocks[0] as { is_open?: boolean }).is_open).toBeUndefined();
+    expect(blocks[1]).toMatchObject({ type: 'paragraph', text: '⏳ eseguo un comando: npm test · 12s' });
+    // Il consuntivo dentro il details non porta il contatore.
+    expect(JSON.stringify((blocks[0] as { blocks: unknown }).blocks)).not.toMatch(/· \d+s/);
+  });
+
+  it('the thinking placeholder is the draft-only block, with its text', () => {
+    expect(thinkingRich('sto pensando · 3s')).toEqual({
+      blocks: [{ type: 'thinking', text: 'sto pensando · 3s' }],
+    });
   });
 });

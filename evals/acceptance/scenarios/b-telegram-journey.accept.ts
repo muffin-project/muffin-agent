@@ -125,6 +125,21 @@ function plantTier2Episode(home: string, threadKey: string): void {
   }
 }
 
+/**
+ * The visible text of one outbound call: legacy `text`, or a rich payload.
+ *
+ * `editMessageRichText` reaches the wire as `editMessageText` carrying
+ * `rich_message` instead of `text` (`connectors/telegram/api.ts`), so the
+ * discriminator is the payload key, never the method name.
+ */
+const testoDi = (c: { method: string; payload: Record<string, unknown> }): string =>
+  c.payload['rich_message'] !== undefined
+    ? JSON.stringify(c.payload['rich_message'])
+    : String(c.payload['text'] ?? '');
+
+/** Un blocco `rich_message`: basta per leggere `details` e la risposta. */
+type Block = { type: string; summary?: string; blocks?: unknown[] };
+
 describe('acceptance · B1 telegram · un fatto detto su Telegram torna a un `run` usa e getta per memoria, non per sessione', () => {
   /**
    * **Aggiornato da ADR-0056 (03/09).** Questo scenario asseriva
@@ -277,66 +292,60 @@ describe('acceptance · B13 · la trascrizione del turno su Telegram', () => {
                 .sent()
                 .some(
                   (c) =>
-                    (c.method === 'sendMessage' || c.method === 'editMessageText') &&
-                    String(c.payload['text'] ?? '').includes('niente di nuovo da ieri a oggi'),
+                    (c.method === 'sendMessage' || c.method === 'editMessageText' || c.method === 'editMessageRichText' || c.method === 'sendRichMessage') &&
+                    testoDi(c).includes('niente di nuovo da ieri a oggi'),
                 ),
             30_000,
           );
 
-          // A transcript message carries the steps in the owner's own words
-          // (`agent/tool-phrase.ts`) — distinct from the pairing confirmation.
+          // Option B: the process rides the ephemeral draft — never a
+          // persistent transcript message. The turn's one durable message is
+          // a fresh rich send whose `details` block collapses the process.
           const sent = tg.sent();
-          const creates = sent.filter(
-            (c) => c.method === 'sendMessage' && String(c.payload['text'] ?? '').includes('cerco in memoria'),
-          );
-          if (creates.length !== 1) {
-            throw new Error(
-              `atteso esattamente 1 sendMessage di trascrizione (due tool senza parole in mezzo = un segmento), trovati ${creates.length}:\n` +
-                JSON.stringify(creates, null, 2),
-            );
+          const drafts = sent.filter((c) => c.method === 'sendMessageDraft');
+          if (!drafts.some((c) => testoDi(c).includes('cerco in memoria'))) {
+            throw new Error(`la bozza non ha mai mostrato i passi:\n${JSON.stringify(drafts, null, 2)}`);
           }
-          const transcriptId = creates[0]!.messageId;
-          if (transcriptId === undefined) throw new Error('il sendMessage di trascrizione non ha un id registrato');
 
-          // Exactly one message a person would ever have read reached this
-          // chat for the whole turn — the pairing confirmation plus this one
-          // create, nothing else. The answer is not a second one.
-          const allCreates = sent.filter((c) => c.method === 'sendMessage');
+          // Exactly two durable creates in the whole scenario: the pairing
+          // confirmation plus the turn's one final message.
+          const allCreates = sent.filter((c) => c.method === 'sendMessage' || c.method === 'sendRichMessage');
           if (allCreates.length !== 2) {
             throw new Error(
-              `attesi esattamente 2 sendMessage in tutto lo scenario (pairing + trascrizione), trovati ${allCreates.length}:\n` +
+              `attesi esattamente 2 sendMessage in tutto lo scenario (pairing + risposta), trovati ${allCreates.length}:\n` +
                 JSON.stringify(allCreates, null, 2),
             );
           }
-
-          const edits = sent.filter((c) => c.method === 'editMessageText' && Number(c.payload['message_id']) === transcriptId);
-          if (edits.length === 0) {
-            throw new Error(
-              `nessun editMessageText sulla trascrizione (id ${transcriptId}) — il turno non è durato ` +
-                `abbastanza da riaprire la finestra, o il secondo passo non è mai stato appeso:\n${JSON.stringify(sent, null, 2)}`,
-            );
+          if (sent.some((c) => c.method === 'editMessageText' || c.method === 'editMessageRichText')) {
+            throw new Error(`un edit persistente su questo turno — in DM il processo non è mai un messaggio:\n${JSON.stringify(sent, null, 2)}`);
           }
-          if (String(edits[0]!.payload['text'] ?? '') === String(creates[0]!.payload['text'] ?? '')) {
-            throw new Error('editMessageText ha ripetuto lo stesso testo del create — non è un aggiornamento reale');
-          }
-          const finale = String(edits[edits.length - 1]!.payload['text'] ?? '');
-          if (!finale.includes('✓ cerco in memoria: appunti di ieri') || !finale.includes('✓ cerco in memoria: appunti di oggi')) {
-            throw new Error(`la trascrizione finale non tiene entrambi i passi:\n${finale}`);
-          }
-          if (/⏳|· \d+s/.test(finale)) {
-            throw new Error(`la trascrizione finale ha ancora un contatore vivo — transcript.stop() non ha chiuso:\n${finale}`);
-          }
-
-          // Never deleted: the record of what happened stays above the answer.
           if (sent.some((c) => c.method === 'deleteMessage')) {
-            throw new Error(`qualcosa è stato cancellato — la trascrizione deve restare:\n${JSON.stringify(sent, null, 2)}`);
+            throw new Error(`qualcosa è stato cancellato:\n${JSON.stringify(sent, null, 2)}`);
           }
 
-          // The real answer is the transcript's OWN last edit — one visible
-          // response, not a message beside it — and it carries the steps
-          // above it, not just the bare answer text.
-          if (!finale.includes('niente di nuovo da ieri a oggi')) {
-            throw new Error(`l'ultimo edit della trascrizione non porta la risposta:\n${finale}`);
+          const finaleCall = allCreates.find(
+            (c) =>
+              (c.payload['rich_message'] as { blocks?: Block[] } | undefined)?.blocks !== undefined &&
+              testoDi(c).includes('niente di nuovo da ieri a oggi'),
+          );
+          if (finaleCall === undefined) {
+            throw new Error(`la risposta non è arrivata come un solo messaggio a blocchi:\n${JSON.stringify(allCreates, null, 2)}`);
+          }
+          const blocks = (finaleCall.payload['rich_message'] as { blocks?: Block[] } | undefined)?.blocks ?? [];
+          const details = blocks.find((b) => b.type === 'details');
+          if (details === undefined || details.summary !== 'Processo') {
+            throw new Error(`manca il blocco details del processo:\n${JSON.stringify(blocks, null, 2)}`);
+          }
+          const processText = JSON.stringify(details.blocks);
+          if (!processText.includes('cerco in memoria: appunti di ieri') || !processText.includes('cerco in memoria: appunti di oggi')) {
+            throw new Error(`il details non tiene entrambi i passi:\n${processText}`);
+          }
+          if (/⏳|· \d+s/.test(processText)) {
+            throw new Error(`il processo finale ha ancora un contatore vivo:\n${processText}`);
+          }
+          const answerText = JSON.stringify(blocks.filter((b) => b.type !== 'details'));
+          if (!answerText.includes('niente di nuovo da ieri a oggi')) {
+            throw new Error(`la risposta non è fuori dal details:\n${answerText}`);
           }
         } finally {
           await gw.stop();
@@ -392,8 +401,8 @@ describe('acceptance · B14 · un allegato reale su Telegram', () => {
                 .sent()
                 .some(
                   (c) =>
-                    (c.method === 'sendMessage' || c.method === 'editMessageText') &&
-                    String(c.payload['text'] ?? '').includes("l'ho mandato come allegato"),
+                    (c.method === 'sendMessage' || c.method === 'editMessageText' || c.method === 'editMessageRichText' || c.method === 'sendRichMessage') &&
+                    testoDi(c).includes("l'ho mandato come allegato"),
                 ),
             30_000,
           );
@@ -473,15 +482,17 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
         try {
           tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'leggi le mie note e poi esegui echo ciao'));
 
-          // The ASK: a sendMessage with an inline keyboard, distinct from the
-          // pairing confirmation already sitting in `tg.sent()`.
+          // The ASK: the turn's own message, with an inline keyboard —
+          // distinct from the pairing confirmation already in `tg.sent()`.
+          // Dal 2026-09-29 la domanda vive sul messaggio del turno (la
+          // tastiera non sta su una bozza effimera), non su una bolla a parte.
           await until(
             () => tg.sent().some((c) => c.method === 'sendMessage' && c.payload['reply_markup'] !== undefined),
             20_000,
           );
           const askCall = tg.sent().find((c) => c.method === 'sendMessage' && c.payload['reply_markup'] !== undefined);
           if (!askCall) throw new Error('nessun messaggio ASK con tastiera trovato');
-          const askText = String(askCall.payload['text'] ?? '');
+          const askText = testoDi(askCall);
           if (!askText.includes('sys.shell.write')) throw new Error(`l'ASK non nomina la capability:\n${askText}`);
           if (!askText.includes('command: echo ciao') || !askText.includes('cwd: .')) {
             throw new Error(`l'ASK non mostra comando e cwd insieme:\n${askText}`);
@@ -536,8 +547,8 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
                 .sent()
                 .some(
                   (c) =>
-                    (c.method === 'sendMessage' || c.method === 'editMessageText') &&
-                    String(c.payload['text'] ?? '').includes('ha risposto ciao'),
+                    (c.method === 'sendMessage' || c.method === 'editMessageText' || c.method === 'editMessageRichText' || c.method === 'sendRichMessage') &&
+                    testoDi(c).includes('ha risposto ciao'),
                 ),
             30_000,
           );
@@ -584,45 +595,89 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
             throw new Error(`reply_markup non è una tastiera esplicitamente vuota: ${JSON.stringify(tastieraTolta.payload)}`);
           }
 
-          // (b) Il passo `⏸ … aspetto la tua approvazione` dentro il segmento
-          // della trascrizione (un messaggio diverso da quello con la
-          // tastiera) si è risolto: l'ultimo edit su quel messaggio non porta
-          // più la riga di attesa, e porta il verdetto nello stesso
-          // vocabolario di ogni altro passo (`transcript.ts`'s `resolveAsk`).
-          const editSullaTrascrizione = tg
+          // (b) La domanda è un passo del turno: il processo del turno ripreso
+          // — la riga di attesa risolta e il tool rieseguito — arriva
+          // collassato nel `details` dello **stesso** messaggio che portava la
+          // tastiera. Nessuna riga di attesa congelata, nessuna seconda bolla:
+          // il verdetto è nello stesso vocabolario di ogni altro passo
+          // (`transcript.ts`'s `resolveAsk`) e la risposta finale è un edit di
+          // quel messaggio, non un invio nuovo.
+          const finalCall = tg
             .sent()
-            .filter((c) => c.method === 'editMessageText' && Number(c.payload['message_id']) !== askMessageId);
-          if (editSullaTrascrizione.length === 0) {
-            throw new Error('nessun edit sul messaggio della trascrizione (diverso da quello ASK)');
-          }
-          const ultimoTestoTrascrizione = String(
-            editSullaTrascrizione[editSullaTrascrizione.length - 1]?.payload['text'] ?? '',
-          );
-          if (ultimoTestoTrascrizione.includes('aspetto la tua approvazione')) {
+            .find(
+              (c) =>
+                (c.method === 'sendMessage' ||
+                  c.method === 'sendRichMessage' ||
+                  c.method === 'editMessageText' ||
+                  c.method === 'editMessageRichText') &&
+                (c.payload['rich_message'] as { blocks?: Block[] } | undefined)?.blocks !== undefined &&
+                testoDi(c).includes('ha risposto ciao'),
+            );
+          if (finalCall === undefined) {
             throw new Error(
-              `la riga di attesa resta congelata a turno concluso:\n${ultimoTestoTrascrizione}`,
+              'la risposta finale non è arrivata come un solo messaggio a blocchi:\n' +
+                JSON.stringify(
+                  tg.sent().map((c) => ({
+                    method: c.method,
+                    messageId: c.messageId,
+                    payloadMessageId: c.payload['message_id'],
+                    hasAnswer: testoDi(c).includes('ha risposto ciao'),
+                    hasBlocks: (c.payload['rich_message'] as { blocks?: unknown } | undefined)?.blocks !== undefined,
+                    keys: Object.keys(c.payload),
+                  })),
+                  null,
+                  2,
+                ),
             );
           }
-          if (!ultimoTestoTrascrizione.includes('sys.shell.write: consentito')) {
-            throw new Error(`il verdetto non compare, risolto, nella trascrizione:\n${ultimoTestoTrascrizione}`);
-          }
-          // E il tool rieseguito dopo la ripresa è arrivato nello stesso
-          // segmento — non un messaggio nuovo — a riprova che
-          // `resumeStream` ha riusato la trascrizione tenuta aperta invece
-          // di aprirne una fresca.
-          if (!ultimoTestoTrascrizione.includes('eseguo un comando: echo ciao')) {
+          if (Number(finalCall.payload['message_id'] ?? finalCall.messageId) !== askMessageId) {
             throw new Error(
-              `il passo del tool rieseguito dopo l'approvazione non è nello stesso segmento risolto:\n${ultimoTestoTrascrizione}`,
+              `la risposta finale è un messaggio nuovo invece di un edit di quello della domanda: ` +
+                `ask=${askMessageId} final=${JSON.stringify(finalCall.payload['message_id'] ?? finalCall.messageId)}`,
             );
           }
-          // (c) La risposta finale è proprio quest'ultimo edit — un turno,
-          // una risposta visibile come una cosa sola — non un `sendMessage`
-          // a parte accanto alla trascrizione.
-          if (!ultimoTestoTrascrizione.includes('ha risposto ciao')) {
-            throw new Error(`la risposta finale non è finita nell'ultimo edit della trascrizione:\n${ultimoTestoTrascrizione}`);
+          const blocks = (finalCall.payload['rich_message'] as { blocks?: Block[] } | undefined)?.blocks ?? [];
+          const details = blocks.find((b) => b.type === 'details');
+          if (details === undefined) throw new Error('manca il blocco details del processo');
+          const processText = JSON.stringify(details.blocks);
+          if (processText.includes('aspetto la tua approvazione')) {
+            throw new Error(`la riga di attesa resta congelata a turno concluso:\n${processText}`);
           }
-          if (tg.sent().some((c) => c.method === 'sendMessage' && String(c.payload['text'] ?? '').includes('ha risposto ciao'))) {
-            throw new Error('la risposta finale è arrivata anche come sendMessage a parte, non solo come edit della trascrizione');
+          if (!processText.includes('sys.shell.write: consentito')) {
+            throw new Error(`il verdetto non compare, risolto, nel processo:\n${processText}`);
+          }
+          // E il tool rieseguito dopo la ripresa è nello stesso processo, a
+          // riprova che `resumeStream` ha riusato la trascrizione tenuta
+          // aperta invece di aprirne una fresca.
+          if (!processText.includes('eseguo un comando: echo ciao')) {
+            throw new Error(
+              `il passo del tool rieseguito dopo l'approvazione non è nel processo:\n${processText}`,
+            );
+          }
+          // (c) La risposta finale è fuori dal `details`, e in un solo
+          // messaggio: quello della domanda, editato.
+          const answerText = JSON.stringify(blocks.filter((b) => b.type !== 'details'));
+          if (!answerText.includes('ha risposto ciao')) {
+            throw new Error(`la risposta finale non è fuori dal details:\n${answerText}`);
+          }
+          const risposte = tg
+            .sent()
+            .filter(
+              (c) =>
+                (c.method === 'sendMessage' ||
+                  c.method === 'sendRichMessage' ||
+                  c.method === 'editMessageText' ||
+                  c.method === 'editMessageRichText') &&
+                testoDi(c).includes('ha risposto ciao'),
+            );
+          // Più edit dello stesso messaggio vanno bene — è lo streaming che si
+          // posa e poi la consegna che lo ripiega. Ciò che non deve esistere è
+          // un **secondo** messaggio con la risposta.
+          const idDellaRisposta = new Set(risposte.map((c) => Number(c.payload['message_id'] ?? c.messageId)));
+          if (idDellaRisposta.size !== 1 || !idDellaRisposta.has(askMessageId)) {
+            throw new Error(
+              `la risposta ha toccato messaggi diversi da quello della domanda: ${JSON.stringify([...idDellaRisposta])} vs ask=${askMessageId}`,
+            );
           }
         } finally {
           await gw.stop();
@@ -634,5 +689,123 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
     },
     90_000,
     shellNonDisponibileQui,
+  );
+});
+
+describe('acceptance · #746 · una seconda approvazione in un turno ripreso resta azionabile', () => {
+  /**
+   * Falsificatore del difetto: senza la guardia in `resumeStream.stop`
+   * (`waiting` con barriera `approval:<id>` → la trascrizione resta viva), la
+   * seconda domanda perde la tastiera alla sospensione e il click non risolve
+   * più niente: l'`until` sulla seconda domanda o sulla risposta finale scade.
+   *
+   * Il turno: due comandi diversi, quindi due approvazioni reali. La prima
+   * sospende il turno fresco; il click lo riprende; il modello chiede il
+   * secondo comando; la lane finalizza l'AttachStream sull'esito sospeso; la
+   * domanda deve restare sullo **stesso messaggio** con la tastiera viva, e il
+   * secondo click deve chiudere il turno.
+   */
+  it(
+    '#746 doppia approvazione: la seconda domanda vive sullo stesso messaggio, la tastiera sopravvive alla sospensione, il turno riprende e chiude',
+    async () => {
+      const tg = await startFakeTelegram();
+      const inst = await install({
+        main: [
+          { tool: { name: 'shell_run_write', args: { command: 'echo primo', cwd: '.', description: 'primo comando' } } },
+          { tool: { name: 'shell_run_write', args: { command: 'echo secondo', cwd: '.', description: 'secondo comando' } } },
+          { text: 'fatto, entrambi i comandi hanno risposto' },
+        ],
+        env: { MUFFIN_GATEWAY_TICK_MS: '200' },
+      });
+      try {
+        plantTier2Episode(inst.home, 'fixture-746');
+        const gw = await pairOwner(inst, tg, OWNER_ID);
+        try {
+          type Tastiera = { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+          const tastieraViva = (c: { payload: Record<string, unknown> }): boolean => {
+            const kb = (c.payload['reply_markup'] as Tastiera | undefined)?.inline_keyboard;
+            return Array.isArray(kb) && kb.length > 0;
+          };
+          const idDi = (c: { messageId?: number; payload: Record<string, unknown> }): number | undefined =>
+            typeof c.payload['message_id'] === 'number' ? (c.payload['message_id'] as number) : c.messageId;
+          const ultimaDomanda = () => tg.sent().filter((c) => tastieraViva(c) && testoDi(c).includes('⚠')).at(-1);
+          const okDi = (c: { payload: Record<string, unknown> }): string => {
+            const bottoni = ((c.payload['reply_markup'] as Tastiera).inline_keyboard ?? []).flat();
+            const ok = bottoni.find((b) => b.callback_data.startsWith('ok:'));
+            if (!ok) throw new Error(`nessun pulsante ok: ${JSON.stringify(c.payload['reply_markup'])}`);
+            return ok.callback_data;
+          };
+
+          tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'esegui due comandi'));
+
+          // Prima domanda: il comando è `echo primo`.
+          await until(() => ultimaDomanda() !== undefined && testoDi(ultimaDomanda()!).includes('echo primo'), 20_000);
+          const prima = ultimaDomanda()!;
+          const messaggio = prima.messageId;
+          if (messaggio === undefined) throw new Error('la prima domanda non ha un id di messaggio');
+          tg.deliver(callbackQuery({ id: OWNER_ID, name: 'Owner' }, okDi(prima), { messageId: messaggio, chatId: OWNER_ID, text: testoDi(prima) }));
+
+          // Seconda domanda: comando diverso, nuova approvazione, e deve vivere
+          // sullo stesso messaggio del turno.
+          try {
+            await until(() => {
+              const ultima = ultimaDomanda();
+              return ultima !== undefined && idDi(ultima) === messaggio && testoDi(ultima).includes('echo secondo');
+            }, 30_000);
+          } catch (error) {
+            const righe = inst.db((db) => db.prepare('SELECT id, capability, resource, decision, consumed_at FROM approvals ORDER BY asked_at').all());
+            throw new Error(
+              `${error instanceof Error ? error.message : String(error)}\n` +
+                `approvals: ${JSON.stringify(righe)}\n` +
+                JSON.stringify(
+                  tg.sent().map((c) => ({
+                    method: c.method,
+                    messageId: c.messageId,
+                    payloadMessageId: c.payload['message_id'],
+                    tastiera: tastieraViva(c),
+                    kb: tastieraViva(c) ? JSON.stringify(c.payload['reply_markup']) : undefined,
+                    text: testoDi(c).slice(0, 160),
+                  })),
+                  null,
+                  2,
+                ),
+            );
+          }
+          const seconda = ultimaDomanda()!;
+
+          // La sospensione non deve aver tolto la tastiera: nessuna rimozione
+          // esplicita dopo la seconda domanda, prima del click.
+          const daSeconda = tg.sent().slice(tg.sent().indexOf(seconda));
+          const rimozioni = daSeconda.filter(
+            (c) => c.method === 'editMessageReplyMarkup' && Number(c.payload['message_id']) === messaggio,
+          );
+          if (rimozioni.length !== 0) {
+            throw new Error(`la tastiera della seconda domanda è stata tolta durante la sospensione: ${JSON.stringify(rimozioni)}`);
+          }
+
+          // Il secondo click risolve lo stesso passo e il turno chiude con la
+          // risposta, sullo stesso messaggio.
+          tg.deliver(callbackQuery({ id: OWNER_ID, name: 'Owner' }, okDi(seconda), { messageId: messaggio, chatId: OWNER_ID, text: testoDi(seconda) }));
+          await until(
+            () =>
+              tg
+                .sent()
+                .some(
+                  (c) =>
+                    (c.method === 'editMessageText' || c.method === 'editMessageRichText' || c.method === 'sendMessage') &&
+                    Number(c.payload['message_id'] ?? c.messageId) === messaggio &&
+                    testoDi(c).includes('entrambi i comandi hanno risposto'),
+                ),
+            30_000,
+          );
+        } finally {
+          await gw.stop();
+        }
+      } finally {
+        await inst.cleanup();
+        await tg.close();
+      }
+    },
+    120_000,
   );
 });

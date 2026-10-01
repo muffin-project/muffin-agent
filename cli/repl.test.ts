@@ -7,7 +7,7 @@ import { runInit } from './init.js';
 import { applica } from './schermo.js';
 import { formatProgressLine, makeReplCliWrite, runRepl, closingLine, statusFor } from './repl.js';
 import { TOOL_PHRASES, toolLine, toolPhrase, toolSubject } from '../agent/tool-phrase.js';
-import { debugCommand, thinkingCommand } from '../agent/comandi.js';
+import { COMANDI, debugCommand, thinkingCommand } from '../agent/comandi.js';
 import { readdirSync, readFileSync } from 'node:fs';
 import { cliSurface } from '../core/surface/cli.js';
 import { SurfaceRegistry } from '../core/surface/registry.js';
@@ -288,6 +288,15 @@ describe('formatProgressLine (B13) — in debug, i numeri restano quelli di semp
     expect(
       formatProgressLine({ type: 'tool_end', name: 'demo_boom', ms: 3, isError: true }, 'debug'),
     ).toBe('· demo_boom fallito (3ms)');
+  });
+
+  it('formats a model_retry event with the budget, the attempt and the declared wait', () => {
+    expect(
+      formatProgressLine({ type: 'model_retry', class: 'provider_empty', attempt: 2, max: 3, inMs: 4200 }, 'debug'),
+    ).toBe('· provider provider_empty tentativo 2/3 fra 4200ms');
+    expect(
+      formatProgressLine({ type: 'model_retry', class: 'transport', attempt: 1, max: 10, inMs: 500 }, 'debug'),
+    ).toBe('· provider transport tentativo 1/10 fra 500ms');
   });
 
   it('throws on a variant the switch does not recognise, instead of silently rendering a blank line', () => {
@@ -596,6 +605,32 @@ describe('/think', () => {
     expect(out.line).toContain('consumer-local');
   });
 
+  it('senza argomenti dice il livello attivo, non solo `on`: è l\'unico posto dove Telegram lo mostra', () => {
+    const out = thinkingCommand('', 'medium', 'medium', 'consumer-local');
+    expect(out.line).toContain('on, livello medium');
+    expect(out.line).toContain('config.json');
+    expect(out.set).toBeUndefined();
+    // `adaptive` resta «on» e basta: non ha un livello da dire.
+    expect(thinkingCommand('', 'adaptive', undefined, 'consumer-local').line).not.toContain('livello');
+  });
+
+  it("l'aiuto del comando, da cui nasce il menu di Telegram, dice che un livello è accettato — e che non tutti i modelli ne accettano gli stessi", () => {
+    const aiuto = COMANDI.find((c) => c.nome === 'think')?.aiuto ?? '';
+    expect(aiuto).toContain('livello');
+    for (const livello of ['low', 'medium', 'xhigh']) expect(aiuto).toContain(livello);
+    // «xhigh» è di qwen3, «high» di gpt-oss: senza questa frase il menu
+    // prometterebbe livelli che il modello dell'installazione rifiuta.
+    expect(aiuto).toContain('i valori validi dipendono dal modello');
+  });
+
+  it('un livello scrive come `on` e `off`, e dice che il ragionamento resta acceso a quel livello', () => {
+    const out = thinkingCommand('medium', 'adaptive', undefined, 'consumer-local');
+    expect(out.set).toBe('medium');
+    expect(out.line).toContain('medium');
+    expect(out.line).toContain('prossimi avvii');
+    expect(thinkingCommand('xhigh', 'off', 'off', 'consumer-local').set).toBe('xhigh');
+  });
+
   it('un argomento che non è nessuno dei tre non scrive niente, e li nomina', () => {
     const out = thinkingCommand('forse', 'adaptive', undefined, 'consumer-local');
     expect(out.set).toBeUndefined();
@@ -653,6 +688,15 @@ describe('formatProgressLine — modalità normale', () => {
       formatProgressLine({ type: 'tool_end', name: 'fs_write', ms: 3, isError: true }, 'normale'),
     ).toBe('  ✗ scrivo un file');
   });
+
+  it("l'attesa di un re-drive si dice: senza, lo spinner fermo per due minuti sembra un guasto", () => {
+    expect(
+      formatProgressLine({ type: 'model_retry', class: 'provider_empty', attempt: 2, max: 3, inMs: 4200 }, 'normale'),
+    ).toBe('  ↻ risposta vuota dal provider — riprovo (2/3) tra 4s');
+    expect(
+      formatProgressLine({ type: 'model_retry', class: 'transport', attempt: 1, max: 10, inMs: 200 }, 'normale'),
+    ).toBe('  ↻ il provider non ha risposto — riprovo (1/10) tra 1s');
+  });
 });
 
 /**
@@ -705,10 +749,10 @@ describe('la riga dice anche su cosa', () => {
     expect(toolSubject('fs_read', { path: 'a\tb\nc' })).toBe('a b c');
   });
 
-  it('e accorcia invece di mandare a capo', () => {
+  it('non accorcia mai: il soggetto resta intero', () => {
     const lungo = toolSubject('memory_search', { query: 'x'.repeat(200) });
-    expect(lungo.length).toBeLessThanOrEqual(48);
-    expect(lungo.endsWith('…')).toBe(true);
+    expect(lungo).toBe('x'.repeat(200));
+    expect(lungo).not.toContain('…');
   });
 
   /** Senza soggetto la riga resta quella di prima: un tool MCP non è nella mappa. */

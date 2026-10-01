@@ -1,6 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
 import type { Update } from '@grammyjs/types';
-import { mkdtempSync } from 'node:fs';
+import { closeSync, ftruncateSync, mkdtempSync, openSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -12,6 +12,7 @@ import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types
 import { TelegramConnector, parseUpdate, type TelegramConfig } from './connector.js';
 import { ModelLane } from '../../core/turns/model-lane.js';
 import { TelegramApi, type SendOptions, type TelegramApi as TelegramApiType } from './api.js';
+import { telegramSurface } from './surface.js';
 import { UpdateInbox } from './updates.js';
 import { TelegramDeliveryStore, deliverTelegram } from './delivery.js';
 
@@ -141,6 +142,134 @@ describe('TelegramApi: il topic arriva sul filo', () => {
   });
 });
 
+describe('deliverFile: il canale di un topic porta il thread fino al documento', () => {
+  /**
+   * Il difetto: `send_file` indirizzava `telegram:<chatId>`, che non ha una
+   * dimensione topic, e `sendDocument` non aveva `message_thread_id` — quindi
+   * un file prodotto in un topic finiva in *General*, in silenzio. La forma
+   * scelta è `telegram:<chatId>#<threadId>`: `telegram:<chatId>` resta valido
+   * per ogni riga già installata e per una DM, e la parte dopo `#` è l'unica
+   * cosa che `sendDocument` e la notifica oversize devono leggere.
+   */
+  const canale = (threadId?: number): string =>
+    threadId === undefined ? `telegram:${GROUP}` : `telegram:${GROUP}#${threadId}`;
+
+  const fileTemporaneo = (contenuto: string, nome = 'report.txt'): string => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-topic-file-'));
+    const path = join(dir, nome);
+    writeFileSync(path, contenuto, 'utf8');
+    return path;
+  };
+
+  /** Oltre `maxUploadBytes` (50MB) senza allocare 50MB: `statSync` legge la dimensione, non i byte. */
+  const fileOversize = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-topic-big-'));
+    const path = join(dir, 'big.bin');
+    const fd = openSync(path, 'w');
+    ftruncateSync(fd, 50 * 1024 * 1024 + 1);
+    closeSync(fd);
+    return path;
+  };
+
+  it('parsa `telegram:<chat>#<thread>`, e rifiuta le forme malformate', () => {
+    const api = {} as unknown as TelegramApiType;
+    const surface = telegramSurface(api, undefined);
+
+    expect(surface.handles(canale(TOPIC_BUG))).toBe(true);
+    // Le righe già installate e le DM: nessun `#`, nessun topic.
+    expect(surface.handles(canale())).toBe(true);
+    for (const malformato of [`telegram:${GROUP}#`, `telegram:${GROUP}#abc`, `telegram:${GROUP}#0`, 'telegram:abc', 'telegram:0', 'telegram:']) {
+      expect(surface.handles(malformato), malformato).toBe(false);
+    }
+  });
+
+  it('`sendDocument` porta `message_thread_id` quando il canale ha il thread', async () => {
+    const uploads: FormData[] = [];
+    const api = {
+      upload: async (_method: string, body: FormData) => {
+        uploads.push(body);
+        return {} as never;
+      },
+    } as unknown as TelegramApiType;
+
+    const esito = await telegramSurface(api, undefined).deliverFile(canale(TOPIC_BUG), {
+      absolutePath: fileTemporaneo('contenuto'),
+      filename: 'report.txt',
+    });
+
+    expect(esito.delivered).toBe(true);
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]!.get('message_thread_id')).toBe(String(TOPIC_BUG));
+  });
+
+  it('un file oversize lo dice nel topic, non in *General*', async () => {
+    const inviati: { method: string; chatId: number; options: SendOptions | undefined }[] = [];
+    const api = {
+      sendMessage: async (chatId: number, _html: string, options?: SendOptions) => {
+        inviati.push({ method: 'sendMessage', chatId, options });
+        return {} as never;
+      },
+      // Ricca o legacy, la notifica registra le opzioni: il thread deve
+      // esserci comunque.
+      sendRichMessage: async (chatId: number, _rich: unknown, options?: SendOptions) => {
+        inviati.push({ method: 'sendRichMessage', chatId, options });
+        return {} as never;
+      },
+    } as unknown as TelegramApiType;
+
+    const esito = await telegramSurface(api, undefined).deliverFile(canale(TOPIC_BUG), {
+      absolutePath: fileOversize(),
+      filename: 'big.bin',
+    });
+
+    expect(esito.delivered).toBe(true);
+    expect(inviati).toHaveLength(1);
+    expect(inviati[0]!.method).toBe('sendRichMessage');
+    expect(inviati[0]!.chatId).toBe(GROUP);
+    expect(inviati[0]!.options?.threadId).toBe(TOPIC_BUG);
+  });
+
+  it('senza `#` resta esattamente la forma di prima: nessun thread sul filo', async () => {
+    const uploads: FormData[] = [];
+    const api = {
+      upload: async (_method: string, body: FormData) => {
+        uploads.push(body);
+        return {} as never;
+      },
+    } as unknown as TelegramApiType;
+
+    const esito = await telegramSurface(api, undefined).deliverFile(canale(), {
+      absolutePath: fileTemporaneo('contenuto'),
+      filename: 'report.txt',
+    });
+
+    expect(esito.delivered).toBe(true);
+    expect(uploads[0]!.get('message_thread_id')).toBeNull();
+  });
+
+  it('anche `deliver` rispetta il thread: un job nato in un topic ci resta', async () => {
+    // `schedule.ts` scrive `ctx.replyChannel` come canale del job: se `deliver`
+    // ignorasse il `#`, un promemoria creato in un topic suonerebbe in
+    // *General* — la stessa degradazione silenziosa, un giro più tardi.
+    const inviati: { method: string; chatId: number; options: SendOptions | undefined }[] = [];
+    const api = {
+      sendMessage: async (chatId: number, _html: string, options?: SendOptions) => {
+        inviati.push({ method: 'sendMessage', chatId, options });
+        return {} as never;
+      },
+      sendRichMessage: async (chatId: number, _rich: unknown, options?: SendOptions) => {
+        inviati.push({ method: 'sendRichMessage', chatId, options });
+        return {} as never;
+      },
+    } as unknown as TelegramApiType;
+
+    const esito = await telegramSurface(api, undefined).deliver(canale(TOPIC_BUG), 'promemoria');
+    expect(esito.delivered).toBe(true);
+    expect(inviati[0]!.method).toBe('sendRichMessage');
+    expect(inviati[0]!.options?.threadId).toBe(TOPIC_BUG);
+  });
+});
+
 describe('deliverTelegram: ogni pezzo, non solo quello che cita', () => {
   const pezzo = (html: string, i: number) => ({
     operation: 'send' as const,
@@ -160,11 +289,16 @@ describe('deliverTelegram: ogni pezzo, non solo quello che cita', () => {
         opzioni.push(o);
         return { message_id: opzioni.length } as never;
       },
+      sendRichMessage: async (_c: number, _rich: unknown, o?: SendOptions) => {
+        opzioni.push(o);
+        return { message_id: opzioni.length } as never;
+      },
     } as unknown as TelegramApiType;
 
     let n = 0;
     await deliverTelegram(store, api, 't1', [pezzo('a', 0), pezzo('b', 1), pezzo('c', 2)], () =>
       new Date(1_700_000_000_000 + n++).toISOString(),
+    0,
     );
 
     expect(opzioni).toHaveLength(3);
@@ -186,9 +320,18 @@ describe('deliverTelegram: ogni pezzo, non solo quello che cita', () => {
       attempt_id TEXT, telegram_message_id INTEGER, error TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
       PRIMARY KEY (turn_id, part_index));`);
+    // Una riga già scritta dal processo precedente: la migrazione additiva
+    // deve lasciarla leggibile come lease 0, non solo aggiungere la colonna
+    // a una tabella vuota.
+    db.prepare(
+      `INSERT INTO telegram_delivery_parts
+        (turn_id, part_index, operation, chat_id, reply_to, edit_message_id, html, status, created_at, updated_at)
+       VALUES ('vecchio', 0, 'send', 1, NULL, NULL, 'consegnato', 'sent', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`,
+    ).run();
 
     const store = new TelegramDeliveryStore(db);
-    const parti = store.plan('t1', [pezzo('a', 0)], '2026-09-04T00:00:00.000Z');
+    expect(store.parts('vecchio')).toMatchObject([{ leaseIndex: 0, status: 'sent', threadId: null }]);
+    const parti = store.plan('t1', [pezzo('a', 0)], '2026-09-04T00:00:00.000Z', 0);
 
     expect(parti[0]!.threadId).toBe(TOPIC_BUG);
     db.close();
@@ -229,7 +372,13 @@ function harness(config: TelegramConfig, script: ChatResult[] = []) {
       inviati.push({ chatId, options });
       return { message_id: inviati.length } as never;
     },
+    sendRichMessage: async (chatId: number, _rich: unknown, options?: SendOptions) => {
+      inviati.push({ chatId, options });
+      return { message_id: inviati.length } as never;
+    },
     editMessageText: async () => ({}) as never,
+    editMessageRichText: async () => ({}) as never,
+    sendRichMessageDraft: async () => true,
     sendChatAction: async (_c: number, _a?: string, threadId?: number) => {
       azioni.push(threadId);
       return true;
@@ -266,10 +415,33 @@ describe('un turno nato in un topic, dal filo', () => {
     try {
       await deliver(h, [inTopic(1, TOPIC_BUG, '@MuffinBot ciao')]);
 
-      expect(h.inviati.length).toBeGreaterThan(1);
+      // Rich: the whole answer is one message now, and it still lands in the topic.
+      expect(h.inviati.length).toBeGreaterThanOrEqual(1);
       for (const invio of h.inviati) expect(invio.options?.threadId).toBe(TOPIC_BUG);
       expect(h.azioni.length).toBeGreaterThan(0);
       for (const t of h.azioni) expect(t).toBe(TOPIC_BUG);
+    } finally {
+      h.runtime.close();
+    }
+  });
+
+  it('il canale durevole del turno nomina il topic, non solo la chat', async () => {
+    // Il produttore della forma: se `canaleDi` smettesse di scrivere il `#`,
+    // `send_file` e `deliverFile` non avrebbero niente da parsare — la stessa
+    // riga che l'accettazione `#744` guida dal binario vero.
+    const h = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER }, [reply('ok')]);
+    try {
+      await deliver(h, [inTopic(1, TOPIC_BUG, '@MuffinBot ciao')]);
+
+      const row = h.runtime.db
+        .prepare(`SELECT reply_to AS replyTo FROM turns ORDER BY created_at DESC LIMIT 1`)
+        .get() as { replyTo: string } | undefined;
+      if (!row) throw new Error('nessun turno dopo il messaggio nel topic');
+      expect(JSON.parse(row.replyTo)).toMatchObject({
+        chatId: GROUP,
+        threadId: TOPIC_BUG,
+        channel: `telegram:${GROUP}#${TOPIC_BUG}`,
+      });
     } finally {
       h.runtime.close();
     }

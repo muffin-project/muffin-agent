@@ -141,7 +141,40 @@ function fixture(script: ChatResult[] = []) {
   // this fake API, never to a store.
   const sendChatAction = vi.fn(async () => true);
   const sendMessageDraft = vi.fn(async () => true);
-  const api = { sendMessage, editMessageText, sendChatAction, sendMessageDraft } as unknown as TelegramApiLike;
+  // Rich is the transport now; the fake records it in the same `sent` log.
+  // Rich delegates to the legacy spies, so every existing assertion on
+  // `sendMessage`/`editMessageText` keeps observing the same effect.
+
+/** Il testo visibile di un payload rich, letto dai blocchi (il finale in DM è a blocchi). */
+function richTesto(rich: { html?: string; blocks?: unknown[] }): string {
+  const blockText = (b: unknown): string => {
+    if (b === null || typeof b !== 'object') return '';
+    const o = b as { text?: unknown; summary?: unknown; blocks?: unknown[] };
+    const parts: string[] = [];
+    if (typeof o.summary === 'string') parts.push(o.summary);
+    if (typeof o.text === 'string') parts.push(o.text);
+    else if (Array.isArray(o.text)) parts.push(JSON.stringify(o.text));
+    if (Array.isArray(o.blocks)) parts.push(o.blocks.map(blockText).join('\n'));
+    return parts.join('\n');
+  };
+  if (typeof rich.html === 'string') return rich.html;
+  return Array.isArray(rich.blocks) ? rich.blocks.map(blockText).join('\n') : '';
+}
+
+  const sendRichMessage = vi.fn((chatId: number, rich: { html?: string; blocks?: unknown[] }) => sendMessage(chatId, richTesto(rich)));
+  const editMessageRichText = vi.fn((_chatId: number, _id: number, rich: { html?: string }) =>
+    editMessageText(_chatId, _id, richTesto(rich)),
+  );
+  const sendRichMessageDraft = vi.fn(async () => true);
+  const api = {
+    sendMessage,
+    editMessageText,
+    sendChatAction,
+    sendMessageDraft,
+    sendRichMessage,
+    editMessageRichText,
+    sendRichMessageDraft,
+  } as unknown as TelegramApiLike;
 
   const inbox = new UpdateInbox(db);
   const delivery = new TelegramDeliveryStore(db);
@@ -301,7 +334,13 @@ describe('resolveBound — fault point 2: bound but the turn row is missing comp
 describe('resolveBound — fault point 6: the same update resolved twice never re-runs the model', () => {
   it('a live retry after a failed send redelivers the durable result instead of recomputing it', async () => {
     const h = fixture([answer('primo e unico giro')]);
-    h.sendMessage.mockRejectedValueOnce(new TelegramError(429, 'Too Many Requests', 1));
+    // Fail EVERY send for the first pass, rich and its legacy fallback alike:
+    // a single rejection would be absorbed by the rich→legacy fallback and the
+    // delivery would succeed.
+    const originalSend = h.sendMessage.getMockImplementation()!;
+    h.sendMessage.mockImplementation(async () => {
+      throw new TelegramError(429, 'Too Many Requests', 1);
+    });
     const { stored, incoming } = acceptOne(h, privateMsg(1));
 
     await expect(resolveOnce(h, stored, incoming)).rejects.toThrow('429');
@@ -310,10 +349,10 @@ describe('resolveBound — fault point 6: the same update resolved twice never r
 
     // The next drain reads the same row back — still bound to the turn the
     // first attempt already ran.
+    h.sendMessage.mockImplementation(originalSend);
     await resolveOnce(h, h.inbox.get(1)!, incoming);
 
     expect(h.provider.calls).toBe(1); // never called twice
-    expect(h.sendMessage).toHaveBeenCalledTimes(2); // the retry, not the model
     expect(h.sent.filter((s) => s === 'send:primo e unico giro')).toHaveLength(1);
     expect(h.inbox.pending()).toHaveLength(0);
   });
@@ -661,6 +700,30 @@ describe('resolve — "riprendi" continua la riga continuabile, non ne apre una'
         created.claimToken,
       ),
     ).toBe(true);
+
+    // La diagnosi di cessione è già passata dalla WAL della superficie: in
+    // produzione è il testo del primo risultato della riga, congelato e
+    // consegnato. La risposta della ripresa è un secondo messaggio della
+    // stessa riga, e non deve essere inghiottita dal piano congelato.
+    const delivery = new TelegramDeliveryStore(h.db);
+    const at = new Date().toISOString();
+    delivery.plan(
+      'vecchia-lease',
+      [
+        {
+          operation: 'send',
+          chatId: OWNER,
+          threadId: null,
+          replyTo: null,
+          editMessageId: null,
+          html: 'Mi sono fermato qui, scrivi "riprendi"',
+        },
+      ],
+      at,
+      0,
+    );
+    expect(delivery.claim('vecchia-lease', 0, 'attempt', at)).toBe(true);
+    expect(delivery.sent('vecchia-lease', 0, 'attempt', 1, at)).toBe(true);
 
     const { stored, incoming } = acceptOne(h, privateMsg(9, 'riprendi'));
     await resolveOnce(h, stored, incoming);

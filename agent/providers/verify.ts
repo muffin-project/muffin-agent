@@ -195,6 +195,7 @@ export async function verifyInferenceRoute(opts: VerifyInferenceOptions = {}): P
             { 'HTTP-Referer': 'https://github.com/muffin-ai/muffin', 'X-Title': 'muffin' },
             {
               ...(config.provider.routing ? { routing: config.provider.routing } : {}),
+              ...(config.provider.reasoningDialect ? { reasoningDialect: config.provider.reasoningDialect } : {}),
               ...(opts.fetch ? { fetch: opts.fetch, metadataFetch: opts.fetch } : {}),
             },
           );
@@ -261,6 +262,19 @@ export async function verifyInferenceRoute(opts: VerifyInferenceOptions = {}): P
         remedy: 'pick a route that returns structurally valid tool calls, not just prose',
       });
     }
+    // A provider that ends at its output cap has not completed the probe.
+    // Reasoning-capable models can spend this bounded allowance before
+    // emitting the required tool call; treating that partial response as a
+    // completed text-only answer would falsely declare the route incompatible.
+    if (result.finishReason === 'length') {
+      return finish({
+        ...base,
+        status: 'provider_error',
+        capability: { completion: 'fail', toolCall: 'fail' },
+        diagnostic: `route reached the probe output budget before returning the required ${PROBE_TOOL_NAME} tool call; compatibility is unverified`,
+        remedy: outputBudgetRemedy(),
+      });
+    }
     return finish({
       ...base,
       status: 'incompatible',
@@ -314,6 +328,14 @@ function classifyProbeError(
       remedy: 'check the model profile and retry',
     };
   }
+  if (error instanceof ProviderError && error.outputTruncated) {
+    return {
+      ...base,
+      status: 'provider_error',
+      diagnostic: `route reached the probe output budget while returning a partial tool call; compatibility is unverified`,
+      remedy: outputBudgetRemedy(),
+    };
+  }
   const status = error instanceof ProviderError ? error.status : undefined;
   const raw = redact(error instanceof Error ? error.message : String(error), secrets);
   if (status === 401 || status === 403 || (status === undefined && isAuthMessage(raw))) {
@@ -362,6 +384,10 @@ function classifyProbeError(
     diagnostic: redact(`provider failure${status === undefined ? '' : ` (${String(status)})`}: ${raw}`, secrets),
     remedy: 'retry later; if it persists, check the provider status page',
   };
+}
+
+function outputBudgetRemedy(): string {
+  return `Muffin's doctor probe exhausted its own ${String(VERIFY_MAX_OUTPUT_TOKENS)}-token output budget; rerun after Muffin raises that budget, and do not change the provider route based on this unverified result`;
 }
 
 function isAbortError(error: unknown): boolean {

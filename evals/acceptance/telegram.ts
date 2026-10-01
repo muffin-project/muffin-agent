@@ -188,6 +188,30 @@ function parseMultipart(
 const HOLD_MS = 150;
 const HOLD_STEP_MS = 10;
 
+function richTextPlain(t: unknown): string {
+  if (typeof t === 'string') return t;
+  // Un RichText può essere un array di stringhe/entità: il testo è la
+  // concatenazione, e per un'entità il campo `text` porta il contenuto.
+  if (Array.isArray(t)) return t.map(richTextPlain).join('');
+  if (t === null || typeof t !== 'object') return '';
+  const o = t as { text?: unknown };
+  return typeof o.text === 'string' ? o.text : '';
+}
+
+function testoDaBlocchi(blocks: unknown): string {
+  if (!Array.isArray(blocks)) return '';
+  const blockText = (b: unknown): string => {
+    if (b === null || typeof b !== 'object') return '';
+    const o = b as { text?: unknown; summary?: unknown; blocks?: unknown[] };
+    const parts: string[] = [];
+    if (o.summary !== undefined) parts.push(richTextPlain(o.summary));
+    if (o.text !== undefined) parts.push(richTextPlain(o.text));
+    if (Array.isArray(o.blocks)) parts.push(o.blocks.map(blockText).join('\n'));
+    return parts.join('\n');
+  };
+  return blocks.map(blockText).join('\n');
+}
+
 export async function startFakeTelegram(): Promise<FakeTelegram> {
   const queue: FakeUpdate[] = [];
   const calls: SentCall[] = [];
@@ -257,6 +281,30 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
           payload = {};
         }
       }
+
+      // Rich is the transport now; the acceptance scenarios assert on
+      // legacy-shaped records. Normalize a rich call to its legacy twin so a
+      // scenario reads `method` / `payload.text` / `payload.message_thread_id`
+      // the same way whichever lane carried it. The HTTP method stays the real
+      // one, so the transport itself is still exercised end to end.
+      let recordedMethod = method;
+      const richMessage =
+        payload['rich_message'] !== null && typeof payload['rich_message'] === 'object'
+          ? (payload['rich_message'] as { html?: unknown; blocks?: unknown })
+          : undefined;
+      if (typeof richMessage?.html === 'string') {
+        // `<br>` è l'a-capo del rich HTML (i `\n` nudi collassano): per lo
+        // scenario è testo visibile, cioè un newline come nel legacy.
+        payload['text'] = richMessage.html.replace(/<br>/g, '\n');
+      } else if (Array.isArray(richMessage?.blocks)) {
+        // Un finale a blocchi si legge come un `sendMessage` col suo testo —
+        // `payload.rich_message.blocks` resta comunque leggibile per gli
+        // scenari che asseriscono la struttura.
+        payload['text'] = testoDaBlocchi(richMessage.blocks);
+      }
+      // Rich is the transport; the scenarios assert legacy-shaped records.
+      if (method === 'sendRichMessage') recordedMethod = 'sendMessage';
+      if (method === 'sendRichMessageDraft') recordedMethod = 'sendMessageDraft';
 
       const ok = (result: unknown): void => {
         res.writeHead(200, { 'content-type': 'application/json' });
@@ -336,31 +384,32 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
       // caller already names it as `message_id` in the request payload
       // (`connectors/telegram/api.ts`), so it needs no manufacturing here; a
       // scenario reads it straight off `sent()[i].payload['message_id']`.
-      const createdId = method === 'sendMessage' || method === 'sendMessageDraft' ? nextMessageId++ : undefined;
+      const createdId = method === 'sendMessage' || method === 'sendMessageDraft' || method === 'sendRichMessage' || method === 'sendRichMessageDraft' ? nextMessageId++ : undefined;
 
       // Everything else is an outbound effect, and it is recorded before it is
       // answered: a scenario asserting "Muffin never sent this" needs the
       // record to exist even when the reply is uninteresting.
-      calls.push({ method, payload, ...(files ? { files } : {}), ...(createdId !== undefined ? { messageId: createdId } : {}) });
+      calls.push({ method: recordedMethod, payload, ...(files ? { files } : {}), ...(createdId !== undefined ? { messageId: createdId } : {}) });
 
       // B10-errori: a planned rejection wins over every effect branch below
       // (`sendMessage`, `editMessageText`, …). Placed after `calls.push`, on
       // purpose: a scenario asserting "Muffin tried to send this" needs the
       // record even for the attempt that got rejected.
-      const guastoInCoda = guasti.get(method)?.shift();
+      const guastoInCoda = guasti.get(recordedMethod)?.shift();
       if (guastoInCoda) {
         res.writeHead(guastoInCoda.status, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: false, description: guastoInCoda.description }));
         return;
       }
 
-      if (method === 'sendMessage' || method === 'editMessageText' || method === 'sendMessageDraft') {
+      if (method === 'sendMessage' || method === 'editMessageText' || method === 'sendMessageDraft' || method === 'sendRichMessage' || method === 'sendRichMessageDraft' || method === 'editMessageRichText') {
         ok({
           // An edit echoes the id it was given; a create hands out the fresh one.
           message_id: createdId ?? Number(payload['message_id'] ?? 0),
           date: Math.floor(Date.now() / 1000),
           chat: { id: Number(payload['chat_id'] ?? 0), type: 'private' },
           text: String(payload['text'] ?? ''),
+          ...(payload['rich_message'] !== undefined ? { rich_message: payload['rich_message'] } : {}),
         });
         return;
       }
@@ -389,8 +438,16 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
     sent: () => calls.slice(),
     messages: () =>
       calls
-        .filter((c) => c.method === 'sendMessage')
-        .map((c) => ({ chatId: Number(c.payload['chat_id'] ?? 0), text: String(c.payload['text'] ?? '') })),
+        .filter((c) => c.method === 'sendMessage' || c.method === 'sendRichMessage')
+        .map((c) => ({
+          chatId: Number(c.payload['chat_id'] ?? 0),
+          text: String(
+            c.payload['text'] ??
+              (c.payload['rich_message'] as { html?: string } | undefined)?.html?.replace(/<br>/g, '\n') ??
+              testoDaBlocchi((c.payload['rich_message'] as { blocks?: unknown[] } | undefined)?.blocks) ??
+              '',
+          ),
+        })),
     documents: () =>
       calls
         .filter((c) => c.method === 'sendDocument')

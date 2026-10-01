@@ -2,11 +2,13 @@ import type { CallbackQuery, ChatMemberUpdated, Message, MessageOrigin, Update }
 import { randomBytes } from 'node:crypto';
 import type { LoopDeps, TurnDelta, TurnEvent } from '../../agent/loop.js';
 import { routeContinuationTarget } from '../../agent/loop.js';
+import type { ApprovalRequest, ApprovalWhere, Approver } from '../../agent/loop.js';
 import type { AttachStream } from '../../agent/turn-lane.js';
 import { COMANDI, sembraComando, type Controlli } from '../../agent/comandi.js';
 import { recoveredText } from '../../agent/recovered-text.js';
 import type { PendingPairing } from '../../core/config/pairing.js';
 import type { ModelLane } from '../../core/turns/model-lane.js';
+import { decodeWaitFor } from '../../core/turns/wait.js';
 import { fence } from '../../core/memory/spotlight.js';
 import type { SessionStore } from '../../core/session/store.js';
 import type { TrustTier } from '../../core/policy/types.js';
@@ -33,6 +35,7 @@ import {
 } from '../shared/ingress/router.js';
 import { telegramPort } from './surface.js';
 import { TelegramError, type TelegramApiLike } from './api.js';
+import { approvatoreTelegram } from './approval.js';
 import {
   deliverTelegram,
   type TelegramDeliveryOutcome,
@@ -57,8 +60,8 @@ import type { Voce } from '../../core/audio/voce.js';
 type Arrivo = Arrival;
 
 /** Solo i due metodi che questo file usa: il connettore non possiede il registro. */
-type ApprovalDecide = (id: string, decision: 'allow' | 'deny', now: Date) => 'ok' | 'already' | 'unknown';
-type ApprovalGet = (id: string) => { turnId: string; capability: string; resource: string | null } | null;
+type ApprovalDecide = (id: string, decision: 'allow' | 'deny', now: Date) => 'ok' | 'already' | 'unknown' | 'withdrawn';
+type ApprovalGet = (id: string) => { id: string; turnId: string; capability: string; resource: string | null } | null;
 import { startPresence } from './presence.js';
 import { avvisoAllOwner, decidiInvito, SALUTO_NEL_GRUPPO, type Invito } from './invito.js';
 import { stanzaDi } from './negoziazione.js';
@@ -74,8 +77,9 @@ import { DRAIN_BUDGET_MS } from '../../core/gateway/service.js';
  * `drainBudgetMs` — see `stop()`'s doc comment.
  */
 const DEFAULT_STOP_BUDGET_MS = DRAIN_BUDGET_MS;
-import { escapeHtml, renderForTelegram, splitHtml, toTelegramHtml } from './render.js';
-import { normalizeInboundRich, planRich } from './rich.js';
+import { escapeHtml, splitHtml, toTelegramHtml } from './render.js';
+import { present, presentationOf, presentationOfHtml } from './present.js';
+import { normalizeInboundRich, planRich, RICH_COMPAT_CHARS, richFitsHard, richFromHtml, turnRichMessage } from './rich.js';
 import { UpdateInbox, type StoredUpdate } from './updates.js';
 
 /**
@@ -653,8 +657,25 @@ export function indirizzoDi(incoming: Incoming): Record<string, unknown> {
     chatId: incoming.chatId,
     messageId: incoming.messageId,
     ...(incoming.threadId === undefined ? {} : { threadId: incoming.threadId }),
-    channel: `telegram:${incoming.chatId}`,
+    channel: canaleDi(incoming),
   };
+}
+
+/**
+ * Il canale di questa conversazione — la stringa che il registro superfici
+ * legge, e che `deliverFile`/`deliver` riportano al topic.
+ *
+ * `telegram:<chatId>` è la forma di sempre (DM, gruppi, ogni riga già
+ * installata); `telegram:<chatId>#<threadId>` è la stessa stanza **dentro un
+ * topic**. Scritta qui una volta e non due: `indirizzoDi` (l'indirizzo
+ * durevole) e `eventoDi` (l'indirizzo vivo che `runWork` passa come
+ * `replyChannel`) devono dire la stessa cosa, o `send_file` in un topic
+ * dipende da quale dei due ha vinto la corsa.
+ */
+export function canaleDi(incoming: Incoming): string {
+  return incoming.threadId === undefined
+    ? `telegram:${incoming.chatId}`
+    : `telegram:${incoming.chatId}#${incoming.threadId}`;
 }
 
 /**
@@ -982,32 +1003,50 @@ export class TelegramConnector {
   private readonly transcriptInSospeso = new Map<string, Transcript>();
 
   /**
-   * The transcript message a just-finished turn's real answer should
-   * **extend** instead of arriving beside — tool steps happened this turn,
-   * so there is already a real, durable message for the answer to join.
-   * Written by `noteTranscriptHandoff` the moment a transcript closes for
-   * good (never for a turn that is merely pausing — see the two call sites),
-   * read and deleted the one time `deliverTo` builds a plan for that turn.
+   * La trascrizione viva di ogni chat, finché il turno gira.
    *
-   * This is the fix for the other half of the two-bubble defect
-   * (`docs/evidence/turno-sospendibile.md`): before this slice, the tool
-   * trail (`transcript.ts`) and the final answer (`deliverTo`) were two
-   * independent `sendMessage` calls for the same turn — measured on the
-   * owner's own chat as a stray message id sitting between the question and
-   * the answer on three turns out of eight, exactly the ones that used a
-   * tool. `deliverTo` now **edits** this message into steps-plus-answer
-   * instead, through the same durable, crash-recoverable write-ahead every
-   * other delivery already goes through — `TelegramDeliveryStore.plan()`
-   * freezes the combined text before any network call, so a crash right
-   * after does not lose the merge, only a crash *before* this map even has
-   * the entry does (see `deliverTo`'s own comment).
+   * Serve all'approvatore: la domanda di approvazione è un passo del turno,
+   * non un messaggio a parte, e per scriverla — e attaccarci la tastiera — deve
+   * raggiungere il messaggio che il turno sta già usando. La lane è per chat
+   * («una chat, un turno alla volta»), quindi la chiave è il chat id.
+   *
+   * Registrata in `apriIlVivo`/`resumeStream`, tolta nei loro `stop`/`close`.
+   * Un riavvio la perde, e va bene: l'approvatore ripiega sul messaggio
+   * autonomo, che è la garanzia che la domanda esista comunque.
+   */
+  private readonly transcriptVivi = new Map<number, Transcript>();
+
+  /**
+   * Gli id delle approvazioni che la trascrizione ha preso in carico.
+   *
+   * `handleCallback` deve sapere se la decisione va scritta sulla trascrizione
+   * (`resolveAsk` toglie la tastiera e risolve il passo) o sul messaggio
+   * autonomo del ripiego (l'edit con `✓ consentito`). In-memory come
+   * `transcriptInSospeso`: dopo un riavvio l'id non c'è, e il callback torna
+   * alla strada autonoma — che è anche quella giusta, perché dopo un riavvio
+   * la trascrizione viva non esiste più.
+   */
+  private readonly approvalSulTurno = new Set<string>();
+
+  /**
+   * What a just-finished turn's answer must account for: the process it
+   * showed and, when there is one, the real message it should extend.
+   *
+   * In a group `messageId` is that message (the tool trail is persistent) and
+   * the answer **edits** it, through the durable, crash-recoverable
+   * write-ahead every delivery goes through. In a DM it is `null`: the process
+   * only ever lived in the ephemeral draft, and the answer is a fresh rich
+   * send whose `details` block carries `process`. Written by
+   * `noteTranscriptHandoff` the moment a transcript closes for good (never for
+   * a turn that is merely pausing — see the two call sites), read and deleted
+   * the one time `deliverTo` builds a plan for that turn.
    *
    * In-memory only, same accepted degradation as `transcriptInSospeso` right
    * above: a process boundary between "transcript closed" and "answer
    * delivered" loses the entry, and `deliverTo` falls back to a plain new
    * message — the pre-existing shape, never worse.
    */
-  private readonly transcriptHandoff = new Map<string, { messageId: number; stepsText: string }>();
+  private readonly transcriptHandoff = new Map<string, { messageId: number | null; process: string[]; processHtml: string }>();
 
   private noteTranscriptHandoff(turnId: string, transcript: Transcript): void {
     const handoff = transcript.handoff();
@@ -1313,25 +1352,33 @@ export class TelegramConnector {
    * Both the fresh inbound path and the lane/recovery path converge here: one
    * frozen wire plan, one first-writer-wins attempt per part.
    *
-   * **One bubble, not two.** `this.transcriptHandoff` names the message the
-   * tool trail (`transcript.ts`) already sent this turn, if any — read and
-   * cleared here, once. When present, the answer is not a message beside it:
-   * `combineWithHandoff` below prepends the steps' own settled text and the
-   * whole thing is split as one document, so the plan's first part **edits**
-   * that message (steps kept, answer appended) and only an overflow spills
-   * into further `send`s after it — never a `send` of its own for the answer.
+   * **One durable message per turn, two shapes.** `this.transcriptHandoff`
+   * names the message the tool trail (`transcript.ts`) already sent this turn,
+   * if any — read and cleared here, once.
    *
-   * The one gap this cannot close: a crash between `transcript.stop()`
+   * - A handoff with a **real message** (a group, no draft): the answer is not
+   *   a message beside it — the steps' settled text is prepended and the whole
+   *   thing split as one document, so the plan's first part **edits** that
+   *   message (steps kept, answer appended) and only an overflow spills into
+   *   further `send`s after it.
+   * - A **DM** (positive chat id, the room with the draft): nothing is ever
+   *   edited; the answer is a fresh rich `send` whose first block collapses
+   *   the process in a `details` block (`rich.ts#turnRichMessage`), the same
+   *   shape the draft had. Its legacy fallback prepends the process text, so
+   *   the trail is never lost even if rich is refused. This holds for tool
+   *   turns and plain ones alike — no shape change at the swap.
+   *
+   * The one gap neither shape closes: a crash between `transcript.stop()`
    * setting the handoff and this method's own `store.plan()` call, which is
-   * what actually freezes it durably. `store.plan()` freezes the *combined*
-   * html the very first time it runs for this `turnId` — every later replay
-   * (a retry, a recovery in a different process) reuses that frozen plan
-   * byte-for-byte regardless of what this method computes on that later call
+   * what actually freezes it durably. `store.plan()` freezes the plan the very
+   * first time it runs for this `turnId` — every later replay (a retry, a
+   * recovery in a different process) reuses that frozen plan byte-for-byte
+   * regardless of what this method computes on that later call
    * (`TelegramDeliveryStore.plan`'s own contract) — so once this method has
-   * run once with a handoff, the merge is as durable as any other delivery.
-   * Before that first run, there is nothing durable yet to lose beyond the
-   * handoff map entry itself, and losing it here means exactly what losing
-   * it meant before this slice: one extra message, never a dropped answer.
+   * run once with a handoff, the delivery is as durable as any other. Before
+   * that first run, there is nothing durable yet to lose beyond the handoff
+   * map entry itself, and losing it here means exactly what losing it meant
+   * before this slice: one extra message, never a dropped answer.
    */
   async deliverTo(turnId: string, replyTo: Record<string, unknown>, text: string): Promise<TelegramDeliveryOutcome> {
     const chatId = replyTo['chatId'];
@@ -1339,6 +1386,13 @@ export class TelegramConnector {
       throw new Error(`replyTo senza chatId numerico: ${JSON.stringify(replyTo)}`);
     }
     const replyToMessage = typeof replyTo['messageId'] === 'number' ? replyTo['messageId'] : undefined;
+    // La lease corrente decide quale piano congelato appartiene a QUESTA
+    // consegna. Un turno ripreso consegna la sua risposta sotto una lease
+    // successiva, e senza questo numero il piano già congelato del
+    // diagnostico la inghiottirebbe: `plan` restituirebbe le parti di prima,
+    // tutte `sent`, e la superficie riferirebbe una consegna mai avvenuta
+    // (misurato il 28/09 sulla catena reale `riprendi`).
+    const leaseIndex = this.deps.loop.turns.get(turnId)?.leaseIndex ?? 0;
     // Sta sulla riga durevole e non su questo stack, perché la ripresa dopo
     // un riavvio legge la riga: senza, un turno ripescato rispondeva in
     // *General* invece che nel topic da cui era partita la domanda.
@@ -1348,16 +1402,23 @@ export class TelegramConnector {
     const handoff = this.transcriptHandoff.get(turnId);
     if (handoff) this.transcriptHandoff.delete(turnId);
 
-    const parts = handoff
-      ? splitHtml(handoff.stepsText === '' ? toTelegramHtml(text) : `${handoff.stepsText}\n\n${toTelegramHtml(text)}`)
-      : renderForTelegram(text);
+    const processHtml = handoff?.processHtml ?? '';
+    // A handoff with a real message (a group with no draft) edits that bubble;
+    // an ephemeral one (a DM) has nothing to edit, so this is a fresh send.
+    const editId = handoff !== undefined && handoff.messageId !== null ? handoff.messageId : editMessageId;
+    // Una chat privata è la stanza con la bozza: lì il turno ha una sola forma,
+    // i blocchi, e il finale la ripete — mai il vecchio cambio forma.
+    const isPrivate = chatId > 0;
+
+    // The unsplit HTML both lanes start from: `splitHtml` is the legacy plan
+    // (and the rich fallback); the rich lane carries `combined` whole.
+    const combined =
+      processHtml === '' ? toTelegramHtml(text) : `${processHtml}\n\n${toTelegramHtml(text)}`;
+    const parts = splitHtml(combined);
 
     const legacy: TelegramDeliveryPlanPart[] = parts.map((html, i) => {
-      if (i === 0 && handoff) {
-        return { operation: 'edit', chatId, threadId, replyTo: null, editMessageId: handoff.messageId, html };
-      }
-      if (i === 0 && editMessageId !== undefined) {
-        return { operation: 'edit', chatId, threadId, replyTo: null, editMessageId, html };
+      if (i === 0 && editId !== undefined) {
+        return { operation: 'edit', chatId, threadId, replyTo: null, editMessageId: editId, html };
       }
       return {
         operation: 'send',
@@ -1368,33 +1429,76 @@ export class TelegramConnector {
         html,
       };
     });
-    return deliverTelegram(this.deps.delivery, this.deps.api, turnId, this.maybeRich(text, legacy), () => this.now());
+
+    // In a DM the turn's one message is always blocks — the same shape the
+    // draft showed (process in `details`, answer as native blocks), whether the
+    // turn had tools or not. Da quando una domanda di approvazione apre il
+    // messaggio del turno, anche la consegna in DM è un **edit** di quel
+    // messaggio: stessa forma a blocchi, processo ripiegato nel `details`, una
+    // sola bolla per il turno. Un gruppo tiene l'edit-merge qui sotto (i suoi
+    // passi sono una traccia silenziosa e la risposta estende quella bolla).
+    if (isPrivate) {
+      const turn = turnRichMessage({ process: handoff?.process ?? [], answer: text });
+      const first = legacy[0];
+      if (turn !== null && first !== undefined && richFitsHard(turn) === null) {
+        return deliverTelegram(
+          this.deps.delivery,
+          this.deps.api,
+          turnId,
+          [{ ...first, kind: 'rich' as const, rich: turn, fallback: legacy }],
+          () => this.now(),
+          leaseIndex,
+        );
+      }
+      return deliverTelegram(this.deps.delivery, this.deps.api, turnId, legacy, () => this.now(), leaseIndex);
+    }
+    return deliverTelegram(this.deps.delivery, this.deps.api, turnId, this.maybeRich(text, combined, legacy), () => this.now(), leaseIndex);
   }
 
   /**
-   * Rich final, Bot API 10.3 — exactly one case, and the restriction is the
-   * guarantee: a rich final rides ONLY a fresh `send` (no transcript handoff
-   * being extended, no owned edit being rewritten). A handoff message already
-   * carries settled steps/preamble in legacy HTML, and a rich edit would
-   * replace them with the answer alone — steps lost on screen. A fresh send
-   * carries nothing yet, so nothing can be lost.
+   * Rich final, Bot API 10.3 — two cases.
    *
-   * That is also why a table answered after twelve tool calls still goes
-   * legacy: preserving the trail beats prettier cells. A rich final that
-   * preserves settled transcript content needs the raw step text at this
-   * boundary — a broader Turn-contract change, deliberately NOT smuggled in
-   * here.
+   * A fresh `send` whose answer is structurally rich (tables, checklists,
+   * details, headings) rides `blocks`, as before: the richest rendering on
+   * the message that carries the answer.
    *
-   * The legacy plan is computed first and always: it is the frozen fallback
-   * a deterministic rich rejection expands into (`delivery.ts`), and the
-   * path taken whole when the answer is ordinary prose.
+   * An `edit` — the answer that extends the message already showing the step
+   * trail — rides rich as `html`: the **same bytes** the legacy path would
+   * edit in (`stepsText + answer`), so nothing of the trail is lost, and the
+   * message becomes a rich one instead of staying legacy. The owner asked for
+   * rich end to end (2026-09-26): the old rule ("a rich edit would replace the
+   * steps with the answer alone") assumed the rich payload was the answer
+   * only; carrying the combined HTML removes that reason, because the rich
+   * message IS the trail plus the answer.
+   *
+   * The legacy plan is computed first and always: it is the frozen fallback a
+   * deterministic rich rejection expands into (`delivery.ts`), and the path
+   * taken whole when rich does not fit the protocol limits.
    */
-  private maybeRich(text: string, legacy: TelegramDeliveryPlanPart[]): TelegramDeliveryPlanPart[] {
+  private maybeRich(
+    text: string,
+    combinedHtml: string,
+    legacy: TelegramDeliveryPlanPart[],
+  ): TelegramDeliveryPlanPart[] {
     const first = legacy[0];
-    if (first === undefined || first.operation !== 'send') return legacy;
+    if (first === undefined) return legacy;
     const rich = planRich(text);
-    if (rich.mode !== 'rich') return legacy;
-    return [{ ...first, kind: 'rich' as const, rich: rich.message, fallback: legacy }];
+    const richConstructs = rich.mode === 'legacy' ? rich.richConstructs : false;
+    if (first.operation === 'send' && rich.mode === 'rich') {
+      return [{ ...first, kind: 'rich' as const, rich: rich.message, fallback: legacy }];
+    }
+    // An answer that HAS rich-native constructs but is over the compatibility
+    // ceiling stays on the proven legacy chunks — on BOTH lanes, not only the
+    // fresh send: the ceiling is a client-rendering policy with its own
+    // falsifier, not a cut. The html lane builds no native blocks, so falling
+    // back to the bounded legacy chunks costs no rendering.
+    if (richConstructs || combinedHtml.length > RICH_COMPAT_CHARS) return legacy;
+    // Ordinary prose, and the answer that extends the step trail, ride rich as
+    // HTML — the same bytes the legacy lane would send or edit, richer
+    // transport, one message.
+    const payload = richFromHtml(combinedHtml);
+    if (richFitsHard(payload) !== null) return legacy;
+    return [{ ...first, kind: 'rich' as const, rich: payload, fallback: legacy }];
   }
 
   /**
@@ -1440,6 +1544,7 @@ export class TelegramConnector {
         ...(this.deps.log ? { log: this.deps.log } : {}),
       });
     this.transcriptInSospeso.delete(record.id);
+    this.transcriptVivi.set(chatId, transcript);
     const presencePromise = startPresence(this.deps.api, chatId, threadId);
 
     let deltaText = '';
@@ -1479,28 +1584,85 @@ export class TelegramConnector {
       signal: vivo.controller.signal,
       steer: () => vivo.correzioni.splice(0),
       stop: async () => {
+        if (this.transcriptVivi.get(chatId) === transcript) this.transcriptVivi.delete(chatId);
         release();
         const presence = await presencePromise;
         await presence.stop();
+        // Un turno ripreso che sospende **di nuovo su un'approvazione** non ha
+        // finito: la trascrizione resta viva e azionabile, come nel percorso
+        // fresco (`apriIlVivo.ran`), o `transcript.stop()` toglie la tastiera
+        // alla domanda appena mostrata e il passo si congela mentre il turno
+        // aspetta (issue #746). La riga durevole è la prova: `waiting` con
+        // barriera `approval:<id>`. `makeLaneRunner` chiama `stop()` sempre,
+        // anche sull'esito sospeso, quindi è qui che si decide di non chiudere.
+        const dopo = this.deps.loop.turns.get(record.id);
+        if (dopo !== null && dopo.status === 'waiting' && decodeWaitFor(dopo.waitFor)?.kind === 'approval') {
+          this.transcriptInSospeso.set(record.id, transcript);
+          return;
+        }
         await transcript.stop();
-        // Unconditional, same as `runFresh`'s own call: `stop()` here cannot
-        // see whether this resume is about to suspend again (another
-        // approval, another `wait`) — that outcome is `makeLaneRunner`'s, not
-        // this closure's. A resume that *does* suspend again leaves a stale
-        // entry keyed by this same `turnId`; it is overwritten the next time
-        // this turn's transcript stops, before `deliverTo` is ever called for
-        // it (`makeLaneRunner` always stops the stream before delivering) —
-        // and if the process dies with the entry never overwritten, the map
-        // itself is gone with it, so recovery just finds none. The residual
-        // is the rarer case still: this same process resumes the turn again
-        // through a path other than `resumeStream` (no telegram connector at
-        // that moment) — `deliverTo` would then extend a stale message
-        // instead of sending a fresh one. Narrower than, and no worse than,
-        // the pre-existing gap in re-suspension handling this map already had.
+        this.dimenticaTrascrizione(transcript);
+        // Da qui in poi il turno ha finito: `stop()` è la finalizzazione, e il
+        // ramo che resta è il residuo noto di una ripresa che sospende di
+        // nuovo su un `wait` **non** di approvazione (la guardia qui sopra ha
+        // già tenuto aperto il caso approval). Una voce stantia per lo stesso
+        // `turnId` viene sovrascritta al prossimo stop di questo turno, prima
+        // che `deliverTo` venga mai chiamato per lui (`makeLaneRunner` ferma
+        // sempre lo stream prima di consegnare); e se il processo muore con la
+        // voce mai sovrascritta, la mappa sparisce con lui, quindi il recovery
+        // semplicemente non la trova. Il residuo è il caso ancora più raro:
+        // questo stesso processo riprende il turno per una strada diversa da
+        // `resumeStream` (nessun connettore Telegram in quel momento) —
+        // `deliverTo` estenderebbe un messaggio stantio invece di mandarne uno
+        // nuovo. Più stretto, e non peggiore, del buco preesistente che questa
+        // mappa aveva già sulla ri-sospensione.
         this.noteTranscriptHandoff(record.id, transcript);
       },
     };
   };
+
+  /**
+   * La domanda di approvazione su Telegram: prima sul messaggio del turno,
+   * poi — solo se nessuna trascrizione viva può ospitarla — su un messaggio
+   * autonomo.
+   *
+   * La trascrizione si trova per chat, non per turno: la lane è per chat
+   * («una chat, un turno alla volta»), e la stessa chat non può avere due
+   * trascrizioni vive. Se non c'è — processo riavviato, turno ripreso da
+   * un'altra lane, trascrizione spenta da un rifiuto — `approvatoreTelegram`
+   * manda la bolla con la tastiera come prima: la domanda non resta mai muta.
+   *
+   * Presa la domanda, la trascrizione si registra **subito** in
+   * `transcriptInSospeso` per il suo turno: un click che arriva prima che la
+   * sospensione scriva la mappa deve trovare lo stesso passo da risolvere, e
+   * il callback lo cerca per turno — mai per chat, che risolverebbe il turno
+   * sbagliato (#745).
+   */
+  async approval(request: ApprovalRequest, where: ApprovalWhere): Promise<Awaited<ReturnType<Approver>>> {
+    const chatId = where.replyTo?.['chatId'];
+    const transcript = typeof chatId === 'number' ? this.transcriptVivi.get(chatId) : undefined;
+    if (transcript !== undefined && where.approvalId !== undefined) {
+      const presa = await transcript.ask({ request, approvalId: where.approvalId });
+      if (presa) {
+        this.approvalSulTurno.add(where.approvalId);
+        this.transcriptInSospeso.set(where.turnId, transcript);
+        return 'asked';
+      }
+    }
+    return approvatoreTelegram(this.deps.api)(request, where);
+  }
+
+  /**
+   * La trascrizione è stata finalizzata: nessuna voce di `transcriptInSospeso`
+   * può più puntarle. Le voci nascono quando una domanda è presa e alla
+   * sospensione; un turno che finisce senza sospendere ne lascerebbe una
+   * stantia, e la ripresa successiva riuserebbe una trascrizione spenta.
+   */
+  private dimenticaTrascrizione(transcript: Transcript): void {
+    for (const [id, t] of this.transcriptInSospeso) {
+      if (t === transcript) this.transcriptInSospeso.delete(id);
+    }
+  }
 
   /**
    * Uno svuotamento alla volta, in background. Un secondo `scheduleDrain`
@@ -1693,7 +1855,7 @@ export class TelegramConnector {
     if (esito.azione === 'resta') return;
 
     try {
-      await this.deps.api.sendMessage(chat.id, escapeHtml(SALUTO_NEL_GRUPPO));
+      await present(this.deps.api, { chatId: chat.id }, presentationOfHtml(escapeHtml(SALUTO_NEL_GRUPPO)));
     } catch (error) {
       log(`telegram: saluto non inviato in ${chat.id} — ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -1701,7 +1863,7 @@ export class TelegramConnector {
     const ownerChat = this.deps.config.ownerChatId;
     if (ownerChat !== undefined) {
       try {
-        await this.deps.api.sendMessage(ownerChat, escapeHtml(avvisoAllOwner(invito, esito)));
+        await present(this.deps.api, { chatId: ownerChat }, presentationOfHtml(escapeHtml(avvisoAllOwner(invito, esito))));
       } catch (error) {
         log(`telegram: avviso all'owner non inviato — ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -2046,7 +2208,7 @@ export class TelegramConnector {
       compositionId: String(stored.updateId),
       identity: identitaDi(incoming),
       address: {
-        channel: `telegram:${incoming.chatId}`,
+        channel: canaleDi(incoming),
         replyTo: String(incoming.messageId),
         // The opaque durable record, unchanged: it is what `turns.replyTo`
         // already holds on this installation, and this slice does not touch
@@ -2182,10 +2344,15 @@ export class TelegramConnector {
   /** Una frase sola, non richiesta, nella stanza da cui è arrivato questo update. */
   private async dilloA(incoming: Incoming, testo: string): Promise<void> {
     try {
-      await this.deps.api.sendMessage(incoming.chatId, testo, {
-        replyTo: incoming.messageId,
-        ...(incoming.threadId === undefined ? {} : { threadId: incoming.threadId }),
-      });
+      await present(
+        this.deps.api,
+        {
+          chatId: incoming.chatId,
+          replyTo: incoming.messageId,
+          ...(incoming.threadId === undefined ? {} : { threadId: incoming.threadId }),
+        },
+        presentationOfHtml(escapeHtml(testo)),
+      );
     } catch (error) {
       (this.deps.log ?? (() => {}))(
         `telegram: conferma di coda non inviata — ${error instanceof Error ? error.message : String(error)}`,
@@ -2219,6 +2386,8 @@ export class TelegramConnector {
       ...(incoming.threadId === undefined ? {} : { threadId: incoming.threadId }),
       ...(this.deps.log ? { log: this.deps.log } : {}),
     });
+    // L'approvatore la trova da qui: la domanda vive sul messaggio del turno.
+    this.transcriptVivi.set(incoming.chatId, transcript);
     /**
      * Set the moment this turn suspends on an approval, and read by `close()`
      * below — which unconditionally calls `transcript.stop()` as a safety net.
@@ -2296,13 +2465,17 @@ export class TelegramConnector {
         if (result.stopped !== 'suspended') this.noteTranscriptHandoff(result.turnId, transcript);
       },
       close: async () => {
+        if (this.transcriptVivi.get(incoming.chatId) === transcript) this.transcriptVivi.delete(incoming.chatId);
         this.corsie.close(this.corsia(incoming.chatId));
         await presence.stop();
         // Non su un turno lasciato aperto per l'approvazione: `stop()` è
         // idempotente, ma qui vorrebbe dire congelare per sempre proprio il
         // segmento che `transcriptInSospeso.set(...)` ha appena promesso di
         // tenere vivo per `resolveAsk`.
-        if (!lasciataAperta) await transcript.stop();
+        if (!lasciataAperta) {
+          await transcript.stop();
+          this.dimenticaTrascrizione(transcript);
+        }
       },
     };
   }
@@ -2364,7 +2537,7 @@ export class TelegramConnector {
           this.deps.savePairing!({ pairing: next });
           this.deps.config.pairing = next ?? undefined;
         },
-        say: (text) => this.deps.api.sendMessage(incoming.chatId, text),
+        say: (text) => present(this.deps.api, { chatId: incoming.chatId }, presentationOfHtml(escapeHtml(text))),
         // A wrong or expired code must not turn the personal bot into a reply
         // surface for strangers. The valid one-time secret still confirms
         // pairing to the account that proved it.
@@ -2448,40 +2621,82 @@ export class TelegramConnector {
     const esito = this.deps.approvals.decide(id, decisione, now);
     if (esito === 'unknown') return rispondi('Questa richiesta non esiste più.');
     if (esito === 'already') return rispondi('Avevi già risposto a questa richiesta.');
+    if (esito === 'withdrawn') {
+      // Il turno è finito mentre la domanda era aperta (#742): nessuno ha
+      // risposto, quindi non si dice «consentito» né «rifiutato» — si dice che
+      // non serve più, e la tastiera si toglie per costruzione.
+      await rispondi('Non serve più: quel turno è finito.');
+      const testo = query.message;
+      if (testo !== undefined) {
+        try {
+          await this.deps.api.editMessageReplyMarkup(testo.chat.id, testo.message_id);
+        } catch {
+          /* il messaggio può essere troppo vecchio per essere modificato */
+        }
+      }
+      return;
+    }
 
     await rispondi(decisione === 'allow' ? 'Consentito.' : 'Rifiutato.');
+
+    const riga = this.deps.approvals.get(id);
+    // Se la domanda è stata presa in carico dalla trascrizione del turno, la
+    // tastiera e il passo sono suoi: `resolveAsk` la toglie per costruzione e
+    // risolve la riga dentro il Processo. Un edit autonomo qui scriverebbe
+    // dentro il messaggio del turno, e il primo render della ripresa lo
+    // sovrascriverebbe comunque.
+    const presaDallaTrascrizione = this.approvalSulTurno.delete(id);
 
     // I pulsanti spariscono e il messaggio dice cosa è stato deciso: una
     // tastiera che resta premibile dopo la risposta invita a rispondere due
     // volte a una domanda che è già chiusa.
+    //
+    // La domanda di ripiego ora parte ricca (`present`): il messaggio del
+    // callback può non avere `text` ma solo `rich_message` — la stessa forma
+    // che `parseMessage` già legge. Guardare solo `text` salterebbe l'edit
+    // proprio per le domande che manda Muffin, e la tastiera resterebbe viva.
     const testo = query.message;
-    if (testo !== undefined && 'text' in testo && typeof testo.text === 'string') {
-      try {
-        await this.deps.api.editMessageText(
-          testo.chat.id,
-          testo.message_id,
-          `${escapeHtml(testo.text)}\n\n<b>${decisione === 'allow' ? '✓ consentito' : '✗ rifiutato'}</b>`,
-        );
-        // Esplicito, non per omissione: `editMessageText` non dice cosa
-        // succede alla tastiera quando `reply_markup` non è passato — non è
-        // documentato dalla fonte primaria (`api.ts`'s
-        // `editMessageReplyMarkup`, letta il 03/09/2026). Una seconda
-        // chiamata dedicata la toglie per costruzione.
-        await this.deps.api.editMessageReplyMarkup(testo.chat.id, testo.message_id);
-      } catch {
-        /* il messaggio può essere troppo vecchio per essere modificato: la decisione è già presa */
+    if (!presaDallaTrascrizione && testo !== undefined) {
+      const base =
+        'text' in testo && typeof testo.text === 'string'
+          ? testo.text
+          : normalizeInboundRich(testo as { rich_message?: unknown });
+      if (base !== null) {
+        // Il thread serve al ripiego quando la domanda era spezzata: i pezzi
+        // in coda a un edit sono `sendMessage`, e senza thread finirebbero in
+        // *General*.
+        const threadId = (testo as { message_thread_id?: unknown }).message_thread_id;
+        try {
+          // La tastiera si toglie con `keyboard: []` nella **stessa** chiamata
+          // che scrive il verdetto — rimozione esplicita, non per omissione:
+          // `editMessageText` non dice cosa succede alla tastiera quando
+          // `reply_markup` non è passato (`api.ts`, letta il 03/09/2026).
+          await present(
+            this.deps.api,
+            {
+              chatId: testo.chat.id,
+              editMessageId: testo.message_id,
+              keyboard: [],
+              ...(typeof threadId === 'number' ? { threadId } : {}),
+            },
+            presentationOfHtml(
+              `${escapeHtml(base)}\n\n<b>${decisione === 'allow' ? '✓ consentito' : '✗ rifiutato'}</b>`,
+            ),
+          );
+        } catch {
+          /* il messaggio può essere troppo vecchio per essere modificato: la decisione è già presa */
+        }
       }
     }
 
-    const riga = this.deps.approvals.get(id);
-    // Il verdetto rientra nel passo che lo aveva chiesto — vedi
-    // `transcriptInSospeso`. Assente per un turno che non aveva mai una
-    // trascrizione aperta (un crash nel mezzo, un altro processo che l'aveva
-    // presa): `resolveAsk` sul suo `Transcript` è l'unico modo di trovare
-    // quel passo, e senza il riferimento non c'è niente da correggere qui —
-    // il turno riprende comunque, solo con la riga `⏸` rimasta com'era.
+    // Il verdetto rientra nel passo che lo aveva chiesto. La ricerca è **per
+    // turno** e la chiave del passo è l'**id dell'approvazione**: un ripiego
+    // per chat risolverebbe il passo di un altro turno con la stessa
+    // capability, e una chiave per capability risolverebbe la domanda
+    // sbagliata quando due `sys.shell` su comandi diversi sono in attesa
+    // (#745).
     if (riga !== null) {
-      this.transcriptInSospeso.get(riga.turnId)?.resolveAsk(riga.capability, decisione === 'allow');
+      this.transcriptInSospeso.get(riga.turnId)?.resolveAsk({ approvalId: riga.id, capability: riga.capability }, decisione === 'allow');
     }
     if (riga !== null && this.deps.loop.turns.wake(riga.turnId, now)) {
       // Solo se la riga si è davvero mossa: svegliare la corsia per un turno
@@ -2526,21 +2741,21 @@ export class TelegramConnector {
       // sua corsia, e `/stop` dal gruppo non ferma il turno della privata.
       controlli: controlliPerCorsia(this.corsie, this.corsia(incoming.chatId), this.deps.pausa),
       esegui: this.deps.comandi,
-      // Il dialetto resta qui. `renderForTelegram` taglia sotto il limite di
-      // Telegram: `/model --list` supera i 4096 caratteri con una manciata di
-      // modelli, e mandarne solo il primo pezzo sarebbe un elenco troncato in
-      // silenzio. La citazione sta sul primo: e' li' che si vede a quale
-      // messaggio si sta rispondendo.
+      // Il dialetto resta qui. La politica di presentazione (rich-first, con
+      // il ripiego legacy a pezzi sotto il limite) è di `present`: `/model
+      // --list` supera i 4096 caratteri con una manciata di modelli, e la
+      // citazione sta sul primo pezzo — è lì che si vede a quale messaggio si
+      // sta rispondendo.
       rispondi: async (testo) => {
-        const pezzi = renderForTelegram(testo);
-        for (const [i, pezzo] of pezzi.entries()) {
-          const topic = incoming.threadId === undefined ? {} : { threadId: incoming.threadId };
-          await this.deps.api.sendMessage(
-            incoming.chatId,
-            pezzo,
-            i === 0 ? { replyTo: incoming.messageId, ...topic } : topic,
-          );
-        }
+        await present(
+          this.deps.api,
+          {
+            chatId: incoming.chatId,
+            ...(incoming.threadId === undefined ? {} : { threadId: incoming.threadId }),
+            replyTo: incoming.messageId,
+          },
+          presentationOf(testo),
+        );
       },
     });
   }

@@ -72,6 +72,26 @@ A slice should make one coherent falsifiable claim. FAST maintenance items may b
 clustered when they remain independently readable; STANDARD/CRITICAL work should
 normally have one primary claim.
 
+### Brief shape
+
+A narrow goal is still good, but a claim that can distort product shape should be
+handed over with enough context that a locally correct change is not globally
+wrong. The proportional shape is:
+
+```text
+CONTEXT / PRODUCT PRINCIPLE   what this should feel like; which boundary is protected
+CURRENT OBSERVATION           what was measured on real HEAD / install
+TARGET SHAPE                  diagram, state transition or request path
+CONCRETE EXAMPLES             good UX and bad UX
+PREFERRED MINIMUM             pseudocode, candidate seam, existing primitive to reuse
+NON-GOALS                     what must not be generalized or built now
+FALSIFIER / ACCEPTANCE        the observable result that proves the claim
+ECONOMY                       smallest solution; targeted tests, then the gate
+```
+
+A one-number bug can still be a one-line brief; the amount of context is
+proportional to how much the claim can move product shape.
+
 ### Scope follows the outcome, not a firewall
 
 One primary outcome is a centre of gravity, not a prohibition on repairing what
@@ -360,6 +380,16 @@ Do not update history merely so it reads like HEAD. Do not put DAY-1 counts in t
 handoff or critical path. Do not put PR chronology in architecture/ADR. A current
 finding that has no authoritative home is a signal to choose one, not to copy it
 into several files.
+
+### Derive, don't remember
+
+If correctness depends on an agent or a person remembering to update it after
+the underlying system changes, prefer deriving it from the authoritative source.
+This class includes: current issue/program, current branch/PR/SHA, CI/check
+state, available provider/model list, supported modalities/reasoning settings,
+active credentials/capability connections, latest version/update availability,
+branch divergence and the live tool/provider catalog. Persist owner intent and
+policy; derive accidental state (from #669).
 
 ## Integration and stopping
 
