@@ -16,6 +16,7 @@ import {
   ProviderStreamError,
 } from '../providers/types.js';
 import { ReasoningConfigurationError, reasoningFromLegacyThinking } from '../providers/reasoning.js';
+import { ownedOpenRows } from './completion-gate.js';
 import { checkpoint, finish, releaseContinuable, suspendHere, type TurnScope } from './durability.js';
 import { resolveConversationId } from './conversation.js';
 import type { ExecutionAbortReason, ExecutionBudget, ModelCallLease, ModelCallTelemetry } from './execution-budget.js';
@@ -1110,6 +1111,25 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
           // risposta invece di un confronto di stringhe.
           turnId: record.id,
         });
+      }
+      // The completion gate (#811): a resumed turn that would settle
+      // `answered` with granted plan work still open settles `continuable`
+      // instead — a query on rows, never prose in context. Fresh turns
+      // (lease 0) own nothing and settle as before, so multi-turn plans
+      // written for later are unaffected. The refusal site above is
+      // deliberately excluded: a refused reply is already a terminal signal
+      // about the model, not work silently dropped.
+      if (scope.record.leaseIndex > 0) {
+        const leaseStartedAt = scope.deps.turns.leaseStartedAt(scope.record.id, scope.record.leaseIndex);
+        if (leaseStartedAt !== null) {
+          const open = scope.deps.todos.open(scope.input.tenant, scope.input.session.id);
+          const owned = ownedOpenRows({
+            open,
+            turnCreatedAt: scope.record.createdAt,
+            leaseStartedAt,
+          });
+          if (owned.length > 0) return releaseContinuable(scope, 'plan_open', 0, { openRows: owned });
+        }
       }
       return finish(scope, 'answered', text);
     }
