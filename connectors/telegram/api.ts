@@ -49,7 +49,7 @@ const REQUEST_TIMEOUT_MS = (POLL_SECONDS + 15) * 1000;
  * verde, `primary`. Un "rifiuta" e un "consenti" che si somigliano sono un
  * pulsante premuto per sbaglio.
  */
-type InlineButton = { text: string; callback_data: string; style?: 'danger' | 'success' | 'primary' };
+export type InlineButton = { text: string; callback_data: string; style?: 'danger' | 'success' | 'primary' };
 
 export type SendOptions = {
   replyTo?: number;
@@ -113,13 +113,13 @@ export interface TelegramApiLike {
    * one, and the type makes passing both unrepresentable.
    */
   sendRichMessage(chatId: number, rich: OutboundRich, options?: SendOptions): Promise<Message>;
-  editMessageText(chatId: number, messageId: number, html: string): Promise<Message | boolean>;
+  editMessageText(chatId: number, messageId: number, html: string, options?: Pick<SendOptions, 'keyboard'>): Promise<Message | boolean>;
   /**
    * Bot API 10.1+: `editMessageText` with `rich_message` instead of `text`.
    * Same exclusivity as the send pair: rich OR text, never both.
    */
-  editMessageRichText(chatId: number, messageId: number, rich: OutboundRich): Promise<Message | boolean>;
-  editMessageReplyMarkup(chatId: number, messageId: number): Promise<Message | boolean>;
+  editMessageRichText(chatId: number, messageId: number, rich: OutboundRich, options?: Pick<SendOptions, 'keyboard'>): Promise<Message | boolean>;
+  editMessageReplyMarkup(chatId: number, messageId: number, keyboard?: InlineButton[][]): Promise<Message | boolean>;
   deleteMessage(chatId: number, messageId: number): Promise<boolean>;
   sendChatAction(chatId: number, action?: string, threadId?: number): Promise<boolean>;
   sendMessageDraft(chatId: number, draftId: number, text: string, options?: DraftOptions): Promise<boolean>;
@@ -343,13 +343,18 @@ export class TelegramApi implements TelegramApiLike {
     });
   }
 
-  editMessageText(chatId: number, messageId: number, html: string): Promise<Message | boolean> {
+  editMessageText(chatId: number, messageId: number, html: string, options: Pick<SendOptions, 'keyboard'> = {}): Promise<Message | boolean> {
     return this.effect<Message | boolean>('editMessageText', {
       chat_id: chatId,
       message_id: messageId,
       text: html,
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
+      // La tastiera si ripassa esplicita finché è viva: la pagina ufficiale
+      // non promette cosa succede alla tastiera esistente quando `reply_markup`
+      // è omesso (§4.4 dell'evidenza 03/09), e un edit del processo non deve
+      // poterla far sparire per omissione.
+      ...(options.keyboard === undefined ? {} : { reply_markup: { inline_keyboard: options.keyboard } }),
     });
   }
 
@@ -359,12 +364,18 @@ export class TelegramApi implements TelegramApiLike {
    * 400 «message is not modified» on an identical edit is a delivery, not a
    * failure (handled in `delivery.ts`, not here).
    */
-  editMessageRichText(chatId: number, messageId: number, rich: OutboundRich): Promise<Message | boolean> {
+  editMessageRichText(
+    chatId: number,
+    messageId: number,
+    rich: OutboundRich,
+    options: Pick<SendOptions, 'keyboard'> = {},
+  ): Promise<Message | boolean> {
     this.assertRichFits(rich);
     return this.effect<Message | boolean>('editMessageText', {
       chat_id: chatId,
       message_id: messageId,
       rich_message: rich,
+      ...(options.keyboard === undefined ? {} : { reply_markup: { inline_keyboard: options.keyboard } }),
     });
   }
 
@@ -395,11 +406,15 @@ export class TelegramApi implements TelegramApiLike {
    * chiamante che sta solo chiudendo una domanda non deve anche ricomporre il
    * testo per toglierle i pulsanti.
    */
-  editMessageReplyMarkup(chatId: number, messageId: number): Promise<Message | boolean> {
+  editMessageReplyMarkup(
+    chatId: number,
+    messageId: number,
+    keyboard: InlineButton[][] = [],
+  ): Promise<Message | boolean> {
     return this.effect<Message | boolean>('editMessageReplyMarkup', {
       chat_id: chatId,
       message_id: messageId,
-      reply_markup: { inline_keyboard: [] },
+      reply_markup: { inline_keyboard: keyboard },
     });
   }
 

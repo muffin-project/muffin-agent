@@ -236,27 +236,23 @@ describe('additive migration: holder_id reaches a table created before this colu
  * absorbed and the command degraded well, while a `throw` from a store
  * constructor kills a process that was only opening the database.
  *
- * **What this proves and what it does not.** It does not reproduce the
- * interleaving: `better-sqlite3` is synchronous, and in one process there is no
- * way to slip *between* a call's `PRAGMA` and `ALTER` without instrumenting the
- * function — and a test that instruments the thing it checks stops checking it.
- * It proves the behaviour the race lands on, with the **identical error**
- * produced deterministically: a missing `column` and a `ddl` that adds one that
- * already exists is, to SQLite, exactly the same failed `ALTER`.
+ * The consumer test in core/db/column-consumers.test.ts inserts a second
+ * connection at the PRAGMA/ALTER boundary. This unit test covers the distinct
+ * failure path: a duplicate-column error must not imply our target exists.
  */
 describe('ensureColumn survives an ALTER someone else already did', () => {
-  it('does not kill the process when the column appeared in the meantime', () => {
+  it('refuses a duplicate-column error when the requested column is absent', () => {
     const dir = mkdtempSync(join(tmpdir(), 'muffin-ensure-column-'));
     const file = join(dir, 'gara.db');
     const db = new DatabaseCtor(file);
     try {
       db.exec(`CREATE TABLE zz_gara (id INTEGER PRIMARY KEY, undone_at TEXT);`);
-      // `mai_vista` really is missing, so the `PRAGMA` says "go ahead" as it
-      // would for the connection that lost the race; the `ALTER` that follows
-      // finds `undone_at` already there and raises `duplicate column name`.
-      expect(() => ensureColumn(db, 'zz_gara', 'mai_vista', 'undone_at TEXT')).not.toThrow();
+      // A mismatched DDL used to be accepted as a successful race even though
+      // the requested column remained absent for the next prepared statement.
+      expect(() => ensureColumn(db, 'zz_gara', 'mai_vista', 'undone_at TEXT')).toThrow(/duplicate column name/i);
       const columns = db.prepare(`PRAGMA table_info(zz_gara)`).all() as { name: string }[];
       expect(columns.filter((c) => c.name === 'undone_at').length).toBe(1);
+      expect(columns.some((c) => c.name === 'mai_vista')).toBe(false);
     } finally {
       db.close();
       rmSync(dir, { recursive: true, force: true });

@@ -7,7 +7,7 @@ import * as sqliteVec from 'sqlite-vec';
 import { CONTINUATION_TTL_MS } from '../agent/loop.js';
 import { CONSERVATIVE, loadProfiles, selectProfile } from '../agent/profiles/profile.js';
 import { audioAccettato } from '../agent/providers/modalita.js';
-import { wantsExplicitCache } from '../agent/providers/openai-compat.js';
+import { speaksReasoningEffort, wantsExplicitCache } from '../agent/providers/openai-compat.js';
 import { type VerificationResult, verifyInferenceRoute } from '../agent/providers/verify.js';
 import { baseToolOrder } from '../agent/runtime.js';
 import { diagnoseSearch } from '../agent/tools/search.js';
@@ -434,6 +434,25 @@ export async function runDoctor(
     ];
     if (pins.length > 0 && config.provider.routingForFamily !== undefined) {
       ok('model routing', `pin validati per la famiglia "${config.provider.routingForFamily}"`);
+    }
+  }
+
+  // Reasoning control (#789). Silent when nothing is configured: the default
+  // is "the server decides", and a line nobody asked for teaches people to skip
+  // doctor. When something IS configured, say whether it can reach the wire —
+  // a level on an endpoint that neither is OpenRouter nor declares a dialect is
+  // omitted, which is exactly the silent no-op this line exists to name.
+  if (config.provider.kind === 'openai-compat' && (config.provider.reasoningDialect !== undefined || config.thinking !== undefined)) {
+    const level = config.thinking !== undefined && config.thinking !== 'off' && config.thinking !== 'adaptive' && config.thinking !== 'unset';
+    const reaches = config.provider.reasoningDialect !== undefined || speaksReasoningEffort(config.provider.baseUrl);
+    if ((level || config.thinking === 'off') && !reaches) {
+      warn(
+        'reasoning',
+        `thinking ${config.thinking} non arriva a ${config.provider.baseUrl ?? 'questo endpoint'}: fuori da OpenRouter viene omesso`,
+        'imposta provider.reasoningDialect in config.json se il server capisce reasoning_effort',
+      );
+    } else {
+      ok('reasoning', `thinking ${config.thinking ?? 'profilo'}, dialetto ${config.provider.reasoningDialect ?? (speaksReasoningEffort(config.provider.baseUrl) ? 'openrouter (dall\'hostname)' : 'nessuno')}`);
     }
   }
 

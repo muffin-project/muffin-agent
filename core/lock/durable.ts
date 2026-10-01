@@ -200,6 +200,10 @@ export function ensureColumn(db: Database.Database, table: string, column: strin
     // other error stays an error: the case is recognized, not the class.
     const message = error instanceof Error ? error.message : String(error);
     if (!/duplicate column name/i.test(message)) throw error;
+    // The error alone does not prove that the requested column was added.
+    // A malformed DDL naming another column must still fail closed.
+    const after = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!after.some((c) => c.name === column)) throw error;
   }
 }
 

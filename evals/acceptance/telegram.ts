@@ -293,7 +293,9 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
           ? (payload['rich_message'] as { html?: unknown; blocks?: unknown })
           : undefined;
       if (typeof richMessage?.html === 'string') {
-        payload['text'] = richMessage.html;
+        // `<br>` è l'a-capo del rich HTML (i `\n` nudi collassano): per lo
+        // scenario è testo visibile, cioè un newline come nel legacy.
+        payload['text'] = richMessage.html.replace(/<br>/g, '\n');
       } else if (Array.isArray(richMessage?.blocks)) {
         // Un finale a blocchi si legge come un `sendMessage` col suo testo —
         // `payload.rich_message.blocks` resta comunque leggibile per gli
@@ -441,7 +443,7 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
           chatId: Number(c.payload['chat_id'] ?? 0),
           text: String(
             c.payload['text'] ??
-              (c.payload['rich_message'] as { html?: string } | undefined)?.html ??
+              (c.payload['rich_message'] as { html?: string } | undefined)?.html?.replace(/<br>/g, '\n') ??
               testoDaBlocchi((c.payload['rich_message'] as { blocks?: unknown[] } | undefined)?.blocks) ??
               '',
           ),

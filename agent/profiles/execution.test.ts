@@ -9,6 +9,14 @@ const expected = {
     stallTimeoutMs: 25_000,
     heartbeatIntervalMs: 15_000,
   },
+  // Copia di consumer-local, tenuta allineata a mano: vedi le note del file.
+  'consumer-qwen3': {
+    modelCallDeadlineMs: 90_000,
+    turnWallDeadlineMs: 900_000,
+    activeModelBudgetMs: 900_000,
+    stallTimeoutMs: 25_000,
+    heartbeatIntervalMs: 15_000,
+  },
   frontier: {
     modelCallDeadlineMs: 120_000,
     turnWallDeadlineMs: 300_000,

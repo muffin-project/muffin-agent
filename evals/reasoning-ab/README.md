@@ -6,12 +6,15 @@ mai in `if` sul nome del modello nel loop.
 
 ## Bracci
 
-- `A` — status quo: profilo shipped intatto (`adaptive` + `deterministic`).
+- `A` — status quo: profilo shipped così com'è (per qwen3, dal 01/10/2026,
+  `consumer-qwen3` dichiara `xhigh` + `deterministic`).
 - `B` — `adaptive` + `model-default`: solo la temperature resta al provider.
 - `C` — `off` + `deterministic` (via `thinking: 'off'` nella home usa-e-getta).
 
-Il braccio `low/bounded reasoning` della issue non è esprimibile:
-`ReasoningRequest.effort/maxTokens` non ha superficie in profilo/config.
+Il braccio `low/bounded reasoning` della issue non è ancora implementato qui:
+l'effort ora ha una superficie (`thinking: '<livello>'` in `config.json`,
+`/think`, profilo), quindi il braccio si può aggiungere; `maxTokens` resta
+senza superficie.
 
 ## Uso
 
