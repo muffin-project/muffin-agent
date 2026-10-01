@@ -308,6 +308,22 @@ only place that knows which part of the turn raised the level. That line is
 context and never the cause: since ADR-0074 the tier produces no `ask` on the
 host row, and since ADR-0075 it produces no `deny` there either.
 
+### Who may consume an `ask` without interrupting: owner delegation (ADR-0095)
+
+An `ask` is owner-approvable by construction — the kernel said so when it
+asked instead of refusing. The owner can pre-consume the asks of **one piece
+of work** (`/yolo`), recorded per turn row in `delegation_modes`, resolved in
+the loop's `ask` branch after already-given answers and before any surface is
+asked. What delegation never does: turn a deterministic `deny` into an allow
+(the `deny` branch returns before the delegation hook), approve across works,
+sessions or tenants (a new work is a new row and inherits nothing), or let the
+model enable itself (only owner commands write the table; there is no
+capability for it). Every consumed ask still passes through the single
+`approvals` queue — one-use, withdrawn on turn end — marked
+`decided_by: 'delegation'`. `/manual` revokes from the next ask; `/auto`
+records the posture but keeps asking until a calibrated semantic judgment
+exists, so an uncalibrated envelope cannot silently execute.
+
 ### The tenant dimension: what a room may do (ADR-0073, 2026-09-06)
 
 Until 2026-09-06 the kernel had one answer to *may a remote tenant reach this
