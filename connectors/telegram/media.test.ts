@@ -100,6 +100,14 @@ describe('reading an attachment', () => {
     expect(attachmentOf(msg({ sticker: { file_id: 's', file_unique_id: 'x', width: 512, height: 512, is_animated: false, is_video: false } })))
       .toMatchObject({ fileId: 's', kind: 'sticker', originalName: 'sticker' });
   });
+
+  it('animation and video notes are videos with their own names', () => {
+    // GIF e videomessaggi tondi sono mp4 anche loro: stessa strada, nome suo.
+    expect(attachmentOf(msg({ animation: { file_id: 'g', file_unique_id: 'x', width: 100, height: 100, duration: 2 } })))
+      .toMatchObject({ fileId: 'g', kind: 'video' });
+    expect(attachmentOf(msg({ video_note: { file_id: 'n', file_unique_id: 'x', length: 100, duration: 5 } })))
+      .toMatchObject({ fileId: 'n', kind: 'video', originalName: 'video-nota.mp4' });
+  });
 });
 
 describe('reading a sticker format', () => {
