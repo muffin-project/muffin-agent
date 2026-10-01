@@ -11,6 +11,7 @@ import type { BuildStamp } from '../../cli/update.js';
 import type { TurnHealth } from '../../core/turns/store.js';
 import { jobPayload, type Job } from '../../core/scheduler/jobs.js';
 import type { CapabilityGap } from './capability-status.js';
+import type { DelegationMode } from '../../core/runtime/delega.js';
 
 /**
  * Propriocezione tecnica: cosa sta usando **adesso**, non cosa dice il progetto.
@@ -98,6 +99,13 @@ export type InspectSources = {
   turns: () => TurnHealth;
   /** `JobStore.list()`, come `muffin jobs`. */
   jobs: () => Job[];
+  /**
+   * La postura di delega di **questo** lavoro (issue #740): `manual`, `auto`
+   * o `yolo`, e da quando. Letta dal registro durevole — `ctx.turnId`, mai
+   * una copia — così il modello vede la stessa modalità che il loop applicherà
+   * al prossimo ask.
+   */
+  delega?: ((turnId: string) => { modo: DelegationMode; dal: string | null }) | undefined;
   /**
    * Ogni capacità che questo assemblaggio ha spento o tagliato, dalla stessa
    * lista che produce le `bootLines` e che `muffin doctor` legge (E7, la
@@ -216,6 +224,15 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
         `# Questo turno`,
         `surface: ${surfaceOf(principal)} · principal: ${principal.kind} · tenant: ${ctx.tenant} · classe prompt: ${cls}`,
         `taint corrente: ${ctx.taint()}`,
+        // La postura che il loop applicherà al prossimo ask (issue #740):
+        // `manual` chiede, `yolo` ha pre-approvato, `auto` chiede finché il
+        // giudizio non è calibrato. Letta adesso, non ricordata.
+        `delega: ${(() => {
+          const d = sources.delega?.(ctx.turnId);
+          if (d === undefined || d.modo === 'manual') return "manual — ogni conferma arriva all'owner";
+          if (d.modo === 'yolo') return `yolo — ask pre-approvati per delega${d.dal === null ? '' : ` dal ${d.dal}`}`;
+          return `auto — chiede finché il giudizio non è calibrato${d.dal === null ? '' : ` (attiva dal ${d.dal})`}`;
+        })()}`,
         `capability esposte: ${esposti.map((t) => t.name).sort().join(', ')}`,
         sources.tools.length === filtrati.length
           ? ''

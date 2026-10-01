@@ -1,5 +1,6 @@
 import { loadConfig, saveConfig, type Config } from '../core/config/config.js';
 import { isThinkingEffort, THINKING_EFFORTS, type Thinking } from '../core/config/thinking.js';
+import type { DelegationMode, LevaDelega } from '../core/runtime/delega.js';
 import { loadProfiles, selectProfile } from './profiles/profile.js';
 import { describeSettableKnobs, formatSetOutcome, setConfigKnob } from '../core/config/settings.js';
 
@@ -56,6 +57,13 @@ export type Controlli = {
   stop: () => boolean;
   steer: (testo: string) => boolean;
   pausa: { attiva: () => boolean; metti: () => void; togli: () => void };
+  /**
+   * La delega sul lavoro in corso (issue #740): la costruisce chi ha gli
+   * store in mano — il connettore per la sua corsia, il REPL per la sua
+   * sessione — e qui arriva solo la leva. Assente dove non esiste un lavoro
+   * da governare, e i tre comandi lo dicono invece di fingere.
+   */
+  delega?: LevaDelega | undefined;
 };
 
 export type ContestoComandi = {
@@ -102,6 +110,9 @@ export const COMANDI: readonly { nome: string; aiuto: string; soloTerminale?: bo
   { nome: 'steer', aiuto: '<testo> — corregge il turno in corso, al prossimo passo' },
   { nome: 'pause', aiuto: 'ferma job e turni in coda finché non riprendi' },
   { nome: 'resume', aiuto: 'riprende dopo /pause' },
+  { nome: 'manual', aiuto: 'torna a chiedere ogni conferma per il lavoro in corso' },
+  { nome: 'auto', aiuto: 'azioni ordinarie automatiche per il lavoro in corso, quando calibrate' },
+  { nome: 'yolo', aiuto: 'full auto per il lavoro in corso; i divieti hard restano attivi' },
   { nome: 'help', aiuto: 'questo elenco' },
   { nome: 'exit', aiuto: 'esci (o Ctrl+D)', soloTerminale: true },
 ];
@@ -180,6 +191,60 @@ export async function eseguiComando(riga: string, ctx: ContestoComandi): Promise
       if (!ctx.controlli.pausa.attiva()) return { testo: 'non ero in pausa.' };
       ctx.controlli.pausa.togli();
       return { testo: 'ripreso: riparto da quello che è rimasto in coda.' };
+    }
+
+    // La delega dell'owner sul lavoro in corso (issue #740): `/manual` il
+    // comportamento di oggi, `/yolo` la pre-approvazione degli ask di questo
+    // lavoro, `/auto` la postura registrata finché il giudizio semantico non
+    // è calibrato. Mai un interruttore globale: la leva si lega all'ultimo
+    // lavoro attivo di questa conversazione, e un lavoro nuovo riparte in
+    // manuale. `off` dopo `/auto` o `/yolo` torna in manuale.
+    case 'manual':
+    case 'auto':
+    case 'yolo': {
+      const chiesto = nome as 'manual' | 'auto' | 'yolo';
+      const voluto: DelegationMode = arg === 'off' && chiesto !== 'manual' ? 'manual' : chiesto;
+      if (arg !== '' && voluto !== 'manual') {
+        return { testo: `/${chiesto} non prende argomenti — per tornare a farti chiedere tutto: /manual` };
+      }
+      if (ctx.controlli?.delega === undefined) return { testo: 'qui non c\'è un lavoro da delegare.' };
+      const esito = ctx.controlli.delega.metti(voluto);
+      if (esito === null) {
+        return {
+          testo:
+            'non c\'è un lavoro in corso a cui darla: la delega vale per il lavoro che vedi adesso, e muore con lui.',
+        };
+      }
+      const corto = esito.turnId.slice(0, 12);
+      if (!esito.cambiato) {
+        if (voluto === 'manual') return { testo: 'ero già in manuale: ti chiedo ogni conferma.' };
+        if (voluto === 'auto') {
+          return {
+            testo:
+              `ero già in auto per questo lavoro (${corto}): finché il giudizio non è calibrato, ogni conferma arriva a te.`,
+          };
+        }
+        return {
+          testo:
+            `ero già in yolo per questo lavoro (${corto}).` +
+            (esito.risposteDate > 0 ? ' La domanda aperta passa per delega.' : ''),
+        };
+      }
+      if (voluto === 'manual') {
+        return { testo: `manuale — torno a chiederti ogni conferma per questo lavoro (${corto}).` };
+      }
+      if (voluto === 'auto') {
+        return {
+          testo:
+            `AUTO — registrato per questo lavoro (${corto}): le azioni ordinarie passeranno da sole quando il ` +
+            `giudizio sarà calibrato; fino ad allora ogni conferma arriva ancora a te. /manual per tornare.`,
+        };
+      }
+      return {
+        testo:
+          `YOLO — full auto per questo lavoro (${corto}); i divieti hard restano attivi. /manual per tornare.` +
+          (esito.risposteDate > 0 ? ' La domanda aperta passa per delega e il turno riprende da solo.' : ''),
+      };
     }
 
     case 'spend': {
