@@ -8,6 +8,7 @@ import { ALL_API_KEY_NAMES, LEGACY_API_KEY_NAME } from '../core/config/providers
 import { cmdUndo } from './undo.js';
 import { cmdOrientamento } from './orientamento.js';
 import { cmdEffects } from './effects.js';
+import { cmdJudgments } from './judgments.js';
 import { defaultModels, isSameOrNestedPath, resolveLocalHome, runInit, type InitStep } from './init.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { seal, verify } from '../core/rot/verify.js';
@@ -275,6 +276,8 @@ async function main(rawArgv: string[]): Promise<number> {
       return cmdOrientamento(rest);
     case 'effects':
       return cmdEffects(rest);
+    case 'judgments':
+      return cmdJudgments(rest);
     case 'completion': {
       const script = completion(rest[0] ?? '');
       if (script === null) {
