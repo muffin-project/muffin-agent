@@ -2472,3 +2472,48 @@ describe('doctor reports vault drift with the reindex remedy', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe('doctor says whether a photo would be seen, before the first one arrives', () => {
+  const conTelegram = (dir: string): string => {
+    const file = join(paths(dir).home, 'config.json');
+    const config = JSON.parse(readFileSync(file, 'utf8')) as { surfaces: Record<string, unknown> };
+    config.surfaces = { ...config.surfaces, enabled: ['cli', 'telegram'] };
+    writeFileSync(file, JSON.stringify(config, null, 2));
+    return dir;
+  };
+
+  it('says nothing when no photo-carrying surface is enabled', async () => {
+    const dir = home();
+    const c = await checkWith(dir, 'vista', { vista: { vedeImmagini: async () => true } });
+    expect(c).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is ok, naming the model, when the configured model sees images', async () => {
+    const dir = conTelegram(home());
+    const c = await checkWith(dir, 'vista', { vista: { vedeImmagini: async () => true } });
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toMatch(/vede le immagini/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is ok, naming who describes, when the main model is blind but the light one sees', async () => {
+    const dir = conTelegram(home());
+    const config = loadConfig(dir);
+    const c = await checkWith(dir, 'vista', {
+      vista: { vedeImmagini: async (modello: string) => modello === config.models.light },
+    });
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain(config.models.light);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('warns with the remedy when nobody sees', async () => {
+    const dir = conTelegram(home());
+    const c = await checkWith(dir, 'vista', { vista: { vedeImmagini: async () => false } });
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toMatch(/restano fuori dal turno/);
+    expect(c?.remedy).toContain('/model');
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
