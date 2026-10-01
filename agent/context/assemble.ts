@@ -190,10 +190,12 @@ export const STALE_PLAN_MS = 6 * 60 * 60 * 1000;
  *    invitation to redo it. `done` rows stay in the table — nothing is deleted
  *    (`AGENTS.md` §I-8) — and `todo list` still shows them; what the turn is
  *    handed unasked is what is still owed.
- *  - **The completion criterion is stated, and it is deterministic.** requirements-status.md#wait-e-todo-sono-primitive-del-runtime-non-tool
- *    asks for one: "finished" is *every item out of `pending`/`retry`*, decided
- *    by reading rows, not by the model declaring itself done. It is written
- *    here because this is the only place the model reads about the plan at all.
+ *  - **No completion rule in prose.** "Finished" is *every item out of
+ *    `pending`/`retry`*, decided by reading rows — but the reading happens in
+ *    code, not here: `agent/loop/completion-gate.ts` refuses a silent
+ *    `answered` settle on a resumed turn with granted rows still open
+ *    (requirements-status.md#wait-e-todo-sono-primitive-del-runtime-non-tool
+ *    as amended). This section shows rows and states; the gate decides.
  *
  * Empty in, empty out — a session with nothing open costs zero tokens, which is
  * what lets the loop call it unconditionally.
@@ -215,7 +217,7 @@ export function todoSection(open: TodoItem[], nowMs: number): string {
       renderTodos(freschi),
       '',
       'Aggiorna lo stato con `todo set` appena qualcosa cambia — è la sola traccia che resta ' +
-        'se il processo muore. Il lavoro è finito quando nessun passo è più `pending` o `retry`.',
+        'se il processo muore.',
     );
   }
   if (stantii.length > 0) {

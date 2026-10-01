@@ -389,9 +389,11 @@ export const paths = (home = muffinHome()) => ({
    * Dove va il modello whisper, quando `config.audio.whisperModel` non lo dice.
    *
    * Un percorso e non un file: qui non lo scrive nessuno. Lo scarica l'owner —
-   * 142 MiB per `ggml-base.bin` — e `core/audio/trascrivi.ts` stampa il `curl`
-   * esatto quando non lo trova. Dentro la home e non in `rot/`: non e' una
-   * cosa dell'identita', e' un pezzo di macchina rimpiazzabile.
+   * 142 MiB per `ggml-base.bin` — oppure `init`, `surface enable` e il primo
+   * uso (`core/audio/trascrivi.ts`), che lo assicurano quando una superficie
+   * vocale è accesa; se manca comunque, `trascrivi` stampa il `curl` esatto.
+   * Dentro la home e non in `rot/`: non e' una cosa dell'identita', e' un
+   * pezzo di macchina rimpiazzabile.
    */
   whisperModel: join(home, 'models', 'ggml-base.bin'),
   // Outside the root of trust on purpose: the voice is the part that learns,

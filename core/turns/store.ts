@@ -186,13 +186,16 @@ export type ContinuableClass =
   | 'model_deadline'
   | 'turn_deadline'
   | 'active_model_budget'
-  | 'recovery_exhausted';
+  | 'recovery_exhausted'
+  | 'plan_open';
 
 /** Typed durable evidence carried by a `continuable` row. Never message content, never secrets. */
 export type ContinuableReason = {
   class: ContinuableClass;
   /** Which lease ended (0-based). */
   lease: number;
+  /** Granted plan rows still open behind a `plan_open` release: a count, never their text. */
+  openSteps?: number;
   /** Consecutive failed attempts behind the release, when the class counts them. */
   attempts?: number;
   /** Provider request ids behind the release, for the OpenRouter dashboard. */
@@ -709,6 +712,7 @@ function serializzaCheckpoint(checkpoint: unknown): string {
 export class TurnStore {
   private readonly insertStmt: Database.Statement | null;
   private readonly getStmt: Database.Statement;
+  private readonly latestActiveOfSessionStmt: Database.Statement;
   private readonly checkpointStmt: Database.Statement;
   private readonly deliveryStmt: Database.Statement;
   private readonly intentStmt: Database.Statement;
@@ -793,6 +797,18 @@ export class TurnStore {
                @replyTo, @jobId, @status, @pid, @claimedAt, @claimToken, @delivery, @now, @now)`,
     );
     this.getStmt = db.prepare(`SELECT * FROM turns WHERE id = ?`);
+    /**
+     * L'ultimo lavoro attivo di una conversazione, per la delega (issue #740).
+     *
+     * Attivo = non finito: in coda, in corso, sospeso, interrotto o
+     * continuabile. Un lavoro `done` è finito e non si delega più — la delega
+     * vale per il lavoro a cui la si dà, non per «questa chat da ora in poi».
+     */
+    this.latestActiveOfSessionStmt = db.prepare(
+      `SELECT * FROM turns
+        WHERE session_id = ? AND status IN ('runnable','running','waiting','interrupted','continuable')
+        ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+    );
     // Fenced on `claim_token` (P19's second finding): a checkpoint from a
     // process that has been stolen from must change zero rows, not overwrite
     // whatever the new holder has already written. `changes` is read back by
@@ -1646,6 +1662,17 @@ export class TurnStore {
 
   get(id: string): TurnRecord | null {
     const row = this.getStmt.get(id) as Row | undefined;
+    return row ? toRecord(row) : null;
+  }
+
+  /**
+   * L'ultimo lavoro non finito di una conversazione — vedi
+   * `latestActiveOfSessionStmt`. È il lavoro a cui `/yolo` e soci si legano:
+   * quello che l'owner vede in flight (o in attesa di continuazione), mai uno
+   * `done`.
+   */
+  latestActiveOfSession(sessionId: string): TurnRecord | null {
+    const row = this.latestActiveOfSessionStmt.get(sessionId) as Row | undefined;
     return row ? toRecord(row) : null;
   }
 
