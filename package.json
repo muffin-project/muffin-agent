@@ -45,6 +45,7 @@
     "@anthropic-ai/sandbox-runtime": "0.0.71",
     "@anthropic-ai/sdk": "^0.115.0",
     "@modelcontextprotocol/client": "2.0.0",
+    "@typesafe-ai/sdk": "^0.6.0",
     "better-sqlite3": "^12.11.1",
     "cron-parser": "^5.10.0",
     "defuddle": "^0.19.3",
