@@ -29,7 +29,7 @@ Measurements and alternatives behind these choices:
 | | Native | This container path |
 |---|---|---|
 | supervisor | systemd user unit / launchd | the container restart policy (`unless-stopped`); `doctor` warns that no unit exists, which is expected |
-| updates | `muffin update` / `--rollback` | rebuild the image from a newer checkout; `muffin update` does not apply |
+| updates | `muffin update` / `--rollback` | rebuild the image from a newer checkout (transitional — the unified update/rollback contract is #765); `muffin update` inside the container says so instead of failing on git |
 | shell tools | on when the host sandbox works | **off by default**; on only with the sandbox override and a host that allows it |
 | data | `~/.muffin` and `~/.config/muffin/secrets` | named volumes `home` (`/muffin/home`) and `config` (`/muffin/config`) |
 | workspace | `~/muffin-workspace` | named volume `workspace` (`/muffin/workspace`) |
