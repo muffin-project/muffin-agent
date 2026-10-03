@@ -1,5 +1,6 @@
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it } from 'vitest';
 import { install, until, type Install } from '../harness.js';
 import { privateMessage, startFakeTelegram, voiceMessage, type FakeTelegram } from '../telegram.js';
@@ -40,15 +41,18 @@ import { paths } from '../../../core/config/config.js';
  *     in production code. This scenario points it at two tiny Node scripts
  *     instead of the real binaries.
  *
- * **What is proven, and what is not.** This proves the real wiring —
- * `voceFor` reads the config, `decidiVoce` asks the real `audioAccettato`
- * over HTTP, takes the transcribe branch, calls the two binaries by path with
- * the real argv shape `trascrivi` builds, and the transcript reaches the turn
- * fenced as tainted data. It does not prove whisper.cpp itself transcribes
- * audio correctly — that is a claim about a third-party binary, not about
- * Muffin, and `trascrivi.ts`'s own docstring already cites the owner's
- * from-mouth-to-text spot check on the real installation (02/09/2026) for
- * that half.
+  * **What is proven, and what is not.** This proves the real wiring —
+  * `voceFor` reads the config, `decidiVoce` asks the real `audioAccettato`
+  * over HTTP, takes the transcribe branch, calls the two binaries by path with
+  * the real argv shape `trascrivi` builds, and the transcript reaches the turn
+  * fenced as tainted data. The audio itself is real (see `voceReale`), and
+  * what the real binaries hear in those exact bytes was checked separately
+  * on 03/10/2026 — real `ffmpeg` + real `whisper-cli` (`ggml-base.bin`)
+  * through the real `trascrivi()` return the sentence the fake replays. What
+  * no CI run proves is whisper.cpp/ffmpeg being correct on *every* input —
+  * that stays a claim about third-party binaries, now with one dated
+  * observation on real bytes instead of only the owner's from-mouth-to-text
+  * spot check on the real installation (02/09/2026).
  */
 
 const OWNER_ID = 777;
@@ -85,27 +89,40 @@ async function pairOwner(inst: Install, tg: FakeTelegram, ownerId: number): Prom
 }
 
 /**
- * An Ogg header `tipoAudio` recognises (`agent/audio.ts#sniff` reads the
- * first four bytes, `OggS`) — the same minimal-fixture posture
- * `b-immagini-ed-errori.accept.ts` uses for its JPEG: the claim under test is
- * that these exact bytes survive fake Bot API → download → vault, not that
- * they decode to real audio.
+ * Real audio, shaped like production: Ogg/Opus (`OggS` magic, OpusHead), a few
+ * seconds of Italian speech saying exactly what the fake transcription below
+ * stands in for — "ricordami di richiamare il corriere domani mattina".
  *
- * The four `0x00` bytes right after the magic are load-bearing, not filler: a
- * real Ogg page header is mostly binary and always carries a NUL within its
- * first few bytes, and `core/documents/extract.ts#readableText` — the vault's
- * own text/binary test — treats a NUL in the first 8192 bytes as "binary",
- * `null` for the same reason a real voice note is. Padding with only
- * printable bytes (as a first version of this fixture did) made
- * `sniffFormat` call it `'text'`, and the vault indexed it as a document
- * instead of ever reaching `loadImage`/`tipoAudio` — the exact branch this
- * scenario exists to exercise.
+ * Produced 03/10/2026 with macOS `say -v Alice` → `ffmpeg -c:a libopus` and
+ * committed as `evals/acceptance/fixtures/voce-c8.oga` (8,8 kB), so this
+ * scenario downloads, sniffs and vaults bytes a real encoder wrote — not a
+ * hand-stacked header. The previous stub (magic-looking bytes plus filler)
+ * could not tell a decoder-shaped path from a bytes-are-bytes one; the two
+ * guards below pin the shape so it cannot silently become a stub again.
+ *
+ * What the real binaries heard in these exact bytes was checked the same day:
+ * real `ffmpeg` → WAV 16 kHz mono → real `whisper-cli` (`ggml-base.bin`)
+ * through the real `trascrivi()` returns "ricordami di richiamare il corriere
+ * domani mattina." — the sentence the fake below replays deterministically,
+ * because CI has neither the binaries nor the 142 MB model and a
+ * speech-to-text assertion must not depend on either.
+ *
+ * **Falsifier**: point `plantFile` at an empty file and the voice path is
+ * never taken — `sniff` calls it text, the vault indexes a document instead
+ * of a voice note, no transcript ever reaches the turn. The assertions below
+ * are on content (the transcript in the turn and in the model request, the
+ * original bytes on disk), never on a bare exit code.
  */
-const FAKE_OGG = Buffer.concat([
-  Buffer.from('OggS', 'latin1'),
-  Buffer.from([0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
-  Buffer.alloc(256, 0x11),
-]);
+function voceReale(): Buffer {
+  const bytes = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'voce-c8.oga'));
+  if (bytes.subarray(0, 4).toString('latin1') !== 'OggS') {
+    throw new Error('voce-c8.oga non è Ogg: il fixture reale è stato sostituito?');
+  }
+  if (bytes.length < 1024) {
+    throw new Error(`voce-c8.oga è di soli ${bytes.length} byte: non è audio vero, è uno stub`);
+  }
+  return bytes;
+}
 
 type TurnRow = { id: string; messages: string; taint: number };
 
@@ -195,7 +212,8 @@ describe('acceptance · C8 · audio — nota vocale', () => {
 
         const gw = await pairOwner(inst, tg, OWNER_ID);
         try {
-          tg.plantFile('c8-voice-1', 'voice/file_1.oga', FAKE_OGG);
+          const voce = voceReale();
+          tg.plantFile('c8-voice-1', 'voice/file_1.oga', voce);
           tg.deliver(voiceMessage({ id: OWNER_ID, name: 'Owner' }, 'c8-voice-1'));
 
           await until(
@@ -277,10 +295,10 @@ describe('acceptance · C8 · audio — nota vocale', () => {
           const pathMatch = /nota vocale ricevuta: `([^`]+)`/.exec(turn.messages);
           if (!pathMatch) throw new Error(`impossibile leggere il percorso del vault dal turno: ${turn.messages}`);
           const onDisk = readFileSync(join(paths(inst.home).vault, pathMatch[1]!));
-          if (!onDisk.equals(FAKE_OGG)) {
+          if (!onDisk.equals(voce)) {
             throw new Error(
               `i byte dell'audio originale nel vault non coincidono con quelli scaricati ` +
-                `(attesi ${FAKE_OGG.length}, trovati ${onDisk.length})`,
+                `(attesi ${voce.length}, trovati ${onDisk.length})`,
             );
           }
         } finally {
