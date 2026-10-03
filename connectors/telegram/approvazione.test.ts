@@ -62,7 +62,7 @@ function harness() {
    * la trascrizione parla rich, e la domanda deve poter essere letta e
    * ritrovata per messaggio.
    */
-  const inviati: { method: string; chatId?: number; messageId?: number; text?: string; keyboard?: unknown }[] = [];
+  const inviati: { method: string; chatId?: number; messageId?: number; text?: string; threadId?: unknown; keyboard?: unknown }[] = [];
   let nextMessageId = 700;
   const testoDi = (rich: { html?: string; blocks?: unknown[] }): string =>
     typeof rich.html === 'string' ? rich.html : JSON.stringify(rich.blocks ?? []);
@@ -86,14 +86,14 @@ function harness() {
       inviati.push({ method: 'editMessageReplyMarkup', chatId, messageId, keyboard });
       return true;
     },
-    sendMessage: async (chatId: number, html: string, options?: { keyboard?: unknown }) => {
+    sendMessage: async (chatId: number, html: string, options?: { threadId?: unknown; keyboard?: unknown }) => {
       const messageId = nextMessageId++;
-      inviati.push({ method: 'sendMessage', chatId, messageId, text: html, ...(options?.keyboard === undefined ? {} : { keyboard: options.keyboard }) });
+      inviati.push({ method: 'sendMessage', chatId, messageId, text: html, ...(options?.threadId === undefined ? {} : { threadId: options.threadId }), ...(options?.keyboard === undefined ? {} : { keyboard: options.keyboard }) });
       return { message_id: messageId, date: 0, chat: { id: chatId, type: 'private' } } as never;
     },
-    sendRichMessage: async (chatId: number, rich: { html?: string; blocks?: unknown[] }, options?: { keyboard?: unknown }) => {
+    sendRichMessage: async (chatId: number, rich: { html?: string; blocks?: unknown[] }, options?: { threadId?: unknown; keyboard?: unknown }) => {
       const messageId = nextMessageId++;
-      inviati.push({ method: 'sendMessage', chatId, messageId, text: testoDi(rich), ...(options?.keyboard === undefined ? {} : { keyboard: options.keyboard }) });
+      inviati.push({ method: 'sendMessage', chatId, messageId, text: testoDi(rich), ...(options?.threadId === undefined ? {} : { threadId: options.threadId }), ...(options?.keyboard === undefined ? {} : { keyboard: options.keyboard }) });
       return { message_id: messageId, date: 0, chat: { id: chatId, type: 'private' } } as never;
     },
     sendMessageDraft: async () => true,
@@ -253,6 +253,43 @@ describe('un pulsante premuto dall owner', () => {
     expect(h.modifiche[0]?.html).toContain('eseguo rm -rf /tmp/x?');
     const verdetto = h.inviati.find((c) => c.method === 'editMessageText' && c.messageId === 55);
     expect(verdetto?.keyboard).toEqual([]);
+  });
+
+  /**
+   * #760 — il verdetto di ripiego in un topic resta nel topic.
+   *
+   * Una domanda di ripiego partita ricca dentro un topic di forum, il cui
+   * verdetto ri-renderizzato supera il tetto di compatibilità (8192): il
+   * primo pezzo è un `editMessageText` (gli edit non portano thread, giusto
+   * così) ma i pezzi in coda sono `sendMessage` — e senza thread finirebbero
+   * in *General*. Falsificatore: togliere `threadId` dal target di `present`
+   * in `handleCallback` deve far fallire questo test (e nessun altro).
+   */
+  it('un verdetto oltre il tetto in un topic: ogni `sendMessage` di coda porta il thread', async () => {
+    const h = harness();
+    const { approvalId } = turnoInAttesa(h);
+
+    const THREAD = 77;
+    // Oltre il tetto di compatibilità: il verdetto non parte ricco — il
+    // primo pezzo riusa il messaggio, la coda sono `sendMessage`.
+    const domandaLunga = `⚠ eseguo rm -rf /tmp/x?\n${'x'.repeat(9000)}`;
+    await deliver(h, [
+      premuto(`ok:${approvalId}`, OWNER, 1, {
+        message_id: 55,
+        date: 0,
+        chat: { id: OWNER, type: 'private' },
+        message_thread_id: THREAD,
+        text: domandaLunga,
+      }),
+    ]);
+
+    expect(h.approvals.get(approvalId)?.decision).toBe('allow');
+    // Il primo pezzo riusa il messaggio: è un edit, e gli edit non portano thread.
+    expect(h.inviati[0]?.method).toBe('editMessageText');
+    expect(h.inviati[0]?.messageId).toBe(55);
+    const coda = h.inviati.filter((c) => c.method === 'sendMessage');
+    expect(coda.length).toBeGreaterThan(0);
+    for (const pezzo of coda) expect(pezzo.threadId).toBe(THREAD);
   });
 });
 
