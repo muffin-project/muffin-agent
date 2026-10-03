@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+// @ts-expect-error — modulo .mjs senza dichiarazioni: e uno strumento da riga
+// di comando, non una dipendenza del runtime, e resta importato com'e.
 import { isSkippableFile, shouldRunAcceptance } from './acceptance-scope.mjs';
 
 describe('acceptance scope gate', () => {
