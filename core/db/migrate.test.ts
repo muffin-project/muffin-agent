@@ -724,3 +724,216 @@ describe('migrazione 8 — Turn schema authority', () => {
     ).toBe('[{"id":"aaa"}]');
   });
 });
+
+/**
+ * #766 (A7) — `rebuildTable` on an existing populated database, through the
+ * production runner.
+ *
+ * The recorded residue is exact: `rebuildTable` was proven only at unit level
+ * (the `things` table above), never on a populated DB, and no production
+ * migration called it. Migration v8 now does — and the one-row v8 fixtures
+ * above still do not prove a populated home survives the rebuild.
+ *
+ * This fixture is a v7-stamped home with tenure: fifty turns across all five
+ * old statuses, two tenants, every taint level, `continuation_candidates`
+ * populated on every third row (the #707 reconciliation — the rebuild must
+ * CARRY values through its derived column intersection, not just add an
+ * empty column), plus populated `turn_tool_calls` and `turn_leases` in their
+ * pre-v8 shapes. `migrate()` with the real `MIGRATIONS` list runs v8 (the
+ * CHECK-widening rebuild) and v9 over it.
+ *
+ * What would falsify it: a rebuild that names its columns by hand and forgets
+ * one (the defect the derived intersection exists to prevent) loses those
+ * values — the full-dump comparison below goes red instead of reporting
+ * success.
+ */
+describe('migrazione 8 — rebuildTable su una casa v7 popolata (#766)', () => {
+  const OLD_TURNS_COLS = [
+    'id', 'principal', 'tenant', 'surface', 'session_id', 'model', 'messages', 'taint',
+    'counters', 'reply_to', 'job_id', 'status', 'wake_at', 'wait_for', 'claimed_by',
+    'claimed_at', 'turn_outcome', 'delivery', 'continuation_candidates', 'created_at', 'updated_at',
+  ];
+  const OLD_CALL_COLS = [
+    'turn_id', 'call_id', 'tool', 'capability', 'rerunnable', 'args_digest',
+    'started_at', 'ended_at', 'content', 'is_error', 'tier',
+  ];
+  const OLD_LEASE_COLS = [
+    'turn_id', 'lease_index', 'started_at', 'ended_at', 'outcome',
+    'harness_messages', 'counters', 'transport_used', 'delivery',
+  ];
+  const STATUSES = ['runnable', 'running', 'waiting', 'interrupted', 'done'];
+
+  function seedPopulatedV7(db: DatabaseCtor.Database): void {
+    db.exec(`
+      CREATE TABLE turns (
+        id TEXT PRIMARY KEY, principal TEXT NOT NULL, tenant TEXT NOT NULL,
+        surface TEXT NOT NULL, session_id TEXT NOT NULL, model TEXT NOT NULL,
+        messages TEXT NOT NULL, taint INTEGER NOT NULL CHECK (taint BETWEEN 0 AND 3),
+        counters TEXT NOT NULL, reply_to TEXT, job_id TEXT,
+        status TEXT NOT NULL CHECK (status IN ('runnable','running','waiting','interrupted','done')),
+        wake_at TEXT, wait_for TEXT, claimed_by INTEGER, claimed_at TEXT,
+        turn_outcome TEXT, delivery TEXT, continuation_candidates TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE turn_tool_calls (
+        turn_id TEXT NOT NULL, call_id TEXT NOT NULL, tool TEXT NOT NULL,
+        capability TEXT NOT NULL, rerunnable INTEGER NOT NULL, args_digest TEXT NOT NULL,
+        started_at TEXT NOT NULL, ended_at TEXT, content TEXT, is_error INTEGER, tier INTEGER,
+        PRIMARY KEY (turn_id, call_id)
+      );
+      CREATE TABLE turn_leases (
+        turn_id TEXT NOT NULL, lease_index INTEGER NOT NULL, started_at TEXT NOT NULL,
+        ended_at TEXT, outcome TEXT, harness_messages TEXT, counters TEXT,
+        transport_used INTEGER, delivery TEXT,
+        PRIMARY KEY (turn_id, lease_index)
+      );
+    `);
+    const insTurn = db.prepare(
+      `INSERT INTO turns (${OLD_TURNS_COLS.join(', ')})
+       VALUES (${OLD_TURNS_COLS.map((c) => `@${c}`).join(', ')})`,
+    );
+    for (let i = 0; i < 50; i += 1) {
+      const status = STATUSES[i % STATUSES.length]!;
+      const n = String(i).padStart(3, '0');
+      insTurn.run({
+        id: `t${n}`,
+        principal: '{"kind":"owner"}',
+        tenant: i % 7 === 6 ? 'group:telegram:9' : 'host',
+        surface: i % 3 === 2 ? 'telegram' : 'cli',
+        session_id: `s${i % 5}`,
+        model: 'model-x',
+        messages: JSON.stringify([{ role: 'user', text: `messaggio ${n} con corpo lungo `.repeat(4) }]),
+        taint: i % 4,
+        counters: JSON.stringify({ input: 100 + i, output: 20 + i }),
+        reply_to: i % 4 === 0 ? `t${String(Math.max(0, i - 1)).padStart(3, '0')}` : null,
+        job_id: i % 10 === 9 ? 'job-1' : null,
+        status,
+        wake_at: status === 'waiting' ? '2026-09-01T00:00:00Z' : null,
+        wait_for: status === 'waiting' ? '2026-09-02T00:00:00Z' : null,
+        claimed_by: status === 'running' ? 4242 : null,
+        claimed_at: status === 'running' ? '2026-09-01T00:00:01Z' : null,
+        turn_outcome: status === 'done' ? (i % 2 === 0 ? 'done' : 'error') : null,
+        delivery: status === 'done' ? (i % 3 === 0 ? 'sent' : i % 3 === 1 ? 'failed:rete' : 'pending') : null,
+        continuation_candidates:
+          i % 3 === 0
+            ? JSON.stringify([{ id: `q${n}`, updatedAt: '2026-09-25T00:00:00Z', summary: `domanda ${n}` }])
+            : null,
+        created_at: '2026-08-01T10:00:00Z',
+        updated_at: '2026-08-02T10:00:00Z',
+      });
+    }
+    const insCall = db.prepare(
+      `INSERT INTO turn_tool_calls (${OLD_CALL_COLS.join(', ')})
+       VALUES (${OLD_CALL_COLS.map((c) => `@${c}`).join(', ')})`,
+    );
+    for (let i = 0; i < 20; i += 1) {
+      insCall.run({
+        turn_id: `t${String(i % 50).padStart(3, '0')}`,
+        call_id: `c${i}`,
+        tool: 'sys.shell',
+        capability: 'sys.shell',
+        rerunnable: i % 2,
+        args_digest: `digest-${i}`,
+        started_at: '2026-08-02T10:00:00Z',
+        ended_at: i % 5 === 4 ? null : '2026-08-02T10:00:01Z',
+        content: JSON.stringify({ out: `output ${i}` }),
+        is_error: i % 6 === 5 ? 1 : 0,
+        tier: i % 4,
+      });
+    }
+    const insLease = db.prepare(
+      `INSERT INTO turn_leases (${OLD_LEASE_COLS.join(', ')})
+       VALUES (${OLD_LEASE_COLS.map((c) => `@${c}`).join(', ')})`,
+    );
+    for (let i = 0; i < 10; i += 1) {
+      insLease.run({
+        turn_id: `t${String(i).padStart(3, '0')}`,
+        lease_index: 0,
+        started_at: '2026-08-02T10:00:00Z',
+        ended_at: '2026-08-02T10:01:00Z',
+        outcome: 'done',
+        harness_messages: null,
+        counters: '{}',
+        transport_used: 7,
+        delivery: 'sent',
+      });
+    }
+    // Stamped at v7, as a home that lived through everything before the turn
+    // rebuild would actually be. The stamp table is created here the same way
+    // `migrate()` creates it — this home predates the runner's first boot.
+    db.exec(
+      `CREATE TABLE IF NOT EXISTS schema_version (
+         version     INTEGER PRIMARY KEY,
+         description TEXT    NOT NULL,
+         applied_at  TEXT    NOT NULL
+       )`,
+    );
+    const timbra = db.prepare(
+      `INSERT INTO schema_version (version, description, applied_at) VALUES (?, ?, '2026-09-01T00:00:00Z')`,
+    );
+    timbra.run(1, 'baseline');
+    for (const v of [2, 3, 4, 5, 6, 7]) timbra.run(v, `storica (${v})`);
+    expect(schemaVersionOf(db)).toBe(7);
+  }
+
+  function dump(db: DatabaseCtor.Database, table: string, cols: string[], order: string): string {
+    return JSON.stringify(db.prepare(`SELECT ${cols.join(', ')} FROM "${table}" ORDER BY ${order}`).all());
+  }
+
+  it('fifty turns, twenty tool calls and ten leases cross the v8 rebuild without losing a value', () => {
+    const { db, backups } = fileDb();
+    seedPopulatedV7(db);
+    const beforeTurns = dump(db, 'turns', OLD_TURNS_COLS, 'id');
+    const beforeCalls = dump(db, 'turn_tool_calls', OLD_CALL_COLS, 'turn_id, call_id');
+    const beforeLeases = dump(db, 'turn_leases', OLD_LEASE_COLS, 'turn_id, lease_index');
+
+    const res = migrate(db, { backupDir: backups });
+
+    expect(res.applied).toEqual([8, 9]);
+    expect(schemaVersionOf(db)).toBe(9);
+    // Not a stamp: every old value is still there, on every row.
+    expect(dump(db, 'turns', OLD_TURNS_COLS, 'id')).toBe(beforeTurns);
+    expect(dump(db, 'turn_tool_calls', OLD_CALL_COLS, 'turn_id, call_id')).toBe(beforeCalls);
+    expect(dump(db, 'turn_leases', OLD_LEASE_COLS, 'turn_id, lease_index')).toBe(beforeLeases);
+    // The carried values specifically: the #707 column survived the rebuild
+    // populated, not merely present.
+    const carried = db.prepare(`SELECT count(*) AS n FROM turns WHERE continuation_candidates IS NOT NULL`).get() as {
+      n: number;
+    };
+    expect(carried.n).toBe(17); // every third of fifty: i % 3 === 0
+    const sample = db.prepare(`SELECT continuation_candidates AS c FROM turns WHERE id = 't000'`).get() as { c: string };
+    expect(JSON.parse(sample.c)).toEqual([{ id: 'q000', updatedAt: '2026-09-25T00:00:00Z', summary: 'domanda 000' }]);
+    // The new shape is real, not just stamped.
+    const sql = (db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'turns'`).get() as { sql: string })
+      .sql;
+    expect(sql).toContain("'continuable'");
+    const cols = (db.prepare(`PRAGMA table_info(turns)`).all() as Array<{ name: string }>).map((c) => c.name);
+    for (const added of ['claim_token', 'lease_index', 'continuable_reason', 'lifetime', 'input_text']) {
+      expect(cols, `v8 column ${added}`).toContain(added);
+    }
+    expect(() => db.prepare(`INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint, counters, status, created_at, updated_at)
+      VALUES ('tx', '{"kind":"owner"}', 'host', 'cli', 's9', 'm', '[]', 0, '{}', 'continuable', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')`).run()).not.toThrow();
+    db.prepare(`DELETE FROM turns WHERE id = 'tx'`).run();
+    expect(() => db.prepare(`INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint, counters, status, created_at, updated_at)
+      VALUES ('ty', '{"kind":"owner"}', 'host', 'cli', 's9', 'm', '[]', 0, '{}', 'bogus', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')`).run()).toThrow();
+    const idx = (db.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'turns'`).all() as Array<{ name: string }>).map(
+      (r) => r.name,
+    );
+    expect(idx).toContain('idx_turns_status');
+    expect(idx).toContain('idx_turns_due');
+    // The pre-migrate backup holds the OLD shape with the OLD rows — proof it
+    // preceded the rebuild, on a populated database.
+    expect(res.backup).not.toBeNull();
+    const snap = new DatabaseCtor(res.backup!, { readonly: true });
+    try {
+      expect((snap.prepare(`SELECT count(*) AS n FROM turns`).get() as { n: number }).n).toBe(50);
+      const snapSql = (snap.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'turns'`).get() as { sql: string })
+        .sql;
+      expect(snapSql).not.toContain("'continuable'");
+      expect(schemaVersionOf(snap)).toBe(7);
+    } finally {
+      snap.close();
+    }
+    db.close();
+  });
+});
