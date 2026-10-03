@@ -173,3 +173,52 @@ describe('present · rich per primo, legacy solo su rifiuto deterministico', () 
     expect(calls).toEqual([]);
   });
 });
+
+describe('present · onSent nomina i messaggi nuovi, mai gli edit', () => {
+  it('una send ricca chiama onSent con il suo id', async () => {
+    const { api, calls } = fake();
+    const visti: number[] = [];
+    await present(api, { chatId: 7 }, presentationOf('ciao'), (id) => {
+      visti.push(id);
+    });
+
+    expect(visti).toHaveLength(1);
+    expect(typeof visti[0]).toBe('number');
+    expect(calls).toHaveLength(1);
+  });
+
+  it('i pezzi legacy chiamano onSent una volta per messaggio, nell’ordine di invio', async () => {
+    const { api } = fake({ rich: 'refuse' });
+    const visti: number[] = [];
+    // Sopra il limite legacy così i pezzi sono più d'uno; sotto il tetto di
+    // compatibilità così il ricco viene tentato e rifiutato.
+    const lunga = Array.from({ length: 120 }, (_, i) => `riga numero ${i} di un testo che non entra in un messaggio`).join('\n');
+    await present(api, { chatId: 7 }, presentationOf(lunga), (id) => {
+      visti.push(id);
+    });
+
+    expect(visti.length).toBeGreaterThan(1);
+    expect(new Set(visti).size).toBe(visti.length);
+  });
+
+  it('un edit non è un messaggio nuovo: onSent non viene chiamato', async () => {
+    const { api } = fake();
+    const visti: number[] = [];
+    await present(api, { chatId: 7, editMessageId: 55, keyboard: [] }, presentationOfHtml('verdetto'), (id) => {
+      visti.push(id);
+    });
+
+    expect(visti).toEqual([]);
+  });
+
+  it('un invio ambiguo non registra niente: l’id non è noto', async () => {
+    const { api } = fake({ rich: 'ambiguous' });
+    const visti: number[] = [];
+    await expect(
+      present(api, { chatId: 7 }, presentationOf('ciao'), (id) => {
+        visti.push(id);
+      }),
+    ).rejects.toThrow('rete giù');
+    expect(visti).toEqual([]);
+  });
+});

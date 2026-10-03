@@ -77,7 +77,13 @@ CREATE TABLE IF NOT EXISTS approvals (
   -- Quando il turno è finito con la domanda ancora aperta: la riga non è
   -- cancellata (niente si cancella) e non è decisa (nessuno ha risposto), ma
   -- non è più una domanda — open la ignora e un tocco tardivo non decide.
-  withdrawn_at TEXT
+  withdrawn_at TEXT,
+  -- Dove la domanda si è mostrata, come array JSON di id di messaggio
+  -- (issue #784). Una riga può avere più bolle: un re-ask dopo un riavvio
+  -- riusa la riga ma manda un messaggio nuovo, e la bolla vecchia resta
+  -- dov'era. Solo scritture in aggiunta, mai sovrascritture: alla chiusura
+  -- terminale si toglie la tastiera a tutte quelle registrate.
+  question_message_ids TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_approvals_turn ON approvals(turn_id, consumed_at);
 `;
@@ -97,6 +103,12 @@ export type ApprovalRow = {
   decidedBy: 'owner' | 'delegation' | null;
   /** Il turno è finito mentre la domanda era aperta: vedi `withdrawForTurn`. */
   withdrawnAt: string | null;
+  /**
+   * Gli id dei messaggi su cui questa domanda si è mostrata, in ordine di
+   * invio — vedi `noteQuestionMessage`. Vuoto quando niente è stato
+   * registrato: righe di prima della colonna, o domande mai arrivate sul filo.
+   */
+  questionMessageIds: number[];
 };
 
 type Raw = {
@@ -112,6 +124,28 @@ type Raw = {
   consumed_at: string | null;
   decided_by: string | null;
   withdrawn_at: string | null;
+  question_message_ids: string | null;
+};
+
+/**
+ * Gli id dei messaggi registrati su una riga, come numeri interi positivi.
+ *
+ * Difensivo di proposito: la colonna è JSON scritto solo da
+ * `noteQuestionMessage`, ma una riga può arrivare da un database toccato a
+ * mano o da una scrittura interrotta — una lettura che lancia qui
+ * trasformerebbe una bolla orfana in un turno che non si chiude. Spazzatura
+ * dentro, lista vuota fuori: la tastiera di quel messaggio resta dov'è, che
+ * è lo stato di prima di questa colonna, mai un errore nuovo.
+ */
+const leggiDomande = (grezzo: string | null | undefined): number[] => {
+  if (typeof grezzo !== 'string' || grezzo === '') return [];
+  try {
+    const parsed: unknown = JSON.parse(grezzo);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((n): n is number => typeof n === 'number' && Number.isInteger(n) && n > 0);
+  } catch {
+    return [];
+  }
 };
 
 const read = (r: Raw): ApprovalRow => ({
@@ -129,6 +163,7 @@ const read = (r: Raw): ApprovalRow => ({
   // l'owner poteva decidere — vedi lo schema.
   decidedBy: r.decision === null ? null : r.decided_by === 'delegation' ? 'delegation' : 'owner',
   withdrawnAt: r.withdrawn_at,
+  questionMessageIds: leggiDomande(r.question_message_ids),
 });
 
 export class ApprovalStore {
@@ -141,6 +176,8 @@ export class ApprovalStore {
   private readonly openRowsStmt: DatabaseCtor.Statement;
   private readonly decidedUnconsumedStmt: DatabaseCtor.Statement;
   private readonly withdrawStmt: DatabaseCtor.Statement;
+  private readonly noteQuestionStmt: DatabaseCtor.Statement;
+  private readonly withdrawnQuestionsStmt: DatabaseCtor.Statement;
   private readonly openForStmt: DatabaseCtor.Statement;
 
   constructor(db: DatabaseCtor.Database) {
@@ -161,6 +198,9 @@ export class ApprovalStore {
       'decided_by',
       "decided_by TEXT CHECK (decided_by IN ('owner','delegation'))",
     );
+    // Stesso meccanismo, stessa ragione: l'id del messaggio della domanda
+    // (#784) su un database installato prima di questa colonna.
+    ensureColumn(db, 'approvals', 'question_message_ids', 'question_message_ids TEXT');
     this.askStmt = db.prepare(
       `INSERT INTO approvals (id, turn_id, capability, resource, prompt, taint, asked_at)
        VALUES (@id, @turnId, @capability, @resource, @prompt, @taint, @askedAt)`,
@@ -211,6 +251,12 @@ export class ApprovalStore {
     this.withdrawStmt = db.prepare(
       `UPDATE approvals SET withdrawn_at = @at
         WHERE turn_id = @turnId AND decision IS NULL AND withdrawn_at IS NULL`,
+    );
+    this.noteQuestionStmt = db.prepare(`UPDATE approvals SET question_message_ids = @ids WHERE id = @id`);
+    this.withdrawnQuestionsStmt = db.prepare(
+      `SELECT id, question_message_ids FROM approvals
+        WHERE turn_id = ? AND withdrawn_at IS NOT NULL AND question_message_ids IS NOT NULL
+        ORDER BY asked_at ASC`,
     );
     this.decidedUnconsumedStmt = db.prepare(
       `SELECT 1 AS uno FROM approvals WHERE turn_id = ? AND decision IS NOT NULL AND consumed_at IS NULL LIMIT 1`,
@@ -299,6 +345,42 @@ export class ApprovalStore {
    */
   withdrawForTurn(turnId: string, now: Date): number {
     return this.withdrawStmt.run({ turnId, at: now.toISOString() }).changes;
+  }
+
+  /**
+   * Questa domanda si è mostrata su questo messaggio (#784).
+   *
+   * Chiamata dalla superficie **dopo** l'invio, con l'id che il filo ha
+   * restituito — la riga esiste già (l'id viaggia dentro i pulsanti), il
+   * messaggio no. Solo in aggiunta: un re-ask riusa la riga ma manda un
+   * messaggio nuovo (dopo un riavvio, sempre), e sovrascrivere perderebbe la
+   * bolla vecchia proprio nel caso che questa colonna esiste per chiudere.
+   * Idempotente sullo stesso messaggio, silenziosa su un id sconosciuto: una
+   * registrazione non può rompere una domanda già fatta.
+   */
+  noteQuestionMessage(id: string, messageId: number): void {
+    const row = this.get(id);
+    if (row === null || row.questionMessageIds.includes(messageId)) return;
+    this.noteQuestionStmt.run({ id, ids: JSON.stringify([...row.questionMessageIds, messageId]) });
+  }
+
+  /**
+   * Le bolle da spegnere alla chiusura terminale del turno (#784): per ogni
+   * riga ritirata che ha mostrato una domanda, gli id dei messaggi registrati.
+   *
+   * Solo righe ritirate — una domanda aperta o decisa ha ancora (o ha avuto)
+   * la sua tastiera gestita dal percorso vivo, e toccarla qui sarebbe
+   * togliere pulsanti a una domanda che aspetta davvero. Righe senza
+   * registrazione (prima della colonna, o mai arrivate sul filo) non ci sono:
+   * niente id, niente edit, mai un falso.
+   */
+  withdrawnQuestionMessages(turnId: string): Array<{ id: string; messageId: number }> {
+    const rows = this.withdrawnQuestionsStmt.all(turnId) as { id: string; question_message_ids: string | null }[];
+    const out: Array<{ id: string; messageId: number }> = [];
+    for (const r of rows) {
+      for (const messageId of leggiDomande(r.question_message_ids)) out.push({ id: r.id, messageId });
+    }
+    return out;
   }
 
   /** La barriera del turno: c'è una risposta per questa domanda? */

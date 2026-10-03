@@ -141,3 +141,53 @@ describe('approvatoreTelegram · il ripiego, quando nessuna trascrizione può os
     expect(calls).toEqual([]);
   });
 });
+
+describe('approvatoreTelegram · onAsked registra dove la domanda si è mostrata (#784)', () => {
+  it('dopo l’invio chiama onAsked con l’id del registro e quello del messaggio', async () => {
+    const { api, calls } = recordingApi();
+    const viste: { approvalId: string; messageId: number }[] = [];
+    const esito = await approvatoreTelegram(api, (m) => {
+      viste.push(m);
+    })(request, where);
+
+    expect(esito).toBe('asked');
+    expect(viste).toHaveLength(1);
+    expect(viste[0]!.approvalId).toBe('aabbccdd');
+    expect(typeof viste[0]!.messageId).toBe('number');
+    // È il messaggio mandato davvero, non un numero inventato.
+    expect(calls.length).toBeGreaterThan(0);
+  });
+
+  it('una domanda spezzata registra l’ultimo pezzo: è lì che sta la tastiera', async () => {
+    const { api, calls } = recordingApi();
+    const lunga: ApprovalRequest = { ...request, resource: `command: ${'x'.repeat(9000)}` };
+    const viste: { approvalId: string; messageId: number }[] = [];
+    const esito = await approvatoreTelegram(api, (m) => {
+      viste.push(m);
+    })(lunga, where);
+
+    expect(esito).toBe('asked');
+    expect(calls.length).toBeGreaterThan(1);
+    expect(viste).toHaveLength(1);
+    // L’ultimo pezzo è l’unico con la tastiera.
+    expect(calls.at(-1)!.keyboard).toBeDefined();
+  });
+
+  it('un gancio che lancia non rompe la domanda: è già partita', async () => {
+    const { api, calls } = recordingApi();
+    const esito = await approvatoreTelegram(api, () => {
+      throw new Error('simulato');
+    })(request, where);
+
+    expect(esito).toBe('asked');
+    expect(calls).toHaveLength(1);
+  });
+
+  it('senza gancio non cambia niente: `asked` come prima', async () => {
+    const { api, calls } = recordingApi();
+    const esito = await approvatoreTelegram(api)(request, where);
+
+    expect(esito).toBe('asked');
+    expect(calls).toHaveLength(1);
+  });
+});

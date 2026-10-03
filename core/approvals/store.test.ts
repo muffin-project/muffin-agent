@@ -1,4 +1,7 @@
 import DatabaseCtor from 'better-sqlite3';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ApprovalStore } from './store.js';
 
@@ -162,6 +165,130 @@ describe('#742 — la fine del turno ritira le domande aperte', () => {
   });
 });
 
+/**
+ * #784 — l'id del messaggio della domanda è durevole, per riga.
+ *
+ * Senza, la chiusura terminale non può toccare la bolla: il processo che
+ * finisce il turno non ha mai visto il messaggio mandato da quello morto
+ * prima del riavvio, e la tastiera resta viva finché qualcuno non la preme.
+ */
+describe('#784 — la domanda registra dove si è mostrata', () => {
+  it('la registrazione resta sulla riga e sopravvive alla rilettura', () => {
+    const s = store();
+    const id = chiedi(s);
+
+    expect(s.get(id)?.questionMessageIds).toEqual([]);
+
+    s.noteQuestionMessage(id, 700);
+    expect(s.get(id)?.questionMessageIds).toEqual([700]);
+  });
+
+  it('un re-ask aggiunge il messaggio nuovo senza perdere il vecchio', () => {
+    const s = store();
+    const id = chiedi(s);
+    s.noteQuestionMessage(id, 700);
+    // Stesso id riusato (lo store riusa la riga aperta), messaggio nuovo —
+    // è il re-ask dopo un riavvio.
+    s.noteQuestionMessage(id, 701);
+
+    expect(s.get(id)?.questionMessageIds).toEqual([700, 701]);
+  });
+
+  it('lo stesso messaggio registrato due volte resta una volta sola', () => {
+    const s = store();
+    const id = chiedi(s);
+    s.noteQuestionMessage(id, 700);
+    s.noteQuestionMessage(id, 700);
+
+    expect(s.get(id)?.questionMessageIds).toEqual([700]);
+  });
+
+  it('un id sconosciuto è un no-op, non un errore', () => {
+    expect(() => store().noteQuestionMessage('deadbeef', 700)).not.toThrow();
+  });
+
+  it('alla chiusura terminale si leggono le bolle ritirate con domanda mostrata', () => {
+    const s = store();
+    const aperta = chiedi(s);
+    s.noteQuestionMessage(aperta, 700);
+    const decisa = chiedi(s, { capability: 'sys.http' });
+    s.noteQuestionMessage(decisa, 701);
+    s.decide(decisa, 'allow', T0);
+    const maiMostrata = chiedi(s, { capability: 'fs.write' });
+
+    expect(s.withdrawForTurn('t1', T0)).toBe(2);
+    // La ritirata con bolla c'è; la decisa no (non è ritirata); quella mai
+    // mostrata no (niente id, niente edit — mai un falso).
+    const bolle = s.withdrawnQuestionMessages('t1');
+    expect(bolle).toEqual([{ id: aperta, messageId: 700 }]);
+    expect(bolle.some((b) => b.id === maiMostrata)).toBe(false);
+  });
+
+  it('un database installato prima della colonna la riceve, senza perdere righe e senza falsi edit', () => {
+    const db = new DatabaseCtor(':memory:');
+    // Lo schema esatto di prima, senza `withdrawn_at`, senza `decided_by`,
+    // senza `question_message_ids`.
+    db.exec(`CREATE TABLE approvals (
+      id TEXT PRIMARY KEY, turn_id TEXT NOT NULL, capability TEXT NOT NULL, resource TEXT,
+      prompt TEXT NOT NULL, taint INTEGER NOT NULL CHECK (taint BETWEEN 0 AND 3), asked_at TEXT NOT NULL,
+      decision TEXT CHECK (decision IN ('allow','deny')), decided_at TEXT, consumed_at TEXT);`);
+    db.prepare(
+      `INSERT INTO approvals (id, turn_id, capability, prompt, taint, asked_at) VALUES ('a1', 't1', 'sys.shell', 'p', 0, ?)`,
+    ).run(T0.toISOString());
+
+    const s = new ApprovalStore(db);
+
+    // Niente crash in lettura, niente id inventati: la riga vecchia non ha
+    // bolle da spegnere.
+    expect(s.get('a1')?.questionMessageIds).toEqual([]);
+    expect(s.withdrawForTurn('t1', T0)).toBe(1);
+    expect(s.withdrawnQuestionMessages('t1')).toEqual([]);
+
+    // E da qui in poi registra come le righe nuove.
+    s.noteQuestionMessage('a1', 700);
+    expect(s.get('a1')?.questionMessageIds).toEqual([700]);
+  });
+
+  it('spazzatura nella colonna si legge come nessuna bolla, senza lanciare', () => {
+    const db = new DatabaseCtor(':memory:');
+    const s = new ApprovalStore(db);
+    const id = chiedi(s);
+    db.prepare(`UPDATE approvals SET question_message_ids = 'non-json' WHERE id = ?`).run(id);
+
+    expect(s.get(id)?.questionMessageIds).toEqual([]);
+    expect(s.withdrawForTurn('t1', T0)).toBe(1);
+    expect(s.withdrawnQuestionMessages('t1')).toEqual([]);
+  });
+
+  it('kill-restart al livello onesto: chiudere l’handle e riaprire non perde le bolle', () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-784-'));
+    const file = join(home, 'approvals.db');
+    const id = (() => {
+      const db = new DatabaseCtor(file);
+      const s = new ApprovalStore(db);
+      const aperta = chiedi(s);
+      s.noteQuestionMessage(aperta, 700);
+      s.noteQuestionMessage(aperta, 701);
+      db.close(); // il processo muore con la domanda aperta
+      return aperta;
+    })();
+
+    // Un processo nuovo sullo stesso file: la riga è aperta e le bolle ci
+    // sono ancora — la chiusura terminale le ritrova senza nessun tocco.
+    const db2 = new DatabaseCtor(file);
+    try {
+      const ripresa = new ApprovalStore(db2);
+      expect(ripresa.open('t1')?.id).toBe(id);
+      expect(ripresa.withdrawForTurn('t1', T0)).toBe(1);
+      expect(ripresa.withdrawnQuestionMessages('t1')).toEqual([
+        { id, messageId: 700 },
+        { id, messageId: 701 },
+      ]);
+    } finally {
+      db2.close();
+    }
+  });
+});
 /**
  * #745 — la stessa domanda aperta non si duplica.
  *
