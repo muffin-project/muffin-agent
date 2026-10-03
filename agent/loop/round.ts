@@ -991,6 +991,14 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // called — a denied or failed call is still a call, so a model saying
       // "non ho potuto usare fs_write" after a real refusal is out of scope.
       //
+      // Turn-lifetime truth, not current-lease truth (#603): a continuation
+      // to a new lease resets the lease-local counter (`buildFreshCounters`),
+      // while finished leases stay folded in `record.lifetime` — the same
+      // total `durability.ts` already reports. Reading only the fresh lease
+      // misclassifies a continued turn answering from prior-lease tool
+      // evidence as narrating an action it never took, and the surface then
+      // marks the valid draft `superseded`.
+      //
       // Its own flag, deliberately outside the profile's cascade: this check
       // is durable (07 classifies the profiles as impalcatura and says
       // nothing of it), it answers a false-success rate measured on every
@@ -999,7 +1007,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       const completion = checkCompletion({
         text,
         available: exposed.map((t) => t.spec.name),
-        toolCallsMade: run.toolCallsMade,
+        toolCallsMade: record.lifetime.toolCallsMade + run.toolCallsMade,
       });
       if (!completion.ok) {
         turn.setAttributes({ 'muffin.completion.named_uncalled': completion.named.join(',') });
