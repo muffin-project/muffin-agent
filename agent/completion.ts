@@ -62,7 +62,14 @@ export type CompletionInput = {
   text: string;
   /** Tool names exposed this turn — from the registry, never a hardcoded list. */
   available: string[];
-  /** How many tool calls the turn actually made, successful or not. */
+  /**
+   * How many tool calls the turn actually made, successful or not.
+   *
+   * Turn-lifetime total across leases (#603): finished leases stay folded in
+   * `record.lifetime` while a continuation resets the lease-local counter, so
+   * callers must pass `record.lifetime.toolCallsMade + run.toolCallsMade`.
+   * A lease-local zero is not "called nothing at all" on a continued turn.
+   */
   toolCallsMade: number;
 };
 
