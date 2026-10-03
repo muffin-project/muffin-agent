@@ -1233,8 +1233,22 @@ const UPDATE_PHRASE: Readonly<Record<string, string>> = {
   'smoke test': 'provo che la release nuova risponda, prima di toccare qualunque cosa viva',
 };
 
-export async function cmdUpdate(argv: string[]): Promise<number> {
-  let values: { 'dry-run'?: boolean; yes?: boolean; rollback?: boolean; channel?: string };
+/**
+ * Whether this process runs inside the experimental Muffin gateway image.
+ *
+ * The marker is baked into the image (`ENV MUFFIN_CONTAINER=1` in
+ * `contrib/docker/Dockerfile`), not detected heuristically: checkout shape,
+ * uid and mount points all have native lookalikes, and a wrong guess here
+ * either blocks a working native update or offers a container procedure on a
+ * native box. It steers only a help message (which procedure to print), never
+ * authority: exporting the variable on a native install merely misdirects to
+ * the Docker procedure, visibly and reversibly.
+ */
+export function runningInContainerImage(): boolean {
+  return process.env.MUFFIN_CONTAINER === '1';
+}
+
+export async function cmdUpdate(argv: string[]): Promise<number> {  let values: { 'dry-run'?: boolean; yes?: boolean; rollback?: boolean; channel?: string };
   try {
     ({ values } = parseArgs({
       args: argv,
@@ -1248,6 +1262,22 @@ export async function cmdUpdate(argv: string[]): Promise<number> {
     }));
   } catch {
     process.stderr.write(UPDATE_USAGE);
+    return 78;
+  }
+
+  // Inside the experimental Docker image there is nothing to update in place:
+  // the code tree is baked into the image and root-owned, and the gateway has
+  // no Docker socket by design (#765). Say the host-side procedure instead of
+  // failing further down on git (no remote in the image) with a remedy about
+  // deploy keys that does not apply in a container. This deliberately covers
+  // every flag, rollback included: image rollback is also a host-side act.
+  if (runningInContainerImage()) {
+    process.stderr.write(
+      'Questo Muffin gira dentro l\u2019immagine Docker sperimentale: `muffin update` qui non si applica ' +
+        '(il codice è dentro l\u2019immagine, di root, e non si aggiorna sul posto).\n' +
+        'Per aggiornare, sull\u2019host che ha il checkout e i file compose (procedura in contrib/docker/README.md, "Update"):\n' +
+        '  git pull nel checkout e poi, da contrib/docker/, ./build.sh && docker compose up -d\n',
+    );
     return 78;
   }
 
