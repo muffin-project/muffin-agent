@@ -602,9 +602,11 @@ describe('acceptance · E · economia e osservabilità', () => {
    *
    * La condizione fatta cambiare qui è il modello main (`muffin model main
    * <slug>`): con un endpoint fuori catalogo (il provider finto lo è sempre)
-   * `cmdModel` scrive lo slug senza poterlo verificare — nessuna chiamata di
-   * rete, nessuna approvazione, la scelta più economica e deterministica fra
-   * le condizioni che il report nomina esplicitamente ("modello ... in uso").
+   * `cmdModel` legge `/models` come indizio (#763; il provider finto
+   * risponde `{data: []}` senza registrarla come chiamata main), avvisa che
+   * lo slug non è elencato e lo scrive lo stesso: nessuna approvazione, la
+   * scelta più economica e deterministica fra le condizioni che il report
+   * nomina esplicitamente ("modello ... in uso").
    */
   scenario(
     'E7',
@@ -639,8 +641,8 @@ describe('acceptance · E · economia e osservabilità', () => {
         }
 
         // La condizione reale cambia: nessuna finzione, `muffin model` scrive
-        // davvero config.json (cli/model.ts, ramo "endpoint fuori dal
-        // catalogo" — il provider finto non è mai in nessun catalogo noto).
+        // davvero config.json (cli/model.ts, ramo dell'endpoint compat
+        // generico: il provider finto non è mai in nessun catalogo noto).
         const cambiato = await inst.muffin(['model', 'main', 'test-model-e7-live']);
         if (cambiato.code !== 0) {
           throw new Error(`muffin model main: exit ${cambiato.code}\nout: ${cambiato.out}\nerr: ${cambiato.err}`);

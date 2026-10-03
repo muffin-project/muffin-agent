@@ -103,7 +103,7 @@ export const COMANDI: readonly { nome: string; aiuto: string; soloTerminale?: bo
   { nome: 'session', aiuto: 'mostra l\'id della conversazione' },
   { nome: 'spend', aiuto: 'quanto hai speso questo mese e oggi' },
   { nome: 'think', aiuto: `ragionamento: on | off | reset | un livello (${THINKING_EFFORTS.join(', ')}) — i valori validi dipendono dal modello; senza argomenti lo mostra` },
-  { nome: 'model', aiuto: 'modello: [main|light|embed] <slug>, --list, o niente per vederli' },
+  { nome: 'model', aiuto: 'modello: [main|light|embed] <slug>, [main|light] --served, --list, o niente per vederli' },
   { nome: 'config', aiuto: 'set <chiave> <valore> — solo le poche manopole scrivibili da qui' },
   { nome: 'debug', aiuto: 'giri, token e millisecondi: on | off (da solo, inverte)' },
   { nome: 'stop', aiuto: 'interrompe il turno in corso; quelli in coda restano' },
