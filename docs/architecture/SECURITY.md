@@ -930,11 +930,15 @@ status lives only in `docs/status/day1/requirements-status.md`.
 - **The Node protocol does not exist in the current runtime.** ADR-0050 defines
   its future authority/security contract; current code does not yet enforce it.
 - **Surface and Node execution placement are still the same `cwd`, found
-  2026-09-03.** ADR-0050 §3 separates them on paper. The supervised gateway
-  does not: `WorkingDirectory=${home}` (`core/gateway/unit.ts`) with no `cwd`
-  override in `cli/gateway.ts` means the shell tool's write scope is the
-  Muffin home on that surface, and the same request from a REPL elsewhere on
-  the same machine gets a different answer. This is an open design question
+  2026-09-03.** ADR-0050 §3 separates them on paper, and the Node protocol
+  does not exist yet, so that separation stays paper-only; the owner-chosen
+  `cwd` also still varies across surfaces on the same machine. The
+  write-scope half of the original finding is CLOSED by ADR-0059: the agent
+  write scope is `resolveWorkspace` (`core/config/workspace.ts:228`, wired
+  in `agent/runtime.ts:443`), the home is denied outright via
+  `mandatoryGuards` (`agent/runtime.ts:776`), the gateway passes no `cwd`
+  override (`cli/gateway.ts:823-841`), and both shell lanes are rooted at
+  the workspace (`agent/runtime.ts:894-895`). This is an open design question
   requiring a `docs/development/RESEARCH.md` pass and an ADR, not a decided direction —
   see `docs/product/ROADMAP.md` "First Mac capability Node" and
   `docs/evidence/il-lavoro-che-viene-2026-09-03.md`.
