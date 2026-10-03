@@ -270,9 +270,40 @@ jobs:
     # nessun runner lento raggiunge per caso.
     timeout-minutes: 20
     steps:
+      # `fetch-depth: 0` e non il default 1: lo scope gate confronta
+      # `base...head` e con un clone superficiale quel range non ha una
+      # storia da attraversare (stessa ragione di `install.yml`).
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      # Scope gate (`scripts/ci/acceptance-scope.mjs`): la suite di
+      # accettazione (~11min) può falsificare solo una modifica che tocca il
+      # percorso runtime/acceptance. Su una PR il cui diff è provabilmente
+      # fuori da quel percorso (docs, .claude, unit-test, install evals) gli
+      # step pesanti qui sotto vengono saltati e il job conclude `success`
+      # con un no-op veritiero — nessun check pendente, la superficie
+      # required resta quella del job. Fail-safe: range non calcolabile,
+      # evento non-PR o file sconosciuto → la suite gira.
+      - id: scope
+        name: la modifica può rompere un acceptance journey?
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/ci/acceptance-scope.mjs
+
+      - if: steps.scope.outputs.run == 'false'
+        name: nessun acceptance journey toccato — no-op veritiero
+        run: |
+          echo "acceptance: scope gate says no runtime/acceptance file changed; full suite skipped, other required jobs (verifica, collegamenti, install, strumenti, dco) still ran."
+        # Nota: questo step gira solo quando lo scope è `false`; tutti gli
+        # step pesanti qui sotto girano a meno di un `false` esplicito, così
+        # un output mancante (bug dello scope) gira troppo, mai troppo poco.
+        # Il job conclude sempre `success`: nessun required check pendente.
+
+      - if: steps.scope.outputs.run != 'false'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
@@ -281,10 +312,12 @@ jobs:
       # qui sopra — due copie divergenti di una configurazione di contenimento
       # sono peggio di nessuna. Il perché di ciascuno è misurato e documentato
       # lì, una volta sola.
-      - name: prerequisiti del sandbox Linux (bwrap, socat, ripgrep)
+      - if: steps.scope.outputs.run != 'false'
+        name: prerequisiti del sandbox Linux (bwrap, socat, ripgrep)
         run: sudo bash scripts/install-ci-bubblewrap.sh
 
-      - name: profilo AppArmor per bwrap (il rimedio che il probe stampa)
+      - if: steps.scope.outputs.run != 'false'
+        name: profilo AppArmor per bwrap (il rimedio che il probe stampa)
         run: |
           sudo tee /etc/apparmor.d/bwrap > /dev/null <<'EOF'
           abi <abi/4.0>,
@@ -297,7 +330,8 @@ jobs:
           EOF
           sudo apparmor_parser -r /etc/apparmor.d/bwrap
 
-      - run: npm ci
+      - if: steps.scope.outputs.run != 'false'
+        run: npm ci
 
       # Il sandbox è un **prerequisito di questo job**, non uno sfondo: senza,
       # gli scenari che eseguono aspettano un effetto che il runtime rifiuta
@@ -310,7 +344,8 @@ jobs:
       # non-zero: un contenimento assente diventa una riga sola, non una diagnosi.
       # È anche l'unico punto in cui questo job vedrebbe il regresso che ha
       # tenuto no-op per due mesi il sandbox del vecchio Muffin (ADR-0018).
-      - name: il sandbox contiene davvero, qui?
+      - if: steps.scope.outputs.run != 'false'
+        name: il sandbox contiene davvero, qui?
         run: |
           npx tsx -e "
             import('./core/sandbox/probe.js').then((m) => {
@@ -328,7 +363,8 @@ jobs:
       # the job crossed `timeout-minutes` with every step green — GitHub marks
       # that `cancelled`, on `dev` too, and a green report in the log was the
       # only way to tell a timeout from a failure.
-      - name: suite di accettazione
+      - if: steps.scope.outputs.run != 'false'
+        name: suite di accettazione
         run: npx vitest run --config vitest.acceptance.config.ts --reporter=dot --reporter=json --outputFile.json=${{ runner.temp }}/accettazione.json
 
       # Secondo gate, e non un log informativo. Senza `|| true`: fallisce anche
@@ -338,7 +374,7 @@ jobs:
       # riga scoperta o riclassificata male diventa rossa **qui**, dove si vede,
       # invece di restare una riga di inventario che nessuno rilegge.
       - name: rapporto per riga
-        if: always()
+        if: always() && steps.scope.outputs.run != 'false'
         env:
           MUFFIN_ACCEPT_RESULTS: ${{ runner.temp }}/accettazione.json
         run: npx tsx evals/acceptance/report.ts
