@@ -6,7 +6,7 @@ import type { SpanHandle } from '../../core/tracing/types.js';
 import { ATTR } from '../../core/tracing/types.js';
 import type { TurnRecord } from '../../core/turns/store.js';
 import { planTaint } from '../../core/turns/todo.js';
-import { decodeWaitFor, satisfied, wakeReport } from '../../core/turns/wait.js';
+import { approvalFootnote, decodeWaitFor, satisfied, wakeReport, type WakeReason } from '../../core/turns/wait.js';
 import { tenantClass, visibleTools } from '../context/assemble.js';
 import { historyTaint, reinjectedHistory } from '../context/history-taint.js';
 import { DEFAULT_EXECUTION } from '../profiles/profile.js';
@@ -81,6 +81,12 @@ export type DriveOptions = {
   continued?: boolean;
   /** La barriera com'era prima del claim: vedi `resumeTurn`. */
   waitForAtWake?: string | null;
+  /**
+   * La scadenza com'era prima del claim, per la stessa ragione: il claim
+   * spegne entrambe, e senza di lei il referto non può distinguere una
+   * scadenza osservata da un risveglio da risposta (#762).
+   */
+  wakeAtAtWake?: string | null;
   /** The ref the caller already opened. Absent on a resume — see `input.session`. */
   session?: SessionRef | undefined;
   /**
@@ -649,20 +655,44 @@ export async function guidaIlTurno(
       // stesso registro sotto: senza `answered` una barriera d'approvazione
       // risulterebbe non soddisfatta qui, e il turno si risveglierebbe con
       // «non hai risposto» proprio nel momento in cui la risposta è arrivata.
-      const why =
-        waitFor !== null &&
+      const aperta = waitFor !== null &&
         satisfied(waitFor, {
           ...(deps.approvals === undefined
             ? {}
             : { answered: (id: string) => deps.approvals?.answered(id) === true }),
-        })
-          ? 'event'
-          : 'timer';
+        });
+      // #762(a) — il referto afferma la scadenza solo se l'ha osservata. La
+      // barriera dice *cosa* si aspettava, non *chi* ha svegliato: un click su
+      // un'altra domanda sveglia la riga a prescindere, quindi una barriera
+      // chiusa con la scadenza nel futuro è un risveglio da risposta — se il
+      // registro mostra una risposta data — o un risveglio anticipato di cui
+      // non si conosce la causa. Mai una scadenza non passata. La scadenza la
+      // si legge dalla riga prima del claim (`wakeAtAtWake`, che il claim
+      // spegne insieme alla barriera).
+      const adesso = (deps.now ?? (() => new Date()))().getTime();
+      const wakeAtRaw = options.wakeAtAtWake ?? record.wakeAt ?? null;
+      const wakeAtMs = wakeAtRaw === null ? Number.NaN : Date.parse(wakeAtRaw);
+      const scaduta = Number.isFinite(wakeAtMs) && (wakeAtMs as number) <= adesso;
+      const rispostaNelRegistro = deps.approvals?.decidedUnconsumed(record.id) ?? false;
+      const why: WakeReason = aperta ? 'event' : scaduta ? 'timer' : rispostaNelRegistro ? 'answer' : 'early';
       turn.setAttributes({ 'muffin.turn.woken_by': why });
       // Harness control (a transition report for this resume), not owner
       // words: a continuation to a new lease archives it instead of replaying
       // it — the approved work it refers to already completed.
-      run.messages.push(harnessMessage('user', [{ type: 'text', text: wakeReport(waitFor, why) }]));
+      let testo = wakeReport(waitFor, why);
+      // #762(b) — il trade è esplicito. Su una barriera d'approvazione la
+      // guardia di ripresa e il referto parlano già di domande e risposte; su
+      // un processo (o senza barriera) il modello riceveva solo il referto
+      // dell'uscita, mentre la domanda aperta veniva ritirata e la decisione
+      // presa restava non consumata. La nota nomina entrambi gli stati.
+      if (waitFor?.kind !== 'approval') {
+        const nota = approvalFootnote(
+          deps.approvals?.open(record.id)?.capability ?? null,
+          rispostaNelRegistro,
+        );
+        if (nota !== null) testo += `\n${nota}`;
+      }
+      run.messages.push(harnessMessage('user', [{ type: 'text', text: testo }]));
     }
   }
 

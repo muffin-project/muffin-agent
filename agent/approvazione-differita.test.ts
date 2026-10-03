@@ -3,7 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ApprovalStore } from '../core/approvals/store.js';
+import { ApprovalStore, APPROVAL_WINDOW_MS } from '../core/approvals/store.js';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
@@ -254,13 +254,18 @@ describe('la risposta arriva, e il lavoro riparte', () => {
    * Nessuno ha premuto niente. Il turno si sveglia comunque alla sua scadenza
    * e **lo dice**: l'owner legge «non hai risposto, non l'ho fatto» invece di
    * non leggere niente.
+   *
+   * La scadenza passa davvero (#762): un risveglio manuale a scadenza futura
+   * non è una scadenza, e il referto non la racconta più come tale.
    */
   it('e se nessuno risponde, la scadenza sveglia il turno che lo racconta', async () => {
     const h = harness([chiamata(), risposta('te lo dico')]);
     const primo = await parti(h.deps, h.home);
 
-    // Nessun `decide`: solo il tempo.
-    h.deps.turns.wake(primo.turnId, new Date());
+    // Nessun `decide`: si va oltre la finestra della domanda, poi la lane sveglia.
+    const oltre = new Date(Date.now() + APPROVAL_WINDOW_MS + 60_000);
+    h.deps.now = () => oltre;
+    h.deps.turns.wake(primo.turnId, oltre);
     await resumeTurn(h.deps, primo.turnId);
 
     expect(h.eseguito.volte).toBe(0);

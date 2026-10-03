@@ -212,6 +212,20 @@ export function satisfied(waitFor: WaitFor, checks: BarrierChecks | ((pid: numbe
 }
 
 /**
+ * How a suspended turn came back, as observed at resume time.
+ *
+ * `event` and `timer` are what the lane and the deadline say: the barrier is
+ * satisfied now, or the deadline has passed. `answer` is the case issue #762
+ * names: the barrier is **not** satisfied and the deadline has **not** passed,
+ * but the register shows an answer somebody gave — a click on another approval
+ * wakes the row regardless of its barrier. `early` is the same shape with no
+ * answer on the register: woken early by something else (a manual resume), so
+ * the report says only that, and neither asserts an expiry nobody observed
+ * nor invents an answer nobody gave.
+ */
+export type WakeReason = 'timer' | 'event' | 'answer' | 'early';
+
+/**
  * What the model is told when the turn comes back, and it is a `tool_result`
  * rather than an error.
  *
@@ -221,17 +235,56 @@ export function satisfied(waitFor: WaitFor, checks: BarrierChecks | ((pid: numbe
  * expired wait means. It is also told **which** barrier ended the wait, because
  * "the process exited" and "you ran out of time" lead to different next moves.
  */
-export function wakeReport(waitFor: WaitFor | null, reason: 'timer' | 'event'): string {
+export function wakeReport(waitFor: WaitFor | null, reason: WakeReason): string {
   if (waitFor?.kind === 'approval') {
     // Cosa ha risposto l'owner non si dice qui: lo dice il ramo che rifà la
     // chiamata, perché è quello che ha letto il registro. Qui si dice soltanto
     // che l'attesa è finita e come — e le due uscite portano a mosse diverse.
-    return reason === 'event'
-      ? "L'owner ha risposto alla richiesta di approvazione. Rifai la chiamata che stavi facendo: se ha detto di sì parte, se ha detto di no te lo dico e non insisti."
-      : "L'owner non ha risposto alla richiesta di approvazione entro il tempo previsto. Non l'hai fatto. Diglielo, e proponi cosa fare invece — non rifare la chiamata sperando che stavolta passi.";
+    if (reason === 'event') {
+      return "L'owner ha risposto alla richiesta di approvazione. Rifai la chiamata che stavi facendo: se ha detto di sì parte, se ha detto di no te lo dico e non insisti.";
+    }
+    if (reason === 'answer') {
+      return (
+        "L'owner ha risposto a un'altra domanda, non a quella che stavi aspettando — che è ancora aperta. " +
+        'Riparti dalla risposta arrivata, non rifare questa chiamata sperando che passi.'
+      );
+    }
+    if (reason === 'early') {
+      return (
+        'La richiesta di approvazione è ancora senza risposta e il tempo non è ancora passato: ' +
+        'il turno è stato ripreso prima della scadenza. Non rifare la chiamata sperando che passi.'
+      );
+    }
+    return "L'owner non ha risposto alla richiesta di approvazione entro il tempo previsto. Non l'hai fatto. Diglielo, e proponi cosa fare invece — non rifare la chiamata sperando che stavolta passi.";
   }
   if (reason === 'event' && waitFor !== null) {
     return `Attesa finita: il processo ${waitFor.pid} è uscito. Riprendi da dove eri.`;
+  }
+  if (reason === 'answer') {
+    // #762(a): il risveglio non viene dalla barriera — è ancora chiusa — né
+    // dalla scadenza, che non è passata. Dirlo è l'unica cosa onesta: il ramo
+    // `timer` qui sotto affermerebbe una scadenza che nessuno ha osservato.
+    return waitFor !== null
+      ? (
+        `Il turno si è svegliato per la risposta a un'altra domanda, non per il processo ${waitFor.pid}: ` +
+          `risulta ancora vivo e il tempo che avevi chiesto non è ancora passato. ` +
+          `Riparti dalla risposta — se avevi una chiamata in attesa di approvazione, rifalla e la decisione verrà usata.`
+        )
+      : (
+        'Il turno si è svegliato per la risposta a una domanda di approvazione, prima del tempo che avevi chiesto. ' +
+        'Riparti dalla risposta.'
+        );
+  }
+  if (reason === 'early') {
+    // Stessa forma senza risposta nel registro: svegliato prima che qualcosa
+    // di atteso succedesse, quindi il referto non nomina cause — né scadenze
+    // non passate, né risposte non date.
+    return waitFor !== null
+      ? (
+        `Il turno riprende prima del tempo che avevi chiesto, e non perché il processo ${waitFor.pid} sia uscito ` +
+          `— risulta ancora vivo. Riprendi da dove eri.`
+        )
+      : 'Attesa finita prima del tempo che avevi chiesto — nessuna scadenza è passata. Riprendi da dove eri.';
   }
   if (waitFor !== null) {
     return (
@@ -240,6 +293,34 @@ export function wakeReport(waitFor: WaitFor | null, reason: 'timer' | 'event'): 
     );
   }
   return 'Attesa finita: è passato il tempo che avevi chiesto. Riprendi da dove eri.';
+}
+
+/**
+ * The trade #762(b) makes explicit, in the model's own resume report.
+ *
+ * A turn resumed on `process_exit` used to receive only the exit report: an
+ * open approval question would then be withdrawn at finish (#742) and a taken
+ * decision would stay unconsumed, with nobody saying so. This note names both
+ * states. Pure — the caller observed them on the register; `null` when there
+ * is nothing to say, so callers that already speak about approvals (an
+ * `approval` barrier, handled by the guard and by `wakeReport` above) add no
+ * noise.
+ */
+export function approvalFootnote(openCapability: string | null, decidedUnconsumed: boolean): string | null {
+  const righe: string[] = [];
+  if (decidedUnconsumed) {
+    righe.push(
+      "C'è anche una decisione dell'owner già presa e non ancora usata: vale solo se rifai la chiamata che l'aveva chiesta " +
+        '— se chiudi il turno senza rifarla, resta inutilizzata.',
+    );
+  }
+  if (openCapability !== null) {
+    righe.push(
+      `C'è anche una domanda di approvazione ancora aperta (${openCapability}): se il turno finisce senza che tu l'abbia richiamata, ` +
+        'verrà ritirata senza risposta — segnalalo invece di lasciarla cadere in silenzio.',
+    );
+  }
+  return righe.length === 0 ? null : righe.join(' ');
 }
 
 function assertNever(x: never): never {

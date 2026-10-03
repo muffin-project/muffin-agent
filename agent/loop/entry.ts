@@ -437,67 +437,6 @@ export async function resumeTurn(
     };
   }
 
-  /**
-   * #741 — una sola decisione non apre un turno con più domande aperte.
-   *
-   * Un giro può chiedere più approvazioni (una per tool call che ne ha
-   * bisogno): ognuna ha la sua riga in `approvals`, e un click ne decide
-   * **una**. La barriera del turno è un `wait_for` solo, quindi `wake` lo
-   * riporta `runnable` alla prima decisione: senza questa guardia il motore
-   * leggerebbe la barriera ancora aperta come «l'owner non ha risposto» e il
-   * modello ripartirebbe con un referto falso, rifacendo le chiamate e
-   * ri-chiedendo le domande ancora aperte — con id nuovi e tastiere nuove.
-   *
-   * La condizione distingue un risveglio **da click** da uno **da scadenza**:
-   * c'è una decisione non consumata per il turno (`decidedUnconsumed`) e la
-   * prima domanda aperta (`open`) non è ancora scaduta. Alla scadenza il
-   * turno prosegue come prima — una domanda senza risposta non blocca per
-   * sempre — e un risveglio a mano senza decisioni resta il caso «timer» che
-   * `wakeReport` racconta.
-   *
-   * #749 — e la barriera della riga dev'essere **essa stessa
-   * un'approvazione**. Se aspettava un processo, il referto dell'uscita è il
-   * fatto che il modello deve ricevere: ri-sospendere su una domanda aperta
-   * lo perderebbe e lo sostituirebbe con un'attesa che nessuno ha chiesto. La
-   * decisione non consumata non si butta — resta per il tool quando riparte
-   * (`consume`).
-   */
-  const aperta = deps.approvals?.open(record.id) ?? null;
-  const decisioneDaConsumare = deps.approvals?.decidedUnconsumed(record.id) ?? false;
-  const barriera = decodeWaitFor(existing.waitFor);
-  if (barriera?.kind === 'approval' && aperta !== null && decisioneDaConsumare) {
-    const ora = (deps.now ?? (() => new Date()))().getTime();
-    const scadenzaDellaDomanda = Date.parse(aperta.askedAt) + APPROVAL_WINDOW_MS;
-    if (scadenzaDellaDomanda > ora) {
-      const spec: WaitSpec = { wakeAt: new Date(scadenzaDellaDomanda).toISOString(), waitFor: { kind: 'approval', id: aperta.id } };
-      const scritto = deps.turns.suspend(
-        record.id,
-        {
-          messages: providerMessages(record),
-          taint: record.taint,
-          counters: record.counters,
-          wakeAt: spec.wakeAt,
-          waitFor: encodeWaitFor({ kind: 'approval', id: aperta.id }),
-        },
-        record.claimToken,
-      );
-      if (scritto) {
-        return {
-          text: '',
-          iterations: record.counters.iterations,
-          traceId: record.id,
-          turnId: record.id,
-          stopped: 'suspended',
-          taint: record.taint,
-          usage: record.counters.usage,
-          suspendedUntil: spec,
-        };
-      }
-      // La scrittura non è riuscita (claim perso): il funnel ha le sue
-      // guardie, e non si inventa qui un esito diverso.
-    }
-  }
-
   const span = deps.tracer.start(
     'muffin.turn',
     {
@@ -519,6 +458,73 @@ export async function resumeTurn(
     // it is the one thing this interface needs it for.
     remoteParent(record.id),
   );
+
+  /**
+   * #741 — una sola decisione non apre un turno con più domande aperte.
+   *
+   * Un giro può chiedere più approvazioni (una per tool call che ne ha
+   * bisogno): ognuna ha la sua riga in `approvals`, e un click ne decide
+   * **una**. La barriera del turno è un `wait_for` solo, quindi `wake` lo
+   * riporta `runnable` alla prima decisione: senza questa guardia il motore
+   * leggerebbe la barriera ancora aperta come «l'owner non ha risposto» e il
+   * modello ripartirebbe con un referto falso, rifacendo le chiamate e
+   * ri-chiedendo le domande ancora aperte — con id nuovi e tastiere nuove.
+   *
+   * La condizione distingue un risveglio **da click** da uno **da scadenza**:
+   * c'è una decisione non consumata per il turno (`decidedUnconsumed`) e la
+   * prima domanda aperta (`open`) non è ancora scaduta. Alla scadenza il
+   * turno prosegue come prima — una domanda senza risposta non blocca per
+   * sempre — e un risveglio a mano senza decisioni resta il caso che il
+   * referto racconta senza affermare scadenze non osservate (#762).
+   *
+   * #749 — e la barriera della riga dev'essere **essa stessa
+   * un'approvazione**. Se aspettava un processo, il referto dell'uscita è il
+   * fatto che il modello deve ricevere: ri-sospendere su una domanda aperta
+   * lo perderebbe e lo sostituirebbe con un'attesa che nessuno ha chiesto. La
+   * decisione non consumata non si butta — resta per il tool quando riparte
+   * (`consume`).
+   *
+   * La span nasce **prima** della guardia (#762(c)): una ri-sospensione su
+   * click differito è un esito del turno come gli altri, e prima usciva di
+   * qui senza lasciare traccia nel trace.
+   */
+  const aperta = deps.approvals?.open(record.id) ?? null;
+  const decisioneDaConsumare = deps.approvals?.decidedUnconsumed(record.id) ?? false;
+  const barriera = decodeWaitFor(existing.waitFor);
+  if (barriera?.kind === 'approval' && aperta !== null && decisioneDaConsumare) {
+    const ora = (deps.now ?? (() => new Date()))().getTime();
+    const scadenzaDellaDomanda = Date.parse(aperta.askedAt) + APPROVAL_WINDOW_MS;
+    if (scadenzaDellaDomanda > ora) {
+      const spec: WaitSpec = { wakeAt: new Date(scadenzaDellaDomanda).toISOString(), waitFor: { kind: 'approval', id: aperta.id } };
+      const scritto = deps.turns.suspend(
+        record.id,
+        {
+          messages: providerMessages(record),
+          taint: record.taint,
+          counters: record.counters,
+          wakeAt: spec.wakeAt,
+          waitFor: encodeWaitFor({ kind: 'approval', id: aperta.id }),
+        },
+        record.claimToken,
+      );
+      if (scritto) {
+        span.setAttributes({ 'muffin.turn.resuspended': 'approval-still-open' });
+        span.end({ status: 'ok' });
+        return {
+          text: '',
+          iterations: record.counters.iterations,
+          traceId: record.id,
+          turnId: record.id,
+          stopped: 'suspended',
+          taint: record.taint,
+          usage: record.counters.usage,
+          suspendedUntil: spec,
+        };
+      }
+      // La scrittura non è riuscita (claim perso): il funnel ha le sue
+      // guardie, e non si inventa qui un esito diverso.
+    }
+  }
 
   if (record.providerLease.model !== deps.model) {
     // Explicit, and terminal. Retrying would mean a row that wakes every boot
@@ -564,8 +570,10 @@ export async function resumeTurn(
     // La barriera letta **prima** del claim, che è ciò che la spegne. `record`
     // qui sotto è la riga già reclamata: chiederla a lui vorrebbe dire dire
     // sempre «è passato il tempo», anche quando a svegliare il turno è stata
-    // una risposta dell'owner arrivata un istante fa.
+    // una risposta dell'owner arrivata un istante fa. Stessa strada per la
+    // scadenza: senza, il referto non può osservare se è passata (#762).
     waitForAtWake: existing.waitFor,
+    wakeAtAtWake: existing.wakeAt,
     ...(replyChannelAlRisveglio === undefined ? {} : { replyChannel: replyChannelAlRisveglio }),
     // Il filo che `docs/evidence/forma-delle-superfici-2026-09-03.md` §4.3
     // trovava reciso: `drive` li accetta già da sempre (`options.onDelta`/
