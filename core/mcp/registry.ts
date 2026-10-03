@@ -115,18 +115,68 @@ export type McpToolDef = {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  /**
+   * The protocol's own `annotations` (`ToolAnnotations` in the SDK: `title`,
+   * `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`, all
+   * optional). Retained from `listTools` so the reversible mapping below reads
+   * a declared value, not a guess — and hashed with the rest, because an
+   * annotation flip is a rug-pull with the same standing as a rewritten
+   * description: a server approved as read-only that later declares itself
+   * destructive (or the reverse) suspends until the owner re-approves.
+   */
+  annotations?: McpToolAnnotations;
 };
+
+/**
+ * The five protocol hint fields, nothing else. Unknown keys from the wire are
+ * dropped at the boundary (`connect.ts`), so a server cannot smuggle hash
+ * volatility — or meaning — through a field this build never reviewed.
+ */
+export type McpToolAnnotations = {
+  title?: string;
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
+};
+
+/**
+ * ADR-0074 punto 5: the annotations the MCP server declares are the authority
+ * for the reversible flag. `readOnlyHint: true` is `reversible: 'yes'`; a
+ * `destructiveHint` or absent annotations are `'no'` and ask (row `external`).
+ *
+ * Two deliberate fail-closed readings where the ADR is silent:
+ * - contradictory hints (`readOnlyHint` AND `destructiveHint` true) are `'no'`:
+ *   the server disagrees with itself, and the direction that asks is the one
+ *   that survives a lie;
+ * - `readOnlyHint: false` is `'no'`, not `'yes'`: only an explicit `true`
+ *   lifts the ask, the default is today's ask-everything, byte for byte.
+ *
+ * The SDK itself warns that hints are "not guaranteed to provide a faithful
+ * description" and that clients should never decide on them from untrusted
+ * servers. They are not trusted here either: they are *pinned* — an
+ * annotation change breaks the tool hash and suspends the server — so the
+ * authority is the owner's approval of that exact declaration, not the
+ * server's live word.
+ */
+export function reversibleFromAnnotations(annotations?: McpToolAnnotations): 'yes' | 'no' {
+  if (annotations?.readOnlyHint === true && annotations?.destructiveHint !== true) return 'yes';
+  return 'no';
+}
 
 /**
  * sha256 over a canonical serialization: object keys sorted at every level, so
  * a server that merely re-orders its schema fields is not "changed". Anything
- * else — a word in the description, a new argument, a widened type — is.
+ * else — a word in the description, a new argument, a widened type, a flipped
+ * hint — is. Absent annotations hash as `{}`: the pin covers the authority,
+ * not just the prose.
  */
 export function toolHash(tool: McpToolDef): string {
   const canonical = stableStringify({
     name: tool.name,
     description: tool.description,
     inputSchema: tool.inputSchema,
+    annotations: tool.annotations ?? {},
   });
   return createHash('sha256').update(canonical).digest('hex');
 }

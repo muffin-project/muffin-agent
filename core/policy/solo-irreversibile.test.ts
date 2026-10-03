@@ -142,7 +142,18 @@ const ALL: readonly CapabilityDecl[] = [
   waitCapability,
   scheduleCapability,
   vaultWriteCapability,
-  mcpCapabilityFor('esempio'),
+  mcpCapabilityFor('esempio', { name: 'scrivi', description: 'd', inputSchema: { type: 'object' } }),
+  // Il gemello read-only dello stesso server (ADR-0074 punto 5): stesse
+  // righe, stesso taint, altro verdetto. L'`it.each` sotto gli chiede la
+  // regola per intero — mai `ask` sotto il soffitto — quindi togliere la
+  // mappatura annotazioni→reversibile lo fa chiedere e fa cadere il file in
+  // due punti, qui e nell'elenco per nome qui sotto (che NON lo nomina).
+  mcpCapabilityFor('esempio', {
+    name: 'leggi',
+    description: 'd',
+    inputSchema: { type: 'object' },
+    annotations: { readOnlyHint: true },
+  }),
   ...DOORS,
 ];
 
@@ -294,16 +305,17 @@ describe('si chiede solo per l irreversibile — ADR-0074, ogni capability spedi
    * #645) leggere l'intera macchina e' disclosure, e la disclosure non ha
    * undo, quindi la corsia di ADR-0074 punto 4 e' entrata nella lista invece
    * di restarne fuori per «costruzione» —, un processo terminato, una chiamata
-   * a un server MCP di cui non possediamo la semantica. `mcp.*` e'
-   * `reversible: 'no'` a mano su ogni server ed e' la meta' che ADR-0074
-   * punto 5 (altra fetta) sistema leggendo `readOnlyHint` dal protocollo;
-   * finché quella non atterra, ogni chiamata MCP chiede, ed e' la conseguenza
-   * dichiarata dell'ADR, non una sorpresa di questa.
+   * a un server MCP di cui non possediamo la semantica. `mcp.esempio.scrivi`
+   * e' `reversible: 'no'` perche' senza annotazioni (ADR-0074 punto 5,
+   * atterrato: `readOnlyHint` dichiara `'yes'`, il resto chiede); il gemello
+   * `mcp.esempio.leggi` dello stesso server e' `'yes'` e NON e' in questa
+   * lista — togliere la mappatura lo fa chiedere e fa cadere sia l'`it.each`
+   * sopra sia questa riga.
    */
   it('le capability che chiedono, per nome: shell (entrambe le corsie), kill, MCP — e nessun altra', () => {
     const chiedono = ALL.filter((d) => decisione(d, 0, OWNER).effect === 'ask').map((d) => d.id);
     expect(chiedono.sort()).toEqual([
-      'mcp.esempio',
+      'mcp.esempio.scrivi',
       'sys.process.kill',
       'sys.shell',
       'sys.shell.write',
@@ -445,8 +457,8 @@ describe('si chiede solo per l irreversibile — ADR-0074, ogni capability spedi
    * La meta' non-owner della stessa regola, e **perche' ha bisogno di una
    * dichiarazione sintetica invece che di una spedita.**
    *
-   * Oggi le uniche dichiarazioni su quelle due righe sono `mcp.*`
-   * (`external`), e sono tutte `hostOnly: true`: un membro di gruppo le perde
+   * Oggi le uniche dichiarazioni su quelle due righe sono le `mcp.*`
+   * (`external`, una per tool dallo slice #770), e sono tutte `hostOnly: true`: un membro di gruppo le perde
    * al confine dei tenant, molto prima del soffitto del taint. Nessuna riga
    * `outward` e' spedita affatto — ADR-0070, asserito in
    * `effect-rows.test.ts`. Un ciclo sulle sole capability spedite quindi
