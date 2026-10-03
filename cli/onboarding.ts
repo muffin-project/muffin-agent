@@ -1,3 +1,4 @@
+import { discoverOpenAICompatModels } from '../agent/providers/models-discovery.js';
 import type { ProviderKind } from '../core/config/config.js';
 import type { SandboxProbe } from '../core/sandbox/probe.js';
 import { promptLine } from './prompt.js';
@@ -164,22 +165,17 @@ export const DEFAULT_LOCAL_RUNTIME_URL = 'http://127.0.0.1:11434/v1';
  * timeout, non-JSON, wrong shape) reads as "not found": the owner's brief is
  * "fallito = semplicemente non proposto", not a warning about a server that
  * was never expected to be there.
+ *
+ * The HTTP reading is the shared `discoverOpenAICompatModels` (#763); this
+ * function only applies the onboarding policy on top: no credential, and every
+ * outcome other than a model list collapses to "not available".
  */
 export async function probeLocalRuntime(
   baseUrl: string = DEFAULT_LOCAL_RUNTIME_URL,
   timeoutMs: number = LOCAL_RUNTIME_PROBE_TIMEOUT_MS,
 ): Promise<LocalRuntimeProbe> {
-  try {
-    const response = await fetch(`${baseUrl}/models`, { signal: AbortSignal.timeout(timeoutMs) });
-    if (!response.ok) return { available: false, baseUrl };
-    const body = (await response.json()) as { data?: Array<{ id?: string }> };
-    const models = (body.data ?? [])
-      .map((m) => m.id)
-      .filter((id): id is string => typeof id === 'string' && id.length > 0);
-    return { available: true, baseUrl, models };
-  } catch {
-    return { available: false, baseUrl };
-  }
+  const found = await discoverOpenAICompatModels({ baseUrl, timeoutMs });
+  return found.status === 'known' ? { available: true, baseUrl, models: found.models } : { available: false, baseUrl };
 }
 
 /**

@@ -1,3 +1,4 @@
+import { discoverOpenAICompatModels, type ModelDiscovery } from '../agent/providers/models-discovery.js';
 import { loadConfig, saveConfig, readSecret, type Config } from '../core/config/config.js';
 import { buildEndpointsUrl, parseEndpointTags } from '../core/config/endpoints.js';
 import { resolveModelSwitch, type EndpointEvidence } from '../core/config/model-resolve.js';
@@ -166,7 +167,7 @@ export function priceNote(reale: CatalogueModel, baseUrl: string | undefined): s
  * servirebbe. Soglia a 6 caratteri per non proporre mezzo catalogo a chi ha
  * scritto `gpt`.
  */
-function vicini(slug: string, catalogo: CatalogueModel[]): string[] {
+function vicini(slug: string, catalogo: readonly { id: string }[]): string[] {
   const coda = (id: string): string => (id.includes('/') ? id.slice(id.indexOf('/') + 1) : id).toLowerCase();
   const bersaglio = coda(slug);
   const comune = (a: string, b: string): number => {
@@ -304,7 +305,22 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
   const lane: Lane = primo === 'main' || primo === 'light' || primo === 'embed' ? primo : 'main';
   const slug = lane === primo ? resto[0] : primo;
 
+  const generico = genericEndpoint(config, entry);
+
   if (primo === '--list') {
+    if (generico !== null) {
+      const found = await discoverOpenAICompatModels({ baseUrl: generico, apiKey: providerKey(config, home), fetch: deps.fetchImpl });
+      if (found.status !== 'known') {
+        out(`${generico}/models non verificabile (${perche(found)}).`);
+        return 1;
+      }
+      const filtro = (resto[0] ?? '').toLowerCase();
+      const righe = found.models.filter((id) => id.toLowerCase().includes(filtro));
+      if (found.models.length === 0) out(`${generico} non dichiara nessun modello.`);
+      for (const id of righe.slice(0, 60)) out(id);
+      if (righe.length > 60) out(`… e altri ${righe.length - 60}. Restringi con \`muffin model --list <filtro>\`.`);
+      return 0;
+    }
     if (entry === null) {
       out('nessun catalogo: questo endpoint non è fra i provider conosciuti.');
       return 1;
@@ -317,16 +333,10 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
     return 0;
   }
 
-  if (slug === undefined || slug.startsWith('-')) {
-    out('uso: muffin model [main|light|embed] <slug> · muffin model --list [filtro] · muffin model');
-    return 2;
-  }
-
   // Persistito contro attivo (issue #500), su ogni strada che scrive: il
   // gateway vivo applica ai nuovi turni senza riavvio, e lo si dice con i
-  // valori che il gateway stesso dichiara — mai indovinando. Qui `slug` è
-  // ristretto a stringa dal ramo qui sopra.
-  const attiva = async (cfg: Config): Promise<void> => {
+  // valori che il gateway stesso dichiara, mai indovinando.
+  const attiva = async (cfg: Config, scelto: string): Promise<void> => {
     const query = deps.gatewayStatus ?? (() => askGateway(home, 'status') as Promise<GatewayStatus | null>);
     let status: GatewayStatus | null = null;
     try {
@@ -334,8 +344,78 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
     } catch {
       status = null;
     }
-    for (const line of activationNotes(lane, slug, cfg.models.main, cfg.models.light, status)) out(line);
+    for (const line of activationNotes(lane, scelto, cfg.models.main, cfg.models.light, status)) out(line);
   };
+
+  // Endpoint compat generico (issue #763): `/models` è un indizio, non
+  // un'autorità (un proxy con route wildcard elenca modelli finti), quindi
+  // uno slug assente avvisa e si scrive lo stesso, e un fallimento della
+  // lettura vuol dire «non verificato», mai «non esiste».
+  const scriviGenerico = async (
+    corsia: 'main' | 'light',
+    baseUrl: string,
+    scelto: string,
+    found: ModelDiscovery,
+  ): Promise<number> => {
+    if (found.status === 'known' && found.models.includes(scelto)) {
+      out(`"${scelto}" è servito da ${baseUrl} (visto in /models).`);
+    } else if (found.status === 'known') {
+      const n = found.models.length;
+      const anteprima = n === 0 ? '' : `: ${found.models.slice(0, 5).join(', ')}${n > 5 ? ', …' : ''}`;
+      out(
+        `⚠ "${scelto}" non compare in ${baseUrl}/models (${n === 1 ? '1 modello' : `${n} modelli`}${anteprima}). ` +
+          `Su un endpoint generico quella lista è un indizio, non un'autorità: lo scrivo lo stesso.`,
+      );
+      const forse = vicini(scelto, found.models.map((id) => ({ id })));
+      if (forse.length > 0) out(`forse: ${forse.join(', ')}`);
+    } else {
+      out(`${baseUrl}/models non verificabile (${perche(found)}): scrivo "${scelto}" su ${corsia}, NON verificato.`);
+    }
+    const switched = resolveModelSwitch(config, corsia, scelto, null);
+    saveConfig(switched.config, home);
+    for (const note of switched.notes) out(note);
+    await attiva(switched.config, scelto);
+    if (corsia === 'main') out('Il profilo si risceglie da solo dal nome del modello: `muffin doctor` dice quale.');
+    return 0;
+  };
+
+  if (slug === '--served' && lane !== 'embed') {
+    if (generico === null) {
+      out(
+        '--served vale solo per un endpoint openai-compat fuori catalogo' +
+          (entry === null ? '.' : `: il catalogo di ${entry.label} è autorevole, scegli con \`muffin model <slug>\`.`),
+      );
+      return 2;
+    }
+    const found = await discoverOpenAICompatModels({ baseUrl: generico, apiKey: providerKey(config, home), fetch: deps.fetchImpl });
+    if (found.status !== 'known') {
+      out(`Non so cosa serve ${generico} (${perche(found)}): niente scritto.`);
+      return 1;
+    }
+    const [unico, ...altri] = found.models;
+    if (unico === undefined) {
+      out(`${generico} non dichiara nessun modello: niente scritto.`);
+      return 1;
+    }
+    if (altri.length > 0) {
+      // Anteprima e non elenco: un proxy con route wildcard ne dichiara
+      // centinaia (200, misurato), e una riga sola di migliaia di caratteri
+      // non si legge in un terminale e supera il limite di un messaggio Telegram.
+      const n = found.models.length;
+      out(
+        `${generico} serve ${n} modelli, non ne scelgo uno a caso: ` +
+          `${found.models.slice(0, 5).join(', ')}${n > 5 ? `, … (\`muffin model --list\` li elenca)` : ''}.`,
+      );
+      out(`Scegli con \`muffin model ${lane === 'main' ? '' : `${lane} `}<slug>\`. Niente scritto.`);
+      return 1;
+    }
+    return scriviGenerico(lane, generico, unico, found);
+  }
+
+  if (slug === undefined || slug.startsWith('-')) {
+    out('uso: muffin model [main|light|embed] <slug> · muffin model [main|light] --served · muffin model --list [filtro] · muffin model');
+    return 2;
+  }
 
   if (lane === 'embed') {
     // Nessun catalogo da interrogare: OpenRouter instrada chat, non embedding.
@@ -360,6 +440,11 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
     return 0;
   }
 
+  if (generico !== null) {
+    const found = await discoverOpenAICompatModels({ baseUrl: generico, apiKey: providerKey(config, home), fetch: deps.fetchImpl });
+    return scriviGenerico(lane, generico, slug, found);
+  }
+
   if (entry === null) {
     out(`endpoint fuori dal catalogo: scrivo "${slug}" su ${lane} senza poterlo verificare.`);
     // Senza provider noto non c'è evidenza: il resolver tiene tutto e lo dice
@@ -367,7 +452,7 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
     const switched = resolveModelSwitch(config, lane, slug, null);
     saveConfig(switched.config, home);
     for (const note of switched.notes) out(note);
-    await attiva(switched.config);
+    await attiva(switched.config, slug);
     return 0;
   }
 
@@ -383,7 +468,7 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
     saveConfig(switched.config, home);
     out(`${lane} → ${slug}, NON verificato.`);
     for (const note of switched.notes) out(note);
-    await attiva(switched.config);
+    await attiva(switched.config, slug);
     return 0;
   }
 
@@ -405,9 +490,40 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
   const nota = priceNote(trovato, config.provider.baseUrl);
   if (nota !== null) out(nota);
   for (const note of switched.notes) out(note);
-  await attiva(switched.config);
+  await attiva(switched.config, slug);
   if (lane === 'main') out('Il profilo si risceglie da solo dal nome del modello: `muffin doctor` dice quale.');
   return 0;
+}
+
+/**
+ * L'endpoint compat generico di questa installazione, o `null`: un
+ * openai-compat con un `baseUrl` che non è nel catalogo (un llama-server, un
+ * vLLM, un Ollama, un proxy). L'API nativa di Anthropic parla un altro
+ * protocollo e resta fuori: questa lettura è quella OpenAI-compatibile.
+ */
+function genericEndpoint(config: Config, entry: ProviderEntry | null): string | null {
+  if (entry !== null || config.provider.kind !== 'openai-compat') return null;
+  return config.provider.baseUrl ?? null;
+}
+
+/**
+ * La credenziale con cui il runtime parla a questo endpoint (la stessa che
+ * `agent/providers/verify.ts` legge), perché un server con `--api-key` rifiuta
+ * `/models` senza. Va solo a `baseUrl`, mai stampata.
+ */
+function providerKey(config: Config, home: string): string | undefined {
+  try {
+    return readSecret(config.provider.apiKeyRef, home);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Perché `/models` non ha detto niente, in parole dell'owner. */
+function perche(found: Exclude<ModelDiscovery, { status: 'known' }>): string {
+  if (found.status === 'unsupported') return `nessuna lista dei modelli: ${found.detail}`;
+  const motivo = { network: 'irraggiungibile', timeout: 'nessuna risposta in tempo', auth: 'credenziale rifiutata', http: 'errore HTTP' };
+  return `${motivo[found.reason]}: ${found.detail}`;
 }
 
 /** La chiave, solo se il catalogo la pretende — su OpenRouter non serve, e non si legge un segreto per niente. */

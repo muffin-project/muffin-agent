@@ -320,6 +320,184 @@ describe('muffin model rivalida il routing (issue #501)', () => {
   });
 });
 
+/**
+ * Endpoint openai-compat fuori catalogo (issue #763): un llama-server, un
+ * vLLM, un Ollama, un proxy. Il server accetta qualunque nome gli si chieda
+ * (misurato su llama-server con `--api-key`), quindi un refuso o un modello
+ * cambiato lato server passavano in silenzio. `/models` è un indizio, non
+ * un'autorità: un proxy con route wildcard ne elenca di finti.
+ */
+describe('muffin model su un endpoint compat generico (issue #763)', () => {
+  const GENERIC = 'http://llm.example.test:8080/v1';
+  const CHIAVE = 'sk-local-canary-763';
+
+  function genericHome(): string {
+    const h = mkdtempSync(join(tmpdir(), 'muffin-model-generic-'));
+    runInit({ home: h, provider: 'openai-compat', baseUrl: GENERIC, apiKey: CHIAVE });
+    return h;
+  }
+
+  /** `/models` finto che registra ogni richiesta: URL e Authorization. */
+  function modelli(
+    risposta: { status?: number; body?: unknown; raw?: string } | 'throw',
+  ): { fetchImpl: typeof globalThis.fetch; viste: { url: string; auth: string | null }[] } {
+    const viste: { url: string; auth: string | null }[] = [];
+    const fetchImpl = (async (url: unknown, init?: RequestInit) => {
+      viste.push({ url: String(url), auth: new Headers(init?.headers).get('authorization') });
+      if (risposta === 'throw') throw new TypeError('fetch failed');
+      const text = risposta.raw ?? JSON.stringify(risposta.body ?? {});
+      return new Response(text, { status: risposta.status ?? 200 });
+    }) as unknown as typeof globalThis.fetch;
+    return { fetchImpl, viste };
+  }
+
+  const lista = (...ids: string[]) => ({ body: { object: 'list', data: ids.map((id) => ({ id, object: 'model' })) } });
+
+  it('uno slug elencato: lo dice prima di scriverlo, chiedendo /models con la credenziale salvata', async () => {
+    const h = genericHome();
+    const rete = modelli(lista('qwen3.6-35b'));
+    const { out, sink } = raccogli();
+    const code = await cmdModel(h, ['qwen3.6-35b'], { out: sink, fetchImpl: rete.fetchImpl, gatewayStatus: async () => null });
+    expect(code).toBe(0);
+    expect(loadConfig(h).models.main).toBe('qwen3.6-35b');
+    expect(rete.viste).toEqual([{ url: `${GENERIC}/models`, auth: `Bearer ${CHIAVE}` }]);
+    const testo = out.join('\n');
+    expect(testo).toContain('visto in /models');
+    expect(testo).not.toContain(CHIAVE);
+  });
+
+  it('uno slug assente: avvisa, propone i vicini, e scrive lo stesso', async () => {
+    const h = genericHome();
+    const { out, sink } = raccogli();
+    const code = await cmdModel(h, ['qwen3.5-9b-abliterated'], {
+      out: sink,
+      fetchImpl: modelli(lista('qwen3.5-9b')).fetchImpl,
+      gatewayStatus: async () => null,
+    });
+    expect(code).toBe(0);
+    expect(loadConfig(h).models.main).toBe('qwen3.5-9b-abliterated');
+    const testo = out.join('\n');
+    expect(testo).toContain('non compare');
+    expect(testo).toContain('qwen3.5-9b');
+    expect(testo).toContain('lo scrivo lo stesso');
+  });
+
+  it('rete giù, 401 o risposta malformata: scrive e dice NON verificato, mai «non esiste»', async () => {
+    for (const risposta of ['throw', { status: 401, body: { error: 'Invalid API Key' } }, { raw: '<html>' }] as const) {
+      const h = genericHome();
+      const { out, sink } = raccogli();
+      const code = await cmdModel(h, ['qualcosa'], { out: sink, fetchImpl: modelli(risposta).fetchImpl, gatewayStatus: async () => null });
+      expect(code).toBe(0);
+      expect(loadConfig(h).models.main).toBe('qualcosa');
+      const testo = out.join('\n');
+      expect(testo).toContain('NON verificato');
+      expect(testo).not.toContain('non esiste');
+    }
+  });
+
+  it('la corsia light passa dalla stessa verifica', async () => {
+    const h = genericHome();
+    const mainPrima = loadConfig(h).models.main;
+    const { out, sink } = raccogli();
+    await cmdModel(h, ['light', 'qwen3.6-35b'], { out: sink, fetchImpl: modelli(lista('qwen3.6-35b')).fetchImpl, gatewayStatus: async () => null });
+    const c = loadConfig(h);
+    expect(c.models.light).toBe('qwen3.6-35b');
+    expect(c.models.main).toBe(mainPrima);
+    expect(out.join('\n')).toContain('visto in /models');
+  });
+
+  it('--list elenca ciò che /models dichiara, col filtro', async () => {
+    const { out, sink } = raccogli();
+    const code = await cmdModel(genericHome(), ['--list', 'qwen'], {
+      out: sink,
+      fetchImpl: modelli(lista('qwen3.6-35b', 'gemma-4-12b')).fetchImpl,
+    });
+    expect(code).toBe(0);
+    expect(out.join('\n')).toContain('qwen3.6-35b');
+    expect(out.join('\n')).not.toContain('gemma-4-12b');
+  });
+
+  it('--list su un endpoint che non risponde fallisce dicendo perché', async () => {
+    const { out, sink } = raccogli();
+    const code = await cmdModel(genericHome(), ['--list'], { out: sink, fetchImpl: modelli('throw').fetchImpl });
+    expect(code).toBe(1);
+    expect(out.join('\n')).toContain('non verificabile');
+  });
+
+  describe('--served sceglie solo quando il modello servito è esattamente uno', () => {
+    it('uno: lo scrive su main', async () => {
+      const h = genericHome();
+      const { out, sink } = raccogli();
+      const code = await cmdModel(h, ['--served'], { out: sink, fetchImpl: modelli(lista('qwen3.6-35b')).fetchImpl, gatewayStatus: async () => null });
+      expect(code).toBe(0);
+      expect(loadConfig(h).models.main).toBe('qwen3.6-35b');
+      expect(out.join('\n')).toContain('qwen3.6-35b');
+    });
+
+    it('uno, sulla corsia light', async () => {
+      const h = genericHome();
+      const code = await cmdModel(h, ['light', '--served'], {
+        out: () => {},
+        fetchImpl: modelli(lista('qwen3.6-35b')).fetchImpl,
+        gatewayStatus: async () => null,
+      });
+      expect(code).toBe(0);
+      expect(loadConfig(h).models.light).toBe('qwen3.6-35b');
+    });
+
+    it('zero: errore esplicito, niente scritto', async () => {
+      const h = genericHome();
+      const prima = loadConfig(h).models.main;
+      const { out, sink } = raccogli();
+      const code = await cmdModel(h, ['--served'], { out: sink, fetchImpl: modelli(lista()).fetchImpl });
+      expect(code).toBe(1);
+      expect(loadConfig(h).models.main).toBe(prima);
+      expect(out.join('\n')).toContain('nessun modello');
+    });
+
+    it('più di uno: li elenca e chiede lo slug, niente scritto', async () => {
+      const h = genericHome();
+      const prima = loadConfig(h).models.main;
+      const { out, sink } = raccogli();
+      const code = await cmdModel(h, ['--served'], { out: sink, fetchImpl: modelli(lista('a-model', 'b-model')).fetchImpl });
+      expect(code).toBe(1);
+      expect(loadConfig(h).models.main).toBe(prima);
+      expect(out.join('\n')).toContain('a-model');
+      expect(out.join('\n')).toContain('b-model');
+    });
+
+    it('centinaia, da un proxy con route wildcard: anteprima breve, non un muro di testo', async () => {
+      const ids = Array.from({ length: 200 }, (_, i) => `proxy/model-${String(i)}`);
+      const { out, sink } = raccogli();
+      const code = await cmdModel(genericHome(), ['--served'], { out: sink, fetchImpl: modelli(lista(...ids)).fetchImpl });
+      expect(code).toBe(1);
+      const testo = out.join('\n');
+      expect(testo).toContain('200 modelli');
+      expect(testo).toContain('--list');
+      expect(testo).not.toContain('proxy/model-199');
+      expect(testo.length).toBeLessThan(600);
+    });
+
+    it('endpoint non verificabile: non indovina, niente scritto', async () => {
+      const h = genericHome();
+      const prima = loadConfig(h).models.main;
+      const code = await cmdModel(h, ['--served'], { out: () => {}, fetchImpl: modelli('throw').fetchImpl });
+      expect(code).toBe(1);
+      expect(loadConfig(h).models.main).toBe(prima);
+    });
+
+    it('su un catalogo autorevole non ha senso, e lo dice', async () => {
+      const h = home();
+      const prima = loadConfig(h).models.main;
+      const { out, sink } = raccogli();
+      const code = await cmdModel(h, ['--served'], { out: sink, fetchImpl: catalogo(['x/y', '0', '0']) });
+      expect(code).toBe(2);
+      expect(loadConfig(h).models.main).toBe(prima);
+      expect(out.join('\n')).toContain('--served');
+    });
+  });
+});
+
 describe('muffin model distingue persistito da attivo (issue #500)', () => {
   const casa = (main: string, light: string) => {
     const h = home();
