@@ -612,11 +612,19 @@ export function replyMessage(
  * message this press is answering, the way a real Telegram client would —
  * `connectors/telegram/connector.ts#handleCallback` reads `message.chat.id`
  * and `message.message_id` to strike the confirmation onto that same bubble.
+ *
+ * Two shapes, because the ASK itself ships two ways. The transcript-hosted
+ * question echoes back with `text`; the standalone fallback question goes out
+ * rich-first (`connectors/telegram/approval.ts#approvatoreTelegram` via
+ * `present()`), so its callback carries `rich_message` and **no** `text` —
+ * the shape #759 taught `handleCallback` to read via `normalizeInboundRich`.
+ * Pass `{ richBlocks }` (no `text` key at all) for that second shape; #783's
+ * restart scenario drives one approval of each.
  */
 export function callbackQuery(
   from: { id: number; name?: string },
   data: string,
-  message: { messageId: number; chatId: number; text: string },
+  message: { messageId: number; chatId: number; text: string } | { messageId: number; chatId: number; richBlocks: unknown[] },
 ): FakeUpdate {
   return {
     callback_query: {
@@ -628,7 +636,7 @@ export function callbackQuery(
         message_id: message.messageId,
         date: Math.floor(Date.now() / 1000),
         chat: { id: message.chatId, type: 'private' },
-        text: message.text,
+        ...('text' in message ? { text: message.text } : { rich_message: { blocks: message.richBlocks } }),
       },
     },
   };
