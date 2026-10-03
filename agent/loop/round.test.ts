@@ -527,6 +527,69 @@ describe('il gate di completezza spinge una volta sola', () => {
   });
 });
 
+describe('il gate di completezza legge i contatori di vita del turno (#603)', () => {
+  /**
+   * The owner-visible failure of 2026-09-19: a continued turn on the same
+   * durable identity, 6 tool calls folded into `lifetime` by the prior lease
+   * and 0 in the fresh one, answering from that prior evidence while naming
+   * the tool. Lease-local truth misclassifies it as narrating an action it
+   * never took, and the valid streamed draft is closed as `superseded`.
+   *
+   * MUTATION-PROVABLE: with the gate reverted to `run.toolCallsMade`, the
+   * nudge fires, the second scripted answer is consumed, and the call-count
+   * assertion below goes red.
+   */
+  it('un turno continuato che risponde da prove del lease precedente non è mai superseded', async () => {
+    const { tool, decl } = okTool('fs_read');
+    const deltas: TurnDelta[] = [];
+    const first = 'Ho letto il file con fs_read: ecco cosa contiene.';
+    const provider = scriptedProvider({
+      stream: [
+        [{ type: 'text_delta', text: first }, { type: 'done', result: reply(first) }],
+        [{ type: 'text_delta', text: 'seconda risposta' }, { type: 'done', result: reply('seconda risposta') }],
+      ],
+    });
+    const h = harness({ provider, tools: [tool], decls: [decl], onDelta: (d) => deltas.push(d) });
+    // Durable evidence from the prior lease, fresh lease with zero new calls.
+    h.scope.record.lifetime.toolCallsMade = 6;
+
+    const result = await runRounds(h.scope);
+
+    expect(result.stopped).toBe('answered');
+    expect(result.text).toBe(first);
+    expect(provider.streamCalls).toHaveLength(1);
+    expect(h.run.nudgedForCompletion).toBe(false);
+    expect(deltas.filter((d) => d.type === 'boundary')).toEqual([]);
+  });
+
+  /**
+   * The other direction: the fix must not delete the gate. A turn with zero
+   * calls in every lease that narrates a tool is still nudged exactly once,
+   * and the replaced draft is still reported `superseded` to the surface.
+   */
+  it('un turno davvero senza chiamate che narra un tool è ancora superseded', async () => {
+    const { tool, decl } = okTool('fs_write');
+    const deltas: TurnDelta[] = [];
+    const first = 'Ho usato fs_write per salvarlo.';
+    const second = 'Nessun file scritto: riscrivo senza affermazioni.';
+    const provider = scriptedProvider({
+      stream: [
+        [{ type: 'text_delta', text: first }, { type: 'done', result: reply(first) }],
+        [{ type: 'text_delta', text: second }, { type: 'done', result: reply(second) }],
+      ],
+    });
+    const h = harness({ provider, tools: [tool], decls: [decl], onDelta: (d) => deltas.push(d) });
+
+    const result = await runRounds(h.scope);
+
+    expect(result.stopped).toBe('answered');
+    expect(provider.streamCalls).toHaveLength(2);
+    expect(h.run.nudgedForCompletion).toBe(true);
+    expect(deltas).toContainEqual({ type: 'boundary', reason: 'superseded' });
+    expect(result.text).toBe(second);
+  });
+});
+
 describe('execution budget', () => {
   it('does not invoke the provider when the cumulative model budget is already spent', async () => {
     let calls = 0;
