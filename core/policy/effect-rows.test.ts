@@ -74,7 +74,16 @@ const ALL: readonly CapabilityDecl[] = [
   waitCapability,
   scheduleCapability,
   vaultWriteCapability,
-  mcpCapabilityFor('esempio'),
+  mcpCapabilityFor('esempio', { name: 'scrivi', description: 'd', inputSchema: { type: 'object' } }),
+  // Il gemello read-only (ADR-0074 punto 5): stessa riga `external`, altro
+  // `reversible` — l'oracolo sopra lo vuole `allow` sotto il soffitto, e così
+  // la cella della riga resta provata in entrambe le direzioni.
+  mcpCapabilityFor('esempio', {
+    name: 'leggi',
+    description: 'd',
+    inputSchema: { type: 'object' },
+    annotations: { readOnlyHint: true },
+  }),
   // The two doors: declared without a tool, asserted against their rows like
   // everything else (ADR-0055).
   ...DOORS,
