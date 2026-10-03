@@ -4,7 +4,7 @@ import { Client } from '@modelcontextprotocol/client';
 // still show it on the root export.
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { readSecret } from '../config/config.js';
-import type { McpServerEntry, McpToolDef } from './registry.js';
+import type { McpServerEntry, McpToolAnnotations, McpToolDef } from './registry.js';
 
 /**
  * One connection per allowlisted server, over stdio.
@@ -43,10 +43,17 @@ export async function connectServer(server: string, entry: McpServerEntry): Prom
   do {
     const page = await client.listTools(cursor ? { cursor } : {});
     for (const t of page.tools) {
+      const annotations = normalizzaAnnotazioni(t.annotations);
       tools.push({
         name: t.name,
         description: t.description ?? '',
         inputSchema: (t.inputSchema ?? { type: 'object' }) as Record<string, unknown>,
+        // The authority for the reversible flag (ADR-0074 punto 5,
+        // `reversibleFromAnnotations` in `registry.ts`). Dropped before this
+        // slice, which is why every MCP call asked: nothing downstream could
+        // read what the listing never kept. Normalized to the five known
+        // fields so only reviewed vocabulary reaches the hash.
+        ...(annotations !== undefined ? { annotations } : {}),
       });
     }
     cursor = page.nextCursor;
@@ -88,3 +95,22 @@ function resolveEnv(env: Record<string, string>, home?: string): Record<string, 
 
 /** Solo per il test: la stessa funzione, con una home esplicita. */
 export const resolveEnvForTest = resolveEnv;
+
+/**
+ * The wire's `annotations` reduced to the five reviewed fields
+ * (`McpToolAnnotations`). Unknown keys are dropped — they carry no meaning
+ * this build understands and must not reach the pin hash — and a value with
+ * no known field set collapses to `undefined`, so an empty object and an
+ * absent one hash (and decide) the same.
+ */
+function normalizzaAnnotazioni(raw: unknown): McpToolAnnotations | undefined {
+  if (raw === undefined || raw === null || typeof raw !== 'object') return undefined;
+  const obj = raw as { [k: string]: unknown };
+  const out: McpToolAnnotations = {};
+  if (typeof obj.title === 'string') out.title = obj.title;
+  if (typeof obj.readOnlyHint === 'boolean') out.readOnlyHint = obj.readOnlyHint;
+  if (typeof obj.destructiveHint === 'boolean') out.destructiveHint = obj.destructiveHint;
+  if (typeof obj.idempotentHint === 'boolean') out.idempotentHint = obj.idempotentHint;
+  if (typeof obj.openWorldHint === 'boolean') out.openWorldHint = obj.openWorldHint;
+  return Object.keys(out).length > 0 ? out : undefined;
+}

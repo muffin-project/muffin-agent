@@ -292,7 +292,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   provataDalMeccanismo(
     'D14',
     "solo l'irreversibile chiede: un ask arriva se e solo se `reversible: 'no'` incontra una riga con `asksForIrreversible`, mai per il taint, la classe o la scorciatoia hardened",
-    "la regge `core/policy/solo-irreversibile.test.ts`, che enumera ogni `CapabilityDecl` spedita (18 tool più le due porte) per owner e membro di gruppo a taint 0-3 e fissa per nome chi chiede (`sys.shell`, `sys.process.kill`, `mcp.*`); un ask in più o in meno lo fa rosso, e le tre mutazioni della PR #456 (askAbove restituito, scorciatoia hardened restituita, `asksForIrreversible` su `reply`) lo hanno fatto rosso. Uno scenario di accettazione non aggiunge nulla: la domanda della riga è sul kernel, e il kernel è lo stesso oggetto per il binario e per il test",
+    "la regge `core/policy/solo-irreversibile.test.ts`, che enumera ogni `CapabilityDecl` spedita (18 tool più le due porte) per owner e membro di gruppo a taint 0-3 e fissa per nome chi chiede (`sys.shell`, `sys.process.kill`, ogni `mcp.<server>.<tool>` senza `readOnlyHint: true` — dal #770 la reversibilità MCP viene dalle `annotations` dichiarate, non più dal solo id server); un ask in più o in meno lo fa rosso, e le tre mutazioni della PR #456 (askAbove restituito, scorciatoia hardened restituita, `asksForIrreversible` su `reply`) lo hanno fatto rosso. Uno scenario di accettazione non aggiunge nulla: la domanda della riga è sul kernel, e il kernel è lo stesso oggetto per il binario e per il test",
   ),
   provataDalMeccanismo(
     'B19',

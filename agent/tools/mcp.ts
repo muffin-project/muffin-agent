@@ -1,7 +1,12 @@
 import type { CapabilityDecl } from '../../core/policy/types.js';
 import { fence } from '../../core/memory/spotlight.js';
 import { connectServer, type McpConnection } from '../../core/mcp/connect.js';
-import { verifyTools, type McpRegistry } from '../../core/mcp/registry.js';
+import {
+  reversibleFromAnnotations,
+  verifyTools,
+  type McpRegistry,
+  type McpToolDef,
+} from '../../core/mcp/registry.js';
 import type { RegisteredTool } from '../loop.js';
 
 /**
@@ -17,9 +22,19 @@ import type { RegisteredTool } from '../loop.js';
  *     attack downstream (the kernel refuses tainted turns the sensitive
  *     capabilities).
  *
- * One capability per server (`mcp.<name>`): medium risk, host-only, default
- * taint ceiling 1 — a turn already carrying untrusted content cannot reach
- * out through a third-party server at all.
+ * One capability per tool (`mcp.<server>.<tool>`): medium risk, host-only,
+ * default taint ceiling 1 — a turn already carrying untrusted content cannot
+ * reach out through a third-party server at all.
+ *
+ * The one field that varies per tool is `reversible`, and it is not set here:
+ * ADR-0074 punto 5 makes the protocol's own `annotations` the authority
+ * (`reversibleFromAnnotations` in `core/mcp/registry.ts` — `readOnlyHint: true`
+ * is `'yes'`, a `destructiveHint` or absent annotations are `'no'` and ask).
+ * A server with ten read-only tools and one destructive tool therefore asks
+ * for exactly the one, instead of asking for all eleven (the old per-server
+ * `'no'`) or for none. Everything else — risk, row, ceiling, `rerunnable`
+ * below — is identical for every tool, which is the "no widening beyond
+ * annotations" half of the slice.
  *
  * That ceiling used to be INHERITED from the class default, and the sentence
  * above was only true because `policy.json` may lower the default and never
@@ -29,16 +44,19 @@ import type { RegisteredTool } from '../loop.js';
  * number, now stated rather than inherited, which is what that measurement
  * asked for.
  */
-export function mcpCapabilityFor(server: string): CapabilityDecl {
+export function mcpCapabilityFor(server: string, tool: McpToolDef): CapabilityDecl {
   return {
-    id: `mcp.${server}`,
+    id: `mcp.${server}.${tool.name}`,
     // Third-party code we do not own, outside the egress allowlist model: the
     // one row the threat model's matrix does not print, kept at exactly the
     // ceiling this capability already had rather than widened into a printed
     // row nobody reviewed it for.
     effect: 'external',
     risk: 'medium',
-    reversible: 'no',
+    // Declared by the server, pinned by the registry: the tool hash covers the
+    // annotations, so a hint flip suspends the server until the owner
+    // re-approves instead of silently moving a tool across the ask boundary.
+    reversible: reversibleFromAnnotations(tool.annotations),
     // We do not own the semantics on the other side of the pipe, so a call that
     // may have landed is never made twice. This is the value that must not
     // become a per-server option later without the server telling us: a
@@ -100,12 +118,13 @@ export async function buildMcpTools(registry: McpRegistry, deps: McpDeps = {}): 
     }
 
     connections.push(connection);
-    capabilities.push(mcpCapabilityFor(server));
+    for (const def of connection.tools) capabilities.push(mcpCapabilityFor(server, def));
 
     for (const def of connection.tools) {
       const fenced = fence('mcpdesc', def.description, `descrizione dal server terzo "${server}"`);
+      const capability = `mcp.${server}.${def.name}`;
       tools.push({
-        capability: `mcp.${server}`,
+        capability,
         spec: {
           name: `mcp_${server}_${def.name}`,
           description: fenced.block,

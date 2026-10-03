@@ -11,6 +11,7 @@ import { connectServer } from './connect.js';
 import {
   loadMcpRegistry,
   pinTools,
+  reversibleFromAnnotations,
   saveMcpRegistry,
   stableStringify,
   toolHash,
@@ -62,6 +63,50 @@ describe('tool hashing', () => {
 
   it('stableStringify drops undefined and sorts keys', () => {
     expect(stableStringify({ b: 1, a: undefined, c: [{ z: 0, a: 1 }] })).toBe('{"b":1,"c":[{"a":1,"z":0}]}');
+  });
+});
+
+describe('reversibleFromAnnotations (ADR-0074 punto 5)', () => {
+  it('readOnlyHint true is reversible yes', () => {
+    expect(reversibleFromAnnotations({ readOnlyHint: true })).toBe('yes');
+  });
+
+  it('absent annotations stay ask-everything, byte for byte with the old hand-set no', () => {
+    expect(reversibleFromAnnotations(undefined)).toBe('no');
+    expect(reversibleFromAnnotations({})).toBe('no');
+  });
+
+  it('destructiveHint is no, even next to a readOnlyHint (contradiction fails closed)', () => {
+    expect(reversibleFromAnnotations({ destructiveHint: true })).toBe('no');
+    expect(reversibleFromAnnotations({ readOnlyHint: true, destructiveHint: true })).toBe('no');
+  });
+
+  it('only an explicit readOnlyHint true lifts the ask', () => {
+    expect(reversibleFromAnnotations({ readOnlyHint: false })).toBe('no');
+    expect(reversibleFromAnnotations({ idempotentHint: true, openWorldHint: true })).toBe('no');
+    expect(reversibleFromAnnotations({ title: 'Leggi' })).toBe('no');
+  });
+
+  it('the pin covers the authority: a hint flip alone is a changed tool', () => {
+    const base = { name: 'leggi', description: 'd', inputSchema: { type: 'object' } };
+    const pinned = pinTools([{ ...base, annotations: { readOnlyHint: true } }]);
+    // Same prose, same schema — only the hint moved.
+    const verdict = verifyTools([{ ...base, annotations: { destructiveHint: true } }], pinned);
+    expect(verdict).toEqual({ ok: false, added: [], removed: [], changed: ['leggi'] });
+    // And the reverse: gaining readOnlyHint without re-approval suspends too.
+    const pinnedPlain = pinTools([base]);
+    expect(verifyTools([{ ...base, annotations: { readOnlyHint: true } }], pinnedPlain)).toEqual({
+      ok: false,
+      added: [],
+      removed: [],
+      changed: ['leggi'],
+    });
+  });
+
+  it('absent and empty annotations hash the same (no phantom rug-pull)', () => {
+    const base = { name: 'leggi', description: 'd', inputSchema: { type: 'object' } };
+    expect(toolHash({ ...base, annotations: {} })).toBe(toolHash(base));
+    expect(verifyTools([{ ...base, annotations: {} }], pinTools([base]))).toEqual({ ok: true });
   });
 });
 
@@ -159,7 +204,7 @@ describe('against a real stdio server', () => {
       expect(attachment.tools.length).toBe(1);
       const tool = attachment.tools[0]!;
       expect(tool.spec.name).toBe('mcp_echo_echo');
-      expect(tool.capability).toBe('mcp.echo');
+      expect(tool.capability).toBe('mcp.echo.echo');
       // the third-party description travels fenced, never bare
       expect(tool.spec.description).toMatch(/<<<mcpdesc_[0-9a-f]+/);
       const out = await tool.handler({ message: 'x' }, toolContext());
@@ -231,7 +276,8 @@ describe('against a real stdio server', () => {
 });
 
 describe('mcp capability through the kernel', () => {
-  const decl = mcpCapabilityFor('echo');
+  const unannotated = { name: 'echo', description: 'd', inputSchema: { type: 'object' } };
+  const decl = mcpCapabilityFor('echo', unannotated);
   const decide = createDecide({
     matrix: POLICY_FLOOR,
     capabilities: new Map([[decl.id, decl]]),
@@ -254,7 +300,7 @@ describe('mcp capability through the kernel', () => {
     const d = decide({
       principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
       tenant: 'host',
-      capability: 'mcp.echo',
+      capability: 'mcp.echo.echo',
       resource: { kind: 'none' },
       args: {},
       taint: 2,
@@ -270,11 +316,87 @@ describe('mcp capability through the kernel', () => {
     const d = decide({
       principal: { kind: 'member', connector: 'telegram', tenantId: 'group:t:1', externalId: 'u' },
       tenant: 'group:t:1',
-      capability: 'mcp.echo',
+      capability: 'mcp.echo.echo',
       resource: { kind: 'none' },
       args: {},
       taint: 0,
     });
     expect(d).toMatchObject({ effect: 'deny', code: 'principal_forbidden' });
+  });
+
+  /**
+   * ADR-0074 punto 5, il falsificatore della fetta: un tool `readOnlyHint`
+   * risolve `reversible: 'yes'` e NON chiede dove il gemello non annotato
+   * chiede — stessa riga, stesso taint, stesso principal. Togliere la
+   * mappatura (`reversibleFromAnnotations`, o il suo uso in
+   * `mcpCapabilityFor`) riporta il gemello read-only a `'no'`, e questa riga
+   * torna rossa: è il pin che rende la rimozione visibile.
+   */
+  it('un tool readOnlyHint non chiede dove il gemello non annotato chiede', () => {
+    const readOnly = mcpCapabilityFor('echo', {
+      ...unannotated,
+      name: 'leggi',
+      annotations: { readOnlyHint: true },
+    });
+    expect(readOnly.id).toBe('mcp.echo.leggi');
+    expect(readOnly.reversible).toBe('yes');
+    expect(decl.reversible).toBe('no');
+    const decideBoth = createDecide({
+      matrix: POLICY_FLOOR,
+      capabilities: new Map([
+        [decl.id, decl],
+        [readOnly.id, readOnly],
+      ]),
+      budgetExhausted: () => false,
+      hardened: true,
+    });
+    const request = (capability: string) => ({
+      principal: { kind: 'owner', connector: 'cli', externalId: 'local' } as const,
+      tenant: 'host',
+      capability,
+      resource: { kind: 'none' } as const,
+      args: {},
+      taint: 0 as const,
+    });
+    expect(decideBoth(request(readOnly.id)).effect).toBe('allow');
+    expect(decideBoth(request(decl.id)).effect).toBe('ask');
+  });
+
+  it('buildMcpTools dichiara una capability per tool, con la reversibilità delle annotazioni', async () => {
+    const leggi = {
+      name: 'leggi',
+      description: 'reads only',
+      inputSchema: { type: 'object' },
+      annotations: { readOnlyHint: true },
+    };
+    const scrivi = { name: 'scrivi', description: 'writes', inputSchema: { type: 'object' } };
+    const registry = {
+      schemaVersion: 1 as const,
+      servers: { docs: { ...fixtureEntry(), tools: pinTools([leggi, scrivi]) } },
+    };
+    const attachment = await buildMcpTools(registry, {
+      connectFn: async () => ({
+        tools: [leggi, scrivi],
+        call: async () => ({ text: 'ok', isError: false }),
+        close: async () => {},
+      }),
+    });
+    try {
+      expect(attachment.capabilities.map((c) => [c.id, c.reversible]).sort()).toEqual([
+        ['mcp.docs.leggi', 'yes'],
+        ['mcp.docs.scrivi', 'no'],
+      ]);
+      // Stesso rischio, stessa riga, stesso soffitto: solo la reversibilità
+      // si muove con le annotazioni — metà «nessun allargamento» della fetta.
+      for (const cap of attachment.capabilities) {
+        expect(cap).toMatchObject({ effect: 'external', risk: 'medium', rerunnable: false, hostOnly: true });
+      }
+      expect(attachment.tools.map((t) => [t.spec.name, t.capability]).sort()).toEqual([
+        ['mcp_docs_leggi', 'mcp.docs.leggi'],
+        ['mcp_docs_scrivi', 'mcp.docs.scrivi'],
+      ]);
+    } finally {
+      await attachment.close();
+    }
   });
 });
