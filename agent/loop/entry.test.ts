@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -106,7 +106,7 @@ function world(script: (ChatResult | Error)[], durante: (n: number) => void = ()
     systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite.' },
     now: NOW,
   };
-  return { deps, turns, sessions, approvals };
+  return { deps, turns, sessions, approvals, home };
 }
 
 /** Quante volte esattamente quel testo compare, come stringa JSON esatta. */
@@ -678,5 +678,179 @@ describe('#749 — la guardia multi-ask non scavalca un referto di processo usci
     expect('stopped' in esito && esito.stopped).toBe('answered');
     expect((w.deps.provider as Scripted).seen).toHaveLength(1);
     expect(JSON.stringify((w.deps.provider as Scripted).seen[0])).toContain(`il processo ${morto} è uscito`);
+  });
+});
+
+/**
+ * #762 — il referto di risveglio non mente sul perché, il trade è
+ * esplicito, e anche il click differito lascia la sua span.
+ *
+ * (a) Un click sveglia la riga a prescindere dalla sua barriera: con un
+ * `process_exit` vivo e la scadenza nel futuro, il referto deve nominare la
+ * risposta, non affermare una scadenza che nessuno ha osservato.
+ *
+ * (b) Ripartendo su `process_exit` con una decisione presa e una domanda
+ * aperta, il referto nomina entrambi gli stati: la decisione non consumata
+ * resta per il tool, la domanda aperta verrà ritirata se il turno chiude.
+ *
+ * (c) La ri-sospensione su click differito emette la sua span `muffin.turn`:
+ * prima ritornava prima che la span nascesse.
+ */
+describe('#762 — il referto di risveglio dice il vero', () => {
+  const counters762 = {
+    iterations: 2,
+    recoveriesUsed: 0,
+    transportRetriesLeft: 10,
+    truncationsUsed: 0,
+    toolCallsMade: 2,
+    nudgedForCompletion: false,
+    usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    spentUsd: 0,
+    resumes: 0,
+    contextBuilt: true,
+    activeModelMs: 0,
+  };
+
+  /** Riga sospesa su `process_exit`, con una decisione non consumata e una domanda aperta. */
+  function attesaProcesso(
+    w: ReturnType<typeof world>,
+    waitFor: string,
+    wakeAt: string,
+  ): { id: string; a: string } {
+    const record = w.turns.create(
+      {
+        id: 'f'.repeat(32),
+        principal: owner,
+        tenant: 'host',
+        surface: 'cli',
+        sessionId: 'wake-762',
+        model: 'test-model',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'aspetta il processo' }] }],
+        taint: 0,
+        counters: counters762,
+      },
+      4242,
+    );
+    const a = w.approvals.ask(
+      { turnId: record.id, capability: 'sys.shell', resource: 'echo a', prompt: 'eseguo a?', taint: 0 },
+      NOW(),
+    );
+    w.approvals.ask(
+      { turnId: record.id, capability: 'sys.shell', resource: 'echo b', prompt: 'eseguo b?', taint: 0 },
+      NOW(),
+    );
+    w.turns.suspend(
+      record.id,
+      {
+        messages: providerMessages(record),
+        taint: 0,
+        counters: record.counters,
+        wakeAt,
+        waitFor,
+      },
+      record.claimToken,
+    );
+    return { id: record.id, a };
+  }
+
+  it('(a) barriera viva e scadenza futura: il referto nomina la risposta, non la scadenza', async () => {
+    const w = world([answer('riparto dalla risposta')]);
+    // Questo processo è vivo per definizione: la barriera non si è aperta.
+    const { id, a } = attesaProcesso(
+      w,
+      `process_exit:${process.pid}`,
+      new Date(NOW().getTime() + APPROVAL_WINDOW_MS).toISOString(),
+    );
+    // Il click decide A e sveglia la riga — la stessa sequenza di `handleCallback`.
+    w.approvals.decide(a, 'allow', NOW());
+    expect(w.turns.wake(id, NOW())).toBe(true);
+
+    const esito = await barrel.resumeTurn(w.deps, id);
+
+    expect('stopped' in esito && esito.stopped).toBe('answered');
+    expect((w.deps.provider as Scripted).seen).toHaveLength(1);
+    const testo = JSON.stringify((w.deps.provider as Scripted).seen[0]);
+    expect(testo).toMatch(/risposta/);
+    expect(testo).not.toMatch(/scadut/);
+  });
+
+  it('(b) ripresa su `process_exit`: il referto nomina decisione e domanda aperta', async () => {
+    const w = world([answer('ho capito il trade')]);
+    const morto = 999_999_999;
+    const { id, a } = attesaProcesso(
+      w,
+      `process_exit:${morto}`,
+      new Date(NOW().getTime() + APPROVAL_WINDOW_MS).toISOString(),
+    );
+    w.approvals.decide(a, 'allow', NOW());
+    expect(w.turns.wake(id, NOW())).toBe(true);
+
+    const esito = await barrel.resumeTurn(w.deps, id);
+
+    expect('stopped' in esito && esito.stopped).toBe('answered');
+    const testo = JSON.stringify((w.deps.provider as Scripted).seen[0]);
+    expect(testo).toContain(`il processo ${morto} è uscito`);
+    expect(testo).toMatch(/non ancora usata/);
+    expect(testo).toMatch(/ritirata/);
+  });
+
+  it('(c) il click differito lascia la sua span nel trace', async () => {
+    const w = world([answer('non deve partire')]);
+    // Due domande aperte, barriera sull'ultima: la forma del click differito.
+    const record = w.turns.create(
+      {
+        id: 'c'.repeat(32),
+        principal: owner,
+        tenant: 'host',
+        surface: 'cli',
+        sessionId: 'differito-762',
+        model: 'test-model',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'due comandi' }] }],
+        taint: 0,
+        counters: counters762,
+      },
+      4242,
+    );
+    const a = w.approvals.ask(
+      { turnId: record.id, capability: 'sys.shell', resource: 'echo a', prompt: 'eseguo a?', taint: 0 },
+      NOW(),
+    );
+    const b = w.approvals.ask(
+      { turnId: record.id, capability: 'sys.shell', resource: 'echo b', prompt: 'eseguo b?', taint: 0 },
+      NOW(),
+    );
+    w.turns.suspend(
+      record.id,
+      {
+        messages: providerMessages(record),
+        taint: 0,
+        counters: record.counters,
+        wakeAt: new Date(NOW().getTime() + APPROVAL_WINDOW_MS).toISOString(),
+        waitFor: `approval:${b}`,
+      },
+      record.claimToken,
+    );
+    const id = record.id;
+
+    // L'owner decide la prima; la lane lo riprende; la guardia ri-sospende su b.
+    expect(w.approvals.decide(a, 'allow', NOW())).toBe('ok');
+    expect(w.turns.wake(id, NOW())).toBe(true);
+
+    const esito = await barrel.resumeTurn(w.deps, id);
+
+    expect('stopped' in esito && esito.stopped).toBe('suspended');
+    expect((w.deps.provider as Scripted).seen).toHaveLength(0);
+    const righe = readdirSync(join(w.home, 'traces'))
+      .filter((f) => f.endsWith('.jsonl'))
+      .flatMap((f) =>
+        readFileSync(join(w.home, 'traces', f), 'utf8')
+          .split('\n')
+          .filter((r) => r.trim() !== '')
+          .map((r) => JSON.parse(r) as { name: string; attributes: Record<string, unknown> }),
+      );
+    const span = righe.find(
+      (s) => s.name === 'muffin.turn' && s.attributes?.['muffin.turn.id'] === id,
+    );
+    expect(span).toBeDefined();
   });
 });
