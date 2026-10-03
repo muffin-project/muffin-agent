@@ -158,19 +158,50 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # `fetch-depth: 0` e non il default 1: lo scope gate confronta
+      # `base...head` e con un clone superficiale quel range non ha una
+      # storia da attraversare (stessa ragione di `install.yml` e `ci.yml`).
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      # Scope gate (`scripts/ci/strumenti-scope.mjs`): questo job prova gli
+      # strumenti di sessione sotto `.claude/` (~40s). Su una PR puramente
+      # runtime — nessun file sotto `.claude/`, nessun docs, nessun config
+      # condiviso — nessun suo test può cambiare verdetto (nessuno importa
+      # il runtime; il typecheck duplicato è già coperto da `verifica`, che
+      # gira sempre) e gli step pesanti vengono saltati con un no-op
+      # veritiero. Fail-safe: range non calcolabile, evento non-PR o file
+      # sconosciuto → il job gira.
+      - id: scope
+        name: la modifica tocca gli strumenti di sessione?
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/ci/strumenti-scope.mjs
+
+      - if: steps.scope.outputs.run == 'false'
+        name: strumenti non toccati — no-op veritiero
+        run: |
+          echo "strumenti: scope gate says no session-tooling file changed; suite skipped, other required jobs still ran."
+        # Nota: pesanti girano a meno di un `false` esplicito, così un output
+        # mancante (bug dello scope) gira troppo, mai troppo poco.
+
+      - if: steps.scope.outputs.run != 'false'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
 
-      - run: npm ci
+      - if: steps.scope.outputs.run != 'false'
+        run: npm ci
 
       # `tsconfig.json` include `.claude/hooks/**/*.ts` e `**/*.test.ts`: senza
       # questo step un errore di tipo qui passerebbe invisibile e verrebbe
       # fuori solo alla prossima PR di sorgenti, attribuito a quella.
-      - name: typecheck
+      - if: steps.scope.outputs.run != 'false'
+        name: typecheck
         run: npx tsc --noEmit
 
       # Il filtro posizionale di vitest è una sottostringa sul percorso del
@@ -181,5 +212,6 @@ jobs:
       #
       # Senza pipe, come in `ci.yml`: `cmd | tail` riporta l'exit status di
       # `tail`.
-      - name: suite degli strumenti di sessione
+      - if: steps.scope.outputs.run != 'false'
+        name: suite degli strumenti di sessione
         run: npx vitest run .claude --reporter=dot
