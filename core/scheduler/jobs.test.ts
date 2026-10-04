@@ -303,3 +303,143 @@ describe('JobStore — provenance corrotta legge default noti, mai stringhe vuot
     }
   });
 });
+
+/**
+ * #598 S3 — armato una volta + pre-delega.
+ *
+ * Falsificatore: senza il ramo `once` in `markRan` il secondo tick ritrova il
+ * job dovuto e richiama il modello; senza la colonna `delegation` il fire
+ * futuro non ha postura da ereditare e `Delega.modo` resta `manual`.
+ */
+describe('JobStore — armato una volta (#598 S3)', () => {
+  const NOW = new Date('2026-06-15T05:00:00Z');
+
+  it('le righe legacy e gli add senza once restano ricorrenti + manual', () => {
+    const { store, db } = memStore(NOW);
+    try {
+      const job = store.add(BRIEF);
+      expect(job.once).toBe(false);
+      expect(job.delegation).toBe('manual');
+      expect(store.get(job.id)?.once).toBe(false);
+      expect(store.get(job.id)?.delegation).toBe('manual');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('addOnce è dovuto subito e porta la postura', () => {
+    const { store, db } = memStore(NOW);
+    try {
+      const job = store.addOnce({ timezone: 'Europe/Rome', channel: 'cli', goal: 'fai una cosa sola', delegation: 'yolo' });
+      expect(job.once).toBe(true);
+      expect(job.delegation).toBe('yolo');
+      expect(job.nextFireAt.toISOString()).toBe(NOW.toISOString());
+      expect(store.due(NOW).map((j) => j.id)).toContain(job.id);
+      expect(store.get(job.id)?.delegation).toBe('yolo');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('un once con cron reale spara una volta a quell ora, poi si disattiva', () => {
+    const { store, db } = memStore(NOW);
+    try {
+      const job = store.add({ ...BRIEF, once: true, delegation: 'manual' });
+      expect(job.once).toBe(true);
+      // Prima fire al cron, come una ricorrenza normale.
+      expect(job.nextFireAt.toISOString()).toBe('2026-06-15T06:00:00.000Z');
+      expect(store.due(new Date('2026-06-15T05:59:00Z'))).toEqual([]);
+      expect(store.due(new Date('2026-06-15T06:00:00Z')).map((j) => j.id)).toContain(job.id);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('markRan su un once disattiva: il secondo tick non trova niente', () => {
+    let now = new Date('2026-06-15T05:00:00Z');
+    const db = new DatabaseCtor(':memory:');
+    try {
+      const store = new JobStore(db, () => now);
+      const job = store.addOnce({ timezone: 'Europe/Rome', channel: 'cli', goal: 'una sola' });
+      expect(store.due(now).map((j) => j.id)).toContain(job.id);
+
+      now = new Date('2026-06-15T06:00:00Z');
+      const ran = store.markRan(job.id);
+      expect(ran?.active).toBe(false);
+      expect(ran?.lastRunAt?.toISOString()).toBe(now.toISOString());
+      // La riga resta (§I-8): get la raggiunge, list/due non la vedono più.
+      expect(store.get(job.id)?.active).toBe(false);
+      expect(store.list()).toEqual([]);
+      expect(store.due(now)).toEqual([]);
+      expect(store.markRan(job.id)).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('markRan sulle ricorrenze avanza ancora, come sempre', () => {
+    let now = new Date('2026-06-15T05:00:00Z');
+    const db = new DatabaseCtor(':memory:');
+    try {
+      const store = new JobStore(db, () => now);
+      const job = store.add(BRIEF);
+      now = new Date('2026-06-15T06:00:00Z');
+      const ran = store.markRan(job.id);
+      expect(ran?.active).toBe(true);
+      expect(ran!.nextFireAt.toISOString()).toBe('2026-06-16T06:00:00.000Z');
+      expect(store.list().map((j) => j.id)).toEqual([job.id]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('rifiuta una delega che non esiste, prima di scrivere', () => {
+    const { store, db } = memStore(NOW);
+    try {
+      expect(() =>
+        store.add({ ...BRIEF, once: true, delegation: 'sempre' as unknown as 'yolo' }),
+      ).toThrow(JobError);
+      expect(store.list()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('apre un database scritto prima delle colonne S3: legge ricorrente + manual, e scrive once', () => {
+    const db = new DatabaseCtor(':memory:');
+    try {
+      db.exec(`
+        CREATE TABLE jobs (
+          id           TEXT PRIMARY KEY,
+          cron         TEXT NOT NULL,
+          timezone     TEXT NOT NULL,
+          goal         TEXT NOT NULL,
+          channel      TEXT NOT NULL,
+          kind         TEXT NOT NULL DEFAULT 'goal',
+          created_at   TEXT NOT NULL,
+          next_fire_at TEXT NOT NULL,
+          last_run_at  TEXT,
+          active       INTEGER NOT NULL DEFAULT 1
+        );
+      `);
+      db.prepare(
+        `INSERT INTO jobs (id, cron, timezone, goal, channel, kind, created_at, next_fire_at, active)
+         VALUES ('vecchio', '0 8 * * *', 'Europe/Rome', 'brief di prima', 'cli', 'goal', ?, ?, 1)`,
+      ).run(NOW.toISOString(), new Date('2026-06-16T06:00:00Z').toISOString());
+      const colonne = () => (db.prepare(`PRAGMA table_info(jobs)`).all() as Array<{ name: string }>).map((c) => c.name);
+      expect(colonne()).not.toContain('run_once');
+
+      const store = new JobStore(db, () => NOW);
+      expect(colonne()).toContain('run_once');
+      expect(colonne()).toContain('delegation');
+      expect(store.get('vecchio')?.once).toBe(false);
+      expect(store.get('vecchio')?.delegation).toBe('manual');
+
+      const nuovo = store.addOnce({ timezone: 'Europe/Rome', channel: 'cli', goal: 'una sola', delegation: 'yolo' });
+      expect(store.get(nuovo.id)?.once).toBe(true);
+      expect(store.get(nuovo.id)?.delegation).toBe('yolo');
+    } finally {
+      db.close();
+    }
+  });
+});

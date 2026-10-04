@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 import { CronExpressionParser } from 'cron-parser';
 import { ensureColumn } from '../lock/durable.js';
 import type { TrustTier } from '../policy/types.js';
+import type { DelegationMode } from '../runtime/delega.js';
 
 /**
  * The durable core of M5: jobs that survive a restart, and a next-fire that is
@@ -54,7 +55,20 @@ CREATE TABLE IF NOT EXISTS jobs (
   origin_surface   TEXT NOT NULL DEFAULT 'cli',
   origin_principal TEXT NOT NULL DEFAULT 'owner',
   origin_turn      TEXT,
-  tier             INTEGER NOT NULL DEFAULT 0
+  tier             INTEGER NOT NULL DEFAULT 0,
+  -- Armato una volta (#598 S3): 1 = spara una sola occorrenza e poi si
+  -- disattiva in markRan invece di avanzare. Default 0: le righe legacy e
+  -- ogni add senza once restano ricorrenti, quindi la migrazione non
+  -- spegne niente che l'owner non abbia toccato (stessa disciplina di
+  -- per_job_usd: nullable-additiva via ensureColumn, mai un default che
+  -- cambia righe esistenti).
+  run_once         INTEGER NOT NULL DEFAULT 0,
+  -- Postura pre-delegata per il futuro turno di fire (#598 S3, #740): quale
+  -- ask il fire puo consumare senza una nuova domanda. Default manual:
+  -- le righe legacy chiedono come oggi. Solo yolo consuma (stesso registro,
+  -- decided_by delegation); auto resta in escalation finche la busta di
+  -- System One e vuota — nessuna soglia inventata qui.
+  delegation       TEXT NOT NULL DEFAULT 'manual' CHECK (delegation IN ('manual','auto','yolo'))
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs(active, next_fire_at);
 `;
@@ -102,6 +116,20 @@ type JobCommon = {
    * vecchio codice faceva — per quelle niente cambia.
    */
   tier: TrustTier;
+  /**
+   * Armato una volta (#598 S3): `true` = una sola occorrenza, poi `markRan`
+   * disattiva invece di avanzare. `false` sulle righe legacy e su ogni `add`
+   * senza `once`: ricorrente come oggi.
+   */
+  once: boolean;
+  /**
+   * Postura pre-delegata per il futuro turno di fire (#598 S3, #740), letta
+   * da `Delega.modo` via `turns.job_id` quando il turno non ha una propria
+   * riga. `'manual'` sulle righe legacy e quando l'owner non la nomina: chiede
+   * come oggi. Nessuna soglia inventata: `auto` escala, `yolo` consuma via
+   * stesso registro, `deny` resta `deny` nel kernel.
+   */
+  delegation: DelegationMode;
 };
 
 /**
@@ -130,11 +158,25 @@ export type Job = JobCommon &
   );
 
 export type NewJob = {
+  /**
+   * Standard 5-field cron expression — oppure il sentinella `'once'` per un
+   * armato-immediato senza cadenza (`addOnce` lo usa; `markRan` non lo
+   * interpreta mai perché un `once` disattiva invece di avanzare). Un `once`
+   * con un cron reale spara una volta a quell'ora e poi si disattiva.
+   */
   cron: string;
   timezone: string;
   channel: string;
   /** See `Job.perJobUsd`. Omitted means no per-job ceiling. */
   perJobUsd?: number | null;
+  /**
+   * Armato una volta (#598 S3). Omesso = ricorrente come oggi.
+   */
+  once?: boolean | undefined;
+  /**
+   * Postura pre-delegata per il futuro fire (#598 S3, #740). Omessa = manual.
+   */
+  delegation?: DelegationMode | undefined;
   /**
    * Chi ha chiesto la ricorrenza. La CLI passa l'owner al terminale; il tool
    * conversazionale passa il turno che ha ricevuto l'intento. Assente = riga
@@ -205,10 +247,16 @@ type Row = {
   origin_principal?: string | null;
   origin_turn?: string | null;
   tier?: number | null;
+  run_once?: number | null;
+  delegation?: string | null;
 };
 
 function asTier(v: unknown): TrustTier {
   return v === 1 || v === 2 || v === 3 ? v : 0;
+}
+
+function asDelegation(v: unknown): DelegationMode {
+  return v === 'auto' || v === 'yolo' ? v : 'manual';
 }
 
 function toJob(row: Row): Job {
@@ -242,6 +290,11 @@ function toJob(row: Row): Job {
       turnId: row.origin_turn || null,
     },
     tier: asTier(row.tier),
+    // Legacy senza colonne S3: ricorrente + manual — la migrazione non spegne
+    // niente che l'owner non abbia toccato. `=== 1` e non truthy: una riga
+    // corrotta a mano non deve diventare una-tantum per caso.
+    once: row.run_once === 1,
+    delegation: asDelegation(row.delegation),
   };
   // Anything that is not exactly 'script' is a goal. A row with a `kind` this
   // build does not know must not become an executable script by accident —
@@ -257,6 +310,7 @@ export class JobStore {
   private readonly dueStmt: Database.Statement;
   private readonly getStmt: Database.Statement;
   private readonly ranStmt: Database.Statement;
+  private readonly ranOnceStmt: Database.Statement;
   private readonly disableStmt: Database.Statement;
   private readonly capStmt: Database.Statement;
 
@@ -293,20 +347,27 @@ export class JobStore {
     ensureColumn(db, 'jobs', 'origin_principal', `origin_principal TEXT NOT NULL DEFAULT 'owner'`);
     ensureColumn(db, 'jobs', 'origin_turn', 'origin_turn TEXT');
     ensureColumn(db, 'jobs', 'tier', 'tier INTEGER NOT NULL DEFAULT 0');
+    // S3 una-tantum + pre-delega: stessa rete, stessa ragione. Senza, il primo
+    // `muffin jobs add --once` dopo l'aggiornamento morirebbe con «table jobs
+    // has no column named run_once» su un'installazione che funzionava un
+    // minuto prima — il guasto già visto per `kind` e `per_job_usd`.
+    ensureColumn(db, 'jobs', 'run_once', 'run_once INTEGER NOT NULL DEFAULT 0');
+    ensureColumn(db, 'jobs', 'delegation', `delegation TEXT NOT NULL DEFAULT 'manual'`);
     this.insertStmt = db.prepare(
       `INSERT INTO jobs (id, cron, timezone, goal, channel, kind, per_job_usd, created_at, next_fire_at, last_run_at, active,
-                         origin_tenant, origin_surface, origin_principal, origin_turn, tier)
+                         origin_tenant, origin_surface, origin_principal, origin_turn, tier, run_once, delegation)
        VALUES (@id, @cron, @timezone, @goal, @channel, @kind, @perJobUsd, @createdAt, @nextFireAt, NULL, 1,
-               @originTenant, @originSurface, @originPrincipal, @originTurn, @tier)`,
+               @originTenant, @originSurface, @originPrincipal, @originTurn, @tier, @runOnce, @delegation)`,
     );
     this.listStmt = db.prepare(`SELECT * FROM jobs WHERE active = 1 ORDER BY next_fire_at`);
     this.dueStmt = db.prepare(
       `SELECT * FROM jobs WHERE active = 1 AND next_fire_at <= ? ORDER BY next_fire_at`,
     );
     this.getStmt = db.prepare(`SELECT * FROM jobs WHERE id = ?`);
-    this.ranStmt = db.prepare(`UPDATE jobs SET last_run_at = @now, next_fire_at = @next WHERE id = @id`);
+    this.ranStmt = db.prepare(`UPDATE jobs SET last_run_at = @now, next_fire_at = @next WHERE id = @id AND active = 1`);
     this.disableStmt = db.prepare(`UPDATE jobs SET active = 0 WHERE id = ? AND active = 1`);
     this.capStmt = db.prepare(`UPDATE jobs SET per_job_usd = @cap WHERE id = @id AND active = 1`);
+    this.ranOnceStmt = db.prepare(`UPDATE jobs SET last_run_at = @now, active = 0 WHERE id = @id AND active = 1`);
   }
 
   /** Validates, computes the first fire from now, persists. Throws JobError. */
@@ -322,7 +383,18 @@ export class JobStore {
         throw new JobError(`tetto per-job non valido: "${spec.perJobUsd}" (attesi dollari, es. 0.50)`);
       }
     }
-    const next = nextFire(spec.cron, spec.timezone, now); // throws before any write
+    if (spec.delegation !== undefined && spec.delegation !== 'manual' && spec.delegation !== 'auto' && spec.delegation !== 'yolo') {
+      throw new JobError(`delega non valida: "${spec.delegation}" (attese manual|auto|yolo)`);
+    }
+    // Il sentinella `once`: un armato-immediato senza cadenza. Non passa da
+    // `nextFire` — un cron reale non lo descrive — e la prima (unica) fire è
+    // adesso, cioè dovuta al prossimo tick. `markRan` non lo interpreta mai
+    // perché un `once` disattiva invece di avanzare.
+    const once = spec.once === true;
+    const next = spec.cron === 'once' ? now : nextFire(spec.cron, spec.timezone, now); // throws before any write
+    if (spec.cron === 'once' && !once) {
+      throw new JobError(`cron "once" solo per un job armato una volta (--once)`);
+    }
     const origin = spec.origin;
     const common = {
       id: randomUUID(),
@@ -343,6 +415,8 @@ export class JobStore {
         turnId: origin?.turnId ?? null,
       },
       tier: origin?.tier ?? 0,
+      once,
+      delegation: spec.delegation ?? 'manual',
     };
     const job: Job =
       spec.kind === 'script'
@@ -363,8 +437,42 @@ export class JobStore {
       originPrincipal: job.origin.principal,
       originTurn: job.origin.turnId,
       tier: job.tier,
+      runOnce: job.once ? 1 : 0,
+      delegation: job.delegation,
     });
     return job;
+  }
+
+  /**
+   * Arma un obiettivo una volta sola (#598 S3): la prima (unica) fire è
+   * adesso — dovuta al prossimo tick — senza cadenza. Sottile sopra `add`
+   * con il sentinella `cron:'once'` per non duplicare la validazione
+   * (tetto, delega, provenance): un solo motore cron, un solo percorso di
+   * persistenza.
+   */
+  addOnce(
+    spec: {
+      timezone?: string;
+      channel: string;
+      perJobUsd?: number | null;
+      delegation?: DelegationMode | undefined;
+      origin?: NewJob['origin'];
+    } & ({ kind?: 'goal'; goal: string } | { kind: 'script'; script: string }),
+  ): Job {
+    const timezone = spec.timezone ?? 'UTC';
+    const base = {
+      cron: 'once',
+      timezone,
+      channel: spec.channel,
+      once: true as const,
+      ...(spec.perJobUsd !== undefined ? { perJobUsd: spec.perJobUsd } : {}),
+      ...(spec.delegation !== undefined ? { delegation: spec.delegation } : {}),
+      ...(spec.origin !== undefined ? { origin: spec.origin } : {}),
+    };
+    if (spec.kind === 'script') {
+      return this.add({ ...base, kind: 'script' as const, script: spec.script });
+    }
+    return this.add({ ...base, goal: (spec as { goal: string }).goal });
   }
 
   list(): Job[] {
@@ -386,11 +494,21 @@ export class JobStore {
    * old next_fire_at: if the process was down over a fire, the job runs once on
    * catch-up and then resumes its cadence, rather than replaying every missed
    * slot.
+   *
+   * Un `once` non avanza: la riga si disattiva (stessa forma del soft-delete
+   * §I-8 — la riga resta, `get` la raggiunge, `due`/`list` non la vedono più)
+   * così il secondo tick non trova niente da far girare e il modello non viene
+   * richiamato. `job_fires` + `resolveBound` restano a garantire che una
+   * seconda lettura della STESSA occorrenza (prima di `markRan`) non riesegua.
    */
   markRan(id: string): Job | null {
     const job = this.get(id);
     if (!job || !job.active) return null;
     const now = this.clock();
+    if (job.once) {
+      this.ranOnceStmt.run({ id, now: now.toISOString() });
+      return { ...job, lastRunAt: now, active: false };
+    }
     const next = nextFire(job.cron, job.timezone, now);
     this.ranStmt.run({ id, now: now.toISOString(), next: next.toISOString() });
     return { ...job, lastRunAt: now, nextFireAt: next };

@@ -1,6 +1,7 @@
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { ApprovalStore } from '../approvals/store.js';
+import { JobStore } from '../scheduler/jobs.js';
 import type { NewTurn } from '../turns/store.js';
 import { TurnStore } from '../turns/store.js';
 import type { Principal } from '../policy/types.js';
@@ -213,6 +214,67 @@ describe('approvals: chi ha deciso resta scritto', () => {
       a,
     );
     expect(approvals.get(a)?.decidedBy).toBe('owner');
+  });
+});
+
+describe('Delega carry sul fire futuro (#598 S3)', () => {
+  it('un fire senza riga propria eredita la postura del job', () => {
+    const db = new DatabaseCtor(':memory:');
+    try {
+      const delega = new Delega(db);
+      const turns = new TurnStore(db);
+      const jobs = new JobStore(db, () => new Date('2026-06-15T05:00:00Z'));
+
+      const yolo = jobs.addOnce({ timezone: 'Europe/Rome', channel: 'cli', goal: 'una sola', delegation: 'yolo' });
+      const manuale = jobs.addOnce({ timezone: 'Europe/Rome', channel: 'cli', goal: 'una sola' });
+      const auto = jobs.addOnce({ timezone: 'Europe/Rome', channel: 'cli', goal: 'una sola', delegation: 'auto' });
+
+      turns.create(riga({ id: 'fire-yolo', sessionId: 'job-sess', jobId: yolo.id }));
+      turns.create(riga({ id: 'fire-manuale', sessionId: 'job-sess', jobId: manuale.id }));
+      turns.create(riga({ id: 'fire-auto', sessionId: 'job-sess', jobId: auto.id }));
+      turns.create(riga({ id: 'senza-job', sessionId: 'job-sess' }));
+
+      expect(delega.modo('fire-yolo')).toBe('yolo');
+      expect(delega.modo('fire-manuale')).toBe('manual');
+      expect(delega.modo('fire-auto')).toBe('auto');
+      expect(delega.modo('senza-job')).toBe('manual');
+      expect(delega.modo('mai-visto')).toBe('manual');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('una riga esplicita sul turno vince sul job: /manual revoca un fire yolo', () => {
+    const db = new DatabaseCtor(':memory:');
+    try {
+      const delega = new Delega(db);
+      const turns = new TurnStore(db);
+      const jobs = new JobStore(db, () => new Date('2026-06-15T05:00:00Z'));
+      const job = jobs.addOnce({ timezone: 'Europe/Rome', channel: 'cli', goal: 'una sola', delegation: 'yolo' });
+      turns.create(riga({ id: 'fire', sessionId: 'job-sess', jobId: job.id }));
+      expect(delega.modo('fire')).toBe('yolo');
+      delega.metti('fire', 'manual', 'owner', new Date());
+      expect(delega.modo('fire')).toBe('manual');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('la delega non trapela a un altro lavoro con un altro job', () => {
+    const db = new DatabaseCtor(':memory:');
+    try {
+      const delega = new Delega(db);
+      const turns = new TurnStore(db);
+      const jobs = new JobStore(db, () => new Date('2026-06-15T05:00:00Z'));
+      const yolo = jobs.addOnce({ timezone: 'Europe/Rome', channel: 'cli', goal: 'una sola', delegation: 'yolo' });
+      const manuale = jobs.addOnce({ timezone: 'Europe/Rome', channel: 'cli', goal: 'un altra' });
+      turns.create(riga({ id: 'fire-yolo', sessionId: 'job-sess', jobId: yolo.id }));
+      turns.create(riga({ id: 'fire-manuale', sessionId: 'job-sess', jobId: manuale.id }));
+      expect(delega.modo('fire-manuale')).toBe('manual');
+      expect(delega.modo('fire-yolo')).toBe('yolo');
+    } finally {
+      db.close();
+    }
   });
 });
 
