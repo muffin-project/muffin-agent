@@ -184,3 +184,10 @@ of OpenCode's `provider` field); keep authentication in the dedicated auth file.
 No full user/project configuration or MCP plugin bundle is imported.
 Publication requires the current integration base to be an ancestor of the
 local candidate; refreshed refs alone do not make a stale branch publishable.
+
+If the foreground wrapper is interrupted abruptly, status recognizes the owned
+scheduler group by a unique launch marker. A second start fails closed until
+`ops.py stop` stops that group and its worker containers; then start normally.
+The scheduler cannot execute before its identity has been recorded. Status/stop
+never signal an unrelated process using a stale PID alone. POSIX `ps` is a host
+dependency; macOS and the supported Linux host provide it.

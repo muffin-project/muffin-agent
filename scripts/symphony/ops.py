@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 import stat
+import uuid
 
 
 def stop_containers(service):
@@ -33,6 +34,42 @@ def service_root():
 def open_lock(path):
     return os.fdopen(os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600), "w")
 
+def read_upstream(path):
+    if not path.exists(): return None
+    value = json.loads(path.read_text())
+    if not isinstance(value.get("pid"), int) or value["pid"] < 2 or not isinstance(value.get("marker"), str) or len(value["marker"]) != 32:
+        raise ValueError("invalid service process identity")
+    return value
+
+
+def upstream_live(state):
+    if not state: return False
+    try:
+        if os.getpgid(state["pid"]) != state["pid"]: return False
+        command = subprocess.run(["ps", "-ww", "-p", str(state["pid"]), "-o", "command="],
+                                 capture_output=True, text=True, check=False).stdout
+        return state["marker"] in command
+    except ProcessLookupError:
+        return False
+
+
+def stop_upstream(state):
+    # Never signal a stale PID unless the unique launch identity still matches.
+    if not upstream_live(state): return
+    try:
+        os.killpg(state["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    for _ in range(25):
+        if not upstream_live(state): return
+        time.sleep(.2)
+    if upstream_live(state):
+        try:
+            os.killpg(state["pid"], signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("build", "start", "stop", "status"))
@@ -52,6 +89,7 @@ def main():
     lockfile = registry / (service + ".lock")
     pidfile = registry / (service + ".pid")
     stopfile = registry / (service + ".stop")
+    upstream_file = registry / (service + ".upstream.json")
     if args.action == "build":
         subprocess.run(["docker", "build", "-t", image, str(adapter)], check=True)
         return
@@ -64,18 +102,24 @@ def main():
                 live = False
             except BlockingIOError:
                 pass
-        print(json.dumps({"service": service, "pid": pid, "running": live,
+        upstream = read_upstream(upstream_file)
+        running = live or upstream_live(upstream)
+        print(json.dumps({"service": service, "pid": pid, "running": running,
                           "dashboard": f"http://127.0.0.1:{config['port']}/api/v1/state"}))
         if args.action == "stop":
             if live:
                 # A stale PID must never signal an unrelated host process.
                 stopfile.write_text(str(pid))
+            stop_upstream(upstream)
             stop_containers(service)
+            if not live: upstream_file.unlink(missing_ok=True); pidfile.unlink(missing_ok=True)
         return
     if not args.symphony or not args.auth or not all(os.environ.get(k) for k in ("GITHUB_TOKEN", "SYMPHONY_GIT_AUTHOR_NAME", "SYMPHONY_GIT_AUTHOR_EMAIL", "SYMPHONY_OPENCODE_MODEL")):
         parser.error("start requires --symphony, --auth, host-only GITHUB_TOKEN, model and DCO identity")
     with open_lock(lockfile) as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if upstream_live(read_upstream(upstream_file)):
+            raise ValueError("prior scheduler still active after wrapper exit; run stop before restart")
         pidfile.write_text(str(os.getpid()))
         stopfile.unlink(missing_ok=True)
         stop_containers(service)  # reap leftovers from a crashed prior instance
@@ -86,21 +130,35 @@ def main():
                    SYMPHONY_LAUNCHER=str(adapter / "launcher.py"), SYMPHONY_PREPARE=str(adapter / "prepare.py"),
                    SYMPHONY_LOCK_ROOT=str(registry / "issues"), SYMPHONY_MIRROR_ROOT=str(runtime / "mirrors"), SYMPHONY_SOURCE_BUNDLE=str(runtime / "bundles" / (service + ".bundle")))
         workflow = config_path.parent / config["workflow"]
-        proc = subprocess.Popen([str(args.symphony.resolve(strict=True)), str(workflow),
-                                 "--i-understand-that-this-will-be-running-without-the-usual-guardrails",
-                                 "--logs-root", str(runtime / "logs" / service), "--port", str(config["port"])], env=env)
+        marker = uuid.uuid4().hex
+        command = [str(args.symphony.resolve(strict=True)), str(workflow),
+                   "--i-understand-that-this-will-be-running-without-the-usual-guardrails",
+                   "--logs-root", str(runtime / "logs" / service / marker), "--port", str(config["port"])]
+        gate_read, gate_write = os.pipe()
+        proc = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "_exec", str(gate_read), *command],
+                                env=env, pass_fds=(gate_read,), start_new_session=True)
+        os.close(gate_read)
+        try:
+            # Record process identity before allowing scheduler execution. If
+            # the wrapper dies in this window, pipe EOF prevents execution.
+            pending = upstream_file.with_suffix(".pending")
+            pending.write_text(json.dumps({"pid": proc.pid, "marker": marker}))
+            os.replace(pending, upstream_file)
+            os.write(gate_write, b"1")
+        finally:
+            os.close(gate_write)
         def stop(_signum, _frame):
-            proc.terminate()
+            stop_upstream(read_upstream(upstream_file))
         signal.signal(signal.SIGTERM, stop)
         signal.signal(signal.SIGINT, stop)
         try:
             while proc.poll() is None:
                 if stopfile.exists() and stopfile.read_text() == str(os.getpid()):
-                    proc.terminate()
+                    stop_upstream(read_upstream(upstream_file))
                     stopfile.unlink(missing_ok=True)
                 time.sleep(.2)
         finally:
-            proc.terminate()
+            stop_upstream(read_upstream(upstream_file))
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
@@ -108,7 +166,18 @@ def main():
                 proc.wait()
             stop_containers(service)
             pidfile.unlink(missing_ok=True)
+            upstream_file.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 2 and sys.argv[1] == "_exec":
+        gate = int(sys.argv[2])
+        ready = os.read(gate, 1)
+        os.close(gate)
+        if ready != b"1": sys.exit(78)
+        # Keep a trusted process-group leader with the launch marker even
+        # when the release executable wraps/forks its Erlang runtime.
+        result = subprocess.run(sys.argv[3:], env=os.environ)
+        sys.exit(result.returncode)
+    else:
+        main()

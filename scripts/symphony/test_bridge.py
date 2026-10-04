@@ -20,8 +20,9 @@ sys.path.insert(0, str(HERE))
 from bridge import Bridge, brief_from_issue, github_allowed
 from launcher import command
 from prepare import prepare
-from ops import service_root, open_lock
+from ops import service_root, open_lock, read_upstream, upstream_live
 import fcntl
+import signal
 
 
 def config(repo="muffin-project/muffin-agent", base="dev"):
@@ -323,6 +324,49 @@ class OperationsFixture(unittest.TestCase):
                 if first.poll() is None: first.terminate(); first.wait(timeout=10)
                 first.stderr.close()
                 for suffix in (".pid", ".stop", ".lock"):
+                    (registry / (service + suffix)).unlink(missing_ok=True)
+
+
+    @unittest.skipUnless(os.environ.get("SYMPHONY_TEST_DOCKER"), "actual operations needs Docker")
+    def test_wrapper_hard_death_blocks_restart_until_owned_scheduler_stopped(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t); c = config("fixture/death-" + str(os.getpid())); c.update(port=4320, workflow="WORKFLOW.md")
+            (root / "config.json").write_text(json.dumps(c)); (root / "auth.json").write_text("{}")
+            (root / "WORKFLOW.md").write_text("fixture only")
+            fake = root / "fake-symphony"; fake.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(60)\n"); fake.chmod(0o755)
+            env = os.environ.copy(); env.update(GITHUB_TOKEN="fixture-not-secret", SYMPHONY_GIT_AUTHOR_NAME="Fixture",
+                       SYMPHONY_GIT_AUTHOR_EMAIL="fixture@example.invalid", SYMPHONY_OPENCODE_MODEL="fixture/test")
+            common = [sys.executable, str(HERE / "ops.py")]
+            settings = ["--config", str(root / "config.json")]
+            start = ["--symphony", str(fake), "--auth", str(root / "auth.json")]
+            first = subprocess.Popen(common + ["start"] + settings + ["--runtime", str(root / "runtime-a")] + start,
+                                     env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            registry = service_root(); service = "symphony-" + c["repo"].replace("/", "-")
+            state_file = registry / (service + ".upstream.json")
+            state = None
+            try:
+                for _ in range(100):
+                    if state_file.exists():
+                        state = read_upstream(state_file)
+                        if upstream_live(state): break
+                    time.sleep(.05)
+                self.assertTrue(upstream_live(state))
+                first.kill(); first.wait(timeout=5)
+                second = subprocess.run(common + ["start"] + settings + ["--runtime", str(root / "runtime-b")] + start,
+                                        env=env, capture_output=True, timeout=10)
+                self.assertNotEqual(second.returncode, 0)
+                self.assertIn(b"prior scheduler still active", second.stderr)
+                subprocess.run(common + ["stop"] + settings + ["--runtime", str(root / "runtime-b")], env=env,
+                               check=True, stdout=subprocess.DEVNULL, timeout=10)
+                self.assertFalse(upstream_live(state))
+                status = subprocess.check_output(common + ["status"] + settings + ["--runtime", str(root / "runtime-b")], env=env)
+                self.assertFalse(json.loads(status)["running"])
+            finally:
+                if first.poll() is None: first.terminate(); first.wait(timeout=10)
+                first.stderr.close()
+                from ops import stop_upstream
+                stop_upstream(state)
+                for suffix in (".pid", ".stop", ".lock", ".upstream.json", ".upstream.pending"):
                     (registry / (service + suffix)).unlink(missing_ok=True)
 
 

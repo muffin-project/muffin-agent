@@ -46,7 +46,7 @@ Hermes/OpenClaw scheduler or session database is adopted.
 - OpenCode 1.18.33 real binary in the local Docker worker image. Source inspection of `run` showed stdin is read to EOF. The real-binary fixture stalled when stdin inherited Symphony's stream; closing worker stdin fixed it. This is a measured compatibility finding, not inferred equivalence.
 
 Executed locally: 114 official tracker/core/workspace tests passed; the added
-official AppServer/Workspace fixture passed for both repo configs; 22 bridge
+official AppServer/Workspace fixture passed for both repo configs; 23 bridge
 tests passed in the real OpenCode Docker image, including a real launcher/container/MCP localhost model
 fixture with no external model call. Hosted CI and independent review must be
 read on the eventual PR head; these local results do not authorize merge.
@@ -90,3 +90,10 @@ but job cleanup failed because Docker root owned bind-mounted build artifacts.
 The upstream fixture now runs as the invoking UID. Required verifica exposed
 the existing no-trigger-path-filters invariant; the optional pilot workflow now
 uses an unfiltered PR trigger, without weakening the invariant/test.
+
+Final recovery review exposed wrapper hard-death leaving an upstream scheduler.
+A startup pipe now records a unique process-group identity before allowing the
+scheduler to execute. The trusted group leader remains stable across runtime
+wrapping; status/stop recognizes the launch marker and restart refuses an owned
+orphan until stop. An actual temporary process fixture kills the wrapper,
+checks restart rejection, stops the owned group and verifies status false.
