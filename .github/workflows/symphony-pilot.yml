@@ -1,0 +1,27 @@
+name: Symphony OpenCode fixture
+on:
+  pull_request:
+    paths: ['scripts/symphony/**', 'WORKFLOW.md', 'symphony.json', '.github/workflows/symphony-pilot.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: symphony-fixture-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  symphony-fixture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Build pinned OpenCode worker
+        run: docker build -t symphony-opencode:1.18.33-pilot scripts/symphony
+      - name: Real OpenCode and scoped MCP with local model fixture
+        env:
+          SYMPHONY_TEST_DOCKER: '1'
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s scripts/symphony -p 'test_*.py' -v
+      - name: Official pinned Symphony lifecycle and app-server fixtures
+        run: bash scripts/symphony/verify-upstream.sh
