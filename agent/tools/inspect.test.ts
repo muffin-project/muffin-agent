@@ -3,6 +3,7 @@ import { toolContext } from '../fixtures/tool-context.js';
 import { inspectCapability, makeInspectTool, type InspectSources } from './inspect.js';
 import { CONSERVATIVE } from '../profiles/profile.js';
 import type { DoctorReport } from '../../cli/doctor.js';
+import type { RunStatus } from '../../core/autonomy/run-status.js';
 import type { CapabilityDecl } from '../../core/policy/types.js';
 import type { RegisteredTool } from '../loop.js';
 
@@ -135,5 +136,32 @@ describe('sys_inspect dice cosa sta usando adesso', () => {
     // Senza runtimeInfo la riga resta quella di sempre, senza suffissi inventati.
     expect(testo).toContain('profilo: conservative — max');
     expect(testo).not.toContain('profilo: conservative ·');
+  });
+
+  it('mostra le run autonome quando la fonte cè, e tace quando manca (#598 S1)', async () => {
+    // Senza `runs` la sezione non compare: i chiamanti esistenti non vedono
+    // righe nuove per una fonte che non forniscono.
+    expect(await chiedi()).not.toContain('Run autonome');
+    const run: RunStatus = {
+      state: 'needs-owner',
+      jobId: 'job-1',
+      scheduledFor: '2026-09-20T08:00:00.000Z',
+      turnId: 'turn-1',
+      settledAt: null,
+      turnStatus: 'waiting',
+      turnOutcome: null,
+      delivery: null,
+      openApprovals: 1,
+      decidedUnconsumed: false,
+      settledEffects: 2,
+      uncertainCalls: 0,
+      undoneEffects: 0,
+      spendUsd: 0.5,
+    };
+    const testo = await chiedi({ runs: () => [run] });
+    expect(testo).toContain('# Run autonome (1):');
+    expect(testo).toContain('needs-owner');
+    expect(testo).toContain('job-1@2026-09-20T08:00:00.000Z');
+    expect(testo).toContain('core/autonomy/run-status.ts');
   });
 });

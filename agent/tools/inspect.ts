@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { DoctorReport } from '../../cli/doctor.js';
 import type { BuildStamp } from '../../cli/update.js';
+import { formatRunStatus, type RunStatus } from '../../core/autonomy/run-status.js';
 import type { Config } from '../../core/config/config.js';
 import type { CapabilityDecl, CapabilityId, Principal } from '../../core/policy/types.js';
 import type { DelegationMode } from '../../core/runtime/delega.js';
@@ -98,6 +99,12 @@ export type InspectSources = {
   turns: () => TurnHealth;
   /** `JobStore.list()`, come `muffin jobs`. */
   jobs: () => Job[];
+  /**
+   * Fired autonomous runs with their 6-state answer (#598 S1). Letto dalle
+   * stesse righe durevoli che il resto del report legge — mai ricalcolato
+   * qui. Assente = il chiamante non lo fornisce: la sezione non compare.
+   */
+  runs?: (() => readonly RunStatus[]) | undefined;
   /**
    * System One attivo su questa installazione (issue #740 fase shadow):
    * provider e modello richiesto, per dire «sto giudicando in shadow» invece
@@ -218,6 +225,9 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
       const blocchi = sources.promptBlocks[cls] ?? [];
       const salute = sources.turns();
       const job = sources.jobs();
+      // Una sola lettura: la proiezione è pura, ma due chiamate sarebbero due
+      // giri di SELECT per la stessa risposta.
+      const runs = sources.runs?.() ?? null;
 
       const righe = [
         '# Questa istanza, adesso',
@@ -305,6 +315,16 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
             // leggerebbe un job attivo che in realtà non parte più.
             `  ${j.cron} ${j.timezone} → ${j.channel} · ${j.kind} · ${j.active ? 'attivo' : 'spento'}${j.perJobUsd === null ? '' : ` · tetto $${j.perJobUsd}/mese`} · ultimo ${j.lastRunAt?.toISOString() ?? 'mai'} — ${jobPayload(j).slice(0, 60)}`,
         ),
+        // Le run autonome armate (#598 S1): la stessa proiezione che il
+        // runtime espone, una riga per occorrenza registrata. Assente = il
+        // chiamante non la fornisce, e la sezione non compare.
+        ...(runs === null
+          ? []
+          : [
+              `# Run autonome (${runs.length}):`,
+              ...runs.map((r) => `  ${formatRunStatus(r)}`),
+              '  stati: pending/running/continuable/done/needs-owner/failed — vedi core/autonomy/run-status.ts',
+            ]),
       ];
       return { content: righe.filter((r) => r !== '').join('\n'), tier: 0 };
     },
