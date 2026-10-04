@@ -1,4 +1,5 @@
 import copy
+import io
 import importlib.util
 import json
 import os
@@ -137,6 +138,47 @@ class ContractTests(unittest.TestCase):
 
 
 class ProtocolFixture(unittest.TestCase):
+    def test_eof_during_worker_creation_waits_then_reaps_child(self):
+        bridge = Bridge(config(), input_stream=io.StringIO(), output_stream=io.StringIO())
+        bridge.rpc = lambda args: issue() if args["path"].endswith("/issues/1") else []
+        entered, release, cleanup_done = threading.Event(), threading.Event(), threading.Event()
+        created = []
+        real_popen = subprocess.Popen
+        def spawn(_command, **kwargs):
+            proc = real_popen([sys.executable, "-c", "import time; time.sleep(60)"], **kwargs)
+            created.append(proc); entered.set()
+            if not release.wait(10): raise RuntimeError("fixture gate timeout")
+            return proc
+        worker = threading.Thread(target=bridge.run_worker, args=({"input": [{"type": "text", "text": "Canonical issue: 1"}]},))
+        def close_stream():
+            bridge.run(); cleanup_done.set()
+        closer = threading.Thread(target=close_stream)
+        with patch("bridge.subprocess.Popen", side_effect=spawn):
+            try:
+                worker.start(); self.assertTrue(entered.wait(5))
+                closer.start(); self.assertTrue(bridge.closed.wait(5))
+                self.assertFalse(cleanup_done.wait(.2), "EOF cleanup missed a child being created")
+                release.set(); closer.join(6); worker.join(6)
+                self.assertFalse(closer.is_alive()); self.assertFalse(worker.is_alive())
+                self.assertIsNotNone(created[0].poll())
+                self.assertIsNone(bridge.server); self.assertIsNone(bridge.temp)
+            finally:
+                release.set(); worker.join(6)
+                if closer.ident is not None: closer.join(6)
+                bridge.cleanup_worker()
+                for proc in created:
+                    if proc.poll() is None: proc.kill(); proc.wait(timeout=5)
+                    proc.stdout.close()
+
+    def test_closed_stream_prevents_worker_setup_and_launch(self):
+        bridge = Bridge(config(), input_stream=io.StringIO(), output_stream=io.StringIO())
+        bridge.rpc = lambda args: issue() if args["path"].endswith("/issues/1") else []
+        bridge.closed.set()
+        with patch("bridge.subprocess.Popen") as spawn:
+            bridge.run_worker({"input": [{"type": "text", "text": "Canonical issue: 1"}]})
+            spawn.assert_not_called()
+        self.assertIsNone(bridge.server); self.assertIsNone(bridge.temp)
+
     def execute(self, raw_issue, repo="muffin-project/muffin-agent", hold=False, real_worker=None, provider=None, isolated=False, injected=False):
         temp = tempfile.TemporaryDirectory(); p = Path(temp.name) / "workspace"; p.mkdir(); (p / ".git").mkdir()
         fake = p / "fake-opencode"

@@ -46,7 +46,7 @@ Hermes/OpenClaw scheduler or session database is adopted.
 - OpenCode 1.18.33 real binary in the local Docker worker image. Source inspection of `run` showed stdin is read to EOF. The real-binary fixture stalled when stdin inherited Symphony's stream; closing worker stdin fixed it. This is a measured compatibility finding, not inferred equivalence.
 
 Executed locally: 114 official tracker/core/workspace tests passed; the added
-official AppServer/Workspace fixture passed for both repo configs; 25 bridge
+official AppServer/Workspace fixture passed for both repo configs; 27 bridge
 tests passed in the real OpenCode Docker image, including a real launcher/container/MCP localhost model
 fixture with no external model call. Hosted CI and independent review must be
 read on the eventual PR head; these local results do not authorize merge.
@@ -111,3 +111,9 @@ non-zombie members of its original group even after its direct child exits.
 The additional regression covers that exact falsifier and restart after cleanup.
 The normal-exit fixture also proves the process-list probe does not count
 itself as a surviving descendant and retain an empty service group.
+
+Fresh final review also paused actual child creation before the worker field
+assignment, fed EOF and falsified cleanup: it returned while the child was alive.
+Resource setup and Popen assignment now share the existing cleanup lock, with
+closed-state rejection under that lock. Deterministic regression proves EOF waits
+for creation then reaps the child, and prior EOF prevents setup/launch entirely.

@@ -319,55 +319,58 @@ class Bridge:
                                         text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True)
                 if json.loads(result.stdout):
                     raise ValueError("canonical reserved predicate rejected write-set")
-            if self.isolated:
-                import hashlib
-                key = hashlib.sha256((self.config["repo"] + "#" + str(number)).encode()).hexdigest()[:16]
-                lock_root = Path(os.environ["SYMPHONY_LOCK_ROOT"])
-                lock_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-                self.lock_file = open(lock_root / (key + ".lock"), "a")
-                fcntl.flock(self.lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            self.temp = tempfile.TemporaryDirectory(prefix="symphony-opencode-")
-            mcp = self.start_mcp()
-            config = {"$schema": "https://opencode.ai/config.json", "autoupdate": False,
-                      "mcp": {"symphony": mcp},
-                      "permission": {"*": "allow", "external_directory": "deny", "question": "deny"}}
-            if self.isolated and os.environ.get("SYMPHONY_OPENCODE_PROVIDER_CONFIG"):
-                config["provider"] = json.loads(Path(os.environ["SYMPHONY_OPENCODE_PROVIDER_CONFIG"]).read_text())
-            configfile = Path(self.temp.name) / "opencode.json"
-            configfile.write_text(json.dumps(config))
-            text = (f"Repository: {self.config['repo']}\nCanonical issue: #{number} {issue['title']}\n"
-                    f"Integration base: origin/{self.config['base']}\nOwned branch: {self.config['branch']}\n"
-                    + json.dumps(brief, indent=2) + "\n\nRead AGENTS.md and relevant local contracts. "
-                    "Work only in write_set; preserve other writers. Create or reuse the owned branch, and reconcile it onto the current integration base before coding/publishing. Reuse this branch/PR on retry. "
-                    "Repair implementation/tests/exact-head CI until review-ready. Commit with the configured "
-                    "DCO identity, then use symphony publish_branch; use its returned REMOTE head SHA for CI. "
-                    "Create the PR when integration-grade (draft=false) using "
-                    "the symphony github_api MCP tool, and post evidence on that PR. "
-                    "Never merge, label, close issues, deploy or modify reserved/product authority. "
-                    "If credentials or founder authority are missing, report that blocker. "
-                    "After required exact-head CI succeeds, post a PR comment containing "
-                    "symphony-handoff:<remote SHA> and evidence. This is not a review attestation. "
-                    "Finish with a concise SHA/evidence/handoff; do not start other work.")
-            env = {k: v for k, v in os.environ.items() if k not in {
-                "GITHUB_TOKEN", "GH_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_ENTERPRISE_TOKEN"}}
-            env["OPENCODE_CONFIG"] = str(configfile)
-            env["OPENCODE_DISABLE_AUTOUPDATE"] = "true"
-            for k, v in {"GIT_AUTHOR_NAME": self.config["author_name"], "GIT_COMMITTER_NAME": self.config["author_name"],
-                         "GIT_AUTHOR_EMAIL": self.config["author_email"], "GIT_COMMITTER_EMAIL": self.config["author_email"]}.items():
-                env[k] = v
-            command = [self.config.get("opencode_bin", "opencode"), "run", "--format", "json", "--pure"]
-            if self.config.get("model"):
-                command += ["--model", self.config["model"]]
-            command += ["--", text]
-            if self.isolated:
-                from launcher import command as docker_command
-                command = docker_command(os.environ, str(Path.cwd()), self.temp.name, text, number)
-                self.container = command[command.index("--name") + 1]
-            self.worker = subprocess.Popen(command, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                           stderr=subprocess.DEVNULL, text=True, start_new_session=True)
-            self.worker_timer = threading.Timer(self.config.get("worker_timeout_seconds", 3600), self.cleanup_worker)
-            self.worker_timer.daemon = True
-            self.worker_timer.start()
+            # EOF cleanup must either prevent launch or observe every resource.
+            with self.cleanup_lock:
+                if self.closed.is_set(): return
+                if self.isolated:
+                    import hashlib
+                    key = hashlib.sha256((self.config["repo"] + "#" + str(number)).encode()).hexdigest()[:16]
+                    lock_root = Path(os.environ["SYMPHONY_LOCK_ROOT"])
+                    lock_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    self.lock_file = open(lock_root / (key + ".lock"), "a")
+                    fcntl.flock(self.lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.temp = tempfile.TemporaryDirectory(prefix="symphony-opencode-")
+                mcp = self.start_mcp()
+                config = {"$schema": "https://opencode.ai/config.json", "autoupdate": False,
+                          "mcp": {"symphony": mcp},
+                          "permission": {"*": "allow", "external_directory": "deny", "question": "deny"}}
+                if self.isolated and os.environ.get("SYMPHONY_OPENCODE_PROVIDER_CONFIG"):
+                    config["provider"] = json.loads(Path(os.environ["SYMPHONY_OPENCODE_PROVIDER_CONFIG"]).read_text())
+                configfile = Path(self.temp.name) / "opencode.json"
+                configfile.write_text(json.dumps(config))
+                text = (f"Repository: {self.config['repo']}\nCanonical issue: #{number} {issue['title']}\n"
+                        f"Integration base: origin/{self.config['base']}\nOwned branch: {self.config['branch']}\n"
+                        + json.dumps(brief, indent=2) + "\n\nRead AGENTS.md and relevant local contracts. "
+                        "Work only in write_set; preserve other writers. Create or reuse the owned branch, and reconcile it onto the current integration base before coding/publishing. Reuse this branch/PR on retry. "
+                        "Repair implementation/tests/exact-head CI until review-ready. Commit with the configured "
+                        "DCO identity, then use symphony publish_branch; use its returned REMOTE head SHA for CI. "
+                        "Create the PR when integration-grade (draft=false) using "
+                        "the symphony github_api MCP tool, and post evidence on that PR. "
+                        "Never merge, label, close issues, deploy or modify reserved/product authority. "
+                        "If credentials or founder authority are missing, report that blocker. "
+                        "After required exact-head CI succeeds, post a PR comment containing "
+                        "symphony-handoff:<remote SHA> and evidence. This is not a review attestation. "
+                        "Finish with a concise SHA/evidence/handoff; do not start other work.")
+                env = {k: v for k, v in os.environ.items() if k not in {
+                    "GITHUB_TOKEN", "GH_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_ENTERPRISE_TOKEN"}}
+                env["OPENCODE_CONFIG"] = str(configfile)
+                env["OPENCODE_DISABLE_AUTOUPDATE"] = "true"
+                for k, v in {"GIT_AUTHOR_NAME": self.config["author_name"], "GIT_COMMITTER_NAME": self.config["author_name"],
+                             "GIT_AUTHOR_EMAIL": self.config["author_email"], "GIT_COMMITTER_EMAIL": self.config["author_email"]}.items():
+                    env[k] = v
+                command = [self.config.get("opencode_bin", "opencode"), "run", "--format", "json", "--pure"]
+                if self.config.get("model"):
+                    command += ["--model", self.config["model"]]
+                command += ["--", text]
+                if self.isolated:
+                    from launcher import command as docker_command
+                    command = docker_command(os.environ, str(Path.cwd()), self.temp.name, text, number)
+                    self.container = command[command.index("--name") + 1]
+                self.worker = subprocess.Popen(command, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                               stderr=subprocess.DEVNULL, text=True, start_new_session=True)
+                self.worker_timer = threading.Timer(self.config.get("worker_timeout_seconds", 3600), self.cleanup_worker)
+                self.worker_timer.daemon = True
+                self.worker_timer.start()
             finished, failed = False, False
             for line in self.worker.stdout:
                 try:
