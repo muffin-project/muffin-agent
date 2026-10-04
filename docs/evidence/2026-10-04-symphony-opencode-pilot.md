@@ -97,3 +97,9 @@ scheduler to execute. The trusted group leader remains stable across runtime
 wrapping; status/stop recognizes the launch marker and restart refuses an owned
 orphan until stop. An actual temporary process fixture kills the wrapper,
 checks restart rejection, stops the owned group and verifies status false.
+
+The final process-group review falsified default TERM handling of the trusted
+leader: it could lose the ownership marker before a child stopped. The leader
+now retains its identity during graceful termination; the existing process
+fixture uses a TERM-resistant scheduler, proves bounded group escalation and
+checks a subsequent start/stop succeeds.

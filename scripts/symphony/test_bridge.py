@@ -333,7 +333,10 @@ class OperationsFixture(unittest.TestCase):
             root = Path(t); c = config("fixture/death-" + str(os.getpid())); c.update(port=4320, workflow="WORKFLOW.md")
             (root / "config.json").write_text(json.dumps(c)); (root / "auth.json").write_text("{}")
             (root / "WORKFLOW.md").write_text("fixture only")
-            fake = root / "fake-symphony"; fake.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(60)\n"); fake.chmod(0o755)
+            child_pidfile = root / "child.pid"
+            fake = root / "fake-symphony"
+            fake.write_text("#!/usr/bin/env python3\nimport os, signal, time\nfrom pathlib import Path\nsignal.signal(signal.SIGTERM, lambda *_: None)\nPath(" + repr(str(child_pidfile)) + ").write_text(str(os.getpid()))\ntime.sleep(60)\n")
+            fake.chmod(0o755)
             env = os.environ.copy(); env.update(GITHUB_TOKEN="fixture-not-secret", SYMPHONY_GIT_AUTHOR_NAME="Fixture",
                        SYMPHONY_GIT_AUTHOR_EMAIL="fixture@example.invalid", SYMPHONY_OPENCODE_MODEL="fixture/test")
             common = [sys.executable, str(HERE / "ops.py")]
@@ -351,6 +354,10 @@ class OperationsFixture(unittest.TestCase):
                         if upstream_live(state): break
                     time.sleep(.05)
                 self.assertTrue(upstream_live(state))
+                for _ in range(100):
+                    if child_pidfile.exists(): break
+                    time.sleep(.05)
+                child_pid = int(child_pidfile.read_text())
                 first.kill(); first.wait(timeout=5)
                 second = subprocess.run(common + ["start"] + settings + ["--runtime", str(root / "runtime-b")] + start,
                                         env=env, capture_output=True, timeout=10)
@@ -358,7 +365,28 @@ class OperationsFixture(unittest.TestCase):
                 self.assertIn(b"prior scheduler still active", second.stderr)
                 subprocess.run(common + ["stop"] + settings + ["--runtime", str(root / "runtime-b")], env=env,
                                check=True, stdout=subprocess.DEVNULL, timeout=10)
+                for _ in range(100):
+                    child_status = subprocess.run(["ps", "-p", str(child_pid), "-o", "stat="], capture_output=True, text=True).stdout.strip()
+                    if not child_status or child_status.startswith("Z"): break
+                    time.sleep(.05)
+                self.assertTrue(not child_status or child_status.startswith("Z"), "TERM-resistant scheduler survived stop")
                 self.assertFalse(upstream_live(state))
+                # A clean stop permits a fresh scheduler for the same repo.
+                restarted = subprocess.Popen(common + ["start"] + settings + ["--runtime", str(root / "runtime-b")] + start,
+                                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                try:
+                    for _ in range(100):
+                        current = read_upstream(state_file)
+                        if current and current["pid"] != state["pid"] and upstream_live(current): break
+                        if restarted.poll() is not None: self.fail(restarted.stderr.read().decode())
+                        time.sleep(.05)
+                    self.assertTrue(upstream_live(current))
+                    subprocess.run(common + ["stop"] + settings + ["--runtime", str(root / "runtime-b")], env=env,
+                                   check=True, stdout=subprocess.DEVNULL, timeout=15)
+                    self.assertEqual(restarted.wait(timeout=10), 0)
+                finally:
+                    if restarted.poll() is None: restarted.kill(); restarted.wait(timeout=5)
+                    restarted.stderr.close()
                 status = subprocess.check_output(common + ["status"] + settings + ["--runtime", str(root / "runtime-b")], env=env)
                 self.assertFalse(json.loads(status)["running"])
             finally:

@@ -171,6 +171,10 @@ def main():
 
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "_exec":
+        # Preserve the ownership witness while the scheduler handles TERM.
+        # The host escalates the complete group after the bounded grace.
+        signal.signal(signal.SIGTERM, lambda *_: None)
+        signal.signal(signal.SIGINT, lambda *_: None)
         gate = int(sys.argv[2])
         ready = os.read(gate, 1)
         os.close(gate)
