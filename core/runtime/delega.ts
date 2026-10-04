@@ -24,6 +24,12 @@ import type { TurnStatus } from '../turns/store.js';
  * l'owner intende — e non trapela mai a un lavoro, una sessione o un tenant
  * diversi.
  *
+ * Carry sul fire futuro (#598 S3): un job armato una volta con una postura
+ * (`jobs.delegation`) la porta al turno che ancora non esiste — `modo` legge
+ * `turns.job_id → jobs.delegation` quando il turno non ha una propria riga.
+ * Una riga esplicita sul turno vince sempre: `/manual` revoca subito anche un
+ * fire armato `yolo`.
+ *
  * Accanto a `core/runtime/pausa.ts`: un fatto durevole letto a ogni consumo di
  * ask, non uno stato in memoria — un riavvio non deve né dimenticare la delega
  * né allargarla. Lettura fresca a ogni ask anche perché è così che `/manual`
@@ -67,10 +73,44 @@ export class Delega {
   /**
    * La modalità attiva per questo lavoro. Assente = `manual`: il verso in cui
    * si degrada è chiedere all'owner, non eseguire da soli.
+   *
+   * Carry sul fire futuro (#598 S3): quando il turno non ha una propria riga,
+   * ma è il fire di un job armato con una postura (`jobs.delegation` via
+   * `turns.job_id`), vale la postura del job. Una riga esplicita sul turno
+   * vince sempre — così `/manual` revoca subito anche un fire armato `yolo`.
+   * Tabelle assenti o righe legacy senza colonna leggono `manual`: il verso
+   * che chiede, mai quello che esegue.
    */
   modo(turnId: string): DelegationMode {
     const row = this.modeStmt.get(turnId) as { mode: string } | undefined;
-    return row?.mode === 'auto' || row?.mode === 'yolo' ? row.mode : 'manual';
+    if (row !== undefined) {
+      return row.mode === 'auto' || row.mode === 'yolo' ? row.mode : 'manual';
+    }
+    return this.modoDalJob(turnId);
+  }
+
+  /**
+   * La postura pre-delegata del job di questo fire, o `manual` quando non c'è.
+   * Solo lettura (`SELECT`), mai scrittura: il fire non minta deleghe, le
+   * eredita per quell'occasione — la storia resta sul job e sul turno.
+   */
+  private modoDalJob(turnId: string): DelegationMode {
+    try {
+      const turno = this.db
+        .prepare(`SELECT job_id FROM turns WHERE id = ?`)
+        .get(turnId) as { job_id: string | null } | undefined;
+      const jobId = turno?.job_id ?? null;
+      if (jobId === null) return 'manual';
+      const riga = this.db
+        .prepare(`SELECT delegation FROM jobs WHERE id = ?`)
+        .get(jobId) as { delegation: string | null } | undefined;
+      const d = riga?.delegation ?? null;
+      return d === 'auto' || d === 'yolo' ? d : 'manual';
+    } catch {
+      // Tabelle o colonne assenti (database vecchio, `:memory:` senza jobs):
+      // il verso che chiede, non quello che esegue.
+      return 'manual';
+    }
   }
 
   /** Da quando vale la modalità attiva, o `null` se nessuno l'ha mai cambiata. */
