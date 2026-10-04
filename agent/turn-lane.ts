@@ -73,7 +73,53 @@ export type AutonomousBudget = {
   jobCap: (jobId: string) => number | null;
   /** What the job has spent this month — the counter `jobCap` gates. */
   jobMonthUsd: (jobId: string) => number;
+  /**
+   * The job's delivery policy (#598 silent-resume), or `null`/`undefined`
+   * when the job is gone.
+   *
+   * Optional: absent means the lane falls back to the job row on the same
+   * database (`TurnStore.jobDelivery`), which is what production and the
+   * assembled proof share — so no rewiring is needed to stay silent. An
+   * explicit reader, when given, wins (tests inject here rather than building
+   * a jobs table). Either way, anything but an explicit `'silent'` delivers,
+   * exactly as today.
+   */
+  jobDelivery?: ((jobId: string) => 'deliver' | 'silent' | null | undefined) | undefined;
 };
+
+/**
+ * Whether a finished resumed turn must stay silent (#598 S4 across resume).
+ *
+ * True only for the one case the scheduler's own silent branch silences: a
+ * job turn whose delivery policy is `silent` and whose lease ended
+ * `answered`. Every other outcome — `ask` (needs-owner), `error`, `budget`,
+ * `cap`, `aborted` — speaks with or without a policy, and every non-job turn
+ * or unreadable policy delivers exactly as today. The policy read itself never
+ * throws: an explicit `jobDelivery` reader that throws, and a missing jobs
+ * row/table, both fall back to `deliver`.
+ */
+function isSilentResume(
+  deps: LoopDeps,
+  auto: AutonomousBudget | undefined,
+  record: TurnRecord,
+  stopped: string,
+): boolean {
+  if (stopped !== 'answered') return false;
+  const jobId = record.jobId;
+  if (jobId === null) return false;
+  try {
+    const explicit = auto?.jobDelivery?.(jobId);
+    if (explicit === 'silent') return true;
+    if (explicit === 'deliver') return false;
+  } catch {
+    return false;
+  }
+  try {
+    return deps.turns.jobDelivery(jobId) === 'silent';
+  } catch {
+    return false;
+  }
+}
 
 export function makeLaneRunner(
   deps: LoopDeps,
@@ -151,6 +197,14 @@ export function makeLaneRunner(
     if (outcome.stopped === 'suspended') return { stopped: outcome.stopped };
 
     const record = deps.turns.get(turnId);
+    // A silent-policy job turn that answered stays silent here too, leaving
+    // `delivery` pending so the next scheduler tick flows into the existing S4
+    // silent branch (settle with receipt, no conversational message). Only
+    // `answered` silences — needs-owner/error/budget still speak — and the
+    // default (no job, `deliver` policy, unreadable row) sends as today.
+    if (record !== null && outcome.text !== '' && isSilentResume(deps, auto, record, outcome.stopped)) {
+      return { stopped: outcome.stopped };
+    }
     if (record?.replyTo != null && outcome.text !== '') {
       await sendAndRecord(deps, record, outcome.text);
       return { stopped: outcome.stopped };
@@ -341,6 +395,20 @@ async function runAutonomous(
     return { stopped: outcome.stopped };
   }
   const current = deps.turns.get(record.id);
+  // A silent-policy turn stays silent across resume: no conversational
+  // message here, `delivery` left pending, and the flow continues into the
+  // existing S4 silent branch on the next tick (which settles the fire with
+  // the silent receipt). Only `answered` silences — `ask` (needs-owner),
+  // `error`, `budget` and every other outcome still speak with or without a
+  // policy — and the default (`deliver`, no job, unreadable row) sends
+  // byte-for-byte as today.
+  if (
+    current !== null &&
+    outcome.text !== '' &&
+    isSilentResume(deps, auto, current, outcome.stopped)
+  ) {
+    return { stopped: outcome.stopped };
+  }
   if (current?.replyTo != null && outcome.text !== '') {
     await send(current, outcome.text);
     return { stopped: outcome.stopped };

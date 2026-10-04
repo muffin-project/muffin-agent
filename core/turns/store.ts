@@ -1737,6 +1737,34 @@ export class TurnStore {
   }
 
   /**
+   * The job's delivery policy for a lane-resumed turn (#598 silent-resume).
+   *
+   * Read-only (`SELECT`), never a write: the lane consults the same `jobs`
+   * row the scheduler's S4 silent branch already reads, on the same database
+   * handle that backs both stores in production and in tests. A per-turn row
+   * never overrides it — there is no per-turn delivery column (issue #844
+   * owns that coordination, so this stays a job-level read).
+   *
+   * Fail-open toward speaking: a missing job, a missing table/column, or any
+   * value that is not exactly `'silent'` reads `'deliver'` — the default that
+   * keeps every legacy row and every existing test byte-for-byte as today.
+   * Only an explicit `'silent'` silences, and only for `answered` (the lane
+   * decides that half; see `agent/turn-lane.ts`).
+   */
+  jobDelivery(jobId: string): 'deliver' | 'silent' {
+    try {
+      const row = this.db.prepare(`SELECT delivery FROM jobs WHERE id = ?`).get(jobId) as
+        | { delivery: string | null }
+        | undefined;
+      return row?.delivery === 'silent' ? 'silent' : 'deliver';
+    } catch {
+      // No jobs table (a turns-only handle), a pre-S4 database without the
+      // column, or any other read failure: speak, as today.
+      return 'deliver';
+    }
+  }
+
+  /**
    * L'ultimo lavoro non finito di una conversazione — vedi
    * `latestActiveOfSessionStmt`. È il lavoro a cui `/yolo` e soci si legano:
    * quello che l'owner vede in flight (o in attesa di continuazione), mai uno
