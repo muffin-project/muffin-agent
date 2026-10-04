@@ -1,0 +1,8 @@
+{
+  "repo": "muffin-project/muffin-agent",
+  "base": "dev",
+  "ready_label": "agent:symphony",
+  "workflow": "WORKFLOW.md",
+  "port": 4318,
+  "denied_paths": ["docs/decisions", "docs/architecture", "docs/product", "infra", "defaults", "migrations", "AGENTS.md", "CLAUDE.md", "WORKFLOW.md", "symphony.json", "scripts/symphony"]
+}

@@ -176,6 +176,9 @@ jobs:
       - name: licenze delle dipendenze
         run: node scripts/check-dep-licenses.mjs
 
+      - name: Symphony OpenCode bridge contract (no credentials)
+        run: python3 -m unittest discover -s scripts/symphony -p "test_*.py" -v
+
       - name: typecheck
         run: npx tsc --noEmit
 
