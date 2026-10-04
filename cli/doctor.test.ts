@@ -34,6 +34,7 @@ import { sealOwnerBinding } from '../core/rot/owner.js';
 import { seal } from '../core/rot/verify.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import type { StatoSuperficie } from '../core/surface/salute.js';
+import { JobFireStore } from '../core/scheduler/job-fires.js';
 import { TurnStore } from '../core/turns/store.js';
 import {
   AVVIO_TROPPO_LUNGO_MS,
@@ -510,6 +511,112 @@ describe('doctor reads undelivered turns — D3 (judge, PR #42)', () => {
     // state on day one, not a second thing to report alongside it.
     const dir = home();
     expect(await check(dir, 'consegne')).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('doctor consegne distinguishes silent receipts — #844', () => {
+  /**
+   * #598 S4 leaves `turns.delivery = pending` on a silent-settled turn by
+   * design, so without the `job_fires.silent` read the `consegne` check warns
+   * about an intentional silence. These are wiring tests through `runDoctor`
+   * (same posture as D3 above): a silent fire receipt must never warn, a
+   * genuine miss must warn exactly as today, and a settled-but-not-silent
+   * fire (the empty-text branch shape) must keep warning.
+   */
+  const counters844 = {
+    iterations: 1,
+    recoveriesUsed: 0,
+    transportRetriesLeft: 3,
+    truncationsUsed: 0,
+    toolCallsMade: 0,
+    nudgedForCompletion: false,
+    usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    spentUsd: 0,
+    resumes: 0,
+    contextBuilt: false,
+  };
+
+  function donePendingTurn(
+    store: TurnStore,
+    id: string,
+  ): void {
+    const created = store.create({
+      id,
+      principal: { kind: 'owner', connector: 'telegram', externalId: '1' },
+      tenant: 'host',
+      surface: 'telegram',
+      sessionId: 'sess-844',
+      model: 't',
+      messages: [],
+      taint: 0,
+      counters: counters844,
+      replyTo: { chatId: 1, messageId: 1 },
+    });
+    store.finish(
+      id,
+      { outcome: 'answered', messages: [], taint: 0, counters: counters844 },
+      created.claimToken,
+    );
+  }
+
+  it('a silent-settled turn alone reads ok with an informative line, never warn', async () => {
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    const store = new TurnStore(db);
+    const fires = new JobFireStore(db);
+    donePendingTurn(store, 'turn-844-sil-01');
+    // Production shape (`agent/scheduler-run.ts` + S4 branch): the occurrence
+    // is claimed, bound to the turn, and settled with the silent receipt.
+    fires.claim('job-844-silent', '2026-10-04T10:00:00.000Z');
+    fires.bind('job-844-silent', '2026-10-04T10:00:00.000Z', 'turn-844-sil-01');
+    fires.settle('job-844-silent', '2026-10-04T10:00:00.000Z', { silent: true });
+    db.close();
+
+    const c = await check(dir, 'consegne');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('ricevuta silenziosa');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('silent + genuine: the warning names only the genuine turn', async () => {
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    const store = new TurnStore(db);
+    const fires = new JobFireStore(db);
+    donePendingTurn(store, 'turn-844-sil-02');
+    fires.claim('job-844-silent', '2026-10-04T10:00:00.000Z');
+    fires.bind('job-844-silent', '2026-10-04T10:00:00.000Z', 'turn-844-sil-02');
+    fires.settle('job-844-silent', '2026-10-04T10:00:00.000Z', { silent: true });
+    // Genuinely undelivered: done + pending, no silent fire anywhere near it.
+    donePendingTurn(store, 'turn-844-gen-01');
+    db.close();
+
+    const c = await check(dir, 'consegne');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('1 turni');
+    expect(c?.detail).toContain('turn-844-gen'); // genuine slice(0, 12)
+    expect(c?.detail).not.toContain('turn-844-sil'); // silent never named
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('a settled-but-not-silent fire still warns — empty-text branch unchanged', async () => {
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    const store = new TurnStore(db);
+    const fires = new JobFireStore(db);
+    // Same durable shape as the empty-text branch in
+    // `core/scheduler/scheduler.ts`: occurrence settled, schedule advanced,
+    // turn row untouched (`pending`) — but no silent receipt (`silent = 0`).
+    donePendingTurn(store, 'turn-844-empty-01');
+    fires.claim('job-844-empty', '2026-10-04T11:00:00.000Z');
+    fires.bind('job-844-empty', '2026-10-04T11:00:00.000Z', 'turn-844-empty-01');
+    fires.settle('job-844-empty', '2026-10-04T11:00:00.000Z');
+    db.close();
+
+    const c = await check(dir, 'consegne');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('turn-844-emp');
     rmSync(dir, { recursive: true, force: true });
   });
 });
