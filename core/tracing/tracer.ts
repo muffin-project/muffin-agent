@@ -46,9 +46,9 @@ export class JsonlExporter implements SpanExporter {
   }
 
   /**
-   * Retention runs at boot and on day rollover, from the runtime itself: there
-   * is no scheduler yet in M0, and a retention policy nobody enforces is a
-   * promise, not a policy.
+   * Retention runs at boot (from the runtime itself) and on every scheduler
+   * tick that owns the store (`Scheduler`'s `traceRetention` pass, #838): a
+   * retention policy nobody enforces is a promise, not a policy.
    */
   pruneOlderThan(days: number, now: Date = new Date()): string[] {
     const cutoff = new Date(now.getTime() - days * 86_400_000).toISOString().slice(0, 10);

@@ -269,6 +269,25 @@ export class Scheduler {
      * `agent/scheduler-run.ts`'s own construction untouched.
      */
     private readonly commitments: { tick(now: Date): void } | null = null,
+    /**
+     * Trace retention on this same beat (#838) — the proven
+     * `JsonlExporter.pruneOlderThan` via `makeTraceRetentionTick`
+     * (`core/scheduler/trace-retention.ts`), which is the exact function
+     * `agent/runtime.ts` already calls at boot.
+     *
+     * It lives **here** for the same reason `commitments` does: the two
+     * conditions that must silence it — `standDown` and `paused` — are already
+     * resolved above, so a process that lost the claim never prunes, and the
+     * REPL (which owns a scheduler and no gateway) gets it too. And it is
+     * asked **before** the lane checks for the same reason as well: retention
+     * costs no model call, so a busy lane or an active foreground must not
+     * hold disk hygiene past the tick. No policy change — same days, same
+     * cutoff, only a second caller next to the boot one.
+     *
+     * A no-op by default, same as `commitments`: every existing construction
+     * is untouched.
+     */
+    private readonly traceRetention: { tick(now: Date): void } | null = null,
   ) {}
 
   /**
@@ -310,6 +329,10 @@ export class Scheduler {
     // this pass never calls the model, so nothing that arbitrates the model
     // lane has any business delaying a promise past the moment it was made for.
     this.commitments?.tick(now);
+    // Beside the commitments pass, same placement argument: retention is disk
+    // hygiene, not a model call, so a busy lane or an active foreground must
+    // not delay it — while a handover or a `/pause` still silences it above.
+    this.traceRetention?.tick(now);
     // Asked of the shared lane, not of a flag of our own: the thing that must
     // not happen twice is a *model call*, and the turn lane makes them too.
     if (this.modelLane.busy()) {
