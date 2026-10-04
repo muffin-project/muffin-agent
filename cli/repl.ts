@@ -5,6 +5,7 @@ import { intestazione } from './riquadro.js';
 import { attachMcp, buildRuntime, type Runtime } from '../agent/runtime.js';
 import { loadProfiles, selectProfile } from '../agent/profiles/profile.js';
 import { Scheduler, type Deliver, type ForegroundGate, type StandDown } from '../core/scheduler/scheduler.js';
+import { makeTraceRetentionTick } from '../core/scheduler/trace-retention.js';
 import { ModelLane } from '../core/turns/model-lane.js';
 import { gatewayTransition, readGateway } from '../core/gateway/lock.js';
 import { resolveExecutionOwner } from '../core/gateway/ownership.js';
@@ -922,6 +923,11 @@ export async function runRepl(
     // volte. Ed è qui, e non solo nel gateway, perché un'installazione senza
     // gateway ha comunque fatto la promessa.
     commitments,
+    // #838: la stessa retention del gateway, dalla stessa porta — il REPL cede
+    // allo scheduler del gateway quando c'è, quindi pota solo quando nessun
+    // altro processo possiede lo store. Stessa policy del boot, solo un
+    // secondo chiamante.
+    makeTraceRetentionTick(home, runtime.config.traces.retentionDays),
   );
   const ticker = setInterval(() => scheduler.tick(), TICK_MS);
   ticker.unref(); // the timer must not, by itself, keep the process alive

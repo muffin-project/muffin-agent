@@ -35,6 +35,7 @@ import {
   STOP_TIMEOUT_SEC,
 } from '../core/gateway/unit.js';
 import { Scheduler, type Deliver } from '../core/scheduler/scheduler.js';
+import { makeTraceRetentionTick } from '../core/scheduler/trace-retention.js';
 import type { SurfaceRegistry } from '../core/surface/registry.js';
 import { notDelivered } from '../core/surface/types.js';
 import { attachSendFile, connectSurfaces } from './surface.js';
@@ -998,6 +999,12 @@ export async function cmdGatewayRun(
     // e non chiamato da `Gateway.tick`, perché le due condizioni che devono
     // zittirlo — handover e `/pause` — sono già risolte lì dentro.
     commitments,
+    // #838: la retention provata (`JsonlExporter.pruneOlderThan`, la stessa che
+    // `agent/runtime.ts` chiama al boot) sul battito dello scheduler — un
+    // processo che vive di settimane pota comunque le vecchie tracce senza
+    // alcun riavvio. Stesse condizioni di `commitments` qui sopra: nessun
+    // cambio di policy, solo un secondo chiamante accanto a quello del boot.
+    makeTraceRetentionTick(home, runtime.config.traces.retentionDays),
   );
 
   /**
