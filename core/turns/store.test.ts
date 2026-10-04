@@ -617,6 +617,88 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     expect(s.get('turn-1')?.status).toBe('continuable');
   });
 
+  describe('due · autonomous inclusion of scheduler-bound continuable rows (#598 S2)', () => {
+    const scheduler: Principal = { kind: 'system', source: 'scheduler' };
+    const jobSpec = (over: Partial<NewTurn> = {}): NewTurn =>
+      spec({ principal: scheduler, jobId: 'job-1', sessionId: 'job-sess', ...over });
+
+    const release = (s: TurnStore, id: string): void => {
+      const rec = s.get(id);
+      if (rec === null) throw new Error('no row');
+      const ok = s.releaseContinuable(
+        id,
+        { messages: [], taint: rec.taint, counters: rec.counters, reason },
+        rec.claimToken,
+      );
+      expect(ok).toBe(true);
+    };
+
+    const grant = (s: TurnStore, id: string): void => {
+      const rec = s.get(id);
+      if (rec === null) throw new Error('no row');
+      const granted = s.grantContinuation(
+        id,
+        {
+          messages: [],
+          taint: rec.taint,
+          counters: { ...rec.counters, contextBuilt: true },
+          newLeaseStartedAt: '2026-09-18T17:16:35.000Z',
+        },
+        4242,
+      );
+      expect(granted).not.toBeNull();
+    };
+
+    it('picks up a scheduler-bound continuable row, and nothing else continuable', () => {
+      const s = store();
+      s.create(jobSpec({ id: 'job-turn' }), 4242);
+      release(s, 'job-turn');
+      s.create(spec({ id: 'owner-turn' }), 4242);
+      release(s, 'owner-turn');
+
+      const due = s.due().map((r) => r.id);
+      expect(due).toContain('job-turn');
+      expect(due).not.toContain('owner-turn');
+      // The grant — not the claim — is still the only way to take it.
+      expect(s.claim('job-turn', 9999)).toBeNull();
+      expect(s.get('job-turn')?.status).toBe('continuable');
+    });
+
+    it('ignores scheduler rows without a bound job, and non-scheduler system rows', () => {
+      const s = store();
+      s.create(jobSpec({ id: 'unbound', jobId: undefined }), 4242);
+      release(s, 'unbound');
+      const consolidation: Principal = { kind: 'system', source: 'consolidation' };
+      s.create(jobSpec({ id: 'stranger', principal: consolidation }), 4242);
+      release(s, 'stranger');
+
+      const due = s.due().map((r) => r.id);
+      expect(due).not.toContain('unbound');
+      expect(due).not.toContain('stranger');
+    });
+
+    it('stops picking a scheduler row up past MAX_AUTONOMOUS_LEASES', () => {
+      const s = store();
+      s.create(jobSpec({ id: 'bounded' }), 4242);
+      release(s, 'bounded');
+      expect(s.due().map((r) => r.id)).toContain('bounded');
+      // Burn two autonomous leases the way the lane would grant them.
+      grant(s, 'bounded');
+      release(s, 'bounded');
+      grant(s, 'bounded');
+      release(s, 'bounded');
+      expect(s.get('bounded')?.leaseIndex).toBe(2);
+      expect(s.due().map((r) => r.id)).toContain('bounded');
+      grant(s, 'bounded');
+      release(s, 'bounded');
+      expect(s.get('bounded')?.leaseIndex).toBe(3);
+      // At the bound the row stays continuable, for an explicit owner grant —
+      // the lane no longer sees it.
+      expect(s.due().map((r) => r.id)).not.toContain('bounded');
+      expect(s.get('bounded')?.status).toBe('continuable');
+    });
+  });
+
   it('finds eligible rows per conversation, matching the speaker by fields', () => {
     const s = store();
     s.create(spec({ id: 'a', sessionId: 'owner' }), 1);
