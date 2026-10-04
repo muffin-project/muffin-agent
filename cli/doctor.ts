@@ -1184,16 +1184,36 @@ export async function runDoctor(
     if (turns !== null) {
       const undelivered = readUndelivered(db);
       if (undelivered !== null && undelivered.length > 0) {
-        // `undelivered()` orders most-recent-first; the owner wants the
-        // oldest unresolved one, which is what has waited longest.
-        const oldest = undelivered[undelivered.length - 1]!;
-        const when = oldest.startedAt.slice(0, 16).replace('T', ' ');
-        warn(
-          'consegne',
-          `${undelivered.length} turni con delivery non confermata nelle ultime 24h — la più vecchia: ` +
-            `turno ${oldest.id.slice(0, 12)} su ${oldest.surface} (${when}), ${oldest.delivery}`,
-          'il lavoro è stato fatto ma la consegna non è confermata: controlla la superficie; non ritentare alla cieca uno stato possibly_sent',
-        );
+        // #844 (#598 S4): a fire settled with the silent receipt leaves
+        // `turns.delivery = pending` by design (`core/turns/*` out of scope in
+        // S4) — an intentional silence, not a delivery nobody confirmed. The
+        // durable receipt lives on the fire row (`job_fires.silent`), so the
+        // warning excludes those turns; a genuine miss still warns exactly as
+        // before. The empty-text branch settles with `silent = 0`, hence it
+        // keeps warning here — no regression by construction.
+        const silentIds = silentSettledTurnIds(db);
+        const genuine = undelivered.filter((t) => !silentIds.has(t.id));
+        const silentCount = undelivered.length - genuine.length;
+        if (genuine.length > 0) {
+          // `undelivered()` orders most-recent-first; the owner wants the
+          // oldest unresolved one, which is what has waited longest.
+          const oldest = genuine[genuine.length - 1]!;
+          const when = oldest.startedAt.slice(0, 16).replace('T', ' ');
+          warn(
+            'consegne',
+            `${genuine.length} turni con delivery non confermata nelle ultime 24h — la più vecchia: ` +
+              `turno ${oldest.id.slice(0, 12)} su ${oldest.surface} (${when}), ${oldest.delivery}` +
+              (silentCount > 0
+                ? ` · ${silentCount} con ricevuta silenziosa (policy silent, nessuna consegna attesa)`
+                : ''),
+            'il lavoro è stato fatto ma la consegna non è confermata: controlla la superficie; non ritentare alla cieca uno stato possibly_sent',
+          );
+        } else {
+          ok(
+            'consegne',
+            `nessuna delivery mancante nelle ultime 24h — ${silentCount} con ricevuta silenziosa (policy silent, nessuna consegna attesa)`,
+          );
+        }
       } else if (undelivered !== null) {
         ok('consegne', 'nessuna delivery mancante nelle ultime 24h');
       }
@@ -1928,6 +1948,31 @@ function countOrNull(db: DatabaseCtor.Database, table: string): number | null {
     return (db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Turns whose job fire settled with the S4 silent receipt (#844, #598 S4).
+ *
+ * A `silent`-policy routine success settles the fire with `silent = 1` and no
+ * conversational message, while the turn row keeps `delivery = pending` by
+ * design (`core/turns/*` untouched in S4). Without this read the `consegne`
+ * check warns about an intentional silence as if it were an unconfirmed
+ * delivery. Read-only and fail-open: a missing `job_fires` table or a pre-S4
+ * database without the `silent` column reads as "no silent turn" — today's
+ * behavior — never a crash inside `doctor`.
+ */
+function silentSettledTurnIds(db: DatabaseCtor.Database): Set<string> {
+  try {
+    const rows = db
+      .prepare(
+        `SELECT turn_id AS turnId FROM job_fires
+         WHERE silent = 1 AND settled_at IS NOT NULL AND turn_id IS NOT NULL`,
+      )
+      .all() as { turnId: string }[];
+    return new Set(rows.map((r) => r.turnId));
+  } catch {
+    return new Set();
   }
 }
 
