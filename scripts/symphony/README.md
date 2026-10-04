@@ -108,7 +108,8 @@ OpenCode can commit locally and call MCP `publish_branch`. The adapter checks
 READY again, unchanged canonical brief, the current integration base, a clean
 committed candidate, exact write-set, regular files and DCO. It publishes only
 `slice/symphony-<issue>` with non-forced ref updates and returns the **remote**
-candidate SHA; API commits may differ from local commits. Workers read CI using
+candidate SHA; when base advances, validated publication preserves the old
+branch head and current base as merge parents without forced updates. API commits may differ from local commits. Workers read CI using
 that remote SHA, repair the same PR and finish with
 `symphony-handoff:<remote-sha>` in a PR comment. A matching GitHub marker blocks
 restart dispatch. This marker is a worker handoff, never a review attestation.
@@ -121,7 +122,8 @@ attestation and founder gates are unchanged. A reviewer/program orchestrator
 integrates under repository policy; Symphony never performs integration.
 
 One foreground instance per repo on the same host, concurrency 1 each (maximum
-2 across these two configured instances). A host lock rejects a second instance;
+2 across these two configured instances). A per-user host registry in the system temporary directory locks the repository identity,
+independent of the chosen runtime directory. It rejects a second instance;
 an external issue lock rejects a second logical writer. This is not a multi-host
 distributed lease. A process failure is retried by Symphony in the same clone.
 An attempt is capped at one hour; successful process exit requests operator
@@ -145,7 +147,8 @@ To disable, remove `agent:symphony` from opted-in issues, stop both services,
 verify `docker ps --filter label=symphony.service=<service-name>` is empty and
 save any remaining issue clones before deleting the runtime directory. Workspaces
 are standalone clones, not linked repository worktrees. Revoke pilot credentials
-through their normal issuer. No system service/autostart or VPS change is installed.
+through their normal issuer. No system service/autostart or VPS change is installed. Host registry lock files
+contain no credentials and can be removed after both services are stopped.
 
 ## Verification
 

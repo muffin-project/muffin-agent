@@ -140,10 +140,12 @@ class Bridge:
         existing = [r for r in existing if r["ref"] == "refs/heads/" + self.config["branch"]]
         parent = existing[0]["object"]["sha"] if existing else base_sha
         current = self.rpc({"method": "GET", "path": root + "/git/commits/" + parent})
+        reconciled = True
         if existing:
             comparison = self.rpc({"method": "GET", "path": root + "/compare/" + base_sha + "..." + parent})
-            if comparison.get("status") not in ("ahead", "identical") or len(comparison.get("files", [])) >= 300:
-                raise ValueError("published branch diverged or comparison truncated")
+            if comparison.get("status") not in ("ahead", "identical", "behind", "diverged") or len(comparison.get("files", [])) >= 300:
+                raise ValueError("published branch comparison invalid or truncated")
+            reconciled = comparison["status"] in ("ahead", "identical")
             for file in comparison.get("files", []):
                 if file["filename"] not in self.brief["write_set"] or file.get("previous_filename", file["filename"]) not in self.brief["write_set"]:
                     raise ValueError("published branch changed outside owned write-set")
@@ -161,14 +163,14 @@ class Bridge:
             entries.append({"path": path, "mode": mode, "type": "blob", "sha": blob["sha"]})
         tree = self.rpc({"method": "POST", "path": root + "/git/trees", "body": {
             "base_tree": base_commit["tree"]["sha"], "tree": entries}})
-        if tree["sha"] == current["tree"]["sha"]:
+        if tree["sha"] == current["tree"]["sha"] and reconciled:
             return {"branch": self.config["branch"], "head_sha": parent}
         message = self.git("show", "-s", "--format=%B", "HEAD").decode().strip()
         name, email = self.config["author_name"], self.config["author_email"]
         if f"Signed-off-by: {name} <{email}>" not in message:
             raise ValueError("approved DCO identity required")
         commit = self.rpc({"method": "POST", "path": root + "/git/commits", "body": {
-            "message": message, "tree": tree["sha"], "parents": [parent], "author": {"name": name, "email": email}}})
+            "message": message, "tree": tree["sha"], "parents": [parent] if reconciled else [parent, base_sha], "author": {"name": name, "email": email}}})
         if existing:
             args = {"method": "PATCH", "path": root + "/git/refs/heads/" + self.config["branch"],
                     "body": {"sha": commit["sha"], "force": False}}
@@ -295,6 +297,8 @@ class Bridge:
                 raise ValueError("open PR page may be truncated")
             relevant = [p for p in prs if p["head"]["ref"] == self.config["branch"] or
                         re.search(r"#" + str(number) + r"\b", p.get("body") or "")]
+            if any(p["head"].get("repo", {}).get("full_name") != self.config["repo"] for p in relevant):
+                raise ValueError("another repository/fork owns this PR")
             self.pr_numbers.update(p["number"] for p in relevant)
             if any(p["head"]["ref"] != self.config["branch"] for p in relevant):
                 raise ValueError("another PR already owns this issue")
@@ -317,7 +321,7 @@ class Bridge:
                     raise ValueError("canonical reserved predicate rejected write-set")
             if self.isolated:
                 import hashlib
-                key = hashlib.sha256(str(Path.cwd().resolve()).encode()).hexdigest()[:16]
+                key = hashlib.sha256((self.config["repo"] + "#" + str(number)).encode()).hexdigest()[:16]
                 lock_root = Path(os.environ["SYMPHONY_LOCK_ROOT"])
                 lock_root.mkdir(parents=True, exist_ok=True, mode=0o700)
                 self.lock_file = open(lock_root / (key + ".lock"), "a")
@@ -357,7 +361,7 @@ class Bridge:
             command += ["--", text]
             if self.isolated:
                 from launcher import command as docker_command
-                command = docker_command(os.environ, str(Path.cwd()), self.temp.name, text)
+                command = docker_command(os.environ, str(Path.cwd()), self.temp.name, text, number)
                 self.container = command[command.index("--name") + 1]
             self.worker = subprocess.Popen(command, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                            stderr=subprocess.DEVNULL, text=True, start_new_session=True)

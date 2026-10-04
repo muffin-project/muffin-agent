@@ -20,6 +20,8 @@ sys.path.insert(0, str(HERE))
 from bridge import Bridge, brief_from_issue, github_allowed
 from launcher import command
 from prepare import prepare
+from ops import service_root, open_lock
+import fcntl
 
 
 def config(repo="muffin-project/muffin-agent", base="dev"):
@@ -76,7 +78,7 @@ class ContractTests(unittest.TestCase):
                    "SYMPHONY_OPENCODE_AUTH": str(p / "auth.json"), "SYMPHONY_SERVICE": "fixture", "SYMPHONY_IMAGE": "fixture-image",
                    "SYMPHONY_SOURCE_BUNDLE": str(p / "source.bundle"), "SYMPHONY_OPENCODE_MODEL": "fixture/test",
                    "GITHUB_TOKEN": "DO_NOT_LEAK", "GH_TOKEN": "DO_NOT_LEAK", "SSH_AUTH_SOCK": "/secret", "HOME": "/secret"}
-            cmd = command(env, t, t, "bounded fixture")
+            cmd = command(env, t, t, "bounded fixture", 1)
             self.assertNotIn("DO_NOT_LEAK", " ".join(cmd)); self.assertNotIn("/secret", " ".join(cmd))
             self.assertIn("--read-only", cmd); self.assertIn("--init", cmd)
             self.assertEqual(sum(v.startswith("type=bind,") for v in cmd), 6)
@@ -109,6 +111,15 @@ class ContractTests(unittest.TestCase):
             self.assertIn("https://github.com/muffin-project/muffin-agent.git", fetch)
             self.assertIn("--", fetch)
 
+
+    def test_repo_service_lock_is_independent_of_runtime(self):
+        with tempfile.TemporaryDirectory() as t, patch("ops.SERVICE_REGISTRY_PARENT", Path(t)):
+            root = service_root()
+            with open_lock(root / "repo.lock") as first, open_lock(root / "repo.lock") as second:
+                fcntl.flock(first, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                with self.assertRaises(BlockingIOError): fcntl.flock(second, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            other = Path(t) / "another-runtime"; other.mkdir()
+            self.assertEqual(service_root(), root)
 
     def test_mcp_requires_attempt_capability(self):
         bridge = Bridge(config())
@@ -270,6 +281,51 @@ class ProtocolFixture(unittest.TestCase):
             server.shutdown(); server.server_close()
 
 
+class OperationsFixture(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("SYMPHONY_TEST_DOCKER"), "actual operations needs Docker")
+    def test_two_runtime_starts_reject_second_and_stop_cleans_service(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            c = config("fixture/lock-" + str(os.getpid()))
+            c.update(port=4320, workflow="WORKFLOW.md")
+            (root / "config.json").write_text(json.dumps(c))
+            (root / "auth.json").write_text("{}")
+            (root / "WORKFLOW.md").write_text("fixture only")
+            fake = root / "fake-symphony"
+            fake.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(60)\n")
+            fake.chmod(0o755)
+            env = os.environ.copy()
+            env.update(GITHUB_TOKEN="fixture-not-secret", SYMPHONY_GIT_AUTHOR_NAME="Fixture",
+                       SYMPHONY_GIT_AUTHOR_EMAIL="fixture@example.invalid", SYMPHONY_OPENCODE_MODEL="fixture/test")
+            common = [sys.executable, str(HERE / "ops.py")]
+            settings = ["--config", str(root / "config.json")]
+            start = ["--symphony", str(fake), "--auth", str(root / "auth.json")]
+            first = subprocess.Popen(common + ["start"] + settings + ["--runtime", str(root / "runtime-a")] + start,
+                                     env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            registry = service_root()
+            service = "symphony-" + c["repo"].replace("/", "-")
+            try:
+                for _ in range(100):
+                    if (registry / (service + ".pid")).exists(): break
+                    if first.poll() is not None: self.fail(first.stderr.read().decode())
+                    time.sleep(.05)
+                self.assertTrue((registry / (service + ".pid")).exists())
+                second = subprocess.run(common + ["start"] + settings + ["--runtime", str(root / "runtime-b")] + start,
+                                        env=env, capture_output=True, timeout=10)
+                self.assertNotEqual(second.returncode, 0)
+                self.assertIn(b"BlockingIOError", second.stderr)
+                subprocess.run(common + ["stop"] + settings + ["--runtime", str(root / "runtime-b")],
+                               env=env, check=True, stdout=subprocess.DEVNULL, timeout=10)
+                self.assertEqual(first.wait(timeout=10), 0)
+                status = subprocess.check_output(common + ["status"] + settings + ["--runtime", str(root / "runtime-b")], env=env)
+                self.assertFalse(json.loads(status)["running"])
+            finally:
+                if first.poll() is None: first.terminate(); first.wait(timeout=10)
+                first.stderr.close()
+                for suffix in (".pid", ".stop", ".lock"):
+                    (registry / (service + suffix)).unlink(missing_ok=True)
+
+
 class PublicationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -313,6 +369,21 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(len(writes), 1)
         refs = [c for c in self.calls if "/git/refs" in c["path"]]
         self.assertTrue(all(c["body"].get("ref", "refs/heads/slice/symphony-1") == "refs/heads/slice/symphony-1" for c in refs))
+
+    def test_existing_pr_reconciles_advanced_base_without_force(self):
+        self.remote = "prior-remote-candidate"
+        original = self.bridge.rpc
+        def diverged(args):
+            result = original(args)
+            if "/compare/" in args["path"]: result["status"] = "diverged"
+            return result
+        self.bridge.rpc = diverged
+        result = self.bridge.publish()
+        self.assertEqual(result["head_sha"], "remote-candidate-sha")
+        commit = next(c for c in self.calls if c["method"] == "POST" and c["path"].endswith("/git/commits"))
+        self.assertEqual(commit["body"]["parents"], ["prior-remote-candidate", self.base])
+        ref = next(c for c in self.calls if c["method"] == "PATCH")
+        self.assertFalse(ref["body"]["force"])
 
     def test_scope_escape_cannot_publish(self):
         Path("outside.md").write_text("forbidden\n"); self.git("add", "."); self.git("commit", "-qsm", "escape")

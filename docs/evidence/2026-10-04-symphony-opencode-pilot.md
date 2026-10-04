@@ -46,7 +46,7 @@ Hermes/OpenClaw scheduler or session database is adopted.
 - OpenCode 1.18.33 real binary in the local Docker worker image. Source inspection of `run` showed stdin is read to EOF. The real-binary fixture stalled when stdin inherited Symphony's stream; closing worker stdin fixed it. This is a measured compatibility finding, not inferred equivalence.
 
 Executed locally: 114 official tracker/core/workspace tests passed; the added
-official AppServer/Workspace fixture passed for both repo configs; 19 bridge
+official AppServer/Workspace fixture passed for both repo configs; 22 bridge
 tests passed in the real OpenCode Docker image, including a real launcher/container/MCP localhost model
 fixture with no external model call. Hosted CI and independent review must be
 read on the eventual PR head; these local results do not authorize merge.
@@ -78,3 +78,15 @@ Review also found worker-controlled host Git config, stale-base publication and
 worker-clone policy imports. Mirror/bundle refresh, ancestry checks and trusted
 config policy now cover these seams; fixture records include a real MCP roundtrip.
 No claim of a full independent MERGE verdict is made until candidate review.
+
+Exact-head review on 05d6d02 also falsified runtime-dependent service locking
+and retry publication after base advancement on an existing PR. Repairs use a
+per-user repository identity lock, stable issue identity and validated merge
+parents preserving remote branch history without force. Regression fixtures
+exercise both failures; a fresh final-head review remains required.
+
+Hosted first-head evidence: bridge/local-model and all 115 upstream tests passed,
+but job cleanup failed because Docker root owned bind-mounted build artifacts.
+The upstream fixture now runs as the invoking UID. Required verifica exposed
+the existing no-trigger-path-filters invariant; the optional pilot workflow now
+uses an unfiltered PR trigger, without weakening the invariant/test.

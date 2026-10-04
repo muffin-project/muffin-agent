@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 
-def command(env, cwd, broker_dir, prompt):
+def command(env, cwd, broker_dir, prompt, number):
     required = ("SYMPHONY_ADAPTER_HOME", "SYMPHONY_REPO_CONFIG", "SYMPHONY_OPENCODE_AUTH", "SYMPHONY_SERVICE", "SYMPHONY_IMAGE", "SYMPHONY_SOURCE_BUNDLE")
     if any(not env.get(k) for k in required):
         raise ValueError("missing isolated worker settings")
@@ -20,7 +20,7 @@ def command(env, cwd, broker_dir, prompt):
     if not (Path(cwd) / ".git").is_dir():
         raise ValueError("standalone issue clone required")
     import hashlib
-    suffix = hashlib.sha256(str(Path(cwd).resolve()).encode()).hexdigest()[:16]
+    suffix = hashlib.sha256((settings["repo"] + "#" + str(number)).encode()).hexdigest()[:16]
     args = ["docker", "run", "--rm", "-i", "--init", "--name", env["SYMPHONY_SERVICE"] + "-" + suffix,
             "--add-host", "host.docker.internal:host-gateway",
             "--label", "symphony.service=" + env["SYMPHONY_SERVICE"], "--cap-drop", "ALL",

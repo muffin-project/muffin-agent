@@ -1,7 +1,6 @@
 name: Symphony OpenCode fixture
 on:
   pull_request:
-    paths: ['scripts/symphony/**', 'WORKFLOW.md', 'symphony.json', '.github/workflows/symphony-pilot.yml']
   workflow_dispatch:
 permissions:
   contents: read
