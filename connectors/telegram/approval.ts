@@ -95,7 +95,14 @@ export function askKeyboard(capability: string, approvalId: string): InlineButto
   ];
 }
 
-export function approvatoreTelegram(api: TelegramApi | TelegramApiLike): Approver {
+/**
+ * La domanda registrata dove si è mostrata (#784): chi manda la domanda la
+ * scrive nel registro con l'id che il filo ha restituito, così la chiusura
+ * terminale del turno può toglierle la tastiera anche dopo un riavvio.
+ */
+export type DomandaMostrata = (mostrata: { approvalId: string; messageId: number }) => void;
+
+export function approvatoreTelegram(api: TelegramApi | TelegramApiLike, onAsked?: DomandaMostrata): Approver {
   return async (request, where) => {
     const chatId = where.replyTo?.['chatId'];
     // Nessun indirizzo durevole vuol dire nessun posto dove far comparire la
@@ -114,11 +121,26 @@ export function approvatoreTelegram(api: TelegramApi | TelegramApiLike): Approve
     // La politica è la stessa delle altre uscite fuori-turno (`present`):
     // ricca se entra, legacy a pezzi sotto il limite, con la tastiera
     // sull'ultimo pezzo — la domanda è l'ultima cosa che si legge.
+    const inviati: number[] = [];
     await present(
       api,
       { chatId, ...topic, keyboard: askKeyboard(request.capability, where.approvalId) },
       presentationOfHtml(askHtml(request)),
+      (messageId) => {
+        inviati.push(messageId);
+      },
     );
+    // La tastiera sta sull'ultimo pezzo: quello è il messaggio da spegnere
+    // alla chiusura terminale. La registrazione non può rompere la domanda:
+    // è già partita, e un gancio che lancia non deve trasformarla in errore.
+    const ultimo = inviati.at(-1);
+    if (ultimo !== undefined) {
+      try {
+        onAsked?.({ approvalId: where.approvalId, messageId: ultimo });
+      } catch {
+        /* la domanda è partita; la registrazione è contabilità */
+      }
+    }
     return 'asked';
   };
 }

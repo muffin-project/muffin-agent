@@ -63,7 +63,7 @@ import type { Vista } from '../../core/vista/vista.js';
  */
 type Arrivo = Arrival;
 
-/** Solo i due metodi che questo file usa: il connettore non possiede il registro. */
+/** Solo i metodi che questo file usa: il connettore non possiede il registro. */
 type ApprovalDecide = (
   id: string,
   decision: 'allow' | 'deny',
@@ -72,6 +72,14 @@ type ApprovalDecide = (
 ) => 'ok' | 'already' | 'unknown' | 'withdrawn';
 type ApprovalGet = (id: string) => { id: string; turnId: string; capability: string; resource: string | null } | null;
 type ApprovalOpenRows = (turnId: string) => { id: string }[];
+/**
+ * Solo i due metodi che la chiusura orfana usa (#784): registrare dove una
+ * domanda si è mostrata, e rileggere le bolle ritirate di un turno. Il
+ * registro vero è `ApprovalStore`; qui resta il sottoinsieme strutturale come
+ * per gli altri tre, per la stessa ragione (testabilità senza database).
+ */
+type ApprovalNoteQuestion = (id: string, messageId: number) => void;
+type ApprovalWithdrawnQuestions = (turnId: string) => Array<{ id: string; messageId: number }>;
 import { startPresence } from './presence.js';
 import { avvisoAllOwner, decidiInvito, SALUTO_NEL_GRUPPO, type Invito } from './invito.js';
 import { stanzaDi } from './negoziazione.js';
@@ -225,7 +233,13 @@ export type ConnectorDeps = {
    * pulsante premuto viene chiuso dicendo che non si sa di cosa si tratti —
    * mai lasciato girare.
    */
-  approvals?: { decide: ApprovalDecide; get: ApprovalGet; openRows: ApprovalOpenRows };
+  approvals?: {
+    decide: ApprovalDecide;
+    get: ApprovalGet;
+    openRows: ApprovalOpenRows;
+    noteQuestionMessage: ApprovalNoteQuestion;
+    withdrawnQuestionMessages: ApprovalWithdrawnQuestions;
+  };
   /**
    * «C'è un turno pronto adesso.»
    *
@@ -1403,6 +1417,14 @@ export class TelegramConnector {
     if (typeof chatId !== 'number') {
       throw new Error(`replyTo senza chatId numerico: ${JSON.stringify(replyTo)}`);
     }
+    // #784 — il turno è terminale (la risposta che stiamo per consegnare lo
+    // dice): le domande ritirate non hanno più nessuno che le decida, e le
+    // loro bolle — mandate magari da un processo morto prima di un riavvio —
+    // non devono restare premibili. Cortesia di chiusura, mai parte della
+    // consegna: non lancia mai, e una consegna che fallisce dopo non la
+    // rimette in discussione (al prossimo `deliverTo` la spazzata si ripete,
+    // sugli stessi id).
+    await rimuoviTastiereOrfane(this.deps.api, this.deps.approvals, turnId, chatId, this.deps.log);
     const replyToMessage = typeof replyTo['messageId'] === 'number' ? replyTo['messageId'] : undefined;
     // La lease corrente decide quale piano congelato appartiene a QUESTA
     // consegna. Un turno ripreso consegna la sua risposta sotto una lease
@@ -1560,6 +1582,9 @@ export class TelegramConnector {
         negotiation,
         ...(threadId === undefined ? {} : { threadId }),
         ...(this.deps.log ? { log: this.deps.log } : {}),
+        // #784 — una domanda chiesta dal turno ripreso registra dove si
+        // mostra, come nel percorso fresco qui sotto.
+        onAsked: (mostrata) => this.notaDomanda(mostrata.approvalId, mostrata.messageId),
       });
     this.transcriptInSospeso.delete(record.id);
     this.transcriptVivi.set(chatId, transcript);
@@ -1667,7 +1692,32 @@ export class TelegramConnector {
         return 'asked';
       }
     }
-    return approvatoreTelegram(this.deps.api)(request, where);
+    // La domanda esce come messaggio autonomo: la registrazione di dove si è
+    // mostrata è il gancio, con la stessa protezione di quello della
+    // trascrizione (una registrazione non rompe una domanda già partita).
+    return approvatoreTelegram(this.deps.api, (mostrata) => this.notaDomanda(mostrata.approvalId, mostrata.messageId))(
+      request,
+      where,
+    );
+  }
+
+  /**
+   * Una domanda si è mostrata su un messaggio: lo si scrive nel registro
+   * durevole (#784), così la chiusura terminale del turno può toglierle la
+   * tastiera anche dopo un riavvio.
+   *
+   * Non lancia mai: la domanda è già partita, e una registrazione non può
+   * trasformarla in errore. Chiamata dai due ganci `onAsked` (trascrizione e
+   * ripiego), mai dal percorso vivo del tocco.
+   */
+  private notaDomanda(approvalId: string, messageId: number): void {
+    try {
+      this.deps.approvals?.noteQuestionMessage(approvalId, messageId);
+    } catch (error) {
+      (this.deps.log ?? (() => {}))(
+        `telegram: domanda non registrata sul messaggio ${messageId} — ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   /**
@@ -2403,6 +2453,11 @@ export class TelegramConnector {
       negotiation: this.port.surface.negotiate(stanzaDi(incoming)),
       ...(incoming.threadId === undefined ? {} : { threadId: incoming.threadId }),
       ...(this.deps.log ? { log: this.deps.log } : {}),
+      // #784 — la domanda vive sul messaggio del turno: se ne registra l'id
+      // nel registro durevole, così la chiusura terminale può toglierle la
+      // tastiera anche dopo un riavvio, quando questa trascrizione non esiste
+      // più.
+      onAsked: (mostrata) => this.notaDomanda(mostrata.approvalId, mostrata.messageId),
     });
     // L'approvatore la trova da qui: la domanda vive sul messaggio del turno.
     this.transcriptVivi.set(incoming.chatId, transcript);
@@ -3012,6 +3067,58 @@ export class TelegramConnector {
       ...(immagine === undefined ? {} : { image: immagine }),
       ...(audio === undefined ? {} : { audio }),
     };
+  }
+}
+
+/**
+ * Toglie la tastiera alle bolle orfane di un turno terminale (#784).
+ *
+ * Il turno è già finito quando questa gira — `withdrawForTurn` ha ritirato le
+ * righe ancora aperte — quindi nessuna domanda qui è più decidibile: un tocco
+ * tardivo riceve «Non serve più» dal percorso vivo, e questa spazzata toglie
+ * i pulsanti anche senza tocco. Legge solo righe ritirate con domanda
+ * registrata: una domanda aperta o decisa non ci finisce mai, una riga senza
+ * registrazione (prima della colonna) non produce edit.
+ *
+ * Cortesia di chiusura, mai semantica: non lancia mai (né la lettura né un
+ * singolo edit possono fallire la consegna che la chiama), è idempotente (lo
+ * stesso messaggio si spegne una volta sola anche se due righe lo
+ * condividono, #745), e ripeterla è innocuo — un messaggio già senza tastiera
+ * risponde «message is not modified», ingoiato come gli altri.
+ *
+ * Esportata per i test: è il passo che `deliverTo` fa alla consegna finale, e
+ * la prova kill-restart la guida qui senza dover consegnare davvero.
+ */
+export async function rimuoviTastiereOrfane(
+  api: Pick<TelegramApiLike, 'editMessageReplyMarkup'>,
+  approvals:
+    | { withdrawnQuestionMessages(turnId: string): Array<{ id: string; messageId: number }> }
+    | undefined,
+  turnId: string,
+  chatId: number,
+  log?: (line: string) => void,
+): Promise<void> {
+  if (approvals === undefined) return;
+  let righe: Array<{ id: string; messageId: number }>;
+  try {
+    righe = approvals.withdrawnQuestionMessages(turnId);
+  } catch (error) {
+    log?.(
+      `telegram: bolle orfane non lette per il turno ${turnId.slice(0, 12)} — ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return;
+  }
+  const visti = new Set<number>();
+  for (const riga of righe) {
+    if (visti.has(riga.messageId)) continue;
+    visti.add(riga.messageId);
+    try {
+      await api.editMessageReplyMarkup(chatId, riga.messageId);
+    } catch (error) {
+      log?.(
+        `telegram: tastiera orfana non rimossa (${riga.messageId}) — ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 }
 

@@ -1231,3 +1231,68 @@ describe('#745 review — stessa capability, risorse diverse', () => {
     await t.stop();
   });
 });
+
+/**
+ * #784 — la domanda dice dove si è mostrata, così la chiusura terminale può
+ * spegnerla anche dopo un riavvio.
+ *
+ * `onAsked` riceve l'id dell'approvazione e quello del messaggio che la
+ * ospita; senza messaggio vivo (`ask()` torna `false`) non viene chiamato —
+ * lì il chiamante ripiega sul messaggio autonomo, che registra da sé.
+ */
+describe('#784 — ask() nomina il messaggio della domanda', () => {
+  const request: ApprovalRequest = {
+    capability: 'sys.shell.write',
+    prompt: 'non si torna indietro: cambia questa macchina — sys.shell.write',
+    resource: 'command: echo ciao\ncwd: .',
+    taint: 0,
+  };
+
+  it('a domanda presa, onAsked riceve l’id dell’approvazione e quello del messaggio inviato', async () => {
+    const { api, calls } = recordingApi();
+    const viste: { approvalId: string; messageId: number }[] = [];
+    const t = startTranscript(api, 1, {
+      negotiation: DM,
+      onAsked: (m) => {
+        viste.push(m);
+      },
+    });
+
+    await expect(t.ask({ request, approvalId: 'aabb' })).resolves.toBe(true);
+
+    expect(viste).toHaveLength(1);
+    expect(viste[0]!.approvalId).toBe('aabb');
+    const inviato = calls.find((c) => c.method === 'sendMessage')!;
+    expect(inviato).toBeDefined();
+    expect(viste[0]!.messageId).toBe(inviato.messageId);
+    await t.stop();
+  });
+
+  it('senza messaggio vivo non registra niente: il ripiego è del chiamante', async () => {
+    const { api } = recordingApi({ send: true });
+    const viste: { approvalId: string; messageId: number }[] = [];
+    const t = startTranscript(api, 1, {
+      negotiation: GRUPPO,
+      onAsked: (m) => {
+        viste.push(m);
+      },
+    });
+
+    await expect(t.ask({ request, approvalId: 'aabb' })).resolves.toBe(false);
+    expect(viste).toEqual([]);
+    await t.stop();
+  });
+
+  it('un gancio che lancia non rompe la domanda: resta presa', async () => {
+    const { api } = recordingApi();
+    const t = startTranscript(api, 1, {
+      negotiation: DM,
+      onAsked: () => {
+        throw new Error('simulato');
+      },
+    });
+
+    await expect(t.ask({ request, approvalId: 'aabb' })).resolves.toBe(true);
+    await t.stop();
+  });
+});
