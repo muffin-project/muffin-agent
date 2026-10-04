@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import type DatabaseCtor from 'better-sqlite3';
 import { ApprovalStore } from '../core/approvals/store.js';
+import { listRunStatuses } from '../core/autonomy/run-status.js';
 import { BudgetEngine } from '../core/budget/budget.js';
 import { costUsd, isUnmeteredEndpoint } from '../core/budget/pricing.js';
 import {
@@ -1222,6 +1223,9 @@ export function buildRuntime(
       doctor: async () => (await import('../cli/doctor.js')).runDoctor(home),
       turns: () => turns.health({ windowMs: 0 }),
       jobs: () => jobs.list(),
+      // Fired autonomous runs with their 6-state answer (#598 S1): the same
+      // read-only projection `sys.inspect` renders, over this same `db`.
+      runs: () => listRunStatuses(db),
       // La postura di delega del lavoro che sta chiedendo (issue #740): la
       // stessa riga che il ramo ask del loop legge, così `sys_inspect` non ha
       // una seconda risposta su «in che modalità sono».
