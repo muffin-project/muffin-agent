@@ -117,3 +117,6 @@ assignment, fed EOF and falsified cleanup: it returned while the child was alive
 Resource setup and Popen assignment now share the existing cleanup lock, with
 closed-state rejection under that lock. Deterministic regression proves EOF waits
 for creation then reaps the child, and prior EOF prevents setup/launch entirely.
+
+The issue brief rejects non-object JSON and extra fields, so a program payload
+cannot be forwarded through additional keys. The bounded-field fixture covers it.

@@ -40,6 +40,9 @@ def brief_from_issue(issue, config):
     if len(blocks) != 1:
         raise ValueError("exactly one symphony-work brief required")
     brief = json.loads(blocks[0])
+    fields = {"canonical_issue", "owner", "risk", "acceptance", "current_failure", "write_set"}
+    if not isinstance(brief, dict) or set(brief) != fields:
+        raise ValueError("only the six bounded work fields are accepted")
     for key in ("owner", "acceptance", "current_failure"):
         if not isinstance(brief.get(key), str) or not brief[key].strip():
             raise ValueError("missing bounded brief field: " + key)

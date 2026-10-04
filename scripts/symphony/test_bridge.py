@@ -63,6 +63,12 @@ class ContractTests(unittest.TestCase):
             i["body"] = "```symphony-work\n" + json.dumps(b) + "\n```"
             with self.subTest(name=name), self.assertRaises(ValueError): brief_from_issue(i, config())
 
+        i = issue(); b = json.loads(i["body"].split("```symphony-work\n")[1].split("\n```")[0])
+        b["program"] = "Whole program must not enter the worker brief"
+        for value in (b, [], "program"):
+            i["body"] = "```symphony-work\n" + json.dumps(value) + "\n```"
+            with self.subTest(value=value), self.assertRaises(ValueError): brief_from_issue(i, config())
+
     def test_github_authority(self):
         c = config(); c["branch"] = "slice/symphony-1"
         for method, path in (("PUT", "/pulls/7/merge"), ("POST", "/issues/1/labels"), ("PATCH", "/issues/1"),
