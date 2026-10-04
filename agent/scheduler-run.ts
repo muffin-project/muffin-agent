@@ -50,6 +50,12 @@ import { recoveredText } from './recovered-text.js';
  *       `Scheduler` either a normal delivery or a settle-only sentinel,
  *       depending on whether something already delivered it (fault points 5
  *       and 6).
+ *     - `continuable` bound to this job → the same durable work interrupted
+ *       mid-goal: not this call's turn to touch either. `TurnStore.due`
+ *       picks scheduler-bound continuable rows up on the lane's own beat
+ *       (#598 S2), so this defers exactly like the arm below and the next
+ *       tick re-reads the row (done → recover/deliver/settle, still
+ *       continuable → defer again).
  *     - anything else (`runnable`/`running`/`waiting`/`interrupted`) → not
  *       this call's turn to touch; say so and let the turn lane's own
  *       machinery finish it (fault point 4, unchanged).
@@ -151,7 +157,7 @@ async function runFresh(
   exec: JobExec | null,
   scope: ScriptScope | null,
   jobBudget: JobBudget | null,
-): Promise<JobOutcome> {
+): Promise<JobOutcome | FireDeferred | FireSettleOnly> {
   /**
    * **Il tetto per-job, e sta qui perché qui è l'unico punto che chiama il
    * modello** (DAY-1 E1, ADR-0035 emendamento №2).
@@ -238,7 +244,24 @@ async function runFresh(
   // Fault point 5, made observable: a real `SIGKILL` here lands after the
   // turn reaches `done` and before `Scheduler` ever calls `deliver`/`markRan`.
   // Skipped for a turn that suspended — there is nothing "done" about it yet,
-  // and `Scheduler`'s own suspended branch does not call `deliver` either.
+  // and `Scheduler`'s own suspended branch does not call `deliver` either —
+  // and for a turn that released as `continuable`: the release is persisted,
+  // the occurrence stays open, and the lane owns what happens next (#598 S2),
+  // so there is no "between done and settle" instant to widen here — the
+  // continuable stall below is that instant's own window instead.
+  if (result.stopped === 'continuable') {
+    // The lease ended recoverably with the work intact: hand the row to the
+    // lane rather than delivering the "scrivi riprendi" diagnostic as this
+    // occurrence's final answer. `Scheduler` treats the sentinel exactly like
+    // a bound-but-unfinished turn — no delivery, no `markRan` — and the next
+    // tick re-reads the same fire: `done` recovers and settles through the
+    // fault-point-5 path, still-`continuable` defers again. Fault-injection
+    // window for the kill-after-release scenario, same precedent as the two
+    // `MUFFIN_JOB_FIRES_STALL_*` above: never set outside `evals/acceptance`
+    // and the S2 fault tests.
+    await testStall('MUFFIN_JOB_FIRES_STALL_AFTER_CONTINUABLE_MS');
+    return { deferred: true };
+  }
   if (result.stopped !== 'suspended') await testStall('MUFFIN_JOB_FIRES_STALL_AFTER_DONE_MS');
   return jobOutcomeFromTurn(result);
 }
@@ -262,6 +285,11 @@ async function resolveBound(
   // between the two (fault point 2). Nothing has run yet, so this is not a
   // duplicate: finish exactly what was interrupted, with the same identity.
   if (existing === null) return runFresh(deps, job, turnId, signal, exec, scope, jobBudget);
+  // Anything not `done` — `runnable`/`running`/`waiting`/`interrupted`, and
+  // `continuable` most of all (#598 S2): the lane owns it now
+  // (`TurnStore.due` picks scheduler-bound continuable rows up on its own
+  // beat), so this tick does nothing at all — no delivery, no `markRan` —
+  // and the next tick re-reads the row.
   if (existing.status !== 'done') return { deferred: true };
   // `done`, and delivery already resolved by someone else (a live run's own
   // `Scheduler.settle`, or a completed one this same check is re-observing) —
