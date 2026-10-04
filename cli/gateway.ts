@@ -1043,6 +1043,14 @@ export async function cmdGatewayRun(
       (turn, text) => deliverFromLane(turn, text),
       laneLog,
       (record) => attachStreamFromLane?.(record),
+      // The spend counter behind autonomous continuation grants (#598 S2):
+      // without it the lane cannot verify a scheduler turn's per-job ceiling
+      // and refuses to grant (fail closed). Same ledger the fire-time gate in
+      // `agent/scheduler-run.ts` reads — one counter, two readers.
+      {
+        jobCap: (jobId) => runtime.jobs.get(jobId)?.perJobUsd ?? null,
+        jobMonthUsd: (jobId) => runtime.budget.jobMonthUsd(jobId),
+      },
     ),
     onEvent: laneLog,
     // The same token the scheduler got, which is the whole point of building it

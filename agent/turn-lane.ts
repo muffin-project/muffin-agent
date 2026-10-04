@@ -1,6 +1,8 @@
 import type { LaneEvent, LaneRun } from '../core/turns/lane.js';
-import type { TurnRecord } from '../core/turns/store.js';
-import { resumeTurn, type LoopDeps, type ResumeStream } from './loop.js';
+import { isSchedulerAutonomous, MAX_AUTONOMOUS_LEASES, type TurnRecord } from '../core/turns/store.js';
+import { continueTurn, resumeTurn, type LoopDeps, type ResumeStream } from './loop.js';
+import { harnessMessage } from './loop/message-origin.js';
+import type { Message } from './providers/types.js';
 
 /**
  * The bridge from a row in `turns` to a real turn, and from a finished turn to
@@ -58,6 +60,21 @@ export const NO_SURFACE: LaneDeliver = async (turn) => {
   throw new Error(`nessuna superficie cablata per ${turn.surface}`);
 };
 
+/**
+ * The per-job spend counter behind an autonomous continuation grant.
+ *
+ * Read-only by construction: the lane never records spend, it only asks
+ * whether the next lease may start. `BudgetEngine` implements both halves;
+ * a fake with the same two methods is a valid counter in tests, the same
+ * way `JobExec` is for the executor in `agent/scheduler-run.ts`.
+ */
+export type AutonomousBudget = {
+  /** The job's own ceiling, or `null` when the owner set none (or the job is gone). */
+  jobCap: (jobId: string) => number | null;
+  /** What the job has spent this month — the counter `jobCap` gates. */
+  jobMonthUsd: (jobId: string) => number;
+};
+
 export function makeLaneRunner(
   deps: LoopDeps,
   deliver: LaneDeliver = NO_SURFACE,
@@ -75,12 +92,33 @@ export function makeLaneRunner(
    * chat, which message, which surface to open a fresh stream against.
    */
   attachStream?: AttachStream,
+  /**
+   * The spend counter behind autonomous continuation grants (#598 S2), and
+   * `undefined` when nobody wired one.
+   *
+   * Absent means the lane cannot verify a scheduler turn's per-job ceiling,
+   * so it does not grant autonomous leases at all — fail closed, in the same
+   * direction as `agent/scheduler-run.ts` refusing to start a capped job it
+   * cannot meter. Production (`cli/gateway.ts`) wires the real ledger; a
+   * lane that only ever resumes owner/interrupted work never notices.
+   */
+  auto?: AutonomousBudget,
 ): LaneRun {
   return async (turnId) => {
     const before = deps.turns.get(turnId);
     const stream = before === null ? undefined : attachStream?.(before);
     let outcome: Awaited<ReturnType<typeof resumeTurn>>;
     try {
+      if (before !== null && before.status === 'continuable' && isSchedulerAutonomous(before)) {
+        return await runAutonomous(
+          deps,
+          before,
+          (record, text) => sendAndRecord(deps, record, text),
+          onUndeliverable,
+          auto,
+          stream,
+        );
+      }
       outcome = await resumeTurn(deps, turnId, stream);
     } finally {
       // Closed here and not inside `resumeTurn`: the sink is this file's own
@@ -176,4 +214,144 @@ export function makeLaneRunner(
       /* a bookkeeping write may not undo a delivery that already happened */
     }
   }
+}
+
+/**
+ * The grant message behind an autonomous lease (#598 S2).
+ *
+ * Harness-marked (`message-origin.ts`), never owner words: at the next
+ * continuation `splitWorkEvidence` keeps it out of the new lease as control
+ * (archived in `turn_leases`), and it is never replayed to the model as work
+ * evidence. Names the lease so the transcript stays attributable.
+ */
+function autonomousGrantMessage(record: TurnRecord): Message {
+  return harnessMessage('user', [
+    {
+      type: 'text',
+      text:
+        `Continuazione autonoma del turno ${record.id.slice(0, 12)} (lease ${record.leaseIndex + 1}, ` +
+        `senza nuovo messaggio owner): la lease precedente è finita su una boundary recuperabile ` +
+        `(${(record.continuableReason?.class ?? 'motivo ignoto')}). ` +
+        `Continua lo stesso lavoro dallo stato durevole, senza ripetere gli effetti già registrati.`,
+    },
+  ]);
+}
+
+/**
+ * Continue a scheduler-bound continuable turn without an owner message
+ * (#598 S2) — the lane side of the autonomous due-inclusion in
+ * `core/turns/store.ts`.
+ *
+ * Same identity, same WAL, same loop: `continueTurn` mints the next lease
+ * (fresh lease-local budgets via `buildFreshCounters`, harness control
+ * archived off the transcript) and `drive` replays recorded tool outcomes
+ * instead of re-calling them (`reconcile` + the `ON CONFLICT DO NOTHING`
+ * intent row in `agent/loop/tool-call.ts`). No new primitive, no second
+ * loop: an owner saying "riprendi" takes the identical path with their own
+ * words as the grant message.
+ *
+ * Three gates, all fail-closed, all before the grant:
+ *
+ * 1. `MAX_AUTONOMOUS_LEASES` — a recurrence that always lands continuable
+ *    must not spend for ever; past the count the row stays continuable for
+ *    an explicit owner grant.
+ * 2. The tenant/monthly budget (`budgetExhausted`) — granting a lease that
+ *    could not call the model would burn a lease to immediately finish
+ *    `budget`.
+ * 3. The job's own ceiling — `jobCap`/`jobMonthUsd` re-checked per lease, the
+ *    same "do not start" shape `agent/scheduler-run.ts` enforces at fire
+ *    time. Unverifiable (no reader wired) means no grant.
+ *
+ * Iteration and tool-call ceilings bind inside the lease exactly as on any
+ * other: profile `maxToolCallsPerTurn`, execution deadlines and the monthly
+ * seal all live in `drive`, which this path shares rather than bypasses.
+ *
+ * What it deliberately does not do:
+ *
+ * - consume approvals — an `ask` ending is delivered as the canonical
+ *   question and stays open; #740 owns its resolution, and no threshold is
+ *   encoded here;
+ * - deliver while the work is still lane-owned — a lease that ends
+ *   `suspended` or `continuable` again returns its stop without a message,
+ *   the same silence the resumed path keeps for `suspended`. Delivering the
+ *   "scrivi riprendi" diagnostic would page the owner for work that resumes
+ *   on its own;
+ * - touch owner/member/consolidation/ratchet rows — the caller checks
+ *   `isSchedulerAutonomous` before arriving here, and this function asserts
+ *   nothing beyond it.
+ */
+async function runAutonomous(
+  deps: LoopDeps,
+  record: TurnRecord,
+  send: (record: TurnRecord, text: string) => Promise<void>,
+  onUndeliverable: (event: Extract<LaneEvent, { kind: 'undeliverable' }>) => void,
+  auto: AutonomousBudget | undefined,
+  stream: (ResumeStream & { stop?: () => Promise<void> }) | undefined,
+): Promise<Awaited<ReturnType<LaneRun>>> {
+  if (record.leaseIndex >= MAX_AUTONOMOUS_LEASES) {
+    return {
+      refused:
+        `il turno ${record.id.slice(0, 12)} ha già usato ${record.leaseIndex} lease e resta continuabile: ` +
+        `non lo continuo da solo oltre il tetto. Riprendilo con un messaggio esplicito.`,
+    };
+  }
+  if (deps.budgetExhausted(record.tenant)) {
+    return {
+      refused:
+        `budget esaurito per ${record.tenant}: non apro una lease autonoma sul turno ${record.id.slice(0, 12)}. ` +
+        `Resta continuabile finché il budget non lo permette.`,
+    };
+  }
+  if (record.jobId !== null) {
+    if (auto === undefined) {
+      return {
+        refused:
+          `il turno ${record.id.slice(0, 12)} è il giro di un job ma il tetto per-job non è verificabile ` +
+          `in questo processo: non lo continuo da solo. Resta continuabile.`,
+      };
+    }
+    const cap = auto.jobCap(record.jobId);
+    if (cap !== null && auto.jobMonthUsd(record.jobId) >= cap) {
+      return {
+        refused:
+          `job "${record.jobId.slice(0, 8)}" fermato a lease autonoma: ha già speso ` +
+          `$${auto.jobMonthUsd(record.jobId).toFixed(2)} questo mese, sul tetto per-job di $${cap}. ` +
+          `Il lavoro resta continuabile nel turno ${record.id.slice(0, 12)}.`,
+      };
+    }
+  }
+  const channel = record.replyTo?.channel;
+  const replyChannel = typeof channel === 'string' ? channel : undefined;
+  const outcome = await continueTurn(deps, record.id, {
+    message: autonomousGrantMessage(record),
+    ...(stream?.signal ? { signal: stream.signal } : {}),
+    ...(stream?.steer ? { steer: stream.steer } : {}),
+    ...(stream?.onDelta ? { onDelta: stream.onDelta } : {}),
+    ...(stream?.onProgress ? { onProgress: stream.onProgress } : {}),
+    ...(replyChannel === undefined ? {} : { replyChannel }),
+  });
+  if ('why' in outcome) {
+    // The grant raced (claimed elsewhere) or the row changed under the lane:
+    // the row's own truth stands, nothing is delivered, the next beat retries.
+    return { refused: outcome.detail };
+  }
+  // Still lane-owned: silence, like `suspended` on the resumed path — the
+  // turn comes back on its own, and a message now would read as an answer.
+  if (outcome.stopped === 'suspended' || outcome.stopped === 'continuable') {
+    return { stopped: outcome.stopped };
+  }
+  const current = deps.turns.get(record.id);
+  if (current?.replyTo != null && outcome.text !== '') {
+    await send(current, outcome.text);
+    return { stopped: outcome.stopped };
+  }
+  if (current !== null && outcome.text !== '') {
+    onUndeliverable({ kind: 'undeliverable', turnId: record.id, surface: current.surface, text: outcome.text });
+    try {
+      deps.turns.delivered(record.id, 'undeliverable');
+    } catch {
+      /* the answer was already produced; a bookkeeping write may not undo that */
+    }
+  }
+  return { stopped: outcome.stopped };
 }

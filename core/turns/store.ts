@@ -604,6 +604,38 @@ export type NewTurn = NewTurnFields & {
  */
 export const TURN_STALE_AFTER_MS = 60 * 60 * 1000;
 
+/**
+ * How many execution leases a scheduler-bound turn may burn without an owner
+ * message before it stops being lane-pickable (#598 S2).
+ *
+ * Three, and it is a P0 autonomy policy rather than an invariant: a recurrence
+ * that always lands `continuable` must not spend for ever with no owner
+ * decision, so the lease that is still continuable past this count stays
+ * owner-continuable (`muffin resume` / "riprendi") instead of resuming on its
+ * own. Counts grants (`lease_index`), not crashes (`resumes` guards those):
+ * a scheduler turn never receives owner grants, so on these rows the two
+ * cannot diverge. Reversible; every lease inside it still runs under the
+ * profile and budget ceilings.
+ */
+export const MAX_AUTONOMOUS_LEASES = 3;
+
+/**
+ * Whether this row may resume without a new owner message (#598 S2).
+ *
+ * The single predicate behind the autonomous due-inclusion in `due()`: only
+ * a turn bound to a scheduled job (`job_id` set) running as the scheduler
+ * principal (`{ kind: 'system', source: 'scheduler' }`). Owner, member,
+ * consolidation and ratchet rows never satisfy it, whatever their status —
+ * their `continuable` still means "owed an explicit owner continuation".
+ * Lives here, next to `due()`, so the SQL below and the lane-side
+ * double-check cannot drift apart.
+ */
+export function isSchedulerAutonomous(record: Pick<TurnRecord, 'principal' | 'jobId'>): boolean {
+  return (
+    record.jobId !== null && record.principal.kind === 'system' && record.principal.source === 'scheduler'
+  );
+}
+
 type Row = {
   id: string;
   principal: string;
@@ -707,6 +739,52 @@ function argsDigest(args: unknown): string {
  */
 function serializzaCheckpoint(checkpoint: unknown): string {
   return redactText(JSON.stringify(checkpoint));
+}
+
+/**
+ * The lane's pickup query, with a legacy fallback for read-only diagnosis.
+ *
+ * The full predicate names `job_id`/`lease_index` (migrations 6/8); a
+ * read-only handle over a pre-migration table (`doctor` on an old home)
+ * cannot prepare it. The fallback is the three-producer query from before
+ * #598 S2 — and it loses nothing: those tables' `status` CHECK forbids
+ * `'continuable'` outright, so no row the fourth arm could return exists
+ * there. Writable callers migrate before constructing the store (see the
+ * constructor), so production never takes this road.
+ *
+ * The fourth arm is the autonomous one (#598 S2): a `continuable` turn bound
+ * to a scheduled job and running as the scheduler principal resumes without
+ * an owner message, through `grantContinuation` — never `claim` — on the
+ * lane's next beat. The predicate is `isSchedulerAutonomous`, spelled in SQL
+ * so `ORDER BY`/`LIMIT` still mean what they say; the lane re-checks the
+ * same helper in JS before granting. Every other `continuable` row keeps the
+ * old rule — no automatic pickup, ever — and so does a scheduler row past
+ * `MAX_AUTONOMOUS_LEASES` (the literal `3` in the query is that constant; a
+ * dedicated test pins the parity).
+ */
+function prepareDue(db: Database.Database): Database.Statement {
+  try {
+    return db.prepare(
+      `SELECT * FROM turns
+       WHERE status IN ('runnable','interrupted')
+          OR (status = 'waiting' AND wake_at IS NOT NULL AND wake_at <= @now)
+          OR (status = 'continuable' AND job_id IS NOT NULL
+              AND json_extract(principal, '$.kind') = 'system'
+              AND json_extract(principal, '$.source') = 'scheduler'
+              AND lease_index < 3)
+       ORDER BY updated_at LIMIT @limit`,
+    );
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('no such column')) {
+      return db.prepare(
+        `SELECT * FROM turns
+         WHERE status IN ('runnable','interrupted')
+            OR (status = 'waiting' AND wake_at IS NOT NULL AND wake_at <= @now)
+         ORDER BY updated_at LIMIT @limit`,
+      );
+    }
+    throw error;
+  }
 }
 
 export class TurnStore {
@@ -975,21 +1053,9 @@ export class TurnStore {
                         claimed_by = NULL, claim_token = NULL, updated_at = @now
        WHERE id = @id AND status = 'running' AND claim_token = @claimToken`,
     );
-    /**
-     * What the lane may pick up, oldest first.
-     *
-     * Three producers in one query, because they are one queue: a turn a
-     * surface created and did not run (`runnable`), a turn whose deadline has
-     * arrived (`waiting` past `wake_at`), and a turn a dead process was holding
-     * (`interrupted`). `idx_turns_due` covers the first two; the third is the
-     * one `reclaim` writes, and until this slice nothing ever read it back.
-     */
-    this.dueStmt = db.prepare(
-      `SELECT * FROM turns
-       WHERE status IN ('runnable','interrupted')
-          OR (status = 'waiting' AND wake_at IS NOT NULL AND wake_at <= @now)
-       ORDER BY updated_at LIMIT @limit`,
-    );
+    // The lane's pickup query — see `prepareDue` (module scope) for the
+    // predicate and its legacy fallback.
+    this.dueStmt = prepareDue(db);
     /** Suspended turns with an event barrier — the rows whose predicate is evaluated. */
     this.armedStmt = db.prepare(
       `SELECT * FROM turns WHERE status = 'waiting' AND wait_for IS NOT NULL ORDER BY updated_at LIMIT @limit`,
@@ -1314,10 +1380,15 @@ export class TurnStore {
     );
   }
 
-  /** Rows the lane may pick up now: enqueued, expired, or left by a dead process.
+  /** Rows the lane may pick up now: enqueued, expired, left by a dead process,
+   * or scheduler-bound continuable work owed an autonomous lease (#598 S2).
    *
-   * `continuable` is deliberately absent: no automatic pickup, ever — only an
-   * explicit owner continuation mints the next lease (`grantContinuation`).
+   * `continuable` is otherwise deliberately absent: no automatic pickup, ever
+   * — only an explicit owner continuation mints the next lease
+   * (`grantContinuation`). The S2 exception is exactly `isSchedulerAutonomous`
+   * rows under `MAX_AUTONOMOUS_LEASES` (see `dueStmt`): a fired job's session
+   * has no owner conversing in it, so "wait for «riprendi»" there means wait
+   * for ever.
    */
   due(now: Date = this.clock(), limit = 20): TurnRecord[] {
     return (this.dueStmt.all({ now: now.toISOString(), limit }) as Row[]).map(toRecord);
