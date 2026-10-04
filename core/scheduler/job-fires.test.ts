@@ -47,9 +47,10 @@ describe('JobFireStore — the migration (§ "cosa costruire" 3)', () => {
     // database" case: no migration runner, just `db.exec(SCHEMA)`.
     const fires = new JobFireStore(db, () => NOW);
 
-    // The table exists now, with exactly the columns the mandate asks for.
+    // The table exists now, with exactly the columns the mandate asks for
+    // (plus the S4 silent receipt — same additive discipline as the mandate).
     const columns = (db.prepare(`PRAGMA table_info(job_fires)`).all() as { name: string }[]).map((c) => c.name);
-    expect(columns.sort()).toEqual(['created_at', 'job_id', 'scheduled_for', 'settled_at', 'turn_id'].sort());
+    expect(columns.sort()).toEqual(['created_at', 'job_id', 'scheduled_for', 'settled_at', 'silent', 'turn_id'].sort());
 
     // Nothing pre-existing was disturbed: same job, same turn, every column.
     expect(jobs.get(job.id)).toEqual(job);
@@ -66,7 +67,7 @@ describe('JobFireStore.claim — fault point 1: crash before the fire → it get
   it('the occurrence exists after the first call, exactly once', () => {
     const { db, fires } = memStore();
     const fire = fires.claim('job-1', '2026-06-16T06:00:00.000Z');
-    expect(fire).toEqual({ jobId: 'job-1', scheduledFor: '2026-06-16T06:00:00.000Z', turnId: null, settledAt: null });
+    expect(fire).toEqual({ jobId: 'job-1', scheduledFor: '2026-06-16T06:00:00.000Z', turnId: null, settledAt: null, silent: false });
     const rows = db.prepare(`SELECT count(*) AS n FROM job_fires`).get() as { n: number };
     expect(rows.n).toBe(1);
   });
@@ -77,7 +78,7 @@ describe('JobFireStore.claim — fault point 1: crash before the fire → it get
     const { db, fires } = memStore();
     fires.claim('job-1', '2026-06-16T06:00:00.000Z');
     const second = fires.claim('job-1', '2026-06-16T06:00:00.000Z');
-    expect(second).toEqual({ jobId: 'job-1', scheduledFor: '2026-06-16T06:00:00.000Z', turnId: null, settledAt: null });
+    expect(second).toEqual({ jobId: 'job-1', scheduledFor: '2026-06-16T06:00:00.000Z', turnId: null, settledAt: null, silent: false });
     const rows = db.prepare(`SELECT count(*) AS n FROM job_fires`).get() as { n: number };
     expect(rows.n).toBe(1);
   });
@@ -164,5 +165,76 @@ describe('JobFireStore.settle — fault point 7: settlement, then (and only then
     const { fires } = memStore();
     expect(() => fires.settle('ghost-job', '2026-06-16T06:00:00.000Z')).not.toThrow();
     expect(fires.get('ghost-job', '2026-06-16T06:00:00.000Z')).toBeNull();
+  });
+});
+
+describe('JobFireStore.settle — silent receipt (#598 S4)', () => {
+  it('settle({ silent: true }) writes the receipt on the same guarded row', () => {
+    const { fires } = memStore();
+    fires.claim('job-1', '2026-06-16T06:00:00.000Z');
+    fires.bind('job-1', '2026-06-16T06:00:00.000Z', 'turn-a');
+    expect(fires.get('job-1', '2026-06-16T06:00:00.000Z')?.silent).toBe(false);
+    fires.settle('job-1', '2026-06-16T06:00:00.000Z', { silent: true });
+    const fire = fires.get('job-1', '2026-06-16T06:00:00.000Z');
+    expect(fire?.settledAt).toBe(NOW.toISOString());
+    expect(fire?.silent).toBe(true);
+  });
+
+  it('a plain settle leaves the receipt unset: delivered fires are not silent', () => {
+    const { fires } = memStore();
+    fires.claim('job-1', '2026-06-16T06:00:00.000Z');
+    fires.bind('job-1', '2026-06-16T06:00:00.000Z', 'turn-a');
+    fires.settle('job-1', '2026-06-16T06:00:00.000Z');
+    expect(fires.get('job-1', '2026-06-16T06:00:00.000Z')?.silent).toBe(false);
+  });
+
+  it('first settlement wins on the receipt too: a retry never rewrites silent', () => {
+    const { fires } = memStore();
+    fires.claim('job-1', '2026-06-16T06:00:00.000Z');
+    fires.bind('job-1', '2026-06-16T06:00:00.000Z', 'turn-a');
+    fires.settle('job-1', '2026-06-16T06:00:00.000Z', { silent: true });
+    // A duplicate tick retrying with the default opts must not un-silence it.
+    fires.settle('job-1', '2026-06-16T06:00:00.000Z');
+    expect(fires.get('job-1', '2026-06-16T06:00:00.000Z')?.silent).toBe(true);
+  });
+
+  it('claim and bind carry silent=false: nothing is silent before settlement', () => {
+    const { fires } = memStore();
+    expect(fires.claim('job-1', '2026-06-16T06:00:00.000Z').silent).toBe(false);
+    fires.bind('job-1', '2026-06-16T06:00:00.000Z', 'turn-a');
+    expect(fires.get('job-1', '2026-06-16T06:00:00.000Z')?.silent).toBe(false);
+  });
+
+  it('opens a job_fires table written before S4: the receipt column arrives, legacy rows read silent=false', () => {
+    const db = new DatabaseCtor(':memory:');
+    try {
+      db.exec(`
+        CREATE TABLE job_fires (
+          job_id        TEXT NOT NULL,
+          scheduled_for TEXT NOT NULL,
+          turn_id       TEXT,
+          settled_at    TEXT,
+          created_at    TEXT NOT NULL,
+          PRIMARY KEY (job_id, scheduled_for)
+        );
+        INSERT INTO job_fires (job_id, scheduled_for, turn_id, settled_at, created_at)
+        VALUES ('vecchio', '2026-06-16T06:00:00.000Z', 'turn-v', '2026-06-16T06:05:00.000Z', '2026-06-16T06:00:00.000Z');
+      `);
+      const columns = () => (db.prepare(`PRAGMA table_info(job_fires)`).all() as Array<{ name: string }>).map((c) => c.name);
+      expect(columns()).not.toContain('silent');
+
+      const fires = new JobFireStore(db, () => NOW);
+      expect(columns()).toContain('silent');
+      // A settled-before-S4 occurrence spoke as today: no silent receipt invented.
+      expect(fires.get('vecchio', '2026-06-16T06:00:00.000Z')?.silent).toBe(false);
+
+      // And the new write path works on the migrated table.
+      fires.claim('job-1', '2026-06-16T06:00:00.000Z');
+      fires.bind('job-1', '2026-06-16T06:00:00.000Z', 'turn-a');
+      fires.settle('job-1', '2026-06-16T06:00:00.000Z', { silent: true });
+      expect(fires.get('job-1', '2026-06-16T06:00:00.000Z')?.silent).toBe(true);
+    } finally {
+      db.close();
+    }
   });
 });

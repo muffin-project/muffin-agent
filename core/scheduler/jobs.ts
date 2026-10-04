@@ -6,6 +6,19 @@ import type { TrustTier } from '../policy/types.js';
 import type { DelegationMode } from '../runtime/delega.js';
 
 /**
+ * What a fire may do with a routine success (#598 S4, property 9).
+ *
+ * `deliver` is today's behavior: the outcome text reaches the job's channel.
+ * `silent` settles the same success to a durable receipt with zero
+ * conversational message — the fire is settled, the schedule advances, and
+ * `job_fires` carries the receipt (`core/scheduler/job-fires.ts`), while
+ * anything that is not routine success (`ask`, `error`, `budget`, …) still
+ * delivers exactly as today. Silence is strictly opt-in: every legacy row
+ * and every add that does not name it reads `deliver`.
+ */
+export type DeliveryPolicy = 'deliver' | 'silent';
+
+/**
  * The durable core of M5: jobs that survive a restart, and a next-fire that is
  * correct across a DST change.
  *
@@ -68,7 +81,14 @@ CREATE TABLE IF NOT EXISTS jobs (
   -- le righe legacy chiedono come oggi. Solo yolo consuma (stesso registro,
   -- decided_by delegation); auto resta in escalation finche la busta di
   -- System One e vuota — nessuna soglia inventata qui.
-  delegation       TEXT NOT NULL DEFAULT 'manual' CHECK (delegation IN ('manual','auto','yolo'))
+  delegation       TEXT NOT NULL DEFAULT 'manual' CHECK (delegation IN ('manual','auto','yolo')),
+  -- Consegna dell'esito di routine (#598 S4, proprietà 9): 'deliver' manda il
+  -- testo sul canale del job come oggi, 'silent' chiude il successo ordinario
+  -- su una ricevuta durevole senza messaggio. Default 'deliver': le righe
+  -- legacy e ogni add che non la nomina parlano come oggi — il silenzio è
+  -- opt-in riga per riga, mai un default che zittisce lavoro esistente
+  -- (stessa disciplina di run_once/delegation: additiva via ensureColumn).
+  delivery         TEXT NOT NULL DEFAULT 'deliver' CHECK (delivery IN ('deliver','silent'))
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs(active, next_fire_at);
 `;
@@ -130,6 +150,14 @@ type JobCommon = {
    * stesso registro, `deny` resta `deny` nel kernel.
    */
   delegation: DelegationMode;
+  /**
+   * Consegna dell'esito di routine (#598 S4): `'deliver'` parla come oggi,
+   * `'silent'` chiude il successo ordinario su una ricevuta durevole senza
+   * messaggio. `'deliver'` sulle righe legacy e quando l'owner non la nomina.
+   * Letta da `core/scheduler/scheduler.ts` al momento della consegna — solo
+   * `answered` può tacere; `ask`/errori/budget parlano sempre.
+   */
+  delivery: DeliveryPolicy;
 };
 
 /**
@@ -177,6 +205,10 @@ export type NewJob = {
    * Postura pre-delegata per il futuro fire (#598 S3, #740). Omessa = manual.
    */
   delegation?: DelegationMode | undefined;
+  /**
+   * Consegna dell'esito di routine (#598 S4). Omessa = deliver, come oggi.
+   */
+  delivery?: DeliveryPolicy | undefined;
   /**
    * Chi ha chiesto la ricorrenza. La CLI passa l'owner al terminale; il tool
    * conversazionale passa il turno che ha ricevuto l'intento. Assente = riga
@@ -249,6 +281,7 @@ type Row = {
   tier?: number | null;
   run_once?: number | null;
   delegation?: string | null;
+  delivery?: string | null;
 };
 
 function asTier(v: unknown): TrustTier {
@@ -257,6 +290,16 @@ function asTier(v: unknown): TrustTier {
 
 function asDelegation(v: unknown): DelegationMode {
   return v === 'auto' || v === 'yolo' ? v : 'manual';
+}
+
+/**
+ * Anything that is not exactly `'silent'` delivers. Legacy rows (no column),
+ * rows whose column is somehow NULL, and hand-corrupted values all read as
+ * today's behavior: silence is opt-in, so the safe default is the one that
+ * talks. Same fail-toward-today discipline as `asDelegation` above.
+ */
+function asDeliveryPolicy(v: unknown): DeliveryPolicy {
+  return v === 'silent' ? 'silent' : 'deliver';
 }
 
 function toJob(row: Row): Job {
@@ -295,6 +338,9 @@ function toJob(row: Row): Job {
     // corrotta a mano non deve diventare una-tantum per caso.
     once: row.run_once === 1,
     delegation: asDelegation(row.delegation),
+    // Legacy senza colonna S4: parla come oggi. Il silenzio si sceglie riga
+    // per riga, mai per default di migrazione.
+    delivery: asDeliveryPolicy(row.delivery),
   };
   // Anything that is not exactly 'script' is a goal. A row with a `kind` this
   // build does not know must not become an executable script by accident —
@@ -353,11 +399,16 @@ export class JobStore {
     // minuto prima — il guasto già visto per `kind` e `per_job_usd`.
     ensureColumn(db, 'jobs', 'run_once', 'run_once INTEGER NOT NULL DEFAULT 0');
     ensureColumn(db, 'jobs', 'delegation', `delegation TEXT NOT NULL DEFAULT 'manual'`);
+    // S4 consegna di routine: stessa rete, stessa ragione. Senza, il primo
+    // `muffin jobs add --silent` dopo l'aggiornamento morirebbe con «table
+    // jobs has no column named delivery» su un'installazione che funzionava un
+    // minuto prima — il guasto già visto per `kind` e `per_job_usd`.
+    ensureColumn(db, 'jobs', 'delivery', `delivery TEXT NOT NULL DEFAULT 'deliver'`);
     this.insertStmt = db.prepare(
       `INSERT INTO jobs (id, cron, timezone, goal, channel, kind, per_job_usd, created_at, next_fire_at, last_run_at, active,
-                         origin_tenant, origin_surface, origin_principal, origin_turn, tier, run_once, delegation)
+                         origin_tenant, origin_surface, origin_principal, origin_turn, tier, run_once, delegation, delivery)
        VALUES (@id, @cron, @timezone, @goal, @channel, @kind, @perJobUsd, @createdAt, @nextFireAt, NULL, 1,
-               @originTenant, @originSurface, @originPrincipal, @originTurn, @tier, @runOnce, @delegation)`,
+               @originTenant, @originSurface, @originPrincipal, @originTurn, @tier, @runOnce, @delegation, @delivery)`,
     );
     this.listStmt = db.prepare(`SELECT * FROM jobs WHERE active = 1 ORDER BY next_fire_at`);
     this.dueStmt = db.prepare(
@@ -385,6 +436,12 @@ export class JobStore {
     }
     if (spec.delegation !== undefined && spec.delegation !== 'manual' && spec.delegation !== 'auto' && spec.delegation !== 'yolo') {
       throw new JobError(`delega non valida: "${spec.delegation}" (attese manual|auto|yolo)`);
+    }
+    // Prima di qualunque scrittura, come la delega: un valore che non esiste
+    // diventerebbe una riga che tace senza che nessuno l'abbia chiesto — e il
+    // silenzio si sceglie, non si indovina.
+    if (spec.delivery !== undefined && spec.delivery !== 'deliver' && spec.delivery !== 'silent') {
+      throw new JobError(`consegna non valida: "${spec.delivery}" (attese deliver|silent)`);
     }
     // Il sentinella `once`: un armato-immediato senza cadenza. Non passa da
     // `nextFire` — un cron reale non lo descrive — e la prima (unica) fire è
@@ -417,6 +474,7 @@ export class JobStore {
       tier: origin?.tier ?? 0,
       once,
       delegation: spec.delegation ?? 'manual',
+      delivery: spec.delivery ?? 'deliver',
     };
     const job: Job =
       spec.kind === 'script'
@@ -439,6 +497,7 @@ export class JobStore {
       tier: job.tier,
       runOnce: job.once ? 1 : 0,
       delegation: job.delegation,
+      delivery: job.delivery,
     });
     return job;
   }
@@ -456,6 +515,7 @@ export class JobStore {
       channel: string;
       perJobUsd?: number | null;
       delegation?: DelegationMode | undefined;
+      delivery?: DeliveryPolicy | undefined;
       origin?: NewJob['origin'];
     } & ({ kind?: 'goal'; goal: string } | { kind: 'script'; script: string }),
   ): Job {
@@ -467,6 +527,7 @@ export class JobStore {
       once: true as const,
       ...(spec.perJobUsd !== undefined ? { perJobUsd: spec.perJobUsd } : {}),
       ...(spec.delegation !== undefined ? { delegation: spec.delegation } : {}),
+      ...(spec.delivery !== undefined ? { delivery: spec.delivery } : {}),
       ...(spec.origin !== undefined ? { origin: spec.origin } : {}),
     };
     if (spec.kind === 'script') {

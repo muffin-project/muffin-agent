@@ -268,11 +268,12 @@ describe('#598 S2 · fault injection — killed after the yield, resumes unatten
         .prepare(`SELECT COUNT(*) AS n FROM turn_tool_calls WHERE turn_id = ? AND ended_at IS NOT NULL AND undone_at IS NULL`)
         .get(turnId) as { n: number }
     ).n;
-    const fire = runtime.db.prepare(`SELECT job_id, scheduled_for, turn_id, settled_at FROM job_fires`).get() as {
+    const fire = runtime.db.prepare(`SELECT job_id, scheduled_for, turn_id, settled_at, silent FROM job_fires`).get() as {
       job_id: string;
       scheduled_for: string;
       turn_id: string;
       settled_at: string | null;
+      silent: number | null;
     };
     runtime.close();
 
@@ -292,6 +293,7 @@ describe('#598 S2 · fault injection — killed after the yield, resumes unatten
           scheduledFor: fire.scheduled_for,
           turnId: fire.turn_id,
           settledAt: fire.settled_at,
+          silent: fire.silent === 1,
         }).state,
       ).toBe('done');
     } finally {

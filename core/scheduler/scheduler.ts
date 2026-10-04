@@ -234,8 +234,14 @@ export class Scheduler {
      * constructions) settles nothing and behaves exactly as before this
      * column existed — additive, never a required rewire of every test that
      * does not care about occurrence identity.
+     *
+     * `opts.silent` (#598 S4) settles with the silent receipt: the fire
+     * closed a routine success with zero conversational message under a
+     * `silent` delivery policy. Carried on this same callback — rather than a
+     * second one — because it is the same write (`job_fires.settle`) with one
+     * more durable fact on it, and the ordering guarantee above covers both.
      */
-    private readonly settleFire: (job: Job) => void = () => {},
+    private readonly settleFire: (job: Job, opts?: { silent?: boolean }) => void = () => {},
     /**
      * «L'owner ha detto di fermarsi» (ADR-0054 §4, `core/runtime/pausa.ts`).
      * Un default costante-falso, come `standDown`: un'installazione senza
@@ -499,6 +505,35 @@ export class Scheduler {
     if (outcome.text.trim() === '' && outcome.stopped !== 'error') {
       try {
         this.settleFire(job);
+        this.store.markRan(job.id);
+        this.onEvent({ kind: 'ran', job, stopped: outcome.stopped, delivered: false });
+      } catch (error) {
+        this.onEvent({ kind: 'not_recorded', job, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    /**
+     * #598 S4, proprietà 9 — il successo ordinario può tacere.
+     *
+     * Quando il job porta una delivery policy `silent` e il giro è finito in
+     * `answered`, l'occorrenza si chiude su una ricevuta durevole senza nessun
+     * messaggio conversazionale: `settleFire` con la ricevuta, la schedulazione
+     * avanza, l'evento dice `delivered: false` — niente è stato consegnato, e
+     * la riga di `job_fires` dice perché. Sta dopo il ramo del testo vuoto
+     * (un fire vuoto tace già da sé, senza bisogno di ricevuta) e vale solo
+     * per `answered`: `ask` (needs-owner), `error`, `budget` e ogni altro
+     * esito parlano sempre, con o senza policy — un guasto silenzioso o una
+     * domanda inghiottita sarebbero la forma esatta del guasto che la S1
+     * chiede di non costruire mai.
+     *
+     * La riga del turno resta dov'è (`delivery` intoccata, come nel ramo del
+     * testo vuoto): `core/turns/*` non è di questa slice, e la ricevuta vive
+     * sulla riga del fire, letta da `core/autonomy/run-status.ts`.
+     */
+    if (job.delivery === 'silent' && outcome.stopped === 'answered') {
+      try {
+        this.settleFire(job, { silent: true });
         this.store.markRan(job.id);
         this.onEvent({ kind: 'ran', job, stopped: outcome.stopped, delivered: false });
       } catch (error) {

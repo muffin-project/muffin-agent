@@ -987,8 +987,10 @@ export async function cmdGatewayRun(
     () => lock.isCurrentClaim(),
     // B7: the last write before `markRan`, every time `markRan` is about to
     // run — never a required rewire, just the one thing this store still
-    // needed to know before advancing a schedule it also gates.
-    (job) => runtime.jobFires.settle(job.id, job.nextFireAt.toISOString()),
+    // needed to know before advancing a schedule it also gates. Forwards the
+    // S4 silent receipt (#598) on the same write: a fire the delivery policy
+    // closed without messaging settles with its receipt, not as a delivery.
+    (job, opts) => runtime.jobFires.settle(job.id, job.nextFireAt.toISOString(), opts),
     // ADR-0054 §4: `/pause` da qualunque superficie, letta dal database che
     // tutti i processi condividono.
     () => pausa.attiva(),

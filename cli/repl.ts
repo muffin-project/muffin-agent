@@ -910,8 +910,9 @@ export async function runRepl(
     // re-verify, same default as every other REPL/test construction.
     undefined,
     // B7: same wiring as `cli/gateway.ts`, so a job the REPL runs (no gateway
-    // installed yet, or its claim gone stale) gets the same identity bridge.
-    (job) => runtime.jobFires.settle(job.id, job.nextFireAt.toISOString()),
+    // installed yet, or its claim gone stale) gets the same identity bridge —
+    // silent receipt included (#598 S4).
+    (job, opts) => runtime.jobFires.settle(job.id, job.nextFireAt.toISOString(), opts),
     // ADR-0054 §4: la pausa è del database, non di questo processo — un
     // `/pause` dato dal telefono ferma anche i job che girano qui.
     () => pausa.attiva(),

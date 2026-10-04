@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { ensureColumn } from '../lock/durable.js';
 
 /**
  * The identity/idempotency bridge from a due occurrence to a durable turn.
@@ -39,6 +40,14 @@ CREATE TABLE IF NOT EXISTS job_fires (
   turn_id       TEXT,
   settled_at    TEXT,
   created_at    TEXT NOT NULL,
+  -- Ricevuta di consegna silenziosa (#598 S4, proprietà 9): 1 quando il fire
+  -- ha chiuso un successo ordinario senza messaggio per policy
+  -- ("jobs.delivery = 'silent'"), 0 altrimenti. Default 0: le occorrenze
+  -- registrate prima di questa colonna hanno parlato come oggi, e la
+  -- migrazione non riscrive la loro storia. Non è un secondo "turns.delivery":
+  -- quella colonna dice se il messaggio è partito, questa dice se è stato
+  -- scelto di non farlo partire — e "core/turns/*" resta intoccato.
+  silent        INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (job_id, scheduled_for)
 );
 `;
@@ -50,12 +59,33 @@ export type JobFire = {
   turnId: string | null;
   /** `null` until the scheduler has finished handling this occurrence. */
   settledAt: string | null;
+  /**
+   * `true` when this occurrence settled a routine success with zero
+   * conversational message under a `silent` delivery policy (#598 S4). The
+   * durable receipt `core/autonomy/run-status.ts` reads — `false` on every
+   * legacy row and every delivered fire.
+   */
+  silent: boolean;
 };
 
-type Row = { job_id: string; scheduled_for: string; turn_id: string | null; settled_at: string | null };
+type Row = {
+  job_id: string;
+  scheduled_for: string;
+  turn_id: string | null;
+  settled_at: string | null;
+  silent?: number | null;
+};
 
 function toFire(row: Row): JobFire {
-  return { jobId: row.job_id, scheduledFor: row.scheduled_for, turnId: row.turn_id, settledAt: row.settled_at };
+  return {
+    jobId: row.job_id,
+    scheduledFor: row.scheduled_for,
+    turnId: row.turn_id,
+    settledAt: row.settled_at,
+    // `=== 1` e non truthy: stessa disciplina di `jobs.run_once` — una riga
+    // corrotta a mano non deve diventare una ricevuta silenziosa per caso.
+    silent: row.silent === 1,
+  };
 }
 
 export class JobFireStore {
@@ -69,6 +99,12 @@ export class JobFireStore {
     private readonly clock: () => Date = () => new Date(),
   ) {
     db.exec(SCHEMA);
+    // Stessa rete di `jobs` (`core/scheduler/jobs.ts`): `CREATE TABLE IF NOT
+    // EXISTS` è un no-op su una tabella che esiste già, quindi senza questa
+    // riga un database con fuochi registrati prima di S4 non avrebbe mai la
+    // colonna `silent` — e la prima `settle({ silent: true })` morirebbe con
+    // «table job_fires has no column named silent» sul giro che doveva tacere.
+    ensureColumn(db, 'job_fires', 'silent', 'silent INTEGER NOT NULL DEFAULT 0');
     // OR IGNORE, not OR REPLACE: a second `claim` for a key that already
     // exists (a retry after a crash, a second process reading the same due
     // list) must leave whatever the first claim wrote — including a `turn_id`
@@ -90,7 +126,8 @@ export class JobFireStore {
     // Guarded on `settled_at IS NULL` for the same reason: idempotent under a
     // retry, and the first settlement is the one that counts.
     this.settleStmt = db.prepare(
-      `UPDATE job_fires SET settled_at = @now WHERE job_id = @jobId AND scheduled_for = @scheduledFor AND settled_at IS NULL`,
+      `UPDATE job_fires SET settled_at = @now, silent = @silent
+        WHERE job_id = @jobId AND scheduled_for = @scheduledFor AND settled_at IS NULL`,
     );
   }
 
@@ -127,9 +164,15 @@ export class JobFireStore {
    * duplicate tick or a retried delivery never moves `settled_at` a second
    * time. `Scheduler` calls this immediately before `markRan` and never
    * after — fault point 7, "solo dopo il settlement avanza la schedule".
+   *
+   * `opts.silent` (#598 S4) writes the silent receipt on the same row, in the
+   * same guarded write: a routine success the delivery policy chose not to
+   * message. Omitted or false = the occurrence spoke (or failed speaking) as
+   * today. The `settled_at IS NULL` guard covers both: whoever settles first
+   * owns the receipt too, and a retry never rewrites either.
    */
-  settle(jobId: string, scheduledFor: string): void {
-    this.settleStmt.run({ jobId, scheduledFor, now: this.clock().toISOString() });
+  settle(jobId: string, scheduledFor: string, opts?: { silent?: boolean }): void {
+    this.settleStmt.run({ jobId, scheduledFor, now: this.clock().toISOString(), silent: opts?.silent === true ? 1 : 0 });
   }
 
   get(jobId: string, scheduledFor: string): JobFire | null {
