@@ -189,7 +189,8 @@ If the foreground wrapper is interrupted abruptly, status recognizes the owned
 scheduler group by a unique launch marker. A second start fails closed until
 `ops.py stop` stops that group and its worker containers; then start normally.
 The scheduler cannot execute before its identity has been recorded. The trusted
-leader keeps its marker during graceful termination; a scheduler that ignores
+leader keeps its marker while any active group descendant survives, including
+after its direct child exits; a scheduler or descendant that ignores
 TERM receives bounded process-group escalation. Status/stop
 never signal an unrelated process using a stale PID alone. POSIX `ps` is a host
 dependency; macOS and the supported Linux host provide it.

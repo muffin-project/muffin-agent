@@ -46,7 +46,7 @@ Hermes/OpenClaw scheduler or session database is adopted.
 - OpenCode 1.18.33 real binary in the local Docker worker image. Source inspection of `run` showed stdin is read to EOF. The real-binary fixture stalled when stdin inherited Symphony's stream; closing worker stdin fixed it. This is a measured compatibility finding, not inferred equivalence.
 
 Executed locally: 114 official tracker/core/workspace tests passed; the added
-official AppServer/Workspace fixture passed for both repo configs; 23 bridge
+official AppServer/Workspace fixture passed for both repo configs; 25 bridge
 tests passed in the real OpenCode Docker image, including a real launcher/container/MCP localhost model
 fixture with no external model call. Hosted CI and independent review must be
 read on the eventual PR head; these local results do not authorize merge.
@@ -103,3 +103,11 @@ leader: it could lose the ownership marker before a child stopped. The leader
 now retains its identity during graceful termination; the existing process
 fixture uses a TERM-resistant scheduler, proves bounded group escalation and
 checks a subsequent start/stop succeeds.
+
+A subsequent fault probe falsified the same ownership lifetime for grandchildren:
+the direct scheduler accepted TERM while its descendant ignored it; stop returned
+in 0.21s with the descendant still running. The guardian now waits for all active
+non-zombie members of its original group even after its direct child exits.
+The additional regression covers that exact falsifier and restart after cleanup.
+The normal-exit fixture also proves the process-list probe does not count
+itself as a surviving descendant and retain an empty service group.

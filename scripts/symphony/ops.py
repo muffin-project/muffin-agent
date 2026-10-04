@@ -53,6 +53,19 @@ def upstream_live(state):
         return False
 
 
+def group_has_active_children():
+    """Keep the launch witness while any descendant in this group can run."""
+    own_pid, own_group = os.getpid(), os.getpgrp()
+    probe = subprocess.Popen(["ps", "-axo", "pid=,pgid=,stat="], stdout=subprocess.PIPE, text=True)
+    rows, _ = probe.communicate()
+    if probe.returncode: raise RuntimeError("cannot inspect owned process group")
+    for row in rows.splitlines():
+        pid, group, status = row.split()
+        if int(group) == own_group and int(pid) not in (own_pid, probe.pid) and not status.startswith("Z"):
+            return True
+    return False
+
+
 def stop_upstream(state):
     # Never signal a stale PID unless the unique launch identity still matches.
     if not upstream_live(state): return
@@ -182,6 +195,10 @@ if __name__ == "__main__":
         # Keep a trusted process-group leader with the launch marker even
         # when the release executable wraps/forks its Erlang runtime.
         result = subprocess.run(sys.argv[3:], env=os.environ)
+        # Release wrappers may exit before their runtime descendants. Keep
+        # ownership until every active member exits or host group escalation.
+        while group_has_active_children():
+            time.sleep(.2)
         sys.exit(result.returncode)
     else:
         main()

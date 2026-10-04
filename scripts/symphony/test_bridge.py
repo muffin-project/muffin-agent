@@ -283,6 +283,19 @@ class ProtocolFixture(unittest.TestCase):
 
 
 class OperationsFixture(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("SYMPHONY_TEST_DOCKER"), "actual host operations")
+    def test_guardian_exits_after_last_active_group_member(self):
+        gate_read, gate_write = os.pipe()
+        proc = subprocess.Popen([sys.executable, str(HERE / "ops.py"), "_exec", str(gate_read),
+                                 sys.executable, "-c", "pass"], pass_fds=(gate_read,), start_new_session=True)
+        os.close(gate_read)
+        try:
+            os.write(gate_write, b"1")
+            os.close(gate_write)
+            self.assertEqual(proc.wait(timeout=5), 0)
+        finally:
+            if proc.poll() is None: proc.kill(); proc.wait(timeout=5)
+
     @unittest.skipUnless(os.environ.get("SYMPHONY_TEST_DOCKER"), "actual operations needs Docker")
     def test_two_runtime_starts_reject_second_and_stop_cleans_service(self):
         with tempfile.TemporaryDirectory() as t:
@@ -329,13 +342,25 @@ class OperationsFixture(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get("SYMPHONY_TEST_DOCKER"), "actual operations needs Docker")
     def test_wrapper_hard_death_blocks_restart_until_owned_scheduler_stopped(self):
+        self.check_owned_group_recovery(False)
+
+    @unittest.skipUnless(os.environ.get("SYMPHONY_TEST_DOCKER"), "actual operations needs Docker")
+    def test_scheduler_exit_keeps_witness_for_term_resistant_descendant(self):
+        self.check_owned_group_recovery(True)
+
+    def check_owned_group_recovery(self, descendant):
         with tempfile.TemporaryDirectory() as t:
             root = Path(t); c = config("fixture/death-" + str(os.getpid())); c.update(port=4320, workflow="WORKFLOW.md")
             (root / "config.json").write_text(json.dumps(c)); (root / "auth.json").write_text("{}")
             (root / "WORKFLOW.md").write_text("fixture only")
             child_pidfile = root / "child.pid"
             fake = root / "fake-symphony"
-            fake.write_text("#!/usr/bin/env python3\nimport os, signal, time\nfrom pathlib import Path\nsignal.signal(signal.SIGTERM, lambda *_: None)\nPath(" + repr(str(child_pidfile)) + ").write_text(str(os.getpid()))\ntime.sleep(60)\n")
+            resistant = "import os, signal, time\nfrom pathlib import Path\nsignal.signal(signal.SIGTERM, lambda *_: None)\nPath(" + repr(str(child_pidfile)) + ").write_text(str(os.getpid()))\ntime.sleep(60)\n"
+            if descendant:
+                # Direct scheduler accepts TERM; its grandchild does not.
+                fake.write_text("#!/usr/bin/env python3\nimport subprocess, sys, time\nsubprocess.Popen([sys.executable, '-c', " + repr(resistant) + "])\ntime.sleep(60)\n")
+            else:
+                fake.write_text("#!/usr/bin/env python3\n" + resistant)
             fake.chmod(0o755)
             env = os.environ.copy(); env.update(GITHUB_TOKEN="fixture-not-secret", SYMPHONY_GIT_AUTHOR_NAME="Fixture",
                        SYMPHONY_GIT_AUTHOR_EMAIL="fixture@example.invalid", SYMPHONY_OPENCODE_MODEL="fixture/test")
