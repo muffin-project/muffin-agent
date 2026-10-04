@@ -210,3 +210,48 @@ describe('muffin jobs add --once (#598 S3)', () => {
     expect(job.delegation).toBe('manual');
   });
 });
+
+/**
+ * #598 S4 — `muffin jobs add --silent`: il successo ordinario non manda
+ * messaggi, resta una ricevuta durevole. needs-owner e guasti arrivano sempre.
+ */
+describe('muffin jobs add --silent (#598 S4)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('--silent si scrive sulla riga e la lista lo mostra, su ricorrenze e una-tantum', () => {
+    const home = bootHome();
+    const detto: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((s) => {
+      detto.push(String(s));
+      return true;
+    });
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    expect(cmdJobsAdd(home, ['--cron', '0 8 * * *', '--silent', 'controllo silenzioso'])).toBe(0);
+    expect(cmdJobsAdd(home, ['--once', '--silent', 'una cosa sola in silenzio'])).toBe(0);
+    const jobs = activeJobs(home);
+    expect(jobs.map((j) => j.delivery)).toEqual(['silent', 'silent']);
+
+    detto.length = 0;
+    expect(cmdJobsList(home)).toBe(0);
+    const lista = detto.join('');
+    expect(lista).toContain('silent');
+  });
+
+  it('senza --silent i job parlano come oggi e la lista non mostra niente di nuovo', () => {
+    const home = bootHome();
+    const detto: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((s) => {
+      detto.push(String(s));
+      return true;
+    });
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    expect(cmdJobsAdd(home, ['--cron', '0 8 * * *', 'brief'])).toBe(0);
+    expect(activeJobs(home)[0]?.delivery).toBe('deliver');
+
+    detto.length = 0;
+    expect(cmdJobsList(home)).toBe(0);
+    expect(detto.join('')).not.toContain('silent');
+  });
+});

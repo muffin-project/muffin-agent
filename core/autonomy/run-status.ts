@@ -92,6 +92,18 @@ export type RunStatus = {
   undoneEffects: number;
   /** All-time ledger sum for this `job_id`. Purity note above. */
   spendUsd: number;
+  /**
+   * Silent receipt (#598 S4): the fire settled a routine success with zero
+   * conversational message under a `silent` delivery policy
+   * (`job_fires.silent`, written by `core/scheduler/scheduler.ts`). Present
+   * and `true` only there — absent on every delivered fire and every legacy
+   * row, so existing lines render byte-for-byte as before. Optional (rather
+   * than required) so hand-built literals elsewhere keep compiling; readers
+   * treat anything but `true` as "spoke, or predates the receipt". States
+   * above are untouched: this is evidence on the receipt, never a state
+   * driver — a silent `answered` run still reads `done`.
+   */
+  silent?: boolean;
 };
 
 type TurnShape = {
@@ -103,6 +115,11 @@ type TurnShape = {
 /** `true` only for the storage-missing-table case; every other error throws. */
 function isMissingTable(error: unknown): boolean {
   return error instanceof Error && error.message.includes('no such table');
+}
+
+/** `true` only for a `job_fires` table that predates the S4 `silent` column. */
+function isMissingColumn(error: unknown): boolean {
+  return error instanceof Error && /no such column/i.test(error.message);
 }
 
 function readTurn(db: Database.Database, turnId: string): TurnShape | null {
@@ -225,10 +242,19 @@ export function runStatus(db: Database.Database, fire: JobFire): RunStatus {
     uncertainCalls: fire.turnId === null ? 0 : countCalls(db, fire.turnId, 'uncertain'),
     undoneEffects: fire.turnId === null ? 0 : countCalls(db, fire.turnId, 'undone'),
     spendUsd: sumSpend(db, fire.jobId),
+    // The silent receipt rides on the fire, not the turn: present only when
+    // the scheduler closed this occurrence without messaging.
+    ...(fire.silent ? { silent: true as const } : {}),
   };
 }
 
-type FireRow = { job_id: string; scheduled_for: string; turn_id: string | null; settled_at: string | null };
+type FireRow = {
+  job_id: string;
+  scheduled_for: string;
+  turn_id: string | null;
+  settled_at: string | null;
+  silent?: number | null;
+};
 
 /**
  * Every recorded occurrence, oldest first, each with its 6-state answer.
@@ -241,13 +267,25 @@ export function listRunStatuses(db: Database.Database): RunStatus[] {
   try {
     rows = db
       .prepare(
-        `SELECT job_id, scheduled_for, turn_id, settled_at FROM job_fires
+        `SELECT job_id, scheduled_for, turn_id, settled_at, silent FROM job_fires
           ORDER BY scheduled_for ASC, job_id ASC`,
       )
       .all() as FireRow[];
   } catch (error) {
     if (isMissingTable(error)) return [];
-    throw error;
+    // A `job_fires` table written before S4 has no `silent` column: read it
+    // the old way rather than breaking `sys.inspect` on an older home
+    // (same posture as the missing-table case above, one column narrower).
+    if (isMissingColumn(error)) {
+      rows = db
+        .prepare(
+          `SELECT job_id, scheduled_for, turn_id, settled_at FROM job_fires
+            ORDER BY scheduled_for ASC, job_id ASC`,
+        )
+        .all() as FireRow[];
+    } else {
+      throw error;
+    }
   }
   return rows.map((row) =>
     runStatus(db, {
@@ -255,6 +293,7 @@ export function listRunStatuses(db: Database.Database): RunStatus[] {
       scheduledFor: row.scheduled_for,
       turnId: row.turn_id,
       settledAt: row.settled_at,
+      silent: row.silent === 1,
     }),
   );
 }
@@ -267,6 +306,10 @@ export function formatRunStatus(status: RunStatus): string {
     `run ${status.jobId}@${status.scheduledFor} → ${status.state}` +
     ` · ${turn} ${shape}` +
     ` · delivery ${status.delivery ?? '-'}` +
+    // The receipt, and only when there is one: every other line renders
+    // exactly as before S4, which is what keeps the S1 determinism test
+    // (`same rows, same line`) green without touching it.
+    (status.silent === true ? ' · silent' : '') +
     ` · approvals open ${status.openApprovals}` +
     ` · effects settled ${status.settledEffects}/uncertain ${status.uncertainCalls}/undone ${status.undoneEffects}` +
     ` · spend $${status.spendUsd.toFixed(4)}`

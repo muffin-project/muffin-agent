@@ -443,3 +443,111 @@ describe('JobStore — armato una volta (#598 S3)', () => {
     }
   });
 });
+
+describe('JobStore — delivery policy (#598 S4)', () => {
+  const NOW = new Date('2026-06-15T05:00:00Z');
+
+  it('le righe legacy e gli add senza delivery parlano come oggi', () => {
+    const { store, db } = memStore(NOW);
+    try {
+      const job = store.add(BRIEF);
+      expect(job.delivery).toBe('deliver');
+      expect(store.get(job.id)?.delivery).toBe('deliver');
+      const unaTantum = store.addOnce({ timezone: 'Europe/Rome', channel: 'cli', goal: 'una sola' });
+      expect(unaTantum.delivery).toBe('deliver');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('silent si scrive e torna dal database, su ricorrenze e una-tantum', () => {
+    const { store, db } = memStore(NOW);
+    try {
+      const ricorrente = store.add({ ...BRIEF, delivery: 'silent' });
+      expect(ricorrente.delivery).toBe('silent');
+      expect(store.get(ricorrente.id)?.delivery).toBe('silent');
+      expect(store.due(new Date('2026-06-15T06:00:00Z')).find((j) => j.id === ricorrente.id)?.delivery).toBe('silent');
+
+      const unaTantum = store.addOnce({ timezone: 'Europe/Rome', channel: 'cli', goal: 'una sola', delivery: 'silent' });
+      expect(store.get(unaTantum.id)?.delivery).toBe('silent');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('rifiuta una delivery che non esiste, prima di scrivere', () => {
+    const { store, db } = memStore(NOW);
+    try {
+      expect(() => store.add({ ...BRIEF, delivery: 'sempre' as unknown as 'silent' })).toThrow(JobError);
+      expect(store.list()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('apre un database scritto prima della colonna S4: legge deliver, e scrive silent', () => {
+    const db = new DatabaseCtor(':memory:');
+    try {
+      db.exec(`
+        CREATE TABLE jobs (
+          id           TEXT PRIMARY KEY,
+          cron         TEXT NOT NULL,
+          timezone     TEXT NOT NULL,
+          goal         TEXT NOT NULL,
+          channel      TEXT NOT NULL,
+          kind         TEXT NOT NULL DEFAULT 'goal',
+          created_at   TEXT NOT NULL,
+          next_fire_at TEXT NOT NULL,
+          last_run_at  TEXT,
+          active       INTEGER NOT NULL DEFAULT 1
+        );
+      `);
+      db.prepare(
+        `INSERT INTO jobs (id, cron, timezone, goal, channel, kind, created_at, next_fire_at, active)
+         VALUES ('vecchio', '0 8 * * *', 'Europe/Rome', 'brief di prima', 'cli', 'goal', ?, ?, 1)`,
+      ).run(NOW.toISOString(), new Date('2026-06-16T06:00:00Z').toISOString());
+      const colonne = () => (db.prepare(`PRAGMA table_info(jobs)`).all() as Array<{ name: string }>).map((c) => c.name);
+      expect(colonne()).not.toContain('delivery');
+
+      const store = new JobStore(db, () => NOW);
+      expect(colonne()).toContain('delivery');
+      // La migrazione non zittisce niente che l'owner non abbia toccato.
+      expect(store.get('vecchio')?.delivery).toBe('deliver');
+
+      const nuovo = store.add({ ...BRIEF, delivery: 'silent' });
+      expect(store.get(nuovo.id)?.delivery).toBe('silent');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('un valore corrotto a mano legge deliver: il silenzio non si indovina mai', () => {
+    const db = new DatabaseCtor(':memory:');
+    try {
+      // Tabella con la colonna ma senza CHECK: qualcuno ci ha scritto dentro
+      // a mano un valore che il vincolo non avrebbe mai lasciato passare.
+      db.exec(`
+        CREATE TABLE jobs (
+          id           TEXT PRIMARY KEY,
+          cron         TEXT NOT NULL,
+          timezone     TEXT NOT NULL,
+          goal         TEXT NOT NULL,
+          channel      TEXT NOT NULL,
+          kind         TEXT NOT NULL DEFAULT 'goal',
+          delivery     TEXT NOT NULL DEFAULT 'deliver',
+          created_at   TEXT NOT NULL,
+          next_fire_at TEXT NOT NULL,
+          last_run_at  TEXT,
+          active       INTEGER NOT NULL DEFAULT 1
+        );
+        INSERT INTO jobs (id, cron, timezone, goal, channel, kind, delivery, created_at, next_fire_at, active)
+        VALUES ('corrotto', '0 8 * * *', 'Europe/Rome', 'brief', 'cli', 'goal', 'sempre',
+                '2026-06-01T00:00:00.000Z', '2026-06-16T06:00:00.000Z', 1);
+      `);
+      const store = new JobStore(db, () => NOW);
+      expect(store.get('corrotto')?.delivery).toBe('deliver');
+    } finally {
+      db.close();
+    }
+  });
+});
