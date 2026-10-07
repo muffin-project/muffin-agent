@@ -27,7 +27,7 @@ export function makeCapabilitySearchTool(): RegisteredTool {
       description:
         'Search and load authorized tools that are not currently visible. ' +
         'Use it when the task needs a capability missing from the current tool list. ' +
-        'Do not use it when the needed tool is already visible, or just to browse the catalogue. ' +
+        'Not for capabilities that are already visible, and not for browsing the catalogue without a task need. ' +
         'The next model round receives the loaded tool schemas; execution still goes through normal policy checks.',
       inputSchema: {
         type: 'object',
