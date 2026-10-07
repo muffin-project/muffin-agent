@@ -9,24 +9,18 @@ import { loadProfiles, selectProfile } from './profiles/profile.js';
 import { baseToolOrder, buildRuntime } from './runtime.js';
 
 /**
- * Which tools a turn is actually shown, and what falls off the end.
+ * Native registration order and the #469 model-visible projection.
  *
- * `profile.maxToolsExposed` truncates the registered list **by registration
- * order**, and `consumer-local.json` sets it to 10 against a default install of
- * eleven or twelve tools (the sandbox decides). So something is always cut on
- * that profile, silently: it is simply not in the request, no line is logged,
- * and the model behaves as if it did not exist. *What* is cut is decided by the
- * order of a literal in `buildRuntime` — a place nobody edits with the cap in
- * mind.
+ * Before #469 this file guarded a hard `slice(0, maxToolsExposed)`: a tool
+ * after the profile ceiling simply disappeared from the model request. The
+ * structural repair keeps deterministic registration for diagnostics/cache
+ * stability, but moves the actual turn view to `createCapabilityExposure`.
  *
- * That is how `slice/turno-sospeso` cost a small-model install its web access:
- * `wait` and `todo` went into the base array at positions 6-7 and pushed
- * `skill_read` and `http_get` over the line. The trade was never decided, and
- * nothing could have caught it — the suite was green and every tool worked.
- *
- * This file is the thing that would have caught it. It asserts the **whole
- * ordered list**, so any insertion anywhere fails here and names itself, and it
- * asserts the cut for the profile where the cut is real.
+ * The tests below therefore prove both facts separately:
+ * - `baseToolOrder` still matches the real native catalogue;
+ * - profiles that fit stay on the ordinary fast path with no discovery tool;
+ * - a pressured profile exposes a small core + capability_search and can load
+ *   a needed authorized schema without increasing the ceiling.
  */
 
 function realRuntime(): {
