@@ -143,7 +143,10 @@ describe('quali tool vede davvero un turno', () => {
     // ricorrenti — «ricordamelo ogni giorno alle 9»): un tool registrato in
     // più, contato, non stimato. Senza il +1 il tetto tornerebbe a tagliare
     // in silenzio, e il primo a sparire sarebbe l'ultimo della lista.
-    expect(profile.maxToolsExposed).toBe(22);
+    //
+    // 23 dal 04/10: `memory_propose` (ADR-0051 slice 1, «ricorda X» intenzionale):
+    // stesso +1 contato, stessa ragione.
+    expect(profile.maxToolsExposed).toBe(23);
 
     const rt = realRuntime();
     rt.close();
@@ -185,6 +188,9 @@ describe('quali tool vede davvero un turno', () => {
       'sys_effects',
       // 08/09: «dimentica X» non esiste su un'installazione dove questo cade.
       'memory_forget',
+      // 04/10: «ricorda X» intenzionale non esiste su un'installazione dove
+      // questo cade.
+      'memory_propose',
       // 18/09: «ricordamelo ogni giorno alle 9» non esiste su
       // un'installazione dove questo cade.
       'schedule_recurring',

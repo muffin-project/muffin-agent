@@ -43,6 +43,7 @@ const TOOL_PHRASE: Readonly<Record<string, string>> = {
   memory_search: 'cerco in memoria',
   memory_why: 'guardo da dove viene',
   memory_forget: 'dimentico',
+  memory_propose: 'ricordo',
   fs_read: 'leggo un file',
   fs_list: 'guardo una cartella',
   fs_search: 'cerco nei file',
@@ -84,6 +85,7 @@ const TOOL_PHRASE: Readonly<Record<string, string>> = {
 const TOOL_SUBJECT: Readonly<Record<string, string | readonly string[]>> = {
   memory_search: 'query',
   memory_why: 'query',
+  memory_propose: 'object',
   web_search: 'query',
   fs_read: 'path',
   fs_list: 'path',

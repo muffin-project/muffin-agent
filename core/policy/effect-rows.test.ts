@@ -11,6 +11,7 @@ import { inspectCapability } from '../../agent/tools/inspect.js';
 import { mcpCapabilityFor } from '../../agent/tools/mcp.js';
 import { memoryCapability } from '../../agent/tools/memory.js';
 import { memoryForgetCapability } from '../../agent/tools/memory-forget.js';
+import { memoryProposeCapability } from '../../agent/tools/memory-propose.js';
 import { processCapabilities } from '../../agent/tools/process.js';
 import { scheduleCapability } from '../../agent/tools/schedule.js';
 import { searchCapability } from '../../agent/tools/search.js';
@@ -66,6 +67,9 @@ const ALL: readonly CapabilityDecl[] = [
   searchCapability,
   memoryCapability,
   memoryForgetCapability,
+  // ADR-0051 slice 1: stages, never commits — same `memory` row as the other
+  // two verbs, which is exactly the claim (no privileged truth channel).
+  memoryProposeCapability,
   skillCapability,
   documentCapability,
   inspectCapability,
@@ -316,6 +320,7 @@ describe('la matrice normativa è eseguibile', () => {
         'mcp.ts:mcpCapabilityFor',
         'memory.ts:memoryCapability',
         'memory-forget.ts:memoryForgetCapability',
+        'memory-propose.ts:memoryProposeCapability',
         'process.ts:processCapabilities',
         'search.ts:searchCapability',
         'shell.ts:shellCapability',
