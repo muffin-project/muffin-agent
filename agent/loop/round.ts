@@ -403,10 +403,10 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       });
     }
 
-    // #469: a capability search stages schemas during a tool batch, but they
-    // become callable only at the following model boundary. This prevents a
-    // single completion from guessing a hidden tool name, searching, and
-    // executing it before the model has ever received that tool's schema.
+    // #469: a capability search stages schemas during a tool batch and changes
+    // the provider-visible projection only at the following model boundary.
+    // Execution authority is deliberately unchanged: a directly named
+    // registered tool still goes through runTool + the kernel.
     toolContext.capabilityDiscovery?.activatePending();
 
     const reasoning = reasoningFromLegacyThinking(deps.profile.thinking);
