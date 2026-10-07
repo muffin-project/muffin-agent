@@ -177,7 +177,7 @@ describe('#469 production-path capability discovery', () => {
       tenant: 'host',
       surface: 'cli',
       session: sessions.open('capability-discovery'),
-      text: 'crea un trigger su un evento esterno',
+      text: 'sorveglia una condizione remota e reagisci quando cambia',
     });
 
     expect(result.stopped).toBe('answered');
