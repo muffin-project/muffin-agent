@@ -77,6 +77,10 @@ import {
   formatCapabilityGap,
   truncationGap,
 } from './tools/capability-status.js';
+import {
+  capabilityDiscoveryCapability,
+  makeCapabilitySearchTool,
+} from './tools/capability-search.js';
 import { documentCapability, makeDocumentTool } from './tools/document.js';
 import { effectsCapability, makeEffectsTool } from './tools/effects.js';
 import { type FsScope, fsCapabilities, fsList, makeFsTools } from './tools/fs.js';
@@ -954,6 +958,11 @@ export function buildRuntime(
     capabilityGaps.push(searchDiagnosis.gap);
   }
 
+  // #469: registered once like every other native tool, but only projected to
+  // the model on turns whose authority-filtered catalogue exceeds the profile
+  // ceiling. The per-turn projection lives in agent/capability-exposure.ts.
+  tools.push(makeCapabilitySearchTool());
+
   /**
    * The two runtime primitives (requirements-status.md#wait-e-todo-sono-primitive-del-runtime-non-tool) — registered **last**, and the
    * position is a decision rather than an accident of where the import landed.
@@ -1024,6 +1033,7 @@ export function buildRuntime(
       scheduleCapability,
       effectsCapability,
       vaultWriteCapability,
+      capabilityDiscoveryCapability,
       // Declared only when the tool exists. A capability the kernel knows about
       // but nothing can invoke is the harmless direction; the dangerous one is a
       // tool the kernel has never heard of, and registering them together is
