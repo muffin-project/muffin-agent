@@ -209,8 +209,9 @@ export async function proposeMemory(
   // `proposeMemoryRecord` throws on foreign episodes, and derives the tier
   // as the worst of the sources.
   let proposalId: number;
+  let duplicate = false;
   try {
-    ({ id: proposalId } = proposeMemoryRecord(deps.store, {
+    ({ id: proposalId, duplicate } = proposeMemoryRecord(deps.store, {
       tenantId: ctx.tenant,
       subject,
       predicate,
@@ -230,6 +231,16 @@ export async function proposeMemory(
     };
   }
 
+  // A duplicate pending proposal can retain a higher tier from an earlier
+  // context. The durable row is authoritative for every replay response;
+  // current evidence and live taint may raise, but never lower, that tier.
+  const responseTier = (): TrustTier =>
+    Math.max(
+      worstTier(deps.store, ctx.tenant, evidenceIds),
+      ctx.taint(),
+      deps.store.proposalById(ctx.tenant, proposalId)?.trustTier ?? 0,
+    ) as TrustTier;
+
   const ingestDeps: IngestDeps = {
     store: deps.store,
     provider: deps.provider,
@@ -242,10 +253,38 @@ export async function proposeMemory(
     // The response repeats the proposal even when reconciliation failed, so
     // operational failure cannot lower the provenance of the evidence it
     // carries back into the model's context.
-    const tier = Math.max(
-      worstTier(deps.store, ctx.tenant, evidenceIds),
-      ctx.taint(),
-    ) as TrustTier;
+    const tier = responseTier();
+    // Terminal proposal outcomes are durable history. On an idempotent replay,
+    // the referenced fact may since have been retired or superseded; don't
+    // turn an old acceptance into a present-tense claim.
+    const resultFactsStillActive =
+      out.factIds.length > 0 &&
+      out.factIds.every((id) => deps.store.factById(ctx.tenant, id)?.expiredAt === null);
+    if (duplicate && !resultFactsStillActive) {
+      switch (out.status) {
+        case 'accepted':
+          return {
+            content:
+              `La proposta #${proposalId} era stata accettata (fatto #${out.factIds[0]}). ` +
+              'Verifica con memory_search se il fatto è ancora attivo.',
+            tier,
+          };
+        case 'merged':
+          return {
+            content:
+              `La proposta #${proposalId} era stata unita al fatto #${out.factIds[0]}. ` +
+              'Verifica con memory_search lo stato corrente.',
+            tier,
+          };
+        case 'superseded':
+          return {
+            content:
+              `La proposta #${proposalId} aveva aggiornato il fatto #${out.factIds[0]}. ` +
+              'Verifica con memory_search lo stato corrente.',
+            tier,
+          };
+      }
+    }
     switch (out.status) {
       case 'accepted':
         return {
@@ -265,8 +304,8 @@ export async function proposeMemory(
       case 'review':
         return {
           content:
-            `Registrato, ma resta da decidere: ${subject} ${predicate} ${object} (fatto #${out.factIds[0]}, proposta #${proposalId}). ` +
-            `Non darlo per certo finché \`muffin memory review\` non lo chiude.`,
+            `Sottoposto a revisione: ${subject} ${predicate} ${object} (fatto #${out.factIds[0]}, proposta #${proposalId}). ` +
+            `Controlla \`muffin memory review\` per lo stato corrente; questo non era un verdetto del giudice.`,
           tier,
         };
       case 'rejected':
@@ -288,13 +327,10 @@ export async function proposeMemory(
         content:
           `Proposta #${proposalId} registrata durevolmente, ma la riconciliazione è rimandata (${message}): ` +
           `il consolidamento la prenderà al prossimo giro. Non dire che lo ricordi finché non è una credenza.`,
-        tier: Math.max(
-          worstTier(deps.store, ctx.tenant, evidenceIds),
-          ctx.taint(),
-        ) as TrustTier,
+        tier: responseTier(),
       };
     }
-    return { content: `memory_propose: ${message}`, isError: true, tier: 0 };
+    return { content: `memory_propose: ${message}`, isError: true, tier: responseTier() };
   }
 }
 

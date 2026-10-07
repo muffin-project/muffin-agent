@@ -132,6 +132,50 @@ describe('MemoryProposal — propose is durable and idempotent', () => {
     expect(store.pendingProposals(HOST)).toHaveLength(1);
   });
 
+  it('encodes candidate fields without delimiter collisions', () => {
+    const { store } = harness();
+    const ep = episode(store, 'same source');
+    const first = proposeOwner(store, {
+      episodeId: ep,
+      subject: 'owner|x',
+      predicate: 'p',
+    });
+    const second = proposeOwner(store, {
+      episodeId: ep,
+      subject: 'owner',
+      predicate: 'x|p',
+    });
+
+    expect(second.id).not.toBe(first.id);
+    expect(second.duplicate).toBe(false);
+    expect(store.pendingProposals(HOST)).toHaveLength(2);
+  });
+
+  it('treats valid_from as proposal identity and trims it consistently', () => {
+    const { store } = harness();
+    const ep = episode(store, 'same source');
+    const base = {
+      tenantId: HOST,
+      subject: 'owner',
+      predicate: 'accountant',
+      object: 'Mario',
+      producer: 'owner-stated' as const,
+      sourceEpisodeIds: [ep],
+      content: 'owner accountant Mario',
+      confidence: 0.9,
+    };
+    const first = proposeMemoryRecord(store, { ...base, validFrom: '2024-01-01' });
+    const same = proposeMemoryRecord(store, { ...base, validFrom: ' 2024-01-01 ' });
+    const changed = proposeMemoryRecord(store, { ...base, validFrom: '2025-01-01' });
+
+    expect(same).toEqual({ id: first.id, duplicate: true });
+    expect(changed.id).not.toBe(first.id);
+    expect(changed.duplicate).toBe(false);
+    expect(store.proposalById(HOST, first.id)?.validFrom).toBe('2024-01-01');
+    expect(store.proposalById(HOST, changed.id)?.validFrom).toBe('2025-01-01');
+    expect(store.pendingProposals(HOST)).toHaveLength(2);
+  });
+
   it('raises a duplicate pending proposal to the latest runtime-derived context tier', () => {
     const { store } = harness();
     const ep = episode(store, 'inferenza dal prompt');
@@ -625,7 +669,7 @@ describe('MemoryProposal — the duplicate sweep shares the reconciliation lane'
     const subjectId = first.store.upsertEntity(HOST, 'owner', 'person', '2026-08-04T11:00:00Z');
     const firstEpisode = episode(first.store, 'il commercialista è Marco');
     const secondEpisode = episode(first.store, 'il commercialista è Marco');
-    const candidateId = first.store.addFact({
+    const firstDuplicateId = first.store.addFact({
       tenantId: HOST,
       subjectId,
       predicate: 'accountant',
@@ -636,7 +680,7 @@ describe('MemoryProposal — the duplicate sweep shares the reconciliation lane'
       extractionV: 1,
       recordedAt: '2026-08-04T10:00:00Z',
     });
-    const duplicateId = first.store.addFact({
+    const candidateId = first.store.addFact({
       tenantId: HOST,
       subjectId,
       predicate: 'accountant',
@@ -652,9 +696,7 @@ describe('MemoryProposal — the duplicate sweep shares the reconciliation lane'
       producer: 'agent-inference',
       episodeId: episode(first.store, 'inferisco che il commercialista sia Lucia'),
     });
-    const candidateOrder = first.store.activeFacts(HOST, subjectId, 'accountant');
-    expect(candidateOrder[0]?.id).toBe(candidateId);
-    expect(candidateId).toBeLessThan(duplicateId);
+    expect(firstDuplicateId).toBeLessThan(candidateId);
 
     const reconciliation = reconcileProposal(first.deps, HOST, proposalId);
     try {
@@ -662,7 +704,7 @@ describe('MemoryProposal — the duplicate sweep shares the reconciliation lane'
       const sweep = sweepDuplicates(second.store, HOST, NOW());
       expect(sweep).toMatchObject({ busy: true, merges: [] });
       expect(first.store.activeFacts(HOST, subjectId, 'accountant').map((fact) => fact.id)).toEqual(
-        [candidateId, duplicateId],
+        [firstDuplicateId, candidateId],
       );
       const retried = proposeMemoryRecord(second.store, {
         tenantId: HOST,

@@ -6,7 +6,7 @@ Does the intentional-memory path preserve the trust of information available to
 the model when it stages a proposal, and does the shared memory writer lane
 protect a reconciliation snapshot until its asynchronous judge result commits?
 
-Observed on PR #850 head `3b1ae3aaf47f681371d26852f5bebea715d94048`, tree
+Initial observation on PR #850 head `3b1ae3aaf47f681371d26852f5bebea715d94048`, tree
 `e93308733fcb00d8cee251e261731bdbcb73058f`, based on `dev` at
 `b178dd3201d13a658a054e3cf28a005ea724afd5`:
 
@@ -56,6 +56,44 @@ These sources support retaining deterministic write-time provenance and
 challenge how much a scalar or caller-supplied lineage can establish. They do
 not settle Muffin's product policy. The selected changes enforce the current
 ADR/security promise without a schema migration or a new provenance system.
+
+## Follow-up falsifiers found during review
+
+Follow-up review ran against PR #850 head `132ff02d5e70b998589cc9a923541e78d104c9fc`, tree
+`89e3240b13fa13748a9e320e2b37ab2863d62219`, on base `dev` at
+`b178dd3201d13a658a054e3cf28a005ea724afd5`.
+
+Review and production-path falsifiers exposed gaps in the initial implementation:
+
+1. `proposalIdentityKey` joined free-text fields with `|`, so distinct tuples
+   such as (`owner|x`, `p`) and (`owner`, `x|p`) produced the same key. It also
+   omitted `validFrom`, although the row and eventual fact carry that temporal
+   boundary. The key now serializes a versioned tuple and includes trimmed
+   `validFrom`; the stored value uses the same trim. Tests falsify this by
+   staging both delimiter cases and two temporal values against the same
+   source, while confirming whitespace-only differences remain idempotent.
+2. A duplicate pending proposal monotonically keeps the highest durable tier,
+   but `memory_propose` originally returned only the current call's evidence
+   and taint tier. A clean-context retry could therefore report tier 0 while
+   committing a tier-3 fact. Responses now include the persisted proposal tier;
+   the production tool test stages under a busy lane at tier 3, retries at tier
+   0, and asserts both the returned tier and committed fact remain tier 3.
+3. Automatic consolidation rearmed after a complete proposal page, but the
+   manual `muffin memory extract` loop only considered episode and vector
+   progress. When episodes were already extracted, it could close the runtime
+   and cancel the scheduled follow-up with proposals left pending. The CLI loop
+   now continues on a full proposal page within its existing round limit, with
+   tests for the stop condition and command loop.
+4. Idempotent terminal replay could phrase an old acceptance or supersession
+   in the present tense after its fact was retired. The tool now labels those
+   outcomes as history and asks the model to check `memory_search` for current
+   state; new outcomes still use the immediate reconciliation result.
+5. With equal `recorded_at`, reconciliation selected a candidate without the
+   ID tie-break used by the duplicate sweep. The sweep could therefore retire
+   the fact referenced by a just-created open review. Extraction and proposal
+   reconciliation now use the same descending ID tie-break, and a production
+   `Consolidator` test verifies the post-ingest sweep leaves the review open
+   and resolvable.
 
 ## Consequences and reversal signals
 

@@ -15,6 +15,7 @@ import {
 } from '../core/memory/consolidator.js';
 import { EXTRACTION_VERSION } from '../core/memory/schema.js';
 import { ingestPending } from '../core/memory/ingest.js';
+import { sweepDuplicates } from '../core/memory/maintenance.js';
 import type { RecallDeps } from '../core/memory/recall.js';
 import { proposeMemoryRecord } from '../core/memory/proposals.js';
 import { MemoryStore } from '../core/memory/store.js';
@@ -121,6 +122,7 @@ function harness(script: ChatResult[], model = 'light', baseUrl?: string) {
     db,
     budgetExhausted: () => budget.exhausted(),
     ingest: (limit) => ingestPending({ store, provider: light, model, tracer }, 'host', limit),
+    sweep: (at) => sweepDuplicates(store, 'host', at),
   });
 
   const deps: LoopDeps = {
@@ -247,6 +249,43 @@ describe('consolidation starts by itself', () => {
     ).map((r) => r.trigger);
     expect(triggers).toEqual(['idle', 'drain']);
     expect(h.consolidation.isArmed()).toBe(false);
+  });
+
+  it('keeps a review resolvable when the post-ingest sweep finds equal-time duplicates', async () => {
+    const h = harness([
+      reply('{"reasoning":"le due versioni restano aperte","verdict":"review","confidence":0.5}'),
+    ]);
+    const evidence = h.store.addEpisode({
+      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
+      content: 'il commercialista ora è Lucia', trustTier: 0, createdAt: '2026-08-01T12:00:00Z',
+    });
+    const priorEvidence = h.store.addEpisode({
+      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
+      content: 'il commercialista è Marco', trustTier: 0, createdAt: '2026-08-01T11:00:00Z',
+    });
+    const ownerId = h.store.upsertEntity('host', 'owner', 'person', '2026-08-01T11:00:00Z');
+    const addMarco = () => h.store.addFact({
+      tenantId: 'host', subjectId: ownerId, predicate: 'accountant', objectValue: 'Marco',
+      episodeId: priorEvidence, trustTier: 0, confidence: 0.9, extractionV: 1,
+      recordedAt: '2026-08-01T11:00:00Z',
+    });
+    const olderDuplicate = addMarco();
+    const sweepKeeper = addMarco();
+    h.store.markExtracted('host', [evidence, priorEvidence], EXTRACTION_VERSION);
+    proposeMemoryRecord(h.store, {
+      tenantId: 'host', subject: 'owner', subjectKind: 'person', predicate: 'accountant',
+      object: 'Lucia', producer: 'owner-stated', sourceEpisodeIds: [evidence],
+      content: 'il commercialista ora è Lucia', confidence: 0.95,
+    });
+
+    const result = await h.consolidation.runNow('manual');
+
+    expect(result.report?.needsReview).toHaveLength(1);
+    expect(h.store.factById('host', olderDuplicate)?.expiredAt).not.toBeNull();
+    expect(h.store.factById('host', sweepKeeper)?.expiredAt).toBeNull();
+    expect(h.store.openContradictions('host')).toMatchObject([
+      { existingFactId: sweepKeeper },
+    ]);
   });
 
   it('embeds the episode too — the half of recall nothing else feeds', async () => {

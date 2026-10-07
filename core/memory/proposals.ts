@@ -99,19 +99,23 @@ export function proposalIdentityKey(input: {
   subject: string;
   predicate: string;
   object: string;
+  validFrom?: string | null;
   producer: ProposalProducer;
   sourceEpisodeIds: number[];
 }): string {
   const norm = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, ' ');
-  const episodes = [...new Set(input.sourceEpisodeIds)].sort((a, b) => a - b).join(',');
-  return [
+  const episodes = [...new Set(input.sourceEpisodeIds)].sort((a, b) => a - b);
+  // Encode the semantic tuple as JSON rather than joining fields with a
+  // delimiter that candidate text itself may contain.
+  return JSON.stringify([
     'v1',
     norm(input.subject),
     norm(input.predicate),
     norm(input.object),
+    input.validFrom?.trim() || null,
     input.producer,
     episodes,
-  ].join('|');
+  ]);
 }
 
 /**
@@ -159,6 +163,7 @@ export function proposeMemoryRecord(
     throw new Error('memory_propose: subject and predicate must both be non-blank.');
   }
   const object = input.object.trim();
+  const validFrom = input.validFrom?.trim() || null;
   if (!PROPOSAL_PRODUCERS.includes(input.producer)) {
     throw new Error(`memory_propose: unknown producer "${input.producer}".`);
   }
@@ -186,14 +191,15 @@ export function proposeMemoryRecord(
       subject,
       predicate,
       object,
+      validFrom,
       producer: input.producer,
       sourceEpisodeIds: episodeIds,
     }),
     subject,
     subjectKind: input.subjectKind?.trim() || 'person',
     predicate,
-    objectValue: input.object,
-    validFrom: input.validFrom ?? null,
+    objectValue: object,
+    validFrom,
     producer: input.producer,
     sourceEpisodeIds: episodeIds,
     content: input.content,

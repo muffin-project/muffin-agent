@@ -6,13 +6,17 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type ChatResult, type Provider, ProviderError } from '../agent/providers/types.js';
 import { paths } from '../core/config/config.js';
-import { reconcileProposal } from '../core/memory/ingest.js';
+import { Consolidator } from '../core/memory/consolidator.js';
+import { ingestPending, reconcileProposal } from '../core/memory/ingest.js';
+import { sweepDuplicates } from '../core/memory/maintenance.js';
 import { proposeMemoryRecord } from '../core/memory/proposals.js';
+import { EXTRACTION_VERSION } from '../core/memory/schema.js';
 import { MemoryStore } from '../core/memory/store.js';
 import { VectorIndex } from '../core/memory/vectors.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { runInit } from './init.js';
 import {
+  cmdMemoryExtract,
   cmdMemoryPin,
   cmdMemoryProposals,
   cmdMemoryReview,
@@ -686,7 +690,9 @@ describe('muffin memory search — cmdMemorySearch reached beyond the argv rejec
  * vectors, in sync» — cioe' alla lettera il difetto da cui nasce la slice.
  */
 describe('drenare l indice e progresso quanto estrarre', () => {
-  const giro = (marked: number, indexed: number, fetched: number) => ({ marked, indexed, fetched });
+  const giro = (marked: number, indexed: number, fetched: number, proposalPageFull = false) => ({
+    marked, indexed, fetched, proposalPageFull,
+  });
 
   it('continua quando l estrazione e ferma ma l indice si sta drenando', () => {
     // Il caso del dopo-cambio: niente da estrarre, 200 chunk scritti.
@@ -706,6 +712,79 @@ describe('drenare l indice e progresso quanto estrarre', () => {
   it('il tetto sui giri vale comunque, anche mentre l indice si drena', () => {
     // Senza, un indice enorme trasformerebbe il comando in una nottata.
     expect(valeUnAltroGiro(giro(0, 200, 0), 8, 200)).toBe(false);
+  });
+
+  it('continua una pagina piena di proposte anche senza progresso episodio', () => {
+    expect(valeUnAltroGiro(giro(0, 0, 0, true), 1, 50)).toBe(true);
+    expect(valeUnAltroGiro(giro(0, 0, 0, true), 2, 50)).toBe(false);
+  });
+
+  it('il comando manuale richiede la pagina successiva prima di chiudere', async () => {
+    const db = new DatabaseCtor(':memory:');
+    const store = new MemoryStore(db);
+    const home = mkdtempSync(join(tmpdir(), 'muffin-memory-manual-drain-'));
+    const evidenceIds = Array.from({ length: 21 }, (_, i) =>
+      store.addEpisode({
+        tenantId: 'host',
+        connector: 'cli',
+        threadKey: 't',
+        role: 'user',
+        kind: 'message',
+        content: `evidence ${i}`,
+        trustTier: 0,
+        createdAt: `2026-08-01T10:${String(i).padStart(2, '0')}:00Z`,
+      }),
+    );
+    store.markExtracted('host', evidenceIds, EXTRACTION_VERSION);
+    evidenceIds.forEach((episodeId, i) =>
+      proposeMemoryRecord(store, {
+        tenantId: 'host',
+        subject: 'owner',
+        predicate: `note_${i}`,
+        object: `value_${i}`,
+        producer: 'agent-inference',
+        sourceEpisodeIds: [episodeId],
+        content: `inference ${i}`,
+        confidence: 0.9,
+      }),
+    );
+    const provider: Provider = {
+      kind: 'openai-compat',
+      async chat(): Promise<ChatResult> {
+        return {
+          text: '{"reasoning":"no conflict","verdict":"coexist","confidence":0.9}',
+          toolCalls: [],
+          stopReason: 'end',
+          usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          model: 'test',
+        };
+      },
+    };
+    const tracer = new SimpleTracer(new JsonlExporter(home));
+    const consolidation = new Consolidator({
+      db,
+      budgetExhausted: () => false,
+      ingest: (limit) => ingestPending({ store, provider, model: 'test', tracer }, 'host', limit),
+      sweep: (at) => sweepDuplicates(store, 'host', at),
+      drainMs: 60_000,
+    });
+    const { out } = capture();
+    vi.doMock('../agent/runtime.js', () => ({
+      buildRuntime: () => ({
+        close: () => consolidation.stop(),
+        consolidation,
+      }),
+    }));
+    try {
+      expect(await cmdMemoryExtract(home, 50)).toBe(0);
+      expect(store.pendingProposals('host')).toHaveLength(0);
+      expect(store.stats('host').activeFacts).toBe(21);
+      expect(out.join('')).toContain('21 fatti');
+    } finally {
+      vi.doUnmock('../agent/runtime.js');
+      consolidation.stop();
+      db.close();
+    }
   });
 });
 

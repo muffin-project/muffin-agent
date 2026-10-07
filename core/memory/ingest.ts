@@ -664,7 +664,9 @@ async function reconcile(
   // different thing entirely: the belief this one might be replacing, which is
   // the latest. Leaving it as `existing[0]` would have silently made "the most
   // important fact" the supersede candidate the day that ORDER BY changed.
-  const candidate = [...existing].sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0]!;
+  const candidate = [...existing].sort(
+    (a, b) => b.recordedAt.localeCompare(a.recordedAt) || b.id - a.id,
+  )[0]!;
 
   // Same thing said twice is not news — but "the same thing" means the
   // CURRENT belief, i.e. `candidate`, and only that. This used to check every
@@ -1135,7 +1137,9 @@ export async function reconcileProposalLocked(
       });
       return { raced: false as const, status: 'accepted' as const, factIds: [factId] };
     }
-    const candidate = [...existing].sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0]!;
+    const candidate = [...existing].sort(
+      (a, b) => b.recordedAt.localeCompare(a.recordedAt) || b.id - a.id,
+    )[0]!;
     if ((candidate.objectValue ?? candidate.objectName ?? '').toLowerCase() === incoming.object.toLowerCase()) {
       deps.store.resolveProposal(tenantId, proposalId, {
         status: 'merged',

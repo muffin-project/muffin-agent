@@ -194,10 +194,14 @@ export async function cmdMemorySearch(
  * indice enorme di trasformare un comando in una nottata.
  */
 export function valeUnAltroGiro(
-  report: { marked: number; indexed: number; fetched: number },
+  report: { marked: number; indexed: number; fetched: number; proposalPageFull?: boolean },
   rounds: number,
   limit: number,
 ): boolean {
+  // A complete proposal page is independent progress: the episode page may
+  // be empty or short because those episodes were extracted in an earlier
+  // run. Keep draining it within the same round budget.
+  if (report.proposalPageFull) return rounds * 25 < limit;
   if (report.marked === 0 && report.indexed === 0) return false;
   // Solo quando è l'estrazione a essere a corto di lavoro: con `marked` a 0 e
   // l'indice ancora da drenare, `fetched` è 0 per costruzione, e questa riga

@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
+import { resolveContradiction } from '../../core/memory/maintenance.js';
 import { MemoryStore } from '../../core/memory/store.js';
 import { JsonlExporter, SimpleTracer } from '../../core/tracing/tracer.js';
 import type { ChatCall, ChatResult, Provider } from '../providers/types.js';
@@ -221,7 +222,7 @@ describe('memory_propose — stage durably, reconcile canonically, answer honest
     const review = h.store.pendingReview('host')[0]!;
 
     expect(out.isError).toBeUndefined();
-    expect(out.content).toContain('resta da decidere');
+    expect(out.content).toContain('Sottoposto a revisione');
     expect(out.content).not.toContain('Ricordo:');
     expect(out.tier).toBe(3);
     expect(proposal.trustTier).toBe(3);
@@ -237,7 +238,7 @@ describe('memory_propose — stage durably, reconcile canonically, answer honest
     expect(first.isError).toBeUndefined();
     expect(second.isError).toBeUndefined();
     // Same evidence (the turn's message), same candidate: the retry adopts
-    // the first call's recorded outcome instead of doubling the belief.
+    // the first call's recorded outcome and verifies that the fact is current.
     expect(first.content).toContain('Ricordo:');
     expect(second.content).toContain('Ricordo:');
     const me = h.store.findEntity('host', 'owner')!;
@@ -247,6 +248,31 @@ describe('memory_propose — stage durably, reconcile canonically, answer honest
     expect(h.store.pendingProposals('host')).toHaveLength(0);
   });
 
+  it('does not replay an old acceptance as current after its fact is retired', async () => {
+    const h = seed();
+    const first = await proposeMemory(h.deps, CTX, ricorda);
+    const me = h.store.findEntity('host', 'owner')!;
+    const acceptedFact = h.store.activeFacts('host', me, 'accountant')[0]!;
+    expect(first.content).toContain('Ricordo:');
+
+    const replacementEpisode = h.store.addEpisode({
+      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
+      content: 'il commercialista ora è Lucia', trustTier: 0, createdAt: '2026-08-04T11:30:00Z',
+    });
+    const replacement = h.store.addFact({
+      tenantId: 'host', subjectId: me, predicate: 'accountant', objectValue: 'Lucia',
+      episodeId: replacementEpisode, trustTier: 0, confidence: 0.9, extractionV: 1,
+      recordedAt: '2026-08-04T11:30:00Z',
+    });
+    h.store.supersede('host', acceptedFact.id, replacement, '2026-08-04T11:30:00Z');
+
+    const replay = await proposeMemory(h.deps, CTX, ricorda);
+    expect(replay.content).toContain('era stata accettata');
+    expect(replay.content).toContain('memory_search');
+    expect(replay.content).not.toContain('Ricordo:');
+    expect(h.store.activeFacts('host', me, 'accountant').map((fact) => fact.id)).toEqual([replacement]);
+  });
+
   it('a held lane lock records the intent and says so — never claims the belief', async () => {
     const h = seed();
     // Held by someone else, still alive: the parent process's pid can only
@@ -254,16 +280,19 @@ describe('memory_propose — stage durably, reconcile canonically, answer honest
     // (same holder), which is why the foreign pid matters here.
     const held = h.store.acquireIngestLock(NOW(), process.ppid);
     expect('held' in held).toBe(false);
+    const taintedContext = { ...CTX, taint: () => 3 as const };
     try {
       // Explicit NOW: the tool defaults to the real clock, against which an
       // August claim reads as hard-stale and stealable. Same clock both
       // sides, like production.
-      const out = await proposeMemory(h.deps, CTX, ricorda, NOW);
+      const out = await proposeMemory(h.deps, taintedContext, ricorda, NOW);
       expect(out.isError).toBeUndefined();
       expect(out.content).toContain('rimandata');
       expect(out.content).not.toContain('Ricordo:');
       // Durable: the proposal survived, the belief does not exist yet.
       expect(h.store.pendingProposals('host')).toHaveLength(1);
+      expect(out.tier).toBe(3);
+      expect(h.store.pendingProposals('host')[0]!.trustTier).toBe(3);
       expect(h.store.hasActiveFacts('host')).toBe(false);
     } finally {
       h.store.releaseIngestLock(process.ppid);
@@ -271,8 +300,13 @@ describe('memory_propose — stage durably, reconcile canonically, answer honest
     // And the next drain converges: exactly one belief.
     const drained = await proposeMemory(h.deps, CTX, ricorda);
     expect(drained.content).toContain('Ricordo:');
+    expect(drained.tier).toBe(3);
     const me = h.store.findEntity('host', 'owner')!;
-    expect(h.store.activeFacts('host', me, 'accountant')).toHaveLength(1);
+    const facts = h.store.activeFacts('host', me, 'accountant');
+    expect(facts).toHaveLength(1);
+    expect(facts[0]!.trustTier).toBe(3);
+    const replayed = await proposeMemory(h.deps, CTX, ricorda);
+    expect(replayed.tier).toBe(3);
   });
 
   it('supersede answers with the update, review answers with the caution', async () => {
@@ -311,9 +345,47 @@ describe('memory_propose — stage durably, reconcile canonically, answer honest
       object: 'Cagliari',
       kind: 'agent-inference',
     });
-    expect(review.content).toContain('resta da decidere');
+    expect(review.content).toContain('Sottoposto a revisione');
     expect(review.content).not.toContain('Ricordo:');
     // Both stay: the cautious outcome never retires quietly.
     expect(h.store.activeFacts('host', me, 'city')).toHaveLength(2);
+  });
+
+  it('describes review as a past outcome after the owner resolves it', async () => {
+    const h = seed(['{"reasoning":"non chiaro","verdict":"review","confidence":0.5}']);
+    const me = h.store.upsertEntity('host', 'owner', 'person', '2026-08-04T10:00:00Z');
+    h.store.addFact({
+      tenantId: 'host',
+      subjectId: me,
+      predicate: 'accountant',
+      objectValue: 'Marco',
+      episodeId: h.turnEpisode,
+      trustTier: 0,
+      confidence: 0.9,
+      extractionV: 1,
+      recordedAt: '2026-08-04T10:00:00Z',
+    });
+    const proposal = {
+      subject: 'owner',
+      predicate: 'accountant',
+      object: 'Lucia',
+      kind: 'agent-inference',
+    };
+
+    const first = await proposeMemory(h.deps, CTX, proposal);
+    const row = h.store.listProposals('host', { status: 'review' })[0]!;
+    const incomingFactId = row.resultingFactIds[0]!;
+    expect(first.content).toContain('Sottoposto a revisione');
+    expect(h.store.openContradictions('host')).toHaveLength(1);
+
+    expect(resolveContradiction(h.store, 'host', incomingFactId, NOW())).toHaveLength(1);
+    expect(h.store.openContradictions('host')).toHaveLength(0);
+
+    const replay = await proposeMemory(h.deps, CTX, proposal);
+    expect(replay.content).toContain('Sottoposto a revisione');
+    expect(replay.content).toContain('stato corrente');
+    expect(replay.content).not.toContain('resta da decidere');
+    expect(h.store.activeFacts('host', me, 'accountant')).toHaveLength(1);
+    expect(h.store.listProposals('host', { status: 'review' })).toHaveLength(1);
   });
 });
