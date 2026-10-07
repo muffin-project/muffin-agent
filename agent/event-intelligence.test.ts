@@ -262,7 +262,7 @@ describe('EI wake -> real Muffin TurnStore', () => {
       process.pid,
     );
 
-    let emitted = false;
+    let pollCount = 0;
     const connection = {
       connectionId: 'demo',
       serverId: 'demo',
@@ -288,9 +288,11 @@ describe('EI wake -> real Muffin TurnStore', () => {
           };
         }
         if (method === 'events/poll') {
-          if (!emitted) {
-            emitted = true;
+          pollCount += 1;
+          if (pollCount <= 2) {
             return {
+              // The second poll deliberately replays the SAME occurrence.
+              // EI + Muffin receipt identity must not mint a second Work.
               events: [
                 {
                   eventId: 'real-store-event-1',
@@ -299,7 +301,7 @@ describe('EI wake -> real Muffin TurnStore', () => {
                   data: { value: 42 },
                 },
               ],
-              cursor: 'done',
+              cursor: `replay-${pollCount}`,
               hasMore: false,
               nextPollMs: 60_000,
             };
@@ -358,6 +360,8 @@ describe('EI wake -> real Muffin TurnStore', () => {
         externalId: 'local',
       });
 
+      // Replay the exact same external occurrence. The deterministic wake
+      // receipt is also the Turn id, so this must remain one durable row.
       await embedded.host.runtime.mcpEventsClient.pollAll();
       const secondPass = runtime.deps.turns
         .due(new Date('2026-10-07T10:02:00.000Z'), 20)

@@ -67,7 +67,7 @@ import {
  */
 export function enqueueTurn(deps: LoopDeps, input: TurnInput): string {
   deps.prepareTurn?.();
-  const id = randomBytes(16).toString('hex');
+  const id = input.id ?? randomBytes(16).toString('hex');
   deps.turns.enqueue({
     id,
     principal: input.principal,
