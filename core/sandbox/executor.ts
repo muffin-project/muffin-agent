@@ -107,6 +107,42 @@ const SELFTEST_SENTINEL_NAME = '.muffin-selftest-sentinel';
  */
 const SELFTEST_LEG_TIMEOUT_MS = 10_000;
 /**
+ * Active hook filenames recognized by Git's current githooks manual. Git ships
+ * `.sample` files too, so this self-test probes only the active names and keeps
+ * the default templates writable. The AppArmor policy carries the same list.
+ */
+const ACTIVE_GIT_HOOK_NAMES = [
+  'applypatch-msg',
+  'pre-applypatch',
+  'post-applypatch',
+  'pre-commit',
+  'pre-merge-commit',
+  'prepare-commit-msg',
+  'commit-msg',
+  'post-commit',
+  'pre-rebase',
+  'post-checkout',
+  'post-merge',
+  'pre-push',
+  'pre-receive',
+  'update',
+  'proc-receive',
+  'post-receive',
+  'post-update',
+  'reference-transaction',
+  'push-to-checkout',
+  'pre-auto-gc',
+  'post-rewrite',
+  'sendemail-validate',
+  'fsmonitor-watchman',
+  'fsmonitor-watchmanv2',
+  'p4-changelist',
+  'p4-prepare-changelist',
+  'p4-post-changelist',
+  'p4-pre-submit',
+  'post-index-change',
+] as const;
+/**
  * Belt-and-suspenders over the two per-leg timeouts: bounds `initialize()`
  * itself, which has no timeout of its own (it may start a network bridge).
  * "Nessun blocco eterno" — a hang here must resolve to unavailable, not hang
@@ -783,13 +819,20 @@ export class SandboxExecutor {
   private async selfTestNestedGitHookWrite(cwd: string): Promise<ContainmentFailure | null> {
     const command = [
       "printf 'muffin sandbox nested-hook self-test\\n'",
+      `apparmor_label=unavailable
+if [ -r /proc/self/attr/current ]; then
+  IFS= read -r apparmor_label < /proc/self/attr/current || apparmor_label=unavailable
+fi
+printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
       'mkdir -p ordinary empty-template/hooks',
       'printf ordinary > ordinary/file.txt',
-      'git init --quiet --template=empty-template nested',
+      process.platform === 'darwin'
+        ? 'git init --quiet --template=empty-template nested'
+        : 'git init --quiet nested',
       'printf tracked > nested/tracked.txt',
       'git -C nested add tracked.txt',
       'mkdir -p nested/.git/hooks',
-      'if printf hook > nested/.git/hooks/pre-commit; then printf "muffin-hook-write: allowed\\n"; else printf "muffin-hook-write: denied\\n"; fi',
+      `for hook in ${ACTIVE_GIT_HOOK_NAMES.join(' ')}; do if printf hook > "nested/.git/hooks/$hook" 2>/dev/null; then printf "muffin-hook-write: allowed:%s\\n" "$hook"; else printf "muffin-hook-write: denied:%s\\n" "$hook"; fi; done`,
       'test -f ordinary/file.txt',
       'test -f nested/tracked.txt',
       'test -f nested/.git/index',
@@ -841,19 +884,24 @@ export class SandboxExecutor {
           'check that the real sandbox invocation can write ordinary workspace files and run Git in a nested repository',
       };
     }
-    if (result.stdout.includes('muffin-hook-write: allowed')) {
+    const appArmorLabel =
+      /muffin-apparmor-label: ([^\r\n]+)/.exec(result.stdout)?.[1]?.trim() ?? 'unavailable';
+    const allowedHook = /muffin-hook-write: allowed:([a-z0-9-]+)/.exec(result.stdout)?.[1];
+    if (allowedHook) {
       return {
         reason: 'git_hooks_unprotected',
-        detail:
-          'a contained process created nested/.git/hooks/pre-commit after the sandbox profile was built',
+        detail: `a contained process created nested/.git/hooks/${allowedHook} after the sandbox profile was built (AppArmor label: ${appArmorLabel})`,
         remedy:
-          'load Muffin’s bubblewrap AppArmor profile with the explicit Git-hook deny rule attached to the real bwrap binary; on macOS verify Seatbelt still denies .git/hooks writes. Shell execution remains disabled until the check holds',
+          'on Linux, render scripts/install/bwrap.apparmor for the exact host bwrap binary and load it; the writer label should contain muffin-bwrap//&muffin-unpriv-bwrap. See docs/user/INSTALL.md. On macOS verify Seatbelt still denies .git/hooks writes. Shell calls remain refused until the check holds',
       };
     }
-    if (!result.stdout.includes('muffin-hook-write: denied')) {
+    const missingDenials = ACTIVE_GIT_HOOK_NAMES.filter(
+      (hook) => !result.stdout.includes(`muffin-hook-write: denied:${hook}`),
+    );
+    if (missingDenials.length > 0) {
       return {
         reason: 'contain_failed',
-        detail: `the nested Git-hook self-test returned without a recognisable deny result (${JSON.stringify(result.stdout.slice(0, 200))})`,
+        detail: `the nested Git-hook self-test did not report denials for ${missingDenials.join(', ')} (AppArmor label: ${appArmorLabel})`,
         remedy:
           'check that the sandbox can report a concrete denial for a newly-created nested Git hook',
       };

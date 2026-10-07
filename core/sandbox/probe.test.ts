@@ -288,6 +288,9 @@ describe('the Linux branch (bubblewrap)', () => {
     expect(probe.reason).toBe('userns_denied');
     expect(probe.detail).toContain('RTM_NEWADDR');
     expect(probe.remedy).toMatch(/apparmor/i);
+    expect(probe.remedy).toContain('scripts/install/bwrap.apparmor');
+    expect(probe.remedy).toMatch(/hook/i);
+    expect(probe.remedy).toContain('does not provide the hook protection');
   });
 
   /**

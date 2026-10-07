@@ -103,6 +103,7 @@ describe('the registered shell write tool contains Git hooks through the product
         'git -C nested add tracked.txt',
         'mkdir -p nested/.git/hooks',
         'if printf nested-hook > nested/.git/hooks/pre-commit; then printf writable; else printf denied; fi > nested-hook-result.txt',
+        'if printf nested-fsmonitor > nested/.git/hooks/fsmonitor-watchmanv2; then printf writable; else printf denied; fi > nested-fsmonitor-result.txt',
         'if printf top-level-hook > .git/hooks/pre-commit; then printf writable; else printf denied; fi > top-level-hook-result.txt',
       ].join(' && ');
 
@@ -144,8 +145,12 @@ describe('the registered shell write tool contains Git hooks through the product
         expect(readFileSync(join(workspace, 'nested', 'tracked.txt'), 'utf8')).toBe('tracked');
         expect(readFileSync(join(workspace, 'nested', '.git', 'index'))).toBeTruthy();
         expect(readFileSync(join(workspace, 'nested-hook-result.txt'), 'utf8')).toBe('denied');
+        expect(readFileSync(join(workspace, 'nested-fsmonitor-result.txt'), 'utf8')).toBe('denied');
         expect(readFileSync(join(workspace, 'top-level-hook-result.txt'), 'utf8')).toBe('denied');
         expect(existsSync(join(workspace, 'nested', '.git', 'hooks', 'pre-commit'))).toBe(false);
+        expect(
+          existsSync(join(workspace, 'nested', '.git', 'hooks', 'fsmonitor-watchmanv2')),
+        ).toBe(false);
         expect(existsSync(join(workspace, '.git', 'hooks', 'pre-commit'))).toBe(false);
       } finally {
         runtime.close();

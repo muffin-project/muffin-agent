@@ -73,9 +73,17 @@ function mockProtectedSandbox(options: { hookWriteAllowed?: boolean; unixFilterA
           ? [
               '/bin/bash',
               '-c',
-              options.hookWriteAllowed
-                ? 'printf "muffin-hook-write: allowed\\nmuffin sandbox hook self-test positive controls passed\\n"'
-                : 'printf "muffin-hook-write: denied\\nmuffin sandbox hook self-test positive controls passed\\n"',
+              (() => {
+                const hookNames = command.match(/for hook in ([^;]+); do/)?.[1]?.split(/\s+/) ?? [];
+                const hookResults = hookNames
+                  .map((hook) => {
+                    const result =
+                      options.hookWriteAllowed && hook === 'pre-commit' ? 'allowed' : 'denied';
+                    return `muffin-hook-write: ${result}:${hook}`;
+                  })
+                  .join('\\n');
+                return `printf "muffin-apparmor-label: muffin-bwrap//&muffin-unpriv-bwrap (enforce)\\n${hookResults}\\nmuffin sandbox hook self-test positive controls passed\\n"`;
+              })(),
             ]
           : command.includes('afunix.sock') && !options.unixFilterAbsent
             ? ['/bin/sh', '-c', 'echo EPERM >&2; exit 1']
@@ -178,6 +186,14 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     if (status.available) return;
     expect(status.reason).toBe('git_hooks_unprotected');
     expect(status.detail).toContain('nested/.git/hooks/pre-commit');
+    expect(status.detail).toContain('muffin-bwrap//&muffin-unpriv-bwrap');
+    expect(status.remedy).toContain('scripts/install/bwrap.apparmor');
+    expect(status.remedy).toContain('docs/user/INSTALL.md');
+    const nestedHookCommand = wrapWithSandboxArgv.mock.calls
+      .map(([command]) => command)
+      .find((command) => command.includes('muffin sandbox nested-hook self-test'));
+    expect(nestedHookCommand).toContain('IFS= read -r apparmor_label < /proc/self/attr/current');
+    expect(nestedHookCommand).not.toContain('cat /proc/self/attr/current');
 
     const dir = mktempWorkspace();
     const witness = join(dir, 'caller-command-ran.txt');

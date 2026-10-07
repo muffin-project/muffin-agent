@@ -279,8 +279,8 @@ case "$(uname -s)" in
     done
     if [ -n "$missing_sandbox" ]; then
       apt_install "the sandbox — without it every command asks you first" 0 bubblewrap socat ripgrep || true
-      say "      On Ubuntu 24.04+ bwrap also needs an AppArmor profile granting userns."
     fi
+    say "      Linux shell tools require Muffin's hook-protection AppArmor profile; see docs/user/INSTALL.md."
     ;;
   Darwin)
     # @anthropic-ai/sandbox-runtime uses the built-in sandbox-exec/Seatbelt

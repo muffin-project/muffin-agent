@@ -147,11 +147,16 @@ jobs:
       # riproduce esattamente la configurazione in cui il sandbox del vecchio
       # Muffin è stato un no-op per due mesi.
       #
-      # Load the same profile template shipped for the Muffin-owned bwrap.
-      # `default_allow` honors the explicit active-hook denies below; the old
-      # `unconfined` mode did not provide that enforcement contract.
+      # Load the shared enforce-mode profile. Record the parser build and the
+      # userns restriction so a real-path failure has actionable host evidence.
       - name: profilo AppArmor condiviso per bwrap
         run: |
+          apparmor_parser --version
+          dpkg-query -W -f='apparmor=${Version}\n' apparmor
+          if [ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            printf 'kernel.apparmor_restrict_unprivileged_userns='
+            cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          fi
           sed 's|<BWRAP_BINARY>|/usr/bin/bwrap|' scripts/install/bwrap.apparmor \
             | sudo tee /etc/apparmor.d/muffin-bwrap > /dev/null
           sudo apparmor_parser -r /etc/apparmor.d/muffin-bwrap
@@ -338,6 +343,12 @@ jobs:
       - if: steps.scope.outputs.run != 'false'
         name: profilo AppArmor condiviso per bwrap
         run: |
+          apparmor_parser --version
+          dpkg-query -W -f='apparmor=${Version}\n' apparmor
+          if [ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            printf 'kernel.apparmor_restrict_unprivileged_userns='
+            cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          fi
           sed 's|<BWRAP_BINARY>|/usr/bin/bwrap|' scripts/install/bwrap.apparmor \
             | sudo tee /etc/apparmor.d/muffin-bwrap > /dev/null
           sudo apparmor_parser -r /etc/apparmor.d/muffin-bwrap

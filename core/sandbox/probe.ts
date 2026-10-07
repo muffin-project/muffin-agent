@@ -276,9 +276,11 @@ export const SANDBOX_BINARIES_REMEDY =
   'Fedora: `sudo dnf install bubblewrap socat ripgrep`';
 
 export const APPARMOR_REMEDY =
-  'unprivileged user namespaces are restricted (Ubuntu 24.04+ default). ' +
-  'Add an AppArmor profile for bwrap granting `userns` and reload it with apparmor_parser -r; ' +
-  'lowering kernel.apparmor_restrict_unprivileged_userns works too but disarms the protection host-wide';
+  'unprivileged user namespaces may be restricted. ' +
+  'The Linux shell boundary also needs Muffin’s AppArmor policy attached to the exact bwrap binary. ' +
+  'Render `scripts/install/bwrap.apparmor` for `command -v bwrap` and load it with `apparmor_parser -r`; ' +
+  'keep its nested Git-hook denies and child stack. See `docs/user/INSTALL.md`. ' +
+  'Lowering the host-wide userns sysctl does not provide the hook protection';
 
 /**
  * Ubuntu 24.04's `kernel.apparmor_restrict_unprivileged_userns=1` (ADR-0018's
