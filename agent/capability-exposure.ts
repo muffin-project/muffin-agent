@@ -126,7 +126,7 @@ function takeCore<T extends CapabilityTool>(
 export function createCapabilityExposure<T extends CapabilityTool>(input: {
   readonly eligible: readonly T[];
   readonly maxToolsExposed: number;
-  readonly discoveryTool: T;
+  readonly discoveryTool?: T | undefined;
   readonly coreNames?: readonly string[] | undefined;
 }): CapabilityExposure<T> {
   const max = input.maxToolsExposed;
@@ -134,9 +134,11 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
     throw new Error('maxToolsExposed must be a positive integer');
   }
 
-  const catalog = input.eligible.filter(
-    (tool) => tool.spec.name !== input.discoveryTool.spec.name,
-  );
+  const discoveryName = input.discoveryTool?.spec.name;
+  const catalog =
+    discoveryName === undefined
+      ? [...input.eligible]
+      : input.eligible.filter((tool) => tool.spec.name !== discoveryName);
 
   if (catalog.length <= max) {
     return {
@@ -144,6 +146,10 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
       pressured: false,
       hiddenCount: 0,
     };
+  }
+
+  if (input.discoveryTool === undefined) {
+    throw new Error('capability_search is required when the authorized catalogue exceeds maxToolsExposed');
   }
 
   const preferred = input.coreNames ?? DEFAULT_CORE_TOOL_NAMES;
