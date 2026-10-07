@@ -85,7 +85,12 @@ describe('quali tool vede davvero un turno', () => {
   it('l’ordine di registrazione è quello dichiarato, e cambiarlo fallisce qui', () => {
     const rt = realRuntime();
     rt.close();
-    expect(rt.names.filter((n) => !SANDBOXED.includes(n))).toEqual(REGISTERED);
+    expect(
+      rt.names.filter(
+        (n) => !SANDBOXED.includes(n) && n !== CAPABILITY_SEARCH_TOOL_NAME,
+      ),
+    ).toEqual(REGISTERED);
+    expect(rt.names).toContain(CAPABILITY_SEARCH_TOOL_NAME);
   });
 
   it('baseToolOrder non diverge dal registro reale, sandbox della macchina compresa', () => {
@@ -102,7 +107,9 @@ describe('quali tool vede davvero un turno', () => {
     // host che ne offrisse una sola sarebbe la degradazione silenziosa che
     // ADR-0074 punto 4 vieta — qui si vede, invece di passare inosservata.
     expect(SANDBOXED.some((n) => rt.names.includes(n))).toBe(conteneva);
-    expect(baseToolOrder({ sandboxAvailable: conteneva, searchOn: false })).toEqual(rt.names);
+    expect(baseToolOrder({ sandboxAvailable: conteneva, searchOn: false })).toEqual(
+      rt.names.filter((name) => name !== CAPABILITY_SEARCH_TOOL_NAME),
+    );
   });
 
   it('su consumer-local resta il fast path ordinario finché il catalogo entra nel profilo', () => {
