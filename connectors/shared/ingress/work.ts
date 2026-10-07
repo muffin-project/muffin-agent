@@ -5,7 +5,7 @@ import { LANE_TURNS, type ModelLane } from '../../../core/turns/model-lane.js';
 import type { SessionStore } from '../../../core/session/store.js';
 import type { SurfaceIdentity } from '../../../core/surface/types.js';
 import type { InboundEvent, IngressPort } from './types.js';
-import { dispatchRuntimeEvent, type RuntimeEvent } from '../../../agent/automation.js';
+import { dispatchRuntimeEvent, type AutomationRule, type RuntimeEvent } from '../../../agent/automation.js';
 
 /**
  * Slice 14, the `work` stage: creating the turn and its durable record.
@@ -49,6 +49,15 @@ export type WorkDeps = {
    * sua: il gateway la sua condivisa, il REPL senza gateway la sua.
    */
   readonly lane: ModelLane;
+  /**
+   * Rules already resolved for this process/tenant.
+   *
+   * Deliberately injected rather than persisted here: #605 owns the execution
+   * seam, while the durable projection for message rules is the remaining
+   * design decision. Ordinary production callers omit this and keep today's
+   * zero-rule path byte-for-byte.
+   */
+  readonly automationRules?: readonly AutomationRule<TurnResult>[] | undefined;
 };
 
 export type WorkRequest = {
@@ -105,7 +114,7 @@ export async function runWork(
     },
   };
 
-  return dispatchRuntimeEvent(runtimeEvent, [], {
+  return dispatchRuntimeEvent(runtimeEvent, deps.automationRules ?? [], {
     mode: 'agent',
     run: () => runAgentWork(deps, port, event, req),
   });
