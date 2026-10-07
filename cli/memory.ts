@@ -5,7 +5,12 @@ import { readConsolidation } from '../core/memory/consolidator.js';
 import { formatConsolidationLines } from '../core/memory/ingest.js';
 import { checkInvariants, formatCheck } from '../core/memory/invariants.js';
 import { EVERY_INSTANT, recall } from '../core/memory/recall.js';
-import { resolveContradiction, reviewLine, reviewSummary } from '../core/memory/maintenance.js';
+import {
+  MemoryLaneBusyError,
+  resolveContradiction,
+  reviewLine,
+  reviewSummary,
+} from '../core/memory/maintenance.js';
 import { describeProvenance, factLine } from '../core/memory/provenance.js';
 import { makeEmbedder, OllamaEmbedder } from '../core/memory/embed.js';
 import { MemoryStore, type Fact } from '../core/memory/store.js';
@@ -37,9 +42,13 @@ export const MEMORY_USAGE = `usage:
        --around K     K episodi prima e dopo ogni risultato, nel suo thread
   muffin memory extract [--limit N]    drena l'arretrato a mano (di norma parte da solo)
   muffin memory review [keep <fact-id>] [--verbose]
-                                 le contraddizioni e i problemi della pipeline
-                                 che aspettano te. --verbose aggiunge la
-                                 risposta grezza del giudice quando non era leggibile
+                                  le contraddizioni e i problemi della pipeline
+                                  che aspettano te. --verbose aggiunge la
+                                  risposta grezza del giudice quando non era leggibile
+  muffin memory proposals [--status <stato>] [-n N]
+                                  le proposte di memoria intenzionale (ADR-0051):
+                                  chi le ha prodotte, da quale evidenza, con
+                                  quale esito di riconciliazione
   muffin memory stats
   muffin memory check [--json]         invarianti del grafo (nessun modello, nessuna rete)
   muffin memory pin <fact-id>          il fatto entra in OGNI turno, senza dipendere dalla somiglianza
@@ -185,10 +194,14 @@ export async function cmdMemorySearch(
  * indice enorme di trasformare un comando in una nottata.
  */
 export function valeUnAltroGiro(
-  report: { marked: number; indexed: number; fetched: number },
+  report: { marked: number; indexed: number; fetched: number; proposalPageFull?: boolean },
   rounds: number,
   limit: number,
 ): boolean {
+  // A complete proposal page is independent progress: the episode page may
+  // be empty or short because those episodes were extracted in an earlier
+  // run. Keep draining it within the same round budget.
+  if (report.proposalPageFull) return rounds * 25 < limit;
   if (report.marked === 0 && report.indexed === 0) return false;
   // Solo quando è l'estrazione a essere a corto di lavoro: con `marked` a 0 e
   // l'indice ancora da drenare, `fetched` è 0 per costruzione, e questa riga
@@ -298,10 +311,10 @@ function splitReviewDetail(detail: string): { headline: string; rawResponse: str
  * model to be configured.
  *
  * `verbose` reveals the judge's raw response on a row it could not read
- * (`ingest.ts` writes it as everything in `detail` after the first line) —
- * off by default because a light model's answer can run to hundreds of
- * characters, and the summary line already names the typed reason
- * (`describeFailureReason` in `judge.ts`: "vuota" · "non-json" · "schema: …").
+ * (`ingest.ts` writes it after the first line) — off by default because a
+ * light model's answer can run to hundreds of characters, and the summary
+ * line already names the typed reason (`describeFailureReason` in `judge.ts`:
+ * "vuota" · "non-json" · "schema: …").
  */
 export function cmdMemoryReview(home: string, verbose = false): number {
   const { db, store } = openStore(home);
@@ -317,7 +330,11 @@ export function cmdMemoryReview(home: string, verbose = false): number {
       // way to answer it.
       out.push(`   tengo   #${item.existing.id} "${objectOf(item.existing)}" (${item.existing.recordedAt.slice(0, 10)})`);
       out.push(`   oppure  #${item.incoming.id} "${objectOf(item.incoming)}" (${item.incoming.recordedAt.slice(0, 10)})`);
-      out.push(`   il giudice: ${item.why}`);
+      const { headline, rawResponse } = splitReviewDetail(item.why);
+      out.push(`   il giudice: ${headline}`);
+      if (verbose) {
+        for (const line of rawResponse) out.push(`        ${line}`);
+      }
       out.push(`   → muffin memory review keep ${item.incoming.id}`);
       out.push('');
     }
@@ -389,7 +406,16 @@ export function cmdMemoryReview(home: string, verbose = false): number {
 export function cmdMemoryReviewKeep(home: string, factId: number): number {
   const { db, store } = openStore(home);
   try {
-    const answered = resolveContradiction(store, TENANT, factId, new Date());
+    let answered: ReturnType<typeof resolveContradiction>;
+    try {
+      answered = resolveContradiction(store, TENANT, factId, new Date());
+    } catch (error) {
+      if (!(error instanceof MemoryLaneBusyError)) throw error;
+      process.stderr.write(
+        `nessuna modifica: ${error.message}; rilancia \`muffin memory review keep ${factId}\` quando l'operazione termina\n`,
+      );
+      return 1;
+    }
     if (answered.length === 0) {
       process.stderr.write(
         `#${factId} non è uno dei due fatti di una contraddizione aperta — \`muffin memory review\` per la lista\n`,
@@ -449,6 +475,49 @@ export function cmdMemoryUnpin(home: string, factId: number): number {
     }
     store.setPinned(TENANT, factId, false);
     process.stdout.write(`#${factId} non è più appuntato — torna al recall ordinario.\n`);
+    return 0;
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * The read side of intentional memory (ADR-0051).
+ *
+ * Every proposal answers the six provenance questions durably — who produced
+ * it, from which evidence, with what trust, of which kind, when it was
+ * staged, and what reconciliation made of it — so the owner can audit what
+ * the agent asked to remember, not just what it now believes. Opens nothing
+ * but the database: no provider, no key, no network. Same argument as
+ * `check` — the moment you need this, the model may be down.
+ *
+ * Exit 0 always: a pending proposal is work in flight, not a problem.
+ */
+export function cmdMemoryProposals(
+  home: string,
+  options: { status?: string; limit?: number } = {},
+): number {
+  const { db, store } = openStore(home);
+  try {
+    const rows = store.listProposals(TENANT, {
+      ...(options.status ? { status: options.status } : {}),
+      limit: options.limit ?? 20,
+    });
+    if (rows.length === 0) {
+      process.stdout.write('nessuna proposta di memoria\n');
+      return 0;
+    }
+    const lines = rows.map((p) => {
+      const head = `[proposta #${p.id}] ${p.status} · ${p.producer} · ${p.subject} ${p.predicate} ${p.objectValue}`;
+      const evidence = `   evidenza: episodi ${p.sourceEpisodeIds.map((id) => `#${id}`).join(', ')} · tier ${p.trustTier} · ${p.origin} · proposta il ${p.proposedAt.slice(0, 16).replace('T', ' ')}`;
+      const outcome =
+        p.status === 'pending'
+          ? '   esito: in attesa di riconciliazione'
+          : `   esito: ${p.status}${p.resultingFactIds.length > 0 ? ` → fatti ${p.resultingFactIds.map((id) => `#${id}`).join(', ')}` : ''} · decisa il ${(p.decidedAt ?? '').slice(0, 16).replace('T', ' ')}` +
+            (p.detail ? `\n   perché: ${p.detail.split('\n')[0]}` : '');
+      return `${head}\n${evidence}\n${outcome}`;
+    });
+    process.stdout.write(`${lines.join('\n\n')}\n`);
     return 0;
   } finally {
     db.close();
@@ -516,7 +585,7 @@ function consolidationLine(db: DatabaseCtor.Database): string {
       : last.outcome === 'budget'
         ? 'saltato: budget esaurito'
         : last.outcome === 'busy'
-          ? "saltato: un'altra estrazione in corso"
+          ? "saltato: un'altra operazione sulla memoria è in corso"
           : 'fallito';
   return `${when} (${last.trigger}) · ${outcome} — ${seen.runs} run, ${seen.facts} fatti in totale`;
 }
