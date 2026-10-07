@@ -403,6 +403,12 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       });
     }
 
+    // #469: a capability search stages schemas during a tool batch, but they
+    // become callable only at the following model boundary. This prevents a
+    // single completion from guessing a hidden tool name, searching, and
+    // executing it before the model has ever received that tool's schema.
+    toolContext.capabilityDiscovery?.activatePending();
+
     const reasoning = reasoningFromLegacyThinking(deps.profile.thinking);
     const call: ChatCall = {
       model: deps.model,
