@@ -6,7 +6,7 @@ import { attachMcp, buildRuntime, type Runtime } from '../agent/runtime.js';
 import { loadProfiles, selectProfile } from '../agent/profiles/profile.js';
 import { Scheduler, type Deliver, type ForegroundGate, type StandDown } from '../core/scheduler/scheduler.js';
 import { makeTraceRetentionTick } from '../core/scheduler/trace-retention.js';
-import { ModelLane } from '../core/turns/model-lane.js';
+import { LANE_JOBS, LANE_TURNS, ModelLane } from '../core/turns/model-lane.js';
 import { gatewayTransition, readGateway } from '../core/gateway/lock.js';
 import { resolveExecutionOwner } from '../core/gateway/ownership.js';
 import { mintExecutionId, runViaGateway, UnknownOutcomeError } from '../core/gateway/forward.js';
@@ -75,6 +75,30 @@ export function statusFor(event: TurnEvent): string | null {
     default:
       return null;
   }
+}
+
+const MODEL_LANE_POLL_MS = 50;
+
+/** Wait for the REPL's local turn to own the same lane as jobs and inbound turns. */
+async function waitForForegroundModelLane(
+  lane: ModelLane,
+  signal: AbortSignal,
+  status: StatusLine,
+): Promise<boolean> {
+  let visibleStatus: string | null = null;
+  while (!signal.aborted) {
+    const holder = lane.take(LANE_TURNS);
+    if (holder === null) return true;
+
+    const activity = holder === LANE_JOBS ? 'un’attività pianificata' : 'un altro turno';
+    const nextStatus = `attendo il modello: ${activity} sta usando la corsia…`;
+    if (nextStatus !== visibleStatus) {
+      status.show(nextStatus);
+      visibleStatus = nextStatus;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, MODEL_LANE_POLL_MS));
+  }
+  return false;
 }
 
 
@@ -1113,22 +1137,30 @@ export async function runRepl(
           );
         } else if (proprietario.kind === 'local') {
           await ensureMcp();
-          result = await runTurn(runtime.deps, {
-            principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
-            tenant: 'host',
-            surface: 'cli',
-            session,
-            text: line,
-            signal: controller.signal,
-            // No `replyTo` (the REPL holds the answer itself, see below), but a
-            // `replyChannel` all the same: `send_file` mid-turn needs somewhere
-            // to address an attachment, and for the terminal that address is
-            // just `cli` — the owner is on this machine, so `cliSurface`'s
-            // `deliverFile` names the path rather than moving any bytes.
-            replyChannel: 'cli',
-            ...(onDelta ? { onDelta } : {}),
-            ...(onProgress ? { onProgress } : {}),
-          });
+          if (!(await waitForForegroundModelLane(modelLane, controller.signal, status))) {
+            status.line('attesa della corsia del modello annullata');
+            continue;
+          }
+          try {
+            result = await runTurn(runtime.deps, {
+              principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
+              tenant: 'host',
+              surface: 'cli',
+              session,
+              text: line,
+              signal: controller.signal,
+              // No `replyTo` (the REPL holds the answer itself, see below), but a
+              // `replyChannel` all the same: `send_file` mid-turn needs somewhere
+              // to address an attachment, and for the terminal that address is
+              // just `cli` — the owner is on this machine, so `cliSurface`'s
+              // `deliverFile` names the path rather than moving any bytes.
+              replyChannel: 'cli',
+              ...(onDelta ? { onDelta } : {}),
+              ...(onProgress ? { onProgress } : {}),
+            });
+          } finally {
+            modelLane.release(LANE_TURNS);
+          }
         } else {
           status.clear();
           process.stderr.write(`non eseguo: ${proprietario.reason}\n→ ${proprietario.remedy}\n`);
