@@ -47,7 +47,11 @@ export type SandboxProbe =
         // while `SandboxManager`'s real Linux invocation — which does mount a
         // fresh `/proc` (linux-sandbox-utils.js) — died with `bwrap: Can't mount
         // proc on /newroot/proc: Operation not permitted`.
-        | 'contain_failed';
+        | 'contain_failed'
+        // The real SandboxManager invocation could write an active Git hook
+        // under a nested repository created after the sandbox profile. The
+        // executor refuses shell commands unless this host-level deny holds.
+        | 'git_hooks_unprotected';
       detail: string;
       remedy: string;
     };

@@ -766,6 +766,33 @@ items live in `docs/evidence/shell-containment-2026-09-21.md`.
 Symlink, hardlink, ancestor-symlink and path-canonicalisation behaviour are part
 of the security claim rather than filesystem edge cases.
 
+### 9.3 Git hook creation in a compound shell call
+
+The workspace grants writes to project files, not authority to install trusted
+Git hooks. `nestedGitHooksDirs()` still denies hook directories that exist
+before a command starts. It cannot see a nested repository created later in the
+same shell invocation, so the operating-system profile supplies the second
+boundary: Linux requires `scripts/install/bwrap.apparmor` loaded against the
+real bwrap path with `default_allow`, the `userns` grant and explicit
+write/link denies for Git's active hook names; macOS Seatbelt's hook-path deny
+remains in force. The profile uses
+`default_allow` because AppArmor's `unconfined` mode does not generally enforce
+explicit deny rules.
+
+Before shell execution, `SandboxExecutor` tests the real `SandboxManager` path
+with ordinary writes, nested `git init`/`git add`, and a newly-created
+`nested/.git/hooks/pre-commit`. If that write succeeds, the sandbox reports
+`git_hooks_unprotected` and refuses the caller's command. The production
+`shell_run_write` wiring test also checks the existing top-level hook deny.
+Ubuntu hosts without the matching profile therefore lose shell execution rather
+than silently running without this boundary.
+
+This claim covers direct active hook filenames under `.git/hooks`. Git's
+`core.hooksPath`, a Git directory outside the worktree, or redirected paths are
+separate cases owned by #657; this rule does not claim to cover them. The
+decision and test scope are recorded in
+`docs/evidence/shell-nested-git-hook-protection-2026-10-07.md`.
+
 Process inspection should expose only the information required by the declared
 capability; command-line arguments are particularly sensitive because they may
 contain secrets or private data.

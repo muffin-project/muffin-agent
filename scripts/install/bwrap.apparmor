@@ -1,0 +1,21 @@
+# Muffin's AppArmor policy for a Muffin-owned bubblewrap binary.
+#
+# Ubuntu 24.04+ may restrict unprivileged user namespaces. This grants the
+# verified Muffin-owned executable the namespace it needs while also keeping
+# Git's active hook filenames unwritable inside every contained command.
+# The installer substitutes <BWRAP_BINARY> with the binary's realpath before
+# loading this profile. CI renders the same source against /usr/bin/bwrap.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile muffin-bwrap <BWRAP_BINARY> flags=(default_allow) {
+  userns,
+
+  # Keep this list aligned with the active hooks documented by Git's current
+  # githooks manual. The explicit names leave Git's *.sample template files
+  # writable so a normal git init remains useful.
+  deny /**/.git/hooks/{applypatch-msg,pre-applypatch,post-applypatch,pre-commit,pre-merge-commit,prepare-commit-msg,commit-msg,post-commit,pre-rebase,post-checkout,post-merge,pre-push,pre-receive,update} wl,
+  deny /**/.git/hooks/{proc-receive,post-receive,post-update,reference-transaction,push-to-checkout,pre-auto-gc,post-rewrite,sendemail-validate,fsmonitor-watchman,p4-changelist,p4-prepare-changelist,p4-post-changelist,p4-pre-submit,post-index-change} wl,
+
+  include if exists <local/bwrap>
+}
