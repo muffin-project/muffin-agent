@@ -11,6 +11,7 @@ import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { TurnStore } from '../core/turns/store.js';
 import { TodoStore } from '../core/turns/todo.js';
 import { type LoopDeps, type RegisteredTool, runTurn } from './loop.js';
+import { CAPABILITY_DISCOVERY_GUIDANCE } from './capability-exposure.js';
 import { CONSERVATIVE } from './profiles/profile.js';
 import type { ChatCall, ChatResult, Provider } from './providers/types.js';
 import {
@@ -185,6 +186,9 @@ describe('#469 production-path capability discovery', () => {
 
     const firstNames = provider.seen[0]?.tools?.map((tool) => tool.name) ?? [];
     expect(firstNames).toContain('capability_search');
+    expect(JSON.stringify(provider.seen[0]?.messages ?? [])).toContain(
+      CAPABILITY_DISCOVERY_GUIDANCE,
+    );
     expect(firstNames).not.toContain('event_watch_create');
     expect(firstNames.length).toBeLessThanOrEqual(6);
 
@@ -355,6 +359,57 @@ describe('#469 production-path capability discovery', () => {
     // execution occur.
     expect(hiddenCalls).toBe(0);
     expect(provider.seen).toHaveLength(0);
+  });
+
+
+  it('keeps the under-cap fast path free of discovery schema and guidance', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-capability-fast-path-'));
+    const db = new DatabaseCtor(':memory:');
+    const core = [inertTool('fs_read'), inertTool('fs_list')];
+    const search = makeCapabilitySearchTool();
+    const tools = [...core.map((entry) => entry.tool), search];
+    const capabilities = new Map<string, CapabilityDecl>([
+      ...core.map((entry) => [entry.decl.id, entry.decl] as const),
+      [capabilityDiscoveryCapability.id, capabilityDiscoveryCapability],
+    ]);
+    const provider = new Scripted([answer('ok')]);
+    const sessions = new SessionStore(home);
+    const deps: LoopDeps = {
+      provider,
+      profile: { ...CONSERVATIVE, maxToolsExposed: 10, recovery: [] },
+      model: 'test-model',
+      tools,
+      capabilities,
+      decide: createDecide({
+        matrix: POLICY_FLOOR,
+        capabilities,
+        budgetExhausted: () => false,
+        hardened: true,
+      }),
+      tracer: new SimpleTracer(new JsonlExporter(home)),
+      sessions,
+      turns: new TurnStore(db),
+      todos: new TodoStore(db),
+      budgetExhausted: () => false,
+      systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite.' },
+    };
+
+    const result = await runTurn(deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session: sessions.open('capability-fast-path'),
+      text: 'ciao',
+    });
+
+    expect(result.stopped).toBe('answered');
+    expect(provider.seen).toHaveLength(1);
+    expect(provider.seen[0]?.tools?.map((tool) => tool.name) ?? []).not.toContain(
+      'capability_search',
+    );
+    expect(JSON.stringify(provider.seen[0]?.messages ?? [])).not.toContain(
+      CAPABILITY_DISCOVERY_GUIDANCE,
+    );
   });
 
 });
