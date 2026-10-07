@@ -15,7 +15,7 @@ RuntimeEvent
 
 without adding a second scheduler, agent loop, authority path, generic event bus or canonical event store.
 
-This record is evidence for PR #851. It does not decide the two remaining product/boundary questions listed at the end.
+This record is evidence for PR #851. The durable non-time rule representation is now resolved by the store audit below; model-visible EI tool projection remains owned by #469.
 
 ## Canonical owners kept intact
 
@@ -49,7 +49,7 @@ The refactor therefore changes composition, not durability ownership.
 - `deterministic_then_agent_on_signal` does not invoke agent on `signal:false`;
 - `signal:true` forwards only the emitted evidence to the agent callback.
 
-The current durable schedule projection already covers deterministic-only and agent-only through the same seam. Choosing the durable product representation for a persisted deterministic-first rule is part of the remaining rule-projection decision; no second scheduler/store is introduced here merely to make the test green.
+The current durable schedule projection already covers deterministic-only and agent-only through the same seam. For non-time rules, `core/automation/rules.ts` now persists the action mode plus a host-owned action reference, and `compileStoredAutomationRule` projects that data into the same executable seam without giving the store an executor.
 
 ### C — `message.received`
 
@@ -61,7 +61,7 @@ Production-path tests prove:
 - an unrelated owner message evaluates the matcher once, executes no automation action, and takes the ordinary conversation path with exactly one normal model call;
 - no connector-specific `preTurn` or `onMessage` hook exists.
 
-The rule list is currently dependency-injected into the shared work stage only for proof. Its durable projection is intentionally unresolved rather than hidden behind a new table.
+The execution proof still dependency-injects resolved rules into the shared work stage, while the durable definition is now explicit: `AutomationRuleStore` owns only non-time rule definition/matcher/action + provenance/authority + enabled/version. The audit at `docs/evidence/automation-rule-store-audit-2026-10-07.md` shows why JobStore, TurnStore, TodoStore, wait, SessionStore and the existing decision/fire/approval stores are not semantic homes for that state.
 
 ### D — EI external condition -> canonical durable work
 
@@ -130,20 +130,14 @@ Required before ready-for-review:
 - Symphony/OpenCode fixture;
 - targeted #605 acceptance above;
 - public EI management conformance;
-- fresh independent judge once the two remaining decisions are resolved and the candidate stops moving.
+- fresh independent judge once #469/tool projection is resolved and the candidate stops moving.
 
-## Exactly two unresolved decisions
+## Remaining external dependency
 
-### 1. EI model-visible tool projection
+### EI model-visible tool projection
 
 Current consumer profile has no spare permanent tool slots. The old spike's answer — raising `maxToolsExposed` for EI — is deliberately rejected.
 
-Need one accepted host projection that keeps trigger lifecycle reachable without silently evicting existing capabilities. #469 owns the structural catalogue/truncation problem.
+#469 owns the structural catalogue/truncation problem. The accepted direction is an authority-filtered catalog, a small always-visible kernel and discovery/load, implemented as a separate composable slice rather than EI-specific discovery.
 
-### 2. Durable rule projection for the new seam
-
-Execution is proven with rules supplied to the shared seam, and scheduled Job rows already provide a durable projection for the existing schedule cases.
-
-What remains is the minimum durable representation for rules that are not already Job rows — especially `message.received`, and the persisted configuration of `deterministic_then_agent_on_signal` — without introducing a second automation store/framework unless existing durable identities demonstrably cannot represent it.
-
-Everything else in this PR should be treated as implementation/evidence cleanup, not an open architecture decision.
+The durable rule-store decision is no longer open: the store audit found no existing semantic owner for non-time rule definitions, and this PR now carries the minimum definition-only store described above.
