@@ -1,3 +1,8 @@
+import type {
+  StoredAutomationAction,
+  StoredAutomationRule,
+} from '../core/automation/rules.js';
+
 /**
  * The executable waist owned by #605.
  *
@@ -54,6 +59,39 @@ export type AutomationRule<T> = {
   readonly matches: (event: RuntimeEvent) => boolean;
   readonly action: (event: RuntimeEvent) => ActionRequest<T>;
 };
+
+export type StoredAutomationActionResolver<T> = (
+  action: StoredAutomationAction,
+  event: RuntimeEvent,
+  rule: StoredAutomationRule,
+) => ActionRequest<T>;
+
+function storedMatcherMatches(rule: StoredAutomationRule, event: RuntimeEvent): boolean {
+  if (!rule.enabled || rule.eventKind !== event.kind) return false;
+  switch (rule.matcher.type) {
+    case 'evidence_equals':
+      return Object.is(event.evidence[rule.matcher.key], rule.matcher.value);
+  }
+}
+
+/**
+ * Project one durable definition into the #605 executable seam.
+ *
+ * The store never gains an executor. Resolution stays host-owned so policy,
+ * authority, WAL and canonical Turn execution are rechecked where they already
+ * live. A persisted rule is data; this function is the only conversion to the
+ * in-memory closure shape used by dispatchRuntimeEvent.
+ */
+export function compileStoredAutomationRule<T>(
+  rule: StoredAutomationRule,
+  resolve: StoredAutomationActionResolver<T>,
+): AutomationRule<T> {
+  return {
+    id: rule.id,
+    matches: (event) => storedMatcherMatches(rule, event),
+    action: (event) => resolve(rule.action, event, rule),
+  };
+}
 
 export async function executeAction<T>(request: ActionRequest<T>): Promise<T> {
   switch (request.mode) {
