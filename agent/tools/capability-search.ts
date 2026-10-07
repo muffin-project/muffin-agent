@@ -34,7 +34,7 @@ export function makeCapabilitySearchTool(): RegisteredTool {
         properties: {
           query: {
             type: 'string',
-            description: 'Short description of the capability needed for the current task.',
+            description: 'Short description of the capability needed for the current task; describe the need, not a guessed tool name.',
           },
           max_results: {
             type: 'integer',
