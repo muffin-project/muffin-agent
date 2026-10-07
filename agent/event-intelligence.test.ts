@@ -2,6 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { runInit } from '../cli/init.js';
+import { buildRuntime } from './runtime.js';
 import {
   attachEventIntelligence,
   createMuffinEventIntelligence,
@@ -209,6 +211,162 @@ describe('MCP event -> EI match -> canonical automation wake', () => {
     } finally {
       await embedded.close();
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+
+describe('EI wake -> real Muffin TurnStore', () => {
+  it('persists one canonical system:automation Turn instead of impersonating the owner', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-ei-real-store-'));
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-ei-real-ws-'));
+    runInit({ home, apiKey: 'sk-ei-test-never-used' });
+    const runtime = buildRuntime(home, workspace);
+
+    const counters = {
+      iterations: 0,
+      recoveriesUsed: 0,
+      transportRetriesLeft: 10,
+      truncationsUsed: 0,
+      toolCallsMade: 0,
+      nudgedForCompletion: false,
+      usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      spentUsd: 0,
+      resumes: 0,
+      contextBuilt: true,
+      activeModelMs: 0,
+    };
+
+    const source = runtime.deps.turns.create(
+      {
+        id: 'source-turn-real-store',
+        principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
+        tenant: 'host',
+        surface: 'cli',
+        sessionId: 'owner',
+        providerLease: {
+          model: runtime.deps.model,
+          checkpoint: [
+            {
+              role: 'user',
+              origin: 'owner',
+              content: [{ type: 'text', text: 'watch demo.ready' }],
+            },
+          ],
+        },
+        taint: 0,
+        counters,
+        replyTo: { channel: 'cli' },
+      },
+      process.pid,
+    );
+
+    let emitted = false;
+    const connection = {
+      connectionId: 'demo',
+      serverId: 'demo',
+      getCapabilities: () => ({
+        extensions: { 'io.modelcontextprotocol/events': {} },
+      }),
+      request: async (method: string) => {
+        if (method === 'events/list') {
+          return {
+            events: [
+              {
+                name: 'demo.ready',
+                description: 'A demo item became ready.',
+                delivery: ['poll'],
+                inputSchema: { type: 'object' },
+                payloadSchema: {
+                  type: 'object',
+                  properties: { value: { type: 'number' } },
+                },
+              },
+            ],
+            nextCursor: null,
+          };
+        }
+        if (method === 'events/poll') {
+          if (!emitted) {
+            emitted = true;
+            return {
+              events: [
+                {
+                  eventId: 'real-store-event-1',
+                  name: 'demo.ready',
+                  timestamp: '2026-10-07T10:00:00.000Z',
+                  data: { value: 42 },
+                },
+              ],
+              cursor: 'done',
+              hasMore: false,
+              nextPollMs: 60_000,
+            };
+          }
+          return { events: [], cursor: 'done', hasMore: false, nextPollMs: 60_000 };
+        }
+        throw new Error(`unexpected method ${method}`);
+      },
+      pollIntervalMs: 60_000,
+    };
+
+    try {
+      const report = await attachEventIntelligence(runtime, [connection], home);
+      expect(report.join('\n')).toContain('1 Events-capable');
+
+      const create = runtime.deps.tools.find((tool) => tool.spec.name === 'event_watch_create');
+      if (!create) throw new Error('event_watch_create was not registered');
+      const armed = await create.handler(
+        {
+          trigger_id: 'real-store-watch',
+          events: [
+            {
+              event: 'demo.ready',
+              where: [{ path: 'value', op: 'gt', value: 10 }],
+            },
+          ],
+          instruction: 'Inspect the matched demo event.',
+          one_shot: false,
+        },
+        toolContext({ turnId: source.id }),
+      );
+      expect(armed.isError).not.toBe(true);
+
+      const embedded = getAttachedEventIntelligence(runtime);
+      if (!embedded) throw new Error('Event Intelligence was not attached');
+      await embedded.host.runtime.mcpEventsClient.pollAll();
+
+      const runnable = runtime.deps.turns
+        .due(new Date('2026-10-07T10:01:00.000Z'), 20)
+        .filter((row) => row.id !== source.id);
+      expect(runnable).toHaveLength(1);
+
+      const wake = runnable[0]!;
+      expect(wake.status).toBe('runnable');
+      expect(wake.principal).toEqual({ kind: 'system', source: 'automation' });
+      expect(wake.tenant).toBe('host');
+      expect(wake.taint).toBe(3);
+      expect(wake.inputText).toContain('Inspect the matched demo event.');
+      expect(wake.inputText).toContain('"value": 42');
+
+      // The source row remains owner-authored; the wake is a separate system
+      // work item with its own durable identity.
+      expect(runtime.deps.turns.get(source.id)?.principal).toEqual({
+        kind: 'owner',
+        connector: 'cli',
+        externalId: 'local',
+      });
+
+      await embedded.host.runtime.mcpEventsClient.pollAll();
+      const secondPass = runtime.deps.turns
+        .due(new Date('2026-10-07T10:02:00.000Z'), 20)
+        .filter((row) => row.id !== source.id);
+      expect(secondPass).toHaveLength(1);
+      expect(secondPass[0]?.id).toBe(wake.id);
+    } finally {
+      await runtime.close();
+      rmSync(home, { recursive: true, force: true });
+      rmSync(workspace, { recursive: true, force: true });
     }
   });
 });
