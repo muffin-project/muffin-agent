@@ -5,6 +5,7 @@ import {
   type EventActivation,
   type PortableAgentTool,
 } from 'mcp-event-intelligence/embedded';
+import type { EventIntelligenceObservabilitySink } from 'mcp-event-intelligence/observability';
 import { dispatchRuntimeEvent, type RuntimeEvent } from './automation.js';
 import { fence } from '../core/memory/spotlight.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
@@ -333,12 +334,14 @@ export async function createMuffinEventIntelligence(
   connections: readonly McpEventConnection[],
   home: string,
   wakePort: EventWakePort,
+  observability?: EventIntelligenceObservabilitySink,
 ) {
   const wakeOwners = new WakeOwnerBindings();
   const embedded = await createEmbeddedRuntimeIntegration<ToolContext>({
     dataDir: join(home, 'event-intelligence'),
     eventSources: connections,
     activation: activationDelivery(wakePort, wakeOwners),
+    ...(observability ? { observability } : {}),
     tooling: portableTooling(wakeOwners),
   });
   return Object.freeze({
