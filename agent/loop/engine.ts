@@ -8,6 +8,7 @@ import type { TurnRecord } from '../../core/turns/store.js';
 import { planTaint } from '../../core/turns/todo.js';
 import { approvalFootnote, decodeWaitFor, satisfied, wakeReport, type WakeReason } from '../../core/turns/wait.js';
 import {
+  CAPABILITY_DISCOVERY_GUIDANCE,
   CAPABILITY_SEARCH_TOOL_NAME,
   createCapabilityExposure,
 } from '../capability-exposure.js';
@@ -605,23 +606,38 @@ export async function guidaIlTurno(
     const undoneTraceIds = deps.turns.undoneTraceIds(traceIdsInWindow);
 
     run.messages.length = 0;
-    run.messages.push(
-      ...buildContext(
-        input,
-        recalled,
-        open,
-        spoken,
-        now(),
-        deps.model,
-        deps.profile.name,
-        deps.istanza?.(),
-        deps.timeZone,
-        undoneTraceIds,
-        turnClass === 'owner' &&
-          deps.memory !== undefined &&
-          !deps.memory.store.hasActiveFacts(input.tenant),
-      ),
+    const builtContext = buildContext(
+      input,
+      recalled,
+      open,
+      spoken,
+      now(),
+      deps.model,
+      deps.profile.name,
+      deps.istanza?.(),
+      deps.timeZone,
+      undoneTraceIds,
+      turnClass === 'owner' &&
+        deps.memory !== undefined &&
+        !deps.memory.store.hasActiveFacts(input.tenant),
     );
+
+    if (capabilityExposure.pressured) {
+      // Local progressive discovery is not provider magic: the model must know
+      // that the current schema menu is intentionally partial. Keep that fact
+      // in volatile harness context (never owner words), immediately before
+      // the real owner input so the under-cap stable prefix remains untouched.
+      const ownerIndex = Math.max(0, builtContext.length - 1);
+      builtContext.splice(
+        ownerIndex,
+        0,
+        harnessMessage('user', [
+          { type: 'text', text: CAPABILITY_DISCOVERY_GUIDANCE },
+        ]),
+      );
+    }
+
+    run.messages.push(...builtContext);
 
     // `record.taint`, the same substitution and for the same reason as the
     // episode write above: `initialTaint(input)` here would read `drive`'s
