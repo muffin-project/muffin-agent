@@ -82,6 +82,31 @@ class Scripted implements Provider {
   }
 }
 
+class SchemaDriven implements Provider {
+  readonly kind = 'openai-compat' as const;
+  readonly seen: ChatCall[] = [];
+  private searched = false;
+  private executed = false;
+
+  async chat(call: ChatCall): Promise<ChatResult> {
+    this.seen.push(call);
+    const names = new Set(call.tools?.map((tool) => tool.name) ?? []);
+
+    if (names.has('event_watch_create') && !this.executed) {
+      this.executed = true;
+      return toolCall('hidden-auto', 'event_watch_create', {});
+    }
+    if (names.has('capability_search') && !this.searched) {
+      this.searched = true;
+      return toolCall('search-auto', 'capability_search', {
+        query: 'durable external event trigger',
+        max_results: 1,
+      });
+    }
+    return answer(this.executed ? 'done' : 'capability unavailable');
+  }
+}
+
 describe('#469 production-path capability discovery', () => {
   it('loads an authorized beyond-cap tool into the next model round and executes it normally', async () => {
     const home = mkdtempSync(join(tmpdir(), 'muffin-capability-discovery-'));
@@ -251,6 +276,84 @@ describe('#469 production-path capability discovery', () => {
     for (const call of provider.seen.slice(0, 2)) {
       expect(call.tools?.map((tool) => tool.name) ?? []).not.toContain('forbidden_host_write');
     }
+  });
+
+
+  it('load-bearing mutation: removing the discovery door makes the beyond-cap task unrecoverable', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-capability-mutation-'));
+    const db = new DatabaseCtor(':memory:');
+    const core = [
+      inertTool('fs_read'),
+      inertTool('fs_list'),
+      inertTool('fs_search'),
+      inertTool('memory_search'),
+      inertTool('skill_read'),
+      inertTool('http_get'),
+      inertTool('todo'),
+    ];
+    let hiddenCalls = 0;
+    const hiddenDecl = declaration('event.watch');
+    const hidden: RegisteredTool = {
+      capability: hiddenDecl.id,
+      spec: {
+        name: 'event_watch_create',
+        description: 'Create a durable external event trigger when a condition matches.',
+        inputSchema: { type: 'object' },
+      },
+      throwTier: 0,
+      handler: () => {
+        hiddenCalls += 1;
+        return { content: 'watch created', tier: 0 };
+      },
+    };
+
+    // Deliberate mutation of the runtime wiring: the hidden authorized tool
+    // remains registered, but the #469 discovery door + declaration are
+    // removed. A schema-driven provider can no longer discover its name.
+    const tools = [...core.map((entry) => entry.tool), hidden];
+    const capabilities = new Map<string, CapabilityDecl>([
+      ...core.map((entry) => [entry.decl.id, entry.decl] as const),
+      [hiddenDecl.id, hiddenDecl],
+    ]);
+    const provider = new SchemaDriven();
+    const sessions = new SessionStore(home);
+    const deps: LoopDeps = {
+      provider,
+      profile: { ...CONSERVATIVE, maxToolsExposed: 6, recovery: [] },
+      model: 'test-model',
+      tools,
+      capabilities,
+      decide: createDecide({
+        matrix: POLICY_FLOOR,
+        capabilities,
+        budgetExhausted: () => false,
+        hardened: true,
+      }),
+      tracer: new SimpleTracer(new JsonlExporter(home)),
+      sessions,
+      turns: new TurnStore(db),
+      todos: new TodoStore(db),
+      budgetExhausted: () => false,
+      systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite.' },
+    };
+
+    const result = await runTurn(deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session: sessions.open('capability-mutation'),
+      text: 'crea un trigger su un evento esterno',
+    });
+
+    expect(result.stopped).toBe('answered');
+    expect(hiddenCalls).toBe(0);
+    expect(provider.seen).toHaveLength(1);
+    expect(provider.seen[0]?.tools?.map((tool) => tool.name) ?? []).not.toContain(
+      'event_watch_create',
+    );
+    expect(provider.seen[0]?.tools?.map((tool) => tool.name) ?? []).not.toContain(
+      'capability_search',
+    );
   });
 
 });
