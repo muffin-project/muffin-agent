@@ -840,9 +840,16 @@ export function buildRuntime(
       throwTier: 0,
     },
     {
-      // ADR-0051 slice 1: intentional memory stages a durable proposal and
-      // reconciles it through the canonical memory writer. #469 only changes
-      // model visibility; this tool keeps the exact dev authority/taint path.
+      // «Ricorda X» — the intentional-memory verb of `docs/product/VISION.md`
+      // (remember, correct, forget) that had no mechanism: the model
+      // improvised with shell/sqlite instead. This stages a durable proposal
+      // and reconciles it through the canonical reconciler (`memory.propose`
+      // stages; the commit belongs to reconciliation, never to this tool).
+      // Same tenant rule as the reads above; the capability is host-only
+      // like `memory_forget` (an intentional "ricorda" is the owner's word
+      // about the owner's memory, and the lane it drains into is host-only
+      // too), so registering it here concedes nothing to any group: it is
+      // `tenants` in `rot/policy.json` that decides who reaches it.
       capability: memoryProposeCapability.id,
       spec: memoryProposeSpec,
       handler: async (args, ctx) =>
@@ -860,6 +867,8 @@ export function buildRuntime(
           },
           args,
         ),
+      // Its answer is the durable outcome (belief, merge, review, rejection
+      // or honest deferral); only a storage error escapes.
       throwTier: 0,
     },
     // The other half of "a document enters whole": the vault stores every page
@@ -1001,6 +1010,10 @@ export function buildRuntime(
       // `memory_forget`'s own door, host-only: declared here or the visibility
       // filter and the kernel disagree about who sees it.
       memoryForgetCapability,
+      // `memory_propose`'s own door: stages, never commits. Declared here
+      // next to its tool, same treatment as the two above — a tool whose
+      // capability the kernel has never heard of is refused `no_capability`
+      // on its first call.
       memoryProposeCapability,
       documentCapability,
       shellCapability,
