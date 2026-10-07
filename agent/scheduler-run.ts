@@ -227,7 +227,7 @@ async function runFresh(
       throw new Error(`schedule.fire ${runtimeEvent.occurrenceId} had no matching job rule`);
     },
   });
-
+}
 
 async function runGoal(
   deps: LoopDeps,
@@ -239,9 +239,7 @@ async function runGoal(
   // fire is bound and before the turn row exists at all.
   await testStall('MUFFIN_JOB_FIRES_STALL_AFTER_BIND_MS');
   const session = deps.sessions.open(`job-${job.id.slice(0, 8)}-${randomBytes(3).toString('hex')}`);
-  const result = await dispatchRuntimeEvent(runtimeEvent, [], {
-    mode: 'agent',
-    run: () => runTurn(deps, {
+  const result = await runTurn(deps, {
     principal: { kind: 'system', source: 'scheduler' },
     tenant: fireTenant(job),
     surface: job.channel,
@@ -291,7 +289,6 @@ async function runGoal(
     // the same destination the job's own text answer will.
     replyChannel: job.channel,
     ...(signal ? { signal } : {}),
-    }),
   });
   // Fault point 5, made observable: a real `SIGKILL` here lands after the
   // turn reaches `done` and before `Scheduler` ever calls `deliver`/`markRan`.
