@@ -69,6 +69,8 @@ const ALL: readonly CapabilityDecl[] = [
   searchCapability,
   memoryCapability,
   memoryForgetCapability,
+  // ADR-0051 slice 1: stages, never commits — same `memory` row as the other
+  // two verbs, which is exactly the claim (no privileged truth channel).
   memoryProposeCapability,
   skillCapability,
   documentCapability,
