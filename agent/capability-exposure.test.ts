@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CAPABILITY_SEARCH_TOOL_NAME,
   createCapabilityExposure,
+  preloadCapabilitiesForTask,
 } from './capability-exposure.js';
 
 function tool(name: string, capability = name, description = name) {
@@ -164,9 +165,12 @@ describe('capability exposure projection', () => {
       discoveryTool: discovery,
     });
 
-    const loaded = projection.discovery?.searchAndLoad('create external event trigger', 2);
+    const loaded = preloadCapabilitiesForTask(
+      projection,
+      'create external event trigger',
+      2,
+    );
     expect(loaded?.loaded.map((entry) => entry.name)).toContain('event_watch_create');
-    projection.discovery?.activatePending();
     expect(projection.exposed.map((entry) => entry.spec.name)).toContain('event_watch_create');
     expect(projection.exposed.map((entry) => entry.spec.name)).toContain(
       CAPABILITY_SEARCH_TOOL_NAME,
