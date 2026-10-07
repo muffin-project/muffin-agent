@@ -14,7 +14,6 @@ import {
 import { audioAccettato, immagineAccettata } from '../agent/providers/modalita.js';
 import { speaksReasoningEffort, wantsExplicitCache } from '../agent/providers/openai-compat.js';
 import { type VerificationResult, verifyInferenceRoute } from '../agent/providers/verify.js';
-import { profileEditPath } from '../agent/tools/capability-status.js';
 import { baseToolOrder } from '../agent/runtime.js';
 import { diagnoseSearch } from '../agent/tools/search.js';
 import { type Prerequisito, prerequisitiTrascrizione } from '../core/audio/trascrivi.js';
@@ -1462,47 +1461,26 @@ export async function runDoctor(
     );
   }
 
-  // Il tetto del profilo: quali tool, fra quelli che questa installazione
-  // registrerebbe, cadono oltre `maxToolsExposed`. `baseToolOrder`
-  // (agent/runtime.ts) è la stessa lista ordinata che il boot usa per
-  // `capabilityGaps` e che `runtime-exposure.test.ts` tiene allineata al
-  // registro reale — non un secondo elenco scritto qui a mano.
-  //
-  // `sendFileAvailable: true` perché `doctor` non costruisce un runtime intero
-  // e non sa se questa invocazione precede un gateway o un REPL — ma
-  // entrambi i processi persistenti lo allegano sempre (`cli/surface.ts#
-  // attachSendFile`, DAY-1 B14), e solo `muffin run` non lo fa mai. Ometterlo
-  // qui era esattamente il difetto misurato altrove (`agent/runtime.ts`): il
-  // tool più a rischio di un taglio silenzioso reso invisibile alla diagnosi
-  // che dovrebbe segnalarlo.
-  //
-  // `sandboxAvailable: boundary.usable` — not `sandbox.available`: the shell
-  // lanes enter the ordered list only where the runtime would register them
-  // (#642), otherwise the tetto check grades a tool list that boot never
-  // builds.
+  // #469 changes what the profile ceiling means. It still bounds the
+  // model-visible schemas in one round, but an authorized native capability
+  // beyond the initial projection remains reachable through capability_search.
+  // baseToolOrder describes the native catalogue; the discovery meta-tool is
+  // not itself counted as a user capability in the under-cap fast path.
   const ordineBase = baseToolOrder({
     sandboxAvailable: boundary.usable,
     searchOn: ricerca.on,
     sendFileAvailable: true,
-  });
-  const tagliatiDalTetto = ordineBase.slice(resolvedProfile.maxToolsExposed);
-  if (tagliatiDalTetto.length === 0) {
+  }).filter((name) => name !== 'capability_search');
+  const oltreProiezione = Math.max(0, ordineBase.length - resolvedProfile.maxToolsExposed);
+  if (oltreProiezione === 0) {
     ok(
       'capacità: tetto tool',
-      `${ordineBase.length} tool entro il tetto di ${resolvedProfile.maxToolsExposed} del profilo "${resolvedProfile.name}"`,
+      `${ordineBase.length} capability native entro la proiezione di ${resolvedProfile.maxToolsExposed} del profilo "${resolvedProfile.name}"`,
     );
   } else {
-    const dove = profileEditPath(
-      resolvedProfile.name,
-      sourced?.origin ?? 'conservative',
-      sourced?.file === '' ? undefined : sourced?.file,
-    );
-    warn(
+    ok(
       'capacità: tetto tool',
-      `${tagliatiDalTetto.length} tool oltre il tetto di ${resolvedProfile.maxToolsExposed} del profilo "${resolvedProfile.name}" e quindi invisibili al modello — ${tagliatiDalTetto.join(', ')}`,
-      dove === null
-        ? `il profilo conservativo non ha un file in cui alzare maxToolsExposed: un profilo che matcha il modello lo sostituirebbe, oppure riduci quanti tool sono registrati prima di questi`
-        : `alza maxToolsExposed in ${dove}, oppure riduci quanti tool sono registrati prima di questi`,
+      `${ordineBase.length} capability native, proiezione massima ${resolvedProfile.maxToolsExposed} del profilo "${resolvedProfile.name}": ${oltreProiezione} restano caricabili su richiesta via capability_search`,
     );
   }
 
