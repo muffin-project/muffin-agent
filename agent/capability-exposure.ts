@@ -38,9 +38,12 @@ export type CapabilityExposureSnapshot = {
 
 export type CapabilityDiscoveryPort = {
   /**
-   * Select schemas for the next model round. Selection is staged: a model
-   * cannot search and then call a previously hidden tool in the same response
-   * merely by guessing its name.
+   * Select schemas for the next model round. Selection is staged so the
+   * provider-visible projection changes only at a model-call boundary.
+   *
+   * This is not an execution or authority gate: a directly named registered
+   * tool still reaches the normal kernel path, preserving Muffin's existing
+   * defence-in-depth rule for forbidden calls.
    */
   readonly searchAndLoad: (query: string, maxResults: number) => CapabilityLoadResult;
   /** Apply the last staged selection at the next round boundary. */
