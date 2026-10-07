@@ -772,10 +772,11 @@ export class Consolidator {
       for (const line of formatConsolidationLines(report)) this.deps.log?.(`consolidamento: ${line}`);
     }
 
-    // The drain follows progress, not the sweep outcome. A refusal to acquire
-    // the ingest lane returns no fetched rows, so it cannot schedule another
-    // page; a sweep may become busy only after this batch already moved one.
-    if (report.fetched >= limit && report.marked > 0) {
+    // The drain follows progress, not the sweep outcome. Episode progress is
+    // counted by markers; proposals expose a full-page signal because their
+    // bounded page is independent of the episode limit. A lane refusal reports
+    // neither kind of progress, while a busy sweep cannot discard either one.
+    if ((report.fetched >= limit && report.marked > 0) || report.proposalPageFull === true) {
       this.drainAgain = true;
     }
     return { run, report };

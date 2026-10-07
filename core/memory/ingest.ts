@@ -184,6 +184,8 @@ export type IngestReport = {
    * in `factsAdded`.
    */
   proposalsReconciled?: number;
+  /** A complete proposal page may leave more staged intent for a drain pass. */
+  proposalPageFull?: boolean;
 };
 
 /** One judge call this round that could not be turned into a verdict. */
@@ -271,6 +273,7 @@ export async function ingestPending(
     errors: [],
     judgeUnavailable: [],
     proposalsReconciled: 0,
+    proposalPageFull: false,
   };
 
   // One extractor at a time. A hand-typed `muffin memory extract` overlapping
@@ -465,6 +468,7 @@ export async function ingestPending(
     // directly; a proposal whose evidence arrived in this same batch meets a
     // graph that already contains it.
     const staged = deps.store.pendingProposals(tenantId, PROPOSAL_DRAIN_LIMIT);
+    report.proposalPageFull = staged.length === PROPOSAL_DRAIN_LIMIT;
     for (const proposal of staged) {
       const outcome = await reconcileProposalLocked(deps, tenantId, proposal.id, now(), span, report);
       report.proposalsReconciled = (report.proposalsReconciled ?? 0) + 1;
@@ -844,16 +848,20 @@ function commitCandidateDecision(
     const reviewDetail =
       `giudice non disponibile su ${incoming.subject}/${incoming.predicate}: tengo entrambi i valori [${reason}]\n` +
       `risposta grezza: ${verdict.failure.rawResponse || '(vuota)'}`;
-    const headline = reviewDetail.split('\n')[0] ?? reviewDetail;
+    // The terminal prints both the actionable conflict (`needsReview`) and
+    // one grouped judge-failure summary. Keep the per-candidate line useful
+    // without repeating that summary's stable phrase; the durable review row
+    // above still preserves the full typed detail.
+    const headline = `risposta del giudice non interpretabile [${reason}]: tengo entrambi i valori`;
     detail = headline;
     report.needsReview.push({
       subject: incoming.subject,
       predicate: incoming.predicate,
       existing: candidate.objectValue ?? candidate.objectName ?? '',
       incoming: incoming.object,
-      // `muffin memory extract` prints this report directly. Keep the raw
-      // model response in the durable row for explicit `review --verbose`,
-      // not in the round report that is printed by default.
+      // `muffin memory extract` prints this per-candidate report beside the
+      // grouped judge summary. Keep the raw model response in the durable row
+      // for explicit `review --verbose`, not in the round report.
       why: headline,
     });
     store.recordReview({
@@ -976,6 +984,7 @@ function blankIngestReport(tenantId: string): IngestReport {
     errors: [],
     judgeUnavailable: [],
     proposalsReconciled: 0,
+    proposalPageFull: false,
   };
 }
 

@@ -9,11 +9,14 @@ import { costUsd } from '../core/budget/pricing.js';
 import {
   Consolidator,
   CONSOLIDATION_CAPABILITY,
+  CONSOLIDATION_DRAIN_MS,
   CONSOLIDATION_IDLE_MS,
   readConsolidation,
 } from '../core/memory/consolidator.js';
+import { EXTRACTION_VERSION } from '../core/memory/schema.js';
 import { ingestPending } from '../core/memory/ingest.js';
 import type { RecallDeps } from '../core/memory/recall.js';
+import { proposeMemoryRecord } from '../core/memory/proposals.js';
 import { MemoryStore } from '../core/memory/store.js';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
@@ -194,6 +197,56 @@ describe('consolidation starts by itself', () => {
       v: string;
     };
     expect(fact).toEqual({ predicate: 'lives_in', v: 'Cagliari' });
+  });
+
+  it('drains proposals past one bounded page when the episode page is short', async () => {
+    const h = harness([reply('ok')]);
+    const evidenceIds = Array.from({ length: 21 }, (_, i) =>
+      h.store.addEpisode({
+        tenantId: 'host',
+        connector: 'cli',
+        threadKey: 't',
+        role: 'user',
+        kind: 'message',
+        content: `evidence ${i}`,
+        trustTier: 0,
+        createdAt: `2026-08-01T10:${String(i).padStart(2, '0')}:00Z`,
+      }),
+    );
+    h.store.markExtracted('host', evidenceIds, EXTRACTION_VERSION);
+    evidenceIds.forEach((episodeId, i) =>
+      proposeMemoryRecord(h.store, {
+        tenantId: 'host',
+        subject: 'owner',
+        subjectKind: 'person',
+        predicate: `note_${i}`,
+        object: `value_${i}`,
+        producer: 'agent-inference',
+        sourceEpisodeIds: [episodeId],
+        content: `inference ${i}`,
+        confidence: 0.9,
+      }),
+    );
+
+    // The production turn-end seam arms consolidation. Its one ingress episode
+    // is a short page; the 21 already-evidenced proposals cross their own page
+    // boundary only after the real `ingestPending` consumer runs.
+    await h.speak('ciao');
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_IDLE_MS);
+    await h.consolidation.settled();
+    expect(h.store.pendingProposals('host')).toHaveLength(1);
+    expect(h.consolidation.isArmed()).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_DRAIN_MS);
+    await h.consolidation.settled();
+
+    expect(h.store.pendingProposals('host')).toHaveLength(0);
+    expect(h.activeFacts().n).toBe(21);
+    const triggers = (
+      h.db.prepare(`SELECT trigger FROM consolidation_runs ORDER BY id`).all() as { trigger: string }[]
+    ).map((r) => r.trigger);
+    expect(triggers).toEqual(['idle', 'drain']);
+    expect(h.consolidation.isArmed()).toBe(false);
   });
 
   it('embeds the episode too — the half of recall nothing else feeds', async () => {

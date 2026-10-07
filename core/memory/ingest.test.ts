@@ -369,6 +369,7 @@ describe('memory ingestion', () => {
       expect(store.openContradictions(HOST)).toHaveLength(1);
       expect(report.needsReview).toHaveLength(1);
       expect(report.needsReview[0]?.why).toContain(`[${reason}`);
+      expect(report.needsReview[0]?.why).not.toContain('giudice non disponibile');
       if (rawResponse) expect(report.needsReview[0]?.why).not.toContain(rawResponse);
       // Mutation this kills: removing the raw-response line from `detail`.
       // The typed reason and explicit owner action stay visible even when the
