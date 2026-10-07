@@ -151,6 +151,7 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
   if (input.discoveryTool === undefined) {
     throw new Error('capability_search is required when the authorized catalogue exceeds maxToolsExposed');
   }
+  const discoveryTool = input.discoveryTool;
 
   const preferred = input.coreNames ?? DEFAULT_CORE_TOOL_NAMES;
   // One slot is discovery itself and, where the profile permits it, at least
@@ -158,7 +159,7 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
   const coreTarget =
     max === 1 ? 0 : Math.min(preferred.length, catalog.length, Math.max(0, max - 2));
   const core = takeCore(catalog, coreTarget, preferred);
-  const fixed = [...core, input.discoveryTool];
+  const fixed = [...core, discoveryTool];
   const exposed = [...fixed];
   const coreNames = new Set(core.map((tool) => tool.spec.name));
   const searchable = catalog.filter((tool) => !coreNames.has(tool.spec.name));
@@ -180,7 +181,7 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
         exposed.splice(
           0,
           exposed.length,
-          ...(matches.length > 0 ? [matches[0]!] : [input.discoveryTool]),
+          ...(matches.length > 0 ? [matches[0]!] : [discoveryTool]),
         );
       } else {
         // Loaded tools are a task-local projection, not a growing second
