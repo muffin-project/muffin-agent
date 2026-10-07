@@ -58,6 +58,12 @@ describe('capability exposure projection', () => {
     const result = projection.discovery?.searchAndLoad('external event trigger', 3);
 
     expect(result?.loaded.map((entry) => entry.name)).toContain('event_watch_create');
+    // Search selects for the next round; the current batch cannot immediately
+    // invoke a schema the model was never shown.
+    expect(projection.exposed.map((entry) => entry.spec.name)).not.toContain(
+      'event_watch_create',
+    );
+    projection.discovery?.activatePending();
     expect(projection.exposed.map((entry) => entry.spec.name)).toContain(
       'event_watch_create',
     );
@@ -107,16 +113,18 @@ describe('capability exposure projection', () => {
     ];
     const projection = createCapabilityExposure({
       eligible,
-      maxToolsExposed: 7,
+      maxToolsExposed: 8,
       discoveryTool: discovery,
     });
 
     projection.discovery?.searchAndLoad('event trigger', 2);
+    projection.discovery?.activatePending();
     expect(projection.exposed.map((entry) => entry.spec.name)).toEqual(
       expect.arrayContaining(['event_watch_create', 'event_watch_list']),
     );
 
     projection.discovery?.searchAndLoad('public url', 1);
+    projection.discovery?.activatePending();
     const names = projection.exposed.map((entry) => entry.spec.name);
     expect(names).toContain('http_get');
     expect(names).not.toContain('event_watch_create');
