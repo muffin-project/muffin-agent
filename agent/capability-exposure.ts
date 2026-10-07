@@ -197,14 +197,22 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
         .sort((left, right) => right.score - left.score || left.index - right.index);
 
       const matches = ranked.slice(0, limit);
+      const selected =
+        max === 1
+          ? matches.slice(0, 1).map((row) => row.tool)
+          : matches.slice(0, dynamicCapacity).map((row) => row.tool);
 
       if (max === 1) {
-        pending = matches.length > 0 ? [matches[0]!.tool] : [discoveryTool];
+        // With a one-schema custom profile the search door temporarily swaps
+        // with the selected schema. On a miss it stays in place, but a miss is
+        // still reported as a miss rather than pretending discovery loaded
+        // itself.
+        pending = selected.length > 0 ? selected : [discoveryTool];
       } else {
-        pending = matches.slice(0, dynamicCapacity).map((row) => row.tool);
+        pending = selected;
       }
 
-      const loaded = (pending ?? []).map((tool) => ({
+      const loaded = selected.map((tool) => ({
         name: tool.spec.name,
         capability: tool.capability,
       }));
