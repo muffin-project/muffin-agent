@@ -7,6 +7,10 @@ import { ATTR } from '../../core/tracing/types.js';
 import type { TurnRecord } from '../../core/turns/store.js';
 import { planTaint } from '../../core/turns/todo.js';
 import { approvalFootnote, decodeWaitFor, satisfied, wakeReport, type WakeReason } from '../../core/turns/wait.js';
+import {
+  CAPABILITY_SEARCH_TOOL_NAME,
+  createCapabilityExposure,
+} from '../capability-exposure.js';
 import { tenantClass, visibleTools } from '../context/assemble.js';
 import { historyTaint, reinjectedHistory } from '../context/history-taint.js';
 import { DEFAULT_EXECUTION } from '../profiles/profile.js';
@@ -311,6 +315,34 @@ export async function guidaIlTurno(
       run.activeModelMs = activeModelMs;
     },
   });
+  // #469: principal/grant filtering decides which installed capabilities may
+  // even enter discovery. The profile ceiling is applied only to the model
+  // projection, never to catalogue existence.
+  const eligibleTools = visibleTools(
+    deps.tools,
+    input.principal,
+    deps.capabilities,
+    deps.grants?.get(input.tenant),
+  );
+  const discoveryTool = eligibleTools.find(
+    (tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME,
+  );
+  if (discoveryTool === undefined) {
+    throw new Error('capability_search is missing from the authorized runtime catalogue');
+  }
+  const capabilityExposure = createCapabilityExposure({
+    eligible: eligibleTools,
+    maxToolsExposed: deps.profile.maxToolsExposed,
+    discoveryTool,
+  });
+  const exposed = capabilityExposure.exposed;
+  turn.setAttributes({
+    'muffin.context.class': turnClass,
+    'muffin.context.tools_exposed': exposed.length,
+    'muffin.context.tools_hidden': capabilityExposure.hiddenCount,
+    'muffin.context.capability_discovery': capabilityExposure.pressured,
+  });
+
   /**
    * What every handler is told about the turn it is running in — built once,
    * because the barrier has to be the same object across the whole turn.
@@ -337,6 +369,9 @@ export async function guidaIlTurno(
     suspend: (spec) => {
       run.barrier = spec;
     },
+    ...(capabilityExposure.discovery === undefined
+      ? {}
+      : { capabilityDiscovery: capabilityExposure.discovery }),
     durability: {
       failure: () => run.durabilityFailure,
       fail: (reason) => {
@@ -365,29 +400,6 @@ export async function guidaIlTurno(
     const echo = echoContentFor(call.name, call.args, outcome);
     if (echo !== undefined) run.sensitiveResourceEchoes.push(echo);
   };
-
-  // What this turn is shown, decided from who is speaking and where — never
-  // from what they said. Filter first, cap second: `slice` on registration
-  // order applied to the full list would spend a weak model's ten slots on
-  // tools the kernel is going to refuse this principal anyway.
-  //
-  // Recomputed on a resume rather than persisted, and it is correct to: it is a
-  // pure function of the principal and the profile, and the profile follows the
-  // model, which the row pins. The legitimate direction of change in between —
-  // a tightened permission matrix — is one a resume should *inherit*, not one
-  // it should carry a stale copy past.
-  const exposed = visibleTools(
-    deps.tools,
-    input.principal,
-    deps.capabilities,
-    // `input.tenant` e non il tenant del principal: sono lo stesso valore, e
-    // questo è quello su cui il kernel deciderà fra due righe.
-    deps.grants?.get(input.tenant),
-  ).slice(0, deps.profile.maxToolsExposed);
-  turn.setAttributes({
-    'muffin.context.class': turnClass,
-    'muffin.context.tools_exposed': exposed.length,
-  });
 
   /**
    * Ciò che le scritture durevoli e il corpo del giro leggevano per chiusura,
