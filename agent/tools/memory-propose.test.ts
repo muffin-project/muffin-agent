@@ -346,6 +346,7 @@ describe('memory_propose — stage durably, reconcile canonically, answer honest
       kind: 'agent-inference',
     });
     expect(review.content).toContain('Sottoposto a revisione');
+    expect(review.content).not.toContain('non era un verdetto del giudice');
     expect(review.content).not.toContain('Ricordo:');
     // Both stay: the cautious outcome never retires quietly.
     expect(h.store.activeFacts('host', me, 'city')).toHaveLength(2);
@@ -384,6 +385,7 @@ describe('memory_propose — stage durably, reconcile canonically, answer honest
     const replay = await proposeMemory(h.deps, CTX, proposal);
     expect(replay.content).toContain('Sottoposto a revisione');
     expect(replay.content).toContain('stato corrente');
+    expect(replay.content).not.toContain('non era un verdetto del giudice');
     expect(replay.content).not.toContain('resta da decidere');
     expect(h.store.activeFacts('host', me, 'accountant')).toHaveLength(1);
     expect(h.store.listProposals('host', { status: 'review' })).toHaveLength(1);

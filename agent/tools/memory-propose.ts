@@ -305,7 +305,7 @@ export async function proposeMemory(
         return {
           content:
             `Sottoposto a revisione: ${subject} ${predicate} ${object} (fatto #${out.factIds[0]}, proposta #${proposalId}). ` +
-            `Controlla \`muffin memory review\` per lo stato corrente; questo non era un verdetto del giudice.`,
+            `Controlla \`muffin memory review\` per lo stato corrente.`,
           tier,
         };
       case 'rejected':
