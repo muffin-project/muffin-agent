@@ -261,3 +261,23 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
     discovery,
   };
 }
+
+/**
+ * Use the same deterministic authority-filtered search to seed the first model
+ * round from the task text. This is the provider-neutral fallback for models
+ * that do not reliably decide to invoke the discovery meta-tool themselves.
+ *
+ * The search door remains visible (except on the intentionally tiny one-slot
+ * profile), so a later need can still replace the task-local selection.
+ */
+export function preloadCapabilitiesForTask<T extends CapabilityTool>(
+  exposure: CapabilityExposure<T>,
+  query: string,
+  maxResults = 2,
+): CapabilityLoadResult | null {
+  if (!exposure.pressured || exposure.discovery === undefined) return null;
+  const result = exposure.discovery.searchAndLoad(query, maxResults);
+  exposure.discovery.activatePending();
+  return result;
+}
+
