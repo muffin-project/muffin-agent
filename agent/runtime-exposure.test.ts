@@ -109,7 +109,7 @@ describe('quali tool vede davvero un turno', () => {
   it('su consumer-local resta il fast path ordinario finché il catalogo entra nel profilo', () => {
     const profiles = loadProfiles(join(import.meta.dirname, 'profiles'));
     const profile = selectProfile('qwen3.8-27b', profiles);
-    expect(profile.maxToolsExposed).toBe(22);
+    expect(profile.maxToolsExposed).toBe(23);
 
     const rt = realRuntime();
     try {

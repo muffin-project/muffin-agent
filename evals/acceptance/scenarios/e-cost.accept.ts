@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe } from 'vitest';
 import { install, until, type Run } from '../harness.js';
@@ -393,12 +393,29 @@ describe('acceptance · E · economia e osservabilità', () => {
             ? extraction([
                 { subject: 'owner', predicate: 'accountant', object: 'Marco', subjectKind: 'person', validFrom: null, confidence: 0.9 },
               ])
-            : extraction([
-                { subject: 'owner', predicate: 'accountant', object: 'Lucia', subjectKind: 'person', validFrom: null, confidence: 0.9 },
-              ]);
+          : extraction([
+              { subject: 'owner', predicate: 'accountant', object: 'Lucia', subjectKind: 'person', validFrom: null, confidence: 0.9 },
+            ]);
         },
       });
       try {
+        // The review question is the claim here; embeddings are not. Keep the
+        // fact index on the same deterministic fake provider so this scenario
+        // does not depend on a local Ollama service or record an unrelated
+        // pipeline error in the review register.
+        const secret = await inst.muffin(['secret', 'set', 'fake_embed_key'], 'fake_embed_key-value');
+        if (secret.code !== 0) throw new Error(`secret set fake_embed_key: exit ${secret.code}\n${secret.err}`);
+        const configPath = join(inst.home, 'config.json');
+        const config = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+        config['embedder'] = {
+          kind: 'openai-compat',
+          model: 'fake-embed',
+          dimensions: 8,
+          baseUrl: inst.provider.baseUrl,
+          apiKeyRef: 'secret://fake_embed_key',
+        };
+        writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+
         const first = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'Marco è il mio commercialista']);
         if (first.code !== 0) throw new Error(`primo turno: exit ${first.code}\n${first.err}`);
         const second = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'ho cambiato commercialista, ora è Lucia']);
@@ -416,14 +433,11 @@ describe('acceptance · E · economia e osservabilità', () => {
         if (extract.code !== 1) {
           throw new Error(`muffin memory extract: atteso exit 1 (un problema reale), trovato ${extract.code}\nout: ${extract.out}\nerr: ${extract.err}`);
         }
-        // The manual drain's own summary line is the grouped one
-        // (`formatConsolidationLines`), not the ungrouped `report.errors` —
-        // proven here, not assumed, since only one candidate failed and the
-        // multiplier only appears above one. Exactly once, not twice: before
-        // the fix in this same PR, `cmdMemoryExtract`'s own summary loop and
-        // `Consolidator.execute()`'s internal logger both printed it —
-        // `Consolidator.execute()` now stays quiet on `trigger: 'manual'`
-        // because this caller already holds the report and prints it below.
+        // The manual drain prints one grouped judge summary
+        // (`formatConsolidationLines`) beside the actionable per-candidate
+        // conflict. The conflict carries its typed reason without repeating
+        // the summary phrase; only the durable review row keeps the full
+        // detail. Exactly once, not twice.
         const judgeLineHits = extract.err.split('giudice non disponibile su owner/accountant').length - 1;
         if (judgeLineHits !== 1) {
           throw new Error(
@@ -438,8 +452,8 @@ describe('acceptance · E · economia e osservabilità', () => {
         }
 
         const quiet = await inst.muffin(['memory', 'review']);
-        if (quiet.code !== 0) {
-          throw new Error(`muffin memory review: exit ${quiet.code}\nout: ${quiet.out}\nerr: ${quiet.err}`);
+        if (quiet.code !== 1) {
+          throw new Error(`muffin memory review: atteso exit 1 per la decisione aperta, trovato ${quiet.code}\nout: ${quiet.out}\nerr: ${quiet.err}`);
         }
         if (!quiet.out.includes('giudice non disponibile su owner/accountant')) {
           throw new Error(`la riga non nomina il fallimento del giudice: ${JSON.stringify(quiet.out)}`);
@@ -454,8 +468,8 @@ describe('acceptance · E · economia e osservabilità', () => {
         }
 
         const verbose = await inst.muffin(['memory', 'review', '--verbose']);
-        if (verbose.code !== 0) {
-          throw new Error(`muffin memory review --verbose: exit ${verbose.code}\nout: ${verbose.out}\nerr: ${verbose.err}`);
+        if (verbose.code !== 1) {
+          throw new Error(`muffin memory review --verbose: atteso exit 1 per la decisione aperta, trovato ${verbose.code}\nout: ${verbose.out}\nerr: ${verbose.err}`);
         }
         if (!verbose.out.includes('risposta grezza')) {
           throw new Error(`--verbose non aggiunge la risposta grezza: ${JSON.stringify(verbose.out)}`);

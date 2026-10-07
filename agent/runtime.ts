@@ -91,6 +91,11 @@ import {
   whyMemory,
 } from './tools/memory.js';
 import { forgetMemory, memoryForgetCapability, memoryForgetSpec } from './tools/memory-forget.js';
+import {
+  memoryProposeCapability,
+  memoryProposeSpec,
+  proposeMemory,
+} from './tools/memory-propose.js';
 import { makeProcessTools, processCapabilities } from './tools/process.js';
 import { makeScheduleTool, scheduleCapability } from './tools/schedule.js';
 import { diagnoseSearch, makeSearchTool, searchCapability } from './tools/search.js';
@@ -324,6 +329,7 @@ export function baseToolOrder(input: {
     'memory_search',
     'memory_why',
     'memory_forget',
+    'memory_propose',
     'document_read',
     // Accanto a `document_read`, e non in coda: sono le due metà della stessa
     // cosa — si salva per rileggere. In una stanza con grant (ADR-0073) queste
@@ -833,6 +839,29 @@ export function buildRuntime(
       // lock error escapes.
       throwTier: 0,
     },
+    {
+      // ADR-0051 slice 1: intentional memory stages a durable proposal and
+      // reconciles it through the canonical memory writer. #469 only changes
+      // model visibility; this tool keeps the exact dev authority/taint path.
+      capability: memoryProposeCapability.id,
+      spec: memoryProposeSpec,
+      handler: async (args, ctx) =>
+        proposeMemory(
+          {
+            store: memoryStore,
+            provider: light,
+            model: config.models.light,
+            tracer,
+          },
+          {
+            tenant: ctx.tenant,
+            turnId: ctx.turnId,
+            taint: ctx.taint,
+          },
+          args,
+        ),
+      throwTier: 0,
+    },
     // The other half of "a document enters whole": the vault stores every page
     // and the model is handed an index, so it needs a door back to the text.
     // An index with no door is a summary with extra steps.
@@ -972,6 +1001,7 @@ export function buildRuntime(
       // `memory_forget`'s own door, host-only: declared here or the visibility
       // filter and the kernel disagree about who sees it.
       memoryForgetCapability,
+      memoryProposeCapability,
       documentCapability,
       shellCapability,
       shellWriteCapability,

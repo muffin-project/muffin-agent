@@ -323,7 +323,7 @@ describe('memory ingestion', () => {
     expect(report.errors.join(' ')).not.toContain('giudice non disponibile');
   });
 
-  describe('why the judge could not answer, and what it said', () => {
+  describe('why the judge could not answer, what it said, and how to resolve it', () => {
     // 2026-08-16, real install: the REPL printed "giudice non disponibile su
     // owner/interest: tengo entrambi i valori" three times running, and
     // `muffin memory review` showed nothing to tell the three apart — no
@@ -346,7 +346,7 @@ describe('memory ingestion', () => {
       },
     ];
 
-    it.each(scenarios)('$name → typed reason and the raw response, both on the durable row', async ({ reply, reason, rawResponse }) => {
+    it.each(scenarios)('$name → typed reason and raw response on an actionable contradiction', async ({ reply, reason, rawResponse }) => {
       const { store, deps } = harness([
         facts(fact('owner', 'interest', 'vela')),
         facts(fact('owner', 'interest', 'windsurf')),
@@ -363,12 +363,17 @@ describe('memory ingestion', () => {
 
       const persisted = store.pendingReview(HOST);
       expect(persisted).toHaveLength(1);
-      expect(persisted[0]?.kind).toBe('error');
+      expect(persisted[0]?.kind).toBe('contradiction');
       expect(persisted[0]?.subject).toBe('owner');
       expect(persisted[0]?.predicate).toBe('interest');
+      expect(store.openContradictions(HOST)).toHaveLength(1);
+      expect(report.needsReview).toHaveLength(1);
+      expect(report.needsReview[0]?.why).toContain(`[${reason}`);
+      expect(report.needsReview[0]?.why).not.toContain('giudice non disponibile');
+      if (rawResponse) expect(report.needsReview[0]?.why).not.toContain(rawResponse);
       // Mutation this kills: removing the raw-response line from `detail`.
-      // Without it the row says only "tengo entrambi i valori" — the exact
-      // sentence the owner could not get an explanation from on 2026-08-16.
+      // The typed reason and explicit owner action stay visible even when the
+      // judge's raw response is withheld from ordinary output.
       expect(persisted[0]?.detail).toContain(rawResponse === '' ? '(vuota)' : rawResponse);
       expect(persisted[0]?.detail).toContain(`[${reason}`);
     });
@@ -873,7 +878,7 @@ describe('the ingest lock', () => {
 
     expect(report.episodes).toBe(0);
     expect(report.factsAdded).toBe(0);
-    expect(report.errors.join(' ')).toContain("un'altra estrazione è già in corso");
+    expect(report.errors.join(' ')).toContain("un'altra operazione sulla memoria è già in corso");
     expect(store.pendingEpisodes(HOST, 1)).toHaveLength(1);
 
     store.releaseIngestLock();
