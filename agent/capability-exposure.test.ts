@@ -130,4 +130,21 @@ describe('capability exposure projection', () => {
     expect(names).not.toContain('event_watch_create');
     expect(names).not.toContain('event_watch_list');
   });
+
+  it('a one-slot profile does not report capability_search itself as a discovered match', () => {
+    const projection = createCapabilityExposure({
+      eligible: [tool('fs_read'), tool('event_watch_create', 'event.watch'), discovery],
+      maxToolsExposed: 1,
+      discoveryTool: discovery,
+    });
+
+    const result = projection.discovery?.searchAndLoad('does not exist anywhere', 3);
+    expect(result?.loaded).toEqual([]);
+    expect(result?.matched).toBe(0);
+    projection.discovery?.activatePending();
+    expect(projection.exposed.map((entry) => entry.spec.name)).toEqual([
+      CAPABILITY_SEARCH_TOOL_NAME,
+    ]);
+  });
+
 });
