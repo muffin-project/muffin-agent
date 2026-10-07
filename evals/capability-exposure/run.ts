@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util';
 import { runTurn, type RegisteredTool, type ToolContext } from '../../agent/loop.js';
 import { selectProfile, loadProfiles } from '../../agent/profiles/profile.js';
 import { OpenAICompatProvider } from '../../agent/providers/openai-compat.js';
+import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types.js';
 import {
   capabilityDiscoveryCapability,
   makeCapabilitySearchTool,
@@ -29,6 +30,7 @@ type Outcome = {
   readonly outputTokens: number;
   readonly ms: number;
   readonly calls: readonly string[];
+  readonly firstTools: readonly string[];
 };
 
 function declaration(id: string): CapabilityDecl {
@@ -90,6 +92,21 @@ const inventoryTool: RegisteredTool = {
   },
 };
 
+class ObservedProvider implements Provider {
+  readonly seen: ChatCall[] = [];
+
+  constructor(private readonly inner: Provider) {}
+
+  get kind(): Provider['kind'] {
+    return this.inner.kind;
+  }
+
+  async chat(call: ChatCall): Promise<ChatResult> {
+    this.seen.push(call);
+    return this.inner.chat(call);
+  }
+}
+
 function observed(tool: RegisteredTool, calls: string[]): RegisteredTool {
   return {
     ...tool,
@@ -141,11 +158,14 @@ async function oneRun(input: {
     maxToolsExposed: input.mode === 'flat' ? 24 : 4,
   };
 
+  const provider = new ObservedProvider(
+    new OpenAICompatProvider(input.apiKey, input.baseUrl),
+  );
   const started = Date.now();
   try {
     const result = await runTurn(
       {
-        provider: new OpenAICompatProvider(input.apiKey, input.baseUrl),
+        provider,
         profile,
         model: input.model,
         tools,
@@ -179,17 +199,21 @@ async function oneRun(input: {
 
     const inventoryCalls = calls.filter((name) => name === 'inventory_lookup').length;
     const discoveryCalls = calls.filter((name) => name === 'capability_search').length;
+    const firstTools = provider.seen[0]?.tools?.map((tool) => tool.name) ?? [];
     const hasAnswer = /\b37\b/.test(result.text);
-    const discoveryShape =
+    const projectionShape =
       input.mode === 'flat'
-        ? discoveryCalls === 0
-        : discoveryCalls === 0 || discoveryCalls >= 1;
+        ? firstTools.includes('inventory_lookup') &&
+          !firstTools.includes('capability_search')
+        : firstTools.length <= 4 &&
+          firstTools.includes('inventory_lookup') &&
+          firstTools.includes('capability_search');
 
     const pass =
       result.stopped === 'answered' &&
       hasAnswer &&
       inventoryCalls === 1 &&
-      discoveryShape;
+      projectionShape;
 
     return {
       mode: input.mode,
@@ -199,18 +223,20 @@ async function oneRun(input: {
           ? 'inventory tool selected directly'
           : discoveryCalls === 0
             ? 'hidden inventory tool preloaded from task text then selected'
-            : 'hidden inventory tool discovered then selected'
+            : 'preloaded inventory tool selected after an additional discovery call'
         : [
             'stopped=' + result.stopped,
             'answer37=' + String(hasAnswer),
             'inventoryCalls=' + String(inventoryCalls),
             'discoveryCalls=' + String(discoveryCalls),
+            'firstTools=' + firstTools.join('|'),
           ].join(', '),
       iterations: result.iterations,
       inputTokens: result.usage.inputTokens,
       outputTokens: result.usage.outputTokens,
       ms: Date.now() - started,
       calls,
+      firstTools,
     };
   } catch (error) {
     return {
@@ -222,6 +248,7 @@ async function oneRun(input: {
       outputTokens: 0,
       ms: Date.now() - started,
       calls,
+      firstTools: provider.seen[0]?.tools?.map((tool) => tool.name) ?? [],
     };
   } finally {
     db.close();
