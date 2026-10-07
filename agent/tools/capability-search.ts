@@ -26,7 +26,8 @@ export function makeCapabilitySearchTool(): RegisteredTool {
       name: CAPABILITY_SEARCH_TOOL_NAME,
       description:
         'Search and load authorized tools that are not currently visible. ' +
-        'Use this only when the task needs a capability missing from the current tool list. ' +
+        'Use it when the task needs a capability missing from the current tool list. ' +
+        'Do not use it when the needed tool is already visible, or just to browse the catalogue. ' +
         'The next model round receives the loaded tool schemas; execution still goes through normal policy checks.',
       inputSchema: {
         type: 'object',
@@ -80,7 +81,7 @@ export function makeCapabilitySearchTool(): RegisteredTool {
           ? ' ' + String(result.omitted) + ' additional match(es) were not loaded because of the profile exposure ceiling.'
           : '';
       return {
-        content: 'Loaded for the next round: ' + loaded + '.' + suffix,
+        content: 'Selected for the next model round in this lease: ' + loaded + '.' + suffix,
         tier: 0,
       };
     },
