@@ -1,15 +1,16 @@
-# Capability exposure measurement — 2026-10-07
+# Capability exposure deterministic measurement — 2026-10-08
 
-Candidate: `0a1f56b322c283732494b68220efbf6a19e33d86`  
+Measured candidate: `87e8b594907fda3feffe60ac1371c371ea84b548`  
 PR: #854  
-GitHub Actions run: `verifica` 37643138069
+GitHub Actions run: `verifica` 37694712266
 
 ## What was measured
 
-The measurement uses the real `buildRuntime` native owner catalogue, applies
-the same `visibleTools` authority filter as the production loop, then compares
-the full authorized native tool schema set with the #469 initial projection
-under the shipped conservative ceiling (`maxToolsExposed = 10`).
+The measurement uses the real `buildRuntime` native owner catalogue after the
+current `dev` reconciliation, applies the same `visibleTools` authority filter
+as the production loop, then compares the full authorized native ToolSpec set
+with the #469 initial projection under the conservative ceiling
+(`maxToolsExposed = 10`).
 
 It also asks the deterministic local discovery path for fourteen representative
 native capabilities using task-shaped queries rather than raw tool ids.
@@ -17,66 +18,78 @@ native capabilities using task-shaped queries rather than raw tool ids.
 Observed in GitHub Actions:
 
 ```text
-CAPABILITY_EXPOSURE_METRICS {"fullToolCount":21,"initialToolCount":6,"fullSchemaBytes":24471,"initialSchemaBytes":6252,"schemaByteReductionPct":74.5,"representativeTasks":14,"selectionHits":14,"selectionSuccessPct":100,"extraDiscoveryModelRoundsPerHiddenTask":1}
+CAPABILITY_EXPOSURE_METRICS {"fullToolCount":22,"initialToolCount":6,"fullSchemaBytes":26319,"initialSchemaBytes":6318,"schemaByteReductionPct":76,"representativeTasks":14,"selectionHits":14,"selectionSuccessPct":100,"extraDiscoveryModelRoundsPerHiddenTask":1}
 ```
 
-The full verification gate at this candidate reported:
+The same verification gate reported:
 
 ```text
-Test Files 393 passed (393)
-Tests      5185 passed | 3 skipped (5188)
+Test Files 396 passed (396)
+Tests      5237 passed | 3 skipped (5240)
 ```
 
 ## Result
 
 | Metric | Observed |
 | --- | ---: |
-| authorized native tools in flat baseline | 21 |
+| authorized native tools in flat baseline | 22 |
 | schemas in initial pressured projection | 6 |
-| flat serialized ToolSpec bytes | 24,471 |
-| initial serialized ToolSpec bytes | 6,252 |
-| schema-byte reduction | 74.5% |
+| flat serialized ToolSpec bytes | 26,319 |
+| initial serialized ToolSpec bytes | 6,318 |
+| schema-byte reduction | 76.0% |
 | representative deterministic-search tasks | 14 |
 | expected capability in loaded top-3 | 14/14 |
 | deterministic selection success | 100% |
-| structural extra model rounds for a hidden capability | 1 |
+| explicit-search extra model rounds for a hidden capability | 1 |
 
-This falsifies the old claim that the current catalogue is too small for
-progressive disclosure to save meaningful schema context: at the conservative
-ceiling the initial serialized schema payload is about one quarter of the flat
-native catalogue.
+This proves that, at the current native catalogue breadth, the profile ceiling is
+not merely theoretical pressure: an initial progressive projection can remove
+about three quarters of serialized tool-schema bytes while deterministic local
+selection still recovers all fourteen representative targets in the test set.
 
-It does **not** prove that every model benefits. A hidden capability adds one
-model/discovery round, and these fourteen cases measure the deterministic search
-layer, not a real model deciding whether and how to invoke `capability_search`.
+The final mechanism does not force that extra round for every hidden
+capability. An obvious task-relevant hidden tool may be selected from the owner
+request and preloaded before the first provider call; `capability_search`
+remains the fallback when the task text does not recover the need.
+
+## Real-model evidence
+
+Model behavior, token use and latency are measured separately in:
+
+`docs/evidence/capability-exposure-real-model-2026-10-08.md`
+
+At a 22-schema flat baseline versus a four-schema progressive projection,
+`gpt-4o-mini` completed 5/5 tasks in both conditions with the same two model
+iterations. Progressive exposure reduced average input tokens from 1,196 to 898
+(-24.9%) while average wall time in the small sample increased from 1,287 ms to
+1,500 ms (+16.6%).
+
+The same lane intentionally records the small-catalog counterexample: with only
+six flat schemas, progressive exposure used more input tokens. That is why the
+under-cap path remains static.
 
 ## Current external guidance rechecked
 
-OpenAI's current Tool Search documentation says deferred loading trades an
-additional discovery step for lower up-front tool context, supports
-client-executed search when availability depends on tenant/project/application
-state, and recommends comparing task completion, input-token usage and latency
-before choosing it as a default.
+OpenAI's Tool Search guidance supports deferred loading and client-executed
+search for application-controlled catalogues, while recommending comparison of
+task completion, input-token usage and latency before choosing a default.
 
-Anthropic's current advanced-tool-use guidance likewise recommends keeping a
-small frequent set eager and discovering the remainder, while its strongest
-published gains come from much larger MCP catalogues than Muffin's current one.
+Anthropic's advanced-tool-use guidance likewise supports a small eager set plus
+search for broader catalogues, with its strongest published gains at much larger
+tool counts than Muffin currently has.
 
 Sources:
 - https://developers.openai.com/api/docs/guides/tools-tool-search
 - https://www.anthropic.com/engineering/advanced-tool-use
 
-## Remaining evidence
+## Remaining gate
 
-Before this CRITICAL slice can integrate:
+The mechanism, production wiring, authority-negative path, load-bearing mutation
+and model comparison are all recorded. Integration still requires:
 
-1. a load-bearing wiring mutation must show that bypassing the production
-   projection makes the beyond-cap production-path proof fail for the expected
-   reason;
-2. real-model/provider task success and latency should be measured on a lane
-   with owner-controlled credentials rather than fabricated in CI;
-3. the branch must be current with `dev`, full Ready-for-review acceptance must
-   run, and a fresh independent judge must return terminal `MERGE`.
+1. Ready-for-review acceptance green on an unchanged current head;
+2. current `dev` still matching the integration base immediately before review;
+3. a fresh independent CRITICAL judge returning terminal `MERGE`.
 
-The deterministic measurement above is reusable only while the relevant
-catalogue/projection/search code remains unchanged.
+This deterministic evidence is reusable on a later documentation-only head
+because the catalogue/projection/search code and test remain byte-identical.
