@@ -11,6 +11,7 @@ import {
   CAPABILITY_DISCOVERY_GUIDANCE,
   CAPABILITY_SEARCH_TOOL_NAME,
   createCapabilityExposure,
+  preloadCapabilitiesForTask,
 } from '../capability-exposure.js';
 import { tenantClass, visibleTools } from '../context/assemble.js';
 import { historyTaint, reinjectedHistory } from '../context/history-taint.js';
@@ -333,12 +334,17 @@ export async function guidaIlTurno(
     maxToolsExposed: deps.profile.maxToolsExposed,
     ...(discoveryTool === undefined ? {} : { discoveryTool }),
   });
+  const preloaded =
+    capabilityExposure.pressured && deps.profile.maxToolsExposed > 1
+      ? preloadCapabilitiesForTask(capabilityExposure, input.text, 2)
+      : null;
   const exposed = capabilityExposure.exposed;
   turn.setAttributes({
     'muffin.context.class': turnClass,
     'muffin.context.tools_exposed': exposed.length,
     'muffin.context.tools_hidden': capabilityExposure.hiddenCount,
     'muffin.context.capability_discovery': capabilityExposure.pressured,
+    'muffin.context.tools_preloaded': preloaded?.loaded.length ?? 0,
   });
 
   /**
