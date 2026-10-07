@@ -23,7 +23,7 @@ export type Principal =
    */
   | { kind: 'owner'; connector: ConnectorId; externalId: string }
   | { kind: 'member'; connector: ConnectorId; tenantId: TenantId; externalId: string }
-  | { kind: 'system'; source: 'scheduler' | 'consolidation' | 'ratchet' }
+  | { kind: 'system'; source: 'scheduler' | 'consolidation' | 'ratchet' | 'automation' }
   | { kind: 'agent'; role: 'dev' };
 
 /** 'host' | `group:${connector}:${externalId}` | `community:${slug}` */

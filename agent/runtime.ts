@@ -1578,6 +1578,17 @@ export async function attachMcp(runtime: Runtime, home = paths().home): Promise<
       .sort((a, b) => a.spec.name.localeCompare(b.spec.name));
     for (const t of tool) runtime.register(t, decl);
   }
+  const report = [...attachment.report];
+  if (process.env.MUFFIN_EVENT_INTELLIGENCE === '1') {
+    try {
+      const { attachEventIntelligence } = await import('./event-intelligence.js');
+      report.push(...(await attachEventIntelligence(runtime, attachment.eventConnections, home)));
+    } catch (error) {
+      report.push(
+        `event-intelligence — unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
   runtime.onClose(() => attachment.close());
-  return attachment.report;
+  return report;
 }
