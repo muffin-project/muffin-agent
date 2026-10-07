@@ -54,7 +54,7 @@ function inert(name: string): { tool: RegisteredTool; decl: CapabilityDecl } {
       capability: decl.id,
       spec: {
         name,
-        description: 'Support capability ' + name + '; not useful for inventory questions.',
+        description: 'Support capability ' + name + ' for its own domain operations.',
         inputSchema: { type: 'object' },
       },
       throwTier: 0,
@@ -137,14 +137,39 @@ async function oneRun(input: {
     inert('memory_search'),
     inert('skill_read'),
   ];
+  // Approximate the current native-catalogue breadth rather than comparing a
+  // six-tool flat baseline against a four-tool projection. The static schema
+  // byte measurement uses the exact shipped catalogue separately; this real
+  // model lane asks whether selection/reliability still holds at comparable
+  // breadth.
+  const fillers = [
+    'document_read',
+    'vault_save',
+    'process_list',
+    'process_kill',
+    'http_get',
+    'wait',
+    'todo',
+    'schedule_recurring',
+    'sys_inspect',
+    'sys_effects',
+    'memory_why',
+    'memory_forget',
+    'memory_propose',
+    'send_file',
+    'shell_run',
+    'shell_run_write',
+  ].map(inert);
   const search = makeCapabilitySearchTool();
   const tools = [
     ...core.map((entry) => observed(entry.tool, calls)),
+    ...fillers.map((entry) => observed(entry.tool, calls)),
     observed(inventoryTool, calls),
     observed(search, calls),
   ];
   const capabilities = new Map<string, CapabilityDecl>([
     ...core.map((entry) => [entry.decl.id, entry.decl] as const),
+    ...fillers.map((entry) => [entry.decl.id, entry.decl] as const),
     [inventoryDecl.id, inventoryDecl],
     [capabilityDiscoveryCapability.id, capabilityDiscoveryCapability],
   ]);
