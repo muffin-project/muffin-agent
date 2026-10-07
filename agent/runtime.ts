@@ -352,10 +352,6 @@ export function baseToolOrder(input: {
     'skill_read',
     'http_get',
     ...(input.searchOn ? ['web_search'] : []),
-    // Registered globally, projected only when the authority-filtered catalogue
-    // is under pressure (#469). Keeping it in the deterministic runtime order
-    // prevents late registration from moving the discovery door by accident.
-    'capability_search',
     ...(input.sendFileAvailable ? ['send_file'] : []),
     /**
      * Sopra `wait`/`todo`/`sys_inspect`, e per l'argomento che `send_file` ha
@@ -948,11 +944,6 @@ export function buildRuntime(
     capabilityGaps.push(searchDiagnosis.gap);
   }
 
-  // #469: registered once like every other native tool, but only projected to
-  // the model on turns whose authority-filtered catalogue exceeds the profile
-  // ceiling. The per-turn projection lives in agent/capability-exposure.ts.
-  tools.push(makeCapabilitySearchTool());
-
   /**
    * The two runtime primitives (requirements-status.md#wait-e-todo-sono-primitive-del-runtime-non-tool) — registered **last**, and the
    * position is a decision rather than an accident of where the import landed.
@@ -1023,7 +1014,6 @@ export function buildRuntime(
       scheduleCapability,
       effectsCapability,
       vaultWriteCapability,
-      capabilityDiscoveryCapability,
       // Declared only when the tool exists. A capability the kernel knows about
       // but nothing can invoke is the harmless direction; the dangerous one is a
       // tool the kernel has never heard of, and registering them together is
@@ -1031,6 +1021,14 @@ export function buildRuntime(
       ...(searchOn ? [searchCapability] : []),
     ].map((c) => [c.id, c]),
   );
+  // #469 meta-capability: keep its tool and policy declaration paired at one
+  // registration site instead of adding another independent entry to the
+  // native tool list and the declaration list. This is deliberately not a
+  // broad registry rewrite; it is the smallest non-drifting shape for the new
+  // projection door.
+  capabilities.set(capabilityDiscoveryCapability.id, capabilityDiscoveryCapability);
+  tools.push(makeCapabilitySearchTool());
+
   const decide = createDecide({
     capabilities,
     // The line that makes `rot/policy.json` load-bearing. Delete it and the
