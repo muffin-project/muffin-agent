@@ -32,6 +32,7 @@ Initial observation on PR #850 head `3b1ae3aaf47f681371d26852f5bebea715d94048`, 
 |---|---|---|---|---|
 | Proposal trust cannot be lowered by omitted or selectively cited evidence. | ADR-0051 says a tier-3 inference cannot become tier 0 by paraphrase. `ToolContext.taint()` covers everything physically available in the current prompt, including reinjected history, while `intrinsicTaint()` excludes history/plan ceilings to avoid the reply/todo ratchet documented by ADR-0044. | Derive proposal tier as `max(cited episode tiers, current turn taint)`; pass the live taint function only from runtime, never from model arguments. Return the same derived tier from the tool. | Using `intrinsicTaint()` avoids stamping history-only ceilings but can lose a still-present injected instruction that causes a durable proposal. Requiring model-supplied episode IDs is weaker: the model can omit an influential result or select a lower-tier source. CaMeL's control/data-flow extraction is a finer-grained alternative but would require a new execution architecture. | Use current turn taint: memory proposals can persist a belief and must inherit every source physically present to the model. This accepts the conservative history ceiling already required for in-prompt actions; revisit if dogfood demonstrates lasting false-positive memory tiers after the tainted history leaves the prompt. Falsify through the production `memory_propose` handler: ingress and selected source tier 0, current turn taint 3, then assert proposal and resulting fact stay tier 3; removing the runtime taint floor must make the regression fail. |
 | Reconciliation review rows remain answerable until owner resolution. | The shared lane is held across judge calls and owner decisions; the production duplicate sweep was the unguarded writer. | Reacquire the existing lane around the sweep's snapshot and retirements; report a busy sweep explicitly and let consolidation mark the run busy. | A transaction around the sweep alone cannot cover another process's asynchronous judge wait. Removing the sweep avoids the race but leaves exact duplicate active beliefs, a condition this maintenance path owns. The existing deterministic sweep-vs-sweep test does not cover a reconciliation writer. | Use the same durable lane, with no new lock or schema. Falsify on a file-backed DB with two equal-time duplicate facts, a blocked proposal judge and a second `MemoryStore` sweep: sweep must report busy, preserve the candidate, and the committed review must remain visible and resolvable. |
+| A duplicate proposal's higher live taint must not be lost while reconciliation is deciding it. | `insertProposal` currently autocommits `INSERT OR IGNORE`, `SELECT id`, and pending-only `UPDATE trust_tier = MAX(...)` separately. Reconciliation re-reads the tier and writes the fact plus terminal outcome atomically after the judge await. If resolution lands between staging statements, the update affects zero rows and the fact can stay tier 0 while the duplicate request carried tier 3. | Wrap the existing insert, ID lookup and pending-only tier promotion in one SQLite `IMMEDIATE` transaction. | An atomic `ON CONFLICT ... DO UPDATE ... WHERE status='pending'` can express promotion in one statement, but keeping the current `changes`-based duplicate result and ID lookup makes it less direct. Removing promotion avoids the race by discarding the required monotonic taint floor. Extending the reconciliation lane to staging would hold a semantic lock around producer work and is broader than needed. | Use the short `IMMEDIATE` transaction: SQLite serializes writers, and this existing multi-statement storage operation then orders wholly before reconciliation's commit or after its terminal status. No schema or lane change is needed. Falsify with two processes/connections and a controlled pause after the duplicate insert: while staging owns the transaction, reconciliation must not commit; after staging resumes, the resulting fact must retain tier 3. Also verify a duplicate ordered after terminal commit leaves the outcome unchanged. |
 
 ## Peer evidence and limits
 
@@ -56,6 +57,23 @@ These sources support retaining deterministic write-time provenance and
 challenge how much a scalar or caller-supplied lineage can establish. They do
 not settle Muffin's product policy. The selected changes enforce the current
 ADR/security promise without a schema migration or a new provenance system.
+
+For the staging/reconciliation race, SQLite's primary documentation says that
+separate connections see only committed transactions, SQLite serializes writes
+to one writer at a time, and `BEGIN IMMEDIATE` acquires that writer position
+before subsequent reads/writes. Its `UPDATE` documentation also makes explicit
+that a `WHERE` clause matching no rows is a successful zero-row update — the
+exact silent outcome in the reproduced interleaving. These sources support
+grouping the existing statements in one short transaction; they do not make
+separate autocommit statements atomic by themselves:
+
+- [SQLite isolation](https://www.sqlite.org/isolation.html)
+- [SQLite transactions](https://www.sqlite.org/lang_transaction.html)
+- [SQLite UPDATE](https://www.sqlite.org/lang_update.html)
+
+No agent-framework peer comparison changes this storage decision: the failure
+is determined by SQLite transaction boundaries, and the existing single-writer
+memory semantics remain intact.
 
 ## Follow-up falsifiers found during review
 
@@ -94,6 +112,21 @@ Review and production-path falsifiers exposed gaps in the initial implementation
    reconciliation now use the same descending ID tie-break, and a production
    `Consolidator` test verifies the post-ingest sweep leaves the review open
    and resolvable.
+6. Fresh CRITICAL review of PR #850 head
+   `779514a595ad7c1d49cb26868bc28c27b17916b6` found that duplicate tier
+   promotion was three separate autocommit statements. A second process can
+   commit a terminal proposal between the initial `INSERT OR IGNORE` and the
+   pending-only tier update, so the final commit's fresh read can still be tier
+   0. The chosen repair groups those statements in an `IMMEDIATE` transaction;
+   the regression pauses one process after the insert while another attempts
+   reconciliation, then verifies the writer is serialized and the committed
+   fact retains tier 3. A second connection also verifies that a duplicate
+   arriving after terminal commit leaves both outcome and fact unchanged.
+7. The same review found that a `review` response claimed the outcome was not a
+   judge verdict, although a parsed `verdict: "review"` is exactly such a
+   verdict. The response now reports only that the proposal went to review and
+   points to the current review surface; parsed review and resolved replay
+   regressions prevent the inaccurate claim from returning.
 
 ## Consequences and reversal signals
 
@@ -112,3 +145,20 @@ Consolidation can report this as busy and retry on its next data-driven fire; it
 does not retire a snapshotted candidate during judge work. Revisit if the lane
 does not cover every production writer or if the retry cadence leaves duplicates
 persistently unresolved.
+
+The duplicate staging transaction is intentionally short and covers only the
+insert, identity lookup and pending-tier promotion. It has no external work or
+await. If it wins the SQLite writer order, reconciliation later reads the
+raised tier; if terminal resolution wins, the pending-only update is a no-op.
+The cross-process regression reproduced both orderings without a schema or lane
+change.
+
+## Verification
+
+- Related local suite: 204 tests passed across 7 files, including the new
+  process-interleaving and terminal-replay cases.
+- `npm run typecheck`: passed.
+- `git diff --check`: passed.
+- The focused E5 acceptance result recorded for the preceding candidate was 1
+  passed with 4 sibling scenarios skipped; exact-head hosted checks remain the
+  integration gate for the replacement commit.

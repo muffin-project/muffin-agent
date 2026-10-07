@@ -1517,42 +1517,50 @@ export class MemoryStore {
     // OR IGNORE on the UNIQUE(tenant_id, identity_key): a repeated propose —
     // a retried tool call, a replay after a crash — is the same proposal, not
     // a second row. `changes === 0` tells the caller which one it was.
-    const info = this.db
-      .prepare(
-        `INSERT OR IGNORE INTO memory_proposals
-           (tenant_id, identity_key, subject, subject_kind, predicate, object_value,
-            valid_from, producer, source_episodes, content, trust_tier, confidence,
-            origin, importance, pinned_request, status, proposed_at)
-         VALUES (@tenantId, @identityKey, @subject, @subjectKind, @predicate, @objectValue,
-            @validFrom, @producer, @sourceEpisodes, @content, @trustTier, @confidence,
-            @origin, @importance, @pinnedRequest, 'pending', @proposedAt)`,
-      )
-      .run({
-        ...input,
-        validFrom: input.validFrom ?? null,
-        sourceEpisodes: JSON.stringify(input.sourceEpisodeIds),
-        pinnedRequest: input.pinnedRequest ? 1 : 0,
-      });
-    const row = this.db
-      .prepare(`SELECT id FROM memory_proposals WHERE tenant_id = ? AND identity_key = ?`)
-      .get(input.tenantId, input.identityKey) as { id: number };
-    if (info.changes === 0) {
-      // A replay can carry a higher live prompt taint than the first attempt.
-      // Keep idempotency, but never leave a pending write below the provenance
-      // floor the current runtime observed.
-      this.db
+    // Keep the insert, lookup and pending-only tier promotion in one write
+    // transaction. Reconciliation commits a fact from the pending row's tier;
+    // separate autocommit statements here let another process resolve the row
+    // after INSERT but before this UPDATE, losing a higher concurrent tier.
+    const stage = this.db.transaction(() => {
+      const info = this.db
         .prepare(
-          `UPDATE memory_proposals
-           SET trust_tier = MAX(trust_tier, @trustTier)
-           WHERE tenant_id = @tenantId AND identity_key = @identityKey AND status = 'pending'`,
+          `INSERT OR IGNORE INTO memory_proposals
+             (tenant_id, identity_key, subject, subject_kind, predicate, object_value,
+              valid_from, producer, source_episodes, content, trust_tier, confidence,
+              origin, importance, pinned_request, status, proposed_at)
+           VALUES (@tenantId, @identityKey, @subject, @subjectKind, @predicate, @objectValue,
+              @validFrom, @producer, @sourceEpisodes, @content, @trustTier, @confidence,
+              @origin, @importance, @pinnedRequest, 'pending', @proposedAt)`,
         )
         .run({
-          tenantId: input.tenantId,
-          identityKey: input.identityKey,
-          trustTier: input.trustTier,
+          ...input,
+          validFrom: input.validFrom ?? null,
+          sourceEpisodes: JSON.stringify(input.sourceEpisodeIds),
+          pinnedRequest: input.pinnedRequest ? 1 : 0,
         });
-    }
-    return { id: Number(row.id), duplicate: info.changes === 0 };
+      const row = this.db
+        .prepare(`SELECT id FROM memory_proposals WHERE tenant_id = ? AND identity_key = ?`)
+        .get(input.tenantId, input.identityKey) as { id: number };
+      if (info.changes === 0) {
+        // A replay can carry a higher live prompt taint than the first attempt.
+        // Keep idempotency, but never leave a pending write below the provenance
+        // floor the current runtime observed. The transaction orders this with
+        // reconciliation's terminal transition across database connections.
+        this.db
+          .prepare(
+            `UPDATE memory_proposals
+             SET trust_tier = MAX(trust_tier, @trustTier)
+             WHERE tenant_id = @tenantId AND identity_key = @identityKey AND status = 'pending'`,
+          )
+          .run({
+            tenantId: input.tenantId,
+            identityKey: input.identityKey,
+            trustTier: input.trustTier,
+          });
+      }
+      return { id: Number(row.id), duplicate: info.changes === 0 };
+    });
+    return stage.immediate();
   }
 
   private static proposalFromRow(row: ProposalRow): MemoryProposalRecord {

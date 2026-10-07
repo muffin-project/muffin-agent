@@ -1,4 +1,12 @@
-import { mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -737,5 +745,213 @@ describe('MemoryProposal — the duplicate sweep shares the reconciliation lane'
       first.db.close();
       second.db.close();
     }
+  });
+});
+
+describe('MemoryProposal — duplicate tier promotion is ordered with reconciliation', () => {
+  it('holds the SQLite writer slot from duplicate insert through tier promotion', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-proposal-tier-order-'));
+    const file = join(dir, 'muffin.db');
+    const db = new DatabaseCtor(file);
+    const store = new MemoryStore(db);
+    const sourceEpisode = episode(store, 'ricorda che il mio commercialista è Mario');
+    const { id: proposalId } = proposeOwner(store, { episodeId: sourceEpisode });
+    const home = mkdtempSync(join(tmpdir(), 'muffin-proposal-tier-traces-'));
+    const deps: IngestDeps = {
+      store,
+      provider: new Scripted([]),
+      model: 'test-light',
+      tracer: new SimpleTracer(new JsonlExporter(home)),
+      now: NOW,
+    };
+
+    const reconcileReady = join(dir, 'reconcile-ready');
+    const reconcileGo = join(dir, 'reconcile-go');
+    const reconcileDone = join(dir, 'reconcile-done');
+    const stageReady = join(dir, 'stage-ready');
+    const stageGo = join(dir, 'stage-go');
+    const stagePaused = join(dir, 'stage-paused');
+    const stageRelease = join(dir, 'stage-release');
+    const stageDone = join(dir, 'stage-done');
+    const reconcileScript = `
+      import { existsSync, writeFileSync } from 'node:fs';
+      import DatabaseCtor from 'better-sqlite3';
+      import { MemoryStore } from '${join(process.cwd(), 'core/memory/store.ts')}';
+      import { reconcileProposal } from '${join(process.cwd(), 'core/memory/ingest.ts')}';
+      const [dbFile, id, readyFile, goFile, doneFile] = process.argv.slice(1);
+      const db = new DatabaseCtor(dbFile);
+      db.pragma('busy_timeout = 250');
+      const store = new MemoryStore(db);
+      writeFileSync(readyFile, 'ready');
+      const wait = new Int32Array(new SharedArrayBuffer(4));
+      while (!existsSync(goFile)) Atomics.wait(wait, 0, 0, 10);
+      try {
+        const out = await reconcileProposal({
+          store,
+          provider: { kind: 'openai-compat', async chat() { throw new Error('judge not expected'); } },
+          model: 'test-light',
+          tracer: {},
+        }, 'host', Number(id));
+        writeFileSync(doneFile, JSON.stringify({ kind: 'resolved', status: out.status }));
+      } catch (error) {
+        writeFileSync(doneFile, JSON.stringify({
+          kind: error?.code === 'SQLITE_BUSY' ? 'busy' : 'error',
+          code: error?.code,
+          message: String(error),
+        }));
+      } finally {
+        db.close();
+      }
+    `;
+    const stageScript = `
+      import { existsSync, writeFileSync } from 'node:fs';
+      import DatabaseCtor from 'better-sqlite3';
+      import { MemoryStore } from '${join(process.cwd(), 'core/memory/store.ts')}';
+      import { proposeMemoryRecord } from '${join(process.cwd(), 'core/memory/proposals.ts')}';
+      const [dbFile, episodeId, readyFile, goFile, pausedFile, releaseFile, doneFile] = process.argv.slice(1);
+      const db = new DatabaseCtor(dbFile);
+      let paused = false;
+      const instrumented = new Proxy(db, {
+        get(target, property) {
+          if (property === 'prepare') return (sql) => {
+            const statement = target.prepare(sql);
+            if (!paused && String(sql).includes('INSERT OR IGNORE INTO memory_proposals')) {
+              return new Proxy(statement, {
+                get(inner, key) {
+                  if (key === 'run') return (...args) => {
+                    const result = inner.run(...args);
+                    paused = true;
+                    writeFileSync(pausedFile, 'paused');
+                    const wait = new Int32Array(new SharedArrayBuffer(4));
+                    while (!existsSync(releaseFile)) Atomics.wait(wait, 0, 0, 10);
+                    return result;
+                  };
+                  const value = Reflect.get(inner, key, inner);
+                  return typeof value === 'function' ? value.bind(inner) : value;
+                },
+              });
+            }
+            return statement;
+          };
+          const value = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+      const store = new MemoryStore(instrumented);
+      writeFileSync(readyFile, 'ready');
+      const wait = new Int32Array(new SharedArrayBuffer(4));
+      while (!existsSync(goFile)) Atomics.wait(wait, 0, 0, 10);
+      const out = proposeMemoryRecord(store, {
+        tenantId: 'host', subject: 'owner', subjectKind: 'person',
+        predicate: 'accountant', object: 'Mario', producer: 'owner-stated',
+        sourceEpisodeIds: [Number(episodeId)], contextTier: 3,
+        content: 'ricorda che il mio commercialista è Mario', confidence: 0.95,
+      });
+      writeFileSync(doneFile, JSON.stringify(out));
+      db.close();
+    `;
+    const reconcile = spawn(
+      'node',
+      ['--import', 'tsx', '--input-type=module', '-e', reconcileScript, file, String(proposalId), reconcileReady, reconcileGo, reconcileDone],
+      { stdio: ['ignore', 'ignore', 'pipe'] },
+    );
+    let reconcileError = '';
+    reconcile.stderr.on('data', (chunk) => (reconcileError += String(chunk)));
+    const stage = spawn(
+      'node',
+      ['--import', 'tsx', '--input-type=module', '-e', stageScript, file, String(sourceEpisode), stageReady, stageGo, stagePaused, stageRelease, stageDone],
+      { stdio: ['ignore', 'ignore', 'pipe'] },
+    );
+    let stageError = '';
+    stage.stderr.on('data', (chunk) => (stageError += String(chunk)));
+    const waitForFile = async (path: string): Promise<string> => {
+      const deadline = Date.now() + 8_000;
+      while (!existsSync(path) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      if (!existsSync(path)) throw new Error(`Timed out waiting for ${path}`);
+      return readFileSync(path, 'utf8');
+    };
+    const waitForClose = (child: ReturnType<typeof spawn>): Promise<void> => {
+      if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+      return new Promise((resolve) => child.once('close', () => resolve()));
+    };
+    try {
+      await Promise.all([waitForFile(reconcileReady), waitForFile(stageReady)]);
+      writeFileSync(stageGo, 'go');
+      await waitForFile(stagePaused);
+
+      // Pause the duplicate call after its INSERT. An autocommit implementation
+      // lets reconciliation finish here; an IMMEDIATE transaction keeps its
+      // writer slot until the pending-only tier promotion also commits.
+      writeFileSync(reconcileGo, 'go');
+      const firstReconcile = JSON.parse(await waitForFile(reconcileDone)) as {
+        kind: string;
+        code?: string;
+        status?: string;
+      };
+      writeFileSync(stageRelease, 'release');
+      await waitForFile(stageDone);
+      await Promise.all([waitForClose(reconcile), waitForClose(stage)]);
+      expect(reconcileError).toBe('');
+      expect(stageError).toBe('');
+      expect(firstReconcile.kind).toBe('busy');
+
+      const out = await reconcileProposal(deps, HOST, proposalId, { at: NOW() });
+      expect(out.status).toBe('accepted');
+      const proposal = store.proposalById(HOST, proposalId)!;
+      const fact = store.factById(HOST, out.factIds[0]!)!;
+      expect(proposal.trustTier).toBe(3);
+      expect(fact.trustTier).toBe(3);
+    } finally {
+      if (!existsSync(reconcileGo)) writeFileSync(reconcileGo, 'go');
+      if (!existsSync(stageGo)) writeFileSync(stageGo, 'go');
+      if (!existsSync(stageRelease)) writeFileSync(stageRelease, 'release');
+      await Promise.all([waitForClose(reconcile), waitForClose(stage)]);
+      db.close();
+    }
+  }, 20_000);
+
+  it('does not raise a proposal after its terminal outcome has committed', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-proposal-terminal-tier-'));
+    const file = join(dir, 'muffin.db');
+    const firstDb = new DatabaseCtor(file);
+    const first = new MemoryStore(firstDb);
+    const sourceEpisode = episode(first, 'ricorda che il mio commercialista è Mario');
+    const { id: proposalId } = proposeOwner(first, { episodeId: sourceEpisode });
+    const home = mkdtempSync(join(tmpdir(), 'muffin-proposal-terminal-traces-'));
+    const out = await reconcileProposal(
+      {
+        store: first,
+        provider: new Scripted([]),
+        model: 'test-light',
+        tracer: new SimpleTracer(new JsonlExporter(home)),
+        now: NOW,
+      },
+      HOST,
+      proposalId,
+      { at: NOW() },
+    );
+    expect(out.status).toBe('accepted');
+
+    const secondDb = new DatabaseCtor(file);
+    const second = new MemoryStore(secondDb);
+    const replay = proposeMemoryRecord(second, {
+      tenantId: HOST,
+      subject: 'owner',
+      subjectKind: 'person',
+      predicate: 'accountant',
+      object: 'Mario',
+      producer: 'owner-stated',
+      sourceEpisodeIds: [sourceEpisode],
+      contextTier: 3,
+      content: 'ricorda che il mio commercialista è Mario',
+      confidence: 0.95,
+    });
+    expect(replay).toEqual({ id: proposalId, duplicate: true });
+    expect(second.proposalById(HOST, proposalId)?.trustTier).toBe(0);
+    expect(second.factById(HOST, out.factIds[0]!)?.trustTier).toBe(0);
+    secondDb.close();
+    firstDb.close();
   });
 });
