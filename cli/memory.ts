@@ -5,7 +5,12 @@ import { readConsolidation } from '../core/memory/consolidator.js';
 import { formatConsolidationLines } from '../core/memory/ingest.js';
 import { checkInvariants, formatCheck } from '../core/memory/invariants.js';
 import { EVERY_INSTANT, recall } from '../core/memory/recall.js';
-import { resolveContradiction, reviewLine, reviewSummary } from '../core/memory/maintenance.js';
+import {
+  MemoryLaneBusyError,
+  resolveContradiction,
+  reviewLine,
+  reviewSummary,
+} from '../core/memory/maintenance.js';
 import { describeProvenance, factLine } from '../core/memory/provenance.js';
 import { makeEmbedder, OllamaEmbedder } from '../core/memory/embed.js';
 import { MemoryStore, type Fact } from '../core/memory/store.js';
@@ -397,7 +402,16 @@ export function cmdMemoryReview(home: string, verbose = false): number {
 export function cmdMemoryReviewKeep(home: string, factId: number): number {
   const { db, store } = openStore(home);
   try {
-    const answered = resolveContradiction(store, TENANT, factId, new Date());
+    let answered: ReturnType<typeof resolveContradiction>;
+    try {
+      answered = resolveContradiction(store, TENANT, factId, new Date());
+    } catch (error) {
+      if (!(error instanceof MemoryLaneBusyError)) throw error;
+      process.stderr.write(
+        `nessuna modifica: ${error.message}; rilancia \`muffin memory review keep ${factId}\` quando l'operazione termina\n`,
+      );
+      return 1;
+    }
     if (answered.length === 0) {
       process.stderr.write(
         `#${factId} non è uno dei due fatti di una contraddizione aperta — \`muffin memory review\` per la lista\n`,
@@ -567,7 +581,7 @@ function consolidationLine(db: DatabaseCtor.Database): string {
       : last.outcome === 'budget'
         ? 'saltato: budget esaurito'
         : last.outcome === 'busy'
-          ? "saltato: un'altra estrazione in corso"
+          ? "saltato: un'altra operazione sulla memoria è in corso"
           : 'fallito';
   return `${when} (${last.trigger}) · ${outcome} — ${seen.runs} run, ${seen.facts} fatti in totale`;
 }

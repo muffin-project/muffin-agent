@@ -458,7 +458,7 @@ export class MemoryStore {
   // ---- coordination -----------------------------------------------------------
 
   /**
-   * One extractor at a time. See `ingest-lock.ts` for why a single lane lock
+   * One memory writer at a time. See `ingest-lock.ts` for why a single lane lock
    * is the whole mechanism rather than a per-episode claim.
    */
   acquireIngestLock(now: Date, pid: number = process.pid): LockOutcome {

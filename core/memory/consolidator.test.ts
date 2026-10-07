@@ -257,7 +257,12 @@ describe('one batch at a time', () => {
 
   it('reports the durable lane lock refusing as `busy`, not as a failure', async () => {
     const h = harness({
-      report: empty({ episodes: 0, factsAdded: 0, busy: true, errors: ["un'altra estrazione è già in corso (pid 9)"] }),
+      report: empty({
+        episodes: 0,
+        factsAdded: 0,
+        busy: true,
+        errors: ["un'altra operazione sulla memoria è già in corso (pid 9)"],
+      }),
     });
     h.consolidator.notify('host');
     await vi.advanceTimersByTimeAsync(CONSOLIDATION_IDLE_MS);

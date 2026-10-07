@@ -877,7 +877,7 @@ describe('the ingest lock', () => {
 
     expect(report.episodes).toBe(0);
     expect(report.factsAdded).toBe(0);
-    expect(report.errors.join(' ')).toContain("un'altra estrazione è già in corso");
+    expect(report.errors.join(' ')).toContain("un'altra operazione sulla memoria è già in corso");
     expect(store.pendingEpisodes(HOST, 1)).toHaveLength(1);
 
     store.releaseIngestLock();

@@ -282,6 +282,14 @@ export function errorGroups(store: MemoryStore, tenantId: string, limit = 20): E
   return [...groups.values()].sort((a, b) => b.lastAt.localeCompare(a.lastAt)).slice(0, limit);
 }
 
+/** Refusal is distinguishable at owner-facing call sites so they can explain that nothing changed. */
+export class MemoryLaneBusyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MemoryLaneBusyError';
+  }
+}
+
 /**
  * Answering a contradiction: keep one belief, retire the other.
  *
@@ -296,7 +304,8 @@ export function errorGroups(store: MemoryStore, tenantId: string, limit = 20): E
  * put in front of them, so it leaves ADR-0032 (*"il contributo del modello al
  * contenuto della memoria è zero, non indiretto"*) exactly where it was. The
  * open question about a `ricorda` tool that writes is a different question and
- * this does not touch it.
+ * this does not touch it. The same ingest lane serializes this write with
+ * extraction and proposal reconciliation, including the judge's async wait.
  *
  * Returns the review rows it answered. Zero means the id was not one of the two
  * facts in any open contradiction — which is a caller error worth reporting, not
@@ -308,19 +317,27 @@ export function resolveContradiction(
   keepFactId: number,
   now: Date,
 ): OpenContradiction[] {
-  const answered: OpenContradiction[] = [];
-  for (const open of openContradictions(store, tenantId, 500)) {
-    const drop =
-      open.existing.id === keepFactId
-        ? open.incoming
-        : open.incoming.id === keepFactId
-          ? open.existing
-          : null;
-    if (!drop) continue;
-    store.supersede(tenantId, drop.id, keepFactId, now.toISOString());
-    answered.push(open);
+  const claim = store.acquireIngestLock(now);
+  if ('held' in claim) {
+    throw new MemoryLaneBusyError(`memoria occupata (${claim.held}): ${claim.remedy}`);
   }
-  return answered;
+  try {
+    const answered: OpenContradiction[] = [];
+    for (const open of openContradictions(store, tenantId, 500)) {
+      const drop =
+        open.existing.id === keepFactId
+          ? open.incoming
+          : open.incoming.id === keepFactId
+            ? open.existing
+            : null;
+      if (!drop) continue;
+      store.supersede(tenantId, drop.id, keepFactId, now.toISOString());
+      answered.push(open);
+    }
+    return answered;
+  } finally {
+    claim.release();
+  }
 }
 
 /**

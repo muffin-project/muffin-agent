@@ -353,6 +353,95 @@ describe('muffin memory review', () => {
     expect(err.join('')).toContain('contraddizione aperta');
   });
 
+  it('refuses to keep a side while proposal reconciliation is awaiting the judge', async () => {
+    const { home, existing, incoming } = homeWithContradiction();
+    const runningAt = new Date();
+    const db = new DatabaseCtor(paths(home).db);
+    const store = new MemoryStore(db);
+    const proposalEpisode = store.addEpisode({
+      tenantId: 'host',
+      connector: 'cli',
+      threadKey: 't',
+      role: 'user',
+      kind: 'message',
+      content: 'il mio commercialista ora è Sara',
+      trustTier: 0,
+      createdAt: runningAt.toISOString(),
+    });
+    const proposal = proposeMemoryRecord(store, {
+      tenantId: 'host',
+      subject: 'owner',
+      subjectKind: 'person',
+      predicate: 'accountant',
+      object: 'Sara',
+      producer: 'owner-stated',
+      sourceEpisodeIds: [proposalEpisode],
+      content: 'il mio commercialista ora è Sara',
+      confidence: 0.95,
+    });
+    let judgeStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      judgeStarted = resolve;
+    });
+    let finishJudge!: (result: ChatResult) => void;
+    const judgeResult = new Promise<ChatResult>((resolve) => {
+      finishJudge = resolve;
+    });
+    const provider: Provider = {
+      kind: 'openai-compat',
+      async chat() {
+        judgeStarted();
+        return judgeResult;
+      },
+    };
+    const reconciliation = reconcileProposal(
+      {
+        store,
+        provider,
+        model: 'test-light',
+        tracer: new SimpleTracer(new JsonlExporter(home)),
+        now: () => runningAt,
+      },
+      'host',
+      proposal.id,
+    );
+    const reviewDecision: ChatResult = {
+      text: JSON.stringify({ reasoning: 'serve una scelta del proprietario', verdict: 'review', confidence: 0.5 }),
+      toolCalls: [],
+      stopReason: 'end',
+      usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      model: 'test',
+    };
+
+    try {
+      await started;
+      const { err } = capture();
+      expect(cmdMemoryReviewKeep(home, incoming)).toBe(1);
+      expect(err.join('')).toContain('memoria occupata');
+      expect(err.join('')).toContain('nessuna modifica');
+      expect(store.factById('host', existing)?.expiredAt).toBeNull();
+      expect(store.factById('host', incoming)?.expiredAt).toBeNull();
+      expect(store.openContradictions('host')).toHaveLength(1);
+      expect(store.proposalById('host', proposal.id)?.status).toBe('pending');
+
+      finishJudge(reviewDecision);
+      expect((await reconciliation).status).toBe('review');
+      expect(store.openContradictions('host')).toHaveLength(2);
+
+      vi.restoreAllMocks();
+      const retry = capture();
+      expect(cmdMemoryReviewKeep(home, incoming)).toBe(0);
+      expect(retry.out.join('')).toContain('deciso');
+      expect(store.openContradictions('host')).toHaveLength(0);
+      expect(store.factById('host', incoming)?.expiredAt).toBeNull();
+      expect(store.activeFacts('host', store.findEntity('host', 'owner')!, 'accountant')).toHaveLength(1);
+    } finally {
+      finishJudge(reviewDecision);
+      await reconciliation.catch(() => undefined);
+      db.close();
+    }
+  });
+
   it('tells an empty register apart from one whose questions are all answered', () => {
     const empty = mkdtempSync(join(tmpdir(), 'muffin-memory-empty-'));
     const db = new DatabaseCtor(paths(empty).db);
