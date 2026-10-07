@@ -327,13 +327,10 @@ export async function guidaIlTurno(
   const discoveryTool = eligibleTools.find(
     (tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME,
   );
-  if (discoveryTool === undefined) {
-    throw new Error('capability_search is missing from the authorized runtime catalogue');
-  }
   const capabilityExposure = createCapabilityExposure({
     eligible: eligibleTools,
     maxToolsExposed: deps.profile.maxToolsExposed,
-    discoveryTool,
+    ...(discoveryTool === undefined ? {} : { discoveryTool }),
   });
   const exposed = capabilityExposure.exposed;
   turn.setAttributes({
