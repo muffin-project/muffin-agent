@@ -168,4 +168,89 @@ describe('#469 production-path capability discovery', () => {
     expect(secondNames).toContain('event_watch_create');
     expect(secondNames.length).toBeLessThanOrEqual(6);
   });
+  it('keeps forbidden tools out of discovery while direct guesses still meet the kernel', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-capability-authority-'));
+    const db = new DatabaseCtor(':memory:');
+    const allowed = [
+      inertTool('fs_read'),
+      inertTool('fs_list'),
+      inertTool('memory_search'),
+      inertTool('http_get'),
+      inertTool('todo'),
+    ];
+    let forbiddenCalls = 0;
+    const forbiddenDecl = declaration('host.secret_write', true);
+    const forbidden: RegisteredTool = {
+      capability: forbiddenDecl.id,
+      spec: {
+        name: 'forbidden_host_write',
+        description: 'Write a host-only secret.',
+        inputSchema: { type: 'object' },
+      },
+      throwTier: 0,
+      handler: () => {
+        forbiddenCalls += 1;
+        return { content: 'should never run', tier: 0 };
+      },
+    };
+    const search = makeCapabilitySearchTool();
+    const tools = [...allowed.map((entry) => entry.tool), forbidden, search];
+    const capabilities = new Map<string, CapabilityDecl>([
+      ...allowed.map((entry) => [entry.decl.id, entry.decl] as const),
+      [forbiddenDecl.id, forbiddenDecl],
+      [capabilityDiscoveryCapability.id, capabilityDiscoveryCapability],
+    ]);
+    const provider = new Scripted([
+      toolCall('search-forbidden', 'capability_search', {
+        query: 'host secret write',
+        max_results: 3,
+      }),
+      // Deliberately guess the hidden name anyway. Discovery is not the
+      // authority gate: the canonical kernel must refuse this call.
+      toolCall('guess-forbidden', 'forbidden_host_write', {}),
+      answer('denied'),
+    ]);
+    const sessions = new SessionStore(home);
+    const deps: LoopDeps = {
+      provider,
+      profile: { ...CONSERVATIVE, maxToolsExposed: 4, recovery: [] },
+      model: 'test-model',
+      tools,
+      capabilities,
+      decide: createDecide({
+        matrix: POLICY_FLOOR,
+        capabilities,
+        budgetExhausted: () => false,
+        hardened: true,
+      }),
+      tracer: new SimpleTracer(new JsonlExporter(home)),
+      sessions,
+      turns: new TurnStore(db),
+      todos: new TodoStore(db),
+      budgetExhausted: () => false,
+      systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite.' },
+    };
+    const member: Principal = {
+      kind: 'member',
+      connector: 'telegram',
+      tenantId: 'group:test',
+      externalId: 'u1',
+    };
+
+    const result = await runTurn(deps, {
+      principal: member,
+      tenant: 'group:test',
+      surface: 'telegram',
+      session: sessions.open('capability-authority'),
+      text: 'scrivi un segreto host',
+    });
+
+    expect(result.stopped).toBe('answered');
+    expect(forbiddenCalls).toBe(0);
+    expect(provider.seen).toHaveLength(3);
+    for (const call of provider.seen.slice(0, 2)) {
+      expect(call.tools?.map((tool) => tool.name) ?? []).not.toContain('forbidden_host_write');
+    }
+  });
+
 });
