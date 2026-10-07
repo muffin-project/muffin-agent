@@ -75,7 +75,9 @@ Tests prove:
 - that wake is `system:automation`, not owner authority;
 - external evidence starts at taint 3 and remains fenced;
 - the original source Turn remains owner-authored and unchanged;
-- repeated polling without a new event does not mint a second durable wake.
+- `enqueueTurn` now honors a caller-supplied durable `TurnInput.id` instead of silently minting a competing random id;
+- the EI deterministic receipt id is therefore the canonical Turn id written to `TurnStore`;
+- replaying the same external MCP event occurrence does not mint a second durable wake.
 
 ## Negative-space / forbidden mechanisms
 
