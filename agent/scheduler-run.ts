@@ -7,6 +7,7 @@ import type { TrustTier } from '../core/policy/types.js';
 import { CAPPED_MODEL, SCRIPT_MODEL, type TurnCounters, type TurnOutcome } from '../core/turns/store.js';
 import { runTurn, type LoopDeps, type TurnResult } from './loop.js';
 import { recoveredText } from './recovered-text.js';
+import { dispatchRuntimeEvent, type RuntimeEvent } from './automation.js';
 
 /**
  * The bridge from a scheduled job to a real turn.
@@ -181,16 +182,35 @@ async function runFresh(
     const spent = jobBudget.jobMonthUsd(job.id);
     if (spent >= job.perJobUsd) return skipForBudget(deps, job, turnId, spent, job.perJobUsd);
   }
+  const runtimeEvent: RuntimeEvent = {
+    occurrenceId: turnId,
+    kind: 'schedule.fire',
+    source: 'scheduler',
+    observedAt: new Date().toISOString(),
+    evidence: {
+      jobId: job.id,
+      scheduledFor: job.nextFireAt.toISOString(),
+      jobKind: job.kind,
+    },
+  };
+
   // Un job `script` non passa di qui sotto: nessuna sessione, nessun prompt,
   // nessuna chiamata al modello. Il turno durevole viene scritto lo stesso —
   // è ciò che tiene l'esattamente-una-volta, la visibilità in `doctor` e la
   // consegna — ma il modello non lo vede mai.
-  if (job.kind === 'script') return runScript(deps, job, turnId, exec, scope);
+  if (job.kind === 'script') {
+    return dispatchRuntimeEvent(runtimeEvent, [], {
+      mode: 'deterministic',
+      run: () => runScript(deps, job, turnId, exec, scope),
+    });
+  }
   // Fault point 2, made observable: a real `SIGKILL` here lands after the
   // fire is bound and before the turn row exists at all.
   await testStall('MUFFIN_JOB_FIRES_STALL_AFTER_BIND_MS');
   const session = deps.sessions.open(`job-${job.id.slice(0, 8)}-${randomBytes(3).toString('hex')}`);
-  const result = await runTurn(deps, {
+  const result = await dispatchRuntimeEvent(runtimeEvent, [], {
+    mode: 'agent',
+    run: () => runTurn(deps, {
     principal: { kind: 'system', source: 'scheduler' },
     tenant: fireTenant(job),
     surface: job.channel,
@@ -240,6 +260,7 @@ async function runFresh(
     // the same destination the job's own text answer will.
     replyChannel: job.channel,
     ...(signal ? { signal } : {}),
+    }),
   });
   // Fault point 5, made observable: a real `SIGKILL` here lands after the
   // turn reaches `done` and before `Scheduler` ever calls `deliver`/`markRan`.

@@ -5,6 +5,7 @@ import { LANE_TURNS, type ModelLane } from '../../../core/turns/model-lane.js';
 import type { SessionStore } from '../../../core/session/store.js';
 import type { SurfaceIdentity } from '../../../core/surface/types.js';
 import type { InboundEvent, IngressPort } from './types.js';
+import { dispatchRuntimeEvent, type RuntimeEvent } from '../../../agent/automation.js';
 
 /**
  * Slice 14, the `work` stage: creating the turn and its durable record.
@@ -84,6 +85,33 @@ export type WorkRequest = {
 };
 
 export async function runWork(
+  deps: WorkDeps,
+  port: IngressPort,
+  event: InboundEvent,
+  req: WorkRequest,
+): Promise<TurnResult> {
+  const runtimeEvent: RuntimeEvent = {
+    occurrenceId: req.workId,
+    kind: 'message.received',
+    source: port.surface.id,
+    observedAt: event.receivedAt.toISOString(),
+    evidence: {
+      eventId: event.eventId,
+      compositionId: event.compositionId,
+      text: req.text,
+      principalKind: req.identity.principal.kind,
+      tenant: req.identity.tenant,
+      contentTaint: req.contentTaint,
+    },
+  };
+
+  return dispatchRuntimeEvent(runtimeEvent, [], {
+    mode: 'agent',
+    run: () => runAgentWork(deps, port, event, req),
+  });
+}
+
+async function runAgentWork(
   deps: WorkDeps,
   port: IngressPort,
   event: InboundEvent,
