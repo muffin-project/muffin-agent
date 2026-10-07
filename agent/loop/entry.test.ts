@@ -115,7 +115,7 @@ const quante = (haystack: unknown, testo: string): number =>
 
 describe('enqueueTurn durable identity', () => {
   it('honours a caller-supplied durable identity instead of minting a competing row', () => {
-    const w = world();
+    const w = world([]);
     const session = w.sessions.open('explicit-enqueue-id');
     const id = barrel.enqueueTurn(w.deps, {
       id: 'occurrence-owned-turn-id',
