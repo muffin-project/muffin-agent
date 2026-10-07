@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import type DatabaseCtor from 'better-sqlite3';
 import { ApprovalStore } from '../core/approvals/store.js';
+import { AutomationRuleStore } from '../core/automation/rules.js';
 import { listRunStatuses } from '../core/autonomy/run-status.js';
 import { BudgetEngine } from '../core/budget/budget.js';
 import { costUsd, isUnmeteredEndpoint } from '../core/budget/pricing.js';
@@ -189,6 +190,11 @@ export type Runtime = {
   defaultChannel: () => string;
   /** Scheduled jobs, on the same connection as everything else (ADR-0022). */
   jobs: JobStore;
+  /**
+   * Durable definitions for non-time automation rules (#605).
+   * Definition state only: execution remains in the RuntimeEvent/ActionRequest seam.
+   */
+  automationRules: AutomationRuleStore;
   /**
    * The `(job.id, scheduled_for) → turn_id` bridge (B7). Exposed the same way
    * `jobs` is — `cli/gateway.ts`/`cli/repl.ts` wire it into both `Scheduler`
@@ -512,6 +518,9 @@ export function buildRuntime(
   migrate(db, { backupDir: join(p.home, 'backups') });
   const budget = new BudgetEngine(db, budgets.caps);
   const jobs = new JobStore(db);
+  // Non-time automation definitions live beside jobs/turns on the one runtime
+  // connection, but own neither clock nor execution state (#605).
+  const automationRules = new AutomationRuleStore(db);
   const turns = new TurnStore(db);
   // The identity/idempotency bridge from a due occurrence to a durable turn
   // (B7, ADR-0035 emendamento №5). Same connection as `jobs`/`turns`, same
@@ -1421,6 +1430,7 @@ export function buildRuntime(
     quietHours: budgets.quietHours,
     defaultChannel: () => readDefaultChannel(home, config.surfaces.default),
     jobs,
+    automationRules,
     jobFires,
     db,
     consolidation,
