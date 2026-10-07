@@ -211,7 +211,7 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
       // path). Under pressure the cap bounds only the currently loaded schemas:
       // the remaining authorized tools stay reachable through discovery.
       const filtrati = visibleTools(
-        sources.tools,
+        [...sources.tools],
         principal,
         sources.capabilities,
         sources.grants?.get(ctx.tenant),
