@@ -7,6 +7,7 @@ import { buildRuntime } from './runtime.js';
 import {
   attachEventIntelligence,
   createMuffinEventIntelligence,
+  getAttachedEventIntelligence,
   type EventWakePort,
 } from './event-intelligence.js';
 import { toolContext } from './fixtures/tool-context.js';
