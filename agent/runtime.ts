@@ -285,22 +285,18 @@ function msFromEnv(raw: string | undefined): number | undefined {
 }
 
 /**
- * The order `buildRuntime` registers built-in tools in, named without
- * building any of them — the fact `muffin doctor` needs to say which ones a
- * profile's ceiling would cut without opening a database or a sandbox to get
- * it, so the ceiling reads the same as `sys.inspect`'s (which does hold the
- * real, live array).
+ * Deterministic order of Muffin's native tool catalogue, without constructing
+ * the tools. `muffin doctor` uses the same list to describe catalogue pressure
+ * and late-registration ordering; the model-visible projection itself is owned
+ * by `agent/capability-exposure.ts`.
  *
  * `sandboxAvailable` and `searchOn` are the only two conditionals in the
- * literal build below; every other position is unconditional. MCP tools are
- * never part of this: they attach after `buildRuntime` returns
- * (`attachMcp`), which is also why they never counted toward `tagliati`
- * there.
+ * literal build below; every other native position is unconditional. MCP tools
+ * attach later through `attachMcp` and are therefore not hand-copied here.
  *
- * `agent/runtime-exposure.test.ts` asserts this against the real, constructed
- * array — the same de-drift discipline as `capabilityGaps` above: a second
- * hand-typed order would be exactly the kind of copy this repository has
- * already paid for once (`slice/turno-sospeso`, cited in that test).
+ * `agent/runtime-exposure.test.ts` asserts this order against the constructed
+ * runtime (excluding the #469 discovery meta-tool), so the diagnostic catalogue
+ * cannot drift from what boot actually registers.
  */
 export function baseToolOrder(input: {
   sandboxAvailable: boolean;
@@ -312,16 +308,10 @@ export function baseToolOrder(input: {
    * attach it after `buildRuntime` returns (they hold the `SurfaceRegistry`
    * it needs), `muffin run` never does.
    *
-   * Placed **before** `wait`/`todo`/`sys_inspect` on purpose: those three are
-   * the tools this list already names, deliberately, as the ones a cut may
-   * take first (comment below, and `runtime-exposure.test.ts`'s +1 for
-   * `fs_search` names `sys_inspect` as "the first of the list to fall"). A
-   * tool an owner's turn actually depends on for getting an artifact back —
-   * DAY-1, not scaffolding — must not rank below the harness's own
-   * self-inspection merely because it happens to attach later in the boot
-   * sequence. That was the measured defect: `send_file` used to land after
-   * `sys_inspect` in the live array for no reason anyone chose, which made it
-   * the *first* casualty of a cut, not the last.
+   * Placed before the runtime bookkeeping tools on purpose. Registration
+   * order no longer decides reachability under #469, but it still stabilizes
+   * the catalogue, diagnostics and tie-breaking after late registration.
+   * `send_file` must not move merely because a surface attaches it later.
    */
   sendFileAvailable?: boolean;
 }): string[] {
@@ -945,29 +935,15 @@ export function buildRuntime(
   }
 
   /**
-   * The two runtime primitives (requirements-status.md#wait-e-todo-sono-primitive-del-runtime-non-tool) — registered **last**, and the
-   * position is a decision rather than an accident of where the import landed.
+   * Runtime primitives are still registered late in the native catalogue, but
+   * #469 removes the old semantic consequence: being beyond
+   * `maxToolsExposed` no longer makes an authorized capability disappear.
+   * The cap bounds the current schema projection; discovery can load a needed
+   * non-core tool on the next model round.
    *
-   * `profile.maxToolsExposed` truncates this list by registration order, and
-   * `consumer-local.json` sets it to **10** against a default install of twelve
-   * tools. Sitting where they used to (positions 6-7, in the base array) `wait`
-   * and `todo` pushed `skill_read` and `http_get` off the end — a weak local
-   * model silently lost the web and the skill catalogue in exchange for the
-   * ability to suspend itself, which is the wrong trade on the profile least
-   * able to run a multi-turn plan in the first place. Nothing said so: the two
-   * tools simply were not in the request.
-   *
-   * So the order is by what a turn loses without it: reading and remembering,
-   * then hands, then the catalogue, then the web, then these. On a frontier
-   * profile (cap 24) nothing is cut and the order is invisible; on the small
-   * one it is the whole difference. `runtime-exposure.test.ts` pins the
-   * resulting set, so a future insertion cannot move a capability across the
-   * line without a test saying which one moved.
-   *
-   * Neither is optional on any install: they need no key, no probe and no
-   * daemon — a database is the whole dependency, and this runtime has one open.
-   * `wait` gets the store for one purpose only, counting how many turns this
-   * tenant already holds suspended; it cannot suspend anything by itself.
+   * The order remains deterministic for diagnostics, cache stability and
+   * lexical tie-breaking. `wait` itself still needs only the TurnStore, used
+   * to count this tenant's suspended turns.
    */
   // `budgets.quietHours.timezone` e non il fuso del processo: e' la stessa
   // lettura che riceve `LoopDeps.timeZone` poco piu' sotto, e senza di essa
@@ -980,9 +956,8 @@ export function buildRuntime(
     makeEffectsTool(turns, budgets.quietHours.timezone),
     // La porta conversazionale sui job ricorrenti («ricordamelo ogni giorno
     // alle 9»): valida e persiste sullo stesso `JobStore` della CLI, con la
-    // provenance del turno che ha chiesto. Accanto a `wait`/`todo` e non in
-    // coda per la stessa ragione per cui quelli stanno in fondo — sono le
-    // primitive del runtime, e il tetto di profilo prende da qui.
+    // provenance del turno che ha chiesto. È una primitive del runtime; quando
+    // non è nella proiezione iniziale resta caricabile via capability_search.
     makeScheduleTool({
       jobs,
       defaultTimezone: budgets.quietHours.timezone,
