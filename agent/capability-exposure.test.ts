@@ -147,4 +147,31 @@ describe('capability exposure projection', () => {
     ]);
   });
 
+
+  it('preloads an obvious authorized hidden capability from task text without widening the cap', () => {
+    const eligible = [
+      tool('fs_read'),
+      tool('fs_list'),
+      tool('fs_search'),
+      tool('memory_search'),
+      tool('skill_read'),
+      tool('event_watch_create', 'event.watch', 'Create a durable external event trigger.'),
+      discovery,
+    ];
+    const projection = createCapabilityExposure({
+      eligible,
+      maxToolsExposed: 4,
+      discoveryTool: discovery,
+    });
+
+    const loaded = projection.discovery?.searchAndLoad('create external event trigger', 2);
+    expect(loaded?.loaded.map((entry) => entry.name)).toContain('event_watch_create');
+    projection.discovery?.activatePending();
+    expect(projection.exposed.map((entry) => entry.spec.name)).toContain('event_watch_create');
+    expect(projection.exposed.map((entry) => entry.spec.name)).toContain(
+      CAPABILITY_SEARCH_TOOL_NAME,
+    );
+    expect(projection.exposed.length).toBeLessThanOrEqual(4);
+  });
+
 });
