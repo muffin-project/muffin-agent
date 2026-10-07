@@ -30,12 +30,27 @@ export type CapabilityLoadResult = {
   readonly omitted: number;
 };
 
+export type CapabilityExposureSnapshot = {
+  readonly visible: readonly string[];
+  readonly pressured: boolean;
+  readonly hiddenCount: number;
+};
+
 export type CapabilityDiscoveryPort = {
+  /**
+   * Select schemas for the next model round. Selection is staged: a model
+   * cannot search and then call a previously hidden tool in the same response
+   * merely by guessing its name.
+   */
   readonly searchAndLoad: (query: string, maxResults: number) => CapabilityLoadResult;
+  /** Apply the last staged selection at the next round boundary. */
+  readonly activatePending: () => void;
+  /** Current model-visible projection, for truthful runtime inspection. */
+  readonly snapshot: () => CapabilityExposureSnapshot;
 };
 
 export type CapabilityExposure<T extends CapabilityTool> = {
-  /** Mutable on purpose: successful discovery changes the next model round. */
+  /** Mutable only at round boundaries; runTool receives this same array. */
   readonly exposed: T[];
   readonly pressured: boolean;
   readonly hiddenCount: number;
@@ -149,13 +164,16 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
   }
 
   if (input.discoveryTool === undefined) {
-    throw new Error('capability_search is required when the authorized catalogue exceeds maxToolsExposed');
+    throw new Error(
+      'capability_search is required when the authorized catalogue exceeds maxToolsExposed',
+    );
   }
   const discoveryTool = input.discoveryTool;
 
   const preferred = input.coreNames ?? DEFAULT_CORE_TOOL_NAMES;
-  // One slot is discovery itself and, where the profile permits it, at least
-  // one slot must remain loadable. The preferred core is capped at five.
+  // Reserve one slot for discovery and, where possible, at least one slot for
+  // a task-local schema. Five is only the preferred maximum core, never a
+  // reason to violate the profile ceiling.
   const coreTarget =
     max === 1 ? 0 : Math.min(preferred.length, catalog.length, Math.max(0, max - 2));
   const core = takeCore(catalog, coreTarget, preferred);
@@ -165,6 +183,8 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
   const searchable = catalog.filter((tool) => !coreNames.has(tool.spec.name));
   const dynamicCapacity = Math.max(0, max - fixed.length);
 
+  let pending: T[] | null = null;
+
   const discovery: CapabilityDiscoveryPort = {
     searchAndLoad(query, maxResults) {
       const limit = Math.max(1, Math.floor(maxResults));
@@ -173,31 +193,42 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
         .filter((row) => row.score > 0)
         .sort((left, right) => right.score - left.score || left.index - right.index);
 
-      const matches = ranked.slice(0, limit).map((row) => row.tool);
+      const matches = ranked.slice(0, limit);
 
       if (max === 1) {
-        // A one-slot profile cannot keep the search door and a loaded schema at
-        // once. The matched tool replaces discovery for the next round.
-        exposed.splice(
-          0,
-          exposed.length,
-          ...(matches.length > 0 ? [matches[0]!] : [discoveryTool]),
-        );
+        pending = matches.length > 0 ? [matches[0]!.tool] : [discoveryTool];
       } else {
-        // Loaded tools are a task-local projection, not a growing second
-        // catalogue. A new search replaces the previous dynamic set.
-        exposed.splice(fixed.length);
-        exposed.push(...matches.slice(0, dynamicCapacity));
+        pending = matches.slice(0, dynamicCapacity).map((row) => row.tool);
       }
 
-      const loaded = exposed
-        .filter((tool) => !fixed.some((fixedTool) => fixedTool.spec.name === tool.spec.name))
-        .map((tool) => ({ name: tool.spec.name, capability: tool.capability }));
+      const loaded = (pending ?? []).map((tool) => ({
+        name: tool.spec.name,
+        capability: tool.capability,
+      }));
 
       return {
         loaded,
         matched: ranked.length,
         omitted: Math.max(0, ranked.length - loaded.length),
+      };
+    },
+
+    activatePending() {
+      if (pending === null) return;
+      if (max === 1) {
+        exposed.splice(0, exposed.length, ...pending);
+      } else {
+        exposed.splice(fixed.length);
+        exposed.push(...pending);
+      }
+      pending = null;
+    },
+
+    snapshot() {
+      return {
+        visible: exposed.map((tool) => tool.spec.name),
+        pressured: true,
+        hiddenCount: searchable.length,
       };
     },
   };
