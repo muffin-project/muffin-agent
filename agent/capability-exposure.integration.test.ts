@@ -337,23 +337,24 @@ describe('#469 production-path capability discovery', () => {
       systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite.' },
     };
 
-    const result = await runTurn(deps, {
-      principal: owner,
-      tenant: 'host',
-      surface: 'cli',
-      session: sessions.open('capability-mutation'),
-      text: 'crea un trigger su un evento esterno',
-    });
+    await expect(
+      runTurn(deps, {
+        principal: owner,
+        tenant: 'host',
+        surface: 'cli',
+        session: sessions.open('capability-mutation'),
+        text: 'crea un trigger su un evento esterno',
+      }),
+    ).rejects.toThrow(
+      'capability_search is required when the authorized catalogue exceeds maxToolsExposed',
+    );
 
-    expect(result.stopped).toBe('answered');
+    // The expected failure is at the production projection boundary itself:
+    // without the discovery door the runtime refuses to silently fall back to
+    // registration-order truncation. No provider call and no hidden handler
+    // execution occur.
     expect(hiddenCalls).toBe(0);
-    expect(provider.seen).toHaveLength(1);
-    expect(provider.seen[0]?.tools?.map((tool) => tool.name) ?? []).not.toContain(
-      'event_watch_create',
-    );
-    expect(provider.seen[0]?.tools?.map((tool) => tool.name) ?? []).not.toContain(
-      'capability_search',
-    );
+    expect(provider.seen).toHaveLength(0);
   });
 
 });
