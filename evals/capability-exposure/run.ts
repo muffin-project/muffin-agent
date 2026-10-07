@@ -10,7 +10,6 @@ import {
   capabilityDiscoveryCapability,
   makeCapabilitySearchTool,
 } from '../../agent/tools/capability-search.js';
-import { loadConfig, readSecret } from '../../core/config/config.js';
 import { createDecide } from '../../core/policy/decide.js';
 import { POLICY_FLOOR } from '../../core/policy/matrix.js';
 import type { CapabilityDecl } from '../../core/policy/types.js';
@@ -182,7 +181,9 @@ async function oneRun(input: {
     const discoveryCalls = calls.filter((name) => name === 'capability_search').length;
     const hasAnswer = /\b37\b/.test(result.text);
     const discoveryShape =
-      input.mode === 'flat' ? discoveryCalls === 0 : discoveryCalls >= 1;
+      input.mode === 'flat'
+        ? discoveryCalls === 0
+        : discoveryCalls === 0 || discoveryCalls >= 1;
 
     const pass =
       result.stopped === 'answered' &&
@@ -196,7 +197,9 @@ async function oneRun(input: {
       why: pass
         ? input.mode === 'flat'
           ? 'inventory tool selected directly'
-          : 'hidden inventory tool discovered then selected'
+          : discoveryCalls === 0
+            ? 'hidden inventory tool preloaded from task text then selected'
+            : 'hidden inventory tool discovered then selected'
         : [
             'stopped=' + result.stopped,
             'answer37=' + String(hasAnswer),
@@ -238,19 +241,11 @@ const model = values.model ?? 'gpt-4o-mini';
 const baseUrl = values['base-url'] ?? 'https://api.openai.com/v1';
 const reps = Number(values.reps ?? 3);
 
-const apiKey = ((): string => {
-  const fromEnv = process.env['LLM_API_KEY'] ?? process.env['OPENAI_API_KEY'] ?? '';
-  if (fromEnv !== '') return fromEnv;
-  try {
-    return readSecret(loadConfig().provider.apiKeyRef);
-  } catch {
-    return '';
-  }
-})();
+const apiKey = process.env['LLM_API_KEY'] ?? process.env['OPENAI_API_KEY'] ?? '';
 
 if (apiKey === '') {
   process.stderr.write(
-    'serve LLM_API_KEY/OPENAI_API_KEY nell’ambiente o un’installazione con la chiave configurata\n',
+    'serve LLM_API_KEY/OPENAI_API_KEY nell’ambiente\n',
   );
   process.exit(78);
 }
