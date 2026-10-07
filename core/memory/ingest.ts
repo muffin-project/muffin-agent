@@ -1152,9 +1152,10 @@ export async function reconcileProposalLocked(
     return { proposalId, status: committed.status, factIds: committed.factIds, report: rep };
   }
 
-  // Judged path: the candidate was snapshotted above, and the lock this
-  // function runs under means no other writer could have moved the graph
-  // since — the same single-writer assumption the episode loop relies on.
+  // Judged path: the lane keeps the candidate graph stable while the judge
+  // is awaited. Duplicate proposal retries may still raise the persisted
+  // provenance tier outside that lane, so the final transaction adopts the
+  // latest tier before it writes a fact.
   const decision = await decideCandidate(deps, incoming, committed.candidate, {
     existing: deps.store.episodeById(tenantId, committed.candidate.episodeId)?.content ?? undefined,
     incoming: proposal.content,
@@ -1164,11 +1165,21 @@ export async function reconcileProposalLocked(
     if (!fresh || fresh.status !== 'pending') {
       return { raced: true as const, status: fresh?.status as ProposalStatus | undefined, factIds: fresh?.resultingFactIds ?? [] };
     }
-    const out = commitCandidateDecision(deps.store, tenantId, subjectId, incoming, committed.candidate, decision, {
-      episodeTrustTier: incoming.trustTier,
-      now,
-      report: rep,
-    });
+    const finalIncoming =
+      fresh.trustTier > incoming.trustTier ? { ...incoming, trustTier: fresh.trustTier } : incoming;
+    const out = commitCandidateDecision(
+      deps.store,
+      tenantId,
+      subjectId,
+      finalIncoming,
+      committed.candidate,
+      decision,
+      {
+        episodeTrustTier: finalIncoming.trustTier,
+        now,
+        report: rep,
+      },
+    );
     const detail = out.detail === null ? withdrawalNote.trim() || null : `${out.detail}${withdrawalNote}`;
     deps.store.resolveProposal(tenantId, proposalId, {
       status: out.category,

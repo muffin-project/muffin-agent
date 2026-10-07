@@ -45,7 +45,7 @@ class Unavailable implements Provider {
 }
 
 const NOW = () => new Date('2026-08-04T12:00:00Z');
-const CTX = { tenant: 'host', turnId: 'turn-propose-1' };
+const CTX = { tenant: 'host', turnId: 'turn-propose-1', taint: () => 0 as const };
 
 function seed(
   replies: string[] = [],

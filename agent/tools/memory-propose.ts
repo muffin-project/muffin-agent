@@ -24,7 +24,7 @@
 import { type IngestDeps, reconcileProposal } from '../../core/memory/ingest.js';
 import { type ProposalProducer, proposeMemoryRecord } from '../../core/memory/proposals.js';
 import type { MemoryStore } from '../../core/memory/store.js';
-import type { CapabilityDecl } from '../../core/policy/types.js';
+import type { CapabilityDecl, TrustTier } from '../../core/policy/types.js';
 import type { Tracer } from '../../core/tracing/types.js';
 import type { ToolOutcome } from '../loop.js';
 import type { Provider, ToolSpec } from '../providers/types.js';
@@ -108,6 +108,8 @@ export type ProposeDeps = {
 export type ProposeContext = {
   tenant: string;
   turnId: string;
+  /** Live runtime taint, including bytes recalled earlier in this turn. */
+  taint: () => TrustTier;
 };
 
 type RawArgs = {
@@ -201,6 +203,7 @@ export async function proposeMemory(
     typeof raw.valid_from === 'string' && raw.valid_from.trim() !== ''
       ? raw.valid_from.trim()
       : null;
+  const contextTier = ctx.taint();
 
   // Provenance is read off the evidence, never trusted from the arguments:
   // `proposeMemoryRecord` throws on foreign episodes, and derives the tier
@@ -215,6 +218,7 @@ export async function proposeMemory(
       ...(validFrom === null ? {} : { validFrom }),
       producer,
       sourceEpisodeIds: evidenceIds,
+      contextTier,
       content: `${subject} ${predicate} ${object}`,
       confidence,
     }));
@@ -238,7 +242,10 @@ export async function proposeMemory(
     // The response repeats the proposal even when reconciliation failed, so
     // operational failure cannot lower the provenance of the evidence it
     // carries back into the model's context.
-    const tier = worstTier(deps.store, ctx.tenant, evidenceIds);
+    const tier = Math.max(
+      worstTier(deps.store, ctx.tenant, evidenceIds),
+      ctx.taint(),
+    ) as TrustTier;
     switch (out.status) {
       case 'accepted':
         return {
@@ -281,7 +288,10 @@ export async function proposeMemory(
         content:
           `Proposta #${proposalId} registrata durevolmente, ma la riconciliazione è rimandata (${message}): ` +
           `il consolidamento la prenderà al prossimo giro. Non dire che lo ricordi finché non è una credenza.`,
-        tier: worstTier(deps.store, ctx.tenant, evidenceIds),
+        tier: Math.max(
+          worstTier(deps.store, ctx.tenant, evidenceIds),
+          ctx.taint(),
+        ) as TrustTier,
       };
     }
     return { content: `memory_propose: ${message}`, isError: true, tier: 0 };

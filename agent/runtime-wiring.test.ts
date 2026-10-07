@@ -1396,3 +1396,109 @@ describe('billing identity: owner-declared unmetered endpoints (#499)', () => {
     expect(usd).toBeGreaterThan(0);
   });
 });
+
+describe('memory proposal preserves the live turn taint through buildRuntime', () => {
+  const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
+
+  const call = (id: string, name: string, args: Record<string, unknown>): ChatResult => ({
+    text: null,
+    toolCalls: [{ id, name, args }],
+    stopReason: 'tool_use',
+    usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    model: 't',
+  });
+
+  it('does not wash tier-3 recall into an inference with omitted or lower-tier evidence ids', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-memory-proposal-taint-'));
+    runInit({ home, apiKey: 'sk-never-called' });
+    const runtime = buildRuntime(
+      home,
+      mkdtempSync(join(tmpdir(), 'muffin-memory-proposal-taint-ws-')),
+    );
+    // Exercise the shipped text recall and tool-call path without asking a
+    // model to rerank a one-item fixture. Proposal reconciliation itself has
+    // no judge call because these predicates have no existing beliefs.
+    runtime.memory.recall.reranker = undefined;
+
+    const highEpisode = runtime.memory.store.addEpisode({
+      tenantId: 'host',
+      connector: 'cli',
+      threadKey: 'memory-source',
+      role: 'user',
+      kind: 'message',
+      content: 'cobalt meridian provenance canary',
+      trustTier: 3,
+      createdAt: '2026-08-04T10:00:00Z',
+    });
+    const lowEpisode = runtime.memory.store.addEpisode({
+      tenantId: 'host',
+      connector: 'cli',
+      threadKey: 'low-source',
+      role: 'user',
+      kind: 'message',
+      content: 'the owner likes tea',
+      trustTier: 0,
+      createdAt: '2026-08-04T10:01:00Z',
+    });
+    const runtimeProvider = new Scripted([
+      call('search-high', 'memory_search', { query: 'cobalt meridian provenance' }),
+      call('propose-ingress', 'memory_propose', {
+        subject: 'owner',
+        predicate: 'inferred_from_ingress',
+        object: 'derived without cited ids',
+        kind: 'agent-inference',
+      }),
+      call('propose-low', 'memory_propose', {
+        subject: 'owner',
+        predicate: 'inferred_from_explicit_low_evidence',
+        object: 'derived with low id',
+        kind: 'agent-inference',
+        evidence_ids: [lowEpisode],
+      }),
+      {
+        text: 'fatto',
+        toolCalls: [],
+        stopReason: 'end',
+        usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        model: 't',
+      },
+    ]);
+
+    try {
+      await runTurn(
+        { ...runtime.deps, provider: runtimeProvider },
+        {
+          principal: owner,
+          tenant: 'host',
+          surface: 'cli',
+          session: runtime.deps.sessions.open('memory-proposal-taint'),
+          text: 'osserva il ricordo e inferisci due dettagli distinti',
+        },
+      );
+
+      const proposals = runtime.memory.store.listProposals('host');
+      expect(proposals).toHaveLength(2);
+      expect(
+        proposals.find((proposal) => proposal.predicate === 'inferred_from_ingress')
+          ?.sourceEpisodeIds,
+      ).not.toEqual([highEpisode]);
+      expect(
+        proposals.find((proposal) => proposal.predicate === 'inferred_from_explicit_low_evidence')
+          ?.sourceEpisodeIds,
+      ).toEqual([lowEpisode]);
+      expect(proposals.map((proposal) => proposal.trustTier)).toEqual([3, 3]);
+      expect(proposals.every((proposal) => proposal.origin === 'inferred')).toBe(true);
+      const ownerId = runtime.memory.store.findEntity('host', 'owner');
+      if (ownerId === null) throw new Error('the owner entity was not committed');
+      expect(
+        runtime.memory.store.activeFacts('host', ownerId, 'inferred_from_ingress')[0]?.trustTier,
+      ).toBe(3);
+      expect(
+        runtime.memory.store.activeFacts('host', ownerId, 'inferred_from_explicit_low_evidence')[0]
+          ?.trustTier,
+      ).toBe(3);
+    } finally {
+      runtime.close();
+    }
+  });
+});

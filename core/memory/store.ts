@@ -1536,6 +1536,22 @@ export class MemoryStore {
     const row = this.db
       .prepare(`SELECT id FROM memory_proposals WHERE tenant_id = ? AND identity_key = ?`)
       .get(input.tenantId, input.identityKey) as { id: number };
+    if (info.changes === 0) {
+      // A replay can carry a higher live prompt taint than the first attempt.
+      // Keep idempotency, but never leave a pending write below the provenance
+      // floor the current runtime observed.
+      this.db
+        .prepare(
+          `UPDATE memory_proposals
+           SET trust_tier = MAX(trust_tier, @trustTier)
+           WHERE tenant_id = @tenantId AND identity_key = @identityKey AND status = 'pending'`,
+        )
+        .run({
+          tenantId: input.tenantId,
+          identityKey: input.identityKey,
+          trustTier: input.trustTier,
+        });
+    }
     return { id: Number(row.id), duplicate: info.changes === 0 };
   }
 

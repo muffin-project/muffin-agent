@@ -52,6 +52,8 @@ export type ProposeInput = {
   producer: ProposalProducer;
   /** At least one episode id, owned by this tenant. Never empty. */
   sourceEpisodeIds: number[];
+  /** Runtime-derived floor from the current prompt, never from model arguments. */
+  contextTier?: TrustTier;
   /** The candidate sentence, shown to the judge as the incoming evidence. */
   content: string;
   confidence: number;
@@ -138,8 +140,8 @@ export function originForProducer(producer: ProposalProducer): FactOrigin {
  *
  * Validates the provenance it will need at reconcile (non-blank candidate,
  * at least one tenant-owned episode) rather than staging a proposal the
- * reconciler could never commit. The trust tier is read off the evidence,
- * never taken from the caller: a proposal cannot talk its sources up.
+ * reconciler could never commit. The trust tier is the maximum of source
+ * evidence and the runtime-derived current-prompt floor, never model input.
  *
  * Throws on invalid input. Never writes a belief.
  */
@@ -177,6 +179,7 @@ export function proposeMemoryRecord(
     }
     if (ep.trustTier > tier) tier = ep.trustTier;
   }
+  if (input.contextTier !== undefined && input.contextTier > tier) tier = input.contextTier;
   return store.insertProposal({
     tenantId: input.tenantId,
     identityKey: proposalIdentityKey({

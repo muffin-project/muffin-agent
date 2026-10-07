@@ -92,6 +92,8 @@ export type SweepReport = {
   /** Groups examined — (subject, predicate) pairs holding more than one belief. */
   examined: number;
   merges: Merge[];
+  /** Another memory writer owns the lane; no snapshot or retirement ran. */
+  busy?: boolean;
 };
 
 /**
@@ -117,19 +119,31 @@ export type SweepReport = {
  * marker (a replayed episode whose wording drifted) are the two ways a second
  * active value gets there in the first place.
  *
- * ## Determinism is what makes it safe to run twice
+ * ## The writer lane protects snapshots against reconciliation
  *
  * The survivor is the most recently recorded row, ties broken by the larger id
- * — a total order, computed from the rows alone. Two processes sweeping at once
- * therefore choose the *same* survivor and issue the same retirements, and
- * `supersede`'s own `AND expired_at IS NULL` makes the loser's write a no-op.
- * No lock is taken and none is needed.
+ * — a total order, computed from the rows alone. That makes two sweeps
+ * deterministic, but does not protect a reconciler that has selected an active
+ * candidate and is waiting for the judge. The shared lane must cover both the
+ * sweep snapshot and retirements so a review cannot reference a fact this pass
+ * expired.
  *
  * The newest wins rather than the oldest because `recorded_at` is when we
  * learned it: keeping the latest telling preserves the provenance chain the
  * conversation actually produced, and the older rows keep pointing at it.
  */
 export function sweepDuplicates(store: MemoryStore, tenantId: string, now: Date): SweepReport {
+  const claim = store.acquireIngestLock(now);
+  if ('held' in claim) return { examined: 0, merges: [], busy: true };
+
+  try {
+    return sweepDuplicatesLocked(store, tenantId, now);
+  } finally {
+    claim.release();
+  }
+}
+
+function sweepDuplicatesLocked(store: MemoryStore, tenantId: string, now: Date): SweepReport {
   const groups = store.multiValuedActiveFacts(tenantId);
   const merges: Merge[] = [];
 

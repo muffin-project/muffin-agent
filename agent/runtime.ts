@@ -886,6 +886,7 @@ export function buildRuntime(
           {
             tenant: ctx.tenant,
             turnId: ctx.turnId,
+            taint: ctx.taint,
           },
           args,
         ),

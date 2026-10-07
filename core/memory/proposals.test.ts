@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { type ChatCall, type ChatResult, type Provider, ProviderError } from '../../agent/providers/types.js';
 import { JsonlExporter, SimpleTracer } from '../tracing/tracer.js';
 import { type IngestDeps, reconcilePendingProposals, reconcileProposal } from './ingest.js';
-import { resolveContradiction } from './maintenance.js';
+import { resolveContradiction, sweepDuplicates } from './maintenance.js';
 import { proposeMemoryRecord } from './proposals.js';
 import { MemoryStore } from './store.js';
 
@@ -130,6 +130,26 @@ describe('MemoryProposal — propose is durable and idempotent', () => {
     expect(second.id).toBe(first.id);
     expect(second.duplicate).toBe(true);
     expect(store.pendingProposals(HOST)).toHaveLength(1);
+  });
+
+  it('raises a duplicate pending proposal to the latest runtime-derived context tier', () => {
+    const { store } = harness();
+    const ep = episode(store, 'inferenza dal prompt');
+    const input = {
+      tenantId: HOST,
+      subject: 'owner',
+      subjectKind: 'person',
+      predicate: 'preference',
+      object: 'tea',
+      producer: 'agent-inference' as const,
+      sourceEpisodeIds: [ep],
+      content: 'owner preference tea',
+      confidence: 0.8,
+    };
+    const first = proposeMemoryRecord(store, { ...input, contextTier: 0 });
+    const second = proposeMemoryRecord(store, { ...input, contextTier: 3 });
+    expect(second).toEqual({ id: first.id, duplicate: true });
+    expect(store.proposalById(HOST, first.id)?.trustTier).toBe(3);
   });
 
   it('derives the tier from the evidence, never from the caller — taint is not washed', () => {
@@ -556,5 +576,124 @@ describe('MemoryProposal — the writer stays single', () => {
     };
     for (const root of roots) walk(root);
     expect(offenders).toEqual([]);
+  });
+});
+
+describe('MemoryProposal — the duplicate sweep shares the reconciliation lane', () => {
+  it('defers a sweep while a judge holds a candidate snapshot, keeping the review actionable', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-proposal-sweep-race-'));
+    const file = join(dir, 'muffin.db');
+    const makeHarness = () => {
+      const db = new DatabaseCtor(file);
+      const store = new MemoryStore(db);
+      const home = mkdtempSync(join(tmpdir(), 'muffin-proposal-sweep-race-traces-'));
+      const deps: IngestDeps = {
+        store,
+        provider: new Scripted([]),
+        model: 'test-light',
+        tracer: new SimpleTracer(new JsonlExporter(home)),
+        now: NOW,
+      };
+      return { db, store, deps };
+    };
+    const first = makeHarness();
+    const second = makeHarness();
+    let signalJudgeStarted!: () => void;
+    const judgeStarted = new Promise<void>((resolve) => {
+      signalJudgeStarted = resolve;
+    });
+    let releaseJudge!: (text: string) => void;
+    const judgeReply = new Promise<string>((resolve) => {
+      releaseJudge = resolve;
+    });
+    const deferredJudge: Provider = {
+      kind: 'openai-compat',
+      async chat(): Promise<ChatResult> {
+        signalJudgeStarted();
+        const text = await judgeReply;
+        return {
+          text,
+          toolCalls: [],
+          stopReason: 'end',
+          usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          model: 'test',
+        };
+      },
+    };
+    first.deps.provider = deferredJudge;
+
+    const subjectId = first.store.upsertEntity(HOST, 'owner', 'person', '2026-08-04T11:00:00Z');
+    const firstEpisode = episode(first.store, 'il commercialista è Marco');
+    const secondEpisode = episode(first.store, 'il commercialista è Marco');
+    const candidateId = first.store.addFact({
+      tenantId: HOST,
+      subjectId,
+      predicate: 'accountant',
+      objectValue: 'Marco',
+      episodeId: firstEpisode,
+      trustTier: 0,
+      confidence: 0.9,
+      extractionV: 1,
+      recordedAt: '2026-08-04T10:00:00Z',
+    });
+    const duplicateId = first.store.addFact({
+      tenantId: HOST,
+      subjectId,
+      predicate: 'accountant',
+      objectValue: 'Marco',
+      episodeId: secondEpisode,
+      trustTier: 0,
+      confidence: 0.9,
+      extractionV: 1,
+      recordedAt: '2026-08-04T10:00:00Z',
+    });
+    const { id: proposalId } = proposeOwner(first.store, {
+      object: 'Lucia',
+      producer: 'agent-inference',
+      episodeId: episode(first.store, 'inferisco che il commercialista sia Lucia'),
+    });
+    const candidateOrder = first.store.activeFacts(HOST, subjectId, 'accountant');
+    expect(candidateOrder[0]?.id).toBe(candidateId);
+    expect(candidateId).toBeLessThan(duplicateId);
+
+    const reconciliation = reconcileProposal(first.deps, HOST, proposalId);
+    try {
+      await judgeStarted;
+      const sweep = sweepDuplicates(second.store, HOST, NOW());
+      expect(sweep).toMatchObject({ busy: true, merges: [] });
+      expect(first.store.activeFacts(HOST, subjectId, 'accountant').map((fact) => fact.id)).toEqual(
+        [candidateId, duplicateId],
+      );
+      const retried = proposeMemoryRecord(second.store, {
+        tenantId: HOST,
+        subject: 'owner',
+        subjectKind: 'person',
+        predicate: 'accountant',
+        object: 'Lucia',
+        producer: 'agent-inference',
+        sourceEpisodeIds: [first.store.proposalById(HOST, proposalId)!.sourceEpisodeIds[0]!],
+        content: 'ricorda che il mio commercialista è Mario',
+        confidence: 0.95,
+        contextTier: 3,
+      });
+      expect(retried).toEqual({ id: proposalId, duplicate: true });
+
+      releaseJudge(verdict('review', 0.5));
+      const out = await reconciliation;
+      expect(out.status).toBe('review');
+      const incomingId = out.factIds[0];
+      expect(first.store.factById(HOST, incomingId!)?.trustTier).toBe(3);
+      if (incomingId === undefined) throw new Error('review did not record the incoming fact');
+      expect(first.store.openContradictions(HOST)).toEqual([
+        expect.objectContaining({ existingFactId: candidateId, incomingFactId: incomingId }),
+      ]);
+      expect(resolveContradiction(second.store, HOST, incomingId, NOW())).toHaveLength(1);
+      expect(first.store.openContradictions(HOST)).toHaveLength(0);
+    } finally {
+      releaseJudge(verdict('review', 0.5));
+      await reconciliation.catch(() => undefined);
+      first.db.close();
+      second.db.close();
+    }
   });
 });
