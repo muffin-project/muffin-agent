@@ -78,7 +78,25 @@ carve-out node_modules del pre-scan, tripwire macOS/Linux del replacement
 mid-command, reseal single-user indistinguibile (B15), D6 `hasParams`, E5
 recovery manuale, #657 core.hooksPath.
 
-## 5. Criteri di falsificazione di questo audit
+## 5. Addendum 2026-10-08 — enabling-minimum breadth prima del ledger
+
+Obiezione dell'owner accolta: senza un minimo di breadth la corsa non può
+partire, e il suo ledger del giorno 1 direbbe solo "manca tutto". La regola
+del §4 si raffina in due tempi, non si cancella:
+
+- **Breadth abilitante minima PRIMA del giorno 1**: al massimo 1–3 capacità,
+  fetta più sottile possibile, solo quelle senza cui i 14 giorni non possono
+  partire. Lo decide l'owner (solo lui conosce le sue giornate). Aperte ora:
+  email read-only (#871), calendario read+create (#872), spike browser via
+  MCP senza nuovo core (#873), più la verifica end-to-end di tutta la breadth
+  esistente compreso il self-knowledge (#874, compone con #854).
+- **Breadth guidata DAL ledger DOPO**: tutto il resto si costruisce solo su
+  dolore contato — e il ledger parla già al giorno 3–4, non aspetta il 14.
+
+Il resto dell'audit resta valido: meccanismi misurati, deferral fermi,
+residuals dichiarati.
+
+## 6. Criteri di falsificazione di questo audit
 
 - Se il ledger conta ≥1 fallback/giorno su una capability, quella capability
   entra nel prossimo lavoro prima di qualunque deferral.
