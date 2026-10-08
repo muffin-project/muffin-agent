@@ -498,8 +498,9 @@ const NESTED_GIT_HOOKS_SEARCH_DEPTH = 3;
  * replaced by a symlink redirects Git's lookup to a path no filename rule can
  * see (issue #865), so the concrete deny must name the resolved target. A
  * missing or dangling path comes back unchanged: there is nothing behind it
- * for Git to execute, and replacing it mid-command is the host profile's job
- * (the link-deny on the hooks path in bwrap.apparmor), not this walk's.
+ * for Git to execute, and a mid-command replacement at that path is only
+ * recorded, never gated (see the leg docstring), so the walk stays a
+ * pre-existing-repo complement, not a second enforcement point.
  */
 function resolveIfSymlink(path: string): string {
   try {

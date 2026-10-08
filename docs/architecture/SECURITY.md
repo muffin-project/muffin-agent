@@ -800,6 +800,10 @@ attempted and recorded on every platform but gated on none: AppArmor has no
 per-path symlink mediation (measured with the full profile loaded), and
 neither does Seatbelt for the hooks entry itself — so the marker is a
 tripwire, not a proof, and the residual stays explicitly open (see below).
+Like the depth bound itself, the pre-scan skips `node_modules`: a repository
+pre-existing under `node_modules/**/…` misses the concrete-target deny (host
+filename rules still apply to it mid-command). Rename into place, hardlink
+and direct installs have no such carve-out.
 
 This claim covers direct active hook filenames under a real `.git/hooks`
 directory, hardlink installs, writes through pre-existing symlinks, and

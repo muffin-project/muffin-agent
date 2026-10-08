@@ -111,6 +111,7 @@ describe('the registered shell write tool contains Git hooks through the product
         'mkdir -p ordinary',
         'printf ordinary > ordinary/file.txt',
         'printf evil > ordinary/evil',
+        'printf evil2 > ordinary/evil2',
         nestedInit,
         'printf tracked > nested/tracked.txt',
         'git -C nested add tracked.txt',
