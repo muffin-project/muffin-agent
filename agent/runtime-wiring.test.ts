@@ -1,19 +1,30 @@
-import DatabaseCtor from 'better-sqlite3';
-import { mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
-import { runInit } from '../cli/init.js';
-import { loadConfig, paths, saveConfig, secretDir } from '../core/config/config.js';
-import { UndoJournal } from '../core/undo/journal.js';
-import { cmdUndo } from '../cli/undo.js';
-import { seal } from '../core/rot/verify.js';
-import { buildRuntime } from './runtime.js';
 import { runDoctor } from '../cli/doctor.js';
+import { runInit } from '../cli/init.js';
+import { cmdUndo } from '../cli/undo.js';
+import { loadConfig, paths, saveConfig, secretDir } from '../core/config/config.js';
 import { muffinWorkspace } from '../core/config/workspace.js';
-import { enqueueTurn, runTurn, type LoopDeps, type ToolContext } from './loop.js';
-import type { ChatCall, ChatResult, Provider } from './providers/types.js';
 import type { Principal } from '../core/policy/types.js';
+import { seal } from '../core/rot/verify.js';
+import { probeSandbox } from '../core/sandbox/probe.js';
+import { UndoJournal } from '../core/undo/journal.js';
+import { enqueueTurn, type LoopDeps, runTurn, type ToolContext } from './loop.js';
+import type { ChatCall, ChatResult, Provider } from './providers/types.js';
+import { buildRuntime } from './runtime.js';
 
 /**
  * The joins `buildRuntime` is responsible for, asserted through a real turn.
@@ -38,9 +49,11 @@ import type { Principal } from '../core/policy/types.js';
 
 class Scripted implements Provider {
   readonly kind = 'openai-compat' as const;
+  readonly calls: ChatCall[] = [];
   private i = 0;
   constructor(private readonly script: ChatResult[]) {}
-  async chat(): Promise<ChatResult> {
+  async chat(call: ChatCall): Promise<ChatResult> {
+    this.calls.push(call);
     return this.script[this.i++] ?? {
       text: 'fine', toolCalls: [], stopReason: 'end',
       usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 }, model: 't',
@@ -59,6 +72,128 @@ const fetchCall = (url: string): ChatResult => ({
 const member: Principal = {
   kind: 'member', connector: 'telegram', tenantId: 'group:telegram:42', externalId: 'u1',
 };
+
+const productionSandboxAvailable =
+  probeSandbox().available || process.env.MUFFIN_REQUIRE_SANDBOX === '1';
+
+describe('the registered shell write tool contains Git hooks through the production runtime', () => {
+  const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
+
+  it.runIf(productionSandboxAvailable)(
+    'one real turn keeps ordinary writes and nested Git tracking while denying new nested and top-level hooks',
+    async () => {
+      const home = homeAllowing('ok.example.com');
+      const workspace = mkdtempSync(join(tmpdir(), 'muffin-wiring-shell-hooks-'));
+      const template = join(workspace, 'empty-template');
+      mkdirSync(join(template, 'hooks'), { recursive: true });
+      // The root repository exists before the shell call, so the existing
+      // concrete deny path protects its hook directory. The nested repository
+      // is created by the model's one compound command and must be protected
+      // by the host-level hook policy instead. The pre-existing symlinked
+      // repository is staged host-side (creating it through the door is what
+      // the link rule forbids); the scan resolves it to a concrete target.
+      execFileSync('git', ['init', '--quiet', `--template=${template}`, workspace], { stdio: 'pipe' });
+      execFileSync('git', ['init', '--quiet', 'pre'], { cwd: workspace, stdio: 'pipe' });
+      mkdirSync(join(workspace, 'pre-resolved'), { recursive: true });
+      writeFileSync(join(workspace, 'pre-resolved', 'pre-commit'), 'planted\n');
+      rmSync(join(workspace, 'pre', '.git', 'hooks'), { recursive: true, force: true });
+      symlinkSync(join('..', 'pre-resolved'), join(workspace, 'pre', '.git', 'hooks'));
+
+      const nestedInit =
+        process.platform === 'darwin'
+          ? 'git init --quiet --template=empty-template nested'
+          : 'git init --quiet nested';
+      const aliasInit =
+        process.platform === 'darwin'
+          ? 'git init --quiet --template=empty-template alias2'
+          : 'git init --quiet alias2';
+      const command = [
+        'mkdir -p ordinary',
+        'printf ordinary > ordinary/file.txt',
+        'printf evil > ordinary/evil',
+        'printf evil2 > ordinary/evil2',
+        nestedInit,
+        'printf tracked > nested/tracked.txt',
+        'git -C nested add tracked.txt',
+        aliasInit,
+        // Hardlink installs are refused on every platform; the symlink
+        // replacement is attempted and recorded but gated on none (tripwire:
+        // both platforms report writable today — see the leg docstring).
+        'if ln ordinary/evil2 alias2/.git/hooks/pre-commit 2>/dev/null; then printf writable; else printf denied; fi > hardlink-result.txt',
+        'rm -rf alias2/.git/hooks',
+        'if ln -s ../redirected alias2/.git/hooks 2>/dev/null; then printf writable; else printf denied; fi > alias-result.txt',
+        'if printf hook > pre/.git/hooks/pre-commit 2>/dev/null; then printf writable; else printf denied; fi > pre-result.txt',
+        'mkdir -p nested/.git/hooks',
+        'if printf nested-hook > nested/.git/hooks/pre-commit; then printf writable; else printf denied; fi > nested-hook-result.txt',
+        'if printf nested-fsmonitor > nested/.git/hooks/fsmonitor-watchmanv2; then printf writable; else printf denied; fi > nested-fsmonitor-result.txt',
+        'if mv ordinary/evil nested/.git/hooks/pre-commit 2>/dev/null; then printf writable; else printf denied; fi > rename-result.txt',
+        'if printf top-level-hook > .git/hooks/pre-commit; then printf writable; else printf denied; fi > top-level-hook-result.txt',
+      ].join(' && ');
+
+      const runtime = buildRuntime(home, workspace);
+      try {
+        expect(runtime.deps.tools.some((tool) => tool.spec.name === 'shell_run_write')).toBe(true);
+        const provider = new Scripted([{
+          text: null,
+          toolCalls: [{ id: 'shell-hooks-1', name: 'shell_run_write', args: { command } }],
+          stopReason: 'tool_use',
+          usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          model: 't',
+        }]);
+        const deps: LoopDeps = {
+          ...runtime.deps,
+          provider,
+          approve: async () => 'allow',
+        };
+
+        await runTurn(deps, {
+          principal: owner,
+          tenant: 'host',
+          surface: 'cli',
+          session: deps.sessions.open('shell-hooks-1'),
+          text: 'crea un repository annidato e prova a installare un hook',
+        });
+
+        const toolResults = provider.calls
+          .flatMap((call) => call.messages)
+          .flatMap((message) => message.content)
+          .filter((block) => block.type === 'tool_result')
+          .map((block) => block.content)
+          .join('\n');
+        // The mutation job removes AppArmor's explicit hook rules (filename
+        // denies and the hooks-path link deny). This assertion then fails
+        // with the self-test's typed reason, before a later missing-file
+        // check can obscure which guarantee regressed.
+        expect(toolResults).not.toContain('git_hooks_unprotected');
+        expect(readFileSync(join(workspace, 'ordinary', 'file.txt'), 'utf8')).toBe('ordinary');
+        expect(readFileSync(join(workspace, 'nested', 'tracked.txt'), 'utf8')).toBe('tracked');
+        expect(readFileSync(join(workspace, 'nested', '.git', 'index'))).toBeTruthy();
+        expect(readFileSync(join(workspace, 'nested-hook-result.txt'), 'utf8')).toBe('denied');
+        expect(readFileSync(join(workspace, 'nested-fsmonitor-result.txt'), 'utf8')).toBe('denied');
+        expect(readFileSync(join(workspace, 'hardlink-result.txt'), 'utf8')).toBe('denied');
+        expect(readFileSync(join(workspace, 'pre-result.txt'), 'utf8')).toBe('denied');
+        expect(readFileSync(join(workspace, 'rename-result.txt'), 'utf8')).toBe('denied');
+        expect(readFileSync(join(workspace, 'top-level-hook-result.txt'), 'utf8')).toBe('denied');
+        // Tripwire: the mid-command replacement succeeds on every platform
+        // today (no per-path symlink mediation) — recorded, not gated. The
+        // day this flips to denied, re-gate it and update the claim.
+        expect(readFileSync(join(workspace, 'alias-result.txt'), 'utf8')).toBe('writable');
+        // The pre-existing symlink still points at its target, but nothing was
+        // written through it on any platform.
+        expect(readFileSync(join(workspace, 'pre-resolved', 'pre-commit'), 'utf8')).toBe('planted\n');
+        // The refused rename leaves the source in place.
+        expect(existsSync(join(workspace, 'ordinary', 'evil'))).toBe(true);
+        expect(existsSync(join(workspace, 'nested', '.git', 'hooks', 'pre-commit'))).toBe(false);
+        expect(
+          existsSync(join(workspace, 'nested', '.git', 'hooks', 'fsmonitor-watchmanv2')),
+        ).toBe(false);
+        expect(existsSync(join(workspace, '.git', 'hooks', 'pre-commit'))).toBe(false);
+      } finally {
+        runtime.close();
+      }
+    },
+  );
+});
 
 /** A home whose root of trust allows exactly one host. */
 function homeAllowing(host: string): string {
@@ -1001,11 +1136,11 @@ describe('main model config is a turn-boundary input', () => {
     // qui non è cambiato, e resta quello.
     expect(runtime.light.provider).not.toBe(bootLightProvider);
     expect(runtime.light.model).toBe(bootLightModel);
-    expect(
-      runtime.capabilityGaps.some(
-        (gap) => gap.kind === 'truncated' && gap.reason.includes('profilo "conservative"'),
-      ),
-    ).toBe(true);
+    // #469: a profile refresh may lower the schema ceiling, but that no
+    // longer makes otherwise authorized capabilities unavailable. The fresh
+    // turn uses discovery under pressure instead of materializing a false
+    // truncation gap at runtime level.
+    expect(runtime.capabilityGaps.filter((gap) => gap.kind === 'truncated')).toEqual([]);
 
     runtime.close();
   });
@@ -1394,5 +1529,111 @@ describe('billing identity: owner-declared unmetered endpoints (#499)', () => {
   it('a malformed sealed section fails safe to metered', async () => {
     const { usd } = await billedOn(homeWithUnmetered('all'));
     expect(usd).toBeGreaterThan(0);
+  });
+});
+
+describe('memory proposal preserves the live turn taint through buildRuntime', () => {
+  const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
+
+  const call = (id: string, name: string, args: Record<string, unknown>): ChatResult => ({
+    text: null,
+    toolCalls: [{ id, name, args }],
+    stopReason: 'tool_use',
+    usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    model: 't',
+  });
+
+  it('does not wash tier-3 recall into an inference with omitted or lower-tier evidence ids', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-memory-proposal-taint-'));
+    runInit({ home, apiKey: 'sk-never-called' });
+    const runtime = buildRuntime(
+      home,
+      mkdtempSync(join(tmpdir(), 'muffin-memory-proposal-taint-ws-')),
+    );
+    // Exercise the shipped text recall and tool-call path without asking a
+    // model to rerank a one-item fixture. Proposal reconciliation itself has
+    // no judge call because these predicates have no existing beliefs.
+    runtime.memory.recall.reranker = undefined;
+
+    const highEpisode = runtime.memory.store.addEpisode({
+      tenantId: 'host',
+      connector: 'cli',
+      threadKey: 'memory-source',
+      role: 'user',
+      kind: 'message',
+      content: 'cobalt meridian provenance canary',
+      trustTier: 3,
+      createdAt: '2026-08-04T10:00:00Z',
+    });
+    const lowEpisode = runtime.memory.store.addEpisode({
+      tenantId: 'host',
+      connector: 'cli',
+      threadKey: 'low-source',
+      role: 'user',
+      kind: 'message',
+      content: 'the owner likes tea',
+      trustTier: 0,
+      createdAt: '2026-08-04T10:01:00Z',
+    });
+    const runtimeProvider = new Scripted([
+      call('search-high', 'memory_search', { query: 'cobalt meridian provenance' }),
+      call('propose-ingress', 'memory_propose', {
+        subject: 'owner',
+        predicate: 'inferred_from_ingress',
+        object: 'derived without cited ids',
+        kind: 'agent-inference',
+      }),
+      call('propose-low', 'memory_propose', {
+        subject: 'owner',
+        predicate: 'inferred_from_explicit_low_evidence',
+        object: 'derived with low id',
+        kind: 'agent-inference',
+        evidence_ids: [lowEpisode],
+      }),
+      {
+        text: 'fatto',
+        toolCalls: [],
+        stopReason: 'end',
+        usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        model: 't',
+      },
+    ]);
+
+    try {
+      await runTurn(
+        { ...runtime.deps, provider: runtimeProvider },
+        {
+          principal: owner,
+          tenant: 'host',
+          surface: 'cli',
+          session: runtime.deps.sessions.open('memory-proposal-taint'),
+          text: 'osserva il ricordo e inferisci due dettagli distinti',
+        },
+      );
+
+      const proposals = runtime.memory.store.listProposals('host');
+      expect(proposals).toHaveLength(2);
+      expect(
+        proposals.find((proposal) => proposal.predicate === 'inferred_from_ingress')
+          ?.sourceEpisodeIds,
+      ).not.toEqual([highEpisode]);
+      expect(
+        proposals.find((proposal) => proposal.predicate === 'inferred_from_explicit_low_evidence')
+          ?.sourceEpisodeIds,
+      ).toEqual([lowEpisode]);
+      expect(proposals.map((proposal) => proposal.trustTier)).toEqual([3, 3]);
+      expect(proposals.every((proposal) => proposal.origin === 'inferred')).toBe(true);
+      const ownerId = runtime.memory.store.findEntity('host', 'owner');
+      if (ownerId === null) throw new Error('the owner entity was not committed');
+      expect(
+        runtime.memory.store.activeFacts('host', ownerId, 'inferred_from_ingress')[0]?.trustTier,
+      ).toBe(3);
+      expect(
+        runtime.memory.store.activeFacts('host', ownerId, 'inferred_from_explicit_low_evidence')[0]
+          ?.trustTier,
+      ).toBe(3);
+    } finally {
+      runtime.close();
+    }
   });
 });

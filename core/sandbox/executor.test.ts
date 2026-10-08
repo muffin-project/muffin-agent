@@ -299,6 +299,71 @@ describe.runIf(gate.run)(`sandboxed execution holds (real containment — ${gate
     expect(existsSync(hookPath)).toBe(false);
   }, 20_000);
 
+  it('creates nested repositories and ordinary tracked files in one write-shell call', async () => {
+    const initNested =
+      platform() === 'darwin'
+        ? 'mkdir -p empty-template/hooks && git init --quiet --template=empty-template nested'
+        : 'git init --quiet nested';
+    const r = await executor.run({
+      command:
+        'mkdir -p ordinary && printf ordinary > ordinary/file.txt && ' +
+        initNested + ' && printf tracked > nested/tracked.txt && ' +
+        'git -C nested add tracked.txt',
+      cwd: s.workspace,
+      writeScope: [s.workspace],
+      timeoutMs: 15_000,
+    });
+
+    expect(r.code).toBe(0);
+    expect(readFileSync(join(s.workspace, 'ordinary', 'file.txt'), 'utf8')).toBe('ordinary');
+    expect(readFileSync(join(s.workspace, 'nested', 'tracked.txt'), 'utf8')).toBe('tracked');
+    expect(existsSync(join(s.workspace, 'nested', '.git', 'index'))).toBe(true);
+  }, 20_000);
+
+  it('refuses a hook created in a nested repository during the same write-shell call', async () => {
+    const hookPath = join(s.workspace, 'created-now', '.git', 'hooks', 'pre-commit');
+    const initNested =
+      platform() === 'darwin'
+        ? 'mkdir -p empty-template/hooks && git init --quiet --template=empty-template created-now'
+        : 'git init --quiet created-now';
+    const r = await executor.run({
+      command: initNested + ' && mkdir -p created-now/.git/hooks && ' +
+        'if printf hook > created-now/.git/hooks/pre-commit; then echo WRITABLE; ' +
+        'else echo DENIED; fi',
+      cwd: s.workspace,
+      writeScope: [s.workspace],
+      timeoutMs: 15_000,
+    });
+
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('DENIED');
+    expect(r.stdout).not.toContain('WRITABLE');
+    expect(existsSync(join(s.workspace, 'created-now', '.git', 'HEAD'))).toBe(true);
+    expect(existsSync(hookPath)).toBe(false);
+  }, 20_000);
+
+  it('refuses a top-level hook created in the same write-shell call', async () => {
+    const hookPath = join(s.workspace, '.git', 'hooks', 'pre-commit');
+    const initTopLevel =
+      platform() === 'darwin'
+        ? 'mkdir -p empty-template/hooks && git init --quiet --template=empty-template .'
+        : 'git init --quiet .';
+    const r = await executor.run({
+      command: initTopLevel + ' && mkdir -p .git/hooks && ' +
+        'if printf hook > .git/hooks/pre-commit; then echo WRITABLE; ' +
+        'else echo DENIED; fi',
+      cwd: s.workspace,
+      writeScope: [s.workspace],
+      timeoutMs: 15_000,
+    });
+
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('DENIED');
+    expect(r.stdout).not.toContain('WRITABLE');
+    expect(existsSync(join(s.workspace, '.git', 'HEAD'))).toBe(true);
+    expect(existsSync(hookPath)).toBe(false);
+  }, 20_000);
+
   /**
    * The seccomp stage, verified against a listener this process owns.
    *

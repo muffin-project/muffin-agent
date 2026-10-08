@@ -20,6 +20,7 @@ import {
   cmdMemoryCheck,
   cmdMemoryExtract,
   cmdMemoryPin,
+  cmdMemoryProposals,
   cmdMemoryReview,
   cmdMemoryReviewKeep,
   cmdMemorySearch,
@@ -908,6 +909,18 @@ async function cmdMemory(argv: string[]): Promise<number> {
   }
 
   if (sub === 'stats') return cmdMemoryStats(home);
+
+  if (sub === 'proposals') {
+    const { values } = parseArgs({
+      args: rest,
+      options: { status: { type: 'string' }, n: { type: 'string' } },
+      allowPositionals: true,
+    });
+    return cmdMemoryProposals(home, {
+      ...(values.status ? { status: values.status } : {}),
+      ...(values.n ? { limit: Number(values.n) } : {}),
+    });
+  }
 
   if (sub === 'review') {
     const { values, positionals } = parseArgs({

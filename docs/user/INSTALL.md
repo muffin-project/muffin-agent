@@ -15,14 +15,50 @@
 > the supposedly one-command path stops at “run `muffin init`”. The bootstrap
 > never reads a secret itself.
 >
-> When the installer is done you have a `muffin` command, a `~/.muffin` home,
-> and, where the local supervisor supports it, a gateway running in the
-> background.
+> **Personal install:** run it from your normal, unprivileged account.
+>
+> **Provider gives you root SSH:** on Ubuntu, the bootstrap creates a locked,
+> non-login `muffin` account, then runs the build, setup and gateway as that
+> account. Code, Node and private data live under `/var/lib/muffin`; operate it
+> with `muffin ...` from the root login, or `sudo muffin ...` from an admin
+> account (`muffin-agent` is used if `muffin` would conflict with a host
+> command). The installer asks systemd to keep the account's
+> user manager available after logout and at boot (“linger”). A disposable
+> Ubuntu 24.04 VM confirmed that the gateway runs as `muffin`, returns after a
+> reboot, updates and rolls back, and can be removed while preserving the
+> account and data. This path is still not release-verified: it used an invalid
+> test key and did not exercise Telegram. See the evidence report for the exact
+> limits.
+>
+> **Immutable root code.** The bootstrap does not execute a mutable branch as
+> root: it resolves one **commit SHA** (GitHub over HTTPS is the transport/trust
+> provider), fetches `install.sh` from
+> `raw.githubusercontent.com/<repo>/<sha>/install.sh`, prints it, and passes it
+> down so the build checks out that same commit (`MUFFIN_REF` overrides it for
+> pinned runs; anything that is not a 40-hex commit is refused).
+> Signing/attestation is later hardening, not a prerequisite. The *public
+> unauthenticated* bootstrap (`curl …/main/bootstrap.sh | sh`) cannot be
+> truthfully verified while the repository is private: it is the one check
+> deferred to publication, with no simulated evidence standing in for it.
+>
+> **Containment stays fail-closed.** On Ubuntu 24.04+ the kernel restricts
+> unprivileged user namespaces, which bubblewrap needs. The installer detects
+> it and offers Muffin's packaged, versioned AppArmor profile
+> (`scripts/install/bwrap.apparmor`); it is applied only with explicit consent
+> (`MUFFIN_APPLY_SANDBOX_PROFILE=1`, or an interactive yes). With no consent, or
+> if the application fails, the installation still completes but **shell and job
+> execution stay disabled** — never an unsandboxed fallback, never a silent host
+> policy change. `muffin doctor` names the missing capability and the remedy.
+> See `docs/architecture/SECURITY.md` §9.
+>
+> A personal install stores data in `~/.muffin`. A root-managed install stores
+> it in `/var/lib/muffin/.muffin`. Where the local supervisor supports it, the
+> gateway runs in the background.
 
-The mechanics live in `install.sh` itself, which is the authority for what
-actually happens; `bootstrap.sh` owns only the pipe-to-controlling-TTY handoff.
-This page says what the command is for, what it will do to your machine, and how
-to undo it.
+The install mechanics live in `install.sh` itself. `bootstrap.sh` owns the
+pipe-to-controlling-TTY handoff; `install.sh` checks the privilege boundary and
+selects the personal or root-managed path. This page says what the command is
+for, what it will do to your machine, and how to undo it.
 
 ## Install modes: personal (default) and checkout
 
@@ -57,9 +93,41 @@ and for scripts that need to know where things will land.
 | Setup | `muffin init` — creates `~/.muffin`, stores your key `0600`, seals the root of trust |
 | Supervisor | `muffin gateway install --write --start` — writes the user unit, loads it, enables linger where applicable |
 
-Nothing is installed outside your home directory except optional OS packages.
-If passwordless `sudo` is not available on Linux the installer prints the one
-package-manager line it cannot perform and continues where it safely can.
+For a personal install, Muffin's files stay in your home except for optional
+OS packages. For a root-managed install, root also installs required OS
+packages and the command shim in `/usr/local/bin`; the service account and
+program are under `/var/lib/muffin`. If passwordless `sudo` is not available on
+Linux the personal installer prints the one package-manager line it cannot
+perform and continues where it safely can.
+
+## Linux shell containment
+
+Linux shell commands run only when Muffin's runtime checks confirm both that
+bubblewrap works and that active Git hooks cannot be created inside a new
+nested repository. On AppArmor-enabled Linux, load the shared profile against
+the exact host `bwrap` binary. Without an effective policy, shell calls are
+refused before their requested commands run. The installer does not
+change system AppArmor policy.
+
+From the installed source checkout (the default personal install is under
+`~/.local/share/muffin/src`), run:
+
+```sh
+cd ~/.local/share/muffin/src
+bwrap_path="$(command -v bwrap)"
+test -n "$bwrap_path" || { echo 'bwrap not found in PATH' >&2; exit 1; }
+sed "s|<BWRAP_BINARY>|${bwrap_path}|" scripts/install/bwrap.apparmor \
+  | sudo tee /etc/apparmor.d/muffin-bwrap > /dev/null
+sudo apparmor_parser -r /etc/apparmor.d/muffin-bwrap
+sudo aa-status | grep muffin-bwrap
+muffin doctor
+```
+
+This is an opt-in system policy change. On Linux without AppArmor, the current
+runtime has no shipped policy for this nested-hook boundary. Any Linux host
+without an effective policy keeps rejecting shell calls rather than running
+them without the guard. The Docker Compose path is experimental and has not
+passed this hook-protection acceptance.
 
 ## Why a bootstrap shim exists
 
@@ -149,6 +217,15 @@ MUFFIN_API_KEY_FILE=/run/secrets/muffin-key sh install.sh
 ```
 
 That is a *path* in the environment, not a secret. See ADR-0048.
+For a root-launched install, the file must be a regular file in directories
+owned by root or the account that invoked `sudo`; shared writable directories
+and symbolic-link paths are refused. This stops another local account from
+swapping the file while root copies it. To keep a key file in your own private
+home when installing as root, pass its path through `sudo`:
+
+```bash
+sudo MUFFIN_API_KEY_FILE="$HOME/.config/muffin/key" sh bootstrap.sh
+```
 
 The Alpha onboarding plan adds a lower-friction recommended path — OpenRouter
 OAuth PKCE — without weakening this invariant. Until that slice lands, the
@@ -227,6 +304,14 @@ anything is written.
 muffin uninstall          # ~/.muffin: config, keys, memory
 ./install.sh --uninstall  # the launcher symlink
 rm -rf ~/.local/share/muffin   # the checkout and the bundled Node
+```
+
+For a root-managed install, remove the program and gateway while keeping the
+locked service account and its data (see the root evals for the exact
+guarantees):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/muffin-project/muffin-agent/main/bootstrap.sh | sudo sh -s -- --uninstall
 ```
 
 New values entered through an owner-facing capability setup are stored in the

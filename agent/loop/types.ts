@@ -19,6 +19,7 @@ import type { TurnStopped, TurnStore } from '../../core/turns/store.js';
 import type { TodoStore } from '../../core/turns/todo.js';
 import type { WaitSpec } from '../../core/turns/wait.js';
 import type { UndoJournal } from '../../core/undo/journal.js';
+import type { CapabilityDiscoveryPort } from '../capability-exposure.js';
 import type { IstanzaFacts, SystemPrompts } from '../context/assemble.js';
 import type { Profile, ProfileOrigin } from '../profiles/profile.js';
 import type { AudioBlock, ImageBlock, Provider, ToolSpec } from '../providers/types.js';
@@ -124,6 +125,14 @@ export type ToolContext = {
    * so the barrier has to travel with the turn — not with the tool.
    */
   suspend: (spec: WaitSpec) => void;
+  /**
+   * Turn-local progressive capability projection (#469).
+   *
+   * Absent when the authority-filtered catalogue already fits the profile cap.
+   * The handler may only search/load the eligible catalogue the engine built
+   * before the model call; execution still goes through runTool + the kernel.
+   */
+  capabilityDiscovery?: CapabilityDiscoveryPort | undefined;
   /** Durability guard for this turn: a write failure disables later tools. */
   durability?: {
     failure: () => string | null;

@@ -483,7 +483,7 @@ export type ConsolidatorDeps = {
    * the batch and its log row, and anything asynchronous there would be a
    * second place a shutdown can catch the lane mid-write.
    */
-  sweep?: ((now: Date) => { merges: unknown[] }) | undefined;
+  sweep?: ((now: Date) => { merges: unknown[]; busy?: boolean }) | undefined;
   /** Where a refusal or an error is said out loud. stderr, in every surface. */
   log?: ((line: string) => void) | undefined;
   now?: (() => Date) | undefined;
@@ -733,7 +733,9 @@ export class Consolidator {
     let merged = 0;
     if (report.factsAdded > 0 && this.deps.sweep) {
       try {
-        merged = this.deps.sweep(this.now()).merges.length;
+        const sweep = this.deps.sweep(this.now());
+        merged = sweep.merges.length;
+        if (sweep.busy) report.busy = true;
       } catch (error) {
         // The batch is what mattered. A sweep that threw must not turn a run
         // that wrote facts into an `error` row, because the facts are there and
@@ -770,11 +772,11 @@ export class Consolidator {
       for (const line of formatConsolidationLines(report)) this.deps.log?.(`consolidamento: ${line}`);
     }
 
-    // The drain. Both halves, and the `busy` exclusion: a lane lock refusal
-    // fetched nothing, so `fetched === limit` is false anyway — but stating it
-    // keeps the condition readable as "this process consumed a full page", not
-    // as "some process might have".
-    if (!report.busy && report.fetched >= limit && report.marked > 0) {
+    // The drain follows progress, not the sweep outcome. Episode progress is
+    // counted by markers; proposals expose a full-page signal because their
+    // bounded page is independent of the episode limit. A lane refusal reports
+    // neither kind of progress, while a busy sweep cannot discard either one.
+    if ((report.fetched >= limit && report.marked > 0) || report.proposalPageFull === true) {
       this.drainAgain = true;
     }
     return { run, report };

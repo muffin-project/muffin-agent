@@ -60,15 +60,38 @@ const denyReadOf = (customConfig: Partial<SandboxRuntimeConfig> | undefined): re
  * produce (`EPERM` da `socket(AF_UNIX, …)`). Il mock non esegue bwrap: senza
  * modellare quel rifiuto il client della sonda si connetterebbe e `verify()`
  * direbbe `unix_filter_absent`.
+ *
+ * La gamba nested-hook (introdotta per #862) riceve lo stesso trattamento:
+ * il mock finge i deny su ogni hook attivo. Senza, il comando della gamba
+ * girerebbe davvero in `/bin/sh`, le scritture hook riuscirebbero e
+ * `verify()` direbbe `git_hooks_unprotected` — e questi test, che provano il
+ * contratto della reset e non il contenimento, diventerebbero rossi per la
+ * ragione sbagliata. La prova vera del deny sta in
+ * `executor.selftest.test.ts` (mock) e nel percorso di produzione
+ * (`agent/runtime-wiring.test.ts`, binario vero).
  */
 function contieneDavvero(): void {
   wrapWithSandboxArgv.mockImplementation(async (command, _binShell, customConfig) => ({
     argv:
       denyReadOf(customConfig).length > 0
         ? ['/bin/sh', '-c', 'exit 1']
-        : command.includes('afunix.sock')
-          ? ['/bin/sh', '-c', 'echo EPERM >&2; exit 1']
-          : ['/bin/sh', '-c', command],
+        : command.includes('muffin sandbox nested-hook self-test')
+          ? [
+              '/bin/sh',
+              '-c',
+              (() => {
+                const hookNames = command.match(/for hook in ([^;]+); do/)?.[1]?.split(/\s+/) ?? [];
+                const hookResults = hookNames
+                  .map((hook) => `muffin-hook-write: denied:${hook}`)
+                  .join('\\n');
+                // Model a healthy host: the mid-command replacement is
+                // recorded, not gated (see the leg docstring).
+                return `printf "muffin-apparmor-label: mocked\\n${hookResults}\\nmuffin-hook-alias: created\\nmuffin-hook-hardlink: denied\\nmuffin-hook-pre: denied\\nmuffin-hook-rename: denied\\nmuffin sandbox hook self-test positive controls passed\\n"`;
+              })(),
+            ]
+          : command.includes('afunix.sock')
+            ? ['/bin/sh', '-c', 'echo EPERM >&2; exit 1']
+            : ['/bin/sh', '-c', command],
     env: {},
   }));
 }

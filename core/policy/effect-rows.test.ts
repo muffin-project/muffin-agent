@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { capabilityDiscoveryCapability } from '../../agent/tools/capability-search.js';
 import { sendFileCapability } from '../../agent/tools/deliver.js';
 import { documentCapability } from '../../agent/tools/document.js';
 import { effectsCapability } from '../../agent/tools/effects.js';
@@ -11,6 +12,7 @@ import { inspectCapability } from '../../agent/tools/inspect.js';
 import { mcpCapabilityFor } from '../../agent/tools/mcp.js';
 import { memoryCapability } from '../../agent/tools/memory.js';
 import { memoryForgetCapability } from '../../agent/tools/memory-forget.js';
+import { memoryProposeCapability } from '../../agent/tools/memory-propose.js';
 import { processCapabilities } from '../../agent/tools/process.js';
 import { scheduleCapability } from '../../agent/tools/schedule.js';
 import { searchCapability } from '../../agent/tools/search.js';
@@ -62,10 +64,14 @@ const ALL: readonly CapabilityDecl[] = [
   shellWriteCapability,
   ...processCapabilities,
   sendFileCapability,
+  capabilityDiscoveryCapability,
   httpCapability,
   searchCapability,
   memoryCapability,
   memoryForgetCapability,
+  // ADR-0051 slice 1: stages, never commits — same `memory` row as the other
+  // two verbs, which is exactly the claim (no privileged truth channel).
+  memoryProposeCapability,
   skillCapability,
   documentCapability,
   inspectCapability,
@@ -307,6 +313,7 @@ describe('la matrice normativa è eseguibile', () => {
     // aggiunta a `ALL` sopra, e allora questo elenco torna a coincidere.
     expect(esportate.sort()).toEqual(
       [
+        'capability-search.ts:capabilityDiscoveryCapability',
         'deliver.ts:sendFileCapability',
         'document.ts:documentCapability',
         'effects.ts:effectsCapability',
@@ -316,6 +323,7 @@ describe('la matrice normativa è eseguibile', () => {
         'mcp.ts:mcpCapabilityFor',
         'memory.ts:memoryCapability',
         'memory-forget.ts:memoryForgetCapability',
+        'memory-propose.ts:memoryProposeCapability',
         'process.ts:processCapabilities',
         'search.ts:searchCapability',
         'shell.ts:shellCapability',

@@ -1,4 +1,4 @@
-import type { Provider } from '../../agent/providers/types.js';
+import { type Provider, ProviderError, ProviderStreamError } from '../../agent/providers/types.js';
 import type { Principal } from '../policy/types.js';
 import type { SpanHandle, Tracer } from '../tracing/types.js';
 import type { VectorIndex } from './vectors.js';
@@ -6,8 +6,9 @@ import { ATTR } from '../tracing/types.js';
 import { extractFacts } from './extract.js';
 import { speakerAttributedContent } from './authorship.js';
 import { describeFailureReason, judgeContradiction, type JudgeOutcome } from './judge.js';
-import { EXTRACTION_VERSION } from './schema.js';
-import type { MemoryStore } from './store.js';
+import type { ProposalStatus } from './proposals.js';
+import { EXTRACTION_VERSION, type FactOrigin } from './schema.js';
+import type { Fact, MemoryStore } from './store.js';
 
 /**
  * The ingestion job: episodes in, facts out.
@@ -174,6 +175,17 @@ export type IngestReport = {
    * which could drift from what actually happened.
    */
   judgeUnavailable: JudgeUnavailable[];
+  /**
+   * Durable proposals resolved this run (ADR-0051) — every terminal outcome
+   * (accepted/merged/superseded/review/rejected), not just the ones that
+   * wrote a belief. Optional so older fakes stay valid: absent reads as zero.
+   * The run-log row (`consolidator.ts#rowFrom`) does not map this field: it
+   * counts rows, not proposals, and the beliefs proposals wrote are already
+   * in `factsAdded`.
+   */
+  proposalsReconciled?: number;
+  /** A complete proposal page may leave more staged intent for a drain pass. */
+  proposalPageFull?: boolean;
 };
 
 /** One judge call this round that could not be turned into a verdict. */
@@ -260,6 +272,8 @@ export async function ingestPending(
     needsReview: [],
     errors: [],
     judgeUnavailable: [],
+    proposalsReconciled: 0,
+    proposalPageFull: false,
   };
 
   // One extractor at a time. A hand-typed `muffin memory extract` overlapping
@@ -448,6 +462,21 @@ export async function ingestPending(
       mark(episode.id);
     }
 
+    // ADR-0051 producers drain through the same canonical reconciler the
+    // episode loop above uses — no second writer, no second semantics. The
+    // lane lock is already held by this batch, so the locked variant runs
+    // directly; a proposal whose evidence arrived in this same batch meets a
+    // graph that already contains it.
+    const staged = deps.store.pendingProposals(tenantId, PROPOSAL_DRAIN_LIMIT);
+    report.proposalPageFull = staged.length === PROPOSAL_DRAIN_LIMIT;
+    for (const proposal of staged) {
+      const outcome = await reconcileProposalLocked(deps, tenantId, proposal.id, now(), span, report);
+      report.proposalsReconciled = (report.proposalsReconciled ?? 0) + 1;
+      if (outcome.status === 'accepted' || outcome.status === 'superseded' || outcome.status === 'review') {
+        report.factsAdded += 1;
+      }
+    }
+
     // After the loop, and separately: the backlog is idempotent, so an embedder
     // that is down costs a retry next run instead of losing the extraction that
     // already succeeded.
@@ -503,6 +532,63 @@ export async function ingestPending(
   }
 }
 
+/**
+ * How many staged proposals one consolidation batch resolves. Bounded for
+ * the same reason `CONSOLIDATION_BATCH` is: each resolution can cost a judge
+ * call, and one trailing edge must not turn into a twenty-minute run.
+ */
+const PROPOSAL_DRAIN_LIMIT = 20;
+
+/**
+ * A candidate belief on its way through the one semantic writer — whether it
+ * arrived as an extracted fact or as a staged proposal. Both producers fill
+ * this shape; `decideCandidate` + `commitCandidateDecision` below own what
+ * happens next, so no producer carries its own contradiction semantics.
+ */
+type IncomingCandidate = {
+  subject: string;
+  predicate: string;
+  object: string;
+  validFrom: string | null;
+  confidence: number;
+  importance: number;
+  /**
+   * Requested pin. Still only a request: `addFact`'s own gate decides, from
+   * `trustTier`/`origin` here, not from anything the producer claims.
+   */
+  pinnedRequest: boolean;
+  /** Provenance travels: a fact can never be more trusted than where it came from. */
+  trustTier: 0 | 1 | 2 | 3;
+  origin: FactOrigin;
+  /** The single episode the belief row points at. */
+  episodeId: number;
+};
+
+/** The one belief-writer call, shared by every producer path. */
+function insertCandidateFact(
+  store: MemoryStore,
+  tenantId: string,
+  subjectId: number,
+  incoming: IncomingCandidate,
+  now: Date,
+): number {
+  return store.addFact({
+    tenantId,
+    subjectId,
+    predicate: incoming.predicate,
+    objectValue: incoming.object,
+    validFrom: incoming.validFrom,
+    episodeId: incoming.episodeId,
+    trustTier: incoming.trustTier,
+    confidence: incoming.confidence,
+    origin: incoming.origin,
+    importance: incoming.importance,
+    pinned: incoming.pinnedRequest,
+    extractionV: EXTRACTION_VERSION,
+    recordedAt: now.toISOString(),
+  });
+}
+
 async function reconcile(
   deps: IngestDeps,
   tenantId: string,
@@ -523,41 +609,39 @@ async function reconcile(
 ): Promise<'added' | 'skipped'> {
   const existing = deps.store.activeFacts(tenantId, subjectId, fact.predicate);
 
-  const insert = () =>
-    deps.store.addFact({
-      tenantId,
-      subjectId,
-      predicate: fact.predicate,
-      objectValue: fact.object,
-      validFrom: fact.validFrom,
-      episodeId: episode.id,
-      // Provenance travels: a fact can never be more trusted than where it came from.
-      trustTier: episode.trustTier,
-      confidence: fact.confidence,
-      // Everything this pipeline produces is `said` by construction: rule 2 of
-      // the extraction prompt forbids inference, so a fact reaching here is
-      // always something someone actually stated. The `inferred` producer is
-      // the observing spine (MVP #5) — declared deferred, not forgotten, and
-      // the hedging path it will feed is already tested from the store side.
-      origin: 'said',
-      // Never derived from confidence, and never allowed to raise it: intensity
-      // changes how accurate a memory feels, not how accurate it is.
-      importance: fact.importance,
-      // The extractor's own strict-vocabulary request, OR the small bootstrap
-      // rule: a fact about the owner (by this pipeline's own subject-naming
-      // convention, see `isOwnerSubject`) on one of the two identity
-      // predicates the real install had already recorded before this column
-      // existed. Either way this is only a *request* — `addFact`'s own gate
-      // is what actually decides, from `episode.trustTier`/`origin` here, not
-      // from anything this module claims.
-      pinned: fact.pinned || (isOwnerSubject(fact.subject) && BOOTSTRAP_IDENTITY_PREDICATES.has(fact.predicate)),
-      extractionV: EXTRACTION_VERSION,
-      recordedAt: now.toISOString(),
-    });
+  // Everything this pipeline produces is `said` by construction: rule 2 of
+  // the extraction prompt forbids inference, so a fact reaching here is
+  // always something someone actually stated. The `inferred` producer is
+  // the observing spine (MVP #5) — declared deferred, not forgotten, and
+  // the hedging path it will feed is already tested from the store side.
+  const incoming: IncomingCandidate = {
+    subject: fact.subject,
+    predicate: fact.predicate,
+    object: fact.object,
+    validFrom: fact.validFrom,
+    confidence: fact.confidence,
+    importance: fact.importance,
+    // Never derived from confidence, and never allowed to raise it: intensity
+    // changes how accurate a memory feels, not how accurate it is.
+    //
+    // The extractor's own strict-vocabulary request, OR the small bootstrap
+    // rule: a fact about the owner (by this pipeline's own subject-naming
+    // convention, see `isOwnerSubject`) on one of the two identity
+    // predicates the real install had already recorded before this column
+    // existed. Either way this is only a *request* — `addFact`'s own gate
+    // is what actually decides, from `episode.trustTier`/`origin` here, not
+    // from anything this module claims.
+    pinnedRequest:
+      fact.pinned || (isOwnerSubject(fact.subject) && BOOTSTRAP_IDENTITY_PREDICATES.has(fact.predicate)),
+    // Provenance travels: a fact can never be more trusted than where it came from.
+    trustTier: episode.trustTier,
+    origin: 'said',
+    episodeId: episode.id,
+  };
 
   // Nothing to contradict: no judge, no cost.
   if (existing.length === 0) {
-    insert();
+    insertCandidateFact(deps.store, tenantId, subjectId, incoming, now);
     return 'added';
   }
 
@@ -580,7 +664,9 @@ async function reconcile(
   // different thing entirely: the belief this one might be replacing, which is
   // the latest. Leaving it as `existing[0]` would have silently made "the most
   // important fact" the supersede candidate the day that ORDER BY changed.
-  const candidate = [...existing].sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0]!;
+  const candidate = [...existing].sort(
+    (a, b) => b.recordedAt.localeCompare(a.recordedAt) || b.id - a.id,
+  )[0]!;
 
   // Same thing said twice is not news — but "the same thing" means the
   // CURRENT belief, i.e. `candidate`, and only that. This used to check every
@@ -596,10 +682,62 @@ async function reconcile(
   // nothing — while letting a reversion-shaped correction reach the judge
   // like any other change. Proven in ingest.test.ts: "lets a correction that
   // repeats an older active value still reach the judge".
-  if ((candidate.objectValue ?? candidate.objectName ?? '').toLowerCase() === fact.object.toLowerCase()) {
+  if ((candidate.objectValue ?? candidate.objectName ?? '').toLowerCase() === incoming.object.toLowerCase()) {
     return 'skipped';
   }
 
+  const decision = await decideCandidate(
+    deps,
+    incoming,
+    candidate,
+    {
+      existing: deps.store.episodeById(tenantId, candidate.episodeId)?.content ?? undefined,
+      incoming: episode.content ?? undefined,
+    },
+    parent,
+  );
+  commitCandidateDecision(deps.store, tenantId, subjectId, incoming, candidate, decision, {
+    episodeTrustTier: episode.trustTier,
+    now,
+    report,
+  });
+  return 'added';
+}
+
+/**
+ * What the judge thinks, without writing anything. Async (it calls the
+ * model) and side-effect-free except for its own span, so both producers —
+ * the episode loop and the proposal reconciler — can share it while keeping
+ * their own commit boundaries: the episode path commits bare, the proposal
+ * path commits belief and outcome atomically.
+ */
+type CandidateDecision = { kind: 'judge-throw'; failure: string } | { kind: 'judged'; verdict: JudgeOutcome };
+
+/**
+ * Provider exception messages are untrusted wire text and may echo credentials
+ * or private response bodies. Keep only a closed failure class and a validated
+ * HTTP status in durable memory, proposal output, and traces.
+ */
+function describeJudgeTransportFailure(error: unknown): string {
+  if (error instanceof ProviderError) {
+    const status = error.status;
+    if (typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599) {
+      return `errore provider HTTP ${status}`;
+    }
+    return 'errore provider';
+  }
+  if (error instanceof ProviderStreamError) return 'errore stream provider';
+  if (error instanceof Error && error.name === 'AbortError') return 'timeout provider';
+  return 'errore di trasporto provider';
+}
+
+async function decideCandidate(
+  deps: IngestDeps,
+  incoming: IncomingCandidate,
+  candidate: Fact,
+  evidence: { existing?: string | undefined; incoming?: string | undefined },
+  parent: SpanHandle | undefined,
+): Promise<CandidateDecision> {
   let verdict: JudgeOutcome;
   const judgeSpan = deps.tracer.start(
     'muffin.chat_call',
@@ -608,14 +746,11 @@ async function reconcile(
   );
   try {
     verdict = await judgeContradiction(deps.provider, deps.model, {
-      subject: fact.subject,
-      predicate: fact.predicate,
+      subject: incoming.subject,
+      predicate: incoming.predicate,
       existing: candidate,
-      incoming: { object: fact.object, validFrom: fact.validFrom },
-      evidence: {
-        existing: deps.store.episodeById(tenantId, candidate.episodeId)?.content ?? undefined,
-        incoming: episode.content ?? undefined,
-      },
+      incoming: { object: incoming.object, validFrom: incoming.validFrom },
+      evidence,
     });
     judgeSpan.setAttributes({
       'muffin.memory.verdict': verdict.verdict,
@@ -632,23 +767,67 @@ async function reconcile(
     });
     judgeSpan.end();
   } catch (error) {
-    judgeSpan.end({ error });
+    const failure = describeJudgeTransportFailure(error);
+    judgeSpan.end({ error: failure });
+    return { kind: 'judge-throw', failure };
+  }
+  return { kind: 'judged', verdict };
+}
+
+/**
+ * Applies a judged decision: the belief write plus its contradiction
+ * handling, synchronously, so a caller can wrap it in a transaction. Returns
+ * the committed fact and the ADR-0051 outcome category — the episode path
+ * folds every category into 'added', the proposal path records it.
+ */
+function commitCandidateDecision(
+  store: MemoryStore,
+  tenantId: string,
+  subjectId: number,
+  incoming: IncomingCandidate,
+  candidate: Fact,
+  decision: CandidateDecision,
+  opts: { episodeTrustTier: 0 | 1 | 2 | 3; now: Date; report: IngestReport },
+): { factId: number; category: 'accepted' | 'superseded' | 'review'; detail: string | null } {
+  const { now, report } = opts;
+
+  if (decision.kind === 'judge-throw') {
     // A broken judge must not be able to retire a belief — same rule as the
-    // low-confidence branch eight lines below, and reported the same way.
-    // Silently returning 'added' here made an unreachable judge (network,
-    // auth, a 5xx on the light provider) indistinguishable from an ordinary,
-    // considered 'coexist': not a decision, and looking like one is how "the
-    // memory just accumulates" becomes something nobody can explain.
-    report.errors.push(
-      `giudice non raggiungibile su ${fact.subject}/${fact.predicate}: ` +
-        `${error instanceof Error ? error.message : String(error)} — tengo entrambi i valori`,
-    );
-    insert();
-    return 'added';
+    // low-confidence branch below. The candidate may still be kept beside the
+    // existing fact, but that is an unresolved conflict, never an accepted
+    // belief: a transport/auth/5xx failure did not make a semantic decision.
+    const detail =
+      `giudice non raggiungibile su ${incoming.subject}/${incoming.predicate}: ` +
+      `${decision.failure} (dettagli omessi) — tengo entrambi i valori; serve una revisione.`;
+    report.errors.push(detail);
+    const factId = insertCandidateFact(store, tenantId, subjectId, incoming, now);
+    report.needsReview.push({
+      subject: incoming.subject,
+      predicate: incoming.predicate,
+      existing: candidate.objectValue ?? candidate.objectName ?? '',
+      incoming: incoming.object,
+      why: detail,
+    });
+    store.recordReview({
+      tenantId,
+      // The owner can resolve this unanswered conflict through the existing
+      // `memory review keep` path; the transport failure remains in its safe
+      // detail instead of making the question un-actionable as a pipeline error.
+      kind: 'contradiction',
+      subject: incoming.subject,
+      predicate: incoming.predicate,
+      existingFactId: candidate.id,
+      incomingFactId: factId,
+      detail,
+      createdAt: now.toISOString(),
+    });
+    return { factId, category: 'review', detail };
   }
 
-  const newId = insert();
+  const verdict = decision.verdict;
+  const newId = insertCandidateFact(store, tenantId, subjectId, incoming, now);
 
+  let detail: string | null = verdict.reasoning;
   // A judge whose answer could not be turned into a verdict at all reads as
   // `coexist` with zero confidence. The outcome is the safe one, but it is
   // not a decision, and letting it look like one — a durable row that says
@@ -667,21 +846,39 @@ async function reconcile(
   // candidate, writing two review rows for one judge call.
   if (verdict.failure) {
     const reason = describeFailureReason(verdict.failure.reason);
-    report.judgeUnavailable.push({ subject: fact.subject, predicate: fact.predicate, reason });
-    deps.store.recordReview({
+    report.judgeUnavailable.push({ subject: incoming.subject, predicate: incoming.predicate, reason });
+    const reviewDetail =
+      `giudice non disponibile su ${incoming.subject}/${incoming.predicate}: tengo entrambi i valori [${reason}]\n` +
+      `risposta grezza: ${verdict.failure.rawResponse || '(vuota)'}`;
+    // The terminal prints both the actionable conflict (`needsReview`) and
+    // one grouped judge-failure summary. Keep the per-candidate line useful
+    // without repeating that summary's stable phrase; the durable review row
+    // above still preserves the full typed detail.
+    const headline = `risposta del giudice non interpretabile [${reason}]: tengo entrambi i valori`;
+    detail = headline;
+    report.needsReview.push({
+      subject: incoming.subject,
+      predicate: incoming.predicate,
+      existing: candidate.objectValue ?? candidate.objectName ?? '',
+      incoming: incoming.object,
+      // `muffin memory extract` prints this per-candidate report beside the
+      // grouped judge summary. Keep the raw model response in the durable row
+      // for explicit `review --verbose`, not in the round report.
+      why: headline,
+    });
+    store.recordReview({
       tenantId,
-      kind: 'error',
-      subject: fact.subject,
-      predicate: fact.predicate,
+      // A response the judge could not read is not a pipeline-only error:
+      // both facts remain active and the owner must be able to resolve them
+      // through the same `memory review keep` path as every other conflict.
+      kind: 'contradiction',
+      subject: incoming.subject,
+      predicate: incoming.predicate,
       existingFactId: candidate.id,
       incomingFactId: newId,
-      // First line is the summary `errorGroups` (`maintenance.ts`) folds on
-      // and `muffin memory review` always shows; everything after it is the
-      // model's own words, shown only with `--verbose` — free text, not a
-      // second column (`store.ts` `ReviewItemInput.detail`).
-      detail:
-        `giudice non disponibile su ${fact.subject}/${fact.predicate}: tengo entrambi i valori [${reason}]\n` +
-        `risposta grezza: ${verdict.failure.rawResponse || '(vuota)'}`,
+      // `muffin memory review` shows the typed reason by default and reveals
+      // the sanitized raw response only with `--verbose`.
+      detail: reviewDetail,
       createdAt: now.toISOString(),
     });
   }
@@ -695,53 +892,320 @@ async function reconcile(
   // able to ride the old fact's pin onto the new one — `candidate.pinned`
   // says the *old* value was owner-said, it says nothing about this one.
   const carryPin = (): void => {
-    if (candidate.pinned === 1 && episode.trustTier === 0) deps.store.setPinned(tenantId, newId, true);
+    if (candidate.pinned === 1 && opts.episodeTrustTier === 0) store.setPinned(tenantId, newId, true);
   };
 
   switch (verdict.verdict) {
     case 'supersede':
-      deps.store.supersede(tenantId, candidate.id, newId, now.toISOString());
+      store.supersede(tenantId, candidate.id, newId, now.toISOString());
       report.superseded += 1;
       carryPin();
-      break;
+      return { factId: newId, category: 'superseded', detail };
     case 'temporal_scope':
-      deps.store.supersede(
+      store.supersede(
         tenantId,
         candidate.id,
         newId,
         now.toISOString(),
-        verdict.oldValidTo ?? fact.validFrom ?? now.toISOString(),
+        verdict.oldValidTo ?? incoming.validFrom ?? now.toISOString(),
       );
       report.superseded += 1;
       carryPin();
-      break;
+      return { factId: newId, category: 'superseded', detail };
     case 'review':
       // Both stay. The owner is told, rather than the system choosing quietly
       // — and told durably: `recordReview` is what keeps this outcome from
       // disappearing into a stderr nobody reads once a scheduler, not a human
       // at a terminal, is what calls `ingestPending`.
       report.needsReview.push({
-        subject: fact.subject,
-        predicate: fact.predicate,
+        subject: incoming.subject,
+        predicate: incoming.predicate,
         existing: candidate.objectValue ?? candidate.objectName ?? '',
-        incoming: fact.object,
+        incoming: incoming.object,
         why: verdict.reasoning,
       });
-      deps.store.recordReview({
+      store.recordReview({
         tenantId,
         kind: 'contradiction',
-        subject: fact.subject,
-        predicate: fact.predicate,
+        subject: incoming.subject,
+        predicate: incoming.predicate,
         existingFactId: candidate.id,
         incomingFactId: newId,
         detail: verdict.reasoning,
         createdAt: now.toISOString(),
       });
-      break;
+      return { factId: newId, category: 'review', detail };
     case 'coexist':
-      break;
+      // An unreadable judge (`verdict.failure`) is not a decision to coexist
+      // with — it is a decision the system could not read, and the proposal
+      // path records it as `review` rather than a quiet accept.
+      return verdict.failure ? { factId: newId, category: 'review', detail } : { factId: newId, category: 'accepted', detail };
   }
-  return 'added';
+}
+
+/**
+ * The canonical reconciliation entry point for staged proposals (ADR-0051:
+ * many producers, one semantic writer).
+ *
+ * This is the only path that turns a `memory_proposals` row into a belief.
+ * It runs the same decide/commit core as the episode loop above — same
+ * duplicate check, same judge, same supersede/review handling — and commits
+ * the belief writes together with the proposal's outcome in one transaction:
+ * a crash between the two leaves a pending proposal and no belief (retried
+ * cleanly), never a belief without an outcome or an outcome without its
+ * belief.
+ *
+ * Idempotent twice over: an already-reconciled proposal returns its recorded
+ * outcome without writing, and the in-transaction re-read means a retried
+ * commit after a crash adopts the first commit's belief instead of writing a
+ * second one. Exactly one belief per accepted proposal.
+ */
+export type ProposalReconcileResult = {
+  proposalId: number;
+  status: ProposalStatus;
+  factIds: number[];
+  report: IngestReport;
+};
+
+function blankIngestReport(tenantId: string): IngestReport {
+  return {
+    tenantId,
+    fetched: 0,
+    marked: 0,
+    episodes: 0,
+    factsAdded: 0,
+    rejected: 0,
+    superseded: 0,
+    skippedAgentOutput: 0,
+    skippedDocuments: 0,
+    skippedEmpty: 0,
+    indexed: 0,
+    forgottenRequestChunks: 0,
+    busy: false,
+    needsReview: [],
+    errors: [],
+    judgeUnavailable: [],
+    proposalsReconciled: 0,
+    proposalPageFull: false,
+  };
+}
+
+/**
+ * Takes the lane lock, like `retireBeliefs` below: a consolidation batch and
+ * an intentional reconcile must never interleave on the same rows.
+ */
+export async function reconcileProposal(
+  deps: IngestDeps,
+  tenantId: string,
+  proposalId: number,
+  opts: { at?: Date; report?: IngestReport } = {},
+): Promise<ProposalReconcileResult> {
+  const at = opts.at ?? deps.now?.() ?? new Date();
+  const claim = deps.store.acquireIngestLock(at);
+  if ('held' in claim) {
+    throw new Error(`memoria occupata (${claim.held}): ${claim.remedy}`);
+  }
+  try {
+    const out = await reconcileProposalLocked(deps, tenantId, proposalId, at, undefined, opts.report);
+    if (out.status === 'accepted' || out.status === 'superseded' || out.status === 'review') {
+      out.report.factsAdded += 1;
+    }
+    return out;
+  } finally {
+    claim.release();
+  }
+}
+
+/**
+ * Drains the staged queue through the canonical reconciler — what a fresh
+ * boot runs after a kill between propose and reconcile, and what the tool
+ * falls back to when its inline attempt meets a held lock.
+ */
+export async function reconcilePendingProposals(
+  deps: IngestDeps,
+  tenantId: string,
+  opts: { limit?: number; at?: Date; report?: IngestReport } = {},
+): Promise<{ reconciled: number; results: ProposalReconcileResult[]; report: IngestReport }> {
+  const at = opts.at ?? deps.now?.() ?? new Date();
+  const claim = deps.store.acquireIngestLock(at);
+  if ('held' in claim) {
+    throw new Error(`memoria occupata (${claim.held}): ${claim.remedy}`);
+  }
+  try {
+    const report = opts.report ?? blankIngestReport(tenantId);
+    const staged = deps.store.pendingProposals(tenantId, opts.limit ?? PROPOSAL_DRAIN_LIMIT);
+    const results: ProposalReconcileResult[] = [];
+    for (const proposal of staged) {
+      const out = await reconcileProposalLocked(deps, tenantId, proposal.id, at, undefined, report);
+      report.proposalsReconciled = (report.proposalsReconciled ?? 0) + 1;
+      if (out.status === 'accepted' || out.status === 'superseded' || out.status === 'review') {
+        report.factsAdded += 1;
+      }
+      results.push(out);
+    }
+    return { reconciled: results.length, results, report };
+  } finally {
+    claim.release();
+  }
+}
+
+/**
+ * The lock-held half. `ingestPending`'s proposal drain calls this directly —
+ * the batch already holds the lane — while `reconcileProposal` and
+ * `reconcilePendingProposals` take the lock first. Never called without one
+ * of the two holding it.
+ */
+export async function reconcileProposalLocked(
+  deps: IngestDeps,
+  tenantId: string,
+  proposalId: number,
+  now: Date,
+  parent?: SpanHandle,
+  report?: IngestReport,
+): Promise<ProposalReconcileResult> {
+  const rep = report ?? blankIngestReport(tenantId);
+  const at = now.toISOString();
+  const proposal = deps.store.proposalById(tenantId, proposalId);
+  if (!proposal) {
+    throw new Error(`nessuna proposta #${proposalId} in questa memoria.`);
+  }
+  // Already reconciled: return the recorded outcome, write nothing. This is
+  // what makes a retried tool call and a post-crash drain converge instead
+  // of doubling the belief.
+  if (proposal.status !== 'pending') {
+    return {
+      proposalId,
+      status: proposal.status as ProposalStatus,
+      factIds: proposal.resultingFactIds,
+      report: rep,
+    };
+  }
+
+  // An empty candidate and withdrawn evidence never reach the judge: there is
+  // nothing to reconcile, and staging that as a belief would invent one.
+  if (proposal.objectValue.trim() === '') {
+    deps.store.resolveProposal(tenantId, proposalId, {
+      status: 'rejected',
+      factIds: [],
+      detail: 'candidato vuoto: niente da ricordare.',
+      decidedAt: at,
+    });
+    return { proposalId, status: 'rejected', factIds: [], report: rep };
+  }
+  const withdrawn = deps.store.withdrawnEpisodes(tenantId, proposal.sourceEpisodeIds);
+  const usable = proposal.sourceEpisodeIds.filter((id) => !withdrawn.includes(id));
+  if (usable.length === 0) {
+    const detail = `evidenza ritirata prima della riconciliazione (episodi ${withdrawn.join(', ')}).`;
+    deps.store.resolveProposal(tenantId, proposalId, { status: 'rejected', factIds: [], detail, decidedAt: at });
+    return { proposalId, status: 'rejected', factIds: [], report: rep };
+  }
+  const withdrawalNote = withdrawn.length > 0 ? ` [evidenza ritirata: episodi ${withdrawn.join(', ')}]` : '';
+
+  const subjectId = deps.store.upsertEntity(tenantId, proposal.subject, proposal.subjectKind, at);
+  const incoming: IncomingCandidate = {
+    subject: proposal.subject,
+    predicate: proposal.predicate,
+    object: proposal.objectValue,
+    validFrom: proposal.validFrom,
+    confidence: proposal.confidence,
+    importance: proposal.importance,
+    pinnedRequest: proposal.pinnedRequest,
+    // The tier the evidence had when staged — re-reading it here would let a
+    // re-tiered episode wash the proposal's taint after the fact.
+    trustTier: proposal.trustTier,
+    origin: proposal.origin,
+    episodeId: usable[0]!,
+  };
+
+  const existing = deps.store.activeFacts(tenantId, subjectId, proposal.predicate);
+  // The belief and its outcome commit together, and the pending re-check
+  // inside the transaction is what a post-crash retry meets: if the first
+  // attempt's commit already landed, this one adopts it instead of writing
+  // a second belief for the same intent.
+  const committed = deps.store.transact(() => {
+    const fresh = deps.store.proposalById(tenantId, proposalId);
+    if (!fresh || fresh.status !== 'pending') {
+      return { raced: true as const, status: fresh?.status as ProposalStatus | undefined, factIds: fresh?.resultingFactIds ?? [] };
+    }
+    if (existing.length === 0) {
+      const factId = insertCandidateFact(deps.store, tenantId, subjectId, incoming, now);
+      deps.store.resolveProposal(tenantId, proposalId, {
+        status: 'accepted',
+        factIds: [factId],
+        detail: `nessuna credenza esistente: inserita.${withdrawalNote}`,
+        decidedAt: at,
+      });
+      return { raced: false as const, status: 'accepted' as const, factIds: [factId] };
+    }
+    const candidate = [...existing].sort(
+      (a, b) => b.recordedAt.localeCompare(a.recordedAt) || b.id - a.id,
+    )[0]!;
+    if ((candidate.objectValue ?? candidate.objectName ?? '').toLowerCase() === incoming.object.toLowerCase()) {
+      deps.store.resolveProposal(tenantId, proposalId, {
+        status: 'merged',
+        factIds: [candidate.id],
+        detail: `già creduto (#${candidate.id}): nessuna riga nuova.${withdrawalNote}`,
+        decidedAt: at,
+      });
+      return { raced: false as const, status: 'merged' as const, factIds: [candidate.id] };
+    }
+    // The judge is awaited BEFORE the transaction — better-sqlite3 rejects an
+    // async transaction function — so the commit below is purely synchronous.
+    // A crash between the verdict and this commit leaves the proposal pending
+    // with nothing written: the retry re-judges (one wasted call, never a
+    // lost or doubled belief), which is decision #2 of the 2026-08-13
+    // research doc, at-least-once, applied to the proposal lane.
+    return { raced: false as const, status: null as null, factIds: [] as number[], candidate };
+  });
+
+  if (committed.raced) {
+    return { proposalId, status: committed.status ?? 'rejected', factIds: committed.factIds, report: rep };
+  }
+  if (committed.status !== null) {
+    return { proposalId, status: committed.status, factIds: committed.factIds, report: rep };
+  }
+
+  // Judged path: the lane keeps the candidate graph stable while the judge
+  // is awaited. Duplicate proposal retries may still raise the persisted
+  // provenance tier outside that lane, so the final transaction adopts the
+  // latest tier before it writes a fact.
+  const decision = await decideCandidate(deps, incoming, committed.candidate, {
+    existing: deps.store.episodeById(tenantId, committed.candidate.episodeId)?.content ?? undefined,
+    incoming: proposal.content,
+  }, parent);
+  const judged = deps.store.transact(() => {
+    const fresh = deps.store.proposalById(tenantId, proposalId);
+    if (!fresh || fresh.status !== 'pending') {
+      return { raced: true as const, status: fresh?.status as ProposalStatus | undefined, factIds: fresh?.resultingFactIds ?? [] };
+    }
+    const finalIncoming =
+      fresh.trustTier > incoming.trustTier ? { ...incoming, trustTier: fresh.trustTier } : incoming;
+    const out = commitCandidateDecision(
+      deps.store,
+      tenantId,
+      subjectId,
+      finalIncoming,
+      committed.candidate,
+      decision,
+      {
+        episodeTrustTier: finalIncoming.trustTier,
+        now,
+        report: rep,
+      },
+    );
+    const detail = out.detail === null ? withdrawalNote.trim() || null : `${out.detail}${withdrawalNote}`;
+    deps.store.resolveProposal(tenantId, proposalId, {
+      status: out.category,
+      factIds: [out.factId],
+      detail,
+      decidedAt: at,
+    });
+    return { raced: false as const, status: out.category, factIds: [out.factId] };
+  });
+  if (judged.raced) {
+    return { proposalId, status: judged.status ?? 'rejected', factIds: judged.factIds, report: rep };
+  }
+  return { proposalId, status: judged.status, factIds: judged.factIds, report: rep };
 }
 
 /**

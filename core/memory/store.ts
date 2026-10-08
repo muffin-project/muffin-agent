@@ -187,8 +187,65 @@ export type ReviewItem = {
   createdAt: string;
 };
 
+/** One row of `memory_proposals` (ADR-0051), as the store hands it out. */
+export type MemoryProposalRecord = {
+  id: number;
+  tenantId: string;
+  identityKey: string;
+  subject: string;
+  subjectKind: string;
+  predicate: string;
+  objectValue: string;
+  validFrom: string | null;
+  producer: string;
+  sourceEpisodeIds: number[];
+  content: string;
+  trustTier: TrustTier;
+  confidence: number;
+  origin: FactOrigin;
+  importance: number;
+  pinnedRequest: boolean;
+  status: string;
+  resultingFactIds: number[];
+  detail: string | null;
+  proposedAt: string;
+  decidedAt: string | null;
+};
+
+type ProposalRow = {
+  id: number;
+  tenant_id: string;
+  identity_key: string;
+  subject: string;
+  subject_kind: string;
+  predicate: string;
+  object_value: string;
+  valid_from: string | null;
+  producer: string;
+  source_episodes: string;
+  content: string;
+  trust_tier: TrustTier;
+  confidence: number;
+  origin: FactOrigin;
+  importance: number;
+  pinned_request: number;
+  status: string;
+  resulting_fact_ids: string | null;
+  detail: string | null;
+  proposed_at: string;
+  decided_at: string | null;
+};
+
+const PROPOSAL_SELECT = `SELECT id, tenant_id, identity_key, subject, subject_kind, predicate,
+    object_value, valid_from, producer, source_episodes, content, trust_tier,
+    confidence, origin, importance, pinned_request, status, resulting_fact_ids,
+    detail, proposed_at, decided_at
+  FROM memory_proposals`;
+
 /**
- * What makes a contradiction *open*, written once.
+ * What makes a contradiction *open*, written once. Legacy judge failures were
+ * recorded as `error` rows but have the same two active fact ids; include them
+ * here so existing installs gain the resolution path without a data migration.
  *
  * Two readers need it and they cannot share a code path: this class hydrates
  * the rows, and `muffin doctor` opens the database **readonly** so it can never
@@ -200,7 +257,9 @@ export type ReviewItem = {
 export const OPEN_CONTRADICTION_FROM = `FROM memory_review r
          JOIN facts e ON e.id = r.existing_fact_id AND e.tenant_id = r.tenant_id
          JOIN facts i ON i.id = r.incoming_fact_id AND i.tenant_id = r.tenant_id
-        WHERE r.tenant_id = ? AND r.kind = 'contradiction'
+        WHERE r.tenant_id = ?
+          AND (r.kind = 'contradiction'
+               OR (r.kind = 'error' AND r.existing_fact_id IS NOT NULL AND r.incoming_fact_id IS NOT NULL))
           AND e.expired_at IS NULL AND i.expired_at IS NULL`;
 
 export class MemoryStore {
@@ -399,7 +458,7 @@ export class MemoryStore {
   // ---- coordination -----------------------------------------------------------
 
   /**
-   * One extractor at a time. See `ingest-lock.ts` for why a single lane lock
+   * One memory writer at a time. See `ingest-lock.ts` for why a single lane lock
    * is the whole mechanism rather than a per-episode claim.
    */
   acquireIngestLock(now: Date, pid: number = process.pid): LockOutcome {
@@ -1418,6 +1477,207 @@ export class MemoryStore {
          ORDER BY f.id`,
       )
       .all(tenantId, factId) as Fact[];
+  }
+
+  // ---- proposals (ADR-0051) ---------------------------------------------------
+  //
+  // The durable staging half of intentional memory. These methods record
+  // intents and their outcomes; they never write beliefs — the only
+  // `addFact` calls in production stay in `ingest.ts`'s canonical reconciler,
+  // which transitions a proposal and writes its belief in one transaction.
+
+  /**
+   * Runs `fn` atomically. The canonical reconciler uses it to commit a
+   * belief and its proposal's outcome together: a crash inside the commit
+   * leaves both unwritten (the proposal stays pending and is retried), never
+   * a belief without an outcome or an outcome without its belief.
+   */
+  transact<T>(fn: () => T): T {
+    return this.db.transaction(fn)();
+  }
+
+  insertProposal(input: {
+    tenantId: string;
+    identityKey: string;
+    subject: string;
+    subjectKind: string;
+    predicate: string;
+    objectValue: string;
+    validFrom: string | null;
+    producer: string;
+    sourceEpisodeIds: number[];
+    content: string;
+    trustTier: number;
+    confidence: number;
+    origin: string;
+    importance: number;
+    pinnedRequest: boolean;
+    proposedAt: string;
+  }): { id: number; duplicate: boolean } {
+    // OR IGNORE on the UNIQUE(tenant_id, identity_key): a repeated propose —
+    // a retried tool call, a replay after a crash — is the same proposal, not
+    // a second row. `changes === 0` tells the caller which one it was.
+    // Keep the insert, lookup and pending-only tier promotion in one write
+    // transaction. Reconciliation commits a fact from the pending row's tier;
+    // separate autocommit statements here let another process resolve the row
+    // after INSERT but before this UPDATE, losing a higher concurrent tier.
+    const stage = this.db.transaction(() => {
+      const info = this.db
+        .prepare(
+          `INSERT OR IGNORE INTO memory_proposals
+             (tenant_id, identity_key, subject, subject_kind, predicate, object_value,
+              valid_from, producer, source_episodes, content, trust_tier, confidence,
+              origin, importance, pinned_request, status, proposed_at)
+           VALUES (@tenantId, @identityKey, @subject, @subjectKind, @predicate, @objectValue,
+              @validFrom, @producer, @sourceEpisodes, @content, @trustTier, @confidence,
+              @origin, @importance, @pinnedRequest, 'pending', @proposedAt)`,
+        )
+        .run({
+          ...input,
+          validFrom: input.validFrom ?? null,
+          sourceEpisodes: JSON.stringify(input.sourceEpisodeIds),
+          pinnedRequest: input.pinnedRequest ? 1 : 0,
+        });
+      const row = this.db
+        .prepare(`SELECT id FROM memory_proposals WHERE tenant_id = ? AND identity_key = ?`)
+        .get(input.tenantId, input.identityKey) as { id: number };
+      if (info.changes === 0) {
+        // A replay can carry a higher live prompt taint than the first attempt.
+        // Keep idempotency, but never leave a pending write below the provenance
+        // floor the current runtime observed. The transaction orders this with
+        // reconciliation's terminal transition across database connections.
+        this.db
+          .prepare(
+            `UPDATE memory_proposals
+             SET trust_tier = MAX(trust_tier, @trustTier)
+             WHERE tenant_id = @tenantId AND identity_key = @identityKey AND status = 'pending'`,
+          )
+          .run({
+            tenantId: input.tenantId,
+            identityKey: input.identityKey,
+            trustTier: input.trustTier,
+          });
+      }
+      return { id: Number(row.id), duplicate: info.changes === 0 };
+    });
+    return stage.immediate();
+  }
+
+  private static proposalFromRow(row: ProposalRow): MemoryProposalRecord {
+    return {
+      id: Number(row.id),
+      tenantId: row.tenant_id,
+      identityKey: row.identity_key,
+      subject: row.subject,
+      subjectKind: row.subject_kind,
+      predicate: row.predicate,
+      objectValue: row.object_value,
+      validFrom: row.valid_from,
+      producer: row.producer,
+      sourceEpisodeIds: JSON.parse(row.source_episodes) as number[],
+      content: row.content,
+      trustTier: row.trust_tier,
+      confidence: row.confidence,
+      origin: row.origin,
+      importance: row.importance,
+      pinnedRequest: row.pinned_request === 1,
+      status: row.status,
+      resultingFactIds: row.resulting_fact_ids === null ? [] : (JSON.parse(row.resulting_fact_ids) as number[]),
+      detail: row.detail,
+      proposedAt: row.proposed_at,
+      decidedAt: row.decided_at,
+    };
+  }
+
+  proposalById(tenantId: string, id: number): MemoryProposalRecord | null {
+    const row = this.db
+      .prepare(`${PROPOSAL_SELECT} WHERE tenant_id = ? AND id = ?`)
+      .get(tenantId, id) as ProposalRow | undefined;
+    return row ? MemoryStore.proposalFromRow(row) : null;
+  }
+
+  /** Proposals still awaiting the canonical reconciler, oldest first. */
+  pendingProposals(tenantId: string, limit = 50): MemoryProposalRecord[] {
+    return (
+      this.db
+        .prepare(`${PROPOSAL_SELECT} WHERE tenant_id = ? AND status = 'pending' ORDER BY id LIMIT ?`)
+        .all(tenantId, limit) as ProposalRow[]
+    ).map(MemoryStore.proposalFromRow);
+  }
+
+  /** Read-back for the owner: every proposal, newest first, optionally by status. */
+  listProposals(
+    tenantId: string,
+    opts: { status?: string; limit?: number } = {},
+  ): MemoryProposalRecord[] {
+    const rows = (
+      opts.status === undefined
+        ? this.db.prepare(`${PROPOSAL_SELECT} WHERE tenant_id = ? ORDER BY id DESC LIMIT ?`).all(tenantId, opts.limit ?? 50)
+        : this.db
+            .prepare(`${PROPOSAL_SELECT} WHERE tenant_id = ? AND status = ? ORDER BY id DESC LIMIT ?`)
+            .all(tenantId, opts.status, opts.limit ?? 50)
+    ) as ProposalRow[];
+    return rows.map(MemoryStore.proposalFromRow);
+  }
+
+  /**
+   * Compare-and-set to a terminal state. The `status = 'pending'` guard is
+   * the exactly-once half of kill durability: two reconcilers racing on the
+   * same proposal — a retry after a crash, a double tool call — both compute,
+   * but only the first transition sticks, and only the first one's belief
+   * stands (the second sees a non-pending row and returns its outcome).
+   *
+   * Returns whether this call performed the transition.
+   */
+  resolveProposal(
+    tenantId: string,
+    id: number,
+    outcome: { status: string; factIds: number[]; detail: string | null; decidedAt: string },
+  ): boolean {
+    const info = this.db
+      .prepare(
+        `UPDATE memory_proposals
+         SET status = @status, resulting_fact_ids = @factIds, detail = @detail, decided_at = @decidedAt
+         WHERE tenant_id = @tenantId AND id = @id AND status = 'pending'`,
+      )
+      .run({
+        tenantId,
+        id,
+        status: outcome.status,
+        factIds: JSON.stringify(outcome.factIds),
+        detail: outcome.detail,
+        decidedAt: outcome.decidedAt,
+      });
+    return info.changes > 0;
+  }
+
+  /** The subset of `ids` whose evidence was retired since the proposal was staged. */
+  withdrawnEpisodes(tenantId: string, ids: number[]): number[] {
+    if (ids.length === 0) return [];
+    const marks = ids.map(() => '?').join(',');
+    return (
+      this.db
+        .prepare(
+          `SELECT id FROM episodes WHERE tenant_id = ? AND id IN (${marks}) AND superseded_at IS NOT NULL`,
+        )
+        .all(tenantId, ...ids) as { id: number }[]
+    ).map((r) => Number(r.id));
+  }
+
+  /**
+   * The turn's own user-message episode, for evidence fallback: an
+   * owner-stated "ricorda" arrives inside a turn whose ingress episode is
+   * already on disk, so the tool can cite it without the model naming an id.
+   */
+  episodeIdByTurnId(tenantId: string, turnId: string): number | null {
+    const row = this.db
+      .prepare(
+        `SELECT id FROM episodes
+         WHERE tenant_id = ? AND turn_id = ? AND role = 'user' AND kind = 'message'
+         ORDER BY id LIMIT 1`,
+      )
+      .get(tenantId, turnId) as { id: number } | undefined;
+    return row ? Number(row.id) : null;
   }
 
   stats(tenantId: string): MemoryStats {

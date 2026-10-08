@@ -64,6 +64,38 @@ const available = (): SandboxProbe => ({ available: true, mechanism: 'bubblewrap
 const denyReadOf = (customConfig: Partial<SandboxRuntimeConfig> | undefined): readonly string[] =>
   customConfig?.filesystem?.denyRead ?? [];
 
+function mockProtectedSandbox(options: { hookWriteAllowed?: boolean; hookHardlinkAllowed?: boolean; unixFilterAbsent?: boolean } = {}): void {
+  wrapWithSandboxArgv.mockImplementation(async (command, _binShell, customConfig) => ({
+    argv:
+      denyReadOf(customConfig).length > 0
+        ? ['/bin/sh', '-c', 'exit 1']
+        : command.includes('muffin sandbox nested-hook self-test')
+          ? [
+              '/bin/bash',
+              '-c',
+              (() => {
+                const hookNames = command.match(/for hook in ([^;]+); do/)?.[1]?.split(/\s+/) ?? [];
+                const hookResults = hookNames
+                  .map((hook) => {
+                    const result =
+                      options.hookWriteAllowed && hook === 'pre-commit' ? 'allowed' : 'denied';
+                    return `muffin-hook-write: ${result}:${hook}`;
+                  })
+                  .join('\\n');
+                // A mid-command hooks-dir replacement succeeds on every
+                // platform (no per-path symlink mediation): the leg records
+                // the marker without gating on it.
+                const hardlinkMarker = options.hookHardlinkAllowed ? 'allowed' : 'denied';
+                return `printf "muffin-apparmor-label: muffin-bwrap//&muffin-unpriv-bwrap (enforce)\\n${hookResults}\\nmuffin-hook-alias: created\\nmuffin-hook-hardlink: ${hardlinkMarker}\\nmuffin-hook-pre: denied\\nmuffin-hook-rename: denied\\nmuffin sandbox hook self-test positive controls passed\\n"`;
+              })(),
+            ]
+          : command.includes('afunix.sock') && !options.unixFilterAbsent
+            ? ['/bin/sh', '-c', 'echo EPERM >&2; exit 1']
+            : ['/bin/bash', '-c', command],
+    env: {},
+  }));
+}
+
 /** What bwrap actually printed in the reperto — both legs die the same way. */
 const BROKEN_INVOCATION = [
   '/bin/sh',
@@ -82,6 +114,7 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     initialize.mockReset().mockResolvedValue(undefined);
     wrapWithSandboxArgv.mockReset();
     reset.mockReset().mockResolvedValue(undefined);
+    mockProtectedSandbox();
     toClose = null;
   });
 
@@ -90,24 +123,10 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
   });
 
   it('a real invocation that genuinely contains: verify() says available, and a first run() does not pay initialize() twice', async () => {
-    // `command` arrives as `cat <sentinelPath>`, reused verbatim on the allow
-    // leg so it really reads the sentinel `selfTestContainment` wrote to
-    // disk; the deny leg ignores it and always refuses — exactly what a held
-    // deny through the real door looks like from the outside.
-    //
-    // The AF_UNIX leg gets the refusal the real `apply-seccomp` filter
-    // produces (`EPERM` from `socket(AF_UNIX, …)`): the mock never runs
-    // bwrap, so without modelling that refusal it would let the probe's
-    // client connect and `verify()` would report `unix_filter_absent`.
-    wrapWithSandboxArgv.mockImplementation(async (command, _binShell, customConfig) => ({
-      argv:
-        denyReadOf(customConfig).length > 0
-          ? ['/bin/sh', '-c', 'exit 1']
-          : command.includes('afunix.sock')
-            ? ['/bin/sh', '-c', 'echo EPERM >&2; exit 1']
-            : ['/bin/bash', '-c', command],
-      env: {},
-    }));
+    // The stand-in models the held read deny, the nested hook deny, and (on
+    // Linux) the EPERM produced by the real AF_UNIX seccomp filter. The
+    // production-path test in runtime-wiring.test.ts exercises those rules
+    // through the actual sandbox binary.
 
     const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
     toClose = executor;
@@ -138,10 +157,7 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
       // Deny leg refuses; the allow leg and the AF_UNIX leg run the command
       // verbatim — the mock applies no seccomp, exactly like a host where
       // srt skipped the stage, so the AF_UNIX client reaches our listener.
-      wrapWithSandboxArgv.mockImplementation(async (command, _binShell, customConfig) => ({
-        argv: denyReadOf(customConfig).length > 0 ? ['/bin/sh', '-c', 'exit 1'] : ['/bin/bash', '-c', command],
-        env: {},
-      }));
+      mockProtectedSandbox({ unixFilterAbsent: true });
 
       const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
       toClose = executor;
@@ -160,6 +176,80 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
       expect(existsSync(join(dir, 'should-not-exist'))).toBe(false);
     },
   );
+
+  it('a nested hook write that is not contained makes the sandbox unavailable before the caller command runs', async () => {
+    // This fault injection is the missing AppArmor/Seatbelt rule: all prior
+    // containment legs still hold, but the exact nested hook write succeeds.
+    mockProtectedSandbox({ hookWriteAllowed: true });
+
+    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+    toClose = executor;
+
+    const status = await executor.verify();
+    expect(status.available).toBe(false);
+    if (status.available) return;
+    expect(status.reason).toBe('git_hooks_unprotected');
+    expect(status.detail).toContain('via pre-commit');
+    expect(status.detail).toContain('muffin-bwrap//&muffin-unpriv-bwrap');
+    expect(status.remedy).toContain('scripts/install/bwrap.apparmor');
+    expect(status.remedy).toContain('docs/user/INSTALL.md');
+    const nestedHookCommand = wrapWithSandboxArgv.mock.calls
+      .map(([command]) => command)
+      .find((command) => command.includes('muffin sandbox nested-hook self-test'));
+    expect(nestedHookCommand).toContain('IFS= read -r apparmor_label < /proc/self/attr/current');
+    expect(nestedHookCommand).not.toContain('cat /proc/self/attr/current');
+
+    const dir = mktempWorkspace();
+    const witness = join(dir, 'caller-command-ran.txt');
+    await expect(
+      executor.run({ command: `touch '${witness}'`, cwd: dir, writeScope: [dir] }),
+    ).rejects.toThrow(/sandbox unavailable: git_hooks_unprotected/);
+    expect(existsSync(witness)).toBe(false);
+    // The failed hook leg is the last sandboxed call; the caller is never wrapped.
+    expect(wrapWithSandboxArgv).toHaveBeenCalledTimes(3);
+  });
+
+  it('a hardlinked hook install that is not contained makes the sandbox unavailable before the caller command runs', async () => {
+    // Fault injection for a missing link-deny on hook filenames: the
+    // hardlink lands where a direct write would be refused.
+    mockProtectedSandbox({ hookHardlinkAllowed: true });
+
+    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+    toClose = executor;
+
+    const status = await executor.verify();
+    expect(status.available).toBe(false);
+    if (status.available) return;
+    expect(status.reason).toBe('git_hooks_unprotected');
+    expect(status.detail).toContain('hardlink');
+
+    const dir = mktempWorkspace();
+    const witness = join(dir, 'caller-command-ran.txt');
+    await expect(
+      executor.run({ command: `touch '${witness}'`, cwd: dir, writeScope: [dir] }),
+    ).rejects.toThrow(/sandbox unavailable: git_hooks_unprotected/);
+    expect(existsSync(witness)).toBe(false);
+  });
+
+  it('a mid-command hooks-dir replacement is recorded without refusing the shell', async () => {
+    // No per-path symlink mediation exists (measured on Linux with the full
+    // profile loaded), so a created alias is the documented residual, not a
+    // shell-killing event. This pins the record-only semantics: the day the
+    // marker flips to denied, re-gate it. The default mock already emits a
+    // created alias alongside every denial.
+    mockProtectedSandbox();
+
+    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+    toClose = executor;
+
+    const status = await executor.verify();
+    expect(status).toEqual({ available: true, mechanism: 'bubblewrap' });
+
+    const dir = mktempWorkspace();
+    const witness = join(dir, 'caller-command-ran.txt');
+    await executor.run({ command: `touch '${witness}'`, cwd: dir, writeScope: [dir] });
+    expect(existsSync(witness)).toBe(true);
+  });
 
   it("the reperto itself: the real invocation cannot even run an unrestricted command (bwrap dies on /proc) — contain_failed, and run() never reaches the caller's command", async () => {
     wrapWithSandboxArgv.mockImplementation(async () => ({ argv: BROKEN_INVOCATION, env: {} }));

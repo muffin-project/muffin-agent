@@ -1,20 +1,20 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { runInit } from './init.js';
-import { applica } from './schermo.js';
-import { formatProgressLine, makeReplCliWrite, runRepl, closingLine, statusFor } from './repl.js';
-import { TOOL_PHRASES, toolLine, toolPhrase, toolSubject } from '../agent/tool-phrase.js';
 import { COMANDI, debugCommand, thinkingCommand } from '../agent/comandi.js';
-import { readdirSync, readFileSync } from 'node:fs';
+import type { TurnEvent } from '../agent/loop.js';
+import { TOOL_PHRASES, toolLine, toolPhrase, toolSubject } from '../agent/tool-phrase.js';
 import { cliSurface } from '../core/surface/cli.js';
 import { SurfaceRegistry } from '../core/surface/registry.js';
 import { DELIVERED, MUTA, type Surface } from '../core/surface/types.js';
+import { LANE_JOBS, LANE_TURNS, ModelLane } from '../core/turns/model-lane.js';
 import { startFakeProvider } from '../evals/acceptance/provider.js';
 import { shellNonDisponibileQui } from '../evals/acceptance/sandbox-host.js';
-import type { TurnEvent } from '../agent/loop.js';
+import { runInit } from './init.js';
+import { closingLine, formatProgressLine, makeReplCliWrite, runRepl, statusFor } from './repl.js';
+import { applica } from './schermo.js';
 
 const itWithShell = it.skipIf(shellNonDisponibileQui() !== null);
 
@@ -241,6 +241,51 @@ describe('the REPL streams the final answer while it forms (B11)', () => {
       expect(provider.main()[0]?.transcript).toBeDefined();
       expect(written.some((w) => w === 'risposta ')).toBe(false);
       expect(written.join('')).toContain('risposta intera, non a pezzi');
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it('waits visibly for the shared model lane before a local foreground turn', async () => {
+    const provider = await startFakeProvider({ main: [{ text: 'turno foreground concluso' }] });
+    const home = homeAgainst(provider.baseUrl);
+    const err: string[] = [];
+    let seededBusyLane = false;
+    let laneFreedAt = 0;
+    const released: string[] = [];
+    const originalTake = ModelLane.prototype.take;
+    const originalRelease = ModelLane.prototype.release;
+
+    vi.spyOn(ModelLane.prototype, 'take').mockImplementation(function (this: ModelLane, holder) {
+      if (!seededBusyLane && holder === LANE_TURNS) {
+        seededBusyLane = true;
+        expect(originalTake.call(this, LANE_JOBS)).toBeNull();
+        setTimeout(() => {
+          laneFreedAt = Date.now();
+          this.release(LANE_JOBS);
+        }, 10);
+      }
+      return originalTake.call(this, holder);
+    });
+    vi.spyOn(ModelLane.prototype, 'release').mockImplementation(function (this: ModelLane, holder) {
+      released.push(holder);
+      originalRelease.call(this, holder);
+    });
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      err.push(String(chunk));
+      return true;
+    });
+
+    try {
+      const code = await runRepl(home, { stdin: stdinWith('ciao') });
+
+      expect(code).toBe(0);
+      expect(seededBusyLane).toBe(true);
+      expect(laneFreedAt).toBeGreaterThan(0);
+      expect(provider.main()[0]?.at).toBeGreaterThanOrEqual(laneFreedAt);
+      expect(released).toEqual([LANE_JOBS, LANE_TURNS]);
+      expect(err.join('')).toContain('attendo il modello: un’attività pianificata sta usando la corsia');
     } finally {
       await provider.close();
     }

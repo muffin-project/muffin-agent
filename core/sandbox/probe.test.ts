@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { platform, userInfo } from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  APPARMOR_REMEDY,
   probeSandbox,
   tmpdirBreaksSandboxSockets,
   SANDBOX_BINARIES,
@@ -288,6 +289,9 @@ describe('the Linux branch (bubblewrap)', () => {
     expect(probe.reason).toBe('userns_denied');
     expect(probe.detail).toContain('RTM_NEWADDR');
     expect(probe.remedy).toMatch(/apparmor/i);
+    expect(probe.remedy).toContain('scripts/install/bwrap.apparmor');
+    expect(probe.remedy).toMatch(/hook/i);
+    expect(probe.remedy).toContain('does not provide the hook protection');
   });
 
   /**
@@ -517,4 +521,10 @@ describe('il rimedio nomina tutto ciò che serve', () => {
     // altro nome: questa è quella che un preflight interroga.
     expect([...SANDBOX_BINARIES]).toEqual(['bwrap', 'socat', 'rg']);
   });
+});
+
+
+it('the AppArmor remedy names the packaged profile and the installer consent flag', () => {
+  expect(APPARMOR_REMEDY).toContain('MUFFIN_APPLY_SANDBOX_PROFILE=1');
+  expect(APPARMOR_REMEDY).toContain('bwrap.apparmor');
 });

@@ -766,6 +766,55 @@ items live in `docs/evidence/shell-containment-2026-09-21.md`.
 Symlink, hardlink, ancestor-symlink and path-canonicalisation behaviour are part
 of the security claim rather than filesystem edge cases.
 
+### 9.3 Git hook creation in a compound shell call
+
+The workspace grants writes to project files, not authority to install trusted
+Git hooks. `nestedGitHooksDirs()` still denies hook directories that exist
+before a command starts. It cannot see a nested repository created later in the
+same shell invocation, so the operating-system profile supplies the second
+boundary: Linux requires `scripts/install/bwrap.apparmor` loaded against the
+real bwrap path with `userns`, explicit allow rules and write/link denies for
+Git's active hook names. Its `pix` rule stacks bwrap children under the same
+deny policy; that transition matters because bwrap sets `no-new-privs` before it
+executes the command. Capability stripping for shell children is deliberately
+not part of this profile: on nested or containerized hosts it breaks userns
+setup for every contained command (measured on hosted CI as `contain_failed`
+on all shell tests), so it waits for real-host validation as a separate
+follow-up. The hook-deny boundary does not depend on it. macOS Seatbelt's
+hook-path deny remains in force.
+
+Before shell execution, `SandboxExecutor` tests the real `SandboxManager` path
+with ordinary writes, nested `git init`/`git add`, every active hook name in
+a newly-created `nested/.git/hooks`, a hardlink install, a write through a
+pre-existing hooks symlink, and a rename into place. Linux uses Git's default
+templates, so `*.sample` files must remain writable; macOS uses an empty
+template because Seatbelt denies writes anywhere under the hook directory. If
+any gated hook install succeeds, the sandbox reports `git_hooks_unprotected`
+and refuses the caller's command. The production `shell_run_write` wiring test
+also checks `fsmonitor-watchmanv2` and the existing top-level hook deny.
+Ubuntu hosts without the matching profile therefore lose shell execution
+rather than silently running without this boundary. The pre-existing-symlink
+door is covered on both platforms by resolving the scanned hooks path to its
+concrete target. A mid-command hooks-dir replacement (`rm -rf` + `ln -s`) is
+attempted and recorded on every platform but gated on none: AppArmor has no
+per-path symlink mediation (measured with the full profile loaded), and
+neither does Seatbelt for the hooks entry itself — so the marker is a
+tripwire, not a proof, and the residual stays explicitly open (see below).
+Like the depth bound itself, the pre-scan skips `node_modules`: a repository
+pre-existing under `node_modules/**/…` misses the concrete-target deny (host
+filename rules still apply to it mid-command). Rename into place, hardlink
+and direct installs have no such carve-out.
+
+This claim covers direct active hook filenames under a real `.git/hooks`
+directory, hardlink installs, writes through pre-existing symlinks, and
+renames into place. Git's `core.hooksPath` or a Git directory outside the
+worktree remain owned by #657. The mid-command symlink replacement is the
+remaining #865 residual: attempted and recorded by the self-test and the
+wiring test on every platform, denied on none, tracked openly rather than
+claimed. The
+decision and test scope are recorded in
+`docs/evidence/shell-nested-git-hook-protection-2026-10-07.md`.
+
 Process inspection should expose only the information required by the declared
 capability; command-line arguments are particularly sensitive because they may
 contain secrets or private data.

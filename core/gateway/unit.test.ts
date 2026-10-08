@@ -496,6 +496,42 @@ describe('la unit deve dire dove sta node', () => {
     expect(plan.text).toMatch(/Environment=PATH=[^\n]*\/usr\/bin/);
   });
 
+  /**
+   * La bubblewrap Muffin-owned deve vincere sul copy di distro.
+   *
+   * Falsificatore: nel PATH della unit il tool bin dir sta DOPO la directory
+   * dell'interprete e PRIMA di ogni percorso di sistema, così `bwrap` risolve
+   * alla 0.13.0 verificata e non alla 0.9.0 di Ubuntu.
+   */
+  it('systemd: il tool bin Muffin-owned viene prima dei percorsi di sistema', () => {
+    const ownedDir = '/home/x/.local/share/muffin/tool-bin';
+    const plan = planUnit({ ...base, platform: 'linux', toolBinDir: ownedDir });
+    const line = plan.text.split('\n').find((l) => l.startsWith('Environment=PATH='));
+    expect(line).toBeDefined();
+    const owned = line!.indexOf(ownedDir);
+    const system = line!.indexOf('/usr/bin');
+    expect(owned).toBeGreaterThanOrEqual(0);
+    expect(system).toBeGreaterThan(owned);
+  });
+
+  it('launchd: stesso ordine, la bubblewrap verificata prima di /usr/bin', () => {
+    const ownedDir = '/home/x/.local/share/muffin/tool-bin';
+    const plan = planUnit({ ...base, platform: 'darwin', toolBinDir: ownedDir });
+    const path = /<key>PATH<\/key>\s*<string>([^<]+)<\/string>/.exec(plan.text)?.[1];
+    expect(path).toBeDefined();
+    const owned = path!.indexOf(ownedDir);
+    const system = path!.indexOf('/usr/bin');
+    expect(owned).toBeGreaterThanOrEqual(0);
+    expect(system).toBeGreaterThan(owned);
+  });
+
+  it('MUTAZIONE: senza toolBinDir i percorsi di sistema tornano primi, e il system bwrap vincerebbe', () => {
+    const plan = planUnit({ ...base, platform: 'linux' });
+    const line = plan.text.split('\n').find((l) => l.startsWith('Environment=PATH='))!;
+    expect(line).not.toContain('tool-bin');
+    expect(line.indexOf('/usr/bin')).toBeGreaterThan(line.indexOf('/opt/homebrew/bin'));
+  });
+
   it('senza interpreterDir la unit resta valida e non inventa un PATH vuoto', () => {
     const plan = planUnit({ ...base, interpreterDir: undefined, platform: 'darwin' });
     expect(plan.text).not.toContain('<key>PATH</key>');
