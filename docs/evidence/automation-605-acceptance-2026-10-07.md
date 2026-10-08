@@ -141,3 +141,46 @@ Current consumer profile has no spare permanent tool slots. The old spike's answ
 #469 owns the structural catalogue/truncation problem. The accepted direction is an authority-filtered catalog, a small always-visible kernel and discovery/load, implemented as a separate composable slice rather than EI-specific discovery.
 
 The durable rule-store decision is no longer open: the store audit found no existing semantic owner for non-time rule definitions, and this PR now carries the minimum definition-only store described above.
+
+## Integration audit — 2026-10-08 (after #854, before CRITICAL verdict)
+
+The PR is **not** a claim that arbitrary persisted `message.received`
+definitions already execute in production. These three facts are distinct:
+
+1. **Shipped candidate path:** `attachMcp -> attachEventIntelligence`
+   registers embedded EI tools through the ordinary runtime registry and
+   #469's authorized capability discovery. Real EI matches enter
+   `external.condition.matched -> system:automation` and use the canonical
+   TurnStore receipt and existing loop. Production loop discovery and direct
+   kernel denial are exercised by
+   `agent/event-intelligence-discovery.test.ts`.
+2. **Executable but injected only:** `connectors/shared/ingress/work.ts`
+   dispatches `message.received` against `deps.automationRules ?? []`.
+   The in-memory deterministic/agent seam is tested. **No current live gateway,
+   connector or REPL caller provides compiled definitions from
+   `runtime.automationRules` with a host-owned action resolver**. Persisted
+   `message.received` definitions are *definition-only*, **not live
+   automations**. Promoting them requires a separately reviewed production
+   resolver/authority + receipt/replay contract, without a second work lane.
+   This residual must not be used to advertise an active feature.
+3. **Restart read-scope boundary:** `WakeOwnerBindings` maps an EI wake Turn
+   ID to explanatory owner-read scope **in memory** (max 1024, erased on close).
+   The canonical wake Turn and owner-authored watch definition are durable;
+   the autonomous read association is not. After restart/eviction, resumed
+   autonomous work can lose the ability to list/inspect the watch, but cannot
+   gain owner write authority. `agent/event-intelligence-restart.test.ts`
+   pins the fail-closed restart semantics. Owner-initiated management remains
+   the supported read/write path.
+
+### #469 + EI autonomous authority
+
+The sealed `POLICY_FLOOR.forbiddenForSystem` now excludes
+`events.trigger.create` and `events.trigger.manage` for all autonomous
+principals before preload/discovery; the embedded EI host action-control still
+independently rejects non-owner mutations. The new production-loop test
+falsifies a leaked system discovery schema or direct-name mutation bypass.
+
+This audit narrows the acceptance statement rather than asserting that
+green unit tests prove production wiring which does not yet exist. Fresh
+independent CRITICAL judgment and exact-head CI/acceptance remain mandatory
+before upstream integration.
