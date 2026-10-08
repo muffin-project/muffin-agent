@@ -129,7 +129,15 @@ describe('EI owner association across a process restart', () => {
           autonomousContext,
         );
         expect(denied.ok).toBe(false);
-        expect(denied.error?.code).toBe('EVENT_WATCH_OWNER_REQUIRED');
+        // The portable lifecycle resolves the owned trigger before reaching
+        // host control(). With the ephemeral wake owner binding gone after
+        // restart, resolution fails closed: the trigger does not belong to
+        // this autonomous identity. The authoritative kernel also forbids
+        // autonomous watch mutations before dispatch.
+        expect(denied.error?.code).toBe('EVENT_TRIGGER_LIFECYCLE_FAILED');
+        const stillOwned = await list.execute({ limit: 10 }, toolContext({ turnId: source.id }));
+        expect(stillOwned.ok).toBe(true);
+        expect(JSON.stringify(stillOwned.data)).toContain('restart-watch');
       } finally {
         await reopened.close();
       }
