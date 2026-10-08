@@ -210,10 +210,10 @@ jobs:
           MUFFIN_REQUIRE_SYSTEMD: '1'
         run: npx vitest run --reporter=dot
 
-      # Mutation proof for the AppArmor hook rule: restore only the shared
+      # Mutation proof for the AppArmor hook rules: remove the shared
       # profile's hook policy, then run the same production-path test. Its
       # failure must name git_hooks_unprotected, so an unrelated setup failure
-      # cannot masquerade as evidence that the rule is load-bearing.
+      # cannot masquerade as evidence that the rules are load-bearing.
       - name: 'mutazione del profilo: senza deny Git-hook la shell rifiuta il runtime'
         env:
           MUFFIN_REQUIRE_SANDBOX: '1'
