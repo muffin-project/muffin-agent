@@ -7,6 +7,10 @@ import { runTurn, type RegisteredTool } from '../../agent/loop.js';
 import { loadProfiles, selectProfile } from '../../agent/profiles/profile.js';
 import { OpenAICompatProvider } from '../../agent/providers/openai-compat.js';
 import { fsCapabilities, makeFsTools, type FsScope } from '../../agent/tools/fs.js';
+import {
+  capabilityDiscoveryCapability,
+  makeCapabilitySearchTool,
+} from '../../agent/tools/capability-search.js';
 import { BudgetEngine } from '../../core/budget/budget.js';
 import { createDecide } from '../../core/policy/decide.js';
 import { POLICY_FLOOR } from '../../core/policy/matrix.js';
@@ -57,7 +61,10 @@ type Outcome = Verdict & {
   error?: string;
 };
 
-const decls = new Map<string, CapabilityDecl>(fsCapabilities.map((c) => [c.id, c]));
+const decls = new Map<string, CapabilityDecl>([
+  ...fsCapabilities.map((c) => [c.id, c] as const),
+  [capabilityDiscoveryCapability.id, capabilityDiscoveryCapability] as const,
+]);
 
 async function runScenario(
   scenario: Scenario,
@@ -97,6 +104,11 @@ async function runScenario(
     ...makeFsTools(scope),
     ...(scenario.extraTools ?? []),
     ...(sweep.pad ? crowdTools(sweep.pad) : []),
+    // #469: the real-model floor must exercise the same progressive
+    // projection door as production when --tools forces catalogue pressure.
+    // Under the cap the loop removes this meta-tool from the ordinary fast
+    // path, so adding it here does not distort flat-baseline runs.
+    makeCapabilitySearchTool(),
   ];
   const tools: RegisteredTool[] = declared.map(observe);
 

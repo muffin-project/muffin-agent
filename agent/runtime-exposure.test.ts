@@ -3,36 +3,52 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runInit } from '../cli/init.js';
+import { CAPABILITY_SEARCH_TOOL_NAME, createCapabilityExposure } from './capability-exposure.js';
+import { visibleTools } from './context/assemble.js';
 import { loadProfiles, selectProfile } from './profiles/profile.js';
 import { baseToolOrder, buildRuntime } from './runtime.js';
 
 /**
- * Which tools a turn is actually shown, and what falls off the end.
+ * Native registration order and the #469 model-visible projection.
  *
- * `profile.maxToolsExposed` truncates the registered list **by registration
- * order**, and `consumer-local.json` sets it to 10 against a default install of
- * eleven or twelve tools (the sandbox decides). So something is always cut on
- * that profile, silently: it is simply not in the request, no line is logged,
- * and the model behaves as if it did not exist. *What* is cut is decided by the
- * order of a literal in `buildRuntime` — a place nobody edits with the cap in
- * mind.
+ * Before #469 this file guarded a hard `slice(0, maxToolsExposed)`: a tool
+ * after the profile ceiling simply disappeared from the model request. The
+ * structural repair keeps deterministic registration for diagnostics/cache
+ * stability, but moves the actual turn view to `createCapabilityExposure`.
  *
- * That is how `slice/turno-sospeso` cost a small-model install its web access:
- * `wait` and `todo` went into the base array at positions 6-7 and pushed
- * `skill_read` and `http_get` over the line. The trade was never decided, and
- * nothing could have caught it — the suite was green and every tool worked.
- *
- * This file is the thing that would have caught it. It asserts the **whole
- * ordered list**, so any insertion anywhere fails here and names itself, and it
- * asserts the cut for the profile where the cut is real.
+ * The tests below therefore prove both facts separately:
+ * - `baseToolOrder` still matches the real native catalogue;
+ * - profiles that fit stay on the ordinary fast path with no discovery tool;
+ * - a pressured profile exposes a small core + capability_search and can load
+ *   a needed authorized schema without increasing the ceiling.
  */
 
-function realRuntime(): { names: string[]; close: () => void } {
+function realRuntime(): {
+  names: string[];
+  runtime: ReturnType<typeof buildRuntime>;
+  close: () => void;
+} {
   const home = mkdtempSync(join(tmpdir(), 'muffin-exposure-'));
   runInit({ home, apiKey: 'sk-never-called' });
   const runtime = buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-exposure-ws-')));
   const names = runtime.deps.tools.map((t) => t.spec.name);
-  return { names, close: () => runtime.close() };
+  return { names, runtime, close: () => runtime.close() };
+}
+
+function ownerProjection(runtime: ReturnType<typeof buildRuntime>, maxToolsExposed: number) {
+  const principal = { kind: 'owner', connector: 'cli', externalId: 'local' } as const;
+  const eligible = visibleTools(
+    runtime.deps.tools,
+    principal,
+    runtime.deps.capabilities,
+    runtime.deps.grants?.get('host'),
+  );
+  const discoveryTool = eligible.find((tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME);
+  return createCapabilityExposure({
+    eligible,
+    maxToolsExposed,
+    ...(discoveryTool === undefined ? {} : { discoveryTool }),
+  });
 }
 
 /**
@@ -63,7 +79,12 @@ describe('quali tool vede davvero un turno', () => {
   it('l’ordine di registrazione è quello dichiarato, e cambiarlo fallisce qui', () => {
     const rt = realRuntime();
     rt.close();
-    expect(rt.names.filter((n) => !SANDBOXED.includes(n))).toEqual(REGISTERED);
+    expect(
+      rt.names.filter(
+        (n) => !SANDBOXED.includes(n) && n !== CAPABILITY_SEARCH_TOOL_NAME,
+      ),
+    ).toEqual(REGISTERED);
+    expect(rt.names).toContain(CAPABILITY_SEARCH_TOOL_NAME);
   });
 
   it('baseToolOrder non diverge dal registro reale, sandbox della macchina compresa', () => {
@@ -80,133 +101,60 @@ describe('quali tool vede davvero un turno', () => {
     // host che ne offrisse una sola sarebbe la degradazione silenziosa che
     // ADR-0074 punto 4 vieta — qui si vede, invece di passare inosservata.
     expect(SANDBOXED.some((n) => rt.names.includes(n))).toBe(conteneva);
-    expect(baseToolOrder({ sandboxAvailable: conteneva, searchOn: false })).toEqual(rt.names);
+    expect(baseToolOrder({ sandboxAvailable: conteneva, searchOn: false })).toEqual(
+      rt.names.filter((name) => name !== CAPABILITY_SEARCH_TOOL_NAME),
+    );
   });
 
-  it('su consumer-local il tetto non taglia più niente, e questo va visto', () => {
-    /**
-     * The profile that actually truncates. The cap is not a hypothetical: it is
-     * what a local model gets, and the tools past the line are invisible to it —
-     * no error, no log, no mention in the prompt.
-     *
-     * The assertion is on **what the cut may contain**, not on a fixed list,
-     * because `shell_run` is registered only where the sandbox probe passed: on
-     * a machine with a sandbox twelve tools meet a cap of ten and two are cut,
-     * without one it is eleven and one. Pinning either number would make this
-     * file pass or fail on the host rather than on the code. What must hold on
-     * every host is that the things the cap takes are the two primitives at the
-     * end of the list, and never the web, the catalogue or memory.
-     */
+  it('su consumer-local resta il fast path ordinario finché il catalogo entra nel profilo', () => {
     const profiles = loadProfiles(join(import.meta.dirname, 'profiles'));
     const profile = selectProfile('qwen3.8-27b', profiles);
-    // 15, alzato da 14 il 28/08 per fare posto a `fs_search`. Il commento qui
-    // sotto chiamava «cerotto» esattamente questa mossa, e aveva ragione: il
-    // numero continua a non avere una misura dietro.
-    //
-    // Fatta lo stesso, e con una misura almeno sul lato del beneficio. Sul
-    // database dell'owner 19 chiamate su 94 erano `sys.shell`, quasi tutte
-    // `grep` e `ls -R`, ognuna con una conferma da dare a mano — perché
-    // cercare dentro i file non si poteva fare altrimenti. L'alternativa a
-    // questo +1 era perdere `sys_inspect`, cioè l'auto-ispezione, che è il
-    // primo della lista a cadere. Fra un cerotto dichiarato e un agente che
-    // non sa più guardarsi, il cerotto.
-    //
-    // La risposta strutturale resta quella scritta sotto, e non è un numero.
-    // 16 dal 06/09 (ADR-0074 punto 4), e per una ragione contata invece che
-    // stimata: `sys.shell` si è divisa in due tool, quindi i registrati sono
-    // saliti esattamente di uno. Lasciare 15 avrebbe tagliato `sys_inspect` in
-    // silenzio su ogni installazione consumer, che è il difetto, non la
-    // correzione. La risposta strutturale resta quella scritta sotto.
-    //
-    // 18 dal 06/09 sera: dopo `muffin update` l'installazione dell'owner
-    // registrava 18 tool (ricerca web configurata e `send_file` in più
-    // rispetto al conteggio del 04/09) e `doctor` diceva `todo` e
-    // `sys_inspect` tagliati. Di nuovo il numero dei registrati, contato
-    // sull'installazione vera, non stimato.
-    //
-    // 19 dal 07/09 (DAY-1 D15): `sys_effects` — «cosa hai fatto oggi», letto
-    // dal record durevole invece che ricordato — e' esattamente un tool
-    // registrato in piu'. Il +1 tiene costante quanti ne cadono
-    // sull'installazione dell'owner; non chiude il taglio che c'era gia'
-    // prima, e non pretende di averlo chiuso.
-    //
-    // 20 dall'08/09: `muffin doctor` sull'installazione dell'owner, subito
-    // dopo l'update a dev (2b6de29), contava 20 registrati e `sys_inspect`
-    // tagliato — il conteggio del 07/09 era di uno inferiore a quello vero
-    // (18 con zero tagliati la sera del 06/09, quindi 20 dopo D15). Di nuovo
-    // il numero dei registrati contato sull'installazione vera, non stimato.
-    //
-    // 21 dall'08/09 sera: `memory_forget` («dimentica X», il verbo che il
-    // cutover ha trovato senza meccanismo) è un tool registrato in più.
-    //
-    // 22 dal 18/09: `schedule_recurring` (la porta conversazionale sui job
-    // ricorrenti — «ricordamelo ogni giorno alle 9»): un tool registrato in
-    // più, contato, non stimato. Senza il +1 il tetto tornerebbe a tagliare
-    // in silenzio, e il primo a sparire sarebbe l'ultimo della lista.
-    //
-    // 23 dal 04/10: `memory_propose` (ADR-0051 slice 1, «ricorda X» intenzionale):
-    // stesso +1 contato, stessa ragione.
     expect(profile.maxToolsExposed).toBe(23);
 
     const rt = realRuntime();
-    rt.close();
-    const cut = rt.names.slice(profile.maxToolsExposed);
-
-    /**
-     * Niente tagliato **oggi**, ed è la ragione per cui questo test resta.
-     *
-     * Fino al 27/08 il tetto mordeva e il file asseriva *cosa* poteva
-     * prendere. Ora non prende niente, e l'asserzione utile si è capovolta:
-     * il prossimo tool registrato lo rimette a mordere, in silenzio, e il
-     * primo a sparire sarà l'ultimo della lista. Qui diventa rosso invece.
-     *
-     * La risposta strutturale non è alzare ancora il numero — è la tool
-     * search, scartata il 26/08 valutandola contro il budget di token invece
-     * che contro questo tetto (`docs/evidence/tool-design-2026-08-26.md`).
-     */
-    expect(
-      cut,
-      'il tetto è tornato a tagliare: alzarlo ancora è un cerotto, non una risposta',
-    ).toEqual([]);
-
-    // Detto anche al positivo, perché un'asserzione su un insieme vuoto passa
-    // in un mondo vuoto.
-    for (const kept of [
-      'fs_read',
-      'memory_search',
-      'document_read',
-      'skill_read',
-      'http_get',
-      'wait',
-      'todo',
-      'sys_inspect',
-      // Nominato per nome dal 07/09 (D15): il punto 3 della riga — «l'owner
-      // chiede cosa hai fatto oggi e riceve una risposta» — non esiste su
-      // un'installazione dove questo tool cade sotto il tetto, e un `cut`
-      // vuoto misurato su un runtime senza ricerca ne' `send_file` non lo
-      // direbbe.
-      'sys_effects',
-      // 08/09: «dimentica X» non esiste su un'installazione dove questo cade.
-      'memory_forget',
-      // 04/10: «ricorda X» intenzionale non esiste su un'installazione dove
-      // questo cade.
-      'memory_propose',
-      // 18/09: «ricordamelo ogni giorno alle 9» non esiste su
-      // un'installazione dove questo cade.
-      'schedule_recurring',
-    ]) {
-      expect(rt.names, `${kept} deve restare esposto`).toContain(kept);
+    try {
+      const projection = ownerProjection(rt.runtime, profile.maxToolsExposed);
+      expect(projection.pressured).toBe(false);
+      expect(projection.discovery).toBeUndefined();
+      expect(projection.exposed.map((tool) => tool.spec.name)).not.toContain(
+        CAPABILITY_SEARCH_TOOL_NAME,
+      );
+    } finally {
+      rt.close();
     }
   });
 
-  it('su un profilo frontier non taglia niente, quindi l’ordine non si vede', () => {
-    // The other half: the trade above is only ever paid by the small profile,
-    // and stating it here stops the next reader from thinking `wait` is
-    // unavailable in general.
+  it('su conservative il tetto limita gli schema ma non rende irraggiungibile sys_inspect', () => {
+    const rt = realRuntime();
+    try {
+      const projection = ownerProjection(rt.runtime, 10);
+      expect(projection.pressured).toBe(true);
+      expect(projection.exposed.length).toBeLessThanOrEqual(10);
+      expect(projection.exposed.map((tool) => tool.spec.name)).toContain(
+        CAPABILITY_SEARCH_TOOL_NAME,
+      );
+      expect(projection.exposed.map((tool) => tool.spec.name)).not.toContain('sys_inspect');
+
+      const found = projection.discovery?.searchAndLoad('inspect current runtime', 2);
+      expect(found?.loaded.map((tool) => tool.name)).toContain('sys_inspect');
+      projection.discovery?.activatePending();
+      expect(projection.exposed.map((tool) => tool.spec.name)).toContain('sys_inspect');
+      expect(projection.exposed.length).toBeLessThanOrEqual(10);
+    } finally {
+      rt.close();
+    }
+  });
+
+  it('su un profilo frontier il catalogo resta sul fast path statico', () => {
     const profiles = loadProfiles(join(import.meta.dirname, 'profiles'));
     const profile = selectProfile('claude-sonnet-5', profiles);
     const rt = realRuntime();
-    rt.close();
-    expect(rt.names.length).toBeLessThanOrEqual(profile.maxToolsExposed);
+    try {
+      const projection = ownerProjection(rt.runtime, profile.maxToolsExposed);
+      expect(projection.pressured).toBe(false);
+      expect(projection.discovery).toBeUndefined();
+    } finally {
+      rt.close();
+    }
   });
 });

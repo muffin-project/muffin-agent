@@ -7,6 +7,12 @@ import { ATTR } from '../../core/tracing/types.js';
 import type { TurnRecord } from '../../core/turns/store.js';
 import { planTaint } from '../../core/turns/todo.js';
 import { approvalFootnote, decodeWaitFor, satisfied, wakeReport, type WakeReason } from '../../core/turns/wait.js';
+import {
+  CAPABILITY_DISCOVERY_GUIDANCE,
+  CAPABILITY_SEARCH_TOOL_NAME,
+  createCapabilityExposure,
+  preloadCapabilitiesForTask,
+} from '../capability-exposure.js';
 import { tenantClass, visibleTools } from '../context/assemble.js';
 import { historyTaint, reinjectedHistory } from '../context/history-taint.js';
 import { DEFAULT_EXECUTION } from '../profiles/profile.js';
@@ -311,6 +317,56 @@ export async function guidaIlTurno(
       run.activeModelMs = activeModelMs;
     },
   });
+  // #469: principal/grant filtering decides which installed capabilities may
+  // even enter discovery. The profile ceiling is applied only to the model
+  // projection, never to catalogue existence.
+  const principalVisibleTools = visibleTools(
+    deps.tools,
+    input.principal,
+    deps.capabilities,
+    deps.grants?.get(input.tenant),
+  );
+  // #469 judge ADJUST: visibleTools' hostOnly/grants projection was designed
+  // for members and deliberately returns the full catalogue for system
+  // principals. That is not the kernel's authority: autonomous principals
+  // also have sealed forbiddenForSystem exclusions (including namespace
+  // patterns). Ask the SAME kernel snapshot for static denial codes BEFORE
+  // any task preload/search; never replicate the sealed list here.
+  //
+  // A dummy no-resource probe is used ONLY to exclude capabilities the kernel
+  // categorically denies to this principal. Resource/taint/budget decisions
+  // still happen at execution with real args. Direct guesses continue to
+  // resolve against deps.tools, outside this model-visible projection.
+  const eligibleTools =
+    input.principal.kind === 'system'
+      ? principalVisibleTools.filter((tool) => {
+          const decision = snapshot.check(tool.capability, { kind: 'none' }, {});
+          return decision.effect !== 'deny' ||
+            !['principal_forbidden', 'rot_violation', 'safe_mode', 'no_capability', 'tenant_mismatch']
+              .includes(decision.code);
+        })
+      : principalVisibleTools;
+  const discoveryTool = eligibleTools.find(
+    (tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME,
+  );
+  const capabilityExposure = createCapabilityExposure({
+    eligible: eligibleTools,
+    maxToolsExposed: deps.profile.maxToolsExposed,
+    ...(discoveryTool === undefined ? {} : { discoveryTool }),
+  });
+  const preloaded =
+    capabilityExposure.pressured && deps.profile.maxToolsExposed > 1
+      ? preloadCapabilitiesForTask(capabilityExposure, input.text, 2)
+      : null;
+  const exposed = capabilityExposure.exposed;
+  turn.setAttributes({
+    'muffin.context.class': turnClass,
+    'muffin.context.tools_exposed': exposed.length,
+    'muffin.context.tools_hidden': capabilityExposure.hiddenCount,
+    'muffin.context.capability_discovery': capabilityExposure.pressured,
+    'muffin.context.tools_preloaded': preloaded?.loaded.length ?? 0,
+  });
+
   /**
    * What every handler is told about the turn it is running in — built once,
    * because the barrier has to be the same object across the whole turn.
@@ -337,6 +393,9 @@ export async function guidaIlTurno(
     suspend: (spec) => {
       run.barrier = spec;
     },
+    ...(capabilityExposure.discovery === undefined
+      ? {}
+      : { capabilityDiscovery: capabilityExposure.discovery }),
     durability: {
       failure: () => run.durabilityFailure,
       fail: (reason) => {
@@ -365,29 +424,6 @@ export async function guidaIlTurno(
     const echo = echoContentFor(call.name, call.args, outcome);
     if (echo !== undefined) run.sensitiveResourceEchoes.push(echo);
   };
-
-  // What this turn is shown, decided from who is speaking and where — never
-  // from what they said. Filter first, cap second: `slice` on registration
-  // order applied to the full list would spend a weak model's ten slots on
-  // tools the kernel is going to refuse this principal anyway.
-  //
-  // Recomputed on a resume rather than persisted, and it is correct to: it is a
-  // pure function of the principal and the profile, and the profile follows the
-  // model, which the row pins. The legitimate direction of change in between —
-  // a tightened permission matrix — is one a resume should *inherit*, not one
-  // it should carry a stale copy past.
-  const exposed = visibleTools(
-    deps.tools,
-    input.principal,
-    deps.capabilities,
-    // `input.tenant` e non il tenant del principal: sono lo stesso valore, e
-    // questo è quello su cui il kernel deciderà fra due righe.
-    deps.grants?.get(input.tenant),
-  ).slice(0, deps.profile.maxToolsExposed);
-  turn.setAttributes({
-    'muffin.context.class': turnClass,
-    'muffin.context.tools_exposed': exposed.length,
-  });
 
   /**
    * Ciò che le scritture durevoli e il corpo del giro leggevano per chiusura,
@@ -596,23 +632,38 @@ export async function guidaIlTurno(
     const undoneTraceIds = deps.turns.undoneTraceIds(traceIdsInWindow);
 
     run.messages.length = 0;
-    run.messages.push(
-      ...buildContext(
-        input,
-        recalled,
-        open,
-        spoken,
-        now(),
-        deps.model,
-        deps.profile.name,
-        deps.istanza?.(),
-        deps.timeZone,
-        undoneTraceIds,
-        turnClass === 'owner' &&
-          deps.memory !== undefined &&
-          !deps.memory.store.hasActiveFacts(input.tenant),
-      ),
+    const builtContext = buildContext(
+      input,
+      recalled,
+      open,
+      spoken,
+      now(),
+      deps.model,
+      deps.profile.name,
+      deps.istanza?.(),
+      deps.timeZone,
+      undoneTraceIds,
+      turnClass === 'owner' &&
+        deps.memory !== undefined &&
+        !deps.memory.store.hasActiveFacts(input.tenant),
     );
+
+    if (capabilityExposure.pressured) {
+      // Local progressive discovery is not provider magic: the model must know
+      // that the current schema menu is intentionally partial. Keep that fact
+      // in volatile harness context (never owner words), immediately before
+      // the real owner input so the under-cap stable prefix remains untouched.
+      const ownerIndex = Math.max(0, builtContext.length - 1);
+      builtContext.splice(
+        ownerIndex,
+        0,
+        harnessMessage('user', [
+          { type: 'text', text: CAPABILITY_DISCOVERY_GUIDANCE },
+        ]),
+      );
+    }
+
+    run.messages.push(...builtContext);
 
     // `record.taint`, the same substitution and for the same reason as the
     // episode write above: `initialTaint(input)` here would read `drive`'s

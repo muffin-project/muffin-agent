@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { capabilityDiscoveryCapability } from '../../agent/tools/capability-search.js';
 import { sendFileCapability } from '../../agent/tools/deliver.js';
 import { documentCapability } from '../../agent/tools/document.js';
 import { effectsCapability } from '../../agent/tools/effects.js';
@@ -63,6 +64,7 @@ const ALL: readonly CapabilityDecl[] = [
   shellWriteCapability,
   ...processCapabilities,
   sendFileCapability,
+  capabilityDiscoveryCapability,
   httpCapability,
   searchCapability,
   memoryCapability,
@@ -311,6 +313,7 @@ describe('la matrice normativa è eseguibile', () => {
     // aggiunta a `ALL` sopra, e allora questo elenco torna a coincidere.
     expect(esportate.sort()).toEqual(
       [
+        'capability-search.ts:capabilityDiscoveryCapability',
         'deliver.ts:sendFileCapability',
         'document.ts:documentCapability',
         'effects.ts:effectsCapability',

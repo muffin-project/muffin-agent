@@ -7,6 +7,10 @@ import { paths, writeSecret } from '../core/config/config.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import type { Principal } from '../core/policy/types.js';
 import { seal } from '../core/rot/verify.js';
+import {
+  CAPABILITY_SEARCH_TOOL_NAME,
+  createCapabilityExposure,
+} from './capability-exposure.js';
 import { visibleTools } from './context/assemble.js';
 import { toolContext } from './fixtures/tool-context.js';
 import { buildRuntime } from './runtime.js';
@@ -99,13 +103,7 @@ describe('una capacità spenta lo dice, non solo al log', () => {
     }
   });
 
-  it('un tool tagliato dal tetto del profilo è distinto da uno spento, non la stessa parola', async () => {
-    // Nessun profilo spedito taglia oggi (consumer-local: 15, frontier: 24,
-    // contro una dozzina di tool base — runtime-exposure.test.ts lo misura).
-    // Un id modello che non combacia con nessun `match` risolve su
-    // CONSERVATIVE (maxToolsExposed: 10), che invece taglia davvero: è la
-    // stessa strada che `cli/doctor.ts` già percorre per dire "profilo
-    // conservativo" quando il modello configurato non è riconosciuto.
+  it('un tool oltre il tetto resta discoverable e non viene più dichiarato tagliato', async () => {
     const home = mkdtempSync(join(tmpdir(), 'muffin-capgap-tetto-'));
     const workspace = mkdtempSync(join(tmpdir(), 'muffin-capgap-tetto-ws-'));
     runInit({ home, apiKey: 'sk-never-called' });
@@ -119,46 +117,21 @@ describe('una capacità spenta lo dice, non solo al log', () => {
       expect(runtime.deps.profile.name).toBe('conservative');
       expect(runtime.deps.profile.maxToolsExposed).toBe(10);
 
-      const tagliati = runtime.capabilityGaps.filter((g) => g.kind === 'truncated');
-      const spenti = runtime.capabilityGaps.filter((g) => g.kind === 'disabled');
-      expect(tagliati.length).toBeGreaterThan(0);
-      // Distintamente etichettato: `kind` separa le due domande, e nessuna
-      // riga «tagliata» condivide la parola con cui si dice una capacità
-      // spenta (e viceversa) — altrimenti il collasso che il compito descrive
-      // sarebbe ancora qui, solo spostato di un campo.
-      for (const g of tagliati) {
-        expect(g.reason).toContain('tetto');
-        expect(g.reason).not.toContain('spento');
-      }
-      for (const g of spenti) {
-        expect(g.reason).not.toContain('tetto');
-      }
+      // #469 changes the meaning of the profile ceiling: it bounds the schema
+      // projection, not whether an authorized capability exists.
+      expect(runtime.capabilityGaps.filter((g) => g.kind === 'truncated')).toEqual([]);
 
       const inspect = runtime.deps.tools.find((t) => t.spec.name === 'sys_inspect');
       const out = await inspect!.handler({}, toolContext());
-      expect(out.content).toContain('tagliate dal tetto');
-      expect(out.content).toContain('maxToolsExposed');
+      expect(out.content).toContain('catalogo discoverable');
+      expect(out.content).toContain('maxToolsExposed limita gli schema caricati');
+      expect(out.content).not.toContain('tagliate dal tetto');
     } finally {
       runtime.close();
     }
   });
 
-  it('send_file, registrato dopo buildRuntime come fa cli/gateway.ts, non cade dal tetto per accidente di quando si registra', async () => {
-    /**
-     * Il difetto misurato: `send_file` (`cli/surface.ts#attachSendFile`, DAY-1
-     * B14) si registra **dopo** che `buildRuntime` è tornato — il
-     * `SurfaceRegistry` che gli serve non esiste ancora a quel punto del boot
-     * (`registry` resta `null` in `cli/gateway.ts` fino a `connectSurfaces`,
-     * chiamato dopo `buildRuntime`). Il calcolo del taglio che gira **dentro**
-     * `buildRuntime` non può quindi vederlo, e prima di questa riparazione
-     * restava così per sempre: l'annuncio del taglio era la fotografia di un
-     * boot che non aveva ancora finito di registrare tool.
-     *
-     * `runtime.recomputeExposure()` è la riparazione: rifà il calcolo sul
-     * registro *live*, ordinato per priorità dichiarata (`baseToolOrder`, che
-     * ora include `send_file` prima di `wait`/`todo`/`sys_inspect` — le tre
-     * che il repository dichiara già, per iscritto, come le prime a cadere).
-     */
+  it('send_file registrato tardi entra nel catalogo discoverable invece di diventare irraggiungibile', async () => {
     const home = mkdtempSync(join(tmpdir(), 'muffin-capgap-sendfile-'));
     const workspace = mkdtempSync(join(tmpdir(), 'muffin-capgap-sendfile-ws-'));
     runInit({ home, apiKey: 'sk-never-called' });
@@ -168,15 +141,9 @@ describe('una capacità spenta lo dice, non solo al log', () => {
       const primaDiSendFile = runtime.deps.tools.length;
       expect(runtime.deps.tools.map((t) => t.spec.name)).not.toContain('send_file');
 
-      // Un tetto che, sul registro base (senza `send_file`), non taglierebbe
-      // niente — esattamente come sull'installazione reale dell'owner
-      // (misurato: 14-15 tool base contro un tetto di 15). L'unico modo per
-      // farlo tagliare è aggiungere il tool che oggi si registra per ultimo.
-      runtime.deps.profile.maxToolsExposed = primaDiSendFile;
-      expect(runtime.capabilityGaps.filter((g) => g.kind === 'truncated')).toEqual([]);
+      // Before the late tool arrives the non-discovery catalogue fits exactly.
+      runtime.deps.profile.maxToolsExposed = primaDiSendFile - 1;
 
-      // La stessa fabbrica e la stessa chiamata di `attachSendFile`, dopo che
-      // `buildRuntime` è già tornato — non un tool finto sostituito al suo posto.
       const vaultRoot = paths(home).vault;
       runtime.register(
         makeSendFileTool({
@@ -187,30 +154,39 @@ describe('una capacità spenta lo dice, non solo al log', () => {
       );
       expect(runtime.deps.tools.map((t) => t.spec.name)).toContain('send_file');
 
-      // Il produttore dell'annuncio (`cli/gateway.ts`/`cli/repl.ts`) chiama
-      // questo esattamente qui: dopo ogni `attach*` del boot, mai prima.
-      const righe = runtime.recomputeExposure();
-      const tagliati = runtime.capabilityGaps.filter((g) => g.kind === 'truncated');
+      // Late registration still refreshes the deterministic live order, but
+      // there is no longer a false "truncated" availability gap.
+      expect(runtime.recomputeExposure()).toEqual([]);
+      expect(runtime.capabilityGaps.filter((g) => g.kind === 'truncated')).toEqual([]);
 
-      // L'asserzione che deve diventare rossa alla mutazione "rimetti il
-      // calcolo dentro buildRuntime, prima che send_file esista": senza
-      // `recomputeExposure` che rilegge il registro live, `tagliati` qui
-      // resterebbe `[]` (la fotografia di prima, presa quando `send_file` non
-      // esisteva ancora) invece di nominare il tool tagliato per davvero.
-      //
-      // E se invece `baseToolOrder` tornasse a non conoscere `send_file` (la
-      // seconda mutazione, quella di questa stessa riparazione): l'ordinamento
-      // lo spingerebbe in coda a tutto, oltre `sys_inspect`, e sarebbe
-      // `send_file` — il tool DAY-1, non lo scaffolding — a cadere qui al
-      // posto suo. Nessuna delle due mutazioni lascia `['sys_inspect']` come
-      // unico tagliato.
-      expect(tagliati.map((g) => g.capability)).toEqual(['sys_inspect']);
-      expect(righe.some((riga) => riga.startsWith('sys_inspect tagliato'))).toBe(true);
-      expect(righe.some((riga) => riga.includes('send_file'))).toBe(false);
+      const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
+      const eligible = visibleTools(
+        runtime.deps.tools,
+        owner,
+        runtime.deps.capabilities,
+        runtime.deps.grants?.get('host'),
+      );
+      const discoveryTool = eligible.find(
+        (tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME,
+      );
+      expect(discoveryTool).toBeDefined();
+      const projection = createCapabilityExposure({
+        eligible,
+        maxToolsExposed: runtime.deps.profile.maxToolsExposed,
+        discoveryTool: discoveryTool!,
+      });
+      expect(projection.pressured).toBe(true);
+      expect(projection.exposed.map((t) => t.spec.name)).not.toContain('send_file');
+
+      const found = projection.discovery?.searchAndLoad('send file to the user', 2);
+      expect(found?.loaded.map((entry) => entry.name)).toContain('send_file');
+      projection.discovery?.activatePending();
+      expect(projection.exposed.map((t) => t.spec.name)).toContain('send_file');
     } finally {
       runtime.close();
     }
   });
+
 });
 
 /**
@@ -261,15 +237,23 @@ describe('cosa raggiunge un membro, con e senza grant (ADR-0073)', () => {
     externalId: 'u1',
   });
 
-  /** Il menu che il modello vede per quel principal, per nome di tool. */
+  /** Il menu iniziale che il modello vede per quel principal, per nome di tool. */
   function menu(runtime: ReturnType<typeof buildRuntime>, tenantId: string): string[] {
-    return visibleTools(
+    const eligible = visibleTools(
       runtime.deps.tools,
       membro(tenantId),
       runtime.deps.capabilities,
       runtime.deps.grants?.get(tenantId),
-    )
-      .map((t) => t.spec.name)
+    );
+    const discoveryTool = eligible.find(
+      (tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME,
+    );
+    return createCapabilityExposure({
+      eligible,
+      maxToolsExposed: runtime.deps.profile.maxToolsExposed,
+      ...(discoveryTool === undefined ? {} : { discoveryTool }),
+    })
+      .exposed.map((t) => t.spec.name)
       .sort();
   }
 
@@ -317,6 +301,7 @@ describe('cosa raggiunge un membro, con e senza grant (ADR-0073)', () => {
       expect(raggiunte(runtime, STANZA_SENZA)).toEqual([
         'documents.read',
         'memory.read',
+        'sys.capability_discover',
         'sys.http',
       ]);
       expect(menu(runtime, STANZA_SENZA)).toEqual([

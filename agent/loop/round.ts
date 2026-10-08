@@ -403,6 +403,12 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       });
     }
 
+    // #469: a capability search stages schemas during a tool batch and changes
+    // the provider-visible projection only at the following model boundary.
+    // Execution authority is deliberately unchanged: a directly named
+    // registered tool still goes through runTool + the kernel.
+    toolContext.capabilityDiscovery?.activatePending();
+
     const reasoning = reasoningFromLegacyThinking(deps.profile.thinking);
     const call: ChatCall = {
       model: deps.model,

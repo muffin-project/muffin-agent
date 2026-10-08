@@ -1136,11 +1136,11 @@ describe('main model config is a turn-boundary input', () => {
     // qui non è cambiato, e resta quello.
     expect(runtime.light.provider).not.toBe(bootLightProvider);
     expect(runtime.light.model).toBe(bootLightModel);
-    expect(
-      runtime.capabilityGaps.some(
-        (gap) => gap.kind === 'truncated' && gap.reason.includes('profilo "conservative"'),
-      ),
-    ).toBe(true);
+    // #469: a profile refresh may lower the schema ceiling, but that no
+    // longer makes otherwise authorized capabilities unavailable. The fresh
+    // turn uses discovery under pressure instead of materializing a false
+    // truncation gap at runtime level.
+    expect(runtime.capabilityGaps.filter((gap) => gap.kind === 'truncated')).toEqual([]);
 
     runtime.close();
   });
