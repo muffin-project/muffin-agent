@@ -766,6 +766,40 @@ items live in `docs/evidence/shell-containment-2026-09-21.md`.
 Symlink, hardlink, ancestor-symlink and path-canonicalisation behaviour are part
 of the security claim rather than filesystem edge cases.
 
+### 9.3 Git hook creation in a compound shell call
+
+The workspace grants writes to project files, not authority to install trusted
+Git hooks. `nestedGitHooksDirs()` still denies hook directories that exist
+before a command starts. It cannot see a nested repository created later in the
+same shell invocation, so the operating-system profile supplies the second
+boundary: Linux requires `scripts/install/bwrap.apparmor` loaded against the
+real bwrap path with `userns`, explicit allow rules and write/link denies for
+Git's active hook names. Its `pix` rule stacks bwrap children under the same
+deny policy; that transition matters because bwrap sets `no-new-privs` before it
+executes the command. Capability stripping for shell children is deliberately
+not part of this profile: on nested or containerized hosts it breaks userns
+setup for every contained command (measured on hosted CI as `contain_failed`
+on all shell tests), so it waits for real-host validation as a separate
+follow-up. The hook-deny boundary does not depend on it. macOS Seatbelt's
+hook-path deny remains in force.
+
+Before shell execution, `SandboxExecutor` tests the real `SandboxManager` path
+with ordinary writes, nested `git init`/`git add`, and every active hook name in
+a newly-created `nested/.git/hooks`. Linux uses Git's default templates, so
+`*.sample` files must remain writable; macOS uses an empty template because
+Seatbelt denies writes anywhere under the hook directory. If any active hook
+write succeeds, the sandbox reports `git_hooks_unprotected` and refuses the
+caller's command. The production `shell_run_write` wiring test also checks
+`fsmonitor-watchmanv2` and the existing top-level hook deny. Ubuntu hosts
+without the matching profile therefore lose shell execution rather than
+silently running without this boundary.
+
+This claim covers direct active hook filenames under `.git/hooks`. Git's
+`core.hooksPath`, a Git directory outside the worktree, or redirected paths are
+separate cases owned by #657; this rule does not claim to cover them. The
+decision and test scope are recorded in
+`docs/evidence/shell-nested-git-hook-protection-2026-10-07.md`.
+
 Process inspection should expose only the information required by the declared
 capability; command-line arguments are particularly sensitive because they may
 contain secrets or private data.

@@ -1,0 +1,71 @@
+# AppArmor policy for Muffin's bubblewrap sandbox.
+#
+# Replace <BWRAP_BINARY> with the real host bwrap path before loading this
+# profile. CI renders it for /usr/bin/bwrap; native Linux installs must use the
+# path returned by `command -v bwrap`.
+#
+# Bubblewrap sets no-new-privs before execing its command. AppArmor's upstream
+# bwrap-userns-restrict profile documents that children must be stacked against
+# the bwrap policy in this case; the explicit pix transition below keeps the
+# hook denies effective for every stacked child.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile muffin-bwrap <BWRAP_BINARY> flags=(attach_disconnected,mediate_deleted) {
+  # Bubblewrap needs these rights while constructing its namespaces. Its child
+  # processes are stacked against muffin-unpriv-bwrap so the hook denies below
+  # stay effective for them.
+  allow capability,
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow ptrace,
+  allow signal,
+  allow mqueue,
+  allow io_uring,
+  allow userns,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow dbus,
+
+  # Explicitly deny every active hook filename documented by Git's githooks
+  # manual, including both supported fsmonitor-watchman names. Keep *.sample
+  # files writable so a normal git init retains its default templates.
+  deny /**/.git/hooks/{applypatch-msg,pre-applypatch,post-applypatch,pre-commit,pre-merge-commit,prepare-commit-msg,commit-msg,post-commit,pre-rebase,post-checkout,post-merge,pre-push,pre-receive,update} wl,
+  deny /**/.git/hooks/{proc-receive,post-receive,post-update,reference-transaction,push-to-checkout,pre-auto-gc,post-rewrite,sendemail-validate,fsmonitor-watchman,fsmonitor-watchmanv2,p4-changelist,p4-prepare-changelist,p4-post-changelist,p4-pre-submit,post-index-change} wl,
+
+  # bwrap sets no-new-privs. Use an explicit stack because an implicit exec
+  # transition can leave children outside the active-hook deny rules.
+  allow pix /** -> &muffin-bwrap//&muffin-unpriv-bwrap,
+
+  include if exists <local/bwrap>
+}
+
+profile muffin-unpriv-bwrap flags=(attach_disconnected,mediate_deleted) {
+  # Keep normal shell/Git commands usable. Repeated child transitions collapse
+  # duplicate stack entries. Capabilities stay allowed here on purpose:
+  # enforce mode denies anything not explicitly allowed, so a child profile
+  # without a capability rule strips every capability from stacked children —
+  # which breaks userns setup on nested or containerized hosts (measured on
+  # hosted CI: every contained command failed with contain_failed, "nested
+  # userns is capability-restricted"). The hook-deny boundary lives in the
+  # parent profile and still applies to this stack; capability hardening for
+  # shell children is a separate follow-up for real-host validation.
+  allow capability,
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow ptrace,
+  allow signal,
+  allow mqueue,
+  allow io_uring,
+  allow userns,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow dbus,
+  allow pix /** -> &muffin-unpriv-bwrap,
+
+  include if exists <local/unpriv-bwrap>
+}

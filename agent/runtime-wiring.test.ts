@@ -1,19 +1,29 @@
-import DatabaseCtor from 'better-sqlite3';
-import { mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
-import { runInit } from '../cli/init.js';
-import { loadConfig, paths, saveConfig, secretDir } from '../core/config/config.js';
-import { UndoJournal } from '../core/undo/journal.js';
-import { cmdUndo } from '../cli/undo.js';
-import { seal } from '../core/rot/verify.js';
-import { buildRuntime } from './runtime.js';
 import { runDoctor } from '../cli/doctor.js';
+import { runInit } from '../cli/init.js';
+import { cmdUndo } from '../cli/undo.js';
+import { loadConfig, paths, saveConfig, secretDir } from '../core/config/config.js';
 import { muffinWorkspace } from '../core/config/workspace.js';
-import { enqueueTurn, runTurn, type LoopDeps, type ToolContext } from './loop.js';
-import type { ChatCall, ChatResult, Provider } from './providers/types.js';
 import type { Principal } from '../core/policy/types.js';
+import { seal } from '../core/rot/verify.js';
+import { probeSandbox } from '../core/sandbox/probe.js';
+import { UndoJournal } from '../core/undo/journal.js';
+import { enqueueTurn, type LoopDeps, runTurn, type ToolContext } from './loop.js';
+import type { ChatCall, ChatResult, Provider } from './providers/types.js';
+import { buildRuntime } from './runtime.js';
 
 /**
  * The joins `buildRuntime` is responsible for, asserted through a real turn.
@@ -38,9 +48,11 @@ import type { Principal } from '../core/policy/types.js';
 
 class Scripted implements Provider {
   readonly kind = 'openai-compat' as const;
+  readonly calls: ChatCall[] = [];
   private i = 0;
   constructor(private readonly script: ChatResult[]) {}
-  async chat(): Promise<ChatResult> {
+  async chat(call: ChatCall): Promise<ChatResult> {
+    this.calls.push(call);
     return this.script[this.i++] ?? {
       text: 'fine', toolCalls: [], stopReason: 'end',
       usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 }, model: 't',
@@ -59,6 +71,93 @@ const fetchCall = (url: string): ChatResult => ({
 const member: Principal = {
   kind: 'member', connector: 'telegram', tenantId: 'group:telegram:42', externalId: 'u1',
 };
+
+const productionSandboxAvailable =
+  probeSandbox().available || process.env.MUFFIN_REQUIRE_SANDBOX === '1';
+
+describe('the registered shell write tool contains Git hooks through the production runtime', () => {
+  const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
+
+  it.runIf(productionSandboxAvailable)(
+    'one real turn keeps ordinary writes and nested Git tracking while denying new nested and top-level hooks',
+    async () => {
+      const home = homeAllowing('ok.example.com');
+      const workspace = mkdtempSync(join(tmpdir(), 'muffin-wiring-shell-hooks-'));
+      const template = join(workspace, 'empty-template');
+      mkdirSync(join(template, 'hooks'), { recursive: true });
+      // The root repository exists before the shell call, so the existing
+      // concrete deny path protects its hook directory. The nested repository
+      // is created by the model's one compound command and must be protected
+      // by the host-level hook policy instead.
+      execFileSync('git', ['init', '--quiet', `--template=${template}`, workspace], { stdio: 'pipe' });
+
+      const nestedInit =
+        process.platform === 'darwin'
+          ? 'git init --quiet --template=empty-template nested'
+          : 'git init --quiet nested';
+      const command = [
+        'mkdir -p ordinary',
+        'printf ordinary > ordinary/file.txt',
+        nestedInit,
+        'printf tracked > nested/tracked.txt',
+        'git -C nested add tracked.txt',
+        'mkdir -p nested/.git/hooks',
+        'if printf nested-hook > nested/.git/hooks/pre-commit; then printf writable; else printf denied; fi > nested-hook-result.txt',
+        'if printf nested-fsmonitor > nested/.git/hooks/fsmonitor-watchmanv2; then printf writable; else printf denied; fi > nested-fsmonitor-result.txt',
+        'if printf top-level-hook > .git/hooks/pre-commit; then printf writable; else printf denied; fi > top-level-hook-result.txt',
+      ].join(' && ');
+
+      const runtime = buildRuntime(home, workspace);
+      try {
+        expect(runtime.deps.tools.some((tool) => tool.spec.name === 'shell_run_write')).toBe(true);
+        const provider = new Scripted([{
+          text: null,
+          toolCalls: [{ id: 'shell-hooks-1', name: 'shell_run_write', args: { command } }],
+          stopReason: 'tool_use',
+          usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          model: 't',
+        }]);
+        const deps: LoopDeps = {
+          ...runtime.deps,
+          provider,
+          approve: async () => 'allow',
+        };
+
+        await runTurn(deps, {
+          principal: owner,
+          tenant: 'host',
+          surface: 'cli',
+          session: deps.sessions.open('shell-hooks-1'),
+          text: 'crea un repository annidato e prova a installare un hook',
+        });
+
+        const toolResults = provider.calls
+          .flatMap((call) => call.messages)
+          .flatMap((message) => message.content)
+          .filter((block) => block.type === 'tool_result')
+          .map((block) => block.content)
+          .join('\n');
+        // The mutation job removes only AppArmor's explicit hook rules. This
+        // assertion then fails with the self-test's typed reason, before a
+        // later missing-file check can obscure which guarantee regressed.
+        expect(toolResults).not.toContain('git_hooks_unprotected');
+        expect(readFileSync(join(workspace, 'ordinary', 'file.txt'), 'utf8')).toBe('ordinary');
+        expect(readFileSync(join(workspace, 'nested', 'tracked.txt'), 'utf8')).toBe('tracked');
+        expect(readFileSync(join(workspace, 'nested', '.git', 'index'))).toBeTruthy();
+        expect(readFileSync(join(workspace, 'nested-hook-result.txt'), 'utf8')).toBe('denied');
+        expect(readFileSync(join(workspace, 'nested-fsmonitor-result.txt'), 'utf8')).toBe('denied');
+        expect(readFileSync(join(workspace, 'top-level-hook-result.txt'), 'utf8')).toBe('denied');
+        expect(existsSync(join(workspace, 'nested', '.git', 'hooks', 'pre-commit'))).toBe(false);
+        expect(
+          existsSync(join(workspace, 'nested', '.git', 'hooks', 'fsmonitor-watchmanv2')),
+        ).toBe(false);
+        expect(existsSync(join(workspace, '.git', 'hooks', 'pre-commit'))).toBe(false);
+      } finally {
+        runtime.close();
+      }
+    },
+  );
+});
 
 /** A home whose root of trust allows exactly one host. */
 function homeAllowing(host: string): string {

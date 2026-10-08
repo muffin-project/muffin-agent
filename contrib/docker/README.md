@@ -188,16 +188,25 @@ for up to 60 s, and Docker's default 10 s would kill it mid-drain.
 
 | Posture | Command | Effect on the container |
 |---|---|---|
-| default | `docker compose up -d` | Docker's default seccomp and AppArmor. On the engines measured, the default seccomp profile refuses user namespaces, so the shell tools are off; an engine whose defaults allow them would contain here, and `doctor` would say so |
+| default | `docker compose up -d` | Docker's default seccomp and AppArmor. On the engines measured, the default seccomp profile refuses user namespaces, so the shell tools are off; if an engine lets bwrap run, the active-hook self-test must also pass or shell calls are refused |
 | sandbox | `docker compose -f compose.yaml -f compose.sandbox.yaml up -d` | `seccomp=unconfined` (user namespaces) and `systempaths=unconfined` (unmasked `/proc`); no capability, no device |
 | sandbox + AppArmor | add `-f compose.apparmor.yaml` after loading `apparmor/muffin-userns` on the host | the container runs under `muffin-userns` instead of Docker's default AppArmor profile: `flags=(unconfined)` plus the `userns` grant, so Docker's default AppArmor confinement is removed as well |
 
-Measured results (details in the evidence file):
+Earlier Docker measurements from 2026-09-26, before the nested active-hook
+guard (details in the evidence file):
 
 | Host | default | sandbox | sandbox + AppArmor |
 |---|---|---|---|
 | Linux without AppArmor (WSL2 kernel 6.18) | shell off | contained | n/a (option ignored) |
 | Ubuntu 24.04 with `apparmor_restrict_unprivileged_userns=1` (Docker 29.6, Compose 5.1.4) | shell off | shell off: Docker's default AppArmor profile denies the mounts bubblewrap needs (with `apparmor=unconfined` instead: `userns_denied`) | contained |
+
+The current Linux shell guard verifies writes to every active Git hook name at
+runtime. The existing `compose.apparmor.yaml` override selects its AppArmor
+profile for the whole container and does not apply the native per-bwrap hook
+policy. If the runtime probe can create an active hook, shell calls are refused
+before the requested command runs. Treat Docker shell execution as
+unavailable until a container profile preserves Docker's default restrictions
+and passes the same runtime and mutation checks.
 
 `privileged: true` is deliberately **not** offered: it grants every device and
 capability to the container, and `docs/user/INSTALL.md` rules it out. Never mount
@@ -235,6 +244,7 @@ sudo aa-status | grep muffin-userns
 | the gateway restarts in a loop; `docker compose ps -a` shows exit code 78 | a permanent error: missing config, a rejected key, a Root of Trust that refuses. systemd leaves the gateway down on this code; Docker's restart policy has no per-code exception and keeps retrying | `docker compose stop gateway`, then `docker compose run --rm gateway muffin doctor` and `muffin rot verify` |
 | `bwrap: No permissions to create new namespace` | default seccomp profile | sandbox override |
 | `userns_denied ... RTM_NEWADDR` | AppArmor user-namespace restriction | load the profile, add `compose.apparmor.yaml` |
+| shell call reports `git_hooks_unprotected` | the nested-hook self-test can write an active Git hook | on native Linux, load the shared profile against the exact host bwrap binary; Docker shell execution has no accepted AppArmor policy yet |
 | `bwrap: Failed to make / slave: Permission denied` | Docker's default AppArmor profile denies mounts | load the profile, add `compose.apparmor.yaml` |
 | `Can't mount proc on /proc` | Docker masks `/proc` | make sure `compose.sandbox.yaml` is applied (`systempaths=unconfined`) |
 | container does not start after adding `compose.apparmor.yaml` | profile not loaded on an AppArmor host | load it, or drop that override |
