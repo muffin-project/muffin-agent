@@ -115,20 +115,12 @@ describe('the registered shell write tool contains Git hooks through the product
         'printf tracked > nested/tracked.txt',
         'git -C nested add tracked.txt',
         aliasInit,
-        'mkdir -p alias2/redirected',
-        'printf planted > alias2/redirected/pre-commit',
-        'printf evil2 > ordinary/evil2',
+        // Hardlink installs are refused on every platform; the symlink
+        // replacement is attempted and recorded but gated on none (tripwire:
+        // both platforms report writable today — see the leg docstring).
         'if ln ordinary/evil2 alias2/.git/hooks/pre-commit 2>/dev/null; then printf writable; else printf denied; fi > hardlink-result.txt',
         'rm -rf alias2/.git/hooks',
-        // Linux must refuse the replacement (link-deny); macOS Seatbelt has
-        // no rule for the hooks entry itself, so there the attempt is
-        // recorded but not gated — and no through-write is attempted.
         'if ln -s ../redirected alias2/.git/hooks 2>/dev/null; then printf writable; else printf denied; fi > alias-result.txt',
-        ...(process.platform === 'linux'
-          ? [
-              'if printf hook > alias2/.git/hooks/pre-commit 2>/dev/null; then printf writable; else printf denied; fi > alias-write-result.txt',
-            ]
-          : []),
         'if printf hook > pre/.git/hooks/pre-commit 2>/dev/null; then printf writable; else printf denied; fi > pre-result.txt',
         'mkdir -p nested/.git/hooks',
         'if printf nested-hook > nested/.git/hooks/pre-commit; then printf writable; else printf denied; fi > nested-hook-result.txt',
@@ -181,14 +173,10 @@ describe('the registered shell write tool contains Git hooks through the product
         expect(readFileSync(join(workspace, 'pre-result.txt'), 'utf8')).toBe('denied');
         expect(readFileSync(join(workspace, 'rename-result.txt'), 'utf8')).toBe('denied');
         expect(readFileSync(join(workspace, 'top-level-hook-result.txt'), 'utf8')).toBe('denied');
-        if (process.platform === 'linux') {
-          // The replacement itself must fail where the link-deny applies.
-          expect(readFileSync(join(workspace, 'alias-result.txt'), 'utf8')).toBe('denied');
-          expect(readFileSync(join(workspace, 'alias-write-result.txt'), 'utf8')).toBe('denied');
-          expect(readFileSync(join(workspace, 'alias2', 'redirected', 'pre-commit'), 'utf8')).toBe(
-            'planted\n',
-          );
-        }
+        // Tripwire: the mid-command replacement succeeds on every platform
+        // today (no per-path symlink mediation) — recorded, not gated. The
+        // day this flips to denied, re-gate it and update the claim.
+        expect(readFileSync(join(workspace, 'alias-result.txt'), 'utf8')).toBe('writable');
         // The pre-existing symlink still points at its target, but nothing was
         // written through it on any platform.
         expect(readFileSync(join(workspace, 'pre-resolved', 'pre-commit'), 'utf8')).toBe('planted\n');

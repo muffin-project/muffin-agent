@@ -61,6 +61,25 @@ self-test leg attempting the #865 repro through the production door, and the
 CI rule-removal mutation extended to the `l` rule. If the Linux run falsifies
 A, stop and bring candidate B/C to the owner instead of stacking workarounds.
 
+## 6. Amendment 2026-10-08 — candidate A falsified on Linux
+
+The exact-head hosted run (PR #868, first Linux CI) failed all shell tests at
+`initialize`: the leg's per-door attribution read
+`direct:denied alias:created alias-write:allowed hardlink:denied pre:denied
+rename:denied`. The `ln -s` succeeded with the full profile — including
+`deny /**/.git/hooks l` — loaded. AppArmor `l` mediates hardlink, not
+`symlink()` creation (which needs parent-dir write and cannot be denied
+per-path). Candidate A is dead; the `l` rule is removed as vacuous (hardlink
+installs were already covered by the filename `wl` denies, now with an
+explicit gated attempt).
+
+What ships instead: direct + hardlink + pre-existing + rename, all gated on
+both platforms; the mid-command replacement stays attempted-and-recorded
+(tripwire) on every platform, denied on none. The residual is owned openly,
+not claimed. Candidate B (post-command scan) is not built: with the gated
+doors closed, nothing persists silently except through the recorded residual,
+and a scanner would add a mechanism without closing it either.
+
 Peer note: no peer sandbox comparison was dispositive here — the question is
 AppArmor mediation semantics plus Git lookup behavior, both primary-source and
 locally probed above. Most peer sandboxes do not protect Git hooks at all;

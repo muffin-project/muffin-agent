@@ -785,26 +785,29 @@ hook-path deny remains in force.
 
 Before shell execution, `SandboxExecutor` tests the real `SandboxManager` path
 with ordinary writes, nested `git init`/`git add`, every active hook name in
-a newly-created `nested/.git/hooks`, a mid-command hooks-dir replacement by a
-symlink, a write through a pre-existing hooks symlink, and a rename into
-place. Linux uses Git's default templates, so `*.sample` files must remain
-writable; macOS uses an empty template because Seatbelt denies writes anywhere
-under the hook directory. If any hook install succeeds, the sandbox reports
-`git_hooks_unprotected` and refuses the caller's command. The production
-`shell_run_write` wiring test also checks `fsmonitor-watchmanv2` and the
-existing top-level hook deny. Ubuntu hosts without the matching profile
-therefore lose shell execution rather than silently running without this
-boundary. The pre-existing-symlink door is covered on both platforms by
-resolving the scanned hooks path to its concrete target; the mid-command
-replacement is denied on Linux by the hooks-path link rule, while on macOS
-Seatbelt has no rule for the hooks entry itself, so there the attempt is
-recorded but not gated (documented platform gap, not a silent pass).
+a newly-created `nested/.git/hooks`, a hardlink install, a write through a
+pre-existing hooks symlink, and a rename into place. Linux uses Git's default
+templates, so `*.sample` files must remain writable; macOS uses an empty
+template because Seatbelt denies writes anywhere under the hook directory. If
+any gated hook install succeeds, the sandbox reports `git_hooks_unprotected`
+and refuses the caller's command. The production `shell_run_write` wiring test
+also checks `fsmonitor-watchmanv2` and the existing top-level hook deny.
+Ubuntu hosts without the matching profile therefore lose shell execution
+rather than silently running without this boundary. The pre-existing-symlink
+door is covered on both platforms by resolving the scanned hooks path to its
+concrete target. A mid-command hooks-dir replacement (`rm -rf` + `ln -s`) is
+attempted and recorded on every platform but gated on none: AppArmor has no
+per-path symlink mediation (measured with the full profile loaded), and
+neither does Seatbelt for the hooks entry itself — so the marker is a
+tripwire, not a proof, and the residual stays explicitly open (see below).
 
 This claim covers direct active hook filenames under a real `.git/hooks`
-directory plus the symlink-alias shapes above. Git's `core.hooksPath` or a Git
-directory outside the worktree remain owned by #657; symlink path redirection
-is owned by #865, which this section now implements. This rule does not claim
-to cover anything else. The
+directory, hardlink installs, writes through pre-existing symlinks, and
+renames into place. Git's `core.hooksPath` or a Git directory outside the
+worktree remain owned by #657. The mid-command symlink replacement is the
+remaining #865 residual: attempted and recorded by the self-test and the
+wiring test on every platform, denied on none, tracked openly rather than
+claimed. The
 decision and test scope are recorded in
 `docs/evidence/shell-nested-git-hook-protection-2026-10-07.md`.
 

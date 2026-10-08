@@ -64,7 +64,7 @@ const available = (): SandboxProbe => ({ available: true, mechanism: 'bubblewrap
 const denyReadOf = (customConfig: Partial<SandboxRuntimeConfig> | undefined): readonly string[] =>
   customConfig?.filesystem?.denyRead ?? [];
 
-function mockProtectedSandbox(options: { hookWriteAllowed?: boolean; hookAliasCreated?: boolean; hookHardlinkAllowed?: boolean; unixFilterAbsent?: boolean } = {}): void {
+function mockProtectedSandbox(options: { hookWriteAllowed?: boolean; hookHardlinkAllowed?: boolean; unixFilterAbsent?: boolean } = {}): void {
   wrapWithSandboxArgv.mockImplementation(async (command, _binShell, customConfig) => ({
     argv:
       denyReadOf(customConfig).length > 0
@@ -82,10 +82,11 @@ function mockProtectedSandbox(options: { hookWriteAllowed?: boolean; hookAliasCr
                     return `muffin-hook-write: ${result}:${hook}`;
                   })
                   .join('\\n');
-                const aliasMarker =
-                  options.hookAliasCreated || process.platform !== 'linux' ? 'created' : 'denied';
+                // A mid-command hooks-dir replacement succeeds on every
+                // platform (no per-path symlink mediation): the leg records
+                // the marker without gating on it.
                 const hardlinkMarker = options.hookHardlinkAllowed ? 'allowed' : 'denied';
-                return `printf "muffin-apparmor-label: muffin-bwrap//&muffin-unpriv-bwrap (enforce)\\n${hookResults}\\nmuffin-hook-alias: ${aliasMarker}\\nmuffin-hook-alias-write: denied\\nmuffin-hook-hardlink: ${hardlinkMarker}\\nmuffin-hook-pre: denied\\nmuffin-hook-rename: denied\\nmuffin sandbox hook self-test positive controls passed\\n"`;
+                return `printf "muffin-apparmor-label: muffin-bwrap//&muffin-unpriv-bwrap (enforce)\\n${hookResults}\\nmuffin-hook-alias: created\\nmuffin-hook-hardlink: ${hardlinkMarker}\\nmuffin-hook-pre: denied\\nmuffin-hook-rename: denied\\nmuffin sandbox hook self-test positive controls passed\\n"`;
               })(),
             ]
           : command.includes('afunix.sock') && !options.unixFilterAbsent
@@ -230,31 +231,25 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     expect(existsSync(witness)).toBe(false);
   });
 
-  it.runIf(process.platform === 'linux')(
-    'a hooks dir replaced by a symlink mid-command makes the sandbox unavailable before the caller command runs',
-    async () => {
-      // Fault injection for the missing link-deny (#865): direct writes still
-      // fail, but the alias itself gets created. Linux-only: on macOS the
-      // replacement is a recorded platform gap, not a shell-killing event.
-      mockProtectedSandbox({ hookAliasCreated: true });
+  it('a mid-command hooks-dir replacement is recorded without refusing the shell', async () => {
+    // No per-path symlink mediation exists (measured on Linux with the full
+    // profile loaded), so a created alias is the documented residual, not a
+    // shell-killing event. This pins the record-only semantics: the day the
+    // marker flips to denied, re-gate it. The default mock already emits a
+    // created alias alongside every denial.
+    mockProtectedSandbox();
 
-      const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
-      toClose = executor;
+    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+    toClose = executor;
 
-      const status = await executor.verify();
-      expect(status.available).toBe(false);
-      if (status.available) return;
-      expect(status.reason).toBe('git_hooks_unprotected');
-      expect(status.detail).toContain('symlink');
+    const status = await executor.verify();
+    expect(status).toEqual({ available: true, mechanism: 'bubblewrap' });
 
-      const dir = mktempWorkspace();
-      const witness = join(dir, 'caller-command-ran.txt');
-      await expect(
-        executor.run({ command: `touch '${witness}'`, cwd: dir, writeScope: [dir] }),
-      ).rejects.toThrow(/sandbox unavailable: git_hooks_unprotected/);
-      expect(existsSync(witness)).toBe(false);
-    },
-  );
+    const dir = mktempWorkspace();
+    const witness = join(dir, 'caller-command-ran.txt');
+    await executor.run({ command: `touch '${witness}'`, cwd: dir, writeScope: [dir] });
+    expect(existsSync(witness)).toBe(true);
+  });
 
   it("the reperto itself: the real invocation cannot even run an unrestricted command (bwrap dies on /proc) — contain_failed, and run() never reaches the caller's command", async () => {
     wrapWithSandboxArgv.mockImplementation(async () => ({ argv: BROKEN_INVOCATION, env: {} }));

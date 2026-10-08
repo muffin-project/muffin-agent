@@ -836,16 +836,9 @@ export class SandboxExecutor {
    * Three shapes, one typed failure:
    *
    * - direct: every active hook name written under a `nested/.git/hooks`
-   *   created mid-command (host profile rule, no concrete path exists yet);
-   * - alias (#865): a second fresh directory (`alias2`) is git-initialized
-   *   mid-command, its real hooks dir removed, and a symlink planted in its
-   *   place — because no concrete deny can name a path that did not exist
-   *   when the sandbox was built, only the host link rule stands in the way.
-   *   On Linux the `ln -s` must fail (link-deny on the hooks path). On macOS
-   *   Seatbelt has no equivalent rule for the hooks entry itself, so the
-   *   replacement is attempted, recorded, and left as a documented platform
-   *   gap instead of bricking the shell for a door the previous claim never
-   *   covered;
+   *   created mid-command (host filename rules, no concrete path exists yet);
+   * - hardlink: an ordinary file hardlinked to an active hook name — refused
+   *   by the same filename rules on both platforms;
    * - pre-existing: `pre/.git/hooks` is already a symlink to `pre-resolved`
    *   before the guarded call, so the production pre-scan
    *   (`nestedGitHooksDirs`, which resolves symlinks to concrete targets)
@@ -855,11 +848,18 @@ export class SandboxExecutor {
    * A rename into place (`mv ordinary/evil nested/.git/hooks/pre-commit`) is
    * attempted too: installing a hook is not only redirection.
    *
-   * The pre-existing-symlink fixture runs host-side on purpose: creating it
-   * through the sandboxed door is exactly what the new rule forbids, so the
-   * guarded call could never set up its own fixture. Only the attacks and the
-   * positive controls go through the door. Planted contents (`planted`) prove
-   * no through-write silently overwrote a hook behind the markers.
+   * A mid-command hooks-dir replacement (`rm -rf` + `ln -s`) is attempted and
+   * recorded on every platform, but deliberately not gated: AppArmor has no
+   * per-path symlink mediation (measured with the full profile loaded: the
+   * replacement succeeds), and neither does Seatbelt for the hooks entry
+   * itself. Gating it would refuse the shell wherever the door is open
+   * instead of proving anything closed. The marker is a tripwire — the day it
+   * flips to denied, re-gate it and update the claim.
+   *
+   * The pre-existing-symlink fixture runs host-side because only it needs to
+   * exist before the guarded call. Planted contents (`planted`) in the
+   * resolved target prove no through-write silently overwrote a hook behind
+   * the markers; they are asserted host-side, naming the exact door.
    */
   private async selfTestNestedGitHookWrite(cwd: string): Promise<ContainmentFailure | null> {
     try {
@@ -893,27 +893,17 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
       'mkdir -p nested/.git/hooks',
       `for hook in ${ACTIVE_GIT_HOOK_NAMES.join(' ')}; do if printf hook > "nested/.git/hooks/$hook" 2>/dev/null; then printf "muffin-hook-write: allowed:%s\\n" "$hook"; else printf "muffin-hook-write: denied:%s\\n" "$hook"; fi; done`,
       // Mid-command replacement: alias2 does not exist when the sandbox (and
-      // every deny list) is built, so only the host link rule stands in the
-      // way. Linux must refuse; macOS Seatbelt has no rule for the hooks
-      // entry itself (see the method docstring), so there the attempt is
-      // recorded but not gated — and no through-write is attempted, leaving
-      // nothing installed behind the marker. Planted contents are asserted
-      // host-side below (not in-shell), so a mismatch names the exact door
-      // instead of aborting the compound early and shadowing later markers.
+      // every deny list) is built. The hardlink install is gated on every
+      // platform; the symlink replacement is attempted and recorded but
+      // gated on none (see the method docstring) — no through-write is
+      // attempted, leaving nothing installed behind the marker.
       ...(process.platform === 'darwin'
         ? ['git init --quiet --template=empty-template alias2']
         : ['git init --quiet alias2']),
-      'mkdir -p alias2/redirected',
-      'printf planted > alias2/redirected/pre-commit',
       'printf evil2 > ordinary/evil2',
       'if ln ordinary/evil2 alias2/.git/hooks/pre-commit 2>/dev/null; then printf "muffin-hook-hardlink: allowed\\n"; else printf "muffin-hook-hardlink: denied\\n"; fi',
       'rm -rf alias2/.git/hooks',
       'if ln -s ../redirected alias2/.git/hooks 2>/dev/null; then printf "muffin-hook-alias: created\\n"; else printf "muffin-hook-alias: denied\\n"; fi',
-      ...(process.platform === 'linux'
-        ? [
-            'if printf hook > alias2/.git/hooks/pre-commit 2>/dev/null; then printf "muffin-hook-alias-write: allowed\\n"; else printf "muffin-hook-alias-write: denied\\n"; fi',
-          ]
-        : []),
       'if printf hook > pre/.git/hooks/pre-commit 2>/dev/null; then printf "muffin-hook-pre: allowed\\n"; else printf "muffin-hook-pre: denied\\n"; fi',
       'if mv ordinary/evil nested/.git/hooks/pre-commit 2>/dev/null; then printf "muffin-hook-rename: allowed\\n"; else printf "muffin-hook-rename: denied\\n"; fi',
       'test -f ordinary/file.txt',
@@ -978,20 +968,13 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
     const doors = {
       direct: /muffin-hook-write: allowed:([a-z0-9-]+)/.exec(result.stdout)?.[1] ?? null,
       aliasReplaced,
-      aliasWrite: result.stdout.includes('muffin-hook-alias-write: allowed'),
       hardlink: result.stdout.includes('muffin-hook-hardlink: allowed'),
       pre: result.stdout.includes('muffin-hook-pre: allowed'),
       rename: result.stdout.includes('muffin-hook-rename: allowed'),
     };
-    const doorSummary = `direct:${doors.direct ?? 'denied'} alias:${aliasReplaced ? 'created' : 'denied'} alias-write:${doors.aliasWrite ? 'allowed' : 'denied'} hardlink:${doors.hardlink ? 'allowed' : 'denied'} pre:${doors.pre ? 'allowed' : 'denied'} rename:${doors.rename ? 'allowed' : 'denied'}`;
+    const doorSummary = `direct:${doors.direct ?? 'denied'} alias:${aliasReplaced ? 'created' : 'denied'} hardlink:${doors.hardlink ? 'allowed' : 'denied'} pre:${doors.pre ? 'allowed' : 'denied'} rename:${doors.rename ? 'allowed' : 'denied'}`;
     const unprotected =
       (doors.direct ??
-      // The mid-command replacement gates Linux only: macOS Seatbelt has no
-      // rule for the hooks entry itself, so there a created alias is the
-      // documented platform gap (recorded by the marker, installed nothing —
-      // no through-write is attempted on darwin), not a shell-killing event.
-      (aliasReplaced && process.platform === 'linux' ? 'hooks dir replaced by a symlink mid-command' : null) ??
-      (doors.aliasWrite ? 'write through a mid-command hooks symlink' : null) ??
       (doors.hardlink ? 'hardlink into hooks' : null) ??
       (doors.pre ? 'write through a pre-existing hooks symlink' : null) ??
       (doors.rename ? 'rename into hooks' : null));
@@ -1003,28 +986,21 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
           'on Linux, render scripts/install/bwrap.apparmor for the exact host bwrap binary and load it; the writer label should contain muffin-bwrap//&muffin-unpriv-bwrap. See docs/user/INSTALL.md. On macOS verify Seatbelt still denies .git/hooks writes. Shell calls remain refused until the check holds',
       };
     }
-    // Planted contents are asserted host-side: a through-write that the markers
-    // somehow missed still shows up here, naming the exact door.
-    const plantedDoors: Array<[string, string]> = [
-      ['write through a mid-command hooks symlink', join(cwd, 'alias2', 'redirected', 'pre-commit')],
-      ['write through a pre-existing hooks symlink', join(cwd, 'pre-resolved', 'pre-commit')],
-    ];
-    for (const [door, plantedPath] of plantedDoors) {
-      if (process.platform !== 'linux' && door.startsWith('write through a mid-command')) continue;
-      let content: string;
-      try {
-        content = readFileSync(plantedPath, 'utf8');
-      } catch {
-        content = 'UNREADABLE';
-      }
-      if (content !== 'planted\n') {
-        return {
-          reason: 'git_hooks_unprotected',
-          detail: `a contained process installed (or could install) a hook via ${door} after the sandbox profile was built (AppArmor label: ${appArmorLabel}; doors ${doorSummary}; planted file holds ${JSON.stringify(content.slice(0, 40))})`,
-          remedy:
-            'on Linux, render scripts/install/bwrap.apparmor for the exact host bwrap binary and load it; the writer label should contain muffin-bwrap//&muffin-unpriv-bwrap. See docs/user/INSTALL.md. On macOS verify Seatbelt still denies .git/hooks writes. Shell calls remain refused until the check holds',
-        };
-      }
+    // The planted pre-existing hook content is asserted host-side: a
+    // through-write that the markers somehow missed still shows up here.
+    let plantedContent: string;
+    try {
+      plantedContent = readFileSync(join(cwd, 'pre-resolved', 'pre-commit'), 'utf8');
+    } catch {
+      plantedContent = 'UNREADABLE';
+    }
+    if (plantedContent !== 'planted\n') {
+      return {
+        reason: 'git_hooks_unprotected',
+        detail: `a contained process installed (or could install) a hook via write through a pre-existing hooks symlink after the sandbox profile was built (AppArmor label: ${appArmorLabel}; doors ${doorSummary}; planted file holds ${JSON.stringify(plantedContent.slice(0, 40))})`,
+        remedy:
+          'on Linux, render scripts/install/bwrap.apparmor for the exact host bwrap binary and load it; the writer label should contain muffin-bwrap//&muffin-unpriv-bwrap. See docs/user/INSTALL.md. On macOS verify Seatbelt still denies .git/hooks writes. Shell calls remain refused until the check holds',
+      };
     }
     const missingDenials = ACTIVE_GIT_HOOK_NAMES.filter(
       (hook) => !result.stdout.includes(`muffin-hook-write: denied:${hook}`),
@@ -1034,10 +1010,6 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
       result.stdout.includes('muffin-hook-alias: created');
     const missingMarkers = [
       ...(aliasAttempted ? [] : ['muffin-hook-alias attempt']),
-      ...(process.platform === 'linux' &&
-      !result.stdout.includes('muffin-hook-alias-write: denied')
-        ? ['muffin-hook-alias-write: denied']
-        : []),
       ...[
         'muffin-hook-hardlink: denied',
         'muffin-hook-pre: denied',
