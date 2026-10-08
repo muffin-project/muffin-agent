@@ -277,9 +277,30 @@ describe('#469 production-path capability discovery', () => {
     expect(result.stopped).toBe('answered');
     expect(forbiddenCalls).toBe(0);
     expect(provider.seen).toHaveLength(3);
-    for (const call of provider.seen.slice(0, 2)) {
+    for (const call of provider.seen) {
       expect(call.tools?.map((tool) => tool.name) ?? []).not.toContain('forbidden_host_write');
     }
+
+    // The search response must not disclose the forbidden tool or capability.
+    const discoveryReply = provider.seen[1]?.messages
+      .flatMap((message) => message.content)
+      .find((block) => block.type === 'tool_result' && block.toolCallId === 'search-forbidden');
+    expect(discoveryReply?.type).toBe('tool_result');
+    if (discoveryReply?.type !== 'tool_result') throw new Error('discovery reply missing');
+    expect(discoveryReply.content).not.toContain('forbidden_host_write');
+    expect(discoveryReply.content).not.toContain('host.secret_write');
+
+    // The guessed tool name is resolved from the full registry and must
+    // produce the canonical kernel denial, NOT an unknown-tool refusal.
+    // This pins the exact defence-in-depth branch, not merely a handler count.
+    const guessedReply = provider.seen[2]?.messages
+      .flatMap((message) => message.content)
+      .find((block) => block.type === 'tool_result' && block.toolCallId === 'guess-forbidden');
+    expect(guessedReply?.type).toBe('tool_result');
+    if (guessedReply?.type !== 'tool_result') throw new Error('kernel reply missing');
+    expect(guessedReply.isError).toBe(true);
+    expect(guessedReply.content).toContain('principal_forbidden');
+    expect(guessedReply.content).not.toContain('non esiste');
   });
 
 
