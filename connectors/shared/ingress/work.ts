@@ -52,10 +52,14 @@ export type WorkDeps = {
   /**
    * Rules already resolved for this process/tenant.
    *
-   * Deliberately injected rather than persisted here: #605 owns the execution
-   * seam, while the durable projection for message rules is the remaining
-   * design decision. Ordinary production callers omit this and keep today's
-   * zero-rule path byte-for-byte.
+   * This is a narrow execution seam, NOT an implicit consumer of the SQLite
+   * AutomationRuleStore. As of #851 the store persists definitions and the
+   * compileStoredAutomationRule adapter exists, but production gateway/surface
+   * call sites do not yet provide a host-owned action resolver and compiled
+   * rules. Those persisted message.received definitions therefore do NOT run
+   * on live ingress. Tests injecting rules here prove the seam only, not
+   * a production-persisted automation feature. Missing rules keep the existing
+   * zero-rule ingress path unchanged and must never be advertised as active.
    */
   readonly automationRules?: readonly AutomationRule<TurnResult>[] | undefined;
 };
