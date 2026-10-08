@@ -210,17 +210,18 @@ jobs:
           MUFFIN_REQUIRE_SYSTEMD: '1'
         run: npx vitest run --reporter=dot
 
-      # Mutation proof for the AppArmor hook rule: restore only the shared
-      # profile's hook policy, then run the same production-path test. Its
-      # failure must name git_hooks_unprotected, so an unrelated setup failure
-      # cannot masquerade as evidence that the rule is load-bearing.
+      # Mutation proof for the AppArmor hook rules: remove the shared
+      # profile's hook policy (filename denies and the hooks-path link deny),
+      # then run the same production-path test. Its failure must name
+      # git_hooks_unprotected, so an unrelated setup failure cannot masquerade
+      # as evidence that the rules are load-bearing.
       - name: 'mutazione del profilo: senza deny Git-hook la shell rifiuta il runtime'
         env:
           MUFFIN_REQUIRE_SANDBOX: '1'
         run: |
           set -euo pipefail
           sed 's|<BWRAP_BINARY>|/usr/bin/bwrap|' scripts/install/bwrap.apparmor \
-            | awk '!index($0, "deny /**/.git/hooks/")' \
+            | awk '!index($0, "deny /**/.git/hooks")' \
             | sudo tee /etc/apparmor.d/muffin-bwrap > /dev/null
           sudo apparmor_parser -r /etc/apparmor.d/muffin-bwrap
 

@@ -784,19 +784,27 @@ follow-up. The hook-deny boundary does not depend on it. macOS Seatbelt's
 hook-path deny remains in force.
 
 Before shell execution, `SandboxExecutor` tests the real `SandboxManager` path
-with ordinary writes, nested `git init`/`git add`, and every active hook name in
-a newly-created `nested/.git/hooks`. Linux uses Git's default templates, so
-`*.sample` files must remain writable; macOS uses an empty template because
-Seatbelt denies writes anywhere under the hook directory. If any active hook
-write succeeds, the sandbox reports `git_hooks_unprotected` and refuses the
-caller's command. The production `shell_run_write` wiring test also checks
-`fsmonitor-watchmanv2` and the existing top-level hook deny. Ubuntu hosts
-without the matching profile therefore lose shell execution rather than
-silently running without this boundary.
+with ordinary writes, nested `git init`/`git add`, every active hook name in
+a newly-created `nested/.git/hooks`, a mid-command hooks-dir replacement by a
+symlink, a write through a pre-existing hooks symlink, and a rename into
+place. Linux uses Git's default templates, so `*.sample` files must remain
+writable; macOS uses an empty template because Seatbelt denies writes anywhere
+under the hook directory. If any hook install succeeds, the sandbox reports
+`git_hooks_unprotected` and refuses the caller's command. The production
+`shell_run_write` wiring test also checks `fsmonitor-watchmanv2` and the
+existing top-level hook deny. Ubuntu hosts without the matching profile
+therefore lose shell execution rather than silently running without this
+boundary. The pre-existing-symlink door is covered on both platforms by
+resolving the scanned hooks path to its concrete target; the mid-command
+replacement is denied on Linux by the hooks-path link rule, while on macOS
+Seatbelt has no rule for the hooks entry itself, so there the attempt is
+recorded but not gated (documented platform gap, not a silent pass).
 
-This claim covers direct active hook filenames under `.git/hooks`. Git's
-`core.hooksPath`, a Git directory outside the worktree, or redirected paths are
-separate cases owned by #657; this rule does not claim to cover them. The
+This claim covers direct active hook filenames under a real `.git/hooks`
+directory plus the symlink-alias shapes above. Git's `core.hooksPath` or a Git
+directory outside the worktree remain owned by #657; symlink path redirection
+is owned by #865, which this section now implements. This rule does not claim
+to cover anything else. The
 decision and test scope are recorded in
 `docs/evidence/shell-nested-git-hook-protection-2026-10-07.md`.
 

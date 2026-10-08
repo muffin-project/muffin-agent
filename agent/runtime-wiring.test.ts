@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -88,22 +89,49 @@ describe('the registered shell write tool contains Git hooks through the product
       // The root repository exists before the shell call, so the existing
       // concrete deny path protects its hook directory. The nested repository
       // is created by the model's one compound command and must be protected
-      // by the host-level hook policy instead.
+      // by the host-level hook policy instead. The pre-existing symlinked
+      // repository is staged host-side (creating it through the door is what
+      // the link rule forbids); the scan resolves it to a concrete target.
       execFileSync('git', ['init', '--quiet', `--template=${template}`, workspace], { stdio: 'pipe' });
+      execFileSync('git', ['init', '--quiet', 'pre'], { cwd: workspace, stdio: 'pipe' });
+      mkdirSync(join(workspace, 'pre-resolved'), { recursive: true });
+      writeFileSync(join(workspace, 'pre-resolved', 'pre-commit'), 'planted\n');
+      rmSync(join(workspace, 'pre', '.git', 'hooks'), { recursive: true, force: true });
+      symlinkSync(join('..', 'pre-resolved'), join(workspace, 'pre', '.git', 'hooks'));
 
       const nestedInit =
         process.platform === 'darwin'
           ? 'git init --quiet --template=empty-template nested'
           : 'git init --quiet nested';
+      const aliasInit =
+        process.platform === 'darwin'
+          ? 'git init --quiet --template=empty-template alias2'
+          : 'git init --quiet alias2';
       const command = [
         'mkdir -p ordinary',
         'printf ordinary > ordinary/file.txt',
+        'printf evil > ordinary/evil',
         nestedInit,
         'printf tracked > nested/tracked.txt',
         'git -C nested add tracked.txt',
+        aliasInit,
+        'mkdir -p alias2/redirected',
+        'printf planted > alias2/redirected/pre-commit',
+        'rm -rf alias2/.git/hooks',
+        // Linux must refuse the replacement (link-deny); macOS Seatbelt has
+        // no rule for the hooks entry itself, so there the attempt is
+        // recorded but not gated — and no through-write is attempted.
+        'if ln -s ../redirected alias2/.git/hooks 2>/dev/null; then printf writable; else printf denied; fi > alias-result.txt',
+        ...(process.platform === 'linux'
+          ? [
+              'if printf hook > alias2/.git/hooks/pre-commit 2>/dev/null; then printf writable; else printf denied; fi > alias-write-result.txt',
+            ]
+          : []),
+        'if printf hook > pre/.git/hooks/pre-commit 2>/dev/null; then printf writable; else printf denied; fi > pre-result.txt',
         'mkdir -p nested/.git/hooks',
         'if printf nested-hook > nested/.git/hooks/pre-commit; then printf writable; else printf denied; fi > nested-hook-result.txt',
         'if printf nested-fsmonitor > nested/.git/hooks/fsmonitor-watchmanv2; then printf writable; else printf denied; fi > nested-fsmonitor-result.txt',
+        'if mv ordinary/evil nested/.git/hooks/pre-commit 2>/dev/null; then printf writable; else printf denied; fi > rename-result.txt',
         'if printf top-level-hook > .git/hooks/pre-commit; then printf writable; else printf denied; fi > top-level-hook-result.txt',
       ].join(' && ');
 
@@ -137,16 +165,32 @@ describe('the registered shell write tool contains Git hooks through the product
           .filter((block) => block.type === 'tool_result')
           .map((block) => block.content)
           .join('\n');
-        // The mutation job removes only AppArmor's explicit hook rules. This
-        // assertion then fails with the self-test's typed reason, before a
-        // later missing-file check can obscure which guarantee regressed.
+        // The mutation job removes AppArmor's explicit hook rules (filename
+        // denies and the hooks-path link deny). This assertion then fails
+        // with the self-test's typed reason, before a later missing-file
+        // check can obscure which guarantee regressed.
         expect(toolResults).not.toContain('git_hooks_unprotected');
         expect(readFileSync(join(workspace, 'ordinary', 'file.txt'), 'utf8')).toBe('ordinary');
         expect(readFileSync(join(workspace, 'nested', 'tracked.txt'), 'utf8')).toBe('tracked');
         expect(readFileSync(join(workspace, 'nested', '.git', 'index'))).toBeTruthy();
         expect(readFileSync(join(workspace, 'nested-hook-result.txt'), 'utf8')).toBe('denied');
         expect(readFileSync(join(workspace, 'nested-fsmonitor-result.txt'), 'utf8')).toBe('denied');
+        expect(readFileSync(join(workspace, 'pre-result.txt'), 'utf8')).toBe('denied');
+        expect(readFileSync(join(workspace, 'rename-result.txt'), 'utf8')).toBe('denied');
         expect(readFileSync(join(workspace, 'top-level-hook-result.txt'), 'utf8')).toBe('denied');
+        if (process.platform === 'linux') {
+          // The replacement itself must fail where the link-deny applies.
+          expect(readFileSync(join(workspace, 'alias-result.txt'), 'utf8')).toBe('denied');
+          expect(readFileSync(join(workspace, 'alias-write-result.txt'), 'utf8')).toBe('denied');
+          expect(readFileSync(join(workspace, 'alias2', 'redirected', 'pre-commit'), 'utf8')).toBe(
+            'planted\n',
+          );
+        }
+        // The pre-existing symlink still points at its target, but nothing was
+        // written through it on any platform.
+        expect(readFileSync(join(workspace, 'pre-resolved', 'pre-commit'), 'utf8')).toBe('planted\n');
+        // The refused rename leaves the source in place.
+        expect(existsSync(join(workspace, 'ordinary', 'evil'))).toBe(true);
         expect(existsSync(join(workspace, 'nested', '.git', 'hooks', 'pre-commit'))).toBe(false);
         expect(
           existsSync(join(workspace, 'nested', '.git', 'hooks', 'fsmonitor-watchmanv2')),

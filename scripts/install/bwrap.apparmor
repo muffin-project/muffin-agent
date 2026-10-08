@@ -35,6 +35,13 @@ profile muffin-bwrap <BWRAP_BINARY> flags=(attach_disconnected,mediate_deleted) 
   deny /**/.git/hooks/{applypatch-msg,pre-applypatch,post-applypatch,pre-commit,pre-merge-commit,prepare-commit-msg,commit-msg,post-commit,pre-rebase,post-checkout,post-merge,pre-push,pre-receive,update} wl,
   deny /**/.git/hooks/{proc-receive,post-receive,post-update,reference-transaction,push-to-checkout,pre-auto-gc,post-rewrite,sendemail-validate,fsmonitor-watchman,fsmonitor-watchmanv2,p4-changelist,p4-prepare-changelist,p4-post-changelist,p4-pre-submit,post-index-change} wl,
 
+  # A symlinked hooks directory redirects Git's lookup to a path no filename
+  # rule above can see (AppArmor matches the resolved path, issue #865).
+  # Denying link on the hooks path itself blocks replacing it with a symlink
+  # mid-command; creating the real directory (git init/clone) needs write on
+  # the parent, not link here, so ordinary repositories keep working.
+  deny /**/.git/hooks l,
+
   # bwrap sets no-new-privs. Use an explicit stack because an implicit exec
   # transition can leave children outside the active-hook deny rules.
   allow pix /** -> &muffin-bwrap//&muffin-unpriv-bwrap,

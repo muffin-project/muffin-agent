@@ -64,7 +64,7 @@ const available = (): SandboxProbe => ({ available: true, mechanism: 'bubblewrap
 const denyReadOf = (customConfig: Partial<SandboxRuntimeConfig> | undefined): readonly string[] =>
   customConfig?.filesystem?.denyRead ?? [];
 
-function mockProtectedSandbox(options: { hookWriteAllowed?: boolean; unixFilterAbsent?: boolean } = {}): void {
+function mockProtectedSandbox(options: { hookWriteAllowed?: boolean; hookAliasCreated?: boolean; unixFilterAbsent?: boolean } = {}): void {
   wrapWithSandboxArgv.mockImplementation(async (command, _binShell, customConfig) => ({
     argv:
       denyReadOf(customConfig).length > 0
@@ -82,7 +82,13 @@ function mockProtectedSandbox(options: { hookWriteAllowed?: boolean; unixFilterA
                     return `muffin-hook-write: ${result}:${hook}`;
                   })
                   .join('\\n');
-                return `printf "muffin-apparmor-label: muffin-bwrap//&muffin-unpriv-bwrap (enforce)\\n${hookResults}\\nmuffin sandbox hook self-test positive controls passed\\n"`;
+                // A healthy Linux host refuses the mid-command replacement
+                // (link-deny); a healthy macOS host has no rule for the hooks
+                // entry itself, so the replacement succeeds there and the leg
+                // records it without gating — model both faithfully.
+                const aliasMarker =
+                  options.hookAliasCreated || process.platform !== 'linux' ? 'created' : 'denied';
+                return `printf "muffin-apparmor-label: muffin-bwrap//&muffin-unpriv-bwrap (enforce)\\n${hookResults}\\nmuffin-hook-alias: ${aliasMarker}\\nmuffin-hook-alias-write: denied\\nmuffin-hook-pre: denied\\nmuffin-hook-rename: denied\\nmuffin sandbox hook self-test positive controls passed\\n"`;
               })(),
             ]
           : command.includes('afunix.sock') && !options.unixFilterAbsent
@@ -185,7 +191,7 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     expect(status.available).toBe(false);
     if (status.available) return;
     expect(status.reason).toBe('git_hooks_unprotected');
-    expect(status.detail).toContain('nested/.git/hooks/pre-commit');
+    expect(status.detail).toContain('via pre-commit');
     expect(status.detail).toContain('muffin-bwrap//&muffin-unpriv-bwrap');
     expect(status.remedy).toContain('scripts/install/bwrap.apparmor');
     expect(status.remedy).toContain('docs/user/INSTALL.md');
@@ -204,6 +210,32 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     // The failed hook leg is the last sandboxed call; the caller is never wrapped.
     expect(wrapWithSandboxArgv).toHaveBeenCalledTimes(3);
   });
+
+  it.runIf(process.platform === 'linux')(
+    'a hooks dir replaced by a symlink mid-command makes the sandbox unavailable before the caller command runs',
+    async () => {
+      // Fault injection for the missing link-deny (#865): direct writes still
+      // fail, but the alias itself gets created. Linux-only: on macOS the
+      // replacement is a recorded platform gap, not a shell-killing event.
+      mockProtectedSandbox({ hookAliasCreated: true });
+
+      const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+      toClose = executor;
+
+      const status = await executor.verify();
+      expect(status.available).toBe(false);
+      if (status.available) return;
+      expect(status.reason).toBe('git_hooks_unprotected');
+      expect(status.detail).toContain('symlink');
+
+      const dir = mktempWorkspace();
+      const witness = join(dir, 'caller-command-ran.txt');
+      await expect(
+        executor.run({ command: `touch '${witness}'`, cwd: dir, writeScope: [dir] }),
+      ).rejects.toThrow(/sandbox unavailable: git_hooks_unprotected/);
+      expect(existsSync(witness)).toBe(false);
+    },
+  );
 
   it("the reperto itself: the real invocation cannot even run an unrestricted command (bwrap dies on /proc) — contain_failed, and run() never reaches the caller's command", async () => {
     wrapWithSandboxArgv.mockImplementation(async () => ({ argv: BROKEN_INVOCATION, env: {} }));
