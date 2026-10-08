@@ -71,19 +71,6 @@
 # Exit codes: 0 done · 1 something failed · 3 installed, gateway NOT active.
 set -eu
 
-# The PATH this script inherited: the only thing that says whether the shell
-# that launched the installer will find `muffin` afterwards. A child cannot
-# change its parent's environment, so every PATH mutation below (bundled Node,
-# the launcher directory) is measured against this, never against the script's
-# own working PATH. (`first_command_note`, at the end, reads it.)
-INVOKING_PATH="$PATH"
-
-MUFFIN_PREFIX=${MUFFIN_PREFIX:-$HOME/.local/share/muffin}
-MUFFIN_REPO=${MUFFIN_REPO:-https://github.com/muffin-project/muffin-agent.git}
-MUFFIN_CHANNEL=${MUFFIN_CHANNEL:-main}
-NODE_MAJOR_REQUIRED=22
-EXIT_GATEWAY_NOT_ACTIVE=3
-
 say() { printf '%s\n' "$*" >&2; }
 
 # ---------------------------------------------------------------------------
@@ -778,6 +765,23 @@ EOF
   sandbox_report root_service_run "$SERVICE_PREFIX/node/bin/node" "$SERVICE_PREFIX/src" yes "$SERVICE_PREFIX/tool-bin/bwrap"
   exit 0
 fi
+
+# Install-wide defaults. They live below the root dispatchers on purpose: the
+# dispatchers (`--muffin-root-account`, `--muffin-secure-copy-key`) run under
+# `env -i` in evals and must not die on an unset HOME before they start.
+# The PATH this script inherited: the only thing that says whether the shell
+# that launched the installer will find `muffin` afterwards. A child cannot
+# change its parent's environment, so every PATH mutation below (bundled Node,
+# the launcher directory) is measured against this, never against the script's
+# own working PATH. (`first_command_note`, at the end, reads it.)
+INVOKING_PATH="$PATH"
+
+MUFFIN_PREFIX=${MUFFIN_PREFIX:-$HOME/.local/share/muffin}
+MUFFIN_REPO=${MUFFIN_REPO:-https://github.com/muffin-project/muffin-agent.git}
+MUFFIN_CHANNEL=${MUFFIN_CHANNEL:-main}
+NODE_MAJOR_REQUIRED=22
+EXIT_GATEWAY_NOT_ACTIVE=3
+
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
