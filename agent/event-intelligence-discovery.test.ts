@@ -8,6 +8,8 @@ import { visibleTools } from './context/assemble.js';
 import { attachEventIntelligence } from './event-intelligence.js';
 import { toolContext } from './fixtures/tool-context.js';
 import { buildRuntime } from './runtime.js';
+import { runTurn } from './loop.js';
+import type { ChatCall, ChatResult, Provider } from './providers/types.js';
 
 const WATCH_TOOLS = [
   'event_watch_sources',
@@ -145,4 +147,150 @@ describe('embedded Event Intelligence composed with capability discovery', () =>
       rmSync(workspace, { recursive: true, force: true });
     }
   });
+  it('runs owner discovery and watch creation through the real loop, and denies autonomous discovery and direct guesses', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-ei-loop-discovery-'));
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-ei-loop-ws-'));
+    runInit({ home, apiKey: 'sk-ei-loop-never-used' });
+    const runtime = buildRuntime(home, workspace);
+    const owner = { kind: 'owner', connector: 'cli', externalId: 'local' } as const;
+    const system = { kind: 'system', source: 'automation' } as const;
+    const usage = {
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
+    const call = (id: string, name: string, args: Record<string, unknown>): ChatResult => ({
+      text: null,
+      toolCalls: [{ id, name, args }],
+      stopReason: 'tool_use',
+      usage,
+      model: 'test-model',
+    });
+    const answer: ChatResult = {
+      text: 'done', toolCalls: [], stopReason: 'end', usage, model: 'test-model',
+    };
+
+    class Scripted implements Provider {
+      readonly kind = 'openai-compat' as const;
+      readonly seen: ChatCall[] = [];
+      private cursor = 0;
+      constructor(private readonly replies: ChatResult[]) {}
+      async chat(request: ChatCall): Promise<ChatResult> {
+        this.seen.push(request);
+        const response = this.replies[this.cursor++];
+        if (!response) throw new Error('unexpected extra model call');
+        return response;
+      }
+    }
+
+    const watchArgs = {
+      trigger_id: 'kernel-watch',
+      events: [{ event: 'demo.ready', where: [{ path: 'value', op: 'gt', value: 10 }] }],
+      instruction: 'Tell me when the demo is ready.',
+      one_shot: true,
+    };
+
+    try {
+      await attachEventIntelligence(runtime, [{
+        connectionId: 'demo',
+        serverId: 'demo',
+        getCapabilities: () => ({
+          extensions: { 'io.modelcontextprotocol/events': {} },
+        }),
+        request: async (method: string) => {
+          if (method === 'events/list') {
+            return {
+              events: [{
+                name: 'demo.ready',
+                description: 'Demo is ready',
+                delivery: ['poll'],
+                inputSchema: { type: 'object' },
+                payloadSchema: { type: 'object', properties: { value: { type: 'number' } } },
+              }],
+              nextCursor: null,
+            };
+          }
+          if (method === 'events/poll') {
+            return { events: [], cursor: null, hasMore: false, nextPollMs: 60_000 };
+          }
+          throw new Error(`unexpected Events method ${method}`);
+        },
+        pollIntervalMs: 60_000,
+      }], home);
+
+      const profile = { ...runtime.deps.profile, maxToolsExposed: 10, recovery: [] };
+      const ownerProvider = new Scripted([
+        call('owner-search', 'capability_search', { query: 'event_watch_create', max_results: 1 }),
+        call('owner-create', 'event_watch_create', watchArgs),
+        answer,
+      ]);
+      const ownerResult = await runTurn(
+        { ...runtime.deps, provider: ownerProvider, profile, model: 'test-model' },
+        {
+          principal: owner,
+          tenant: 'host',
+          surface: 'cli',
+          session: runtime.deps.sessions.open('ei-owner-loop'),
+          text: 'test',
+        },
+      );
+      expect(ownerResult.stopped).toBe('answered');
+      expect(ownerProvider.seen).toHaveLength(3);
+      expect(ownerProvider.seen[0]?.tools?.map((tool) => tool.name)).toContain('capability_search');
+      expect(ownerProvider.seen[0]?.tools?.map((tool) => tool.name)).not.toContain('event_watch_create');
+      expect(ownerProvider.seen[1]?.tools?.map((tool) => tool.name)).toContain('event_watch_create');
+      const created = ownerProvider.seen[2]?.messages.flatMap((message) => message.content)
+        .find((block) => block.type === 'tool_result' && block.toolCallId === 'owner-create');
+      expect(created?.type).toBe('tool_result');
+      if (created?.type !== 'tool_result') throw new Error('owner creation result missing');
+      expect(created.isError).not.toBe(true);
+      expect(created.content).toContain('event watch create: kernel-watch');
+
+      const systemProvider = new Scripted([
+        call('system-search', 'capability_search', {
+          query: 'event_watch_create event_watch_delete',
+          max_results: 5,
+        }),
+        call('system-guess', 'event_watch_create', {
+          ...watchArgs, trigger_id: 'forbidden-kernel-watch',
+        }),
+        answer,
+      ]);
+      const systemResult = await runTurn(
+        { ...runtime.deps, provider: systemProvider, profile, model: 'test-model' },
+        {
+          principal: system,
+          tenant: 'host',
+          surface: 'cli',
+          session: runtime.deps.sessions.open('ei-system-loop'),
+          text: 'event_watch_create event_watch_delete',
+        },
+      );
+      expect(systemResult.stopped).toBe('answered');
+      for (const request of systemProvider.seen) {
+        const names = request.tools?.map((tool) => tool.name) ?? [];
+        expect(names).not.toContain('event_watch_create');
+        expect(names).not.toContain('event_watch_delete');
+        expect(names).not.toContain('event_watch_pause');
+      }
+      const searchResult = systemProvider.seen[1]?.messages.flatMap((message) => message.content)
+        .find((block) => block.type === 'tool_result' && block.toolCallId === 'system-search');
+      expect(searchResult?.type).toBe('tool_result');
+      if (searchResult?.type !== 'tool_result') throw new Error('system search result missing');
+      expect(searchResult.content).not.toContain('event_watch_create');
+      expect(searchResult.content).not.toContain('event_watch_delete');
+      const rejected = systemProvider.seen[2]?.messages.flatMap((message) => message.content)
+        .find((block) => block.type === 'tool_result' && block.toolCallId === 'system-guess');
+      expect(rejected?.type).toBe('tool_result');
+      if (rejected?.type !== 'tool_result') throw new Error('system denial result missing');
+      expect(rejected.isError).toBe(true);
+      expect(rejected.content).toContain('principal_forbidden');
+    } finally {
+      await runtime.close();
+      rmSync(home, { recursive: true, force: true });
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
 });
