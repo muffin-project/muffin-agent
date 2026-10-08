@@ -16,8 +16,9 @@ OWNED_REAL=$(readlink -f "$LAB/tool-bin/bwrap")
 RENDERED=$LAB/muffin-bwrap
 sed "s|<BWRAP_BINARY>|$OWNED_REAL|" "$PROFILE" >"$RENDERED"
 
-grep -Fqx "profile muffin-bwrap $OWNED_REAL flags=(unconfined) {" "$RENDERED"
-grep -Fqx '  userns,' "$RENDERED"
+grep -Fqx "profile muffin-bwrap $OWNED_REAL flags=(attach_disconnected,mediate_deleted) {" "$RENDERED"
+grep -Fqx '  allow userns,' "$RENDERED"
+grep -Fq 'deny /**/.git/hooks/' "$RENDERED"
 if grep -Fq '<BWRAP_BINARY>' "$RENDERED" || grep -Fq 'profile muffin-bwrap /usr/bin/bwrap ' "$RENDERED"; then
   echo 'apparmor profile eval: unresolved placeholder or system bwrap attachment' >&2
   exit 1
