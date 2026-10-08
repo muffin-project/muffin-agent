@@ -561,6 +561,10 @@ export async function cmdGatewayInstall(
     // launcher a PATH that has no `node` in it at all — and with the *wrong*
     // one it hands it a path that expires (see `resolveInterpreterDir`).
     interpreterDir: resolveInterpreterDir(process.execPath, REAL_INTERPRETER_PROBES),
+    // The Muffin-owned tool bin dir, written by `install.sh` beside the
+    // launcher PATH: the unit must select the verified bubblewrap, not the
+    // distro copy the system PATH would find first.
+    ...(process.env['MUFFIN_TOOL_BIN'] ? { toolBinDir: process.env['MUFFIN_TOOL_BIN'] } : {}),
     // Solo se serve: senza `--start` la lista stampata resta quella con
     // `$(id -u)`, che è giusta per una shell e non richiede di sapere chi sia.
     ...(values.start === true ? { identity: deps.identity ?? { user: userInfo().username, uid: userInfo().uid } } : {}),
