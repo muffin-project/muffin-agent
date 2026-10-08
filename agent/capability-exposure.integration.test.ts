@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
+import { JobStore } from '../core/scheduler/jobs.js';
 import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { TurnStore } from '../core/turns/store.js';
@@ -13,6 +14,7 @@ import { TodoStore } from '../core/turns/todo.js';
 import { type LoopDeps, type RegisteredTool, runTurn } from './loop.js';
 import { CAPABILITY_DISCOVERY_GUIDANCE } from './capability-exposure.js';
 import { CONSERVATIVE } from './profiles/profile.js';
+import { makeScheduleTool, scheduleCapability } from './tools/schedule.js';
 import type { ChatCall, ChatResult, Provider } from './providers/types.js';
 import {
   capabilityDiscoveryCapability,
@@ -303,6 +305,161 @@ describe('#469 production-path capability discovery', () => {
     expect(guessedReply.content).not.toContain('non esiste');
   });
 
+
+  it('system@scheduler never discovers kernel-forbidden schedule or namespace tools, even under preload pressure', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-capability-scheduler-authority-'));
+    const db = new DatabaseCtor(':memory:');
+    const basic = [
+      inertTool('fs_read'),
+      inertTool('memory_search'),
+      inertTool('http_get'),
+      inertTool('todo'),
+      inertTool('skill_read'),
+    ];
+    const schedule = makeScheduleTool({
+      jobs: new JobStore(db),
+      defaultTimezone: 'Europe/Rome',
+      defaultChannel: 'cli',
+    });
+    let scheduleCalls = 0;
+    const scheduleObserved: RegisteredTool = {
+      ...schedule,
+      handler: (args, ctx) => {
+        scheduleCalls += 1;
+        return schedule.handler(args, ctx);
+      },
+    };
+    // The sealed policy prohibits outward.* namespaces, including new future
+    // siblings not explicitly listed by name in POLICY_FLOOR.
+    const outwardDecl = declaration('outward.email.send');
+    let outwardCalls = 0;
+    const outward: RegisteredTool = {
+      capability: outwardDecl.id,
+      spec: {
+        name: 'outward_email_send',
+        description: 'Send recurring email update outside the tenant.',
+        inputSchema: { type: 'object' },
+      },
+      throwTier: 0,
+      handler: () => {
+        outwardCalls += 1;
+        return { content: 'should never send', tier: 0 };
+      },
+    };
+    const allowedDecl = declaration('event.watch');
+    const allowed: RegisteredTool = {
+      capability: allowedDecl.id,
+      spec: {
+        name: 'event_watch_create',
+        description: 'Create a durable trigger on an external event condition.',
+        inputSchema: { type: 'object' },
+      },
+      throwTier: 0,
+      handler: () => ({ content: 'watch ok', tier: 0 }),
+    };
+    const search = makeCapabilitySearchTool();
+    const tools = [
+      ...basic.map((entry) => entry.tool),
+      scheduleObserved,
+      outward,
+      allowed,
+      search,
+    ];
+    const capabilities = new Map<string, CapabilityDecl>([
+      ...basic.map((entry) => [entry.decl.id, entry.decl] as const),
+      [scheduleCapability.id, scheduleCapability],
+      [outwardDecl.id, outwardDecl],
+      [allowedDecl.id, allowedDecl],
+      [capabilityDiscoveryCapability.id, capabilityDiscoveryCapability],
+    ]);
+    const provider = new Scripted([
+      toolCall('scheduler-search', 'capability_search', {
+        query: 'schedule recurring reminder and send outward email',
+        max_results: 5,
+      }),
+      // An unsupported tool name can still be emitted by a model. It must
+      // meet the regular kernel, not bypass it or turn into "unknown tool".
+      toolCall('scheduler-guess', 'schedule_recurring', {
+        cron: '0 9 * * *',
+        goal: 'repeat tomorrow',
+      }),
+      toolCall('scheduler-authorized-search', 'capability_search', {
+        query: 'durable trigger on an external event condition',
+        max_results: 3,
+      }),
+      answer('done'),
+    ]);
+    const sessions = new SessionStore(home);
+    const deps: LoopDeps = {
+      provider,
+      profile: { ...CONSERVATIVE, maxToolsExposed: 4, recovery: [] },
+      model: 'test-model',
+      tools,
+      capabilities,
+      decide: createDecide({
+        matrix: POLICY_FLOOR,
+        capabilities,
+        budgetExhausted: () => false,
+        hardened: true,
+      }),
+      tracer: new SimpleTracer(new JsonlExporter(home)),
+      sessions,
+      turns: new TurnStore(db),
+      todos: new TodoStore(db),
+      budgetExhausted: () => false,
+      systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite.' },
+    };
+
+    const result = await runTurn(deps, {
+      principal: { kind: 'system', source: 'scheduler' },
+      tenant: 'host',
+      surface: 'cli',
+      session: sessions.open('capability-scheduler-deny'),
+      text: 'schedule a recurring reminder and send an outward email',
+    });
+
+    expect(result.stopped).toBe('answered');
+    expect(scheduleCalls).toBe(0);
+    expect(outwardCalls).toBe(0);
+    expect(provider.seen).toHaveLength(4);
+
+    // Static principal denials must happen BEFORE initial text preload.
+    // They must stay excluded from every round, even if the prompt and
+    // search terms explicitly select their names and descriptions.
+    for (const request of provider.seen) {
+      const visible = request.tools?.map((tool) => tool.name) ?? [];
+      expect(visible).not.toContain('schedule_recurring');
+      expect(visible).not.toContain('outward_email_send');
+      expect(visible.length).toBeLessThanOrEqual(4);
+    }
+    const forbiddenDiscovery = provider.seen[1]?.messages
+      .flatMap((message) => message.content)
+      .find((block) => block.type === 'tool_result' && block.toolCallId === 'scheduler-search');
+    expect(forbiddenDiscovery?.type).toBe('tool_result');
+    if (forbiddenDiscovery?.type !== 'tool_result') throw new Error('scheduler discovery result missing');
+    expect(forbiddenDiscovery.content).not.toContain('schedule_recurring');
+    expect(forbiddenDiscovery.content).not.toContain('jobs.schedule');
+    expect(forbiddenDiscovery.content).not.toContain('outward_email_send');
+    expect(forbiddenDiscovery.content).not.toContain('outward.email.send');
+
+    const guessedReply = provider.seen[2]?.messages
+      .flatMap((message) => message.content)
+      .find((block) => block.type === 'tool_result' && block.toolCallId === 'scheduler-guess');
+    expect(guessedReply?.type).toBe('tool_result');
+    if (guessedReply?.type !== 'tool_result') throw new Error('scheduler kernel result missing');
+    expect(guessedReply.isError).toBe(true);
+    expect(guessedReply.content).toContain('principal_forbidden');
+
+    // Filtering forbidden tools must not silently disable legitimate hidden
+    // capabilities. Search still returns an authorized external-event tool.
+    const allowedDiscovery = provider.seen[3]?.messages
+      .flatMap((message) => message.content)
+      .find((block) => block.type === 'tool_result' && block.toolCallId === 'scheduler-authorized-search');
+    expect(allowedDiscovery?.type).toBe('tool_result');
+    if (allowedDiscovery?.type !== 'tool_result') throw new Error('authorized discovery result missing');
+    expect(allowedDiscovery.content).toContain('event_watch_create');
+    expect(provider.seen[3]?.tools?.map((tool) => tool.name)).toContain('event_watch_create');
+  });
 
   it('load-bearing mutation: removing the discovery door makes the beyond-cap task unrecoverable', async () => {
     const home = mkdtempSync(join(tmpdir(), 'muffin-capability-mutation-'));
