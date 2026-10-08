@@ -1413,7 +1413,7 @@ export async function runDoctor(
     // Not a hard failure: the runtime still starts, execution capabilities
     // just degrade — shell tools and the job executor are absent, declared
     // here. Silently unsandboxed is the one outcome we refuse.
-    warn('sandbox', `${boundary.reason} — execution capabilities degrade to ask`, boundary.remedy);
+    warn('sandbox', `${boundary.reason} — shell and job execution stay DISABLED until containment can be proven`, boundary.remedy);
   }
 
   // `web_search`: stesso produttore di `agent/runtime.ts`, non una seconda

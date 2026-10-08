@@ -278,7 +278,7 @@ export const SANDBOX_BINARIES_REMEDY =
 export const APPARMOR_REMEDY =
   'unprivileged user namespaces may be restricted. ' +
   'The Linux shell boundary also needs Muffin’s AppArmor policy attached to the exact bwrap binary. ' +
-  'Render `scripts/install/bwrap.apparmor` for `command -v bwrap` and load it with `apparmor_parser -r`; ' +
+  'Re-run the installer with MUFFIN_APPLY_SANDBOX_PROFILE=1, or render `scripts/install/bwrap.apparmor` for `command -v bwrap` and load it with `apparmor_parser -r`; ' +
   'keep its nested Git-hook denies and child stack. See `docs/user/INSTALL.md`. ' +
   'Lowering the host-wide userns sysctl does not provide the hook protection';
 
