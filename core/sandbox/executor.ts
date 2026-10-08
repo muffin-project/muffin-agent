@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -487,10 +487,30 @@ const NESTED_GIT_HOOKS_SEARCH_DEPTH = 3;
  * repository created mid-command is protected by the host-level AppArmor /
  * Seatbelt hook-path rule, which `selfTestNestedGitHookWrite()` verifies
  * through the same SandboxManager door before caller commands are allowed.
+ * A symlinked `.git` or `hooks` that exists before the call resolves to its
+ * concrete target here, so the deny names the path Git will actually touch.
  * `agent/tools/fs.ts` keeps its per-call structural check for `fs_write`;
  * this walk remains useful for pre-existing repositories and complements the
  * host rule rather than trying to predict paths created later in the shell.
  */
+/**
+ * Follow one symlink hop, if that path is a symlink at all. A hooks directory
+ * replaced by a symlink redirects Git's lookup to a path no filename rule can
+ * see (issue #865), so the concrete deny must name the resolved target. A
+ * missing or dangling path comes back unchanged: there is nothing behind it
+ * for Git to execute, and a mid-command replacement at that path is only
+ * recorded, never gated (see the leg docstring), so the walk stays a
+ * pre-existing-repo complement, not a second enforcement point.
+ */
+function resolveIfSymlink(path: string): string {
+  try {
+    if (!lstatSync(path).isSymbolicLink()) return path;
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
 function nestedGitHooksDirs(root: string, depth: number = NESTED_GIT_HOOKS_SEARCH_DEPTH): string[] {
   const found: string[] = [];
   const walk = (dir: string, remaining: number): void => {
@@ -501,13 +521,16 @@ function nestedGitHooksDirs(root: string, depth: number = NESTED_GIT_HOOKS_SEARC
       return; // gone or unreadable between listing and here — nothing to protect there
     }
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
       if (entry.name === 'node_modules') continue; // the one directory guaranteed to dwarf everything else
       const full = join(dir, entry.name);
-      if (entry.name === '.git') {
-        found.push(join(full, 'hooks'));
+      if (entry.name === '.git' && (entry.isDirectory() || entry.isSymbolicLink())) {
+        // A symlinked `.git` (or a symlinked `hooks` beneath a real one) is
+        // the same alias class: deny the resolved target. Bounded to these two
+        // hops, never a general symlink-following walk.
+        found.push(resolveIfSymlink(join(resolveIfSymlink(full), 'hooks')));
         continue; // hooks cannot nest inside hooks
       }
+      if (!entry.isDirectory()) continue;
       if (remaining > 0) walk(full, remaining - 1);
     }
   };
@@ -805,18 +828,54 @@ export class SandboxExecutor {
   }
 
   /**
-   * Verify that the actual SandboxManager invocation refuses a hook filename
-   * created after the sandbox profile was built, while ordinary project writes
-   * and a nested `git add` still work. The empty template avoids macOS
+   * Verify that the actual SandboxManager invocation refuses hook installs
+   * through every door this claim covers, while ordinary project writes and
+   * a nested `git add` still work. The empty template avoids macOS
    * Seatbelt's broader `.git/hooks/**` deny from rejecting Git's `*.sample`
    * files before this test reaches the new hook itself.
    *
-   * No `denyWrite` entry is supplied here: on Linux the hook-specific rule is
-   * carried by the loaded AppArmor profile; on macOS Seatbelt supplies it. A
-   * missing or misattached host policy therefore disables shell execution
-   * before the caller's command runs.
+   * Three shapes, one typed failure:
+   *
+   * - direct: every active hook name written under a `nested/.git/hooks`
+   *   created mid-command (host filename rules, no concrete path exists yet);
+   * - hardlink: an ordinary file hardlinked to an active hook name — refused
+   *   by the same filename rules on both platforms;
+   * - pre-existing: `pre/.git/hooks` is already a symlink to `pre-resolved`
+   *   before the guarded call, so the production pre-scan
+   *   (`nestedGitHooksDirs`, which resolves symlinks to concrete targets)
+   *   carries the deny — this leg passes that scan's output as its
+   *   `denyWrite`, exactly like `execute()` does.
+   *
+   * A rename into place (`mv ordinary/evil nested/.git/hooks/pre-commit`) is
+   * attempted too: installing a hook is not only redirection.
+   *
+   * A mid-command hooks-dir replacement (`rm -rf` + `ln -s`) is attempted and
+   * recorded on every platform, but deliberately not gated: AppArmor has no
+   * per-path symlink mediation (measured with the full profile loaded: the
+   * replacement succeeds), and neither does Seatbelt for the hooks entry
+   * itself. Gating it would refuse the shell wherever the door is open
+   * instead of proving anything closed. The marker is a tripwire — the day it
+   * flips to denied, re-gate it and update the claim.
+   *
+   * The pre-existing-symlink fixture runs host-side because only it needs to
+   * exist before the guarded call. Planted contents (`planted`) in the
+   * resolved target prove no through-write silently overwrote a hook behind
+   * the markers; they are asserted host-side, naming the exact door.
    */
   private async selfTestNestedGitHookWrite(cwd: string): Promise<ContainmentFailure | null> {
+    try {
+      execFileSync('git', ['init', '--quiet', 'pre'], { cwd, stdio: 'pipe' });
+      mkdirSync(join(cwd, 'pre-resolved'), { recursive: true });
+      writeFileSync(join(cwd, 'pre-resolved', 'pre-commit'), 'planted\n');
+      rmSync(join(cwd, 'pre', '.git', 'hooks'), { recursive: true, force: true });
+      symlinkSync(join('..', 'pre-resolved'), join(cwd, 'pre', '.git', 'hooks'));
+    } catch (error) {
+      return {
+        reason: 'contain_failed',
+        detail: `the nested Git-hook self-test could not stage its alias fixtures (${String(error).slice(0, 200)})`,
+        remedy: 'check that git runs host-side and the self-test directory is writable',
+      };
+    }
     const command = [
       "printf 'muffin sandbox nested-hook self-test\\n'",
       `apparmor_label=unavailable
@@ -826,6 +885,7 @@ fi
 printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
       'mkdir -p ordinary empty-template/hooks',
       'printf ordinary > ordinary/file.txt',
+      'printf evil > ordinary/evil',
       process.platform === 'darwin'
         ? 'git init --quiet --template=empty-template nested'
         : 'git init --quiet nested',
@@ -833,6 +893,20 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
       'git -C nested add tracked.txt',
       'mkdir -p nested/.git/hooks',
       `for hook in ${ACTIVE_GIT_HOOK_NAMES.join(' ')}; do if printf hook > "nested/.git/hooks/$hook" 2>/dev/null; then printf "muffin-hook-write: allowed:%s\\n" "$hook"; else printf "muffin-hook-write: denied:%s\\n" "$hook"; fi; done`,
+      // Mid-command replacement: alias2 does not exist when the sandbox (and
+      // every deny list) is built. The hardlink install is gated on every
+      // platform; the symlink replacement is attempted and recorded but
+      // gated on none (see the method docstring) — no through-write is
+      // attempted, leaving nothing installed behind the marker.
+      ...(process.platform === 'darwin'
+        ? ['git init --quiet --template=empty-template alias2']
+        : ['git init --quiet alias2']),
+      'printf evil2 > ordinary/evil2',
+      'if ln ordinary/evil2 alias2/.git/hooks/pre-commit 2>/dev/null; then printf "muffin-hook-hardlink: allowed\\n"; else printf "muffin-hook-hardlink: denied\\n"; fi',
+      'rm -rf alias2/.git/hooks',
+      'if ln -s ../redirected alias2/.git/hooks 2>/dev/null; then printf "muffin-hook-alias: created\\n"; else printf "muffin-hook-alias: denied\\n"; fi',
+      'if printf hook > pre/.git/hooks/pre-commit 2>/dev/null; then printf "muffin-hook-pre: allowed\\n"; else printf "muffin-hook-pre: denied\\n"; fi',
+      'if mv ordinary/evil nested/.git/hooks/pre-commit 2>/dev/null; then printf "muffin-hook-rename: allowed\\n"; else printf "muffin-hook-rename: denied\\n"; fi',
       'test -f ordinary/file.txt',
       'test -f nested/tracked.txt',
       'test -f nested/.git/index',
@@ -844,7 +918,12 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
     try {
       const legConfig: Partial<SandboxRuntimeConfig> = {
         network: networkOff(),
-        filesystem: { denyRead: [], allowWrite: [cwd], denyWrite: [] },
+        // The production pre-scan over this call's roots — the same
+        // expression `execute()` builds — so the pre-existing symlinked
+        // repository is denied through resolveIfSymlink's concrete target.
+        // Repositories created mid-command stay invisible to it on purpose:
+        // they are the host profile's proof, not this list's.
+        filesystem: { denyRead: [], allowWrite: [cwd], denyWrite: nestedGitHooksDirs(cwd) },
       };
       const wrapped = await SandboxManager.wrapWithSandboxArgv(
         `${STRICT_SHELL_PREFIX}${command}`,
@@ -886,11 +965,40 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
     }
     const appArmorLabel =
       /muffin-apparmor-label: ([^\r\n]+)/.exec(result.stdout)?.[1]?.trim() ?? 'unavailable';
-    const allowedHook = /muffin-hook-write: allowed:([a-z0-9-]+)/.exec(result.stdout)?.[1];
-    if (allowedHook) {
+    const aliasReplaced = result.stdout.includes('muffin-hook-alias: created');
+    const doors = {
+      direct: /muffin-hook-write: allowed:([a-z0-9-]+)/.exec(result.stdout)?.[1] ?? null,
+      aliasReplaced,
+      hardlink: result.stdout.includes('muffin-hook-hardlink: allowed'),
+      pre: result.stdout.includes('muffin-hook-pre: allowed'),
+      rename: result.stdout.includes('muffin-hook-rename: allowed'),
+    };
+    const doorSummary = `direct:${doors.direct ?? 'denied'} alias:${aliasReplaced ? 'created' : 'denied'} hardlink:${doors.hardlink ? 'allowed' : 'denied'} pre:${doors.pre ? 'allowed' : 'denied'} rename:${doors.rename ? 'allowed' : 'denied'}`;
+    const unprotected =
+      (doors.direct ??
+      (doors.hardlink ? 'hardlink into hooks' : null) ??
+      (doors.pre ? 'write through a pre-existing hooks symlink' : null) ??
+      (doors.rename ? 'rename into hooks' : null));
+    if (unprotected) {
       return {
         reason: 'git_hooks_unprotected',
-        detail: `a contained process created nested/.git/hooks/${allowedHook} after the sandbox profile was built (AppArmor label: ${appArmorLabel})`,
+        detail: `a contained process installed (or could install) a hook via ${unprotected} after the sandbox profile was built (AppArmor label: ${appArmorLabel}; doors ${doorSummary})`,
+        remedy:
+          'on Linux, render scripts/install/bwrap.apparmor for the exact host bwrap binary and load it; the writer label should contain muffin-bwrap//&muffin-unpriv-bwrap. See docs/user/INSTALL.md. On macOS verify Seatbelt still denies .git/hooks writes. Shell calls remain refused until the check holds',
+      };
+    }
+    // The planted pre-existing hook content is asserted host-side: a
+    // through-write that the markers somehow missed still shows up here.
+    let plantedContent: string;
+    try {
+      plantedContent = readFileSync(join(cwd, 'pre-resolved', 'pre-commit'), 'utf8');
+    } catch {
+      plantedContent = 'UNREADABLE';
+    }
+    if (plantedContent !== 'planted\n') {
+      return {
+        reason: 'git_hooks_unprotected',
+        detail: `a contained process installed (or could install) a hook via write through a pre-existing hooks symlink after the sandbox profile was built (AppArmor label: ${appArmorLabel}; doors ${doorSummary}; planted file holds ${JSON.stringify(plantedContent.slice(0, 40))})`,
         remedy:
           'on Linux, render scripts/install/bwrap.apparmor for the exact host bwrap binary and load it; the writer label should contain muffin-bwrap//&muffin-unpriv-bwrap. See docs/user/INSTALL.md. On macOS verify Seatbelt still denies .git/hooks writes. Shell calls remain refused until the check holds',
       };
@@ -898,10 +1006,21 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
     const missingDenials = ACTIVE_GIT_HOOK_NAMES.filter(
       (hook) => !result.stdout.includes(`muffin-hook-write: denied:${hook}`),
     );
-    if (missingDenials.length > 0) {
+    const aliasAttempted =
+      result.stdout.includes('muffin-hook-alias: denied') ||
+      result.stdout.includes('muffin-hook-alias: created');
+    const missingMarkers = [
+      ...(aliasAttempted ? [] : ['muffin-hook-alias attempt']),
+      ...[
+        'muffin-hook-hardlink: denied',
+        'muffin-hook-pre: denied',
+        'muffin-hook-rename: denied',
+      ].filter((marker) => !result.stdout.includes(marker)),
+    ];
+    if (missingDenials.length > 0 || missingMarkers.length > 0) {
       return {
         reason: 'contain_failed',
-        detail: `the nested Git-hook self-test did not report denials for ${missingDenials.join(', ')} (AppArmor label: ${appArmorLabel})`,
+        detail: `the nested Git-hook self-test did not report denials for ${[...missingDenials, ...missingMarkers].join(', ')} (AppArmor label: ${appArmorLabel})`,
         remedy:
           'check that the sandbox can report a concrete denial for a newly-created nested Git hook',
       };

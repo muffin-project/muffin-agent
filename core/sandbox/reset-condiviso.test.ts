@@ -84,7 +84,9 @@ function contieneDavvero(): void {
                 const hookResults = hookNames
                   .map((hook) => `muffin-hook-write: denied:${hook}`)
                   .join('\\n');
-                return `printf "muffin-apparmor-label: mocked\\n${hookResults}\\nmuffin sandbox hook self-test positive controls passed\\n"`;
+                // Model a healthy host: the mid-command replacement is
+                // recorded, not gated (see the leg docstring).
+                return `printf "muffin-apparmor-label: mocked\\n${hookResults}\\nmuffin-hook-alias: created\\nmuffin-hook-hardlink: denied\\nmuffin-hook-pre: denied\\nmuffin-hook-rename: denied\\nmuffin sandbox hook self-test positive controls passed\\n"`;
               })(),
             ]
           : command.includes('afunix.sock')
