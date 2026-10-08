@@ -7,13 +7,14 @@
 # Bubblewrap sets no-new-privs before execing its command. AppArmor's upstream
 # bwrap-userns-restrict profile documents that children must be stacked against
 # the bwrap policy in this case; the explicit pix transition below keeps the
-# hook denies effective while moving children into a capability-free profile.
+# hook denies effective for every stacked child.
 abi <abi/4.0>,
 include <tunables/global>
 
 profile muffin-bwrap <BWRAP_BINARY> flags=(attach_disconnected,mediate_deleted) {
   # Bubblewrap needs these rights while constructing its namespaces. Its child
-  # processes are stacked against muffin-unpriv-bwrap, which denies capabilities.
+  # processes are stacked against muffin-unpriv-bwrap so the hook denies below
+  # stay effective for them.
   allow capability,
   allow file rwlkm /{**,},
   allow network,
@@ -42,9 +43,14 @@ profile muffin-bwrap <BWRAP_BINARY> flags=(attach_disconnected,mediate_deleted) 
 }
 
 profile muffin-unpriv-bwrap flags=(attach_disconnected,mediate_deleted) {
-  # Keep normal shell/Git commands usable while stripping the namespace
-  # capabilities granted to bwrap itself. Repeated child transitions collapse
-  # duplicate stack entries and retain this restriction.
+  # Keep normal shell/Git commands usable. Repeated child transitions collapse
+  # duplicate stack entries. No capability rule here on purpose: stripping
+  # capabilities from stacked children breaks userns setup on nested or
+  # containerized hosts — measured on hosted CI, where every contained command
+  # failed with contain_failed ("nested userns is capability-restricted"),
+  # not just hook writes. Capability hardening for shell children is a
+  # separate follow-up for real-host validation; the hook-deny boundary does
+  # not depend on it.
   allow file rwlkm /{**,},
   allow network,
   allow unix,
@@ -58,8 +64,6 @@ profile muffin-unpriv-bwrap flags=(attach_disconnected,mediate_deleted) {
   allow pivot_root,
   allow dbus,
   allow pix /** -> &muffin-unpriv-bwrap,
-
-  audit deny capability,
 
   include if exists <local/unpriv-bwrap>
 }

@@ -775,9 +775,13 @@ same shell invocation, so the operating-system profile supplies the second
 boundary: Linux requires `scripts/install/bwrap.apparmor` loaded against the
 real bwrap path with `userns`, explicit allow rules and write/link denies for
 Git's active hook names. Its `pix` rule stacks bwrap children under the same
-deny policy while removing the namespace capabilities from the shell child;
-that transition matters because bwrap sets `no-new-privs` before it executes the
-command. macOS Seatbelt's hook-path deny remains in force.
+deny policy; that transition matters because bwrap sets `no-new-privs` before it
+executes the command. Capability stripping for shell children is deliberately
+not part of this profile: on nested or containerized hosts it breaks userns
+setup for every contained command (measured on hosted CI as `contain_failed`
+on all shell tests), so it waits for real-host validation as a separate
+follow-up. The hook-deny boundary does not depend on it. macOS Seatbelt's
+hook-path deny remains in force.
 
 Before shell execution, `SandboxExecutor` tests the real `SandboxManager` path
 with ordinary writes, nested `git init`/`git add`, and every active hook name in

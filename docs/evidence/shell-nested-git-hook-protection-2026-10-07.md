@@ -27,8 +27,8 @@ list. Deeper pre-enumeration cannot close this timing gap.
 On native Linux, the shared bwrap profile retains `userns`, explicitly allows the
 operations bwrap and its child need, and denies write/link access to every
 active hook filename documented by Git. It uses an explicit `pix` stack for
-bwrap children because bwrap sets `no-new-privs`; the child stack removes
-namespace capabilities while retaining the hook denies. The policy leaves
+bwrap children because bwrap sets `no-new-privs`; the stacked children keep the
+hook denies. The policy leaves
 `*.sample` template files writable. The initial hosted run loaded a
 `default_allow` profile, but the production child still created the hook; that
 run did not isolate whether mode, profile attachment, or child stacking caused
@@ -87,6 +87,17 @@ mutation checks. [Docker AppArmor documentation](https://docs.docker.com/engine/
   contain `git_hooks_unprotected`; an unrelated failure does not count.
 
 ## Limits and reversal conditions
+
+Amendment 2026-10-08: the candidate first shipped an `audit deny capability`
+rule in the stacked child profile. The exact-head hosted run failed 66 shell
+tests with `contain_failed` ("nested userns is capability-restricted; caller
+must provide CAP_SYS_ADMIN"), including the ordinary-write positive controls —
+so the capability rule broke containment itself on that host instead of
+hardening it. The rule is removed; the hook denies stay in the parent profile
+and still apply to stacked children. The exact-head Linux run must confirm the
+denied writes and the rule-removal mutation on this amended head before the
+bounded claim is accepted. Capability stripping for shell children is a
+separate follow-up for real-host validation, not part of #862.
 
 This closes direct active hook filenames under a real `.git/hooks` directory.
 Git's `core.hooksPath`, a Git directory placed elsewhere, and symlink-based
