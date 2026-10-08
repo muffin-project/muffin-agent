@@ -11,6 +11,28 @@ describe('safe provider error replies', () => {
     expect(reply).not.toContain('secret gateway payload');
   });
 
+  it('gives an actionable payment diagnostic for HTTP 402', () => {
+    const reply = providerErrorReply(
+      new ProviderError('private billing payload', true, 402, 'transport'),
+    );
+    expect(reply).toContain('HTTP 402');
+    expect(reply).toContain('saldo');
+    expect(reply).toContain('limiti');
+    expect(reply).not.toContain('Riprova tra poco');
+    expect(reply).not.toContain('private billing payload');
+  });
+
+  it('points HTTP 404 toward the model or provider routing without echoing upstream text', () => {
+    const reply = providerErrorReply(
+      new ProviderError('private route payload', true, 404, 'transport'),
+    );
+    expect(reply).toContain('HTTP 404');
+    expect(reply).toContain('modello');
+    expect(reply).toContain('provider.routing');
+    expect(reply).not.toContain('Riprova tra poco');
+    expect(reply).not.toContain('private route payload');
+  });
+
   it('handles a connection failure without status', () => {
     expect(
       providerErrorReply(
