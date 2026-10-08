@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -897,18 +897,21 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
       // way. Linux must refuse; macOS Seatbelt has no rule for the hooks
       // entry itself (see the method docstring), so there the attempt is
       // recorded but not gated — and no through-write is attempted, leaving
-      // nothing installed behind the marker.
+      // nothing installed behind the marker. Planted contents are asserted
+      // host-side below (not in-shell), so a mismatch names the exact door
+      // instead of aborting the compound early and shadowing later markers.
       ...(process.platform === 'darwin'
         ? ['git init --quiet --template=empty-template alias2']
         : ['git init --quiet alias2']),
       'mkdir -p alias2/redirected',
       'printf planted > alias2/redirected/pre-commit',
+      'printf evil2 > ordinary/evil2',
+      'if ln ordinary/evil2 alias2/.git/hooks/pre-commit 2>/dev/null; then printf "muffin-hook-hardlink: allowed\\n"; else printf "muffin-hook-hardlink: denied\\n"; fi',
       'rm -rf alias2/.git/hooks',
       'if ln -s ../redirected alias2/.git/hooks 2>/dev/null; then printf "muffin-hook-alias: created\\n"; else printf "muffin-hook-alias: denied\\n"; fi',
       ...(process.platform === 'linux'
         ? [
             'if printf hook > alias2/.git/hooks/pre-commit 2>/dev/null; then printf "muffin-hook-alias-write: allowed\\n"; else printf "muffin-hook-alias-write: denied\\n"; fi',
-            'test "$(cat alias2/redirected/pre-commit)" = planted',
           ]
         : []),
       'if printf hook > pre/.git/hooks/pre-commit 2>/dev/null; then printf "muffin-hook-pre: allowed\\n"; else printf "muffin-hook-pre: denied\\n"; fi',
@@ -916,7 +919,6 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
       'test -f ordinary/file.txt',
       'test -f nested/tracked.txt',
       'test -f nested/.git/index',
-      'test "$(cat pre-resolved/pre-commit)" = planted',
       'printf "muffin sandbox hook self-test positive controls passed\\n"',
     ].join(' && ');
     const controller = new AbortController();
@@ -973,29 +975,56 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
     const appArmorLabel =
       /muffin-apparmor-label: ([^\r\n]+)/.exec(result.stdout)?.[1]?.trim() ?? 'unavailable';
     const aliasReplaced = result.stdout.includes('muffin-hook-alias: created');
+    const doors = {
+      direct: /muffin-hook-write: allowed:([a-z0-9-]+)/.exec(result.stdout)?.[1] ?? null,
+      aliasReplaced,
+      aliasWrite: result.stdout.includes('muffin-hook-alias-write: allowed'),
+      hardlink: result.stdout.includes('muffin-hook-hardlink: allowed'),
+      pre: result.stdout.includes('muffin-hook-pre: allowed'),
+      rename: result.stdout.includes('muffin-hook-rename: allowed'),
+    };
+    const doorSummary = `direct:${doors.direct ?? 'denied'} alias:${aliasReplaced ? 'created' : 'denied'} alias-write:${doors.aliasWrite ? 'allowed' : 'denied'} hardlink:${doors.hardlink ? 'allowed' : 'denied'} pre:${doors.pre ? 'allowed' : 'denied'} rename:${doors.rename ? 'allowed' : 'denied'}`;
     const unprotected =
-      /muffin-hook-write: allowed:([a-z0-9-]+)/.exec(result.stdout)?.[1] ??
+      (doors.direct ??
       // The mid-command replacement gates Linux only: macOS Seatbelt has no
       // rule for the hooks entry itself, so there a created alias is the
       // documented platform gap (recorded by the marker, installed nothing —
       // no through-write is attempted on darwin), not a shell-killing event.
-      (aliasReplaced && process.platform === 'linux'
-        ? 'hooks dir replaced by a symlink mid-command'
-        : null) ??
-      (result.stdout.includes('muffin-hook-alias-write: allowed')
-        ? 'write through a mid-command hooks symlink'
-        : null) ??
-      (result.stdout.includes('muffin-hook-pre: allowed')
-        ? 'write through a pre-existing hooks symlink'
-        : null) ??
-      (result.stdout.includes('muffin-hook-rename: allowed') ? 'rename into hooks' : null);
+      (aliasReplaced && process.platform === 'linux' ? 'hooks dir replaced by a symlink mid-command' : null) ??
+      (doors.aliasWrite ? 'write through a mid-command hooks symlink' : null) ??
+      (doors.hardlink ? 'hardlink into hooks' : null) ??
+      (doors.pre ? 'write through a pre-existing hooks symlink' : null) ??
+      (doors.rename ? 'rename into hooks' : null));
     if (unprotected) {
       return {
         reason: 'git_hooks_unprotected',
-        detail: `a contained process installed (or could install) a hook via ${unprotected} after the sandbox profile was built (AppArmor label: ${appArmorLabel})`,
+        detail: `a contained process installed (or could install) a hook via ${unprotected} after the sandbox profile was built (AppArmor label: ${appArmorLabel}; doors ${doorSummary})`,
         remedy:
           'on Linux, render scripts/install/bwrap.apparmor for the exact host bwrap binary and load it; the writer label should contain muffin-bwrap//&muffin-unpriv-bwrap. See docs/user/INSTALL.md. On macOS verify Seatbelt still denies .git/hooks writes. Shell calls remain refused until the check holds',
       };
+    }
+    // Planted contents are asserted host-side: a through-write that the markers
+    // somehow missed still shows up here, naming the exact door.
+    const plantedDoors: Array<[string, string]> = [
+      ['write through a mid-command hooks symlink', join(cwd, 'alias2', 'redirected', 'pre-commit')],
+      ['write through a pre-existing hooks symlink', join(cwd, 'pre-resolved', 'pre-commit')],
+    ];
+    for (const [door, plantedPath] of plantedDoors) {
+      if (process.platform !== 'linux' && door.startsWith('write through a mid-command')) continue;
+      let content: string;
+      try {
+        content = readFileSync(plantedPath, 'utf8');
+      } catch {
+        content = 'UNREADABLE';
+      }
+      if (content !== 'planted\n') {
+        return {
+          reason: 'git_hooks_unprotected',
+          detail: `a contained process installed (or could install) a hook via ${door} after the sandbox profile was built (AppArmor label: ${appArmorLabel}; doors ${doorSummary}; planted file holds ${JSON.stringify(content.slice(0, 40))})`,
+          remedy:
+            'on Linux, render scripts/install/bwrap.apparmor for the exact host bwrap binary and load it; the writer label should contain muffin-bwrap//&muffin-unpriv-bwrap. See docs/user/INSTALL.md. On macOS verify Seatbelt still denies .git/hooks writes. Shell calls remain refused until the check holds',
+        };
+      }
     }
     const missingDenials = ACTIVE_GIT_HOOK_NAMES.filter(
       (hook) => !result.stdout.includes(`muffin-hook-write: denied:${hook}`),
@@ -1009,9 +1038,11 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
       !result.stdout.includes('muffin-hook-alias-write: denied')
         ? ['muffin-hook-alias-write: denied']
         : []),
-      ...['muffin-hook-pre: denied', 'muffin-hook-rename: denied'].filter(
-        (marker) => !result.stdout.includes(marker),
-      ),
+      ...[
+        'muffin-hook-hardlink: denied',
+        'muffin-hook-pre: denied',
+        'muffin-hook-rename: denied',
+      ].filter((marker) => !result.stdout.includes(marker)),
     ];
     if (missingDenials.length > 0 || missingMarkers.length > 0) {
       return {

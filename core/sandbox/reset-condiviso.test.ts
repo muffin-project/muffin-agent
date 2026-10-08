@@ -87,7 +87,7 @@ function contieneDavvero(): void {
                 // Model a healthy host per platform: Linux refuses the
                 // mid-command replacement, macOS records it (see the leg).
                 const aliasMarker = process.platform === 'linux' ? 'denied' : 'created';
-                return `printf "muffin-apparmor-label: mocked\\n${hookResults}\\nmuffin-hook-alias: ${aliasMarker}\\nmuffin-hook-alias-write: denied\\nmuffin-hook-pre: denied\\nmuffin-hook-rename: denied\\nmuffin sandbox hook self-test positive controls passed\\n"`;
+                return `printf "muffin-apparmor-label: mocked\\n${hookResults}\\nmuffin-hook-alias: ${aliasMarker}\\nmuffin-hook-alias-write: denied\\nmuffin-hook-hardlink: denied\\nmuffin-hook-pre: denied\\nmuffin-hook-rename: denied\\nmuffin sandbox hook self-test positive controls passed\\n"`;
               })(),
             ]
           : command.includes('afunix.sock')

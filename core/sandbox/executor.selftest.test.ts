@@ -64,7 +64,7 @@ const available = (): SandboxProbe => ({ available: true, mechanism: 'bubblewrap
 const denyReadOf = (customConfig: Partial<SandboxRuntimeConfig> | undefined): readonly string[] =>
   customConfig?.filesystem?.denyRead ?? [];
 
-function mockProtectedSandbox(options: { hookWriteAllowed?: boolean; hookAliasCreated?: boolean; unixFilterAbsent?: boolean } = {}): void {
+function mockProtectedSandbox(options: { hookWriteAllowed?: boolean; hookAliasCreated?: boolean; hookHardlinkAllowed?: boolean; unixFilterAbsent?: boolean } = {}): void {
   wrapWithSandboxArgv.mockImplementation(async (command, _binShell, customConfig) => ({
     argv:
       denyReadOf(customConfig).length > 0
@@ -82,13 +82,10 @@ function mockProtectedSandbox(options: { hookWriteAllowed?: boolean; hookAliasCr
                     return `muffin-hook-write: ${result}:${hook}`;
                   })
                   .join('\\n');
-                // A healthy Linux host refuses the mid-command replacement
-                // (link-deny); a healthy macOS host has no rule for the hooks
-                // entry itself, so the replacement succeeds there and the leg
-                // records it without gating — model both faithfully.
                 const aliasMarker =
                   options.hookAliasCreated || process.platform !== 'linux' ? 'created' : 'denied';
-                return `printf "muffin-apparmor-label: muffin-bwrap//&muffin-unpriv-bwrap (enforce)\\n${hookResults}\\nmuffin-hook-alias: ${aliasMarker}\\nmuffin-hook-alias-write: denied\\nmuffin-hook-pre: denied\\nmuffin-hook-rename: denied\\nmuffin sandbox hook self-test positive controls passed\\n"`;
+                const hardlinkMarker = options.hookHardlinkAllowed ? 'allowed' : 'denied';
+                return `printf "muffin-apparmor-label: muffin-bwrap//&muffin-unpriv-bwrap (enforce)\\n${hookResults}\\nmuffin-hook-alias: ${aliasMarker}\\nmuffin-hook-alias-write: denied\\nmuffin-hook-hardlink: ${hardlinkMarker}\\nmuffin-hook-pre: denied\\nmuffin-hook-rename: denied\\nmuffin sandbox hook self-test positive controls passed\\n"`;
               })(),
             ]
           : command.includes('afunix.sock') && !options.unixFilterAbsent
@@ -209,6 +206,28 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     expect(existsSync(witness)).toBe(false);
     // The failed hook leg is the last sandboxed call; the caller is never wrapped.
     expect(wrapWithSandboxArgv).toHaveBeenCalledTimes(3);
+  });
+
+  it('a hardlinked hook install that is not contained makes the sandbox unavailable before the caller command runs', async () => {
+    // Fault injection for a missing link-deny on hook filenames: the
+    // hardlink lands where a direct write would be refused.
+    mockProtectedSandbox({ hookHardlinkAllowed: true });
+
+    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+    toClose = executor;
+
+    const status = await executor.verify();
+    expect(status.available).toBe(false);
+    if (status.available) return;
+    expect(status.reason).toBe('git_hooks_unprotected');
+    expect(status.detail).toContain('hardlink');
+
+    const dir = mktempWorkspace();
+    const witness = join(dir, 'caller-command-ran.txt');
+    await expect(
+      executor.run({ command: `touch '${witness}'`, cwd: dir, writeScope: [dir] }),
+    ).rejects.toThrow(/sandbox unavailable: git_hooks_unprotected/);
+    expect(existsSync(witness)).toBe(false);
   });
 
   it.runIf(process.platform === 'linux')(

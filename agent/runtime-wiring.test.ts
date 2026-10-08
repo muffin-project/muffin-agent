@@ -117,6 +117,8 @@ describe('the registered shell write tool contains Git hooks through the product
         aliasInit,
         'mkdir -p alias2/redirected',
         'printf planted > alias2/redirected/pre-commit',
+        'printf evil2 > ordinary/evil2',
+        'if ln ordinary/evil2 alias2/.git/hooks/pre-commit 2>/dev/null; then printf writable; else printf denied; fi > hardlink-result.txt',
         'rm -rf alias2/.git/hooks',
         // Linux must refuse the replacement (link-deny); macOS Seatbelt has
         // no rule for the hooks entry itself, so there the attempt is
@@ -175,6 +177,7 @@ describe('the registered shell write tool contains Git hooks through the product
         expect(readFileSync(join(workspace, 'nested', '.git', 'index'))).toBeTruthy();
         expect(readFileSync(join(workspace, 'nested-hook-result.txt'), 'utf8')).toBe('denied');
         expect(readFileSync(join(workspace, 'nested-fsmonitor-result.txt'), 'utf8')).toBe('denied');
+        expect(readFileSync(join(workspace, 'hardlink-result.txt'), 'utf8')).toBe('denied');
         expect(readFileSync(join(workspace, 'pre-result.txt'), 'utf8')).toBe('denied');
         expect(readFileSync(join(workspace, 'rename-result.txt'), 'utf8')).toBe('denied');
         expect(readFileSync(join(workspace, 'top-level-hook-result.txt'), 'utf8')).toBe('denied');
