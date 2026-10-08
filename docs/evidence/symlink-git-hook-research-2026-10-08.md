@@ -80,6 +80,21 @@ not claimed. Candidate B (post-command scan) is not built: with the gated
 doors closed, nothing persists silently except through the recorded residual,
 and a scanner would add a mechanism without closing it either.
 
+## 7. Implementation evidence (head 29108d0b, PR #868)
+
+Exact-head hosted Linux run 37770287990, all green: verifica (typecheck,
+profile render+load, probe bwrap-contains-here, full unit suite incl. the new
+hardlink fault-injection test, profile-mutation step requiring
+`git_hooks_unprotected` SUCCESS), accettazione 12m07s SUCCESS, plus install,
+collegamenti, strumenti, dco, docker, symphony-fixture. Per-door outcome on
+that run: direct denied (29/29 filename rules), hardlink denied (filename `wl`
+rules), pre-existing symlink denied (resolved concrete target via
+`resolveIfSymlink`), rename denied (filename rules), mid-command replacement
+created-and-recorded on every platform (tripwire, ungated — the owned
+residual). macOS behavior of the new leg steps is unproven by CI (Linux-only
+runners); the leg's platform branches keep macOS shell working while proving
+the three gated doors there through Seatbelt translation.
+
 Peer note: no peer sandbox comparison was dispositive here — the question is
 AppArmor mediation semantics plus Git lookup behavior, both primary-source and
 locally probed above. Most peer sandboxes do not protect Git hooks at all;
