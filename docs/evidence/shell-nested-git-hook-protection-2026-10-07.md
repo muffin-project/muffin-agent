@@ -88,16 +88,15 @@ mutation checks. [Docker AppArmor documentation](https://docs.docker.com/engine/
 
 ## Limits and reversal conditions
 
-Amendment 2026-10-08: the candidate first shipped an `audit deny capability`
-rule in the stacked child profile. The exact-head hosted run failed 66 shell
-tests with `contain_failed` ("nested userns is capability-restricted; caller
-must provide CAP_SYS_ADMIN"), including the ordinary-write positive controls —
-so the capability rule broke containment itself on that host instead of
-hardening it. The rule is removed; the hook denies stay in the parent profile
-and still apply to stacked children. The exact-head Linux run must confirm the
+Amendment 2026-10-08 (2): removing `audit deny capability` alone changed
+nothing — the rerun failed identically, because enforce mode denies
+capabilities that no rule allows. The child profile now carries
+`allow capability` like its parent: stacked children keep the rights bwrap
+had, and the hook denies in the parent profile still apply to the stack.
+Capability stripping for shell children remains a separate real-host
+follow-up, not part of #862. The exact-head Linux run must confirm the
 denied writes and the rule-removal mutation on this amended head before the
-bounded claim is accepted. Capability stripping for shell children is a
-separate follow-up for real-host validation, not part of #862.
+bounded claim is accepted.
 
 This closes direct active hook filenames under a real `.git/hooks` directory.
 Git's `core.hooksPath`, a Git directory placed elsewhere, and symlink-based

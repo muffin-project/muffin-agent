@@ -44,13 +44,15 @@ profile muffin-bwrap <BWRAP_BINARY> flags=(attach_disconnected,mediate_deleted) 
 
 profile muffin-unpriv-bwrap flags=(attach_disconnected,mediate_deleted) {
   # Keep normal shell/Git commands usable. Repeated child transitions collapse
-  # duplicate stack entries. No capability rule here on purpose: stripping
-  # capabilities from stacked children breaks userns setup on nested or
-  # containerized hosts — measured on hosted CI, where every contained command
-  # failed with contain_failed ("nested userns is capability-restricted"),
-  # not just hook writes. Capability hardening for shell children is a
-  # separate follow-up for real-host validation; the hook-deny boundary does
-  # not depend on it.
+  # duplicate stack entries. Capabilities stay allowed here on purpose:
+  # enforce mode denies anything not explicitly allowed, so a child profile
+  # without a capability rule strips every capability from stacked children —
+  # which breaks userns setup on nested or containerized hosts (measured on
+  # hosted CI: every contained command failed with contain_failed, "nested
+  # userns is capability-restricted"). The hook-deny boundary lives in the
+  # parent profile and still applies to this stack; capability hardening for
+  # shell children is a separate follow-up for real-host validation.
+  allow capability,
   allow file rwlkm /{**,},
   allow network,
   allow unix,
