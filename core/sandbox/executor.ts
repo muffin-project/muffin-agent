@@ -100,18 +100,55 @@ export const EXEC_MAX_TIMEOUT_MS = 600_000;
  */
 const SELFTEST_SENTINEL_NAME = '.muffin-selftest-sentinel';
 /**
- * Per leg. Three legs (deny, allow, AF_UNIX on Linux) plus the control run,
+ * Per leg. The self-test runs deny, allow and Git-hook legs, plus the AF_UNIX
+ * client on Linux and its host-side control run,
  * bounded as a whole by `SELFTEST_OVERALL_TIMEOUT_MS`; a leg that hangs is
  * reported as a containment failure, never as a held deny or filter.
  */
 const SELFTEST_LEG_TIMEOUT_MS = 10_000;
+/**
+ * Active hook filenames recognized by Git's current githooks manual. Git ships
+ * `.sample` files too, so this self-test probes only the active names and keeps
+ * the default templates writable. The AppArmor policy carries the same list.
+ */
+const ACTIVE_GIT_HOOK_NAMES = [
+  'applypatch-msg',
+  'pre-applypatch',
+  'post-applypatch',
+  'pre-commit',
+  'pre-merge-commit',
+  'prepare-commit-msg',
+  'commit-msg',
+  'post-commit',
+  'pre-rebase',
+  'post-checkout',
+  'post-merge',
+  'pre-push',
+  'pre-receive',
+  'update',
+  'proc-receive',
+  'post-receive',
+  'post-update',
+  'reference-transaction',
+  'push-to-checkout',
+  'pre-auto-gc',
+  'post-rewrite',
+  'sendemail-validate',
+  'fsmonitor-watchman',
+  'fsmonitor-watchmanv2',
+  'p4-changelist',
+  'p4-prepare-changelist',
+  'p4-post-changelist',
+  'p4-pre-submit',
+  'post-index-change',
+] as const;
 /**
  * Belt-and-suspenders over the two per-leg timeouts: bounds `initialize()`
  * itself, which has no timeout of its own (it may start a network bridge).
  * "Nessun blocco eterno" — a hang here must resolve to unavailable, not hang
  * `doctor`/`muffin init`/the first `shell_run` forever.
  */
-const SELFTEST_OVERALL_TIMEOUT_MS = 25_000;
+const SELFTEST_OVERALL_TIMEOUT_MS = 45_000;
 /** Per stream, head+tail around a marker; matches what peers keep inline. */
 const EXEC_MAX_OUTPUT_CHARS = 30_000;
 /** Hard buffering cap per stream so a firehose cannot eat the process heap. */
@@ -176,7 +213,7 @@ const STRICT_SHELL_PREFIX = 'set -eo pipefail; ';
 
 /** What the real self-test found wrong — same reason taxonomy `probe.ts` uses. */
 type ContainmentFailure = {
-  reason: 'userns_denied' | 'contain_failed' | 'unix_filter_absent';
+  reason: 'userns_denied' | 'contain_failed' | 'unix_filter_absent' | 'git_hooks_unprotected';
   detail: string;
   remedy: string;
 };
@@ -446,16 +483,13 @@ const NESTED_GIT_HOOKS_SEARCH_DEPTH = 3;
  * runs on (a VPS) — the same shape of silent-empty-deny-list this module's
  * own docstring already warns about for a typo'd config key.
  *
- * **Declared limit, not silently left open**: a checkout created and
- * written to inside ONE `shell_run` call (e.g. `git clone x && echo evil >
- * x/.git/hooks/pre-commit`) still gets through — this walk runs once,
- * before the whole compound command is spawned, and a filesystem profile
- * compiled ahead of time cannot see a directory the command itself creates
- * mid-execution. `agent/tools/fs.ts`'s structural check
- * (`isNestedGitHooksPath`) has no such gap for the `fs_write` tool, because
- * it inspects the actual resolved path of each call rather than a
- * pre-computed list — but `shell_run`'s containment is srt's ahead-of-time
- * profile, which has no equivalent live check.
+ * This scan only covers repositories that exist before this call. A nested
+ * repository created mid-command is protected by the host-level AppArmor /
+ * Seatbelt hook-path rule, which `selfTestNestedGitHookWrite()` verifies
+ * through the same SandboxManager door before caller commands are allowed.
+ * `agent/tools/fs.ts` keeps its per-call structural check for `fs_write`;
+ * this walk remains useful for pre-existing repositories and complements the
+ * host rule rather than trying to predict paths created later in the shell.
  */
 function nestedGitHooksDirs(root: string, depth: number = NESTED_GIT_HOOKS_SEARCH_DEPTH): string[] {
   const found: string[] = [];
@@ -582,13 +616,11 @@ export class SandboxExecutor {
       //
       // The timer backing that deadline is captured and cleared once the race
       // settles — measured, not assumed (2026-08-26): `Promise.race` does not
-      // cancel the losing side, so an uncleared `setTimeout(…, 25_000)` here
-      // kept `doctor`/`init`'s *process* alive for the full 25s after `verify()`
-      // had already resolved in under 100ms, because Node will not exit while a
-      // referenced timer is still pending — a self-inflicted cost so close in
-      // shape to the reperto (a healthy answer, paid for with a silent hang on
-      // the real path) that it would have shipped as this file's own instance
-      // of it.
+      // cancel the losing side, so the prior 25s timer kept `doctor`/`init`'s
+      // *process* alive until the full bound after `verify()` had resolved in
+      // under 100ms. The same rule applies to the current bound: Node will not
+      // exit while a referenced timer is still pending, so every completed race
+      // clears it rather than charging its remaining time to the caller.
       let overallTimer: NodeJS.Timeout | undefined;
       let failure: ContainmentFailure | null;
       try {
@@ -757,6 +789,9 @@ export class SandboxExecutor {
       };
     }
 
+    const hooks = await this.selfTestNestedGitHookWrite(cwd);
+    if (hooks) return hooks;
+
     // Linux only: the seccomp stage that blocks `socket(AF_UNIX, …)` was
     // requested by `networkOff()`, and srt silently skips it when it cannot
     // find its `apply-seccomp` binary. A real client is the only way to know
@@ -766,6 +801,111 @@ export class SandboxExecutor {
       if (unix) return unix;
     }
 
+    return null;
+  }
+
+  /**
+   * Verify that the actual SandboxManager invocation refuses a hook filename
+   * created after the sandbox profile was built, while ordinary project writes
+   * and a nested `git add` still work. The empty template avoids macOS
+   * Seatbelt's broader `.git/hooks/**` deny from rejecting Git's `*.sample`
+   * files before this test reaches the new hook itself.
+   *
+   * No `denyWrite` entry is supplied here: on Linux the hook-specific rule is
+   * carried by the loaded AppArmor profile; on macOS Seatbelt supplies it. A
+   * missing or misattached host policy therefore disables shell execution
+   * before the caller's command runs.
+   */
+  private async selfTestNestedGitHookWrite(cwd: string): Promise<ContainmentFailure | null> {
+    const command = [
+      "printf 'muffin sandbox nested-hook self-test\\n'",
+      `apparmor_label=unavailable
+if [ -r /proc/self/attr/current ]; then
+  IFS= read -r apparmor_label < /proc/self/attr/current || apparmor_label=unavailable
+fi
+printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
+      'mkdir -p ordinary empty-template/hooks',
+      'printf ordinary > ordinary/file.txt',
+      process.platform === 'darwin'
+        ? 'git init --quiet --template=empty-template nested'
+        : 'git init --quiet nested',
+      'printf tracked > nested/tracked.txt',
+      'git -C nested add tracked.txt',
+      'mkdir -p nested/.git/hooks',
+      `for hook in ${ACTIVE_GIT_HOOK_NAMES.join(' ')}; do if printf hook > "nested/.git/hooks/$hook" 2>/dev/null; then printf "muffin-hook-write: allowed:%s\\n" "$hook"; else printf "muffin-hook-write: denied:%s\\n" "$hook"; fi; done`,
+      'test -f ordinary/file.txt',
+      'test -f nested/tracked.txt',
+      'test -f nested/.git/index',
+      'printf "muffin sandbox hook self-test positive controls passed\\n"',
+    ].join(' && ');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SELFTEST_LEG_TIMEOUT_MS);
+    let result: ExecResult;
+    try {
+      const legConfig: Partial<SandboxRuntimeConfig> = {
+        network: networkOff(),
+        filesystem: { denyRead: [], allowWrite: [cwd], denyWrite: [] },
+      };
+      const wrapped = await SandboxManager.wrapWithSandboxArgv(
+        `${STRICT_SHELL_PREFIX}${command}`,
+        undefined,
+        legConfig,
+        controller.signal,
+        cwd,
+      );
+      result = await this.spawnCollect(
+        wrapped.argv,
+        this.childEnv(wrapped.env, cwd),
+        { command, cwd, writeScope: [cwd], signal: controller.signal },
+        SELFTEST_LEG_TIMEOUT_MS,
+        Date.now(),
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (result.timedOut) {
+      return {
+        reason: 'contain_failed',
+        detail: `the nested Git-hook self-test did not exit within ${SELFTEST_LEG_TIMEOUT_MS}ms`,
+        remedy:
+          'the sandboxed Git-hook check is hanging on this host; inspect the sandbox and Git processes',
+      };
+    }
+    if (
+      result.code !== 0 ||
+      !result.stdout.includes('muffin sandbox hook self-test positive controls passed')
+    ) {
+      const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;
+      return {
+        reason: 'contain_failed',
+        detail: `the nested Git-hook self-test could not complete its ordinary file and nested-repository positive controls (${detail.slice(0, 300)})`,
+        remedy:
+          'check that the real sandbox invocation can write ordinary workspace files and run Git in a nested repository',
+      };
+    }
+    const appArmorLabel =
+      /muffin-apparmor-label: ([^\r\n]+)/.exec(result.stdout)?.[1]?.trim() ?? 'unavailable';
+    const allowedHook = /muffin-hook-write: allowed:([a-z0-9-]+)/.exec(result.stdout)?.[1];
+    if (allowedHook) {
+      return {
+        reason: 'git_hooks_unprotected',
+        detail: `a contained process created nested/.git/hooks/${allowedHook} after the sandbox profile was built (AppArmor label: ${appArmorLabel})`,
+        remedy:
+          'on Linux, render scripts/install/bwrap.apparmor for the exact host bwrap binary and load it; the writer label should contain muffin-bwrap//&muffin-unpriv-bwrap. See docs/user/INSTALL.md. On macOS verify Seatbelt still denies .git/hooks writes. Shell calls remain refused until the check holds',
+      };
+    }
+    const missingDenials = ACTIVE_GIT_HOOK_NAMES.filter(
+      (hook) => !result.stdout.includes(`muffin-hook-write: denied:${hook}`),
+    );
+    if (missingDenials.length > 0) {
+      return {
+        reason: 'contain_failed',
+        detail: `the nested Git-hook self-test did not report denials for ${missingDenials.join(', ')} (AppArmor label: ${appArmorLabel})`,
+        remedy:
+          'check that the sandbox can report a concrete denial for a newly-created nested Git hook',
+      };
+    }
     return null;
   }
 

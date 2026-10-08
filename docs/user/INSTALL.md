@@ -61,6 +61,35 @@ Nothing is installed outside your home directory except optional OS packages.
 If passwordless `sudo` is not available on Linux the installer prints the one
 package-manager line it cannot perform and continues where it safely can.
 
+## Linux shell containment
+
+Linux shell commands run only when Muffin's runtime checks confirm both that
+bubblewrap works and that active Git hooks cannot be created inside a new
+nested repository. On AppArmor-enabled Linux, load the shared profile against
+the exact host `bwrap` binary. Without an effective policy, shell calls are
+refused before their requested commands run. The installer does not
+change system AppArmor policy.
+
+From the installed source checkout (the default personal install is under
+`~/.local/share/muffin/src`), run:
+
+```sh
+cd ~/.local/share/muffin/src
+bwrap_path="$(command -v bwrap)"
+test -n "$bwrap_path" || { echo 'bwrap not found in PATH' >&2; exit 1; }
+sed "s|<BWRAP_BINARY>|${bwrap_path}|" scripts/install/bwrap.apparmor \
+  | sudo tee /etc/apparmor.d/muffin-bwrap > /dev/null
+sudo apparmor_parser -r /etc/apparmor.d/muffin-bwrap
+sudo aa-status | grep muffin-bwrap
+muffin doctor
+```
+
+This is an opt-in system policy change. On Linux without AppArmor, the current
+runtime has no shipped policy for this nested-hook boundary. Any Linux host
+without an effective policy keeps rejecting shell calls rather than running
+them without the guard. The Docker Compose path is experimental and has not
+passed this hook-protection acceptance.
+
 ## Why a bootstrap shim exists
 
 The canonical installer needs to distinguish an interactive terminal from a

@@ -147,23 +147,19 @@ jobs:
       # riproduce esattamente la configurazione in cui il sandbox del vecchio
       # Muffin è stato un no-op per due mesi.
       #
-      # Il rimedio è quello che il probe stesso stampa, ed è quello applicato
-      # alla VPS: un profilo AppArmor dedicato a `bwrap` che concede `userns`.
-      # Non il sysctl, che allargherebbe il permesso a tutta la macchina — su
-      # un runner effimero sarebbe innocuo, ma allora la CI proverebbe il
-      # contenimento in una configurazione che la produzione non ha.
-      - name: profilo AppArmor per bwrap (il rimedio che il probe stampa)
+      # Load the shared enforce-mode profile. Record the parser build and the
+      # userns restriction so a real-path failure has actionable host evidence.
+      - name: profilo AppArmor condiviso per bwrap
         run: |
-          sudo tee /etc/apparmor.d/bwrap > /dev/null <<'EOF'
-          abi <abi/4.0>,
-          include <tunables/global>
-
-          profile bwrap /usr/bin/bwrap flags=(unconfined) {
-            userns,
-            include if exists <local/bwrap>
-          }
-          EOF
-          sudo apparmor_parser -r /etc/apparmor.d/bwrap
+          apparmor_parser --version
+          dpkg-query -W -f='apparmor=${Version}\n' apparmor
+          if [ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            printf 'kernel.apparmor_restrict_unprivileged_userns='
+            cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          fi
+          sed 's|<BWRAP_BINARY>|/usr/bin/bwrap|' scripts/install/bwrap.apparmor \
+            | sudo tee /etc/apparmor.d/muffin-bwrap > /dev/null
+          sudo apparmor_parser -r /etc/apparmor.d/muffin-bwrap
 
       # `npm ci` e non `npm install`: il lockfile è la verità, e un CI che
       # risolve le versioni da sé verifica un albero che nessuno ha in locale.
@@ -213,6 +209,31 @@ jobs:
           MUFFIN_REQUIRE_SANDBOX: '1'
           MUFFIN_REQUIRE_SYSTEMD: '1'
         run: npx vitest run --reporter=dot
+
+      # Mutation proof for the AppArmor hook rule: restore only the shared
+      # profile's hook policy, then run the same production-path test. Its
+      # failure must name git_hooks_unprotected, so an unrelated setup failure
+      # cannot masquerade as evidence that the rule is load-bearing.
+      - name: 'mutazione del profilo: senza deny Git-hook la shell rifiuta il runtime'
+        env:
+          MUFFIN_REQUIRE_SANDBOX: '1'
+        run: |
+          set -euo pipefail
+          sed 's|<BWRAP_BINARY>|/usr/bin/bwrap|' scripts/install/bwrap.apparmor \
+            | awk '!index($0, "deny /**/.git/hooks/")' \
+            | sudo tee /etc/apparmor.d/muffin-bwrap > /dev/null
+          sudo apparmor_parser -r /etc/apparmor.d/muffin-bwrap
+
+          output="$(mktemp)"
+          if npx vitest run agent/runtime-wiring.test.ts \
+            -t 'one real turn keeps ordinary writes and nested Git tracking' \
+            --reporter=dot >"$output" 2>&1; then
+            cat "$output"
+            echo 'The production-path test stayed green after removing AppArmor Git-hook denies.' >&2
+            exit 1
+          fi
+          cat "$output"
+          grep -F 'git_hooks_unprotected' "$output"
 
   # -------------------------------------------------------------------------
   # Accettazione: il binario vero, contro un $HOME finto, senza un modello vero.
@@ -320,18 +341,17 @@ jobs:
         run: sudo bash scripts/install-ci-bubblewrap.sh
 
       - if: steps.scope.outputs.run != 'false'
-        name: profilo AppArmor per bwrap (il rimedio che il probe stampa)
+        name: profilo AppArmor condiviso per bwrap
         run: |
-          sudo tee /etc/apparmor.d/bwrap > /dev/null <<'EOF'
-          abi <abi/4.0>,
-          include <tunables/global>
-
-          profile bwrap /usr/bin/bwrap flags=(unconfined) {
-            userns,
-            include if exists <local/bwrap>
-          }
-          EOF
-          sudo apparmor_parser -r /etc/apparmor.d/bwrap
+          apparmor_parser --version
+          dpkg-query -W -f='apparmor=${Version}\n' apparmor
+          if [ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            printf 'kernel.apparmor_restrict_unprivileged_userns='
+            cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          fi
+          sed 's|<BWRAP_BINARY>|/usr/bin/bwrap|' scripts/install/bwrap.apparmor \
+            | sudo tee /etc/apparmor.d/muffin-bwrap > /dev/null
+          sudo apparmor_parser -r /etc/apparmor.d/muffin-bwrap
 
       - if: steps.scope.outputs.run != 'false'
         run: npm ci
