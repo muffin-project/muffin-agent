@@ -495,6 +495,14 @@ describe('draft: la copia e la scrittura sono lo stesso file', () => {
       realpathSync(join(root, 'nota.md')),
     );
   });
+
+  it('espone il vincolo di destinazione accanto a `fs_write`', () => {
+    const { scope } = scoped();
+    const description = byName(scope, 'fs_write').spec.description;
+    expect(description).toContain('explicitly requested destination is denied');
+    expect(description).toContain('do not write the same content to another path');
+    expect(description).toContain('ask before changing destinations');
+  });
 });
 
 /**
