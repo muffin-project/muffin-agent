@@ -284,3 +284,123 @@ describe('continuazione conversazionale (P0-B)', () => {
     expect(env.turns.get('cont-1')?.status).toBe('continuable');
   });
 });
+
+
+describe('message.received automation seam', () => {
+  const settled = (workId: string): import('../../../agent/loop.js').TurnResult => ({
+    text: '',
+    iterations: 0,
+    traceId: workId,
+    turnId: workId,
+    stopped: 'answered',
+    taint: 0,
+    usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+  });
+
+  it('matched deterministic rule runs once and never calls the model', async () => {
+    const env = ambiente();
+    const port = porta('telegram');
+    const ev = evento(port, {
+      eventId: 'greeting-1',
+      compositionId: 'greeting-1',
+      parts: [{ source: 'author', tier: 0, text: 'buongiorno' }],
+    });
+    const chat = vi.spyOn(env.loop.provider, 'chat');
+    let actions = 0;
+
+    const out = await runWork(
+      {
+        loop: env.loop,
+        sessions: env.sessions,
+        lane: new ModelLane(),
+        automationRules: [
+          {
+            id: 'owner-buongiorno',
+            matches: (event) =>
+              event.kind === 'message.received' &&
+              event.evidence['text'] === 'buongiorno' &&
+              event.evidence['principalKind'] === 'owner',
+            action: (event) => ({
+              mode: 'deterministic',
+              run: () => {
+                actions += 1;
+                return settled(event.occurrenceId);
+              },
+            }),
+          },
+        ],
+      },
+      port,
+      ev,
+      {
+        workId: 'greeting-work-1',
+        identity: identify(ev.identity, '7'),
+        text: 'buongiorno',
+        contentTaint: 0,
+        replyTo: ev.address.record,
+        signal: new AbortController().signal,
+        steer: () => [],
+      },
+    );
+
+    expect(actions).toBe(1);
+    expect(chat).not.toHaveBeenCalled();
+    expect(out).toMatchObject({ turnId: 'greeting-work-1', iterations: 0, stopped: 'answered' });
+    // A consumed deterministic message does not mint a hidden agent Turn.
+    expect(env.turns.get('greeting-work-1')).toBeNull();
+  });
+
+  it('negative match takes the ordinary ingress path with one normal model call', async () => {
+    const env = ambiente();
+    const port = porta('telegram');
+    const ev = evento(port, {
+      eventId: 'ordinary-1',
+      compositionId: 'ordinary-1',
+      parts: [{ source: 'author', tier: 0, text: 'come va?' }],
+    });
+    const chat = vi.spyOn(env.loop.provider, 'chat');
+    let matches = 0;
+    let actions = 0;
+
+    const out = await runWork(
+      {
+        loop: env.loop,
+        sessions: env.sessions,
+        lane: new ModelLane(),
+        automationRules: [
+          {
+            id: 'only-buongiorno',
+            matches: (event) => {
+              matches += 1;
+              return event.evidence['text'] === 'buongiorno';
+            },
+            action: () => ({
+              mode: 'deterministic',
+              run: () => {
+                actions += 1;
+                return settled('should-not-run');
+              },
+            }),
+          },
+        ],
+      },
+      port,
+      ev,
+      {
+        workId: 'ordinary-work-1',
+        identity: identify(ev.identity, '7'),
+        text: 'come va?',
+        contentTaint: 0,
+        replyTo: ev.address.record,
+        signal: new AbortController().signal,
+        steer: () => [],
+      },
+    );
+
+    expect(matches).toBe(1);
+    expect(actions).toBe(0);
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(out.stopped).toBe('answered');
+    expect(env.turns.get('ordinary-work-1')?.principal.kind).toBe('owner');
+  });
+});

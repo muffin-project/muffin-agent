@@ -68,9 +68,24 @@ export function mcpCapabilityFor(server: string, tool: McpToolDef): CapabilityDe
   };
 }
 
+export type McpEventConnection = {
+  connectionId: string;
+  serverId: string;
+  request(method: string, params?: unknown): Promise<unknown>;
+  getCapabilities(): unknown;
+  /** Optional tuning knobs consumed by an embedded event layer. */
+  pollIntervalMs?: number;
+  maxEvents?: number;
+};
+
 export type McpAttachment = {
   tools: RegisteredTool[];
   capabilities: CapabilityDecl[];
+  /**
+   * Verified host-owned MCP sessions exposed as a narrow Events-capable view.
+   * Consumers never reconnect or receive the underlying credentials/transport.
+   */
+  eventConnections: McpEventConnection[];
   /** One line per server: connected with N tools, suspended with the reason, or failed. */
   report: string[];
   close(): Promise<void>;
@@ -87,6 +102,7 @@ export async function buildMcpTools(registry: McpRegistry, deps: McpDeps = {}): 
   const capabilities: CapabilityDecl[] = [];
   const report: string[] = [];
   const connections: McpConnection[] = [];
+  const eventConnections: McpEventConnection[] = [];
 
   for (const [server, entry] of Object.entries(registry.servers)) {
     let connection: McpConnection;
@@ -118,6 +134,14 @@ export async function buildMcpTools(registry: McpRegistry, deps: McpDeps = {}): 
     }
 
     connections.push(connection);
+    if (connection.request !== undefined && connection.getCapabilities !== undefined) {
+      eventConnections.push({
+        connectionId: server,
+        serverId: server,
+        request: connection.request,
+        getCapabilities: connection.getCapabilities,
+      });
+    }
     for (const def of connection.tools) capabilities.push(mcpCapabilityFor(server, def));
 
     for (const def of connection.tools) {
@@ -173,6 +197,7 @@ export async function buildMcpTools(registry: McpRegistry, deps: McpDeps = {}): 
   return {
     tools,
     capabilities,
+    eventConnections,
     report,
     async close() {
       await Promise.allSettled(connections.map((c) => c.close()));

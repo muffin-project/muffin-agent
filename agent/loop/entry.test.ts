@@ -113,6 +113,24 @@ function world(script: (ChatResult | Error)[], durante: (n: number) => void = ()
 const quante = (haystack: unknown, testo: string): number =>
   JSON.stringify(haystack).split(JSON.stringify(testo)).length - 1;
 
+describe('enqueueTurn durable identity', () => {
+  it('honours a caller-supplied durable identity instead of minting a competing row', () => {
+    const w = world([]);
+    const session = w.sessions.open('explicit-enqueue-id');
+    const id = barrel.enqueueTurn(w.deps, {
+      id: 'occurrence-owned-turn-id',
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session,
+      text: 'wake from a durable occurrence',
+    });
+
+    expect(id).toBe('occurrence-owned-turn-id');
+    expect(w.turns.get('occurrence-owned-turn-id')).not.toBeNull();
+  });
+});
+
 describe('agent/loop.ts è un barile, e niente altro', () => {
   it('espone i cinque valori pubblici che i 35 importatori vedevano prima', () => {
     expect(typeof barrel.MAX_RESUMES).toBe('number');

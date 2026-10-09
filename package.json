@@ -51,6 +51,7 @@
     "defuddle": "^0.19.3",
     "js-yaml": "^5.4.1",
     "linkedom": "^0.18.13",
+    "mcp-event-intelligence": "0.11.0",
     "openai": "^7.9.0",
     "sqlite-vec": "^0.1.9",
     "unpdf": "1.8.1",

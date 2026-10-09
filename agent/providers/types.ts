@@ -145,6 +145,8 @@ export type MessageOrigin =
   | 'harness'
   /** Bytes actually authored by the owner on a surface this turn (or the turn's opening line). */
   | 'owner'
+  /** Content delivered by an external source, which cannot become owner speech during a wake or resume. */
+  | 'external'
   /** Tool evidence: results, refusals, repairs of missing results. */
   | 'tool'
   /** Retrieved memory rendered for the prompt. */
