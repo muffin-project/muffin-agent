@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { OpenAICompatProvider, wantsExplicitCache } from './openai-compat.js';
-import { ProviderError, ProviderStreamError, type ChatCall, type StreamEvent } from './types.js';
+import { type ChatCall, ProviderError, ProviderStreamError, type StreamEvent } from './types.js';
 
 /**
  * The adapter's caching contract, tested against the bytes it actually sends.
@@ -902,10 +902,15 @@ describe('openai-compat · tool_choice escalation (ADR-0082)', () => {
  * `retryAfterMs`, senza header non si inventa nulla.
  */
 describe('openai-compat · Retry-After sopravvive a wrap', () => {
-  function statusHarness(status: number, headers: Record<string, string>, body: unknown) {
+  function statusHarness(
+    status: number,
+    headers: Record<string, string>,
+    body: unknown,
+    baseURL = 'https://openrouter.ai/api/v1',
+  ) {
     const fetchFake = async (): Promise<Response> =>
       new Response(JSON.stringify(body), { status, headers });
-    return new OpenAICompatProvider('sk-test', 'https://openrouter.ai/api/v1', {}, {
+    return new OpenAICompatProvider('sk-test', baseURL, {}, {
       explicitCache: false,
       reasoningEffort: false,
       discoverReasoning: false,
@@ -922,6 +927,47 @@ describe('openai-compat · Retry-After sopravvive a wrap', () => {
     expect(failed).toBeInstanceOf(ProviderError);
     expect((failed as ProviderError).retryable).toBe(true);
     expect((failed as unknown as { retryAfterMs?: number }).retryAfterMs).toBe(45_000);
+  });
+
+  it('un HTTP 404 è retryable solo per il router free dinamico di OpenRouter', async () => {
+    const body = { error: { message: 'route not found', code: 404 } };
+    const free = statusHarness(404, {}, body);
+    const freeFailure = await free.chat({ ...CALL, model: 'openrouter/free' }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(freeFailure).toBeInstanceOf(ProviderError);
+    expect(freeFailure).toMatchObject({ retryable: true, status: 404 });
+
+    for (const region of ['us', 'eu']) {
+      const regional = statusHarness(
+        404,
+        {},
+        { error: { message: 'No endpoints found supporting your data region.', code: 404 } },
+        `https://${region}.openrouter.ai/api/v1`,
+      );
+      const regionalFailure = await regional.chat({ ...CALL, model: 'openrouter/free' }).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(regionalFailure).toBeInstanceOf(ProviderError);
+      expect(regionalFailure).toMatchObject({ retryable: false, status: 404 });
+    }
+
+    const fixed = statusHarness(404, {}, body);
+    const fixedFailure = await fixed.chat(CALL).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(fixedFailure).toBeInstanceOf(ProviderError);
+    expect(fixedFailure).toMatchObject({ retryable: false, status: 404 });
+
+    const otherEndpoint = statusHarness(404, {}, body, 'https://gateway.example/v1');
+    const otherFailure = await otherEndpoint.chat({ ...CALL, model: 'openrouter/free' }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(otherFailure).toMatchObject({ retryable: false, status: 404 });
   });
 });
 
