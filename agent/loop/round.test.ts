@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import DatabaseCtor from 'better-sqlite3';
@@ -18,8 +18,8 @@ import { JsonlExporter, SimpleTracer } from '../../core/tracing/tracer.js';
 import type { AttributeValue, SpanHandle } from '../../core/tracing/types.js';
 import { TurnStore } from '../../core/turns/store.js';
 import { TodoStore } from '../../core/turns/todo.js';
-import { MAX_TRANSPORT_RETRIES } from './types.js';
 import { CONSERVATIVE, type Profile } from '../profiles/profile.js';
+import { OpenAICompatProvider } from '../providers/openai-compat.js';
 import {
   type ChatCall,
   type ChatResult,
@@ -30,13 +30,14 @@ import {
   type StreamEvent,
 } from '../providers/types.js';
 import { searchCapability, searchSpec } from '../tools/search.js';
+import { ExecutionBudget } from './execution-budget.js';
 import { makeSnapshot } from './permissions.js';
 import { type RoundScope, recover, runRounds } from './round.js';
 import { TurnRun } from './run-state.js';
-import { ExecutionBudget } from './execution-budget.js';
 import {
   assertNever,
   type LoopDeps,
+  MAX_TRANSPORT_RETRIES,
   type RegisteredTool,
   type ToolContext,
   type TurnDelta,
@@ -186,6 +187,7 @@ function scriptedProvider(script: {
 
 function harness(options: {
   provider: Provider;
+  model?: string;
   profile?: Profile;
   tools?: RegisteredTool[];
   decls?: CapabilityDecl[];
@@ -205,7 +207,7 @@ function harness(options: {
   const deps: LoopDeps = {
     provider: options.provider,
     profile,
-    model: 'test',
+    model: options.model ?? 'test',
     tools,
     capabilities: new Map(decls.map((d) => [d.id, d])),
     decide: createDecide({
@@ -229,7 +231,7 @@ function harness(options: {
     tenant: 'host',
     surface: 'cli',
     sessionId: 's1',
-    model: 'test',
+    model: options.model ?? 'test',
     messages: options.messages ?? [{ role: 'user', content: [{ type: 'text', text: 'ciao' }] }],
     taint: 0,
     counters: freshCounters(),
@@ -418,6 +420,74 @@ describe('un solo fallback, mai un secondo tentativo in streaming', () => {
     expect(retries).toEqual([
       { type: 'model_retry', class: 'transport', attempt: 1, max: MAX_TRANSPORT_RETRIES, inMs: expect.any(Number) },
     ]);
+  });
+
+  it('un HTTP 404 della route OpenRouter Free attraversa il retry durevole del runtime', async () => {
+    let tentativiHttp = 0;
+    const richieste: Record<string, unknown>[] = [];
+    const provider = new OpenAICompatProvider(
+      'sk-test',
+      'https://openrouter.ai/api/v1',
+      {},
+      {
+        metadataFetch: async () =>
+          new Response(JSON.stringify({ data: { id: 'openrouter/free' } }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        fetch: async (_input: string | URL | Request, init?: RequestInit) => {
+          const body = typeof init?.body === 'string' ? init.body : '{}';
+          richieste.push(JSON.parse(body) as Record<string, unknown>);
+          tentativiHttp += 1;
+          if (tentativiHttp === 1) {
+            return new Response(
+              JSON.stringify({ error: { message: 'stale free route', code: 404 } }),
+              {
+                status: 404,
+                headers: { 'content-type': 'application/json' },
+              },
+            );
+          }
+          const chunk = {
+            id: 'chatcmpl-test',
+            object: 'chat.completion.chunk',
+            created: 0,
+            model: 'openrouter/free',
+            choices: [
+              {
+                index: 0,
+                delta: { role: 'assistant', content: 'recuperato' },
+                finish_reason: 'stop',
+              },
+            ],
+          };
+          return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+            status: 200,
+            headers: { 'content-type': 'text/event-stream' },
+          });
+        },
+      },
+    );
+    const progress: TurnEvent[] = [];
+    const h = harness({
+      provider,
+      model: 'openrouter/free',
+      profile: { ...CONSERVATIVE, thinking: 'adaptive' },
+      onDelta: () => undefined,
+      onProgress: (event) => progress.push(event),
+    });
+
+    const result = await runRounds(h.scope);
+
+    expect(tentativiHttp).toBe(2);
+    expect(richieste).toHaveLength(2);
+    expect(richieste.map((request) => request.model)).toEqual(['openrouter/free', 'openrouter/free']);
+    expect(typeof richieste[0]?.session_id).toBe('string');
+    expect(richieste[1]?.session_id).toBe(richieste[0]?.session_id);
+    expect(result).toMatchObject({ stopped: 'answered', text: 'recuperato', iterations: 2 });
+    expect(h.run.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES - 1);
+    expect(h.turns.get(h.id)?.counters.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES - 1);
+    expect(progress.filter((event) => event.type === 'model_retry')).toHaveLength(1);
   });
 });
 
