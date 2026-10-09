@@ -3,27 +3,30 @@ import OpenAI from 'openai';
 import type { ReasoningDialect } from '../../core/config/thinking.js';
 import { compileForOpenAI } from './compile.js';
 import {
-  ProviderError,
-  ProviderStreamError,
-  parseRetryAfterMs,
+  type OpenRouterDiscoveryResult,
+  OpenRouterReasoningDiscovery,
+} from './openrouter-reasoning.js';
+import {
+  type ReasoningCapabilities,
+  ReasoningConfigurationError,
+  type ReasoningResolution,
+  reasoningRequest,
+  resolveReasoningPolicy,
+} from './reasoning.js';
+import {
   type AudioMediaType,
   type ChatCall,
   type ChatResult,
   type ContentBlock,
   type Message,
-  type ProviderMessageMetadata,
   type Provider,
+  ProviderError,
+  type ProviderMessageMetadata,
+  ProviderStreamError,
+  parseRetryAfterMs,
   type StopReason,
   type StreamEvent,
 } from './types.js';
-import {
-  ReasoningConfigurationError,
-  reasoningRequest,
-  resolveReasoningPolicy,
-  type ReasoningCapabilities,
-  type ReasoningResolution,
-} from './reasoning.js';
-import { OpenRouterReasoningDiscovery, type OpenRouterDiscoveryResult } from './openrouter-reasoning.js';
 
 /**
  * OpenAI-compatible chat completions.
@@ -361,7 +364,7 @@ export class OpenAICompatProvider implements Provider {
         providerMetadata: this.reasoningMetadata(choice.message),
       });
     } catch (error) {
-      throw wrap(error);
+      throw wrap(error, this.openRouter && call.model === 'openrouter/free');
     }
   }
 
@@ -398,7 +401,7 @@ export class OpenAICompatProvider implements Provider {
       // Nothing was ever streamed — `chat()`'s own failure shape, not the
       // stream breaking mid-flight. See the matching comment in
       // `anthropic.ts#chatStream`.
-      throw wrap(error);
+      throw wrap(error, this.openRouter && call.model === 'openrouter/free');
     }
 
     let text = '';
@@ -932,13 +935,22 @@ function providerErrorFromWire(
   );
 }
 
-function wrap(error: unknown): ProviderError {
+function wrap(error: unknown, retryFreeRouterNotFound = false): ProviderError {
   if (error instanceof ProviderError) return error;
   if (error instanceof OpenAI.APIError) {
     const status = error.status ?? 0;
+    const regionalNoEndpoint = isRegionalNoEndpoint404(error);
+    // `openrouter/free` chooses a compatible free upstream dynamically. A
+    // surfaced HTTP 404 can be a stale upstream route; let the existing durable
+    // transport budget try the same alias again. OpenRouter's regional hosts
+    // also use 404 for an intentional no-endpoint-in-region result; retrying
+    // that response cannot broaden the allowed region. Fixed model 404s and
+    // in-band errors keep their existing classification.
+    const retryable =
+      status === 429 || status >= 500 || (retryFreeRouterNotFound && status === 404 && !regionalNoEndpoint);
     return new ProviderError(
       `${status} ${error.message}`,
-      status === 429 || status >= 500,
+      retryable,
       status,
       'transport',
       parseRetryAfterMs(error.headers),
@@ -948,4 +960,13 @@ function wrap(error: unknown): ProviderError {
     return new ProviderError('aborted', false);
   }
   return new ProviderError(error instanceof Error ? error.message : String(error), true);
+}
+
+function isRegionalNoEndpoint404(error: InstanceType<typeof OpenAI.APIError>): boolean {
+  if (error.status !== 404) return false;
+  const message = (error.error as { message?: unknown } | undefined)?.message;
+  return (
+    typeof message === 'string' &&
+    message.toLowerCase().includes('no endpoints found supporting your data region')
+  );
 }
