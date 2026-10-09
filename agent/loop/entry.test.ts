@@ -208,6 +208,45 @@ describe('l imbuto: il drain sta su drive(), non su finish()', () => {
     expect(result.text).not.toContain('chiave morta');
   });
 
+  it('provider HTTP 402 reaches the owner as a payment diagnostic', async () => {
+    const w = world([new ProviderError('private billing payload', false, 402, 'transport')]);
+    const session = w.sessions.open('ramo-payment-required');
+
+    const result = await barrel.runTurn(w.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session,
+      text: 'completa il lavoro',
+    });
+
+    expect(result).toMatchObject({ stopped: 'error', reason: 'provider_error' });
+    expect(result.text).toContain('HTTP 402');
+    expect(result.text).toContain('saldo');
+    expect(result.text).toContain('limiti');
+    expect(result.text).not.toContain('Riprova tra poco');
+    expect(result.text).not.toContain('private billing payload');
+  });
+
+  it('provider HTTP 404 reaches the owner as a routing diagnostic', async () => {
+    const w = world([new ProviderError('private route payload', false, 404, 'transport')]);
+    const session = w.sessions.open('ramo-route-not-found');
+
+    const result = await barrel.runTurn(w.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session,
+      text: 'rispondi',
+    });
+
+    expect(result).toMatchObject({ stopped: 'error', reason: 'provider_error' });
+    expect(result.text).toContain('HTTP 404');
+    expect(result.text).toContain('provider.routing');
+    expect(result.text).not.toContain('Riprova tra poco');
+    expect(result.text).not.toContain('private route payload');
+  });
+
   it('ramo di ritorno: una volta sola, e nessun secondo scrittore', async () => {
     const coda: string[] = [];
     const w = world([answer('ecco')], (n) => {
