@@ -258,15 +258,15 @@ export function makeSnapshot(
       // must not reach it.
     },
     invalidate: () => cache.clear(),
-    recordInput(text, toolCapability) {
+    recordInput(text, toolCapability, inputOrigin = 'owner') {
       if (text === '') return;
-      // Senza capability è il messaggio della persona: citabile per
-      // costruzione. Con capability lo è solo se appartiene alla classe che
-      // legge il web aperto — un risultato di tool che non sta in
-      // `QUOTABLE_TOOL_CAPABILITIES` (disco tier-2 in primis) entra e alza il
-      // taint, ma non rende «citata» nessuna URL.
-      const citabile =
-        toolCapability === undefined || QUOTABLE_TOOL_CAPABILITIES.has(toolCapability);
+      // Direct owner input can quote a URL; external wake input cannot inherit
+      // that exception. Tool results can quote only when their capability is
+      // one of the open-web readers. Other ingress still raises taint without
+      // making a URL "quoted".
+      const citabile = toolCapability === undefined
+        ? inputOrigin === 'owner'
+        : QUOTABLE_TOOL_CAPABILITIES.has(toolCapability);
       ingressi.push({ testo: text, citabile });
     },
     check(capability, resource, args) {
@@ -283,4 +283,3 @@ export function makeSnapshot(
     },
   };
 }
-

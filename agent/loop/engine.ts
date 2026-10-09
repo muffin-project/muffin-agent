@@ -157,6 +157,9 @@ export async function guidaIlTurno(
 ): Promise<TurnResult> {
   const now = deps.now ?? (() => new Date());
   const messages = providerMessages(record);
+  const persistedInput = messages.find(
+    (message) => message.role === 'user' && (message.origin === 'owner' || message.origin === 'external'),
+  );
   const input: TurnInput = {
     principal: record.principal,
     tenant: record.tenant,
@@ -175,6 +178,14 @@ export async function guidaIlTurno(
      */
     session: options.session ?? deps.sessions.open(record.sessionId),
     text: record.inputText ?? lastUserText(messages),
+    // Event wakes run as `system:automation`, but their input contains matched
+    // external data. Preserve the marker; legacy automation rows fail closed
+    // as external rather than acquiring owner provenance on recovery.
+    inputOrigin:
+      persistedInput?.origin === 'external' ||
+      (record.principal.kind === 'system' && record.principal.source === 'automation')
+        ? 'external'
+        : 'owner',
     // Riprese **dal record**, esattamente come il testo qui sopra, e per la
     // stessa ragione: `drive` non riceve il `TurnInput` originale — lo
     // ricostruisce — quindi tutto cio' che il modello deve vedere deve essere
@@ -220,7 +231,7 @@ export async function guidaIlTurno(
   // ovvio che il gate sui parametri trattava come tale. Senza capability:
   // il messaggio umano è la classe di provenienza che rende «citata» una URL
   // intera (lane #624 + #641 — un file tier-2 non lo è).
-  snapshot.recordInput(input.text);
+  snapshot.recordInput(input.text, undefined, input.inputOrigin ?? 'owner');
   const turnClass = tenantClass(input.principal, input.tenant);
 
   /**

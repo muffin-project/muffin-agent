@@ -401,15 +401,22 @@ export interface PermissionSnapshot {
    * `DecisionRequest.quoted` per perché quella distinzione è il meccanismo e
    * non un dettaglio.
    *
-   * `toolCapability` dice **da dove** entrano: assente per il messaggio della
-   * persona, l'id della capability per un risultato di tool. Solo due classi
-   * di ingressi possono rendere una URL «citata» per il gate di egress
-   * (`agent/loop/permissions.ts`): il messaggio umano e i risultati degli
-   * strumenti che leggono il web (`sys.http`, `sys.search`) — seguire un link
-   * trovato è il mestiere. Tutto il resto — disco, memoria, MCP, shell —
+   * `toolCapability` dice **da dove** entrano: assente per un messaggio della
+   * superficie, l'id della capability per un risultato di tool. Per un
+   * messaggio diretto, `inputOrigin` distingue i byte dell'owner da quelli
+   * ricevuti da una fonte esterna; questi ultimi non possono creare provenienza
+   * «citata». Solo due classi possono rendere una URL «citata» per il gate di
+   * egress (`agent/loop/permissions.ts`): input diretto dell'owner e risultati
+   * degli strumenti che leggono il web (`sys.http`, `sys.search`) — seguire un
+   * link trovato è il mestiere. Tutto il resto — input esterno, disco, memoria,
+   * MCP, shell —
    * entra nel turno e alza il taint, ma non fabbrica provenienza owner: un
    * documento tier-2 che contiene o inventa una URL non la rende equivalente
    * a una URL fornita dall'owner (lane #624 + #641).
    */
-  recordInput(text: string, toolCapability?: CapabilityId): void;
+  recordInput(
+    text: string,
+    toolCapability?: CapabilityId,
+    inputOrigin?: 'owner' | 'external',
+  ): void;
 }

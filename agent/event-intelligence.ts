@@ -52,9 +52,12 @@ export const eventTriggerReadCapability: CapabilityDecl = {
 
 export const eventTriggerCapability: CapabilityDecl = {
   id: 'events.trigger.create',
-  effect: 'context',
-  risk: 'low',
-  reversible: 'undoable',
+  // Creating a durable trigger delegates future unattended work. Route it
+  // through the ordinary host-effect authority path so the owner can approve
+  // it under the active autonomy mode; system principals remain denied.
+  effect: 'host',
+  risk: 'medium',
+  reversible: 'no',
   rerunnable: false,
   resourceKind: 'none',
   policyArgs: ['instruction'],
@@ -63,8 +66,9 @@ export const eventTriggerCapability: CapabilityDecl = {
 
 export const eventTriggerManageCapability: CapabilityDecl = {
   id: 'events.trigger.manage',
-  effect: 'context',
-  risk: 'low',
+  // This shared mutation tool includes deletion and edits to future work.
+  effect: 'host',
+  risk: 'medium',
   reversible: 'no',
   rerunnable: false,
   resourceKind: 'none',
@@ -195,6 +199,7 @@ function activationDelivery(port: EventWakePort, wakeOwners: WakeOwnerBindings) 
             session: port.openSession(target.sessionId),
             text: renderWakeText(activation),
             contentTaint: EXTERNAL,
+            inputOrigin: 'external',
             ...(target.replyTo === null ? {} : { replyTo: target.replyTo }),
           });
           // Preserve only explanatory read scope for the wake. Mutations below
