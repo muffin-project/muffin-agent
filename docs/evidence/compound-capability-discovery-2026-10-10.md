@@ -47,3 +47,34 @@ Verification: targeted existing exposure production-path tests, recorded actual
 request guidance, then bounded real CLI acceptance. A final independent review
 must assess the exposure/authority guarantee before integration. No success is
 claimed from this decision record alone.
+
+## Second observation and instruction conflict
+
+At `793a3028109dc9e7733bd7f34542b3b4b11b378b`, the same NVIDIA Free
+scenario/profile still fails: eight successful responses, no discovery or write.
+Aggregate input 72,115, output 1,338, cached 56,576, reasoning 1,236, reported
+cost 0. The local budget correctly stops the owned CLI at the ninth attempted
+request; only eight are forwarded. The wording-only partial-coverage hypothesis
+is insufficient. Negative authority remains NOT_RUN.
+
+The actual captured system prompt contains a contrary unconditional rule:
+“I tool che hai sono quelli che vedi” and asks the model to report absence
+when none is visible. Both WORK_RULES versions in `agent/context/assemble.ts`
+still encode this closed-menu assumption. Producer: buildSystemPromptBlocks;
+consumer: buildRuntime systemPrompts then runTurn provider request. The existing
+volatile discovery guidance arrives in a lower-role user message and cannot
+consistently override the static system rule. This is a factual instruction
+conflict; its contribution to this model's failure remains an experiment.
+
+Remove the obsolete closed-menu assertion from both versions, replacing it
+with one truthful conditional rule: when capability_search is visible, search
+for the authorized missing capability before reporting absence. Preserve the
+prohibition on inventing tools, policy and permission; preserve kernel grants
+and fenced data. This changes the stable prefix once, recorded explicitly in
+the existing cache-pin test. It needs no new context manager or dynamic system
+prompt mechanism. Keep the model, scene and profile unchanged for comparison.
+
+If this reconciliation does not suffice, use the declared diagnostic alternatives
+rather than accumulating more prompt exceptions. Independent review found the
+artifact oracle's normalized substring accepted unrelated extra content; tighten
+that oracle to the existing fixture's exact decision before any PASS claim.

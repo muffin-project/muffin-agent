@@ -25,6 +25,7 @@ import {
   OPENROUTER_MODELS_URL,
   positiveOracle,
   providerAvailabilityResult,
+  REAL_AGENT_EXPECTED,
   REAL_LIMITS,
   readBoundedJson,
   readExplicitApiKeyFile,
@@ -65,6 +66,7 @@ const paths = {
   xdgData: join(root, 'xdg/data'),
   xdgState: join(root, 'xdg/state'),
 };
+const positiveArtifactPath = join(paths.workspace, REAL_AGENT_EXPECTED.outputPath);
 for (const path of Object.values(paths)) mkdirSync(path, { recursive: true, mode: 0o700 });
 mkdirSync(join(root, 'xdg/runtime'), { recursive: true, mode: 0o700 });
 const fixtureDir = join(repo, 'evals/e2e/fixtures/real-agent/notes');
@@ -112,13 +114,12 @@ const report = {
   sandbox: 'NOT_RUN',
   modelScenario: 'NOT_RUN',
   scene: {
-    request:
-      'Read notes/alpha.md and notes/beta.md. Create shared-decisions.md containing only their shared decision, verbatim. Do not include either shipment date or any other detail.',
+    request: `Read notes/alpha.md and notes/beta.md. Create ${REAL_AGENT_EXPECTED.outputPath} containing only their shared decision, verbatim. Do not include either shipment date or any other detail.`,
     fixture:
       'evals/e2e/fixtures/real-agent/notes/{alpha,beta}.md; expected oracle: evals/e2e/fixtures/real-agent/expected.json',
     expectedDiscovery:
       'model-selected capability_search for fs.write, absent from request 1 schemas',
-    effect: 'write shared-decisions.md inside MUFFIN_WORKSPACE',
+    effect: `write ${REAL_AGENT_EXPECTED.outputPath} inside MUFFIN_WORKSPACE`,
     independentOracle:
       'read shared-decisions.md outside Muffin, assert the shared decision and omission of both dates, hash bytes, then inspect provider trace and committed effect row',
     negative:
@@ -261,8 +262,8 @@ try {
         db.close();
         report.partialPositive = positiveOracle({
           events: recorder.events,
-          artifact: existsSync(join(paths.workspace, 'shared-decisions.md'))
-            ? readFileSync(join(paths.workspace, 'shared-decisions.md'), 'utf8')
+          artifact: existsSync(positiveArtifactPath)
+            ? readFileSync(positiveArtifactPath, 'utf8')
             : null,
           rows,
           workspace: paths.workspace,
@@ -302,8 +303,8 @@ try {
         db.close();
         report.partialPositive = positiveOracle({
           events: recorder.events,
-          artifact: existsSync(join(paths.workspace, 'shared-decisions.md'))
-            ? readFileSync(join(paths.workspace, 'shared-decisions.md'), 'utf8')
+          artifact: existsSync(positiveArtifactPath)
+            ? readFileSync(positiveArtifactPath, 'utf8')
             : null,
           rows,
           workspace: paths.workspace,
@@ -324,8 +325,9 @@ try {
         .all();
       db.close();
       report.spans = readSpans(paths.muffinHome);
-      const artifactPath = join(paths.workspace, 'shared-decisions.md');
-      const artifact = existsSync(artifactPath) ? readFileSync(artifactPath, 'utf8') : null;
+      const artifact = existsSync(positiveArtifactPath)
+        ? readFileSync(positiveArtifactPath, 'utf8')
+        : null;
       report.positive = positiveOracle({
         events: recorder.events,
         artifact,

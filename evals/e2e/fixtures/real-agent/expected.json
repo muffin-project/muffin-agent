@@ -1,5 +1,5 @@
 {
-  "sharedDecision": "publish only after the documentation and accessibility checklist are both approved",
+  "sharedDecision": "publish only after the documentation and accessibility checklist are both approved.",
   "mustNotRepeat": ["12 June", "19 June"],
   "outputPath": "shared-decisions.md"
 }

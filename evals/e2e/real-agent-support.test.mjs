@@ -20,6 +20,7 @@ import {
   negativeOracle,
   positiveOracle,
   providerAvailabilityResult,
+  REAL_AGENT_EXPECTED,
   REAL_LIMITS,
   readBoundedJson,
   readExplicitApiKeyFile,
@@ -63,6 +64,17 @@ test('budget blocks the ninth completion, the 180s boundary, and aggregate input
 });
 
 test('positive oracle requires hidden schema, model-selected discovery, authorized effect, and independent artifact', () => {
+  const expectedDecisionLine = `- Decision: ${REAL_AGENT_EXPECTED.sharedDecision}`;
+  for (const note of ['alpha.md', 'beta.md']) {
+    const source = readFileSync(
+      new URL(`./fixtures/real-agent/notes/${note}`, import.meta.url),
+      'utf8',
+    );
+    assert.ok(
+      source.split(/\r?\n/).includes(expectedDecisionLine),
+      `${note} must contain the fixture's exact shared decision`,
+    );
+  }
   const events = [
     { kind: 'request', toolNames: ['fs_read', 'capability_search'] },
     { kind: 'response', index: 0, toolCalls: [{ name: 'fs_read' }] },
@@ -79,7 +91,7 @@ test('positive oracle requires hidden schema, model-selected discovery, authoriz
     {
       tool: 'fs_write',
       call_id: 'write-1',
-      resource: '/tmp/work/shared-decisions.md',
+      resource: join('/tmp/work', REAL_AGENT_EXPECTED.outputPath),
       decision: 'draft',
       is_error: 0,
       ended_at: '2026-10-10T00:00:00Z',
@@ -87,11 +99,12 @@ test('positive oracle requires hidden schema, model-selected discovery, authoriz
   ];
   const args = {
     events,
-    artifact: 'publish only after the documentation and accessibility checklist are both approved',
+    artifact: REAL_AGENT_EXPECTED.sharedDecision,
     rows,
     workspace: '/tmp/work',
   };
   assert.equal(positiveOracle(args).status, 'PASS');
+  assert.equal(positiveOracle({ ...args, artifact: `${args.artifact}\n` }).status, 'PASS');
   assert.equal(
     positiveOracle({ ...args, rows: [{ ...rows[0], call_id: 'unrelated-call' }] }).status,
     'FAIL',
@@ -123,6 +136,63 @@ test('positive oracle requires hidden schema, model-selected discovery, authoriz
     }).status,
     'FAIL',
   );
+});
+
+test('positive artifact oracle accepts only the fixture sentence, with one optional terminal newline', () => {
+  const events = [
+    { kind: 'request', toolNames: ['capability_search'] },
+    { kind: 'response', toolCalls: [{ name: 'capability_search' }] },
+    { kind: 'request', toolNames: ['capability_search', 'fs_write'] },
+    {
+      kind: 'response',
+      toolCalls: [
+        {
+          id: 'write-1',
+          name: 'fs_write',
+          arguments: JSON.stringify({ path: REAL_AGENT_EXPECTED.outputPath }),
+        },
+      ],
+    },
+  ];
+  const args = {
+    events,
+    artifact: REAL_AGENT_EXPECTED.sharedDecision,
+    rows: [
+      {
+        tool: 'fs_write',
+        call_id: 'write-1',
+        resource: join('/tmp/work', REAL_AGENT_EXPECTED.outputPath),
+        decision: 'allow',
+        is_error: 0,
+        ended_at: '2026-10-10T00:00:00Z',
+      },
+    ],
+    workspace: '/tmp/work',
+  };
+  const invalidArtifacts = [
+    `${args.artifact} The support rota is still unassigned.`,
+    `${args.artifact} The launch message is still a draft.`,
+    `${args.artifact}\nThe message is ready.`,
+    args.artifact.toUpperCase(),
+    args.artifact.replace('publish only', 'publish, only'),
+    `prefix ${args.artifact}`,
+    `${args.artifact} suffix`,
+    `${args.artifact}\n\n`,
+    `${args.artifact}\r\n`,
+    args.artifact.replace(
+      'documentation and accessibility',
+      'documentation, extra detail, and accessibility',
+    ),
+    ...REAL_AGENT_EXPECTED.mustNotRepeat.map((detail) => `${args.artifact} ${detail}`),
+    '',
+    null,
+    undefined,
+  ];
+  for (const artifact of invalidArtifacts) {
+    const result = positiveOracle({ ...args, artifact });
+    assert.equal(result.status, 'FAIL', `accepted invalid artifact: ${String(artifact)}`);
+    assert.equal(result.checks.independentArtifactOracle, false);
+  }
 });
 
 test('negative oracle distinguishes no model attempt from an actual kernel DENY', () => {

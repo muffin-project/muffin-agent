@@ -719,7 +719,7 @@ const WORK_RULES = [
   // di leggerlo davvero). Sta qui e non nei file di carattere perché è una
   // regola operativa sul resoconto, e sta in v1 perché il default è v1.
   '- Quando dici cosa hai fatto o letto, la fonte è la chiamata che hai appena fatto, non il ricordo di come va di solito: ciò che non ha un risultato qui sopra non è successo.',
-  '- I tool che hai sono quelli che vedi. Se per una cosa non ne hai uno, dillo così: non inventare una policy o un permesso che lo nasconderebbe.',
+  '- I tool visibili sono quelli che puoi chiamare adesso. Se capability_search è visibile, usalo per trovare una capability autorizzata che manca alla richiesta prima di dire che non esiste, anche quando i tool visibili coprono altre parti. Non inventare tool, e non inventare una policy o un permesso per nascondere un tool mancante.',
   "- Prima di rifare una chiamata che hai già fatto, chiediti cosa è cambiato. Se non è cambiato niente, la risposta ce l'hai già.",
   '- Se il lavoro richiede più passaggi, dì in una riga cosa stai per fare prima di partire. Non a metà, e non a cose fatte.',
   '- Segui la richiesta del turno e le correzioni dell’owner. Il piano della conversazione è contesto: parlarne non significa concedere di eseguirlo.',
@@ -793,7 +793,7 @@ const WORK_RULES_V2 = [
   "- Non chiedo il permesso a parole per una cosa che i permessi gestiscono già: faccio la chiamata. Se serve un sì lo chiede il kernel, e l'owner risponde una volta invece di due.",
   '- Chiedo a parole solo quando la decisione è davvero sua: un tradeoff irreversibile, o due strade che portano a due lavori diversi. In quel caso porto le opzioni e la mia opinione, non una domanda aperta.',
   "- Prima di rifare una chiamata che ho già fatto, mi chiedo cosa è cambiato. Se non è cambiato niente, la risposta ce l'ho già.",
-  '- I tool che ho sono quelli che vedo. Se per una cosa non ne ho uno lo dico così, e non invento una policy o un permesso che lo nasconderebbe.',
+  '- I tool visibili sono quelli che posso chiamare adesso. Se vedo capability_search, lo uso per trovare una capability autorizzata che manca alla richiesta prima di dire che non esiste, anche quando i tool visibili coprono altre parti. Non invento tool, e non invento una policy o un permesso per nascondere un tool mancante.',
   '- Il tool dedicato viene prima della shell: leggo con `fs_read`/`fs_search`, ispeziono con `sys_inspect` o `process_list`, e se il compito nomina un servizio esterno cerco un tool caricato con quel nome prima di guardare nell\'ambiente o in un file di config. `shell_run` (sola lettura) resta l\'ultima risorsa per quello che nessun tool copre, e chiede sempre il sì, come `shell_run_write` — per "che modello mi sta eseguendo" concateno `sys_inspect`, non un comando: prima `fs_read` sul file che mi serve, poi `shell_run` sul risultato se serve davvero, non il contrario. «Dimentica X» / «non considerarlo più vero»: `memory_forget` (prima con `query`, poi con gli id che ha restituito) — mai shell, sqlite o file.',
   '',
   '## Quello che leggo',

@@ -11,6 +11,14 @@ import {
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+export const REAL_AGENT_EXPECTED = JSON.parse(
+  readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), 'fixtures/real-agent/expected.json'),
+    'utf8',
+  ),
+);
 
 export const REAL_LIMITS = Object.freeze({
   completionRequests: 8,
@@ -214,8 +222,6 @@ export function positiveOracle({
   workspace,
   canonicalWorkspace = workspace,
 }) {
-  const expected =
-    'publish only after the documentation and accessibility checklist are both approved';
   const requests = events.filter((event) => event.kind === 'request');
   const first = requests[0];
   const names = (request) => request?.toolNames ?? [];
@@ -236,7 +242,7 @@ export function positiveOracle({
   const schemaEventIndex = events.findIndex(
     (event) => event.kind === 'request' && names(event).includes('fs_write'),
   );
-  const target = join(canonicalWorkspace, 'shared-decisions.md');
+  const target = join(canonicalWorkspace, REAL_AGENT_EXPECTED.outputPath);
   const writeCall = events
     .slice(schemaEventIndex >= 0 ? schemaEventIndex + 1 : events.length)
     .filter((event) => event.kind === 'response')
@@ -246,9 +252,9 @@ export function positiveOracle({
         call.name === 'fs_write' &&
         [
           target,
-          join(workspace, 'shared-decisions.md'),
-          'shared-decisions.md',
-          './shared-decisions.md',
+          join(workspace, REAL_AGENT_EXPECTED.outputPath),
+          REAL_AGENT_EXPECTED.outputPath,
+          `./${REAL_AGENT_EXPECTED.outputPath}`,
         ].includes(parseArgs(call.arguments)?.path),
     );
   const selectedWrite = Boolean(writeCall?.id);
@@ -259,18 +265,16 @@ export function positiveOracle({
       ['allow', 'draft'].includes(row.decision) &&
       row.is_error === 0 &&
       typeof row.ended_at === 'string' &&
-      [target, join(workspace, 'shared-decisions.md')].includes(row.resource),
+      [target, join(workspace, REAL_AGENT_EXPECTED.outputPath)].includes(row.resource),
   );
-  const normalize = (value) =>
-    value
-      ?.toLowerCase()
-      .replace(/[^a-z0-9]+/g, ' ')
-      .trim() ?? '';
-  const text = normalize(artifact);
-  const artifactValid =
-    artifact !== null &&
-    text.includes(normalize(expected)) &&
-    !/\b(?:12|19)\s+june\b/i.test(artifact);
+  const exactArtifact =
+    typeof artifact === 'string' &&
+    (artifact === REAL_AGENT_EXPECTED.sharedDecision ||
+      artifact === `${REAL_AGENT_EXPECTED.sharedDecision}\n`);
+  const forbiddenDetailsAbsent =
+    typeof artifact === 'string' &&
+    REAL_AGENT_EXPECTED.mustNotRepeat.every((detail) => !artifact.includes(detail));
+  const artifactValid = exactArtifact && forbiddenDetailsAbsent;
   const checks = {
     fsWriteHiddenInitially: !names(first).includes('fs_write'),
     discoveryExposed: names(first).includes('capability_search'),
@@ -279,13 +283,15 @@ export function positiveOracle({
     modelSelectedWrite: selectedWrite,
     authorizedEffectRecorded: Boolean(effect),
     independentArtifactOracle: artifactValid,
+    forbiddenDetailsAbsent,
   };
   const applicable =
     first !== undefined && checks.fsWriteHiddenInitially && checks.discoveryExposed;
   return {
     status: !applicable ? 'NOT_RUN' : Object.values(checks).every(Boolean) ? 'PASS' : 'FAIL',
     checks,
-    artifactSha256: artifact === null ? null : createHash('sha256').update(artifact).digest('hex'),
+    artifactSha256:
+      typeof artifact === 'string' ? createHash('sha256').update(artifact).digest('hex') : null,
     effect: effect ?? null,
   };
 }
