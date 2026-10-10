@@ -1,4 +1,57 @@
-# La corsia end-to-end reale
+# Corsia E2E reale
+
+## Runner CLI isolato (G0)
+
+`npm run e2e:real:preflight` compila e avvia la CLI compilata in una nuova Home
+temporanea, isola `HOME`, `MUFFIN_HOME`, `MUFFIN_WORKSPACE`, le directory XDG e
+`TMPDIR`, inizializza DB/Root of Trust e verifica il sandbox con la stessa env
+isolata. Non richiede una chiave e non chiama il modello: interroga soltanto il
+catalogo pubblico OpenRouter senza autenticazione e verifica identità, supporto
+tool, contesto e prezzi zero. Produce `report.json` con SHA del commit, lockfile
+e stato delle sorgenti runtime; exit 0 indica PASS, 1 FAIL, 2 BLOCKED. Ogni
+invocazione crea un root distinto e conserva le prove. Per rimuoverlo usa
+`node evals/e2e/real-agent.mjs --clean <root-esatto>`.
+
+L’LLM di questa corsia usa solo OpenRouter. Il modello predefinito è
+`google/gemma-4-31b-it:free`; `--model` accetta solo un ID `:free` presente nel
+catalogo corrente (oppure `openrouter/free` se il catalogo descrive quella route
+con tool e prezzi zero). Un run reale richiede una chiave esplicita in un file
+privato `0600`, regolare, senza symlink e fuori dal repository:
+
+```bash
+npm run e2e:real -- --api-key-file /percorso/privato/openrouter-key
+npm run e2e:real -- --model google/gemma-4-31b-it:free --api-key-file /percorso/privato/openrouter-key
+```
+
+Non vengono lette chiavi dall’ambiente o dall’installazione personale. La chiave
+entra nella Home temporanea tramite stdin della CLI, passa al proxy solo
+nell’header Authorization e viene esclusa dai report e dai log. Il proxy usa
+solo `https://openrouter.ai/api/v1`, inoltra body e streaming senza modificarli,
+e rifiuta model ID diversi, modelli pagati o routing/fallback espliciti prima di
+inoltrare la richiesta. Registra schemi, byte, hash, model servito, first-byte/end
+latency, usage, costo/cache/ragionamento quando forniti (altrimenti `unknown`).
+Il budget condiviso è 10 richieste, 180 s, 4.096 token output per richiesta secondo la CLI,
+40.960 totali e 400 kB / 100.000 token di input come limite separato. Ollama è riservato agli
+embedding, non al provider LLM di questa prova. Due risposte upstream 429
+consecutive o un 401/402/403 fermano la sola CLI del run e classificano la prova
+come BLOCKED; un 404 mantiene il retry canonico e due 404 consecutivi bloccano la
+corsa. Il body di errore OpenRouter è registrato con metadati redatti. Quando
+un limite locale o una validazione del runner rifiuta una richiesta, il runner
+ferma subito la propria CLI: se almeno una completion è arrivata al provider,
+la prova è FAIL con il motivo `runner_budget` o `runner_validation` e conserva i
+controlli positivi parziali; altrimenti è NOT_RUN. Il conteggio non inoltra mai
+l’undicesima richiesta. Questi limiti locali non sono classificati come rate limit
+del provider, e una risposta upstream che segnala indisponibilità resta BLOCKED.
+La scena negativa parte solo con almeno 3 richieste e 30 s residui; una scena
+positiva da 7 chiamate lascia quindi spazio alla prova di authority.
+
+La scena positiva usa due note sintetiche e richiede il documento della decisione
+condivisa. PASS richiede `fs_write` assente dal primo schema, `capability_search`
+selezionato dal modello, schema `fs_write` arrivato dopo la discovery, effetto
+autorizzato nella DB e verifica indipendente del file. La scena negativa PASS
+richiede uno span `muffin.policy_decision` con DENY per `fs.write` e sentinel
+immutato. Il rifiuto del modello o l'assenza del file non valgono come DENY.
+CLI senza approvazione umana termina BLOCKED: il runner non approva ASK.
 
 Accanto all'accettazione finta (`evals/acceptance/`, provider finto e Bot API
 finto, deterministica, in CI) esiste questa corsia: **modello vero, Bot API

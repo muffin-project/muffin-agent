@@ -258,7 +258,7 @@ describe('the owner-class prompt does not move', () => {
    */
   const OWNER_PROMPT_SHA_AT_SPLIT =
     // #529: session plan rows are context, not a grant or Turn completion rule.
-    '0952125772949ff2d1db0866998a17cea8b38f68c4608b9b87872dcc56df28b2';
+    '0720ea78567243a4b35fcc3cdf9fa59a42aa5b9ed55a72d86d9d6a2dfba4a2a0';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
@@ -372,7 +372,17 @@ describe('the owner-class prompt does not move', () => {
    * `63c6590ed366dbb44d9e2a5ce2b018f9f0ffe3993ec5ea34d555c46cddf0b3f4`.
    */
   // #529: the same scoped-work rule reaches owner and group prompts.
-  const GROUP_PROMPT_SHA_V1 = '57857222d8b56eafa48d3a583489b6a1ffce30b164bb0881f91a3af7846264c8';
+  const GROUP_PROMPT_SHA_V1 = '3184e66ff1a4a11e07fe06387d943f046b9d5713dc9ae650b28497f6c8c167bd';
+
+  /**
+   * Ri-fissato 2026-10-10: la regola sull'esposizione progressiva chiarisce
+   * che un tool visibile non esaurisce il catalogo quando capability_search
+   * è disponibile. L'invalidazione della cache è intenzionale. Pin precedente:
+   * owner `0952125772949ff2d1db0866998a17cea8b38f68c4608b9b87872dcc56df28b2`,
+   * group `57857222d8b56eafa48d3a583489b6a1ffce30b164bb0881f91a3af7846264c8`.
+   * Misura v1 aggiornata: 2026-10-10, rapporto carattere/regole 8,37; la
+   * soglia del test segue la misura a 8,3, senza cambiare quella di v2.
+   */
 
   it('e la stanza riceve lo stesso prompt di ieri, byte per byte', () => {
     const runtime = boot(bootHome());
@@ -397,6 +407,34 @@ describe('the owner-class prompt does not move', () => {
  * a mano e la config scritta dal comando, montate entrambe da `buildRuntime`.
  */
 describe('quale versione del prompt assembla questa installazione', () => {
+  it('rende il menu progressivo esplicito nei prompt runtime owner e group', () => {
+    const home = bootHome();
+    const assertCapabilityRule = (prompt: string) => {
+      expect(prompt).toContain('capability_search');
+      expect(prompt).toContain('autorizzata');
+      expect(prompt).toContain('anche quando i tool visibili coprono altre parti');
+      expect(prompt).toContain('Non invent');
+      expect(prompt).not.toMatch(/I tool che (hai|ho) sono quelli che (vedi|vedo)/);
+    };
+
+    const first = boot(home);
+    try {
+      assertCapabilityRule(first.deps.systemPrompts.owner);
+      assertCapabilityRule(first.deps.systemPrompts.group);
+    } finally {
+      first.close();
+    }
+
+    saveConfig({ ...loadConfig(home), prompt: { version: 'v2' } }, home);
+    const second = boot(home);
+    try {
+      assertCapabilityRule(second.deps.systemPrompts.owner);
+      assertCapabilityRule(second.deps.systemPrompts.group);
+    } finally {
+      second.close();
+    }
+  });
+
   it('senza campo in config monta v1, e col campo a v2 monta v2 — attraverso buildRuntime', () => {
     const home = bootHome();
     const primo = boot(home);
@@ -501,7 +539,7 @@ describe('quale versione del prompt assembla questa installazione', () => {
     // regola: la soglia scende con la misura, e v1 resta pesantemente
     // carattere contro il `< 8` di v2 — che è la riga che porta il peso
     // dell'affermazione.
-    expect(v1.chiSei / v1.comeLavori).toBeGreaterThan(8.5);
+    expect(v1.chiSei / v1.comeLavori).toBeGreaterThan(8.3);
     expect(v2.chiSei / v2.comeLavori).toBeLessThan(8);
     // E il prompt non è cresciuto per farlo: il peso si è spostato.
     expect(v2.chiSei + v2.comeLavori).toBeLessThan((v1.chiSei + v1.comeLavori) * 1.02);

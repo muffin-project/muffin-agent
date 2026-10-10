@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { CapabilityDecl } from '../../core/policy/types.js';
-import type { RegisteredTool } from '../loop.js';
 import { CAPABILITY_SEARCH_TOOL_NAME } from '../capability-exposure.js';
+import type { RegisteredTool } from '../loop.js';
 
 export const capabilityDiscoveryCapability: CapabilityDecl = {
   id: 'sys.capability_discover',
@@ -26,15 +26,16 @@ export function makeCapabilitySearchTool(): RegisteredTool {
       name: CAPABILITY_SEARCH_TOOL_NAME,
       description:
         'Search and load authorized tools that are not currently visible. ' +
-        'Use it when none of the visible tools directly fits the user task; describe the capability you need instead of guessing a hidden tool name. ' +
-        'Not for tasks already covered by a visible tool, and not for browsing the catalogue without a task need. ' +
+        'Check each requested action and effect: search when any part lacks a visible tool, even if visible tools cover other parts; do not treat partial completion as full task coverage. ' +
+        'Describe the missing capability instead of guessing a hidden tool name. ' +
         'The next model round receives the loaded tool schemas; execution still goes through normal policy checks.',
       inputSchema: {
         type: 'object',
         properties: {
           query: {
             type: 'string',
-            description: 'Short description of the capability needed for the current task; describe the need, not a guessed tool name.',
+            description:
+              'Short description of the capability needed for the current task; describe the need, not a guessed tool name.',
           },
           max_results: {
             type: 'integer',
@@ -60,7 +61,8 @@ export function makeCapabilitySearchTool(): RegisteredTool {
       const discovery = ctx.capabilityDiscovery;
       if (!discovery) {
         return {
-          content: 'Capability discovery is not needed on this turn: the authorized catalogue already fits.',
+          content:
+            'Capability discovery is not needed on this turn: the authorized catalogue already fits.',
           tier: 0,
         };
       }
@@ -78,7 +80,9 @@ export function makeCapabilitySearchTool(): RegisteredTool {
         .join(', ');
       const suffix =
         result.omitted > 0
-          ? ' ' + String(result.omitted) + ' additional match(es) were not loaded because of the profile exposure ceiling.'
+          ? ' ' +
+            String(result.omitted) +
+            ' additional match(es) were not loaded because of the profile exposure ceiling.'
           : '';
       return {
         content: 'Selected for the next model round in this lease: ' + loaded + '.' + suffix,
