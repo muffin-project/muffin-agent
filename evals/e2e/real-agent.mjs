@@ -29,6 +29,7 @@ import {
   readBoundedJson,
   readExplicitApiKeyFile,
   realAgentTemporaryRoot,
+  runnerStopResult,
   selectFreeModel,
   startRecorder,
   stopOwnedProcess,
@@ -279,6 +280,37 @@ try {
         recorderGuard: recorder.violation(),
       };
       report.status = 'NOT_RUN';
+    } else if (positive.runnerStopReason ?? recorder.metrics().runnerStopReason) {
+      const stopReason = positive.runnerStopReason ?? recorder.metrics().runnerStopReason;
+      const metrics = recorder.metrics();
+      const stopResult = runnerStopResult(stopReason, metrics.completionRequests);
+      report.reason = stopResult.reason;
+      report.runnerStop = stopReason;
+      report.modelScenario = stopResult.modelScenario;
+      report.status = stopResult.status;
+      report.negative = {
+        status: 'NOT_RUN',
+        reason: 'positive runner stopped before an independent negative scenario could start',
+      };
+      if (stopResult.modelStarted) {
+        const db = new Database(join(paths.muffinHome, 'muffin.db'), { readonly: true });
+        const rows = db
+          .prepare(
+            'SELECT call_id, tool, resource, decision, is_error, ended_at, effect_row, reversible FROM turn_tool_calls ORDER BY started_at',
+          )
+          .all();
+        db.close();
+        report.partialPositive = positiveOracle({
+          events: recorder.events,
+          artifact: existsSync(join(paths.workspace, 'shared-decisions.md'))
+            ? readFileSync(join(paths.workspace, 'shared-decisions.md'), 'utf8')
+            : null,
+          rows,
+          workspace: paths.workspace,
+          canonicalWorkspace: realpathSync(paths.workspace),
+        });
+        report.partialSpans = readSpans(paths.muffinHome);
+      }
     } else if (positive.code === 3) {
       report.modelScenario =
         'BLOCKED (headless CLI needs human approval; no approval was injected)';
@@ -303,6 +335,14 @@ try {
       });
       report.modelScenario = positive.code === 0 ? report.positive.status : 'FAIL';
       report.status = positive.code === 0 ? report.positive.status : 'FAIL';
+      if (
+        report.status !== 'PASS' &&
+        recorder.metrics().completionRequests >= REAL_LIMITS.completionRequests
+      ) {
+        report.reason = 'runner_budget';
+        report.modelScenario =
+          'FAIL (runner_budget: completion-request limit; positive goal incomplete)';
+      }
       if (
         report.status === 'PASS' &&
         Date.now() - recorder.startedAt < 165_000 &&
@@ -377,14 +417,20 @@ function runCli(args, stdin = '', timeoutMs = 120_000) {
     let stdout = '';
     let stderr = '';
     let providerUnavailable = null;
+    let runnerStopReason = null;
     let clearEscalation = null;
     const stop = (failure = null) => {
-      if (failure) providerUnavailable ??= failure;
+      if (failure?.kind === 'runner-budget' || failure?.kind === 'runner-validation')
+        runnerStopReason ??= failure;
+      else if (failure) providerUnavailable ??= failure;
       if (child.exitCode !== null || child.signalCode !== null || clearEscalation) return;
       clearEscalation = stopOwnedProcess(child);
     };
-    const timeout = setTimeout(() => stop(), timeoutMs);
     const isAgentRun = args[0] === 'run';
+    const timeout = setTimeout(
+      () => stop(isAgentRun ? { kind: 'runner-budget', reason: 'wall-time limit' } : null),
+      timeoutMs,
+    );
     if (isAgentRun) activeAgentStop = stop;
     child.stdout.setEncoding('utf8').on('data', (chunk) => (stdout += chunk));
     child.stderr.setEncoding('utf8').on('data', (chunk) => (stderr += chunk));
@@ -401,7 +447,14 @@ function runCli(args, stdin = '', timeoutMs = 120_000) {
         `${JSON.stringify({ args, code, signal, stdout, stderr })}\n`,
         { mode: 0o600 },
       );
-      resolvePromise({ code: code ?? -1, signal, stdout, stderr, providerUnavailable });
+      resolvePromise({
+        code: code ?? -1,
+        signal,
+        stdout,
+        stderr,
+        providerUnavailable,
+        runnerStopReason,
+      });
     });
     child.stdin.end(stdin);
   });

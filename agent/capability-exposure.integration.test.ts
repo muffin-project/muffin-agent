@@ -1,7 +1,7 @@
-import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
@@ -11,15 +11,15 @@ import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { TurnStore } from '../core/turns/store.js';
 import { TodoStore } from '../core/turns/todo.js';
-import { type LoopDeps, type RegisteredTool, runTurn } from './loop.js';
 import { CAPABILITY_DISCOVERY_GUIDANCE } from './capability-exposure.js';
+import { type LoopDeps, type RegisteredTool, runTurn } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
-import { makeScheduleTool, scheduleCapability } from './tools/schedule.js';
 import type { ChatCall, ChatResult, Provider } from './providers/types.js';
 import {
   capabilityDiscoveryCapability,
   makeCapabilitySearchTool,
 } from './tools/capability-search.js';
+import { makeScheduleTool, scheduleCapability } from './tools/schedule.js';
 
 const usage = {
   inputTokens: 1,
@@ -111,7 +111,7 @@ class SchemaDriven implements Provider {
 }
 
 describe('#469 production-path capability discovery', () => {
-  it('loads an authorized beyond-cap tool into the next model round and executes it normally', async () => {
+  it('discovers a hidden effect after a visible tool covers only part of the requested task', async () => {
     const home = mkdtempSync(join(tmpdir(), 'muffin-capability-discovery-'));
     const db = new DatabaseCtor(':memory:');
     const core = [
@@ -146,6 +146,7 @@ describe('#469 production-path capability discovery', () => {
       [capabilityDiscoveryCapability.id, capabilityDiscoveryCapability],
     ]);
     const provider = new Scripted([
+      toolCall('read-1', 'fs_read', {}),
       toolCall('search-1', 'capability_search', {
         query: 'durable external event trigger',
         max_results: 1,
@@ -179,25 +180,35 @@ describe('#469 production-path capability discovery', () => {
       tenant: 'host',
       surface: 'cli',
       session: sessions.open('capability-discovery'),
-      text: 'sorveglia una condizione remota e reagisci quando cambia',
+      text: 'Read the project notes and make their shared instruction recur automatically.',
     });
 
     expect(result.stopped).toBe('answered');
     expect(hiddenCalls).toBe(1);
-    expect(provider.seen).toHaveLength(3);
+    expect(provider.seen).toHaveLength(4);
 
     const firstNames = provider.seen[0]?.tools?.map((tool) => tool.name) ?? [];
+    expect(firstNames).toContain('fs_read');
     expect(firstNames).toContain('capability_search');
     expect(JSON.stringify(provider.seen[0]?.messages ?? [])).toContain(
       CAPABILITY_DISCOVERY_GUIDANCE,
     );
     expect(firstNames).not.toContain('event_watch_create');
     expect(firstNames.length).toBeLessThanOrEqual(6);
+    expect(
+      provider.seen[0]?.tools?.find((tool) => tool.name === 'capability_search')?.description,
+    ).toContain('search when any part lacks a visible tool');
 
     const secondNames = provider.seen[1]?.tools?.map((tool) => tool.name) ?? [];
     expect(secondNames).toContain('capability_search');
-    expect(secondNames).toContain('event_watch_create');
     expect(secondNames.length).toBeLessThanOrEqual(6);
+
+    const thirdNames = provider.seen[2]?.tools?.map((tool) => tool.name) ?? [];
+    expect(thirdNames).toContain('event_watch_create');
+    expect(thirdNames.length).toBeLessThanOrEqual(6);
+    expect(JSON.stringify(provider.seen[0]?.messages ?? [])).toContain(
+      'Valuta separatamente ogni azione ed effetto richiesto',
+    );
   });
   it('keeps forbidden tools out of discovery while direct guesses still meet the kernel', async () => {
     const home = mkdtempSync(join(tmpdir(), 'muffin-capability-authority-'));
@@ -305,7 +316,6 @@ describe('#469 production-path capability discovery', () => {
     expect(guessedReply.content).not.toContain('non esiste');
   });
 
-
   it('system@scheduler never discovers kernel-forbidden schedule or namespace tools, even under preload pressure', async () => {
     const home = mkdtempSync(join(tmpdir(), 'muffin-capability-scheduler-authority-'));
     const db = new DatabaseCtor(':memory:');
@@ -358,13 +368,7 @@ describe('#469 production-path capability discovery', () => {
       handler: () => ({ content: 'watch ok', tier: 0 }),
     };
     const search = makeCapabilitySearchTool();
-    const tools = [
-      ...basic.map((entry) => entry.tool),
-      scheduleObserved,
-      outward,
-      allowed,
-      search,
-    ];
+    const tools = [...basic.map((entry) => entry.tool), scheduleObserved, outward, allowed, search];
     const capabilities = new Map<string, CapabilityDecl>([
       ...basic.map((entry) => [entry.decl.id, entry.decl] as const),
       [scheduleCapability.id, scheduleCapability],
@@ -436,7 +440,8 @@ describe('#469 production-path capability discovery', () => {
       .flatMap((message) => message.content)
       .find((block) => block.type === 'tool_result' && block.toolCallId === 'scheduler-search');
     expect(forbiddenDiscovery?.type).toBe('tool_result');
-    if (forbiddenDiscovery?.type !== 'tool_result') throw new Error('scheduler discovery result missing');
+    if (forbiddenDiscovery?.type !== 'tool_result')
+      throw new Error('scheduler discovery result missing');
     expect(forbiddenDiscovery.content).not.toContain('schedule_recurring');
     expect(forbiddenDiscovery.content).not.toContain('jobs.schedule');
     expect(forbiddenDiscovery.content).not.toContain('outward_email_send');
@@ -454,9 +459,13 @@ describe('#469 production-path capability discovery', () => {
     // capabilities. Search still returns an authorized external-event tool.
     const allowedDiscovery = provider.seen[3]?.messages
       .flatMap((message) => message.content)
-      .find((block) => block.type === 'tool_result' && block.toolCallId === 'scheduler-authorized-search');
+      .find(
+        (block) =>
+          block.type === 'tool_result' && block.toolCallId === 'scheduler-authorized-search',
+      );
     expect(allowedDiscovery?.type).toBe('tool_result');
-    if (allowedDiscovery?.type !== 'tool_result') throw new Error('authorized discovery result missing');
+    if (allowedDiscovery?.type !== 'tool_result')
+      throw new Error('authorized discovery result missing');
     expect(allowedDiscovery.content).toContain('event_watch_create');
     expect(provider.seen[3]?.tools?.map((tool) => tool.name)).toContain('event_watch_create');
   });
@@ -539,7 +548,6 @@ describe('#469 production-path capability discovery', () => {
     expect(provider.seen).toHaveLength(0);
   });
 
-
   it('keeps the under-cap fast path free of discovery schema and guidance', async () => {
     const home = mkdtempSync(join(tmpdir(), 'muffin-capability-fast-path-'));
     const db = new DatabaseCtor(':memory:');
@@ -589,5 +597,4 @@ describe('#469 production-path capability discovery', () => {
       CAPABILITY_DISCOVERY_GUIDANCE,
     );
   });
-
 });

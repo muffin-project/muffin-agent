@@ -107,6 +107,20 @@ export function providerAvailabilityResult(failure, successfulModelResponses) {
   };
 }
 
+export function runnerStopResult(stopReason, completionRequests) {
+  if (!stopReason) return null;
+  const reason = stopReason.kind === 'runner-budget' ? 'runner_budget' : 'runner_validation';
+  const modelStarted = completionRequests > 0;
+  return {
+    status: modelStarted ? 'FAIL' : 'NOT_RUN',
+    reason,
+    modelStarted,
+    modelScenario: modelStarted
+      ? `FAIL (${reason}: ${stopReason.reason})`
+      : `NOT_RUN (${reason}: no completion reached the provider)`,
+  };
+}
+
 export function stopOwnedProcess(child, graceMs = 2_000) {
   if (child.exitCode !== null || child.signalCode !== null) return () => {};
   child.kill('SIGTERM');
@@ -368,7 +382,15 @@ export async function startRecorder({
   let consecutiveNotFound = 0;
   let providerUnavailable = null;
   let providerUnavailableNotified = false;
+  let runnerStopReason = null;
+  let runnerStopNotified = false;
   let runnerRejectedRequests = 0;
+  const stopForRunner = (kind, reason) => {
+    runnerStopReason ??= { kind, reason };
+    if (runnerStopNotified) return;
+    runnerStopNotified = true;
+    onProviderUnavailable(runnerStopReason);
+  };
   const server = createServer(async (req, res) => {
     if (req.method !== 'POST' || req.url !== '/v1/chat/completions') {
       runnerRejectedRequests += 1;
@@ -429,6 +451,7 @@ export async function startRecorder({
         request.rejected = 'completion model or routing fields violate the selected free-model pin';
         violation = request.rejected;
         runnerRejectedRequests += 1;
+        stopForRunner('runner-validation', request.rejected);
         res.writeHead(400, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: request.rejected }));
         return;
@@ -436,6 +459,7 @@ export async function startRecorder({
       if (!apiKey || req.headers.authorization !== `Bearer ${apiKey}`) {
         request.rejected = 'explicit API credential missing or invalid';
         runnerRejectedRequests += 1;
+        stopForRunner('runner-validation', request.rejected);
         res.writeHead(401, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: request.rejected }));
         return;
@@ -450,6 +474,7 @@ export async function startRecorder({
       if (violation || reason) {
         const why = violation ?? reason;
         runnerRejectedRequests += 1;
+        stopForRunner(reason ? 'runner-budget' : 'runner-validation', why);
         res.writeHead(429, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: why }));
         request.rejected = why;
@@ -464,6 +489,7 @@ export async function startRecorder({
         request.rejected = why;
         violation = why;
         runnerRejectedRequests += 1;
+        stopForRunner('runner-budget', why);
         res.writeHead(412, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: why }));
         return;
@@ -477,7 +503,10 @@ export async function startRecorder({
       activeController = controller;
       activeControllers.add(controller);
       const remainingMs = Math.max(1, REAL_LIMITS.wallMs - (now() - startedAt));
-      wallTimer = setTimeout(() => controller.abort(new Error('E2E wall-time limit')), remainingMs);
+      wallTimer = setTimeout(() => {
+        stopForRunner('runner-budget', 'wall-time limit');
+        controller.abort(new Error('E2E wall-time limit'));
+      }, remainingMs);
       req.once('aborted', () => controller.abort(new Error('CLI client disconnected')));
       res.once('close', () => {
         if (!res.writableEnded) controller.abort(new Error('CLI client disconnected'));
@@ -547,11 +576,19 @@ export async function startRecorder({
           completion.usage?.completion_tokens ?? completion.usage?.output_tokens ?? 0;
         reportedInputTokens +=
           completion.usage?.prompt_tokens ?? completion.usage?.input_tokens ?? 0;
-        if (reportedOutputTokens > REAL_LIMITS.outputTokens)
+        let reportedBudgetExceeded = false;
+        if (reportedOutputTokens > REAL_LIMITS.outputTokens) {
           violation = 'provider-reported output-token limit';
-        if (reportedInputTokens > 80_000) violation = 'provider-reported input-token limit';
+          reportedBudgetExceeded = true;
+        }
+        if (reportedInputTokens > 80_000) {
+          violation = 'provider-reported input-token limit';
+          reportedBudgetExceeded = true;
+        }
         if (Number.isFinite(completion.usage?.cost) && completion.usage.cost > 0)
           violation = 'provider-reported nonzero cost for catalog-verified free model';
+        if (violation)
+          stopForRunner(reportedBudgetExceeded ? 'runner-budget' : 'runner-validation', violation);
         const done = {
           kind: 'response',
           index: requestMeta.index,
@@ -636,6 +673,7 @@ export async function startRecorder({
         upstreamStatuses: [...upstreamStatuses],
         providerUnavailable,
         runnerRejectedRequests,
+        runnerStopReason,
         cost: sumKnown(usages, ['cost']),
         reasoningTokens: sumKnown(
           usages.map((usage) => usage.completion_tokens_details ?? usage),

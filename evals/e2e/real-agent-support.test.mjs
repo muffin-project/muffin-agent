@@ -23,6 +23,7 @@ import {
   REAL_LIMITS,
   readBoundedJson,
   readExplicitApiKeyFile,
+  runnerStopResult,
   selectFreeModel,
   servedModelViolation,
   startRecorder,
@@ -483,6 +484,168 @@ test('two consecutive upstream 429 responses preserve error metadata and stop as
     assert.match(providerAvailabilityResult(stopped, 0).modelScenario, /^NOT_RUN/);
     assert.equal(providerAvailabilityResult(stopped, 1).status, 'BLOCKED');
     assert.match(providerAvailabilityResult(stopped, 1).modelScenario, /^BLOCKED/);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await recorder.close();
+    await new Promise((resolve) => upstream.close(resolve));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the ninth completion is rejected locally and immediately stops the owned CLI child as runner_budget FAIL', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'g0-runner-budget-'));
+  const key = 'synthetic-private-key';
+  let upstreamCalls = 0;
+  let stopped = null;
+  let childStoppedAt = null;
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  await new Promise((resolve, reject) => {
+    child.once('spawn', resolve);
+    child.once('error', reject);
+  });
+  const upstream = createServer(async (_req, res) => {
+    upstreamCalls += 1;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        model: DEFAULT_FREE_MODEL,
+        choices: [{ message: { content: 'synthetic response' } }],
+        usage: { prompt_tokens: 10, completion_tokens: 1, cost: 0 },
+      }),
+    );
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const address = upstream.address();
+  const recorder = await startRecorder({
+    target: `http://127.0.0.1:${address.port}`,
+    upstreamPrefix: '/api/v1',
+    wirePath: join(root, 'wire.jsonl'),
+    modelId: DEFAULT_FREE_MODEL,
+    apiKey: key,
+    onProviderUnavailable: (failure) => {
+      stopped = failure;
+      childStoppedAt = Date.now();
+      stopOwnedProcess(child);
+    },
+  });
+  const body = JSON.stringify({
+    model: DEFAULT_FREE_MODEL,
+    max_tokens: 4096,
+    messages: [{ role: 'user', content: 'synthetic request' }],
+    tools: [],
+  });
+  try {
+    for (let index = 0; index < 8; index += 1) {
+      const response = await fetch(`${recorder.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+        body,
+      });
+      assert.equal(response.status, 200);
+      await response.arrayBuffer();
+    }
+    const ninth = await fetch(`${recorder.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body,
+    });
+    assert.equal(ninth.status, 429);
+    await ninth.arrayBuffer();
+    assert.equal(upstreamCalls, 8, 'the ninth request must never reach the upstream model');
+    assert.equal(recorder.metrics().completionRequests, 8);
+    assert.equal(recorder.metrics().runnerRejectedRequests, 1);
+    assert.equal(
+      recorder.metrics().providerUnavailable,
+      null,
+      'local budget exhaustion is not provider failure',
+    );
+    assert.deepEqual(stopped, { kind: 'runner-budget', reason: 'completion-request limit' });
+    const childExit = await new Promise((resolve) =>
+      child.once('close', (code, signal) => resolve({ code, signal })),
+    );
+    assert.equal(childExit.signal, 'SIGTERM');
+    assert.ok(Date.now() - childStoppedAt < 2_000, 'runner budget stops the owned child promptly');
+    assert.deepEqual(runnerStopResult(stopped, recorder.metrics().completionRequests), {
+      status: 'FAIL',
+      reason: 'runner_budget',
+      modelStarted: true,
+      modelScenario: 'FAIL (runner_budget: completion-request limit)',
+    });
+    assert.equal(providerAvailabilityResult(null, recorder.metrics().completionRequests), null);
+    assert.equal(
+      providerAvailabilityResult(
+        { kind: 'consecutive-upstream-rate-limit', status: 429, count: 2 },
+        8,
+      ).status,
+      'BLOCKED',
+    );
+    assert.equal(
+      runnerStopResult(stopped, 0).status,
+      'NOT_RUN',
+      'no forwarded completion means the model never started',
+    );
+    assert.equal(recorder.violation(), null);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await recorder.close();
+    await new Promise((resolve) => upstream.close(resolve));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a first-request witness violation stops the owned CLI child without forwarding or calling a model', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'g0-runner-witness-'));
+  const key = 'synthetic-private-key';
+  let upstreamCalls = 0;
+  let stopped = null;
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  await new Promise((resolve, reject) => {
+    child.once('spawn', resolve);
+    child.once('error', reject);
+  });
+  const upstream = createServer((_req, res) => {
+    upstreamCalls += 1;
+    res.writeHead(200).end('{}');
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const address = upstream.address();
+  const recorder = await startRecorder({
+    target: `http://127.0.0.1:${address.port}`,
+    upstreamPrefix: '/api/v1',
+    wirePath: join(root, 'wire.jsonl'),
+    guardFirstWrite: true,
+    modelId: DEFAULT_FREE_MODEL,
+    apiKey: key,
+    onProviderUnavailable: (failure) => {
+      stopped = failure;
+      stopOwnedProcess(child);
+    },
+  });
+  try {
+    const response = await fetch(`${recorder.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: DEFAULT_FREE_MODEL,
+        max_tokens: 4096,
+        messages: [{ role: 'user', content: 'synthetic request' }],
+        tools: [{ function: { name: 'fs_write' } }],
+      }),
+    });
+    assert.equal(response.status, 429);
+    await response.arrayBuffer();
+    assert.equal(upstreamCalls, 0);
+    assert.equal(recorder.metrics().completionRequests, 0);
+    assert.equal(stopped.kind, 'runner-validation');
+    assert.match(stopped.reason, /fs_write present in first provider request/);
+    assert.equal(
+      runnerStopResult(stopped, recorder.metrics().completionRequests).status,
+      'NOT_RUN',
+    );
+    const childExit = await new Promise((resolve) =>
+      child.once('close', (code, signal) => resolve({ code, signal })),
+    );
+    assert.equal(childExit.signal, 'SIGTERM');
   } finally {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     await recorder.close();
