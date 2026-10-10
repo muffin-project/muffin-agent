@@ -43,6 +43,25 @@ Record in the PR or work handoff:
 - what evidence could falsify it;
 - any owner decision that genuinely blocks the shape.
 
+## DCO applies to every contribution PR
+
+Every non-merge commit introduced by a contribution PR, internal or external,
+must carry a `Signed-off-by` trailer matching its Git author. The only
+exception is canonical same-repository `dev` to `main` promotion of already
+integrated history, including legacy pre-gate commits. The exception does not
+certify those historical contributions. The checker evaluates exact base/head
+SHAs and fails closed on incomplete event metadata. It does not verify signer
+identity, authority, rights, or the truth of the DCO statement.
+
+For agent-assisted work, do not invent an agent identity or sign another
+author's commit. The human who submits a concrete contribution remains
+responsible for deciding whether they can truthfully certify it under the DCO.
+Preserve outside authors' attribution and sign-offs; an internal PR does not
+make an imported unsigned commit eligible. If the required author cannot
+provide a truthful sign-off, leave that commit uncertified and unsubmitted.
+ADR-0097 records the current policy; ADR-0079 remains the historical decision
+that introduced the DCO and relicense grant.
+
 Open a draft PR early when the work is substantial enough that a durable remote
 checkpoint buys recovery/reviewability. A trivial FAST edit does not need a
 ceremonial draft lifecycle.

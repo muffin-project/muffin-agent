@@ -7,7 +7,8 @@ It is not a copyright assignment: contributors retain copyright in their work.
 
 ## How to agree
 
-Sign off every commit submitted in a pull request:
+Sign off every commit submitted in a contribution pull request, whether the
+pull request is internal or external:
 
 ```bash
 git commit -s -m "your change"
@@ -20,6 +21,20 @@ Signed-off-by: Ada Lovelace <ada@example.com>
 ```
 
 Submitting a signed-off contribution means you agree to both terms below.
+CI checks the commits introduced by the pull request against the exact base and
+head SHAs. An internal pull request does not exempt imported commits by outside
+authors; preserve their author metadata and obtain each author's sign-off. Only
+the canonical same-repository `dev` to `main` promotion skips this check: it
+promotes history already integrated into `dev`, including legacy commits from
+before the gate. The exception does not certify that historical work.
+
+For AI-assisted work, an agent is not a separate legal contributor and must not
+be given a fabricated author identity or sign-off. The human submitting the
+work is responsible for deciding whether they can truthfully make the DCO
+certification for each concrete commit. Maintainer status, PR authorship, GitHub
+authentication, and a matching trailer do not establish that the certification
+is true. Never sign on behalf of another author. If you cannot truthfully make
+the required certification, do not submit that commit as DCO-certified.
 
 ## Developer Certificate of Origin 1.1
 
