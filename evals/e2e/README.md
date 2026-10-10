@@ -1,4 +1,31 @@
-# La corsia end-to-end reale
+# Corsia E2E reale
+
+## Runner CLI isolato (G0)
+
+`npm run e2e:real:preflight` compila e avvia la CLI compilata in una nuova Home
+temporanea, isola `HOME`, `MUFFIN_HOME`, `MUFFIN_WORKSPACE`, le directory XDG e
+`TMPDIR`, inizializza DB/Root of Trust, e verifica il sandbox in un child con la
+stessa env isolata. Non chiama il modello. Produce `report.json` con SHA del
+commit, lockfile e stato delle sorgenti runtime; exit 0 indica preflight PASS,
+1 FAIL, 2 BLOCKED. Ogni invocazione crea un root distinto e conserva le prove.
+`node evals/e2e/real-agent.mjs --clean <root-esatto>` rimuove solo un root
+diretto in temp con il marker del runner.
+
+`npm run e2e:real` abilita le due scene reali su Ollama locale `qwen3:8b` tramite
+recorder proxy. Il proxy registra schemi, byte, hash, risposte, first-byte/end
+latency e usage, inoltra body e streaming senza modificarli e rifiuta un payload
+che dichiari più di 4.096 token output. Il budget complessivo è 8 richieste,
+180 s, massimo 32.768 token output dichiarati e 320 kB di input come limite
+conservativo separato da quello provider di 80.000 token. I token esatti sono
+riportati quando il provider li restituisce.
+
+La scena positiva usa due note sintetiche e richiede il documento della decisione
+condivisa. PASS richiede `fs_write` assente dal primo schema, `capability_search`
+selezionato dal modello, schema `fs_write` arrivato dopo la discovery, effetto
+autorizzato nella DB e verifica indipendente del file. La scena negativa PASS
+richiede uno span `muffin.policy_decision` con DENY per `fs.write` e sentinel
+immutato. Il rifiuto del modello o l'assenza del file non valgono come DENY.
+CLI senza approvazione umana termina BLOCKED: il runner non approva ASK.
 
 Accanto all'accettazione finta (`evals/acceptance/`, provider finto e Bot API
 finto, deterministica, in CI) esiste questa corsia: **modello vero, Bot API
