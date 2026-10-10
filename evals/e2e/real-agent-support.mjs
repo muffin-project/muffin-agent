@@ -10,7 +10,7 @@ import {
 } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 export const REAL_LIMITS = Object.freeze({
   completionRequests: 8,
@@ -19,6 +19,115 @@ export const REAL_LIMITS = Object.freeze({
   outputTokensPerRequest: 4_096,
   outputTokens: 32_768,
 });
+
+export const OPENROUTER_BASE_URL = 'https://openrouter.ai';
+export const OPENROUTER_API_PREFIX = '/api/v1';
+export const OPENROUTER_MODELS_URL = `${OPENROUTER_BASE_URL}${OPENROUTER_API_PREFIX}/models`;
+export const DEFAULT_FREE_MODEL = 'google/gemma-4-31b-it:free';
+export const MAX_CATALOG_BYTES = 16 * 1024 * 1024;
+
+export async function readBoundedJson(response, maxBytes = MAX_CATALOG_BYTES) {
+  const declared = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await response.body?.cancel();
+    throw new Error('catalog response exceeds the runner byte limit');
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('catalog response has no body');
+  const chunks = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel();
+      throw new Error('catalog response exceeds the runner byte limit');
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return JSON.parse(Buffer.concat(chunks, size).toString('utf8'));
+}
+
+export function selectFreeModel(catalog, modelId) {
+  if (typeof modelId !== 'string' || (!modelId.endsWith(':free') && modelId !== 'openrouter/free'))
+    throw new Error('selected model is not explicitly free');
+  if (!Array.isArray(catalog?.data)) throw new Error('OpenRouter catalog has no model list');
+  const entry = catalog.data.find((model) => model?.id === modelId);
+  if (!entry) throw new Error('selected model is absent from the current OpenRouter catalog');
+  if (!Array.isArray(entry.supported_parameters) || !entry.supported_parameters.includes('tools'))
+    throw new Error('selected model does not advertise tool support');
+  if (!Number.isInteger(entry.context_length) || entry.context_length < 16_384)
+    throw new Error('selected model catalog context is below the runner minimum');
+  const pricing = entry.pricing;
+  if (!pricing || !Object.hasOwn(pricing, 'prompt') || !Object.hasOwn(pricing, 'completion'))
+    throw new Error('selected model has incomplete pricing data');
+  const prices = Object.entries(pricing).map(([name, value]) => {
+    const number =
+      typeof value === 'number' || (typeof value === 'string' && value.trim() !== '')
+        ? Number(value)
+        : NaN;
+    if (!Number.isFinite(number)) throw new Error(`selected model has unknown ${name} pricing`);
+    if (number !== 0) throw new Error(`selected model has nonzero ${name} pricing`);
+    return [name, number];
+  });
+  return {
+    id: entry.id,
+    contextLength: entry.context_length,
+    pricing: Object.fromEntries(prices),
+    supportedParameters: entry.supported_parameters,
+  };
+}
+
+export function servedModelViolation(expectedId, servedId, catalog) {
+  if (expectedId !== 'openrouter/free')
+    return servedId === expectedId
+      ? null
+      : 'provider served a model different from the concrete free-model pin';
+  if (typeof servedId !== 'string')
+    return 'provider did not report the model served by openrouter/free';
+  try {
+    selectFreeModel(catalog, servedId);
+    return null;
+  } catch {
+    return 'openrouter/free served a model not verified as zero-priced with tool support';
+  }
+}
+
+export function readExplicitApiKeyFile(path, repositoryRoot) {
+  if (typeof path !== 'string' || path.length === 0)
+    throw new Error('BLOCKED: --api-key-file is required for a real run');
+  let stat;
+  let canonicalPath;
+  try {
+    stat = lstatSync(path);
+    canonicalPath = realpathSync(path);
+  } catch {
+    throw new Error('BLOCKED: API key file cannot be read');
+  }
+  if (!stat.isFile() || stat.isSymbolicLink())
+    throw new Error('BLOCKED: API key path must be a regular non-symlink file');
+  const rel = relative(realpathSync(repositoryRoot), canonicalPath);
+  if (
+    !rel ||
+    (!isAbsolute(rel) &&
+      rel !== '..' &&
+      !rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`))
+  )
+    throw new Error('BLOCKED: API key file must be outside the repository');
+  if ((stat.mode & 0o077) !== 0)
+    throw new Error('BLOCKED: API key file permissions must be private (0600 or stricter)');
+  let content;
+  try {
+    content = readFileSync(canonicalPath, 'utf8');
+  } catch {
+    throw new Error('BLOCKED: API key file cannot be read');
+  }
+  const key = content.trim();
+  if (!key || key.length > 8_192 || /\s/.test(key))
+    throw new Error('BLOCKED: API key file is empty or malformed');
+  return key;
+}
 
 // macOS's default per-user TMPDIR can exceed Unix socket path limits once
 // isolated Home and runtime subdirectories are appended. /tmp stays portable
@@ -188,7 +297,16 @@ function parseArgs(value) {
   }
 }
 
-export async function startRecorder({ target, wirePath, guardFirstWrite, now = () => Date.now() }) {
+export async function startRecorder({
+  target = OPENROUTER_BASE_URL,
+  upstreamPrefix = OPENROUTER_API_PREFIX,
+  wirePath,
+  guardFirstWrite,
+  modelId,
+  catalog,
+  apiKey,
+  now = () => Date.now(),
+}) {
   const startedAt = now();
   const events = [];
   let forwarded = 0;
@@ -199,11 +317,20 @@ export async function startRecorder({ target, wirePath, guardFirstWrite, now = (
   const requestDigests = new Set();
   const activeControllers = new Set();
   let violation = null;
+  const upstreamStatuses = [];
+  let runnerRejectedRequests = 0;
   const server = createServer(async (req, res) => {
+    if (req.method !== 'POST' || req.url !== '/v1/chat/completions') {
+      runnerRejectedRequests += 1;
+      req.resume();
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'runner accepts only POST /v1/chat/completions' }));
+      return;
+    }
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const raw = Buffer.concat(chunks);
-    const isCompletion = req.method === 'POST' && req.url?.includes('/chat/completions');
+    const isCompletion = true;
     let body;
     let requestMeta = null;
     let activeController = null;
@@ -231,11 +358,38 @@ export async function startRecorder({ target, wirePath, guardFirstWrite, now = (
       };
       requestMeta = request;
       request.digest = createHash('sha256').update(raw).digest('hex');
-      writeFileSync(join(dirname(wirePath), `request-${request.index}.json`), raw, { mode: 0o600 });
+      writeFileSync(
+        join(dirname(wirePath), `request-${request.index}.json`),
+        redact(raw.toString('utf8'), apiKey),
+        { mode: 0o600 },
+      );
       events.push(request);
       appendFileSync(wirePath, `${JSON.stringify(request)}\n`, { mode: 0o600 });
       if (forwarded === 0 && guardFirstWrite && toolNames.includes('fs_write'))
         violation = 'fs_write present in first provider request';
+      const unsafeRouting =
+        body?.models !== undefined ||
+        body?.provider !== undefined ||
+        body?.route !== undefined ||
+        body?.plugins !== undefined ||
+        body?.transforms !== undefined ||
+        body?.fallbacks !== undefined ||
+        body?.allow_fallbacks !== undefined;
+      if (body?.model !== modelId || unsafeRouting) {
+        request.rejected = 'completion model or routing fields violate the selected free-model pin';
+        violation = request.rejected;
+        runnerRejectedRequests += 1;
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: request.rejected }));
+        return;
+      }
+      if (!apiKey || req.headers.authorization !== `Bearer ${apiKey}`) {
+        request.rejected = 'explicit API credential missing or invalid';
+        runnerRejectedRequests += 1;
+        res.writeHead(401, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: request.rejected }));
+        return;
+      }
       const reason = budgetReason({
         count: forwarded,
         startedAt,
@@ -245,19 +399,22 @@ export async function startRecorder({ target, wirePath, guardFirstWrite, now = (
       });
       if (violation || reason) {
         const why = violation ?? reason;
+        runnerRejectedRequests += 1;
         res.writeHead(429, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: why }));
         request.rejected = why;
         return;
       }
       if (
-        Number.isInteger(body.max_tokens) &&
+        !Number.isInteger(body.max_tokens) ||
+        body.max_tokens <= 0 ||
         body.max_tokens > REAL_LIMITS.outputTokensPerRequest
       ) {
         const why = `provider request max_tokens exceeds CLI bound ${REAL_LIMITS.outputTokensPerRequest}`;
         request.rejected = why;
         violation = why;
-        res.writeHead(429, { 'content-type': 'application/json' });
+        runnerRejectedRequests += 1;
+        res.writeHead(412, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: why }));
         return;
       }
@@ -275,9 +432,13 @@ export async function startRecorder({ target, wirePath, guardFirstWrite, now = (
       res.once('close', () => {
         if (!res.writableEnded) controller.abort(new Error('CLI client disconnected'));
       });
-      const response = await fetch(new URL(req.url ?? '/', target), {
+      const upstreamUrl = new URL(`${upstreamPrefix}/chat/completions`, target);
+      const response = await fetch(upstreamUrl, {
         method: req.method,
-        headers: { 'content-type': req.headers['content-type'] ?? 'application/json' },
+        headers: {
+          'content-type': req.headers['content-type'] ?? 'application/json',
+          authorization: `Bearer ${apiKey}`,
+        },
         ...(raw.length ? { body: raw } : {}),
         signal: controller.signal,
       });
@@ -300,8 +461,18 @@ export async function startRecorder({ target, wirePath, guardFirstWrite, now = (
       const bytes = Buffer.concat(chunks);
       clearTimeout(wallTimer);
       activeControllers.delete(controller);
+      upstreamStatuses.push(response.status);
       if (isCompletion) {
-        const completion = parseCompletion(bytes);
+        const parsed = parseCompletion(bytes);
+        const completion = {
+          ...parsed,
+          content: redact(parsed.content, apiKey),
+          toolCalls: parsed.toolCalls.map((call) => ({
+            ...call,
+            arguments: redact(call.arguments, apiKey),
+          })),
+        };
+        if (response.ok) violation ??= servedModelViolation(modelId, completion.model, catalog);
         outputBytes += bytes.byteLength;
         reportedOutputTokens +=
           completion.usage?.completion_tokens ?? completion.usage?.output_tokens ?? 0;
@@ -310,6 +481,8 @@ export async function startRecorder({ target, wirePath, guardFirstWrite, now = (
         if (reportedOutputTokens > REAL_LIMITS.outputTokens)
           violation = 'provider-reported output-token limit';
         if (reportedInputTokens > 80_000) violation = 'provider-reported input-token limit';
+        if (Number.isFinite(completion.usage?.cost) && completion.usage.cost > 0)
+          violation = 'provider-reported nonzero cost for catalog-verified free model';
         const done = {
           kind: 'response',
           index: requestMeta.index,
@@ -321,6 +494,9 @@ export async function startRecorder({ target, wirePath, guardFirstWrite, now = (
           responseBytes: bytes.byteLength,
           content: completion.content,
           model: completion.model,
+          provider: 'openrouter',
+          upstreamProvider: completion.upstreamProvider,
+          statusClass: classifyStatus(response.status),
         };
         events.push(done);
         appendFileSync(wirePath, `${JSON.stringify(done)}\n`, { mode: 0o600 });
@@ -365,8 +541,38 @@ export async function startRecorder({ target, wirePath, guardFirstWrite, now = (
         inputBytes,
         outputBytes,
         providerReportedUsage: usages,
-        reportedInputTokens: sum(usages, ['prompt_tokens', 'input_tokens']),
-        reportedOutputTokens: sum(usages, ['completion_tokens', 'output_tokens']),
+        provider: 'openrouter',
+        selectedModel: modelId,
+        servedModels: [
+          ...new Set(
+            events
+              .filter((event) => event.kind === 'response')
+              .map((event) => event.model)
+              .filter(Boolean),
+          ),
+        ],
+        upstreamProviders: [
+          ...new Set(
+            events
+              .filter((event) => event.kind === 'response')
+              .map((event) => event.upstreamProvider)
+              .filter(Boolean),
+          ),
+        ],
+        upstreamStatuses: [...upstreamStatuses],
+        runnerRejectedRequests,
+        cost: sumKnown(usages, ['cost']),
+        reasoningTokens: sumKnown(
+          usages.map((usage) => usage.completion_tokens_details ?? usage),
+          ['reasoning_tokens', 'reasoning'],
+        ),
+        cacheReadTokens: sumKnown(
+          usages.map((usage) => usage.prompt_tokens_details ?? usage),
+          ['cached_tokens', 'cache_read_tokens'],
+        ),
+        costAvailability: sumKnown(usages, ['cost']) === null ? 'unknown' : 'reported',
+        reportedInputTokens: sumKnown(usages, ['prompt_tokens', 'input_tokens']),
+        reportedOutputTokens: sumKnown(usages, ['completion_tokens', 'output_tokens']),
         outputTokenLimit: REAL_LIMITS.outputTokens,
         outputTokenLimitPerRequest: REAL_LIMITS.outputTokensPerRequest,
         inputTokenLimit: 80_000,
@@ -390,11 +596,23 @@ export async function startRecorder({ target, wirePath, guardFirstWrite, now = (
 function byteSize(value) {
   return Buffer.byteLength(JSON.stringify(value), 'utf8');
 }
-function sum(rows, keys) {
-  return rows.reduce(
-    (total, row) => total + (keys.map((key) => row[key]).find(Number.isFinite) ?? 0),
-    0,
-  );
+function sumKnown(rows, keys) {
+  const values = rows
+    .map((row) => keys.map((key) => row?.[key]).find(Number.isFinite))
+    .filter(Number.isFinite);
+  return values.length ? values.reduce((total, value) => total + value, 0) : null;
+}
+
+function redact(value, secret) {
+  return typeof value === 'string' && secret ? value.split(secret).join('[REDACTED]') : value;
+}
+
+function classifyStatus(status) {
+  if (status === 402) return 'upstream-payment-required';
+  if (status === 401 || status === 403) return 'upstream-authorization';
+  if (status === 404) return 'upstream-not-found';
+  if (status === 429) return 'upstream-rate-limit';
+  return status >= 400 ? 'upstream-error' : 'ok';
 }
 
 function parseCompletion(bytes) {
@@ -404,6 +622,7 @@ function parseCompletion(bytes) {
     return {
       usage: JSON.parse(text)?.usage ?? null,
       model: JSON.parse(text)?.model ?? null,
+      upstreamProvider: JSON.parse(text)?.provider ?? null,
       content: message?.content ?? null,
       toolCalls: (message?.tool_calls ?? []).map((call) => ({
         id: call?.id ?? null,
@@ -415,6 +634,7 @@ function parseCompletion(bytes) {
     const calls = new Map();
     let usage = null;
     let model = null;
+    let upstreamProvider = null;
     let content = '';
     for (const line of text.split(/\r?\n/)) {
       if (!line.startsWith('data: ')) continue;
@@ -428,6 +648,7 @@ function parseCompletion(bytes) {
       }
       usage = event.usage ?? usage;
       model = event.model ?? model;
+      upstreamProvider = event.provider ?? upstreamProvider;
       const delta = event.choices?.[0]?.delta;
       if (typeof delta?.content === 'string') content += delta.content;
       for (const part of delta?.tool_calls ?? []) {
@@ -438,6 +659,12 @@ function parseCompletion(bytes) {
         calls.set(part.index, prior);
       }
     }
-    return { usage, content: content || null, toolCalls: [...calls.values()], model };
+    return {
+      usage,
+      content: content || null,
+      toolCalls: [...calls.values()],
+      model,
+      upstreamProvider,
+    };
   }
 }

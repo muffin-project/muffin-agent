@@ -17,10 +17,17 @@ import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import {
   cleanOwnedRoot,
+  DEFAULT_FREE_MODEL,
   negativeOracle,
+  OPENROUTER_API_PREFIX,
+  OPENROUTER_BASE_URL,
+  OPENROUTER_MODELS_URL,
   positiveOracle,
   REAL_LIMITS,
+  readBoundedJson,
+  readExplicitApiKeyFile,
   realAgentTemporaryRoot,
+  selectFreeModel,
   startRecorder,
 } from './real-agent-support.mjs';
 
@@ -36,6 +43,9 @@ if (cleanTarget) {
   process.exit(0);
 }
 const runReal = process.argv.includes('--run');
+const modelId = valueAfter('--model') ?? DEFAULT_FREE_MODEL;
+const apiKeyFile = valueAfter('--api-key-file');
+const redactions = [];
 const root = mkdtempSync(join(realAgentTemporaryRoot(), 'muffin-real-e2e-'));
 const marker = join(root, '.muffin-real-e2e-root');
 mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -113,51 +123,73 @@ const report = {
   },
   trace: {
     completionRequests: 0,
-    provider: 'local Ollama (not called)',
-    model: 'qwen3:8b',
+    provider: 'OpenRouter (no inference in preflight)',
+    model: modelId,
     toolCalls: [],
     usage: null,
     retries: 0,
   },
   paths,
   startedAt: new Date().toISOString(),
+  modelSelection: {
+    requested: modelId,
+    provider: 'OpenRouter',
+    pricingPolicy: 'only verified zero-priced catalog entries',
+  },
 };
 let recorder = null;
+let apiKey = null;
 
 try {
+  if (runReal || apiKeyFile) {
+    apiKey = readExplicitApiKeyFile(apiKeyFile, repo);
+    redactions.push(apiKey);
+    report.credential = runReal
+      ? 'explicit private file loaded for real run'
+      : 'explicit private file used only by isolated init; no completion request is sent';
+  } else {
+    apiKey = 'preflight-only-placeholder-not-forwarded';
+    report.credential =
+      'not required; placeholder remains in isolated bootstrap and is never forwarded';
+  }
   const build = await runProcess('npm', ['run', 'compile'], repo, env, 120_000);
   if (build.code !== 0) throw new Error(`compiled build failed (${build.code}): ${build.stderr}`);
   report.build = 'PASS';
   if (dirtyProductionSource.length)
     throw new Error(`production TypeScript sources are dirty: ${dirtyProductionSource.join(', ')}`);
-  const providerTarget = 'http://127.0.0.1:11434';
-  const providerCheck = await fetch(`${providerTarget}/api/tags`, {
+  const catalogResponse = await fetch(OPENROUTER_MODELS_URL, {
     signal: AbortSignal.timeout(10_000),
   }).catch(() => null);
-  const providerTags = providerCheck?.ok ? await providerCheck.json() : null;
+  if (!catalogResponse?.ok)
+    throw new Error(
+      `BLOCKED: OpenRouter catalog unavailable (${catalogResponse?.status ?? 'network'})`,
+    );
+  const catalog = await readBoundedJson(catalogResponse);
+  let selectedModel;
+  try {
+    selectedModel = selectFreeModel(catalog, modelId);
+  } catch (error) {
+    throw new Error(`BLOCKED: ${error instanceof Error ? error.message : String(error)}`);
+  }
   report.providerPreflight = {
-    endpoint: providerTarget,
-    model: providerTags?.models?.find((model) => model.name === 'qwen3:8b') ?? null,
+    endpoint: OPENROUTER_MODELS_URL,
+    catalogFetchedAt: new Date().toISOString(),
+    selectedModel,
+    inference: 'not called during preflight',
+    auth: 'catalog is public; no Authorization header sent',
   };
-  if (!report.providerPreflight.model)
-    throw new Error('BLOCKED: local Ollama qwen3:8b is unavailable');
-  const modelInfo = await fetch(`${providerTarget}/api/show`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ model: 'qwen3:8b' }),
-    signal: AbortSignal.timeout(10_000),
-  }).then((r) => r.json());
-  report.providerPreflight.capabilities = modelInfo.capabilities;
-  if (!modelInfo.capabilities?.includes('tools'))
-    throw new Error('BLOCKED: local model does not advertise tool support');
   recorder = runReal
     ? await startRecorder({
-        target: `${providerTarget}/v1`,
+        target: OPENROUTER_BASE_URL,
+        upstreamPrefix: OPENROUTER_API_PREFIX,
         wirePath: join(root, 'wire.jsonl'),
         guardFirstWrite: true,
+        modelId,
+        catalog,
+        apiKey,
       })
     : null;
-  const baseUrl = recorder?.baseUrl ?? `${providerTarget}/v1`;
+  const baseUrl = recorder?.baseUrl ?? `${OPENROUTER_BASE_URL}${OPENROUTER_API_PREFIX}`;
   const init = await runCli(
     [
       'init',
@@ -166,15 +198,15 @@ try {
       '--base-url',
       baseUrl,
       '--model',
-      'qwen3:8b',
+      modelId,
       '--light-model',
-      'qwen3:8b',
+      modelId,
     ],
-    'local-e2e-placeholder-key',
+    apiKey,
   );
   if (init.code !== 0) throw new Error(`muffin init exited ${init.code}: ${init.stderr}`);
   report.init = 'PASS';
-  installExperimentConfig();
+  installExperimentConfig(modelId);
   const rot = await runCli(['rot', 'verify']);
   if (rot.code !== 0) throw new Error(`muffin rot verify exited ${rot.code}: ${rot.stderr}`);
   report.rootOfTrust = 'PASS';
@@ -203,7 +235,7 @@ try {
     const firstRequest = recorder.events.find((event) => event.kind === 'request');
     if (
       recorder.violation() === 'fs_write present in first provider request' ||
-      (firstRequest && firstRequest.toolNames.includes('fs_write'))
+      firstRequest?.toolNames.includes('fs_write')
     ) {
       report.modelScenario = 'NOT_RUN (first request did not satisfy hidden-capability witness)';
       report.witness = {
@@ -252,7 +284,7 @@ try {
     report.trace = recorder.metrics();
   }
 } catch (error) {
-  report.error = error instanceof Error ? error.message : String(error);
+  report.error = sanitize(error instanceof Error ? error.message : String(error));
   if (report.error.startsWith('BLOCKED:')) report.status = 'BLOCKED';
 }
 
@@ -312,6 +344,8 @@ function runCli(args, stdin = '', timeoutMs = 120_000) {
     child.on('error', reject);
     child.on('close', (code, signal) => {
       clearTimeout(timeout);
+      stdout = sanitize(stdout);
+      stderr = sanitize(stderr);
       const label = (args[0] ?? 'cli').replace(/[^a-z0-9_-]/gi, '_');
       appendFileSync(
         join(root, `cli-${label}.log`),
@@ -324,16 +358,15 @@ function runCli(args, stdin = '', timeoutMs = 120_000) {
   });
 }
 
-function installExperimentConfig() {
+function installExperimentConfig(modelId) {
   const configPath = join(paths.muffinHome, 'config.json');
   const config = JSON.parse(readFileSync(configPath, 'utf8'));
-  config.provider.reasoningDialect = 'reasoning_effort';
-  config.thinking = 'off';
+  config.models = { ...config.models, main: modelId, light: modelId, deep: modelId };
   writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
   const profile = {
     schemaVersion: 1,
-    name: 'g0-real-qwen3',
-    match: ['qwen3:8b'],
+    name: 'g0-real-openrouter-free',
+    match: [modelId],
     maxToolsExposed: 6,
     maxToolCallsPerTurn: 8,
     thinking: 'unset',
@@ -352,17 +385,25 @@ function installExperimentConfig() {
   };
   const profileDir = join(paths.muffinHome, 'profiles');
   mkdirSync(profileDir, { recursive: true, mode: 0o700 });
-  writeFileSync(join(profileDir, 'g0-real-qwen3.json'), `${JSON.stringify(profile, null, 2)}\n`, {
-    mode: 0o600,
-  });
+  writeFileSync(
+    join(profileDir, 'g0-real-openrouter-free.json'),
+    `${JSON.stringify(profile, null, 2)}\n`,
+    {
+      mode: 0o600,
+    },
+  );
   report.experimentConfig = {
     maxToolsExposed: 6,
     profile: profile.name,
-    reasoningDialect: 'reasoning_effort',
-    thinking: 'off',
+    model: modelId,
+    thinking: 'unset (provider/model default)',
     recovery: profile.recovery,
     autoApproval: false,
   };
+}
+
+function sanitize(value) {
+  return redactions.reduce((text, secret) => text.split(secret).join('[REDACTED]'), value);
 }
 
 async function runNegative({ recorder }) {

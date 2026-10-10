@@ -4,20 +4,35 @@
 
 `npm run e2e:real:preflight` compila e avvia la CLI compilata in una nuova Home
 temporanea, isola `HOME`, `MUFFIN_HOME`, `MUFFIN_WORKSPACE`, le directory XDG e
-`TMPDIR`, inizializza DB/Root of Trust, e verifica il sandbox in un child con la
-stessa env isolata. Non chiama il modello. Produce `report.json` con SHA del
-commit, lockfile e stato delle sorgenti runtime; exit 0 indica preflight PASS,
-1 FAIL, 2 BLOCKED. Ogni invocazione crea un root distinto e conserva le prove.
-`node evals/e2e/real-agent.mjs --clean <root-esatto>` rimuove solo un root
-diretto in temp con il marker del runner.
+`TMPDIR`, inizializza DB/Root of Trust e verifica il sandbox con la stessa env
+isolata. Non richiede una chiave e non chiama il modello: interroga soltanto il
+catalogo pubblico OpenRouter senza autenticazione e verifica identità, supporto
+tool, contesto e prezzi zero. Produce `report.json` con SHA del commit, lockfile
+e stato delle sorgenti runtime; exit 0 indica PASS, 1 FAIL, 2 BLOCKED. Ogni
+invocazione crea un root distinto e conserva le prove. Per rimuoverlo usa
+`node evals/e2e/real-agent.mjs --clean <root-esatto>`.
 
-`npm run e2e:real` abilita le due scene reali su Ollama locale `qwen3:8b` tramite
-recorder proxy. Il proxy registra schemi, byte, hash, risposte, first-byte/end
-latency e usage, inoltra body e streaming senza modificarli e rifiuta un payload
-che dichiari più di 4.096 token output. Il budget complessivo è 8 richieste,
-180 s, massimo 32.768 token output dichiarati e 320 kB di input come limite
-conservativo separato da quello provider di 80.000 token. I token esatti sono
-riportati quando il provider li restituisce.
+L’LLM di questa corsia usa solo OpenRouter. Il modello predefinito è
+`google/gemma-4-31b-it:free`; `--model` accetta solo un ID `:free` presente nel
+catalogo corrente (oppure `openrouter/free` se il catalogo descrive quella route
+con tool e prezzi zero). Un run reale richiede una chiave esplicita in un file
+privato `0600`, regolare, senza symlink e fuori dal repository:
+
+```bash
+npm run e2e:real -- --api-key-file /percorso/privato/openrouter-key
+npm run e2e:real -- --model google/gemma-4-31b-it:free --api-key-file /percorso/privato/openrouter-key
+```
+
+Non vengono lette chiavi dall’ambiente o dall’installazione personale. La chiave
+entra nella Home temporanea tramite stdin della CLI, passa al proxy solo
+nell’header Authorization e viene esclusa dai report e dai log. Il proxy usa
+solo `https://openrouter.ai/api/v1`, inoltra body e streaming senza modificarli,
+e rifiuta model ID diversi, modelli pagati o routing/fallback espliciti prima di
+inoltrare la richiesta. Registra schemi, byte, hash, model servito, first-byte/end
+latency, usage, costo/cache/ragionamento quando forniti (altrimenti `unknown`).
+Il budget è 8 richieste, 180 s, 4.096 token output per richiesta secondo la CLI,
+32.768 totali e 320 kB di input come limite separato. Ollama è riservato agli
+embedding, non al provider LLM di questa prova.
 
 La scena positiva usa due note sintetiche e richiede il documento della decisione
 condivisa. PASS richiede `fs_write` assente dal primo schema, `capability_search`

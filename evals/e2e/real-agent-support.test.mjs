@@ -1,14 +1,29 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'vitest';
 import {
   budgetReason,
   cleanOwnedRoot,
+  DEFAULT_FREE_MODEL,
   negativeOracle,
   positiveOracle,
   REAL_LIMITS,
+  readBoundedJson,
+  readExplicitApiKeyFile,
+  selectFreeModel,
+  servedModelViolation,
+  startRecorder,
 } from './real-agent-support.mjs';
 
 test('budget blocks the ninth completion, the 180s boundary, and aggregate input overflow', () => {
@@ -155,5 +170,220 @@ test('owned-root cleanup is marker-bound, symlink-safe, and repeatable', () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(`${root}-link`, { force: true });
+  }
+});
+
+function freeEntry(overrides = {}) {
+  return {
+    id: DEFAULT_FREE_MODEL,
+    context_length: 262144,
+    supported_parameters: ['tools', 'tool_choice'],
+    pricing: { prompt: '0', completion: '0', request: '0', image: '0' },
+    ...overrides,
+  };
+}
+
+test('free-model selection requires exact catalog identity, tools, context, and fully zero known prices', () => {
+  const catalog = { data: [freeEntry()] };
+  assert.equal(selectFreeModel(catalog, DEFAULT_FREE_MODEL).id, DEFAULT_FREE_MODEL);
+  assert.throws(() => selectFreeModel(catalog, 'google/gemma-4-31b-it'), /explicitly free/);
+  assert.throws(() => selectFreeModel(catalog, 'unknown/model:free'), /absent/);
+  assert.throws(
+    () =>
+      selectFreeModel(
+        { data: [freeEntry({ supported_parameters: ['max_tokens'] })] },
+        DEFAULT_FREE_MODEL,
+      ),
+    /tool support/,
+  );
+  assert.throws(
+    () =>
+      selectFreeModel(
+        { data: [freeEntry({ pricing: { prompt: '0', completion: '0', image: '0.001' } })] },
+        DEFAULT_FREE_MODEL,
+      ),
+    /nonzero image pricing/,
+  );
+  assert.throws(
+    () =>
+      selectFreeModel(
+        { data: [freeEntry({ pricing: { prompt: '0', completion: '0', request: null } })] },
+        DEFAULT_FREE_MODEL,
+      ),
+    /unknown request pricing/,
+  );
+  assert.throws(
+    () =>
+      selectFreeModel(
+        { data: [freeEntry({ pricing: { prompt: ' ', completion: '0' } })] },
+        DEFAULT_FREE_MODEL,
+      ),
+    /unknown prompt pricing/,
+  );
+  assert.throws(() => selectFreeModel(catalog, 'openrouter/free'), /absent/);
+  assert.equal(servedModelViolation(DEFAULT_FREE_MODEL, DEFAULT_FREE_MODEL, catalog), null);
+  assert.match(
+    servedModelViolation(DEFAULT_FREE_MODEL, 'paid/model', catalog),
+    /different from the concrete/,
+  );
+  assert.equal(servedModelViolation('openrouter/free', DEFAULT_FREE_MODEL, catalog), null);
+  assert.match(
+    servedModelViolation('openrouter/free', 'paid/model', catalog),
+    /not verified as zero-priced/,
+  );
+});
+
+test('public catalog parsing has a strict byte ceiling', async () => {
+  assert.deepEqual(await readBoundedJson(new Response('{"data":[]}'), 32), { data: [] });
+  await assert.rejects(
+    readBoundedJson(new Response('{"data":["too large"]}'), 8),
+    /exceeds the runner byte limit/,
+  );
+});
+
+test('explicit API key file must be private, outside the repo, regular, and not a symlink', () => {
+  const root = mkdtempSync(join(tmpdir(), 'g0-credential-test-'));
+  const repository = join(root, 'repo');
+  const privateDir = join(root, 'private');
+  mkdirSync(repository);
+  mkdirSync(privateDir);
+  const keyPath = join(privateDir, 'api-key');
+  const key = 'synthetic-secret-for-test-only';
+  try {
+    writeFileSync(keyPath, `${key}\n`, { mode: 0o600 });
+    assert.equal(readExplicitApiKeyFile(keyPath, repository), key);
+    const link = join(privateDir, 'link');
+    symlinkSync(keyPath, link);
+    assert.throws(() => readExplicitApiKeyFile(link, repository), /non-symlink/);
+    const inRepo = join(repository, 'key');
+    writeFileSync(inRepo, key, { mode: 0o600 });
+    assert.throws(() => readExplicitApiKeyFile(inRepo, repository), /outside the repository/);
+    chmodSync(keyPath, 0o644);
+    assert.throws(() => readExplicitApiKeyFile(keyPath, repository), /permissions must be private/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('OpenRouter recorder maps /v1, forwards only the explicit credential, pins model, and keeps it out of evidence', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'g0-proxy-test-'));
+  const key = 'synthetic-secret-for-test-only';
+  let requests = 0;
+  let forwardedUrl = '';
+  let forwardedAuth = '';
+  let forwardedBody = '';
+  const upstream = createServer(async (req, res) => {
+    requests += 1;
+    forwardedUrl = req.url ?? '';
+    forwardedAuth = req.headers.authorization ?? '';
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    forwardedBody = Buffer.concat(chunks).toString();
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        model: DEFAULT_FREE_MODEL,
+        choices: [{ message: { content: key } }],
+        usage: { prompt_tokens: 12, completion_tokens: 2, cost: 0 },
+      }),
+    );
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const upstreamAddress = upstream.address();
+  const wirePath = join(root, 'wire.jsonl');
+  const recorder = await startRecorder({
+    target: `http://127.0.0.1:${upstreamAddress.port}`,
+    upstreamPrefix: '/api/v1',
+    wirePath,
+    modelId: DEFAULT_FREE_MODEL,
+    apiKey: key,
+  });
+  const requestBody = JSON.stringify({
+    model: DEFAULT_FREE_MODEL,
+    max_tokens: 4096,
+    messages: [{ role: 'user', content: 'synthetic fixture' }],
+    tools: [],
+  });
+  try {
+    const response = await fetch(`${recorder.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: requestBody,
+    });
+    assert.equal(response.status, 200);
+    await response.arrayBuffer();
+    assert.equal(requests, 1);
+    assert.equal(forwardedUrl, '/api/v1/chat/completions');
+    assert.equal(forwardedAuth, `Bearer ${key}`);
+    assert.equal(forwardedBody, requestBody);
+    assert.equal(JSON.stringify(recorder.events).includes(key), false);
+    assert.equal(readFileSync(wirePath, 'utf8').includes(key), false);
+    assert.equal(readFileSync(join(root, 'request-0.json'), 'utf8').includes(key), false);
+    assert.equal(recorder.events.find((event) => event.kind === 'response').content, '[REDACTED]');
+    assert.equal(recorder.metrics().cost, 0);
+    const altered = await fetch(`${recorder.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model: 'paid/model', messages: [], tools: [] }),
+    });
+    assert.equal(altered.status, 400);
+    assert.equal(requests, 1);
+    const routed = await fetch(`${recorder.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: DEFAULT_FREE_MODEL,
+        models: ['paid/model'],
+        messages: [],
+        tools: [],
+      }),
+    });
+    assert.equal(routed.status, 400);
+    assert.equal(requests, 1);
+    const unauthenticated = await fetch(`${recorder.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: requestBody,
+    });
+    assert.equal(unauthenticated.status, 401);
+    assert.equal(requests, 1);
+    const alternateEndpoint = await fetch(`${recorder.baseUrl}/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model: 'paid/model' }),
+    });
+    assert.equal(alternateEndpoint.status, 404);
+    const alternateMethod = await fetch(`${recorder.baseUrl}/chat/completions`, { method: 'GET' });
+    assert.equal(alternateMethod.status, 404);
+    assert.equal(requests, 1);
+    assert.equal(recorder.metrics().runnerRejectedRequests, 5);
+  } finally {
+    await recorder.close();
+    await new Promise((resolve) => upstream.close(resolve));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('recorder rejects an unbounded completion before any upstream request', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'muffin-recorder-bound-'));
+  const key = 'synthetic-private-key';
+  const recorder = await startRecorder({
+    target: 'http://127.0.0.1:1',
+    wirePath: join(root, 'wire.jsonl'),
+    modelId: DEFAULT_FREE_MODEL,
+    apiKey: key,
+  });
+  try {
+    const response = await fetch(`${recorder.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: DEFAULT_FREE_MODEL, messages: [] }),
+    });
+    assert.equal(response.status, 412);
+    assert.equal(recorder.metrics().completionRequests, 0);
+    assert.equal(recorder.metrics().upstreamStatuses.length, 0);
+  } finally {
+    await recorder.close();
+    rmSync(root, { recursive: true, force: true });
   }
 });
