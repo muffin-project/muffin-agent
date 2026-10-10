@@ -20,7 +20,14 @@ export const REAL_LIMITS = Object.freeze({
   outputTokens: 32_768,
 });
 
-export function cleanOwnedRoot(target, temporaryRoot = tmpdir()) {
+// macOS's default per-user TMPDIR can exceed Unix socket path limits once
+// isolated Home and runtime subdirectories are appended. /tmp stays portable
+// across our macOS and Linux targets; it is canonicalised before cleanup.
+export function realAgentTemporaryRoot() {
+  return process.platform === 'darwin' ? '/tmp' : tmpdir();
+}
+
+export function cleanOwnedRoot(target, temporaryRoot = realAgentTemporaryRoot()) {
   const temp = realpathSync(temporaryRoot);
   const candidate = resolve(target);
   const name = candidate.slice(candidate.lastIndexOf('/') + 1);

@@ -12,7 +12,6 @@ import {
   readFileSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
@@ -21,6 +20,7 @@ import {
   negativeOracle,
   positiveOracle,
   REAL_LIMITS,
+  realAgentTemporaryRoot,
   startRecorder,
 } from './real-agent-support.mjs';
 
@@ -36,7 +36,7 @@ if (cleanTarget) {
   process.exit(0);
 }
 const runReal = process.argv.includes('--run');
-const root = mkdtempSync(join(tmpdir(), 'muffin-real-e2e-'));
+const root = mkdtempSync(join(realAgentTemporaryRoot(), 'muffin-real-e2e-'));
 const marker = join(root, '.muffin-real-e2e-root');
 mkdirSync(root, { recursive: true, mode: 0o700 });
 writeFileSync(marker, `${sourceSha}\n`, { mode: 0o600 });
