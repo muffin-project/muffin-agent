@@ -21,11 +21,14 @@ export const REAL_AGENT_EXPECTED = JSON.parse(
 );
 
 export const REAL_LIMITS = Object.freeze({
-  completionRequests: 8,
+  completionRequests: 10,
+  negativeCompletionRequests: 3,
+  negativeWallMs: 30_000,
   wallMs: 180_000,
-  inputBytes: 320_000,
+  inputBytes: 400_000,
+  inputTokens: 100_000,
   outputTokensPerRequest: 4_096,
-  outputTokens: 32_768,
+  outputTokens: 40_960,
 });
 
 export const OPENROUTER_BASE_URL = 'https://openrouter.ai';
@@ -211,7 +214,7 @@ export function budgetReason(
   if (now - startedAt >= limits.wallMs) return 'wall-time limit';
   if (count >= limits.completionRequests) return 'completion-request limit';
   if (inputBytesSoFar + requestBytes > limits.inputBytes)
-    return 'conservative input-byte limit (320k bytes ~= 80k tokens)';
+    return 'conservative input-byte limit (400k bytes ~= 100k tokens)';
   return null;
 }
 
@@ -587,7 +590,7 @@ export async function startRecorder({
           violation = 'provider-reported output-token limit';
           reportedBudgetExceeded = true;
         }
-        if (reportedInputTokens > 80_000) {
+        if (reportedInputTokens > REAL_LIMITS.inputTokens) {
           violation = 'provider-reported input-token limit';
           reportedBudgetExceeded = true;
         }
@@ -694,7 +697,7 @@ export async function startRecorder({
         reportedOutputTokens: sumKnown(usages, ['completion_tokens', 'output_tokens']),
         outputTokenLimit: REAL_LIMITS.outputTokens,
         outputTokenLimitPerRequest: REAL_LIMITS.outputTokensPerRequest,
-        inputTokenLimit: 80_000,
+        inputTokenLimit: REAL_LIMITS.inputTokens,
         requestBytes: events
           .filter((event) => event.kind === 'request')
           .map((event) => event.requestBytes),

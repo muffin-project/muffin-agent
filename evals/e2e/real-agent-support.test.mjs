@@ -31,14 +31,26 @@ import {
   stopOwnedProcess,
 } from './real-agent-support.mjs';
 
-test('budget blocks the ninth completion, the 180s boundary, and aggregate input overflow', () => {
+test('budget blocks the eleventh completion, the 180s boundary, and aggregate input overflow', () => {
   const startedAt = 1_000;
   assert.equal(
-    budgetReason({ count: 7, startedAt, inputBytesSoFar: 20, requestBytes: 30, now: 2_000 }),
+    budgetReason({
+      count: REAL_LIMITS.completionRequests - 1,
+      startedAt,
+      inputBytesSoFar: 20,
+      requestBytes: 30,
+      now: 2_000,
+    }),
     null,
   );
   assert.equal(
-    budgetReason({ count: 8, startedAt, inputBytesSoFar: 20, requestBytes: 30, now: 2_000 }),
+    budgetReason({
+      count: REAL_LIMITS.completionRequests,
+      startedAt,
+      inputBytesSoFar: 20,
+      requestBytes: 30,
+      now: 2_000,
+    }),
     'completion-request limit',
   );
   assert.equal(
@@ -59,7 +71,7 @@ test('budget blocks the ninth completion, the 180s boundary, and aggregate input
       requestBytes: 6,
       now: 2_000,
     }),
-    'conservative input-byte limit (320k bytes ~= 80k tokens)',
+    'conservative input-byte limit (400k bytes ~= 100k tokens)',
   );
 });
 
@@ -562,7 +574,7 @@ test('two consecutive upstream 429 responses preserve error metadata and stop as
   }
 });
 
-test('the ninth completion is rejected locally and immediately stops the owned CLI child as runner_budget FAIL', async () => {
+test('the eleventh completion is rejected locally and immediately stops the owned CLI child as runner_budget FAIL', async () => {
   const root = mkdtempSync(join(tmpdir(), 'g0-runner-budget-'));
   const key = 'synthetic-private-key';
   let upstreamCalls = 0;
@@ -605,7 +617,7 @@ test('the ninth completion is rejected locally and immediately stops the owned C
     tools: [],
   });
   try {
-    for (let index = 0; index < 8; index += 1) {
+    for (let index = 0; index < REAL_LIMITS.completionRequests; index += 1) {
       const response = await fetch(`${recorder.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
@@ -614,15 +626,19 @@ test('the ninth completion is rejected locally and immediately stops the owned C
       assert.equal(response.status, 200);
       await response.arrayBuffer();
     }
-    const ninth = await fetch(`${recorder.baseUrl}/chat/completions`, {
+    const rejected = await fetch(`${recorder.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
       body,
     });
-    assert.equal(ninth.status, 429);
-    await ninth.arrayBuffer();
-    assert.equal(upstreamCalls, 8, 'the ninth request must never reach the upstream model');
-    assert.equal(recorder.metrics().completionRequests, 8);
+    assert.equal(rejected.status, 429);
+    await rejected.arrayBuffer();
+    assert.equal(
+      upstreamCalls,
+      REAL_LIMITS.completionRequests,
+      'the request beyond the cap must never reach the upstream model',
+    );
+    assert.equal(recorder.metrics().completionRequests, REAL_LIMITS.completionRequests);
     assert.equal(recorder.metrics().runnerRejectedRequests, 1);
     assert.equal(
       recorder.metrics().providerUnavailable,

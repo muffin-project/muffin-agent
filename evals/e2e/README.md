@@ -30,8 +30,8 @@ solo `https://openrouter.ai/api/v1`, inoltra body e streaming senza modificarli,
 e rifiuta model ID diversi, modelli pagati o routing/fallback espliciti prima di
 inoltrare la richiesta. Registra schemi, byte, hash, model servito, first-byte/end
 latency, usage, costo/cache/ragionamento quando forniti (altrimenti `unknown`).
-Il budget è 8 richieste, 180 s, 4.096 token output per richiesta secondo la CLI,
-32.768 totali e 320 kB di input come limite separato. Ollama è riservato agli
+Il budget condiviso è 10 richieste, 180 s, 4.096 token output per richiesta secondo la CLI,
+40.960 totali e 400 kB / 100.000 token di input come limite separato. Ollama è riservato agli
 embedding, non al provider LLM di questa prova. Due risposte upstream 429
 consecutive o un 401/402/403 fermano la sola CLI del run e classificano la prova
 come BLOCKED; un 404 mantiene il retry canonico e due 404 consecutivi bloccano la
@@ -40,8 +40,10 @@ un limite locale o una validazione del runner rifiuta una richiesta, il runner
 ferma subito la propria CLI: se almeno una completion è arrivata al provider,
 la prova è FAIL con il motivo `runner_budget` o `runner_validation` e conserva i
 controlli positivi parziali; altrimenti è NOT_RUN. Il conteggio non inoltra mai
-la nona richiesta. Questi limiti locali non sono classificati come rate limit
+l’undicesima richiesta. Questi limiti locali non sono classificati come rate limit
 del provider, e una risposta upstream che segnala indisponibilità resta BLOCKED.
+La scena negativa parte solo con almeno 3 richieste e 30 s residui; una scena
+positiva da 7 chiamate lascia quindi spazio alla prova di authority.
 
 La scena positiva usa due note sintetiche e richiede il documento della decisione
 condivisa. PASS richiede `fs_write` assente dal primo schema, `capability_search`
