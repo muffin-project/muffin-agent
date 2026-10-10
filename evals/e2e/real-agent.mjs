@@ -10,6 +10,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -23,12 +24,14 @@ import {
   OPENROUTER_BASE_URL,
   OPENROUTER_MODELS_URL,
   positiveOracle,
+  providerAvailabilityResult,
   REAL_LIMITS,
   readBoundedJson,
   readExplicitApiKeyFile,
   realAgentTemporaryRoot,
   selectFreeModel,
   startRecorder,
+  stopOwnedProcess,
 } from './real-agent-support.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -139,6 +142,7 @@ const report = {
 };
 let recorder = null;
 let apiKey = null;
+let activeAgentStop = null;
 
 try {
   if (runReal || apiKeyFile) {
@@ -187,6 +191,7 @@ try {
         modelId,
         catalog,
         apiKey,
+        onProviderUnavailable: (failure) => activeAgentStop?.(failure),
       })
     : null;
   const baseUrl = recorder?.baseUrl ?? `${OPENROUTER_BASE_URL}${OPENROUTER_API_PREFIX}`;
@@ -232,8 +237,39 @@ try {
       '',
       REAL_LIMITS.wallMs,
     );
+    const successfulModelResponses = recorder.events.filter(
+      (event) =>
+        event.kind === 'response' && event.status >= 200 && event.status < 300 && event.model,
+    ).length;
+    const providerResult = providerAvailabilityResult(
+      positive.providerUnavailable ?? recorder.metrics().providerUnavailable,
+      successfulModelResponses,
+    );
     const firstRequest = recorder.events.find((event) => event.kind === 'request');
-    if (
+    if (providerResult) {
+      report.status = providerResult.status;
+      report.modelScenario = providerResult.modelScenario;
+      report.providerUnavailable = providerResult.providerUnavailable;
+      if (successfulModelResponses > 0) {
+        const db = new Database(join(paths.muffinHome, 'muffin.db'), { readonly: true });
+        const rows = db
+          .prepare(
+            'SELECT call_id, tool, resource, decision, is_error, ended_at, effect_row, reversible FROM turn_tool_calls ORDER BY started_at',
+          )
+          .all();
+        db.close();
+        report.partialPositive = positiveOracle({
+          events: recorder.events,
+          artifact: existsSync(join(paths.workspace, 'shared-decisions.md'))
+            ? readFileSync(join(paths.workspace, 'shared-decisions.md'), 'utf8')
+            : null,
+          rows,
+          workspace: paths.workspace,
+          canonicalWorkspace: realpathSync(paths.workspace),
+        });
+        report.partialSpans = readSpans(paths.muffinHome);
+      }
+    } else if (
       recorder.violation() === 'fs_write present in first provider request' ||
       firstRequest?.toolNames.includes('fs_write')
     ) {
@@ -251,7 +287,7 @@ try {
       const db = new Database(join(paths.muffinHome, 'muffin.db'), { readonly: true });
       const rows = db
         .prepare(
-          'SELECT tool, resource, decision, is_error, ended_at, effect_row, reversible FROM turn_tool_calls ORDER BY started_at',
+          'SELECT call_id, tool, resource, decision, is_error, ended_at, effect_row, reversible FROM turn_tool_calls ORDER BY started_at',
         )
         .all();
       db.close();
@@ -263,6 +299,7 @@ try {
         artifact,
         rows,
         workspace: paths.workspace,
+        canonicalWorkspace: realpathSync(paths.workspace),
       });
       report.modelScenario = positive.code === 0 ? report.positive.status : 'FAIL';
       report.status = positive.code === 0 ? report.positive.status : 'FAIL';
@@ -272,7 +309,13 @@ try {
         recorder.metrics().completionRequests < 7
       ) {
         report.negative = await runNegative({ recorder });
-        if (report.negative.status !== 'PASS') report.status = report.negative.status;
+        if (recorder.metrics().providerUnavailable) {
+          report.providerUnavailable = recorder.metrics().providerUnavailable;
+          report.status = 'BLOCKED';
+          if (report.negative.status === 'NOT_RUN')
+            report.negative.status =
+              'BLOCKED (provider unavailable before negative model response)';
+        } else if (report.negative.status !== 'PASS') report.status = report.negative.status;
       } else {
         report.negative = {
           status: 'NOT_RUN',
@@ -333,17 +376,23 @@ function runCli(args, stdin = '', timeoutMs = 120_000) {
     });
     let stdout = '';
     let stderr = '';
-    const timeout = setTimeout(() => {
-      child.kill('SIGTERM');
-      setTimeout(() => {
-        if (child.exitCode === null) child.kill('SIGKILL');
-      }, 2_000).unref();
-    }, timeoutMs);
+    let providerUnavailable = null;
+    let clearEscalation = null;
+    const stop = (failure = null) => {
+      if (failure) providerUnavailable ??= failure;
+      if (child.exitCode !== null || child.signalCode !== null || clearEscalation) return;
+      clearEscalation = stopOwnedProcess(child);
+    };
+    const timeout = setTimeout(() => stop(), timeoutMs);
+    const isAgentRun = args[0] === 'run';
+    if (isAgentRun) activeAgentStop = stop;
     child.stdout.setEncoding('utf8').on('data', (chunk) => (stdout += chunk));
     child.stderr.setEncoding('utf8').on('data', (chunk) => (stderr += chunk));
     child.on('error', reject);
     child.on('close', (code, signal) => {
       clearTimeout(timeout);
+      clearEscalation?.();
+      if (isAgentRun && activeAgentStop === stop) activeAgentStop = null;
       stdout = sanitize(stdout);
       stderr = sanitize(stderr);
       const label = (args[0] ?? 'cli').replace(/[^a-z0-9_-]/gi, '_');
@@ -352,7 +401,7 @@ function runCli(args, stdin = '', timeoutMs = 120_000) {
         `${JSON.stringify({ args, code, signal, stdout, stderr })}\n`,
         { mode: 0o600 },
       );
-      resolvePromise({ code: code ?? -1, signal, stdout, stderr });
+      resolvePromise({ code: code ?? -1, signal, stdout, stderr, providerUnavailable });
     });
     child.stdin.end(stdin);
   });

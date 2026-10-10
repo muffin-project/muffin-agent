@@ -94,6 +94,29 @@ export function servedModelViolation(expectedId, servedId, catalog) {
   }
 }
 
+export function providerAvailabilityResult(failure, successfulModelResponses) {
+  if (!failure) return null;
+  return {
+    status: 'BLOCKED',
+    modelScenario:
+      successfulModelResponses === 0
+        ? 'NOT_RUN (provider unavailable before a successful model response)'
+        : 'BLOCKED (provider unavailable after partial model responses)',
+    successfulModelResponses,
+    providerUnavailable: failure,
+  };
+}
+
+export function stopOwnedProcess(child, graceMs = 2_000) {
+  if (child.exitCode !== null || child.signalCode !== null) return () => {};
+  child.kill('SIGTERM');
+  const timer = setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  }, graceMs);
+  timer.unref();
+  return () => clearTimeout(timer);
+}
+
 export function readExplicitApiKeyFile(path, repositoryRoot) {
   if (typeof path !== 'string' || path.length === 0)
     throw new Error('BLOCKED: --api-key-file is required for a real run');
@@ -170,7 +193,13 @@ export function budgetReason(
   return null;
 }
 
-export function positiveOracle({ events, artifact, rows, workspace }) {
+export function positiveOracle({
+  events,
+  artifact,
+  rows,
+  workspace,
+  canonicalWorkspace = workspace,
+}) {
   const expected =
     'publish only after the documentation and accessibility checklist are both approved';
   const requests = events.filter((event) => event.kind === 'request');
@@ -190,17 +219,33 @@ export function positiveOracle({ events, artifact, rows, workspace }) {
     (searchIndex < 0 ||
       searchIndex <
         events.findIndex((event) => event.kind === 'request' && names(event).includes('fs_write')));
-  const selectedWrite = events.some(
-    (event) =>
-      event.kind === 'response' && event.toolCalls?.some((call) => call.name === 'fs_write'),
+  const schemaEventIndex = events.findIndex(
+    (event) => event.kind === 'request' && names(event).includes('fs_write'),
   );
+  const target = join(canonicalWorkspace, 'shared-decisions.md');
+  const writeCall = events
+    .slice(schemaEventIndex >= 0 ? schemaEventIndex + 1 : events.length)
+    .filter((event) => event.kind === 'response')
+    .flatMap((event) => event.toolCalls ?? [])
+    .find(
+      (call) =>
+        call.name === 'fs_write' &&
+        [
+          target,
+          join(workspace, 'shared-decisions.md'),
+          'shared-decisions.md',
+          './shared-decisions.md',
+        ].includes(parseArgs(call.arguments)?.path),
+    );
+  const selectedWrite = Boolean(writeCall?.id);
   const effect = rows.find(
     (row) =>
       row.tool === 'fs_write' &&
+      row.call_id === writeCall?.id &&
       ['allow', 'draft'].includes(row.decision) &&
       row.is_error === 0 &&
       typeof row.ended_at === 'string' &&
-      row.resource === `${workspace}/shared-decisions.md`,
+      [target, join(workspace, 'shared-decisions.md')].includes(row.resource),
   );
   const normalize = (value) =>
     value
@@ -305,6 +350,7 @@ export async function startRecorder({
   modelId,
   catalog,
   apiKey,
+  onProviderUnavailable = () => {},
   now = () => Date.now(),
 }) {
   const startedAt = now();
@@ -318,6 +364,10 @@ export async function startRecorder({
   const activeControllers = new Set();
   let violation = null;
   const upstreamStatuses = [];
+  let consecutiveRateLimits = 0;
+  let consecutiveNotFound = 0;
+  let providerUnavailable = null;
+  let providerUnavailableNotified = false;
   let runnerRejectedRequests = 0;
   const server = createServer(async (req, res) => {
     if (req.method !== 'POST' || req.url !== '/v1/chat/completions') {
@@ -462,11 +512,30 @@ export async function startRecorder({
       clearTimeout(wallTimer);
       activeControllers.delete(controller);
       upstreamStatuses.push(response.status);
+      if (response.status === 429) consecutiveRateLimits += 1;
+      else consecutiveRateLimits = 0;
+      if (response.status === 404) consecutiveNotFound += 1;
+      else consecutiveNotFound = 0;
+      if ([401, 402, 403].includes(response.status))
+        providerUnavailable = { kind: 'fatal-upstream-status', status: response.status };
+      else if (consecutiveRateLimits >= 2)
+        providerUnavailable = {
+          kind: 'consecutive-upstream-rate-limit',
+          status: 429,
+          count: consecutiveRateLimits,
+        };
+      else if (consecutiveNotFound >= 2)
+        providerUnavailable = {
+          kind: 'repeated-upstream-not-found',
+          status: 404,
+          count: consecutiveNotFound,
+        };
       if (isCompletion) {
         const parsed = parseCompletion(bytes);
         const completion = {
           ...parsed,
           content: redact(parsed.content, apiKey),
+          providerError: redactDeep(parsed.providerError, apiKey),
           toolCalls: parsed.toolCalls.map((call) => ({
             ...call,
             arguments: redact(call.arguments, apiKey),
@@ -496,10 +565,15 @@ export async function startRecorder({
           model: completion.model,
           provider: 'openrouter',
           upstreamProvider: completion.upstreamProvider,
+          providerError: completion.providerError,
           statusClass: classifyStatus(response.status),
         };
         events.push(done);
         appendFileSync(wirePath, `${JSON.stringify(done)}\n`, { mode: 0o600 });
+      }
+      if (providerUnavailable && !providerUnavailableNotified) {
+        providerUnavailableNotified = true;
+        onProviderUnavailable(providerUnavailable);
       }
     } catch (error) {
       clearTimeout(wallTimer);
@@ -560,6 +634,7 @@ export async function startRecorder({
           ),
         ],
         upstreamStatuses: [...upstreamStatuses],
+        providerUnavailable,
         runnerRejectedRequests,
         cost: sumKnown(usages, ['cost']),
         reasoningTokens: sumKnown(
@@ -607,6 +682,16 @@ function redact(value, secret) {
   return typeof value === 'string' && secret ? value.split(secret).join('[REDACTED]') : value;
 }
 
+function redactDeep(value, secret) {
+  if (typeof value === 'string') return redact(value, secret);
+  if (Array.isArray(value)) return value.map((item) => redactDeep(item, secret));
+  if (value && typeof value === 'object')
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, redactDeep(item, secret)]),
+    );
+  return value;
+}
+
 function classifyStatus(status) {
   if (status === 402) return 'upstream-payment-required';
   if (status === 401 || status === 403) return 'upstream-authorization';
@@ -618,17 +703,19 @@ function classifyStatus(status) {
 function parseCompletion(bytes) {
   const text = bytes.toString('utf8');
   try {
-    const message = JSON.parse(text)?.choices?.[0]?.message;
+    const payload = JSON.parse(text);
+    const message = payload?.choices?.[0]?.message;
     return {
-      usage: JSON.parse(text)?.usage ?? null,
-      model: JSON.parse(text)?.model ?? null,
-      upstreamProvider: JSON.parse(text)?.provider ?? null,
+      usage: payload?.usage ?? null,
+      model: payload?.model ?? null,
+      upstreamProvider: payload?.provider ?? null,
       content: message?.content ?? null,
       toolCalls: (message?.tool_calls ?? []).map((call) => ({
         id: call?.id ?? null,
         name: call?.function?.name ?? call?.name ?? null,
         arguments: call?.function?.arguments ?? null,
       })),
+      providerError: providerErrorFields(payload?.error),
     };
   } catch {
     const calls = new Map();
@@ -636,6 +723,7 @@ function parseCompletion(bytes) {
     let model = null;
     let upstreamProvider = null;
     let content = '';
+    let providerError = null;
     for (const line of text.split(/\r?\n/)) {
       if (!line.startsWith('data: ')) continue;
       const data = line.slice(6);
@@ -649,6 +737,7 @@ function parseCompletion(bytes) {
       usage = event.usage ?? usage;
       model = event.model ?? model;
       upstreamProvider = event.provider ?? upstreamProvider;
+      providerError = providerErrorFields(event.error) ?? providerError;
       const delta = event.choices?.[0]?.delta;
       if (typeof delta?.content === 'string') content += delta.content;
       for (const part of delta?.tool_calls ?? []) {
@@ -665,6 +754,17 @@ function parseCompletion(bytes) {
       toolCalls: [...calls.values()],
       model,
       upstreamProvider,
+      providerError,
     };
   }
+}
+
+function providerErrorFields(error) {
+  if (!error || typeof error !== 'object') return null;
+  return {
+    message: typeof error.message === 'string' ? error.message : null,
+    code: error.code ?? null,
+    metadata: error.metadata && typeof error.metadata === 'object' ? error.metadata : null,
+    type: error.type ?? null,
+  };
 }

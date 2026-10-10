@@ -32,7 +32,11 @@ inoltrare la richiesta. Registra schemi, byte, hash, model servito, first-byte/e
 latency, usage, costo/cache/ragionamento quando forniti (altrimenti `unknown`).
 Il budget è 8 richieste, 180 s, 4.096 token output per richiesta secondo la CLI,
 32.768 totali e 320 kB di input come limite separato. Ollama è riservato agli
-embedding, non al provider LLM di questa prova.
+embedding, non al provider LLM di questa prova. Due risposte upstream 429
+consecutive o un 401/402/403 fermano la sola CLI del run e classificano la prova
+come BLOCKED; un 404 mantiene il retry canonico e due 404 consecutivi bloccano la
+corsa. Il body di errore OpenRouter è registrato con metadati redatti.
+Una risposta provider indisponibile non viene conteggiata come FAIL di Muffin.
 
 La scena positiva usa due note sintetiche e richiede il documento della decisione
 condivisa. PASS richiede `fs_write` assente dal primo schema, `capability_search`
