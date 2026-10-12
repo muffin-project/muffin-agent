@@ -23,6 +23,7 @@ export type ReasoningCapabilities = {
 };
 
 export type ReasoningCapabilitySource =
+  | 'account-catalog'
   | 'openrouter-live'
   | 'openrouter-cache'
   | 'static-snapshot'

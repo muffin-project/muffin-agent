@@ -5,6 +5,7 @@ import { LANE_TURNS, type ModelLane } from '../../../core/turns/model-lane.js';
 import type { SessionStore } from '../../../core/session/store.js';
 import type { SurfaceIdentity } from '../../../core/surface/types.js';
 import type { InboundEvent, IngressPort } from './types.js';
+import { dispatchRuntimeEvent, type AutomationRule, type RuntimeEvent } from '../../../agent/automation.js';
 
 /**
  * Slice 14, the `work` stage: creating the turn and its durable record.
@@ -48,6 +49,19 @@ export type WorkDeps = {
    * sua: il gateway la sua condivisa, il REPL senza gateway la sua.
    */
   readonly lane: ModelLane;
+  /**
+   * Rules already resolved for this process/tenant.
+   *
+   * This is a narrow execution seam, NOT an implicit consumer of the SQLite
+   * AutomationRuleStore. As of #851 the store persists definitions and the
+   * compileStoredAutomationRule adapter exists, but production gateway/surface
+   * call sites do not yet provide a host-owned action resolver and compiled
+   * rules. Those persisted message.received definitions therefore do NOT run
+   * on live ingress. Tests injecting rules here prove the seam only, not
+   * a production-persisted automation feature. Missing rules keep the existing
+   * zero-rule ingress path unchanged and must never be advertised as active.
+   */
+  readonly automationRules?: readonly AutomationRule<TurnResult>[] | undefined;
 };
 
 export type WorkRequest = {
@@ -84,6 +98,33 @@ export type WorkRequest = {
 };
 
 export async function runWork(
+  deps: WorkDeps,
+  port: IngressPort,
+  event: InboundEvent,
+  req: WorkRequest,
+): Promise<TurnResult> {
+  const runtimeEvent: RuntimeEvent = {
+    occurrenceId: req.workId,
+    kind: 'message.received',
+    source: port.surface.id,
+    observedAt: event.receivedAt.toISOString(),
+    evidence: {
+      eventId: event.eventId,
+      compositionId: event.compositionId,
+      text: req.text,
+      principalKind: req.identity.principal.kind,
+      tenant: req.identity.tenant,
+      contentTaint: req.contentTaint,
+    },
+  };
+
+  return dispatchRuntimeEvent(runtimeEvent, deps.automationRules ?? [], {
+    mode: 'agent',
+    run: () => runAgentWork(deps, port, event, req),
+  });
+}
+
+async function runAgentWork(
   deps: WorkDeps,
   port: IngressPort,
   event: InboundEvent,

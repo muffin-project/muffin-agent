@@ -7,11 +7,15 @@ import type { CapabilityDecl, CapabilityId, Principal } from '../../core/policy/
 import type { DelegationMode } from '../../core/runtime/delega.js';
 import { type Job, jobPayload } from '../../core/scheduler/jobs.js';
 import type { TurnHealth } from '../../core/turns/store.js';
+import {
+  CAPABILITY_SEARCH_TOOL_NAME,
+  createCapabilityExposure,
+} from '../capability-exposure.js';
 import type { PromptBlock } from '../context/assemble.js';
 import { tenantClass, visibleTools } from '../context/assemble.js';
 import type { RegisteredTool } from '../loop.js';
 import type { Profile, ProfileOrigin } from '../profiles/profile.js';
-import { type CapabilityGap, profileEditPath } from './capability-status.js';
+import type { CapabilityGap } from './capability-status.js';
 
 /**
  * Propriocezione tecnica: cosa sta usando **adesso**, non cosa dice il progetto.
@@ -202,25 +206,31 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
             ? ' · conservativo (nessun profilo matcha)'
             : ` · ${profileSource.origin} (${profileSource.file.split('/').pop()})`;
       const [report, build] = await Promise.all([sources.doctor(), sources.build()]);
-      // Filtro poi tetto — lo stesso ordine di `agent/loop.ts` (`exposed =
-      // visibleTools(...).slice(0, maxToolsExposed)`), non solo il filtro. La
-      // riga precedente si fermava al filtro e diceva «capability esposte» su
-      // un elenco che il tetto del profilo avrebbe comunque ristretto: onesto
-      // sull'esclusione da host-only, muto su quella del tetto — la stessa
-      // lacuna che questo file esiste per chiudere altrove.
+      // Same authority filter and same #469 projection as the live loop.
+      // Under the cap capability_search disappears entirely (ordinary fast
+      // path). Under pressure the cap bounds only the currently loaded schemas:
+      // the remaining authorized tools stay reachable through discovery.
       const filtrati = visibleTools(
-        sources.tools.map((t) => ({ capability: t.capability, name: t.spec.name })),
+        [...sources.tools],
         principal,
         sources.capabilities,
         sources.grants?.get(ctx.tenant),
       );
-      const esposti = filtrati.slice(0, profile.maxToolsExposed);
-      const tagliatiDalTetto = filtrati.slice(profile.maxToolsExposed);
-      // Solo le spente qui: le tagliate dal tetto sono calcolate sopra, per
-      // *questo* principal e *questo* turno — più accurato del calcolo
-      // all'avvio in `sources.capabilityGaps` (che vale per il registro
-      // intero, prima del filtro host-only). Le due domande restano distinte
-      // anche nel testo: "spenta" contro "tagliata dal tetto".
+      const discoveryTool = filtrati.find(
+        (tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME,
+      );
+      const initialProjection = createCapabilityExposure({
+        eligible: filtrati,
+        maxToolsExposed: profile.maxToolsExposed,
+        ...(discoveryTool === undefined ? {} : { discoveryTool }),
+      });
+      const exposure =
+        ctx.capabilityDiscovery?.snapshot() ?? {
+          visible: initialProjection.exposed.map((tool) => tool.spec.name),
+          pressured: initialProjection.pressured,
+          hiddenCount: initialProjection.hiddenCount,
+        };
+      const esposti = [...exposure.visible];
       const spente = sources.capabilityGaps.filter((g) => g.kind === 'disabled');
       const blocchi = sources.promptBlocks[cls] ?? [];
       const salute = sources.turns();
@@ -263,27 +273,13 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
             return `yolo — ask pre-approvati per delega${d.dal === null ? '' : ` dal ${d.dal}`}`;
           return `auto — chiede finché il giudizio non è calibrato${d.dal === null ? '' : ` (attiva dal ${d.dal})`}`;
         })()}`,
-        `capability esposte: ${esposti
-          .map((t) => t.name)
-          .sort()
-          .join(', ')}`,
+        `capability esposte: ${esposti.sort().join(', ')}`,
         sources.tools.length === filtrati.length
           ? ''
           : `  (${sources.tools.length - filtrati.length} registrate ma non esposte a questo principal)`,
-        tagliatiDalTetto.length === 0
-          ? ''
-          : (() => {
-              const dove = profileEditPath(
-                profile.name,
-                profileSource?.origin,
-                profileSource?.file === '' ? undefined : profileSource?.file,
-              );
-              const rimedio =
-                dove === null
-                  ? `il profilo conservativo non ha un file in cui alzare maxToolsExposed: un profilo che matcha il modello lo sostituirebbe, oppure riduci quanti tool sono registrati prima di questi`
-                  : `alza maxToolsExposed in ${dove}, oppure riduci quanti tool sono registrati prima di questi`;
-              return `  (${tagliatiDalTetto.length} tagliate dal tetto di ${profile.maxToolsExposed} tool del profilo "${profile.name}": ${tagliatiDalTetto.map((t) => t.name).join(', ')} — ${rimedio})`;
-            })(),
+        exposure.pressured
+          ? `  (catalogo discoverable: ${exposure.hiddenCount} tool autorizzati non-core; maxToolsExposed limita gli schema caricati, non la raggiungibilità)`
+          : '',
         '',
         // Distinto da quanto sopra apposta: qui non è «non visto da questo
         // principal» né «tagliato dal tetto», è «non esiste in questa

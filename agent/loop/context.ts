@@ -2,7 +2,7 @@ import { ambienteSection, tenantClass, todoSection, type IstanzaFacts } from '..
 import type { ReinjectedHistory } from '../context/history-taint.js';
 import type { TodoItem } from '../../core/turns/todo.js';
 import type { AudioBlock, ContentBlock, ImageBlock, Message, MessageOrigin } from '../providers/types.js';
-import { harnessMessage, ownerMessage, provenanceMessage } from './message-origin.js';
+import { harnessMessage, inputMessage, provenanceMessage } from './message-origin.js';
 import type { TurnInput } from './types.js';
 
 /**
@@ -340,9 +340,12 @@ export function assembleSemantic(args: SemanticArgs): SemanticContext {
   // l'unica posizione che lo rispetta senza separare la domanda dal suo
   // contesto.
   //
-  // Solo i byte della superficie: niente memoria richiamata, niente fatti di
-  // runtime, niente piano. Ciò che l'owner ha scritto, e nient'altro.
-  const owner = ownerMessage([...media(input), { type: 'text', text: input.text }]);
+  // Only the submitted bytes enter this section; keep their source marker
+  // across fresh runs and recovery without granting external content authority.
+  const owner = inputMessage(
+    [...media(input), { type: 'text', text: input.text }],
+    input.inputOrigin ?? 'owner',
+  );
 
   return { announcement, history, memory, runtime, work, owner };
 }

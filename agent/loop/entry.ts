@@ -11,7 +11,7 @@ import { primoMessaggio } from './context.js';
 import { buildFreshCounters, evidenceForContinuation } from './continuation.js';
 import { closeRow } from './durability.js';
 import { type DriveOptions, guidaIlTurno } from './engine.js';
-import { harnessMessage, ownerMessage } from './message-origin.js';
+import { harnessMessage, inputMessage, ownerMessage } from './message-origin.js';
 import { initialTaint, spendeIlBudget } from './permissions.js';
 import { providerMessages } from './provider-checkpoint.js';
 import {
@@ -58,7 +58,7 @@ import {
  * "record the turn somewhere durable", so the row is the cure and not a
  * bookkeeping side-effect of it.
  *
- * The transcript starts as the owner's own words and nothing else. That is not
+ * The transcript starts with the submitted input and nothing else. That is not
  * a placeholder: it is the minimum a resume needs to be able to assemble the
  * rest, and it is why nothing here calls recall — recall is an embedder plus a
  * reranking model call, which is precisely the latency this function exists to
@@ -67,7 +67,7 @@ import {
  */
 export function enqueueTurn(deps: LoopDeps, input: TurnInput): string {
   deps.prepareTurn?.();
-  const id = randomBytes(16).toString('hex');
+  const id = input.id ?? randomBytes(16).toString('hex');
   deps.turns.enqueue({
     id,
     principal: input.principal,
@@ -75,7 +75,10 @@ export function enqueueTurn(deps: LoopDeps, input: TurnInput): string {
     surface: input.surface,
     sessionId: input.session.id,
     inputText: input.text,
-    providerLease: { model: deps.model, checkpoint: [ownerMessage(primoMessaggio(input))] },
+    providerLease: {
+      model: deps.model,
+      checkpoint: [inputMessage(primoMessaggio(input), input.inputOrigin ?? 'owner')],
+    },
     taint: initialTaint(input),
     counters: freshCounters(),
     // Sulla riga, non solo nell'input: vedi `TurnRecord.jobId`.
@@ -151,7 +154,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
    * an episode written for a turn that never started is memory of something
    * that did not happen.
    *
-   * The transcript is the owner's words and nothing else — the same shape
+   * The transcript is the opening input and nothing else — the same shape
    * `enqueueTurn` writes, so a crash between this line and the first checkpoint
    * leaves a row a resume can still assemble a context for. It used to be `[]`,
    * which lost the question along with the answer.
@@ -166,7 +169,10 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     // Pinned here and never re-derived: a resume onto a different model sends
     // back thinking signatures it cannot read, and ADR-0037 records that this
     // fails silently rather than loudly.
-    providerLease: { model: deps.model, checkpoint: [ownerMessage(primoMessaggio(input))] },
+    providerLease: {
+      model: deps.model,
+      checkpoint: [inputMessage(primoMessaggio(input), input.inputOrigin ?? 'owner')],
+    },
     taint: initialTaint(input),
     counters: freshCounters(),
     // Sulla riga, non solo nell'input: vedi `TurnRecord.jobId`.

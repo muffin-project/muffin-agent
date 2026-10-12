@@ -1,3 +1,4 @@
+import { cmdChatGPT } from './chatgpt.js';
 import { discoverOpenAICompatModels, type ModelDiscovery } from '../agent/providers/models-discovery.js';
 import { loadConfig, saveConfig, readSecret, type Config } from '../core/config/config.js';
 import { buildEndpointsUrl, parseEndpointTags } from '../core/config/endpoints.js';
@@ -288,8 +289,19 @@ function mostra(config: Config, entry: ProviderEntry | null, out: (l: string) =>
  * non essere d'accordo il giorno che una delle due cambia.
  */
 export async function cmdModel(home: string, argv: string[], deps: ModelDeps): Promise<number> {
-  const { out } = deps;
   const config = loadConfig(home);
+  if (config.provider.kind === 'openai-chatgpt' && argv[0] !== 'embed') {
+    if (argv.length === 0) {
+      deps.out(`Using ChatGPT plan · main ${config.models.main} · light ${config.models.light}`);
+      deps.out('Manage usage: https://chatgpt.com/settings/usage');
+      return 0;
+    }
+    if (argv[0] === '--list') return cmdChatGPT(home, ['models'], { out: deps.out });
+    const model = argv[0] === 'main' || argv[0] === 'light' ? argv[1] : argv[0];
+    if (!model || argv.length > (argv[0] === 'main' || argv[0] === 'light' ? 2 : 1)) { deps.out('muffin model <model> — pins main and light on ChatGPT'); return 2; }
+    return cmdChatGPT(home, ['use', model], { out: deps.out });
+  }
+  const { out } = deps;
   const entry = providerFor(config.provider);
 
   if (argv.length === 0) {

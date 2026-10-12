@@ -564,6 +564,14 @@ export const POLICY_FLOOR: PolicyMatrix = {
      * (questa lista non tocca `hostOnly`).
      */
     'jobs.schedule',
+    /**
+     * An autonomous EI wake may inspect its own trigger context, but may not
+     * create or mutate persistent watches. The embedded handler also checks
+     * owner identity; this sealed exclusion keeps forbidden mutation schemas
+     * out of #469 preload and capability_search before any model call.
+     */
+    'events.trigger.create',
+    'events.trigger.manage',
   ]),
   /**
    * **Il pavimento non concede niente a nessuna stanza**, e questa riga è

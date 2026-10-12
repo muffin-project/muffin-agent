@@ -7,6 +7,12 @@ import type { TrustTier } from '../core/policy/types.js';
 import { CAPPED_MODEL, SCRIPT_MODEL, type TurnCounters, type TurnOutcome } from '../core/turns/store.js';
 import { runTurn, type LoopDeps, type TurnResult } from './loop.js';
 import { recoveredText } from './recovered-text.js';
+import {
+  dispatchRuntimeEvent,
+  type ActionRequest,
+  type AutomationRule,
+  type RuntimeEvent,
+} from './automation.js';
 
 /**
  * The bridge from a scheduled job to a real turn.
@@ -181,11 +187,54 @@ async function runFresh(
     const spent = jobBudget.jobMonthUsd(job.id);
     if (spent >= job.perJobUsd) return skipForBudget(deps, job, turnId, spent, job.perJobUsd);
   }
-  // Un job `script` non passa di qui sotto: nessuna sessione, nessun prompt,
-  // nessuna chiamata al modello. Il turno durevole viene scritto lo stesso —
-  // è ciò che tiene l'esattamente-una-volta, la visibilità in `doctor` e la
-  // consegna — ma il modello non lo vede mai.
-  if (job.kind === 'script') return runScript(deps, job, turnId, exec, scope);
+  const runtimeEvent: RuntimeEvent = {
+    occurrenceId: turnId,
+    kind: 'schedule.fire',
+    source: 'scheduler',
+    observedAt: new Date().toISOString(),
+    evidence: {
+      jobId: job.id,
+      scheduledFor: job.nextFireAt.toISOString(),
+      jobKind: job.kind,
+    },
+  };
+
+  type ScheduledOutcome = JobOutcome | FireDeferred | FireSettleOnly;
+  const action: ActionRequest<ScheduledOutcome> =
+    job.kind === 'script'
+      ? {
+          mode: 'deterministic',
+          run: () => runScript(deps, job, turnId, exec, scope),
+        }
+      : {
+          mode: 'agent',
+          run: () => runGoal(deps, job, turnId, signal),
+        };
+
+  // The durable job row is already the rule definition for schedule.fire:
+  // kind chooses the executor, JobFire owns occurrence identity, and all
+  // authority/effects remain in the existing scheduler/Turn paths.
+  const rule: AutomationRule<ScheduledOutcome> = {
+    id: `scheduled-job:${job.id}`,
+    matches: (event) =>
+      event.kind === 'schedule.fire' && event.evidence['jobId'] === job.id,
+    action: () => action,
+  };
+
+  return dispatchRuntimeEvent(runtimeEvent, [rule], {
+    mode: 'deterministic',
+    run: () => {
+      throw new Error(`schedule.fire ${runtimeEvent.occurrenceId} had no matching job rule`);
+    },
+  });
+}
+
+async function runGoal(
+  deps: LoopDeps,
+  job: Extract<Job, { kind: 'goal' }>,
+  turnId: string,
+  signal: AbortSignal | undefined,
+): Promise<JobOutcome | FireDeferred | FireSettleOnly> {
   // Fault point 2, made observable: a real `SIGKILL` here lands after the
   // fire is bound and before the turn row exists at all.
   await testStall('MUFFIN_JOB_FIRES_STALL_AFTER_BIND_MS');

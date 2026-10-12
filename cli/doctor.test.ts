@@ -2420,11 +2420,7 @@ describe('doctor nomina le capacità spente o tagliate, come sys.inspect', () =>
     }
   });
 
-  it('tetto tool: nomina i tool tagliati quando il modello risolve sul profilo conservativo, e non è la stessa frase di uno spento', async () => {
-    // Nessun profilo spedito taglia oggi (consumer-local: 15, frontier: 24,
-    // contro una dozzina di tool base — agent/runtime-exposure.test.ts lo
-    // misura). Un id modello che non combacia con nessun `match` risolve su
-    // CONSERVATIVE (maxToolsExposed: 10), che invece taglia davvero.
+  it('tetto tool: capability oltre la proiezione restano discoverable, non risultano invisibili', async () => {
     const dir = home();
     const configPath = paths(dir).config;
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
@@ -2432,21 +2428,20 @@ describe('doctor nomina le capacità spente o tagliate, come sys.inspect', () =>
     writeFileSync(configPath, JSON.stringify(config, null, 2));
 
     const c = await check(dir, 'capacità: tetto tool');
-    expect(c?.level).toBe('warn');
-    expect(c?.detail).toContain('tetto');
+    expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('conservative');
-    expect(c?.remedy).toContain('maxToolsExposed');
-    // Distinto da una capacità spenta: il tetto non "non è disponibile" e non
-    // è "spento", è tagliato — e viceversa, il check `sandbox`/`web_search`
-    // non nomina mai un tetto.
-    expect(c?.detail).not.toContain('non disponibile');
+    expect(c?.detail).toContain('capability native');
+    expect(c?.detail).toContain('capability_search');
+    expect(c?.detail).not.toContain('invisibili');
+    expect(c?.remedy).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('tetto tool: ok quando il profilo risolto copre tutti i tool registrati', async () => {
-    const dir = home(); // cli/init.ts risolve su un profilo frontier, tetto 24
+  it('tetto tool: ok quando il profilo risolto copre tutto il catalogo nativo', async () => {
+    const dir = home();
     const c = await check(dir, 'capacità: tetto tool');
     expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('capability native entro la proiezione');
     expect(c?.remedy).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
   });

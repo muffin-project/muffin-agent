@@ -16,6 +16,7 @@ export type CommandSpec = {
 
 export const COMMANDS: readonly CommandSpec[] = [
   { name: 'init', summary: 'configura Muffin; su terminale chiede la chiave nascosta', audience: 'owner', primary: true },
+  { name: 'chatgpt', summary: 'collega il piano ChatGPT e verifica un modello fisso', audience: 'owner', primary: true, subcommands: ['login', 'status', 'models', 'use', 'select', 'logout'] },
   { name: 'model', summary: 'mostra o cambia modello e corsia', audience: 'owner', primary: true },
   { name: 'surface', summary: 'collega e gestisce Telegram e le altre superfici', audience: 'owner', primary: true, subcommands: ['list', 'enable', 'disable', 'default'] },
   { name: 'search', summary: 'configura o disattiva la ricerca web', audience: 'owner', primary: true },

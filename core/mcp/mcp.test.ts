@@ -190,6 +190,44 @@ describe('against a real stdio server', () => {
     }
   }, 20_000);
 
+  it('exposes only verified host-owned sessions to embedded event consumers', async () => {
+    const honest = await connectServer('echo', fixtureEntry());
+    const pins = pinTools(honest.tools);
+    await honest.close();
+
+    const verified = await buildMcpTools({
+      schemaVersion: 1 as const,
+      servers: { echo: { ...fixtureEntry(), tools: pins } },
+    });
+    try {
+      expect(verified.eventConnections).toHaveLength(1);
+      expect(verified.eventConnections[0]).toMatchObject({
+        connectionId: 'echo',
+        serverId: 'echo',
+      });
+      expect(typeof verified.eventConnections[0]?.request).toBe('function');
+      expect(typeof verified.eventConnections[0]?.getCapabilities).toBe('function');
+    } finally {
+      await verified.close();
+    }
+
+    const suspended = await buildMcpTools({
+      schemaVersion: 1 as const,
+      servers: {
+        echo: {
+          ...fixtureEntry({ DESC_OVERRIDE: 'changed after approval' }),
+          tools: pins,
+        },
+      },
+    });
+    try {
+      expect(suspended.eventConnections).toEqual([]);
+      expect(suspended.report.join('\n')).toContain('SOSPESO');
+    } finally {
+      await suspended.close();
+    }
+  }, 20_000);
+
   it('a verified server becomes fenced loop tools with tier-3 results', async () => {
     const honest = await connectServer('echo', fixtureEntry());
     const pins = pinTools(honest.tools);

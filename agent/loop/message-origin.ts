@@ -22,9 +22,14 @@ export function harnessMessage(role: Role, content: ContentBlock[]): Message {
   return provenanceMessage(role, 'harness', content);
 }
 
+/** Build the current input message while preserving whether it came from the owner or an external event. */
+export function inputMessage(content: ContentBlock[], origin: 'owner' | 'external' = 'owner'): Message {
+  return provenanceMessage('user', origin, content);
+}
+
 /** Build the current turn's owner-input message: only owner bytes may enter. */
 export function ownerMessage(content: ContentBlock[]): Message {
-  return provenanceMessage('user', 'owner', content);
+  return inputMessage(content);
 }
 
 /** Build a tool-evidence message: results, refusals, repairs. Wire role stays `user`. */

@@ -142,6 +142,24 @@ const ACTIVE_GIT_HOOK_NAMES = [
   'p4-pre-submit',
   'post-index-change',
 ] as const;
+
+/**
+ * SRT's macOS hook glob is rooted at the gateway process cwd, not the turn's
+ * workspace. Muffin supplies a different cwd per call, so add exact active
+ * hook filenames independent of that host cwd. Exact leaves keep Git's
+ * harmless `*.sample` templates writable during `git init`.
+ *
+ * Linux uses the host AppArmor policy plus the concrete per-call scan below;
+ * SRT drops write globs on that backend, so sending these patterns there
+ * would look like a deny while protecting nothing.
+ */
+const MACOS_NESTED_GIT_HOOK_DENY_GLOBS = ACTIVE_GIT_HOOK_NAMES.map(
+  (hook) => `/**/.git/hooks/${hook}`,
+);
+
+function nestedGitHookDenyGlobs(): string[] {
+  return process.platform === 'darwin' ? MACOS_NESTED_GIT_HOOK_DENY_GLOBS : [];
+}
 /**
  * Belt-and-suspenders over the two per-leg timeouts: bounds `initialize()`
  * itself, which has no timeout of its own (it may start a network bridge).
@@ -830,9 +848,9 @@ export class SandboxExecutor {
   /**
    * Verify that the actual SandboxManager invocation refuses hook installs
    * through every door this claim covers, while ordinary project writes and
-   * a nested `git add` still work. The empty template avoids macOS
-   * Seatbelt's broader `.git/hooks/**` deny from rejecting Git's `*.sample`
-   * files before this test reaches the new hook itself.
+   * a nested `git add` still work. The custom template includes a
+   * `pre-commit.sample` file so the positive control proves the new exact-leaf
+   * deny does not reject Git's harmless hook templates.
    *
    * Three shapes, one typed failure:
    *
@@ -883,12 +901,12 @@ if [ -r /proc/self/attr/current ]; then
   IFS= read -r apparmor_label < /proc/self/attr/current || apparmor_label=unavailable
 fi
 printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
-      'mkdir -p ordinary empty-template/hooks',
+      'mkdir -p ordinary template/hooks',
+      'printf sample > template/hooks/pre-commit.sample',
       'printf ordinary > ordinary/file.txt',
       'printf evil > ordinary/evil',
-      process.platform === 'darwin'
-        ? 'git init --quiet --template=empty-template nested'
-        : 'git init --quiet nested',
+      'git init --quiet --template=template nested',
+      'test -f nested/.git/hooks/pre-commit.sample',
       'printf tracked > nested/tracked.txt',
       'git -C nested add tracked.txt',
       'mkdir -p nested/.git/hooks',
@@ -898,9 +916,8 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
       // platform; the symlink replacement is attempted and recorded but
       // gated on none (see the method docstring) — no through-write is
       // attempted, leaving nothing installed behind the marker.
-      ...(process.platform === 'darwin'
-        ? ['git init --quiet --template=empty-template alias2']
-        : ['git init --quiet alias2']),
+      'git init --quiet --template=template alias2',
+      'test -f alias2/.git/hooks/pre-commit.sample',
       'printf evil2 > ordinary/evil2',
       'if ln ordinary/evil2 alias2/.git/hooks/pre-commit 2>/dev/null; then printf "muffin-hook-hardlink: allowed\\n"; else printf "muffin-hook-hardlink: denied\\n"; fi',
       'rm -rf alias2/.git/hooks',
@@ -923,7 +940,11 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
         // repository is denied through resolveIfSymlink's concrete target.
         // Repositories created mid-command stay invisible to it on purpose:
         // they are the host profile's proof, not this list's.
-        filesystem: { denyRead: [], allowWrite: [cwd], denyWrite: nestedGitHooksDirs(cwd) },
+        filesystem: {
+          denyRead: [],
+          allowWrite: [cwd],
+          denyWrite: [...nestedGitHooksDirs(cwd), ...nestedGitHookDenyGlobs()],
+        },
       };
       const wrapped = await SandboxManager.wrapWithSandboxArgv(
         `${STRICT_SHELL_PREFIX}${command}`,
@@ -1225,6 +1246,7 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
         // its own process, not `req.cwd`) cover a checkout cloned mid-turn.
         denyWrite: [
           ...this.guards.denyWrite,
+          ...nestedGitHookDenyGlobs(),
           ...new Set([req.cwd, ...req.writeScope].flatMap((root) => nestedGitHooksDirs(root))),
         ],
       },

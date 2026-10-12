@@ -23,9 +23,16 @@ describe('shipped profiles', () => {
   const profiles = loadProfiles();
 
   it('all load, through the same parser production uses', () => {
-    expect(profiles.map((p) => p.name).sort()).toEqual(['consumer-local', 'consumer-qwen3', 'frontier']);
+    expect(profiles.map((p) => p.name).sort()).toEqual([
+      'consumer-local',
+      'consumer-qwen3',
+      'frontier',
+    ]);
   });
 
+  it('the pinned GPT-6 plan model uses legal default reasoning without overriding owner controls', () => {
+    expect(selectProfile('gpt-6.1-sol', profiles).thinking).toBe('adaptive');
+  });
   it('frontier: a nudge and one retry, in that order', () => {
     const frontier = profiles.find((p) => p.name === 'frontier');
     expect(frontier?.recovery).toEqual(['nudge', 'retryOnce']);
@@ -56,7 +63,13 @@ describe('shipped profiles', () => {
     const consumer = profiles.find((p) => p.name === 'consumer-local');
     // `requireTool` last (ADR-0082): the wire escalation that answers the
     // Gemma stall — `stop` + prose + zero calls — after the gentler rungs ran.
-    expect(consumer?.recovery).toEqual(['nudge', 'reinjectTools', 'retryOnce', 'strictJson', 'requireTool']);
+    expect(consumer?.recovery).toEqual([
+      'nudge',
+      'reinjectTools',
+      'retryOnce',
+      'strictJson',
+      'requireTool',
+    ]);
     // `adaptive` dal 27/08, per decisione dell'owner, e il cambio è vero: da
     // #167 l'adapter openai-compat manda davvero `reasoning:{effort:none}` su
     // OpenRouter, quindi `off` su una famiglia a reasoning ibrido spegneva il
