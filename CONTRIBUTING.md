@@ -17,10 +17,25 @@ it is not a claim of stability, compatibility or production readiness.
 The code in this repository is licensed under the **GNU Affero General Public
 License v3 or later** (`LICENSE`, SPDX `AGPL-3.0-or-later`; rationale in
 `docs/decisions/0078-licenza-agpl.md`). By contributing you agree your
-contributions enter under the same license. Before submitting a PR, read and
-accept `CONTRIBUTOR_AGREEMENT.md`, then sign off every commit with
-`git commit -s`. The agreement contains the standard DCO 1.1 plus the narrow
-owner-approved grant that permits a future move to another OSI-approved license.
+contributions enter under the same license. External contributors must read and
+accept `CONTRIBUTOR_AGREEMENT.md` and sign off every submitted commit with
+`git commit -s`. The agreement contains the standard DCO 1.1 plus a narrow grant
+allowing the project owner to relicense the contribution under another
+OSI-approved license, including MIT. Contributors retain their copyright.
+
+Owner-authored internal work, including work explicitly delegated to coding
+agents, remains the human owner's responsibility and does not require a new
+DCO attestation for each diff. The exemption applies only to owner-opened PRs
+with both branches in the canonical repository and commits attributed to the
+owner. Fork PRs and imported commits by other authors retain the sign-off
+requirement. Preserve their attribution; never add another person's sign-off
+or relabel their work to obtain an exemption. Git metadata and agent identities
+do not establish copyright ownership, identity or permission to relicense.
+
+Review, required CI and runtime security boundaries remain unchanged. Canonical
+same-repository `dev` to `main` promotion preserves integrated history without
+certifying legacy rights. These rules grant no retroactive permissions; see
+[ADR-0098](docs/decisions/0098-contributi-owner-delegati.md).
 The `Muffin` name and logo are **not** covered by that grant — see
 `TRADEMARK.md`.
 
