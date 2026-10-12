@@ -7,10 +7,7 @@ import type { CapabilityDecl, CapabilityId, Principal } from '../../core/policy/
 import type { DelegationMode } from '../../core/runtime/delega.js';
 import { type Job, jobPayload } from '../../core/scheduler/jobs.js';
 import type { TurnHealth } from '../../core/turns/store.js';
-import {
-  CAPABILITY_SEARCH_TOOL_NAME,
-  createCapabilityExposure,
-} from '../capability-exposure.js';
+import { CAPABILITY_SEARCH_TOOL_NAME, createCapabilityExposure } from '../capability-exposure.js';
 import type { PromptBlock } from '../context/assemble.js';
 import { tenantClass, visibleTools } from '../context/assemble.js';
 import type { RegisteredTool } from '../loop.js';
@@ -216,20 +213,17 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
         sources.capabilities,
         sources.grants?.get(ctx.tenant),
       );
-      const discoveryTool = filtrati.find(
-        (tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME,
-      );
+      const discoveryTool = filtrati.find((tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME);
       const initialProjection = createCapabilityExposure({
         eligible: filtrati,
         maxToolsExposed: profile.maxToolsExposed,
         ...(discoveryTool === undefined ? {} : { discoveryTool }),
       });
-      const exposure =
-        ctx.capabilityDiscovery?.snapshot() ?? {
-          visible: initialProjection.exposed.map((tool) => tool.spec.name),
-          pressured: initialProjection.pressured,
-          hiddenCount: initialProjection.hiddenCount,
-        };
+      const exposure = ctx.capabilityDiscovery?.snapshot() ?? {
+        visible: initialProjection.exposed.map((tool) => tool.spec.name),
+        pressured: initialProjection.pressured,
+        hiddenCount: initialProjection.hiddenCount,
+      };
       const esposti = [...exposure.visible];
       const spente = sources.capabilityGaps.filter((g) => g.kind === 'disabled');
       const blocchi = sources.promptBlocks[cls] ?? [];
@@ -243,7 +237,7 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
         '# Questa istanza, adesso',
         '',
         `build: ${build ? `${build.sha.slice(0, 12)} (${build.date})${build.dirty ? ' +modificato' : ''}` : 'sconosciuta — non è un checkout git'}`,
-        `provider: ${runtimeInfo?.providerKind ?? sources.config.provider.kind}${(runtimeInfo?.providerBaseUrl ?? sources.config.provider.baseUrl) ? ` · ${runtimeInfo?.providerBaseUrl ?? sources.config.provider.baseUrl}` : ''}`,
+        `provider: main ${runtimeInfo?.providerKind ?? sources.config.provider.kind}${(runtimeInfo?.providerBaseUrl ?? sources.config.provider.baseUrl) ? ` · ${runtimeInfo?.providerBaseUrl ?? sources.config.provider.baseUrl}` : ''} · light ${runtimeInfo?.lightProviderKind ?? sources.config.lightProvider?.kind ?? sources.config.provider.kind}${(runtimeInfo?.lightProviderBaseUrl ?? sources.config.lightProvider?.baseUrl ?? sources.config.provider.baseUrl) ? ` · ${runtimeInfo?.lightProviderBaseUrl ?? sources.config.lightProvider?.baseUrl ?? sources.config.provider.baseUrl}` : ''}`,
         `modello: ${runtimeInfo?.mainModel ?? sources.config.models.main} (main) · ${runtimeInfo?.lightModel ?? sources.config.models.light} (light)`,
         // Dove atterra la scrittura di *questo* turno — non «l'installazione»
         // in generale, che è la domanda a cui risponde `muffin doctor`. Stessa

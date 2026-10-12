@@ -330,6 +330,8 @@ export type Approver = (request: ApprovalRequest, where: ApprovalWhere) => Promi
 export type TurnRuntimeInfo = {
   providerKind: string;
   providerBaseUrl?: string | undefined;
+  lightProviderKind?: string | undefined;
+  lightProviderBaseUrl?: string | undefined;
   mainModel: string;
   lightModel: string;
   profile: Profile;

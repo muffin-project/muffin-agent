@@ -13,7 +13,10 @@ import { REASONING_DIALECTS, THINKING_VALUES } from './thinking.js';
  */
 
 /**
- * 2 since the spend caps left this file.
+ * 3 separates main/light provider connections; v2 homes retain both original routes.
+ * Reads migrate only in memory; an explicit save writes the current version.
+ *
+ * Version 2 moved the spend caps out of this file.
  *
  * They lived here *and* in the sealed `rot/budgets.json`, and the one that bound
  * was the copy nobody sealed. Keeping a deprecated-but-parsed `budget` would
@@ -21,7 +24,7 @@ import { REASONING_DIALECTS, THINKING_VALUES } from './thinking.js';
  * cap and is not — so the field is gone and `loadConfig` migrates a v1 file in
  * memory instead of refusing to open it. See `core/rot/budgets.ts`.
  */
-export const CONFIG_SCHEMA_VERSION = 2;
+export const CONFIG_SCHEMA_VERSION = 3;
 
 /**
  * Le versioni del system prompt che questa build sa assemblare.
@@ -65,9 +68,8 @@ export type ProviderKind = 'anthropic' | 'openai-compat' | 'openai-chatgpt';
  * field has to fail at load with a sentence about which field, not months later
  * as an absence of behaviour.
  */
-export const ConfigSchema = z.object({
-  schemaVersion: z.number().int().positive(),
-  provider: z.object({
+export const InferenceProviderSchema = z
+  .object({
     /** Explicit, never inferred from the URL: a wrong guess fails at the first call. */
     kind: z.enum(['anthropic', 'openai-compat', 'openai-chatgpt']),
     baseUrl: z.string().url().optional(),
@@ -140,15 +142,37 @@ export const ConfigSchema = z.object({
      * accusa, nessun silenzio complice — solo niente da confrontare.
      */
     routingForFamily: z.string().min(1).optional(),
-  }).superRefine((provider, ctx) => {
+  })
+  .superRefine((provider, ctx) => {
     if (provider.kind !== 'openai-chatgpt') return;
-    if (provider.baseUrl !== 'https://api.openai.com/v1' || provider.apiKeyRef !== 'secret://chatgpt') {
-      ctx.addIssue({ code: 'custom', message: 'ChatGPT requires its public endpoint and secret://chatgpt connection', path: ['kind'] });
+    if (
+      provider.baseUrl !== 'https://api.openai.com/v1' ||
+      provider.apiKeyRef !== 'secret://chatgpt'
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'ChatGPT requires its public endpoint and secret://chatgpt connection',
+        path: ['kind'],
+      });
     }
-    if (provider.routing !== undefined || provider.reasoningDialect !== undefined || provider.routingForFamily !== undefined) {
-      ctx.addIssue({ code: 'custom', message: 'ChatGPT does not accept router or Chat Completions dialect settings', path: ['kind'] });
+    if (
+      provider.routing !== undefined ||
+      provider.reasoningDialect !== undefined ||
+      provider.routingForFamily !== undefined
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'ChatGPT does not accept router or Chat Completions dialect settings',
+        path: ['kind'],
+      });
     }
-  }),
+  });
+
+export const ConfigSchema = z.object({
+  schemaVersion: z.number().int().positive(),
+  /** Main inference connection; light is independent after legacy normalization. */
+  provider: InferenceProviderSchema,
+  lightProvider: InferenceProviderSchema.optional(),
   models: z.object({
     main: z.string().min(1),
     light: z.string().min(1),
@@ -404,6 +428,29 @@ export const ConfigSchema = z.object({
 
 export type Config = z.infer<typeof ConfigSchema>;
 
+export type InferenceLane = 'main' | 'light';
+export type InferenceProviderConfig = Config['provider'];
+
+/** Older/programmatic configurations use the same explicit connection on both lanes. */
+export function inferenceProvider(
+  config: Config,
+  lane: InferenceLane = 'main',
+): InferenceProviderConfig {
+  return lane === 'light' ? (config.lightProvider ?? config.provider) : config.provider;
+}
+
+/** Capture both connections before changing one, so the other cannot follow an inherited default. */
+export function withInferenceProvider(
+  config: Config,
+  lane: InferenceLane,
+  provider: InferenceProviderConfig,
+): Config {
+  const lightProvider = structuredClone(inferenceProvider(config, 'light'));
+  return lane === 'light'
+    ? { ...config, lightProvider: structuredClone(provider) }
+    : { ...config, provider: structuredClone(provider), lightProvider };
+}
+
 export const DEFAULT_CONFIG: Omit<Config, 'provider' | 'models'> = {
   schemaVersion: CONFIG_SCHEMA_VERSION,
   rot: { mode: 'single-user' },
@@ -519,12 +566,28 @@ function migrateV1(
   return { ...rest, schemaVersion: 2 };
 }
 
+function migrateV2(
+  raw: Record<string, unknown>,
+  note: (line: string) => void,
+): Record<string, unknown> {
+  if (raw.lightProvider === undefined)
+    note(
+      'config.json schemaVersion 2: main and light retain their existing provider; future lane changes are independent.',
+    );
+  return {
+    ...raw,
+    schemaVersion: 3,
+    lightProvider: raw.lightProvider ?? structuredClone(raw.provider),
+  };
+}
+
 /** Indexed by the version being left behind, so the ladder reads in one direction. */
 const MIGRATIONS: Record<
   number,
   (raw: Record<string, unknown>, note: (line: string) => void) => Record<string, unknown>
 > = {
   1: migrateV1,
+  2: migrateV2,
 };
 
 /**
@@ -590,7 +653,10 @@ export function loadConfig(home = muffinHome(), onNote: (line: string) => void =
       'fix those fields, or re-run `muffin init --force`',
     );
   }
-  return validated.data;
+  return {
+    ...validated.data,
+    lightProvider: structuredClone(inferenceProvider(validated.data, 'light')),
+  };
 }
 
 export function saveConfig(config: Config, home = muffinHome()): void {
@@ -601,7 +667,12 @@ export function saveConfig(config: Config, home = muffinHome()): void {
       'rimuovi il symlink e riprova',
     );
   }
-  writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  const canonical = {
+    ...config,
+    schemaVersion: CONFIG_SCHEMA_VERSION,
+    lightProvider: structuredClone(inferenceProvider(config, 'light')),
+  };
+  writeFileSync(file, `${JSON.stringify(canonical, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   tightenPrivateFile(file);
 }
 

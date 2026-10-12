@@ -1,9 +1,9 @@
-import DatabaseCtor from 'better-sqlite3';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync, chmodSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import DatabaseCtor from 'better-sqlite3';
 import { afterAll, describe, expect, it } from 'vitest';
 import { MemoryStore } from '../core/memory/store.js';
 
@@ -25,7 +25,11 @@ function scratchHome(): { dir: string; xdg: string } {
   return { dir, xdg: join(dir, '.config-xdg') };
 }
 
-function muffin(env: Record<string, string>, args: string[], stdin = ''): { code: number; out: string; err: string } {
+function muffin(
+  env: Record<string, string>,
+  args: string[],
+  stdin = '',
+): { code: number; out: string; err: string } {
   // Il figlio gira in una directory vuota, mai nel checkout: `cli/main.ts`
   // carica `${cwd}/.env` quando c'è (comodità di sviluppo documentata), e un
   // `.env` del founder nella radice del repo avvelenerebbe ogni scenario —
@@ -42,13 +46,17 @@ function muffin(env: Record<string, string>, args: string[], stdin = ''): { code
   // comunque dai node_modules del checkout. Stessa assunzione che questi test
   // fanno già (`join(process.cwd(), 'cli/main.ts')`).
   const cwd = cwdSenzaDotenv();
-  const result = spawnSync('node', ['--import', 'tsx', join(process.cwd(), 'cli/main.ts'), ...args], {
-    env: { ...process.env, NO_COLOR: '1', ...env },
-    input: stdin,
-    encoding: 'utf8',
-    timeout: 60_000,
-    cwd,
-  });
+  const result = spawnSync(
+    'node',
+    ['--import', 'tsx', join(process.cwd(), 'cli/main.ts'), ...args],
+    {
+      env: { ...process.env, NO_COLOR: '1', ...env },
+      input: stdin,
+      encoding: 'utf8',
+      timeout: 60_000,
+      cwd,
+    },
+  );
   return { code: result.status ?? -1, out: result.stdout ?? '', err: result.stderr ?? '' };
 }
 
@@ -64,7 +72,8 @@ describe('muffin init infers the provider from the key — headless, no TTY requ
     const { dir, xdg } = scratchHome();
     const r = muffin(
       { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg },
-      ['init'], 'sk-or-v1-realistic-openrouter-key',
+      ['init'],
+      'sk-or-v1-realistic-openrouter-key',
     );
     expect(r.code).toBe(0);
     // Said, not just done: ADR-0036's "never decide silently" half of the fix.
@@ -78,7 +87,11 @@ describe('muffin init infers the provider from the key — headless, no TTY requ
 
   it('an Anthropic-shaped key ends up as anthropic, and says so', () => {
     const { dir, xdg } = scratchHome();
-    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['init'], 'sk-ant-api03-realistic');
+    const r = muffin(
+      { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg },
+      ['init'],
+      'sk-ant-api03-realistic',
+    );
     expect(r.code).toBe(0);
     expect(r.err).toContain('dedotto dalla chiave');
 
@@ -102,7 +115,8 @@ describe('muffin init infers the provider from the key — headless, no TTY requ
     const { dir, xdg } = scratchHome();
     const r = muffin(
       { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg },
-      ['init', '--provider', 'anthropic'], 'sk-or-v1-would-have-inferred-openai-compat',
+      ['init', '--provider', 'anthropic'],
+      'sk-or-v1-would-have-inferred-openai-compat',
     );
     expect(r.code).toBe(0);
     const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'));
@@ -118,7 +132,8 @@ describe('muffin init infers the provider from the key — headless, no TTY requ
     const { dir, xdg } = scratchHome();
     const r = muffin(
       { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg },
-      ['init', '--provider', 'anthropic'], '8712345678:AAExampleBotTokenLooksLikeThis_abcdef',
+      ['init', '--provider', 'anthropic'],
+      '8712345678:AAExampleBotTokenLooksLikeThis_abcdef',
     );
     expect(r.err).toContain('token');
     expect(r.err.toLowerCase()).toContain('telegram');
@@ -153,7 +168,11 @@ describe('muffin init infers the provider from the key — headless, no TTY requ
     // describe already exercises — this one asserts the negative space
     // directly instead of only not-tripping-over it.
     const { dir, xdg } = scratchHome();
-    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['init'], 'sk-or-v1-realistic-openrouter-key');
+    const r = muffin(
+      { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg },
+      ['init'],
+      'sk-or-v1-realistic-openrouter-key',
+    );
     expect(r.code).toBe(0);
     expect(r.err).not.toContain('Supervisore:');
     expect(r.err).not.toContain('Trovato un runtime locale');
@@ -228,10 +247,16 @@ describe('selective Italian command aliases (ADR-0036)', () => {
     expect(primo.out).toContain(join(xdg, 'muffin', 'secrets', 'provider_api_key'));
 
     // The old spelling remains compatible but cannot create a second location.
-    const ombreggiata = muffin(env, ['secret', 'set', 'provider_api_key', '--persist'], 'sk-persisted\n');
+    const ombreggiata = muffin(
+      env,
+      ['secret', 'set', 'provider_api_key', '--persist'],
+      'sk-persisted\n',
+    );
     expect(ombreggiata.code).toBe(0);
     expect(ombreggiata.err).toBe('');
-    expect(readFileSync(join(xdg, 'muffin', 'secrets', 'provider_api_key'), 'utf8')).toContain('sk-persisted');
+    expect(readFileSync(join(xdg, 'muffin', 'secrets', 'provider_api_key'), 'utf8')).toContain(
+      'sk-persisted',
+    );
     expect(existsSync(join(dir, 'secrets', 'provider_api_key'))).toBe(false);
   });
 
@@ -288,21 +313,39 @@ describe('muffin memory review — the register the owner can finally act on', (
     const db = new DatabaseCtor(join(dir, 'muffin.db'));
     const store = new MemoryStore(db);
     const episodeId = store.addEpisode({
-      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
-      content: 'il commercialista ora è Lucia', trustTier: 0, createdAt: '2026-08-13T10:00:00Z',
+      tenantId: 'host',
+      connector: 'cli',
+      threadKey: 't',
+      role: 'user',
+      kind: 'message',
+      content: 'il commercialista ora è Lucia',
+      trustTier: 0,
+      createdAt: '2026-08-13T10:00:00Z',
     });
     const subjectId = store.upsertEntity('host', 'owner', 'person', '2026-08-13T10:00:00Z');
     const believe = (object: string, at: string) =>
       store.addFact({
-        tenantId: 'host', subjectId, predicate: 'accountant', objectValue: object,
-        episodeId, trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: at,
+        tenantId: 'host',
+        subjectId,
+        predicate: 'accountant',
+        objectValue: object,
+        episodeId,
+        trustTier: 0,
+        confidence: 0.9,
+        extractionV: 1,
+        recordedAt: at,
       });
     const existing = believe('Marco', '2026-06-01T10:00:00Z');
     const incoming = believe('Lucia', '2026-08-13T10:00:00Z');
     store.recordReview({
-      tenantId: 'host', kind: 'contradiction', subject: 'owner', predicate: 'accountant',
-      existingFactId: existing, incomingFactId: incoming,
-      detail: 'nessuna delle due frasi dice quando', createdAt: '2026-08-13T10:00:01Z',
+      tenantId: 'host',
+      kind: 'contradiction',
+      subject: 'owner',
+      predicate: 'accountant',
+      existingFactId: existing,
+      incomingFactId: incoming,
+      detail: 'nessuna delle due frasi dice quando',
+      createdAt: '2026-08-13T10:00:01Z',
     });
     db.close();
     return { existing, incoming };
@@ -343,7 +386,13 @@ describe('muffin memory search — the temporal boundary is checked before anyth
    */
   it('rejects an unreadable --as-of instead of silently searching without it', () => {
     const { dir, xdg } = scratchHome();
-    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['memory', 'search', 'test', '--as-of', 'not-a-date']);
+    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, [
+      'memory',
+      'search',
+      'test',
+      '--as-of',
+      'not-a-date',
+    ]);
     expect(r.code).toBe(78);
     expect(r.err).toContain('non è una data leggibile');
   });
@@ -351,7 +400,13 @@ describe('muffin memory search — the temporal boundary is checked before anyth
   it('rejects --since after --until — a window that cannot contain anything', () => {
     const { dir, xdg } = scratchHome();
     const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, [
-      'memory', 'search', 'test', '--since', '2026-08-01', '--until', '2026-01-01',
+      'memory',
+      'search',
+      'test',
+      '--since',
+      '2026-08-01',
+      '--until',
+      '2026-01-01',
     ]);
     expect(r.code).toBe(78);
     expect(r.err).toContain('non può contenere niente');
@@ -359,7 +414,13 @@ describe('muffin memory search — the temporal boundary is checked before anyth
 
   it('rejects an --as-of that has not happened yet', () => {
     const { dir, xdg } = scratchHome();
-    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['memory', 'search', 'test', '--as-of', '2099-01-01']);
+    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, [
+      'memory',
+      'search',
+      'test',
+      '--as-of',
+      '2099-01-01',
+    ]);
     expect(r.code).toBe(78);
     expect(r.err).toContain('nel futuro');
   });
@@ -369,7 +430,12 @@ describe('muffin memory search — the temporal boundary is checked before anyth
     // ASCII) — the same risk `checkTemporalWindow`'s unit tests cover, checked
     // again here at the boundary that actually calls it from argv.
     const { dir, xdg } = scratchHome();
-    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['memory', 'search', 'test', '--history']);
+    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, [
+      'memory',
+      'search',
+      'test',
+      '--history',
+    ]);
     // Never 78: an un-initialised home fails later, trying to open the
     // runtime — the one failure mode this test must not produce is the
     // temporal-boundary rejection.
@@ -396,12 +462,24 @@ describe('muffin memory search — --surface and --around actually reach a resul
     const db = new DatabaseCtor(join(dir, 'muffin.db'));
     const store = new MemoryStore(db);
     store.addEpisode({
-      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
-      kind: 'message', content: 'promemoria dal terminale', trustTier: 0, createdAt: '2026-08-01T10:00:00Z',
+      tenantId: 'host',
+      connector: 'cli',
+      threadKey: 't',
+      role: 'user',
+      kind: 'message',
+      content: 'promemoria dal terminale',
+      trustTier: 0,
+      createdAt: '2026-08-01T10:00:00Z',
     });
     store.addEpisode({
-      tenantId: 'host', connector: 'telegram', threadKey: 'g', role: 'user',
-      kind: 'message', content: 'promemoria da telegram', trustTier: 0, createdAt: '2026-08-01T10:00:00Z',
+      tenantId: 'host',
+      connector: 'telegram',
+      threadKey: 'g',
+      role: 'user',
+      kind: 'message',
+      content: 'promemoria da telegram',
+      trustTier: 0,
+      createdAt: '2026-08-01T10:00:00Z',
     });
     db.close();
 
@@ -420,8 +498,14 @@ describe('muffin memory search — --surface and --around actually reach a resul
     const store = new MemoryStore(db);
     const fill = (content: string, minute: number) =>
       store.addEpisode({
-        tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
-        kind: 'message', content, trustTier: 0, createdAt: `2026-08-01T10:0${minute}:00Z`,
+        tenantId: 'host',
+        connector: 'cli',
+        threadKey: 't',
+        role: 'user',
+        kind: 'message',
+        content,
+        trustTier: 0,
+        createdAt: `2026-08-01T10:0${minute}:00Z`,
       });
     fill('un messaggio prima', 1);
     const anchor = fill('il codice segreto è ZK-9', 2);
@@ -436,7 +520,7 @@ describe('muffin memory search — --surface and --around actually reach a resul
   });
 });
 
-describe('una chiave non passa mai per argv né per l\'environment (owner 2026-08-18)', () => {
+describe("una chiave non passa mai per argv né per l'environment (owner 2026-08-18)", () => {
   it('rifiuta MUFFIN_API_KEY nominando solo la variabile, mai il valore', () => {
     const dir = mkdtempSync(join(tmpdir(), 'muffin-env-'));
     const xdg = mkdtempSync(join(tmpdir(), 'muffin-env-xdg-'));
@@ -476,7 +560,9 @@ describe('una chiave non passa mai per argv né per l\'environment (owner 2026-0
     try {
       const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
       // Registrata come si deve: da stdin, mai da argv.
-      expect(muffin(env, ['secret', 'set', 'provider_api_key'], 'sk-or-registrata-bene').code).toBe(0);
+      expect(muffin(env, ['secret', 'set', 'provider_api_key'], 'sk-or-registrata-bene').code).toBe(
+        0,
+      );
 
       const r = muffin({ ...env, MUFFIN_API_KEY: KEY }, ['init']);
       expect(r.code).not.toBe(78);
@@ -495,7 +581,6 @@ describe('una chiave non passa mai per argv né per l\'environment (owner 2026-0
     }
   });
 
-
   /**
    * Il difetto che questo test impedisce: `muffin init --api-key sk-…` metteva
    * una chiave di classe 1 in `argv`, cioè nella shell history e nel `ps` di
@@ -507,7 +592,11 @@ describe('una chiave non passa mai per argv né per l\'environment (owner 2026-0
     const dir = mkdtempSync(join(tmpdir(), 'muffin-argv-'));
     const xdg = mkdtempSync(join(tmpdir(), 'muffin-argv-xdg-'));
     try {
-      const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['init', '--api-key', 'sk-ant-api03-mai-in-argv']);
+      const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, [
+        'init',
+        '--api-key',
+        'sk-ant-api03-mai-in-argv',
+      ]);
       expect(r.code).toBe(78);
       expect(r.err).toMatch(/argv/i);
       expect(r.err).toMatch(/stdin/);
@@ -536,7 +625,13 @@ describe('una chiave non passa mai per argv né per l\'environment (owner 2026-0
       homes.push(cwd);
       const r = spawnSync(
         'bash',
-        ['-c', `(sleep 1; printf 'sk-ant-api03-produttore-lento') | npx tsx ${cli} init`],
+        [
+          '-c',
+          '(sleep 1; printf sk-ant-api03-produttore-lento) | "$1" "$2" init',
+          'muffin-slow-producer',
+          join(process.cwd(), 'node_modules', '.bin', 'tsx'),
+          cli,
+        ],
         {
           env: {
             ...process.env,
@@ -549,8 +644,11 @@ describe('una chiave non passa mai per argv né per l\'environment (owner 2026-0
         },
       );
       expect(r.status).toBe(0);
-      expect(existsSync(join(xdg, 'muffin', 'secrets', 'provider_api_key'))).toBe(true);
-      expect(existsSync(join(dir, 'secrets', 'provider_api_key'))).toBe(false);
+      const secretName = JSON.parse(
+        readFileSync(join(dir, 'config.json'), 'utf8'),
+      ).provider.apiKeyRef.slice('secret://'.length);
+      expect(existsSync(join(xdg, 'muffin', 'secrets', secretName))).toBe(true);
+      expect(existsSync(join(dir, 'secrets', secretName))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(xdg, { recursive: true, force: true });
@@ -561,7 +659,11 @@ describe('una chiave non passa mai per argv né per l\'environment (owner 2026-0
     const dir = mkdtempSync(join(tmpdir(), 'muffin-stdin-'));
     const xdg = mkdtempSync(join(tmpdir(), 'muffin-stdin-xdg-'));
     try {
-      const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['init'], 'sk-ant-api03-da-stdin-va-bene');
+      const r = muffin(
+        { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg },
+        ['init'],
+        'sk-ant-api03-da-stdin-va-bene',
+      );
       expect(r.code).toBe(0);
       expect(existsSync(join(dir, 'config.json'))).toBe(true);
     } finally {
@@ -688,7 +790,10 @@ describe('muffin --version dice quale build è', () => {
     expect(r.code).toBe(0);
     // Il SHA di questo checkout, letto qui e non assunto: il test vale
     // ovunque giri, e la mutazione che toglie la build muore comunque.
-    const sha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: process.cwd(), encoding: 'utf8' }).stdout.trim();
+    const sha = spawnSync('git', ['rev-parse', 'HEAD'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+    }).stdout.trim();
     expect(sha).not.toBe('');
     expect(r.out).toContain(sha.slice(0, 12));
   });
@@ -760,7 +865,11 @@ function haScript(): boolean {
  * EOF automatico e la mutazione che toglie la memoria dell'EOF da
  * `cli/prompt.ts` sopravvivrebbe alla seconda domanda.
  */
-function muffinTty(env: Record<string, string>, args: string[], attesa: string): { code: number; out: string } {
+function muffinTty(
+  env: Record<string, string>,
+  args: string[],
+  attesa: string,
+): { code: number; out: string } {
   const argv = ['node', '--import', 'tsx', join(process.cwd(), 'cli/main.ts'), ...args];
   const lavoro = mkdtempSync(join(tmpdir(), 'muffin-ctrl-d-'));
   const schermo = join(lavoro, 'schermo'); // tutto ciò che il pty ha prodotto
@@ -828,7 +937,9 @@ function muffinTty(env: Record<string, string>, args: string[], attesa: string):
     // `init` con exit 78. `lavoro` resta per gli artefatti (fifo, schermo:
     // tutto a percorsi assoluti), la cwd è una directory a parte — `lavoro`
     // in /tmp non risolverebbe `tsx` (vedi `muffin()` sopra).
-    env: { ...process.env, NO_COLOR: '1', ...env }, encoding: 'utf8', timeout: 120_000,
+    env: { ...process.env, NO_COLOR: '1', ...env },
+    encoding: 'utf8',
+    timeout: 120_000,
     cwd: cwdSenzaDotenv(),
   });
   // La trascrizione si legge dal **file**, non da `r.stdout`: sul ramo
@@ -837,12 +948,13 @@ function muffinTty(env: Record<string, string>, args: string[], attesa: string):
   // «appeso» dice ancora fin dove era arrivato — cioè `r.code === -1` **con**
   // la domanda sul runtime locale dentro `r.out`, che è esattamente la
   // diagnosi su cui #437 poggiava.
-  const trascrizione = existsSync(schermo) ? readFileSync(schermo, 'utf8') : `${r.stdout ?? ''}${r.stderr ?? ''}`;
+  const trascrizione = existsSync(schermo)
+    ? readFileSync(schermo, 'utf8')
+    : `${r.stdout ?? ''}${r.stderr ?? ''}`;
   // Le sequenze di controllo del pty non sono il contenuto: togliere quelle e i
   // CR rende le asserzioni leggibili quanto quelle del ramo headless.
-  const pulito = trascrizione
-    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
-    .replace(/\r/g, '\n');
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: remove literal ANSI terminal control sequences from the PTY capture.
+  const pulito = trascrizione.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\r/g, '\n');
   return { code: r.status ?? -1, out: pulito };
 }
 

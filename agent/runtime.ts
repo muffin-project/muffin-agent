@@ -1,4 +1,3 @@
-import { configuredProvider } from './providers/configured.js';
 import { join } from 'node:path';
 import type DatabaseCtor from 'better-sqlite3';
 import { ApprovalStore } from '../core/approvals/store.js';
@@ -8,6 +7,7 @@ import { BudgetEngine } from '../core/budget/budget.js';
 import { costUsd, isUnmeteredEndpoint } from '../core/budget/pricing.js';
 import {
   type Config,
+  inferenceProvider,
   loadConfig,
   paths,
   promptVersion,
@@ -66,17 +66,18 @@ import type { Approver, LoopDeps, RegisteredTool, SpendEntry, TurnRuntimeInfo } 
 import {
   CONSERVATIVE,
   loadEffectiveProfiles,
+  type ProfileOrigin,
   selectSourcedProfile,
   withThinking,
-  type ProfileOrigin,
 } from './profiles/profile.js';
+import { configuredProvider } from './providers/configured.js';
 import { type LightAttemptReport, lightLane } from './providers/light-lane.js';
 import type { Provider } from './providers/types.js';
-import { type CapabilityGap, formatCapabilityGap } from './tools/capability-status.js';
 import {
   capabilityDiscoveryCapability,
   makeCapabilitySearchTool,
 } from './tools/capability-search.js';
+import { type CapabilityGap, formatCapabilityGap } from './tools/capability-status.js';
 import { documentCapability, makeDocumentTool } from './tools/document.js';
 import { effectsCapability, makeEffectsTool } from './tools/effects.js';
 import { type FsScope, fsCapabilities, fsList, makeFsTools } from './tools/fs.js';
@@ -586,14 +587,21 @@ export function buildRuntime(
     ];
   })();
 
-  // One connection, two lanes: the endpoint is the same, the model id is not.
-  const createMainProvider = (source: Config): Provider => configuredProvider(source, home);
+  // Each inference lane owns an adapter and credential route; neither lane
+  // borrows the other's provider simply because its model id is different.
+  const createMainProvider = (source: Config): Provider =>
+    configuredProvider(source, home, undefined, 'main');
   let provider: Provider = createMainProvider(config);
-  let providerFingerprint = JSON.stringify(config.provider);
-  let lightFingerprint = JSON.stringify({ provider: config.provider, light: config.models.light });
+  let providerFingerprint = JSON.stringify(inferenceProvider(config, 'main'));
+  let lightFingerprint = JSON.stringify({
+    provider: inferenceProvider(config, 'light'),
+    light: config.models.light,
+  });
 
   const profileProblems: string[] = [];
-  const sourcedProfiles = loadEffectiveProfiles(home, undefined, (line) => profileProblems.push(line));
+  const sourcedProfiles = loadEffectiveProfiles(home, undefined, (line) =>
+    profileProblems.push(line),
+  );
   // L'override dell'owner (`config.json` §thinking) sulla sola corsia di
   // conversazione: la light qui sotto tiene il profilo del *suo* modello, e le
   // corsie della memoria chiedono `off` da sé.
@@ -607,7 +615,11 @@ export function buildRuntime(
       ? { origin: 'conservative' as const, file: '' }
       : { origin: mainSourced.origin, file: mainSourced.file };
 
-  const recordSpendWithBaseUrl = (entry: SpendEntry, baseUrl: string | undefined, kind: Config['provider']['kind']): number => {
+  const recordSpendWithBaseUrl = (
+    entry: SpendEntry,
+    baseUrl: string | undefined,
+    kind: Config['provider']['kind'],
+  ): number => {
     // ChatGPT OAuth uses account plan/credits, not our API-dollar estimate.
     // Token usage stays recorded; ChatGPT Settings owns quota/credit accounting.
     // An owner-declared unmetered endpoint skips the meter entirely: the
@@ -615,7 +627,8 @@ export function buildRuntime(
     // and the requested route both stop mattering here. Only the sealed list
     // decides — a model-reachable config.json never reaches this branch (#499).
     const usd =
-      kind === 'openai-chatgpt' || (baseUrl !== undefined && isUnmeteredEndpoint(baseUrl, budgets.unmetered))
+      kind === 'openai-chatgpt' ||
+      (baseUrl !== undefined && isUnmeteredEndpoint(baseUrl, budgets.unmetered))
         ? 0
         : costUsd(entry.model, entry, baseUrl, entry.requestedModel);
     // `entry` porta già `jobId` quando il turno è il giro di un job
@@ -630,7 +643,7 @@ export function buildRuntime(
     (entry: SpendEntry): number =>
       recordSpendWithBaseUrl(entry, source.baseUrl, source.kind);
   let recordSpend = makeRecordSpend(config.provider);
-  const initialLightProvider = { ...config.provider };
+  const initialLightProvider = { ...inferenceProvider(config, 'light') };
 
   /**
    * The light lane, behind the boundary that bills it and makes its requests
@@ -662,7 +675,8 @@ export function buildRuntime(
     });
     span.end();
   };
-  let light = lightLane(provider, {
+  let lightRouteProvider: Provider = configuredProvider(config, home, undefined, 'light');
+  let light = lightLane(lightRouteProvider, {
     profile: selectSourcedProfile(config.models.light, sourcedProfiles)?.profile ?? CONSERVATIVE,
     record: (entry) =>
       void recordSpendWithBaseUrl(
@@ -1296,22 +1310,21 @@ export function buildRuntime(
   let loopDeps: LoopDeps | null = null;
   const refreshMainModel = (): void => {
     const persisted = loadConfig(home);
-    const fingerprint = JSON.stringify(persisted.provider);
+    const mainProviderConfig = inferenceProvider(persisted, 'main');
+    const fingerprint = JSON.stringify(mainProviderConfig);
     if (fingerprint !== providerFingerprint) {
       provider = createMainProvider(persisted);
       providerFingerprint = fingerprint;
     }
 
     const refreshed = selectSourcedProfile(persisted.models.main, loadEffectiveProfiles(home));
-    const nextProfile = withThinking(
-      refreshed?.profile ?? CONSERVATIVE,
-      persisted.thinking,
-    );
+    const nextProfile = withThinking(refreshed?.profile ?? CONSERVATIVE, persisted.thinking);
     // Keep the config and profile objects stable for their existing readers
     // (`Runtime.config`, `sys_inspect`, and exposure calculation). A running
     // turn owns shallow snapshots made by `runTurn`/`resumeTurn`.
     Object.assign(config, {
-      provider: persisted.provider,
+      provider: mainProviderConfig,
+      lightProvider: inferenceProvider(persisted, 'light'),
       models: { ...config.models, main: persisted.models.main, light: persisted.models.light },
       thinking: persisted.thinking,
     });
@@ -1322,16 +1335,26 @@ export function buildRuntime(
         ? { origin: 'conservative' as const, file: '' }
         : { origin: refreshed.origin, file: refreshed.file },
     );
-    recordSpend = makeRecordSpend(persisted.provider);
+    recordSpend = makeRecordSpend(mainProviderConfig);
     if (loopDeps !== null) {
       loopDeps.provider = provider;
       loopDeps.model = persisted.models.main;
       loopDeps.recordSpend = recordSpend;
       loopDeps.runtimeInfo = {
-        providerKind: persisted.provider.kind,
-        providerBaseUrl: persisted.provider.baseUrl,
+        providerKind: mainProviderConfig.kind,
+        providerBaseUrl: mainProviderConfig.baseUrl,
+        // The light lane is refreshed independently below. Keep its live
+        // snapshot until its provider, wrapper and reranker have all built.
+        lightProviderKind:
+          loopDeps.runtimeInfo?.lightProviderKind ??
+          config.lightProvider?.kind ??
+          config.provider.kind,
+        lightProviderBaseUrl:
+          loopDeps.runtimeInfo?.lightProviderBaseUrl ??
+          config.lightProvider?.baseUrl ??
+          config.provider.baseUrl,
         mainModel: persisted.models.main,
-        lightModel: persisted.models.light,
+        lightModel: loopDeps.runtimeInfo?.lightModel ?? lightInfo.model,
         profile,
         profileSource,
       };
@@ -1351,15 +1374,20 @@ export function buildRuntime(
    */
   const refreshLightModel = (): void => {
     const persisted = loadConfig(home);
+    const lightProviderConfig = inferenceProvider(persisted, 'light');
     const fingerprint = JSON.stringify({
-      provider: persisted.provider,
+      provider: lightProviderConfig,
       light: persisted.models.light,
     });
     if (fingerprint === lightFingerprint) return;
-    lightFingerprint = fingerprint;
-    const nextLightProvider = { ...persisted.provider };
-    light = lightLane(provider, {
-      profile: selectSourcedProfile(persisted.models.light, sourcedProfiles)?.profile ?? CONSERVATIVE,
+    const nextLightProvider = { ...lightProviderConfig };
+    // Build the complete replacement before publishing any part of it. In
+    // particular, resolving the selected lane's secret can throw; retaining
+    // the old fingerprint in that case makes the next prepareTurn retry.
+    const nextLightRouteProvider = configuredProvider(persisted, home, undefined, 'light');
+    const nextLight = lightLane(nextLightRouteProvider, {
+      profile:
+        selectSourcedProfile(persisted.models.light, sourcedProfiles)?.profile ?? CONSERVATIVE,
       record: (entry) =>
         void recordSpendWithBaseUrl(
           {
@@ -1372,11 +1400,21 @@ export function buildRuntime(
         ),
       onAttempt: reportLightAttempt,
     });
-    recallDeps.reranker = new LlmReranker(light, persisted.models.light);
-    lightInfo.provider = light;
+    const nextReranker = new LlmReranker(nextLight, persisted.models.light);
+
+    lightRouteProvider = nextLightRouteProvider;
+    light = nextLight;
+    lightFingerprint = fingerprint;
+    recallDeps.reranker = nextReranker;
+    lightInfo.provider = nextLight;
     lightInfo.model = persisted.models.light;
     if (loopDeps !== null && loopDeps.runtimeInfo !== undefined) {
-      loopDeps.runtimeInfo = { ...loopDeps.runtimeInfo, lightModel: persisted.models.light };
+      loopDeps.runtimeInfo = {
+        ...loopDeps.runtimeInfo,
+        lightModel: persisted.models.light,
+        lightProviderKind: lightProviderConfig.kind,
+        lightProviderBaseUrl: lightProviderConfig.baseUrl,
+      };
     }
   };
 
@@ -1398,7 +1436,7 @@ export function buildRuntime(
     voci: fsList(scope, '.')
       .split('\n')
       .filter((riga) => riga.length > 0),
-    provider: config.provider.kind,
+    provider: `main ${inferenceProvider(config, 'main').kind} · light ${inferenceProvider(config, 'light').kind}`,
     jobAttivi: jobs.list().filter((j) => j.active).length,
     safeMode: safeMode ? { reason: safeMode.reason } : null,
   });
@@ -1420,7 +1458,9 @@ export function buildRuntime(
     promptBlocks,
     capabilityGaps,
     bootLines: [
-      ...(config.provider.kind === 'openai-chatgpt' ? ['Using ChatGPT plan · quota and credits: https://chatgpt.com/settings/usage'] : []),
+      ...(config.provider.kind === 'openai-chatgpt'
+        ? ['Using ChatGPT plan · quota and credits: https://chatgpt.com/settings/usage']
+        : []),
       ...workspaceNotes,
       ...turnNotes,
       ...waitingNotes,
@@ -1461,6 +1501,8 @@ export function buildRuntime(
       runtimeInfo: {
         providerKind: config.provider.kind,
         providerBaseUrl: config.provider.baseUrl,
+        lightProviderKind: inferenceProvider(config, 'light').kind,
+        lightProviderBaseUrl: inferenceProvider(config, 'light').baseUrl,
         mainModel: config.models.main,
         lightModel: config.models.light,
         profile,

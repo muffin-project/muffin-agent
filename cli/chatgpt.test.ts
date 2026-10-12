@@ -1,12 +1,12 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, it, expect, vi } from 'vitest';
-import { runInit } from './init.js';
-import { loadConfig, ConfigSchema } from '../core/config/config.js';
-import { ChatGPTConnection } from '../core/config/chatgpt-oauth.js';
-import { cmdChatGPT } from './chatgpt.js';
+import { describe, expect, it, vi } from 'vitest';
 import type { VerificationResult, verifyInferenceRoute } from '../agent/providers/verify.js';
+import { ChatGPTConnection } from '../core/config/chatgpt-oauth.js';
+import { ConfigSchema, loadConfig } from '../core/config/config.js';
+import { cmdChatGPT } from './chatgpt.js';
+import { runInit } from './init.js';
 
 function fixture() {
   const home = mkdtempSync(join(tmpdir(), 'muffin-chatgpt-command-'));
@@ -83,8 +83,9 @@ describe('ChatGPT account and fixed model command', () => {
     ).toBe(1);
     expect(loadConfig(f.home)).toEqual(before);
   });
-  it('pins both lanes only after verified inference and passes the production candidate into the probe', async () => {
+  it('the ChatGPT compatibility alias changes only main after verified inference', async () => {
     const f = fixture();
+    const before = loadConfig(f.home);
     const verify = vi.fn<typeof verifyInferenceRoute>(async () => working());
     expect(
       await cmdChatGPT(f.home, ['use', 'gpt-6.1-sol'], {
@@ -93,26 +94,24 @@ describe('ChatGPT account and fixed model command', () => {
         verify,
       }),
     ).toBe(0);
-    expect(loadConfig(f.home).models).toEqual({ main: 'gpt-6.1-sol', light: 'gpt-6.1-sol' });
+    const after = loadConfig(f.home);
+    expect(after.models).toEqual({ ...before.models, main: 'gpt-6.1-sol' });
+    expect(after.lightProvider).toEqual(before.lightProvider);
     expect(verify.mock.calls[0]?.[0]).toMatchObject({
       home: f.home,
       config: { provider: { kind: 'openai-chatgpt', baseUrl: 'https://api.openai.com/v1' } },
     });
-    expect(verify).toHaveBeenCalledTimes(2);
-    expect(verify.mock.calls[1]?.[0]).toMatchObject({ thinking: 'low', model: 'gpt-6.1-sol' });
-    expect(f.out.join('\n')).toContain('Using ChatGPT plan');
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(f.out.join('\n')).toContain('ChatGPT plan');
   });
-  it('preserves config when the main probe passes but the internal memory policy fails', async () => {
+  it('preserves config when the main route probe fails', async () => {
     const f = fixture();
     const before = loadConfig(f.home);
-    const verify = vi
-      .fn<typeof verifyInferenceRoute>()
-      .mockResolvedValueOnce(working())
-      .mockResolvedValueOnce({
-        ...working(),
-        status: 'misconfigured',
-        diagnostic: 'unsupported low',
-      });
+    const verify = vi.fn<typeof verifyInferenceRoute>(async () => ({
+      ...working(),
+      status: 'misconfigured',
+      diagnostic: 'synthetic route rejection',
+    }));
     expect(
       await cmdChatGPT(f.home, ['use', 'gpt-6.1-sol'], {
         out: f.sink,
@@ -121,6 +120,7 @@ describe('ChatGPT account and fixed model command', () => {
       }),
     ).toBe(1);
     expect(loadConfig(f.home)).toEqual(before);
+    expect(verify).toHaveBeenCalledTimes(1);
   });
   it('login saves a connection without switching provider or model', async () => {
     const f = fixture();

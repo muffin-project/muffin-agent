@@ -1,4 +1,3 @@
-import DatabaseCtor from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
@@ -7,33 +6,40 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
-  realpathSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
+import DatabaseCtor from 'better-sqlite3';
+import { reconcileDefaults, rigaRiconciliazione } from './adopt.js';
+import { backupNow } from './backup.js';
+import { findCheckoutRoot } from './git-root.js';
+import { realishPath } from './init.js';
 import { makeStatusLine } from './status-line.js';
 import { styleFor } from './ui.js';
-import { backupNow } from './backup.js';
-import { realishPath } from './init.js';
-import { reconcileDefaults, rigaRiconciliazione } from './adopt.js';
-import { findCheckoutRoot } from './git-root.js';
+
 export { findCheckoutRoot };
-import { promptLine } from './prompt.js';
-import { paths, loadConfig, saveConfig } from '../core/config/config.js';
-import { providerFor } from '../core/config/providers.js';
+
+import { inferenceProvider, loadConfig, paths, saveConfig } from '../core/config/config.js';
 import { buildEndpointsUrl, parseEndpointTags } from '../core/config/endpoints.js';
 import { repairStaleRouting, tagsToEvidence } from '../core/config/model-resolve.js';
-import { keyForEndpoints } from './model.js';
-import { readGateway } from '../core/gateway/lock.js';
-import { checkSupervisor, realSupervisorProbes, type SupervisorProbes } from '../core/gateway/supervisor.js';
-import { LAUNCHD_LABEL, SERVICE_NAME } from '../core/gateway/unit.js';
+import { providerFor } from '../core/config/providers.js';
 import { schemaVersionOf } from '../core/db/migrate.js';
+import { readGateway } from '../core/gateway/lock.js';
+import {
+  checkSupervisor,
+  realSupervisorProbes,
+  type SupervisorProbes,
+} from '../core/gateway/supervisor.js';
+import { LAUNCHD_LABEL, SERVICE_NAME } from '../core/gateway/unit.js';
+import { keyForEndpoints } from './model.js';
+import { promptLine } from './prompt.js';
 
 /**
  * `muffin update` — releases built alongside, never in place.
@@ -275,7 +281,8 @@ export type UpdateDeps = {
  */
 export function run(cmd: string, args: string[], cwd: string, timeoutMs = 120_000): SpawnResult {
   const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', timeout: timeoutMs });
-  const stderr = r.stderr && r.stderr.trim() !== '' ? r.stderr : r.error ? r.error.message : (r.stderr ?? '');
+  const stderr =
+    r.stderr && r.stderr.trim() !== '' ? r.stderr : r.error ? r.error.message : (r.stderr ?? '');
   return { status: r.status ?? 1, stdout: r.stdout ?? '', stderr };
 }
 
@@ -302,7 +309,7 @@ export function fetchFailureRemedy(stderr: string): string {
   ) {
     return (
       'sembra un problema di accesso al remote: verifica la deploy key o il token ' +
-      '(`git remote -v` per vedere l\'URL, poi controlla che la chiave/il token configurati abbiano accesso al repository).'
+      "(`git remote -v` per vedere l'URL, poi controlla che la chiave/il token configurati abbiano accesso al repository)."
     );
   }
   return 'controlla la connessione e la configurazione del remote (`git remote -v`), poi riprova.';
@@ -390,9 +397,12 @@ const LAUNCHER_NAMES = ['muffin', 'muffin-agent'] as const;
 
 /** Same bindirs `install.sh` and `cli/gateway.ts`'s `currentLauncher()` check, in the same order. */
 function defaultBindirs(): string[] {
-  return [process.env['MUFFIN_BINDIR'], join(homedir(), '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'].filter(
-    (d): d is string => typeof d === 'string' && d.length > 0,
-  );
+  return [
+    process.env['MUFFIN_BINDIR'],
+    join(homedir(), '.local', 'bin'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+  ].filter((d): d is string => typeof d === 'string' && d.length > 0);
 }
 
 /**
@@ -425,13 +435,17 @@ function resolvedLauncherTarget(link: string): string | null {
  * name too). Identity by realpath prefix, the same test `resolveLauncher`
  * uses for the same reason.
  */
-export function findOwnedLaunchers(checkoutRoot: string, bindirs: string[] = defaultBindirs()): string[] {
+export function findOwnedLaunchers(
+  checkoutRoot: string,
+  bindirs: string[] = defaultBindirs(),
+): string[] {
   const found: string[] = [];
   for (const dir of bindirs) {
     for (const name of LAUNCHER_NAMES) {
       const link = join(dir, name);
       const real = resolvedLauncherTarget(link);
-      if (real !== null && (real === checkoutRoot || real.startsWith(`${checkoutRoot}/`))) found.push(link);
+      if (real !== null && (real === checkoutRoot || real.startsWith(`${checkoutRoot}/`)))
+        found.push(link);
     }
   }
   return found;
@@ -461,15 +475,23 @@ function markerPath(checkoutRoot: string, name: 'current' | 'previous'): string 
 
 function readMarker(checkoutRoot: string, name: 'current' | 'previous'): ReleaseMarker | null {
   try {
-    const raw = JSON.parse(readFileSync(markerPath(checkoutRoot, name), 'utf8')) as Partial<ReleaseMarker>;
-    return typeof raw.sha === 'string' && typeof raw.entry === 'string' ? (raw as ReleaseMarker) : null;
+    const raw = JSON.parse(
+      readFileSync(markerPath(checkoutRoot, name), 'utf8'),
+    ) as Partial<ReleaseMarker>;
+    return typeof raw.sha === 'string' && typeof raw.entry === 'string'
+      ? (raw as ReleaseMarker)
+      : null;
   } catch {
     return null;
   }
 }
 
 /** Same tmp-then-rename idiom as `atomicSymlink`, for the plain bookkeeping file. */
-function writeMarker(checkoutRoot: string, name: 'current' | 'previous', marker: ReleaseMarker): void {
+function writeMarker(
+  checkoutRoot: string,
+  name: 'current' | 'previous',
+  marker: ReleaseMarker,
+): void {
   const dir = releasesDir(checkoutRoot);
   mkdirSync(dir, { recursive: true });
   const link = markerPath(checkoutRoot, name);
@@ -488,7 +510,10 @@ function releaseRootOf(entry: string): string {
  * update` before: no marker yet is not a broken state, it is the bootstrap
  * one — the release IS the main worktree, exactly as `install.sh` left it.
  */
-function currentOrBootstrap(checkoutRoot: string, gitRunner: GitRunner): { marker: ReleaseMarker; bootstrap: boolean } {
+function currentOrBootstrap(
+  checkoutRoot: string,
+  gitRunner: GitRunner,
+): { marker: ReleaseMarker; bootstrap: boolean } {
   const existing = readMarker(checkoutRoot, 'current');
   if (existing) return { marker: existing, bootstrap: false };
   const sha = gitRunner(['rev-parse', 'HEAD'], checkoutRoot).stdout.trim();
@@ -502,7 +527,11 @@ function releaseDirNameOf(checkoutRoot: string, marker: ReleaseMarker): string |
 }
 
 /** Every `.releases/<name>` directory not in `keep` — a straight `git worktree remove`, belt-and-suspenders `rm -rf` after. */
-function pruneOldReleases(checkoutRoot: string, keep: ReadonlySet<string>, gitRunner: GitRunner): string[] {
+function pruneOldReleases(
+  checkoutRoot: string,
+  keep: ReadonlySet<string>,
+  gitRunner: GitRunner,
+): string[] {
   const dir = releasesDir(checkoutRoot);
   if (!existsSync(dir)) return [];
   const removed: string[] = [];
@@ -521,7 +550,12 @@ function defaultNpmCi(releaseDir: string): SpawnResult {
 }
 
 function defaultSmokeTest(releaseDir: string): SpawnResult {
-  return run(process.execPath, [join(releaseDir, 'dist', 'cli', 'main.js'), '--help'], releaseDir, 15_000);
+  return run(
+    process.execPath,
+    [join(releaseDir, 'dist', 'cli', 'main.js'), '--help'],
+    releaseDir,
+    15_000,
+  );
 }
 
 /**
@@ -538,7 +572,11 @@ function defaultReadNewSchemaVersion(releaseDir: string): number | null {
   const url = pathToFileURL(migrateJs).href;
   const r = run(
     process.execPath,
-    ['--input-type=module', '-e', `import(${JSON.stringify(url)}).then(m=>process.stdout.write(String(m.currentSchemaVersion())))`],
+    [
+      '--input-type=module',
+      '-e',
+      `import(${JSON.stringify(url)}).then(m=>process.stdout.write(String(m.currentSchemaVersion())))`,
+    ],
     releaseDir,
     15_000,
   );
@@ -548,8 +586,10 @@ function defaultReadNewSchemaVersion(releaseDir: string): number | null {
 }
 
 function migrationsDetail(dbPath: string, newVersion: number | null): string {
-  if (!existsSync(dbPath)) return 'nessun database ancora — la prima `muffin init` lo crea già alla forma corrente';
-  if (newVersion === null) return 'non riesco a leggere lo schema del codice nuovo (dist/core/db/migrate.js mancante, o il subprocess è fallito)';
+  if (!existsSync(dbPath))
+    return 'nessun database ancora — la prima `muffin init` lo crea già alla forma corrente';
+  if (newVersion === null)
+    return 'non riesco a leggere lo schema del codice nuovo (dist/core/db/migrate.js mancante, o il subprocess è fallito)';
   const db = new DatabaseCtor(dbPath, { readonly: true });
   let have: number | null;
   try {
@@ -558,7 +598,8 @@ function migrationsDetail(dbPath: string, newVersion: number | null): string {
     db.close();
   }
   if (have === null) return 'database senza schema_version — verrà stampata al primo avvio';
-  if (have === newVersion) return `schema già alla versione corrente (v${have}) — nessuna migrazione in sospeso`;
+  if (have === newVersion)
+    return `schema già alla versione corrente (v${have}) — nessuna migrazione in sospeso`;
   if (have < newVersion) {
     return `database a v${have}, il codice nuovo arriva a v${newVersion} — ${newVersion - have} migrazione/i in sospeso: partirà al prossimo avvio (repl o gateway)`;
   }
@@ -605,21 +646,19 @@ export function repairRoutingStep(
   home: string,
   fetchJson: (url: string, key: string | undefined) => unknown | null = fetchJsonSync,
 ): { text: string; ok: boolean } {
-  let config;
+  let config: ReturnType<typeof loadConfig>;
   try {
     config = loadConfig(home);
   } catch {
     return { text: 'niente da riparare (nessuna config leggibile)', ok: true };
   }
-  const entry = providerFor(config.provider);
-  if (entry === null) return { text: 'niente da riparare (endpoint fuori catalogo)', ok: true };
-  if (config.provider.routing === undefined) {
-    return { text: 'routing coerente coi modelli, niente da riparare', ok: true };
-  }
-  const key = keyForEndpoints(config, home);
   let out = config;
   const notes: string[] = [];
   for (const lane of ['main', 'light'] as const) {
+    const connection = inferenceProvider(out, lane);
+    const entry = providerFor(connection);
+    if (entry === null || entry.id !== 'openrouter' || connection.routing === undefined) continue;
+    const key = keyForEndpoints(connection, home);
     const slug = out.models[lane];
     const url = buildEndpointsUrl(entry.baseUrl, slug);
     let live: ReturnType<typeof tagsToEvidence> = null;
@@ -634,9 +673,11 @@ export function repairRoutingStep(
     out = repaired.config;
     notes.push(...repaired.notes);
   }
-  if (JSON.stringify(out.provider) !== JSON.stringify(config.provider)) {
+  if (
+    JSON.stringify([out.provider, out.lightProvider]) !==
+    JSON.stringify([config.provider, config.lightProvider])
+  )
     saveConfig(out, home);
-  }
   return {
     text: notes.length > 0 ? notes.join(' ') : 'routing coerente coi modelli, niente da riparare',
     ok: true,
@@ -686,7 +727,7 @@ export function noteDopoLoSwing(args: {
     );
   }
   righe.push(
-    'quello che era già in esecuzione continua sul codice vecchio: il symlink si risolve all\'avvio del processo. ' +
+    "quello che era già in esecuzione continua sul codice vecchio: il symlink si risolve all'avvio del processo. " +
       'Una REPL aperta (anche in un tmux di giorni fa) va chiusa e rilanciata.',
   );
   return righe;
@@ -703,10 +744,16 @@ export function restartCommand(platform: NodeJS.Platform): { printable: string; 
   if (platform === 'darwin') {
     const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
     const target = `gui/${uid}/${LAUNCHD_LABEL}`;
-    return { argv: ['launchctl', 'kickstart', '-k', target], printable: `launchctl kickstart -k ${target}` };
+    return {
+      argv: ['launchctl', 'kickstart', '-k', target],
+      printable: `launchctl kickstart -k ${target}`,
+    };
   }
   const unit = `${SERVICE_NAME}.service`;
-  return { argv: ['systemctl', '--user', 'restart', unit], printable: `systemctl --user restart ${unit}` };
+  return {
+    argv: ['systemctl', '--user', 'restart', unit],
+    printable: `systemctl --user restart ${unit}`,
+  };
 }
 
 /**
@@ -753,7 +800,8 @@ export async function waitForGatewayPid(
 ): Promise<number | null> {
   const attempts = opts.attempts ?? 8;
   const intervalMs = opts.intervalMs ?? 750;
-  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const sleep =
+    opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   let pid = readPid();
   for (let i = 0; i < attempts && (pid === null || pid === before); i++) {
     await sleep(intervalMs);
@@ -833,15 +881,22 @@ export async function offerGatewayRestart(
   const promptFn = opts.promptFn ?? promptLine;
   const restart = opts.restart ?? ((argv: string[]) => run(argv[0]!, argv.slice(1), home, 30_000));
   const readGatewayPid = opts.readGatewayPid ?? (() => currentGatewayPid(home));
-  const status = checkSupervisor(opts.platform, home, opts.gatewayRunning ?? readGatewayPid() !== null, {
-    ...realSupervisorProbes(),
-    ...opts.supervisorProbes,
-  });
+  const status = checkSupervisor(
+    opts.platform,
+    home,
+    opts.gatewayRunning ?? readGatewayPid() !== null,
+    {
+      ...realSupervisorProbes(),
+      ...opts.supervisorProbes,
+    },
+  );
 
   const carryOn = (): void => {
     process.stderr.write(
       `Il codice nuovo entra comunque al prossimo riavvio del processo` +
-        (status.engaged ? ' — anche un crash: il supervisore lo fa ripartire da solo' : ' (repl o gateway, quando lo rilanci tu)') +
+        (status.engaged
+          ? ' — anche un crash: il supervisore lo fa ripartire da solo'
+          : ' (repl o gateway, quando lo rilanci tu)') +
         ` — le migrazioni pendenti, se ce ne sono, girano a quel riavvio.\n`,
     );
   };
@@ -871,7 +926,12 @@ export async function offerGatewayRestart(
       intervalMs: opts.verifyIntervalMs,
       sleep: opts.sleep,
     });
-    const verdict = restartVerdict({ pidBefore, pidAfter, commandOk: r.status === 0, commandDetail });
+    const verdict = restartVerdict({
+      pidBefore,
+      pidAfter,
+      commandOk: r.status === 0,
+      commandDetail,
+    });
     process.stderr.write(`${verdict.line}\n`);
     if (!verdict.restarted) carryOn();
   };
@@ -881,7 +941,9 @@ export async function offerGatewayRestart(
     return;
   }
 
-  const answer = await promptFn('\nGateway supervisionato trovato. Riavvio ora così gira il codice nuovo? [Y/n] ');
+  const answer = await promptFn(
+    '\nGateway supervisionato trovato. Riavvio ora così gira il codice nuovo? [Y/n] ',
+  );
   if (answer === undefined) {
     process.stderr.write(`\nPer far girare il codice nuovo ora:\n  ${printable}\n`);
     carryOn();
@@ -895,7 +957,12 @@ export async function offerGatewayRestart(
   await doRestart();
 }
 
-function rollback(checkoutRoot: string, home: string, deps: UpdateDeps, steps: UpdateStep[]): UpdateResult {
+function rollback(
+  checkoutRoot: string,
+  home: string,
+  deps: UpdateDeps,
+  steps: UpdateStep[],
+): UpdateResult {
   /**
    * Accumulato **e** emesso, come `step` in `runUpdate` — e per una ragione
    * misurata il 06/09/2026 da `evals/install/ubuntu.sh`: questa funzione
@@ -914,7 +981,11 @@ function rollback(checkoutRoot: string, home: string, deps: UpdateDeps, steps: U
   };
   const previous = readMarker(checkoutRoot, 'previous');
   if (!previous) {
-    push('rollback', 'nessuna release precedente registrata — niente da cui tornare indietro', false);
+    push(
+      'rollback',
+      'nessuna release precedente registrata — niente da cui tornare indietro',
+      false,
+    );
     return { steps, code: 1 };
   }
   const current = readMarker(checkoutRoot, 'current');
@@ -951,7 +1022,10 @@ function rollback(checkoutRoot: string, home: string, deps: UpdateDeps, steps: U
   writeMarker(checkoutRoot, 'current', previous);
   push(
     'rollback',
-    `tornato a ${previous.sha.slice(0, 7)} (${previous.entry})` + (owned.length > 0 ? ` — launcher: ${owned.join(', ')}` : ' — nessun launcher trovato da flippare'),
+    `tornato a ${previous.sha.slice(0, 7)} (${previous.entry})` +
+      (owned.length > 0
+        ? ` — launcher: ${owned.join(', ')}`
+        : ' — nessun launcher trovato da flippare'),
   );
   return { steps, code: 0 };
 }
@@ -995,15 +1069,25 @@ export function runUpdate(deps: UpdateDeps = {}): UpdateResult {
   const channelRef = `refs/remotes/origin/${channel}`;
 
   begin('fetch');
-  const fetchRes = gitRunner(['fetch', 'origin', `+refs/heads/${channel}:${channelRef}`], checkoutRoot);
+  const fetchRes = gitRunner(
+    ['fetch', 'origin', `+refs/heads/${channel}:${channelRef}`],
+    checkoutRoot,
+  );
   if (fetchRes.status !== 0) {
-    step('fetch', `${fetchRes.stderr.trim() || 'git fetch fallito'}\n  → ${fetchFailureRemedy(fetchRes.stderr)}`, false);
+    step(
+      'fetch',
+      `${fetchRes.stderr.trim() || 'git fetch fallito'}\n  → ${fetchFailureRemedy(fetchRes.stderr)}`,
+      false,
+    );
     return { steps, code: 1 };
   }
   const newSha = gitRunner(['rev-parse', channelRef], checkoutRoot).stdout.trim();
   const newShort = gitRunner(['rev-parse', '--short', channelRef], checkoutRoot).stdout.trim();
   const baseline = currentOrBootstrap(checkoutRoot, gitRunner);
-  const behindRes = gitRunner(['rev-list', '--count', `${baseline.marker.sha}..${newSha}`], checkoutRoot);
+  const behindRes = gitRunner(
+    ['rev-list', '--count', `${baseline.marker.sha}..${newSha}`],
+    checkoutRoot,
+  );
   const behind = Number(behindRes.stdout.trim() || '0');
 
   /**
@@ -1016,7 +1100,10 @@ export function runUpdate(deps: UpdateDeps = {}): UpdateResult {
   let ahead: number | null = null;
   if (upstream !== null) {
     const upstreamRef = `refs/remotes/origin/${upstream}`;
-    if (gitRunner(['fetch', 'origin', `+refs/heads/${upstream}:${upstreamRef}`], checkoutRoot).status === 0) {
+    if (
+      gitRunner(['fetch', 'origin', `+refs/heads/${upstream}:${upstreamRef}`], checkoutRoot)
+        .status === 0
+    ) {
       const r = gitRunner(['rev-list', '--count', `${channelRef}..${upstreamRef}`], checkoutRoot);
       const n = Number(r.stdout.trim());
       if (r.status === 0 && Number.isFinite(n)) ahead = n;
@@ -1024,7 +1111,9 @@ export function runUpdate(deps: UpdateDeps = {}): UpdateResult {
   }
   const lag = (): void => step('canale', channelLagNote({ channel, upstream, ahead }));
 
-  const bootstrapNote = baseline.bootstrap ? ' (nessuna release registrata ancora — confronto con l\'HEAD di questo checkout)' : '';
+  const bootstrapNote = baseline.bootstrap
+    ? " (nessuna release registrata ancora — confronto con l'HEAD di questo checkout)"
+    : '';
 
   if (deps.dryRun) {
     step(
@@ -1135,7 +1224,10 @@ export function runUpdate(deps: UpdateDeps = {}): UpdateResult {
    * dicendo meno. Il conteggio di riserva è `behind`, che è misurato sopra e
    * resta noto anche se `git log` non risponde.
    */
-  const logRes = gitRunner(['log', '--no-merges', '--format=%s', `${previousForMarker.sha}..${newSha}`], checkoutRoot);
+  const logRes = gitRunner(
+    ['log', '--no-merges', '--format=%s', `${previousForMarker.sha}..${newSha}`],
+    checkoutRoot,
+  );
   const subjects =
     logRes.status === 0
       ? logRes.stdout
@@ -1147,10 +1239,15 @@ export function runUpdate(deps: UpdateDeps = {}): UpdateResult {
   lag();
 
   const keepNames = new Set(
-    [newShort, releaseDirNameOf(checkoutRoot, previousForMarker)].filter((x): x is string => x !== null),
+    [newShort, releaseDirNameOf(checkoutRoot, previousForMarker)].filter(
+      (x): x is string => x !== null,
+    ),
   );
   const pruned = pruneOldReleases(checkoutRoot, keepNames, gitRunner);
-  step('pulizia', pruned.length > 0 ? `release precedenti rimosse: ${pruned.join(', ')}` : 'niente da rimuovere');
+  step(
+    'pulizia',
+    pruned.length > 0 ? `release precedenti rimosse: ${pruned.join(', ')}` : 'niente da rimuovere',
+  );
 
   const readNewSchemaVersion = deps.readNewSchemaVersion ?? defaultReadNewSchemaVersion;
   step('schema', migrationsDetail(p.db, readNewSchemaVersion(releaseDir)));
@@ -1182,14 +1279,22 @@ export function runUpdate(deps: UpdateDeps = {}): UpdateResult {
   // dell'owner. Un aggiornamento non deve poter riscrivere niente di suo.
   const riconciliato = reconcileDefaults(home, releaseDir);
   const rigaDefault = rigaRiconciliazione(riconciliato);
-  step('default', rigaDefault ?? 'la casa ha gia\' tutti i default che questa release spedisce', riconciliato.falliti.length === 0);
+  step(
+    'default',
+    rigaDefault ?? "la casa ha gia' tutti i default che questa release spedisce",
+    riconciliato.falliti.length === 0,
+  );
 
   // Le due conseguenze che il comando taceva — vedi `noteDopoLoSwing`. Lo stato
   // si legge qui, dallo stesso `gitRunner` di tutto il resto; la decisione sta
   // nella funzione pura.
   const headRes = gitRunner(['rev-parse', 'HEAD'], checkoutRoot);
-  const checkoutSha = headRes.status === 0 && headRes.stdout.trim() !== '' ? headRes.stdout.trim() : null;
-  const dietroRes = checkoutSha === null ? null : gitRunner(['rev-list', '--count', `${checkoutSha}..${newSha}`], checkoutRoot);
+  const checkoutSha =
+    headRes.status === 0 && headRes.stdout.trim() !== '' ? headRes.stdout.trim() : null;
+  const dietroRes =
+    checkoutSha === null
+      ? null
+      : gitRunner(['rev-list', '--count', `${checkoutSha}..${newSha}`], checkoutRoot);
   for (const riga of noteDopoLoSwing({
     releaseSha: newSha,
     checkoutSha,
@@ -1227,7 +1332,7 @@ const UPDATE_USAGE = `uso:
  * legge lo stesso, non un errore.
  */
 const UPDATE_PHRASE: Readonly<Record<string, string>> = {
-  fetch: 'guardo se c\'e\' qualcosa di nuovo',
+  fetch: "guardo se c'e' qualcosa di nuovo",
   release: 'preparo la release nuova, senza toccare quella in esecuzione',
   'npm ci': 'installo e compilo la release nuova',
   'smoke test': 'provo che la release nuova risponda, prima di toccare qualunque cosa viva',
@@ -1248,7 +1353,8 @@ export function runningInContainerImage(): boolean {
   return process.env.MUFFIN_CONTAINER === '1';
 }
 
-export async function cmdUpdate(argv: string[]): Promise<number> {  let values: { 'dry-run'?: boolean; yes?: boolean; rollback?: boolean; channel?: string };
+export async function cmdUpdate(argv: string[]): Promise<number> {
+  let values: { 'dry-run'?: boolean; yes?: boolean; rollback?: boolean; channel?: string };
   try {
     ({ values } = parseArgs({
       args: argv,
@@ -1286,7 +1392,9 @@ export async function cmdUpdate(argv: string[]): Promise<number> {  let values: 
   // non della manopola che l'utente ha girato.
   const requested = values.channel ?? DEFAULT_CHANNEL;
   if (!isChannel(requested)) {
-    process.stderr.write(`canale sconosciuto: ${requested} — i canali sono ${CHANNELS.join(', ')}\n${UPDATE_USAGE}`);
+    process.stderr.write(
+      `canale sconosciuto: ${requested} — i canali sono ${CHANNELS.join(', ')}\n${UPDATE_USAGE}`,
+    );
     return 78;
   }
 
@@ -1300,7 +1408,10 @@ export async function cmdUpdate(argv: string[]): Promise<number> {  let values: 
    */
   const style = styleFor(process.stderr);
   process.stderr.write(`${style.header('muffin update')}\n`);
-  const status = makeStatusLine((text) => process.stderr.write(text), process.stderr.isTTY === true);
+  const status = makeStatusLine(
+    (text) => process.stderr.write(text),
+    process.stderr.isTTY === true,
+  );
   const result = runUpdate({
     home,
     channel: requested,
