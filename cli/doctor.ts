@@ -1,3 +1,4 @@
+import { ChatGPTConnection } from '../core/config/chatgpt-oauth.js';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname } from 'node:path';
@@ -687,7 +688,13 @@ export async function runDoctor(
   // how an install that believes it has moved its key keeps reading the old
   // copy forever. Both locations are named when both exist, because that is the
   // shadowing case and it is silent from every other angle.
-  try {
+  if (config.provider.kind === 'openai-chatgpt') {
+    try {
+      const session = new ChatGPTConnection(home).session();
+      if (session?.connected) ok('ChatGPT', 'Account connected; plan quota and credits are managed at https://chatgpt.com/settings/usage');
+      else fail('ChatGPT', 'Account is not connected with plan permission', 'muffin chatgpt login');
+    } catch { fail('ChatGPT', 'Saved connection is unavailable', 'muffin chatgpt login'); }
+  } else try {
     const key = readSecret(config.provider.apiKeyRef, home);
     const where = locateSecretAll(config.provider.apiKeyRef, home);
     const answered = where[0];

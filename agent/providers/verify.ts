@@ -1,8 +1,21 @@
 import { randomBytes } from 'node:crypto';
-import { ConfigError, loadConfig, readSecret, type Config } from '../../core/config/config.js';
-import { AnthropicProvider } from './anthropic.js';
-import { OpenAICompatProvider } from './openai-compat.js';
-import { ReasoningConfigurationError } from './reasoning.js';
+import {
+  ConfigError,
+  loadConfig,
+  muffinHome,
+  readSecret,
+  type Config,
+  type ProviderKind,
+} from '../../core/config/config.js';
+import { configuredProvider } from './configured.js';
+import { ReasoningConfigurationError, reasoningFromLegacyThinking } from './reasoning.js';
+import type { Thinking } from '../../core/config/thinking.js';
+import {
+  CONSERVATIVE,
+  loadEffectiveProfiles,
+  selectSourcedProfile,
+  withThinking,
+} from '../profiles/profile.js';
 import { ProviderError, type Provider } from './types.js';
 
 /**
@@ -66,7 +79,7 @@ export type VerificationCapability = {
 
 export type VerificationResult = {
   status: VerificationStatus;
-  provider: 'anthropic' | 'openai-compat';
+  provider: ProviderKind;
   requestedModel: string;
   /**
    * The actually served model, when the production adapter could observe it
@@ -94,10 +107,12 @@ export type VerifyInferenceOptions = {
    * `Provider.chat` boundary the runtime uses.
    */
   provider?: Provider | undefined;
-  providerKind?: 'anthropic' | 'openai-compat' | undefined;
+  providerKind?: ProviderKind | undefined;
   /** Requested model identity; defaults to `config.models.main`. */
   model?: string | undefined;
   timeoutMs?: number | undefined;
+  /** Explicit lane policy; otherwise ChatGPT probes the effective main profile. */
+  thinking?: Thinking | undefined;
   /** Deterministic nonce for tests; random bounded hex otherwise. */
   nonce?: string | undefined;
   /**
@@ -118,11 +133,15 @@ export type VerifyInferenceOptions = {
  * Exported for `doctor --online` today and the onboarding slices next: they
  * call this exact function rather than reimplementing it.
  */
-export async function verifyInferenceRoute(opts: VerifyInferenceOptions = {}): Promise<VerificationResult> {
+export async function verifyInferenceRoute(
+  opts: VerifyInferenceOptions = {},
+): Promise<VerificationResult> {
   const startedAt = Date.now();
   const observedAt = new Date(startedAt).toISOString();
   const timeoutMs = opts.timeoutMs ?? VERIFY_TIMEOUT_MS;
-  const finish = (partial: Omit<VerificationResult, 'observedAt' | 'durationMs'>): VerificationResult => ({
+  const finish = (
+    partial: Omit<VerificationResult, 'observedAt' | 'durationMs'>,
+  ): VerificationResult => ({
     ...partial,
     observedAt,
     durationMs: Date.now() - startedAt,
@@ -138,7 +157,10 @@ export async function verifyInferenceRoute(opts: VerifyInferenceOptions = {}): P
         provider: opts.providerKind ?? 'openai-compat',
         requestedModel: opts.model ?? '(unknown)',
         capability: { completion: 'fail', toolCall: 'fail' },
-        diagnostic: redact(error instanceof Error ? error.message : String(error), opts.secrets ?? []),
+        diagnostic: redact(
+          error instanceof Error ? error.message : String(error),
+          opts.secrets ?? [],
+        ),
         remedy: error instanceof ConfigError ? error.remedy : 'run `muffin init` first',
       });
     }
@@ -160,45 +182,27 @@ export async function verifyInferenceRoute(opts: VerifyInferenceOptions = {}): P
         remedy: 'run `muffin init` first',
       });
     }
-    let apiKey: string;
     try {
-      apiKey = readSecret(config.provider.apiKeyRef, opts.home);
+      if (config.provider.kind !== 'openai-chatgpt') {
+        const key = readSecret(config.provider.apiKeyRef, opts.home);
+        if (!key)
+          throw new ConfigError('secret file is empty', 'write it with `muffin secret set`');
+        knownSecrets.push(key);
+      }
+      provider = configuredProvider(config, opts.home ?? muffinHome(), opts.fetch);
     } catch (error) {
       return finish({
         status: 'misconfigured',
-        provider: config.provider.kind,
+        provider: providerKind,
         requestedModel,
         capability: { completion: 'fail', toolCall: 'fail' },
         diagnostic: redact(error instanceof Error ? error.message : String(error), knownSecrets),
-        remedy: error instanceof ConfigError ? error.remedy : 'set the key',
+        remedy:
+          config.provider.kind === 'openai-chatgpt'
+            ? 'run `muffin chatgpt login`'
+            : 'check the stored key',
       });
     }
-    if (apiKey.length === 0) {
-      return finish({
-        status: 'misconfigured',
-        provider: config.provider.kind,
-        requestedModel,
-        capability: { completion: 'fail', toolCall: 'fail' },
-        diagnostic: 'secret file is empty',
-        remedy: 'write it with `muffin secret set`',
-      });
-    }
-    knownSecrets.push(apiKey);
-    // Same construction as `agent/runtime.ts#createMainProvider`: the probe
-    // must exercise the same route real inference takes, not a lookalike.
-    provider =
-      config.provider.kind === 'anthropic'
-        ? new AnthropicProvider(apiKey, config.provider.baseUrl, opts.fetch ? { fetch: opts.fetch } : {})
-        : new OpenAICompatProvider(
-            apiKey,
-            config.provider.baseUrl,
-            { 'HTTP-Referer': 'https://github.com/muffin-ai/muffin', 'X-Title': 'muffin' },
-            {
-              ...(config.provider.routing ? { routing: config.provider.routing } : {}),
-              ...(config.provider.reasoningDialect ? { reasoningDialect: config.provider.reasoningDialect } : {}),
-              ...(opts.fetch ? { fetch: opts.fetch, metadataFetch: opts.fetch } : {}),
-            },
-          );
   }
 
   const nonce = opts.nonce ?? randomBytes(8).toString('hex');
@@ -212,10 +216,27 @@ export async function verifyInferenceRoute(opts: VerifyInferenceOptions = {}): P
   });
 
   try {
+    const thinking =
+      opts.thinking ??
+      (config?.provider.kind === 'openai-chatgpt'
+        ? withThinking(
+            selectSourcedProfile(requestedModel, loadEffectiveProfiles(opts.home ?? muffinHome()))
+              ?.profile ?? CONSERVATIVE,
+            config.thinking,
+          ).thinking
+        : undefined);
     const result = await provider.chat({
+      ...(thinking === undefined ? {} : { reasoning: reasoningFromLegacyThinking(thinking)! }),
       model: requestedModel,
-      system: [{ type: 'text', text: 'Muffin capability probe. Answer only by calling the probe tool.' }],
-      messages: [{ role: 'user', content: [{ type: 'text', text: `Call ${PROBE_TOOL_NAME} with nonce "${nonce}".` }] }],
+      system: [
+        { type: 'text', text: 'Muffin capability probe. Answer only by calling the probe tool.' },
+      ],
+      messages: [
+        {
+          role: 'user',
+          content: [{ type: 'text', text: `Call ${PROBE_TOOL_NAME} with nonce "${nonce}".` }],
+        },
+      ],
       tools: [
         {
           name: PROBE_TOOL_NAME,
@@ -279,7 +300,8 @@ export async function verifyInferenceRoute(opts: VerifyInferenceOptions = {}): P
       ...base,
       status: 'incompatible',
       capability: { completion: 'pass', toolCall: 'fail' },
-      diagnostic: 'route answered in prose without the required probe tool call: text generation is not Muffin-compatible inference',
+      diagnostic:
+        'route answered in prose without the required probe tool call: text generation is not Muffin-compatible inference',
       remedy: 'pick a route that supports tool calls (a text-only route is not enough)',
     });
   } catch (error) {
@@ -290,7 +312,8 @@ export async function verifyInferenceRoute(opts: VerifyInferenceOptions = {}): P
         status: 'timeout',
         capability: { completion: 'fail', toolCall: 'fail' },
         diagnostic: `probe timed out after ${String(timeoutMs)}ms`,
-        remedy: 'retry `muffin doctor --online`; if it persists, check provider.baseUrl and network',
+        remedy:
+          'retry `muffin doctor --online`; if it persists, check provider.baseUrl and network',
       });
     }
     return finish(classifyProbeError(error, providerKind, requestedModel, knownSecrets));
@@ -305,20 +328,30 @@ function isMatchingProbeArgs(args: unknown, nonce: string): boolean {
 }
 
 function describeRoute(requested: string, resolved: string | undefined): string {
-  if (resolved === undefined) return `${requested} answered the probe tool call (served model not reported)`;
+  if (resolved === undefined)
+    return `${requested} answered the probe tool call (served model not reported)`;
   if (resolved === requested) return `${requested} answered the probe tool call`;
   return `${requested} answered the probe tool call as ${resolved}`;
 }
 
 function classifyProbeError(
   error: unknown,
-  provider: 'anthropic' | 'openai-compat',
+  provider: ProviderKind,
   requestedModel: string,
   secrets: string[],
 ): Omit<VerificationResult, 'observedAt' | 'durationMs'> {
-  const base = { provider, requestedModel, capability: { completion: 'fail', toolCall: 'fail' } as VerificationCapability };
+  const base = {
+    provider,
+    requestedModel,
+    capability: { completion: 'fail', toolCall: 'fail' } as VerificationCapability,
+  };
   if (error instanceof ConfigError) {
-    return { ...base, status: 'misconfigured', diagnostic: redact(error.message, secrets), remedy: error.remedy };
+    return {
+      ...base,
+      status: 'misconfigured',
+      diagnostic: redact(error.message, secrets),
+      remedy: error.remedy,
+    };
   }
   if (error instanceof ReasoningConfigurationError) {
     return {
@@ -381,7 +414,10 @@ function classifyProbeError(
   return {
     ...base,
     status: 'provider_error',
-    diagnostic: redact(`provider failure${status === undefined ? '' : ` (${String(status)})`}: ${raw}`, secrets),
+    diagnostic: redact(
+      `provider failure${status === undefined ? '' : ` (${String(status)})`}: ${raw}`,
+      secrets,
+    ),
     remedy: 'retry later; if it persists, check the provider status page',
   };
 }
@@ -397,12 +433,16 @@ function isAbortError(error: unknown): boolean {
 
 /** Auth words only — matched against the already-redacted message. */
 function isAuthMessage(message: string): boolean {
-  return /unauthorized|invalid api key|invalid_api_key|authentication failed|authentication_error|forbidden/i.test(message);
+  return /unauthorized|invalid api key|invalid_api_key|authentication failed|authentication_error|forbidden/i.test(
+    message,
+  );
 }
 
 /** A 400 that names the tool contract is a capability verdict, not a transport one. */
 function isToolRejection(message: string): boolean {
-  return /tool|function calling|function_call|parameter|schema|require_parameters|tool_choice/i.test(message);
+  return /tool|function calling|function_call|parameter|schema|require_parameters|tool_choice/i.test(
+    message,
+  );
 }
 
 function isNetworkMessage(message: string): boolean {

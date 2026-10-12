@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { cmdChatGPT } from './chatgpt.js';
 import { existsSync, readFileSync, readSync, rmSync } from 'node:fs';
 import { isatty } from 'node:tty';
 import { parseArgs } from 'node:util';
@@ -48,7 +49,7 @@ import {
 } from './gateway.js';
 import { cmdObserve } from './observe.js';
 import { cmdBackup, cmdRestore } from './backup.js';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cmdUpdate, describeBuild } from './update.js';
 import { cmdConfig } from './config.js';
@@ -186,6 +187,8 @@ async function main(rawArgv: string[]): Promise<number> {
       return cmdInit(rest);
     case 'config':
       return cmdConfig(paths().home, rest);
+    case 'chatgpt':
+      return cmdChatGPT(paths().home, rest, { out: (line) => process.stdout.write(`${line}\n`) });
     case 'model': {
       const style = styleFor(process.stdout);
       process.stdout.write(`${style.header('muffin model')}\n`);
@@ -766,6 +769,9 @@ async function cmdUninstall(argv: string[]): Promise<number> {
   if (!existsSync(home)) {
     process.stderr.write(`Niente da rimuovere: ${home} non esiste.\n`);
     return 0;
+  }
+  if (existsSync(join(home, 'secrets', 'chatgpt'))) {
+    process.stderr.write('Removing local credentials does not revoke ChatGPT access. Disconnect Muffin in ChatGPT Settings, or run `muffin chatgpt logout` before uninstalling.\n');
   }
   // Deleting keys and memory is not something a pipe should trigger by accident.
   if (!values.yes) {

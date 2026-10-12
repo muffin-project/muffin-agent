@@ -53,7 +53,7 @@ export function promptVersion(config: Pick<Config, 'prompt'>): PromptVersion {
   return config.prompt?.version ?? 'v1';
 }
 
-export type ProviderKind = 'anthropic' | 'openai-compat';
+export type ProviderKind = 'anthropic' | 'openai-compat' | 'openai-chatgpt';
 
 /**
  * The schema is the type, not a copy of it.
@@ -69,7 +69,7 @@ export const ConfigSchema = z.object({
   schemaVersion: z.number().int().positive(),
   provider: z.object({
     /** Explicit, never inferred from the URL: a wrong guess fails at the first call. */
-    kind: z.enum(['anthropic', 'openai-compat']),
+    kind: z.enum(['anthropic', 'openai-compat', 'openai-chatgpt']),
     baseUrl: z.string().url().optional(),
     /** `secret://name` — resolved through the secret store, never inlined here. */
     apiKeyRef: z.string().min(1),
@@ -140,6 +140,14 @@ export const ConfigSchema = z.object({
      * accusa, nessun silenzio complice — solo niente da confrontare.
      */
     routingForFamily: z.string().min(1).optional(),
+  }).superRefine((provider, ctx) => {
+    if (provider.kind !== 'openai-chatgpt') return;
+    if (provider.baseUrl !== 'https://api.openai.com/v1' || provider.apiKeyRef !== 'secret://chatgpt') {
+      ctx.addIssue({ code: 'custom', message: 'ChatGPT requires its public endpoint and secret://chatgpt connection', path: ['kind'] });
+    }
+    if (provider.routing !== undefined || provider.reasoningDialect !== undefined || provider.routingForFamily !== undefined) {
+      ctx.addIssue({ code: 'custom', message: 'ChatGPT does not accept router or Chat Completions dialect settings', path: ['kind'] });
+    }
   }),
   models: z.object({
     main: z.string().min(1),
