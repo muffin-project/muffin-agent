@@ -1,4 +1,3 @@
-import { ChatGPTConnection } from '../core/config/chatgpt-oauth.js';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname } from 'node:path';
@@ -18,9 +17,12 @@ import { type VerificationResult, verifyInferenceRoute } from '../agent/provider
 import { baseToolOrder } from '../agent/runtime.js';
 import { diagnoseSearch } from '../agent/tools/search.js';
 import { type Prerequisito, prerequisitiTrascrizione } from '../core/audio/trascrivi.js';
+import { ChatGPTConnection } from '../core/config/chatgpt-oauth.js';
 import {
   type Config,
   type ConfigError,
+  type InferenceLane,
+  inferenceProvider,
   loadConfig,
   locateSecretAll,
   paths,
@@ -153,7 +155,7 @@ export type DoctorOptions = {
    * assert the wiring without spending the owner's money. Plain `doctor`
    * never calls it either way.
    */
-  verifyInference?: () => Promise<VerificationResult>;
+  verifyInference?: (lane?: InferenceLane) => Promise<VerificationResult>;
 };
 
 /**
@@ -356,7 +358,7 @@ export async function runDoctor(
     ok('workspace', `${workspace.workspace} — qui atterrano le scritture di un turno`);
   }
 
-  let config;
+  let config: Config;
   const configNotes: string[] = [];
   try {
     config = loadConfig(home, (line) => configNotes.push(line));
@@ -452,17 +454,19 @@ export async function runDoctor(
   // I pin di routing che derivano da un'altra era del modello (issue #501):
   // confronto offline contro il marcatore, senza rete. Quando non lo si può
   // provare si tace — un avviso che piange al lupo insegna a ignorare doctor.
-  const routingDiag = diagnoseRoutingStaleness(config);
-  if (routingDiag !== null) {
-    warn('model routing', routingDiag.detail, routingDiag.remedy);
-  } else {
-    const pins = [
-      ...(config.provider.routing?.only ?? []),
-      ...(config.provider.routing?.order ?? []),
-      ...(config.provider.routing?.ignore ?? []),
-    ];
-    if (pins.length > 0 && config.provider.routingForFamily !== undefined) {
-      ok('model routing', `pin validati per la famiglia "${config.provider.routingForFamily}"`);
+  for (const lane of ['main', 'light'] as const) {
+    const connection = inferenceProvider(config, lane);
+    const name = lane === 'main' ? 'model routing' : 'model routing (light)';
+    const routingDiag = diagnoseRoutingStaleness(config, lane);
+    if (routingDiag !== null) warn(name, routingDiag.detail, routingDiag.remedy);
+    else {
+      const pins = [
+        ...(connection.routing?.only ?? []),
+        ...(connection.routing?.order ?? []),
+        ...(connection.routing?.ignore ?? []),
+      ];
+      if (pins.length > 0 && connection.routingForFamily !== undefined)
+        ok(name, `pin validati per la famiglia "${connection.routingForFamily}"`);
     }
   }
 
@@ -471,9 +475,18 @@ export async function runDoctor(
   // doctor. When something IS configured, say whether it can reach the wire —
   // a level on an endpoint that neither is OpenRouter nor declares a dialect is
   // omitted, which is exactly the silent no-op this line exists to name.
-  if (config.provider.kind === 'openai-compat' && (config.provider.reasoningDialect !== undefined || config.thinking !== undefined)) {
-    const level = config.thinking !== undefined && config.thinking !== 'off' && config.thinking !== 'adaptive' && config.thinking !== 'unset';
-    const reaches = config.provider.reasoningDialect !== undefined || speaksReasoningEffort(config.provider.baseUrl);
+  if (
+    config.provider.kind === 'openai-compat' &&
+    (config.provider.reasoningDialect !== undefined || config.thinking !== undefined)
+  ) {
+    const level =
+      config.thinking !== undefined &&
+      config.thinking !== 'off' &&
+      config.thinking !== 'adaptive' &&
+      config.thinking !== 'unset';
+    const reaches =
+      config.provider.reasoningDialect !== undefined ||
+      speaksReasoningEffort(config.provider.baseUrl);
     if ((level || config.thinking === 'off') && !reaches) {
       warn(
         'reasoning',
@@ -481,7 +494,10 @@ export async function runDoctor(
         'imposta provider.reasoningDialect in config.json se il server capisce reasoning_effort',
       );
     } else {
-      ok('reasoning', `thinking ${config.thinking ?? 'profilo'}, dialetto ${config.provider.reasoningDialect ?? (speaksReasoningEffort(config.provider.baseUrl) ? 'openrouter (dall\'hostname)' : 'nessuno')}`);
+      ok(
+        'reasoning',
+        `thinking ${config.thinking ?? 'profilo'}, dialetto ${config.provider.reasoningDialect ?? (speaksReasoningEffort(config.provider.baseUrl) ? "openrouter (dall'hostname)" : 'nessuno')}`,
+      );
     }
   }
 
@@ -672,7 +688,10 @@ export async function runDoctor(
       'endpoint non conteggiati',
       `rot/budgets.json — ${budgets.unmetered.map((e) => (e.port === undefined ? e.host : `${e.host}:${e.port}`)).join(', ')}`,
     );
-  } else if (budgets.unmeteredSource === 'fallback' && budgets.notes.some((n) => n.includes('unmetered'))) {
+  } else if (
+    budgets.unmeteredSource === 'fallback' &&
+    budgets.notes.some((n) => n.includes('unmetered'))
+  ) {
     // Only when this section itself failed: a missing file already warns
     // through the caps and quiet-hours checks above.
     warn(
@@ -688,33 +707,60 @@ export async function runDoctor(
   // how an install that believes it has moved its key keeps reading the old
   // copy forever. Both locations are named when both exist, because that is the
   // shadowing case and it is silent from every other angle.
-  if (config.provider.kind === 'openai-chatgpt') {
-    try {
-      const session = new ChatGPTConnection(home).session();
-      if (session?.connected) ok('ChatGPT', 'Account connected; plan quota and credits are managed at https://chatgpt.com/settings/usage');
-      else fail('ChatGPT', 'Account is not connected with plan permission', 'muffin chatgpt login');
-    } catch { fail('ChatGPT', 'Saved connection is unavailable', 'muffin chatgpt login'); }
-  } else try {
-    const key = readSecret(config.provider.apiKeyRef, home);
-    const where = locateSecretAll(config.provider.apiKeyRef, home);
-    const answered = where[0];
-    if (key.length === 0) {
-      fail('api key', 'secret file is empty', `write it with \`muffin secret set\``);
-    } else if (where.length > 1) {
-      warn(
-        'api key',
-        `${key.length} chars (mai stampata) — legge ${answered?.path}, ma esiste anche ${where[1]?.path}: la seconda non viene mai usata`,
-        'cancella la copia che non vuoi, così resta una sola chiave da ruotare',
-      );
-    } else {
-      ok(
-        'api key',
-        `${config.provider.apiKeyRef} (${answered?.backend}) — ${answered?.path}, ${key.length} chars, mai stampata`,
-      );
-    }
-  } catch (error) {
-    const e = error as ConfigError;
-    fail('api key', e.message, e.remedy ?? 'set the key');
+  for (const lane of ['main', 'light'] as const) {
+    const connection = inferenceProvider(config, lane);
+    if (lane === 'light' && JSON.stringify(connection) === JSON.stringify(config.provider))
+      continue;
+    const label = (name: string): string => (lane === 'main' ? name : `${name} (light)`);
+    const credentialOk = (name: string, detail: string): void => {
+      ok(label(name), detail);
+    };
+    const credentialWarn = (name: string, detail: string, remedy: string): void => {
+      warn(label(name), detail, remedy);
+    };
+    const credentialFail = (name: string, detail: string, remedy: string): void => {
+      fail(label(name), detail, remedy);
+    };
+    if (connection.kind === 'openai-chatgpt') {
+      try {
+        const session = new ChatGPTConnection(home).session();
+        if (session?.connected)
+          credentialOk(
+            'ChatGPT',
+            'Account connected; plan quota and credits are managed at https://chatgpt.com/settings/usage',
+          );
+        else
+          credentialFail(
+            'ChatGPT',
+            'Account is not connected with plan permission',
+            'muffin chatgpt login',
+          );
+      } catch {
+        credentialFail('ChatGPT', 'Saved connection is unavailable', 'muffin chatgpt login');
+      }
+    } else
+      try {
+        const key = readSecret(connection.apiKeyRef, home);
+        const where = locateSecretAll(connection.apiKeyRef, home);
+        const answered = where[0];
+        if (key.length === 0) {
+          credentialFail('api key', 'secret file is empty', `write it with \`muffin secret set\``);
+        } else if (where.length > 1) {
+          credentialWarn(
+            'api key',
+            `${key.length} chars (mai stampata) — legge ${answered?.path}, ma esiste anche ${where[1]?.path}: la seconda non viene mai usata`,
+            'cancella la copia che non vuoi, così resta una sola chiave da ruotare',
+          );
+        } else {
+          credentialOk(
+            'api key',
+            `${connection.apiKeyRef} (${answered?.backend}) — ${answered?.path}, ${key.length} chars, mai stampata`,
+          );
+        }
+      } catch (error) {
+        const e = error as ConfigError;
+        credentialFail('api key', e.message, e.remedy ?? 'set the key');
+      }
   }
   // Una copia sotto un **altro nome**, che è il caso che il rename di
   // `provider_api_key` -> `<provider>_api_key` crea e che il controllo qui
@@ -723,14 +769,17 @@ export async function runDoctor(
   // è comunque una credenziale valida da qualche parte sul disco, ed è quella
   // che alla rotazione successiva resta indietro.
   const altriNomi = ALL_API_KEY_NAMES.filter(
-    (n) => `secret://${n}` !== config.provider.apiKeyRef,
+    (n) =>
+      ![config.provider.apiKeyRef, inferenceProvider(config, 'light').apiKeyRef].includes(
+        `secret://${n}`,
+      ),
   ).flatMap((n) => locateSecretAll(`secret://${n}`, home).map((l) => ({ nome: n, path: l.path })));
   if (altriNomi.length > 0) {
     warn(
       'api key (nomi)',
       `esiste una chiave anche col nome ${altriNomi.map((a) => `\`${a.nome}\` (${a.path})`).join(', ')} — ` +
-        `questa installazione legge ${config.provider.apiKeyRef} e quella non la usa mai`,
-      'cancella la copia che non serve più: una chiave valida che nessuno legge è una che alla rotazione resta indietro',
+        `collegamenti attivi: ${config.provider.apiKeyRef}, ${inferenceProvider(config, 'light').apiKeyRef}; altre credenziali restano disponibili per la selezione`,
+      'verifica i collegamenti dal menu `muffin config`; elimina un segreto solo quando hai scelto di disconnettere quel provider',
     );
   }
   // The inference route, proven rather than parsed. Plain `doctor` stays
@@ -740,10 +789,21 @@ export async function runDoctor(
   // which already returns redacted diagnostics, so nothing here touches keys,
   // bodies or prompts.
   if (options.online) {
-    const verification = await (
-      options.verifyInference ?? (() => verifyInferenceRoute({ home }))
-    )();
-    renderInferenceCheck(ok, warn, fail, verification);
+    for (const lane of ['main', 'light'] as const) {
+      // Equal model/connection does not imply equal reasoning policy: main
+      // applies the owner profile, while structured light callers differ.
+      const verification = await (
+        options.verifyInference ??
+        ((selected?: InferenceLane) => verifyInferenceRoute({ home, lane: selected ?? 'main' }))
+      )(lane);
+      const qualify = (name: string): string => (lane === 'main' ? name : `${name} (light)`);
+      renderInferenceCheck(
+        (name, detail) => ok(qualify(name), detail),
+        (name, detail, remedy) => warn(qualify(name), detail, remedy),
+        (name, detail, remedy) => fail(qualify(name), detail, remedy),
+        verification,
+      );
+    }
   }
 
   try {
@@ -1094,7 +1154,11 @@ export async function runDoctor(
     // call whose *outcome* was recorded and declares, rather than repeats, the
     // ones that were not — so the open question below is what a declared,
     // non-replayed call may have done to the world, never whether it runs.
-    const turns = readTurnHealth(db, undefined, new Date(Date.now() - CONTINUATION_TTL_MS).toISOString());
+    const turns = readTurnHealth(
+      db,
+      undefined,
+      new Date(Date.now() - CONTINUATION_TTL_MS).toISOString(),
+    );
     if (turns === null) {
       // Not a warning. The table is created by the first runtime that opens
       // this home, so its absence means "no turn has run here yet", which on a
@@ -1158,8 +1222,14 @@ export async function runDoctor(
         live > 0
           ? `${live} riprendibili con "riprendi" o \`muffin resume <id>\``
           : 'nessuna riprendibile in chat';
-      const expiredText = expired > 0 ? ` · ${expired} oltre la finestra di ripresa (solo \`muffin resume <id>\`)` : '';
-      ok('turni continuabili', `${turns.continuable.count} lease esaurite con lavoro salvato${due} · ${liveText}${expiredText}`);
+      const expiredText =
+        expired > 0
+          ? ` · ${expired} oltre la finestra di ripresa (solo \`muffin resume <id>\`)`
+          : '';
+      ok(
+        'turni continuabili',
+        `${turns.continuable.count} lease esaurite con lavoro salvato${due} · ${liveText}${expiredText}`,
+      );
     }
 
     /**
@@ -1419,7 +1489,11 @@ export async function runDoctor(
     // Not a hard failure: the runtime still starts, execution capabilities
     // just degrade — shell tools and the job executor are absent, declared
     // here. Silently unsandboxed is the one outcome we refuse.
-    warn('sandbox', `${boundary.reason} — shell and job execution stay DISABLED until containment can be proven`, boundary.remedy);
+    warn(
+      'sandbox',
+      `${boundary.reason} — shell and job execution stay DISABLED until containment can be proven`,
+      boundary.remedy,
+    );
   }
 
   // `web_search`: stesso produttore di `agent/runtime.ts`, non una seconda
@@ -1600,11 +1674,19 @@ export async function runDoctor(
     } else if (vede === false) {
       const leggera = config.models.light;
       const descrive =
-        leggera === modello
+        leggera === modello &&
+        JSON.stringify(inferenceProvider(config, 'light')) === JSON.stringify(config.provider)
           ? false
-          : await probeVista(options.vista?.vedeImmagini, config.provider.baseUrl, leggera);
+          : await probeVista(
+              options.vista?.vedeImmagini,
+              inferenceProvider(config, 'light').baseUrl,
+              leggera,
+            );
       if (descrive === true) {
-        ok('vista', `${modello} non vede le immagini: le descrive ${leggera}, sullo stesso endpoint`);
+        ok(
+          'vista',
+          `${modello} non vede le immagini: le descrive ${leggera}, su ${inferenceProvider(config, 'light').baseUrl ?? 'endpoint light'}`,
+        );
       } else {
         warn(
           'vista',
@@ -1613,7 +1695,10 @@ export async function runDoctor(
         );
       }
     } else {
-      ok('vista', `non so se ${modello} vede le immagini (endpoint non misurabile): vanno al modello come sempre`);
+      ok(
+        'vista',
+        `non so se ${modello} vede le immagini (endpoint non misurabile): vanno al modello come sempre`,
+      );
     }
   }
 

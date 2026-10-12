@@ -1,13 +1,14 @@
-import { buildRuntime } from '../runtime.js';
-import { runTurn } from '../loop.js';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { runInit } from '../../cli/init.js';
-import { loadConfig, saveConfig } from '../../core/config/config.js';
 import { ChatGPTConnection } from '../../core/config/chatgpt-oauth.js';
+import { loadConfig, saveConfig } from '../../core/config/config.js';
+import { runTurn } from '../loop.js';
+import { buildRuntime } from '../runtime.js';
 import { configuredProvider } from './configured.js';
+import type { Provider } from './types.js';
 import { verifyInferenceRoute } from './verify.js';
 
 function fixture() {
@@ -199,4 +200,106 @@ describe('configured production provider and online verifier share ChatGPT route
       }
     });
   }
+});
+
+describe('configuredProvider keeps main and light credentials and endpoints independent', () => {
+  it('sends each lane through its own production adapter configuration', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-lane-provider-'));
+    runInit({ home, provider: 'openai-compat', apiKey: 'unused-synthetic-key' });
+    const config = loadConfig(home);
+    config.provider = {
+      kind: 'openai-compat',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      apiKeyRef: 'secret://main_key',
+      routing: { only: ['main-route'] },
+    };
+    config.lightProvider = {
+      kind: 'openai-compat',
+      baseUrl: 'https://light.synthetic.test/v1',
+      apiKeyRef: 'secret://light_key',
+      reasoningDialect: 'reasoning_effort',
+    };
+    writeFileSync(join(home, 'secrets', 'main_key'), 'main-canary', { mode: 0o600 });
+    writeFileSync(join(home, 'secrets', 'light_key'), 'light-canary', { mode: 0o600 });
+    const requests: Array<{
+      url: string;
+      authorization: string | null;
+      body: Record<string, unknown>;
+    }> = [];
+    const fetch = (async (input: unknown, init?: RequestInit) => {
+      const request = new Request(input as string | Request, init);
+      requests.push({
+        url: request.url,
+        authorization: request.headers.get('authorization'),
+        body: (await request.json()) as Record<string, unknown>,
+      });
+      return Response.json({
+        id: 'synthetic',
+        model: 'synthetic-served',
+        choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      });
+    }) as typeof globalThis.fetch;
+    const main = configuredProvider(config, home, fetch, 'main');
+    const light = configuredProvider(config, home, fetch, 'light');
+    const call = {
+      model: 'synthetic-requested',
+      system: [{ type: 'text' as const, text: 'system' }],
+      messages: [{ role: 'user' as const, content: [{ type: 'text' as const, text: 'hello' }] }],
+      maxOutputTokens: 8,
+      stream: false,
+    };
+
+    await main.chat(call);
+    await light.chat({ ...call, reasoning: { mode: 'on', effort: 'low' } });
+
+    expect(requests[0]).toMatchObject({
+      url: 'https://openrouter.ai/api/v1/chat/completions',
+      authorization: 'Bearer main-canary',
+      body: { provider: { only: ['main-route'] } },
+    });
+    expect(requests[0]?.body).not.toHaveProperty('reasoning_effort');
+    expect(requests[1]).toMatchObject({
+      url: 'https://light.synthetic.test/v1/chat/completions',
+      authorization: 'Bearer light-canary',
+      body: { reasoning_effort: 'low' },
+    });
+    expect(requests[1]?.body).not.toHaveProperty('provider');
+  });
+});
+
+describe('verifyInferenceRoute selects lane-specific model and ChatGPT reasoning policy', () => {
+  it('uses the light route and low reasoning even when main thinking is off', async () => {
+    const { config, home } = fixture();
+    config.models.light = 'gpt-light-synthetic';
+    config.thinking = 'off';
+    config.lightProvider = { ...config.provider };
+    let observed: Parameters<Provider['chat']>[0] | undefined;
+    const provider: Provider = {
+      kind: 'openai-chatgpt',
+      async chat(call) {
+        observed = call;
+        return {
+          text: null,
+          toolCalls: [{ id: 'probe', name: 'muffin_probe', args: { nonce: 'light-lane-nonce' } }],
+          finishReason: 'tool_calls',
+          stopReason: 'tool_use',
+          usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          model: 'gpt-light-synthetic',
+        };
+      },
+    };
+
+    const result = await verifyInferenceRoute({
+      config,
+      home,
+      provider,
+      lane: 'light',
+      nonce: 'light-lane-nonce',
+    });
+
+    expect(result.status).toBe('working');
+    expect(result.requestedModel).toBe('gpt-light-synthetic');
+    expect(observed?.reasoning).toEqual({ mode: 'on', effort: 'low' });
+  });
 });

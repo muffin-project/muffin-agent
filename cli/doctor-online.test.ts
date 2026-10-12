@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { VerificationResult } from '../agent/providers/verify.js';
+import { type Check, runDoctor } from './doctor.js';
 import { runInit } from './init.js';
-import { runDoctor, type Check } from './doctor.js';
 
 /**
  * Wiring falsifiers for #523 (J/K + doctor half of M).
@@ -27,7 +27,10 @@ function home(secret = 'sk-never-called'): string {
 
 afterEach(() => vi.unstubAllEnvs());
 
-const inference = async (dir: string, options: Parameters<typeof runDoctor>[1]): Promise<Check | undefined> =>
+const inference = async (
+  dir: string,
+  options: Parameters<typeof runDoctor>[1],
+): Promise<Check | undefined> =>
   (await runDoctor(dir, options)).checks.find((c) => c.name === 'inference');
 
 function working(): VerificationResult {
@@ -73,18 +76,18 @@ describe('doctor offline stays offline (J)', () => {
 });
 
 describe('doctor --online renders the shared primitive (K)', () => {
-  it('calls the primitive exactly once and reports the observed working route', async () => {
+  it('verifies both lane policies and reports the observed working route', async () => {
     const dir = home();
     try {
-      let calls = 0;
+      const lanes: unknown[] = [];
       const check = await inference(dir, {
         online: true,
-        verifyInference: async () => {
-          calls += 1;
+        verifyInference: async (lane) => {
+          lanes.push(lane);
           return working();
         },
       });
-      expect(calls).toBe(1);
+      expect(lanes).toEqual(['main', 'light']);
       expect(check?.level).toBe('ok');
       expect(check?.detail).toContain('openrouter/free');
       expect(check?.detail).toContain('qwen/qwen3-235b-a22b-2507');
@@ -124,8 +127,10 @@ describe('doctor --online renders the shared primitive (K)', () => {
           ...working(),
           status: 'provider_error',
           capability: { completion: 'fail', toolCall: 'fail' },
-          diagnostic: 'route reached the probe output budget before returning the required tool call; compatibility is unverified',
-          remedy: 'retry with a model or reasoning profile that can return the required tool call within the bounded probe output',
+          diagnostic:
+            'route reached the probe output budget before returning the required tool call; compatibility is unverified',
+          remedy:
+            'retry with a model or reasoning profile that can return the required tool call within the bounded probe output',
         }),
       });
       expect(check?.level).toBe('warn');

@@ -1,22 +1,52 @@
 #!/usr/bin/env node
-import { cmdChatGPT } from './chatgpt.js';
 import { existsSync, readFileSync, readSync, rmSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { isatty } from 'node:tty';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { formatReport, runDoctor } from './doctor.js';
-import { styleFor } from './ui.js';
+import { assicuraVoce } from '../core/audio/trascrivi.js';
+import {
+  ConfigError,
+  loadConfig,
+  locateSecret,
+  locateSecretAll,
+  type ProviderKind,
+  paths,
+  writeAuthoritativeSecret,
+} from '../core/config/config.js';
 import { ALL_API_KEY_NAMES, LEGACY_API_KEY_NAME } from '../core/config/providers.js';
-import { cmdUndo } from './undo.js';
-import { cmdOrientamento } from './orientamento.js';
-import { cmdEffects } from './effects.js';
-import { cmdJudgments } from './judgments.js';
-import { defaultModels, isSameOrNestedPath, resolveLocalHome, runInit, type InitStep } from './init.js';
-import { SandboxExecutor } from '../core/sandbox/executor.js';
-import { seal, verify } from '../core/rot/verify.js';
+import { checkTemporalWindow, EVERY_INSTANT, normaliseDate } from '../core/memory/recall.js';
+import type { TrustTier } from '../core/policy/types.js';
 import { buildHardenPlan, formatHardenPlan } from '../core/rot/harden.js';
-import { formatSpan, formatTurn, readSpans } from './trace.js';
-import { runHeadless } from './run.js';
-import { runRepl } from './repl.js';
+import { seal, verify } from '../core/rot/verify.js';
+import { SandboxExecutor } from '../core/sandbox/executor.js';
+import { cmdAdopt } from './adopt.js';
+import { cmdBackup, cmdRestore } from './backup.js';
+import { cmdChatGPT } from './chatgpt.js';
+import { allHelp, canonicalCommand, completion, primaryHelp } from './command-surface.js';
+import { cmdConfig } from './config.js';
+import { formatReport, runDoctor } from './doctor.js';
+import { cmdEffects } from './effects.js';
+import {
+  cmdGatewayInstall,
+  cmdGatewayRestart,
+  cmdGatewayRun,
+  cmdGatewayStart,
+  cmdGatewayStatus,
+  cmdGatewayStop,
+  cmdGatewayTurn,
+  GATEWAY_USAGE,
+} from './gateway.js';
+import {
+  defaultModels,
+  type InitStep,
+  isSameOrNestedPath,
+  resolveLocalHome,
+  runInit,
+} from './init.js';
+import { cmdJobsAdd, cmdJobsCap, cmdJobsList, cmdJobsRemove, JOBS_USAGE } from './jobs.js';
+import { cmdJudgments } from './judgments.js';
+import { cmdMcpAdd, cmdMcpList, cmdMcpRemove, MCP_USAGE } from './mcp.js';
 import {
   cmdMemoryCheck,
   cmdMemoryExtract,
@@ -30,47 +60,13 @@ import {
   cmdMemoryWhy,
   MEMORY_USAGE,
 } from './memory.js';
-import { checkTemporalWindow, EVERY_INSTANT, normaliseDate } from '../core/memory/recall.js';
-import { assicuraVoce } from '../core/audio/trascrivi.js';
-import { cmdVaultAdd, cmdVaultCheck, cmdVaultLs, cmdVaultReindex, VAULT_USAGE } from './vault.js';
-import { cmdSurfaceDefault, cmdSurfaceDisable, cmdSurfaceEnable, cmdSurfaceList, SURFACE_USAGE } from './surface.js';
-import { cmdMcpAdd, cmdMcpList, cmdMcpRemove, MCP_USAGE } from './mcp.js';
-import { cmdAdopt } from './adopt.js';
-import { cmdJobsAdd, cmdJobsCap, cmdJobsList, cmdJobsRemove, JOBS_USAGE } from './jobs.js';
-import {
-  cmdGatewayInstall,
-  cmdGatewayRestart,
-  cmdGatewayRun,
-  cmdGatewayStart,
-  cmdGatewayStatus,
-  cmdGatewayStop,
-  cmdGatewayTurn,
-  GATEWAY_USAGE,
-} from './gateway.js';
-import { cmdObserve } from './observe.js';
-import { cmdBackup, cmdRestore } from './backup.js';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { cmdUpdate, describeBuild } from './update.js';
-import { cmdConfig } from './config.js';
 import { cmdModel } from './model.js';
-import { cmdSearch } from './search-setup.js';
-import type { TrustTier } from '../core/policy/types.js';
-import {
-  loadConfig,
-  locateSecret,
-  locateSecretAll,
-  paths,
-  writeAuthoritativeSecret,
-  ConfigError,
-  type ProviderKind,
-} from '../core/config/config.js';
-import { promptLine, promptSecret, resolveSecretInput } from './prompt.js';
-import { cmdPromptShow, cmdPromptVersion, PROMPT_USAGE } from './prompt-show.js';
+import { cmdObserve } from './observe.js';
 import {
   askLocalOrApi,
   askModelChoice,
   chooseProvider,
+  DEFAULT_LOCAL_RUNTIME_URL,
   describeModelChoice,
   describeProviderChoice,
   describeSandboxProbe,
@@ -78,12 +74,28 @@ import {
   keyHint,
   localModelChoices,
   looksLikeTelegramToken,
-  OPENROUTER_MODEL_FAMILIES,
-  DEFAULT_LOCAL_RUNTIME_URL,
-  probeLocalRuntime,
   type ModelChoiceReason,
+  OPENROUTER_MODEL_FAMILIES,
+  probeLocalRuntime,
 } from './onboarding.js';
-import { allHelp, canonicalCommand, completion, primaryHelp } from './command-surface.js';
+import { cmdOrientamento } from './orientamento.js';
+import { promptLine, promptSecret, resolveSecretInput } from './prompt.js';
+import { cmdPromptShow, cmdPromptVersion, PROMPT_USAGE } from './prompt-show.js';
+import { runRepl } from './repl.js';
+import { runHeadless } from './run.js';
+import { cmdSearch } from './search-setup.js';
+import {
+  cmdSurfaceDefault,
+  cmdSurfaceDisable,
+  cmdSurfaceEnable,
+  cmdSurfaceList,
+  SURFACE_USAGE,
+} from './surface.js';
+import { formatSpan, formatTurn, readSpans } from './trace.js';
+import { styleFor } from './ui.js';
+import { cmdUndo } from './undo.js';
+import { cmdUpdate, describeBuild } from './update.js';
+import { cmdVaultAdd, cmdVaultCheck, cmdVaultLs, cmdVaultReindex, VAULT_USAGE } from './vault.js';
 
 /**
  * Entry point.
@@ -102,7 +114,9 @@ function readOwnVersion(): string {
   let declared = '0.0.0';
   for (let i = 0; i < 6; i++) {
     try {
-      const pkg = JSON.parse(readFileSync(new URL('package.json', dir), 'utf8')) as { version: string };
+      const pkg = JSON.parse(readFileSync(new URL('package.json', dir), 'utf8')) as {
+        version: string;
+      };
       declared = pkg.version;
       break;
     } catch {
@@ -182,7 +196,10 @@ async function main(rawArgv: string[]): Promise<number> {
     case 'run':
       return cmdRun(rest);
     case 'repl':
-      return runRepl(paths().home, { ...(stream !== undefined ? { stream } : {}), ...(debug ? { debug } : {}) });
+      return runRepl(paths().home, {
+        ...(stream !== undefined ? { stream } : {}),
+        ...(debug ? { debug } : {}),
+      });
     case 'init':
       return cmdInit(rest);
     case 'config':
@@ -192,7 +209,10 @@ async function main(rawArgv: string[]): Promise<number> {
     case 'model': {
       const style = styleFor(process.stdout);
       process.stdout.write(`${style.header('muffin model')}\n`);
-      return cmdModel(paths().home, rest, { out: (l) => process.stdout.write(`${l}\n`) });
+      return cmdModel(paths().home, rest, {
+        out: (l) => process.stdout.write(`${l}\n`),
+        interactive: isatty(0),
+      });
     }
     case 'search':
       // `readKey` legge stdin **solo** quando un motore e' stato nominato: senza
@@ -299,7 +319,10 @@ async function main(rawArgv: string[]): Promise<number> {
       // open it with. Detect that and route into setup instead of failing with a
       // stack trace the user cannot act on.
       if (!existsSync(paths().config)) return firstRun();
-      return runRepl(paths().home, { ...(stream !== undefined ? { stream } : {}), ...(debug ? { debug } : {}) });
+      return runRepl(paths().home, {
+        ...(stream !== undefined ? { stream } : {}),
+        ...(debug ? { debug } : {}),
+      });
     }
     case '--help':
     case '-h':
@@ -403,7 +426,9 @@ async function cmdInit(argv: string[]): Promise<number> {
   });
 
   if (!values.local && positionals.length > 0) {
-    process.stderr.write(`muffin init: argomento posizionale "${positionals[0]}" ha senso solo con --local\n`);
+    process.stderr.write(
+      `muffin init: argomento posizionale "${positionals[0]}" ha senso solo con --local\n`,
+    );
     return 78;
   }
 
@@ -504,7 +529,9 @@ async function cmdInit(argv: string[]): Promise<number> {
     // Ogni nome, non uno: questa riga gira prima che esista un `config.json`,
     // quindi non c'e' ancora un provider da cui dedurre come si chiami la chiave.
     const dove = values.local === undefined ? paths().home : home;
-    const gia = ALL_API_KEY_NAMES.map((n) => locateSecret(`secret://${n}`, dove)).find((l) => l !== null) ?? null;
+    const gia =
+      ALL_API_KEY_NAMES.map((n) => locateSecret(`secret://${n}`, dove)).find((l) => l !== null) ??
+      null;
     process.stderr.write(
       `MUFFIN_API_KEY non e piu una sorgente supportata: l'environment e un vettore generico, e un segreto non ci passa.\n` +
         `  Togli la variabile dall'ambiente (e dalla shell rc, se e li) e ruota la chiave se e stata esposta.\n`,
@@ -518,7 +545,9 @@ async function cmdInit(argv: string[]): Promise<number> {
     }
     // Una chiave registrata c'e' gia': il comando non ha bisogno di quella
     // variabile per fare il suo lavoro, e fermarsi qui non protegge niente.
-    process.stderr.write(`  (una chiave registrata c'e' gia' in ${gia.path} — proseguo senza guardare la variabile)\n`);
+    process.stderr.write(
+      `  (una chiave registrata c'e' gia' in ${gia.path} — proseguo senza guardare la variabile)\n`,
+    );
   }
   // stdin quando non e un terminale: il percorso di script e CI, lo stesso che
   // `secret set` usa da sempre.
@@ -528,12 +557,15 @@ async function cmdInit(argv: string[]): Promise<number> {
   } catch (error) {
     // Come `cmdSecret`: uno stack trace di Node non e un messaggio, e questa e
     // la prima cosa che una macchina nuova vede.
-    process.stderr.write(`non riesco a leggere stdin: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(
+      `non riesco a leggere stdin: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
     return 78;
   }
   const stored = apiKey
     ? null
-    : (ALL_API_KEY_NAMES.map((n) => locateSecret(`secret://${n}`, home)).find((l) => l !== null) ?? null);
+    : (ALL_API_KEY_NAMES.map((n) => locateSecret(`secret://${n}`, home)).find((l) => l !== null) ??
+      null);
   if (stored) {
     process.stderr.write(`✓ chiave già presente (${stored.backend}): ${stored.path}\n`);
   }
@@ -546,14 +578,22 @@ async function cmdInit(argv: string[]): Promise<number> {
   // the other direction. `askLocalOrApi` itself only runs when a probe found
   // something to offer, so there is never a question with one real answer.
   let localRuntime: { baseUrl: string; models: readonly string[] } | undefined;
-  if (process.stdin.isTTY && !providerFlag && values['base-url'] === undefined && !apiKey && !stored) {
+  if (
+    process.stdin.isTTY &&
+    !providerFlag &&
+    values['base-url'] === undefined &&
+    !apiKey &&
+    !stored
+  ) {
     // L'endpoint sondato e' sovrascrivibile, e non e' una comodita': senza,
     // *cosa* questo ramo esercita dipende da se chi lo esegue ha ollama acceso.
     // E' precisamente cosi' che il blocco su Ctrl+D e' rimasto invisibile —
     // con ollama spento la domanda sul runtime non esiste, e la seconda
     // domanda diventa la prima. Serve anche a chi tiene un runtime su una
     // porta diversa da quella indovinata.
-    const probe = await probeLocalRuntime(process.env['MUFFIN_LOCAL_RUNTIME_URL'] ?? DEFAULT_LOCAL_RUNTIME_URL);
+    const probe = await probeLocalRuntime(
+      process.env['MUFFIN_LOCAL_RUNTIME_URL'] ?? DEFAULT_LOCAL_RUNTIME_URL,
+    );
     if (probe.available) localRuntime = await askLocalOrApi(probe);
   }
 
@@ -599,7 +639,11 @@ async function cmdInit(argv: string[]): Promise<number> {
   // wins over inference. `describeProviderChoice` still says it out loud
   // through the same call, via the 'local' reason.
   const choice = localRuntime
-    ? { provider: 'openai-compat' as const, baseUrl: localRuntime.baseUrl, reason: 'local' as const }
+    ? {
+        provider: 'openai-compat' as const,
+        baseUrl: localRuntime.baseUrl,
+        reason: 'local' as const,
+      }
     : chooseProvider(providerFlag, keyForInference, values['base-url']);
   process.stderr.write(describeProviderChoice(choice, keyForInference));
 
@@ -642,7 +686,10 @@ async function cmdInit(argv: string[]): Promise<number> {
   let priorProvider: { kind: ProviderKind; baseUrl?: string } | undefined;
   try {
     const prior = loadConfig(home);
-    priorProvider = { kind: prior.provider.kind, ...(prior.provider.baseUrl ? { baseUrl: prior.provider.baseUrl } : {}) };
+    priorProvider = {
+      kind: prior.provider.kind,
+      ...(prior.provider.baseUrl ? { baseUrl: prior.provider.baseUrl } : {}),
+    };
   } catch {
     priorProvider = undefined;
   }
@@ -658,11 +705,11 @@ async function cmdInit(argv: string[]): Promise<number> {
       ...(mainModel ? { mainModel } : {}),
       ...(lightModel ? { lightModel } : {}),
       ...(apiKey ? { apiKey } : {}),
-    // The interactive owner flow has one durable source of truth. `runInit`
-    // keeps its home default for isolated programmatic fixtures and legacy API
-    // callers; the public CLI must not create a competing copy.
-    secretBackend: 'persistent',
-    home,
+      // The interactive owner flow has one durable source of truth. `runInit`
+      // keeps its home default for isolated programmatic fixtures and legacy API
+      // callers; the public CLI must not create a competing copy.
+      secretBackend: 'persistent',
+      home,
     });
   } catch (error) {
     // A corrupt/clashing existing config fails closed with its own remedy —
@@ -674,10 +721,13 @@ async function cmdInit(argv: string[]): Promise<number> {
     throw error;
   }
 
-  for (const s of steps) process.stderr.write(`${s.done ? '✓' : '!'} ${s.name.padEnd(16)} ${s.detail}\n`);
+  for (const s of steps)
+    process.stderr.write(`${s.done ? '✓' : '!'} ${s.name.padEnd(16)} ${s.detail}\n`);
   const incomplete = steps.filter((s) => !s.done);
   if (incomplete.length > 0) {
-    process.stderr.write(`\nRilancia \`muffin init\` quando è risolto — riprende da dove si era fermato.\n`);
+    process.stderr.write(
+      `\nRilancia \`muffin init\` quando è risolto — riprende da dove si era fermato.\n`,
+    );
     return 1;
   }
 
@@ -689,7 +739,9 @@ async function cmdInit(argv: string[]): Promise<number> {
     const riga = await assicuraVoce(home, loadConfig(home));
     if (riga !== null) process.stderr.write(`${riga}\n`);
   } catch (error) {
-    process.stderr.write(`voce: controllo modello whisper saltato (${error instanceof Error ? error.message : String(error)})\n`);
+    process.stderr.write(
+      `voce: controllo modello whisper saltato (${error instanceof Error ? error.message : String(error)})\n`,
+    );
   }
 
   if (values.local) {
@@ -726,7 +778,9 @@ async function offerGateway(): Promise<void> {
     '\nInstallo il gateway, così i job girano anche a finestra chiusa? [Y/n] ',
   );
   if (answer === undefined) {
-    process.stderr.write(`\nPer far girare i job senza una finestra aperta:\n  muffin gateway install --write\n`);
+    process.stderr.write(
+      `\nPer far girare i job senza una finestra aperta:\n  muffin gateway install --write\n`,
+    );
     return;
   }
   if (answer !== '' && !/^(y(es)?|s(i|ì)?)$/i.test(answer)) {
@@ -748,7 +802,9 @@ async function offerGateway(): Promise<void> {
  * terminal print the one command to run instead of hanging on a pipe.
  */
 async function firstRun(): Promise<number> {
-  const answer = await promptLine('Muffin non è ancora configurato su questa macchina. Lo configuro ora? [Y/n] ');
+  const answer = await promptLine(
+    'Muffin non è ancora configurato su questa macchina. Lo configuro ora? [Y/n] ',
+  );
   if (answer === undefined) {
     process.stderr.write('Muffin non è configurato. Esegui:\n  muffin init\n');
     return 78;
@@ -764,20 +820,30 @@ async function firstRun(): Promise<number> {
 }
 
 async function cmdUninstall(argv: string[]): Promise<number> {
-  const { values } = parseArgs({ args: argv, options: { yes: { type: 'boolean' } }, allowPositionals: false });
+  const { values } = parseArgs({
+    args: argv,
+    options: { yes: { type: 'boolean' } },
+    allowPositionals: false,
+  });
   const home = paths().home;
   if (!existsSync(home)) {
     process.stderr.write(`Niente da rimuovere: ${home} non esiste.\n`);
     return 0;
   }
   if (existsSync(join(home, 'secrets', 'chatgpt'))) {
-    process.stderr.write('Removing local credentials does not revoke ChatGPT access. Disconnect Muffin in ChatGPT Settings, or run `muffin chatgpt logout` before uninstalling.\n');
+    process.stderr.write(
+      'Removing local credentials does not revoke ChatGPT access. Disconnect Muffin in ChatGPT Settings, or run `muffin chatgpt logout` before uninstalling.\n',
+    );
   }
   // Deleting keys and memory is not something a pipe should trigger by accident.
   if (!values.yes) {
-    const answer = await promptLine(`Cancello ${home} e tutto il suo contenuto — config, chiavi, memoria? [y/N] `);
+    const answer = await promptLine(
+      `Cancello ${home} e tutto il suo contenuto — config, chiavi, memoria? [y/N] `,
+    );
     if (answer === undefined) {
-      process.stderr.write(`Rifiuto di cancellare senza conferma su una pipe. Rilancia con --yes.\n`);
+      process.stderr.write(
+        `Rifiuto di cancellare senza conferma su una pipe. Rilancia con --yes.\n`,
+      );
       return 78;
     }
     if (!/^(y(es)?|s(i|ì)?)$/i.test(answer)) {
@@ -808,7 +874,9 @@ async function cmdUninstall(argv: string[]): Promise<number> {
         `  (è ciò che fa ritrovare la chiave a \`muffin init\`; cancellala a mano se non la vuoi)\n`,
     );
   }
-  process.stderr.write(`Il comando muffin resta installato; per rimuovere anche quello: ./install.sh --uninstall\n`);
+  process.stderr.write(
+    `Il comando muffin resta installato; per rimuovere anche quello: ./install.sh --uninstall\n`,
+  );
   return 0;
 }
 
@@ -827,7 +895,9 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     // `doctor` e quello del comando prima sono un blocco solo, e in uno
     // scrollback lungo non c'e' modo di dire dove finisce uno e comincia
     // l'altro. Mai in `--json`, che ha un solo lettore e non e' umano.
-    process.stdout.write(`${style.header('muffin doctor', paths().home)}\n${formatReport(report, style)}\n`);
+    process.stdout.write(
+      `${style.header('muffin doctor', paths().home)}\n${formatReport(report, style)}\n`,
+    );
   }
   return report.exitCode;
 }
@@ -845,7 +915,9 @@ function cmdRot(argv: string[]): number {
   if (sub === 'verify') {
     const outcome = verify(paths().home, mode);
     if (outcome.ok) {
-      process.stdout.write(`root of trust intact: ${outcome.fileCount} files, mode ${outcome.mode}\n`);
+      process.stdout.write(
+        `root of trust intact: ${outcome.fileCount} files, mode ${outcome.mode}\n`,
+      );
       return 0;
     }
     process.stderr.write(
@@ -868,7 +940,9 @@ function cmdRot(argv: string[]): number {
     // `Error: EACCES` with a stack. Named by the judge on PR #138.
     try {
       const manifest = seal(paths().home, '1', new Date());
-      process.stdout.write(`resealed ${manifest.files.length} files — the change is now yours and declared\n`);
+      process.stdout.write(
+        `resealed ${manifest.files.length} files — the change is now yours and declared\n`,
+      );
       return 0;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
@@ -999,7 +1073,9 @@ async function cmdMemory(argv: string[]): Promise<number> {
       ['--until', values.until, until],
     ] as const) {
       if (raw !== undefined && parsed === undefined) {
-        process.stderr.write(`${flag}: "${raw}" non è una data leggibile (usa 2026-05 o 2026-05-14)\n`);
+        process.stderr.write(
+          `${flag}: "${raw}" non è una data leggibile (usa 2026-05 o 2026-05-14)\n`,
+        );
         return 78;
       }
     }
@@ -1009,13 +1085,19 @@ async function cmdMemory(argv: string[]): Promise<number> {
     // (indistinguishable from amnesia) or today's facts (a prediction wearing a
     // memory's clothes) — `--history` resolves to `EVERY_INSTANT` here only to
     // keep that value out of the future check, which exempts it by name.
-    const windowError = checkTemporalWindow({ asOf: asOf ?? (values.history ? EVERY_INSTANT : undefined), since, until });
+    const windowError = checkTemporalWindow({
+      asOf: asOf ?? (values.history ? EVERY_INSTANT : undefined),
+      since,
+      until,
+    });
     if (windowError === 'empty-window') {
       process.stderr.write(`--since è dopo --until: quella finestra non può contenere niente\n`);
       return 78;
     }
     if (windowError === 'future-asof') {
-      process.stderr.write(`--as-of è nel futuro: posso raccontare solo cosa credevo, non cosa crederò\n`);
+      process.stderr.write(
+        `--as-of è nel futuro: posso raccontare solo cosa credevo, non cosa crederò\n`,
+      );
       return 78;
     }
     return cmdMemorySearch(home, query, {
@@ -1192,7 +1274,9 @@ async function cmdSecret(argv: string[]): Promise<number> {
   const [sub, ...rest] = argv;
   const name = rest.find((a) => !a.startsWith('-'));
   if (sub !== 'set' || !name) {
-    process.stderr.write(`usage: muffin secret set NAME  (value on stdin, or interactive prompt on a TTY)\n`);
+    process.stderr.write(
+      `usage: muffin secret set NAME  (value on stdin, or interactive prompt on a TTY)\n`,
+    );
     return 78;
   }
   // Value from the masked TTY prompt or from piped stdin — never from argv
@@ -1261,7 +1345,9 @@ function cmdTrace(argv: string[]): number {
   // the product hands you.
   const turnId = sub === 'turn' ? positionals[0] : undefined;
   if (sub === 'turn' && !turnId) {
-    process.stderr.write(`usage: muffin trace turn <id>   (l'id che il turno stampa: "trace c22cb4445952")\n`);
+    process.stderr.write(
+      `usage: muffin trace turn <id>   (l'id che il turno stampa: "trace c22cb4445952")\n`,
+    );
     return 78;
   }
 

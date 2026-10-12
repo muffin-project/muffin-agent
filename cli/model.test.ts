@@ -1,19 +1,31 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { verifyInferenceRoute } from '../agent/providers/verify.js';
+import { ChatGPTConnection } from '../core/config/chatgpt-oauth.js';
+import { inferenceProvider, loadConfig, saveConfig, writeSecret } from '../core/config/config.js';
+import { PROVIDERS, providerFor } from '../core/config/providers.js';
 import { runInit } from './init.js';
 import { cmdModel, fetchCatalogue, fetchEndpointTags, priceNote } from './model.js';
-import { loadConfig, saveConfig } from '../core/config/config.js';
-import { PROVIDERS, providerFor } from '../core/config/providers.js';
 
 const OR = PROVIDERS.openrouter;
+
+beforeEach(() => {
+  vi.stubEnv('XDG_CONFIG_HOME', mkdtempSync(join(tmpdir(), 'muffin-model-xdg-')));
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 /** La forma verificata sul vivo il 2026-08-27: prezzi in USD **per token**, stringhe. */
 const catalogo = (...m: [string, string, string][]): typeof globalThis.fetch =>
   (async () =>
     new Response(
-      JSON.stringify({ data: m.map(([id, prompt, completion]) => ({ id, pricing: { prompt, completion } })) }),
+      JSON.stringify({
+        data: m.map(([id, prompt, completion]) => ({ id, pricing: { prompt, completion } })),
+      }),
       { status: 200 },
     )) as unknown as typeof globalThis.fetch;
 
@@ -29,24 +41,36 @@ const raccogli = (): { out: string[]; sink: (l: string) => void } => {
 };
 
 describe('providerFor', () => {
+  it('keeps same-host proxy paths outside the canonical provider catalog', () => {
+    expect(providerFor({ kind: 'openai-compat', baseUrl: `${OR.baseUrl}/proxy` })).toBeNull();
+    expect(providerFor({ kind: 'openai-compat', baseUrl: `${OR.baseUrl}/` })?.id).toBe(
+      'openrouter',
+    );
+  });
   it("riconosce l'endpoint di OpenRouter", () => {
     expect(providerFor({ kind: 'openai-compat', baseUrl: OR.baseUrl })?.id).toBe('openrouter');
   });
 
   /** Per hostname e non per sottostringa: `openrouter.ai.evil.tld` contiene «openrouter» e non lo è. */
   it('non si fa ingannare da un hostname che contiene il nome', () => {
-    expect(providerFor({ kind: 'openai-compat', baseUrl: 'https://openrouter.ai.evil.tld/api/v1' })).toBeNull();
+    expect(
+      providerFor({ kind: 'openai-compat', baseUrl: 'https://openrouter.ai.evil.tld/api/v1' }),
+    ).toBeNull();
   });
 
-  it('un endpoint locale non è nel catalogo, e non è un errore', () => {
+  it('riconosce il provider Anthropic nativo e mantiene fuori catalogo un endpoint locale', () => {
     expect(providerFor({ kind: 'openai-compat', baseUrl: 'http://127.0.0.1:11434/v1' })).toBeNull();
-    expect(providerFor({ kind: 'anthropic' })).toBeNull();
+    expect(providerFor({ kind: 'anthropic' })?.id).toBe('anthropic');
   });
 });
 
 describe('fetchCatalogue', () => {
   it('converte i prezzi da per-token a per-MTok, che è l unità di pricing.ts', async () => {
-    const [m] = await fetchCatalogue(OR, undefined, catalogo(['qwen/qwen3.8-27b', '0.000000425', '0.00000255']));
+    const [m] = await fetchCatalogue(
+      OR,
+      undefined,
+      catalogo(['qwen/qwen3.8-27b', '0.000000425', '0.00000255']),
+    );
     expect(m!.inputPerMTok).toBeCloseTo(0.425, 6);
     expect(m!.outputPerMTok).toBeCloseTo(2.55, 6);
   });
@@ -56,6 +80,21 @@ describe('fetchCatalogue', () => {
     expect(m!.id).toBe('strano/modello');
     expect(Number.isNaN(m!.inputPerMTok)).toBe(true);
     expect(priceNote(m!, OR.baseUrl)).toBeNull();
+  });
+
+  it('usa la paginazione e gli header nativi Anthropic, senza inventare prezzi', async () => {
+    const requests: { url: string; headers: Headers }[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      requests.push({ url: String(input), headers: new Headers(init?.headers) });
+      return new Response(JSON.stringify({ data: [{ id: 'claude-test' }], has_more: false }), {
+        status: 200,
+      });
+    }) as typeof globalThis.fetch;
+    const [model] = await fetchCatalogue(PROVIDERS.anthropic, 'synthetic-anthropic-key', fetchImpl);
+    expect(requests[0]?.url).toContain('/v1/models?limit=1000');
+    expect(requests[0]?.headers.get('x-api-key')).toBe('synthetic-anthropic-key');
+    expect(requests[0]?.headers.get('anthropic-version')).toBe('2023-06-01');
+    expect(Number.isNaN(model?.inputPerMTok)).toBe(true);
   });
 });
 
@@ -81,7 +120,10 @@ describe('priceNote', () => {
     // sopra il tetto di famiglia (2/6) che la tabella corretta usa adesso, ed
     // è quello che serve per provare che il ramo "nomina" è ancora vivo dopo
     // la correzione dei prezzi.
-    const nota = priceNote({ id: 'qwen/qwen3.9-ipotetico', inputPerMTok: 2.5, outputPerMTok: 7 }, OR.baseUrl);
+    const nota = priceNote(
+      { id: 'qwen/qwen3.9-ipotetico', inputPerMTok: 2.5, outputPerMTok: 7 },
+      OR.baseUrl,
+    );
     expect(nota).toContain('2.5');
     expect(nota).toContain('2'); // il prezzo fatturato dalla tabella corretta
     expect(nota).toContain('rot/budgets.json');
@@ -98,11 +140,21 @@ describe('priceNote', () => {
 
   it('tace sulla sovrastima: il tetto che scatta presto è la direzione sicura', () => {
     // claude-sonnet-5 costa 2/10 e la tabella lo fattura 3/15.
-    expect(priceNote({ id: 'anthropic/claude-sonnet-5', inputPerMTok: 2, outputPerMTok: 10 }, OR.baseUrl)).toBeNull();
+    expect(
+      priceNote(
+        { id: 'anthropic/claude-sonnet-5', inputPerMTok: 2, outputPerMTok: 10 },
+        OR.baseUrl,
+      ),
+    ).toBeNull();
   });
 
   it('e su un modello locale, che non si fattura affatto', () => {
-    expect(priceNote({ id: 'qwen3-embedding', inputPerMTok: 9, outputPerMTok: 9 }, 'http://127.0.0.1:11434')).toBeNull();
+    expect(
+      priceNote(
+        { id: 'qwen3-embedding', inputPerMTok: 9, outputPerMTok: 9 },
+        'http://127.0.0.1:11434',
+      ),
+    ).toBeNull();
   });
 });
 
@@ -110,7 +162,10 @@ describe('muffin model', () => {
   it('senza argomenti mostra le tre corsie e il provider, distinguendo un router dal modello servito', async () => {
     const h = home();
     expect(
-      await cmdModel(h, ['openrouter/free'], { out: () => {}, fetchImpl: catalogo(['openrouter/free', '0', '0']) }),
+      await cmdModel(h, ['openrouter/free'], {
+        out: () => {},
+        fetchImpl: catalogo(['openrouter/free', '0', '0']),
+      }),
     ).toBe(0);
     const { out, sink } = raccogli();
     expect(await cmdModel(h, [], { out: sink })).toBe(0);
@@ -119,7 +174,7 @@ describe('muffin model', () => {
     expect(testo).toMatch(/^main /m);
     expect(testo).toMatch(/^light /m);
     expect(testo).toMatch(/^embed /m);
-    expect(testo).toContain('openrouter/free — fatturato $0/$0 per MTok');
+    expect(testo).toContain('openrouter/free · OpenRouter — $0/$0 per MTok');
     expect(testo).toContain('router gratuito (il modello servito può cambiare per richiesta)');
   });
 
@@ -162,6 +217,279 @@ describe('muffin model', () => {
     expect(c.models.main).toBe(mainPrima);
   });
 
+  it('cambia il provider e il modello di main senza toccare il provider né il modello light', async () => {
+    const h = home();
+    writeSecret('anthropic_api_key', 'synthetic-anthropic-key', h, 'home');
+    const before = loadConfig(h);
+    const fetchImpl = (async (input: string | URL | Request) => {
+      expect(String(input)).toContain('/v1/models?limit=1000');
+      return new Response(JSON.stringify({ data: [{ id: 'claude-test' }], has_more: false }), {
+        status: 200,
+      });
+    }) as typeof globalThis.fetch;
+    expect(
+      await cmdModel(h, ['main', '--provider', 'anthropic', 'claude-test'], {
+        out: () => {},
+        fetchImpl,
+      }),
+    ).toBe(0);
+    const after = loadConfig(h);
+    expect(after.models).toEqual({ ...before.models, main: 'claude-test' });
+    expect(inferenceProvider(after, 'main')).toMatchObject({
+      kind: 'anthropic',
+      apiKeyRef: 'secret://anthropic_api_key',
+    });
+    expect(inferenceProvider(after, 'light')).toEqual(inferenceProvider(before, 'light'));
+  });
+
+  it('accepts the provider shortcut without spelling main', async () => {
+    const h = home();
+    writeSecret('anthropic_api_key', 'synthetic-anthropic-key', h, 'home');
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ data: [{ id: 'claude-test' }] }), {
+        status: 200,
+      })) as typeof globalThis.fetch;
+    expect(
+      await cmdModel(h, ['--provider', 'anthropic', 'claude-test'], { out: () => {}, fetchImpl }),
+    ).toBe(0);
+    expect(inferenceProvider(loadConfig(h), 'main').kind).toBe('anthropic');
+  });
+
+  it('does not assign OpenRouter when its inference secret is missing, even though its catalog is public', async () => {
+    const h = mkdtempSync(join(tmpdir(), 'muffin-model-no-openrouter-key-'));
+    runInit({
+      home: h,
+      provider: 'anthropic',
+      baseUrl: PROVIDERS.anthropic.baseUrl,
+      apiKey: 'synthetic-anthropic-key',
+    });
+    const before = loadConfig(h);
+    const fetchImpl = vi.fn<typeof globalThis.fetch>();
+    const out: string[] = [];
+    expect(
+      await cmdModel(h, ['--provider', 'openrouter', 'openai/gpt-test'], {
+        out: (line) => out.push(line),
+        fetchImpl,
+      }),
+    ).toBe(1);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(loadConfig(h)).toEqual(before);
+    expect(out.join('\n')).toContain('saved key reference');
+  });
+
+  it('keeps a same-host OpenAI-compatible proxy when provider is left blank', async () => {
+    const h = home();
+    const current = loadConfig(h);
+    const provider = {
+      kind: 'openai-compat' as const,
+      baseUrl: `${OR.baseUrl}/proxy`,
+      apiKeyRef: 'secret://proxy_fixture',
+    };
+    writeSecret('proxy_fixture', 'proxy-canary', h, 'home');
+    saveConfig({ ...current, provider }, h);
+    const answers = ['main', '', 'proxy-model'];
+    const fetchImpl: typeof globalThis.fetch = async (input, init) => {
+      expect(String(input)).toBe(`${provider.baseUrl}/models`);
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer proxy-canary');
+      return Response.json({ data: [{ id: 'proxy-model' }] });
+    };
+    expect(
+      await cmdModel(h, ['--select'], {
+        out: () => {},
+        interactive: true,
+        ask: async () => answers.shift(),
+        fetchImpl,
+      }),
+    ).toBe(0);
+    expect(loadConfig(h).provider).toEqual(provider);
+    expect(loadConfig(h).lightProvider).toEqual(current.lightProvider);
+  });
+
+  it('keeps a custom Anthropic-compatible connection when provider is left blank', async () => {
+    const h = home();
+    const current = loadConfig(h);
+    const provider = {
+      kind: 'anthropic' as const,
+      baseUrl: 'https://proxy.anthropic.example/v1',
+      apiKeyRef: 'secret://proxy_anthropic_key',
+    };
+    writeSecret('proxy_anthropic_key', 'synthetic-proxy-key', h, 'home');
+    saveConfig({ ...current, provider }, h);
+    const answers = ['main', '', 'proxy-model'];
+    const requests: { url: string; authorization: string | null }[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      requests.push({
+        url: String(input),
+        authorization: new Headers(init?.headers).get('authorization'),
+      });
+      return new Response(JSON.stringify({ data: [{ id: 'proxy-model' }] }), { status: 200 });
+    }) as typeof globalThis.fetch;
+    expect(
+      await cmdModel(h, ['--select'], {
+        out: () => {},
+        interactive: true,
+        ask: async () => answers.shift(),
+        fetchImpl,
+      }),
+    ).toBe(0);
+    const after = loadConfig(h);
+    expect(after.provider).toEqual(provider);
+    expect(after.models.main).toBe('proxy-model');
+    expect(after.lightProvider).toEqual(current.lightProvider);
+    expect(requests).toEqual([]);
+  });
+
+  it('preserves the exact key reference when explicitly reselecting the same native Anthropic endpoint', async () => {
+    const h = home();
+    const current = loadConfig(h);
+    const provider = {
+      kind: 'anthropic' as const,
+      baseUrl: PROVIDERS.anthropic.baseUrl,
+      apiKeyRef: 'secret://owner_anthropic_key',
+    };
+    writeSecret('owner_anthropic_key', 'synthetic-owner-key', h, 'home');
+    saveConfig({ ...current, provider }, h);
+    const requests: { url: string; apiKey: string | null }[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      requests.push({
+        url: String(input),
+        apiKey: new Headers(init?.headers).get('x-api-key'),
+      });
+      return new Response(JSON.stringify({ data: [{ id: 'claude-test' }], has_more: false }), {
+        status: 200,
+      });
+    }) as typeof globalThis.fetch;
+    expect(
+      await cmdModel(h, ['--provider', 'anthropic', 'claude-test'], {
+        out: () => {},
+        fetchImpl,
+      }),
+    ).toBe(0);
+    expect(requests).toEqual([
+      {
+        url: 'https://api.anthropic.com/v1/models?limit=1000',
+        apiKey: 'synthetic-owner-key',
+      },
+    ]);
+    expect(inferenceProvider(loadConfig(h), 'main')).toEqual(provider);
+  });
+
+  it('connects a custom OpenAI-compatible endpoint through the same selector', async () => {
+    const h = home();
+    const before = loadConfig(h);
+    writeSecret('custom_proxy_test', 'synthetic-custom-key', h, 'home');
+    const sentAuth: string[] = [];
+    const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => {
+      sentAuth.push(new Headers(init?.headers).get('authorization') ?? '');
+      return new Response(JSON.stringify({ data: [{ id: 'local-model' }] }), {
+        status: 200,
+      });
+    }) as typeof globalThis.fetch;
+    expect(
+      await cmdModel(
+        h,
+        ['--endpoint', 'http://127.0.0.1:1234/v1', '--key-ref', 'custom_proxy_test', 'local-model'],
+        {
+          out: () => {},
+          fetchImpl,
+        },
+      ),
+    ).toBe(0);
+    const after = loadConfig(h);
+    expect(after.provider).toMatchObject({
+      kind: 'openai-compat',
+      baseUrl: 'http://127.0.0.1:1234/v1',
+    });
+    expect(after.models.main).toBe('local-model');
+    expect(after.lightProvider).toEqual(before.lightProvider);
+    expect(sentAuth).toEqual(['Bearer synthetic-custom-key']);
+    expect(sentAuth).not.toContain('Bearer sk-or-fake');
+  });
+
+  it('never sends the prior router credential when a custom host is selected without its own saved key', async () => {
+    const h = home();
+    const before = loadConfig(h);
+    const out: string[] = [];
+    const fetchImpl = vi.fn<typeof globalThis.fetch>();
+    expect(
+      await cmdModel(h, ['--endpoint', 'https://proxy.example/v1', 'proxy-model'], {
+        out: (line) => out.push(line),
+        fetchImpl,
+      }),
+    ).toBe(1);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(loadConfig(h)).toEqual(before);
+    expect(out.join(' ')).toContain('--key-ref');
+  });
+
+  it('signs in to ChatGPT from the terminal menu before listing and verifying a model', async () => {
+    const h = home();
+    const before = loadConfig(h);
+    const connection = new ChatGPTConnection(h);
+    vi.spyOn(connection, 'session').mockResolvedValue(null);
+    vi.spyOn(connection, 'signIn').mockResolvedValue({
+      profileId: 'synthetic-profile',
+      connected: true,
+      scopes: ['chatgpt.tokens.use.direct'],
+    });
+    vi.spyOn(connection, 'listModels').mockResolvedValue([
+      { slug: 'gpt-test', displayName: 'Test' },
+    ]);
+    const verify = vi.fn<typeof verifyInferenceRoute>(async () => ({
+      status: 'working',
+      provider: 'openai-chatgpt',
+      requestedModel: 'gpt-test',
+      resolvedModel: 'gpt-test',
+      capability: { completion: 'pass', toolCall: 'pass' },
+      diagnostic: 'synthetic verification',
+      observedAt: '2026-10-12T00:00:00Z',
+      durationMs: 1,
+    }));
+    const answers = ['main', 'chatgpt', 'gpt-test'];
+    expect(
+      await cmdModel(h, ['--select'], {
+        out: () => {},
+        interactive: true,
+        ask: async () => answers.shift(),
+        chatgpt: connection,
+        verify,
+      }),
+    ).toBe(0);
+    const after = loadConfig(h);
+    expect(connection.signIn).toHaveBeenCalledTimes(1);
+    expect(inferenceProvider(after, 'main').kind).toBe('openai-chatgpt');
+    expect(inferenceProvider(after, 'light')).toEqual(inferenceProvider(before, 'light'));
+    expect(after.models.light).toBe(before.models.light);
+  });
+
+  it('keeps model and provider assignment intact when the ChatGPT route fails verification', async () => {
+    const h = home();
+    const before = loadConfig(h);
+    const connection = new ChatGPTConnection(h);
+    vi.spyOn(connection, 'listModels').mockResolvedValue([
+      { slug: 'gpt-test', displayName: 'Test' },
+    ]);
+    const verify = vi.fn<typeof verifyInferenceRoute>(async () => ({
+      status: 'provider_error' as const,
+      provider: 'openai-chatgpt' as const,
+      requestedModel: 'gpt-test',
+      capability: { completion: 'fail' as const, toolCall: 'fail' as const },
+      diagnostic: 'synthetic route rejection',
+      observedAt: '2026-10-12T00:00:00Z',
+      durationMs: 1,
+    }));
+    expect(
+      await cmdModel(h, ['light', '--provider', 'chatgpt', 'gpt-test'], {
+        out: () => {},
+        chatgpt: connection,
+        verify,
+      }),
+    ).toBe(1);
+    expect(loadConfig(h)).toEqual(before);
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(verify.mock.calls[0]?.[0]).toMatchObject({ lane: 'light', thinking: 'low' });
+  });
+
   /**
    * Irraggiungibile non è inesistente: rifiutare qui bloccherebbe un owner
    * offline su una scelta perfettamente valida. Si scrive, e si dice.
@@ -178,6 +506,55 @@ describe('muffin model', () => {
     expect(code).toBe(0);
     expect(loadConfig(h).models.main).toBe('qualcosa/di-nuovo');
     expect(out.join('\n')).toContain('NON verificato');
+  });
+
+  it('rifiuta i redirect del catalogo senza inoltrare la chiave né modificare la configurazione', async () => {
+    const h = home();
+    writeSecret('anthropic_api_key', 'synthetic-anthropic-key', h, 'home');
+    const before = loadConfig(h);
+    const requests: {
+      url: string;
+      apiKey: string | null;
+      redirect: RequestInit['redirect'];
+    }[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      requests.push({
+        url: String(input),
+        apiKey: new Headers(init?.headers).get('x-api-key'),
+        redirect: init?.redirect,
+      });
+      return new Response(null, {
+        status: 302,
+        headers: { location: 'https://attacker.example/steal' },
+      });
+    }) as typeof globalThis.fetch;
+    const out: string[] = [];
+    expect(
+      await cmdModel(h, ['--provider', 'anthropic', 'claude-test'], {
+        out: (line) => out.push(line),
+        fetchImpl,
+      }),
+    ).toBe(1);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.url).toContain('https://api.anthropic.com/');
+    expect(requests[0]?.redirect).toBe('manual');
+    expect(requests[0]?.apiKey).toBe('synthetic-anthropic-key');
+    expect(loadConfig(h)).toEqual(before);
+    expect(out.join('\n')).toContain('redirect HTTP 302');
+    expect(out.join('\n')).toContain('Configurazione preservata');
+  });
+
+  it.each([
+    ['duplicate provider flags', ['--provider', 'anthropic', '--provider', 'chatgpt', 'model']],
+    ['surplus model arguments', ['model', 'ignored-extra']],
+    ['provider option on embed lane', ['embed', '--provider', 'anthropic', 'model']],
+  ])('rejects %s without changing configuration', async (_label, argv) => {
+    const h = home();
+    const before = loadConfig(h);
+    const out: string[] = [];
+    expect(await cmdModel(h, argv, { out: (line) => out.push(line) })).toBe(2);
+    expect(loadConfig(h)).toEqual(before);
+    expect(out.length).toBeGreaterThan(0);
   });
 
   /**
@@ -217,7 +594,10 @@ describe('muffin model', () => {
     const { out, sink } = raccogli();
     await cmdModel(home(), ['--list', 'qwen'], {
       out: sink,
-      fetchImpl: catalogo(['qwen/qwen3.8-27b', '0.000000425', '0.00000255'], ['anthropic/claude-sonnet-5', '0.000002', '0.00001']),
+      fetchImpl: catalogo(
+        ['qwen/qwen3.8-27b', '0.000000425', '0.00000255'],
+        ['anthropic/claude-sonnet-5', '0.000002', '0.00001'],
+      ),
     });
     expect(out.join('\n')).toContain('qwen/qwen3.8-27b');
     expect(out.join('\n')).not.toContain('claude-sonnet-5');
@@ -225,31 +605,49 @@ describe('muffin model', () => {
 });
 
 /** Rete finta instradata per URL: catalogo su /models, tag su /models/:author/:slug/endpoints. */
-const rete = (modelli: [string, string, string][], tag: string[] | 'throw'): typeof globalThis.fetch =>
+const rete = (
+  modelli: [string, string, string][],
+  tag: string[] | 'throw',
+): typeof globalThis.fetch =>
   (async (url: unknown) => {
     if (String(url).includes('/endpoints')) {
       if (tag === 'throw') throw new Error('fetch failed');
-      return new Response(JSON.stringify({ data: { endpoints: tag.map((t) => ({ tag: t, provider_name: t })) } }), {
-        status: 200,
-      });
+      return new Response(
+        JSON.stringify({ data: { endpoints: tag.map((t) => ({ tag: t, provider_name: t })) } }),
+        {
+          status: 200,
+        },
+      );
     }
     return new Response(
-      JSON.stringify({ data: modelli.map(([id, prompt, completion]) => ({ id, pricing: { prompt, completion } })) }),
+      JSON.stringify({
+        data: modelli.map(([id, prompt, completion]) => ({ id, pricing: { prompt, completion } })),
+      }),
       { status: 200 },
     );
   }) as unknown as typeof globalThis.fetch;
 
 describe('fetchEndpointTags', () => {
   it('legge tag e nomi dai endpoint, minuscoli e senza doppioni', async () => {
-    const tags = await fetchEndpointTags(OR, 'google/gemma-4-31b-it', undefined, rete([], ['Google', 'google', 'Alibaba']));
+    const tags = await fetchEndpointTags(
+      OR,
+      'google/gemma-4-31b-it',
+      undefined,
+      rete([], ['Google', 'google', 'Alibaba']),
+    );
     expect(tags).toEqual(['google', 'alibaba']);
   });
 
   it('ignoto quando non si sa: offline, 401, forma diversa, slug senza autore', async () => {
-    expect(await fetchEndpointTags(OR, 'google/gemma-4-31b-it', undefined, rete([], 'throw'))).toBeNull();
-    const ko = (() => Promise.resolve(new Response('{}', { status: 401 }))) as unknown as typeof globalThis.fetch;
+    expect(
+      await fetchEndpointTags(OR, 'google/gemma-4-31b-it', undefined, rete([], 'throw')),
+    ).toBeNull();
+    const ko = (() =>
+      Promise.resolve(new Response('{}', { status: 401 }))) as unknown as typeof globalThis.fetch;
     expect(await fetchEndpointTags(OR, 'google/gemma-4-31b-it', undefined, ko)).toBeNull();
-    expect(await fetchEndpointTags(OR, 'google/gemma-4-31b-it', undefined, catalogo(['x', '0', '0']))).toBeNull();
+    expect(
+      await fetchEndpointTags(OR, 'google/gemma-4-31b-it', undefined, catalogo(['x', '0', '0'])),
+    ).toBeNull();
     expect(await fetchEndpointTags(OR, 'llama3', undefined, rete([], ['x']))).toBeNull();
   });
 });
@@ -338,9 +736,10 @@ describe('muffin model su un endpoint compat generico (issue #763)', () => {
   }
 
   /** `/models` finto che registra ogni richiesta: URL e Authorization. */
-  function modelli(
-    risposta: { status?: number; body?: unknown; raw?: string } | 'throw',
-  ): { fetchImpl: typeof globalThis.fetch; viste: { url: string; auth: string | null }[] } {
+  function modelli(risposta: { status?: number; body?: unknown; raw?: string } | 'throw'): {
+    fetchImpl: typeof globalThis.fetch;
+    viste: { url: string; auth: string | null }[];
+  } {
     const viste: { url: string; auth: string | null }[] = [];
     const fetchImpl = (async (url: unknown, init?: RequestInit) => {
       viste.push({ url: String(url), auth: new Headers(init?.headers).get('authorization') });
@@ -351,13 +750,19 @@ describe('muffin model su un endpoint compat generico (issue #763)', () => {
     return { fetchImpl, viste };
   }
 
-  const lista = (...ids: string[]) => ({ body: { object: 'list', data: ids.map((id) => ({ id, object: 'model' })) } });
+  const lista = (...ids: string[]) => ({
+    body: { object: 'list', data: ids.map((id) => ({ id, object: 'model' })) },
+  });
 
   it('uno slug elencato: lo dice prima di scriverlo, chiedendo /models con la credenziale salvata', async () => {
     const h = genericHome();
     const rete = modelli(lista('qwen3.6-35b'));
     const { out, sink } = raccogli();
-    const code = await cmdModel(h, ['qwen3.6-35b'], { out: sink, fetchImpl: rete.fetchImpl, gatewayStatus: async () => null });
+    const code = await cmdModel(h, ['qwen3.6-35b'], {
+      out: sink,
+      fetchImpl: rete.fetchImpl,
+      gatewayStatus: async () => null,
+    });
     expect(code).toBe(0);
     expect(loadConfig(h).models.main).toBe('qwen3.6-35b');
     expect(rete.viste).toEqual([{ url: `${GENERIC}/models`, auth: `Bearer ${CHIAVE}` }]);
@@ -383,10 +788,18 @@ describe('muffin model su un endpoint compat generico (issue #763)', () => {
   });
 
   it('rete giù, 401 o risposta malformata: scrive e dice NON verificato, mai «non esiste»', async () => {
-    for (const risposta of ['throw', { status: 401, body: { error: 'Invalid API Key' } }, { raw: '<html>' }] as const) {
+    for (const risposta of [
+      'throw',
+      { status: 401, body: { error: 'Invalid API Key' } },
+      { raw: '<html>' },
+    ] as const) {
       const h = genericHome();
       const { out, sink } = raccogli();
-      const code = await cmdModel(h, ['qualcosa'], { out: sink, fetchImpl: modelli(risposta).fetchImpl, gatewayStatus: async () => null });
+      const code = await cmdModel(h, ['qualcosa'], {
+        out: sink,
+        fetchImpl: modelli(risposta).fetchImpl,
+        gatewayStatus: async () => null,
+      });
       expect(code).toBe(0);
       expect(loadConfig(h).models.main).toBe('qualcosa');
       const testo = out.join('\n');
@@ -399,7 +812,11 @@ describe('muffin model su un endpoint compat generico (issue #763)', () => {
     const h = genericHome();
     const mainPrima = loadConfig(h).models.main;
     const { out, sink } = raccogli();
-    await cmdModel(h, ['light', 'qwen3.6-35b'], { out: sink, fetchImpl: modelli(lista('qwen3.6-35b')).fetchImpl, gatewayStatus: async () => null });
+    await cmdModel(h, ['light', 'qwen3.6-35b'], {
+      out: sink,
+      fetchImpl: modelli(lista('qwen3.6-35b')).fetchImpl,
+      gatewayStatus: async () => null,
+    });
     const c = loadConfig(h);
     expect(c.models.light).toBe('qwen3.6-35b');
     expect(c.models.main).toBe(mainPrima);
@@ -419,7 +836,10 @@ describe('muffin model su un endpoint compat generico (issue #763)', () => {
 
   it('--list su un endpoint che non risponde fallisce dicendo perché', async () => {
     const { out, sink } = raccogli();
-    const code = await cmdModel(genericHome(), ['--list'], { out: sink, fetchImpl: modelli('throw').fetchImpl });
+    const code = await cmdModel(genericHome(), ['--list'], {
+      out: sink,
+      fetchImpl: modelli('throw').fetchImpl,
+    });
     expect(code).toBe(1);
     expect(out.join('\n')).toContain('non verificabile');
   });
@@ -428,7 +848,11 @@ describe('muffin model su un endpoint compat generico (issue #763)', () => {
     it('uno: lo scrive su main', async () => {
       const h = genericHome();
       const { out, sink } = raccogli();
-      const code = await cmdModel(h, ['--served'], { out: sink, fetchImpl: modelli(lista('qwen3.6-35b')).fetchImpl, gatewayStatus: async () => null });
+      const code = await cmdModel(h, ['--served'], {
+        out: sink,
+        fetchImpl: modelli(lista('qwen3.6-35b')).fetchImpl,
+        gatewayStatus: async () => null,
+      });
       expect(code).toBe(0);
       expect(loadConfig(h).models.main).toBe('qwen3.6-35b');
       expect(out.join('\n')).toContain('qwen3.6-35b');
@@ -449,7 +873,10 @@ describe('muffin model su un endpoint compat generico (issue #763)', () => {
       const h = genericHome();
       const prima = loadConfig(h).models.main;
       const { out, sink } = raccogli();
-      const code = await cmdModel(h, ['--served'], { out: sink, fetchImpl: modelli(lista()).fetchImpl });
+      const code = await cmdModel(h, ['--served'], {
+        out: sink,
+        fetchImpl: modelli(lista()).fetchImpl,
+      });
       expect(code).toBe(1);
       expect(loadConfig(h).models.main).toBe(prima);
       expect(out.join('\n')).toContain('nessun modello');
@@ -459,7 +886,10 @@ describe('muffin model su un endpoint compat generico (issue #763)', () => {
       const h = genericHome();
       const prima = loadConfig(h).models.main;
       const { out, sink } = raccogli();
-      const code = await cmdModel(h, ['--served'], { out: sink, fetchImpl: modelli(lista('a-model', 'b-model')).fetchImpl });
+      const code = await cmdModel(h, ['--served'], {
+        out: sink,
+        fetchImpl: modelli(lista('a-model', 'b-model')).fetchImpl,
+      });
       expect(code).toBe(1);
       expect(loadConfig(h).models.main).toBe(prima);
       expect(out.join('\n')).toContain('a-model');
@@ -469,7 +899,10 @@ describe('muffin model su un endpoint compat generico (issue #763)', () => {
     it('centinaia, da un proxy con route wildcard: anteprima breve, non un muro di testo', async () => {
       const ids = Array.from({ length: 200 }, (_, i) => `proxy/model-${String(i)}`);
       const { out, sink } = raccogli();
-      const code = await cmdModel(genericHome(), ['--served'], { out: sink, fetchImpl: modelli(lista(...ids)).fetchImpl });
+      const code = await cmdModel(genericHome(), ['--served'], {
+        out: sink,
+        fetchImpl: modelli(lista(...ids)).fetchImpl,
+      });
       expect(code).toBe(1);
       const testo = out.join('\n');
       expect(testo).toContain('200 modelli');
@@ -481,7 +914,10 @@ describe('muffin model su un endpoint compat generico (issue #763)', () => {
     it('endpoint non verificabile: non indovina, niente scritto', async () => {
       const h = genericHome();
       const prima = loadConfig(h).models.main;
-      const code = await cmdModel(h, ['--served'], { out: () => {}, fetchImpl: modelli('throw').fetchImpl });
+      const code = await cmdModel(h, ['--served'], {
+        out: () => {},
+        fetchImpl: modelli('throw').fetchImpl,
+      });
       expect(code).toBe(1);
       expect(loadConfig(h).models.main).toBe(prima);
     });
@@ -490,7 +926,10 @@ describe('muffin model su un endpoint compat generico (issue #763)', () => {
       const h = home();
       const prima = loadConfig(h).models.main;
       const { out, sink } = raccogli();
-      const code = await cmdModel(h, ['--served'], { out: sink, fetchImpl: catalogo(['x/y', '0', '0']) });
+      const code = await cmdModel(h, ['--served'], {
+        out: sink,
+        fetchImpl: catalogo(['x/y', '0', '0']),
+      });
       expect(code).toBe(2);
       expect(loadConfig(h).models.main).toBe(prima);
       expect(out.join('\n')).toContain('--served');
@@ -506,7 +945,10 @@ describe('muffin model distingue persistito da attivo (issue #500)', () => {
     return h;
   };
   const rete = catalogo(['google/gemma-4-31b-it', '0', '0']);
-  const vivo = (main: string, light: string) => async () => ({ pid: 4242, models: { main, light } });
+  const vivo = (main: string, light: string) => async () => ({
+    pid: 4242,
+    models: { main, light },
+  });
 
   it('senza gateway: vale dal prossimo avvio', async () => {
     const { out, sink } = raccogli();

@@ -328,6 +328,16 @@ Pairing establishes Node identity; it does not grant every capability. See
 
 ## 8. Providers are replaceable compute and privileged data recipients
 
+Main and light have independent provider connections and model selections.
+Legacy Homes initially retain their existing connection on both lanes; changing
+one lane preserves the other. Runtime construction, reload, verification,
+diagnostics and spend attribution use the selected lane's connection. The
+existing secret store owns credentials; configuration contains references.
+The guided selector and CLI/conversational shortcuts share the model-selection
+path. Light remains the current memory/multimodal role, distinct from the
+optional System One judgment provider. This does not introduce a new cognitive
+scheduler or automatic provider fallback.
+
 The `openai-chatgpt` adapter uses explicitly authorized ChatGPT plan OAuth and
 the public Responses API. It preserves Muffin's loop and kernel; runtime and
 online verification share provider construction. Credentials and host/profile

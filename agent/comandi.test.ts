@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runInit } from '../cli/init.js';
 import { loadConfig } from '../core/config/config.js';
-import { COMANDI, aiuto, eseguiComando, type ContestoComandi, type Controlli } from './comandi.js';
 import type { DelegationMode, LevaDelega } from '../core/runtime/delega.js';
+import { aiuto, COMANDI, type ContestoComandi, type Controlli, eseguiComando } from './comandi.js';
 
 /**
  * Le quattro leve di ADR-0054, con controlli finti: cosa risponde ogni
@@ -17,7 +17,10 @@ function contesto(controlli?: Controlli): ContestoComandi {
     home: '/nessuno',
     config: {} as ContestoComandi['config'],
     profilo: { name: 'test', thinking: 'unset' },
-    budget: { status: () => ({ monthUsd: 0, monthlyCapUsd: 1, exhausted: false }), tenantTodayUsd: () => 0 },
+    budget: {
+      status: () => ({ monthUsd: 0, monthlyCapUsd: 1, exhausted: false }),
+      tenantTodayUsd: () => 0,
+    },
     sessionId: 's',
     verbosity: 'normale',
     puoiUscire: false,
@@ -77,7 +80,7 @@ describe('/stop', () => {
   it('senza leve — muffin run, un test — dice che qui non puo', async () => {
     const e = await eseguiComando('/stop', contesto());
     expect(e.sconosciuto).toBeUndefined();
-    expect(e.testo).toContain('non c\'è');
+    expect(e.testo).toContain("non c'è");
   });
 });
 
@@ -160,12 +163,12 @@ describe('/yolo', () => {
   it('senza lavoro attivo non delega niente e lo dice', async () => {
     const d = delegaFinta({ lavoro: null });
     const e = await eseguiComando('/yolo', contestoConDelega(d.leva));
-    expect(e.testo).toContain('non c\'è un lavoro in corso');
+    expect(e.testo).toContain("non c'è un lavoro in corso");
     expect(d.messe).toEqual([]);
   });
   it('senza leve dice che qui non può', async () => {
     const e = await eseguiComando('/yolo', contesto());
-    expect(e.testo).toContain('non c\'è un lavoro da delegare');
+    expect(e.testo).toContain("non c'è un lavoro da delegare");
   });
   it('/yolo off torna in manuale', async () => {
     const d = delegaFinta({ modo: 'yolo' });
@@ -223,7 +226,9 @@ describe('/pause e /resume', () => {
     const l = leve({ pausa: true });
     expect((await eseguiComando('/resume', contesto(l.controlli))).testo).toContain('ripreso');
     expect(l.inPausa()).toBe(false);
-    expect((await eseguiComando('/resume', contesto(l.controlli))).testo).toContain('non ero in pausa');
+    expect((await eseguiComando('/resume', contesto(l.controlli))).testo).toContain(
+      'non ero in pausa',
+    );
   });
 });
 
@@ -239,7 +244,10 @@ function contestoConHome(home: string): ContestoComandi {
     home,
     config,
     profilo: { name: 'test', thinking: 'unset' },
-    budget: { status: () => ({ monthUsd: 0, monthlyCapUsd: 1, exhausted: false }), tenantTodayUsd: () => 0 },
+    budget: {
+      status: () => ({ monthUsd: 0, monthlyCapUsd: 1, exhausted: false }),
+      tenantTodayUsd: () => 0,
+    },
     sessionId: 's',
     verbosity: 'normale',
     puoiUscire: false,
@@ -255,11 +263,27 @@ describe('/model', () => {
     const dir = mkdtempSync(join(tmpdir(), 'muffin-comandi-model-'));
     runInit({ home: dir, apiKey: 'sk-fixture' });
     const ctx = contestoConHome(dir);
-    ctx.model = async () => undefined;
+    ctx.model = async () => 0;
 
     const result = await eseguiComando('/model main example/model', ctx);
 
     expect(result.testo).toContain('dal prossimo turno');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('non dichiara applicata una scelta che la CLI ha rifiutato', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-comandi-model-failed-'));
+    runInit({ home: dir, apiKey: 'sk-fixture' });
+    const ctx = contestoConHome(dir);
+    ctx.model = async (_argv, out) => {
+      out('Model verification failed. Configuration preserved.');
+      return 1;
+    };
+
+    const result = await eseguiComando('/model light --provider chatgpt gpt-test', ctx);
+
+    expect(result.testo).toContain('Configuration preserved');
+    expect(result.testo).not.toContain('dal prossimo turno');
     rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -296,7 +320,7 @@ describe('/config', () => {
     runInit({ home: dir, apiKey: 'sk-ant-fixture' });
     const before = loadConfig(dir);
     const e = await eseguiComando('/config set rot.mode hardened', contestoConHome(dir));
-    expect(e.testo).toContain('non è un\'impostazione modificabile');
+    expect(e.testo).toContain("non è un'impostazione modificabile");
     expect(loadConfig(dir)).toEqual(before);
     rmSync(dir, { recursive: true, force: true });
   });

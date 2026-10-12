@@ -1,6 +1,6 @@
-import type { ImageBlock } from '../../agent/providers/types.js';
 import { loadImage } from '../../agent/images.js';
 import { immagineAccettata } from '../../agent/providers/modalita.js';
+import type { ImageBlock } from '../../agent/providers/types.js';
 
 /**
  * Il bivio delle immagini, in un posto solo — gemello di `decidiVoce`.
@@ -28,6 +28,9 @@ export type Vista =
 
 export type VistaDeps = {
   baseUrl?: string | undefined;
+  /** Omission preserves legacy shared-endpoint callers; explicit undefined is native light. */
+  lightBaseUrl?: string | undefined;
+  lightApiKey?: string | undefined;
   mainModel: string;
   lightModel: string;
   apiKey?: string | undefined;
@@ -49,22 +52,37 @@ export type VistaDeps = {
  * misurabile, Anthropic nativo) tiene la strada di sempre.
  */
 export async function decidiVista(percorso: string, deps: VistaDeps): Promise<Vista> {
-  const domanda = { apiKey: deps.apiKey, ...(deps.fetch === undefined ? {} : { fetch: deps.fetch }) };
+  const domanda = {
+    apiKey: deps.apiKey,
+    ...(deps.fetch === undefined ? {} : { fetch: deps.fetch }),
+  };
   const vede = await immagineAccettata(deps.baseUrl, deps.mainModel, domanda);
   if (vede !== false) {
     const caricata = loadImage(percorso);
     if (caricata.ok) return { modo: 'mostra', blocco: caricata.block };
     return { modo: 'no', why: caricata.why };
   }
-  if (deps.descrivi !== undefined && (await immagineAccettata(deps.baseUrl, deps.lightModel, domanda)) === true) {
+  const lightBaseUrl = Object.hasOwn(deps, 'lightBaseUrl') ? deps.lightBaseUrl : deps.baseUrl;
+  const lightQuestion = {
+    ...domanda,
+    apiKey: Object.hasOwn(deps, 'lightApiKey') ? deps.lightApiKey : deps.apiKey,
+  };
+  if (
+    deps.descrivi !== undefined &&
+    (await immagineAccettata(lightBaseUrl, deps.lightModel, lightQuestion)) === true
+  ) {
     const caricata = loadImage(percorso);
     if (!caricata.ok) return { modo: 'no', why: caricata.why };
     try {
       const testo = await deps.descrivi(caricata.block);
-      if (testo.trim() === '') return { modo: 'no', why: 'il modello leggero non ha risposto alla descrizione' };
+      if (testo.trim() === '')
+        return { modo: 'no', why: 'il modello leggero non ha risposto alla descrizione' };
       return { modo: 'descritta', testo, descrittaDa: deps.lightModel };
     } catch (error) {
-      return { modo: 'no', why: `la descrizione non è riuscita: ${error instanceof Error ? error.message : String(error)}` };
+      return {
+        modo: 'no',
+        why: `la descrizione non è riuscita: ${error instanceof Error ? error.message : String(error)}`,
+      };
     }
   }
   return {

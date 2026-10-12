@@ -1,4 +1,14 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -6,6 +16,7 @@ import { runInit } from '../../cli/init.js';
 import {
   CONFIG_SCHEMA_VERSION,
   ConfigError,
+  inferenceProvider,
   loadConfig,
   locateSecret,
   locateSecretAll,
@@ -14,6 +25,7 @@ import {
   readSecret,
   saveConfig,
   secretDir,
+  withInferenceProvider,
   writeAuthoritativeSecret,
   writeSecret,
 } from './config.js';
@@ -49,6 +61,58 @@ function downgrade(dir: string, budget: unknown): void {
 afterEach(() => vi.unstubAllEnvs());
 
 describe('config migration', () => {
+  it('preserves both legacy routes on read and makes later lane changes independent', () => {
+    const dir = home();
+    try {
+      const file = paths(dir).config;
+      const legacy = JSON.parse(readFileSync(file, 'utf8'));
+      legacy.schemaVersion = 2;
+      delete legacy.lightProvider;
+      legacy.provider.routing = { only: ['fixture'], dataCollection: 'deny' };
+      writeFileSync(file, JSON.stringify(legacy));
+      const before = readFileSync(file, 'utf8');
+      const migrated = loadConfig(dir, () => {});
+      expect(readFileSync(file, 'utf8')).toBe(before);
+      expect(inferenceProvider(migrated, 'light')).toEqual(legacy.provider);
+      expect(migrated.models).toEqual(legacy.models);
+      const changed = withInferenceProvider(migrated, 'main', {
+        kind: 'openai-compat',
+        baseUrl: 'http://localhost:11434/v1',
+        apiKeyRef: 'secret://local',
+      });
+      saveConfig(changed, dir);
+      const restarted = loadConfig(dir, () => {});
+      expect(restarted.provider).toEqual(changed.provider);
+      expect(inferenceProvider(restarted, 'light')).toEqual(legacy.provider);
+      expect(restarted.models).toEqual(legacy.models);
+      expect(restarted.schemaVersion).toBe(CONFIG_SCHEMA_VERSION);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('validates the light connection with the same credential and dialect constraints', () => {
+    const dir = home();
+    try {
+      const file = paths(dir).config;
+      const config = loadConfig(dir);
+      writeFileSync(
+        file,
+        JSON.stringify({
+          ...config,
+          lightProvider: {
+            kind: 'openai-chatgpt',
+            baseUrl: 'https://wrong.example/v1',
+            apiKeyRef: 'secret://chatgpt',
+          },
+        }),
+      );
+      expect(() => loadConfig(dir)).toThrow(ConfigError);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('opens a schemaVersion-1 file, drops the stale cap, and names what it dropped', () => {
     const dir = home();
     downgrade(dir, { monthlyUsd: 500, perTenantDailyUsd: 9 });
@@ -127,7 +191,7 @@ describe('the secret chain says which link answered', () => {
     const muffinHome = join(dir, '.muffin');
 
     runInit({ home: muffinHome, apiKey: 'sk-ant-primo', secretBackend: 'persistent' });
-    expect(locateSecret('secret://provider_api_key', muffinHome)?.backend).toBe('persistent');
+    expect(locateSecret('secret://anthropic_api_key', muffinHome)?.backend).toBe('persistent');
 
     rmSync(muffinHome, { recursive: true, force: true }); // muffin uninstall --yes
     const steps = runInit({ home: muffinHome }); // muffin init, no key anywhere else
@@ -137,10 +201,10 @@ describe('the secret chain says which link answered', () => {
     expect(key?.detail).toContain('persistent');
     // Found, never copied: a second copy in the wiped home is the two-files
     // shape that produced the budget defect in the first place.
-    expect(locateSecretAll('secret://provider_api_key', muffinHome).map((l) => l.backend)).toEqual([
-      'persistent',
-    ]);
-    expect(readSecret('secret://provider_api_key', muffinHome)).toBe('sk-ant-primo');
+    expect(locateSecretAll('secret://anthropic_api_key', muffinHome).map((l) => l.backend)).toEqual(
+      ['persistent'],
+    );
+    expect(readSecret('secret://anthropic_api_key', muffinHome)).toBe('sk-ant-primo');
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -153,7 +217,9 @@ describe('the secret chain says which link answered', () => {
     writeAuthoritativeSecret('provider_api_key', 'authoritative', muffinHome);
 
     expect(readSecret('secret://provider_api_key', muffinHome)).toBe('authoritative');
-    expect(locateSecretAll('secret://provider_api_key', muffinHome).map((item) => item.backend)).toEqual(['persistent']);
+    expect(
+      locateSecretAll('secret://provider_api_key', muffinHome).map((item) => item.backend),
+    ).toEqual(['persistent']);
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -187,7 +253,9 @@ describe('the secret chain says which link answered', () => {
   it('honours XDG_CONFIG_HOME, which is what lets a test — and a second machine — move it', () => {
     const dir = mkdtempSync(join(tmpdir(), 'muffin-xdg-'));
     vi.stubEnv('XDG_CONFIG_HOME', join(dir, 'altrove'));
-    expect(secretDir('persistent', join(dir, '.muffin'))).toBe(join(dir, 'altrove', 'muffin', 'secrets'));
+    expect(secretDir('persistent', join(dir, '.muffin'))).toBe(
+      join(dir, 'altrove', 'muffin', 'secrets'),
+    );
     rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -203,7 +271,10 @@ describe('the secret chain says which link answered', () => {
  */
 describe('thinking levels and the provider reasoning dialect (#789)', () => {
   /** Rewrites config.json with one field changed, the way an owner hand-edits it. */
-  function edit(dir: string, change: (config: Record<string, unknown> & { provider: Record<string, unknown> }) => void): void {
+  function edit(
+    dir: string,
+    change: (config: Record<string, unknown> & { provider: Record<string, unknown> }) => void,
+  ): void {
     const file = paths(dir).config;
     const config = JSON.parse(readFileSync(file, 'utf8'));
     change(config);
@@ -219,9 +290,21 @@ describe('thinking levels and the provider reasoning dialect (#789)', () => {
   });
 
   it('accepts every level next to off/adaptive/unset, in the one `thinking` setting', () => {
-    for (const thinking of ['off', 'adaptive', 'unset', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
+    for (const thinking of [
+      'off',
+      'adaptive',
+      'unset',
+      'minimal',
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+    ]) {
       const dir = home();
-      edit(dir, (c) => { c.thinking = thinking; });
+      edit(dir, (c) => {
+        c.thinking = thinking;
+      });
       expect(loadConfig(dir).thinking).toBe(thinking);
       rmSync(dir, { recursive: true, force: true });
     }
@@ -229,16 +312,22 @@ describe('thinking levels and the provider reasoning dialect (#789)', () => {
 
   it('refuses a thinking value nobody defined, naming the field', () => {
     const dir = home();
-    edit(dir, (c) => { c.thinking = 'medium-rare'; });
+    edit(dir, (c) => {
+      c.thinking = 'medium-rare';
+    });
     expect(() => loadConfig(dir)).toThrow(/thinking/);
     rmSync(dir, { recursive: true, force: true });
   });
 
   it('accepts the declared dialect and refuses one it does not know', () => {
     const dir = home();
-    edit(dir, (c) => { c.provider.reasoningDialect = 'reasoning_effort'; });
+    edit(dir, (c) => {
+      c.provider.reasoningDialect = 'reasoning_effort';
+    });
     expect(loadConfig(dir).provider.reasoningDialect).toBe('reasoning_effort');
-    edit(dir, (c) => { c.provider.reasoningDialect = 'chat_template_kwargs'; });
+    edit(dir, (c) => {
+      c.provider.reasoningDialect = 'chat_template_kwargs';
+    });
     expect(() => loadConfig(dir)).toThrow(/reasoningDialect/);
     rmSync(dir, { recursive: true, force: true });
   });

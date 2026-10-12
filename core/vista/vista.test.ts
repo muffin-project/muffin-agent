@@ -16,7 +16,10 @@ import { decidiVista } from './vista.js';
  * modello che non lo guarda, mai niente.
  */
 
-const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64)]);
+const PNG = Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  Buffer.alloc(64),
+]);
 const URL = 'https://openrouter.ai/api/v1';
 
 const elenco = (modelli: unknown[]): typeof globalThis.fetch =>
@@ -41,6 +44,45 @@ beforeEach(() => {
 });
 
 describe('decidiVista', () => {
+  it('checks each lane at its own endpoint before selecting the description route', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-vista-mixed-'));
+    try {
+      const mainUrl = 'https://main.example/v1';
+      const lightUrl = 'https://light.example/v1';
+      const requests: string[] = [];
+      const fetch: typeof globalThis.fetch = async (input, init) => {
+        const req = new Request(input, init);
+        requests.push(req.url);
+        expect(req.headers.get('authorization')).toBe(
+          req.url.startsWith(mainUrl) ? 'Bearer main-canary' : 'Bearer light-canary',
+        );
+        return Response.json({
+          data: req.url.startsWith(mainUrl) ? [CIECO('same-model')] : [VEDENTE('same-model')],
+        });
+      };
+      const descrivi = vi.fn(async () => 'description from light');
+      const result = await decidiVista(immagine(dir, 'a.png'), {
+        baseUrl: mainUrl,
+        lightBaseUrl: lightUrl,
+        apiKey: 'main-canary',
+        lightApiKey: 'light-canary',
+        mainModel: 'same-model',
+        lightModel: 'same-model',
+        fetch,
+        descrivi,
+      });
+      expect(result).toEqual({
+        modo: 'descritta',
+        testo: 'description from light',
+        descrittaDa: 'same-model',
+      });
+      expect(requests).toEqual([`${mainUrl}/models`, `${lightUrl}/models`]);
+      expect(descrivi).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('mostra quando il modello ci vede, senza chiedere a nessuno di descrivere', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'muffin-vista-'));
     try {
@@ -69,7 +111,11 @@ describe('decidiVista', () => {
         fetch: elenco([CIECO('m/cieco'), VEDENTE('m/vede-light')]),
         descrivi: async () => 'un gatto sul tavolo',
       });
-      expect(esito).toEqual({ modo: 'descritta', testo: 'un gatto sul tavolo', descrittaDa: 'm/vede-light' });
+      expect(esito).toEqual({
+        modo: 'descritta',
+        testo: 'un gatto sul tavolo',
+        descrittaDa: 'm/vede-light',
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -144,7 +190,10 @@ describe('decidiVista', () => {
         },
       });
       expect(rotta.modo).toBe('no');
-      const vuota = await decidiVista(immagine(dir, 'b.png'), { ...base, descrivi: async () => '   ' });
+      const vuota = await decidiVista(immagine(dir, 'b.png'), {
+        ...base,
+        descrivi: async () => '   ',
+      });
       expect(vuota.modo).toBe('no');
     } finally {
       rmSync(dir, { recursive: true, force: true });

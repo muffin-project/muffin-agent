@@ -1,14 +1,14 @@
 import { randomBytes } from 'node:crypto';
 import {
+  type Config,
   ConfigError,
+  type InferenceLane,
+  inferenceProvider,
   loadConfig,
   muffinHome,
-  readSecret,
-  type Config,
   type ProviderKind,
+  readSecret,
 } from '../../core/config/config.js';
-import { configuredProvider } from './configured.js';
-import { ReasoningConfigurationError, reasoningFromLegacyThinking } from './reasoning.js';
 import type { Thinking } from '../../core/config/thinking.js';
 import {
   CONSERVATIVE,
@@ -16,7 +16,9 @@ import {
   selectSourcedProfile,
   withThinking,
 } from '../profiles/profile.js';
-import { ProviderError, type Provider } from './types.js';
+import { configuredProvider } from './configured.js';
+import { ReasoningConfigurationError, reasoningFromLegacyThinking } from './reasoning.js';
+import { type Provider, ProviderError } from './types.js';
 
 /**
  * One reusable inference-verification primitive (#523).
@@ -101,6 +103,8 @@ export type VerifyInferenceOptions = {
   home?: string | undefined;
   /** Already-loaded config; wins over `home`. */
   config?: Config | undefined;
+  /** Selects the matching provider, model and profile policy from the config. */
+  lane?: InferenceLane | undefined;
   /**
    * Injected provider (tests, doctor). When present, no config or secret is
    * read and no provider is constructed — the probe still exercises the same
@@ -108,7 +112,7 @@ export type VerifyInferenceOptions = {
    */
   provider?: Provider | undefined;
   providerKind?: ProviderKind | undefined;
-  /** Requested model identity; defaults to `config.models.main`. */
+  /** Requested model identity; defaults to the selected lane's configured model. */
   model?: string | undefined;
   timeoutMs?: number | undefined;
   /** Explicit lane policy; otherwise ChatGPT probes the effective main profile. */
@@ -148,6 +152,7 @@ export async function verifyInferenceRoute(
   });
 
   let config: Config | undefined = opts.config;
+  const lane = opts.lane ?? 'main';
   if (config === undefined && opts.provider === undefined) {
     try {
       config = loadConfig(opts.home);
@@ -166,8 +171,9 @@ export async function verifyInferenceRoute(
     }
   }
 
-  const requestedModel = opts.model ?? config?.models.main ?? '(unknown)';
-  const providerKind = opts.providerKind ?? config?.provider.kind ?? 'openai-compat';
+  const selectedConfig = config === undefined ? undefined : inferenceProvider(config, lane);
+  const requestedModel = opts.model ?? config?.models[lane] ?? '(unknown)';
+  const providerKind = opts.providerKind ?? selectedConfig?.kind ?? 'openai-compat';
 
   let provider = opts.provider;
   const knownSecrets: string[] = [...(opts.secrets ?? [])];
@@ -183,13 +189,15 @@ export async function verifyInferenceRoute(
       });
     }
     try {
-      if (config.provider.kind !== 'openai-chatgpt') {
-        const key = readSecret(config.provider.apiKeyRef, opts.home);
+      if (selectedConfig === undefined)
+        throw new Error('selected inference provider is unavailable');
+      if (selectedConfig.kind !== 'openai-chatgpt') {
+        const key = readSecret(selectedConfig.apiKeyRef, opts.home);
         if (!key)
           throw new ConfigError('secret file is empty', 'write it with `muffin secret set`');
         knownSecrets.push(key);
       }
-      provider = configuredProvider(config, opts.home ?? muffinHome(), opts.fetch);
+      provider = configuredProvider(config, opts.home ?? muffinHome(), opts.fetch, lane);
     } catch (error) {
       return finish({
         status: 'misconfigured',
@@ -198,7 +206,7 @@ export async function verifyInferenceRoute(
         capability: { completion: 'fail', toolCall: 'fail' },
         diagnostic: redact(error instanceof Error ? error.message : String(error), knownSecrets),
         remedy:
-          config.provider.kind === 'openai-chatgpt'
+          selectedConfig?.kind === 'openai-chatgpt'
             ? 'run `muffin chatgpt login`'
             : 'check the stored key',
       });
@@ -218,11 +226,11 @@ export async function verifyInferenceRoute(
   try {
     const thinking =
       opts.thinking ??
-      (config?.provider.kind === 'openai-chatgpt'
+      (selectedConfig?.kind === 'openai-chatgpt'
         ? withThinking(
             selectSourcedProfile(requestedModel, loadEffectiveProfiles(opts.home ?? muffinHome()))
               ?.profile ?? CONSERVATIVE,
-            config.thinking,
+            lane === 'light' ? 'low' : config?.thinking,
           ).thinking
         : undefined);
     const result = await provider.chat({

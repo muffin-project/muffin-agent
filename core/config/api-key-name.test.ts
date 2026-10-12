@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { ALL_API_KEY_NAMES, LEGACY_API_KEY_NAME, apiKeyCandidates, apiKeyNameFor } from './providers.js';
+import {
+  ALL_API_KEY_NAMES,
+  apiKeyCandidates,
+  apiKeyNameFor,
+  LEGACY_API_KEY_NAME,
+} from './providers.js';
 
 /**
  * `provider_api_key` non dice quale provider. Con un catalogo in albero
@@ -14,7 +19,9 @@ import { ALL_API_KEY_NAMES, LEGACY_API_KEY_NAME, apiKeyCandidates, apiKeyNameFor
  */
 describe('come si chiama la chiave', () => {
   it('un provider del catalogo dà il proprio nome', () => {
-    expect(apiKeyNameFor({ kind: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1' })).toBe('openrouter_api_key');
+    expect(apiKeyNameFor({ kind: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1' })).toBe(
+      'openrouter_api_key',
+    );
   });
 
   /**
@@ -23,8 +30,10 @@ describe('come si chiama la chiave', () => {
    * letteralmente ciò che descrive.
    */
   it('fuori dal catalogo il generico non è un ripiego, è il nome giusto', () => {
-    expect(apiKeyNameFor({ kind: 'anthropic' })).toBe(LEGACY_API_KEY_NAME);
-    expect(apiKeyNameFor({ kind: 'openai-compat', baseUrl: 'http://localhost:11434/v1' })).toBe(LEGACY_API_KEY_NAME);
+    expect(apiKeyNameFor({ kind: 'anthropic' })).toBe('anthropic_api_key');
+    expect(apiKeyNameFor({ kind: 'openai-compat', baseUrl: 'http://localhost:11434/v1' })).toBe(
+      LEGACY_API_KEY_NAME,
+    );
   });
 
   /**
@@ -32,16 +41,18 @@ describe('come si chiama la chiave', () => {
    * Un'installazione vecchia trova solo il secondo e continua a funzionare
    * senza che nessuno tocchi niente.
    */
-  it("i candidati mettono il nome del provider davanti a quello vecchio", () => {
-    expect(apiKeyCandidates({ kind: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1' })).toEqual([
-      'openrouter_api_key',
-      LEGACY_API_KEY_NAME,
-    ]);
+  it('i candidati mettono il nome del provider davanti a quello vecchio', () => {
+    expect(
+      apiKeyCandidates({ kind: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1' }),
+    ).toEqual(['openrouter_api_key', LEGACY_API_KEY_NAME]);
   });
 
   /** E non lo cerca due volte quando i due nomi coincidono. */
   it('fuori dal catalogo il generico compare una volta sola', () => {
-    expect(apiKeyCandidates({ kind: 'anthropic' })).toEqual([LEGACY_API_KEY_NAME]);
+    expect(apiKeyCandidates({ kind: 'anthropic' })).toEqual([
+      'anthropic_api_key',
+      LEGACY_API_KEY_NAME,
+    ]);
   });
 
   /**
