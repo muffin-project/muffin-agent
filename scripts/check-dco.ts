@@ -2,8 +2,8 @@
 import { execFileSync } from 'node:child_process';
 /**
  * Verifies the contributor agreement's DCO sign-off for every non-merge commit
- * introduced by a contribution PR. Only the canonical same-repository dev to
- * main promotion skips rechecking integrated history, including pre-gate commits.
+ * introduced by a contribution PR, except owner-delegated internal work.
+ * Canonical dev to main promotion preserves already integrated history.
  *
  * A matching trailer is a mechanical check, not proof of identity or a truthful
  * certification. The human signer remains responsible for the DCO statement.
@@ -13,16 +13,20 @@ import { readFileSync } from 'node:fs';
 const RECORD = '\x1e';
 const FIELD = '\x1f';
 const REPOSITORY = 'muffin-project/muffin-agent';
+const OWNER = 'GiustoPiedimonte';
 
 export type Commit = { sha: string; authorName: string; authorEmail: string; body: string };
 export type PullRequestEvent = {
+  authorLogin?: string;
   base: { ref: string; sha: string; repository: string };
   head: { ref: string; sha: string; repository: string };
 };
 export type DcoResult = { kind: 'skip'; reason: string } | { kind: 'check'; missing: string[] };
 
-export function missingSignoffs(commits: readonly Commit[]): Commit[] {
+export function missingSignoffs(commits: readonly Commit[], ownerInternal = false): Commit[] {
   return commits.filter((commit) => {
+    // Attribution filter within an authenticated owner PR; not identity/rights proof.
+    if (ownerInternal && commit.authorName === OWNER) return false;
     const expected = `Signed-off-by: ${commit.authorName} <${commit.authorEmail}>`;
     return !commit.body
       .split(/\r?\n/)
@@ -59,8 +63,13 @@ export function parseCommitLog(output: string, base: string, head: string): Comm
     });
 }
 
-export function checkDco(base: string, head: string, cwd = process.cwd()): string[] {
-  return missingSignoffs(commitsBetween(base, head, cwd)).map(
+export function checkDco(
+  base: string,
+  head: string,
+  cwd = process.cwd(),
+  ownerInternal = false,
+): string[] {
+  return missingSignoffs(commitsBetween(base, head, cwd), ownerInternal).map(
     (commit) => `${commit.sha.slice(0, 12)} ${commit.authorName} <${commit.authorEmail}>`,
   );
 }
@@ -78,6 +87,7 @@ export function parsePullRequestEvent(value: unknown): PullRequestEvent {
     return typeof field === 'string' ? field : undefined;
   };
   const result = {
+    authorLogin: stringAt('user' in pr ? pr.user : undefined, 'login'),
     base: {
       ref: stringAt(base, 'ref'),
       sha: stringAt(base, 'sha'),
@@ -121,7 +131,11 @@ export function checkPullRequestDco(event: unknown, cwd = process.cwd()): DcoRes
       reason: 'canonical dev -> main promotion; preserve inherited pre-gate commits',
     };
   }
-  const missing = checkDco(pr.base.sha, pr.head.sha, cwd);
+  const ownerInternal =
+    pr.authorLogin === OWNER &&
+    pr.base.repository === REPOSITORY &&
+    pr.head.repository === REPOSITORY;
+  const missing = checkDco(pr.base.sha, pr.head.sha, cwd, ownerInternal);
   return { kind: 'check', missing };
 }
 
@@ -140,7 +154,9 @@ if (isMain) {
       );
       process.exitCode = 1;
     } else {
-      process.stdout.write('DCO: every introduced non-merge commit is signed off.\n');
+      process.stdout.write(
+        'DCO: external commits are signed off; owner-internal work is exempt. No certification is generated.\n',
+      );
     }
   } else if (mode && value && mode !== '--pull-request-event') {
     const missing = checkDco(mode, value);

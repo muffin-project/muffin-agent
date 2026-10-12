@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -220,9 +220,7 @@ describe('DCO contribution gate', () => {
       execFileSync(process.execPath, [loader, checker, ...args], { cwd: root, encoding: 'utf8' });
     const eventPath = join(root, 'event.json');
     writeFileSync(eventPath, JSON.stringify(event(base, head)));
-    expect(run('--pull-request-event', eventPath)).toContain(
-      'every introduced non-merge commit is signed off',
-    );
+    expect(run('--pull-request-event', eventPath)).toContain('external commits are signed off');
     expect(run(base, head)).toContain('every introduced non-merge commit is signed off');
     const unsigned = addCommit(root, {
       name: 'External Author',
@@ -232,5 +230,107 @@ describe('DCO contribution gate', () => {
     writeFileSync(eventPath, JSON.stringify(event(base, unsigned)));
     expect(() => run('--pull-request-event', eventPath)).toThrow();
     expect(() => run(base, unsigned)).toThrow();
+  });
+});
+
+describe('owner-delegated internal contribution policy', () => {
+  function ownerEvent(base: string, head: string, headRepo = 'muffin-project/muffin-agent') {
+    const value = event(base, head, 'dev', 'codex/change', 'muffin-project/muffin-agent', headRepo);
+    return { pull_request: { ...value.pull_request, user: { login: 'GiustoPiedimonte' } } };
+  }
+
+  it('accepts unsigned owner work only in an owner-opened canonical PR', () => {
+    const root = repository();
+    const base = git(root, 'rev-parse', 'HEAD');
+    const head = addCommit(root, {
+      name: 'GiustoPiedimonte',
+      email: 'owner@example.test',
+      signedOff: false,
+    });
+    expect(checkPullRequestDco(ownerEvent(base, head), root)).toEqual({
+      kind: 'check',
+      missing: [],
+    });
+    for (const value of [
+      ownerEvent(base, head, 'fork/muffin-agent'),
+      event(base, head),
+      {
+        pull_request: {
+          ...ownerEvent(base, head).pull_request,
+          user: { login: 'OutsideContributor' },
+        },
+      },
+    ]) {
+      expect(checkPullRequestDco(value, root)).toMatchObject({
+        missing: [expect.stringContaining(head.slice(0, 12))],
+      });
+    }
+  });
+
+  it('retains the external-author requirement beneath an unsigned owner tip', () => {
+    const root = repository();
+    const base = git(root, 'rev-parse', 'HEAD');
+    const external = addCommit(root, {
+      name: 'External Author',
+      email: 'external@example.test',
+      signedOff: false,
+    });
+    const head = addCommit(root, {
+      name: 'GiustoPiedimonte',
+      email: 'owner@example.test',
+      signedOff: false,
+    });
+    expect(checkPullRequestDco(ownerEvent(base, head), root)).toEqual({
+      kind: 'check',
+      missing: [`${external.slice(0, 12)} External Author <external@example.test>`],
+    });
+  });
+
+  it('accepts an imported signed external commit without fabricating an owner sign-off', () => {
+    const root = repository();
+    const base = git(root, 'rev-parse', 'HEAD');
+    addCommit(root, { name: 'External Author', email: 'external@example.test', signedOff: true });
+    const head = addCommit(root, {
+      name: 'GiustoPiedimonte',
+      email: 'owner@example.test',
+      signedOff: false,
+    });
+    expect(checkPullRequestDco(ownerEvent(base, head), root)).toEqual({
+      kind: 'check',
+      missing: [],
+    });
+  });
+
+  it('uses the exact CI command and event range; a raw Git range has no owner exemption', () => {
+    const root = repository();
+    const base = git(root, 'rev-parse', 'HEAD');
+    const head = addCommit(root, {
+      name: 'GiustoPiedimonte',
+      email: 'owner@example.test',
+      signedOff: false,
+    });
+    const eventPath = join(root, 'owner-event.json');
+    writeFileSync(eventPath, JSON.stringify(ownerEvent(base, head)));
+    const checker = fileURLToPath(new URL('./check-dco.ts', import.meta.url));
+    const loader = fileURLToPath(new URL('../node_modules/tsx/dist/cli.mjs', import.meta.url));
+    const run = (...args: string[]) =>
+      execFileSync(process.execPath, [loader, checker, ...args], {
+        cwd: root,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
+    expect(workflow).toContain(
+      'npx tsx scripts/check-dco.ts --pull-request-event "$GITHUB_EVENT_PATH"',
+    );
+    expect(run('--pull-request-event', eventPath)).toContain('owner-internal');
+    expect(() => run(base, head)).toThrow();
+    const external = addCommit(root, {
+      name: 'External Author',
+      email: 'external@example.test',
+      signedOff: false,
+    });
+    writeFileSync(eventPath, JSON.stringify(ownerEvent(base, external)));
+    expect(() => run('--pull-request-event', eventPath)).toThrow();
   });
 });
