@@ -49,9 +49,19 @@ through the real `.git/hooks` directory. Issue [#865](https://github.com/muffin-
 tracks production-path acceptance for this symlink redirection; it is separate
 from #657's `.gitattributes` driver issue.
 
-macOS keeps the pinned sandbox-runtime Seatbelt hook-path deny. The positive
-control uses an empty Git template there because Seatbelt also denies Git's
-default `.sample` hook files; Linux uses the normal template. Git documents
+The installed macOS build did **not** keep this guarantee on the production
+path. On 2026-10-09, `muffin doctor` on the owner's host, build `31f1f6064e72`,
+returned `git_hooks_unprotected`: the real Seatbelt-wrapped self-test created
+`nested/.git/hooks/applypatch-msg` (and reported hardlink, rename and alias
+doors). SRT's built-in glob is rooted at the gateway process cwd, while Muffin
+passes each turn's workspace cwd separately. The host-level deny therefore
+missed hook paths under a workspace elsewhere on disk.
+
+The candidate adds exact active-hook leaf globs to each macOS per-call
+`denyWrite` profile and to the executor's same-door self-test. This keeps the
+protection independent of the gateway cwd while leaving Git's `*.sample`
+templates writable. Linux continues to rely on its AppArmor policy and
+concrete per-call scan; SRT drops write globs on that backend. Git documents
 the active hook names, including `fsmonitor-watchmanv2`, the default
 `$GIT_DIR/hooks` location, and the configurable `core.hooksPath`.
 [Git hooks manual](https://git-scm.com/docs/githooks)
@@ -86,6 +96,37 @@ mutation checks. [Docker AppArmor documentation](https://docs.docker.com/engine/
   production-runtime test. The mutation step requires the failure output to
   contain `git_hooks_unprotected`; an unrelated failure does not count.
 
+### macOS production-path correction, 2026-10-09
+
+The failing owner-host check and the repair were reproduced against the same
+base build. The isolated slice changes only `core/sandbox/executor.ts`; it does
+not change the shell read scope, policy, approval semantics, or Linux AppArmor
+rules.
+
+- Installed `muffin doctor --json`, outside Codex's nested sandbox, reported
+  `sandbox: warn`, reason `git_hooks_unprotected`, with direct
+  `applypatch-msg` creation allowed. The live Gateway stayed running and was
+  not restarted or modified.
+- Running the candidate source's `doctor` on the same host reported
+  `sandbox: ok`, `seatbelt: a real containment ran and held`. This executes the
+  candidate's actual `SandboxExecutor.verify()` path; it does not claim the
+  installed Gateway has been updated.
+- The candidate self-test runs `git init` with a synthetic
+  `pre-commit.sample`, confirms that template is present, then attempts every
+  active hook leaf plus hardlink, rename, and pre-existing hooks-symlink
+  controls. `git add` and ordinary writes remain positive controls.
+- On the host, `agent/runtime-wiring.test.ts`,
+  `core/sandbox/executor.selftest.test.ts`, and
+  `core/sandbox/executor.test.ts` passed: 70 passed, 2 platform-specific tests
+  skipped. The production runtime-wiring turn ran the registered shell write
+  tool through real Seatbelt with a scripted provider. This is not evidence of
+  real-model selection.
+- `npm run typecheck` and `git diff --check` passed. No owner files or install
+  data were changed; the temporary dependency symlink used by this worktree was
+  removed after verification.
+
+Host evidence source pin: the 2026-10-09 production-cwd positive run and matching deny-removal mutation were executed against the implementation content in commit `87ff4c7b8e865821e5bcb7fd068c7828527f41b5`. This corrective candidate retains the identical `core/sandbox/executor.ts` source; the follow-up changes the evidence note and commit metadata only. Hosted checks and independent review still need to validate the resulting exact head.
+
 ## Limits and reversal conditions
 
 Amendment 2026-10-08 (2): removing `audit deny capability` alone changed
@@ -109,6 +150,7 @@ The choice is falsified if ordinary writes or `git add` fail, a default
 `.sample` hook cannot be created, any direct active hook path is written, or
 deleting the AppArmor rule leaves the production-path test green.
 Hosted Linux Actions must prove the candidate on its exact head. The local
-Codex host cannot run the real macOS sandbox, so that host is not evidence for
-Seatbelt acceptance; the real-binary tests remain enabled on any supported
-macOS runner.
+macOS host now provides real Seatbelt evidence for this candidate, but this
+does not replace Linux CI, review on the exact candidate, or acceptance after
+integration and installation. The owner installation remains on build
+`31f1f6064e72` until a reviewed update is promoted.

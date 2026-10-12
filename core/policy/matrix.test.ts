@@ -237,6 +237,8 @@ describe('a policy file that cannot be trusted never widens anything', () => {
       'outward.*',
       'config.ratchet',
       'jobs.schedule',
+      'events.trigger.create',
+      'events.trigger.manage',
     ]);
   };
 

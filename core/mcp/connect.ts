@@ -3,6 +3,7 @@ import { Client } from '@modelcontextprotocol/client';
 // is runtime-agnostic) — probed on the installed package, the alpha-era docs
 // still show it on the root export.
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
+import { z } from 'zod';
 import { readSecret } from '../config/config.js';
 import type { McpServerEntry, McpToolAnnotations, McpToolDef } from './registry.js';
 
@@ -19,6 +20,13 @@ import type { McpServerEntry, McpToolAnnotations, McpToolDef } from './registry.
 export type McpConnection = {
   tools: McpToolDef[];
   call(name: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean }>;
+  /**
+   * Generic request access to this already-authenticated host-owned session.
+   * Extension consumers (for example MCP Events) reuse it rather than opening
+   * a second transport or receiving credentials.
+   */
+  request?(method: string, params?: unknown): Promise<unknown>;
+  getCapabilities?(): unknown;
   close(): Promise<void>;
 };
 
@@ -70,6 +78,15 @@ export async function connectServer(server: string, entry: McpServerEntry): Prom
         )
         .join('\n');
       return { text, isError: result.isError === true };
+    },
+    async request(method, params) {
+      return client.request(
+        { method, ...(params === undefined ? {} : { params }) } as never,
+        z.unknown(),
+      );
+    },
+    getCapabilities() {
+      return client.getServerCapabilities();
     },
     async close() {
       await client.close();

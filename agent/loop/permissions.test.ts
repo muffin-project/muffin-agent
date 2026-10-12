@@ -145,6 +145,21 @@ describe('makeSnapshot / citato', () => {
     expect(decision).toEqual(deny);
   });
 
+  it('an external wake cannot quote a URL into owner provenance', () => {
+    const requests: DecisionRequest[] = [];
+    const decide: Decide = (req) => {
+      requests.push(req);
+      return req.quoted ? deny : allow;
+    };
+    const snapshot = makeSnapshot(decide, owner, 'host', 3);
+    const url = 'https://event.example/path?source=untrusted';
+    snapshot.recordInput(`Matched event included ${url}`, undefined, 'external');
+
+    const decision = snapshot.check('demo.cap', { kind: 'url', value: url }, {});
+    expect(requests[0]?.quoted).toBe(false);
+    expect(decision).toEqual(allow);
+  });
+
   it('an empty recorded input is never "quoted" by an empty resource value', () => {
     const decide: Decide = vi.fn((req: DecisionRequest) => (req.quoted ? deny : allow));
     const snapshot = makeSnapshot(decide, owner, 'host', 0);

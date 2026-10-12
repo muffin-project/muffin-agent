@@ -730,6 +730,11 @@ export type TurnInput = {
    */
   contentTaint?: TrustTier;
   /**
+   * Provenance of the opening input. `external` is an untrusted source label,
+   * not authority; policy still evaluates the principal, taint, and capability.
+   */
+  inputOrigin?: 'owner' | 'external';
+  /**
    * Le immagini che questo turno porta con sé, già caricate (`agent/images.ts`).
    *
    * Entrano nel **primo messaggio utente**, prima del testo: entrambe le API lo
