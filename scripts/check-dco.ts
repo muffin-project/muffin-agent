@@ -26,7 +26,11 @@ export type DcoResult = { kind: 'skip'; reason: string } | { kind: 'check'; miss
 export function missingSignoffs(commits: readonly Commit[], ownerInternal = false): Commit[] {
   return commits.filter((commit) => {
     // Attribution filter within an authenticated owner PR; not identity/rights proof.
-    if (ownerInternal && commit.authorName === OWNER) return false;
+    if (
+      ownerInternal &&
+      commit.authorName.replace(/\s+/g, '').toLowerCase() === OWNER.toLowerCase()
+    )
+      return false;
     const expected = `Signed-off-by: ${commit.authorName} <${commit.authorEmail}>`;
     return !commit.body
       .split(/\r?\n/)

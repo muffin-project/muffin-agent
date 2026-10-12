@@ -14,7 +14,8 @@ L’owner ha confermato di voler preservare un futuro passaggio verso MIT.
 esplicitamente agli agenti, non richiede una nuova attestazione DCO per diff.
 Il checker usa il metadata dell’evento PR GitHub: autore PR owner e repository
 canonico sia per base sia per head. Controlla i commit dell’esatto intervallo
-base/head; i commit attribuiti ad altri autori richiedono ancora il loro
+base/head; il confronto del nome normalizza spazi e maiuscole per le due
+attribuzioni pubbliche dell’owner (nome e login). I commit attribuiti ad altri autori richiedono ancora il loro
 sign-off. Fork, altri autori PR e intervalli Git senza evento verificabile
 mantengono il controllo ordinario. La promozione canonica dev → main conserva
 l’eccezione già prevista. Review, CI e protezioni dei rami non cambiano.

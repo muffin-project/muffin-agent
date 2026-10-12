@@ -239,33 +239,36 @@ describe('owner-delegated internal contribution policy', () => {
     return { pull_request: { ...value.pull_request, user: { login: 'GiustoPiedimonte' } } };
   }
 
-  it('accepts unsigned owner work only in an owner-opened canonical PR', () => {
-    const root = repository();
-    const base = git(root, 'rev-parse', 'HEAD');
-    const head = addCommit(root, {
-      name: 'GiustoPiedimonte',
-      email: 'owner@example.test',
-      signedOff: false,
-    });
-    expect(checkPullRequestDco(ownerEvent(base, head), root)).toEqual({
-      kind: 'check',
-      missing: [],
-    });
-    for (const value of [
-      ownerEvent(base, head, 'fork/muffin-agent'),
-      event(base, head),
-      {
-        pull_request: {
-          ...ownerEvent(base, head).pull_request,
-          user: { login: 'OutsideContributor' },
-        },
-      },
-    ]) {
-      expect(checkPullRequestDco(value, root)).toMatchObject({
-        missing: [expect.stringContaining(head.slice(0, 12))],
+  it.each(['GiustoPiedimonte', 'Giusto Piedimonte'])(
+    'accepts %s only in an owner-opened canonical PR',
+    (name) => {
+      const root = repository();
+      const base = git(root, 'rev-parse', 'HEAD');
+      const head = addCommit(root, {
+        name,
+        email: 'owner@example.test',
+        signedOff: false,
       });
-    }
-  });
+      expect(checkPullRequestDco(ownerEvent(base, head), root)).toEqual({
+        kind: 'check',
+        missing: [],
+      });
+      for (const value of [
+        ownerEvent(base, head, 'fork/muffin-agent'),
+        event(base, head),
+        {
+          pull_request: {
+            ...ownerEvent(base, head).pull_request,
+            user: { login: 'OutsideContributor' },
+          },
+        },
+      ]) {
+        expect(checkPullRequestDco(value, root)).toMatchObject({
+          missing: [expect.stringContaining(head.slice(0, 12))],
+        });
+      }
+    },
+  );
 
   it('retains the external-author requirement beneath an unsigned owner tip', () => {
     const root = repository();
