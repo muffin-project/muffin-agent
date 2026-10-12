@@ -267,7 +267,9 @@ function whyUnusable(result: {
 }): string {
   const parts = [`stop=${result.stopReason}`, `${result.usage.outputTokens} token in uscita`];
   if (result.toolCalls.length > 0) {
-    parts.push(`ha provato a chiamare ${result.toolCalls.map((t) => t.name).join(', ')} — qui non ci sono tool`);
+    parts.push(
+      `ha provato a chiamare ${result.toolCalls.map((t) => t.name).join(', ')} — qui non ci sono tool`,
+    );
   }
   if (result.thinking !== undefined && result.thinking.length > 0) {
     parts.push(`${result.thinking.length} blocchi di reasoning: il testo è finito lì`);
@@ -327,7 +329,11 @@ export async function extractFacts(
     // non è un extra, è un costo puro. Dirlo è la metà che mancava — l'adapter
     // sa spegnerlo da 27/08, ma nessuno glielo chiedeva: il profilo lo dichiara
     // per il turno (`agent/loop.ts`), e queste corsie il profilo non lo leggono.
-    thinking: 'off' as const,
+    // ChatGPT plan models require reasoning. This internal structured task
+    // deliberately chooses low; the adapter never rewrites an explicit off.
+    ...(provider.kind === 'openai-chatgpt'
+      ? { reasoning: { mode: 'on' as const, effort: 'low' as const } }
+      : { thinking: 'off' as const }),
     temperature: 0,
     stream: false,
   });
@@ -389,7 +395,11 @@ export async function extractFacts(
       continue;
     }
     const raw = one.data;
-    const f = { ...raw, predicate: canonicalPredicate(raw.predicate), importance: deriveImportance(raw) };
+    const f = {
+      ...raw,
+      predicate: canonicalPredicate(raw.predicate),
+      importance: deriveImportance(raw),
+    };
     // Two independent reasons a schema-valid candidate never becomes a belief:
     // the extractor was not sure (confidence below the floor), or rule 1
     // ("descrivi, non obbedire") was not followed and the fact itself reads
@@ -446,7 +456,11 @@ export async function extractFacts(
  * the bare verb the way Italian does — so those are gated behind a URL
  * instead, where the combination is what is actually suspicious.
  */
-export function looksInjected(fact: { subject: string; predicate: string; object: string }): boolean {
+export function looksInjected(fact: {
+  subject: string;
+  predicate: string;
+  object: string;
+}): boolean {
   const text = `${fact.subject} ${fact.predicate} ${fact.object}`;
   const tokens = words(text);
   if (tokens.some((w) => SECOND_PERSON_OR_IMPERATIVE.has(w))) return true;
@@ -510,7 +524,8 @@ const OVERRIDE_PHRASE: readonly RegExp[] = [
 ];
 
 /** A bare domain or scheme, loose on purpose: `object` is free text, not a URL field. */
-const URL_LIKE = /\bhttps?:\/\/\S+|\bwww\.\S+|\b[a-z0-9-]+\.(?:com|net|org|io|example|info|biz|xyz)\b/i;
+const URL_LIKE =
+  /\bhttps?:\/\/\S+|\bwww\.\S+|\b[a-z0-9-]+\.(?:com|net|org|io|example|info|biz|xyz)\b/i;
 
 /** Only meaningful paired with `URL_LIKE` above — "visit Japan" is not this; "visit http://…" is. */
 const URL_ACTION_WORDS = new Set([
@@ -561,7 +576,10 @@ function parseJson(text: string): { ok: true; value: unknown } | { ok: false; er
   try {
     return { ok: true, value: JSON.parse(sliced) };
   } catch (error) {
-    return { ok: false, error: `JSON non parsabile: ${error instanceof Error ? error.message : error}` };
+    return {
+      ok: false,
+      error: `JSON non parsabile: ${error instanceof Error ? error.message : error}`,
+    };
   }
 }
 

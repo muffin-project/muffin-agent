@@ -1,3 +1,4 @@
+import { configuredProvider } from './providers/configured.js';
 import { join } from 'node:path';
 import type DatabaseCtor from 'better-sqlite3';
 import { ApprovalStore } from '../core/approvals/store.js';
@@ -69,9 +70,7 @@ import {
   withThinking,
   type ProfileOrigin,
 } from './profiles/profile.js';
-import { AnthropicProvider } from './providers/anthropic.js';
 import { type LightAttemptReport, lightLane } from './providers/light-lane.js';
-import { OpenAICompatProvider } from './providers/openai-compat.js';
 import type { Provider } from './providers/types.js';
 import { type CapabilityGap, formatCapabilityGap } from './tools/capability-status.js';
 import {
@@ -588,30 +587,7 @@ export function buildRuntime(
   })();
 
   // One connection, two lanes: the endpoint is the same, the model id is not.
-  const createMainProvider = (source: Config): Provider =>
-    source.provider.kind === 'anthropic'
-      ? new AnthropicProvider(readSecret(source.provider.apiKeyRef, home), source.provider.baseUrl)
-      : new OpenAICompatProvider(
-          readSecret(source.provider.apiKeyRef, home),
-          source.provider.baseUrl,
-          { 'HTTP-Referer': 'https://github.com/muffin-ai/muffin', 'X-Title': 'muffin' },
-          // Cache breakpoints are the provider's own decision, defaulted from
-          // the endpoint (`wantsExplicitCache`): the first version made every
-          // caller pass the flag, and the two eval harnesses immediately forgot
-          // — same endpoint, full price, silently.
-          //
-          // L'instradamento invece **non** ha un default: è una scelta
-          // dell'owner su prezzo, quantizzazione e chi può conservare i suoi
-          // dati, e sceglierla al posto suo qui sarebbe deciderla in silenzio.
-          // Assente = quello che fa il gateway da sé; `muffin doctor` dice
-          // cosa vuol dire.
-          {
-            ...(source.provider.routing ? { routing: source.provider.routing } : {}),
-            ...(source.provider.reasoningDialect
-              ? { reasoningDialect: source.provider.reasoningDialect }
-              : {}),
-          },
-        );
+  const createMainProvider = (source: Config): Provider => configuredProvider(source, home);
   let provider: Provider = createMainProvider(config);
   let providerFingerprint = JSON.stringify(config.provider);
   let lightFingerprint = JSON.stringify({ provider: config.provider, light: config.models.light });
@@ -631,13 +607,15 @@ export function buildRuntime(
       ? { origin: 'conservative' as const, file: '' }
       : { origin: mainSourced.origin, file: mainSourced.file };
 
-  const recordSpendWithBaseUrl = (entry: SpendEntry, baseUrl: string | undefined): number => {
+  const recordSpendWithBaseUrl = (entry: SpendEntry, baseUrl: string | undefined, kind: Config['provider']['kind']): number => {
+    // ChatGPT OAuth uses account plan/credits, not our API-dollar estimate.
+    // Token usage stays recorded; ChatGPT Settings owns quota/credit accounting.
     // An owner-declared unmetered endpoint skips the meter entirely: the
     // machine behind it is funded outside the spend caps, so the served model
     // and the requested route both stop mattering here. Only the sealed list
     // decides — a model-reachable config.json never reaches this branch (#499).
     const usd =
-      baseUrl !== undefined && isUnmeteredEndpoint(baseUrl, budgets.unmetered)
+      kind === 'openai-chatgpt' || (baseUrl !== undefined && isUnmeteredEndpoint(baseUrl, budgets.unmetered))
         ? 0
         : costUsd(entry.model, entry, baseUrl, entry.requestedModel);
     // `entry` porta già `jobId` quando il turno è il giro di un job
@@ -648,11 +626,11 @@ export function buildRuntime(
     return usd;
   };
   const makeRecordSpend =
-    (baseUrl: string | undefined) =>
+    (source: Config['provider']) =>
     (entry: SpendEntry): number =>
-      recordSpendWithBaseUrl(entry, baseUrl);
-  let recordSpend = makeRecordSpend(config.provider.baseUrl);
-  let lightBaseUrl = config.provider.baseUrl;
+      recordSpendWithBaseUrl(entry, source.baseUrl, source.kind);
+  let recordSpend = makeRecordSpend(config.provider);
+  const initialLightProvider = { ...config.provider };
 
   /**
    * The light lane, behind the boundary that bills it and makes its requests
@@ -693,7 +671,8 @@ export function buildRuntime(
           tenant: CONSOLIDATION_TENANT,
           capability: CONSOLIDATION_CAPABILITY,
         },
-        lightBaseUrl,
+        initialLightProvider.baseUrl,
+        initialLightProvider.kind,
       ),
     onAttempt: reportLightAttempt,
   });
@@ -1343,7 +1322,7 @@ export function buildRuntime(
         ? { origin: 'conservative' as const, file: '' }
         : { origin: refreshed.origin, file: refreshed.file },
     );
-    recordSpend = makeRecordSpend(persisted.provider.baseUrl);
+    recordSpend = makeRecordSpend(persisted.provider);
     if (loopDeps !== null) {
       loopDeps.provider = provider;
       loopDeps.model = persisted.models.main;
@@ -1378,7 +1357,7 @@ export function buildRuntime(
     });
     if (fingerprint === lightFingerprint) return;
     lightFingerprint = fingerprint;
-    lightBaseUrl = persisted.provider.baseUrl;
+    const nextLightProvider = { ...persisted.provider };
     light = lightLane(provider, {
       profile: selectSourcedProfile(persisted.models.light, sourcedProfiles)?.profile ?? CONSERVATIVE,
       record: (entry) =>
@@ -1388,7 +1367,8 @@ export function buildRuntime(
             tenant: CONSOLIDATION_TENANT,
             capability: CONSOLIDATION_CAPABILITY,
           },
-          lightBaseUrl,
+          nextLightProvider.baseUrl,
+          nextLightProvider.kind,
         ),
       onAttempt: reportLightAttempt,
     });
@@ -1440,6 +1420,7 @@ export function buildRuntime(
     promptBlocks,
     capabilityGaps,
     bootLines: [
+      ...(config.provider.kind === 'openai-chatgpt' ? ['Using ChatGPT plan · quota and credits: https://chatgpt.com/settings/usage'] : []),
       ...workspaceNotes,
       ...turnNotes,
       ...waitingNotes,

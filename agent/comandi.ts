@@ -253,7 +253,8 @@ export async function eseguiComando(riga: string, ctx: ContestoComandi): Promise
       return {
         testo:
           `$${s.monthUsd.toFixed(4)} / $${String(s.monthlyCapUsd)} questo mese${s.exhausted ? ' — esaurito' : ''}\n` +
-          `oggi: $${oggi.toFixed(4)}`,
+          `oggi: $${oggi.toFixed(4)}` +
+          (ctx.config.provider.kind === 'openai-chatgpt' ? '\nChatGPT plan quota/credits excluded from API-dollar estimates: https://chatgpt.com/settings/usage' : ''),
       };
     }
 
