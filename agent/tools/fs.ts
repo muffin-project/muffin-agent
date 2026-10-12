@@ -339,7 +339,8 @@ export const fsToolSpecs: ToolSpec[] = [
       'replace one entirely — this is the tool for writing a file, not `echo … > file` in shell_run. Not for a ' +
       'partial edit of a file you have not read: read it first with fs_read so the replacement does not silently ' +
       'drop the parts you meant to keep. Overwrites an existing file whole. Returns confirmation of the path ' +
-      'written, or an error naming what blocked it.',
+      'written, or an error naming what blocked it. If an explicitly requested destination is denied, do not ' +
+      'write the same content to another path; explain the boundary and ask before changing destinations.',
     inputSchema: {
       type: 'object',
       properties: {
