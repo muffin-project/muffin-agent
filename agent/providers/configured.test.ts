@@ -137,7 +137,7 @@ describe('configured production provider and online verifier share ChatGPT route
     expect(h.requests[1]).toMatchObject({ reasoning: { effort: 'low' } });
   });
   for (const failure of ['before-first-event', 'truncated-stream']) {
-    it(`does not invoke a second SSE request through the production loop on ${failure}`, async () => {
+    it(`retries ${failure} through the production governor without a hidden SSE fallback`, async () => {
       const { config, home } = fixture();
       saveConfig(config, home);
       const workspace = mkdtempSync(join(tmpdir(), 'muffin-chatgpt-runtime-ws-'));
@@ -162,6 +162,28 @@ describe('configured production provider and online verifier share ChatGPT route
         if (!String(input).startsWith('https://api.openai.com/v1/responses'))
           return new Response(null, { status: 503 });
         requests += 1;
+        if (requests === 2) {
+          const response = {
+            id: 'resp_retry',
+            model: 'gpt-6.1-sol',
+            status: 'completed',
+            output: [
+              {
+                type: 'message',
+                role: 'assistant',
+                status: 'completed',
+                content: [{ type: 'output_text', text: 'ready' }],
+              },
+            ],
+            usage: { input_tokens: 1, output_tokens: 1 },
+          };
+          return new Response(
+            `event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', response })}\n\n`,
+            {
+              headers: { 'content-type': 'text/event-stream' },
+            },
+          );
+        }
         if (failure === 'before-first-event') throw new Error('synthetic transport loss');
         return new Response(
           'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"partial"}\n\n',
@@ -184,7 +206,8 @@ describe('configured production provider and online verifier share ChatGPT route
         expect(runtime.budget.monthToDateUsd()).toBe(0);
         const rows = runtime.db.prepare('SELECT input_tokens, output_tokens FROM spend').all();
         expect(rows).toContainEqual({ input_tokens: 50, output_tokens: 20 });
-        await runTurn(runtime.deps, {
+        const retries: unknown[] = [];
+        const result = await runTurn(runtime.deps, {
           principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
           tenant: 'host',
           surface: 'cli',
@@ -192,8 +215,14 @@ describe('configured production provider and online verifier share ChatGPT route
           text: 'Reply with ready.',
           onDelta: () => {},
           signal: AbortSignal.timeout(3000),
-        }).catch(() => undefined);
-        expect(requests).toBe(1);
+          onProgress: (event) => {
+            if (event.type === 'model_retry') retries.push(event);
+          },
+        });
+        expect(requests).toBe(2);
+        expect(result).toMatchObject({ stopped: 'answered', text: 'ready', iterations: 2 });
+        expect(retries).toHaveLength(1);
+        expect(runtime.deps.turns?.get(result.turnId)?.counters.transportRetriesLeft).toBe(9);
       } finally {
         runtime?.close();
         vi.unstubAllGlobals();

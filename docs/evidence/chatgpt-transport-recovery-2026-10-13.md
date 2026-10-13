@@ -57,3 +57,10 @@ Focused adapter/production-loop verification: **50 PASS, 0 SKIP**. Fresh review
 identified a credential-acquisition edge case; repaired before submission and
 covered by a zero-request, sanitized non-retryable regression. Credential errors
 are not reclassified as inference-stream failures.
+
+The first exact-head CI run passed 5,399 tests and failed two configured-runtime
+assertions that encoded terminal failure after one SSE request. Updated these to
+require exactly two requests separated by one announced transport retry, a
+successful final answer and a durable counter reduced to nine. This preserves
+one SSE request per invocation while permitting the existing governor to retry.
+Focused configured-runtime/adapter/loop verification: **55 PASS, 0 SKIP**.
