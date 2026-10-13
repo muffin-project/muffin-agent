@@ -452,6 +452,24 @@ describe('forget authority and independently resolved target boundary', () => {
     expect(h.store.factById('host', h.fact)?.expiredAt).toBeNull();
   });
 
+  it.each(['fact', 'source', 'new sibling'])('refuses a canonical %s changed during resolution', async (change) => {
+    const h = seed();
+    const original = h.deps.provider;
+    h.deps.provider = { kind: 'openai-compat', chat: async (call) => {
+      const selected = await original.chat(call);
+      if (change === 'fact') h.db.prepare('UPDATE facts SET object_value=? WHERE id=?').run('New dentist', h.fact);
+      if (change === 'source') h.db.prepare('UPDATE episodes SET content=? WHERE id=?').run('Changed source plus unrelated private information', h.ep);
+      if (change === 'new sibling') h.store.addFact({
+        tenantId: 'host', subjectId: h.me, predicate: 'accountant', objectValue: 'New accountant',
+        episodeId: h.ep, trustTier: 0, confidence: 1, extractionV: 1, recordedAt: NOW,
+      });
+      return selected;
+    } };
+    await expect(forgetMemory(h.deps, CTX, {})).rejects.toThrow(/cambiat|fonte.*fatt|fatti/i);
+    expect(h.store.factById('host', h.fact)?.expiredAt).toBeNull();
+    expect(h.store.provenanceOf('host', 'episode', h.ep)?.supersededAt).toBeNull();
+  });
+
   it('rolls back both writes if source retirement fails', async () => {
     const h = seed();
     const supersede = h.store.supersedeEpisodes;

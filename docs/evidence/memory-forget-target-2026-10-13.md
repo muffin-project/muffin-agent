@@ -71,3 +71,11 @@ called `memory_forget({})`; semantic resolution refused the unrelated target.
 Independent read-only wire/SQLite oracle confirmed the code fact and its source
 remain active (tier 2 preserved), with three real model completions and unchanged
 configuration. Evidence: `/private/tmp/muffin-memory-forget-negative-live-YWNL3t`.
+
+Precommit races now have durable regressions: a changed canonical fact, changed
+source content and a newly inserted unselected sibling each refuse retirement
+while preserving active fact/source. Three targeted tests PASS; removing the
+precommit snapshot/sibling guards makes all three FAIL. The source was restored
+byte-for-byte from a pre-mutation copy. Logs:
+`/private/tmp/muffin-memory-forget-guards-positive.log` and
+`/private/tmp/muffin-memory-forget-guards-mutated.log`.
