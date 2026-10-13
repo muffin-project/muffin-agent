@@ -158,3 +158,20 @@ Two Telegram recovery assertions now require 44 bounded attempts (four leases),
 not the previous 11; failed diagnostic delivery still cannot recompute the task.
 Focused CI-repair coverage: 48 PASS, including a 37-tool real-loop effect oracle
 that exceeds the former per-lease ceiling without renewal.
+
+Successful real CLI duration witness: **PASS** on runtime source `4e9cd8b9`,
+1,122,102 ms (18 min 42 s), real served `gpt-6.1-sol`, 15 HTTP 200 completed
+responses. Independent SQLite and filesystem oracles found one answered/done
+Turn on lease 0, 12 successful `fs_read`, one successful `fs_write`, and the
+exact final chain nonce plus newline in its receipt. No injected owner renewal
+or approval. The durable allowance records 15 model requests and 13 tool
+executions, matching the wire/effect oracles; active model time is 1,116,518 ms.
+The fixture's original config/profile hash is unchanged after cleanup.
+
+The witness injected 75 seconds of latency before each main inference request,
+then forwarded the real request and response bytes unchanged. It is a duration
+regression, not an empirical estimate of natural task success. Later changes
+add the semantic v10 boot guard, avoid unnecessary legacy/terminal database
+reads, and update tests/comments; the healthy active-loop/provider/resource
+mechanisms used by this witness remain unchanged. The v10 guard has its own
+populated-data and prior-writer rejection evidence.
