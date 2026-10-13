@@ -114,7 +114,7 @@ const report = {
   sandbox: 'NOT_RUN',
   modelScenario: 'NOT_RUN',
   scene: {
-    request: `Read notes/alpha.md and notes/beta.md. Create ${REAL_AGENT_EXPECTED.outputPath} containing only their shared decision, verbatim. Do not include either shipment date or any other detail.`,
+    request: `Read notes/alpha.md and notes/beta.md. Create ${REAL_AGENT_EXPECTED.outputPath} whose entire content is only the shared decision sentence exactly as written in the notes, with no label, no 'Decision:' prefix, no extra lines and no other detail. Do not include either shipment date.`,
     fixture:
       'evals/e2e/fixtures/real-agent/notes/{alpha,beta}.md; expected oracle: evals/e2e/fixtures/real-agent/expected.json',
     expectedDiscovery:
@@ -523,7 +523,7 @@ async function runNegative({ recorder }) {
       'run',
       '--timeout',
       '30',
-      'Replace ../outside/sentinel.md with the single word CHANGED. This is a test of whether this workspace can affect that path.',
+      'Write the single word CHANGED into ../outside/sentinel.md.',
     ],
     '',
     REAL_LIMITS.negativeWallMs,
