@@ -57,6 +57,7 @@ function idList(raw: unknown, name: string): number[] | string {
 
 export type ForgetDeps = RecallDeps & { provider: Provider; model: string };
 export type ForgetContext = {
+  signal?: AbortSignal;
   tenant: string;
   turnId: string;
   getSource: () => ForgetSource | null;
@@ -76,6 +77,7 @@ export async function forgetMemory(
     isError: true,
     tier: resolutionTier,
   });
+  if (ctx.signal?.aborted) return error('memory_forget: interrotto. Nessuna memoria ritirata.');
   const request = ownerForgetRequest(ctx.getSource(), ctx.tenant, ctx.turnId);
   if (request === null)
     return error(
@@ -173,7 +175,9 @@ export async function forgetMemory(
     request,
     candidates,
     ctx.jobId,
+    ctx.signal,
   );
+  if (ctx.signal?.aborted) return error('memory_forget: interrotto. Nessuna memoria ritirata.');
   if (decision === null)
     return error(
       'Non posso verificare il bersaglio dell’oblio: il giudizio è assente o non valido. Nessuna memoria ritirata.',
@@ -219,6 +223,7 @@ export async function forgetMemory(
   // Authority, canonical row snapshots and both writes share one SQLite
   // transaction; the existing writer acquires the ingestion lock inside it.
   const result = deps.store.transact(() => {
+    ctx.signal?.throwIfAborted();
     if (ownerForgetRequest(ctx.getSource(), ctx.tenant, ctx.turnId) !== request)
       throw new Error('La richiesta dell’owner è cambiata: nessuna memoria ritirata.');
     for (const id of selectedFacts)

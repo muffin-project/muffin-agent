@@ -807,7 +807,7 @@ export async function runTool(
     const outcome = await eseguiConRitentativi(
       tool,
       args,
-      risolto === undefined ? ctx : { ...ctx, effectPath: risolto },
+      { ...ctx, signal: input.signal, ...(risolto === undefined ? {} : { effectPath: risolto }) },
       decl?.rerunnable === true,
       call.name,
       input.onProgress,

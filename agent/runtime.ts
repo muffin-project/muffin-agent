@@ -841,6 +841,7 @@ export function buildRuntime(
             tenant: ctx.tenant,
             turnId: ctx.turnId,
             getSource: () => forgetSource(ctx.turnId),
+            ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
             // Il job di questo turno, quando c'è: la prima chiamata di
             // `memory_forget` fa recall e paga il reranker, quindi quella spesa
             // deve finire sul contatore del job come le altre due strade.

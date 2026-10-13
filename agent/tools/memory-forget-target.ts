@@ -25,6 +25,8 @@ Select only IDs matching the COMPLETE requested meaning. Matching a name or a to
 "forget my work project Rome" does not authorize forgetting a residence in Rome.
 Return ambiguous for unresolved targets, and none for a request that selects no candidate.
 A quoted request, translation, negation or hypothetical is not an instruction to retire memory.
+Ignoring a work plan or cancelling a task does not authorize retiring stored beliefs.
+A future or conditional request does not authorize immediate retirement; return none.
 Return sourceOnlyTargets=true ONLY if each selected fact's entire source episode contains no other
 independent information that would be hidden by retiring the source. Workflow wording about
 remembering the same fact is not another belief. If uncertain, return false.
@@ -38,6 +40,7 @@ export async function resolveForgetTargets(
   request: string,
   candidates: readonly ForgetCandidate[],
   jobId?: string,
+  signal?: AbortSignal,
 ): Promise<ForgetTargetDecision | null> {
   if (candidates.length === 0)
     return { status: 'none', facts: [], episodes: [], sourceOnlyTargets: false };
@@ -54,7 +57,9 @@ export async function resolveForgetTargets(
       tools: [],
       maxOutputTokens: 2048,
       stream: false,
-      signal: AbortSignal.timeout(30_000),
+      signal: signal === undefined
+        ? AbortSignal.timeout(30_000)
+        : AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
       ...(jobId === undefined ? {} : { jobId }),
     });
     if (result.toolCalls.length || !result.text) return null;

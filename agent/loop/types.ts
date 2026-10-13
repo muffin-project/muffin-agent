@@ -45,6 +45,8 @@ import type { AudioBlock, ImageBlock, Provider, ToolSpec } from '../providers/ty
  * nobody hands it one — the comment claiming it did was aspirational.
  */
 export type ToolContext = {
+  /** Runtime cancellation, never model-controlled tool arguments. */
+  signal?: AbortSignal | undefined;
   tenant: string;
   principal: Principal;
   /**

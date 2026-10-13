@@ -278,6 +278,27 @@ describe('memory_forget — «dimentica X» ritira la belief attraverso il write
 });
 
 describe('forget authority and independently resolved target boundary', () => {
+  it.each(['before lookup', 'during resolution'])('never retires after cancellation %s', async (stage) => {
+    const h = seed();
+    const controller = new AbortController();
+    let calls = 0;
+    const original = h.deps.provider;
+    h.deps.provider = { kind: 'openai-compat', chat: async (call) => {
+      calls += 1;
+      expect(call.signal).toBeDefined();
+      controller.abort('user_stop');
+      expect(call.signal?.aborted).toBe(true);
+      // A provider may ignore cancellation and return a valid selection.
+      return original.chat(call);
+    } };
+    if (stage === 'before lookup') controller.abort('user_stop');
+    const result = await forgetMemory(h.deps, { ...CTX, signal: controller.signal }, {});
+    expect(result.isError).toBe(true);
+    expect(calls).toBe(stage === 'before lookup' ? 0 : 1);
+    expect(h.store.factById('host', h.fact)?.expiredAt).toBeNull();
+    expect(h.store.searchEpisodes('host', 'Ferrante', 5)).toHaveLength(1);
+  });
+
   it('refuses quoted or missing owner intent before consulting a semantic provider', async () => {
     const h = seed();
     let calls = 0;
@@ -431,7 +452,7 @@ describe('forget authority and independently resolved target boundary', () => {
     expect(h.store.factById('host', h.fact)?.expiredAt).toBeNull();
   });
 
-  it('rejects changed canonical rows and rolls back both writes if source retirement fails', async () => {
+  it('rolls back both writes if source retirement fails', async () => {
     const h = seed();
     const supersede = h.store.supersedeEpisodes;
     h.store.supersedeEpisodes = () => {
