@@ -1615,6 +1615,19 @@ describe("l'indice coerente non dice che l'embedder risponda", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('accepts a successful cold-start probe beyond the former 1.5-second deadline', async () => {
+    const dir = await conIndice();
+    const c = await checkWith(dir, 'vector index', {
+      embedderProbe: async () => {
+        // A successful response beyond the former deadline must stay healthy.
+        await new Promise<void>((resolve) => setTimeout(resolve, 2_000));
+      },
+    });
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('in sync');
+    rmSync(dir, { recursive: true, force: true });
+  }, 15_000);
+
   /**
    * Il posto dove l'owner legge davvero la causa. Il difetto era a monte —
    * `embed.ts` passava `error.message` a `EmbedderUnavailable`, e quando

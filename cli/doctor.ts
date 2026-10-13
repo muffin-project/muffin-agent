@@ -2081,14 +2081,14 @@ function quantiNonIndicizzatiSafe(
   }
 }
 
-/** Quanto si aspetta un embedder che ha accettato la connessione e non risponde. */
-const EMBEDDER_PROBE_MS = 1_500;
+/** Probe deadline includes cold loading of local embedding models. */
+const EMBEDDER_PROBE_MS = 5_000;
 
 /**
  * `null` quando l'embedder ha risposto; il motivo, in parole, quando no.
  *
  * Una sola stringa da mettere in una riga, non un booleano: «connessione
- * rifiutata» e «non ha risposto entro un secondo e mezzo» mandano l'owner in
+ * rifiutata» e «non ha risposto entro cinque secondi» mandano l'owner in
  * due posti diversi, e la riga che li appiattisce in "non disponibile" è la
  * stessa che ha tenuto ferma la corsia della memoria per due giorni.
  */
