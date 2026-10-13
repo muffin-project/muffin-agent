@@ -43,7 +43,7 @@ Record in the PR or work handoff:
 - what evidence could falsify it;
 - any owner decision that genuinely blocks the shape.
 
-## DCO applies to every contribution PR
+## Contributor sign-offs and preserved attribution
 
 External contribution commits must carry a `Signed-off-by` trailer matching
 their Git author. Owner-authored internal work explicitly delegated to agents

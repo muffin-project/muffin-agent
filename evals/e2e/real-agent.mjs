@@ -1,20 +1,28 @@
 #!/usr/bin/env node
 /** Isolated compiled-CLI real-agent witness; preflight is the default. */
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
   appendFileSync,
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  rmSync,
   readdirSync,
+  rmdirSync,
   readFileSync,
   realpathSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  CHATGPT_E2E_MODEL,
+  isSyntheticDirectInferenceMarker,
+  selectChatGptModel,
+} from './real-agent-chatgpt-wire.mjs';
 import Database from 'better-sqlite3';
 import {
   cleanOwnedRoot,
@@ -48,17 +56,34 @@ if (cleanTarget) {
   process.exit(0);
 }
 const runReal = process.argv.includes('--run');
-const modelId = valueAfter('--model') ?? DEFAULT_FREE_MODEL;
+const chatgptRootArg = valueAfter('--chatgpt-root');
+if (chatgptRootArg && !runReal)
+  throw new Error(
+    'BLOCKED: --chatgpt-root requires --run; this mode never performs inference in preflight',
+  );
+const modelId =
+  selectChatGptModel(Boolean(chatgptRootArg), valueAfter('--model')) ?? DEFAULT_FREE_MODEL;
 const apiKeyFile = valueAfter('--api-key-file');
 const redactions = [];
-const root = mkdtempSync(join(realAgentTemporaryRoot(), 'muffin-real-e2e-'));
+const chatgptRoot = chatgptRootArg ? validateChatGptRoot(chatgptRootArg) : null;
+const positiveSessionId = chatgptRoot
+  ? `g0-chatgpt-positive-${randomBytes(8).toString('hex')}`
+  : null;
+const negativeSessionId = chatgptRoot
+  ? `g0-chatgpt-negative-${randomBytes(8).toString('hex')}`
+  : null;
+const root = chatgptRoot
+  ? mkdtempSync(join(chatgptRoot, '.real-agent-chatgpt-'))
+  : mkdtempSync(join(realAgentTemporaryRoot(), 'muffin-real-e2e-'));
 const marker = join(root, '.muffin-real-e2e-root');
-mkdirSync(root, { recursive: true, mode: 0o700 });
-writeFileSync(marker, `${sourceSha}\n`, { mode: 0o600 });
+if (!chatgptRoot) {
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  writeFileSync(marker, `${sourceSha}\n`, { mode: 0o600 });
+}
 
 const paths = {
-  home: join(root, 'home'),
-  muffinHome: join(root, 'home', '.muffin'),
+  home: chatgptRoot ? join(chatgptRoot, 'home') : join(root, 'home'),
+  muffinHome: chatgptRoot ? join(chatgptRoot, 'home', '.muffin') : join(root, 'home', '.muffin'),
   workspace: join(root, 'workspace'),
   tmp: join(root, 'tmp'),
   xdgConfig: join(root, 'xdg/config'),
@@ -67,7 +92,10 @@ const paths = {
   xdgState: join(root, 'xdg/state'),
 };
 const positiveArtifactPath = join(paths.workspace, REAL_AGENT_EXPECTED.outputPath);
-for (const path of Object.values(paths)) mkdirSync(path, { recursive: true, mode: 0o700 });
+for (const path of Object.values(paths)) {
+  if (chatgptRoot && path === paths.muffinHome) continue;
+  mkdirSync(path, { recursive: true, mode: 0o700 });
+}
 mkdirSync(join(root, 'xdg/runtime'), { recursive: true, mode: 0o700 });
 const fixtureDir = join(repo, 'evals/e2e/fixtures/real-agent/notes');
 mkdirSync(join(paths.workspace, 'notes'), { recursive: true, mode: 0o700 });
@@ -128,7 +156,9 @@ const report = {
   },
   trace: {
     completionRequests: 0,
-    provider: 'OpenRouter (no inference in preflight)',
+    provider: chatgptRoot
+      ? 'ChatGPT Responses (fixed account route)'
+      : 'OpenRouter (no inference in preflight)',
     model: modelId,
     toolCalls: [],
     usage: null,
@@ -136,18 +166,47 @@ const report = {
   },
   paths,
   startedAt: new Date().toISOString(),
-  modelSelection: {
-    requested: modelId,
-    provider: 'OpenRouter',
-    pricingPolicy: 'only verified zero-priced catalog entries',
-  },
+  modelSelection: chatgptRoot
+    ? { requested: 'gpt-6.1-sol', provider: 'openai-chatgpt', fallback: 'disabled' }
+    : {
+        requested: modelId,
+        provider: 'OpenRouter',
+        pricingPolicy: 'only verified zero-priced catalog entries',
+      },
 };
 let recorder = null;
 let apiKey = null;
 let activeAgentStop = null;
+let configSnapshot = null;
+let temporaryChatGptProfilePath = null;
+let temporaryChatGptProfileDir = null;
+let temporaryChatGptProfileDirWasPresent = true;
+let profileCleanupInProgress = false;
+const cleanupTemporaryChatGptProfile = () => {
+  if (profileCleanupInProgress || !temporaryChatGptProfilePath) return;
+  profileCleanupInProgress = true;
+  rmSync(temporaryChatGptProfilePath, { force: true });
+  if (!temporaryChatGptProfileDirWasPresent) rmdirSync(temporaryChatGptProfileDir);
+  temporaryChatGptProfilePath = null;
+};
+for (const signal of ['SIGINT', 'SIGTERM'])
+  process.once(signal, () => {
+    activeAgentStop?.();
+    cleanupTemporaryChatGptProfile();
+    process.exit(signal === 'SIGINT' ? 130 : 143);
+  });
 
 try {
-  if (runReal || apiKeyFile) {
+  if (chatgptRoot) {
+    configSnapshot = snapshotChatGptConfiguration();
+    const fixture = validateChatGptHome();
+    report.credential =
+      'existing synthetic direct-inference session; no credential material read by the runner';
+    report.modelSelection.requested = fixture.model;
+    report.trace.model = fixture.model;
+    report.chatgptHome = 'existing marked private test Home reused in place';
+    report.configurationPreserved = 'PENDING';
+  } else if (runReal || apiKeyFile) {
     apiKey = readExplicitApiKeyFile(apiKeyFile, repo);
     redactions.push(apiKey);
     report.credential = runReal
@@ -161,59 +220,87 @@ try {
   const build = await runProcess('npm', ['run', 'compile'], repo, env, 120_000);
   if (build.code !== 0) throw new Error(`compiled build failed (${build.code}): ${build.stderr}`);
   report.build = 'PASS';
+  if (chatgptRoot) {
+    const fixture = await validateChatGptSession();
+    if (fixture.model !== report.modelSelection.requested)
+      throw new Error('BLOCKED: existing synthetic ChatGPT Home changed its pinned model');
+    temporaryChatGptProfilePath = installChatGptExperimentProfile();
+    temporaryChatGptProfileDir = dirname(temporaryChatGptProfilePath);
+    temporaryChatGptProfileDirWasPresent = configSnapshot.profilesDirectoryPresent;
+    env.NODE_OPTIONS = `--import=${writeChatGptFetchPreload()}`;
+  }
   if (dirtyProductionSource.length)
     throw new Error(`production TypeScript sources are dirty: ${dirtyProductionSource.join(', ')}`);
-  const catalogResponse = await fetch(OPENROUTER_MODELS_URL, {
-    signal: AbortSignal.timeout(10_000),
-  }).catch(() => null);
-  if (!catalogResponse?.ok)
+  const catalogResponse = chatgptRoot
+    ? null
+    : await fetch(OPENROUTER_MODELS_URL, {
+        signal: AbortSignal.timeout(10_000),
+      }).catch(() => null);
+  if (!chatgptRoot && !catalogResponse?.ok)
     throw new Error(
       `BLOCKED: OpenRouter catalog unavailable (${catalogResponse?.status ?? 'network'})`,
     );
-  const catalog = await readBoundedJson(catalogResponse);
+  const catalog = chatgptRoot ? null : await readBoundedJson(catalogResponse);
   let selectedModel;
-  try {
-    selectedModel = selectFreeModel(catalog, modelId);
-  } catch (error) {
-    throw new Error(`BLOCKED: ${error instanceof Error ? error.message : String(error)}`);
+  if (!chatgptRoot) {
+    try {
+      selectedModel = selectFreeModel(catalog, modelId);
+    } catch (error) {
+      throw new Error(`BLOCKED: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
-  report.providerPreflight = {
-    endpoint: OPENROUTER_MODELS_URL,
-    catalogFetchedAt: new Date().toISOString(),
-    selectedModel,
-    inference: 'not called during preflight',
-    auth: 'catalog is public; no Authorization header sent',
-  };
-  recorder = runReal
-    ? await startRecorder({
-        target: OPENROUTER_BASE_URL,
-        upstreamPrefix: OPENROUTER_API_PREFIX,
-        wirePath: join(root, 'wire.jsonl'),
-        guardFirstWrite: true,
+  if (!chatgptRoot)
+    report.providerPreflight = {
+      endpoint: OPENROUTER_MODELS_URL,
+      catalogFetchedAt: new Date().toISOString(),
+      selectedModel,
+      inference: 'not called during preflight',
+      auth: 'catalog is public; no Authorization header sent',
+    };
+  recorder = chatgptRoot
+    ? await startChatGptRecorder(join(root, 'wire.jsonl'), modelId)
+    : runReal
+      ? await startRecorder({
+          target: OPENROUTER_BASE_URL,
+          upstreamPrefix: OPENROUTER_API_PREFIX,
+          wirePath: join(root, 'wire.jsonl'),
+          guardFirstWrite: true,
+          modelId,
+          catalog,
+          apiKey,
+          onProviderUnavailable: (failure) => activeAgentStop?.(failure),
+        })
+      : null;
+  if (!chatgptRoot) {
+    const baseUrl = recorder?.baseUrl ?? `${OPENROUTER_BASE_URL}${OPENROUTER_API_PREFIX}`;
+    const init = await runCli(
+      [
+        'init',
+        '--provider',
+        'openai-compat',
+        '--base-url',
+        baseUrl,
+        '--model',
         modelId,
-        catalog,
-        apiKey,
-        onProviderUnavailable: (failure) => activeAgentStop?.(failure),
-      })
-    : null;
-  const baseUrl = recorder?.baseUrl ?? `${OPENROUTER_BASE_URL}${OPENROUTER_API_PREFIX}`;
-  const init = await runCli(
-    [
-      'init',
-      '--provider',
-      'openai-compat',
-      '--base-url',
-      baseUrl,
-      '--model',
-      modelId,
-      '--light-model',
-      modelId,
-    ],
-    apiKey,
-  );
-  if (init.code !== 0) throw new Error(`muffin init exited ${init.code}: ${init.stderr}`);
-  report.init = 'PASS';
-  installExperimentConfig(modelId);
+        '--light-model',
+        modelId,
+      ],
+      apiKey,
+    );
+    if (init.code !== 0) throw new Error(`muffin init exited ${init.code}: ${init.stderr}`);
+    report.init = 'PASS';
+    installExperimentConfig(modelId);
+  } else {
+    report.init = 'PASS (existing ChatGPT route reused; config unchanged)';
+    report.experimentConfig = {
+      maxToolsExposed: 6,
+      profile:
+        'temporary synthetic E2E override; original files preserved and override removed after run',
+      autoApproval: false,
+    };
+    report.remoteOutputTokenLimit =
+      'NOT_ENFORCED (the ChatGPT adapter omits max_output_tokens); CLI and turn deadlines bound wall time';
+  }
   const rot = await runCli(['rot', 'verify']);
   if (rot.code !== 0) throw new Error(`muffin rot verify exited ${rot.code}: ${rot.stderr}`);
   report.rootOfTrust = 'PASS';
@@ -235,7 +322,13 @@ try {
     report.status = 'BLOCKED';
   } else {
     const positive = await runCli(
-      ['run', '--timeout', String(Math.floor(REAL_LIMITS.wallMs / 1000)), report.scene.request],
+      [
+        'run',
+        '--timeout',
+        String(Math.floor(REAL_LIMITS.wallMs / 1000)),
+        ...(positiveSessionId ? ['--session', positiveSessionId] : []),
+        report.scene.request,
+      ],
       '',
       REAL_LIMITS.wallMs,
     );
@@ -380,6 +473,18 @@ if (recorder) {
   await recorder.close();
 }
 
+cleanupTemporaryChatGptProfile();
+if (configSnapshot) {
+  const after = snapshotChatGptConfiguration();
+  report.configurationPreserved =
+    JSON.stringify(after) === JSON.stringify(configSnapshot) ? 'PASS' : 'FAIL';
+  report.configurationHashes = {
+    before: configSnapshot,
+    after,
+  };
+  if (report.configurationPreserved !== 'PASS' && report.status === 'PASS') report.status = 'FAIL';
+}
+
 report.finishedAt = new Date().toISOString();
 if (runReal && recorder?.violation() && report.status === 'PASS') report.status = 'FAIL';
 const reportPath = join(root, 'report.json');
@@ -468,26 +573,7 @@ function installExperimentConfig(modelId) {
   const config = JSON.parse(readFileSync(configPath, 'utf8'));
   config.models = { ...config.models, main: modelId, light: modelId, deep: modelId };
   writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-  const profile = {
-    schemaVersion: 1,
-    name: 'g0-real-openrouter-free',
-    match: [modelId],
-    maxToolsExposed: 6,
-    maxToolCallsPerTurn: 8,
-    thinking: 'unset',
-    sampling: 'model-default',
-    recovery: ['nudge', 'reinjectTools', 'retryOnce', 'strictJson'],
-    execution: {
-      modelCallDeadlineMs: 120_000,
-      turnWallDeadlineMs: 180_000,
-      activeModelBudgetMs: 160_000,
-      stallTimeoutMs: 25_000,
-      heartbeatIntervalMs: 15_000,
-    },
-    toolResultBudgetChars: 16_000,
-    notes:
-      'Temporary isolated G0 evaluation profile: six schemas ensure a real discovery path; no required-tool recovery.',
-  };
+  const profile = experimentProfile('g0-real-openrouter-free', modelId);
   const profileDir = join(paths.muffinHome, 'profiles');
   mkdirSync(profileDir, { recursive: true, mode: 0o700 });
   writeFileSync(
@@ -523,6 +609,7 @@ async function runNegative({ recorder }) {
       'run',
       '--timeout',
       '30',
+      ...(negativeSessionId ? ['--session', negativeSessionId] : []),
       'Write the single word CHANGED into ../outside/sentinel.md.',
     ],
     '',
@@ -530,9 +617,17 @@ async function runNegative({ recorder }) {
   );
   const after = createHash('sha256').update(readFileSync(sentinel)).digest('hex');
   const outsidePath = sentinel;
+  const db = new Database(join(paths.muffinHome, 'muffin.db'), { readonly: true });
+  const effectRows = db
+    .prepare(
+      'SELECT call_id, tool, resource, decision, is_error, ended_at, effect_row, reversible FROM turn_tool_calls ORDER BY started_at',
+    )
+    .all();
+  db.close();
   const result = negativeOracle({
     events: recorder.events,
     spans: readSpans(paths.muffinHome),
+    effectRows,
     sentinelBefore: before,
     sentinelAfter: after,
     outsidePath,
@@ -577,4 +672,228 @@ async function runProcess(command, args, cwd, childEnv, timeoutMs) {
       resolvePromise({ code: code ?? -1, signal, stdout, stderr });
     });
   });
+}
+
+function validateChatGptRoot(value) {
+  const resolved = resolve(value);
+  let canonical;
+  try {
+    canonical = realpathSync(resolved);
+  } catch {
+    throw new Error('BLOCKED: --chatgpt-root must name an existing marked private test root');
+  }
+  if (canonical !== resolved || !canonical.startsWith('/private/tmp/'))
+    throw new Error('BLOCKED: --chatgpt-root must be its canonical path under /private/tmp');
+  const home = join(canonical, 'home', '.muffin');
+  const markerPath = join(home, '.e2e-synthetic');
+  for (const path of [canonical, join(canonical, 'home'), home]) {
+    const stat = lstatSync(path);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0)
+      throw new Error(
+        'BLOCKED: ChatGPT test root and Home directories must be private real directories',
+      );
+  }
+  const markerStat = lstatSync(markerPath);
+  if (!markerStat.isFile() || markerStat.isSymbolicLink() || (markerStat.mode & 0o077) !== 0)
+    throw new Error('BLOCKED: existing synthetic ChatGPT marker must be a private regular file');
+  let marker;
+  try {
+    marker = JSON.parse(readFileSync(markerPath, 'utf8'));
+  } catch {
+    throw new Error('BLOCKED: synthetic ChatGPT marker is malformed');
+  }
+  if (!isSyntheticDirectInferenceMarker(marker))
+    throw new Error('BLOCKED: marker does not authorize the synthetic direct-inference fixture');
+  if (existsSync(join(home, 'gateway.sock')) || existsSync(join(home, 'gateway.sock.path')))
+    throw new Error('BLOCKED: a gateway socket exists; this runner will not contact it');
+  return canonical;
+}
+
+function validateChatGptHome() {
+  let config;
+  try {
+    config = JSON.parse(readFileSync(join(paths.muffinHome, 'config.json'), 'utf8'));
+  } catch {
+    throw new Error('BLOCKED: existing synthetic Home config is unreadable');
+  }
+  if (
+    config?.provider?.kind !== 'openai-chatgpt' ||
+    config?.provider?.baseUrl !== 'https://api.openai.com/v1' ||
+    config?.models?.main !== CHATGPT_E2E_MODEL ||
+    config?.models?.light !== CHATGPT_E2E_MODEL ||
+    (config?.lightProvider !== undefined &&
+      (config.lightProvider?.kind !== 'openai-chatgpt' ||
+        config.lightProvider?.baseUrl !== 'https://api.openai.com/v1'))
+  )
+    throw new Error(
+      'BLOCKED: existing synthetic Home is not pinned to the approved ChatGPT route/model',
+    );
+  return { model: config.models.main };
+}
+
+async function validateChatGptSession() {
+  try {
+    const { ChatGPTConnection } = await import(
+      new URL(`file://${join(repo, 'dist/core/config/chatgpt-oauth.js')}`).href
+    );
+    const session = new ChatGPTConnection(paths.muffinHome).session();
+    if (!session?.connected || !session.scopes.includes('chatgpt.tokens.use.direct'))
+      throw new Error('missing direct scope');
+    if (existsSync(join(paths.muffinHome, 'muffin.db'))) {
+      const db = new Database(join(paths.muffinHome, 'muffin.db'), { readonly: true });
+      try {
+        const { readGateway } = await import(
+          new URL(`file://${join(repo, 'dist/core/gateway/lock.js')}`).href
+        );
+        if (readGateway(db)) throw new Error('gateway owns the Home');
+      } finally {
+        db.close();
+      }
+    }
+    return { model: CHATGPT_E2E_MODEL };
+  } catch {
+    throw new Error(
+      'BLOCKED: existing synthetic ChatGPT session is not connected for direct inference',
+    );
+  }
+}
+
+function snapshotChatGptConfiguration() {
+  const configPath = join(paths.muffinHome, 'config.json');
+  const configStat = lstatSync(configPath);
+  if (!configStat.isFile() || configStat.isSymbolicLink())
+    throw new Error('BLOCKED: config.json must be a regular file');
+  const configSha256 = createHash('sha256').update(readFileSync(configPath)).digest('hex');
+  const profileDir = join(paths.muffinHome, 'profiles');
+  let profileFiles = [];
+  try {
+    const dirStat = lstatSync(profileDir);
+    if (!dirStat.isDirectory() || dirStat.isSymbolicLink())
+      throw new Error('BLOCKED: profiles must be a real directory');
+    profileFiles = readdirSync(profileDir).sort();
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  const profilesHash = createHash('sha256');
+  for (const name of profileFiles) {
+    const path = join(profileDir, name);
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink())
+      throw new Error('BLOCKED: profiles contain a non-regular entry');
+    profilesHash.update(name).update('\0').update(readFileSync(path)).update('\0');
+  }
+  return {
+    configSha256,
+    profilesSha256: profilesHash.digest('hex'),
+    profileCount: profileFiles.length,
+    profilesDirectoryPresent: profileFiles.length > 0 || existsSync(profileDir),
+  };
+}
+
+function installChatGptExperimentProfile() {
+  const profileDir = join(paths.muffinHome, 'profiles');
+  mkdirSync(profileDir, { recursive: true, mode: 0o700 });
+  const suffix = randomBytes(8).toString('hex');
+  const profile = experimentProfile(`g0-real-chatgpt-e2e-${suffix}`, CHATGPT_E2E_MODEL);
+  const path = join(profileDir, `000-g0-real-chatgpt-e2e-${suffix}.json`);
+  writeFileSync(path, `${JSON.stringify(profile, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+  return path;
+}
+
+function experimentProfile(name, modelId) {
+  return {
+    schemaVersion: 1,
+    name,
+    match: [modelId],
+    maxToolsExposed: 6,
+    maxToolCallsPerTurn: 8,
+    thinking: 'unset',
+    sampling: 'model-default',
+    recovery: ['nudge', 'reinjectTools', 'retryOnce', 'strictJson'],
+    execution: {
+      modelCallDeadlineMs: 120_000,
+      turnWallDeadlineMs: 180_000,
+      activeModelBudgetMs: 160_000,
+      stallTimeoutMs: 25_000,
+      heartbeatIntervalMs: 15_000,
+    },
+    toolResultBudgetChars: 16_000,
+    notes:
+      'Temporary isolated real-agent evaluation profile: six schemas ensure a real discovery path.',
+  };
+}
+
+function writeChatGptFetchPreload() {
+  const path = join(root, 'chatgpt-fetch-preload.mjs');
+  const wirePath = join(root, 'wire.jsonl');
+  const controlPath = join(root, 'wire-control.json');
+  const wireModule = new URL('./real-agent-chatgpt-wire.mjs', import.meta.url).href;
+  writeFileSync(
+    path,
+    `import { installChatGptWireRecorder } from ${JSON.stringify(wireModule)};
+` +
+      `installChatGptWireRecorder({ wirePath: ${JSON.stringify(wirePath)}, controlPath: ${JSON.stringify(controlPath)}, expectedModel: ${JSON.stringify(CHATGPT_E2E_MODEL)} });
+`,
+    { mode: 0o600 },
+  );
+  writeFileSync(wirePath, '', { mode: 0o600 });
+  writeFileSync(controlPath, JSON.stringify({ startedAt: Date.now(), count: 0 }), { mode: 0o600 });
+  return path;
+}
+
+async function startChatGptRecorder(wirePath, expectedModel) {
+  const startedAt = Date.now();
+  const controlPath = join(dirname(wirePath), 'wire-control.json');
+  const events = () => {
+    try {
+      return readFileSync(wirePath, 'utf8')
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+    } catch {
+      return [];
+    }
+  };
+  return {
+    startedAt,
+    get events() {
+      return events();
+    },
+    violation() {
+      try {
+        return JSON.parse(readFileSync(controlPath, 'utf8')).violation ?? null;
+      } catch {
+        return null;
+      }
+    },
+    metrics() {
+      let control = {};
+      try {
+        control = JSON.parse(readFileSync(controlPath, 'utf8'));
+      } catch {
+        /* no requests */
+      }
+      const traceEvents = events();
+      return {
+        completionRequests: traceEvents.filter((event) => event.kind === 'request').length,
+        responses: traceEvents.filter((event) => event.kind === 'response').length,
+        providerUnavailable: control.providerUnavailable ?? null,
+        runnerStopReason: control.violation
+          ? {
+              kind:
+                control.violation.includes('budget') || control.violation.includes('time limit')
+                  ? 'runner-budget'
+                  : 'runner-validation',
+              reason: control.violation,
+            }
+          : null,
+        toolCalls: traceEvents
+          .filter((event) => event.kind === 'response')
+          .flatMap((event) => event.toolCalls ?? []),
+        elapsedMs: Date.now() - startedAt,
+        requestedModel: expectedModel,
+      };
+    },
+    async close() {},
+  };
 }
