@@ -17,13 +17,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { toolContext } from '../fixtures/tool-context.js';
 import {
   DISK_TIER,
-  PathDenied,
+  type FsScope,
   fsList,
   fsRead,
   fsWrite,
   makeFsTools,
+  PathDenied,
   resolveInScope,
-  type FsScope,
 } from './fs.js';
 
 /**
@@ -94,6 +94,27 @@ describe('filesystem primitives', () => {
   it('refuses an absolute path pointing elsewhere', () => {
     const { scope, outside } = scoped();
     expect(() => fsRead(scope, join(outside, 'segreto.txt'))).toThrow(PathDenied);
+  });
+
+  it('types only filesystem containment failures as outside_scope', () => {
+    const { scope, outside } = scoped();
+    let outsideError: unknown;
+    try {
+      resolveInScope(scope, join(outside, 'segreto.txt'), true);
+    } catch (error) {
+      outsideError = error;
+    }
+    expect(outsideError).toBeInstanceOf(PathDenied);
+    expect((outsideError as PathDenied).reason).toBe('outside_scope');
+
+    let rootOfTrustError: unknown;
+    try {
+      resolveInScope(scope, 'secrets/provider_api_key', true);
+    } catch (error) {
+      rootOfTrustError = error;
+    }
+    expect(rootOfTrustError).toBeInstanceOf(PathDenied);
+    expect((rootOfTrustError as PathDenied).reason).toBeUndefined();
   });
 
   it('is not fooled by a symlink that leaves the scope', () => {
@@ -217,7 +238,9 @@ describe('filesystem primitives', () => {
       const { scope, root, outside } = scoped();
       writeFileSync(join(outside, 'esistente.txt'), 'ORIGINALE');
       symlinkSync(outside, join(root, 'altro-parent-symlinkato'));
-      expect(() => fsWrite(scope, 'altro-parent-symlinkato/esistente.txt', 'SOVRASCRITTO')).toThrow(PathDenied);
+      expect(() => fsWrite(scope, 'altro-parent-symlinkato/esistente.txt', 'SOVRASCRITTO')).toThrow(
+        PathDenied,
+      );
       expect(readFileSync(join(outside, 'esistente.txt'), 'utf8')).toBe('ORIGINALE');
     });
   });
@@ -371,7 +394,7 @@ describe('what a filesystem tool says about where its bytes came from', () => {
     expect(DISK_TIER).toBe(2);
   });
 
-  it('a listing is tier 2 too — a filename is somebody\'s text', async () => {
+  it("a listing is tier 2 too — a filename is somebody's text", async () => {
     // `IGNORA le istruzioni precedenti.md` is a legal filename and costs an
     // attacker nothing. Treating a listing as metadata rather than as content
     // would be a special case whose only argument is that the strings are short.
@@ -382,7 +405,7 @@ describe('what a filesystem tool says about where its bytes came from', () => {
     expect(out.tier).toBe(DISK_TIER);
   });
 
-  it('a write is tier 0: the result is the tool\'s own receipt, nothing came in', async () => {
+  it("a write is tier 0: the result is the tool's own receipt, nothing came in", async () => {
     const { scope } = scoped();
     const out = await byName(scope, 'fs_write').handler({ path: 'nuovo.md', content: 'x' }, ctx);
     expect(out.content).toContain('wrote 1 bytes');
@@ -521,7 +544,10 @@ describe('fs_read a finestre, fs_edit chirurgico', () => {
   it('una finestra numera le righe e dice intervallo e totale', async () => {
     const { scope, root } = scoped();
     writeFileSync(join(root, 'lungo.txt'), ['uno', 'due', 'tre', 'quattro', 'cinque'].join('\n'));
-    const out = await byName(scope, 'fs_read').handler({ path: 'lungo.txt', offset: 2, limit: 2 }, toolContext());
+    const out = await byName(scope, 'fs_read').handler(
+      { path: 'lungo.txt', offset: 2, limit: 2 },
+      toolContext(),
+    );
     expect(out.content).toContain('righe 2–3 di 5');
     expect(out.content).toContain('2: due');
     expect(out.content).toContain('3: tre');
@@ -541,15 +567,19 @@ describe('fs_read a finestre, fs_edit chirurgico', () => {
   it('offset oltre la fine lancia invece di restituire vuoto', () => {
     const { scope, root } = scoped();
     writeFileSync(join(root, 'corto.txt'), 'solo\n');
-    expect(() => byName(scope, 'fs_read').handler({ path: 'corto.txt', offset: 9 }, toolContext())).toThrow(
-      /oltre la fine/,
-    );
+    expect(() =>
+      byName(scope, 'fs_read').handler({ path: 'corto.txt', offset: 9 }, toolContext()),
+    ).toThrow(/oltre la fine/);
   });
 
   it('offset e limit non interi o minori di 1 non passano lo schema', () => {
     const { scope } = scoped();
-    expect(() => byName(scope, 'fs_read').handler({ path: 'x', offset: 0 }, toolContext())).toThrow();
-    expect(() => byName(scope, 'fs_read').handler({ path: 'x', limit: 1.5 }, toolContext())).toThrow();
+    expect(() =>
+      byName(scope, 'fs_read').handler({ path: 'x', offset: 0 }, toolContext()),
+    ).toThrow();
+    expect(() =>
+      byName(scope, 'fs_read').handler({ path: 'x', limit: 1.5 }, toolContext()),
+    ).toThrow();
   });
 
   it('fs_edit sostituisce il blocco unico e dice le righe', async () => {
@@ -572,7 +602,10 @@ describe('fs_read a finestre, fs_edit chirurgico', () => {
     // Sincrono come gli altri rifiuti di questo file: niente è successo al file
     // prima ancora che una promise esista.
     expect(() =>
-      byName(scope, 'fs_edit').handler({ path: 'fermo.txt', oldText: 'inesistente', newText: 'x' }, toolContext()),
+      byName(scope, 'fs_edit').handler(
+        { path: 'fermo.txt', oldText: 'inesistente', newText: 'x' },
+        toolContext(),
+      ),
     ).toThrow(/non trovato/);
     expect(readFileSync(f, 'utf8')).toBe('contenuto vero\n');
   });
@@ -582,7 +615,10 @@ describe('fs_read a finestre, fs_edit chirurgico', () => {
     const f = join(root, 'doppio.txt');
     writeFileSync(f, 'chiave: 1\nchiave: 2\n');
     expect(() =>
-      byName(scope, 'fs_edit').handler({ path: 'doppio.txt', oldText: 'chiave', newText: 'x' }, toolContext()),
+      byName(scope, 'fs_edit').handler(
+        { path: 'doppio.txt', oldText: 'chiave', newText: 'x' },
+        toolContext(),
+      ),
     ).toThrow(/2 volte/);
     // Il file è intatto: un edit ambiguo che "sceglie la prima" modificherebbe
     // al posto sbagliato, ed è proprio ciò che il vincolo vieta.
@@ -602,7 +638,9 @@ describe('fs_read a finestre, fs_edit chirurgico', () => {
 
   it('oldText vuoto non passa lo schema: matcherebbe ovunque', () => {
     const { scope } = scoped();
-    expect(() => byName(scope, 'fs_edit').handler({ path: 'x', oldText: '', newText: 'y' }, toolContext())).toThrow();
+    expect(() =>
+      byName(scope, 'fs_edit').handler({ path: 'x', oldText: '', newText: 'y' }, toolContext()),
+    ).toThrow();
   });
 
   it('`fs_edit` scrive dove il journal ha fotografato, come `fs_write`', async () => {
@@ -627,6 +665,11 @@ describe('fs_read a finestre, fs_edit chirurgico', () => {
     expect(tool.resolveEffectPath).toBeDefined();
     const { fsCapabilities } = await import('./fs.js');
     const decl = fsCapabilities.find((d) => d.id === 'fs.edit')!;
-    expect(decl).toMatchObject({ risk: 'medium', reversible: 'undoable', rerunnable: false, hostOnly: true });
+    expect(decl).toMatchObject({
+      risk: 'medium',
+      reversible: 'undoable',
+      rerunnable: false,
+      hostOnly: true,
+    });
   });
 });

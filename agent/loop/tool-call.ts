@@ -329,6 +329,7 @@ export async function runTool(
           isError: true,
         };
       }
+      let effectPathResolved = false;
       try {
         // Prima di `recordIntent`, di proposito. Se la copia fallisce si esce
         // di qui **senza** riga d'intento, cioè "mai partito" — lo stesso stato
@@ -339,8 +340,21 @@ export async function runTool(
         // Una sola risoluzione, e il suo risultato viaggia con la chiamata:
         // l'handler la riusa invece di rifarla (vedi `ToolContext.effectPath`).
         risolto = tool.resolveEffectPath(args, ctx);
+        effectPathResolved = true;
         deps.undo.take(ctx.turnId, { callId: call.id, capability, path: risolto });
       } catch (error) {
+        // Keep the loop independent of the filesystem module: the resolver's
+        // existing PathDenied carries this discriminant only for containment.
+        // A similarly shaped failure from undo.take is never a path rejection.
+        if (
+          !effectPathResolved &&
+          error instanceof Error &&
+          error.name === 'PathDenied' &&
+          'reason' in error &&
+          error.reason === 'outside_scope'
+        ) {
+          span.setAttributes({ 'muffin.effect.preflight_rejection': 'outside_scope' });
+        }
         span.end({ status: 'error', error: 'draft_snapshot_failed' });
         emitToolEnd(true);
         return {

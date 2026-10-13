@@ -1,7 +1,7 @@
 import {
   closeSync,
-  constants as fsConstants,
   existsSync,
+  constants as fsConstants,
   fstatSync,
   lstatSync,
   mkdirSync,
@@ -9,17 +9,18 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  type Stats,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { z } from 'zod';
 import { isIncarnationFile } from '../../core/lock/incarnation.js';
 import { fence } from '../../core/memory/spotlight.js';
 import type { CapabilityDecl, TrustTier } from '../../core/policy/types.js';
-import type { ToolSpec } from '../providers/types.js';
 import type { RegisteredTool } from '../loop.js';
-import { z } from 'zod';
+import type { ToolSpec } from '../providers/types.js';
 
 /**
  * The three filesystem primitives of M1.
@@ -294,7 +295,10 @@ export const fsToolSpecs: ToolSpec[] = [
       type: 'object',
       properties: {
         path: { type: 'string', description: 'Path relative to the working directory' },
-        offset: { type: 'number', description: 'First line to return, 1-based. Omit to read from the start.' },
+        offset: {
+          type: 'number',
+          description: 'First line to return, 1-based. Omit to read from the start.',
+        },
         limit: { type: 'number', description: 'Maximum lines to return. Omit to read to the end.' },
       },
       required: ['path'],
@@ -305,11 +309,13 @@ export const fsToolSpecs: ToolSpec[] = [
     description:
       'List the entries of a directory, marking which are directories. Use it when you need to see what is in a ' +
       'folder before deciding what to read or search next — this is the tool for `ls`, not shell_run. Not for ' +
-      'finding a file inside subdirectories: fs_search with `name` recurses, this does not. Returns each entry\'s ' +
+      "finding a file inside subdirectories: fs_search with `name` recurses, this does not. Returns each entry's " +
       'name and whether it is a directory.',
     inputSchema: {
       type: 'object',
-      properties: { path: { type: 'string', description: 'Directory, relative to the working directory' } },
+      properties: {
+        path: { type: 'string', description: 'Directory, relative to the working directory' },
+      },
       required: ['path'],
     },
   },
@@ -326,9 +332,20 @@ export const fsToolSpecs: ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Literal text to find inside files (case-insensitive). Not a regex.' },
-        name: { type: 'string', description: 'Only search files whose relative path contains this (case-insensitive), e.g. "test.ts" or "core/memory".' },
-        path: { type: 'string', description: 'Directory to search under, relative to the working directory. Defaults to the working directory.' },
+        query: {
+          type: 'string',
+          description: 'Literal text to find inside files (case-insensitive). Not a regex.',
+        },
+        name: {
+          type: 'string',
+          description:
+            'Only search files whose relative path contains this (case-insensitive), e.g. "test.ts" or "core/memory".',
+        },
+        path: {
+          type: 'string',
+          description:
+            'Directory to search under, relative to the working directory. Defaults to the working directory.',
+        },
       },
     },
   },
@@ -369,8 +386,14 @@ export const fsToolSpecs: ToolSpec[] = [
       type: 'object',
       properties: {
         path: { type: 'string', description: 'Path relative to the working directory' },
-        oldText: { type: 'string', description: 'The exact current block, character for character. Must match exactly once.' },
-        newText: { type: 'string', description: 'What it becomes. May be empty to delete the block.' },
+        oldText: {
+          type: 'string',
+          description: 'The exact current block, character for character. Must match exactly once.',
+        },
+        newText: {
+          type: 'string',
+          description: 'What it becomes. May be empty to delete the block.',
+        },
       },
       required: ['path', 'oldText', 'newText'],
     },
@@ -378,9 +401,12 @@ export const fsToolSpecs: ToolSpec[] = [
 ];
 
 export class PathDenied extends Error {
-  constructor(message: string) {
+  readonly reason: 'outside_scope' | undefined;
+
+  constructor(message: string, reason?: 'outside_scope') {
     super(message);
     this.name = 'PathDenied';
+    this.reason = reason;
   }
 }
 
@@ -600,7 +626,10 @@ type EnclosingRepo = { repoRoot: string; gitdir: string };
  * write must be denied. A `.git` that does not exist at all (missing or
  * dangling link) is simply not a checkout — Git itself would agree.
  */
-function findEnclosingRepos(target: string, scopeRoot: string): { repos: EnclosingRepo[]; uncertain: boolean } {
+function findEnclosingRepos(
+  target: string,
+  scopeRoot: string,
+): { repos: EnclosingRepo[]; uncertain: boolean } {
   const out: EnclosingRepo[] = [];
   let uncertain = false;
   // `target` arrives realpath'd from `resolveInScope`; `scope.root` may still
@@ -769,7 +798,8 @@ function readGitExecutionTargets(repoRoot: string, gitdir: string): GitExecution
         uncertain = true;
         continue;
       }
-      for (const abs of resolveGitConfigPaths(expanded, [repoRoot, gitdir, originDir])) hooksDirs.push(abs);
+      for (const abs of resolveGitConfigPaths(expanded, [repoRoot, gitdir, originDir]))
+        hooksDirs.push(abs);
     }
   }
   return { includes, hooksDirs, uncertain };
@@ -1037,7 +1067,7 @@ export function resolveInScope(scope: FsScope, requested: string, forWrite: bool
   const target = realpathDeepest(requestedFull, forWrite ? 'reject' : 'follow');
 
   if (!containmentCheck(base, target)) {
-    throw new PathDenied(`outside the working directory: ${requested}`);
+    throw new PathDenied(`outside the working directory: ${requested}`, 'outside_scope');
   }
 
   // Writes check the full deny-list; reads check the narrower one — see
@@ -1046,7 +1076,9 @@ export function resolveInScope(scope: FsScope, requested: string, forWrite: bool
   // (never the unresolved location of a symlink), case-blind where the
   // filesystem is.
   if (isDenied(scope, target, forWrite)) {
-    throw new PathDenied(`${forWrite ? 'write' : 'read'} denied by the root of trust: ${requested}`);
+    throw new PathDenied(
+      `${forWrite ? 'write' : 'read'} denied by the root of trust: ${requested}`,
+    );
   }
 
   // A hard link has its own realpath, so no amount of resolving reveals that it
@@ -1069,7 +1101,11 @@ export function resolveInScope(scope: FsScope, requested: string, forWrite: bool
   return target;
 }
 
-export function fsRead(scope: FsScope, path: string, window?: { offset?: number; limit?: number }): string {
+export function fsRead(
+  scope: FsScope,
+  path: string,
+  window?: { offset?: number; limit?: number },
+): string {
   const full = resolveInScope(scope, path, false);
   // Opened with `O_NOFOLLOW` rather than checked-then-read on a path string:
   // `resolveInScope` above and this open are still two syscalls (a TOCTOU
@@ -1086,7 +1122,8 @@ export function fsRead(scope: FsScope, path: string, window?: { offset?: number;
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ENOENT') throw new PathDenied(`no such file: ${path}`);
-    if (code === 'ELOOP') throw new PathDenied(`a symlink appeared at ${path} between the check and the read`);
+    if (code === 'ELOOP')
+      throw new PathDenied(`a symlink appeared at ${path} between the check and the read`);
     throw error;
   }
   try {
@@ -1095,10 +1132,13 @@ export function fsRead(scope: FsScope, path: string, window?: { offset?: number;
     // A model that asks for a 2 GB file gets a refusal rather than the process
     // getting an out-of-memory kill and the turn dying without a trace.
     if (stat.size > MAX_READ_BYTES) {
-      throw new PathDenied(`${path} is ${(stat.size / 1e6).toFixed(1)}MB, over the ${MAX_READ_BYTES / 1e6}MB read limit`);
+      throw new PathDenied(
+        `${path} is ${(stat.size / 1e6).toFixed(1)}MB, over the ${MAX_READ_BYTES / 1e6}MB read limit`,
+      );
     }
     const text = readFileSync(fd, 'utf8');
-    if (window === undefined || (window.offset === undefined && window.limit === undefined)) return text;
+    if (window === undefined || (window.offset === undefined && window.limit === undefined))
+      return text;
     /**
      * La finestra per righe, e perché i numeri ci sono solo qui.
      *
@@ -1116,7 +1156,8 @@ export function fsRead(scope: FsScope, path: string, window?: { offset?: number;
     if (offset > lines.length) {
       throw new PathDenied(`${path} ha ${lines.length} righe: offset ${offset} oltre la fine`);
     }
-    const end = window.limit === undefined ? lines.length : Math.min(lines.length, offset - 1 + window.limit);
+    const end =
+      window.limit === undefined ? lines.length : Math.min(lines.length, offset - 1 + window.limit);
     const numbered = lines.slice(offset - 1, end).map((line, i) => `${offset + i}: ${line}`);
     return [`righe ${offset}–${end} di ${lines.length} (${path})`, ...numbered].join('\n');
   } finally {
@@ -1258,7 +1299,9 @@ export function fsSearch(
   const query = args.query?.trim() ?? '';
   const name = args.name?.trim().toLowerCase() ?? '';
   if (query === '' && name === '') {
-    throw new PathDenied('serve almeno `query` (cosa cercare dentro i file) o `name` (che file cercare)');
+    throw new PathDenied(
+      'serve almeno `query` (cosa cercare dentro i file) o `name` (che file cercare)',
+    );
   }
   const start = resolveInScope(scope, args.path ?? '.', false);
   if (!existsSync(start) || !statSync(start).isDirectory()) {
@@ -1285,7 +1328,7 @@ export function fsSearch(
     for (const voce of voci) {
       if (troncato) return;
       const pieno = join(dir, voce);
-      let st;
+      let st: Stats | undefined;
       try {
         st = lstatSync(pieno, { throwIfNoEntry: false });
       } catch {
@@ -1372,10 +1415,17 @@ export function fsSearch(
   cammina(start);
 
   const note: string[] = [];
-  if (troncato) note.push(`fermata al tetto: ${String(SEARCH_LIMITS.matches)} riscontri o ${String(SEARCH_LIMITS.files)} file — restringi con \`name\` o \`path\``);
+  if (troncato)
+    note.push(
+      `fermata al tetto: ${String(SEARCH_LIMITS.matches)} riscontri o ${String(SEARCH_LIMITS.files)} file — restringi con \`name\` o \`path\``,
+    );
   if (saltatiPerNome) note.push(`non attraversate: ${[...SEARCH_SKIP].join(', ')}`);
-  if (saltatiPerDimensione > 0) note.push(`${String(saltatiPerDimensione)} file oltre ${String(SEARCH_LIMITS.bytes / 1024)}KB, non letti`);
-  if (saltatiIlleggibili > 0) note.push(`${String(saltatiIlleggibili)} percorsi illeggibili, saltati`);
+  if (saltatiPerDimensione > 0)
+    note.push(
+      `${String(saltatiPerDimensione)} file oltre ${String(SEARCH_LIMITS.bytes / 1024)}KB, non letti`,
+    );
+  if (saltatiIlleggibili > 0)
+    note.push(`${String(saltatiIlleggibili)} percorsi illeggibili, saltati`);
 
   const testa = righe.length === 0 ? 'nessun riscontro' : righe.join('\n');
   return note.length === 0 ? testa : `${testa}\n\n[${note.join(' · ')}]`;
@@ -1426,19 +1476,28 @@ export function fsWrite(scope: FsScope, path: string, content: string, resolved?
  * direzione di `fsRead` sui lanci: solo `PathDenied` costruiti qui, mai byte
  * del disco in un messaggio d'errore.
  */
-export function fsEdit(scope: FsScope, path: string, oldText: string, newText: string, resolved?: string): string {
+export function fsEdit(
+  scope: FsScope,
+  path: string,
+  oldText: string,
+  newText: string,
+  resolved?: string,
+): string {
   const full = resolved ?? resolveInScope(scope, path, true);
   // Lo stesso tetto di `fsRead`, per la stessa ragione: senza, un file da 2 GB
   // qui ucciderebbe il processo invece di rispondere con un rifiuto.
   const size = statSync(full, { throwIfNoEntry: false })?.size;
   if (size !== undefined && size > MAX_READ_BYTES) {
-    throw new PathDenied(`${path} is ${(size / 1e6).toFixed(1)}MB, over the ${MAX_READ_BYTES / 1e6}MB read limit`);
+    throw new PathDenied(
+      `${path} is ${(size / 1e6).toFixed(1)}MB, over the ${MAX_READ_BYTES / 1e6}MB read limit`,
+    );
   }
   let current: string;
   try {
     current = readFileSync(full, 'utf8');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new PathDenied(`no such file: ${path}`);
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+      throw new PathDenied(`no such file: ${path}`);
     throw error;
   }
   // Conteggio senza regex: `oldText` è testo letterale, e una regex costruita
@@ -1450,12 +1509,18 @@ export function fsEdit(scope: FsScope, path: string, oldText: string, newText: s
     );
   }
   if (occurrences > 1) {
-    throw new PathDenied(`"${oldText.slice(0, 120)}" compare ${occurrences} volte in ${path}: restringi il blocco finché non è unico, niente è stato scritto`);
+    throw new PathDenied(
+      `"${oldText.slice(0, 120)}" compare ${occurrences} volte in ${path}: restringi il blocco finché non è unico, niente è stato scritto`,
+    );
   }
   const updated = current.replace(oldText, newText);
   let fd: number;
   try {
-    fd = openSync(full, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW, 0o666);
+    fd = openSync(
+      full,
+      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW,
+      0o666,
+    );
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ELOOP') {
       throw new PathDenied(`a symlink appeared at ${path} between the check and the write`);
@@ -1509,7 +1574,11 @@ const readArgs = z.object({
   offset: z.number().int().min(1).optional(),
   limit: z.number().int().min(1).optional(),
 });
-const editArgs = z.object({ path: z.string().min(1), oldText: z.string().min(1), newText: z.string() });
+const editArgs = z.object({
+  path: z.string().min(1),
+  oldText: z.string().min(1),
+  newText: z.string(),
+});
 const writeArgs = z.object({ path: z.string().min(1), content: z.string() });
 /**
  * Tutto opzionale, e il rifiuto di «né l'uno né l'altro» sta dentro `fsSearch`
@@ -1630,7 +1699,10 @@ export function makeFsTools(scope: FsScope): RegisteredTool[] {
           // outside the fence to keep a note company is the direction that does
           // not. And the truncation sentences land *inside* the body, so a cut
           // result still ends with the closing marker.
-          content: fenceDisk(fsSearch(scope, a), `ricerca su disco (${a.query ?? a.name ?? a.path ?? ''})`),
+          content: fenceDisk(
+            fsSearch(scope, a),
+            `ricerca su disco (${a.query ?? a.name ?? a.path ?? ''})`,
+          ),
           tier: DISK_TIER,
         };
       },

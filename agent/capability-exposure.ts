@@ -7,8 +7,8 @@ export const CAPABILITY_SEARCH_TOOL_NAME = 'capability_search';
  */
 export const CAPABILITY_DISCOVERY_GUIDANCE =
   '[Il menu tool di questo turno è una proiezione parziale del catalogo autorizzato. ' +
-  'Se nessun tool visibile corrisponde direttamente alla richiesta, usa capability_search descrivendo la capacità necessaria prima di provare tool non pertinenti o concludere che la capacità non esiste.]';
-
+  'Valuta separatamente ogni azione ed effetto richiesto: se anche uno solo non è coperto dai tool visibili, usa capability_search per trovare la capacità autorizzata necessaria, anche quando altri tool visibili coprono altre parti. ' +
+  'Non concludere che la richiesta è completa dopo aver svolto soltanto una parte.]';
 
 /**
  * The initial always-visible native kernel when catalogue pressure exists.
@@ -280,4 +280,3 @@ export function preloadCapabilitiesForTask<T extends CapabilityTool>(
   exposure.discovery.activatePending();
   return result;
 }
-
