@@ -2054,3 +2054,69 @@ describe('memory proposal preserves the live turn taint through buildRuntime', (
     }
   });
 });
+
+describe('registered memory proposals cannot assign owner-authored provenance', () => {
+  it.each([
+    ['Ricorda che preferisco il tè verde', 'accountant', 'Marco'],
+    ['Remember that I work in Milan', 'work on', 'Milan'],
+    ['Remember that I like tea', 'like', 'tea'],
+  ])('keeps the model interpretation inferred for %s', async (text, predicate, object) => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-proposal-producer-'));
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-proposal-producer-ws-'));
+    runInit({ home, apiKey: 'sk-never-called' });
+    const runtime = buildRuntime(home, workspace);
+    runtime.memory.recall.reranker = undefined;
+    runtime.memory.recall.vectors = undefined;
+    try {
+      await runTurn(
+        {
+          ...runtime.deps,
+          provider: new Scripted([
+            {
+              text: null,
+              toolCalls: [
+                {
+                  id: 'producer-forgery',
+                  name: 'memory_propose',
+                  args: {
+                    subject: 'owner',
+                    predicate,
+                    object,
+                    ...(predicate === 'like' ? {} : { kind: 'owner-stated' }),
+                  },
+                },
+              ],
+              stopReason: 'tool_use',
+              usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+              model: 't',
+            },
+          ]),
+        },
+        {
+          principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
+          tenant: 'host',
+          surface: 'cli',
+          session: runtime.deps.sessions.open('proposal-producer'),
+          text,
+        },
+      );
+      const proposal = runtime.memory.store.listProposals('host')[0];
+      expect(proposal).toMatchObject({
+        producer: 'agent-inference',
+        origin: 'inferred',
+        status: 'accepted',
+        predicate,
+        objectValue: object,
+      });
+      const ownerId = runtime.memory.store.findEntity('host', 'owner');
+      if (ownerId === null || proposal === undefined) throw new Error('no durable proposal');
+      const fact = runtime.memory.store.activeFacts('host', ownerId, predicate)[0];
+      expect(fact).toMatchObject({ origin: 'inferred', objectValue: object });
+      expect(proposal.sourceEpisodeIds).toEqual([fact?.episodeId]);
+      if (fact?.episodeId == null) throw new Error('no canonical source episode');
+      expect(runtime.memory.store.episodeById('host', fact.episodeId)?.content).toBe(text);
+    } finally {
+      runtime.close();
+    }
+  });
+});

@@ -101,11 +101,23 @@ describe('memory_propose — validation at the boundary', () => {
     expect(h.store.pendingProposals('host')).toHaveLength(0);
   });
 
-  it('requires kind to name the producer honestly', async () => {
+  it.each([
+    undefined,
+    'owner-stated',
+    'agent-inference',
+    'extraction',
+    'import',
+    'said',
+    'remember',
+  ])('assigns the actual model producer regardless of legacy kind %s', async (kind) => {
     const h = seed();
-    const out = await proposeMemory(h.deps, CTX, { ...ricorda, kind: 'remember' });
-    expect(out.isError).toBe(true);
-    expect(h.store.pendingProposals('host')).toHaveLength(0);
+    const out = await proposeMemory(h.deps, CTX, { ...ricorda, kind });
+    expect(out.isError).toBeUndefined();
+    expect(h.store.listProposals('host')[0]).toMatchObject({
+      producer: 'agent-inference',
+      origin: 'inferred',
+      status: 'accepted',
+    });
   });
 
   it('rejects malformed evidence ids without touching the store', async () => {
@@ -138,7 +150,7 @@ describe('memory_propose — validation at the boundary', () => {
 });
 
 describe('memory_propose — stage durably, reconcile canonically, answer honestly', () => {
-  it('owner-stated ricorda becomes a belief and the answer says so', async () => {
+  it('a direct remember request persists its interpreted belief and original evidence', async () => {
     const h = seed();
     const out = await proposeMemory(h.deps, CTX, ricorda);
     expect(out.isError).toBeUndefined();
@@ -147,7 +159,7 @@ describe('memory_propose — stage durably, reconcile canonically, answer honest
     const facts = h.store.activeFacts('host', me, 'accountant');
     expect(facts).toHaveLength(1);
     expect(facts[0]!.objectValue).toBe('Mario');
-    expect(facts[0]!.origin).toBe('said');
+    expect(facts[0]!.origin).toBe('inferred');
     expect(facts[0]!.episodeId).toBe(h.turnEpisode);
   });
 
@@ -256,12 +268,24 @@ describe('memory_propose — stage durably, reconcile canonically, answer honest
     expect(first.content).toContain('Ricordo:');
 
     const replacementEpisode = h.store.addEpisode({
-      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
-      content: 'il commercialista ora è Lucia', trustTier: 0, createdAt: '2026-08-04T11:30:00Z',
+      tenantId: 'host',
+      connector: 'cli',
+      threadKey: 't',
+      role: 'user',
+      kind: 'message',
+      content: 'il commercialista ora è Lucia',
+      trustTier: 0,
+      createdAt: '2026-08-04T11:30:00Z',
     });
     const replacement = h.store.addFact({
-      tenantId: 'host', subjectId: me, predicate: 'accountant', objectValue: 'Lucia',
-      episodeId: replacementEpisode, trustTier: 0, confidence: 0.9, extractionV: 1,
+      tenantId: 'host',
+      subjectId: me,
+      predicate: 'accountant',
+      objectValue: 'Lucia',
+      episodeId: replacementEpisode,
+      trustTier: 0,
+      confidence: 0.9,
+      extractionV: 1,
       recordedAt: '2026-08-04T11:30:00Z',
     });
     h.store.supersede('host', acceptedFact.id, replacement, '2026-08-04T11:30:00Z');
@@ -270,7 +294,9 @@ describe('memory_propose — stage durably, reconcile canonically, answer honest
     expect(replay.content).toContain('era stata accettata');
     expect(replay.content).toContain('memory_search');
     expect(replay.content).not.toContain('Ricordo:');
-    expect(h.store.activeFacts('host', me, 'accountant').map((fact) => fact.id)).toEqual([replacement]);
+    expect(h.store.activeFacts('host', me, 'accountant').map((fact) => fact.id)).toEqual([
+      replacement,
+    ]);
   });
 
   it('a held lane lock records the intent and says so — never claims the belief', async () => {

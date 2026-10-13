@@ -104,7 +104,9 @@ may be rebuilt.
 The runtime exposes `memory_propose`: it stages a proposal and invokes the
 canonical reconciliation path, preserving the single semantic writer described
 above. See `agent/tools/memory-propose.ts` and `core/memory/ingest.ts` for the
-executable contract. Registration does not establish real end-to-end acceptance.
+executable contract. Its model-authored tuple is recorded as `agent-inference`;
+the owner's original message remains source evidence. Tool arguments cannot
+select `owner-stated` provenance. Registration does not establish real end-to-end acceptance.
 
 ### Work
 
