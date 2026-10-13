@@ -45,3 +45,22 @@ provider failure enables fallback retirement. Legitimate direct forgetting must
 still persist its exact retirement without redundant ASK and retain history.
 
 Implementation and runtime/real-provider evidence: pending.
+
+## Current prototype evidence
+
+Compiled CLI at `813265742cd804bba6131618e389c24ff831b3ff` exercised a real
+ChatGPT `gpt-6.1-sol` owner request in the pre-marked private synthetic Home.
+Three actual Responses completions included `memory_forget({})`; an independent
+read-only SQLite/wire oracle confirmed fact 2 and source episodes 15/16 retired
+at the same timestamp, with retained history and tier 2. Configuration/profile
+hashes were preserved. Evidence lives outside the repository at
+`/private/tmp/muffin-memory-forget-live-q52S8A`.
+
+The handler now receives the runtime-owned cancellation signal. Pre-aborted and
+mid-resolution cancellation tests preserve both fact and source even when the
+semantic provider ignores cancellation. A registered-runtime test proves the
+signal reaches the real handler and selector through capability discovery.
+Current focused suite: 102 PASS, one pre-existing sandbox SKIP. Targeted
+registered-runtime scenes: six PASS (44 unrelated cases skipped by selection).
+This remains an unintegrated prototype: full CRITICAL review, additional
+negative live evidence and exact-head CI remain required.

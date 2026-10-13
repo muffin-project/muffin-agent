@@ -2129,6 +2129,7 @@ describe('registered forget consumes owner source and independent target resolut
     ['external', 'Dimentica il dentista Ferrante', 'external', false],
     ['steered', 'Dimentica il dentista Ferrante', 'owner', false],
     ['unrelated', 'Forget my work project Rome', 'owner', false],
+    ['cancelled', 'Dimentica il dentista Ferrante', 'owner', false],
   ] as const)(
     '%s through the real registered handler',
     async (_scene, text, inputOrigin, allowed) => {
@@ -2170,18 +2171,26 @@ describe('registered forget consumes owner source and independent target resolut
         extractionV: 1,
         recordedAt: '2026-10-13T00:00:00Z',
       });
-      const spy = vi.spyOn(OpenAICompatProvider.prototype, 'chat').mockImplementation(async () => ({
+      const cancellation = new AbortController();
+      const spy = vi.spyOn(OpenAICompatProvider.prototype, 'chat').mockImplementation(async (call) => {
+        if (_scene === 'cancelled') {
+          expect(call.signal).toBeDefined();
+          cancellation.abort('user_stop');
+          expect(call.signal?.aborted).toBe(true);
+        }
+        return ({
         text: JSON.stringify({
-          status: allowed ? 'match' : 'none',
-          facts: allowed ? [fact] : [],
+          status: allowed || _scene === 'cancelled' ? 'match' : 'none',
+          facts: allowed || _scene === 'cancelled' ? [fact] : [],
           episodes: [],
-          sourceOnlyTargets: allowed,
+          sourceOnlyTargets: allowed || _scene === 'cancelled',
         }),
         toolCalls: [],
         stopReason: 'end',
         model: 't-light',
         usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
-      }));
+        });
+      });
       let drains = 0;
       let outcome: { content: string; isError?: boolean } | undefined;
       const tools = runtime.deps.tools.map((tool) =>
@@ -2189,6 +2198,7 @@ describe('registered forget consumes owner source and independent target resolut
           ? {
               ...tool,
               handler: async (args: unknown, ctx: ToolContext) => {
+                if (_scene === 'cancelled') expect(ctx.signal).toBe(cancellation.signal);
                 const result = await tool.handler(args, ctx);
                 outcome = result;
                 return result;
@@ -2237,6 +2247,7 @@ describe('registered forget consumes owner source and independent target resolut
             session: runtime.deps.sessions.open('forget'),
             text,
             inputOrigin,
+            ...(_scene === 'cancelled' ? { signal: cancellation.signal } : {}),
             ...(_scene === 'steered'
               ? { steer: () => (++drains === 2 ? ['Keep it, do not forget.'] : []) }
               : {}),
