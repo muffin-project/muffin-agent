@@ -1,8 +1,9 @@
 /** Interactive execution envelope: time bounds, not a round cap. */
 export type ExecutionBudgetConfig = {
   modelCallDeadlineMs: number;
-  turnWallDeadlineMs: number;
-  activeModelBudgetMs?: number;
+  /** Null disables the aggregate wall bound; per-call watchdogs remain. */
+  turnWallDeadlineMs: number | null;
+  activeModelBudgetMs?: number | null;
   /**
    * Silence after activity, never before it.
    *
@@ -79,7 +80,7 @@ export type ModelCallLease = {
 export class ExecutionBudget {
   readonly startedAt: number;
   private readonly turnController = new AbortController();
-  private readonly turnTimer: ReturnType<typeof setTimeout>;
+  private readonly turnTimer: ReturnType<typeof setTimeout> | undefined;
   private activeModelMs: number;
   private modelCallIndex = 0;
 
@@ -90,11 +91,14 @@ export class ExecutionBudget {
   ) {
     this.startedAt = now();
     this.activeModelMs = Math.max(0, options.initialActiveModelMs ?? 0);
-    this.turnTimer = setTimeout(() => this.turnController.abort('turn_deadline'), config.turnWallDeadlineMs);
+    this.turnTimer =
+      config.turnWallDeadlineMs === null
+        ? undefined
+        : setTimeout(() => this.turnController.abort('turn_deadline'), config.turnWallDeadlineMs);
     // The wall deadline must govern live work, not keep an otherwise finished
     // short-lived process alive solely because its cleanup path returned early.
     // If any real work/IO is still alive, the timer still fires normally.
-    this.turnTimer.unref?.();
+    this.turnTimer?.unref?.();
   }
 
   get signal(): AbortSignal {
@@ -110,17 +114,23 @@ export class ExecutionBudget {
   }
 
   activeModelMsRemaining(): number | undefined {
-    return this.config.activeModelBudgetMs === undefined
+    return this.config.activeModelBudgetMs == null
       ? undefined
       : Math.max(0, this.config.activeModelBudgetMs - this.activeModelMs);
   }
 
-  beginModelCall(external?: AbortSignal, onProgress?: (progress: ModelProgress) => void): ModelCallLease {
+  beginModelCall(
+    external?: AbortSignal,
+    onProgress?: (progress: ModelProgress) => void,
+  ): ModelCallLease {
     const callController = new AbortController();
     const modelCallIndex = ++this.modelCallIndex;
     const startedAt = this.now();
     const activeModelMsBefore = this.activeModelMs;
-    const remainingWall = Math.max(0, this.config.turnWallDeadlineMs - (this.now() - this.startedAt));
+    const remainingWall =
+      this.config.turnWallDeadlineMs === null
+        ? Number.POSITIVE_INFINITY
+        : Math.max(0, this.config.turnWallDeadlineMs - (this.now() - this.startedAt));
     const remainingActive = this.activeModelMsRemaining() ?? Number.POSITIVE_INFINITY;
     const deadline = Math.min(this.config.modelCallDeadlineMs, remainingWall, remainingActive);
     const effectiveDeadlineSource =
@@ -146,10 +156,17 @@ export class ExecutionBudget {
         durationMs,
         activeModelMsBefore,
         activeModelMsAfter,
-        ...(this.config.activeModelBudgetMs === undefined ? {} : { activeModelBudgetMs: this.config.activeModelBudgetMs }),
-        ...(this.config.activeModelBudgetMs === undefined
+        ...(this.config.activeModelBudgetMs == null
           ? {}
-          : { activeModelMsRemaining: Math.max(0, this.config.activeModelBudgetMs - activeModelMsAfter) }),
+          : { activeModelBudgetMs: this.config.activeModelBudgetMs }),
+        ...(this.config.activeModelBudgetMs == null
+          ? {}
+          : {
+              activeModelMsRemaining: Math.max(
+                0,
+                this.config.activeModelBudgetMs - activeModelMsAfter,
+              ),
+            }),
         normalDeadlineMs: this.config.modelCallDeadlineMs,
         effectiveDeadlineMs: deadline,
         effectiveDeadlineSource,
@@ -164,7 +181,11 @@ export class ExecutionBudget {
     };
 
     const emit = (): void => {
-      onProgress?.({ status, elapsedMs: this.now() - this.startedAt, idleMs: this.now() - lastActivityAt });
+      onProgress?.({
+        status,
+        elapsedMs: this.now() - this.startedAt,
+        idleMs: this.now() - lastActivityAt,
+      });
     };
     const clearWatchdog = (): void => {
       if (watchdog !== undefined) clearTimeout(watchdog);
@@ -214,7 +235,11 @@ export class ExecutionBudget {
       reason: () => {
         if (externalAbort) return 'user_stop';
         const reason = signal.reason;
-        return reason === 'user_stop' || reason === 'model_stall' || reason === 'model_deadline' || reason === 'turn_deadline' || reason === 'active_model_budget_exhausted'
+        return reason === 'user_stop' ||
+          reason === 'model_stall' ||
+          reason === 'model_deadline' ||
+          reason === 'turn_deadline' ||
+          reason === 'active_model_budget_exhausted'
           ? reason
           : undefined;
       },
@@ -244,6 +269,6 @@ export class ExecutionBudget {
   }
 
   close(): void {
-    clearTimeout(this.turnTimer);
+    if (this.turnTimer !== undefined) clearTimeout(this.turnTimer);
   }
 }

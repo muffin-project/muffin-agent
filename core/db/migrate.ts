@@ -48,7 +48,7 @@ export type Migration = {
 const MIGRATIONS: Migration[] = [
   {
     version: 2,
-    description: "jobs.kind — un job può essere uno script, e uno script non chiama il modello",
+    description: 'jobs.kind — un job può essere uno script, e uno script non chiama il modello',
     up: (db) => {
       // La guardia che le regole qui sopra chiedono, e serve davvero: `jobs`
       // è creata da `JobStore`, che gira **dopo** questo runner. Su
@@ -75,7 +75,7 @@ const MIGRATIONS: Migration[] = [
   {
     version: 3,
     description:
-      "facts.pinned — un nucleo di fatti che il recall per somiglianza non deve poter far dimenticare",
+      'facts.pinned — un nucleo di fatti che il recall per somiglianza non deve poter far dimenticare',
     up: (db) => {
       // Same guard as migration 2, same reason: `facts` is created by
       // `MemoryStore`, which runs after this runner. A fresh install never
@@ -167,7 +167,9 @@ const MIGRATIONS: Migration[] = [
       // `CREATE INDEX IF NOT EXISTS` only after this runner has already handed
       // it the column — belt and braces for the boot order, not a second source
       // of truth.
-      db.exec(`CREATE INDEX IF NOT EXISTS idx_todos_due ON todos(tenant, due_at) WHERE due_at IS NOT NULL`);
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_todos_due ON todos(tenant, due_at) WHERE due_at IS NOT NULL`,
+      );
     },
   },
   {
@@ -208,7 +210,7 @@ const MIGRATIONS: Migration[] = [
   {
     version: 6,
     description:
-      "jobs.per_job_usd, spend.job_id, turns.job_id — un job rotto non può più mangiarsi il mese intero (DAY-1 E1)",
+      'jobs.per_job_usd, spend.job_id, turns.job_id — un job rotto non può più mangiarsi il mese intero (DAY-1 E1)',
     up: (db) => {
       // La stessa guardia della migrazione 2, per la stessa ragione: `jobs` e
       // `spend` sono create dai rispettivi store, che girano **dopo** questo
@@ -216,9 +218,12 @@ const MIGRATIONS: Migration[] = [
       // le creeranno i loro `SCHEMA` con le colonne già dentro; su
       // un'installazione con tenure ci sono e mancano le colonne.
       const haTabella = (nome: string): boolean =>
-        db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(nome) !== undefined;
+        db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(nome) !==
+        undefined;
       const haColonna = (tabella: string, colonna: string): boolean =>
-        (db.prepare(`PRAGMA table_info(${tabella})`).all() as Array<{ name: string }>).some((c) => c.name === colonna);
+        (db.prepare(`PRAGMA table_info(${tabella})`).all() as Array<{ name: string }>).some(
+          (c) => c.name === colonna,
+        );
 
       // Additiva e nullable: nessun job esistente acquisisce un tetto per
       // effetto di questa migrazione. La direzione conta — il contrario
@@ -246,16 +251,20 @@ const MIGRATIONS: Migration[] = [
   },
   {
     version: 7,
-    description: "jobs.origin_* + jobs.tier — un job creato da conversazione porta la provenance dell'intento",
+    description:
+      "jobs.origin_* + jobs.tier — un job creato da conversazione porta la provenance dell'intento",
     up: (db) => {
       // La stessa guardia delle migrazioni 2 e 6, per la stessa ragione: `jobs`
       // è creata da `JobStore`, che gira dopo questo runner. Su
       // un'installazione fresca la tabella non esiste ancora e la creerà
       // `SCHEMA` con le colonne già dentro.
       const haTabella = (nome: string): boolean =>
-        db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(nome) !== undefined;
+        db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(nome) !==
+        undefined;
       const haColonna = (tabella: string, colonna: string): boolean =>
-        (db.prepare(`PRAGMA table_info(${tabella})`).all() as Array<{ name: string }>).some((c) => c.name === colonna);
+        (db.prepare(`PRAGMA table_info(${tabella})`).all() as Array<{ name: string }>).some(
+          (c) => c.name === colonna,
+        );
       if (!haTabella('jobs')) return;
 
       // Additive con default, e la direzione è il punto — come la migrazione
@@ -293,7 +302,8 @@ const MIGRATIONS: Migration[] = [
           (c) => c.name === column,
         );
       const addColumn = (table: string, column: string, ddl: string): void => {
-        if (hasTable(table) && !hasColumn(table, column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+        if (hasTable(table) && !hasColumn(table, column))
+          db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
       };
       addColumn('turns', 'claim_token', 'claim_token TEXT');
       addColumn('turns', 'job_id', 'job_id TEXT');
@@ -358,6 +368,15 @@ const MIGRATIONS: Migration[] = [
       if (!hasColumn) db.exec(`ALTER TABLE turns ADD COLUMN continuation_candidates TEXT`);
     },
   },
+  {
+    version: 10,
+    description:
+      'durable activity allowance — refuse prior writers that discard authority counters',
+    // Semantic JSON schema change: table columns and canonical rows stay intact.
+    // Prior TurnRun/continuation writers omit this authority field. The existing
+    // schema-ahead guard must reject them before they can erase it on rollback.
+    up: () => {},
+  },
 ];
 
 const BASELINE_VERSION = 1;
@@ -369,7 +388,9 @@ export function currentSchemaVersion(migrations: readonly Migration[] = MIGRATIO
 /** MAX(version) the database itself claims, or null before the baseline stamp. */
 export function schemaVersionOf(db: Database.Database): number | null {
   try {
-    const row = db.prepare(`SELECT MAX(version) AS v FROM schema_version`).get() as { v: number | null };
+    const row = db.prepare(`SELECT MAX(version) AS v FROM schema_version`).get() as {
+      v: number | null;
+    };
     return row.v;
   } catch {
     return null; // no such table: a database from before this runner existed
@@ -415,12 +436,19 @@ export function stampFresh(
   const stamp = db.prepare(
     `INSERT OR IGNORE INTO schema_version (version, description, applied_at) VALUES (?, ?, ?)`,
   );
-  stamp.run(BASELINE_VERSION, 'baseline — legacy schema before versioned migrations', now().toISOString());
+  stamp.run(
+    BASELINE_VERSION,
+    'baseline — legacy schema before versioned migrations',
+    now().toISOString(),
+  );
   for (const m of migrations) {
-    stamp.run(m.version, `${m.description} (fresh install — born at this shape)`, now().toISOString());
+    stamp.run(
+      m.version,
+      `${m.description} (fresh install — born at this shape)`,
+      now().toISOString(),
+    );
   }
 }
-
 
 /** A snapshot nobody has ever validated is a hope, not a backup (judge #93). */
 export function assertSnapshotOk(file: string): void {
@@ -483,7 +511,9 @@ export function migrate(
   );
   // The baseline is a stamp, not DDL: a fresh install and a pre-runner install
   // are both at the legacy schema boundary by construction.
-  db.prepare(`INSERT OR IGNORE INTO schema_version (version, description, applied_at) VALUES (?, ?, ?)`).run(
+  db.prepare(
+    `INSERT OR IGNORE INTO schema_version (version, description, applied_at) VALUES (?, ?, ?)`,
+  ).run(
     BASELINE_VERSION,
     'baseline — legacy schema before versioned migrations',
     now().toISOString(),
@@ -499,7 +529,9 @@ export function migrate(
   // idempotence wanted for a file whose name carries the moment. A refused
   // private parent stops the migration instead of snapshotting outside it.
   if (!ensurePrivateDir(opts.backupDir)) {
-    throw new Error(`non posso scrivere il backup in ${opts.backupDir}: la directory privata non è stata stabilita (symlink sulla catena)`);
+    throw new Error(
+      `non posso scrivere il backup in ${opts.backupDir}: la directory privata non è stata stabilita (symlink sulla catena)`,
+    );
   }
   const backup = join(
     opts.backupDir,
@@ -507,20 +539,24 @@ export function migrate(
   );
   snapshotTo(db, backup);
 
-  const stamp = db.prepare(`INSERT INTO schema_version (version, description, applied_at) VALUES (?, ?, ?)`);
+  const stamp = db.prepare(
+    `INSERT INTO schema_version (version, description, applied_at) VALUES (?, ?, ?)`,
+  );
   const applied: number[] = [];
   for (const m of pending) {
     // Another opener can migrate after `pending` was computed. Acquire the
     // writer lock before re-reading its stamp, then reshape and stamp in that
     // same transaction. A skipped migration belongs to the other opener.
-    const didApply = db.transaction(() => {
-      const current = schemaVersionOf(db) ?? BASELINE_VERSION;
-      if (current > target) throw new SchemaAheadError(current, target);
-      if (current >= m.version) return false;
-      m.up(db);
-      stamp.run(m.version, m.description, now().toISOString());
-      return true;
-    }).immediate();
+    const didApply = db
+      .transaction(() => {
+        const current = schemaVersionOf(db) ?? BASELINE_VERSION;
+        if (current > target) throw new SchemaAheadError(current, target);
+        if (current >= m.version) return false;
+        m.up(db);
+        stamp.run(m.version, m.description, now().toISOString());
+        return true;
+      })
+      .immediate();
     if (didApply) applied.push(m.version);
   }
   return { applied, backup, version: target };
@@ -553,7 +589,9 @@ export function rebuildTable(
   if (!createSql.includes('{T}')) throw new Error(`createSql deve contenere {T} come nome tabella`);
   const scratch = `${table}__rebuild`;
   const cols = (t: string): string[] =>
-    (db.prepare(`SELECT name FROM pragma_table_info(?)`).all(t) as { name: string }[]).map((r) => r.name);
+    (db.prepare(`SELECT name FROM pragma_table_info(?)`).all(t) as { name: string }[]).map(
+      (r) => r.name,
+    );
   const before = (db.prepare(`SELECT count(*) AS n FROM "${table}"`).get() as { n: number }).n;
   db.exec(`DROP TABLE IF EXISTS "${scratch}"`);
   db.exec(createSql.replaceAll('{T}', scratch));

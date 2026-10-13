@@ -6,7 +6,13 @@ import type { SpanHandle } from '../../core/tracing/types.js';
 import { ATTR } from '../../core/tracing/types.js';
 import type { TurnRecord } from '../../core/turns/store.js';
 import { planTaint } from '../../core/turns/todo.js';
-import { approvalFootnote, decodeWaitFor, satisfied, wakeReport, type WakeReason } from '../../core/turns/wait.js';
+import {
+  approvalFootnote,
+  decodeWaitFor,
+  satisfied,
+  type WakeReason,
+  wakeReport,
+} from '../../core/turns/wait.js';
 import {
   CAPABILITY_DISCOVERY_GUIDANCE,
   CAPABILITY_SEARCH_TOOL_NAME,
@@ -16,6 +22,12 @@ import {
 import { tenantClass, visibleTools } from '../context/assemble.js';
 import { historyTaint, reinjectedHistory } from '../context/history-taint.js';
 import { DEFAULT_EXECUTION } from '../profiles/profile.js';
+import {
+  ActivityAllowanceError,
+  activityProvider,
+  withActivityAllowance,
+  withoutActivityAllowance,
+} from '../providers/activity-allowance.js';
 import { type ContentBlock, type Message, ProviderError } from '../providers/types.js';
 import { buildContext, userAudios, userImages } from './context.js';
 import {
@@ -29,8 +41,8 @@ import {
 import { ExecutionBudget } from './execution-budget.js';
 import { harnessMessage } from './message-origin.js';
 import { makeSnapshot } from './permissions.js';
-import { markProviderErrorReplyForRecovery, providerErrorReply } from './provider-error-reply.js';
 import { providerMessages } from './provider-checkpoint.js';
+import { markProviderErrorReplyForRecovery, providerErrorReply } from './provider-error-reply.js';
 import { type RoundScope, runRounds } from './round.js';
 import { TurnRun } from './run-state.js';
 import { echoContentFor } from './sensitive-echo.js';
@@ -152,13 +164,39 @@ export async function guidaIlTurno(
   record: TurnRecord,
   turn: SpanHandle,
   options: DriveOptions,
+  recupero: string[],
+): Promise<TurnResult> {
+  if (record.counters.activityAllowance === undefined)
+    return runClaimedTurn(deps, record, turn, options, recupero);
+  const scoped = {
+    ...deps,
+    provider: activityProvider(deps.provider),
+    ...(deps.onTurnEnd === undefined
+      ? {}
+      : {
+          onTurnEnd: (info: Parameters<NonNullable<LoopDeps['onTurnEnd']>>[0]) =>
+            withoutActivityAllowance(() => deps.onTurnEnd?.(info)),
+        }),
+  };
+  return withActivityAllowance(
+    { turns: deps.turns, turnId: record.id, claimToken: record.claimToken },
+    () => runClaimedTurn(scoped, record, turn, options, recupero),
+  );
+}
+
+async function runClaimedTurn(
+  deps: LoopDeps,
+  record: TurnRecord,
+  turn: SpanHandle,
+  options: DriveOptions,
   /** Ciò che è già uscito dalla porta di steer e non ha trovato una riga (vedi `drive`). */
   recupero: string[],
 ): Promise<TurnResult> {
   const now = deps.now ?? (() => new Date());
   const messages = providerMessages(record);
   const persistedInput = messages.find(
-    (message) => message.role === 'user' && (message.origin === 'owner' || message.origin === 'external'),
+    (message) =>
+      message.role === 'user' && (message.origin === 'owner' || message.origin === 'external'),
   );
   const input: TurnInput = {
     principal: record.principal,
@@ -322,12 +360,19 @@ export async function guidaIlTurno(
     wokenFromWait: options.wokenFromWait === true,
     continued: options.continued === true,
   });
-  const execution = new ExecutionBudget(deps.profile.execution ?? DEFAULT_EXECUTION, Date.now, {
-    initialActiveModelMs: run.activeModelMs,
-    onActiveModelMs: (activeModelMs) => {
-      run.activeModelMs = activeModelMs;
+  const executionConfig = deps.profile.execution ?? DEFAULT_EXECUTION;
+  const execution = new ExecutionBudget(
+    record.counters.activityAllowance === undefined
+      ? executionConfig
+      : { ...executionConfig, turnWallDeadlineMs: null, activeModelBudgetMs: null },
+    Date.now,
+    {
+      initialActiveModelMs: run.activeModelMs,
+      onActiveModelMs: (activeModelMs) => {
+        run.activeModelMs = activeModelMs;
+      },
     },
-  });
+  );
   // #469: principal/grant filtering decides which installed capabilities may
   // even enter discovery. The profile ceiling is applied only to the model
   // projection, never to catalogue existence.
@@ -352,9 +397,16 @@ export async function guidaIlTurno(
     input.principal.kind === 'system'
       ? principalVisibleTools.filter((tool) => {
           const decision = snapshot.check(tool.capability, { kind: 'none' }, {});
-          return decision.effect !== 'deny' ||
-            !['principal_forbidden', 'rot_violation', 'safe_mode', 'no_capability', 'tenant_mismatch']
-              .includes(decision.code);
+          return (
+            decision.effect !== 'deny' ||
+            ![
+              'principal_forbidden',
+              'rot_violation',
+              'safe_mode',
+              'no_capability',
+              'tenant_mismatch',
+            ].includes(decision.code)
+          );
         })
       : principalVisibleTools;
   const discoveryTool = eligibleTools.find(
@@ -668,9 +720,7 @@ export async function guidaIlTurno(
       builtContext.splice(
         ownerIndex,
         0,
-        harnessMessage('user', [
-          { type: 'text', text: CAPABILITY_DISCOVERY_GUIDANCE },
-        ]),
+        harnessMessage('user', [{ type: 'text', text: CAPABILITY_DISCOVERY_GUIDANCE }]),
       );
     }
 
@@ -717,7 +767,8 @@ export async function guidaIlTurno(
       // stesso registro sotto: senza `answered` una barriera d'approvazione
       // risulterebbe non soddisfatta qui, e il turno si risveglierebbe con
       // «non hai risposto» proprio nel momento in cui la risposta è arrivata.
-      const aperta = waitFor !== null &&
+      const aperta =
+        waitFor !== null &&
         satisfied(waitFor, {
           ...(deps.approvals === undefined
             ? {}
@@ -736,7 +787,13 @@ export async function guidaIlTurno(
       const wakeAtMs = wakeAtRaw === null ? Number.NaN : Date.parse(wakeAtRaw);
       const scaduta = Number.isFinite(wakeAtMs) && (wakeAtMs as number) <= adesso;
       const rispostaNelRegistro = deps.approvals?.decidedUnconsumed(record.id) ?? false;
-      const why: WakeReason = aperta ? 'event' : scaduta ? 'timer' : rispostaNelRegistro ? 'answer' : 'early';
+      const why: WakeReason = aperta
+        ? 'event'
+        : scaduta
+          ? 'timer'
+          : rispostaNelRegistro
+            ? 'answer'
+            : 'early';
       turn.setAttributes({ 'muffin.turn.woken_by': why });
       // Harness control (a transition report for this resume), not owner
       // words: a continuation to a new lease archives it instead of replaying
@@ -761,6 +818,8 @@ export async function guidaIlTurno(
   try {
     return await runRounds(scope);
   } catch (error) {
+    if (error instanceof ActivityAllowanceError)
+      return releaseContinuable(scope, 'activity_budget', 0);
     if (error instanceof ProviderError) {
       // Retry exhaustion is a yielded lease, not a connector exception — when
       // another attempt could still help. A retryable transport failure (or a

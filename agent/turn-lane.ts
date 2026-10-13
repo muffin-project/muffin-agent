@@ -1,7 +1,12 @@
+import { isOwnerActivityAutonomous } from '../core/turns/activity-allowance.js';
 import type { LaneEvent, LaneRun } from '../core/turns/lane.js';
-import { isSchedulerAutonomous, MAX_AUTONOMOUS_LEASES, type TurnRecord } from '../core/turns/store.js';
-import { continueTurn, resumeTurn, type LoopDeps, type ResumeStream } from './loop.js';
+import {
+  isSchedulerAutonomous,
+  MAX_AUTONOMOUS_LEASES,
+  type TurnRecord,
+} from '../core/turns/store.js';
 import { harnessMessage } from './loop/message-origin.js';
+import { continueTurn, type LoopDeps, type ResumeStream, resumeTurn } from './loop.js';
 import type { Message } from './providers/types.js';
 
 /**
@@ -49,7 +54,9 @@ export type LaneDeliver = (turn: TurnRecord, text: string) => Promise<void | 'po
  * each surface already calls `presence.stop()`/`transcript.stop()` in its own
  * `finally` — a resumed turn owes its sink the same close.
  */
-export type AttachStream = (record: TurnRecord) => (ResumeStream & { stop?: () => Promise<void> }) | undefined;
+export type AttachStream = (
+  record: TurnRecord,
+) => (ResumeStream & { stop?: () => Promise<void> }) | undefined;
 
 /**
  * A surface with nowhere to send. Used by a runtime that has no connector
@@ -155,7 +162,11 @@ export function makeLaneRunner(
     const stream = before === null ? undefined : attachStream?.(before);
     let outcome: Awaited<ReturnType<typeof resumeTurn>>;
     try {
-      if (before !== null && before.status === 'continuable' && isSchedulerAutonomous(before)) {
+      if (
+        before !== null &&
+        before.status === 'continuable' &&
+        (isSchedulerAutonomous(before) || isOwnerActivityAutonomous(before))
+      ) {
         return await runAutonomous(
           deps,
           before,
@@ -202,7 +213,11 @@ export function makeLaneRunner(
     // silent branch (settle with receipt, no conversational message). Only
     // `answered` silences — needs-owner/error/budget still speak — and the
     // default (no job, `deliver` policy, unreadable row) sends as today.
-    if (record !== null && outcome.text !== '' && isSilentResume(deps, auto, record, outcome.stopped)) {
+    if (
+      record !== null &&
+      outcome.text !== '' &&
+      isSilentResume(deps, auto, record, outcome.stopped)
+    ) {
       return { stopped: outcome.stopped };
     }
     if (record?.replyTo != null && outcome.text !== '') {
@@ -229,7 +244,12 @@ export function makeLaneRunner(
      * a turn that already produced its answer into an unhandled rejection.
      */
     if (record !== null && outcome.text !== '') {
-      onUndeliverable({ kind: 'undeliverable', turnId, surface: record.surface, text: outcome.text });
+      onUndeliverable({
+        kind: 'undeliverable',
+        turnId,
+        surface: record.surface,
+        text: outcome.text,
+      });
       try {
         deps.turns.delivered(turnId, 'undeliverable');
       } catch {
@@ -261,7 +281,11 @@ export function makeLaneRunner(
     }
   }
 
-  function mark(d: LoopDeps, turnId: string, state: 'sent' | 'possibly_sent' | `failed:${string}`): void {
+  function mark(
+    d: LoopDeps,
+    turnId: string,
+    state: 'sent' | 'possibly_sent' | `failed:${string}`,
+  ): void {
     try {
       d.turns.delivered(turnId, state);
     } catch {
@@ -285,15 +309,15 @@ function autonomousGrantMessage(record: TurnRecord): Message {
       text:
         `Continuazione autonoma del turno ${record.id.slice(0, 12)} (lease ${record.leaseIndex + 1}, ` +
         `senza nuovo messaggio owner): la lease precedente è finita su una boundary recuperabile ` +
-        `(${(record.continuableReason?.class ?? 'motivo ignoto')}). ` +
+        `(${record.continuableReason?.class ?? 'motivo ignoto'}). ` +
         `Continua lo stesso lavoro dallo stato durevole, senza ripetere gli effetti già registrati.`,
     },
   ]);
 }
 
 /**
- * Continue a scheduler-bound continuable turn without an owner message
- * (#598 S2) — the lane side of the autonomous due-inclusion in
+ * Continue scheduler work or an owner activity with remaining granted capacity
+ * without a new owner message — the lane side of autonomous due-inclusion in
  * `core/turns/store.ts`.
  *
  * Same identity, same WAL, same loop: `continueTurn` mints the next lease
@@ -304,9 +328,10 @@ function autonomousGrantMessage(record: TurnRecord): Message {
  * loop: an owner saying "riprendi" takes the identical path with their own
  * words as the grant message.
  *
- * Three gates, all fail-closed, all before the grant:
+ * Gates are fail-closed and precede the grant:
  *
- * 1. `MAX_AUTONOMOUS_LEASES` — a recurrence that always lands continuable
+ * 1. Owner activities use their durable remaining capacity/renewals. Scheduler
+ *    work uses `MAX_AUTONOMOUS_LEASES` — a recurrence that always lands continuable
  *    must not spend for ever; past the count the row stays continuable for
  *    an explicit owner grant.
  * 2. The tenant/monthly budget (`budgetExhausted`) — granting a lease that
@@ -316,9 +341,9 @@ function autonomousGrantMessage(record: TurnRecord): Message {
  *    same "do not start" shape `agent/scheduler-run.ts` enforces at fire
  *    time. Unverifiable (no reader wired) means no grant.
  *
- * Iteration and tool-call ceilings bind inside the lease exactly as on any
- * other: profile `maxToolCallsPerTurn`, execution deadlines and the monthly
- * seal all live in `drive`, which this path shares rather than bypasses.
+ * Owner capacity remains cumulative across leases. Legacy/scheduler profiles
+ * retain their per-lease tool and execution ceilings. Individual call/stall
+ * controls and the monthly seal live in the shared `drive` path.
  *
  * What it deliberately does not do:
  *
@@ -330,9 +355,9 @@ function autonomousGrantMessage(record: TurnRecord): Message {
  *   the same silence the resumed path keeps for `suspended`. Delivering the
  *   "scrivi riprendi" diagnostic would page the owner for work that resumes
  *   on its own;
- * - touch owner/member/consolidation/ratchet rows — the caller checks
- *   `isSchedulerAutonomous` before arriving here, and this function asserts
- *   nothing beyond it.
+ * - grant activity authority to legacy owners, members, consolidation or ratchet
+ *   rows — the caller requires scheduler eligibility or an already granted
+ *   owner activity, and the store independently validates owner renewals.
  */
 async function runAutonomous(
   deps: LoopDeps,
@@ -342,7 +367,8 @@ async function runAutonomous(
   auto: AutonomousBudget | undefined,
   stream: (ResumeStream & { stop?: () => Promise<void> }) | undefined,
 ): Promise<Awaited<ReturnType<LaneRun>>> {
-  if (record.leaseIndex >= MAX_AUTONOMOUS_LEASES) {
+  const ownerActivity = isOwnerActivityAutonomous(record);
+  if (!ownerActivity && record.leaseIndex >= MAX_AUTONOMOUS_LEASES) {
     return {
       refused:
         `il turno ${record.id.slice(0, 12)} ha già usato ${record.leaseIndex} lease e resta continuabile: ` +
@@ -378,6 +404,7 @@ async function runAutonomous(
   const replyChannel = typeof channel === 'string' ? channel : undefined;
   const outcome = await continueTurn(deps, record.id, {
     message: autonomousGrantMessage(record),
+    ...(ownerActivity ? { automatic: true } : {}),
     ...(stream?.signal ? { signal: stream.signal } : {}),
     ...(stream?.steer ? { steer: stream.steer } : {}),
     ...(stream?.onDelta ? { onDelta: stream.onDelta } : {}),
@@ -414,7 +441,12 @@ async function runAutonomous(
     return { stopped: outcome.stopped };
   }
   if (current !== null && outcome.text !== '') {
-    onUndeliverable({ kind: 'undeliverable', turnId: record.id, surface: current.surface, text: outcome.text });
+    onUndeliverable({
+      kind: 'undeliverable',
+      turnId: record.id,
+      surface: current.surface,
+      text: outcome.text,
+    });
     try {
       deps.turns.delivered(record.id, 'undeliverable');
     } catch {

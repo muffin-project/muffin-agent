@@ -1,18 +1,18 @@
-import DatabaseCtor from 'better-sqlite3';
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { TURN_TABLE_SCHEMA } from '../turns/schema.js';
 import {
+  assertSnapshotOk,
   currentSchemaVersion,
+  type Migration,
   migrate,
   rebuildTable,
   SchemaAheadError,
   schemaVersionOf,
-  assertSnapshotOk,
   stampFresh,
-  type Migration,
 } from './migrate.js';
 
 /**
@@ -85,10 +85,17 @@ describe('migrate — baseline and idempotence', () => {
 
   it('rejects a migration list that is not strictly increasing from 2', () => {
     const { db, backups } = fileDb();
-    const bad = [{ version: 2, description: 'x', up: () => {} }, { version: 2, description: 'y', up: () => {} }];
-    expect(() => migrate(db, { backupDir: backups, migrations: bad })).toThrow(/strettamente crescenti/);
+    const bad = [
+      { version: 2, description: 'x', up: () => {} },
+      { version: 2, description: 'y', up: () => {} },
+    ];
+    expect(() => migrate(db, { backupDir: backups, migrations: bad })).toThrow(
+      /strettamente crescenti/,
+    );
     const alsoBad = [{ version: 1, description: 'x', up: () => {} }];
-    expect(() => migrate(db, { backupDir: backups, migrations: alsoBad })).toThrow(/strettamente crescenti/);
+    expect(() => migrate(db, { backupDir: backups, migrations: alsoBad })).toThrow(
+      /strettamente crescenti/,
+    );
   });
 });
 
@@ -109,7 +116,9 @@ describe('migrate — a populated old-shape database reaches HEAD', () => {
       { kind: 'b', body: 'due' },
     ]);
     // The new shape is real: 'c' now enters, 'd' still cannot.
-    expect(() => db.prepare(`INSERT INTO things (kind, body) VALUES ('c','tre')`).run()).not.toThrow();
+    expect(() =>
+      db.prepare(`INSERT INTO things (kind, body) VALUES ('c','tre')`).run(),
+    ).not.toThrow();
     expect(() => db.prepare(`INSERT INTO things (kind, body) VALUES ('d','no')`).run()).toThrow();
   });
 
@@ -232,7 +241,9 @@ describe('stampFresh — a fresh install is born at HEAD', () => {
   it('stamps every version without running any up(), and the next migrate() is a no-op', () => {
     const { db, backups } = fileDb();
     let ran = 0;
-    const list: Migration[] = [{ version: 2, description: 'reshape del passato', up: () => void ran++ }];
+    const list: Migration[] = [
+      { version: 2, description: 'reshape del passato', up: () => void ran++ },
+    ];
 
     stampFresh(db, list);
 
@@ -287,7 +298,7 @@ describe('migrazione 2 — jobs.kind', () => {
     // (`slice/una-promessa-torna`) are genuine no-ops here — but `migrate()` still runs and stamps them, the
     // same way migration 2 itself no-ops (and still counts) on a database where
     // `jobs` is absent, two tests below.
-    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10]);
     const riga = db.prepare(`SELECT goal, kind FROM jobs WHERE id = 'j1'`).get() as {
       goal: string;
       kind: string;
@@ -307,7 +318,7 @@ describe('migrazione 2 — jobs.kind', () => {
     // e prima che `MemoryStore` crei `facts` e `TodoStore` crei `todos`,
     // motivo per cui la 3 e la 4 arrivano fin qui allo stesso modo.
     expect(() => migrate(db, { backupDir: backups })).not.toThrow();
-    expect(schemaVersionOf(db)).toBe(9);
+    expect(schemaVersionOf(db)).toBe(10);
   });
 });
 
@@ -350,11 +361,15 @@ describe('migrazione 3 — facts.pinned', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
-    const pinned = db.prepare(`SELECT id FROM facts WHERE pinned = 1 ORDER BY id`).all() as { id: number }[];
+    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    const pinned = db.prepare(`SELECT id FROM facts WHERE pinned = 1 ORDER BY id`).all() as {
+      id: number;
+    }[];
     expect(pinned.map((r) => r.id)).toEqual([1, 2, 3]);
     // Rows survive untouched — this is a backfill, not a rewrite.
-    const untouched = db.prepare(`SELECT pinned FROM facts WHERE id = 4`).get() as { pinned: number };
+    const untouched = db.prepare(`SELECT pinned FROM facts WHERE id = 4`).get() as {
+      pinned: number;
+    };
     expect(untouched.pinned).toBe(0);
   });
 
@@ -387,9 +402,13 @@ describe('migrazione 3 — facts.pinned', () => {
 
     migrate(db, { backupDir: backups });
 
-    const pinned = db.prepare(`SELECT id FROM facts WHERE pinned = 1 ORDER BY id`).all() as { id: number }[];
+    const pinned = db.prepare(`SELECT id FROM facts WHERE pinned = 1 ORDER BY id`).all() as {
+      id: number;
+    }[];
     expect(pinned.map((r) => r.id)).toEqual([1, 2, 3]); // the host backfill, and nothing else
-    const refused = db.prepare(`SELECT id FROM facts WHERE id IN (5, 6, 7, 8) AND pinned = 0`).all() as { id: number }[];
+    const refused = db
+      .prepare(`SELECT id FROM facts WHERE id IN (5, 6, 7, 8) AND pinned = 0`)
+      .all() as { id: number }[];
     expect(refused.map((r) => r.id)).toEqual([5, 6, 7, 8]);
   });
 
@@ -398,7 +417,7 @@ describe('migrazione 3 — facts.pinned', () => {
     // The fresh-install case: `MemoryStore` has not run yet, so `facts` is not
     // there for this migration to touch — same guard, same reason as jobs.kind.
     expect(() => migrate(db, { backupDir: backups })).not.toThrow();
-    expect(schemaVersionOf(db)).toBe(9);
+    expect(schemaVersionOf(db)).toBe(10);
   });
 });
 
@@ -419,15 +438,17 @@ describe('migrazioni 4 e 5 — todos.due_at, poi todos.due_tier', () => {
     for (let i = 1; i <= 200; i += 1) raw.run(i, `k${i}`, `passo ${i}`);
   }
 
-  it('porta un todos popolato fino a HEAD con le righe intatte, e l\'indice che lo scanner usa', () => {
+  it("porta un todos popolato fino a HEAD con le righe intatte, e l'indice che lo scanner usa", () => {
     const { db, backups } = fileDb();
     seedOldTodos(db);
     migrate(db, { backupDir: backups, migrations: [] }); // baseline v1, un'installazione vecchia
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
-    const colonne = (db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>).map((c) => c.name);
+    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    const colonne = (db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>).map(
+      (c) => c.name,
+    );
     expect(colonne).toContain('due_at');
     expect(colonne).toContain('due_tier');
     const righe = db.prepare(`SELECT count(*) AS n FROM todos`).get() as { n: number };
@@ -435,10 +456,14 @@ describe('migrazioni 4 e 5 — todos.due_at, poi todos.due_tier', () => {
     // Nessuna riga scritta prima di oggi acquista un momento per effetto di un
     // aggiornamento: sarebbe testo che l'owner non ha mai datato, e che da
     // domani può far parlare Muffin per primo.
-    const datate = db.prepare(`SELECT count(*) AS n FROM todos WHERE due_at IS NOT NULL`).get() as { n: number };
+    const datate = db.prepare(`SELECT count(*) AS n FROM todos WHERE due_at IS NOT NULL`).get() as {
+      n: number;
+    };
     expect(datate.n).toBe(0);
     const piano = db
-      .prepare(`EXPLAIN QUERY PLAN SELECT key FROM todos WHERE tenant = 'host' AND due_at > '' AND due_at < 'z'`)
+      .prepare(
+        `EXPLAIN QUERY PLAN SELECT key FROM todos WHERE tenant = 'host' AND due_at > '' AND due_at < 'z'`,
+      )
       .all() as Array<{ detail: string }>;
     expect(piano.map((r) => r.detail).join(' ')).toContain('idx_todos_due');
   });
@@ -469,13 +494,17 @@ describe('migrazioni 4 e 5 — todos.due_at, poi todos.due_tier', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([5, 6, 7, 8, 9]);
-    const colonne = (db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>).map((c) => c.name);
+    expect(res.applied).toEqual([5, 6, 7, 8, 9, 10]);
+    const colonne = (db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>).map(
+      (c) => c.name,
+    );
     expect(colonne).toContain('due_tier');
     // La query che moriva: è questa a rendere l'asserzione un comportamento e
     // non un `PRAGMA` soddisfatto di sé.
     expect(() =>
-      db.prepare(`SELECT max(tier, coalesce(due_tier, 0)) AS tier FROM todos WHERE tenant = 'host'`).get(),
+      db
+        .prepare(`SELECT max(tier, coalesce(due_tier, 0)) AS tier FROM todos WHERE tenant = 'host'`)
+        .get(),
     ).not.toThrow();
     const righe = db.prepare(`SELECT count(*) AS n FROM todos`).get() as { n: number };
     expect(righe.n).toBe(200);
@@ -535,9 +564,13 @@ describe('migrazione 6 — jobs.per_job_usd, spend.job_id, turns.job_id', () => 
       expect(colonne('turns')).toContain('job_id');
 
       // Nessuna riga persa, nessun tetto inventato, nessuna spesa riscritta.
-      expect(db.prepare(`SELECT per_job_usd FROM jobs WHERE id = 'j1'`).get()).toEqual({ per_job_usd: null });
+      expect(db.prepare(`SELECT per_job_usd FROM jobs WHERE id = 'j1'`).get()).toEqual({
+        per_job_usd: null,
+      });
       expect(db.prepare(`SELECT usd, job_id FROM spend`).get()).toEqual({ usd: 2.5, job_id: null });
-      expect(db.prepare(`SELECT job_id FROM turns WHERE id = 't1'`).get()).toEqual({ job_id: null });
+      expect(db.prepare(`SELECT job_id FROM turns WHERE id = 't1'`).get()).toEqual({
+        job_id: null,
+      });
     } finally {
       db.close();
       rmSync(dir, { recursive: true, force: true });
@@ -574,15 +607,29 @@ describe('migrazione 7 — jobs.origin_*, jobs.tier', () => {
       const res = migrate(db, { backupDir: join(dir, 'backups') });
       expect(res.applied).toContain(7);
 
-      const colonne = (db.prepare(`PRAGMA table_info(jobs)`).all() as Array<{ name: string }>).map((c) => c.name);
-      for (const colonna of ['origin_tenant', 'origin_surface', 'origin_principal', 'origin_turn', 'tier']) {
+      const colonne = (db.prepare(`PRAGMA table_info(jobs)`).all() as Array<{ name: string }>).map(
+        (c) => c.name,
+      );
+      for (const colonna of [
+        'origin_tenant',
+        'origin_surface',
+        'origin_principal',
+        'origin_turn',
+        'tier',
+      ]) {
         expect(colonne).toContain(colonna);
       }
       // La riga sopravvive e descrive un owner al terminale a taint 0 — i
       // default, non un'attribuzione inventata. Il contrario — un taint
       // diverso da zero su una riga che nessuno ha scritto così — cambierebbe
       // da solo cosa il giro futuro può fare.
-      expect(db.prepare(`SELECT origin_tenant, origin_surface, origin_principal, origin_turn, tier FROM jobs WHERE id = 'j1'`).get()).toEqual({
+      expect(
+        db
+          .prepare(
+            `SELECT origin_tenant, origin_surface, origin_principal, origin_turn, tier FROM jobs WHERE id = 'j1'`,
+          )
+          .get(),
+      ).toEqual({
         origin_tenant: 'host',
         origin_surface: 'cli',
         origin_principal: 'owner',
@@ -620,12 +667,20 @@ describe('migrazione 8 — Turn schema authority', () => {
 
       const res = migrate(db, { backupDir: join(dir, 'backups') });
 
-      expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
-      const row = db.prepare(`SELECT input_text, status, model, messages FROM turns WHERE id = 't1'`).get();
+      expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      const row = db
+        .prepare(`SELECT input_text, status, model, messages FROM turns WHERE id = 't1'`)
+        .get();
       expect(row).toEqual({ input_text: null, status: 'done', model: 'model-x', messages: '[]' });
-      const columns = (db.prepare(`PRAGMA table_info(turns)`).all() as Array<{ name: string }>).map((c) => c.name);
+      const columns = (db.prepare(`PRAGMA table_info(turns)`).all() as Array<{ name: string }>).map(
+        (c) => c.name,
+      );
       expect(columns).toContain('continuation_candidates');
-      const sql = (db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'turns'`).get() as { sql: string }).sql;
+      const sql = (
+        db
+          .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'turns'`)
+          .get() as { sql: string }
+      ).sql;
       expect(sql).toContain("'continuable'");
     } finally {
       db.close();
@@ -691,10 +746,10 @@ describe('migrazione 8 — Turn schema authority', () => {
     const { db, backups } = fileDb();
     // The v8-era table: the canonical shape, status CHECK already including
     // 'continuable', but no continuation_candidates.
-    const ddl = TURN_TABLE_SCHEMA.replace('CREATE TABLE IF NOT EXISTS turns', 'CREATE TABLE turns').replace(
-      /\n\s*continuation_candidates TEXT,/,
-      '',
-    );
+    const ddl = TURN_TABLE_SCHEMA.replace(
+      'CREATE TABLE IF NOT EXISTS turns',
+      'CREATE TABLE turns',
+    ).replace(/\n\s*continuation_candidates TEXT,/, '');
     db.exec(ddl);
     db.prepare(
       `INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint, counters, status, created_at, updated_at)
@@ -707,20 +762,30 @@ describe('migrazione 8 — Turn schema authority', () => {
     );
     for (const v of [2, 3, 4, 5, 6, 7, 8]) timbra.run(v, `v8 senza continuation_candidates (${v})`);
     expect(schemaVersionOf(db)).toBe(8);
-    const before = (db.prepare(`PRAGMA table_info(turns)`).all() as Array<{ name: string }>).map((c) => c.name);
+    const before = (db.prepare(`PRAGMA table_info(turns)`).all() as Array<{ name: string }>).map(
+      (c) => c.name,
+    );
     expect(before).not.toContain('continuation_candidates');
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([9]);
-    const colonne = (db.prepare(`PRAGMA table_info(turns)`).all() as Array<{ name: string }>).map((c) => c.name);
+    expect(res.applied).toEqual([9, 10]);
+    const colonne = (db.prepare(`PRAGMA table_info(turns)`).all() as Array<{ name: string }>).map(
+      (c) => c.name,
+    );
     expect(colonne).toContain('continuation_candidates');
     // Il comportamento che la colonna serve, non solo il PRAGMA.
     expect(() =>
-      db.prepare(`UPDATE turns SET continuation_candidates = ? WHERE id = 't1'`).run('[{"id":"aaa"}]'),
+      db
+        .prepare(`UPDATE turns SET continuation_candidates = ? WHERE id = 't1'`)
+        .run('[{"id":"aaa"}]'),
     ).not.toThrow();
     expect(
-      (db.prepare(`SELECT continuation_candidates AS c FROM turns WHERE id = 't1'`).get() as { c: string }).c,
+      (
+        db.prepare(`SELECT continuation_candidates AS c FROM turns WHERE id = 't1'`).get() as {
+          c: string;
+        }
+      ).c,
     ).toBe('[{"id":"aaa"}]');
   });
 });
@@ -749,17 +814,51 @@ describe('migrazione 8 — Turn schema authority', () => {
  */
 describe('migrazione 8 — rebuildTable su una casa v7 popolata (#766)', () => {
   const OLD_TURNS_COLS = [
-    'id', 'principal', 'tenant', 'surface', 'session_id', 'model', 'messages', 'taint',
-    'counters', 'reply_to', 'job_id', 'status', 'wake_at', 'wait_for', 'claimed_by',
-    'claimed_at', 'turn_outcome', 'delivery', 'continuation_candidates', 'created_at', 'updated_at',
+    'id',
+    'principal',
+    'tenant',
+    'surface',
+    'session_id',
+    'model',
+    'messages',
+    'taint',
+    'counters',
+    'reply_to',
+    'job_id',
+    'status',
+    'wake_at',
+    'wait_for',
+    'claimed_by',
+    'claimed_at',
+    'turn_outcome',
+    'delivery',
+    'continuation_candidates',
+    'created_at',
+    'updated_at',
   ];
   const OLD_CALL_COLS = [
-    'turn_id', 'call_id', 'tool', 'capability', 'rerunnable', 'args_digest',
-    'started_at', 'ended_at', 'content', 'is_error', 'tier',
+    'turn_id',
+    'call_id',
+    'tool',
+    'capability',
+    'rerunnable',
+    'args_digest',
+    'started_at',
+    'ended_at',
+    'content',
+    'is_error',
+    'tier',
   ];
   const OLD_LEASE_COLS = [
-    'turn_id', 'lease_index', 'started_at', 'ended_at', 'outcome',
-    'harness_messages', 'counters', 'transport_used', 'delivery',
+    'turn_id',
+    'lease_index',
+    'started_at',
+    'ended_at',
+    'outcome',
+    'harness_messages',
+    'counters',
+    'transport_used',
+    'delivery',
   ];
   const STATUSES = ['runnable', 'running', 'waiting', 'interrupted', 'done'];
 
@@ -802,7 +901,9 @@ describe('migrazione 8 — rebuildTable su una casa v7 popolata (#766)', () => {
         surface: i % 3 === 2 ? 'telegram' : 'cli',
         session_id: `s${i % 5}`,
         model: 'model-x',
-        messages: JSON.stringify([{ role: 'user', text: `messaggio ${n} con corpo lungo `.repeat(4) }]),
+        messages: JSON.stringify([
+          { role: 'user', text: `messaggio ${n} con corpo lungo `.repeat(4) },
+        ]),
         taint: i % 4,
         counters: JSON.stringify({ input: 100 + i, output: 20 + i }),
         reply_to: i % 4 === 0 ? `t${String(Math.max(0, i - 1)).padStart(3, '0')}` : null,
@@ -813,10 +914,19 @@ describe('migrazione 8 — rebuildTable su una casa v7 popolata (#766)', () => {
         claimed_by: status === 'running' ? 4242 : null,
         claimed_at: status === 'running' ? '2026-09-01T00:00:01Z' : null,
         turn_outcome: status === 'done' ? (i % 2 === 0 ? 'done' : 'error') : null,
-        delivery: status === 'done' ? (i % 3 === 0 ? 'sent' : i % 3 === 1 ? 'failed:rete' : 'pending') : null,
+        delivery:
+          status === 'done'
+            ? i % 3 === 0
+              ? 'sent'
+              : i % 3 === 1
+                ? 'failed:rete'
+                : 'pending'
+            : null,
         continuation_candidates:
           i % 3 === 0
-            ? JSON.stringify([{ id: `q${n}`, updatedAt: '2026-09-25T00:00:00Z', summary: `domanda ${n}` }])
+            ? JSON.stringify([
+                { id: `q${n}`, updatedAt: '2026-09-25T00:00:00Z', summary: `domanda ${n}` },
+              ])
             : null,
         created_at: '2026-08-01T10:00:00Z',
         updated_at: '2026-08-02T10:00:00Z',
@@ -877,7 +987,9 @@ describe('migrazione 8 — rebuildTable su una casa v7 popolata (#766)', () => {
   }
 
   function dump(db: DatabaseCtor.Database, table: string, cols: string[], order: string): string {
-    return JSON.stringify(db.prepare(`SELECT ${cols.join(', ')} FROM "${table}" ORDER BY ${order}`).all());
+    return JSON.stringify(
+      db.prepare(`SELECT ${cols.join(', ')} FROM "${table}" ORDER BY ${order}`).all(),
+    );
   }
 
   it('fifty turns, twenty tool calls and ten leases cross the v8 rebuild without losing a value', () => {
@@ -889,36 +1001,63 @@ describe('migrazione 8 — rebuildTable su una casa v7 popolata (#766)', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([8, 9]);
-    expect(schemaVersionOf(db)).toBe(9);
+    expect(res.applied).toEqual([8, 9, 10]);
+    expect(schemaVersionOf(db)).toBe(10);
     // Not a stamp: every old value is still there, on every row.
     expect(dump(db, 'turns', OLD_TURNS_COLS, 'id')).toBe(beforeTurns);
     expect(dump(db, 'turn_tool_calls', OLD_CALL_COLS, 'turn_id, call_id')).toBe(beforeCalls);
     expect(dump(db, 'turn_leases', OLD_LEASE_COLS, 'turn_id, lease_index')).toBe(beforeLeases);
     // The carried values specifically: the #707 column survived the rebuild
     // populated, not merely present.
-    const carried = db.prepare(`SELECT count(*) AS n FROM turns WHERE continuation_candidates IS NOT NULL`).get() as {
+    const carried = db
+      .prepare(`SELECT count(*) AS n FROM turns WHERE continuation_candidates IS NOT NULL`)
+      .get() as {
       n: number;
     };
     expect(carried.n).toBe(17); // every third of fifty: i % 3 === 0
-    const sample = db.prepare(`SELECT continuation_candidates AS c FROM turns WHERE id = 't000'`).get() as { c: string };
-    expect(JSON.parse(sample.c)).toEqual([{ id: 'q000', updatedAt: '2026-09-25T00:00:00Z', summary: 'domanda 000' }]);
+    const sample = db
+      .prepare(`SELECT continuation_candidates AS c FROM turns WHERE id = 't000'`)
+      .get() as { c: string };
+    expect(JSON.parse(sample.c)).toEqual([
+      { id: 'q000', updatedAt: '2026-09-25T00:00:00Z', summary: 'domanda 000' },
+    ]);
     // The new shape is real, not just stamped.
-    const sql = (db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'turns'`).get() as { sql: string })
-      .sql;
+    const sql = (
+      db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'turns'`).get() as {
+        sql: string;
+      }
+    ).sql;
     expect(sql).toContain("'continuable'");
-    const cols = (db.prepare(`PRAGMA table_info(turns)`).all() as Array<{ name: string }>).map((c) => c.name);
-    for (const added of ['claim_token', 'lease_index', 'continuable_reason', 'lifetime', 'input_text']) {
+    const cols = (db.prepare(`PRAGMA table_info(turns)`).all() as Array<{ name: string }>).map(
+      (c) => c.name,
+    );
+    for (const added of [
+      'claim_token',
+      'lease_index',
+      'continuable_reason',
+      'lifetime',
+      'input_text',
+    ]) {
       expect(cols, `v8 column ${added}`).toContain(added);
     }
-    expect(() => db.prepare(`INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint, counters, status, created_at, updated_at)
-      VALUES ('tx', '{"kind":"owner"}', 'host', 'cli', 's9', 'm', '[]', 0, '{}', 'continuable', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')`).run()).not.toThrow();
+    expect(() =>
+      db
+        .prepare(`INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint, counters, status, created_at, updated_at)
+      VALUES ('tx', '{"kind":"owner"}', 'host', 'cli', 's9', 'm', '[]', 0, '{}', 'continuable', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')`)
+        .run(),
+    ).not.toThrow();
     db.prepare(`DELETE FROM turns WHERE id = 'tx'`).run();
-    expect(() => db.prepare(`INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint, counters, status, created_at, updated_at)
-      VALUES ('ty', '{"kind":"owner"}', 'host', 'cli', 's9', 'm', '[]', 0, '{}', 'bogus', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')`).run()).toThrow();
-    const idx = (db.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'turns'`).all() as Array<{ name: string }>).map(
-      (r) => r.name,
-    );
+    expect(() =>
+      db
+        .prepare(`INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint, counters, status, created_at, updated_at)
+      VALUES ('ty', '{"kind":"owner"}', 'host', 'cli', 's9', 'm', '[]', 0, '{}', 'bogus', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')`)
+        .run(),
+    ).toThrow();
+    const idx = (
+      db
+        .prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'turns'`)
+        .all() as Array<{ name: string }>
+    ).map((r) => r.name);
     expect(idx).toContain('idx_turns_status');
     expect(idx).toContain('idx_turns_due');
     // The pre-migrate backup holds the OLD shape with the OLD rows — proof it
@@ -927,8 +1066,11 @@ describe('migrazione 8 — rebuildTable su una casa v7 popolata (#766)', () => {
     const snap = new DatabaseCtor(res.backup!, { readonly: true });
     try {
       expect((snap.prepare(`SELECT count(*) AS n FROM turns`).get() as { n: number }).n).toBe(50);
-      const snapSql = (snap.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'turns'`).get() as { sql: string })
-        .sql;
+      const snapSql = (
+        snap
+          .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'turns'`)
+          .get() as { sql: string }
+      ).sql;
       expect(snapSql).not.toContain("'continuable'");
       expect(schemaVersionOf(snap)).toBe(7);
     } finally {

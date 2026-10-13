@@ -1,6 +1,11 @@
 import type { PermissionSnapshot } from '../../core/policy/types.js';
 import { ATTR, type SpanHandle } from '../../core/tracing/types.js';
-import type { ContinuableClass, ContinuableReason, TurnOutcome, TurnRecord } from '../../core/turns/store.js';
+import type {
+  ContinuableClass,
+  ContinuableReason,
+  TurnOutcome,
+  TurnRecord,
+} from '../../core/turns/store.js';
 import type { TodoItem } from '../../core/turns/todo.js';
 import { encodeWaitFor, type WaitSpec } from '../../core/turns/wait.js';
 import type { ContentBlock, Message } from '../providers/types.js';
@@ -77,7 +82,10 @@ export type TurnScope = {
    * The sensitive-resource echo collector. A repaired call reads a resource
    * exactly like a fresh one does, so a repair must feed the same sink.
    */
-  readonly noteSensitiveResourceEcho: (call: { name: string; args: unknown }, outcome: ContentBlock) => void;
+  readonly noteSensitiveResourceEcho: (
+    call: { name: string; args: unknown },
+    outcome: ContentBlock,
+  ) => void;
 };
 
 /**
@@ -154,7 +162,12 @@ export function suspendHere(scope: TurnScope, spec: WaitSpec): TurnResult {
   const conCorrezioni: Message[] =
     correzioniPendenti.length === 0
       ? run.messages
-      : [...run.messages, ...correzioniPendenti.map((testo): Message => ({ role: 'user', content: [{ type: 'text', text: testo }] }))];
+      : [
+          ...run.messages,
+          ...correzioniPendenti.map(
+            (testo): Message => ({ role: 'user', content: [{ type: 'text', text: testo }] }),
+          ),
+        ];
 
   const wrote = (() => {
     try {
@@ -170,7 +183,9 @@ export function suspendHere(scope: TurnScope, spec: WaitSpec): TurnResult {
         record.claimToken,
       );
     } catch (error) {
-      turn.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
+      turn.setAttributes({
+        'muffin.turn.record_error': error instanceof Error ? error.message : String(error),
+      });
       return false;
     }
   })();
@@ -259,10 +274,22 @@ export function suspendHere(scope: TurnScope, spec: WaitSpec): TurnResult {
  * checkpoints in the main loop.
  */
 export async function reconcile(scope: TurnScope): Promise<TurnResult | null> {
-  const { deps, exposed, input, noteSensitiveResourceEcho, record, run, snapshot, toolContext, turn } = scope;
+  const {
+    deps,
+    exposed,
+    input,
+    noteSensitiveResourceEcho,
+    record,
+    run,
+    snapshot,
+    toolContext,
+    turn,
+  } = scope;
   const last = run.messages[run.messages.length - 1];
   if (last === undefined || last.role !== 'assistant') return null;
-  const pending = last.content.filter((b): b is Extract<ContentBlock, { type: 'tool_use' }> => b.type === 'tool_use');
+  const pending = last.content.filter(
+    (b): b is Extract<ContentBlock, { type: 'tool_use' }> => b.type === 'tool_use',
+  );
   if (pending.length === 0) return null;
 
   const recorded = deps.turns.recordedOutcomes(record.id);
@@ -276,7 +303,8 @@ export async function reconcile(scope: TurnScope): Promise<TurnResult | null> {
       // The taint the recorded result carried has to come back with it: this
       // is the same "the two facts must not land apart" the outcome write
       // enforces in a transaction.
-      if (done.tier !== null) snapshot.raiseTaint(done.tier, 'un risultato ripreso dal record di questo turno');
+      if (done.tier !== null)
+        snapshot.raiseTaint(done.tier, 'un risultato ripreso dal record di questo turno');
       repaired.push({
         type: 'tool_result',
         toolCallId: block.id,
@@ -315,11 +343,12 @@ export async function reconcile(scope: TurnScope): Promise<TurnResult | null> {
       repaired.push({
         type: 'tool_result',
         toolCallId: block.id,
-        content: error instanceof ApprovalRequired
-          ? `Ripresa: ${block.name} vuole un'approvazione che qui non posso chiedere.`
-          : error instanceof Error
-            ? error.message
-            : String(error),
+        content:
+          error instanceof ApprovalRequired
+            ? `Ripresa: ${block.name} vuole un'approvazione che qui non posso chiedere.`
+            : error instanceof Error
+              ? error.message
+              : String(error),
         isError: true,
       });
     }
@@ -393,7 +422,9 @@ export function closeRecord(scope: TurnScope, outcome: TurnOutcome): boolean {
     // as "could not write" (the pre-existing behaviour, `true`), never as
     // "lost the claim" — those are different facts and only the second one
     // is what a fenced `changes === 0` means.
-    turn.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
+    turn.setAttributes({
+      'muffin.turn.record_error': error instanceof Error ? error.message : String(error),
+    });
     return true;
   }
 }
@@ -438,7 +469,8 @@ function continuableText(
   // dopo un'ora e 17 call la lease 1 diceva «nessuna tool call», e la frase
   // mentiva sul lavoro fatto.
   const done = scope.record.lifetime.toolCallsMade + scope.run.toolCallsMade;
-  const completed = done > 0 ? `${done} tool call completate` : 'nessuna tool call ancora completata';
+  const completed =
+    done > 0 ? `${done} tool call completate` : 'nessuna tool call ancora completata';
   // #615: a `truncated` release after partial-text continuations already holds
   // the accepted prefix durably in the transcript. Saying "senza produrre
   // contenuto" there would be false — the prefix is saved, continuable, and
@@ -472,6 +504,8 @@ function continuableText(
         return 'il turno ha esaurito il suo limite di tempo';
       case 'active_model_budget':
         return 'il turno ha esaurito il budget di attività del modello';
+      case 'activity_budget':
+        return 'l’attività ha esaurito il budget complessivo di richieste ai modelli o esecuzioni dei tool';
       case 'recovery_exhausted':
         return 'il modello non ha prodotto una risposta utilizzabile dopo la cascata di recupero';
       case 'plan_open': {
@@ -521,7 +555,9 @@ export function releaseContinuable(
     class: failureClass,
     lease: record.leaseIndex,
     ...(attempts > 0 ? { attempts } : {}),
-    ...(run.providerFailureRequestIds.length > 0 ? { requestIds: [...run.providerFailureRequestIds] } : {}),
+    ...(run.providerFailureRequestIds.length > 0
+      ? { requestIds: [...run.providerFailureRequestIds] }
+      : {}),
     ...(extra?.openRows !== undefined ? { openSteps: extra.openRows.length } : {}),
     completed: { toolCalls: completedToolCalls },
     at: new Date().toISOString(),
@@ -570,7 +606,13 @@ export function releaseContinuable(
   };
 }
 
-export function finish(scope: TurnScope, stopped: TurnOutcome, text: string, reason?: string): TurnResult {  const { record, run, snapshot, turn: span } = scope;
+export function finish(
+  scope: TurnScope,
+  stopped: TurnOutcome,
+  text: string,
+  reason?: string,
+): TurnResult {
+  const { record, run, snapshot, turn: span } = scope;
   span.setAttributes({ [ATTR.stopReason]: stopped, [ATTR.turnIteration]: run.iterations });
   if (reason !== undefined) span.setAttributes({ 'muffin.turn.stop_reason': reason });
   // Nessun drain di `/steer` qui, ed è la differenza fra questa versione e
@@ -657,7 +699,10 @@ export function closeRow(
     // The refusal report joins the transcript first, so the row keeps the
     // same array a reader sees — including the report itself
     // (harness-marked, so it archives as control, not as model output).
-    const closed = [...providerMessages(record), harnessMessage('assistant', [{ type: 'text', text: detail }])];
+    const closed = [
+      ...providerMessages(record),
+      harnessMessage('assistant', [{ type: 'text', text: detail }]),
+    ];
     const scritto = deps.turns.finish(
       record.id,
       {
@@ -673,6 +718,8 @@ export function closeRow(
     );
     if (scritto) withdrawApprovals(deps, record, (deps.now ?? (() => new Date()))());
   } catch (error) {
-    span.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
+    span.setAttributes({
+      'muffin.turn.record_error': error instanceof Error ? error.message : String(error),
+    });
   }
 }

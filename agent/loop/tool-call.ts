@@ -6,6 +6,7 @@ import { redactText } from '../../core/tracing/redact.js';
 import type { SpanHandle } from '../../core/tracing/types.js';
 import { ATTR } from '../../core/tracing/types.js';
 import type { EffectDecision, EffectMetadata } from '../../core/turns/effects.js';
+import { reserveActivityAttempt } from '../providers/activity-allowance.js';
 import type { ContentBlock } from '../providers/types.js';
 import { denyText, resourceFor } from './permissions.js';
 import {
@@ -137,6 +138,7 @@ async function eseguiConRitentativi(
   onProgress: ((event: TurnEvent) => void) | undefined,
   signal: AbortSignal | undefined,
 ): Promise<ToolOutcome> {
+  reserveActivityAttempt('tool');
   let outcome = await tool.handler(args, ctx);
   for (let tentativo = 2; tentativo <= MAX_TOOL_RETRIES + 1; tentativo += 1) {
     if (outcome.isError !== true || outcome.retryable !== true || !rerunnable) return outcome;
@@ -155,6 +157,8 @@ async function eseguiConRitentativi(
       args,
     });
     await sleep(inMs, signal);
+    if (signal?.aborted) return outcome;
+    reserveActivityAttempt('tool');
     outcome = await tool.handler(args, ctx);
   }
   return outcome;
