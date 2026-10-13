@@ -64,3 +64,10 @@ Current focused suite: 102 PASS, one pre-existing sandbox SKIP. Targeted
 registered-runtime scenes: six PASS (44 unrelated cases skipped by selection).
 This remains an unintegrated prototype: full CRITICAL review, additional
 negative live evidence and exact-head CI remain required.
+
+Negative compiled-CLI case at the same runtime source: request to forget a
+synthetic dentist sharing the existing verification-code token. The real model
+called `memory_forget({})`; semantic resolution refused the unrelated target.
+Independent read-only wire/SQLite oracle confirmed the code fact and its source
+remain active (tier 2 preserved), with three real model completions and unchanged
+configuration. Evidence: `/private/tmp/muffin-memory-forget-negative-live-YWNL3t`.
