@@ -4,10 +4,10 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runInit } from '../../cli/init.js';
 import type { TodoItem } from '../../core/turns/todo.js';
-import { ownedOpenRows } from './completion-gate.js';
-import { continueTurn, runTurn, type LoopDeps } from '../loop.js';
-import { buildRuntime } from '../runtime.js';
+import { continueTurn, type LoopDeps, runTurn } from '../loop.js';
 import type { ChatResult, Provider } from '../providers/types.js';
+import { buildRuntime } from '../runtime.js';
+import { ownedOpenRows } from './completion-gate.js';
 
 /**
  * The completion gate (#811): a resumed turn that would settle `answered`
@@ -128,7 +128,18 @@ describe('the gate at the finish boundary, on the production loop', () => {
       stall(),
       stall(),
     ]);
-    const deps: LoopDeps = { ...runtime.deps, provider };
+    // Inspect one lease boundary; automatic renewal is explicitly disabled in this fixture.
+    const deps: LoopDeps = {
+      ...runtime.deps,
+      provider,
+      profile: {
+        ...runtime.deps.profile,
+        activity:
+          runtime.deps.profile.activity === undefined
+            ? undefined
+            : { ...runtime.deps.profile.activity, maxAutomaticContinuations: 0 },
+      },
+    };
     const session = runtime.deps.sessions.open('piano');
 
     const first = await runTurn(deps, {
@@ -141,14 +152,10 @@ describe('the gate at the finish boundary, on the production loop', () => {
     expect(first.stopped).toBe('continuable');
 
     const drop = new Scripted([answer('tutto fatto, nessun passo aperto')]);
-    const resumed = await continueTurn(
-      { ...deps, provider: drop },
-      first.turnId,
-      {
-        message: { role: 'user', content: [{ type: 'text', text: 'continua pure' }] },
-        session: runtime.deps.sessions.open('piano'),
-      },
-    );
+    const resumed = await continueTurn({ ...deps, provider: drop }, first.turnId, {
+      message: { role: 'user', content: [{ type: 'text', text: 'continua pure' }] },
+      session: runtime.deps.sessions.open('piano'),
+    });
     if ('why' in resumed) throw new Error(`continuation refused: ${resumed.why}`);
     expect(resumed.stopped).toBe('continuable');
     expect(resumed.reason).toBe('plan_open');
@@ -172,7 +179,18 @@ describe('the gate at the finish boundary, on the production loop', () => {
       stall(),
       stall(),
     ]);
-    const deps: LoopDeps = { ...runtime.deps, provider };
+    // Inspect one lease boundary; automatic renewal is explicitly disabled in this fixture.
+    const deps: LoopDeps = {
+      ...runtime.deps,
+      provider,
+      profile: {
+        ...runtime.deps.profile,
+        activity:
+          runtime.deps.profile.activity === undefined
+            ? undefined
+            : { ...runtime.deps.profile.activity, maxAutomaticContinuations: 0 },
+      },
+    };
     const session = runtime.deps.sessions.open('piano');
 
     const first = await runTurn(deps, {
@@ -188,14 +206,10 @@ describe('the gate at the finish boundary, on the production loop', () => {
       callTodo({ action: 'set', step: 1, state: 'done' }, 'c2'),
       answer('fatto'),
     ]);
-    const resumed = await continueTurn(
-      { ...deps, provider: closer },
-      first.turnId,
-      {
-        message: { role: 'user', content: [{ type: 'text', text: 'finisci' }] },
-        session: runtime.deps.sessions.open('piano'),
-      },
-    );
+    const resumed = await continueTurn({ ...deps, provider: closer }, first.turnId, {
+      message: { role: 'user', content: [{ type: 'text', text: 'finisci' }] },
+      session: runtime.deps.sessions.open('piano'),
+    });
     if ('why' in resumed) throw new Error(`continuation refused: ${resumed.why}`);
     expect(resumed.stopped).toBe('answered');
     runtime.close();
@@ -208,7 +222,18 @@ describe('the gate at the finish boundary, on the production loop', () => {
       callTodo({ action: 'plan', items: ['domani si vedrà'] }),
       answer('ho scritto il piano'),
     ]);
-    const deps: LoopDeps = { ...runtime.deps, provider };
+    // Inspect one lease boundary; automatic renewal is explicitly disabled in this fixture.
+    const deps: LoopDeps = {
+      ...runtime.deps,
+      provider,
+      profile: {
+        ...runtime.deps.profile,
+        activity:
+          runtime.deps.profile.activity === undefined
+            ? undefined
+            : { ...runtime.deps.profile.activity, maxAutomaticContinuations: 0 },
+      },
+    };
     const session = runtime.deps.sessions.open('piano');
 
     const r = await runTurn(deps, {
@@ -234,7 +259,18 @@ describe('the gate at the finish boundary, on the production loop', () => {
       stall(),
       stall(),
     ]);
-    const deps: LoopDeps = { ...runtime.deps, provider };
+    // Inspect one lease boundary; automatic renewal is explicitly disabled in this fixture.
+    const deps: LoopDeps = {
+      ...runtime.deps,
+      provider,
+      profile: {
+        ...runtime.deps.profile,
+        activity:
+          runtime.deps.profile.activity === undefined
+            ? undefined
+            : { ...runtime.deps.profile.activity, maxAutomaticContinuations: 0 },
+      },
+    };
     const session = runtime.deps.sessions.open('piano');
 
     const first = await runTurn(deps, {
@@ -250,14 +286,10 @@ describe('the gate at the finish boundary, on the production loop', () => {
       callTodo({ action: 'set', step: 1, state: 'blocked', note: 'aspetto Marco' }, 'c2'),
       answer('bloccato su Marco'),
     ]);
-    const resumed = await continueTurn(
-      { ...deps, provider: blocker },
-      first.turnId,
-      {
-        message: { role: 'user', content: [{ type: 'text', text: 'a che punto sei?' }] },
-        session: runtime.deps.sessions.open('piano'),
-      },
-    );
+    const resumed = await continueTurn({ ...deps, provider: blocker }, first.turnId, {
+      message: { role: 'user', content: [{ type: 'text', text: 'a che punto sei?' }] },
+      session: runtime.deps.sessions.open('piano'),
+    });
     if ('why' in resumed) throw new Error(`continuation refused: ${resumed.why}`);
     // `blocked` is a deliberate terminal-ish state, not dropped work.
     expect(resumed.stopped).toBe('answered');

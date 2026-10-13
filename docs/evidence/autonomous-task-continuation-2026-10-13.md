@@ -149,3 +149,12 @@ counters. The existing schema-ahead boundary now protects this semantic JSON
 change with a no-op v10 migration. Red-before populated-v9 coverage failed;
 27 focused migration tests then passed, checking unchanged canonical rows,
 validated v9 backup, idempotence and prior-writer refusal before execution.
+
+The first full CI candidate failed six tests. One exposed unnecessary new DB
+reads on a legacy persistence-degraded terminal path; reads are now limited to
+actual activity-budget/continuation paths. Three manual completion-gate fixtures
+now explicitly disable automatic renewal while retaining the non-time allowance.
+Two Telegram recovery assertions now require 44 bounded attempts (four leases),
+not the previous 11; failed diagnostic delivery still cannot recompute the task.
+Focused CI-repair coverage: 48 PASS, including a 37-tool real-loop effect oracle
+that exceeds the former per-lease ceiling without renewal.

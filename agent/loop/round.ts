@@ -374,7 +374,10 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     if (input.signal?.aborted) {
       return finish(scope, 'aborted', 'Interrotto.', 'user_stop');
     }
-    const allowance = deps.turns.activityAllowance(record.id);
+    const allowance =
+      record.counters.activityAllowance === undefined
+        ? null
+        : deps.turns.activityAllowance(record.id);
     if (
       allowance !== null &&
       (allowance.modelCallsUsed >= allowance.maxModelCalls ||

@@ -940,13 +940,13 @@ async function drive(
 
   const nonScritte = scriviCorrezioniInSessione(deps, turn, session, record, residue());
   if (nonScritte.length === 0) {
-    const current = deps.turns.get(record.id);
-    if (
+    const current =
       !options.signal?.aborted &&
       risultato.stopped === 'continuable' &&
-      current !== null &&
-      isOwnerActivityAutonomous(current)
-    ) {
+      record.counters.activityAllowance !== undefined
+        ? deps.turns.get(record.id)
+        : null;
+    if (current !== null && isOwnerActivityAutonomous(current)) {
       const next = await continueTurn(deps, current.id, {
         message: harnessMessage('user', [
           {

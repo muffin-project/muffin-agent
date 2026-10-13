@@ -153,6 +153,22 @@ describe('authorized activity on the production loop', () => {
     expect(readFileSync(join(h.home, 'effects'), 'utf8')).toBe('10');
   });
 
+  it('uses the granted cumulative tool capacity rather than the old per-lease ceiling', async () => {
+    let requests = 0;
+    const h = harness({
+      kind: 'openai-compat',
+      chat: async () => (requests++ < 37 ? call(`read-${requests}`) : answer()),
+    });
+    const result = await runTurn(h.deps, h.input);
+    expect(result.stopped).toBe('answered');
+    expect(readFileSync(join(h.home, 'effects'), 'utf8')).toBe('37');
+    expect(h.turns.activityAllowance(result.turnId)).toMatchObject({
+      modelCallsUsed: 38,
+      toolCallsUsed: 37,
+    });
+    expect(h.turns.get(result.turnId)?.leaseIndex).toBe(0);
+  });
+
   it('bounds total requests without a task-time limit and retains the checkpoint', async () => {
     let requests = 0;
     const h = harness(
