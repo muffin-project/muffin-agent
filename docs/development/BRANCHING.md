@@ -45,22 +45,20 @@ Record in the PR or work handoff:
 
 ## DCO applies to every contribution PR
 
-Every non-merge commit introduced by a contribution PR, internal or external,
-must carry a `Signed-off-by` trailer matching its Git author. The only
-exception is canonical same-repository `dev` to `main` promotion of already
-integrated history, including legacy pre-gate commits. The exception does not
-certify those historical contributions. The checker evaluates exact base/head
-SHAs and fails closed on incomplete event metadata. It does not verify signer
-identity, authority, rights, or the truth of the DCO statement.
+External contribution commits must carry a `Signed-off-by` trailer matching
+their Git author. Owner-authored internal work explicitly delegated to agents
+is exempt only in an owner-opened PR with both branches in the canonical
+repository and owner-attributed commits. Other authors' imported commits retain
+their sign-off requirement. The checker evaluates exact base/head SHAs and PR
+event metadata; it does not verify identity, rights or the truth of certification.
 
-For agent-assisted work, do not invent an agent identity or sign another
-author's commit. The human who submits a concrete contribution remains
-responsible for deciding whether they can truthfully certify it under the DCO.
-Preserve outside authors' attribution and sign-offs; an internal PR does not
-make an imported unsigned commit eligible. If the required author cannot
-provide a truthful sign-off, leave that commit uncertified and unsubmitted.
-ADR-0097 records the current policy; ADR-0079 remains the historical decision
-that introduced the DCO and relicense grant.
+Canonical same-repository `dev` to `main` promotion preserves already integrated
+history without certifying legacy rights. Do not add another person's sign-off
+or change attribution to obtain an exemption. If an external author cannot
+truthfully certify a commit, leave it uncertified and unsubmitted.
+[ADR-0098](../decisions/0098-contributi-owner-delegati.md) and
+[CONTRIBUTING.md](../../CONTRIBUTING.md) own the current contributor policy;
+ADR-0097 and ADR-0079 record earlier decisions.
 
 Open a draft PR early when the work is substantial enough that a durable remote
 checkpoint buys recovery/reviewability. A trivial FAST edit does not need a

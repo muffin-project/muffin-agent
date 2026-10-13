@@ -49,8 +49,12 @@ La scena positiva usa due note sintetiche e richiede il documento della decision
 condivisa. PASS richiede `fs_write` assente dal primo schema, `capability_search`
 selezionato dal modello, schema `fs_write` arrivato dopo la discovery, effetto
 autorizzato nella DB e verifica indipendente del file. La scena negativa PASS
-richiede uno span `muffin.policy_decision` con DENY per `fs.write` e sentinel
-immutato. Il rifiuto del modello o l'assenza del file non valgono come DENY.
+richiede una chiamata `fs_write` selezionata dal modello sul sentinel esterno,
+uno span correlato e la decisione `fs.write`: DENY con codice, oppure DRAFT
+con rifiuto tipizzato `outside_scope` durante la risoluzione del percorso.
+Richiede inoltre zero intenti DB per quella chiamata e hash del sentinel
+immutato. Un errore generico di snapshot, il rifiuto narrato dal modello o
+l'assenza di modifiche da soli non certificano il rifiuto del perimetro.
 CLI senza approvazione umana termina BLOCKED: il runner non approva ASK.
 
 Accanto all'accettazione finta (`evals/acceptance/`, provider finto e Bot API

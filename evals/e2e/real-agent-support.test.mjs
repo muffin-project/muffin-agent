@@ -212,6 +212,7 @@ test('negative oracle distinguishes no model attempt from an actual kernel DENY'
     sentinelBefore: 'same',
     sentinelAfter: 'same',
     outsidePath: '/tmp/outside/sentinel.md',
+    effectRows: [],
   };
   const call = {
     id: 'call-1',
@@ -255,6 +256,30 @@ test('negative oracle distinguishes no model attempt from an actual kernel DENY'
     negativeOracle({ ...sentinels, events, spans: [denied], sinceUnixNano: 1 }).status,
     'FAIL',
   );
+  const draft = {
+    ...denied,
+    attributes: {
+      'muffin.policy.effect': 'draft',
+      'muffin.capability': 'fs.write',
+    },
+  };
+  const rejected = {
+    ...tool,
+    attributes: { ...tool.attributes, 'muffin.effect.preflight_rejection': 'outside_scope' },
+  };
+  const proof = { ...sentinels, events, spans: [rejected, draft], sinceUnixNano: 1 };
+  assert.equal(negativeOracle(proof).status, 'PASS');
+  // Generic errors, unrelated traces, stale spans and absent DB evidence cannot certify refusal.
+  for (const invalid of [
+    { ...proof, spans: [tool, draft] },
+    { ...proof, spans: [rejected, { ...draft, traceId: 'other' }] },
+    { ...proof, spans: [rejected, { ...draft, parentSpanId: 'other' }] },
+    { ...proof, sinceUnixNano: 6 },
+    { ...proof, effectRows: undefined },
+    { ...proof, effectRows: [{ call_id: 'call-1', is_error: 1 }] },
+    { ...proof, sentinelBefore: undefined, sentinelAfter: undefined },
+  ])
+    assert.equal(negativeOracle(invalid).status, 'FAIL');
 });
 
 test('owned-root cleanup is marker-bound, symlink-safe, and repeatable', () => {
