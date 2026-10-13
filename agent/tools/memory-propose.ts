@@ -22,7 +22,7 @@
  */
 
 import { type IngestDeps, reconcileProposal } from '../../core/memory/ingest.js';
-import { type ProposalProducer, proposeMemoryRecord } from '../../core/memory/proposals.js';
+import { proposeMemoryRecord } from '../../core/memory/proposals.js';
 import type { MemoryStore } from '../../core/memory/store.js';
 import type { CapabilityDecl, TrustTier } from '../../core/policy/types.js';
 import type { Tracer } from '../../core/tracing/types.js';
@@ -60,10 +60,10 @@ export const memoryProposeSpec: ToolSpec = {
     'Not for finding anything (that is memory_search), explaining a belief (memory_why), or forgetting one (memory_forget) — ' +
     'and never use the shell, sqlite or files for this. ' +
     'Stages a durable proposal that the memory reconciler accepts, merges, supersedes, reviews or rejects. ' +
-    'Pass kind "owner-stated" when the owner explicitly asked to remember, "agent-inference" when it is your own judgment ' +
-    'that something is worth keeping. The answer tells you whether it became a belief, merged with one, went to ' +
+    'The runtime records your interpreted tuple as agent-inference and keeps its source evidence. ' +
+    'The answer tells you whether it became a belief, merged with one, went to ' +
     'review, or was rejected — report that honestly, never claim "lo ricordo" for a mere proposal. ' +
-    'e.g. memory_propose({subject: "owner", predicate: "accountant", object: "Mario", kind: "owner-stated"}).',
+    'e.g. memory_propose({subject: "owner", predicate: "accountant", object: "Mario"}).',
   inputSchema: {
     type: 'object',
     properties: {
@@ -73,11 +73,6 @@ export const memoryProposeSpec: ToolSpec = {
         description: 'What kind of fact it is (e.g. "accountant", "lives_in").',
       },
       object: { type: 'string', description: 'The value to remember.' },
-      kind: {
-        type: 'string',
-        description:
-          '"owner-stated" when the owner explicitly asked to remember; "agent-inference" when it is your own judgment.',
-      },
       evidence_ids: {
         type: 'array',
         items: { type: 'number' },
@@ -91,7 +86,7 @@ export const memoryProposeSpec: ToolSpec = {
           'When it became true out there, if stated (YYYY-MM-DD). Omit when nobody said.',
       },
     },
-    required: ['subject', 'predicate', 'object', 'kind'],
+    required: ['subject', 'predicate', 'object'],
   },
 };
 
@@ -116,7 +111,6 @@ type RawArgs = {
   subject?: unknown;
   predicate?: unknown;
   object?: unknown;
-  kind?: unknown;
   evidence_ids?: unknown;
   confidence?: unknown;
   valid_from?: unknown;
@@ -143,15 +137,8 @@ export async function proposeMemory(
       tier: 0,
     };
   }
-  if (raw.kind !== 'owner-stated' && raw.kind !== 'agent-inference') {
-    return {
-      content:
-        'memory_propose richiede "kind": "owner-stated" (l’owner ha detto di ricordare) oppure "agent-inference" (tua inferenza).',
-      isError: true,
-      tier: 0,
-    };
-  }
-  const producer = raw.kind as ProposalProducer;
+  // The model authored this projection; its arguments cannot grant owner authority.
+  const producer = 'agent-inference' as const;
 
   let evidenceIds: number[] = [];
   if (raw.evidence_ids !== undefined) {
@@ -174,10 +161,8 @@ export async function proposeMemory(
       evidenceIds.push(n);
     }
   }
-  // The turn's own message is the evidence for an owner-stated "ricorda":
-  // the model must not have to name an episode id for the sentence the owner
-  // just said. Agent inference without cited episodes falls back to it too —
-  // the turn it was inferred in — rather than to nothing.
+  // Cite the durable ingress when no explicit source was supplied. The owner's
+  // original words remain evidence; this tool's extracted tuple is inferred.
   if (evidenceIds.length === 0) {
     const ingress = deps.store.episodeIdByTurnId(ctx.tenant, ctx.turnId);
     if (ingress !== null) evidenceIds = [ingress];
