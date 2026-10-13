@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import {
   CHATGPT_E2E_MAX_REQUESTS,
+  CHATGPT_E2E_MAX_WALL_MS,
   CHATGPT_E2E_MODEL,
   completedResponseViolation,
   installChatGptWireRecorder,
@@ -37,16 +38,30 @@ test('ChatGPT route requires the exact model and synthetic marker', () => {
   );
 });
 
-test('request recorder projects the actual Responses function schemas without prompt fields', () => {
+test('request recorder flattens the production Muffin namespace without prompt fields', () => {
   const schemas = responseToolSchemas({
     input: [{ role: 'user', content: 'must not be recorded' }],
     tools: [
       {
-        type: 'function',
-        name: 'capability_search',
-        description: 'Discover a capability',
-        parameters: { type: 'object' },
-        strict: true,
+        type: 'namespace',
+        name: 'muffin',
+        description: 'Muffin tools',
+        tools: [
+          {
+            type: 'function',
+            name: 'capability_search',
+            description: 'Discover a capability',
+            parameters: { type: 'object', properties: { capability: { type: 'string' } } },
+            strict: false,
+          },
+          {
+            type: 'function',
+            name: 'fs_write',
+            description: 'Write a file',
+            parameters: { type: 'object', properties: { path: { type: 'string' } } },
+            strict: false,
+          },
+        ],
       },
       { type: 'web_search' },
     ],
@@ -56,11 +71,33 @@ test('request recorder projects the actual Responses function schemas without pr
       type: 'function',
       name: 'capability_search',
       description: 'Discover a capability',
-      parameters: { type: 'object' },
-      strict: true,
+      parameters: { type: 'object', properties: { capability: { type: 'string' } } },
+      strict: false,
+    },
+    {
+      type: 'function',
+      name: 'fs_write',
+      description: 'Write a file',
+      parameters: { type: 'object', properties: { path: { type: 'string' } } },
+      strict: false,
     },
   ]);
   assert.equal(JSON.stringify(schemas).includes('must not be recorded'), false);
+  assert.equal(
+    responsesRequestViolation({
+      body: {
+        model: CHATGPT_E2E_MODEL,
+        tools: [
+          { type: 'namespace', name: 'muffin', tools: [{ type: 'function', name: 'fs_write' }] },
+        ],
+      },
+      index: 0,
+      count: 0,
+      startedAt: 1,
+      now: 2,
+    }),
+    'fs_write present in first provider request',
+  );
 });
 
 test('completed SSE tool calls survive an empty completed envelope, while incomplete streams expose none', () => {
@@ -254,6 +291,59 @@ test('installed recorder records a served-model mismatch as a fatal control viol
       .map((line) => JSON.parse(line));
     expect(records.find((event) => event.kind === 'response').model).toBe('gpt-6-sol');
     expect(JSON.stringify(records)).not.toMatch(/authorization|bearer|api[_-]?key|input|prompt/i);
+  } finally {
+    await recorder.close();
+    globalThis.fetch = realFetch;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('installed recorder aborts an in-flight response stream at the shared wall deadline', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'muffin-chatgpt-deadline-'));
+  const wirePath = join(root, 'wire.jsonl');
+  const controlPath = join(root, 'control.json');
+  writeFileSync(wirePath, '');
+  writeFileSync(
+    controlPath,
+    JSON.stringify({ startedAt: Date.now() - CHATGPT_E2E_MAX_WALL_MS + 120, count: 0 }),
+  );
+  const realFetch = globalThis.fetch;
+  let forwardedInit;
+  globalThis.fetch = async (_input, init) => {
+    forwardedInit = init;
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          let timer;
+          init.signal.addEventListener('abort', () => controller.error(init.signal.reason), {
+            once: true,
+          });
+          timer = setTimeout(
+            () => controller.enqueue(new TextEncoder().encode('data: still streaming\n\n')),
+            1_000,
+          );
+          init.signal.addEventListener('abort', () => clearTimeout(timer), { once: true });
+        },
+      }),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    );
+  };
+  const recorder = installChatGptWireRecorder({
+    wirePath,
+    controlPath,
+    expectedModel: CHATGPT_E2E_MODEL,
+  });
+  try {
+    const response = await globalThis.fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: { 'x-e2e-forwarding-check': 'preserved' },
+      body: JSON.stringify({ model: CHATGPT_E2E_MODEL, tools: [] }),
+    });
+    await expect(response.text()).rejects.toThrow();
+    expect(forwardedInit.method).toBe('POST');
+    expect(forwardedInit.headers).toEqual({ 'x-e2e-forwarding-check': 'preserved' });
+    expect(forwardedInit.body).toBe(JSON.stringify({ model: CHATGPT_E2E_MODEL, tools: [] }));
+    expect(forwardedInit.signal.aborted).toBe(true);
   } finally {
     await recorder.close();
     globalThis.fetch = realFetch;

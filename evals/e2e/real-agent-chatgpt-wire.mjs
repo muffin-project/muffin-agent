@@ -19,17 +19,23 @@ export function isSyntheticDirectInferenceMarker(marker) {
 }
 
 export function responseToolSchemas(body) {
-  return Array.isArray(body?.tools)
-    ? body.tools
-        .filter((tool) => tool?.type === 'function')
-        .map((tool) => ({
-          type: tool.type,
-          name: tool.name,
-          ...(tool.description === undefined ? {} : { description: tool.description }),
-          parameters: tool.parameters,
-          ...(tool.strict === undefined ? {} : { strict: tool.strict }),
-        }))
-    : [];
+  if (!Array.isArray(body?.tools)) return [];
+  const functions = body.tools.flatMap((tool) => {
+    if (tool?.type === 'function') return [tool];
+    if (tool?.type === 'namespace' && tool?.name === 'muffin' && Array.isArray(tool.tools))
+      return tool.tools.filter((nested) => nested?.type === 'function');
+    return [];
+  });
+  return functions.map((tool) => ({
+    type: 'function',
+    name:
+      typeof tool.name === 'string' && tool.name.startsWith('muffin.')
+        ? tool.name.slice(7)
+        : tool.name,
+    ...(tool.description === undefined ? {} : { description: tool.description }),
+    parameters: tool.parameters,
+    ...(tool.strict === undefined ? {} : { strict: tool.strict }),
+  }));
 }
 
 function completedCall(item) {
@@ -164,7 +170,14 @@ export function installChatGptWireRecorder({ wirePath, controlPath, expectedMode
     });
     if (violation) throw new Error(`ChatGPT E2E request rejected: ${violation}`);
 
-    const response = await originalFetch(input, init);
+    const requestDeadline = AbortSignal.timeout(
+      Math.max(1, CHATGPT_E2E_MAX_WALL_MS - (Date.now() - startedAt)),
+    );
+    const callerSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+    const signal = callerSignal
+      ? AbortSignal.any([callerSignal, requestDeadline])
+      : requestDeadline;
+    const response = await originalFetch(input, { ...init, signal });
     if (!response.ok) {
       append({
         kind: 'response',
@@ -219,7 +232,7 @@ export function installChatGptWireRecorder({ wirePath, controlPath, expectedMode
             event.model = typeof parsed.terminal?.model === 'string' ? parsed.terminal.model : null;
             event.toolCalls = parsed.toolCalls;
             event.completed = parsed.terminal?.status === 'completed';
-            const modelViolation = completedResponseViolation(parsed.terminal, body.model);
+            const modelViolation = completedResponseViolation(parsed.terminal, expectedModel);
             if (modelViolation)
               updateControl({ violation: readControl(controlPath).violation ?? modelViolation });
           }

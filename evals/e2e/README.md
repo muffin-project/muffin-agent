@@ -12,7 +12,7 @@ e stato delle sorgenti runtime; exit 0 indica PASS, 1 FAIL, 2 BLOCKED. Ogni
 invocazione crea un root distinto e conserva le prove. Per rimuoverlo usa
 `node evals/e2e/real-agent.mjs --clean <root-esatto>`.
 
-L’LLM di questa corsia usa solo OpenRouter. Il modello predefinito è
+Il percorso predefinito usa OpenRouter Free. Il modello predefinito è
 `google/gemma-4-31b-it:free`; `--model` accetta solo un ID `:free` presente nel
 catalogo corrente (oppure `openrouter/free` se il catalogo descrive quella route
 con tool e prezzi zero). Un run reale richiede una chiave esplicita in un file
@@ -56,6 +56,20 @@ Richiede inoltre zero intenti DB per quella chiamata e hash del sentinel
 immutato. Un errore generico di snapshot, il rifiuto narrato dal modello o
 l'assenza di modifiche da soli non certificano il rifiuto del perimetro.
 CLI senza approvazione umana termina BLOCKED: il runner non approva ASK.
+
+È disponibile anche `--run --chatgpt-root <root-sintetico>`: riusa in posizione
+una Home di prova già autorizzata, privata e marcata, senza copiare credenziali.
+Il root deve essere canonico sotto `/private/tmp`, avere il marker sintetico
+con scope `chatgpt.tokens.use.direct` e non avere socket gateway. Provider e
+modelli main/light devono essere fissati alla route ChatGPT e `gpt-6.1-sol`;
+`--model` diverso viene rifiutato. Il runner crea workspace e sessioni unici,
+aggiunge un solo profilo temporaneo per esercitare discovery e lo rimuove,
+verificando gli hash originali di config e profili. Usa gli stessi oracoli e
+osserva gli schemi e le chiamate reali Responses, senza registrare prompt,
+header di autorizzazione o token. Il budget condiviso è 10 richieste / 180 s,
+inclusa una risposta già in corso; nessun fallback a provider API. La route
+ChatGPT non supporta `max_output_tokens`: il report dichiara il limite remoto
+di output NOT_ENFORCED e mantiene il limite locale di tempo.
 
 Accanto all'accettazione finta (`evals/acceptance/`, provider finto e Bot API
 finto, deterministica, in CI) esiste questa corsia: **modello vero, Bot API

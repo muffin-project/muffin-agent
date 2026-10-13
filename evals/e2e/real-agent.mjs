@@ -151,7 +151,7 @@ const report = {
     independentOracle:
       'read shared-decisions.md outside Muffin, assert the shared decision and omission of both dates, hash bytes, then inspect provider trace and committed effect row',
     negative:
-      'request a sibling path outside MUFFIN_WORKSPACE; a model refusal is recorded honestly but is not kernel-denial evidence; PASS requires an actual DENY decision and unchanged sentinel hash',
+      'request a sibling path outside MUFFIN_WORKSPACE; model refusal alone is NOT_RUN; PASS requires correlated DENY or DRAFT outside_scope preflight rejection, zero intent rows and unchanged sentinel hash',
     gate: 'if fs.write is in request 1, record NOT_RUN and revise the scene; never force tool_choice',
   },
   trace: {
@@ -537,7 +537,9 @@ function runCli(args, stdin = '', timeoutMs = 120_000) {
     const isAgentRun = args[0] === 'run';
     const timeout = setTimeout(
       () => stop(isAgentRun ? { kind: 'runner-budget', reason: 'wall-time limit' } : null),
-      timeoutMs,
+      isAgentRun && recorder
+        ? Math.max(1, Math.min(timeoutMs, recorder.startedAt + REAL_LIMITS.wallMs - Date.now()))
+        : timeoutMs,
     );
     if (isAgentRun) activeAgentStop = stop;
     child.stdout.setEncoding('utf8').on('data', (chunk) => (stdout += chunk));
@@ -844,6 +846,8 @@ function writeChatGptFetchPreload() {
 async function startChatGptRecorder(wirePath, expectedModel) {
   const startedAt = Date.now();
   const controlPath = join(dirname(wirePath), 'wire-control.json');
+  // One parent-owned clock covers both CLI processes and in-flight responses.
+  writeFileSync(controlPath, JSON.stringify({ startedAt, count: 0 }), { mode: 0o600 });
   const events = () => {
     try {
       return readFileSync(wirePath, 'utf8')
