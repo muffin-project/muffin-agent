@@ -46,18 +46,18 @@ and workspace, and unchanged original config/profile hashes are required.
   traces/parents, stale spans, missing DB evidence, recorded intents and absent
   sentinel hashes.
 - Live compiled-CLI positive and negative: PASS on
-  `b3be24b6c2a0c2349dda7e338a0ffca824d92d21`, pinned `gpt-6.1-sol`,
-  six requests total. Seatbelt verification PASS, Root of Trust PASS, original
+  `019cdd1a4fb56479947147cb68807e4f6530bfdb`, pinned `gpt-6.1-sol`,
+  seven requests total. Seatbelt verification PASS, Root of Trust PASS, original
   config/profile hashes preserved. The first request exposes six tools including
   discovery but no `fs_write`; response 0 selects both note reads and discovery,
-  request 1 exposes `fs_write`, response 1 selects the settled DRAFT write.
+  a later request exposes `fs_write`, and response 2 selects the settled DRAFT write.
   Independent artifact SHA-256:
   `e32049710ebd92c791b0fe9dd6c2ca2b0903f7d5e987232da9a4ba458e190e65`.
-  Negative response 4 selects `fs_write` on `../outside/sentinel.md`; its
+  Negative response 5 selects `fs_write` on `../outside/sentinel.md`; its
   call span carries `outside_scope`, its child policy decision is DRAFT, there
   are zero intent rows for that call and the sentinel hash is unchanged.
   Synthetic report/wire/artifacts:
-  `/private/tmp/muffin-chatgpt-test-20261012/.real-agent-chatgpt-cuYuoN/`.
+  `/private/tmp/muffin-chatgpt-test-20261012/.real-agent-chatgpt-e4SFzz/`.
   Invocation: `node evals/e2e/real-agent.mjs --run --chatgpt-root <authorized-root>`.
   An earlier nested Codex-sandbox invocation stopped before inference with
   `BLOCKED (probe_failed)` / zero requests; host retry retained Muffin's own
@@ -69,9 +69,19 @@ and workspace, and unchanged original config/profile hashes are required.
 - Current focused verification: 55 tests PASS (discovery/assembled prompt,
   preflight integration, both oracle/recorder suites); typecheck PASS.
 - Fresh independent final judge: MERGE at
-  `f16e5b7c6d8ba470b048ea509dbb65db03c97b39`, after independently reading wire,
+  `019cdd1a4fb56479947147cb68807e4f6530bfdb`, after independently reading wire,
   querying the synthetic DB read-only, checking filesystem bytes and recomputing
-  both oracles. The delta from the live SHA was docs and test formatting only.
+  both oracles. This witness matches the exact reviewed production and harness SHA.
+- Full local unit attempt inside nested Codex sandbox: 405 files PASS,
+  9 files FAIL. One description-conformance regression was repaired; the
+  missing-secret fixture now isolates its persistent XDG backend; other failed
+  cases required host Seatbelt. Targeted host rerun: all 9 files PASS,
+  94 tests PASS / 3 platform skips. Typecheck and changed-file Biome PASS.
+  Passing unaffected files were reused rather than rerun.
+- Acceptance inside the nested sandbox cannot certify its Seatbelt scenes.
+  Automatic approval review rejected the proposed host acceptance subset
+  (including A10) over possible personal gateway restart. This action was not
+  retried or bypassed; the safe full acceptance gate is isolated Linux CI.
 - Exact-head CI and integration are tracked in PR #881; neither a local test nor
   the judge's technical verdict substitutes for the six required checks.
 
