@@ -268,6 +268,20 @@ assembler. DAY-1 status for those capabilities remains owned by `docs/status/day
 Receiving input and executing current work are separate responsibilities. A
 long-running turn must not make a Surface unable to durably receive later input.
 
+New authenticated owner activities admitted by a profile's `activity` policy
+carry a durable, non-time allowance in the existing Turn. Physical main/light
+requests and tool executions reserve capacity under its current claim before
+starting. Checkpoints, waits, restarts and automatic lease continuations preserve
+both the granted ceiling and spent capacity. These activities have no aggregate
+wall-time or active-inference timer; individual request/stall controls and
+financial/authority gates remain. Recoverable lease endings continue internally
+within the granted renewal allowance, including through the lane after restart.
+An exhausted activity retains its checkpoint for an explicit owner extension;
+stop, denial and terminal failures do not automatically restart. Legacy/custom
+profiles without `activity` and scheduler jobs retain their prior policy.
+[ADR-0100](../decisions/0100-il-budget-appartiene-all-attivita-non-al-timer.md)
+records the behavioral change and initial resource calibration.
+
 The runtime vocabulary must be able to represent at least:
 
 ```text

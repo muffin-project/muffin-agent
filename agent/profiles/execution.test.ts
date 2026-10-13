@@ -44,7 +44,10 @@ describe('shipped execution envelopes', () => {
       if (execution === undefined) continue;
       expect(execution.heartbeatIntervalMs, profile.name).toBeLessThan(execution.stallTimeoutMs);
       expect(execution.stallTimeoutMs, profile.name).toBeLessThan(execution.modelCallDeadlineMs);
-      expect(execution.activeModelBudgetMs, profile.name).toBeLessThanOrEqual(execution.turnWallDeadlineMs);
+      if (execution.activeModelBudgetMs !== null && execution.turnWallDeadlineMs !== null)
+        expect(execution.activeModelBudgetMs, profile.name).toBeLessThanOrEqual(
+          execution.turnWallDeadlineMs,
+        );
     }
   });
 });

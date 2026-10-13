@@ -3,7 +3,8 @@ import { sleep } from '../../core/net/sleep.js';
 import { retryDelayMs } from '../loop/stream.js';
 import { MAX_LIGHT_TRANSPORT_RETRIES } from '../loop/types.js';
 import { DEFAULT_EXECUTION, type Profile } from '../profiles/profile.js';
-import { ProviderError, type ChatCall, type ChatResult, type Provider } from './types.js';
+import { reserveActivityAttempt } from './activity-allowance.js';
+import { type ChatCall, type ChatResult, type Provider, ProviderError } from './types.js';
 
 /**
  * The light lane's missing half of the loop.
@@ -182,6 +183,7 @@ async function chatWithTransportRetries(
     while (true) {
       try {
         attempt += 1;
+        if (!requestSignal.aborted) reserveActivityAttempt('model');
         onAttempt?.({ attempt, model: call.model, requestId });
         return await inner.chat({ ...call, signal: requestSignal });
       } catch (error) {

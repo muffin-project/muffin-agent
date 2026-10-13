@@ -1,7 +1,7 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { z } from 'zod';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { z } from 'zod';
 import { THINKING_VALUES, type Thinking } from '../../core/config/thinking.js';
 import { TOOL_RESULT_BUDGET_CHARS } from '../loop/types.js';
 
@@ -49,8 +49,8 @@ export type RecoveryStrategy =
 
 export type ProfileExecution = {
   modelCallDeadlineMs: number;
-  turnWallDeadlineMs: number;
-  activeModelBudgetMs: number;
+  turnWallDeadlineMs: number | null;
+  activeModelBudgetMs: number | null;
   stallTimeoutMs: number;
   heartbeatIntervalMs: number;
 };
@@ -69,13 +69,13 @@ export type ProfileExecution = {
  * accepted and the key ignored: the zod object strips unknown fields at the
  * boundary, and no path reads it any more.
  */
-export const DEFAULT_EXECUTION: ProfileExecution = {
+export const DEFAULT_EXECUTION = {
   modelCallDeadlineMs: 90_000,
   turnWallDeadlineMs: 180_000,
   activeModelBudgetMs: 120_000,
   stallTimeoutMs: 25_000,
   heartbeatIntervalMs: 15_000,
-};
+} satisfies ProfileExecution;
 
 /**
  * What the loop asks the provider for. Two fields, both of them corrections.
@@ -128,6 +128,10 @@ export type Profile = {
   recovery: RecoveryStrategy[];
   /** Optional only for programmatic/backward-compatible callers; loadProfiles materializes DEFAULT_EXECUTION. */
   execution?: ProfileExecution | undefined;
+  /** Non-time allowance snapshotted when authorized owner work is admitted. */
+  activity?:
+    | { maxModelCalls: number; maxToolCalls: number; maxAutomaticContinuations: number }
+    | undefined;
   /**
    * Clearable tool-result payload kept per turn, in characters.
    *
@@ -182,8 +186,18 @@ export const CONSERVATIVE: Profile = {
  */
 const ExecutionSchema = z.object({
   modelCallDeadlineMs: z.number().int().positive().default(DEFAULT_EXECUTION.modelCallDeadlineMs),
-  turnWallDeadlineMs: z.number().int().positive().default(DEFAULT_EXECUTION.turnWallDeadlineMs),
-  activeModelBudgetMs: z.number().int().positive().default(DEFAULT_EXECUTION.activeModelBudgetMs),
+  turnWallDeadlineMs: z
+    .number()
+    .int()
+    .positive()
+    .nullable()
+    .default(DEFAULT_EXECUTION.turnWallDeadlineMs),
+  activeModelBudgetMs: z
+    .number()
+    .int()
+    .positive()
+    .nullable()
+    .default(DEFAULT_EXECUTION.activeModelBudgetMs),
   stallTimeoutMs: z.number().int().positive().default(DEFAULT_EXECUTION.stallTimeoutMs),
   heartbeatIntervalMs: z.number().int().positive().default(DEFAULT_EXECUTION.heartbeatIntervalMs),
 });
@@ -212,6 +226,13 @@ const ProfileSchema = z.object({
   // floor. Per-field defaults also make a partially migrated profile converge
   // instead of silently losing whichever fuse it omitted.
   execution: ExecutionSchema.default(DEFAULT_EXECUTION),
+  activity: z
+    .object({
+      maxModelCalls: z.number().int().positive(),
+      maxToolCalls: z.number().int().positive(),
+      maxAutomaticContinuations: z.number().int().nonnegative(),
+    })
+    .optional(),
   // Defaulted, not required: the default is what the loop did before this
   // field existed (the global compaction budget), so an old profile keeps
   // exactly the behaviour it had instead of silently acquiring a tighter one.
@@ -220,9 +241,11 @@ const ProfileSchema = z.object({
 });
 
 export function loadProfiles(dir?: string, onProblem?: (line: string) => void): Profile[] {
-  return loadSourcedDir(dir ?? join(dirname(fileURLToPath(import.meta.url))), 'shipped', onProblem).map(
-    (s) => s.profile,
-  );
+  return loadSourcedDir(
+    dir ?? join(dirname(fileURLToPath(import.meta.url))),
+    'shipped',
+    onProblem,
+  ).map((s) => s.profile);
 }
 
 /**
@@ -246,13 +269,18 @@ function loadSourcedDir(
 ): SourcedProfile[] {
   if (!existsSync(dir)) return [];
   const out: SourcedProfile[] = [];
-  for (const f of readdirSync(dir).filter((n) => n.endsWith('.json')).sort()) {
+  for (const f of readdirSync(dir)
+    .filter((n) => n.endsWith('.json'))
+    .sort()) {
     const file = join(dir, f);
     let raw: unknown;
     try {
       raw = JSON.parse(readFileSync(file, 'utf8'));
     } catch (error) {
-      onProblem?.(`profilo ${f} illeggibile: ${error instanceof Error ? error.message : String(error)}`, origin);
+      onProblem?.(
+        `profilo ${f} illeggibile: ${error instanceof Error ? error.message : String(error)}`,
+        origin,
+      );
       continue;
     }
     const parsed = ProfileSchema.safeParse(raw);
@@ -307,7 +335,11 @@ export function loadEffectiveProfiles(
   onProblem?: (line: string, origin?: ProfileOrigin) => void,
 ): SourcedProfile[] {
   const owner = loadSourcedDir(ownerProfilesDir(home), 'owner', onProblem);
-  const shipped = loadSourcedDir(releaseDir ?? join(dirname(fileURLToPath(import.meta.url))), 'shipped', onProblem);
+  const shipped = loadSourcedDir(
+    releaseDir ?? join(dirname(fileURLToPath(import.meta.url))),
+    'shipped',
+    onProblem,
+  );
   const ownerByName = new Map(owner.map((s) => [s.profile.name, s] as const));
   const kept: SourcedProfile[] = [];
   for (const s of shipped) {
@@ -333,7 +365,10 @@ export function loadEffectiveProfiles(
  * CONSERVATIVE explicitly, so the fallback stays visible where owners look
  * instead of hiding inside selection.
  */
-export function selectSourcedProfile(model: string, sourced: SourcedProfile[]): SourcedProfile | undefined {
+export function selectSourcedProfile(
+  model: string,
+  sourced: SourcedProfile[],
+): SourcedProfile | undefined {
   for (const s of sourced) {
     if (s.profile.match.some((pattern) => globMatch(pattern, model))) return s;
   }

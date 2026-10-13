@@ -3,6 +3,10 @@ import { APPROVAL_WINDOW_MS } from '../../core/approvals/store.js';
 import type { SessionRef } from '../../core/session/store.js';
 import type { SpanHandle } from '../../core/tracing/types.js';
 import { ATTR } from '../../core/tracing/types.js';
+import {
+  isOwnerActivityAutonomous,
+  newActivityAllowance,
+} from '../../core/turns/activity-allowance.js';
 import type { TurnCounters, TurnRecord } from '../../core/turns/store.js';
 import { CAPPED_MODEL, SCRIPT_MODEL } from '../../core/turns/store.js';
 import { decodeWaitFor, encodeWaitFor, type WaitSpec } from '../../core/turns/wait.js';
@@ -80,7 +84,7 @@ export function enqueueTurn(deps: LoopDeps, input: TurnInput): string {
       checkpoint: [inputMessage(primoMessaggio(input), input.inputOrigin ?? 'owner')],
     },
     taint: initialTaint(input),
-    counters: freshCounters(),
+    counters: freshCounters(deps, input),
     // Sulla riga, non solo nell'input: vedi `TurnRecord.jobId`.
     ...(input.jobId === undefined ? {} : { jobId: input.jobId }),
     ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
@@ -89,8 +93,13 @@ export function enqueueTurn(deps: LoopDeps, input: TurnInput): string {
 }
 
 /** The counters of a turn that has not started. */
-function freshCounters(): TurnCounters {
+function freshCounters(deps: LoopDeps, input: TurnInput): TurnCounters {
   return {
+    ...(input.principal.kind === 'owner' &&
+    (input.inputOrigin ?? 'owner') === 'owner' &&
+    deps.profile.activity !== undefined
+      ? { activityAllowance: newActivityAllowance(deps.profile.activity) }
+      : {}),
     iterations: 0,
     recoveriesUsed: 0,
     transportRetriesLeft: MAX_TRANSPORT_RETRIES,
@@ -174,7 +183,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
       checkpoint: [inputMessage(primoMessaggio(input), input.inputOrigin ?? 'owner')],
     },
     taint: initialTaint(input),
-    counters: freshCounters(),
+    counters: freshCounters(deps, input),
     // Sulla riga, non solo nell'input: vedi `TurnRecord.jobId`.
     ...(input.jobId === undefined ? {} : { jobId: input.jobId }),
     ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
@@ -407,7 +416,12 @@ export async function resumeTurn(
   if (record.providerLease.model === CAPPED_MODEL) {
     deps.turns.finish(
       record.id,
-      { outcome: 'budget', messages: providerMessages(record), taint: record.taint, counters: record.counters },
+      {
+        outcome: 'budget',
+        messages: providerMessages(record),
+        taint: record.taint,
+        counters: record.counters,
+      },
       record.claimToken,
     );
     return {
@@ -429,7 +443,12 @@ export async function resumeTurn(
       `\n\nControlla lo stato prima di rilanciarlo.`;
     deps.turns.finish(
       record.id,
-      { outcome: 'error', messages: providerMessages(record), taint: record.taint, counters: record.counters },
+      {
+        outcome: 'error',
+        messages: providerMessages(record),
+        taint: record.taint,
+        counters: record.counters,
+      },
       record.claimToken,
     );
     return {
@@ -501,7 +520,10 @@ export async function resumeTurn(
     const ora = (deps.now ?? (() => new Date()))().getTime();
     const scadenzaDellaDomanda = Date.parse(aperta.askedAt) + APPROVAL_WINDOW_MS;
     if (scadenzaDellaDomanda > ora) {
-      const spec: WaitSpec = { wakeAt: new Date(scadenzaDellaDomanda).toISOString(), waitFor: { kind: 'approval', id: aperta.id } };
+      const spec: WaitSpec = {
+        wakeAt: new Date(scadenzaDellaDomanda).toISOString(),
+        waitFor: { kind: 'approval', id: aperta.id },
+      };
       const scritto = deps.turns.suspend(
         record.id,
         {
@@ -645,6 +667,8 @@ export async function continueTurn(
     onDelta?: (delta: import('./types.js').TurnDelta) => void;
     onProgress?: (event: import('./types.js').TurnEvent) => void;
     replyChannel?: string;
+    /** Runtime-owned renewal within the existing grant, never owner words. */
+    automatic?: boolean;
   },
 ): Promise<TurnResult | ContinuationRefusal> {
   deps.prepareTurn?.();
@@ -689,18 +713,28 @@ export async function continueTurn(
         // The grant targets this durable Turn, not whichever session plan is
         // most salient. This reference is derived control, never owner input;
         // subsequent owner corrections remain in the retained evidence.
-        harnessMessage('user', [{
-          type: 'text',
-          text: `Ripresa del turno ${existing.id}. ` +
-            (existing.inputText === null ? '' : `La richiesta iniziale di questo lavoro è: ${JSON.stringify(existing.inputText)}. `) +
-            'Continua il lavoro di questo turno con le correzioni successive dell’owner, ' +
-            'usando gli effetti già registrati. Il piano e la storia della conversazione sono contesto, non un altro lavoro da avviare.',
-        }]),
+        harnessMessage('user', [
+          {
+            type: 'text',
+            text:
+              `Ripresa del turno ${existing.id}. ` +
+              (existing.inputText === null
+                ? ''
+                : `La richiesta iniziale di questo lavoro è: ${JSON.stringify(existing.inputText)}. `) +
+              'Continua il lavoro di questo turno con le correzioni successive dell’owner, ' +
+              'usando gli effetti già registrati. Il piano e la storia della conversazione sono contesto, non un altro lavoro da avviare.',
+          },
+        ]),
         opts.message,
       ],
       taint: existing.taint,
       counters: buildFreshCounters(existing.counters),
       newLeaseStartedAt: now().toISOString(),
+      ...(opts.automatic === true
+        ? { automatic: true }
+        : existing.principal.kind === 'owner' && deps.profile.activity !== undefined
+          ? { activityExtension: deps.profile.activity }
+          : {}),
     },
     process.pid,
   );
@@ -726,14 +760,15 @@ export async function continueTurn(
     remoteParent(granted.id),
   );
   try {
-    deps.sessions.append(session, {
-      role: 'user',
-      content: ownerMessageText(opts.message),
-      surface: granted.surface,
-      createdAt: now().toISOString(),
-      traceId: granted.id,
-      tier: existing.taint,
-    });
+    if (opts.automatic !== true)
+      deps.sessions.append(session, {
+        role: 'user',
+        content: ownerMessageText(opts.message),
+        surface: granted.surface,
+        createdAt: now().toISOString(),
+        traceId: granted.id,
+        tier: existing.taint,
+      });
   } catch (error) {
     span.setAttributes({
       'muffin.turn.session_append_error': error instanceof Error ? error.message : String(error),
@@ -904,7 +939,33 @@ async function drive(
   }
 
   const nonScritte = scriviCorrezioniInSessione(deps, turn, session, record, residue());
-  if (nonScritte.length === 0) return risultato;
+  if (nonScritte.length === 0) {
+    const current = deps.turns.get(record.id);
+    if (
+      !options.signal?.aborted &&
+      risultato.stopped === 'continuable' &&
+      current !== null &&
+      isOwnerActivityAutonomous(current)
+    ) {
+      const next = await continueTurn(deps, current.id, {
+        message: harnessMessage('user', [
+          {
+            type: 'text',
+            text: 'Continue this authorized activity within its remaining allowance. This is runtime continuation, not a new owner instruction or approval.',
+          },
+        ]),
+        automatic: true,
+        session,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+        ...(options.steer === undefined ? {} : { steer: options.steer }),
+        ...(options.onDelta === undefined ? {} : { onDelta: options.onDelta }),
+        ...(options.onProgress === undefined ? {} : { onProgress: options.onProgress }),
+        ...(options.replyChannel === undefined ? {} : { replyChannel: options.replyChannel }),
+      });
+      return 'why' in next ? risultato : next;
+    }
+    return risultato;
+  }
   /**
    * Una scrittura fallita **non è silenziosa**.
    *
