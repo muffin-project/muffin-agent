@@ -1,35 +1,14 @@
-/**
- * `memory_forget` — the owner says «dimentica X», and a belief is retired.
- *
- * DAY-1 cutover, 2026-09-08 (`docs/evidence/dimentica-2026-09-08.md`): on the
- * real install "forget" had no mechanism at all, and the model improvised —
- * shell, sqlite, a recipe of `rm` and `DELETE` handed to the owner — for
- * minutes, without retiring anything. `docs/product/VISION.md` (07/09) lists forget
- * next to remember and correct as an ordinary conversational intent.
- *
- * Two calls, on purpose:
- *
- *   1. `memory_forget({query})` — the runtime's own recall lists what is
- *      currently believed or recorded about it, each with an id;
- *   2. `memory_forget({facts:[…], episodes:[…]})` — the writer retires exactly
- *      those ids (`core/memory/ingest.ts#retireBeliefs`, under the ingest
- *      lock) and answers with what actually changed.
- *
- * The model chooses which ids the owner meant — the same freedom the judge
- * has when it emits `supersede` — but the retirement itself is by exact id,
- * never "whatever matched the query": that is how the wrong memory goes
- * (LangMem `manage_memory` deletes by `id` for the same reason). Nothing is
- * deleted: facts get `expired_at` + `retired_reason`, episodes get D11's
- * `superseded_at`; `--history` and `memory why` keep the provenance.
- *
- * The confirmation is the durable result, so a "done" cannot precede the
- * commit (ADR-0051 Caso 1, #481).
- */
 import { retireBeliefs } from '../../core/memory/ingest.js';
-import { recall, type RecallDeps } from '../../core/memory/recall.js';
-import type { CapabilityDecl } from '../../core/policy/types.js';
+import { type RecallDeps, recall } from '../../core/memory/recall.js';
+import type { CapabilityDecl, TrustTier } from '../../core/policy/types.js';
 import type { ToolOutcome } from '../loop.js';
-import type { ToolSpec } from '../providers/types.js';
+import type { Provider, ToolSpec } from '../providers/types.js';
+import {
+  type ForgetSource,
+  forgetDiscoveryQuery,
+  ownerForgetRequest,
+} from './memory-forget-intent.js';
+import { type ForgetCandidate, resolveForgetTargets } from './memory-forget-target.js';
 
 /**
  * Owner-only on purpose: «dimentica X» is the owner's word about the owner's
@@ -52,32 +31,13 @@ export const memoryForgetCapability: CapabilityDecl = {
 export const memoryForgetSpec: ToolSpec = {
   name: 'memory_forget',
   description:
-    'Forget something on the owner\'s request. Use it when the owner says "dimentica X", "non ' +
-    'considerarlo più vero", "non voglio che tu lo ricordi". Not for a correction ("no, è Y"): just ' +
-    'state the new value and memory supersedes the old one. Retires the belief and the messages it came from so normal ' +
-    'recall stops using them; history and provenance are kept, nothing is deleted. Two steps: ' +
-    'first call with `query` to get the candidate facts and episodes with their ids; then call ' +
-    'again with the ids to retire (`facts`, `episodes`). Never use the shell, sqlite or files ' +
-    'for this. e.g. memory_forget({query: "il mio dentista"}) then memory_forget({facts: [149], episodes: [544]}).',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      query: {
-        type: 'string',
-        description: 'What the owner wants forgotten, in natural language — returns candidates with ids.',
-      },
-      facts: {
-        type: 'array',
-        items: { type: 'number' },
-        description: 'Fact ids to retire (from the candidates).',
-      },
-      episodes: {
-        type: 'array',
-        items: { type: 'number' },
-        description: 'Episode ids to retire (from the candidates).',
-      },
-    },
-  },
+    'Forget memory on a direct current owner request. Use it when the owner asks "dimentica X" or "forget X". ' +
+    'Not for a correction, a quoted request, or your own judgment that something is stale. ' +
+    'Call with {}. The runtime derives the target from the authenticated owner message, resolves matching facts ' +
+    'and their source episodes, and retires them through the canonical writer. Unresolved targets or sources ' +
+    'containing other information require clarification; no retirement is inferred from a matching keyword. ' +
+    'History and provenance remain queryable. Never use shell, sqlite or files for this. Report the actual receipt.',
+  inputSchema: { type: 'object', properties: {} },
 };
 
 type RawArgs = { query?: unknown; facts?: unknown; episodes?: unknown };
@@ -88,105 +48,211 @@ function idList(raw: unknown, name: string): number[] | string {
   const ids: number[] = [];
   for (const v of raw) {
     const n = typeof v === 'number' ? v : Number(v);
-    if (!Number.isInteger(n) || n <= 0) return `memory_forget: "${name}" contiene un id non valido: ${String(v)}.`;
+    if (!Number.isInteger(n) || n <= 0)
+      return `memory_forget: "${name}" contiene un id non valido: ${String(v)}.`;
     ids.push(n);
   }
   return ids;
 }
 
-/** Everything a forget needs from the turn: who owns the memory and which turn asked. */
+export type ForgetDeps = RecallDeps & { provider: Provider; model: string };
 export type ForgetContext = {
+  signal?: AbortSignal;
   tenant: string;
   turnId: string;
-  /**
-   * The scheduled job this turn belongs to, when one does.
-   *
-   * The first `memory_forget` call recalls to list candidates, and recall pays
-   * the reranker past `RERANK_MIN_CANDIDATES` — spend the job caused, so it has
-   * to land on the job's ledger like the pre-turn recall and `memory_search`.
-   * Absent on every interactive turn.
-   */
-  jobId?: string | undefined;
+  getSource: () => ForgetSource | null;
+  jobId?: string;
 };
 
+/** One direct owner action, independently resolved targets, one canonical writer. */
 export async function forgetMemory(
-  deps: RecallDeps,
+  deps: ForgetDeps,
   ctx: ForgetContext,
   args: unknown,
   now: () => Date = () => new Date(),
 ): Promise<ToolOutcome> {
+  let resolutionTier: TrustTier = 0;
+  const error = (content: string): ToolOutcome => ({
+    content,
+    isError: true,
+    tier: resolutionTier,
+  });
+  if (ctx.signal?.aborted) return error('memory_forget: interrotto. Nessuna memoria ritirata.');
+  const request = ownerForgetRequest(ctx.getSource(), ctx.tenant, ctx.turnId);
+  if (request === null)
+    return error(
+      'memory_forget: nessuna richiesta diretta e attuale dell’owner autorizza questo oblio.',
+    );
+  if (args !== undefined && (args === null || typeof args !== 'object' || Array.isArray(args)))
+    return error('memory_forget: argomenti non validi.');
   const raw = (args ?? {}) as RawArgs;
-  const facts = idList(raw.facts, 'facts');
-  if (typeof facts === 'string') return { content: facts, isError: true, tier: 0 };
-  const episodes = idList(raw.episodes, 'episodes');
-  if (typeof episodes === 'string') return { content: episodes, isError: true, tier: 0 };
-
-  if (facts.length > 0 || episodes.length > 0) {
-    const result = retireBeliefs(deps.store, ctx.tenant, {
-      factIds: facts,
-      episodeIds: episodes,
-      at: now(),
-      reason: `richiesta dell'owner · turno ${ctx.turnId}`,
-    });
-    const missed = {
-      facts: facts.filter((id) => !result.facts.includes(id)),
-      episodes: episodes.filter((id) => !result.episodes.includes(id)),
-    };
-    const lines = [
-      result.facts.length > 0 ? `ritirati ${result.facts.length} fatti: ${result.facts.map((id) => `#${id}`).join(', ')}` : 'nessun fatto ritirato',
-      result.episodes.length > 0
-        ? `ritirati ${result.episodes.length} episodi dal recall: ${result.episodes.map((id) => `#${id}`).join(', ')}`
-        : 'nessun episodio ritirato',
-    ];
-    if (missed.facts.length > 0) lines.push(`non trovati o già ritirati (fatti): ${missed.facts.map((id) => `#${id}`).join(', ')}`);
-    if (missed.episodes.length > 0) lines.push(`non trovati (episodi): ${missed.episodes.map((id) => `#${id}`).join(', ')}`);
-    lines.push('La storia e la provenienza restano: `muffin memory search --history` le mostra come ritirate.');
-    return { content: lines.join('\n'), tier: 0 };
-  }
-
-  if (typeof raw.query !== 'string' || raw.query.trim() === '') {
-    return {
-      content: 'memory_forget richiede "query" (per vedere i candidati) oppure "facts"/"episodes" (gli id da ritirare).',
-      isError: true,
-      tier: 0,
-    };
-  }
-  const query = raw.query.trim();
-  const found = await recall(deps, ctx.tenant, query, {
-    limit: 12,
+  const requestedFacts = idList(raw.facts, 'facts');
+  const requestedEpisodes = idList(raw.episodes, 'episodes');
+  if (typeof requestedFacts === 'string') return error(requestedFacts);
+  if (typeof requestedEpisodes === 'string') return error(requestedEpisodes);
+  // Legacy query never controls discovery or the mutation target.
+  const discoveryQuery = forgetDiscoveryQuery(request)!;
+  const found = await recall(deps, ctx.tenant, discoveryQuery, {
+    limit: 13,
     ...(ctx.jobId === undefined ? {} : { jobId: ctx.jobId }),
   });
-  const items = found.items.filter((i) => (i.kind === 'fact' || i.kind === 'episode') && i.expired !== true);
-  // Facts reach recall through the vector index or the entity hop. A fact
-  // extracted a minute ago may have no vector yet (embedder backlog — measured
-  // on the owner's install, 08/09), and then «dimentica» would list only the
-  // episodes and leave the belief standing. So the active facts are also
-  // searched by their words, deterministically, and merged in by id.
-  const seen = new Set(items.filter((i) => i.kind === 'fact').map((i) => i.id));
-  for (const f of deps.store.searchActiveFacts(ctx.tenant, query)) {
-    if (seen.has(f.id)) continue;
-    seen.add(f.id);
-    items.push({
-      kind: 'fact',
-      id: f.id,
-      text: `${f.subjectName} ${f.predicate} ${f.objectValue ?? f.objectName ?? ''}`,
-      trustTier: f.trustTier,
-      source: `fatto registrato il ${f.recordedAt.slice(0, 10)}`,
-      score: 0,
+  resolutionTier = Math.max(0, ...found.items.map((i) => i.trustTier)) as TrustTier;
+  const fallbackFacts = deps.store.searchActiveFacts(ctx.tenant, discoveryQuery, 13);
+  if (found.items.length >= 13 || fallbackFacts.length >= 13)
+    return error(
+      'Troppi candidati: specifica meglio cosa vuoi dimenticare. Nessuna memoria ritirata.',
+    );
+  const factIds = new Set(fallbackFacts.map((f) => f.id));
+  const episodeIds = new Set<number>();
+  for (const item of found.items) {
+    if (item.expired) continue;
+    if (item.kind === 'fact') factIds.add(item.id);
+    else if (item.turnId !== ctx.turnId) episodeIds.add(item.id);
+  }
+  for (const id of [...episodeIds]) {
+    for (const f of deps.store.factsFromEpisode(ctx.tenant, id))
+      if (f.expiredAt === null) factIds.add(f.id);
+  }
+  for (const id of factIds) {
+    const f = deps.store.factById(ctx.tenant, id);
+    if (f?.episodeId != null) episodeIds.add(f.episodeId);
+  }
+  const candidates: ForgetCandidate[] = [];
+  const snapshots = new Map<string, string>();
+  for (const id of episodeIds) {
+    const ep = deps.store.episodeById(ctx.tenant, id);
+    if (
+      !ep ||
+      ep.content === null ||
+      ep.turnId === ctx.turnId ||
+      deps.store.provenanceOf(ctx.tenant, 'episode', id)?.supersededAt !== null ||
+      ep.undoneAt !== undefined
+    )
+      continue;
+    resolutionTier = Math.max(resolutionTier, ep.trustTier) as TrustTier;
+    const sourceFacts = deps.store
+      .factsFromEpisode(ctx.tenant, id)
+      .filter((f) => f.expiredAt === null);
+    if (ep.content.length > 12_000 || sourceFacts.length > 12)
+      return error(
+        'La fonte non è risolvibile in modo completo entro questa richiesta. Nessuna memoria ritirata.',
+      );
+    snapshots.set(
+      `episode:${id}`,
+      JSON.stringify({
+        episode: ep,
+        provenance: deps.store.provenanceOf(ctx.tenant, 'episode', id),
+      }),
+    );
+    candidates.push({
+      kind: 'episode',
+      id,
+      text: ep.content,
+      sourceEpisodeId: id,
+      sourceText: ep.content,
+      sourceFactIds: sourceFacts.map((f) => f.id),
     });
+    for (const f of sourceFacts) {
+      resolutionTier = Math.max(resolutionTier, f.trustTier) as TrustTier;
+      snapshots.set(`fact:${f.id}`, JSON.stringify(deps.store.factById(ctx.tenant, f.id)));
+      candidates.push({
+        kind: 'fact',
+        id: f.id,
+        text: `${f.subjectName} ${f.predicate} ${f.objectValue ?? f.objectName ?? ''}`,
+        sourceEpisodeId: id,
+        sourceText: ep.content,
+        sourceFactIds: sourceFacts.map((s) => s.id),
+      });
+    }
   }
-  if (items.length === 0) {
-    return { content: `Niente da dimenticare: nessun fatto attivo né episodio corrisponde a «${raw.query.trim()}».`, tier: 0 };
-  }
-  const lines = items.map(
-    (i) => `[${i.kind} #${i.id}] ${i.source} — ${i.text.replace(/\s+/g, ' ').slice(0, 200)}`,
+  if (candidates.length > 24 || JSON.stringify(candidates).length > 64_000)
+    return error(
+      'Troppi candidati: specifica meglio cosa vuoi dimenticare. Nessuna memoria ritirata.',
+    );
+  const decision = await resolveForgetTargets(
+    deps.provider,
+    deps.model,
+    request,
+    candidates,
+    ctx.jobId,
+    ctx.signal,
   );
-  const tier = items.reduce<0 | 1 | 2 | 3>((max, i) => (i.trustTier > max ? i.trustTier : max), 0);
+  if (ctx.signal?.aborted) return error('memory_forget: interrotto. Nessuna memoria ritirata.');
+  if (decision === null)
+    return error(
+      'Non posso verificare il bersaglio dell’oblio: il giudizio è assente o non valido. Nessuna memoria ritirata.',
+    );
+  if (decision.status === 'none')
+    return error('Nessun candidato corrisponde alla richiesta completa. Nessuna memoria ritirata.');
+  if (decision.status === 'ambiguous' || !decision.sourceOnlyTargets)
+    return error(
+      'Il bersaglio o la sua fonte contiene altre informazioni: specifica cosa vuoi ritirare. Nessuna memoria ritirata.',
+    );
+  const selectedFacts = new Set(decision.facts);
+  const selectedEpisodes = new Set(decision.episodes);
+  for (const id of selectedFacts) {
+    const item = candidates.find((c) => c.kind === 'fact' && c.id === id)!;
+    if (item.sourceEpisodeId !== null) selectedEpisodes.add(item.sourceEpisodeId);
+  }
+  for (const id of selectedEpisodes) {
+    const ep = candidates.find((c) => c.kind === 'episode' && c.id === id);
+    if (!ep || ep.sourceFactIds.some((f) => !selectedFacts.has(f)))
+      return error(
+        'La fonte contiene altri fatti attivi: serve chiarire l’effetto sul messaggio sorgente. Nessuna memoria ritirata.',
+      );
+  }
+  if (
+    requestedFacts.some((id) => !selectedFacts.has(id)) ||
+    requestedEpisodes.some((id) => !selectedEpisodes.has(id))
+  )
+    return error(
+      'Gli id del modello non corrispondono al bersaglio autorizzato dall’owner. Nessuna memoria ritirata.',
+    );
+  if (typeof raw.query === 'string' && !requestedFacts.length && !requestedEpisodes.length) {
+    return {
+      content:
+        'Candidati autorizzati dalla richiesta attuale:\n' +
+        candidates
+          .filter((c) => (c.kind === 'fact' ? selectedFacts.has(c.id) : selectedEpisodes.has(c.id)))
+          .map((c) => `[${c.kind} #${c.id}] ${c.text}`)
+          .join('\n') +
+        '\nPer eseguire usa memory_forget con gli id, oppure {}.',
+      tier: resolutionTier,
+    };
+  }
+  // Authority, canonical row snapshots and both writes share one SQLite
+  // transaction; the existing writer acquires the ingestion lock inside it.
+  const result = deps.store.transact(() => {
+    ctx.signal?.throwIfAborted();
+    if (ownerForgetRequest(ctx.getSource(), ctx.tenant, ctx.turnId) !== request)
+      throw new Error('La richiesta dell’owner è cambiata: nessuna memoria ritirata.');
+    for (const id of selectedFacts)
+      if (JSON.stringify(deps.store.factById(ctx.tenant, id)) !== snapshots.get(`fact:${id}`))
+        throw new Error('Il fatto è cambiato durante la risoluzione: nessuna memoria ritirata.');
+    for (const id of selectedEpisodes) {
+      if (
+        JSON.stringify({
+          episode: deps.store.episodeById(ctx.tenant, id),
+          provenance: deps.store.provenanceOf(ctx.tenant, 'episode', id),
+        }) !== snapshots.get(`episode:${id}`)
+      )
+        throw new Error('La fonte è cambiata durante la risoluzione: nessuna memoria ritirata.');
+      if (
+        deps.store
+          .factsFromEpisode(ctx.tenant, id)
+          .some((f) => f.expiredAt === null && !selectedFacts.has(f.id))
+      )
+        throw new Error('La fonte ora contiene altri fatti: nessuna memoria ritirata.');
+    }
+    return retireBeliefs(deps.store, ctx.tenant, {
+      factIds: [...selectedFacts],
+      episodeIds: [...selectedEpisodes],
+      at: now(),
+      reason: `richiesta diretta dell’owner · turno ${ctx.turnId}`,
+    });
+  });
   return {
-    content:
-      `Candidati (attivi) per «${raw.query.trim()}»:\n${lines.join('\n')}\n\n` +
-      'Per ritirarli chiama di nuovo memory_forget con gli id: {facts: [...], episodes: [...]}. ' +
-      'Ritira solo ciò che l\'owner intende davvero; un fatto non nominato resta.',
-    tier,
+    content: `ritirati ${result.facts.length} fatti: ${result.facts.map((id) => `#${id}`).join(', ')}\nritirati ${result.episodes.length} episodi dal recall: ${result.episodes.map((id) => `#${id}`).join(', ')}\nLa storia e la provenienza restano consultabili con memory why e search --history.`,
+    tier: resolutionTier,
   };
 }

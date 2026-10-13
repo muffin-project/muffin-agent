@@ -62,6 +62,7 @@ import {
   renderSystemPrompts,
   type SystemPromptBlocks,
 } from './context/assemble.js';
+import { providerMessages } from './loop/provider-checkpoint.js';
 import type { Approver, LoopDeps, RegisteredTool, SpendEntry, TurnRuntimeInfo } from './loop.js';
 import {
   CONSERVATIVE,
@@ -92,6 +93,7 @@ import {
   whyMemory,
 } from './tools/memory.js';
 import { forgetMemory, memoryForgetCapability, memoryForgetSpec } from './tools/memory-forget.js';
+import type { ForgetSource } from './tools/memory-forget-intent.js';
 import {
   memoryProposeCapability,
   memoryProposeSpec,
@@ -508,6 +510,15 @@ export function buildRuntime(
   // connection, but own neither clock nor execution state (#605).
   const automationRules = new AutomationRuleStore(db);
   const turns = new TurnStore(db);
+  const forgetSource = (turnId: string): ForgetSource | null => {
+    const turn = turns.get(turnId);
+    if (!turn || turn.status !== 'running') return null;
+    try {
+      return { ...turn, messages: providerMessages(turn) };
+    } catch {
+      return null;
+    }
+  };
   // The identity/idempotency bridge from a due occurrence to a durable turn
   // (B7, ADR-0035 emendamento №5). Same connection as `jobs`/`turns`, same
   // `CREATE TABLE IF NOT EXISTS` additivity as every other store here.
@@ -825,10 +836,12 @@ export function buildRuntime(
       spec: memoryForgetSpec,
       handler: async (args, ctx) =>
         forgetMemory(
-          recallDeps,
+          { ...recallDeps, provider: light, model: config.models.light },
           {
             tenant: ctx.tenant,
             turnId: ctx.turnId,
+            getSource: () => forgetSource(ctx.turnId),
+            ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
             // Il job di questo turno, quando c'è: la prima chiamata di
             // `memory_forget` fa recall e paga il reranker, quindi quella spesa
             // deve finire sul contatore del job come le altre due strade.
