@@ -19,6 +19,7 @@ import type { AttributeValue, SpanHandle } from '../../core/tracing/types.js';
 import { TurnStore } from '../../core/turns/store.js';
 import { TodoStore } from '../../core/turns/todo.js';
 import { CONSERVATIVE, type Profile } from '../profiles/profile.js';
+import { OpenAIChatGPTProvider } from '../providers/openai-chatgpt.js';
 import { OpenAICompatProvider } from '../providers/openai-compat.js';
 import {
   type ChatCall,
@@ -355,6 +356,107 @@ describe('la porta di risposta è chiesta prima della chiamata al modello', () =
     );
     expect(h.span.attrs['muffin.reply.refused']).toBe('taint_exceeded');
   });
+});
+
+describe('ChatGPT transport recovery through the production loop', () => {
+  it('does not retry an unfinished ChatGPT stream after the persisted budget is spent', async () => {
+    let requests = 0;
+    const provider = new OpenAIChatGPTProvider(
+      { accessToken: async () => 'synthetic-token', listModels: async () => [] },
+      {
+        fetch: (async () => {
+          requests += 1;
+          return new Response(
+            'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"discarded"}\n\n',
+            {
+              headers: { 'content-type': 'text/event-stream' },
+            },
+          );
+        }) as typeof fetch,
+      },
+    );
+    const h = harness({
+      provider,
+      model: 'gpt-6.1-sol',
+      profile: { ...CONSERVATIVE, thinking: 'adaptive' },
+    });
+    h.run.transportRetriesLeft = 0;
+    await expect(runRounds(h.scope)).rejects.toMatchObject({
+      name: 'ProviderError',
+      retryable: true,
+      source: 'transport',
+    });
+    expect(requests).toBe(1);
+    expect(h.run.transportRetriesLeft).toBe(0);
+  });
+
+  it.each(['truncated stream', 'connection failure'])(
+    'retries %s with the persisted transport budget',
+    async (failure) => {
+      let requests = 0;
+      const provider = new OpenAIChatGPTProvider(
+        {
+          accessToken: async () => 'synthetic-token',
+          listModels: async () => [],
+        },
+        {
+          fetch: (async () => {
+            requests += 1;
+            if (requests === 1) {
+              if (failure === 'connection failure')
+                throw new TypeError('synthetic connection reset');
+              return new Response(
+                'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"discarded partial"}\n\n',
+                {
+                  headers: { 'content-type': 'text/event-stream' },
+                },
+              );
+            }
+            const response = {
+              id: 'resp_recovered',
+              model: 'gpt-6.1-sol',
+              status: 'completed',
+              output: [
+                {
+                  type: 'message',
+                  role: 'assistant',
+                  status: 'completed',
+                  content: [{ type: 'output_text', text: 'Recovered answer.' }],
+                },
+              ],
+              usage: { input_tokens: 1, output_tokens: 1 },
+            };
+            return new Response(
+              `event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', response })}\n\n`,
+              {
+                headers: { 'content-type': 'text/event-stream' },
+              },
+            );
+          }) as typeof fetch,
+        },
+      );
+      const progress: TurnEvent[] = [];
+      const deltas: TurnDelta[] = [];
+      const h = harness({
+        provider,
+        model: 'gpt-6.1-sol',
+        profile: { ...CONSERVATIVE, thinking: 'adaptive' },
+        onDelta: (event) => deltas.push(event),
+        onProgress: (event) => progress.push(event),
+      });
+      const result = await runRounds(h.scope);
+      expect(requests).toBe(2);
+      expect(result).toMatchObject({
+        stopped: 'answered',
+        text: 'Recovered answer.',
+        iterations: 2,
+      });
+      expect(h.run.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES - 1);
+      expect(h.turns.get(h.id)?.counters.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES - 1);
+      expect(progress.filter((event) => event.type === 'model_retry')).toHaveLength(1);
+      expect(JSON.stringify(deltas)).not.toContain('discarded partial');
+    },
+  );
 });
 
 describe('un solo fallback, mai un secondo tentativo in streaming', () => {

@@ -1,4 +1,4 @@
-import OpenAI, { APIError } from 'openai';
+import OpenAI, { APIConnectionError, APIError } from 'openai';
 import type { ChatGPTModel } from '../../core/config/chatgpt-oauth.js';
 import { isThinkingEffort } from '../../core/config/thinking.js';
 import { compileForOpenAI } from './compile.js';
@@ -137,10 +137,19 @@ export class OpenAIChatGPTProvider implements Provider {
   }
 
   async chat(call: ChatCall): Promise<ChatResult> {
-    for await (const event of this.run(call)) {
-      if (event.type === 'done') return event.result;
+    try {
+      for await (const event of this.run(call)) {
+        if (event.type === 'done') return event.result;
+      }
+    } catch (error) {
+      // This adapter has no non-streaming route. An unfinished SSE is a
+      // failed chat invocation: let the loop's persisted transport budget
+      // retry it, without publishing partial text or executing partial tools.
+      if (error instanceof ProviderStreamError)
+        throw new ProviderError(error.message, true, undefined, 'transport');
+      throw error;
     }
-    throw new ProviderStreamError('Responses stream ended without a completed result', true);
+    throw new ProviderError('Responses stream ended without a completed result', true);
   }
 
   // No public chatStream: the loop's non-stream fallback would issue a second
@@ -157,8 +166,17 @@ export class OpenAIChatGPTProvider implements Provider {
     const completedOutputItems = new Map<number, OpenAI.Responses.ResponseOutputItem>();
     const allowedTools = new Set((call.tools ?? []).map((tool) => tool.name));
 
+    let accessToken: string;
     try {
-      const accessToken = await this.connection.accessToken(call.signal);
+      accessToken = await this.connection.accessToken(call.signal);
+    } catch {
+      if (call.signal?.aborted) throw new ProviderError('aborted', false);
+      // Credential acquisition is not an inference-stream failure. Preserve
+      // its non-retryable boundary without exposing OAuth error details.
+      throw new ProviderError('ChatGPT access token unavailable', false);
+    }
+
+    try {
       call.signal?.throwIfAborted();
       const client = new OpenAI({
         apiKey: accessToken,
@@ -628,7 +646,11 @@ function responseFailure(error: unknown, requestId: string | undefined): Provide
 function apiProviderError(error: APIError): ProviderError {
   const status = error.status;
   const retryable =
-    status === 408 || status === 409 || status === 429 || (status !== undefined && status >= 500);
+    error instanceof APIConnectionError ||
+    status === 408 ||
+    status === 409 ||
+    status === 429 ||
+    (status !== undefined && status >= 500);
   const requestId =
     error.requestID && /^[a-zA-Z0-9_-]{1,100}$/.test(error.requestID)
       ? ` [${error.requestID}]`

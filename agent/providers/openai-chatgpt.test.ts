@@ -95,6 +95,50 @@ function harness(
 }
 
 describe('OpenAI ChatGPT plan Responses provider', () => {
+  it('does not classify credential acquisition failures as retryable stream failures', async () => {
+    let requests = 0;
+    const provider = new OpenAIChatGPTProvider(
+      {
+        accessToken: async () => {
+          throw new Error('synthetic private credential detail');
+        },
+        listModels: async () => [],
+      },
+      {
+        fetch: (async () => {
+          requests += 1;
+          return sse([]);
+        }) as typeof fetch,
+      },
+    );
+    const error = await provider.chat(CALL).catch((failure: unknown) => failure);
+    expect(error).toMatchObject({
+      name: 'ProviderError',
+      retryable: false,
+      message: 'ChatGPT access token unavailable',
+    });
+    expect(requests).toBe(0);
+    expect(String(error)).not.toContain('private credential detail');
+  });
+
+  it.each([401, 403, 400])('does not make HTTP %s retryable', async (status) => {
+    const provider = new OpenAIChatGPTProvider(
+      { accessToken: async () => 'synthetic-token', listModels: async () => [] },
+      {
+        fetch: (async () =>
+          new Response(JSON.stringify({ error: { message: 'synthetic rejection' } }), {
+            status,
+          })) as typeof fetch,
+      },
+    );
+    await expect(provider.chat(CALL)).rejects.toMatchObject({
+      name: 'ProviderError',
+      status,
+      retryable: false,
+      source: 'transport',
+    });
+  });
+
   it('sends full semantic history to the public streaming endpoint and maps a completed response and usage', async () => {
     const output = [
       {
@@ -317,8 +361,9 @@ describe('OpenAI ChatGPT plan Responses provider', () => {
       }),
     ]);
     await expect(h.provider.chat(CALL)).rejects.toMatchObject({
-      name: 'ProviderStreamError',
-      partial: true,
+      name: 'ProviderError',
+      retryable: true,
+      source: 'transport',
     });
     expect(h.requests).toHaveLength(1);
   });
@@ -523,8 +568,9 @@ describe('OpenAI ChatGPT plan Responses provider', () => {
 
     const noTerminal = harness([event('response.output_text.delta', { delta: 'partial' })]);
     await expect(noTerminal.provider.chat(CALL)).rejects.toMatchObject({
-      name: 'ProviderStreamError',
-      partial: true,
+      name: 'ProviderError',
+      retryable: true,
+      source: 'transport',
     });
 
     const invalidTool = harness([
