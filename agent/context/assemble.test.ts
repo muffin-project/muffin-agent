@@ -12,6 +12,7 @@ import {
   saveConfig,
 } from '../../core/config/config.js';
 import type { Principal } from '../../core/policy/types.js';
+import type { TodoItem } from '../../core/turns/todo.js';
 import { buildRuntime, type Runtime } from '../runtime.js';
 import {
   buildSystemPromptBlocks,
@@ -20,7 +21,6 @@ import {
   todoSection,
   visibleTools,
 } from './assemble.js';
-import type { TodoItem } from '../../core/turns/todo.js';
 
 /**
  * The prompt is a function of the tenant, and the tool list is a function of the
@@ -931,8 +931,14 @@ describe('the tool list a principal is shown', () => {
 
 describe('session plans remain context, independent of age', () => {
   const item = (updatedAt: string): TodoItem => ({
-    seq: 1, text: 'Build an unrelated animation.', state: 'pending', note: null,
-    tier: 0, dueAt: null, createdAt: updatedAt, updatedAt,
+    seq: 1,
+    text: 'Build an unrelated animation.',
+    state: 'pending',
+    note: null,
+    tier: 0,
+    dueAt: null,
+    createdAt: updatedAt,
+    updatedAt,
   });
 
   it('empty plans cost no context', () => {
@@ -950,7 +956,8 @@ describe('session plans remain context, independent of age', () => {
   });
 
   it('age does not change which request the plan authorizes', () => {
-    expect(todoSection([item('2026-09-30T09:30:00Z')]))
-      .toBe(todoSection([item('2020-01-01T00:00:00Z')]));
+    expect(todoSection([item('2026-09-30T09:30:00Z')])).toBe(
+      todoSection([item('2020-01-01T00:00:00Z')]),
+    );
   });
 });

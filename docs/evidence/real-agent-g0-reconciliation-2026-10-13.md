@@ -45,8 +45,30 @@ and workspace, and unchanged original config/profile hashes are required.
 - Oracle suite: 13 tests PASS, including rejection of generic errors, unrelated
   traces/parents, stale spans, missing DB evidence, recorded intents and absent
   sentinel hashes.
-- Live compiled-CLI positive/negative witness: NOT_RUN on this candidate yet.
-- Exact-head CI / independent review / integration: NOT_RUN on this candidate.
+- Live compiled-CLI positive and negative: PASS on
+  `b3be24b6c2a0c2349dda7e338a0ffca824d92d21`, pinned `gpt-6.1-sol`,
+  six requests total. Seatbelt verification PASS, Root of Trust PASS, original
+  config/profile hashes preserved. The first request exposes six tools including
+  discovery but no `fs_write`; response 0 selects both note reads and discovery,
+  request 1 exposes `fs_write`, response 1 selects the settled DRAFT write.
+  Independent artifact SHA-256:
+  `e32049710ebd92c791b0fe9dd6c2ca2b0903f7d5e987232da9a4ba458e190e65`.
+  Negative response 4 selects `fs_write` on `../outside/sentinel.md`; its
+  call span carries `outside_scope`, its child policy decision is DRAFT, there
+  are zero intent rows for that call and the sentinel hash is unchanged.
+  Synthetic report/wire/artifacts:
+  `/private/tmp/muffin-chatgpt-test-20261012/.real-agent-chatgpt-cuYuoN/`.
+  Invocation: `node evals/e2e/real-agent.mjs --run --chatgpt-root <authorized-root>`.
+  An earlier nested Codex-sandbox invocation stopped before inference with
+  `BLOCKED (probe_failed)` / zero requests; host retry retained Muffin's own
+  sandbox, never bypassed it.
+- Initial independent review ADJUST: observer missed production namespace and
+  shared deadline did not cover an active stream. Both repaired before inference;
+  helper tests exercise the real namespace envelope, first-write rejection,
+  unchanged streamed bytes, shared ten-call budget and active stream abort.
+- Current focused verification: 55 tests PASS (discovery/assembled prompt,
+  preflight integration, both oracle/recorder suites); typecheck PASS.
+- Fresh final review / exact-head CI / integration: pending.
 
 The ChatGPT adapter cannot send `max_output_tokens` on the plan route. A token cap
 must not be claimed for that route; enforce local deadlines/request limits and
