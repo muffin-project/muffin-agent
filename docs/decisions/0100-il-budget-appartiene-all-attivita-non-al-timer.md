@@ -20,6 +20,11 @@ Una prenotazione persa prima della chiamata può sovrastimare il consumo; un
 crash non deve invece concedere chiamate gratuite. I risultati già nel WAL
 si riutilizzano senza addebitare una nuova esecuzione.
 
+Le chiamate light che servono all'attività condividono la sua capacità. Il
+callback post-turn che avvia il consolidamento della memoria esce invece dal
+contesto dell'attività conclusa: quel lavoro mantiene identità e controlli
+finanziari propri, senza ereditare una claim ormai chiusa.
+
 Ripresa, sospensione, checkpoint e reload non modificano il budget concesso o
 il consumo. Per questa modalità i timer complessivi di drive e inferenza sono
 disabilitati; il timeout della singola chiamata e il watchdog dopo attività
@@ -45,6 +50,8 @@ Work/Goal, una tabella o un altro orchestratore. I record precedenti, l'input
 esterno, i member e i job scheduler mantengono il percorso precedente. Una
 continuazione esplicita può ammettere una vecchia attività owner alla nuova
 modalità. Un profilo custom senza `activity` conserva la sua policy precedente.
+Il fallback di produzione per modelli senza un profilo dedicato usa lo stesso
+budget di risorse; il profilo conservativo dei caller legacy rimane compatibile.
 
 ## Falsificatori
 

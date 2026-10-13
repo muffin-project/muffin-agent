@@ -114,3 +114,31 @@ recovery. A material change to ADR-0086 requires a new ADR.
 Real model acceptance and independent effect/state oracles remain required.
 No execution limit, personal installation setting or autonomy policy was changed
 by this research. No measured completion-rate improvement is claimed.
+
+## Implementation evidence (integration pending)
+
+PR #889 implements ADR-0100 using an additive allowance in the existing Turn
+counter JSON. The initial candidate is `091b9d59`. Focused watchdog/store/loop
+coverage passed 133 tests; restoring the former aggregate timing policy makes
+healthy-work coverage fail (three unnecessary renewals instead of zero).
+
+Fresh independent review found a real composition defect: AsyncLocalStorage
+propagated the completed activity claim into the consolidator's idle timer,
+preventing background light requests. A registered production-loop regression
+failed before repair. The post-turn dispatch now exits that scope; active task
+main/light calls remain scoped. Idle and ceiling consolidation, concurrent owner
+activities, lane recovery after a crash, and independent recorded-effect oracles
+are covered. Reviewed focused follow-up: 43 PASS, including 15 existing real
+runtime consolidation wiring tests. Typecheck and compilation passed.
+
+The first real CLI duration witness was **FAIL**, not accepted: the driver used
+its checkout as cwd while its chain files were in a separate workspace. The
+model received missing-file errors, concluded after 495,802 ms, and did not
+write a receipt. The report's CLI exit 0 was insufficient; the independent
+receipt/duration oracle correctly rejected it. The driver was corrected.
+
+A real-model duration witness must preserve actual provider responses and
+verify elapsed time, terminal Turn state and receipt independently. Controlled
+latency injection demonstrates the absence of aggregate cutoffs; it does not
+benchmark natural task completion or establish optimal numeric resource limits.
+The required >=15-minute successful witness remains pending here.

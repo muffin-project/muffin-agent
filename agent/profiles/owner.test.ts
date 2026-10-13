@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -25,7 +25,7 @@ const shipped = (name: string, match: string[]) => ({
   maxToolCallsPerTurn: 50 as number | null,
   thinking: 'off' as const,
   sampling: 'deterministic' as const,
-  recovery: ['nudge'] as ('nudge')[],
+  recovery: ['nudge'] as 'nudge'[],
   notes: `${name} shipped fixture`,
 });
 
@@ -34,7 +34,10 @@ const ownerLan = () => ({
   notes: 'owner fixture',
 });
 
-function layout(opts: { shippedNames?: [string, string[]][]; ownerFiles?: Record<string, unknown> }): {
+function layout(opts: {
+  shippedNames?: [string, string[]][];
+  ownerFiles?: Record<string, unknown>;
+}): {
   home: string;
   release: string;
 } {
@@ -170,6 +173,33 @@ describe('owner profiles outside the release tree (#764)', () => {
     }
   });
 
+  it('production fallback admits non-time owner work and reload preserves an explicit legacy owner profile', () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-activity-profile-'));
+    try {
+      runInit({ home, apiKey: 'sk-never-called', mainModel: 'my-lan-model' });
+      const runtime = buildRuntime(
+        home,
+        mkdtempSync(join(tmpdir(), 'muffin-activity-profile-ws-')),
+      );
+      try {
+        expect(runtime.deps.profile.name).toBe(CONSERVATIVE.name);
+        expect(runtime.deps.profile.activity).toMatchObject({
+          maxModelCalls: 128,
+          maxToolCalls: 256,
+        });
+        mkdirSync(ownerProfilesDir(home), { recursive: true });
+        writeFileSync(join(ownerProfilesDir(home), 'owner-lan.json'), JSON.stringify(ownerLan()));
+        runtime.deps.prepareTurn?.();
+        expect(runtime.deps.profile.name).toBe('owner-lan');
+        expect(runtime.deps.profile.activity).toBeUndefined();
+      } finally {
+        runtime.close();
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('without an owner match the runtime stays on shipped or conservative, as before', () => {
     const home = mkdtempSync(join(tmpdir(), 'muffin-owner-wiring-'));
     try {
@@ -177,8 +207,8 @@ describe('owner profiles outside the release tree (#764)', () => {
       const runtime = buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-owner-ws-')));
       try {
         expect(runtime.deps.profile.name).toBe(
-          selectSourcedProfile(runtime.config.models.main, loadEffectiveProfiles(home))?.profile.name ??
-            CONSERVATIVE.name,
+          selectSourcedProfile(runtime.config.models.main, loadEffectiveProfiles(home))?.profile
+            .name ?? CONSERVATIVE.name,
         );
         expect(runtime.deps.runtimeInfo?.profileSource?.origin).not.toBe('owner');
       } finally {

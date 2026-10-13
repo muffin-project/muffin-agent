@@ -150,6 +150,13 @@ export type Profile = {
 };
 
 /** Applies when nothing matches. Deliberately the cautious one. */
+export const DEFAULT_ACTIVITY = {
+  maxModelCalls: 128,
+  maxToolCalls: 256,
+  maxAutomaticContinuations: 3,
+};
+
+/** Compatibility floor; production adds DEFAULT_ACTIVITY for unmatched models. */
 export const CONSERVATIVE: Profile = {
   schemaVersion: 1,
   name: 'conservative',

@@ -19,6 +19,11 @@ export function withActivityAllowance<T>(scope: ActivityScope, work: () => T): T
   return active.run(scope, work);
 }
 
+/** Completed-turn background work has its own owner and financial controls. */
+export function withoutActivityAllowance<T>(work: () => T): T {
+  return active.exit(work);
+}
+
 export function reserveActivityAttempt(resource: 'model' | 'tool'): void {
   const scope = active.getStore();
   if (scope === undefined) return;

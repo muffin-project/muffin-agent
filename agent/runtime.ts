@@ -66,6 +66,7 @@ import { providerMessages } from './loop/provider-checkpoint.js';
 import type { Approver, LoopDeps, RegisteredTool, SpendEntry, TurnRuntimeInfo } from './loop.js';
 import {
   CONSERVATIVE,
+  DEFAULT_ACTIVITY,
   loadEffectiveProfiles,
   type ProfileOrigin,
   selectSourcedProfile,
@@ -617,7 +618,10 @@ export function buildRuntime(
   // conversazione: la light qui sotto tiene il profilo del *suo* modello, e le
   // corsie della memoria chiedono `off` da sé.
   const mainSourced = selectSourcedProfile(config.models.main, sourcedProfiles);
-  const profile = withThinking(mainSourced?.profile ?? CONSERVATIVE, config.thinking);
+  const profile = withThinking(
+    mainSourced?.profile ?? { ...CONSERVATIVE, activity: DEFAULT_ACTIVITY },
+    config.thinking,
+  );
   // Provenance holder, mutated alongside `profile` on refresh: readers
   // (`sys_inspect`, exposure remedies) hold this reference, never a copy —
   // the same stability contract `profile` itself has below.
@@ -1331,7 +1335,10 @@ export function buildRuntime(
     }
 
     const refreshed = selectSourcedProfile(persisted.models.main, loadEffectiveProfiles(home));
-    const nextProfile = withThinking(refreshed?.profile ?? CONSERVATIVE, persisted.thinking);
+    const nextProfile = withThinking(
+      refreshed?.profile ?? { ...CONSERVATIVE, activity: DEFAULT_ACTIVITY },
+      persisted.thinking,
+    );
     // Keep the config and profile objects stable for their existing readers
     // (`Runtime.config`, `sys_inspect`, and exposure calculation). A running
     // turn owns shallow snapshots made by `runTurn`/`resumeTurn`.
@@ -1342,6 +1349,9 @@ export function buildRuntime(
       thinking: persisted.thinking,
     });
     Object.assign(profile, nextProfile);
+    // An explicit custom profile without activity keeps its legacy policy.
+    // Object.assign alone would retain a prior shipped profile's allowance.
+    if (nextProfile.activity === undefined) delete profile.activity;
     Object.assign(
       profileSource,
       refreshed === undefined

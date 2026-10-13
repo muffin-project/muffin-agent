@@ -26,6 +26,7 @@ import {
   ActivityAllowanceError,
   activityProvider,
   withActivityAllowance,
+  withoutActivityAllowance,
 } from '../providers/activity-allowance.js';
 import { type ContentBlock, type Message, ProviderError } from '../providers/types.js';
 import { buildContext, userAudios, userImages } from './context.js';
@@ -167,7 +168,16 @@ export async function guidaIlTurno(
 ): Promise<TurnResult> {
   if (record.counters.activityAllowance === undefined)
     return runClaimedTurn(deps, record, turn, options, recupero);
-  const scoped = { ...deps, provider: activityProvider(deps.provider) };
+  const scoped = {
+    ...deps,
+    provider: activityProvider(deps.provider),
+    ...(deps.onTurnEnd === undefined
+      ? {}
+      : {
+          onTurnEnd: (info: Parameters<NonNullable<LoopDeps['onTurnEnd']>>[0]) =>
+            withoutActivityAllowance(() => deps.onTurnEnd?.(info)),
+        }),
+  };
   return withActivityAllowance(
     { turns: deps.turns, turnId: record.id, claimToken: record.claimToken },
     () => runClaimedTurn(scoped, record, turn, options, recupero),

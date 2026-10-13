@@ -690,7 +690,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       }
     };
 
-    let result;
+    let result: ChatResult;
     try {
       result = await requestChatResult();
     } catch (error) {
