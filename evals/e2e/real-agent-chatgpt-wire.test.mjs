@@ -1,17 +1,17 @@
-import { test, expect } from 'vitest';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { expect, test } from 'vitest';
 import {
   CHATGPT_E2E_MAX_REQUESTS,
   CHATGPT_E2E_MODEL,
   completedResponseViolation,
-  isSyntheticDirectInferenceMarker,
   installChatGptWireRecorder,
+  isSyntheticDirectInferenceMarker,
   parseResponsesSse,
-  responseToolSchemas,
   responsesRequestViolation,
+  responseToolSchemas,
   selectChatGptModel,
 } from './real-agent-chatgpt-wire.mjs';
 

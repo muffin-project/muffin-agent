@@ -9,21 +9,21 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
-  rmSync,
   readdirSync,
-  rmdirSync,
   readFileSync,
   realpathSync,
+  rmdirSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import Database from 'better-sqlite3';
 import {
   CHATGPT_E2E_MODEL,
   isSyntheticDirectInferenceMarker,
   selectChatGptModel,
 } from './real-agent-chatgpt-wire.mjs';
-import Database from 'better-sqlite3';
 import {
   cleanOwnedRoot,
   DEFAULT_FREE_MODEL,
