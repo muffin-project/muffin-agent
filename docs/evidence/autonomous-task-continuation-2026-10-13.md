@@ -142,3 +142,10 @@ verify elapsed time, terminal Turn state and receipt independently. Controlled
 latency injection demonstrates the absence of aggregate cutoffs; it does not
 benchmark natural task completion or establish optimal numeric resource limits.
 The required >=15-minute successful witness remains pending here.
+
+A second independent review confirmed a supported rollback hazard: previous
+writers recognize schema v9 but omit the new allowance when serializing run
+counters. The existing schema-ahead boundary now protects this semantic JSON
+change with a no-op v10 migration. Red-before populated-v9 coverage failed;
+27 focused migration tests then passed, checking unchanged canonical rows,
+validated v9 backup, idempotence and prior-writer refusal before execution.

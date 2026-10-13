@@ -53,6 +53,12 @@ modalità. Un profilo custom senza `activity` conserva la sua policy precedente.
 Il fallback di produzione per modelli senza un profilo dedicato usa lo stesso
 budget di risorse; il profilo conservativo dei caller legacy rimane compatibile.
 
+La versione del database passa a 10 senza cambiare righe o tabelle: i writer
+precedenti omettono il budget nella serializzazione. Il controllo esistente di
+versione impedisce che un rollback a quel codice cancelli silenziosamente la
+capacità concessa o la esegua senza prenotazioni. Il backup pre-migrazione resta
+quello canonico del runner; tornare al vecchio codice richiede dati compatibili.
+
 ## Falsificatori
 
 - Lavoro sano interrotto da un timer complessivo a 240/300/900 secondi.

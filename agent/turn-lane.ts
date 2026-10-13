@@ -316,8 +316,8 @@ function autonomousGrantMessage(record: TurnRecord): Message {
 }
 
 /**
- * Continue a scheduler-bound continuable turn without an owner message
- * (#598 S2) — the lane side of the autonomous due-inclusion in
+ * Continue scheduler work or an owner activity with remaining granted capacity
+ * without a new owner message — the lane side of autonomous due-inclusion in
  * `core/turns/store.ts`.
  *
  * Same identity, same WAL, same loop: `continueTurn` mints the next lease
@@ -328,9 +328,10 @@ function autonomousGrantMessage(record: TurnRecord): Message {
  * loop: an owner saying "riprendi" takes the identical path with their own
  * words as the grant message.
  *
- * Three gates, all fail-closed, all before the grant:
+ * Gates are fail-closed and precede the grant:
  *
- * 1. `MAX_AUTONOMOUS_LEASES` — a recurrence that always lands continuable
+ * 1. Owner activities use their durable remaining capacity/renewals. Scheduler
+ *    work uses `MAX_AUTONOMOUS_LEASES` — a recurrence that always lands continuable
  *    must not spend for ever; past the count the row stays continuable for
  *    an explicit owner grant.
  * 2. The tenant/monthly budget (`budgetExhausted`) — granting a lease that
@@ -340,9 +341,9 @@ function autonomousGrantMessage(record: TurnRecord): Message {
  *    same "do not start" shape `agent/scheduler-run.ts` enforces at fire
  *    time. Unverifiable (no reader wired) means no grant.
  *
- * Iteration and tool-call ceilings bind inside the lease exactly as on any
- * other: profile `maxToolCallsPerTurn`, execution deadlines and the monthly
- * seal all live in `drive`, which this path shares rather than bypasses.
+ * Owner capacity remains cumulative across leases. Legacy/scheduler profiles
+ * retain their per-lease tool and execution ceilings. Individual call/stall
+ * controls and the monthly seal live in the shared `drive` path.
  *
  * What it deliberately does not do:
  *
@@ -354,9 +355,9 @@ function autonomousGrantMessage(record: TurnRecord): Message {
  *   the same silence the resumed path keeps for `suspended`. Delivering the
  *   "scrivi riprendi" diagnostic would page the owner for work that resumes
  *   on its own;
- * - touch owner/member/consolidation/ratchet rows — the caller checks
- *   `isSchedulerAutonomous` before arriving here, and this function asserts
- *   nothing beyond it.
+ * - grant activity authority to legacy owners, members, consolidation or ratchet
+ *   rows — the caller requires scheduler eligibility or an already granted
+ *   owner activity, and the store independently validates owner renewals.
  */
 async function runAutonomous(
   deps: LoopDeps,
