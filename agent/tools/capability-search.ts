@@ -26,7 +26,7 @@ export function makeCapabilitySearchTool(): RegisteredTool {
       name: CAPABILITY_SEARCH_TOOL_NAME,
       description:
         'Search and load authorized tools that are not currently visible. ' +
-        'Check each requested action and effect: search when any part lacks a visible tool, even if visible tools cover other parts; do not treat partial completion as full task coverage. ' +
+        'Use it when any requested action or effect lacks a visible tool, even if visible tools cover other parts; do not treat partial completion as full task coverage. Not for executing effects or bypassing policy. ' +
         'Describe the missing capability instead of guessing a hidden tool name. ' +
         'The next model round receives the loaded tool schemas; execution still goes through normal policy checks.',
       inputSchema: {

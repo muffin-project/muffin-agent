@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import DatabaseCtor from 'better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ApprovalStore } from '../core/approvals/store.js';
 import { SHADOW_PACK } from '../core/judgment/pack.js';
 import type {
@@ -211,10 +211,15 @@ describe('buildRuntime: il giudice senza segreto si dice, non si rompe', () => {
     const { writeFileSync } = await import('node:fs');
     const home = mkdtempSync(join(tmpdir(), 'muffin-shadow-degrade-'));
     runInit({ home, apiKey: 'sk-never-called' });
-    const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as Record<string, unknown>;
+    const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as Record<
+      string,
+      unknown
+    >;
     config['judgment'] = { provider: 'typesafe', apiKeyRef: 'secret://typesafe_key' };
     writeFileSync(join(home, 'config.json'), JSON.stringify(config, null, 2), 'utf8');
 
+    // An empty install is not an empty persistent secret backend on a contributor's machine.
+    vi.stubEnv('XDG_CONFIG_HOME', mkdtempSync(join(tmpdir(), 'muffin-shadow-empty-secrets-')));
     const runtime = buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-shadow-degrade-ws-')));
     try {
       expect(runtime.deps.judgment).toBeUndefined();
@@ -222,6 +227,7 @@ describe('buildRuntime: il giudice senza segreto si dice, non si rompe', () => {
       expect(runtime.bootLines.join('\n')).toContain('segreto manca');
     } finally {
       runtime.close();
+      vi.unstubAllEnvs();
     }
   });
 });

@@ -68,7 +68,12 @@ and workspace, and unchanged original config/profile hashes are required.
   unchanged streamed bytes, shared ten-call budget and active stream abort.
 - Current focused verification: 55 tests PASS (discovery/assembled prompt,
   preflight integration, both oracle/recorder suites); typecheck PASS.
-- Fresh final review / exact-head CI / integration: pending.
+- Fresh independent final judge: MERGE at
+  `f16e5b7c6d8ba470b048ea509dbb65db03c97b39`, after independently reading wire,
+  querying the synthetic DB read-only, checking filesystem bytes and recomputing
+  both oracles. The delta from the live SHA was docs and test formatting only.
+- Exact-head CI and integration are tracked in PR #881; neither a local test nor
+  the judge's technical verdict substitutes for the six required checks.
 
 The ChatGPT adapter cannot send `max_output_tokens` on the plan route. A token cap
 must not be claimed for that route; enforce local deadlines/request limits and
