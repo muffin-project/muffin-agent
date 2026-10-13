@@ -1,4 +1,4 @@
-import type { Config } from './config.js';
+import { type Config, inferenceProvider, withInferenceProvider } from './config.js';
 
 /**
  * Il cambio modello che non rompe l'instradamento (issue #501).
@@ -82,7 +82,11 @@ function partition(
   return { kept, dropped };
 }
 
-function revalidate(routing: Routing, slug: string, live: Exclude<EndpointEvidence, null>): { routing: Routing; notes: string[] } {
+function revalidate(
+  routing: Routing,
+  slug: string,
+  live: Exclude<EndpointEvidence, null>,
+): { routing: Routing; notes: string[] } {
   const notes: string[] = [];
   const repaired: Routing = { ...routing };
   for (const key of IDENTITY_KEYS) {
@@ -103,7 +107,10 @@ function revalidate(routing: Routing, slug: string, live: Exclude<EndpointEviden
     // detto a voce alta. (Lo schema lo rifiuta con nonempty, ma la difesa
     // qui non costa niente.)
     const { only: _dropped, ...rest } = repaired;
-    return { routing: rest, notes: [...notes, `routing.only vuoto rimosso: vietava tutti i provider per ${slug}.`] };
+    return {
+      routing: rest,
+      notes: [...notes, `routing.only vuoto rimosso: vietava tutti i provider per ${slug}.`],
+    };
   }
   return { routing: repaired, notes };
 }
@@ -121,7 +128,8 @@ export function resolveModelSwitch(
   live: EndpointEvidence,
 ): ResolveResult {
   const before = config.models[lane];
-  const routing = config.provider.routing;
+  const provider = inferenceProvider(config, lane);
+  const routing = provider.routing;
   if (routing === undefined) {
     if (before === slug) return { config, notes: [] };
     return { config: { ...config, models: { ...config.models, [lane]: slug } }, notes: [] };
@@ -130,12 +138,12 @@ export function resolveModelSwitch(
   const oldFamily = familyOf(before);
   const newFamily = familyOf(slug);
   // Il marcatore dice per cosa i pin sono stati validati l'ultima volta,
-  // qualunque corsia li abbia prodotti: finché una corsia viva lo conferma,
+  // per la corsia selezionata: il modello dell’altra non può validarli,
   // non c'è niente da rivalidare (fail-open verso il silenzio in caso dubbio).
-  const fams = new Set([familyOf(config.models.main), familyOf(config.models.light), newFamily]);
+  const fams = new Set([oldFamily, newFamily]);
   const staleMarker =
-    config.provider.routingForFamily !== undefined &&
-    !fams.has(config.provider.routingForFamily) &&
+    provider.routingForFamily !== undefined &&
+    !fams.has(provider.routingForFamily) &&
     ![...fams].includes('router');
   if (before === slug && !staleMarker) return { config, notes: [] };
   if (!staleMarker && oldFamily === newFamily && newFamily !== 'router') {
@@ -164,8 +172,14 @@ export function resolveModelSwitch(
   // Validato con evidenza: il marcatore avanza, e `doctor` potrà confrontarlo
   // offline. Senza evidenza non si scrive niente — un marcatore non validato
   // spegnerebbe l'unico avviso che resta.
-  next.provider = { ...next.provider, routing: repaired, routingForFamily: newFamily };
-  return { config: next, notes: [...notes, ...dropped] };
+  return {
+    config: withInferenceProvider(next, lane, {
+      ...provider,
+      routing: repaired,
+      routingForFamily: newFamily,
+    }),
+    notes: [...notes, ...dropped],
+  };
 }
 
 /**
@@ -175,20 +189,24 @@ export function resolveModelSwitch(
  * (niente routing, niente marcatore, un router di mezzo, una corsia che il
  * marcatore conferma) si tace.
  */
-export function diagnoseRoutingStaleness(config: Config): { detail: string; remedy: string } | null {
-  const routing = config.provider.routing;
-  const marker = config.provider.routingForFamily;
+export function diagnoseRoutingStaleness(
+  config: Config,
+  lane: SwitchLane = 'main',
+): { detail: string; remedy: string } | null {
+  const provider = inferenceProvider(config, lane);
+  const routing = provider.routing;
+  const marker = provider.routingForFamily;
   if (routing === undefined || marker === undefined) return null;
   const pins = [...(routing.only ?? []), ...(routing.order ?? []), ...(routing.ignore ?? [])];
   if (pins.length === 0) return null;
-  const fams = new Set([familyOf(config.models.main), familyOf(config.models.light)]);
+  const fams = new Set([familyOf(config.models[lane])]);
   if (fams.has('router') || fams.has(marker)) return null;
   return {
     detail:
       `i pin di routing (${pins.join(', ')}) derivano per la famiglia "${marker}", ` +
       `i modelli sono ${[...fams].join(' + ')}`,
     remedy:
-      `rivalida con \`muffin model ${config.models.main}\` (anche lo stesso slug ricontrolla) ` +
+      `rivalida con \`muffin model ${lane} ${config.models[lane]}\` (anche lo stesso slug ricontrolla) ` +
       `oppure sistema provider.routing in config.json`,
   };
 }
@@ -198,14 +216,19 @@ export function diagnoseRoutingStaleness(config: Config): { detail: string; reme
  * contro gli endpoint vivi di oggi. Un pin di un'altra era cade con evidenza;
  * senza evidenza non si tocca niente.
  */
-export function repairStaleRouting(config: Config, lane: SwitchLane, live: EndpointEvidence): ResolveResult {
+export function repairStaleRouting(
+  config: Config,
+  lane: SwitchLane,
+  live: EndpointEvidence,
+): ResolveResult {
   const slug = config.models[lane];
-  const routing = config.provider.routing;
+  const provider = inferenceProvider(config, lane);
+  const routing = provider.routing;
   if (routing === undefined || live === null) return { config, notes: [] };
   const { routing: repaired, notes } = revalidate(routing, slug, live);
-  const provider = { ...config.provider, routing: repaired, routingForFamily: familyOf(slug) };
-  if (notes.length === 0 && provider.routingForFamily === config.provider.routingForFamily) {
+  const updatedProvider = { ...provider, routing: repaired, routingForFamily: familyOf(slug) };
+  if (notes.length === 0 && updatedProvider.routingForFamily === provider.routingForFamily) {
     return { config, notes };
   }
-  return { config: { ...config, provider }, notes };
+  return { config: withInferenceProvider(config, lane, updatedProvider), notes };
 }

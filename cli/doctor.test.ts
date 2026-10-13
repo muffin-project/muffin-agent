@@ -33,8 +33,8 @@ import { VectorIndex } from '../core/memory/vectors.js';
 import { sealOwnerBinding } from '../core/rot/owner.js';
 import { seal } from '../core/rot/verify.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
-import type { StatoSuperficie } from '../core/surface/salute.js';
 import { JobFireStore } from '../core/scheduler/job-fires.js';
+import type { StatoSuperficie } from '../core/surface/salute.js';
 import { TurnStore } from '../core/turns/store.js';
 import {
   AVVIO_TROPPO_LUNGO_MS,
@@ -100,7 +100,11 @@ const writeOwnerProfile = (dir: string, file: string, model: string, raw?: strin
   );
 };
 
-const checkWithModel = async (dir: string, model: string, name: string): Promise<Check | undefined> => {
+const checkWithModel = async (
+  dir: string,
+  model: string,
+  name: string,
+): Promise<Check | undefined> => {
   const configFile = join(dir, 'config.json');
   const config = JSON.parse(readFileSync(configFile, 'utf8'));
   config.models.main = model;
@@ -537,10 +541,7 @@ describe('doctor consegne distinguishes silent receipts — #844', () => {
     contextBuilt: false,
   };
 
-  function donePendingTurn(
-    store: TurnStore,
-    id: string,
-  ): void {
+  function donePendingTurn(store: TurnStore, id: string): void {
     const created = store.create({
       id,
       principal: { kind: 'owner', connector: 'telegram', externalId: '1' },
@@ -739,12 +740,37 @@ describe('doctor names the spend cap and where it came from', () => {
 });
 
 describe('doctor names which secret store answered', () => {
+  it('reports a missing independent light credential without borrowing the main key', async () => {
+    const dir = home();
+    const config = loadConfig(dir);
+    saveConfig(
+      {
+        ...config,
+        lightProvider: {
+          kind: 'openai-compat',
+          baseUrl: 'https://light.invalid/v1',
+          apiKeyRef: 'secret://missing_light_fixture',
+        },
+      },
+      dir,
+    );
+    try {
+      expect((await check(dir, 'api key'))?.level).toBe('ok');
+      const light = await check(dir, 'api key (light)');
+      expect(light?.level).toBe('fail');
+      expect(light?.detail).toContain('missing_light_fixture');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it('names the backend and the path, so a chain is never silent', async () => {
     const dir = home();
     const c = await check(dir, 'api key');
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('home');
-    expect(c?.detail).toContain(join(paths(dir).secrets, 'provider_api_key'));
+    expect(c?.detail).toContain(
+      join(paths(dir).secrets, loadConfig(dir).provider.apiKeyRef.slice('secret://'.length)),
+    );
     // Never the value. The check counts characters precisely so it does not
     // have to print any of them.
     expect(c?.detail).not.toContain('sk-never-called');
@@ -756,7 +782,12 @@ describe('doctor names which secret store answered', () => {
     // store, the old copy in the home keeps answering, and every symptom of a
     // successful migration is present.
     const dir = home();
-    writeSecret('provider_api_key', 'sk-never-called', dir, 'persistent');
+    writeSecret(
+      loadConfig(dir).provider.apiKeyRef.slice('secret://'.length),
+      'sk-never-called',
+      dir,
+      'persistent',
+    );
     const c = await check(dir, 'api key');
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('non viene mai usata');
@@ -2562,7 +2593,7 @@ describe('model routing (issue #501)', () => {
     const found = await check(dir, 'model routing');
     expect(found?.level).toBe('warn');
     expect(found?.detail).toContain('alibaba');
-    expect(found?.remedy).toContain('muffin model google/gemma-4-31b-it');
+    expect(found?.remedy).toContain('muffin model main google/gemma-4-31b-it');
     rmSync(dir, { recursive: true, force: true });
   });
 

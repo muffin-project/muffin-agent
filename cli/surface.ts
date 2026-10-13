@@ -1,48 +1,58 @@
-import DatabaseCtor from 'better-sqlite3';
-import { aiuto, eseguiComando, type Controlli } from '../agent/comandi.js';
-import { Pausa } from '../core/runtime/pausa.js';
-import { decidiVoce, type Voce } from '../core/audio/voce.js';
-import { assicuraVoce } from '../core/audio/trascrivi.js';
-import { decidiVista, type Vista } from '../core/vista/vista.js';
-import { openDb } from '../core/db/open.js';
-import { generatePairingCode, startPairing } from '../core/config/pairing.js';
-import { ensurePrivateDir } from '../core/config/private-fs.js';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
+import { aiuto, type Controlli, eseguiComando } from '../agent/comandi.js';
+import type { Approver } from '../agent/loop.js';
 import type { Runtime } from '../agent/runtime.js';
+import { makeSendFileTool, sendFileCapability } from '../agent/tools/deliver.js';
+import type { FsScope } from '../agent/tools/fs.js';
 import type { AttachStream, LaneDeliver } from '../agent/turn-lane.js';
-import type { IngressPort } from '../connectors/shared/ingress/types.js';
+import { DiscordApi } from '../connectors/discord/api.js';
 import {
+  DiscordConnector,
+  type ConnectorDeps as DiscordConnectorDeps,
+} from '../connectors/discord/connector.js';
+import { DiscordInbox } from '../connectors/discord/inbox.js';
+import { DISCORD_ID, discordSurface } from '../connectors/discord/surface.js';
+import type { IngressPort } from '../connectors/shared/ingress/types.js';
+import { TelegramApi } from '../connectors/telegram/api.js';
+import { type ConnectorDeps, TelegramConnector } from '../connectors/telegram/connector.js';
+import { TelegramDeliveryStore } from '../connectors/telegram/delivery.js';
+import { TELEGRAM_ID, telegramSurface } from '../connectors/telegram/surface.js';
+import { UpdateInbox } from '../connectors/telegram/updates.js';
+import { assicuraVoce } from '../core/audio/trascrivi.js';
+import { decidiVoce, type Voce } from '../core/audio/voce.js';
+import {
+  type Config,
+  type ConfigError,
+  inferenceProvider,
   loadConfig,
   paths,
   readSecret,
   saveConfig,
   writeAuthoritativeSecret,
-  ConfigError,
-  type Config,
 } from '../core/config/config.js';
-import { cliSurface, type CliWriter } from '../core/surface/cli.js';
-import type { ModelLane } from '../core/turns/model-lane.js';
-import { SurfaceRegistry } from '../core/surface/registry.js';
-import type { DeliveryOutcome, FileSpec, Surface } from '../core/surface/types.js';
-import { adoptOwnerState } from '../core/surface/adopt-owner.js';
-import { TelegramApi } from '../connectors/telegram/api.js';
-import { TelegramConnector, type ConnectorDeps } from '../connectors/telegram/connector.js';
-import { TelegramDeliveryStore } from '../connectors/telegram/delivery.js';
-import { TELEGRAM_ID, telegramSurface } from '../connectors/telegram/surface.js';
-import { UpdateInbox } from '../connectors/telegram/updates.js';
-import { DiscordApi } from '../connectors/discord/api.js';
-import { DiscordConnector, type ConnectorDeps as DiscordConnectorDeps } from '../connectors/discord/connector.js';
-import { DISCORD_ID, discordSurface } from '../connectors/discord/surface.js';
-import { DiscordInbox } from '../connectors/discord/inbox.js';
-import { mandatoryGuards } from '../core/rot/guards.js';
-import { discordOwner, loadSealedOwner, sealOwnerBinding, telegramOwner, type SealedOwner } from '../core/rot/owner.js';
-import { makeSendFileTool, sendFileCapability } from '../agent/tools/deliver.js';
-import type { FsScope } from '../agent/tools/fs.js';
-import { cmdModel } from './model.js';
-import type { Approver } from '../agent/loop.js';
-import { SaluteSuperfici } from '../core/surface/salute.js';
+import { generatePairingCode, startPairing } from '../core/config/pairing.js';
+import { ensurePrivateDir } from '../core/config/private-fs.js';
+import { openDb } from '../core/db/open.js';
 import { HEARTBEAT_MS } from '../core/gateway/lock.js';
 import { DRAIN_BUDGET_MS } from '../core/gateway/service.js';
+import { mandatoryGuards } from '../core/rot/guards.js';
+import {
+  discordOwner,
+  loadSealedOwner,
+  type SealedOwner,
+  sealOwnerBinding,
+  telegramOwner,
+} from '../core/rot/owner.js';
+import { Pausa } from '../core/runtime/pausa.js';
+import { adoptOwnerState } from '../core/surface/adopt-owner.js';
+import { type CliWriter, cliSurface } from '../core/surface/cli.js';
+import { SurfaceRegistry } from '../core/surface/registry.js';
+import { SaluteSuperfici } from '../core/surface/salute.js';
+import type { DeliveryOutcome, FileSpec, Surface } from '../core/surface/types.js';
+import type { ModelLane } from '../core/turns/model-lane.js';
+import { decidiVista, type Vista } from '../core/vista/vista.js';
+import { cmdModel } from './model.js';
 
 /**
  * Surfaces are enabled, not launched.
@@ -129,7 +139,13 @@ type PortConnection = {
   readonly start: () => void;
   readonly stopPoller: () => void;
   readonly stop: (budgetMs: number) => Promise<void>;
-  readonly door?: ((turnId: string, replyTo: Record<string, unknown>, text: string) => Promise<void | 'possibly_sent'>) | undefined;
+  readonly door?:
+    | ((
+        turnId: string,
+        replyTo: Record<string, unknown>,
+        text: string,
+      ) => Promise<void | 'possibly_sent'>)
+    | undefined;
   readonly stream?: AttachStream | undefined;
   readonly approver?: Approver | undefined;
   readonly line: string;
@@ -193,7 +209,9 @@ export function cmdSurfaceDefault(home: string, id: string): number {
   // mandava a `surface enable pippo`, che risponde «superficie sconosciuta»:
   // un vicolo cieco in due passi, trovato da un giudice.
   if (!SUPERFICI_NOTE.includes(id)) {
-    process.stderr.write(`superficie sconosciuta: ${id}\n  quelle che esistono: ${SUPERFICI_NOTE.join(', ')}\n`);
+    process.stderr.write(
+      `superficie sconosciuta: ${id}\n  quelle che esistono: ${SUPERFICI_NOTE.join(', ')}\n`,
+    );
     return 78;
   }
   if (id !== 'cli' && !config.surfaces.enabled.includes(id)) {
@@ -251,7 +269,8 @@ export function cmdSurfaceList(home: string): number {
       if (enabled) {
         detail = ` · token ${token ? 'presente' : 'MANCANTE'} · owner ${owner ?? 'MANCANTE'}`;
         const stats = inboxStats(home, reg.inbox);
-        if (stats) detail += ` · ${stats.pending} in coda${stats.failed > 0 ? ` · ${stats.failed} falliti` : ''}`;
+        if (stats)
+          detail += ` · ${stats.pending} in coda${stats.failed > 0 ? ` · ${stats.failed} falliti` : ''}`;
       } else {
         detail = token ? ` · token presente, abilitala con \`muffin surface enable ${id}\`` : '';
       }
@@ -321,7 +340,9 @@ export async function cmdSurfaceEnable(
       const riga = await assicuraVoce(home, loadConfig(home));
       if (riga !== null) process.stderr.write(`${riga}\n`);
     } catch (error) {
-      process.stderr.write(`voce: controllo modello whisper saltato (${error instanceof Error ? error.message : String(error)})\n`);
+      process.stderr.write(
+        `voce: controllo modello whisper saltato (${error instanceof Error ? error.message : String(error)})\n`,
+      );
     }
   }
   return codice;
@@ -458,7 +479,9 @@ async function enableDiscord(home: string, ownerFlag?: string): Promise<number> 
     token = readSecret('secret://discord_token', home);
   } catch (error) {
     process.stderr.write(`${(error as ConfigError).message}\n`);
-    process.stderr.write(`  → crea un'app su discord.com/developers/applications, prendi il token del bot, poi:\n    echo -n "<token>" | muffin secret set discord_token\n`);
+    process.stderr.write(
+      `  → crea un'app su discord.com/developers/applications, prendi il token del bot, poi:\n    echo -n "<token>" | muffin secret set discord_token\n`,
+    );
     return 78;
   }
 
@@ -506,9 +529,15 @@ async function enableDiscord(home: string, ownerFlag?: string): Promise<number> 
   saveConfig(next, home);
   // Stessa ragione di `enableTelegram`.
   if (ownerUserId !== undefined) {
-    sealOwnerBinding(home, { discord: { userId: ownerUserId } }, { out: (riga) => process.stdout.write(`${riga}\n`) });
+    sealOwnerBinding(
+      home,
+      { discord: { userId: ownerUserId } },
+      { out: (riga) => process.stdout.write(`${riga}\n`) },
+    );
   }
-  process.stdout.write(`discord abilitata: @${me.username} (${me.id})${ownerUserId ? `, owner ${ownerUserId}` : ''}\n`);
+  process.stdout.write(
+    `discord abilitata: @${me.username} (${me.id})${ownerUserId ? `, owner ${ownerUserId}` : ''}\n`,
+  );
   process.stdout.write(`si connette al prossimo \`muffin\`\n`);
   ricordaLaPredefinita(home, 'discord');
   return 0;
@@ -529,7 +558,6 @@ function ricordaLaPredefinita(home: string, id: string): void {
       `  → muffin surface default ${id}\n`,
   );
 }
-
 
 export function cmdSurfaceDisable(home: string, id: string): number {
   if (id === 'cli') {
@@ -618,7 +646,7 @@ function voceFor(runtime: Runtime, home: string): (percorso: string) => Promise<
   const modello = audio?.whisperModel ?? paths(home).whisperModel;
   return (percorso) =>
     decidiVoce(percorso, {
-      baseUrl: runtime.config.provider.baseUrl,
+      baseUrl: inferenceProvider(runtime.config, 'main').baseUrl,
       model: runtime.config.models.main,
       whisperModel: modello,
       // Il percorso di produzione scarica il modello se manca: è il senso di
@@ -639,31 +667,45 @@ function voceFor(runtime: Runtime, home: string): (percorso: string) => Promise<
  * resto che fa. Il connettore riceve la funzione già decisa, come `voce`.
  */
 export function vistaFor(runtime: Runtime): (percorso: string) => Promise<Vista> {
-  const leggera = runtime.config.models.light;
-  return (percorso) =>
-    decidiVista(percorso, {
-      baseUrl: runtime.config.provider.baseUrl,
+  return (percorso) => {
+    // Snapshot all lane inputs at call start: a config refresh can replace the
+    // light provider between calls, while an image already being described
+    // stays on the route it began with.
+    const leggera = runtime.config.models.light;
+    const lightProvider = runtime.light.provider;
+    const baseUrl = inferenceProvider(runtime.config, 'main').baseUrl;
+    const lightBaseUrl = inferenceProvider(runtime.config, 'light').baseUrl;
+    return decidiVista(percorso, {
+      baseUrl,
+      lightBaseUrl,
       mainModel: runtime.config.models.main,
       lightModel: leggera,
       descrivi: async (immagine) => {
-        const esito = await runtime.light.provider.chat({
+        const esito = await lightProvider.chat({
           model: leggera,
           system: [{ type: 'text', text: 'Descrivi immagini con precisione, in italiano.' }],
           messages: [
             {
               role: 'user',
-              content: [{ type: 'text', text: 'Descrivi con precisione cosa mostra questa immagine. Solo la descrizione, niente altro.' }, immagine],
+              content: [
+                {
+                  type: 'text',
+                  text: 'Descrivi con precisione cosa mostra questa immagine. Solo la descrizione, niente altro.',
+                },
+                immagine,
+              ],
             },
           ],
           maxOutputTokens: 400,
           stream: false,
         });
-        if (esito.text === null || esito.text.trim() === '') throw new Error('il modello leggero non ha risposto alla descrizione');
+        if (esito.text === null || esito.text.trim() === '')
+          throw new Error('il modello leggero non ha risposto alla descrizione');
         return esito.text;
       },
     });
+  };
 }
-
 
 /**
  * I comandi della CLI, eseguibili da Telegram.
@@ -916,7 +958,11 @@ export function connectSurfaces(
    */
   const doors = new Map<
     string,
-    (turnId: string, replyTo: Record<string, unknown>, text: string) => Promise<void | 'possibly_sent'>
+    (
+      turnId: string,
+      replyTo: Record<string, unknown>,
+      text: string,
+    ) => Promise<void | 'possibly_sent'>
   >();
   /**
    * The lane's own half of B11/B13 for a resumed turn — same shape as
@@ -1024,7 +1070,8 @@ export function connectSurfaces(
     // its own bounded wait against the *same* budget, so running them one
     // after another would let two slow connectors add their waits together
     // instead of sharing one clock.
-    stop: (budgetMs = DRAIN_BUDGET_MS) => Promise.all(stops.map((s) => s(budgetMs))).then(() => undefined),
+    stop: (budgetMs = DRAIN_BUDGET_MS) =>
+      Promise.all(stops.map((s) => s(budgetMs))).then(() => undefined),
     // Re-reads `config.json` on every call, not once at boot — the same
     // freshness `readDefaultChannel` already keeps for `surfaces.default`, and
     // for the same reason: a surface enabled by `muffin surface enable` after
@@ -1057,7 +1104,8 @@ export function connectSurfaces(
       }
       const door = doors.get(turn.surface);
       if (!door) throw new Error(`superficie "${turn.surface}" non connessa in questo processo`);
-      if (turn.replyTo === null) throw new Error(`turno ${turn.id.slice(0, 12)} senza indirizzo di risposta`);
+      if (turn.replyTo === null)
+        throw new Error(`turno ${turn.id.slice(0, 12)} senza indirizzo di risposta`);
       return door(turn.id, turn.replyTo, text);
     },
     attachStream: (record) => streams.get(record.surface)?.(record),
@@ -1084,7 +1132,11 @@ export function attachSendFile(
 ): void {
   const vaultRoot = paths(home).vault;
   const guards = mandatoryGuards(home, vaultRoot);
-  const scope: FsScope = { root: vaultRoot, denyWrite: guards.denyWrite, denyRead: guards.denyRead };
+  const scope: FsScope = {
+    root: vaultRoot,
+    denyWrite: guards.denyWrite,
+    denyRead: guards.denyRead,
+  };
   runtime.register(makeSendFileTool({ scope, deliverFile }), sendFileCapability);
 }
 
@@ -1127,7 +1179,10 @@ function hasSecret(ref: string, home: string): boolean {
   }
 }
 
-function inboxStats(home: string, table: 'telegram_updates' | 'discord_messages'): { pending: number; failed: number } | null {
+function inboxStats(
+  home: string,
+  table: 'telegram_updates' | 'discord_messages',
+): { pending: number; failed: number } | null {
   const db = new DatabaseCtor(paths(home).db, { readonly: true });
   try {
     return db
@@ -1144,7 +1199,6 @@ function inboxStats(home: string, table: 'telegram_updates' | 'discord_messages'
   }
 }
 
-
 /**
  * Telegram, dal token alla porta registrata.
  *
@@ -1154,7 +1208,8 @@ function inboxStats(home: string, table: 'telegram_updates' | 'discord_messages'
  * stream e approvatore** (`port.surface.id`, non un letterale).
  */
 function connectTelegram(ctx: PortConnectContext): PortConnection | null {
-  const { runtime, home, log, salute, adesso, sealedOwner, gatewayAtBoot, onWork, lines, lane } = ctx;
+  const { runtime, home, log, salute, adesso, sealedOwner, gatewayAtBoot, onWork, lines, lane } =
+    ctx;
   const token = readSecret('secret://telegram_token', home);
   const tg = runtime.config.surfaces.telegram;
   // Il legame owner viene dal sigillo quando il sigillo ne ha uno; da
@@ -1174,7 +1229,7 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
     if (adopted.movedRows > 0 || adopted.transcriptRows > 0) {
       log(
         `telegram: adottata la conversazione pre-pairing ` +
-        `(${adopted.movedRows} righe, ${adopted.transcriptRows} messaggi)`,
+          `(${adopted.movedRows} righe, ${adopted.transcriptRows} messaggi)`,
       );
     }
   }
@@ -1182,7 +1237,12 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
   // surface has to be up to receive the code. What it must not do is treat
   // anyone as the owner while it waits.
   if (ownerUserId === undefined && tg?.pairing === undefined) {
-    salute.caduta(TELEGRAM_ID, 'abilitata ma senza owner', adesso(), '`muffin surface enable telegram`');
+    salute.caduta(
+      TELEGRAM_ID,
+      'abilitata ma senza owner',
+      adesso(),
+      '`muffin surface enable telegram`',
+    );
     lines.push('telegram: abilitata ma senza owner — `muffin surface enable telegram`');
     return null;
   }
@@ -1193,8 +1253,15 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
   const delivery = new TelegramDeliveryStore(telegramDb);
   const vaultRoot = paths(home).vault;
   if (!ensurePrivateDir(join(vaultRoot, 'inbox'))) {
-    salute.caduta(TELEGRAM_ID, 'inbox non scrivibile in modo privato', adesso(), 'rimuovi il symlink sotto il vault e riavvia');
-    lines.push('telegram: directory inbox non stabilita in modo privato (symlink sulla catena) — superficie non avviata');
+    salute.caduta(
+      TELEGRAM_ID,
+      'inbox non scrivibile in modo privato',
+      adesso(),
+      'rimuovi il symlink sotto il vault e riavvia',
+    );
+    lines.push(
+      'telegram: directory inbox non stabilita in modo privato (symlink sulla catena) — superficie non avviata',
+    );
     return null;
   }
   // The runtime's own vault, not a second one: `document_read` reads through
@@ -1268,7 +1335,7 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
         if (adopted.movedRows > 0 || adopted.transcriptRows > 0) {
           log(
             `telegram: adottata la conversazione pre-pairing ` +
-            `(${adopted.movedRows} righe, ${adopted.transcriptRows} messaggi)`,
+              `(${adopted.movedRows} righe, ${adopted.transcriptRows} messaggi)`,
           );
         }
       }
@@ -1333,7 +1400,12 @@ function connectDiscord(ctx: PortConnectContext): PortConnection | null {
   // Stessa precedenza di Telegram, stessa funzione: il sigillo prima.
   const ownerUserId = discordOwner(sealedOwner, dc).userId;
   if (ownerUserId === undefined && dc?.pairing === undefined) {
-    salute.caduta(DISCORD_ID, 'abilitata ma senza owner', adesso(), '`muffin surface enable discord`');
+    salute.caduta(
+      DISCORD_ID,
+      'abilitata ma senza owner',
+      adesso(),
+      '`muffin surface enable discord`',
+    );
     lines.push('discord: abilitata ma senza owner — `muffin surface enable discord`');
     return null;
   }
@@ -1341,8 +1413,15 @@ function connectDiscord(ctx: PortConnectContext): PortConnection | null {
   const inbox = new DiscordInbox(openDb(paths(home).db));
   const vaultRoot = paths(home).vault;
   if (!ensurePrivateDir(join(vaultRoot, 'inbox'))) {
-    salute.caduta(DISCORD_ID, 'inbox non scrivibile in modo privato', adesso(), 'rimuovi il symlink sotto il vault e riavvia');
-    lines.push('discord: directory inbox non stabilita in modo privato (symlink sulla catena) — superficie non avviata');
+    salute.caduta(
+      DISCORD_ID,
+      'inbox non scrivibile in modo privato',
+      adesso(),
+      'rimuovi il symlink sotto il vault e riavvia',
+    );
+    lines.push(
+      'discord: directory inbox non stabilita in modo privato (symlink sulla catena) — superficie non avviata',
+    );
     return null;
   }
   const connector = new DiscordConnector({
@@ -1381,7 +1460,11 @@ function connectDiscord(ctx: PortConnectContext): PortConnection | null {
       // Stessa ragione di Telegram, qui sopra: il legame va sotto il sigillo
       // appena esiste.
       if (next.ownerUserId !== undefined) {
-        sealOwnerBinding(home, { discord: { userId: next.ownerUserId } }, { out: (riga) => log(`discord: ${riga}`) });
+        sealOwnerBinding(
+          home,
+          { discord: { userId: next.ownerUserId } },
+          { out: (riga) => log(`discord: ${riga}`) },
+        );
       }
     },
     log,

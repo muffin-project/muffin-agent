@@ -2,13 +2,20 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSy
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import DatabaseCtor from 'better-sqlite3';
-import { isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
-import { CONFIG_SCHEMA_VERSION, ConfigError, loadConfig, paths, saveConfig, writeSecret } from '../core/config/config.js';
-import { muffinWorkspace } from '../core/config/workspace.js';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  CONFIG_SCHEMA_VERSION,
+  ConfigError,
+  loadConfig,
+  paths,
+  saveConfig,
+  writeSecret,
+} from '../core/config/config.js';
 import { readDefaultsRegistry } from '../core/config/defaults-drift.js';
+import { muffinWorkspace } from '../core/config/workspace.js';
 import { sha256 } from '../core/rot/verify.js';
+import { isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
 
 /**
  * The `--local` guard (DAY-1 requirement A9), in isolation from the CLI around it: a
@@ -103,9 +110,18 @@ describe('runInit — the defaults registry it hands `muffin doctor` (core/confi
     const reg = readDefaultsRegistry(dir);
     expect(reg).not.toBeNull();
     const byPath = new Map((reg?.files ?? []).map((f) => [f.path, f.sha256]));
-    for (const relPath of ['persona.md', 'voice.md', 'rot/identity.md', 'rot/policy.json', 'rot/egress.json', 'rot/budgets.json']) {
+    for (const relPath of [
+      'persona.md',
+      'voice.md',
+      'rot/identity.md',
+      'rot/policy.json',
+      'rot/egress.json',
+      'rot/budgets.json',
+    ]) {
       const installed = join(dir, ...relPath.split('/'));
-      expect(byPath.get(relPath), `no registry entry for ${relPath}`).toBe(sha256(readFileSync(installed)));
+      expect(byPath.get(relPath), `no registry entry for ${relPath}`).toBe(
+        sha256(readFileSync(installed)),
+      );
     }
   });
 
@@ -119,7 +135,7 @@ describe('runInit — the defaults registry it hands `muffin doctor` (core/confi
     // The owner edits persona.md by hand, then runs `muffin init` again
     // (e.g. to pick up a config fix) — WITHOUT --force. `installFile` leaves
     // an existing file alone, so the registry must leave its entry alone too.
-    writeFileSync(paths(dir).persona, "la mia versione, scritta a mano\n");
+    writeFileSync(paths(dir).persona, 'la mia versione, scritta a mano\n');
     runInit({ home: dir, apiKey: 'sk-never-called' });
 
     const after = readDefaultsRegistry(dir);
@@ -131,7 +147,7 @@ describe('runInit — the defaults registry it hands `muffin doctor` (core/confi
   it('does re-stamp on `--force`, which really did overwrite the file', () => {
     const dir = freshHome();
     runInit({ home: dir, apiKey: 'sk-never-called' });
-    writeFileSync(paths(dir).persona, "la mia versione, scritta a mano\n");
+    writeFileSync(paths(dir).persona, 'la mia versione, scritta a mano\n');
     runInit({ home: dir, apiKey: 'sk-never-called', force: true });
 
     const reg = readDefaultsRegistry(dir);
@@ -156,11 +172,20 @@ describe('runInit — the defaults registry it hands `muffin doctor` (core/confi
 describe('il nome della chiave dice di chi è', () => {
   it('un install nuovo su OpenRouter registra `openrouter_api_key`', () => {
     const dir = scratchDir('muffin-init-nome-nuovo-');
-    runInit({ home: dir, apiKey: 'sk-or-nuova', provider: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1' });
+    runInit({
+      home: dir,
+      apiKey: 'sk-or-nuova',
+      provider: 'openai-compat',
+      baseUrl: 'https://openrouter.ai/api/v1',
+    });
 
-    const config = JSON.parse(readFileSync(paths(dir).config, 'utf8')) as { provider: { apiKeyRef: string } };
+    const config = JSON.parse(readFileSync(paths(dir).config, 'utf8')) as {
+      provider: { apiKeyRef: string };
+    };
     expect(config.provider.apiKeyRef).toBe('secret://openrouter_api_key');
-    expect(readFileSync(join(dir, 'secrets', 'openrouter_api_key'), 'utf8').trim()).toBe('sk-or-nuova');
+    expect(readFileSync(join(dir, 'secrets', 'openrouter_api_key'), 'utf8').trim()).toBe(
+      'sk-or-nuova',
+    );
   });
 
   /**
@@ -170,13 +195,28 @@ describe('il nome della chiave dice di chi è', () => {
    */
   it("e su un'installazione che ha già la chiave col nome vecchio, il riferimento resta quello", () => {
     const dir = scratchDir('muffin-init-nome-vecchio-');
-    runInit({ home: dir, apiKey: 'sk-vecchia' }); // provider di default: nome generico
-    expect(readFileSync(join(dir, 'secrets', 'provider_api_key'), 'utf8').trim()).toBe('sk-vecchia');
+    runInit({ home: dir, apiKey: 'sk-vecchia' });
+    // Reconstruct an actual pre-provider-name Home, rather than assuming new
+    // installations still write the legacy filename.
+    writeSecret('provider_api_key', 'sk-vecchia', dir, 'home');
+    const legacy = JSON.parse(readFileSync(paths(dir).config, 'utf8'));
+    legacy.provider.apiKeyRef = 'secret://provider_api_key';
+    writeFileSync(paths(dir).config, JSON.stringify(legacy));
+    expect(readFileSync(join(dir, 'secrets', 'provider_api_key'), 'utf8').trim()).toBe(
+      'sk-vecchia',
+    );
 
     // Secondo giro, stavolta dichiarando OpenRouter, e senza ripassare la chiave.
-    runInit({ home: dir, provider: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1', force: true });
+    runInit({
+      home: dir,
+      provider: 'openai-compat',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      force: true,
+    });
 
-    const config = JSON.parse(readFileSync(paths(dir).config, 'utf8')) as { provider: { apiKeyRef: string } };
+    const config = JSON.parse(readFileSync(paths(dir).config, 'utf8')) as {
+      provider: { apiKeyRef: string };
+    };
     expect(config.provider.apiKeyRef).toBe('secret://provider_api_key');
     // E non ha fabbricato una seconda copia col nome nuovo.
     expect(existsSync(join(dir, 'secrets', 'openrouter_api_key'))).toBe(false);
@@ -184,9 +224,16 @@ describe('il nome della chiave dice di chi è', () => {
 
   it('fuori dal catalogo il nome generico resta quello giusto', () => {
     const dir = scratchDir('muffin-init-nome-locale-');
-    runInit({ home: dir, apiKey: 'sk-locale', provider: 'openai-compat', baseUrl: 'http://localhost:11434/v1' });
+    runInit({
+      home: dir,
+      apiKey: 'sk-locale',
+      provider: 'openai-compat',
+      baseUrl: 'http://localhost:11434/v1',
+    });
 
-    const config = JSON.parse(readFileSync(paths(dir).config, 'utf8')) as { provider: { apiKeyRef: string } };
+    const config = JSON.parse(readFileSync(paths(dir).config, 'utf8')) as {
+      provider: { apiKeyRef: string };
+    };
     expect(config.provider.apiKeyRef).toBe('secret://provider_api_key');
   });
 });
@@ -229,7 +276,13 @@ describe('runInit nomina il workspace di ADR-0059, senza crearlo', () => {
 
 describe('init non installa la spazzatura del sistema operativo', () => {
   it('un .DS_Store in defaults/rot/ non entra nel sigillo', () => {
-    const junk = join(dirname(fileURLToPath(import.meta.url)), '..', 'defaults', 'rot', '.DS_Store');
+    const junk = join(
+      dirname(fileURLToPath(import.meta.url)),
+      '..',
+      'defaults',
+      'rot',
+      '.DS_Store',
+    );
     const dir = scratchDir('muffin-init-junk-');
     writeFileSync(junk, 'binaria del Finder\n');
     try {
@@ -277,7 +330,12 @@ describe('runInit su una Home esistente non la ricostruisce (P0 2026-09-18)', ()
       models: { main: 'qwen/qwen3.8-27b', light: 'qwen/qwen3.8-flash', deep: 'qwen/qwen3.8-80b' },
       thinking: 'off',
       search: { provider: 'tavily', apiKeyRef: 'secret://tavily_api_key' },
-      embedder: { kind: 'openai-compat', model: 'text-embedding-3-small', dimensions: 1536, apiKeyRef: 'secret://emb_key' },
+      embedder: {
+        kind: 'openai-compat',
+        model: 'text-embedding-3-small',
+        dimensions: 1536,
+        apiKeyRef: 'secret://emb_key',
+      },
       prompt: { version: 'v2' },
       audio: { whisperBin: '/usr/local/bin/whisper-cli' },
       surfaces: {
@@ -304,7 +362,10 @@ describe('runInit su una Home esistente non la ricostruisce (P0 2026-09-18)', ()
     const dir = existingHome();
     const before = JSON.parse(configBytes(dir));
     const steps = runInit({ home: dir });
-    expect(JSON.parse(configBytes(dir))).toEqual(before);
+    expect(JSON.parse(configBytes(dir))).toEqual({
+      ...before,
+      lightProvider: before.lightProvider ?? before.provider,
+    });
     expect(steps.find((s) => s.name === 'config')?.detail).toMatch(/conservata/);
     // E non ha fabbricato nessun nuovo file di segreto.
     expect(existsSync(join(dir, 'secrets', 'openrouter_api_key'))).toBe(false);
@@ -316,7 +377,11 @@ describe('runInit su una Home esistente non la ricostruisce (P0 2026-09-18)', ()
     const after = JSON.parse(configBytes(dir));
     expect(after.provider.routing).toEqual({ only: ['alibaba'], dataCollection: 'deny' });
     expect(after.provider.apiKeyRef).toBe('secret://provider_api_key');
-    expect(after.models).toEqual({ main: 'qwen/qwen3.8-27b', light: 'qwen/qwen3.8-flash', deep: 'qwen/qwen3.8-80b' });
+    expect(after.models).toEqual({
+      main: 'qwen/qwen3.8-27b',
+      light: 'qwen/qwen3.8-flash',
+      deep: 'qwen/qwen3.8-80b',
+    });
     expect(after.thinking).toBe('off');
     expect(after.search).toEqual({ provider: 'tavily', apiKeyRef: 'secret://tavily_api_key' });
     expect(after.embedder.dimensions).toBe(1536);
@@ -342,11 +407,19 @@ describe('runInit su una Home esistente non la ricostruisce (P0 2026-09-18)', ()
 
   it('una chiave fornita migra atomicamente (scrittura prima, riferimento dopo)', () => {
     const dir = existingHome();
-    runInit({ home: dir, apiKey: 'sk-or-nuovissima', provider: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1', secretBackend: 'persistent' });
+    runInit({
+      home: dir,
+      apiKey: 'sk-or-nuovissima',
+      provider: 'openai-compat',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      secretBackend: 'persistent',
+    });
     const after = JSON.parse(configBytes(dir));
     // Il nuovo riferimento punta a un valore appena scritto: migrazione, non rename secco.
     expect(after.provider.apiKeyRef).toBe('secret://openrouter_api_key');
-    expect(readFileSync(join(dir, 'xdg', 'muffin', 'secrets', 'openrouter_api_key'), 'utf8').trim()).toBe('sk-or-nuovissima');
+    expect(
+      readFileSync(join(dir, 'xdg', 'muffin', 'secrets', 'openrouter_api_key'), 'utf8').trim(),
+    ).toBe('sk-or-nuovissima');
     // E il resto della config è intatto.
     expect(after.models.main).toBe('qwen/qwen3.8-27b');
     expect(after.provider.routing).toEqual({ only: ['alibaba'], dataCollection: 'deny' });
@@ -402,12 +475,18 @@ describe('runInit su una Home esistente non la ricostruisce (P0 2026-09-18)', ()
     // Simula un DB fermo a una vecchia versione con dati veri.
     const db = new DatabaseCtor(join(dir, 'muffin.db'));
     try {
-      const before = db.prepare(`SELECT group_concat(version, ',') AS v FROM schema_version`).get() as { v: string };
+      const before = db
+        .prepare(`SELECT group_concat(version, ',') AS v FROM schema_version`)
+        .get() as { v: string };
       db.exec(`DELETE FROM schema_version WHERE version > 2`);
-      const aged = db.prepare(`SELECT group_concat(version, ',') AS v FROM schema_version`).get() as { v: string };
+      const aged = db
+        .prepare(`SELECT group_concat(version, ',') AS v FROM schema_version`)
+        .get() as { v: string };
       expect(aged.v).not.toBe(before.v);
       runInit({ home: dir });
-      const after = db.prepare(`SELECT group_concat(version, ',') AS v FROM schema_version`).get() as { v: string };
+      const after = db
+        .prepare(`SELECT group_concat(version, ',') AS v FROM schema_version`)
+        .get() as { v: string };
       expect(after.v).toBe(aged.v);
     } finally {
       db.close();

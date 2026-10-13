@@ -195,7 +195,7 @@ function richTextPlain(t: unknown): string {
   if (Array.isArray(t)) return t.map(richTextPlain).join('');
   if (t === null || typeof t !== 'object') return '';
   const o = t as { text?: unknown };
-  return typeof o.text === 'string' ? o.text : '';
+  return richTextPlain(o.text);
 }
 
 function testoDaBlocchi(blocks: unknown): string {

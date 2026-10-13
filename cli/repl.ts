@@ -631,7 +631,9 @@ export async function runRepl(
         `${style.accent('✳')} ${style.bold('muffin')}`,
         style.dim(`${runtime.config.models.main} · profilo ${runtime.deps.profile.name}`),
         style.dim(
-          runtime.config.provider.kind === 'anthropic'
+          runtime.config.provider.kind === 'openai-chatgpt'
+            ? 'ChatGPT plan · https://chatgpt.com/settings/usage'
+            : runtime.config.provider.kind === 'anthropic'
             ? 'Anthropic diretto'
             : runtime.config.provider.baseUrl?.includes('openrouter.ai')
               ? 'OpenRouter · OpenAI-compatible'
@@ -1174,9 +1176,9 @@ export async function runRepl(
         // Su stderr, come tutto cio' che e' cornice: `muffin > risposte.txt`
         // raccoglie le risposte e lascia questa a schermo.
         if (progressEnabled) {
-          const usd = costUsd(modelloEsecutore, result.usage, runtime.config.provider.baseUrl);
+          const usd = runtime.config.provider.kind === 'openai-chatgpt' ? null : costUsd(modelloEsecutore, result.usage, runtime.config.provider.baseUrl);
           process.stderr.write(
-            `${style.dim(closingLine(result.usage, Date.now() - iniziatoAlle, usd))}\n\n`,
+            `${style.dim(closingLine(result.usage, Date.now() - iniziatoAlle, usd) + (runtime.config.provider.kind === 'openai-chatgpt' ? ' · ChatGPT plan' : ''))}\n\n`,
           );
         }
         if (result.stopped === 'suspended') {

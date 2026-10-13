@@ -479,7 +479,7 @@ export class ProviderStreamError extends Error {
 }
 
 export interface Provider {
-  readonly kind: 'anthropic' | 'openai-compat';
+  readonly kind: 'anthropic' | 'openai-compat' | 'openai-chatgpt';
   chat(call: ChatCall): Promise<ChatResult>;
   resolveReasoning?(call: ChatCall): ReasoningResolution | Promise<ReasoningResolution>;
   /**

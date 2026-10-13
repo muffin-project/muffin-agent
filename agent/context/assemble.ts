@@ -178,7 +178,6 @@ export function todoSection(open: TodoItem[]): string {
       'Usale quando servono alla richiesta corrente o quando l’owner chiede del piano; ' +
       'la sola presenza di passi aperti non richiede di ricordarli, proporne la ripresa o eseguirli.',
   ].join('\n');
-
 }
 
 /**
@@ -228,7 +227,7 @@ export type IstanzaFacts = {
    * accanto al testo che lo spiega.
    */
   voci: readonly string[];
-  /** `config.provider.kind` — lo stesso campo che `sys_inspect` stampa come `provider:`. */
+  /** Provider effettivi delle due corsie d'inferenza, gli stessi di `sys_inspect`. */
   provider: string;
   /** Job attivi, stesso conteggio di `sys_inspect` (`jobs.list().filter(active)`). */
   jobAttivi: number;

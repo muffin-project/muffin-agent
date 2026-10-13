@@ -101,9 +101,10 @@ The durable rule is semantic: preserve evidence and the meaning required to
 reconstruct useful beliefs. Physical indexes and model-specific representations
 may be rebuilt.
 
-The current runtime does **not yet implement an agent memory-proposal tool**; it
-currently exposes read/search. ADR-0051 constrains the first intentional write
-path without claiming that path is shipped.
+The runtime exposes `memory_propose`: it stages a proposal and invokes the
+canonical reconciliation path, preserving the single semantic writer described
+above. See `agent/tools/memory-propose.ts` and `core/memory/ingest.ts` for the
+executable contract. Registration does not establish real end-to-end acceptance.
 
 ### Work
 
@@ -326,6 +327,29 @@ Pairing establishes Node identity; it does not grant every capability. See
 `SECURITY.md` and ADR-0050.
 
 ## 8. Providers are replaceable compute and privileged data recipients
+
+Main and light have independent provider connections and model selections.
+Legacy Homes initially retain their existing connection on both lanes; changing
+one lane preserves the other. Runtime construction, reload, verification,
+diagnostics and spend attribution use the selected lane's connection. The
+existing secret store owns credentials; configuration contains references.
+The guided selector and CLI/conversational shortcuts share the model-selection
+path. Light remains the current memory/multimodal role, distinct from the
+optional System One judgment provider. This does not introduce a new cognitive
+scheduler or automatic provider fallback.
+
+The `openai-chatgpt` adapter uses explicitly authorized ChatGPT plan OAuth and
+the public Responses API. It preserves Muffin's loop and kernel; runtime and
+online verification share provider construction. Credentials and host/profile
+state stay in the protected secret store, with serialized rotating refresh.
+Full context is sent with remote storage disabled. This preview cannot express
+a remote output-token cap: runtime deadlines still apply, and account quota and
+credit limits belong to ChatGPT Settings. API-dollar estimates exclude these
+requests while token usage remains recorded. Account catalog metadata determines
+which reasoning controls are legal. Explicit owner off is never converted into
+reasoning on; unsupported controls fail before inference. Main uses its effective
+model profile and owner override. Internal structured memory calls deliberately
+choose low on the ChatGPT route and are verified before model selection is saved.
 
 The configured LLM provider is part of the harness, not Muffin's identity. Model
 and provider changes must not reset the agent's durable state.
