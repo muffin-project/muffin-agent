@@ -43,3 +43,32 @@ Required proof: registered-runtime negative and positive outcomes, existing
 proposal/ingest tests, a fresh CRITICAL verdict, and exact-head required CI.
 This slice does not close #858: forget target binding, consumed steering, and
 extraction's separate `origin=said` behavior remain distinct unresolved claims.
+
+## Verification
+
+- Before the source repair, all three registered-runtime regressions fail:
+  tool-authored tuples become `producer=owner-stated`, `origin=said`.
+- After repair: proposal, runtime-wiring, canonical proposal, and ingest tests:
+  **137 passed, 1 skipped** (the pre-existing sandbox-dependent runtime case).
+  The updated registered contract also passes its three targeted cases, including
+  a modern call without `kind`. Typecheck, compile and diff check pass.
+- Compiled CLI real-model witness at `4ebce728fd397059c16bc5a93de42a2bd3899487`:
+  two actual `gpt-6.1-sol` Responses requests, both HTTP 200, answered turn,
+  model-selected `memory_propose`, schema and call omit `kind`. Independent
+  read-only SQLite oracle verifies accepted proposal #2, active fact #2,
+  `agent-inference` / `inferred`, original request episode #15, matching turn,
+  and preserved runtime taint 2. No approval was injected.
+- The existing authorized synthetic direct-inference Home was reused in place;
+  no token was copied or read by the runner. Temporary profile removed; config
+  and existing profile hashes matched. Wire recorder enforced fixed model,
+  10-request / 180-second ceilings and no alternate inference route. Actual
+  run used two requests in about 18 seconds. Remote output-token cap is not
+  enforced by this ChatGPT route; active stream and parent deadlines bound time.
+- Private evidence: `/private/tmp/muffin-memory-producer-live-aUWUe0/` with wire,
+  CLI result and independently computed `oracle.json`. The runner and oracle
+  are one-off private fixtures, not a new repository harness.
+- Rebase onto `dev@ad04ff81` changes only the already-integrated doctor deadline
+  and its regression compared with the live-tested tree. Memory, provider, loop,
+  and CLI execution paths are byte-identical, so the live proof is reusable.
+- Fresh CRITICAL review and required exact-head CI remain pending. Full #858
+  acceptance is not claimed.
