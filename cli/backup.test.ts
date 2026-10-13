@@ -112,13 +112,13 @@ describe('restoreFrom — refusals first, escape hatch always', () => {
     const aside = new DatabaseCtor(asideCopy!, { readonly: true });
     expect(aside.prepare(`SELECT count(*) AS n FROM notes`).get()).toEqual({ n: 2 }); // nothing destroyed
     aside.close();
-    // [2, 3, 4, 5, 6, 7, 8, 9]: this fixture has neither `facts` nor `todos` nor `jobs`
+    // [2, 3, 4, 5, 6, 7, 8, 9, 10]: this fixture has neither `facts` nor `todos` nor `jobs`
     // nor `spend`, so migrations 3 (`slice/memoria-appuntata`), 4 and 5
     // (`slice/una-promessa-torna`), 6 (`slice/e1-budget-per-job`), 7 (job
     // provenance), and 8 (canonical turn schema) no-op here the same way
-    // migration 2 itself no-ops on a database with no `jobs` — all seven still
-    // run and stamp.
-    expect(applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
+    // migration 2 itself no-ops on a database with no `jobs`; migration 10 is
+    // a semantic compatibility marker. All nine still run and stamp.
+    expect(applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10]);
   });
 
   it('refuses while the gateway is alive', () => {

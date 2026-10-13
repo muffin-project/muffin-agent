@@ -175,3 +175,13 @@ add the semantic v10 boot guard, avoid unnecessary legacy/terminal database
 reads, and update tests/comments; the healthy active-loop/provider/resource
 mechanisms used by this witness remain unchanged. The v10 guard has its own
 populated-data and prior-writer rejection evidence.
+
+The ready-for-review CI run at `c2577221` passed 5,458 tests, skipped three,
+and failed one stale backup-roundtrip assertion: it expected migration stamps
+through v9 instead of v10. Canonical restored-data and aside-copy assertions
+passed. The expectation now includes the semantic v10 marker.
+
+An additional compiled CLI boot at `c2577221` passed against the isolated
+authorized fixture with actual ChatGPT responses: schema v10, exact fresh
+nonce, answered/done Turn, shipped 128/256/3 allowance and two counted model
+requests. The original configuration and profiles remained unchanged.
