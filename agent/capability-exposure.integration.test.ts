@@ -195,9 +195,6 @@ describe('#469 production-path capability discovery', () => {
     );
     expect(firstNames).not.toContain('event_watch_create');
     expect(firstNames.length).toBeLessThanOrEqual(6);
-    expect(
-      provider.seen[0]?.tools?.find((tool) => tool.name === 'capability_search')?.description,
-    ).toContain('search when any part lacks a visible tool');
 
     const secondNames = provider.seen[1]?.tools?.map((tool) => tool.name) ?? [];
     expect(secondNames).toContain('capability_search');

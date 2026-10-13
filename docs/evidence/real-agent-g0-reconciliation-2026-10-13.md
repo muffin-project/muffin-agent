@@ -78,10 +78,18 @@ and workspace, and unchanged original config/profile hashes are required.
   cases required host Seatbelt. Targeted host rerun: all 9 files PASS,
   94 tests PASS / 3 platform skips. Typecheck and changed-file Biome PASS.
   Passing unaffected files were reused rather than rerun.
-- Acceptance inside the nested sandbox cannot certify its Seatbelt scenes.
+- Full local acceptance inside nested Codex sandbox: 80 PASS / 3 FAIL / 8 SKIP.
+  Failures were #746 callback progress, D5 process introspection (`ps` EPERM),
+  and A10 sandbox diagnostics. This does not certify the acceptance gate.
   Automatic approval review rejected the proposed host acceptance subset
   (including A10) over possible personal gateway restart. This action was not
   retried or bypassed; the safe full acceptance gate is isolated Linux CI.
+- Initial Linux CI: 413 files / 5383 tests PASS / 3 SKIP; one test failed
+  because it pinned the obsolete description wording. Only that literal-prose
+  assertion was removed; discovery/schema/guidance/authority assertions remain.
+  Focused discovery/context/recorder/oracle rerun: 54 tests PASS. Independent
+  bounded delta review retains MERGE; production/harness are unchanged from
+  the verified live SHA, so no additional model calls are needed.
 - Exact-head CI and integration are tracked in PR #881; neither a local test nor
   the judge's technical verdict substitutes for the six required checks.
 
