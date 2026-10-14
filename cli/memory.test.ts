@@ -587,6 +587,28 @@ describe('muffin memory pin / unpin', () => {
 describe('muffin memory search — cmdMemorySearch reached beyond the argv rejections', () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it('shows inferred attribution beside the fact instead of only its owner-tier source', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-memory-origin-cli-'));
+    runInit({ home, apiKey: 'sk-memory-origin-never-called' });
+    const db = new DatabaseCtor(paths(home).db);
+    const store = new MemoryStore(db);
+    const source = store.addEpisode({
+      tenantId: 'host', connector: 'cli', threadKey: 'synthetic', role: 'user',
+      kind: 'message', content: 'Inspect the tool catalog.', trustTier: 0,
+      createdAt: '2026-10-14T00:00:00Z',
+    });
+    const owner = store.upsertEntity('host', 'owner', 'person', '2026-10-14T00:00:00Z');
+    const fact = store.addFact({
+      tenantId: 'host', subjectId: owner, predicate: 'works_as', objectValue: 'Synthetic accountant',
+      episodeId: source, trustTier: 0, origin: 'inferred', confidence: 0.99, extractionV: 1,
+      recordedAt: '2026-10-14T00:00:00Z',
+    });
+    db.close();
+    const { out } = capture();
+    expect(await cmdMemorySearch(home, 'owner', {})).toBe(0);
+    expect(out.join('')).toMatch(new RegExp(`\\[fact #${fact}\\][^\\n]*dedotto — non detto\\n[^\\n]*Synthetic accountant`));
+  });
+
   /**
    * U1: `cli/main.test.ts` proves the three argv-level rejections (bad date,
    * empty window, future as-of) — all short-circuit *before* `cmdMemorySearch`
@@ -736,7 +758,7 @@ describe('drenare l indice e progresso quanto estrarre', () => {
       }),
     );
     store.markExtracted('host', evidenceIds, EXTRACTION_VERSION);
-    evidenceIds.forEach((episodeId, i) =>
+    evidenceIds.forEach((episodeId, i) => {
       proposeMemoryRecord(store, {
         tenantId: 'host',
         subject: 'owner',
@@ -746,8 +768,8 @@ describe('drenare l indice e progresso quanto estrarre', () => {
         sourceEpisodeIds: [episodeId],
         content: `inference ${i}`,
         confidence: 0.9,
-      }),
-    );
+      });
+    });
     const provider: Provider = {
       kind: 'openai-compat',
       async chat(): Promise<ChatResult> {

@@ -128,9 +128,8 @@ export function originForProducer(producer: ProposalProducer): FactOrigin {
     case 'owner-stated':
       return 'said';
     case 'agent-inference':
-      return 'inferred';
     case 'extraction':
-      return 'said';
+      return 'inferred';
     case 'import':
       return 'imported';
   }

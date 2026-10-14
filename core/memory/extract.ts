@@ -66,12 +66,9 @@ const ExtractedFact = z.object({
   matters: z.boolean().default(false),
   charged: z.boolean().default(false),
   /**
-   * A request, not a grant — `MemoryStore.addFact` is the actual gate
-   * (trustTier 0, origin `said`), because the text this reads can be a group
-   * chat or a forwarded message and "pinned" reaches every future turn
-   * unconditionally. Defaulted false for the same "one missing boolean must
-   * not discard the fact" reason `matters`/`charged` are: absence here is the
-   * ordinary case, not an error.
+   * Compatibility field for older extractor replies. Ingestion never grants
+   * an automatic pin to an interpreted tuple, regardless of this flag.
+   * Defaulting false keeps omission from discarding the rest of the fact.
    */
   pinned: z.boolean().default(false),
 });
@@ -183,13 +180,8 @@ REGOLE, in ordine di importanza:
    - 0.5  il testo stesso lo dà per incerto ("credo", "forse", "mi pare")
    Sotto 0.4 non estrarlo affatto: verrebbe scartato comunque.
 
-9. "pinned" — SOLO per due cose, e per nient'altro: l'identità stabile
-   dell'owner (il suo nome, non il suo umore di oggi) e una preferenza
-   durevole che l'owner ha dichiarato esplicitamente su come vuoi che tu ti
-   comporti ("chiamami X", "rispondimi sempre in italiano"). NON per interessi,
-   eventi, richieste, opinioni, o qualunque fatto su una persona diversa
-   dall'owner. Nel dubbio, "false" — è un'eccezione rara, non una seconda
-   versione di "matters".
+9. "pinned" — sempre false. Produci interpretazioni del testo; il fissaggio
+   permanente nel profilo è un'operazione distinta.
 
 Rispondi SOLO con JSON, di questa forma esatta — "confidence" numero,
 gli ultimi tre booleani, "subjectKind" uno di

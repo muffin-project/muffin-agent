@@ -108,6 +108,11 @@ executable contract. Its model-authored tuple is recorded as `agent-inference`;
 the owner's original message remains source evidence. Tool arguments cannot
 select `owner-stated` provenance. Registration does not establish real end-to-end acceptance.
 
+Automatic extraction also produces inferred projections: its source episode
+retains the speaker's words and trust, while the tuple records model
+interpretation. Extracted tuples cannot automatically enter the pinned profile
+or inherit a previous belief's pin. Explicit owner pinning remains available.
+
 ### Work
 
 Work owns unfinished obligations: turns, waits, todos, scheduled occurrences and
