@@ -257,16 +257,24 @@ senza mai passare da: model · env generico · argv · risultato di tool · DB �
 log · superficie · approvazione. È forte e mantenibile perché nomina un
 percorso, non un'assenza.
 
-**Anche i server MCP.** `muffin mcp add --env K=VALORE` era l'unico modo
-documentato di dare una chiave a un server MCP, e la metteva in `argv`
-(reperto del judge di questa PR). Ora `--env` accetta **solo** riferimenti
-`secret://nome`: il registro su disco tiene il nome, e il valore si risolve
-al momento della connessione dentro `core/mcp/connect.ts` — il sink
-privilegiato che avvia il figlio — e finisce nell'**environment del figlio**,
-mai in `argv`. `core/config/secret-boundary.test.ts` dichiara questo quarto
-chiamante di `readSecret` con la sua ragione. Nota che l'env **del figlio** è
-il sink autorizzato di quel consumatore, mentre l'env **del processo
-principale** non lo è: la differenza è chi lo riceve, non il meccanismo.
+**Anche i server MCP.** Per una credenziale, il percorso supportato è
+`muffin mcp add --env K=secret://nome`: il registro su disco tiene il
+riferimento, e il valore si risolve al momento della connessione dentro
+`core/mcp/connect.ts` — il sink privilegiato che avvia il figlio — e finisce
+nell'**environment del figlio**, mai in `argv`. `core/config/secret-boundary.test.ts`
+dichiara questo quarto chiamante di `readSecret` con la sua ragione. Nota che
+l'env **del figlio** è il sink autorizzato di quel consumatore, mentre l'env
+**del processo principale** non lo è: la differenza è chi lo riceve, non il
+meccanismo.
+
+Il registro ammette anche valori letterali di configurazione non sensibili
+(per esempio `LANG=C`) e rifiuta i valori che corrispondono alle forme
+conosciute da `looksLikeSecretValue`. Questo rilevatore è **classe 3**, quindi
+best-effort: un formato personalizzato o una stringa opaca può passare. Non è
+una garanzia strutturale contro ogni credenziale inserita a mano in `--env` o
+in `mcp.json`; non inserire segreti letterali lì. Una garanzia più forte
+richiede una decisione separata, perché vietare tutti i valori letterali
+romperebbe la configurazione non sensibile già supportata.
 
 **Il percorso stdin funziona anche con un produttore lento.** `process.stdin.isTTY`
 mette fd 0 in non-blocking: con `pass show`/`op read`/`gpg -d` a monte,
@@ -305,20 +313,36 @@ difetto è sopravvissuto a un giro — è che una pipe immediata riempie il buff
 prima della lettura e maschera il caso: ora c'è un test con un produttore che
 ritarda, rosso quando si toglie il retry.
 
-**2. La regola sull'`env` di un server MCP vive nello schema, non nel parser.**
-Un `mcp.json` scritto a mano con un token letterale veniva consegnato al figlio
-senza obiezioni: la garanzia dipendeva dal fatto che si passasse da `muffin mcp
-add`. Ora `core/mcp/registry.ts` rifiuta un valore che **ha la forma** di una
-credenziale, riusando il predicato di `core/tracing/redact.ts`
+**2. La regola sull'`env` di un server MCP vive nello schema, non solo nel parser.**
+Un `mcp.json` scritto a mano con un token riconoscibile veniva consegnato al
+figlio senza obiezioni: la verifica dipendeva dal fatto che si passasse da
+`muffin mcp add`. Ora `core/mcp/registry.ts` rifiuta un valore che **ha una
+forma nota** di credenziale, riusando il predicato di `core/tracing/redact.ts`
 (`looksLikeSecretValue`) invece di ricopiarne la lista.
 
 È **classe 3, e va letto come tale**: riconosce le forme note (`ghp_…`,
-`sk-ant-…`, `Bearer …`, `token=…`), non qualunque stringa. La classe 1 resta
-strutturale altrove — il valore noto al backend non passa mai di qui, perché
-`--env` accetta solo `secret://nome` e la risoluzione avviene nel sink. E
-`LANG=C` o `MCP_MODE=strict` continuano a passare: vietare ogni valore letterale
-avrebbe rotto la configurazione legittima senza chiudere niente che la classe 1
-non chiudesse già.
+`sk-ant-…`, `Bearer …`, `token=…`), non qualunque stringa. I valori letterali
+di configurazione come `LANG=C` o `MCP_MODE=strict` continuano a passare. La
+classe 1 vale per i segreti già nel backend: passano tramite `secret://nome` e
+si risolvono nel sink. Non protegge da ogni segreto opaco digitato direttamente
+in `--env`; vietare ogni valore letterale eviterebbe quella ambiguità, ma
+romperebbe anche la configurazione non sensibile già supportata.
+
+## Revisione — 2026-10-14: la guardia sull'argv torna nello schema e nella CLI
+
+Il lavoro del 24/09 (`fix/mcp-argv-secret-guard`, mai integrato) aveva già
+chiuso questo buco: valori con forma di credenziale in `command`/`args`
+venivano lanciati nel figlio prima di qualsiasi rifiuto. Su `dev` attuale il
+buco era tornato — `mcp add --` con un token in argv tentava la connessione
+(misurato: exit 1 dalla connessione, nessuna guardia).
+
+Ora `core/mcp/registry.ts` applica `looksLikeSecretValue` anche a `command` e
+`args` (caricamento e salvataggio) e `muffin mcp add` rifiuta prima di
+avviare (exit 78, valore mai stampato, nulla registrato). La rete copre anche
+il prefisso `tvly-` di Tavily, aggiunto alle forme note di
+`core/tracing/redact.ts` con il suo fixture. Resta classe 3: i formati
+personali od opachi passano ancora — vietarli tutti romperebbe la
+configurazione legittima, come già deciso sopra.
 
 
 ## Eccezione dichiarata — `evals/character/run.ts` (2026-08-18)

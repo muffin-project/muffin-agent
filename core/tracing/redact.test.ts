@@ -106,6 +106,7 @@ describe('trace redaction — the value-shape net', () => {
     ['OpenAI', 'sk-abcdefghijklmnop0123456789'],
     ['Anthropic', 'sk-ant-abcdefghijklmnop0123456789'],
     ['GitHub PAT', 'ghp_abcdefghijklmnopqrstuvwxyz01'],
+    ['Tavily', 'tvly-test-key-0123456789'],
     ['Slack', 'xoxb-1234567890-abcdefghij'],
     ['Google', 'AIzaSyAbcdefghijklmnopqrstuvwxyz01234'],
     ['JWT', 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NX0.sig'],
