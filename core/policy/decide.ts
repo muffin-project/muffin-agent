@@ -180,7 +180,10 @@ export function createDecide(ctx: PolicyContext): Decide {
      * sono tutti *sotto* questa riga e la attraversano identici. Una stanza
      * con grant su `sys.search` resta soggetta a `gateParams` e a
      * `perTenantDailyUsd`; una stanza con grant su `vault.write` resta
-     * soggetta a `budgetExhausted` e a `safeMode`.
+     * soggetta a `budgetExhausted` e a `safeMode`. Limite noto del secondo
+     * controllo: il ledger `spend` registra la spesa stimata delle chiamate
+     * al modello, non i crediti del provider di ricerca — non è un tetto
+     * alla spesa Tavily di una stanza con grant.
      *
      * `tenant` e non `principal.tenantId`: sono lo stesso valore per
      * costruzione (il controllo `tenant_mismatch` sopra è già passato), e

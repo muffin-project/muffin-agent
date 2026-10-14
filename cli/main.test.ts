@@ -205,6 +205,9 @@ describe('the owner-facing command surface', () => {
     expect(r.code).toBe(0);
     expect(r.out).toContain('surface');
     expect(r.out).toContain('orientamento');
+    // `gateway turn <id>` ha un handler (cmdGatewayTurn) — il vocabolario
+    // dichiarato deve comprenderlo, o la completion lo nasconde.
+    expect(r.out).toMatch(/gateway\) COMPREPLY=\( \$\(compgen -W '[^']*\bturn\b/);
   });
 });
 
