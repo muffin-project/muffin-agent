@@ -2,7 +2,7 @@ import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { COMANDI, debugCommand, thinkingCommand } from '../agent/comandi.js';
 import type { TurnEvent } from '../agent/loop.js';
 import { TOOL_PHRASES, toolLine, toolPhrase, toolSubject } from '../agent/tool-phrase.js';
@@ -17,6 +17,20 @@ import { closingLine, formatProgressLine, makeReplCliWrite, runRepl, statusFor }
 import { applica } from './schermo.js';
 
 const itWithShell = it.skipIf(shellNonDisponibileQui() !== null);
+
+// ADR-0103: i test qui guidano turni foreground nel REPL, che in produzione
+// girano solo sul gateway. L'hatch ripristina l'esecuzione locale per tutto
+// il file; il fail-closed senza hatch è pinnato in `cli/gateway.test.ts` e
+// nell'accettazione `gateway-execution-owner`, non qui.
+let hatchPrevio: string | undefined;
+beforeEach(() => {
+  hatchPrevio = process.env.MUFFIN_EXEC_LOCAL;
+  process.env.MUFFIN_EXEC_LOCAL = '1';
+});
+afterEach(() => {
+  if (hatchPrevio === undefined) delete process.env.MUFFIN_EXEC_LOCAL;
+  else process.env.MUFFIN_EXEC_LOCAL = hatchPrevio;
+});
 
 /**
  * The REPL's delivery path, in isolation from the interactive stdin loop.

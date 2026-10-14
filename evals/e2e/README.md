@@ -19,9 +19,14 @@ con tool e prezzi zero). Un run reale richiede una chiave esplicita in un file
 privato `0600`, regolare, senza symlink e fuori dal repository:
 
 ```bash
-npm run e2e:real -- --api-key-file /percorso/privato/openrouter-key
-npm run e2e:real -- --model google/gemma-4-31b-it:free --api-key-file /percorso/privato/openrouter-key
+npm run e2e:real -- --api-key-file ~/.local/state/muffin/e2e/openrouter-key
+npm run e2e:real -- --model google/gemma-4-31b-it:free --api-key-file ~/.local/state/muffin/e2e/openrouter-key
 ```
+
+Convenzione locale (non nel repository, mai in `/tmp` che non sopravvive al
+reboot e accumula detriti dei test): il file vive in
+`~/.local/state/muffin/e2e/openrouter-key`, `0600`. Le Home temporanee dei run
+restano invece usa-e-getta sotto `/tmp` per i limiti sui socket Unix.
 
 Non vengono lette chiavi dall’ambiente o dall’installazione personale. La chiave
 entra nella Home temporanea tramite stdin della CLI, passa al proxy solo

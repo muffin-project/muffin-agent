@@ -3,7 +3,7 @@ import { attachMcp, buildRuntime } from '../agent/runtime.js';
 import { runTurn, type TurnResult } from '../agent/loop.js';
 import { loadImage } from '../agent/images.js';
 import { paths } from '../core/config/config.js';
-import { resolveExecutionOwner } from '../core/gateway/ownership.js';
+import { localExecAllowed, NO_GATEWAY_REMEDY, resolveExecutionOwner } from '../core/gateway/ownership.js';
 import { mintExecutionId, runViaGateway, UnknownOutcomeError } from '../core/gateway/forward.js';
 import { describeAbort } from './abort.js';
 
@@ -87,13 +87,21 @@ export async function runHeadless(options: RunOptions): Promise<RunExit> {
     ? setTimeout(() => controller.abort(), options.timeoutSeconds * 1000)
     : null;
 
-  // #533: un solo execution owner per Home. Con un gateway vivo il turno
-  // gira lì — stesso runtime, stessa ModelLane e stesso budget di Telegram —
-  // non in un secondo runtime costruito qui. Senza gateway, owner locale
-  // esplicito. Un conflitto non esegue affatto: fail closed.
+  // #533 + ADR-0103: un solo execution owner per Home. Con un gateway vivo
+  // il turno gira lì — stesso runtime, stessa ModelLane e stesso budget di
+  // Telegram — non in un secondo runtime costruito qui. Senza gateway,
+  // nessuno esegue qui: fail closed con il rimedio (solo l'hatch di test
+  // MUFFIN_EXEC_LOCAL=1 ripristina l'esecuzione locale). Un conflitto non
+  // esegue affatto.
   const proprietario = await resolveExecutionOwner(home, runtime.db);
   if (proprietario.kind === 'conflict') {
     process.stderr.write(`non eseguo: ${proprietario.reason}\n→ ${proprietario.remedy}\n`);
+    if (timeout) clearTimeout(timeout);
+    runtime.close();
+    return 1;
+  }
+  if (proprietario.kind === 'local' && !localExecAllowed()) {
+    process.stderr.write(`non eseguo: ${NO_GATEWAY_REMEDY}\n`);
     if (timeout) clearTimeout(timeout);
     runtime.close();
     return 1;
@@ -103,7 +111,7 @@ export async function runHeadless(options: RunOptions): Promise<RunExit> {
   } else {
     // Esplicito, su stderr (stdout resta la risposta e basta): con un gateway
     // vivo questo comando non eseguirebbe mai in proprio — se lo fa, lo dice.
-    process.stderr.write(`esecuzione locale (nessun gateway attivo)\n`);
+    process.stderr.write(`esecuzione locale (hatch MUFFIN_EXEC_LOCAL=1, solo test)\n`);
   }
 
   let result: TurnResult;
