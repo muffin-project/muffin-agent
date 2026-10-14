@@ -1,7 +1,7 @@
 import { type Provider, ProviderError, ProviderStreamError } from '../../agent/providers/types.js';
 import type { Principal } from '../policy/types.js';
 import type { SpanHandle, Tracer } from '../tracing/types.js';
-import type { VectorIndex } from './vectors.js';
+import { VECTOR_INDEX_BATCH_SIZE, type VectorIndex } from './vectors.js';
 import { ATTR } from '../tracing/types.js';
 import { extractFacts } from './extract.js';
 import { speakerAttributedContent } from './authorship.js';
@@ -468,6 +468,21 @@ export async function ingestPending(
         // planes, never touching `facts` — and converges to a no-op the moment
         // a tenant has none left.
         report.forgottenRequestChunks = deps.vectors.forgetRequestFacts(tenantId);
+
+        // `doctor` counts every tenant and the same repair command must make
+        // that backlog reachable. Keep the vector-only group pass under this
+        // lane's durable lock: two gateways must not embed and commit the same
+        // page concurrently. Host remains owned by the tenant-scoped pass
+        // above, and non-host evidence never reaches fact extraction. Run it
+        // after forgetting request vectors, so a group embedding failure does
+        // not defer that existing cleanup on the host partition.
+        if (tenantId === 'host') {
+          report.indexed += await deps.vectors.indexBacklogAcrossTenants(
+            now().toISOString(),
+            Math.max(0, VECTOR_INDEX_BATCH_SIZE - report.indexed),
+            tenantId,
+          );
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const detail = `indice vettoriale: ${message} — il recall resta testuale`;

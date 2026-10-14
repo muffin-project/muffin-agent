@@ -204,10 +204,9 @@ export function valeUnAltroGiro(
   // run. Keep draining it within the same round budget.
   if (report.proposalPageFull) return rounds * 25 < limit;
   if (report.marked === 0 && report.indexed === 0) return false;
-  // Solo quando è l'estrazione a essere a corto di lavoro: con `marked` a 0 e
-  // l'indice ancora da drenare, `fetched` è 0 per costruzione, e questa riga
-  // fermerebbe proprio il giro che serve.
-  if (report.marked > 0 && report.fetched < Math.min(limit, 25)) return false;
+  // Un'estrazione corta chiude il giro solo quando non è avanzato nemmeno
+  // l'indice: il drain globale può avere ancora pagine di altri tenant.
+  if (report.marked > 0 && report.fetched < Math.min(limit, 25) && report.indexed === 0) return false;
   return rounds * 25 < limit;
 }
 

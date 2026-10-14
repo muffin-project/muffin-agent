@@ -731,6 +731,10 @@ describe('drenare l indice e progresso quanto estrarre', () => {
     expect(valeUnAltroGiro(giro(25, 0, 25), 1, 200)).toBe(true);
   });
 
+  it('continua se una pagina corta estrae poco ma indicizza altro lavoro', () => {
+    expect(valeUnAltroGiro(giro(3, 2, 3), 1, 200)).toBe(true);
+  });
+
   it('il tetto sui giri vale comunque, anche mentre l indice si drena', () => {
     // Senza, un indice enorme trasformerebbe il comando in una nottata.
     expect(valeUnAltroGiro(giro(0, 200, 0), 8, 200)).toBe(false);
@@ -802,6 +806,107 @@ describe('drenare l indice e progresso quanto estrarre', () => {
       expect(store.pendingProposals('host')).toHaveLength(0);
       expect(store.stats('host').activeFacts).toBe(21);
       expect(out.join('')).toContain('21 fatti');
+    } finally {
+      vi.doUnmock('../agent/runtime.js');
+      consolidation.stop();
+      db.close();
+    }
+  });
+
+  it('drena vettori per tenant senza estrarre fatti dai tenant Telegram', async () => {
+    const db = new DatabaseCtor(':memory:');
+    const store = new MemoryStore(db);
+    let startEmbedding!: () => void;
+    const embeddingStarted = new Promise<void>((resolve) => {
+      startEmbedding = resolve;
+    });
+    let finishEmbedding!: () => void;
+    const embeddingGate = new Promise<void>((resolve) => {
+      finishEmbedding = resolve;
+    });
+    const vectors = new VectorIndex(db, {
+      id: 'test:tenant-index',
+      dimensions: 4,
+      embed: async (texts) => {
+        startEmbedding();
+        await embeddingGate;
+        return texts.map(() => Float32Array.from([1, 0, 0, 0]));
+      },
+    });
+    const tenantA = 'group:telegram:a';
+    const tenantB = 'group:telegram:b';
+    store.addEpisode({
+      tenantId: tenantA,
+      connector: 'telegram',
+      threadKey: 'a',
+      role: 'user',
+      kind: 'message',
+      content: 'promemoria sintetico del gruppo A',
+      trustTier: 0,
+      createdAt: '2026-10-09T09:00:00Z',
+    });
+    store.addEpisode({
+      tenantId: tenantB,
+      connector: 'telegram',
+      threadKey: 'b',
+      role: 'user',
+      kind: 'message',
+      content: 'promemoria sintetico del gruppo B',
+      trustTier: 0,
+      createdAt: '2026-10-09T09:01:00Z',
+    });
+
+    const home = mkdtempSync(join(tmpdir(), 'muffin-memory-tenant-drain-'));
+    const tracer = new SimpleTracer(new JsonlExporter(home));
+    let modelCalls = 0;
+    const provider: Provider = {
+      kind: 'openai-compat',
+      async chat() {
+        modelCalls += 1;
+        return {
+          text: '',
+          toolCalls: [],
+          stopReason: 'end',
+          usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          model: 'test',
+        };
+      },
+    };
+    const consolidation = new Consolidator({
+      db,
+      budgetExhausted: () => false,
+      ingest: (limit) => ingestPending({ store, provider, model: 'test', tracer, vectors }, 'host', limit),
+    });
+    const { out } = capture();
+    vi.doMock('../agent/runtime.js', () => ({
+      buildRuntime: () => ({
+        close: () => consolidation.stop(),
+        consolidation,
+      }),
+    }));
+    try {
+      const command = cmdMemoryExtract(home, 50);
+      try {
+        await embeddingStarted;
+        const contender = new MemoryStore(db);
+        const claim = contender.acquireIngestLock(new Date());
+        if (!('held' in claim)) contender.releaseIngestLock();
+        expect('held' in claim).toBe(true);
+      } finally {
+        finishEmbedding();
+      }
+      expect(await command).toBe(0);
+      expect(out.join('')).toContain('2 chunk indicizzati');
+      expect(modelCalls).toBe(0);
+      expect(store.pendingEpisodes(tenantA, EXTRACTION_VERSION)).toHaveLength(1);
+      expect(store.pendingEpisodes(tenantB, EXTRACTION_VERSION)).toHaveLength(1);
+      expect(await vectors.search(tenantA, 'query')).toEqual([
+        expect.objectContaining({ text: 'promemoria sintetico del gruppo A' }),
+      ]);
+      expect(await vectors.search(tenantB, 'query')).toEqual([
+        expect.objectContaining({ text: 'promemoria sintetico del gruppo B' }),
+      ]);
+      expect(await vectors.search('host', 'query')).toEqual([]);
     } finally {
       vi.doUnmock('../agent/runtime.js');
       consolidation.stop();
