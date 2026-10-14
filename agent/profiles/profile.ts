@@ -70,6 +70,13 @@ export type ProfileExecution = {
  * boundary, and no path reads it any more.
  */
 export const DEFAULT_EXECUTION = {
+  // 90s: the per-call fuse stays where #824's tuning put it. A 300s default
+  // was tried here and reverted on judge evidence: beginModelCall takes
+  // min(call, wall 180s, active 120s), so 300s is unreachable on default
+  // rows — slow calls die at 120s as active_model_budget_exhausted, and the
+  // extra 30s only burn more context per doomed lease. Slow-route protection
+  // is the dead-lease breaker (deadStreak + dead_route refusal), not a
+  // higher ceiling nobody can reach.
   modelCallDeadlineMs: 90_000,
   turnWallDeadlineMs: 180_000,
   activeModelBudgetMs: 120_000,

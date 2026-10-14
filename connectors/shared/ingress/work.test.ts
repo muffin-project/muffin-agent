@@ -262,6 +262,52 @@ describe('continuazione conversazionale (P0-B)', () => {
     expect(env.turns.get('cont-1')?.status).toBe('continuable');
   });
 
+  it('"riprendi" su rotta morta risponde il rifiuto onesto senza nuova lease', async () => {
+    const env = ambiente();
+    const created = env.turns.create(
+      {
+        id: 'cont-1',
+        principal: { kind: 'owner', connector: 'telegram', externalId: '7' },
+        tenant: 'host',
+        surface: 'telegram',
+        sessionId: 'owner',
+        model: env.loop.model,
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'fai' }] }],
+        taint: 0,
+        counters,
+      },
+      4242,
+    );
+    expect(
+      env.turns.releaseContinuable(
+        'cont-1',
+        {
+          messages: providerMessages(created),
+          taint: 0,
+          counters,
+          reason: {
+            class: 'model_deadline' as const,
+            lease: 2,
+            deadStreak: 3,
+            completed: { toolCalls: 0 },
+            at: new Date().toISOString(),
+          },
+        },
+        created.claimToken,
+      ),
+    ).toBe(true);
+    const leasesBefore = env.turns.leasesFor('cont-1').length;
+    const out = await giraRiprendi(env, porta('telegram'), 'w9');
+    expect(out.turnId).toBe('cont-1');
+    expect(out.stopped).toBe('continuable');
+    expect(out.text).toContain('non riparte');
+    expect(out.text).not.toContain('scrivi "riprendi"');
+    // Riga intatta, nessuna lease partita, nessun evento-lavoro creato.
+    expect(env.turns.get('cont-1')?.status).toBe('continuable');
+    expect(env.turns.leasesFor('cont-1')).toHaveLength(leasesBefore);
+    expect(env.turns.get('w9')).toBeNull();
+  });
+
   it('un id già impegnato che la ri-derivazione non nomina più non collide con la riga', async () => {
     const env = ambiente();
     rigaContinuabile(env);
