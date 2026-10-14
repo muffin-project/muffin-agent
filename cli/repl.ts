@@ -8,7 +8,7 @@ import { Scheduler, type Deliver, type ForegroundGate, type StandDown } from '..
 import { makeTraceRetentionTick } from '../core/scheduler/trace-retention.js';
 import { LANE_JOBS, LANE_TURNS, ModelLane } from '../core/turns/model-lane.js';
 import { gatewayTransition, readGateway } from '../core/gateway/lock.js';
-import { resolveExecutionOwner } from '../core/gateway/ownership.js';
+import { localExecAllowed, NO_GATEWAY_REMEDY, resolveExecutionOwner } from '../core/gateway/ownership.js';
 import { mintExecutionId, runViaGateway, UnknownOutcomeError } from '../core/gateway/forward.js';
 import { formatFileReady } from '../core/surface/cli.js';
 import type { ApprovalRequest } from '../agent/loop.js';
@@ -518,10 +518,10 @@ export async function runRepl(
   const gateway = readGateway(runtime.db);
   /**
    * L'unica ModelLane di questo processo (#533): lo scheduler che gira qui
-   * (quando nessun gateway c'è) e i turni in arrivo dalle superfici che
-   * questa finestra serve la condividono — mai due istanze indipendenti che
-   * si dicono «equivalenti». Quando il gateway c'è, i turni del terminale non
-   * la toccano proprio: girano sulla sua.
+   * (solo con gateway o hatch, vedi sotto) e i turni in arrivo dalle superfici
+   * che questa finestra serve la condividono — mai due istanze indipendenti
+   * che si dicono «equivalenti». Quando il gateway c'è, i turni del terminale
+   * non la toccano proprio: girano sulla sua.
    */
   const modelLane = new ModelLane();
   const surfaces = connectSurfaces(
@@ -907,7 +907,13 @@ export async function runRepl(
       else if (e.kind === 'failed') status.line(`corsia impegni: giro fallito — ${e.error}`);
     },
   });
-  const scheduler = new Scheduler(
+  // ADR-0103: lo scheduler vive nel gateway. Questa finestra ne crea uno
+  // solo quando un gateway c'è (cede a ogni tick via standDown, come prima)
+  // o dietro l'hatch di test — senza gateway e senza hatch nessuno
+  // schedula qui, e la riga qui sotto lo dice invece di prometterlo.
+  let scheduler: Scheduler | null = null;
+  if (gateway !== null || localExecAllowed()) {
+    scheduler = new Scheduler(
     runtime.jobs,
     makeJobRunner(runtime.deps, runtime.jobFires, runtime.executor, { cwd: runtime.workspace }, runtime.budget),
     deliver,
@@ -944,31 +950,38 @@ export async function runRepl(
     // `/pause` dato dal telefono ferma anche i job che girano qui.
     () => pausa.attiva(),
     // ADR-0060: la stessa corsia del gateway, dalla stessa porta. Il REPL cede
-    // allo scheduler del gateway quando c'è (`standDown` qui sopra), quindi
-    // parla solo quando nessun altro processo possiede lo store — mai due
-    // volte. Ed è qui, e non solo nel gateway, perché un'installazione senza
-    // gateway ha comunque fatto la promessa.
+    // allo scheduler del gateway quando c'è (`standDown` qui sopra). Senza
+    // gateway e senza hatch non c'è scheduler qui (ADR-0103: la promessa dei
+    // job vive nel gateway, non nella finestra).
     commitments,
     // #838: la stessa retention del gateway, dalla stessa porta — il REPL cede
     // allo scheduler del gateway quando c'è, quindi pota solo quando nessun
     // altro processo possiede lo store. Stessa policy del boot, solo un
     // secondo chiamante.
     makeTraceRetentionTick(home, runtime.config.traces.retentionDays),
-  );
-  const ticker = setInterval(() => scheduler.tick(), TICK_MS);
-  ticker.unref(); // the timer must not, by itself, keep the process alive
+    );
+  }
+  let ticker: ReturnType<typeof setInterval> | null = null;
+  if (scheduler !== null) {
+    ticker = setInterval(() => scheduler.tick(), TICK_MS);
+    ticker.unref(); // the timer must not, by itself, keep the process alive
+  }
   // Says who owns it *now*, from the same read the ticker will redo. The line
   // is allowed to become false — that is what the handover announcement is for.
-  process.stderr.write(
-    gateway === null
-      ? `scheduler: in questa sessione — i job girano finché la finestra è aperta\n`
-      : `scheduler: del gateway (pid ${gateway.pid}) — i job girano anche senza di te\n`,
-  );
+  if (scheduler !== null) {
+    process.stderr.write(
+      gateway === null
+        ? `scheduler: hatch di test — i job girano in questa finestra finché è aperta\n`
+        : `scheduler: del gateway (pid ${gateway.pid}) — i job girano anche senza di te\n`,
+    );
+  } else {
+    process.stderr.write(`scheduler: nessuno — i job girano solo sul gateway (${NO_GATEWAY_REMEDY})\n`);
+  }
   // One tick now, not only on the interval — the gateway does the same and for
   // the same reason (`service.ts`): a job that came due while nothing was
   // running is the case `markRan`'s catch-up exists for, and waiting a whole
   // interval to notice it is a job the owner watched not happen.
-  scheduler.tick();
+  scheduler?.tick();
 
   try {
     for (;;) {
@@ -1096,13 +1109,13 @@ export async function runRepl(
           : undefined;
 
         /**
-         * #533: chi esegue questo turno si decide qui, a ogni turno, mai
-         * all'avvio. Quando il gateway è vivo esegue lui — sullo stesso
-         * runtime, la stessa ModelLane e lo stesso budget di Telegram — e
-         * questo processo è solo il terminale che guarda. Quando non c'è,
-         * esegue questa finestra come owner locale esplicito. Un conflitto
-         * (un owner che non può eseguire per noi) non esegue affatto: fail
-         * closed, con il rimedio, mai un secondo runtime silenzioso.
+         * #533 + ADR-0103: chi esegue questo turno si decide qui, a ogni
+         * turno, mai all'avvio. Quando il gateway è vivo esegue lui — sullo
+         * stesso runtime, la stessa ModelLane e lo stesso budget di Telegram —
+         * e questo processo è solo il terminale che guarda. Quando non c'è,
+         * nessuno esegue qui: fail closed con il rimedio. Solo l'hatch di
+         * test MUFFIN_EXEC_LOCAL=1 ripristina l'owner locale esplicito.
+         * Un conflitto non esegue affatto, come prima.
          */
         const proprietario = await resolveExecutionOwner(home, runtime.db);
         const chiaveProprietario =
@@ -1114,7 +1127,7 @@ export async function runRepl(
               `\nesecuzione: passa al gateway (pid ${proprietario.pid}) — i turni girano lì adesso, non più in questa finestra\n`,
             );
           } else if (proprietario.kind === 'local') {
-            process.stderr.write(`\nesecuzione: il gateway non risponde più — i turni girano in questa finestra (owner locale)\n`);
+            process.stderr.write(`\nesecuzione: il gateway non risponde più — i turni restano fermi (${NO_GATEWAY_REMEDY})\n`);
           }
         }
         let result: TurnResult;
@@ -1138,6 +1151,17 @@ export async function runRepl(
             },
           );
         } else if (proprietario.kind === 'local') {
+          if (!localExecAllowed()) {
+            // ADR-0103: senza gateway nessun secondo runtime. Il turno non
+            // parte in locale: il rimedio dice come avviare il gateway.
+            // Solo l'hatch di test ripristina il vecchio owner locale.
+            status.clear();
+            process.stderr.write(`non eseguo: ${NO_GATEWAY_REMEDY}\n`);
+            continue;
+          }
+          process.stderr.write(
+            `\nesecuzione: owner locale esplicito (hatch MUFFIN_EXEC_LOCAL=1, solo test) — in produzione i turni girano sul gateway\n`,
+          );
           await ensureMcp();
           if (!(await waitForForegroundModelLane(modelLane, controller.signal, status))) {
             status.line('attesa della corsia del modello annullata');
@@ -1232,7 +1256,7 @@ export async function runRepl(
     }
   } finally {
     status.stop();
-    clearInterval(ticker);
+    if (ticker !== null) clearInterval(ticker);
     // Il terminale torna com'era, sempre. Uscire lasciando lo stdin in raw mode
     // non rompe Muffin: rompe la **shell** che resta dopo — niente eco, niente
     // Ctrl+C — e chi ci finisce dentro non ha nessun motivo di collegare la

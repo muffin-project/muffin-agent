@@ -112,6 +112,10 @@ const env = {
   XDG_DATA_HOME: paths.xdgData,
   XDG_STATE_HOME: paths.xdgState,
   XDG_RUNTIME_DIR: join(root, 'xdg/runtime'),
+  // Test-only hatch for gateway-first execution (ADR-0103): this witness runs
+  // headless turns in an isolated Home with no supervisor by design, so it
+  // opts into local execution explicitly instead of failing closed.
+  MUFFIN_EXEC_LOCAL: '1',
   TMPDIR: paths.tmp,
   NO_COLOR: '1',
   CI: '1',

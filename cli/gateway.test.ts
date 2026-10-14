@@ -193,11 +193,21 @@ describe('muffin gateway status', () => {
 });
 
 describe('two schedulers must never run', () => {
-  it('the REPL keeps the ticker when nothing else owns it', () => {
+  it('the REPL keeps the ticker behind the test hatch when nothing else owns it', () => {
     // The control. Without it the next test passes on a REPL that never
     // schedules anything at all, which would be the opposite failure.
-    const r = muffin(home(), ['repl'], '/exit\n');
-    expect(r.err).toContain('scheduler: in questa sessione');
+    // ADR-0103: the hatch restores the old gateway-less scheduling for tests;
+    // production without a gateway schedules nothing (next test).
+    const r = muffin(home(), ['repl'], '/exit\n', { MUFFIN_EXEC_LOCAL: '1' });
+    expect(r.err).toContain('scheduler: hatch di test');
+  });
+
+  it('the REPL schedules nothing without a gateway and without the hatch', () => {
+    const r = muffin(home(), ['repl'], '/exit\n', { MUFFIN_EXEC_LOCAL: '' });
+    expect(r.err).toContain('muffin gateway install');
+    expect(r.err).not.toContain('scheduler: hatch di test');
+    expect(r.err).not.toContain('scheduler: in questa sessione');
+    expect(r.code).toBe(0);
   });
 
   it('the REPL hands the scheduler to a running gateway and stays interactive', () => {
@@ -226,18 +236,30 @@ describe('two schedulers must never run', () => {
     expect(r.code).toBe(75);
   });
 
-  it('the REPL fires an overdue job when nobody owns the store', () => {
+  it('the REPL fires an overdue job behind the hatch when nobody owns the store', () => {
     // The control for the next test, and it has to come first: without it, "the
     // REPL did not fire it" passes on a REPL that fires nothing ever, which is
     // the opposite defect and indistinguishable from the fix.
     const dir = home();
     overdueJob(dir);
-    const r = muffin(dir, ['repl'], '/exit\n');
-    expect(r.err).toContain('scheduler: in questa sessione');
+    const r = muffin(dir, ['repl'], '/exit\n', { MUFFIN_EXEC_LOCAL: '1' });
+    expect(r.err).toContain('scheduler: hatch di test');
     // The delivery marker. The turn itself dies on the database this same
     // `/exit` just closed — which is fine and is the point: what is under test
     // is whether the tick reached the job at all.
     expect(r.out).toContain('⏰');
+    expect(r.code).toBe(0);
+  });
+
+  it('the REPL fires nothing without a gateway and without the hatch', () => {
+    const dir = home();
+    const id = overdueJob(dir);
+    const r = muffin(dir, ['repl'], '/exit\n', { MUFFIN_EXEC_LOCAL: '' });
+    expect(r.out).not.toContain('⏰');
+    expect(r.err).toContain('muffin gateway install');
+    // And it stayed due: not firing must not consume the fire either.
+    const row = jobRow(dir, id);
+    expect(row.last_run_at).toBeNull();
     expect(r.code).toBe(0);
   });
 
@@ -665,9 +687,9 @@ describe('the claim can change under a REPL that is already ticking', () => {
     await flush();
 
     expect(w.events.at(-1)).toEqual({ kind: 'deferred', reason: 'handover' });
-    // Not silence. The boot line said "in questa sessione" and has just become
-    // false, and a REPL that quietly stops scheduling is indistinguishable from
-    // one that is broken.
+    // Not silence. The boot line said this session schedules (behind the
+    // hatch) and has just become false, and a REPL that quietly stops
+    // scheduling is indistinguishable from one that is broken.
     expect(w.said.join(' ')).toContain(`passato al gateway (pid ${process.pid})`);
   });
 
