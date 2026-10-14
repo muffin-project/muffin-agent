@@ -374,15 +374,11 @@ function sameLaneState(a: Config, b: Config, lane: InferenceLane): boolean {
  */
 async function probeDimensions(config: Config, slug: string, home: string): Promise<number> {
   const scelta = { ...(config.embedder ?? { kind: 'ollama' as const }), model: slug };
-  // Senza `dimensions` il ramo openai-compat rifiuta di costruirsi: qui si sta
-  // per misurarla, quindi si passa un valore qualsiasi e si guarda il vettore.
-  const embedder = makeEmbedder({ ...scelta, dimensions: scelta.dimensions ?? 1 }, (ref) =>
-    readSecret(ref, home),
-  );
-  const [v] = await embedder.embed(['muffin']);
-  if (v === undefined || v.length === 0)
-    throw new Error(`l'embedder "${slug}" ha risposto senza vettore`);
-  return v.length;
+  const embedder = makeEmbedder(scelta, (ref) => readSecret(ref, home));
+  if (embedder.probeDimensions === undefined) {
+    throw new Error(`l'embedder "${slug}" non può misurare la dimensione del vettore`);
+  }
+  return embedder.probeDimensions();
 }
 
 function mostra(config: Config, out: (l: string) => void): void {
@@ -792,6 +788,18 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
       );
       out('Niente scritto: un modello che non risponde adesso non indicizzerebbe niente dopo.');
       return 1;
+    }
+    const fallbackChoice = config.embedder?.fallback;
+    if (fallbackChoice !== undefined) {
+      const fallbackDimensions = makeEmbedder(fallbackChoice, (ref) => readSecret(ref, home)).dimensions;
+      if (fallbackDimensions !== dim) {
+        out(
+          `La dimensione misurata (${dim}) non coincide con il fallback (${fallbackDimensions}): ` +
+            'allinea i due embedder prima di cambiare modello.',
+        );
+        out('Niente scritto: il fallback non indicizzerebbe nella stessa tabella vettoriale.');
+        return 1;
+      }
     }
     const prima = config.embedder?.dimensions;
     saveConfig(
