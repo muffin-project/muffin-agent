@@ -914,9 +914,11 @@ export function connectSurfaces(
   /**
    * ADR-0103: senza gateway i poller non partono, salvo hatch di test. Vedi
    * il cancello all'avvio e il sorvegliante in fondo: la stessa costante
-   * decide entrambi, mai due letture diverse.
+   * decide entrambi, mai due letture diverse. `gatewayServes` assente = sono
+   * io il processo che serve (il gateway stesso, `observe`): lì si riceve
+   * sempre, l'hatch non serve.
    */
-  const pollEnabled = gatewayAtBoot !== null || localExecAllowed();
+  const pollEnabled = gatewayServes === undefined || gatewayAtBoot !== null || localExecAllowed();
   /**
    * Chi è l'owner secondo il sigillo — letto una volta, per tutte le superfici.
    *
