@@ -1,4 +1,5 @@
 import { connectServer } from '../core/mcp/connect.js';
+import { looksLikeSecretValue } from '../core/tracing/redact.js';
 import {
   loadMcpRegistry,
   McpConfigError,
@@ -38,8 +39,11 @@ export const MCP_USAGE = `usage:
   muffin mcp remove <name>
 
   --host HOST  ripetibile: un host che questo server deve poter raggiungere.
-               Viene aggiunto a rot/egress.json (stessa allowlist di
-               sys.http/sys.search) dopo una conferma esplicita a terminale.
+                Viene aggiunto a rot/egress.json (stessa allowlist di
+                sys.http/sys.search) dopo una conferma esplicita a terminale.
+  credenziali: muffin secret set + --env K=secret://nome, se il server legge da env.
+  La rilevazione di valori sensibili letterali copre formati noti, non ogni token:
+  non passare segreti direttamente con --env o negli argomenti del comando.
 `;
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
@@ -55,6 +59,13 @@ export async function cmdMcpAdd(
 ): Promise<number> {
   if (!NAME_RE.test(name)) {
     process.stderr.write(`nome non valido: "${name}" (minuscole, cifre, - e _, max 32)\n`);
+    return 78;
+  }
+  if ([command, ...args].some((value) => value !== undefined && looksLikeSecretValue(value))) {
+    process.stderr.write(
+      'un valore con forma di credenziale è già passato nella command line di Muffin; server non avviato né registrato.\n' +
+        'Se era un segreto reale, revocalo. Registralo con `muffin secret set` e passa solo `secret://nome` via `--env` se il server legge credenziali da env.\n',
+    );
     return 78;
   }
   const registry = loadMcpRegistry(home);
