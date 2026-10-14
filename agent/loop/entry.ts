@@ -623,9 +623,18 @@ export async function resumeTurn(
  */
 export type ContinuationRefusal = {
   turnId: string;
-  why: 'not_found' | 'not_continuable' | 'claimed' | 'model_changed' | 'unstarted';
+  why: 'not_found' | 'not_continuable' | 'claimed' | 'model_changed' | 'unstarted' | 'dead_route';
   detail: string;
 };
+
+/**
+ * Consecutive dead leases (provider too slow, zero new tool calls) behind a
+ * `continuable` row after which a new lease is refused instead of granted.
+ * Three is the bound: the fourth identical attempt has never produced work in
+ * measured evidence (8 dead 90s leases, 0 calls, #824 residue), and each one
+ * re-sends the full resumed context for nothing.
+ */
+export const MAX_CONSECUTIVE_DEAD_LEASES = 3;
 
 function ownerMessageText(message: Message): string {
   return message.content
@@ -702,6 +711,23 @@ export async function continueTurn(
       turnId,
       why: 'unstarted',
       detail: `il turno ${turnId} non ha mai avviato il contesto: niente da continuare, apri un turno nuovo.`,
+    };
+  }
+  const deadStreak = existing.continuableReason?.deadStreak ?? 0;
+  if (deadStreak >= MAX_CONSECUTIVE_DEAD_LEASES) {
+    // Same slow provider, same unanswered context, three leases in a row with
+    // no new tool call. Granting a fourth burns the full resumed context for
+    // nothing measurable — the row stays continuable for a later retry or a
+    // different model, but this "riprendi" does not start a lease.
+    const model = existing.providerLease.model;
+    return {
+      turnId,
+      why: 'dead_route',
+      detail:
+        `il turno ${turnId.slice(0, 12)} non riparte su ${model}: il provider non ha risposto in tempo ` +
+        `per ${deadStreak} lease di fila senza produrre nuovo lavoro. Non è un problema del tuo messaggio — ` +
+        `è la rotta a essere troppo lenta per questo contesto. Riprova più tardi, oppure cambia modello ` +
+        `(un turno nuovo ripartirebbe da qui con lo stesso contesto), e questo turno resta dov'è per quando la rotta risponde.`,
     };
   }
   const session = opts.session ?? deps.sessions.open(existing.sessionId);

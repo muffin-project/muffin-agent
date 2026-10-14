@@ -511,6 +511,63 @@ describe('continueTurn rifiuta senza toccare la riga', () => {
     expect(w.turns.get('cont-1')?.status).toBe('continuable');
   });
 
+  function deadRow(w: ReturnType<typeof world>, deadStreak: number) {
+    const created = w.turns.create(
+      {
+        id: 'cont-1',
+        principal: owner,
+        tenant: 'host',
+        surface: 'cli',
+        sessionId: 's1',
+        model: 'test-model',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'fai' }] }],
+        taint: 0,
+        counters: { ...counters, contextBuilt: true },
+      },
+      4242,
+    );
+    expect(
+      w.turns.releaseContinuable(
+        'cont-1',
+        {
+          messages: providerMessages(created),
+          taint: 0,
+          counters: { ...counters, contextBuilt: true },
+          reason: {
+            class: 'model_deadline' as const,
+            lease: 2,
+            deadStreak,
+            completed: { toolCalls: 2 },
+            at: '2026-10-14T09:00:00.000Z',
+          },
+        },
+        created.claimToken,
+      ),
+    ).toBe(true);
+    return w.turns.get('cont-1')!;
+  }
+
+  it('dead_route rifiuta la quarta lease morta senza bruciare contesto', async () => {
+    const w = world([answer('ok')]);
+    deadRow(w, 3);
+    const leasesBefore = w.turns.leasesFor('cont-1').length;
+    const r = await barrel.continueTurn(w.deps, 'cont-1', { message: { ...grant } });
+    expect(r).toMatchObject({ turnId: 'cont-1', why: 'dead_route' });
+    if ('detail' in r) {
+      expect(r.detail).toContain('test-model');
+      expect(r.detail).not.toContain('riprendi');
+    }
+    expect(w.turns.get('cont-1')?.status).toBe('continuable');
+    expect(w.turns.leasesFor('cont-1')).toHaveLength(leasesBefore);
+  });
+
+  it('sotto soglia la continuazione parte ancora', async () => {
+    const w = world([answer('ok')]);
+    deadRow(w, 2);
+    const r = await barrel.continueTurn(w.deps, 'cont-1', { message: { ...grant } });
+    expect(r).not.toHaveProperty('why');
+  });
+
   it('resumeTurn su riga continuable rifiuta con la strada giusta, senza consumare resume', async () => {
     const w = world([answer('ok')]);
     continuableRow(w);

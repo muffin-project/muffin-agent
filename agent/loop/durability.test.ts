@@ -14,7 +14,7 @@ import { JsonlExporter, SimpleTracer } from '../../core/tracing/tracer.js';
 import { CONSERVATIVE } from '../profiles/profile.js';
 import type { Message } from '../providers/types.js';
 import { searchCapability, searchSpec } from '../tools/search.js';
-import { checkpoint, closeRow, finish, reconcile, releaseContinuable, suspendHere, type TurnScope } from './durability.js';
+import { checkpoint, closeRow, finish, nextDeadStreak, reconcile, releaseContinuable, suspendHere, type TurnScope } from './durability.js';
 import { runTool } from './tool-call.js';
 import { makeSnapshot } from './permissions.js';
 import { TurnRun } from './run-state.js';
@@ -543,5 +543,30 @@ describe('la diagnostica continuable conta tutto il turno, non la lease', () => 
 
     expect(result.stopped).toBe('continuable');
     expect(result.text).toContain('nessuna tool call ancora completata');
+  });
+});
+
+describe('nextDeadStreak conta solo lease morte senza progresso', () => {
+  const at = '2026-10-14T09:00:00.000Z';
+  it('prima lease morta apre la striscia a 1', () => {
+    expect(nextDeadStreak(null, 'model_deadline', 0)).toBe(1);
+  });
+  it('seconda lease morta senza nuove call allunga a 2', () => {
+    const prev = { class: 'model_deadline' as const, lease: 1, completed: { toolCalls: 6 }, at };
+    expect(nextDeadStreak(prev, 'model_deadline', 6)).toBe(2);
+  });
+  it('onora lo streak già registrato invece di ripartire', () => {
+    const prev = { class: 'model_stall' as const, lease: 4, deadStreak: 3, completed: { toolCalls: 6 }, at };
+    expect(nextDeadStreak(prev, 'model_deadline', 6)).toBe(4);
+  });
+  it('una call nuova azzera anche dopo tre morti', () => {
+    const prev = { class: 'model_deadline' as const, lease: 2, deadStreak: 2, completed: { toolCalls: 6 }, at };
+    expect(nextDeadStreak(prev, 'model_deadline', 7)).toBe(1);
+  });
+  it('classi non-morte non allungano mai (rate limit compreso)', () => {
+    const prev = { class: 'model_deadline' as const, lease: 2, deadStreak: 2, completed: { toolCalls: 6 }, at };
+    expect(nextDeadStreak(prev, 'provider_transport', 6)).toBe(0);
+    expect(nextDeadStreak(prev, 'turn_deadline', 6)).toBe(0);
+    expect(nextDeadStreak(null, 'provider_empty', 0)).toBe(0);
   });
 });

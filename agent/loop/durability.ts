@@ -529,6 +529,44 @@ function continuableText(
 }
 
 /**
+ * Lease classes that mean "the provider was too slow", as opposed to a wall,
+ * a budget, a transport error or an empty response. Only these extend the
+ * dead streak: a rate limit or a crash may clear on retry, a provider that
+ * cannot answer 56k tokens of resumed context in 90 seconds will not answer
+ * them in the next lease either.
+ */
+const DEAD_LEASE_CLASSES: readonly ContinuableClass[] = ['model_deadline', 'model_stall'];
+
+/**
+ * Next value for `ContinuableReason.deadStreak`, from the previous release's
+ * reason and this lease's cumulative completed tool calls. Pure, so the
+ * breaker (`continueTurn`) and the writer agree on the count by construction.
+ */
+export function nextDeadStreak(
+  previous: ContinuableReason | null,
+  failureClass: ContinuableClass,
+  completedToolCalls: number,
+): number {
+  if (!DEAD_LEASE_CLASSES.includes(failureClass)) return 0;
+  const prevCompleted = previous?.completed?.toolCalls;
+  const continues =
+    previous !== null &&
+    DEAD_LEASE_CLASSES.includes(previous.class) &&
+    prevCompleted === completedToolCalls;
+  if (!continues) return 1;
+  return (previous?.deadStreak ?? 1) + 1;
+}
+
+function deadStreakUpdate(
+  previous: ContinuableReason | null,
+  failureClass: ContinuableClass,
+  completedToolCalls: number,
+): { deadStreak?: number } {
+  const streak = nextDeadStreak(previous, failureClass, completedToolCalls);
+  return streak > 0 ? { deadStreak: streak } : {};
+}
+
+/**
  * End the execution lease, keep the work (P0-B).
  *
  * The counterpart to `finish` for recoverable endings: releases the row as
@@ -555,6 +593,7 @@ export function releaseContinuable(
     class: failureClass,
     lease: record.leaseIndex,
     ...(attempts > 0 ? { attempts } : {}),
+    ...deadStreakUpdate(record.continuableReason ?? null, failureClass, completedToolCalls),
     ...(run.providerFailureRequestIds.length > 0
       ? { requestIds: [...run.providerFailureRequestIds] }
       : {}),
