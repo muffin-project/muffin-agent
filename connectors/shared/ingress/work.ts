@@ -198,7 +198,25 @@ async function runAgentWork(
       });
       // Lost the grant race after the re-check (narrow, but real under two
       // overlapping drains): same road as above — defer, never recompute.
-      if ('why' in continued) throw new ContinuationGone(req.workId);
+      if ('why' in continued && continued.why !== 'dead_route')
+        throw new ContinuationGone(req.workId);
+      if ('why' in continued) {
+        // The loop refused a fourth doomed lease on a route that has not
+        // answered three times with no new work. That refusal IS the answer
+        // to this "riprendi": deliver it on the continuable row instead of
+        // deferring into another silent wait. No lease started, no model
+        // call spent, the row stays continuable for a later retry.
+        return {
+          text: continued.detail,
+          iterations: 0,
+          traceId: target,
+          turnId: target,
+          stopped: 'continuable' as const,
+          reason: 'dead_route',
+          taint: row.taint,
+          usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        };
+      }
       return continued;
     }
     // The bind committed an identity that already has a row, yet the

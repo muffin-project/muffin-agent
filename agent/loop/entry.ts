@@ -623,9 +623,27 @@ export async function resumeTurn(
  */
 export type ContinuationRefusal = {
   turnId: string;
-  why: 'not_found' | 'not_continuable' | 'claimed' | 'model_changed' | 'unstarted';
+  why: 'not_found' | 'not_continuable' | 'claimed' | 'model_changed' | 'unstarted' | 'dead_route';
   detail: string;
 };
+
+/**
+ * Consecutive dead leases (provider too slow, zero new tool calls) behind a
+ * `continuable` row after which a new lease is refused instead of granted.
+ * Three is the bound: the fourth identical attempt has never produced work in
+ * measured evidence (8 dead 90s leases, 0 calls, #824 residue), and each one
+ * re-sends the full resumed context for nothing.
+ */
+export const MAX_CONSECUTIVE_DEAD_LEASES = 3;
+
+/**
+ * How long a `dead_route` refusal locks the row before one probe lease is
+ * granted again. Without a cooldown the latch would be permanent with a
+ * remedy ("retry later") that can never work; with it, each probe death
+ * re-locks for another window from its fresh `at`, and any progress clears
+ * the streak outright.
+ */
+export const DEAD_ROUTE_COOLDOWN_MS = 30 * 60 * 1_000;
 
 function ownerMessageText(message: Message): string {
   return message.content
@@ -703,6 +721,30 @@ export async function continueTurn(
       why: 'unstarted',
       detail: `il turno ${turnId} non ha mai avviato il contesto: niente da continuare, apri un turno nuovo.`,
     };
+  }
+  const reason = existing.continuableReason;
+  const deadStreak = reason?.deadStreak ?? 0;
+  if (deadStreak >= MAX_CONSECUTIVE_DEAD_LEASES) {
+    // Same slow provider, same unanswered context, three leases in a row with
+    // no new tool call. Granting another lease now burns the full resumed
+    // context for nothing measurable — the row stays continuable, and one
+    // probe is granted again after the cooldown (or immediately in a fresh
+    // turn, possibly on another model).
+    const diedAt = reason?.at !== undefined ? Date.parse(reason.at) : NaN;
+    const elapsed = Number.isFinite(diedAt) ? now().getTime() - diedAt : Number.POSITIVE_INFINITY;
+    if (elapsed < DEAD_ROUTE_COOLDOWN_MS) {
+      const waitMin = Math.max(1, Math.ceil((DEAD_ROUTE_COOLDOWN_MS - elapsed) / 60_000));
+      const model = existing.providerLease.model;
+      return {
+        turnId,
+        why: 'dead_route',
+        detail:
+          `il turno ${turnId.slice(0, 12)} non riparte su ${model}: il provider non ha risposto in tempo ` +
+          `per ${deadStreak} lease di fila senza produrre nuovo lavoro. Non è un problema del tuo messaggio — ` +
+          `è la rotta a essere troppo lenta per questo contesto. Riprova fra ~${waitMin} minuti, oppure apri ` +
+          `un turno nuovo (eventualmente su un altro modello): questo resta dov'è e si potrà riprovare allo scadere.`,
+      };
+    }
   }
   const session = opts.session ?? deps.sessions.open(existing.sessionId);
   const granted = deps.turns.grantContinuation(
