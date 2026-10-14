@@ -45,17 +45,22 @@ Record in the PR or work handoff:
 
 ## Contributor sign-offs and preserved attribution
 
-External contribution commits must carry a `Signed-off-by` trailer matching
-their Git author. Owner-authored internal work explicitly delegated to agents
-is exempt only in an owner-opened PR with both branches in the canonical
-repository and owner-attributed commits. Other authors' imported commits retain
-their sign-off requirement. The checker evaluates exact base/head SHAs and PR
-event metadata; it does not verify identity, rights or the truth of certification.
+External human contribution commits must carry a `Signed-off-by` trailer
+matching their Git author. Coding agents use an explicit non-human author
+identity such as `Codex <codex@agent.invalid>` and never add a DCO trailer. Such
+commits are exempt only in an owner-opened PR with both branches in the canonical
+repository, where they represent owner-delegated internal work. Imported commits
+by other authors still need their own sign-off. Outside that narrow internal
+path, an `@agent.invalid` identity fails even if its commit contains a matching
+trailer. The checker evaluates exact base/head SHAs and authenticated PR event
+metadata; it does not verify human identity, rights or the truth of a DCO
+certification.
 
 Canonical same-repository `dev` to `main` promotion preserves already integrated
 history without certifying legacy rights. Do not add another person's sign-off
 or change attribution to obtain an exemption. If an external author cannot
 truthfully certify a commit, leave it uncertified and unsubmitted.
+[ADR-0102](../decisions/0102-identita-agenti-e-dco.md),
 [ADR-0098](../decisions/0098-contributi-owner-delegati.md) and
 [CONTRIBUTING.md](../../CONTRIBUTING.md) own the current contributor policy;
 ADR-0097 and ADR-0079 record earlier decisions.

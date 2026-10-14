@@ -157,6 +157,21 @@ describe('DCO contribution gate', () => {
     });
   });
 
+  it('does not treat an agent identity as a DCO signatory, even with a matching trailer', () => {
+    const root = repository();
+    const base = git(root, 'rev-parse', 'HEAD');
+    const head = addCommit(root, {
+      name: 'Codex',
+      email: 'codex@agent.invalid',
+      signedOff: true,
+    });
+
+    expect(checkPullRequestDco(event(base, head), root)).toEqual({
+      kind: 'check',
+      missing: [`${head.slice(0, 12)} Codex <codex@agent.invalid>`],
+    });
+  });
+
   it('skips only the canonical same-repository dev to main promotion', () => {
     const root = repository();
     const base = git(root, 'rev-parse', 'HEAD');
@@ -220,7 +235,7 @@ describe('DCO contribution gate', () => {
       execFileSync(process.execPath, [loader, checker, ...args], { cwd: root, encoding: 'utf8' });
     const eventPath = join(root, 'event.json');
     writeFileSync(eventPath, JSON.stringify(event(base, head)));
-    expect(run('--pull-request-event', eventPath)).toContain('external commits are signed off');
+    expect(run('--pull-request-event', eventPath)).toContain('required human sign-offs match');
     expect(run(base, head)).toContain('every introduced non-merge commit is signed off');
     const unsigned = addCommit(root, {
       name: 'External Author',
@@ -269,6 +284,30 @@ describe('owner-delegated internal contribution policy', () => {
       }
     },
   );
+
+  it('exempts an explicit agent identity only in an owner-opened canonical PR, without requiring a signature', () => {
+    const root = repository();
+    const base = git(root, 'rev-parse', 'HEAD');
+    const head = addCommit(root, {
+      name: 'Codex',
+      email: 'codex@agent.invalid',
+      signedOff: false,
+    });
+
+    expect(checkPullRequestDco(ownerEvent(base, head), root)).toEqual({
+      kind: 'check',
+      missing: [],
+    });
+    expect(checkPullRequestDco(ownerEvent(base, head, 'fork/muffin-agent'), root)).toMatchObject({
+      missing: [expect.stringContaining(head.slice(0, 12))],
+    });
+    expect(
+      checkPullRequestDco(
+        event(base, head, 'dev', 'codex/change', 'muffin-project/muffin-agent'),
+        root,
+      ),
+    ).toMatchObject({ missing: [expect.stringContaining(head.slice(0, 12))] });
+  });
 
   it('retains the external-author requirement beneath an unsigned owner tip', () => {
     const root = repository();
@@ -326,7 +365,7 @@ describe('owner-delegated internal contribution policy', () => {
     expect(workflow).toContain(
       'npx tsx scripts/check-dco.ts --pull-request-event "$GITHUB_EVENT_PATH"',
     );
-    expect(run('--pull-request-event', eventPath)).toContain('owner-internal');
+    expect(run('--pull-request-event', eventPath)).toContain('agent-attributed internal work');
     expect(() => run(base, head)).toThrow();
     const external = addCommit(root, {
       name: 'External Author',

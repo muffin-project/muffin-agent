@@ -6,7 +6,8 @@ import { execFileSync } from 'node:child_process';
  * Canonical dev to main promotion preserves already integrated history.
  *
  * A matching trailer is a mechanical check, not proof of identity or a truthful
- * certification. The human signer remains responsible for the DCO statement.
+ * certification. Agent identities cannot sign the DCO; only owner-opened PRs
+ * from the canonical repository may treat them as delegated internal work.
  */
 import { readFileSync } from 'node:fs';
 
@@ -23,8 +24,15 @@ export type PullRequestEvent = {
 };
 export type DcoResult = { kind: 'skip'; reason: string } | { kind: 'check'; missing: string[] };
 
+function hasAgentIdentity(commit: Commit): boolean {
+  return commit.authorEmail.toLowerCase().endsWith('@agent.invalid');
+}
+
 export function missingSignoffs(commits: readonly Commit[], ownerInternal = false): Commit[] {
   return commits.filter((commit) => {
+    // The trailer is still only text; a non-human placeholder cannot certify it.
+    // Owner-internal PRs exempt agent-authored commits as delegated work instead.
+    if (hasAgentIdentity(commit)) return !ownerInternal;
     // Attribution filter within an authenticated owner PR; not identity/rights proof.
     if (
       ownerInternal &&
@@ -154,12 +162,12 @@ if (isMain) {
     } else if (result.missing.length > 0) {
       process.stderr.write(
         `DCO missing or does not match commit author:\n${result.missing.map((line) => `  ${line}`).join('\n')}\n` +
-          'For a commit you can truthfully certify, add its sign-off before publication. Ask another author to sign their own commit. Never change another author’s identity or sign on their behalf.\n',
+          'A coding-agent identity ending in @agent.invalid cannot sign the DCO. In an owner-opened PR from the canonical repository it is treated as delegated internal work without a DCO attestation. For other contributions, use an authentic human commit identity only when that person can truthfully certify the contribution. Never change another author’s identity or sign on their behalf.\n',
       );
       process.exitCode = 1;
     } else {
       process.stdout.write(
-        'DCO: external commits are signed off; owner-internal work is exempt. No certification is generated.\n',
+        'DCO: required human sign-offs match; owner-attributed and agent-attributed internal work is exempt. No certification is generated.\n',
       );
     }
   } else if (mode && value && mode !== '--pull-request-event') {
