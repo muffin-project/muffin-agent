@@ -24,17 +24,20 @@ allowing the project owner to relicense the contribution under another
 OSI-approved license, including MIT. Contributors retain their copyright.
 
 Owner-authored internal work, including work explicitly delegated to coding
-agents, remains the human owner's responsibility and does not require a new
-DCO attestation for each diff. The exemption applies only to owner-opened PRs
-with both branches in the canonical repository and commits attributed to the
-owner. Fork PRs and imported commits by other authors retain the sign-off
-requirement. Preserve their attribution; never add another person's sign-off
-or relabel their work to obtain an exemption. Git metadata and agent identities
-do not establish copyright ownership, identity or permission to relicense.
+agents, remains the owner's responsibility and does not require a DCO
+attestation for each diff. To preserve provenance, coding agents use an explicit
+non-human identity such as `Codex <codex@agent.invalid>` and never sign the DCO.
+That identity is exempt only in an owner-opened PR with both branches in the
+canonical repository. Fork PRs and imported commits by other authors retain the
+sign-off requirement. Preserve their attribution; never add another person's
+sign-off or relabel their work to obtain an exemption. Git metadata and agent
+identities do not establish copyright ownership, identity or permission to
+relicense.
 
 Review, required CI and runtime security boundaries remain unchanged. Canonical
 same-repository `dev` to `main` promotion preserves integrated history without
 certifying legacy rights. These rules grant no retroactive permissions; see
+[ADR-0102](docs/decisions/0102-identita-agenti-e-dco.md) and
 [ADR-0098](docs/decisions/0098-contributi-owner-delegati.md).
 The `Muffin` name and logo are **not** covered by that grant — see
 `TRADEMARK.md`.
