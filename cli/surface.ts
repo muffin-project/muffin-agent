@@ -35,6 +35,7 @@ import { generatePairingCode, startPairing } from '../core/config/pairing.js';
 import { ensurePrivateDir } from '../core/config/private-fs.js';
 import { openDb } from '../core/db/open.js';
 import { HEARTBEAT_MS } from '../core/gateway/lock.js';
+import { localExecAllowed } from '../core/gateway/ownership.js';
 import { DRAIN_BUDGET_MS } from '../core/gateway/service.js';
 import { mandatoryGuards } from '../core/rot/guards.js';
 import {
@@ -805,8 +806,9 @@ export function connectSurfaces(
    * Terzo parametro e obbligatorio — prima degli opzionali — perché
    * dimenticarla deve essere un errore di compilazione, non un default che
    * esegue turni in arrivo fuori dalla corsia unica della Home. Il gateway
-   * passa la sua condivisa, il REPL la sua (la stessa dello scheduler che
-   * gira qui quando nessun gateway c'è).
+   * passa la sua condivisa; il REPL la sua (usata dai turni in arrivo solo
+   * quando un gateway c'è o dietro l'hatch — senza gateway e senza hatch
+   * nessun polling parte, ADR-0103).
    */
   lane: ModelLane,
   /**
@@ -909,6 +911,12 @@ export function connectSurfaces(
    * letture a distanza di qualche riga potrebbero non dirla.
    */
   const gatewayAtBoot = gatewayServes?.() ?? null;
+  /**
+   * ADR-0103: senza gateway i poller non partono, salvo hatch di test. Vedi
+   * il cancello all'avvio e il sorvegliante in fondo: la stessa costante
+   * decide entrambi, mai due letture diverse.
+   */
+  const pollEnabled = gatewayAtBoot !== null || localExecAllowed();
   /**
    * Chi è l'owner secondo il sigillo — letto una volta, per tutte le superfici.
    *
@@ -1018,9 +1026,17 @@ export function connectSurfaces(
       if (conn.stream !== undefined) streams.set(id, conn.stream);
       surfaces.push(conn.surface);
       pollers.push({ start: conn.start, stop: conn.stopPoller });
-      if (gatewayAtBoot === null) conn.start();
+      // ADR-0103: i poller partono solo se un gateway c'è già (poi cede a
+      // lui) o dietro l'hatch di test. Senza gateway e senza hatch le
+      // superfici restano registrate send-only — Telegram tiene gli update
+      // lato server, quindi è ritardo, non perdita — ma nessun polling
+      // parte in questo processo.
+      if (pollEnabled && gatewayAtBoot === null) conn.start();
       stops.push(conn.stop);
       lines.push(conn.line);
+      if (!pollEnabled) {
+        lines.push(`${reg.id}: solo invio — i turni girano sul gateway (muffin gateway install --write --start)`);
+      }
     } catch (error) {
       // Il rimedio esplicito, perche' quello di default direbbe «riavvia il
       // gateway» e un segreto che manca non si ripara riavviando.
@@ -1041,8 +1057,11 @@ export function connectSurfaces(
    * perche' il giro qui e' un long-poll che dura. Quindi il cancello si rilegge
    * a `HEARTBEAT_MS` — lo stesso ritmo con cui il gateway batte, cioe' il piu'
    * fitto che possa dire qualcosa di nuovo — e sul cambio si passa la bocca:
-   * il gateway compare e questa finestra smette di ricevere, il gateway sparisce
-   * e ricomincia. `gatewayServes` annuncia da se' il passaggio (una riga per
+   * il gateway compare e questa finestra smette di ricevere. Se sparisce,
+   * questa finestra ricomincia a ricevere solo dietro l'hatch di test
+   * (ADR-0103: senza gateway e senza hatch i poller restano fermi, fail
+   * closed — gli update restano lato server, ritardo non perdita).
+   * `gatewayServes` annuncia da se' il passaggio (una riga per
    * cambio, mai a timer).
    *
    * `unref` perche' questo timer non e' una ragione per restare vivi: un
@@ -1055,7 +1074,7 @@ export function connectSurfaces(
       const now = gatewayServes() !== null;
       if (now === served) return;
       served = now;
-      for (const p of pollers) (now ? p.stop : p.start)();
+      for (const p of pollers) (now || !pollEnabled ? p.stop : p.start)();
     }, HEARTBEAT_MS);
     vigile.unref();
     stops.push(async () => {

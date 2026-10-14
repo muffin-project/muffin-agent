@@ -14,15 +14,20 @@ Amenda ADR-0035 (stand-down) e la promessa dello scheduler nel REPL
   falliscono con il rimedio (`muffin gateway install --write --start`),
   mai con un secondo runtime silenzioso. Il caso `conflict` resta invariato.
 - Lo scheduler vive solo nel gateway. Il REPL non ne crea nessuno senza
-  gateway; con gateway continua a cedere via `standDown` come prima.
+  gateway; con gateway continua a cedere via `standDown` come prima. Stessa
+  sorte per i poller delle superfici servite dal REPL: senza gateway e senza
+  hatch restano registrati send-only (gli update restano lato server:
+  ritardo, non perdita), nessun polling parte in quel processo.
 - Hatch di test `MUFFIN_EXEC_LOCAL=1`: ripristina il vecchio comportamento
   (owner locale + scheduler in finestra) **solo per i test**. Vive nel
   codice (`core/gateway/ownership.ts:localExecAllowed`), nell'harness di
   accettazione e nel witness G0 — mai documentato agli owner, mai default.
 - Eccezioni esplicite, non dimenticanze: `muffin resume` resta locale e
   claim-fenced per disegno (recovery/debug, la race col gateway è detta a
-  voce); `muffin observe` resta diagnostica dell'operatore. Entrambi fuori
-  dal percorso dei turni dell'owner.
+  voce); `muffin observe` resta diagnostica dell'operatore (compone anche
+  via modello con `--send`, ma non esegue turni dell'owner). Senza scheduler
+  nel REPL si fermano anche retention delle tracce e corsia impegni lì:
+  ritardano, il gateway le recupera — come i job.
 
 ## Alternative scartate
 

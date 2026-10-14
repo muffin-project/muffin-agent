@@ -155,10 +155,51 @@ describe('con un gateway vivo, il REPL non apre una seconda bocca su Telegram', 
     }
   }, 30_000);
 
-  it('è un cancello e non un muro: senza gateway la stessa chiamata riceve', async () => {
+  it('ADR-0103: senza gateway e senza hatch non parte nessun polling (send-only)', async () => {
     const provider = await startFakeProvider({ main: [{ text: 'irrilevante' }] });
     const bot = await fintoBotApi();
     const home = casa(bot.baseUrl, provider.baseUrl);
+    const prev = process.env.MUFFIN_EXEC_LOCAL;
+    delete process.env.MUFFIN_EXEC_LOCAL;
+    try {
+      const runtime = buildRuntime(home, home);
+      // Nessuna claim: il lucchetto non e' mai stato preso su questa home.
+      const surfaces = connectSurfaces(
+        runtime,
+        home,
+        new ModelLane(),
+        () => {},
+        undefined,
+        () => {},
+        surfaceStandDown(runtime.db, () => {}, false),
+      );
+      try {
+        await attendi(600);
+      } finally {
+        surfaces.stop();
+      }
+      // Niente getUpdates: gli update restano lato server (ritardo, non
+      // perdita). Ma la bocca resta registrata: mandare funziona.
+      expect(bot.getUpdates).toBe(0);
+      expect(surfaces.lines).toContain('telegram: connessa (owner 7)');
+      expect(surfaces.lines.some((l) => l.includes('solo invio'))).toBe(true);
+      const esito = await surfaces.registry.deliver('telegram', 'consegna send-only');
+      expect(esito.delivered).toBe(true);
+      expect(bot.inviati).toContain('consegna send-only');
+    } finally {
+      if (prev === undefined) delete process.env.MUFFIN_EXEC_LOCAL;
+      else process.env.MUFFIN_EXEC_LOCAL = prev;
+      await bot.close();
+      await provider.close();
+    }
+  }, 30_000);
+
+  it('hatch: senza gateway ma con MUFFIN_EXEC_LOCAL=1 la stessa chiamata riceve', async () => {
+    const provider = await startFakeProvider({ main: [{ text: 'irrilevante' }] });
+    const bot = await fintoBotApi();
+    const home = casa(bot.baseUrl, provider.baseUrl);
+    const prev = process.env.MUFFIN_EXEC_LOCAL;
+    process.env.MUFFIN_EXEC_LOCAL = '1';
     try {
       const runtime = buildRuntime(home, home);
       // Nessuna claim: il lucchetto non e' mai stato preso su questa home.
@@ -179,6 +220,8 @@ describe('con un gateway vivo, il REPL non apre una seconda bocca su Telegram', 
       expect(bot.getUpdates).toBeGreaterThan(0);
       expect(surfaces.lines).toContain('telegram: connessa (owner 7)');
     } finally {
+      if (prev === undefined) delete process.env.MUFFIN_EXEC_LOCAL;
+      else process.env.MUFFIN_EXEC_LOCAL = prev;
       await bot.close();
       await provider.close();
     }
