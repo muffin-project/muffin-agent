@@ -5,6 +5,7 @@ import type {
   ContinuableReason,
   TurnOutcome,
   TurnRecord,
+  TurnStore,
 } from '../../core/turns/store.js';
 import type { TodoItem } from '../../core/turns/todo.js';
 import { encodeWaitFor, type WaitSpec } from '../../core/turns/wait.js';
@@ -529,6 +530,71 @@ function continuableText(
 }
 
 /**
+ * Lease classes that mean "the provider was too slow", as opposed to a wall,
+ * a transport error or an empty response. `active_model_budget` counts: under
+ * default budgets a slow call dies at 120s of active model time, never
+ * reaching any higher per-call ceiling — excluding it is what made the
+ * breaker dead code for exactly its target rows. `turn_deadline` is excluded
+ * deliberately: the wall is per-lease fresh, and the 120s active budget fires
+ * first, so a zero-progress wall death is unreachable under defaults; if it
+ * ever arrives it carries its own attempts evidence. Rate limits, crashes and
+ * empty responses never extend the streak: they may clear on retry, a
+ * provider that cannot answer 56k resumed tokens in time will not answer
+ * them in the next lease either.
+ */
+const DEAD_LEASE_CLASSES: readonly ContinuableClass[] = [
+  'model_deadline',
+  'model_stall',
+  'active_model_budget',
+];
+
+/**
+ * Consecutive dead leases behind the release being written, counted from the
+ * durable lease audit — never from the row's previous reason, which the grant
+ * clears (so a reason-carried count could never exceed 1 in production).
+ *
+ * Walks closed leases newest-first: only `model_deadline`, `model_stall` and
+ * `active_model_budget` extend the streak, and any lease with tool calls
+ * (progress happened, however slowly) ends it. The dying lease counts iff it
+ * is itself dead-classed with zero calls this lease. Transport errors, rate
+ * limits, empty responses and wall deaths never extend it: they may clear on
+ * retry, and the 120s active budget fires before any wall under defaults.
+ * (`turn_deadline` exclusion, reasoned: per-lease fresh wall + active binding
+ * first = zero-progress wall death unreachable on defaults.)
+ */
+export function deadStreakForRelease(
+  turns: Pick<TurnStore, 'leasesFor'>,
+  turnId: string,
+  failureClass: ContinuableClass,
+  currentLeaseToolCalls: number,
+): number {
+  if (!DEAD_LEASE_CLASSES.includes(failureClass)) return 0;
+  if (currentLeaseToolCalls > 0) return 0;
+  let streak = 1;
+  const closed = turns
+    .leasesFor(turnId)
+    .filter((lease) => lease.endedAt !== null)
+    .sort((a, b) => b.leaseIndex - a.leaseIndex);
+  for (const lease of closed) {
+    if (lease.outcome === null || !DEAD_LEASE_CLASSES.includes(lease.outcome as ContinuableClass))
+      break;
+    if ((lease.counters?.toolCallsMade ?? 0) > 0) break;
+    streak += 1;
+  }
+  return streak;
+}
+
+function deadStreakUpdate(
+  turns: Pick<TurnStore, 'leasesFor'>,
+  turnId: string,
+  failureClass: ContinuableClass,
+  currentLeaseToolCalls: number,
+): { deadStreak?: number } {
+  const streak = deadStreakForRelease(turns, turnId, failureClass, currentLeaseToolCalls);
+  return streak > 0 ? { deadStreak: streak } : {};
+}
+
+/**
  * End the execution lease, keep the work (P0-B).
  *
  * The counterpart to `finish` for recoverable endings: releases the row as
@@ -555,6 +621,7 @@ export function releaseContinuable(
     class: failureClass,
     lease: record.leaseIndex,
     ...(attempts > 0 ? { attempts } : {}),
+    ...deadStreakUpdate(deps.turns, record.id, failureClass, run.toolCallsMade),
     ...(run.providerFailureRequestIds.length > 0
       ? { requestIds: [...run.providerFailureRequestIds] }
       : {}),
