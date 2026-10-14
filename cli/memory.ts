@@ -141,6 +141,7 @@ export async function cmdMemorySearch(
     }
     const lines = result.items.map((item) => {
       const marks = [
+        item.origin === 'inferred' ? 'dedotto — non detto' : '',
         item.expired ? 'RITIRATO' : '',
         item.neighbourOf === undefined ? '' : `intorno a #${item.neighbourOf}`,
         item.validFrom || item.validTo

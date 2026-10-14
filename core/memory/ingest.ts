@@ -6,7 +6,7 @@ import { ATTR } from '../tracing/types.js';
 import { extractFacts } from './extract.js';
 import { speakerAttributedContent } from './authorship.js';
 import { describeFailureReason, judgeContradiction, type JudgeOutcome } from './judge.js';
-import type { ProposalStatus } from './proposals.js';
+import { originForProducer, type ProposalStatus } from './proposals.js';
 import { EXTRACTION_VERSION, type FactOrigin } from './schema.js';
 import type { Fact, MemoryStore } from './store.js';
 
@@ -42,31 +42,6 @@ export const CONSOLIDATION_PRINCIPAL = {
   kind: 'system',
   source: 'consolidation',
 } as const satisfies Principal;
-
-/**
- * Identity predicates that pin themselves at the moment they are recorded,
- * with no judgment call left to the extractor. Small and hardcoded on
- * purpose, the same shape as `schema.ts`'s `DEFAULT_FUNCTIONAL_PREDICATES`:
- * grown by audit, never guessed at, because every predicate added here pins
- * itself into every future turn forever. These two are the exact predicates
- * the real dogfood database had recorded for the owner's identity before this
- * column existed (migration 3's own backfill targets the same pair).
- */
-const BOOTSTRAP_IDENTITY_PREDICATES = new Set(['works_as', 'created']);
-
-/**
- * Whether `subject` is the extraction pipeline's own name for the person on
- * the other end of the conversation — not a guess: `speakerName` below hands
- * the extractor literally `'owner'` for every user-role episode, and
- * `extract.ts`'s SYSTEM prompt (rule 5's own worked example) instructs it to
- * use that same literal word as `subject` for a first-person fact. A fact
- * whose `subject` is that word is therefore about the owner by construction
- * of this pipeline's contract, on any tenant, not by matching this
- * install's real name into the source.
- */
-function isOwnerSubject(subject: string): boolean {
-  return subject.trim().toLowerCase() === 'owner';
-}
 
 export type IngestDeps = {
   store: MemoryStore;
@@ -609,11 +584,9 @@ async function reconcile(
 ): Promise<'added' | 'skipped'> {
   const existing = deps.store.activeFacts(tenantId, subjectId, fact.predicate);
 
-  // Everything this pipeline produces is `said` by construction: rule 2 of
-  // the extraction prompt forbids inference, so a fact reaching here is
-  // always something someone actually stated. The `inferred` producer is
-  // the observing spine (MVP #5) — declared deferred, not forgotten, and
-  // the hedging path it will feed is already tested from the store side.
+  // The episode records what was said; the tuple is the model's interpretation.
+  // A prompt asking for literal extraction cannot establish owner assertion or
+  // justify unconditional profile promotion. Preserve source trust separately.
   const incoming: IncomingCandidate = {
     subject: fact.subject,
     predicate: fact.predicate,
@@ -621,21 +594,10 @@ async function reconcile(
     validFrom: fact.validFrom,
     confidence: fact.confidence,
     importance: fact.importance,
-    // Never derived from confidence, and never allowed to raise it: intensity
-    // changes how accurate a memory feels, not how accurate it is.
-    //
-    // The extractor's own strict-vocabulary request, OR the small bootstrap
-    // rule: a fact about the owner (by this pipeline's own subject-naming
-    // convention, see `isOwnerSubject`) on one of the two identity
-    // predicates the real install had already recorded before this column
-    // existed. Either way this is only a *request* — `addFact`'s own gate
-    // is what actually decides, from `episode.trustTier`/`origin` here, not
-    // from anything this module claims.
-    pinnedRequest:
-      fact.pinned || (isOwnerSubject(fact.subject) && BOOTSTRAP_IDENTITY_PREDICATES.has(fact.predicate)),
+    pinnedRequest: false,
     // Provenance travels: a fact can never be more trusted than where it came from.
     trustTier: episode.trustTier,
-    origin: 'said',
+    origin: originForProducer('extraction'),
     episodeId: episode.id,
   };
 
@@ -697,7 +659,6 @@ async function reconcile(
     parent,
   );
   commitCandidateDecision(deps.store, tenantId, subjectId, incoming, candidate, decision, {
-    episodeTrustTier: episode.trustTier,
     now,
     report,
   });
@@ -787,7 +748,7 @@ function commitCandidateDecision(
   incoming: IncomingCandidate,
   candidate: Fact,
   decision: CandidateDecision,
-  opts: { episodeTrustTier: 0 | 1 | 2 | 3; now: Date; report: IngestReport },
+  opts: { now: Date; report: IngestReport },
 ): { factId: number; category: 'accepted' | 'superseded' | 'review'; detail: string | null } {
   const { now, report } = opts;
 
@@ -883,16 +844,13 @@ function commitCandidateDecision(
     });
   }
 
-  // Pin follows the *current* belief, not a specific row — a pinned fact
-  // superseded here would otherwise vanish from every future turn's
-  // unconditional core the moment the owner corrects it (a new name, a new
-  // stated preference), which is the opposite of what pinning that belief
-  // meant. Gated on this episode's own trust tier, same as `addFact`'s gate:
-  // a low-trust message that talks the judge into a supersede must not be
-  // able to ride the old fact's pin onto the new one — `candidate.pinned`
-  // says the *old* value was owner-said, it says nothing about this one.
+  // An owner-authored successor may retain the old pin. The old row's pin
+  // does not establish the new tuple's assertion or trust: apply the same
+  // incoming provenance conditions as addFact, including on judge supersedes.
   const carryPin = (): void => {
-    if (candidate.pinned === 1 && opts.episodeTrustTier === 0) store.setPinned(tenantId, newId, true);
+    if (candidate.pinned === 1 && incoming.trustTier === 0 && incoming.origin === 'said') {
+      store.setPinned(tenantId, newId, true);
+    }
   };
 
   switch (verdict.verdict) {
@@ -1188,7 +1146,6 @@ export async function reconcileProposalLocked(
       committed.candidate,
       decision,
       {
-        episodeTrustTier: finalIncoming.trustTier,
         now,
         report: rep,
       },

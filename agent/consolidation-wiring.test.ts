@@ -216,7 +216,7 @@ describe('consolidation starts by itself', () => {
       }),
     );
     h.store.markExtracted('host', evidenceIds, EXTRACTION_VERSION);
-    evidenceIds.forEach((episodeId, i) =>
+    evidenceIds.forEach((episodeId, i) => {
       proposeMemoryRecord(h.store, {
         tenantId: 'host',
         subject: 'owner',
@@ -227,8 +227,8 @@ describe('consolidation starts by itself', () => {
         sourceEpisodeIds: [episodeId],
         content: `inference ${i}`,
         confidence: 0.9,
-      }),
-    );
+      });
+    });
 
     // The production turn-end seam arms consolidation. Its one ingress episode
     // is a short page; the 21 already-evidenced proposals cross their own page
@@ -458,6 +458,50 @@ describe('buildRuntime wires it', () => {
     runInit({ home, apiKey: 'sk-never-called' });
     return home;
   };
+
+  it('keeps an idle extractor interpretation out of the unconditional owner profile', async () => {
+    const runtime = buildRuntime(freshHome(), mkdtempSync(join(tmpdir(), 'muffin-cons-ws-')));
+    const source = 'Inspect the tool catalog. I am not stating any profession here.';
+    const extracted = vi.spyOn(runtime.light.provider, 'chat').mockResolvedValueOnce(
+      extraction([
+        {
+          subject: 'owner',
+          subjectKind: 'person',
+          predicate: 'works_as',
+          object: 'Synthetic accountant',
+          validFrom: null,
+          confidence: 0.99,
+          matters: true,
+          charged: false,
+          pinned: true,
+        },
+      ]),
+    );
+    try {
+      await runTurn(
+        { ...runtime.deps, provider: new Scripted([reply('ok')]) },
+        {
+          principal: owner,
+          tenant: 'host',
+          surface: 'cli',
+          session: runtime.deps.sessions.open('extraction-provenance'),
+          text: source,
+        },
+      );
+      expect(runtime.consolidation.isArmed()).toBe(true);
+      await vi.advanceTimersByTimeAsync(CONSOLIDATION_IDLE_MS);
+      await runtime.consolidation.settled();
+      expect(extracted).toHaveBeenCalledTimes(1);
+      const subject = runtime.memory.store.findEntity('host', 'owner')!;
+      const fact = runtime.memory.store.activeFacts('host', subject, 'works_as')[0]!;
+      expect(fact).toMatchObject({ origin: 'inferred', pinned: 0, trustTier: 0 });
+      expect(runtime.memory.store.episodeById('host', fact.episodeId)?.content).toBe(source);
+      expect(runtime.memory.store.pinnedFacts('host')).toEqual([]);
+    } finally {
+      runtime.close();
+      extracted.mockRestore();
+    }
+  });
 
   it('arms the real consolidator from a real turn on the real runtime', async () => {
     const runtime = buildRuntime(freshHome(), mkdtempSync(join(tmpdir(), 'muffin-cons-ws-')));
