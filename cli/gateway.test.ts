@@ -192,6 +192,16 @@ describe('muffin gateway status', () => {
   });
 });
 
+describe('gateway-first fail closed (ADR-0103)', () => {
+  it('run senza gateway e senza hatch rifiuta con rimedio, senza eseguire', () => {
+    const r = muffin(home(), ['run', 'dimmi qualcosa'], '', { MUFFIN_EXEC_LOCAL: '' });
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('non eseguo:');
+    expect(r.err).toContain('muffin gateway install');
+    expect(r.out).not.toContain('dimmi qualcosa');
+  });
+});
+
 describe('two schedulers must never run', () => {
   it('the REPL keeps the ticker behind the test hatch when nothing else owns it', () => {
     // The control. Without it the next test passes on a REPL that never
