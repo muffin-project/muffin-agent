@@ -89,44 +89,127 @@ describe('the registered shell write tool contains Git hooks through the product
   const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
 
   it.runIf(productionSandboxAvailable)(
+    'the registered read shell reads its workspace and refuses a sibling file',
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), 'muffin-wiring-shell-read-'));
+      const home = join(root, 'home');
+      const workspace = join(root, 'workspace');
+      const outside = join(root, 'outside');
+      mkdirSync(workspace, { recursive: true });
+      mkdirSync(outside, { recursive: true });
+      const workspaceFile = join(workspace, 'notes.txt');
+      const workspaceEnv = join(workspace, '.env');
+      const outsideFile = join(outside, 'private.txt');
+      writeFileSync(workspaceFile, 'AUTHORIZED_WORKSPACE_MARKER');
+      writeFileSync(workspaceEnv, 'WORKSPACE_ENV_PRIVATE_MARKER');
+      writeFileSync(outsideFile, 'OUTSIDE_PRIVATE_MARKER');
+      symlinkSync(outside, join(workspace, 'sibling-link'));
+      runInit({ home, apiKey: 'sk-never-called' });
+
+      const runtime = buildRuntime(home, workspace);
+      try {
+        expect(runtime.deps.tools.some((tool) => tool.spec.name === 'shell_run')).toBe(true);
+        const provider = new Scripted([{
+          text: null,
+          toolCalls: [{
+            id: 'shell-read-scope-1',
+            name: 'shell_run',
+            args: {
+              command:
+                'cat notes.txt && ' +
+                `if cat '${outsideFile}' >/dev/null 2>&1; then echo OUTSIDE_READ; ` +
+                `else echo OUTSIDE_DENIED; fi && ` +
+                'if cat sibling-link/private.txt >/dev/null 2>&1; then echo SYMLINK_READ; ' +
+                'else echo SYMLINK_DENIED; fi && ' +
+                'if cat .env >/dev/null 2>&1; then echo ENV_READ; else echo ENV_DENIED; fi',
+              description: 'Controllare le note di progetto senza leggere file esterni.',
+            },
+          }],
+          stopReason: 'tool_use',
+          usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          model: 't',
+        }]);
+        const deps: LoopDeps = {
+          ...runtime.deps,
+          provider,
+          approve: async () => 'allow',
+        };
+
+        await runTurn(deps, {
+          principal: owner,
+          tenant: 'host',
+          surface: 'cli',
+          session: deps.sessions.open('shell-read-scope-1'),
+          text: 'Leggi le note del progetto.',
+        });
+
+        const toolResults = provider.calls
+          .flatMap((call) => call.messages)
+          .flatMap((message) => message.content)
+          .filter((block) => block.type === 'tool_result')
+          .map((block) => block.content)
+          .join('\n');
+        expect(toolResults).toContain('AUTHORIZED_WORKSPACE_MARKER');
+        expect(toolResults).toContain('OUTSIDE_DENIED');
+        expect(toolResults).toContain('SYMLINK_DENIED');
+        expect(toolResults).toContain('ENV_DENIED');
+        expect(toolResults).not.toContain('OUTSIDE_PRIVATE_MARKER');
+        expect(toolResults).not.toContain('WORKSPACE_ENV_PRIVATE_MARKER');
+      } finally {
+        runtime.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(productionSandboxAvailable)(
     'one real turn keeps ordinary writes and nested Git tracking while denying new nested and top-level hooks',
     async () => {
       const home = homeAllowing('ok.example.com');
       const workspace = mkdtempSync(join(tmpdir(), 'muffin-wiring-shell-hooks-'));
-      const template = join(workspace, 'empty-template');
-      mkdirSync(join(template, 'hooks'), { recursive: true });
+      const sampleTemplate = join(workspace, 'sample-template');
+      mkdirSync(join(sampleTemplate, 'hooks'), { recursive: true });
+      writeFileSync(join(sampleTemplate, 'hooks', 'pre-commit.sample'), 'sample\n');
       // The root repository exists before the shell call, so the existing
       // concrete deny path protects its hook directory. The nested repository
       // is created by the model's one compound command and must be protected
       // by the host-level hook policy instead. The pre-existing symlinked
       // repository is staged host-side (creating it through the door is what
       // the link rule forbids); the scan resolves it to a concrete target.
-      execFileSync('git', ['init', '--quiet', `--template=${template}`, workspace], {
+      const gitEnv = {
+        ...process.env,
+        GIT_CONFIG_GLOBAL: '/dev/null',
+        GIT_CONFIG_NOSYSTEM: '1',
+      };
+      execFileSync('git', ['init', '--quiet', `--template=${sampleTemplate}`, workspace], {
         stdio: 'pipe',
+        env: gitEnv,
       });
-      execFileSync('git', ['init', '--quiet', 'pre'], { cwd: workspace, stdio: 'pipe' });
+      execFileSync('git', ['init', '--quiet', `--template=${sampleTemplate}`, 'pre'], {
+        cwd: workspace,
+        stdio: 'pipe',
+        env: gitEnv,
+      });
       mkdirSync(join(workspace, 'pre-resolved'), { recursive: true });
       writeFileSync(join(workspace, 'pre-resolved', 'pre-commit'), 'planted\n');
       rmSync(join(workspace, 'pre', '.git', 'hooks'), { recursive: true, force: true });
       symlinkSync(join('..', 'pre-resolved'), join(workspace, 'pre', '.git', 'hooks'));
 
       const nestedInit =
-        process.platform === 'darwin'
-          ? 'git init --quiet --template=empty-template nested'
-          : 'git init --quiet nested';
+        'git init --quiet --template=sample-template nested';
       const aliasInit =
-        process.platform === 'darwin'
-          ? 'git init --quiet --template=empty-template alias2'
-          : 'git init --quiet alias2';
+        'git init --quiet --template=sample-template alias2';
       const command = [
         'mkdir -p ordinary',
         'printf ordinary > ordinary/file.txt',
         'printf evil > ordinary/evil',
         'printf evil2 > ordinary/evil2',
         nestedInit,
+        'test -f nested/.git/hooks/pre-commit.sample',
         'printf tracked > nested/tracked.txt',
         'git -C nested add tracked.txt',
         aliasInit,
+        'test -f alias2/.git/hooks/pre-commit.sample',
         // Hardlink installs are refused on every platform; the symlink
         // replacement is attempted and recorded but gated on none (tripwire:
         // both platforms report writable today — see the leg docstring).
@@ -181,6 +264,12 @@ describe('the registered shell write tool contains Git hooks through the product
         expect(readFileSync(join(workspace, 'ordinary', 'file.txt'), 'utf8')).toBe('ordinary');
         expect(readFileSync(join(workspace, 'nested', 'tracked.txt'), 'utf8')).toBe('tracked');
         expect(readFileSync(join(workspace, 'nested', '.git', 'index'))).toBeTruthy();
+        expect(
+          existsSync(join(workspace, 'nested', '.git', 'hooks', 'pre-commit.sample')),
+        ).toBe(true);
+        expect(existsSync(join(workspace, '.git', 'hooks', 'pre-commit.sample'))).toBe(
+          true,
+        );
         expect(readFileSync(join(workspace, 'nested-hook-result.txt'), 'utf8')).toBe('denied');
         expect(readFileSync(join(workspace, 'nested-fsmonitor-result.txt'), 'utf8')).toBe('denied');
         expect(readFileSync(join(workspace, 'hardlink-result.txt'), 'utf8')).toBe('denied');

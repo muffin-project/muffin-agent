@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -117,7 +117,12 @@ const PWNED = 'pwned\n';
  * is the target of one test only.
  */
 function scaffold(): { home: string; workspace: string; file: (rel: string) => string } {
-  const base = mkdtempSync(join(tmpdir(), 'muffin-home-ws-'));
+  // Canonical spelling: under a filesystem-root deny, Seatbelt cannot traverse
+  // symlinked path components (`/tmp` → `/private/tmp`) no matter which
+  // spellings the grants carry — the request path itself must be canonical.
+  // Production workspaces live under symlink-free Homes; only tmpdir()-built
+  // fixtures need this.
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'muffin-home-ws-')));
   const home = join(base, '.muffin');
   const workspace = join(base, 'muffin-workspace');
   for (const dir of [join(home, 'rot'), join(home, 'sessions'), join(home, 'secrets'), join(home, 'profiles'), workspace]) {

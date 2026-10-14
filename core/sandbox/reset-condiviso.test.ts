@@ -55,6 +55,14 @@ const denyReadOf = (customConfig: Partial<SandboxRuntimeConfig> | undefined): re
   customConfig?.filesystem?.denyRead ?? [];
 
 /**
+ * SRT nega per percorso, non in blocco: una deny-list con la sola radice del
+ * filesystem (il default di `readDenyPaths`, sempre presente) lascia girare
+ * le gambe — a rifiutare tutto serve una voce concreta oltre la radice.
+ */
+const refusesAll = (customConfig: Partial<SandboxRuntimeConfig> | undefined): boolean =>
+  denyReadOf(customConfig).filter((p) => p !== '/' && !/^[A-Za-z]:\\$/.test(p)).length > 0;
+
+/**
  * Contenimento che regge: la gamba con deny rifiuta, quella di controllo
  * passa, e la gamba AF_UNIX riceve il rifiuto che il vero `apply-seccomp`
  * produce (`EPERM` da `socket(AF_UNIX, …)`). Il mock non esegue bwrap: senza
@@ -73,7 +81,7 @@ const denyReadOf = (customConfig: Partial<SandboxRuntimeConfig> | undefined): re
 function contieneDavvero(): void {
   wrapWithSandboxArgv.mockImplementation(async (command, _binShell, customConfig) => ({
     argv:
-      denyReadOf(customConfig).length > 0
+      refusesAll(customConfig)
         ? ['/bin/sh', '-c', 'exit 1']
         : command.includes('muffin sandbox nested-hook self-test')
           ? [
@@ -97,7 +105,7 @@ function contieneDavvero(): void {
 }
 
 async function esecutoreVivo(): Promise<SandboxExecutor> {
-  const e = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+  const e = new SandboxExecutor({ readScope: [], denyWrite: [], denyRead: [] }, available);
   const stato = await e.verify();
   expect(stato.available).toBe(true);
   return e;

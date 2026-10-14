@@ -25,7 +25,7 @@ const CMD = 'true'; // does nothing — we are timing the wrapper, not the work
 
 async function main(): Promise<void> {
   const workspace = mkdtempSync(join(tmpdir(), 'muffin-overhead-'));
-  const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] });
+  const executor = new SandboxExecutor({ readScope: [workspace], denyWrite: [], denyRead: [] });
 
   const status = executor.status();
   if (!status.available) {

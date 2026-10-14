@@ -467,7 +467,7 @@ async function cmdInit(argv: string[]): Promise<number> {
   // green and the real invocation still could not mount `/proc`. Headless is
   // untouched: nothing here prints or blocks off a TTY.
   if (process.stdin.isTTY) {
-    const sandboxExecutor = new SandboxExecutor({ denyWrite: [], denyRead: [] });
+    const sandboxExecutor = new SandboxExecutor({ readScope: [], denyWrite: [], denyRead: [] });
     process.stderr.write(describeSandboxProbe(await sandboxExecutor.verify()));
     await sandboxExecutor.close();
     process.stderr.write(describeSupervisor(process.platform));

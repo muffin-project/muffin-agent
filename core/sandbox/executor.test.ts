@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir, platform } from 'node:os';
 import { join } from 'node:path';
@@ -62,11 +62,12 @@ function scaffold() {
   const outside = join(base, 'outside');
   const guarded = join(base, 'guarded'); // stands in for ~/.muffin/rot
   const secrets = join(base, 'secrets');
+  const workspaceSecret = join(workspace, '.env');
   for (const d of [workspace, outside, guarded, secrets]) mkdirSync(d, { recursive: true });
   writeFileSync(join(guarded, 'manifest.json'), '{"probe": true}');
   writeFileSync(join(secrets, 'llm_api_key'), 'sk-live-do-not-read');
   writeFileSync(join(outside, 'diary.txt'), 'OUTSIDE_MARKER');
-  return { base, workspace, outside, guarded, secrets };
+  return { base, workspace, outside, guarded, secrets, workspaceSecret };
 }
 
 describe('the containment suite declares whether it ran', () => {
@@ -95,8 +96,9 @@ describe('the containment suite declares whether it ran', () => {
 describe.runIf(gate.run)(`sandboxed execution holds (real containment — ${gate.why})`, () => {
   const s = scaffold();
   const executor = new SandboxExecutor({
+    readScope: [s.workspace],
     denyWrite: [s.guarded, s.secrets],
-    denyRead: [s.secrets],
+    denyRead: [s.secrets, s.workspaceSecret],
   });
 
   afterAll(async () => {
@@ -158,27 +160,40 @@ describe.runIf(gate.run)(`sandboxed execution holds (real containment — ${gate
     expect(r.stdout).not.toContain('sk-live');
   });
 
-  /**
-   * The limit, asserted rather than assumed. `filesystem.allowWrite` is a
-   * *write* scope: ADR-0018 says "fs write-scope ristretto al workspace del
-   * turno", and reads stay open except for the mandatory deny-read paths.
-   * Measured on macOS 2026-08-15 with this executor: a contained command reads
-   * `/etc/hosts`, `$HOME`, and any file outside the scope.
-   *
-   * It is pinned here because it is the kind of limit that gets misremembered
-   * as a guarantee — "the sandbox confines the command to the workspace" is
-   * true of writes and false of reads, and `~/.muffin/muffin.db` is readable by
-   * a contained command today. If this line ever goes red, someone tightened
-   * reads: that is a good change, and it should be a deliberate one.
-   */
-  it('the write scope is a write scope — reads outside it are NOT contained (declared limit)', async () => {
-    const r = await executor.run({
+  it('reads the trusted workspace but cannot read a sibling outside it', async () => {
+    const workspaceFile = join(s.workspace, 'project.txt');
+    writeFileSync(workspaceFile, 'WORKSPACE_MARKER');
+    symlinkSync(s.outside, join(s.workspace, 'outside-link'));
+    const allowed = await executor.runReadOnly({
+      command: 'cat project.txt',
+      cwd: s.workspace,
+    });
+    expect(allowed.code).toBe(0);
+    expect(allowed.stdout).toContain('WORKSPACE_MARKER');
+
+    const outside = await executor.runReadOnly({
       command: `cat '${join(s.outside, 'diary.txt')}'`,
       cwd: s.workspace,
-      writeScope: [s.workspace],
     });
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain('OUTSIDE_MARKER');
+    expect(outside.code).not.toBe(0);
+    expect(outside.stdout).not.toContain('OUTSIDE_MARKER');
+
+    const throughLink = await executor.runReadOnly({
+      command: 'cat outside-link/diary.txt',
+      cwd: s.workspace,
+    });
+    expect(throughLink.code).not.toBe(0);
+    expect(throughLink.stdout).not.toContain('OUTSIDE_MARKER');
+  });
+
+  it('an explicit secret deny still wins inside the trusted workspace', async () => {
+    writeFileSync(s.workspaceSecret, 'WORKSPACE_SECRET_MARKER');
+    const r = await executor.runReadOnly({
+      command: 'cat .env',
+      cwd: s.workspace,
+    });
+    expect(r.code).not.toBe(0);
+    expect(r.stdout).not.toContain('WORKSPACE_SECRET_MARKER');
   });
 
   it('a host-env secret does not ride into the child environment', async () => {
@@ -300,14 +315,12 @@ describe.runIf(gate.run)(`sandboxed execution holds (real containment — ${gate
   }, 20_000);
 
   it('creates nested repositories and ordinary tracked files in one write-shell call', async () => {
-    const initNested =
-      platform() === 'darwin'
-        ? 'mkdir -p empty-template/hooks && git init --quiet --template=empty-template nested'
-        : 'git init --quiet nested';
     const r = await executor.run({
       command:
-        'mkdir -p ordinary && printf ordinary > ordinary/file.txt && ' +
-        initNested + ' && printf tracked > nested/tracked.txt && ' +
+        'mkdir -p ordinary template/hooks && printf sample > template/hooks/pre-commit.sample && ' +
+        'printf ordinary > ordinary/file.txt && ' +
+        'git init --quiet --template=template nested && ' +
+        'printf tracked > nested/tracked.txt && ' +
         'git -C nested add tracked.txt',
       cwd: s.workspace,
       writeScope: [s.workspace],
@@ -318,16 +331,18 @@ describe.runIf(gate.run)(`sandboxed execution holds (real containment — ${gate
     expect(readFileSync(join(s.workspace, 'ordinary', 'file.txt'), 'utf8')).toBe('ordinary');
     expect(readFileSync(join(s.workspace, 'nested', 'tracked.txt'), 'utf8')).toBe('tracked');
     expect(existsSync(join(s.workspace, 'nested', '.git', 'index'))).toBe(true);
+    expect(existsSync(join(s.workspace, 'nested', '.git', 'hooks', 'pre-commit.sample'))).toBe(
+      true,
+    );
   }, 20_000);
 
   it('refuses a hook created in a nested repository during the same write-shell call', async () => {
     const hookPath = join(s.workspace, 'created-now', '.git', 'hooks', 'pre-commit');
-    const initNested =
-      platform() === 'darwin'
-        ? 'mkdir -p empty-template/hooks && git init --quiet --template=empty-template created-now'
-        : 'git init --quiet created-now';
     const r = await executor.run({
-      command: initNested + ' && mkdir -p created-now/.git/hooks && ' +
+      command:
+        'mkdir -p template/hooks && printf sample > template/hooks/pre-commit.sample && ' +
+        'git init --quiet --template=template created-now && ' +
+        'mkdir -p created-now/.git/hooks && ' +
         'if printf hook > created-now/.git/hooks/pre-commit; then echo WRITABLE; ' +
         'else echo DENIED; fi',
       cwd: s.workspace,
@@ -339,17 +354,19 @@ describe.runIf(gate.run)(`sandboxed execution holds (real containment — ${gate
     expect(r.stdout).toContain('DENIED');
     expect(r.stdout).not.toContain('WRITABLE');
     expect(existsSync(join(s.workspace, 'created-now', '.git', 'HEAD'))).toBe(true);
+    expect(existsSync(join(s.workspace, 'created-now', '.git', 'hooks', 'pre-commit.sample'))).toBe(
+      true,
+    );
     expect(existsSync(hookPath)).toBe(false);
   }, 20_000);
 
   it('refuses a top-level hook created in the same write-shell call', async () => {
     const hookPath = join(s.workspace, '.git', 'hooks', 'pre-commit');
-    const initTopLevel =
-      platform() === 'darwin'
-        ? 'mkdir -p empty-template/hooks && git init --quiet --template=empty-template .'
-        : 'git init --quiet .';
     const r = await executor.run({
-      command: initTopLevel + ' && mkdir -p .git/hooks && ' +
+      command:
+        'mkdir -p template/hooks && printf sample > template/hooks/pre-commit.sample && ' +
+        'git init --quiet --template=template . && ' +
+        'mkdir -p .git/hooks && ' +
         'if printf hook > .git/hooks/pre-commit; then echo WRITABLE; ' +
         'else echo DENIED; fi',
       cwd: s.workspace,
@@ -361,6 +378,9 @@ describe.runIf(gate.run)(`sandboxed execution holds (real containment — ${gate
     expect(r.stdout).toContain('DENIED');
     expect(r.stdout).not.toContain('WRITABLE');
     expect(existsSync(join(s.workspace, '.git', 'HEAD'))).toBe(true);
+    expect(existsSync(join(s.workspace, '.git', 'hooks', 'pre-commit.sample'))).toBe(
+      true,
+    );
     expect(existsSync(hookPath)).toBe(false);
   }, 20_000);
 
@@ -419,7 +439,7 @@ describe('when the sandbox is unavailable', () => {
     }) as const;
 
   it('run() refuses instead of running unsandboxed', async () => {
-    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, unavailable);
+    const executor = new SandboxExecutor({ readScope: [], denyWrite: [], denyRead: [] }, unavailable);
     await expect(
       executor.run({ command: 'true', cwd: tmpdir(), writeScope: [] }),
     ).rejects.toThrow(/sandbox unavailable/);
@@ -433,7 +453,7 @@ describe('when the sandbox is unavailable', () => {
   it('refusing means the command never ran, not that its output was discarded', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'muffin-exec-refuse-'));
     const witness = join(dir, 'it-ran.txt');
-    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, unavailable);
+    const executor = new SandboxExecutor({ readScope: [], denyWrite: [], denyRead: [] }, unavailable);
     await expect(
       executor.run({ command: `echo ran > '${witness}'`, cwd: dir, writeScope: [dir] }),
     ).rejects.toThrow(/sandbox unavailable/);
@@ -446,7 +466,7 @@ describe('when the sandbox is unavailable', () => {
    * is how a fixable host condition becomes a permanent missing capability.
    */
   it('the refusal carries the reason and the remedy', async () => {
-    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, unavailable);
+    const executor = new SandboxExecutor({ readScope: [], denyWrite: [], denyRead: [] }, unavailable);
     await expect(
       executor.run({ command: 'true', cwd: tmpdir(), writeScope: [] }),
     ).rejects.toThrow(/userns_denied.*fix the host/s);

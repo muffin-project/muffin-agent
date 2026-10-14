@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { connect } from 'node:net';
 import { platform, tmpdir } from 'node:os';
@@ -68,14 +68,17 @@ describe('il confine fra le due corsie dichiara se è stato provato', () => {
 });
 
 describe.runIf(gate.run)(`le due corsie contengono cose diverse (${gate.why})`, () => {
-  const base = mkdtempSync(join(tmpdir(), 'muffin-corsie-'));
+  // Seatbelt matches resolved vnodes: keep the test's absolute command paths
+  // on the same canonical spelling the executor grants, even when macOS
+  // returns a `/var/...` tmpdir alias for a `/private/var/...` directory.
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'muffin-corsie-')));
   const workspace = join(base, 'workspace');
   const secrets = join(base, 'secrets');
   mkdirSync(workspace, { recursive: true });
   mkdirSync(secrets, { recursive: true });
   writeFileSync(join(secrets, 'llm_api_key'), 'sk-live-do-not-read');
 
-  const executor = new SandboxExecutor({ denyWrite: [secrets], denyRead: [secrets] });
+  const executor = new SandboxExecutor({ readScope: [workspace], denyWrite: [secrets], denyRead: [secrets] });
 
   /**
    * Una porta TCP **viva** sul loopback dell'host, e non una porta chiusa.
@@ -252,14 +255,10 @@ describe.runIf(gate.run)(`le due corsie contengono cose diverse (${gate.why})`, 
       expect(r.code).not.toBe(0);
     });
 
-    it.fails('un file fuori dal workspace e fuori dalla deny-list non e leggibile (ESPOSIZIONE NOTA #645)', async () => {
-      // La corsia in sola lettura lega `--ro-bind / /`: tutto l'host è
-      // leggibile tranne la deny-list finita. Questo test documenta
-      // l'esposizione in eseguibile — oggi il canarino SI legge, quindi il
-      // test fallisce ed `it.fails` resta verde. Quando la superficie di
-      // lettura sarà allow-scoped (workspace + scratch + path di sistema
-      // espliciti), il canarino diventerà illeggibile, `it.fails` andrà rosso
-      // e andrà girato in `it` normale: quel rosso sarà la prova del fix.
+    it('un file fuori dal workspace e dalla deny-list esplicita resta illeggibile', async () => {
+      // Regression canary for the former whole-host read: this file is a
+      // sibling of the trusted workspace and is not named by denyRead. Removing
+      // the root deny or the session read grant makes one side of this test fail.
       const canarino = join(base, 'fuori-dal-workspace.txt');
       writeFileSync(canarino, 'CANARINO-FUORI-PERIMETRO-645\n');
       const r = await executor.runReadOnly({ command: `cat '${canarino}'`, cwd: workspace });
@@ -279,7 +278,7 @@ describe.runIf(gate.run)(`le due corsie contengono cose diverse (${gate.why})`, 
         cwd: workspace,
         writeScope: [workspace],
       });
-      expect(r.code).toBe(0);
+      expect(r.code, r.stderr || r.stdout).toBe(0);
       expect(existsSync(bersaglio)).toBe(true);
     });
 

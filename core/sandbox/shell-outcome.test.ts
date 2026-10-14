@@ -76,7 +76,7 @@ describe.runIf(gate.run)(`shell outcome integrity (real containment — ${gate.w
   const workspace = join(base, 'workspace');
   mkdirSync(workspace, { recursive: true });
 
-  const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] });
+  const executor = new SandboxExecutor({ readScope: [workspace], denyWrite: [], denyRead: [] });
 
   afterAll(async () => {
     await executor.close();

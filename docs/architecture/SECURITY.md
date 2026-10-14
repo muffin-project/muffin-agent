@@ -632,7 +632,7 @@ judgement about how dangerous commands are.
 
 `sys.shell` (`shell_run`) is the **read-only lane**: the whole host filesystem is
 readable minus a finite deny-read list (not just the project — §9.2 names what
-that costs; narrowing it to workspace + justified paths is #734, non-P0), writes are confined to a scratch directory this
+that costs; the narrowed-read proposal is still unratified), writes are confined to a scratch directory this
 process creates under the system temp dir and removes when the session ends, and
 direct IP networking is disabled. On Linux the AF_UNIX seccomp filter is
 requested and behaviorally verified (three-legged self-test: an unsandboxed
@@ -647,18 +647,17 @@ socket and pointer are additionally deny-listed, and the long-home fallback is
 covered by the composed Linux test (see §9.3). It declares `risk: 'high'`:
 although filesystem writes stay in scratch and direct IP networking is
 disabled, a contained command still reads a broad host filesystem and spends
-the host's resources.
-`risk` governs safe mode and the budget, not the ask. Since ADR-0091
-(2026-09-22, on the Linux measurement in §9.2 / issue #645), it also declares
-`reversible: 'no'`: what a command reads reaches the model and a disclosure
-cannot be taken back, so the kernel **asks the owner every time**, exactly as
-it does for the writing lane. It is also `rerunnable: false`: after a crash
+the host's resources. `risk` governs safe mode and the budget, not the ask.
+Since ADR-0091 (2026-09-22, on the Linux measurement in §9.2 / issue #645), it
+also declares `reversible: 'no'`: what a command reads reaches the model and a
+disclosure cannot be taken back, so the kernel **asks the owner every time**,
+exactly as it does for the writing lane. It is also `rerunnable: false`: after a crash
 without a recorded outcome, recovery reports “maybe done” instead of repeating
 a possible local-service mutation. The write-and-no-IP-network halves are tested
 against a live sandbox in `core/sandbox/confine-sola-lettura.test.ts`, on Linux
 under `bwrap` in the GitHub Actions `verifica` job and on macOS under seatbelt;
-the ask is the gate over the read half the sandbox cannot bound (pinned srt
-0.0.71 has no read allowlist — §9.2).
+the ask is the gate over the read half the sandbox cannot yet bound (pinned SRT
+0.0.71 has an allowlist API, but this proposal has not been accepted or installed).
 
 `sys.shell.write` (`shell_run_write`) is the **writing lane**: the workspace is
 its write scope, it keeps `reversible: 'no'` and `risk: 'high'`, and it asks
@@ -719,27 +718,33 @@ not consult it, and that is a separate decision from this split. The current
 state is asserted, not assumed: the same live containment test checks the
 writing lane cannot reach a listening host socket either.
 
-### 9.2 Shell read scope and sandbox patch posture (2026-09-21)
+### 9.2 Proposed shell read scope and sandbox patch posture (2026-10-08)
 
-Reads are allow-by-default: `--ro-bind / /` minus a finite `denyRead`.
-Applications, credential stores and private folders appear continuously, so the
-list protects known secrets without ever expressing "this turn may inspect the
-project, not the whole machine". Stdout reaches the model (fenced, `DISK_TIER`),
-so an injected `cat ~/…` discloses to the provider. Writes stay in scratch,
-direct IP networking is disabled, and on Linux `socket(AF_UNIX, …)` is refused
-by the verified seccomp filter as described above. The exposure is documented in
-executable form by an
-`it.fails` canary in `confine-sola-lettura.test.ts` that must be flipped to a
-plain assertion the day reads become allow-scoped. Measured on Linux
-2026-09-22 (evidence §5): a canary outside the workspace and outside the
-deny-list is readable through production `runReadOnly` — `~`, `/var/tmp` and
-host disk all in scope — while the deny itself holds. The gating half of the
-question closed the same day (ADR-0091): `sys.shell` is `reversible: 'no'` and
-asks the owner every time, so whole-host visibility is no longer an
-*unapproved* low-risk capability. The allow-scoped read surface (workspace,
-session scratch, explicit safe system paths) remains the preferred fix and is
-not constructible on pinned srt 0.0.71 — it has no read allowlist — so it
-stays a reversal condition of ADR-0091 rather than a silent default.
+The 2026-09-22 Linux measurement recorded the old behavior: reads were
+allow-by-default, and `runReadOnly` could return a canary from outside the
+workspace. That was a real disclosure path, not just a missing list entry.
+The pinned `@anthropic-ai/sandbox-runtime` 0.0.71 does expose
+`filesystem.allowRead`; its exact tagged API documents a workspace-only recipe.
+The current installed source still uses the finite deny list. The uncommitted
+candidate proposes a root read deny and re-opens the runtime's trusted
+workspace, session scratch, active Node runtime, configured executable paths,
+and OS/tool roots. `mandatoryGuards(home, workspace)` provides the workspace;
+the model can select only a working directory inside it. Each invocation
+repeats the root and secret denies because the SDK treats a per-call filesystem
+config as an override. `allowRead` stays session-level for Windows compatibility.
+This security-boundary proposal requires owner ratification before integration
+or installation.
+
+This allowlist does not mean “only project files”: system and executable roots
+are available so shell programs can run, and OS process state remains an
+explicit residual. The high-risk, non-rerunnable, ask-every-time policy is
+unchanged. Synthetic macOS probes and candidate-path tests are recorded in
+[`docs/evidence/shell-read-allowlist-2026-10-08.md`](../evidence/shell-read-allowlist-2026-10-08.md).
+The candidate was exercised through the production executor and a
+`buildRuntime` turn with a scripted provider on macOS. This is not a live-model
+dogfood result. Those probes do not establish Linux or Windows behavior; Linux
+CI must execute the new positive and negative runtime tests before the
+narrowed-read claim is treated as cross-platform verified.
 
 The September 2026 Bubblewrap symlink setup flaw (CVE-2026-87766) happens
 before anything runs, so no behavioral probe observes it, and Ubuntu reverted
@@ -781,17 +786,24 @@ not part of this profile: on nested or containerized hosts it breaks userns
 setup for every contained command (measured on hosted CI as `contain_failed`
 on all shell tests), so it waits for real-host validation as a separate
 follow-up. The hook-deny boundary does not depend on it. macOS Seatbelt's
-hook-path deny remains in force.
+mandatory hook glob is rooted at the gateway's `process.cwd()`, while a turn
+may use a different workspace. `SandboxExecutor` adds cwd-independent Seatbelt
+denies for each active Git hook filename to the per-call profile; it does not
+deny the whole hooks directory, so the default `*.sample` templates remain
+available in workspaces outside the gateway root. The SDK's existing broad
+deny still applies below its own process root; this change does not alter that
+behavior.
 
 Before shell execution, `SandboxExecutor` tests the real `SandboxManager` path
-with ordinary writes, nested `git init`/`git add`, every active hook name in
-a newly-created `nested/.git/hooks`, a hardlink install, a write through a
-pre-existing hooks symlink, and a rename into place. Linux uses Git's default
-templates, so `*.sample` files must remain writable; macOS uses an empty
-template because Seatbelt denies writes anywhere under the hook directory. If
-any gated hook install succeeds, the sandbox reports `git_hooks_unprotected`
-and refuses the caller's command. The production `shell_run_write` wiring test
-also checks `fsmonitor-watchmanv2` and the existing top-level hook deny.
+with ordinary writes, nested `git init`/`git add` using Git's default template,
+every active hook name in a newly-created `nested/.git/hooks`, a hardlink
+install, a write through a pre-existing hooks symlink, and a rename into place.
+Both platforms assert that Git's default `pre-commit.sample` remains present;
+Seatbelt denies only the active hook filenames added for the per-call workspace.
+If any gated hook install succeeds, the sandbox reports
+`git_hooks_unprotected` and refuses the caller's command. The production
+`shell_run_write` wiring test also checks `fsmonitor-watchmanv2` and the
+existing top-level hook deny.
 Ubuntu hosts without the matching profile therefore lose shell execution
 rather than silently running without this boundary. The pre-existing-symlink
 door is covered on both platforms by resolving the scanned hooks path to its

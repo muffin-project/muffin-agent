@@ -77,8 +77,9 @@ mutation checks. [Docker AppArmor documentation](https://docs.docker.com/engine/
 ## Evidence in the candidate
 
 - `core/sandbox/executor.test.ts` exercises ordinary writes, nested `git init`
-  and `git add`, a hook created in that same call, and the existing top-level
-  hook path using the real sandbox binary.
+  with the default Git template, `git add`, a hook created in that same call,
+  and the existing top-level hook path using the real sandbox binary. It
+  asserts that `pre-commit.sample` survives on both platforms.
 - `core/sandbox/executor.ts` adds a real `SandboxManager` self-test leg. It
   repeats the positive controls, prints the effective AppArmor label, then
   attempts every active hook name with no concrete hook path in `denyWrite`.
@@ -88,9 +89,10 @@ mutation checks. [Docker AppArmor documentation](https://docs.docker.com/engine/
   and asserts the typed failure prevents a caller command from running.
 - `agent/runtime-wiring.test.ts` drives the registered `shell_run_write`
   through `buildRuntime` and `runTurn`, then inspects the resulting ordinary
-  files, Git index, and absent nested `pre-commit`, `fsmonitor-watchmanv2`, and
-  top-level hook files. It also checks the tool result for the typed
-  containment failure so a rule-removal mutation fails for the exact reason.
+  files, Git index, present default `pre-commit.sample` templates, and absent
+  nested `pre-commit`, `fsmonitor-watchmanv2`, and top-level hook files. It also
+  checks the tool result for the typed containment failure so a rule-removal
+  mutation fails for the exact reason.
 - Both Linux CI profiles render the shared template. `verifica` then removes
   only the explicit hook rules, reloads AppArmor, and reruns the same
   production-runtime test. The mutation step requires the failure output to
@@ -138,6 +140,18 @@ Capability stripping for shell children remains a separate real-host
 follow-up, not part of #862. The exact-head Linux run must confirm the
 denied writes and the rule-removal mutation on this amended head before the
 bounded claim is accepted.
+
+Amendment 2026-10-08 (3): an initial macOS fix used the absolute glob
+`/**/.git/hooks/**/*`. Fresh review returned `ADJUST`: the glob also denied
+Git's default `.sample` files, and a real Seatbelt mutation reproduced
+`git init` failing while copying `commit-msg.sample`. The fix now derives one
+cwd-independent deny per active hook name from `ACTIVE_GIT_HOOK_NAMES`; sample
+templates stay writable. On the local native macOS runner, 31 executor/selftest
+cases and the registered `runTurn` → `shell_run_write` production test passed
+with real Seatbelt. Replacing the leaf patterns with the broad glob makes the
+default-template positive-control fail in the self-test with the exact
+`commit-msg.sample` denial. Removing the leaf rules remains covered by the
+existing `git_hooks_unprotected` mutation.
 
 This closes direct active hook filenames under a real `.git/hooks` directory.
 Git's `core.hooksPath`, a Git directory placed elsewhere, and symlink-based

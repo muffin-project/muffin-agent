@@ -64,10 +64,13 @@ const available = (): SandboxProbe => ({ available: true, mechanism: 'bubblewrap
 const denyReadOf = (customConfig: Partial<SandboxRuntimeConfig> | undefined): readonly string[] =>
   customConfig?.filesystem?.denyRead ?? [];
 
+const deniesSelfTestSentinel = (customConfig: Partial<SandboxRuntimeConfig> | undefined): boolean =>
+  denyReadOf(customConfig).some((path) => path.endsWith('.muffin-selftest-sentinel'));
+
 function mockProtectedSandbox(options: { hookWriteAllowed?: boolean; hookHardlinkAllowed?: boolean; unixFilterAbsent?: boolean } = {}): void {
   wrapWithSandboxArgv.mockImplementation(async (command, _binShell, customConfig) => ({
     argv:
-      denyReadOf(customConfig).length > 0
+      deniesSelfTestSentinel(customConfig)
         ? ['/bin/sh', '-c', 'exit 1']
         : command.includes('muffin sandbox nested-hook self-test')
           ? [
@@ -128,7 +131,7 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     // production-path test in runtime-wiring.test.ts exercises those rules
     // through the actual sandbox binary.
 
-    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+    const executor = new SandboxExecutor({ readScope: [], denyWrite: [], denyRead: [] }, available);
     toClose = executor;
 
     const status = await executor.verify();
@@ -159,7 +162,7 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
       // srt skipped the stage, so the AF_UNIX client reaches our listener.
       mockProtectedSandbox({ unixFilterAbsent: true });
 
-      const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+      const executor = new SandboxExecutor({ readScope: [], denyWrite: [], denyRead: [] }, available);
       toClose = executor;
 
       const status = await executor.verify();
@@ -182,7 +185,7 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     // containment legs still hold, but the exact nested hook write succeeds.
     mockProtectedSandbox({ hookWriteAllowed: true });
 
-    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+    const executor = new SandboxExecutor({ readScope: [], denyWrite: [], denyRead: [] }, available);
     toClose = executor;
 
     const status = await executor.verify();
@@ -214,7 +217,7 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     // hardlink lands where a direct write would be refused.
     mockProtectedSandbox({ hookHardlinkAllowed: true });
 
-    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+    const executor = new SandboxExecutor({ readScope: [], denyWrite: [], denyRead: [] }, available);
     toClose = executor;
 
     const status = await executor.verify();
@@ -239,7 +242,7 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     // created alias alongside every denial.
     mockProtectedSandbox();
 
-    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+    const executor = new SandboxExecutor({ readScope: [], denyWrite: [], denyRead: [] }, available);
     toClose = executor;
 
     const status = await executor.verify();
@@ -251,17 +254,17 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     expect(existsSync(witness)).toBe(true);
   });
 
-  it("the reperto itself: the real invocation cannot even run an unrestricted command (bwrap dies on /proc) — contain_failed, and run() never reaches the caller's command", async () => {
+  it("the reperto itself: the real invocation cannot read the trusted scratch control (bwrap dies on /proc) — contain_failed, and run() never reaches the caller's command", async () => {
     wrapWithSandboxArgv.mockImplementation(async () => ({ argv: BROKEN_INVOCATION, env: {} }));
 
-    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+    const executor = new SandboxExecutor({ readScope: [], denyWrite: [], denyRead: [] }, available);
     toClose = executor;
 
     const status = await executor.verify();
     expect(status.available).toBe(false);
     if (status.available) return;
     expect(status.reason).toBe('contain_failed');
-    expect(status.detail).toMatch(/unrestricted contained command/);
+    expect(status.detail).toMatch(/trusted self-test scratch file/);
     expect(reset).toHaveBeenCalledTimes(1);
 
     const dir = mktempWorkspace();
@@ -276,7 +279,7 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
   it('a deny-configured leg that still reads (the real door is not containing anything): contain_failed, the control leg never runs', async () => {
     wrapWithSandboxArgv.mockImplementation(async (command) => ({ argv: ['/bin/bash', '-c', command], env: {} }));
 
-    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+    const executor = new SandboxExecutor({ readScope: [], denyWrite: [], denyRead: [] }, available);
     toClose = executor;
 
     const status = await executor.verify();
@@ -292,7 +295,7 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
   it('`SandboxManager.initialize()` itself throws with a userns-denied signature: classified userns_denied, not the generic reason', async () => {
     initialize.mockReset().mockRejectedValue(new Error('bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted'));
 
-    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+    const executor = new SandboxExecutor({ readScope: [], denyWrite: [], denyRead: [] }, available);
     toClose = executor;
 
     const status = await executor.verify();
@@ -312,7 +315,7 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     // col rimedio generico «guarda il detail», che non nomina il pacchetto.
     initialize.mockReset().mockRejectedValue(new Error('Sandbox dependencies not available: ripgrep (rg) not found'));
 
-    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+    const executor = new SandboxExecutor({ readScope: [], denyWrite: [], denyRead: [] }, available);
     toClose = executor;
 
     const status = await executor.verify();
@@ -333,7 +336,7 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
       detail: 'probe says no',
       remedy: 'fix the host',
     });
-    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, negative);
+    const executor = new SandboxExecutor({ readScope: [], denyWrite: [], denyRead: [] }, negative);
     toClose = executor;
 
     const status = await executor.verify();
@@ -350,7 +353,7 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
   // che decide se un comando gira contenuto o non gira affatto.
   it('dopo un self-test fallito ogni chiamata successiva rifiuta ancora, e il self-test costoso non si ripaga', async () => {
     wrapWithSandboxArgv.mockImplementation(async () => ({ argv: BROKEN_INVOCATION, env: {} }));
-    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+    const executor = new SandboxExecutor({ readScope: [], denyWrite: [], denyRead: [] }, available);
     toClose = executor;
     const dir = mktempWorkspace();
 
@@ -377,14 +380,14 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
   it('due chiamate sovrapposte mentre il self-test è in volo condividono un solo giro', async () => {
     wrapWithSandboxArgv.mockImplementation(async (command, _shell, customConfig) => ({
       argv:
-        denyReadOf(customConfig).length > 0
+        deniesSelfTestSentinel(customConfig)
           ? BROKEN_INVOCATION
           : command.includes('afunix.sock')
             ? ['/bin/sh', '-c', 'echo EPERM >&2; exit 1']
             : ['/bin/bash', '-c', command],
       env: {},
     }));
-    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+    const executor = new SandboxExecutor({ readScope: [], denyWrite: [], denyRead: [] }, available);
     toClose = executor;
 
     const [a, b] = await Promise.all([executor.verify(), executor.verify()]);
@@ -410,7 +413,7 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     initialize.mockImplementation(async () => {
       throw new Error('il ponte HTTP non esiste: /tmp/finto.sock');
     });
-    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+    const executor = new SandboxExecutor({ readScope: [], denyWrite: [], denyRead: [] }, available);
     toClose = executor;
     const dir = mktempWorkspace();
 

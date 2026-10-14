@@ -31,6 +31,8 @@ import { INCARNATIONS_DIRNAME } from '../lock/incarnation.js';
  */
 
 export type Guards = {
+  /** The owner-data tree a shell process may read; never selected by the model. */
+  readScope: readonly string[];
   /** Never writable, whatever the per-call scope says. */
   denyWrite: readonly string[];
   /** Never readable either — narrower on purpose (see `agent/tools/fs.ts`). */
@@ -66,6 +68,9 @@ const SHELL_DOTFILES = [
 export function mandatoryGuards(home: string, cwd: string, userHome: string = homedir()): Guards {
   const p = paths(home);
   return {
+    // Fs tools carry the same trusted root as `FsScope.root`; the shell uses it
+    // as the only owner-data carve-out under the OS sandbox's root deny.
+    readScope: [cwd],
     denyWrite: [
       // 0. the installation itself — the category the five below were a
       //    partial spelling of.

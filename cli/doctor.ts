@@ -1464,7 +1464,7 @@ export async function runDoctor(
   // posture (CVE-2026-87766, upstream 0.12.0) is unverified — same verdict
   // `agent/runtime.ts` uses to decide whether the shell tools exist, so this
   // file can never print "shell attivo" on a host where the tools are absent.
-  const sandboxExecutor = new SandboxExecutor({ denyWrite: [], denyRead: [] });
+  const sandboxExecutor = new SandboxExecutor({ readScope: [], denyWrite: [], denyRead: [] });
   const sandbox = await sandboxExecutor.verify();
   await sandboxExecutor.close();
   const readVersion =

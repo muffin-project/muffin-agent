@@ -27,16 +27,16 @@ import { DISK_TIER, fenceDisk } from './fs.js';
  * since the 2026-09-22 Linux measurement (#645, ADR-0091) both lanes stand on
  * the asking side of it:
  *
- *  - **`shell_run` / `sys.shell`** — the sandbox confines writes to session
- *    scratch and disables direct IP networking (`SandboxExecutor.runReadOnly`).
- *    On Linux a contained command cannot open Unix-domain sockets at all (the
- *    filter is requested and verified); the Muffin gateway socket is
- *    additionally deny-listed. Reads cover the whole host minus a
- *    finite deny-list (recorded in SECURITY's “Shell read scope and sandbox
- *    patch posture” section, measured on Linux 2026-09-22): stdout reaches
- *    the model and disclosure has no undo.
- *    `reversible: 'no'`, `risk: 'high'`, and the kernel asks every time
- *    (ADR-0091 plus the AF_UNIX recovery correction below).
+ *  - **`shell_run` / `sys.shell`** — the sandbox denies reads at the filesystem
+ *    root and reopens only the trusted workspace, session scratch, and
+ *    configured OS/runtime/tool paths (`SandboxExecutor.runReadOnly`). Explicit
+ *    secret denies remain in force. Writes stay in scratch and direct IP
+ *    networking is disabled. On Linux a contained command cannot open
+ *    Unix-domain sockets at all (the filter is requested and verified); the
+ *    Muffin gateway socket is additionally deny-listed. The command still
+ *    spends host resources and can inspect OS process state; returned bytes
+ *    reach the model. `reversible: 'no'`, `risk: 'high'`, and the kernel asks
+ *    every time (approval semantics are unchanged by the scoped-read fix).
  *  - **`shell_run_write` / `sys.shell.write`** — writes into the workspace,
  *    exactly as the single lane always did. `reversible: 'no'`, `risk: 'high'`,
  *    and it asks every time.
@@ -69,24 +69,25 @@ export const shellCapability: CapabilityDecl = {
   // Still `host`, and deliberately not `context` — which is where the ceiling
   // and the unattended-floor would be 3/3 and this lane would be as free as
   // `fs_read`. Residuals keep it here, all declared in `docs/architecture/SECURITY.md`
-  // §9: reads cover the whole host filesystem minus a finite deny-list (not
-  // just the project — measured on Linux 2026-09-22, #645); writes stay in
-  // scratch and direct IP networking is disabled. On Linux the AF_UNIX
+  // §9: reads use the trusted workspace plus explicit OS/runtime/tool roots;
+  // writes stay in scratch and direct IP networking is disabled. On Linux the
+  // AF_UNIX
   // seccomp filter is requested and behaviorally verified before any
   // contained command runs (a host where it cannot hold refuses every
   // invocation). The Muffin
   // gateway socket and pointer are additionally deny-listed (#638, macOS).
   // Commands also spend
-  // host CPU and file descriptors. Whole-host output can disclose data, so
-  // ADR-0091 makes every call ask the owner.
+  // host CPU and file descriptors, and can inspect OS process state. Returned
+  // bytes are disclosed to the model, so approval remains unchanged here.
   effect: 'host',
   // Risk still governs safe mode and the budget, not the ask (ADR-0074 point
-  // 1). A contained command reads a broad host filesystem and spends host
+  // 1). A contained command reads its trusted workspace and configured
+  // runtime/tool roots, can inspect OS process state, and spends host
   // resources; filesystem writes stay in scratch and direct IP networking is
   // disabled, and on Linux Unix sockets are refused by the verified seccomp
   // filter. High risk keeps this capability unavailable in safe mode and
-  // subject to budget limits. ADR-0091 made the read disclosure itself
-  // irreversible.
+  // subject to budget limits. This scoped-read change keeps existing approval
+  // semantics while its runtime and process effects remain host-level.
   risk: 'high',
   reversible: 'no',
   // A contained command can still affect the host outside the filesystem
@@ -156,13 +157,11 @@ const shellSpec: ToolSpec = {
   name: 'shell_run',
   description:
     'Run a non-interactive shell command in the contained read lane. ' +
-    'It asks the owner every time: what a command reads on this machine reaches the conversation and cannot be ' +
-    'taken back. The whole host filesystem is readable except for a finite deny-read list; writes stay in a ' +
-    'temporary scratch directory, direct IP networking is disabled, and on Linux Unix-domain sockets are blocked ' +
+    'It asks the owner every time. Reads are limited to the trusted project workspace and configured OS/runtime/tool ' +
+    'paths; explicit secret denies still apply. Writes stay in a temporary scratch directory, direct IP networking is disabled, and on Linux Unix-domain sockets are blocked ' +
     'by the sandbox. This lane is treated as high risk and is not replayed after an ' +
     'uncertain crash. Muffin gateway socket paths are deny-listed. Prefer project-relative reads; ' +
-    'an absolute path outside the project reads the owner\u2019s machine, ' +
-    'and its output reaches the model. Use it when you need to observe something no ' +
+    'absolute paths outside the project work only when they are under a configured OS/runtime/tool root. Use it when you need to observe something no ' +
     'dedicated tool wraps: `ls`, `lsof`, `sqlite3 -readonly`, `env`, `ps`, `df`, `du`, `git status`, `git log`, ' +
     '`wc`, `find`, a dry run. Not for what a dedicated tool answers better than parsed text — `cat`/`ls` of a ' +
     'known file (fs_read, fs_list), a search in the files (fs_search), `ps` (process_list), a question about this ' +

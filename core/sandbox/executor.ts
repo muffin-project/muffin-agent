@@ -1,8 +1,8 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { delimiter, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { SandboxManager, type SandboxRuntimeConfig } from '@anthropic-ai/sandbox-runtime';
 import {
   APPARMOR_REMEDY,
@@ -144,23 +144,6 @@ const ACTIVE_GIT_HOOK_NAMES = [
 ] as const;
 
 /**
- * SRT's macOS hook glob is rooted at the gateway process cwd, not the turn's
- * workspace. Muffin supplies a different cwd per call, so add exact active
- * hook filenames independent of that host cwd. Exact leaves keep Git's
- * harmless `*.sample` templates writable during `git init`.
- *
- * Linux uses the host AppArmor policy plus the concrete per-call scan below;
- * SRT drops write globs on that backend, so sending these patterns there
- * would look like a deny while protecting nothing.
- */
-const MACOS_NESTED_GIT_HOOK_DENY_GLOBS = ACTIVE_GIT_HOOK_NAMES.map(
-  (hook) => `/**/.git/hooks/${hook}`,
-);
-
-function nestedGitHookDenyGlobs(): string[] {
-  return process.platform === 'darwin' ? MACOS_NESTED_GIT_HOOK_DENY_GLOBS : [];
-}
-/**
  * Belt-and-suspenders over the two per-leg timeouts: bounds `initialize()`
  * itself, which has no timeout of its own (it may start a network bridge).
  * "Nessun blocco eterno" — a hang here must resolve to unavailable, not hang
@@ -171,6 +154,127 @@ const SELFTEST_OVERALL_TIMEOUT_MS = 45_000;
 const EXEC_MAX_OUTPUT_CHARS = 30_000;
 /** Hard buffering cap per stream so a firehose cannot eat the process heap. */
 const BUFFER_HARD_CAP = 200_000;
+
+/** OS roots needed to load the shell and ordinary host-installed programs. */
+function systemReadRoots(): string[] {
+  switch (process.platform) {
+    case 'darwin':
+      return [
+        '/System',
+        '/usr',
+        '/bin',
+        '/sbin',
+        '/opt/homebrew',
+        '/Library/Developer',
+        '/var/select',
+      ];
+    case 'linux':
+      return ['/usr', '/bin', '/sbin', '/lib', '/lib64', '/etc', '/dev', '/proc', '/sys'];
+    case 'win32':
+      return [
+        process.env['SystemRoot'] ?? 'C:\\Windows',
+        process.env['ProgramFiles'] ?? 'C:\\Program Files',
+        process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)',
+      ];
+    default:
+      return [];
+  }
+}
+
+function existingRealPath(path: string): string | null {
+  try {
+    return realpathSync(path);
+  } catch {
+    return null;
+  }
+}
+
+/** Keep the owner-supplied spelling as well as its canonical target. On macOS
+ * temporary roots commonly traverse `/var` → `/private/var`; the process may
+ * open either spelling, while the grant must remain limited to the same tree.
+ */
+function existingPathAliases(path: string): string[] {
+  const lexical = resolve(path);
+  const canonical = existingRealPath(lexical);
+  return canonical ? [...new Set([lexical, canonical])] : [];
+}
+
+function pathIsWithin(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+/**
+ * Apple's `/usr/bin/git` shim asks `xcode-select` for its developer directory,
+ * whose selection link is not readable from Seatbelt's root-deny profile. If
+ * that shim is the PATH winner, prefer the real Command Line Tools binary; its
+ * directory is already inside the explicit `/Library/Developer` system grant.
+ * User-installed Git remains first whenever PATH already selects it.
+ */
+function preferReadableMacGit(pathValue: string | undefined): string | undefined {
+  if (process.platform !== 'darwin' || !pathValue) return pathValue;
+
+  const findExecutable = (name: string): string | null => {
+    for (const directory of pathValue.split(delimiter)) {
+      const candidate = join(directory || process.cwd(), name);
+      try {
+        const stats = lstatSync(candidate);
+        if (stats.isFile() && (stats.mode & 0o111) !== 0) {
+          return existingRealPath(candidate) ?? resolve(candidate);
+        }
+      } catch {
+        // Keep walking PATH; an absent or inaccessible entry is not executable.
+      }
+    }
+    return null;
+  };
+
+  const appleShim = existingRealPath('/usr/bin/git') ?? '/usr/bin/git';
+  if (findExecutable('git') !== appleShim) return pathValue;
+
+  const commandLineToolsGit = '/Library/Developer/CommandLineTools/usr/bin/git';
+  try {
+    const stats = lstatSync(commandLineToolsGit);
+    if (!stats.isFile() || (stats.mode & 0o111) === 0) return pathValue;
+  } catch {
+    return pathValue;
+  }
+  const commandLineToolsBin = dirname(commandLineToolsGit);
+  return [commandLineToolsBin, ...pathValue.split(delimiter)].join(delimiter);
+}
+
+/**
+ * `PATH` is trusted process configuration, but a root or home-directory entry
+ * must not reopen the tree the sandbox is about to deny. Exact executable
+ * directories under home remain available when the owner put them on PATH.
+ */
+function executableReadRoots(): string[] {
+  const home = existingRealPath(homedir()) ?? resolve(homedir());
+  const filesystemRoot = parse(home).root;
+  const roots = new Set<string>();
+  const addDirectory = (path: string): void => {
+    const aliases = existingPathAliases(path);
+    const resolved = existingRealPath(path);
+    if (
+      !resolved ||
+      aliases.some((alias) => alias === filesystemRoot || pathIsWithin(alias, home))
+    ) return;
+    try {
+      if (!lstatSync(resolved).isDirectory()) return;
+    } catch {
+      return;
+    }
+    for (const alias of aliases) roots.add(alias);
+  };
+
+  for (const entry of (process.env['PATH'] ?? '').split(delimiter)) {
+    if (entry && isAbsolute(entry)) addDirectory(entry);
+  }
+
+  const runtime = existingRealPath(process.execPath);
+  if (runtime) addDirectory(dirname(dirname(runtime)));
+  return [...roots];
+}
 
 /**
  * **The exit of a command is the exit of the operation, not of the last process.**
@@ -457,6 +561,8 @@ function quoteShell(word: string): string {
 
 /** Paths the sandbox must never touch, whatever the per-call scope says. */
 export type ExecGuards = {
+  /** Trusted owner-data roots for this runtime (normally its workspace). */
+  readScope: readonly string[];
   /** RoT, config, secrets — denied in write always (threat model §3-bis). */
   denyWrite: readonly string[];
   /** Secrets — denied in read: a child that reads the key has already won. */
@@ -471,6 +577,28 @@ export type ExecGuards = {
  * the traversal cost is not worth paying on every command.
  */
 const NESTED_GIT_HOOKS_SEARCH_DEPTH = 3;
+
+/**
+ * `sandbox-runtime` builds its macOS mandatory hook glob from the gateway's
+ * `process.cwd()`. Muffin passes each turn's workspace cwd separately, so a
+ * workspace elsewhere on disk is not covered by that host-rooted pattern.
+ * Add absolute, cwd-independent patterns for Git's active hook filenames.
+ * Keep these as exact leaf names: denying the whole directory also prevents
+ * Git from copying its harmless `*.sample` templates during `git init`. This
+ * is platform specific; Linux drops glob deny paths and uses its AppArmor
+ * rules plus the concrete per-call scan below.
+ *
+ * The sandbox's allow-write roots still bound where a command can write; this
+ * adds the mandatory hook-path deny within those roots without changing the
+ * caller's authority.
+ */
+const MACOS_NESTED_GIT_HOOKS_DENY_GLOBS = ACTIVE_GIT_HOOK_NAMES.map(
+  (hook) => `/**/.git/hooks/${hook}`,
+);
+
+function nestedGitHooksDenyGlobs(): string[] {
+  return process.platform === 'darwin' ? MACOS_NESTED_GIT_HOOKS_DENY_GLOBS : [];
+}
 
 /**
  * `ExecGuards.denyWrite`'s `.git/hooks` entry (`core/rot/guards.ts`,
@@ -597,6 +725,7 @@ export class SandboxExecutor {
   private initPromise: Promise<void> | null = null;
   private cachedProbe: SandboxProbe | null = null;
   private scratchDir: string | null = null;
+  private readAllowPaths: string[] | null = null;
 
   constructor(
     private readonly guards: ExecGuards,
@@ -615,8 +744,61 @@ export class SandboxExecutor {
    * commands of the same session so `cmd1 > f && cmd2 < f` workflows hold.
    */
   private scratch(): string {
-    this.scratchDir ??= mkdtempSync(join(tmpdir(), 'muffin-exec-'));
+    if (!this.scratchDir) {
+      const created = mkdtempSync(join(tmpdir(), 'muffin-exec-'));
+      // On macOS tmpdir() is often spelled through `/var` while Seatbelt's
+      // path rules normalize it to `/private/var`. Use one canonical spelling
+      // for the grant, cwd, and TMPDIR so the positive self-test proves the
+      // same path the child will actually open.
+      this.scratchDir = existingRealPath(created) ?? created;
+    }
     return this.scratchDir;
+  }
+
+  /**
+   * Freeze the read grants before SRT initializes. Only the configured
+   * workspace, this executor's scratch, the active runtime, PATH executables,
+   * and OS roots are re-opened under the filesystem-root deny.
+   */
+  private allowedReadRoots(): string[] {
+    if (this.readAllowPaths !== null) return [...this.readAllowPaths];
+
+    const required = [...this.guards.readScope, this.scratch()];
+    const allowed = new Set<string>();
+    for (const root of required) {
+      const resolved = existingRealPath(root);
+      if (!resolved) throw new Error(`sandbox read scope is missing: ${root}`);
+      try {
+        if (!lstatSync(resolved).isDirectory()) {
+          throw new Error(`sandbox read scope is not a directory: ${root}`);
+        }
+      } catch (error) {
+        if (error instanceof Error && error.message.startsWith('sandbox read scope')) throw error;
+        throw new Error(`sandbox read scope is unavailable: ${root}`);
+      }
+      for (const alias of existingPathAliases(root)) allowed.add(alias);
+    }
+
+    for (const root of [...systemReadRoots(), ...executableReadRoots()]) {
+      const resolved = existingRealPath(root);
+      if (!resolved) continue;
+      try {
+        if (lstatSync(resolved).isDirectory()) {
+          for (const alias of existingPathAliases(root)) allowed.add(alias);
+        }
+      } catch {
+        // A platform-specific root or PATH entry absent on this host grants
+        // nothing; the command will report a missing tool if it needs it.
+      }
+    }
+
+    this.readAllowPaths = [...allowed];
+    return [...this.readAllowPaths];
+  }
+
+  private readDenyPaths(extra: readonly string[] = []): string[] {
+    const filesystemRoot = parse(homedir()).root || '/';
+    return [...new Set([filesystemRoot, ...this.guards.denyRead, ...extra])];
   }
 
   /**
@@ -735,11 +917,10 @@ export class SandboxExecutor {
    * command actually get contained".
    *
    * Same two-legged shape `probe.ts` uses, for the same reason its own
-   * comments document twice over: a single deny leg cannot tell "containment
+   * comments document twice over: a single deny leg cannot tell "the deny
    * held" apart from "the mechanism is broken and everything fails" — the
-   * exact ambiguity that produced this file's incident (the deny leg failing
-   * on `Can't mount proc` looks identical to a held deny unless a control run
-   * is also required to succeed).
+   * positive control must prove the session's trusted scratch grant still
+   * works under the root deny.
    */
   private async selfTestContainment(): Promise<ContainmentFailure | null> {
     const cwd = this.scratch();
@@ -760,7 +941,17 @@ export class SandboxExecutor {
           // allowWrite, and a self-test that omits it is one more gratuitous
           // difference from the real invocation — exactly the shape of gap
           // that let this file's own bug hide from the old probe.
-          filesystem: { denyRead, allowWrite: [cwd], denyWrite: [] },
+          filesystem: {
+            // allowRead is per-call, never inherited: the manager session
+            // freezes the first executor's grants, but every executor owns
+            // its scratch — inheriting would prove another executor's scope,
+            // not this one's. Repeating the root deny here keeps the deny
+            // leg honest about the production shape.
+            ...(denyRead.length > 0 ? { denyRead: this.readDenyPaths(denyRead) } : { denyRead: this.readDenyPaths() }),
+            allowRead: this.allowedReadRoots(),
+            allowWrite: [cwd],
+            denyWrite: [],
+          } as SandboxRuntimeConfig['filesystem'],
         };
         const wrapped = await SandboxManager.wrapWithSandboxArgv(
           `cat ${sentinelPath}`,
@@ -813,7 +1004,7 @@ export class SandboxExecutor {
       }
       return {
         reason: 'contain_failed',
-        detail: `SandboxManager could not run even an unrestricted contained command (${detail}) — the denied read failing above is not evidence of containment when this unrestricted one fails too`,
+        detail: `SandboxManager could not read the trusted self-test scratch file (${detail}) — a denied read failing above is not evidence of containment when the configured positive control fails too`,
         remedy:
           'the real sandbox invocation is broken independent of any deny policy — check the mechanism against this kernel/OS/container',
       };
@@ -824,7 +1015,7 @@ export class SandboxExecutor {
       // write, or of some other command silently swallowed on this host.
       return {
         reason: 'contain_failed',
-        detail: `the unrestricted leg exited 0 but did not read the sentinel's content back (stdout: ${JSON.stringify(allow.stdout.slice(0, 200))})`,
+        detail: `the trusted-read leg exited 0 but did not read the sentinel's content back (stdout: ${JSON.stringify(allow.stdout.slice(0, 200))})`,
         remedy:
           'the real sandbox invocation is not behaving as a plain read on this host — check the mechanism against this kernel/OS/container',
       };
@@ -882,7 +1073,18 @@ export class SandboxExecutor {
    */
   private async selfTestNestedGitHookWrite(cwd: string): Promise<ContainmentFailure | null> {
     try {
-      execFileSync('git', ['init', '--quiet', 'pre'], { cwd, stdio: 'pipe' });
+      const template = join(cwd, 'selftest-template');
+      mkdirSync(join(template, 'hooks'), { recursive: true });
+      writeFileSync(join(template, 'hooks', 'pre-commit.sample'), 'sample\n');
+      execFileSync('git', ['init', '--quiet', `--template=${template}`, 'pre'], {
+        cwd,
+        stdio: 'pipe',
+        env: {
+          ...process.env,
+          GIT_CONFIG_GLOBAL: '/dev/null',
+          GIT_CONFIG_NOSYSTEM: '1',
+        },
+      });
       mkdirSync(join(cwd, 'pre-resolved'), { recursive: true });
       writeFileSync(join(cwd, 'pre-resolved', 'pre-commit'), 'planted\n');
       rmSync(join(cwd, 'pre', '.git', 'hooks'), { recursive: true, force: true });
@@ -905,10 +1107,15 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
       'printf sample > template/hooks/pre-commit.sample',
       'printf ordinary > ordinary/file.txt',
       'printf evil > ordinary/evil',
+      'printf "muffin sandbox hook self-test before nested git init\\n"',
       'git init --quiet --template=template nested',
+      'printf "muffin sandbox hook self-test after nested git init\\n"',
       'test -f nested/.git/hooks/pre-commit.sample',
       'printf tracked > nested/tracked.txt',
+      'printf "muffin sandbox hook self-test before git add\\n"',
       'git -C nested add tracked.txt',
+      'printf "muffin sandbox hook self-test after git add\\n"',
+      'test -f nested/.git/hooks/pre-commit.sample',
       'mkdir -p nested/.git/hooks',
       `for hook in ${ACTIVE_GIT_HOOK_NAMES.join(' ')}; do if printf hook > "nested/.git/hooks/$hook" 2>/dev/null; then printf "muffin-hook-write: allowed:%s\\n" "$hook"; else printf "muffin-hook-write: denied:%s\\n" "$hook"; fi; done`,
       // Mid-command replacement: alias2 does not exist when the sandbox (and
@@ -941,9 +1148,10 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
         // Repositories created mid-command stay invisible to it on purpose:
         // they are the host profile's proof, not this list's.
         filesystem: {
-          denyRead: [],
+          denyRead: this.readDenyPaths(),
+          allowRead: this.allowedReadRoots(),
           allowWrite: [cwd],
-          denyWrite: [...nestedGitHooksDirs(cwd), ...nestedGitHookDenyGlobs()],
+          denyWrite: [...nestedGitHooksDirs(cwd), ...nestedGitHooksDenyGlobs()],
         },
       };
       const wrapped = await SandboxManager.wrapWithSandboxArgv(
@@ -976,10 +1184,12 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
       result.code !== 0 ||
       !result.stdout.includes('muffin sandbox hook self-test positive controls passed')
     ) {
-      const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;
+      const detail =
+        [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join(' | ') ||
+        `exit ${result.code}`;
       return {
         reason: 'contain_failed',
-        detail: `the nested Git-hook self-test could not complete its ordinary file and nested-repository positive controls (${detail.slice(0, 300)})`,
+        detail: `the nested Git-hook self-test could not complete its ordinary file and nested-repository positive controls (${detail.slice(0, 600)})`,
         remedy:
           'check that the real sandbox invocation can write ordinary workspace files and run Git in a nested repository',
       };
@@ -1005,7 +1215,7 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
         reason: 'git_hooks_unprotected',
         detail: `a contained process installed (or could install) a hook via ${unprotected} after the sandbox profile was built (AppArmor label: ${appArmorLabel}; doors ${doorSummary})`,
         remedy:
-          'on Linux, render scripts/install/bwrap.apparmor for the exact host bwrap binary and load it; the writer label should contain muffin-bwrap//&muffin-unpriv-bwrap. See docs/user/INSTALL.md. On macOS verify Seatbelt still denies .git/hooks writes. Shell calls remain refused until the check holds',
+          'on Linux, render scripts/install/bwrap.apparmor for the exact host bwrap binary and load it; the writer label should contain muffin-bwrap//&muffin-unpriv-bwrap. See docs/user/INSTALL.md. On macOS verify Seatbelt denies installs at active Git hook filenames. Shell calls remain refused until the check holds',
       };
     }
     // The planted pre-existing hook content is asserted host-side: a
@@ -1021,7 +1231,7 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
         reason: 'git_hooks_unprotected',
         detail: `a contained process installed (or could install) a hook via write through a pre-existing hooks symlink after the sandbox profile was built (AppArmor label: ${appArmorLabel}; doors ${doorSummary}; planted file holds ${JSON.stringify(plantedContent.slice(0, 40))})`,
         remedy:
-          'on Linux, render scripts/install/bwrap.apparmor for the exact host bwrap binary and load it; the writer label should contain muffin-bwrap//&muffin-unpriv-bwrap. See docs/user/INSTALL.md. On macOS verify Seatbelt still denies .git/hooks writes. Shell calls remain refused until the check holds',
+          'on Linux, render scripts/install/bwrap.apparmor for the exact host bwrap binary and load it; the writer label should contain muffin-bwrap//&muffin-unpriv-bwrap. See docs/user/INSTALL.md. On macOS verify Seatbelt denies installs at active Git hook filenames. Shell calls remain refused until the check holds',
       };
     }
     const missingDenials = ACTIVE_GIT_HOOK_NAMES.filter(
@@ -1114,7 +1324,12 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
       try {
         const legConfig: Partial<SandboxRuntimeConfig> = {
           network: networkOff(),
-          filesystem: { denyRead: [], allowWrite: [cwd], denyWrite: [] },
+          filesystem: {
+            denyRead: this.readDenyPaths(),
+            allowRead: this.allowedReadRoots(),
+            allowWrite: [cwd],
+            denyWrite: [],
+          },
         };
         const wrapped = await SandboxManager.wrapWithSandboxArgv(
           command,
@@ -1195,7 +1410,8 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
     return {
       network: networkOff(),
       filesystem: {
-        denyRead: [...this.guards.denyRead],
+        denyRead: this.readDenyPaths(),
+        allowRead: this.allowedReadRoots(),
         allowWrite: [],
         denyWrite: [...this.guards.denyWrite],
       },
@@ -1209,13 +1425,13 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
    * not the home, not the caller's cwd — and direct IP/proxy egress is off.
    * On Linux a contained command cannot open `socket(AF_UNIX, …)` at all: the
    * seccomp filter is requested and the self-test refuses the first command
-   * when it did not hold. Whole-host reads can disclose data; ADR-0091
-   * therefore declares `reversible: 'no'` and the kernel asks on every call.
+   * when it did not hold. Filesystem reads are denied at the root and only the
+   * trusted workspace, scratch, OS/runtime paths are re-opened; secret denies
+   * remain in force inside those roots.
    *
-   * `cwd` is still the caller's: reading is the point, and `--ro-bind / /`
-   * makes the whole filesystem readable minus `guards.denyRead` either way.
-   * What changes between the lanes is `allowWrite`, and `ReadOnlyExecRequest`
-   * is the type that makes it unchangeable from outside.
+   * `cwd` is still the caller's within the workspace, but it does not define
+   * read authority. The workspace grant is fixed when the runtime is built;
+   * `ReadOnlyExecRequest` keeps write authority absent from this lane.
    */
   async runReadOnly(req: ReadOnlyExecRequest): Promise<ExecResult> {
     return this.execute({ ...req, writeScope: [] });
@@ -1229,24 +1445,36 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
   private async execute(req: ExecRequest): Promise<ExecResult> {
     await this.ensureInit();
     const scratch = this.scratch();
+    const cwd = existingRealPath(req.cwd);
+    if (!cwd) throw new Error(`sandbox working directory is missing or unresolved: ${req.cwd}`);
+    const writeScope = req.writeScope.map((root) => existingRealPath(root) ?? resolve(root));
+    const executionReq: ExecRequest = { ...req, cwd, writeScope };
     const timeoutMs = Math.min(req.timeoutMs ?? EXEC_DEFAULT_TIMEOUT_MS, EXEC_MAX_TIMEOUT_MS);
 
     const perCall: Partial<SandboxRuntimeConfig> = {
       network: networkOff(),
       filesystem: {
-        denyRead: [...this.guards.denyRead],
+        // A supplied per-call filesystem object overrides the session's
+        // denyRead; repeat the root deny so a narrower write scope cannot
+        // silently restore host-wide reads. allowRead rides along per-call
+        // too: the manager session freezes the first executor's grants, but
+        // every executor owns its scratch — inheriting would enforce another
+        // executor's scope. (SRT honors per-call allowRead on macOS/Linux;
+        // Windows keeps the session value.)
+        denyRead: this.readDenyPaths(),
+        allowRead: this.allowedReadRoots(),
         // The scratch is in both lanes, and it is the *only* entry the
         // read-only lane has: `runReadOnly` passes `writeScope: []`, so this
         // spread contributes nothing there. `cmd1 > f && cmd2 < f` keeps
         // working in both, because the scratch survives the session.
-        allowWrite: [...req.writeScope, scratch],
+        allowWrite: [...writeScope, scratch],
         // `nestedGitHooksDirs` walks every writable root fresh, THIS call —
         // see its docstring for why neither `this.guards.denyWrite` (fixed
         // once per turn) nor srt's own nested-repo protection (anchored to
         // its own process, not `req.cwd`) cover a checkout cloned mid-turn.
         denyWrite: [
           ...this.guards.denyWrite,
-          ...nestedGitHookDenyGlobs(),
+          ...nestedGitHooksDenyGlobs(),
           ...new Set([req.cwd, ...req.writeScope].flatMap((root) => nestedGitHooksDirs(root))),
         ],
       },
@@ -1263,7 +1491,7 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
       undefined,
       perCall,
       req.signal,
-      req.cwd,
+      cwd,
     );
 
     const started = Date.now();
@@ -1271,7 +1499,7 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
       return await this.spawnCollect(
         puntaTmpdirAlloScratch(wrapped.argv, scratch),
         this.childEnv(wrapped.env, scratch),
-        req,
+        executionReq,
         timeoutMs,
         started,
       );
@@ -1297,6 +1525,12 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
     for (const [key, value] of Object.entries(srtEnv)) {
       if (value !== undefined && process.env[key] !== value) out[key] = value;
     }
+    out.PATH = preferReadableMacGit(out.PATH ?? process.env['PATH']);
+    // The root-deny profile intentionally makes host Git config unreadable.
+    // Point Git at an inert global config and skip system config so commands
+    // do not mistake that policy for a broken repository or leak credentials.
+    out.GIT_CONFIG_GLOBAL = '/dev/null';
+    out.GIT_CONFIG_NOSYSTEM = '1';
     out.TMPDIR = scratch;
     return out;
   }
