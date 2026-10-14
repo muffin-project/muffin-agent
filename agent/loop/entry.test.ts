@@ -511,7 +511,11 @@ describe('continueTurn rifiuta senza toccare la riga', () => {
     expect(w.turns.get('cont-1')?.status).toBe('continuable');
   });
 
-  function deadRow(w: ReturnType<typeof world>, deadStreak: number) {
+  function deadRow(
+    w: ReturnType<typeof world>,
+    deadStreak: number,
+    at = NOW().toISOString(),
+  ) {
     const created = w.turns.create(
       {
         id: 'cont-1',
@@ -538,7 +542,7 @@ describe('continueTurn rifiuta senza toccare la riga', () => {
             lease: 2,
             deadStreak,
             completed: { toolCalls: 2 },
-            at: '2026-10-14T09:00:00.000Z',
+            at,
           },
         },
         created.claimToken,
@@ -564,6 +568,13 @@ describe('continueTurn rifiuta senza toccare la riga', () => {
   it('sotto soglia la continuazione parte ancora', async () => {
     const w = world([answer('ok')]);
     deadRow(w, 2);
+    const r = await barrel.continueTurn(w.deps, 'cont-1', { message: { ...grant } });
+    expect(r).not.toHaveProperty('why');
+  });
+
+  it('scaduto il cooldown, una lease di sonda riparte', async () => {
+    const w = world([answer('ok')]);
+    deadRow(w, 3, new Date(NOW().getTime() - 31 * 60_000).toISOString());
     const r = await barrel.continueTurn(w.deps, 'cont-1', { message: { ...grant } });
     expect(r).not.toHaveProperty('why');
   });

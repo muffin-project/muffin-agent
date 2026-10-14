@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { loadProfiles } from './profile.js';
 
 const BASELINE_EXECUTION = {
-  modelCallDeadlineMs: 300_000,
+  modelCallDeadlineMs: 90_000,
   turnWallDeadlineMs: 180_000,
   activeModelBudgetMs: 120_000,
   stallTimeoutMs: 25_000,

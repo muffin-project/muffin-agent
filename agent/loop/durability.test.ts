@@ -7,14 +7,14 @@ import { createDecide } from '../../core/policy/decide.js';
 import { POLICY_FLOOR } from '../../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../../core/policy/types.js';
 import { SessionStore } from '../../core/session/store.js';
-import { TurnStore } from '../../core/turns/store.js';
+import { TurnStore, type LeaseAuditRow } from '../../core/turns/store.js';
 import { TodoStore } from '../../core/turns/todo.js';
 import type { AttributeValue, SpanHandle } from '../../core/tracing/types.js';
 import { JsonlExporter, SimpleTracer } from '../../core/tracing/tracer.js';
 import { CONSERVATIVE } from '../profiles/profile.js';
 import type { Message } from '../providers/types.js';
 import { searchCapability, searchSpec } from '../tools/search.js';
-import { checkpoint, closeRow, finish, nextDeadStreak, reconcile, releaseContinuable, suspendHere, type TurnScope } from './durability.js';
+import { checkpoint, closeRow, deadStreakForRelease, finish, reconcile, releaseContinuable, suspendHere, type TurnScope } from './durability.js';
 import { runTool } from './tool-call.js';
 import { makeSnapshot } from './permissions.js';
 import { TurnRun } from './run-state.js';
@@ -546,27 +546,100 @@ describe('la diagnostica continuable conta tutto il turno, non la lease', () => 
   });
 });
 
-describe('nextDeadStreak conta solo lease morte senza progresso', () => {
-  const at = '2026-10-14T09:00:00.000Z';
+describe('deadStreakForRelease conta solo lease morte senza progresso', () => {
+  const lease = (over: Partial<LeaseAuditRow> = {}): LeaseAuditRow => ({
+    turnId: 't',
+    leaseIndex: 0,
+    startedAt: '2026-10-14T09:00:00.000Z',
+    endedAt: '2026-10-14T09:01:30.000Z',
+    outcome: null,
+    harnessMessages: [],
+    counters: null,
+    transportUsed: 0,
+    transportAllowance: 10,
+    delivery: null,
+    ...over,
+  });
+  const turns = (leases: LeaseAuditRow[]): Pick<TurnStore, 'leasesFor'> => ({
+    leasesFor: () => leases,
+  });
+  const noCalls = { ...freshCounters(), toolCallsMade: 0 };
   it('prima lease morta apre la striscia a 1', () => {
-    expect(nextDeadStreak(null, 'model_deadline', 0)).toBe(1);
+    expect(deadStreakForRelease(turns([]), 't', 'model_deadline', 0)).toBe(1);
   });
-  it('seconda lease morta senza nuove call allunga a 2', () => {
-    const prev = { class: 'model_deadline' as const, lease: 1, completed: { toolCalls: 6 }, at };
-    expect(nextDeadStreak(prev, 'model_deadline', 6)).toBe(2);
+  it('chiuse morte senza call allungano (deadline, stall, active)', () => {
+    const fake = turns([
+      lease({ leaseIndex: 0, outcome: 'model_deadline', counters: noCalls }),
+      lease({ leaseIndex: 1, outcome: 'model_stall', counters: noCalls }),
+    ]);
+    expect(deadStreakForRelease(fake, 't', 'active_model_budget', 0)).toBe(3);
   });
-  it('onora lo streak già registrato invece di ripartire', () => {
-    const prev = { class: 'model_stall' as const, lease: 4, deadStreak: 3, completed: { toolCalls: 6 }, at };
-    expect(nextDeadStreak(prev, 'model_deadline', 6)).toBe(4);
+  it('una call nella lease che muore azzera', () => {
+    const fake = turns([lease({ leaseIndex: 0, outcome: 'model_deadline', counters: noCalls })]);
+    expect(deadStreakForRelease(fake, 't', 'model_deadline', 2)).toBe(0);
   });
-  it('una call nuova azzera anche dopo tre morti', () => {
-    const prev = { class: 'model_deadline' as const, lease: 2, deadStreak: 2, completed: { toolCalls: 6 }, at };
-    expect(nextDeadStreak(prev, 'model_deadline', 7)).toBe(1);
+  it('una call in una lease chiusa ferma la conta', () => {
+    const fake = turns([
+      lease({ leaseIndex: 0, outcome: 'model_deadline', counters: noCalls }),
+      lease({ leaseIndex: 1, outcome: 'model_deadline', counters: { ...freshCounters(), toolCallsMade: 4 } }),
+    ]);
+    expect(deadStreakForRelease(fake, 't', 'model_deadline', 0)).toBe(1);
   });
-  it('classi non-morte non allungano mai (rate limit compreso)', () => {
-    const prev = { class: 'model_deadline' as const, lease: 2, deadStreak: 2, completed: { toolCalls: 6 }, at };
-    expect(nextDeadStreak(prev, 'provider_transport', 6)).toBe(0);
-    expect(nextDeadStreak(prev, 'turn_deadline', 6)).toBe(0);
-    expect(nextDeadStreak(null, 'provider_empty', 0)).toBe(0);
+  it('classi non-morte non allungano mai (rate limit, wall, risposte vuote)', () => {
+    const fake = turns([lease({ leaseIndex: 0, outcome: 'model_deadline', counters: noCalls })]);
+    expect(deadStreakForRelease(fake, 't', 'provider_transport', 0)).toBe(0);
+    expect(deadStreakForRelease(fake, 't', 'turn_deadline', 0)).toBe(0);
+    expect(deadStreakForRelease(fake, 't', 'provider_empty', 0)).toBe(0);
+  });
+  it('lease aperte (outcome null) si saltano, non fermano', () => {
+    const fake = turns([
+      lease({ leaseIndex: 0, outcome: 'model_deadline', counters: noCalls }),
+      lease({ leaseIndex: 1, endedAt: null }),
+    ]);
+    expect(deadStreakForRelease(fake, 't', 'model_deadline', 0)).toBe(2);
+  });
+});
+
+describe('deadStreak attraversa release vere sulla stessa riga', () => {
+  it('tre lease morte di fila scrivono 1..3 senza scorciatoie', () => {
+    const h = harness();
+    // Lease 0 muore model_deadline senza call, via releaseContinuable vera.
+    releaseContinuable(h.scope, 'model_deadline', 0);
+    expect(h.turns.get(h.id)?.continuableReason).toMatchObject({ deadStreak: 1 });
+
+    // Grant dell'owner + lease 1 muore active_model_budget senza call.
+    const granted = h.turns.grantContinuation(
+      h.id,
+      {
+        messages: h.run.messages,
+        taint: 0,
+        counters: { ...freshCounters(), iterations: 5 },
+        newLeaseStartedAt: new Date().toISOString(),
+      },
+      4242,
+    );
+    expect(granted).not.toBeNull();
+    const run2 = new TurnRun(granted!, { resumed: true, wokenFromWait: false });
+    const scope2 = { ...h.scope, record: granted!, run: run2 };
+    releaseContinuable(scope2, 'active_model_budget', 5);
+    expect(h.turns.get(h.id)?.continuableReason).toMatchObject({ deadStreak: 2 });
+
+    // Grant + lease 2 con una call: lo streak si azzera sulla riga.
+    const granted2 = h.turns.grantContinuation(
+      h.id,
+      {
+        messages: h.run.messages,
+        taint: 0,
+        counters: { ...freshCounters(), iterations: 9 },
+        newLeaseStartedAt: new Date().toISOString(),
+      },
+      4242,
+    );
+    expect(granted2).not.toBeNull();
+    const run3 = new TurnRun(granted2!, { resumed: true, wokenFromWait: false });
+    run3.toolCallsMade = 1;
+    const scope3 = { ...h.scope, record: granted2!, run: run3 };
+    releaseContinuable(scope3, 'model_deadline', 9);
+    expect(h.turns.get(h.id)?.continuableReason?.deadStreak).toBeUndefined();
   });
 });

@@ -217,11 +217,13 @@ export type ContinuableReason = {
   /** What the ended lease had completed. */
   completed?: { toolCalls: number };
   /**
-   * Consecutive leases ended by a dead provider (`model_deadline`,
-   * `model_stall`) with zero new tool calls behind this release. Lets the
-   * next continuation refuse a fourth doomed lease instead of inviting
-   * another "riprendi" that burns context for nothing (#824 residue:
-   * measured 8 dead 90s leases, 0 calls, on a slow free route).
+   * Consecutive leases ended by a slow provider (`model_deadline`,
+   * `model_stall`, `active_model_budget` — the last is how slow deaths read
+   * under default budgets, where the 120s active budget binds first) with
+   * zero new tool calls behind this release. Lets the next continuation
+   * refuse a fourth doomed lease instead of inviting another "riprendi"
+   * that burns context for nothing (#824 residue: measured 8 dead leases
+   * in a row, 0 calls, on a slow free route).
    */
   deadStreak?: number;
   at: string;

@@ -290,7 +290,7 @@ describe('continuazione conversazionale (P0-B)', () => {
             lease: 2,
             deadStreak: 3,
             completed: { toolCalls: 0 },
-            at: '2026-10-14T09:00:00.000Z',
+            at: new Date().toISOString(),
           },
         },
         created.claimToken,
