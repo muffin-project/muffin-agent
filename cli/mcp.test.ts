@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -238,6 +238,20 @@ describe('una chiave di un server MCP non passa per argv (correzione owner 18/08
       expect(r.code).toBe(78);
       expect(r.err).toMatch(/ps di chiunque|shell history/);
       expect(r.err).toMatch(/secret:\/\/mcp_github_token/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rifiuta un token negli argomenti del server prima di avviarlo, senza stamparlo', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-mcp-pat-argv-'));
+    const token = 'ghp_abcdefghijklmnopqrstuvwxyz01';
+    try {
+      const r = muffin(dir, ['mcp', 'add', 'gh', '--', 'node', 'server.js', '--token', token]);
+      expect(r.code).toBe(78);
+      expect(r.err).toContain('server non avviato né registrato');
+      expect(r.err + r.out).not.toContain(token);
+      expect(existsSync(join(dir, 'mcp.json'))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
