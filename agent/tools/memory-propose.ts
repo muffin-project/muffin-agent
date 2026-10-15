@@ -28,7 +28,7 @@ import type { CapabilityDecl, TrustTier } from '../../core/policy/types.js';
 import type { Tracer } from '../../core/tracing/types.js';
 import type { ToolOutcome } from '../loop.js';
 import type { Provider, ToolSpec } from '../providers/types.js';
-import { authenticatedOwnerInput, type OwnerIngress } from './owner-ingress.js';
+import { type OwnerIngress, verifyQuotedInstruction } from './owner-ingress.js';
 
 /**
  * Staging, not committing: a second identical call is the same proposal, and
@@ -58,6 +58,8 @@ export const memoryProposeSpec: ToolSpec = {
   description:
     'Remember something intentionally. Use it when the owner says "ricorda X" ("ricorda che il mio commercialista è Mario"), ' +
     'or when you noticed a detail worth keeping and want it to survive this turn. ' +
+    "Pass the owner's exact instructing words as `instruction` when they exist, in any language or verb — " +
+    'the kernel verifies those bytes and marks the candidate owner-stated only then. ' +
     'Not for finding anything (that is memory_search), explaining a belief (memory_why), or forgetting one (memory_forget) — ' +
     'and never use the shell, sqlite or files for this. ' +
     'Stages a durable proposal that the memory reconciler accepts, merges, supersedes, reviews or rejects. ' +
@@ -86,6 +88,11 @@ export const memoryProposeSpec: ToolSpec = {
         description:
           'When it became true out there, if stated (YYYY-MM-DD). Omit when nobody said.',
       },
+      instruction: {
+        type: 'string',
+        description:
+          'The owner\u2019s exact instructing words, when the owner asked to remember this (any language or verb). Verified byte-for-byte against the current message; only then is the candidate owner-stated.',
+      },
     },
     required: ['subject', 'predicate', 'object'],
   },
@@ -110,21 +117,6 @@ export type ProposeContext = {
   getSource?: () => OwnerIngress | null;
 };
 
-/**
- * The `ricorda X` prefix, mirroring `forgetDiscoveryQuery`: only the body's
- * remainder is the candidate — the verb itself is authority, not content.
- */
-export function rememberBody(request: string): string | null {
-  const body = request
-    .trim()
-    .replace(/^@?muffin[,:!]\s*/iu, '')
-    .replace(/^(?:per favore|please)[,:!]?\s+/iu, '');
-  const match = body.match(
-    /^(?:ricorda(?:ti(?:\s+di)?)?|remember|do\s+not\s+forget)\s+([\s\S]+)$/iu,
-  );
-  return match?.[1]?.trim() || null;
-}
-
 type RawArgs = {
   subject?: unknown;
   predicate?: unknown;
@@ -132,10 +124,17 @@ type RawArgs = {
   evidence_ids?: unknown;
   confidence?: unknown;
   valid_from?: unknown;
+  instruction?: unknown;
 };
 
 function str(raw: unknown): string | null {
   return typeof raw === 'string' && raw.trim() !== '' ? raw : null;
+}
+
+/** The model's quoted instruction, if it passed one at all. */
+function quotedInstruction(raw: unknown): unknown {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined;
+  return (raw as { instruction?: unknown }).instruction;
 }
 
 export async function proposeMemory(
@@ -156,21 +155,28 @@ export async function proposeMemory(
     };
   }
   // The model authored this projection; its arguments cannot grant owner authority.
-  // Exception with a narrow gate (#776): the current owner message is an
-  // authenticated "ricorda X" AND the object (the value — the actual payload)
-  // appears byte-for-byte in it. The predicate is typing, validated by the
-  // reconciler judge like any other candidate; the subject may additionally
-  // be the canonical 'owner' (the capability is already owner-only on the
-  // host tenant, so that name claims nothing the door hasn't enforced).
+  // Exception with a narrow gate (#776): the model quotes the exact owner
+  // instruction it executes, and the kernel verifies those bytes sit in the
+  // authenticated current input. The object (the value — the actual payload)
+  // must sit inside the quoted instruction, and the subject must be there
+  // too unless it is the canonical 'owner' (the capability is already
+  // owner-only on the host tenant, so that name claims nothing the door
+  // hasn't enforced). Any language, any verb — "segnati", typos included —
+  // because understanding is the model's job and provenance is the kernel's.
   // Then the owner authored the candidate and the model only typed it —
-  // producer owner-stated, origin said. Anything else (quoted, inferred,
-  // foreign turn, values from elsewhere) stays agent-inference.
-  const ownerInput = authenticatedOwnerInput(ctx.getSource?.() ?? null, ctx.tenant, ctx.turnId);
-  const ownerBody = ownerInput === null ? null : rememberBody(ownerInput);
-  const statedByOwner = (body: string): boolean =>
-    body.includes(object) && (subject === 'owner' || body.includes(subject));
+  // producer owner-stated, origin said. Anything else (no quote, quoted
+  // third party, inferred, foreign turn, values from elsewhere) stays
+  // agent-inference.
+  const instruction = verifyQuotedInstruction(
+    ctx.getSource?.() ?? null,
+    ctx.tenant,
+    ctx.turnId,
+    quotedInstruction(raw),
+  );
+  const statedByOwner = (quote: string): boolean =>
+    quote.includes(object) && (subject === 'owner' || quote.includes(subject));
   const producer =
-    ownerBody === null || !statedByOwner(ownerBody)
+    instruction === null || !statedByOwner(instruction)
       ? ('agent-inference' as const)
       : ('owner-stated' as const);
 

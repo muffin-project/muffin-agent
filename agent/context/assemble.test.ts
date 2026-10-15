@@ -258,7 +258,9 @@ describe('the owner-class prompt does not move', () => {
    */
   const OWNER_PROMPT_SHA_AT_SPLIT =
     // #529: session plan rows are context, not a grant or Turn completion rule.
-    'bfea965a5ffcc39f827bc695fa4eeb201ca43f5326ed63ff6ddda7e1ff2cf011';
+    // Re-misurato 2026-10-15 (slice/quote-authority): la riga memory_forget
+    // insegna instruction invece di `{}`.
+    '0e585218ed6b18a7d1cda49fcf4f5ba95d1f69d1708247b949da198e60f07015';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
@@ -372,7 +374,7 @@ describe('the owner-class prompt does not move', () => {
    * `63c6590ed366dbb44d9e2a5ce2b018f9f0ffe3993ec5ea34d555c46cddf0b3f4`.
    */
   // #529: the same scoped-work rule reaches owner and group prompts.
-  const GROUP_PROMPT_SHA_V1 = '88d78e7c433e626c2d497a5f460f9c9c0ee10d2d96fdcb20bc50261290bc86d4';
+  const GROUP_PROMPT_SHA_V1 = 'ef99d12c6473eae61ff40ab5b2eaeb87b9644b95ecd54487bb7fa1b0f411275e';
 
   /**
    * Ri-fissato 2026-10-10: la regola sull'esposizione progressiva chiarisce

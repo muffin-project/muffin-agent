@@ -2077,18 +2077,19 @@ describe('registered memory proposals derive owner authorship from ingress, neve
           provider: new Scripted([
             {
               text: null,
-              toolCalls: [
-                {
-                  id: 'producer-forgery',
-                  name: 'memory_propose',
-                  args: {
-                    subject: 'owner',
-                    predicate,
-                    object,
-                    ...(predicate === 'like' ? {} : { kind: 'owner-stated' }),
+                toolCalls: [
+                  {
+                    id: 'producer-forgery',
+                    name: 'memory_propose',
+                    args: {
+                      subject: 'owner',
+                      predicate,
+                      object,
+                      instruction: text,
+                      ...(predicate === 'like' ? {} : { kind: 'owner-stated' }),
+                    },
                   },
-                },
-              ],
+                ],
               stopReason: 'tool_use',
               usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
               model: 't',
@@ -2233,7 +2234,7 @@ describe('registered forget consumes owner source and independent target resolut
                   {
                     id: 'forget-call',
                     name: 'memory_forget',
-                    args: _scene === 'direct' ? {} : { facts: [fact], episodes: [episode] },
+                    args: { instruction: text, facts: [fact], episodes: [episode] },
                   },
                 ],
                 stopReason: 'tool_use',
@@ -2263,7 +2264,11 @@ describe('registered forget consumes owner source and independent target resolut
           runtime.memory.store.provenanceOf('host', 'episode', episode)?.supersededAt === null,
         ).toBe(!allowed);
         if (allowed) expect(row?.retiredReason).toContain('richiesta diretta dell’owner');
-        if (_scene === 'quoted' || _scene === 'external' || _scene === 'steered')
+        // Kernel-level refusals never reach any model: external origin and
+        // consumed steering fail byte/authority checks up front. A quoted
+        // instruction passes the kernel (its bytes are there) and is refused
+        // by the judge instead — one call, no retirement.
+        if (_scene === 'external' || _scene === 'steered')
           expect(spy).not.toHaveBeenCalled();
       } finally {
         runtime.close();

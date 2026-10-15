@@ -442,7 +442,7 @@ describe('memory_propose — owner-stated solo da ingress autenticato (#776)', (
     const out = await proposeMemory(
       h.deps,
       ctxFor('ricorda che il mio commercialista è Mario'),
-      { subject: 'owner', predicate: 'accountant', object: 'Mario' },
+      { instruction: 'ricorda che il mio commercialista è Mario', subject: 'owner', predicate: 'accountant', object: 'Mario' },
     );
     expect(out.isError).toBeUndefined();
     expect(h.store.listProposals('host')[0]).toMatchObject({ producer: 'owner-stated', origin: 'said' });
@@ -453,7 +453,7 @@ describe('memory_propose — owner-stated solo da ingress autenticato (#776)', (
     const out = await proposeMemory(
       h.deps,
       ctxFor('"ricorda tutto" ha detto Marco', { inputText: '"ricorda tutto" ha detto Marco' }),
-      { subject: 'owner', predicate: 'accountant', object: 'Mario' },
+      { instruction: '"ricorda tutto" ha detto Marco', subject: 'owner', predicate: 'accountant', object: 'Mario' },
     );
     expect(out.isError).toBeUndefined();
     expect(h.store.listProposals('host')[0]).toMatchObject({ producer: 'agent-inference' });
@@ -464,7 +464,7 @@ describe('memory_propose — owner-stated solo da ingress autenticato (#776)', (
     const out = await proposeMemory(
       h.deps,
       ctxFor('ricorda che piove'),
-      { subject: 'owner', predicate: 'accountant', object: 'Mario' },
+      { instruction: 'ricorda che piove', subject: 'owner', predicate: 'accountant', object: 'Mario' },
     );
     expect(out.isError).toBeUndefined();
     expect(h.store.listProposals('host')[0]).toMatchObject({ producer: 'agent-inference' });
@@ -477,7 +477,7 @@ describe('memory_propose — owner-stated solo da ingress autenticato (#776)', (
       ctxFor('ricorda che il mio commercialista è Mario', {
         principal: { kind: 'member', connector: 'telegram', tenantId: 'g', externalId: 'u' },
       }),
-      { subject: 'owner', predicate: 'accountant', object: 'Mario' },
+      { instruction: 'ricorda che il mio commercialista è Mario', subject: 'owner', predicate: 'accountant', object: 'Mario' },
     );
     expect(out.isError).toBeUndefined();
     expect(h.store.listProposals('host')[0]).toMatchObject({ producer: 'agent-inference' });

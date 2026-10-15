@@ -3,12 +3,8 @@ import { type RecallDeps, recall } from '../../core/memory/recall.js';
 import type { CapabilityDecl, TrustTier } from '../../core/policy/types.js';
 import type { ToolOutcome } from '../loop.js';
 import type { Provider, ToolSpec } from '../providers/types.js';
-import {
-  type ForgetSource,
-  forgetDiscoveryQuery,
-  ownerForgetRequest,
-} from './memory-forget-intent.js';
 import { type ForgetCandidate, resolveForgetTargets } from './memory-forget-target.js';
+import { type OwnerIngress, verifyQuotedInstruction } from './owner-ingress.js';
 
 /**
  * Owner-only on purpose: «dimentica X» is the owner's word about the owner's
@@ -31,16 +27,39 @@ export const memoryForgetCapability: CapabilityDecl = {
 export const memoryForgetSpec: ToolSpec = {
   name: 'memory_forget',
   description:
-    'Forget memory on a direct current owner request. Use it when the owner asks "dimentica X" or "forget X". ' +
-    'Not for a correction, a quoted request, or your own judgment that something is stale. ' +
-    'Call with {}. The runtime derives the target from the authenticated owner message, resolves matching facts ' +
-    'and their source episodes, and retires them through the canonical writer. Unresolved targets or sources ' +
-    'containing other information require clarification; no retirement is inferred from a matching keyword. ' +
+    'Forget memory on a direct current owner request. Use it when the owner asks to forget something, ' +
+    'in whatever words. Quote the exact owner words that ask to forget ' +
+    'as `instruction` — any language, any verb ("dimentica X", "segnati di scordarti Y", typos included): ' +
+    "understanding the request is your job, proving it is the owner's is the kernel's, which checks the bytes. " +
+    'Call with {instruction} first: you get the resolved candidates back. Then call with {instruction, facts, episodes} ' +
+    'using those ids. Not for a correction, a quoted third-party request, or your own judgment that something ' +
+    'is stale. Unresolved targets or sources containing other information require clarification. ' +
     'History and provenance remain queryable. Never use shell, sqlite or files for this. Report the actual receipt.',
-  inputSchema: { type: 'object', properties: {} },
+  inputSchema: {
+    type: 'object',
+    properties: {
+      instruction: {
+        type: 'string',
+        description:
+          'The owner\u2019s exact words asking to forget, quoted verbatim. Verified byte-for-byte against the current message; required.',
+      },
+      facts: {
+        type: 'array',
+        items: { type: 'integer' },
+        description:
+          'Fact ids to retire, from the candidate list. Omit on the first call to list candidates.',
+      },
+      episodes: {
+        type: 'array',
+        items: { type: 'integer' },
+        description:
+          'Episode ids to retire from recall, from the candidate list. Omit on the first call.',
+      },
+    },
+  },
 };
 
-type RawArgs = { query?: unknown; facts?: unknown; episodes?: unknown };
+type RawArgs = { instruction?: unknown; facts?: unknown; episodes?: unknown };
 
 function idList(raw: unknown, name: string): number[] | string {
   if (raw === undefined) return [];
@@ -60,7 +79,7 @@ export type ForgetContext = {
   signal?: AbortSignal;
   tenant: string;
   turnId: string;
-  getSource: () => ForgetSource | null;
+  getSource: () => OwnerIngress | null;
   jobId?: string;
 };
 
@@ -78,10 +97,18 @@ export async function forgetMemory(
     tier: resolutionTier,
   });
   if (ctx.signal?.aborted) return error('memory_forget: interrotto. Nessuna memoria ritirata.');
-  const request = ownerForgetRequest(ctx.getSource(), ctx.tenant, ctx.turnId);
+  // Authority by quotation (#859 follow-up): the model declares which owner
+  // words it executes; the kernel verifies the bytes. No verb lists — the
+  // request below is whatever the owner wrote, in whatever words.
+  const request = verifyQuotedInstruction(
+    ctx.getSource(),
+    ctx.tenant,
+    ctx.turnId,
+    (args as RawArgs | undefined)?.instruction,
+  );
   if (request === null)
     return error(
-      'memory_forget: nessuna richiesta diretta e attuale dell’owner autorizza questo oblio.',
+      'memory_forget: cita tra virgolette le parole dell’owner che chiedono di dimenticare (instruction) — senza, nessun oblio.',
     );
   if (args !== undefined && (args === null || typeof args !== 'object' || Array.isArray(args)))
     return error('memory_forget: argomenti non validi.');
@@ -90,14 +117,13 @@ export async function forgetMemory(
   const requestedEpisodes = idList(raw.episodes, 'episodes');
   if (typeof requestedFacts === 'string') return error(requestedFacts);
   if (typeof requestedEpisodes === 'string') return error(requestedEpisodes);
-  // Legacy query never controls discovery or the mutation target.
-  const discoveryQuery = forgetDiscoveryQuery(request)!;
-  const found = await recall(deps, ctx.tenant, discoveryQuery, {
+  // The quoted instruction drives discovery; the kernel already verified it.
+  const found = await recall(deps, ctx.tenant, request, {
     limit: 13,
     ...(ctx.jobId === undefined ? {} : { jobId: ctx.jobId }),
   });
   resolutionTier = Math.max(0, ...found.items.map((i) => i.trustTier)) as TrustTier;
-  const fallbackFacts = deps.store.searchActiveFacts(ctx.tenant, discoveryQuery, 13);
+  const fallbackFacts = deps.store.searchActiveFacts(ctx.tenant, request, 13);
   if (found.items.length >= 13 || fallbackFacts.length >= 13)
     return error(
       'Troppi candidati: specifica meglio cosa vuoi dimenticare. Nessuna memoria ritirata.',
@@ -208,7 +234,7 @@ export async function forgetMemory(
     return error(
       'Gli id del modello non corrispondono al bersaglio autorizzato dall’owner. Nessuna memoria ritirata.',
     );
-  if (typeof raw.query === 'string' && !requestedFacts.length && !requestedEpisodes.length) {
+  if (!requestedFacts.length && !requestedEpisodes.length) {
     return {
       content:
         'Candidati autorizzati dalla richiesta attuale:\n' +
@@ -216,7 +242,7 @@ export async function forgetMemory(
           .filter((c) => (c.kind === 'fact' ? selectedFacts.has(c.id) : selectedEpisodes.has(c.id)))
           .map((c) => `[${c.kind} #${c.id}] ${c.text}`)
           .join('\n') +
-        '\nPer eseguire usa memory_forget con gli id, oppure {}.',
+        '\nPer eseguire usa memory_forget con gli stessi instruction e gli id.',
       tier: resolutionTier,
     };
   }
@@ -224,7 +250,9 @@ export async function forgetMemory(
   // transaction; the existing writer acquires the ingestion lock inside it.
   const result = deps.store.transact(() => {
     ctx.signal?.throwIfAborted();
-    if (ownerForgetRequest(ctx.getSource(), ctx.tenant, ctx.turnId) !== request)
+    if (
+      verifyQuotedInstruction(ctx.getSource(), ctx.tenant, ctx.turnId, raw.instruction) !== request
+    )
       throw new Error('La richiesta dell’owner è cambiata: nessuna memoria ritirata.');
     for (const id of selectedFacts)
       if (JSON.stringify(deps.store.factById(ctx.tenant, id)) !== snapshots.get(`fact:${id}`))
