@@ -1,7 +1,7 @@
 import DatabaseCtor from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { afterEach, describe, expect, it } from 'vitest';
-import { VectorIndex } from './vectors.js';
+import { quantiNonIndicizzati, VectorIndex } from './vectors.js';
 import { MEMORY_SCHEMA } from './schema.js';
 import { makeEmbedder, toVectorBlob, type Embedder } from './embed.js';
 import { MemoryStore } from './store.js';
@@ -54,6 +54,48 @@ const conEpisodi = (db: DatabaseCtor.Database, quanti: number): void => {
   );
   for (let i = 0; i < quanti; i += 1) ins.run('host', 'cli', 't1', 'user', 'message', `frase ${i}`, 0, '2026-08-27', 0);
 };
+
+describe('indicizzazione del backlog per tenant', () => {
+  it('drena una pagina globale mantenendo ogni vettore nella sua partizione', async () => {
+    const db = new DatabaseCtor(':memory:');
+    try {
+      const store = new MemoryStore(db);
+      const embedder = finto('test:tenant-index', 4);
+      const vectors = new VectorIndex(db, embedder);
+      const add = (tenantId: string, text: string) =>
+        store.addEpisode({
+          tenantId,
+          connector: 'telegram',
+          threadKey: tenantId,
+          role: 'user',
+          kind: 'message',
+          content: text,
+          trustTier: 0,
+          createdAt: '2026-10-09T09:00:00Z',
+        });
+      add('group:telegram:a', 'evidenza sintetica del gruppo A');
+      add('group:telegram:b', 'evidenza sintetica del gruppo B');
+      add('host', 'evidenza sintetica del tenant host');
+
+      expect(quantiNonIndicizzati(db, embedder.id)).toBe(3);
+      expect(await vectors.indexBacklogAcrossTenants('2026-10-09T09:01:00Z', 1, 'host')).toBe(1);
+      expect(quantiNonIndicizzati(db, embedder.id)).toBe(2);
+      expect(await vectors.indexBacklogAcrossTenants('2026-10-09T09:02:00Z', 1, 'host')).toBe(1);
+      expect(await vectors.indexBacklogAcrossTenants('2026-10-09T09:03:00Z', 1, 'host')).toBe(0);
+      expect(quantiNonIndicizzati(db, embedder.id)).toBe(1);
+      expect(vectors.indexBacklog('host')).toHaveLength(1);
+
+      const a = await vectors.search('group:telegram:a', 'query');
+      const b = await vectors.search('group:telegram:b', 'query');
+      expect(a.map((hit) => hit.text)).toEqual(['evidenza sintetica del gruppo A']);
+      expect(b.map((hit) => hit.text)).toEqual(['evidenza sintetica del gruppo B']);
+      expect(await vectors.search('host', 'query')).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+});
 
 describe('la tabella vettoriale segue l\'embedder', () => {
   let db: DatabaseCtor.Database | undefined;
