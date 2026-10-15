@@ -48,9 +48,11 @@ import {
   resolveContinuationSuffix,
   retryDelayMs,
 } from './stream.js';
+import type { TurnRun } from './run-state.js';
 import { runTool } from './tool-call.js';
 import {
   ApprovalRequired,
+  MAX_AUTO_RENEW_LEASES,
   MAX_PROVIDER_EMPTY_RETRIES,
   MAX_TRANSPORT_RETRIES,
   MAX_TRUNCATION_CONTINUATIONS,
@@ -145,6 +147,34 @@ function leaseAbortClass(reason: Exclude<ExecutionAbortReason, 'user_stop'>): Co
     case 'active_model_budget_exhausted':
       return 'active_model_budget';
   }
+}
+
+/**
+ * Calm-harness renewal (Fase 1): a spent lease from a *slow provider* renews
+ * silently instead of parking the turn on the owner. Only `model_stall` and
+ * `model_deadline` qualify — walls, spent delegation envelopes and user stops
+ * are verdicts, and `active_model_budget_exhausted` would spend past the cap
+ * the owner delegated. Progress resets the count; three progress-less renewals
+ * yield to the normal continuable path (and from there to the dead-route
+ * breaker). Returns true when renewed — the caller `continue`s the loop.
+ *
+ * No new lease row, no message, no model notification: the same ExecutionBudget
+ * (wall and active accounting intact) simply opens its next model call. The
+ * heartbeat line keeps narrating; the outcome, whenever it lands, is the same
+ * shape as if the first call had answered.
+ */
+export function tryAutoRenewLease(
+  run: Pick<TurnRun, 'toolCallsMade' | 'autoRenewsUsed' | 'autoRenewBaselineCalls'>,
+  abortReason: ExecutionAbortReason,
+): boolean {
+  if (abortReason !== 'model_stall' && abortReason !== 'model_deadline') return false;
+  if (run.toolCallsMade > run.autoRenewBaselineCalls) {
+    run.autoRenewsUsed = 0;
+  }
+  if (run.autoRenewsUsed >= MAX_AUTO_RENEW_LEASES) return false;
+  run.autoRenewsUsed += 1;
+  run.autoRenewBaselineCalls = run.toolCallsMade;
+  return true;
 }
 
 /**
@@ -716,9 +746,10 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       if (abortReason === 'user_stop' || input.signal?.aborted)
         return finish(scope, 'aborted', 'Interrotto.', 'user_stop');
       if (abortReason !== undefined) {
-        // A spent lease is a yield, not an ending: the work checkpoints
-        // durably and the owner may grant the next lease. Only an explicit
-        // stop ends the work itself here.
+        // A spent lease is a yield, not an ending: slow providers renew
+        // silently (tryAutoRenewLease) instead of parking the turn on the
+        // owner; only an exhausted bound yields through releaseContinuable.
+        if (tryAutoRenewLease(run, abortReason)) continue;
         return releaseContinuable(scope, leaseAbortClass(abortReason), run.iterations);
       }
       // Two failures wearing one type, and they take different doors.
@@ -784,7 +815,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     // can come back shaped like a success — empty. It is never a completion,
     // and it must never become the provider's `empty` to retry against the
     // same machine: it takes the same two doors as the catch above.
-    if (lastAbortReason !== undefined && result.text === null && result.toolCalls.length === 0) {
+      if (lastAbortReason !== undefined && result.text === null && result.toolCalls.length === 0) {
       chatSpan.setAttributes({
         'muffin.chat_call.duration_ms': Date.now() - chatCallStartedAt,
         'muffin.chat_call.abort_reason': lastAbortReason,
@@ -795,6 +826,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       if (lastAbortReason === 'user_stop' || input.signal?.aborted) {
         return finish(scope, 'aborted', 'Interrotto.', 'user_stop');
       }
+      if (tryAutoRenewLease(run, lastAbortReason)) continue;
       return releaseContinuable(scope, leaseAbortClass(lastAbortReason), run.iterations);
     }
     // Consumed: the escalation lasts exactly one provider response. A

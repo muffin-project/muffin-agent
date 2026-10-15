@@ -33,7 +33,7 @@ import {
 import { searchCapability, searchSpec } from '../tools/search.js';
 import { ExecutionBudget } from './execution-budget.js';
 import { makeSnapshot } from './permissions.js';
-import { type RoundScope, recover, runRounds } from './round.js';
+import { type RoundScope, recover, runRounds, tryAutoRenewLease } from './round.js';
 import { TurnRun } from './run-state.js';
 import {
   assertNever,
@@ -805,11 +805,39 @@ describe('execution budget', () => {
 
     const result = await runRounds(h.scope);
 
-    expect(calls).toBe(1);
-    // P0-B: la deadline cede la lease con la sua classe, senza bruciare retry
-    // di trasporto né rung semantici.
+    // Fase 1 calm harness: la lease lenta si rinnova in silenzio (1 + 3
+    // rinnovi) invece di parcheggiare il turno al primo colpo — poi cede
+    // onestamente per la via continuable normale, dove la conta il breaker.
+    expect(calls).toBe(4);
     expect(result).toMatchObject({ stopped: 'continuable', reason: 'model_deadline' });
     expect(h.span.attrs['muffin.turn.stop_reason']).toBe('model_deadline');
+  });
+
+  it('una risposta alla terza chiamata chiude answered, senza parcheggi intermedi', async () => {
+    let calls = 0;
+    const provider: Provider = {
+      kind: 'openai-compat',
+      async chat(call) {
+        calls += 1;
+        if (calls < 3) {
+          await new Promise<never>((_, reject) => {
+            call.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+          });
+          throw new Error('unreachable');
+        }
+        return reply('eccomi');
+      },
+    };
+    const h = harness({
+      provider,
+      execution: new ExecutionBudget({ modelCallDeadlineMs: 10, turnWallDeadlineMs: 500, stallTimeoutMs: 20 }),
+    });
+
+    const result = await runRounds(h.scope);
+
+    expect(calls).toBe(3);
+    expect(result).toMatchObject({ stopped: 'answered' });
+    expect(result.text).toBe('eccomi');
   });
 
   it('a call our own deadline aborted is never read as the provider answering empty', async () => {
@@ -840,7 +868,9 @@ describe('execution budget', () => {
 
     const result = await runRounds(h.scope);
 
-    expect(calls).toBe(1);
+    // Fase 1: i rinnovi silenziosi provano 4 volte prima di cedere — ma mai
+    // come provider_empty (la ragione resta il segnale, non la forma).
+    expect(calls).toBe(4);
     expect(result).toMatchObject({ stopped: 'continuable', reason: 'model_deadline' });
   });
 });
@@ -1189,5 +1219,35 @@ describe('la compattazione segue il budget del profilo', () => {
     await runRounds(h.scope);
 
     expect(risultatiInviati(provider)).toEqual([big(12_000), big(12_000)]);
+  });
+});
+
+describe('tryAutoRenewLease — rinnovo silenzioso delle lease lente', () => {
+  const run = (over: Record<string, number> = {}) => ({
+    toolCallsMade: 0,
+    autoRenewsUsed: 0,
+    autoRenewBaselineCalls: 0,
+    ...over,
+  });
+  it('rinnova model_stall e model_deadline fino al tetto', () => {
+    const r = run();
+    expect(tryAutoRenewLease(r, 'model_deadline')).toBe(true);
+    expect(tryAutoRenewLease(r, 'model_deadline')).toBe(true);
+    expect(tryAutoRenewLease(r, 'model_stall')).toBe(true);
+    expect(r.autoRenewsUsed).toBe(3);
+    expect(tryAutoRenewLease(r, 'model_deadline')).toBe(false);
+  });
+  it('il progresso azzera la conta', () => {
+    const r = run({ toolCallsMade: 0, autoRenewsUsed: 2, autoRenewBaselineCalls: 0 });
+    r.toolCallsMade = 5;
+    expect(tryAutoRenewLease(r, 'model_deadline')).toBe(true);
+    expect(r.autoRenewsUsed).toBe(1);
+  });
+  it('muro, budget e stop non rinnovano mai', () => {
+    for (const reason of ['turn_deadline', 'active_model_budget_exhausted', 'user_stop'] as const) {
+      const r = run();
+      expect(tryAutoRenewLease(r, reason)).toBe(false);
+      expect(r.autoRenewsUsed).toBe(0);
+    }
   });
 });
