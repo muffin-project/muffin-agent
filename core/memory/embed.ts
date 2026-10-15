@@ -16,6 +16,8 @@ export interface Embedder {
   readonly id: string;
   readonly dimensions: number;
   embed(texts: string[]): Promise<Float32Array[]>;
+  /** Return the endpoint's actual vector length without imposing configured dimensions. */
+  probeDimensions?(): Promise<number>;
 }
 
 /**
@@ -71,6 +73,27 @@ export class OllamaEmbedder implements Embedder {
   private readonly baseUrl: string;
 
   async embed(texts: string[]): Promise<Float32Array[]> {
+    const out = await this.requestEmbeddings(texts);
+    for (const vector of out) {
+      // Dimension mismatch is worth failing on: a table built for 1024 floats
+      // silently accepting 768 is the kind of wrong that shows up as bad recall
+      // months later, never as an error.
+      if (vector.length !== this.dimensions) {
+        throw new EmbedderUnavailable(this.id, `dimensione ${vector.length}, attesa ${this.dimensions}`);
+      }
+    }
+    return out;
+  }
+
+  async probeDimensions(): Promise<number> {
+    const [vector] = await this.requestEmbeddings(['muffin']);
+    if (vector === undefined || vector.length === 0) {
+      throw new EmbedderUnavailable(this.id, 'risposta senza embedding');
+    }
+    return vector.length;
+  }
+
+  private async requestEmbeddings(texts: string[]): Promise<Float32Array[]> {
     const out: Float32Array[] = [];
     for (const text of texts) {
       let response: Response;
@@ -105,15 +128,6 @@ export class OllamaEmbedder implements Embedder {
       if (!response.ok) throw new EmbedderUnavailable(this.id, `HTTP ${response.status}`);
       const body = (await response.json()) as { embedding?: number[] };
       if (!body.embedding) throw new EmbedderUnavailable(this.id, 'risposta senza embedding');
-      // Dimension mismatch is worth failing on: a table built for 1024 floats
-      // silently accepting 768 is the kind of wrong that shows up as bad recall
-      // months later, never as an error.
-      if (body.embedding.length !== this.dimensions) {
-        throw new EmbedderUnavailable(
-          this.id,
-          `dimensione ${body.embedding.length}, attesa ${this.dimensions}`,
-        );
-      }
       out.push(Float32Array.from(body.embedding));
     }
     return out;
@@ -133,25 +147,36 @@ export class OpenAICompatEmbedder implements Embedder {
   }
 
   async embed(texts: string[]): Promise<Float32Array[]> {
+    const vectors = await this.requestEmbeddings(texts, true);
+    for (const vector of vectors) {
+      // Runtime vectors pin the configured dimension so they agree with vec0.
+      if (vector.length !== this.dimensions) {
+        throw new EmbedderUnavailable(this.id, `dimensione ${vector.length}, attesa ${this.dimensions}`);
+      }
+    }
+    return vectors;
+  }
+
+  async probeDimensions(): Promise<number> {
+    const [vector] = await this.requestEmbeddings(['muffin'], false);
+    if (vector === undefined || vector.length === 0) {
+      throw new EmbedderUnavailable(this.id, 'risposta senza embedding');
+    }
+    return vector.length;
+  }
+
+  private async requestEmbeddings(texts: string[], includeDimensions: boolean): Promise<Float32Array[]> {
     let response: Response;
     try {
+      const body: { model: string; input: string[]; dimensions?: number } = { model: this.model, input: texts };
+      if (includeDimensions) body.dimensions = this.dimensions;
       response = await fetch(`${this.baseUrl}/embeddings`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${this.apiKey}` },
-        // `dimensions` nel corpo, non solo nella nostra config: sull'API di
-        // OpenAI è il parametro che *accorcia davvero* l'embedding
-        // (`text-embedding-3-*`). Senza, chiedere 512 significa ricevere 1536 e
-        // scoprirlo all'insert in vec0 — cioè configurare una dimensione non
-        // nativa era garantito sbagliato.
-        //
-        // Mandato **sempre**, e la generalità di questa scelta non è verificata:
-        // `dimensions` è posteriore a `text-embedding-ada-002`, e un endpoint
-        // che non lo conosce può rifiutare la richiesta invece di ignorare il
-        // campo. Se succede è un `HTTP 400` rumoroso — un guasto che si vede al
-        // primo giro, non un danno silenzioso — e il controllo qui sotto prende
-        // comunque i server che lo ignorano. Resta da decidere se legarlo al
-        // modello.
-        body: JSON.stringify({ model: this.model, input: texts, dimensions: this.dimensions }),
+        // Probe omits this optional provider parameter to discover the vector
+        // length the endpoint returns by default. Normal embedding calls still
+        // send the configured dimension explicitly.
+        body: JSON.stringify(body),
         signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
       });
     } catch (error) {
@@ -163,15 +188,6 @@ export class OpenAICompatEmbedder implements Embedder {
     if (!response.ok) throw new EmbedderUnavailable(this.id, `HTTP ${response.status}`);
     const body = (await response.json()) as { data?: { embedding: number[] }[] };
     if (!body.data) throw new EmbedderUnavailable(this.id, 'risposta senza data');
-    // Lo stesso controllo che fa `OllamaEmbedder`, e per lo stesso motivo:
-    // qui la dimensione è **cotta nella tabella vettoriale**, quindi una
-    // risposta della lunghezza sbagliata non è un dettaglio da lasciar passare
-    // a vec0, che la riporterebbe senza nominare l'embedder.
-    for (const d of body.data) {
-      if (d.embedding.length !== this.dimensions) {
-        throw new EmbedderUnavailable(this.id, `dimensione ${d.embedding.length}, attesa ${this.dimensions}`);
-      }
-    }
     return body.data.map((d) => Float32Array.from(d.embedding));
   }
 }
@@ -263,6 +279,16 @@ export class FallbackEmbedder implements Embedder {
       this.onFallback?.(error);
       return this.secondario.embed(texts);
     }
+  }
+
+  async probeDimensions(): Promise<number> {
+    const probe = this.primario.probeDimensions;
+    if (probe !== undefined) return probe.call(this.primario);
+    const [vector] = await this.primario.embed(['muffin']);
+    if (vector === undefined || vector.length === 0) {
+      throw new EmbedderUnavailable(this.primario.id, 'risposta senza embedding');
+    }
+    return vector.length;
   }
 }
 
