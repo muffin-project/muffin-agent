@@ -1,3 +1,4 @@
+import type { TrustTier } from '../policy/types.js';
 import type { DueCommitment, TodoStore } from '../turns/todo.js';
 import { type DecisionLog, decisionParts } from './decisions.js';
 import type { FireLog } from './firelog.js';
@@ -162,6 +163,15 @@ export type CommitmentDeps = {
   /** Stage 1's signal producer: one indexed query, no model, deliberately uncapped. */
   due: () => DueCommitment[];
   decide: typeof decideProactive;
+  /**
+   * Content lineage for #859, resolved per due row. Optional so the seam stays
+   * testable without stores; production always passes it. Absent = tier-only
+   * gate, the pre-lineage behavior.
+   */
+  lineageOf?: (
+    armedTurnId: string | null,
+    text: string,
+  ) => { ownerBytes: boolean; untrusted: boolean };
   /** Read here, written by the caller after delivery — see `recordCommitmentFired`. */
   fires: FireLog;
   /**
@@ -181,6 +191,49 @@ export type CommitmentDeps = {
   channel: string;
   limit?: number;
 };
+
+/**
+ * #859 content lineage, resolved from durable rows — never from the prompt.
+ *
+ * ownerBytes: the commitment text appears byte-for-byte in the arming turn's
+ * input (the owner authored these bytes). untrusted: the same bytes appear in
+ * tier>1 episode evidence (planted content surviving restatement). Either
+ * store missing (tests, observe --send without memory) = no evidence either
+ * way, and the tier-only gate decides as before — never a guess.
+ */
+export function resolveLineage(
+  turns: { get(id: string): { inputText: string | null } | null } | undefined,
+  store:
+    | {
+        searchEpisodes(
+          tenantId: string,
+          query: string,
+          limit?: number,
+        ): { content: string; trustTier: TrustTier }[];
+      }
+    | undefined,
+  tenant: string,
+  armedTurnId: string | null,
+  text: string,
+): { ownerBytes: boolean; untrusted: boolean } {
+  const trimmed = text.trim();
+  if (armedTurnId === null || trimmed === '') return { ownerBytes: false, untrusted: false };
+  const arming = turns?.get(armedTurnId);
+  const ownerBytes = arming?.inputText?.includes(trimmed) === true;
+  if (store === undefined) return { ownerBytes, untrusted: false };
+  let untrusted = false;
+  try {
+    for (const hit of store.searchEpisodes(tenant, trimmed, 10)) {
+      if (hit.trustTier > 1 && hit.content.includes(trimmed)) {
+        untrusted = true;
+        break;
+      }
+    }
+  } catch {
+    untrusted = false;
+  }
+  return { ownerBytes, untrusted };
+}
 
 export function observeCommitments(deps: CommitmentDeps): CommitmentObservation[] {
   const out: CommitmentObservation[] = [];
@@ -209,6 +262,7 @@ export function observeCommitments(deps: CommitmentDeps): CommitmentObservation[
       continue;
     }
 
+    const lineage = deps.lineageOf?.(commitment.armedTurnId ?? null, commitment.text);
     const trigger: ProactiveTrigger = {
       // The row's own tier, never a literal. This is the line the whole design
       // turns on: what arrives at the gate is the provenance of the turn that
@@ -218,6 +272,7 @@ export function observeCommitments(deps: CommitmentDeps): CommitmentObservation[
       channel: deps.channel,
       kind: 'commitment_due',
       anchor,
+      ...(lineage === undefined ? {} : { lineage }),
     };
     const decision = deps.decide(trigger, deps.ctx);
     deps.decisions?.record({
@@ -333,6 +388,15 @@ export type CommitmentLaneDeps = {
   todos: TodoStore;
   tenant: string;
   fires: FireLog;
+  /**
+   * #859 content lineage, resolved per due row by whoever owns the stores
+   * (production: makeCommitmentLane from the runtime). Optional; absent =
+   * tier-only gate. Forwarded to observeCommitments like decisions.
+   */
+  lineageOf?: (
+    armedTurnId: string | null,
+    text: string,
+  ) => { ownerBytes: boolean; untrusted: boolean };
   /**
    * History, not dedup (see `CommitmentDeps.decisions`): forwarded to
    * `observeCommitments` so the tick path records what the gate decided.
@@ -519,6 +583,7 @@ export class CommitmentLane {
       fires: this.deps.fires,
       tenant: this.deps.tenant,
       ...(this.deps.decisions === undefined ? {} : { decisions: this.deps.decisions }),
+      ...(this.deps.lineageOf === undefined ? {} : { lineageOf: this.deps.lineageOf }),
       ctx: this.deps.context(now),
       channel,
     });

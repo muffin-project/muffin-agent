@@ -171,6 +171,12 @@ export type DueCommitment = {
   tier: TrustTier;
   dueAt: Date;
   createdAt: string;
+  /**
+   * The turn that first armed this row, or null/absent for rows predating
+   * migration 11. Sticky: restatement never overwrites it (see plan()/setDue()).
+   * The proactivity lineage check reads it; nothing else does.
+   */
+  armedTurnId?: string | null;
 };
 
 /**
@@ -213,6 +219,12 @@ CREATE TABLE IF NOT EXISTS todos (
   -- section on the second tier in this file's docstring: the delayed trigger is
   -- precisely the case intrinsicTaint is defined to exclude.
   due_tier    INTEGER CHECK (due_tier IS NULL OR due_tier BETWEEN 0 AND 3),
+  -- The turn that first armed this row (wrote or dated it). NULL for rows
+  -- predating migration 11. Sticky on first arming, never overwritten by
+  -- restatement: a later cleaner turn touching the step must not launder the
+  -- lineage the future wake is judged on. Read only by the proactivity
+  -- lineage check, never by planTaint.
+  armed_turn_id TEXT,
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL,
   PRIMARY KEY (tenant, session_id, key)
@@ -260,12 +272,14 @@ export class TodoStore {
     // item nobody has touched in a week is indistinguishable from one restated
     // a second ago. So the text is refreshed, the state is not.
     this.upsertStmt = db.prepare(
-      `INSERT INTO todos (tenant, session_id, seq, key, text, state, note, tier, created_at, updated_at)
-       VALUES (@tenant, @sessionId, @seq, @key, @text, 'pending', NULL, @tier, @now, @now)
+      `INSERT INTO todos (tenant, session_id, seq, key, text, state, note, tier, armed_turn_id, created_at, updated_at)
+       VALUES (@tenant, @sessionId, @seq, @key, @text, 'pending', NULL, @tier, @armedTurnId, @now, @now)
        ON CONFLICT(tenant, session_id, key) DO UPDATE SET text = excluded.text,
          -- max(), never assignment: a later and cleaner turn restating the same
-         -- step does not launder the sentence the tainted one wrote.
+         -- step does not launder the sentence the tainted one wrote. Same for
+         -- the arming turn: first arming wins, restatement never re-arms.
          tier = max(tier, excluded.tier),
+         armed_turn_id = coalesce(armed_turn_id, excluded.armed_turn_id),
          updated_at = excluded.updated_at`,
     );
     this.nextSeqStmt = db.prepare(
@@ -313,7 +327,7 @@ export class TodoStore {
       // owns the formatting.
       `SELECT session_id AS sessionId, seq, text,
               max(tier, coalesce(due_tier, 0)) AS tier,
-              due_at AS dueAt, created_at AS createdAt
+              due_at AS dueAt, created_at AS createdAt, armed_turn_id AS armedTurnId
        FROM todos
        WHERE tenant = @tenant AND state != 'done' AND due_at IS NOT NULL AND due_at <= @now
        ORDER BY due_at, session_id, seq`,
@@ -327,14 +341,14 @@ export class TodoStore {
    * One transaction, because a plan that half-landed is worse than one that did
    * not: the model would see three of five steps and believe that was the plan.
    */
-  plan(tenant: string, sessionId: string, texts: string[], tier: TrustTier): TodoItem[] {
+  plan(tenant: string, sessionId: string, texts: string[], tier: TrustTier, turnId?: string | null): TodoItem[] {
     const now = this.clock().toISOString();
     const write = this.db.transaction(() => {
       for (const raw of texts) {
         const text = raw.trim();
         if (text === '') continue;
         const seq = (this.nextSeqStmt.get({ tenant, sessionId }) as { next: number }).next;
-        this.upsertStmt.run({ tenant, sessionId, seq, key: keyOf(text), text, tier, now });
+        this.upsertStmt.run({ tenant, sessionId, seq, key: keyOf(text), text, tier, armedTurnId: turnId ?? null, now });
       }
     });
     write();
