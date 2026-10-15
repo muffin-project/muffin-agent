@@ -17,7 +17,8 @@ import type { DiscordAttachment, DiscordMessage } from './api.js';
 import { awaitWithBudget } from '../shared/stop-budget.js';
 import { tryPair as sharedTryPair } from '../shared/ingress/pair.js';
 import { LaneRegistry, QueueNotices, laneKey, type LaneState, type PausaLever } from '../shared/ingress/lane.js';
-import { receive, type Claim, type IngressHooks, type LiveWork } from '../shared/ingress/router.js';
+import { receive, recover, type Claim, type IngressHooks, type LiveWork, type RecoverHooks } from '../shared/ingress/router.js';
+import { recoveredText } from '../../agent/recovered-text.js';
 import type { InboundEvent, IngressPart, IngressPort } from '../shared/ingress/types.js';
 import { atLeastAttachmentTier, type Arrival } from '../shared/ingress/ingest.js';
 import { DRAIN_BUDGET_MS } from '../../core/gateway/service.js';
@@ -570,20 +571,30 @@ export class DiscordConnector {
    * fanno un candidato al pairing, come si spezza un messaggio sotto i 2000
    * caratteri, quale riga dell'inbox si marca elaborata.
    *
-   * **Solo `receive`, non `recover`.** Il gemello esiste per un evento gia'
-   * legato a un `workId` durevole, e `discord_messages` (`inbox.ts`:29-38) non
-   * ha ne' la colonna del legame ne' quella del settle: un messaggio Discord e'
-   * o pending o elaborato. `claim` conia quindi sempre un id nuovo e vince
-   * sempre, non esiste una gara di bind da perdere, e `recover` non ha da qui
-   * un chiamante raggiungibile. La conseguenza e' quella di oggi, invariata:
-   * un crash fra il turno e `markProcessed` fa ripartire il messaggio al drain
-   * successivo. Darle un bind — e con esso l'esattamente-una-volta che
-   * Telegram ha — e' una migrazione additiva dello schema durevole, che il
-   * disegno mette nella fetta 20 accanto alle parti di consegna.
+   * **Receive e recover.** Un messaggio già legato a un `workId` durevole
+   * (`inbox.bindWork`, first-writer-wins) recupera quel Work invece di
+   * coniarne un secondo: un crash fra il turno e `markProcessed` ritrova lo
+   * stesso id al drain successivo (#860, come Telegram).
    */
   private async resolve(stored: StoredMessage, incoming: Incoming): Promise<void> {
     const log = this.deps.log ?? (() => {});
-    const esito = await receive(this.port, this.eventoDi(stored, incoming), this.ganci(stored, incoming));
+    const evento = this.eventoDi(stored, incoming);
+    const ganci = this.ganci(stored, incoming);
+    // Durable event → Work bind (#860): an already-bound message recovers
+    // its Work instead of minting a second one — the crash window between
+    // the turn and markProcessed closes here, not in a second runtime.
+    const bound = this.deps.inbox.boundWork(stored.messageId);
+    const riga = { eventId: stored.messageId, settledAt: this.deps.inbox.settledAt(stored.messageId) };
+    let esito =
+      bound !== null
+        ? await recover(this.port, riga, bound, evento, ganci)
+        : await receive(this.port, evento, ganci);
+
+    // Lost the bind race: another drain committed this message first. Recover
+    // the winner's id exactly as if it had been found bound above.
+    if (esito.kind === 'deferred' && esito.why === 'bind-lost' && esito.workId !== undefined) {
+      esito = await recover(this.port, riga, esito.workId, evento, ganci);
+    }
 
     // Un pairing non crea mai un turno: non chiama il modello e legarlo a uno
     // vorrebbe dire fargli attraversare tutta la macchina di consegna
@@ -654,7 +665,7 @@ export class DiscordConnector {
    * `ingress.commands` e' `false` (fetta 17); `remember` manca perche'
    * `opensATurn` non ha un ramo che possa rifiutare.
    */
-  private ganci(stored: StoredMessage, incoming: Incoming): IngressHooks {
+  private ganci(stored: StoredMessage, incoming: Incoming): IngressHooks & RecoverHooks {
     const log = this.deps.log ?? (() => {});
     const spec = incoming.attachment;
     return {
@@ -677,7 +688,11 @@ export class DiscordConnector {
         : {
             ingest: (ctx) => this.ingest(incoming, spec, ctx.identity.tenant, tierOf(ctx.identity.principal)),
           }),
-      claim: async (): Promise<Claim> => ({ kind: 'mine', workId: randomBytes(16).toString('hex') }),
+      claim: async (): Promise<Claim> => {
+        const minted = randomBytes(16).toString('hex');
+        const bound = this.deps.inbox.bindWork(stored.messageId, minted);
+        return bound.mine ? { kind: 'mine', workId: bound.workId } : { kind: 'taken', workId: bound.workId };
+      },
       work: { loop: this.deps.loop, sessions: this.deps.sessions, lane: this.deps.lane },
       openLive: async () => this.apriIlVivo(incoming),
       deliver: async (_ctx, _workId, text) => {
@@ -688,12 +703,22 @@ export class DiscordConnector {
       },
       recordDelivery: (turnId, delivery) => this.recordDelivery(turnId, delivery),
       finish: () => this.markProcessedQuietly(stored.messageId, log),
-      // Discord non ha un fuoco da spegnere: `discord_messages` non ha una
-      // colonna `settled_at`, perche' senza bind non c'e' la finestra fra il
-      // legame e la consegna che quella colonna esiste per testimoniare.
-      settle: () => {},
+      settle: () => this.deps.inbox.settle(stored.messageId, new Date().toISOString()),
       markProcessed: () => this.markProcessedQuietly(stored.messageId, log),
       log: (riga) => log(`discord: ${riga}`),
+      turn: (id) => this.deps.loop.turns.get(id),
+      recoveredText: (record) => recoveredText(this.deps.loop.sessions, record),
+      // Discord sends synchronously with no possibly-sent tracking: the wire
+      // is never uncertain here, unlike Telegram's multi-part plan.
+      wireWasUncertain: () => false,
+      redeliver: async (_id, replyTo, text) => {
+        const channelId =
+          typeof replyTo.channelId === 'string' ? replyTo.channelId : incoming.channelId;
+        for (const part of renderForDiscord(text)) {
+          await this.deps.api.sendMessage(channelId, part);
+        }
+        return 'sent' as const;
+      },
     };
   }
 
