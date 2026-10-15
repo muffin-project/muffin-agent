@@ -54,6 +54,7 @@ import type { DeliveryOutcome, FileSpec, Surface } from '../core/surface/types.j
 import type { ModelLane } from '../core/turns/model-lane.js';
 import { decidiVista, type Vista } from '../core/vista/vista.js';
 import { cmdModel } from './model.js';
+import { secretStoreHint } from './prompt.js';
 
 /**
  * Surfaces are enabled, not launched.
@@ -361,7 +362,7 @@ async function enableTelegram(
   } catch (error) {
     if (!promptSecret) {
       process.stderr.write(`${(error as ConfigError).message}\n`);
-      process.stderr.write(`  → passa il token su stdin: muffin secret set telegram_token\n`);
+      process.stderr.write(`  → ${secretStoreHint('telegram_token')}\n`);
       return 78;
     }
     const entered = await promptSecret('Token Telegram (nascosto — da @BotFather): ');
@@ -481,7 +482,7 @@ async function enableDiscord(home: string, ownerFlag?: string): Promise<number> 
   } catch (error) {
     process.stderr.write(`${(error as ConfigError).message}\n`);
     process.stderr.write(
-      `  → crea un'app su discord.com/developers/applications, prendi il token del bot, poi:\n    echo -n "<token>" | muffin secret set discord_token\n`,
+      `  → crea un'app su discord.com/developers/applications, prendi il token del bot, poi:\n    ${secretStoreHint('discord_token')}\n`,
     );
     return 78;
   }
