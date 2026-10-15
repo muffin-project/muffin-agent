@@ -267,7 +267,7 @@ export function makeTodoTool(todos: TodoStore): RegisteredTool {
               tier: CLEAN,
             };
           }
-          const items = todos.plan(tenant, sessionId, parsed.data.items, tier);
+          const items = todos.plan(tenant, sessionId, parsed.data.items, tier, ctx.turnId);
           return { content: `Piano aggiornato:\n${renderTodos(items)}`, tier: CLEAN };
         }
         case 'set': {
