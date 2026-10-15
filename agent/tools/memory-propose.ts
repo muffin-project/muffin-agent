@@ -28,6 +28,7 @@ import type { CapabilityDecl, TrustTier } from '../../core/policy/types.js';
 import type { Tracer } from '../../core/tracing/types.js';
 import type { ToolOutcome } from '../loop.js';
 import type { Provider, ToolSpec } from '../providers/types.js';
+import { authenticatedOwnerInput, type OwnerIngress } from './owner-ingress.js';
 
 /**
  * Staging, not committing: a second identical call is the same proposal, and
@@ -105,7 +106,24 @@ export type ProposeContext = {
   turnId: string;
   /** Live runtime taint, including bytes recalled earlier in this turn. */
   taint: () => TrustTier;
+  /** Authenticated ingress for owner-authored proposals; absent in tests without turns. */
+  getSource?: () => OwnerIngress | null;
 };
+
+/**
+ * The `ricorda X` prefix, mirroring `forgetDiscoveryQuery`: only the body's
+ * remainder is the candidate — the verb itself is authority, not content.
+ */
+export function rememberBody(request: string): string | null {
+  const body = request
+    .trim()
+    .replace(/^@?muffin[,:!]\s*/iu, '')
+    .replace(/^(?:per favore|please)[,:!]?\s+/iu, '');
+  const match = body.match(
+    /^(?:ricorda(?:ti(?:\s+di)?)?|remember|do\s+not\s+forget)\s+([\s\S]+)$/iu,
+  );
+  return match?.[1]?.trim() || null;
+}
 
 type RawArgs = {
   subject?: unknown;
@@ -138,7 +156,23 @@ export async function proposeMemory(
     };
   }
   // The model authored this projection; its arguments cannot grant owner authority.
-  const producer = 'agent-inference' as const;
+  // Exception with a narrow gate (#776): the current owner message is an
+  // authenticated "ricorda X" AND the object (the value — the actual payload)
+  // appears byte-for-byte in it. The predicate is typing, validated by the
+  // reconciler judge like any other candidate; the subject may additionally
+  // be the canonical 'owner' (the capability is already owner-only on the
+  // host tenant, so that name claims nothing the door hasn't enforced).
+  // Then the owner authored the candidate and the model only typed it —
+  // producer owner-stated, origin said. Anything else (quoted, inferred,
+  // foreign turn, values from elsewhere) stays agent-inference.
+  const ownerInput = authenticatedOwnerInput(ctx.getSource?.() ?? null, ctx.tenant, ctx.turnId);
+  const ownerBody = ownerInput === null ? null : rememberBody(ownerInput);
+  const statedByOwner = (body: string): boolean =>
+    body.includes(object) && (subject === 'owner' || body.includes(subject));
+  const producer =
+    ownerBody === null || !statedByOwner(ownerBody)
+      ? ('agent-inference' as const)
+      : ('owner-stated' as const);
 
   let evidenceIds: number[] = [];
   if (raw.evidence_ids !== undefined) {

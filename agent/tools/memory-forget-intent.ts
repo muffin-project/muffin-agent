@@ -1,55 +1,18 @@
-import type { Principal } from '../../core/policy/types.js';
-import type { Message } from '../providers/types.js';
+import { authenticatedOwnerInput, type OwnerIngress } from './owner-ingress.js';
 
 /** Authenticated ingress and checkpoint, supplied by the runtime, never tool arguments. */
-export type ForgetSource = {
-  id: string;
-  tenant: string;
-  principal: Principal;
-  inputText: string | null;
-  messages: readonly Message[];
-};
+export type ForgetSource = OwnerIngress;
 
 export function ownerForgetRequest(
   source: ForgetSource | null,
   tenant: string,
   turnId: string,
 ): string | null {
-  if (
-    !source ||
-    source.id !== turnId ||
-    source.tenant !== tenant ||
-    tenant !== 'host' ||
-    source.principal.kind !== 'owner' ||
-    !source.inputText
-  )
-    return null;
-  const start = source.messages.findIndex(
-    (m) => m.role === 'user' && (m.origin === 'owner' || m.origin === 'external'),
-  );
-  if (start < 0) return null;
-  const ingress = source.messages[start]!;
-  const text = ingress.content
-    .filter((b) => b.type === 'text')
-    .map((b) => b.text)
-    .join('');
-  if (ingress.origin !== 'owner' || text !== source.inputText) return null;
-  // A consumed correction, including an unmarked legacy suspension correction,
-  // invalidates the original request. Tool/harness evidence is not owner ingress.
-  if (
-    source.messages
-      .slice(start + 1)
-      .some(
-        (m) =>
-          m.role === 'user' &&
-          (m.origin === 'owner' || m.origin === 'external' || m.origin === undefined),
-      )
-  )
-    return null;
-  const request = text.trim();
+  const text = authenticatedOwnerInput(source, tenant, turnId);
+  if (text === null) return null;
   // Recognize the destructive request prefix without interpreting a fact tuple.
-  if (forgetDiscoveryQuery(request) === null) return null;
-  return request;
+  if (forgetDiscoveryQuery(text) === null) return null;
+  return text;
 }
 
 /** Remove only request syntax for retrieval; preserve all target qualifiers. */
