@@ -65,6 +65,16 @@ describe('buildContext', () => {
     expect(textIndex).toBeGreaterThan(imgIndex);
   });
 
+  it('an opening message carrying external evidence stays external in model context', () => {
+    const input = baseInput({ text: 'wake with external evidence', inputOrigin: 'external' });
+    const messages = buildContext(input, [], [], noHistory, new Date(2026, 0, 1), 'test-model', 'test-profile', undefined, undefined, new Set());
+    const opening = messages[messages.length - 1]!;
+
+    expect(opening.role).toBe('user');
+    expect(opening.origin).toBe('external');
+    expect(textOf(opening.content)).toBe('wake with external evidence');
+  });
+
   it('MUTATION: a kept history line from a different surface is marked with the [surface] prefix', () => {
     const spoken: ReinjectedHistory = {
       kept: [sessionMessage({ surface: 'telegram', content: 'ho scritto da telefono' })],
