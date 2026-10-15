@@ -82,7 +82,7 @@ type ApprovalNoteQuestion = (id: string, messageId: number) => void;
 type ApprovalWithdrawnQuestions = (turnId: string) => Array<{ id: string; messageId: number }>;
 import { startPresence } from './presence.js';
 import { avvisoAllOwner, decidiInvito, SALUTO_NEL_GRUPPO, type Invito } from './invito.js';
-import { stanzaDi } from './negoziazione.js';
+import { isDirectChat, stanzaDi } from './negoziazione.js';
 import { startTranscript, type Transcript } from './transcript.js';
 import { awaitWithBudget } from '../shared/stop-budget.js';
 import { DRAIN_BUDGET_MS } from '../../core/gateway/service.js';
@@ -1448,7 +1448,7 @@ export class TelegramConnector {
     const editId = handoff !== undefined && handoff.messageId !== null ? handoff.messageId : editMessageId;
     // Una chat privata è la stanza con la bozza: lì il turno ha una sola forma,
     // i blocchi, e il finale la ripete — mai il vecchio cambio forma.
-    const isPrivate = chatId > 0;
+    const isPrivate = isDirectChat(chatId);
 
     // The unsplit HTML both lanes start from: `splitHtml` is the legacy plan
     // (and the rich fallback); the rich lane carries `combined` whole.
@@ -1564,10 +1564,7 @@ export class TelegramConnector {
   resumeStream: AttachStream = (record) => {
     const chatId = record.replyTo?.['chatId'];
     if (typeof chatId !== 'number') return undefined;
-    // Convenzione del Bot API: un id di chat privata è positivo, un id di
-    // gruppo/supergruppo/canale è negativo (`connectors/telegram/surface.ts`
-    // lo usa già per la stessa domanda).
-    const isPrivate = chatId > 0;
+    const isPrivate = isDirectChat(chatId);
     // Stesso topic della domanda: la riga durevole è l'unica fonte che
     // sopravvive al riavvio da cui questo percorso riparte.
     const threadId = typeof record.replyTo?.['threadId'] === 'number' ? record.replyTo['threadId'] : undefined;

@@ -1028,7 +1028,7 @@ function providerKey(provider: InferenceProviderConfig, home: string): string | 
   return keyForEndpoints(provider, home);
 }
 
-/** Perché `/models` non ha detto niente, in parole dell'owner. */
+/** Perché `/models` non ha detto niente, in parole dell'owner — con il rimedio, mai solo il lamento. */
 function perche(found: Exclude<ModelDiscovery, { status: 'known' }>): string {
   if (found.status === 'unsupported') return `nessuna lista dei modelli: ${found.detail}`;
   const motivo = {
@@ -1037,7 +1037,13 @@ function perche(found: Exclude<ModelDiscovery, { status: 'known' }>): string {
     auth: 'credenziale rifiutata',
     http: 'errore HTTP',
   };
-  return `${motivo[found.reason]}: ${found.detail}`;
+  const rimedio = {
+    network: 'controlla rete/proxy, poi riprova',
+    timeout: 'riprova — se persiste, il provider è lento, non rotto',
+    auth: 'ruota la chiave e riprova',
+    http: 'riprova più tardi',
+  };
+  return `${motivo[found.reason]}: ${found.detail} — ${rimedio[found.reason]}`;
 }
 
 /** La chiave, solo se il catalogo la pretende — su OpenRouter non serve, e non si legge un segreto per niente. */
