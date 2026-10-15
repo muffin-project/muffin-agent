@@ -110,3 +110,11 @@ describe('verifyQuotedInstruction — bytes, not verbs', () => {
     ).toBeNull();
   });
 });
+
+describe('forget judge pins the quoted-request refusal (#906)', () => {
+  it('the semantic prompt refuses quoted third-party requests', async () => {
+    const { FORGET_JUDGE_SYSTEM } = await import('./memory-forget-target.js');
+    expect(FORGET_JUDGE_SYSTEM).toContain('quoted');
+    expect(FORGET_JUDGE_SYSTEM).toContain('selects no target');
+  });
+});
