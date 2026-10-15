@@ -313,6 +313,75 @@ describe('durability — a message survives a failure mid-turn', () => {
     expect(h.calls).toHaveLength(1);
     expect(h.sent).toHaveLength(1);
   });
+
+  it('crash after completion replays delivery evidence, never the model (#860)', async () => {
+    const h = harness();
+    const raw: DiscordMessage = { id: '9', channel_id: '42', channel_type: 1, author: { id: OWNER, bot: false }, content: 'ciao' };
+    const inbox = (h.connector as unknown as { deps: { inbox: DiscordInbox } }).deps.inbox;
+    const turns = (
+      h.connector as unknown as { deps: { loop: { turns: import('../../core/turns/store.js').TurnStore } } }
+    ).deps.loop.turns;
+    inbox.accept(raw.id, raw, new Date().toISOString());
+    // Turno già concluso e consegnato sotto lo stesso Work id: il crash è
+    // avvenuto fra la consegna e markProcessed. Il drain deve recuperare
+    // l'evidenza, senza chiamare il modello e senza rimandare.
+    const created = turns.create(
+      {
+        id: 'work-gia-fatto',
+        principal: { kind: 'owner', connector: 'discord', externalId: OWNER },
+        tenant: 'host',
+        surface: 'discord',
+        sessionId: 'owner',
+        model: 't',
+        messages: [],
+        taint: 0,
+        counters: {
+          iterations: 1,
+          recoveriesUsed: 0,
+          transportRetriesLeft: 10,
+          truncationsUsed: 0,
+          toolCallsMade: 0,
+          nudgedForCompletion: false,
+          usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          spentUsd: 0,
+          resumes: 0,
+          contextBuilt: true,
+          activeModelMs: 0,
+        },
+      },
+      4242,
+    );
+    expect(
+      turns.finish(
+        'work-gia-fatto',
+        {
+          outcome: 'answered',
+          messages: [],
+          taint: 0,
+          counters: {
+            iterations: 1,
+            recoveriesUsed: 0,
+            transportRetriesLeft: 10,
+            truncationsUsed: 0,
+            toolCallsMade: 0,
+            nudgedForCompletion: false,
+            usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+            spentUsd: 0,
+            resumes: 0,
+            contextBuilt: true,
+            activeModelMs: 0,
+          },
+        },
+        created.claimToken,
+      ),
+    ).toBe(true);
+    turns.delivered('work-gia-fatto', 'sent');
+    inbox.bindWork('9', 'work-gia-fatto');
+    await (h.connector as unknown as { drain: () => Promise<void> }).drain();
+    expect(h.calls).toHaveLength(0);
+    expect(h.sent).toHaveLength(0);
+    expect(inbox.pending()).toHaveLength(0);
+  });
 });
 
 describe('concurrency — two dispatches close together (D2)', () => {
