@@ -68,6 +68,16 @@ export class TurnRun {
   spentUsd: number;
   contextBuilt: boolean;
   activeModelMs: number;
+  /**
+   * Silent lease renewals spent without progress (Fase 1 calm harness).
+   * Deliberately NOT in `counters()`: it bounds one process run, and a crash
+   * starts a new execution with its own bound — persisting it would let a
+   * crash loop inherit spent renewals it never used, or vice versa. The
+   * durable cross-lease guard is the dead-route breaker, not this.
+   */
+  autoRenewsUsed: number = 0;
+  /** Tool calls at the last renewal: progress since then resets the count. */
+  autoRenewBaselineCalls: number = 0;
   /** A failed durable write keeps this lease read-only until it ends. */
   durabilityFailure: string | null = null;
 

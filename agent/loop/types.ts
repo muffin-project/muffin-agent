@@ -226,6 +226,22 @@ export const MAX_PROVIDER_EMPTY_RETRIES = 3;
 export const MAX_LIGHT_TRANSPORT_RETRIES = 2;
 
 /**
+ * Bounded silent renewals of a spent lease inside one execution (Fase 1 calm
+ * harness). A slow provider killing the call at `modelCallDeadlineMs` (or a
+ * mid-response stall) is not a question for the owner — no peer parks there —
+ * so the loop renews the call budget and continues instead of releasing
+ * continuable and inviting another "riprendi".
+ *
+ * Three renewals after the initial attempt, then the turn yields honestly
+ * through the normal continuable path (where the dead-route breaker counts
+ * it). Progress resets the count: a lease that produced tool calls earned its
+ * time. Walls (`turn_deadline`), spent delegation envelopes
+ * (`active_model_budget_exhausted`, `activity_budget`) and user stops never
+ * renew — those are verdicts, not slow paths.
+ */
+export const MAX_AUTO_RENEW_LEASES = 3;
+
+/**
  * Bounded continuations for a `max_tokens` answer interrupted with partial
  * text (#615).
  *
