@@ -236,8 +236,9 @@ export const MAX_LIGHT_TRANSPORT_RETRIES = 2;
  * through the normal continuable path (where the dead-route breaker counts
  * it). Progress resets the count: a lease that produced tool calls earned its
  * time. Walls (`turn_deadline`), spent delegation envelopes
- * (`active_model_budget_exhausted`, `activity_budget`) and user stops never
- * renew — those are verdicts, not slow paths.
+ * (`active_model_budget_exhausted`) and user stops never
+ * renew — those are verdicts, not slow paths. (`activity_budget` releases
+ * through its own loop-top door and never reaches a lease abort.)
  */
 export const MAX_AUTO_RENEW_LEASES = 3;
 
