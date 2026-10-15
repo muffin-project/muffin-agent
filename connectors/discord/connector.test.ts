@@ -283,6 +283,36 @@ describe('durability — a message survives a failure mid-turn', () => {
     expect(pending).toHaveLength(1);
     expect(pending[0]?.messageId).toBe('1');
   });
+
+  it('a redelivered dispatch reuses the bound Work instead of minting a second one (#860)', async () => {
+    const h = harness();
+    const raw: DiscordMessage = { id: '7', channel_id: '42', channel_type: 1, author: { id: OWNER, bot: false }, content: 'ciao' };
+    const inbox = (h.connector as unknown as { deps: { inbox: DiscordInbox } }).deps.inbox;
+    inbox.accept(raw.id, raw, new Date().toISOString());
+    // Crash simulato fra il bind e il turno: un id legato senza riga dietro.
+    const bound = inbox.bindWork('7', 'work-prima-del-turno');
+    expect(bound).toEqual({ workId: 'work-prima-del-turno', mine: true });
+    await (h.connector as unknown as { drain: () => Promise<void> }).drain();
+    // Il turno è stato eseguito sotto lo STESSO id legato, una volta sola…
+    expect(h.calls).toHaveLength(1);
+    expect(inbox.boundWork('7')).toBe('work-prima-del-turno');
+    expect(h.delivered.map(([id]) => id)).toContain('work-prima-del-turno');
+    // …e un secondo drain non riesegue niente: il messaggio è consumato.
+    await (h.connector as unknown as { drain: () => Promise<void> }).drain();
+    expect(h.calls).toHaveLength(1);
+    expect(h.sent).toHaveLength(1);
+  });
+
+  it('duplicate accept of the same dispatch answers once (#860)', async () => {
+    const h = harness();
+    const raw: DiscordMessage = { id: '8', channel_id: '42', channel_type: 1, author: { id: OWNER, bot: false }, content: 'ciao' };
+    const inbox = (h.connector as unknown as { deps: { inbox: DiscordInbox } }).deps.inbox;
+    inbox.accept(raw.id, raw, new Date().toISOString());
+    inbox.accept(raw.id, raw, new Date().toISOString());
+    await (h.connector as unknown as { drain: () => Promise<void> }).drain();
+    expect(h.calls).toHaveLength(1);
+    expect(h.sent).toHaveLength(1);
+  });
 });
 
 describe('concurrency — two dispatches close together (D2)', () => {

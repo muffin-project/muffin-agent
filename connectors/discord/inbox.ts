@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { ensureColumn } from '../../core/lock/durable.js';
 
 /**
  * The inbox: every dispatch lands here before it is processed.
@@ -46,6 +47,11 @@ export type StoredMessage = {
 export class DiscordInbox {
   constructor(private readonly db: Database.Database) {
     db.exec(DISCORD_SCHEMA);
+    // Additive, like telegram_updates.composition_id/settled_at: NULL means
+    // received but never bound/settled. Homes written before this slice get
+    // the columns without touching their rows.
+    ensureColumn(db, 'discord_messages', 'work_id', 'work_id TEXT');
+    ensureColumn(db, 'discord_messages', 'settled_at', 'settled_at TEXT');
   }
 
   /**
@@ -76,6 +82,44 @@ export class DiscordInbox {
 
   markProcessed(messageId: string, at: string): void {
     this.db.prepare(`UPDATE discord_messages SET processed_at = ?, failure = NULL WHERE message_id = ?`).run(at, messageId);
+  }
+
+  /**
+   * First-writer-wins bind of a durable Work id, mirroring Telegram's
+   * composition bind. Returns the winner (existing or newly minted) and
+   * whether this call won it: a replay/crash redelivery gets the SAME id
+   * back instead of minting Work B.
+   */
+  bindWork(messageId: string, minted: string): { workId: string; mine: boolean } {
+    this.db
+      .prepare(`UPDATE discord_messages SET work_id = ? WHERE message_id = ? AND work_id IS NULL`)
+      .run(minted, messageId);
+    const row = this.db
+      .prepare(`SELECT work_id AS workId FROM discord_messages WHERE message_id = ?`)
+      .get(messageId) as { workId: string | null } | undefined;
+    if (row?.workId === undefined || row.workId === null)
+      throw new Error(`discord inbox has no row for ${messageId}`);
+    return { workId: row.workId, mine: row.workId === minted };
+  }
+
+  /** The bound Work id, if any — what `resolve` uses to choose recover over receive. */
+  boundWork(messageId: string): string | null {
+    const row = this.db
+      .prepare(`SELECT work_id AS workId FROM discord_messages WHERE message_id = ?`)
+      .get(messageId) as { workId: string | null } | undefined;
+    return row?.workId ?? null;
+  }
+
+  /** Settlement evidence for the bind→delivery window `recover` reads back. */
+  settle(messageId: string, at: string): void {
+    this.db.prepare(`UPDATE discord_messages SET settled_at = ? WHERE message_id = ?`).run(at, messageId);
+  }
+
+  settledAt(messageId: string): string | null {
+    const row = this.db
+      .prepare(`SELECT settled_at AS settledAt FROM discord_messages WHERE message_id = ?`)
+      .get(messageId) as { settledAt: string | null } | undefined;
+    return row?.settledAt ?? null;
   }
 
   /** Stays pending on purpose — a message that failed once may succeed after a restart. */
