@@ -63,6 +63,7 @@ import { assessShellBoundary } from '../core/sandbox/shell-boundary.js';
 import type { StatoSuperficie } from '../core/surface/salute.js';
 import { describeInterrupted, readTurnHealth, readUndelivered } from '../core/turns/store.js';
 import { Vault, type VaultAudit, type VaultStore } from '../core/vault/vault.js';
+import { secretStoreHint } from './prompt.js';
 import { PLAIN, type Style } from './ui.js';
 import { type BuildStamp, describeBuild, findCheckoutRoot } from './update.js';
 
@@ -744,7 +745,11 @@ export async function runDoctor(
         const where = locateSecretAll(connection.apiKeyRef, home);
         const answered = where[0];
         if (key.length === 0) {
-          credentialFail('api key', 'secret file is empty', `write it with \`muffin secret set\``);
+          credentialFail(
+            'api key',
+            'secret file is empty',
+            secretStoreHint(connection.apiKeyRef.replace(/^secret:\/\//, '')),
+          );
         } else if (where.length > 1) {
           credentialWarn(
             'api key',
