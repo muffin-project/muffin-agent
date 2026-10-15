@@ -60,3 +60,26 @@ export function authenticatedOwnerInput(
     return null;
   return text.trim();
 }
+
+/**
+ * Authority by quotation instead of verb lists: the model declares which
+ * owner words it is executing, and the kernel verifies those bytes sit
+ * inside the authenticated current input. Any language, any verb, any
+ * phrasing the model understands — "segnati", "scordatelo", typos included —
+ * because understanding is the model's job and provenance is the kernel's.
+ * Returns the trimmed quote, or null when it is absent, empty, or not
+ * byte-contained (forged, quoted third party, or stale turn).
+ */
+export function verifyQuotedInstruction(
+  source: OwnerIngress | null,
+  tenant: string,
+  turnId: string,
+  instruction: unknown,
+): string | null {
+  if (typeof instruction !== 'string') return null;
+  const quote = instruction.trim();
+  if (quote === '') return null;
+  const input = authenticatedOwnerInput(source, tenant, turnId);
+  if (input === null || !input.includes(quote)) return null;
+  return quote;
+}
