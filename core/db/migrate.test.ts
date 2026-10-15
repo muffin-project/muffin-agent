@@ -298,7 +298,7 @@ describe('migrazione 2 — jobs.kind', () => {
     // (`slice/una-promessa-torna`) are genuine no-ops here — but `migrate()` still runs and stamps them, the
     // same way migration 2 itself no-ops (and still counts) on a database where
     // `jobs` is absent, two tests below.
-    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     const riga = db.prepare(`SELECT goal, kind FROM jobs WHERE id = 'j1'`).get() as {
       goal: string;
       kind: string;
@@ -318,7 +318,7 @@ describe('migrazione 2 — jobs.kind', () => {
     // e prima che `MemoryStore` crei `facts` e `TodoStore` crei `todos`,
     // motivo per cui la 3 e la 4 arrivano fin qui allo stesso modo.
     expect(() => migrate(db, { backupDir: backups })).not.toThrow();
-    expect(schemaVersionOf(db)).toBe(10);
+    expect(schemaVersionOf(db)).toBe(11);
   });
 });
 
@@ -361,7 +361,7 @@ describe('migrazione 3 — facts.pinned', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     const pinned = db.prepare(`SELECT id FROM facts WHERE pinned = 1 ORDER BY id`).all() as {
       id: number;
     }[];
@@ -417,7 +417,7 @@ describe('migrazione 3 — facts.pinned', () => {
     // The fresh-install case: `MemoryStore` has not run yet, so `facts` is not
     // there for this migration to touch — same guard, same reason as jobs.kind.
     expect(() => migrate(db, { backupDir: backups })).not.toThrow();
-    expect(schemaVersionOf(db)).toBe(10);
+    expect(schemaVersionOf(db)).toBe(11);
   });
 });
 
@@ -445,7 +445,7 @@ describe('migrazioni 4 e 5 — todos.due_at, poi todos.due_tier', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     const colonne = (db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>).map(
       (c) => c.name,
     );
@@ -466,6 +466,25 @@ describe('migrazioni 4 e 5 — todos.due_at, poi todos.due_tier', () => {
       )
       .all() as Array<{ detail: string }>;
     expect(piano.map((r) => r.detail).join(' ')).toContain('idx_todos_due');
+  });
+
+  it('migrazione 11 — armed_turn_id arriva NULL sulle righe vecchie, senza toccarle', () => {
+    const { db, backups } = fileDb();
+    seedOldTodos(db);
+    migrate(db, { backupDir: backups, migrations: [] });
+    migrate(db, { backupDir: backups });
+    const colonne = (db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>).map(
+      (c) => c.name,
+    );
+    expect(colonne).toContain('armed_turn_id');
+    const righe = db.prepare(`SELECT count(*) AS n FROM todos`).get() as { n: number };
+    expect(righe.n).toBe(200);
+    // NULL, mai un default che fingerebbe una provenienza: le righe vecchie
+    // tengono il gate solo-tier finché non vengono riarmate.
+    const armate = db.prepare(`SELECT count(*) AS n FROM todos WHERE armed_turn_id IS NOT NULL`).get() as {
+      n: number;
+    };
+    expect(armate.n).toBe(0);
   });
 
   /**
@@ -494,7 +513,7 @@ describe('migrazioni 4 e 5 — todos.due_at, poi todos.due_tier', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([5, 6, 7, 8, 9, 10]);
+    expect(res.applied).toEqual([5, 6, 7, 8, 9, 10, 11]);
     const colonne = (db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>).map(
       (c) => c.name,
     );
@@ -667,7 +686,7 @@ describe('migrazione 8 — Turn schema authority', () => {
 
       const res = migrate(db, { backupDir: join(dir, 'backups') });
 
-      expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
       const row = db
         .prepare(`SELECT input_text, status, model, messages FROM turns WHERE id = 't1'`)
         .get();
@@ -769,7 +788,7 @@ describe('migrazione 8 — Turn schema authority', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([9, 10]);
+    expect(res.applied).toEqual([9, 10, 11]);
     const colonne = (db.prepare(`PRAGMA table_info(turns)`).all() as Array<{ name: string }>).map(
       (c) => c.name,
     );
@@ -1001,8 +1020,8 @@ describe('migrazione 8 — rebuildTable su una casa v7 popolata (#766)', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([8, 9, 10]);
-    expect(schemaVersionOf(db)).toBe(10);
+    expect(res.applied).toEqual([8, 9, 10, 11]);
+    expect(schemaVersionOf(db)).toBe(11);
     // Not a stamp: every old value is still there, on every row.
     expect(dump(db, 'turns', OLD_TURNS_COLS, 'id')).toBe(beforeTurns);
     expect(dump(db, 'turn_tool_calls', OLD_CALL_COLS, 'turn_id, call_id')).toBe(beforeCalls);

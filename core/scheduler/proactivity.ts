@@ -93,6 +93,17 @@ export type ProactiveTrigger = {
    * repetition. The consumer records fired anchors and skips a repeat.
    */
   anchor: string;
+  /**
+   * Content lineage of the arming, resolved by the observer (never by the
+   * gate: this stays pure). Absent for rows predating the arming column and
+   * for observers without store access — those keep the tier-only behavior.
+   */
+  lineage?: {
+    /** The commitment text appears byte-for-byte in owner-authored input. */
+    ownerBytes: boolean;
+    /** The commitment text appears byte-for-byte in untrusted (tier > 1) evidence. */
+    untrusted: boolean;
+  };
 };
 
 export type QuietHours = { from: string; to: string; timezone: string };
@@ -106,11 +117,19 @@ export type ProactiveContext = {
 export type ProactiveDecision =
   | { effect: 'allow' }
   | { effect: 'defer'; until: Date; reason: 'quiet_hours' | 'budget' }
-  | { effect: 'deny'; reason: 'tainted_source' };
+  | { effect: 'deny'; reason: 'tainted_source' | 'untrusted_lineage' };
 
 export function decideProactive(trigger: ProactiveTrigger, ctx: ProactiveContext): ProactiveDecision {
   if (trigger.tier > 1) {
     return { effect: 'deny', reason: 'tainted_source' };
+  }
+  // #859: a clean-looking row can still carry planted content laundered
+  // through restatement after the history window moved on. The tier snapshot
+  // cannot see that; the lineage can. Owner bytes win over an untrusted
+  // match (the owner re-authored it); an untrusted match without owner
+  // bytes fails closed. No lineage evidence either way keeps old behavior.
+  if (trigger.lineage?.untrusted === true && trigger.lineage.ownerBytes !== true) {
+    return { effect: 'deny', reason: 'untrusted_lineage' };
   }
   const quietEnd = nextTimeOfDay(ctx.quietHours.to, ctx.quietHours.timezone, ctx.now);
   if (ctx.budgetExhausted) {
