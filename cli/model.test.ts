@@ -1,11 +1,19 @@
+import { createServer } from 'node:http';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { verifyInferenceRoute } from '../agent/providers/verify.js';
 import { ChatGPTConnection } from '../core/config/chatgpt-oauth.js';
-import { inferenceProvider, loadConfig, saveConfig, writeSecret } from '../core/config/config.js';
+import {
+  inferenceProvider,
+  loadConfig,
+  readSecret,
+  saveConfig,
+  writeSecret,
+} from '../core/config/config.js';
 import { PROVIDERS, providerFor } from '../core/config/providers.js';
+import { makeEmbedder } from '../core/memory/embed.js';
 import { runInit } from './init.js';
 import { cmdModel, fetchCatalogue, fetchEndpointTags, priceNote } from './model.js';
 
@@ -38,6 +46,44 @@ function home(): string {
 const raccogli = (): { out: string[]; sink: (l: string) => void } => {
   const out: string[] = [];
   return { out, sink: (l) => void out.push(l) };
+};
+
+async function embeddingEndpoint(naturalDimensions = 1024): Promise<{
+  baseUrl: string;
+  requests: { path: string | undefined; body: Record<string, unknown> }[];
+  close: () => Promise<void>;
+}> {
+  const requests: { path: string | undefined; body: Record<string, unknown> }[] = [];
+  const server = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+    request.on('end', () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
+      requests.push({ path: request.url, body });
+      const dimensions = typeof body['dimensions'] === 'number' ? body['dimensions'] : naturalDimensions;
+      const embedding = Array.from({ length: dimensions }, () => 0.125);
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(
+        request.url === '/api/embeddings'
+          ? JSON.stringify({ embedding })
+          : JSON.stringify({ data: [{ embedding, index: 0, object: 'embedding' }] }),
+      );
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('embedding endpoint did not bind TCP');
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    requests,
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  };
 };
 
 describe('providerFor', () => {
@@ -574,6 +620,97 @@ describe('muffin model', () => {
     expect(c.embedder?.model).toBe('text-embedding-3-small');
     expect(c.embedder?.dimensions).toBe(1536);
     expect(out.join('\n')).toContain('1536');
+  });
+
+  it('probes the Ollama model dimensions without a fake expected size', async () => {
+    const endpoint = await embeddingEndpoint(1024);
+    try {
+      const h = home();
+      saveConfig({ ...loadConfig(h), embedder: { kind: 'ollama', baseUrl: endpoint.baseUrl } }, h);
+      const { sink } = raccogli();
+
+      const code = await cmdModel(h, ['embed', 'qwen3-embedding:0.6b'], { out: sink });
+
+      expect(code).toBe(0);
+      expect(endpoint.requests[0]).toMatchObject({ path: '/api/embeddings', body: { model: 'qwen3-embedding:0.6b' } });
+      expect(endpoint.requests[0]?.body).not.toHaveProperty('dimensions');
+      expect(loadConfig(h).embedder?.dimensions).toBe(1024);
+    } finally {
+      await endpoint.close();
+    }
+  });
+
+  it('probes OpenAI-compatible native dimensions and keeps them on normal embeddings', async () => {
+    const endpoint = await embeddingEndpoint(1536);
+    try {
+      const h = home();
+      writeSecret('embedding_test_key', 'sk-embedding-fake', h, 'home');
+      saveConfig(
+        {
+          ...loadConfig(h),
+          embedder: {
+            kind: 'openai-compat',
+            model: 'old-embedding-model',
+            dimensions: 512,
+            apiKeyRef: 'secret://embedding_test_key',
+            baseUrl: `${endpoint.baseUrl}/v1`,
+          },
+        },
+        h,
+      );
+      const { sink } = raccogli();
+
+      const code = await cmdModel(h, ['embed', 'new-embedding-model'], { out: sink });
+
+      expect(code).toBe(0);
+      expect(endpoint.requests[0]).toMatchObject({
+        path: '/v1/embeddings',
+        body: { model: 'new-embedding-model', input: ['muffin'] },
+      });
+      expect(endpoint.requests[0]?.body).not.toHaveProperty('dimensions');
+      expect(loadConfig(h).embedder?.dimensions).toBe(1536);
+
+      const configured = loadConfig(h).embedder;
+      const active = makeEmbedder(configured, (ref) => readSecret(ref, h));
+      await active.embed(['normal runtime embedding']);
+      expect(endpoint.requests[1]).toMatchObject({
+        path: '/v1/embeddings',
+        body: { model: 'new-embedding-model', input: ['normal runtime embedding'], dimensions: 1536 },
+      });
+    } finally {
+      await endpoint.close();
+    }
+  });
+
+  it('does not save a measured size that would invalidate the configured fallback', async () => {
+    const endpoint = await embeddingEndpoint(1536);
+    try {
+      const h = home();
+      writeSecret('embedding_test_key', 'sk-embedding-fake', h, 'home');
+      saveConfig(
+        {
+          ...loadConfig(h),
+          embedder: {
+            kind: 'openai-compat',
+            model: 'old-embedding-model',
+            dimensions: 512,
+            apiKeyRef: 'secret://embedding_test_key',
+            baseUrl: `${endpoint.baseUrl}/v1`,
+            fallback: { kind: 'ollama', model: 'qwen3-embedding:0.6b', dimensions: 512 },
+          },
+        },
+        h,
+      );
+      const { out, sink } = raccogli();
+
+      const code = await cmdModel(h, ['embed', 'new-embedding-model'], { out: sink });
+
+      expect(code).toBe(1);
+      expect(loadConfig(h).embedder).toMatchObject({ model: 'old-embedding-model', dimensions: 512 });
+      expect(out.join('\n')).toContain('Niente scritto');
+    } finally {
+      await endpoint.close();
+    }
   });
 
   it('un embedder che non risponde non viene scritto', async () => {
