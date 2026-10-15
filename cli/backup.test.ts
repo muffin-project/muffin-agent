@@ -118,7 +118,9 @@ describe('restoreFrom — refusals first, escape hatch always', () => {
     // provenance), and 8 (canonical turn schema) no-op here the same way
     // migration 2 itself no-ops on a database with no `jobs`; migration 10 is
     // a semantic compatibility marker. All nine still run and stamp.
-    expect(applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    // Migration 11 (todos.armed_turn_id) no-ops here too — no `todos` table —
+    // and still stamps, like the rest.
+    expect(applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
   });
 
   it('refuses while the gateway is alive', () => {

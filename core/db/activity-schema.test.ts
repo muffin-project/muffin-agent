@@ -33,8 +33,8 @@ describe('activity allowance semantic schema compatibility', () => {
       ).run(counters);
       const before = db.prepare('SELECT * FROM turns').get();
       const result = migrate(db, { backupDir: join(root, 'backups') });
-      expect(result.applied).toEqual([10]);
-      expect(schemaVersionOf(db)).toBe(10);
+      expect(result.applied).toEqual([10, 11]);
+      expect(schemaVersionOf(db)).toBe(11);
       expect(db.prepare('SELECT * FROM turns').get()).toEqual(before);
       expect(result.backup).not.toBeNull();
       const backup = new DatabaseCtor(result.backup!, { readonly: true });
