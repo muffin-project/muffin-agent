@@ -63,3 +63,29 @@ describe('nextTimeOfDay', () => {
     expect(nextTimeOfDay('08:00', 'Europe/Rome', DEEP_NIGHT).toISOString()).toBe('2026-06-15T06:00:00.000Z');
   });
 });
+
+describe('decideProactive lineage (#859)', () => {
+  const ctx = { now: ACTIVE_NOON, quietHours: QUIET, budgetExhausted: false };
+  const clean: ProactiveTrigger = { tier: 0, channel: 'telegram', kind: 'deadline_near', anchor: 'fact:1' };
+  it('untrusted lineage without owner bytes fails closed', () => {
+    expect(
+      decideProactive({ ...clean, lineage: { ownerBytes: false, untrusted: true } }, ctx),
+    ).toEqual({ effect: 'deny', reason: 'untrusted_lineage' });
+  });
+  it('owner bytes win over an untrusted match (re-authored)', () => {
+    expect(
+      decideProactive({ ...clean, lineage: { ownerBytes: true, untrusted: true } }, ctx),
+    ).toEqual({ effect: 'allow' });
+  });
+  it('no lineage evidence keeps the tier-only behavior', () => {
+    expect(decideProactive(clean, ctx)).toEqual({ effect: 'allow' });
+    expect(
+      decideProactive({ ...clean, lineage: { ownerBytes: false, untrusted: false } }, ctx),
+    ).toEqual({ effect: 'allow' });
+  });
+  it('tier gate still fires first', () => {
+    expect(
+      decideProactive({ ...clean, tier: 2, lineage: { ownerBytes: true, untrusted: false } }, ctx),
+    ).toEqual({ effect: 'deny', reason: 'tainted_source' });
+  });
+});

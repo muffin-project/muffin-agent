@@ -377,6 +377,20 @@ const MIGRATIONS: Migration[] = [
     // schema-ahead guard must reject them before they can erase it on rollback.
     up: () => {},
   },
+  {
+    version: 11,
+    description: 'todos.armed_turn_id — proactivity lineage for #859',
+    up: (db) => {
+      const hasTable = db
+        .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'todos'`)
+        .get();
+      if (hasTable === undefined) return;
+      const hasColumn = (
+        db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>
+      ).some((c) => c.name === 'armed_turn_id');
+      if (!hasColumn) db.exec(`ALTER TABLE todos ADD COLUMN armed_turn_id TEXT`);
+    },
+  },
 ];
 
 const BASELINE_VERSION = 1;
