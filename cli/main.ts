@@ -79,7 +79,7 @@ import {
   probeLocalRuntime,
 } from './onboarding.js';
 import { cmdOrientamento } from './orientamento.js';
-import { promptLine, promptSecret, resolveSecretInput } from './prompt.js';
+import { promptLine, promptSecret, resolveSecretInput, secretStoreHint } from './prompt.js';
 import { cmdPromptShow, cmdPromptVersion, PROMPT_USAGE } from './prompt-show.js';
 import { runRepl } from './repl.js';
 import { runHeadless } from './run.js';
@@ -538,7 +538,7 @@ async function cmdInit(argv: string[]): Promise<number> {
     );
     if (gia === null) {
       process.stderr.write(
-        `  Registrala una volta:  echo -n "$KEY" | muffin secret set ${LEGACY_API_KEY_NAME} --persist\n` +
+        `  ${secretStoreHint(LEGACY_API_KEY_NAME)}\n` +
           `  Oppure passala a init:  echo -n "$KEY" | muffin init\n`,
       );
       return 78;
@@ -620,7 +620,7 @@ async function cmdInit(argv: string[]): Promise<number> {
     process.stderr.write(
       `! sembra il token di un bot Telegram, non una chiave del modello — non la salvo.\n` +
         `  La chiave del modello è OpenRouter (sk-or-…) o Anthropic (sk-ant-…): https://openrouter.ai/keys\n` +
-        `  Il token del bot va altrove: muffin secret set telegram_token\n`,
+        `  Il token del bot va altrove: ${secretStoreHint('telegram_token')}\n`,
     );
     apiKey = undefined;
   }
@@ -1225,7 +1225,7 @@ async function cmdMcp(argv: string[]): Promise<number> {
       if (!value.startsWith('secret://')) {
         process.stderr.write(
           `--env ${key}=… non accetta un valore: finirebbe nel ps di chiunque e nella shell history.\n` +
-            `  Registra il segreto:  echo -n "$TOKEN" | muffin secret set mcp_${key.toLowerCase()}\n` +
+            `  ${secretStoreHint(`mcp_${key.toLowerCase()}`)}\n` +
             `  Poi passa il riferimento:  --env ${key}=secret://mcp_${key.toLowerCase()}\n` +
             `  Un valore che non è un segreto (un flag, un percorso) mettilo negli argomenti del comando, dopo --.\n`,
         );

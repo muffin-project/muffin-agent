@@ -183,3 +183,21 @@ export async function resolveSecretInput(deps: {
   }
   return { ok: true, value };
 }
+
+/**
+ * The one instruction telling an owner how to store a secret — every CLI
+ * message funnels through here instead of rewording it.
+ *
+ * Canonical since the `--persist`/multi-copy era ended: `writeAuthoritativeSecret`
+ * is the sole durable target, so there is nothing to choose (no `--persist`,
+ * no backend flag) and nothing to type inline (a literal value lands in shell
+ * history and `ps`). Two doors: the masked TTY prompt, or a pipe from a
+ * vault — never a literal, never an env variable (nothing reads env here).
+ */
+export function secretStoreHint(name: string): string {
+  return (
+    `muffin secret set ${name} — dal terminale, al prompt nascosto; ` +
+    `oppure da un vault: op read ... | muffin secret set ${name}. ` +
+    `Mai il valore nella riga di comando, mai variabili d'ambiente.`
+  );
+}
