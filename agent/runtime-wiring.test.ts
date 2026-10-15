@@ -2056,12 +2056,14 @@ describe('memory proposal preserves the live turn taint through buildRuntime', (
   });
 });
 
-describe('registered memory proposals cannot assign owner-authored provenance', () => {
+describe('registered memory proposals derive owner authorship from ingress, never from model args (#776)', () => {
   it.each([
-    ['Ricorda che preferisco il tè verde', 'accountant', 'Marco'],
-    ['Remember that I work in Milan', 'work on', 'Milan'],
-    ['Remember that I like tea', 'like', 'tea'],
-  ])('keeps the model interpretation inferred for %s', async (text, predicate, object) => {
+    // A model-passed kind is ignored in both directions: what counts is
+    // whether the values sit byte-for-byte in the authenticated request.
+    ['Ricorda che preferisco il tè verde', 'accountant', 'Marco', 'agent-inference', 'inferred'],
+    ['Remember that I work in Milan', 'work on', 'Milan', 'owner-stated', 'said'],
+    ['Remember that I like tea', 'like', 'tea', 'owner-stated', 'said'],
+  ])('producer for %s', async (text, predicate, object, producer, origin) => {
     const home = mkdtempSync(join(tmpdir(), 'muffin-proposal-producer-'));
     const workspace = mkdtempSync(join(tmpdir(), 'muffin-proposal-producer-ws-'));
     runInit({ home, apiKey: 'sk-never-called' });
@@ -2103,8 +2105,8 @@ describe('registered memory proposals cannot assign owner-authored provenance', 
       );
       const proposal = runtime.memory.store.listProposals('host')[0];
       expect(proposal).toMatchObject({
-        producer: 'agent-inference',
-        origin: 'inferred',
+        producer,
+        origin,
         status: 'accepted',
         predicate,
         objectValue: object,
@@ -2112,7 +2114,7 @@ describe('registered memory proposals cannot assign owner-authored provenance', 
       const ownerId = runtime.memory.store.findEntity('host', 'owner');
       if (ownerId === null || proposal === undefined) throw new Error('no durable proposal');
       const fact = runtime.memory.store.activeFacts('host', ownerId, predicate)[0];
-      expect(fact).toMatchObject({ origin: 'inferred', objectValue: object });
+      expect(fact).toMatchObject({ origin, objectValue: object });
       expect(proposal.sourceEpisodeIds).toEqual([fact?.episodeId]);
       if (fact?.episodeId == null) throw new Error('no canonical source episode');
       expect(runtime.memory.store.episodeById('host', fact.episodeId)?.content).toBe(text);

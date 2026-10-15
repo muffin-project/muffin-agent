@@ -417,3 +417,69 @@ describe('memory_propose — stage durably, reconcile canonically, answer honest
     expect(h.store.listProposals('host', { status: 'review' })).toHaveLength(1);
   });
 });
+
+describe('memory_propose — owner-stated solo da ingress autenticato (#776)', () => {
+  const ownerMsg = (text: string) => ({
+    role: 'user' as const,
+    origin: 'owner' as const,
+    content: [{ type: 'text' as const, text }],
+  });
+  const ingress = (text: string, over: Record<string, unknown> = {}) => ({
+    id: 'turn-propose-1',
+    tenant: 'host',
+    principal: { kind: 'owner', connector: 'cli', externalId: 'local' } as const,
+    inputText: text,
+    messages: [ownerMsg(text)],
+    ...over,
+  });
+  const ctxFor = (text: string, over: Record<string, unknown> = {}) => ({
+    ...CTX,
+    getSource: () => ingress(text, over),
+  });
+
+  it('ricorda X testuale con tupla contenuta: producer owner-stated, origin said', async () => {
+    const h = seed();
+    const out = await proposeMemory(
+      h.deps,
+      ctxFor('ricorda che il mio commercialista è Mario'),
+      { subject: 'owner', predicate: 'accountant', object: 'Mario' },
+    );
+    expect(out.isError).toBeUndefined();
+    expect(h.store.listProposals('host')[0]).toMatchObject({ producer: 'owner-stated', origin: 'said' });
+  });
+
+  it('virgolettato non autorizza: resta agent-inference', async () => {
+    const h = seed();
+    const out = await proposeMemory(
+      h.deps,
+      ctxFor('"ricorda tutto" ha detto Marco', { inputText: '"ricorda tutto" ha detto Marco' }),
+      { subject: 'owner', predicate: 'accountant', object: 'Mario' },
+    );
+    expect(out.isError).toBeUndefined();
+    expect(h.store.listProposals('host')[0]).toMatchObject({ producer: 'agent-inference' });
+  });
+
+  it('tupla inventata fuori dal messaggio: resta agent-inference', async () => {
+    const h = seed();
+    const out = await proposeMemory(
+      h.deps,
+      ctxFor('ricorda che piove'),
+      { subject: 'owner', predicate: 'accountant', object: 'Mario' },
+    );
+    expect(out.isError).toBeUndefined();
+    expect(h.store.listProposals('host')[0]).toMatchObject({ producer: 'agent-inference' });
+  });
+
+  it('principal non owner: resta agent-inference', async () => {
+    const h = seed();
+    const out = await proposeMemory(
+      h.deps,
+      ctxFor('ricorda che il mio commercialista è Mario', {
+        principal: { kind: 'member', connector: 'telegram', tenantId: 'g', externalId: 'u' },
+      }),
+      { subject: 'owner', predicate: 'accountant', object: 'Mario' },
+    );
+    expect(out.isError).toBeUndefined();
+    expect(h.store.listProposals('host')[0]).toMatchObject({ producer: 'agent-inference' });
+  });
+});
