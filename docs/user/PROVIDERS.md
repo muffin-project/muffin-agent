@@ -34,7 +34,7 @@ Run `muffin config` in a terminal to choose a lane, connect a provider, view its
 model catalog, and select a model. Choosing OpenRouter with no key offers OAuth
 first. Main and light are independent: changing one preserves the other's
 model, endpoint, credentials and routing settings. The menu supports
-OpenRouter, Anthropic API, ChatGPT plan, and custom OpenAI-compatible
+OpenRouter, Groq, Anthropic API, ChatGPT plan, and custom OpenAI-compatible
 endpoints such as a local Ollama server.
 
 Shortcuts use the same selection path:
