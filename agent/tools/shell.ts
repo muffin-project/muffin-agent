@@ -30,11 +30,12 @@ import { DISK_TIER, fenceDisk } from './fs.js';
  *  - **`shell_run` / `sys.shell`** — the sandbox confines writes to session
  *    scratch and disables direct IP networking (`SandboxExecutor.runReadOnly`).
  *    On Linux a contained command cannot open Unix-domain sockets at all (the
- *    filter is requested and verified); the Muffin gateway socket is
- *    additionally deny-listed. Reads cover the whole host minus a
- *    finite deny-list (recorded in SECURITY's “Shell read scope and sandbox
- *    patch posture” section, measured on Linux 2026-09-22): stdout reaches
- *    the model and disclosure has no undo.
+  *    filter is requested and verified); the Muffin gateway socket is
+  *    additionally deny-listed. Reads are allow-scoped to the workspace, the
+  *    session scratch and explicit system paths (recorded in SECURITY's
+  *    “Shell read scope and sandbox patch posture” section, §9.2): stdout
+  *    reaches
+  *    the model and disclosure has no undo.
  *    `reversible: 'no'`, `risk: 'high'`, and the kernel asks every time
  *    (ADR-0091 plus the AF_UNIX recovery correction below).
  *  - **`shell_run_write` / `sys.shell.write`** — writes into the workspace,
@@ -69,8 +70,9 @@ export const shellCapability: CapabilityDecl = {
   // Still `host`, and deliberately not `context` — which is where the ceiling
   // and the unattended-floor would be 3/3 and this lane would be as free as
   // `fs_read`. Residuals keep it here, all declared in `docs/architecture/SECURITY.md`
-  // §9: reads cover the whole host filesystem minus a finite deny-list (not
-  // just the project — measured on Linux 2026-09-22, #645); writes stay in
+  // §9: reads are allow-scoped to the workspace, the session scratch and
+  // explicit system paths (not just the project — closed 2026-10-16, #645);
+  // writes stay in
   // scratch and direct IP networking is disabled. On Linux the AF_UNIX
   // seccomp filter is requested and behaviorally verified before any
   // contained command runs (a host where it cannot hold refuses every
@@ -157,12 +159,13 @@ const shellSpec: ToolSpec = {
   description:
     'Run a non-interactive shell command in the contained read lane. ' +
     'It asks the owner every time: what a command reads on this machine reaches the conversation and cannot be ' +
-    'taken back. The whole host filesystem is readable except for a finite deny-read list; writes stay in a ' +
+    'taken back. Reads are allow-scoped to the project workspace, a temporary scratch directory and explicit system paths; ' +
+    'writes stay in a ' +
     'temporary scratch directory, direct IP networking is disabled, and on Linux Unix-domain sockets are blocked ' +
     'by the sandbox. This lane is treated as high risk and is not replayed after an ' +
     'uncertain crash. Muffin gateway socket paths are deny-listed. Prefer project-relative reads; ' +
-    'an absolute path outside the project reads the owner\u2019s machine, ' +
-    'and its output reaches the model. Use it when you need to observe something no ' +
+    'an absolute path outside the project fails with a permission error, ' +
+    'which is the boundary working, not a bug — and in-scope output reaches the model. Use it when you need to observe something no ' +
     'dedicated tool wraps: `ls`, `lsof`, `sqlite3 -readonly`, `env`, `ps`, `df`, `du`, `git status`, `git log`, ' +
     '`wc`, `find`, a dry run. Not for what a dedicated tool answers better than parsed text — `cat`/`ls` of a ' +
     'known file (fs_read, fs_list), a search in the files (fs_search), `ps` (process_list), a question about this ' +

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SandboxRuntimeConfig } from '@anthropic-ai/sandbox-runtime';
 import { SandboxExecutor } from './executor.js';
 import type { SandboxProbe } from './probe.js';
+import { READ_DENY_ROOT } from './read-scope.js';
 
 /**
  * `SandboxManager` non e' per istanza: e' stato di modulo, uno per processo.
@@ -51,8 +52,16 @@ vi.mock('@anthropic-ai/sandbox-runtime', () => ({
 
 const available = (): SandboxProbe => ({ available: true, mechanism: 'bubblewrap' });
 
+/**
+ * The per-leg denies beyond the read-scope root. Since `read-scoped-workspace`
+ * every leg — deny and allow alike — carries `denyRead: ['/', …]`, so a
+ * stand-in that refused on any non-empty deny list would refuse the control
+ * leg too and model a broken sandbox rather than a holding one. The
+ * discriminator is what the leg adds ON TOP of the root: the sentinel for
+ * the deny leg, nothing for the allow leg.
+ */
 const denyReadOf = (customConfig: Partial<SandboxRuntimeConfig> | undefined): readonly string[] =>
-  customConfig?.filesystem?.denyRead ?? [];
+  (customConfig?.filesystem?.denyRead ?? []).filter((p) => p !== READ_DENY_ROOT);
 
 /**
  * Contenimento che regge: la gamba con deny rifiuta, quella di controllo

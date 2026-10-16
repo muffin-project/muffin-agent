@@ -620,9 +620,9 @@ filesystem tools, and the boundary is enforced twice — the workspace is a
 sibling directory, and the home is denied outright whatever the per-call scope
 says.
 
-Read access to the home is a separate, still-open question: a contained command
-can read `muffin.db` and the session log, and what leaves is governed by taint
-and egress rather than by this boundary.
+Read access outside the turn's scope is denied by the sandbox (§9.2); what
+the scope legitimately contains still reaches the model, so disclosure of
+in-scope bytes is governed by taint and egress rather than by this boundary.
 
 ### 9.1 Two shell lanes, and what each one promises
 
@@ -630,9 +630,9 @@ Since point 4 of the *ask only for the irreversible* decision (`docs/decisions/0
 line between them is what the sandbox can be made to guarantee rather than a
 judgement about how dangerous commands are.
 
-`sys.shell` (`shell_run`) is the **read-only lane**: the whole host filesystem is
-readable minus a finite deny-read list (not just the project — §9.2 names what
-that costs; narrowing it to workspace + justified paths is #734, non-P0), writes are confined to a scratch directory this
+`sys.shell` (`shell_run`) is the **read-only lane**: reads are allow-scoped to
+the turn's workspace, the session scratch and explicit system paths (§9.2),
+writes are confined to a scratch directory this
 process creates under the system temp dir and removes when the session ends, and
 direct IP networking is disabled. On Linux the AF_UNIX seccomp filter is
 requested and behaviorally verified (three-legged self-test: an unsandboxed
@@ -646,8 +646,8 @@ that no command ever runs unfiltered. The Muffin gateway
 socket and pointer are additionally deny-listed, and the long-home fallback is
 covered by the composed Linux test (see §9.3). It declares `risk: 'high'`:
 although filesystem writes stay in scratch and direct IP networking is
-disabled, a contained command still reads a broad host filesystem and spends
-the host's resources.
+disabled, a contained command still reads workspace bytes that reach the model
+and spends the host's resources.
 `risk` governs safe mode and the budget, not the ask. Since ADR-0091
 (2026-09-22, on the Linux measurement in §9.2 / issue #645), it also declares
 `reversible: 'no'`: what a command reads reaches the model and a disclosure
@@ -657,8 +657,8 @@ without a recorded outcome, recovery reports “maybe done” instead of repeati
 a possible local-service mutation. The write-and-no-IP-network halves are tested
 against a live sandbox in `core/sandbox/confine-sola-lettura.test.ts`, on Linux
 under `bwrap` in the GitHub Actions `verifica` job and on macOS under seatbelt;
-the ask is the gate over the read half the sandbox cannot bound (pinned srt
-0.0.71 has no read allowlist — §9.2).
+the ask remains the gate over what scoping cannot bound: which of the
+in-scope bytes the owner lets the model see.
 
 `sys.shell.write` (`shell_run_write`) is the **writing lane**: the workspace is
 its write scope, it keeps `reversible: 'no'` and `risk: 'high'`, and it asks
@@ -705,12 +705,13 @@ Three properties of this split are load-bearing:
   an ACL granting `add_file` and `delete_child`. The AF_UNIX filter itself is
   measured on the production-side Linux runner (evidence
   `docs/evidence/af-unix-seccomp-2026-09-26.md`).
-  And a command still spends the host's CPU, memory and
-  file descriptors. So `sys.shell` stays on the `host` effect row rather than
-  moving to `context`: "no writes outside the scratch, no IP network and no
-  reachable local socket" is the
-  claim; "no effect of any kind on the host" is not — and since ADR-0091 the
-  ask covers the half the boundary cannot: the read.
+   And a command still spends the host's CPU, memory and
+   file descriptors. So `sys.shell` stays on the `host` effect row rather than
+   moving to `context`: "no writes outside the scratch, no IP network and no
+   reachable local socket" is the
+   claim; "no effect of any kind on the host" is not — and the ask stays as
+   the second lock over disclosure: scoping bounds *what* a command can read,
+   the ask governs *whether* it may run at all.
 
 Direct IP networking is disabled on **both** lanes today, although that decision describes the
 writing one as writing *or* reaching the network. Opening the network there would route
@@ -719,27 +720,42 @@ not consult it, and that is a separate decision from this split. The current
 state is asserted, not assumed: the same live containment test checks the
 writing lane cannot reach a listening host socket either.
 
-### 9.2 Shell read scope and sandbox patch posture (2026-09-21)
+### 9.2 Shell read scope and sandbox patch posture (2026-09-21, scope closed 2026-10-16)
 
-Reads are allow-by-default: `--ro-bind / /` minus a finite `denyRead`.
-Applications, credential stores and private folders appear continuously, so the
-list protects known secrets without ever expressing "this turn may inspect the
-project, not the whole machine". Stdout reaches the model (fenced, `DISK_TIER`),
-so an injected `cat ~/…` discloses to the provider. Writes stay in scratch,
-direct IP networking is disabled, and on Linux `socket(AF_UNIX, …)` is refused
-by the verified seccomp filter as described above. The exposure is documented in
-executable form by an
-`it.fails` canary in `confine-sola-lettura.test.ts` that must be flipped to a
-plain assertion the day reads become allow-scoped. Measured on Linux
-2026-09-22 (evidence §5): a canary outside the workspace and outside the
-deny-list is readable through production `runReadOnly` — `~`, `/var/tmp` and
-host disk all in scope — while the deny itself holds. The gating half of the
-question closed the same day (ADR-0091): `sys.shell` is `reversible: 'no'` and
-asks the owner every time, so whole-host visibility is no longer an
-*unapproved* low-risk capability. The allow-scoped read surface (workspace,
-session scratch, explicit safe system paths) remains the preferred fix and is
-not constructible on pinned srt 0.0.71 — it has no read allowlist — so it
-stays a reversal condition of ADR-0091 rather than a silent default.
+Reads are allow-scoped since the `read-scoped-workspace` slice (#645): every
+sandboxed call carries `denyRead: ['/']` plus an explicit allow list — the
+call's `cwd`, its write scope, the session scratch, and the system paths
+`core/sandbox/read-scope.ts` names entry by entry — with `guards.denyRead`
+layered on top, so a secret inside an allowed root stays denied. Stdout
+reaches the model (fenced, `DISK_TIER`), so an injected `cat` of an in-scope
+file still discloses to the provider; what changed is that `~/…` outside the
+scope is no longer there to be catted. The `it.fails` canary in
+`confine-sola-lettura.test.ts` is now a plain assertion: a canary outside
+the workspace and outside the deny-list is unreadable through production
+`runReadOnly`, and removing the root deny turns it red (fourth mutation in
+that file's header). The mechanism the pinned srt 0.0.71 provides is
+`allowRead` — deny-broad-then-re-allow (SBPL last-match-wins on macOS,
+tmpfs-plus-re-bind on Linux). The earlier statement that the pinned runtime
+"has no read allowlist" was wrong about the shipped dist — the schema field
+is there and both backends enforce it — and this slice corrects it; the
+2026-09-21 evidence file stays as the dated record of the exposure as
+measured then. The gating half closed 2026-09-22 (ADR-0091): `sys.shell` is
+`reversible: 'no'` and asks the owner every time, so disclosure is never an
+unapproved low-risk capability. ADR-0091 stays in force alongside the scope:
+scoping bounds *what* a command can read, the ask governs *whether* it runs.
+
+Three properties of the scope were measured, not assumed. On macOS a
+symlinked ancestor's link inode must itself be allowed for any spelling
+through it to resolve — allowing the resolved scratch alone leaves `cat`
+via its `/var/…` spelling at `EPERM` — hence the lexical aliases, link inode
+only, never content. Git runs with `GIT_CONFIG_GLOBAL/SYSTEM=/dev/null`
+because `~/.gitconfig` is EPERM by design and git treats that as fatal even
+for `init`; repo-local config and `-c` flags keep working. The xcrun
+toolchain cache (`$TMPDIR/xcrun_db`, fixed name) is re-allowed for read so
+the `/usr/bin/git` shim does not fall into its ~1.2s cache-miss path on
+every call. Live proof ran on macOS seatbelt; the same suite runs under
+`bwrap` in the `verifica` CI job, and a host where the scope cannot hold
+refuses every contained invocation before it runs.
 
 The September 2026 Bubblewrap symlink setup flaw (CVE-2026-87766) happens
 before anything runs, so no behavioral probe observes it, and Ubuntu reverted
