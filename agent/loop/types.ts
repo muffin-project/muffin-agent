@@ -594,6 +594,14 @@ export type LoopDeps = {
    */
   delega?: Delega | undefined;
   /**
+   * Approval tiers (ADR-0105): owner-managed allow/deny command patterns.
+   *
+   * Opzionale e spento per assenza: senza questo campo ogni ask chiede come
+   * prima. Il verso del degrado è perdere comodità, non sicurezza — un loop
+   * che se lo dimentica chiede di più, mai di meno.
+   */
+  approvalTiers?: { autoAllow: readonly string[]; deny: readonly string[] } | undefined;
+  /**
    * System One in shadow (issue #740, fase 1; ADR-0096): giudica gli ask
    * **accanto** alla domanda all'owner — mai davanti, mai al posto.
    *

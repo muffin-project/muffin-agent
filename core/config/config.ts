@@ -313,6 +313,20 @@ export const ConfigSchema = z.object({
   // seal (`rot/budgets.json`, read by `core/rot/budgets.ts`) and this file — which
   // the agent is meant to be able to change while talking (ADR-0036) — must not
   // carry a second copy of them.
+  /**
+   * Approval tiers (ADR-0105): owner-managed allow/deny command patterns.
+   * Entirely optional with no defaults — absent means every ask behaves as
+   * before. A preference, not a trust anchor, so it lives here (owner edits
+   * freely) rather than under the seal. Entries are exact commands or
+   * `prefix*` globs matched against the trimmed shell command; deny wins
+   * over allow, and critical paths always ask regardless of both lists.
+   */
+  approvals: z
+    .object({
+      autoAllowCommands: z.array(z.string().min(1)).optional(),
+      denyCommands: z.array(z.string().min(1)).optional(),
+    })
+    .optional(),
   rot: z.object({ mode: z.enum(['hardened', 'single-user']) }),
   traces: z.object({ retentionDays: z.number().int().positive() }),
   /**

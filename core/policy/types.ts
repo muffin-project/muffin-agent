@@ -293,6 +293,14 @@ export type CapabilityDecl = {
   /** Where this effect lands. See `EffectRow`: it owns the ceiling. */
   readonly effect: EffectRow;
   /**
+   * Opt-in: every execution of this capability runs inside the OS sandbox
+   * (Seatbelt/bwrap via `SandboxExecutor`), so the boundary — not a prompt —
+   * contains what it can reach. The approval tiers (ADR-0105) auto-approve
+   * calls on sandboxed capabilities that match no explicit rule and no
+   * critical path. Absent means not declared; only `sys.shell` lanes opt in.
+   */
+  readonly sandboxed?: boolean;
+  /**
    * A **tightening** of this capability's own row, and nothing else.
    *
    * It used to be the ceiling itself, `?? defaultMaxTaint[risk]`, and that is

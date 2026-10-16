@@ -1555,6 +1555,17 @@ export function buildRuntime(
       // La postura che consuma gli ask di ogni lavoro: letta fresca dal
       // registro a ogni domanda, mai copiata in memoria (issue #740).
       delega,
+      // Approval tiers (ADR-0105) dalla config dell'owner: assenti, ogni ask
+      // chiede come prima. Copia letta all'avvio, come il resto della config
+      // non sigillata che il runtime consuma.
+      ...(config.approvals === undefined
+        ? {}
+        : {
+            approvalTiers: {
+              autoAllow: [...(config.approvals.autoAllowCommands ?? [])],
+              deny: [...(config.approvals.denyCommands ?? [])],
+            },
+          }),
       // System One in shadow (issue #740 fase 1): presente solo quando la
       // config e il segreto lo dicono — assente, il ramo ask non cambia.
       ...(judgment === undefined ? {} : { judgment }),
