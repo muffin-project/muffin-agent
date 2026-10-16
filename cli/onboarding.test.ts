@@ -10,7 +10,9 @@ import {
   describeProviderChoice,
   describeSandboxProbe,
   describeSupervisor,
+  GROQ_BASE_URL,
   inferProvider,
+  isGroqKey,
   isOpenRouterKey,
   keyHint,
   localModelChoices,
@@ -61,6 +63,12 @@ describe('provider inference from key shape', () => {
     expect(inferProvider('sk-ant-api03-xyz')).toBe('anthropic');
   });
 
+  it('reads a Groq key as the openai-compat gateway', () => {
+    expect(isGroqKey('gsk_abc123')).toBe(true);
+    expect(isGroqKey('sk-or-v1-abc123')).toBe(false);
+    expect(inferProvider('gsk_abc123')).toBe('openai-compat');
+  });
+
   it('does not guess an unknown prefix, leaving the default to the caller', () => {
     expect(inferProvider('xoxb-not-a-model-key')).toBeUndefined();
     expect(inferProvider(undefined)).toBeUndefined();
@@ -75,6 +83,7 @@ describe('telegram bot token detection', () => {
   it('does not flag real model keys or empties', () => {
     expect(looksLikeTelegramToken('sk-or-v1-abc')).toBe(false);
     expect(looksLikeTelegramToken('sk-ant-api03-xyz')).toBe(false);
+    expect(looksLikeTelegramToken('gsk_abc123')).toBe(false);
     expect(looksLikeTelegramToken(undefined)).toBe(false);
   });
 });
@@ -92,7 +101,14 @@ describe('key hint', () => {
   it('offers both routes when the provider is not yet known', () => {
     const hint = keyHint(undefined, undefined);
     expect(hint).toContain('sk-or-');
+    expect(hint).toContain('gsk-');
     expect(hint).toContain('sk-ant-');
+  });
+
+  it('points a Groq endpoint at the Groq keys page, not the OpenRouter one', () => {
+    expect(keyHint(undefined, GROQ_BASE_URL)).toContain('console.groq.com/keys');
+    expect(keyHint(undefined, GROQ_BASE_URL)).not.toContain('openrouter.ai/keys');
+    expect(keyHint('openai-compat', GROQ_BASE_URL)).toContain('console.groq.com/keys');
   });
 });
 
@@ -131,6 +147,24 @@ describe('chooseProvider — the decision cmdInit used to make in two different 
   it('infers anthropic from an Anthropic key, with no base URL to fill', () => {
     const choice = chooseProvider(undefined, 'sk-ant-api03-xyz', undefined);
     expect(choice).toEqual({ provider: 'anthropic', baseUrl: undefined, reason: 'inferred' });
+  });
+
+  it('infers openai-compat from a Groq key and fills the Groq base URL', () => {
+    const choice = chooseProvider(undefined, 'gsk_abc123', undefined);
+    expect(choice).toEqual({
+      provider: 'openai-compat',
+      baseUrl: GROQ_BASE_URL,
+      reason: 'inferred',
+    });
+  });
+
+  it('an explicit --base-url overrides the inferred Groq default', () => {
+    const choice = chooseProvider(undefined, 'gsk_abc123', 'https://my-proxy.example.com/v1');
+    expect(choice).toEqual({
+      provider: 'openai-compat',
+      baseUrl: 'https://my-proxy.example.com/v1',
+      reason: 'inferred',
+    });
   });
 
   it('falls back to anthropic when there is a key but its prefix is unknown', () => {
@@ -173,6 +207,20 @@ describe('describeProviderChoice — say what was inferred, never decide silentl
   it('announces an inferred anthropic provider', () => {
     const choice = { provider: 'anthropic' as const, baseUrl: undefined, reason: 'inferred' as const };
     expect(describeProviderChoice(choice, 'sk-ant-x')).toContain('dedotto');
+  });
+
+  it('announces an inferred Groq provider with the Groq prefix, not the OpenRouter one', () => {
+    const choice = {
+      provider: 'openai-compat' as const,
+      baseUrl: GROQ_BASE_URL,
+      reason: 'inferred' as const,
+    };
+    const line = describeProviderChoice(choice, 'gsk_the-real-secret-must-not-appear');
+    expect(line).toContain('openai-compat');
+    expect(line).toContain(GROQ_BASE_URL);
+    expect(line).toContain('gsk-…');
+    expect(line).not.toContain('sk-or-…');
+    expect(line).not.toContain('the-real-secret-must-not-appear');
   });
 
   it('names the unrecognised key as the reason for the default, distinct from having no key at all', () => {
