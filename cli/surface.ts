@@ -646,7 +646,7 @@ export function rigaDatata(line: string): string {
 /** Dove finisce una riga di log di superficie: stderr, o la regione sopra la casella. */
 export type SinkDiLog = (line: string) => void;
 
-function voceFor(runtime: Runtime, home: string): (percorso: string) => Promise<Voce> {
+export function voceFor(runtime: Runtime, home: string): (percorso: string) => Promise<Voce> {
   const audio = runtime.config.audio;
   const modello = audio?.whisperModel ?? paths(home).whisperModel;
   return (percorso) =>
