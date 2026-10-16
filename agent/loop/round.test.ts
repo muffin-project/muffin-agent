@@ -682,20 +682,24 @@ describe('recover cammina la cascata del profilo, un passo per tentativo', () =>
   });
 });
 
-describe('il gate di completezza spinge una volta sola', () => {
-  it('e la seconda volta la risposta resta, dichiarata sullo span', async () => {
+describe('il gate di completezza registra e non richiama', () => {
+  it('la prima risposta con testo resta, al primo giro, dichiarata sullo span', async () => {
+    // Simple-loop: testo + zero call = risposta terminale. Il gate rileva
+    // (attributi per Control/eval) ma non spende un secondo giro a modello.
     const { tool, decl } = okTool('fs_write');
     const provider = scriptedProvider({
-      chat: [reply('Ho usato fs_write per salvarlo.'), reply('Ho usato fs_write, davvero.')],
+      chat: [reply('Ho usato fs_write per salvarlo.')],
     });
     const h = harness({ provider, tools: [tool], decls: [decl] });
 
     const result = await runRounds(h.scope);
 
-    expect(provider.chatCalls).toHaveLength(2);
+    expect(provider.chatCalls).toHaveLength(1);
+    expect(result.stopped).toBe('answered');
+    expect(result.text).toBe('Ho usato fs_write per salvarlo.');
     expect(h.run.nudgedForCompletion).toBe(true);
+    expect(h.span.attrs['muffin.completion.named_uncalled']).toBe('fs_write');
     expect(h.span.attrs['muffin.completion.unresolved']).toBe(true);
-    expect(result.text).toBe('Ho usato fs_write, davvero.');
   });
 });
 
@@ -735,30 +739,28 @@ describe('il gate di completezza legge i contatori di vita del turno (#603)', ()
   });
 
   /**
-   * The other direction: the fix must not delete the gate. A turn with zero
-   * calls in every lease that narrates a tool is still nudged exactly once,
-   * and the replaced draft is still reported `superseded` to the surface.
+   * The other direction: the detection must not delete the answer either. A
+   * turn with zero calls in every lease that narrates a tool still ends
+   * `answered` on the first text — recorded, never re-asked, never
+   * `superseded`.
    */
-  it('un turno davvero senza chiamate che narra un tool è ancora superseded', async () => {
+  it('un turno davvero senza chiamate che narra un tool resta risposto, mai superseded', async () => {
     const { tool, decl } = okTool('fs_write');
     const deltas: TurnDelta[] = [];
     const first = 'Ho usato fs_write per salvarlo.';
-    const second = 'Nessun file scritto: riscrivo senza affermazioni.';
     const provider = scriptedProvider({
-      stream: [
-        [{ type: 'text_delta', text: first }, { type: 'done', result: reply(first) }],
-        [{ type: 'text_delta', text: second }, { type: 'done', result: reply(second) }],
-      ],
+      stream: [[{ type: 'text_delta', text: first }, { type: 'done', result: reply(first) }]],
     });
     const h = harness({ provider, tools: [tool], decls: [decl], onDelta: (d) => deltas.push(d) });
 
     const result = await runRounds(h.scope);
 
     expect(result.stopped).toBe('answered');
-    expect(provider.streamCalls).toHaveLength(2);
+    expect(provider.streamCalls).toHaveLength(1);
     expect(h.run.nudgedForCompletion).toBe(true);
-    expect(deltas).toContainEqual({ type: 'boundary', reason: 'superseded' });
-    expect(result.text).toBe(second);
+    expect(h.span.attrs['muffin.completion.unresolved']).toBe(true);
+    expect(deltas).not.toContainEqual({ type: 'boundary', reason: 'superseded' });
+    expect(result.text).toBe(first);
   });
 });
 
@@ -875,10 +877,14 @@ describe('execution budget', () => {
   });
 });
 
-describe('requireTool arma il filo una volta sola (ADR-0082)', () => {
+describe('requireTool non arma mai il filo (simple-loop)', () => {
   const vuota: ChatResult = { text: null, toolCalls: [], stopReason: 'end', usage, model: 'test' };
 
-  it('il giro dopo un vuoto chiede required, poi torna auto', async () => {
+  it('il giro dopo un vuoto resta auto: parole sì, forzatura no', async () => {
+    // SOTA (OpenAI final-output rule, LangGraph tools_condition): nessun giro
+    // chiede mai tool_choice: required. L'ultimo rung prescrive a parole,
+    // come strictJson — fabbricare una call che il modello non ha scelto
+    // era la disonestà che round.ts stesso nominava.
     const { tool, decl } = okTool('noop');
     const provider = scriptedProvider({ chat: [vuota, reply('fatto')] });
     const h = harness({
@@ -893,11 +899,9 @@ describe('requireTool arma il filo una volta sola (ADR-0082)', () => {
     expect(result.stopped).toBe('answered');
     expect(provider.chatCalls).toHaveLength(2);
     expect(provider.chatCalls[0]!.toolChoice).toBe('auto');
-    expect(provider.chatCalls[1]!.toolChoice).toBe('required');
-    // Consumato: non resta armato sul turno.
-    expect(h.run.requireToolOnce).toBe(false);
+    expect(provider.chatCalls[1]!.toolChoice).toBe('auto');
     expect(h.span.attrs['muffin.recovery.strategy']).toBe('requireTool');
-    expect(h.span.attrs['muffin.recovery.tool_choice']).toBe('required');
+    expect(h.span.attrs['muffin.recovery.tool_choice']).toBeUndefined();
   });
 
   it('a cascata esaurita non arma niente', () => {
@@ -906,7 +910,6 @@ describe('requireTool arma il filo una volta sola (ADR-0082)', () => {
       profile: { ...CONSERVATIVE, recovery: [] },
     });
     expect(recover(h.scope, 'empty')).toBe(false);
-    expect(h.run.requireToolOnce).toBe(false);
   });
 });
 
@@ -1025,7 +1028,6 @@ describe('verità del fallimento provider/risultato (P0-A)', () => {
     expect(result.reason).toBe('provider_empty');
     expect(h.run.recoveriesUsed).toBe(0);
     for (const call of provider.chatCalls) expect(call.toolChoice).not.toBe('required');
-    expect(h.run.requireToolOnce).toBe(false);
   });
 
   /**
