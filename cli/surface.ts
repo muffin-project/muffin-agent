@@ -1,7 +1,10 @@
 import { join } from 'node:path';
 import DatabaseCtor from 'better-sqlite3';
+import { loadAudio } from '../agent/audio.js';
 import { aiuto, type Controlli, eseguiComando } from '../agent/comandi.js';
+import { loadImage } from '../agent/images.js';
 import type { Approver } from '../agent/loop.js';
+import { audioAccettato, immagineAccettata } from '../agent/providers/modalita.js';
 import type { Runtime } from '../agent/runtime.js';
 import { makeSendFileTool, sendFileCapability } from '../agent/tools/deliver.js';
 import type { FsScope } from '../agent/tools/fs.js';
@@ -650,6 +653,8 @@ function voceFor(runtime: Runtime, home: string): (percorso: string) => Promise<
     decidiVoce(percorso, {
       baseUrl: inferenceProvider(runtime.config, 'main').baseUrl,
       model: runtime.config.models.main,
+      carica: loadAudio,
+      misuraAudio: audioAccettato,
       whisperModel: modello,
       // Il percorso di produzione scarica il modello se manca: è il senso di
       // "sempre installato" — nei test e negli eval resta spento, e l'assenza
@@ -682,6 +687,8 @@ export function vistaFor(runtime: Runtime): (percorso: string) => Promise<Vista>
       lightBaseUrl,
       mainModel: runtime.config.models.main,
       lightModel: leggera,
+      carica: loadImage,
+      misuraVista: immagineAccettata,
       descrivi: async (immagine) => {
         const esito = await lightProvider.chat({
           model: leggera,
@@ -1038,7 +1045,9 @@ export function connectSurfaces(
       stops.push(conn.stop);
       lines.push(conn.line);
       if (!pollEnabled) {
-        lines.push(`${reg.id}: solo invio — i turni girano sul gateway (muffin gateway install --write --start)`);
+        lines.push(
+          `${reg.id}: solo invio — i turni girano sul gateway (muffin gateway install --write --start)`,
+        );
       }
     } catch (error) {
       // Il rimedio esplicito, perche' quello di default direbbe «riavvia il
