@@ -1,5 +1,6 @@
 import { discoverOpenAICompatModels } from '../agent/providers/models-discovery.js';
 import type { ProviderKind } from '../core/config/config.js';
+import { PROVIDERS, type ProviderId } from '../core/config/providers.js';
 import type { SandboxProbe } from '../core/sandbox/probe.js';
 import { promptLine } from './prompt.js';
 
@@ -109,6 +110,85 @@ export function keyHint(provider: ProviderKind | undefined, baseUrl: string | un
     'Incolla una chiave OpenRouter (sk-or-…) o Anthropic (sk-ant-…) — il prefisso sceglie il provider.\n' +
     '  OpenRouter, una chiave per tutti i modelli → https://openrouter.ai/keys\n'
   );
+}
+
+/**
+ * What the init provider menu resolves to: a catalog entry, or a custom
+ * OpenAI-compatible endpoint (with the URL already captured when the owner
+ * pasted one instead of writing `custom`).
+ */
+export type ProviderMenuPick =
+  | { readonly kind: 'provider'; readonly id: ProviderId }
+  | { readonly kind: 'custom'; readonly baseUrl?: string | undefined };
+
+/**
+ * The provider question ADR-0036 originally named (*«da chi passiamo?»*).
+ *
+ * Asked only when the key did not already answer it — a recognised key keeps
+ * today's silent inference, an explicit flag keeps winning over everything.
+ * The catalog entries come from `PROVIDERS`, never from a second list kept
+ * here: a provider added to the catalog appears in this menu with no edit.
+ * `custom` (or a pasted http(s) URL) is an endpoint the catalog does not
+ * know; the caller prompts for the URL and the key next. Empty or EOF skips
+ * the question and the caller falls back to today's default path; anything
+ * else that is not a number, an id, `custom` or a URL re-asks instead of
+ * guessing, because a mistyped provider is a misconfigured install.
+ */
+export async function askProviderChoice(
+  input: NodeJS.ReadStream = process.stdin,
+  output: NodeJS.WriteStream = process.stdout,
+): Promise<ProviderMenuPick | undefined> {
+  const entries = Object.values(PROVIDERS);
+  const menu = entries.map((e, i) => `  [${i + 1}] ${e.label} (${e.id})`).join('\n');
+  const custom = entries.length + 1;
+  for (;;) {
+    const answer = await promptLine(
+      `\nDa chi passiamo?\n${menu}\n  [${custom}] endpoint personalizzato (OpenAI-compatibile)\nScelta [1-${custom}] (nome, numero, URL http(s), o invio per saltare): `,
+      input,
+      output,
+    );
+    if (answer === undefined || answer === '') return undefined;
+    const n = Number.parseInt(answer, 10);
+    const numbered = Number.isInteger(n) && String(n) === answer ? n : undefined;
+    if (numbered !== undefined && numbered >= 1 && numbered <= entries.length) {
+      const picked = entries[numbered - 1]!;
+      return { kind: 'provider', id: picked.id };
+    }
+    if (answer === 'custom' || numbered === custom) return { kind: 'custom' };
+    const byId = entries.find((e) => e.id === answer.toLowerCase());
+    if (byId !== undefined) return { kind: 'provider', id: byId.id };
+    try {
+      const parsed = new URL(answer);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return { kind: 'custom', baseUrl: answer };
+      }
+    } catch {
+      // Not a URL — fall through to the re-ask below.
+    }
+    output.write(
+      `«${answer}» non è un provider della lista — numero, nome, custom, URL http(s) o invio per saltare.\n`,
+    );
+  }
+}
+
+/**
+ * Whether this key can belong to this catalog provider — the strictness the
+ * menu flow applies after the owner just chose: a mismatch is almost certainly
+ * a wrong paste, and writing it would fail at the first model call, which is
+ * the worst place to learn it. Unknown shapes (and ChatGPT's OAuth, which has
+ * no key shape at all) have nothing to check against and pass.
+ */
+export function keyMatchesProvider(key: string, id: ProviderId): boolean {
+  if (id === 'openrouter') return isOpenRouterKey(key);
+  if (id === 'anthropic') return key.startsWith('sk-ant-');
+  return true;
+}
+
+/** The key shape the strict prompt names, so the refusal says what it wants. */
+export function keyPrefixFor(id: ProviderId): string | undefined {
+  if (id === 'openrouter') return 'sk-or-…';
+  if (id === 'anthropic') return 'sk-ant-…';
+  return undefined;
 }
 
 /**

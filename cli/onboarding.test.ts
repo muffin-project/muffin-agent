@@ -5,6 +5,7 @@ import type { SandboxProbe } from '../core/sandbox/probe.js';
 import {
   askLocalOrApi,
   askModelChoice,
+  askProviderChoice,
   chooseProvider,
   describeModelChoice,
   describeProviderChoice,
@@ -13,12 +14,15 @@ import {
   inferProvider,
   isOpenRouterKey,
   keyHint,
+  keyMatchesProvider,
+  keyPrefixFor,
   localModelChoices,
   looksLikeTelegramToken,
   OPENROUTER_BASE_URL,
   OPENROUTER_MODEL_FAMILIES,
   probeLocalRuntime,
 } from './onboarding.js';
+import { PROVIDERS } from '../core/config/providers.js';
 
 /** A writable/readable pair that claims to be a TTY, so the prompts engage — same fixture as cli/prompt.test.ts. */
 function fakeTty(): { input: NodeJS.ReadStream; output: NodeJS.WriteStream } {
@@ -64,6 +68,90 @@ describe('provider inference from key shape', () => {
   it('does not guess an unknown prefix, leaving the default to the caller', () => {
     expect(inferProvider('xoxb-not-a-model-key')).toBeUndefined();
     expect(inferProvider(undefined)).toBeUndefined();
+  });
+});
+
+describe('askProviderChoice — «da chi passiamo?», only when the key did not answer', () => {
+  const firstId = Object.values(PROVIDERS)[0]!.id;
+
+  it('a number picks that catalog entry', async () => {
+    const { input, output } = fakeTty();
+    const pending = askProviderChoice(input, output);
+    input.write('1\n');
+    await expect(pending).resolves.toEqual({ kind: 'provider', id: firstId });
+  });
+
+  it('an id picks that catalog entry', async () => {
+    const { input, output } = fakeTty();
+    const pending = askProviderChoice(input, output);
+    input.write('anthropic\n');
+    await expect(pending).resolves.toEqual({ kind: 'provider', id: 'anthropic' });
+  });
+
+  it('every catalog entry is reachable by number — a new provider needs no edit here', async () => {
+    for (const [index, entry] of Object.values(PROVIDERS).entries()) {
+      const { input, output } = fakeTty();
+      const pending = askProviderChoice(input, output);
+      input.write(`${index + 1}\n`);
+      await expect(pending).resolves.toEqual({ kind: 'provider', id: entry.id });
+    }
+  });
+
+  it('"custom" resolves to a custom endpoint without a URL yet', async () => {
+    const { input, output } = fakeTty();
+    const pending = askProviderChoice(input, output);
+    input.write('custom\n');
+    await expect(pending).resolves.toEqual({ kind: 'custom' });
+  });
+
+  it('a pasted http(s) URL resolves to a custom endpoint with that URL', async () => {
+    const { input, output } = fakeTty();
+    const pending = askProviderChoice(input, output);
+    input.write('https://my-proxy.example.com/v1\n');
+    await expect(pending).resolves.toEqual({
+      kind: 'custom',
+      baseUrl: 'https://my-proxy.example.com/v1',
+    });
+  });
+
+  it('an empty answer skips — the caller falls back to the default path', async () => {
+    const { input, output } = fakeTty();
+    const pending = askProviderChoice(input, output);
+    input.write('\n');
+    await expect(pending).resolves.toBeUndefined();
+  });
+
+  it('garbage re-asks instead of guessing, then honours the correction', async () => {
+    const { input, output } = fakeTty();
+    const pending = askProviderChoice(input, output);
+    input.write('xx\n');
+    // A new readline per prompt: the correction goes only after the re-ask is
+    // listening, or the first interface buffers it away.
+    await new Promise((r) => setTimeout(r, 100));
+    input.write('2\n');
+    await expect(pending).resolves.toEqual({
+      kind: 'provider',
+      id: Object.values(PROVIDERS)[1]!.id,
+    });
+  });
+});
+
+describe('keyMatchesProvider — the strictness of the menu flow', () => {
+  it('accepts matching shapes and refuses the others', () => {
+    expect(keyMatchesProvider('sk-or-v1-abc', 'openrouter')).toBe(true);
+    expect(keyMatchesProvider('sk-ant-api03-xyz', 'openrouter')).toBe(false);
+    expect(keyMatchesProvider('sk-ant-api03-xyz', 'anthropic')).toBe(true);
+    expect(keyMatchesProvider('sk-or-v1-abc', 'anthropic')).toBe(false);
+  });
+
+  it('chatgpt has no key shape to check — OAuth, not a pasted key', () => {
+    expect(keyMatchesProvider('anything', 'chatgpt')).toBe(true);
+  });
+
+  it('names the expected prefix where one exists', () => {
+    expect(keyPrefixFor('openrouter')).toBe('sk-or-…');
+    expect(keyPrefixFor('anthropic')).toBe('sk-ant-…');
+    expect(keyPrefixFor('chatgpt')).toBeUndefined();
   });
 });
 
