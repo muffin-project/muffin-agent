@@ -71,12 +71,14 @@ import {
   describeProviderChoice,
   describeSandboxProbe,
   describeSupervisor,
+  inferProvider,
   keyHint,
   localModelChoices,
   looksLikeTelegramToken,
   type ModelChoiceReason,
   OPENROUTER_MODEL_FAMILIES,
   probeLocalRuntime,
+  resolveMenuProvider,
 } from './onboarding.js';
 import { cmdOrientamento } from './orientamento.js';
 import { promptLine, promptSecret, resolveSecretInput, secretStoreHint } from './prompt.js';
@@ -634,26 +636,51 @@ async function cmdInit(argv: string[]): Promise<number> {
   // (`describeProviderChoice`) — ADR-0036: ask only what cannot be inferred,
   // and never decide silently.
   const keyForInference = apiKey ?? (stored ? readFileSync(stored.path, 'utf8').trim() : undefined);
+  // The provider question («da chi passiamo?») — asked only when the key did
+  // not already answer it. An explicit flag, a probed local runtime, or a
+  // recognised key shape all decide without asking, exactly as before; off a
+  // TTY there is nothing to ask with, so headless keeps inference plus
+  // defaults. A skipped menu (empty/EOF) falls back to the default path too,
+  // announced as today.
+  const menu =
+    process.stdin.isTTY &&
+    providerFlag === undefined &&
+    values['base-url'] === undefined &&
+    localRuntime === undefined &&
+    inferProvider(keyForInference) === undefined
+      ? await resolveMenuProvider(home, process.stdin, process.stdout, {
+          out: (line) => process.stderr.write(`${line}\n`),
+        })
+      : null;
+  if (menu !== null && menu.apiKey !== undefined) apiKey = menu.apiKey;
   // `localRuntime` already decided the provider (a probe, not a key prefix) —
   // `chooseProvider` never sees it, same as an explicit --provider always
   // wins over inference. `describeProviderChoice` still says it out loud
   // through the same call, via the 'local' reason.
-  const choice = localRuntime
-    ? {
-        provider: 'openai-compat' as const,
-        baseUrl: localRuntime.baseUrl,
-        reason: 'local' as const,
-      }
-    : chooseProvider(providerFlag, keyForInference, values['base-url']);
+  const choice =
+    localRuntime !== undefined
+      ? {
+          provider: 'openai-compat' as const,
+          baseUrl: localRuntime.baseUrl,
+          reason: 'local' as const,
+        }
+      : menu !== null
+        ? {
+            provider: menu.provider,
+            baseUrl: menu.baseUrl,
+            reason: 'chosen' as const,
+          }
+        : chooseProvider(providerFlag, keyForInference, values['base-url']);
   process.stderr.write(describeProviderChoice(choice, keyForInference));
 
   // Modello (owner, verbatim: "chiedere che modello si vuole usare") — asked
   // only when nothing already names one, and only on a TTY; headless keeps
   // today's compiled default from `defaultModels`. Anthropic diretto gets no
   // question at all: one family, nothing to choose among.
-  let mainModel = values.model;
-  let lightModel = values['light-model'];
+  let mainModel = values.model ?? menu?.models?.main;
+  let lightModel = values['light-model'] ?? menu?.models?.light;
   let modelReason: ModelChoiceReason = mainModel || lightModel ? 'explicit' : 'default';
+  if (menu?.models !== undefined) modelReason = 'chosen';
   if (!mainModel && process.stdin.isTTY) {
     const pick = localRuntime
       ? await askModelChoice(
@@ -705,6 +732,10 @@ async function cmdInit(argv: string[]): Promise<number> {
       ...(mainModel ? { mainModel } : {}),
       ...(lightModel ? { lightModel } : {}),
       ...(apiKey ? { apiKey } : {}),
+      // A menu-picked ChatGPT account connected over OAuth: there is no key
+      // value to store, and the missing-key path below would wrongly report
+      // the install incomplete. The session file is the credential.
+      ...(menu?.chatgpt === true ? { chatgptConnected: true } : {}),
       // The interactive owner flow has one durable source of truth. `runInit`
       // keeps its home default for isolated programmatic fixtures and legacy API
       // callers; the public CLI must not create a competing copy.
