@@ -547,32 +547,32 @@ describe('agent loop', () => {
     expect(tool.every((m) => m.content === big)).toBe(true);
   });
 
-  it('nudges once when the answer narrates a call it never made', async () => {
+  it('lets a narrated-call answer stand at the first text, recorded', async () => {
+    // Simple-loop: testo + zero call = risposta terminale. Il gate rileva ma
+    // non richiama: nessuna call fabbricata, nessun secondo giro fatturato.
     const {
       deps: d,
       store,
       calls,
-    } = deps([
-      answer('[Eseguo `demo_write`] Fatto, ho scritto il file.'),
-      callTool('demo_write'),
-      answer('scritto per davvero'),
-    ]);
+    } = deps([answer('[Eseguo `demo_write`] Fatto, ho scritto il file.')]);
     const result = await runTurn(d, input(store));
-    // The nudge got a real call out of it instead of a story about one.
-    expect(calls).toContain('demo_write');
-    expect(result.text).toBe('scritto per davvero');
+    expect(calls).not.toContain('demo_write');
+    expect(result).toMatchObject({
+      stopped: 'answered',
+      text: '[Eseguo `demo_write`] Fatto, ho scritto il file.',
+    });
   });
 
-  it('lets the answer stand after one nudge rather than editing it', async () => {
+  it('never rewrites what the agent said, nor re-asks for it', async () => {
     // Rewriting what the agent said would be a second dishonesty on top of the
-    // first. The turn records the fact and returns the model's own words.
-    const { deps: d, store } = deps([
-      answer('[Eseguo `demo_write`] fatto'),
-      answer('[Eseguo `demo_write`] fatto davvero, giuro'),
-    ]);
+    // first — and so would a forced second round. The turn records the fact
+    // and returns the model's own words, once.
+    const { deps: d, store } = deps([answer('[Eseguo `demo_write`] fatto')]);
+    const provider = d.provider as ScriptedProvider;
     const result = await runTurn(d, input(store));
+    expect(provider.seen).toHaveLength(1);
     expect(result.stopped).toBe('answered');
-    expect(result.text).toContain('giuro');
+    expect(result.text).toBe('[Eseguo `demo_write`] fatto');
   });
 
   it('stops with a question rather than inventing a refusal, when nobody can be asked', async () => {
@@ -1168,26 +1168,21 @@ describe('the recovery cascade', () => {
     });
   });
 
-  it('keeps the completion nudge out of the cascade, on a profile that declares none', async () => {
-    // Two nudges, two mechanisms. The completion gate is durable (it answers a
-    // measured false-success rate on every model) and is not a step a profile
-    // may decline; the cascade is scaffolding a profile declares. Deleting the
-    // cascade must not delete the gate.
+  it('lets a text answer stand on a profile that declares no cascade', async () => {
+    // Simple-loop: testo + zero call = risposta terminale, anche se nomina un
+    // tool, anche con recovery []. Il gate rileva (attributi) ma non spende un
+    // giro: cancellare la cascata non deve cancellare il rilevamento, e il
+    // rilevamento non deve cancellare la risposta.
     const {
       deps: d,
       store,
       calls,
-    } = deps(
-      [
-        answer('[Eseguo `demo_write`] Fatto.'),
-        callTool('demo_write'),
-        answer('scritto per davvero'),
-      ],
-      { profile: cascade([]) },
-    );
+    } = deps([answer('[Eseguo `demo_write`] Fatto.')], { profile: cascade([]) });
+    const provider = d.provider as ScriptedProvider;
     const result = await runTurn(d, input(store));
-    expect(calls).toContain('demo_write');
-    expect(result.text).toBe('scritto per davvero');
+    expect(provider.seen).toHaveLength(1);
+    expect(calls).not.toContain('demo_write');
+    expect(result).toMatchObject({ stopped: 'answered', text: '[Eseguo `demo_write`] Fatto.' });
   });
 
   it("routes a real adapter's malformed output to the cascade, from the wire up", async () => {
@@ -1629,15 +1624,14 @@ describe('agent loop · streaming (B11)', () => {
     expect(dopoLUltimoConfine(received)).toBe(result.text);
   });
 
-  it('says a completion-nudged draft was superseded, instead of hiding the whole turn to avoid saying it', async () => {
-    // Stesso innesco del test non-streaming più sopra (una chiamata narrata
-    // che il turno non ha mai fatto), così questo ne è il gemello streaming.
+  it('delivers a tool-naming draft as the answer, with no superseded boundary', async () => {
+    // Gemello streaming del test non-streaming più sopra: la risposta che
+    // nomina un tool mai chiamato resta la risposta al primo giro.
     const provider = new StreamCapableProvider([
       {
         chunks: ['[Eseguo ', '`demo_write`] fatto'],
         result: answer('[Eseguo `demo_write`] fatto'),
       },
-      { chunks: ['scritto ', 'per davvero'], result: answer('scritto per davvero') },
     ]);
     const { deps: d, store } = deps([], { provider });
     const received: TurnDelta[] = [];
@@ -1649,12 +1643,8 @@ describe('agent loop · streaming (B11)', () => {
     expect(received).toEqual([
       { type: 'text', text: '[Eseguo' },
       { type: 'text', text: ' `demo_write`] fatto' },
-      { type: 'boundary', reason: 'superseded' },
-      { type: 'text', text: 'scritto' },
-      { type: 'text', text: ' per davvero' },
     ]);
-    expect(dopoLUltimoConfine(received)).toBe(result.text);
-    expect(result.text).toBe('scritto per davvero');
+    expect(result.text).toBe('[Eseguo `demo_write`] fatto');
   });
 
   it('never calls chatStream with no onDelta sink — the default turn is the same request as before this field existed', async () => {
