@@ -111,6 +111,9 @@ export async function cmdGatewayTurn(home: string, id: string): Promise<number> 
 export const GATEWAY_USAGE = `usage:
   muffin gateway status         attivo? da quando? cosa sta facendo?
   muffin gateway turn <id>      esito di un turno (dopo un disconnect ambiguo)
+  muffin gateway attach <id>    aspetta l'esito durevole dello stesso turno
+                                [--wait-sec N] [--json] — mai una riesecuzione;
+                                senza gateway esce subito con il rimedio
   muffin gateway stop           drena i turni in volo e lo ferma — e lo tiene
                                 giù, anche su macOS
   muffin gateway start          lo riaccende dopo uno stop
