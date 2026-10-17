@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SandboxRuntimeConfig } from '@anthropic-ai/sandbox-runtime';
+import type { FilesystemPathEntry, SandboxRuntimeConfig } from '@anthropic-ai/sandbox-runtime';
 import { SandboxExecutor } from './executor.js';
 import type { SandboxProbe } from './probe.js';
 
@@ -61,7 +61,7 @@ vi.mock('@anthropic-ai/sandbox-runtime', () => ({
 
 const available = (): SandboxProbe => ({ available: true, mechanism: 'bubblewrap' });
 
-const denyReadOf = (customConfig: Partial<SandboxRuntimeConfig> | undefined): readonly string[] =>
+const denyReadOf = (customConfig: Partial<SandboxRuntimeConfig> | undefined): readonly FilesystemPathEntry[] =>
   customConfig?.filesystem?.denyRead ?? [];
 
 function mockProtectedSandbox(options: { hookWriteAllowed?: boolean; hookHardlinkAllowed?: boolean; unixFilterAbsent?: boolean } = {}): void {
