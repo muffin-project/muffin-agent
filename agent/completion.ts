@@ -40,14 +40,19 @@
  * uncovered by any structured invariant today, so the minimum correct change
  * is not removal but precision: an answer that EXPLICITLY disclaims use
  * ("non ho avuto bisogno di fs_write", "I did not use X") makes no false
- * claim and must never receive the reprimand. The check is therefore
+ * claim and must never be flagged. The check is therefore
  * sentence-scoped — a mention inside a disclaimed sentence is not a claim —
  * instead of punishing every linguistic mention of a tool name.
  *
- * And it does not rewrite the answer. It gets the model one more attempt with a
- * specific nudge, and if that fails the answer stands and the fact is recorded.
- * Silently editing what the agent said would be a second dishonesty on top of
- * the first.
+ * And it does not rewrite the answer, nor re-ask the model. The verdict is
+ * recorded on the turn span (`muffin.completion.named_uncalled`,
+ * `muffin.completion.unresolved`) for Control/eval observability, and the
+ * answer stands at the first text: under the simple loop (text with no calls
+ * is terminal — the OpenAI final-output rule, LangGraph `tools_condition`),
+ * a forced second round on a no-tool answer is the reprompt that makes no
+ * sense. Silently editing what the agent said would be a second dishonesty
+ * on top of the first; a billed re-ask the model overrides half the time
+ * (measured 6/12 unresolved on the owner install) is spend without signal.
  */
 
 export type CompletionVerdict = {
@@ -115,14 +120,4 @@ function disclaimsUse(sentence: string): boolean {
 function mentions(text: string, tool: string): boolean {
   const escaped = tool.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`(^|[^\\w])${escaped}([^\\w]|$)`, 'i').test(text);
-}
-
-/** The nudge, naming what it saw. Vague feedback produces a vague retry. */
-export function completionNudge(named: string[]): string {
-  const list = named.map((n) => `\`${n}\``).join(', ');
-  return (
-    `Hai nominato ${list} ma in questo turno non hai chiamato nessun tool. ` +
-    `Una delle due: chiamalo davvero adesso, oppure riscrivi la risposta dicendo ` +
-    `che non l'hai fatto e perché. Non descrivere una chiamata come se fosse avvenuta.`
-  );
 }

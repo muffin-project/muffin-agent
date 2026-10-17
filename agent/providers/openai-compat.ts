@@ -505,7 +505,20 @@ export class OpenAICompatProvider implements Provider {
     // marker the wire always sends; its absence plus an aborted signal is the
     // one honest reading: this call was interrupted by us.
     if (call.signal?.aborted && finishReason === null) {
-      throw new ProviderError('aborted', false);
+      // Our own deadline/stall/stop cut the stream before any completion
+      // marker. The loop reads this back as the abort it is — but the abort
+      // must not swallow what the wire had already said: without the ids and
+      // the byte count below, a `model_deadline` trace cannot tell
+      // "never connected" from "connected but silent" from "stalled mid-stream".
+      const bytesReceived =
+        text.length + [...toolCalls.values()].reduce((n, tc) => n + tc.argsRaw.length, 0);
+      throw new ProviderError('aborted', false, undefined, 'transport', undefined, false, {
+        ...(requestId === undefined ? {} : { requestId }),
+        ...(upstream === undefined ? {} : { upstream }),
+        model,
+        receivedAnyEvent,
+        bytesReceived,
+      });
     }
 
     yield {

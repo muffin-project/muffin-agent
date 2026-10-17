@@ -2,9 +2,9 @@ import { sleep } from '../../core/net/sleep.js';
 import { replyCapability } from '../../core/policy/doors.js';
 import type { CapabilityId, Decision, DecisionRequest } from '../../core/policy/types.js';
 import { redactText, scrubResourceEchoes } from '../../core/tracing/redact.js';
-import { ATTR } from '../../core/tracing/types.js';
+import { ATTR, type AttributeValue } from '../../core/tracing/types.js';
 import type { ContinuableClass } from '../../core/turns/store.js';
-import { checkCompletion, completionNudge } from '../completion.js';
+import { checkCompletion } from '../completion.js';
 import type { TenantClass } from '../context/assemble.js';
 import { compactToolResults } from '../context/compact.js';
 import { type RecoveryFailure, recoveryStep } from '../profiles/recovery.js';
@@ -59,6 +59,58 @@ import {
   TOOL_RESULT_BUDGET_CHARS,
   type TurnResult,
 } from './types.js';
+
+/**
+ * What the provider said before a call failed, on the span that failed.
+ *
+ * A deadline/stall abort used to end the span with only `abort_reason`: the
+ * provider's share of the story (HTTP status, retryability, request id,
+ * whether the stream was ever established, bytes already received) was thrown
+ * away with the `aborted` error, and the database could not tell "never
+ * connected" from "connected but silent" from "stalled mid-stream".
+ * Observability only — no routing decision reads these attributes.
+ */
+function chatCallErrorAttrs(error: unknown): Record<string, AttributeValue> {
+  if (error instanceof ProviderStreamError) {
+    return {
+      'muffin.chat_call.error_name': 'ProviderStreamError',
+      'muffin.chat_call.error_message': redactText(error.message).slice(0, 300),
+      'muffin.chat_call.stream_partial': error.partial,
+    };
+  }
+  if (error instanceof ProviderError) {
+    const details = error.details;
+    return {
+      'muffin.chat_call.error_name': 'ProviderError',
+      'muffin.chat_call.error_message': redactText(error.message).slice(0, 300),
+      'muffin.chat_call.error_retryable': error.retryable,
+      'muffin.chat_call.error_source': error.source,
+      ...(error.status === undefined ? {} : { 'muffin.chat_call.error_status': error.status }),
+      ...(error.retryAfterMs === undefined
+        ? {}
+        : { 'muffin.chat_call.error_retry_after_ms': error.retryAfterMs }),
+      ...(details?.requestId === undefined
+        ? {}
+        : { 'muffin.chat_call.provider_request_id': details.requestId }),
+      ...(details?.upstream === undefined
+        ? {}
+        : { 'muffin.chat_call.provider_upstream': details.upstream }),
+      ...(details?.receivedAnyEvent === undefined
+        ? {}
+        : { 'muffin.chat_call.stream_received_any_event': details.receivedAnyEvent }),
+      ...(details?.bytesReceived === undefined
+        ? {}
+        : { 'muffin.chat_call.stream_bytes_received': details.bytesReceived }),
+    };
+  }
+  if (error instanceof Error) {
+    return {
+      'muffin.chat_call.error_name': error.name,
+      'muffin.chat_call.error_message': redactText(error.message).slice(0, 300),
+    };
+  }
+  return {};
+}
 
 /**
  * The paid path: one round of the turn, repeated until something ends it.
@@ -329,12 +381,9 @@ export function recover(scope: TurnScope, failure: RecoveryFailure): boolean {
   const strategy = deps.profile.recovery[run.recoveriesUsed];
   if (strategy === undefined) return false;
   run.recoveriesUsed += 1;
-  // The wire half of `requireTool`: the next attempt demands a call. The
-  // message half is in `recoveryStep` below; both travel together.
-  if (strategy === 'requireTool') {
-    run.requireToolOnce = true;
-    turn.setAttributes({ 'muffin.recovery.tool_choice': 'required' });
-  }
+  // Simple-loop: no rung arms the wire. `requireTool` prescribes a call in
+  // words (see `recoveryStep`) but the next request stays `auto` — forcing a
+  // call manufactures an action the model never chose.
   const step = recoveryStep(strategy, { failure, tools: exposed.map((t) => t.spec.name) });
   if (step.message !== undefined) {
     // Lease-local control, not conversation: marked so a continuation to a
@@ -503,13 +552,15 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // l'altro. Risolta in `conversation.ts`, mai dal principal e mai dal
       // turno: l'hash opaco verso `session_id` lo fa l'adapter.
       conversation: resolveConversationId(input.session),
-      // One attempt, demanded by the `requireTool` rung (ADR-0082). `auto`
-      // everywhere else: forcing a tool on a turn that needs none
-      // manufactures an action the model never chose.
+      // Simple-loop (OpenAI final-output rule, LangGraph tools_condition):
+      // text with no calls is terminal, calls re-run the loop. No round ever
+      // asks for `tool_choice: required` — not even the last recovery rung.
+      // The capability probe (`agent/providers/verify.ts`) is the one caller
+      // with a precise reason to demand a call, and it sets the flag itself.
       ...(exposed.length > 0
         ? {
             tools: exposed.map((t) => t.spec),
-            toolChoice: run.requireToolOnce ? ('required' as const) : ('auto' as const),
+            toolChoice: 'auto' as const,
           }
         : {}),
       maxOutputTokens: 4096,
@@ -556,9 +607,6 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       },
       turn,
     );
-    if (run.requireToolOnce) {
-      chatSpan.setAttributes({ 'muffin.recovery.tool_choice': 'required' });
-    }
     const reasoningResolution = await deps.provider.resolveReasoning?.(call);
     if (reasoningResolution !== undefined) {
       chatSpan.setAttributes({
@@ -731,6 +779,10 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       chatSpan.setAttributes({
         'muffin.chat_call.duration_ms': Date.now() - chatCallStartedAt,
         ...(abortReason === undefined ? {} : { 'muffin.chat_call.abort_reason': abortReason }),
+        // The abort reason says who cut the call; these say what the provider
+        // had said before the cut. Without both, a `model_deadline` trace
+        // cannot answer "never connected or stalled mid-stream?".
+        ...chatCallErrorAttrs(error),
       });
       chatSpan.end({ error });
       // Whatever door this takes below — a retry, the profile's cascade, or
@@ -829,10 +881,6 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       if (tryAutoRenewLease(run, lastAbortReason)) continue;
       return releaseContinuable(scope, leaseAbortClass(lastAbortReason), run.iterations);
     }
-    // Consumed: the escalation lasts exactly one provider response. A
-    // transport retry that `continue`d above rebuilds `call` with the flag
-    // still armed, so the retry keeps `required`.
-    run.requireToolOnce = false;
     // Provider/result failure truth (P0-A): classify while this span is still
     // open, because the verdict belongs on it. Handled further down, after
     // usage accounting and the progress event — the classification never
@@ -1121,24 +1169,19 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // stays the scrubbed full concatenation either way.
       const currentText = scrubResourceEchoes(redactText(suffix), run.sensitiveResourceEchoes);
 
-      // The completion gate: did the answer describe a call this turn never
-      // made? Deterministic, tool-aware, and it only fires when *nothing* was
-      // called — a denied or failed call is still a call, so a model saying
-      // "non ho potuto usare fs_write" after a real refusal is out of scope.
+      // Simple-loop: the answer stands on the first text, even when it names
+      // a tool this turn never called. The gate detects and records (span
+      // attributes for Control/eval observability) but never spends a second
+      // billed model round re-asking: text with no calls is terminal, and a
+      // re-ask the model overrides half the time (measured 6/12 unresolved on
+      // the owner install) is spend without signal.
       //
       // Turn-lifetime truth, not current-lease truth (#603): a continuation
       // to a new lease resets the lease-local counter (`buildFreshCounters`),
       // while finished leases stay folded in `record.lifetime` — the same
       // total `durability.ts` already reports. Reading only the fresh lease
       // misclassifies a continued turn answering from prior-lease tool
-      // evidence as narrating an action it never took, and the surface then
-      // marks the valid draft `superseded`.
-      //
-      // Its own flag, deliberately outside the profile's cascade: this check
-      // is durable (07 classifies the profiles as impalcatura and says
-      // nothing of it), it answers a false-success rate measured on every
-      // model family including the reasoning ones, and a profile that
-      // declares no crutches must still get it. One nudge, always available.
+      // evidence as narrating an action it never took.
       const completion = checkCompletion({
         text,
         available: exposed.map((t) => t.spec.name),
@@ -1146,20 +1189,10 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       });
       if (!completion.ok) {
         turn.setAttributes({ 'muffin.completion.named_uncalled': completion.named.join(',') });
-        if (run.nudgedForCompletion === false) {
-          // One attempt, with the specific tools named. Vague feedback gets a
-          // vague retry, and this is measured as the highest-value check in the
-          // design — but it is a nudge, never a rewrite of what the agent said.
-          // Harness control (see `recover` above), not owner words.
-          run.nudgedForCompletion = true;
-          closeLive('superseded');
-          run.messages.push(
-            harnessMessage('user', [{ type: 'text', text: completionNudge(completion.named) }]),
-          );
-          continue;
-        }
         // It stands. Recorded rather than corrected: silently editing the
-        // answer would be a second dishonesty stacked on the first.
+        // answer would be a second dishonesty stacked on the first, and a
+        // forced re-ask would be the no-tool reprompt the simple loop forbids.
+        run.nudgedForCompletion = true;
         turn.setAttributes({ 'muffin.completion.unresolved': true });
       }
 
