@@ -219,6 +219,12 @@ export class ForwardHost {
         turnId: exec.result.turnId,
       };
     }
+    // Viva ma non finita (in coda sulla lane o in esecuzione): pollabile per
+    // id fin da subito, altrimenti un submit+poll vedrebbe `missing` finché
+    // la riga non esiste — indistinguibile da «mai sottomesso».
+    if (exec) {
+      return { found: true, status: 'running', stopped: null, text: null, turnId: exec.id };
+    }
     const row = this.deps.turns.get(id);
     if (!row) return { found: false };
     if (row.status === 'done') {
@@ -397,10 +403,15 @@ export class ForwardHost {
     this.deps.log(
       `forward ${req.id.slice(0, 12)}: richiesta da terminale — sessione ${req.sessionId}`,
     );
-    // La corsia, prima della riga: niente è partito finché non la teniamo, e
-    // un client che si stacca qui non lascia niente alle spalle — l'errore è
-    // deterministico (`failed`), mai `unknown`.
-    while (!exec.abort.signal.aborted && exec.observers.size > 0) {
+    // La corsia, prima della riga: niente è partito finché non la teniamo.
+    //
+    // Disconnect ≠ cancel, in ogni fase: chiudere il socket senza `cancel`
+    // lascia l'esecuzione in corso — è il contratto del submit+poll
+    // (`gateway attach` / `run --attach`), dove il client chiude dopo `started`
+    // e interroga l'esito per id. Solo un frame `cancel` esplicito abortisce.
+    // Prima, un disconnect in coda sulla lane cancellava l'execution senza
+    // riga — il submit perdeva il lavoro quando la lane era occupata.
+    while (!exec.abort.signal.aborted) {
       if (!this.deps.stillOwner()) {
         return this.finish(exec, {
           kind: 'error',
@@ -411,7 +422,7 @@ export class ForwardHost {
       if (this.deps.modelLane.take(LANE_TURNS) === null) break;
       await new Promise((r) => setTimeout(r, LANE_POLL_MS));
     }
-    if (exec.abort.signal.aborted || exec.observers.size === 0) {
+    if (exec.abort.signal.aborted) {
       this.executions.delete(req.id);
       return;
     }
@@ -493,7 +504,7 @@ function sendLine(sock: Socket, event: ServerEvent): void {
   }
 }
 
-function lastAssistantText(row: TurnRecord): string | null {
+export function lastAssistantText(row: TurnRecord): string | null {
   const checkpoint = row.providerLease.checkpoint;
   if (!Array.isArray(checkpoint)) return null;
   for (let i = checkpoint.length - 1; i >= 0; i -= 1) {
@@ -659,6 +670,123 @@ export async function runViaGateway(
     // Una chiusura prima dell'esito non dice niente sull'esecuzione — che
     // continua — quindi non è un errore da riprovare: è `unknown`.
     sock.on('error', () => done(() => reject(new UnknownOutcomeError(turnId))));
+    sock.on('close', () => done(() => reject(new UnknownOutcomeError(turnId))));
+  });
+}
+
+/**
+ * Sottomette un turno al gateway vivo e si stacca subito — la metà submit di
+ * `gateway attach` / `run --attach`.
+ *
+ * Invia la prima riga `run` con un id stabile, attende il frame `started` e
+ * chiude il socket **senza** `cancel`: l'esecuzione resta viva nel gateway
+ * (disconnect ≠ cancel, in ogni fase) e l'esito si interroga per id (`query`).
+ * Lo stesso id risottomesso non duplica: si attacca all'execution viva, torna
+ * l'esito finito, o fallisce `unknown` su riga esistente senza rieseguire.
+ *
+ * Fail closed: senza socket, senza `started` entro il timeout, o con un errore
+ * `failed`, niente esecuzione da interrogare — l'errore lo dice, mai attesa
+ * silenziosa.
+ */
+export async function submitViaGateway(
+  home: string,
+  req: {
+    id?: string;
+    text: string;
+    sessionId: string;
+    images?: TurnInput['images'];
+    audios?: TurnInput['audios'];
+  },
+  opts: { timeoutMs?: number } = {},
+): Promise<string> {
+  const id = req.id ?? mintExecutionId();
+  if (!isSafeControlToken(id)) throw new Error(`id di execution non usabile: ${id}`);
+  if (!isSafeControlToken(req.sessionId)) throw new Error(`sessionId non usabile: ${req.sessionId}`);
+  if (typeof req.text !== 'string' || req.text.trim() === '')
+    throw new Error('il testo del turno è vuoto');
+  const path = resolveSocketPath(home);
+  if (!existsSync(path))
+    throw new Error(
+      'il gateway non risponde sul socket di controllo — `muffin gateway install --write --start` per avviarlo',
+    );
+  const timeoutMs = opts.timeoutMs ?? 5_000;
+  const first: Record<string, unknown> = {
+    verb: 'run',
+    protocol: 2,
+    id,
+    text: req.text,
+    sessionId: req.sessionId,
+    ...(req.images !== undefined ? { images: req.images } : {}),
+    ...(req.audios !== undefined ? { audios: req.audios } : {}),
+  };
+  return new Promise<string>((resolve, reject) => {
+    let turnId = id;
+    let settled = false;
+    let buf = '';
+    const done = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        sock.destroy();
+      } catch {
+        // Chiuso già.
+      }
+      fn();
+    };
+    const sock = connect(path);
+    sock.setEncoding('utf8');
+    const timer = setTimeout(() => {
+      done(() => reject(new UnknownOutcomeError(turnId)));
+    }, timeoutMs);
+    timer.unref?.();
+    sock.on('connect', () => {
+      try {
+        sock.write(`${JSON.stringify(first)}\n`);
+      } catch (error) {
+        done(() => reject(error instanceof Error ? error : new Error(String(error))));
+      }
+    });
+    sock.on('data', (chunk: string) => {
+      buf += chunk;
+      const parts = buf.split('\n');
+      buf = parts.pop() ?? '';
+      for (const line of parts) {
+        if (line.trim() === '') continue;
+        let event: Record<string, unknown>;
+        try {
+          event = JSON.parse(line) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+        if (event.kind === 'started') {
+          if (typeof event.turnId === 'string') turnId = event.turnId;
+          // Staccato senza cancel: l'esecuzione resta viva, l'esito per id.
+          done(() => resolve(turnId));
+          return;
+        }
+        if (event.kind === 'result') {
+          const result = asTurnResult(event.result);
+          done(() =>
+            result ? resolve(result.turnId) : reject(new UnknownOutcomeError(turnId)),
+          );
+          return;
+        }
+        if (event.kind === 'error') {
+          const message =
+            typeof event.error === 'string' ? event.error : 'errore del gateway';
+          const tid =
+            typeof event.turnId === 'string' ? (event.turnId as string) : turnId;
+          done(() =>
+            event.outcome === 'unknown'
+              ? reject(new UnknownOutcomeError(tid))
+              : reject(new Error(message)),
+          );
+          return;
+        }
+      }
+    });
+    sock.on('error', (error: Error) => done(() => reject(error)));
     sock.on('close', () => done(() => reject(new UnknownOutcomeError(turnId))));
   });
 }

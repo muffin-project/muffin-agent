@@ -121,7 +121,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     name: 'gateway',
     summary: 'supervisore e lifecycle del processo',
     audience: 'operator',
-    subcommands: ['status', 'turn', 'stop', 'start', 'restart', 'install', 'run'],
+    subcommands: ['status', 'turn', 'attach', 'stop', 'start', 'restart', 'install', 'run'],
   },
   { name: 'observe', summary: 'ispezione della proattività', audience: 'inspection' },
   {
