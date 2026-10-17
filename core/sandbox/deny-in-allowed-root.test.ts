@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -28,10 +28,17 @@ import { probeSandbox } from './probe.js';
  * `denyRead` (or `execute()` no longer layering `guards.denyRead`) — the
  * direct read then succeeds and the canary lands in `stdout`.
  *
- * Hardlink residual: `ln .env copy && cat copy` in the write lane names the
- * same inode through a non-denied spelling. Whether the sandbox denies by
- * path or by inode is backend-specific; the variant below records the live
- * outcome on this host rather than asserting a mechanism no backend promises.
+ * Hardlink residual: `guards.denyRead` names `.env` as a *path*, not an inode,
+ * so a hardlink that already exists host-side (`ln .env copy`) names the same
+ * inode under a non-denied spelling and is read through. The model cannot
+ * create that link from inside the sandbox (the creation leg below measures
+ * macOS `ln` at `Operation not permitted`), so the trigger is a link the host
+ * already had — and a process able to create one already reads `.env`
+ * directly. The leg below creates the alias host-side and *records* the live
+ * outcome (record-only, like the mid-command hooks-dir replacement in
+ * `executor.selftest.test.ts`): no inode-aware denial exists today, so this is
+ * a warning pinning the behaviour, not a refusal. The day inode-aware denial
+ * lands, that leg flips to denied and must be re-gated.
  */
 const host = platform();
 
@@ -114,12 +121,10 @@ describe.runIf(gate.run)(`B2: un segreto negato dentro una root permessa resta n
     expect(r.stdout).not.toContain(CANARY);
   });
 
-  it('run (write lane): anche via hardlink ln .env copy && cat copy resta negato', async () => {
-    // Live 2026-10-17, macOS seatbelt: `ln` stesso fallisce con
-    // `Operation not permitted`, quindi `cat copy` non gira affatto
-    // (exit != 0, nessun canarino). Se un backend futuro lo lasciasse passare,
-    // questo test diventerebbe rosso — e quella è la forma giusta per un
-    // residual: un rosso, non un paragrafo.
+  it('run (write lane): creare un hardlink dentro il sandbox è negato (gate di creazione)', async () => {
+    // On macOS seatbelt `ln` itself fails with `Operation not permitted`, so
+    // `cat copy` never runs. This pins the *creation* gate — it says nothing
+    // about a hardlink that already exists, which is the record-only leg below.
     const r = await executor.run({
       command: 'rm -f copy && ln .env copy && cat copy',
       cwd: workspace,
@@ -127,5 +132,38 @@ describe.runIf(gate.run)(`B2: un segreto negato dentro una root permessa resta n
     });
     expect(r.code).not.toBe(0);
     expect(r.stdout).not.toContain(CANARY);
+  });
+
+  it('un hardlink pre-esistente al .env resta un residual registrato (deny path-based)', async () => {
+    // `guards.denyRead` denies `.env` BY PATH; a host-side hardlink `copy`
+    // names the same inode under a non-denied path, so the contained read
+    // reaches the secret. The model cannot create the link from inside the
+    // sandbox (leg above), so the trigger is a pre-existing host-side alias.
+    // Recorded, not gated: `console.warn` pins the live outcome for both
+    // lanes while the direct path stays denied, and the control leg proves the
+    // sandbox is alive rather than dead.
+    const alias = join(workspace, 'copy');
+    rmSync(alias, { force: true });
+    linkSync(join(workspace, '.env'), alias);
+
+    const direct = await executor.runReadOnly({ command: 'cat .env', cwd: workspace });
+    expect(direct.code).not.toBe(0);
+    expect(direct.stdout).not.toContain(CANARY);
+
+    const legs: Array<[string, { code: number | null; stdout: string }]> = [
+      ['runReadOnly', await executor.runReadOnly({ command: 'cat copy', cwd: workspace })],
+      ['run', await executor.run({ command: 'cat copy', cwd: workspace, writeScope: [workspace] })],
+    ];
+    for (const [name, r] of legs) {
+      const leaked = r.stdout.includes(CANARY);
+      console.warn(
+        `[sandbox] hardlink pre-esistente al .env via ${name}: ${
+          leaked ? 'LEGGE (residual aperto, deny path-based)' : 'negato'
+        } — exit ${r.code}`,
+      );
+    }
+
+    const control = await executor.runReadOnly({ command: 'cat visibile.txt', cwd: workspace });
+    expect(control.stdout).toContain('pubblico');
   });
 });

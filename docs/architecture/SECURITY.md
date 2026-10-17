@@ -726,7 +726,16 @@ Reads are allow-scoped since the `read-scoped-workspace` slice (#645): every
 sandboxed call carries `denyRead: ['/']` plus an explicit allow list — the
 call's `cwd`, its write scope, the session scratch, and the system paths
 `core/sandbox/read-scope.ts` names entry by entry — with `guards.denyRead`
-layered on top, so a secret inside an allowed root stays denied. Stdout
+layered on top, so a denied *path* inside an allowed root stays denied. The
+deny names paths, not inodes: a pre-existing host-side hardlink that aliases a
+denied inode under a non-denied name (e.g. `ln workspace/.env copy`) is read
+through, because neither seatbelt subpath rules nor the Linux tmpfs masks
+mediate by inode. The model cannot create that alias from inside the sandbox
+(macOS `ln` is `EPERM`; on Linux the denied inode is masked away before a link
+could name it), so the residual trigger is a link the host already had — and a
+process able to create one already reads the file directly. Recorded, not
+claimed: `core/sandbox/deny-in-allowed-root.test.ts` creates the alias
+host-side and pins the live outcome. Stdout
 reaches the model (fenced, `DISK_TIER`), so an injected `cat` of an in-scope
 file still discloses to the provider; what changed is that `~/…` outside the
 scope is no longer there to be catted. The `it.fails` canary in
@@ -780,7 +789,10 @@ The falsifiers, the decision table and the Linux results that closed the HOLD
 items live in `docs/evidence/shell-containment-2026-09-21.md`.
 
 Symlink, hardlink, ancestor-symlink and path-canonicalisation behaviour are part
-of the security claim rather than filesystem edge cases.
+of the security claim rather than filesystem edge cases. Symlink and
+ancestor-symlink spellings are denied through a denied root (measured live);
+hardlink denial is path-based only, so a pre-existing host-side inode alias is
+the documented residual above, not a denied case.
 
 ### 9.3 Git hook creation in a compound shell call
 
