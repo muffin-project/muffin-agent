@@ -101,7 +101,7 @@ describe('key hint', () => {
   it('offers both routes when the provider is not yet known', () => {
     const hint = keyHint(undefined, undefined);
     expect(hint).toContain('sk-or-');
-    expect(hint).toContain('gsk-');
+    expect(hint).toContain('gsk_');
     expect(hint).toContain('sk-ant-');
   });
 
@@ -218,7 +218,7 @@ describe('describeProviderChoice — say what was inferred, never decide silentl
     const line = describeProviderChoice(choice, 'gsk_the-real-secret-must-not-appear');
     expect(line).toContain('openai-compat');
     expect(line).toContain(GROQ_BASE_URL);
-    expect(line).toContain('gsk-…');
+    expect(line).toContain('gsk_…');
     expect(line).not.toContain('sk-or-…');
     expect(line).not.toContain('the-real-secret-must-not-appear');
   });

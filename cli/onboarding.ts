@@ -106,14 +106,14 @@ export function describeProviderChoice(choice: ProviderChoice, key: string | und
   if (choice.reason === 'inferred') {
     // Read from the key, not the provider: openai-compat is two key shapes
     // now, and the prefix is what proves which one was actually seen.
-    const prefix = isGroqKey(key) ? 'gsk-…' : key?.startsWith('sk-ant-') ? 'sk-ant-…' : 'sk-or-…';
+    const prefix = isGroqKey(key) ? 'gsk_…' : key?.startsWith('sk-ant-') ? 'sk-ant-…' : 'sk-or-…';
     return `✓ ${label} ${choice.provider}${where} — dedotto dalla chiave (${prefix})\n`;
   }
   if (choice.reason === 'local') {
     return `✓ ${label} ${choice.provider}${where} — runtime locale rilevato e scelto, nessuna chiave\n`;
   }
   if (key) {
-    return `! ${label} ${choice.provider} — la chiave non è sk-or-…, gsk-… né sk-ant-…, uso il default (--provider per cambiarlo)\n`;
+    return `! ${label} ${choice.provider} — la chiave non è sk-or-…, gsk_… né sk-ant-…, uso il default (--provider per cambiarlo)\n`;
   }
   return `! ${label} ${choice.provider} — nessuna chiave ancora, dedurrò il provider quando la incolli\n`;
 }
@@ -134,7 +134,7 @@ export function keyHint(provider: ProviderKind | undefined, baseUrl: string | un
     return 'Chiave OpenRouter (una chiave, tutti i modelli) → https://openrouter.ai/keys\n';
   }
   return (
-    'Incolla una chiave OpenRouter (sk-or-…), Groq (gsk-…) o Anthropic (sk-ant-…) — il prefisso sceglie il provider.\n' +
+    'Incolla una chiave OpenRouter (sk-or-…), Groq (gsk_…) o Anthropic (sk-ant-…) — il prefisso sceglie il provider.\n' +
     '  OpenRouter, una chiave per tutti i modelli → https://openrouter.ai/keys\n' +
     `  Groq → ${PROVIDERS.groq.keysUrl}\n`
   );

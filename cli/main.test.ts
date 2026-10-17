@@ -110,7 +110,7 @@ describe('muffin init infers the provider from the key — headless, no TTY requ
     expect(r.code).toBe(0);
     expect(r.err).toContain('openai-compat');
     expect(r.err).toContain('dedotto dalla chiave');
-    expect(r.err).toContain('gsk-…');
+    expect(r.err).toContain('gsk_…');
 
     const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'));
     expect(config.provider.kind).toBe('openai-compat');

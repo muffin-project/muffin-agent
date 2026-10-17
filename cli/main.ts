@@ -619,7 +619,7 @@ async function cmdInit(argv: string[]): Promise<number> {
   if (apiKey && looksLikeTelegramToken(apiKey)) {
     process.stderr.write(
       `! sembra il token di un bot Telegram, non una chiave del modello — non la salvo.\n` +
-        `  La chiave del modello è OpenRouter (sk-or-…), Groq (gsk-…) o Anthropic (sk-ant-…): https://openrouter.ai/keys, ${PROVIDERS.groq.keysUrl}\n` +
+        `  La chiave del modello è OpenRouter (sk-or-…), Groq (gsk_…) o Anthropic (sk-ant-…): https://openrouter.ai/keys, ${PROVIDERS.groq.keysUrl}\n` +
         `  Il token del bot va altrove: ${secretStoreHint('telegram_token')}\n`,
     );
     apiKey = undefined;
