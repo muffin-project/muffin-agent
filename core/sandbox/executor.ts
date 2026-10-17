@@ -293,7 +293,7 @@ function isMissingDependency(detail: string): boolean {
  * self-test before any caller's command runs.
  *
  * **What actually does the work, measured in `@anthropic-ai/sandbox-runtime`
- * 0.0.71, not assumed from the field names.** `allowedDomains` being *defined*
+ * 0.0.80, not assumed from the field names.** `allowedDomains` being *defined*
  * — empty is still defined — is what sets srt's `needsNetworkRestriction`
  * (`dist/sandbox/sandbox-manager.js`, `hasNetworkConfig`). On Linux that flag
  * is what pushes `--unshare-net` into the bwrap argv
@@ -353,7 +353,7 @@ function networkOff(): SandboxRuntimeConfig['network'] {
  * processo, e la docstring di `scratch()` dice che quella è la superficie
  * temporanea della sessione — creata da questo processo, cancellata da
  * `close()`. Era falso su tutt'e due le piattaforme, e per la stessa riga di
- * `@anthropic-ai/sandbox-runtime` 0.0.71: `generateProxyEnvVars`
+ * `@anthropic-ai/sandbox-runtime` 0.0.80: `generateProxyEnvVars`
  * (`dist/sandbox/sandbox-utils.js`) aggiunge `TMPDIR=/tmp/claude` — il default
  * del suo consumatore, non il nostro — e ciascun ramo lo applica in un modo
  * che vince sull'ambiente ereditato:
