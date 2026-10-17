@@ -970,7 +970,11 @@ function wrap(error: unknown, retryFreeRouterNotFound = false): ProviderError {
     );
   }
   if (error instanceof Error && error.name === 'AbortError') {
-    return new ProviderError('aborted', false);
+    // Aborted before any event reached the loop: the wire never spoke, and the
+    // trace should say so rather than leave `receivedAnyEvent` unrecorded.
+    return new ProviderError('aborted', false, undefined, 'transport', undefined, false, {
+      receivedAnyEvent: false,
+    });
   }
   return new ProviderError(error instanceof Error ? error.message : String(error), true);
 }

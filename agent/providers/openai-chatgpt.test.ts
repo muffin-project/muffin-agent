@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatGPTModel } from '../../core/config/chatgpt-oauth.js';
 import { OpenAIChatGPTProvider } from './openai-chatgpt.js';
-import type { ChatCall } from './types.js';
+import { ProviderError, type ChatCall } from './types.js';
 
 const tool = {
   name: 'read_file',
@@ -640,9 +640,13 @@ describe('OpenAI ChatGPT plan Responses provider', () => {
     const controller = new AbortController();
     controller.abort();
     const aborted = harness([]);
-    await expect(aborted.provider.chat({ ...CALL, signal: controller.signal })).rejects.toThrow(
-      /aborted/,
-    );
+    const abortedError = await aborted.provider
+      .chat({ ...CALL, signal: controller.signal })
+      .catch((error: unknown) => error);
+    expect(abortedError).toBeInstanceOf(ProviderError);
+    expect((abortedError as ProviderError).message).toMatch(/aborted/);
+    // Aborted before any event: the trace must record that the wire never spoke.
+    expect((abortedError as ProviderError).details).toEqual({ receivedAnyEvent: false });
 
     let requestStarted!: () => void;
     const started = new Promise<void>((resolve) => {
@@ -677,6 +681,10 @@ describe('OpenAI ChatGPT plan Responses provider', () => {
     const pending = streamingAbort.chat({ ...CALL, signal: active.signal });
     await started;
     active.abort();
-    await expect(pending).rejects.toThrow(/aborted/);
+    const streamedError = await pending.catch((error: unknown) => error);
+    expect(streamedError).toBeInstanceOf(ProviderError);
+    expect((streamedError as ProviderError).message).toMatch(/aborted/);
+    // The abort cut a stream that had sent no event yet.
+    expect((streamedError as ProviderError).details).toEqual({ receivedAnyEvent: false });
   });
 });
