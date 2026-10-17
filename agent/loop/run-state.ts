@@ -64,6 +64,11 @@ export class TurnRun {
    */
   truncationsUsed: number;
   toolCallsMade: number;
+  /**
+   * Completion warning recorded for this lease: the answer named a tool the
+   * turn never called. Observability only — the answer stands at the first
+   * text (simple-loop), no re-ask is ever spent on it.
+   */
   nudgedForCompletion: boolean;
   spentUsd: number;
   contextBuilt: boolean;
@@ -120,18 +125,6 @@ export class TurnRun {
    * rather than thrown.
    */
   barrier: WaitSpec | null = null;
-
-  /**
-   * One-shot wire escalation, armed by the `requireTool` recovery rung and
-   * consumed by the next model call (`tool_choice: required`, then back to
-   * `auto`).
-   *
-   * Deliberately **not** in `counters()`: a resume that loses it degrades to
-   * one more `auto` attempt, which is safe; persisting it would let a
-   * crash-loop force calls on transcripts that never saw the message
-   * explaining why a call is due.
-   */
-  requireToolOnce = false;
 
   /**
    * Consecutive provider-empty responses in this lease (P0-A).
