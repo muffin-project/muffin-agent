@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import type { CapabilityDecl, TrustTier } from '../../core/policy/types.js';
@@ -286,8 +287,39 @@ function makeLane(
       // not what it can write — writes are the sandbox's job — but a cwd outside
       // the root would also anchor srt's profile generation somewhere we did not
       // mean (upstream #432 made that mistake load-bearing).
+      //
+      // The escape check must run on canonical paths (B1): `execute()`
+      // (`core/sandbox/executor.ts`) feeds `cwd` to `buildReadScope` →
+      // `resolveReadRoot` → `realpathSync`, so a lexical-only check here lets
+      // a symlink inside the project pointing outside through, and the
+      // resolved outside tree lands in `allowRead` on both lanes. Resolve the
+      // root and the candidate and re-apply the escape check on the resolved
+      // spellings; fail closed when either cannot be resolved.
+      //
+      // The *request* still carries the lexical spelling, on purpose: the
+      // executor realpaths it into the read scope and the process working
+      // directory, so the safety is the check we just ran, not the string we
+      // hand downstream. Passing the resolved spelling back would move every
+      // `cwd` on macOS (`/var` → `/private/var`) and change a contract the
+      // lane never agreed to change.
       const cwd = resolve(scope.root, parsed.data.cwd ?? '.');
-      const escape = relative(scope.root, cwd);
+      let rootResolved: string;
+      try {
+        rootResolved = realpathSync(scope.root);
+      } catch {
+        return { content: `cwd escapes the project: ${parsed.data.cwd ?? '.'}`, isError: true, tier: 0 };
+      }
+      let cwdResolved: string;
+      try {
+        cwdResolved = realpathSync(cwd);
+      } catch {
+        return {
+          content: `cwd escapes the project: ${parsed.data.cwd ?? '.'} (unresolvable)`,
+          isError: true,
+          tier: 0,
+        };
+      }
+      const escape = relative(rootResolved, cwdResolved);
       if (escape === '..' || escape.startsWith('..') || isAbsolute(escape)) {
         return { content: `cwd escapes the project: ${parsed.data.cwd}`, isError: true, tier: 0 };
       }

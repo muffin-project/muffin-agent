@@ -1,3 +1,4 @@
+import { mkdtempSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -55,7 +56,12 @@ function senzaSandbox() {
   return { run: boom, runReadOnly: boom };
 }
 
-const root = join(tmpdir(), 'muffin-shell-root');
+/**
+ * A real directory: `makeLane` canonicalises `cwd` with `realpathSync` and
+ * fails closed when it cannot be resolved, so the scope root the lanes check
+ * against must exist on disk (B1).
+ */
+const root = mkdtempSync(join(tmpdir(), 'muffin-shell-root-'));
 
 /**
  * Policy semantics for the two lanes, through the real kernel.
@@ -275,6 +281,37 @@ describe('shell_run argument boundary', () => {
     for (const make of [makeShellTool, makeShellWriteTool]) {
       const exec = fakeExec();
       const out = await make(exec, { root }).handler({ command: 'ls', cwd: '../../etc' }, ctx);
+      expect(out.isError).toBe(true);
+      expect(out.content).toContain('escapes');
+      expect(exec.calls.length).toBe(0);
+    }
+  });
+
+  it('rejects a cwd that is a symlink inside the workspace pointing outside, on both lanes (B1)', async () => {
+    // The lexical spelling `link` is inside the root, so the old lexical-only
+    // check let it through — and `execute()` resolves `cwd` into `allowRead`
+    // on both lanes. The lane must refuse before the executor is reached.
+    const outside = mkdtempSync(join(tmpdir(), 'muffin-shell-outside-'));
+    writeFileSync(join(outside, 'canary.txt'), 'CANARY\n');
+    const link = join(root, 'link');
+    symlinkSync(outside, link);
+    try {
+      for (const make of [makeShellTool, makeShellWriteTool]) {
+        const exec = fakeExec();
+        const out = await make(exec, { root }).handler({ command: 'cat canary.txt', cwd: 'link' }, ctx);
+        expect(out.isError).toBe(true);
+        expect(out.content).toContain('escapes');
+        expect(exec.calls.length).toBe(0);
+      }
+    } finally {
+      unlinkSync(link);
+    }
+  });
+
+  it('fails closed on a cwd that cannot be resolved, on both lanes (B1)', async () => {
+    for (const make of [makeShellTool, makeShellWriteTool]) {
+      const exec = fakeExec();
+      const out = await make(exec, { root }).handler({ command: 'ls', cwd: 'non-esiste' }, ctx);
       expect(out.isError).toBe(true);
       expect(out.content).toContain('escapes');
       expect(exec.calls.length).toBe(0);
