@@ -1,5 +1,4 @@
-import { loadImage } from '../../agent/images.js';
-import { immagineAccettata } from '../../agent/providers/modalita.js';
+import type { ImageLoad } from '../../agent/images.js';
 import type { ImageBlock } from '../../agent/providers/types.js';
 
 /**
@@ -26,6 +25,17 @@ export type Vista =
   /** Né l'uno né l'altro, e si dice perché. */
   | { modo: 'no'; why: string; rimedio?: string };
 
+/**
+ * Come si misura se un modello vede le immagini. Firma identica a
+ * `immagineAccettata`, che il chiamante di produzione inietta: il nucleo
+ * decide, non va in rete da sé.
+ */
+export type MisuraVista = (
+  baseUrl: string | undefined,
+  model: string,
+  domanda: { apiKey?: string | undefined; fetch?: typeof globalThis.fetch },
+) => Promise<boolean | undefined>;
+
 export type VistaDeps = {
   baseUrl?: string | undefined;
   /** Omission preserves legacy shared-endpoint callers; explicit undefined is native light. */
@@ -36,6 +46,13 @@ export type VistaDeps = {
   apiKey?: string | undefined;
   /** Solo per i test, come il `run` di `trascrivi`. */
   fetch?: typeof globalThis.fetch;
+  /**
+   * Chi carica i byte e chi misura la vista. Iniettati dal chiamante
+   * (produzione: `loadImage` + `immagineAccettata` via `vistaFor`): questo
+   * modulo non importa comportamento da `agent/`, solo contratti di tipo.
+   */
+  carica: (percorso: string) => ImageLoad;
+  misuraVista: MisuraVista;
   /**
    * Descrive l'immagine col modello leggero. Chiesto solo quando serve, mai
    * in anticipo: è una chiamata a pagamento. Assente vuol dire "nessuno
@@ -56,9 +73,9 @@ export async function decidiVista(percorso: string, deps: VistaDeps): Promise<Vi
     apiKey: deps.apiKey,
     ...(deps.fetch === undefined ? {} : { fetch: deps.fetch }),
   };
-  const vede = await immagineAccettata(deps.baseUrl, deps.mainModel, domanda);
+  const vede = await deps.misuraVista(deps.baseUrl, deps.mainModel, domanda);
   if (vede !== false) {
-    const caricata = loadImage(percorso);
+    const caricata = deps.carica(percorso);
     if (caricata.ok) return { modo: 'mostra', blocco: caricata.block };
     return { modo: 'no', why: caricata.why };
   }
@@ -69,9 +86,9 @@ export async function decidiVista(percorso: string, deps: VistaDeps): Promise<Vi
   };
   if (
     deps.descrivi !== undefined &&
-    (await immagineAccettata(lightBaseUrl, deps.lightModel, lightQuestion)) === true
+    (await deps.misuraVista(lightBaseUrl, deps.lightModel, lightQuestion)) === true
   ) {
-    const caricata = loadImage(percorso);
+    const caricata = deps.carica(percorso);
     if (!caricata.ok) return { modo: 'no', why: caricata.why };
     try {
       const testo = await deps.descrivi(caricata.block);
