@@ -82,7 +82,10 @@ export class OpenAIChatGPTProvider implements Provider {
     try {
       model = await this.findModel(call.model, call.signal);
     } catch {
-      if (call.signal?.aborted) throw new ProviderError('aborted', false);
+      if (call.signal?.aborted)
+        throw new ProviderError('aborted', false, undefined, 'transport', undefined, false, {
+          receivedAnyEvent: false,
+        });
       return {
         requested: request,
         status: 'unsupported',
@@ -156,7 +159,10 @@ export class OpenAIChatGPTProvider implements Provider {
   // SSE request on this streaming-only route. chat() consumes exactly one SSE.
 
   private async *run(call: ChatCall): AsyncIterable<StreamEvent> {
-    if (call.signal?.aborted) throw new ProviderError('aborted', false);
+    if (call.signal?.aborted)
+      throw new ProviderError('aborted', false, undefined, 'transport', undefined, false, {
+        receivedAnyEvent: false,
+      });
     const params = await this.requestBody(call);
 
     let receivedAnyEvent = false;
@@ -170,7 +176,10 @@ export class OpenAIChatGPTProvider implements Provider {
     try {
       accessToken = await this.connection.accessToken(call.signal);
     } catch {
-      if (call.signal?.aborted) throw new ProviderError('aborted', false);
+      if (call.signal?.aborted)
+        throw new ProviderError('aborted', false, undefined, 'transport', undefined, false, {
+          receivedAnyEvent: false,
+        });
       // Credential acquisition is not an inference-stream failure. Preserve
       // its non-retryable boundary without exposing OAuth error details.
       throw new ProviderError('ChatGPT access token unavailable', false);
@@ -289,12 +298,18 @@ export class OpenAIChatGPTProvider implements Provider {
         error instanceof ReasoningConfigurationError
       )
         throw error;
-      if (call.signal?.aborted) throw new ProviderError('aborted', false);
+      if (call.signal?.aborted)
+        throw new ProviderError('aborted', false, undefined, 'transport', undefined, false, {
+          receivedAnyEvent,
+        });
       if (error instanceof APIError) throw apiProviderError(error);
       throw new ProviderStreamError('ChatGPT Responses stream failed', receivedAnyEvent);
     }
 
-    if (call.signal?.aborted) throw new ProviderError('aborted', false);
+    if (call.signal?.aborted)
+      throw new ProviderError('aborted', false, undefined, 'transport', undefined, false, {
+        receivedAnyEvent,
+      });
     if (terminal === undefined)
       throw new ProviderStreamError(
         'ChatGPT Responses stream ended without response.completed',

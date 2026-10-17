@@ -211,7 +211,26 @@ export class AnthropicProvider implements Provider {
     // is the completion marker on this wire; absent plus an aborted signal
     // means the interruption was ours.
     if (call.signal?.aborted && stopReason === null) {
-      throw new ProviderError('aborted', false);
+      // Our own deadline/stall/stop cut the stream before the completion
+      // marker. The abort must not swallow what the wire had already said:
+      // without these facts a `model_deadline` trace cannot tell "never
+      // connected" from "connected but silent" from "stalled mid-stream", the
+      // same hole closed on `openai-compat.ts#chatStream`.
+      const bytesReceived =
+        blocks.reduce(
+          (n, block) =>
+            n +
+            (block?.type === 'text'
+              ? block.text.length
+              : block?.type === 'thinking'
+                ? block.thinking.length
+                : 0),
+          0,
+        ) + [...toolJson.values()].reduce((n, raw) => n + raw.length, 0);
+      throw new ProviderError('aborted', false, undefined, 'transport', undefined, false, {
+        receivedAnyEvent,
+        bytesReceived,
+      });
     }
 
     yield {
@@ -467,7 +486,11 @@ function wrap(error: unknown): ProviderError {
     );
   }
   if (error instanceof Error && error.name === 'AbortError') {
-    return new ProviderError('aborted', false);
+    // The abort fired before any stream event reached the loop: record that
+    // fact so a deadline trace never has to guess whether the wire spoke.
+    return new ProviderError('aborted', false, undefined, 'transport', undefined, false, {
+      receivedAnyEvent: false,
+    });
   }
   // Network-level failures (DNS, reset, timeout) are worth one more try.
   return new ProviderError(error instanceof Error ? error.message : String(error), true);
