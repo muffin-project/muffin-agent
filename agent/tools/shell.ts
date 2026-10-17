@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import type { CapabilityDecl, TrustTier } from '../../core/policy/types.js';
@@ -30,11 +31,12 @@ import { DISK_TIER, fenceDisk } from './fs.js';
  *  - **`shell_run` / `sys.shell`** — the sandbox confines writes to session
  *    scratch and disables direct IP networking (`SandboxExecutor.runReadOnly`).
  *    On Linux a contained command cannot open Unix-domain sockets at all (the
- *    filter is requested and verified); the Muffin gateway socket is
- *    additionally deny-listed. Reads cover the whole host minus a
- *    finite deny-list (recorded in SECURITY's “Shell read scope and sandbox
- *    patch posture” section, measured on Linux 2026-09-22): stdout reaches
- *    the model and disclosure has no undo.
+  *    filter is requested and verified); the Muffin gateway socket is
+  *    additionally deny-listed. Reads are allow-scoped to the workspace, the
+  *    session scratch and explicit system paths (recorded in SECURITY's
+  *    “Shell read scope and sandbox patch posture” section, §9.2): stdout
+  *    reaches
+  *    the model and disclosure has no undo.
  *    `reversible: 'no'`, `risk: 'high'`, and the kernel asks every time
  *    (ADR-0091 plus the AF_UNIX recovery correction below).
  *  - **`shell_run_write` / `sys.shell.write`** — writes into the workspace,
@@ -69,8 +71,9 @@ export const shellCapability: CapabilityDecl = {
   // Still `host`, and deliberately not `context` — which is where the ceiling
   // and the unattended-floor would be 3/3 and this lane would be as free as
   // `fs_read`. Residuals keep it here, all declared in `docs/architecture/SECURITY.md`
-  // §9: reads cover the whole host filesystem minus a finite deny-list (not
-  // just the project — measured on Linux 2026-09-22, #645); writes stay in
+  // §9: reads are allow-scoped to the workspace, the session scratch and
+  // explicit system paths (not just the project — closed 2026-10-16, #645);
+  // writes stay in
   // scratch and direct IP networking is disabled. On Linux the AF_UNIX
   // seccomp filter is requested and behaviorally verified before any
   // contained command runs (a host where it cannot hold refuses every
@@ -157,12 +160,13 @@ const shellSpec: ToolSpec = {
   description:
     'Run a non-interactive shell command in the contained read lane. ' +
     'It asks the owner every time: what a command reads on this machine reaches the conversation and cannot be ' +
-    'taken back. The whole host filesystem is readable except for a finite deny-read list; writes stay in a ' +
+    'taken back. Reads are allow-scoped to the project workspace, a temporary scratch directory and explicit system paths; ' +
+    'writes stay in a ' +
     'temporary scratch directory, direct IP networking is disabled, and on Linux Unix-domain sockets are blocked ' +
     'by the sandbox. This lane is treated as high risk and is not replayed after an ' +
     'uncertain crash. Muffin gateway socket paths are deny-listed. Prefer project-relative reads; ' +
-    'an absolute path outside the project reads the owner\u2019s machine, ' +
-    'and its output reaches the model. Use it when you need to observe something no ' +
+    'an absolute path outside the project fails with a permission error, ' +
+    'which is the boundary working, not a bug — and in-scope output reaches the model. Use it when you need to observe something no ' +
     'dedicated tool wraps: `ls`, `lsof`, `sqlite3 -readonly`, `env`, `ps`, `df`, `du`, `git status`, `git log`, ' +
     '`wc`, `find`, a dry run. Not for what a dedicated tool answers better than parsed text — `cat`/`ls` of a ' +
     'known file (fs_read, fs_list), a search in the files (fs_search), `ps` (process_list), a question about this ' +
@@ -283,8 +287,39 @@ function makeLane(
       // not what it can write — writes are the sandbox's job — but a cwd outside
       // the root would also anchor srt's profile generation somewhere we did not
       // mean (upstream #432 made that mistake load-bearing).
+      //
+      // The escape check must run on canonical paths (B1): `execute()`
+      // (`core/sandbox/executor.ts`) feeds `cwd` to `buildReadScope` →
+      // `resolveReadRoot` → `realpathSync`, so a lexical-only check here lets
+      // a symlink inside the project pointing outside through, and the
+      // resolved outside tree lands in `allowRead` on both lanes. Resolve the
+      // root and the candidate and re-apply the escape check on the resolved
+      // spellings; fail closed when either cannot be resolved.
+      //
+      // The *request* still carries the lexical spelling, on purpose: the
+      // executor realpaths it into the read scope and the process working
+      // directory, so the safety is the check we just ran, not the string we
+      // hand downstream. Passing the resolved spelling back would move every
+      // `cwd` on macOS (`/var` → `/private/var`) and change a contract the
+      // lane never agreed to change.
       const cwd = resolve(scope.root, parsed.data.cwd ?? '.');
-      const escape = relative(scope.root, cwd);
+      let rootResolved: string;
+      try {
+        rootResolved = realpathSync(scope.root);
+      } catch {
+        return { content: `cwd escapes the project: ${parsed.data.cwd ?? '.'}`, isError: true, tier: 0 };
+      }
+      let cwdResolved: string;
+      try {
+        cwdResolved = realpathSync(cwd);
+      } catch {
+        return {
+          content: `cwd escapes the project: ${parsed.data.cwd ?? '.'} (unresolvable)`,
+          isError: true,
+          tier: 0,
+        };
+      }
+      const escape = relative(rootResolved, cwdResolved);
       if (escape === '..' || escape.startsWith('..') || isAbsolute(escape)) {
         return { content: `cwd escapes the project: ${parsed.data.cwd}`, isError: true, tier: 0 };
       }
