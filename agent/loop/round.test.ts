@@ -815,6 +815,59 @@ describe('execution budget', () => {
     expect(h.span.attrs['muffin.turn.stop_reason']).toBe('model_deadline');
   });
 
+  it('un abort da deadline conserva la parte di storia del provider sullo span', async () => {
+    // Regressione del 16/10/2026: cinque `model_deadline` di fila sul main
+    // senza un byte dal provider, e dal DB non si poteva dire "mai connesso"
+    // da "connesso ma muto" — lo span portava solo `abort_reason`.
+    const provider: Provider = {
+      kind: 'openai-compat',
+      async chat(call) {
+        await new Promise<never>((_, reject) => {
+          call.signal?.addEventListener(
+            'abort',
+            () =>
+              reject(
+                new ProviderError('aborted', false, undefined, 'transport', undefined, false, {
+                  requestId: 'gen-123',
+                  upstream: 'nvidia',
+                  model: 'test',
+                  receivedAnyEvent: false,
+                  bytesReceived: 0,
+                }),
+              ),
+            { once: true },
+          );
+        });
+        throw new Error('unreachable');
+      },
+    };
+    const h = harness({
+      provider,
+      profile: { ...CONSERVATIVE, recovery: ['retryOnce'] },
+      execution: new ExecutionBudget({ modelCallDeadlineMs: 10, turnWallDeadlineMs: 200, stallTimeoutMs: 20 }),
+    });
+
+    const result = await runRounds(h.scope);
+
+    expect(result).toMatchObject({ stopped: 'continuable', reason: 'model_deadline' });
+    const dir = join(h.home, 'traces');
+    const chiamata = readdirSync(dir)
+      .filter((f) => f.endsWith('.jsonl'))
+      .flatMap((f) => readFileSync(join(dir, f), 'utf8').split('\n'))
+      .filter((l) => l.trim() !== '')
+      .map((l) => JSON.parse(l) as { name: string; attributes: Record<string, AttributeValue> })
+      .filter((r) => r.name === 'muffin.chat_call')
+      .at(-1);
+    if (chiamata === undefined) throw new Error('nessuno span muffin.chat_call esportato');
+    const attrs = chiamata.attributes;
+    expect(attrs['muffin.chat_call.abort_reason']).toBe('model_deadline');
+    expect(attrs['muffin.chat_call.error_name']).toBe('ProviderError');
+    expect(attrs['muffin.chat_call.provider_request_id']).toBe('gen-123');
+    expect(attrs['muffin.chat_call.provider_upstream']).toBe('nvidia');
+    expect(attrs['muffin.chat_call.stream_received_any_event']).toBe(false);
+    expect(attrs['muffin.chat_call.stream_bytes_received']).toBe(0);
+  });
+
   it('una risposta alla terza chiamata chiude answered, senza parcheggi intermedi', async () => {
     let calls = 0;
     const provider: Provider = {

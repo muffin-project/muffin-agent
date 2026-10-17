@@ -519,6 +519,19 @@ export type ProviderErrorSource = 'transport' | 'output';
 // nothing to mislabel.
 
 /** Carries what the recovery cascade needs to decide, instead of a bare string. */
+export type ProviderErrorDetails = {
+  /** Upstream generation/request id, when the provider exposed one. */
+  requestId?: string;
+  /** Concrete upstream that served the call (e.g. OpenRouter `provider`), when known. */
+  upstream?: string;
+  /** The provider's own model id echoed on the wire, when it differs from the request. */
+  model?: string;
+  /** Whether anything at all arrived before the failure (stream established). */
+  receivedAnyEvent?: boolean;
+  /** Bytes of model output received before the failure (text + tool-args fragments). */
+  bytesReceived?: number;
+};
+
 export class ProviderError extends Error {
   constructor(
     message: string,
@@ -535,6 +548,14 @@ export class ProviderError extends Error {
     readonly retryAfterMs?: number,
     /** The adapter saw a wire output limit while parsing a partial tool call. */
     readonly outputTruncated = false,
+    /**
+     * What the wire had already told us when the failure hit. Additive and
+     * optional: every existing construction site keeps the behaviour it had.
+     * Read by the loop's `muffin.chat_call` error attributes so a deadline
+     * abort keeps the provider's share of the story instead of masking it
+     * behind a bare `aborted`.
+     */
+    readonly details?: ProviderErrorDetails,
   ) {
     super(message);
     this.name = 'ProviderError';
