@@ -119,6 +119,7 @@ const SECRET_REF = /^secret:\/\/[A-Za-z0-9_]+$/;
 const SECRET_VALUE_SHAPES: readonly RegExp[] = [
   /\bsk-[A-Za-z0-9_-]{16,}\b/, // OpenAI-style
   /\bsk-ant-[A-Za-z0-9_-]{16,}\b/, // Anthropic
+  /\bgsk_[A-Za-z0-9]{20,}\b/, // Groq
   /\bghp_[A-Za-z0-9]{20,}\b/, // GitHub PAT
   /\btvly-[A-Za-z0-9_-]{8,}\b/, // Tavily API key prefix
   /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/, // Slack
