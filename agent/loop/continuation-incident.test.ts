@@ -272,11 +272,11 @@ describe('Incident A · useful work then provider stalls', () => {
     expect(row?.counters.recoveriesUsed).toBe(0);
   });
 
-  it('requireTool exhaustion becomes continuable; the next lease starts auto', async () => {    // Mandate regression: lease 1 walks the whole cascade to requireTool
-    // (the wire IS demanded once, there), becomes continuable, and lease 2
-    // runs with fresh recovery state and toolChoice=auto — stale
-    // requireTool/strict-json/nudge directives from lease 1 are archived,
-    // never behaviorally active.
+  it('empty-cascade exhaustion becomes continuable; the next lease starts auto', async () => {    // Mandate regression: lease 1 walks the whole cascade to requireTool
+    // (words only now — no round ever sends tool_choice: required),
+    // becomes continuable, and lease 2 runs with fresh recovery state and
+    // toolChoice=auto — stale strict-json/nudge directives from lease 1 are
+    // archived, never behaviorally active.
     const genuine = (): ChatResult => ({
       text: null,
       toolCalls: [],
@@ -315,9 +315,10 @@ describe('Incident A · useful work then provider stalls', () => {
     expect(first.stopped).toBe('continuable');
     expect(first.reason).toBe('recovery_exhausted');
     expect(w.turns.get(first.turnId)?.counters.recoveriesUsed).toBe(5);
-    // The escalation fired exactly once, in lease 1, then was consumed.
+    // No round ever demanded: the whole cascade, last rung included, stayed auto.
     const demanded = w.provider.seen.filter((c) => c.toolChoice === 'required');
-    expect(demanded).toHaveLength(1);
+    expect(demanded).toHaveLength(0);
+    for (const call of w.provider.seen) expect(call.toolChoice ?? 'auto').toBe('auto');
 
     const second = await continueTurn(w.deps, first.turnId, {
       message: { role: 'user', content: [{ type: 'text', text: 'riprendi' }] },
@@ -327,7 +328,8 @@ describe('Incident A · useful work then provider stalls', () => {
     expect(second.stopped).toBe('answered');
     // Lease 2 never demanded a call and never re-read a stale directive:
     // every request auto, no recovery text from lease 1 on the wire.
-    const lease2 = w.provider.seen.slice(demanded.length + 5);
+    // Lease 1 spent 1 initial + 5 recovery calls; the rest is lease 2.
+    const lease2 = w.provider.seen.slice(6);
     expect(lease2.length).toBeGreaterThan(0);
     for (const call of lease2) expect(call.toolChoice ?? 'auto').toBe('auto');
     const lastWire = JSON.stringify(lease2.at(-1)!.messages);
