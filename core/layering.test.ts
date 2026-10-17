@@ -24,6 +24,11 @@ const CORE = dirname(fileURLToPath(import.meta.url));
  * bordo. Il comportamento si inietta per dipendenza (`VistaDeps.carica`,
  * `VoceDeps.misuraAudio`, …), mai per importazione.
  *
+ * Vale identico per le riesportazioni: `export { x } from`, `export * from` e
+ * `export * as ns from` verso un bordo sono importazioni di valore travestite,
+ * e il controllo le vede. Un `export type … from` resta permesso, come
+ * `import type`.
+ *
  * Se questo test diventa rosso, la correzione è iniettare, non allargare
  * l'eccezione.
  */
@@ -43,27 +48,40 @@ function* walk(dir: string): Generator<string> {
   }
 }
 
-/** Importazioni di valore verso i bordi, una per riga `file: spec`. */
+/** Importazioni e riesportazioni di valore verso i bordi, una per riga `spec`. */
 function valueImportsToEdges(source: string): string[] {
   // Via i type-only: `import type …;` e `export type …;` non esistono a runtime.
   const noTypes = source
     .replace(/^\s*import\s+type\s+[\s\S]*?;(?=\s*(?:\n|$))/gm, '')
     .replace(/^\s*export\s+type\s+[\s\S]*?;(?=\s*(?:\n|$))/gm, '');
   const hits: string[] = [];
+  const collect = (spec: string): void => {
+    if (!/(^|\/)agent\/|(^|\/)connectors\/|(^|\/)cli\//.test(spec)) return;
+    // Normalizza `../../agent/x.js` → `agent/x.js` per l'eccezione.
+    if (ALLOWED_VALUE_IMPORTS.has(spec.replace(/^(\.\.\/|\.\/)+/, ''))) return;
+    hits.push(spec);
+  };
   const staticRe = /import\s*(?:[\s\S]*?\bfrom\s*)?['"]([^'"]+)['"]/g;
   const dynamicRe = /import\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+  // Riesportazioni di valore. `export type … from` è già tolto sopra; una
+  // lista di soli `type` (`export { type A } from`, che non esiste a runtime)
+  // si salta; tutto il resto — anche misto tipo/valore — è un import di valore
+  // e va visto: nel dubbio, fallire.
+  const reexportRe = /export\s+(?:\*|\*\s+as\s+[\w$]+|\{([^}]*)\})\s+from\s*['"]([^'"]+)['"]/g;
   for (const re of [staticRe, dynamicRe]) {
-    for (const match of noTypes.matchAll(re)) {
-      const spec = match[1] ?? '';
-      const toEdge = /(^|\/)agent\/|(^|\/)connectors\/|(^|\/)cli\//.test(spec);
-      if (!toEdge) continue;
-      // Normalizza `../../agent/x.js` → `agent/x.js`.
-      const normalized = spec.replace(/^(\.\.\/|\.\/)+/, '');
-      if (ALLOWED_VALUE_IMPORTS.has(normalized)) continue;
-      hits.push(spec);
-    }
+    for (const match of noTypes.matchAll(re)) collect(match[1] ?? '');
+  }
+  for (const match of noTypes.matchAll(reexportRe)) {
+    const named = match[1];
+    if (named !== undefined && onlyTypes(named)) continue;
+    collect(match[2] ?? '');
   }
   return hits;
+}
+
+/** Vero per `type A`, `type A as B`, separati da virgole: una lista senza valori. */
+function onlyTypes(named: string): boolean {
+  return named.split(',').every((entry) => /^\s*type\s+[\w$]+\s*(?:as\s+[\w$]+)?\s*$/.test(entry));
 }
 
 describe('core layering', () => {
