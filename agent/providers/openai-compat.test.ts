@@ -364,6 +364,13 @@ describe('openai-compat · chatStream (B11)', () => {
     expect(events).toEqual([]);
     expect(caught).toBeInstanceOf(ProviderError);
     expect((caught as ProviderError).retryable).toBe(false);
+    // The abort keeps the provider's share of the story: only the `ping`
+    // comment arrived (which the SDK drops), so no event and no output bytes.
+    expect((caught as ProviderError).details).toEqual({
+      model: 'anthropic/claude-sonnet-5',
+      receivedAnyEvent: false,
+      bytesReceived: 0,
+    });
   });
 
   it('a request that never starts streaming (no bytes at all) fails as an ordinary ProviderError, not ProviderStreamError', async () => {
