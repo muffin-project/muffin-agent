@@ -65,10 +65,10 @@ describe('sleep — un timer, con o senza un modo per abbandonarlo', () => {
  * porta, non la funzione: se uno di questi chiamanti smette di importare da
  * qui, o torna a dichiarare `function sleep(`, questa suite diventa rossa.
  *
- * Solo tre dei quattro misurati: `connectors/telegram/connector.ts` porta
- * ancora la propria copia, non perché la duplicazione sia difendibile ma
- * perché quel file era sotto riscrittura in una fetta concorrente mentre
- * questa entrava — vedi il commento in `sleep.ts`.
+ * Tutti e quattro i misurati: `connectors/telegram/connector.ts` è stato
+ * l'ultimo, rimandato solo perché quel file era sotto riscrittura in una fetta
+ * concorrente mentre gli altri tre entravano — vedi il commento in `sleep.ts`.
+ * Quella fetta è atterrata, e la quarta copia è ora fusa.
  */
 describe('sleep — una porta sola, verificata sui chiamanti unificati', () => {
   const root = join(import.meta.dirname, '..', '..');
@@ -76,6 +76,7 @@ describe('sleep — una porta sola, verificata sui chiamanti unificati', () => {
     { file: 'agent/loop/round.ts', importPath: '../../core/net/sleep.js' },
     { file: 'connectors/discord/api.ts', importPath: '../../core/net/sleep.js' },
     { file: 'connectors/telegram/api.ts', importPath: '../../core/net/sleep.js' },
+    { file: 'connectors/telegram/connector.ts', importPath: '../../core/net/sleep.js' },
   ];
 
   for (const { file, importPath } of chiamanti) {

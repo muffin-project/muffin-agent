@@ -12,6 +12,7 @@ import { levaDelega } from '../../core/runtime/delega.js';
 import type { ModelLane } from '../../core/turns/model-lane.js';
 import { decodeWaitFor } from '../../core/turns/wait.js';
 import { fence } from '../../core/memory/spotlight.js';
+import { sleep } from '../../core/net/sleep.js';
 import type { SessionStore } from '../../core/session/store.js';
 import type { TrustTier } from '../../core/policy/types.js';
 import { identify, tierOf, type IncomingIdentity, type SurfaceIdentity } from '../../core/surface/types.js';
@@ -262,9 +263,10 @@ export type ConnectorDeps = {
   now?: () => Date;
   log?: (line: string) => void;
   /**
-   * Injectable so a test never waits for real. Same seam as
-   * `connectors/discord/gateway.ts`'s own `sleep`, deliberately not shared
-   * across the two connectors — three lines is not yet worth a module.
+   * Injectable so a test never waits for real. The seam stays local, like
+   * `connectors/discord/gateway.ts`'s, but its default is no longer a private
+   * copy: it is `core/net/sleep.ts`, the one shared by every other waiter
+   * (forma-del-repo-2026-09-04 §B.2, which left this fourth copy deferred).
    */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 };
@@ -3117,17 +3119,6 @@ export async function rimuoviTastiereOrfane(
       );
     }
   }
-}
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted === true) return Promise.resolve();
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener('abort', () => {
-      clearTimeout(timer);
-      resolve();
-    }, { once: true });
-  });
 }
 
 /**
