@@ -2,7 +2,7 @@ import { sleep } from '../../core/net/sleep.js';
 import { replyCapability } from '../../core/policy/doors.js';
 import type { CapabilityId, Decision, DecisionRequest } from '../../core/policy/types.js';
 import { redactText, scrubResourceEchoes } from '../../core/tracing/redact.js';
-import { ATTR } from '../../core/tracing/types.js';
+import { ATTR, type AttributeValue } from '../../core/tracing/types.js';
 import type { ContinuableClass } from '../../core/turns/store.js';
 import { checkCompletion } from '../completion.js';
 import type { TenantClass } from '../context/assemble.js';
@@ -59,6 +59,58 @@ import {
   TOOL_RESULT_BUDGET_CHARS,
   type TurnResult,
 } from './types.js';
+
+/**
+ * What the provider said before a call failed, on the span that failed.
+ *
+ * A deadline/stall abort used to end the span with only `abort_reason`: the
+ * provider's share of the story (HTTP status, retryability, request id,
+ * whether the stream was ever established, bytes already received) was thrown
+ * away with the `aborted` error, and the database could not tell "never
+ * connected" from "connected but silent" from "stalled mid-stream".
+ * Observability only — no routing decision reads these attributes.
+ */
+function chatCallErrorAttrs(error: unknown): Record<string, AttributeValue> {
+  if (error instanceof ProviderStreamError) {
+    return {
+      'muffin.chat_call.error_name': 'ProviderStreamError',
+      'muffin.chat_call.error_message': redactText(error.message).slice(0, 300),
+      'muffin.chat_call.stream_partial': error.partial,
+    };
+  }
+  if (error instanceof ProviderError) {
+    const details = error.details;
+    return {
+      'muffin.chat_call.error_name': 'ProviderError',
+      'muffin.chat_call.error_message': redactText(error.message).slice(0, 300),
+      'muffin.chat_call.error_retryable': error.retryable,
+      'muffin.chat_call.error_source': error.source,
+      ...(error.status === undefined ? {} : { 'muffin.chat_call.error_status': error.status }),
+      ...(error.retryAfterMs === undefined
+        ? {}
+        : { 'muffin.chat_call.error_retry_after_ms': error.retryAfterMs }),
+      ...(details?.requestId === undefined
+        ? {}
+        : { 'muffin.chat_call.provider_request_id': details.requestId }),
+      ...(details?.upstream === undefined
+        ? {}
+        : { 'muffin.chat_call.provider_upstream': details.upstream }),
+      ...(details?.receivedAnyEvent === undefined
+        ? {}
+        : { 'muffin.chat_call.stream_received_any_event': details.receivedAnyEvent }),
+      ...(details?.bytesReceived === undefined
+        ? {}
+        : { 'muffin.chat_call.stream_bytes_received': details.bytesReceived }),
+    };
+  }
+  if (error instanceof Error) {
+    return {
+      'muffin.chat_call.error_name': error.name,
+      'muffin.chat_call.error_message': redactText(error.message).slice(0, 300),
+    };
+  }
+  return {};
+}
 
 /**
  * The paid path: one round of the turn, repeated until something ends it.
@@ -727,6 +779,10 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       chatSpan.setAttributes({
         'muffin.chat_call.duration_ms': Date.now() - chatCallStartedAt,
         ...(abortReason === undefined ? {} : { 'muffin.chat_call.abort_reason': abortReason }),
+        // The abort reason says who cut the call; these say what the provider
+        // had said before the cut. Without both, a `model_deadline` trace
+        // cannot answer "never connected or stalled mid-stream?".
+        ...chatCallErrorAttrs(error),
       });
       chatSpan.end({ error });
       // Whatever door this takes below — a retry, the profile's cascade, or
