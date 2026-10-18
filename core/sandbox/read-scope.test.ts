@@ -9,6 +9,7 @@ import {
   rootSymlinkAliases,
   SYSTEM_READ_PATHS_DARWIN,
   SYSTEM_READ_PATHS_LINUX,
+  seccompHelperPaths,
   symlinkAncestors,
 } from './read-scope.js';
 
@@ -83,6 +84,22 @@ describe('buildReadScope', () => {
     expect(symlinkAncestors(leaf)).not.toContain(leaf);
     const viaLink = symlinkAncestors(join(base, 'mid-link', 'leaf'));
     expect(viaLink).toContain(join(base, 'mid-link'));
+  });
+
+  it("re-allows the runtime's seccomp helper so the Linux wrapper can exec it inside the namespace", () => {
+    // Every tree that runs these tests has the pinned sandbox-runtime
+    // installed (vitest itself runs from it); the resolution is pinned here
+    // so a renamed vendor directory (or a dropped workspace entry) cannot
+    // make the containment assertion below vacuously green.
+    const helpers = seccompHelperPaths('linux');
+    expect(helpers).toHaveLength(1);
+    expect(helpers[0]).toContain(join('vendor', 'seccomp'));
+    const scope = buildReadScope(['/work'], 'linux');
+    expect(scope.allowRead).toContain(helpers[0]);
+  });
+
+  it('contributes no seccomp helper off Linux (no mount namespace hides it there)', () => {
+    expect(seccompHelperPaths('darwin')).toEqual([]);
   });
 
   it('derives root aliases only for links whose target holds allowed content', () => {

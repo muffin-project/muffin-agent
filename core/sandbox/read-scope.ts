@@ -1,6 +1,7 @@
-import { lstatSync, readdirSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, realpathSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 /**
  * The allow-scoped read surface for sandboxed shell commands (#645, slice
@@ -91,6 +92,48 @@ export const SYSTEM_READ_PATHS_LINUX = [
 
 export function systemReadPaths(platform: NodeJS.Platform = process.platform): readonly string[] {
   return platform === 'linux' ? SYSTEM_READ_PATHS_LINUX : SYSTEM_READ_PATHS_DARWIN;
+}
+
+/**
+ * The pinned sandbox-runtime's seccomp helper directory, which the Linux
+ * wrapper exec's from INSIDE the bwrap namespace: every wrapped command is
+ * prefixed with `vendor/seccomp/<arch>/apply-seccomp` (resolved by
+ * `getApplySeccompBinaryPath` and prepended in `wrapCommandWithSandboxLinux`;
+ * its own comment names the visibility "the caller's responsibility").
+ *
+ * With `denyRead: ['/']` the root deny expands to a tmpfs over each of the
+ * root's children, and any install tree outside the allow set disappears
+ * with the child it lives under. When the per-call roots do not cover the
+ * install (every temporary workspace: the Linux CI runner keeps the checkout
+ * under `/home`, the eval workspaces under `/tmp`), the helper is masked and
+ * every real-containment test dies `bash: …/apply-seccomp: No such file or
+ * directory` — measured 2026-10-18, run 39118368417, 68 failures with the
+ * bwrap symlink bug of 0.0.71 already fixed. The helper is part of the
+ * confinement mechanism itself, like `/usr/bin/bwrap`: re-allowing its
+ * directory re-opens a binary, never owner data. macOS Seatbelt exec's no
+ * helper (no mount namespace to hide it), hence Linux only.
+ */
+export function seccompHelperPaths(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): readonly string[] {
+  if (platform !== 'linux') return [];
+  // The same architecture names srt maps (x64/arm64); other arches get no
+  // helper at all — nothing to keep visible.
+  if (arch !== 'x64' && arch !== 'arm64') return [];
+  try {
+    const require = createRequire(import.meta.url);
+    const packageJson = require.resolve('@anthropic-ai/sandbox-runtime/package.json');
+    const raw = join(dirname(packageJson), 'vendor', 'seccomp', arch);
+    if (!existsSync(raw)) return [];
+    try {
+      return [realpathSync(raw)];
+    } catch {
+      return [raw];
+    }
+  } catch {
+    return [];
+  }
 }
 
 export type ReadScope = {
@@ -220,6 +263,10 @@ export function buildReadScope(
     for (const ancestor of symlinkAncestors(root)) allow.add(ancestor);
   }
   for (const system of systemReadPaths(platform)) allow.add(system);
+  // The pinned runtime's own seccomp helper (see `seccompHelperPaths`): the
+  // wrapper exec's it inside the namespace, so the root deny would hide it
+  // with its install tree's tmpfs and the command would fail at exec.
+  for (const helper of seccompHelperPaths(platform)) allow.add(helper);
   // Lexical aliases of the allowed tree (see `rootSymlinkAliases`): without
   // them every absolute path spelled through a root symlink fails closed.
   for (const alias of rootSymlinkAliases([...allow])) allow.add(alias);
