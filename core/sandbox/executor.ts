@@ -12,6 +12,7 @@ import {
   SANDBOX_BINARIES_REMEDY,
   type SandboxProbe,
 } from './probe.js';
+import { buildReadScope } from './read-scope.js';
 
 /**
  * The one door to sandboxed execution.
@@ -287,13 +288,13 @@ function isMissingDependency(detail: string): boolean {
  *
  * Every config this module builds — session, per-call, self-test — reads its
  * `network` block from here, so direct IP/proxy egress is one function to
- * check and one function to break. `sys.shell` asks every time since ADR-0091
- * because whole-host reads disclose data. On Linux the same function requests
+  * check and one function to break. `sys.shell` asks every time since ADR-0091
+  * because even scoped reads disclose data. On Linux the same function requests
  * srt's AF_UNIX seccomp filter; whether it held is proven behaviorally by the
  * self-test before any caller's command runs.
  *
  * **What actually does the work, measured in `@anthropic-ai/sandbox-runtime`
- * 0.0.71, not assumed from the field names.** `allowedDomains` being *defined*
+ * 0.0.80, not assumed from the field names.** `allowedDomains` being *defined*
  * — empty is still defined — is what sets srt's `needsNetworkRestriction`
  * (`dist/sandbox/sandbox-manager.js`, `hasNetworkConfig`). On Linux that flag
  * is what pushes `--unshare-net` into the bwrap argv
@@ -353,7 +354,7 @@ function networkOff(): SandboxRuntimeConfig['network'] {
  * processo, e la docstring di `scratch()` dice che quella è la superficie
  * temporanea della sessione — creata da questo processo, cancellata da
  * `close()`. Era falso su tutt'e due le piattaforme, e per la stessa riga di
- * `@anthropic-ai/sandbox-runtime` 0.0.71: `generateProxyEnvVars`
+ * `@anthropic-ai/sandbox-runtime` 0.0.80: `generateProxyEnvVars`
  * (`dist/sandbox/sandbox-utils.js`) aggiunge `TMPDIR=/tmp/claude` — il default
  * del suo consumatore, non il nostro — e ciascun ramo lo applica in un modo
  * che vince sull'ambiente ereditato:
@@ -613,9 +614,15 @@ export class SandboxExecutor {
   /**
    * Session scratch space: writable in every invocation, survives across
    * commands of the same session so `cmd1 > f && cmd2 < f` workflows hold.
+   *
+   * Stored resolved: under an allow-scoped read surface every symlinked
+   * ancestor of `$TMPDIR` would otherwise need its own link-inode allow for
+   * the unresolved spelling to work (`core/sandbox/read-scope.ts`). The
+   * resolved spelling needs none, and the lexical aliases stay as the
+   * fallback for paths the model spells by hand.
    */
   private scratch(): string {
-    this.scratchDir ??= mkdtempSync(join(tmpdir(), 'muffin-exec-'));
+    this.scratchDir ??= realpathSync(mkdtempSync(join(tmpdir(), 'muffin-exec-')));
     return this.scratchDir;
   }
 
@@ -753,6 +760,7 @@ export class SandboxExecutor {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), SELFTEST_LEG_TIMEOUT_MS);
       try {
+        const legScope = buildReadScope([cwd]);
         const legConfig: Partial<SandboxRuntimeConfig> = {
           network: networkOff(),
           // `allowWrite: [cwd]` on both legs even though the command only
@@ -760,7 +768,12 @@ export class SandboxExecutor {
           // allowWrite, and a self-test that omits it is one more gratuitous
           // difference from the real invocation — exactly the shape of gap
           // that let this file's own bug hide from the old probe.
-          filesystem: { denyRead, allowWrite: [cwd], denyWrite: [] },
+          filesystem: {
+            denyRead: [...legScope.denyRead, ...denyRead],
+            allowRead: [...legScope.allowRead],
+            allowWrite: [cwd],
+            denyWrite: [],
+          },
         };
         const wrapped = await SandboxManager.wrapWithSandboxArgv(
           `cat ${sentinelPath}`,
@@ -933,6 +946,10 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
     const timer = setTimeout(() => controller.abort(), SELFTEST_LEG_TIMEOUT_MS);
     let result: ExecResult;
     try {
+      // Same read scope production calls run under: the hook leg `git init`s
+      // and `cat`s inside `cwd`, and without its allow entry the positive
+      // controls would fail for lack of reads rather than lack of writes.
+      const hookScope = buildReadScope([cwd]);
       const legConfig: Partial<SandboxRuntimeConfig> = {
         network: networkOff(),
         // The production pre-scan over this call's roots — the same
@@ -941,7 +958,8 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
         // Repositories created mid-command stay invisible to it on purpose:
         // they are the host profile's proof, not this list's.
         filesystem: {
-          denyRead: [],
+          denyRead: [...hookScope.denyRead],
+          allowRead: [...hookScope.allowRead],
           allowWrite: [cwd],
           denyWrite: [...nestedGitHooksDirs(cwd), ...nestedGitHookDenyGlobs()],
         },
@@ -1112,9 +1130,18 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
       const timer = setTimeout(() => controller.abort(), SELFTEST_LEG_TIMEOUT_MS);
       let leg: ExecResult;
       try {
+        // Linux-only leg, same read scope as production: the contained node
+        // client must start (binary + loader readable) so that its failure
+        // to connect reads as a held filter rather than a stillborn process.
+        const unixScope = buildReadScope([cwd]);
         const legConfig: Partial<SandboxRuntimeConfig> = {
           network: networkOff(),
-          filesystem: { denyRead: [], allowWrite: [cwd], denyWrite: [] },
+          filesystem: {
+            denyRead: [...unixScope.denyRead],
+            allowRead: [...unixScope.allowRead],
+            allowWrite: [cwd],
+            denyWrite: [],
+          },
         };
         const wrapped = await SandboxManager.wrapWithSandboxArgv(
           command,
@@ -1190,12 +1217,19 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
    * per-call config below: srt merges customConfig per-field, and relying on
    * that merge to preserve a deny list is one ambiguity too many for the part
    * that holds the Root of Trust.
+   *
+   * Reads are allow-scoped from this config down (`./read-scope.ts`): the
+   * root deny plus an explicit allow list, never a finite deny over an open
+   * host. The base allow list holds the system paths only — a wrap without
+   * per-call roots degrades to "system binaries, no data", fail-closed.
    */
   private baseConfig(): SandboxRuntimeConfig {
+    const scope = buildReadScope([]);
     return {
       network: networkOff(),
       filesystem: {
-        denyRead: [...this.guards.denyRead],
+        denyRead: [...scope.denyRead, ...this.guards.denyRead],
+        allowRead: [...scope.allowRead],
         allowWrite: [],
         denyWrite: [...this.guards.denyWrite],
       },
@@ -1209,13 +1243,16 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
    * not the home, not the caller's cwd — and direct IP/proxy egress is off.
    * On Linux a contained command cannot open `socket(AF_UNIX, …)` at all: the
    * seccomp filter is requested and the self-test refuses the first command
-   * when it did not hold. Whole-host reads can disclose data; ADR-0091
-   * therefore declares `reversible: 'no'` and the kernel asks on every call.
+   * when it did not hold. Reads are allow-scoped (`./read-scope.ts`): the
+   * caller's `cwd`, the session scratch and the listed system paths, plus
+   * the `denyRead` guards on top — the rest of the host is not readable from
+   * this lane. ADR-0091 still declares `reversible: 'no'` and the kernel asks
+   * on every call: scoping bounds *what* a command can disclose, the ask
+   * governs *whether* it may run at all.
    *
-   * `cwd` is still the caller's: reading is the point, and `--ro-bind / /`
-   * makes the whole filesystem readable minus `guards.denyRead` either way.
-   * What changes between the lanes is `allowWrite`, and `ReadOnlyExecRequest`
-   * is the type that makes it unchangeable from outside.
+   * `cwd` is still the caller's: reading is the point. What changes between
+   * the lanes is `allowWrite`, and `ReadOnlyExecRequest` is the type that
+   * makes it unchangeable from outside.
    */
   async runReadOnly(req: ReadOnlyExecRequest): Promise<ExecResult> {
     return this.execute({ ...req, writeScope: [] });
@@ -1230,11 +1267,13 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
     await this.ensureInit();
     const scratch = this.scratch();
     const timeoutMs = Math.min(req.timeoutMs ?? EXEC_DEFAULT_TIMEOUT_MS, EXEC_MAX_TIMEOUT_MS);
+    const readScope = buildReadScope([req.cwd, ...req.writeScope, scratch]);
 
     const perCall: Partial<SandboxRuntimeConfig> = {
       network: networkOff(),
       filesystem: {
-        denyRead: [...this.guards.denyRead],
+        denyRead: [...readScope.denyRead, ...this.guards.denyRead],
+        allowRead: [...readScope.allowRead],
         // The scratch is in both lanes, and it is the *only* entry the
         // read-only lane has: `runReadOnly` passes `writeScope: []`, so this
         // spread contributes nothing there. `cmd1 > f && cmd2 < f` keeps
@@ -1298,6 +1337,18 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
       if (value !== undefined && process.env[key] !== value) out[key] = value;
     }
     out.TMPDIR = scratch;
+    // Git must not fail closed on an unreadable `$HOME`. With reads
+    // allow-scoped, `~/.gitconfig` is EPERM by design (a static token in
+    // `http.extraHeader` would otherwise ride every shell call), and git
+    // treats even `init` as fatal when the global config is unreadable —
+    // measured on the Xcode-shim git. Pointing both files at `/dev/null`
+    // keeps repo-local config, `-c` flags and srt's own `GIT_CONFIG_COUNT`
+    // safe.directory plumbing working with no home reads at all (precedent:
+    // `evals/acceptance/scenarios/a-lifecycle.accept.ts`). A commit that
+    // needs an identity now says `Author identity unknown` instead of
+    // silently borrowing the owner's — the loud, ask-gated failure.
+    out.GIT_CONFIG_GLOBAL = '/dev/null';
+    out.GIT_CONFIG_SYSTEM = '/dev/null';
     return out;
   }
 

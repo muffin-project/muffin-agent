@@ -405,9 +405,9 @@ export function buildRuntime(
      * Extra paths no tool may read, layered on top of `mandatoryGuards` —
      * never a substitute for it. Production never passes this; it exists for
      * a caller that runs a *real* model against a throwaway home and needs
-     * the read-only shell lane (`sys.shell`, ADR-0074 punto 4 — deliberately
-     * allow-by-default on reads, `--ro-bind / /` minus the mandatory guards)
-     * to see only that home, not the operator's real one. `evals/character/run.ts`
+     * the read-only shell lane (`sys.shell`, ADR-0074 punto 4 — allow-scoped
+     * on reads since `read-scoped-workspace`, plus these extra denies) to
+     * see only that home, not the operator's real one. `evals/character/run.ts`
      * is the first caller: a probe whose fixture workspace has nothing to
      * find can send the model looking on the real disk, and a real network
      * model's tool result is bytes leaving the machine (found running D13's
