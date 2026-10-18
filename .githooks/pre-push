@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+#
+# Feedback locale veloce prima del push. Non è un gate: l'integrazione la
+# autorizzano solo i check GitHub richiesti (CONTRIBUTING.md). Attivazione,
+# una volta per clone:
+#
+#   git config core.hooksPath .githooks
+#
+# Bypass: MUFFIN_SKIP_HOOKS=1 git push …
+set -euo pipefail
+
+if [ "${MUFFIN_SKIP_HOOKS:-}" = "1" ]; then
+  echo "pre-push: saltato (MUFFIN_SKIP_HOOKS=1)"
+  exit 0
+fi
+
+base_ref=""
+for ref in origin/dev origin/main; do
+  if git rev-parse --verify -q "$ref" >/dev/null; then
+    base_ref="$ref"
+    break
+  fi
+done
+
+echo "pre-push: typecheck (tsc --noEmit)"
+npx tsc --noEmit
+
+if [ -z "$base_ref" ]; then
+  echo "pre-push: nessun origin/dev o origin/main da confrontare; salto lint e test"
+  exit 0
+fi
+
+changed="$(git diff --name-only "$base_ref"...HEAD)"
+if [ -z "$changed" ]; then
+  echo "pre-push: nessun cambiamento rispetto a $base_ref"
+  exit 0
+fi
+
+echo "pre-push: lint dei file cambiati rispetto a $base_ref"
+npx biome check --changed --since="$base_ref" --no-errors-on-unmatched
+
+echo "pre-push: test toccati dai cambi rispetto a $base_ref"
+npx vitest run --changed "$base_ref" --reporter=dot --passWithNoTests
