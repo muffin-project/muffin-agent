@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SandboxRuntimeConfig } from '@anthropic-ai/sandbox-runtime';
+import type { FilesystemPathEntry, SandboxRuntimeConfig } from '@anthropic-ai/sandbox-runtime';
 import { SandboxExecutor } from './executor.js';
 import type { SandboxProbe } from './probe.js';
 import { READ_DENY_ROOT } from './read-scope.js';
@@ -58,10 +58,14 @@ const available = (): SandboxProbe => ({ available: true, mechanism: 'bubblewrap
  * stand-in that refused on any non-empty deny list would refuse the control
  * leg too and model a broken sandbox rather than a holding one. The
  * discriminator is what the leg adds ON TOP of the root: the sentinel for
- * the deny leg, nothing for the allow leg.
+ * the deny leg, nothing for the allow leg. Since srt 0.0.80 an entry is the
+ * union `FilesystemPathEntry` (`string | { path; literal: true }`), so the
+ * root comparison reads the path of either spelling.
  */
-const denyReadOf = (customConfig: Partial<SandboxRuntimeConfig> | undefined): readonly string[] =>
-  (customConfig?.filesystem?.denyRead ?? []).filter((p) => p !== READ_DENY_ROOT);
+const denyReadOf = (customConfig: Partial<SandboxRuntimeConfig> | undefined): readonly FilesystemPathEntry[] =>
+  (customConfig?.filesystem?.denyRead ?? []).filter(
+    (p) => (typeof p === 'string' ? p : p.path) !== READ_DENY_ROOT,
+  );
 
 /**
  * Contenimento che regge: la gamba con deny rifiuta, quella di controllo

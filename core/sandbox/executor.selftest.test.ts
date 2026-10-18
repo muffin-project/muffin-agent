@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SandboxRuntimeConfig } from '@anthropic-ai/sandbox-runtime';
+import type { FilesystemPathEntry, SandboxRuntimeConfig } from '@anthropic-ai/sandbox-runtime';
 import { SandboxExecutor } from './executor.js';
 import type { SandboxProbe } from './probe.js';
 import { READ_DENY_ROOT } from './read-scope.js';
@@ -66,10 +66,14 @@ const available = (): SandboxProbe => ({ available: true, mechanism: 'bubblewrap
  * The per-leg denies beyond the read-scope root (same contract as
  * `reset-condiviso.test.ts`): since `read-scoped-workspace` every leg carries
  * `denyRead: ['/', …]`, so the stand-in refuses on what a leg adds ON TOP of
- * the root, never on the root itself.
+ * the root, never on the root itself. Since srt 0.0.80 an entry is the union
+ * `FilesystemPathEntry` (`string | { path; literal: true }`), so the root
+ * comparison reads the path of either spelling.
  */
-const denyReadOf = (customConfig: Partial<SandboxRuntimeConfig> | undefined): readonly string[] =>
-  (customConfig?.filesystem?.denyRead ?? []).filter((p) => p !== READ_DENY_ROOT);
+const denyReadOf = (customConfig: Partial<SandboxRuntimeConfig> | undefined): readonly FilesystemPathEntry[] =>
+  (customConfig?.filesystem?.denyRead ?? []).filter(
+    (p) => (typeof p === 'string' ? p : p.path) !== READ_DENY_ROOT,
+  );
 
 function mockProtectedSandbox(options: { hookWriteAllowed?: boolean; hookHardlinkAllowed?: boolean; unixFilterAbsent?: boolean } = {}): void {
   wrapWithSandboxArgv.mockImplementation(async (command, _binShell, customConfig) => ({
