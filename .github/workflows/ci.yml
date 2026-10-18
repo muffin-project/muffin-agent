@@ -139,10 +139,12 @@ jobs:
       # Stessa regola di `npm run lint` locale (`biome check --changed`), con
       # la base esplicita perché in CI non esiste un `origin/dev` da leggere in
       # `biome.json`. Solo sulle PR: sul push a main questo percorso è già
-      # coperto dalle PR che lo hanno prodotto.
+      # coperto dalle PR che lo hanno prodotto. `--no-errors-on-unmatched`:
+      # una PR di soli YAML/Markdown non deve fallire perché Biome non
+      # processa nessuno dei suoi file.
       - if: github.event_name == 'pull_request'
         name: lint Biome (file cambiati rispetto alla base)
-        run: npx biome check --changed --since=${{ github.event.pull_request.base.sha }}
+        run: npx biome check --changed --since=${{ github.event.pull_request.base.sha }} --no-errors-on-unmatched
 
       # ADR-0078: ADR-0019 promised this check, but no CI implemented it. It
       # now runs in the required GitHub Actions `verifica` job:

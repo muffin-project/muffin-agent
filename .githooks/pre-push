@@ -37,18 +37,7 @@ if [ -z "$changed" ]; then
 fi
 
 echo "pre-push: lint dei file cambiati rispetto a $base_ref"
-npx biome check --changed --since="$base_ref"
+npx biome check --changed --since="$base_ref" --no-errors-on-unmatched
 
 echo "pre-push: test toccati dai cambi rispetto a $base_ref"
-set +e
-out="$(npx vitest run --changed "$base_ref" --reporter=dot 2>&1)"
-code=$?
-set -e
-printf '%s\n' "$out"
-if [ "$code" -ne 0 ]; then
-  if printf '%s' "$out" | grep -q "No test files found"; then
-    echo "pre-push: nessun test toccato dai cambi"
-  else
-    exit "$code"
-  fi
-fi
+npx vitest run --changed "$base_ref" --reporter=dot --passWithNoTests
