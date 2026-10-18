@@ -260,7 +260,11 @@ describe('the owner-class prompt does not move', () => {
     // #529: session plan rows are context, not a grant or Turn completion rule.
     // Re-misurato 2026-10-15 (slice/quote-authority): la riga memory_forget
     // insegna instruction invece di `{}`.
-    '0e585218ed6b18a7d1cda49fcf4f5ba95d1f69d1708247b949da198e60f07015';
+    // Ri-fissato 2026-10-18 (docs-hygiene, PR #921): la persona non dichiara
+    // più «worker» — nessun meccanismo lo sostiene; la sola differenza nella
+    // stringa assemblata è quella parola.
+    // Pin precedente: `0e585218ed6b18a7d1cda49fcf4f5ba95d1f69d1708247b949da198e60f07015`.
+    '7e98f233b3da23b3d5c03513b73d337f10b6032d78636a7352ff955afb7c4d95';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
