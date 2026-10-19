@@ -15,7 +15,7 @@ import { fence } from '../../core/memory/spotlight.js';
 import { sleep } from '../../core/net/sleep.js';
 import type { SessionStore } from '../../core/session/store.js';
 import type { TrustTier } from '../../core/policy/types.js';
-import { identify, tierOf, type IncomingIdentity, type SurfaceIdentity } from '../../core/surface/types.js';
+import { identify, tierOf, OWNER_SESSION_KEY, type IncomingIdentity, type SurfaceIdentity } from '../../core/surface/types.js';
 import { composeTurnText as sharedComposeTurnText } from '../shared/ingress/compose.js';
 import { tryPair as sharedTryPair } from '../shared/ingress/pair.js';
 import { rememberWithoutReplying } from '../shared/ingress/remember.js';
@@ -27,6 +27,7 @@ import {
   tryControlCommand,
 } from '../shared/ingress/lane.js';
 import { contentTierOf, type InboundEvent, type IngressPart, type IngressPort } from '../shared/ingress/types.js';
+import { runWork } from '../shared/ingress/work.js';
 import { ingestAttachment, type Arrival } from '../shared/ingress/ingest.js';
 import {
   receive,
@@ -909,6 +910,14 @@ export class TelegramConnector {
    * one already aborted from its previous life.
    */
   private abortController = new AbortController();
+  /**
+   * Una convocazione guest alla volta: il turno gira sulla sessione dell'owner,
+   * e due turni contemporanei sulla stessa sessione sarebbero due narratori
+   * della stessa conversazione. Non è un queue — il canale guest non può
+   * tenere coda (una sola risposta, già spesa per dire «aspetta»), quindi la
+   * seconda convocazione riceve un avviso onesto e basta.
+   */
+  private convocazioneViva = false;
   /**
    * Resolves once the current `run()` call has actually returned — not when
    * `stop()` is asked for, when it is granted. `stop()` awaits this (bounded
@@ -2034,6 +2043,23 @@ export class TelegramConnector {
         continue;
       }
 
+      // Convocazione in guest mode (Bot API 10.0): qualcuno ha menzionato il
+      // bot in una chat dove il bot non è mai entrato, e l'unico canale d'uscita
+      // è `answerGuestQuery`. Anche questa passa prima di `parseUpdate`, che di
+      // un `guest_message` non sa niente: lasciarla cadere nel ramo «niente da
+      // fare» sarebbe l'equivalente silenzioso di non averla mai ricevuta.
+      const convocazione = (update as { guest_message?: Message }).guest_message;
+      if (convocazione !== undefined) {
+        // Non si aspetta: un turno in guest gira in background come un turno
+        // normale. Aspettarlo qui dentro significherebbe congelare il poll —
+        // e l'owner che scrive in DM resterebbe fuori finché il turno guest
+        // non finisce. L'update è processato alla consegna, come i messaggi:
+        // la risposta ha già un suo canale e un suo id.
+        this.markProcessedQuietly(stored.updateId, log);
+        void this.gestisciConvocazione(convocazione, log);
+        continue;
+      }
+
       const incoming = parseUpdate(update, this.meId);
 
       if (!incoming) {
@@ -2859,6 +2885,125 @@ export class TelegramConnector {
    */
   private corsia(chatId: number): string {
     return laneKey('telegram', chatId);
+  }
+
+  /**
+   * Convocazione in guest mode (Bot API 10.0): il bot è stato menzionato in
+   * una chat dove non è mai entrato, e l'unica risposta possibile è
+   * `answerGuestQuery` — una sola, agganciata al `guest_query_id`, senza
+   * streaming, senza corsia viva, senza presenza: il canale non li può
+   * portare.
+   *
+   * Il cancello è l'id del chiamante contro l'id dell'owner: la convocazione
+   * guest non arriva da una stanza di cui il bot fa parte, arriva attribuita
+   * da Telegram stesso. Chiunque altro non riceve niente — nemmeno un «no»: un
+   * bot guest che risponde ai curiosi aprirebbe una superficie di sondaggio, e
+   * questa fetta non ne apre una. L'update è marcato processato in ogni caso:
+   * una convocazione che non aprirà mai un turno non deve restare in coda a
+   * nascondere quelle che lo farebbero.
+   *
+   * Il turno gira sulla sessione dell'owner, la stessa dei DM: chi convoca è
+   * l'owner stesso da una chat estranea, e la continuità con la conversazione
+   * sua è esattamente il punto (ADR-0056).
+   */
+  private async gestisciConvocazione(convocazione: Message, log: (line: string) => void): Promise<void> {
+    const queryId = convocazione.guest_query_id;
+    const testo = convocazione.text?.trim();
+    if (queryId === undefined || testo === undefined || testo === '') return;
+    const chiamante = convocazione.guest_bot_caller_user?.id;
+    if (chiamante === undefined) {
+      log('telegram: convocazione guest senza chiamante identificabile — ignorata');
+      return;
+    }
+    const incoming: Incoming = {
+      updateId: 0,
+      chatId: convocazione.chat.id,
+      text: testo,
+      isPrivate: convocazione.chat.type === 'private',
+      fromId: chiamante,
+      messageId: convocazione.message_id,
+    };
+    // Il cancello è sul chiamante, non sulla stanza. `identify()` concede
+    // l'identità di owner solo nei DM — regola nata dal fallimento documentato
+    // in `core/policy/types.ts`: confrontare l'id della *chat* faceva arrivare
+    // come owner chiunque parlasse nella stanza giusta. Qui la stanza è
+    // irrilevante per contratto: è Telegram stesso che certifica chi ha
+    // convocato (`guest_bot_caller_user`), quindi il confronto è tra quell'id
+    // e l'id dell'owner, mai tra l'id della chat e niente.
+    const owner = this.deps.config.ownerUserId;
+    if (owner === undefined || String(chiamante) !== String(owner)) {
+      // Fail-closed: la convocazione di uno sconosciuto non lascia traccia
+      // oltre al log.
+      log(`telegram: convocazione guest da non-owner (${chiamante}) — ignorata`);
+      return;
+    }
+    const identity: SurfaceIdentity = {
+      principal: { kind: 'owner', connector: 'telegram', externalId: String(chiamante) },
+      tenant: 'host',
+      sessionKey: OWNER_SESSION_KEY,
+    };
+    const chatOwner = this.deps.config.ownerChatId ?? this.deps.config.ownerUserId;
+    if (this.convocazioneViva || (chatOwner !== undefined && this.corsie.isLive(this.corsia(chatOwner)))) {
+      await this.rispondiConvocazione(queryId, 'Sto finendo un altro turno: richiamami tra poco.', log);
+      return;
+    }
+    this.convocazioneViva = true;
+    try {
+      const evento: InboundEvent = {
+        port: this.port,
+        eventId: `guest:${queryId}`,
+        compositionId: `guest:${queryId}`,
+        identity: identitaDi(incoming),
+        address: {
+          channel: `telegram:${incoming.chatId}`,
+          replyTo: String(incoming.messageId),
+          record: { guestQueryId: queryId },
+        },
+        addressing: { direct: false, mentionsBot: true, repliesToBot: false },
+        parts: partsFromIncoming(incoming),
+        receivedAt: new Date(this.now()),
+      };
+      const esito = await runWork(
+        { loop: this.deps.loop, sessions: this.deps.sessions, lane: this.deps.lane },
+        this.port,
+        evento,
+        {
+          workId: `guest-${queryId}`,
+          identity,
+          text: testo,
+          contentTaint: 0,
+          replyTo: { guestQueryId: queryId },
+          signal: this.abortController.signal,
+          steer: () => [],
+        },
+      );
+      // Una risposta sola: se il testo non sta nel primo pezzo, il resto non
+      // ha un secondo messaggio dove andare. Meglio un taglio onesto che il
+      // silenzio o un secondo invio che Bot API rifiuterebbe.
+      const pezzi = splitHtml(toTelegramHtml(esito.text ?? ''));
+      const html = pezzi.length <= 1 ? (pezzi[0] ?? '') : `${pezzi[0]}\n\n…`;
+      await this.rispondiConvocazione(queryId, html, log);
+    } catch (error) {
+      // Il turno è fallito prima della risposta: il canale è ancora libero,
+      // e il silenzio assoluto sarebbe la peggiore delle risposte.
+      await this.rispondiConvocazione(queryId, 'Il turno è fallito prima della risposta. Riprova.', log);
+      log(`telegram: convocazione guest non gestita — ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      this.convocazioneViva = false;
+    }
+  }
+
+  /**
+   * L'unico canale che esiste per una convocazione guest: se è chiuso (query
+   * scaduta, risposta già spesa) non c'è fallback — il bot non è membro della
+   * chat e `sendMessage` lì non arriva. Il log è tutto.
+   */
+  private async rispondiConvocazione(queryId: string, html: string, log: (line: string) => void): Promise<void> {
+    try {
+      await this.deps.api.answerGuestQuery(queryId, html);
+    } catch (error) {
+      log(`telegram: risposta guest non consegnata — ${error instanceof TelegramError ? error.description : String(error)}`);
+    }
   }
 
   /**
