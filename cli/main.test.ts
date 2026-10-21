@@ -100,6 +100,24 @@ describe('muffin init infers the provider from the key — headless, no TTY requ
     expect(config.provider.baseUrl).toBeUndefined();
   });
 
+  it('a Groq-shaped key ends up as openai-compat on the Groq endpoint with its own secret name, and says so', () => {
+    const { dir, xdg } = scratchHome();
+    const r = muffin(
+      { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg },
+      ['init'],
+      'gsk_realistic_groq_key',
+    );
+    expect(r.code).toBe(0);
+    expect(r.err).toContain('openai-compat');
+    expect(r.err).toContain('dedotto dalla chiave');
+    expect(r.err).toContain('gsk_…');
+
+    const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'));
+    expect(config.provider.kind).toBe('openai-compat');
+    expect(config.provider.baseUrl).toBe('https://api.groq.com/openai/v1');
+    expect(config.provider.apiKeyRef).toBe('secret://groq_api_key');
+  });
+
   it('an unrecognised key still defaults to anthropic, but now names the reason instead of staying silent', () => {
     const { dir, xdg } = scratchHome();
     const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['init'], 'xoxb-unknown-shape');

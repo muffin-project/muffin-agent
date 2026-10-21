@@ -14,7 +14,7 @@ import {
   paths,
   writeAuthoritativeSecret,
 } from '../core/config/config.js';
-import { ALL_API_KEY_NAMES, LEGACY_API_KEY_NAME } from '../core/config/providers.js';
+import { ALL_API_KEY_NAMES, LEGACY_API_KEY_NAME, PROVIDERS } from '../core/config/providers.js';
 import { checkTemporalWindow, EVERY_INSTANT, normaliseDate } from '../core/memory/recall.js';
 import type { TrustTier } from '../core/policy/types.js';
 import { buildHardenPlan, formatHardenPlan } from '../core/rot/harden.js';
@@ -619,7 +619,7 @@ async function cmdInit(argv: string[]): Promise<number> {
   if (apiKey && looksLikeTelegramToken(apiKey)) {
     process.stderr.write(
       `! sembra il token di un bot Telegram, non una chiave del modello — non la salvo.\n` +
-        `  La chiave del modello è OpenRouter (sk-or-…) o Anthropic (sk-ant-…): https://openrouter.ai/keys\n` +
+        `  La chiave del modello è OpenRouter (sk-or-…), Groq (gsk_…) o Anthropic (sk-ant-…): https://openrouter.ai/keys, ${PROVIDERS.groq.keysUrl}\n` +
         `  Il token del bot va altrove: ${secretStoreHint('telegram_token')}\n`,
     );
     apiKey = undefined;

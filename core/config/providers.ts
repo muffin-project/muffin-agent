@@ -8,7 +8,7 @@
  */
 
 /** Gli id dei provider conosciuti. Un `enum` di stringhe, così un id sconosciuto in config non passa lo schema. */
-export type ProviderId = 'openrouter' | 'chatgpt' | 'anthropic';
+export type ProviderId = 'openrouter' | 'groq' | 'chatgpt' | 'anthropic';
 
 export type ProviderEntry = {
   id: ProviderId;
@@ -100,6 +100,16 @@ export const PROVIDERS: Readonly<Record<ProviderId, ProviderEntry>> = {
     modelsPath: '/models',
     catalogueNeedsKey: false,
     secretName: 'openrouter_api_key',
+  },
+  groq: {
+    id: 'groq',
+    label: 'Groq',
+    kind: 'openai-compat',
+    baseUrl: 'https://api.groq.com/openai/v1',
+    keysUrl: 'https://console.groq.com/keys',
+    modelsPath: '/models',
+    catalogueNeedsKey: true,
+    secretName: 'groq_api_key',
   },
   chatgpt: {
     id: 'chatgpt',
