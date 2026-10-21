@@ -74,6 +74,10 @@ capabilities before adding discovery/deferred-loading machinery.
 
 ## MVP / trusted alpha
 
+The MVP outcome, its in/out boundary and its proof scorecard are owned by
+[MVP.md](MVP.md). This section owns only **which deliberately deferred
+capability is reconsidered in this phase**.
+
 These are the strongest post-DAY-1 candidates. They are not automatically required before dogfood.
 
 ### Installation, deployment and runtime direction (reconciled from #481)

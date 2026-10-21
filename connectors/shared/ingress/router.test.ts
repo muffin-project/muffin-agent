@@ -8,7 +8,7 @@ import type { LoopDeps } from '../../../agent/loop.js';
 import type { Provider } from '../../../agent/providers/types.js';
 import type { SessionStore } from '../../../core/session/store.js';
 import type { TurnRecord } from '../../../core/turns/store.js';
-import { ModelLane } from '../../../core/turns/model-lane.js';
+import { LANE_TURNS, ModelLane } from '../../../core/turns/model-lane.js';
 import { QueueNotices } from './lane.js';
 import { INGRESS_STAGES, receive, recover, type IngressHooks, type IngressStage, type RecoverHooks } from './router.js';
 import { makeIngressPort, type InboundEvent, type IngressPort } from './types.js';
@@ -524,5 +524,34 @@ describe('continuazione conversazionale (P0-B)', () => {
     // Nessuna riga continuabile in questa sessione: il testo procede come un
     // turno fresco ordinario (nessun match = nessuna continuazione).
     expect(esito.kind).toBe('answered');
+  });
+});
+
+describe('corsia occupata: il router accoda, sveglia e chiude l evento', () => {
+  it('nessuna consegna in banda, `finish` sì, e la spinta parte subito', async () => {
+    const traccia = nuovaTraccia();
+    const env = runtimeVero();
+    expect(env.lane.take(LANE_TURNS)).toBeNull();
+    try {
+      const esito = await receive(
+        PORT,
+        evento(),
+        ganci(traccia, {
+          work: env,
+          wake: () => traccia.scritture.push('wake'),
+        }),
+      );
+      // `suspended` è l'esito onesto: il turno esiste ed è durevole, ma non ha
+      // ancora una risposta — la consegnerà la corsia, come per un turno che
+      // si sospende su `wait`.
+      expect(esito).toEqual({ kind: 'suspended', workId: 'w1' });
+      expect(traccia.scritture).toContain('wake');
+      expect(traccia.scritture).toContain('finish');
+      expect(traccia.stadi).not.toContain('deliver');
+      expect(traccia.stadi).not.toContain('settle');
+      expect(env.loop.turns.get('w1')?.status).toBe('runnable');
+    } finally {
+      env.lane.release(LANE_TURNS);
+    }
   });
 });

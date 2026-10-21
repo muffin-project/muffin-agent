@@ -19,6 +19,7 @@ import {
   writeAuthoritativeSecret,
   writeSecret,
   type Config,
+  type PromptVersion,
   type ProviderKind,
   type SecretBackend,
 } from '../core/config/config.js';
@@ -45,6 +46,17 @@ export type InitOptions = {
   apiKey?: string;
   /** Where `apiKey` is written. `persistent` survives `muffin uninstall`. */
   secretBackend?: SecretBackend;
+  /**
+   * La versione del system prompt da selezionare (`config.prompt.version`).
+   *
+   * Esiste come opzione, e non solo come comando `muffin prompt version`, per
+   * un solo chiamante: `evals/character/run.ts`, che misura lo stesso modello
+   * su v1 e su v2 e deve poter nascere con la manopola già girata. Qui scrive
+   * il campo in config; l'assemblaggio resta deciso da `promptVersion()`, che
+   * è l'unica risposta alla domanda. Assente = nessun campo scritto, e una
+   * config che non lo nomina resta byte per byte quella di prima.
+   */
+  promptVersion?: PromptVersion;
   hardened?: boolean;
   force?: boolean;
 };
@@ -241,6 +253,7 @@ export function runInit(options: InitOptions = {}): InitStep[] {
       light: options.lightModel ?? prior?.models.light ?? defaults.light,
     },
     rot: { mode: options.hardened ? 'hardened' : (prior?.rot.mode ?? 'single-user') },
+    ...(options.promptVersion ? { prompt: { version: options.promptVersion } } : {}),
   };
   saveConfig(config, home);
   step('config', prior ? 'esistente conservata (solo bootstrap/mancanti, 0600)' : `${p.config} (0600)`);

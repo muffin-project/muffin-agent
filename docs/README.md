@@ -48,6 +48,7 @@ unused manifest would be another source of drift.
 | What does the system literally do or accept? | Executable code, schemas and shipped config; tests/evals are evidence that the path is exercised. |
 | Why does Muffin exist? | `docs/product/THESIS.md` |
 | Where is the product trying to go? | `docs/product/VISION.md` |
+| What is the MVP, what proves it, and what is explicitly out? | `docs/product/MVP.md` |
 | Which cognitive/human hypotheses is Muffin exploring, with what evidence status and kill criteria? | `docs/product/COGNITIVE-DESIGN.md` |
 | In which phase should a deliberately deferred capability be reconsidered? | `docs/product/ROADMAP.md` |
 | How is Muffin shaped now? | `docs/architecture/ARCHITECTURE.md` |

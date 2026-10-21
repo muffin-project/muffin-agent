@@ -35,6 +35,7 @@ const USAGE = `usage: tsx evals/character/run.ts [options]
   --api-key-env <VAR>                    env var holding the API key (never printed, never argv)
                                          default: LLM_API_KEY, else OPENROUTER_API_KEY
   --judge-model <id>                     judge model, same provider/base-url/api-key-env
+  --prompt-version <v1|v2>               which system prompt the model's home assembles (default: v1)
   --config <file.json>                   alternative to the flags above, outside any home — see README
   --probes <a,b,c>                       optional filter, default: all 17
   --out <dir>                            default: evals/character/out
@@ -77,10 +78,34 @@ const ModelTargetSchema = z.object({
   baseUrl: z.string().url().optional(),
   model: z.string().min(1),
   apiKeyEnv: z.string().min(1),
+  /**
+   * Quale system prompt la home di questo target deve assemblare
+   * (`config.prompt.version`, scritto da `runInit`). Assente = v1, il default
+   * di una config che non nomina la manopola.
+   *
+   * Per-probe-e-non-per-corsa di proposito: è ciò che rende possibile la sola
+   * misura che questo eval non sapeva fare — **lo stesso modello due volte**,
+   * una su v1 e una su v2, in un report solo. Etichette distinte
+   * (`m@v2`) perché il report raggruppa per etichetta, e due righe identiche
+   * che differiscono solo per la versione non si leggono.
+   */
+  promptVersion: z.enum(['v1', 'v2']).optional(),
 });
 /** `z.infer`, not a hand-written interface — see `core/config/config.ts Config` for why: a parallel type only drifts from the schema it copies. */
 export type ModelTarget = z.infer<typeof ModelTargetSchema>;
 const ConfigFileSchema = z.object({ models: z.array(ModelTargetSchema).min(1), judge: ModelTargetSchema.optional() });
+
+/**
+ * L'etichetta che identifica un target in tutto l'output — cartella, righe del
+ * report, token. Porta la versione del prompt **solo quando è dichiarata**:
+ * due target dello stesso modello a versioni diverse devono produrre due
+ * cartelle e due righe distinte, altrimenti la misura v1-vs-v2 si sovrascrive
+ * da sola — un rischio che nessun test di questo file vedrebbe, perché ogni
+ * corsa, presa da sola, sarebbe verde.
+ */
+function effectiveLabel(target: ModelTarget): string {
+  return target.promptVersion ? `${target.label}@${target.promptVersion}` : target.label;
+}
 
 export type RunConfig = {
   models: ModelTarget[];
@@ -125,6 +150,7 @@ export function parseCli(argv: string[], defaultOutDir: string): RunConfig {
       models: { type: 'string' },
       'api-key-env': { type: 'string' },
       'judge-model': { type: 'string' },
+      'prompt-version': { type: 'string' },
       config: { type: 'string' },
       probes: { type: 'string' },
       out: { type: 'string' },
@@ -138,6 +164,12 @@ export function parseCli(argv: string[], defaultOutDir: string): RunConfig {
   const fakeApprove = values['fake-approve'] === true;
   const outDir = values.out ?? defaultOutDir;
   const probeIds = values.probes ? values.probes.split(',').map((s) => s.trim()).filter((s) => s.length > 0) : null;
+  const promptVersionRaw = values['prompt-version'];
+  if (promptVersionRaw !== undefined && promptVersionRaw !== 'v1' && promptVersionRaw !== 'v2') {
+    throw new Error(`${USAGE}\n\n--prompt-version accetta v1 o v2`);
+  }
+  const promptVersion: 'v1' | 'v2' | undefined = promptVersionRaw;
+  const pvSpread = promptVersion ? { promptVersion } : {};
 
   let models: ModelTarget[];
   let judge: ModelTarget | null;
@@ -149,7 +181,7 @@ export function parseCli(argv: string[], defaultOutDir: string): RunConfig {
   } else if (dryRun) {
     const ids = (values.models ?? values.model ?? DRY_RUN_DEFAULT_MODELS.join(',')).split(',').map((s) => s.trim());
     const provider = (values.provider as ProviderKind | undefined) ?? 'anthropic';
-    models = ids.map((id) => ({ label: id, provider, model: id, apiKeyEnv: 'UNUSED_UNDER_DRY_RUN', ...(values['base-url'] ? { baseUrl: values['base-url'] } : {}) }));
+    models = ids.map((id) => ({ label: id, provider, model: id, apiKeyEnv: 'UNUSED_UNDER_DRY_RUN', ...(values['base-url'] ? { baseUrl: values['base-url'] } : {}), ...pvSpread }));
     judge = null;
   } else {
     const provider = values.provider;
@@ -161,7 +193,7 @@ export function parseCli(argv: string[], defaultOutDir: string): RunConfig {
     if (!modelsRaw) throw new Error(`${USAGE}\n\nserve --model o --models (o --config)`);
     const ids = modelsRaw.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
     const baseUrl = values['base-url'];
-    models = ids.map((id) => ({ label: id, provider, model: id, apiKeyEnv, ...(baseUrl ? { baseUrl } : {}) }));
+    models = ids.map((id) => ({ label: id, provider, model: id, apiKeyEnv, ...(baseUrl ? { baseUrl } : {}), ...pvSpread }));
     judge = values['judge-model'] ? { label: values['judge-model'], provider, model: values['judge-model'], apiKeyEnv, ...(baseUrl ? { baseUrl } : {}) } : null;
   }
 
@@ -361,6 +393,9 @@ export type ToolCallEvent = {
   isError: boolean | null;
 };
 
+const PACE_MS = Number.parseInt(process.env.MUFFIN_EVAL_PACE_MS ?? '0', 10) || 0;
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function runProbe(runtime: Runtime, probe: Probe): Promise<{ transcript: TurnRecord[]; turnIds: string[] }> {
   const session = runtime.deps.sessions.open(`probe-${probe.id}-${randomBytes(3).toString('hex')}`);
   const vars = seedContext(runtime, probe, session);
@@ -441,6 +476,13 @@ export function judgeCall(model: string, prompt: { system: string; user: string 
     // `core/memory/corsie-senza-reasoning.test.ts`. Senza questo campo il
     // giudice ragionava dentro il proprio tetto di uscita e tornava vuoto.
     thinking: 'off',
+    // La trascrizione di `casual-hey` è uscita identica in v1 e v2, ma il
+    // giudice le ha dato due verdetti diversi (`not_assistanty` fail→pass,
+    // `recognizably_muffin` fail→n/a): senza temperatura fissa il confronto
+    // misura il campionamento del giudice, non il prompt. `sampling` è
+    // l'override eval-only (`ChatCall.sampling`); i provider che non lo
+    // leggono restano sul proprio default.
+    sampling: { temperature: 0 },
     stream: false,
   };
 }
@@ -461,16 +503,33 @@ export function buildJudgePrompt(probe: Probe, transcript: string): { system: st
 }
 
 /** Tolerant on purpose: a judge reply that is not valid JSON marks every property `unparsed` rather than crashing the run. */
+/**
+ * Il primo prefisso che è JSON valido, provando le chiusure dall'ultima
+ * all'indietro.
+ *
+ * Il giudice del 21/10 ha chiuso con un residuo (`…]}]}`): JSON valido più
+ * una graffa e una parentesi di troppo. Contare le graffe non basta quando il
+ * modello lascia una virgoletta non escapata dentro un'evidenza; provare le
+ * chiusure vere e tenere la prima che parsea è più semplice e non accetta un
+ * oggetto troncato, perché senza `}` finale non c'è nessun candidato.
+ */
+function firstJsonValue(raw: string): unknown | null {
+  const start = raw.indexOf('{');
+  if (start < 0) return null;
+  for (let end = raw.lastIndexOf('}'); end > start; end = raw.lastIndexOf('}', end - 1)) {
+    try {
+      return JSON.parse(raw.slice(start, end + 1));
+    } catch {
+      // prova una chiusura precedente
+    }
+  }
+  return null;
+}
+
 export function parseJudgeOutput(raw: string, properties: readonly PropertyId[]): PropertyJudgement[] {
   const unparsed = (): PropertyJudgement[] => properties.map((property) => ({ property, verdict: 'unparsed' as const, evidence: raw.slice(0, 200) }));
-  const match = /\{[\s\S]*\}/.exec(raw);
-  if (!match) return unparsed();
-  let data: unknown;
-  try {
-    data = JSON.parse(match[0]);
-  } catch {
-    return unparsed();
-  }
+  const data = firstJsonValue(raw);
+  if (data === null) return unparsed();
   const judgements = (data as { judgements?: unknown }).judgements;
   if (!Array.isArray(judgements)) return unparsed();
   const byProperty = new Map<string, { verdict: unknown; evidence: unknown }>();
@@ -562,7 +621,7 @@ export function renderReport(rows: ReportRow[], models: readonly ModelTarget[], 
     .filter(([, c]) => c.fail > 0 && c.fail >= c.pass)
     .map(([model, c]) => `- **${model}**: ${c.fail} fail contro ${c.pass} pass — verifica a mano prima di considerarlo compatibile con questa persona; non deformare Muffin per adattarlo al modello.`)
     .join('\n');
-  const header = `# Character eval — report\n\ngenerato: ${new Date().toISOString()}\nmodelli: ${models.map((m) => m.label).join(', ')}\ngiudice: ${judge.label}\n\n${esito}\n\n`;
+  const header = `# Character eval — report\n\ngenerato: ${new Date().toISOString()}\nmodelli: ${models.map(effectiveLabel).join(', ')}\ngiudice: ${judge.label}\n\n${esito}\n\n`;
   const table =
     '| Probe | Proprietà | Modello | Giudice | Evidenza | Revisione umana |\n|---|---|---|---|---|---|\n' +
     rows.map((r) => `| ${r.probe} | ${r.property} | ${r.model} | ${r.verdict} | ${escapeCell(r.evidence)} | |`).join('\n');
@@ -581,12 +640,12 @@ export function renderTokenReport(rows: readonly TokenRow[], models: readonly Mo
   for (const r of rows) perModel.set(r.model, (perModel.get(r.model) ?? 0) + r.systemTokens + r.turnTokens);
   const lines = [...perModel.entries()]
     .map(([model, total]) => {
-      const price = priceOf(model) ?? { inputPerMTok: 15, outputPerMTok: 75 };
+      const price = priceOf(model.replace(/@v\d+$/, '')) ?? { inputPerMTok: 15, outputPerMTok: 75 };
       const usd = (total * price.inputPerMTok) / 1e6;
       return `- ${model}: ~${total} token stimati (lato input, ${rows.filter((r) => r.model === model).length} probe) a ${price.inputPerMTok}$/Mtok → ~$${usd.toFixed(4)} per corsa (solo input; output e giudice non stimati qui)`;
     })
     .join('\n');
-  const header = `# Character eval — stima dry-run\n\ngenerato: ${new Date().toISOString()}\nmodelli: ${models.map((m) => m.label).join(', ')}\n\n`;
+  const header = `# Character eval — stima dry-run\n\ngenerato: ${new Date().toISOString()}\nmodelli: ${models.map(effectiveLabel).join(', ')}\n\n`;
   const caveat =
     'Stima grezza (char/4), come `evals/acceptance/provider.ts` e `muffin prompt show`. Non conta: output del modello, ' +
     'il giudice (non gira sotto --dry-run), eventuali chiamate di consolidamento in background che il ' +
@@ -670,7 +729,7 @@ export async function runEval(
       const home = mkdtempSync(join(tmpdir(), 'muffin-character-home-'));
       homes.push(home);
       const workspace = mkdtempSync(join(tmpdir(), 'muffin-character-ws-'));
-      const modelOutDir = join(runOutDir, target.label);
+      const modelOutDir = join(runOutDir, effectiveLabel(target));
       mkdirSync(modelOutDir, { recursive: true });
 
       const baseUrl = fake ? fake.baseUrl : target.baseUrl;
@@ -681,6 +740,7 @@ export async function runEval(
         mainModel: target.model,
         lightModel: target.model,
         ...(baseUrl ? { baseUrl } : {}),
+        ...(target.promptVersion ? { promptVersion: target.promptVersion } : {}),
       });
 
       const runtime = buildRuntime(home, workspace, { extraDenyRead: [realHome] });
@@ -705,6 +765,7 @@ export async function runEval(
         for (const probe of probes) {
           currentProbeId = probe.id;
           const before = fake?.requests.length ?? 0;
+          if (PACE_MS > 0) await sleep(PACE_MS);
           const { transcript, turnIds } = await runProbe(runtime, probe);
           writeFileSync(join(modelOutDir, `${probe.id}.md`), renderTranscript(probe, transcript));
           for (const turnId of turnIds) {
@@ -724,8 +785,9 @@ export async function runEval(
             const made = fake!.requests.slice(before);
             const systemTokens = made.reduce((sum, r) => sum + approxTokens(r.system), 0);
             const turnTokens = made.reduce((sum, r) => sum + approxTokens(r.transcript), 0) - systemTokens;
-            tokenRows.push({ model: target.label, probe: probe.id, systemTokens, turnTokens, calls: made.length });
+            tokenRows.push({ model: effectiveLabel(target), probe: probe.id, systemTokens, turnTokens, calls: made.length });
           } else {
+            if (PACE_MS > 0) await sleep(PACE_MS);
             const result = await judgeProvider!.chat(judgeCall(config.judge!.model, buildJudgePrompt(probe, plainTranscript(transcript))));
             const judgements = parseJudgeOutput(result.text ?? '', probe.properties);
             // La risposta grezza, sempre, accanto al verdetto — non solo quando
@@ -740,7 +802,7 @@ export async function runEval(
               JSON.stringify({ model: result.model, stopReason: result.stopReason, usage: result.usage, raw: result.text ?? '' }, null, 2),
             );
             writeFileSync(join(modelOutDir, `${probe.id}.judge.json`), JSON.stringify(judgements, null, 2));
-            for (const j of judgements) reportRows.push({ model: target.label, probe: probe.id, ...j });
+            for (const j of judgements) reportRows.push({ model: effectiveLabel(target), probe: probe.id, ...j });
           }
         }
       } finally {

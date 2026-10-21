@@ -263,8 +263,12 @@ describe('the owner-class prompt does not move', () => {
     // Ri-fissato 2026-10-18 (docs-hygiene, PR #921): la persona non dichiara
     // più «worker» — nessun meccanismo lo sostiene; la sola differenza nella
     // stringa assemblata è quella parola.
-    // Pin precedente: `0e585218ed6b18a7d1cda49fcf4f5ba95d1f69d1708247b949da198e60f07015`.
-    '7e98f233b3da23b3d5c03513b73d337f10b6032d78636a7352ff955afb7c4d95';
+    // Ri-fissato 2026-10-19 (G2 carattere): persona.md e voice.md dicono che
+    // Muffin non è un coach/terapeuta, non costruisce framework o piani
+    // d'azione, ride con l'owner e non tratta un «hey» come un ticket. È un
+    // cold-start deliberato della cache: una volta, non a ogni turno.
+    // Pin precedente: `7e98f233b3da23b3d5c03513b73d337f10b6032d78636a7352ff955afb7c4d95`.
+    '968d931d68a71a1344f4891fd80710319eceb215fe75806be3df6a688d5a37d8';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
@@ -378,7 +382,10 @@ describe('the owner-class prompt does not move', () => {
    * `63c6590ed366dbb44d9e2a5ce2b018f9f0ffe3993ec5ea34d555c46cddf0b3f4`.
    */
   // #529: the same scoped-work rule reaches owner and group prompts.
-  const GROUP_PROMPT_SHA_V1 = 'ef99d12c6473eae61ff40ab5b2eaeb87b9644b95ecd54487bb7fa1b0f411275e';
+  // Ri-fissato 2026-10-19 (G2 carattere): voice.md dà alla stanza i divieti
+  // espliciti (coach, terapeuta, framework) e «rido con te, non di te».
+  // Pin precedente: `ef99d12c6473eae61ff40ab5b2eaeb87b9644b95ecd54487bb7fa1b0f411275e`.
+  const GROUP_PROMPT_SHA_V1 = '40b3537705a3166a4881b573e8d3130cf39192367989554bda100a045cf2d1ae';
 
   /**
    * Ri-fissato 2026-10-10: la regola sull'esposizione progressiva chiarisce
@@ -719,7 +726,7 @@ describe('what a group turn is allowed to be told', () => {
  * continua a sembrare a posto. `muffin prompt show --eco` misura la
  * sovrapposizione ma non conosce questa regola: misura, non decide.
  *
- * Sette regole, e per ognuna la sola cosa che serve sapere è dove ne vive
+ * Nove regole, e per ognuna la sola cosa che serve sapere è dove ne vive
  * l'altra copia. Sono asserite **per versione**, così una potatura futura di
  * `defaults/v2/voice.md` che ne cancella una perché «c'è già in identity.md»
  * fallisce qui invece che nella chat di un estraneo.
@@ -752,8 +759,18 @@ describe('i pavimenti che la stanza riceve solo da voice.md', () => {
     ],
     [
       'niente terapeuta, coach, motivational speaker',
-      /Non\s+faccio\s+il\s+motivational\s+speaker/,
+      /Non\s+faccio\s+[^\n]*(coach|terapeuta|motivational\s+speaker)/,
       'identity.md: «Non fai il terapeuta, il coach o il motivational speaker»',
+    ],
+    [
+      "niente framework o piani d'azione",
+      /framework[^\n]*piani d'azione|piani d'azione[^\n]*framework/i,
+      "persona.md (owner) e voice.md (la stanza): «Non propongo framework, piani d'azione o «i tre passi per»»",
+    ],
+    [
+      'ridere con, non di',
+      /Rido\s+con\s+te,\s+non\s+di\s+te/,
+      'persona.md (owner) e voice.md (la stanza)',
     ],
     [
       'niente linguaggio da assistente generico',
@@ -805,6 +822,18 @@ describe('i pavimenti che la stanza riceve solo da voice.md', () => {
       expect(gruppo).toMatch(/Non\s+sono\s+il\s+filo\s+principale\s+della\s+conversazione/);
       expect(gruppo).toMatch(/informazioni\s+private\s+dell'owner\s+non\s+diventano\s+materiale/);
       expect(gruppo).toMatch(/🧁 è ancora più raro/);
+    });
+
+    it(`${versione}: l'owner che scrive solo «hey» riceve un amico, non un ticket`, () => {
+      const home = bootHome();
+      const owner = renderSystemPrompts(buildSystemPromptBlocks(home, false, '', versione)).owner;
+      // The casual register is the one `casual-hey` measures, and the one the
+      // old plan push ruined first: a greeting in the DM came back as a work
+      // board. The plan no longer rides along (ADR-0104); this is the other
+      // half — the reply itself should sound like a friend, not a queue.
+      expect(owner).toMatch(/Se\s+mi\s+scrivi\s+solo\s+«hey»/);
+      expect(owner).toMatch(/non\s+apro\s+un\s+ticket/);
+      expect(owner).toMatch(/non\s+tiro\s+fuori\s+un\s+piano/);
     });
 
     it(`${versione}: e continua a non ricevere niente del patto dell'owner`, () => {
