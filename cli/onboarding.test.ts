@@ -5,6 +5,7 @@ import type { SandboxProbe } from '../core/sandbox/probe.js';
 import {
   askLocalOrApi,
   askModelChoice,
+  askProviderChoice,
   chooseProvider,
   describeModelChoice,
   describeProviderChoice,
@@ -13,12 +14,17 @@ import {
   inferProvider,
   isOpenRouterKey,
   keyHint,
+  keyMatchesProvider,
+  keyPrefixFor,
   localModelChoices,
   looksLikeTelegramToken,
   OPENROUTER_BASE_URL,
   OPENROUTER_MODEL_FAMILIES,
   probeLocalRuntime,
+  promptProviderKey,
+  resolveMenuProvider,
 } from './onboarding.js';
+import { PROVIDERS } from '../core/config/providers.js';
 
 /** A writable/readable pair that claims to be a TTY, so the prompts engage — same fixture as cli/prompt.test.ts. */
 function fakeTty(): { input: NodeJS.ReadStream; output: NodeJS.WriteStream } {
@@ -64,6 +70,225 @@ describe('provider inference from key shape', () => {
   it('does not guess an unknown prefix, leaving the default to the caller', () => {
     expect(inferProvider('xoxb-not-a-model-key')).toBeUndefined();
     expect(inferProvider(undefined)).toBeUndefined();
+  });
+});
+
+describe('askProviderChoice — «da chi passiamo?», only when the key did not answer', () => {
+  const firstId = Object.values(PROVIDERS)[0]!.id;
+
+  it('a number picks that catalog entry', async () => {
+    const { input, output } = fakeTty();
+    const pending = askProviderChoice(input, output);
+    input.write('1\n');
+    await expect(pending).resolves.toEqual({ kind: 'provider', id: firstId });
+  });
+
+  it('an id picks that catalog entry', async () => {
+    const { input, output } = fakeTty();
+    const pending = askProviderChoice(input, output);
+    input.write('anthropic\n');
+    await expect(pending).resolves.toEqual({ kind: 'provider', id: 'anthropic' });
+  });
+
+  it('every catalog entry is reachable by number — a new provider needs no edit here', async () => {
+    for (const [index, entry] of Object.values(PROVIDERS).entries()) {
+      const { input, output } = fakeTty();
+      const pending = askProviderChoice(input, output);
+      input.write(`${index + 1}\n`);
+      await expect(pending).resolves.toEqual({ kind: 'provider', id: entry.id });
+    }
+  });
+
+  it('"custom" resolves to a custom endpoint without a URL yet', async () => {
+    const { input, output } = fakeTty();
+    const pending = askProviderChoice(input, output);
+    input.write('custom\n');
+    await expect(pending).resolves.toEqual({ kind: 'custom' });
+  });
+
+  it('a pasted http(s) URL resolves to a custom endpoint with that URL', async () => {
+    const { input, output } = fakeTty();
+    const pending = askProviderChoice(input, output);
+    input.write('https://my-proxy.example.com/v1\n');
+    await expect(pending).resolves.toEqual({
+      kind: 'custom',
+      baseUrl: 'https://my-proxy.example.com/v1',
+    });
+  });
+
+  it('an empty answer skips — the caller falls back to the default path', async () => {
+    const { input, output } = fakeTty();
+    const pending = askProviderChoice(input, output);
+    input.write('\n');
+    await expect(pending).resolves.toBeUndefined();
+  });
+
+  it('garbage re-asks instead of guessing, then honours the correction', async () => {
+    const { input, output } = fakeTty();
+    const pending = askProviderChoice(input, output);
+    input.write('xx\n');
+    // A new readline per prompt: the correction goes only after the re-ask is
+    // listening, or the first interface buffers it away.
+    await new Promise((r) => setTimeout(r, 100));
+    input.write('2\n');
+    await expect(pending).resolves.toEqual({
+      kind: 'provider',
+      id: Object.values(PROVIDERS)[1]!.id,
+    });
+  });
+});
+
+describe('keyMatchesProvider — the strictness of the menu flow', () => {
+  it('accepts matching shapes and refuses the others', () => {
+    expect(keyMatchesProvider('sk-or-v1-abc', 'openrouter')).toBe(true);
+    expect(keyMatchesProvider('sk-ant-api03-xyz', 'openrouter')).toBe(false);
+    expect(keyMatchesProvider('sk-ant-api03-xyz', 'anthropic')).toBe(true);
+    expect(keyMatchesProvider('sk-or-v1-abc', 'anthropic')).toBe(false);
+  });
+
+  it('chatgpt has no key shape to check — OAuth, not a pasted key', () => {
+    expect(keyMatchesProvider('anything', 'chatgpt')).toBe(true);
+  });
+
+  it('names the expected prefix where one exists', () => {
+    expect(keyPrefixFor('openrouter')).toBe('sk-or-…');
+    expect(keyPrefixFor('anthropic')).toBe('sk-ant-…');
+    expect(keyPrefixFor('chatgpt')).toBeUndefined();
+  });
+});
+
+describe('promptProviderKey — strict after a menu pick', () => {
+  const entry = PROVIDERS.openrouter;
+
+  it('takes a matching key straight away', async () => {
+    const seen: string[] = [];
+    const out: string[] = [];
+    const key = await promptProviderKey(entry, fakeTty().input, fakeTty().output, {
+      out: (l) => void out.push(l),
+      askSecret: async (q) => {
+        seen.push(q);
+        return 'sk-or-v1-abc';
+      },
+    });
+    expect(key).toBe('sk-or-v1-abc');
+    expect(seen).toHaveLength(1);
+    expect(out).toHaveLength(0);
+  });
+
+  it('refuses a mismatched key without storing it, then takes the correction', async () => {
+    const answers = ['sk-ant-api03-xyz', 'sk-or-v1-abc'];
+    const out: string[] = [];
+    const key = await promptProviderKey(entry, fakeTty().input, fakeTty().output, {
+      out: (l) => void out.push(l),
+      askSecret: async () => answers.shift(),
+    });
+    expect(key).toBe('sk-or-v1-abc');
+    expect(out).toHaveLength(1);
+    expect(out[0]).toContain('sk-or-…');
+  });
+
+  it('skipping leaves the key to the missing-key path', async () => {
+    const key = await promptProviderKey(entry, fakeTty().input, fakeTty().output, {
+      out: () => {},
+      askSecret: async () => undefined,
+    });
+    expect(key).toBeUndefined();
+  });
+});
+
+describe('resolveMenuProvider — the menu run to a decision', () => {
+  const out = () => {};
+
+  it('an API pick with a matching key resolves provider, endpoint and key', async () => {
+    const { input, output } = fakeTty();
+    const pending = resolveMenuProvider('/tmp/never', input, output, {
+      out,
+      askSecret: async () => 'sk-or-v1-abc',
+    });
+    input.write('1\n');
+    await expect(pending).resolves.toEqual({
+      provider: 'openai-compat',
+      baseUrl: OPENROUTER_BASE_URL,
+      apiKey: 'sk-or-v1-abc',
+      chatgpt: false,
+    });
+  });
+
+  it('skipping the menu resolves to null — the default path', async () => {
+    const { input, output } = fakeTty();
+    const pending = resolveMenuProvider('/tmp/never', input, output, { out });
+    input.write('\n');
+    await expect(pending).resolves.toBeNull();
+  });
+
+  it('a ChatGPT pick connects via OAuth and names both models', async () => {
+    const answers = ['gpt-test', ''];
+    const chatgpt = () => ({
+      session: () => null,
+      signIn: async () => ({ profileId: 'p1', connected: true, scopes: [] }),
+      listModels: async () => [{ slug: 'gpt-test', displayName: 'GPT Test' }],
+    });
+    const { input, output } = fakeTty();
+    const pending = resolveMenuProvider('/tmp/never', input, output, {
+      out,
+      ask: async () => answers.shift(),
+      chatgpt,
+      openBrowser: async () => {},
+    });
+    input.write('2\n');
+    await expect(pending).resolves.toEqual({
+      provider: 'openai-chatgpt',
+      baseUrl: 'https://api.openai.com/v1',
+      models: { main: 'gpt-test', light: 'gpt-test' },
+      chatgpt: true,
+    });
+  });
+
+  it('a custom pick resolves endpoint, key and slugs', async () => {
+    const answers = ['https://llm.example.com/v1', 'custom-main', ''];
+    const { input, output } = fakeTty();
+    const pending = resolveMenuProvider('/tmp/never', input, output, {
+      out,
+      ask: async () => answers.shift(),
+      askSecret: async () => 'custom-secret',
+    });
+    input.write('custom\n');
+    await expect(pending).resolves.toEqual({
+      provider: 'openai-compat',
+      baseUrl: 'https://llm.example.com/v1',
+      apiKey: 'custom-secret',
+      models: { main: 'custom-main', light: 'custom-main' },
+      chatgpt: false,
+    });
+  });
+
+  it('an OAuth refusal returns to the menu instead of writing half a provider', async () => {
+    const answers = ['gpt-test', 'gpt-test'];
+    let signs = 0;
+    const chatgpt = () => ({
+      session: () => null,
+      signIn: async () => {
+        signs += 1;
+        if (signs === 1) throw new Error('browser closed');
+        return { profileId: 'p1', connected: true, scopes: [] };
+      },
+      listModels: async () => [{ slug: 'gpt-test', displayName: 'GPT Test' }],
+    });
+    const seen: string[] = [];
+    const { input, output } = fakeTty();
+    const pending = resolveMenuProvider('/tmp/never', input, output, {
+      out: (l) => void seen.push(l),
+      ask: async () => answers.shift(),
+      chatgpt,
+      openBrowser: async () => {},
+    });
+    input.write('2\n');
+    await new Promise((r) => setTimeout(r, 100));
+    input.write('2\n');
+    const resolved = await pending;
+    expect(signs).toBe(2);
+    expect(resolved).toMatchObject({ provider: 'openai-chatgpt', chatgpt: true });
+    expect(seen.join('\n')).toContain('torno al menu');
   });
 });
 

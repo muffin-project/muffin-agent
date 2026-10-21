@@ -9,6 +9,7 @@ import { schemaVersionOf, stampFresh } from '../core/db/migrate.js';
 import { seal } from '../core/rot/verify.js';
 import { isShippedDefault, recordCopied } from '../core/config/defaults-drift.js';
 import { LEGACY_API_KEY_NAME, apiKeyCandidates, apiKeyNameFor } from '../core/config/providers.js';
+import { CHATGPT_SECRET_REF } from '../core/config/chatgpt-oauth.js';
 import {
   CONFIG_SCHEMA_VERSION,
   DEFAULT_CONFIG,
@@ -43,6 +44,13 @@ export type InitOptions = {
   mainModel?: string;
   lightModel?: string;
   apiKey?: string;
+  /**
+   * The ChatGPT account just connected over OAuth (browser consent): there is
+   * no key value to store, and the session file is the credential. Without
+   * this the missing-key path below would wrongly report the install
+   * incomplete. Only meaningful with `provider: 'openai-chatgpt'`.
+   */
+  chatgptConnected?: boolean;
   /** Where `apiKey` is written. `persistent` survives `muffin uninstall`. */
   secretBackend?: SecretBackend;
   hardened?: boolean;
@@ -191,6 +199,11 @@ export function runInit(options: InitOptions = {}): InitStep[] {
       : writeSecret(nomeChiave, apiKey, home, backend);
     riferimento = `secret://${nomeChiave}`;
     chiaveDettaglio = `stored 0600 in ${at}`;
+  } else if (options.chatgptConnected === true && effProviderKind === 'openai-chatgpt') {
+    // Same reference `muffin model --provider chatgpt` writes: the runtime
+    // and doctor read the OAuth session for this kind, never a secret value.
+    riferimento = CHATGPT_SECRET_REF;
+    chiaveDettaglio = 'account collegato (OAuth, consenso browser)';
   } else if (prior?.provider.apiKeyRef && locateSecret(prior.provider.apiKeyRef, home) !== null) {
     riferimento = prior.provider.apiKeyRef;
     chiaveDettaglio = `già presente: ${locateSecret(prior.provider.apiKeyRef, home)?.path} (riferimento esistente conservato)`;
