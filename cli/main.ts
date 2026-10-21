@@ -37,6 +37,7 @@ import {
   cmdGatewayTurn,
   GATEWAY_USAGE,
 } from './gateway.js';
+import { cmdGatewayAttach } from './gateway-attach.js';
 import {
   defaultModels,
   type InitStep,
@@ -1168,6 +1169,7 @@ async function cmdGateway(argv: string[]): Promise<number> {
   if (sub === 'run') return cmdGatewayRun(home);
   if (sub === 'status' || sub === undefined) return cmdGatewayStatus(home);
   if (sub === 'turn' && rest[0]) return cmdGatewayTurn(home, rest[0]);
+  if (sub === 'attach') return cmdGatewayAttach(home, rest);
   if (sub === 'stop') return cmdGatewayStop(home);
   if (sub === 'start') return cmdGatewayStart(home);
   if (sub === 'restart') return cmdGatewayRestart(home);
@@ -1383,12 +1385,28 @@ async function cmdRun(argv: string[]): Promise<number> {
       // Ripetibile: piu' immagini nello stesso turno sono un caso normale
       // («cosa e' cambiato fra queste due?») ed entrambe le API lo prevedono.
       image: { type: 'string', multiple: true },
+      attach: { type: 'boolean' },
+      'wait-sec': { type: 'string' },
+      id: { type: 'string' },
     },
     allowPositionals: true,
   });
   const goal = positionals.join(' ').trim();
   if (goal === '') {
-    process.stderr.write(`usage: muffin run "<goal>" [--image FILE]\n`);
+    process.stderr.write(`usage: muffin run "<goal>" [--image FILE] [--attach [--wait-sec N] [--id ID]]\n`);
+    return 78;
+  }
+  let waitSec: number | undefined;
+  if (values['wait-sec'] !== undefined) {
+    const n = Number(values['wait-sec']);
+    if (!Number.isFinite(n) || n < 0) {
+      process.stderr.write(`--wait-sec vuole secondi (0 = senza limite), non "${values['wait-sec']}"\n`);
+      return 78;
+    }
+    waitSec = n;
+  }
+  if (values.id !== undefined && values.attach !== true) {
+    process.stderr.write(`--id solo con --attach (è l'id stabile del submit+poll)\n`);
     return 78;
   }
   return runHeadless({
@@ -1397,6 +1415,9 @@ async function cmdRun(argv: string[]): Promise<number> {
     ...(values.session ? { sessionId: values.session } : {}),
     ...(values.timeout ? { timeoutSeconds: Number(values.timeout) } : {}),
     ...(values.image && values.image.length > 0 ? { images: values.image } : {}),
+    ...(values.attach === true ? { attach: true as const } : {}),
+    ...(waitSec !== undefined ? { waitSec } : {}),
+    ...(values.id ? { executionId: values.id } : {}),
   });
 }
 
