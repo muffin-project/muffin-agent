@@ -156,6 +156,12 @@ necessaria: autorizzazione a committare, push del branch, PR verso `dev`,
 verifica CI, build pulita, aggiornamento di `.releases/current` e del launcher
 alla release pulita. Fino a quel momento la frase «giriamo su HEAD» è falsa.
 
+**Aggiornamento, 21/10, dopo l'audit**: il worktree è stato committato
+(`22779711`), il branch è stato pushato e la PR verso `dev` è aperta. Restano
+da fare la build pulita e la riconciliazione di `.releases/current` con il
+launcher: finché non accade, l'installazione viva continua a essere la build
+sporca descritta sopra.
+
 ### F3. Meccanismi presenti ma non cablati — ALTO
 
 Il repository conosce il proprio pattern di guasto e lo ripete.
