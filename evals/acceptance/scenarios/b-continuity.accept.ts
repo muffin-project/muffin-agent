@@ -234,6 +234,7 @@ describe('acceptance · B · il turno sospendibile', () => {
         main: [
           { tool: { name: 'todo', args: { action: 'plan', items: ['leggere il contratto', 'rispondere a Marco'] } } },
           { text: 'ho scritto il piano' },
+          { tool: { name: 'todo', args: { action: 'list' } } },
           { text: 'eccomi' },
         ],
       });
@@ -247,16 +248,31 @@ describe('acceptance · B · il turno sospendibile', () => {
         const second = await inst.muffin(['run', '--session', 'piano-1', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'a che punto sei?']);
         if (second.code !== 0) throw new Error(`secondo processo: exit ${second.code}\n${second.err}`);
 
-        const sent = inst.provider.main().at(-1);
-        if (!sent) throw new Error('il secondo processo non ha mai chiamato il modello');
-        // Shown **unasked**: the second process never called `todo list`, and
-        // the plan is in front of the model anyway. A plan the model has to
-        // remember to ask for is one it forgets the moment its own earlier
-        // prose is compacted.
-        for (const step of ['leggere il contratto', 'rispondere a Marco']) {
-          if (!sent.transcript.includes(step)) {
-            throw new Error(`il passo "${step}" non è nel contesto del secondo processo:\n${sent.transcript}`);
-          }
+        const calls = inst.provider.main();
+        const beforeList = calls[2];
+        const afterList = calls[3];
+        if (!beforeList || !afterList) {
+          throw new Error(`attese due chiamate nel secondo processo (lettura on-demand), ricevute ${calls.length} totali`);
+        }
+        const steps = ['leggere il contratto', 'rispondere a Marco'];
+        const hasBoth = (text: string) => steps.every((step) => text.includes(step));
+        const toolHits = (req: NonNullable<typeof beforeList>) =>
+          req.messages.filter((m) => m.role === 'tool' && hasBoth(JSON.stringify(m.content))).length;
+
+        // ADR-0104: the plan is read, not pushed. The second process has not
+        // asked yet, so no system block may carry the steps. The persisted
+        // transcript may still hold the first process's tool result — that is
+        // history the model can consult, not a block re-injected every turn.
+        if (hasBoth(beforeList.system)) {
+          throw new Error(`il piano è stato spinto nel system prompt senza che il modello lo chiedesse (ADR-0104):\n${beforeList.system}`);
+        }
+        // And on demand it is still there: `todo list` must add a new tool
+        // result carrying both steps, across the process boundary.
+        if (!hasBoth(JSON.stringify(afterList.messages))) {
+          throw new Error(`todo list non ha restituito il piano nel secondo processo:\n${JSON.stringify(afterList.messages, null, 2)}`);
+        }
+        if (toolHits(afterList) <= toolHits(beforeList)) {
+          throw new Error(`todo list non ha aggiunto un tool_result con il piano: prima ${toolHits(beforeList)}, dopo ${toolHits(afterList)}`);
         }
         // No completion rule in prose: "finished" is decided by the
         // completion gate reading rows at the finish boundary

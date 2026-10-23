@@ -7,6 +7,7 @@ import { EXIT_MISSING_ENV, MissingApiKey, runEval, type RunConfig } from './run.
 import { PROBES } from './probes.js';
 import { buildSystemPromptBlocks, renderSystemPrompts } from '../../agent/context/assemble.js';
 import { buildRuntime } from '../../agent/runtime.js';
+import { loadConfig, promptVersion, type PromptVersion } from '../../core/config/config.js';
 import { startFakeProvider } from '../acceptance/provider.js';
 import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types.js';
 
@@ -79,6 +80,48 @@ describe("il prompt che l'eval manda è l'assemblaggio di produzione", () => {
     } finally {
       runtime.close();
     }
+  }, 60_000);
+
+  /**
+   * Il metro che mancava: la stessa corsa, lo stesso modello, due versioni.
+   *
+   * Falsificazione diretta del plumbing — se `runInit` non scrivesse
+   * `config.prompt.version`, o se `runEval` non gliela passasse, i due prompt
+   * inviati sarebbero identici e questo test cadrebbe. E in entrambi i casi il
+   * prompt inviato deve restare l'assemblaggio reale di quella home: la
+   * seconda metà dell'uguaglianza vieta di "selezionare v2" cambiando solo
+   * un'etichetta.
+   */
+  it('selezionare v2 cambia i byte inviati: è l\'assemblaggio v2, non v1', async () => {
+    async function runOne(richiesta: PromptVersion): Promise<string> {
+      const { homes, sentSystemPrompts } = await runEval({
+        models: [{ label: 'dry-model', provider: 'anthropic', model: 'dry-model', apiKeyEnv: 'UNUSED_UNDER_DRY_RUN', promptVersion: richiesta }],
+        judge: null,
+        dryRun: true,
+        probeIds: ['casual-hey'],
+        outDir: scratch('muffin-character-prompt-out-'),
+      });
+      const home = homes[0]!;
+      SCRATCH.push(home);
+      const inviato = sentSystemPrompts[0]!;
+      // La versione si rilegge dalla config della home, non dal valore chiesto:
+      // se `runInit` non la scrivesse, qui tornerebbe v1 e il confronto sotto
+      // cadrebbe alla seconda riga. È `promptVersion()` — la stessa risposta
+      // che `buildRuntime` legge — a decidere l'assemblaggio atteso.
+      expect(promptVersion(loadConfig(home))).toBe(richiesta);
+      const runtime = buildRuntime(home);
+      try {
+        const skills = runtime.promptBlocks.owner.find((b) => b.name === 'skills')?.text ?? '';
+        const atteso = renderSystemPrompts(buildSystemPromptBlocks(home, runtime.safeMode != null, skills, richiesta)).owner;
+        expect(inviato).toBe(atteso);
+      } finally {
+        runtime.close();
+      }
+      return inviato;
+    }
+    const v1 = await runOne('v1');
+    const v2 = await runOne('v2');
+    expect(v2).not.toBe(v1);
   }, 60_000);
 });
 

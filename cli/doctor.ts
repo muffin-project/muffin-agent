@@ -331,34 +331,6 @@ export async function runDoctor(
   }
   ok('home', p.home);
 
-  // ADR-0059: dove atterra il lavoro di un turno, non la casa dell'installazione
-  // — sono due domande diverse da quando `resolveWorkspace` le ha separate, e
-  // fino a questa riga nessuna delle due porte che l'owner guarda (un turno,
-  // `muffin doctor`) rispondeva alla seconda. `describeWorkspace` legge, non
-  // decide: la stessa cartella di default che `resolveWorkspace` userebbe, mai
-  // creata qui — un `mkdirSync` dentro una diagnosi renderebbe "esiste già" e
-  // "non esiste ancora" la stessa risposta.
-  const workspace = describeWorkspace(home);
-  if (workspace.envRejected) {
-    warn(
-      'workspace',
-      `${workspace.workspace} — MUFFIN_WORKSPACE puntava a ${workspace.envRejected.requested}, dentro l'installazione: ignorato, ` +
-        'perché dentro ~/.muffin ci sono memoria, sessioni e il sigillo, non è uno spazio di lavoro e nessun turno ci scrive',
-      `indica una cartella fuori dall'installazione con MUFFIN_WORKSPACE, oppure togli la variabile e lascia il default`,
-    );
-  } else if (!workspace.exists) {
-    // Non un warn: non c'è niente da fare qui, e un warn senza un'azione è
-    // come si insegna a scorrere oltre gli avvisi — questo repository ha già
-    // pagato il prezzo del testo di sicurezza che nessuno legge più. La nota
-    // resta, dentro la riga verde.
-    ok(
-      'workspace',
-      `${workspace.workspace} — qui atterrano le scritture di un turno (si crea da sola al primo turno che ci scrive)`,
-    );
-  } else {
-    ok('workspace', `${workspace.workspace} — qui atterrano le scritture di un turno`);
-  }
-
   let config: Config;
   const configNotes: string[] = [];
   try {
@@ -380,6 +352,43 @@ export async function runDoctor(
     const e = error as ConfigError;
     fail('config', e.message, e.remedy ?? 'run `muffin init`');
     return report(checks);
+  }
+
+  // ADR-0059: dove atterra il lavoro di un turno, non la casa dell'installazione
+  // — sono due domande diverse da quando `resolveWorkspace` le ha separate, e
+  // fino a questa riga nessuna delle due porte che l'owner guarda (un turno,
+  // `muffin doctor`) rispondeva alla seconda. `describeWorkspace` legge, non
+  // decide: la cartella che `resolveWorkspace` userebbe davvero, mai creata
+  // qui — un `mkdirSync` dentro una diagnosi renderebbe "esiste già" e "non
+  // esiste ancora" la stessa risposta. `config.workspace` entra nella
+  // risposta: un `muffin doctor` che ignorasse la cartella dichiarata
+  // descriverebbe un turno che non esiste.
+  const workspace = describeWorkspace(home, config.workspace);
+  if (workspace.configRejected) {
+    warn(
+      'workspace',
+      `${workspace.workspace} — config.json dichiara ${workspace.configRejected.requested}, dentro l'installazione: ignorato, ` +
+        'perché dentro ~/.muffin ci sono memoria, sessioni e il sigillo, non è uno spazio di lavoro e nessun turno ci scrive',
+      `dichiara una cartella fuori dall'installazione con \`muffin workspace set <cartella>\``,
+    );
+  } else if (workspace.envRejected) {
+    warn(
+      'workspace',
+      `${workspace.workspace} — MUFFIN_WORKSPACE puntava a ${workspace.envRejected.requested}, dentro l'installazione: ignorato, ` +
+        'perché dentro ~/.muffin ci sono memoria, sessioni e il sigillo, non è uno spazio di lavoro e nessun turno ci scrive',
+      `indica una cartella fuori dall'installazione con MUFFIN_WORKSPACE, oppure togli la variabile e lascia il default`,
+    );
+  } else if (!workspace.exists) {
+    // Non un warn: non c'è niente da fare qui, e un warn senza un'azione è
+    // come si insegna a scorrere oltre gli avvisi — questo repository ha già
+    // pagato il prezzo del testo di sicurezza che nessuno legge più. La nota
+    // resta, dentro la riga verde.
+    ok(
+      'workspace',
+      `${workspace.workspace} — qui atterrano le scritture di un turno (si crea da sola al primo turno che ci scrive)`,
+    );
+  } else {
+    ok('workspace', `${workspace.workspace} — qui atterrano le scritture di un turno`);
   }
 
   // A migration that ran in memory and said nothing would be the same class of

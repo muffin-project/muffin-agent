@@ -34,6 +34,13 @@ export const COMMANDS: readonly CommandSpec[] = [
     primary: true,
   },
   {
+    name: 'workspace',
+    summary: 'dichiara il progetto in cui lavorano i turni',
+    audience: 'owner',
+    primary: true,
+    subcommands: ['set', 'clear'],
+  },
+  {
     name: 'surface',
     summary: 'collega e gestisce Telegram e le altre superfici',
     audience: 'owner',

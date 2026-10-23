@@ -47,17 +47,26 @@ describe('isForbiddenAddress — the SSRF floor', () => {
     'fd00::1',
     'fc00::1234',
     '::ffff:10.0.0.1', // v4-mapped: the classic laundering
+    '::ffff:7f00:1', // the hexadecimal spelling of ::ffff:127.0.0.1
+    '::ffff:a9fe:a9fe', // 169.254.169.254, metadata
+    '::ffff:c0a8:101', // 192.168.1.1
+    '::ffff:0:0', // 0.0.0.0
+    '::ffff:ffff:ffff', // 255.255.255.255
     '64:ff9b::a00:1',
   ])('refuses %s', (address) => {
     expect(isForbiddenAddress(address)).toBe(true);
   });
 
-  it.each(['93.184.216.34', '1.1.1.1', '2606:4700:4700::1111', '172.32.0.1', '11.0.0.1'])(
-    'allows public %s',
-    (address) => {
-      expect(isForbiddenAddress(address)).toBe(false);
-    },
-  );
+  it.each([
+    '93.184.216.34',
+    '1.1.1.1',
+    '2606:4700:4700::1111',
+    '172.32.0.1',
+    '11.0.0.1',
+    '::ffff:808:808',
+  ])('allows public %s', (address) => {
+    expect(isForbiddenAddress(address)).toBe(false);
+  });
 
   it('refuses what is not an address at all', () => {
     expect(isForbiddenAddress('not-an-ip')).toBe(true);

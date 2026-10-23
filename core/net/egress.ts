@@ -56,7 +56,10 @@ export function loadEgress(home: string): EgressPolicy {
   if (!existsSync(file)) {
     // The RoT manifest verification runs before this and would already have
     // refused a tampered install; a missing file here is an incomplete one.
-    throw new EgressError(`no egress policy at ${file}`, 'reinstall the root of trust: `muffin rot reinstall`');
+    throw new EgressError(
+      `no egress policy at ${file}`,
+      'reinstall the root of trust: `muffin rot reinstall`',
+    );
   }
   let raw: unknown;
   try {
@@ -126,12 +129,32 @@ function forbiddenV4(address: string): boolean {
 
 function forbiddenV6(address: string): boolean {
   const h = address.toLowerCase();
-  // v4-mapped (::ffff:10.0.0.1) and NAT64 (64:ff9b::) carry a v4 answer
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(h);
-  if (mapped) return forbiddenV4(mapped[1]!);
+  // v4-mapped (::ffff:10.0.0.1) and NAT64 (64:ff9b::) carry a v4 answer.
+  // `isIP` accepts both the dotted and the hexadecimal spelling of the
+  // mapped suffix; classifying only the dotted one let `::ffff:7f00:1`
+  // through as "public" and then straight to loopback.
+  const mapped = mappedV4(h);
+  if (mapped !== null) return forbiddenV4(mapped);
   if (h.startsWith('64:ff9b:')) return true;
   if (h === '::' || h === '::1') return true;
-  if (h.startsWith('fe8') || h.startsWith('fe9') || h.startsWith('fea') || h.startsWith('feb')) return true; // fe80::/10
+  if (h.startsWith('fe8') || h.startsWith('fe9') || h.startsWith('fea') || h.startsWith('feb'))
+    return true; // fe80::/10
   if (h.startsWith('fc') || h.startsWith('fd')) return true; // fc00::/7 unique-local
   return false;
+}
+
+/**
+ * The IPv4 address inside an IPv4-mapped IPv6 address, in either spelling
+ * (`::ffff:127.0.0.1` or `::ffff:7f00:1`), or `null` for any other address.
+ * The kernel ultimately connects to the embedded v4 address, so the policy
+ * has to classify that address — not the text that happens to spell it.
+ */
+function mappedV4(address: string): string | null {
+  const dotted = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(address);
+  if (dotted) return dotted[1]!;
+  const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(address);
+  if (!hex) return null;
+  const hi = Number.parseInt(hex[1]!, 16);
+  const lo = Number.parseInt(hex[2]!, 16);
+  return `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
 }

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { armingTier, type CapabilityDecl } from '../../core/policy/types.js';
-import { MAX_OPEN_TODOS, renderTodos, TODO_STATES, type TodoStore } from '../../core/turns/todo.js';
+import { MAX_OPEN_TODOS, planTaint, renderTodos, TODO_STATES, type TodoStore } from '../../core/turns/todo.js';
+import { todoSection } from '../context/assemble.js';
 import type { RegisteredTool } from '../loop.js';
 import type { ToolSpec } from '../providers/types.js';
 
@@ -13,17 +14,20 @@ import type { ToolSpec } from '../providers/types.js';
  * transcript cannot do it — it is prose, it gets compacted, and re-deriving the
  * open list from the model's own earlier paragraph is how a step goes missing.
  *
- * The list is **read into every turn of the session** (`agent/context/`), which
- * is the half that makes this a mechanism rather than a table: a store with a
- * writer and no reader is the defect this repository keeps paying for, and it
- * would be especially pointless here — a plan nobody is shown is a plan nobody
- * follows.
+ * The list is **read on demand** by the model through this tool, which is the
+ * half that makes it a mechanism rather than a table: a store with a writer and
+ * no reader is the defect this repository keeps paying for. It used to be
+ * pushed into every turn of the session; that put a work board in front of
+ * unrelated messages in the same thread, so the push was removed (see
+ * `docs/decisions/0104-il-piano-si-legge-non-si-spinge.md`) and the read now
+ * carries the rows' taint, so a dirty plan still cannot be acted on as clean.
  */
 
 /**
- * `tier: 0`, with the reason. Nothing here crosses a boundary: the text written
- * is text the model already had in context, and reading it back cannot lift the
- * taint of the turn above what put it there.
+ * `tier: 0`, with the reason. Used only by refusals: the empty answer and the
+ * errors cross no boundary. A successful read carries `planTaint(rows)` — the
+ * point of ADR-0104 on top of ADR-0042 — so `CLEAN` must not be returned by
+ * `plan`/`set`/`list`/`due`.
  */
 const CLEAN: 0 = 0;
 
@@ -115,10 +119,12 @@ export const todoCapability: CapabilityDecl = {
 const todoSpec: ToolSpec = {
   name: 'todo',
   description:
-    'The persistent plan for this conversation. It survives restarts and is shown back to you at the ' +
-    'start of every turn, so you do not have to re-derive it. `plan` writes the steps (restate the whole ' +
-    'list — repeating a step you already wrote does not duplicate it); `set` moves one step to ' +
-    `${TODO_STATES.join(' | ')}; \`list\` shows it. Use it for work that takes more than one turn. ` +
+    'The persistent plan for this conversation. It survives restarts; read it with `list` when you need it — ' +
+    'it is not pushed into every turn. `plan` writes the steps (restate the whole list — repeating a step you ' +
+    'already wrote does not duplicate it); `set` moves one step to ' +
+    `${TODO_STATES.join(' | ')}; \`list\` shows the rows. Use it for work that takes more than one turn. ` +
+    'When the owner changes topic, close or block the steps that no longer belong to it instead of leaving ' +
+    'them open — a plan that only grows stops describing the work. ' +
     'Not for a single step you are about to do right now — planning what you will do in the next call adds ' +
     'bookkeeping with no benefit; just do it. Nothing here executes anything: it records what you intend to do. ' +
     '`due` is the one exception and the only way to remember something for a moment that is not now: ' +
@@ -268,7 +274,7 @@ export function makeTodoTool(todos: TodoStore): RegisteredTool {
             };
           }
           const items = todos.plan(tenant, sessionId, parsed.data.items, tier, ctx.turnId);
-          return { content: `Piano aggiornato:\n${renderTodos(items)}`, tier: CLEAN };
+          return { content: `Piano aggiornato:\n${renderTodos(items)}`, tier: planTaint(items) };
         }
         case 'set': {
           const { step, state, note } = parsed.data;
@@ -282,7 +288,8 @@ export function makeTodoTool(todos: TodoStore): RegisteredTool {
               tier: CLEAN,
             };
           }
-          return { content: `Piano:\n${renderTodos(todos.list(tenant, sessionId))}`, tier: CLEAN };
+          const rows = todos.list(tenant, sessionId);
+          return { content: `Piano:\n${renderTodos(rows)}`, tier: planTaint(rows) };
         }
         case 'due': {
           const { step, at } = parsed.data;
@@ -319,13 +326,16 @@ export function makeTodoTool(todos: TodoStore): RegisteredTool {
               tier: CLEAN,
             };
           }
-          return { content: `Piano:\n${renderTodos(todos.list(tenant, sessionId))}`, tier: CLEAN };
+          const rows = todos.list(tenant, sessionId);
+          return { content: `Piano:\n${renderTodos(rows)}`, tier: planTaint(rows) };
         }
         case 'list': {
           const items = todos.list(tenant, sessionId);
           return {
-            content: items.length === 0 ? 'Nessun piano per questa conversazione.' : `Piano:\n${renderTodos(items)}`,
-            tier: CLEAN,
+            // The same framing the per-turn push used to carry: the rows are
+            // evidence the model asked for, never an obligation of this turn.
+            content: items.length === 0 ? 'Nessun piano per questa conversazione.' : todoSection(items),
+            tier: planTaint(items),
           };
         }
       }
