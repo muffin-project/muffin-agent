@@ -96,6 +96,7 @@ import { styleFor } from './ui.js';
 import { cmdUndo } from './undo.js';
 import { cmdUpdate, describeBuild } from './update.js';
 import { cmdVaultAdd, cmdVaultCheck, cmdVaultLs, cmdVaultReindex, VAULT_USAGE } from './vault.js';
+import { cmdWorkspace } from './workspace.js';
 
 /**
  * Entry point.
@@ -204,6 +205,8 @@ async function main(rawArgv: string[]): Promise<number> {
       return cmdInit(rest);
     case 'config':
       return cmdConfig(paths().home, rest);
+    case 'workspace':
+      return cmdWorkspace(paths().home, rest);
     case 'chatgpt':
       return cmdChatGPT(paths().home, rest, { out: (line) => process.stdout.write(`${line}\n`) });
     case 'model': {

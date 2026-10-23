@@ -5,6 +5,7 @@ Start here when you do not already know Muffin:
 - [Status](STATUS.md) — release boundary and where live state is observed.
 - [Install](user/INSTALL.md) — install, update and rollback.
 - [Providers](user/PROVIDERS.md) — connect providers and select main/light models.
+- [Workspace](user/WORKSPACE.md) — declare the project a turn may read and write.
 - [Architecture](architecture/ARCHITECTURE.md) — present semantic shape.
 - [Security](architecture/SECURITY.md) — current trust and authority boundaries.
 - [Contributing](../CONTRIBUTING.md) — contribution rules and inbound agreement.

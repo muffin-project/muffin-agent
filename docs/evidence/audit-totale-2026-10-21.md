@@ -157,10 +157,12 @@ verifica CI, build pulita, aggiornamento di `.releases/current` e del launcher
 alla release pulita. Fino a quel momento la frase «giriamo su HEAD» è falsa.
 
 **Aggiornamento, 21/10, dopo l'audit**: il worktree è stato committato
-(`22779711`), il branch è stato pushato e la PR verso `dev` è aperta. Restano
-da fare la build pulita e la riconciliazione di `.releases/current` con il
-launcher: finché non accade, l'installazione viva continua a essere la build
-sporca descritta sopra.
+(`22779711`), il branch è stato pushato e la PR verso `dev` è aperta. La build
+pulita è stata costruita dallo SHA `709c4179` in `.releases/709c4179`, e
+`.releases/current` e il launcher puntano lì: `muffin --version` risponde
+`muffin 0.0.0 (709c4179f1ab, 2026-10-21)` e il gateway è stato riavviato su
+quella build. Restano la CI della PR (`verifica`, `install`,
+`symphony-fixture`) e il merge.
 
 ### F3. Meccanismi presenti ma non cablati — ALTO
 
@@ -414,8 +416,8 @@ sulla build giusta. Se manca uno di questi, il resto non è prova.
 
 ## Decisioni richieste all'owner
 
-1. **Commit/push/PR** del branch e build pulita: senza, il dogfood non è
-   misurabile.
+1. ~~**Commit/push/PR** del branch e build pulita~~ — fatto il 21/10: PR #926,
+   release `709c4179`, launcher e `.releases/current` riconciliati.
 2. ~~**SSRF adesso**~~ — chiuso il 21/10 con test. Resta da verificare, nel
    passaggio successivo, `2002::/16` e `fec0::/10`.
 3. **Tavily**: chiave, oppure `web_search` dichiarato OUT per i quattordici
