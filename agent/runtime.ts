@@ -16,7 +16,7 @@ import {
   secretDir,
 } from '../core/config/config.js';
 import { tightenHome } from '../core/config/private-fs.js';
-import { resolveWorkspace } from '../core/config/workspace.js';
+import { requestedWorkspace, resolveWorkspace } from '../core/config/workspace.js';
 import { migrate } from '../core/db/migrate.js';
 import { openDb } from '../core/db/open.js';
 import { makeShadowJudge, type ShadowJudge } from '../core/judgment/shadow.js';
@@ -381,12 +381,14 @@ export function buildRuntime(
   /**
    * The directory the caller is *proposing* as the turn's workspace, not the
    * workspace itself: `resolveWorkspace` below refuses it when it is the
-   * installation. The default stays `process.cwd()` because for `muffin run`
-   * and the REPL the owner chose that directory by standing in it — and it is
-   * exactly the surfaces where nobody chose it (a supervised gateway, whose
-   * cwd its unit pins to the home on purpose) that the refusal is for.
+   * installation. Omitted by the supervised surfaces — the gateway, whose
+   * unit pins its cwd to the home on purpose, and `muffin run`, which
+   * forwards to it. They do not stand anywhere meaningful, so the proposed
+   * directory comes from `MUFFIN_WORKSPACE`, then `workspace` in
+   * `config.json`, then `process.cwd()`. The REPL passes its cwd explicitly:
+   * there the owner chose a directory by standing in it.
    */
-  cwd = process.cwd(),
+  cwd?: string,
   opts: {
     /**
      * Dove finiscono le righe che il consolidamento scrive **mentre** qualcosa
@@ -426,6 +428,9 @@ export function buildRuntime(
   } catch {
     /* best-effort: tightening must not break boot */
   }
+  const configNotes: string[] = [];
+  const config = loadConfig(home, (line) => configNotes.push(`! ${line}`));
+
   /**
    * Where this turn may write — never where Muffin is installed.
    *
@@ -436,12 +441,12 @@ export function buildRuntime(
    * and for why the workspace is a sibling of the home rather than a
    * subdirectory of it.
    */
-  const { workspace, notes: workspaceNotes } = resolveWorkspace(home, cwd);
+  const { workspace, notes: workspaceNotes } = resolveWorkspace(
+    home,
+    requestedWorkspace(home, cwd, config.workspace),
+  );
   const exporter = new JsonlExporter(home);
   const tracer = new SimpleTracer(exporter);
-
-  const configNotes: string[] = [];
-  const config = loadConfig(home, (line) => configNotes.push(`! ${line}`));
   exporter.pruneOlderThan(config.traces.retentionDays);
 
   // Root of trust before anything reads policy from it: in single-user mode a

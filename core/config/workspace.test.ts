@@ -3,7 +3,14 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ConfigError } from './config.js';
-import { WORKSPACE_ENV, isSameOrNestedPath, muffinWorkspace, resolveWorkspace } from './workspace.js';
+import {
+  describeWorkspace,
+  isSameOrNestedPath,
+  muffinWorkspace,
+  requestedWorkspace,
+  resolveWorkspace,
+  WORKSPACE_ENV,
+} from './workspace.js';
 
 /**
  * The braces of the home-is-not-a-workspace claim, at the level where the
@@ -68,7 +75,11 @@ describe('resolveWorkspace: the cwd the owner chose is kept, the one a superviso
     const s = scratch();
     const progetto = join(s.base, 'progetto');
     mkdirSync(progetto);
-    expect(resolveWorkspace(s.home, progetto)).toEqual({ workspace: progetto, relocatedFrom: null, notes: [] });
+    expect(resolveWorkspace(s.home, progetto)).toEqual({
+      workspace: progetto,
+      relocatedFrom: null,
+      notes: [],
+    });
   });
 
   it('relocates when the cwd IS the home — the supervised gateway, measured on the owner’s machine', () => {
@@ -176,5 +187,86 @@ describe('a workspace that cannot exist fails with a sentence, not an errno', ()
     } finally {
       chmodSync(chiuso, 0o700);
     }
+  });
+});
+
+/**
+ * La precedenza fra le tre fonti, provata dove viene decisa.
+ *
+ * La cwd esplicita conta solo se non è l'installazione: il REPL la passa anche
+ * quando l'owner l'ha aperto da `~`, e trattarla come una scelta farebbe
+ * ignorare la cartella dichiarata — il difetto che `workspace` in config
+ * esiste per chiudere. Fuori da quel caso l'env vince sulla config, perché è
+ * l'override della sessione, e la config vince sul default.
+ */
+describe('requestedWorkspace: cwd scelta, override di sessione, dichiarazione, default', () => {
+  it('keeps an explicit project cwd above both the env var and the config', () => {
+    const s = scratch();
+    const progetto = join(s.base, 'progetto');
+    const altro = join(s.base, 'altro');
+    mkdirSync(progetto);
+    mkdirSync(altro);
+    vi.stubEnv(WORKSPACE_ENV, altro);
+    expect(requestedWorkspace(s.home, progetto, altro)).toBe(progetto);
+  });
+
+  it('does not treat the installation as a choice: env, then config, then the cwd itself', () => {
+    const s = scratch();
+    const progetto = join(s.base, 'progetto');
+    mkdirSync(progetto);
+    expect(requestedWorkspace(s.home, s.home, progetto)).toBe(progetto);
+    vi.stubEnv(WORKSPACE_ENV, progetto);
+    expect(requestedWorkspace(s.home, s.home, altro(s.base))).toBe(progetto);
+    vi.unstubAllEnvs();
+    expect(requestedWorkspace(s.home, s.home, undefined)).toBe(s.home);
+  });
+
+  it('ignores an env or config that points inside the install, so the next source can win', () => {
+    const s = scratch();
+    const progetto = join(s.base, 'progetto');
+    mkdirSync(progetto);
+    vi.stubEnv(WORKSPACE_ENV, join(s.home, 'dentro'));
+    expect(requestedWorkspace(s.home, undefined, progetto)).toBe(progetto);
+    expect(requestedWorkspace(s.home, undefined, join(s.home, 'anche-dentro'))).toBe(
+      muffinWorkspace(s.home),
+    );
+  });
+});
+
+function altro(base: string): string {
+  const path = join(base, 'altro');
+  mkdirSync(path, { recursive: true });
+  return path;
+}
+
+describe('describeWorkspace names the declaration, and rejects the ones resolveWorkspace would relocate', () => {
+  it('reports the declared workspace as effective when nothing overrides it', () => {
+    const s = scratch();
+    const progetto = join(s.base, 'progetto');
+    mkdirSync(progetto);
+    expect(describeWorkspace(s.home, progetto)).toMatchObject({
+      workspace: progetto,
+      configured: progetto,
+      configRejected: null,
+      envRejected: null,
+    });
+  });
+
+  it('flags a hand-edited config that names the home instead of reporting it as usable', () => {
+    const s = scratch();
+    const status = describeWorkspace(s.home, join(s.home, 'workspace'));
+    expect(status.configured).toBe(join(s.home, 'workspace'));
+    expect(status.configRejected?.requested).toBe(join(s.home, 'workspace'));
+    expect(isSameOrNestedPath(status.workspace, s.home)).toBe(false);
+  });
+
+  it('lets MUFFIN_WORKSPACE win over the declaration, and says so by returning it', () => {
+    const s = scratch();
+    const progetto = join(s.base, 'progetto');
+    const sessione = join(s.base, 'sessione');
+    mkdirSync(progetto);
+    mkdirSync(sessione);
+    vi.stubEnv(WORKSPACE_ENV, sessione);
+    expect(describeWorkspace(s.home, progetto).workspace).toBe(sessione);
   });
 });

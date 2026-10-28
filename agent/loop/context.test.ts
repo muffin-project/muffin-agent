@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionMessage } from '../../core/session/store.js';
 import type { Principal, TenantId } from '../../core/policy/types.js';
-import type { TodoItem } from '../../core/turns/todo.js';
 import type { ContentBlock, ImageBlock, AudioBlock } from '../providers/types.js';
 import type { ReinjectedHistory } from '../context/history-taint.js';
 import type { TurnInput } from './types.js';
@@ -57,7 +56,7 @@ describe('userImages / userAudios', () => {
 describe('buildContext', () => {
   it('MUTATION: images/audio ride before the final text block, not after', () => {
     const input = baseInput({ images: [image('foto')], text: 'cosa vedi?' });
-    const messages = buildContext(input, [], [], noHistory, new Date(2026, 0, 1), 'test-model', 'test-profile', undefined, undefined, new Set());
+    const messages = buildContext(input, [], noHistory, new Date(2026, 0, 1), 'test-model', 'test-profile', undefined, undefined, new Set());
     const last = messages[messages.length - 1]!;
     const imgIndex = last.content.findIndex((b) => b.type === 'image');
     const textIndex = last.content.findIndex((b) => b.type === 'text' && b.text === 'cosa vedi?');
@@ -67,7 +66,7 @@ describe('buildContext', () => {
 
   it('an opening message carrying external evidence stays external in model context', () => {
     const input = baseInput({ text: 'wake with external evidence', inputOrigin: 'external' });
-    const messages = buildContext(input, [], [], noHistory, new Date(2026, 0, 1), 'test-model', 'test-profile', undefined, undefined, new Set());
+    const messages = buildContext(input, [], noHistory, new Date(2026, 0, 1), 'test-model', 'test-profile', undefined, undefined, new Set());
     const opening = messages[messages.length - 1]!;
 
     expect(opening.role).toBe('user');
@@ -81,7 +80,7 @@ describe('buildContext', () => {
       dropped: 0,
     };
     const input = baseInput({ surface: 'cli' });
-    const messages = buildContext(input, [], [], spoken, new Date(2026, 0, 1), 'test-model', 'test-profile', undefined, undefined, new Set());
+    const messages = buildContext(input, [], spoken, new Date(2026, 0, 1), 'test-model', 'test-profile', undefined, undefined, new Set());
     const historyMsg = messages.find(
       (m) => m.content.some((b) => b.type === 'text' && b.text.includes('ho scritto da telefono')),
     )!;
@@ -98,7 +97,7 @@ describe('buildContext', () => {
       dropped: 0,
     };
     const input = baseInput({ surface: 'cli' });
-    const messages = buildContext(input, [], [], spoken, new Date(2026, 0, 1), 'test-model', 'test-profile', undefined, undefined, new Set());
+    const messages = buildContext(input, [], spoken, new Date(2026, 0, 1), 'test-model', 'test-profile', undefined, undefined, new Set());
     const block = messages
       .flatMap((m) => m.content)
       .find((b) => b.type === 'text' && b.text.includes('stessa superficie'))!;
@@ -108,7 +107,7 @@ describe('buildContext', () => {
 
   it('announces how many prior messages were dropped, when any were', () => {
     const spoken: ReinjectedHistory = { kept: [], dropped: 3 };
-    const messages = buildContext(baseInput(), [], [], spoken, new Date(2026, 0, 1), 'm', 'p', undefined, undefined, new Set());
+    const messages = buildContext(baseInput(), [], spoken, new Date(2026, 0, 1), 'm', 'p', undefined, undefined, new Set());
     const announce = messages[0]!.content[0]!;
     expect(announce.type).toBe('text');
     if (announce.type === 'text') expect(announce.text).toContain('3 messaggi precedenti');
@@ -121,7 +120,6 @@ describe('buildContext', () => {
     };
     const messages = buildContext(
       baseInput(),
-      [],
       [],
       spoken,
       new Date(2026, 0, 1),
@@ -138,18 +136,21 @@ describe('buildContext', () => {
 
   it('memory rides in its own evidence message, ahead of the owner input', () => {
     const recalled = [{ type: 'text' as const, text: '[ricordo] qualcosa' }];
-    const messages = buildContext(baseInput(), recalled, [], noHistory, new Date(2026, 0, 1), 'm', 'p', undefined, undefined, new Set());
+    const messages = buildContext(baseInput(), recalled, noHistory, new Date(2026, 0, 1), 'm', 'p', undefined, undefined, new Set());
     const memory = messages.find((m) => m.origin === 'memory')!;
     expect(memory.content[0]).toEqual(recalled[0]);
     const ownerIndex = messages.findIndex((m) => m.origin === 'owner');
     expect(messages.indexOf(memory)).toBeLessThan(ownerIndex);
   });
 
-  it('the session plan remains evidence rather than work to resume', () => {
+  it('the session plan is not pushed into the turn: it is read through the todo tool', () => {
+    // The per-turn push was removed on purpose (ADR-0104). `buildContext` no
+    // longer even takes the open rows, so the plan cannot ride in the context
+    // as an implicit obligation. The reader is `agent/tools/todo.ts`, proved
+    // end-to-end in `agent/todo-wiring.test.ts`.
     const messages = buildContext(
       baseInput({ text: 'Buongiorno' }),
       [],
-      openPlan,
       noHistory,
       new Date(2026, 8, 30, 9, 31, 0),
       'm',
@@ -158,28 +159,9 @@ describe('buildContext', () => {
       undefined,
       new Set(),
     );
-    const work = messages.find((m) => m.origin === 'work')!;
-    const text = textOf(work.content);
-    expect(text).toContain('passo del piano');
-    expect(text).not.toContain('Sono aperti:');
-    expect(text).toContain('contesto');
-    expect(text).not.toContain('chiedi prima');
-    expect(text).not.toContain('Il lavoro è finito');
+    expect(messages.some((m) => m.origin === 'work')).toBe(false);
   });
 });
-
-const openPlan: TodoItem[] = [
-  {
-    seq: 1,
-    text: 'passo del piano',
-    state: 'pending',
-    note: null,
-    tier: 0,
-    dueAt: null,
-    createdAt: new Date(0).toISOString(),
-    updatedAt: new Date(0).toISOString(),
-  },
-];
 
 const textOf = (content: ContentBlock[]): string =>
   content
@@ -194,7 +176,6 @@ describe('P0 provenance · current owner input is isolated', () => {
     return buildContext(
       baseInput({ text }),
       recalled,
-      openPlan,
       noHistory,
       new Date(2026, 5, 1, 12, 0, 0),
       'm',
@@ -213,20 +194,18 @@ describe('P0 provenance · current owner input is isolated', () => {
     expect(textOf(last.content)).toBe('DOMANDA-OWNER');
   });
 
-  it('memory, runtime and work ride as separate non-owner messages', () => {
+  it('memory and runtime ride as separate non-owner messages', () => {
     const messages = built();
     const memory = messages.filter((m) => m.origin === 'memory');
     const runtime = messages.filter((m) => m.origin === 'runtime');
-    const work = messages.filter((m) => m.origin === 'work');
     expect(memory.length).toBe(1);
     expect(textOf(memory[0]!.content)).toContain('UNICOMEMORIA');
     expect(runtime.length).toBe(1);
-    expect(work.length).toBe(1);
-    expect(textOf(work[0]!.content)).toContain('passo del piano');
+    // The plan is not one of these sections any more (ADR-0104).
+    expect(messages.some((m) => m.origin === 'work')).toBe(false);
     // Nothing injected leaks into the owner message.
     const ownerText = textOf(messages[messages.length - 1]!.content);
     expect(ownerText).not.toContain('UNICOMEMORIA');
-    expect(ownerText).not.toContain('passo del piano');
   });
 
   it('no message is internally owner-originated except the current input', () => {
@@ -240,7 +219,6 @@ describe('P0 provenance · current owner input is isolated', () => {
     const messages = buildContext(
       baseInput(),
       [],
-      [],
       { kept: [], dropped: 3 },
       new Date(2026, 0, 1),
       'm',
@@ -252,11 +230,11 @@ describe('P0 provenance · current owner input is isolated', () => {
     expect(messages[0]!.origin).toBe('harness');
   });
 
-  it('volatile tail order is deterministic: history, memory, runtime, work, owner', () => {
+  it('volatile tail order is deterministic: history, memory, runtime, owner', () => {
     const messages = built();
     const order = messages.map((m) => m.origin ?? 'legacy');
     const rank = (o: string): number =>
-      ({ harness: 0, legacy: 1, memory: 2, runtime: 3, work: 4, owner: 5 })[o] ?? 9;
+      ({ harness: 0, legacy: 1, memory: 2, runtime: 3, owner: 5 })[o] ?? 9;
     const ranks = order.map(rank);
     expect([...ranks].sort((a, b) => a - b)).toEqual(ranks);
     expect(messages[messages.length - 1]!.origin).toBe('owner');
@@ -264,8 +242,8 @@ describe('P0 provenance · current owner input is isolated', () => {
 
   it('only the volatile clock moves between two builds: the rest is byte-identical', () => {
     const at = (h: number) => new Date(2026, 5, 1, h, 0, 0);
-    const first = buildContext(baseInput(), recalled, openPlan, noHistory, at(12), 'm', 'p', undefined, undefined, new Set());
-    const second = buildContext(baseInput(), recalled, openPlan, noHistory, at(13), 'm', 'p', undefined, undefined, new Set());
+    const first = buildContext(baseInput(), recalled, noHistory, at(12), 'm', 'p', undefined, undefined, new Set());
+    const second = buildContext(baseInput(), recalled, noHistory, at(13), 'm', 'p', undefined, undefined, new Set());
     expect(first.length).toBe(second.length);
     for (let i = 0; i < first.length; i++) {
       if (first[i]!.origin === 'runtime') {
@@ -282,7 +260,6 @@ describe('P0 provenance · semantic sections are observable without raw text', (
     const ctx = assembleSemantic({
       input: baseInput({ text: 'DOMANDA-OWNER' }),
       recalled: [{ type: 'text' as const, text: '[ricordo] qualcosa' }],
-      open: openPlan,
       spoken: noHistory,
       adesso: new Date(2026, 5, 1, 12, 0, 0),
       modello: 'm',
@@ -296,7 +273,6 @@ describe('P0 provenance · semantic sections are observable without raw text', (
     expect(byKey['owner']!.origin).toBe('owner');
     expect(byKey['owner']!.stability).toBe('volatile');
     expect(byKey['memory']!.origin).toBe('memory');
-    expect(byKey['work']!.origin).toBe('work');
     expect(byKey['runtime']!.origin).toBe('runtime');
     for (const s of sections) {
       expect(s.reason.length).toBeGreaterThan(0);
@@ -309,7 +285,6 @@ describe('P0 provenance · semantic sections are observable without raw text', (
     const ctx = assembleSemantic({
       input: baseInput({ text: `la chiave è ${secret}` }),
       recalled: [{ type: 'text' as const, text: `ricordo con ${secret} dentro` }],
-      open: openPlan,
       spoken: noHistory,
       adesso: new Date(2026, 5, 1, 12, 0, 0),
       modello: 'm',

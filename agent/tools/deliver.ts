@@ -1,4 +1,5 @@
-import { basename } from 'node:path';
+import { statSync } from 'node:fs';
+import { basename, isAbsolute, resolve } from 'node:path';
 import { z } from 'zod';
 import type { CapabilityDecl } from '../../core/policy/types.js';
 import type { DeliveryOutcome, FileSpec } from '../../core/surface/types.js';
@@ -17,6 +18,22 @@ import { PathDenied, resolveInScope, type FsScope } from './fs.js';
  * to call it."* This is that module, now that `Surface.deliverFile`
  * (`core/surface/types.ts`) gives every surface — Telegram, Discord, the
  * terminal — the same contract to answer to.
+ *
+ * ## Due radici, entrambe in lettura
+ *
+ * Il file che l'agente produce con `fs_write` vive nella **radice di progetto**
+ * (`Runtime.workspace`), mentre un allegato che l'owner ha mandato vive nel
+ * **vault** (`~/.muffin/vault`, stato d'installazione). Fino al 19/10/2026
+ * `send_file` aveva una sola radice — il vault — quindi un report appena
+ * scritto non si poteva mandare: il tool rispondeva "outside the working
+ * directory" su un file che l'agente aveva appena creato. Il caso d'uso
+ * principale era rotto, e il test di accettazione B14 lo aveva cristallizzato
+ * scrivendo il file nel vault invece di usare `fs_write`.
+ *
+ * Le due radici sono **in lettura**, in quest'ordine: progetto, poi vault. La
+ * radice di progetto vince a parità di nome, perché è l'output di questo turno.
+ * Le liste `denyRead`/`denyWrite` restano quelle di `mandatoryGuards`, e la
+ * scrittura non passa da qui: questo tool non scrive niente.
  *
  * ## Where this stops, and why it stops there
  *
@@ -62,13 +79,17 @@ export const sendFileCapability: CapabilityDecl = {
 const sendFileToolSpec: ToolSpec = {
   name: 'send_file',
   description:
-    "Send a file from the vault as a real attachment on the current conversation's surface (Telegram, Discord, or the terminal), instead of citing its path in text. " +
-    'Use it when the owner should be able to open something directly — a report, an exported chart, a generated document. ' +
+    "Send a file from the project working directory or the vault as a real attachment on the current conversation's surface (Telegram, Discord, or the terminal), instead of citing its path in text. " +
+    'Use it when the owner should be able to open something directly — a report you just wrote, an exported chart, a generated document, or an attachment the owner sent earlier. ' +
     'Not for text you can just say in the reply: only for actual files. Returns confirmation that the attachment was delivered, or the reason it was not.',
   inputSchema: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Path to the file, relative to the vault root (or absolute, if already known)' },
+      path: {
+        type: 'string',
+        description:
+          'Path to the file, relative to the project working directory or the vault (or absolute, if already known). A leading "vault/" is accepted for files the owner sent.',
+      },
       caption: { type: 'string', description: 'Optional short text shown alongside the file' },
     },
     required: ['path'],
@@ -76,10 +97,59 @@ const sendFileToolSpec: ToolSpec = {
 };
 
 export type SendFileDeps = {
-  /** Scoped to the vault root — see the module docstring for why not the general working directory. */
-  scope: FsScope;
+  /**
+   * Read scopes, in priority order: the project working directory first, then
+   * the vault. See the module docstring for why both and why in this order.
+   */
+  scopes: readonly FsScope[];
   deliverFile: (channel: string, file: FileSpec) => Promise<DeliveryOutcome>;
 };
+
+/**
+ * Resolve `requested` against the first scope that contains it.
+ *
+ * A relative path is tried twice per scope: as written, and with a leading
+ * `<basename(scope.root)>/` removed. The second form exists for one measured
+ * bug — the ingest line names a file relative to the vault root (`inbox/x`),
+ * while a model that has seen the path in another context writes
+ * `vault/inbox/x`, and the old single-root resolver joined it to
+ * `vault/vault/inbox/x`. The strip only fires when the first segment really is
+ * the root's own name, so it cannot turn an unrelated relative path into a
+ * different one.
+ */
+function resolveForSend(scopes: readonly FsScope[], requested: string): string {
+  const attempts: string[] = [];
+  for (const scope of scopes) {
+    const candidates = [requested];
+    if (!isAbsolute(requested)) {
+      const rootName = basename(resolve(scope.root));
+      if (requested.startsWith(`${rootName}/`) || requested.startsWith(`${rootName}\\`)) {
+        candidates.push(requested.slice(rootName.length + 1));
+      }
+    }
+    for (const candidate of candidates) {
+      try {
+        const resolved = resolveInScope(scope, candidate, false);
+        // The path must be a file that exists. Without this check the first
+        // scope "succeeds" on a path that merely sits inside it, and a file
+        // that only exists in the second scope is never reached — the same
+        // shadowing that made the vault case fail with two non-existent paths.
+        if (statSync(resolved, { throwIfNoEntry: false })?.isFile() !== true) {
+          attempts.push(`no such file: ${requested}`);
+          continue;
+        }
+        return resolved;
+      } catch (error) {
+        attempts.push(error instanceof Error ? error.message : String(error));
+      }
+    }
+  }
+  throw new PathDenied(
+    `outside the working directory and the vault: ${requested}` +
+      (attempts.length === 0 ? '' : ` (${attempts.join('; ')})`),
+    'outside_scope',
+  );
+}
 
 /**
  * Built once the registry exists (`connectSurfaces`), late-registered via
@@ -121,7 +191,7 @@ export function makeSendFileTool(deps: SendFileDeps): RegisteredTool {
 
       let resolved: string;
       try {
-        resolved = resolveInScope(deps.scope, parsed.data.path, false);
+        resolved = resolveForSend(deps.scopes, parsed.data.path);
       } catch (error) {
         // `PathDenied`'s message quotes back the path the model itself wrote —
         // an echo of the caller's own output, not foreign content, which is

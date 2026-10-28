@@ -147,7 +147,7 @@ describe('una capacità spenta lo dice, non solo al log', () => {
       const vaultRoot = paths(home).vault;
       runtime.register(
         makeSendFileTool({
-          scope: { root: vaultRoot, denyWrite: [], denyRead: [] },
+          scopes: [{ root: vaultRoot, denyWrite: [], denyRead: [] }],
           deliverFile: async () => ({ delivered: false, why: 'test: nessun registro superfici' }),
         }),
         sendFileCapability,

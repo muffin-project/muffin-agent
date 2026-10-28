@@ -3,7 +3,13 @@ import { isIP } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { isForbiddenAddress } from '../../core/net/egress.js';
 import { toolContext } from '../fixtures/tool-context.js';
-import { buildPinnedUrl, defaultPinnedFetch, hostHeaderFor, makeHttpTool, serverNameFor } from './http.js';
+import {
+  buildPinnedUrl,
+  defaultPinnedFetch,
+  hostHeaderFor,
+  makeHttpTool,
+  serverNameFor,
+} from './http.js';
 
 const ctx = toolContext();
 
@@ -81,6 +87,20 @@ describe('http_get DNS pinning (#640)', () => {
     expect(out.isError).toBeUndefined();
     expect(wireAddress).toBe('93.184.216.34');
     expect(n).toBe(1);
+  });
+
+  it('a hexadecimal v4-mapped literal never reaches the wire', async () => {
+    const { fetchFn, calls } = fetchRecorder([]);
+    const tool = makeHttpTool({
+      fetchFn,
+      lookupFn: async () => {
+        throw new Error('a literal must not be looked up');
+      },
+    });
+    const out = await tool.handler({ url: 'http://[::ffff:7f00:1]:11434/' }, ctx);
+    expect(out.isError).toBe(true);
+    expect(out.content).toContain('not routable');
+    expect(calls.length).toBe(0);
   });
 
   it('one private answer vetoes the hop even when a public answer exists', async () => {
@@ -168,7 +188,10 @@ describe('http_get DNS pinning (#640)', () => {
             port,
             path: '/items?q=1',
             method: 'GET',
-            headers: { host: hostHeaderFor(original), 'user-agent': 'muffin/0.2 (+personal-agent)' },
+            headers: {
+              host: hostHeaderFor(original),
+              'user-agent': 'muffin/0.2 (+personal-agent)',
+            },
           },
           (res) => {
             let text = '';
@@ -187,7 +210,9 @@ describe('http_get DNS pinning (#640)', () => {
 
   it('default transport fails closed on a hostname instead of a pinned IP', async () => {
     await expect(
-      defaultPinnedFetch(new URL('https://shop.example.com/'), { signal: AbortSignal.timeout(1_000) }),
+      defaultPinnedFetch(new URL('https://shop.example.com/'), {
+        signal: AbortSignal.timeout(1_000),
+      }),
     ).rejects.toThrow(/IP literal/);
   });
 });

@@ -5,12 +5,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { runInit } from '../../../cli/init.js';
 import { buildRuntime } from '../../../agent/runtime.js';
 import { ContinuationGone } from '../../../agent/loop.js';
-import type { LoopDeps } from '../../../agent/loop.js';
+import type { LoopDeps, TurnResult } from '../../../agent/loop.js';
 import type { Provider } from '../../../agent/providers/types.js';
 import { identify } from '../../../core/surface/types.js';
 import type { TurnRecord } from '../../../core/turns/store.js';
-import { ModelLane } from '../../../core/turns/model-lane.js';
-import { runWork } from './work.js';
+import { LANE_TURNS, ModelLane } from '../../../core/turns/model-lane.js';
+import { runWork, type EnqueuedWork } from './work.js';
 import { makeIngressPort, type InboundEvent, type IngressPort } from './types.js';
 import { providerMessages } from '../../../agent/loop/provider-checkpoint.js';
 
@@ -26,6 +26,12 @@ import { providerMessages } from '../../../agent/loop/provider-checkpoint.js';
  * comes back. `cli/porta-durevole.test.ts` proves the reading half against the
  * real assembly; this file proves the writing half against the real store.
  */
+
+/** Il turno ha risposto in banda: i test qui sotto non accodano mai. */
+function risposta(out: TurnResult | EnqueuedWork): TurnResult {
+  if ('kind' in out) throw new Error(`accodato invece di risposto: ${out.workId}`);
+  return out;
+}
 
 function porta(id: string, transport: 'edit' | 'off' = 'edit'): IngressPort {
   return makeIngressPort(
@@ -149,6 +155,57 @@ describe('identità e taint arrivano già decisi', () => {
   });
 });
 
+describe('corsia occupata: la riga è durevole e il drain non aspetta', () => {
+  it('accoda invece di bloccare, e non chiama il modello', async () => {
+    const env = ambiente();
+    const port = porta('telegram');
+    const ev = evento(port);
+    const lane = new ModelLane();
+    // La corsia è tenuta da un altro turno: è esattamente la condizione che
+    // prima faceva girare questo drain nel `while` di attesa, bloccando la
+    // casella d'ingresso.
+    expect(lane.take(LANE_TURNS)).toBeNull();
+    const chat = vi.spyOn(env.loop.provider, 'chat');
+    try {
+      const out = await runWork({ loop: env.loop, sessions: env.sessions, lane }, port, ev, {
+        workId: 'coda-1',
+        identity: identify(ev.identity, '7'),
+        text: 'ciao',
+        contentTaint: 0,
+        replyTo: ev.address.record,
+        signal: new AbortController().signal,
+        steer: () => [],
+        enqueueNow: true,
+      });
+      expect(out).toEqual({ kind: 'enqueued', workId: 'coda-1' });
+      const row = env.turns.get('coda-1');
+      expect(row?.status).toBe('runnable');
+      expect(row?.inputText).toBe('ciao');
+      expect(row?.counters.iterations).toBe(0);
+      expect(chat).not.toHaveBeenCalled();
+    } finally {
+      lane.release(LANE_TURNS);
+    }
+  });
+
+  it('senza la decisione del router il turno gira in banda: il flag è la decisione, non uno stato', async () => {
+    const env = ambiente();
+    const port = porta('telegram');
+    const ev = evento(port);
+    const out = await runWork({ loop: env.loop, sessions: env.sessions, lane: new ModelLane() }, port, ev, {
+      workId: 'subito-1',
+      identity: identify(ev.identity, '7'),
+      text: 'ciao',
+      contentTaint: 0,
+      replyTo: ev.address.record,
+      signal: new AbortController().signal,
+      steer: () => [],
+    });
+    expect('kind' in out).toBe(false);
+    expect(env.turns.get('subito-1')?.status).toBe('done');
+  });
+});
+
 describe('l identità già impegnata è la riga scritta', () => {
   it('il turno nasce con il `workId` passato, mai con un secondo id', async () => {
     const env = ambiente();
@@ -219,7 +276,7 @@ describe('continuazione conversazionale (P0-B)', () => {
   it('"riprendi" continua la riga continuabile sulla stessa identità', async () => {
     const env = ambiente();
     rigaContinuabile(env);
-    const out = await giraRiprendi(env, porta('telegram'), 'w9');
+    const out = risposta(await giraRiprendi(env, porta('telegram'), 'w9'));
     expect(out.turnId).toBe('cont-1');
     expect(out.stopped).toBe('answered');
     const row = env.turns.get('cont-1');
@@ -297,7 +354,7 @@ describe('continuazione conversazionale (P0-B)', () => {
       ),
     ).toBe(true);
     const leasesBefore = env.turns.leasesFor('cont-1').length;
-    const out = await giraRiprendi(env, porta('telegram'), 'w9');
+    const out = risposta(await giraRiprendi(env, porta('telegram'), 'w9'));
     expect(out.turnId).toBe('cont-1');
     expect(out.stopped).toBe('continuable');
     expect(out.text).toContain('non riparte');
@@ -354,7 +411,7 @@ describe('message.received automation seam', () => {
     const chat = vi.spyOn(env.loop.provider, 'chat');
     let actions = 0;
 
-    const out = await runWork(
+    const out = risposta(await runWork(
       {
         loop: env.loop,
         sessions: env.sessions,
@@ -387,7 +444,7 @@ describe('message.received automation seam', () => {
         signal: new AbortController().signal,
         steer: () => [],
       },
-    );
+    ));
 
     expect(actions).toBe(1);
     expect(chat).not.toHaveBeenCalled();
@@ -408,7 +465,7 @@ describe('message.received automation seam', () => {
     let matches = 0;
     let actions = 0;
 
-    const out = await runWork(
+    const out = risposta(await runWork(
       {
         loop: env.loop,
         sessions: env.sessions,
@@ -441,7 +498,7 @@ describe('message.received automation seam', () => {
         signal: new AbortController().signal,
         steer: () => [],
       },
-    );
+    ));
 
     expect(matches).toBe(1);
     expect(actions).toBe(0);
