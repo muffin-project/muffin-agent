@@ -203,6 +203,21 @@ safe to delete without losing product knowledge.
 Finished work moves out of the handoff. Git history, DAY-1 requirements/ADR/evidence and current
 authority documents retain what matters.
 
+## Commit checkpoints often
+
+**Trigger:** implementing a slice, before and after each coherent step.
+
+Commit early and often on the slice branch: each commit one coherent,
+working checkpoint, with a message that says what changed. A finished
+slice is never a single commit, and work never lives only in the working
+tree — a checkpoint per step is what makes any earlier point returnable
+without reconstructing it from prose. This applies to agents and humans
+alike.
+
+Push when the work is substantial enough that a durable remote checkpoint
+buys recovery or reviewability (see `BRANCHING.md`); local checkpoints
+already buy returnability.
+
 ## Documentation follows the claim
 
 Update only the authoritative home whose meaning changed, plus a derived view if

@@ -97,6 +97,12 @@ describe('providerFor', () => {
     expect(providerFor({ kind: 'openai-compat', baseUrl: OR.baseUrl })?.id).toBe('openrouter');
   });
 
+  it("riconosce l'endpoint di Groq", () => {
+    expect(providerFor({ kind: 'openai-compat', baseUrl: PROVIDERS.groq.baseUrl })?.id).toBe(
+      'groq',
+    );
+  });
+
   /** Per hostname e non per sottostringa: `openrouter.ai.evil.tld` contiene «openrouter» e non lo è. */
   it('non si fa ingannare da un hostname che contiene il nome', () => {
     expect(
@@ -141,6 +147,20 @@ describe('fetchCatalogue', () => {
     expect(requests[0]?.headers.get('x-api-key')).toBe('synthetic-anthropic-key');
     expect(requests[0]?.headers.get('anthropic-version')).toBe('2023-06-01');
     expect(Number.isNaN(model?.inputPerMTok)).toBe(true);
+  });
+
+  it('il catalogo Groq va interrogato con la chiave (Bearer su /models)', async () => {
+    const requests: { url: string; headers: Headers }[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      requests.push({ url: String(input), headers: new Headers(init?.headers) });
+      return new Response(JSON.stringify({ data: [{ id: 'llama-3.3-70b-versatile' }] }), {
+        status: 200,
+      });
+    }) as typeof globalThis.fetch;
+    const [model] = await fetchCatalogue(PROVIDERS.groq, 'synthetic-groq-key', fetchImpl);
+    expect(requests[0]?.url).toBe('https://api.groq.com/openai/v1/models');
+    expect(requests[0]?.headers.get('authorization')).toBe('Bearer synthetic-groq-key');
+    expect(model?.id).toBe('llama-3.3-70b-versatile');
   });
 });
 

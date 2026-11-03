@@ -477,7 +477,7 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
     requestedProvider = commandArgs[providerFlagIndex + 1];
     if (requestedProvider === undefined || commandArgs[providerFlagIndex + 2] === '--provider') {
       out(
-        'uso: muffin model [main|light] --provider <openrouter|anthropic|chatgpt> [slug|--list [filtro]]',
+        'uso: muffin model [main|light] --provider <openrouter|groq|anthropic|chatgpt> [slug|--list [filtro]]',
       );
       return 2;
     }

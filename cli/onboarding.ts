@@ -1,5 +1,6 @@
 import { discoverOpenAICompatModels } from '../agent/providers/models-discovery.js';
 import type { ProviderKind } from '../core/config/config.js';
+import { PROVIDERS, providerFor } from '../core/config/providers.js';
 import type { SandboxProbe } from '../core/sandbox/probe.js';
 import { promptLine } from './prompt.js';
 
@@ -11,6 +12,18 @@ export function isOpenRouterKey(key: string | undefined): boolean {
   return key?.startsWith('sk-or-') ?? false;
 }
 
+/** Groq keys carry a stable, documented prefix (`gsk_`). */
+export function isGroqKey(key: string | undefined): boolean {
+  return key?.startsWith('gsk_') ?? false;
+}
+
+/**
+ * The Groq base URL, read from the provider catalog — one source, not two.
+ * Mirrors `OPENROUTER_BASE_URL` above, except OpenRouter's predates the
+ * catalog and stays a literal so its history does not rewrite.
+ */
+export const GROQ_BASE_URL = PROVIDERS.groq.baseUrl;
+
 /** Telegram bot tokens are `<digits>:<~35 url-safe chars>` — a shape people paste by mistake. */
 export function looksLikeTelegramToken(key: string | undefined): boolean {
   return /^\d{6,}:[A-Za-z0-9_-]{30,}$/.test(key ?? '');
@@ -18,13 +31,14 @@ export function looksLikeTelegramToken(key: string | undefined): boolean {
 
 /**
  * Infer the provider from the shape of the key, so the first run does not ask a
- * question it can answer by looking: an OpenRouter key means the openai-compat
- * gateway, an Anthropic key means Anthropic direct. Undefined when the prefix is
- * unknown — the caller keeps its own default. An explicit --provider always wins
- * over this.
+ * question it can answer by looking: an OpenRouter or Groq key means the
+ * openai-compat gateway, an Anthropic key means Anthropic direct. Undefined
+ * when the prefix is unknown — the caller keeps its own default. An explicit
+ * --provider always wins over this.
  */
 export function inferProvider(key: string | undefined): ProviderKind | undefined {
   if (isOpenRouterKey(key)) return 'openai-compat';
+  if (isGroqKey(key)) return 'openai-compat';
   if (key?.startsWith('sk-ant-')) return 'anthropic';
   return undefined;
 }
@@ -61,7 +75,12 @@ export function chooseProvider(
   // base URL (the flag path above returns before this line), matching the
   // reading that an owner who names the provider by hand is also trusted to
   // name a non-default endpoint by hand.
-  const baseUrl = explicitBaseUrl ?? (isOpenRouterKey(key) ? OPENROUTER_BASE_URL : undefined);
+  const inferredBaseUrl = isOpenRouterKey(key)
+    ? OPENROUTER_BASE_URL
+    : isGroqKey(key)
+      ? GROQ_BASE_URL
+      : undefined;
+  const baseUrl = explicitBaseUrl ?? inferredBaseUrl;
   if (inferred) return { provider: inferred, baseUrl, reason: 'inferred' };
   return { provider: 'anthropic', baseUrl, reason: 'default' };
 }
@@ -85,20 +104,29 @@ export function describeProviderChoice(choice: ProviderChoice, key: string | und
     return `✓ ${label} ${choice.provider}${where} — indicato con --provider\n`;
   }
   if (choice.reason === 'inferred') {
-    const prefix = choice.provider === 'openai-compat' ? 'sk-or-…' : 'sk-ant-…';
+    // Read from the key, not the provider: openai-compat is two key shapes
+    // now, and the prefix is what proves which one was actually seen.
+    const prefix = isGroqKey(key) ? 'gsk_…' : key?.startsWith('sk-ant-') ? 'sk-ant-…' : 'sk-or-…';
     return `✓ ${label} ${choice.provider}${where} — dedotto dalla chiave (${prefix})\n`;
   }
   if (choice.reason === 'local') {
     return `✓ ${label} ${choice.provider}${where} — runtime locale rilevato e scelto, nessuna chiave\n`;
   }
   if (key) {
-    return `! ${label} ${choice.provider} — la chiave non è sk-or-… né sk-ant-…, uso il default (--provider per cambiarlo)\n`;
+    return `! ${label} ${choice.provider} — la chiave non è sk-or-…, gsk_… né sk-ant-…, uso il default (--provider per cambiarlo)\n`;
   }
   return `! ${label} ${choice.provider} — nessuna chiave ancora, dedurrò il provider quando la incolli\n`;
 }
 
 /** Where to get a key, shown before the prompt — the detail gh and Hermes get right. */
 export function keyHint(provider: ProviderKind | undefined, baseUrl: string | undefined): string {
+  // The endpoint decides before the kind does: an explicit `--provider
+  // openai-compat` with a Groq `--base-url` needs a Groq key, not an OpenRouter
+  // one. Matched against the catalog, not a substring, for the same reason
+  // `providerFor` exists.
+  if (baseUrl !== undefined && providerFor({ kind: 'openai-compat', baseUrl })?.id === 'groq') {
+    return `Chiave Groq → ${PROVIDERS.groq.keysUrl}\n`;
+  }
   if (provider === 'anthropic') {
     return 'Chiave Anthropic → https://console.anthropic.com/settings/keys\n';
   }
@@ -106,8 +134,9 @@ export function keyHint(provider: ProviderKind | undefined, baseUrl: string | un
     return 'Chiave OpenRouter (una chiave, tutti i modelli) → https://openrouter.ai/keys\n';
   }
   return (
-    'Incolla una chiave OpenRouter (sk-or-…) o Anthropic (sk-ant-…) — il prefisso sceglie il provider.\n' +
-    '  OpenRouter, una chiave per tutti i modelli → https://openrouter.ai/keys\n'
+    'Incolla una chiave OpenRouter (sk-or-…), Groq (gsk_…) o Anthropic (sk-ant-…) — il prefisso sceglie il provider.\n' +
+    '  OpenRouter, una chiave per tutti i modelli → https://openrouter.ai/keys\n' +
+    `  Groq → ${PROVIDERS.groq.keysUrl}\n`
   );
 }
 
