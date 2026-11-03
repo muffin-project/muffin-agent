@@ -331,6 +331,17 @@ COMMON_ENV=(
   "MUFFIN_INSTALL_URL=file://$REPO/install.sh"
   "SUDO_UID=$KEY_OWNER_UID"
 )
+# Git 2.56 realpaths the cwd inherited across the root→muffin handoff and
+# refuses an ancestor the service account cannot search. The leaf here is
+# executable; its parent is not. That is the shape of an admin home, of /root,
+# and of the GitHub Actions workspace under /home/runner — not a property of
+# one runner image.
+PRIVATE_PARENT=$LAB/private-parent
+mkdir -p "$PRIVATE_PARENT/cwd"
+chmod 0755 "$PRIVATE_PARENT/cwd"
+chmod 0700 "$PRIVATE_PARENT"
+cd "$PRIVATE_PARENT/cwd"
+
 env -i "${COMMON_ENV[@]}" MUFFIN_API_KEY_FILE="$LAB/user-key-dir/key" sh "$REPO/bootstrap.sh" >"$LAB/install.log" 2>&1 || {
   cat "$LAB/install.log" >&2; cat "$EVENTS" >&2; echo 'root handoff eval: public bootstrap install failed' >&2; exit 1;
 }
