@@ -13,6 +13,14 @@
 # latency warrants it. Linux is the production-side runner and requires the real
 # sandbox/systemd dependencies.
 #
+# `verifica` also enforces Biome on the PR's changed files (same command as
+# `npm run lint` locally) and excludes from its suite the files owned by the
+# narrow required jobs: `docs/collegamenti*` belongs to `collegamenti`,
+# `.claude/**` belongs to `strumenti`. Both are required and materialize on
+# every PR, so the partition removes a duplicate run without removing a check.
+# `npm test` locally stays the full suite: the partition is a CI property, not
+# a command property.
+#
 # `concurrency` cancels obsolete runs for the same ref. The main push workflow
 # is post-merge evidence; promotion itself is authorized by the PR checks.
 
@@ -72,7 +80,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # `fetch-depth: 0` perché lo step di lint confronta contro la sha base
+      # della PR (`biome --changed --since`): con un clone superficiale non
+      # esiste una merge-base da attraversare.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -123,6 +136,16 @@ jobs:
       # risolve le versioni da sé verifica un albero che nessuno ha in locale.
       - run: npm ci
 
+      # Stessa regola di `npm run lint` locale (`biome check --changed`), con
+      # la base esplicita perché in CI non esiste un `origin/dev` da leggere in
+      # `biome.json`. Solo sulle PR: sul push a main questo percorso è già
+      # coperto dalle PR che lo hanno prodotto. `--no-errors-on-unmatched`:
+      # una PR di soli YAML/Markdown non deve fallire perché Biome non
+      # processa nessuno dei suoi file.
+      - if: github.event_name == 'pull_request'
+        name: lint Biome (file cambiati rispetto alla base)
+        run: npx biome check --changed --since=${{ github.event.pull_request.base.sha }} --no-errors-on-unmatched
+
       # ADR-0078: ADR-0019 promised this check, but no CI implemented it. It
       # now runs in the required GitHub Actions `verifica` job:
       # proprietary/UNLICENSED/missing licenses fail, while copyleft is
@@ -162,11 +185,15 @@ jobs:
       # questo è l'unico runner con `systemd-analyze`. Se il parser sparisse
       # dall'immagine, senza la variabile il test tornerebbe a saltare in
       # silenzio e l'unica verifica reale della unit sparirebbe con lui.
+      # `--exclude`: le suite possedute dai job narrow required non si
+      # ripetono qui — `docs/collegamenti*` è di `collegamenti`, `.claude/**`
+      # è di `strumenti`, ed entrambi girano su ogni PR. `npm test` locale
+      # resta la suite intera; la partizione è una proprietà della CI.
       - name: suite
         env:
           MUFFIN_REQUIRE_SANDBOX: '1'
           MUFFIN_REQUIRE_SYSTEMD: '1'
-        run: npx vitest run --reporter=dot
+        run: npx vitest run --reporter=dot --exclude 'docs/collegamenti*.test.ts' --exclude '**/.claude/**/*.test.ts'
 
       # Mutation proof for the AppArmor hook rules: remove the shared
       # profile's hook policy, then run the same production-path test. Its
