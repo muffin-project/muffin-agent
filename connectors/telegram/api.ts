@@ -132,6 +132,13 @@ export interface TelegramApiLike {
   fileUrl(fileId: string): Promise<string>;
   setMyCommands(commands: { command: string; description: string }[]): Promise<boolean>;
   answerCallbackQuery(callbackQueryId: string, text?: string): Promise<boolean>;
+  /**
+   * L'unica risposta possibile a una convocazione in guest mode (Bot API 10.0):
+   * una sola, agganciata al `guest_query_id`, e il bot non deve essere membro
+   * della chat da cui la convocazione arriva. Per questo è un `effect`: è un
+   * messaggio che parte, con tutti i suoi vincoli (niente retry alla cieca).
+   */
+  answerGuestQuery(guestQueryId: string, html: string): Promise<boolean>;
   getChatMember(chatId: number, userId: number): Promise<{ status: string }>;
   leaveChat(chatId: number): Promise<boolean>;
 }
@@ -294,7 +301,7 @@ export class TelegramApi implements TelegramApiLike {
     // `stopped_message_generation` (Bot API 10.3) per la stessa ragione: senza,
     // il controllo Stop dell'owner non arriva mai e un turno non fermabile è
     // un turno che si può fermare solo con `/stop` digitato.
-    allowed: string[] = ['message', 'edited_message', 'callback_query', 'my_chat_member', 'stopped_message_generation'],
+    allowed: string[] = ['message', 'edited_message', 'callback_query', 'my_chat_member', 'stopped_message_generation', 'guest_message'],
     // Il gancio che rende il long poll interrompibile davvero: senza, uno
     // `stop()` durante l'attesa non poteva far altro che aspettare fino a
     // `REQUEST_TIMEOUT_MS` — e il database, chiuso nel frattempo, riceveva la
@@ -340,6 +347,20 @@ export class TelegramApi implements TelegramApiLike {
     return this.call<boolean>('answerCallbackQuery', {
       callback_query_id: callbackQueryId,
       ...(text === undefined ? {} : { text: text.slice(0, 200) }),
+    });
+  }
+
+  /**
+   * La risposta a una convocazione in guest mode: una sola per `guest_query_id`,
+   * in forma di risultato inline (article + testo), perché il bot non è membro
+   * della chat e `sendMessage` lì non può arrivare. Un secondo tentativo su lo
+   * stesso id fallisce per contratto di Bot API — chi chiama risponde una volta
+   * sola o non risponde.
+   */
+  answerGuestQuery(guestQueryId: string, html: string): Promise<boolean> {
+    return this.effect<boolean>('answerGuestQuery', {
+      guest_query_id: guestQueryId,
+      result: { type: 'article', id: 'muffin', message_text: html, parse_mode: 'HTML' },
     });
   }
 
