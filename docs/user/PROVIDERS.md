@@ -4,7 +4,9 @@ Run `muffin config` in a terminal to choose a lane, connect a provider, view its
 model catalog, and select a model. Main and light are independent: changing one
 preserves the other's model, endpoint, credentials and routing settings.
 The menu supports OpenRouter, Anthropic API, ChatGPT plan, and custom
-OpenAI-compatible endpoints such as a local Ollama server.
+OpenAI-compatible endpoints such as a local Ollama server. A first
+`muffin init` without a usable key asks the same provider question; a
+recognised key still selects its provider without asking.
 
 Shortcuts use the same selection path:
 

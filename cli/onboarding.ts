@@ -1,7 +1,10 @@
 import { discoverOpenAICompatModels } from '../agent/providers/models-discovery.js';
 import type { ProviderKind } from '../core/config/config.js';
+import { ChatGPTConnection } from '../core/config/chatgpt-oauth.js';
+import { PROVIDERS, type ProviderEntry, type ProviderId } from '../core/config/providers.js';
 import type { SandboxProbe } from '../core/sandbox/probe.js';
-import { promptLine } from './prompt.js';
+import { openChatGPTBrowser } from './chatgpt-browser.js';
+import { promptLine, promptSecret } from './prompt.js';
 
 /** The one base URL we special-case, because it is the key most users bring. */
 export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
@@ -36,9 +39,10 @@ export type ProviderChoice = {
    * How Muffin decided — the fact `describeProviderChoice` puts into words.
    * `local` is the one case with no key to read a prefix from at all: the
    * owner picked a probed local runtime over the API question entirely
-   * (`askLocalOrApi`), which `chooseProvider` never sees.
+   * (`askLocalOrApi`), which `chooseProvider` never sees. `chosen` is the
+   * init provider menu below: the owner picked, neither a flag nor a key did.
    */
-  readonly reason: 'explicit' | 'inferred' | 'default' | 'local';
+  readonly reason: 'explicit' | 'inferred' | 'chosen' | 'default' | 'local';
 };
 
 /**
@@ -88,6 +92,9 @@ export function describeProviderChoice(choice: ProviderChoice, key: string | und
     const prefix = choice.provider === 'openai-compat' ? 'sk-or-…' : 'sk-ant-…';
     return `✓ ${label} ${choice.provider}${where} — dedotto dalla chiave (${prefix})\n`;
   }
+  if (choice.reason === 'chosen') {
+    return `✓ ${label} ${choice.provider}${where} — scelto ora\n`;
+  }
   if (choice.reason === 'local') {
     return `✓ ${label} ${choice.provider}${where} — runtime locale rilevato e scelto, nessuna chiave\n`;
   }
@@ -109,6 +116,288 @@ export function keyHint(provider: ProviderKind | undefined, baseUrl: string | un
     'Incolla una chiave OpenRouter (sk-or-…) o Anthropic (sk-ant-…) — il prefisso sceglie il provider.\n' +
     '  OpenRouter, una chiave per tutti i modelli → https://openrouter.ai/keys\n'
   );
+}
+
+/**
+ * What the init provider menu resolves to: a catalog entry, or a custom
+ * OpenAI-compatible endpoint (with the URL already captured when the owner
+ * pasted one instead of writing `custom`).
+ */
+export type ProviderMenuPick =
+  | { readonly kind: 'provider'; readonly id: ProviderId }
+  | { readonly kind: 'custom'; readonly baseUrl?: string | undefined };
+
+/**
+ * The provider question ADR-0036 originally named (*«da chi passiamo?»*).
+ *
+ * Asked only when the key did not already answer it — a recognised key keeps
+ * today's silent inference, an explicit flag keeps winning over everything.
+ * The catalog entries come from `PROVIDERS`, never from a second list kept
+ * here: a provider added to the catalog appears in this menu with no edit.
+ * `custom` (or a pasted http(s) URL) is an endpoint the catalog does not
+ * know; the caller prompts for the URL and the key next. Empty or EOF skips
+ * the question and the caller falls back to today's default path; anything
+ * else that is not a number, an id, `custom` or a URL re-asks instead of
+ * guessing, because a mistyped provider is a misconfigured install.
+ */
+export async function askProviderChoice(
+  input: NodeJS.ReadStream = process.stdin,
+  output: NodeJS.WriteStream = process.stdout,
+): Promise<ProviderMenuPick | undefined> {
+  const entries = Object.values(PROVIDERS);
+  const menu = entries.map((e, i) => `  [${i + 1}] ${e.label} (${e.id})`).join('\n');
+  const custom = entries.length + 1;
+  for (;;) {
+    const answer = await promptLine(
+      `\nDa chi passiamo?\n${menu}\n  [${custom}] endpoint personalizzato (OpenAI-compatibile)\nScelta [1-${custom}] (nome, numero, URL http(s), o invio per saltare): `,
+      input,
+      output,
+    );
+    if (answer === undefined || answer === '') return undefined;
+    const n = Number.parseInt(answer, 10);
+    const numbered = Number.isInteger(n) && String(n) === answer ? n : undefined;
+    if (numbered !== undefined && numbered >= 1 && numbered <= entries.length) {
+      const picked = entries[numbered - 1]!;
+      return { kind: 'provider', id: picked.id };
+    }
+    if (answer === 'custom' || numbered === custom) return { kind: 'custom' };
+    const byId = entries.find((e) => e.id === answer.toLowerCase());
+    if (byId !== undefined) return { kind: 'provider', id: byId.id };
+    try {
+      const parsed = new URL(answer);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return { kind: 'custom', baseUrl: answer };
+      }
+    } catch {
+      // Not a URL — fall through to the re-ask below.
+    }
+    output.write(
+      `«${answer}» non è un provider della lista — numero, nome, custom, URL http(s) o invio per saltare.\n`,
+    );
+  }
+}
+
+/**
+ * Whether this key can belong to this catalog provider — the strictness the
+ * menu flow applies after the owner just chose: a mismatch is almost certainly
+ * a wrong paste, and writing it would fail at the first model call, which is
+ * the worst place to learn it. Unknown shapes (and ChatGPT's OAuth, which has
+ * no key shape at all) have nothing to check against and pass.
+ */
+export function keyMatchesProvider(key: string, id: ProviderId): boolean {
+  if (id === 'openrouter') return isOpenRouterKey(key);
+  if (id === 'anthropic') return key.startsWith('sk-ant-');
+  return true;
+}
+
+/** The key shape the strict prompt names, so the refusal says what it wants. */
+export function keyPrefixFor(id: ProviderId): string | undefined {
+  if (id === 'openrouter') return 'sk-or-…';
+  if (id === 'anthropic') return 'sk-ant-…';
+  return undefined;
+}
+
+/**
+ * The key for a provider just picked from the menu — strict, because a
+ * mismatch here is almost certainly a wrong paste made seconds after choosing:
+ * writing it would fail at the first model call, the worst place to learn it.
+ * A refused key is never stored; skipping (empty) leaves key acquisition to
+ * the caller's missing-key path, which stays resumable.
+ */
+export async function promptProviderKey(
+  entry: ProviderEntry,
+  input: NodeJS.ReadStream,
+  output: NodeJS.WriteStream,
+  deps: {
+    readonly out: (line: string) => void;
+    readonly askSecret?: typeof promptSecret;
+  },
+): Promise<string | undefined> {
+  const askSecret = deps.askSecret ?? promptSecret;
+  for (;;) {
+    const key = await askSecret(
+      `Chiave ${entry.label} (nascosta — incollala, o invio per saltare): `,
+      input,
+      output,
+    );
+    if (key === undefined) return undefined;
+    if (keyMatchesProvider(key, entry.id)) return key;
+    const prefix = keyPrefixFor(entry.id);
+    deps.out(
+      `Non sembra una chiave di ${entry.label}${prefix === undefined ? '' : ` (attesa forma ${prefix})`} — non la salvo, riprova o invio per saltare.`,
+    );
+  }
+}
+
+export type MenuProviderDeps = {
+  readonly out: (line: string) => void;
+  readonly ask?: typeof promptLine;
+  readonly askSecret?: typeof promptSecret;
+  readonly chatgpt?: (home: string) => Pick<ChatGPTConnection, 'session' | 'signIn' | 'listModels'>;
+  readonly openBrowser?: (url: string) => Promise<void>;
+};
+
+export type MenuProviderResult = {
+  readonly provider: ProviderKind;
+  readonly baseUrl?: string | undefined;
+  /** A fresh key pasted for this pick, already shape-checked. Absent = skipped. */
+  readonly apiKey?: string | undefined;
+  /** Models resolved by the pick itself (ChatGPT account, custom endpoint). */
+  readonly models?: { readonly main: string; readonly light: string } | undefined;
+  /** True when OAuth already connected the account — the caller's key step. */
+  readonly chatgpt: boolean;
+};
+
+/**
+ * Runs the init provider menu to a decision. Returns `null` when the owner
+ * skips (empty/EOF): the caller falls back to today's default path, announced
+ * as today. Anything the menu resolves carries `reason: 'chosen'` upstream.
+ *
+ * Failures that cannot complete a pick (OAuth refused, empty account catalog,
+ * invalid endpoint, skipped model) print why and return to the menu instead
+ * of writing a half-decided provider — the loop ends on a pick, a skip, or
+ * EOF, so it cannot spin forever.
+ */
+export async function resolveMenuProvider(
+  home: string,
+  input: NodeJS.ReadStream,
+  output: NodeJS.WriteStream,
+  deps: MenuProviderDeps,
+): Promise<MenuProviderResult | null> {
+  for (;;) {
+    const pick = await askProviderChoice(input, output);
+    if (pick === undefined) return null;
+    if (pick.kind === 'custom') {
+      const resolved = await resolveCustomEndpoint(pick.baseUrl, input, output, deps);
+      if (resolved !== undefined) return resolved;
+      continue;
+    }
+    const entry = PROVIDERS[pick.id];
+    if (entry.kind === 'openai-chatgpt') {
+      const resolved = await resolveChatgptAccount(home, entry, input, output, deps);
+      if (resolved !== undefined) return resolved;
+      continue;
+    }
+    const apiKey = await promptProviderKey(entry, input, output, deps);
+    return {
+      provider: entry.kind,
+      baseUrl: entry.baseUrl,
+      ...(apiKey === undefined ? {} : { apiKey }),
+      chatgpt: false,
+    };
+  }
+}
+
+/** An OAuth account instead of a pasted key: connect, then name both models. */
+async function resolveChatgptAccount(
+  home: string,
+  entry: ProviderEntry,
+  input: NodeJS.ReadStream,
+  output: NodeJS.WriteStream,
+  deps: MenuProviderDeps,
+): Promise<MenuProviderResult | undefined> {
+  const ask = deps.ask ?? promptLine;
+  const connection = (deps.chatgpt ?? ((h: string) => new ChatGPTConnection(h)))(home);
+  try {
+    const existing = connection.session();
+    if (existing === null || !existing.connected) {
+      deps.out('Collego l’account ChatGPT nel browser…');
+      await connection.signIn({ openBrowser: deps.openBrowser ?? openChatGPTBrowser });
+    }
+  } catch (error) {
+    deps.out(
+      `ChatGPT non collegato (${error instanceof Error ? error.message : String(error)}) — torno al menu.`,
+    );
+    return undefined;
+  }
+  let models: { slug: string; displayName: string }[];
+  try {
+    models = await connection.listModels();
+  } catch (error) {
+    deps.out(
+      `Non leggo i modelli dell’account (${error instanceof Error ? error.message : String(error)}) — torno al menu.`,
+    );
+    return undefined;
+  }
+  if (models.length === 0) {
+    deps.out('L’account non espone modelli — torno al menu.');
+    return undefined;
+  }
+  for (const model of models.slice(0, 60)) deps.out(`${model.slug} — ${model.displayName}`);
+  const main = await ask(`Modello main di ${entry.label} (esatto, invio per tornare al menu): `, input, output);
+  if (main === undefined || main === '' || !models.some((m) => m.slug === main)) {
+    if (main !== undefined && main !== '') deps.out(`«${main}» non è nel catalogo dell’account — torno al menu.`);
+    return undefined;
+  }
+  const lightAnswer = await ask(`Modello light (invio = ${main}): `, input, output);
+  const light = lightAnswer === undefined || lightAnswer === '' ? main : lightAnswer;
+  if (!models.some((m) => m.slug === light)) {
+    deps.out(`«${light}» non è nel catalogo dell’account — torno al menu.`);
+    return undefined;
+  }
+  return {
+    provider: entry.kind,
+    baseUrl: entry.baseUrl,
+    models: { main, light },
+    chatgpt: true,
+  };
+}
+
+/** A hand-named endpoint: URL, key of any shape, and both model slugs. */
+async function resolveCustomEndpoint(
+  prefilled: string | undefined,
+  input: NodeJS.ReadStream,
+  output: NodeJS.WriteStream,
+  deps: MenuProviderDeps,
+): Promise<MenuProviderResult | undefined> {
+  const ask = deps.ask ?? promptLine;
+  const askSecret = deps.askSecret ?? promptSecret;
+  let baseUrl = prefilled;
+  if (baseUrl === undefined) {
+    const answer = await ask(
+      'Endpoint base http(s) (es. https://llm.example.com/v1 — invio per tornare al menu): ',
+      input,
+      output,
+    );
+    if (answer === undefined || answer === '') return undefined;
+    try {
+      const parsed = new URL(answer);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('protocol');
+      if (parsed.username !== '' || parsed.password !== '' || parsed.hash !== '') {
+        throw new Error('parts');
+      }
+      baseUrl = answer;
+    } catch {
+      deps.out('Endpoint non valido: serve un URL http(s) senza utente né hash — torno al menu.');
+      return undefined;
+    }
+  }
+  let apiKey: string | undefined;
+  for (;;) {
+    const key = await askSecret(
+      'Chiave API (nascosta; server locale senza auth: inserisci local; invio per saltare): ',
+      input,
+      output,
+    );
+    if (key === undefined) break;
+    if (looksLikeTelegramToken(key)) {
+      deps.out('Sembra il token di un bot Telegram, non una chiave — non la salvo, riprova o invio per saltare.');
+      continue;
+    }
+    apiKey = key;
+    break;
+  }
+  const main = await ask('Modello main (esatto, come lo serve l’endpoint — invio per tornare al menu): ', input, output);
+  if (main === undefined || main === '') return undefined;
+  const lightAnswer = await ask(`Modello light (invio = ${main}): `, input, output);
+  const light = lightAnswer === undefined || lightAnswer === '' ? main : lightAnswer;
+  return {
+    provider: 'openai-compat',
+    baseUrl,
+    ...(apiKey === undefined ? {} : { apiKey }),
+    models: { main, light },
+    chatgpt: false,
+  };
 }
 
 /**

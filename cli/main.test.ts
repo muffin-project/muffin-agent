@@ -106,6 +106,9 @@ describe('muffin init infers the provider from the key — headless, no TTY requ
     expect(r.code).toBe(0);
     expect(r.err).toContain('provider');
     expect(r.err).toMatch(/non è sk-or|default/);
+    // Headless there is nothing to ask with: the new provider menu is a TTY
+    // path only, and a pipe must never see it.
+    expect(r.err).not.toContain('Da chi passiamo');
 
     const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'));
     expect(config.provider.kind).toBe('anthropic');
