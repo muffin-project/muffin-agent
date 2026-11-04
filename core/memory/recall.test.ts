@@ -401,9 +401,9 @@ describe('recall', () => {
     // Indexed the way ingest indexes it, so the semantic half can find it.
     await vectors!.index(HOST, [{ kind: 'fact', sourceId: factId, text: 'Giusto mood sotto pressione' }], NOW);
 
-    // Lowercase, and no entity name: `extractCandidateNames` only picks up
-    // capitalised words, so the graph half finds nothing and cannot supply the
-    // origin. Whatever mark survives came through the semantic half alone.
+    // The query contains no mention of the stored entity `Giusto`, so even
+    // case-insensitive lexical candidates must not open its graph. Whatever
+    // mark survives came through the semantic half alone.
     const result = await recall({ store, vectors }, HOST, 'sotto pressione ultimamente');
     expect(result.strategies).toContain('vector');
     expect(result.strategies).not.toContain('graph');
@@ -488,6 +488,71 @@ describe('recall', () => {
 
     const result = await recall({ store, vectors }, HOST, 'codice deposito');
     expect(result.items.map((i) => i.text).join(' ')).not.toContain('FALSO');
+  });
+
+  it('finds an unembedded canonical fact from lowercase identifiers without crossing tenants or time', async () => {
+    const { store, vectors } = harness(false);
+    const owner = store.upsertEntity(HOST, 'owner', 'person', NOW);
+    const ownerEpisode = store.addEpisode({
+      tenantId: HOST,
+      connector: 'cli',
+      threadKey: 'owner-memory',
+      role: 'user',
+      kind: 'message',
+      content: 'A canonical verification fact was recorded.',
+      trustTier: 0,
+      createdAt: NOW,
+    });
+    const canonicalFact = store.addFact({
+      tenantId: HOST,
+      subjectId: owner,
+      predicate: 'e2e_verification_code',
+      objectValue: 'cedar-lantern-5842',
+      episodeId: ownerEpisode,
+      trustTier: 0,
+      confidence: 1,
+      extractionV: 1,
+      recordedAt: NOW,
+    });
+
+    // Same entity name in a different tenant must never leak into host recall.
+    const groupOwner = store.upsertEntity('group:telegram:9', 'owner', 'person', NOW);
+    const groupEpisode = store.addEpisode({
+      tenantId: 'group:telegram:9',
+      connector: 'telegram',
+      threadKey: 'group-memory',
+      role: 'user',
+      kind: 'message',
+      content: 'A different tenant has a different verification fact.',
+      trustTier: 2,
+      createdAt: NOW,
+    });
+    store.addFact({
+      tenantId: 'group:telegram:9',
+      subjectId: groupOwner,
+      predicate: 'e2e_verification_code',
+      objectValue: 'group-secret-7719',
+      episodeId: groupEpisode,
+      trustTier: 2,
+      confidence: 1,
+      extractionV: 1,
+      recordedAt: NOW,
+    });
+
+    const query = 'owner e2e_verification_code cedar-lantern-5842';
+    const current = await recall({ store, vectors }, HOST, query);
+    expect(current.strategies).toContain('graph');
+    expect(current.items.some((item) => item.kind === 'fact' && item.id === canonicalFact)).toBe(true);
+    expect(current.items.map((item) => item.text).join('\n')).toContain('cedar-lantern-5842');
+    expect(current.items.map((item) => item.text).join('\n')).not.toContain('group-secret-7719');
+
+    const beforeRecorded = await recall({ store, vectors }, HOST, query, {
+      asOf: '2026-01-01T00:00:00.000Z',
+    });
+    expect(beforeRecorded.items.some((item) => item.kind === 'fact' && item.id === canonicalFact)).toBe(false);
+    expect(beforeRecorded.gaps).toMatchObject([
+      { kind: 'temporal', entity: 'owner', nearest: { text: expect.stringContaining('cedar-lantern-5842') } },
+    ]);
   });
 
   it('carries provenance into the prompt and hands the taint to the kernel', async () => {
@@ -700,8 +765,8 @@ describe('recall', () => {
     store.supersede(HOST, old, current, NOW);
 
     // No shared word with "sotto pressione ultimamente" in any episode's own
-    // text and no capitalised word for the graph hop to key on: only the vector
-    // half, matching by meaning, can retrieve this fact at all.
+    // text and no query mention that matches the entity `Giusto`: only the
+    // vector half, matching by meaning, can retrieve this fact at all.
     const result = await recall({ store, vectors }, HOST, 'sotto pressione ultimamente');
     expect(result.strategies).toContain('vector');
     expect(result.items.some((i) => i.kind === 'fact' && i.id === old)).toBe(false);

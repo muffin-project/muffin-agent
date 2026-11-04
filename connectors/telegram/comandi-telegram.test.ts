@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { COMANDI } from '../../agent/comandi.js';
+import type { Controlli } from '../../agent/comandi.js';
 import type { LoopDeps } from '../../agent/loop.js';
 import type { ChatResult, Provider } from '../../agent/providers/types.js';
 import { buildRuntime } from '../../agent/runtime.js';
@@ -107,8 +108,11 @@ function harness(comandi?: (riga: string, sessionId: string) => Promise<{ testo:
     api,
     config: { token: 't', ownerUserId: OWNER, ownerChatId: OWNER },
     ...(comandi ? { comandi } : {}),
+    // Come `cli/surface.ts`: senza registro i pulsanti non si mandano e la
+    // leva di delega non si costruisce — l'harness deve dirlo come la produzione.
+    ...(runtime.deps.approvals === undefined ? {} : { approvals: runtime.deps.approvals }),
   });
-  return { connector, sent, turns, menu, controller, failRich };
+  return { connector, sent, turns, menu, controller, failRich, runtime };
 }
 
 async function deliver(h: ReturnType<typeof harness>, updates: Update[]): Promise<void> {
@@ -248,5 +252,84 @@ describe('il menu dei comandi lo dichiara l avvio', () => {
     };
 
     await expect(h.connector.run(h.controller.signal)).resolves.toBeUndefined();
+  });
+});
+
+describe('/yolo dal telefono: la leva è vera, e solo dell owner', () => {
+  /**
+   * Il fake non decide: cattura i controlli che il connettore passa ai
+   * comandi veri, così qui si prova che `tryCommand` costruisce la leva sugli
+   * store del loop — non che `eseguiComando` sa leggere una leva (quello sta
+   * in `agent/comandi.test.ts`).
+   */
+  type Visto = { riga: string; controlli: Controlli };
+  const leve = () => {
+    const visti: Visto[] = [];
+    const comandi = async (riga: string, _sessione: string, controlli?: Controlli) => {
+      visti.push({ riga, controlli: controlli! });
+      return { testo: 'ok' };
+    };
+    return { visti, comandi };
+  };
+
+  const accodaLavoro = (h: ReturnType<typeof harness>) =>
+    h.runtime.deps.turns.enqueue({
+      id: 'lavoro-in-corso',
+      principal: { kind: 'owner', connector: 'telegram', externalId: String(OWNER) },
+      tenant: 'host',
+      surface: 'telegram',
+      sessionId: 'owner',
+      model: 'm',
+      messages: [],
+      taint: 0,
+      counters: {
+        iterations: 0,
+        recoveriesUsed: 0,
+        transportRetriesLeft: 2,
+        truncationsUsed: 0,
+        toolCallsMade: 0,
+        nudgedForCompletion: false,
+        usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        spentUsd: 0,
+        resumes: 0,
+        contextBuilt: false,
+      },
+    });
+
+  it('la leva arriva ai comandi e si lega al lavoro della conversazione', async () => {
+    const l = leve();
+    const h = harness(l.comandi);
+    accodaLavoro(h);
+
+    await deliver(h, [msg(1, { chatId: OWNER, fromId: OWNER, text: '/yolo' })]);
+
+    expect(h.turns).toEqual([]);
+    expect(l.visti).toHaveLength(1);
+    const esito = l.visti[0]!.controlli.delega?.metti('yolo');
+    expect(esito?.turnId).toBe('lavoro-in-corso');
+    expect(h.runtime.deps.delega?.modo('lavoro-in-corso')).toBe('yolo');
+  });
+
+  it('senza lavoro la leva c è ma non lega niente', async () => {
+    const l = leve();
+    const h = harness(l.comandi);
+
+    await deliver(h, [msg(1, { chatId: OWNER, fromId: OWNER, text: '/yolo' })]);
+
+    expect(h.turns).toEqual([]);
+    expect(l.visti[0]!.controlli.delega).toBeDefined();
+    expect(l.visti[0]!.controlli.delega?.metti('yolo')).toBeNull();
+  });
+
+  it('un estraneo non riceve leve e il testo va al modello', async () => {
+    const l = leve();
+    const h = harness(l.comandi);
+    accodaLavoro(h);
+
+    await deliver(h, [msg(1, { chatId: -900, fromId: STRANGER, text: '/yolo', type: 'supergroup' })]);
+
+    expect(l.visti).toEqual([]);
+    expect(h.turns).toEqual(['turn ran']);
+    expect(h.runtime.deps.delega?.modo('lavoro-in-corso')).toBe('manual');
   });
 });

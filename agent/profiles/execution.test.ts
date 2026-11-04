@@ -3,7 +3,7 @@ import { CONSERVATIVE, DEFAULT_EXECUTION, loadProfiles } from './profile.js';
 
 const expected = {
   'consumer-local': {
-    modelCallDeadlineMs: 90_000,
+    modelCallDeadlineMs: 300_000,
     turnWallDeadlineMs: 900_000,
     activeModelBudgetMs: 900_000,
     stallTimeoutMs: 25_000,
@@ -11,7 +11,7 @@ const expected = {
   },
   // Copia di consumer-local, tenuta allineata a mano: vedi le note del file.
   'consumer-qwen3': {
-    modelCallDeadlineMs: 90_000,
+    modelCallDeadlineMs: 300_000,
     turnWallDeadlineMs: 900_000,
     activeModelBudgetMs: 900_000,
     stallTimeoutMs: 25_000,
@@ -44,7 +44,10 @@ describe('shipped execution envelopes', () => {
       if (execution === undefined) continue;
       expect(execution.heartbeatIntervalMs, profile.name).toBeLessThan(execution.stallTimeoutMs);
       expect(execution.stallTimeoutMs, profile.name).toBeLessThan(execution.modelCallDeadlineMs);
-      expect(execution.activeModelBudgetMs, profile.name).toBeLessThanOrEqual(execution.turnWallDeadlineMs);
+      if (execution.activeModelBudgetMs !== null && execution.turnWallDeadlineMs !== null)
+        expect(execution.activeModelBudgetMs, profile.name).toBeLessThanOrEqual(
+          execution.turnWallDeadlineMs,
+        );
     }
   });
 });

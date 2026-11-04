@@ -120,7 +120,7 @@ function scaffold(): { home: string; workspace: string; file: (rel: string) => s
   const base = mkdtempSync(join(tmpdir(), 'muffin-home-ws-'));
   const home = join(base, '.muffin');
   const workspace = join(base, 'muffin-workspace');
-  for (const dir of [join(home, 'rot'), join(home, 'sessions'), join(home, 'secrets'), workspace]) {
+  for (const dir of [join(home, 'rot'), join(home, 'sessions'), join(home, 'secrets'), join(home, 'profiles'), workspace]) {
     mkdirSync(dir, { recursive: true });
   }
   const contents: Record<string, string> = {
@@ -128,6 +128,7 @@ function scaffold(): { home: string; workspace: string; file: (rel: string) => s
     '.rot-anchor': 'e3b0c44298fc1c149afbf4c8996fb924\n',
     'muffin.db': `SQLite format 3 ${'.'.repeat(20464)}`,
     'voice.md': '# la voce\nparlo cosi.\n',
+    'profiles/owner.json': '{"schemaVersion":1}\n',
     'sessions/owner.jsonl': '{"role":"user"}\n',
     'config.json': '{"schemaVersion":2}\n',
     // One target per inheritance leg, so no leg can inherit another's damage.
@@ -161,6 +162,8 @@ const ROWS: [string, string][] = [
   ['.rot-anchor', '.rot-anchor'],
   ['muffin.db', 'muffin.db'],
   ['voice.md', 'voice.md'],
+  // Owner profiles live under the home too (#764): the same deny covers them.
+  ['profiles/owner.json', 'profiles/owner.json'],
 ];
 
 /**

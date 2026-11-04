@@ -9,7 +9,7 @@ import type { ApprovalRequest, LoopDeps } from '../../agent/loop.js';
 import { SessionStore } from '../../core/session/store.js';
 import { TurnStore } from '../../core/turns/store.js';
 import type { TelegramApi } from './api.js';
-import { TelegramConnector } from './connector.js';
+import { TelegramConnector, rimuoviTastiereOrfane, type ConnectorDeps } from './connector.js';
 import { ModelLane } from '../../core/turns/model-lane.js';
 import { TelegramDeliveryStore } from './delivery.js';
 import { UpdateInbox } from './updates.js';
@@ -62,7 +62,7 @@ function harness() {
    * la trascrizione parla rich, e la domanda deve poter essere letta e
    * ritrovata per messaggio.
    */
-  const inviati: { method: string; chatId?: number; messageId?: number; text?: string; keyboard?: unknown }[] = [];
+  const inviati: { method: string; chatId?: number; messageId?: number; text?: string; threadId?: unknown; keyboard?: unknown }[] = [];
   let nextMessageId = 700;
   const testoDi = (rich: { html?: string; blocks?: unknown[] }): string =>
     typeof rich.html === 'string' ? rich.html : JSON.stringify(rich.blocks ?? []);
@@ -86,14 +86,14 @@ function harness() {
       inviati.push({ method: 'editMessageReplyMarkup', chatId, messageId, keyboard });
       return true;
     },
-    sendMessage: async (chatId: number, html: string, options?: { keyboard?: unknown }) => {
+    sendMessage: async (chatId: number, html: string, options?: { threadId?: unknown; keyboard?: unknown }) => {
       const messageId = nextMessageId++;
-      inviati.push({ method: 'sendMessage', chatId, messageId, text: html, ...(options?.keyboard === undefined ? {} : { keyboard: options.keyboard }) });
+      inviati.push({ method: 'sendMessage', chatId, messageId, text: html, ...(options?.threadId === undefined ? {} : { threadId: options.threadId }), ...(options?.keyboard === undefined ? {} : { keyboard: options.keyboard }) });
       return { message_id: messageId, date: 0, chat: { id: chatId, type: 'private' } } as never;
     },
-    sendRichMessage: async (chatId: number, rich: { html?: string; blocks?: unknown[] }, options?: { keyboard?: unknown }) => {
+    sendRichMessage: async (chatId: number, rich: { html?: string; blocks?: unknown[] }, options?: { threadId?: unknown; keyboard?: unknown }) => {
       const messageId = nextMessageId++;
-      inviati.push({ method: 'sendMessage', chatId, messageId, text: testoDi(rich), ...(options?.keyboard === undefined ? {} : { keyboard: options.keyboard }) });
+      inviati.push({ method: 'sendMessage', chatId, messageId, text: testoDi(rich), ...(options?.threadId === undefined ? {} : { threadId: options.threadId }), ...(options?.keyboard === undefined ? {} : { keyboard: options.keyboard }) });
       return { message_id: messageId, date: 0, chat: { id: chatId, type: 'private' } } as never;
     },
     sendMessageDraft: async () => true,
@@ -126,7 +126,7 @@ function harness() {
     onWork: () => spinte.push(1),
     config: { token: 't', ownerUserId: OWNER, ownerChatId: OWNER },
   });
-  return { connector, approvals, turns, risposte, modifiche, spinte, inviati };
+  return { connector, approvals, turns, risposte, modifiche, spinte, inviati, api };
 }
 
 async function deliver(h: ReturnType<typeof harness>, updates: Update[]): Promise<void> {
@@ -253,6 +253,43 @@ describe('un pulsante premuto dall owner', () => {
     expect(h.modifiche[0]?.html).toContain('eseguo rm -rf /tmp/x?');
     const verdetto = h.inviati.find((c) => c.method === 'editMessageText' && c.messageId === 55);
     expect(verdetto?.keyboard).toEqual([]);
+  });
+
+  /**
+   * #760 — il verdetto di ripiego in un topic resta nel topic.
+   *
+   * Una domanda di ripiego partita ricca dentro un topic di forum, il cui
+   * verdetto ri-renderizzato supera il tetto di compatibilità (8192): il
+   * primo pezzo è un `editMessageText` (gli edit non portano thread, giusto
+   * così) ma i pezzi in coda sono `sendMessage` — e senza thread finirebbero
+   * in *General*. Falsificatore: togliere `threadId` dal target di `present`
+   * in `handleCallback` deve far fallire questo test (e nessun altro).
+   */
+  it('un verdetto oltre il tetto in un topic: ogni `sendMessage` di coda porta il thread', async () => {
+    const h = harness();
+    const { approvalId } = turnoInAttesa(h);
+
+    const THREAD = 77;
+    // Oltre il tetto di compatibilità: il verdetto non parte ricco — il
+    // primo pezzo riusa il messaggio, la coda sono `sendMessage`.
+    const domandaLunga = `⚠ eseguo rm -rf /tmp/x?\n${'x'.repeat(9000)}`;
+    await deliver(h, [
+      premuto(`ok:${approvalId}`, OWNER, 1, {
+        message_id: 55,
+        date: 0,
+        chat: { id: OWNER, type: 'private' },
+        message_thread_id: THREAD,
+        text: domandaLunga,
+      }),
+    ]);
+
+    expect(h.approvals.get(approvalId)?.decision).toBe('allow');
+    // Il primo pezzo riusa il messaggio: è un edit, e gli edit non portano thread.
+    expect(h.inviati[0]?.method).toBe('editMessageText');
+    expect(h.inviati[0]?.messageId).toBe(55);
+    const coda = h.inviati.filter((c) => c.method === 'sendMessage');
+    expect(coda.length).toBeGreaterThan(0);
+    for (const pezzo of coda) expect(pezzo.threadId).toBe(THREAD);
   });
 });
 
@@ -568,5 +605,164 @@ describe('#745 review — stessa capability su risorse diverse', () => {
     const edit = h.modifiche.filter((m) => m.messageId === messaggio).at(-1)!;
     expect(edit.html).toContain('sys.shell.write: consentito');
     await stream?.stop?.();
+  });
+});
+
+/**
+ * #784 — la bolla vecchia perde la tastiera senza che nessuno la tocchi.
+ *
+ * Fino a qui la chiusura terminale (`withdrawForTurn`, #742) ritirava la
+ * riga ma non poteva toccare il messaggio: l'id della domanda non era
+ * persistito, e il processo che finisce il turno non ha mai visto la bolla
+ * mandata da quello morto prima del riavvio. La tastiera restava viva finché
+ * qualcuno non la premeva — e premerla diceva «Non serve più».
+ *
+ * La prova guida il percorso vero: domanda chiesta (sul messaggio del turno
+ * o di ripiego) → processo «morto» (un connettore nuovo sullo stesso
+ * database, mappe in memoria vuote) → chiusura terminale del turno →
+ * consegna finale. La vecchia bolla deve perdere i pulsanti senza che nessun
+ * update di callback sia mai arrivato.
+ */
+describe('#784 — restart con domanda aperta: la vecchia bolla si spegne da sola', () => {
+  const domanda: ApprovalRequest = {
+    capability: 'sys.shell.write',
+    prompt: 'non si torna indietro: cambia questa macchina — sys.shell.write',
+    resource: 'command: echo ciao',
+    taint: 0,
+  };
+
+  /** Un «processo nuovo» sullo stesso database: niente mappe in memoria. */
+  function riavvia(h: ReturnType<typeof harness>): TelegramConnector {
+    const deps = (h.connector as unknown as { deps: ConnectorDeps }).deps;
+    return new TelegramConnector({ ...deps });
+  }
+
+  function spente(h: ReturnType<typeof harness>, messageId: number): boolean {
+    return h.inviati.some(
+      (c) => c.method === 'editMessageReplyMarkup' && c.messageId === messageId && Array.isArray(c.keyboard) && c.keyboard.length === 0,
+    );
+  }
+
+  it('domanda di ripiego: registrata all’invio, spenta alla consegna finale dopo il restart', async () => {
+    const h = harness();
+    // Nessuna trascrizione viva: la domanda esce come messaggio autonomo.
+    const { turnId, approvalId } = turnoInAttesa(h, { chatId: OWNER, messageId: 5 });
+    await expect(
+      h.connector.approval(domanda, { surface: 'telegram', turnId, replyTo: { chatId: OWNER, messageId: 5 }, approvalId }),
+    ).resolves.toBe('asked');
+    const bolla = h.inviati.find((c) => c.method === 'sendMessage' && c.keyboard !== undefined)!;
+    expect(bolla).toBeDefined();
+    expect(h.approvals.get(approvalId)?.questionMessageIds).toEqual([bolla.messageId!]);
+
+    // Il processo muore e uno nuovo finisce il turno: chiusura terminale
+    // (come la fa `closeRecord`) e consegna finale.
+    const dopo = riavvia(h);
+    h.approvals.withdrawForTurn(turnId, new Date());
+    await dopo.deliverTo(turnId, { chatId: OWNER }, 'fatto');
+
+    expect(spente(h, bolla.messageId!)).toBe(true);
+    // Senza nessun tocco: nessuna risposta al pulsante, nessuna decisione.
+    expect(h.risposte).toEqual([]);
+    expect(h.approvals.get(approvalId)?.decision).toBeNull();
+  });
+
+  it('domanda sul messaggio del turno: restart, turno finito, vecchia bolla senza pulsanti', async () => {
+    const h = harness();
+    const { turnId, approvalId } = turnoInAttesa(h, { chatId: OWNER, messageId: 5 });
+    const stream = h.connector.resumeStream(h.turns.get(turnId)!);
+    await expect(
+      h.connector.approval(domanda, { surface: 'telegram', turnId, replyTo: { chatId: OWNER, messageId: 5 }, approvalId }),
+    ).resolves.toBe('asked');
+    const bolla = h.inviati.find((c) => c.method === 'sendMessage' && c.keyboard !== undefined)!;
+    expect(h.approvals.get(approvalId)?.questionMessageIds).toEqual([bolla.messageId!]);
+
+    const dopo = riavvia(h);
+    h.approvals.withdrawForTurn(turnId, new Date());
+    await dopo.deliverTo(turnId, { chatId: OWNER }, 'fatto');
+
+    expect(spente(h, bolla.messageId!)).toBe(true);
+    expect(h.risposte).toEqual([]);
+    expect(h.approvals.get(approvalId)?.decision).toBeNull();
+    await stream?.stop?.();
+  });
+
+  it('re-ask dopo il riavvio: si spengono la bolla vecchia e quella nuova', async () => {
+    const h = harness();
+    const { turnId, approvalId } = turnoInAttesa(h, { chatId: OWNER, messageId: 5 });
+    await expect(
+      h.connector.approval(domanda, { surface: 'telegram', turnId, replyTo: { chatId: OWNER, messageId: 5 }, approvalId }),
+    ).resolves.toBe('asked');
+    const prima = h.inviati.filter((c) => c.method === 'sendMessage' && c.keyboard !== undefined).at(-1)!.messageId!;
+
+    // Il processo nuovo ri-chiede la stessa domanda (stessa riga riusata):
+    // bolla nuova, e la vecchia resta registrata.
+    const dopo = riavvia(h);
+    await expect(
+      dopo.approval(domanda, { surface: 'telegram', turnId, replyTo: { chatId: OWNER, messageId: 5 }, approvalId }),
+    ).resolves.toBe('asked');
+    const seconda = h.inviati.filter((c) => c.method === 'sendMessage' && c.keyboard !== undefined).at(-1)!.messageId!;
+    expect(seconda).not.toBe(prima);
+    expect(h.approvals.get(approvalId)?.questionMessageIds).toEqual([prima, seconda]);
+
+    h.approvals.withdrawForTurn(turnId, new Date());
+    await dopo.deliverTo(turnId, { chatId: OWNER }, 'fatto');
+
+    expect(spente(h, prima)).toBe(true);
+    expect(spente(h, seconda)).toBe(true);
+    expect(h.risposte).toEqual([]);
+  });
+
+  it('due righe sulla stessa bolla: un solo edit, non due', async () => {
+    const h = harness();
+    const { turnId } = turnoInAttesa(h, { chatId: OWNER, messageId: 5 });
+    const prima = h.approvals.ask({ turnId, capability: 'sys.shell', resource: 'uno', prompt: 'uno?', taint: 0 }, new Date());
+    const seconda = h.approvals.ask({ turnId, capability: 'sys.http', resource: 'due', prompt: 'due?', taint: 0 }, new Date());
+    h.approvals.noteQuestionMessage(prima, 700);
+    h.approvals.noteQuestionMessage(seconda, 700);
+
+    h.approvals.withdrawForTurn(turnId, new Date());
+    await rimuoviTastiereOrfane(h.api, h.approvals, turnId, OWNER);
+
+    expect(h.inviati.filter((c) => c.method === 'editMessageReplyMarkup' && c.messageId === 700)).toHaveLength(1);
+  });
+
+  it('righe senza registrazione non producono edit: né crash né falsi', async () => {
+    const h = harness();
+    // Mai mostrata sul filo: la riga di prima della colonna.
+    const { turnId } = turnoInAttesa(h);
+    h.approvals.withdrawForTurn(turnId, new Date());
+
+    await rimuoviTastiereOrfane(h.api, h.approvals, turnId, OWNER);
+
+    expect(h.inviati.filter((c) => c.method === 'editMessageReplyMarkup')).toEqual([]);
+  });
+
+  it('un tocco tardivo su domanda registrata dice la stessa frase di sempre, byte per byte', async () => {
+    const h = harness();
+    const { approvalId } = turnoInAttesa(h);
+    h.approvals.noteQuestionMessage(approvalId, 700);
+    h.approvals.withdrawForTurn('a'.repeat(32), new Date());
+
+    await deliver(h, [premuto(`ok:${approvalId}`)]);
+
+    expect(h.risposte[0]?.text).toBe('Non serve più: quel turno è finito.');
+    expect(h.approvals.get(approvalId)?.decision).toBeNull();
+    expect(h.spinte).toEqual([]);
+  });
+
+  it('la spazzata non lancia mai: registro guasto, filo guasto, o niente registro', async () => {
+    const h = harness();
+    const { turnId, approvalId } = turnoInAttesa(h);
+    h.approvals.noteQuestionMessage(approvalId, 700);
+    h.approvals.withdrawForTurn(turnId, new Date());
+
+    const registroGuasto = { withdrawnQuestionMessages: (): never[] => { throw new Error('db giù'); } };
+    await expect(rimuoviTastiereOrfane(h.api, registroGuasto, turnId, OWNER)).resolves.toBeUndefined();
+    const filoGuasto = { editMessageReplyMarkup: async (): Promise<never> => { throw new Error('rete giù'); } };
+    await expect(rimuoviTastiereOrfane(filoGuasto, h.approvals, turnId, OWNER)).resolves.toBeUndefined();
+    await expect(rimuoviTastiereOrfane(h.api, undefined, turnId, OWNER)).resolves.toBeUndefined();
+    // E un turno senza niente da spegnere non tocca il filo.
+    await expect(rimuoviTastiereOrfane(h.api, h.approvals, 'turno-mai-esistito', OWNER)).resolves.toBeUndefined();
+    expect(h.inviati.filter((c) => c.method === 'editMessageReplyMarkup')).toEqual([]);
   });
 });

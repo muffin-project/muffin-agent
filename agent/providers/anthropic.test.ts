@@ -412,6 +412,14 @@ describe('anthropic adapter · chatStream (B11)', () => {
     expect(events).toEqual([]);
     expect(caught).toBeInstanceOf(ProviderError);
     expect((caught as ProviderError).retryable).toBe(false);
+    // The abort must carry what the wire had said: here the `ping` was filtered
+    // by the SDK before any union event, so nothing arrived and no bytes of
+    // model output exist. Without this a `model_deadline` trace cannot tell
+    // "never connected" from a mid-stream stall.
+    expect((caught as ProviderError).details).toEqual({
+      receivedAnyEvent: false,
+      bytesReceived: 0,
+    });
   });
 });
 

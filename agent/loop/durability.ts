@@ -1,6 +1,13 @@
 import type { PermissionSnapshot } from '../../core/policy/types.js';
 import { ATTR, type SpanHandle } from '../../core/tracing/types.js';
-import type { ContinuableClass, ContinuableReason, TurnOutcome, TurnRecord } from '../../core/turns/store.js';
+import type {
+  ContinuableClass,
+  ContinuableReason,
+  TurnOutcome,
+  TurnRecord,
+  TurnStore,
+} from '../../core/turns/store.js';
+import type { TodoItem } from '../../core/turns/todo.js';
 import { encodeWaitFor, type WaitSpec } from '../../core/turns/wait.js';
 import type { ContentBlock, Message } from '../providers/types.js';
 import { harnessMessage, toolMessage } from './message-origin.js';
@@ -76,7 +83,10 @@ export type TurnScope = {
    * The sensitive-resource echo collector. A repaired call reads a resource
    * exactly like a fresh one does, so a repair must feed the same sink.
    */
-  readonly noteSensitiveResourceEcho: (call: { name: string; args: unknown }, outcome: ContentBlock) => void;
+  readonly noteSensitiveResourceEcho: (
+    call: { name: string; args: unknown },
+    outcome: ContentBlock,
+  ) => void;
 };
 
 /**
@@ -153,7 +163,12 @@ export function suspendHere(scope: TurnScope, spec: WaitSpec): TurnResult {
   const conCorrezioni: Message[] =
     correzioniPendenti.length === 0
       ? run.messages
-      : [...run.messages, ...correzioniPendenti.map((testo): Message => ({ role: 'user', content: [{ type: 'text', text: testo }] }))];
+      : [
+          ...run.messages,
+          ...correzioniPendenti.map(
+            (testo): Message => ({ role: 'user', content: [{ type: 'text', text: testo }] }),
+          ),
+        ];
 
   const wrote = (() => {
     try {
@@ -169,7 +184,9 @@ export function suspendHere(scope: TurnScope, spec: WaitSpec): TurnResult {
         record.claimToken,
       );
     } catch (error) {
-      turn.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
+      turn.setAttributes({
+        'muffin.turn.record_error': error instanceof Error ? error.message : String(error),
+      });
       return false;
     }
   })();
@@ -258,10 +275,22 @@ export function suspendHere(scope: TurnScope, spec: WaitSpec): TurnResult {
  * checkpoints in the main loop.
  */
 export async function reconcile(scope: TurnScope): Promise<TurnResult | null> {
-  const { deps, exposed, input, noteSensitiveResourceEcho, record, run, snapshot, toolContext, turn } = scope;
+  const {
+    deps,
+    exposed,
+    input,
+    noteSensitiveResourceEcho,
+    record,
+    run,
+    snapshot,
+    toolContext,
+    turn,
+  } = scope;
   const last = run.messages[run.messages.length - 1];
   if (last === undefined || last.role !== 'assistant') return null;
-  const pending = last.content.filter((b): b is Extract<ContentBlock, { type: 'tool_use' }> => b.type === 'tool_use');
+  const pending = last.content.filter(
+    (b): b is Extract<ContentBlock, { type: 'tool_use' }> => b.type === 'tool_use',
+  );
   if (pending.length === 0) return null;
 
   const recorded = deps.turns.recordedOutcomes(record.id);
@@ -275,7 +304,8 @@ export async function reconcile(scope: TurnScope): Promise<TurnResult | null> {
       // The taint the recorded result carried has to come back with it: this
       // is the same "the two facts must not land apart" the outcome write
       // enforces in a transaction.
-      if (done.tier !== null) snapshot.raiseTaint(done.tier, 'un risultato ripreso dal record di questo turno');
+      if (done.tier !== null)
+        snapshot.raiseTaint(done.tier, 'un risultato ripreso dal record di questo turno');
       repaired.push({
         type: 'tool_result',
         toolCallId: block.id,
@@ -314,11 +344,12 @@ export async function reconcile(scope: TurnScope): Promise<TurnResult | null> {
       repaired.push({
         type: 'tool_result',
         toolCallId: block.id,
-        content: error instanceof ApprovalRequired
-          ? `Ripresa: ${block.name} vuole un'approvazione che qui non posso chiedere.`
-          : error instanceof Error
-            ? error.message
-            : String(error),
+        content:
+          error instanceof ApprovalRequired
+            ? `Ripresa: ${block.name} vuole un'approvazione che qui non posso chiedere.`
+            : error instanceof Error
+              ? error.message
+              : String(error),
         isError: true,
       });
     }
@@ -392,7 +423,9 @@ export function closeRecord(scope: TurnScope, outcome: TurnOutcome): boolean {
     // as "could not write" (the pre-existing behaviour, `true`), never as
     // "lost the claim" — those are different facts and only the second one
     // is what a fenced `changes === 0` means.
-    turn.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
+    turn.setAttributes({
+      'muffin.turn.record_error': error instanceof Error ? error.message : String(error),
+    });
     return true;
   }
 }
@@ -425,14 +458,20 @@ export function announceEnd(scope: TurnScope, stopped: TurnOutcome): void {
  * `releaseContinuable` below only returns this text when the release write
  * actually landed.
  */
-function continuableText(scope: TurnScope, failureClass: ContinuableClass, attempts: number): string {
+function continuableText(
+  scope: TurnScope,
+  failureClass: ContinuableClass,
+  attempts: number,
+  extra?: { openRows?: TodoItem[] },
+): string {
   // Turno, non lease: `run.toolCallsMade` è azzerato a ogni grant esplicito
   // (`buildFreshCounters`), mentre `lifetime` piega le lease chiuse — senza
   // sovrapposizioni, il fold avviene solo al release. Misurato il 30/09/2026:
   // dopo un'ora e 17 call la lease 1 diceva «nessuna tool call», e la frase
   // mentiva sul lavoro fatto.
   const done = scope.record.lifetime.toolCallsMade + scope.run.toolCallsMade;
-  const completed = done > 0 ? `${done} tool call completate` : 'nessuna tool call ancora completata';
+  const completed =
+    done > 0 ? `${done} tool call completate` : 'nessuna tool call ancora completata';
   // #615: a `truncated` release after partial-text continuations already holds
   // the accepted prefix durably in the transcript. Saying "senza produrre
   // contenuto" there would be false — the prefix is saved, continuable, and
@@ -466,8 +505,21 @@ function continuableText(scope: TurnScope, failureClass: ContinuableClass, attem
         return 'il turno ha esaurito il suo limite di tempo';
       case 'active_model_budget':
         return 'il turno ha esaurito il budget di attività del modello';
+      case 'activity_budget':
+        return 'l’attività ha esaurito il budget complessivo di richieste ai modelli o esecuzioni dei tool';
       case 'recovery_exhausted':
         return 'il modello non ha prodotto una risposta utilizzabile dopo la cascata di recupero';
+      case 'plan_open': {
+        // Named rows, not a rule sentence: the owner reads which granted work
+        // is still open; the gate that refused the settle lives in
+        // `agent/loop/completion-gate.ts`, not in prose.
+        const nomi = (extra?.openRows ?? []).slice(0, 3).map((r) => `«${r.text.slice(0, 80)}»`);
+        const altri = (extra?.openRows ?? []).length - nomi.length;
+        return (
+          `questo turno riprendeva un lavoro i cui passi sono ancora aperti (${nomi.join(', ')}` +
+          `${altri > 0 ? ` e altri ${altri}` : ''}): chiuderli con \`todo set\`, o riprenderli — non considerarli finiti`
+        );
+      }
     }
   })();
   return (
@@ -475,6 +527,71 @@ function continuableText(scope: TurnScope, failureClass: ContinuableClass, attem
     `Il lavoro fatto fin qui è salvato nel turno ${scope.record.id.slice(0, 12)} (${completed}); ` +
     `scrivi "riprendi" per continuarlo.`
   );
+}
+
+/**
+ * Lease classes that mean "the provider was too slow", as opposed to a wall,
+ * a transport error or an empty response. `active_model_budget` counts: under
+ * default budgets a slow call dies at 120s of active model time, never
+ * reaching any higher per-call ceiling — excluding it is what made the
+ * breaker dead code for exactly its target rows. `turn_deadline` is excluded
+ * deliberately: the wall is per-lease fresh, and the 120s active budget fires
+ * first, so a zero-progress wall death is unreachable under defaults; if it
+ * ever arrives it carries its own attempts evidence. Rate limits, crashes and
+ * empty responses never extend the streak: they may clear on retry, a
+ * provider that cannot answer 56k resumed tokens in time will not answer
+ * them in the next lease either.
+ */
+const DEAD_LEASE_CLASSES: readonly ContinuableClass[] = [
+  'model_deadline',
+  'model_stall',
+  'active_model_budget',
+];
+
+/**
+ * Consecutive dead leases behind the release being written, counted from the
+ * durable lease audit — never from the row's previous reason, which the grant
+ * clears (so a reason-carried count could never exceed 1 in production).
+ *
+ * Walks closed leases newest-first: only `model_deadline`, `model_stall` and
+ * `active_model_budget` extend the streak, and any lease with tool calls
+ * (progress happened, however slowly) ends it. The dying lease counts iff it
+ * is itself dead-classed with zero calls this lease. Transport errors, rate
+ * limits, empty responses and wall deaths never extend it: they may clear on
+ * retry, and the 120s active budget fires before any wall under defaults.
+ * (`turn_deadline` exclusion, reasoned: per-lease fresh wall + active binding
+ * first = zero-progress wall death unreachable on defaults.)
+ */
+export function deadStreakForRelease(
+  turns: Pick<TurnStore, 'leasesFor'>,
+  turnId: string,
+  failureClass: ContinuableClass,
+  currentLeaseToolCalls: number,
+): number {
+  if (!DEAD_LEASE_CLASSES.includes(failureClass)) return 0;
+  if (currentLeaseToolCalls > 0) return 0;
+  let streak = 1;
+  const closed = turns
+    .leasesFor(turnId)
+    .filter((lease) => lease.endedAt !== null)
+    .sort((a, b) => b.leaseIndex - a.leaseIndex);
+  for (const lease of closed) {
+    if (lease.outcome === null || !DEAD_LEASE_CLASSES.includes(lease.outcome as ContinuableClass))
+      break;
+    if ((lease.counters?.toolCallsMade ?? 0) > 0) break;
+    streak += 1;
+  }
+  return streak;
+}
+
+function deadStreakUpdate(
+  turns: Pick<TurnStore, 'leasesFor'>,
+  turnId: string,
+  failureClass: ContinuableClass,
+  currentLeaseToolCalls: number,
+): { deadStreak?: number } {
+  const streak = deadStreakForRelease(turns, turnId, failureClass, currentLeaseToolCalls);
+  return streak > 0 ? { deadStreak: streak } : {};
 }
 
 /**
@@ -493,6 +610,7 @@ export function releaseContinuable(
   scope: TurnScope,
   failureClass: ContinuableClass,
   attempts: number,
+  extra?: { openRows?: TodoItem[] },
 ): TurnResult {
   const { deps, record, run, snapshot, turn: span } = scope;
   // Stesso totale della diagnostica qui sotto: la ragione durevole deve dire
@@ -503,7 +621,11 @@ export function releaseContinuable(
     class: failureClass,
     lease: record.leaseIndex,
     ...(attempts > 0 ? { attempts } : {}),
-    ...(run.providerFailureRequestIds.length > 0 ? { requestIds: [...run.providerFailureRequestIds] } : {}),
+    ...deadStreakUpdate(deps.turns, record.id, failureClass, run.toolCallsMade),
+    ...(run.providerFailureRequestIds.length > 0
+      ? { requestIds: [...run.providerFailureRequestIds] }
+      : {}),
+    ...(extra?.openRows !== undefined ? { openSteps: extra.openRows.length } : {}),
     completed: { toolCalls: completedToolCalls },
     at: new Date().toISOString(),
   };
@@ -513,7 +635,7 @@ export function releaseContinuable(
     'muffin.turn.stop_reason': failureClass,
     'muffin.turn.lease': record.leaseIndex,
   });
-  const text = continuableText(scope, failureClass, attempts);
+  const text = continuableText(scope, failureClass, attempts, extra);
   const written = deps.turns.releaseContinuable(
     record.id,
     {
@@ -551,7 +673,13 @@ export function releaseContinuable(
   };
 }
 
-export function finish(scope: TurnScope, stopped: TurnOutcome, text: string, reason?: string): TurnResult {  const { record, run, snapshot, turn: span } = scope;
+export function finish(
+  scope: TurnScope,
+  stopped: TurnOutcome,
+  text: string,
+  reason?: string,
+): TurnResult {
+  const { record, run, snapshot, turn: span } = scope;
   span.setAttributes({ [ATTR.stopReason]: stopped, [ATTR.turnIteration]: run.iterations });
   if (reason !== undefined) span.setAttributes({ 'muffin.turn.stop_reason': reason });
   // Nessun drain di `/steer` qui, ed è la differenza fra questa versione e
@@ -638,7 +766,10 @@ export function closeRow(
     // The refusal report joins the transcript first, so the row keeps the
     // same array a reader sees — including the report itself
     // (harness-marked, so it archives as control, not as model output).
-    const closed = [...providerMessages(record), harnessMessage('assistant', [{ type: 'text', text: detail }])];
+    const closed = [
+      ...providerMessages(record),
+      harnessMessage('assistant', [{ type: 'text', text: detail }]),
+    ];
     const scritto = deps.turns.finish(
       record.id,
       {
@@ -654,6 +785,8 @@ export function closeRow(
     );
     if (scritto) withdrawApprovals(deps, record, (deps.now ?? (() => new Date()))());
   } catch (error) {
-    span.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
+    span.setAttributes({
+      'muffin.turn.record_error': error instanceof Error ? error.message : String(error),
+    });
   }
 }

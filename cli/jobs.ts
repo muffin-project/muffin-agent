@@ -3,7 +3,8 @@ import { parseArgs } from 'node:util';
 import { BudgetEngine } from '../core/budget/budget.js';
 import { loadConfig, paths } from '../core/config/config.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
-import { JobError, JobStore, type Job, jobPayload } from '../core/scheduler/jobs.js';
+import type { DelegationMode } from '../core/runtime/delega.js';
+import { JobError, JobStore, type DeliveryPolicy, type Job, jobPayload } from '../core/scheduler/jobs.js';
 
  /**
   * `muffin jobs` — the operator surface over scheduled work.
@@ -33,15 +34,27 @@ import { JobError, JobStore, type Job, jobPayload } from '../core/scheduler/jobs
 export const JOBS_USAGE = `usage:
   muffin jobs list
   muffin jobs add --cron "<expr>" [--tz <IANA>] [--channel <surface>]
-                 [--per-job-usd <dollari>] "<obiettivo>"
+                  [--per-job-usd <dollari>] [--silent] "<obiettivo>"
   muffin jobs add --cron "<expr>" --script "<comando>" [--tz] [--channel]
-                                un comando nella sandbox, senza chiamare il
-                                modello: costa zero token, e parla solo quando
-                                ha qualcosa da dire (stdout vuoto = silenzio)
+                                 un comando nella sandbox, senza chiamare il
+                                 modello: costa zero token, e parla solo quando
+                                 ha qualcosa da dire (stdout vuoto = silenzio)
+  muffin jobs add --once [--delegation manual|auto|yolo] [--channel <surface>]
+                  [--per-job-usd <dollari>] [--silent] "<obiettivo>"
+                                 arma l'obiettivo una volta sola (#598 S3): spara
+                                 alla prossima occasione e poi si disattiva, senza
+                                 richiamare il modello al giro dopo. Senza --cron
+                                 parte subito; con --cron spara una volta a
+                                 quell'ora. La postura pre-delega il futuro turno
+                                 di fire (yolo consuma via stesso registro,
+                                 manual chiede, deny resta deny).
+                                 --silent (#598 S4): il successo ordinario non
+                                 manda messaggi — resta una ricevuta durevole
+                                 (needs-owner e guasti arrivano sempre).
   muffin jobs cap <id> <dollari|none>
-                                il tetto di spesa di QUESTO job, al mese.
-                                Raggiunto il tetto il job non parte e non
-                                chiama il modello: "none" lo toglie.
+                                 il tetto di spesa di QUESTO job, al mese.
+                                 Raggiunto il tetto il job non parte e non
+                                 chiama il modello: "none" lo toglie.
   muffin jobs remove <id>
 `;
 
@@ -99,7 +112,18 @@ function fmt(job: Job, spesoUsd: number): string {
     job.perJobUsd === null
       ? ''
       : `\n            tetto $${job.perJobUsd}/mese — speso $${spesoUsd.toFixed(2)}${spesoUsd >= job.perJobUsd ? ' (raggiunto: non parte)' : ''}`;
-  return `${job.id.slice(0, 8)}  ${job.cron.padEnd(14)} ${job.timezone.padEnd(16)} →${job.channel.padEnd(9)} prossima ${next}\n            ${che}${jobPayload(job)}${tetto}`;
+  // Una-tantum + pre-delega (#598 S3): la riga dice cosa farà — una sola volta
+  // e con quale postura — perché un job che spara una volta e poi sparisce non
+  // deve leggersi come una ricorrenza. Le righe ricorrenti restano byte-per-byte
+  // quelle di prima: nessuna UX che cambia per chi non usa --once.
+  // Consegna silenziosa (#598 S4): la riga dice quando il successo ordinario
+  // non manderà messaggi — perché un job che tace per policy non deve leggersi
+  // come un job che non ha mai girato. Assente quando parla come oggi: le righe
+  // di default restano byte-per-byte quelle di prima, come per la delega.
+  const quando = job.once ? 'una volta' : `${job.cron.padEnd(14)} ${job.timezone.padEnd(16)}`;
+  const delega = !job.once || job.delegation === 'manual' ? '' : `, delega ${job.delegation}`;
+  const silent = job.delivery === 'silent' ? ', silent' : '';
+  return `${job.id.slice(0, 8)}  ${quando} →${job.channel.padEnd(9)} prossima ${next}${delega}${silent}\n            ${che}${jobPayload(job)}${tetto}`;
 }
 
 export function cmdJobsList(home: string): number {
@@ -138,6 +162,14 @@ export function cmdJobsAdd(home: string, argv: string[]): number {
         channel: { type: 'string' },
         script: { type: 'string' },
         'per-job-usd': { type: 'string' },
+        once: { type: 'boolean', default: false },
+        delegation: { type: 'string' },
+        // Consegna di routine (#598 S4): vale per ricorrenze e una-tantum —
+        // un controllo quotidiano che tace finché va tutto bene è il caso
+        // d'uso della proprietà 9, non un'eccezione una-tantum. A differenza
+        // di --delegation (solo --once, S3), qui non c'è niente da vietare:
+        // il default resta deliver in entrambi i casi.
+        silent: { type: 'boolean', default: false },
       },
     });
   } catch (error) {
@@ -147,7 +179,23 @@ export function cmdJobsAdd(home: string, argv: string[]): number {
   const { values, positionals } = parsed;
   const goal = positionals.join(' ').trim();
   const script = values.script?.trim() ?? '';
-  if (!values.cron || (goal === '' && script === '')) {
+  const once = values.once === true;
+  // La pre-delega vive solo sull'armato-una-volta (#598 S3): sulle ricorrenze
+  // non cambia niente — né UX né semantica — e una --delegation senza --once
+  // è un uso sbagliato, non una ricorrenza delegata.
+  let delegation: DelegationMode = 'manual';
+  if (values.delegation !== undefined) {
+    if (!once) {
+      process.stderr.write(`--delegation solo con --once (le ricorrenze restano manual)\n${JOBS_USAGE}`);
+      return 78;
+    }
+    if (values.delegation !== 'manual' && values.delegation !== 'auto' && values.delegation !== 'yolo') {
+      process.stderr.write(`--delegation vuole manual|auto|yolo, non "${values.delegation}"\n`);
+      return 78;
+    }
+    delegation = values.delegation;
+  }
+  if ((!values.cron && !once) || (goal === '' && script === '')) {
     process.stderr.write(JOBS_USAGE);
     return 78;
   }
@@ -174,17 +222,25 @@ export function cmdJobsAdd(home: string, argv: string[]): number {
   const config = loadConfig(home);
   const { store, db } = openStore(home);
   try {
+    // Il silenzio si sceglie, riga per riga: assente = parla come oggi.
+    const delivery: DeliveryPolicy = values.silent === true ? 'silent' : 'deliver';
     const comune = {
-      cron: values.cron,
+      cron: values.cron ?? 'once',
       timezone: values.tz ?? ownerTimezone(home),
       channel: values.channel ?? config.surfaces.default,
       perJobUsd,
+      delivery,
+      ...(once ? { once: true as const, delegation } : {}),
     };
     const job = store.add(script !== '' ? { ...comune, kind: 'script' as const, script } : { ...comune, goal });
     const next = job.nextFireAt.toLocaleString('it-IT', { timeZone: job.timezone, dateStyle: 'short', timeStyle: 'short' });
     const conTetto = job.perJobUsd === null ? '' : `, tetto $${job.perJobUsd}/mese`;
+    const conDelega = !job.once || job.delegation === 'manual' ? '' : `, delega ${job.delegation}`;
+    const conSilent = job.delivery === 'silent' ? ', silent (il successo ordinario non manda messaggi)' : '';
     process.stdout.write(
-      `job ${job.id.slice(0, 8)} creato — prossima esecuzione ${next} (${job.timezone}) su ${job.channel}${conTetto}\n`,
+      once
+        ? `job ${job.id.slice(0, 8)} armato una volta — esegue ${next} (${job.timezone}) su ${job.channel}${conTetto}${conDelega}${conSilent}\n`
+        : `job ${job.id.slice(0, 8)} creato — prossima esecuzione ${next} (${job.timezone}) su ${job.channel}${conTetto}${conSilent}\n`,
     );
     return 0;
   } catch (error) {

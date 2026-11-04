@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkCompletion, completionNudge } from './completion.js';
+import { checkCompletion } from './completion.js';
 
 const AVAILABLE = ['fs_read', 'fs_write', 'memory_search'];
 
@@ -60,13 +60,16 @@ describe('completion gate', () => {
     ).toBe(false);
   });
 
-  it('names the tools in the nudge', () => {
-    // Vague feedback produces a vague retry, and this is the only attempt the
-    // model gets.
-    const nudge = completionNudge(['fs_write', 'send_email']);
-    expect(nudge).toContain('`fs_write`');
-    expect(nudge).toContain('`send_email`');
-    expect(nudge).toContain('non hai chiamato nessun tool');
+  it('records the tools in the verdict, for the loop to attribute', () => {
+    // Il gate rileva e dichiara (attributi sullo span, per Control/eval): la
+    // risposta resta comunque al primo giro, senza secondo tentativo a modello.
+    const verdict = checkCompletion({
+      text: 'Ho usato fs_write e poi send_email.',
+      available: [...AVAILABLE, 'send_email'],
+      toolCallsMade: 0,
+    });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.named).toEqual(['fs_write', 'send_email']);
   });
 
   it('never reprimands an answer that explicitly explains it did not need a tool', () => {

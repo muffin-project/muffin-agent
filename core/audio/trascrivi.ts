@@ -1,8 +1,9 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
+import { paths } from '../config/config.js';
 
 const esegui = promisify(execFile);
 
@@ -67,6 +68,15 @@ export type TrascriviDeps = {
   timeoutMs?: number;
   /** Solo per i test. */
   run?: (bin: string, args: string[], timeoutMs: number) => Promise<{ stdout: string }>;
+  /**
+   * Scarica il modello se manca, invece di fermarsi al rimedio. Solo il
+   * percorso di produzione (`voceFor`) lo accende: nei test, negli eval e
+   * nelle installazioni che non lo chiedono, un modello assente deve restare
+   * un `MODELLO_MANCANTE` misurabile — mai una richiesta di rete a sorpresa.
+   */
+  provisiona?: boolean;
+  /** Solo per i test, come `run`. */
+  fetch?: typeof globalThis.fetch;
 };
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
@@ -80,9 +90,10 @@ const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
  * non nostra. Chi vuole `small` cambia una riga di config; chi non vuole
  * scaricare niente non trascrive, e Muffin glielo dice invece di provarci.
  */
+export const MODELLO_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin';
 export const MODELLO_MANCANTE = [
   'curl -L --create-dirs -o ~/.muffin/models/ggml-base.bin \\',
-  '  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin',
+  `  ${MODELLO_URL}`,
 ].join('\n');
 
 /**
@@ -186,11 +197,22 @@ export async function trascrivi(percorsoAudio: string, deps: TrascriviDeps = {})
     };
   }
   if (!existsSync(deps.whisperModel)) {
-    return {
-      ok: false,
-      why: `il modello whisper configurato non c'è: ${deps.whisperModel}`,
-      rimedio: MODELLO_MANCANTE,
-    };
+    // Ultima spiaggia, non prima strada: `init`, `surface enable` e `update`
+    // lo assicurano in anticipo quando possono; qui si prova comunque, perché
+    // un file cancellato a mano non deve rompere le note vocali per sempre.
+    // Se fallisce, sotto si ritrova il rimedio di sempre — invariato.
+    if (deps.provisiona === true) {
+      await assicuraModello(deps.whisperModel, {
+        ...(deps.fetch === undefined ? {} : { fetch: deps.fetch }),
+      });
+    }
+    if (!existsSync(deps.whisperModel)) {
+      return {
+        ok: false,
+        why: `il modello whisper configurato non c'è: ${deps.whisperModel}`,
+        rimedio: MODELLO_MANCANTE,
+      };
+    }
   }
 
   // Una cartella per chiamata, cancellata comunque vada. Il WAV convertito è
@@ -250,4 +272,90 @@ function manca(bin: string, error: unknown, nome: string, rimedio: string): Tras
   }
   const why = error instanceof Error ? error.message : String(error);
   return { ok: false, why: `${nome} ha fallito: ${why}` };
+}
+
+export type ModelloAssicurato =
+  /** C'era già: nessuna rete toccata. */
+  | { esito: 'presente' }
+  /** Scaricato ora (142 MiB): la prossima nota vocale non aspetta nessuno. */
+  | { esito: 'scaricato'; byte: number }
+  /** Non c'è e non si è scaricato: la casa resta com'era, e lo si dice. */
+  | { esito: 'fallito'; why: string };
+
+export type AssicuraModelloDeps = {
+  fetch?: typeof globalThis.fetch;
+  timeoutMs?: number;
+};
+
+/**
+ * Il modello whisper c'è, o arriva adesso.
+ *
+ * Decisione dell'owner: whisper è il fallback delle note vocali, e un
+ * fallback che tocca procurarsi a mano il giorno che serve non è un fallback
+ * — è un rimedio stampato a cose fatte. Quindi `init`, `surface enable` e
+ * `update` lo assicurano quando una superficie vocale è accesa; questa
+ * funzione è il pezzo condiviso, senza sapere chi la chiama.
+ *
+ * Non lancia mai, non sovrascrive mai un file esistente, e su fallimento non
+ * lascia pezzi (`.part` rimosso): la casa resta esattamente com'era, e il
+ * chiamante dice il `why` invece di fingere.
+ */
+export async function assicuraModello(
+  percorso: string,
+  deps: AssicuraModelloDeps = {},
+): Promise<ModelloAssicurato> {
+  if (existsSync(percorso)) return { esito: 'presente' };
+  const fetchFn = deps.fetch ?? globalThis.fetch;
+  const timeoutMs = deps.timeoutMs ?? 10 * 60_000;
+  let risposta: Response;
+  try {
+    risposta = await fetchFn(MODELLO_URL, { signal: AbortSignal.timeout(timeoutMs) });
+  } catch (error) {
+    return { esito: 'fallito', why: `modello whisper non scaricato: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  if (!risposta.ok) {
+    return { esito: 'fallito', why: `modello whisper non scaricato: HTTP ${risposta.status}` };
+  }
+  const byte = Buffer.from(await risposta.arrayBuffer());
+  if (byte.byteLength === 0) return { esito: 'fallito', why: 'modello whisper non scaricato: risposta vuota' };
+  try {
+    mkdirSync(dirname(percorso), { recursive: true });
+    const parte = `${percorso}.part`;
+    writeFileSync(parte, byte);
+    try {
+      renameSync(parte, percorso);
+    } catch {
+      rmSync(parte, { force: true });
+      throw new Error('rinomina fallita');
+    }
+  } catch (error) {
+    return { esito: 'fallito', why: `modello whisper non scaricato: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  return { esito: 'scaricato', byte: byte.byteLength };
+}
+
+/**
+ * Whisper c'è quando serve: una riga da stampare, o `null` quando non c'è
+ * niente da fare.
+ *
+ * Un posto solo per i tre momenti che lo assicurano (`init`, `surface
+ * enable`, e il primo uso via `provisiona`): la domanda "serve?" è sempre la
+ * stessa — superficie vocale accesa — e il percorso del modello si risolve
+ * con la stessa regola di `voceFor`. I binari (`whisper-cli`, `ffmpeg`) restano
+ * fuori di qui di proposito: installare pacchetti di sistema in silenzio non
+ * si fa, e `doctor` li controlla già col rimedio.
+ */
+export async function assicuraVoce(
+  home: string,
+  config: { surfaces: { enabled: readonly string[] }; audio?: { whisperModel?: string | undefined } | undefined },
+  deps: AssicuraModelloDeps = {},
+): Promise<string | null> {
+  if (!config.surfaces.enabled.some((s) => s === 'telegram' || s === 'discord')) return null;
+  const modello = config.audio?.whisperModel ?? paths(home).whisperModel;
+  const esito = await assicuraModello(modello, deps);
+  if (esito.esito === 'presente') return 'voce: modello whisper presente';
+  if (esito.esito === 'scaricato') {
+    return `voce: modello whisper scaricato (${(esito.byte / 1048576).toFixed(0)} MiB)`;
+  }
+  return `voce: ${esito.why} — la prima nota vocale dirà come prenderlo`;
 }

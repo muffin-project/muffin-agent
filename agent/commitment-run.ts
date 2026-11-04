@@ -1,8 +1,9 @@
-import { type CommitmentEvent, CommitmentLane } from '../core/scheduler/commitments.js';
+import { type CommitmentEvent, CommitmentLane, resolveLineage } from '../core/scheduler/commitments.js';
 import { DecisionLog } from '../core/scheduler/decisions.js';
 import { FireLog } from '../core/scheduler/firelog.js';
 import type { Deliver } from '../core/scheduler/scheduler.js';
 import { SendLock } from '../core/scheduler/sendlock.js';
+import type { LoopDeps } from './loop.js';
 import type { Runtime } from './runtime.js';
 
 /**
@@ -63,6 +64,18 @@ export function makeCommitmentLane(
   return new CommitmentLane({
     todos: runtime.deps.todos,
     tenant: COMMITMENT_TENANT,
+    // #859 content lineage: owner bytes win, untrusted evidence without them
+    // fails closed. Literal byte containment both ways (citato-style): the
+    // arming turn's input for authorship, tier>1 episodes for planting.
+    // Absent memory lane (observe --send without it) = no lineage evidence.
+    lineageOf: (armedTurnId, text) =>
+      resolveLineage(
+        (runtime.deps as Partial<LoopDeps>).turns,
+        runtime.deps.memory?.store,
+        COMMITMENT_TENANT,
+        armedTurnId,
+        text,
+      ),
     // The same table `muffin observe` writes: one anchor namespace, so a
     // commitment and an absence can never collide and neither can speak twice.
     fires: new FireLog(runtime.db),

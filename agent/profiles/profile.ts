@@ -1,7 +1,7 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { z } from 'zod';
-import { dirname, join } from 'node:path';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { z } from 'zod';
 import { THINKING_VALUES, type Thinking } from '../../core/config/thinking.js';
 import { TOOL_RESULT_BUDGET_CHARS } from '../loop/types.js';
 
@@ -49,8 +49,8 @@ export type RecoveryStrategy =
 
 export type ProfileExecution = {
   modelCallDeadlineMs: number;
-  turnWallDeadlineMs: number;
-  activeModelBudgetMs: number;
+  turnWallDeadlineMs: number | null;
+  activeModelBudgetMs: number | null;
   stallTimeoutMs: number;
   heartbeatIntervalMs: number;
 };
@@ -69,13 +69,20 @@ export type ProfileExecution = {
  * accepted and the key ignored: the zod object strips unknown fields at the
  * boundary, and no path reads it any more.
  */
-export const DEFAULT_EXECUTION: ProfileExecution = {
+export const DEFAULT_EXECUTION = {
+  // 90s: the per-call fuse stays where #824's tuning put it. A 300s default
+  // was tried here and reverted on judge evidence: beginModelCall takes
+  // min(call, wall 180s, active 120s), so 300s is unreachable on default
+  // rows — slow calls die at 120s as active_model_budget_exhausted, and the
+  // extra 30s only burn more context per doomed lease. Slow-route protection
+  // is the dead-lease breaker (deadStreak + dead_route refusal), not a
+  // higher ceiling nobody can reach.
   modelCallDeadlineMs: 90_000,
   turnWallDeadlineMs: 180_000,
   activeModelBudgetMs: 120_000,
   stallTimeoutMs: 25_000,
   heartbeatIntervalMs: 15_000,
-};
+} satisfies ProfileExecution;
 
 /**
  * What the loop asks the provider for. Two fields, both of them corrections.
@@ -128,6 +135,10 @@ export type Profile = {
   recovery: RecoveryStrategy[];
   /** Optional only for programmatic/backward-compatible callers; loadProfiles materializes DEFAULT_EXECUTION. */
   execution?: ProfileExecution | undefined;
+  /** Non-time allowance snapshotted when authorized owner work is admitted. */
+  activity?:
+    | { maxModelCalls: number; maxToolCalls: number; maxAutomaticContinuations: number }
+    | undefined;
   /**
    * Clearable tool-result payload kept per turn, in characters.
    *
@@ -146,6 +157,13 @@ export type Profile = {
 };
 
 /** Applies when nothing matches. Deliberately the cautious one. */
+export const DEFAULT_ACTIVITY = {
+  maxModelCalls: 128,
+  maxToolCalls: 256,
+  maxAutomaticContinuations: 3,
+};
+
+/** Compatibility floor; production adds DEFAULT_ACTIVITY for unmatched models. */
 export const CONSERVATIVE: Profile = {
   schemaVersion: 1,
   name: 'conservative',
@@ -182,8 +200,18 @@ export const CONSERVATIVE: Profile = {
  */
 const ExecutionSchema = z.object({
   modelCallDeadlineMs: z.number().int().positive().default(DEFAULT_EXECUTION.modelCallDeadlineMs),
-  turnWallDeadlineMs: z.number().int().positive().default(DEFAULT_EXECUTION.turnWallDeadlineMs),
-  activeModelBudgetMs: z.number().int().positive().default(DEFAULT_EXECUTION.activeModelBudgetMs),
+  turnWallDeadlineMs: z
+    .number()
+    .int()
+    .positive()
+    .nullable()
+    .default(DEFAULT_EXECUTION.turnWallDeadlineMs),
+  activeModelBudgetMs: z
+    .number()
+    .int()
+    .positive()
+    .nullable()
+    .default(DEFAULT_EXECUTION.activeModelBudgetMs),
   stallTimeoutMs: z.number().int().positive().default(DEFAULT_EXECUTION.stallTimeoutMs),
   heartbeatIntervalMs: z.number().int().positive().default(DEFAULT_EXECUTION.heartbeatIntervalMs),
 });
@@ -212,6 +240,13 @@ const ProfileSchema = z.object({
   // floor. Per-field defaults also make a partially migrated profile converge
   // instead of silently losing whichever fuse it omitted.
   execution: ExecutionSchema.default(DEFAULT_EXECUTION),
+  activity: z
+    .object({
+      maxModelCalls: z.number().int().positive(),
+      maxToolCalls: z.number().int().positive(),
+      maxAutomaticContinuations: z.number().int().nonnegative(),
+    })
+    .optional(),
   // Defaulted, not required: the default is what the loop did before this
   // field existed (the global compaction budget), so an old profile keeps
   // exactly the behaviour it had instead of silently acquiring a tighter one.
@@ -220,15 +255,46 @@ const ProfileSchema = z.object({
 });
 
 export function loadProfiles(dir?: string, onProblem?: (line: string) => void): Profile[] {
-  const base = dir ?? join(dirname(fileURLToPath(import.meta.url)));
-  if (!existsSync(base)) return [];
-  const out: Profile[] = [];
-  for (const f of readdirSync(base).filter((n) => n.endsWith('.json')).sort()) {
+  return loadSourcedDir(
+    dir ?? join(dirname(fileURLToPath(import.meta.url))),
+    'shipped',
+    onProblem,
+  ).map((s) => s.profile);
+}
+
+/**
+ * Where the directory came from. The loader is dumb about ownership — it
+ * just tags what it reads — so every production reader funnels through
+ * `loadEffectiveProfiles` below instead of guessing.
+ */
+export type ProfileOrigin = 'owner' | 'shipped';
+
+export type SourcedProfile = {
+  profile: Profile;
+  origin: ProfileOrigin;
+  /** Absolute path of the file it was read from. */
+  file: string;
+};
+
+function loadSourcedDir(
+  dir: string,
+  origin: ProfileOrigin,
+  onProblem?: (line: string, origin: ProfileOrigin) => void,
+): SourcedProfile[] {
+  if (!existsSync(dir)) return [];
+  const out: SourcedProfile[] = [];
+  for (const f of readdirSync(dir)
+    .filter((n) => n.endsWith('.json'))
+    .sort()) {
+    const file = join(dir, f);
     let raw: unknown;
     try {
-      raw = JSON.parse(readFileSync(join(base, f), 'utf8'));
+      raw = JSON.parse(readFileSync(file, 'utf8'));
     } catch (error) {
-      onProblem?.(`profilo ${f} illeggibile: ${error instanceof Error ? error.message : String(error)}`);
+      onProblem?.(
+        `profilo ${f} illeggibile: ${error instanceof Error ? error.message : String(error)}`,
+        origin,
+      );
       continue;
     }
     const parsed = ProfileSchema.safeParse(raw);
@@ -244,10 +310,11 @@ export function loadProfiles(dir?: string, onProblem?: (line: string) => void): 
       const path = issue?.path.join('.');
       onProblem?.(
         `profilo ${f} scartato${path ? ` (campo "${path}")` : ''}: ${issue?.message ?? 'schema non valido'}`,
+        origin,
       );
       continue;
     }
-    out.push(parsed.data);
+    out.push({ profile: parsed.data, origin, file });
   }
   return out;
 }
@@ -257,6 +324,69 @@ export function selectProfile(model: string, profiles: Profile[]): Profile {
     if (profile.match.some((pattern) => globMatch(pattern, model))) return profile;
   }
   return CONSERVATIVE;
+}
+
+/**
+ * The owner side of the profile store: `<home>/profiles/`, deliberately
+ * outside the release tree so `muffin update` and image replacements cannot
+ * take it away (#764). Missing is normal — a fresh home has no such
+ * directory, and that is silence, not a problem line.
+ */
+export function ownerProfilesDir(home: string): string {
+  return join(home, 'profiles');
+}
+
+/**
+ * Both stores, owner first. A shipped profile shadowed by an owner file of
+ * the same `name` is retired, and the retirement is said out loud: silent
+ * shadowing would let a broad owner glob pin models to a stale envelope
+ * without anyone noticing. Malformed files are dropped and named by the same
+ * loader either side uses.
+ */
+export function loadEffectiveProfiles(
+  home: string,
+  releaseDir?: string,
+  onProblem?: (line: string, origin?: ProfileOrigin) => void,
+): SourcedProfile[] {
+  const owner = loadSourcedDir(ownerProfilesDir(home), 'owner', onProblem);
+  const shipped = loadSourcedDir(
+    releaseDir ?? join(dirname(fileURLToPath(import.meta.url))),
+    'shipped',
+    onProblem,
+  );
+  const ownerByName = new Map(owner.map((s) => [s.profile.name, s] as const));
+  const kept: SourcedProfile[] = [];
+  for (const s of shipped) {
+    const o = ownerByName.get(s.profile.name);
+    if (o !== undefined) {
+      // Named with both files: removing the owner one un-shadows the shipped
+      // one, and that is the actionable half. Reported as an owner-side line
+      // so the remedy names the home directory, not the release tree.
+      onProblem?.(
+        `profilo owner "${basename(o.file)}" ombreggia shipped "${basename(s.file)}" (stesso nome "${s.profile.name}"): vale quello owner`,
+        'owner',
+      );
+      continue;
+    }
+    kept.push(s);
+  }
+  return [...owner, ...kept];
+}
+
+/**
+ * First glob match wins, like `selectProfile`, but the winner keeps its
+ * origin. `undefined` means no candidate matched: the caller falls back to
+ * CONSERVATIVE explicitly, so the fallback stays visible where owners look
+ * instead of hiding inside selection.
+ */
+export function selectSourcedProfile(
+  model: string,
+  sourced: SourcedProfile[],
+): SourcedProfile | undefined {
+  for (const s of sourced) {
+    if (s.profile.match.some((pattern) => globMatch(pattern, model))) return s;
+  }
+  return undefined;
 }
 
 /** Enough glob for model ids: `*` stands for any run of characters. */

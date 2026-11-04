@@ -33,6 +33,7 @@ import { VectorIndex } from '../core/memory/vectors.js';
 import { sealOwnerBinding } from '../core/rot/owner.js';
 import { seal } from '../core/rot/verify.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
+import { JobFireStore } from '../core/scheduler/job-fires.js';
 import type { StatoSuperficie } from '../core/surface/salute.js';
 import { TurnStore } from '../core/turns/store.js';
 import {
@@ -78,6 +79,38 @@ const checkWith = async (
   options: Parameters<typeof runDoctor>[1],
 ): Promise<Check | undefined> =>
   (await runDoctor(dir, options)).checks.find((c) => c.name === name);
+
+const writeOwnerProfile = (dir: string, file: string, model: string, raw?: string): void => {
+  const d = join(dir, 'profiles');
+  mkdirSync(d, { recursive: true });
+  writeFileSync(
+    join(d, file),
+    raw ??
+      JSON.stringify({
+        schemaVersion: 1,
+        name: file.replace(/\.json$/, ''),
+        match: [model],
+        maxToolsExposed: 20,
+        maxToolCallsPerTurn: 50,
+        thinking: 'off',
+        sampling: 'deterministic',
+        recovery: ['nudge'],
+        notes: 'test owner profile',
+      }),
+  );
+};
+
+const checkWithModel = async (
+  dir: string,
+  model: string,
+  name: string,
+): Promise<Check | undefined> => {
+  const configFile = join(dir, 'config.json');
+  const config = JSON.parse(readFileSync(configFile, 'utf8'));
+  config.models.main = model;
+  writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
+  return check(dir, name);
+};
 
 describe('doctor names the source of the permission matrix', () => {
   it('says the sealed file when the sealed file spoke', async () => {
@@ -212,7 +245,7 @@ describe('doctor names which profile the configured model resolves to', () => {
     const dir = home(); // cli/init.ts writes models.main = claude-sonnet-5
     const c = await check(dir, 'model profile');
     expect(c?.level).toBe('ok');
-    expect(c?.detail).toBe('claude-sonnet-5 -> frontier');
+    expect(c?.detail).toBe('claude-sonnet-5 -> frontier · shipped: frontier.json');
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -486,6 +519,109 @@ describe('doctor reads undelivered turns — D3 (judge, PR #42)', () => {
   });
 });
 
+describe('doctor consegne distinguishes silent receipts — #844', () => {
+  /**
+   * #598 S4 leaves `turns.delivery = pending` on a silent-settled turn by
+   * design, so without the `job_fires.silent` read the `consegne` check warns
+   * about an intentional silence. These are wiring tests through `runDoctor`
+   * (same posture as D3 above): a silent fire receipt must never warn, a
+   * genuine miss must warn exactly as today, and a settled-but-not-silent
+   * fire (the empty-text branch shape) must keep warning.
+   */
+  const counters844 = {
+    iterations: 1,
+    recoveriesUsed: 0,
+    transportRetriesLeft: 3,
+    truncationsUsed: 0,
+    toolCallsMade: 0,
+    nudgedForCompletion: false,
+    usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    spentUsd: 0,
+    resumes: 0,
+    contextBuilt: false,
+  };
+
+  function donePendingTurn(store: TurnStore, id: string): void {
+    const created = store.create({
+      id,
+      principal: { kind: 'owner', connector: 'telegram', externalId: '1' },
+      tenant: 'host',
+      surface: 'telegram',
+      sessionId: 'sess-844',
+      model: 't',
+      messages: [],
+      taint: 0,
+      counters: counters844,
+      replyTo: { chatId: 1, messageId: 1 },
+    });
+    store.finish(
+      id,
+      { outcome: 'answered', messages: [], taint: 0, counters: counters844 },
+      created.claimToken,
+    );
+  }
+
+  it('a silent-settled turn alone reads ok with an informative line, never warn', async () => {
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    const store = new TurnStore(db);
+    const fires = new JobFireStore(db);
+    donePendingTurn(store, 'turn-844-sil-01');
+    // Production shape (`agent/scheduler-run.ts` + S4 branch): the occurrence
+    // is claimed, bound to the turn, and settled with the silent receipt.
+    fires.claim('job-844-silent', '2026-10-04T10:00:00.000Z');
+    fires.bind('job-844-silent', '2026-10-04T10:00:00.000Z', 'turn-844-sil-01');
+    fires.settle('job-844-silent', '2026-10-04T10:00:00.000Z', { silent: true });
+    db.close();
+
+    const c = await check(dir, 'consegne');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('ricevuta silenziosa');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('silent + genuine: the warning names only the genuine turn', async () => {
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    const store = new TurnStore(db);
+    const fires = new JobFireStore(db);
+    donePendingTurn(store, 'turn-844-sil-02');
+    fires.claim('job-844-silent', '2026-10-04T10:00:00.000Z');
+    fires.bind('job-844-silent', '2026-10-04T10:00:00.000Z', 'turn-844-sil-02');
+    fires.settle('job-844-silent', '2026-10-04T10:00:00.000Z', { silent: true });
+    // Genuinely undelivered: done + pending, no silent fire anywhere near it.
+    donePendingTurn(store, 'turn-844-gen-01');
+    db.close();
+
+    const c = await check(dir, 'consegne');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('1 turni');
+    expect(c?.detail).toContain('turn-844-gen'); // genuine slice(0, 12)
+    expect(c?.detail).not.toContain('turn-844-sil'); // silent never named
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('a settled-but-not-silent fire still warns — empty-text branch unchanged', async () => {
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    const store = new TurnStore(db);
+    const fires = new JobFireStore(db);
+    // Same durable shape as the empty-text branch in
+    // `core/scheduler/scheduler.ts`: occurrence settled, schedule advanced,
+    // turn row untouched (`pending`) — but no silent receipt (`silent = 0`).
+    donePendingTurn(store, 'turn-844-empty-01');
+    fires.claim('job-844-empty', '2026-10-04T11:00:00.000Z');
+    fires.bind('job-844-empty', '2026-10-04T11:00:00.000Z', 'turn-844-empty-01');
+    fires.settle('job-844-empty', '2026-10-04T11:00:00.000Z');
+    db.close();
+
+    const c = await check(dir, 'consegne');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('turn-844-emp');
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe('doctor names the spend cap and where it came from', () => {
   it('says the sealed file, with the numbers', async () => {
     // Same class of invisible fact as the matrix above, and worse in
@@ -497,6 +633,85 @@ describe('doctor names the spend cap and where it came from', () => {
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('rot/budgets.json');
     expect(c?.detail).toContain('80');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('names declared unmetered endpoints with their sealed source (#499)', async () => {
+    const dir = home();
+    const file = join(paths(dir).rot, 'budgets.json');
+    const budgets = JSON.parse(readFileSync(file, 'utf8'));
+    budgets.unmetered = [{ host: '192.168.1.10', port: 8080, note: 'GPU LAN' }];
+    writeFileSync(file, `${JSON.stringify(budgets, null, 2)}\n`);
+    seal(dir, '1', new Date());
+    const c = await check(dir, 'endpoint non conteggiati');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('192.168.1.10:8080');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('warns when the unmetered section is malformed, metering instead (#499)', async () => {
+    const dir = home();
+    const file = join(paths(dir).rot, 'budgets.json');
+    const budgets = JSON.parse(readFileSync(file, 'utf8'));
+    budgets.unmetered = 'all';
+    writeFileSync(file, `${JSON.stringify(budgets, null, 2)}\n`);
+    seal(dir, '1', new Date());
+    const c = await check(dir, 'endpoint non conteggiati');
+    expect(c?.level).toBe('warn');
+    expect(c?.remedy).toContain('rot reseal');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('names an owner-resolved profile with its file, not as a silent default (#764)', async () => {
+    // The green lie this kills: an owner model falling to the conservative
+    // floor read as healthy (`model -> conservative`, no why). Now the source
+    // is on the line.
+    const dir = home();
+    writeOwnerProfile(dir, 'owner-lan.json', 'my-lan-model');
+    const c = await checkWithModel(dir, 'my-lan-model', 'model profile');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('owner-lan');
+    expect(c?.detail).toContain('owner: owner-lan.json');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('names a shipped resolution with its file (#764)', async () => {
+    const dir = home();
+    const c = await checkWithModel(dir, 'qwen3.8-27b', 'model profile');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('shipped: consumer-qwen3.json');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('says why a model lands on the floor instead of printing a green default (#764)', async () => {
+    const dir = home();
+    const c = await checkWithModel(dir, 'model-that-matches-nothing', 'model profile');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('conservative');
+    expect(c?.detail).toContain('nessun profilo matcha');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('fails, naming the home directory, when the only owner file is broken (#764)', async () => {
+    // D4: a problem fired AND the model landed on the floor. The remedy must
+    // name the home profiles dir, not the release tree.
+    const dir = home();
+    writeOwnerProfile(dir, 'broken.json', 'my-lan-model', '{ not json');
+    const c = await checkWithModel(dir, 'my-lan-model', 'model profile');
+    expect(c?.level).toBe('fail');
+    expect(c?.detail).toContain('broken.json');
+    expect(c?.remedy).toContain(join(dir, 'profiles'));
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('warns (not fails) when a broken owner file coexists with a valid resolution (#764)', async () => {
+    const dir = home();
+    writeOwnerProfile(dir, 'owner-lan.json', 'my-lan-model');
+    writeOwnerProfile(dir, 'broken.json', 'my-lan-model', '{ not json');
+    const c = await checkWithModel(dir, 'my-lan-model', 'model profile');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('owner-lan');
+    expect(c?.detail).toContain('broken.json');
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -525,12 +740,37 @@ describe('doctor names the spend cap and where it came from', () => {
 });
 
 describe('doctor names which secret store answered', () => {
+  it('reports a missing independent light credential without borrowing the main key', async () => {
+    const dir = home();
+    const config = loadConfig(dir);
+    saveConfig(
+      {
+        ...config,
+        lightProvider: {
+          kind: 'openai-compat',
+          baseUrl: 'https://light.invalid/v1',
+          apiKeyRef: 'secret://missing_light_fixture',
+        },
+      },
+      dir,
+    );
+    try {
+      expect((await check(dir, 'api key'))?.level).toBe('ok');
+      const light = await check(dir, 'api key (light)');
+      expect(light?.level).toBe('fail');
+      expect(light?.detail).toContain('missing_light_fixture');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it('names the backend and the path, so a chain is never silent', async () => {
     const dir = home();
     const c = await check(dir, 'api key');
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('home');
-    expect(c?.detail).toContain(join(paths(dir).secrets, 'provider_api_key'));
+    expect(c?.detail).toContain(
+      join(paths(dir).secrets, loadConfig(dir).provider.apiKeyRef.slice('secret://'.length)),
+    );
     // Never the value. The check counts characters precisely so it does not
     // have to print any of them.
     expect(c?.detail).not.toContain('sk-never-called');
@@ -542,7 +782,12 @@ describe('doctor names which secret store answered', () => {
     // store, the old copy in the home keeps answering, and every symptom of a
     // successful migration is present.
     const dir = home();
-    writeSecret('provider_api_key', 'sk-never-called', dir, 'persistent');
+    writeSecret(
+      loadConfig(dir).provider.apiKeyRef.slice('secret://'.length),
+      'sk-never-called',
+      dir,
+      'persistent',
+    );
     const c = await check(dir, 'api key');
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('non viene mai usata');
@@ -1370,6 +1615,19 @@ describe("l'indice coerente non dice che l'embedder risponda", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('accepts a successful cold-start probe beyond the former 1.5-second deadline', async () => {
+    const dir = await conIndice();
+    const c = await checkWith(dir, 'vector index', {
+      embedderProbe: async () => {
+        // A successful response beyond the former deadline must stay healthy.
+        await new Promise<void>((resolve) => setTimeout(resolve, 2_000));
+      },
+    });
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('in sync');
+    rmSync(dir, { recursive: true, force: true });
+  }, 15_000);
+
   /**
    * Il posto dove l'owner legge davvero la causa. Il difetto era a monte —
    * `embed.ts` passava `error.message` a `EmbedderUnavailable`, e quando
@@ -1537,6 +1795,47 @@ describe("l'indice coerente non dice che l'embedder risponda", () => {
     expect(c?.remedy).toContain('config.embedder');
     // Il rimedio che non poteva funzionare non deve più comparire.
     expect(c?.remedy).not.toContain('memory extract');
+    rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+
+  it('a indice VUOTO nomina l embedder irraggiungibile invece di prescrivere extract — installazione fresca', async () => {
+    // Il ramo `chunks === 0` prescriveva `muffin memory extract` senza chiedere
+    // se l'embedder risponde: con Ollama giù, extract ripassa da makeEmbedder
+    // e non indicizza niente — causa sbagliata, rimedio inerte (#738).
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    // La tabella c'è ed è vuota: lo stato di un'installazione fresca, non
+    // quello di un DB senza memoria.
+    new VectorIndex(db, new Finto());
+    expect((db.prepare(`SELECT count(*) AS n FROM chunks`).get() as { n: number }).n).toBe(0);
+    db.close();
+
+    const c = await checkWith(dir, 'vector index', {
+      embedderProbe: async () => {
+        throw new Error('fetch failed');
+      },
+    });
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('empty');
+    expect(c?.detail).toContain('non risponde');
+    expect(c?.detail).toContain('fetch failed');
+    // Il rimedio inerte non deve più comparire; quello locale sì.
+    expect(c?.remedy).not.toContain('memory extract');
+    expect(c?.remedy).toContain('ollama');
+    rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+
+  it('a indice VUOTO con embedder raggiungibile resta la riga empty + extract', async () => {
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    new VectorIndex(db, new Finto());
+    db.close();
+
+    const c = await checkWith(dir, 'vector index', { embedderProbe: async () => {} });
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('empty');
+    expect(c?.detail).not.toContain('non risponde');
+    expect(c?.remedy).toContain('memory extract');
     rmSync(dir, { recursive: true, force: true });
   }, 60_000);
 
@@ -2165,11 +2464,7 @@ describe('doctor nomina le capacità spente o tagliate, come sys.inspect', () =>
     }
   });
 
-  it('tetto tool: nomina i tool tagliati quando il modello risolve sul profilo conservativo, e non è la stessa frase di uno spento', async () => {
-    // Nessun profilo spedito taglia oggi (consumer-local: 15, frontier: 24,
-    // contro una dozzina di tool base — agent/runtime-exposure.test.ts lo
-    // misura). Un id modello che non combacia con nessun `match` risolve su
-    // CONSERVATIVE (maxToolsExposed: 10), che invece taglia davvero.
+  it('tetto tool: capability oltre la proiezione restano discoverable, non risultano invisibili', async () => {
     const dir = home();
     const configPath = paths(dir).config;
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
@@ -2177,21 +2472,20 @@ describe('doctor nomina le capacità spente o tagliate, come sys.inspect', () =>
     writeFileSync(configPath, JSON.stringify(config, null, 2));
 
     const c = await check(dir, 'capacità: tetto tool');
-    expect(c?.level).toBe('warn');
-    expect(c?.detail).toContain('tetto');
+    expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('conservative');
-    expect(c?.remedy).toContain('maxToolsExposed');
-    // Distinto da una capacità spenta: il tetto non "non è disponibile" e non
-    // è "spento", è tagliato — e viceversa, il check `sandbox`/`web_search`
-    // non nomina mai un tetto.
-    expect(c?.detail).not.toContain('non disponibile');
+    expect(c?.detail).toContain('capability native');
+    expect(c?.detail).toContain('capability_search');
+    expect(c?.detail).not.toContain('invisibili');
+    expect(c?.remedy).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('tetto tool: ok quando il profilo risolto copre tutti i tool registrati', async () => {
-    const dir = home(); // cli/init.ts risolve su un profilo frontier, tetto 24
+  it('tetto tool: ok quando il profilo risolto copre tutto il catalogo nativo', async () => {
+    const dir = home();
     const c = await check(dir, 'capacità: tetto tool');
     expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('capability native entro la proiezione');
     expect(c?.remedy).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
   });
@@ -2312,7 +2606,7 @@ describe('model routing (issue #501)', () => {
     const found = await check(dir, 'model routing');
     expect(found?.level).toBe('warn');
     expect(found?.detail).toContain('alibaba');
-    expect(found?.remedy).toContain('muffin model google/gemma-4-31b-it');
+    expect(found?.remedy).toContain('muffin model main google/gemma-4-31b-it');
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -2428,6 +2722,51 @@ describe('doctor reports vault drift with the reindex remedy', () => {
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('file spariti');
     expect(c?.remedy).toContain('muffin vault reindex');
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('doctor says whether a photo would be seen, before the first one arrives', () => {
+  const conTelegram = (dir: string): string => {
+    const file = join(paths(dir).home, 'config.json');
+    const config = JSON.parse(readFileSync(file, 'utf8')) as { surfaces: Record<string, unknown> };
+    config.surfaces = { ...config.surfaces, enabled: ['cli', 'telegram'] };
+    writeFileSync(file, JSON.stringify(config, null, 2));
+    return dir;
+  };
+
+  it('says nothing when no photo-carrying surface is enabled', async () => {
+    const dir = home();
+    const c = await checkWith(dir, 'vista', { vista: { vedeImmagini: async () => true } });
+    expect(c).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is ok, naming the model, when the configured model sees images', async () => {
+    const dir = conTelegram(home());
+    const c = await checkWith(dir, 'vista', { vista: { vedeImmagini: async () => true } });
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toMatch(/vede le immagini/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is ok, naming who describes, when the main model is blind but the light one sees', async () => {
+    const dir = conTelegram(home());
+    const config = loadConfig(dir);
+    const c = await checkWith(dir, 'vista', {
+      vista: { vedeImmagini: async (modello: string) => modello === config.models.light },
+    });
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain(config.models.light);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('warns with the remedy when nobody sees', async () => {
+    const dir = conTelegram(home());
+    const c = await checkWith(dir, 'vista', { vista: { vedeImmagini: async () => false } });
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toMatch(/restano fuori dal turno/);
+    expect(c?.remedy).toContain('/model');
     rmSync(dir, { recursive: true, force: true });
   });
 });

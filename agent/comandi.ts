@@ -1,7 +1,8 @@
-import { loadConfig, saveConfig, type Config } from '../core/config/config.js';
-import { isThinkingEffort, THINKING_EFFORTS, type Thinking } from '../core/config/thinking.js';
-import { loadProfiles, selectProfile } from './profiles/profile.js';
+import { type Config, loadConfig, saveConfig } from '../core/config/config.js';
 import { describeSettableKnobs, formatSetOutcome, setConfigKnob } from '../core/config/settings.js';
+import { isThinkingEffort, THINKING_EFFORTS, type Thinking } from '../core/config/thinking.js';
+import type { DelegationMode, LevaDelega } from '../core/runtime/delega.js';
+import { CONSERVATIVE, loadEffectiveProfiles, selectSourcedProfile } from './profiles/profile.js';
 
 /**
  * I comandi che una persona può dare a Muffin, in un posto solo.
@@ -56,6 +57,13 @@ export type Controlli = {
   stop: () => boolean;
   steer: (testo: string) => boolean;
   pausa: { attiva: () => boolean; metti: () => void; togli: () => void };
+  /**
+   * La delega sul lavoro in corso (issue #740): la costruisce chi ha gli
+   * store in mano — il connettore per la sua corsia, il REPL per la sua
+   * sessione — e qui arriva solo la leva. Assente dove non esiste un lavoro
+   * da governare, e i tre comandi lo dicono invece di fingere.
+   */
+  delega?: LevaDelega | undefined;
 };
 
 export type ContestoComandi = {
@@ -68,7 +76,10 @@ export type ContestoComandi = {
   onConfig?: (next: Config) => void;
   profilo: { name: string; thinking: Thinking };
   onThinking?: (t: Thinking) => void;
-  budget: { status: () => { monthUsd: number; monthlyCapUsd: number; exhausted: boolean }; tenantTodayUsd: (t: string) => number };
+  budget: {
+    status: () => { monthUsd: number; monthlyCapUsd: number; exhausted: boolean };
+    tenantTodayUsd: (t: string) => number;
+  };
   sessionId: string;
   verbosity: Verbosity;
   /**
@@ -92,16 +103,26 @@ export type ContestoComandi = {
 /** Una riga per comando: nome, e cosa fa. L'aiuto e l'elenco per il menu di Telegram nascono da qui. */
 export const COMANDI: readonly { nome: string; aiuto: string; soloTerminale?: boolean }[] = [
   { nome: 'new', aiuto: 'inizia una conversazione nuova' },
-  { nome: 'session', aiuto: 'mostra l\'id della conversazione' },
+  { nome: 'session', aiuto: "mostra l'id della conversazione" },
   { nome: 'spend', aiuto: 'quanto hai speso questo mese e oggi' },
-  { nome: 'think', aiuto: `ragionamento: on | off | reset | un livello (${THINKING_EFFORTS.join(', ')}) — i valori validi dipendono dal modello; senza argomenti lo mostra` },
-  { nome: 'model', aiuto: 'modello: [main|light|embed] <slug>, --list, o niente per vederli' },
+  {
+    nome: 'think',
+    aiuto: `ragionamento: on | off | reset | un livello (${THINKING_EFFORTS.join(', ')}) — i valori validi dipendono dal modello; senza argomenti lo mostra`,
+  },
+  {
+    nome: 'model',
+    aiuto:
+      'modello: [main|light] [--provider <id> | --endpoint <url>] <slug>, --list o niente per lo stato; menu guidato nel terminale con `muffin config`',
+  },
   { nome: 'config', aiuto: 'set <chiave> <valore> — solo le poche manopole scrivibili da qui' },
   { nome: 'debug', aiuto: 'giri, token e millisecondi: on | off (da solo, inverte)' },
   { nome: 'stop', aiuto: 'interrompe il turno in corso; quelli in coda restano' },
   { nome: 'steer', aiuto: '<testo> — corregge il turno in corso, al prossimo passo' },
   { nome: 'pause', aiuto: 'ferma job e turni in coda finché non riprendi' },
   { nome: 'resume', aiuto: 'riprende dopo /pause' },
+  { nome: 'manual', aiuto: 'torna a chiedere ogni conferma per il lavoro in corso' },
+  { nome: 'auto', aiuto: 'azioni ordinarie automatiche per il lavoro in corso, quando calibrate' },
+  { nome: 'yolo', aiuto: 'full auto per il lavoro in corso; i divieti hard restano attivi' },
   { nome: 'help', aiuto: 'questo elenco' },
   { nome: 'exit', aiuto: 'esci (o Ctrl+D)', soloTerminale: true },
 ];
@@ -133,7 +154,10 @@ export async function eseguiComando(riga: string, ctx: ContestoComandi): Promise
       return { testo: aiuto(ctx.puoiUscire) };
 
     case 'new':
-      return { testo: 'conversazione nuova: quella di prima non la ricordo più.', nuovaSessione: true };
+      return {
+        testo: 'conversazione nuova: quella di prima non la ricordo più.',
+        nuovaSessione: true,
+      };
 
     case 'session':
       return { testo: ctx.sessionId };
@@ -141,12 +165,17 @@ export async function eseguiComando(riga: string, ctx: ContestoComandi): Promise
     // Le quattro leve di ADR-0054. Ognuna dice cosa ha fatto davvero: un
     // «fermato» su niente sarebbe la stessa bugia di un «inviato» non arrivato.
     case 'stop': {
-      if (ctx.controlli === undefined) return { testo: 'qui non c\'è un turno da fermare.' };
-      return { testo: ctx.controlli.stop() ? 'fermato: il turno in corso si interrompe al prossimo passo.' : 'nessun turno in corso.' };
+      if (ctx.controlli === undefined) return { testo: "qui non c'è un turno da fermare." };
+      return {
+        testo: ctx.controlli.stop()
+          ? 'fermato: il turno in corso si interrompe al prossimo passo.'
+          : 'nessun turno in corso.',
+      };
     }
     case 'steer': {
-      if (ctx.controlli === undefined) return { testo: 'qui non c\'è un turno da correggere.' };
-      if (arg === '') return { testo: '/steer <cosa cambiare> — senza testo non so cosa correggere.' };
+      if (ctx.controlli === undefined) return { testo: "qui non c'è un turno da correggere." };
+      if (arg === '')
+        return { testo: '/steer <cosa cambiare> — senza testo non so cosa correggere.' };
       return {
         // Onesto per **ogni** esito che il codice produce, perche' nel momento
         // in cui si risponde non si sa quale sara' vero. La correzione entra al
@@ -166,20 +195,80 @@ export async function eseguiComando(riga: string, ctx: ContestoComandi): Promise
       };
     }
     case 'pause': {
-      if (ctx.controlli === undefined) return { testo: 'qui non c\'è niente da mettere in pausa.' };
+      if (ctx.controlli === undefined) return { testo: "qui non c'è niente da mettere in pausa." };
       if (ctx.controlli.pausa.attiva()) return { testo: 'già in pausa. /resume per riprendere.' };
       ctx.controlli.pausa.metti();
       return {
         testo:
           'in pausa: nessun job parte e i messaggi restano in coda finché non dici /resume.' +
-          (ctx.controlli.vivo() ? ' Il turno in corso finisce; /stop se vuoi fermare anche quello.' : ''),
+          (ctx.controlli.vivo()
+            ? ' Il turno in corso finisce; /stop se vuoi fermare anche quello.'
+            : ''),
       };
     }
     case 'resume': {
-      if (ctx.controlli === undefined) return { testo: 'qui non c\'è niente da riprendere.' };
+      if (ctx.controlli === undefined) return { testo: "qui non c'è niente da riprendere." };
       if (!ctx.controlli.pausa.attiva()) return { testo: 'non ero in pausa.' };
       ctx.controlli.pausa.togli();
       return { testo: 'ripreso: riparto da quello che è rimasto in coda.' };
+    }
+
+    // La delega dell'owner sul lavoro in corso (issue #740): `/manual` il
+    // comportamento di oggi, `/yolo` la pre-approvazione degli ask di questo
+    // lavoro, `/auto` la postura registrata finché il giudizio semantico non
+    // è calibrato. Mai un interruttore globale: la leva si lega all'ultimo
+    // lavoro attivo di questa conversazione, e un lavoro nuovo riparte in
+    // manuale. `off` dopo `/auto` o `/yolo` torna in manuale.
+    case 'manual':
+    case 'auto':
+    case 'yolo': {
+      const chiesto = nome as 'manual' | 'auto' | 'yolo';
+      const voluto: DelegationMode = arg === 'off' && chiesto !== 'manual' ? 'manual' : chiesto;
+      if (arg !== '' && voluto !== 'manual') {
+        return {
+          testo: `/${chiesto} non prende argomenti — per tornare a farti chiedere tutto: /manual`,
+        };
+      }
+      if (ctx.controlli?.delega === undefined)
+        return { testo: "qui non c'è un lavoro da delegare." };
+      const esito = ctx.controlli.delega.metti(voluto);
+      if (esito === null) {
+        return {
+          testo:
+            "non c'è un lavoro in corso a cui darla: la delega vale per il lavoro che vedi adesso, e muore con lui.",
+        };
+      }
+      const corto = esito.turnId.slice(0, 12);
+      if (!esito.cambiato) {
+        if (voluto === 'manual') return { testo: 'ero già in manuale: ti chiedo ogni conferma.' };
+        if (voluto === 'auto') {
+          return {
+            testo: `ero già in auto per questo lavoro (${corto}): finché il giudizio non è calibrato, ogni conferma arriva a te.`,
+          };
+        }
+        return {
+          testo:
+            `ero già in yolo per questo lavoro (${corto}).` +
+            (esito.risposteDate > 0 ? ' La domanda aperta passa per delega.' : ''),
+        };
+      }
+      if (voluto === 'manual') {
+        return { testo: `manuale — torno a chiederti ogni conferma per questo lavoro (${corto}).` };
+      }
+      if (voluto === 'auto') {
+        return {
+          testo:
+            `AUTO — registrato per questo lavoro (${corto}): le azioni ordinarie passeranno da sole quando il ` +
+            `giudizio sarà calibrato; fino ad allora ogni conferma arriva ancora a te. /manual per tornare.`,
+        };
+      }
+      return {
+        testo:
+          `YOLO — full auto per questo lavoro (${corto}); i divieti hard restano attivi. /manual per tornare.` +
+          (esito.risposteDate > 0
+            ? ' La domanda aperta passa per delega e il turno riprende da solo.'
+            : ''),
+      };
     }
 
     case 'spend': {
@@ -188,7 +277,10 @@ export async function eseguiComando(riga: string, ctx: ContestoComandi): Promise
       return {
         testo:
           `$${s.monthUsd.toFixed(4)} / $${String(s.monthlyCapUsd)} questo mese${s.exhausted ? ' — esaurito' : ''}\n` +
-          `oggi: $${oggi.toFixed(4)}`,
+          `oggi: $${oggi.toFixed(4)}` +
+          (ctx.config.provider.kind === 'openai-chatgpt'
+            ? '\nChatGPT plan quota/credits excluded from API-dollar estimates: https://chatgpt.com/settings/usage'
+            : ''),
       };
     }
 
@@ -206,17 +298,29 @@ export async function eseguiComando(riga: string, ctx: ContestoComandi): Promise
         ctx.onConfig?.(next);
         // La corsia principale ha un `Profile` tutto suo (`withThinking` copia
         // sempre), quindi girare la manopola qui non tocca la corsia della
-        // memoria — che il ragionamento se lo spegne da sé comunque.
-        ctx.onThinking?.(out.set ?? selectProfile(next.models.main, loadProfiles()).thinking);
+        // memoria — che il ragionamento se lo spegne da sé comunque. La
+        // selezione passa dagli effective profiles come il runtime, altrimenti
+        // `/think` e il turno vedrebbero due profili diversi sullo stesso
+        // modello owner.
+        ctx.onThinking?.(
+          out.set ??
+            (
+              selectSourcedProfile(next.models.main, loadEffectiveProfiles(ctx.home))?.profile ??
+              CONSERVATIVE
+            ).thinking,
+        );
       }
       return { testo: out.line };
     }
 
     case 'model': {
       const righe: string[] = [];
-      await ctx.model(arg === '' ? [] : arg.split(/\s+/), (l) => righe.push(l));
+      const code = await ctx.model(arg === '' ? [] : arg.split(/\s+/), (l) => righe.push(l));
       ctx.onConfig?.(loadConfig(ctx.home));
-      return { testo: `${righe.join('\n')}\n(il modello nuovo vale dal prossimo turno)`.trim() };
+      return {
+        testo:
+          `${righe.join('\n')}${code === 0 ? '\n(il modello nuovo vale dal prossimo turno)' : ''}`.trim(),
+      };
     }
 
     // La stessa funzione di `muffin config set` (`core/config/settings.ts`):
@@ -251,7 +355,9 @@ export function debugCommand(arg: string, current: Verbosity): { line: string; s
   }
   if (arg === 'on') return { line: dillo('debug'), set: 'debug' };
   if (arg === 'off') return { line: dillo('normale'), set: 'normale' };
-  return { line: `/debug on | off, oppure /debug da solo per invertirlo — «${arg}» non è nessuno dei due` };
+  return {
+    line: `/debug on | off, oppure /debug da solo per invertirlo — «${arg}» non è nessuno dei due`,
+  };
 }
 
 export function thinkingCommand(
@@ -264,9 +370,21 @@ export function thinkingCommand(
     `ragionamento: ${t === 'off' ? 'off' : isThinkingEffort(t) ? `on, livello ${t}` : 'on'} (${da})`;
   const da = override === undefined ? `profilo ${profileName}` : 'config.json';
   if (arg === '') return { line: stato(current, da) };
-  if (arg === 'on') return { line: `${stato('adaptive', 'config.json')} — vale anche ai prossimi avvii`, set: 'adaptive' };
-  if (arg === 'off') return { line: `${stato('off', 'config.json')} — vale anche ai prossimi avvii`, set: 'off' };
-  if (isThinkingEffort(arg)) return { line: `ragionamento: on, livello ${arg} (config.json) — vale anche ai prossimi avvii`, set: arg };
-  if (arg === 'reset') return { line: `ragionamento: torna a valere il profilo ${profileName}`, set: null };
-  return { line: `/think on | off | reset, oppure un livello (${THINKING_EFFORTS.join(', ')}) — i valori validi dipendono dal modello e dal server — «${arg}» non è nessuno di questi` };
+  if (arg === 'on')
+    return {
+      line: `${stato('adaptive', 'config.json')} — vale anche ai prossimi avvii`,
+      set: 'adaptive',
+    };
+  if (arg === 'off')
+    return { line: `${stato('off', 'config.json')} — vale anche ai prossimi avvii`, set: 'off' };
+  if (isThinkingEffort(arg))
+    return {
+      line: `ragionamento: on, livello ${arg} (config.json) — vale anche ai prossimi avvii`,
+      set: arg,
+    };
+  if (arg === 'reset')
+    return { line: `ragionamento: torna a valere il profilo ${profileName}`, set: null };
+  return {
+    line: `/think on | off | reset, oppure un livello (${THINKING_EFFORTS.join(', ')}) — i valori validi dipendono dal modello e dal server — «${arg}» non è nessuno di questi`,
+  };
 }

@@ -92,6 +92,8 @@ export type SweepReport = {
   /** Groups examined — (subject, predicate) pairs holding more than one belief. */
   examined: number;
   merges: Merge[];
+  /** Another memory writer owns the lane; no snapshot or retirement ran. */
+  busy?: boolean;
 };
 
 /**
@@ -117,19 +119,31 @@ export type SweepReport = {
  * marker (a replayed episode whose wording drifted) are the two ways a second
  * active value gets there in the first place.
  *
- * ## Determinism is what makes it safe to run twice
+ * ## The writer lane protects snapshots against reconciliation
  *
  * The survivor is the most recently recorded row, ties broken by the larger id
- * — a total order, computed from the rows alone. Two processes sweeping at once
- * therefore choose the *same* survivor and issue the same retirements, and
- * `supersede`'s own `AND expired_at IS NULL` makes the loser's write a no-op.
- * No lock is taken and none is needed.
+ * — a total order, computed from the rows alone. That makes two sweeps
+ * deterministic, but does not protect a reconciler that has selected an active
+ * candidate and is waiting for the judge. The shared lane must cover both the
+ * sweep snapshot and retirements so a review cannot reference a fact this pass
+ * expired.
  *
  * The newest wins rather than the oldest because `recorded_at` is when we
  * learned it: keeping the latest telling preserves the provenance chain the
  * conversation actually produced, and the older rows keep pointing at it.
  */
 export function sweepDuplicates(store: MemoryStore, tenantId: string, now: Date): SweepReport {
+  const claim = store.acquireIngestLock(now);
+  if ('held' in claim) return { examined: 0, merges: [], busy: true };
+
+  try {
+    return sweepDuplicatesLocked(store, tenantId, now);
+  } finally {
+    claim.release();
+  }
+}
+
+function sweepDuplicatesLocked(store: MemoryStore, tenantId: string, now: Date): SweepReport {
   const groups = store.multiValuedActiveFacts(tenantId);
   const merges: Merge[] = [];
 
@@ -243,23 +257,24 @@ export type ErrorGroup = { detail: string; count: number; firstAt: string; lastA
  * write is the honest record of what happened and how often; a reader that
  * cannot see "this failed 400 times since June" is missing the finding.
  *
- * **Why the key is not always `detail`.** A judge-unavailable row's `detail`
- * carries the model's own raw response (`ingest.ts`), which is free to differ
- * on every call even for the exact same recurring failure — three unreadable
- * answers on `owner/interest` are not required to be the same three
- * characters. Folding on that text verbatim would stop grouping the one kind
- * of row this register most needs to group. `subject`/`predicate` are stable
- * for the same pair regardless of what the model said this time, and
- * `recordReview` already writes them as columns for exactly this case, so the
- * key is available without parsing `detail`. Rows with neither — a failed
- * extraction, a dead vector index — keep folding on the message, unchanged:
+ * **Why the key is not always `detail`.** Legacy judge-unavailable error rows
+ * carry the model's raw response (`ingest.ts`), which can differ on every
+ * call for the same recurring failure. New judge-unavailable outcomes are
+ * contradictions because they leave two active facts for the owner to resolve;
+ * old rows with both fact ids are still read as open contradictions by the
+ * shared query below. Do not also print those open rows as generic pipeline
+ * errors. Other judge errors can still fold by `(subject, predicate)`; rows
+ * with neither — a failed extraction, a dead vector index — keep folding on
+ * the message, unchanged:
  * that text is deterministic per failure (the episode id and the error are
  * both fixed), which is what made folding on it correct in the first place.
  */
 export function errorGroups(store: MemoryStore, tenantId: string, limit = 20): ErrorGroup[] {
   const groups = new Map<string, ErrorGroup>();
+  const openIds = new Set(store.openContradictions(tenantId, 500).map((item) => item.id));
   for (const item of store.pendingReview(tenantId, 500)) {
     if (item.kind !== 'error') continue;
+    if (openIds.has(item.id)) continue;
     const key = item.subject && item.predicate ? `${item.subject}\t${item.predicate}` : item.detail;
     const seen = groups.get(key);
     if (seen) {
@@ -281,6 +296,14 @@ export function errorGroups(store: MemoryStore, tenantId: string, limit = 20): E
   return [...groups.values()].sort((a, b) => b.lastAt.localeCompare(a.lastAt)).slice(0, limit);
 }
 
+/** Refusal is distinguishable at owner-facing call sites so they can explain that nothing changed. */
+export class MemoryLaneBusyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MemoryLaneBusyError';
+  }
+}
+
 /**
  * Answering a contradiction: keep one belief, retire the other.
  *
@@ -295,7 +318,8 @@ export function errorGroups(store: MemoryStore, tenantId: string, limit = 20): E
  * put in front of them, so it leaves ADR-0032 (*"il contributo del modello al
  * contenuto della memoria è zero, non indiretto"*) exactly where it was. The
  * open question about a `ricorda` tool that writes is a different question and
- * this does not touch it.
+ * this does not touch it. The same ingest lane serializes this write with
+ * extraction and proposal reconciliation, including the judge's async wait.
  *
  * Returns the review rows it answered. Zero means the id was not one of the two
  * facts in any open contradiction — which is a caller error worth reporting, not
@@ -307,19 +331,27 @@ export function resolveContradiction(
   keepFactId: number,
   now: Date,
 ): OpenContradiction[] {
-  const answered: OpenContradiction[] = [];
-  for (const open of openContradictions(store, tenantId, 500)) {
-    const drop =
-      open.existing.id === keepFactId
-        ? open.incoming
-        : open.incoming.id === keepFactId
-          ? open.existing
-          : null;
-    if (!drop) continue;
-    store.supersede(tenantId, drop.id, keepFactId, now.toISOString());
-    answered.push(open);
+  const claim = store.acquireIngestLock(now);
+  if ('held' in claim) {
+    throw new MemoryLaneBusyError(`memoria occupata (${claim.held}): ${claim.remedy}`);
   }
-  return answered;
+  try {
+    const answered: OpenContradiction[] = [];
+    for (const open of openContradictions(store, tenantId, 500)) {
+      const drop =
+        open.existing.id === keepFactId
+          ? open.incoming
+          : open.incoming.id === keepFactId
+            ? open.existing
+            : null;
+      if (!drop) continue;
+      store.supersede(tenantId, drop.id, keepFactId, now.toISOString());
+      answered.push(open);
+    }
+    return answered;
+  } finally {
+    claim.release();
+  }
 }
 
 /**

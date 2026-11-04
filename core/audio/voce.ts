@@ -1,7 +1,6 @@
+import type { AudioLoad } from '../../agent/audio.js';
 import type { AudioBlock } from '../../agent/providers/types.js';
-import { loadAudio } from '../../agent/audio.js';
-import { audioAccettato } from '../../agent/providers/modalita.js';
-import { trascrivi, type TrascriviDeps } from './trascrivi.js';
+import { type TrascriviDeps, trascrivi } from './trascrivi.js';
 
 /**
  * Il bivio delle note vocali, in un posto solo.
@@ -26,6 +25,17 @@ export type Voce =
   /** Né l'uno né l'altro, e si dice perché. */
   | { modo: 'no'; why: string; rimedio?: string };
 
+/**
+ * Come si misura se un modello accetta audio in ingresso. Firma identica a
+ * `audioAccettato`, che il chiamante di produzione inietta: il nucleo
+ * decide, non va in rete da sé.
+ */
+export type MisuraAudio = (
+  baseUrl: string | undefined,
+  model: string,
+  domanda: { apiKey?: string | undefined; fetch?: typeof globalThis.fetch },
+) => Promise<boolean>;
+
 export type VoceDeps = TrascriviDeps & {
   /** `undefined` quando il provider è Anthropic: audio in ingresso non ne accetta. */
   baseUrl?: string | undefined;
@@ -33,6 +43,13 @@ export type VoceDeps = TrascriviDeps & {
   apiKey?: string | undefined;
   /** Solo per i test, come il `run` di `trascrivi`. */
   fetch?: typeof globalThis.fetch;
+  /**
+   * Chi carica i byte e chi misura l'audio. Iniettati dal chiamante
+   * (produzione: `loadAudio` + `audioAccettato` via `voceFor`): questo modulo
+   * non importa comportamento da `agent/`, solo contratti di tipo.
+   */
+  carica: (percorso: string) => AudioLoad;
+  misuraAudio: MisuraAudio;
 };
 
 /**
@@ -44,9 +61,12 @@ export type VoceDeps = TrascriviDeps & {
  * senza traccia.
  */
 export async function decidiVoce(percorso: string, deps: VoceDeps): Promise<Voce> {
-  const chiedi = { apiKey: deps.apiKey, ...(deps.fetch === undefined ? {} : { fetch: deps.fetch }) };
-  if (await audioAccettato(deps.baseUrl, deps.model, chiedi)) {
-    const caricato = loadAudio(percorso);
+  const chiedi = {
+    apiKey: deps.apiKey,
+    ...(deps.fetch === undefined ? {} : { fetch: deps.fetch }),
+  };
+  if (await deps.misuraAudio(deps.baseUrl, deps.model, chiedi)) {
+    const caricato = deps.carica(percorso);
     // Il modello ascolterebbe, ma questi byte non glieli possiamo dare — troppo
     // grossi, o non un formato che sappiamo nominare. Non è la fine: la
     // trascrizione locale non ha nessuno di quei due limiti, e provarla è
@@ -55,5 +75,9 @@ export async function decidiVoce(percorso: string, deps: VoceDeps): Promise<Voce
   }
   const detto = await trascrivi(percorso, deps);
   if (detto.ok) return { modo: 'trascritto', testo: detto.testo };
-  return { modo: 'no', why: detto.why, ...(detto.rimedio === undefined ? {} : { rimedio: detto.rimedio }) };
+  return {
+    modo: 'no',
+    why: detto.why,
+    ...(detto.rimedio === undefined ? {} : { rimedio: detto.rimedio }),
+  };
 }

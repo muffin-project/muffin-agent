@@ -1,13 +1,16 @@
-import { parseArgs } from 'node:util';
 import { relative } from 'node:path';
-import { ConfigError } from '../core/config/config.js';
-import { styleFor } from './ui.js';
-import { listConfigKnobs, type ConfigKnob } from '../core/config/inventory.js';
+import { isatty } from 'node:tty';
+import { parseArgs } from 'node:util';
+import type { ConfigError } from '../core/config/config.js';
+import { type ConfigKnob, listConfigKnobs } from '../core/config/inventory.js';
 import { describeSettableKnobs, formatSetOutcome, setConfigKnob } from '../core/config/settings.js';
+import { cmdModel, type ModelDeps } from './model.js';
+import { styleFor } from './ui.js';
 
 /**
- * `muffin config` — read-only by default, on purpose (ADR-0036), plus one
- * narrow door: `muffin config set <chiave> <valore>` (ADR-0070).
+ * `muffin config` opens the shared model selector in a terminal (ADR-0099).
+ * Noninteractive inventory and `--json` remain read-only (ADR-0036), while
+ * `muffin config set <chiave> <valore>` uses the existing narrow writer (ADR-0070).
  *
  * `muffin config` (senza sotto-comando) answers "what can I adjust, and
  * where" completely without building a write surface anything has to guard:
@@ -37,10 +40,26 @@ export const CONFIG_USAGE = `usage:
 ${describeSettableKnobs()}
 `;
 
-export function cmdConfig(home: string, argv: string[]): number {
+export async function cmdConfig(
+  home: string,
+  argv: string[],
+  deps?: Pick<ModelDeps, 'ask'>,
+): Promise<number> {
   if (argv[0] === 'set') return cmdConfigSet(home, argv.slice(1));
 
-  const { values } = parseArgs({ args: argv, options: { json: { type: 'boolean' } }, allowPositionals: false });
+  if (argv.length === 0 && isatty(0)) {
+    return cmdModel(home, ['--select'], {
+      out: (line) => process.stdout.write(`${line}\n`),
+      interactive: true,
+      ...(deps?.ask === undefined ? {} : { ask: deps.ask }),
+    });
+  }
+
+  const { values } = parseArgs({
+    args: argv,
+    options: { json: { type: 'boolean' } },
+    allowPositionals: false,
+  });
 
   let knobs: ConfigKnob[];
   try {
@@ -56,7 +75,9 @@ export function cmdConfig(home: string, argv: string[]): number {
     process.stdout.write(`${JSON.stringify(knobs, null, 2)}\n`);
   } else {
     const style = styleFor(process.stdout);
-    process.stdout.write(`${style.header('muffin config', home)}\n${formatConfigKnobs(knobs, home)}\n`);
+    process.stdout.write(
+      `${style.header('muffin config', home)}\n${formatConfigKnobs(knobs, home)}\n`,
+    );
   }
   return 0;
 }
@@ -81,7 +102,10 @@ export function formatConfigKnobs(knobs: ConfigKnob[], home: string): string {
   // drag the origin column off the edge of a normal terminal. Values longer
   // than the cap simply are not padded — misaligned by a few columns beats
   // truncating a value a mutation could hide behind.
-  const valueWidth = Math.min(60, Math.max(header.value.length, ...rows.map((k) => k.value.length)));
+  const valueWidth = Math.min(
+    60,
+    Math.max(header.value.length, ...rows.map((k) => k.value.length)),
+  );
   const sealedWidth = header.sealed.length;
 
   const row = (key: string, value: string, sealed: string, source: string): string =>

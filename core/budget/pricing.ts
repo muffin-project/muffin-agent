@@ -18,7 +18,12 @@
  * than never. Explicit zero-price contracts are different: a provider-owned
  * free router is not an unknown model, and charging it at UNKNOWN would make a
  * budget claim money was spent when the provider contract says it was not.
- */
+  */
+
+// Type-only: the sealed shape lives in `core/rot/budgets.ts` (single reader,
+// single definition). This module takes no runtime dependency on it — the
+// predicate below only needs the normalized host/port pair.
+import type { UnmeteredEndpoint } from '../rot/budgets.js';
 
 export type Price = { inputPerMTok: number; outputPerMTok: number; cachedInputPerMTok?: number };
 
@@ -109,6 +114,35 @@ export function isOpenRouterFreeRoute(model: string, baseUrl?: string): boolean 
   return id === 'openrouter/free' || id.endsWith(':free');
 }
 
+/**
+ * Whether calls to this endpoint are owner-declared unmetered (#499): the
+ * owner funds the machine behind it outside the metered spend, so the price
+ * seam records $0 regardless of the served model.
+ *
+ * Both sides are exact, normalized identities — the declarations at parse
+ * (`core/rot/budgets.ts`), the URL here — never substrings or heuristics:
+ * `LOCAL_HINTS`-style guessing is exactly what this replaces for billing.
+ * A declared entry without a port matches any port on its host; a malformed
+ * URL matches nothing (metered, the safe direction).
+ */
+export function isUnmeteredEndpoint(
+  baseUrl: string | undefined,
+  unmetered: readonly UnmeteredEndpoint[],
+): boolean {
+  if (baseUrl === undefined || unmetered.length === 0) return false;
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    return false;
+  }
+  const host = url.hostname.toLowerCase().replace(/\.$/, '');
+  if (host === '') return false;
+  const port =
+    url.port !== '' ? Number(url.port) : url.protocol === 'http:' ? 80 : url.protocol === 'https:' ? 443 : 0;
+  return unmetered.some((e) => e.host === host && (e.port === undefined || e.port === port));
+}
+
 export function priceOf(model: string, baseUrl?: string): Price | null {
   const haystack = `${model} ${baseUrl ?? ''}`.toLowerCase();
   if (LOCAL_HINTS.some((h) => haystack.includes(h))) return null;
@@ -128,7 +162,11 @@ export type Tokens = {
 };
 
 /** Zero for a local model — not "unknown", zero, and the caller can tell. */
-export function costUsd(model: string, tokens: Tokens, baseUrl?: string): number {
+export function costUsd(model: string, tokens: Tokens, baseUrl?: string, requestedModel?: string): number {
+  // An explicit free route is a billing contract, not a model-family guess:
+  // it wins over whatever the response resolved to. Anything else prices the
+  // served model exactly as before (#499).
+  if (requestedModel !== undefined && isOpenRouterFreeRoute(requestedModel, baseUrl)) return 0;
   const price = priceOf(model, baseUrl);
   if (price === null) return 0;
   const cached = tokens.cacheReadTokens ?? 0;

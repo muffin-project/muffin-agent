@@ -1,15 +1,17 @@
 import { z } from 'zod';
-import type { CapabilityDecl, CapabilityId, Principal } from '../../core/policy/types.js';
-import type { Config } from '../../core/config/config.js';
 import type { DoctorReport } from '../../cli/doctor.js';
-import type { PromptBlock } from '../context/assemble.js';
-import { visibleTools } from '../context/assemble.js';
-import { tenantClass } from '../context/assemble.js';
-import type { Profile } from '../profiles/profile.js';
-import type { RegisteredTool } from '../loop.js';
 import type { BuildStamp } from '../../cli/update.js';
+import { formatRunStatus, type RunStatus } from '../../core/autonomy/run-status.js';
+import type { Config } from '../../core/config/config.js';
+import type { CapabilityDecl, CapabilityId, Principal } from '../../core/policy/types.js';
+import type { DelegationMode } from '../../core/runtime/delega.js';
+import { type Job, jobPayload } from '../../core/scheduler/jobs.js';
 import type { TurnHealth } from '../../core/turns/store.js';
-import { jobPayload, type Job } from '../../core/scheduler/jobs.js';
+import { CAPABILITY_SEARCH_TOOL_NAME, createCapabilityExposure } from '../capability-exposure.js';
+import type { PromptBlock } from '../context/assemble.js';
+import { tenantClass, visibleTools } from '../context/assemble.js';
+import type { RegisteredTool } from '../loop.js';
+import type { Profile, ProfileOrigin } from '../profiles/profile.js';
 import type { CapabilityGap } from './capability-status.js';
 
 /**
@@ -99,6 +101,26 @@ export type InspectSources = {
   /** `JobStore.list()`, come `muffin jobs`. */
   jobs: () => Job[];
   /**
+   * Fired autonomous runs with their 6-state answer (#598 S1). Letto dalle
+   * stesse righe durevoli che il resto del report legge — mai ricalcolato
+   * qui. Assente = il chiamante non lo fornisce: la sezione non compare.
+   */
+  runs?: (() => readonly RunStatus[]) | undefined;
+  /**
+   * System One attivo su questa installazione (issue #740 fase shadow):
+   * provider e modello richiesto, per dire «sto giudicando in shadow» invece
+   * di lasciarlo indovinare. Assente = nessun giudice configurato: la riga
+   * non compare, non compare come «off» — il silenzio è il default onesto.
+   */
+  judgment?: (() => { provider: string; model: string }) | undefined;
+  /**
+   * La postura di delega di **questo** lavoro (issue #740): `manual`, `auto`
+   * o `yolo`, e da quando. Letta dal registro durevole — `ctx.turnId`, mai
+   * una copia — così il modello vede la stessa modalità che il loop applicherà
+   * al prossimo ask.
+   */
+  delega?: ((turnId: string) => { modo: DelegationMode; dal: string | null }) | undefined;
+  /**
    * Ogni capacità che questo assemblaggio ha spento o tagliato, dalla stessa
    * lista che produce le `bootLines` e che `muffin doctor` legge (E7, la
    * lacuna misurata il 03/09/2026: `web_search` spento, tre turni a
@@ -111,11 +133,11 @@ export type InspectSources = {
 const inspectArgs = z.object({});
 
 const SPEC_DESCRIPTION =
-  "Read-only: come è configurata QUESTA istanza adesso — build, provider e modello in uso, " +
+  'Read-only: come è configurata QUESTA istanza adesso — build, provider e modello in uso, ' +
   'profilo attivo, root of trust, stato dei check di salute, capability esposte a questo turno, ' +
   'blocchi del system prompt con la loro provenienza, turni aperti, job. ' +
-  "Usalo quando ti si chiede come funzioni o cosa stai usando (che modello ti esegue, quanti tool vedi, " +
-  "se il RoT è integro): è il tool per questo, non un comando di sistema — la risposta è misurata, non ricordata. " +
+  'Usalo quando ti si chiede come funzioni o cosa stai usando (che modello ti esegue, quanti tool vedi, ' +
+  'se il RoT è integro): è il tool per questo, non un comando di sistema — la risposta è misurata, non ricordata. ' +
   "Non per l'architettura del progetto in teoria (quella sta nei documenti), solo per lo stato vivo di questo processo. " +
   'Ritorna un report testuale a sezioni: istanza, turno corrente, capacità spente, salute, system prompt, turni, job. ' +
   'e.g. sys_inspect({}) risponde a "che modello ti sta eseguendo, di preciso?" senza lanciare nulla in shell_run.';
@@ -173,36 +195,49 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
       const cls = tenantClass(principal, ctx.tenant);
       const runtimeInfo = ctx.runtimeInfo;
       const profile = runtimeInfo?.profile ?? sources.profile;
+      const profileSource = runtimeInfo?.profileSource;
+      const profiloOrigine =
+        profileSource === undefined
+          ? ''
+          : profileSource.origin === 'conservative'
+            ? ' · conservativo (nessun profilo matcha)'
+            : ` · ${profileSource.origin} (${profileSource.file.split('/').pop()})`;
       const [report, build] = await Promise.all([sources.doctor(), sources.build()]);
-      // Filtro poi tetto — lo stesso ordine di `agent/loop.ts` (`exposed =
-      // visibleTools(...).slice(0, maxToolsExposed)`), non solo il filtro. La
-      // riga precedente si fermava al filtro e diceva «capability esposte» su
-      // un elenco che il tetto del profilo avrebbe comunque ristretto: onesto
-      // sull'esclusione da host-only, muto su quella del tetto — la stessa
-      // lacuna che questo file esiste per chiudere altrove.
+      // Same authority filter and same #469 projection as the live loop.
+      // Under the cap capability_search disappears entirely (ordinary fast
+      // path). Under pressure the cap bounds only the currently loaded schemas:
+      // the remaining authorized tools stay reachable through discovery.
       const filtrati = visibleTools(
-        sources.tools.map((t) => ({ capability: t.capability, name: t.spec.name })),
+        [...sources.tools],
         principal,
         sources.capabilities,
         sources.grants?.get(ctx.tenant),
       );
-      const esposti = filtrati.slice(0, profile.maxToolsExposed);
-      const tagliatiDalTetto = filtrati.slice(profile.maxToolsExposed);
-      // Solo le spente qui: le tagliate dal tetto sono calcolate sopra, per
-      // *questo* principal e *questo* turno — più accurato del calcolo
-      // all'avvio in `sources.capabilityGaps` (che vale per il registro
-      // intero, prima del filtro host-only). Le due domande restano distinte
-      // anche nel testo: "spenta" contro "tagliata dal tetto".
+      const discoveryTool = filtrati.find((tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME);
+      const initialProjection = createCapabilityExposure({
+        eligible: filtrati,
+        maxToolsExposed: profile.maxToolsExposed,
+        ...(discoveryTool === undefined ? {} : { discoveryTool }),
+      });
+      const exposure = ctx.capabilityDiscovery?.snapshot() ?? {
+        visible: initialProjection.exposed.map((tool) => tool.spec.name),
+        pressured: initialProjection.pressured,
+        hiddenCount: initialProjection.hiddenCount,
+      };
+      const esposti = [...exposure.visible];
       const spente = sources.capabilityGaps.filter((g) => g.kind === 'disabled');
       const blocchi = sources.promptBlocks[cls] ?? [];
       const salute = sources.turns();
       const job = sources.jobs();
+      // Una sola lettura: la proiezione è pura, ma due chiamate sarebbero due
+      // giri di SELECT per la stessa risposta.
+      const runs = sources.runs?.() ?? null;
 
       const righe = [
         '# Questa istanza, adesso',
         '',
         `build: ${build ? `${build.sha.slice(0, 12)} (${build.date})${build.dirty ? ' +modificato' : ''}` : 'sconosciuta — non è un checkout git'}`,
-        `provider: ${runtimeInfo?.providerKind ?? sources.config.provider.kind}${(runtimeInfo?.providerBaseUrl ?? sources.config.provider.baseUrl) ? ` · ${runtimeInfo?.providerBaseUrl ?? sources.config.provider.baseUrl}` : ''}`,
+        `provider: main ${runtimeInfo?.providerKind ?? sources.config.provider.kind}${(runtimeInfo?.providerBaseUrl ?? sources.config.provider.baseUrl) ? ` · ${runtimeInfo?.providerBaseUrl ?? sources.config.provider.baseUrl}` : ''} · light ${runtimeInfo?.lightProviderKind ?? sources.config.lightProvider?.kind ?? sources.config.provider.kind}${(runtimeInfo?.lightProviderBaseUrl ?? sources.config.lightProvider?.baseUrl ?? sources.config.provider.baseUrl) ? ` · ${runtimeInfo?.lightProviderBaseUrl ?? sources.config.lightProvider?.baseUrl ?? sources.config.provider.baseUrl}` : ''}`,
         `modello: ${runtimeInfo?.mainModel ?? sources.config.models.main} (main) · ${runtimeInfo?.lightModel ?? sources.config.models.light} (light)`,
         // Dove atterra la scrittura di *questo* turno — non «l'installazione»
         // in generale, che è la domanda a cui risponde `muffin doctor`. Stessa
@@ -210,19 +245,35 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
         `cartella di lavoro: ${sources.workspace}`,
         // Il profilo non è cosmetico: decide quanti tool vede il modello e se
         // il reasoning viene chiesto spento (#167).
-        `profilo: ${profile.name} — max ${profile.maxToolsExposed} tool esposti, ${profile.maxToolCallsPerTurn === null ? 'nessun tetto numerico di tool call' : `${profile.maxToolCallsPerTurn} call/turno`}, thinking ${profile.thinking}`,
+        `profilo: ${profile.name}${profiloOrigine} — max ${profile.maxToolsExposed} tool esposti, ${profile.maxToolCallsPerTurn === null ? 'nessun tetto numerico di tool call' : `${profile.maxToolCallsPerTurn} call/turno`}, thinking ${profile.thinking}`,
         `root of trust: ${sources.safeMode ? `SAFE MODE (${sources.safeMode.reason}: ${sources.safeMode.diverged.join(', ')}) — capability sopra 'low' negate` : `${sources.config.rot.mode}, integro`}`,
+        ...(sources.judgment === undefined
+          ? []
+          : [
+              `system one: ${sources.judgment().provider} · ${sources.judgment().model} — shadow: giudica accanto agli ask, non consuma`,
+            ]),
         '',
         `# Questo turno`,
         `surface: ${surfaceOf(principal)} · principal: ${principal.kind} · tenant: ${ctx.tenant} · classe prompt: ${cls}`,
         `taint corrente: ${ctx.taint()}`,
-        `capability esposte: ${esposti.map((t) => t.name).sort().join(', ')}`,
+        // La postura che il loop applicherà al prossimo ask (issue #740):
+        // `manual` chiede, `yolo` ha pre-approvato, `auto` chiede finché il
+        // giudizio non è calibrato. Letta adesso, non ricordata.
+        `delega: ${(() => {
+          const d = sources.delega?.(ctx.turnId);
+          if (d === undefined || d.modo === 'manual')
+            return "manual — ogni conferma arriva all'owner";
+          if (d.modo === 'yolo')
+            return `yolo — ask pre-approvati per delega${d.dal === null ? '' : ` dal ${d.dal}`}`;
+          return `auto — chiede finché il giudizio non è calibrato${d.dal === null ? '' : ` (attiva dal ${d.dal})`}`;
+        })()}`,
+        `capability esposte: ${esposti.sort().join(', ')}`,
         sources.tools.length === filtrati.length
           ? ''
           : `  (${sources.tools.length - filtrati.length} registrate ma non esposte a questo principal)`,
-        tagliatiDalTetto.length === 0
-          ? ''
-          : `  (${tagliatiDalTetto.length} tagliate dal tetto di ${profile.maxToolsExposed} tool del profilo "${profile.name}": ${tagliatiDalTetto.map((t) => t.name).join(', ')} — alza maxToolsExposed in agent/profiles/${profile.name}.json, oppure riduci quanti tool sono registrati prima di questi)`,
+        exposure.pressured
+          ? `  (catalogo discoverable: ${exposure.hiddenCount} tool autorizzati non-core; maxToolsExposed limita gli schema caricati, non la raggiungibilità)`
+          : '',
         '',
         // Distinto da quanto sopra apposta: qui non è «non visto da questo
         // principal» né «tagliato dal tetto», è «non esiste in questa
@@ -231,7 +282,10 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
           ? []
           : [
               '# Capacità spente',
-              ...spente.map((g) => `  ✗ ${g.capability}: ${g.reason}${g.remedy === null ? '' : ` → ${g.remedy}`}`),
+              ...spente.map(
+                (g) =>
+                  `  ✗ ${g.capability}: ${g.reason}${g.remedy === null ? '' : ` → ${g.remedy}`}`,
+              ),
               '',
             ]),
         '# Salute, misurata adesso (le stesse verifiche di `muffin doctor`)',
@@ -251,6 +305,16 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
             // leggerebbe un job attivo che in realtà non parte più.
             `  ${j.cron} ${j.timezone} → ${j.channel} · ${j.kind} · ${j.active ? 'attivo' : 'spento'}${j.perJobUsd === null ? '' : ` · tetto $${j.perJobUsd}/mese`} · ultimo ${j.lastRunAt?.toISOString() ?? 'mai'} — ${jobPayload(j).slice(0, 60)}`,
         ),
+        // Le run autonome armate (#598 S1): la stessa proiezione che il
+        // runtime espone, una riga per occorrenza registrata. Assente = il
+        // chiamante non la fornisce, e la sezione non compare.
+        ...(runs === null
+          ? []
+          : [
+              `# Run autonome (${runs.length}):`,
+              ...runs.map((r) => `  ${formatRunStatus(r)}`),
+              '  stati: pending/running/continuable/done/needs-owner/failed — vedi core/autonomy/run-status.ts',
+            ]),
       ];
       return { content: righe.filter((r) => r !== '').join('\n'), tier: 0 };
     },

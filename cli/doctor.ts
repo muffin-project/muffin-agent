@@ -5,16 +5,24 @@ import { fileURLToPath } from 'node:url';
 import DatabaseCtor from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { CONTINUATION_TTL_MS } from '../agent/loop.js';
-import { CONSERVATIVE, loadProfiles, selectProfile } from '../agent/profiles/profile.js';
-import { audioAccettato } from '../agent/providers/modalita.js';
+import {
+  CONSERVATIVE,
+  loadEffectiveProfiles,
+  ownerProfilesDir,
+  selectSourcedProfile,
+} from '../agent/profiles/profile.js';
+import { audioAccettato, immagineAccettata } from '../agent/providers/modalita.js';
 import { speaksReasoningEffort, wantsExplicitCache } from '../agent/providers/openai-compat.js';
 import { type VerificationResult, verifyInferenceRoute } from '../agent/providers/verify.js';
 import { baseToolOrder } from '../agent/runtime.js';
 import { diagnoseSearch } from '../agent/tools/search.js';
 import { type Prerequisito, prerequisitiTrascrizione } from '../core/audio/trascrivi.js';
+import { ChatGPTConnection } from '../core/config/chatgpt-oauth.js';
 import {
   type Config,
   type ConfigError,
+  type InferenceLane,
+  inferenceProvider,
   loadConfig,
   locateSecretAll,
   paths,
@@ -55,6 +63,7 @@ import { assessShellBoundary } from '../core/sandbox/shell-boundary.js';
 import type { StatoSuperficie } from '../core/surface/salute.js';
 import { describeInterrupted, readTurnHealth, readUndelivered } from '../core/turns/store.js';
 import { Vault, type VaultAudit, type VaultStore } from '../core/vault/vault.js';
+import { secretStoreHint } from './prompt.js';
 import { PLAIN, type Style } from './ui.js';
 import { type BuildStamp, describeBuild, findCheckoutRoot } from './update.js';
 
@@ -129,6 +138,12 @@ export type DoctorOptions = {
    */
   voce?: { accettaAudio?: () => Promise<boolean>; path?: string };
   /**
+   * Come `voce.accettaAudio`: tri-stato (`true` vede, `false` non vede,
+   * `undefined` non misurabile), con lo stesso tetto di `probeAudio`, perché
+   * anche qui un provider che non risponde non deve tenere `doctor` appeso.
+   */
+  vista?: { vedeImmagini?: (modello: string) => Promise<boolean | undefined> };
+  /**
    * Test-only: overrides the real `hardeningHolds(home)` probe for the
    * owner-binding remedy below, so the hardened branch runs in the suite
    * without needing a rot/ owned by another OS user — the same reason
@@ -141,7 +156,7 @@ export type DoctorOptions = {
    * assert the wiring without spending the owner's money. Plain `doctor`
    * never calls it either way.
    */
-  verifyInference?: () => Promise<VerificationResult>;
+  verifyInference?: (lane?: InferenceLane) => Promise<VerificationResult>;
 };
 
 /**
@@ -316,35 +331,7 @@ export async function runDoctor(
   }
   ok('home', p.home);
 
-  // ADR-0059: dove atterra il lavoro di un turno, non la casa dell'installazione
-  // — sono due domande diverse da quando `resolveWorkspace` le ha separate, e
-  // fino a questa riga nessuna delle due porte che l'owner guarda (un turno,
-  // `muffin doctor`) rispondeva alla seconda. `describeWorkspace` legge, non
-  // decide: la stessa cartella di default che `resolveWorkspace` userebbe, mai
-  // creata qui — un `mkdirSync` dentro una diagnosi renderebbe "esiste già" e
-  // "non esiste ancora" la stessa risposta.
-  const workspace = describeWorkspace(home);
-  if (workspace.envRejected) {
-    warn(
-      'workspace',
-      `${workspace.workspace} — MUFFIN_WORKSPACE puntava a ${workspace.envRejected.requested}, dentro l'installazione: ignorato, ` +
-        'perché dentro ~/.muffin ci sono memoria, sessioni e il sigillo, non è uno spazio di lavoro e nessun turno ci scrive',
-      `indica una cartella fuori dall'installazione con MUFFIN_WORKSPACE, oppure togli la variabile e lascia il default`,
-    );
-  } else if (!workspace.exists) {
-    // Non un warn: non c'è niente da fare qui, e un warn senza un'azione è
-    // come si insegna a scorrere oltre gli avvisi — questo repository ha già
-    // pagato il prezzo del testo di sicurezza che nessuno legge più. La nota
-    // resta, dentro la riga verde.
-    ok(
-      'workspace',
-      `${workspace.workspace} — qui atterrano le scritture di un turno (si crea da sola al primo turno che ci scrive)`,
-    );
-  } else {
-    ok('workspace', `${workspace.workspace} — qui atterrano le scritture di un turno`);
-  }
-
-  let config;
+  let config: Config;
   const configNotes: string[] = [];
   try {
     config = loadConfig(home, (line) => configNotes.push(line));
@@ -365,6 +352,43 @@ export async function runDoctor(
     const e = error as ConfigError;
     fail('config', e.message, e.remedy ?? 'run `muffin init`');
     return report(checks);
+  }
+
+  // ADR-0059: dove atterra il lavoro di un turno, non la casa dell'installazione
+  // — sono due domande diverse da quando `resolveWorkspace` le ha separate, e
+  // fino a questa riga nessuna delle due porte che l'owner guarda (un turno,
+  // `muffin doctor`) rispondeva alla seconda. `describeWorkspace` legge, non
+  // decide: la cartella che `resolveWorkspace` userebbe davvero, mai creata
+  // qui — un `mkdirSync` dentro una diagnosi renderebbe "esiste già" e "non
+  // esiste ancora" la stessa risposta. `config.workspace` entra nella
+  // risposta: un `muffin doctor` che ignorasse la cartella dichiarata
+  // descriverebbe un turno che non esiste.
+  const workspace = describeWorkspace(home, config.workspace);
+  if (workspace.configRejected) {
+    warn(
+      'workspace',
+      `${workspace.workspace} — config.json dichiara ${workspace.configRejected.requested}, dentro l'installazione: ignorato, ` +
+        'perché dentro ~/.muffin ci sono memoria, sessioni e il sigillo, non è uno spazio di lavoro e nessun turno ci scrive',
+      `dichiara una cartella fuori dall'installazione con \`muffin workspace set <cartella>\``,
+    );
+  } else if (workspace.envRejected) {
+    warn(
+      'workspace',
+      `${workspace.workspace} — MUFFIN_WORKSPACE puntava a ${workspace.envRejected.requested}, dentro l'installazione: ignorato, ` +
+        'perché dentro ~/.muffin ci sono memoria, sessioni e il sigillo, non è uno spazio di lavoro e nessun turno ci scrive',
+      `indica una cartella fuori dall'installazione con MUFFIN_WORKSPACE, oppure togli la variabile e lascia il default`,
+    );
+  } else if (!workspace.exists) {
+    // Non un warn: non c'è niente da fare qui, e un warn senza un'azione è
+    // come si insegna a scorrere oltre gli avvisi — questo repository ha già
+    // pagato il prezzo del testo di sicurezza che nessuno legge più. La nota
+    // resta, dentro la riga verde.
+    ok(
+      'workspace',
+      `${workspace.workspace} — qui atterrano le scritture di un turno (si crea da sola al primo turno che ci scrive)`,
+    );
+  } else {
+    ok('workspace', `${workspace.workspace} — qui atterrano le scritture di un turno`);
   }
 
   // A migration that ran in memory and said nothing would be the same class of
@@ -389,11 +413,28 @@ export async function runDoctor(
   // and a model silently falling back to the conservative floor — fewer
   // tools, a shorter horizon, every crutch on, possibly a 400 on every turn
   // (D4) — is exactly that class of thing.
-  const profileProblems: string[] = [];
-  const profiles = loadProfiles(options.profilesDir, (line) => profileProblems.push(line));
-  const resolvedProfile = selectProfile(config.models.main, profiles);
+  const ownerProblems: string[] = [];
+  const shippedProblems: string[] = [];
+  const effective = loadEffectiveProfiles(home, options.profilesDir, (line, origin) =>
+    (origin === 'owner' ? ownerProblems : shippedProblems).push(line),
+  );
+  const sourced = selectSourcedProfile(config.models.main, effective);
+  const resolvedProfile = sourced?.profile ?? CONSERVATIVE;
+  const provenienza =
+    sourced === undefined
+      ? 'nessun profilo matcha'
+      : sourced.origin === 'owner'
+        ? `owner: ${sourced.file.split('/').pop()}`
+        : `shipped: ${sourced.file.split('/').pop()}`;
+  // The dropped file lives in exactly one of the two stores: the remedy names
+  // the one(s) that spoke, never a guess.
+  const cartelleCadute = [
+    ...(ownerProblems.length > 0 ? [ownerProfilesDir(home)] : []),
+    ...(shippedProblems.length > 0 ? ['agent/profiles/'] : []),
+  ].join(' e ');
+  const profileProblems = [...ownerProblems, ...shippedProblems];
   if (profileProblems.length === 0) {
-    ok('model profile', `${config.models.main} -> ${resolvedProfile.name}`);
+    ok('model profile', `${config.models.main} -> ${resolvedProfile.name} · ${provenienza}`);
   } else if (resolvedProfile === CONSERVATIVE) {
     // D4: a problem fired AND the configured model landed on the floor
     // profile. Named with the cost, not just the fact — an owner reading
@@ -408,32 +449,34 @@ export async function runDoctor(
         // sono tempo e spesa a porre il limite.
         `${resolvedProfile.maxToolsExposed} tool esposti, ${resolvedProfile.maxToolCallsPerTurn === null ? 'nessun tetto numerico di tool call' : `${resolvedProfile.maxToolCallsPerTurn} call/turno`}, ` +
         `stampelle [${resolvedProfile.recovery.join(', ')}]`,
-      'ripara o rimuovi il profilo scartato sopra, sotto agent/profiles/',
+      `ripara o rimuovi il profilo scartato sopra, sotto ${cartelleCadute}`,
     );
   } else {
     // Something is wrong but the model in use was not the one that paid for
     // it — still worth a line, never a fail: the owner is not degraded today.
     warn(
       'model profile',
-      `${profileProblems.join(' · ')} — ${config.models.main} risolve comunque su "${resolvedProfile.name}"`,
-      'ripara o rimuovi il profilo scartato sopra, sotto agent/profiles/',
+      `${profileProblems.join(' · ')} — ${config.models.main} risolve comunque su "${resolvedProfile.name}" · ${provenienza}`,
+      `ripara o rimuovi il profilo scartato sopra, sotto ${cartelleCadute}`,
     );
   }
 
   // I pin di routing che derivano da un'altra era del modello (issue #501):
   // confronto offline contro il marcatore, senza rete. Quando non lo si può
   // provare si tace — un avviso che piange al lupo insegna a ignorare doctor.
-  const routingDiag = diagnoseRoutingStaleness(config);
-  if (routingDiag !== null) {
-    warn('model routing', routingDiag.detail, routingDiag.remedy);
-  } else {
-    const pins = [
-      ...(config.provider.routing?.only ?? []),
-      ...(config.provider.routing?.order ?? []),
-      ...(config.provider.routing?.ignore ?? []),
-    ];
-    if (pins.length > 0 && config.provider.routingForFamily !== undefined) {
-      ok('model routing', `pin validati per la famiglia "${config.provider.routingForFamily}"`);
+  for (const lane of ['main', 'light'] as const) {
+    const connection = inferenceProvider(config, lane);
+    const name = lane === 'main' ? 'model routing' : 'model routing (light)';
+    const routingDiag = diagnoseRoutingStaleness(config, lane);
+    if (routingDiag !== null) warn(name, routingDiag.detail, routingDiag.remedy);
+    else {
+      const pins = [
+        ...(connection.routing?.only ?? []),
+        ...(connection.routing?.order ?? []),
+        ...(connection.routing?.ignore ?? []),
+      ];
+      if (pins.length > 0 && connection.routingForFamily !== undefined)
+        ok(name, `pin validati per la famiglia "${connection.routingForFamily}"`);
     }
   }
 
@@ -442,9 +485,18 @@ export async function runDoctor(
   // doctor. When something IS configured, say whether it can reach the wire —
   // a level on an endpoint that neither is OpenRouter nor declares a dialect is
   // omitted, which is exactly the silent no-op this line exists to name.
-  if (config.provider.kind === 'openai-compat' && (config.provider.reasoningDialect !== undefined || config.thinking !== undefined)) {
-    const level = config.thinking !== undefined && config.thinking !== 'off' && config.thinking !== 'adaptive' && config.thinking !== 'unset';
-    const reaches = config.provider.reasoningDialect !== undefined || speaksReasoningEffort(config.provider.baseUrl);
+  if (
+    config.provider.kind === 'openai-compat' &&
+    (config.provider.reasoningDialect !== undefined || config.thinking !== undefined)
+  ) {
+    const level =
+      config.thinking !== undefined &&
+      config.thinking !== 'off' &&
+      config.thinking !== 'adaptive' &&
+      config.thinking !== 'unset';
+    const reaches =
+      config.provider.reasoningDialect !== undefined ||
+      speaksReasoningEffort(config.provider.baseUrl);
     if ((level || config.thinking === 'off') && !reaches) {
       warn(
         'reasoning',
@@ -452,7 +504,10 @@ export async function runDoctor(
         'imposta provider.reasoningDialect in config.json se il server capisce reasoning_effort',
       );
     } else {
-      ok('reasoning', `thinking ${config.thinking ?? 'profilo'}, dialetto ${config.provider.reasoningDialect ?? (speaksReasoningEffort(config.provider.baseUrl) ? 'openrouter (dall\'hostname)' : 'nessuno')}`);
+      ok(
+        'reasoning',
+        `thinking ${config.thinking ?? 'profilo'}, dialetto ${config.provider.reasoningDialect ?? (speaksReasoningEffort(config.provider.baseUrl) ? "openrouter (dall'hostname)" : 'nessuno')}`,
+      );
     }
   }
 
@@ -635,6 +690,26 @@ export async function runDoctor(
       'ripristina rot/budgets.json dai default del repo e rifai `muffin rot reseal`',
     );
   }
+  // Shown only when there is something to say: declarations come from the
+  // seal (with the host:port that actually matches), and a malformed section
+  // warns because the calls it meant to free are being metered instead.
+  if (budgets.unmetered.length > 0) {
+    ok(
+      'endpoint non conteggiati',
+      `rot/budgets.json — ${budgets.unmetered.map((e) => (e.port === undefined ? e.host : `${e.host}:${e.port}`)).join(', ')}`,
+    );
+  } else if (
+    budgets.unmeteredSource === 'fallback' &&
+    budgets.notes.some((n) => n.includes('unmetered'))
+  ) {
+    // Only when this section itself failed: a missing file already warns
+    // through the caps and quiet-hours checks above.
+    warn(
+      'endpoint non conteggiati',
+      `sezione unmetered non valida (${budgets.notes.join(' · ')}) — tutto resta a consumo`,
+      'correggi rot/budgets.json e rifai `muffin rot reseal`',
+    );
+  }
 
   // Key presence only. A network call costs money and needs an explicit opt-in.
   // *Which backend answered* is part of the check, not decoration: the read
@@ -642,27 +717,64 @@ export async function runDoctor(
   // how an install that believes it has moved its key keeps reading the old
   // copy forever. Both locations are named when both exist, because that is the
   // shadowing case and it is silent from every other angle.
-  try {
-    const key = readSecret(config.provider.apiKeyRef, home);
-    const where = locateSecretAll(config.provider.apiKeyRef, home);
-    const answered = where[0];
-    if (key.length === 0) {
-      fail('api key', 'secret file is empty', `write it with \`muffin secret set\``);
-    } else if (where.length > 1) {
-      warn(
-        'api key',
-        `${key.length} chars (mai stampata) — legge ${answered?.path}, ma esiste anche ${where[1]?.path}: la seconda non viene mai usata`,
-        'cancella la copia che non vuoi, così resta una sola chiave da ruotare',
-      );
-    } else {
-      ok(
-        'api key',
-        `${config.provider.apiKeyRef} (${answered?.backend}) — ${answered?.path}, ${key.length} chars, mai stampata`,
-      );
-    }
-  } catch (error) {
-    const e = error as ConfigError;
-    fail('api key', e.message, e.remedy ?? 'set the key');
+  for (const lane of ['main', 'light'] as const) {
+    const connection = inferenceProvider(config, lane);
+    if (lane === 'light' && JSON.stringify(connection) === JSON.stringify(config.provider))
+      continue;
+    const label = (name: string): string => (lane === 'main' ? name : `${name} (light)`);
+    const credentialOk = (name: string, detail: string): void => {
+      ok(label(name), detail);
+    };
+    const credentialWarn = (name: string, detail: string, remedy: string): void => {
+      warn(label(name), detail, remedy);
+    };
+    const credentialFail = (name: string, detail: string, remedy: string): void => {
+      fail(label(name), detail, remedy);
+    };
+    if (connection.kind === 'openai-chatgpt') {
+      try {
+        const session = new ChatGPTConnection(home).session();
+        if (session?.connected)
+          credentialOk(
+            'ChatGPT',
+            'Account connected; plan quota and credits are managed at https://chatgpt.com/settings/usage',
+          );
+        else
+          credentialFail(
+            'ChatGPT',
+            'Account is not connected with plan permission',
+            'muffin chatgpt login',
+          );
+      } catch {
+        credentialFail('ChatGPT', 'Saved connection is unavailable', 'muffin chatgpt login');
+      }
+    } else
+      try {
+        const key = readSecret(connection.apiKeyRef, home);
+        const where = locateSecretAll(connection.apiKeyRef, home);
+        const answered = where[0];
+        if (key.length === 0) {
+          credentialFail(
+            'api key',
+            'secret file is empty',
+            secretStoreHint(connection.apiKeyRef.replace(/^secret:\/\//, '')),
+          );
+        } else if (where.length > 1) {
+          credentialWarn(
+            'api key',
+            `${key.length} chars (mai stampata) — legge ${answered?.path}, ma esiste anche ${where[1]?.path}: la seconda non viene mai usata`,
+            'cancella la copia che non vuoi, così resta una sola chiave da ruotare',
+          );
+        } else {
+          credentialOk(
+            'api key',
+            `${connection.apiKeyRef} (${answered?.backend}) — ${answered?.path}, ${key.length} chars, mai stampata`,
+          );
+        }
+      } catch (error) {
+        const e = error as ConfigError;
+        credentialFail('api key', e.message, e.remedy ?? 'set the key');
+      }
   }
   // Una copia sotto un **altro nome**, che è il caso che il rename di
   // `provider_api_key` -> `<provider>_api_key` crea e che il controllo qui
@@ -671,14 +783,17 @@ export async function runDoctor(
   // è comunque una credenziale valida da qualche parte sul disco, ed è quella
   // che alla rotazione successiva resta indietro.
   const altriNomi = ALL_API_KEY_NAMES.filter(
-    (n) => `secret://${n}` !== config.provider.apiKeyRef,
+    (n) =>
+      ![config.provider.apiKeyRef, inferenceProvider(config, 'light').apiKeyRef].includes(
+        `secret://${n}`,
+      ),
   ).flatMap((n) => locateSecretAll(`secret://${n}`, home).map((l) => ({ nome: n, path: l.path })));
   if (altriNomi.length > 0) {
     warn(
       'api key (nomi)',
       `esiste una chiave anche col nome ${altriNomi.map((a) => `\`${a.nome}\` (${a.path})`).join(', ')} — ` +
-        `questa installazione legge ${config.provider.apiKeyRef} e quella non la usa mai`,
-      'cancella la copia che non serve più: una chiave valida che nessuno legge è una che alla rotazione resta indietro',
+        `collegamenti attivi: ${config.provider.apiKeyRef}, ${inferenceProvider(config, 'light').apiKeyRef}; altre credenziali restano disponibili per la selezione`,
+      'verifica i collegamenti dal menu `muffin config`; elimina un segreto solo quando hai scelto di disconnettere quel provider',
     );
   }
   // The inference route, proven rather than parsed. Plain `doctor` stays
@@ -688,10 +803,21 @@ export async function runDoctor(
   // which already returns redacted diagnostics, so nothing here touches keys,
   // bodies or prompts.
   if (options.online) {
-    const verification = await (
-      options.verifyInference ?? (() => verifyInferenceRoute({ home }))
-    )();
-    renderInferenceCheck(ok, warn, fail, verification);
+    for (const lane of ['main', 'light'] as const) {
+      // Equal model/connection does not imply equal reasoning policy: main
+      // applies the owner profile, while structured light callers differ.
+      const verification = await (
+        options.verifyInference ??
+        ((selected?: InferenceLane) => verifyInferenceRoute({ home, lane: selected ?? 'main' }))
+      )(lane);
+      const qualify = (name: string): string => (lane === 'main' ? name : `${name} (light)`);
+      renderInferenceCheck(
+        (name, detail) => ok(qualify(name), detail),
+        (name, detail, remedy) => warn(qualify(name), detail, remedy),
+        (name, detail, remedy) => fail(qualify(name), detail, remedy),
+        verification,
+      );
+    }
   }
 
   try {
@@ -808,7 +934,22 @@ export async function runDoctor(
           'run `muffin memory extract` to drain the backlog',
         );
       } else if (chunks === 0) {
-        warn('vector index', 'empty: recall is full-text only', 'run `muffin memory extract`');
+        // Indice vuoto, config valida: resta da distinguere «configurato» da
+        // «raggiungibile» (#738). Con l'embedder giù, `muffin memory extract`
+        // è un rimedio inerte — ripassa da `makeEmbedder` e non indicizza
+        // niente — quindi la riga deve nominare la causa, non solo il sintomo.
+        // La sonda è la stessa del ramo indicizzato: un embedding della parola
+        // «probe» con tetto, nessun effetto su indice o memoria.
+        const down = await probeEmbedder(options.embedderProbe, configurato);
+        if (down !== null) {
+          warn(
+            'vector index',
+            `empty: recall is full-text only, e l'embedder non risponde (${down}): niente di nuovo viene indicizzato`,
+            rimedioEmbedder(config),
+          );
+        } else {
+          warn('vector index', 'empty: recall is full-text only', 'run `muffin memory extract`');
+        }
       } else {
         // Contare non è chiedere. I due numeri dicono che ciò che è **già**
         // indicizzato è coerente; non dicono niente su ciò che verrà, e
@@ -1027,7 +1168,11 @@ export async function runDoctor(
     // call whose *outcome* was recorded and declares, rather than repeats, the
     // ones that were not — so the open question below is what a declared,
     // non-replayed call may have done to the world, never whether it runs.
-    const turns = readTurnHealth(db, undefined, new Date(Date.now() - CONTINUATION_TTL_MS).toISOString());
+    const turns = readTurnHealth(
+      db,
+      undefined,
+      new Date(Date.now() - CONTINUATION_TTL_MS).toISOString(),
+    );
     if (turns === null) {
       // Not a warning. The table is created by the first runtime that opens
       // this home, so its absence means "no turn has run here yet", which on a
@@ -1091,8 +1236,14 @@ export async function runDoctor(
         live > 0
           ? `${live} riprendibili con "riprendi" o \`muffin resume <id>\``
           : 'nessuna riprendibile in chat';
-      const expiredText = expired > 0 ? ` · ${expired} oltre la finestra di ripresa (solo \`muffin resume <id>\`)` : '';
-      ok('turni continuabili', `${turns.continuable.count} lease esaurite con lavoro salvato${due} · ${liveText}${expiredText}`);
+      const expiredText =
+        expired > 0
+          ? ` · ${expired} oltre la finestra di ripresa (solo \`muffin resume <id>\`)`
+          : '';
+      ok(
+        'turni continuabili',
+        `${turns.continuable.count} lease esaurite con lavoro salvato${due} · ${liveText}${expiredText}`,
+      );
     }
 
     /**
@@ -1123,16 +1274,36 @@ export async function runDoctor(
     if (turns !== null) {
       const undelivered = readUndelivered(db);
       if (undelivered !== null && undelivered.length > 0) {
-        // `undelivered()` orders most-recent-first; the owner wants the
-        // oldest unresolved one, which is what has waited longest.
-        const oldest = undelivered[undelivered.length - 1]!;
-        const when = oldest.startedAt.slice(0, 16).replace('T', ' ');
-        warn(
-          'consegne',
-          `${undelivered.length} turni con delivery non confermata nelle ultime 24h — la più vecchia: ` +
-            `turno ${oldest.id.slice(0, 12)} su ${oldest.surface} (${when}), ${oldest.delivery}`,
-          'il lavoro è stato fatto ma la consegna non è confermata: controlla la superficie; non ritentare alla cieca uno stato possibly_sent',
-        );
+        // #844 (#598 S4): a fire settled with the silent receipt leaves
+        // `turns.delivery = pending` by design (`core/turns/*` out of scope in
+        // S4) — an intentional silence, not a delivery nobody confirmed. The
+        // durable receipt lives on the fire row (`job_fires.silent`), so the
+        // warning excludes those turns; a genuine miss still warns exactly as
+        // before. The empty-text branch settles with `silent = 0`, hence it
+        // keeps warning here — no regression by construction.
+        const silentIds = silentSettledTurnIds(db);
+        const genuine = undelivered.filter((t) => !silentIds.has(t.id));
+        const silentCount = undelivered.length - genuine.length;
+        if (genuine.length > 0) {
+          // `undelivered()` orders most-recent-first; the owner wants the
+          // oldest unresolved one, which is what has waited longest.
+          const oldest = genuine[genuine.length - 1]!;
+          const when = oldest.startedAt.slice(0, 16).replace('T', ' ');
+          warn(
+            'consegne',
+            `${genuine.length} turni con delivery non confermata nelle ultime 24h — la più vecchia: ` +
+              `turno ${oldest.id.slice(0, 12)} su ${oldest.surface} (${when}), ${oldest.delivery}` +
+              (silentCount > 0
+                ? ` · ${silentCount} con ricevuta silenziosa (policy silent, nessuna consegna attesa)`
+                : ''),
+            'il lavoro è stato fatto ma la consegna non è confermata: controlla la superficie; non ritentare alla cieca uno stato possibly_sent',
+          );
+        } else {
+          ok(
+            'consegne',
+            `nessuna delivery mancante nelle ultime 24h — ${silentCount} con ricevuta silenziosa (policy silent, nessuna consegna attesa)`,
+          );
+        }
       } else if (undelivered !== null) {
         ok('consegne', 'nessuna delivery mancante nelle ultime 24h');
       }
@@ -1332,7 +1503,11 @@ export async function runDoctor(
     // Not a hard failure: the runtime still starts, execution capabilities
     // just degrade — shell tools and the job executor are absent, declared
     // here. Silently unsandboxed is the one outcome we refuse.
-    warn('sandbox', `${boundary.reason} — execution capabilities degrade to ask`, boundary.remedy);
+    warn(
+      'sandbox',
+      `${boundary.reason} — shell and job execution stay DISABLED until containment can be proven`,
+      boundary.remedy,
+    );
   }
 
   // `web_search`: stesso produttore di `agent/runtime.ts`, non una seconda
@@ -1381,40 +1556,26 @@ export async function runDoctor(
     );
   }
 
-  // Il tetto del profilo: quali tool, fra quelli che questa installazione
-  // registrerebbe, cadono oltre `maxToolsExposed`. `baseToolOrder`
-  // (agent/runtime.ts) è la stessa lista ordinata che il boot usa per
-  // `capabilityGaps` e che `runtime-exposure.test.ts` tiene allineata al
-  // registro reale — non un secondo elenco scritto qui a mano.
-  //
-  // `sendFileAvailable: true` perché `doctor` non costruisce un runtime intero
-  // e non sa se questa invocazione precede un gateway o un REPL — ma
-  // entrambi i processi persistenti lo allegano sempre (`cli/surface.ts#
-  // attachSendFile`, DAY-1 B14), e solo `muffin run` non lo fa mai. Ometterlo
-  // qui era esattamente il difetto misurato altrove (`agent/runtime.ts`): il
-  // tool più a rischio di un taglio silenzioso reso invisibile alla diagnosi
-  // che dovrebbe segnalarlo.
-  //
-  // `sandboxAvailable: boundary.usable` — not `sandbox.available`: the shell
-  // lanes enter the ordered list only where the runtime would register them
-  // (#642), otherwise the tetto check grades a tool list that boot never
-  // builds.
+  // #469 changes what the profile ceiling means. It still bounds the
+  // model-visible schemas in one round, but an authorized native capability
+  // beyond the initial projection remains reachable through capability_search.
+  // baseToolOrder describes the native catalogue; the discovery meta-tool is
+  // not itself counted as a user capability in the under-cap fast path.
   const ordineBase = baseToolOrder({
     sandboxAvailable: boundary.usable,
     searchOn: ricerca.on,
     sendFileAvailable: true,
-  });
-  const tagliatiDalTetto = ordineBase.slice(resolvedProfile.maxToolsExposed);
-  if (tagliatiDalTetto.length === 0) {
+  }).filter((name) => name !== 'capability_search');
+  const oltreProiezione = Math.max(0, ordineBase.length - resolvedProfile.maxToolsExposed);
+  if (oltreProiezione === 0) {
     ok(
       'capacità: tetto tool',
-      `${ordineBase.length} tool entro il tetto di ${resolvedProfile.maxToolsExposed} del profilo "${resolvedProfile.name}"`,
+      `${ordineBase.length} capability native entro la proiezione di ${resolvedProfile.maxToolsExposed} del profilo "${resolvedProfile.name}"`,
     );
   } else {
-    warn(
+    ok(
       'capacità: tetto tool',
-      `${tagliatiDalTetto.length} tool oltre il tetto di ${resolvedProfile.maxToolsExposed} del profilo "${resolvedProfile.name}" e quindi invisibili al modello — ${tagliatiDalTetto.join(', ')}`,
-      `alza maxToolsExposed in agent/profiles/${resolvedProfile.name}.json, oppure riduci quanti tool sono registrati prima di questi`,
+      `${ordineBase.length} capability native, proiezione massima ${resolvedProfile.maxToolsExposed} del profilo "${resolvedProfile.name}": ${oltreProiezione} restano caricabili su richiesta via capability_search`,
     );
   }
 
@@ -1510,6 +1671,47 @@ export async function runDoctor(
         `${modello} non accetta audio e la trascrizione in casa non è pronta: ` +
           `${mancanti.map((x) => x.why).join(' · ')} — la prima nota vocale fallirebbe`,
         mancanti.map((x) => x.rimedio).join('\n  → '),
+      );
+    }
+  }
+
+  // Le foto arrivano solo da Telegram: è l'unica superficie che collega
+  // `vista` (Discord non chiama mai `ingestAttachment`, quindi non descrive
+  // né mostra — il suo allegato resta una riga "non indicizzato"). Stesse
+  // fonti del runtime, non una copia: `immagineAccettata` è la funzione che
+  // `decidiVista` chiama.
+  const superficiFoto = config.surfaces.enabled.filter((id) => id === 'telegram');
+  if (superficiFoto.length > 0) {
+    const vede = await probeVista(options.vista?.vedeImmagini, config.provider.baseUrl, modello);
+    if (vede === true) {
+      ok('vista', `${modello} vede le immagini: arrivano al modello`);
+    } else if (vede === false) {
+      const leggera = config.models.light;
+      const descrive =
+        leggera === modello &&
+        JSON.stringify(inferenceProvider(config, 'light')) === JSON.stringify(config.provider)
+          ? false
+          : await probeVista(
+              options.vista?.vedeImmagini,
+              inferenceProvider(config, 'light').baseUrl,
+              leggera,
+            );
+      if (descrive === true) {
+        ok(
+          'vista',
+          `${modello} non vede le immagini: le descrive ${leggera}, su ${inferenceProvider(config, 'light').baseUrl ?? 'endpoint light'}`,
+        );
+      } else {
+        warn(
+          'vista',
+          `${modello} non vede le immagini${descrive === false ? ` e neanche ${leggera}` : ''}: le foto restano fuori dal turno`,
+          'passa con /model a un modello che vede le immagini',
+        );
+      }
+    } else {
+      ok(
+        'vista',
+        `non so se ${modello} vede le immagini (endpoint non misurabile): vanno al modello come sempre`,
       );
     }
   }
@@ -1834,6 +2036,31 @@ function countOrNull(db: DatabaseCtor.Database, table: string): number | null {
 }
 
 /**
+ * Turns whose job fire settled with the S4 silent receipt (#844, #598 S4).
+ *
+ * A `silent`-policy routine success settles the fire with `silent = 1` and no
+ * conversational message, while the turn row keeps `delivery = pending` by
+ * design (`core/turns/*` untouched in S4). Without this read the `consegne`
+ * check warns about an intentional silence as if it were an unconfirmed
+ * delivery. Read-only and fail-open: a missing `job_fires` table or a pre-S4
+ * database without the `silent` column reads as "no silent turn" — today's
+ * behavior — never a crash inside `doctor`.
+ */
+function silentSettledTurnIds(db: DatabaseCtor.Database): Set<string> {
+  try {
+    const rows = db
+      .prepare(
+        `SELECT turn_id AS turnId FROM job_fires
+         WHERE silent = 1 AND settled_at IS NOT NULL AND turn_id IS NOT NULL`,
+      )
+      .all() as { turnId: string }[];
+    return new Set(rows.map((r) => r.turnId));
+  } catch {
+    return new Set();
+  }
+}
+
+/**
  * Il rimedio giusto per l'embedder che questa installazione ha scelto.
  *
  * «avvia ollama … oppure `OLLAMA_URL`» a chi ha configurato `openai-compat`
@@ -1868,14 +2095,14 @@ function quantiNonIndicizzatiSafe(
   }
 }
 
-/** Quanto si aspetta un embedder che ha accettato la connessione e non risponde. */
-const EMBEDDER_PROBE_MS = 1_500;
+/** Probe deadline includes cold loading of local embedding models. */
+const EMBEDDER_PROBE_MS = 5_000;
 
 /**
  * `null` quando l'embedder ha risposto; il motivo, in parole, quando no.
  *
  * Una sola stringa da mettere in una riga, non un booleano: «connessione
- * rifiutata» e «non ha risposto entro un secondo e mezzo» mandano l'owner in
+ * rifiutata» e «non ha risposto entro cinque secondi» mandano l'owner in
  * due posti diversi, e la riga che li appiattisce in "non disponibile" è la
  * stessa che ha tenuto ferma la corsia della memoria per due giorni.
  */
@@ -1903,6 +2130,33 @@ async function probeAudio(
     ]);
   } catch {
     return false;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/**
+ * Il modello vede le immagini? Tri-stato come `immagineAccettata`: a
+ * differenza dell'audio, "non so" non cade su un ramo locale ma sulla strada
+ * di sempre — ed è una risposta onesta da riportare, non un buco da tappare.
+ */
+async function probeVista(
+  override: ((modello: string) => Promise<boolean | undefined>) | undefined,
+  baseUrl: string | undefined,
+  model: string,
+): Promise<boolean | undefined> {
+  const run = override ?? ((m: string) => immagineAccettata(baseUrl, m));
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      run(model),
+      new Promise<boolean | undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), AUDIO_PROBE_MS);
+        timer.unref();
+      }),
+    ]);
+  } catch {
+    return undefined;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }

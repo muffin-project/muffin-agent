@@ -5,11 +5,28 @@ import type { SessionRef } from '../../core/session/store.js';
 import type { SpanHandle } from '../../core/tracing/types.js';
 import { ATTR } from '../../core/tracing/types.js';
 import type { TurnRecord } from '../../core/turns/store.js';
-import { planTaint } from '../../core/turns/todo.js';
-import { decodeWaitFor, satisfied, wakeReport } from '../../core/turns/wait.js';
+import {
+  approvalFootnote,
+  decodeWaitFor,
+  satisfied,
+  type WakeReason,
+  wakeReport,
+} from '../../core/turns/wait.js';
+import {
+  CAPABILITY_DISCOVERY_GUIDANCE,
+  CAPABILITY_SEARCH_TOOL_NAME,
+  createCapabilityExposure,
+  preloadCapabilitiesForTask,
+} from '../capability-exposure.js';
 import { tenantClass, visibleTools } from '../context/assemble.js';
 import { historyTaint, reinjectedHistory } from '../context/history-taint.js';
 import { DEFAULT_EXECUTION } from '../profiles/profile.js';
+import {
+  ActivityAllowanceError,
+  activityProvider,
+  withActivityAllowance,
+  withoutActivityAllowance,
+} from '../providers/activity-allowance.js';
 import { type ContentBlock, type Message, ProviderError } from '../providers/types.js';
 import { buildContext, userAudios, userImages } from './context.js';
 import {
@@ -23,8 +40,8 @@ import {
 import { ExecutionBudget } from './execution-budget.js';
 import { harnessMessage } from './message-origin.js';
 import { makeSnapshot } from './permissions.js';
-import { markProviderErrorReplyForRecovery, providerErrorReply } from './provider-error-reply.js';
 import { providerMessages } from './provider-checkpoint.js';
+import { markProviderErrorReplyForRecovery, providerErrorReply } from './provider-error-reply.js';
 import { type RoundScope, runRounds } from './round.js';
 import { TurnRun } from './run-state.js';
 import { echoContentFor } from './sensitive-echo.js';
@@ -81,6 +98,12 @@ export type DriveOptions = {
   continued?: boolean;
   /** La barriera com'era prima del claim: vedi `resumeTurn`. */
   waitForAtWake?: string | null;
+  /**
+   * La scadenza com'era prima del claim, per la stessa ragione: il claim
+   * spegne entrambe, e senza di lei il referto non può distinguere una
+   * scadenza osservata da un risveglio da risposta (#762).
+   */
+  wakeAtAtWake?: string | null;
   /** The ref the caller already opened. Absent on a resume — see `input.session`. */
   session?: SessionRef | undefined;
   /**
@@ -140,11 +163,40 @@ export async function guidaIlTurno(
   record: TurnRecord,
   turn: SpanHandle,
   options: DriveOptions,
+  recupero: string[],
+): Promise<TurnResult> {
+  if (record.counters.activityAllowance === undefined)
+    return runClaimedTurn(deps, record, turn, options, recupero);
+  const scoped = {
+    ...deps,
+    provider: activityProvider(deps.provider),
+    ...(deps.onTurnEnd === undefined
+      ? {}
+      : {
+          onTurnEnd: (info: Parameters<NonNullable<LoopDeps['onTurnEnd']>>[0]) =>
+            withoutActivityAllowance(() => deps.onTurnEnd?.(info)),
+        }),
+  };
+  return withActivityAllowance(
+    { turns: deps.turns, turnId: record.id, claimToken: record.claimToken },
+    () => runClaimedTurn(scoped, record, turn, options, recupero),
+  );
+}
+
+async function runClaimedTurn(
+  deps: LoopDeps,
+  record: TurnRecord,
+  turn: SpanHandle,
+  options: DriveOptions,
   /** Ciò che è già uscito dalla porta di steer e non ha trovato una riga (vedi `drive`). */
   recupero: string[],
 ): Promise<TurnResult> {
   const now = deps.now ?? (() => new Date());
   const messages = providerMessages(record);
+  const persistedInput = messages.find(
+    (message) =>
+      message.role === 'user' && (message.origin === 'owner' || message.origin === 'external'),
+  );
   const input: TurnInput = {
     principal: record.principal,
     tenant: record.tenant,
@@ -163,6 +215,14 @@ export async function guidaIlTurno(
      */
     session: options.session ?? deps.sessions.open(record.sessionId),
     text: record.inputText ?? lastUserText(messages),
+    // Event wakes run as `system:automation`, but their input contains matched
+    // external data. Preserve the marker; legacy automation rows fail closed
+    // as external rather than acquiring owner provenance on recovery.
+    inputOrigin:
+      persistedInput?.origin === 'external' ||
+      (record.principal.kind === 'system' && record.principal.source === 'automation')
+        ? 'external'
+        : 'owner',
     // Riprese **dal record**, esattamente come il testo qui sopra, e per la
     // stessa ragione: `drive` non riceve il `TurnInput` originale — lo
     // ricostruisce — quindi tutto cio' che il modello deve vedere deve essere
@@ -208,7 +268,7 @@ export async function guidaIlTurno(
   // ovvio che il gate sui parametri trattava come tale. Senza capability:
   // il messaggio umano è la classe di provenienza che rende «citata» una URL
   // intera (lane #624 + #641 — un file tier-2 non lo è).
-  snapshot.recordInput(input.text);
+  snapshot.recordInput(input.text, undefined, input.inputOrigin ?? 'owner');
   const turnClass = tenantClass(input.principal, input.tenant);
 
   /**
@@ -299,12 +359,76 @@ export async function guidaIlTurno(
     wokenFromWait: options.wokenFromWait === true,
     continued: options.continued === true,
   });
-  const execution = new ExecutionBudget(deps.profile.execution ?? DEFAULT_EXECUTION, Date.now, {
-    initialActiveModelMs: run.activeModelMs,
-    onActiveModelMs: (activeModelMs) => {
-      run.activeModelMs = activeModelMs;
+  const executionConfig = deps.profile.execution ?? DEFAULT_EXECUTION;
+  const execution = new ExecutionBudget(
+    record.counters.activityAllowance === undefined
+      ? executionConfig
+      : { ...executionConfig, turnWallDeadlineMs: null, activeModelBudgetMs: null },
+    Date.now,
+    {
+      initialActiveModelMs: run.activeModelMs,
+      onActiveModelMs: (activeModelMs) => {
+        run.activeModelMs = activeModelMs;
+      },
     },
+  );
+  // #469: principal/grant filtering decides which installed capabilities may
+  // even enter discovery. The profile ceiling is applied only to the model
+  // projection, never to catalogue existence.
+  const principalVisibleTools = visibleTools(
+    deps.tools,
+    input.principal,
+    deps.capabilities,
+    deps.grants?.get(input.tenant),
+  );
+  // #469 judge ADJUST: visibleTools' hostOnly/grants projection was designed
+  // for members and deliberately returns the full catalogue for system
+  // principals. That is not the kernel's authority: autonomous principals
+  // also have sealed forbiddenForSystem exclusions (including namespace
+  // patterns). Ask the SAME kernel snapshot for static denial codes BEFORE
+  // any task preload/search; never replicate the sealed list here.
+  //
+  // A dummy no-resource probe is used ONLY to exclude capabilities the kernel
+  // categorically denies to this principal. Resource/taint/budget decisions
+  // still happen at execution with real args. Direct guesses continue to
+  // resolve against deps.tools, outside this model-visible projection.
+  const eligibleTools =
+    input.principal.kind === 'system'
+      ? principalVisibleTools.filter((tool) => {
+          const decision = snapshot.check(tool.capability, { kind: 'none' }, {});
+          return (
+            decision.effect !== 'deny' ||
+            ![
+              'principal_forbidden',
+              'rot_violation',
+              'safe_mode',
+              'no_capability',
+              'tenant_mismatch',
+            ].includes(decision.code)
+          );
+        })
+      : principalVisibleTools;
+  const discoveryTool = eligibleTools.find(
+    (tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME,
+  );
+  const capabilityExposure = createCapabilityExposure({
+    eligible: eligibleTools,
+    maxToolsExposed: deps.profile.maxToolsExposed,
+    ...(discoveryTool === undefined ? {} : { discoveryTool }),
   });
+  const preloaded =
+    capabilityExposure.pressured && deps.profile.maxToolsExposed > 1
+      ? preloadCapabilitiesForTask(capabilityExposure, input.text, 2)
+      : null;
+  const exposed = capabilityExposure.exposed;
+  turn.setAttributes({
+    'muffin.context.class': turnClass,
+    'muffin.context.tools_exposed': exposed.length,
+    'muffin.context.tools_hidden': capabilityExposure.hiddenCount,
+    'muffin.context.capability_discovery': capabilityExposure.pressured,
+    'muffin.context.tools_preloaded': preloaded?.loaded.length ?? 0,
+  });
+
   /**
    * What every handler is told about the turn it is running in — built once,
    * because the barrier has to be the same object across the whole turn.
@@ -331,6 +455,9 @@ export async function guidaIlTurno(
     suspend: (spec) => {
       run.barrier = spec;
     },
+    ...(capabilityExposure.discovery === undefined
+      ? {}
+      : { capabilityDiscovery: capabilityExposure.discovery }),
     durability: {
       failure: () => run.durabilityFailure,
       fail: (reason) => {
@@ -359,29 +486,6 @@ export async function guidaIlTurno(
     const echo = echoContentFor(call.name, call.args, outcome);
     if (echo !== undefined) run.sensitiveResourceEchoes.push(echo);
   };
-
-  // What this turn is shown, decided from who is speaking and where — never
-  // from what they said. Filter first, cap second: `slice` on registration
-  // order applied to the full list would spend a weak model's ten slots on
-  // tools the kernel is going to refuse this principal anyway.
-  //
-  // Recomputed on a resume rather than persisted, and it is correct to: it is a
-  // pure function of the principal and the profile, and the profile follows the
-  // model, which the row pins. The legitimate direction of change in between —
-  // a tightened permission matrix — is one a resume should *inherit*, not one
-  // it should carry a stale copy past.
-  const exposed = visibleTools(
-    deps.tools,
-    input.principal,
-    deps.capabilities,
-    // `input.tenant` e non il tenant del principal: sono lo stesso valore, e
-    // questo è quello su cui il kernel deciderà fra due righe.
-    deps.grants?.get(input.tenant),
-  ).slice(0, deps.profile.maxToolsExposed);
-  turn.setAttributes({
-    'muffin.context.class': turnClass,
-    'muffin.context.tools_exposed': exposed.length,
-  });
 
   /**
    * Ciò che le scritture durevoli e il corpo del giro leggevano per chiusura,
@@ -533,26 +637,11 @@ export async function guidaIlTurno(
     }
 
     /**
-     * The plan, and the taint that comes with it — in that order.
-     *
-     * `raiseCeiling` **before** the rows reach the transcript, because the
-     * whole property is that the turn is *decided* at the tier of everything in
-     * its context — a plan written by a turn that had read the web is model
-     * text shaped by that page, and this turn may not act as if it were not.
-     *
-     * `raiseCeiling`, not `raiseTaint` (ADR-0044 §Riconciliazione 2026-08-28):
-     * the plan item is *this turn's own reinjected past*, not something this
-     * turn did. Stamping this turn's own fresh output at the plan's inherited
-     * tier is what kept a session dirty long after the item that dirtied it —
-     * every clean answer re-poisoning the window it was meant to age out of.
-     */
-    const open = deps.todos.open(input.tenant, input.session.id);
-    snapshot.raiseCeiling(planTaint(open), 'un promemoria aperto di questa sessione');
-
-    /**
-     * The session transcript, and the taint that comes with it — same order,
-     * same reason, one line down from the plan above (ADR-0044 §Revisione,
-     * "la history non lava la provenienza"; a DAY-1 readiness invariant).
+     * The session transcript, and the taint that comes with it — `raiseCeiling`
+     * before the rows reach the transcript, because the whole property is that
+     * the turn is *decided* at the tier of everything in its context (ADR-0044
+     * §Revisione, "la history non lava la provenienza"; a DAY-1 readiness
+     * invariant).
      *
      * `reinjectedHistory` is the same cut `buildContext` renders — computed
      * once here so the two can never disagree about what "reinjected" means
@@ -590,23 +679,35 @@ export async function guidaIlTurno(
     const undoneTraceIds = deps.turns.undoneTraceIds(traceIdsInWindow);
 
     run.messages.length = 0;
-    run.messages.push(
-      ...buildContext(
-        input,
-        recalled,
-        open,
-        spoken,
-        now(),
-        deps.model,
-        deps.profile.name,
-        deps.istanza?.(),
-        deps.timeZone,
-        undoneTraceIds,
-        turnClass === 'owner' &&
-          deps.memory !== undefined &&
-          !deps.memory.store.hasActiveFacts(input.tenant),
-      ),
+    const builtContext = buildContext(
+      input,
+      recalled,
+      spoken,
+      now(),
+      deps.model,
+      deps.profile.name,
+      deps.istanza?.(),
+      deps.timeZone,
+      undoneTraceIds,
+      turnClass === 'owner' &&
+        deps.memory !== undefined &&
+        !deps.memory.store.hasActiveFacts(input.tenant),
     );
+
+    if (capabilityExposure.pressured) {
+      // Local progressive discovery is not provider magic: the model must know
+      // that the current schema menu is intentionally partial. Keep that fact
+      // in volatile harness context (never owner words), immediately before
+      // the real owner input so the under-cap stable prefix remains untouched.
+      const ownerIndex = Math.max(0, builtContext.length - 1);
+      builtContext.splice(
+        ownerIndex,
+        0,
+        harnessMessage('user', [{ type: 'text', text: CAPABILITY_DISCOVERY_GUIDANCE }]),
+      );
+    }
+
+    run.messages.push(...builtContext);
 
     // `record.taint`, the same substitution and for the same reason as the
     // episode write above: `initialTaint(input)` here would read `drive`'s
@@ -649,26 +750,59 @@ export async function guidaIlTurno(
       // stesso registro sotto: senza `answered` una barriera d'approvazione
       // risulterebbe non soddisfatta qui, e il turno si risveglierebbe con
       // «non hai risposto» proprio nel momento in cui la risposta è arrivata.
-      const why =
+      const aperta =
         waitFor !== null &&
         satisfied(waitFor, {
           ...(deps.approvals === undefined
             ? {}
             : { answered: (id: string) => deps.approvals?.answered(id) === true }),
-        })
-          ? 'event'
-          : 'timer';
+        });
+      // #762(a) — il referto afferma la scadenza solo se l'ha osservata. La
+      // barriera dice *cosa* si aspettava, non *chi* ha svegliato: un click su
+      // un'altra domanda sveglia la riga a prescindere, quindi una barriera
+      // chiusa con la scadenza nel futuro è un risveglio da risposta — se il
+      // registro mostra una risposta data — o un risveglio anticipato di cui
+      // non si conosce la causa. Mai una scadenza non passata. La scadenza la
+      // si legge dalla riga prima del claim (`wakeAtAtWake`, che il claim
+      // spegne insieme alla barriera).
+      const adesso = (deps.now ?? (() => new Date()))().getTime();
+      const wakeAtRaw = options.wakeAtAtWake ?? record.wakeAt ?? null;
+      const wakeAtMs = wakeAtRaw === null ? Number.NaN : Date.parse(wakeAtRaw);
+      const scaduta = Number.isFinite(wakeAtMs) && (wakeAtMs as number) <= adesso;
+      const rispostaNelRegistro = deps.approvals?.decidedUnconsumed(record.id) ?? false;
+      const why: WakeReason = aperta
+        ? 'event'
+        : scaduta
+          ? 'timer'
+          : rispostaNelRegistro
+            ? 'answer'
+            : 'early';
       turn.setAttributes({ 'muffin.turn.woken_by': why });
       // Harness control (a transition report for this resume), not owner
       // words: a continuation to a new lease archives it instead of replaying
       // it — the approved work it refers to already completed.
-      run.messages.push(harnessMessage('user', [{ type: 'text', text: wakeReport(waitFor, why) }]));
+      let testo = wakeReport(waitFor, why);
+      // #762(b) — il trade è esplicito. Su una barriera d'approvazione la
+      // guardia di ripresa e il referto parlano già di domande e risposte; su
+      // un processo (o senza barriera) il modello riceveva solo il referto
+      // dell'uscita, mentre la domanda aperta veniva ritirata e la decisione
+      // presa restava non consumata. La nota nomina entrambi gli stati.
+      if (waitFor?.kind !== 'approval') {
+        const nota = approvalFootnote(
+          deps.approvals?.open(record.id)?.capability ?? null,
+          rispostaNelRegistro,
+        );
+        if (nota !== null) testo += `\n${nota}`;
+      }
+      run.messages.push(harnessMessage('user', [{ type: 'text', text: testo }]));
     }
   }
 
   try {
     return await runRounds(scope);
   } catch (error) {
+    if (error instanceof ActivityAllowanceError)
+      return releaseContinuable(scope, 'activity_budget', 0);
     if (error instanceof ProviderError) {
       // Retry exhaustion is a yielded lease, not a connector exception — when
       // another attempt could still help. A retryable transport failure (or a

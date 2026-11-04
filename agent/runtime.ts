@@ -1,10 +1,13 @@
 import { join } from 'node:path';
 import type DatabaseCtor from 'better-sqlite3';
 import { ApprovalStore } from '../core/approvals/store.js';
+import { AutomationRuleStore } from '../core/automation/rules.js';
+import { listRunStatuses } from '../core/autonomy/run-status.js';
 import { BudgetEngine } from '../core/budget/budget.js';
-import { costUsd } from '../core/budget/pricing.js';
+import { costUsd, isUnmeteredEndpoint } from '../core/budget/pricing.js';
 import {
   type Config,
+  inferenceProvider,
   loadConfig,
   paths,
   promptVersion,
@@ -13,9 +16,12 @@ import {
   secretDir,
 } from '../core/config/config.js';
 import { tightenHome } from '../core/config/private-fs.js';
-import { resolveWorkspace } from '../core/config/workspace.js';
+import { requestedWorkspace, resolveWorkspace } from '../core/config/workspace.js';
 import { migrate } from '../core/db/migrate.js';
 import { openDb } from '../core/db/open.js';
+import { makeShadowJudge, type ShadowJudge } from '../core/judgment/shadow.js';
+import { JudgmentStore } from '../core/judgment/store.js';
+import { TypeSafePort } from '../core/judgment/typesafe.js';
 import { loadMcpRegistry } from '../core/mcp/registry.js';
 import {
   CONSOLIDATION_CAPABILITY,
@@ -36,6 +42,7 @@ import type { CapabilityDecl } from '../core/policy/types.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { mandatoryGuards } from '../core/rot/guards.js';
 import { type HardeningCheck, hardeningHolds, verify } from '../core/rot/verify.js';
+import { Delega } from '../core/runtime/delega.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { assessShellBoundary } from '../core/sandbox/shell-boundary.js';
 import { JobFireStore } from '../core/scheduler/job-fires.js';
@@ -55,17 +62,24 @@ import {
   renderSystemPrompts,
   type SystemPromptBlocks,
 } from './context/assemble.js';
+import { providerMessages } from './loop/provider-checkpoint.js';
 import type { Approver, LoopDeps, RegisteredTool, SpendEntry, TurnRuntimeInfo } from './loop.js';
-import { loadProfiles, selectProfile, withThinking } from './profiles/profile.js';
-import { AnthropicProvider } from './providers/anthropic.js';
+import {
+  CONSERVATIVE,
+  DEFAULT_ACTIVITY,
+  loadEffectiveProfiles,
+  type ProfileOrigin,
+  selectSourcedProfile,
+  withThinking,
+} from './profiles/profile.js';
+import { configuredProvider } from './providers/configured.js';
 import { type LightAttemptReport, lightLane } from './providers/light-lane.js';
-import { OpenAICompatProvider } from './providers/openai-compat.js';
 import type { Provider } from './providers/types.js';
 import {
-  type CapabilityGap,
-  formatCapabilityGap,
-  truncationGap,
-} from './tools/capability-status.js';
+  capabilityDiscoveryCapability,
+  makeCapabilitySearchTool,
+} from './tools/capability-search.js';
+import { type CapabilityGap, formatCapabilityGap } from './tools/capability-status.js';
 import { documentCapability, makeDocumentTool } from './tools/document.js';
 import { effectsCapability, makeEffectsTool } from './tools/effects.js';
 import { type FsScope, fsCapabilities, fsList, makeFsTools } from './tools/fs.js';
@@ -80,6 +94,12 @@ import {
   whyMemory,
 } from './tools/memory.js';
 import { forgetMemory, memoryForgetCapability, memoryForgetSpec } from './tools/memory-forget.js';
+import type { ForgetSource } from './tools/memory-forget-intent.js';
+import {
+  memoryProposeCapability,
+  memoryProposeSpec,
+  proposeMemory,
+} from './tools/memory-propose.js';
 import { makeProcessTools, processCapabilities } from './tools/process.js';
 import { makeScheduleTool, scheduleCapability } from './tools/schedule.js';
 import { diagnoseSearch, makeSearchTool, searchCapability } from './tools/search.js';
@@ -179,6 +199,11 @@ export type Runtime = {
   /** Scheduled jobs, on the same connection as everything else (ADR-0022). */
   jobs: JobStore;
   /**
+   * Durable definitions for non-time automation rules (#605).
+   * Definition state only: execution remains in the RuntimeEvent/ActionRequest seam.
+   */
+  automationRules: AutomationRuleStore;
+  /**
    * The `(job.id, scheduled_for) → turn_id` bridge (B7). Exposed the same way
    * `jobs` is — `cli/gateway.ts`/`cli/repl.ts` wire it into both `Scheduler`
    * (settling a fire before `markRan`) and `makeJobRunner` (resolving one
@@ -231,13 +256,13 @@ export type Runtime = {
    */
   bootLines: string[];
   /**
-   * Every capability this assembly switched off or truncated, structured —
-   * `web_search` disabled, `shell_run` disabled, any tool `profile.
-   * maxToolsExposed` cut. The producer `bootLines` above is *rendered from*
-   * (agent/tools/capability-status.ts), and the same array `sys.inspect`
-   * (agent/tools/inspect.ts) and `muffin doctor` (cli/doctor.ts's own search
-   * check) read from — one source, so a turn and the owner's terminal cannot
-   * disagree about why a tool is missing.
+   * Capabilities this assembly genuinely switched off, structured.
+   *
+   * Before #469 this also carried `truncated` rows for tools beyond
+   * `maxToolsExposed`. Those rows would now be false: an authorized tool can
+   * be absent from the initial schema projection yet remain reachable through
+   * capability discovery. The array therefore names only real availability
+   * gaps, while per-turn projection is reported separately by sys.inspect.
    */
   capabilityGaps: CapabilityGap[];
   /**
@@ -247,24 +272,14 @@ export type Runtime = {
    */
   register(tool: RegisteredTool, decl: CapabilityDecl): void;
   /**
-   * Redo the `profile.maxToolsExposed` cut against the tools registered *so
-   * far*, in place of the one `buildRuntime` computed before any late
-   * registration existed.
+   * Recompute deterministic tool ordering after late registrations.
    *
-   * `send_file` (`cli/surface.ts#attachSendFile`) and MCP tools
-   * (`attachMcp`) both arrive after `buildRuntime` returns — the first
-   * `computeExposureGaps` pass inside it cannot see either, so its
-   * `capabilityGaps`/`bootLines` describe a tool list that is already stale
-   * by the time a surface prints them. `cli/gateway.ts` and `cli/repl.ts`
-   * call this once, right after every `attach*` call for that boot has run,
-   * and print what it returns next to `bootLines` rather than trusting the
-   * frozen array. `cli/run.ts` calls it after its own `attachMcp`, having
-   * never attached `send_file` at all.
-   *
-   * Returns the `'truncated'` lines only (already formatted, `capability
-   * tagliato: …`), for a caller to print — `capabilityGaps` itself is
-   * mutated in place, so `sys.inspect`'s own live read of it stays correct
-   * without calling this.
+   * `send_file` and MCP tools arrive after `buildRuntime`. The method stays
+   * as the existing boot seam used by gateway/repl/run, but #469 changes its
+   * meaning: late tools no longer become unavailable merely because they sit
+   * beyond `maxToolsExposed`; they enter the authority-filtered discovery
+   * catalogue. It therefore returns no "truncated" warnings for discoverable
+   * tools and only refreshes the live ordering/gap view.
    */
   recomputeExposure(): string[];
   /** Awaited by close(); attachments park their teardown here. */
@@ -284,22 +299,18 @@ function msFromEnv(raw: string | undefined): number | undefined {
 }
 
 /**
- * The order `buildRuntime` registers built-in tools in, named without
- * building any of them — the fact `muffin doctor` needs to say which ones a
- * profile's ceiling would cut without opening a database or a sandbox to get
- * it, so the ceiling reads the same as `sys.inspect`'s (which does hold the
- * real, live array).
+ * Deterministic order of Muffin's native tool catalogue, without constructing
+ * the tools. `muffin doctor` uses the same list to describe catalogue pressure
+ * and late-registration ordering; the model-visible projection itself is owned
+ * by `agent/capability-exposure.ts`.
  *
  * `sandboxAvailable` and `searchOn` are the only two conditionals in the
- * literal build below; every other position is unconditional. MCP tools are
- * never part of this: they attach after `buildRuntime` returns
- * (`attachMcp`), which is also why they never counted toward `tagliati`
- * there.
+ * literal build below; every other native position is unconditional. MCP tools
+ * attach later through `attachMcp` and are therefore not hand-copied here.
  *
- * `agent/runtime-exposure.test.ts` asserts this against the real, constructed
- * array — the same de-drift discipline as `capabilityGaps` above: a second
- * hand-typed order would be exactly the kind of copy this repository has
- * already paid for once (`slice/turno-sospeso`, cited in that test).
+ * `agent/runtime-exposure.test.ts` asserts this order against the constructed
+ * runtime (excluding the #469 discovery meta-tool), so the diagnostic catalogue
+ * cannot drift from what boot actually registers.
  */
 export function baseToolOrder(input: {
   sandboxAvailable: boolean;
@@ -311,16 +322,10 @@ export function baseToolOrder(input: {
    * attach it after `buildRuntime` returns (they hold the `SurfaceRegistry`
    * it needs), `muffin run` never does.
    *
-   * Placed **before** `wait`/`todo`/`sys_inspect` on purpose: those three are
-   * the tools this list already names, deliberately, as the ones a cut may
-   * take first (comment below, and `runtime-exposure.test.ts`'s +1 for
-   * `fs_search` names `sys_inspect` as "the first of the list to fall"). A
-   * tool an owner's turn actually depends on for getting an artifact back —
-   * DAY-1, not scaffolding — must not rank below the harness's own
-   * self-inspection merely because it happens to attach later in the boot
-   * sequence. That was the measured defect: `send_file` used to land after
-   * `sys_inspect` in the live array for no reason anyone chose, which made it
-   * the *first* casualty of a cut, not the last.
+   * Placed before the runtime bookkeeping tools on purpose. Registration
+   * order no longer decides reachability under #469, but it still stabilizes
+   * the catalogue, diagnostics and tie-breaking after late registration.
+   * `send_file` must not move merely because a surface attaches it later.
    */
   sendFileAvailable?: boolean;
 }): string[] {
@@ -333,6 +338,7 @@ export function baseToolOrder(input: {
     'memory_search',
     'memory_why',
     'memory_forget',
+    'memory_propose',
     'document_read',
     // Accanto a `document_read`, e non in coda: sono le due metà della stessa
     // cosa — si salva per rileggere. In una stanza con grant (ADR-0073) queste
@@ -375,12 +381,14 @@ export function buildRuntime(
   /**
    * The directory the caller is *proposing* as the turn's workspace, not the
    * workspace itself: `resolveWorkspace` below refuses it when it is the
-   * installation. The default stays `process.cwd()` because for `muffin run`
-   * and the REPL the owner chose that directory by standing in it — and it is
-   * exactly the surfaces where nobody chose it (a supervised gateway, whose
-   * cwd its unit pins to the home on purpose) that the refusal is for.
+   * installation. Omitted by the supervised surfaces — the gateway, whose
+   * unit pins its cwd to the home on purpose, and `muffin run`, which
+   * forwards to it. They do not stand anywhere meaningful, so the proposed
+   * directory comes from `MUFFIN_WORKSPACE`, then `workspace` in
+   * `config.json`, then `process.cwd()`. The REPL passes its cwd explicitly:
+   * there the owner chose a directory by standing in it.
    */
-  cwd = process.cwd(),
+  cwd?: string,
   opts: {
     /**
      * Dove finiscono le righe che il consolidamento scrive **mentre** qualcosa
@@ -399,9 +407,9 @@ export function buildRuntime(
      * Extra paths no tool may read, layered on top of `mandatoryGuards` —
      * never a substitute for it. Production never passes this; it exists for
      * a caller that runs a *real* model against a throwaway home and needs
-     * the read-only shell lane (`sys.shell`, ADR-0074 punto 4 — deliberately
-     * allow-by-default on reads, `--ro-bind / /` minus the mandatory guards)
-     * to see only that home, not the operator's real one. `evals/character/run.ts`
+     * the read-only shell lane (`sys.shell`, ADR-0074 punto 4 — allow-scoped
+     * on reads since `read-scoped-workspace`, plus these extra denies) to
+     * see only that home, not the operator's real one. `evals/character/run.ts`
      * is the first caller: a probe whose fixture workspace has nothing to
      * find can send the model looking on the real disk, and a real network
      * model's tool result is bytes leaving the machine (found running D13's
@@ -420,6 +428,9 @@ export function buildRuntime(
   } catch {
     /* best-effort: tightening must not break boot */
   }
+  const configNotes: string[] = [];
+  const config = loadConfig(home, (line) => configNotes.push(`! ${line}`));
+
   /**
    * Where this turn may write — never where Muffin is installed.
    *
@@ -430,12 +441,12 @@ export function buildRuntime(
    * and for why the workspace is a sibling of the home rather than a
    * subdirectory of it.
    */
-  const { workspace, notes: workspaceNotes } = resolveWorkspace(home, cwd);
+  const { workspace, notes: workspaceNotes } = resolveWorkspace(
+    home,
+    requestedWorkspace(home, cwd, config.workspace),
+  );
   const exporter = new JsonlExporter(home);
   const tracer = new SimpleTracer(exporter);
-
-  const configNotes: string[] = [];
-  const config = loadConfig(home, (line) => configNotes.push(`! ${line}`));
   exporter.pruneOlderThan(config.traces.retentionDays);
 
   // Root of trust before anything reads policy from it: in single-user mode a
@@ -501,7 +512,19 @@ export function buildRuntime(
   migrate(db, { backupDir: join(p.home, 'backups') });
   const budget = new BudgetEngine(db, budgets.caps);
   const jobs = new JobStore(db);
+  // Non-time automation definitions live beside jobs/turns on the one runtime
+  // connection, but own neither clock nor execution state (#605).
+  const automationRules = new AutomationRuleStore(db);
   const turns = new TurnStore(db);
+  const forgetSource = (turnId: string): ForgetSource | null => {
+    const turn = turns.get(turnId);
+    if (!turn || turn.status !== 'running') return null;
+    try {
+      return { ...turn, messages: providerMessages(turn) };
+    } catch {
+      return null;
+    }
+  };
   // The identity/idempotency bridge from a due occurrence to a durable turn
   // (B7, ADR-0035 emendamento №5). Same connection as `jobs`/`turns`, same
   // `CREATE TABLE IF NOT EXISTS` additivity as every other store here.
@@ -581,44 +604,53 @@ export function buildRuntime(
     ];
   })();
 
-  // One connection, two lanes: the endpoint is the same, the model id is not.
+  // Each inference lane owns an adapter and credential route; neither lane
+  // borrows the other's provider simply because its model id is different.
   const createMainProvider = (source: Config): Provider =>
-    source.provider.kind === 'anthropic'
-      ? new AnthropicProvider(readSecret(source.provider.apiKeyRef, home), source.provider.baseUrl)
-      : new OpenAICompatProvider(
-          readSecret(source.provider.apiKeyRef, home),
-          source.provider.baseUrl,
-          { 'HTTP-Referer': 'https://github.com/muffin-ai/muffin', 'X-Title': 'muffin' },
-          // Cache breakpoints are the provider's own decision, defaulted from
-          // the endpoint (`wantsExplicitCache`): the first version made every
-          // caller pass the flag, and the two eval harnesses immediately forgot
-          // — same endpoint, full price, silently.
-          //
-          // L'instradamento invece **non** ha un default: è una scelta
-          // dell'owner su prezzo, quantizzazione e chi può conservare i suoi
-          // dati, e sceglierla al posto suo qui sarebbe deciderla in silenzio.
-          // Assente = quello che fa il gateway da sé; `muffin doctor` dice
-          // cosa vuol dire.
-          {
-            ...(source.provider.routing ? { routing: source.provider.routing } : {}),
-            ...(source.provider.reasoningDialect
-              ? { reasoningDialect: source.provider.reasoningDialect }
-              : {}),
-          },
-        );
+    configuredProvider(source, home, undefined, 'main');
   let provider: Provider = createMainProvider(config);
-  let providerFingerprint = JSON.stringify(config.provider);
-  let lightFingerprint = JSON.stringify({ provider: config.provider, light: config.models.light });
+  let providerFingerprint = JSON.stringify(inferenceProvider(config, 'main'));
+  let lightFingerprint = JSON.stringify({
+    provider: inferenceProvider(config, 'light'),
+    light: config.models.light,
+  });
 
   const profileProblems: string[] = [];
-  const profiles = loadProfiles(undefined, (line) => profileProblems.push(line));
+  const sourcedProfiles = loadEffectiveProfiles(home, undefined, (line) =>
+    profileProblems.push(line),
+  );
   // L'override dell'owner (`config.json` §thinking) sulla sola corsia di
   // conversazione: la light qui sotto tiene il profilo del *suo* modello, e le
   // corsie della memoria chiedono `off` da sé.
-  const profile = withThinking(selectProfile(config.models.main, profiles), config.thinking);
+  const mainSourced = selectSourcedProfile(config.models.main, sourcedProfiles);
+  const profile = withThinking(
+    mainSourced?.profile ?? { ...CONSERVATIVE, activity: DEFAULT_ACTIVITY },
+    config.thinking,
+  );
+  // Provenance holder, mutated alongside `profile` on refresh: readers
+  // (`sys_inspect`, exposure remedies) hold this reference, never a copy —
+  // the same stability contract `profile` itself has below.
+  const profileSource: { origin: ProfileOrigin | 'conservative'; file: string } =
+    mainSourced === undefined
+      ? { origin: 'conservative' as const, file: '' }
+      : { origin: mainSourced.origin, file: mainSourced.file };
 
-  const recordSpendWithBaseUrl = (entry: SpendEntry, baseUrl: string | undefined): number => {
-    const usd = costUsd(entry.model, entry, baseUrl);
+  const recordSpendWithBaseUrl = (
+    entry: SpendEntry,
+    baseUrl: string | undefined,
+    kind: Config['provider']['kind'],
+  ): number => {
+    // ChatGPT OAuth uses account plan/credits, not our API-dollar estimate.
+    // Token usage stays recorded; ChatGPT Settings owns quota/credit accounting.
+    // An owner-declared unmetered endpoint skips the meter entirely: the
+    // machine behind it is funded outside the spend caps, so the served model
+    // and the requested route both stop mattering here. Only the sealed list
+    // decides — a model-reachable config.json never reaches this branch (#499).
+    const usd =
+      kind === 'openai-chatgpt' ||
+      (baseUrl !== undefined && isUnmeteredEndpoint(baseUrl, budgets.unmetered))
+        ? 0
+        : costUsd(entry.model, entry, baseUrl, entry.requestedModel);
     // `entry` porta già `jobId` quando il turno è il giro di un job
     // (`agent/loop.ts`), e lo spread lo passa dritto alla riga di `spend`:
     // niente da tenere in sincrono qui, e nessun secondo posto in cui
@@ -627,11 +659,11 @@ export function buildRuntime(
     return usd;
   };
   const makeRecordSpend =
-    (baseUrl: string | undefined) =>
+    (source: Config['provider']) =>
     (entry: SpendEntry): number =>
-      recordSpendWithBaseUrl(entry, baseUrl);
-  let recordSpend = makeRecordSpend(config.provider.baseUrl);
-  let lightBaseUrl = config.provider.baseUrl;
+      recordSpendWithBaseUrl(entry, source.baseUrl, source.kind);
+  let recordSpend = makeRecordSpend(config.provider);
+  const initialLightProvider = { ...inferenceProvider(config, 'light') };
 
   /**
    * The light lane, behind the boundary that bills it and makes its requests
@@ -663,8 +695,9 @@ export function buildRuntime(
     });
     span.end();
   };
-  let light = lightLane(provider, {
-    profile: selectProfile(config.models.light, profiles),
+  let lightRouteProvider: Provider = configuredProvider(config, home, undefined, 'light');
+  let light = lightLane(lightRouteProvider, {
+    profile: selectSourcedProfile(config.models.light, sourcedProfiles)?.profile ?? CONSERVATIVE,
     record: (entry) =>
       void recordSpendWithBaseUrl(
         {
@@ -672,7 +705,8 @@ export function buildRuntime(
           tenant: CONSOLIDATION_TENANT,
           capability: CONSOLIDATION_CAPABILITY,
         },
-        lightBaseUrl,
+        initialLightProvider.baseUrl,
+        initialLightProvider.kind,
       ),
     onAttempt: reportLightAttempt,
   });
@@ -811,10 +845,12 @@ export function buildRuntime(
       spec: memoryForgetSpec,
       handler: async (args, ctx) =>
         forgetMemory(
-          recallDeps,
+          { ...recallDeps, provider: light, model: config.models.light },
           {
             tenant: ctx.tenant,
             turnId: ctx.turnId,
+            getSource: () => forgetSource(ctx.turnId),
+            ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
             // Il job di questo turno, quando c'è: la prima chiamata di
             // `memory_forget` fa recall e paga il reranker, quindi quella spesa
             // deve finire sul contatore del job come le altre due strade.
@@ -825,6 +861,39 @@ export function buildRuntime(
       // Its answer is either the candidate list (built from recalled text,
       // tiered to the worst source) or the durable result; only a storage or
       // lock error escapes.
+      throwTier: 0,
+    },
+    {
+      // «Ricorda X» — the intentional-memory verb of `docs/product/VISION.md`
+      // (remember, correct, forget) that had no mechanism: the model
+      // improvised with shell/sqlite instead. This stages a durable proposal
+      // and reconciles it through the canonical reconciler (`memory.propose`
+      // stages; the commit belongs to reconciliation, never to this tool).
+      // Same tenant rule as the reads above; the capability is host-only
+      // like `memory_forget` (an intentional "ricorda" is the owner's word
+      // about the owner's memory, and the lane it drains into is host-only
+      // too), so registering it here concedes nothing to any group: it is
+      // `tenants` in `rot/policy.json` that decides who reaches it.
+      capability: memoryProposeCapability.id,
+      spec: memoryProposeSpec,
+      handler: async (args, ctx) =>
+        proposeMemory(
+          {
+            store: memoryStore,
+            provider: light,
+            model: config.models.light,
+            tracer,
+          },
+          {
+            tenant: ctx.tenant,
+            turnId: ctx.turnId,
+            taint: ctx.taint,
+            getSource: () => forgetSource(ctx.turnId),
+          },
+          args,
+        ),
+      // Its answer is the durable outcome (belief, merge, review, rejection
+      // or honest deferral); only a storage error escapes.
       throwTier: 0,
     },
     // The other half of "a document enters whole": the vault stores every page
@@ -929,29 +998,15 @@ export function buildRuntime(
   }
 
   /**
-   * The two runtime primitives (requirements-status.md#wait-e-todo-sono-primitive-del-runtime-non-tool) — registered **last**, and the
-   * position is a decision rather than an accident of where the import landed.
+   * Runtime primitives are still registered late in the native catalogue, but
+   * #469 removes the old semantic consequence: being beyond
+   * `maxToolsExposed` no longer makes an authorized capability disappear.
+   * The cap bounds the current schema projection; discovery can load a needed
+   * non-core tool on the next model round.
    *
-   * `profile.maxToolsExposed` truncates this list by registration order, and
-   * `consumer-local.json` sets it to **10** against a default install of twelve
-   * tools. Sitting where they used to (positions 6-7, in the base array) `wait`
-   * and `todo` pushed `skill_read` and `http_get` off the end — a weak local
-   * model silently lost the web and the skill catalogue in exchange for the
-   * ability to suspend itself, which is the wrong trade on the profile least
-   * able to run a multi-turn plan in the first place. Nothing said so: the two
-   * tools simply were not in the request.
-   *
-   * So the order is by what a turn loses without it: reading and remembering,
-   * then hands, then the catalogue, then the web, then these. On a frontier
-   * profile (cap 24) nothing is cut and the order is invisible; on the small
-   * one it is the whole difference. `runtime-exposure.test.ts` pins the
-   * resulting set, so a future insertion cannot move a capability across the
-   * line without a test saying which one moved.
-   *
-   * Neither is optional on any install: they need no key, no probe and no
-   * daemon — a database is the whole dependency, and this runtime has one open.
-   * `wait` gets the store for one purpose only, counting how many turns this
-   * tenant already holds suspended; it cannot suspend anything by itself.
+   * The order remains deterministic for diagnostics, cache stability and
+   * lexical tie-breaking. `wait` itself still needs only the TurnStore, used
+   * to count this tenant's suspended turns.
    */
   // `budgets.quietHours.timezone` e non il fuso del processo: e' la stessa
   // lettura che riceve `LoopDeps.timeZone` poco piu' sotto, e senza di essa
@@ -964,9 +1019,8 @@ export function buildRuntime(
     makeEffectsTool(turns, budgets.quietHours.timezone),
     // La porta conversazionale sui job ricorrenti («ricordamelo ogni giorno
     // alle 9»): valida e persiste sullo stesso `JobStore` della CLI, con la
-    // provenance del turno che ha chiesto. Accanto a `wait`/`todo` e non in
-    // coda per la stessa ragione per cui quelli stanno in fondo — sono le
-    // primitive del runtime, e il tetto di profilo prende da qui.
+    // provenance del turno che ha chiesto. È una primitive del runtime; quando
+    // non è nella proiezione iniziale resta caricabile via capability_search.
     makeScheduleTool({
       jobs,
       defaultTimezone: budgets.quietHours.timezone,
@@ -981,6 +1035,11 @@ export function buildRuntime(
       // `memory_forget`'s own door, host-only: declared here or the visibility
       // filter and the kernel disagree about who sees it.
       memoryForgetCapability,
+      // `memory_propose`'s own door: stages, never commits. Declared here
+      // next to its tool, same treatment as the two above — a tool whose
+      // capability the kernel has never heard of is refused `no_capability`
+      // on its first call.
+      memoryProposeCapability,
       documentCapability,
       shellCapability,
       shellWriteCapability,
@@ -1005,6 +1064,14 @@ export function buildRuntime(
       ...(searchOn ? [searchCapability] : []),
     ].map((c) => [c.id, c]),
   );
+  // #469 meta-capability: keep its tool and policy declaration paired at one
+  // registration site instead of adding another independent entry to the
+  // native tool list and the declaration list. This is deliberately not a
+  // broad registry rewrite; it is the smallest non-drifting shape for the new
+  // projection door.
+  capabilities.set(capabilityDiscoveryCapability.id, capabilityDiscoveryCapability);
+  tools.push(makeCapabilitySearchTool());
+
   const decide = createDecide({
     capabilities,
     // The line that makes `rot/policy.json` load-bearing. Delete it and the
@@ -1032,6 +1099,58 @@ export function buildRuntime(
   const closeHooks: Array<() => Promise<void>> = [];
   const approvers = new Map<string, Approver>();
   const approvals = new ApprovalStore(db);
+  /**
+   * La delega dell'owner (issue #740), sullo stesso handle di tutto il resto
+   * (ADR-0022): il loop la legge a ogni ask, i comandi la scrivono, e un
+   * processo solo non è mai la verità.
+   */
+  const delega = new Delega(db);
+
+  /**
+   * System One in shadow (issue #740, fase 1; ADR-0096). Costruito **solo**
+   * se la config nomina il giudice e il segreto risponde: in ogni altro
+   * caso `LoopDeps.judgment` resta `undefined`, il ramo `ask` è quello di
+   * sempre e nessun byte parte dalla macchina. Un segreto mancato non è
+   * un errore di avvio — è una riga fra le `bootLines`, come ogni
+   * capability accesa e non raggiungibile.
+   *
+   * La coda vive sullo stesso handle del resto (ADR-0022), e i giudizi in
+   * volo alla chiusura restano `pending`: la riga lo dice, il report lo
+   * conta, e nessuno interpreta il buco come un verdetto.
+   */
+  const judgmentNotes: string[] = [];
+  let judgment: ShadowJudge | undefined;
+  if (config.judgment !== undefined) {
+    const chiave = (() => {
+      try {
+        return readSecret(config.judgment.apiKeyRef, home);
+      } catch {
+        return null;
+      }
+    })();
+    if (chiave === null) {
+      judgmentNotes.push(
+        '! system one: config presente ma il segreto manca — nessun giudizio shadow',
+      );
+    } else {
+      judgment = makeShadowJudge({
+        port: new TypeSafePort({
+          apiKey: chiave,
+          ...(config.judgment.baseUrl === undefined ? {} : { baseUrl: config.judgment.baseUrl }),
+          ...(config.judgment.model === undefined ? {} : { model: config.judgment.model }),
+          ...(config.judgment.timeoutMs === undefined
+            ? {}
+            : { timeoutMs: config.judgment.timeoutMs }),
+          ...(config.judgment.maxRetries === undefined
+            ? {}
+            : { maxRetries: config.judgment.maxRetries }),
+        }),
+        store: new JudgmentStore(db),
+        tracer,
+        log: opts.log ?? ((line) => process.stderr.write(`${line}\n`)),
+      });
+    }
+  }
 
   /**
    * Test-only override of the trailing-edge debounce, a no-op unless a
@@ -1145,6 +1264,18 @@ export function buildRuntime(
       doctor: async () => (await import('../cli/doctor.js')).runDoctor(home),
       turns: () => turns.health({ windowMs: 0 }),
       jobs: () => jobs.list(),
+      // Fired autonomous runs with their 6-state answer (#598 S1): the same
+      // read-only projection `sys.inspect` renders, over this same `db`.
+      runs: () => listRunStatuses(db),
+      // La postura di delega del lavoro che sta chiedendo (issue #740): la
+      // stessa riga che il ramo ask del loop legge, così `sys_inspect` non ha
+      // una seconda risposta su «in che modalità sono».
+      delega: (turnId: string) => ({ modo: delega.modo(turnId), dal: delega.da(turnId) }),
+      // System One, se attivo: visibile a `sys_inspect` come tutto il resto
+      // della postura — mai una seconda fonte, la stessa istanza del loop.
+      ...(judgment === undefined
+        ? {}
+        : { judgment: () => ({ provider: judgment.provider, model: judgment.model }) }),
     }),
   );
 
@@ -1173,12 +1304,11 @@ export function buildRuntime(
    * allega mai `send_file` resta corretto con questa sola chiamata.
    */
   const computeExposureGaps = (): void => {
-    // Ordina per priorità dichiarata, non per ordine di `push`/`register`:
-    // così ciò che il tetto taglia è sempre la stessa coda scelta
-    // (`baseToolOrder`), mai un artefatto di quale superficie ha chiamato
-    // `register()` per ultima. Un tool non elencato (MCP: dinamico per
-    // natura, nessuna priorità dichiarabile qui) resta dopo tutti i nomi
-    // dichiarati, nell'ordine relativo in cui è arrivato — `sort` è stabile.
+    // Keep one deterministic runtime order after late registrations. #469 no
+    // longer treats "past maxToolsExposed" as a capability gap: authorized
+    // tools beyond the initial projection remain reachable through
+    // capability_search. The cap is now a context ceiling, not an existence
+    // test. Disabled capabilities remain real gaps and stay in this array.
     const priorita = new Map(
       baseToolOrder({
         sandboxAvailable: contained,
@@ -1191,23 +1321,11 @@ export function buildRuntime(
         (priorita.get(a.spec.name) ?? Number.MAX_SAFE_INTEGER) -
         (priorita.get(b.spec.name) ?? Number.MAX_SAFE_INTEGER),
     );
-    // Idempotente: una rilettura aggiorna le righe `truncated`, non le accumula.
+
+    // Remove stale rows from an older calculation/hot profile refresh. A tool
+    // that is deferred but discoverable is not "truncated" anymore.
     for (let i = capabilityGaps.length - 1; i >= 0; i -= 1) {
       if (capabilityGaps[i]?.kind === 'truncated') capabilityGaps.splice(i, 1);
-    }
-    const tagliati = tools.slice(profile.maxToolsExposed).map((t) => t.spec.name);
-    // Stessa lista, riformattata come le altre due capacità spente qui sopra —
-    // `kind: 'truncated'` invece di `'disabled'`, perché «esiste ma il tetto
-    // del profilo la taglia» e «non esiste per questa installazione» sono due
-    // domande diverse, e confonderle è esattamente il difetto misurato.
-    for (const tool of tagliati) {
-      capabilityGaps.push(
-        truncationGap({
-          tool,
-          profileName: profile.name,
-          maxToolsExposed: profile.maxToolsExposed,
-        }),
-      );
     }
   };
   computeExposureGaps();
@@ -1215,36 +1333,59 @@ export function buildRuntime(
   let loopDeps: LoopDeps | null = null;
   const refreshMainModel = (): void => {
     const persisted = loadConfig(home);
-    const fingerprint = JSON.stringify(persisted.provider);
+    const mainProviderConfig = inferenceProvider(persisted, 'main');
+    const fingerprint = JSON.stringify(mainProviderConfig);
     if (fingerprint !== providerFingerprint) {
       provider = createMainProvider(persisted);
       providerFingerprint = fingerprint;
     }
 
+    const refreshed = selectSourcedProfile(persisted.models.main, loadEffectiveProfiles(home));
     const nextProfile = withThinking(
-      selectProfile(persisted.models.main, loadProfiles()),
+      refreshed?.profile ?? { ...CONSERVATIVE, activity: DEFAULT_ACTIVITY },
       persisted.thinking,
     );
     // Keep the config and profile objects stable for their existing readers
     // (`Runtime.config`, `sys_inspect`, and exposure calculation). A running
     // turn owns shallow snapshots made by `runTurn`/`resumeTurn`.
     Object.assign(config, {
-      provider: persisted.provider,
+      provider: mainProviderConfig,
+      lightProvider: inferenceProvider(persisted, 'light'),
       models: { ...config.models, main: persisted.models.main, light: persisted.models.light },
       thinking: persisted.thinking,
     });
     Object.assign(profile, nextProfile);
-    recordSpend = makeRecordSpend(persisted.provider.baseUrl);
+    // An explicit custom profile without activity keeps its legacy policy.
+    // Object.assign alone would retain a prior shipped profile's allowance.
+    if (nextProfile.activity === undefined) delete profile.activity;
+    Object.assign(
+      profileSource,
+      refreshed === undefined
+        ? { origin: 'conservative' as const, file: '' }
+        : { origin: refreshed.origin, file: refreshed.file },
+    );
+    recordSpend = makeRecordSpend(mainProviderConfig);
     if (loopDeps !== null) {
       loopDeps.provider = provider;
       loopDeps.model = persisted.models.main;
       loopDeps.recordSpend = recordSpend;
       loopDeps.runtimeInfo = {
-        providerKind: persisted.provider.kind,
-        providerBaseUrl: persisted.provider.baseUrl,
+        providerKind: mainProviderConfig.kind,
+        providerBaseUrl: mainProviderConfig.baseUrl,
+        // The light lane is refreshed independently below. Keep its live
+        // snapshot until its provider, wrapper and reranker have all built.
+        lightProviderKind:
+          loopDeps.runtimeInfo?.lightProviderKind ??
+          config.lightProvider?.kind ??
+          config.provider.kind,
+        lightProviderBaseUrl:
+          loopDeps.runtimeInfo?.lightProviderBaseUrl ??
+          config.lightProvider?.baseUrl ??
+          config.provider.baseUrl,
         mainModel: persisted.models.main,
-        lightModel: persisted.models.light,
+        lightModel: loopDeps.runtimeInfo?.lightModel ?? lightInfo.model,
         profile,
+        profileSource,
       };
     }
     computeExposureGaps();
@@ -1262,15 +1403,20 @@ export function buildRuntime(
    */
   const refreshLightModel = (): void => {
     const persisted = loadConfig(home);
+    const lightProviderConfig = inferenceProvider(persisted, 'light');
     const fingerprint = JSON.stringify({
-      provider: persisted.provider,
+      provider: lightProviderConfig,
       light: persisted.models.light,
     });
     if (fingerprint === lightFingerprint) return;
-    lightFingerprint = fingerprint;
-    lightBaseUrl = persisted.provider.baseUrl;
-    light = lightLane(provider, {
-      profile: selectProfile(persisted.models.light, profiles),
+    const nextLightProvider = { ...lightProviderConfig };
+    // Build the complete replacement before publishing any part of it. In
+    // particular, resolving the selected lane's secret can throw; retaining
+    // the old fingerprint in that case makes the next prepareTurn retry.
+    const nextLightRouteProvider = configuredProvider(persisted, home, undefined, 'light');
+    const nextLight = lightLane(nextLightRouteProvider, {
+      profile:
+        selectSourcedProfile(persisted.models.light, sourcedProfiles)?.profile ?? CONSERVATIVE,
       record: (entry) =>
         void recordSpendWithBaseUrl(
           {
@@ -1278,15 +1424,26 @@ export function buildRuntime(
             tenant: CONSOLIDATION_TENANT,
             capability: CONSOLIDATION_CAPABILITY,
           },
-          lightBaseUrl,
+          nextLightProvider.baseUrl,
+          nextLightProvider.kind,
         ),
       onAttempt: reportLightAttempt,
     });
-    recallDeps.reranker = new LlmReranker(light, persisted.models.light);
-    lightInfo.provider = light;
+    const nextReranker = new LlmReranker(nextLight, persisted.models.light);
+
+    lightRouteProvider = nextLightRouteProvider;
+    light = nextLight;
+    lightFingerprint = fingerprint;
+    recallDeps.reranker = nextReranker;
+    lightInfo.provider = nextLight;
     lightInfo.model = persisted.models.light;
     if (loopDeps !== null && loopDeps.runtimeInfo !== undefined) {
-      loopDeps.runtimeInfo = { ...loopDeps.runtimeInfo, lightModel: persisted.models.light };
+      loopDeps.runtimeInfo = {
+        ...loopDeps.runtimeInfo,
+        lightModel: persisted.models.light,
+        lightProviderKind: lightProviderConfig.kind,
+        lightProviderBaseUrl: lightProviderConfig.baseUrl,
+      };
     }
   };
 
@@ -1308,7 +1465,7 @@ export function buildRuntime(
     voci: fsList(scope, '.')
       .split('\n')
       .filter((riga) => riga.length > 0),
-    provider: config.provider.kind,
+    provider: `main ${inferenceProvider(config, 'main').kind} · light ${inferenceProvider(config, 'light').kind}`,
     jobAttivi: jobs.list().filter((j) => j.active).length,
     safeMode: safeMode ? { reason: safeMode.reason } : null,
   });
@@ -1321,6 +1478,7 @@ export function buildRuntime(
     quietHours: budgets.quietHours,
     defaultChannel: () => readDefaultChannel(home, config.surfaces.default),
     jobs,
+    automationRules,
     jobFires,
     db,
     consolidation,
@@ -1329,6 +1487,9 @@ export function buildRuntime(
     promptBlocks,
     capabilityGaps,
     bootLines: [
+      ...(config.provider.kind === 'openai-chatgpt'
+        ? ['Using ChatGPT plan · quota and credits: https://chatgpt.com/settings/usage']
+        : []),
       ...workspaceNotes,
       ...turnNotes,
       ...waitingNotes,
@@ -1343,6 +1504,7 @@ export function buildRuntime(
       ...budgetNotes,
       ...rotNotes,
       ...configNotes,
+      ...judgmentNotes,
     ],
     register: (tool, decl) => {
       capabilities.set(decl.id, decl);
@@ -1368,9 +1530,12 @@ export function buildRuntime(
       runtimeInfo: {
         providerKind: config.provider.kind,
         providerBaseUrl: config.provider.baseUrl,
+        lightProviderKind: inferenceProvider(config, 'light').kind,
+        lightProviderBaseUrl: inferenceProvider(config, 'light').baseUrl,
         mainModel: config.models.main,
         lightModel: config.models.light,
         profile,
+        profileSource,
       } satisfies TurnRuntimeInfo,
       provider,
       profile,
@@ -1392,6 +1557,12 @@ export function buildRuntime(
       // suo in `runtime.test.ts`, non solo il ramo nel loop.
       undo: new UndoJournal(p.undo),
       approvals,
+      // La postura che consuma gli ask di ogni lavoro: letta fresca dal
+      // registro a ogni domanda, mai copiata in memoria (issue #740).
+      delega,
+      // System One in shadow (issue #740 fase 1): presente solo quando la
+      // config e il segreto lo dicono — assente, il ramo ask non cambia.
+      ...(judgment === undefined ? {} : { judgment }),
       /**
        * L'instradatore, e il fatto che sia qui e non su una superficie è la
        * proprietà: chi chiede è **la superficie da cui il turno è arrivato**,
@@ -1470,6 +1641,17 @@ export async function attachMcp(runtime: Runtime, home = paths().home): Promise<
       .sort((a, b) => a.spec.name.localeCompare(b.spec.name));
     for (const t of tool) runtime.register(t, decl);
   }
+  const report = [...attachment.report];
+  if (process.env.MUFFIN_EVENT_INTELLIGENCE === '1') {
+    try {
+      const { attachEventIntelligence } = await import('./event-intelligence.js');
+      report.push(...(await attachEventIntelligence(runtime, attachment.eventConnections, home)));
+    } catch (error) {
+      report.push(
+        `event-intelligence — unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
   runtime.onClose(() => attachment.close());
-  return attachment.report;
+  return report;
 }

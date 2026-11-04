@@ -180,27 +180,20 @@ export function recoveryStep(strategy: RecoveryStrategy, ctx: RecoveryContext): 
           "oppure una riga che dice che non puoi e perché. Nient'altro.",
       };
     /**
-     * Failure class: every gentler rung already ran and the turn still came
-     * back unusable — an empty turn, an announced-but-absent call, prose
-     * where a call was needed.
-     *
-     * The message is the contract; the wire flag is the enforcement. The loop
-     * (`recover()` in `agent/loop/round.ts`) sends the next attempt with
-     * `tool_choice: required` when this strategy runs, once, then back to
-     * `auto`. Message and flag travel together so a transcript reader sees
-     * why the request demanded a call.
-     *
-     * Amendment to this file's own `strictJson` note (ADR-0082): that note
-     * rejected `tool_choice: 'required'` because `ChatCall.toolChoice` was
-     * `'auto' | 'none'` and both adapters mapped anything-not-`'none'` to
-     * `'auto'` — the flag would have degraded silently, on the weakest
-     * endpoints. The flag now exists on the type and both adapters map it
-     * (`required` on openai-compat, `{type:'any'}` on Anthropic), and it runs
-     * only here, as the last rung, after the transcript already holds the
-     * gentler corrections — never after an empty turn as a first resort, so
-     * it cannot manufacture an action out of silence without the model first
-     * being told a call is due.
-     */
+      * Failure class: every gentler rung already ran and the turn still came
+      * back unusable — an empty turn, an announced-but-absent call, prose
+      * where a call was needed.
+      *
+      * The message is the whole of the contract: words, never the wire. No
+      * round ever sends `tool_choice: required` (simple-loop — SOTA has no
+      * forced-call recovery: OpenAI ends on final output or raises
+      * MaxTurnsExceeded, LangGraph routes no-calls to END). Forcing a call
+      * after an *empty* turn manufactures an action the model never chose,
+      * which is the same dishonesty `completion.ts` refuses when it declines
+      * to rewrite an answer. The capability probe
+      * (`agent/providers/verify.ts`) keeps its own `required`, set by itself
+      * for its own precise reason: proving a model can call at all.
+      */
     case 'requireTool':
       return {
         message:

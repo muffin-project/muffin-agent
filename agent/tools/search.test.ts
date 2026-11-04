@@ -1,4 +1,6 @@
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer, type IncomingHttpHeaders } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -6,7 +8,14 @@ import { runInit } from '../../cli/init.js';
 import { buildRuntime } from '../runtime.js';
 import { paths, writeSecret } from '../../core/config/config.js';
 import { seal } from '../../core/rot/verify.js';
-import { makeSearchTool, searchCapability, tavilyBackend, type SearchBackend } from './search.js';
+import { SEARCH_PROVIDERS } from '../../core/config/providers.js';
+import {
+  keenableBackend,
+  makeSearchTool,
+  searchCapability,
+  tavilyBackend,
+  type SearchBackend,
+} from './search.js';
 
 /**
  * What has to stay true about web search.
@@ -192,5 +201,167 @@ describe('web_search', () => {
     // the bytes actually leaving.
     expect(searchCapability.effect).toBe('egress');
     expect(searchCapability.maxTaint).toBeUndefined();
+  });
+});
+
+/**
+ * Keenable is a second entry behind the same seam, not a second capability:
+ * everything asserted above about fencing, taint and host-only stays owned by
+ * `sys.search`. What is asserted here is only what the backend itself decides
+ * (destination, auth header, the exact request, the response mapping) plus the
+ * wiring claim the slice exists for: an owner search at taint 0 is `allow`,
+ * not `ask` (docs/evidence/secondo-motore-di-ricerca-keenable-2026-09-26.md).
+ */
+describe('web_search with the Keenable backend', () => {
+  type Seen = { url?: string; headers?: Headers; body?: unknown };
+  const keenableFetch = (reply: unknown, status = 200, seen?: Seen) =>
+    (async (url: string, init: RequestInit) => {
+      if (seen) {
+        seen.url = String(url);
+        seen.headers = new Headers(init.headers);
+        seen.body = JSON.parse(String(init.body));
+      }
+      return new Response(JSON.stringify(reply), { status });
+    }) as unknown as typeof fetch;
+
+  it('posts only the query and the cap to the fixed endpoint, key in X-API-Key', async () => {
+    const seen: Seen = {};
+    const backend = keenableBackend({
+      apiKey: 'keen_secret',
+      fetchFn: keenableFetch({ results: [] }, 200, seen),
+    });
+    await backend.search('domanda', AbortSignal.timeout(1000));
+
+    expect(backend.id).toBe('keenable');
+    expect(backend.endpoint).toBe(SEARCH_PROVIDERS.keenable.endpoint);
+    expect(seen.url).toBe(SEARCH_PROVIDERS.keenable.endpoint);
+    expect(seen.headers?.get('x-api-key')).toBe('keen_secret');
+    expect(seen.url).not.toContain('keen_secret');
+    // Exact body: no search mode, no live fetch, no filters chosen on the
+    // owner's behalf. Widening what a search asks for is a separate claim.
+    expect(seen.body).toEqual({ query: 'domanda', max_results: 5 });
+  });
+
+  it('maps the longer snippet when present, else the description, capped like Tavily', async () => {
+    const long = {
+      title: 'Lungo',
+      url: 'https://example.com/a',
+      description: 'breve',
+      snippet: 'x'.repeat(1000),
+    };
+    const short = {
+      title: 'Solo descrizione',
+      url: 'https://example.com/b',
+      description: 'la descrizione',
+    };
+    const backend = keenableBackend({
+      apiKey: 'keen_test',
+      fetchFn: keenableFetch({ results: [long, short] }),
+    });
+    const hits = await backend.search('q', AbortSignal.timeout(1000));
+
+    expect(hits[0]?.snippet).toHaveLength(600);
+    expect(hits[1]).toEqual({
+      title: 'Solo descrizione',
+      url: 'https://example.com/b',
+      snippet: 'la descrizione',
+    });
+  });
+
+  it('turns an unrecognised element into empty strings, never undefined', async () => {
+    const backend = keenableBackend({
+      apiKey: 'keen_test',
+      fetchFn: keenableFetch({ results: [{ titolo: 'sbagliato' }] }),
+    });
+    const hits = await backend.search('q', AbortSignal.timeout(1000));
+    expect(hits[0]).toEqual({ title: '', url: '', snippet: '' });
+  });
+
+  it('never follows a redirect, so the key cannot reach another origin', async () => {
+    // Undici strips `authorization` on a cross-origin redirect but keeps a
+    // custom header like `x-api-key`, and replays the body on a 307. The boot
+    // check only admits the constant endpoint, so a hop to origin B would carry
+    // the owner's key and query to a host nobody allowlisted.
+    const seenByB: IncomingHttpHeaders[] = [];
+    const b = createServer((req, res) => {
+      seenByB.push(req.headers);
+      res.end(JSON.stringify({ results: [] }));
+    });
+    await new Promise<void>((ready) => b.listen(0, '127.0.0.1', ready));
+    const bUrl = `http://127.0.0.1:${(b.address() as AddressInfo).port}/`;
+    const a = createServer((_req, res) => {
+      res.writeHead(307, { location: bUrl });
+      res.end();
+    });
+    await new Promise<void>((ready) => a.listen(0, '127.0.0.1', ready));
+    const aUrl = `http://127.0.0.1:${(a.address() as AddressInfo).port}/v1/search`;
+    try {
+      const backend = keenableBackend({
+        apiKey: 'keen_secret',
+        // The real fetch, with the exact init the backend builds, aimed at origin A.
+        fetchFn: ((_url: string, init: RequestInit) =>
+          fetch(aUrl, init)) as unknown as typeof fetch,
+      });
+      await expect(backend.search('q', AbortSignal.timeout(2000))).rejects.toThrow();
+      expect(seenByB).toHaveLength(0);
+    } finally {
+      a.close();
+      b.close();
+    }
+  });
+
+  it('names the documented error statuses without echoing the response body', async () => {
+    const cases: Array<[number, string]> = [
+      [401, 'chiave non valida'],
+      [402, 'crediti esauriti'],
+      [403, 'chiave disabilitata o revocata'],
+      [429, 'limite di richieste'],
+    ];
+    for (const [status, hint] of cases) {
+      const backend = keenableBackend({
+        apiKey: 'keen_test',
+        fetchFn: keenableFetch({ error: 'body-text-must-not-leak' }, status),
+      });
+      const failure = await backend.search('q', AbortSignal.timeout(1000)).catch((e: unknown) => e);
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toContain(`keenable ${status}`);
+      expect((failure as Error).message).toContain(hint);
+      expect((failure as Error).message).not.toContain('body-text-must-not-leak');
+    }
+  });
+
+  it('registers only with key and sealed egress host, then an owner search passes unasked', () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-keenable-'));
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-keenable-ws-'));
+    runInit({ home, apiKey: 'sk-never-called' });
+
+    const configPath = paths(home).config;
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.search = { provider: 'keenable', apiKeyRef: 'secret://keenable_api_key' };
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+    writeSecret('keenable_api_key', 'keen_test_key', home);
+
+    const keyOnly = buildRuntime(home, workspace);
+    expect(keyOnly.deps.tools.map((t) => t.spec.name)).not.toContain('web_search');
+    expect(keyOnly.bootLines.join(' ')).toMatch(/api\.keenable\.ai.*egress/);
+
+    const egressPath = join(paths(home).rot, 'egress.json');
+    const egress = JSON.parse(readFileSync(egressPath, 'utf8'));
+    egress.allow = ['api.keenable.ai'];
+    writeFileSync(egressPath, JSON.stringify(egress, null, 2));
+    seal(home, '1', new Date());
+
+    const after = buildRuntime(home, workspace);
+    expect(after.deps.tools.map((t) => t.spec.name)).toContain('web_search');
+    // The claim of the slice, stated as the kernel's own verdict: `allow`, not
+    // `ask`. Through MCP the same search was `ask` on every call.
+    expect(after.deps.decide({
+      principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
+      tenant: 'host',
+      capability: 'sys.search',
+      resource: { kind: 'query', value: 'qualcosa' },
+      args: { query: 'qualcosa' },
+      taint: 0,
+    }).effect).toBe('allow');
   });
 });

@@ -64,10 +64,25 @@ export class TurnRun {
    */
   truncationsUsed: number;
   toolCallsMade: number;
+  /**
+   * Completion warning recorded for this lease: the answer named a tool the
+   * turn never called. Observability only — the answer stands at the first
+   * text (simple-loop), no re-ask is ever spent on it.
+   */
   nudgedForCompletion: boolean;
   spentUsd: number;
   contextBuilt: boolean;
   activeModelMs: number;
+  /**
+   * Silent lease renewals spent without progress (Fase 1 calm harness).
+   * Deliberately NOT in `counters()`: it bounds one process run, and a crash
+   * starts a new execution with its own bound — persisting it would let a
+   * crash loop inherit spent renewals it never used, or vice versa. The
+   * durable cross-lease guard is the dead-route breaker, not this.
+   */
+  autoRenewsUsed: number = 0;
+  /** Tool calls at the last renewal: progress since then resets the count. */
+  autoRenewBaselineCalls: number = 0;
   /** A failed durable write keeps this lease read-only until it ends. */
   durabilityFailure: string | null = null;
 
@@ -110,18 +125,6 @@ export class TurnRun {
    * rather than thrown.
    */
   barrier: WaitSpec | null = null;
-
-  /**
-   * One-shot wire escalation, armed by the `requireTool` recovery rung and
-   * consumed by the next model call (`tool_choice: required`, then back to
-   * `auto`).
-   *
-   * Deliberately **not** in `counters()`: a resume that loses it degrades to
-   * one more `auto` attempt, which is safe; persisting it would let a
-   * crash-loop force calls on transcripts that never saw the message
-   * explaining why a call is due.
-   */
-  requireToolOnce = false;
 
   /**
    * Consecutive provider-empty responses in this lease (P0-A).

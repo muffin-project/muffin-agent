@@ -56,8 +56,9 @@ export function filtriDatiAVitest(comando: string): string[] {
       if (token.startsWith('-')) break;
       // `$VAR` e i glob non sono percorsi: il primo lo decide la CI, il
       // secondo lo espande la shell, e un `*` che non corrisponde a niente
-      // è un problema diverso da un file mancante.
-      if (token.includes('$') || token.includes('*')) continue;
+      // è un problema diverso da un file mancante. Un `\` solo è la
+      // continuazione di riga della shell, non un filtro.
+      if (token.includes('$') || token.includes('*') || token === '\\') continue;
       trovati.push(token.replace(/^\.\//, ''));
     }
   }
@@ -99,6 +100,11 @@ describe('i filtri che i workflow danno a vitest', () => {
       'docs/derived/architecture-map',
     ]);
     expect(pescati('docs/derived/architecture-map')).toBe(0);
+    // La continuazione di riga della shell non è un filtro: un comando
+    // multilinea pesca il file, non il `\`.
+    expect(
+      filtriDatiAVitest("npx vitest run agent/runtime-wiring.test.ts \\\n  -t 's' \\"),
+    ).toEqual(['agent/runtime-wiring.test.ts']);
     // E la riga di commento accanto, che nomina vitest a parole, non è un comando.
     expect(filtriDatiAVitest('      # girava con npx vitest run docs/qualcosa')).toEqual([]);
   });

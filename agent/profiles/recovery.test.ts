@@ -62,10 +62,11 @@ describe('the recovery steps', () => {
     }
   });
 
-  it('demands a call on requireTool, with no third shape', () => {
-    // The wire flag (`tool_choice: required`) is armed by the loop, not by
-    // this message — but the transcript must still say a call is due, or the
-    // forced request arrives unexplained.
+  it('demands a call on requireTool, in words only', () => {
+    // Simple-loop: nessun giro chiede mai tool_choice: required al filo (la
+    // forzatura fabbricava un'azione che il modello non aveva scelto). Lo step
+    // resta l'ultimo rung come contratto a parole — stessa forma di
+    // strictJson, con il peso dell'ultima spiaggia.
     const said = recoveryStep('requireTool', ctx).message ?? '';
     expect(said).toMatch(/tool call/);
     expect(said).toMatch(/non puoi/);

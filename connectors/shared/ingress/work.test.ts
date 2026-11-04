@@ -5,12 +5,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { runInit } from '../../../cli/init.js';
 import { buildRuntime } from '../../../agent/runtime.js';
 import { ContinuationGone } from '../../../agent/loop.js';
-import type { LoopDeps } from '../../../agent/loop.js';
+import type { LoopDeps, TurnResult } from '../../../agent/loop.js';
 import type { Provider } from '../../../agent/providers/types.js';
 import { identify } from '../../../core/surface/types.js';
 import type { TurnRecord } from '../../../core/turns/store.js';
-import { ModelLane } from '../../../core/turns/model-lane.js';
-import { runWork } from './work.js';
+import { LANE_TURNS, ModelLane } from '../../../core/turns/model-lane.js';
+import { runWork, type EnqueuedWork } from './work.js';
 import { makeIngressPort, type InboundEvent, type IngressPort } from './types.js';
 import { providerMessages } from '../../../agent/loop/provider-checkpoint.js';
 
@@ -26,6 +26,12 @@ import { providerMessages } from '../../../agent/loop/provider-checkpoint.js';
  * comes back. `cli/porta-durevole.test.ts` proves the reading half against the
  * real assembly; this file proves the writing half against the real store.
  */
+
+/** Il turno ha risposto in banda: i test qui sotto non accodano mai. */
+function risposta(out: TurnResult | EnqueuedWork): TurnResult {
+  if ('kind' in out) throw new Error(`accodato invece di risposto: ${out.workId}`);
+  return out;
+}
 
 function porta(id: string, transport: 'edit' | 'off' = 'edit'): IngressPort {
   return makeIngressPort(
@@ -149,6 +155,57 @@ describe('identità e taint arrivano già decisi', () => {
   });
 });
 
+describe('corsia occupata: la riga è durevole e il drain non aspetta', () => {
+  it('accoda invece di bloccare, e non chiama il modello', async () => {
+    const env = ambiente();
+    const port = porta('telegram');
+    const ev = evento(port);
+    const lane = new ModelLane();
+    // La corsia è tenuta da un altro turno: è esattamente la condizione che
+    // prima faceva girare questo drain nel `while` di attesa, bloccando la
+    // casella d'ingresso.
+    expect(lane.take(LANE_TURNS)).toBeNull();
+    const chat = vi.spyOn(env.loop.provider, 'chat');
+    try {
+      const out = await runWork({ loop: env.loop, sessions: env.sessions, lane }, port, ev, {
+        workId: 'coda-1',
+        identity: identify(ev.identity, '7'),
+        text: 'ciao',
+        contentTaint: 0,
+        replyTo: ev.address.record,
+        signal: new AbortController().signal,
+        steer: () => [],
+        enqueueNow: true,
+      });
+      expect(out).toEqual({ kind: 'enqueued', workId: 'coda-1' });
+      const row = env.turns.get('coda-1');
+      expect(row?.status).toBe('runnable');
+      expect(row?.inputText).toBe('ciao');
+      expect(row?.counters.iterations).toBe(0);
+      expect(chat).not.toHaveBeenCalled();
+    } finally {
+      lane.release(LANE_TURNS);
+    }
+  });
+
+  it('senza la decisione del router il turno gira in banda: il flag è la decisione, non uno stato', async () => {
+    const env = ambiente();
+    const port = porta('telegram');
+    const ev = evento(port);
+    const out = await runWork({ loop: env.loop, sessions: env.sessions, lane: new ModelLane() }, port, ev, {
+      workId: 'subito-1',
+      identity: identify(ev.identity, '7'),
+      text: 'ciao',
+      contentTaint: 0,
+      replyTo: ev.address.record,
+      signal: new AbortController().signal,
+      steer: () => [],
+    });
+    expect('kind' in out).toBe(false);
+    expect(env.turns.get('subito-1')?.status).toBe('done');
+  });
+});
+
 describe('l identità già impegnata è la riga scritta', () => {
   it('il turno nasce con il `workId` passato, mai con un secondo id', async () => {
     const env = ambiente();
@@ -219,7 +276,7 @@ describe('continuazione conversazionale (P0-B)', () => {
   it('"riprendi" continua la riga continuabile sulla stessa identità', async () => {
     const env = ambiente();
     rigaContinuabile(env);
-    const out = await giraRiprendi(env, porta('telegram'), 'w9');
+    const out = risposta(await giraRiprendi(env, porta('telegram'), 'w9'));
     expect(out.turnId).toBe('cont-1');
     expect(out.stopped).toBe('answered');
     const row = env.turns.get('cont-1');
@@ -262,6 +319,52 @@ describe('continuazione conversazionale (P0-B)', () => {
     expect(env.turns.get('cont-1')?.status).toBe('continuable');
   });
 
+  it('"riprendi" su rotta morta risponde il rifiuto onesto senza nuova lease', async () => {
+    const env = ambiente();
+    const created = env.turns.create(
+      {
+        id: 'cont-1',
+        principal: { kind: 'owner', connector: 'telegram', externalId: '7' },
+        tenant: 'host',
+        surface: 'telegram',
+        sessionId: 'owner',
+        model: env.loop.model,
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'fai' }] }],
+        taint: 0,
+        counters,
+      },
+      4242,
+    );
+    expect(
+      env.turns.releaseContinuable(
+        'cont-1',
+        {
+          messages: providerMessages(created),
+          taint: 0,
+          counters,
+          reason: {
+            class: 'model_deadline' as const,
+            lease: 2,
+            deadStreak: 3,
+            completed: { toolCalls: 0 },
+            at: new Date().toISOString(),
+          },
+        },
+        created.claimToken,
+      ),
+    ).toBe(true);
+    const leasesBefore = env.turns.leasesFor('cont-1').length;
+    const out = risposta(await giraRiprendi(env, porta('telegram'), 'w9'));
+    expect(out.turnId).toBe('cont-1');
+    expect(out.stopped).toBe('continuable');
+    expect(out.text).toContain('non riparte');
+    expect(out.text).not.toContain('scrivi "riprendi"');
+    // Riga intatta, nessuna lease partita, nessun evento-lavoro creato.
+    expect(env.turns.get('cont-1')?.status).toBe('continuable');
+    expect(env.turns.leasesFor('cont-1')).toHaveLength(leasesBefore);
+    expect(env.turns.get('w9')).toBeNull();
+  });
+
   it('un id già impegnato che la ri-derivazione non nomina più non collide con la riga', async () => {
     const env = ambiente();
     rigaContinuabile(env);
@@ -282,5 +385,125 @@ describe('continuazione conversazionale (P0-B)', () => {
       }),
     ).rejects.toBeInstanceOf(ContinuationGone);
     expect(env.turns.get('cont-1')?.status).toBe('continuable');
+  });
+});
+
+
+describe('message.received automation seam', () => {
+  const settled = (workId: string): import('../../../agent/loop.js').TurnResult => ({
+    text: '',
+    iterations: 0,
+    traceId: workId,
+    turnId: workId,
+    stopped: 'answered',
+    taint: 0,
+    usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+  });
+
+  it('matched deterministic rule runs once and never calls the model', async () => {
+    const env = ambiente();
+    const port = porta('telegram');
+    const ev = evento(port, {
+      eventId: 'greeting-1',
+      compositionId: 'greeting-1',
+      parts: [{ source: 'author', tier: 0, text: 'buongiorno' }],
+    });
+    const chat = vi.spyOn(env.loop.provider, 'chat');
+    let actions = 0;
+
+    const out = risposta(await runWork(
+      {
+        loop: env.loop,
+        sessions: env.sessions,
+        lane: new ModelLane(),
+        automationRules: [
+          {
+            id: 'owner-buongiorno',
+            matches: (event) =>
+              event.kind === 'message.received' &&
+              event.evidence['text'] === 'buongiorno' &&
+              event.evidence['principalKind'] === 'owner',
+            action: (event) => ({
+              mode: 'deterministic',
+              run: () => {
+                actions += 1;
+                return settled(event.occurrenceId);
+              },
+            }),
+          },
+        ],
+      },
+      port,
+      ev,
+      {
+        workId: 'greeting-work-1',
+        identity: identify(ev.identity, '7'),
+        text: 'buongiorno',
+        contentTaint: 0,
+        replyTo: ev.address.record,
+        signal: new AbortController().signal,
+        steer: () => [],
+      },
+    ));
+
+    expect(actions).toBe(1);
+    expect(chat).not.toHaveBeenCalled();
+    expect(out).toMatchObject({ turnId: 'greeting-work-1', iterations: 0, stopped: 'answered' });
+    // A consumed deterministic message does not mint a hidden agent Turn.
+    expect(env.turns.get('greeting-work-1')).toBeNull();
+  });
+
+  it('negative match takes the ordinary ingress path with one normal model call', async () => {
+    const env = ambiente();
+    const port = porta('telegram');
+    const ev = evento(port, {
+      eventId: 'ordinary-1',
+      compositionId: 'ordinary-1',
+      parts: [{ source: 'author', tier: 0, text: 'come va?' }],
+    });
+    const chat = vi.spyOn(env.loop.provider, 'chat');
+    let matches = 0;
+    let actions = 0;
+
+    const out = risposta(await runWork(
+      {
+        loop: env.loop,
+        sessions: env.sessions,
+        lane: new ModelLane(),
+        automationRules: [
+          {
+            id: 'only-buongiorno',
+            matches: (event) => {
+              matches += 1;
+              return event.evidence['text'] === 'buongiorno';
+            },
+            action: () => ({
+              mode: 'deterministic',
+              run: () => {
+                actions += 1;
+                return settled('should-not-run');
+              },
+            }),
+          },
+        ],
+      },
+      port,
+      ev,
+      {
+        workId: 'ordinary-work-1',
+        identity: identify(ev.identity, '7'),
+        text: 'come va?',
+        contentTaint: 0,
+        replyTo: ev.address.record,
+        signal: new AbortController().signal,
+        steer: () => [],
+      },
+    ));
+
+    expect(matches).toBe(1);
+    expect(actions).toBe(0);
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(out.stopped).toBe('answered');
+    expect(env.turns.get('ordinary-work-1')?.principal.kind).toBe('owner');
   });
 });

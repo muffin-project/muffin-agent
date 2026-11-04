@@ -59,7 +59,12 @@ export interface Reranker {
    * it. Absent on every other recall — the interactive pre-turn recall, a
    * deliberate `memory_search`, the CLI.
    */
-  rerank(query: string, candidates: RecallItem[], topK: number, jobId?: string): Promise<RerankOutcome>;
+  rerank(
+    query: string,
+    candidates: RecallItem[],
+    topK: number,
+    jobId?: string,
+  ): Promise<RerankOutcome>;
 }
 
 /**
@@ -92,14 +97,20 @@ export class LlmReranker implements Reranker {
     this.id = `llm:${model}`;
   }
 
-  async rerank(query: string, candidates: RecallItem[], topK: number, jobId?: string): Promise<RerankOutcome> {
+  async rerank(
+    query: string,
+    candidates: RecallItem[],
+    topK: number,
+    jobId?: string,
+  ): Promise<RerankOutcome> {
     const asIs = (why: string, usage?: RerankOutcome['usage']): RerankOutcome => ({
       items: candidates.slice(0, topK),
       reordered: false,
       why,
       ...(usage === undefined ? {} : { usage }),
     });
-    if (candidates.length < RERANK_MIN_CANDIDATES) return asIs('troppo pochi candidati per pagare una chiamata');
+    if (candidates.length < RERANK_MIN_CANDIDATES)
+      return asIs('troppo pochi candidati per pagare una chiamata');
 
     const listing = candidates
       .map((c, i) => `[${i}] (${c.source}) ${c.text.replace(/\s+/g, ' ').slice(0, 300)}`)
@@ -133,7 +144,11 @@ export class LlmReranker implements Reranker {
         // non è un extra, è un costo puro. Dirlo è la metà che mancava — l'adapter
         // sa spegnerlo da 27/08, ma nessuno glielo chiedeva: il profilo lo dichiara
         // per il turno (`agent/loop.ts`), e queste corsie il profilo non lo leggono.
-        thinking: 'off' as const,
+        // ChatGPT plan models require reasoning. This internal structured task
+        // deliberately chooses low; the adapter never rewrites an explicit off.
+        ...(this.provider.kind === 'openai-chatgpt'
+          ? { reasoning: { mode: 'on' as const, effort: 'low' as const } }
+          : { thinking: 'off' as const }),
         temperature: 0,
         stream: false,
         // Attribution only: the light lane copies it into the spend row. It is
@@ -151,7 +166,9 @@ export class LlmReranker implements Reranker {
       // is a worse answer, not no answer. Ma peggiore va **detto**: chi legge
       // `strategies` deve poter distinguere «riordinato dal modello» da
       // «l'ordine è quello di prima».
-      return asIs(`il modello non ha risposto: ${error instanceof Error ? error.message : String(error)}`);
+      return asIs(
+        `il modello non ha risposto: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
 
     const order = parseOrder(text, candidates.length);
@@ -162,7 +179,11 @@ export class LlmReranker implements Reranker {
     // parsing hiccup is worse than keeping it in a slightly wrong place.
     const chosen = new Set(order);
     const tail = candidates.filter((_, i) => !chosen.has(i));
-    return { items: [...ranked, ...tail].slice(0, topK), reordered: true, ...(usage === undefined ? {} : { usage }) };
+    return {
+      items: [...ranked, ...tail].slice(0, topK),
+      reordered: true,
+      ...(usage === undefined ? {} : { usage }),
+    };
   }
 }
 

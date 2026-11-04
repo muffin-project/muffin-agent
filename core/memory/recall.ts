@@ -1138,12 +1138,13 @@ function temporalLabel(item: RecallItem): string {
 }
 
 /**
- * Capitalised words as entity candidates. Deliberately crude: this only decides
- * which subgraph to look at, and a wrong guess costs a lookup that returns
- * nothing. Anything cleverer would be a classifier, and classifiers on this
- * path have a track record of being demoted to monitor-only.
+ * Bounded lexical mentions as entity candidates. The entity lookup already
+ * matches names case-insensitively; requiring a capital letter here made a
+ * lowercase name or code unreachable through the graph until it had a vector.
+ * This still only chooses which subgraphs to inspect: four candidates, one hop,
+ * and the store's tenant, temporal and entity limits remain authoritative.
  */
 function extractCandidateNames(query: string): string[] {
-  const words = query.match(/\b[A-ZÀ-Ú][\wÀ-ú'-]{2,}\b/g) ?? [];
-  return [...new Set(words)].slice(0, 4);
+  const words = query.match(/[\p{L}\p{N}][\p{L}\p{N}_'-]{2,}/gu) ?? [];
+  return [...new Set(words.map((word) => word.toLowerCase()))].slice(0, 4);
 }

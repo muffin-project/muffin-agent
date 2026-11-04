@@ -144,7 +144,7 @@ export async function cmdSearch(home: string, argv: string[], deps: SearchDeps):
     // programma che la tira fuori lui.
     out(`niente chiave, niente ricerca. Da uno script, senza lasciarla nella history:`);
     out(`  muffin search ${entry.id} < il-file-con-la-chiave`);
-    out(`  pass show tavily | muffin search ${entry.id}`);
+    out(`  pass show ${entry.id} | muffin search ${entry.id}`);
     return 78;
   }
 

@@ -29,6 +29,30 @@ describe('un token letterale in mcp.json scritto a mano (classe 3, ADR-0048)', (
     }
   });
 
+  it('rifiuta anche un token GitHub PAT salvato negli argomenti del figlio', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-mcpreg-argv-'));
+    try {
+      writeFileSync(
+        join(dir, 'mcp.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          servers: {
+            gh: {
+              command: 'node',
+              args: ['server.js', '--token', 'ghp_abcdefghijklmnopqrstuvwxyz01'],
+              env: {},
+              approvedAt: new Date().toISOString(),
+              tools: {},
+            },
+          },
+        }),
+      );
+      expect(() => loadMcpRegistry(dir)).toThrow(/credenziale|secret:\/\//);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('lascia passare la configurazione che non è un segreto', () => {
     const dir = mkdtempSync(join(tmpdir(), 'muffin-mcpreg-ok-'));
     try {

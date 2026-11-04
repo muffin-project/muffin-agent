@@ -22,7 +22,10 @@ import { readGateway } from './lock.js';
  *    eseguire per noi (un gateway di una versione senza `run`, o a metà
  *    boot): stand-down, non un secondo runtime. Eseguire in locale qui è
  *    esattamente lo sdoppiamento che #533 chiude.
- * 3. **né l'uno né l'altro** → owner locale esplicito, un solo percorso.
+ * 3. **né l'uno né l'altro** → nessuno esegue qui (ADR-0103): fail closed
+ *    con il rimedio (`muffin gateway install --write --start`). L'owner
+ *    locale esplicito esiste solo dietro l'hatch di test `MUFFIN_EXEC_LOCAL=1`,
+ *    mai come fallback silenzioso di produzione.
  *
  * Letta a ogni turno, mai all'avvio e mai in cache: un gateway installato
  * mentre il terminale è aperto (e uno che muore) cambiano la risposta, ed è
@@ -82,3 +85,21 @@ export async function resolveExecutionOwner(
 
   return { kind: 'local' };
 }
+
+/**
+ * Test-only hatch for gateway-first execution (ADR-0103).
+ *
+ * Production never sets this: without a live gateway, REPL and headless runs
+ * refuse to execute instead of starting a second runtime. The acceptance
+ * harness and unit tests set `MUFFIN_EXEC_LOCAL=1` explicitly so isolated
+ * Homes keep proving the loop without a supervisor. Visible in code and in
+ * the harness env — never a silent default, never documented for owners.
+ */
+export function localExecAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.MUFFIN_EXEC_LOCAL === '1';
+}
+
+/** Remedy printed whenever execution is refused for lack of a gateway. */
+export const NO_GATEWAY_REMEDY =
+  'nessun gateway attivo su questa Home: i turni girano solo sul gateway (ADR-0103). ' +
+  '`muffin gateway install --write --start` per avviarlo, poi rimanda il turno.';

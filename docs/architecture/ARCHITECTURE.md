@@ -101,9 +101,17 @@ The durable rule is semantic: preserve evidence and the meaning required to
 reconstruct useful beliefs. Physical indexes and model-specific representations
 may be rebuilt.
 
-The current runtime does **not yet implement an agent memory-proposal tool**; it
-currently exposes read/search. ADR-0051 constrains the first intentional write
-path without claiming that path is shipped.
+The runtime exposes `memory_propose`: it stages a proposal and invokes the
+canonical reconciliation path, preserving the single semantic writer described
+above. See `agent/tools/memory-propose.ts` and `core/memory/ingest.ts` for the
+executable contract. Its model-authored tuple is recorded as `agent-inference`;
+the owner's original message remains source evidence. Tool arguments cannot
+select `owner-stated` provenance. Registration does not establish real end-to-end acceptance.
+
+Automatic extraction also produces inferred projections: its source episode
+retains the speaker's words and trust, while the tuple records model
+interpretation. Extracted tuples cannot automatically enter the pinned profile
+or inherit a previous belief's pin. Explicit owner pinning remains available.
 
 ### Work
 
@@ -118,6 +126,10 @@ therefore related but not identical.
 
 Work does not own the truth of what happened in the outside world; that belongs
 to effects/evidence.
+
+A session plan remains context shared across requests. Pending rows alone do not
+grant execution or define a Turn's completion. A continuation resumes the selected
+durable Turn and its request, subject to subsequent owner corrections.
 
 ### Effects
 
@@ -144,9 +156,11 @@ decision. The model may interpret meaning and propose work; it does not grant
 itself authority.
 
 The Root of Trust and shipped policy configuration set constitutional floors.
-Familiarity with the owner does not raise authority. Any future reduction in
-supervision must be scoped, observable, revocable and evidence-backed rather
-than expressed as a global trust score.
+Familiarity with the owner does not raise authority. Any reduction in
+supervision is scoped, observable, revocable and evidence-backed rather than
+expressed as a global trust score: owner delegation modes (ADR-0095) consume
+`ask` verdicts per work — never `deny` — through the single approval queue,
+and die with the work they were given to.
 
 ## 3. Semantic planes and runtime topology are orthogonal
 
@@ -259,6 +273,20 @@ assembler. DAY-1 status for those capabilities remains owned by `docs/status/day
 Receiving input and executing current work are separate responsibilities. A
 long-running turn must not make a Surface unable to durably receive later input.
 
+New authenticated owner activities admitted by a profile's `activity` policy
+carry a durable, non-time allowance in the existing Turn. Physical main/light
+requests and tool executions reserve capacity under its current claim before
+starting. Checkpoints, waits, restarts and automatic lease continuations preserve
+both the granted ceiling and spent capacity. These activities have no aggregate
+wall-time or active-inference timer; individual request/stall controls and
+financial/authority gates remain. Recoverable lease endings continue internally
+within the granted renewal allowance, including through the lane after restart.
+An exhausted activity retains its checkpoint for an explicit owner extension;
+stop, denial and terminal failures do not automatically restart. Legacy/custom
+profiles without `activity` and scheduler jobs retain their prior policy.
+[ADR-0100](../decisions/0100-il-budget-appartiene-all-attivita-non-al-timer.md)
+records the behavioral change and initial resource calibration.
+
 The runtime vocabulary must be able to represent at least:
 
 ```text
@@ -320,6 +348,29 @@ Pairing establishes Node identity; it does not grant every capability. See
 `SECURITY.md` and ADR-0050.
 
 ## 8. Providers are replaceable compute and privileged data recipients
+
+Main and light have independent provider connections and model selections.
+Legacy Homes initially retain their existing connection on both lanes; changing
+one lane preserves the other. Runtime construction, reload, verification,
+diagnostics and spend attribution use the selected lane's connection. The
+existing secret store owns credentials; configuration contains references.
+The guided selector and CLI/conversational shortcuts share the model-selection
+path. Light remains the current memory/multimodal role, distinct from the
+optional System One judgment provider. This does not introduce a new cognitive
+scheduler or automatic provider fallback.
+
+The `openai-chatgpt` adapter uses explicitly authorized ChatGPT plan OAuth and
+the public Responses API. It preserves Muffin's loop and kernel; runtime and
+online verification share provider construction. Credentials and host/profile
+state stay in the protected secret store, with serialized rotating refresh.
+Full context is sent with remote storage disabled. This preview cannot express
+a remote output-token cap: runtime deadlines still apply, and account quota and
+credit limits belong to ChatGPT Settings. API-dollar estimates exclude these
+requests while token usage remains recorded. Account catalog metadata determines
+which reasoning controls are legal. Explicit owner off is never converted into
+reasoning on; unsupported controls fail before inference. Main uses its effective
+model profile and owner override. Internal structured memory calls deliberately
+choose low on the ChatGPT route and are verified before model selection is saved.
 
 The configured LLM provider is part of the harness, not Muffin's identity. Model
 and provider changes must not reset the agent's durable state.

@@ -35,6 +35,7 @@ import {
   STOP_TIMEOUT_SEC,
 } from '../core/gateway/unit.js';
 import { Scheduler, type Deliver } from '../core/scheduler/scheduler.js';
+import { makeTraceRetentionTick } from '../core/scheduler/trace-retention.js';
 import type { SurfaceRegistry } from '../core/surface/registry.js';
 import { notDelivered } from '../core/surface/types.js';
 import { attachSendFile, connectSurfaces } from './surface.js';
@@ -560,6 +561,10 @@ export async function cmdGatewayInstall(
     // launcher a PATH that has no `node` in it at all — and with the *wrong*
     // one it hands it a path that expires (see `resolveInterpreterDir`).
     interpreterDir: resolveInterpreterDir(process.execPath, REAL_INTERPRETER_PROBES),
+    // The Muffin-owned tool bin dir, written by `install.sh` beside the
+    // launcher PATH: the unit must select the verified bubblewrap, not the
+    // distro copy the system PATH would find first.
+    ...(process.env['MUFFIN_TOOL_BIN'] ? { toolBinDir: process.env['MUFFIN_TOOL_BIN'] } : {}),
     // Solo se serve: senza `--start` la lista stampata resta quella con
     // `$(id -u)`, che è giusta per una shell e non richiede di sapere chi sia.
     ...(values.start === true ? { identity: deps.identity ?? { user: userInfo().username, uid: userInfo().uid } } : {}),
@@ -987,8 +992,10 @@ export async function cmdGatewayRun(
     () => lock.isCurrentClaim(),
     // B7: the last write before `markRan`, every time `markRan` is about to
     // run — never a required rewire, just the one thing this store still
-    // needed to know before advancing a schedule it also gates.
-    (job) => runtime.jobFires.settle(job.id, job.nextFireAt.toISOString()),
+    // needed to know before advancing a schedule it also gates. Forwards the
+    // S4 silent receipt (#598) on the same write: a fire the delivery policy
+    // closed without messaging settles with its receipt, not as a delivery.
+    (job, opts) => runtime.jobFires.settle(job.id, job.nextFireAt.toISOString(), opts),
     // ADR-0054 §4: `/pause` da qualunque superficie, letta dal database che
     // tutti i processi condividono.
     () => pausa.attiva(),
@@ -996,6 +1003,12 @@ export async function cmdGatewayRun(
     // e non chiamato da `Gateway.tick`, perché le due condizioni che devono
     // zittirlo — handover e `/pause` — sono già risolte lì dentro.
     commitments,
+    // #838: la retention provata (`JsonlExporter.pruneOlderThan`, la stessa che
+    // `agent/runtime.ts` chiama al boot) sul battito dello scheduler — un
+    // processo che vive di settimane pota comunque le vecchie tracce senza
+    // alcun riavvio. Stesse condizioni di `commitments` qui sopra: nessun
+    // cambio di policy, solo un secondo chiamante accanto a quello del boot.
+    makeTraceRetentionTick(home, runtime.config.traces.retentionDays),
   );
 
   /**
@@ -1043,6 +1056,14 @@ export async function cmdGatewayRun(
       (turn, text) => deliverFromLane(turn, text),
       laneLog,
       (record) => attachStreamFromLane?.(record),
+      // The spend counter behind autonomous continuation grants (#598 S2):
+      // without it the lane cannot verify a scheduler turn's per-job ceiling
+      // and refuses to grant (fail closed). Same ledger the fire-time gate in
+      // `agent/scheduler-run.ts` reads — one counter, two readers.
+      {
+        jobCap: (jobId) => runtime.jobs.get(jobId)?.perJobUsd ?? null,
+        jobMonthUsd: (jobId) => runtime.budget.jobMonthUsd(jobId),
+      },
     ),
     onEvent: laneLog,
     // The same token the scheduler got, which is the whole point of building it

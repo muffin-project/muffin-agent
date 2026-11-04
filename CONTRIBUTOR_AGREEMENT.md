@@ -7,7 +7,7 @@ It is not a copyright assignment: contributors retain copyright in their work.
 
 ## How to agree
 
-Sign off every commit submitted in a pull request:
+External contributors sign off every submitted commit:
 
 ```bash
 git commit -s -m "your change"
@@ -20,6 +20,12 @@ Signed-off-by: Ada Lovelace <ada@example.com>
 ```
 
 Submitting a signed-off contribution means you agree to both terms below.
+Owner-delegated internal work follows the scoped exception in `CONTRIBUTING.md`;
+that exception does not certify rights or grant permissions on third-party work.
+Imported commits by outside authors retain their attribution and sign-off
+requirement, including inside an owner PR. Never sign on another author's behalf.
+An agent identity and a matching Git trailer do not establish ownership or the
+truth of a certification. Review and required CI remain in force.
 
 ## Developer Certificate of Origin 1.1
 

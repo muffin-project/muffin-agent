@@ -95,9 +95,14 @@ COPY --from=build --chmod=0755 /opt/muffin/contrib/docker/entrypoint.sh /usr/loc
 
 # Data lives under /muffin, one volume per directory: the home (config, sealed
 # rot/, database, memory), the persistent secrets and the workspace.
+# MUFFIN_CONTAINER marks this image as the experimental gateway container:
+# `muffin update` inside it refuses with the host-side procedure instead of
+# attempting an in-place update that cannot work here (#765). Baked into the
+# image rather than detected, and steering only a help message, never authority.
 ENV MUFFIN_HOME=/muffin/home \
     XDG_CONFIG_HOME=/muffin/config \
-    MUFFIN_WORKSPACE=/muffin/workspace
+    MUFFIN_WORKSPACE=/muffin/workspace \
+    MUFFIN_CONTAINER=1
 USER node
 WORKDIR /muffin
 LABEL org.opencontainers.image.title="muffin-gateway" \

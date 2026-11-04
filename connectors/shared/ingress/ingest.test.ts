@@ -164,3 +164,61 @@ describe('il tier del mittente viaggia coi byte', () => {
     expect(visti).toEqual([{ tenant: 'group:telegram:-100', tier: 2 }]);
   });
 });
+
+describe('vista collegata: mostra, descrizione firmata, rifiuto dichiarato', () => {
+  const vaultSkipped = (files: Record<string, Buffer>) => {
+    const vault = vaultWith(files);
+    return {
+      root: vault.root,
+      reindexPath: async () => ({ skipped: [{ path: 'foto.png', why: 'nessun estrattore' }], documents: [] }),
+    };
+  };
+  const scarica = async () => ({ vaultPath: 'foto.png', bytes: 2048 });
+
+  it('mostra: la stessa riga di sempre, coi byte', async () => {
+    const arrival = await ingestAttachment(
+      {
+        vault: vaultSkipped({ 'foto.png': PNG }),
+        vista: async () => ({ modo: 'mostra', blocco: { type: 'image', mediaType: 'image/png', data: 'aGk=' } }),
+      },
+      scarica,
+      'host',
+      0,
+    );
+    expect(arrival.line).toBe('[immagine ricevuta: `foto.png` (2KB) — te la sto mostrando in questo messaggio]');
+    expect(arrival.image).toBeDefined();
+  });
+
+  it('descritta: dice chi non vedeva e chi ha descritto, recintata, senza blocco', async () => {
+    const arrival = await ingestAttachment(
+      {
+        vault: vaultSkipped({ 'foto.png': PNG }),
+        vista: async () => ({ modo: 'descritta', testo: 'un gatto', descrittaDa: 'm/light' }),
+      },
+      scarica,
+      'host',
+      0,
+    );
+    expect(arrival.line).toContain('questo modello non vede le immagini');
+    expect(arrival.line).toContain('m/light');
+    expect(arrival.line).toContain('descrizione');
+    expect(arrival.line).toContain('un gatto');
+    expect(arrival.image).toBeUndefined();
+  });
+
+  it('no: la riga dice perché e il rimedio, e non inventa niente', async () => {
+    const arrival = await ingestAttachment(
+      {
+        vault: vaultSkipped({ 'foto.png': PNG }),
+        vista: async () => ({ modo: 'no', why: 'il modello non vede le immagini', rimedio: 'passa con /model' }),
+      },
+      scarica,
+      'host',
+      0,
+    );
+    expect(arrival.line).toContain('ma non visibile: il modello non vede le immagini');
+    expect(arrival.line).toContain('non inventarti cosa mostra');
+    expect(arrival.line).toContain('passa con /model');
+    expect(arrival.image).toBeUndefined();
+  });
+});

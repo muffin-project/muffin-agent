@@ -58,15 +58,36 @@ describe('billing the light lane', () => {
 
     expect(billed).toEqual([
       {
-        // Not `call.model` ('light'): the price table is keyed on what served
-        // the request, and the two differ on every alias.
+        // `model` stays who served the request; `requestedModel` carries the
+        // route it was asked with, so the price seam can choose the provider
+        // billing contract without losing observability (#499).
         model: 'claude-haiku-4-5-20251001',
+        requestedModel: 'light',
         inputTokens: 11,
         outputTokens: 3,
         cacheReadTokens: 2,
         cacheWriteTokens: 1,
       },
     ]);
+  });
+
+  it('carries the requested route alongside the served model (#499)', async () => {
+    const served: ChatResult = {
+      ...ok(),
+      model: 'qwen/qwen3.8-27b',
+      usage: { inputTokens: 10_000, outputTokens: 2_000, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    };
+    const billed: LightSpend[] = [];
+    const lane = lightLane(
+      { kind: 'openai-compat', chat: async () => served },
+      { profile: CONSERVATIVE, record: (e) => billed.push(e) },
+    );
+
+    await lane.chat(call({ model: 'openrouter/free' }));
+
+    expect(billed).toHaveLength(1);
+    expect(billed[0]!.model).toBe('qwen/qwen3.8-27b');
+    expect(billed[0]!.requestedModel).toBe('openrouter/free');
   });
 
   it('bills nothing for a call that threw — a failure is not a charge', async () => {

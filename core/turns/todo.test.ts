@@ -320,3 +320,36 @@ describe('un passo porta la taint di chi lo ha scritto', () => {
     expect(planTaint(todos.open('host', 's1'))).toBe(0);
   });
 });
+
+describe('arming turn (#859)', () => {
+  it('plan registra il turno che arma, la riproposizione non lo sovrascrive', () => {
+    const todos = memory();
+    todos.plan('host', 's1', ['mandare le credenziali'], 3, 'turno-sporco');
+    expect(todos.dueCommitments('host', new Date('2026-10-02T00:00:00Z'))).toEqual([]);
+    todos.plan('host', 's1', ['mandare le credenziali'], 0, 'turno-pulito');
+    const seq = todos.list('host', 's1').find((i) => i.text === 'mandare le credenziali')!.seq;
+    todos.setDue('host', 's1', seq, new Date('2026-10-06T09:00:00Z'), { intrinsic: 0, arming: 0 });
+    const rows = todos.dueCommitments('host', new Date('2026-10-06T10:00:00Z'));
+    expect(rows).toHaveLength(1);
+    // Prima arming vince: né la riproposizione pulita né la data pulita
+    // rilavano la riga.
+    expect(rows[0]!.armedTurnId).toBe('turno-sporco');
+    expect(rows[0]!.tier).toBe(3);
+  });
+  it('setDue da solo non arma senza scrittura: arming resta del piano', () => {
+    const todos = memory();
+    todos.plan('host', 's1', ['chiamare il commercialista'], 0, 'turno-owner');
+    const seq = todos.list('host', 's1')[0]!.seq;
+    todos.setDue('host', 's1', seq, new Date('2026-10-06T09:00:00Z'), { intrinsic: 0, arming: 0 });
+    const rows = todos.dueCommitments('host', new Date('2026-10-06T10:00:00Z'));
+    expect(rows[0]!.armedTurnId).toBe('turno-owner');
+  });
+  it('riga legacy senza arming: armedTurnId assente, vecchio comportamento', () => {
+    const todos = memory();
+    todos.plan('host', 's1', ['rinnovare il passaporto'], 0);
+    const seq = todos.list('host', 's1')[0]!.seq;
+    todos.setDue('host', 's1', seq, new Date('2026-10-06T09:00:00Z'), { intrinsic: 0, arming: 0 });
+    const rows = todos.dueCommitments('host', new Date('2026-10-06T10:00:00Z'));
+    expect(rows[0]!.armedTurnId ?? null).toBeNull();
+  });
+});

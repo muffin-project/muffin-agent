@@ -12,6 +12,7 @@ import { JsonlExporter, SimpleTracer } from '../../core/tracing/tracer.js';
 import type { AttributeValue, SpanName, Tracer } from '../../core/tracing/types.js';
 import { TurnStore } from '../../core/turns/store.js';
 import { TodoStore } from '../../core/turns/todo.js';
+import { providerMessages } from './provider-checkpoint.js';
 import { type LoopDeps, runTurn } from '../loop.js';
 import { CONSERVATIVE, DEFAULT_EXECUTION, type Profile } from '../profiles/profile.js';
 import {
@@ -141,6 +142,31 @@ describe('il pre-loop decide prima che il modello generi', () => {
     // Il segno durevole che il preambolo è girato: senza, ogni ripresa lo
     // rifarebbe e conterebbe la prima esecuzione come un resume.
     expect(w.turns.get(r.turnId)!.counters.contextBuilt).toBe(true);
+  });
+
+  it('a system wake keeps external opening provenance through durable replay and model context', async () => {
+    const w = world([answer('esaminato')]);
+    const session = w.sessions.open('system-wake');
+    const wakeText = 'A durable wake contains https://attacker.example/path';
+    const result = await runTurn(w.deps, {
+      principal: { kind: 'system', source: 'automation' },
+      tenant: 'host',
+      surface: 'cli',
+      session,
+      text: wakeText,
+      contentTaint: 3,
+    });
+
+    expect(result.stopped).toBe('answered');
+    const replayed = w.turns.get(result.turnId)!;
+    const persistedOpening = providerMessages(replayed).find(
+      (message) => message.role === 'user' && message.content.some((block) => block.type === 'text' && block.text === wakeText),
+    );
+    expect(persistedOpening).toMatchObject({ role: 'user', origin: 'external' });
+    const opening = w.provider.seen[0]!.messages.find(
+      (message) => message.role === 'user' && message.content.some((block) => block.type === 'text' && block.text === wakeText),
+    );
+    expect(opening).toMatchObject({ role: 'user', origin: 'external' });
   });
 });
 

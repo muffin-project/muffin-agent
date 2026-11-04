@@ -120,6 +120,7 @@ const SECRET_VALUE_SHAPES: readonly RegExp[] = [
   /\bsk-[A-Za-z0-9_-]{16,}\b/, // OpenAI-style
   /\bsk-ant-[A-Za-z0-9_-]{16,}\b/, // Anthropic
   /\bghp_[A-Za-z0-9]{20,}\b/, // GitHub PAT
+  /\btvly-[A-Za-z0-9_-]{8,}\b/, // Tavily API key prefix
   /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/, // Slack
   /\bAIza[A-Za-z0-9_-]{20,}\b/, // Google API
   /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\./, // JWT

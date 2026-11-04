@@ -183,7 +183,11 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'busy input: a message sent while a turn is alive is acknowledged at once and answered after it, and /stop interrupts the live turn (ADR-0054)',
   ),
   verde('B3', 'wait: a turn that asks to wait persists and RELEASES the process instead of holding it'),
-  verde('B4', 'todo: a plan written by one process is shown, unasked, to the next one in the session'),
+  verde('B4', 'todo: a plan written by one process is readable on demand by the next one in the session (ADR-0104)'),
+  verde(
+    'B9',
+    'todo: a resumed turn that drops granted plan rows settles continuable naming them, never answered — the completion gate, not a sentence',
+  ),
   verde('B5', 'resume: a process killed mid-turn leaves a row the next boot names and the gateway finishes'),
   // New (slice/job-fires, owner decision 2026-08-17): the fire-claim/identity
   // gap A1's own comment named as "owned elsewhere" — a real SIGKILL landed
@@ -288,7 +292,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   provataDalMeccanismo(
     'D14',
     "solo l'irreversibile chiede: un ask arriva se e solo se `reversible: 'no'` incontra una riga con `asksForIrreversible`, mai per il taint, la classe o la scorciatoia hardened",
-    "la regge `core/policy/solo-irreversibile.test.ts`, che enumera ogni `CapabilityDecl` spedita (18 tool più le due porte) per owner e membro di gruppo a taint 0-3 e fissa per nome chi chiede (`sys.shell`, `sys.process.kill`, `mcp.*`); un ask in più o in meno lo fa rosso, e le tre mutazioni della PR #456 (askAbove restituito, scorciatoia hardened restituita, `asksForIrreversible` su `reply`) lo hanno fatto rosso. Uno scenario di accettazione non aggiunge nulla: la domanda della riga è sul kernel, e il kernel è lo stesso oggetto per il binario e per il test",
+    "la regge `core/policy/solo-irreversibile.test.ts`, che enumera ogni `CapabilityDecl` spedita (18 tool più le due porte) per owner e membro di gruppo a taint 0-3 e fissa per nome chi chiede (`sys.shell`, `sys.process.kill`, ogni `mcp.<server>.<tool>` senza `readOnlyHint: true` — dal #770 la reversibilità MCP viene dalle `annotations` dichiarate, non più dal solo id server); un ask in più o in meno lo fa rosso, e le tre mutazioni della PR #456 (askAbove restituito, scorciatoia hardened restituita, `asksForIrreversible` su `reply`) lo hanno fatto rosso. Uno scenario di accettazione non aggiunge nulla: la domanda della riga è sul kernel, e il kernel è lo stesso oggetto per il binario e per il test",
   ),
   provataDalMeccanismo(
     'B19',

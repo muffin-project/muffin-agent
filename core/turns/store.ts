@@ -5,6 +5,13 @@ import { holderLiveness, mintHolderId } from '../lock/incarnation.js';
 import type { Principal, TrustTier } from '../policy/types.js';
 import { redactText } from '../tracing/redact.js';
 import {
+  type ActivityAllowance,
+  type ActivityLimits,
+  checkedAllowance,
+  isOwnerActivityAutonomous,
+  newActivityAllowance,
+} from './activity-allowance.js';
+import {
   type EffectMetadata,
   type EffectsFilter,
   type EffectsReport,
@@ -20,8 +27,13 @@ import { TURN_STORE_SCHEMA } from './schema.js';
  * module. Fresh-install DDL lives in `schema.ts`; versioned upgrades belong to
  * `core/db/migrate.ts`.
  */
-export type TurnStatus = 'runnable' | 'running' | 'waiting' | 'interrupted' | 'done' | 'continuable';
-
+export type TurnStatus =
+  | 'runnable'
+  | 'running'
+  | 'waiting'
+  | 'interrupted'
+  | 'done'
+  | 'continuable';
 
 /** How the turn itself ended. The `stopped` value of `TurnResult`, verbatim. */
 export type TurnOutcome = 'answered' | 'cap' | 'budget' | 'aborted' | 'error' | 'ask';
@@ -105,6 +117,7 @@ export type DeliveryState =
  *   leases are counted separately, in `lifetime.leases`.
  */
 export type TurnCounters = {
+  activityAllowance?: ActivityAllowance;
   iterations: number;
   recoveriesUsed: number;
   transportRetriesLeft: number;
@@ -186,19 +199,33 @@ export type ContinuableClass =
   | 'model_deadline'
   | 'turn_deadline'
   | 'active_model_budget'
-  | 'recovery_exhausted';
+  | 'recovery_exhausted'
+  | 'plan_open'
+  | 'activity_budget';
 
 /** Typed durable evidence carried by a `continuable` row. Never message content, never secrets. */
 export type ContinuableReason = {
   class: ContinuableClass;
   /** Which lease ended (0-based). */
   lease: number;
+  /** Granted plan rows still open behind a `plan_open` release: a count, never their text. */
+  openSteps?: number;
   /** Consecutive failed attempts behind the release, when the class counts them. */
   attempts?: number;
   /** Provider request ids behind the release, for the OpenRouter dashboard. */
   requestIds?: string[];
   /** What the ended lease had completed. */
   completed?: { toolCalls: number };
+  /**
+   * Consecutive leases ended by a slow provider (`model_deadline`,
+   * `model_stall`, `active_model_budget` — the last is how slow deaths read
+   * under default budgets, where the 120s active budget binds first) with
+   * zero new tool calls behind this release. Lets the next continuation
+   * refuse a fourth doomed lease instead of inviting another "riprendi"
+   * that burns context for nothing (#824 residue: measured 8 dead leases
+   * in a row, 0 calls, on a slow free route).
+   */
+  deadStreak?: number;
   at: string;
 };
 
@@ -294,16 +321,30 @@ function toLifetime(raw: string | null): LifetimeCounters {
     return {
       leases: Number.isFinite(parsed.leases) ? (parsed.leases as number) : 0,
       toolCallsMade: Number.isFinite(parsed.toolCallsMade) ? (parsed.toolCallsMade as number) : 0,
-      recoveriesUsed: Number.isFinite(parsed.recoveriesUsed) ? (parsed.recoveriesUsed as number) : 0,
-      transportRetriesUsed: Number.isFinite(parsed.transportRetriesUsed) ? (parsed.transportRetriesUsed as number) : 0,
+      recoveriesUsed: Number.isFinite(parsed.recoveriesUsed)
+        ? (parsed.recoveriesUsed as number)
+        : 0,
+      transportRetriesUsed: Number.isFinite(parsed.transportRetriesUsed)
+        ? (parsed.transportRetriesUsed as number)
+        : 0,
       usage: {
-        inputTokens: Number.isFinite(parsed.usage?.inputTokens) ? (parsed.usage?.inputTokens as number) : 0,
-        outputTokens: Number.isFinite(parsed.usage?.outputTokens) ? (parsed.usage?.outputTokens as number) : 0,
-        cacheReadTokens: Number.isFinite(parsed.usage?.cacheReadTokens) ? (parsed.usage?.cacheReadTokens as number) : 0,
-        cacheWriteTokens: Number.isFinite(parsed.usage?.cacheWriteTokens) ? (parsed.usage?.cacheWriteTokens as number) : 0,
+        inputTokens: Number.isFinite(parsed.usage?.inputTokens)
+          ? (parsed.usage?.inputTokens as number)
+          : 0,
+        outputTokens: Number.isFinite(parsed.usage?.outputTokens)
+          ? (parsed.usage?.outputTokens as number)
+          : 0,
+        cacheReadTokens: Number.isFinite(parsed.usage?.cacheReadTokens)
+          ? (parsed.usage?.cacheReadTokens as number)
+          : 0,
+        cacheWriteTokens: Number.isFinite(parsed.usage?.cacheWriteTokens)
+          ? (parsed.usage?.cacheWriteTokens as number)
+          : 0,
       },
       spentUsd: Number.isFinite(parsed.spentUsd) ? (parsed.spentUsd as number) : 0,
-      activeModelMs: Number.isFinite(parsed.activeModelMs) ? Math.max(0, parsed.activeModelMs as number) : 0,
+      activeModelMs: Number.isFinite(parsed.activeModelMs)
+        ? Math.max(0, parsed.activeModelMs as number)
+        : 0,
     };
   } catch {
     return base;
@@ -323,10 +364,17 @@ function toCounters(raw: string): TurnCounters {
   const parsed = JSON.parse(raw) as TurnCounters;
   return {
     ...parsed,
-    truncationsUsed: Number.isFinite(parsed.truncationsUsed) ? (parsed.truncationsUsed as number) : 0,
+    ...(parsed.activityAllowance !== undefined
+      ? { activityAllowance: checkedAllowance(parsed.activityAllowance) }
+      : {}),
+    truncationsUsed: Number.isFinite(parsed.truncationsUsed)
+      ? (parsed.truncationsUsed as number)
+      : 0,
     resumes: Number.isFinite(parsed.resumes) ? parsed.resumes : 0,
     contextBuilt: parsed.contextBuilt === true,
-    ...(Number.isFinite(parsed.activeModelMs) ? { activeModelMs: Math.max(0, parsed.activeModelMs as number) } : {}),
+    ...(Number.isFinite(parsed.activeModelMs)
+      ? { activeModelMs: Math.max(0, parsed.activeModelMs as number) }
+      : {}),
   };
 }
 
@@ -528,9 +576,12 @@ export type LeaseAuditRow = {
  */
 function sameSpeaker(a: Principal, b: Principal): boolean {
   if (a.kind !== b.kind) return false;
-  if (a.kind === 'owner' && b.kind === 'owner') return a.connector === b.connector && a.externalId === b.externalId;
+  if (a.kind === 'owner' && b.kind === 'owner')
+    return a.connector === b.connector && a.externalId === b.externalId;
   if (a.kind === 'member' && b.kind === 'member')
-    return a.connector === b.connector && a.externalId === b.externalId && a.tenantId === b.tenantId;
+    return (
+      a.connector === b.connector && a.externalId === b.externalId && a.tenantId === b.tenantId
+    );
   return a.kind === 'system' && b.kind === 'system' && a.source === b.source;
 }
 
@@ -600,6 +651,40 @@ export type NewTurn = NewTurnFields & {
  * differently disagree exactly around a crash.
  */
 export const TURN_STALE_AFTER_MS = 60 * 60 * 1000;
+
+/**
+ * How many execution leases a scheduler-bound turn may burn without an owner
+ * message before it stops being lane-pickable (#598 S2).
+ *
+ * Three, and it is a P0 autonomy policy rather than an invariant: a recurrence
+ * that always lands `continuable` must not spend for ever with no owner
+ * decision, so the lease that is still continuable past this count stays
+ * owner-continuable (`muffin resume` / "riprendi") instead of resuming on its
+ * own. Counts grants (`lease_index`), not crashes (`resumes` guards those):
+ * a scheduler turn never receives owner grants, so on these rows the two
+ * cannot diverge. Reversible; every lease inside it still runs under the
+ * profile and budget ceilings.
+ */
+export const MAX_AUTONOMOUS_LEASES = 3;
+
+/**
+ * Whether this row may resume without a new owner message (#598 S2).
+ *
+ * The single predicate behind the autonomous due-inclusion in `due()`: only
+ * a turn bound to a scheduled job (`job_id` set) running as the scheduler
+ * principal (`{ kind: 'system', source: 'scheduler' }`). Owner, member,
+ * consolidation and ratchet rows never satisfy this scheduler predicate.
+ * Owner activity renewal uses its own durable allowance predicate.
+ * Lives here, next to `due()`, so the SQL below and the lane-side
+ * double-check cannot drift apart.
+ */
+export function isSchedulerAutonomous(record: Pick<TurnRecord, 'principal' | 'jobId'>): boolean {
+  return (
+    record.jobId !== null &&
+    record.principal.kind === 'system' &&
+    record.principal.source === 'scheduler'
+  );
+}
 
 type Row = {
   id: string;
@@ -706,9 +791,80 @@ function serializzaCheckpoint(checkpoint: unknown): string {
   return redactText(JSON.stringify(checkpoint));
 }
 
+/**
+ * The lane's pickup query, with a legacy fallback for read-only diagnosis.
+ *
+ * The full predicate names `job_id`/`lease_index` (migrations 6/8); a
+ * read-only handle over a pre-migration table (`doctor` on an old home)
+ * cannot prepare it. The fallback is the three-producer query from before
+ * #598 S2 — and it loses nothing: those tables' `status` CHECK forbids
+ * `'continuable'` outright, so no row the fourth arm could return exists
+ * there. Writable callers migrate before constructing the store (see the
+ * constructor), so production never takes this road.
+ *
+ * The fourth arm is the autonomous one (#598 S2): a `continuable` turn bound
+ * to a scheduled job and running as the scheduler principal resumes without
+ * an owner message, through `grantContinuation` — never `claim` — on the
+ * lane's next beat. The predicate is `isSchedulerAutonomous`, spelled in SQL
+ * so `ORDER BY`/`LIMIT` still mean what they say; the lane re-checks the
+ * same helper in JS before granting. The fifth arm admits owner activities
+ * only with a valid remaining durable allowance and a recoverable reason.
+ * Legacy owner work still requires explicit continuation, as does a scheduler row past
+ * `MAX_AUTONOMOUS_LEASES` (the literal `3` in the query is that constant; a
+ * dedicated test pins the parity).
+ */
+function prepareDue(db: Database.Database): Database.Statement {
+  try {
+    return db.prepare(
+      `SELECT * FROM turns
+       WHERE status IN ('runnable','interrupted')
+          OR (status = 'waiting' AND wake_at IS NOT NULL AND wake_at <= @now)
+          OR (status = 'continuable' AND job_id IS NOT NULL
+              AND json_extract(principal, '$.kind') = 'system'
+              AND json_extract(principal, '$.source') = 'scheduler'
+              AND lease_index < 3)
+          OR (status = 'continuable' AND json_extract(principal, '$.kind') = 'owner'
+              AND json_extract(continuable_reason, '$.class') IN ('provider_empty','truncated','provider_transport','model_stall','model_deadline','turn_deadline','active_model_budget','recovery_exhausted','plan_open')
+              AND json_type(counters, '$.activityAllowance.maxModelCalls') = 'integer'
+              AND json_extract(counters, '$.activityAllowance.maxModelCalls') >= 1
+              AND json_extract(counters, '$.activityAllowance.maxModelCalls') <= 9007199254740991
+              AND json_type(counters, '$.activityAllowance.maxToolCalls') = 'integer'
+              AND json_extract(counters, '$.activityAllowance.maxToolCalls') >= 1
+              AND json_extract(counters, '$.activityAllowance.maxToolCalls') <= 9007199254740991
+              AND json_type(counters, '$.activityAllowance.maxAutomaticContinuations') = 'integer'
+              AND json_extract(counters, '$.activityAllowance.maxAutomaticContinuations') >= 0
+              AND json_extract(counters, '$.activityAllowance.maxAutomaticContinuations') <= 9007199254740991
+              AND json_type(counters, '$.activityAllowance.modelCallsUsed') = 'integer'
+              AND json_extract(counters, '$.activityAllowance.modelCallsUsed') >= 0
+              AND json_extract(counters, '$.activityAllowance.modelCallsUsed') <= 9007199254740991
+              AND json_type(counters, '$.activityAllowance.toolCallsUsed') = 'integer'
+              AND json_extract(counters, '$.activityAllowance.toolCallsUsed') >= 0
+              AND json_extract(counters, '$.activityAllowance.toolCallsUsed') <= 9007199254740991
+              AND json_type(counters, '$.activityAllowance.automaticContinuationsUsed') = 'integer'
+              AND json_extract(counters, '$.activityAllowance.automaticContinuationsUsed') >= 0
+              AND json_extract(counters, '$.activityAllowance.automaticContinuationsUsed') <= 9007199254740991
+              AND json_extract(counters, '$.activityAllowance.modelCallsUsed') < json_extract(counters, '$.activityAllowance.maxModelCalls')
+              AND json_extract(counters, '$.activityAllowance.toolCallsUsed') < json_extract(counters, '$.activityAllowance.maxToolCalls')
+              AND json_extract(counters, '$.activityAllowance.automaticContinuationsUsed') < json_extract(counters, '$.activityAllowance.maxAutomaticContinuations'))
+       ORDER BY updated_at LIMIT @limit`,
+    );
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('no such column')) {
+      return db.prepare(
+        `SELECT * FROM turns
+         WHERE status IN ('runnable','interrupted')
+            OR (status = 'waiting' AND wake_at IS NOT NULL AND wake_at <= @now)
+         ORDER BY updated_at LIMIT @limit`,
+      );
+    }
+    throw error;
+  }
+}
+
 export class TurnStore {
   private readonly insertStmt: Database.Statement | null;
   private readonly getStmt: Database.Statement;
+  private readonly latestActiveOfSessionStmt: Database.Statement;
   private readonly checkpointStmt: Database.Statement;
   private readonly deliveryStmt: Database.Statement;
   private readonly intentStmt: Database.Statement;
@@ -786,13 +942,28 @@ export class TurnStore {
     // `@claimToken` travels with `@pid`: a row created already `running` (a
     // fresh `runTurn`) needs a token from the start, exactly as much as one
     // `claim()` hands the lane later — see `insert`.
-    this.insertStmt = options.readOnly === true ? null : db.prepare(
-      `INSERT INTO turns (id, principal, tenant, surface, session_id, input_text, model, messages, taint, counters,
+    this.insertStmt =
+      options.readOnly === true
+        ? null
+        : db.prepare(
+            `INSERT INTO turns (id, principal, tenant, surface, session_id, input_text, model, messages, taint, counters,
                           reply_to, job_id, status, claimed_by, claimed_at, claim_token, delivery, created_at, updated_at)
        VALUES (@id, @principal, @tenant, @surface, @sessionId, @inputText, @model, @messages, @taint, @counters,
                @replyTo, @jobId, @status, @pid, @claimedAt, @claimToken, @delivery, @now, @now)`,
-    );
+          );
     this.getStmt = db.prepare(`SELECT * FROM turns WHERE id = ?`);
+    /**
+     * L'ultimo lavoro attivo di una conversazione, per la delega (issue #740).
+     *
+     * Attivo = non finito: in coda, in corso, sospeso, interrotto o
+     * continuabile. Un lavoro `done` è finito e non si delega più — la delega
+     * vale per il lavoro a cui la si dà, non per «questa chat da ora in poi».
+     */
+    this.latestActiveOfSessionStmt = db.prepare(
+      `SELECT * FROM turns
+        WHERE session_id = ? AND status IN ('runnable','running','waiting','interrupted','continuable')
+        ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+    );
     // Fenced on `claim_token` (P19's second finding): a checkpoint from a
     // process that has been stolen from must change zero rows, not overwrite
     // whatever the new holder has already written. `changes` is read back by
@@ -959,21 +1130,9 @@ export class TurnStore {
                         claimed_by = NULL, claim_token = NULL, updated_at = @now
        WHERE id = @id AND status = 'running' AND claim_token = @claimToken`,
     );
-    /**
-     * What the lane may pick up, oldest first.
-     *
-     * Three producers in one query, because they are one queue: a turn a
-     * surface created and did not run (`runnable`), a turn whose deadline has
-     * arrived (`waiting` past `wake_at`), and a turn a dead process was holding
-     * (`interrupted`). `idx_turns_due` covers the first two; the third is the
-     * one `reclaim` writes, and until this slice nothing ever read it back.
-     */
-    this.dueStmt = db.prepare(
-      `SELECT * FROM turns
-       WHERE status IN ('runnable','interrupted')
-          OR (status = 'waiting' AND wake_at IS NOT NULL AND wake_at <= @now)
-       ORDER BY updated_at LIMIT @limit`,
-    );
+    // The lane's pickup query — see `prepareDue` (module scope) for the
+    // predicate and its legacy fallback.
+    this.dueStmt = prepareDue(db);
     /** Suspended turns with an event barrier — the rows whose predicate is evaluated. */
     this.armedStmt = db.prepare(
       `SELECT * FROM turns WHERE status = 'waiting' AND wait_for IS NOT NULL ORDER BY updated_at LIMIT @limit`,
@@ -1167,11 +1326,13 @@ export class TurnStore {
 
   private insert(spec: NewTurn, status: TurnStatus, pid: number | null): TurnRecord {
     const now = this.clock().toISOString();
-    const providerLease = spec.providerLease ??
+    const providerLease =
+      spec.providerLease ??
       (typeof spec.model === 'string' && 'messages' in spec
         ? { model: spec.model, checkpoint: spec.messages }
         : undefined);
-    if (providerLease === undefined) throw new Error('new turn requires an opaque providerLease checkpoint');
+    if (providerLease === undefined)
+      throw new Error('new turn requires an opaque providerLease checkpoint');
     // A row created already `running` needs a fencing token from the start,
     // for the same reason `claim()` mints one below: `checkpoint`, the very
     // first one, is only a few lines away. `enqueue` (pid `null`) gets none —
@@ -1284,24 +1445,31 @@ export class TurnStore {
     },
     claimToken: string | null,
   ): boolean {
-    return (
-      this.suspendStmt.run({
-        id,
-        messages: serializzaCheckpoint(patch.messages),
-        taint: patch.taint,
-        counters: JSON.stringify(patch.counters),
-        wakeAt: patch.wakeAt,
-        waitFor: patch.waitFor,
-        claimToken,
-        now: this.clock().toISOString(),
-      }).changes === 1
-    );
+    return this.db.transaction(
+      () =>
+        this.suspendStmt.run({
+          id,
+          messages: serializzaCheckpoint(patch.messages),
+          taint: patch.taint,
+          counters: JSON.stringify(this.preserveActivity(id, patch.counters)),
+          wakeAt: patch.wakeAt,
+          waitFor: patch.waitFor,
+          claimToken,
+          now: this.clock().toISOString(),
+        }).changes === 1,
+    )();
   }
 
-  /** Rows the lane may pick up now: enqueued, expired, or left by a dead process.
+  /** Rows the lane may pick up now: enqueued, expired, left by a dead process,
+   * or scheduler-bound continuable work owed an autonomous lease (#598 S2).
    *
-   * `continuable` is deliberately absent: no automatic pickup, ever — only an
-   * explicit owner continuation mints the next lease (`grantContinuation`).
+   * Owner continuable work is included only when its persisted activity
+   * allowance and release reason permit automatic renewal. Legacy owner
+   * work still requires explicit continuation
+   * (`grantContinuation`). The S2 exception is exactly `isSchedulerAutonomous`
+   * rows under `MAX_AUTONOMOUS_LEASES` (see `dueStmt`): a fired job's session
+   * has no owner conversing in it, so "wait for «riprendi»" there means wait
+   * for ever.
    */
   due(now: Date = this.clock(), limit = 20): TurnRecord[] {
     return (this.dueStmt.all({ now: now.toISOString(), limit }) as Row[]).map(toRecord);
@@ -1350,14 +1518,19 @@ export class TurnStore {
         | { startedAt: string; allowance: number | null }
         | undefined;
       const startedAt = open?.startedAt ?? before.created_at;
-      const used = open?.allowance == null ? null : Math.max(0, open.allowance - patch.counters.transportRetriesLeft);
-      const lifetime = JSON.stringify(foldLifetime(toLifetime(before.lifetime), patch.counters, used ?? 0));
+      const used =
+        open?.allowance == null
+          ? null
+          : Math.max(0, open.allowance - patch.counters.transportRetriesLeft);
+      const lifetime = JSON.stringify(
+        foldLifetime(toLifetime(before.lifetime), patch.counters, used ?? 0),
+      );
       const r = this.leaseArea().release.run({
         id,
         reason: JSON.stringify(patch.reason),
         messages: serializzaCheckpoint(patch.messages),
         taint: patch.taint,
-        counters: JSON.stringify(patch.counters),
+        counters: JSON.stringify(this.preserveActivity(id, patch.counters)),
         lifetime,
         claimToken,
         now: at,
@@ -1371,7 +1544,7 @@ export class TurnStore {
         now: at,
         outcome: patch.reason.class,
         harness: redactText(JSON.stringify(patch.harnessMessages ?? [])),
-        counters: JSON.stringify(patch.counters),
+        counters: JSON.stringify(this.preserveActivity(id, patch.counters)),
         transportUsed: used,
         delivery: before.delivery,
       });
@@ -1390,7 +1563,9 @@ export class TurnStore {
    * time, so a grant that also folded would count it twice. The caller
    * (`agent/loop/continuation.ts`) owns the reset contract — fresh
    * lease-local counters, evidence filtered, owner message appended — and
-   * this method persists that decision; it derives nothing. Returns `null`
+   * this method preserves durable activity consumption independently of the
+   * caller's lease counters. An automatic grant consumes one renewal; only
+   * an explicit trusted extension can change the ceiling. Returns `null`
    * when another process won the race, so two processes can never hold the
    * same continuation.
    */
@@ -1401,6 +1576,8 @@ export class TurnStore {
       taint: TrustTier;
       counters: TurnCounters;
       newLeaseStartedAt: string;
+      automatic?: boolean;
+      activityExtension?: ActivityLimits;
     },
     pid: number = process.pid,
   ): TurnRecord | null {
@@ -1410,7 +1587,34 @@ export class TurnStore {
     const tx = this.db.transaction(() => {
       const before = this.getStmt.get(id) as Row | undefined;
       if (before === undefined || before.status !== 'continuable') return;
-      const leaseIndex = (Number.isFinite(before.lease_index) ? (before.lease_index as number) : 0) + 1;
+      let allowance = toCounters(before.counters).activityAllowance;
+      if (patch.automatic === true) {
+        if (
+          allowance === undefined ||
+          patch.activityExtension !== undefined ||
+          !isOwnerActivityAutonomous(toRecord(before))
+        )
+          return;
+        allowance = {
+          ...allowance,
+          automaticContinuationsUsed: allowance.automaticContinuationsUsed + 1,
+        };
+      }
+      if (patch.activityExtension !== undefined) {
+        const extension = newActivityAllowance(patch.activityExtension);
+        const used = allowance ?? extension;
+        allowance = checkedAllowance({
+          ...used,
+          maxModelCalls: used.modelCallsUsed + extension.maxModelCalls,
+          maxToolCalls: used.toolCallsUsed + extension.maxToolCalls,
+          maxAutomaticContinuations:
+            used.automaticContinuationsUsed + extension.maxAutomaticContinuations,
+        });
+      }
+      const counters = this.preserveActivity(id, patch.counters);
+      if (allowance !== undefined) counters.activityAllowance = allowance;
+      const leaseIndex =
+        (Number.isFinite(before.lease_index) ? (before.lease_index as number) : 0) + 1;
       const r = this.leaseArea().grant.run({
         id,
         pid,
@@ -1418,7 +1622,7 @@ export class TurnStore {
         now: at,
         messages: serializzaCheckpoint(patch.messages),
         taint: patch.taint,
-        counters: JSON.stringify(patch.counters),
+        counters: JSON.stringify(counters),
         leaseIndex,
       });
       if (r.changes !== 1) return;
@@ -1467,8 +1671,9 @@ export class TurnStore {
       startedAt: r.startedAt,
       endedAt: r.endedAt,
       outcome: r.outcome,
-      harnessMessages: r.harnessMessages === null ? [] : (JSON.parse(r.harnessMessages) as unknown[]),
-      counters: r.counters === null ? null : (JSON.parse(r.counters) as TurnCounters),
+      harnessMessages:
+        r.harnessMessages === null ? [] : (JSON.parse(r.harnessMessages) as unknown[]),
+      counters: r.counters === null ? null : toCounters(r.counters),
       transportUsed: r.transportUsed,
       transportAllowance: r.transportAllowance,
       delivery: r.delivery as DeliveryState | null,
@@ -1514,7 +1719,12 @@ export class TurnStore {
     sessionId: string,
     principal: Principal,
     since: string,
-  ): { id: string; updatedAt: string; reason: ContinuableReason | null; inputText: string | null }[] {
+  ): {
+    id: string;
+    updatedAt: string;
+    reason: ContinuableReason | null;
+    inputText: string | null;
+  }[] {
     const rows = this.leaseArea().continuable.all({ session: sessionId, since }) as {
       id: string;
       principal: string;
@@ -1522,7 +1732,12 @@ export class TurnStore {
       continuable_reason: string | null;
       input_text: string | null;
     }[];
-    const out: { id: string; updatedAt: string; reason: ContinuableReason | null; inputText: string | null }[] = [];
+    const out: {
+      id: string;
+      updatedAt: string;
+      reason: ContinuableReason | null;
+      inputText: string | null;
+    }[] = [];
     for (const row of rows) {
       let stored: Principal;
       try {
@@ -1556,7 +1771,10 @@ export class TurnStore {
    * "reply with the number" fail whenever the gateway restarted between the
    * question and the answer, and the owner restarts his often.
    */
-  setContinuationCandidates(turnId: string, candidates: readonly StoredContinuationCandidate[]): void {
+  setContinuationCandidates(
+    turnId: string,
+    candidates: readonly StoredContinuationCandidate[],
+  ): void {
     this.leaseArea().setCandidates.run({ id: turnId, json: JSON.stringify(candidates) });
   }
 
@@ -1650,6 +1868,45 @@ export class TurnStore {
   }
 
   /**
+   * The job's delivery policy for a lane-resumed turn (#598 silent-resume).
+   *
+   * Read-only (`SELECT`), never a write: the lane consults the same `jobs`
+   * row the scheduler's S4 silent branch already reads, on the same database
+   * handle that backs both stores in production and in tests. A per-turn row
+   * never overrides it — there is no per-turn delivery column (issue #844
+   * owns that coordination, so this stays a job-level read).
+   *
+   * Fail-open toward speaking: a missing job, a missing table/column, or any
+   * value that is not exactly `'silent'` reads `'deliver'` — the default that
+   * keeps every legacy row and every existing test byte-for-byte as today.
+   * Only an explicit `'silent'` silences, and only for `answered` (the lane
+   * decides that half; see `agent/turn-lane.ts`).
+   */
+  jobDelivery(jobId: string): 'deliver' | 'silent' {
+    try {
+      const row = this.db.prepare(`SELECT delivery FROM jobs WHERE id = ?`).get(jobId) as
+        | { delivery: string | null }
+        | undefined;
+      return row?.delivery === 'silent' ? 'silent' : 'deliver';
+    } catch {
+      // No jobs table (a turns-only handle), a pre-S4 database without the
+      // column, or any other read failure: speak, as today.
+      return 'deliver';
+    }
+  }
+
+  /**
+   * L'ultimo lavoro non finito di una conversazione — vedi
+   * `latestActiveOfSessionStmt`. È il lavoro a cui `/yolo` e soci si legano:
+   * quello che l'owner vede in flight (o in attesa di continuazione), mai uno
+   * `done`.
+   */
+  latestActiveOfSession(sessionId: string): TurnRecord | null {
+    const row = this.latestActiveOfSessionStmt.get(sessionId) as Row | undefined;
+    return row ? toRecord(row) : null;
+  }
+
+  /**
    * The taint each of these rows is at, keyed by id — which is also `traceId`
    * (`NewTurn.id`'s own docstring: "one identity, so 'why' is a join").
    *
@@ -1674,6 +1931,40 @@ export class TurnStore {
     return out;
   }
 
+  /** Reservations are fenced and persisted before a model request or tool starts. */
+  reserveActivity(id: string, claimToken: string, resource: 'model' | 'tool'): boolean {
+    return this.db.transaction(() => {
+      const row = this.getStmt.get(id) as Row | undefined;
+      if (row === undefined || row.status !== 'running' || row.claim_token !== claimToken)
+        return false;
+      const counters = toCounters(row.counters);
+      const a = counters.activityAllowance;
+      if (a === undefined) return true;
+      const used = resource === 'model' ? 'modelCallsUsed' : 'toolCallsUsed';
+      const ceiling = resource === 'model' ? 'maxModelCalls' : 'maxToolCalls';
+      if (a[used] >= a[ceiling]) return false;
+      counters.activityAllowance = { ...a, [used]: a[used] + 1 };
+      return (
+        this.db
+          .prepare(
+            "UPDATE turns SET counters = ? WHERE id = ? AND status = 'running' AND claim_token = ?",
+          )
+          .run(JSON.stringify(counters), id, claimToken).changes === 1
+      );
+    })();
+  }
+
+  activityAllowance(id: string): ActivityAllowance | null {
+    const row = this.getStmt.get(id) as Row | undefined;
+    return row === undefined ? null : (toCounters(row.counters).activityAllowance ?? null);
+  }
+
+  private preserveActivity(id: string, counters: TurnCounters): TurnCounters {
+    const { activityAllowance: _callerAllowance, ...rest } = counters;
+    const allowance = this.activityAllowance(id);
+    return { ...rest, ...(allowance === null ? {} : { activityAllowance: allowance }) };
+  }
+
   /**
    * The state at a suspension point: transcript, taint and counters together.
    *
@@ -1688,16 +1979,17 @@ export class TurnStore {
     patch: { messages: unknown; taint: TrustTier; counters: TurnCounters },
     claimToken: string | null,
   ): boolean {
-    return (
-      this.checkpointStmt.run({
-        id,
-        messages: serializzaCheckpoint(patch.messages),
-        taint: patch.taint,
-        counters: JSON.stringify(patch.counters),
-        claimToken,
-        now: this.clock().toISOString(),
-      }).changes === 1
-    );
+    return this.db.transaction(
+      () =>
+        this.checkpointStmt.run({
+          id,
+          messages: serializzaCheckpoint(patch.messages),
+          taint: patch.taint,
+          counters: JSON.stringify(this.preserveActivity(id, patch.counters)),
+          claimToken,
+          now: this.clock().toISOString(),
+        }).changes === 1,
+    )();
   }
 
   /**
@@ -1744,7 +2036,9 @@ export class TurnStore {
               | undefined)
           : undefined;
       const used =
-        open?.allowance == null ? null : Math.max(0, open.allowance - end.counters.transportRetriesLeft);
+        open?.allowance == null
+          ? null
+          : Math.max(0, open.allowance - end.counters.transportRetriesLeft);
       const lifetime =
         started === true
           ? JSON.stringify(foldLifetime(toLifetime(before.lifetime), end.counters, used ?? 0))
@@ -1754,7 +2048,7 @@ export class TurnStore {
         outcome: end.outcome,
         messages: serializzaCheckpoint(end.messages),
         taint: end.taint,
-        counters: JSON.stringify(end.counters),
+        counters: JSON.stringify(this.preserveActivity(id, end.counters)),
         lifetime,
         claimToken,
         now: at,
@@ -1768,7 +2062,7 @@ export class TurnStore {
         now: at,
         outcome: end.outcome,
         harness: redactText(JSON.stringify(end.harnessMessages ?? [])),
-        counters: JSON.stringify(end.counters),
+        counters: JSON.stringify(this.preserveActivity(id, end.counters)),
         transportUsed: used,
         delivery: before.delivery,
       });
@@ -2126,7 +2420,11 @@ export class TurnStore {
     const continuableExpired =
       options.continuableSince === undefined
         ? null
-        : (this.leaseArea().continuableExpired.get({ since: options.continuableSince }) as { n: number }).n;
+        : (
+            this.leaseArea().continuableExpired.get({ since: options.continuableSince }) as {
+              n: number;
+            }
+          ).n;
     const undeliverable = this.undeliverableCountStmt.get() as { n: number };
     return {
       total,
@@ -2137,7 +2435,11 @@ export class TurnStore {
       // Same reasoning: a lease that ended recoverably last month is still
       // continuable work until the owner says otherwise or the resolver TTL
       // excludes it.
-      continuable: { count: continuable.n, oldest: continuable.oldest, expired: continuableExpired },
+      continuable: {
+        count: continuable.n,
+        oldest: continuable.oldest,
+        expired: continuableExpired,
+      },
       // Same reasoning, same absence of a window: a reply nobody could send
       // last month is still a reply nobody sent.
       undeliverable: { count: undeliverable.n },
@@ -2229,7 +2531,9 @@ export function readUndelivered(
   } catch {
     return null;
   }
-  return new TurnStore(db, () => new Date(), holderLiveness(db), { readOnly: true }).undelivered({ windowMs });
+  return new TurnStore(db, () => new Date(), holderLiveness(db), { readOnly: true }).undelivered({
+    windowMs,
+  });
 }
 
 /**

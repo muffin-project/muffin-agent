@@ -20,22 +20,34 @@ import { ensurePrivateDir, tightenPrivateFile } from '../config/private-fs.js';
  */
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+const CREDENTIAL_IN_ARGV =
+  'un valore con la forma di una credenziale non può stare in argv; registra il segreto e passalo nel relativo --env come secret://nome';
 
 const ServerEntrySchema = z.object({
-  command: z.string().min(1),
-  args: z.array(z.string()).default([]),
+  command: z
+    .string()
+    .min(1)
+    .refine((value) => !looksLikeSecretValue(value), CREDENTIAL_IN_ARGV),
+  args: z
+    .array(z.string().refine((value) => !looksLikeSecretValue(value), CREDENTIAL_IN_ARGV))
+    .default([]),
   /**
    * Environment passed to the server, explicit and empty by default. The SDK
    * adds only its own safelist (PATH, HOME, …) — the host process env, API key
    * included, never crosses.
    *
-   * **Solo riferimenti `secret://nome`, mai valori** (direttiva owner
-   * 2026-08-18). La regola vive qui, nello schema, e non solo nel parser di
-   * `muffin mcp add`: un `mcp.json` scritto a mano con un token letterale lo
-   * consegnerebbe al figlio senza che nessuno obietti, e la garanzia
-   * dipenderebbe dal fatto che si passi dalla CLI. Un valore che non è un
-   * segreto — `LANG=C`, un percorso, un flag — non appartiene all'env di un
-   * server MCP: sta negli `args`, dove è visibile per quello che è.
+   * Le credenziali viaggiano come riferimenti `secret://nome`, risolti solo al
+   * momento di avviare il figlio. I valori letterali non sensibili
+   * (`LANG=C`, un percorso, un flag) restano permessi in `env`. Lo schema
+   * rifiuta i valori che corrispondono alle forme note a
+   * `looksLikeSecretValue`, anche in un `mcp.json` scritto a mano: è una rete
+   * best-effort (classe 3), non una garanzia contro token personalizzati o
+   * stringhe opache. Non passare segreti letterali in `env`, `command` o
+   * `args`; la protezione strutturale vale per i valori già nel backend
+   * segreto, passati come riferimenti.
+   * `command` and `args` are also checked for credential-shaped values: they
+   * become child-process argv and are stored in this registry. This is the
+   * class-3 shape detector, not a guarantee for arbitrary custom credentials.
    */
   env: z
     .record(
@@ -100,13 +112,21 @@ export function loadMcpRegistry(home: string): McpRegistry {
 
 export function saveMcpRegistry(registry: McpRegistry, home: string): void {
   const file = registryPath(home);
+  const parsed = RegistryFileSchema.safeParse(registry);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    throw new McpConfigError(
+      `${file} is invalid — ${issue?.path.join('.') ?? '(root)'}: ${issue?.message ?? 'unparseable'}`,
+      'rimuovi i valori con forma di credenziale dagli argomenti e usa riferimenti secret:// solo nel campo env',
+    );
+  }
   if (!ensurePrivateDir(paths(home).home)) {
     throw new McpConfigError(
       `non posso scrivere ${file}: la directory privata non è stata stabilita (symlink sulla catena)`,
       'rimuovi il symlink e riprova',
     );
   }
-  writeFileSync(file, `${JSON.stringify(registry, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  writeFileSync(file, `${JSON.stringify(parsed.data, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   tightenPrivateFile(file);
 }
 
@@ -115,18 +135,68 @@ export type McpToolDef = {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  /**
+   * The protocol's own `annotations` (`ToolAnnotations` in the SDK: `title`,
+   * `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`, all
+   * optional). Retained from `listTools` so the reversible mapping below reads
+   * a declared value, not a guess — and hashed with the rest, because an
+   * annotation flip is a rug-pull with the same standing as a rewritten
+   * description: a server approved as read-only that later declares itself
+   * destructive (or the reverse) suspends until the owner re-approves.
+   */
+  annotations?: McpToolAnnotations;
 };
+
+/**
+ * The five protocol hint fields, nothing else. Unknown keys from the wire are
+ * dropped at the boundary (`connect.ts`), so a server cannot smuggle hash
+ * volatility — or meaning — through a field this build never reviewed.
+ */
+export type McpToolAnnotations = {
+  title?: string;
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
+};
+
+/**
+ * ADR-0074 punto 5: the annotations the MCP server declares are the authority
+ * for the reversible flag. `readOnlyHint: true` is `reversible: 'yes'`; a
+ * `destructiveHint` or absent annotations are `'no'` and ask (row `external`).
+ *
+ * Two deliberate fail-closed readings where the ADR is silent:
+ * - contradictory hints (`readOnlyHint` AND `destructiveHint` true) are `'no'`:
+ *   the server disagrees with itself, and the direction that asks is the one
+ *   that survives a lie;
+ * - `readOnlyHint: false` is `'no'`, not `'yes'`: only an explicit `true`
+ *   lifts the ask, the default is today's ask-everything, byte for byte.
+ *
+ * The SDK itself warns that hints are "not guaranteed to provide a faithful
+ * description" and that clients should never decide on them from untrusted
+ * servers. They are not trusted here either: they are *pinned* — an
+ * annotation change breaks the tool hash and suspends the server — so the
+ * authority is the owner's approval of that exact declaration, not the
+ * server's live word.
+ */
+export function reversibleFromAnnotations(annotations?: McpToolAnnotations): 'yes' | 'no' {
+  if (annotations?.readOnlyHint === true && annotations?.destructiveHint !== true) return 'yes';
+  return 'no';
+}
 
 /**
  * sha256 over a canonical serialization: object keys sorted at every level, so
  * a server that merely re-orders its schema fields is not "changed". Anything
- * else — a word in the description, a new argument, a widened type — is.
+ * else — a word in the description, a new argument, a widened type, a flipped
+ * hint — is. Absent annotations hash as `{}`: the pin covers the authority,
+ * not just the prose.
  */
 export function toolHash(tool: McpToolDef): string {
   const canonical = stableStringify({
     name: tool.name,
     description: tool.description,
     inputSchema: tool.inputSchema,
+    annotations: tool.annotations ?? {},
   });
   return createHash('sha256').update(canonical).digest('hex');
 }

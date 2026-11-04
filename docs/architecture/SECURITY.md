@@ -308,6 +308,39 @@ only place that knows which part of the turn raised the level. That line is
 context and never the cause: since ADR-0074 the tier produces no `ask` on the
 host row, and since ADR-0075 it produces no `deny` there either.
 
+### Who may consume an `ask` without interrupting: owner delegation (ADR-0095)
+
+An `ask` is owner-approvable by construction — the kernel said so when it
+asked instead of refusing. The owner can pre-consume the asks of **one piece
+of work** (`/yolo`), recorded per turn row in `delegation_modes`, resolved in
+the loop's `ask` branch after already-given answers and before any surface is
+asked. What delegation never does: turn a deterministic `deny` into an allow
+(the `deny` branch returns before the delegation hook), approve across works,
+sessions or tenants (a new work is a new row and inherits nothing), or let the
+model enable itself (only owner commands write the table; there is no
+capability for it). Every consumed ask still passes through the single
+`approvals` queue — one-use, withdrawn on turn end — marked
+`decided_by: 'delegation'`. `/manual` revokes from the next ask; `/auto`
+records the posture but keeps asking until a calibrated semantic judgment
+exists, so an uncalibrated envelope cannot silently execute.
+
+### What leaves the machine for a shadow judgment (ADR-0096)
+
+A second external destination exists only when the owner configures it
+(`judgment` section + `secret://` key; absent by default, and then no byte
+leaves and no row is written). When active, every owner-ask of the shell
+family is judged **beside** the question, never instead of it: the judgment
+cannot consume an ask, touch the kernel, or change what the owner decides.
+What is sent is the compact action envelope — the owner request, the
+capability and its effect row, the command/resource, the model's own
+description, taint, principal and the kernel's reason for asking — never the
+conversation, never the repository, and **redacted** with the same
+`redactText` the tracing layer uses, so a token riding inside a command
+leaves as `«redacted:N»`. The API key travels in the header and nowhere
+else. Every judgment — success, timeout, provider failure — lands in the
+durable `ask_judgments` queue joined to the approval and the effect outcome,
+because a failed judgment is calibration data too, not an incident.
+
 ### The tenant dimension: what a room may do (ADR-0073, 2026-09-06)
 
 Until 2026-09-06 the kernel had one answer to *may a remote tenant reach this
@@ -587,9 +620,9 @@ filesystem tools, and the boundary is enforced twice — the workspace is a
 sibling directory, and the home is denied outright whatever the per-call scope
 says.
 
-Read access to the home is a separate, still-open question: a contained command
-can read `muffin.db` and the session log, and what leaves is governed by taint
-and egress rather than by this boundary.
+Read access outside the turn's scope is denied by the sandbox (§9.2); what
+the scope legitimately contains still reaches the model, so disclosure of
+in-scope bytes is governed by taint and egress rather than by this boundary.
 
 ### 9.1 Two shell lanes, and what each one promises
 
@@ -597,9 +630,9 @@ Since point 4 of the *ask only for the irreversible* decision (`docs/decisions/0
 line between them is what the sandbox can be made to guarantee rather than a
 judgement about how dangerous commands are.
 
-`sys.shell` (`shell_run`) is the **read-only lane**: the whole host filesystem is
-readable minus a finite deny-read list (not just the project — §9.2 names what
-that costs; narrowing it to workspace + justified paths is #734, non-P0), writes are confined to a scratch directory this
+`sys.shell` (`shell_run`) is the **read-only lane**: reads are allow-scoped to
+the turn's workspace, the session scratch and explicit system paths (§9.2),
+writes are confined to a scratch directory this
 process creates under the system temp dir and removes when the session ends, and
 direct IP networking is disabled. On Linux the AF_UNIX seccomp filter is
 requested and behaviorally verified (three-legged self-test: an unsandboxed
@@ -613,8 +646,8 @@ that no command ever runs unfiltered. The Muffin gateway
 socket and pointer are additionally deny-listed, and the long-home fallback is
 covered by the composed Linux test (see §9.3). It declares `risk: 'high'`:
 although filesystem writes stay in scratch and direct IP networking is
-disabled, a contained command still reads a broad host filesystem and spends
-the host's resources.
+disabled, a contained command still reads workspace bytes that reach the model
+and spends the host's resources.
 `risk` governs safe mode and the budget, not the ask. Since ADR-0091
 (2026-09-22, on the Linux measurement in §9.2 / issue #645), it also declares
 `reversible: 'no'`: what a command reads reaches the model and a disclosure
@@ -624,8 +657,8 @@ without a recorded outcome, recovery reports “maybe done” instead of repeati
 a possible local-service mutation. The write-and-no-IP-network halves are tested
 against a live sandbox in `core/sandbox/confine-sola-lettura.test.ts`, on Linux
 under `bwrap` in the GitHub Actions `verifica` job and on macOS under seatbelt;
-the ask is the gate over the read half the sandbox cannot bound (pinned srt
-0.0.71 has no read allowlist — §9.2).
+the ask remains the gate over what scoping cannot bound: which of the
+in-scope bytes the owner lets the model see.
 
 `sys.shell.write` (`shell_run_write`) is the **writing lane**: the workspace is
 its write scope, it keeps `reversible: 'no'` and `risk: 'high'`, and it asks
@@ -672,12 +705,13 @@ Three properties of this split are load-bearing:
   an ACL granting `add_file` and `delete_child`. The AF_UNIX filter itself is
   measured on the production-side Linux runner (evidence
   `docs/evidence/af-unix-seccomp-2026-09-26.md`).
-  And a command still spends the host's CPU, memory and
-  file descriptors. So `sys.shell` stays on the `host` effect row rather than
-  moving to `context`: "no writes outside the scratch, no IP network and no
-  reachable local socket" is the
-  claim; "no effect of any kind on the host" is not — and since ADR-0091 the
-  ask covers the half the boundary cannot: the read.
+   And a command still spends the host's CPU, memory and
+   file descriptors. So `sys.shell` stays on the `host` effect row rather than
+   moving to `context`: "no writes outside the scratch, no IP network and no
+   reachable local socket" is the
+   claim; "no effect of any kind on the host" is not — and the ask stays as
+   the second lock over disclosure: scoping bounds *what* a command can read,
+   the ask governs *whether* it may run at all.
 
 Direct IP networking is disabled on **both** lanes today, although that decision describes the
 writing one as writing *or* reaching the network. Opening the network there would route
@@ -686,27 +720,51 @@ not consult it, and that is a separate decision from this split. The current
 state is asserted, not assumed: the same live containment test checks the
 writing lane cannot reach a listening host socket either.
 
-### 9.2 Shell read scope and sandbox patch posture (2026-09-21)
+### 9.2 Shell read scope and sandbox patch posture (2026-09-21, scope closed 2026-10-16)
 
-Reads are allow-by-default: `--ro-bind / /` minus a finite `denyRead`.
-Applications, credential stores and private folders appear continuously, so the
-list protects known secrets without ever expressing "this turn may inspect the
-project, not the whole machine". Stdout reaches the model (fenced, `DISK_TIER`),
-so an injected `cat ~/…` discloses to the provider. Writes stay in scratch,
-direct IP networking is disabled, and on Linux `socket(AF_UNIX, …)` is refused
-by the verified seccomp filter as described above. The exposure is documented in
-executable form by an
-`it.fails` canary in `confine-sola-lettura.test.ts` that must be flipped to a
-plain assertion the day reads become allow-scoped. Measured on Linux
-2026-09-22 (evidence §5): a canary outside the workspace and outside the
-deny-list is readable through production `runReadOnly` — `~`, `/var/tmp` and
-host disk all in scope — while the deny itself holds. The gating half of the
-question closed the same day (ADR-0091): `sys.shell` is `reversible: 'no'` and
-asks the owner every time, so whole-host visibility is no longer an
-*unapproved* low-risk capability. The allow-scoped read surface (workspace,
-session scratch, explicit safe system paths) remains the preferred fix and is
-not constructible on pinned srt 0.0.71 — it has no read allowlist — so it
-stays a reversal condition of ADR-0091 rather than a silent default.
+Reads are allow-scoped since the `read-scoped-workspace` slice (#645): every
+sandboxed call carries `denyRead: ['/']` plus an explicit allow list — the
+call's `cwd`, its write scope, the session scratch, and the system paths
+`core/sandbox/read-scope.ts` names entry by entry — with `guards.denyRead`
+layered on top, so a denied *path* inside an allowed root stays denied. The
+deny names paths, not inodes: a pre-existing host-side hardlink that aliases a
+denied inode under a non-denied name (e.g. `ln workspace/.env copy`) is read
+through, because neither seatbelt subpath rules nor the Linux tmpfs masks
+mediate by inode. The model cannot create that alias from inside the sandbox
+(macOS `ln` is `EPERM`; on Linux the denied inode is masked away before a link
+could name it), so the residual trigger is a link the host already had — and a
+process able to create one already reads the file directly. Recorded, not
+claimed: `core/sandbox/deny-in-allowed-root.test.ts` creates the alias
+host-side and pins the live outcome. Stdout
+reaches the model (fenced, `DISK_TIER`), so an injected `cat` of an in-scope
+file still discloses to the provider; what changed is that `~/…` outside the
+scope is no longer there to be catted. The `it.fails` canary in
+`confine-sola-lettura.test.ts` is now a plain assertion: a canary outside
+the workspace and outside the deny-list is unreadable through production
+`runReadOnly`, and removing the root deny turns it red (fourth mutation in
+that file's header). The mechanism the pinned srt 0.0.71 provides is
+`allowRead` — deny-broad-then-re-allow (SBPL last-match-wins on macOS,
+tmpfs-plus-re-bind on Linux). The earlier statement that the pinned runtime
+"has no read allowlist" was wrong about the shipped dist — the schema field
+is there and both backends enforce it — and this slice corrects it; the
+2026-09-21 evidence file stays as the dated record of the exposure as
+measured then. The gating half closed 2026-09-22 (ADR-0091): `sys.shell` is
+`reversible: 'no'` and asks the owner every time, so disclosure is never an
+unapproved low-risk capability. ADR-0091 stays in force alongside the scope:
+scoping bounds *what* a command can read, the ask governs *whether* it runs.
+
+Three properties of the scope were measured, not assumed. On macOS a
+symlinked ancestor's link inode must itself be allowed for any spelling
+through it to resolve — allowing the resolved scratch alone leaves `cat`
+via its `/var/…` spelling at `EPERM` — hence the lexical aliases, link inode
+only, never content. Git runs with `GIT_CONFIG_GLOBAL/SYSTEM=/dev/null`
+because `~/.gitconfig` is EPERM by design and git treats that as fatal even
+for `init`; repo-local config and `-c` flags keep working. The xcrun
+toolchain cache (`$TMPDIR/xcrun_db`, fixed name) is re-allowed for read so
+the `/usr/bin/git` shim does not fall into its ~1.2s cache-miss path on
+every call. Live proof ran on macOS seatbelt; the same suite runs under
+`bwrap` in the `verifica` CI job, and a host where the scope cannot hold
+refuses every contained invocation before it runs.
 
 The September 2026 Bubblewrap symlink setup flaw (CVE-2026-87766) happens
 before anything runs, so no behavioral probe observes it, and Ubuntu reverted
@@ -731,7 +789,59 @@ The falsifiers, the decision table and the Linux results that closed the HOLD
 items live in `docs/evidence/shell-containment-2026-09-21.md`.
 
 Symlink, hardlink, ancestor-symlink and path-canonicalisation behaviour are part
-of the security claim rather than filesystem edge cases.
+of the security claim rather than filesystem edge cases. Symlink and
+ancestor-symlink spellings are denied through a denied root (measured live);
+hardlink denial is path-based only, so a pre-existing host-side inode alias is
+the documented residual above, not a denied case.
+
+### 9.3 Git hook creation in a compound shell call
+
+The workspace grants writes to project files, not authority to install trusted
+Git hooks. `nestedGitHooksDirs()` still denies hook directories that exist
+before a command starts. It cannot see a nested repository created later in the
+same shell invocation, so the operating-system profile supplies the second
+boundary: Linux requires `scripts/install/bwrap.apparmor` loaded against the
+real bwrap path with `userns`, explicit allow rules and write/link denies for
+Git's active hook names. Its `pix` rule stacks bwrap children under the same
+deny policy; that transition matters because bwrap sets `no-new-privs` before it
+executes the command. Capability stripping for shell children is deliberately
+not part of this profile: on nested or containerized hosts it breaks userns
+setup for every contained command (measured on hosted CI as `contain_failed`
+on all shell tests), so it waits for real-host validation as a separate
+follow-up. The hook-deny boundary does not depend on it. macOS Seatbelt's
+hook-path deny remains in force.
+
+Before shell execution, `SandboxExecutor` tests the real `SandboxManager` path
+with ordinary writes, nested `git init`/`git add`, every active hook name in
+a newly-created `nested/.git/hooks`, a hardlink install, a write through a
+pre-existing hooks symlink, and a rename into place. Linux uses Git's default
+templates, so `*.sample` files must remain writable; macOS uses an empty
+template because Seatbelt denies writes anywhere under the hook directory. If
+any gated hook install succeeds, the sandbox reports `git_hooks_unprotected`
+and refuses the caller's command. The production `shell_run_write` wiring test
+also checks `fsmonitor-watchmanv2` and the existing top-level hook deny.
+Ubuntu hosts without the matching profile therefore lose shell execution
+rather than silently running without this boundary. The pre-existing-symlink
+door is covered on both platforms by resolving the scanned hooks path to its
+concrete target. A mid-command hooks-dir replacement (`rm -rf` + `ln -s`) is
+attempted and recorded on every platform but gated on none: AppArmor has no
+per-path symlink mediation (measured with the full profile loaded), and
+neither does Seatbelt for the hooks entry itself — so the marker is a
+tripwire, not a proof, and the residual stays explicitly open (see below).
+Like the depth bound itself, the pre-scan skips `node_modules`: a repository
+pre-existing under `node_modules/**/…` misses the concrete-target deny (host
+filename rules still apply to it mid-command). Rename into place, hardlink
+and direct installs have no such carve-out.
+
+This claim covers direct active hook filenames under a real `.git/hooks`
+directory, hardlink installs, writes through pre-existing symlinks, and
+renames into place. Git's `core.hooksPath` or a Git directory outside the
+worktree remain owned by #657. The mid-command symlink replacement is the
+remaining #865 residual: attempted and recorded by the self-test and the
+wiring test on every platform, denied on none, tracked openly rather than
+claimed. The
+decision and test scope are recorded in
+`docs/evidence/shell-nested-git-hook-protection-2026-10-07.md`.
 
 Process inspection should expose only the information required by the declared
 capability; command-line arguments are particularly sensitive because they may
@@ -897,11 +1007,15 @@ status lives only in `docs/status/day1/requirements-status.md`.
 - **The Node protocol does not exist in the current runtime.** ADR-0050 defines
   its future authority/security contract; current code does not yet enforce it.
 - **Surface and Node execution placement are still the same `cwd`, found
-  2026-09-03.** ADR-0050 §3 separates them on paper. The supervised gateway
-  does not: `WorkingDirectory=${home}` (`core/gateway/unit.ts`) with no `cwd`
-  override in `cli/gateway.ts` means the shell tool's write scope is the
-  Muffin home on that surface, and the same request from a REPL elsewhere on
-  the same machine gets a different answer. This is an open design question
+  2026-09-03.** ADR-0050 §3 separates them on paper, and the Node protocol
+  does not exist yet, so that separation stays paper-only; the owner-chosen
+  `cwd` also still varies across surfaces on the same machine. The
+  write-scope half of the original finding is CLOSED by ADR-0059: the agent
+  write scope is `resolveWorkspace` (`core/config/workspace.ts:228`, wired
+  in `agent/runtime.ts:443`), the home is denied outright via
+  `mandatoryGuards` (`agent/runtime.ts:776`), the gateway passes no `cwd`
+  override (`cli/gateway.ts:823-841`), and both shell lanes are rooted at
+  the workspace (`agent/runtime.ts:894-895`). This is an open design question
   requiring a `docs/development/RESEARCH.md` pass and an ADR, not a decided direction —
   see `docs/product/ROADMAP.md` "First Mac capability Node" and
   `docs/evidence/il-lavoro-che-viene-2026-09-03.md`.

@@ -1,6 +1,6 @@
 import { statSync } from 'node:fs';
 import { DELIVERED, fileModeFor, notDelivered, type DeliveryOutcome, type FileSpec, type Surface } from '../../core/surface/types.js';
-import { negoziazioneTelegram, stanzaDi, TELEGRAM_PLACES } from './negoziazione.js';
+import { isDirectChat, negoziazioneTelegram, stanzaDi, TELEGRAM_PLACES } from './negoziazione.js';
 import type { TelegramApiLike } from './api.js';
 import { MAX_DOWNLOAD_BYTES, sendDocument } from './media.js';
 import { escapeHtml, TELEGRAM_MAX } from './render.js';
@@ -187,7 +187,7 @@ export function telegramSurface(api: TelegramApiLike, ownerChatId: number | unde
       // La catena `files` decide, e per un file troppo grande la stanza
       // risponde `'say'`: prima del 06/09/2026 la risposta era
       // `{delivered:false}`, cioè «non te lo do» senza dire dove sta.
-      const modo = fileModeFor(negoziazioneTelegram(stanzaDi({ isPrivate: chatId > 0 })), limits, bytes);
+      const modo = fileModeFor(negoziazioneTelegram(stanzaDi({ isPrivate: isDirectChat(chatId) })), limits, bytes);
       if (modo !== 'native') {
         const dove =
           `${file.filename} è pronto ma pesa ${(bytes / 1e6).toFixed(1)}MB, oltre il limite di ` +

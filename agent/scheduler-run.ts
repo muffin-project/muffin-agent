@@ -7,6 +7,12 @@ import type { TrustTier } from '../core/policy/types.js';
 import { CAPPED_MODEL, SCRIPT_MODEL, type TurnCounters, type TurnOutcome } from '../core/turns/store.js';
 import { runTurn, type LoopDeps, type TurnResult } from './loop.js';
 import { recoveredText } from './recovered-text.js';
+import {
+  dispatchRuntimeEvent,
+  type ActionRequest,
+  type AutomationRule,
+  type RuntimeEvent,
+} from './automation.js';
 
 /**
  * The bridge from a scheduled job to a real turn.
@@ -50,6 +56,12 @@ import { recoveredText } from './recovered-text.js';
  *       `Scheduler` either a normal delivery or a settle-only sentinel,
  *       depending on whether something already delivered it (fault points 5
  *       and 6).
+ *     - `continuable` bound to this job → the same durable work interrupted
+ *       mid-goal: not this call's turn to touch either. `TurnStore.due`
+ *       picks scheduler-bound continuable rows up on the lane's own beat
+ *       (#598 S2), so this defers exactly like the arm below and the next
+ *       tick re-reads the row (done → recover/deliver/settle, still
+ *       continuable → defer again).
  *     - anything else (`runnable`/`running`/`waiting`/`interrupted`) → not
  *       this call's turn to touch; say so and let the turn lane's own
  *       machinery finish it (fault point 4, unchanged).
@@ -151,7 +163,7 @@ async function runFresh(
   exec: JobExec | null,
   scope: ScriptScope | null,
   jobBudget: JobBudget | null,
-): Promise<JobOutcome> {
+): Promise<JobOutcome | FireDeferred | FireSettleOnly> {
   /**
    * **Il tetto per-job, e sta qui perché qui è l'unico punto che chiama il
    * modello** (DAY-1 E1, ADR-0035 emendamento №2).
@@ -175,11 +187,54 @@ async function runFresh(
     const spent = jobBudget.jobMonthUsd(job.id);
     if (spent >= job.perJobUsd) return skipForBudget(deps, job, turnId, spent, job.perJobUsd);
   }
-  // Un job `script` non passa di qui sotto: nessuna sessione, nessun prompt,
-  // nessuna chiamata al modello. Il turno durevole viene scritto lo stesso —
-  // è ciò che tiene l'esattamente-una-volta, la visibilità in `doctor` e la
-  // consegna — ma il modello non lo vede mai.
-  if (job.kind === 'script') return runScript(deps, job, turnId, exec, scope);
+  const runtimeEvent: RuntimeEvent = {
+    occurrenceId: turnId,
+    kind: 'schedule.fire',
+    source: 'scheduler',
+    observedAt: new Date().toISOString(),
+    evidence: {
+      jobId: job.id,
+      scheduledFor: job.nextFireAt.toISOString(),
+      jobKind: job.kind,
+    },
+  };
+
+  type ScheduledOutcome = JobOutcome | FireDeferred | FireSettleOnly;
+  const action: ActionRequest<ScheduledOutcome> =
+    job.kind === 'script'
+      ? {
+          mode: 'deterministic',
+          run: () => runScript(deps, job, turnId, exec, scope),
+        }
+      : {
+          mode: 'agent',
+          run: () => runGoal(deps, job, turnId, signal),
+        };
+
+  // The durable job row is already the rule definition for schedule.fire:
+  // kind chooses the executor, JobFire owns occurrence identity, and all
+  // authority/effects remain in the existing scheduler/Turn paths.
+  const rule: AutomationRule<ScheduledOutcome> = {
+    id: `scheduled-job:${job.id}`,
+    matches: (event) =>
+      event.kind === 'schedule.fire' && event.evidence['jobId'] === job.id,
+    action: () => action,
+  };
+
+  return dispatchRuntimeEvent(runtimeEvent, [rule], {
+    mode: 'deterministic',
+    run: () => {
+      throw new Error(`schedule.fire ${runtimeEvent.occurrenceId} had no matching job rule`);
+    },
+  });
+}
+
+async function runGoal(
+  deps: LoopDeps,
+  job: Extract<Job, { kind: 'goal' }>,
+  turnId: string,
+  signal: AbortSignal | undefined,
+): Promise<JobOutcome | FireDeferred | FireSettleOnly> {
   // Fault point 2, made observable: a real `SIGKILL` here lands after the
   // fire is bound and before the turn row exists at all.
   await testStall('MUFFIN_JOB_FIRES_STALL_AFTER_BIND_MS');
@@ -238,7 +293,24 @@ async function runFresh(
   // Fault point 5, made observable: a real `SIGKILL` here lands after the
   // turn reaches `done` and before `Scheduler` ever calls `deliver`/`markRan`.
   // Skipped for a turn that suspended — there is nothing "done" about it yet,
-  // and `Scheduler`'s own suspended branch does not call `deliver` either.
+  // and `Scheduler`'s own suspended branch does not call `deliver` either —
+  // and for a turn that released as `continuable`: the release is persisted,
+  // the occurrence stays open, and the lane owns what happens next (#598 S2),
+  // so there is no "between done and settle" instant to widen here — the
+  // continuable stall below is that instant's own window instead.
+  if (result.stopped === 'continuable') {
+    // The lease ended recoverably with the work intact: hand the row to the
+    // lane rather than delivering the "scrivi riprendi" diagnostic as this
+    // occurrence's final answer. `Scheduler` treats the sentinel exactly like
+    // a bound-but-unfinished turn — no delivery, no `markRan` — and the next
+    // tick re-reads the same fire: `done` recovers and settles through the
+    // fault-point-5 path, still-`continuable` defers again. Fault-injection
+    // window for the kill-after-release scenario, same precedent as the two
+    // `MUFFIN_JOB_FIRES_STALL_*` above: never set outside `evals/acceptance`
+    // and the S2 fault tests.
+    await testStall('MUFFIN_JOB_FIRES_STALL_AFTER_CONTINUABLE_MS');
+    return { deferred: true };
+  }
   if (result.stopped !== 'suspended') await testStall('MUFFIN_JOB_FIRES_STALL_AFTER_DONE_MS');
   return jobOutcomeFromTurn(result);
 }
@@ -262,6 +334,11 @@ async function resolveBound(
   // between the two (fault point 2). Nothing has run yet, so this is not a
   // duplicate: finish exactly what was interrupted, with the same identity.
   if (existing === null) return runFresh(deps, job, turnId, signal, exec, scope, jobBudget);
+  // Anything not `done` — `runnable`/`running`/`waiting`/`interrupted`, and
+  // `continuable` most of all (#598 S2): the lane owns it now
+  // (`TurnStore.due` picks scheduler-bound continuable rows up on its own
+  // beat), so this tick does nothing at all — no delivery, no `markRan` —
+  // and the next tick re-reads the row.
   if (existing.status !== 'done') return { deferred: true };
   // `done`, and delivery already resolved by someone else (a live run's own
   // `Scheduler.settle`, or a completed one this same check is re-observing) —

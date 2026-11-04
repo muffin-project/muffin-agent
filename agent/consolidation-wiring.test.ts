@@ -9,11 +9,15 @@ import { costUsd } from '../core/budget/pricing.js';
 import {
   Consolidator,
   CONSOLIDATION_CAPABILITY,
+  CONSOLIDATION_DRAIN_MS,
   CONSOLIDATION_IDLE_MS,
   readConsolidation,
 } from '../core/memory/consolidator.js';
+import { EXTRACTION_VERSION } from '../core/memory/schema.js';
 import { ingestPending } from '../core/memory/ingest.js';
+import { sweepDuplicates } from '../core/memory/maintenance.js';
 import type { RecallDeps } from '../core/memory/recall.js';
+import { proposeMemoryRecord } from '../core/memory/proposals.js';
 import { MemoryStore } from '../core/memory/store.js';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
@@ -94,7 +98,7 @@ const member: Principal = {
  * `lightLane` wrapper, the same `ingestPending` closure, the same `onTurnEnd`
  * seam — so what this exercises is the arrangement, not a rehearsal of it.
  */
-function harness(script: ChatResult[]) {
+function harness(script: ChatResult[], model = 'light', baseUrl?: string) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-consolidation-'));
   const db = new DatabaseCtor(':memory:');
   const store = new MemoryStore(db);
@@ -109,7 +113,7 @@ function harness(script: ChatResult[]) {
         ...entry,
         tenant: 'host',
         capability: CONSOLIDATION_CAPABILITY,
-        usd: costUsd(entry.model, entry),
+        usd: costUsd(entry.model, entry, baseUrl, entry.requestedModel),
       }),
   });
   const tracer = new SimpleTracer(new JsonlExporter(home));
@@ -117,7 +121,8 @@ function harness(script: ChatResult[]) {
   const consolidation = new Consolidator({
     db,
     budgetExhausted: () => budget.exhausted(),
-    ingest: (limit) => ingestPending({ store, provider: light, model: 'light', tracer }, 'host', limit),
+    ingest: (limit) => ingestPending({ store, provider: light, model, tracer }, 'host', limit),
+    sweep: (at) => sweepDuplicates(store, 'host', at),
   });
 
   const deps: LoopDeps = {
@@ -194,6 +199,93 @@ describe('consolidation starts by itself', () => {
       v: string;
     };
     expect(fact).toEqual({ predicate: 'lives_in', v: 'Cagliari' });
+  });
+
+  it('drains proposals past one bounded page when the episode page is short', async () => {
+    const h = harness([reply('ok')]);
+    const evidenceIds = Array.from({ length: 21 }, (_, i) =>
+      h.store.addEpisode({
+        tenantId: 'host',
+        connector: 'cli',
+        threadKey: 't',
+        role: 'user',
+        kind: 'message',
+        content: `evidence ${i}`,
+        trustTier: 0,
+        createdAt: `2026-08-01T10:${String(i).padStart(2, '0')}:00Z`,
+      }),
+    );
+    h.store.markExtracted('host', evidenceIds, EXTRACTION_VERSION);
+    evidenceIds.forEach((episodeId, i) => {
+      proposeMemoryRecord(h.store, {
+        tenantId: 'host',
+        subject: 'owner',
+        subjectKind: 'person',
+        predicate: `note_${i}`,
+        object: `value_${i}`,
+        producer: 'agent-inference',
+        sourceEpisodeIds: [episodeId],
+        content: `inference ${i}`,
+        confidence: 0.9,
+      });
+    });
+
+    // The production turn-end seam arms consolidation. Its one ingress episode
+    // is a short page; the 21 already-evidenced proposals cross their own page
+    // boundary only after the real `ingestPending` consumer runs.
+    await h.speak('ciao');
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_IDLE_MS);
+    await h.consolidation.settled();
+    expect(h.store.pendingProposals('host')).toHaveLength(1);
+    expect(h.consolidation.isArmed()).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_DRAIN_MS);
+    await h.consolidation.settled();
+
+    expect(h.store.pendingProposals('host')).toHaveLength(0);
+    expect(h.activeFacts().n).toBe(21);
+    const triggers = (
+      h.db.prepare(`SELECT trigger FROM consolidation_runs ORDER BY id`).all() as { trigger: string }[]
+    ).map((r) => r.trigger);
+    expect(triggers).toEqual(['idle', 'drain']);
+    expect(h.consolidation.isArmed()).toBe(false);
+  });
+
+  it('keeps a review resolvable when the post-ingest sweep finds equal-time duplicates', async () => {
+    const h = harness([
+      reply('{"reasoning":"le due versioni restano aperte","verdict":"review","confidence":0.5}'),
+    ]);
+    const evidence = h.store.addEpisode({
+      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
+      content: 'il commercialista ora è Lucia', trustTier: 0, createdAt: '2026-08-01T12:00:00Z',
+    });
+    const priorEvidence = h.store.addEpisode({
+      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
+      content: 'il commercialista è Marco', trustTier: 0, createdAt: '2026-08-01T11:00:00Z',
+    });
+    const ownerId = h.store.upsertEntity('host', 'owner', 'person', '2026-08-01T11:00:00Z');
+    const addMarco = () => h.store.addFact({
+      tenantId: 'host', subjectId: ownerId, predicate: 'accountant', objectValue: 'Marco',
+      episodeId: priorEvidence, trustTier: 0, confidence: 0.9, extractionV: 1,
+      recordedAt: '2026-08-01T11:00:00Z',
+    });
+    const olderDuplicate = addMarco();
+    const sweepKeeper = addMarco();
+    h.store.markExtracted('host', [evidence, priorEvidence], EXTRACTION_VERSION);
+    proposeMemoryRecord(h.store, {
+      tenantId: 'host', subject: 'owner', subjectKind: 'person', predicate: 'accountant',
+      object: 'Lucia', producer: 'owner-stated', sourceEpisodeIds: [evidence],
+      content: 'il commercialista ora è Lucia', confidence: 0.95,
+    });
+
+    const result = await h.consolidation.runNow('manual');
+
+    expect(result.report?.needsReview).toHaveLength(1);
+    expect(h.store.factById('host', olderDuplicate)?.expiredAt).not.toBeNull();
+    expect(h.store.factById('host', sweepKeeper)?.expiredAt).toBeNull();
+    expect(h.store.openContradictions('host')).toMatchObject([
+      { existingFactId: sweepKeeper },
+    ]);
   });
 
   it('embeds the episode too — the half of recall nothing else feeds', async () => {
@@ -298,6 +390,22 @@ describe('the memory lane is inside the budget', () => {
     expect(h.budget.monthToDateUsd()).toBeGreaterThan(0);
   });
 
+  it('bills $0 for a memory-lane call requested through openrouter/free, keeping the served model on the row (#499)', async () => {
+    const served: ChatResult = {
+      ...extraction(CAGLIARI),
+      model: 'qwen/qwen3.8-27b',
+      usage: { inputTokens: 10_000, outputTokens: 2_000, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    };
+    const h = harness([reply('ok'), served], 'openrouter/free', 'https://openrouter.ai/api/v1');
+    await h.speak('mi sono trasferito a Cagliari');
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_IDLE_MS);
+    await h.consolidation.settled();
+
+    expect(h.budget.monthToDateUsd()).toBe(0);
+    const rows = h.db.prepare(`SELECT model, usd FROM spend`).all() as { model: string; usd: number }[];
+    expect(rows).toEqual([{ model: 'qwen/qwen3.8-27b', usd: 0 }]);
+  });
+
   it('stops consolidating when the month is spent, instead of spending past it', async () => {
     const h = harness([reply('ok'), extraction(CAGLIARI)]);
     h.budget.record({
@@ -350,6 +458,50 @@ describe('buildRuntime wires it', () => {
     runInit({ home, apiKey: 'sk-never-called' });
     return home;
   };
+
+  it('keeps an idle extractor interpretation out of the unconditional owner profile', async () => {
+    const runtime = buildRuntime(freshHome(), mkdtempSync(join(tmpdir(), 'muffin-cons-ws-')));
+    const source = 'Inspect the tool catalog. I am not stating any profession here.';
+    const extracted = vi.spyOn(runtime.light.provider, 'chat').mockResolvedValueOnce(
+      extraction([
+        {
+          subject: 'owner',
+          subjectKind: 'person',
+          predicate: 'works_as',
+          object: 'Synthetic accountant',
+          validFrom: null,
+          confidence: 0.99,
+          matters: true,
+          charged: false,
+          pinned: true,
+        },
+      ]),
+    );
+    try {
+      await runTurn(
+        { ...runtime.deps, provider: new Scripted([reply('ok')]) },
+        {
+          principal: owner,
+          tenant: 'host',
+          surface: 'cli',
+          session: runtime.deps.sessions.open('extraction-provenance'),
+          text: source,
+        },
+      );
+      expect(runtime.consolidation.isArmed()).toBe(true);
+      await vi.advanceTimersByTimeAsync(CONSOLIDATION_IDLE_MS);
+      await runtime.consolidation.settled();
+      expect(extracted).toHaveBeenCalledTimes(1);
+      const subject = runtime.memory.store.findEntity('host', 'owner')!;
+      const fact = runtime.memory.store.activeFacts('host', subject, 'works_as')[0]!;
+      expect(fact).toMatchObject({ origin: 'inferred', pinned: 0, trustTier: 0 });
+      expect(runtime.memory.store.episodeById('host', fact.episodeId)?.content).toBe(source);
+      expect(runtime.memory.store.pinnedFacts('host')).toEqual([]);
+    } finally {
+      runtime.close();
+      extracted.mockRestore();
+    }
+  });
 
   it('arms the real consolidator from a real turn on the real runtime', async () => {
     const runtime = buildRuntime(freshHome(), mkdtempSync(join(tmpdir(), 'muffin-cons-ws-')));

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SandboxRuntimeConfig } from '@anthropic-ai/sandbox-runtime';
+import type { FilesystemPathEntry, SandboxRuntimeConfig } from '@anthropic-ai/sandbox-runtime';
 import { SandboxExecutor } from './executor.js';
 import type { SandboxProbe } from './probe.js';
+import { READ_DENY_ROOT } from './read-scope.js';
 
 /**
  * `SandboxManager` non e' per istanza: e' stato di modulo, uno per processo.
@@ -51,8 +52,20 @@ vi.mock('@anthropic-ai/sandbox-runtime', () => ({
 
 const available = (): SandboxProbe => ({ available: true, mechanism: 'bubblewrap' });
 
-const denyReadOf = (customConfig: Partial<SandboxRuntimeConfig> | undefined): readonly string[] =>
-  customConfig?.filesystem?.denyRead ?? [];
+/**
+ * The per-leg denies beyond the read-scope root. Since `read-scoped-workspace`
+ * every leg — deny and allow alike — carries `denyRead: ['/', …]`, so a
+ * stand-in that refused on any non-empty deny list would refuse the control
+ * leg too and model a broken sandbox rather than a holding one. The
+ * discriminator is what the leg adds ON TOP of the root: the sentinel for
+ * the deny leg, nothing for the allow leg. Since srt 0.0.80 an entry is the
+ * union `FilesystemPathEntry` (`string | { path; literal: true }`), so the
+ * root comparison reads the path of either spelling.
+ */
+const denyReadOf = (customConfig: Partial<SandboxRuntimeConfig> | undefined): readonly FilesystemPathEntry[] =>
+  (customConfig?.filesystem?.denyRead ?? []).filter(
+    (p) => (typeof p === 'string' ? p : p.path) !== READ_DENY_ROOT,
+  );
 
 /**
  * Contenimento che regge: la gamba con deny rifiuta, quella di controllo
@@ -60,15 +73,38 @@ const denyReadOf = (customConfig: Partial<SandboxRuntimeConfig> | undefined): re
  * produce (`EPERM` da `socket(AF_UNIX, …)`). Il mock non esegue bwrap: senza
  * modellare quel rifiuto il client della sonda si connetterebbe e `verify()`
  * direbbe `unix_filter_absent`.
+ *
+ * La gamba nested-hook (introdotta per #862) riceve lo stesso trattamento:
+ * il mock finge i deny su ogni hook attivo. Senza, il comando della gamba
+ * girerebbe davvero in `/bin/sh`, le scritture hook riuscirebbero e
+ * `verify()` direbbe `git_hooks_unprotected` — e questi test, che provano il
+ * contratto della reset e non il contenimento, diventerebbero rossi per la
+ * ragione sbagliata. La prova vera del deny sta in
+ * `executor.selftest.test.ts` (mock) e nel percorso di produzione
+ * (`agent/runtime-wiring.test.ts`, binario vero).
  */
 function contieneDavvero(): void {
   wrapWithSandboxArgv.mockImplementation(async (command, _binShell, customConfig) => ({
     argv:
       denyReadOf(customConfig).length > 0
         ? ['/bin/sh', '-c', 'exit 1']
-        : command.includes('afunix.sock')
-          ? ['/bin/sh', '-c', 'echo EPERM >&2; exit 1']
-          : ['/bin/sh', '-c', command],
+        : command.includes('muffin sandbox nested-hook self-test')
+          ? [
+              '/bin/sh',
+              '-c',
+              (() => {
+                const hookNames = command.match(/for hook in ([^;]+); do/)?.[1]?.split(/\s+/) ?? [];
+                const hookResults = hookNames
+                  .map((hook) => `muffin-hook-write: denied:${hook}`)
+                  .join('\\n');
+                // Model a healthy host: the mid-command replacement is
+                // recorded, not gated (see the leg docstring).
+                return `printf "muffin-apparmor-label: mocked\\n${hookResults}\\nmuffin-hook-alias: created\\nmuffin-hook-hardlink: denied\\nmuffin-hook-pre: denied\\nmuffin-hook-rename: denied\\nmuffin sandbox hook self-test positive controls passed\\n"`;
+              })(),
+            ]
+          : command.includes('afunix.sock')
+            ? ['/bin/sh', '-c', 'echo EPERM >&2; exit 1']
+            : ['/bin/sh', '-c', command],
     env: {},
   }));
 }

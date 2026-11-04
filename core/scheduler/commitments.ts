@@ -1,3 +1,5 @@
+import type { TrustTier } from '../policy/types.js';
+import { redactText } from '../tracing/redact.js';
 import type { DueCommitment, TodoStore } from '../turns/todo.js';
 import { type DecisionLog, decisionParts } from './decisions.js';
 import type { FireLog } from './firelog.js';
@@ -162,6 +164,15 @@ export type CommitmentDeps = {
   /** Stage 1's signal producer: one indexed query, no model, deliberately uncapped. */
   due: () => DueCommitment[];
   decide: typeof decideProactive;
+  /**
+   * Content lineage for #859, resolved per due row. Optional so the seam stays
+   * testable without stores; production always passes it. Absent = tier-only
+   * gate, the pre-lineage behavior.
+   */
+  lineageOf?: (
+    armedTurnId: string | null,
+    text: string,
+  ) => { ownerBytes: boolean; untrusted: boolean };
   /** Read here, written by the caller after delivery — see `recordCommitmentFired`. */
   fires: FireLog;
   /**
@@ -182,10 +193,65 @@ export type CommitmentDeps = {
   limit?: number;
 };
 
+/**
+ * #859 content lineage, resolved from durable rows — never from the prompt.
+ *
+ * ownerBytes: the commitment text appears byte-for-byte in the arming turn's
+ * input (the owner authored these bytes). untrusted: the same bytes appear in
+ * tier>1 episode evidence (planted content surviving restatement). Either
+ * store missing (tests, observe --send without memory) = no evidence either
+ * way, and the tier-only gate decides as before — never a guess.
+ */
+export function resolveLineage(
+  turns: { get(id: string): { inputText: string | null } | null } | undefined,
+  store:
+    | {
+        searchEpisodes(
+          tenantId: string,
+          query: string,
+          limit?: number,
+        ): { content: string; trustTier: TrustTier }[];
+      }
+    | undefined,
+  tenant: string,
+  armedTurnId: string | null,
+  text: string,
+): { ownerBytes: boolean; untrusted: boolean } {
+  const trimmed = text.trim();
+  if (armedTurnId === null || trimmed === '') return { ownerBytes: false, untrusted: false };
+  // Both sides through the same redaction the stores apply on write: secrets
+  // are stored redacted, so raw-vs-stored comparison false-negatives exactly
+  // the payloads this gate exists for. Residual: two different secrets with
+  // the same shape+length share a marker and can false-positive into a deny —
+  // safe direction for a speak-first gate, and rephrasing clears it.
+  const needle = redactText(trimmed);
+  const arming = turns?.get(armedTurnId);
+  const ownerBytes =
+    arming?.inputText !== null &&
+    arming?.inputText !== undefined &&
+    redactText(arming.inputText).includes(needle);
+  if (store === undefined) return { ownerBytes, untrusted: false };
+  let untrusted = false;
+  try {
+    for (const hit of store.searchEpisodes(tenant, trimmed, 10)) {
+      if (hit.trustTier > 1 && hit.content.includes(needle)) {
+        untrusted = true;
+        break;
+      }
+    }
+  } catch {
+    untrusted = false;
+  }
+  return { ownerBytes, untrusted };
+}
+
 export function observeCommitments(deps: CommitmentDeps): CommitmentObservation[] {
   const out: CommitmentObservation[] = [];
   const limit = deps.limit ?? COMMITMENT_LIMIT;
   let allowed = 0;
+  // One lineage resolution per distinct (row, text) per pass: denies don't
+  // consume `allowed`, so without this N due rows mean N FTS queries a beat.
+  const lineageCache = new Map<string, { ownerBytes: boolean; untrusted: boolean }>();
   for (const commitment of deps.due()) {
     if (allowed >= limit) break;
     const anchor = commitmentAnchor(commitment);
@@ -209,6 +275,15 @@ export function observeCommitments(deps: CommitmentDeps): CommitmentObservation[
       continue;
     }
 
+    const lineage = (() => {
+      if (deps.lineageOf === undefined) return undefined;
+      const key = `${commitment.armedTurnId ?? ''} ${commitment.text}`;
+      const cached = lineageCache.get(key);
+      if (cached !== undefined) return cached;
+      const resolved = deps.lineageOf(commitment.armedTurnId ?? null, commitment.text);
+      lineageCache.set(key, resolved);
+      return resolved;
+    })();
     const trigger: ProactiveTrigger = {
       // The row's own tier, never a literal. This is the line the whole design
       // turns on: what arrives at the gate is the provenance of the turn that
@@ -218,6 +293,7 @@ export function observeCommitments(deps: CommitmentDeps): CommitmentObservation[
       channel: deps.channel,
       kind: 'commitment_due',
       anchor,
+      ...(lineage === undefined ? {} : { lineage }),
     };
     const decision = deps.decide(trigger, deps.ctx);
     deps.decisions?.record({
@@ -333,6 +409,15 @@ export type CommitmentLaneDeps = {
   todos: TodoStore;
   tenant: string;
   fires: FireLog;
+  /**
+   * #859 content lineage, resolved per due row by whoever owns the stores
+   * (production: makeCommitmentLane from the runtime). Optional; absent =
+   * tier-only gate. Forwarded to observeCommitments like decisions.
+   */
+  lineageOf?: (
+    armedTurnId: string | null,
+    text: string,
+  ) => { ownerBytes: boolean; untrusted: boolean };
   /**
    * History, not dedup (see `CommitmentDeps.decisions`): forwarded to
    * `observeCommitments` so the tick path records what the gate decided.
@@ -519,6 +604,7 @@ export class CommitmentLane {
       fires: this.deps.fires,
       tenant: this.deps.tenant,
       ...(this.deps.decisions === undefined ? {} : { decisions: this.deps.decisions }),
+      ...(this.deps.lineageOf === undefined ? {} : { lineageOf: this.deps.lineageOf }),
       ctx: this.deps.context(now),
       channel,
     });

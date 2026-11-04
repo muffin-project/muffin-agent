@@ -148,6 +148,12 @@ describe('parseJudgeOutput — tollerante a output non-JSON', () => {
       evidence: 'suona da manuale',
     });
   });
+
+  it('tollera un residuo di chiusure dopo il blocco JSON (misurato il 21/10)', () => {
+    const raw = `${JSON.stringify({ judgements: [{ property: 'natural', verdict: 'pass', evidence: 'voce vera' }] })}]}`;
+    const result = parseJudgeOutput(raw, ['natural']);
+    expect(result[0]?.verdict).toBe('pass');
+  });
 });
 
 describe('buildJudgePrompt — mai il system prompt di Muffin', () => {
@@ -176,6 +182,9 @@ describe('il giudice non paga un reasoning che nessuno legge', () => {
   it('la ChatCall del giudice chiede di non ragionare e si lascia il margine', () => {
     const call = judgeCall('j1', { system: 's', user: 'u' });
     expect(call.thinking).toBe('off');
+    // Senza temperatura fissa due giudizi della stessa trascrizione divergono:
+    // misurato il 19/10/2026 su `casual-hey`, byte identici in v1 e v2.
+    expect(call.sampling).toEqual({ temperature: 0 });
     // Il margine, non solo lo spegnimento: `thinking: 'off'` viaggia solo dove
     // l'endpoint capisce il campo (openrouter.ai), e un giudice dietro Ollama o
     // un giudice Anthropic resta senza. Vedi `REASONING_HEADROOM`.

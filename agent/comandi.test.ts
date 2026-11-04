@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runInit } from '../cli/init.js';
 import { loadConfig } from '../core/config/config.js';
-import { COMANDI, aiuto, eseguiComando, type ContestoComandi, type Controlli } from './comandi.js';
+import type { DelegationMode, LevaDelega } from '../core/runtime/delega.js';
+import { aiuto, COMANDI, type ContestoComandi, type Controlli, eseguiComando } from './comandi.js';
 
 /**
  * Le quattro leve di ADR-0054, con controlli finti: cosa risponde ogni
@@ -16,7 +17,10 @@ function contesto(controlli?: Controlli): ContestoComandi {
     home: '/nessuno',
     config: {} as ContestoComandi['config'],
     profilo: { name: 'test', thinking: 'unset' },
-    budget: { status: () => ({ monthUsd: 0, monthlyCapUsd: 1, exhausted: false }), tenantTodayUsd: () => 0 },
+    budget: {
+      status: () => ({ monthUsd: 0, monthlyCapUsd: 1, exhausted: false }),
+      tenantTodayUsd: () => 0,
+    },
     sessionId: 's',
     verbosity: 'normale',
     puoiUscire: false,
@@ -76,7 +80,7 @@ describe('/stop', () => {
   it('senza leve — muffin run, un test — dice che qui non puo', async () => {
     const e = await eseguiComando('/stop', contesto());
     expect(e.sconosciuto).toBeUndefined();
-    expect(e.testo).toContain('non c\'è');
+    expect(e.testo).toContain("non c'è");
   });
 });
 
@@ -100,6 +104,110 @@ describe('/steer', () => {
   });
 });
 
+/**
+ * La delega sul lavoro in corso (issue #740): `/manual`, `/auto`, `/yolo`.
+ * Leva finta, risposte vere — compreso «non c'è un lavoro» e «ero già».
+ */
+function delegaFinta(over: { modo?: DelegationMode; lavoro?: string | null } = {}): {
+  leva: LevaDelega;
+  messe: DelegationMode[];
+} {
+  let modo: DelegationMode = over.modo ?? 'manual';
+  const messe: DelegationMode[] = [];
+  const lavoro = over.lavoro === undefined ? 'turno-abc123' : over.lavoro;
+  const leva: LevaDelega = {
+    modo: () => modo,
+    metti: (m) => {
+      if (lavoro === null) return null;
+      const cambiato = modo !== m;
+      // Come la leva vera: la storia registra i cambi, non le ripetizioni.
+      if (cambiato) {
+        modo = m;
+        messe.push(m);
+      }
+      return { turnId: lavoro, cambiato, risposteDate: 0 };
+    },
+  };
+  return { leva, messe };
+}
+
+function contestoConDelega(leva?: LevaDelega): ContestoComandi {
+  const ctx = contesto();
+  if (leva === undefined) return ctx;
+  return { ...ctx, controlli: { ...leve().controlli, delega: leva } };
+}
+
+describe('/manual, /auto, /yolo sono nell elenco condiviso', () => {
+  it('una volta, per tutte le superfici', () => {
+    const nomi = COMANDI.map((c) => c.nome);
+    for (const n of ['manual', 'auto', 'yolo']) expect(nomi).toContain(n);
+    expect(aiuto(false)).toContain('/yolo');
+  });
+});
+
+describe('/yolo', () => {
+  it('lega la delega al lavoro e lo dice, con i divieti che restano', async () => {
+    const d = delegaFinta();
+    const e = await eseguiComando('/yolo', contestoConDelega(d.leva));
+    expect(e.testo).toContain('YOLO');
+    expect(e.testo).toContain('turno-abc123'.slice(0, 12));
+    expect(e.testo).toContain('divieti hard');
+    expect(d.messe).toEqual(['yolo']);
+  });
+  it('ridetto lo sa', async () => {
+    const d = delegaFinta({ modo: 'yolo' });
+    const e = await eseguiComando('/yolo', contestoConDelega(d.leva));
+    expect(e.testo).toContain('già in yolo');
+    expect(d.messe).toEqual([]);
+  });
+  it('senza lavoro attivo non delega niente e lo dice', async () => {
+    const d = delegaFinta({ lavoro: null });
+    const e = await eseguiComando('/yolo', contestoConDelega(d.leva));
+    expect(e.testo).toContain("non c'è un lavoro in corso");
+    expect(d.messe).toEqual([]);
+  });
+  it('senza leve dice che qui non può', async () => {
+    const e = await eseguiComando('/yolo', contesto());
+    expect(e.testo).toContain("non c'è un lavoro da delegare");
+  });
+  it('/yolo off torna in manuale', async () => {
+    const d = delegaFinta({ modo: 'yolo' });
+    const e = await eseguiComando('/yolo off', contestoConDelega(d.leva));
+    expect(e.testo).toContain('manuale');
+    expect(d.messe).toEqual(['manual']);
+  });
+  it('con altri argomenti rimanda a /manual invece di fingere', async () => {
+    const d = delegaFinta();
+    const e = await eseguiComando('/yolo sempre', contestoConDelega(d.leva));
+    expect(e.testo).toContain('/manual');
+    expect(d.messe).toEqual([]);
+  });
+});
+
+describe('/auto', () => {
+  it('registra la postura e dice onestamente che ogni conferma arriva ancora', async () => {
+    const d = delegaFinta();
+    const e = await eseguiComando('/auto', contestoConDelega(d.leva));
+    expect(e.testo).toContain('AUTO');
+    expect(e.testo).toContain('ogni conferma arriva ancora a te');
+    expect(d.messe).toEqual(['auto']);
+  });
+});
+
+describe('/manual', () => {
+  it('revoca: torna a chiedere ogni conferma', async () => {
+    const d = delegaFinta({ modo: 'yolo' });
+    const e = await eseguiComando('/manual', contestoConDelega(d.leva));
+    expect(e.testo).toContain('manuale');
+    expect(d.messe).toEqual(['manual']);
+  });
+  it('già in manuale lo sa', async () => {
+    const d = delegaFinta();
+    const e = await eseguiComando('/manual', contestoConDelega(d.leva));
+    expect(e.testo).toContain('già in manuale');
+    expect(d.messe).toEqual([]);
+  });
+});
 describe('/pause e /resume', () => {
   it('mette in pausa, e la seconda volta lo sa gia', async () => {
     const l = leve();
@@ -118,7 +226,9 @@ describe('/pause e /resume', () => {
     const l = leve({ pausa: true });
     expect((await eseguiComando('/resume', contesto(l.controlli))).testo).toContain('ripreso');
     expect(l.inPausa()).toBe(false);
-    expect((await eseguiComando('/resume', contesto(l.controlli))).testo).toContain('non ero in pausa');
+    expect((await eseguiComando('/resume', contesto(l.controlli))).testo).toContain(
+      'non ero in pausa',
+    );
   });
 });
 
@@ -134,7 +244,10 @@ function contestoConHome(home: string): ContestoComandi {
     home,
     config,
     profilo: { name: 'test', thinking: 'unset' },
-    budget: { status: () => ({ monthUsd: 0, monthlyCapUsd: 1, exhausted: false }), tenantTodayUsd: () => 0 },
+    budget: {
+      status: () => ({ monthUsd: 0, monthlyCapUsd: 1, exhausted: false }),
+      tenantTodayUsd: () => 0,
+    },
     sessionId: 's',
     verbosity: 'normale',
     puoiUscire: false,
@@ -150,11 +263,27 @@ describe('/model', () => {
     const dir = mkdtempSync(join(tmpdir(), 'muffin-comandi-model-'));
     runInit({ home: dir, apiKey: 'sk-fixture' });
     const ctx = contestoConHome(dir);
-    ctx.model = async () => undefined;
+    ctx.model = async () => 0;
 
     const result = await eseguiComando('/model main example/model', ctx);
 
     expect(result.testo).toContain('dal prossimo turno');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('non dichiara applicata una scelta che la CLI ha rifiutato', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-comandi-model-failed-'));
+    runInit({ home: dir, apiKey: 'sk-fixture' });
+    const ctx = contestoConHome(dir);
+    ctx.model = async (_argv, out) => {
+      out('Model verification failed. Configuration preserved.');
+      return 1;
+    };
+
+    const result = await eseguiComando('/model light --provider chatgpt gpt-test', ctx);
+
+    expect(result.testo).toContain('Configuration preserved');
+    expect(result.testo).not.toContain('dal prossimo turno');
     rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -191,7 +320,7 @@ describe('/config', () => {
     runInit({ home: dir, apiKey: 'sk-ant-fixture' });
     const before = loadConfig(dir);
     const e = await eseguiComando('/config set rot.mode hardened', contestoConHome(dir));
-    expect(e.testo).toContain('non è un\'impostazione modificabile');
+    expect(e.testo).toContain("non è un'impostazione modificabile");
     expect(loadConfig(dir)).toEqual(before);
     rmSync(dir, { recursive: true, force: true });
   });

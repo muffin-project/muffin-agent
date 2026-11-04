@@ -710,3 +710,76 @@ describe('un fire non arma ricorrenze (S1, production path)', () => {
     db.close();
   });
 });
+
+describe('makeJobRunner — continuable hands the row to the lane (#598 S2)', () => {
+  const stall = (): ChatResult => ({
+    text: null,
+    toolCalls: [],
+    stopReason: 'error',
+    usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    model: 'test',
+  });
+
+  it('a fire whose lease ends continuable defers — the diagnostic is not delivered as the answer', async () => {
+    // Four empties: three transport retries, then the lease yields. The fifth
+    // scripted answer stays queued — proof the runner stopped asking.
+    const { deps, jobs, fires, provider } = fixture([stall(), stall(), stall(), stall(), answer('mai')]);
+    const job = jobs.add(SPEC);
+    const scheduledFor = job.nextFireAt.toISOString();
+
+    const outcome = await makeJobRunner(deps, fires)(job, undefined);
+
+    expect(outcome).toEqual({ deferred: true });
+    expect(provider.calls).toBe(4);
+    const fire = fires.get(job.id, scheduledFor);
+    const turnId = fire?.turnId;
+    if (turnId === null || turnId === undefined) throw new Error('fire senza turno legato');
+    // The release is persisted, the occurrence stays open: no delivery, no
+    // `markRan` — the lane owns the row now (`TurnStore.due` picks
+    // scheduler-bound continuable rows up on its own beat).
+    expect(deps.turns.get(turnId)?.status).toBe('continuable');
+    expect(fire?.settledAt).toBeNull();
+  });
+
+  it("a fire bound to its own job's continuable turn defers too — resolveBound belongs to the lane", async () => {
+    const { deps, jobs, fires, provider } = fixture([answer('non deve mai essere chiamato')]);
+    const job = jobs.add(SPEC);
+    const scheduledFor = job.nextFireAt.toISOString();
+    fires.claim(job.id, scheduledFor);
+    const turnId = fires.bind(job.id, scheduledFor, 'turn-continuable-bound');
+    const rec = deps.turns.create(
+      {
+        id: turnId,
+        principal: { kind: 'system', source: 'scheduler' },
+        tenant: 'host',
+        surface: 'cli',
+        sessionId: 'sess-continuable-bound',
+        jobId: job.id,
+        model: 'test-model',
+        messages: [{ role: 'user', content: [{ type: 'text', text: jobPayload(job) }] }],
+        taint: 0,
+        counters: { ...counters(), contextBuilt: true },
+        replyTo: { channel: 'cli' },
+      },
+      99999,
+    );
+    expect(
+      deps.turns.releaseContinuable(
+        turnId,
+        {
+          messages: providerMessages(rec),
+          taint: 0,
+          counters: rec.counters,
+          reason: { class: 'provider_empty', lease: 0, at: new Date().toISOString() },
+        },
+        rec.claimToken,
+      ),
+    ).toBe(true);
+
+    const outcome = await makeJobRunner(deps, fires)(job, undefined);
+
+    expect(provider.calls).toBe(0);
+    expect(outcome).toEqual({ deferred: true });
+    expect(fires.get(job.id, scheduledFor)?.settledAt).toBeNull();
+  });
+});

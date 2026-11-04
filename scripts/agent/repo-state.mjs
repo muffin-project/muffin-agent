@@ -127,6 +127,38 @@ section('open PRs', [
     : 'none (or gh unavailable)',
 ]);
 
+// Live required-check state per open PR (exact head SHA + conclusions).
+// Derived, never remembered: ORCHESTRATION.md lists CI/check state among the
+// accidental state to derive rather than persist. Best-effort like every
+// other section: on failure it prints `unknown` instead of failing.
+const REQUIRED = ['dco', 'verifica', 'accettazione', 'install', 'collegamenti', 'strumenti'];
+const prChecks = [];
+for (const p of prs.slice(0, 10)) {
+  const view = gh(['pr', 'view', String(p.number), '--json', 'headRefOid,statusCheckRollup']);
+  if (!view) {
+    prChecks.push(`#${p.number}: checks unknown (gh unavailable)`);
+    continue;
+  }
+  try {
+    const v = JSON.parse(view);
+    const rolls = Array.isArray(v.statusCheckRollup) ? v.statusCheckRollup : [];
+    const byName = new Map(rolls.map((r) => [r.name, r]));
+    const parts = REQUIRED.map((name) => {
+      const r = byName.get(name);
+      if (!r) return `${name}:absent`;
+      if (r.status !== 'COMPLETED') return `${name}:${String(r.status || 'pending').toLowerCase()}`;
+      return `${name}:${String(r.conclusion || 'unknown').toLowerCase()}`;
+    });
+    const extra = rolls
+      .filter((r) => !REQUIRED.includes(r.name) && r.status !== 'COMPLETED')
+      .map((r) => `${r.name}:${String(r.status || '').toLowerCase()}`);
+    prChecks.push(`#${p.number} @ ${short(v.headRefOid)}: ${[...parts, ...extra].join(' ')}`);
+  } catch {
+    prChecks.push(`#${p.number}: checks unknown (parse failed)`);
+  }
+}
+section('PR checks (live, exact head)', prChecks.length ? prChecks : ['none (or gh unavailable)']);
+
 const claimed = issues.filter((i) => (i.assignees || []).length > 0);
 section('open issue graph', [
   issues.length

@@ -7,10 +7,10 @@ import type { LoopDeps } from '../../agent/loop.js';
 import { type ChatResult, type Provider, ProviderError } from '../../agent/providers/types.js';
 import { buildRuntime } from '../../agent/runtime.js';
 import { runInit } from '../../cli/init.js';
+import { ModelLane } from '../../core/turns/model-lane.js';
 import type { TurnRecord } from '../../core/turns/store.js';
 import { type TelegramApi, TelegramError } from './api.js';
 import { type TelegramConfig, TelegramConnector } from './connector.js';
-import { ModelLane } from '../../core/turns/model-lane.js';
 import { TelegramDeliveryStore } from './delivery.js';
 import { UpdateInbox } from './updates.js';
 
@@ -118,7 +118,8 @@ function harness(
     // the behaviour assertions stay about the turn, not the wire.
 
     sendRichMessage: over.send
-      ? async (chatId: number, rich: { html?: string; blocks?: unknown[] }) => over.send!(chatId, richTesto(rich))
+      ? async (chatId: number, rich: { html?: string; blocks?: unknown[] }) =>
+          over.send!(chatId, richTesto(rich))
       : async (_chatId: number, rich: { html?: string; blocks?: unknown[] }) => {
           outbound.push(`send:${richTesto(rich)}`);
           return {} as never;
@@ -217,7 +218,8 @@ describe('a telegram turn records where the answer goes and whether it got there
     await deliver(h, [privateMsg(9)]);
 
     const row = h.row();
-    expect(calls).toBe(11);
+    // Initial lease plus three bounded automatic renewals, eleven attempts each.
+    expect(calls).toBe(44);
     expect(h.outbound).toHaveLength(1);
     expect(h.outbound[0]).toMatch(/provider|riprendi/i);
     expect(h.outbound[0]).not.toContain('secret provider response');
@@ -264,7 +266,8 @@ describe('a telegram turn records where the answer goes and whether it got there
     // text: the event stays pending, the failure stays recorded, the doctor
     // still sees both. Redelivery happens for the final answer, once the
     // owner continues the work to `done`.
-    expect(calls).toBe(11);
+    // Initial lease plus three bounded automatic renewals, eleven attempts each.
+    expect(calls).toBe(44);
     expect(attempts.length).toBeGreaterThanOrEqual(1);
     expect(attempts[0]).not.toContain('connection details stay private');
     expect(h.inbox.pending()).toHaveLength(1);

@@ -124,6 +124,42 @@ function world(
 }
 
 describe('Incident A · useful work then provider stalls', () => {
+  it('a continuation identifies the interrupted request, not the session plan', async () => {
+    const w = world([
+      stall(), stall(), stall(), stall(), stall(),
+      stall(), stall(), stall(), stall(), stall(),
+      { text: 'The brief is ready.', toolCalls: [], stopReason: 'end', usage: someUsage, model: 'test-model' },
+    ], new Map());
+    const session = w.sessions.open('owner');
+    const request = 'Summarize my open commitments. Read only; do not execute the plan.';
+    w.deps.todos.plan('host', session.id, ['Build the old animation.'], 0);
+    w.sessions.append(session, { role: 'user', content: 'Build the old animation.', surface: 'cli', createdAt: NOW().toISOString(), tier: 0 });
+    const first = await runTurn(w.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: request });
+    expect(first.stopped).toBe('continuable');
+    const correction = { role: 'user' as const, content: [{ type: 'text' as const, text: 'Instead list only two items. Still read only.' }] };
+    const second = await continueTurn(w.deps, first.turnId, { message: correction, session });
+    if ('why' in second) throw new Error(second.why);
+    expect(second.turnId).toBe(first.turnId);
+    expect(second.stopped).toBe('continuable');
+    const grant = { role: 'user' as const, content: [{ type: 'text' as const, text: 'riprendi' }] };
+    const third = await continueTurn(w.deps, first.turnId, { message: grant, session });
+    if ('why' in third) throw new Error(third.why);
+    expect(third.turnId).toBe(first.turnId);
+    const messages = w.provider.seen.at(-1)!.messages;
+    const controls = messages.filter((m) => m.origin === 'harness');
+    const control = controls.map((m) => JSON.stringify(m.content)).join('\n');
+    expect(control).toContain(first.turnId);
+    expect(control).toContain(request);
+    expect(control).not.toContain('Build the old animation.');
+    expect(controls).toHaveLength(1);
+    expect(messages).toContainEqual(correction);
+    expect(messages.at(-1)).toEqual(grant);
+    expect(w.turns.get(first.turnId)?.inputText).toBe(request);
+    // The derived reference is control, never another owner occurrence.
+    expect(w.sessions.read(session).filter((m) => m.content === request)).toHaveLength(1);
+    expect(w.sessions.read(session).filter((m) => m.content === 'riprendi')).toHaveLength(1);
+  });
+
   it('the lease ends continuable with a truthful diagnostic, not done/error', async () => {
     const reads = new Map<string, number>();
     const w = world(
@@ -236,11 +272,11 @@ describe('Incident A · useful work then provider stalls', () => {
     expect(row?.counters.recoveriesUsed).toBe(0);
   });
 
-  it('requireTool exhaustion becomes continuable; the next lease starts auto', async () => {    // Mandate regression: lease 1 walks the whole cascade to requireTool
-    // (the wire IS demanded once, there), becomes continuable, and lease 2
-    // runs with fresh recovery state and toolChoice=auto — stale
-    // requireTool/strict-json/nudge directives from lease 1 are archived,
-    // never behaviorally active.
+  it('empty-cascade exhaustion becomes continuable; the next lease starts auto', async () => {    // Mandate regression: lease 1 walks the whole cascade to requireTool
+    // (words only now — no round ever sends tool_choice: required),
+    // becomes continuable, and lease 2 runs with fresh recovery state and
+    // toolChoice=auto — stale strict-json/nudge directives from lease 1 are
+    // archived, never behaviorally active.
     const genuine = (): ChatResult => ({
       text: null,
       toolCalls: [],
@@ -279,9 +315,10 @@ describe('Incident A · useful work then provider stalls', () => {
     expect(first.stopped).toBe('continuable');
     expect(first.reason).toBe('recovery_exhausted');
     expect(w.turns.get(first.turnId)?.counters.recoveriesUsed).toBe(5);
-    // The escalation fired exactly once, in lease 1, then was consumed.
+    // No round ever demanded: the whole cascade, last rung included, stayed auto.
     const demanded = w.provider.seen.filter((c) => c.toolChoice === 'required');
-    expect(demanded).toHaveLength(1);
+    expect(demanded).toHaveLength(0);
+    for (const call of w.provider.seen) expect(call.toolChoice ?? 'auto').toBe('auto');
 
     const second = await continueTurn(w.deps, first.turnId, {
       message: { role: 'user', content: [{ type: 'text', text: 'riprendi' }] },
@@ -291,7 +328,8 @@ describe('Incident A · useful work then provider stalls', () => {
     expect(second.stopped).toBe('answered');
     // Lease 2 never demanded a call and never re-read a stale directive:
     // every request auto, no recovery text from lease 1 on the wire.
-    const lease2 = w.provider.seen.slice(demanded.length + 5);
+    // Lease 1 spent 1 initial + 5 recovery calls; the rest is lease 2.
+    const lease2 = w.provider.seen.slice(6);
     expect(lease2.length).toBeGreaterThan(0);
     for (const call of lease2) expect(call.toolChoice ?? 'auto').toBe('auto');
     const lastWire = JSON.stringify(lease2.at(-1)!.messages);

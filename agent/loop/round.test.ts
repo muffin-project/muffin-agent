@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import DatabaseCtor from 'better-sqlite3';
@@ -18,8 +18,9 @@ import { JsonlExporter, SimpleTracer } from '../../core/tracing/tracer.js';
 import type { AttributeValue, SpanHandle } from '../../core/tracing/types.js';
 import { TurnStore } from '../../core/turns/store.js';
 import { TodoStore } from '../../core/turns/todo.js';
-import { MAX_TRANSPORT_RETRIES } from './types.js';
 import { CONSERVATIVE, type Profile } from '../profiles/profile.js';
+import { OpenAIChatGPTProvider } from '../providers/openai-chatgpt.js';
+import { OpenAICompatProvider } from '../providers/openai-compat.js';
 import {
   type ChatCall,
   type ChatResult,
@@ -30,13 +31,14 @@ import {
   type StreamEvent,
 } from '../providers/types.js';
 import { searchCapability, searchSpec } from '../tools/search.js';
-import { makeSnapshot } from './permissions.js';
-import { type RoundScope, recover, runRounds } from './round.js';
-import { TurnRun } from './run-state.js';
 import { ExecutionBudget } from './execution-budget.js';
+import { makeSnapshot } from './permissions.js';
+import { type RoundScope, recover, runRounds, tryAutoRenewLease } from './round.js';
+import { TurnRun } from './run-state.js';
 import {
   assertNever,
   type LoopDeps,
+  MAX_TRANSPORT_RETRIES,
   type RegisteredTool,
   type ToolContext,
   type TurnDelta,
@@ -186,6 +188,7 @@ function scriptedProvider(script: {
 
 function harness(options: {
   provider: Provider;
+  model?: string;
   profile?: Profile;
   tools?: RegisteredTool[];
   decls?: CapabilityDecl[];
@@ -205,7 +208,7 @@ function harness(options: {
   const deps: LoopDeps = {
     provider: options.provider,
     profile,
-    model: 'test',
+    model: options.model ?? 'test',
     tools,
     capabilities: new Map(decls.map((d) => [d.id, d])),
     decide: createDecide({
@@ -229,7 +232,7 @@ function harness(options: {
     tenant: 'host',
     surface: 'cli',
     sessionId: 's1',
-    model: 'test',
+    model: options.model ?? 'test',
     messages: options.messages ?? [{ role: 'user', content: [{ type: 'text', text: 'ciao' }] }],
     taint: 0,
     counters: freshCounters(),
@@ -355,6 +358,107 @@ describe('la porta di risposta è chiesta prima della chiamata al modello', () =
   });
 });
 
+describe('ChatGPT transport recovery through the production loop', () => {
+  it('does not retry an unfinished ChatGPT stream after the persisted budget is spent', async () => {
+    let requests = 0;
+    const provider = new OpenAIChatGPTProvider(
+      { accessToken: async () => 'synthetic-token', listModels: async () => [] },
+      {
+        fetch: (async () => {
+          requests += 1;
+          return new Response(
+            'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"discarded"}\n\n',
+            {
+              headers: { 'content-type': 'text/event-stream' },
+            },
+          );
+        }) as typeof fetch,
+      },
+    );
+    const h = harness({
+      provider,
+      model: 'gpt-6.1-sol',
+      profile: { ...CONSERVATIVE, thinking: 'adaptive' },
+    });
+    h.run.transportRetriesLeft = 0;
+    await expect(runRounds(h.scope)).rejects.toMatchObject({
+      name: 'ProviderError',
+      retryable: true,
+      source: 'transport',
+    });
+    expect(requests).toBe(1);
+    expect(h.run.transportRetriesLeft).toBe(0);
+  });
+
+  it.each(['truncated stream', 'connection failure'])(
+    'retries %s with the persisted transport budget',
+    async (failure) => {
+      let requests = 0;
+      const provider = new OpenAIChatGPTProvider(
+        {
+          accessToken: async () => 'synthetic-token',
+          listModels: async () => [],
+        },
+        {
+          fetch: (async () => {
+            requests += 1;
+            if (requests === 1) {
+              if (failure === 'connection failure')
+                throw new TypeError('synthetic connection reset');
+              return new Response(
+                'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"discarded partial"}\n\n',
+                {
+                  headers: { 'content-type': 'text/event-stream' },
+                },
+              );
+            }
+            const response = {
+              id: 'resp_recovered',
+              model: 'gpt-6.1-sol',
+              status: 'completed',
+              output: [
+                {
+                  type: 'message',
+                  role: 'assistant',
+                  status: 'completed',
+                  content: [{ type: 'output_text', text: 'Recovered answer.' }],
+                },
+              ],
+              usage: { input_tokens: 1, output_tokens: 1 },
+            };
+            return new Response(
+              `event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', response })}\n\n`,
+              {
+                headers: { 'content-type': 'text/event-stream' },
+              },
+            );
+          }) as typeof fetch,
+        },
+      );
+      const progress: TurnEvent[] = [];
+      const deltas: TurnDelta[] = [];
+      const h = harness({
+        provider,
+        model: 'gpt-6.1-sol',
+        profile: { ...CONSERVATIVE, thinking: 'adaptive' },
+        onDelta: (event) => deltas.push(event),
+        onProgress: (event) => progress.push(event),
+      });
+      const result = await runRounds(h.scope);
+      expect(requests).toBe(2);
+      expect(result).toMatchObject({
+        stopped: 'answered',
+        text: 'Recovered answer.',
+        iterations: 2,
+      });
+      expect(h.run.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES - 1);
+      expect(h.turns.get(h.id)?.counters.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES - 1);
+      expect(progress.filter((event) => event.type === 'model_retry')).toHaveLength(1);
+      expect(JSON.stringify(deltas)).not.toContain('discarded partial');
+    },
+  );
+});
+
 describe('un solo fallback, mai un secondo tentativo in streaming', () => {
   /**
    * The mutation this case exists for: a stream that breaks retried *as a
@@ -418,6 +522,74 @@ describe('un solo fallback, mai un secondo tentativo in streaming', () => {
     expect(retries).toEqual([
       { type: 'model_retry', class: 'transport', attempt: 1, max: MAX_TRANSPORT_RETRIES, inMs: expect.any(Number) },
     ]);
+  });
+
+  it('un HTTP 404 della route OpenRouter Free attraversa il retry durevole del runtime', async () => {
+    let tentativiHttp = 0;
+    const richieste: Record<string, unknown>[] = [];
+    const provider = new OpenAICompatProvider(
+      'sk-test',
+      'https://openrouter.ai/api/v1',
+      {},
+      {
+        metadataFetch: async () =>
+          new Response(JSON.stringify({ data: { id: 'openrouter/free' } }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        fetch: async (_input: string | URL | Request, init?: RequestInit) => {
+          const body = typeof init?.body === 'string' ? init.body : '{}';
+          richieste.push(JSON.parse(body) as Record<string, unknown>);
+          tentativiHttp += 1;
+          if (tentativiHttp === 1) {
+            return new Response(
+              JSON.stringify({ error: { message: 'stale free route', code: 404 } }),
+              {
+                status: 404,
+                headers: { 'content-type': 'application/json' },
+              },
+            );
+          }
+          const chunk = {
+            id: 'chatcmpl-test',
+            object: 'chat.completion.chunk',
+            created: 0,
+            model: 'openrouter/free',
+            choices: [
+              {
+                index: 0,
+                delta: { role: 'assistant', content: 'recuperato' },
+                finish_reason: 'stop',
+              },
+            ],
+          };
+          return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+            status: 200,
+            headers: { 'content-type': 'text/event-stream' },
+          });
+        },
+      },
+    );
+    const progress: TurnEvent[] = [];
+    const h = harness({
+      provider,
+      model: 'openrouter/free',
+      profile: { ...CONSERVATIVE, thinking: 'adaptive' },
+      onDelta: () => undefined,
+      onProgress: (event) => progress.push(event),
+    });
+
+    const result = await runRounds(h.scope);
+
+    expect(tentativiHttp).toBe(2);
+    expect(richieste).toHaveLength(2);
+    expect(richieste.map((request) => request.model)).toEqual(['openrouter/free', 'openrouter/free']);
+    expect(typeof richieste[0]?.session_id).toBe('string');
+    expect(richieste[1]?.session_id).toBe(richieste[0]?.session_id);
+    expect(result).toMatchObject({ stopped: 'answered', text: 'recuperato', iterations: 2 });
+    expect(h.run.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES - 1);
+    expect(h.turns.get(h.id)?.counters.transportRetriesLeft).toBe(MAX_TRANSPORT_RETRIES - 1);
+    expect(progress.filter((event) => event.type === 'model_retry')).toHaveLength(1);
   });
 });
 
@@ -510,20 +682,85 @@ describe('recover cammina la cascata del profilo, un passo per tentativo', () =>
   });
 });
 
-describe('il gate di completezza spinge una volta sola', () => {
-  it('e la seconda volta la risposta resta, dichiarata sullo span', async () => {
+describe('il gate di completezza registra e non richiama', () => {
+  it('la prima risposta con testo resta, al primo giro, dichiarata sullo span', async () => {
+    // Simple-loop: testo + zero call = risposta terminale. Il gate rileva
+    // (attributi per Control/eval) ma non spende un secondo giro a modello.
     const { tool, decl } = okTool('fs_write');
     const provider = scriptedProvider({
-      chat: [reply('Ho usato fs_write per salvarlo.'), reply('Ho usato fs_write, davvero.')],
+      chat: [reply('Ho usato fs_write per salvarlo.')],
     });
     const h = harness({ provider, tools: [tool], decls: [decl] });
 
     const result = await runRounds(h.scope);
 
-    expect(provider.chatCalls).toHaveLength(2);
+    expect(provider.chatCalls).toHaveLength(1);
+    expect(result.stopped).toBe('answered');
+    expect(result.text).toBe('Ho usato fs_write per salvarlo.');
+    expect(h.run.nudgedForCompletion).toBe(true);
+    expect(h.span.attrs['muffin.completion.named_uncalled']).toBe('fs_write');
+    expect(h.span.attrs['muffin.completion.unresolved']).toBe(true);
+  });
+});
+
+describe('il gate di completezza legge i contatori di vita del turno (#603)', () => {
+  /**
+   * The owner-visible failure of 2026-09-19: a continued turn on the same
+   * durable identity, 6 tool calls folded into `lifetime` by the prior lease
+   * and 0 in the fresh one, answering from that prior evidence while naming
+   * the tool. Lease-local truth misclassifies it as narrating an action it
+   * never took, and the valid streamed draft is closed as `superseded`.
+   *
+   * MUTATION-PROVABLE: with the gate reverted to `run.toolCallsMade`, the
+   * nudge fires, the second scripted answer is consumed, and the call-count
+   * assertion below goes red.
+   */
+  it('un turno continuato che risponde da prove del lease precedente non è mai superseded', async () => {
+    const { tool, decl } = okTool('fs_read');
+    const deltas: TurnDelta[] = [];
+    const first = 'Ho letto il file con fs_read: ecco cosa contiene.';
+    const provider = scriptedProvider({
+      stream: [
+        [{ type: 'text_delta', text: first }, { type: 'done', result: reply(first) }],
+        [{ type: 'text_delta', text: 'seconda risposta' }, { type: 'done', result: reply('seconda risposta') }],
+      ],
+    });
+    const h = harness({ provider, tools: [tool], decls: [decl], onDelta: (d) => deltas.push(d) });
+    // Durable evidence from the prior lease, fresh lease with zero new calls.
+    h.scope.record.lifetime.toolCallsMade = 6;
+
+    const result = await runRounds(h.scope);
+
+    expect(result.stopped).toBe('answered');
+    expect(result.text).toBe(first);
+    expect(provider.streamCalls).toHaveLength(1);
+    expect(h.run.nudgedForCompletion).toBe(false);
+    expect(deltas.filter((d) => d.type === 'boundary')).toEqual([]);
+  });
+
+  /**
+   * The other direction: the detection must not delete the answer either. A
+   * turn with zero calls in every lease that narrates a tool still ends
+   * `answered` on the first text — recorded, never re-asked, never
+   * `superseded`.
+   */
+  it('un turno davvero senza chiamate che narra un tool resta risposto, mai superseded', async () => {
+    const { tool, decl } = okTool('fs_write');
+    const deltas: TurnDelta[] = [];
+    const first = 'Ho usato fs_write per salvarlo.';
+    const provider = scriptedProvider({
+      stream: [[{ type: 'text_delta', text: first }, { type: 'done', result: reply(first) }]],
+    });
+    const h = harness({ provider, tools: [tool], decls: [decl], onDelta: (d) => deltas.push(d) });
+
+    const result = await runRounds(h.scope);
+
+    expect(result.stopped).toBe('answered');
+    expect(provider.streamCalls).toHaveLength(1);
     expect(h.run.nudgedForCompletion).toBe(true);
     expect(h.span.attrs['muffin.completion.unresolved']).toBe(true);
-    expect(result.text).toBe('Ho usato fs_write, davvero.');
+    expect(deltas).not.toContainEqual({ type: 'boundary', reason: 'superseded' });
+    expect(result.text).toBe(first);
   });
 });
 
@@ -570,11 +807,92 @@ describe('execution budget', () => {
 
     const result = await runRounds(h.scope);
 
-    expect(calls).toBe(1);
-    // P0-B: la deadline cede la lease con la sua classe, senza bruciare retry
-    // di trasporto né rung semantici.
+    // Fase 1 calm harness: la lease lenta si rinnova in silenzio (1 + 3
+    // rinnovi) invece di parcheggiare il turno al primo colpo — poi cede
+    // onestamente per la via continuable normale, dove la conta il breaker.
+    expect(calls).toBe(4);
     expect(result).toMatchObject({ stopped: 'continuable', reason: 'model_deadline' });
     expect(h.span.attrs['muffin.turn.stop_reason']).toBe('model_deadline');
+  });
+
+  it('un abort da deadline conserva la parte di storia del provider sullo span', async () => {
+    // Regressione del 16/10/2026: cinque `model_deadline` di fila sul main
+    // senza un byte dal provider, e dal DB non si poteva dire "mai connesso"
+    // da "connesso ma muto" — lo span portava solo `abort_reason`.
+    const provider: Provider = {
+      kind: 'openai-compat',
+      async chat(call) {
+        await new Promise<never>((_, reject) => {
+          call.signal?.addEventListener(
+            'abort',
+            () =>
+              reject(
+                new ProviderError('aborted', false, undefined, 'transport', undefined, false, {
+                  requestId: 'gen-123',
+                  upstream: 'nvidia',
+                  model: 'test',
+                  receivedAnyEvent: false,
+                  bytesReceived: 0,
+                }),
+              ),
+            { once: true },
+          );
+        });
+        throw new Error('unreachable');
+      },
+    };
+    const h = harness({
+      provider,
+      profile: { ...CONSERVATIVE, recovery: ['retryOnce'] },
+      execution: new ExecutionBudget({ modelCallDeadlineMs: 10, turnWallDeadlineMs: 200, stallTimeoutMs: 20 }),
+    });
+
+    const result = await runRounds(h.scope);
+
+    expect(result).toMatchObject({ stopped: 'continuable', reason: 'model_deadline' });
+    const dir = join(h.home, 'traces');
+    const chiamata = readdirSync(dir)
+      .filter((f) => f.endsWith('.jsonl'))
+      .flatMap((f) => readFileSync(join(dir, f), 'utf8').split('\n'))
+      .filter((l) => l.trim() !== '')
+      .map((l) => JSON.parse(l) as { name: string; attributes: Record<string, AttributeValue> })
+      .filter((r) => r.name === 'muffin.chat_call')
+      .at(-1);
+    if (chiamata === undefined) throw new Error('nessuno span muffin.chat_call esportato');
+    const attrs = chiamata.attributes;
+    expect(attrs['muffin.chat_call.abort_reason']).toBe('model_deadline');
+    expect(attrs['muffin.chat_call.error_name']).toBe('ProviderError');
+    expect(attrs['muffin.chat_call.provider_request_id']).toBe('gen-123');
+    expect(attrs['muffin.chat_call.provider_upstream']).toBe('nvidia');
+    expect(attrs['muffin.chat_call.stream_received_any_event']).toBe(false);
+    expect(attrs['muffin.chat_call.stream_bytes_received']).toBe(0);
+  });
+
+  it('una risposta alla terza chiamata chiude answered, senza parcheggi intermedi', async () => {
+    let calls = 0;
+    const provider: Provider = {
+      kind: 'openai-compat',
+      async chat(call) {
+        calls += 1;
+        if (calls < 3) {
+          await new Promise<never>((_, reject) => {
+            call.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+          });
+          throw new Error('unreachable');
+        }
+        return reply('eccomi');
+      },
+    };
+    const h = harness({
+      provider,
+      execution: new ExecutionBudget({ modelCallDeadlineMs: 10, turnWallDeadlineMs: 500, stallTimeoutMs: 20 }),
+    });
+
+    const result = await runRounds(h.scope);
+
+    expect(calls).toBe(3);
+    expect(result).toMatchObject({ stopped: 'answered' });
+    expect(result.text).toBe('eccomi');
   });
 
   it('a call our own deadline aborted is never read as the provider answering empty', async () => {
@@ -605,15 +923,21 @@ describe('execution budget', () => {
 
     const result = await runRounds(h.scope);
 
-    expect(calls).toBe(1);
+    // Fase 1: i rinnovi silenziosi provano 4 volte prima di cedere — ma mai
+    // come provider_empty (la ragione resta il segnale, non la forma).
+    expect(calls).toBe(4);
     expect(result).toMatchObject({ stopped: 'continuable', reason: 'model_deadline' });
   });
 });
 
-describe('requireTool arma il filo una volta sola (ADR-0082)', () => {
+describe('requireTool non arma mai il filo (simple-loop)', () => {
   const vuota: ChatResult = { text: null, toolCalls: [], stopReason: 'end', usage, model: 'test' };
 
-  it('il giro dopo un vuoto chiede required, poi torna auto', async () => {
+  it('il giro dopo un vuoto resta auto: parole sì, forzatura no', async () => {
+    // SOTA (OpenAI final-output rule, LangGraph tools_condition): nessun giro
+    // chiede mai tool_choice: required. L'ultimo rung prescrive a parole,
+    // come strictJson — fabbricare una call che il modello non ha scelto
+    // era la disonestà che round.ts stesso nominava.
     const { tool, decl } = okTool('noop');
     const provider = scriptedProvider({ chat: [vuota, reply('fatto')] });
     const h = harness({
@@ -628,11 +952,9 @@ describe('requireTool arma il filo una volta sola (ADR-0082)', () => {
     expect(result.stopped).toBe('answered');
     expect(provider.chatCalls).toHaveLength(2);
     expect(provider.chatCalls[0]!.toolChoice).toBe('auto');
-    expect(provider.chatCalls[1]!.toolChoice).toBe('required');
-    // Consumato: non resta armato sul turno.
-    expect(h.run.requireToolOnce).toBe(false);
+    expect(provider.chatCalls[1]!.toolChoice).toBe('auto');
     expect(h.span.attrs['muffin.recovery.strategy']).toBe('requireTool');
-    expect(h.span.attrs['muffin.recovery.tool_choice']).toBe('required');
+    expect(h.span.attrs['muffin.recovery.tool_choice']).toBeUndefined();
   });
 
   it('a cascata esaurita non arma niente', () => {
@@ -641,7 +963,6 @@ describe('requireTool arma il filo una volta sola (ADR-0082)', () => {
       profile: { ...CONSERVATIVE, recovery: [] },
     });
     expect(recover(h.scope, 'empty')).toBe(false);
-    expect(h.run.requireToolOnce).toBe(false);
   });
 });
 
@@ -760,7 +1081,6 @@ describe('verità del fallimento provider/risultato (P0-A)', () => {
     expect(result.reason).toBe('provider_empty');
     expect(h.run.recoveriesUsed).toBe(0);
     for (const call of provider.chatCalls) expect(call.toolChoice).not.toBe('required');
-    expect(h.run.requireToolOnce).toBe(false);
   });
 
   /**
@@ -954,5 +1274,35 @@ describe('la compattazione segue il budget del profilo', () => {
     await runRounds(h.scope);
 
     expect(risultatiInviati(provider)).toEqual([big(12_000), big(12_000)]);
+  });
+});
+
+describe('tryAutoRenewLease — rinnovo silenzioso delle lease lente', () => {
+  const run = (over: Record<string, number> = {}) => ({
+    toolCallsMade: 0,
+    autoRenewsUsed: 0,
+    autoRenewBaselineCalls: 0,
+    ...over,
+  });
+  it('rinnova model_stall e model_deadline fino al tetto', () => {
+    const r = run();
+    expect(tryAutoRenewLease(r, 'model_deadline')).toBe(true);
+    expect(tryAutoRenewLease(r, 'model_deadline')).toBe(true);
+    expect(tryAutoRenewLease(r, 'model_stall')).toBe(true);
+    expect(r.autoRenewsUsed).toBe(3);
+    expect(tryAutoRenewLease(r, 'model_deadline')).toBe(false);
+  });
+  it('il progresso azzera la conta', () => {
+    const r = run({ toolCallsMade: 0, autoRenewsUsed: 2, autoRenewBaselineCalls: 0 });
+    r.toolCallsMade = 5;
+    expect(tryAutoRenewLease(r, 'model_deadline')).toBe(true);
+    expect(r.autoRenewsUsed).toBe(1);
+  });
+  it('muro, budget e stop non rinnovano mai', () => {
+    for (const reason of ['turn_deadline', 'active_model_budget_exhausted', 'user_stop'] as const) {
+      const r = run();
+      expect(tryAutoRenewLease(r, reason)).toBe(false);
+      expect(r.autoRenewsUsed).toBe(0);
+    }
   });
 });

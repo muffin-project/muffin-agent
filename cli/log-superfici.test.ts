@@ -2,7 +2,7 @@ import { createServer, type Server } from 'node:http';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runInit } from './init.js';
 import { connectSurfaces, rigaDiLog } from './surface.js';
 import { ModelLane } from '../core/turns/model-lane.js';
@@ -47,7 +47,18 @@ function fintoBotApi(): Promise<{ baseUrl: string; close: () => Promise<void> }>
 }
 
 describe('il sink di log di `connectSurfaces` arriva fino al connettore', () => {
-  afterEach(() => vi.restoreAllMocks());
+  // ADR-0103: la riga «connesso come» nasce dal polling, che senza gateway
+  // parte solo dietro l'hatch. Questi test provano il sink, non il cancello.
+  let hatchPrevio: string | undefined;
+  beforeEach(() => {
+    hatchPrevio = process.env.MUFFIN_EXEC_LOCAL;
+    process.env.MUFFIN_EXEC_LOCAL = '1';
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (hatchPrevio === undefined) delete process.env.MUFFIN_EXEC_LOCAL;
+    else process.env.MUFFIN_EXEC_LOCAL = hatchPrevio;
+  });
 
   it('la riga «telegram: connesso come @…» esce dal sink del chiamante, non da stderr', async () => {
     const provider = await startFakeProvider({ main: [{ text: 'irrilevante' }] });

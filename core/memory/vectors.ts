@@ -15,6 +15,9 @@ import { requestPredicateSql } from './schema.js';
  */
 
 export type ChunkSource = 'episode' | 'fact';
+type TenantIndexEntry = { tenantId: string; kind: ChunkSource; sourceId: number; text: string };
+
+export const VECTOR_INDEX_BATCH_SIZE = 200;
 
 const CHUNKS_SCHEMA = `
 CREATE TABLE IF NOT EXISTS chunks (
@@ -59,7 +62,7 @@ CREATE INDEX IF NOT EXISTS idx_chunks_tenant ON chunks(tenant_id, source_kind);
 function sqlBacklog(perTenant: boolean): string {
   const e = perTenant ? 'e.tenant_id = :tenant AND ' : '';
   const f = perTenant ? 'f.tenant_id = :tenant AND ' : '';
-  return `SELECT 'episode' AS kind, e.id AS sourceId, e.content AS text
+  return `SELECT e.tenant_id AS tenantId, 'episode' AS kind, e.id AS sourceId, e.content AS text
            FROM episodes e
           WHERE ${e}e.content IS NOT NULL AND trim(e.content) <> ''
             AND e.superseded_at IS NULL
@@ -67,7 +70,7 @@ function sqlBacklog(perTenant: boolean): string {
                              WHERE c.tenant_id = e.tenant_id AND c.source_kind = 'episode'
                                AND c.source_id = e.id AND c.embedding_v = :ev)
          UNION ALL
-         SELECT 'fact' AS kind, f.id AS sourceId,
+         SELECT f.tenant_id AS tenantId, 'fact' AS kind, f.id AS sourceId,
                 s.name || ' ' || f.predicate || ' ' || COALESCE(f.object_value, o.name, '') AS text
            FROM facts f
            JOIN entities s ON s.id = f.subject_id
@@ -274,7 +277,13 @@ export class VectorIndex {
     entries: { kind: ChunkSource; sourceId: number; text: string }[],
     now: string,
   ): Promise<number> {
-    const fresh = entries.filter((e) => e.text.trim().length > 0 && !this.alreadyIndexed(tenantId, e));
+    return this.indexEntries(entries.map((entry) => ({ ...entry, tenantId })), now);
+  }
+
+  private async indexEntries(entries: TenantIndexEntry[], now: string): Promise<number> {
+    const fresh = entries.filter(
+      (entry) => entry.text.trim().length > 0 && !this.alreadyIndexed(entry.tenantId, entry),
+    );
     if (fresh.length === 0) return 0;
 
     const vectors = await this.embedder.embed(fresh.map((e) => e.text));
@@ -289,11 +298,18 @@ export class VectorIndex {
 
     const tx = this.db.transaction(() => {
       for (const [i, entry] of fresh.entries()) {
-        const info = insertChunk.run(tenantId, entry.kind, entry.sourceId, entry.text, this.embedder.id, now);
+        const info = insertChunk.run(
+          entry.tenantId,
+          entry.kind,
+          entry.sourceId,
+          entry.text,
+          this.embedder.id,
+          now,
+        );
         // BigInt, not Number: vec0 rejects the latter outright.
         insertVector.run({
           id: BigInt(info.lastInsertRowid),
-          tenant: tenantId,
+          tenant: entry.tenantId,
           emb: toVectorBlob(vectors[i]!),
         });
       }
@@ -411,7 +427,10 @@ export class VectorIndex {
     );
   }
 
-  indexBacklog(tenantId: string, limit = 200): { kind: ChunkSource; sourceId: number; text: string }[] {
+  indexBacklog(
+    tenantId: string,
+    limit = VECTOR_INDEX_BATCH_SIZE,
+  ): { kind: ChunkSource; sourceId: number; text: string }[] {
     return this.db.prepare(`${sqlBacklog(true)} LIMIT :limit`).all({
       tenant: tenantId,
       ev: this.embedder.id,
@@ -421,6 +440,47 @@ export class VectorIndex {
       sourceId: number;
       text: string;
     }[];
+  }
+
+  /**
+   * Indexes one bounded page across all tenants, preserving the partition key.
+   *
+   * `doctor` counts the global backlog and recommends `muffin memory extract`
+   * to drain it. Fact consolidation remains host-only because a group speaker
+   * must never be inferred from the episode's `role`; this method only embeds
+   * the evidence under its existing tenant, exactly as `search()` later scopes
+   * retrieval. The page limit is global so a large number of tenants cannot
+   * turn one manual repair into an unbounded embedding run.
+   */
+  async indexBacklogAcrossTenants(
+    now: string,
+    limit = VECTOR_INDEX_BATCH_SIZE,
+    excludeTenant?: string,
+  ): Promise<number> {
+    const boundedLimit = Math.floor(limit);
+    if (!Number.isFinite(boundedLimit) || boundedLimit <= 0) return 0;
+
+    const rows = this.db
+      .prepare(
+        `SELECT tenantId, kind, sourceId, text
+           FROM (${sqlBacklog(false)})
+           ${excludeTenant === undefined ? '' : 'WHERE tenantId <> :excludeTenant'}
+          ORDER BY tenantId, kind, sourceId
+          LIMIT :limit`,
+      )
+      .all({
+        ev: this.embedder.id,
+        limit: boundedLimit,
+        ...(excludeTenant === undefined ? {} : { excludeTenant }),
+      }) as {
+      tenantId: string;
+      kind: ChunkSource;
+      sourceId: number;
+      text: string;
+    }[];
+    if (rows.length === 0) return 0;
+
+    return this.indexEntries(rows, now);
   }
 
   /** A health check can assert this is not zero — the failure that hides itself. */

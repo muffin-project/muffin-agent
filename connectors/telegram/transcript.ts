@@ -253,6 +253,18 @@ export type TranscriptOptions = {
   threadId?: number;
   /** Traces a swallowed Bot API failure. Absent means silent. */
   log?: (line: string) => void;
+  /**
+   * La domanda si è mostrata sul messaggio del turno (#784).
+   *
+   * Chiamata da `ask()` quando la domanda è presa, con l'id
+   * dell'approvazione e quello del messaggio che la ospita: chi registra lo
+   * scrive nel registro durevole, così la chiusura terminale del turno può
+   * toglierle la tastiera anche dopo un riavvio — quando questa trascrizione
+   * non esiste più. Mai chiamata quando `ask()` torna `false` (nessun
+   * messaggio vivo: il chiamante ripiega sul messaggio autonomo, che
+   * registra da sé). Non deve lanciare: la trascrizione la chiama protetta.
+   */
+  onAsked?: (mostrata: { approvalId: string; messageId: number }) => void;
 };
 
 export function startTranscript(api: TelegramApiLike, chatId: number, options: TranscriptOptions): Transcript {
@@ -1149,6 +1161,14 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
             return false;
           }
         }
+      }
+      // La domanda è sul messaggio del turno: chi registra la scrive nel
+      // registro durevole (#784). Protetta: la domanda è già mostrata, e un
+      // gancio che lancia non deve trasformarla in un ripiego.
+      try {
+        options.onAsked?.({ approvalId, messageId: seg.messageId });
+      } catch (error) {
+        log(`telegram: domanda non registrata — ${error instanceof Error ? error.message : String(error)}`);
       }
       return true;
     },

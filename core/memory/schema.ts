@@ -184,6 +184,61 @@ CREATE TABLE IF NOT EXISTS memory_review (
 );
 CREATE INDEX IF NOT EXISTS idx_memory_review_tenant ON memory_review(tenant_id, created_at);
 
+-- ---------- graph addendum: durable intentional-memory proposals (ADR-0051) --
+-- Many producers, one semantic writer. A producer (owner-stated ricorda, agent
+-- inference, a future import) never writes a belief: it stages a candidate
+-- here, and the canonical reconciler (ingest.ts reconcileProposal) is the
+-- only path that turns one into a fact. The row survives a crash between
+-- intent and commit, and the UNIQUE key makes a repeated proposal the same
+-- proposal instead of a second one.
+CREATE TABLE IF NOT EXISTS memory_proposals (
+  id                INTEGER PRIMARY KEY,
+  tenant_id         TEXT    NOT NULL,
+  -- What makes "the same proposal" the same: normalised
+  -- subject/predicate/object + producer + sorted source episodes. Compared
+  -- before any probabilistic matching, per ADR-0051's source-identity rule.
+  identity_key      TEXT    NOT NULL,
+  subject           TEXT    NOT NULL,
+  subject_kind      TEXT    NOT NULL DEFAULT 'person',
+  predicate         TEXT    NOT NULL,
+  object_value      TEXT    NOT NULL,
+  valid_from        TEXT,
+  -- Who produced the candidate: owner-stated (the owner said "ricorda"),
+  -- agent-inference (the model's own judgment something is worth keeping),
+  -- extraction (the automatic pipeline, when it stages instead of writing),
+  -- import (a future bulk path). Part of the key, never of the commit: two
+  -- producers staging the same content still converge to one belief.
+  producer          TEXT    NOT NULL
+                    CHECK (producer IN ('owner-stated','agent-inference','extraction','import')),
+  -- JSON array of episode ids this candidate derives from. Never empty: a
+  -- belief without provenance is not staged.
+  source_episodes   TEXT    NOT NULL,
+  -- The candidate sentence, shown to the judge as the incoming evidence.
+  content           TEXT    NOT NULL,
+  -- worst tier among the source episodes, taken at propose time. Never
+  -- lowered by the proposal: an inference over tier-3 evidence stays tier 3.
+  trust_tier        INTEGER NOT NULL CHECK (trust_tier BETWEEN 0 AND 3),
+  confidence        REAL    NOT NULL,
+  -- Orthogonal to the tier (see the facts origin column): owner-stated arrives as
+  -- said, agent inference as inferred. Derived from the producer, never
+  -- from a caller-supplied value.
+  origin            TEXT    NOT NULL DEFAULT 'said'
+                    CHECK (origin IN ('said','inferred','imported')),
+  importance        INTEGER NOT NULL DEFAULT 0 CHECK (importance BETWEEN 0 AND 2),
+  pinned_request    INTEGER NOT NULL DEFAULT 0,
+  status            TEXT    NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending','accepted','merged','superseded','review','rejected')),
+  -- JSON array of fact ids this proposal resolved to. Set once, with the
+  -- status, in the same transaction as the belief writes.
+  resulting_fact_ids TEXT,
+  -- The judge's reasoning, or why the proposal was rejected. Human-readable.
+  detail            TEXT,
+  proposed_at       TEXT    NOT NULL,
+  decided_at        TEXT,
+  UNIQUE(tenant_id, identity_key)
+);
+CREATE INDEX IF NOT EXISTS idx_proposals_pending ON memory_proposals(tenant_id, status);
+
 -- ---------- plane 3: derived (droppable) -------------------------------------
 CREATE TABLE IF NOT EXISTS profiles (
   entity_id     INTEGER PRIMARY KEY REFERENCES entities(id),

@@ -2,12 +2,16 @@ import { sleep } from '../../core/net/sleep.js';
 import { replyCapability } from '../../core/policy/doors.js';
 import type { CapabilityId, Decision, DecisionRequest } from '../../core/policy/types.js';
 import { redactText, scrubResourceEchoes } from '../../core/tracing/redact.js';
-import { ATTR } from '../../core/tracing/types.js';
+import { ATTR, type AttributeValue } from '../../core/tracing/types.js';
 import type { ContinuableClass } from '../../core/turns/store.js';
-import { checkCompletion, completionNudge } from '../completion.js';
+import { checkCompletion } from '../completion.js';
 import type { TenantClass } from '../context/assemble.js';
 import { compactToolResults } from '../context/compact.js';
 import { type RecoveryFailure, recoveryStep } from '../profiles/recovery.js';
+import {
+  ReasoningConfigurationError,
+  reasoningFromLegacyThinking,
+} from '../providers/reasoning.js';
 import {
   type ChatCall,
   type ChatResult,
@@ -15,21 +19,98 @@ import {
   ProviderError,
   ProviderStreamError,
 } from '../providers/types.js';
-import { ReasoningConfigurationError, reasoningFromLegacyThinking } from '../providers/reasoning.js';
-import { checkpoint, finish, releaseContinuable, suspendHere, type TurnScope } from './durability.js';
+import { ownedOpenRows } from './completion-gate.js';
 import { resolveConversationId } from './conversation.js';
-import type { ExecutionAbortReason, ExecutionBudget, ModelCallLease, ModelCallTelemetry } from './execution-budget.js';
-import { harnessMessage, isPartialMessage, ownerMessage, partialMessage, toolMessage } from './message-origin.js';
-import { continuationDedup, drainStream, edgeTrimmer, resolveContinuationSuffix, retryDelayMs } from './stream.js';
+import {
+  checkpoint,
+  finish,
+  releaseContinuable,
+  suspendHere,
+  type TurnScope,
+} from './durability.js';
+import type {
+  ExecutionAbortReason,
+  ExecutionBudget,
+  ModelCallLease,
+  ModelCallTelemetry,
+} from './execution-budget.js';
+import {
+  harnessMessage,
+  isPartialMessage,
+  ownerMessage,
+  partialMessage,
+  toolMessage,
+} from './message-origin.js';
+import {
+  continuationDedup,
+  drainStream,
+  edgeTrimmer,
+  resolveContinuationSuffix,
+  retryDelayMs,
+} from './stream.js';
+import type { TurnRun } from './run-state.js';
 import { runTool } from './tool-call.js';
 import {
   ApprovalRequired,
+  MAX_AUTO_RENEW_LEASES,
   MAX_PROVIDER_EMPTY_RETRIES,
   MAX_TRANSPORT_RETRIES,
   MAX_TRUNCATION_CONTINUATIONS,
   TOOL_RESULT_BUDGET_CHARS,
   type TurnResult,
 } from './types.js';
+
+/**
+ * What the provider said before a call failed, on the span that failed.
+ *
+ * A deadline/stall abort used to end the span with only `abort_reason`: the
+ * provider's share of the story (HTTP status, retryability, request id,
+ * whether the stream was ever established, bytes already received) was thrown
+ * away with the `aborted` error, and the database could not tell "never
+ * connected" from "connected but silent" from "stalled mid-stream".
+ * Observability only — no routing decision reads these attributes.
+ */
+function chatCallErrorAttrs(error: unknown): Record<string, AttributeValue> {
+  if (error instanceof ProviderStreamError) {
+    return {
+      'muffin.chat_call.error_name': 'ProviderStreamError',
+      'muffin.chat_call.error_message': redactText(error.message).slice(0, 300),
+      'muffin.chat_call.stream_partial': error.partial,
+    };
+  }
+  if (error instanceof ProviderError) {
+    const details = error.details;
+    return {
+      'muffin.chat_call.error_name': 'ProviderError',
+      'muffin.chat_call.error_message': redactText(error.message).slice(0, 300),
+      'muffin.chat_call.error_retryable': error.retryable,
+      'muffin.chat_call.error_source': error.source,
+      ...(error.status === undefined ? {} : { 'muffin.chat_call.error_status': error.status }),
+      ...(error.retryAfterMs === undefined
+        ? {}
+        : { 'muffin.chat_call.error_retry_after_ms': error.retryAfterMs }),
+      ...(details?.requestId === undefined
+        ? {}
+        : { 'muffin.chat_call.provider_request_id': details.requestId }),
+      ...(details?.upstream === undefined
+        ? {}
+        : { 'muffin.chat_call.provider_upstream': details.upstream }),
+      ...(details?.receivedAnyEvent === undefined
+        ? {}
+        : { 'muffin.chat_call.stream_received_any_event': details.receivedAnyEvent }),
+      ...(details?.bytesReceived === undefined
+        ? {}
+        : { 'muffin.chat_call.stream_bytes_received': details.bytesReceived }),
+    };
+  }
+  if (error instanceof Error) {
+    return {
+      'muffin.chat_call.error_name': error.name,
+      'muffin.chat_call.error_message': redactText(error.message).slice(0, 300),
+    };
+  }
+  return {};
+}
 
 /**
  * The paid path: one round of the turn, repeated until something ends it.
@@ -93,7 +174,10 @@ export type RoundScope = TurnScope & {
  * owner who tightened it is the one reading this.
  */
 function replyRefusedText(decision: Exclude<Decision, { effect: 'allow' }>): string {
-  const why = decision.effect === 'deny' ? `${decision.code}${decision.detail ? `: ${decision.detail}` : ''}` : decision.effect;
+  const why =
+    decision.effect === 'deny'
+      ? `${decision.code}${decision.detail ? `: ${decision.detail}` : ''}`
+      : decision.effect;
   return `La risposta è stata trattenuta dal kernel dei permessi (${why}). Una conversazione nuova riparte con il contesto pulito.`;
 }
 
@@ -115,6 +199,34 @@ function leaseAbortClass(reason: Exclude<ExecutionAbortReason, 'user_stop'>): Co
     case 'active_model_budget_exhausted':
       return 'active_model_budget';
   }
+}
+
+/**
+ * Calm-harness renewal (Fase 1): a spent lease from a *slow provider* renews
+ * silently instead of parking the turn on the owner. Only `model_stall` and
+ * `model_deadline` qualify — walls, spent delegation envelopes and user stops
+ * are verdicts, and `active_model_budget_exhausted` would spend past the cap
+ * the owner delegated. Progress resets the count; three progress-less renewals
+ * yield to the normal continuable path (and from there to the dead-route
+ * breaker). Returns true when renewed — the caller `continue`s the loop.
+ *
+ * No new lease row, no message, no model notification: the same ExecutionBudget
+ * (wall and active accounting intact) simply opens its next model call. The
+ * heartbeat line keeps narrating; the outcome, whenever it lands, is the same
+ * shape as if the first call had answered.
+ */
+export function tryAutoRenewLease(
+  run: Pick<TurnRun, 'toolCallsMade' | 'autoRenewsUsed' | 'autoRenewBaselineCalls'>,
+  abortReason: ExecutionAbortReason,
+): boolean {
+  if (abortReason !== 'model_stall' && abortReason !== 'model_deadline') return false;
+  if (run.toolCallsMade > run.autoRenewBaselineCalls) {
+    run.autoRenewsUsed = 0;
+  }
+  if (run.autoRenewsUsed >= MAX_AUTO_RENEW_LEASES) return false;
+  run.autoRenewsUsed += 1;
+  run.autoRenewBaselineCalls = run.toolCallsMade;
+  return true;
 }
 
 /**
@@ -154,7 +266,11 @@ export type ProviderFailureClass = 'provider_empty' | 'truncated' | 'refused';
  * leaves it on the current tool-call handling.
  */
 export function isTruncatedPartial(result: ChatResult): boolean {
-  return result.stopReason === 'max_tokens' && (result.text?.length ?? 0) > 0 && result.toolCalls.length === 0;
+  return (
+    result.stopReason === 'max_tokens' &&
+    (result.text?.length ?? 0) > 0 &&
+    result.toolCalls.length === 0
+  );
 }
 
 /**
@@ -169,7 +285,9 @@ export function isTruncatedPartial(result: ChatResult): boolean {
  * mistaken for the current answer. Survives checkpoint/crash (it is the
  * transcript) and a granted new lease (evidence, not harness control).
  */
-export function collectTruncationPrefix(messages: readonly import('../providers/types.js').Message[]): string {
+export function collectTruncationPrefix(
+  messages: readonly import('../providers/types.js').Message[],
+): string {
   let out = '';
   for (const m of messages) {
     if (!isPartialMessage(m)) continue;
@@ -201,7 +319,9 @@ function dedupForContinuation(
  * The most recently accepted partial chunk, for no-progress detection below.
  * Structural like the prefix: only `partial` origin counts.
  */
-function lastPartialChunk(messages: readonly import('../providers/types.js').Message[]): string | undefined {
+function lastPartialChunk(
+  messages: readonly import('../providers/types.js').Message[],
+): string | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]!;
     if (!isPartialMessage(m)) continue;
@@ -233,10 +353,12 @@ export function classifyProviderFailure(
   const noActivity = telemetry?.firstActivityAt === undefined;
   switch (result.stopReason) {
     case 'error':
-      if (noOutput && noActivity) return { class: 'provider_empty', finishReason: result.finishReason ?? null };
+      if (noOutput && noActivity)
+        return { class: 'provider_empty', finishReason: result.finishReason ?? null };
       return undefined;
     case 'max_tokens':
-      if (noOutput && noActivity) return { class: 'truncated', finishReason: result.finishReason ?? null };
+      if (noOutput && noActivity)
+        return { class: 'truncated', finishReason: result.finishReason ?? null };
       return undefined;
     case 'refusal':
       return { class: 'refused', finishReason: result.finishReason ?? null };
@@ -254,16 +376,15 @@ export function classifyProviderFailure(
  * are classified by `classifyProviderFailure` above and re-driven on the
  * transport budget instead.
  */
-export function recover(scope: TurnScope, failure: RecoveryFailure): boolean {  const { deps, exposed, run, turn } = scope;
+export function recover(scope: TurnScope, failure: RecoveryFailure): boolean {
+  const { deps, exposed, run, turn } = scope;
   const strategy = deps.profile.recovery[run.recoveriesUsed];
   if (strategy === undefined) return false;
   run.recoveriesUsed += 1;
-  // The wire half of `requireTool`: the next attempt demands a call. The
-  // message half is in `recoveryStep` below; both travel together.
-  if (strategy === 'requireTool') {
-    run.requireToolOnce = true;
-    turn.setAttributes({ 'muffin.recovery.tool_choice': 'required' });
-  }  const step = recoveryStep(strategy, { failure, tools: exposed.map((t) => t.spec.name) });
+  // Simple-loop: no rung arms the wire. `requireTool` prescribes a call in
+  // words (see `recoveryStep`) but the next request stays `auto` — forcing a
+  // call manufactures an action the model never chose.
+  const step = recoveryStep(strategy, { failure, tools: exposed.map((t) => t.spec.name) });
   if (step.message !== undefined) {
     // Lease-local control, not conversation: marked so a continuation to a
     // new lease can drop it without touching evidence (`message-origin.ts`).
@@ -331,6 +452,17 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     // `user_stop`, and the two doors must agree (#497).
     if (input.signal?.aborted) {
       return finish(scope, 'aborted', 'Interrotto.', 'user_stop');
+    }
+    const allowance =
+      record.counters.activityAllowance === undefined
+        ? null
+        : deps.turns.activityAllowance(record.id);
+    if (
+      allowance !== null &&
+      (allowance.modelCallsUsed >= allowance.maxModelCalls ||
+        allowance.toolCallsUsed >= allowance.maxToolCalls)
+    ) {
+      return releaseContinuable(scope, 'activity_budget', 0);
     }
     if (execution.expired()) {
       // The wall is a lease boundary, not a verdict on the work: release so
@@ -402,6 +534,12 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       });
     }
 
+    // #469: a capability search stages schemas during a tool batch and changes
+    // the provider-visible projection only at the following model boundary.
+    // Execution authority is deliberately unchanged: a directly named
+    // registered tool still goes through runTool + the kernel.
+    toolContext.capabilityDiscovery?.activatePending();
+
     const reasoning = reasoningFromLegacyThinking(deps.profile.thinking);
     const call: ChatCall = {
       model: deps.model,
@@ -414,10 +552,17 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // l'altro. Risolta in `conversation.ts`, mai dal principal e mai dal
       // turno: l'hash opaco verso `session_id` lo fa l'adapter.
       conversation: resolveConversationId(input.session),
-      // One attempt, demanded by the `requireTool` rung (ADR-0082). `auto`
-      // everywhere else: forcing a tool on a turn that needs none
-      // manufactures an action the model never chose.
-      ...(exposed.length > 0 ? { tools: exposed.map((t) => t.spec), toolChoice: (run.requireToolOnce ? 'required' as const : 'auto' as const) } : {}),
+      // Simple-loop (OpenAI final-output rule, LangGraph tools_condition):
+      // text with no calls is terminal, calls re-run the loop. No round ever
+      // asks for `tool_choice: required` — not even the last recovery rung.
+      // The capability probe (`agent/providers/verify.ts`) is the one caller
+      // with a precise reason to demand a call, and it sets the flag itself.
+      ...(exposed.length > 0
+        ? {
+            tools: exposed.map((t) => t.spec),
+            toolChoice: 'auto' as const,
+          }
+        : {}),
       maxOutputTokens: 4096,
       // The profile decides both, and until this slice neither reached the
       // wire: the profile's legacy `thinking` vocabulary is normalized into
@@ -436,7 +581,9 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       ...(reasoning === undefined ? {} : { reasoning }),
       // Dopo una risposta vuota, tenta su un'altra macchina invece che sulla
       // stessa: vedi `ChatCall.providerIgnore` e la streak qui sotto.
-      ...(run.providerEmptyUpstreams.size > 0 ? { providerIgnore: [...run.providerEmptyUpstreams] } : {}),
+      ...(run.providerEmptyUpstreams.size > 0
+        ? { providerIgnore: [...run.providerEmptyUpstreams] }
+        : {}),
       // B11: streaming is requested exactly when someone can hear it. A turn
       // with no `onDelta` sink (a job, a headless `muffin run`, a provider
       // that never implements `chatStream`) sends this `false`, the request
@@ -451,23 +598,36 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
         [ATTR.turnIteration]: run.iterations,
         'muffin.chat_call.requested_max_output_tokens': call.maxOutputTokens,
         'muffin.chat_call.reasoning_requested_mode': call.reasoning?.mode ?? 'unset',
-        ...(call.reasoning?.effort === undefined ? {} : { 'muffin.chat_call.reasoning_requested_effort': call.reasoning.effort }),
-        ...(call.reasoning?.maxTokens === undefined ? {} : { 'muffin.chat_call.reasoning_requested_max_tokens': call.reasoning.maxTokens }),
+        ...(call.reasoning?.effort === undefined
+          ? {}
+          : { 'muffin.chat_call.reasoning_requested_effort': call.reasoning.effort }),
+        ...(call.reasoning?.maxTokens === undefined
+          ? {}
+          : { 'muffin.chat_call.reasoning_requested_max_tokens': call.reasoning.maxTokens }),
       },
       turn,
     );
-    if (run.requireToolOnce) {
-      chatSpan.setAttributes({ 'muffin.recovery.tool_choice': 'required' });
-    }
     const reasoningResolution = await deps.provider.resolveReasoning?.(call);
     if (reasoningResolution !== undefined) {
       chatSpan.setAttributes({
         'muffin.chat_call.reasoning_capability_source': reasoningResolution.capabilitySource,
-        'muffin.chat_call.reasoning_effective_mode': reasoningResolution.effective?.mode ?? 'omitted',
-        ...(reasoningResolution.effective?.effort === undefined ? {} : { 'muffin.chat_call.reasoning_effective_effort': reasoningResolution.effective.effort }),
-        ...(reasoningResolution.effective?.maxTokens === undefined ? {} : { 'muffin.chat_call.reasoning_effective_max_tokens': reasoningResolution.effective.maxTokens }),
+        'muffin.chat_call.reasoning_effective_mode':
+          reasoningResolution.effective?.mode ?? 'omitted',
+        ...(reasoningResolution.effective?.effort === undefined
+          ? {}
+          : {
+              'muffin.chat_call.reasoning_effective_effort': reasoningResolution.effective.effort,
+            }),
+        ...(reasoningResolution.effective?.maxTokens === undefined
+          ? {}
+          : {
+              'muffin.chat_call.reasoning_effective_max_tokens':
+                reasoningResolution.effective.maxTokens,
+            }),
         'muffin.chat_call.reasoning_constraint_degraded': reasoningResolution.status !== 'applied',
-        ...(reasoningResolution.reason === undefined ? {} : { 'muffin.chat_call.reasoning_resolution_reason': reasoningResolution.reason }),
+        ...(reasoningResolution.reason === undefined
+          ? {}
+          : { 'muffin.chat_call.reasoning_resolution_reason': reasoningResolution.reason }),
       });
     }
     // `chatSpan`'s own clock is not readable back from `SpanHandle` (it only
@@ -493,13 +653,18 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
         [`${prefix}.duration_ms`]: telemetry.durationMs,
         [`${prefix}.active_model_ms_before`]: telemetry.activeModelMsBefore,
         [`${prefix}.active_model_ms_after`]: telemetry.activeModelMsAfter,
-        ...(telemetry.activeModelBudgetMs === undefined ? {} : { 'muffin.chat_call.active_model_budget_ms': telemetry.activeModelBudgetMs }),
-        ...(telemetry.activeModelMsRemaining === undefined ? {} : { 'muffin.chat_call.active_model_ms_remaining': telemetry.activeModelMsRemaining }),
+        ...(telemetry.activeModelBudgetMs === undefined
+          ? {}
+          : { 'muffin.chat_call.active_model_budget_ms': telemetry.activeModelBudgetMs }),
+        ...(telemetry.activeModelMsRemaining === undefined
+          ? {}
+          : { 'muffin.chat_call.active_model_ms_remaining': telemetry.activeModelMsRemaining }),
         ...(telemetry.firstActivityAt === undefined
           ? {}
           : {
               'muffin.chat_call.first_activity_at': telemetry.firstActivityAt,
-              'muffin.chat_call.ttft_ms': telemetry.ttftMs ?? Math.max(0, telemetry.firstActivityAt - telemetry.startedAt),
+              'muffin.chat_call.ttft_ms':
+                telemetry.ttftMs ?? Math.max(0, telemetry.firstActivityAt - telemetry.startedAt),
             }),
         ...(telemetry.lastActivityAt === undefined
           ? {}
@@ -552,11 +717,13 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       modelLease = lease;
       const callWithBudget: ChatCall = { ...call, stream, signal: lease.signal };
       try {
-        if (reasoningResolution?.status === 'unsupported') throw new ReasoningConfigurationError(reasoningResolution);
+        if (reasoningResolution?.status === 'unsupported')
+          throw new ReasoningConfigurationError(reasoningResolution);
         // A lease can be born already exhausted. Do not call the provider just
         // to discover its signal is aborted: this is a governor decision, not
         // a transport failure and must not enter retry.
-        if (lease.signal.aborted) throw new Error('model invocation not authorized by execution budget');
+        if (lease.signal.aborted)
+          throw new Error('model invocation not authorized by execution budget');
         if (!stream) return await deps.provider.chat(callWithBudget);
         // #615 streaming blocker: a continuation call already has a
         // structurally accepted previous chunk. While the new stream still
@@ -565,8 +732,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
         // detecting no-progress after would show bytes the durable answer
         // will never contain. First calls (no accepted partial) stream
         // byte-for-byte exactly as before.
-        const dedup =
-          input.onDelta === undefined ? undefined : dedupForContinuation(run.messages);
+        const dedup = input.onDelta === undefined ? undefined : dedupForContinuation(run.messages);
         return await drainStream(
           deps.provider.chatStream!(callWithBudget),
           (text) => {
@@ -605,7 +771,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       }
     };
 
-    let result;
+    let result: ChatResult;
     try {
       result = await requestChatResult();
     } catch (error) {
@@ -613,6 +779,10 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       chatSpan.setAttributes({
         'muffin.chat_call.duration_ms': Date.now() - chatCallStartedAt,
         ...(abortReason === undefined ? {} : { 'muffin.chat_call.abort_reason': abortReason }),
+        // The abort reason says who cut the call; these say what the provider
+        // had said before the cut. Without both, a `model_deadline` trace
+        // cannot answer "never connected or stalled mid-stream?".
+        ...chatCallErrorAttrs(error),
       });
       chatSpan.end({ error });
       // Whatever door this takes below — a retry, the profile's cascade, or
@@ -625,11 +795,13 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // rejection fell through to `throw error` — the turn ended `error`
       // and the owner read «esito error» for a stop they had asked for.
       // The signal is the fact; the exception is only how it arrived.
-      if (abortReason === 'user_stop' || input.signal?.aborted) return finish(scope, 'aborted', 'Interrotto.', 'user_stop');
+      if (abortReason === 'user_stop' || input.signal?.aborted)
+        return finish(scope, 'aborted', 'Interrotto.', 'user_stop');
       if (abortReason !== undefined) {
-        // A spent lease is a yield, not an ending: the work checkpoints
-        // durably and the owner may grant the next lease. Only an explicit
-        // stop ends the work itself here.
+        // A spent lease is a yield, not an ending: slow providers renew
+        // silently (tryAutoRenewLease) instead of parking the turn on the
+        // owner; only an exhausted bound yields through releaseContinuable.
+        if (tryAutoRenewLease(run, abortReason)) continue;
         return releaseContinuable(scope, leaseAbortClass(abortReason), run.iterations);
       }
       // Two failures wearing one type, and they take different doors.
@@ -673,9 +845,16 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
           // attempt is built. The wait itself is never a transport failure
           // eligible for another retry.
           const attempt = MAX_TRANSPORT_RETRIES - run.transportRetriesLeft;
-          const waitSignals = input.signal === undefined ? [execution.signal] : [input.signal, execution.signal];
+          const waitSignals =
+            input.signal === undefined ? [execution.signal] : [input.signal, execution.signal];
           const waitMs = Math.max(retryDelayMs(attempt), error.retryAfterMs ?? 0);
-          input.onProgress?.({ type: 'model_retry', class: 'transport', attempt, max: MAX_TRANSPORT_RETRIES, inMs: waitMs });
+          input.onProgress?.({
+            type: 'model_retry',
+            class: 'transport',
+            attempt,
+            max: MAX_TRANSPORT_RETRIES,
+            inMs: waitMs,
+          });
           await sleep(waitMs, AbortSignal.any(waitSignals));
           continue;
         }
@@ -688,7 +867,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     // can come back shaped like a success — empty. It is never a completion,
     // and it must never become the provider's `empty` to retry against the
     // same machine: it takes the same two doors as the catch above.
-    if (lastAbortReason !== undefined && result.text === null && result.toolCalls.length === 0) {
+      if (lastAbortReason !== undefined && result.text === null && result.toolCalls.length === 0) {
       chatSpan.setAttributes({
         'muffin.chat_call.duration_ms': Date.now() - chatCallStartedAt,
         'muffin.chat_call.abort_reason': lastAbortReason,
@@ -699,12 +878,9 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       if (lastAbortReason === 'user_stop' || input.signal?.aborted) {
         return finish(scope, 'aborted', 'Interrotto.', 'user_stop');
       }
+      if (tryAutoRenewLease(run, lastAbortReason)) continue;
       return releaseContinuable(scope, leaseAbortClass(lastAbortReason), run.iterations);
     }
-    // Consumed: the escalation lasts exactly one provider response. A
-    // transport retry that `continue`d above rebuilds `call` with the flag
-    // still armed, so the retry keeps `required`.
-    run.requireToolOnce = false;
     // Provider/result failure truth (P0-A): classify while this span is still
     // open, because the verdict belongs on it. Handled further down, after
     // usage accounting and the progress event — the classification never
@@ -718,7 +894,9 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     }
     chatSpan.setAttributes({
       'muffin.chat_call.duration_ms': Date.now() - chatCallStartedAt,
-      ...(lastTelemetry === undefined ? {} : { 'muffin.chat_call.active_model_ms_after': lastTelemetry.activeModelMsAfter }),
+      ...(lastTelemetry === undefined
+        ? {}
+        : { 'muffin.chat_call.active_model_ms_after': lastTelemetry.activeModelMsAfter }),
     });
 
     run.usage.inputTokens += result.usage.inputTokens;
@@ -733,6 +911,9 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       tenant: input.tenant,
       capability: 'llm.chat',
       model: result.model,
+      // The route it was asked with, for the billing contract: the ledger
+      // identity stays `result.model`, and the price seam decides (#499).
+      requestedModel: deps.model,
       // Attribuzione, non contabilità: la riga di spesa porta il job da cui
       // il turno è nato, così il tetto per-job ha un contatore da leggere.
       ...(input.jobId === undefined ? {} : { jobId: input.jobId }),
@@ -749,7 +930,9 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     }
     chatSpan.setAttributes({
       [ATTR.responseModel]: result.model,
-      ...(result.requestId === undefined ? {} : { 'muffin.chat_call.request_id': result.requestId }),
+      ...(result.requestId === undefined
+        ? {}
+        : { 'muffin.chat_call.request_id': result.requestId }),
       // L'attributo era dichiarato in `core/tracing/types.ts` e **non lo
       // scriveva nessuno**: il difetto di serie di questa repo, un
       // meccanismo senza chiamante. Ora porta chi ha risposto davvero,
@@ -775,7 +958,9 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // `error` while this is the only evidence of what actually arrived.
       // `'null'` names an absent reason explicitly — an absent attribute
       // would read as "not recorded" instead of "recorded as absent".
-      ...(result.finishReason === undefined ? {} : { 'muffin.chat_call.finish_reason': result.finishReason ?? 'null' }),
+      ...(result.finishReason === undefined
+        ? {}
+        : { 'muffin.chat_call.finish_reason': result.finishReason ?? 'null' }),
     });
     chatSpan.end();
     // Same values as the attributes just above, read off the same `result`
@@ -827,7 +1012,8 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
         // ceiling. No server-declared window exists on this path (there was
         // no error response to carry one), so the blind backoff stands alone.
         const attempt = MAX_TRANSPORT_RETRIES - run.transportRetriesLeft;
-        const waitSignals = input.signal === undefined ? [execution.signal] : [input.signal, execution.signal];
+        const waitSignals =
+          input.signal === undefined ? [execution.signal] : [input.signal, execution.signal];
         const waitMs = retryDelayMs(attempt);
         input.onProgress?.({
           type: 'model_retry',
@@ -887,11 +1073,10 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
         return releaseContinuable(scope, 'truncated', run.truncationsUsed);
       }
       run.messages.push({
-        ...partialMessage([
-          ...(result.thinking ?? []),
-          { type: 'text' as const, text: suffix },
-        ]),
-        ...(result.providerMetadata === undefined ? {} : { providerMetadata: result.providerMetadata }),
+        ...partialMessage([...(result.thinking ?? []), { type: 'text' as const, text: suffix }]),
+        ...(result.providerMetadata === undefined
+          ? {}
+          : { providerMetadata: result.providerMetadata }),
       });
       run.truncationsUsed += 1;
       if (result.requestId !== undefined) run.providerFailureRequestIds.push(result.requestId);
@@ -909,7 +1094,9 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
         // instruction), never a partial `answered`.
         return releaseContinuable(scope, 'truncated', run.truncationsUsed);
       }
-      run.messages.push(harnessMessage('user', [{ type: 'text', text: TRUNCATION_CONTINUE_PROMPT }]));
+      run.messages.push(
+        harnessMessage('user', [{ type: 'text', text: TRUNCATION_CONTINUE_PROMPT }]),
+      );
       // Persist prefix + spent budget before the next model call: a crash here
       // resumes from the accepted prefix without loss or duplication, against
       // the same crash-safe total.
@@ -982,35 +1169,30 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // stays the scrubbed full concatenation either way.
       const currentText = scrubResourceEchoes(redactText(suffix), run.sensitiveResourceEchoes);
 
-      // The completion gate: did the answer describe a call this turn never
-      // made? Deterministic, tool-aware, and it only fires when *nothing* was
-      // called — a denied or failed call is still a call, so a model saying
-      // "non ho potuto usare fs_write" after a real refusal is out of scope.
+      // Simple-loop: the answer stands on the first text, even when it names
+      // a tool this turn never called. The gate detects and records (span
+      // attributes for Control/eval observability) but never spends a second
+      // billed model round re-asking: text with no calls is terminal, and a
+      // re-ask the model overrides half the time (measured 6/12 unresolved on
+      // the owner install) is spend without signal.
       //
-      // Its own flag, deliberately outside the profile's cascade: this check
-      // is durable (07 classifies the profiles as impalcatura and says
-      // nothing of it), it answers a false-success rate measured on every
-      // model family including the reasoning ones, and a profile that
-      // declares no crutches must still get it. One nudge, always available.
+      // Turn-lifetime truth, not current-lease truth (#603): a continuation
+      // to a new lease resets the lease-local counter (`buildFreshCounters`),
+      // while finished leases stay folded in `record.lifetime` — the same
+      // total `durability.ts` already reports. Reading only the fresh lease
+      // misclassifies a continued turn answering from prior-lease tool
+      // evidence as narrating an action it never took.
       const completion = checkCompletion({
         text,
         available: exposed.map((t) => t.spec.name),
-        toolCallsMade: run.toolCallsMade,
+        toolCallsMade: record.lifetime.toolCallsMade + run.toolCallsMade,
       });
       if (!completion.ok) {
         turn.setAttributes({ 'muffin.completion.named_uncalled': completion.named.join(',') });
-        if (run.nudgedForCompletion === false) {
-          // One attempt, with the specific tools named. Vague feedback gets a
-          // vague retry, and this is measured as the highest-value check in the
-          // design — but it is a nudge, never a rewrite of what the agent said.
-          // Harness control (see `recover` above), not owner words.
-          run.nudgedForCompletion = true;
-          closeLive('superseded');
-          run.messages.push(harnessMessage('user', [{ type: 'text', text: completionNudge(completion.named) }]));
-          continue;
-        }
         // It stands. Recorded rather than corrected: silently editing the
-        // answer would be a second dishonesty stacked on the first.
+        // answer would be a second dishonesty stacked on the first, and a
+        // forced re-ask would be the no-tool reprompt the simple loop forbids.
+        run.nudgedForCompletion = true;
         turn.setAttributes({ 'muffin.completion.unresolved': true });
       }
 
@@ -1111,6 +1293,29 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
           turnId: record.id,
         });
       }
+      // The completion gate (#811): a resumed turn that would settle
+      // `answered` with granted plan work still open settles `continuable`
+      // instead — a query on rows, never prose in context. Fresh turns
+      // (lease 0) own nothing and settle as before, so multi-turn plans
+      // written for later are unaffected. The refusal site above is
+      // deliberately excluded: a refused reply is already a terminal signal
+      // about the model, not work silently dropped.
+      if (scope.record.leaseIndex > 0) {
+        const leaseStartedAt = scope.deps.turns.leaseStartedAt(
+          scope.record.id,
+          scope.record.leaseIndex,
+        );
+        if (leaseStartedAt !== null) {
+          const open = scope.deps.todos.open(scope.input.tenant, scope.input.session.id);
+          const owned = ownedOpenRows({
+            open,
+            turnCreatedAt: scope.record.createdAt,
+            leaseStartedAt,
+          });
+          if (owned.length > 0)
+            return releaseContinuable(scope, 'plan_open', 0, { openRows: owned });
+        }
+      }
       return finish(scope, 'answered', text);
     }
 
@@ -1139,9 +1344,16 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       content: [
         ...(result.thinking ?? []),
         ...(result.text ? [{ type: 'text' as const, text: result.text }] : []),
-        ...result.toolCalls.map((c) => ({ type: 'tool_use' as const, id: c.id, name: c.name, input: c.args })),
+        ...result.toolCalls.map((c) => ({
+          type: 'tool_use' as const,
+          id: c.id,
+          name: c.name,
+          input: c.args,
+        })),
       ],
-      ...(result.providerMetadata === undefined ? {} : { providerMetadata: result.providerMetadata }),
+      ...(result.providerMetadata === undefined
+        ? {}
+        : { providerMetadata: result.providerMetadata }),
     });
     // Checkpointed **here**, and not only at the top of the next iteration.
     //
@@ -1181,7 +1393,11 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // (E6, RETURN S3). Refused calls still get a tool_result: a hole in the
       // batch is a protocol error every provider rejects, and the model should
       // read why it was stopped instead of retrying blind.
-      if (deps.profile.maxToolCallsPerTurn !== null && run.toolCallsMade >= deps.profile.maxToolCallsPerTurn) {
+      if (
+        record.counters.activityAllowance === undefined &&
+        deps.profile.maxToolCallsPerTurn !== null &&
+        run.toolCallsMade >= deps.profile.maxToolCallsPerTurn
+      ) {
         results.push({
           type: 'tool_result',
           toolCallId: call_.id,

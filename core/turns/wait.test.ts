@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MAX_WAIT_MS,
   MIN_WAIT_MS,
+  approvalFootnote,
   decodeWaitFor,
   encodeWaitFor,
   parseWait,
@@ -173,5 +174,96 @@ describe("la seconda barriera: l'owner ha risposto", () => {
     expect(scaduta).toContain('non ha risposto');
     // E dice cosa fare adesso, invece di lasciare il modello a riprovare.
     expect(scaduta).toContain('non rifare la chiamata');
+  });
+});
+
+/**
+ * #762(a) — il referto non afferma una scadenza che non ha osservato.
+ *
+ * Un click su un'approvazione sveglia la riga a prescindere dalla sua
+ * barriera: se la barriera è un processo ancora vivo (o non c'è barriera) e
+ * la scadenza non è passata, il risveglio viene da una risposta, non dal
+ * tempo. Il ramo `timer` in quel caso mentirebbe sul perché.
+ */
+describe('#762(a) — svegliato da una risposta, non dalla scadenza', () => {
+  it('barriera viva: nomina la risposta, non la scadenza', () => {
+    const testo = wakeReport({ kind: 'process_exit', pid: 4242 }, 'answer');
+    expect(testo).toMatch(/risposta/);
+    expect(testo).not.toMatch(/scadut/);
+    // Resta un fatto osservato: il processo è vivo, il tempo non è passato.
+    expect(testo).toMatch(/ancora vivo/);
+  });
+
+  it('senza barriera: nomina la risposta, non il tempo passato', () => {
+    const testo = wakeReport(null, 'answer');
+    expect(testo).toMatch(/risposta/);
+    expect(testo).not.toMatch(/scadut/);
+  });
+
+  it("barriera d'approvazione altrui: dice che la risposta era per un'altra domanda", () => {
+    const testo = wakeReport({ kind: 'approval', id: 'abc' }, 'answer');
+    expect(testo).toMatch(/un'altra domanda/);
+    expect(testo).not.toMatch(/scadut/);
+  });
+});
+
+/**
+ * #762(a), seconda metà — senza risposta nel registro non si inventa una
+ * risposta: un risveglio anticipato dice solo che è anticipato.
+ */
+describe('#762(a) — svegliato prima, senza che niente di atteso succedesse', () => {
+  it('barriera viva: dice che è presto e che il processo è vivo, senza cause', () => {
+    const testo = wakeReport({ kind: 'process_exit', pid: 4242 }, 'early');
+    expect(testo).toMatch(/prima del tempo/);
+    expect(testo).toMatch(/ancora vivo/);
+    expect(testo).not.toMatch(/scadut/);
+    expect(testo).not.toMatch(/risposta/);
+  });
+
+  it('senza barriera: finita prima del tempo, senza affermare scadenze', () => {
+    const testo = wakeReport(null, 'early');
+    expect(testo).toMatch(/Attesa finita/);
+    expect(testo).toMatch(/prima del tempo/);
+    expect(testo).not.toMatch(/scadut/);
+  });
+
+  it("barriera d'approvazione: ancora senza risposta, ma non «entro il tempo»", () => {
+    const testo = wakeReport({ kind: 'approval', id: 'abc' }, 'early');
+    expect(testo).toMatch(/ancora senza risposta/);
+    expect(testo).not.toMatch(/scadut/);
+    expect(testo).not.toMatch(/un'altra domanda/);
+  });
+});
+
+/**
+ * #762(b) — il trade sulla ripresa è esplicito, non una riga che manca.
+ *
+ * Ripartendo su `process_exit` il modello riceveva solo il referto
+ * dell'uscita: la domanda aperta veniva ritirata e la decisione presa
+ * restava non consumata, senza che nessuno lo dicesse. La nota nomina lo
+ * stato di entrambe.
+ */
+describe('#762(b) — la nota che rende esplicito il trade sulle approvazioni', () => {
+  it('senza approvazioni non aggiunge niente', () => {
+    expect(approvalFootnote(null, false)).toBeNull();
+  });
+
+  it('una decisione non consumata è nominata come tale', () => {
+    const nota = approvalFootnote(null, true);
+    expect(nota).not.toBeNull();
+    expect(nota).toMatch(/non ancora usata/);
+  });
+
+  it('una domanda aperta è nominata col ritiro che la aspetta', () => {
+    const nota = approvalFootnote('sys.shell', false);
+    expect(nota).not.toBeNull();
+    expect(nota).toContain('sys.shell');
+    expect(nota).toMatch(/ritirata/);
+  });
+
+  it('entrambe: una sola nota, tutti e due gli stati', () => {
+    const nota = approvalFootnote('sys.shell', true);
+    expect(nota).toMatch(/non ancora usata/);
+    expect(nota).toMatch(/ritirata/);
   });
 });

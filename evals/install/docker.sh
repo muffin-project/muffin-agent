@@ -168,6 +168,22 @@ check_posture() {
   leaks=$( { docker logs "$GATEWAY" 2>&1; docker inspect "$GATEWAY"; } | grep -c "$KEY_VALUE" || true)
   if [ "$leaks" = 0 ]; then pass "key absent from logs and inspect"; else fail "key found $leaks times in logs/inspect"; fi
 
+  # The unified update contract (#765, S1): inside the image `muffin update`
+  # refuses with the host-side procedure instead of attempting an in-place
+  # update. Image-level facts, so checked in both postures.
+  if [ "$(docker exec "$GATEWAY" printenv MUFFIN_CONTAINER 2>/dev/null)" = 1 ]; then
+    pass "the image marks itself as the gateway container"
+  else
+    fail "MUFFIN_CONTAINER is not 1 in the gateway"
+  fi
+  local refusal
+  refusal=$(docker exec "$GATEWAY" muffin update 2>&1 || true)
+  if echo "$refusal" | grep -q "build.sh"; then
+    pass "muffin update in the container names the host-side procedure"
+  else
+    fail "muffin update in the container did not refuse honestly"; printf '%s\n' "$refusal" | sed 's/^/        /'
+  fi
+
   check_ceilings "$label" "$sandbox"
 }
 

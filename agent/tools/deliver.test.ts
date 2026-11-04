@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -26,9 +26,16 @@ const ctx = (replyChannel: string | null) => toolContext({ replyChannel });
  */
 
 function harness(over: { deliverFile?: (channel: string, file: FileSpec) => Promise<DeliveryOutcome> } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'muffin-send-file-'));
+  // Two roots, as production has had since G4: the project the agent writes
+  // into (`root`) and the vault an owner's attachment lands in (`vault`).
+  const root = mkdtempSync(join(tmpdir(), 'muffin-send-file-project-'));
+  // Named `vault` on purpose: production's vault root is `<home>/vault`, and
+  // the double-prefix bug is exactly a model writing `vault/<path>`.
+  const vault = join(mkdtempSync(join(tmpdir(), 'muffin-send-file-')), 'vault');
+  mkdirSync(vault, { recursive: true });
   writeFileSync(join(root, 'report.pdf'), 'contenuto finto');
-  const scope: FsScope = { root, denyWrite: [], denyRead: [] };
+  const projectScope: FsScope = { root, denyWrite: [], denyRead: [] };
+  const vaultScope: FsScope = { root: vault, denyWrite: [], denyRead: [] };
   const calls: { channel: string; file: FileSpec }[] = [];
   const deliverFile =
     over.deliverFile ??
@@ -36,8 +43,8 @@ function harness(over: { deliverFile?: (channel: string, file: FileSpec) => Prom
       calls.push({ channel, file });
       return DELIVERED;
     });
-  const tool = makeSendFileTool({ scope, deliverFile });
-  return { tool, calls, root };
+  const tool = makeSendFileTool({ scopes: [projectScope, vaultScope], deliverFile });
+  return { tool, calls, root, vault };
 }
 
 describe('send_file', () => {
@@ -59,6 +66,34 @@ describe('send_file', () => {
     // `/private`.
     expect(h.calls[0]?.file.absolutePath).toBe(join(realpathSync(h.root), 'report.pdf'));
     expect(h.calls[0]?.file.filename).toBe('report.pdf');
+  });
+
+  it('sends a file the agent just wrote in the project root, not only files already in the vault', async () => {
+    const h = harness();
+    const outcome = await h.tool.handler({ path: 'report.pdf' }, ctx('cli'));
+
+    expect(outcome.isError).toBeUndefined();
+    expect(h.calls[0]?.file.absolutePath).toBe(join(realpathSync(h.root), 'report.pdf'));
+  });
+
+  it('still sends a file that lives in the vault, the owner-attachment case B14 was built for', async () => {
+    const h = harness();
+    writeFileSync(join(h.vault, 'ricevuto.txt'), 'allegato dell owner');
+
+    const outcome = await h.tool.handler({ path: 'ricevuto.txt' }, ctx('telegram:555'));
+
+    expect(outcome.isError).toBeUndefined();
+    expect(h.calls[0]?.file.absolutePath).toBe(join(realpathSync(h.vault), 'ricevuto.txt'));
+  });
+
+  it('accepts the leading vault/ a model writes even though the ingest line is already relative to the vault', async () => {
+    const h = harness();
+    writeFileSync(join(h.vault, 'ingested.txt'), 'allegato con prefisso');
+
+    const outcome = await h.tool.handler({ path: 'vault/ingested.txt' }, ctx('cli'));
+
+    expect(outcome.isError).toBeUndefined();
+    expect(h.calls[0]?.file.absolutePath).toBe(join(realpathSync(h.vault), 'ingested.txt'));
   });
 
   it('refuses with no channel to reach, and does not call deliverFile at all', async () => {

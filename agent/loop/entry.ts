@@ -3,6 +3,10 @@ import { APPROVAL_WINDOW_MS } from '../../core/approvals/store.js';
 import type { SessionRef } from '../../core/session/store.js';
 import type { SpanHandle } from '../../core/tracing/types.js';
 import { ATTR } from '../../core/tracing/types.js';
+import {
+  isOwnerActivityAutonomous,
+  newActivityAllowance,
+} from '../../core/turns/activity-allowance.js';
 import type { TurnCounters, TurnRecord } from '../../core/turns/store.js';
 import { CAPPED_MODEL, SCRIPT_MODEL } from '../../core/turns/store.js';
 import { decodeWaitFor, encodeWaitFor, type WaitSpec } from '../../core/turns/wait.js';
@@ -11,7 +15,7 @@ import { primoMessaggio } from './context.js';
 import { buildFreshCounters, evidenceForContinuation } from './continuation.js';
 import { closeRow } from './durability.js';
 import { type DriveOptions, guidaIlTurno } from './engine.js';
-import { ownerMessage } from './message-origin.js';
+import { harnessMessage, inputMessage, ownerMessage } from './message-origin.js';
 import { initialTaint, spendeIlBudget } from './permissions.js';
 import { providerMessages } from './provider-checkpoint.js';
 import {
@@ -58,7 +62,7 @@ import {
  * "record the turn somewhere durable", so the row is the cure and not a
  * bookkeeping side-effect of it.
  *
- * The transcript starts as the owner's own words and nothing else. That is not
+ * The transcript starts with the submitted input and nothing else. That is not
  * a placeholder: it is the minimum a resume needs to be able to assemble the
  * rest, and it is why nothing here calls recall — recall is an embedder plus a
  * reranking model call, which is precisely the latency this function exists to
@@ -67,7 +71,7 @@ import {
  */
 export function enqueueTurn(deps: LoopDeps, input: TurnInput): string {
   deps.prepareTurn?.();
-  const id = randomBytes(16).toString('hex');
+  const id = input.id ?? randomBytes(16).toString('hex');
   deps.turns.enqueue({
     id,
     principal: input.principal,
@@ -75,9 +79,12 @@ export function enqueueTurn(deps: LoopDeps, input: TurnInput): string {
     surface: input.surface,
     sessionId: input.session.id,
     inputText: input.text,
-    providerLease: { model: deps.model, checkpoint: [ownerMessage(primoMessaggio(input))] },
+    providerLease: {
+      model: deps.model,
+      checkpoint: [inputMessage(primoMessaggio(input), input.inputOrigin ?? 'owner')],
+    },
     taint: initialTaint(input),
-    counters: freshCounters(),
+    counters: freshCounters(deps, input),
     // Sulla riga, non solo nell'input: vedi `TurnRecord.jobId`.
     ...(input.jobId === undefined ? {} : { jobId: input.jobId }),
     ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
@@ -86,8 +93,13 @@ export function enqueueTurn(deps: LoopDeps, input: TurnInput): string {
 }
 
 /** The counters of a turn that has not started. */
-function freshCounters(): TurnCounters {
+function freshCounters(deps: LoopDeps, input: TurnInput): TurnCounters {
   return {
+    ...(input.principal.kind === 'owner' &&
+    (input.inputOrigin ?? 'owner') === 'owner' &&
+    deps.profile.activity !== undefined
+      ? { activityAllowance: newActivityAllowance(deps.profile.activity) }
+      : {}),
     iterations: 0,
     recoveriesUsed: 0,
     transportRetriesLeft: MAX_TRANSPORT_RETRIES,
@@ -151,7 +163,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
    * an episode written for a turn that never started is memory of something
    * that did not happen.
    *
-   * The transcript is the owner's words and nothing else — the same shape
+   * The transcript is the opening input and nothing else — the same shape
    * `enqueueTurn` writes, so a crash between this line and the first checkpoint
    * leaves a row a resume can still assemble a context for. It used to be `[]`,
    * which lost the question along with the answer.
@@ -166,9 +178,12 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     // Pinned here and never re-derived: a resume onto a different model sends
     // back thinking signatures it cannot read, and ADR-0037 records that this
     // fails silently rather than loudly.
-    providerLease: { model: deps.model, checkpoint: [ownerMessage(primoMessaggio(input))] },
+    providerLease: {
+      model: deps.model,
+      checkpoint: [inputMessage(primoMessaggio(input), input.inputOrigin ?? 'owner')],
+    },
     taint: initialTaint(input),
-    counters: freshCounters(),
+    counters: freshCounters(deps, input),
     // Sulla riga, non solo nell'input: vedi `TurnRecord.jobId`.
     ...(input.jobId === undefined ? {} : { jobId: input.jobId }),
     ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
@@ -401,7 +416,12 @@ export async function resumeTurn(
   if (record.providerLease.model === CAPPED_MODEL) {
     deps.turns.finish(
       record.id,
-      { outcome: 'budget', messages: providerMessages(record), taint: record.taint, counters: record.counters },
+      {
+        outcome: 'budget',
+        messages: providerMessages(record),
+        taint: record.taint,
+        counters: record.counters,
+      },
       record.claimToken,
     );
     return {
@@ -423,7 +443,12 @@ export async function resumeTurn(
       `\n\nControlla lo stato prima di rilanciarlo.`;
     deps.turns.finish(
       record.id,
-      { outcome: 'error', messages: providerMessages(record), taint: record.taint, counters: record.counters },
+      {
+        outcome: 'error',
+        messages: providerMessages(record),
+        taint: record.taint,
+        counters: record.counters,
+      },
       record.claimToken,
     );
     return {
@@ -435,67 +460,6 @@ export async function resumeTurn(
       iterations: 0,
       usage: record.counters.usage,
     };
-  }
-
-  /**
-   * #741 — una sola decisione non apre un turno con più domande aperte.
-   *
-   * Un giro può chiedere più approvazioni (una per tool call che ne ha
-   * bisogno): ognuna ha la sua riga in `approvals`, e un click ne decide
-   * **una**. La barriera del turno è un `wait_for` solo, quindi `wake` lo
-   * riporta `runnable` alla prima decisione: senza questa guardia il motore
-   * leggerebbe la barriera ancora aperta come «l'owner non ha risposto» e il
-   * modello ripartirebbe con un referto falso, rifacendo le chiamate e
-   * ri-chiedendo le domande ancora aperte — con id nuovi e tastiere nuove.
-   *
-   * La condizione distingue un risveglio **da click** da uno **da scadenza**:
-   * c'è una decisione non consumata per il turno (`decidedUnconsumed`) e la
-   * prima domanda aperta (`open`) non è ancora scaduta. Alla scadenza il
-   * turno prosegue come prima — una domanda senza risposta non blocca per
-   * sempre — e un risveglio a mano senza decisioni resta il caso «timer» che
-   * `wakeReport` racconta.
-   *
-   * #749 — e la barriera della riga dev'essere **essa stessa
-   * un'approvazione**. Se aspettava un processo, il referto dell'uscita è il
-   * fatto che il modello deve ricevere: ri-sospendere su una domanda aperta
-   * lo perderebbe e lo sostituirebbe con un'attesa che nessuno ha chiesto. La
-   * decisione non consumata non si butta — resta per il tool quando riparte
-   * (`consume`).
-   */
-  const aperta = deps.approvals?.open(record.id) ?? null;
-  const decisioneDaConsumare = deps.approvals?.decidedUnconsumed(record.id) ?? false;
-  const barriera = decodeWaitFor(existing.waitFor);
-  if (barriera?.kind === 'approval' && aperta !== null && decisioneDaConsumare) {
-    const ora = (deps.now ?? (() => new Date()))().getTime();
-    const scadenzaDellaDomanda = Date.parse(aperta.askedAt) + APPROVAL_WINDOW_MS;
-    if (scadenzaDellaDomanda > ora) {
-      const spec: WaitSpec = { wakeAt: new Date(scadenzaDellaDomanda).toISOString(), waitFor: { kind: 'approval', id: aperta.id } };
-      const scritto = deps.turns.suspend(
-        record.id,
-        {
-          messages: providerMessages(record),
-          taint: record.taint,
-          counters: record.counters,
-          wakeAt: spec.wakeAt,
-          waitFor: encodeWaitFor({ kind: 'approval', id: aperta.id }),
-        },
-        record.claimToken,
-      );
-      if (scritto) {
-        return {
-          text: '',
-          iterations: record.counters.iterations,
-          traceId: record.id,
-          turnId: record.id,
-          stopped: 'suspended',
-          taint: record.taint,
-          usage: record.counters.usage,
-          suspendedUntil: spec,
-        };
-      }
-      // La scrittura non è riuscita (claim perso): il funnel ha le sue
-      // guardie, e non si inventa qui un esito diverso.
-    }
   }
 
   const span = deps.tracer.start(
@@ -519,6 +483,76 @@ export async function resumeTurn(
     // it is the one thing this interface needs it for.
     remoteParent(record.id),
   );
+
+  /**
+   * #741 — una sola decisione non apre un turno con più domande aperte.
+   *
+   * Un giro può chiedere più approvazioni (una per tool call che ne ha
+   * bisogno): ognuna ha la sua riga in `approvals`, e un click ne decide
+   * **una**. La barriera del turno è un `wait_for` solo, quindi `wake` lo
+   * riporta `runnable` alla prima decisione: senza questa guardia il motore
+   * leggerebbe la barriera ancora aperta come «l'owner non ha risposto» e il
+   * modello ripartirebbe con un referto falso, rifacendo le chiamate e
+   * ri-chiedendo le domande ancora aperte — con id nuovi e tastiere nuove.
+   *
+   * La condizione distingue un risveglio **da click** da uno **da scadenza**:
+   * c'è una decisione non consumata per il turno (`decidedUnconsumed`) e la
+   * prima domanda aperta (`open`) non è ancora scaduta. Alla scadenza il
+   * turno prosegue come prima — una domanda senza risposta non blocca per
+   * sempre — e un risveglio a mano senza decisioni resta il caso che il
+   * referto racconta senza affermare scadenze non osservate (#762).
+   *
+   * #749 — e la barriera della riga dev'essere **essa stessa
+   * un'approvazione**. Se aspettava un processo, il referto dell'uscita è il
+   * fatto che il modello deve ricevere: ri-sospendere su una domanda aperta
+   * lo perderebbe e lo sostituirebbe con un'attesa che nessuno ha chiesto. La
+   * decisione non consumata non si butta — resta per il tool quando riparte
+   * (`consume`).
+   *
+   * La span nasce **prima** della guardia (#762(c)): una ri-sospensione su
+   * click differito è un esito del turno come gli altri, e prima usciva di
+   * qui senza lasciare traccia nel trace.
+   */
+  const aperta = deps.approvals?.open(record.id) ?? null;
+  const decisioneDaConsumare = deps.approvals?.decidedUnconsumed(record.id) ?? false;
+  const barriera = decodeWaitFor(existing.waitFor);
+  if (barriera?.kind === 'approval' && aperta !== null && decisioneDaConsumare) {
+    const ora = (deps.now ?? (() => new Date()))().getTime();
+    const scadenzaDellaDomanda = Date.parse(aperta.askedAt) + APPROVAL_WINDOW_MS;
+    if (scadenzaDellaDomanda > ora) {
+      const spec: WaitSpec = {
+        wakeAt: new Date(scadenzaDellaDomanda).toISOString(),
+        waitFor: { kind: 'approval', id: aperta.id },
+      };
+      const scritto = deps.turns.suspend(
+        record.id,
+        {
+          messages: providerMessages(record),
+          taint: record.taint,
+          counters: record.counters,
+          wakeAt: spec.wakeAt,
+          waitFor: encodeWaitFor({ kind: 'approval', id: aperta.id }),
+        },
+        record.claimToken,
+      );
+      if (scritto) {
+        span.setAttributes({ 'muffin.turn.resuspended': 'approval-still-open' });
+        span.end({ status: 'ok' });
+        return {
+          text: '',
+          iterations: record.counters.iterations,
+          traceId: record.id,
+          turnId: record.id,
+          stopped: 'suspended',
+          taint: record.taint,
+          usage: record.counters.usage,
+          suspendedUntil: spec,
+        };
+      }
+      // La scrittura non è riuscita (claim perso): il funnel ha le sue
+      // guardie, e non si inventa qui un esito diverso.
+    }
+  }
 
   if (record.providerLease.model !== deps.model) {
     // Explicit, and terminal. Retrying would mean a row that wakes every boot
@@ -564,8 +598,10 @@ export async function resumeTurn(
     // La barriera letta **prima** del claim, che è ciò che la spegne. `record`
     // qui sotto è la riga già reclamata: chiederla a lui vorrebbe dire dire
     // sempre «è passato il tempo», anche quando a svegliare il turno è stata
-    // una risposta dell'owner arrivata un istante fa.
+    // una risposta dell'owner arrivata un istante fa. Stessa strada per la
+    // scadenza: senza, il referto non può osservare se è passata (#762).
     waitForAtWake: existing.waitFor,
+    wakeAtAtWake: existing.wakeAt,
     ...(replyChannelAlRisveglio === undefined ? {} : { replyChannel: replyChannelAlRisveglio }),
     // Il filo che `docs/evidence/forma-delle-superfici-2026-09-03.md` §4.3
     // trovava reciso: `drive` li accetta già da sempre (`options.onDelta`/
@@ -587,9 +623,27 @@ export async function resumeTurn(
  */
 export type ContinuationRefusal = {
   turnId: string;
-  why: 'not_found' | 'not_continuable' | 'claimed' | 'model_changed' | 'unstarted';
+  why: 'not_found' | 'not_continuable' | 'claimed' | 'model_changed' | 'unstarted' | 'dead_route';
   detail: string;
 };
+
+/**
+ * Consecutive dead leases (provider too slow, zero new tool calls) behind a
+ * `continuable` row after which a new lease is refused instead of granted.
+ * Three is the bound: the fourth identical attempt has never produced work in
+ * measured evidence (8 dead 90s leases, 0 calls, #824 residue), and each one
+ * re-sends the full resumed context for nothing.
+ */
+export const MAX_CONSECUTIVE_DEAD_LEASES = 3;
+
+/**
+ * How long a `dead_route` refusal locks the row before one probe lease is
+ * granted again. Without a cooldown the latch would be permanent with a
+ * remedy ("retry later") that can never work; with it, each probe death
+ * re-locks for another window from its fresh `at`, and any progress clears
+ * the streak outright.
+ */
+export const DEAD_ROUTE_COOLDOWN_MS = 30 * 60 * 1_000;
 
 function ownerMessageText(message: Message): string {
   return message.content
@@ -631,6 +685,8 @@ export async function continueTurn(
     onDelta?: (delta: import('./types.js').TurnDelta) => void;
     onProgress?: (event: import('./types.js').TurnEvent) => void;
     replyChannel?: string;
+    /** Runtime-owned renewal within the existing grant, never owner words. */
+    automatic?: boolean;
   },
 ): Promise<TurnResult | ContinuationRefusal> {
   deps.prepareTurn?.();
@@ -666,14 +722,61 @@ export async function continueTurn(
       detail: `il turno ${turnId} non ha mai avviato il contesto: niente da continuare, apri un turno nuovo.`,
     };
   }
+  const reason = existing.continuableReason;
+  const deadStreak = reason?.deadStreak ?? 0;
+  if (deadStreak >= MAX_CONSECUTIVE_DEAD_LEASES) {
+    // Same slow provider, same unanswered context, three leases in a row with
+    // no new tool call. Granting another lease now burns the full resumed
+    // context for nothing measurable — the row stays continuable, and one
+    // probe is granted again after the cooldown (or immediately in a fresh
+    // turn, possibly on another model).
+    const diedAt = reason?.at !== undefined ? Date.parse(reason.at) : NaN;
+    const elapsed = Number.isFinite(diedAt) ? now().getTime() - diedAt : Number.POSITIVE_INFINITY;
+    if (elapsed < DEAD_ROUTE_COOLDOWN_MS) {
+      const waitMin = Math.max(1, Math.ceil((DEAD_ROUTE_COOLDOWN_MS - elapsed) / 60_000));
+      const model = existing.providerLease.model;
+      return {
+        turnId,
+        why: 'dead_route',
+        detail:
+          `il turno ${turnId.slice(0, 12)} non riparte su ${model}: il provider non ha risposto in tempo ` +
+          `per ${deadStreak} lease di fila senza produrre nuovo lavoro. Non è un problema del tuo messaggio — ` +
+          `è la rotta a essere troppo lenta per questo contesto. Riprova fra ~${waitMin} minuti, oppure apri ` +
+          `un turno nuovo (eventualmente su un altro modello): questo resta dov'è e si potrà riprovare allo scadere.`,
+      };
+    }
+  }
   const session = opts.session ?? deps.sessions.open(existing.sessionId);
   const granted = deps.turns.grantContinuation(
     turnId,
     {
-      messages: [...evidenceForContinuation(providerMessages(existing)), opts.message],
+      messages: [
+        ...evidenceForContinuation(providerMessages(existing)),
+        // The grant targets this durable Turn, not whichever session plan is
+        // most salient. This reference is derived control, never owner input;
+        // subsequent owner corrections remain in the retained evidence.
+        harnessMessage('user', [
+          {
+            type: 'text',
+            text:
+              `Ripresa del turno ${existing.id}. ` +
+              (existing.inputText === null
+                ? ''
+                : `La richiesta iniziale di questo lavoro è: ${JSON.stringify(existing.inputText)}. `) +
+              'Continua il lavoro di questo turno con le correzioni successive dell’owner, ' +
+              'usando gli effetti già registrati. Il piano e la storia della conversazione sono contesto, non un altro lavoro da avviare.',
+          },
+        ]),
+        opts.message,
+      ],
       taint: existing.taint,
       counters: buildFreshCounters(existing.counters),
       newLeaseStartedAt: now().toISOString(),
+      ...(opts.automatic === true
+        ? { automatic: true }
+        : existing.principal.kind === 'owner' && deps.profile.activity !== undefined
+          ? { activityExtension: deps.profile.activity }
+          : {}),
     },
     process.pid,
   );
@@ -699,14 +802,15 @@ export async function continueTurn(
     remoteParent(granted.id),
   );
   try {
-    deps.sessions.append(session, {
-      role: 'user',
-      content: ownerMessageText(opts.message),
-      surface: granted.surface,
-      createdAt: now().toISOString(),
-      traceId: granted.id,
-      tier: existing.taint,
-    });
+    if (opts.automatic !== true)
+      deps.sessions.append(session, {
+        role: 'user',
+        content: ownerMessageText(opts.message),
+        surface: granted.surface,
+        createdAt: now().toISOString(),
+        traceId: granted.id,
+        tier: existing.taint,
+      });
   } catch (error) {
     span.setAttributes({
       'muffin.turn.session_append_error': error instanceof Error ? error.message : String(error),
@@ -877,7 +981,33 @@ async function drive(
   }
 
   const nonScritte = scriviCorrezioniInSessione(deps, turn, session, record, residue());
-  if (nonScritte.length === 0) return risultato;
+  if (nonScritte.length === 0) {
+    const current =
+      !options.signal?.aborted &&
+      risultato.stopped === 'continuable' &&
+      record.counters.activityAllowance !== undefined
+        ? deps.turns.get(record.id)
+        : null;
+    if (current !== null && isOwnerActivityAutonomous(current)) {
+      const next = await continueTurn(deps, current.id, {
+        message: harnessMessage('user', [
+          {
+            type: 'text',
+            text: 'Continue this authorized activity within its remaining allowance. This is runtime continuation, not a new owner instruction or approval.',
+          },
+        ]),
+        automatic: true,
+        session,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+        ...(options.steer === undefined ? {} : { steer: options.steer }),
+        ...(options.onDelta === undefined ? {} : { onDelta: options.onDelta }),
+        ...(options.onProgress === undefined ? {} : { onProgress: options.onProgress }),
+        ...(options.replyChannel === undefined ? {} : { replyChannel: options.replyChannel }),
+      });
+      return 'why' in next ? risultato : next;
+    }
+    return risultato;
+  }
   /**
    * Una scrittura fallita **non è silenziosa**.
    *

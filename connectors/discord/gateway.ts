@@ -166,6 +166,46 @@ function backoffMs(attempt: number): number {
   return base + Math.floor(Math.random() * 1000);
 }
 
+/**
+ * SSRF floor for `resume_gateway_url` (#730). The READY payload is server
+ * data, and a forged or relayed payload must not choose where this process
+ * connects: only `wss://` to Discord's own gateway hosts is accepted.
+ * Anything else is discarded — the next reconnect falls back to the
+ * configured gateway URL with a fresh Identify. Returns the normalized
+ * origin, so the `/?v=10&encoding=json` suffix `run()` appends is always
+ * well-formed and no path, query, fragment or credential survives.
+ */
+function validatedResumeUrl(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'wss:') return null;
+  if (parsed.username !== '' || parsed.password !== '') return null;
+  if (parsed.port !== '' && parsed.port !== '443') return null;
+  const host = parsed.hostname.toLowerCase();
+  if (host !== 'gateway.discord.gg' && !host.endsWith('.discord.gg')) return null;
+  return parsed.origin;
+}
+
+/**
+ * Bounds for the server-sent `heartbeat_interval` (#731). The HELLO payload
+ * is server data: a zero or negative interval would spin the socket in a
+ * tight reschedule loop, an unbounded one would silence heartbeats and the
+ * zombie detection with them. Discord's real values are tens of seconds, so
+ * the floor keeps the connection alive with a sane cadence instead of killing
+ * it for a weird-but-valid number; reconnect semantics are unchanged.
+ */
+const HEARTBEAT_INTERVAL_MIN_MS = 1_000;
+const HEARTBEAT_INTERVAL_MAX_MS = 600_000;
+
+function clampHeartbeatInterval(intervalMs: number): number {
+  return Math.min(Math.max(intervalMs, HEARTBEAT_INTERVAL_MIN_MS), HEARTBEAT_INTERVAL_MAX_MS);
+}
+
 export class DiscordGateway {
   private ws: WebSocketLike | null = null;
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
@@ -303,11 +343,11 @@ export class DiscordGateway {
           case OP.HELLO: {
             helloReceived = true;
             const interval = (envelope.d as { heartbeat_interval?: number } | undefined)?.heartbeat_interval;
-            if (typeof interval !== 'number') {
+            if (typeof interval !== 'number' || !Number.isFinite(interval)) {
               ws.close(1002, 'Hello senza heartbeat_interval');
               return;
             }
-            this.startHeartbeat(ws, interval);
+            this.startHeartbeat(ws, clampHeartbeatInterval(interval));
             if (resuming && this.sessionId !== null) {
               this.send(ws, {
                 op: OP.RESUME,
@@ -350,7 +390,11 @@ export class DiscordGateway {
             if (envelope.t === 'READY') {
               const ready = envelope.d as { session_id?: string; resume_gateway_url?: string } | undefined;
               this.sessionId = ready?.session_id ?? this.sessionId;
-              this.resumeUrl = ready?.resume_gateway_url ?? this.resumeUrl;
+              // Server data, validated at the store site: a forged URL never
+              // becomes the next connect target — it just costs the session a
+              // fresh Identify against the configured gateway URL (#730).
+              const resumeCandidate = validatedResumeUrl(ready?.resume_gateway_url);
+              if (resumeCandidate !== null) this.resumeUrl = resumeCandidate;
               sawReadyOrResumed = true;
               this.log('discord: connesso (identify)');
             } else if (envelope.t === 'RESUMED') {

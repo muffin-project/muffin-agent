@@ -159,26 +159,23 @@ describe.runIf(gate.run)(`sandboxed execution holds (real containment — ${gate
   });
 
   /**
-   * The limit, asserted rather than assumed. `filesystem.allowWrite` is a
-   * *write* scope: ADR-0018 says "fs write-scope ristretto al workspace del
-   * turno", and reads stay open except for the mandatory deny-read paths.
-   * Measured on macOS 2026-08-15 with this executor: a contained command reads
-   * `/etc/hosts`, `$HOME`, and any file outside the scope.
-   *
-   * It is pinned here because it is the kind of limit that gets misremembered
-   * as a guarantee — "the sandbox confines the command to the workspace" is
-   * true of writes and false of reads, and `~/.muffin/muffin.db` is readable by
-   * a contained command today. If this line ever goes red, someone tightened
-   * reads: that is a good change, and it should be a deliberate one.
+   * The old limit, reversed on purpose (slice `read-scoped-workspace`, #645).
+   * `filesystem.allowWrite` was a *write* scope and reads stayed open except
+   * for the mandatory deny-read paths — measured on macOS 2026-08-15, when a
+   * contained command read `/etc/hosts`, `$HOME` and any file outside the
+   * scope. Since the read scope (`core/sandbox/read-scope.ts`) both lanes
+   * read only their own roots plus the listed system paths: a file outside
+   * the scope and outside the deny-list is unreadable, on `run` exactly as
+   * on `runReadOnly` (the write lane widens writes, not reads).
    */
-  it('the write scope is a write scope — reads outside it are NOT contained (declared limit)', async () => {
+  it('reads outside the scope are denied — the scope is a scope, not a write-only one', async () => {
     const r = await executor.run({
       command: `cat '${join(s.outside, 'diary.txt')}'`,
       cwd: s.workspace,
       writeScope: [s.workspace],
     });
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain('OUTSIDE_MARKER');
+    expect(r.code).not.toBe(0);
+    expect(r.stdout).not.toContain('OUTSIDE_MARKER');
   });
 
   it('a host-env secret does not ride into the child environment', async () => {
@@ -296,6 +293,71 @@ describe.runIf(gate.run)(`sandboxed execution holds (real containment — ${gate
     });
 
     expect(r.code).not.toBe(0);
+    expect(existsSync(hookPath)).toBe(false);
+  }, 20_000);
+
+  it('creates nested repositories and ordinary tracked files in one write-shell call', async () => {
+    const initNested =
+      platform() === 'darwin'
+        ? 'mkdir -p empty-template/hooks && git init --quiet --template=empty-template nested'
+        : 'git init --quiet nested';
+    const r = await executor.run({
+      command:
+        'mkdir -p ordinary && printf ordinary > ordinary/file.txt && ' +
+        initNested + ' && printf tracked > nested/tracked.txt && ' +
+        'git -C nested add tracked.txt',
+      cwd: s.workspace,
+      writeScope: [s.workspace],
+      timeoutMs: 15_000,
+    });
+
+    expect(r.code).toBe(0);
+    expect(readFileSync(join(s.workspace, 'ordinary', 'file.txt'), 'utf8')).toBe('ordinary');
+    expect(readFileSync(join(s.workspace, 'nested', 'tracked.txt'), 'utf8')).toBe('tracked');
+    expect(existsSync(join(s.workspace, 'nested', '.git', 'index'))).toBe(true);
+  }, 20_000);
+
+  it('refuses a hook created in a nested repository during the same write-shell call', async () => {
+    const hookPath = join(s.workspace, 'created-now', '.git', 'hooks', 'pre-commit');
+    const initNested =
+      platform() === 'darwin'
+        ? 'mkdir -p empty-template/hooks && git init --quiet --template=empty-template created-now'
+        : 'git init --quiet created-now';
+    const r = await executor.run({
+      command: initNested + ' && mkdir -p created-now/.git/hooks && ' +
+        'if printf hook > created-now/.git/hooks/pre-commit; then echo WRITABLE; ' +
+        'else echo DENIED; fi',
+      cwd: s.workspace,
+      writeScope: [s.workspace],
+      timeoutMs: 15_000,
+    });
+
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('DENIED');
+    expect(r.stdout).not.toContain('WRITABLE');
+    expect(existsSync(join(s.workspace, 'created-now', '.git', 'HEAD'))).toBe(true);
+    expect(existsSync(hookPath)).toBe(false);
+  }, 20_000);
+
+  it('refuses a top-level hook created in the same write-shell call', async () => {
+    const hookPath = join(s.workspace, '.git', 'hooks', 'pre-commit');
+    const initTopLevel =
+      platform() === 'darwin'
+        ? 'mkdir -p empty-template/hooks && git init --quiet --template=empty-template .'
+        : 'git init --quiet .';
+    const r = await executor.run({
+      command: initTopLevel + ' && mkdir -p .git/hooks && ' +
+        'if printf hook > .git/hooks/pre-commit; then echo WRITABLE; ' +
+        'else echo DENIED; fi',
+      cwd: s.workspace,
+      writeScope: [s.workspace],
+      timeoutMs: 15_000,
+    });
+
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('DENIED');
+    expect(r.stdout).not.toContain('WRITABLE');
+    expect(existsSync(join(s.workspace, '.git', 'HEAD'))).toBe(true);
     expect(existsSync(hookPath)).toBe(false);
   }, 20_000);
 

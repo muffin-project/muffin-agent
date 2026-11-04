@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { Config } from './config.js';
 import {
   diagnoseRoutingStaleness,
+  type EndpointEvidence,
   familyOf,
   repairStaleRouting,
   resolveModelSwitch,
   tagsToEvidence,
-  type EndpointEvidence,
 } from './model-resolve.js';
 
 /**
@@ -45,15 +45,34 @@ describe('familyOf', () => {
 });
 
 describe('resolveModelSwitch', () => {
+  it('repairs only light routing and preserves main connection, model and policy', () => {
+    const c = config({
+      lightProvider: {
+        kind: 'openai-compat',
+        apiKeyRef: 'secret://light',
+        routing: { only: ['old'], dataCollection: 'deny' },
+      },
+    });
+    const result = resolveModelSwitch(c, 'light', 'google/gemma-4-31b-it', live).config;
+    expect(result.provider).toEqual(c.provider);
+    expect(result.models.main).toBe(c.models.main);
+    expect(result.lightProvider?.routing).toEqual({ dataCollection: 'deny' });
+    expect(result.lightProvider?.routingForFamily).toBe('google');
+    expect(c.lightProvider?.routing?.only).toEqual(['old']);
+  });
   it('stesso slug: niente da fare, niente rumore', () => {
-    const c = config({ provider: { kind: 'openai-compat', apiKeyRef: 'secret://k', routing: { only: ['alibaba'] } } });
+    const c = config({
+      provider: { kind: 'openai-compat', apiKeyRef: 'secret://k', routing: { only: ['alibaba'] } },
+    });
     const { config: out, notes } = resolveModelSwitch(c, 'main', 'qwen/qwen3.8-27b', live);
     expect(out).toBe(c);
     expect(notes).toEqual([]);
   });
 
   it('stessa famiglia: i pin restano significativi, senza rumore', () => {
-    const c = config({ provider: { kind: 'openai-compat', apiKeyRef: 'secret://k', routing: { only: ['alibaba'] } } });
+    const c = config({
+      provider: { kind: 'openai-compat', apiKeyRef: 'secret://k', routing: { only: ['alibaba'] } },
+    });
     const { config: out, notes } = resolveModelSwitch(c, 'main', 'qwen/qwen3.8-flash', nobody);
     expect(out.models.main).toBe('qwen/qwen3.8-flash');
     expect(out.provider.routing).toEqual({ only: ['alibaba'] });
@@ -106,7 +125,12 @@ describe('resolveModelSwitch', () => {
   });
 
   it('senza routing non cè niente da riparare', () => {
-    const { config: out, notes } = resolveModelSwitch(config(), 'light', 'google/gemma-4-26b-a4b-it', nobody);
+    const { config: out, notes } = resolveModelSwitch(
+      config(),
+      'light',
+      'google/gemma-4-26b-a4b-it',
+      nobody,
+    );
     expect(out.models.light).toBe('google/gemma-4-26b-a4b-it');
     expect(out.provider.routing).toBeUndefined();
     expect(notes).toEqual([]);
@@ -117,15 +141,25 @@ describe('resolveModelSwitch', () => {
       provider: {
         kind: 'openai-compat',
         apiKeyRef: 'secret://k',
-        routing: { order: ['alibaba', 'chutes'], ignore: ['chutes'], quantizations: ['fp8'], sort: 'price' },
+        routing: {
+          order: ['alibaba', 'chutes'],
+          ignore: ['chutes'],
+          quantizations: ['fp8'],
+          sort: 'price',
+        },
       },
     });
     const { config: out } = resolveModelSwitch(c, 'main', 'google/gemma-4-31b-it', live);
-    expect(out.provider.routing).toEqual({ order: ['alibaba'], quantizations: ['fp8'], sort: 'price' });
+    expect(out.provider.routing).toEqual({
+      order: ['alibaba'],
+      quantizations: ['fp8'],
+      sort: 'price',
+    });
   });
 });
 
-describe('repairStaleRouting', () => {  it('ripara il modello già configurato contro gli endpoint di oggi', () => {
+describe('repairStaleRouting', () => {
+  it('ripara il modello già configurato contro gli endpoint di oggi', () => {
     const c = config({
       models: { main: 'google/gemma-4-31b-it', light: 'qwen/qwen3.8-flash' },
       provider: { kind: 'openai-compat', apiKeyRef: 'secret://k', routing: { only: ['chutes'] } },
@@ -188,14 +222,22 @@ describe('diagnoseRoutingStaleness', () => {
     const d = diagnoseRoutingStaleness(stantia());
     expect(d?.detail).toContain('alibaba');
     expect(d?.detail).toContain('"qwen"');
-    expect(d?.remedy).toContain('muffin model google/gemma-4-31b-it');
+    expect(d?.remedy).toContain('muffin model main google/gemma-4-31b-it');
   });
 
   it('tace quando non può provare: niente routing, niente marcatore, marcatore confermato, router', () => {
     expect(diagnoseRoutingStaleness(config())).toBeNull();
-    expect(diagnoseRoutingStaleness({ ...stantia(), provider: { ...stantia().provider, routingForFamily: undefined } })).toBeNull();
     expect(
-      diagnoseRoutingStaleness({ ...stantia(), provider: { ...stantia().provider, routingForFamily: 'google' } }),
+      diagnoseRoutingStaleness({
+        ...stantia(),
+        provider: { ...stantia().provider, routingForFamily: undefined },
+      }),
+    ).toBeNull();
+    expect(
+      diagnoseRoutingStaleness({
+        ...stantia(),
+        provider: { ...stantia().provider, routingForFamily: 'google' },
+      }),
     ).toBeNull();
     expect(
       diagnoseRoutingStaleness({

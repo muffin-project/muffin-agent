@@ -158,7 +158,41 @@ describe('acceptance · #533 · il gateway è l unico execution owner', () => {
   );
 
   it(
-    'senza gateway: owner locale esplicito, un solo percorso',
+    'senza gateway: fail closed con rimedio, nessuna esecuzione locale silenziosa',
+    async () => {
+      const inst = await install({
+        main: [{ text: 'non deve mai partire' }],
+        env: { MUFFIN_EXEC_LOCAL: '' },
+      });
+      try {
+        const run = await inst.muffin([
+          'run',
+          '--timeout',
+          String(HEADLESS_TURN_TIMEOUT_SECONDS),
+          'dimmi qualcosa',
+        ]);
+        if (run.code !== 1) throw new Error(`atteso exit 1 (non eseguo), ricevuto ${run.code}\n${run.err}`);
+        if (!run.err.includes('non eseguo:')) {
+          throw new Error(`il rifiuto non si dichiara:\n${run.err}`);
+        }
+        if (!run.err.includes('muffin gateway install')) {
+          throw new Error(`il rimedio non nomina il gateway:\n${run.err}`);
+        }
+        if (run.out.includes('non deve mai partire')) {
+          throw new Error('il turno ha comunque risposto senza gateway');
+        }
+        if (inst.provider.main().length !== 0) {
+          throw new Error(`il modello è stato chiamato ${inst.provider.main().length} volte senza gateway`);
+        }
+      } finally {
+        await inst.cleanup();
+      }
+    },
+    headlessTestTimeoutMs(1),
+  );
+
+  it(
+    'hatch MUFFIN_EXEC_LOCAL=1: il percorso locale resta per i test, dichiarato',
     async () => {
       const inst = await install({ main: [{ text: 'risposta locale, dichiarata' }] });
       try {
@@ -170,8 +204,8 @@ describe('acceptance · #533 · il gateway è l unico execution owner', () => {
         ]);
         if (run.code !== 0) throw new Error(`exit ${run.code} invece di 0:\n${run.err}`);
         if (!run.out.includes('risposta locale')) throw new Error(`risposta assente:\n${run.out}`);
-        if (!run.err.includes('esecuzione locale (nessun gateway attivo)')) {
-          throw new Error(`il fallback non si dichiara owner locale:\n${run.err}`);
+        if (!run.err.includes('esecuzione locale (hatch MUFFIN_EXEC_LOCAL=1, solo test)')) {
+          throw new Error(`l'hatch non si dichiara:\n${run.err}`);
         }
         if (inst.provider.main().length !== 1) {
           throw new Error(`attesa 1 chiamata al modello, arrivate ${inst.provider.main().length}`);

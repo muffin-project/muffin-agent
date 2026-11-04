@@ -92,3 +92,12 @@ export function stanzaDi(incoming: { readonly isPrivate: boolean; readonly threa
   if (incoming.isPrivate) return 'direct';
   return incoming.threadId === undefined ? 'group' : 'topic';
 }
+
+/**
+ * Convenzione del Bot API: un id di chat privata è positivo, un id di
+ * gruppo/supergruppo/canale è negativo. Una funzione sola perché tre copie
+ * di un confronto sono tre definizioni di "privato".
+ */
+export function isDirectChat(chatId: number): boolean {
+  return chatId > 0;
+}

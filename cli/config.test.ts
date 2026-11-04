@@ -2,11 +2,11 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { runInit } from './init.js';
-import { cmdConfig, cmdConfigSet, formatConfigKnobs } from './config.js';
-import { listConfigKnobs } from '../core/config/inventory.js';
 import { loadConfig } from '../core/config/config.js';
+import { listConfigKnobs } from '../core/config/inventory.js';
 import { formatSetOutcome, setConfigKnob } from '../core/config/settings.js';
+import { cmdConfig, cmdConfigSet, formatConfigKnobs } from './config.js';
+import { runInit } from './init.js';
 
 function home(): string {
   const dir = mkdtempSync(join(tmpdir(), 'muffin-cmd-config-'));
@@ -31,6 +31,20 @@ function capture(fn: () => number): { out: string; code: number } {
   }
 }
 
+async function captureAsync(fn: () => Promise<number>): Promise<{ out: string; code: number }> {
+  let out = '';
+  const spy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+    out += String(chunk);
+    return true;
+  });
+  try {
+    const code = await fn();
+    return { out, code };
+  } finally {
+    spy.mockRestore();
+  }
+}
+
 /** Same shape as `capture`, but for the commands that answer on stderr (a rejection). */
 function captureErr(fn: () => number): { err: string; code: number } {
   let err = '';
@@ -47,9 +61,9 @@ function captureErr(fn: () => number): { err: string; code: number } {
 }
 
 describe('muffin config', () => {
-  it('exits 0 and prints a table with the sealed column', () => {
+  it('exits 0 and prints a table with the sealed column', async () => {
     const dir = home();
-    const { out, code } = capture(() => cmdConfig(dir, []));
+    const { out, code } = await captureAsync(() => cmdConfig(dir, []));
     expect(code).toBe(0);
     expect(out).toContain('CHIAVE');
     expect(out).toContain('SIGILLATO');
@@ -58,16 +72,16 @@ describe('muffin config', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('--json emits exactly what listConfigKnobs produces, valid JSON, parseable and complete', () => {
+  it('--json emits exactly what listConfigKnobs produces, valid JSON, parseable and complete', async () => {
     const dir = home();
-    const { out, code } = capture(() => cmdConfig(dir, ['--json']));
+    const { out, code } = await captureAsync(() => cmdConfig(dir, ['--json']));
     expect(code).toBe(0);
     const parsed = JSON.parse(out);
     expect(parsed).toEqual(listConfigKnobs(dir));
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('a home with no config.json fails clearly instead of throwing past the command', () => {
+  it('a home with no config.json fails clearly instead of throwing past the command', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'muffin-cmd-config-empty-'));
     let err = '';
     const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
@@ -76,7 +90,7 @@ describe('muffin config', () => {
     });
     let code: number;
     try {
-      code = cmdConfig(dir, []);
+      code = await cmdConfig(dir, []);
     } finally {
       spy.mockRestore();
     }
@@ -140,21 +154,23 @@ describe('muffin config set', () => {
     const before = loadConfig(dir);
     const { err, code } = captureErr(() => cmdConfigSet(dir, ['rot.mode', 'hardened']));
     expect(code).toBe(78);
-    expect(err).toContain('non è un\'impostazione modificabile');
+    expect(err).toContain("non è un'impostazione modificabile");
     expect(loadConfig(dir)).toEqual(before);
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('senza chiave o senza valore stampa l\'usage ed esce 78', () => {
+  it("senza chiave o senza valore stampa l'usage ed esce 78", () => {
     const dir = home();
     expect(captureErr(() => cmdConfigSet(dir, [])).code).toBe(78);
     expect(captureErr(() => cmdConfigSet(dir, ['traces.retentionDays'])).code).toBe(78);
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('`muffin config set ...` (via cmdConfig) raggiunge la stessa funzione di `muffin config set` diretto', () => {
+  it('`muffin config set ...` (via cmdConfig) raggiunge la stessa funzione di `muffin config set` diretto', async () => {
     const dir = home();
-    const { out, code } = capture(() => cmdConfig(dir, ['set', 'traces.retentionDays', '15']));
+    const { out, code } = await captureAsync(() =>
+      cmdConfig(dir, ['set', 'traces.retentionDays', '15']),
+    );
     expect(code).toBe(0);
     expect(loadConfig(dir).traces.retentionDays).toBe(15);
     expect(out).toContain('traces.retentionDays');

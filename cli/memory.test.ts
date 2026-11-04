@@ -4,12 +4,21 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { type ChatResult, type Provider, ProviderError } from '../agent/providers/types.js';
 import { paths } from '../core/config/config.js';
+import { Consolidator } from '../core/memory/consolidator.js';
+import { ingestPending, reconcileProposal } from '../core/memory/ingest.js';
+import { sweepDuplicates } from '../core/memory/maintenance.js';
+import { proposeMemoryRecord } from '../core/memory/proposals.js';
+import { EXTRACTION_VERSION } from '../core/memory/schema.js';
 import { MemoryStore } from '../core/memory/store.js';
 import { VectorIndex } from '../core/memory/vectors.js';
+import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { runInit } from './init.js';
 import {
+  cmdMemoryExtract,
   cmdMemoryPin,
+  cmdMemoryProposals,
   cmdMemoryReview,
   cmdMemoryReviewKeep,
   cmdMemorySearch,
@@ -102,6 +111,92 @@ function homeWithFact(): { home: string; factId: number } {
   });
   db.close();
   return { home, factId };
+}
+
+async function homeWithProposalTransportFailure(canary: string): Promise<{ home: string; incomingFactId: number }> {
+  const home = mkdtempSync(join(tmpdir(), 'muffin-memory-proposal-failure-'));
+  const db = new DatabaseCtor(paths(home).db);
+  const store = new MemoryStore(db);
+  const existingEpisode = store.addEpisode({
+    tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
+    content: 'il mio commercialista è Marco', trustTier: 0, createdAt: '2026-08-13T10:00:00Z',
+  });
+  const subjectId = store.upsertEntity('host', 'owner', 'person', '2026-08-13T10:00:00Z');
+  store.addFact({
+    tenantId: 'host', subjectId, predicate: 'accountant', objectValue: 'Marco',
+    episodeId: existingEpisode, trustTier: 0, confidence: 0.9, extractionV: 1,
+    recordedAt: '2026-08-13T10:00:00Z',
+  });
+  const proposalEpisode = store.addEpisode({
+    tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
+    content: 'ricorda che il mio commercialista ora è Lucia', trustTier: 0,
+    createdAt: '2026-08-13T10:01:00Z',
+  });
+  const proposal = proposeMemoryRecord(store, {
+    tenantId: 'host', subject: 'owner', subjectKind: 'person', predicate: 'accountant',
+    object: 'Lucia', producer: 'owner-stated', sourceEpisodeIds: [proposalEpisode],
+    content: 'ricorda che il mio commercialista ora è Lucia', confidence: 0.95,
+  });
+  const provider: Provider = {
+    kind: 'openai-compat',
+    async chat() {
+      throw new ProviderError(`502 upstream echoed Authorization: Bearer ${canary}`, false, 502);
+    },
+  };
+  const out = await reconcileProposal({
+    store, provider, model: 'test-light', tracer: new SimpleTracer(new JsonlExporter(home)),
+    now: () => new Date('2026-08-13T10:02:00Z'),
+  }, 'host', proposal.id);
+  db.close();
+  const incomingFactId = out.factIds[0];
+  if (incomingFactId === undefined) throw new Error('review did not record the incoming fact');
+  return { home, incomingFactId };
+}
+
+async function homeWithProposalMalformedJudge(response: string): Promise<{ home: string; incomingFactId: number }> {
+  const home = mkdtempSync(join(tmpdir(), 'muffin-memory-proposal-malformed-'));
+  const db = new DatabaseCtor(paths(home).db);
+  const store = new MemoryStore(db);
+  const existingEpisode = store.addEpisode({
+    tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
+    content: 'il mio commercialista è Marco', trustTier: 0, createdAt: '2026-08-13T10:00:00Z',
+  });
+  const subjectId = store.upsertEntity('host', 'owner', 'person', '2026-08-13T10:00:00Z');
+  store.addFact({
+    tenantId: 'host', subjectId, predicate: 'accountant', objectValue: 'Marco',
+    episodeId: existingEpisode, trustTier: 0, confidence: 0.9, extractionV: 1,
+    recordedAt: '2026-08-13T10:00:00Z',
+  });
+  const proposalEpisode = store.addEpisode({
+    tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
+    content: 'ricorda che il mio commercialista ora è Lucia', trustTier: 0,
+    createdAt: '2026-08-13T10:01:00Z',
+  });
+  const proposal = proposeMemoryRecord(store, {
+    tenantId: 'host', subject: 'owner', subjectKind: 'person', predicate: 'accountant',
+    object: 'Lucia', producer: 'owner-stated', sourceEpisodeIds: [proposalEpisode],
+    content: 'ricorda che il mio commercialista ora è Lucia', confidence: 0.95,
+  });
+  const provider: Provider = {
+    kind: 'openai-compat',
+    async chat(): Promise<ChatResult> {
+      return {
+        text: response,
+        toolCalls: [],
+        stopReason: 'end',
+        usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        model: 'test',
+      };
+    },
+  };
+  const out = await reconcileProposal({
+    store, provider, model: 'test-light', tracer: new SimpleTracer(new JsonlExporter(home)),
+    now: () => new Date('2026-08-13T10:02:00Z'),
+  }, 'host', proposal.id);
+  db.close();
+  const incomingFactId = out.factIds[0];
+  if (incomingFactId === undefined) throw new Error('review did not record the incoming fact');
+  return { home, incomingFactId };
 }
 
 function capture(): { out: string[]; err: string[] } {
@@ -203,11 +298,152 @@ describe('muffin memory review', () => {
     expect(after.out.join('')).toContain('niente da decidere');
   });
 
+  it('keeps provider exception payloads out of the review and proposal commands', async () => {
+    const canary = 'private-provider-payload-canary-9f82';
+    const { home, incomingFactId } = await homeWithProposalTransportFailure(canary);
+
+    const review = capture();
+    expect(cmdMemoryReview(home)).toBe(1);
+    const reviewText = review.out.join('');
+    expect(reviewText).toContain(`muffin memory review keep ${incomingFactId}`);
+    expect(reviewText).not.toContain(canary);
+
+    vi.restoreAllMocks();
+    const proposals = capture();
+    expect(cmdMemoryProposals(home, { status: 'review' })).toBe(0);
+    const proposalsText = proposals.out.join('');
+    expect(proposalsText).toContain('provider HTTP 502');
+    expect(proposalsText).not.toContain(canary);
+  });
+
+  it('makes malformed judge responses actionable, including rows written by older versions', async () => {
+    const canary = 'malformed-judge-response-canary-4d91';
+    const { home, incomingFactId } = await homeWithProposalMalformedJudge(canary);
+    const db = new DatabaseCtor(paths(home).db);
+    const currentKind = db.prepare('SELECT kind FROM memory_review').pluck().get();
+    expect(currentKind).toBe('contradiction');
+    // Before this fix, the same undecided conflict was written as kind=error.
+    // Keep proving that existing installs can still resolve those rows.
+    db.prepare("UPDATE memory_review SET kind = 'error'").run();
+    db.close();
+
+    const normal = capture();
+    expect(cmdMemoryReview(home)).toBe(1);
+    const normalText = normal.out.join('');
+    expect(normalText).toContain(`muffin memory review keep ${incomingFactId}`);
+    expect(normalText).toContain('[non-json]');
+    expect(normalText).not.toContain(canary);
+    expect(normalText).not.toContain('problemi della pipeline');
+
+    vi.restoreAllMocks();
+    const verbose = capture();
+    expect(cmdMemoryReview(home, true)).toBe(1);
+    expect(verbose.out.join('')).toContain(canary);
+
+    vi.restoreAllMocks();
+    const answered = capture();
+    expect(cmdMemoryReviewKeep(home, incomingFactId)).toBe(0);
+    expect(answered.out.join('')).toContain('deciso');
+    vi.restoreAllMocks();
+    const settled = capture();
+    expect(cmdMemoryReview(home)).toBe(0);
+    expect(settled.out.join('')).not.toContain(`muffin memory review keep ${incomingFactId}`);
+  });
+
   it('refuses an id that is not one of the two, instead of reporting success', () => {
     const { home } = homeWithContradiction();
     const { err } = capture();
     expect(cmdMemoryReviewKeep(home, 9999)).toBe(1);
     expect(err.join('')).toContain('contraddizione aperta');
+  });
+
+  it('refuses to keep a side while proposal reconciliation is awaiting the judge', async () => {
+    const { home, existing, incoming } = homeWithContradiction();
+    const runningAt = new Date();
+    const db = new DatabaseCtor(paths(home).db);
+    const store = new MemoryStore(db);
+    const proposalEpisode = store.addEpisode({
+      tenantId: 'host',
+      connector: 'cli',
+      threadKey: 't',
+      role: 'user',
+      kind: 'message',
+      content: 'il mio commercialista ora è Sara',
+      trustTier: 0,
+      createdAt: runningAt.toISOString(),
+    });
+    const proposal = proposeMemoryRecord(store, {
+      tenantId: 'host',
+      subject: 'owner',
+      subjectKind: 'person',
+      predicate: 'accountant',
+      object: 'Sara',
+      producer: 'owner-stated',
+      sourceEpisodeIds: [proposalEpisode],
+      content: 'il mio commercialista ora è Sara',
+      confidence: 0.95,
+    });
+    let judgeStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      judgeStarted = resolve;
+    });
+    let finishJudge!: (result: ChatResult) => void;
+    const judgeResult = new Promise<ChatResult>((resolve) => {
+      finishJudge = resolve;
+    });
+    const provider: Provider = {
+      kind: 'openai-compat',
+      async chat() {
+        judgeStarted();
+        return judgeResult;
+      },
+    };
+    const reconciliation = reconcileProposal(
+      {
+        store,
+        provider,
+        model: 'test-light',
+        tracer: new SimpleTracer(new JsonlExporter(home)),
+        now: () => runningAt,
+      },
+      'host',
+      proposal.id,
+    );
+    const reviewDecision: ChatResult = {
+      text: JSON.stringify({ reasoning: 'serve una scelta del proprietario', verdict: 'review', confidence: 0.5 }),
+      toolCalls: [],
+      stopReason: 'end',
+      usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      model: 'test',
+    };
+
+    try {
+      await started;
+      const { err } = capture();
+      expect(cmdMemoryReviewKeep(home, incoming)).toBe(1);
+      expect(err.join('')).toContain('memoria occupata');
+      expect(err.join('')).toContain('nessuna modifica');
+      expect(store.factById('host', existing)?.expiredAt).toBeNull();
+      expect(store.factById('host', incoming)?.expiredAt).toBeNull();
+      expect(store.openContradictions('host')).toHaveLength(1);
+      expect(store.proposalById('host', proposal.id)?.status).toBe('pending');
+
+      finishJudge(reviewDecision);
+      expect((await reconciliation).status).toBe('review');
+      expect(store.openContradictions('host')).toHaveLength(2);
+
+      vi.restoreAllMocks();
+      const retry = capture();
+      expect(cmdMemoryReviewKeep(home, incoming)).toBe(0);
+      expect(retry.out.join('')).toContain('deciso');
+      expect(store.openContradictions('host')).toHaveLength(0);
+      expect(store.factById('host', incoming)?.expiredAt).toBeNull();
+      expect(store.activeFacts('host', store.findEntity('host', 'owner')!, 'accountant')).toHaveLength(1);
+    } finally {
+      finishJudge(reviewDecision);
+      await reconciliation.catch(() => undefined);
+      db.close();
+    }
   });
 
   it('tells an empty register apart from one whose questions are all answered', () => {
@@ -351,6 +587,28 @@ describe('muffin memory pin / unpin', () => {
 describe('muffin memory search — cmdMemorySearch reached beyond the argv rejections', () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it('shows inferred attribution beside the fact instead of only its owner-tier source', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-memory-origin-cli-'));
+    runInit({ home, apiKey: 'sk-memory-origin-never-called' });
+    const db = new DatabaseCtor(paths(home).db);
+    const store = new MemoryStore(db);
+    const source = store.addEpisode({
+      tenantId: 'host', connector: 'cli', threadKey: 'synthetic', role: 'user',
+      kind: 'message', content: 'Inspect the tool catalog.', trustTier: 0,
+      createdAt: '2026-10-14T00:00:00Z',
+    });
+    const owner = store.upsertEntity('host', 'owner', 'person', '2026-10-14T00:00:00Z');
+    const fact = store.addFact({
+      tenantId: 'host', subjectId: owner, predicate: 'works_as', objectValue: 'Synthetic accountant',
+      episodeId: source, trustTier: 0, origin: 'inferred', confidence: 0.99, extractionV: 1,
+      recordedAt: '2026-10-14T00:00:00Z',
+    });
+    db.close();
+    const { out } = capture();
+    expect(await cmdMemorySearch(home, 'owner', {})).toBe(0);
+    expect(out.join('')).toMatch(new RegExp(`\\[fact #${fact}\\][^\\n]*dedotto — non detto\\n[^\\n]*Synthetic accountant`));
+  });
+
   /**
    * U1: `cli/main.test.ts` proves the three argv-level rejections (bad date,
    * empty window, future as-of) — all short-circuit *before* `cmdMemorySearch`
@@ -454,7 +712,9 @@ describe('muffin memory search — cmdMemorySearch reached beyond the argv rejec
  * vectors, in sync» — cioe' alla lettera il difetto da cui nasce la slice.
  */
 describe('drenare l indice e progresso quanto estrarre', () => {
-  const giro = (marked: number, indexed: number, fetched: number) => ({ marked, indexed, fetched });
+  const giro = (marked: number, indexed: number, fetched: number, proposalPageFull = false) => ({
+    marked, indexed, fetched, proposalPageFull,
+  });
 
   it('continua quando l estrazione e ferma ma l indice si sta drenando', () => {
     // Il caso del dopo-cambio: niente da estrarre, 200 chunk scritti.
@@ -471,9 +731,187 @@ describe('drenare l indice e progresso quanto estrarre', () => {
     expect(valeUnAltroGiro(giro(25, 0, 25), 1, 200)).toBe(true);
   });
 
+  it('continua se una pagina corta estrae poco ma indicizza altro lavoro', () => {
+    expect(valeUnAltroGiro(giro(3, 2, 3), 1, 200)).toBe(true);
+  });
+
   it('il tetto sui giri vale comunque, anche mentre l indice si drena', () => {
     // Senza, un indice enorme trasformerebbe il comando in una nottata.
     expect(valeUnAltroGiro(giro(0, 200, 0), 8, 200)).toBe(false);
+  });
+
+  it('continua una pagina piena di proposte anche senza progresso episodio', () => {
+    expect(valeUnAltroGiro(giro(0, 0, 0, true), 1, 50)).toBe(true);
+    expect(valeUnAltroGiro(giro(0, 0, 0, true), 2, 50)).toBe(false);
+  });
+
+  it('il comando manuale richiede la pagina successiva prima di chiudere', async () => {
+    const db = new DatabaseCtor(':memory:');
+    const store = new MemoryStore(db);
+    const home = mkdtempSync(join(tmpdir(), 'muffin-memory-manual-drain-'));
+    const evidenceIds = Array.from({ length: 21 }, (_, i) =>
+      store.addEpisode({
+        tenantId: 'host',
+        connector: 'cli',
+        threadKey: 't',
+        role: 'user',
+        kind: 'message',
+        content: `evidence ${i}`,
+        trustTier: 0,
+        createdAt: `2026-08-01T10:${String(i).padStart(2, '0')}:00Z`,
+      }),
+    );
+    store.markExtracted('host', evidenceIds, EXTRACTION_VERSION);
+    evidenceIds.forEach((episodeId, i) => {
+      proposeMemoryRecord(store, {
+        tenantId: 'host',
+        subject: 'owner',
+        predicate: `note_${i}`,
+        object: `value_${i}`,
+        producer: 'agent-inference',
+        sourceEpisodeIds: [episodeId],
+        content: `inference ${i}`,
+        confidence: 0.9,
+      });
+    });
+    const provider: Provider = {
+      kind: 'openai-compat',
+      async chat(): Promise<ChatResult> {
+        return {
+          text: '{"reasoning":"no conflict","verdict":"coexist","confidence":0.9}',
+          toolCalls: [],
+          stopReason: 'end',
+          usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          model: 'test',
+        };
+      },
+    };
+    const tracer = new SimpleTracer(new JsonlExporter(home));
+    const consolidation = new Consolidator({
+      db,
+      budgetExhausted: () => false,
+      ingest: (limit) => ingestPending({ store, provider, model: 'test', tracer }, 'host', limit),
+      sweep: (at) => sweepDuplicates(store, 'host', at),
+      drainMs: 60_000,
+    });
+    const { out } = capture();
+    vi.doMock('../agent/runtime.js', () => ({
+      buildRuntime: () => ({
+        close: () => consolidation.stop(),
+        consolidation,
+      }),
+    }));
+    try {
+      expect(await cmdMemoryExtract(home, 50)).toBe(0);
+      expect(store.pendingProposals('host')).toHaveLength(0);
+      expect(store.stats('host').activeFacts).toBe(21);
+      expect(out.join('')).toContain('21 fatti');
+    } finally {
+      vi.doUnmock('../agent/runtime.js');
+      consolidation.stop();
+      db.close();
+    }
+  });
+
+  it('drena vettori per tenant senza estrarre fatti dai tenant Telegram', async () => {
+    const db = new DatabaseCtor(':memory:');
+    const store = new MemoryStore(db);
+    let startEmbedding!: () => void;
+    const embeddingStarted = new Promise<void>((resolve) => {
+      startEmbedding = resolve;
+    });
+    let finishEmbedding!: () => void;
+    const embeddingGate = new Promise<void>((resolve) => {
+      finishEmbedding = resolve;
+    });
+    const vectors = new VectorIndex(db, {
+      id: 'test:tenant-index',
+      dimensions: 4,
+      embed: async (texts) => {
+        startEmbedding();
+        await embeddingGate;
+        return texts.map(() => Float32Array.from([1, 0, 0, 0]));
+      },
+    });
+    const tenantA = 'group:telegram:a';
+    const tenantB = 'group:telegram:b';
+    store.addEpisode({
+      tenantId: tenantA,
+      connector: 'telegram',
+      threadKey: 'a',
+      role: 'user',
+      kind: 'message',
+      content: 'promemoria sintetico del gruppo A',
+      trustTier: 0,
+      createdAt: '2026-10-09T09:00:00Z',
+    });
+    store.addEpisode({
+      tenantId: tenantB,
+      connector: 'telegram',
+      threadKey: 'b',
+      role: 'user',
+      kind: 'message',
+      content: 'promemoria sintetico del gruppo B',
+      trustTier: 0,
+      createdAt: '2026-10-09T09:01:00Z',
+    });
+
+    const home = mkdtempSync(join(tmpdir(), 'muffin-memory-tenant-drain-'));
+    const tracer = new SimpleTracer(new JsonlExporter(home));
+    let modelCalls = 0;
+    const provider: Provider = {
+      kind: 'openai-compat',
+      async chat() {
+        modelCalls += 1;
+        return {
+          text: '',
+          toolCalls: [],
+          stopReason: 'end',
+          usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          model: 'test',
+        };
+      },
+    };
+    const consolidation = new Consolidator({
+      db,
+      budgetExhausted: () => false,
+      ingest: (limit) => ingestPending({ store, provider, model: 'test', tracer, vectors }, 'host', limit),
+    });
+    const { out } = capture();
+    vi.doMock('../agent/runtime.js', () => ({
+      buildRuntime: () => ({
+        close: () => consolidation.stop(),
+        consolidation,
+      }),
+    }));
+    try {
+      const command = cmdMemoryExtract(home, 50);
+      try {
+        await embeddingStarted;
+        const contender = new MemoryStore(db);
+        const claim = contender.acquireIngestLock(new Date());
+        if (!('held' in claim)) contender.releaseIngestLock();
+        expect('held' in claim).toBe(true);
+      } finally {
+        finishEmbedding();
+      }
+      expect(await command).toBe(0);
+      expect(out.join('')).toContain('2 chunk indicizzati');
+      expect(modelCalls).toBe(0);
+      expect(store.pendingEpisodes(tenantA, EXTRACTION_VERSION)).toHaveLength(1);
+      expect(store.pendingEpisodes(tenantB, EXTRACTION_VERSION)).toHaveLength(1);
+      expect(await vectors.search(tenantA, 'query')).toEqual([
+        expect.objectContaining({ text: 'promemoria sintetico del gruppo A' }),
+      ]);
+      expect(await vectors.search(tenantB, 'query')).toEqual([
+        expect.objectContaining({ text: 'promemoria sintetico del gruppo B' }),
+      ]);
+      expect(await vectors.search('host', 'query')).toEqual([]);
+    } finally {
+      vi.doUnmock('../agent/runtime.js');
+      consolidation.stop();
+      db.close();
+    }
   });
 });
 

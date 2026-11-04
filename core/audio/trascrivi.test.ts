@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MODELLO_MANCANTE, prerequisitiTrascrizione, RIMEDIO_FFMPEG, RIMEDIO_WHISPER, trascrivi } from './trascrivi.js';
+import { MODELLO_MANCANTE, assicuraModello, assicuraVoce, prerequisitiTrascrizione, RIMEDIO_FFMPEG, RIMEDIO_WHISPER, trascrivi } from './trascrivi.js';
 
 /**
  * La voce dell'owner trascritta in casa, e cosa succede quando non si può.
@@ -228,5 +228,117 @@ describe('i prerequisiti si possono chiedere prima che arrivi una nota vocale', 
     const esito = prerequisitiTrascrizione({ whisperBin: mio, whisperModel: join(dir, 'no.bin') }, '');
     expect(esito[1]).toEqual({ cosa: 'whisper.cpp', ok: true, dove: mio });
     expect(esito[0]).toMatchObject({ ok: false });
+  });
+});
+
+describe('il modello si assicura, non si presuppone', () => {
+  const scarica = (byte: Buffer) =>
+    (async () => new Response(new Uint8Array(byte), { status: 200 })) as unknown as typeof globalThis.fetch;
+
+  it('se c è non tocca la rete', async () => {
+    let rete = 0;
+    const esito = await assicuraModello(modelloFinto(), {
+      fetch: (async () => {
+        rete++;
+        return new Response('x', { status: 200 });
+      }) as unknown as typeof globalThis.fetch,
+    });
+    expect(esito).toEqual({ esito: 'presente' });
+    expect(rete).toBe(0);
+  });
+
+  it('se manca lo scarica, atomico e senza pezzi in giro', async () => {
+    const dove = join(dir, 'models', 'ggml-base.bin');
+    const esito = await assicuraModello(dove, { fetch: scarica(Buffer.from('modello')) });
+    expect(esito).toEqual({ esito: 'scaricato', byte: 7 });
+    expect(existsSync(dove)).toBe(true);
+    expect(existsSync(`${dove}.part`)).toBe(false);
+  });
+
+  it('rete giù o risposta vuota: fallito con il perché, niente file, niente eccezioni', async () => {
+    const giu = await assicuraModello(join(dir, 'a.bin'), {
+      fetch: (async () => {
+        throw new Error('ENOTFOUND');
+      }) as unknown as typeof globalThis.fetch,
+    });
+    expect(giu.esito).toBe('fallito');
+    expect(existsSync(join(dir, 'a.bin'))).toBe(false);
+
+    const vuota = await assicuraModello(join(dir, 'b.bin'), { fetch: scarica(Buffer.alloc(0)) });
+    expect(vuota).toEqual({ esito: 'fallito', why: 'modello whisper non scaricato: risposta vuota' });
+    expect(existsSync(join(dir, 'b.bin'))).toBe(false);
+  });
+
+  it('assicuraVoce: niente superfici vocali, niente rete, niente riga', async () => {
+    let rete = 0;
+    const riga = await assicuraVoce(
+      dir,
+      { surfaces: { enabled: ['cli'] }, audio: undefined },
+      {
+        fetch: (async () => {
+          rete++;
+          return new Response('x', { status: 200 });
+        }) as unknown as typeof globalThis.fetch,
+      },
+    );
+    expect(riga).toBeNull();
+    expect(rete).toBe(0);
+  });
+
+  it('assicuraVoce: dice presente, scaricato o fallito con tre righe diverse', async () => {
+    const base = { surfaces: { enabled: ['cli', 'telegram'] }, audio: undefined };
+    expect(await assicuraVoce(dir, { ...base, audio: { whisperModel: modelloFinto() } })).toBe(
+      'voce: modello whisper presente',
+    );
+    const dove = join(dir, 'm2.bin');
+    expect(await assicuraVoce(dir, { ...base, audio: { whisperModel: dove } }, { fetch: scarica(Buffer.from('modello')) })).toContain(
+      'voce: modello whisper scaricato',
+    );
+    expect(
+      await assicuraVoce(
+        dir,
+        { ...base, audio: { whisperModel: join(dir, 'm3.bin') } },
+        {
+          fetch: (async () => {
+            throw new Error('offline');
+          }) as unknown as typeof globalThis.fetch,
+        },
+      ),
+    ).toContain('voce: modello whisper non scaricato');
+  });
+
+  it('trascrivi con provisiona scarica e poi trascrive, senza cambiare il rimedio quando fallisce', async () => {
+    const dove = join(dir, 'ggml-auto.bin');
+    const girati: string[] = [];
+    const esito = await trascrivi(audio, {
+      whisperModel: dove,
+      provisiona: true,
+      fetch: scarica(Buffer.from('modello')),
+      run: async (bin, args) => {
+        girati.push(bin);
+        if (bin === 'whisper-cli') {
+          const of = args[args.indexOf('-of') + 1]!;
+          writeFileSync(`${of}.txt`, 'ciao mondo');
+        }
+        return { stdout: '' };
+      },
+    });
+    // Il download è avvenuto (il file ora c'è) e poi ha girato davvero.
+    expect(existsSync(dove)).toBe(true);
+    expect(girati).toContain('whisper-cli');
+    expect(esito).toEqual({ ok: true, testo: 'ciao mondo' });
+  });
+
+  it('trascrivi con provisiona e rete giù: il rimedio è quello di sempre', async () => {
+    const esito = await trascrivi(audio, {
+      whisperModel: join(dir, 'mai.bin'),
+      provisiona: true,
+      fetch: (async () => {
+        throw new Error('offline');
+      }) as unknown as typeof globalThis.fetch,
+      run: async () => ({ stdout: '' }),
+    });
+    expect(esito.ok).toBe(false);
+    if (!esito.ok) expect(esito.rimedio).toBe(MODELLO_MANCANTE);
   });
 });

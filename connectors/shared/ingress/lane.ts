@@ -1,4 +1,5 @@
 import { sembraComando, type Controlli, type EsitoComando } from '../../../agent/comandi.js';
+import type { LevaDelega } from '../../../core/runtime/delega.js';
 import type { Principal } from '../../../core/policy/types.js';
 
 /**
@@ -212,13 +213,23 @@ const PAUSA_ASSENTE: PausaLever = { attiva: () => false, metti: () => {}, togli:
  * Per-lane and not per-port, deliberately: `/stop` sent from a group must not
  * stop the turn running in the private chat. That was already true of the
  * pre-slice closure over `chatId`; it is the same rule, written once.
+ *
+ * `delega` arriva già costruita dalla porta — la leva sa sessione e store, la
+ * corsia sa solo quale turno è vivo — e resta opzionale dove la porta non ha
+ * niente a cui legarla: i comandi dicono che qui non si può, invece di fingere.
  */
-export function controlliPerCorsia(lanes: LaneRegistry, key: string, pausa: PausaLever | undefined): Controlli {
+export function controlliPerCorsia(
+  lanes: LaneRegistry,
+  key: string,
+  pausa: PausaLever | undefined,
+  delega?: LevaDelega | undefined,
+): Controlli {
   return {
     vivo: () => lanes.isLive(key),
     stop: () => lanes.stop(key),
     steer: (testo) => lanes.steer(key, testo),
     pausa: pausa === undefined ? PAUSA_ASSENTE : { attiva: () => pausa.attiva(), metti: () => pausa.metti(), togli: () => pausa.togli() },
+    ...(delega === undefined ? {} : { delega }),
   };
 }
 

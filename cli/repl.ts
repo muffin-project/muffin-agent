@@ -5,9 +5,10 @@ import { intestazione } from './riquadro.js';
 import { attachMcp, buildRuntime, type Runtime } from '../agent/runtime.js';
 import { loadProfiles, selectProfile } from '../agent/profiles/profile.js';
 import { Scheduler, type Deliver, type ForegroundGate, type StandDown } from '../core/scheduler/scheduler.js';
-import { ModelLane } from '../core/turns/model-lane.js';
+import { makeTraceRetentionTick } from '../core/scheduler/trace-retention.js';
+import { LANE_JOBS, LANE_TURNS, ModelLane } from '../core/turns/model-lane.js';
 import { gatewayTransition, readGateway } from '../core/gateway/lock.js';
-import { resolveExecutionOwner } from '../core/gateway/ownership.js';
+import { localExecAllowed, NO_GATEWAY_REMEDY, resolveExecutionOwner } from '../core/gateway/ownership.js';
 import { mintExecutionId, runViaGateway, UnknownOutcomeError } from '../core/gateway/forward.js';
 import { formatFileReady } from '../core/surface/cli.js';
 import type { ApprovalRequest } from '../agent/loop.js';
@@ -23,6 +24,7 @@ import { TOOL_PHRASES, toolLine, toolPhrase, toolSubject } from '../agent/tool-p
 import { COMANDI as ELENCO_COMANDI, aiuto, debugCommand, eseguiComando, sembraComando, thinkingCommand } from '../agent/comandi.js';
 import type { Controlli, Verbosity } from '../agent/comandi.js';
 import { Pausa } from '../core/runtime/pausa.js';
+import { levaDelega } from '../core/runtime/delega.js';
 import { loadConfig, paths, saveConfig } from '../core/config/config.js';
 import { cmdModel } from './model.js';
 import { makeStatusLine, type StatusLine } from './status-line.js';
@@ -73,6 +75,30 @@ export function statusFor(event: TurnEvent): string | null {
     default:
       return null;
   }
+}
+
+const MODEL_LANE_POLL_MS = 50;
+
+/** Wait for the REPL's local turn to own the same lane as jobs and inbound turns. */
+async function waitForForegroundModelLane(
+  lane: ModelLane,
+  signal: AbortSignal,
+  status: StatusLine,
+): Promise<boolean> {
+  let visibleStatus: string | null = null;
+  while (!signal.aborted) {
+    const holder = lane.take(LANE_TURNS);
+    if (holder === null) return true;
+
+    const activity = holder === LANE_JOBS ? 'un’attività pianificata' : 'un altro turno';
+    const nextStatus = `attendo il modello: ${activity} sta usando la corsia…`;
+    if (nextStatus !== visibleStatus) {
+      status.show(nextStatus);
+      visibleStatus = nextStatus;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, MODEL_LANE_POLL_MS));
+  }
+  return false;
 }
 
 
@@ -492,10 +518,10 @@ export async function runRepl(
   const gateway = readGateway(runtime.db);
   /**
    * L'unica ModelLane di questo processo (#533): lo scheduler che gira qui
-   * (quando nessun gateway c'è) e i turni in arrivo dalle superfici che
-   * questa finestra serve la condividono — mai due istanze indipendenti che
-   * si dicono «equivalenti». Quando il gateway c'è, i turni del terminale non
-   * la toccano proprio: girano sulla sua.
+   * (solo con gateway o hatch, vedi sotto) e i turni in arrivo dalle superfici
+   * che questa finestra serve la condividono — mai due istanze indipendenti
+   * che si dicono «equivalenti». Quando il gateway c'è, i turni del terminale
+   * non la toccano proprio: girano sulla sua.
    */
   const modelLane = new ModelLane();
   const surfaces = connectSurfaces(
@@ -605,7 +631,9 @@ export async function runRepl(
         `${style.accent('✳')} ${style.bold('muffin')}`,
         style.dim(`${runtime.config.models.main} · profilo ${runtime.deps.profile.name}`),
         style.dim(
-          runtime.config.provider.kind === 'anthropic'
+          runtime.config.provider.kind === 'openai-chatgpt'
+            ? 'ChatGPT plan · https://chatgpt.com/settings/usage'
+            : runtime.config.provider.kind === 'anthropic'
             ? 'Anthropic diretto'
             : runtime.config.provider.baseUrl?.includes('openrouter.ai')
               ? 'OpenRouter · OpenAI-compatible'
@@ -793,6 +821,21 @@ export async function runRepl(
     },
     steer: () => false,
     pausa: { attiva: () => pausa.attiva(), metti: () => pausa.metti(), togli: () => pausa.togli() },
+    // La delega sul lavoro di questa sessione (issue #740). Senza spinta alla
+    // corsia: il REPL cede i turni al gateway (ADR-0035) e non riprende mai un
+    // turno da sé — la riga risvegliata la raccoglie la corsia al battito, o
+    // `muffin resume` a mano. La sessione si legge a ogni comando perché `/new`
+    // la ruota senza ricostruire le leve.
+    ...(runtime.deps.delega === undefined || runtime.deps.approvals === undefined
+      ? {}
+      : {
+          delega: levaDelega({
+            delega: runtime.deps.delega,
+            approvals: runtime.deps.approvals,
+            turns: runtime.deps.turns,
+            sessionId: () => session.id,
+          }),
+        }),
   };
 
   /**
@@ -864,7 +907,13 @@ export async function runRepl(
       else if (e.kind === 'failed') status.line(`corsia impegni: giro fallito — ${e.error}`);
     },
   });
-  const scheduler = new Scheduler(
+  // ADR-0103: lo scheduler vive nel gateway. Questa finestra ne crea uno
+  // solo quando un gateway c'è (cede a ogni tick via standDown, come prima)
+  // o dietro l'hatch di test — senza gateway e senza hatch nessuno
+  // schedula qui, e la riga qui sotto lo dice invece di prometterlo.
+  let scheduler: Scheduler | null = null;
+  if (gateway !== null || localExecAllowed()) {
+    scheduler = new Scheduler(
     runtime.jobs,
     makeJobRunner(runtime.deps, runtime.jobFires, runtime.executor, { cwd: runtime.workspace }, runtime.budget),
     deliver,
@@ -894,32 +943,45 @@ export async function runRepl(
     // re-verify, same default as every other REPL/test construction.
     undefined,
     // B7: same wiring as `cli/gateway.ts`, so a job the REPL runs (no gateway
-    // installed yet, or its claim gone stale) gets the same identity bridge.
-    (job) => runtime.jobFires.settle(job.id, job.nextFireAt.toISOString()),
+    // installed yet, or its claim gone stale) gets the same identity bridge —
+    // silent receipt included (#598 S4).
+    (job, opts) => runtime.jobFires.settle(job.id, job.nextFireAt.toISOString(), opts),
     // ADR-0054 §4: la pausa è del database, non di questo processo — un
     // `/pause` dato dal telefono ferma anche i job che girano qui.
     () => pausa.attiva(),
     // ADR-0060: la stessa corsia del gateway, dalla stessa porta. Il REPL cede
-    // allo scheduler del gateway quando c'è (`standDown` qui sopra), quindi
-    // parla solo quando nessun altro processo possiede lo store — mai due
-    // volte. Ed è qui, e non solo nel gateway, perché un'installazione senza
-    // gateway ha comunque fatto la promessa.
+    // allo scheduler del gateway quando c'è (`standDown` qui sopra). Senza
+    // gateway e senza hatch non c'è scheduler qui (ADR-0103: la promessa dei
+    // job vive nel gateway, non nella finestra).
     commitments,
-  );
-  const ticker = setInterval(() => scheduler.tick(), TICK_MS);
-  ticker.unref(); // the timer must not, by itself, keep the process alive
+    // #838: la stessa retention del gateway, dalla stessa porta — il REPL cede
+    // allo scheduler del gateway quando c'è, quindi pota solo quando nessun
+    // altro processo possiede lo store. Stessa policy del boot, solo un
+    // secondo chiamante.
+    makeTraceRetentionTick(home, runtime.config.traces.retentionDays),
+    );
+  }
+  let ticker: ReturnType<typeof setInterval> | null = null;
+  if (scheduler !== null) {
+    ticker = setInterval(() => scheduler.tick(), TICK_MS);
+    ticker.unref(); // the timer must not, by itself, keep the process alive
+  }
   // Says who owns it *now*, from the same read the ticker will redo. The line
   // is allowed to become false — that is what the handover announcement is for.
-  process.stderr.write(
-    gateway === null
-      ? `scheduler: in questa sessione — i job girano finché la finestra è aperta\n`
-      : `scheduler: del gateway (pid ${gateway.pid}) — i job girano anche senza di te\n`,
-  );
+  if (scheduler !== null) {
+    process.stderr.write(
+      gateway === null
+        ? `scheduler: hatch di test — i job girano in questa finestra finché è aperta\n`
+        : `scheduler: del gateway (pid ${gateway.pid}) — i job girano anche senza di te\n`,
+    );
+  } else {
+    process.stderr.write(`scheduler: nessuno — i job girano solo sul gateway (${NO_GATEWAY_REMEDY})\n`);
+  }
   // One tick now, not only on the interval — the gateway does the same and for
   // the same reason (`service.ts`): a job that came due while nothing was
   // running is the case `markRan`'s catch-up exists for, and waiting a whole
   // interval to notice it is a job the owner watched not happen.
-  scheduler.tick();
+  scheduler?.tick();
 
   try {
     for (;;) {
@@ -1047,13 +1109,13 @@ export async function runRepl(
           : undefined;
 
         /**
-         * #533: chi esegue questo turno si decide qui, a ogni turno, mai
-         * all'avvio. Quando il gateway è vivo esegue lui — sullo stesso
-         * runtime, la stessa ModelLane e lo stesso budget di Telegram — e
-         * questo processo è solo il terminale che guarda. Quando non c'è,
-         * esegue questa finestra come owner locale esplicito. Un conflitto
-         * (un owner che non può eseguire per noi) non esegue affatto: fail
-         * closed, con il rimedio, mai un secondo runtime silenzioso.
+         * #533 + ADR-0103: chi esegue questo turno si decide qui, a ogni
+         * turno, mai all'avvio. Quando il gateway è vivo esegue lui — sullo
+         * stesso runtime, la stessa ModelLane e lo stesso budget di Telegram —
+         * e questo processo è solo il terminale che guarda. Quando non c'è,
+         * nessuno esegue qui: fail closed con il rimedio. Solo l'hatch di
+         * test MUFFIN_EXEC_LOCAL=1 ripristina l'owner locale esplicito.
+         * Un conflitto non esegue affatto, come prima.
          */
         const proprietario = await resolveExecutionOwner(home, runtime.db);
         const chiaveProprietario =
@@ -1065,7 +1127,7 @@ export async function runRepl(
               `\nesecuzione: passa al gateway (pid ${proprietario.pid}) — i turni girano lì adesso, non più in questa finestra\n`,
             );
           } else if (proprietario.kind === 'local') {
-            process.stderr.write(`\nesecuzione: il gateway non risponde più — i turni girano in questa finestra (owner locale)\n`);
+            process.stderr.write(`\nesecuzione: il gateway non risponde più — i turni restano fermi (${NO_GATEWAY_REMEDY})\n`);
           }
         }
         let result: TurnResult;
@@ -1089,23 +1151,42 @@ export async function runRepl(
             },
           );
         } else if (proprietario.kind === 'local') {
+          if (!localExecAllowed()) {
+            // ADR-0103: senza gateway nessun secondo runtime. Il turno non
+            // parte in locale: il rimedio dice come avviare il gateway.
+            // Solo l'hatch di test ripristina il vecchio owner locale.
+            status.clear();
+            process.stderr.write(`non eseguo: ${NO_GATEWAY_REMEDY}\n`);
+            continue;
+          }
+          process.stderr.write(
+            `\nesecuzione: owner locale esplicito (hatch MUFFIN_EXEC_LOCAL=1, solo test) — in produzione i turni girano sul gateway\n`,
+          );
           await ensureMcp();
-          result = await runTurn(runtime.deps, {
-            principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
-            tenant: 'host',
-            surface: 'cli',
-            session,
-            text: line,
-            signal: controller.signal,
-            // No `replyTo` (the REPL holds the answer itself, see below), but a
-            // `replyChannel` all the same: `send_file` mid-turn needs somewhere
-            // to address an attachment, and for the terminal that address is
-            // just `cli` — the owner is on this machine, so `cliSurface`'s
-            // `deliverFile` names the path rather than moving any bytes.
-            replyChannel: 'cli',
-            ...(onDelta ? { onDelta } : {}),
-            ...(onProgress ? { onProgress } : {}),
-          });
+          if (!(await waitForForegroundModelLane(modelLane, controller.signal, status))) {
+            status.line('attesa della corsia del modello annullata');
+            continue;
+          }
+          try {
+            result = await runTurn(runtime.deps, {
+              principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
+              tenant: 'host',
+              surface: 'cli',
+              session,
+              text: line,
+              signal: controller.signal,
+              // No `replyTo` (the REPL holds the answer itself, see below), but a
+              // `replyChannel` all the same: `send_file` mid-turn needs somewhere
+              // to address an attachment, and for the terminal that address is
+              // just `cli` — the owner is on this machine, so `cliSurface`'s
+              // `deliverFile` names the path rather than moving any bytes.
+              replyChannel: 'cli',
+              ...(onDelta ? { onDelta } : {}),
+              ...(onProgress ? { onProgress } : {}),
+            });
+          } finally {
+            modelLane.release(LANE_TURNS);
+          }
         } else {
           status.clear();
           process.stderr.write(`non eseguo: ${proprietario.reason}\n→ ${proprietario.remedy}\n`);
@@ -1119,9 +1200,9 @@ export async function runRepl(
         // Su stderr, come tutto cio' che e' cornice: `muffin > risposte.txt`
         // raccoglie le risposte e lascia questa a schermo.
         if (progressEnabled) {
-          const usd = costUsd(modelloEsecutore, result.usage, runtime.config.provider.baseUrl);
+          const usd = runtime.config.provider.kind === 'openai-chatgpt' ? null : costUsd(modelloEsecutore, result.usage, runtime.config.provider.baseUrl);
           process.stderr.write(
-            `${style.dim(closingLine(result.usage, Date.now() - iniziatoAlle, usd))}\n\n`,
+            `${style.dim(closingLine(result.usage, Date.now() - iniziatoAlle, usd) + (runtime.config.provider.kind === 'openai-chatgpt' ? ' · ChatGPT plan' : ''))}\n\n`,
           );
         }
         if (result.stopped === 'suspended') {
@@ -1175,7 +1256,7 @@ export async function runRepl(
     }
   } finally {
     status.stop();
-    clearInterval(ticker);
+    if (ticker !== null) clearInterval(ticker);
     // Il terminale torna com'era, sempre. Uscire lasciando lo stdin in raw mode
     // non rompe Muffin: rompe la **shell** che resta dopo — niente eco, niente
     // Ctrl+C — e chi ci finisce dentro non ha nessun motivo di collegare la

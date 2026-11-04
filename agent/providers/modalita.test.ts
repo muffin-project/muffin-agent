@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { audioAccettato, dimenticaModalita } from './modalita.js';
+import { audioAccettato, dimenticaModalita, immagineAccettata } from './modalita.js';
 
 /**
  * La domanda che decide dove va la voce dell'owner.
@@ -118,5 +118,50 @@ describe('si chiede una volta sola', () => {
     const url = 'https://openrouter.ai/api/v1';
     expect(await audioAccettato(url, 'google/gemini-3.7-flash', { fetch: f })).toBe(true);
     expect(await audioAccettato(url, 'qwen/qwen3.8-27b', { fetch: f })).toBe(false);
+  });
+});
+
+describe('la vista ha tre esiti, non due', () => {
+  /**
+   * Solo un "non vede" misurato gira il bivio verso la descrizione o il
+   * rifiuto dichiarato (`core/vista/vista.ts`): l'incertezza tiene la strada
+   * di sempre, quindi qui è `undefined` e non `false`.
+   */
+  it('sì misurato, no misurato, non-misurabile', async () => {
+    const f = elenco([SENZA_AUDIO, CON_AUDIO, { id: 'solo/testo', architecture: { input_modalities: ['text'] } }]);
+    const url = 'https://openrouter.ai/api/v1';
+    expect(await immagineAccettata(url, 'qwen/qwen3.8-27b', { fetch: f })).toBe(true);
+    expect(await immagineAccettata(url, 'solo/testo', { fetch: f })).toBe(false);
+    expect(await immagineAccettata(url, 'un/modello-mai-visto', { fetch: f })).toBeUndefined();
+  });
+
+  it('senza architecture (Ollama, vLLM) non si può misurare: undefined, non false', async () => {
+    const f = elenco([{ id: 'llama3', object: 'model', owned_by: 'library' }]);
+    expect(await immagineAccettata('http://localhost:11434/v1', 'llama3', { fetch: f })).toBeUndefined();
+  });
+
+  it('Anthropic nativo non si interroga proprio', async () => {
+    let chiamate = 0;
+    const f = (async () => {
+      chiamate += 1;
+      return new Response('{}', { status: 200 });
+    }) as unknown as typeof globalThis.fetch;
+    expect(await immagineAccettata(undefined, 'claude-opus-5', { fetch: f })).toBeUndefined();
+    expect(chiamate).toBe(0);
+  });
+
+  it('audio e vista sullo stesso modello fanno una richiesta sola', async () => {
+    let chiamate = 0;
+    const f = (async () => {
+      chiamate += 1;
+      return new Response(JSON.stringify({ data: [CON_AUDIO] }), { status: 200 });
+    }) as unknown as typeof globalThis.fetch;
+    const url = 'https://openrouter.ai/api/v1';
+    const [a, v] = await Promise.all([
+      audioAccettato(url, 'google/gemini-3.7-flash', { fetch: f }),
+      immagineAccettata(url, 'google/gemini-3.7-flash', { fetch: f }),
+    ]);
+    expect([a, v]).toEqual([true, true]);
+    expect(chiamate).toBe(1);
   });
 });

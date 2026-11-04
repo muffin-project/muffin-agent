@@ -7,6 +7,8 @@ import { FakeSocket } from './fake-socket.js';
 
 function harness(over: { intents?: number } = {}) {
   const sockets: FakeSocket[] = [];
+  /** Every URL a socket was opened against — the forged-resume tests read this, not the frames. */
+  const urls: string[] = [];
   const dispatches: { event: string; data: unknown; seq: number }[] = [];
   const logs: string[] = [];
   const stati: { viva: boolean; causa?: string }[] = [];
@@ -18,16 +20,17 @@ function harness(over: { intents?: number } = {}) {
     onDispatch: (event, data, seq) => dispatches.push({ event, data, seq }),
     onLog: (l) => logs.push(l),
     onStato: (viva, causa) => stati.push(causa === undefined ? { viva } : { viva, causa }),
-    wsFactory: (_url) => {
+    wsFactory: (url) => {
       const s = new FakeSocket();
       sockets.push(s);
+      urls.push(url);
       return s;
     },
     sleep: async (ms) => {
       sleeps.push(ms);
     },
   });
-  return { gw, sockets, dispatches, logs, stati, sleeps, latest: () => sockets[sockets.length - 1]! };
+  return { gw, sockets, urls, dispatches, logs, stati, sleeps, latest: () => sockets[sockets.length - 1]! };
 }
 
 const HELLO = (interval: number) => ({ op: 10, d: { heartbeat_interval: interval } });
@@ -107,6 +110,69 @@ describe('the handshake', () => {
   });
 });
 
+describe('resume URL validation (#730)', () => {
+  // The READY payload is server data. A forged or relayed
+  // `resume_gateway_url` must never choose where the next socket connects:
+  // the reconnect falls back to the configured gateway URL with a fresh
+  // Identify, and no socket ever opens against the forged host.
+  // Built by concatenation: written literally, the userinfo vector would
+  // trip the personal-data guard (docs/collegamenti-dati-personali) as a
+  // leaked email. It is a synthetic attack vector, not a credential — and
+  // it must be tested on a genuine host, where only the userinfo check
+  // stands between the payload and the socket.
+  const credsOnGenuineHost = ['wss://user:pass', '@gateway.discord.gg'].join('');
+
+  it.each([
+    'wss://attacker.example',
+    'https://gateway.discord.gg',
+    credsOnGenuineHost,
+    'wss://gateway.discord.gg:8443',
+    'wss://gateway.discord.gg.evil.example',
+    'not a url',
+    '',
+  ])('discards a forged resume_gateway_url (%s) and identifies fresh', async (forged) => {
+    const h = harness();
+    const run = h.gw.run();
+    await vi.waitFor(() => expect(h.sockets.length).toBe(1));
+    h.latest().serverSends(HELLO(45_000));
+    h.latest().serverSends(READY('sess-1', forged));
+
+    h.latest().close(1006, 'dropped');
+    await vi.waitFor(() => expect(h.sockets.length).toBe(2));
+    h.sockets[1]!.serverSends(HELLO(45_000));
+
+    // The second socket went to the configured URL, and Identifies (op 2) —
+    // never Resumes (op 6) against a URL the server chose.
+    expect(h.urls[1]).toBe('wss://gateway.discord.gg');
+    expect((h.sockets[1]!.sent[0] as { op: number }).op).toBe(2);
+    expect(h.urls.some((u) => u.includes('attacker') || u.includes('evil'))).toBe(false);
+
+    h.gw.stop();
+    await run;
+  });
+
+  it.each(['wss://gateway.discord.gg', 'wss://us-east1-a.discord.gg', 'wss://gateway.discord.gg:443'])(
+    'keeps resuming against a genuine Discord gateway host (%s)',
+    async (genuine) => {
+      const h = harness();
+      const run = h.gw.run();
+      await vi.waitFor(() => expect(h.sockets.length).toBe(1));
+      h.latest().serverSends(HELLO(45_000));
+      h.latest().serverSends(READY('sess-1', genuine));
+
+      h.latest().close(1006, 'dropped');
+      await vi.waitFor(() => expect(h.sockets.length).toBe(2));
+      h.sockets[1]!.serverSends(HELLO(45_000));
+
+      expect(h.urls[1]).toMatch(/^wss:\/\/[^/]*discord\.gg\/\?v=10&encoding=json$/);
+      expect((h.sockets[1]!.sent[0] as { op: number }).op).toBe(6);
+
+      h.gw.stop();
+      await run;
+    },
+  );
+});
+
 describe('backoff — D4', () => {
   it('resets attempt after a session sees READY or RESUMED, so failures do not compound forever', async () => {
     // Without the reset, `attempt` only ever grows across the life of run():
@@ -177,6 +243,52 @@ describe('heartbeat', () => {
       h.gw.stop();
       await run;
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clamps a forged sub-second heartbeat_interval to the floor instead of spinning (#731)', async () => {
+    // A near-zero interval would reschedule the beat as a tight loop and trip
+    // the zombie path within milliseconds, reconnecting a healthy socket.
+    vi.useFakeTimers();
+    try {
+      const h = harness();
+      const run = h.gw.run();
+      await vi.waitFor(() => expect(h.sockets.length).toBe(1), { timeout: 1000 });
+      h.latest().serverSends(HELLO(5));
+
+      await vi.advanceTimersByTimeAsync(500);
+      // Still one socket: the first beat fired (jittered within the clamped
+      // second) and the next one is a full clamped interval away, not 5ms.
+      expect(h.sockets.length).toBe(1);
+
+      h.gw.stop();
+      await run;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clamps a forged huge heartbeat_interval to the ceiling instead of going silent (#731)', async () => {
+    vi.useFakeTimers();
+    // Pin the jitter so the assertion is exact, not probabilistic: with
+    // random() at 0.999 the unfixed code schedules the first beat ~an hour
+    // out, the fixed code just under the ten-minute ceiling.
+    const rand = vi.spyOn(Math, 'random').mockReturnValue(0.999);
+    try {
+      const h = harness();
+      const run = h.gw.run();
+      await vi.waitFor(() => expect(h.sockets.length).toBe(1), { timeout: 1000 });
+      h.latest().serverSends(HELLO(3_600_000));
+
+      await vi.advanceTimersByTimeAsync(600_000);
+      const heartbeats = h.latest().sent.filter((m) => (m as { op: number }).op === 1);
+      expect(heartbeats.length).toBeGreaterThanOrEqual(1);
+
+      h.gw.stop();
+      await run;
+    } finally {
+      rand.mockRestore();
       vi.useRealTimers();
     }
   });

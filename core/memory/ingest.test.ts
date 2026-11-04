@@ -115,7 +115,7 @@ describe('memory ingestion', () => {
     expect(by('diagnosis').trustTier).toBe(by('ate').trustTier);
     expect(by('diagnosis').confidence).toBe(by('ate').confidence);
     // Nothing this pipeline produces is an inference.
-    expect(by('diagnosis').origin).toBe('said');
+    expect(by('diagnosis').origin).toBe('inferred');
   });
 
   it('judges against the most recent belief, not the most important one', async () => {
@@ -323,7 +323,7 @@ describe('memory ingestion', () => {
     expect(report.errors.join(' ')).not.toContain('giudice non disponibile');
   });
 
-  describe('why the judge could not answer, and what it said', () => {
+  describe('why the judge could not answer, what it said, and how to resolve it', () => {
     // 2026-08-16, real install: the REPL printed "giudice non disponibile su
     // owner/interest: tengo entrambi i valori" three times running, and
     // `muffin memory review` showed nothing to tell the three apart — no
@@ -346,7 +346,7 @@ describe('memory ingestion', () => {
       },
     ];
 
-    it.each(scenarios)('$name → typed reason and the raw response, both on the durable row', async ({ reply, reason, rawResponse }) => {
+    it.each(scenarios)('$name → typed reason and raw response on an actionable contradiction', async ({ reply, reason, rawResponse }) => {
       const { store, deps } = harness([
         facts(fact('owner', 'interest', 'vela')),
         facts(fact('owner', 'interest', 'windsurf')),
@@ -363,12 +363,17 @@ describe('memory ingestion', () => {
 
       const persisted = store.pendingReview(HOST);
       expect(persisted).toHaveLength(1);
-      expect(persisted[0]?.kind).toBe('error');
+      expect(persisted[0]?.kind).toBe('contradiction');
       expect(persisted[0]?.subject).toBe('owner');
       expect(persisted[0]?.predicate).toBe('interest');
+      expect(store.openContradictions(HOST)).toHaveLength(1);
+      expect(report.needsReview).toHaveLength(1);
+      expect(report.needsReview[0]?.why).toContain(`[${reason}`);
+      expect(report.needsReview[0]?.why).not.toContain('giudice non disponibile');
+      if (rawResponse) expect(report.needsReview[0]?.why).not.toContain(rawResponse);
       // Mutation this kills: removing the raw-response line from `detail`.
-      // Without it the row says only "tengo entrambi i valori" — the exact
-      // sentence the owner could not get an explanation from on 2026-08-16.
+      // The typed reason and explicit owner action stay visible even when the
+      // judge's raw response is withheld from ordinary output.
       expect(persisted[0]?.detail).toContain(rawResponse === '' ? '(vuota)' : rawResponse);
       expect(persisted[0]?.detail).toContain(`[${reason}`);
     });
@@ -873,7 +878,7 @@ describe('the ingest lock', () => {
 
     expect(report.episodes).toBe(0);
     expect(report.factsAdded).toBe(0);
-    expect(report.errors.join(' ')).toContain("un'altra estrazione è già in corso");
+    expect(report.errors.join(' ')).toContain("un'altra operazione sulla memoria è già in corso");
     expect(store.pendingEpisodes(HOST, 1)).toHaveLength(1);
 
     store.releaseIngestLock();
@@ -920,17 +925,14 @@ describe('what the agent said is evidence, not proof', () => {
 });
 
 describe('memory ingestion — pinned', () => {
-  it('bootstrap rule: an identity predicate on the owner subject is pinned even when the extractor never asked', async () => {
-    // `ingest.ts`'s own small rule — `works_as` is one of the two predicates
-    // the real dogfood database had recorded for the owner's identity — fires
-    // from `subject`/`predicate` alone, with no `pinned: true` in the reply.
+  it('an interpreted identity predicate does not receive a bootstrap pin', async () => {
     const { store, deps } = harness([facts(fact('owner', 'works_as', 'AI engineer'))]);
     episode(store, 'lavoro come AI engineer', 0);
     await ingestPending(deps, HOST);
 
     const me = store.findEntity(HOST, 'owner')!;
     const f = store.activeFacts(HOST, me, 'works_as')[0]!;
-    expect(f.pinned).toBe(1);
+    expect(f.pinned).toBe(0);
   });
 
   it('does not pin an ordinary predicate on the owner subject just because the subject matches', async () => {
@@ -954,7 +956,7 @@ describe('memory ingestion — pinned', () => {
     expect(store.activeFacts(HOST, me, 'preferred_name')[0]!.pinned).toBe(0);
   });
 
-  it('carries the pin onto the successor when an owner-tier correction supersedes a pinned fact', async () => {
+  it('does not carry the pin onto an interpreted successor from owner-tier evidence', async () => {
     const { store, deps } = harness([
       facts(fact('owner', 'preferred_name', 'Giusto')),
       facts(fact('owner', 'preferred_name', 'G.')),
@@ -964,7 +966,7 @@ describe('memory ingestion — pinned', () => {
     await ingestPending(deps, HOST);
     const me = store.findEntity(HOST, 'owner')!;
     const first = store.activeFacts(HOST, me, 'preferred_name')[0]!;
-    expect(first.pinned).toBe(0); // "preferred_name" is not the bootstrap set, and the model did not ask
+    expect(first.pinned).toBe(0);
     store.setPinned(HOST, first.id, true); // the owner pinned it by hand, e.g. `muffin memory pin`
 
     episode(store, 'anzi chiamami G.', 0);
@@ -973,7 +975,8 @@ describe('memory ingestion — pinned', () => {
     const active = store.activeFacts(HOST, me, 'preferred_name');
     expect(active).toHaveLength(1);
     expect(active[0]!.objectValue).toBe('G.');
-    expect(active[0]!.pinned).toBe(1);
+    expect(active[0]!.pinned).toBe(0);
+    expect(active[0]!.origin).toBe('inferred');
     const retired = store.factHistory(HOST, me, 'preferred_name').find((f) => f.id === first.id)!;
     expect(retired.expiredAt).not.toBeNull();
   });

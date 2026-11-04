@@ -1,7 +1,8 @@
 {
-  "_comment": "Spend caps and quiet hours. Dimensional, not sacred — but the agent cannot raise them itself: this file is the ONLY source of the caps (core/rot/budgets.ts), config.json no longer carries a copy. Editing it takes effect after `muffin rot reseal` and a restart. UTC is the neutral shipped fallback; first-run/setup owns replacing it with the detected owner timezone before calling the install configured.",
+  "_comment": "Spend caps, quiet hours, and owner-declared unmetered endpoints. Dimensional, not sacred — but the agent cannot raise them itself: this file is the ONLY source of the caps (core/rot/budgets.ts), config.json no longer carries a copy, and only this seal can declare an endpoint unmetered (a model-reachable config never can). Editing it takes effect after `muffin rot reseal` and a restart. UTC is the neutral shipped fallback; first-run/setup owns replacing it with the detected owner timezone before calling the install configured. `unmetered` lists exact endpoint contracts the owner funds outside the metered spend (e.g. a LAN GPU box): { host (exact, case-insensitive), port (optional — absent means any port), note (optional, why) }. Empty means everything not otherwise free is metered.",
   "schemaVersion": 1,
   "monthlyUsd": 80,
   "perTenantDailyUsd": 2,
-  "quietHours": { "from": "23:00", "to": "08:00", "timezone": "UTC" }
+  "quietHours": { "from": "23:00", "to": "08:00", "timezone": "UTC" },
+  "unmetered": []
 }

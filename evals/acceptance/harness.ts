@@ -203,6 +203,11 @@ export async function install(options: InstallOptions): Promise<Install> {
     MUFFIN_HOME: home,
     XDG_CONFIG_HOME: xdg,
     NO_COLOR: '1',
+    // Hatch di test per l'esecuzione gateway-first (ADR-0103): le Home
+    // isolate dell'accettazione non hanno un supervisore, quindi i turni
+    // headless girerebbero fail-closed senza questo. Visibile qui, mai in
+    // produzione e mai documentato agli owner.
+    MUFFIN_EXEC_LOCAL: '1',
     ...(options.env ?? {}),
   };
 

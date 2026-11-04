@@ -3,7 +3,9 @@ import { ExecutionBudget } from './execution-budget.js';
 
 async function waitForAbort(signal: AbortSignal): Promise<unknown> {
   if (signal.aborted) return signal.reason;
-  return new Promise((resolve) => signal.addEventListener('abort', () => resolve(signal.reason), { once: true }));
+  return new Promise((resolve) =>
+    signal.addEventListener('abort', () => resolve(signal.reason), { once: true }),
+  );
 }
 
 describe('ExecutionBudget activity watchdogs', () => {
@@ -11,7 +13,11 @@ describe('ExecutionBudget activity watchdogs', () => {
 
   it('leaves a provider that never spoke to the hard model deadline', async () => {
     vi.useFakeTimers();
-    const budget = new ExecutionBudget({ modelCallDeadlineMs: 80, turnWallDeadlineMs: 200, stallTimeoutMs: 10 });
+    const budget = new ExecutionBudget({
+      modelCallDeadlineMs: 80,
+      turnWallDeadlineMs: 200,
+      stallTimeoutMs: 10,
+    });
     const lease = budget.beginModelCall();
     const aborted = waitForAbort(lease.signal);
     // Well past the stall window: silence before the first activity is not
@@ -26,7 +32,11 @@ describe('ExecutionBudget activity watchdogs', () => {
 
   it('aborts after activity stops on the stall timeout', async () => {
     vi.useFakeTimers();
-    const budget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 200, stallTimeoutMs: 20 });
+    const budget = new ExecutionBudget({
+      modelCallDeadlineMs: 100,
+      turnWallDeadlineMs: 200,
+      stallTimeoutMs: 20,
+    });
     const lease = budget.beginModelCall();
     lease.activity('thinking');
     const aborted = waitForAbort(lease.signal);
@@ -38,7 +48,11 @@ describe('ExecutionBudget activity watchdogs', () => {
 
   it('does not stall while semantic activity keeps arriving', async () => {
     vi.useFakeTimers();
-    const budget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 200, stallTimeoutMs: 20 });
+    const budget = new ExecutionBudget({
+      modelCallDeadlineMs: 100,
+      turnWallDeadlineMs: 200,
+      stallTimeoutMs: 20,
+    });
     const lease = budget.beginModelCall();
     lease.activity('text');
     for (let i = 0; i < 4; i += 1) {
@@ -52,7 +66,11 @@ describe('ExecutionBudget activity watchdogs', () => {
 
   it('keeps the hard model deadline above the stall watchdog', async () => {
     vi.useFakeTimers();
-    const budget = new ExecutionBudget({ modelCallDeadlineMs: 35, turnWallDeadlineMs: 200, stallTimeoutMs: 50 });
+    const budget = new ExecutionBudget({
+      modelCallDeadlineMs: 35,
+      turnWallDeadlineMs: 200,
+      stallTimeoutMs: 50,
+    });
     const lease = budget.beginModelCall();
     lease.activity('text');
     const aborted = waitForAbort(lease.signal);
@@ -65,7 +83,11 @@ describe('ExecutionBudget activity watchdogs', () => {
   it('preserves user stop and turn deadline causes', async () => {
     vi.useFakeTimers();
     const user = new AbortController();
-    const userBudget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 200, stallTimeoutMs: 50 });
+    const userBudget = new ExecutionBudget({
+      modelCallDeadlineMs: 100,
+      turnWallDeadlineMs: 200,
+      stallTimeoutMs: 50,
+    });
     const userLease = userBudget.beginModelCall(user.signal);
     const stopped = waitForAbort(userLease.signal);
     user.abort();
@@ -74,7 +96,11 @@ describe('ExecutionBudget activity watchdogs', () => {
     userLease.release();
     userBudget.close();
 
-    const turnBudget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 20, stallTimeoutMs: 50 });
+    const turnBudget = new ExecutionBudget({
+      modelCallDeadlineMs: 100,
+      turnWallDeadlineMs: 20,
+      stallTimeoutMs: 50,
+    });
     const turnLease = turnBudget.beginModelCall();
     const deadline = waitForAbort(turnLease.signal);
     await vi.advanceTimersByTimeAsync(20);
@@ -86,7 +112,11 @@ describe('ExecutionBudget activity watchdogs', () => {
 
   it('cleans watchdogs so a successful attempt cannot abort a later operation', async () => {
     vi.useFakeTimers();
-    const budget = new ExecutionBudget({ modelCallDeadlineMs: 10, turnWallDeadlineMs: 100, stallTimeoutMs: 5 });
+    const budget = new ExecutionBudget({
+      modelCallDeadlineMs: 10,
+      turnWallDeadlineMs: 100,
+      stallTimeoutMs: 5,
+    });
     const lease = budget.beginModelCall();
     lease.release();
     await vi.advanceTimersByTimeAsync(50);
@@ -96,7 +126,12 @@ describe('ExecutionBudget activity watchdogs', () => {
 
   it('accumulates only active model time across leases', () => {
     vi.useFakeTimers();
-    const budget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 500, activeModelBudgetMs: 100, stallTimeoutMs: 20 });
+    const budget = new ExecutionBudget({
+      modelCallDeadlineMs: 100,
+      turnWallDeadlineMs: 500,
+      activeModelBudgetMs: 100,
+      stallTimeoutMs: 20,
+    });
 
     const first = budget.beginModelCall();
     vi.advanceTimersByTime(40);
@@ -118,7 +153,11 @@ describe('ExecutionBudget activity watchdogs', () => {
 
   it('refuses a provider invocation once the active budget is exhausted', () => {
     vi.useFakeTimers();
-    const budget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 500, activeModelBudgetMs: 40 });
+    const budget = new ExecutionBudget({
+      modelCallDeadlineMs: 100,
+      turnWallDeadlineMs: 500,
+      activeModelBudgetMs: 40,
+    });
     const first = budget.beginModelCall();
     vi.advanceTimersByTime(40);
     first.release();
@@ -133,7 +172,11 @@ describe('ExecutionBudget activity watchdogs', () => {
 
   it('uses the active budget when it is smaller than the normal deadline', async () => {
     vi.useFakeTimers();
-    const budget = new ExecutionBudget({ modelCallDeadlineMs: 90, turnWallDeadlineMs: 500, activeModelBudgetMs: 10 });
+    const budget = new ExecutionBudget({
+      modelCallDeadlineMs: 90,
+      turnWallDeadlineMs: 500,
+      activeModelBudgetMs: 10,
+    });
     const lease = budget.beginModelCall();
     const aborted = waitForAbort(lease.signal);
     await vi.advanceTimersByTimeAsync(10);
@@ -145,7 +188,12 @@ describe('ExecutionBudget activity watchdogs', () => {
 
   it('counts stalled and user-stopped calls, while preserving their causes', () => {
     vi.useFakeTimers();
-    const budget = new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 500, activeModelBudgetMs: 100, stallTimeoutMs: 20 });
+    const budget = new ExecutionBudget({
+      modelCallDeadlineMs: 100,
+      turnWallDeadlineMs: 500,
+      activeModelBudgetMs: 100,
+      stallTimeoutMs: 20,
+    });
     const stalled = budget.beginModelCall(undefined, undefined);
     vi.advanceTimersByTime(7);
     stalled.activity('thinking');
@@ -166,7 +214,11 @@ describe('ExecutionBudget activity watchdogs', () => {
 
   it('has deterministic precedence when active and wall deadlines race', async () => {
     vi.useFakeTimers();
-    const activeWins = new ExecutionBudget({ modelCallDeadlineMs: 90, turnWallDeadlineMs: 100, activeModelBudgetMs: 20 });
+    const activeWins = new ExecutionBudget({
+      modelCallDeadlineMs: 90,
+      turnWallDeadlineMs: 100,
+      activeModelBudgetMs: 20,
+    });
     const activeLease = activeWins.beginModelCall();
     const activeAbort = waitForAbort(activeLease.signal);
     await vi.advanceTimersByTimeAsync(20);
@@ -174,7 +226,11 @@ describe('ExecutionBudget activity watchdogs', () => {
     activeLease.release();
     activeWins.close();
 
-    const tie = new ExecutionBudget({ modelCallDeadlineMs: 90, turnWallDeadlineMs: 20, activeModelBudgetMs: 20 });
+    const tie = new ExecutionBudget({
+      modelCallDeadlineMs: 90,
+      turnWallDeadlineMs: 20,
+      activeModelBudgetMs: 20,
+    });
     const tieLease = tie.beginModelCall();
     const tieAbort = waitForAbort(tieLease.signal);
     await vi.advanceTimersByTimeAsync(20);
@@ -189,7 +245,11 @@ describe('ExecutionBudget call-activity telemetry (#497)', () => {
 
   it('reports first activity, ttft and last activity from the owned clocks', async () => {
     vi.useFakeTimers();
-    const budget = new ExecutionBudget({ modelCallDeadlineMs: 1000, turnWallDeadlineMs: 5000, stallTimeoutMs: 100 });
+    const budget = new ExecutionBudget({
+      modelCallDeadlineMs: 1000,
+      turnWallDeadlineMs: 5000,
+      stallTimeoutMs: 100,
+    });
     const lease = budget.beginModelCall();
     await vi.advanceTimersByTimeAsync(12);
     lease.activity('text');
@@ -205,7 +265,11 @@ describe('ExecutionBudget call-activity telemetry (#497)', () => {
 
   it('leaves first-activity fields absent when the provider never spoke', async () => {
     vi.useFakeTimers();
-    const budget = new ExecutionBudget({ modelCallDeadlineMs: 1000, turnWallDeadlineMs: 5000, stallTimeoutMs: 100 });
+    const budget = new ExecutionBudget({
+      modelCallDeadlineMs: 1000,
+      turnWallDeadlineMs: 5000,
+      stallTimeoutMs: 100,
+    });
     const lease = budget.beginModelCall();
     await vi.advanceTimersByTimeAsync(10);
     const telemetry = lease.telemetry();
@@ -216,5 +280,142 @@ describe('ExecutionBudget call-activity telemetry (#497)', () => {
     expect(telemetry.lastActivityAt).toBeUndefined();
     lease.release();
     budget.close();
+  });
+});
+
+describe('ExecutionBudget without aggregate time limits', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('keeps healthy model requests and tool gaps alive beyond twenty minutes', () => {
+    vi.useFakeTimers();
+    const accounted: number[] = [];
+    const budget = new ExecutionBudget(
+      {
+        modelCallDeadlineMs: 120_000,
+        turnWallDeadlineMs: null,
+        activeModelBudgetMs: null,
+        stallTimeoutMs: 25_000,
+      },
+      Date.now,
+      { initialActiveModelMs: 240_000, onActiveModelMs: (spent) => accounted.push(spent) },
+    );
+    expect(vi.getTimerCount()).toBe(0); // No aggregate timer, including a coerced null timer.
+    for (let request = 0; request < 12; request += 1) {
+      const lease = budget.beginModelCall();
+      expect(lease.signal.aborted).toBe(false);
+      expect(lease.telemetry()).toMatchObject({
+        normalDeadlineMs: 120_000,
+        effectiveDeadlineMs: 120_000,
+        effectiveDeadlineSource: 'model_deadline',
+      });
+      expect(lease.telemetry().activeModelBudgetMs).toBeUndefined();
+      expect(lease.telemetry().activeModelMsRemaining).toBeUndefined();
+      for (let activity = 0; activity < 5; activity += 1) {
+        vi.advanceTimersByTime(20_000);
+        lease.activity('text');
+      }
+      expect(lease.signal.aborted).toBe(false);
+      lease.release();
+      lease.release(); // Releasing twice cannot double-charge active time.
+      expect(vi.getTimerCount()).toBe(0);
+      vi.advanceTimersByTime(10_000); // Tool work outside the model lease.
+      expect(budget.expired()).toBe(false);
+    }
+    expect(Date.now() - budget.startedAt).toBe(1_320_000);
+    expect(budget.activeModelMsUsed()).toBe(1_440_000);
+    expect(accounted).toHaveLength(12);
+    expect(accounted.at(-1)).toBe(1_440_000);
+    expect(budget.activeModelMsRemaining()).toBeUndefined();
+    budget.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('disables each aggregate bound independently while preserving the other', () => {
+    vi.useFakeTimers();
+    const activeOnly = new ExecutionBudget({
+      modelCallDeadlineMs: 100,
+      turnWallDeadlineMs: null,
+      activeModelBudgetMs: 20,
+    });
+    const activeLease = activeOnly.beginModelCall();
+    vi.advanceTimersByTime(20);
+    expect(activeLease.reason()).toBe('active_model_budget_exhausted');
+    activeLease.release();
+    activeOnly.close();
+
+    const wallOnly = new ExecutionBudget({
+      modelCallDeadlineMs: 100,
+      turnWallDeadlineMs: 20,
+      activeModelBudgetMs: null,
+    });
+    const wallLease = wallOnly.beginModelCall();
+    vi.advanceTimersByTime(20);
+    expect(wallLease.reason()).toBe('turn_deadline');
+    wallLease.release();
+    wallOnly.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('retains the per-call deadline when aggregate limits are disabled', () => {
+    vi.useFakeTimers();
+    const budget = new ExecutionBudget({
+      modelCallDeadlineMs: 100,
+      turnWallDeadlineMs: null,
+      activeModelBudgetMs: null,
+    });
+    const lease = budget.beginModelCall();
+    vi.advanceTimersByTime(99);
+    expect(lease.signal.aborted).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(lease.reason()).toBe('model_deadline');
+    expect(budget.expired()).toBe(false);
+    lease.release();
+    budget.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('retains stalls after first activity and progress heartbeats without aggregate limits', () => {
+    vi.useFakeTimers();
+    const progress = vi.fn();
+    const budget = new ExecutionBudget({
+      modelCallDeadlineMs: 100,
+      turnWallDeadlineMs: null,
+      activeModelBudgetMs: null,
+      stallTimeoutMs: 20,
+      heartbeatIntervalMs: 5,
+    });
+    const lease = budget.beginModelCall(undefined, progress);
+    vi.advanceTimersByTime(30);
+    expect(lease.signal.aborted).toBe(false); // First activity still belongs to the model deadline.
+    expect(progress).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'waiting_for_model', elapsedMs: 30 }),
+    );
+    lease.activity('thinking');
+    vi.advanceTimersByTime(20);
+    expect(lease.reason()).toBe('model_stall');
+    expect(budget.expired()).toBe(false);
+    lease.release();
+    budget.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('retains external user stop and cleans all call timers without aggregate limits', () => {
+    vi.useFakeTimers();
+    const owner = new AbortController();
+    const budget = new ExecutionBudget({
+      modelCallDeadlineMs: 100,
+      turnWallDeadlineMs: null,
+      activeModelBudgetMs: null,
+    });
+    const lease = budget.beginModelCall(owner.signal, vi.fn());
+    lease.activity('text');
+    vi.advanceTimersByTime(7);
+    owner.abort('owner requested stop');
+    expect(lease.signal.aborted).toBe(true);
+    expect(lease.reason()).toBe('user_stop');
+    lease.release();
+    expect(budget.activeModelMsUsed()).toBe(7);
+    budget.close();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

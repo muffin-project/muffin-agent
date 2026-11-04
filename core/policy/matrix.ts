@@ -506,10 +506,13 @@ export const ROW_FLOOR: Readonly<Record<EffectRow, RowPolicy>> = {
    * inventing a widening nobody reviewed.
    *
    * `true`: we do not own the semantics on the other side of the pipe, so a
-   * call that may have landed cannot be taken back. Today every MCP
-   * declaration is `reversible: 'no'` by hand, so every MCP call asks — which
-   * is ADR-0074 point 5's own starting position, and the thing point 5 (a
-   * different slice) fixes by reading the protocol's `readOnlyHint`.
+   * call that may have landed cannot be taken back. Each MCP tool declares its
+   * own `reversible` from the protocol's `annotations` (ADR-0074 punto 5,
+   * `reversibleFromAnnotations` in `core/mcp/registry.ts`, one capability per
+   * tool in `agent/tools/mcp.ts`): `readOnlyHint` tools do not ask, everything
+   * without annotations or with a `destructiveHint` still does — which is the
+   * starting position's ask-everything narrowed by exactly the declared hint,
+   * and nothing else.
    *
    * **Sopra questo soffitto, da ADR-0075, l'owner è *chiesto* e chiunque
    * altro è negato** (`decide.ts`): dove il taint conta davvero — i byte che
@@ -561,6 +564,14 @@ export const POLICY_FLOOR: PolicyMatrix = {
      * (questa lista non tocca `hostOnly`).
      */
     'jobs.schedule',
+    /**
+     * An autonomous EI wake may inspect its own trigger context, but may not
+     * create or mutate persistent watches. The embedded handler also checks
+     * owner identity; this sealed exclusion keeps forbidden mutation schemas
+     * out of #469 preload and capability_search before any model call.
+     */
+    'events.trigger.create',
+    'events.trigger.manage',
   ]),
   /**
    * **Il pavimento non concede niente a nessuna stanza**, e questa riga è

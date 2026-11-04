@@ -257,7 +257,12 @@ describe('one batch at a time', () => {
 
   it('reports the durable lane lock refusing as `busy`, not as a failure', async () => {
     const h = harness({
-      report: empty({ episodes: 0, factsAdded: 0, busy: true, errors: ["un'altra estrazione è già in corso (pid 9)"] }),
+      report: empty({
+        episodes: 0,
+        factsAdded: 0,
+        busy: true,
+        errors: ["un'altra operazione sulla memoria è già in corso (pid 9)"],
+      }),
     });
     h.consolidator.notify('host');
     await vi.advanceTimersByTimeAsync(CONSOLIDATION_IDLE_MS);
@@ -325,6 +330,33 @@ describe('the drain', () => {
    * failure ADR-0038 rejected the `stats.pending` ticker for, through a
    * different door.
    */
+  it('keeps draining a full page after a busy sweep', async () => {
+    const db = new DatabaseCtor(':memory:');
+    let calls = 0;
+    let sweeps = 0;
+    const consolidator = new Consolidator({
+      db,
+      ingest: async (limit) => {
+        calls += 1;
+        return empty({ fetched: calls === 1 ? limit : 1, marked: 1, factsAdded: 1 });
+      },
+      budgetExhausted: () => false,
+      sweep: () => ({ merges: [], busy: ++sweeps === 1 }),
+    });
+
+    consolidator.notify('host');
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_IDLE_MS);
+    await consolidator.settled();
+    expect(readConsolidation(db)?.last.outcome).toBe('busy');
+    expect(consolidator.isArmed()).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_DRAIN_MS);
+    await consolidator.settled();
+    expect(calls).toBe(2);
+    expect(readConsolidation(db)?.last.outcome).toBe('ran');
+    expect(consolidator.isArmed()).toBe(false);
+  });
+
   it('stops on a full page that moved nothing, instead of paying for it forever', async () => {
     const db = new DatabaseCtor(':memory:');
     const calls: number[] = [];
@@ -441,6 +473,21 @@ describe('the maintenance sweep', () => {
     // that retires rows unattended and announces nothing is indistinguishable
     // from one that does not run.
     expect(readConsolidation(db)?.last.merged).toBe(2);
+  });
+
+  it('records a busy outcome when the shared writer lane defers the sweep', async () => {
+    const db = new DatabaseCtor(':memory:');
+    const consolidator = new Consolidator({
+      db,
+      ingest: async () => empty({ factsAdded: 1 }),
+      budgetExhausted: () => false,
+      sweep: () => ({ merges: [], busy: true }),
+    });
+
+    const result = await consolidator.runNow();
+    expect(result.report?.busy).toBe(true);
+    expect(result.run.outcome).toBe('busy');
+    expect(readConsolidation(db)?.last.outcome).toBe('busy');
   });
 
   /**

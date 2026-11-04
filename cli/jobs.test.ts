@@ -146,3 +146,112 @@ describe('muffin jobs — il tetto per-job', () => {
     expect(cmdJobsCap(home, 'nessuno', '1')).toBe(1);
   });
 });
+
+/**
+ * #598 S3 — `muffin jobs add --once`: arma una volta sola, con pre-delega.
+ */
+describe('muffin jobs add --once (#598 S3)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('--once senza cron arma subito, una volta sola, manual di default', () => {
+    const home = bootHome();
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    expect(cmdJobsAdd(home, ['--once', 'fai una cosa sola'])).toBe(0);
+    const jobs = activeJobs(home);
+    expect(jobs.length).toBe(1);
+    expect(jobs[0]!.once).toBe(true);
+    expect(jobs[0]!.delegation).toBe('manual');
+    expect(jobs[0]!.goal).toBe('fai una cosa sola');
+  });
+
+  it('--once --delegation yolo si scrive sulla riga e la lista la mostra', () => {
+    const home = bootHome();
+    const detto: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((s) => (detto.push(String(s)), true));
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    expect(cmdJobsAdd(home, ['--once', '--delegation', 'yolo', 'fai da solo'])).toBe(0);
+    expect(activeJobs(home)[0]!.delegation).toBe('yolo');
+
+    detto.length = 0;
+    expect(cmdJobsList(home)).toBe(0);
+    expect(detto.join('')).toContain('una volta');
+    expect(detto.join('')).toContain('delega yolo');
+  });
+
+  it('--delegation senza --once è un uso sbagliato (78), le ricorrenze restano manual', () => {
+    const home = bootHome();
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    expect(cmdJobsAdd(home, ['--cron', '0 8 * * *', '--delegation', 'yolo', 'brief'])).toBe(78);
+    expect(activeJobs(home)).toEqual([]);
+  });
+
+  it('--delegation con valore assurdo è un rifiuto (78), non un job manual', () => {
+    const home = bootHome();
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    expect(cmdJobsAdd(home, ['--once', '--delegation', 'sempre', 'fai'])).toBe(78);
+    expect(activeJobs(home)).toEqual([]);
+  });
+
+  it('le ricorrenze senza --once restano ricorrenti come sempre', () => {
+    const home = bootHome();
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    expect(cmdJobsAdd(home, ['--cron', '0 8 * * *', 'brief'])).toBe(0);
+    const job = activeJobs(home)[0]!;
+    expect(job.once).toBe(false);
+    expect(job.delegation).toBe('manual');
+  });
+});
+
+/**
+ * #598 S4 — `muffin jobs add --silent`: il successo ordinario non manda
+ * messaggi, resta una ricevuta durevole. needs-owner e guasti arrivano sempre.
+ */
+describe('muffin jobs add --silent (#598 S4)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('--silent si scrive sulla riga e la lista lo mostra, su ricorrenze e una-tantum', () => {
+    const home = bootHome();
+    const detto: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((s) => {
+      detto.push(String(s));
+      return true;
+    });
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    expect(cmdJobsAdd(home, ['--cron', '0 8 * * *', '--silent', 'controllo silenzioso'])).toBe(0);
+    expect(cmdJobsAdd(home, ['--once', '--silent', 'una cosa sola in silenzio'])).toBe(0);
+    const jobs = activeJobs(home);
+    expect(jobs.map((j) => j.delivery)).toEqual(['silent', 'silent']);
+
+    detto.length = 0;
+    expect(cmdJobsList(home)).toBe(0);
+    const lista = detto.join('');
+    expect(lista).toContain('silent');
+  });
+
+  it('senza --silent i job parlano come oggi e la lista non mostra niente di nuovo', () => {
+    const home = bootHome();
+    const detto: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((s) => {
+      detto.push(String(s));
+      return true;
+    });
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    expect(cmdJobsAdd(home, ['--cron', '0 8 * * *', 'brief'])).toBe(0);
+    expect(activeJobs(home)[0]?.delivery).toBe('deliver');
+
+    detto.length = 0;
+    expect(cmdJobsList(home)).toBe(0);
+    expect(detto.join('')).not.toContain('silent');
+  });
+});

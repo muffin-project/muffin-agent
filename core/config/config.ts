@@ -1,10 +1,10 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { ensurePrivateDir, tightenPrivateFile } from './private-fs.js';
+import { homedir } from 'node:os';
+import { dirname, isAbsolute, join } from 'node:path';
 import { z } from 'zod';
+import { ensurePrivateDir, tightenPrivateFile } from './private-fs.js';
 import { SEARCH_PROVIDER_IDS } from './providers.js';
 import { REASONING_DIALECTS, THINKING_VALUES } from './thinking.js';
-import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
 
 /**
  * One home, one config file, one database. Backup, export and "delete
@@ -13,7 +13,10 @@ import { dirname, join } from 'node:path';
  */
 
 /**
- * 2 since the spend caps left this file.
+ * 3 separates main/light provider connections; v2 homes retain both original routes.
+ * Reads migrate only in memory; an explicit save writes the current version.
+ *
+ * Version 2 moved the spend caps out of this file.
  *
  * They lived here *and* in the sealed `rot/budgets.json`, and the one that bound
  * was the copy nobody sealed. Keeping a deprecated-but-parsed `budget` would
@@ -21,7 +24,7 @@ import { dirname, join } from 'node:path';
  * cap and is not — so the field is gone and `loadConfig` migrates a v1 file in
  * memory instead of refusing to open it. See `core/rot/budgets.ts`.
  */
-export const CONFIG_SCHEMA_VERSION = 2;
+export const CONFIG_SCHEMA_VERSION = 3;
 
 /**
  * Le versioni del system prompt che questa build sa assemblare.
@@ -53,7 +56,7 @@ export function promptVersion(config: Pick<Config, 'prompt'>): PromptVersion {
   return config.prompt?.version ?? 'v1';
 }
 
-export type ProviderKind = 'anthropic' | 'openai-compat';
+export type ProviderKind = 'anthropic' | 'openai-compat' | 'openai-chatgpt';
 
 /**
  * The schema is the type, not a copy of it.
@@ -65,11 +68,10 @@ export type ProviderKind = 'anthropic' | 'openai-compat';
  * field has to fail at load with a sentence about which field, not months later
  * as an absence of behaviour.
  */
-export const ConfigSchema = z.object({
-  schemaVersion: z.number().int().positive(),
-  provider: z.object({
+export const InferenceProviderSchema = z
+  .object({
     /** Explicit, never inferred from the URL: a wrong guess fails at the first call. */
-    kind: z.enum(['anthropic', 'openai-compat']),
+    kind: z.enum(['anthropic', 'openai-compat', 'openai-chatgpt']),
     baseUrl: z.string().url().optional(),
     /** `secret://name` — resolved through the secret store, never inlined here. */
     apiKeyRef: z.string().min(1),
@@ -140,8 +142,66 @@ export const ConfigSchema = z.object({
      * accusa, nessun silenzio complice — solo niente da confrontare.
      */
     routingForFamily: z.string().min(1).optional(),
+  })
+  .superRefine((provider, ctx) => {
+    if (provider.kind !== 'openai-chatgpt') return;
+    if (
+      provider.baseUrl !== 'https://api.openai.com/v1' ||
+      provider.apiKeyRef !== 'secret://chatgpt'
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'ChatGPT requires its public endpoint and secret://chatgpt connection',
+        path: ['kind'],
+      });
+    }
+    if (
+      provider.routing !== undefined ||
+      provider.reasoningDialect !== undefined ||
+      provider.routingForFamily !== undefined
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'ChatGPT does not accept router or Chat Completions dialect settings',
+        path: ['kind'],
+      });
+    }
+  });
+
+export const ConfigSchema = z.object({
+  schemaVersion: z.number().int().positive(),
+  /** Main inference connection; light is independent after legacy normalization. */
+  provider: InferenceProviderSchema,
+  lightProvider: InferenceProviderSchema.optional(),
+  models: z.object({
+    main: z.string().min(1),
+    light: z.string().min(1),
+    deep: z.string().min(1).optional(),
   }),
-  models: z.object({ main: z.string().min(1), light: z.string().min(1), deep: z.string().min(1).optional() }),
+  /**
+   * La cartella in cui lavorano i turni quando nessuna superficie ne sceglie
+   * una standoci dentro.
+   *
+   * Senza questo campo il gateway, che launchd avvia in `~/.muffin`, e
+   * `muffin run`, che inoltra al gateway, finiscono sempre in
+   * `~/muffin-workspace`: una cartella vera, ma non il progetto su cui
+   * l'owner sta lavorando. Il REPL non ne ha bisogno — chi lo apre da un
+   * progetto ha già scelto la cartella con `cd` — mentre le superfici
+   * supervised non hanno un `cd` da cui leggere la scelta. Questo campo è
+   * quella scelta, dichiarata una volta e valida per tutte.
+   *
+   * Assente = comportamento di sempre (`~/muffin-workspace`, o
+   * `MUFFIN_WORKSPACE`). Non può nominare la home né una sua sottocartella:
+   * `resolveWorkspace` rifiuta quel caso da sempre, e `muffin workspace set`
+   * lo rifiuta prima di scrivere, con una frase invece di un silenzio.
+   */
+  workspace: z
+    .string()
+    .min(1)
+    .refine((path) => isAbsolute(path), {
+      message: 'workspace deve essere un percorso assoluto: `muffin workspace set <cartella>` lo scrive così',
+    })
+    .optional(),
   /**
    * Il ragionamento sul turno di conversazione, quando l'owner non vuole quello
    * che il profilo del suo modello dichiara.
@@ -235,6 +295,42 @@ export const ConfigSchema = z.object({
           apiKeyRef: z.string().min(1).optional(),
         })
         .optional(),
+    })
+    .optional(),
+  /**
+   * System One — il sensore semantico degli `ask` (issue #740, fase shadow;
+   * ADR-0096). **Spento per default e per assenza**: una config che non
+   * nomina questo campo non spinge un byte verso nessuno, e il comportamento
+   * del ramo `ask` resta quello di sempre.
+   *
+   * Quando c'è, l'runtime giudica **in shadow** ogni ask della famiglia
+   * shell: il verdetto tipizzato (con probabilità) finisce in
+   * `ask_judgments`, accanto alla decisione che l'owner prenderà comunque —
+   * mai al posto suo. Il giudizio non può consumare un ask, né toccare il
+   * kernel: la sovranità deterministica resta intera (ADR-0095/#607).
+   *
+   * Che cosa parte dalla macchina: l'envelope compatto dell'azione
+   * (richiesta dell'owner, capability e riga di effetto, comando/risorsa,
+   * descrizione del modello, taint e principal) — **redatto** con la stessa
+   * `redactText` del tracing, mai segreti, mai la conversazione intera. Chi
+   * lo accende lo fa sapendo questo; chi non lo accende non paga niente.
+   *
+   * `provider` è un literal perché l'interfaccia è di Muffin e TypeSafe è un
+   * adattatore, non il piano: altri provider arrivano come letterali nuovi,
+   * non come stringhe libere.
+   */
+  judgment: z
+    .object({
+      provider: z.literal('typesafe'),
+      /** `secret://name` — risolto dal registro dei segreti, mai inline. */
+      apiKeyRef: z.string().min(1),
+      baseUrl: z.string().url().optional(),
+      /** Il modello richiesto; assente = il default dell'adapter. */
+      model: z.string().min(1).optional(),
+      /** Timeout per tentativo; assente = quello dell'adapter. */
+      timeoutMs: z.number().int().positive().optional(),
+      /** Retries dopo il primo tentativo; assente = quello dell'adapter. */
+      maxRetries: z.number().int().min(0).max(5).optional(),
     })
     .optional(),
   // No `budget` here, deliberately. The caps are a rail, so they live inside the
@@ -338,7 +434,10 @@ export const ConfigSchema = z.object({
      */
     discord: z
       .object({
-        ownerUserId: z.string().regex(/^[0-9]+$/).optional(),
+        ownerUserId: z
+          .string()
+          .regex(/^[0-9]+$/)
+          .optional(),
         pairing: z
           .object({
             hash: z.string().min(1),
@@ -352,6 +451,29 @@ export const ConfigSchema = z.object({
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
+
+export type InferenceLane = 'main' | 'light';
+export type InferenceProviderConfig = Config['provider'];
+
+/** Older/programmatic configurations use the same explicit connection on both lanes. */
+export function inferenceProvider(
+  config: Config,
+  lane: InferenceLane = 'main',
+): InferenceProviderConfig {
+  return lane === 'light' ? (config.lightProvider ?? config.provider) : config.provider;
+}
+
+/** Capture both connections before changing one, so the other cannot follow an inherited default. */
+export function withInferenceProvider(
+  config: Config,
+  lane: InferenceLane,
+  provider: InferenceProviderConfig,
+): Config {
+  const lightProvider = structuredClone(inferenceProvider(config, 'light'));
+  return lane === 'light'
+    ? { ...config, lightProvider: structuredClone(provider) }
+    : { ...config, provider: structuredClone(provider), lightProvider };
+}
 
 export const DEFAULT_CONFIG: Omit<Config, 'provider' | 'models'> = {
   schemaVersion: CONFIG_SCHEMA_VERSION,
@@ -389,9 +511,11 @@ export const paths = (home = muffinHome()) => ({
    * Dove va il modello whisper, quando `config.audio.whisperModel` non lo dice.
    *
    * Un percorso e non un file: qui non lo scrive nessuno. Lo scarica l'owner —
-   * 142 MiB per `ggml-base.bin` — e `core/audio/trascrivi.ts` stampa il `curl`
-   * esatto quando non lo trova. Dentro la home e non in `rot/`: non e' una
-   * cosa dell'identita', e' un pezzo di macchina rimpiazzabile.
+   * 142 MiB per `ggml-base.bin` — oppure `init`, `surface enable` e il primo
+   * uso (`core/audio/trascrivi.ts`), che lo assicurano quando una superficie
+   * vocale è accesa; se manca comunque, `trascrivi` stampa il `curl` esatto.
+   * Dentro la home e non in `rot/`: non e' una cosa dell'identita', e' un
+   * pezzo di macchina rimpiazzabile.
    */
   whisperModel: join(home, 'models', 'ggml-base.bin'),
   // Outside the root of trust on purpose: the voice is the part that learns,
@@ -449,7 +573,10 @@ export const paths = (home = muffinHome()) => ({
  * closes, so the note says what was there and leaves the decision — and the
  * `muffin rot reseal` that carries it — to the owner.
  */
-function migrateV1(raw: Record<string, unknown>, note: (line: string) => void): Record<string, unknown> {
+function migrateV1(
+  raw: Record<string, unknown>,
+  note: (line: string) => void,
+): Record<string, unknown> {
   const { budget, ...rest } = raw;
   if (budget !== null && typeof budget === 'object') {
     const b = budget as { monthlyUsd?: unknown; perTenantDailyUsd?: unknown };
@@ -463,9 +590,28 @@ function migrateV1(raw: Record<string, unknown>, note: (line: string) => void): 
   return { ...rest, schemaVersion: 2 };
 }
 
+function migrateV2(
+  raw: Record<string, unknown>,
+  note: (line: string) => void,
+): Record<string, unknown> {
+  if (raw.lightProvider === undefined)
+    note(
+      'config.json schemaVersion 2: main and light retain their existing provider; future lane changes are independent.',
+    );
+  return {
+    ...raw,
+    schemaVersion: 3,
+    lightProvider: raw.lightProvider ?? structuredClone(raw.provider),
+  };
+}
+
 /** Indexed by the version being left behind, so the ladder reads in one direction. */
-const MIGRATIONS: Record<number, (raw: Record<string, unknown>, note: (line: string) => void) => Record<string, unknown>> = {
+const MIGRATIONS: Record<
+  number,
+  (raw: Record<string, unknown>, note: (line: string) => void) => Record<string, unknown>
+> = {
   1: migrateV1,
+  2: migrateV2,
 };
 
 /**
@@ -526,9 +672,15 @@ export function loadConfig(home = muffinHome(), onNote: (line: string) => void =
     const issues = validated.error.issues
       .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
       .join('; ');
-    throw new ConfigError(`${file} is invalid — ${issues}`, 'fix those fields, or re-run `muffin init --force`');
+    throw new ConfigError(
+      `${file} is invalid — ${issues}`,
+      'fix those fields, or re-run `muffin init --force`',
+    );
   }
-  return validated.data;
+  return {
+    ...validated.data,
+    lightProvider: structuredClone(inferenceProvider(validated.data, 'light')),
+  };
 }
 
 export function saveConfig(config: Config, home = muffinHome()): void {
@@ -539,7 +691,12 @@ export function saveConfig(config: Config, home = muffinHome()): void {
       'rimuovi il symlink e riprova',
     );
   }
-  writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  const canonical = {
+    ...config,
+    schemaVersion: CONFIG_SCHEMA_VERSION,
+    lightProvider: structuredClone(inferenceProvider(config, 'light')),
+  };
+  writeFileSync(file, `${JSON.stringify(canonical, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   tightenPrivateFile(file);
 }
 
@@ -594,9 +751,10 @@ export function locateSecret(ref: string, home = muffinHome()): SecretLocation |
 /** Every backend that holds this name. More than one means one is shadowing the other. */
 export function locateSecretAll(ref: string, home = muffinHome()): SecretLocation[] {
   const name = requireSecretRef(ref);
-  return SECRET_BACKENDS.map((backend) => ({ backend, path: join(secretDir(backend, home), name) })).filter(
-    (l) => existsSync(l.path),
-  );
+  return SECRET_BACKENDS.map((backend) => ({
+    backend,
+    path: join(secretDir(backend, home), name),
+  })).filter((l) => existsSync(l.path));
 }
 
 /**

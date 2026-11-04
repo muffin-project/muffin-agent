@@ -29,6 +29,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
  * names the sink it resolves for.
  */
 const ALLOWED_CALLERS: Readonly<Record<string, string>> = {
+  'agent/providers/configured.ts': 'constructs only authenticated production adapters for runtime and doctor; resolved credentials go directly to the provider, never into tool data',
   'agent/runtime.ts': 'builds the model provider and the search backend — the key is passed straight into the SDK/fetch client that puts it on the wire, never stored in a variable of its own',
   'cli/surface.ts': 'builds TelegramApi/DiscordApi at pairing/setup time, and one existence check (hasSecret) that discards the value',
   'cli/doctor.ts': 'diagnostic: reports backend, path and byte length only — never a character of the value (see doctor.test.ts)',

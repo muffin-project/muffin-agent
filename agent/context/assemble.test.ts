@@ -12,16 +12,15 @@ import {
   saveConfig,
 } from '../../core/config/config.js';
 import type { Principal } from '../../core/policy/types.js';
+import type { TodoItem } from '../../core/turns/todo.js';
 import { buildRuntime, type Runtime } from '../runtime.js';
 import {
   buildSystemPromptBlocks,
   renderSystemPrompts,
-  STALE_PLAN_MS,
   tenantClass,
   todoSection,
   visibleTools,
 } from './assemble.js';
-import type { TodoItem } from '../../core/turns/todo.js';
 
 /**
  * The prompt is a function of the tenant, and the tool list is a function of the
@@ -258,7 +257,18 @@ describe('the owner-class prompt does not move', () => {
    * `205a51aaa4ea013b6351235dac6a3f0563ece1f876d68e2a68346ee961407605`.
    */
   const OWNER_PROMPT_SHA_AT_SPLIT =
-    'd243cf54a8eda456dabb9c35c5911bba54b248d1eb287392cdead2efee90c7a2';
+    // #529: session plan rows are context, not a grant or Turn completion rule.
+    // Re-misurato 2026-10-15 (slice/quote-authority): la riga memory_forget
+    // insegna instruction invece di `{}`.
+    // Ri-fissato 2026-10-18 (docs-hygiene, PR #921): la persona non dichiara
+    // più «worker» — nessun meccanismo lo sostiene; la sola differenza nella
+    // stringa assemblata è quella parola.
+    // Ri-fissato 2026-10-19 (G2 carattere): persona.md e voice.md dicono che
+    // Muffin non è un coach/terapeuta, non costruisce framework o piani
+    // d'azione, ride con l'owner e non tratta un «hey» come un ticket. È un
+    // cold-start deliberato della cache: una volta, non a ogni turno.
+    // Pin precedente: `7e98f233b3da23b3d5c03513b73d337f10b6032d78636a7352ff955afb7c4d95`.
+    '968d931d68a71a1344f4891fd80710319eceb215fe75806be3df6a688d5a37d8';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
@@ -371,7 +381,21 @@ describe('the owner-class prompt does not move', () => {
    * stanza. Pin precedente:
    * `63c6590ed366dbb44d9e2a5ce2b018f9f0ffe3993ec5ea34d555c46cddf0b3f4`.
    */
-  const GROUP_PROMPT_SHA_V1 = '97579e98e30d3b57a3e3372b80f26201efcf8eb1c7fe0c86fd3e4ab449f8bdfc';
+  // #529: the same scoped-work rule reaches owner and group prompts.
+  // Ri-fissato 2026-10-19 (G2 carattere): voice.md dà alla stanza i divieti
+  // espliciti (coach, terapeuta, framework) e «rido con te, non di te».
+  // Pin precedente: `ef99d12c6473eae61ff40ab5b2eaeb87b9644b95ecd54487bb7fa1b0f411275e`.
+  const GROUP_PROMPT_SHA_V1 = '40b3537705a3166a4881b573e8d3130cf39192367989554bda100a045cf2d1ae';
+
+  /**
+   * Ri-fissato 2026-10-10: la regola sull'esposizione progressiva chiarisce
+   * che un tool visibile non esaurisce il catalogo quando capability_search
+   * è disponibile. L'invalidazione della cache è intenzionale. Pin precedente:
+   * owner `0952125772949ff2d1db0866998a17cea8b38f68c4608b9b87872dcc56df28b2`,
+   * group `57857222d8b56eafa48d3a583489b6a1ffce30b164bb0881f91a3af7846264c8`.
+   * Misura v1 aggiornata: 2026-10-10, rapporto carattere/regole 8,37; la
+   * soglia del test segue la misura a 8,3, senza cambiare quella di v2.
+   */
 
   it('e la stanza riceve lo stesso prompt di ieri, byte per byte', () => {
     const runtime = boot(bootHome());
@@ -396,6 +420,34 @@ describe('the owner-class prompt does not move', () => {
  * a mano e la config scritta dal comando, montate entrambe da `buildRuntime`.
  */
 describe('quale versione del prompt assembla questa installazione', () => {
+  it('rende il menu progressivo esplicito nei prompt runtime owner e group', () => {
+    const home = bootHome();
+    const assertCapabilityRule = (prompt: string) => {
+      expect(prompt).toContain('capability_search');
+      expect(prompt).toContain('autorizzata');
+      expect(prompt).toContain('anche quando i tool visibili coprono altre parti');
+      expect(prompt).toContain('Non invent');
+      expect(prompt).not.toMatch(/I tool che (hai|ho) sono quelli che (vedi|vedo)/);
+    };
+
+    const first = boot(home);
+    try {
+      assertCapabilityRule(first.deps.systemPrompts.owner);
+      assertCapabilityRule(first.deps.systemPrompts.group);
+    } finally {
+      first.close();
+    }
+
+    saveConfig({ ...loadConfig(home), prompt: { version: 'v2' } }, home);
+    const second = boot(home);
+    try {
+      assertCapabilityRule(second.deps.systemPrompts.owner);
+      assertCapabilityRule(second.deps.systemPrompts.group);
+    } finally {
+      second.close();
+    }
+  });
+
   it('senza campo in config monta v1, e col campo a v2 monta v2 — attraverso buildRuntime', () => {
     const home = bootHome();
     const primo = boot(home);
@@ -500,7 +552,7 @@ describe('quale versione del prompt assembla questa installazione', () => {
     // regola: la soglia scende con la misura, e v1 resta pesantemente
     // carattere contro il `< 8` di v2 — che è la riga che porta il peso
     // dell'affermazione.
-    expect(v1.chiSei / v1.comeLavori).toBeGreaterThan(8.5);
+    expect(v1.chiSei / v1.comeLavori).toBeGreaterThan(8.3);
     expect(v2.chiSei / v2.comeLavori).toBeLessThan(8);
     // E il prompt non è cresciuto per farlo: il peso si è spostato.
     expect(v2.chiSei + v2.comeLavori).toBeLessThan((v1.chiSei + v1.comeLavori) * 1.02);
@@ -674,7 +726,7 @@ describe('what a group turn is allowed to be told', () => {
  * continua a sembrare a posto. `muffin prompt show --eco` misura la
  * sovrapposizione ma non conosce questa regola: misura, non decide.
  *
- * Sette regole, e per ognuna la sola cosa che serve sapere è dove ne vive
+ * Nove regole, e per ognuna la sola cosa che serve sapere è dove ne vive
  * l'altra copia. Sono asserite **per versione**, così una potatura futura di
  * `defaults/v2/voice.md` che ne cancella una perché «c'è già in identity.md»
  * fallisce qui invece che nella chat di un estraneo.
@@ -707,8 +759,18 @@ describe('i pavimenti che la stanza riceve solo da voice.md', () => {
     ],
     [
       'niente terapeuta, coach, motivational speaker',
-      /Non\s+faccio\s+il\s+motivational\s+speaker/,
+      /Non\s+faccio\s+[^\n]*(coach|terapeuta|motivational\s+speaker)/,
       'identity.md: «Non fai il terapeuta, il coach o il motivational speaker»',
+    ],
+    [
+      "niente framework o piani d'azione",
+      /framework[^\n]*piani d'azione|piani d'azione[^\n]*framework/i,
+      "persona.md (owner) e voice.md (la stanza): «Non propongo framework, piani d'azione o «i tre passi per»»",
+    ],
+    [
+      'ridere con, non di',
+      /Rido\s+con\s+te,\s+non\s+di\s+te/,
+      'persona.md (owner) e voice.md (la stanza)',
     ],
     [
       'niente linguaggio da assistente generico',
@@ -760,6 +822,18 @@ describe('i pavimenti che la stanza riceve solo da voice.md', () => {
       expect(gruppo).toMatch(/Non\s+sono\s+il\s+filo\s+principale\s+della\s+conversazione/);
       expect(gruppo).toMatch(/informazioni\s+private\s+dell'owner\s+non\s+diventano\s+materiale/);
       expect(gruppo).toMatch(/🧁 è ancora più raro/);
+    });
+
+    it(`${versione}: l'owner che scrive solo «hey» riceve un amico, non un ticket`, () => {
+      const home = bootHome();
+      const owner = renderSystemPrompts(buildSystemPromptBlocks(home, false, '', versione)).owner;
+      // The casual register is the one `casual-hey` measures, and the one the
+      // old plan push ruined first: a greeting in the DM came back as a work
+      // board. The plan no longer rides along (ADR-0104); this is the other
+      // half — the reply itself should sound like a friend, not a queue.
+      expect(owner).toMatch(/Se\s+mi\s+scrivi\s+solo\s+«hey»/);
+      expect(owner).toMatch(/non\s+apro\s+un\s+ticket/);
+      expect(owner).toMatch(/non\s+tiro\s+fuori\s+un\s+piano/);
     });
 
     it(`${versione}: e continua a non ricevere niente del patto dell'owner`, () => {
@@ -890,18 +964,10 @@ describe('the tool list a principal is shown', () => {
   });
 });
 
-describe('un piano stantio non si riprende da solo', () => {
-  /**
-   * Misurato il 30/09/2026: il piano video della sera prima (pending dalle
-   * 23:51) è stato reiniettato come «Sono aperti» in un «Buongiorno Muffin»
-   * delle 09:31, e il modello ci ha fatto un'ora di debug sopra senza che
-   * nessuna concessione lo avesse chiesto. Un `pending` di ieri e
-   * un'interruzione di dieci secondi fa non possono presentarsi identici.
-   */
-  const ORA = new Date('2026-09-30T09:31:00.000Z').getTime();
-  const passo = (text: string, updatedAt: string): TodoItem => ({
+describe('session plans remain context, independent of age', () => {
+  const item = (updatedAt: string): TodoItem => ({
     seq: 1,
-    text,
+    text: 'Build an unrelated animation.',
     state: 'pending',
     note: null,
     tier: 0,
@@ -910,49 +976,23 @@ describe('un piano stantio non si riprende da solo', () => {
     updatedAt,
   });
 
-  it('la soglia di staleness è 6 ore, pinnata', () => {
-    expect(STALE_PLAN_MS).toBe(6 * 60 * 60 * 1000);
+  it('empty plans cost no context', () => {
+    expect(todoSection([])).toBe('');
   });
 
-  it('vuoto dentro, vuoto fuori — costo zero', () => {
-    expect(todoSection([], ORA)).toBe('');
-  });
-
-  it('un piano fresco si presenta come dovuto, come prima', () => {
-    const out = todoSection([passo('finire il video', new Date(ORA - 60_000).toISOString())], ORA);
-    expect(out).toContain('Sono aperti:');
-    expect(out).toContain('finire il video');
-    expect(out).not.toContain('da solo');
-  });
-
-  it('un piano di ieri non si presenta come dovuto: chiede prima', () => {
-    const out = todoSection(
-      [passo('verificare venv manim', new Date(ORA - 9.5 * 60 * 60 * 1000).toISOString())],
-      ORA,
-    );
-    expect(out).toContain('verificare venv manim');
+  it('keeps readable plan state without defining the current Turn completion', () => {
+    const out = todoSection([item('2026-09-30T09:30:00Z')]);
+    expect(out).toContain('Build an unrelated animation.');
+    expect(out).toContain('pending');
+    expect(out).toContain('contesto');
+    expect(out).not.toContain('Il lavoro è finito');
+    expect(out).not.toContain('chiedi prima');
     expect(out).not.toContain('Sono aperti:');
-    expect(out).toContain('non riprenderli da solo');
   });
 
-  it('fresco e stantio insieme: due blocchi, due verbi diversi', () => {
-    const out = todoSection(
-      [
-        passo('cosa nuova', new Date(ORA - 10_000).toISOString()),
-        passo('cosa vecchia', new Date(ORA - STALE_PLAN_MS - 1_000).toISOString()),
-      ],
-      ORA,
+  it('age does not change which request the plan authorizes', () => {
+    expect(todoSection([item('2026-09-30T09:30:00Z')])).toBe(
+      todoSection([item('2020-01-01T00:00:00Z')]),
     );
-    expect(out).toContain('Sono aperti:');
-    expect(out).toContain('cosa nuova');
-    expect(out).toContain('non riprenderli da solo');
-    expect(out).toContain('cosa vecchia');
-  });
-
-  it('al confine la vecchiaia vince: oltre la soglia è stantio', () => {
-    const appena = todoSection([passo('x', new Date(ORA - STALE_PLAN_MS + 60_000).toISOString())], ORA);
-    expect(appena).toContain('Sono aperti:');
-    const oltre = todoSection([passo('x', new Date(ORA - STALE_PLAN_MS - 60_000).toISOString())], ORA);
-    expect(oltre).toContain('non riprenderli da solo');
   });
 });

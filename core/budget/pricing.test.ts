@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { costUsd, isOpenRouterFreeRoute, priceOf } from './pricing.js';
+import { costUsd, isOpenRouterFreeRoute, isUnmeteredEndpoint, priceOf } from './pricing.js';
 
 const OPENROUTER = 'https://openrouter.ai/api/v1';
 
@@ -15,6 +15,46 @@ describe('pricing', () => {
     expect(isOpenRouterFreeRoute('openrouter/free', OPENROUTER)).toBe(true);
     expect(priceOf('openrouter/free', OPENROUTER)).toEqual({ inputPerMTok: 0, outputPerMTok: 0 });
     expect(costUsd('openrouter/free', { inputTokens: 1e6, outputTokens: 1e6 }, OPENROUTER)).toBe(0);
+  });
+
+  it('prices the requested free route at zero even when the served model is a paid family (#499)', () => {
+    // The contract decides, not the response string: qwen3 is a $2/$6 family,
+    // but a call requested through openrouter/free must bill $0.
+    const tokens = { inputTokens: 10_000, outputTokens: 2_000 };
+    expect(costUsd('qwen/qwen3.8-27b', tokens, OPENROUTER, 'openrouter/free')).toBe(0);
+  });
+
+  it('keeps served-model pricing for auto routing and off-host free slugs (#499)', () => {
+    // qwen3 $2/$6: 10k in = $0.02, 2k out = $0.012.
+    const tokens = { inputTokens: 10_000, outputTokens: 2_000 };
+    expect(costUsd('qwen/qwen3.8-27b', tokens, OPENROUTER, 'openrouter/auto')).toBeCloseTo(0.032, 6);
+    expect(costUsd('qwen/qwen3.8-27b', tokens, 'https://my-proxy.example/v1', 'openrouter/free')).toBeCloseTo(
+      0.032, 6,
+    );
+  });
+
+  describe('unmetered endpoints (#499)', () => {
+    const LAN = [{ host: '192.168.1.10', port: 8080 }];
+
+    it('matches the declared endpoint, case- and trailing-dot-insensitive', () => {
+      // Declarations arrive normalized (lowercase, folded trailing dot) from
+      // loadSealedBudgets; the predicate compares exact strings, and the URL
+      // side folds the same way.
+      expect(isUnmeteredEndpoint('http://192.168.1.10:8080/v1', LAN)).toBe(true);
+      expect(isUnmeteredEndpoint('HTTP://192.168.1.10:8080/v1', LAN)).toBe(true);
+      expect(isUnmeteredEndpoint('http://192.168.1.10.:8080/v1', LAN)).toBe(true);
+    });
+
+    it('matches any port when none is declared', () => {
+      expect(isUnmeteredEndpoint('http://192.168.1.10:9090/v1', [{ host: '192.168.1.10' }])).toBe(true);
+    });
+
+    it('does not match other hosts, other ports, malformed urls, or an empty list', () => {
+      expect(isUnmeteredEndpoint('http://192.168.1.11:8080/v1', LAN)).toBe(false);
+      expect(isUnmeteredEndpoint('http://192.168.1.10:9090/v1', LAN)).toBe(false);
+      expect(isUnmeteredEndpoint('not a url', LAN)).toBe(false);
+      expect(isUnmeteredEndpoint('http://192.168.1.10:8080/v1', [])).toBe(false);
+    });
   });
 
   it('recognizes explicit :free variants only on the OpenRouter endpoint', () => {

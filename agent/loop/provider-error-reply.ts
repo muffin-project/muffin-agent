@@ -9,6 +9,12 @@ export function providerErrorReply(error: ProviderError): string {
   if (error.source === 'output') {
     return 'Il provider ha restituito una risposta non valida; non ho potuto completare il turno. Riprova tra poco.';
   }
+  if (error.status === 402) {
+    return 'Il provider ha rifiutato la richiesta (HTTP 402: pagamento richiesto). Controlla il saldo e i limiti dell’account.';
+  }
+  if (error.status === 404) {
+    return 'Il provider non trova il modello o una route disponibile (HTTP 404). Controlla il modello e i vincoli in provider.routing.';
+  }
   if (error.status !== undefined) {
     return `Il provider non ha completato la richiesta (HTTP ${error.status}). Riprova tra poco.`;
   }

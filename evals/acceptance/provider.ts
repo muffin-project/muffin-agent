@@ -258,7 +258,9 @@ export async function startFakeProvider(options: FakeProviderOptions): Promise<F
       // scripted main replies. An empty `data` array is enough: `audioAccettato`
       // finds no entry for the configured model and returns `false` — the
       // conservative branch, and also the true answer for every model this
-      // suite configures.
+      // suite configures. `muffin model` reads the same list on a generic
+      // endpoint (#763): empty, it warns that the slug is not listed and
+      // still writes it (E7).
       if (req.method === 'GET' && req.url?.endsWith('/models')) {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ data: [] }));

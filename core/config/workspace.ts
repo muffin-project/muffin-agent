@@ -113,6 +113,53 @@ export function isSameOrNestedPath(candidate: string, base: string): boolean {
 export const WORKSPACE_ENV = 'MUFFIN_WORKSPACE';
 
 /**
+ * The directory a surface proposes, before any containment check.
+ *
+ * Three answers, in order, because each one is a stronger statement than the
+ * next: the caller stood in a directory and named it (`explicitCwd`, the
+ * REPL); the owner exported a session override; the owner declared a
+ * persistent workspace in `config.json`. Absent all three, the process cwd is
+ * all anyone has, and `resolveWorkspace` will relocate it when it is the home.
+ *
+ * The order puts the env var above the config on purpose: a config is the
+ * default for every future boot, while `MUFFIN_WORKSPACE` is the one-shot
+ * escape hatch for the boot in front of you. An explicit cwd stays above both
+ * because a `cd` typed in this terminal is the most local statement of intent
+ * there is, and the REPL is the only surface that passes one — but only when
+ * that cwd is not the installation, where nobody chose anything.
+ */
+export function requestedWorkspace(
+  home: string,
+  explicitCwd?: string,
+  configured?: string,
+): string {
+  // A cwd *is* a choice only when it is not the installation. The REPL passes
+  // its cwd even when the owner opened it from `~`: treating that as a choice
+  // would make `resolveWorkspace` fall back to the install default and ignore
+  // a workspace the owner declared, which is the exact bug this field exists
+  // to fix.
+  if (explicitCwd !== undefined && !isSameOrNestedPath(explicitCwd, home)) {
+    return resolve(explicitCwd);
+  }
+  const fromEnv = process.env[WORKSPACE_ENV]?.trim();
+  if (fromEnv !== undefined && fromEnv !== '') {
+    const candidate = resolve(fromEnv);
+    if (!isSameOrNestedPath(candidate, home)) return candidate;
+  }
+  if (configured !== undefined && configured.trim() !== '') {
+    const candidate = resolve(configured);
+    if (!isSameOrNestedPath(candidate, home)) return candidate;
+    // Declared, but unusable. Fail toward the install default rather than
+    // `process.cwd()`: under launchd that cwd is the home and would relocate
+    // to the same default, but a hand-run gateway from a checkout would
+    // silently get the checkout instead — a different answer from the one
+    // `muffin doctor` prints for the same config.
+    return muffinWorkspace(home);
+  }
+  return explicitCwd !== undefined ? resolve(explicitCwd) : process.cwd();
+}
+
+/**
  * The default workspace for an install: a **sibling** of the home, never a
  * child of it.
  *
@@ -159,9 +206,11 @@ export function muffinWorkspace(home = muffinHome()): string {
  * supervised gateway, where nothing chose a workspace at all.
  */
 export type WorkspaceStatus = {
-  /** The default an install falls back to absent an owner-chosen cwd. */
+  /** The directory a turn would work in now, after every override. */
   workspace: string;
   exists: boolean;
+  /** What `config.json` declares, when it declares anything. */
+  configured: string | null;
   /**
    * Set when `MUFFIN_WORKSPACE` named the home, or somewhere inside it, and
    * `muffinWorkspace` silently fell back to the default because of it — the
@@ -169,17 +218,42 @@ export type WorkspaceStatus = {
    * see (a supervisor's imposed cwd is invisible from here; see above).
    */
   envRejected: { requested: string } | null;
+  /**
+   * Set when `workspace` in `config.json` is the home or sits inside it. A
+   * hand-edited config can say that; `muffin workspace set` refuses it before
+   * writing, and `resolveWorkspace` would relocate it at boot, but a
+   * diagnostic must be able to name the file that is wrong instead of
+   * reporting a workspace the turn will not actually use.
+   */
+  configRejected: { requested: string } | null;
 };
 
-export function describeWorkspace(home = muffinHome()): WorkspaceStatus {
-  const workspace = muffinWorkspace(home);
+export function describeWorkspace(home = muffinHome(), configured?: string): WorkspaceStatus {
   const raw = process.env[WORKSPACE_ENV];
   let envRejected: WorkspaceStatus['envRejected'] = null;
+  let fromEnv: string | null = null;
   if (raw !== undefined && raw.trim() !== '') {
     const candidate = resolve(raw.trim());
     if (isSameOrNestedPath(candidate, home)) envRejected = { requested: candidate };
+    else fromEnv = candidate;
   }
-  return { workspace, exists: existsSync(workspace), envRejected };
+
+  const declared =
+    configured !== undefined && configured.trim() !== '' ? resolve(configured) : null;
+  const configRejected =
+    declared !== null && isSameOrNestedPath(declared, home) ? { requested: declared } : null;
+
+  // Same precedence as `requestedWorkspace`: an exported override, then the
+  // declared config, then the install default. `muffinWorkspace` is the last
+  // fallback *and* the one that knows how to ignore a bad env var.
+  const workspace = fromEnv ?? (configRejected === null ? declared : null) ?? muffinWorkspace(home);
+  return {
+    workspace,
+    exists: existsSync(workspace),
+    configured: declared,
+    envRejected,
+    configRejected,
+  };
 }
 
 /** What `resolveWorkspace` decided, and what the caller has to say about it. */

@@ -300,7 +300,11 @@ export async function judgeContradiction(
     // non è un extra, è un costo puro. Dirlo è la metà che mancava — l'adapter
     // sa spegnerlo da 27/08, ma nessuno glielo chiedeva: il profilo lo dichiara
     // per il turno (`agent/loop.ts`), e queste corsie il profilo non lo leggono.
-    thinking: 'off' as const,
+    // ChatGPT plan models require reasoning. This internal structured task
+    // deliberately chooses low; the adapter never rewrites an explicit off.
+    ...(provider.kind === 'openai-chatgpt'
+      ? { reasoning: { mode: 'on' as const, effort: 'low' as const } }
+      : { thinking: 'off' as const }),
     temperature: 0,
     stream: false,
   });
@@ -334,7 +338,11 @@ export async function judgeContradiction(
   if (!validated.success) {
     const issue = validated.error.issues[0];
     return unavailable(
-      { kind: 'schema', field: issue?.path.join('.') || 'sconosciuto', message: issue?.message ?? 'non valido' },
+      {
+        kind: 'schema',
+        field: issue?.path.join('.') || 'sconosciuto',
+        message: issue?.message ?? 'non valido',
+      },
       result.text,
     );
   }
@@ -382,4 +390,3 @@ function safeJson(text: string): unknown {
     return null;
   }
 }
-

@@ -14,7 +14,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { arrivalsSummary, atomicSymlink, channelLagNote, cmdUpdate, fetchFailureRemedy, findCheckoutRoot, findOwnedLaunchers, noteDopoLoSwing, offerGatewayRestart, repairRoutingStep, restartVerdict, run, runUpdate, describeBuild } from './update.js';
+import { arrivalsSummary, atomicSymlink, channelLagNote, cmdUpdate, fetchFailureRemedy, findCheckoutRoot, findOwnedLaunchers, noteDopoLoSwing, offerGatewayRestart, repairRoutingStep, restartVerdict, run, runUpdate, runningInContainerImage, describeBuild } from './update.js';
 import { loadConfig, saveConfig, type Config } from '../core/config/config.js';
 
 /**
@@ -759,6 +759,55 @@ describe('cmdUpdate — argument parsing', () => {
       expect(await cmdUpdate(['--nonsense'])).toBe(78);
     } finally {
       spy.mockRestore();
+    }
+  });
+});
+
+describe('cmdUpdate inside the experimental container image (#765)', () => {
+  const saved = (): string | undefined => process.env.MUFFIN_CONTAINER;
+  const restore = (v: string | undefined): void => {
+    if (v === undefined) delete process.env.MUFFIN_CONTAINER;
+    else process.env.MUFFIN_CONTAINER = v;
+  };
+  const outputOf = (spy: { mock: { calls: unknown[][] } }): string =>
+    spy.mock.calls.map((c) => String(c[0])).join('');
+
+  it('refuses with the host-side procedure instead of failing on git', async () => {
+    const before = saved();
+    process.env.MUFFIN_CONTAINER = '1';
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      expect(await cmdUpdate([])).toBe(78);
+      expect(outputOf(spy)).toContain('Docker');
+      expect(outputOf(spy)).toContain('build.sh');
+    } finally {
+      spy.mockRestore();
+      restore(before);
+    }
+  });
+
+  it('refuses the same way for --rollback: image rollback is also host-side', async () => {
+    const before = saved();
+    process.env.MUFFIN_CONTAINER = '1';
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      expect(await cmdUpdate(['--rollback'])).toBe(78);
+      expect(outputOf(spy)).toContain('Docker');
+    } finally {
+      spy.mockRestore();
+      restore(before);
+    }
+  });
+
+  it('runningInContainerImage reads the baked marker, nothing else', () => {
+    const before = saved();
+    try {
+      process.env.MUFFIN_CONTAINER = '1';
+      expect(runningInContainerImage()).toBe(true);
+      delete process.env.MUFFIN_CONTAINER;
+      expect(runningInContainerImage()).toBe(false);
+    } finally {
+      restore(before);
     }
   });
 });

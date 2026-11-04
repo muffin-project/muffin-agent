@@ -2,7 +2,8 @@ import type Database from 'better-sqlite3';
 import { DurableLock, type Liveness, type LockOutcome } from '../lock/durable.js';
 
 /**
- * One extractor at a time.
+ * One memory writer at a time: extraction, proposal reconciliation,
+ * retirement and owner decisions on open contradictions.
  *
  * The hole this closes: `pendingEpisodes` has no claim and no status column —
  * a hand-typed `muffin memory extract` overlapping a scheduled tick would read
@@ -85,7 +86,7 @@ export class IngestLock {
         schema: SCHEMA,
         staleAfterMs: STALE_AFTER_MS,
         refusal: (holder) => ({
-          held: `un'altra estrazione è già in corso (pid ${holder})`,
+          held: `un'altra operazione sulla memoria è già in corso (pid ${holder})`,
           remedy: 'aspetta che finisca e riprova',
         }),
       },

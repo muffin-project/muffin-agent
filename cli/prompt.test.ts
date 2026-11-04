@@ -1,6 +1,6 @@
 import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
-import { promptLine, promptSecret, resolveSecretInput } from './prompt.js';
+import { promptLine, promptSecret, resolveSecretInput, secretStoreHint } from './prompt.js';
 import { applica } from './schermo.js';
 
 /** A writable/readable pair that claims to be a TTY, so the prompts engage. */
@@ -279,5 +279,22 @@ describe('resolveSecretInput — TTY prompt vs piped stdin (P0 2026-09-18)', () 
     });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.message).toContain('non riesco a leggere stdin');
+  });
+});
+
+describe('secretStoreHint — one instruction for storing a secret', () => {
+  it('names the secret, the masked prompt and the vault pipe — never inline, env or --persist', () => {
+    const hint = secretStoreHint('github_pat');
+    expect(hint).toContain('muffin secret set github_pat');
+    expect(hint).toContain('nascosto');
+    expect(hint).toContain('op read');
+    expect(hint).not.toContain('echo -n "');
+    expect(hint).not.toContain('MUFFIN_');
+    expect(hint).not.toContain('--persist');
+  });
+
+  it('differs only by the secret name', () => {
+    const strip = (hint: string, name: string) => hint.split(name).join('NAME');
+    expect(strip(secretStoreHint('alpha_key'), 'alpha_key')).toBe(strip(secretStoreHint('beta_key'), 'beta_key'));
   });
 });
