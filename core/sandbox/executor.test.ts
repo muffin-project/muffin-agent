@@ -438,7 +438,11 @@ describe.runIf(gate.run)(`sandboxed execution holds (real containment — ${gate
     execFileSync('git', ['-C', repo, 'add', 'victim.txt'], { env: outside });
     expect(readFileSync(canary, 'utf8')).toContain('PWNED');
     rmSync(canary, { force: true });
+    // `git rm --cached` still sees the global config here, and that command
+    // runs the clean filter (measured: the canary comes back). Clear it
+    // again so the assertion below is only about the sterile re-add.
     execFileSync('git', ['-C', repo, 'rm', '--cached', '-q', '--', 'victim.txt'], { env: outside });
+    rmSync(canary, { force: true });
 
     const previousHome = process.env['HOME'];
     process.env['HOME'] = home;

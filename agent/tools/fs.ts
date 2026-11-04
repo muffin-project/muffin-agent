@@ -1218,15 +1218,18 @@ const COMMAND_BEARING_ATTR = /^(filter|diff|merge)=(.*)$/;
  * uncertain rather than guessed. Macro *uses* that do not themselves spell
  * the driver (`*.txt evil` where `[attr]evil` lives in another file) are
  * outside this scan.
+ *
+ * Separators are the bytes Git's attribute parser treats as blank: space,
+ * tab, and CR. A payload `*.txt\rfilter=probe` is two tokens, not a pattern
+ * that happens to contain a CR. VT and FF are not separators (measured
+ * against `git check-attr`). CR inside quotes stays part of the pattern.
  */
 function parseAttributeActivations(content: string): { keys: Set<string>; uncertain: boolean } {
   const keys = new Set<string>();
   if (content.includes('\0')) return { keys, uncertain: true };
   let uncertain = false;
-  for (const rawLine of content.split('\n')) {
-    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
-    const trimmed = line.trim();
-    if (trimmed === '' || trimmed.startsWith('#')) continue;
+  for (const line of content.split('\n')) {
+    if (attributeLineIsComment(line)) continue;
     const tokens = attributeTokens(line);
     if (tokens === null) {
       uncertain = true;
@@ -1244,6 +1247,18 @@ function parseAttributeActivations(content: string): { keys: Set<string>; uncert
   return { keys, uncertain };
 }
 
+/** Space, tab, and CR. Matches Git's attribute blank set, not C `isspace`. */
+function isAttrWhitespace(c: string): boolean {
+  return c === ' ' || c === '\t' || c === '\r';
+}
+
+/** A physical line whose first non-blank byte is `#`, or a blank line. CR does not start a new line. */
+function attributeLineIsComment(line: string): boolean {
+  let i = 0;
+  while (i < line.length && isAttrWhitespace(line[i]!)) i++;
+  return i === line.length || line[i] === '#';
+}
+
 /** `null` when a quoted token never closes. The pattern token is kept so two identical lines compare equal. */
 function attributeTokens(line: string): string[] | null {
   const tokens: string[] = [];
@@ -1251,7 +1266,7 @@ function attributeTokens(line: string): string[] | null {
   const n = line.length;
   while (i < n) {
     const c = line[i]!;
-    if (c === ' ' || c === '\t') {
+    if (isAttrWhitespace(c)) {
       i++;
       continue;
     }
@@ -1279,7 +1294,7 @@ function attributeTokens(line: string): string[] | null {
       continue;
     }
     const start = i;
-    while (i < n && line[i] !== ' ' && line[i] !== '\t') i++;
+    while (i < n && !isAttrWhitespace(line[i]!)) i++;
     tokens.push(line.slice(start, i));
   }
   return tokens;

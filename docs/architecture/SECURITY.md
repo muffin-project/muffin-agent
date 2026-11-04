@@ -857,17 +857,22 @@ change, so a repository that already uses LFS is not frozen.
 
 Sandbox Git does not inherit global or system config
 (`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` = `/dev/null` in
-`SandboxExecutor.childEnv`). Repo-local config still applies there. That is
-what keeps an attributes file planted outside `fs_write` from running the
-owner's global or system drivers inside the sandbox.
+`SandboxExecutor.childEnv`). Repo-local config still applies there. A later
+`git add` under that env does not run a global or system clean filter,
+including a re-add after an earlier command that did. `git config --get`
+and that `git add` agree. A `git rm --cached` that still sees the global
+config does run the clean filter; that execution is the non-sterile
+command, not the re-add.
 
-Still open: a shell write can plant `filter=`/`diff=`/`merge=` lines the
+Still open: `shell_run_write` can plant `filter=`/`diff=`/`merge=` lines the
 filesystem gate never sees; a later Git command outside the sandbox, using
-the owner's global and system config, will run them. Attribute macros whose
-definition is not in the written file (`[attr]evil filter=…` in another
-attributes file, then `*.txt evil`) are not classified. A driver configured
-only after the write is not visible at the gate. Repo-local drivers still
-run for sandbox Git when the activating line was planted outside `fs_write`.
+the owner's global and system config, will run them. `core.attributesFile`
+can name another workspace file, and a write to that path is not gated.
+Attribute macros whose definition is not in the written file
+(`[attr]evil filter=…` in another attributes file, then `*.txt evil`) are
+not classified. A driver configured only after the write is not visible at
+the gate. Repo-local drivers still run for sandbox Git when the activating
+line was planted outside `fs_write` / `fs_edit`.
 
 Process inspection should expose only the information required by the declared
 capability; command-line arguments are particularly sensitive because they may

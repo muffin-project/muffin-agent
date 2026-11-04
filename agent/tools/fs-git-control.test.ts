@@ -644,4 +644,67 @@ describe('command-bearing attribute activation (#657)', () => {
       expect(() => fsWrite(scope, '.gitattributes', '*.txt text\n')).not.toThrow();
     });
   });
+
+  it('denies a CR-separated filter assignment and does not leave a canary', () => {
+    const { base, dir, scope } = repo();
+    const mal = maliciousDrivers(base);
+    const host: NodeJS.ProcessEnv = {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: mal.cfg,
+      GIT_CONFIG_SYSTEM: '/dev/null',
+    };
+    const ordinary = '*.txt text\n';
+    // Git's attribute blank set includes CR, so this is `filter=probe`, not one pattern token.
+    const crPayload = '*.txt\rfilter=probe\n';
+    writeFileSync(join(dir, 'victim.txt'), 'hi\n');
+    writeFileSync(join(dir, '.gitattributes'), crPayload);
+    const seen = runGit(dir, ['check-attr', 'filter', '--', 'victim.txt'], host);
+    expect(seen.stdout).toContain('victim.txt: filter: probe');
+    expect(runGit(dir, ['add', 'victim.txt'], host).status).toBe(0);
+    expect(readFileSync(mal.filterCanary, 'utf8')).toContain('FILTER');
+
+    writeFileSync(join(dir, '.gitattributes'), ordinary);
+    rmSync(mal.filterCanary, { force: true });
+    withGitConfig(mal.cfg, () => {
+      expect(() => fsWrite(scope, '.gitattributes', crPayload)).toThrow(/filter\.probe/);
+      expect(readFileSync(join(dir, '.gitattributes'), 'utf8')).toBe(ordinary);
+      expect(() => fsEdit(scope, '.gitattributes', 'text', 'text\rfilter=probe')).toThrow(
+        /filter\.probe/,
+      );
+      expect(readFileSync(join(dir, '.gitattributes'), 'utf8')).toBe(ordinary);
+    });
+    expect(runGit(dir, ['add', 'victim.txt'], host).status).toBe(0);
+    expect(existsSync(mal.filterCanary)).toBe(false);
+  });
+
+  it('a sterile re-add does not run the global clean filter that git rm --cached did', () => {
+    const { base, dir } = repo();
+    const mal = maliciousDrivers(base);
+    const host: NodeJS.ProcessEnv = {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: mal.cfg,
+      GIT_CONFIG_SYSTEM: '/dev/null',
+    };
+    const sterile: NodeJS.ProcessEnv = { ...process.env, ...STERILE_GIT_CONFIG_ENV };
+    writeFileSync(join(dir, '.gitattributes'), '*.txt filter=probe\n');
+    writeFileSync(join(dir, 'victim.txt'), 'hi\n');
+    writeFileSync(join(dir, 'other.txt'), 'o\n');
+
+    expect(runGit(dir, ['add', 'other.txt'], sterile).status).toBe(0);
+    expect(existsSync(mal.filterCanary)).toBe(false);
+
+    expect(runGit(dir, ['add', 'victim.txt'], host).status).toBe(0);
+    expect(readFileSync(mal.filterCanary, 'utf8')).toContain('FILTER');
+    rmSync(mal.filterCanary, { force: true });
+
+    expect(runGit(dir, ['rm', '--cached', '-q', '--', 'victim.txt'], host).status).toBe(0);
+    expect(readFileSync(mal.filterCanary, 'utf8')).toContain('FILTER');
+    rmSync(mal.filterCanary, { force: true });
+
+    const hidden = runGit(dir, ['config', '--get', 'filter.probe.clean'], sterile);
+    expect(hidden.status).not.toBe(0);
+    expect(hidden.stdout).toBe('');
+    expect(runGit(dir, ['add', 'victim.txt'], sterile).status).toBe(0);
+    expect(existsSync(mal.filterCanary)).toBe(false);
+  });
 });
