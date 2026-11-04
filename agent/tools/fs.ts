@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import {
   closeSync,
   existsSync,
@@ -564,6 +565,16 @@ function isGitControlPath(target: string): boolean {
  * workspace path, and a write to that target alone would arm the next Git
  * command without touching any config.
  *
+ * A pre-existing filter, diff or merge driver does not need a new config
+ * write: `.gitattributes` names it, and the next trusted-host Git command
+ * runs it (#657). `assertGitAttributesDriverActivation` denies only that
+ * new assignment when the named driver already has a command. Ordinary
+ * attributes (`text`, `eol`, boolean `diff`/`merge`, comments) stay
+ * writable. Sandbox Git separately refuses the owner's global and system
+ * config (`STERILE_GIT_CONFIG_ENV` in `core/sandbox/executor.ts`), so an
+ * attributes file planted by some other door still does not execute those
+ * drivers inside the sandbox.
+ *
  * Includes resolve **recursively**: an included file is itself a config, so
  * its own `include.path` entries (relative to *its* directory, as Git
  * resolves them) and its `core.hooksPath` entries are collected too, with a
@@ -832,11 +843,17 @@ function expandTilde(raw: string, home: string | null): string | null {
 function parseGitConfigExecutionTargets(text: string): {
   includePaths: string[];
   hooksPaths: string[];
+  /** `kind` + NUL + `name` for a filter/diff/merge driver with a non-empty command. */
+  drivers: string[];
   uncertain: boolean;
+  /** Driver names could not be classified. Does not widen the hooks deny. */
+  driversUncertain: boolean;
 } {
   const includePaths: string[] = [];
   const hooksPaths: string[] = [];
+  const drivers: string[] = [];
   let uncertain = false;
+  let driversUncertain = false;
   // A trailing `\` joins the next physical line before anything else is lexed.
   const lines: string[] = [];
   let pending = '';
@@ -850,6 +867,7 @@ function parseGitConfigExecutionTargets(text: string): {
   }
   if (pending !== '') lines.push(pending);
   let section = '';
+  let subsection = '';
   for (const line of lines) {
     const trimmed = line.trim();
     if (trimmed === '' || trimmed.startsWith('#') || trimmed.startsWith(';')) continue;
@@ -859,8 +877,10 @@ function parseGitConfigExecutionTargets(text: string): {
       // the section name itself is still the discriminant. Every conditional
       // include is followed regardless of whether its condition matches
       // now: a condition that matches later would otherwise arm silently.
-      const name = sectionMatch[1].trim().split(/\s+/)[0]?.toLowerCase() ?? '';
-      section = name;
+      const header = splitGitConfigSection(sectionMatch[1]);
+      section = header.name;
+      subsection = header.subsection;
+      if (header.uncertain) driversUncertain = true;
       continue;
     }
     const eq = trimmed.indexOf('=');
@@ -870,19 +890,67 @@ function parseGitConfigExecutionTargets(text: string): {
     const rawValue = trimmed.slice(eq + 1);
     const isIncludeKey = (section === 'include' || section === 'includeif') && key === 'path';
     const isHooksKey = section === 'core' && key === 'hookspath';
-    if (!isIncludeKey && !isHooksKey) continue;
+    const driverKind = commandDriverKind(section, key);
+    if (!isIncludeKey && !isHooksKey && driverKind === null) continue;
     const parsed = parseGitConfigValue(rawValue);
     if (parsed.uncertain) {
-      uncertain = true;
+      if (isIncludeKey || isHooksKey) uncertain = true;
+      if (driverKind !== null) driversUncertain = true;
       continue;
     }
     // An empty `include.path` is fatal to Git; an empty `hooksPath` is the
-    // default. Neither names a target.
+    // default. Neither names a target. An empty driver command is not a
+    // command.
     if (parsed.value === '') continue;
     if (isIncludeKey) includePaths.push(parsed.value);
-    else hooksPaths.push(parsed.value);
+    else if (isHooksKey) hooksPaths.push(parsed.value);
+    else if (driverKind !== null && subsection !== '') drivers.push(`${driverKind}\0${subsection}`);
   }
-  return { includePaths, hooksPaths, uncertain };
+  return { includePaths, hooksPaths, drivers, uncertain, driversUncertain };
+}
+
+/** `filter.clean` / `diff.command` / `merge.driver` and the other command keys. */
+function commandDriverKind(section: string, key: string): 'filter' | 'diff' | 'merge' | null {
+  if (section === 'filter' && (key === 'clean' || key === 'smudge' || key === 'process'))
+    return 'filter';
+  if (section === 'diff' && (key === 'command' || key === 'textconv')) return 'diff';
+  if (section === 'merge' && key === 'driver') return 'merge';
+  return null;
+}
+
+/**
+ * `[filter "probe"]` → name `filter`, subsection `probe`. The subsection
+ * keeps its case: Git's driver lookup is case-sensitive. A header this
+ * parser cannot classify is `uncertain` for drivers only.
+ */
+function splitGitConfigSection(inner: string): {
+  name: string;
+  subsection: string;
+  uncertain: boolean;
+} {
+  const trimmed = inner.trim();
+  const match = /^([A-Za-z0-9-]+)(?:\s+([\s\S]+))?$/.exec(trimmed);
+  if (!match?.[1]) return { name: '', subsection: '', uncertain: true };
+  const name = match[1].toLowerCase();
+  const rest = (match[2] ?? '').trim();
+  if (rest === '') return { name, subsection: '', uncertain: false };
+  const parsed = parseGitConfigValue(rest);
+  if (parsed.uncertain) return { name, subsection: '', uncertain: true };
+  return { name, subsection: parsed.value, uncertain: false };
+}
+
+/** Git's own true-set for boolean env (`GIT_CONFIG_NOSYSTEM`). */
+function gitEnvTrue(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  switch (value.trim().toLowerCase()) {
+    case '1':
+    case 'true':
+    case 'yes':
+    case 'on':
+      return true;
+    default:
+      return false;
+  }
 }
 
 /**
@@ -999,6 +1067,290 @@ function realishPath(target: string): string {
       missing.push(current.slice(parent.length + 1));
       current = parent;
     }
+  }
+}
+
+/**
+ * Global Git config files the trusted host would read, honoring
+ * `GIT_CONFIG_GLOBAL` the way Git does. `/dev/null` is an explicit empty
+ * file. A missing default file is "no config", not uncertainty.
+ */
+function globalGitConfigFiles(): { files: string[]; uncertain: boolean } {
+  const override = process.env['GIT_CONFIG_GLOBAL'];
+  if (override !== undefined) {
+    if (override === '' || override === '/dev/null') return { files: [], uncertain: false };
+    return { files: [override], uncertain: false };
+  }
+  let home: string | null = null;
+  try {
+    home = homedir();
+  } catch {
+    home = null;
+  }
+  if (home === null || home === '') return { files: [], uncertain: true };
+  const xdg = process.env['XDG_CONFIG_HOME'];
+  const xdgRoot = xdg !== undefined && xdg !== '' ? xdg : join(home, '.config');
+  return { files: [join(home, '.gitconfig'), join(xdgRoot, 'git', 'config')], uncertain: false };
+}
+
+/**
+ * The system Git config file. `GIT_CONFIG_SYSTEM` and `GIT_CONFIG_NOSYSTEM`
+ * win. Otherwise ask `git config --system` for the compiled-in path and
+ * re-read that file in-process: the spawn is only path discovery, and the
+ * include walk below stays on the incarnation-safe reader.
+ */
+function systemGitConfigFiles(): { files: string[]; uncertain: boolean } {
+  if (gitEnvTrue(process.env['GIT_CONFIG_NOSYSTEM'])) return { files: [], uncertain: false };
+  const override = process.env['GIT_CONFIG_SYSTEM'];
+  if (override !== undefined) {
+    if (override === '' || override === '/dev/null') return { files: [], uncertain: false };
+    return { files: [override], uncertain: false };
+  }
+  const result = spawnSync('git', ['config', '--system', '--list', '--show-origin'], {
+    encoding: 'utf8',
+    timeout: 5_000,
+    env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' },
+  });
+  if (result.error !== undefined || result.status === null) return { files: [], uncertain: true };
+  const stderr = String(result.stderr ?? '');
+  if (result.status !== 0) {
+    if (/unable to read config file|no such file/i.test(stderr))
+      return { files: [], uncertain: false };
+    return { files: [], uncertain: true };
+  }
+  const files: string[] = [];
+  for (const line of String(result.stdout ?? '').split('\n')) {
+    const tab = line.indexOf('\t');
+    if (tab === -1) continue;
+    const origin = line.slice(0, tab);
+    if (!origin.startsWith('file:')) continue;
+    const path = origin.slice('file:'.length);
+    if (path === '' || files.includes(path)) continue;
+    files.push(isAbsolute(path) ? path : resolve(path));
+  }
+  return { files, uncertain: false };
+}
+
+/**
+ * Command-bearing drivers the next trusted-host Git would see for a write
+ * under `scopeRoot`: local repo config (including includes), then global,
+ * then system. A driver is present when any of those files gives it a
+ * non-empty command. Uncertainty fails closed at the attributes gate.
+ */
+function configuredCommandDrivers(
+  targetFile: string,
+  scopeRoot: string,
+): { drivers: Set<string>; uncertain: boolean } {
+  const drivers = new Set<string>();
+  let uncertain = false;
+  const seeds: string[] = [];
+  try {
+    const found = findEnclosingRepos(targetFile, scopeRoot);
+    if (found.uncertain) uncertain = true;
+    for (const repo of found.repos) {
+      const cand = gitConfigCandidates(repo.gitdir);
+      if (cand.uncertain) uncertain = true;
+      seeds.push(...cand.files);
+    }
+  } catch {
+    uncertain = true;
+  }
+  const globalFiles = globalGitConfigFiles();
+  if (globalFiles.uncertain) uncertain = true;
+  seeds.push(...globalFiles.files);
+  const systemFiles = systemGitConfigFiles();
+  if (systemFiles.uncertain) uncertain = true;
+  seeds.push(...systemFiles.files);
+
+  let home: string | null = null;
+  try {
+    home = homedir();
+  } catch {
+    home = null;
+  }
+  const visited = new Set<string>();
+  const stack: { file: string; depth: number }[] = seeds.map((file) => ({ file, depth: 0 }));
+  while (stack.length > 0) {
+    const { file, depth } = stack.pop()!;
+    const identity = norm(realishPath(file));
+    if (visited.has(identity)) continue;
+    visited.add(identity);
+    if (!existsSync(file)) continue;
+    let text: string;
+    try {
+      const read = readGitControlFile(file);
+      if (read === null) {
+        uncertain = true;
+        continue;
+      }
+      text = read;
+    } catch {
+      uncertain = true;
+      continue;
+    }
+    const parsed = parseGitConfigExecutionTargets(text);
+    if (parsed.driversUncertain) uncertain = true;
+    for (const driver of parsed.drivers) drivers.add(driver);
+    const originDir = dirname(file);
+    for (const raw of parsed.includePaths) {
+      const expanded = expandTilde(raw, home);
+      if (expanded === null) {
+        uncertain = true;
+        continue;
+      }
+      for (const abs of resolveGitConfigPaths(expanded, [originDir])) {
+        if (depth + 1 > GIT_INCLUDE_MAX_DEPTH) uncertain = true;
+        else stack.push({ file: abs, depth: depth + 1 });
+      }
+    }
+  }
+  return { drivers, uncertain };
+}
+
+const COMMAND_BEARING_ATTR = /^(filter|diff|merge)=(.*)$/;
+
+/**
+ * Command-bearing attribute assignments in one `.gitattributes` body.
+ *
+ * Narrow on purpose: a token `filter=<name>`, `diff=<name>` or `merge=<name>`
+ * after the pattern. Boolean `diff` / `-diff` / `merge`, `text`, `eol=lf`
+ * and a leading `#` comment are not assignments. An unterminated quote is
+ * uncertain rather than guessed. Macro *uses* that do not themselves spell
+ * the driver (`*.txt evil` where `[attr]evil` lives in another file) are
+ * outside this scan.
+ */
+function parseAttributeActivations(content: string): { keys: Set<string>; uncertain: boolean } {
+  const keys = new Set<string>();
+  if (content.includes('\0')) return { keys, uncertain: true };
+  let uncertain = false;
+  for (const rawLine of content.split('\n')) {
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+    const trimmed = line.trim();
+    if (trimmed === '' || trimmed.startsWith('#')) continue;
+    const tokens = attributeTokens(line);
+    if (tokens === null) {
+      uncertain = true;
+      continue;
+    }
+    const pattern = tokens[0] ?? '';
+    for (const token of tokens.slice(1)) {
+      const match = COMMAND_BEARING_ATTR.exec(token);
+      const kind = match?.[1];
+      const name = match?.[2];
+      if (kind === undefined || name === undefined || name === '') continue;
+      keys.add(`${pattern}\0${kind}=${name}`);
+    }
+  }
+  return { keys, uncertain };
+}
+
+/** `null` when a quoted token never closes. The pattern token is kept so two identical lines compare equal. */
+function attributeTokens(line: string): string[] | null {
+  const tokens: string[] = [];
+  let i = 0;
+  const n = line.length;
+  while (i < n) {
+    const c = line[i]!;
+    if (c === ' ' || c === '\t') {
+      i++;
+      continue;
+    }
+    if (c === '"') {
+      i++;
+      let tok = '';
+      let closed = false;
+      while (i < n) {
+        const d = line[i]!;
+        if (d === '\\' && i + 1 < n) {
+          tok += line[i + 1];
+          i += 2;
+          continue;
+        }
+        if (d === '"') {
+          closed = true;
+          i++;
+          break;
+        }
+        tok += d;
+        i++;
+      }
+      if (!closed) return null;
+      tokens.push(tok);
+      continue;
+    }
+    const start = i;
+    while (i < n && line[i] !== ' ' && line[i] !== '\t') i++;
+    tokens.push(line.slice(start, i));
+  }
+  return tokens;
+}
+
+function driverIdFromActivation(key: string): string {
+  const split = key.indexOf('\0');
+  const assignment = key.slice(split + 1);
+  const eq = assignment.indexOf('=');
+  return `${assignment.slice(0, eq)}\0${assignment.slice(eq + 1)}`;
+}
+
+function formatDriver(id: string): string {
+  const split = id.indexOf('\0');
+  return `${id.slice(0, split)}.${id.slice(split + 1)}`;
+}
+
+/**
+ * Deny a `.gitattributes` write whose new `filter`/`diff`/`merge` assignments
+ * name a driver that already has a command in trusted-host Git config (#657).
+ *
+ * Assignments already in the file stay, so an ordinary edit of a repo that
+ * uses LFS (or any other configured driver) is not a blanket deny. A name
+ * that resolves to no command is inert and stays writable.
+ */
+function assertGitAttributesDriverActivation(
+  scopeRoot: string,
+  full: string,
+  requested: string,
+  next: string,
+  previous: string | 'unreadable',
+): void {
+  if (norm(basename(full)) !== norm('.gitattributes')) return;
+  const after = parseAttributeActivations(next);
+  if (after.uncertain) {
+    throw new PathDenied(
+      `write denied by the root of trust: ${requested} .gitattributes could not be classified`,
+    );
+  }
+  if (after.keys.size === 0) return;
+  const before =
+    previous === 'unreadable'
+      ? { keys: new Set<string>(), uncertain: true }
+      : parseAttributeActivations(previous);
+  if (before.uncertain) {
+    throw new PathDenied(
+      `write denied by the root of trust: ${requested} .gitattributes could not be classified`,
+    );
+  }
+  const added: string[] = [];
+  for (const key of after.keys) if (!before.keys.has(key)) added.push(driverIdFromActivation(key));
+  if (added.length === 0) return;
+  const configured = configuredCommandDrivers(full, scopeRoot);
+  if (configured.uncertain) {
+    throw new PathDenied(
+      `write denied by the root of trust: ${requested} names a Git driver whose command configuration could not be classified`,
+    );
+  }
+  const hits = [...new Set(added.filter((id) => configured.drivers.has(id)))];
+  if (hits.length === 0) return;
+  throw new PathDenied(
+    `write denied by the root of trust: ${requested} activates command-bearing Git driver ${hits.map(formatDriver).join(', ')}`,
+  );
+}
+
+function existingAttributesText(full: string): string | 'unreadable' {
+  try {
+    if (!existsSync(full)) return '';
+    return readFileSync(full, 'utf8');
+  } catch {
+    return 'unreadable';
   }
 }
 
@@ -1433,6 +1785,15 @@ export function fsSearch(
 
 export function fsWrite(scope: FsScope, path: string, content: string, resolved?: string): string {
   const full = resolved ?? resolveInScope(scope, path, true);
+  if (norm(basename(full)) === norm('.gitattributes')) {
+    assertGitAttributesDriverActivation(
+      scope.root,
+      full,
+      path,
+      content,
+      existingAttributesText(full),
+    );
+  }
   mkdirSync(dirname(full), { recursive: true });
   // Same `O_NOFOLLOW` hardening as `fsRead`, and it closes the write half of
   // the TOCTOU window that matters more here: `resolveInScope` already
@@ -1514,6 +1875,7 @@ export function fsEdit(
     );
   }
   const updated = current.replace(oldText, newText);
+  assertGitAttributesDriverActivation(scope.root, full, path, updated, current);
   let fd: number;
   try {
     fd = openSync(
