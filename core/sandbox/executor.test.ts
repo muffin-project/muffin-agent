@@ -1,9 +1,18 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { createServer } from 'node:net';
-import { tmpdir, platform } from 'node:os';
+import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { SandboxExecutor, type ExecRequest } from './executor.js';
+import { type ExecRequest, SandboxExecutor, STERILE_GIT_CONFIG_ENV } from './executor.js';
 import { probeSandbox } from './probe.js';
 
 /**
@@ -403,6 +412,66 @@ describe.runIf(gate.run)(`sandboxed execution holds (real containment — ${gate
       }
     }, 20_000);
   });
+
+  it('does not run a pre-existing global filter driver (#657)', async () => {
+    const root = join(s.workspace, 'driver-657');
+    const home = join(root, 'home');
+    const repo = join(root, 'repo');
+    const canary = join(root, 'canary');
+    const script = join(root, 'filt.sh');
+    mkdirSync(home, { recursive: true });
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(script, `#!/bin/sh\necho PWNED > ${JSON.stringify(canary)}\ncat\n`);
+    chmodSync(script, 0o755);
+    writeFileSync(join(home, '.gitconfig'), `[filter "probe"]\n\tclean = ${script}\n`);
+    const outside: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: home,
+      GIT_CONFIG_SYSTEM: '/dev/null',
+    };
+    delete outside['GIT_CONFIG_GLOBAL'];
+    execFileSync('git', ['init', '-q', '-b', 'main', repo], {
+      env: { ...process.env, ...STERILE_GIT_CONFIG_ENV },
+    });
+    writeFileSync(join(repo, '.gitattributes'), '*.txt filter=probe\n');
+    writeFileSync(join(repo, 'victim.txt'), 'hi\n');
+    execFileSync('git', ['-C', repo, 'add', 'victim.txt'], { env: outside });
+    expect(readFileSync(canary, 'utf8')).toContain('PWNED');
+    rmSync(canary, { force: true });
+    // `git rm --cached` still sees the global config here, and that command
+    // runs the clean filter (measured: the canary comes back). Clear it
+    // again so the assertion below is only about the sterile re-add.
+    execFileSync('git', ['-C', repo, 'rm', '--cached', '-q', '--', 'victim.txt'], { env: outside });
+    rmSync(canary, { force: true });
+
+    const previousHome = process.env['HOME'];
+    process.env['HOME'] = home;
+    try {
+      const r = await executor.run({
+        command: [
+          "printf '%s\\n' '*.txt text eol=lf' > .gitattributes",
+          'git check-attr text eol filter -- victim.txt',
+          "printf '%s\\n' '*.txt filter=probe' > .gitattributes",
+          'if val=$(git config --get filter.probe.clean); then echo "LEAKED:$val"; exit 4; else echo NOGLOBAL; fi',
+          'git add victim.txt',
+          'echo ADDED',
+        ].join(' && '),
+        cwd: repo,
+        writeScope: [s.workspace],
+        timeoutMs: 15_000,
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('victim.txt: text: set');
+      expect(r.stdout).toContain('victim.txt: eol: lf');
+      expect(r.stdout).toContain('NOGLOBAL');
+      expect(r.stdout).toContain('ADDED');
+      expect(r.stdout).not.toContain('LEAKED');
+      expect(existsSync(canary)).toBe(false);
+    } finally {
+      if (previousHome === undefined) delete process.env['HOME'];
+      else process.env['HOME'] = previousHome;
+    }
+  }, 20_000);
 });
 
 describe('when the sandbox is unavailable', () => {
