@@ -38,7 +38,7 @@ export type ProviderChoice = {
    * owner picked a probed local runtime over the API question entirely
    * (`askLocalOrApi`), which `chooseProvider` never sees.
    */
-  readonly reason: 'explicit' | 'inferred' | 'default' | 'local';
+  readonly reason: 'explicit' | 'inferred' | 'default' | 'local' | 'oauth';
 };
 
 /**
@@ -83,6 +83,9 @@ export function describeProviderChoice(choice: ProviderChoice, key: string | und
   const label = 'provider'.padEnd(16);
   if (choice.reason === 'explicit') {
     return `✓ ${label} ${choice.provider}${where} — indicato con --provider\n`;
+  }
+  if (choice.reason === 'oauth') {
+    return `✓ ${label} ${choice.provider}${where} — collegato con OpenRouter OAuth\n`;
   }
   if (choice.reason === 'inferred') {
     const prefix = choice.provider === 'openai-compat' ? 'sk-or-…' : 'sk-ant-…';
@@ -143,7 +146,9 @@ export function describeSandboxProbe(probe: SandboxProbe): string {
   // owner never typed is exactly the kind of silent decision ADR-0036 forbids
   // for a question; it is worse for a root-level side effect. Taught, not run.
   if (probe.reason === 'userns_denied') {
-    lines.push('  (serve sudo — init non lo esegue da solo: copia il comando sopra ed eseguilo tu)');
+    lines.push(
+      '  (serve sudo — init non lo esegue da solo: copia il comando sopra ed eseguilo tu)',
+    );
   }
   return `${lines.join('\n')}\n`;
 }
@@ -175,7 +180,9 @@ export async function probeLocalRuntime(
   timeoutMs: number = LOCAL_RUNTIME_PROBE_TIMEOUT_MS,
 ): Promise<LocalRuntimeProbe> {
   const found = await discoverOpenAICompatModels({ baseUrl, timeoutMs });
-  return found.status === 'known' ? { available: true, baseUrl, models: found.models } : { available: false, baseUrl };
+  return found.status === 'known'
+    ? { available: true, baseUrl, models: found.models }
+    : { available: false, baseUrl };
 }
 
 /**
@@ -265,10 +272,16 @@ export async function askModelChoice(
     // A local runtime probed clean but listed no models (e.g. Ollama up, none
     // pulled yet) — nothing to number, so ask directly instead of printing an
     // empty menu.
-    const answer = await promptLine(`${header}\nNessun modello elencato — scrivine uno (Invio per lasciare il default): `, input, output);
+    const answer = await promptLine(
+      `${header}\nNessun modello elencato — scrivine uno (Invio per lasciare il default): `,
+      input,
+      output,
+    );
     return answer ? { main: answer, light: answer } : undefined;
   }
-  const menu = choices.map((c, i) => `  [${i + 1}] ${c.label} — ${c.main} (main) · ${c.light} (light)`).join('\n');
+  const menu = choices
+    .map((c, i) => `  [${i + 1}] ${c.label} — ${c.main} (main) · ${c.light} (light)`)
+    .join('\n');
   const answer = await promptLine(
     `${header}\n${menu}\n  ...oppure scrivi il nome di un modello\nScelta [1-${choices.length}] (Invio = 1): `,
     input,
@@ -294,7 +307,11 @@ export type ModelChoiceReason = 'explicit' | 'chosen' | 'default';
  * headless (owner's brief: the print happens regardless of whether a
  * question was ever asked, on a TTY or off one).
  */
-export function describeModelChoice(main: string, light: string, reason: ModelChoiceReason): string {
+export function describeModelChoice(
+  main: string,
+  light: string,
+  reason: ModelChoiceReason,
+): string {
   const label = 'modelli'.padEnd(16);
   const pair = `${main} (main) · ${light} (light)`;
   if (reason === 'explicit') return `✓ ${label} ${pair} — da --model/--light-model\n`;

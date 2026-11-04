@@ -90,7 +90,7 @@ and for scripts that need to know where things will land.
 | Source | `~/.local/share/muffin/src` — a real git checkout, cloned from the channel you asked for |
 | Build | `npm ci` in that checkout, producing `dist/` |
 | Command | `~/.local/bin/muffin` → a symlink into that build |
-| Setup | `muffin init` — creates `~/.muffin`, stores your key `0600`, seals the root of trust |
+| Setup | `muffin init` — creates `~/.muffin`, connects OpenRouter (OAuth or a key) or another API key `0600`, seals the root of trust |
 | Supervisor | `muffin gateway install --write --start` — writes the user unit, loads it, enables linger where applicable |
 
 For a personal install, Muffin's files stay in your home except for optional
@@ -205,12 +205,14 @@ So code lives under `~/.local/share/muffin` and data under `~/.muffin`. See
 
 ## Your API key never travels through argv or the environment
 
-`muffin init` reads the key from **stdin** and refuses both `--api-key <value>`
+`muffin init` reads a pasted key from **stdin** and refuses both `--api-key <value>`
 and `MUFFIN_API_KEY` by name: a value in `argv` is in your shell history and in
 every `ps` on the box, and one in the environment is readable from `/proc` and
 inherited by every child process. On a terminal the bootstrap restores the
-controlling terminal to `install.sh`, which lets `init` ask you with a masked
-prompt. Scripted/headless, point the canonical installer at a file:
+controlling terminal to `install.sh`. Init then recommends OpenRouter OAuth
+(browser, or a pasted code on SSH). Pasting a key is the fallback, and an
+empty Enter must be confirmed. Anthropic stays a Console API key. Scripted/headless,
+point the canonical installer at a file:
 
 ```bash
 MUFFIN_API_KEY_FILE=/run/secrets/muffin-key sh install.sh
