@@ -998,16 +998,16 @@ function runtimeFinto(): { porta: number; ferma: () => void } {
 }
 
 describe.skipIf(!haScript())('muffin init su un terminale vero', () => {
-  it('chiede la chiave — la domanda esiste solo qui', () => {
+  it('chiede come collegare il modello — la domanda esiste solo qui', () => {
     // Il ramo headless di sopra non la stampa mai. Se `cmdInit` smettesse di
     // chiedere, nessuno di quei test se ne accorgerebbe.
     const { dir, xdg } = scratchHome();
     const r = muffinTty(
       { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg, HOME: dir, ...SENZA_RUNTIME_LOCALE },
       ['init'],
-      'Chiave API',
+      'OpenRouter — browser',
     );
-    expect(r.out).toContain('Chiave API');
+    expect(r.out).toContain('OpenRouter — browser');
   });
 
   it('Ctrl+D alla prima domanda finisce come il ramo headless, non come un crash', () => {
@@ -1018,14 +1018,14 @@ describe.skipIf(!haScript())('muffin init su un terminale vero', () => {
     const r = muffinTty(
       { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg, HOME: dir, ...SENZA_RUNTIME_LOCALE },
       ['init'],
-      'Chiave API',
+      'OpenRouter — browser',
     );
 
     expect(r.out).not.toContain('unsettled top-level await');
     expect(r.code).not.toBe(13);
     // Init incompleto è 1, e dice cosa manca e come riprendere: è esattamente
-    // ciò che fa una pipe senza chiave, che è il punto — Ctrl+D a una domanda
-    // che dice «invio per saltare» non può fare peggio di Invio.
+    // ciò che fa una pipe senza chiave. Ctrl+D sul menu OAuth non collega
+    // niente e non può fare peggio di quel ramo.
     expect(r.code).toBe(1);
     expect(r.out).toContain('api key');
     expect(existsSync(join(dir, 'config.json'))).toBe(true);
@@ -1078,5 +1078,42 @@ describe.skipIf(!haScript())('muffin init su un terminale vero', () => {
     } finally {
       ferma();
     }
+  });
+});
+
+describe('muffin auth from the real CLI', () => {
+  it('lists a stored OpenRouter key and refuses subscription OAuth for Anthropic and xAI', () => {
+    const { dir, xdg } = scratchHome();
+    const init = muffin(
+      { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg },
+      ['init'],
+      'sk-or-v1-status-canary',
+    );
+    expect(init.code).toBe(0);
+    const status = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['auth', 'status']);
+    expect(status.code).toBe(0);
+    expect(status.out).toContain('openrouter default api-key secret://openrouter_api_key');
+    expect(status.out).not.toContain('sk-or-v1-status-canary');
+    expect(existsSync(join(dir, 'secrets', 'chatgpt'))).toBe(false);
+
+    const anthropic = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, [
+      'auth',
+      'login',
+      'anthropic',
+    ]);
+    expect(anthropic.code).toBe(2);
+    expect(anthropic.out).toContain('Console/API key');
+    const grok = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['auth', 'login', 'grok']);
+    expect(grok.code).toBe(2);
+    expect(grok.out).toContain('xAI/Grok');
+
+    const headless = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, [
+      'auth',
+      'login',
+      'openrouter',
+    ]);
+    expect(headless.code).toBe(1);
+    expect(headless.out).toContain('needs a terminal');
+    expect(headless.out).not.toContain('sk-or-v1-status-canary');
   });
 });

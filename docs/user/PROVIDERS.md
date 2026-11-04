@@ -1,10 +1,41 @@
 # Provider and model selection
 
+On a terminal, `muffin init` recommends OpenRouter OAuth: a browser loopback on
+this machine, or a one-time code pasted from the browser when SSH is detected.
+Pasting an API key is the advanced path. An empty Enter at the key prompt asks
+before skipping. Headless `muffin init` still reads the key from stdin.
+
+```sh
+muffin auth login openrouter
+muffin auth login openrouter --new work
+muffin auth login openrouter --code
+muffin auth status
+muffin auth switch openrouter work
+muffin chatgpt login
+```
+
+`muffin auth login openrouter` writes the user-scoped key into the secret
+backend as `secret://openrouter_api_key` (or `secret://openrouter_api_key_<id>`
+for another account) and points the main lane at OpenRouter. Light is left
+as it is. A second account is another profile, not a second login that also
+holds Claude or Grok. ChatGPT plan accounts stay on `muffin chatgpt` profile
+ids; `muffin auth status` lists those too. `muffin auth switch` changes only
+lanes that already use that provider.
+
+Anthropic is a Console API key, including Max, Ultra, and Team API credits.
+Muffin does not start a claude.ai or Claude Code login and does not read
+`~/.claude`. xAI/Grok OAuth is not part of this client.
+
+The key is saved before the capability probe. The probe uses the same
+inference check as `muffin doctor --online`. Muffin reports the route as
+working only after that probe passes.
+
 Run `muffin config` in a terminal to choose a lane, connect a provider, view its
-model catalog, and select a model. Main and light are independent: changing one
-preserves the other's model, endpoint, credentials and routing settings.
-The menu supports OpenRouter, Anthropic API, ChatGPT plan, and custom
-OpenAI-compatible endpoints such as a local Ollama server.
+model catalog, and select a model. Choosing OpenRouter with no key offers OAuth
+first. Main and light are independent: changing one preserves the other's
+model, endpoint, credentials and routing settings. The menu supports
+OpenRouter, Anthropic API, ChatGPT plan, and custom OpenAI-compatible
+endpoints such as a local Ollama server.
 
 Shortcuts use the same selection path:
 
@@ -16,7 +47,8 @@ muffin model main --provider chatgpt gpt-6.1-sol
 ```
 
 Provider keys must already be connected for a headless change. The terminal menu
-collects keys without echoing them; ChatGPT opens the browser for account consent.
+collects an OpenRouter authorization or a key without echoing the key; ChatGPT
+opens the browser for account consent.
 Credentials remain outside configuration and Git. A custom endpoint needs its
 own credential reference, even when its model name matches another provider:
 

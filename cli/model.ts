@@ -23,6 +23,7 @@ import { PROVIDERS, type ProviderEntry, providerFor } from '../core/config/provi
 import { askGateway } from '../core/gateway/control-socket.js';
 import { makeEmbedder } from '../core/memory/embed.js';
 import { openChatGPTBrowser } from './chatgpt-browser.js';
+import { ensureOpenRouterSecret, probeSavedRoute } from './openrouter-connect.js';
 import { promptLine, promptSecret } from './prompt.js';
 
 /**
@@ -247,6 +248,8 @@ export type ModelDeps = {
   /** Account lifecycle is read-only here; conversational callers never sign in or prompt for keys. */
   chatgpt?: Pick<ChatGPTConnection, 'listModels' | 'session' | 'signIn'>;
   verify?: typeof verifyInferenceRoute;
+  /** Interactive OpenRouter connect. Tests inject this so a menu never opens a browser. */
+  ensureOpenRouter?: typeof ensureOpenRouterSecret;
   ask?: (question: string) => Promise<string | undefined>;
   interactive?: boolean;
   /** Sonda l'embedder per misurarne la dimensione. Iniettabile: un test non ha un embedder acceso. */
@@ -559,6 +562,7 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
     lane === 'embed' ? original : withInferenceProvider(original, switchLane, selectedProvider);
   const entry = lane === 'embed' ? providerFor(config.provider) : providerFor(selectedProvider);
   const chatgpt = selectedProvider.kind === 'openai-chatgpt';
+  let oauthJustConnected = false;
 
   if (
     !chatgpt &&
@@ -568,14 +572,32 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
     if (keyForEndpoints(selectedProvider, home) === undefined) {
       const entryForSecret = providerFor(selectedProvider);
       const name = selectedProvider.apiKeyRef.replace(/^secret:\/\//, '');
-      const key = await promptSecret(
-        `Chiave API per ${entryForSecret?.label ?? selectedProvider.kind}${requestedEndpoint === undefined ? ' (nascosta; invio annulla)' : ' (nascosta; endpoint locale senza auth: inserisci local)'}: `,
-      );
-      if (!key) {
-        out('Selezione annullata. Configurazione preservata.');
-        return 1;
+      if (entryForSecret?.id === 'openrouter') {
+        const outcome = await (deps.ensureOpenRouter ?? ensureOpenRouterSecret)({
+          home,
+          secretName: name,
+          out,
+          ask: deps.ask ?? promptLine,
+          ssh: Boolean(process.env.SSH_CONNECTION || process.env.SSH_TTY),
+          stdinIsTTY: process.stdin.isTTY === true,
+        });
+        if (outcome === 'cancelled') {
+          out('Selezione annullata. Configurazione preservata.');
+          return 1;
+        }
+        oauthJustConnected = outcome === 'oauth-pkce';
+      } else {
+        const anthropicNote =
+          entryForSecret?.id === 'anthropic' ? ' Chiave Console/API, non un login claude.ai.' : '';
+        const key = await promptSecret(
+          `Chiave API per ${entryForSecret?.label ?? selectedProvider.kind}${requestedEndpoint === undefined ? ' (nascosta; invio vuoto chiede conferma)' : ' (nascosta; endpoint locale senza auth: inserisci local)'}:${anthropicNote} `,
+        );
+        if (!key) {
+          out('Selezione annullata. Configurazione preservata.');
+          return 1;
+        }
+        writeAuthoritativeSecret(name, key, home);
       }
-      writeAuthoritativeSecret(name, key, home);
     }
   } else if (!chatgpt && (requestedProvider !== undefined || requestedEndpoint !== undefined)) {
     const selectedEntry = providerFor(selectedProvider);
@@ -589,6 +611,17 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
       return 1;
     }
   }
+
+  const finishProbe = async (code: number): Promise<number> => {
+    if (code !== 0 || !oauthJustConnected || entry?.id !== 'openrouter') return code;
+    const probeCode = await probeSavedRoute(home, out, {
+      ...(deps.verify ? { verify: deps.verify } : {}),
+      lane: switchLane,
+      style: 'it',
+    });
+    if (probeCode !== 0) out('La chiave è salvata. Riprova la prova con `muffin doctor --online`.');
+    return probeCode;
+  };
 
   if (argv.length === 0) {
     mostra(original, out);
@@ -654,6 +687,9 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
       out(`${m.id}  ${usd(m.inputPerMTok)}/${usd(m.outputPerMTok)} per MTok`);
     if (righe.length > 60)
       out(`… e altri ${righe.length - 60}. Restringi con \`muffin model --list <filtro>\`.`);
+    if (oauthJustConnected && entry.id === 'openrouter') {
+      out('Chiave OpenRouter salvata. La prova della rotta parte quando scegli un modello.');
+    }
     return 0;
   }
 
@@ -791,7 +827,9 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
     }
     const fallbackChoice = config.embedder?.fallback;
     if (fallbackChoice !== undefined) {
-      const fallbackDimensions = makeEmbedder(fallbackChoice, (ref) => readSecret(ref, home)).dimensions;
+      const fallbackDimensions = makeEmbedder(fallbackChoice, (ref) =>
+        readSecret(ref, home),
+      ).dimensions;
       if (fallbackDimensions !== dim) {
         out(
           `La dimensione misurata (${dim}) non coincide con il fallback (${fallbackDimensions}): ` +
@@ -903,7 +941,7 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
     out(`${lane} → ${slug}, NON verificato.`);
     for (const note of switched.notes) out(note);
     await attiva(switched.config, slug);
-    return 0;
+    return finishProbe(0);
   }
 
   const trovato = catalogo.find((m) => m.id === slug);
@@ -937,7 +975,7 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
   await attiva(switched.config, slug);
   if (lane === 'main')
     out('Il profilo si risceglie da solo dal nome del modello: `muffin doctor` dice quale.');
-  return 0;
+  return finishProbe(0);
 }
 
 async function guidedModelSelection(
@@ -984,6 +1022,25 @@ async function guidedModelSelection(
     deps.out(`Provider sconosciuto: ${id}.`);
     return 2;
   }
+  let authorizedOpenRouter = false;
+  if (entry.id === 'openrouter' && deps.interactive) {
+    const selected = providerConfigFor(current, entry.id);
+    if (selected && keyForEndpoints(selected, home) === undefined) {
+      const outcome = await (deps.ensureOpenRouter ?? ensureOpenRouterSecret)({
+        home,
+        secretName: selected.apiKeyRef.replace(/^secret:\/\//, ''),
+        out: deps.out,
+        ask,
+        ssh: Boolean(process.env.SSH_CONNECTION || process.env.SSH_TTY),
+        stdinIsTTY: true,
+      });
+      if (outcome === 'cancelled') {
+        deps.out('Selezione annullata. Configurazione preservata.');
+        return 1;
+      }
+      authorizedOpenRouter = outcome === 'oauth-pkce';
+    }
+  }
   if (entry.kind === 'openai-chatgpt') {
     try {
       const connection = deps.chatgpt ?? new ChatGPTConnection(home);
@@ -1010,7 +1067,16 @@ async function guidedModelSelection(
     deps.out('Selezione annullata.');
     return 1;
   }
-  return cmdModel(home, [laneAnswer, ...providerArgs, model], deps);
+  const code = await cmdModel(home, [laneAnswer, ...providerArgs, model], deps);
+  if (code !== 0 || !authorizedOpenRouter) return code;
+  const probeCode = await probeSavedRoute(home, deps.out, {
+    ...(deps.verify ? { verify: deps.verify } : {}),
+    lane: laneAnswer,
+    style: 'it',
+  });
+  if (probeCode !== 0)
+    deps.out('La chiave è salvata. Riprova la prova con `muffin doctor --online`.');
+  return probeCode;
 }
 
 /**

@@ -54,11 +54,24 @@ describe('terminal prompts read the typed line', () => {
     await expect(pending).resolves.toBe('sk-or-v1-typed');
   });
 
-  it('promptSecret treats an empty line as skipped (undefined)', async () => {
+  it('promptSecret asks before treating an empty line as a skip', async () => {
     const { input, output } = fakeTty();
     const pending = promptSecret('key: ', input, output);
     input.write('\n');
+    await respiro();
+    input.write('y\n');
     await expect(pending).resolves.toBeUndefined();
+  });
+
+  it('promptSecret keeps asking when the empty line is not confirmed', async () => {
+    const { input, output } = fakeTty();
+    const pending = promptSecret('key: ', input, output);
+    input.write('\n');
+    await respiro();
+    input.write('n\n');
+    await respiro();
+    input.write('sk-or-v1-after-empty\n');
+    await expect(pending).resolves.toBe('sk-or-v1-after-empty');
   });
 
   it('promptLine reads and trims a line', async () => {
