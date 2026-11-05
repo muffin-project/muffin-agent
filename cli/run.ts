@@ -4,8 +4,21 @@ import { runTurn, type TurnResult } from '../agent/loop.js';
 import { loadImage } from '../agent/images.js';
 import { paths } from '../core/config/config.js';
 import { localExecAllowed, NO_GATEWAY_REMEDY, resolveExecutionOwner } from '../core/gateway/ownership.js';
-import { mintExecutionId, runViaGateway, UnknownOutcomeError } from '../core/gateway/forward.js';
+import {
+  mintExecutionId,
+  runViaGateway,
+  submitViaGateway,
+  UnknownOutcomeError,
+} from '../core/gateway/forward.js';
+import { isSafeControlToken } from '../core/gateway/control-socket.js';
 import { describeAbort } from './abort.js';
+import {
+  ATTACH_DEFAULT_WAIT_SEC,
+  attachIdentify,
+  pollTurn,
+  queryTurn,
+  reportPollOutcome,
+} from './gateway-attach.js';
 
 /**
  * Headless single turn.
@@ -24,6 +37,16 @@ export type RunOptions = {
   home?: string;
   /** Percorsi di immagini da mostrare al modello insieme all'obiettivo. */
   images?: string[];
+  /**
+   * Submit + poll invece di streaming: sottomette al gateway vivo con un id
+   * stabile e interroga l'esito durevole fino al wait-cap, senza tenere un
+   * socket aperto. Stesso id = mai una riesecuzione.
+   */
+  attach?: boolean;
+  /** Wait-cap dell'attach in secondi (0 = senza limite). Default 600. */
+  waitSec?: number;
+  /** Id di execution stabile per l'attach (default coniato). */
+  executionId?: string;
 };
 
 /** 0 answered · 1 error · 3 needs approval · 4 budget · 5 iteration cap · 6 suspended · 7 continuable */
@@ -108,6 +131,59 @@ export async function runHeadless(options: RunOptions): Promise<RunExit> {
   }
   if (proprietario.kind === 'gateway') {
     process.stderr.write(`esecuzione sul gateway (pid ${proprietario.pid})\n`);
+    if (options.attach === true) {
+      // Submit + poll: il socket si chiude dopo `started`, l'esito si legge
+      // per id fino al wait-cap. Un job o uno script esterno non tiene in
+      // vita niente oltre il poll — e se muore, riattacca con lo stesso id.
+      const turnId = options.executionId ?? mintExecutionId();
+      if (!isSafeControlToken(turnId)) {
+        process.stderr.write(`--id non usabile: ${turnId}\n`);
+        if (timeout) clearTimeout(timeout);
+        runtime.close();
+        return 1;
+      }
+      let submitted: string;
+      try {
+        submitted = await submitViaGateway(
+          home,
+          {
+            id: turnId,
+            text: options.goal,
+            sessionId: session.id,
+            ...(images.length > 0 ? { images } : {}),
+          },
+        );
+      } catch (error) {
+        if (timeout) clearTimeout(timeout);
+        runtime.close();
+        if (error instanceof UnknownOutcomeError) {
+          process.stderr.write(
+            `esito sconosciuto — il turno ${error.turnId.slice(0, 12)} potrebbe aver completato, effetti inclusi\n` +
+              `→ \`muffin gateway turn ${error.turnId}\` per l'esito, non rilanciare alla cieca\n`,
+          );
+          return 1;
+        }
+        process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+        return 1;
+      }
+      if (timeout) clearTimeout(timeout);
+      const waitSec = options.waitSec ?? ATTACH_DEFAULT_WAIT_SEC;
+      process.stderr.write(
+        `sottomesso ${submitted.slice(0, 12)} — poll fino a ${waitSec === 0 ? 'senza limite' : `${waitSec}s`} (stesso id, mai rieseguito)\n`,
+      );
+      const outcome = await pollTurn({
+        waitSec,
+        identify: () => attachIdentify(home),
+        query: () => queryTurn(home, submitted),
+      });
+      const code = reportPollOutcome(outcome, {
+        ...(options.json ? { json: true } : {}),
+        id: submitted,
+        waitSec,
+      });
+      runtime.close();
+      return code;
+    }
   } else {
     // Esplicito, su stderr (stdout resta la risposta e basta): con un gateway
     // vivo questo comando non eseguirebbe mai in proprio — se lo fa, lo dice.
