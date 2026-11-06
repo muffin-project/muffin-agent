@@ -1,8 +1,8 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { paths } from '../config/config.js';
 import type { BudgetCaps } from '../budget/budget.js';
+import { paths } from '../config/config.js';
 // Type-only, so this module takes no runtime dependency on the scheduler — but
 // it does take the *name*. A second `QuietHours` declared here would be a
 // second referent for one term, which is how `origin`/`source_kind` happened.
@@ -30,17 +30,17 @@ import type { QuietHours } from '../scheduler/proactivity.js';
  * hashing a *fragment* of a mutable file is not something the manifest can
  * express. So the cap lives in the sealed file and nowhere else.
  *
-  * **Three halves, parsed independently.** Quiet hours, spend caps and the
-  * unmetered-endpoint list live in one file and answer to three unrelated
-  * features. A single parse would make a mistyped cap open the night, a
-  * mistyped hour remove the spend ceiling, and a mistyped endpoint silently
-  * bill (or silently zero-bill) — couplings nobody would choose if the three
-  * were in separate files, so the shared file must not create them. A missing
-  * `unmetered` section is not a broken half: it is how every home sealed
-  * before the section existed says "no exceptions", so it parses silently to
-  * an empty list. A present-but-malformed section fails safe to metered, with
-  * a note, for the same reason a mistyped cap falls back instead of guessing.
-  */
+ * **Three halves, parsed independently.** Quiet hours, spend caps and the
+ * unmetered-endpoint list live in one file and answer to three unrelated
+ * features. A single parse would make a mistyped cap open the night, a
+ * mistyped hour remove the spend ceiling, and a mistyped endpoint silently
+ * bill (or silently zero-bill) — couplings nobody would choose if the three
+ * were in separate files, so the shared file must not create them. A missing
+ * `unmetered` section is not a broken half: it is how every home sealed
+ * before the section existed says "no exceptions", so it parses silently to
+ * an empty list. A present-but-malformed section fails safe to metered, with
+ * a note, for the same reason a mistyped cap falls back instead of guessing.
+ */
 
 type BudgetsSource = 'sealed' | 'fallback';
 
@@ -139,6 +139,52 @@ function isRealTimezone(tz: string): boolean {
   }
 }
 
+/**
+ * Il fuso dell'owner al primo avvio, rilevato dalla macchina su cui gira `init`.
+ *
+ * `defaults/rot/budgets.json` spedisce `UTC` di proposito (e10f4b4f: niente fuso
+ * del fondatore nel pacchetto), e il suo stesso commento assegna a first-run/setup
+ * il compito di sostituirlo col fuso rilevato. Nessuno lo faceva: una Home nuova
+ * a Roma diceva al modello «Adesso … UTC» a ogni turno e leggeva le quiet hours
+ * un'ora indietro. `undefined` quando il processo non sa niente di meglio del
+ * fallback neutro (nessun fuso, `UTC`/`Etc/UTC`, o un nome che il runtime non
+ * riconosce): in quei casi resta `UTC` e non si inventa nulla.
+ */
+export function detectOwnerTimezone(
+  resolved: string | undefined = Intl.DateTimeFormat().resolvedOptions().timeZone,
+): string | undefined {
+  if (resolved === undefined || resolved.length === 0) return undefined;
+  if (/^(Etc\/)?(UTC|UCT|GMT|Universal|Zulu)$/i.test(resolved)) return undefined;
+  return isRealTimezone(resolved) ? resolved : undefined;
+}
+
+/**
+ * Sostituisce il fuso delle quiet hours **solo** se è ancora il fallback
+ * spedito (`QUIET_FLOOR.timezone`): un fuso già scelto dall'owner non si tocca.
+ * Riscrive la sola stringa del campo, non il file intero, così il resto (il
+ * commento, l'ordine, la formattazione) resta byte per byte quello spedito.
+ * Ritorna `true` se ha scritto. Il chiamante sigilla dopo (`runInit` sigilla per
+ * ultimo): questo file è nel root of trust.
+ */
+export function seedQuietTimezone(file: string, timezone: string): boolean {
+  if (!existsSync(file) || !isRealTimezone(timezone)) return false;
+  const text = readFileSync(file, 'utf8');
+  let parsed: { quietHours?: { timezone?: unknown } };
+  try {
+    parsed = JSON.parse(text) as typeof parsed;
+  } catch {
+    return false;
+  }
+  if (parsed.quietHours?.timezone !== QUIET_FLOOR.timezone) return false;
+  const re = /("quietHours"\s*:\s*\{[^}]*"timezone"\s*:\s*)"([^"]*)"/;
+  if (!re.test(text)) return false;
+  const next = text.replace(re, (_m, head: string) => `${head}${JSON.stringify(timezone)}`);
+  const check = JSON.parse(next) as { quietHours?: { timezone?: unknown } };
+  if (check.quietHours?.timezone !== timezone) return false;
+  writeFileSync(file, next, 'utf8');
+  return true;
+}
+
 const QuietShape = z.object({
   from: z.string().regex(/^\d{1,2}:\d{2}$/),
   to: z.string().regex(/^\d{1,2}:\d{2}$/),
@@ -191,13 +237,17 @@ export function loadSealedBudgets(home: string): SealedBudgets {
   // it — this is the file that says how much money the agent may spend.
   const version = (raw as { schemaVersion?: unknown }).schemaVersion;
   if (version !== SCHEMA_VERSION) {
-    return both(`${file}: schemaVersion ${String(version)}, questa build ne capisce ${SCHEMA_VERSION}`);
+    return both(
+      `${file}: schemaVersion ${String(version)}, questa build ne capisce ${SCHEMA_VERSION}`,
+    );
   }
 
   const notes: string[] = [];
   const caps = CapsShape.safeParse(raw);
   if (!caps.success) {
-    notes.push(`${file}: tetto di spesa non valido (${issue(caps.error)}) — valgono i valori compilati`);
+    notes.push(
+      `${file}: tetto di spesa non valido (${issue(caps.error)}) — valgono i valori compilati`,
+    );
   }
   const quiet = QuietShape.safeParse((raw as { quietHours?: unknown }).quietHours);
   if (!quiet.success) {
@@ -227,7 +277,11 @@ export function loadSealedBudgets(home: string): SealedBudgets {
   };
 }
 
-function parseUnmetered(raw: unknown, file: string, notes: string[]): { list: UnmeteredEndpoint[]; source: BudgetsSource } {
+function parseUnmetered(
+  raw: unknown,
+  file: string,
+  notes: string[],
+): { list: UnmeteredEndpoint[]; source: BudgetsSource } {
   const value = (raw as { unmetered?: unknown }).unmetered;
   // Absent is not broken: every home sealed before this section existed says
   // "no exceptions" by omission, and warning on all of them would be noise.
