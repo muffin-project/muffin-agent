@@ -24,7 +24,7 @@ import { buildRuntime } from './runtime.js';
 
 function bootHome(): string {
   const home = mkdtempSync(join(tmpdir(), 'muffin-effectswire-'));
-  runInit({ home, apiKey: 'sk-never-called' });
+  runInit({ home, apiKey: 'sk-never-called', timeZone: 'UTC' });
   return home;
 }
 

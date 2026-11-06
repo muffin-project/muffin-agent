@@ -31,6 +31,7 @@ function home(): string {
     apiKey: 'sk-or-v1-fixture',
     provider: 'openai-compat',
     baseUrl: 'https://openrouter.ai/api/v1',
+    timeZone: 'UTC',
   });
   return dir;
 }
