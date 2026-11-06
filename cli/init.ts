@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { SCHEMA as BUDGET_SCHEMA } from '../core/budget/budget.js';
 import { schemaVersionOf, stampFresh } from '../core/db/migrate.js';
 import { seal } from '../core/rot/verify.js';
+import { detectOwnerTimezone, seedQuietTimezone } from '../core/rot/budgets.js';
 import { isShippedDefault, recordCopied } from '../core/config/defaults-drift.js';
 import { LEGACY_API_KEY_NAME, apiKeyCandidates, apiKeyNameFor } from '../core/config/providers.js';
 import {
@@ -59,6 +60,8 @@ export type InitOptions = {
   promptVersion?: PromptVersion;
   hardened?: boolean;
   force?: boolean;
+  /** Il fuso da usare al posto di quello rilevato dal processo (test). */
+  timeZone?: string;
 };
 
 export type InitStep = { name: string; done: boolean; detail: string };
@@ -152,6 +155,19 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   for (const f of skills) copiedForRegistry.push({ path: `skills/${f.relPath}`, content: readFileSync(f.dst) });
   for (const f of v2) copiedForRegistry.push({ path: `v2/${f.relPath}`, content: readFileSync(f.dst) });
   recordCopied(home, copiedForRegistry);
+
+  // Il fuso dell'owner, dopo il registro e prima del sigillo. Dopo il registro
+  // perché `recordCopied` deve tenere l'hash del file *spedito*: così `doctor`
+  // lo vede come «modificato dall'owner» e non propone un `cp` che riporterebbe
+  // UTC. Solo su un budgets.json copiato in questo giro — una Home esistente ha
+  // già il suo, e `init` non la riscrive (vedi sotto). Prima del sigillo perché
+  // il file è nel root of trust e il manifest deve descriverlo com'è finito.
+  if (installed.some((f) => f.relPath === 'budgets.json')) {
+    const zona = detectOwnerTimezone(options.timeZone);
+    if (zona !== undefined && seedQuietTimezone(join(p.rot, 'budgets.json'), zona)) {
+      step('timezone', `${zona} (rilevato da questa macchina, in rot/budgets.json → quietHours.timezone)`);
+    }
+  }
 
   // The CLI layer (cmdInit) owns key acquisition — flag, env, or the interactive
   // prompt — and its validation (e.g. rejecting a pasted Telegram token). Reading

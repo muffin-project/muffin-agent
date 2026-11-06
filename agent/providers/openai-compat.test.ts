@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { OpenAICompatProvider, wantsExplicitCache } from './openai-compat.js';
+import { OpenAICompatProvider, openRouterReasoningCapabilities, wantsExplicitCache } from './openai-compat.js';
 import { type ChatCall, ProviderError, ProviderStreamError, type StreamEvent } from './types.js';
 
 /**
@@ -115,7 +115,7 @@ describe('OpenRouter model router', () => {
     });
   });
 
-  it('does not reject the conservative off request when the router omits reasoning metadata', async () => {
+  it('sends the off request to the router instead of omitting it (omission left 92–99% reasoning, 04/11/2026)', async () => {
     const bodies: unknown[] = [];
     const provider = new OpenAICompatProvider('sk-test', 'https://openrouter.ai/api/v1', {}, {
       metadataFetch: async () => new Response(JSON.stringify({ data: { id: 'openrouter/free' } }), { status: 200 }),
@@ -127,7 +127,28 @@ describe('OpenRouter model router', () => {
     });
 
     await provider.chat({ ...CALL, model: 'openrouter/free', thinking: 'off' });
-    expect(bodies[0]).not.toHaveProperty('reasoning');
+    expect(bodies[0]).toMatchObject({ reasoning: { effort: 'none' } });
+  });
+
+  it('keeps the router off request when the metadata fetch fails, from the same static answer', async () => {
+    const bodies: unknown[] = [];
+    const provider = new OpenAICompatProvider('sk-test', 'https://openrouter.ai/api/v1', {}, {
+      metadataFetch: async () => new Response('nope', { status: 503 }),
+      fetch: async (_input: string | URL | Request, init?: RequestInit) => {
+        const body = typeof init?.body === 'string' ? init.body : '{}';
+        bodies.push(JSON.parse(body));
+        return new Response(JSON.stringify(A_COMPLETION), { status: 200, headers: { 'content-type': 'application/json' } });
+      },
+    });
+
+    await provider.chat({ ...CALL, model: 'openrouter/free', thinking: 'off' });
+    expect(bodies[0]).toMatchObject({ reasoning: { effort: 'none' } });
+  });
+
+  it('never claims an exact reasoning budget for a router', () => {
+    const { capabilities } = openRouterReasoningCapabilities('openrouter/auto', 'https://openrouter.ai/api/v1');
+    expect(capabilities).toMatchObject({ support: 'supported', canDisable: true, supportsMaxTokens: false, mandatory: false });
+    expect(capabilities.supportedEfforts).toBeUndefined();
   });
 });
 

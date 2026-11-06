@@ -268,7 +268,13 @@ describe('the owner-class prompt does not move', () => {
     // d'azione, ride con l'owner e non tratta un «hey» come un ticket. È un
     // cold-start deliberato della cache: una volta, non a ogni turno.
     // Pin precedente: `7e98f233b3da23b3d5c03513b73d337f10b6032d78636a7352ff955afb7c4d95`.
-    '968d931d68a71a1344f4891fd80710319eceb215fe75806be3df6a688d5a37d8';
+    // Ri-fissato 2026-11-06 (dogfood, attriti del turno): la riga tool-poi-shell
+    // non manda più a `sys_inspect` per «che modello ti esegue» — la risposta è
+    // già in «Questo turno», e la vecchia frase faceva pagare a un saluto un
+    // secondo passaggio col report doctor intero (19,5k token in invece di ~9k,
+    // audit del 04/11). Pin precedente:
+    // `968d931d68a71a1344f4891fd80710319eceb215fe75806be3df6a688d5a37d8`.
+    '0f34bc891dc38f2e05ba6ce95b441ed89de6dd306720129ed1c150621664b5eb';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
@@ -385,7 +391,10 @@ describe('the owner-class prompt does not move', () => {
   // Ri-fissato 2026-10-19 (G2 carattere): voice.md dà alla stanza i divieti
   // espliciti (coach, terapeuta, framework) e «rido con te, non di te».
   // Pin precedente: `ef99d12c6473eae61ff40ab5b2eaeb87b9644b95ecd54487bb7fa1b0f411275e`.
-  const GROUP_PROMPT_SHA_V1 = '40b3537705a3166a4881b573e8d3130cf39192367989554bda100a045cf2d1ae';
+  // Ri-fissato 2026-11-06 insieme al pin owner, per la stessa riga di
+  // `WORK_RULES` (il modello sta in «Questo turno», non in `sys_inspect`).
+  // Pin precedente: `40b3537705a3166a4881b573e8d3130cf39192367989554bda100a045cf2d1ae`.
+  const GROUP_PROMPT_SHA_V1 = '050db00803df6c989e007af417a0b68ba6701c9937d25700403aa57ee096e0b3';
 
   /**
    * Ri-fissato 2026-10-10: la regola sull'esposizione progressiva chiarisce

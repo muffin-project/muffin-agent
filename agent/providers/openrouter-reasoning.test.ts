@@ -58,11 +58,11 @@ describe('OpenRouter reasoning discovery', () => {
     expect(result.capabilities.support).toBe('unknown');
   });
 
-  it('treats openrouter/free as a dynamic router without a fixed reasoning capability', async () => {
+  it('treats openrouter/free as a dynamic router: off is sendable, no fixed levels or budget', async () => {
     const discovery = new OpenRouterReasoningDiscovery({ fetch: async () => response({ id: 'openrouter/free' }) });
     const result = await discovery.resolve(BASE, 'openrouter/free');
 
-    expect(result.capabilities.support).toBe('unsupported');
+    expect(result.capabilities).toEqual({ support: 'supported', canDisable: true, supportsMaxTokens: false, mandatory: false });
     expect(result.source).toBe('openrouter-live');
   });
 });

@@ -14,7 +14,8 @@ import {
 } from '../core/config/config.js';
 import { readDefaultsRegistry } from '../core/config/defaults-drift.js';
 import { muffinWorkspace } from '../core/config/workspace.js';
-import { sha256 } from '../core/rot/verify.js';
+import { loadSealedBudgets } from '../core/rot/budgets.js';
+import { sha256, verify } from '../core/rot/verify.js';
 import { isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
 
 /**
@@ -105,7 +106,9 @@ describe('runInit — the defaults registry it hands `muffin doctor` (core/confi
 
   it('records the hash of every file it actually copies, matching the bytes on disk', () => {
     const dir = freshHome();
-    runInit({ home: dir, apiKey: 'sk-never-called' });
+    // `UTC` esplicito: con un fuso rilevato `budgets.json` viene personalizzato
+    // dopo la copia, e il registro tiene apposta l'hash spedito (test sotto).
+    runInit({ home: dir, apiKey: 'sk-never-called', timeZone: 'UTC' });
 
     const reg = readDefaultsRegistry(dir);
     expect(reg).not.toBeNull();
@@ -156,6 +159,50 @@ describe('runInit — the defaults registry it hands `muffin doctor` (core/confi
     // registry now records THAT content, not the hand-written one.
     expect(personaHash).toBe(sha256(readFileSync(paths(dir).persona)));
     expect(readFileSync(paths(dir).persona, 'utf8')).not.toContain('scritta a mano');
+  });
+});
+
+describe('runInit scrive il fuso dell\'owner in rot/budgets.json (il compito che il default assegna a first-run)', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  function freshHome(): string {
+    const dir = scratchDir('muffin-init-tz-');
+    vi.stubEnv('XDG_CONFIG_HOME', join(dir, 'xdg'));
+    return dir;
+  }
+
+  const shipped = join(dirname(fileURLToPath(import.meta.url)), '..', 'defaults', 'rot', 'budgets.json');
+  const quiet = (dir: string): { timezone?: string } =>
+    (JSON.parse(readFileSync(join(paths(dir).rot, 'budgets.json'), 'utf8')) as { quietHours: { timezone?: string } }).quietHours;
+
+  it('una Home nuova a Roma nasce con Europe/Rome, sigillata, e il registro tiene l\'hash spedito', () => {
+    const dir = freshHome();
+    const steps = runInit({ home: dir, apiKey: 'sk-never-called', timeZone: 'Europe/Rome' });
+
+    expect(quiet(dir).timezone).toBe('Europe/Rome');
+    expect(steps.find((s) => s.name === 'timezone')?.detail).toContain('Europe/Rome');
+    // Registro = file spedito, non quello personalizzato: così `doctor` dice
+    // «modificato dall'owner» invece di proporre un `cp` che riporta UTC.
+    const reg = readDefaultsRegistry(dir);
+    expect(reg?.files.find((f) => f.path === 'rot/budgets.json')?.sha256).toBe(sha256(readFileSync(shipped)));
+    // Il sigillo descrive il file com'è finito, non com'era copiato.
+    expect(verify(dir, 'single-user').ok).toBe(true);
+    // E il runtime lo legge davvero da lì.
+    expect(loadSealedBudgets(dir).quietHours.timezone).toBe('Europe/Rome');
+  });
+
+  it('senza un fuso migliore del fallback resta UTC e non scrive nessun passo', () => {
+    const dir = freshHome();
+    const steps = runInit({ home: dir, apiKey: 'sk-never-called', timeZone: 'Etc/UTC' });
+    expect(quiet(dir).timezone).toBe('UTC');
+    expect(steps.some((s) => s.name === 'timezone')).toBe(false);
+  });
+
+  it('su una Home esistente non tocca il fuso che c\'è già', () => {
+    const dir = freshHome();
+    runInit({ home: dir, apiKey: 'sk-never-called', timeZone: 'UTC' });
+    runInit({ home: dir, apiKey: 'sk-never-called', timeZone: 'Europe/Rome' });
+    expect(quiet(dir).timezone).toBe('UTC');
   });
 });
 

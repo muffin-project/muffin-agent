@@ -62,7 +62,7 @@ const callTodo = (args: unknown): ChatResult => ({
 
 function bootHome(): string {
   const home = mkdtempSync(join(tmpdir(), 'muffin-todowire-'));
-  runInit({ home, apiKey: 'sk-never-called' });
+  runInit({ home, apiKey: 'sk-never-called', timeZone: 'UTC' });
   return home;
 }
 

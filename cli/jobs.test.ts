@@ -10,7 +10,7 @@ import { cmdJobsAdd, cmdJobsCap, cmdJobsList, cmdJobsRemove } from './jobs.js';
 
 function bootHome(): string {
   const home = mkdtempSync(join(tmpdir(), 'muffin-jobs-cli-'));
-  runInit({ home, apiKey: 'sk-not-used' });
+  runInit({ home, apiKey: 'sk-not-used', timeZone: 'UTC' });
   return home;
 }
 
