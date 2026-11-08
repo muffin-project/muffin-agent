@@ -168,6 +168,36 @@ test('served model mismatch and the shared ten-request/time budget fail closed',
   );
 });
 
+test('a ChatGPT quota response stops further upstream requests in the same run', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'muffin-chatgpt-quota-'));
+  const controlPath = join(root, 'control.json');
+  const realFetch = globalThis.fetch;
+  let forwarded = 0;
+  globalThis.fetch = async () => {
+    forwarded += 1;
+    return new Response(null, { status: 429 });
+  };
+  const recorder = installChatGptWireRecorder({
+    wirePath: join(root, 'wire.jsonl'),
+    controlPath,
+    expectedModel: CHATGPT_E2E_MODEL,
+  });
+  const request = () =>
+    fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      body: JSON.stringify({ model: CHATGPT_E2E_MODEL }),
+    });
+  try {
+    assert.equal((await request()).status, 429);
+    await assert.rejects(request, /stopped after HTTP 429/);
+    assert.equal(forwarded, 1);
+  } finally {
+    await recorder.close();
+    globalThis.fetch = realFetch;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('wire recorder streams the unchanged SSE body and shares the ten-request cap across installs', async () => {
   const root = mkdtempSync(join(tmpdir(), 'muffin-chatgpt-wire-'));
   const wirePath = join(root, 'wire.jsonl');
