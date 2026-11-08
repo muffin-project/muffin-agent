@@ -112,10 +112,6 @@ const env = {
   XDG_DATA_HOME: paths.xdgData,
   XDG_STATE_HOME: paths.xdgState,
   XDG_RUNTIME_DIR: join(root, 'xdg/runtime'),
-  // Test-only hatch for gateway-first execution (ADR-0103): this witness runs
-  // headless turns in an isolated Home with no supervisor by design, so it
-  // opts into local execution explicitly instead of failing closed.
-  MUFFIN_EXEC_LOCAL: '1',
   TMPDIR: paths.tmp,
   NO_COLOR: '1',
   CI: '1',
@@ -144,6 +140,7 @@ const report = {
   init: 'NOT_RUN',
   rootOfTrust: 'NOT_RUN',
   sandbox: 'NOT_RUN',
+  execution: { mode: 'gateway', status: 'NOT_RUN' },
   modelScenario: 'NOT_RUN',
   scene: {
     request: `Read notes/alpha.md and notes/beta.md. Create ${REAL_AGENT_EXPECTED.outputPath} whose entire content is only the shared decision sentence exactly as written in the notes, with no label, no 'Decision:' prefix, no extra lines and no other detail. Do not include either shipment date.`,
@@ -181,6 +178,8 @@ const report = {
 let recorder = null;
 let apiKey = null;
 let activeAgentStop = null;
+let gateway = null;
+let chatgptPreload = null;
 let configSnapshot = null;
 let temporaryChatGptProfilePath = null;
 let temporaryChatGptProfileDir = null;
@@ -194,8 +193,9 @@ const cleanupTemporaryChatGptProfile = () => {
   temporaryChatGptProfilePath = null;
 };
 for (const signal of ['SIGINT', 'SIGTERM'])
-  process.once(signal, () => {
+  process.once(signal, async () => {
     activeAgentStop?.();
+    await gateway?.stop();
     cleanupTemporaryChatGptProfile();
     process.exit(signal === 'SIGINT' ? 130 : 143);
   });
@@ -231,7 +231,7 @@ try {
     temporaryChatGptProfilePath = installChatGptExperimentProfile();
     temporaryChatGptProfileDir = dirname(temporaryChatGptProfilePath);
     temporaryChatGptProfileDirWasPresent = configSnapshot.profilesDirectoryPresent;
-    env.NODE_OPTIONS = `--import=${writeChatGptFetchPreload()}`;
+    chatgptPreload = writeChatGptFetchPreload();
   }
   if (dirtyProductionSource.length)
     throw new Error(`production TypeScript sources are dirty: ${dirtyProductionSource.join(', ')}`);
@@ -320,6 +320,18 @@ try {
   report.sandbox = sandboxResult?.available
     ? `PASS (${sandboxResult.mechanism})`
     : `BLOCKED (${sandboxResult?.reason ?? (sandboxRun.stderr.trim() || `probe exit ${sandboxRun.code}`)})`;
+  if (!sandboxResult?.available && sandboxResult?.detail)
+    report.sandboxDetail = sanitize(sandboxResult.detail);
+  if (report.sandbox.startsWith('PASS')) {
+    report.execution.status = 'FAIL';
+    gateway = launchGateway();
+    await gateway.ready;
+    const { askRaw } = await import('../../dist/core/gateway/control-socket.js');
+    const identity = await askRaw(paths.muffinHome, { verb: 'identify' });
+    if (identity?.pid !== gateway.pid || identity?.home !== paths.muffinHome)
+      throw new Error('isolated gateway did not identify itself on the control socket');
+    report.execution = { mode: 'gateway', status: 'PASS', pid: gateway.pid, turns: 0 };
+  }
   if (!runReal) {
     report.status = report.sandbox.startsWith('PASS') ? 'PASS' : 'BLOCKED';
   } else if (!report.sandbox.startsWith('PASS')) {
@@ -468,7 +480,9 @@ try {
   }
 } catch (error) {
   report.error = sanitize(error instanceof Error ? error.message : String(error));
-  if (report.error.startsWith('BLOCKED:')) report.status = 'BLOCKED';
+  report.status = report.error.startsWith('BLOCKED:') ? 'BLOCKED' : 'FAIL';
+} finally {
+  await gateway?.stop();
 }
 
 if (recorder) {
@@ -519,6 +533,52 @@ function git(args) {
   });
 }
 
+function launchGateway() {
+  const child = spawn(process.execPath, [cli, 'gateway', 'run'], {
+    cwd: paths.workspace,
+    env: chatgptPreload ? { ...env, NODE_OPTIONS: `--import=${chatgptPreload}` } : env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8').on('data', (chunk) => (stdout += chunk));
+  const exited = new Promise((resolveExit) =>
+    child.once('close', (code, signal) => {
+      appendFileSync(
+        join(root, 'cli-gateway.log'),
+        `${JSON.stringify({ code, signal, stdout: sanitize(stdout), stderr: sanitize(stderr) })}\n`,
+        { mode: 0o600 },
+      );
+      resolveExit();
+    }),
+  );
+  let bootTimeout;
+  const ready = new Promise((resolveReady, reject) => {
+    bootTimeout = setTimeout(
+      () => reject(new Error('isolated gateway did not start within 20 s')),
+      20_000,
+    );
+    child.once('error', reject);
+    child.stderr.setEncoding('utf8').on('data', (chunk) => {
+      stderr += chunk;
+      if (stderr.includes(`muffin gateway · pid ${child.pid} ·`)) resolveReady();
+    });
+    void exited.then(() =>
+      reject(new Error(`isolated gateway exited before readiness: ${sanitize(stderr.trim())}`)),
+    );
+  }).finally(() => clearTimeout(bootTimeout));
+  let clearEscalation;
+  return {
+    pid: child.pid,
+    ready,
+    async stop() {
+      clearEscalation ??= stopOwnedProcess(child);
+      await exited;
+      clearEscalation();
+    },
+  };
+}
+
 function runCli(args, stdin = '', timeoutMs = 120_000) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(process.execPath, [cli, ...args], {
@@ -537,6 +597,7 @@ function runCli(args, stdin = '', timeoutMs = 120_000) {
       else if (failure) providerUnavailable ??= failure;
       if (child.exitCode !== null || child.signalCode !== null || clearEscalation) return;
       clearEscalation = stopOwnedProcess(child);
+      if (isAgentRun) void gateway?.stop();
     };
     const isAgentRun = args[0] === 'run';
     const timeout = setTimeout(
@@ -561,6 +622,21 @@ function runCli(args, stdin = '', timeoutMs = 120_000) {
         `${JSON.stringify({ args, code, signal, stdout, stderr })}\n`,
         { mode: 0o600 },
       );
+      // A successful result must come from the process we started. Preserve
+      // provider and runner stops for their existing classification below.
+      if (isAgentRun && !providerUnavailable && !runnerStopReason) {
+        if (
+          !gateway ||
+          !stderr.split('\n').includes(`esecuzione sul gateway (pid ${gateway.pid})`)
+        ) {
+          report.execution.status = 'FAIL';
+          reject(
+            new Error('headless turn did not attach to the isolated gateway; see cli-run.log'),
+          );
+          return;
+        }
+        report.execution.turns += 1;
+      }
       resolvePromise({
         code: code ?? -1,
         signal,
@@ -734,34 +810,44 @@ function validateChatGptHome() {
     throw new Error(
       'BLOCKED: existing synthetic Home is not pinned to the approved ChatGPT route/model',
     );
+  if (
+    config.surfaces?.default !== 'cli' ||
+    config.surfaces?.enabled?.length !== 1 ||
+    config.surfaces.enabled[0] !== 'cli' ||
+    existsSync(join(paths.muffinHome, 'mcp.json'))
+  )
+    throw new Error('BLOCKED: the synthetic gateway requires a CLI-only Home without MCP servers');
+  if (config.embedder !== undefined || config.judgment !== undefined || config.search !== undefined)
+    throw new Error(
+      'BLOCKED: the synthetic gateway requires the default local embedder and no configured judgment or search provider',
+    );
   return { model: config.models.main };
 }
 
 async function validateChatGptSession() {
-  try {
-    const { ChatGPTConnection } = await import(
-      new URL(`file://${join(repo, 'dist/core/config/chatgpt-oauth.js')}`).href
-    );
-    const session = new ChatGPTConnection(paths.muffinHome).session();
-    if (!session?.connected || !session.scopes.includes('chatgpt.tokens.use.direct'))
-      throw new Error('missing direct scope');
-    if (existsSync(join(paths.muffinHome, 'muffin.db'))) {
-      const db = new Database(join(paths.muffinHome, 'muffin.db'), { readonly: true });
-      try {
-        const { readGateway } = await import(
-          new URL(`file://${join(repo, 'dist/core/gateway/lock.js')}`).href
-        );
-        if (readGateway(db)) throw new Error('gateway owns the Home');
-      } finally {
-        db.close();
-      }
-    }
-    return { model: CHATGPT_E2E_MODEL };
-  } catch {
+  const { ChatGPTConnection } = await import('../../dist/core/config/chatgpt-oauth.js');
+  const session = new ChatGPTConnection(paths.muffinHome).session();
+  if (!session?.connected || !session.scopes.includes('chatgpt.tokens.use.direct'))
     throw new Error(
       'BLOCKED: existing synthetic ChatGPT session is not connected for direct inference',
     );
+  const { readGateway } = await import('../../dist/core/gateway/lock.js');
+  const db = new Database(join(paths.muffinHome, 'muffin.db'), { readonly: true });
+  try {
+    if (readGateway(db)) throw new Error('BLOCKED: a gateway already owns the synthetic Home');
+    const hasTable = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?");
+    if (
+      (hasTable.get('jobs') && db.prepare('SELECT 1 FROM jobs LIMIT 1').get()) ||
+      (hasTable.get('turns') &&
+        db.prepare("SELECT 1 FROM turns WHERE status != 'done' LIMIT 1").get())
+    )
+      throw new Error(
+        'BLOCKED: the synthetic gateway requires a Home without jobs or unfinished turns',
+      );
+  } finally {
+    db.close();
   }
+  return { model: CHATGPT_E2E_MODEL };
 }
 
 function snapshotChatGptConfiguration() {
@@ -850,7 +936,7 @@ function writeChatGptFetchPreload() {
 async function startChatGptRecorder(wirePath, expectedModel) {
   const startedAt = Date.now();
   const controlPath = join(dirname(wirePath), 'wire-control.json');
-  // One parent-owned clock covers both CLI processes and in-flight responses.
+  // One parent-owned clock covers both turns and in-flight responses.
   writeFileSync(controlPath, JSON.stringify({ startedAt, count: 0 }), { mode: 0o600 });
   const events = () => {
     try {

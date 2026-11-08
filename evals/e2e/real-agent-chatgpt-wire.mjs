@@ -146,6 +146,8 @@ export function installChatGptWireRecorder({ wirePath, controlPath, expectedMode
       return fail('Responses request body was not JSON');
     }
     const control = readControl(controlPath);
+    if (control.providerUnavailable)
+      throw new Error(`ChatGPT E2E stopped after HTTP ${control.providerUnavailable.status}`);
     const count = Number.isInteger(control.count) ? control.count : 0;
     const schemas = responseToolSchemas(body);
     const request = {
@@ -187,7 +189,7 @@ export function installChatGptWireRecorder({ wirePath, controlPath, expectedMode
         toolCalls: [],
         completed: false,
       });
-      if ([401, 402, 403].includes(response.status))
+      if ([401, 402, 403, 429].includes(response.status))
         updateControl({
           providerUnavailable: { kind: 'fatal-upstream-status', status: response.status },
         });
