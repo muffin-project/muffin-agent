@@ -520,6 +520,8 @@ export type ProviderErrorSource = 'transport' | 'output';
 
 /** Carries what the recovery cascade needs to decide, instead of a bare string. */
 export type ProviderErrorDetails = {
+  /** An account quota that requires user action before another attempt. */
+  quota?: 'chatgpt-plan';
   /** Upstream generation/request id, when the provider exposed one. */
   requestId?: string;
   /** Concrete upstream that served the call (e.g. OpenRouter `provider`), when known. */
