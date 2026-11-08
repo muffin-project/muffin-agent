@@ -23,6 +23,7 @@ import {
 } from './types.js';
 
 const BASE_URL = 'https://api.openai.com/v1';
+const PLAN_USAGE_LIMIT_CODE = 'subscription_sharing_usage_limit_exceeded';
 const MODEL_CATALOG_TTL_MS = 60_000;
 const UNKNOWN_REASONING_CAPABILITIES = {
   support: 'unknown',
@@ -648,30 +649,43 @@ function responseFailure(error: unknown, requestId: string | undefined): Provide
   const code = /^[a-zA-Z0-9_.-]{1,80}$/.test(rawCode) ? rawCode : 'unknown_error';
   const safeRequestId =
     requestId !== undefined && /^[a-zA-Z0-9_-]{1,100}$/.test(requestId) ? requestId : undefined;
+  const message = `ChatGPT Responses failed (${code})${safeRequestId ? ` [${safeRequestId}]` : ''}`;
+  if (code === PLAN_USAGE_LIMIT_CODE)
+    return new ProviderError(message, false, undefined, 'transport', undefined, false, {
+      quota: 'chatgpt-plan',
+    });
   const retryable =
     /^(rate_limit_exceeded|server_error|temporarily_unavailable|timeout|internal_error)$/i.test(
       code,
     );
-  return new ProviderError(
-    `ChatGPT Responses failed (${code})${safeRequestId ? ` [${safeRequestId}]` : ''}`,
-    retryable,
-  );
+  return new ProviderError(message, retryable);
 }
 
 function apiProviderError(error: APIError): ProviderError {
   const status = error.status;
+  const requestId =
+    error.requestID && /^[a-zA-Z0-9_-]{1,100}$/.test(error.requestID) ? error.requestID : undefined;
+  if (status === 429 && error.code === PLAN_USAGE_LIMIT_CODE)
+    return new ProviderError(
+      'ChatGPT plan usage limit exceeded',
+      false,
+      status,
+      'transport',
+      undefined,
+      false,
+      {
+        quota: 'chatgpt-plan',
+        ...(requestId === undefined ? {} : { requestId }),
+      },
+    );
   const retryable =
     error instanceof APIConnectionError ||
     status === 408 ||
     status === 409 ||
     status === 429 ||
     (status !== undefined && status >= 500);
-  const requestId =
-    error.requestID && /^[a-zA-Z0-9_-]{1,100}$/.test(error.requestID)
-      ? ` [${error.requestID}]`
-      : '';
   return new ProviderError(
-    `ChatGPT Responses HTTP request failed${status === undefined ? '' : ` (${status})`}${requestId}`,
+    `ChatGPT Responses HTTP request failed${status === undefined ? '' : ` (${status})`}${requestId ? ` [${requestId}]` : ''}`,
     retryable,
     status,
     'transport',
