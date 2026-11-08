@@ -535,7 +535,7 @@ function git(args) {
 
 function launchGateway() {
   const child = spawn(process.execPath, [cli, 'gateway', 'run'], {
-    cwd: paths.muffinHome,
+    cwd: paths.workspace,
     env: chatgptPreload ? { ...env, NODE_OPTIONS: `--import=${chatgptPreload}` } : env,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -817,6 +817,10 @@ function validateChatGptHome() {
     existsSync(join(paths.muffinHome, 'mcp.json'))
   )
     throw new Error('BLOCKED: the synthetic gateway requires a CLI-only Home without MCP servers');
+  if (config.embedder !== undefined || config.judgment !== undefined || config.search !== undefined)
+    throw new Error(
+      'BLOCKED: the synthetic gateway requires the default local embedder and no configured judgment or search provider',
+    );
   return { model: config.models.main };
 }
 

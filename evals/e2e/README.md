@@ -70,8 +70,9 @@ Il root deve essere canonico sotto `/private/tmp`, avere il marker sintetico
 con scope `chatgpt.tokens.use.direct` e non avere socket gateway. Provider e
 modelli main/light devono essere fissati alla route ChatGPT e `gpt-6.1-sol`;
 `--model` diverso viene rifiutato. La Home inizializzata con `muffin init` deve
-avere solo la CLI attiva e nessun MCP, job o turno pendente. Il runner crea
-workspace e sessioni unici,
+avere solo la CLI attiva e nessun MCP, job o turno pendente. Usa l'embedder locale
+predefinito e lascia assenti le configurazioni di search e judgment. Il runner
+crea workspace e sessioni unici,
 aggiunge un solo profilo temporaneo per esercitare discovery e lo rimuove,
 verificando gli hash originali di config e profili. Usa gli stessi oracoli e
 osserva gli schemi e le chiamate reali Responses, senza registrare prompt,
