@@ -148,6 +148,10 @@ type Segment = {
   closed: boolean;
 };
 
+type TranscriptProgress = TurnEvent | { type: 'preparing_context' };
+
+const PREPARING_CONTEXT_STATUS = 'preparo il contesto';
+
 export type Transcript = {
   /**
    * The model's text turned out to be preamble: a `boundary` arrived
@@ -156,8 +160,8 @@ export type Transcript = {
    * `'tool-call'` is a round that went straight to tools: nothing to show.
    */
   spoke(text: string, reason: 'tool-call' | 'superseded'): void;
-  /** One fact about the turn's progress — see `TurnInput.onProgress`. */
-  report(event: TurnEvent): void;
+  /** Surface preparation or one fact from `TurnInput.onProgress`. */
+  report(event: TranscriptProgress): void;
   /**
    * The wait `report`'s `'ask'` case opened is over — the owner answered.
    *
@@ -996,8 +1000,11 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     report(event) {
       if (stopped || disabled) return;
       switch (event.type) {
+        case 'preparing_context':
+          status = PREPARING_CONTEXT_STATUS;
+          break;
         case 'round':
-          status = 'sto pensando';
+          if (status !== PREPARING_CONTEXT_STATUS) status = 'sto pensando';
           break;
         case 'model':
           status = event.stopReason === 'tool_use' ? 'ho deciso i prossimi passi' : 'sto scrivendo la risposta';
