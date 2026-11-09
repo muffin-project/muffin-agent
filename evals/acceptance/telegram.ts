@@ -125,6 +125,8 @@ export type FakeTelegram = {
    * exactly like a transient rejection would.
    */
   guasta(method: string, status: number, description: string): void;
+  /** Accept one message and leave its HTTP response unreadable until the client exits. */
+  withholdNextSendResponse(): void;
   close(): Promise<void>;
 };
 
@@ -232,6 +234,7 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
   const bytesByPath = new Map<string, Buffer>();
   // B10-errori: one planned rejection per method, consumed in call order.
   const guasti = new Map<string, Array<{ status: number; description: string }>>();
+  let withholdSendResponse = false;
 
   const server: Server = createServer((req, res) => {
     // The file **download** route is not `<base>/bot<token>/METHOD` — it is
@@ -401,6 +404,10 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
         res.end(JSON.stringify({ ok: false, description: guastoInCoda.description }));
         return;
       }
+      if (recordedMethod === 'sendMessage' && withholdSendResponse) {
+        withholdSendResponse = false;
+        return;
+      }
 
       if (method === 'sendMessage' || method === 'editMessageText' || method === 'sendMessageDraft' || method === 'sendRichMessage' || method === 'sendRichMessageDraft' || method === 'editMessageRichText') {
         ok({
@@ -469,6 +476,9 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
       const coda = guasti.get(method) ?? [];
       coda.push({ status, description });
       guasti.set(method, coda);
+    },
+    withholdNextSendResponse: () => {
+      withholdSendResponse = true;
     },
     close: () =>
       new Promise<void>((resolve) => {
