@@ -1,12 +1,13 @@
 import DatabaseCtor from 'better-sqlite3';
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
+import { HARD_STALE_MULTIPLIER } from '../lock/durable.js';
 import { DELIVERED } from '../surface/types.js';
 import { JobStore } from '../scheduler/jobs.js';
-import { Scheduler } from '../scheduler/scheduler.js';
+import { Scheduler, type FireDeferred, type RunJob } from '../scheduler/scheduler.js';
 import { ModelLane } from '../turns/model-lane.js';
 import { createNotifier } from './notify.js';
-import { GatewayLock, readGateway } from './lock.js';
+import { GatewayLock, readGateway, STALE_AFTER_MS } from './lock.js';
 import { EXIT_STOPPED, Gateway, STATUS } from './service.js';
 
 /**
@@ -21,7 +22,7 @@ import { EXIT_STOPPED, Gateway, STATUS } from './service.js';
 
 function harness(
   over: {
-    runJob?: () => Promise<{ stopped: 'answered'; text: string; turnId: string | null }>;
+    runJob?: RunJob;
     tickMs?: number;
     /** Pass an array to make it supervised: every datagram lands here. */
     sent?: string[];
@@ -118,6 +119,32 @@ function dueJob(h: ReturnType<typeof harness>): ReturnType<typeof h.jobs.add> {
 }
 
 describe('the gateway owns the scheduler', () => {
+  it.each(['replaced', 'expired'] as const)(
+    'does not tick the turn lane again after the gateway claim is %s',
+    async (claim) => {
+      let finish!: (outcome: FireDeferred) => void;
+      const pending = new Promise<FireDeferred>((resolve) => (finish = resolve));
+      const tick = vi.fn();
+      const h = harness({ runJob: () => pending, turnLane: { tick, isRunning: () => false } });
+      dueJob(h);
+      expect(h.gateway.start()).toEqual({ started: true });
+      h.gateway.tick();
+      expect(h.gateway.scheduler.isRunning()).toBe(true);
+      expect(tick).toHaveBeenCalledTimes(1);
+
+      if (claim === 'replaced') {
+        const replacement = new GatewayLock(h.db, () => false);
+        expect(replacement.claim(h.now(), STATUS.starting, 4243)).not.toHaveProperty('held');
+      } else {
+        h.advance(90_001 + STALE_AFTER_MS * HARD_STALE_MULTIPLIER);
+      }
+
+      finish({ deferred: true });
+      await vi.waitFor(() => expect(h.gateway.scheduler.isRunning()).toBe(false));
+      expect(tick).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('fires a due job with no REPL anywhere', async () => {
     // The whole of ADR-0035 in one assertion: the ticker used to live in
     // `cli/repl.ts`, so closing the terminal stopped everything. Nothing here
