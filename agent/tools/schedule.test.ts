@@ -281,14 +281,13 @@ describe('provenance, principal e taint attraversano il confine del job futuro',
 });
 
 describe('la capability è registrata, surface-agnostic e chiusa ai membri', () => {
-  it('il runtime vero espone schedule_recurring con la capability jobs.schedule', () => {
+  it('the runtime registers both scheduling tools under jobs.schedule', () => {
     const home = mkdtempSync(join(tmpdir(), 'muffin-schedule-rt-'));
     runInit({ home, apiKey: 'sk-never-called' });
     const runtime = buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-schedule-ws-')));
     try {
-      const tool = runtime.deps.tools.find((t) => t.spec.name === 'schedule_recurring');
-      expect(tool, 'il loop non ha la porta conversazionale sui job ricorrenti').toBeDefined();
-      expect(tool?.capability).toBe('jobs.schedule');
+      const tools = runtime.deps.tools.filter((tool) => tool.capability === 'jobs.schedule');
+      expect(tools.map((tool) => tool.spec.name)).toEqual(['schedule_recurring', 'schedule_once']);
       expect(scheduleCapability.hostOnly).toBe(true);
       expect(scheduleCapability.effect).toBe('context');
       expect(scheduleCapability.rerunnable).toBe(false);
@@ -309,7 +308,8 @@ describe('la capability è registrata, surface-agnostic e chiusa ai membri', () 
         externalId: 'u1',
       } as const;
       const menu = visibleTools(runtime.deps.tools, member, runtime.deps.capabilities, undefined);
-      expect(menu.some((t) => t.spec.name === 'schedule_recurring')).toBe(false);
+      expect(menu.map((tool) => tool.spec.name)).not.toContain('schedule_recurring');
+      expect(menu.map((tool) => tool.spec.name)).not.toContain('schedule_once');
     } finally {
       runtime.close();
     }
@@ -351,6 +351,25 @@ describe('la capability è registrata, surface-agnostic e chiusa ai membri', () 
       void ammessi;
     }
   });
+});
+
+it('one-shot arming rejects model-supplied routing, authority and budget fields', async () => {
+  const db = new DatabaseCtor(':memory:');
+  try {
+    const jobs = new JobStore(db);
+    const tool = makeScheduleTool({ jobs, defaultTimezone: 'Europe/Rome', defaultChannel: 'cli' }, 'once');
+    const ctx = toolContext({ replyChannel: 'telegram:123' });
+    for (const field of [
+      { channel: 'telegram:999' },
+      { delegation: 'yolo' },
+      { perJobUsd: 1000 },
+    ]) {
+      expect(await tool.handler({ goal: 'Inspect the file', ...field }, ctx)).toMatchObject({ isError: true });
+    }
+    expect(jobs.list()).toHaveLength(0);
+  } finally {
+    db.close();
+  }
 });
 
 describe('un principal autonomo non arma ricorrenze (S1)', () => {

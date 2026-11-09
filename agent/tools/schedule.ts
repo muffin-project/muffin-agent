@@ -5,7 +5,7 @@ import type { RegisteredTool } from '../loop.js';
 import type { ToolSpec } from '../providers/types.js';
 
 /**
- * `schedule_recurring` — la porta conversazionale sui job ricorrenti.
+ * Conversational scheduling uses the same JobStore as the CLI.
  *
  * Fino a oggi `JobStore.add` aveva un solo chiamante fuori da test ed eval:
  * `muffin jobs add --cron`, digitato dall'owner a un terminale
@@ -109,7 +109,7 @@ const scheduleSpec: ToolSpec = {
     'one durable job on the same store as `muffin jobs add` — the job survives restarts and fires on schedule. ' +
     "`timezone` is an IANA zone and defaults to the owner's own zone; never guess one from the process environment. " +
     "Delivery goes to this conversation's surface. " +
-    'Not for one-shots ("il 3 ottobre devo…": that is `todo` + `due`) or for waiting inside this turn (that is `wait`). ' +
+    'Use `schedule_once` for an independent one-shot objective, `todo` + `due` for a dated reminder, and `wait` to resume this turn. ' +
     'Never emulate this with a shell command: there is no shell path to the scheduler.',
   inputSchema: {
     type: 'object',
@@ -138,6 +138,28 @@ const scheduleArgs = z.object({
   timezone: z.string().min(1).max(60).optional(),
 });
 
+const onceSpec: ToolSpec = {
+  name: 'schedule_once',
+  description:
+    'Arm an independent background objective once, due on the next gateway tick ("fallo in background una sola volta"). ' +
+    'Use only for an explicit request to delegate work once. The job survives restart and reports back to this conversation. ' +
+    'Use todo for a dated reminder and wait to resume the current turn.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      goal: { type: 'string', description: "The owner's objective, in their words (max 500 chars)" },
+    },
+    required: ['goal'],
+    additionalProperties: false,
+  },
+};
+
+const onceArgs = z.strictObject({ goal: scheduleArgs.shape.goal }).transform(({ goal }) => ({
+  goal,
+  cron: undefined,
+  timezone: undefined,
+}));
+
 export function makeScheduleTool(deps: {
   jobs: JobStore;
   /** La zona dell'owner dal RoT sigillato — mai quella del processo. */
@@ -152,10 +174,11 @@ export function makeScheduleTool(deps: {
    * rilettura non attraversa nessun confine di fiducia.
    */
   defaultChannel: string | (() => string);
-}): RegisteredTool {
+}, mode: 'recurring' | 'once' = 'recurring'): RegisteredTool {
+  const once = mode === 'once';
   return {
     capability: scheduleCapability.id,
-    spec: scheduleSpec,
+    spec: once ? onceSpec : scheduleSpec,
     /**
      * `throwTier: 0`. L'handler è sincrono, valida con `safeParse`, e gli unici
      * throw raggiungibili sono `JobError` tradotto in `isError` qui sotto e un
@@ -164,7 +187,7 @@ export function makeScheduleTool(deps: {
      */
     throwTier: 0,
     handler: (args, ctx) => {
-      const parsed = scheduleArgs.safeParse(args ?? {});
+      const parsed = (once ? onceArgs : scheduleArgs).safeParse(args ?? {});
       if (!parsed.success) {
         const issue = parsed.error.issues[0];
         return {
@@ -173,18 +196,11 @@ export function makeScheduleTool(deps: {
           tier: CLEAN,
         };
       }
-      const goal = parsed.data.cron.trim() === '' ? '' : parsed.data.goal.trim();
+      const cron = parsed.data.cron?.trim();
+      const goal = cron === '' ? '' : parsed.data.goal.trim();
       if (goal === '') {
         return {
           content: 'il testo del promemoria è vuoto — dimmi cosa devo ricordare',
-          isError: true,
-          tier: CLEAN,
-        };
-      }
-      const cron = parsed.data.cron.trim();
-      if (cron === '') {
-        return {
-          content: 'espressione cron vuota — serve un cron a 5 campi, per esempio "0 9 * * *"',
           isError: true,
           tier: CLEAN,
         };
@@ -211,32 +227,27 @@ export function makeScheduleTool(deps: {
           ? ctx.replyChannel
           : fallback;
       const surface = channel.split(':')[0] ?? fallback;
-      const timezone = parsed.data.timezone?.trim()
-        ? parsed.data.timezone.trim()
-        : deps.defaultTimezone;
+      const timezone = parsed.data.timezone?.trim() || deps.defaultTimezone;
+      const jobInput = {
+        timezone,
+        channel,
+        goal,
+        origin: { tenant, surface, principal: principal.kind, turnId, tier: arming },
+      };
       let job: Job;
       try {
-        // `JobStore.add` valida (cron + timezone) PRIMA di qualunque scrittura
-        // e lancia `JobError`: nessun ramo qui sotto conferma ciò che non è
-        // stato persistito.
-        job = deps.jobs.add({
-          cron,
-          timezone,
-          channel,
-          goal,
-          origin: {
-            tenant,
-            surface,
-            principal: principal.kind,
-            turnId,
-            tier: arming,
-          },
-        });
+        job = cron === undefined ? deps.jobs.addOnce(jobInput) : deps.jobs.add({ ...jobInput, cron });
       } catch (error) {
         if (error instanceof JobError) {
           return { content: `promemoria non creato: ${error.message}`, isError: true, tier: CLEAN };
         }
         throw error;
+      }
+      if (job.once) {
+        return {
+          content: `job ${job.id.slice(0, 8)} armato una volta (${job.id}) — in coda per il prossimo giro\n${goal}`,
+          tier: CLEAN,
+        };
       }
       const next = job.nextFireAt.toLocaleString('it-IT', {
         timeZone: job.timezone,

@@ -64,6 +64,7 @@ const TOOL_PHRASE: Readonly<Record<string, string>> = {
   todo: 'aggiorno il piano',
   wait: 'mi metto in attesa',
   schedule_recurring: 'programmo un promemoria ricorrente',
+  schedule_once: 'programmo un lavoro una tantum',
 };
 
 /**
@@ -106,6 +107,7 @@ const TOOL_SUBJECT: Readonly<Record<string, string | readonly string[]>> = {
   skill_read: 'name',
   send_file: 'path',
   schedule_recurring: 'goal',
+  schedule_once: 'goal',
 };
 
 /**
