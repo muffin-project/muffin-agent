@@ -122,6 +122,22 @@ describe('acceptance · #598 · a Telegram request arms one autonomous job', () 
         delivery: 'sent',
       });
       expect(JSON.parse(fires[0]!.principal)).toEqual({ kind: 'system', source: 'scheduler' });
+      const sent = telegram
+        .sent()
+        .filter(
+          (call) => call.method === 'sendMessage' && String(call.payload['text']).includes(final),
+        );
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.messageId).toEqual(expect.any(Number));
+      expect(
+        inst.db((db) =>
+          db
+            .prepare(`
+        SELECT chat_id, status, telegram_message_id FROM telegram_delivery_parts WHERE turn_id = ?
+      `)
+            .all(fires[0]!.id),
+        ),
+      ).toEqual([{ chat_id: owner.id, status: 'sent', telegram_message_id: sent[0]!.messageId }]);
       const effects = inst.db((db) =>
         db
           .prepare(`
