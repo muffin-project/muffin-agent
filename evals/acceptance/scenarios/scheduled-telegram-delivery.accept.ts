@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { seal } from '../../../core/rot/verify.js';
 import { install, until } from '../harness.js';
 import { startFakeTelegram } from '../telegram.js';
@@ -17,12 +17,14 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
     'before send',
     'lost send response',
     'legacy lost response',
+    'suspended lost response',
   ] as const)(
     'reconciles %s without losing or repeating the final message',
     async (scene) => {
       const interrupted = scene === 'interrupted work';
       const beforeSend = scene === 'before send';
       const legacy = scene === 'legacy lost response';
+      const suspended = scene === 'suspended lost response';
       const uncertain = !interrupted && !beforeSend;
       const delivery = uncertain ? 'possibly_sent' : 'sent';
       const inst = await install({
@@ -37,7 +39,12 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
               { tool: { name: 'fs_read', args: { path: FILE } } },
               { text: FINAL },
             ]
-          : [{ text: FINAL }],
+          : suspended
+            ? [
+                { tool: { name: 'wait', args: { seconds: 120, why: 'fixture wait' } } },
+                { text: FINAL },
+              ]
+            : [{ text: FINAL }],
       });
       const telegram = await startFakeTelegram();
       try {
@@ -81,6 +88,26 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
           telegram.messages().filter((message) => message.text.includes(FINAL));
         if (uncertain) telegram.withholdNextSendResponse();
         const first = inst.spawnRaw(['gateway', 'run']);
+        if (suspended) {
+          await until(() => inst.provider.main().length === 1, 12_000);
+          await until(
+            () =>
+              readTurn()?.status === 'waiting' &&
+              inst.db((db) => db.prepare('SELECT active FROM jobs').pluck().get() === 0),
+            12_000,
+          );
+          // The real wait has handed the fire to the lane. Advance only its
+          // fixture deadline, without waiting two minutes in CI.
+          const db = new Database(join(inst.home, 'muffin.db'));
+          try {
+            db.prepare('UPDATE turns SET wake_at = ? WHERE id = ?').run(
+              new Date(Date.now() - 1_000).toISOString(),
+              readTurn()!.id,
+            );
+          } finally {
+            db.close();
+          }
+        }
         if (interrupted) {
           await until(() => inst.provider.main().length === 2, 12_000);
           expect(readFileSync(join(inst.workspace, FILE), 'utf8')).toBe(EVIDENCE);
@@ -119,6 +146,9 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
           () => inst.db((db) => db.prepare('SELECT active FROM jobs').pluck().get() === 0),
           12_000,
         );
+        if (suspended) {
+          await vi.waitFor(() => expect(readTurn()?.delivery).toBe(delivery), { timeout: 5_000 });
+        }
         expect(messages()).toEqual([{ chatId: OWNER, text: expect.stringContaining(FINAL) }]);
         expect(readTurn()).toMatchObject({
           id: workId,
@@ -138,7 +168,7 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
         expect(inst.db((db) => db.prepare('SELECT turn_id FROM job_fires').all())).toEqual([
           { turn_id: workId },
         ]);
-        expect(inst.provider.main()).toHaveLength(interrupted ? 4 : 1);
+        expect(inst.provider.main()).toHaveLength(interrupted ? 4 : suspended ? 2 : 1);
         if (interrupted) {
           expect(readFileSync(join(inst.workspace, FILE), 'utf8')).toBe(EVIDENCE);
           expect(
