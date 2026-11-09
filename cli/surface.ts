@@ -1124,10 +1124,17 @@ export function connectSurfaces(
      * unknown surface **throws**, so the row gets `failed:` and the answer
      * stays visible as owed instead of being reported as sent.
      */
-    deliver: async (turn, text) => {
+    deliver: async (turn, text, recovered) => {
       const channel = turn.replyTo?.channel;
-      if (turn.jobId !== null && typeof channel === 'string' && registry.find(channel)?.id === TELEGRAM_ID) {
-        const result = await registry.deliver(channel, text, { id: turn.id });
+      if (
+        typeof turn.jobId === 'string' &&
+        typeof channel === 'string' &&
+        registry.find(channel)?.id === TELEGRAM_ID
+      ) {
+        const result = await registry.deliver(channel, text, {
+          id: turn.id,
+          ...(recovered ? { recovered } : {}),
+        });
         if (result.delivered) return;
         if (result.status !== undefined) return result.status;
         throw new Error(result.why);

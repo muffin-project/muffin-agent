@@ -23,9 +23,18 @@ becomes possibly sent. An old terminal turn with no plan and no journal
 version cannot prove that it had not sent before the upgrade. Recovery records
 that uncertainty. The marker lives in the existing reply address.
 
+The scheduler already advances an occurrence when it suspends so a recurring
+job can fire again on schedule. A terminal Telegram reply still pending on a
+settled occurrence goes through the ordinary turn lane after runnable work.
+The lane reads the saved reply for that Work and uses the same journal. It
+leaves silent successes and already classified deliveries alone.
+
 The regression suite covers interrupted work, a new turn killed before sending,
-an accepted send with its response lost, and the equivalent legacy state. A
-healthy send requires one message and a recorded receipt. Uncertain recovery
-requires no second message or model request. These are isolated processes with
-a fixture provider and Bot API. They establish neither external Telegram
-acceptance nor safety of running a legacy writer after downgrading.
+an accepted send with its response lost, the equivalent legacy state, and
+lost responses after one-shot and recurring waits. The recurring test checks
+the next fire stays unchanged during receipt recovery. Compiled fault probes
+also stop a resumed turn before any send plan and after Telegram accepts a
+send. Uncertain recovery requires no second message or model request. These
+are isolated processes with a fixture provider and Bot API. They establish
+neither external Telegram acceptance nor safety of running a legacy writer
+after downgrading.

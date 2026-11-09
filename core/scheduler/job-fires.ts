@@ -93,9 +93,10 @@ export class JobFireStore {
   private readonly getStmt: Database.Statement;
   private readonly bindStmt: Database.Statement;
   private readonly settleStmt: Database.Statement;
+  private pendingTelegramReplyStmt: Database.Statement | undefined;
 
   constructor(
-    db: Database.Database,
+    private readonly db: Database.Database,
     private readonly clock: () => Date = () => new Date(),
   ) {
     db.exec(SCHEMA);
@@ -178,5 +179,26 @@ export class JobFireStore {
   get(jobId: string, scheduledFor: string): JobFire | null {
     const row = this.getStmt.get({ jobId, scheduledFor }) as Row | undefined;
     return row ? toFire(row) : null;
+  }
+
+  /**
+   * The scheduler already advanced this occurrence. Its Work can still owe
+   * a reply if the turn lane finished after a wait and died during delivery.
+   */
+  pendingTelegramReply(): string | undefined {
+    this.pendingTelegramReplyStmt ??= this.db.prepare(`
+      SELECT t.id
+      FROM job_fires f
+      JOIN turns t ON t.id = f.turn_id AND t.job_id = f.job_id
+      JOIN jobs j ON j.id = f.job_id
+      WHERE f.settled_at IS NOT NULL AND f.silent = 0
+        AND t.status = 'done' AND t.delivery = 'pending'
+        AND t.surface = j.channel
+        AND (j.channel = 'telegram' OR j.channel GLOB 'telegram:*')
+        AND NOT (j.delivery = 'silent' AND t.turn_outcome IS 'answered')
+      ORDER BY f.settled_at, t.id
+      LIMIT 1
+    `).pluck();
+    return this.pendingTelegramReplyStmt.get() as string | undefined;
   }
 }

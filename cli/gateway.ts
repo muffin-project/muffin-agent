@@ -1053,9 +1053,10 @@ export async function cmdGatewayRun(
   };
   const turnLane = new TurnLane({
     turns: runtime.deps.turns,
+    pendingReply: () => runtime.jobFires.pendingTelegramReply(),
     run: makeLaneRunner(
       runtime.deps,
-      (turn, text) => deliverFromLane(turn, text),
+      (turn, text, recovered) => deliverFromLane(turn, text, recovered),
       laneLog,
       (record) => attachStreamFromLane?.(record),
       // The spend counter behind autonomous continuation grants (#598 S2):

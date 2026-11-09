@@ -98,7 +98,11 @@ function fireTenant(job: Job): string {
 export const SCHEDULED_DELIVERY_VERSION = 1;
 
 function jobReplyTo(job: Job) {
-  return { channel: job.channel, scheduledDeliveryVersion: SCHEDULED_DELIVERY_VERSION };
+  const { channel } = job;
+  if (channel === 'telegram' || channel.startsWith('telegram:')) {
+    return { channel, scheduledDeliveryVersion: SCHEDULED_DELIVERY_VERSION };
+  }
+  return { channel };
 }
 
 /**

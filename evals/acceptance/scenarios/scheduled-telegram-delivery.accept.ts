@@ -18,13 +18,15 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
     'lost send response',
     'legacy lost response',
     'suspended lost response',
+    'recurring suspended lost response',
   ] as const)(
     'reconciles %s without losing or repeating the final message',
     async (scene) => {
       const interrupted = scene === 'interrupted work';
       const beforeSend = scene === 'before send';
       const legacy = scene === 'legacy lost response';
-      const suspended = scene === 'suspended lost response';
+      const recurring = scene === 'recurring suspended lost response';
+      const suspended = recurring || scene === 'suspended lost response';
       const uncertain = !interrupted && !beforeSend;
       const delivery = uncertain ? 'possibly_sent' : 'sent';
       const inst = await install({
@@ -68,12 +70,31 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
         const armed = await inst.muffin([
           'jobs',
           'add',
-          '--once',
+          ...(recurring ? ['--cron', '0 8 * * *'] : ['--once']),
           '--channel',
           'telegram:' + OWNER,
           'Verify the synthetic task.',
         ]);
         expect(armed.code, armed.err).toBe(0);
+        const readSchedule = () =>
+          inst.db(
+            (db) =>
+              db.prepare('SELECT active, next_fire_at FROM jobs').get() as {
+                active: number;
+                next_fire_at: string;
+              },
+          );
+        if (recurring) {
+          const db = new Database(join(inst.home, 'muffin.db'));
+          try {
+            db.prepare('UPDATE jobs SET next_fire_at = ?').run(
+              new Date(Date.now() - 1_000).toISOString(),
+            );
+          } finally {
+            db.close();
+          }
+        }
+        const occurrence = readSchedule().next_fire_at;
 
         const readTurn = () =>
           inst.db(
@@ -93,7 +114,9 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
           await until(
             () =>
               readTurn()?.status === 'waiting' &&
-              inst.db((db) => db.prepare('SELECT active FROM jobs').pluck().get() === 0),
+              (recurring
+                ? readSchedule().next_fire_at !== occurrence
+                : readSchedule().active === 0),
             12_000,
           );
           // The real wait has handed the fire to the lane. Advance only its
@@ -122,6 +145,7 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
           expect(readTurn()).toMatchObject({ status: 'done', delivery: 'pending' });
         }
         const workId = readTurn()!.id;
+        const scheduleBeforeRestart = readSchedule();
         first.kill();
         expect(await first.exited).toBeNull();
         if (legacy) {
@@ -142,12 +166,16 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
 
         const restarted = await inst.gateway();
         await restarted.waitFor(/muffin gateway/, 12_000);
-        await until(
-          () => inst.db((db) => db.prepare('SELECT active FROM jobs').pluck().get() === 0),
-          12_000,
-        );
+        if (!recurring) await until(() => readSchedule().active === 0, 12_000);
         if (suspended) {
           await vi.waitFor(() => expect(readTurn()?.delivery).toBe(delivery), { timeout: 5_000 });
+        }
+        if (recurring) {
+          expect(scheduleBeforeRestart.active).toBe(1);
+          expect(Date.parse(scheduleBeforeRestart.next_fire_at)).toBeGreaterThan(
+            Date.parse(occurrence),
+          );
+          expect(readSchedule()).toEqual(scheduleBeforeRestart);
         }
         expect(messages()).toEqual([{ chatId: OWNER, text: expect.stringContaining(FINAL) }]);
         expect(readTurn()).toMatchObject({

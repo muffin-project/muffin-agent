@@ -64,6 +64,8 @@ export type LaneDeps = {
   /** Only what the lane touches, so a test can drive it with three methods. */
   turns: Pick<TurnStore, 'due' | 'armed' | 'wake'>;
   run: LaneRun;
+  /** Delivery only, after ordinary due Work and under the same process claim. */
+  pendingReply?: () => string | undefined;
   gate?: ForegroundGate;
   standDown?: StandDown;
   /**
@@ -174,8 +176,8 @@ export class TurnLane {
       return;
     }
 
-    const [row] = this.deps.turns.due(now, 1);
-    if (!row) return;
+    const turnId = this.deps.turns.due(now, 1)[0]?.id ?? this.deps.pendingReply?.();
+    if (turnId === undefined) return;
 
     // Re-verified right before the row is actually taken, the same point
     // `modelLane.take` is (P20) — `standDown` above only proves nobody owned
@@ -190,7 +192,7 @@ export class TurnLane {
       this.onEvent({ kind: 'deferred', reason: 'in_flight' });
       return;
     }
-    void this.take(row.id).finally(() => {
+    void this.take(turnId).finally(() => {
       this.modelLane.release(LANE_TURNS);
     });
   }
