@@ -183,7 +183,7 @@ describe('#598 S4 · il ramo di consegna (stub runJob, store veri)', () => {
     sched.tick();
     await flush();
 
-    expect(deliver).toHaveBeenCalledWith('cli', 'il brief');
+    expect(deliver).toHaveBeenCalledWith('cli', 'il brief', { id: 'turn-s4-default' });
     expect(must(w.store.get(job.id)).lastRunAt).not.toBeNull();
     const fire = must(w.fires.get(job.id, job.nextFireAt.toISOString()));
     expect(fire.silent).toBe(false);
@@ -214,7 +214,7 @@ describe('#598 S4 · il ramo di consegna (stub runJob, store veri)', () => {
     sched.tick();
     await flush();
 
-    expect(deliver).toHaveBeenCalledWith('cli', 'In coda per te: "probe.act" — conferma?');
+    expect(deliver).toHaveBeenCalledWith('cli', 'In coda per te: "probe.act" — conferma?', { id: 'turn-s4-ask' });
     expect(must(w.store.get(job.id)).lastRunAt).not.toBeNull();
     // La domanda non è un successo ordinario: nessuna ricevuta silenziosa.
     expect(must(w.fires.get(job.id, job.nextFireAt.toISOString())).silent).toBe(false);
@@ -236,7 +236,7 @@ describe('#598 S4 · il ramo di consegna (stub runJob, store veri)', () => {
     sched.tick();
     await flush();
 
-    expect(deliver).toHaveBeenCalledWith('cli', 'il provider non risponde');
+    expect(deliver).toHaveBeenCalledWith('cli', 'il provider non risponde', { id: 'turn-s4-err' });
   });
 
   it('silent + testo vuoto → il ramo del silenzio preesistente, senza ricevuta S4', async () => {

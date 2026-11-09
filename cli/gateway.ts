@@ -915,8 +915,8 @@ export async function cmdGatewayRun(
    * domanda arriva, non nel momento in cui il gestore viene costruito.
    */
   let saluteSuperfici: SaluteSuperfici | null = null;
-  const deliver: Deliver = async (channel, text) =>
-    registry === null ? notDelivered('le superfici non sono ancora connesse') : registry.deliver(channel, text);
+  const deliver: Deliver = async (channel, text, turn) =>
+    registry === null ? notDelivered('le superfici non sono ancora connesse') : registry.deliver(channel, text, turn);
 
   const pausa = new Pausa(runtime.db);
   /**
@@ -965,6 +965,8 @@ export async function cmdGatewayRun(
     (e) => {
       if (e.kind === 'delivery_failed') {
         process.stderr.write(`job ${e.job.id.slice(0, 8)}: consegna fallita (${e.error})\n`);
+      } else if (e.kind === 'delivery_uncertain') {
+        process.stderr.write(`job ${e.job.id.slice(0, 8)}: consegna incerta (${e.error})\n`);
       } else if (e.kind === 'yielded') {
         // P21 (1b)/(2) MEDIUM: an aborted job retries every tick and a job
         // whose fire was declined by `stillOwner` mid-run both used to reach

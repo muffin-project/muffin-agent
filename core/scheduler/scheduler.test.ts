@@ -48,7 +48,7 @@ describe('Scheduler.tick', () => {
 
     expect(runJob).toHaveBeenCalledOnce();
     expect(runJob.mock.calls[0]![0].id).toBe(job.id);
-    expect(deliver).toHaveBeenCalledWith('cli', `ecco il brief per ${job.id}`);
+    expect(deliver).toHaveBeenCalledWith('cli', `ecco il brief per ${job.id}`, { id: TURN });
     // markRan advanced the fire past today's 08:00 → tomorrow.
     expect(store.get(job.id)!.nextFireAt.toISOString()).toBe('2026-06-16T06:00:00.000Z');
     expect(store.get(job.id)!.lastRunAt).not.toBeNull();
@@ -238,7 +238,7 @@ describe('Scheduler.tick', () => {
 
     sched.tick();
     await flush();
-    expect(deliver).toHaveBeenCalledWith('cli', 'serve la tua conferma per X');
+    expect(deliver).toHaveBeenCalledWith('cli', 'serve la tua conferma per X', { id: TURN });
     expect(store.get(job.id)!.lastRunAt).not.toBeNull();
   });
 

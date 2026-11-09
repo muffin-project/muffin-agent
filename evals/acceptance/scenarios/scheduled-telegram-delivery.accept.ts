@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { seal } from '../../../core/rot/verify.js';
 import { install, until } from '../harness.js';
@@ -11,12 +12,24 @@ const FILE = 'scheduled-evidence.txt';
 const EVIDENCE = 'one settled write before interruption\n';
 
 describe('acceptance · #949 · scheduled Telegram delivery', () => {
-  it.each(['interrupted work', 'lost send response'] as const)(
+  it.each([
+    'interrupted work',
+    'before send',
+    'lost send response',
+    'legacy lost response',
+  ] as const)(
     'reconciles %s without losing or repeating the final message',
     async (scene) => {
       const interrupted = scene === 'interrupted work';
+      const beforeSend = scene === 'before send';
+      const legacy = scene === 'legacy lost response';
+      const uncertain = !interrupted && !beforeSend;
+      const delivery = uncertain ? 'possibly_sent' : 'sent';
       const inst = await install({
-        env: { MUFFIN_GATEWAY_TICK_MS: '1000' },
+        env: {
+          MUFFIN_GATEWAY_TICK_MS: '1000',
+          ...(beforeSend ? { MUFFIN_JOB_FIRES_STALL_AFTER_DONE_MS: '8000' } : {}),
+        },
         main: interrupted
           ? [
               { tool: { name: 'fs_write', args: { path: FILE, content: EVIDENCE } } },
@@ -66,12 +79,17 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
           );
         const messages = () =>
           telegram.messages().filter((message) => message.text.includes(FINAL));
-        if (!interrupted) telegram.withholdNextSendResponse();
+        if (uncertain) telegram.withholdNextSendResponse();
         const first = inst.spawnRaw(['gateway', 'run']);
         if (interrupted) {
           await until(() => inst.provider.main().length === 2, 12_000);
           expect(readFileSync(join(inst.workspace, FILE), 'utf8')).toBe(EVIDENCE);
           expect(readTurn()?.status).toBe('running');
+        } else if (beforeSend) {
+          await until(() => inst.provider.main().length === 1, 12_000);
+          await until(() => readTurn()?.status === 'done', 12_000);
+          expect(readTurn()?.delivery).toBe('pending');
+          expect(messages()).toHaveLength(0);
         } else {
           await until(() => messages().length === 1, 12_000);
           expect(readTurn()).toMatchObject({ status: 'done', delivery: 'pending' });
@@ -79,6 +97,21 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
         const workId = readTurn()!.id;
         first.kill();
         expect(await first.exited).toBeNull();
+        if (legacy) {
+          // Recreate the state left by a gateway that accepted no journal
+          // context. The external fixture still owns the first message.
+          const db = new Database(join(inst.home, 'muffin.db'));
+          try {
+            db.transaction(() => {
+              db.prepare(
+                `UPDATE turns SET reply_to = json_remove(reply_to, '$.scheduledDeliveryVersion') WHERE id = ?`,
+              ).run(workId);
+              db.prepare('DELETE FROM telegram_delivery_parts WHERE turn_id = ?').run(workId);
+            })();
+          } finally {
+            db.close();
+          }
+        }
 
         const restarted = await inst.gateway();
         await restarted.waitFor(/muffin gateway/, 12_000);
@@ -91,7 +124,7 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
           id: workId,
           status: 'done',
           turn_outcome: 'answered',
-          delivery: interrupted ? 'sent' : 'possibly_sent',
+          delivery,
         });
         expect(
           inst.db((db) =>
@@ -101,7 +134,7 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
         `)
               .all(workId),
           ),
-        ).toEqual([{ status: interrupted ? 'sent' : 'possibly_sent' }]);
+        ).toEqual(legacy ? [] : [{ status: delivery }]);
         expect(inst.db((db) => db.prepare('SELECT turn_id FROM job_fires').all())).toEqual([
           { turn_id: workId },
         ]);

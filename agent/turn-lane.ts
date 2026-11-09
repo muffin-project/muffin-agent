@@ -40,7 +40,7 @@ import type { Message } from './providers/types.js';
  * the failure is recorded on the row — never merged with how the *turn* ended,
  * which is a second question and never the same one.
  */
-export type LaneDeliver = (turn: TurnRecord, text: string) => Promise<void | 'possibly_sent'>;
+export type LaneDeliver = (turn: TurnRecord, text: string) => Promise<void | 'possibly_sent' | 'deferred'>;
 
 /**
  * Opens a live sink for a row the lane is about to resume, addressed at its
@@ -275,6 +275,7 @@ export function makeLaneRunner(
   async function sendAndRecord(d: LoopDeps, record: TurnRecord, text: string): Promise<void> {
     try {
       const outcome = await deliver(record, text);
+      if (outcome === 'deferred') return;
       mark(d, record.id, outcome === 'possibly_sent' ? 'possibly_sent' : 'sent');
     } catch (error) {
       mark(d, record.id, `failed:${error instanceof Error ? error.message : String(error)}`);

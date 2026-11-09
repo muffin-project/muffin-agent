@@ -1,7 +1,8 @@
 import { statSync } from 'node:fs';
-import { DELIVERED, fileModeFor, notDelivered, type DeliveryOutcome, type FileSpec, type Surface } from '../../core/surface/types.js';
+import { DELIVERED, fileModeFor, notDelivered, type DeliveryOutcome, type DeliveryTurn, type FileSpec, type Surface } from '../../core/surface/types.js';
 import { isDirectChat, negoziazioneTelegram, stanzaDi, TELEGRAM_PLACES } from './negoziazione.js';
 import type { TelegramApiLike } from './api.js';
+import type { TelegramDeliveryOutcome } from './delivery.js';
 import { MAX_DOWNLOAD_BYTES, sendDocument } from './media.js';
 import { escapeHtml, TELEGRAM_MAX } from './render.js';
 import { present, presentationOf, presentationOfHtml } from './present.js';
@@ -66,7 +67,15 @@ function indirizzoPer(
  */
 export const TELEGRAM_ID = 'telegram';
 
-export function telegramSurface(api: TelegramApiLike, ownerChatId: number | undefined): Surface {
+export function telegramSurface(
+  api: TelegramApiLike,
+  ownerChatId: number | undefined,
+  deliverTurn?: (
+    turn: DeliveryTurn,
+    address: { chatId: number; threadId?: number },
+    text: string,
+  ) => Promise<TelegramDeliveryOutcome>,
+): Surface {
   // N1 (judge, PR #42): `deliverFile`'s size check used to hand-write
   // `50 * 1024 * 1024` again instead of reading the number it had already
   // declared here — two literals that agreed today and had no reason to keep
@@ -109,12 +118,22 @@ export function telegramSurface(api: TelegramApiLike, ownerChatId: number | unde
 
     handles: (channel) => indirizzoPer(channel, ownerChatId) !== null,
 
-    deliver: async (channel, text): Promise<DeliveryOutcome> => {
+    deliver: async (channel, text, turn): Promise<DeliveryOutcome> => {
       const indirizzo = indirizzoPer(channel, ownerChatId);
       if (indirizzo === null) {
         // Reachable only if a caller skipped `handles`. Refusing is right: the
         // alternative is inventing a destination for a message.
         return notDelivered(`"${channel}" non è un canale telegram indirizzabile`);
+      }
+      if (turn !== undefined) {
+        if (text.trim() === '') return notDelivered('niente da consegnare: il testo è vuoto');
+        if (deliverTurn === undefined) return notDelivered('registro di consegna Telegram non disponibile');
+        const status = await deliverTurn(turn, indirizzo, text);
+        if (status === 'sent') return DELIVERED;
+        const why = status === 'possibly_sent'
+          ? 'Telegram potrebbe aver ricevuto il messaggio'
+          : 'consegna Telegram già in corso';
+        return { delivered: false, status, why };
       }
       // Convert first, split second. The limit is on the rendered HTML, and
       // splitting the markdown at 4000 then expanding it produced messages over

@@ -6,6 +6,7 @@ import { loadImage } from '../agent/images.js';
 import type { Approver } from '../agent/loop.js';
 import { audioAccettato, immagineAccettata } from '../agent/providers/modalita.js';
 import type { Runtime } from '../agent/runtime.js';
+import { SCHEDULED_DELIVERY_VERSION } from '../agent/scheduler-run.js';
 import { makeSendFileTool, sendFileCapability } from '../agent/tools/deliver.js';
 import type { FsScope } from '../agent/tools/fs.js';
 import type { AttachStream, LaneDeliver } from '../agent/turn-lane.js';
@@ -149,7 +150,7 @@ type PortConnection = {
         turnId: string,
         replyTo: Record<string, unknown>,
         text: string,
-      ) => Promise<void | 'possibly_sent'>)
+      ) => ReturnType<LaneDeliver>)
     | undefined;
   readonly stream?: AttachStream | undefined;
   readonly approver?: Approver | undefined;
@@ -980,7 +981,7 @@ export function connectSurfaces(
       turnId: string,
       replyTo: Record<string, unknown>,
       text: string,
-    ) => Promise<void | 'possibly_sent'>
+    ) => ReturnType<LaneDeliver>
   >();
   /**
    * The lane's own half of B11/B13 for a resumed turn — same shape as
@@ -1094,6 +1095,16 @@ export function connectSurfaces(
     });
   }
 
+  // Re-read enabled surfaces at delivery time so a connector enabled since
+  // boot can be distinguished from an unknown channel.
+  const registry = new SurfaceRegistry(surfaces, () => {
+    try {
+      return loadConfig(home).surfaces.enabled;
+    } catch {
+      return [];
+    }
+  });
+
   return {
     lines,
     salute,
@@ -1103,22 +1114,7 @@ export function connectSurfaces(
     // instead of sharing one clock.
     stop: (budgetMs = DRAIN_BUDGET_MS) =>
       Promise.all(stops.map((s) => s(budgetMs))).then(() => undefined),
-    // Re-reads `config.json` on every call, not once at boot — the same
-    // freshness `readDefaultChannel` already keeps for `surfaces.default`, and
-    // for the same reason: a surface enabled by `muffin surface enable` after
-    // this gateway started must be told apart from one that was never
-    // configured, and a value captured here at boot would make this callback
-    // just as stale as `surfaces` itself already is. Tolerant of a config that
-    // fails to parse mid-edit, same as `readDefaultChannel`: an unreadable
-    // config answers "nothing else is enabled" rather than throwing out of a
-    // delivery path.
-    registry: new SurfaceRegistry(surfaces, () => {
-      try {
-        return loadConfig(home).surfaces.enabled;
-      } catch {
-        return [];
-      }
-    }),
+    registry,
     /**
      * The lane's delivery, over whichever surfaces are up.
      *
@@ -1129,6 +1125,13 @@ export function connectSurfaces(
      * stays visible as owed instead of being reported as sent.
      */
     deliver: async (turn, text) => {
+      const channel = turn.replyTo?.channel;
+      if (turn.jobId !== null && typeof channel === 'string' && registry.find(channel)?.id === TELEGRAM_ID) {
+        const result = await registry.deliver(channel, text, { id: turn.id });
+        if (result.delivered) return;
+        if (result.status !== undefined) return result.status;
+        throw new Error(result.why);
+      }
       if (turn.surface === 'cli') {
         process.stdout.write(`↩︎ ${text}\n`);
         return;
@@ -1410,7 +1413,18 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
     // `ownerChatId` is what makes `handles('telegram')` true, so an unpaired
     // surface listens but does not claim to be a destination — which is the
     // honest answer while nobody is the owner yet.
-    surface: telegramSurface(api, ownerChatId),
+    surface: telegramSurface(api, ownerChatId, async (turn, address, text) => {
+      const record = runtime.deps.turns.get(turn.id);
+      if (record === null) throw new Error('turno schedulato non trovato');
+      // Older gateways could send without a journal. For a recovered terminal
+      // turn, an empty journal cannot establish that those bytes never went out.
+      if (
+        turn.recovered &&
+        record.replyTo?.scheduledDeliveryVersion !== SCHEDULED_DELIVERY_VERSION &&
+        delivery.parts(turn.id, record.leaseIndex).length === 0
+      ) return 'possibly_sent';
+      return connector.deliverTo(turn.id, address, text);
+    }),
     start: avvia,
     // Fire-and-forget on purpose here: the mouth handoff is not a shutdown,
     // nothing downstream is about to close the database, and the interval
@@ -1422,7 +1436,7 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
     // than a door onto a dead poller.
     door: async (turnId, replyTo, text) => {
       const outcome = await connector.deliverTo(turnId, replyTo, text);
-      return outcome === 'possibly_sent' ? outcome : undefined;
+      return outcome === 'sent' ? undefined : outcome;
     },
     stream: connector.resumeStream,
     approver: (request, where) => connector.approval(request, where),
