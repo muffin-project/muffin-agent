@@ -169,6 +169,7 @@ export class OpenAIChatGPTProvider implements Provider {
     let receivedAnyEvent = false;
     let terminal: OpenAI.Responses.Response | undefined;
     let refusal = false;
+    let firstTextMs: number | undefined;
     const toolItems = new Map<number, { id?: string; callId?: string; name?: string }>();
     const completedOutputItems = new Map<number, OpenAI.Responses.ResponseOutputItem>();
     const allowedTools = new Set((call.tools ?? []).map((tool) => tool.name));
@@ -194,6 +195,7 @@ export class OpenAIChatGPTProvider implements Provider {
         maxRetries: 0,
         ...(this.options.fetch === undefined ? {} : { fetch: this.options.fetch }),
       });
+      const requestStartedAt = performance.now();
       const stream = await client.responses.create(
         params,
         call.signal ? { signal: call.signal } : {},
@@ -210,10 +212,11 @@ export class OpenAIChatGPTProvider implements Provider {
         receivedAnyEvent = true;
         switch (event.type) {
           case 'response.output_text.delta':
-            yield { type: 'text_delta', text: event.delta };
-            break;
           case 'response.refusal.delta':
-            refusal = true;
+            if (event.type === 'response.refusal.delta') refusal = true;
+            if (firstTextMs === undefined && event.delta.trim() !== '') {
+              firstTextMs = Math.round(performance.now() - requestStartedAt);
+            }
             yield { type: 'text_delta', text: event.delta };
             break;
           case 'response.output_item.added':
@@ -339,7 +342,7 @@ export class OpenAIChatGPTProvider implements Provider {
           }
         : terminal;
     const result = resultFromResponse(resultResponse, refusal, allowedTools);
-    yield { type: 'done', result };
+    yield { type: 'done', result: firstTextMs === undefined ? result : { ...result, firstTextMs } };
   }
 
   private async requestBody(
