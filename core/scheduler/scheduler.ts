@@ -293,8 +293,9 @@ export class Scheduler {
   /**
    * Process at most one due job. Returns immediately; the run happens in the
    * background so the caller's timer keeps ticking. Idempotent to call often.
+   * A caller sharing the model lane can retry its turn tick after a deferral.
    */
-  tick(now: Date = this.clock()): void {
+  tick(now: Date = this.clock(), onBoundTurnPending?: () => void): void {
     // Before anything, including the deferral bookkeeping: if another process
     // owns this store there is nothing here to defer — this ticker is simply
     // not the scheduler any more, and the honest thing is to stop being one.
@@ -364,12 +365,14 @@ export class Scheduler {
       this.onEvent({ kind: 'deferred', reason: 'in_flight' });
       return;
     }
-    void this.run(job).finally(() => {
-      this.modelLane.release(LANE_JOBS);
-    });
+    void this.run(job)
+      .finally(() => this.modelLane.release(LANE_JOBS))
+      .then((outcome) => {
+        if (outcome === 'bound_turn_pending') onBoundTurnPending?.();
+      });
   }
 
-  private async run(job: Job): Promise<void> {
+  private async run(job: Job): Promise<'bound_turn_pending' | void> {
     const signal = this.gate.signal();
     let outcome: JobOutcome | FireDeferred | FireSettleOnly;
     try {
@@ -391,7 +394,7 @@ export class Scheduler {
      */
     if ('deferred' in outcome) {
       this.onEvent({ kind: 'deferred', reason: 'bound_turn_pending' });
-      return;
+      return 'bound_turn_pending';
     }
 
     /**
