@@ -157,6 +157,27 @@ describe('le tre azioni', () => {
       expect(out.isError, JSON.stringify(bad)).toBe(true);
     }
   });
+
+  it('rejects an oversized plan before inspecting its items', async () => {
+    const { handler, todos } = tool();
+    const ctx = toolContext({ sessionId: 'owner' });
+    await handler({ action: 'plan', items: ['existing step'] }, ctx);
+    const before = todos.list('host', 'owner');
+    expect(before).toHaveLength(1);
+
+    let itemReads = 0;
+    const items = new Proxy(Array.from({ length: 31 }, () => null), {
+      get(target, key, receiver) {
+        if (typeof key === 'string' && /^\d+$/.test(key)) itemReads += 1;
+        return Reflect.get(target, key, receiver);
+      },
+    });
+
+    const result = await handler({ action: 'plan', items }, ctx);
+    expect(result.isError).toBe(true);
+    expect(todos.list('host', 'owner')).toEqual(before);
+    expect(itemReads).toBe(0);
+  });
 });
 
 describe('il tetto cumulativo di sessione (N3, judge giro 2)', () => {
