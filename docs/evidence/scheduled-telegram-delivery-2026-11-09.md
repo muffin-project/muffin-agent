@@ -25,9 +25,10 @@ that uncertainty. The marker lives in the existing reply address.
 
 The scheduler already advances an occurrence when it suspends so a recurring
 job can fire again on schedule. A terminal Telegram reply still pending on a
-settled occurrence goes through the ordinary turn lane after runnable work.
-The lane reads the saved reply for that Work and uses the same journal. It
-leaves silent successes and already classified deliveries alone.
+settled goal goes through the ordinary turn lane after runnable work. The lane
+reads the saved reply for that Work and uses the same journal. Native scripts
+cannot suspend into that lane. It also leaves silent successes and already
+classified deliveries alone.
 
 The regression suite covers interrupted work, a new turn killed before sending,
 an accepted send with its response lost, the equivalent legacy state, and

@@ -12,14 +12,16 @@ function memStore(now = NOW): { db: DatabaseCtor.Database; fires: JobFireStore }
   return { db, fires: new JobFireStore(db, () => now) };
 }
 
-it('selects only pending Telegram replies from settled, non-silent occurrences', () => {
+it('selects only pending Telegram replies from settled goals that should speak', () => {
   const { db, fires } = memStore();
   try {
     const jobs = new JobStore(db, () => NOW);
     const turns = new TurnStore(db, () => NOW);
-    for (const scene of ['quiet', 'cli', 'unsettled', 'uncertain', 'pending']) {
+    for (const scene of ['quiet', 'cli', 'unsettled', 'uncertain', 'script', 'pending']) {
       const channel = scene === 'cli' ? 'cli' : 'telegram:42';
-      const job = jobs.addOnce({ channel, goal: 'brief', delivery: scene === 'quiet' ? 'silent' : 'deliver' });
+      const job = scene === 'script'
+        ? jobs.addOnce({ channel, kind: 'script', script: 'true' })
+        : jobs.addOnce({ channel, goal: 'brief', delivery: scene === 'quiet' ? 'silent' : 'deliver' });
       const scheduledFor = job.nextFireAt.toISOString();
       fires.claim(job.id, scheduledFor);
       const turn = turns.create({

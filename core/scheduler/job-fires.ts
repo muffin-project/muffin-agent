@@ -193,6 +193,7 @@ export class JobFireStore {
       JOIN jobs j ON j.id = f.job_id
       WHERE f.settled_at IS NOT NULL AND f.silent = 0
         AND t.status = 'done' AND t.delivery = 'pending'
+        AND j.kind = 'goal'
         AND t.surface = j.channel
         AND (j.channel = 'telegram' OR j.channel GLOB 'telegram:*')
         AND NOT (j.delivery = 'silent' AND t.turn_outcome IS 'answered')
