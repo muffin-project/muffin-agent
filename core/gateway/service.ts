@@ -255,7 +255,11 @@ export class Gateway {
     this.deps.scheduler.tick(now, () => {
       // A due job with unfinished Work would take the token on every beat,
       // even though the turn lane is the one that can finish it.
-      if (!this.stopping) this.deps.turnLane.tick(this.now());
+      if (this.stopping) return;
+      const resumedAt = this.now();
+      // The beat's claim may have expired while the job was unwinding.
+      // Recheck before TurnLane's barrier sweep can write to the store.
+      if (this.deps.lock.isCurrentClaim(this.pid, resumedAt)) this.deps.turnLane.tick(resumedAt);
     });
     // Still sweep turn barriers on the beat, even when a job holds the token.
     this.deps.turnLane.tick(now);

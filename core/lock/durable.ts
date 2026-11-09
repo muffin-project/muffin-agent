@@ -381,10 +381,12 @@ export class DurableLock {
    * (`readGateway`, `muffin gateway status`) cannot accidentally read as an
    * owner of it.
    */
-  isCurrentHolder(pid: number = process.pid): boolean {
+  isCurrentHolder(pid: number = process.pid, now?: Date): boolean {
     if (this.myHolderId === null) return false;
     const row = this.recorded();
-    return row?.pid === pid && row.holderId === this.myHolderId;
+    if (row?.pid !== pid || row.holderId !== this.myHolderId) return false;
+    // A delayed admission can also require a claim inside the heartbeat horizon.
+    return now === undefined || heldBy(row, now.getTime(), this.spec.staleAfterMs, () => true) !== null;
   }
 
   private currentHolder(nowMs: number): number | null {
