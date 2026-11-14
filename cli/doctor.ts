@@ -40,6 +40,12 @@ import {
   realSupervisorProbes,
   type SupervisorProbes,
 } from '../core/gateway/supervisor.js';
+import {
+  futureLockCheckName,
+  futureLockClaims,
+  futureLockDetail,
+  futureLockRemedy,
+} from '../core/lock/future-claim.js';
 import { readConsolidation } from '../core/memory/consolidator.js';
 import { type Embedder, makeEmbedder, OllamaEmbedder } from '../core/memory/embed.js';
 import { readOpenContradictions } from '../core/memory/maintenance.js';
@@ -1458,6 +1464,13 @@ export async function runDoctor(
       ok('supervisore', supervisor.detail);
     } else {
       warn('supervisore', supervisor.detail, supervisor.remedy);
+    }
+
+    // A future `taken_at` never crosses `heldBy`'s horizon while the holder
+    // still reads as alive. Reported, not tolerated: the comparison in
+    // `heldBy` stays as it is. `futureLockClaims` creates nothing.
+    for (const claim of futureLockClaims(db)) {
+      warn(futureLockCheckName(claim), futureLockDetail(claim), futureLockRemedy(claim));
     }
     db.close();
   } catch (error) {

@@ -1,46 +1,77 @@
-import DatabaseCtor from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { ensurePrivateDir, tightenPrivateFile } from '../core/config/private-fs.js';
-import { delimiter, dirname, join } from 'node:path';
 import { homedir, userInfo } from 'node:os';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { attachMcp, buildRuntime } from '../agent/runtime.js';
-import { runTurn } from '../agent/loop.js';
-import { ForwardHost } from '../core/gateway/forward.js';
+import DatabaseCtor from 'better-sqlite3';
 import { makeCommitmentLane } from '../agent/commitment-run.js';
+import { runTurn } from '../agent/loop.js';
+import { attachMcp, buildRuntime } from '../agent/runtime.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
-import { makeLaneRunner, NO_SURFACE, type AttachStream, type LaneDeliver } from '../agent/turn-lane.js';
-import { TurnLane, type LaneEvent } from '../core/turns/lane.js';
-import { ModelLane } from '../core/turns/model-lane.js';
-import { ConfigError, paths } from '../core/config/config.js';
-import { GatewayLock, readGateway, type GatewayInfo } from '../core/gateway/lock.js';
-import { askRaw, CONTROL_PROTOCOL, serveControlSocket, type ControlServer } from '../core/gateway/control-socket.js';
-import type { ExecutionQuery } from '../core/gateway/forward.js';
-import { currentGatewayPid, describeBuild, restartCommand, restartVerdict, run, waitForGatewayPid } from './update.js';
-import { checkSupervisor, realSupervisorProbes, type SupervisorProbes } from '../core/gateway/supervisor.js';
-import { createNotifier, describeSupervision } from '../core/gateway/notify.js';
-import { Gateway, EXIT_ALREADY_RUNNING, EXIT_STOPPED, type GatewayDeps } from '../core/gateway/service.js';
-import { consolidationBootLine, CONSOLIDATION_TENANT } from '../core/memory/consolidator.js';
-import { reviewBootLine } from '../core/memory/maintenance.js';
 import {
-  planUnit,
-  resolveInterpreterDir,
-  type InterpreterProbes,
-  resolveLauncher,
+  type AttachStream,
+  type LaneDeliver,
+  makeLaneRunner,
+  NO_SURFACE,
+} from '../agent/turn-lane.js';
+import { ConfigError, paths } from '../core/config/config.js';
+import { ensurePrivateDir, tightenPrivateFile } from '../core/config/private-fs.js';
+import {
+  askRaw,
+  CONTROL_PROTOCOL,
+  type ControlServer,
+  serveControlSocket,
+} from '../core/gateway/control-socket.js';
+import type { ExecutionQuery } from '../core/gateway/forward.js';
+import { ForwardHost } from '../core/gateway/forward.js';
+import { type GatewayInfo, GatewayLock, readGateway } from '../core/gateway/lock.js';
+import { createNotifier, describeSupervision } from '../core/gateway/notify.js';
+import {
+  EXIT_ALREADY_RUNNING,
+  EXIT_STOPPED,
+  Gateway,
+  type GatewayDeps,
+} from '../core/gateway/service.js';
+import {
+  checkSupervisor,
+  realSupervisorProbes,
+  type SupervisorProbes,
+} from '../core/gateway/supervisor.js';
+import {
   EXIT_PERMANENT,
+  type InterpreterProbes,
   LAUNCHD_LABEL,
+  planUnit,
   RESTART_SEC,
+  resolveInterpreterDir,
+  resolveLauncher,
   STOP_TIMEOUT_SEC,
 } from '../core/gateway/unit.js';
-import { Scheduler, type Deliver } from '../core/scheduler/scheduler.js';
+import {
+  clearGatewayClaim,
+  type GatewayClaim,
+  judgeGatewayUnlock,
+} from '../core/gateway/unlock.js';
+import { CONSOLIDATION_TENANT, consolidationBootLine } from '../core/memory/consolidator.js';
+import { reviewBootLine } from '../core/memory/maintenance.js';
+import { Pausa } from '../core/runtime/pausa.js';
+import { type Deliver, Scheduler } from '../core/scheduler/scheduler.js';
 import { makeTraceRetentionTick } from '../core/scheduler/trace-retention.js';
 import type { SurfaceRegistry } from '../core/surface/registry.js';
-import { notDelivered } from '../core/surface/types.js';
-import { attachSendFile, connectSurfaces } from './surface.js';
-import { Pausa } from '../core/runtime/pausa.js';
 import type { SaluteSuperfici } from '../core/surface/salute.js';
+import { notDelivered } from '../core/surface/types.js';
+import { type LaneEvent, TurnLane } from '../core/turns/lane.js';
+import { ModelLane } from '../core/turns/model-lane.js';
+import { attachSendFile, connectSurfaces } from './surface.js';
+import {
+  currentGatewayPid,
+  describeBuild,
+  restartCommand,
+  restartVerdict,
+  run,
+  waitForGatewayPid,
+} from './update.js';
 
 /**
  * `muffin gateway` — the process that lives, and the three verbs around it.
@@ -86,9 +117,21 @@ export async function cmdGatewayTurn(home: string, id: string): Promise<number> 
           .get(id) as { id: string; status: string; outcome: string | null } | undefined;
         if (!row) return { found: false } as ExecutionQuery;
         if (row.status === 'done') {
-          return { found: true, status: 'done', stopped: row.outcome, text: null, turnId: row.id } as ExecutionQuery;
+          return {
+            found: true,
+            status: 'done',
+            stopped: row.outcome,
+            text: null,
+            turnId: row.id,
+          } as ExecutionQuery;
         }
-        return { found: true, status: row.status, stopped: null, text: null, turnId: row.id } as ExecutionQuery;
+        return {
+          found: true,
+          status: row.status,
+          stopped: null,
+          text: null,
+          turnId: row.id,
+        } as ExecutionQuery;
       } catch {
         return null;
       } finally {
@@ -104,7 +147,9 @@ export async function cmdGatewayTurn(home: string, id: string): Promise<number> 
     if (esito.text) process.stdout.write(`${esito.text.slice(0, 2000)}\n`);
     return 0;
   }
-  process.stdout.write(`turno ${id.slice(0, 12)}: ${esito.status} — esito non ancora noto, non rimandare alla cieca\n`);
+  process.stdout.write(
+    `turno ${id.slice(0, 12)}: ${esito.status} — esito non ancora noto, non rimandare alla cieca\n`,
+  );
   return 0;
 }
 
@@ -123,6 +168,9 @@ export const GATEWAY_USAGE = `usage:
                                 servizio no
   muffin gateway run            il processo stesso — lo lancia il supervisore,
                                 non tu (vedi \`muffin gateway install\`)
+  muffin gateway unlock         mostra il claim di gateway_lock, senza scrivere
+            [--confirm]         lo rilascia, solo se l'incarnazione non è tenuta
+                                da un processo vivo
 `;
 
 /**
@@ -210,7 +258,9 @@ export function cmdGatewayStatus(home: string): number {
     // sbagliato è peggio di nessun rimedio: si esegue.
     if (existsSync(paths(home).gatewayStopped)) {
       process.stdout.write(`fermo di proposito (\`muffin gateway stop\`)\n`);
-      process.stderr.write(`→ \`muffin gateway start\` lo riaccende — resta giù anche dopo un riavvio\n`);
+      process.stderr.write(
+        `→ \`muffin gateway start\` lo riaccende — resta giù anche dopo un riavvio\n`,
+      );
       // Sempre 1: la domanda scriptabile è «è su?», e la risposta è no
       // qualunque sia la ragione. Il perché sta nel testo, non nell'exit code.
       return 1;
@@ -223,6 +273,80 @@ export function cmdGatewayStatus(home: string): number {
   }
   process.stdout.write(`${describe(info)}\n`);
   return 0;
+}
+
+export type GatewayUnlockIo = {
+  out: (text: string) => void;
+  err: (text: string) => void;
+};
+
+function claimLines(claim: GatewayClaim): string {
+  return [
+    `  pid: ${String(claim.pid)}`,
+    `  holder_id: ${claim.holderId ?? '(nessuno)'}`,
+    `  taken_at: ${claim.takenAt ?? '(vuoto)'}`,
+    `  since: ${claim.since ?? '(vuoto)'}`,
+    `  status: ${claim.status ?? '(vuoto)'}`,
+  ].join('\n');
+}
+
+/**
+ * `muffin gateway unlock` — clear a gateway claim by hand.
+ *
+ * Without `--confirm` it only says what it would remove. With `--confirm`
+ * it removes the claim when the incarnation is not held, and refuses when
+ * it is. The refusal is the same either way: a dry run must not look like
+ * permission to evict a live holder.
+ */
+export function cmdGatewayUnlock(home: string, args: string[], io?: GatewayUnlockIo): number {
+  const out = io?.out ?? ((text: string) => process.stdout.write(text));
+  const err = io?.err ?? ((text: string) => process.stderr.write(text));
+  if (args.includes('--help') || args.includes('-h') || args.some((arg) => arg !== '--confirm')) {
+    err(GATEWAY_USAGE);
+    return 78;
+  }
+  const file = paths(home).db;
+  if (!existsSync(file)) {
+    err(`nessun database in ${file}\n`);
+    return 1;
+  }
+  const confirm = args.includes('--confirm');
+  const db = new DatabaseCtor(file, confirm ? {} : { readonly: true });
+  try {
+    const verdict = judgeGatewayUnlock(db);
+    if (verdict.action === 'absent') {
+      out('nessun claim su gateway_lock\n');
+      return 0;
+    }
+    if (verdict.action === 'refuse') {
+      err(`GATEWAY UNLOCK: rifiutato.\n${verdict.reason}\n${claimLines(verdict.claim)}\n`);
+      return EXIT_ALREADY_RUNNING;
+    }
+    if (!confirm) {
+      out(
+        'GATEWAY UNLOCK: non ho scritto nulla. Con --confirm rimuoverei questo claim ' +
+          `(la riga resta, pid e holder_id no):\n${claimLines(verdict.claim)}\n`,
+      );
+      return 0;
+    }
+    const changes = clearGatewayClaim(db, verdict.claim);
+    if (changes === 0) {
+      err(
+        'GATEWAY UNLOCK: non ho rimosso nulla. La riga è cambiata dopo il controllo ' +
+          `(pid o holder_id diversi).\n${claimLines(verdict.claim)}\n`,
+      );
+      return 1;
+    }
+    err(
+      'GATEWAY UNLOCK: claim rimosso da gateway_lock. La riga resta, il detentore no.\n' +
+        `${claimLines(verdict.claim)}\n` +
+        '  incarnazione: non tenuta da un processo vivo\n',
+    );
+    out('gateway_lock: claim rimosso\n');
+    return 0;
+  } finally {
+    db.close();
+  }
 }
 
 /**
@@ -319,7 +443,9 @@ export async function cmdGatewayStart(
  */
 function supervisorStart(home: string): string[] | null {
   if (process.platform === 'darwin') {
-    return existsSync(launchAgentPath()) ? ['launchctl', 'kickstart', `gui/${String(userInfo().uid)}/${LAUNCHD_LABEL}`] : null;
+    return existsSync(launchAgentPath())
+      ? ['launchctl', 'kickstart', `gui/${String(userInfo().uid)}/${LAUNCHD_LABEL}`]
+      : null;
   }
   return existsSync(join(homedir(), '.config', 'systemd', 'user', `${LAUNCHD_LABEL}.service`))
     ? ['systemctl', '--user', 'start', `${LAUNCHD_LABEL}.service`]
@@ -344,10 +470,15 @@ export async function cmdGatewayStop(home: string): Promise<number> {
   // privato verificato niente semaforo e niente segnale: scrivere altrove
   // ricreerebbe l'escape.
   if (!ensurePrivateDir(home)) {
-    process.stderr.write(`non posso fermare il gateway: la directory privata ${home} non è stata stabilita (symlink sulla catena)\n`);
+    process.stderr.write(
+      `non posso fermare il gateway: la directory privata ${home} non è stata stabilita (symlink sulla catena)\n`,
+    );
     return 1;
   }
-  writeFileSync(paths(home).gatewayStopped, `${new Date().toISOString()}\n`, { encoding: 'utf8', mode: 0o600 });
+  writeFileSync(paths(home).gatewayStopped, `${new Date().toISOString()}\n`, {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
   tightenPrivateFile(paths(home).gatewayStopped);
 
   try {
@@ -521,7 +652,11 @@ export async function cmdGatewayInstall(
   try {
     ({ values } = parseArgs({
       args: argv,
-      options: { write: { type: 'boolean' }, force: { type: 'boolean' }, start: { type: 'boolean' } },
+      options: {
+        write: { type: 'boolean' },
+        force: { type: 'boolean' },
+        start: { type: 'boolean' },
+      },
       allowPositionals: false,
     }));
   } catch {
@@ -567,7 +702,9 @@ export async function cmdGatewayInstall(
     ...(process.env['MUFFIN_TOOL_BIN'] ? { toolBinDir: process.env['MUFFIN_TOOL_BIN'] } : {}),
     // Solo se serve: senza `--start` la lista stampata resta quella con
     // `$(id -u)`, che è giusta per una shell e non richiede di sapere chi sia.
-    ...(values.start === true ? { identity: deps.identity ?? { user: userInfo().username, uid: userInfo().uid } } : {}),
+    ...(values.start === true
+      ? { identity: deps.identity ?? { user: userInfo().username, uid: userInfo().uid } }
+      : {}),
     ...(deps.configHome !== undefined
       ? { configHome: deps.configHome }
       : process.env['XDG_CONFIG_HOME']
@@ -584,7 +721,9 @@ export async function cmdGatewayInstall(
         // regenerated unit that eats those edits is a bad trade for one saved
         // flag.
         process.stderr.write(`${plan.path} esiste già ed è diverso da quello che genererei.\n`);
-        process.stderr.write(`→ guardalo, poi \`muffin gateway install --write --force\` per sovrascriverlo\n`);
+        process.stderr.write(
+          `→ guardalo, poi \`muffin gateway install --write --force\` per sovrascriverlo\n`,
+        );
         // 2 and not 1: the command did not do what it was asked. 1 below means
         // "the unit is written, with a caveat", and a script has to be able to
         // tell "I refused" from "done, but read this".
@@ -627,8 +766,11 @@ export async function cmdGatewayInstall(
       const runtimeDir = `/run/user/${uid}`;
       if ((deps.runtimeDirExists ?? existsSync)(runtimeDir)) {
         env['XDG_RUNTIME_DIR'] = runtimeDir;
-        if (!env['DBUS_SESSION_BUS_ADDRESS']) env['DBUS_SESSION_BUS_ADDRESS'] = `unix:path=${runtimeDir}/bus`;
-        process.stderr.write(`\nquesta shell non aveva XDG_RUNTIME_DIR (su -, sudo): uso ${runtimeDir}\n`);
+        if (!env['DBUS_SESSION_BUS_ADDRESS'])
+          env['DBUS_SESSION_BUS_ADDRESS'] = `unix:path=${runtimeDir}/bus`;
+        process.stderr.write(
+          `\nquesta shell non aveva XDG_RUNTIME_DIR (su -, sudo): uso ${runtimeDir}\n`,
+        );
       } else {
         const user = deps.identity?.user ?? userInfo().username;
         noUserBus =
@@ -650,7 +792,9 @@ export async function cmdGatewayInstall(
         const detail = r.stderr.trim();
         if (detail !== '') process.stderr.write(`  ${detail.split('\n').join('\n  ')}\n`);
         if (noUserBus !== null) process.stderr.write(`\n! ${noUserBus}\n`);
-        process.stderr.write(`\nla unit è scritta in ${plan.path}; il servizio no. I passi rimasti:\n`);
+        process.stderr.write(
+          `\nla unit è scritta in ${plan.path}; il servizio no. I passi rimasti:\n`,
+        );
         for (const c of plan.commands) process.stderr.write(`  ${c}\n`);
         for (const w of plan.warnings) process.stderr.write(`\n! ${w}\n`);
         return EXIT_NOT_ACTIVATED;
@@ -678,7 +822,9 @@ export async function cmdGatewayInstall(
       for (const w of plan.warnings) process.stderr.write(`\n! ${w}\n`);
       return EXIT_NOT_ACTIVATED;
     }
-    process.stderr.write(`\nil gateway è un servizio adesso — pid ${pid}, \`muffin gateway status\` lo vede.\n`);
+    process.stderr.write(
+      `\nil gateway è un servizio adesso — pid ${pid}, \`muffin gateway status\` lo vede.\n`,
+    );
     for (const w of plan.warnings) process.stderr.write(`\n! ${w}\n`);
     if (launcher.warning) {
       process.stderr.write(`\n! ${launcher.warning}\n`);
@@ -740,7 +886,12 @@ function currentLauncher(): { argv: string[]; warning: string | null } {
   // dist/cli/ when compiled, cli/ under tsx — one level up either way.
   const buildRoot = dirname(here);
   const entry = join(here, 'main.js');
-  const bindirs = [process.env['MUFFIN_BINDIR'], join(homedir(), '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'];
+  const bindirs = [
+    process.env['MUFFIN_BINDIR'],
+    join(homedir(), '.local', 'bin'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+  ];
   const candidates = bindirs
     .filter((d): d is string => typeof d === 'string' && d.length > 0)
     .flatMap((d) => [join(d, 'muffin'), join(d, 'muffin-agent')]);
@@ -822,7 +973,7 @@ export async function cmdGatewayRun(
     );
     return EXIT_STOPPED;
   }
-  let runtime;
+  let runtime: ReturnType<typeof buildRuntime>;
   try {
     /**
      * No cwd argument, and that is now a decision rather than an omission.
@@ -916,7 +1067,9 @@ export async function cmdGatewayRun(
    */
   let saluteSuperfici: SaluteSuperfici | null = null;
   const deliver: Deliver = async (channel, text) =>
-    registry === null ? notDelivered('le superfici non sono ancora connesse') : registry.deliver(channel, text);
+    registry === null
+      ? notDelivered('le superfici non sono ancora connesse')
+      : registry.deliver(channel, text);
 
   const pausa = new Pausa(runtime.db);
   /**
@@ -955,7 +1108,13 @@ export async function cmdGatewayRun(
   });
   const scheduler = new Scheduler(
     runtime.jobs,
-    makeJobRunner(runtime.deps, runtime.jobFires, runtime.executor, { cwd: runtime.workspace }, runtime.budget),
+    makeJobRunner(
+      runtime.deps,
+      runtime.jobFires,
+      runtime.executor,
+      { cwd: runtime.workspace },
+      runtime.budget,
+    ),
     deliver,
     // ALWAYS_IDLE by omission, and it is a decision: a gateway has no terminal,
     // so there is no foreground to lose the lane to. When a surface turn becomes
@@ -1196,7 +1355,9 @@ export async function cmdGatewayRun(
       },
     );
   } catch (error) {
-    process.stderr.write(`socket di controllo non aperto: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(
+      `socket di controllo non aperto: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
   }
 
   // La spinta alla corsia: quando l'owner risponde a un'approvazione da
@@ -1221,7 +1382,9 @@ export async function cmdGatewayRun(
   // appartengono a nessuna superficie: li serve l'execution che il terminale
   // ha chiesto, con un frame al client invece di una consegna nel journal.
   attachSendFile(runtime, home, surfaces.registry, (channel, file) =>
-    forward.ownsChannel(channel) ? forward.deliverFile(channel, file) : surfaces.registry.deliverFile(channel, file),
+    forward.ownsChannel(channel)
+      ? forward.deliverFile(channel, file)
+      : surfaces.registry.deliverFile(channel, file),
   );
   let mcpLines: string[] = [];
   try {
