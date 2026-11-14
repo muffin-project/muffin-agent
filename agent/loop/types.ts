@@ -6,8 +6,6 @@ import type {
   CapabilityDecl,
   CapabilityId,
   Decide,
-  Decision,
-  DecisionRequest,
   Principal,
   TenantId,
   TrustTier,

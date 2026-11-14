@@ -647,7 +647,6 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     // describes — not a second stopwatch with its own idea of when the
     // request began.
     const chatCallStartedAt = Date.now();
-    let modelLease: ModelCallLease | undefined;
     let lastAbortReason: ReturnType<ModelCallLease['reason']>;
     let lastTelemetry: ModelCallTelemetry | undefined;
 
@@ -725,7 +724,6 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       const lease = execution.beginModelCall(input.signal, (progress) => {
         input.onProgress?.({ type: 'model_status', ...progress });
       });
-      modelLease = lease;
       const callWithBudget: ChatCall = { ...call, stream, signal: lease.signal };
       try {
         if (reasoningResolution?.status === 'unsupported')

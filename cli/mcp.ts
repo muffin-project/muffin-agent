@@ -1,15 +1,15 @@
 import { connectServer } from '../core/mcp/connect.js';
-import { looksLikeSecretValue } from '../core/tracing/redact.js';
 import {
   loadMcpRegistry,
   McpConfigError,
+  type McpServerEntry,
   pinTools,
   saveMcpRegistry,
   toolHash,
   verifyTools,
-  type McpServerEntry,
 } from '../core/mcp/registry.js';
-import { widenEgressForCapability, type EgressWidenDeps } from '../core/rot/egress-writer.js';
+import { type EgressWidenDeps, widenEgressForCapability } from '../core/rot/egress-writer.js';
+import { looksLikeSecretValue } from '../core/tracing/redact.js';
 
 /**
  * Operator verbs over the MCP allowlist — the audit surface the threat model
@@ -81,9 +81,9 @@ export async function cmdMcpAdd(
     return 78;
   }
 
-  let connection;
+  let connection: Awaited<ReturnType<typeof connectServer>>;
   try {
-    connection = await connectServer(name, entry);
+    connection = await connectServer(entry);
   } catch (error) {
     process.stderr.write(
       `connessione fallita: ${error instanceof Error ? error.message : String(error)}\n`,
@@ -121,7 +121,12 @@ export async function cmdMcpAdd(
     // --verify` usa già qui sotto (pulito → 0, qualcosa da rivedere → 1), non
     // una seconda inventata per questo verbo.
     if (hosts.length > 0) {
-      const esito = await widenEgressForCapability(home, hosts, `il server MCP «${name}»`, egressDeps);
+      const esito = await widenEgressForCapability(
+        home,
+        hosts,
+        `il server MCP «${name}»`,
+        egressDeps,
+      );
       if (!esito.ok) return 1;
     }
     return 0;
@@ -131,7 +136,7 @@ export async function cmdMcpAdd(
 }
 
 export async function cmdMcpList(home: string, verify: boolean): Promise<number> {
-  let registry;
+  let registry: ReturnType<typeof loadMcpRegistry>;
   try {
     registry = loadMcpRegistry(home);
   } catch (error) {
@@ -156,7 +161,7 @@ export async function cmdMcpList(home: string, verify: boolean): Promise<number>
       continue;
     }
     try {
-      const connection = await connectServer(name, entry);
+      const connection = await connectServer(entry);
       const verdict = verifyTools(connection.tools, entry.tools);
       await connection.close().catch(() => {});
       if (verdict.ok) {
