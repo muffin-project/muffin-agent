@@ -12,11 +12,7 @@ import { TurnStore } from '../../core/turns/store.js';
 import { TodoStore } from '../../core/turns/todo.js';
 import { continueTurn, type LoopDeps, resolveContinuation, resumeTurn, runTurn } from '../loop.js';
 import { CONSERVATIVE } from '../profiles/profile.js';
-import {
-  type ChatCall,
-  type ChatResult,
-  type Provider,
-} from '../providers/types.js';
+import type { ChatCall, ChatResult, Provider } from '../providers/types.js';
 import { searchCapability, searchSpec } from '../tools/search.js';
 import { providerMessages } from './provider-checkpoint.js';
 
@@ -49,7 +45,13 @@ const stall = (): ChatResult => ({
 });
 
 function calls(name: string, id: string, args: unknown = {}): ChatResult {
-  return { text: null, toolCalls: [{ id, name, args }], stopReason: 'tool_use', usage: someUsage, model: 'test-model' };
+  return {
+    text: null,
+    toolCalls: [{ id, name, args }],
+    stopReason: 'tool_use',
+    usage: someUsage,
+    model: 'test-model',
+  };
 }
 
 class Scripted implements Provider {
@@ -79,7 +81,11 @@ function readTool(
         ...searchSpec,
         name: 'fs_read',
         description: 'legge un file',
-        inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+        inputSchema: {
+          type: 'object',
+          properties: { path: { type: 'string' } },
+          required: ['path'],
+        },
       },
       handler: (args) => {
         const path = ((args ?? {}) as Record<string, unknown>).path;
@@ -111,7 +117,12 @@ function world(
     model: 'test-model',
     tools: [tool],
     capabilities,
-    decide: createDecide({ matrix: POLICY_FLOOR, capabilities, budgetExhausted: () => false, hardened: true }),
+    decide: createDecide({
+      matrix: POLICY_FLOOR,
+      capabilities,
+      budgetExhausted: () => false,
+      hardened: true,
+    }),
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions,
     turns,
@@ -125,18 +136,50 @@ function world(
 
 describe('Incident A · useful work then provider stalls', () => {
   it('a continuation identifies the interrupted request, not the session plan', async () => {
-    const w = world([
-      stall(), stall(), stall(), stall(), stall(),
-      stall(), stall(), stall(), stall(), stall(),
-      { text: 'The brief is ready.', toolCalls: [], stopReason: 'end', usage: someUsage, model: 'test-model' },
-    ], new Map());
+    const w = world(
+      [
+        stall(),
+        stall(),
+        stall(),
+        stall(),
+        stall(),
+        stall(),
+        stall(),
+        stall(),
+        stall(),
+        stall(),
+        {
+          text: 'The brief is ready.',
+          toolCalls: [],
+          stopReason: 'end',
+          usage: someUsage,
+          model: 'test-model',
+        },
+      ],
+      new Map(),
+    );
     const session = w.sessions.open('owner');
     const request = 'Summarize my open commitments. Read only; do not execute the plan.';
     w.deps.todos.plan('host', session.id, ['Build the old animation.'], 0);
-    w.sessions.append(session, { role: 'user', content: 'Build the old animation.', surface: 'cli', createdAt: NOW().toISOString(), tier: 0 });
-    const first = await runTurn(w.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: request });
+    w.sessions.append(session, {
+      role: 'user',
+      content: 'Build the old animation.',
+      surface: 'cli',
+      createdAt: NOW().toISOString(),
+      tier: 0,
+    });
+    const first = await runTurn(w.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session,
+      text: request,
+    });
     expect(first.stopped).toBe('continuable');
-    const correction = { role: 'user' as const, content: [{ type: 'text' as const, text: 'Instead list only two items. Still read only.' }] };
+    const correction = {
+      role: 'user' as const,
+      content: [{ type: 'text' as const, text: 'Instead list only two items. Still read only.' }],
+    };
     const second = await continueTurn(w.deps, first.turnId, { message: correction, session });
     if ('why' in second) throw new Error(second.why);
     expect(second.turnId).toBe(first.turnId);
@@ -152,8 +195,18 @@ describe('Incident A · useful work then provider stalls', () => {
     expect(control).toContain(request);
     expect(control).not.toContain('Build the old animation.');
     expect(controls).toHaveLength(1);
-    expect(messages).toContainEqual(correction);
-    expect(messages.at(-1)).toEqual(grant);
+    // Cache breakpoints are a property of the request, not of the correction.
+    // The last text blocks carry `cache: 'stable'`; the words are unchanged.
+    const bare = (message: (typeof messages)[number]) => ({
+      ...message,
+      content: message.content.map((block) => {
+        if (block.type !== 'text') return block;
+        const { cache: _cache, ...rest } = block;
+        return rest;
+      }),
+    });
+    expect(messages.map(bare)).toContainEqual(correction);
+    expect(bare(messages.at(-1)!)).toEqual(grant);
     expect(w.turns.get(first.turnId)?.inputText).toBe(request);
     // The derived reference is control, never another owner occurrence.
     expect(w.sessions.read(session).filter((m) => m.content === request)).toHaveLength(1);
@@ -244,7 +297,10 @@ describe('Incident A · useful work then provider stalls', () => {
     expect(match).toEqual({ kind: 'single', turnId: first.turnId });
 
     const second = await continueTurn(w.deps, first.turnId, {
-      message: { role: 'user', content: [{ type: 'text', text: 'Riprendi senza ripetere le cose due volte' }] },
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: 'Riprendi senza ripetere le cose due volte' }],
+      },
       session: w.sessions.open('owner'),
     });
     if ('why' in second) throw new Error(`continuation refused: ${second.why} ${second.detail}`);
@@ -272,7 +328,8 @@ describe('Incident A · useful work then provider stalls', () => {
     expect(row?.counters.recoveriesUsed).toBe(0);
   });
 
-  it('empty-cascade exhaustion becomes continuable; the next lease starts auto', async () => {    // Mandate regression: lease 1 walks the whole cascade to requireTool
+  it('empty-cascade exhaustion becomes continuable; the next lease starts auto', async () => {
+    // Mandate regression: lease 1 walks the whole cascade to requireTool
     // (words only now — no round ever sends tool_choice: required),
     // becomes continuable, and lease 2 runs with fresh recovery state and
     // toolChoice=auto — stale strict-json/nudge directives from lease 1 are
@@ -302,7 +359,10 @@ describe('Incident A · useful work then provider stalls', () => {
         },
       ],
       reads,
-      { ...CONSERVATIVE, recovery: ['nudge', 'reinjectTools', 'retryOnce', 'strictJson', 'requireTool'] },
+      {
+        ...CONSERVATIVE,
+        recovery: ['nudge', 'reinjectTools', 'retryOnce', 'strictJson', 'requireTool'],
+      },
     );
     const session = w.sessions.open('owner');
     const first = await runTurn(w.deps, {
@@ -386,7 +446,12 @@ describe('Incident A · useful work then provider stalls', () => {
         },
       ],
       capabilities,
-      decide: createDecide({ matrix: POLICY_FLOOR, capabilities, budgetExhausted: () => false, hardened: true }),
+      decide: createDecide({
+        matrix: POLICY_FLOOR,
+        capabilities,
+        budgetExhausted: () => false,
+        hardened: true,
+      }),
       tracer: new SimpleTracer(new JsonlExporter(home)),
       sessions,
       turns,
@@ -399,7 +464,14 @@ describe('Incident A · useful work then provider stalls', () => {
       { role: 'user', content: [{ type: 'text', text: 'scrivi il file' }] },
       {
         role: 'assistant',
-        content: [{ type: 'tool_use', id: 'c-dangle', name: 'fs_write_once', input: { query: 'x', path: 'irreversibile.txt' } }],
+        content: [
+          {
+            type: 'tool_use',
+            id: 'c-dangle',
+            name: 'fs_write_once',
+            input: { query: 'x', path: 'irreversibile.txt' },
+          },
+        ],
       },
     ];
     const created = turns.create(

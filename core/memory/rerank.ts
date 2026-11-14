@@ -1,7 +1,7 @@
-import { REASONING_HEADROOM } from '../../agent/providers/types.js';
 import type { Provider } from '../../agent/providers/types.js';
-import { fence } from './spotlight.js';
+import { REASONING_HEADROOM } from '../../agent/providers/types.js';
 import type { RecallItem } from './recall.js';
+import { fence } from './spotlight.js';
 
 /**
  * Reranking.
@@ -73,7 +73,7 @@ export interface Reranker {
  */
 export const RERANK_MIN_CANDIDATES = 12;
 
-const SYSTEM = `Ordini frammenti di memoria per quanto rispondono a una domanda.
+export const SYSTEM = `Ordini frammenti di memoria per quanto rispondono a una domanda.
 
 Ti arriva una domanda e una lista numerata di frammenti. Restituisci gli indici
 dei più pertinenti, dal migliore al peggiore.

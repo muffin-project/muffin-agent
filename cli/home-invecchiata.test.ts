@@ -3,8 +3,8 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -13,13 +13,13 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { runInit } from './init.js';
-import { cmdAdopt, reconcileDefaults } from './adopt.js';
-import { runUpdate } from './update.js';
-import { runDoctor } from './doctor.js';
 import { paths } from '../core/config/config.js';
 import { readDefaultsRegistry } from '../core/config/defaults-drift.js';
 import { discoverSkills, skillsPromptSection } from '../core/skills/skills.js';
+import { cmdAdopt, reconcileDefaults } from './adopt.js';
+import { runDoctor } from './doctor.js';
+import { runInit } from './init.js';
+import { runUpdate } from './update.js';
 
 /**
  * **Una casa creata prima che un default esistesse non lo riceve mai.**
@@ -56,7 +56,7 @@ function casaVecchia(): string {
   rmSync(join(home, 'skills'), { recursive: true, force: true });
   const manifest = paths(home).defaultsManifest;
   const reg = JSON.parse(readFileSync(manifest, 'utf8')) as { files: { path: string }[] };
-  reg.files = reg.files.filter((f) => f.path === 'persona.md');
+  reg.files = reg.files.filter((f) => f.path === 'rot/identity.md');
   writeFileSync(manifest, `${JSON.stringify(reg, null, 2)}\n`, 'utf8');
   return home;
 }
@@ -67,14 +67,23 @@ describe('una casa nata prima di un default lo riceve lo stesso', () => {
     expect(existsSync(join(home, 'skills'))).toBe(false);
 
     const righe: string[] = [];
-    const code = cmdAdopt(home, ['--tutto'], { out: (l) => void righe.push(l), checkoutRoot: REPO });
+    const code = cmdAdopt(home, ['--tutto'], {
+      out: (l) => void righe.push(l),
+      checkoutRoot: REPO,
+    });
 
     expect(code, righe.join('\n')).toBe(0);
-    expect(readdirSync(join(home, 'skills')).sort()).toEqual(readdirSync(join(REPO, 'defaults', 'skills')).sort());
+    expect(readdirSync(join(home, 'skills')).sort()).toEqual(
+      readdirSync(join(REPO, 'defaults', 'skills')).sort(),
+    );
 
     const scan = discoverSkills(home);
     expect(scan.problems).toEqual([]);
-    expect(scan.skills.map((s) => s.name).sort()).toEqual(['collega-telegram', 'studia-un-documento']);
+    expect(scan.skills.map((s) => s.name).sort()).toEqual([
+      'collega-telegram',
+      'studia-un-documento',
+      'voce',
+    ]);
     expect(skillsPromptSection(scan.skills)).not.toBe('');
   });
 
@@ -88,14 +97,15 @@ describe('una casa nata prima di un default lo riceve lo stesso', () => {
 
   it("un default riscritto dall'owner non viene mai sovrascritto, e viene dichiarato divergente", () => {
     const home = casaVecchia();
-    const mio = '# la mia persona, non la vostra\n';
-    writeFileSync(paths(home).persona, mio, 'utf8');
+    const mio = '# il mio patto, non il vostro\n';
+    const identity = join(paths(home).rot, 'identity.md');
+    writeFileSync(identity, mio, 'utf8');
 
     const esito = reconcileDefaults(home, REPO);
 
-    expect(readFileSync(paths(home).persona, 'utf8')).toBe(mio);
-    expect(esito.divergenti.map((d) => d.path)).toContain('persona.md');
-    expect(esito.installati).not.toContain('persona.md');
+    expect(readFileSync(identity, 'utf8')).toBe(mio);
+    expect(esito.divergenti.map((d) => d.path)).toContain('rot/identity.md');
+    expect(esito.installati).not.toContain('rot/identity.md');
   });
 
   it('una casa appena installata non fa lavoro doppio: niente copie, registro immutato', () => {
@@ -110,10 +120,12 @@ describe('una casa nata prima di un default lo riceve lo stesso', () => {
     expect(readFileSync(paths(home).defaultsManifest, 'utf8')).toBe(prima);
   });
 
-  it("`muffin doctor` lo dice da solo, con un rimedio eseguibile", async () => {
+  it('`muffin doctor` lo dice da solo, con un rimedio eseguibile', async () => {
     const home = casaVecchia();
     const report = await runDoctor(home, { checkoutRoot: REPO });
-    const riga = report.checks.find((c) => c.name === 'default skills/studia-un-documento/SKILL.md');
+    const riga = report.checks.find(
+      (c) => c.name === 'default skills/studia-un-documento/SKILL.md',
+    );
     expect(riga?.level).toBe('warn');
     expect(riga?.remedy ?? '').toContain('muffin adopt');
   });

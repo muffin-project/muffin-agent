@@ -111,8 +111,7 @@ describe('runInit — the defaults registry it hands `muffin doctor` (core/confi
     expect(reg).not.toBeNull();
     const byPath = new Map((reg?.files ?? []).map((f) => [f.path, f.sha256]));
     for (const relPath of [
-      'persona.md',
-      'voice.md',
+      'skills/voce/SKILL.md',
       'rot/identity.md',
       'rot/policy.json',
       'rot/egress.json',
@@ -129,33 +128,37 @@ describe('runInit — the defaults registry it hands `muffin doctor` (core/confi
     const dir = freshHome();
     runInit({ home: dir, apiKey: 'sk-never-called' });
     const original = readDefaultsRegistry(dir);
-    const originalPersonaHash = original?.files.find((f) => f.path === 'persona.md')?.sha256;
-    expect(originalPersonaHash).toBeTruthy();
+    const skillPath = join(dir, 'skills', 'voce', 'SKILL.md');
+    const originalSkillHash = original?.files.find(
+      (f) => f.path === 'skills/voce/SKILL.md',
+    )?.sha256;
+    expect(originalSkillHash).toBeTruthy();
 
-    // The owner edits persona.md by hand, then runs `muffin init` again
-    // (e.g. to pick up a config fix) — WITHOUT --force. `installFile` leaves
-    // an existing file alone, so the registry must leave its entry alone too.
-    writeFileSync(paths(dir).persona, 'la mia versione, scritta a mano\n');
+    // The owner edits the voice skill by hand, then runs `muffin init` again
+    // WITHOUT --force. installTree leaves an existing file alone, so the
+    // registry must leave its entry alone too.
+    writeFileSync(skillPath, 'la mia versione, scritta a mano\n');
     runInit({ home: dir, apiKey: 'sk-never-called' });
 
     const after = readDefaultsRegistry(dir);
-    const afterPersonaHash = after?.files.find((f) => f.path === 'persona.md')?.sha256;
-    expect(afterPersonaHash).toBe(originalPersonaHash);
-    expect(afterPersonaHash).not.toBe(sha256(readFileSync(paths(dir).persona)));
+    const afterSkillHash = after?.files.find((f) => f.path === 'skills/voce/SKILL.md')?.sha256;
+    expect(afterSkillHash).toBe(originalSkillHash);
+    expect(afterSkillHash).not.toBe(sha256(readFileSync(skillPath)));
   });
 
   it('does re-stamp on `--force`, which really did overwrite the file', () => {
     const dir = freshHome();
     runInit({ home: dir, apiKey: 'sk-never-called' });
-    writeFileSync(paths(dir).persona, 'la mia versione, scritta a mano\n');
+    const skillPath = join(dir, 'skills', 'voce', 'SKILL.md');
+    writeFileSync(skillPath, 'la mia versione, scritta a mano\n');
     runInit({ home: dir, apiKey: 'sk-never-called', force: true });
 
     const reg = readDefaultsRegistry(dir);
-    const personaHash = reg?.files.find((f) => f.path === 'persona.md')?.sha256;
-    // --force overwrote persona.md back to the shipped default, and the
+    const skillHash = reg?.files.find((f) => f.path === 'skills/voce/SKILL.md')?.sha256;
+    // --force overwrote the skill back to the shipped default, and the
     // registry now records THAT content, not the hand-written one.
-    expect(personaHash).toBe(sha256(readFileSync(paths(dir).persona)));
-    expect(readFileSync(paths(dir).persona, 'utf8')).not.toContain('scritta a mano');
+    expect(skillHash).toBe(sha256(readFileSync(skillPath)));
+    expect(readFileSync(skillPath, 'utf8')).not.toContain('scritta a mano');
   });
 });
 
