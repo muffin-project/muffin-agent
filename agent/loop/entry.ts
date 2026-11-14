@@ -196,6 +196,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     ...(input.onDelta ? { onDelta: input.onDelta } : {}),
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
     ...(input.steer ? { steer: input.steer } : {}),
+    ...(input.promptMode === 'minimal' ? { promptMode: 'minimal' as const } : {}),
   });
 }
 

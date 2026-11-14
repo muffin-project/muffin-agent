@@ -128,34 +128,10 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   const skills = installTree('skills', join(p.home, 'skills'), options.force ?? false);
   step('skills', skills.length > 0 ? `installed ${skills.length} files` : 'already present');
 
-  // voice.md lives outside the root of trust on purpose: it is the part that
-  // learns, and the ratchet may rewrite it. identity.md is the part that does not.
-  const voiceInstalled = installFile('voice.md', p.voice, options.force ?? false);
-  step(
-    'voice',
-    voiceInstalled ? 'installed voice.md (modificabile, fuori dal RoT)' : 'already present',
-  );
-
-  // La v2 del prompt, accanto alla v1 e non al posto suo. Copiata come le
-  // skill — stesso `installTree`, stessa regola «copia, non sovrascrivere» —
-  // perché sono file che l'owner riscriverà: `defaults/v2/` senza questa riga
-  // resterebbe leggibile solo dal pacchetto, e `muffin doctor` segnalerebbe due
-  // default per sempre `missing`. Copiarli non li **usa**: l'assemblaggio resta
-  // su v1 finché `config.prompt.version` non dice altro.
-  const v2 = installTree('v2', join(p.home, 'v2'), options.force ?? false);
-  step(
-    'prompt v2',
-    v2.length > 0
-      ? `installed ${v2.length} files (non attivi: config.prompt.version resta v1)`
-      : 'already present',
-  );
-
-  // Pure muffin: the same character for every install, which is what stops a
-  // fresh one from having none at all. identity.md ships empty by design — it
-  // is the owner's — so without this file a first run had three bullet points
-  // and a set of formatting rules standing in for a personality.
-  const personaInstalled = installFile('persona.md', p.persona, options.force ?? false);
-  step('persona', personaInstalled ? 'installed persona.md (uguale per tutti)' : 'already present');
+  // The character is the sealed identity (`rot/`, copied with the tree above)
+  // plus the on-demand `voce` skill (copied with the skills tree). persona.md
+  // and voice.md are no longer prompt sources; a home that still has them is
+  // left alone and not read.
 
   // Only the files this run actually wrote — never the ones found already
   // present, which may already carry the owner's own edits (see
@@ -163,9 +139,6 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   // `muffin doctor` reads this back through diagnoseDefaultsDrift to tell a
   // never-touched shipped file from an owner edit, no Git required.
   const copiedForRegistry: { path: string; content: Buffer }[] = [];
-  if (personaInstalled)
-    copiedForRegistry.push({ path: 'persona.md', content: readFileSync(p.persona) });
-  if (voiceInstalled) copiedForRegistry.push({ path: 'voice.md', content: readFileSync(p.voice) });
   for (const f of installed)
     copiedForRegistry.push({ path: `rot/${f.relPath}`, content: readFileSync(f.dst) });
   // Anche le skill: sono il tipo di file che l'owner riscrive, ed è
@@ -173,8 +146,6 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   // «di serie, mai toccata» contro «modificata da chi la usa».
   for (const f of skills)
     copiedForRegistry.push({ path: `skills/${f.relPath}`, content: readFileSync(f.dst) });
-  for (const f of v2)
-    copiedForRegistry.push({ path: `v2/${f.relPath}`, content: readFileSync(f.dst) });
   recordCopied(home, copiedForRegistry);
 
   // The CLI layer (cmdInit) owns key acquisition — flag, env, or the interactive
@@ -355,19 +326,6 @@ export function defaultModels(options: InitOptions): { main: string; light: stri
     light:
       options.lightModel ?? (compat ? 'anthropic/claude-haiku-4.5' : 'claude-haiku-4-5-20251001'),
   };
-}
-
-/** Never overwrites a personalised file: a second `init` must not undo your edits. */
-function installFile(name: string, dest: string, force: boolean): boolean {
-  if (!force && existsSync(dest)) return false;
-  if (!ensurePrivateDir(dirname(dest))) {
-    throw new Error(
-      `non posso installare ${dest}: la directory privata non è stata stabilita (symlink sulla catena)`,
-    );
-  }
-  copyFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'defaults', name), dest);
-  tightenPrivateFile(dest);
-  return true;
 }
 
 /**

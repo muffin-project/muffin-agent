@@ -83,7 +83,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   ),
   verde(
     'A3',
-    'persona: the installed persona.md/voice.md reach the real system prompt in canonical order (persona, identity, voice), and `muffin prompt show` on the same home is byte-identical to what the provider actually received',
+    'persona: the sealed identity register rule reaches the real system prompt, the voce skill is catalogued but its body is not in the prefix, and `muffin prompt show` on the same home is byte-identical to what the provider actually received',
   ),
   verde('A5', 'doctor: a tampered sealed root-of-trust file is caught and named, with a remedy'),
   // New (slice/journey-lifecycle): the row was BLOCKER only for a missing
