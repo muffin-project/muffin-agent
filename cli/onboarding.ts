@@ -36,9 +36,10 @@ export type ProviderChoice = {
    * How Muffin decided — the fact `describeProviderChoice` puts into words.
    * `local` is the one case with no key to read a prefix from at all: the
    * owner picked a probed local runtime over the API question entirely
-   * (`askLocalOrApi`), which `chooseProvider` never sees.
+   * (`askLocalOrApi`), which `chooseProvider` never sees. `chosen` is the
+   * init credential menu naming a provider the key prefix did not.
    */
-  readonly reason: 'explicit' | 'inferred' | 'default' | 'local' | 'oauth';
+  readonly reason: 'explicit' | 'inferred' | 'chosen' | 'default' | 'local' | 'oauth';
 };
 
 /**
@@ -90,6 +91,9 @@ export function describeProviderChoice(choice: ProviderChoice, key: string | und
   if (choice.reason === 'inferred') {
     const prefix = choice.provider === 'openai-compat' ? 'sk-or-…' : 'sk-ant-…';
     return `✓ ${label} ${choice.provider}${where} — dedotto dalla chiave (${prefix})\n`;
+  }
+  if (choice.reason === 'chosen') {
+    return `✓ ${label} ${choice.provider}${where} — scelto ora\n`;
   }
   if (choice.reason === 'local') {
     return `✓ ${label} ${choice.provider}${where} — runtime locale rilevato e scelto, nessuna chiave\n`;

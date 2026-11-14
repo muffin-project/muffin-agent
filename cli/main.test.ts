@@ -106,6 +106,8 @@ describe('muffin init infers the provider from the key — headless, no TTY requ
     expect(r.code).toBe(0);
     expect(r.err).toContain('provider');
     expect(r.err).toMatch(/non è sk-or|default/);
+    // Headless there is nothing to ask with. The credential menu is a TTY path.
+    expect(r.err).not.toContain('Collega il modello');
 
     const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'));
     expect(config.provider.kind).toBe('anthropic');
@@ -1007,7 +1009,13 @@ describe.skipIf(!haScript())('muffin init su un terminale vero', () => {
       ['init'],
       'OpenRouter — browser',
     );
+    // One menu. The provider lines live on this question; a second picker
+    // would not be what this transcript shows, and deleting them here fails
+    // the real `cmdInit` path.
     expect(r.out).toContain('OpenRouter — browser');
+    expect(r.out).toContain('Anthropic — chiave Console/API');
+    expect(r.out).toContain('Piano ChatGPT');
+    expect(r.out).toContain('Endpoint personalizzato');
   });
 
   it('Ctrl+D alla prima domanda finisce come il ramo headless, non come un crash', () => {
