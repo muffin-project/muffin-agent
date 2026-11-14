@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
-import { holderLiveness, mintHolderId, pidAlive, type Liveness } from './incarnation.js';
+import { holderLiveness, type Liveness, mintHolderId, pidAlive } from './incarnation.js';
 
-export { pidAlive, type Liveness };
+export { type Liveness, pidAlive };
 
 /**
  * One holder at a time, across processes, surviving a hard kill — and, since
@@ -116,20 +116,17 @@ export type LockOutcome = { release: () => void } | { held: string; remedy: stri
  * That last claim has a precondition this file does not check: `heldBy`
  * (below) computes `nowMs - takenAt`, and a `takenAt` written by a clock that
  * runs *ahead* of the reader's makes that difference negative — never greater
- * than any horizon, hard or ordinary. A live pid whose claim carries a
+ * than any horizon, hard or ordinary. A live holder whose claim carries a
  * future-dated `taken_at` is therefore held with no expiry at all until the
- * pid itself dies, which is a real gap in "bounded rather than forever" (judge,
- * round 2, R4/R6). Not closed here: every holder in this codebase writes
- * `taken_at` from its own `Date.now()`/`new Date()` immediately before the
- * write, so the only source of skew is disagreement between machines' clocks,
- * which NTP keeps under a second — negligible against a multi-minute horizon,
- * today. The day that stops being true, the fix is one line at the
- * `nowMs - takenAt` comparison (`heldBy`, "Alive is not enough by itself"):
- * treat `takenAt > nowMs + tolerance` as stale too. Not added speculatively
- * because the right tolerance is a real choice — too small and it fires on
- * ordinary skew, too large and it buys nothing — and guessing one without a
- * measured skew budget would be exactly the unverifiable presumption
- * `docs/development/PRACTICES.md` §2 says to cut rather than write down.
+ * holder itself dies, which is a real gap in "bounded rather than forever"
+ * (judge, round 2, R4/R6). A tolerance at this comparison was considered and
+ * rejected: too small and it fires on ordinary skew, too large and it buys
+ * nothing, and no skew budget was measured. Do not add one. The interim
+ * mitigation is outside this function. `muffin doctor` names the row
+ * (`core/lock/future-claim.ts`). `muffin gateway unlock --confirm` clears a
+ * gateway claim whose incarnation is not held, and refuses one that is.
+ * The root fix is a later amendment of ADR-0094, not a change to `heldBy`
+ * or `refresh`.
  */
 export const HARD_STALE_MULTIPLIER = 6;
 
@@ -185,7 +182,12 @@ export function heldBy(
  * `core/memory/store.ts` carried its own private duplicate, predating this
  * one, until the P27 follow-up slice folded it in here.
  */
-export function ensureColumn(db: Database.Database, table: string, column: string, ddl: string): void {
+export function ensureColumn(
+  db: Database.Database,
+  table: string,
+  column: string,
+  ddl: string,
+): void {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
   if (columns.some((c) => c.name === column)) return;
   try {
@@ -259,7 +261,9 @@ export class DurableLock {
     // Guarded on `holder_id` as well as `pid`, below — the statement itself
     // stays a plain positional UPDATE; the horizon check that decides whether
     // to run it at all lives in `refresh`, next to `heldBy`'s own rule.
-    this.refreshStmt = db.prepare(`UPDATE ${spec.table} SET taken_at = ? WHERE id = 1 AND pid = ? AND holder_id = ?`);
+    this.refreshStmt = db.prepare(
+      `UPDATE ${spec.table} SET taken_at = ? WHERE id = 1 AND pid = ? AND holder_id = ?`,
+    );
     // `release` stays guarded on `pid` alone, deliberately not on `holder_id`:
     // `GatewayLock.release(pid)` (via `cmdGatewayStop`, and this file's own
     // tests) is legitimately called from an instance that never itself
@@ -329,7 +333,8 @@ export class DurableLock {
   refresh(now: Date, pid: number = process.pid, onRefresh?: () => void): boolean {
     const beat = this.db.transaction((at: string, nowMs: number, self: number): boolean => {
       const row = this.recorded();
-      if (row?.pid !== self || row.holderId !== this.myHolderId || this.myHolderId === null) return false;
+      if (row?.pid !== self || row.holderId !== this.myHolderId || this.myHolderId === null)
+        return false;
       if (heldBy(row, nowMs, this.spec.staleAfterMs, () => true) === null) return false;
       if (this.refreshStmt.run(at, self, this.myHolderId).changes === 0) return false;
       onRefresh?.();
@@ -386,7 +391,9 @@ export class DurableLock {
     const row = this.recorded();
     if (row?.pid !== pid || row.holderId !== this.myHolderId) return false;
     // A delayed admission can also require a claim inside the heartbeat horizon.
-    return now === undefined || heldBy(row, now.getTime(), this.spec.staleAfterMs, () => true) !== null;
+    return (
+      now === undefined || heldBy(row, now.getTime(), this.spec.staleAfterMs, () => true) !== null
+    );
   }
 
   private currentHolder(nowMs: number): number | null {
