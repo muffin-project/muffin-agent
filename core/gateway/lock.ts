@@ -97,7 +97,9 @@ export class GatewayLock {
     // `since` is set only here: a heartbeat that touched it would reset uptime
     // every thirty seconds, and `doctor` would report a process that has been
     // up for a week as thirty seconds old, forever.
-    this.claimInfo = db.prepare(`UPDATE gateway_lock SET since = @at, status = @status WHERE id = 1`);
+    this.claimInfo = db.prepare(
+      `UPDATE gateway_lock SET since = @at, status = @status WHERE id = 1`,
+    );
     this.beatInfo = db.prepare(`UPDATE gateway_lock SET status = @status WHERE id = 1`);
   }
 
@@ -174,7 +176,9 @@ export function readGateway(
     return null;
   }
   const judged =
-    row === undefined ? undefined : { pid: row.pid, takenAt: row.taken_at, holderId: row.holder_id ?? null };
+    row === undefined
+      ? undefined
+      : { pid: row.pid, takenAt: row.taken_at, holderId: row.holder_id ?? null };
   const pid = heldBy(judged, now.getTime(), STALE_AFTER_MS, alive);
   if (pid === null || !row) return null;
   return {

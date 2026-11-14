@@ -1,7 +1,7 @@
 import type { JobStore } from '../scheduler/jobs.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import type { TurnLane } from '../turns/lane.js';
-import { HEARTBEAT_MS, type GatewayLock } from './lock.js';
+import { type GatewayLock, HEARTBEAT_MS } from './lock.js';
 import type { Notifier } from './notify.js';
 
 /**
@@ -223,7 +223,9 @@ export class Gateway {
    * expensive half of boot in the CLI, so the loser of the race has not spawned
    * MCP children or connected a surface by the time it finds out.
    */
-  start(now: Date = this.now()): { started: true } | { started: false; held: string; remedy: string } {
+  start(
+    now: Date = this.now(),
+  ): { started: true } | { started: false; held: string; remedy: string } {
     // Idempotent, because `serve` claims too. The claim deliberately refuses a
     // live holder even when that holder is this same pid (see sendlock.ts), so
     // without this flag a caller that pre-checked would refuse itself.
@@ -424,7 +426,9 @@ export class Gateway {
       // A missing transport means the watchdog never gets fed and systemd kills
       // a healthy process every WatchdogSec. Visible, or it reads as a crash
       // loop with no cause anywhere.
-      this.deps.log(`gateway: notifiche al supervisore non consegnate (${problem}) — watchdog non alimentato`);
+      this.deps.log(
+        `gateway: notifiche al supervisore non consegnate (${problem}) — watchdog non alimentato`,
+      );
     }
 
     // One tick straight away, not only on the interval. Two things go wrong
