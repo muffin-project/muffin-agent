@@ -154,6 +154,13 @@ export type IngressHooks = {
   /** Mints and commits the durable work identity — the port's own `bind`. */
   readonly claim: (ctx: Ingressing) => Promise<Claim>;
   readonly work: WorkDeps;
+  /**
+   * «C'è una riga `runnable` da raccogliere adesso»: la stessa spinta che il
+   * connettore usa per un'approvazione (`ConnectorDeps.onWork`). Assente dove
+   * non c'è una corsia da svegliare — il REPL senza gateway — e in quel caso
+   * il router non accoda e aspetta come prima.
+   */
+  readonly wake?: (() => void) | undefined;
   readonly openLive: (ctx: Ingressing) => Promise<LiveWork>;
   /** The port's write-ahead delivery plan (§2.4), never `SurfaceRegistry.deliver`. */
   readonly deliver: (ctx: Ingressing, workId: string, text: string) => Promise<'sent' | 'possibly_sent' | 'deferred'>;
@@ -403,7 +410,11 @@ async function runStage(
       // Presence starts here and not at `work`: on a slow link the download is
       // the part the owner waits through, and before this slice the Telegram
       // connector already started its "sta scrivendo…" ahead of `ingest`.
-      await openLive();
+      // Con la corsia occupata e una `TurnLane` dietro, questo evento finirà
+      // accodato: aprire un secondo vivo adesso prenderebbe il posto di quello
+      // del turno che sta girando (`LaneRegistry.open` sovrascrive) e il
+      // `close()` di questo evento cancellerebbe il suo `/stop`.
+      if (!(hooks.wake !== undefined && hooks.work.lane.busy())) await openLive();
       const arrival = await hooks.ingest(ctx);
       if (arrival === null) return step(CONTINUE);
       ctx.arrival = arrival;
@@ -434,10 +445,14 @@ async function runStage(
       // event already bound.
       if (claim.kind === 'taken') return step({ kind: 'deferred', workId: claim.workId, why: 'bind-lost' });
       if (ctx.text === undefined) throw new Error('ingress: the work stage ran without a composed text');
-      const sinks = await openLive();
-      const lane = sinks.arm();
+      // Letta una volta, prima dei sink vivi: è la decisione che il router
+      // possiede (vedi `WorkRequest.enqueueNow`) e apre il ramo che non tocca
+      // la linea del turno in corso.
+      const busyEnqueue = hooks.wake !== undefined && hooks.work.lane.busy();
+      const sinks = busyEnqueue ? null : await openLive();
+      const lane = sinks?.arm() ?? { signal: new AbortController().signal, steer: () => [] };
       try {
-        ctx.result = await runWork(hooks.work, ctx.port, ctx.event, {
+        const result = await runWork(hooks.work, ctx.port, ctx.event, {
           workId: claim.workId,
           identity: ctx.identity,
           text: ctx.text,
@@ -447,9 +462,21 @@ async function runStage(
           steer: lane.steer,
           ...(ctx.arrival?.image === undefined ? {} : { images: [ctx.arrival.image] }),
           ...(ctx.arrival?.audio === undefined ? {} : { audios: [ctx.arrival.audio] }),
-          ...(sinks.onDelta === undefined ? {} : { onDelta: sinks.onDelta }),
-          ...(sinks.onProgress === undefined ? {} : { onProgress: sinks.onProgress }),
+          ...(sinks?.onDelta === undefined ? {} : { onDelta: sinks.onDelta }),
+          ...(sinks?.onProgress === undefined ? {} : { onProgress: sinks.onProgress }),
+          enqueueNow: busyEnqueue,
         });
+        // La corsia era occupata e la riga è già durevole: la risposta la
+        // consegnerà la `TurnLane`, non questo drain. L'evento è chiuso qui
+        // perché il suo fuoco è stato consumato — la riga `runnable` è ciò che
+        // lo sostituisce — e la spinta è l'unica cosa che manca perché parta
+        // subito invece al prossimo battito.
+        if ('kind' in result) {
+          hooks.wake?.();
+          hooks.finish(ctx);
+          return step({ kind: 'suspended', workId: result.workId });
+        }
+        ctx.result = result;
       } catch (error) {
         // The continuation target vanished between bind and execution. Never
         // recompute under this event's identity: the event stays pending and
@@ -460,7 +487,10 @@ async function runStage(
         }
         throw error;
       }
-      await sinks.ran?.(ctx.result);
+      // L'altro ramo del tipo è già tornato qui sopra; questo è il turno che
+      // ha davvero risposto in banda.
+      if (ctx.result === undefined) throw new Error('ingress: work returned no result');
+      await sinks?.ran?.(ctx.result);
       return step(CONTINUE);
     }
     case 'deliver': {

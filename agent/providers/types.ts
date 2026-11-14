@@ -394,6 +394,8 @@ export type ChatResult = {
   stopReason: StopReason;
   usage: Usage;
   model: string;
+  /** Milliseconds from dispatch to the first nonblank text delta, when observed on the wire. */
+  firstTextMs?: number;
   /** Provider request/generation id, when the upstream returns one. */
   requestId?: string;
   /**
@@ -520,6 +522,8 @@ export type ProviderErrorSource = 'transport' | 'output';
 
 /** Carries what the recovery cascade needs to decide, instead of a bare string. */
 export type ProviderErrorDetails = {
+  /** An account quota that requires user action before another attempt. */
+  quota?: 'chatgpt-plan';
   /** Upstream generation/request id, when the provider exposed one. */
   requestId?: string;
   /** Concrete upstream that served the call (e.g. OpenRouter `provider`), when known. */

@@ -1,11 +1,11 @@
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { install, until } from '../harness.js';
+import { shellNonDisponibileQui } from '../sandbox-host.js';
 import { type FakeTelegram, privateMessage, startFakeTelegram } from '../telegram.js';
 import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
-import { shellNonDisponibileQui } from '../sandbox-host.js';
 
 /**
  * #533 — quando il gateway è vivo, è l'unico execution owner della Home.
@@ -158,6 +158,87 @@ describe('acceptance · #533 · il gateway è l unico execution owner', () => {
   );
 
   it(
+    'loads a hidden write tool on the gateway and commits the requested file',
+    async () => {
+      const filename = 'shared-decisions.md';
+      const decision = 'Ship after both checks pass.';
+      const inst = await install({
+        env: { MUFFIN_EXEC_LOCAL: '' },
+        main: [
+          { tool: { name: 'fs_read', args: { path: 'alpha.md' } } },
+          { tool: { name: 'fs_read', args: { path: 'beta.md' } } },
+          {
+            tool: {
+              name: 'capability_search',
+              args: { query: 'write file content', max_results: 1 },
+            },
+          },
+          { tool: { name: 'fs_write', args: { path: filename, content: decision } } },
+          { text: 'Written.' },
+        ],
+      });
+      try {
+        writeFileSync(join(inst.workspace, 'alpha.md'), `${decision}\nShip date: Monday.`);
+        writeFileSync(join(inst.workspace, 'beta.md'), `${decision}\nShip date: Tuesday.`);
+        const profiles = join(inst.home, 'profiles');
+        mkdirSync(profiles, { recursive: true });
+        writeFileSync(
+          join(profiles, 'discovery.json'),
+          JSON.stringify({
+            schemaVersion: 1,
+            name: 'gateway discovery acceptance',
+            match: ['*'],
+            maxToolsExposed: 6,
+            maxToolCallsPerTurn: 8,
+            thinking: 'unset',
+            recovery: [],
+            notes: 'Require a discovery round before the file write.',
+          }),
+        );
+        const gateway = await inst.gateway();
+        try {
+          await gateway.waitFor(/muffin gateway/, 20_000);
+          const run = await inst.muffin([
+            'run',
+            '--timeout',
+            String(HEADLESS_TURN_TIMEOUT_SECONDS),
+            `Read alpha.md and beta.md. Create ${filename} with only the shared decision, without either shipment date.`,
+          ]);
+          expect(run.code, run.err).toBe(0);
+          expect(run.err).toContain('esecuzione sul gateway');
+          const requests = inst.provider.main();
+          expect(requests[0]?.tools).toContain('capability_search');
+          expect(requests.slice(0, 3).flatMap((request) => request.tools)).not.toContain(
+            'fs_write',
+          );
+          expect(requests[3]?.tools).toContain('fs_write');
+          expect(readFileSync(join(inst.workspace, filename), 'utf8')).toBe(decision);
+          const effect = inst.db((db) =>
+            db
+              .prepare(`
+            SELECT calls.decision, calls.is_error, calls.ended_at, turns.status
+            FROM turn_tool_calls AS calls JOIN turns ON turns.id = calls.turn_id
+            WHERE calls.tool = 'fs_write' AND turns.surface = 'cli'
+          `)
+              .get(),
+          );
+          expect(effect).toEqual({
+            decision: 'draft',
+            is_error: 0,
+            ended_at: expect.any(String),
+            status: 'done',
+          });
+        } finally {
+          await gateway.stop();
+        }
+      } finally {
+        await inst.cleanup();
+      }
+    },
+    headlessTestTimeoutMs(1),
+  );
+
+  it(
     'senza gateway: fail closed con rimedio, nessuna esecuzione locale silenziosa',
     async () => {
       const inst = await install({
@@ -171,7 +252,8 @@ describe('acceptance · #533 · il gateway è l unico execution owner', () => {
           String(HEADLESS_TURN_TIMEOUT_SECONDS),
           'dimmi qualcosa',
         ]);
-        if (run.code !== 1) throw new Error(`atteso exit 1 (non eseguo), ricevuto ${run.code}\n${run.err}`);
+        if (run.code !== 1)
+          throw new Error(`atteso exit 1 (non eseguo), ricevuto ${run.code}\n${run.err}`);
         if (!run.err.includes('non eseguo:')) {
           throw new Error(`il rifiuto non si dichiara:\n${run.err}`);
         }
@@ -182,7 +264,9 @@ describe('acceptance · #533 · il gateway è l unico execution owner', () => {
           throw new Error('il turno ha comunque risposto senza gateway');
         }
         if (inst.provider.main().length !== 0) {
-          throw new Error(`il modello è stato chiamato ${inst.provider.main().length} volte senza gateway`);
+          throw new Error(
+            `il modello è stato chiamato ${inst.provider.main().length} volte senza gateway`,
+          );
         }
       } finally {
         await inst.cleanup();

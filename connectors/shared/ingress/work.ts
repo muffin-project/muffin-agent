@@ -1,4 +1,4 @@
-import { ContinuationGone, askWhichContinuation, continueTurn, resolveContinuation, resolveFollowup, runTurn, type LoopDeps, type TurnDelta, type TurnEvent, type TurnResult } from '../../../agent/loop.js';
+import { ContinuationGone, askWhichContinuation, continueTurn, enqueueTurn, resolveContinuation, resolveFollowup, runTurn, type LoopDeps, type TurnDelta, type TurnEvent, type TurnResult } from '../../../agent/loop.js';
 import type { AudioBlock, ImageBlock } from '../../../agent/providers/types.js';
 import type { TrustTier } from '../../../core/policy/types.js';
 import { LANE_TURNS, type ModelLane } from '../../../core/turns/model-lane.js';
@@ -95,14 +95,32 @@ export type WorkRequest = {
   readonly audios?: readonly AudioBlock[] | undefined;
   readonly onDelta?: ((delta: TurnDelta) => void) | undefined;
   readonly onProgress?: ((event: TurnEvent) => void) | undefined;
+  /**
+   * Accoda adesso, senza aspettare la corsia.
+   *
+   * La decisione è del chiamante perché non è una proprietà del lavoro: è una
+   * proprietà del **processo**. Il gateway ha una `TurnLane` che batte e a cui
+   * si può dare la spinta (`onWork`), quindi una riga `runnable` è lavoro che
+   * qualcuno raccoglierà davvero; il REPL senza gateway non ha quella corsia —
+   * accodare lì vorrebbe dire una risposta che non arriva mai — e continua a
+   * fare la cosa di prima: aspettare. Il router legge `lane.busy()` una volta
+   * sola, **prima** di aprire i sink vivi, e passa qui quella decisione: un
+   * secondo controllo dentro `runWork` sarebbe una seconda verità sullo stesso
+   * fatto, con una finestra fra le due.
+   */
+  readonly enqueueNow?: boolean | undefined;
 };
+
+/** Il lavoro è scritto e tocca alla corsia; nessuna consegna in banda è avvenuta. */
+export type EnqueuedWork = { readonly kind: 'enqueued'; readonly workId: string };
+
 
 export async function runWork(
   deps: WorkDeps,
   port: IngressPort,
   event: InboundEvent,
   req: WorkRequest,
-): Promise<TurnResult> {
+): Promise<TurnResult | EnqueuedWork> {
   const runtimeEvent: RuntimeEvent = {
     occurrenceId: req.workId,
     kind: 'message.received',
@@ -129,7 +147,44 @@ async function runAgentWork(
   port: IngressPort,
   event: InboundEvent,
   req: WorkRequest,
-): Promise<TurnResult> {
+): Promise<TurnResult | EnqueuedWork> {
+  /**
+   * L'accodamento va deciso **prima** di aspettare la corsia, o non è un
+   * accodamento: la corsia occupata è proprio la condizione che qui non deve
+   * bloccare il drain. Le due letture (`resolveContinuation`, `resolveFollowup`)
+   * sono le stesse che il ramo sincrono rifà sotto la corsia: qui servono solo
+   * a non accodare un messaggio che appartiene a un turno già aperto.
+   */
+  if (req.enqueueNow === true) {
+    const match = resolveContinuation({
+      turns: deps.loop.turns,
+      principal: req.identity.principal,
+      sessionId: req.identity.sessionKey,
+      text: req.text,
+      hasAttachment: req.images !== undefined || req.audios !== undefined,
+      nowMs: Date.now(),
+    });
+    const follow =
+      match.kind === 'none'
+        ? resolveFollowup(deps.loop.turns, req.identity.sessionKey, req.text, Date.now())
+        : null;
+    if (match.kind === 'none' && follow === null && deps.loop.turns.get(req.workId) === null) {
+      const session = deps.sessions.open(req.identity.sessionKey);
+      enqueueTurn(deps.loop, {
+        principal: req.identity.principal,
+        tenant: req.identity.tenant,
+        surface: port.surface.id,
+        session,
+        text: req.text,
+        contentTaint: req.contentTaint,
+        ...(req.images === undefined ? {} : { images: [...req.images] }),
+        ...(req.audios === undefined ? {} : { audios: [...req.audios] }),
+        id: req.workId,
+        replyTo: req.replyTo,
+      });
+      return { kind: 'enqueued', workId: req.workId };
+    }
+  }
   /**
    * La corsia prima della riga, come i turni inoltrati dal terminale
    * (`core/gateway/forward.ts`): niente parte finché non la teniamo, quindi

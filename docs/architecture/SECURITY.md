@@ -836,12 +836,43 @@ and direct installs have no such carve-out.
 This claim covers direct active hook filenames under a real `.git/hooks`
 directory, hardlink installs, writes through pre-existing symlinks, and
 renames into place. Git's `core.hooksPath` or a Git directory outside the
-worktree remain owned by #657. The mid-command symlink replacement is the
+worktree are outside this claim. The mid-command symlink replacement is the
 remaining #865 residual: attempted and recorded by the self-test and the
 wiring test on every platform, denied on none, tracked openly rather than
 claimed. The
 decision and test scope are recorded in
 `docs/evidence/shell-nested-git-hook-protection-2026-10-07.md`.
+
+### 9.4 Command-bearing Git attributes (#657)
+
+A workspace `.gitattributes` write must not turn pre-existing trusted-host
+Git configuration into an execution channel. Ordinary attributes stay
+writable: `text`, `eol`, boolean `diff`/`merge`, comments, and any
+`filter`/`diff`/`merge` name that does not resolve to a command.
+`fs_write`/`fs_edit` deny a **new** assignment only when that name already
+has a command (`filter.*.clean`/`smudge`/`process`, `diff.*.command`/`textconv`,
+`merge.*.driver`) in local, global, or system config, including includes.
+An existing line that names such a driver can stay while other attributes
+change, so a repository that already uses LFS is not frozen.
+
+Sandbox Git does not inherit global or system config
+(`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` = `/dev/null` in
+`SandboxExecutor.childEnv`). Repo-local config still applies there. A later
+`git add` under that env does not run a global or system clean filter,
+including a re-add after an earlier command that did. `git config --get`
+and that `git add` agree. A `git rm --cached` that still sees the global
+config does run the clean filter; that execution is the non-sterile
+command, not the re-add.
+
+Still open: `shell_run_write` can plant `filter=`/`diff=`/`merge=` lines the
+filesystem gate never sees; a later Git command outside the sandbox, using
+the owner's global and system config, will run them. `core.attributesFile`
+can name another workspace file, and a write to that path is not gated.
+Attribute macros whose definition is not in the written file
+(`[attr]evil filter=…` in another attributes file, then `*.txt evil`) are
+not classified. A driver configured only after the write is not visible at
+the gate. Repo-local drivers still run for sandbox Git when the activating
+line was planted outside `fs_write` / `fs_edit`.
 
 Process inspection should expose only the information required by the declared
 capability; command-line arguments are particularly sensitive because they may

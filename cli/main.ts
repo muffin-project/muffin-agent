@@ -5,6 +5,7 @@ import { isatty } from 'node:tty';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { assicuraVoce } from '../core/audio/trascrivi.js';
+import { rememberKeyProfile } from '../core/config/auth-profile.js';
 import {
   ConfigError,
   loadConfig,
@@ -21,6 +22,7 @@ import { buildHardenPlan, formatHardenPlan } from '../core/rot/harden.js';
 import { seal, verify } from '../core/rot/verify.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { cmdAdopt } from './adopt.js';
+import { cmdAuth } from './auth.js';
 import { cmdBackup, cmdRestore } from './backup.js';
 import { cmdChatGPT } from './chatgpt.js';
 import { allHelp, canonicalCommand, completion, primaryHelp } from './command-surface.js';
@@ -44,6 +46,7 @@ import {
   resolveLocalHome,
   runInit,
 } from './init.js';
+import { acquireInitCredential } from './init-auth.js';
 import { cmdJobsAdd, cmdJobsCap, cmdJobsList, cmdJobsRemove, JOBS_USAGE } from './jobs.js';
 import { cmdJudgments } from './judgments.js';
 import { cmdMcpAdd, cmdMcpList, cmdMcpRemove, MCP_USAGE } from './mcp.js';
@@ -75,9 +78,11 @@ import {
   localModelChoices,
   looksLikeTelegramToken,
   type ModelChoiceReason,
+  OPENROUTER_BASE_URL,
   OPENROUTER_MODEL_FAMILIES,
   probeLocalRuntime,
 } from './onboarding.js';
+import { probeSavedRoute } from './openrouter-connect.js';
 import { cmdOrientamento } from './orientamento.js';
 import { promptLine, promptSecret, resolveSecretInput, secretStoreHint } from './prompt.js';
 import { cmdPromptShow, cmdPromptVersion, PROMPT_USAGE } from './prompt-show.js';
@@ -96,6 +101,7 @@ import { styleFor } from './ui.js';
 import { cmdUndo } from './undo.js';
 import { cmdUpdate, describeBuild } from './update.js';
 import { cmdVaultAdd, cmdVaultCheck, cmdVaultLs, cmdVaultReindex, VAULT_USAGE } from './vault.js';
+import { cmdWorkspace } from './workspace.js';
 
 /**
  * Entry point.
@@ -204,8 +210,16 @@ async function main(rawArgv: string[]): Promise<number> {
       return cmdInit(rest);
     case 'config':
       return cmdConfig(paths().home, rest);
+    case 'workspace':
+      return cmdWorkspace(paths().home, rest);
     case 'chatgpt':
       return cmdChatGPT(paths().home, rest, { out: (line) => process.stdout.write(`${line}\n`) });
+    case 'auth':
+      return cmdAuth(paths().home, rest, {
+        out: (line) => process.stdout.write(`${line}\n`),
+        ssh: Boolean(process.env.SSH_CONNECTION || process.env.SSH_TTY),
+        stdinIsTTY: isatty(0),
+      });
     case 'model': {
       const style = styleFor(process.stdout);
       process.stdout.write(`${style.header('muffin model')}\n`);
@@ -597,9 +611,26 @@ async function cmdInit(argv: string[]): Promise<number> {
     if (probe.available) localRuntime = await askLocalOrApi(probe);
   }
 
+  let openRouterOAuth = false;
   if (!localRuntime && !apiKey && !stored && process.stdin.isTTY) {
-    process.stderr.write(keyHint(providerFlag, values['base-url']));
-    apiKey = await promptSecret('Chiave API (nascosta — incollala, o invio per saltare): ');
+    const baseFlag = values['base-url'];
+    const offerOAuth =
+      providerFlag !== 'anthropic' && (baseFlag === undefined || baseFlag === OPENROUTER_BASE_URL);
+    if (!offerOAuth) {
+      process.stderr.write(keyHint(providerFlag, baseFlag));
+      apiKey = await promptSecret('Chiave API (nascosta — invio vuoto chiede conferma): ');
+    } else {
+      const acquired = await acquireInitCredential({
+        stderr: (text) => process.stderr.write(text),
+        ssh: Boolean(process.env.SSH_CONNECTION || process.env.SSH_TTY),
+        stdinIsTTY: true,
+      });
+      if (acquired.kind === 'cancelled') return 1;
+      if (acquired.kind === 'key') {
+        apiKey = acquired.apiKey;
+        openRouterOAuth = acquired.method === 'oauth-pkce';
+      }
+    }
   }
 
   // A local runtime needs no key from the owner, but `readSecret` at boot
@@ -644,8 +675,16 @@ async function cmdInit(argv: string[]): Promise<number> {
         baseUrl: localRuntime.baseUrl,
         reason: 'local' as const,
       }
-    : chooseProvider(providerFlag, keyForInference, values['base-url']);
-  process.stderr.write(describeProviderChoice(choice, keyForInference));
+    : openRouterOAuth
+      ? {
+          provider: 'openai-compat' as const,
+          baseUrl: OPENROUTER_BASE_URL,
+          reason: 'oauth' as const,
+        }
+      : chooseProvider(providerFlag, keyForInference, values['base-url']);
+  process.stderr.write(
+    describeProviderChoice(choice, openRouterOAuth ? undefined : keyForInference),
+  );
 
   // Modello (owner, verbatim: "chiedere che modello si vuole usare") — asked
   // only when nothing already names one, and only on a TTY; headless keeps
@@ -693,8 +732,11 @@ async function cmdInit(argv: string[]): Promise<number> {
   } catch {
     priorProvider = undefined;
   }
-  const effProvider = providerFlag ?? priorProvider?.kind ?? choice.provider;
-  const effBaseUrl = values['base-url'] ?? priorProvider?.baseUrl ?? choice.baseUrl;
+  const effProvider =
+    providerFlag ?? (openRouterOAuth ? choice.provider : (priorProvider?.kind ?? choice.provider));
+  const effBaseUrl =
+    values['base-url'] ??
+    (openRouterOAuth ? choice.baseUrl : (priorProvider?.baseUrl ?? choice.baseUrl));
   let steps: InitStep[];
   try {
     steps = runInit({
@@ -729,6 +771,22 @@ async function cmdInit(argv: string[]): Promise<number> {
       `\nRilancia \`muffin init\` quando è risolto — riprende da dove si era fermato.\n`,
     );
     return 1;
+  }
+
+  if (openRouterOAuth) {
+    rememberKeyProfile(home, {
+      id: 'default',
+      provider: 'openrouter',
+      method: 'oauth-pkce',
+      secretName: 'openrouter_api_key',
+    });
+    const probeCode = await probeSavedRoute(home, (line) => process.stderr.write(`${line}\n`));
+    if (probeCode !== 0) {
+      process.stderr.write(
+        'La chiave è salvata. Riprova la prova con `muffin doctor --online` senza ripetere il login.\n',
+      );
+      return 1;
+    }
   }
 
   // Il fallback vocale, assicurato una volta sola e mai a sorpresa: solo se

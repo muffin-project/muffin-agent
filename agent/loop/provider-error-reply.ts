@@ -6,6 +6,9 @@ const RECOVERY_MARKER = '[MUFFIN_PROVIDER_ERROR_REPLY_V1]\n';
 
 /** User-facing diagnostics expose only the typed failure class and numeric status, never upstream text. */
 export function providerErrorReply(error: ProviderError): string {
+  if (error.details?.quota === 'chatgpt-plan') {
+    return 'È stato raggiunto il limite di utilizzo del piano ChatGPT. Controlla la quota di Muffin in https://chatgpt.com/settings/usage.';
+  }
   if (error.source === 'output') {
     return 'Il provider ha restituito una risposta non valida; non ho potuto completare il turno. Riprova tra poco.';
   }

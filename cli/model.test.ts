@@ -1,5 +1,5 @@
-import { createServer } from 'node:http';
 import { mkdtempSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -60,7 +60,8 @@ async function embeddingEndpoint(naturalDimensions = 1024): Promise<{
     request.on('end', () => {
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
       requests.push({ path: request.url, body });
-      const dimensions = typeof body['dimensions'] === 'number' ? body['dimensions'] : naturalDimensions;
+      const dimensions =
+        typeof body['dimensions'] === 'number' ? body['dimensions'] : naturalDimensions;
       const embedding = Array.from({ length: dimensions }, () => 0.125);
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(
@@ -75,7 +76,8 @@ async function embeddingEndpoint(naturalDimensions = 1024): Promise<{
     server.listen(0, '127.0.0.1', resolve);
   });
   const address = server.address();
-  if (address === null || typeof address === 'string') throw new Error('embedding endpoint did not bind TCP');
+  if (address === null || typeof address === 'string')
+    throw new Error('embedding endpoint did not bind TCP');
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     requests,
@@ -84,7 +86,7 @@ async function embeddingEndpoint(naturalDimensions = 1024): Promise<{
         server.close((error) => (error ? reject(error) : resolve()));
       }),
   };
-};
+}
 
 describe('providerFor', () => {
   it('keeps same-host proxy paths outside the canonical provider catalog', () => {
@@ -321,6 +323,56 @@ describe('muffin model', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(loadConfig(h)).toEqual(before);
     expect(out.join('\n')).toContain('saved key reference');
+  });
+
+  it('offers OpenRouter OAuth from the interactive command and probes the saved route', async () => {
+    const h = mkdtempSync(join(tmpdir(), 'muffin-model-openrouter-oauth-'));
+    runInit({
+      home: h,
+      provider: 'anthropic',
+      baseUrl: PROVIDERS.anthropic.baseUrl,
+      apiKey: 'synthetic-anthropic-key',
+    });
+    const before = loadConfig(h);
+    const canary = 'sk-or-v1-menu-canary';
+    const ensure = vi.fn(async () => {
+      writeSecret('openrouter_api_key', canary, h, 'home');
+      return 'oauth-pkce' as const;
+    });
+    const verify = vi.fn<typeof verifyInferenceRoute>(async () => ({
+      status: 'working',
+      provider: 'openai-compat',
+      requestedModel: 'openrouter/free',
+      resolvedModel: 'openrouter/free',
+      capability: { completion: 'pass', toolCall: 'pass' },
+      diagnostic: 'completed probe',
+      observedAt: '2026-11-04T00:00:00Z',
+      durationMs: 1,
+    }));
+    const out: string[] = [];
+    const code = await cmdModel(h, ['main', '--provider', 'openrouter', 'openrouter/free'], {
+      out: (line) => out.push(line),
+      interactive: true,
+      ensureOpenRouter: ensure,
+      verify,
+      fetchImpl: catalogo(['openrouter/free', '0', '0']),
+      gatewayStatus: async () => null,
+    });
+    expect(code).toBe(0);
+    expect(ensure).toHaveBeenCalledTimes(1);
+    expect(verify).toHaveBeenCalledTimes(1);
+    const after = loadConfig(h);
+    expect(after.provider).toMatchObject({
+      kind: 'openai-compat',
+      baseUrl: OR.baseUrl,
+      apiKeyRef: 'secret://openrouter_api_key',
+    });
+    expect(after.models.main).toBe('openrouter/free');
+    expect(after.models.light).toBe(before.models.light);
+    expect(inferenceProvider(after, 'light').kind).toBe('anthropic');
+    expect(out.join('\n')).toContain('working');
+    expect(out.join('\n')).not.toContain(canary);
+    expect(JSON.stringify(after)).not.toContain(canary);
   });
 
   it('keeps a same-host OpenAI-compatible proxy when provider is left blank', async () => {
@@ -632,7 +684,10 @@ describe('muffin model', () => {
       const code = await cmdModel(h, ['embed', 'qwen3-embedding:0.6b'], { out: sink });
 
       expect(code).toBe(0);
-      expect(endpoint.requests[0]).toMatchObject({ path: '/api/embeddings', body: { model: 'qwen3-embedding:0.6b' } });
+      expect(endpoint.requests[0]).toMatchObject({
+        path: '/api/embeddings',
+        body: { model: 'qwen3-embedding:0.6b' },
+      });
       expect(endpoint.requests[0]?.body).not.toHaveProperty('dimensions');
       expect(loadConfig(h).embedder?.dimensions).toBe(1024);
     } finally {
@@ -675,7 +730,11 @@ describe('muffin model', () => {
       await active.embed(['normal runtime embedding']);
       expect(endpoint.requests[1]).toMatchObject({
         path: '/v1/embeddings',
-        body: { model: 'new-embedding-model', input: ['normal runtime embedding'], dimensions: 1536 },
+        body: {
+          model: 'new-embedding-model',
+          input: ['normal runtime embedding'],
+          dimensions: 1536,
+        },
       });
     } finally {
       await endpoint.close();
@@ -706,7 +765,10 @@ describe('muffin model', () => {
       const code = await cmdModel(h, ['embed', 'new-embedding-model'], { out: sink });
 
       expect(code).toBe(1);
-      expect(loadConfig(h).embedder).toMatchObject({ model: 'old-embedding-model', dimensions: 512 });
+      expect(loadConfig(h).embedder).toMatchObject({
+        model: 'old-embedding-model',
+        dimensions: 512,
+      });
       expect(out.join('\n')).toContain('Niente scritto');
     } finally {
       await endpoint.close();

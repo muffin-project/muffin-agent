@@ -709,6 +709,13 @@ USAGE
   # and (when present) the already private, service-owned key file.
   chmod 0711 "$ROOT_STAGE" || root_fail "could not expose the secured stage to the service account."
   say "root has prepared the service account; build and setup now run as muffin."
+  # Git 2.56 realpaths the process cwd inside index-pack and aborts the clone
+  # with "Invalid path '<ancestor>': Permission denied" when that ancestor is
+  # not searchable. runuser keeps the caller's cwd. A root install is often
+  # started from a private directory — an admin home, /root, or a GitHub
+  # Actions workspace — which the service account must not traverse. Start the
+  # delegated installer in the service home, which that account owns. The root
+  # shell's cwd stays put; the paths below are absolute.
   set +e
   if [ -n "$KEY_COPY" ]; then
     runuser -u muffin -- env -i HOME="$SERVICE_HOME" USER=muffin LOGNAME=muffin SHELL=/bin/sh \
@@ -717,7 +724,7 @@ USAGE
       MUFFIN_TOOL_BIN="$SERVICE_PREFIX/tool-bin" \
       MUFFIN_CMD="$ROOT_CMD" MUFFIN_NO_APT=1 MUFFIN_REPO="${MUFFIN_REPO:-https://github.com/muffin-project/muffin-agent.git}" \
       MUFFIN_CHANNEL="${MUFFIN_CHANNEL:-main}" MUFFIN_REF="${MUFFIN_REF:-}" MUFFIN_NODE_DIST_BASE="${MUFFIN_NODE_DIST_BASE:-}" \
-      MUFFIN_NO_GATEWAY="${MUFFIN_NO_GATEWAY:-}" MUFFIN_SANDBOX_REPORT=0 MUFFIN_API_KEY_FILE="$KEY_COPY" sh "$ROOT_STAGE/install.sh" "$@" <&0
+      MUFFIN_NO_GATEWAY="${MUFFIN_NO_GATEWAY:-}" MUFFIN_SANDBOX_REPORT=0 MUFFIN_API_KEY_FILE="$KEY_COPY" sh -c 'cd "$1" && shift && exec sh "$@"' _ "$SERVICE_HOME" "$ROOT_STAGE/install.sh" "$@" <&0
   else
     runuser -u muffin -- env -i HOME="$SERVICE_HOME" USER=muffin LOGNAME=muffin SHELL=/bin/sh \
       PATH="$SERVICE_PREFIX/tool-bin:$SERVICE_PREFIX/node/bin:/usr/local/bin:/usr/bin:/bin" XDG_RUNTIME_DIR="$SERVICE_RUNTIME" \
@@ -725,7 +732,7 @@ USAGE
       MUFFIN_TOOL_BIN="$SERVICE_PREFIX/tool-bin" \
       MUFFIN_CMD="$ROOT_CMD" MUFFIN_NO_APT=1 MUFFIN_REPO="${MUFFIN_REPO:-https://github.com/muffin-project/muffin-agent.git}" \
       MUFFIN_CHANNEL="${MUFFIN_CHANNEL:-main}" MUFFIN_REF="${MUFFIN_REF:-}" MUFFIN_NODE_DIST_BASE="${MUFFIN_NODE_DIST_BASE:-}" \
-      MUFFIN_NO_GATEWAY="${MUFFIN_NO_GATEWAY:-}" MUFFIN_SANDBOX_REPORT=0 sh "$ROOT_STAGE/install.sh" "$@" <&0
+      MUFFIN_NO_GATEWAY="${MUFFIN_NO_GATEWAY:-}" MUFFIN_SANDBOX_REPORT=0 sh -c 'cd "$1" && shift && exec sh "$@"' _ "$SERVICE_HOME" "$ROOT_STAGE/install.sh" "$@" <&0
   fi
   ROOT_INSTALL_RC=$?
   set -e

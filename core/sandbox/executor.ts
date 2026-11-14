@@ -594,6 +594,18 @@ async function rilascia(): Promise<void> {
   if (esecutoriVivi === 0) await SandboxManager.reset();
 }
 
+/**
+ * Global and system Git config the sandbox child must not inherit (#657).
+ *
+ * Repo-local config stays. These two names are the whole contract: tests
+ * that spawn Git outside the sandbox import them so a second copy cannot
+ * drift from `childEnv`.
+ */
+export const STERILE_GIT_CONFIG_ENV = {
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_CONFIG_SYSTEM: '/dev/null',
+} as const;
+
 export class SandboxExecutor {
   private initPromise: Promise<void> | null = null;
   private cachedProbe: SandboxProbe | null = null;
@@ -1347,8 +1359,12 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
     // `evals/acceptance/scenarios/a-lifecycle.accept.ts`). A commit that
     // needs an identity now says `Author identity unknown` instead of
     // silently borrowing the owner's — the loud, ask-gated failure.
-    out.GIT_CONFIG_GLOBAL = '/dev/null';
-    out.GIT_CONFIG_SYSTEM = '/dev/null';
+    // The same assignment is the #657 boundary for agent-driven Git: a
+    // workspace `.gitattributes` must not run the owner's global or system
+    // filter, diff or merge drivers. `/etc/gitconfig` stays readable inside
+    // the sandbox, so the system file has to be named empty here too.
+    out.GIT_CONFIG_GLOBAL = STERILE_GIT_CONFIG_ENV.GIT_CONFIG_GLOBAL;
+    out.GIT_CONFIG_SYSTEM = STERILE_GIT_CONFIG_ENV.GIT_CONFIG_SYSTEM;
     return out;
   }
 

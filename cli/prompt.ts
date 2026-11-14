@@ -77,15 +77,45 @@ const finiti = new WeakSet<NodeJS.ReadStream>();
  * listener, which writes it on both paths.
  *
  * input/output are injectable so the read path is testable without a real TTY.
+ *
+ * An empty Enter is not a skip. Dogfood hit this on `muffin init`: the prompt
+ * said Enter skips, and a stray Enter dropped the key with no second chance.
+ * Empty Enter asks for confirmation; Ctrl+D (EOF) still cancels immediately,
+ * because there is no line left to confirm.
  */
-export function promptSecret(
+const SKIP_SECRET = /^(y|yes|s|si|sì)$/i;
+
+export async function promptSecret(
   question: string,
   input: NodeJS.ReadStream = process.stdin,
   output: NodeJS.WriteStream = process.stdout,
 ): Promise<string | undefined> {
-  if (!input.isTTY || finiti.has(input)) return Promise.resolve(undefined);
+  for (;;) {
+    const read = await readHiddenLine(question, input, output);
+    if (read === 'no-tty' || read === 'eof') return undefined;
+    if (read !== 'empty') return read.value;
+    const confirm = await promptLine('Invio vuoto: saltare davvero? [y/N] ', input, output);
+    if (confirm === undefined) return undefined;
+    if (SKIP_SECRET.test(confirm)) return undefined;
+  }
+}
+
+type HiddenRead = 'eof' | 'empty' | { value: string };
+
+function readHiddenLine(
+  question: string,
+  input: NodeJS.ReadStream,
+  output: NodeJS.WriteStream,
+): Promise<HiddenRead | 'no-tty'> {
+  if (!input.isTTY || finiti.has(input)) return Promise.resolve('no-tty');
   return new Promise((resolve) => {
     let risposto = false;
+    let settled = false;
+    const finish = (value: HiddenRead) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
     // Senza `output`: readline non scrive un byte, quindi non c'è un'eco da
     // sopprimere e non c'è il ridisegno che cancellava la domanda.
     const rl = createInterface({ input, terminal: true });
@@ -104,7 +134,7 @@ export function promptSecret(
       // ascoltatore scatta anche dopo una risposta, dove la promise è già
       // decisa e resta solo la riga da chiudere.
       output.write('\n');
-      resolve(undefined);
+      finish('eof');
     });
     rl.question('', (answer) => {
       // Risolvere PRIMA di chiudere: `rl.close()` emette `close` da lì, e
@@ -113,7 +143,7 @@ export function promptSecret(
       // vale una chiave incollata e buttata via in silenzio.
       risposto = true;
       const trimmed = answer.trim();
-      resolve(trimmed === '' ? undefined : trimmed);
+      finish(trimmed === '' ? 'empty' : { value: trimmed });
       rl.close();
     });
   });
@@ -169,17 +199,24 @@ export async function resolveSecretInput(deps: {
 }): Promise<SecretInput> {
   if (deps.stdinIsTTY) {
     const entered = await deps.prompt('Valore del segreto (nascosto — Ctrl+D per annullare): ');
-    if (!entered) return { ok: false, message: 'nessun valore inserito — niente scritto, niente cambiato.' };
+    if (!entered)
+      return { ok: false, message: 'nessun valore inserito — niente scritto, niente cambiato.' };
     return { ok: true, value: entered };
   }
   let value: string;
   try {
     value = deps.readPiped().trim();
   } catch (error) {
-    return { ok: false, message: `non riesco a leggere stdin: ${error instanceof Error ? error.message : String(error)}` };
+    return {
+      ok: false,
+      message: `non riesco a leggere stdin: ${error instanceof Error ? error.message : String(error)}`,
+    };
   }
   if (!value) {
-    return { ok: false, message: `no value on stdin — pipe it: echo -n "$KEY" | muffin secret set ${deps.name}` };
+    return {
+      ok: false,
+      message: `no value on stdin — pipe it: echo -n "$KEY" | muffin secret set ${deps.name}`,
+    };
   }
   return { ok: true, value };
 }

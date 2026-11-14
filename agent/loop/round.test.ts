@@ -2,7 +2,7 @@ import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import DatabaseCtor from 'better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createDecide } from '../../core/policy/decide.js';
 import { replyCapability } from '../../core/policy/doors.js';
 import { POLICY_FLOOR } from '../../core/policy/matrix.js';
@@ -980,6 +980,72 @@ describe('la telemetria di first activity arriva sullo span (#497)', () => {
     if (chiamate.length === 0) throw new Error('nessuno span muffin.chat_call esportato');
     return chiamate.at(-1)!.attributes;
   }
+
+  it.each([true, false])(
+    'traces the first nonblank ChatGPT text delta only when observed (%s)',
+    async (withTextDelta) => {
+      vi.useFakeTimers({ toFake: ['performance', 'setTimeout', 'clearTimeout'] });
+      try {
+        let opened!: () => void;
+        const open = new Promise<void>((resolve) => {
+          opened = resolve;
+        });
+        const model = 'gpt-6.1-sol';
+        const text = 'Final answer.';
+        let requests = 0;
+        const provider = new OpenAIChatGPTProvider(
+          { accessToken: async () => 'fixture-token', listModels: async () => [] },
+          {
+            fetch: async () => {
+              requests += 1;
+              const stream = new ReadableStream<Uint8Array>({
+                start(controller) {
+                  const encoder = new TextEncoder();
+                  const emit = (type: string, fields: Record<string, unknown>) => {
+                    controller.enqueue(
+                      encoder.encode(`event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`),
+                    );
+                  };
+                  setTimeout(() => emit('response.output_text.delta', { delta: ' ' }), 10);
+                  if (withTextDelta)
+                    setTimeout(() => emit('response.output_text.delta', { delta: text }), 40);
+                  setTimeout(() => {
+                    emit('response.completed', {
+                      response: {
+                        id: 'resp_fixture',
+                        model,
+                        status: 'completed',
+                        output: [{
+                          type: 'message',
+                          role: 'assistant',
+                          status: 'completed',
+                          content: [{ type: 'output_text', text }],
+                        }],
+                      },
+                    });
+                    controller.close();
+                  }, 120);
+                  opened();
+                },
+              });
+              return new Response(stream, { headers: { 'content-type': 'text/event-stream' } });
+            },
+          },
+        );
+        const h = harness({ provider, model, profile: { ...CONSERVATIVE, thinking: 'adaptive' } });
+        const result = runRounds(h.scope);
+        await open;
+        await vi.advanceTimersByTimeAsync(120);
+        expect(await result).toMatchObject({ text, stopped: 'answered' });
+        expect(requests).toBe(1);
+        const attrs = spanChatCall(h.home);
+        expect(attrs['muffin.chat_call.first_text_ms']).toBe(withTextDelta ? 40 : undefined);
+        expect(attrs['muffin.chat_call.first_activity_at']).toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it('uno stream con delta registra first/last activity e ttft', async () => {
     const provider = scriptedProvider({

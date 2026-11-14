@@ -2381,6 +2381,11 @@ export class TelegramConnector {
         return winner === minted ? { kind: 'mine', workId: minted } : { kind: 'taken', workId: winner };
       },
       work: { loop: this.deps.loop, sessions: this.deps.sessions, lane: this.deps.lane },
+      // La stessa spinta del pulsante «consenti», per la stessa ragione: una
+      // riga accodata mentre la corsia era occupata deve partire subito, non
+      // al prossimo battito da trenta secondi. Senza `onWork` (REPL senza
+      // gateway) il router non accoda affatto.
+      ...(this.deps.onWork === undefined ? {} : { wake: this.deps.onWork }),
       openLive: () => this.apriIlVivo(incoming),
       deliver: async (_ctx, turnId, text) => {
         // Fault point 5, made observable: a real crash here lands after the
@@ -2487,6 +2492,7 @@ export class TelegramConnector {
         // `close()`, così `/stop` e `/steer` trovano qualcosa esattamente
         // mentre c'è qualcosa.
         const vivo = this.corsie.open(this.corsia(incoming.chatId));
+        transcript.report({ type: 'preparing_context' });
         return { signal: vivo.controller.signal, steer: () => vivo.correzioni.splice(0) };
       },
       onDelta: (delta: TurnDelta): void => {

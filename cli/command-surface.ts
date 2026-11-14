@@ -17,9 +17,16 @@ export type CommandSpec = {
 export const COMMANDS: readonly CommandSpec[] = [
   {
     name: 'init',
-    summary: 'configura Muffin; su terminale chiede la chiave nascosta',
+    summary: 'configura Muffin; su terminale OpenRouter OAuth, la chiave è il ripiego',
     audience: 'owner',
     primary: true,
+  },
+  {
+    name: 'auth',
+    summary: 'collega OpenRouter e sceglie l’account attivo',
+    audience: 'owner',
+    primary: true,
+    subcommands: ['login', 'status', 'list', 'switch'],
   },
   {
     name: 'chatgpt',
@@ -32,6 +39,13 @@ export const COMMANDS: readonly CommandSpec[] = [
     summary: 'sceglie provider e modello per una corsia',
     audience: 'owner',
     primary: true,
+  },
+  {
+    name: 'workspace',
+    summary: 'dichiara il progetto in cui lavorano i turni',
+    audience: 'owner',
+    primary: true,
+    subcommands: ['set', 'clear'],
   },
   {
     name: 'surface',

@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'vitest';
 import { install, until, type Install } from '../harness.js';
@@ -7,7 +7,6 @@ import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-bu
 import { callbackQuery, privateMessage, startFakeTelegram, type FakeTelegram } from '../telegram.js';
 import { scenario } from '../scenario.js';
 import { MemoryStore } from '../../../core/memory/store.js';
-import { paths } from '../../../core/config/config.js';
 import { shellNonDisponibileQui } from '../sandbox-host.js';
 
 /**
@@ -378,14 +377,12 @@ describe('acceptance · B14 · un allegato reale su Telegram', () => {
         env: { MUFFIN_GATEWAY_TICK_MS: '200' },
       });
       try {
-        // A file that already exists — `send_file`'s scope is the vault root
-        // (`cli/surface.ts#attachSendFile`), never the project working
-        // directory `fs_write` uses, so this is placed directly rather than
-        // routed through a first tool round that could not reach it anyway.
-        const vaultRoot = paths(inst.home).vault;
-        mkdirSync(vaultRoot, { recursive: true });
+        // The file lives where `fs_write` would put it — the project working
+        // directory. Before G4 `send_file` looked only in the vault, so this
+        // scenario had to place the file there and proved the opposite of the
+        // product promise; the workspace root is now the first read scope.
         const content = 'resoconto acceptance B14 — '.repeat(50);
-        writeFileSync(join(vaultRoot, 'report.txt'), content, 'utf8');
+        writeFileSync(join(inst.workspace, 'report.txt'), content, 'utf8');
         const expectedBytes = Buffer.byteLength(content, 'utf8');
 
         const gw = await pairOwner(inst, tg, OWNER_ID);
