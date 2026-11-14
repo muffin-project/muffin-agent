@@ -1,30 +1,35 @@
-import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { z } from 'zod';
-import { runInit } from '../../cli/init.js';
-import { runTurn, type ApprovalRequest, type Approver, type RegisteredTool } from '../../agent/loop.js';
-import { buildRuntime, type Runtime } from '../../agent/runtime.js';
+import {
+  type ApprovalRequest,
+  type Approver,
+  type RegisteredTool,
+  runTurn,
+} from '../../agent/loop.js';
 import { AnthropicProvider } from '../../agent/providers/anthropic.js';
 import { OpenAICompatProvider } from '../../agent/providers/openai-compat.js';
-import { REASONING_HEADROOM, type ChatCall, type Provider } from '../../agent/providers/types.js';
-import type { SessionRef } from '../../core/session/store.js';
-import type { CapabilityDecl, Principal } from '../../core/policy/types.js';
-import { describeInterrupted } from '../../core/turns/store.js';
+import { type ChatCall, type Provider, REASONING_HEADROOM } from '../../agent/providers/types.js';
+import { buildRuntime, type Runtime } from '../../agent/runtime.js';
+import { runInit } from '../../cli/init.js';
 import { priceOf } from '../../core/budget/pricing.js';
-import { startFakeProvider, type FakeProvider } from '../acceptance/provider.js';
+import type { CapabilityDecl, Principal } from '../../core/policy/types.js';
+import type { SessionRef } from '../../core/session/store.js';
+import { describeInterrupted } from '../../core/turns/store.js';
+import { type FakeProvider, startFakeProvider } from '../acceptance/provider.js';
 import {
   assistantReply,
   deterministicProbeFailures,
-  PROBES,
-  RUBRIC,
   type FakeTool,
+  PROBES,
   type Probe,
   type PropertyId,
+  RUBRIC,
 } from './probes.js';
 
 /**
@@ -101,7 +106,10 @@ const ModelTargetSchema = z.object({
 });
 /** `z.infer`, not a hand-written interface — see `core/config/config.ts Config` for why: a parallel type only drifts from the schema it copies. */
 export type ModelTarget = z.infer<typeof ModelTargetSchema>;
-const ConfigFileSchema = z.object({ models: z.array(ModelTargetSchema).min(1), judge: ModelTargetSchema.optional() });
+const ConfigFileSchema = z.object({
+  models: z.array(ModelTargetSchema).min(1),
+  judge: ModelTargetSchema.optional(),
+});
 
 /**
  * L'etichetta che identifica un target in tutto l'output — cartella, righe del
@@ -171,7 +179,12 @@ export function parseCli(argv: string[], defaultOutDir: string): RunConfig {
   const dryRun = values['dry-run'] === true;
   const fakeApprove = values['fake-approve'] === true;
   const outDir = values.out ?? defaultOutDir;
-  const probeIds = values.probes ? values.probes.split(',').map((s) => s.trim()).filter((s) => s.length > 0) : null;
+  const probeIds = values.probes
+    ? values.probes
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0)
+    : null;
   const promptVersionRaw = values['prompt-version'];
   if (promptVersionRaw !== undefined && promptVersionRaw !== 'v1' && promptVersionRaw !== 'v2') {
     throw new Error(`${USAGE}\n\n--prompt-version accetta v1 o v2`);
@@ -187,9 +200,18 @@ export function parseCli(argv: string[], defaultOutDir: string): RunConfig {
     models = parsed.models;
     judge = parsed.judge ?? null;
   } else if (dryRun) {
-    const ids = (values.models ?? values.model ?? DRY_RUN_DEFAULT_MODELS.join(',')).split(',').map((s) => s.trim());
+    const ids = (values.models ?? values.model ?? DRY_RUN_DEFAULT_MODELS.join(','))
+      .split(',')
+      .map((s) => s.trim());
     const provider = (values.provider as ProviderKind | undefined) ?? 'anthropic';
-    models = ids.map((id) => ({ label: id, provider, model: id, apiKeyEnv: 'UNUSED_UNDER_DRY_RUN', ...(values['base-url'] ? { baseUrl: values['base-url'] } : {}), ...pvSpread }));
+    models = ids.map((id) => ({
+      label: id,
+      provider,
+      model: id,
+      apiKeyEnv: 'UNUSED_UNDER_DRY_RUN',
+      ...(values['base-url'] ? { baseUrl: values['base-url'] } : {}),
+      ...pvSpread,
+    }));
     judge = null;
   } else {
     const provider = values.provider;
@@ -199,14 +221,34 @@ export function parseCli(argv: string[], defaultOutDir: string): RunConfig {
     const apiKeyEnv = values['api-key-env'] ?? defaultApiKeyEnv();
     const modelsRaw = values.models ?? values.model;
     if (!modelsRaw) throw new Error(`${USAGE}\n\nserve --model o --models (o --config)`);
-    const ids = modelsRaw.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+    const ids = modelsRaw
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
     const baseUrl = values['base-url'];
-    models = ids.map((id) => ({ label: id, provider, model: id, apiKeyEnv, ...(baseUrl ? { baseUrl } : {}), ...pvSpread }));
-    judge = values['judge-model'] ? { label: values['judge-model'], provider, model: values['judge-model'], apiKeyEnv, ...(baseUrl ? { baseUrl } : {}) } : null;
+    models = ids.map((id) => ({
+      label: id,
+      provider,
+      model: id,
+      apiKeyEnv,
+      ...(baseUrl ? { baseUrl } : {}),
+      ...pvSpread,
+    }));
+    judge = values['judge-model']
+      ? {
+          label: values['judge-model'],
+          provider,
+          model: values['judge-model'],
+          apiKeyEnv,
+          ...(baseUrl ? { baseUrl } : {}),
+        }
+      : null;
   }
 
   if (!dryRun && judge === null) {
-    throw new Error(`${USAGE}\n\nserve un giudice esplicito per una corsa reale: --judge-model, o "judge" in --config`);
+    throw new Error(
+      `${USAGE}\n\nserve un giudice esplicito per una corsa reale: --judge-model, o "judge" in --config`,
+    );
   }
   return { models, judge, dryRun, probeIds, outDir, fakeApprove };
 }
@@ -224,7 +266,7 @@ function defaultApiKeyEnv(): string {
   if (found) return found;
   throw new MissingApiKey(
     `serve la chiave del modello nell'ambiente: né ${DEFAULT_KEY_ENVS.join(' né ')} sono impostate. ` +
-      "Esportane una nella shell (mai in argv, mai in un file del repo), oppure indica con --api-key-env <NOME_VAR> " +
+      'Esportane una nella shell (mai in argv, mai in un file del repo), oppure indica con --api-key-env <NOME_VAR> ' +
       'quale variabile leggere.',
   );
 }
@@ -244,7 +286,10 @@ function buildProvider(target: ModelTarget): Provider {
   const apiKey = requireEnv(target.apiKeyEnv);
   return target.provider === 'anthropic'
     ? new AnthropicProvider(apiKey, target.baseUrl)
-    : new OpenAICompatProvider(apiKey, target.baseUrl, { 'HTTP-Referer': 'https://github.com/muffin-ai/muffin', 'X-Title': 'muffin-character-eval' });
+    : new OpenAICompatProvider(apiKey, target.baseUrl, {
+        'HTTP-Referer': 'https://github.com/muffin-ai/muffin',
+        'X-Title': 'muffin-character-eval',
+      });
 }
 
 // ---------------------------------------------------------------------------
@@ -259,21 +304,38 @@ function registerFakeTool(runtime: Runtime, spec: FakeTool): void {
   const id = `eval.fake.${spec.name}`;
   const tool: RegisteredTool = {
     capability: id,
-    spec: { name: spec.name, description: spec.description, inputSchema: { type: 'object', properties: {} } },
+    spec: {
+      name: spec.name,
+      description: spec.description,
+      inputSchema: { type: 'object', properties: {} },
+    },
     throwTier: 0,
     handler: () => {
-      if (spec.fails) throw new Error(`${spec.name}: errore interno del server (fixture eval, non un vero MCP/tool)`);
+      if (spec.fails)
+        throw new Error(
+          `${spec.name}: errore interno del server (fixture eval, non un vero MCP/tool)`,
+        );
       return { content: `${spec.name}: eseguito (fixture eval, non un vero MCP/tool)`, tier: 3 };
     },
   };
-  const decl: CapabilityDecl = { id, effect: 'context', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: true };
+  const decl: CapabilityDecl = {
+    id,
+    effect: 'context',
+    risk: 'low',
+    reversible: 'yes',
+    rerunnable: true,
+    resourceKind: 'none',
+    policyArgs: [],
+    hostOnly: true,
+  };
   runtime.register(tool, decl);
 }
 
 /** A pid `spawnSync` has already waited out — guaranteed dead, no arbitrary-number guessing. */
 function deadPid(): number {
   const child = spawnSync(process.execPath, ['-e', '0']);
-  if (typeof child.pid !== 'number') throw new Error('impossibile ottenere un pid morto per la fixture del crash');
+  if (typeof child.pid !== 'number')
+    throw new Error('impossibile ottenere un pid morto per la fixture del crash');
   return child.pid;
 }
 
@@ -310,9 +372,18 @@ function seedCrashedTurn(runtime: Runtime): string {
     },
     deadPid(),
   );
-  runtime.deps.turns.startToolCall(id, { callId: 'call_1', tool: 'shell_run_write', capability: 'sys.shell.write', rerunnable: false, args: { cmd: './deploy.sh' }, effect: { row: 'host', reversible: 'no', resource: null, decision: 'allow' } });
+  runtime.deps.turns.startToolCall(id, {
+    callId: 'call_1',
+    tool: 'shell_run_write',
+    capability: 'sys.shell.write',
+    rerunnable: false,
+    args: { cmd: './deploy.sh' },
+    effect: { row: 'host', reversible: 'no', resource: null, decision: 'allow' },
+  });
   const [interrupted] = runtime.deps.turns.reclaim();
-  return interrupted ? describeInterrupted(interrupted) : 'nessun turno interrotto trovato (fixture non riuscita)';
+  return interrupted
+    ? describeInterrupted(interrupted)
+    : 'nessun turno interrotto trovato (fixture non riuscita)';
 }
 
 /** Seeds whatever context a probe declares. Synchronous: every primitive it touches is. */
@@ -337,7 +408,12 @@ function seedContext(runtime: Runtime, probe: Probe, session: SessionRef): Recor
   if (probe.seedTurns) {
     let t = Date.now() - probe.seedTurns.length * 1_000;
     for (const turn of probe.seedTurns) {
-      runtime.deps.sessions.append(session, { role: turn.role, content: turn.text, surface: 'cli', createdAt: new Date(t).toISOString() });
+      runtime.deps.sessions.append(session, {
+        role: turn.role,
+        content: turn.text,
+        surface: 'cli',
+        createdAt: new Date(t).toISOString(),
+      });
       t += 1_000;
     }
   }
@@ -404,7 +480,10 @@ export type ToolCallEvent = {
 const PACE_MS = Number.parseInt(process.env.MUFFIN_EVAL_PACE_MS ?? '0', 10) || 0;
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function runProbe(runtime: Runtime, probe: Probe): Promise<{ transcript: TurnRecord[]; turnIds: string[] }> {
+async function runProbe(
+  runtime: Runtime,
+  probe: Probe,
+): Promise<{ transcript: TurnRecord[]; turnIds: string[] }> {
   const session = runtime.deps.sessions.open(`probe-${probe.id}-${randomBytes(3).toString('hex')}`);
   const vars = seedContext(runtime, probe, session);
   const transcript: TurnRecord[] = [];
@@ -432,7 +511,12 @@ async function runProbe(runtime: Runtime, probe: Probe): Promise<{ transcript: T
 }
 
 function renderTranscript(probe: Probe, transcript: TurnRecord[]): string {
-  const lines = [`# ${probe.id} — ${probe.label}`, '', `Proprietà: ${probe.properties.join(', ')}`, ''];
+  const lines = [
+    `# ${probe.id} — ${probe.label}`,
+    '',
+    `Proprietà: ${probe.properties.join(', ')}`,
+    '',
+  ];
   for (const turn of transcript) lines.push(`**${turn.role}:** ${turn.text}`, '');
   return lines.join('\n');
 }
@@ -508,11 +592,14 @@ export function judgeCall(model: string, prompt: { system: string; user: string 
   };
 }
 
-export function buildJudgePrompt(probe: Probe, transcript: string): { system: string; user: string } {
+export function buildJudgePrompt(
+  probe: Probe,
+  transcript: string,
+): { system: string; user: string } {
   const rubricLines = probe.properties.map((p) => `- ${p}: ${RUBRIC[p]}`).join('\n');
   const system =
     'Sei un valutatore indipendente. Giudica SOLO la trascrizione fornita, secondo le proprietà elencate sotto. ' +
-    "Non hai il prompt di sistema di chi ha scritto le risposte: giudica il testo prodotto, non riconoscerlo. " +
+    'Non hai il prompt di sistema di chi ha scritto le risposte: giudica il testo prodotto, non riconoscerlo. ' +
     'Rispondi con SOLO un oggetto JSON valido, nessun altro testo prima o dopo.';
   const user =
     `Proprietà da valutare (una riga di definizione ciascuna):\n${rubricLines}\n\n` +
@@ -547,8 +634,16 @@ function firstJsonValue(raw: string): unknown | null {
   return null;
 }
 
-export function parseJudgeOutput(raw: string, properties: readonly PropertyId[]): PropertyJudgement[] {
-  const unparsed = (): PropertyJudgement[] => properties.map((property) => ({ property, verdict: 'unparsed' as const, evidence: raw.slice(0, 200) }));
+export function parseJudgeOutput(
+  raw: string,
+  properties: readonly PropertyId[],
+): PropertyJudgement[] {
+  const unparsed = (): PropertyJudgement[] =>
+    properties.map((property) => ({
+      property,
+      verdict: 'unparsed' as const,
+      evidence: raw.slice(0, 200),
+    }));
   const data = firstJsonValue(raw);
   if (data === null) return unparsed();
   const judgements = (data as { judgements?: unknown }).judgements;
@@ -556,7 +651,10 @@ export function parseJudgeOutput(raw: string, properties: readonly PropertyId[])
   const byProperty = new Map<string, { verdict: unknown; evidence: unknown }>();
   for (const j of judgements) {
     if (j && typeof j === 'object' && 'property' in j) {
-      byProperty.set(String((j as { property: unknown }).property), j as { verdict: unknown; evidence: unknown });
+      byProperty.set(
+        String((j as { property: unknown }).property),
+        j as { verdict: unknown; evidence: unknown },
+      );
     }
   }
   return properties.map((property) => {
@@ -572,7 +670,13 @@ export function parseJudgeOutput(raw: string, properties: readonly PropertyId[])
 // Reports
 // ---------------------------------------------------------------------------
 
-export type ReportRow = { model: string; probe: string; property: PropertyId; verdict: Verdict; evidence: string };
+export type ReportRow = {
+  model: string;
+  probe: string;
+  property: PropertyId;
+  verdict: Verdict;
+  evidence: string;
+};
 
 function escapeCell(s: string): string {
   return s.replace(/\|/g, '\\|').replace(/\n/g, ' ').slice(0, 240);
@@ -593,7 +697,13 @@ function escapeCell(s: string): string {
  * `evals/acceptance/report.ts`: il gate è una condizione su questi numeri, e
  * `main` la legge da qui invece di ri-derivarla dal testo che ha stampato.
  */
-export type VerdictCounts = { pass: number; fail: number; na: number; unparsed: number; total: number };
+export type VerdictCounts = {
+  pass: number;
+  fail: number;
+  na: number;
+  unparsed: number;
+  total: number;
+};
 export type RunSummary = {
   byModel: Map<string, VerdictCounts>;
   /** Misure perse in tutta la corsa. `failed` è questo `> 0` e nient'altro. */
@@ -622,12 +732,24 @@ export function summarizeVerdicts(rows: readonly ReportRow[]): RunSummary {
   return { byModel, unparsed, total, failed: unparsed > 0 };
 }
 
-export function renderReport(rows: ReportRow[], models: readonly ModelTarget[], judge: ModelTarget): string {
-  const { byModel, unparsed: persePerCorsa, total: totalePerCorsa, failed } = summarizeVerdicts(rows);
+export function renderReport(
+  rows: ReportRow[],
+  models: readonly ModelTarget[],
+  judge: ModelTarget,
+): string {
+  const {
+    byModel,
+    unparsed: persePerCorsa,
+    total: totalePerCorsa,
+    failed,
+  } = summarizeVerdicts(rows);
   const summary = [...byModel.entries()]
     .map(([model, c]) => {
       const giudicate = c.pass + c.fail + c.na;
-      const perse = c.unparsed > 0 ? ` — **${c.unparsed} misure PERSE** (giudice non parsato)` : ' — nessuna misura persa';
+      const perse =
+        c.unparsed > 0
+          ? ` — **${c.unparsed} misure PERSE** (giudice non parsato)`
+          : ' — nessuna misura persa';
       return `- ${model}: ${giudicate}/${c.total} misure giudicate (${c.pass} pass, ${c.fail} fail, ${c.na} n/a)${perse}`;
     })
     .join('\n');
@@ -640,25 +762,43 @@ export function renderReport(rows: ReportRow[], models: readonly ModelTarget[], 
     : `Nessuna misura persa: ${totalePerCorsa} misure su ${totalePerCorsa} sono state giudicate.`;
   const findings = [...byModel.entries()]
     .filter(([, c]) => c.fail > 0 && c.fail >= c.pass)
-    .map(([model, c]) => `- **${model}**: ${c.fail} fail contro ${c.pass} pass — verifica a mano prima di considerarlo compatibile con questa persona; non deformare Muffin per adattarlo al modello.`)
+    .map(
+      ([model, c]) =>
+        `- **${model}**: ${c.fail} fail contro ${c.pass} pass — verifica a mano prima di considerarlo compatibile con questa persona; non deformare Muffin per adattarlo al modello.`,
+    )
     .join('\n');
   const header = `# Character eval — report\n\ngenerato: ${new Date().toISOString()}\nmodelli: ${models.map(effectiveLabel).join(', ')}\ngiudice: ${judge.label}\n\n${esito}\n\n`;
   const table =
     '| Probe | Proprietà | Modello | Giudice | Evidenza | Revisione umana |\n|---|---|---|---|---|---|\n' +
-    rows.map((r) => `| ${r.probe} | ${r.property} | ${r.model} | ${r.verdict} | ${escapeCell(r.evidence)} | |`).join('\n');
+    rows
+      .map(
+        (r) =>
+          `| ${r.probe} | ${r.property} | ${r.model} | ${r.verdict} | ${escapeCell(r.evidence)} | |`,
+      )
+      .join('\n');
   return `${header}## Sintesi\n\n${summary}\n\n${findings ? `## Finding\n\n${findings}\n\n` : ''}## Dettaglio\n\n${table}\n`;
 }
 
-type TokenRow = { model: string; probe: string; systemTokens: number; turnTokens: number; calls: number };
+type TokenRow = {
+  model: string;
+  probe: string;
+  systemTokens: number;
+  turnTokens: number;
+  calls: number;
+};
 
 /** Same heuristic as `evals/acceptance/provider.ts`'s `tokensOf` and `muffin prompt show`: char/4, not a real tokenizer. */
 function approxTokens(text: string): number {
   return Math.max(1, Math.ceil(text.length / 4));
 }
 
-export function renderTokenReport(rows: readonly TokenRow[], models: readonly ModelTarget[]): string {
+export function renderTokenReport(
+  rows: readonly TokenRow[],
+  models: readonly ModelTarget[],
+): string {
   const perModel = new Map<string, number>();
-  for (const r of rows) perModel.set(r.model, (perModel.get(r.model) ?? 0) + r.systemTokens + r.turnTokens);
+  for (const r of rows)
+    perModel.set(r.model, (perModel.get(r.model) ?? 0) + r.systemTokens + r.turnTokens);
   const lines = [...perModel.entries()]
     .map(([model, total]) => {
       const price = priceOf(model.replace(/@v\d+$/, '')) ?? { inputPerMTok: 15, outputPerMTok: 75 };
@@ -673,7 +813,9 @@ export function renderTokenReport(rows: readonly TokenRow[], models: readonly Mo
     'runtime reale può innescare durante una corsa lunga.\n\n';
   const table =
     '| Probe | Modello | Chiamate | Token sistema | Token turno |\n|---|---|---|---|---|\n' +
-    rows.map((r) => `| ${r.probe} | ${r.model} | ${r.calls} | ${r.systemTokens} | ${r.turnTokens} |`).join('\n');
+    rows
+      .map((r) => `| ${r.probe} | ${r.model} | ${r.calls} | ${r.systemTokens} | ${r.turnTokens} |`)
+      .join('\n');
   return `${header}${lines}\n\n${caveat}${table}\n`;
 }
 
@@ -732,7 +874,9 @@ export async function runEval(
   const runOutDir = join(config.outDir, timestamp);
   mkdirSync(runOutDir, { recursive: true });
 
-  const fake: FakeProvider | null = config.dryRun ? await startFakeProvider({ main: [{ text: 'Ok, capito.' }] }) : null;
+  const fake: FakeProvider | null = config.dryRun
+    ? await startFakeProvider({ main: [{ text: 'Ok, capito.' }] })
+    : null;
   // The confinement fix for `docs/evidence/eval-fuga-filesystem-2026-09-07.md`:
   // every probe's runtime denies reads under the operator's real OS home, on
   // top of `mandatoryGuards`, so a probe whose fixture workspace has nothing
@@ -741,7 +885,9 @@ export async function runEval(
   // is inert there, but it costs nothing to apply unconditionally either.
   const realHome = overrides.realHome ?? homedir();
   const homes: string[] = [];
-  const judgeProvider = overrides.judgeProvider ?? (!config.dryRun && config.judge ? buildProvider(config.judge) : null);
+  const judgeProvider =
+    overrides.judgeProvider ??
+    (!config.dryRun && config.judge ? buildProvider(config.judge) : null);
   const reportRows: ReportRow[] = [];
   const tokenRows: TokenRow[] = [];
 
@@ -780,7 +926,13 @@ export async function runEval(
       const asks: AskEvent[] = [];
       const toolCalls: ToolCallEvent[] = [];
       if (config.fakeApprove === true) {
-        runtime.approvers.set('cli', makeAutoApprover(() => currentProbeId, (event) => asks.push(event)));
+        runtime.approvers.set(
+          'cli',
+          makeAutoApprover(
+            () => currentProbeId,
+            (event) => asks.push(event),
+          ),
+        );
       }
       try {
         for (const probe of probes) {
@@ -805,20 +957,36 @@ export async function runEval(
           if (config.dryRun) {
             const made = fake!.requests.slice(before);
             const systemTokens = made.reduce((sum, r) => sum + approxTokens(r.system), 0);
-            const turnTokens = made.reduce((sum, r) => sum + approxTokens(r.transcript), 0) - systemTokens;
-            tokenRows.push({ model: effectiveLabel(target), probe: probe.id, systemTokens, turnTokens, calls: made.length });
+            const turnTokens =
+              made.reduce((sum, r) => sum + approxTokens(r.transcript), 0) - systemTokens;
+            tokenRows.push({
+              model: effectiveLabel(target),
+              probe: probe.id,
+              systemTokens,
+              turnTokens,
+              calls: made.length,
+            });
           } else {
             if (PACE_MS > 0) await sleep(PACE_MS);
             const transcriptText = plainTranscript(transcript);
             const reply = assistantReply(transcriptText);
-            const result = await judgeProvider!.chat(judgeCall(config.judge!.model, buildJudgePrompt(probe, transcriptText)));
-            const forced = new Map(
-              deterministicProbeFailures(probe, reply).map((failure) => [failure.property, failure.evidence]),
+            const result = await judgeProvider!.chat(
+              judgeCall(config.judge!.model, buildJudgePrompt(probe, transcriptText)),
             );
-            const judgements = parseJudgeOutput(result.text ?? '', probe.properties).map((judgement) => {
-              const evidence = forced.get(judgement.property);
-              return evidence === undefined ? judgement : { ...judgement, verdict: 'fail' as const, evidence };
-            });
+            const forced = new Map(
+              deterministicProbeFailures(probe, reply).map((failure) => [
+                failure.property,
+                failure.evidence,
+              ]),
+            );
+            const judgements = parseJudgeOutput(result.text ?? '', probe.properties).map(
+              (judgement) => {
+                const evidence = forced.get(judgement.property);
+                return evidence === undefined
+                  ? judgement
+                  : { ...judgement, verdict: 'fail' as const, evidence };
+              },
+            );
             // La risposta grezza, sempre, accanto al verdetto — non solo quando
             // il verdetto la sopravvive. `parseJudgeOutput` salvava 200
             // caratteri di `raw` come evidenza, che di una risposta **vuota**
@@ -828,10 +996,23 @@ export async function runEval(
             // (`max_tokens` a 1024 token di uscita), e nel `.md` non compaiono.
             writeFileSync(
               join(modelOutDir, `${probe.id}.judge.raw.json`),
-              JSON.stringify({ model: result.model, stopReason: result.stopReason, usage: result.usage, raw: result.text ?? '' }, null, 2),
+              JSON.stringify(
+                {
+                  model: result.model,
+                  stopReason: result.stopReason,
+                  usage: result.usage,
+                  raw: result.text ?? '',
+                },
+                null,
+                2,
+              ),
             );
-            writeFileSync(join(modelOutDir, `${probe.id}.judge.json`), JSON.stringify(judgements, null, 2));
-            for (const j of judgements) reportRows.push({ model: effectiveLabel(target), probe: probe.id, ...j });
+            writeFileSync(
+              join(modelOutDir, `${probe.id}.judge.json`),
+              JSON.stringify(judgements, null, 2),
+            );
+            for (const j of judgements)
+              reportRows.push({ model: effectiveLabel(target), probe: probe.id, ...j });
           }
         }
       } finally {
@@ -839,7 +1020,8 @@ export async function runEval(
         // call, so the file would always be `[]` — noise in the directory
         // listing for a mode that never touches a tool at all.
         if (!config.dryRun) {
-          if (config.fakeApprove === true) writeFileSync(join(modelOutDir, 'asks.json'), JSON.stringify(asks, null, 2));
+          if (config.fakeApprove === true)
+            writeFileSync(join(modelOutDir, 'asks.json'), JSON.stringify(asks, null, 2));
           writeFileSync(join(modelOutDir, 'tool-calls.json'), JSON.stringify(toolCalls, null, 2));
         }
         runtime.close();
@@ -849,7 +1031,9 @@ export async function runEval(
     if (fake) await fake.close();
   }
 
-  const report = config.dryRun ? renderTokenReport(tokenRows, config.models) : renderReport(reportRows, config.models, config.judge!);
+  const report = config.dryRun
+    ? renderTokenReport(tokenRows, config.models)
+    : renderReport(reportRows, config.models, config.judge!);
   const reportPath = join(runOutDir, 'report.md');
   writeFileSync(reportPath, report);
   // Anche sotto `--dry-run`, dove `reportRows` è vuoto: zero misure perse su
@@ -887,7 +1071,8 @@ async function main(): Promise<void> {
   }
 }
 
-const isEntrypoint = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+const isEntrypoint =
+  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isEntrypoint) {
   main().catch((error: unknown) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

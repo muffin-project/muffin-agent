@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runInit } from '../cli/init.js';
-import { buildRuntime } from './runtime.js';
 import { paths } from '../core/config/config.js';
+import { buildRuntime } from './runtime.js';
 
 /**
  * The persona reaches the turn.
@@ -79,7 +79,7 @@ describe('persona in the system prompt', () => {
     expect(prompt).toMatch(/seconda prospettiva con memoria/);
     expect(prompt).toMatch(/Non fingi di ricordare, aver visto, controllato, eseguito/);
     expect(prompt).toMatch(/Non descrivi un lavoro come completato se non lo è/);
-    expect(prompt).toContain('Un\'inferenza resta un\'inferenza');
+    expect(prompt).toContain("Un'inferenza resta un'inferenza");
   });
 
   it('states who Muffin is before the limits, in the one sealed file', () => {

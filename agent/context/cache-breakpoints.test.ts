@@ -23,12 +23,22 @@ function current(value: string): Message {
 }
 
 function isMarked(message: Message | undefined): boolean {
-  return message?.content.some((block) => block.type === 'text' && block.cache === 'stable') === true;
+  return (
+    message?.content.some((block) => block.type === 'text' && block.cache === 'stable') === true
+  );
 }
 
 describe('cache breakpoints', () => {
   it('marks the system prefix and stable history before the clock, never the clock or the current message', () => {
-    const messages = [history('a'), history('b'), history('c'), history('d'), history('e'), clock(), current('adesso')];
+    const messages = [
+      history('a'),
+      history('b'),
+      history('c'),
+      history('d'),
+      history('e'),
+      clock(),
+      current('adesso'),
+    ];
     const placed = placeCacheBreakpoints([text('sistema')], messages);
     expect(countCacheBreakpoints(placed.system, placed.messages)).toBe(MAX_CACHE_BREAKPOINTS);
     expect(placed.system[0]).toMatchObject({ cache: 'stable' });

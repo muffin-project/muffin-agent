@@ -3,8 +3,8 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -13,13 +13,13 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { runInit } from './init.js';
-import { cmdAdopt, reconcileDefaults } from './adopt.js';
-import { runUpdate } from './update.js';
-import { runDoctor } from './doctor.js';
 import { paths } from '../core/config/config.js';
 import { readDefaultsRegistry } from '../core/config/defaults-drift.js';
 import { discoverSkills, skillsPromptSection } from '../core/skills/skills.js';
+import { cmdAdopt, reconcileDefaults } from './adopt.js';
+import { runDoctor } from './doctor.js';
+import { runInit } from './init.js';
+import { runUpdate } from './update.js';
 
 /**
  * **Una casa creata prima che un default esistesse non lo riceve mai.**
@@ -67,14 +67,23 @@ describe('una casa nata prima di un default lo riceve lo stesso', () => {
     expect(existsSync(join(home, 'skills'))).toBe(false);
 
     const righe: string[] = [];
-    const code = cmdAdopt(home, ['--tutto'], { out: (l) => void righe.push(l), checkoutRoot: REPO });
+    const code = cmdAdopt(home, ['--tutto'], {
+      out: (l) => void righe.push(l),
+      checkoutRoot: REPO,
+    });
 
     expect(code, righe.join('\n')).toBe(0);
-    expect(readdirSync(join(home, 'skills')).sort()).toEqual(readdirSync(join(REPO, 'defaults', 'skills')).sort());
+    expect(readdirSync(join(home, 'skills')).sort()).toEqual(
+      readdirSync(join(REPO, 'defaults', 'skills')).sort(),
+    );
 
     const scan = discoverSkills(home);
     expect(scan.problems).toEqual([]);
-    expect(scan.skills.map((s) => s.name).sort()).toEqual(['collega-telegram', 'studia-un-documento', 'voce']);
+    expect(scan.skills.map((s) => s.name).sort()).toEqual([
+      'collega-telegram',
+      'studia-un-documento',
+      'voce',
+    ]);
     expect(skillsPromptSection(scan.skills)).not.toBe('');
   });
 
@@ -111,10 +120,12 @@ describe('una casa nata prima di un default lo riceve lo stesso', () => {
     expect(readFileSync(paths(home).defaultsManifest, 'utf8')).toBe(prima);
   });
 
-  it("`muffin doctor` lo dice da solo, con un rimedio eseguibile", async () => {
+  it('`muffin doctor` lo dice da solo, con un rimedio eseguibile', async () => {
     const home = casaVecchia();
     const report = await runDoctor(home, { checkoutRoot: REPO });
-    const riga = report.checks.find((c) => c.name === 'default skills/studia-un-documento/SKILL.md');
+    const riga = report.checks.find(
+      (c) => c.name === 'default skills/studia-un-documento/SKILL.md',
+    );
     expect(riga?.level).toBe('warn');
     expect(riga?.remedy ?? '').toContain('muffin adopt');
   });

@@ -33,7 +33,11 @@ const A_COMPLETION = {
 };
 
 /** A provider whose network is a recorder: returns the body it would have sent. */
-function harness(explicitCache: boolean, reasoningEffort = false, completion: unknown = A_COMPLETION) {
+function harness(
+  explicitCache: boolean,
+  reasoningEffort = false,
+  completion: unknown = A_COMPLETION,
+) {
   const bodies: unknown[] = [];
   const fetchFake = async (_url: unknown, init?: { body?: string }): Promise<Response> => {
     bodies.push(JSON.parse(init?.body ?? '{}'));
@@ -42,12 +46,17 @@ function harness(explicitCache: boolean, reasoningEffort = false, completion: un
       headers: { 'content-type': 'application/json' },
     });
   };
-  const provider = new OpenAICompatProvider('sk-test', 'https://openrouter.ai/api/v1', {}, {
-    explicitCache,
-    reasoningEffort,
-    discoverReasoning: false,
-    fetch: fetchFake as never,
-  });
+  const provider = new OpenAICompatProvider(
+    'sk-test',
+    'https://openrouter.ai/api/v1',
+    {},
+    {
+      explicitCache,
+      reasoningEffort,
+      discoverReasoning: false,
+      fetch: fetchFake as never,
+    },
+  );
   return { provider, bodies };
 }
 
@@ -90,9 +99,23 @@ describe('experimental sampling overrides', () => {
     const h = harness(false, false);
     await h.provider.chat({
       ...CALL,
-      sampling: { temperature: 1, topP: 0.95, topK: 20, minP: 0, presencePenalty: 0, repetitionPenalty: 1 },
+      sampling: {
+        temperature: 1,
+        topP: 0.95,
+        topK: 20,
+        minP: 0,
+        presencePenalty: 0,
+        repetitionPenalty: 1,
+      },
     });
-    expect(h.bodies[0]).toMatchObject({ temperature: 1, top_p: 0.95, top_k: 20, min_p: 0, presence_penalty: 0, repetition_penalty: 1 });
+    expect(h.bodies[0]).toMatchObject({
+      temperature: 1,
+      top_p: 0.95,
+      top_k: 20,
+      min_p: 0,
+      presence_penalty: 0,
+      repetition_penalty: 1,
+    });
   });
 });
 
@@ -101,7 +124,17 @@ describe('OpenRouter model router', () => {
     const h = harness(false, false, {
       ...A_COMPLETION,
       model: 'openrouter/free',
-      choices: [{ message: { content: 'uso il tool', tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'demo_read', arguments: '{}' } }] }, finish_reason: 'tool_calls' }],
+      choices: [
+        {
+          message: {
+            content: 'uso il tool',
+            tool_calls: [
+              { id: 'call_1', type: 'function', function: { name: 'demo_read', arguments: '{}' } },
+            ],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
     });
     const result = await h.provider.chat({
       ...CALL,
@@ -117,14 +150,23 @@ describe('OpenRouter model router', () => {
 
   it('does not reject the conservative off request when the router omits reasoning metadata', async () => {
     const bodies: unknown[] = [];
-    const provider = new OpenAICompatProvider('sk-test', 'https://openrouter.ai/api/v1', {}, {
-      metadataFetch: async () => new Response(JSON.stringify({ data: { id: 'openrouter/free' } }), { status: 200 }),
-      fetch: async (_input: string | URL | Request, init?: RequestInit) => {
-        const body = typeof init?.body === 'string' ? init.body : '{}';
-        bodies.push(JSON.parse(body));
-        return new Response(JSON.stringify(A_COMPLETION), { status: 200, headers: { 'content-type': 'application/json' } });
+    const provider = new OpenAICompatProvider(
+      'sk-test',
+      'https://openrouter.ai/api/v1',
+      {},
+      {
+        metadataFetch: async () =>
+          new Response(JSON.stringify({ data: { id: 'openrouter/free' } }), { status: 200 }),
+        fetch: async (_input: string | URL | Request, init?: RequestInit) => {
+          const body = typeof init?.body === 'string' ? init.body : '{}';
+          bodies.push(JSON.parse(body));
+          return new Response(JSON.stringify(A_COMPLETION), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        },
       },
-    });
+    );
 
     await provider.chat({ ...CALL, model: 'openrouter/free', thinking: 'off' });
     expect(bodies[0]).not.toHaveProperty('reasoning');
@@ -194,7 +236,7 @@ describe('openai-compat · explicit prompt caching', () => {
       ],
     });
 
-    const parts = ((h.bodies[0] as Body).messages[0]!.content) as SystemPart[];
+    const parts = (h.bodies[0] as Body).messages[0]!.content as SystemPart[];
     // The volatile tail rides after the breakpoint, uncached — marking it too
     // would burn a new cache entry every turn, which is worse than no cache.
     expect(parts[0]?.cache_control).toEqual({ type: 'ephemeral' });
@@ -204,12 +246,19 @@ describe('openai-compat · explicit prompt caching', () => {
   it('marks a stable message part on OpenRouter and leaves the same mark off a vanilla server', async () => {
     const marked = {
       ...CALL,
-      messages: [{ role: 'user' as const, content: [{ type: 'text' as const, text: 'ciao', cache: 'stable' as const }] }],
+      messages: [
+        {
+          role: 'user' as const,
+          content: [{ type: 'text' as const, text: 'ciao', cache: 'stable' as const }],
+        },
+      ],
     };
     const openRouter = harness(true);
     await openRouter.provider.chat(marked);
     const user = (openRouter.bodies[0] as Body).messages[1]!;
-    expect(user.content).toEqual([{ type: 'text', text: 'ciao', cache_control: { type: 'ephemeral' } }]);
+    expect(user.content).toEqual([
+      { type: 'text', text: 'ciao', cache_control: { type: 'ephemeral' } },
+    ]);
 
     const local = harness(false);
     await local.provider.chat(marked);
@@ -251,7 +300,12 @@ function streamedResponse(chunks: string[], breakAfter?: number): Response {
 
 function streamHarness(response: Response) {
   const fetchFake = async (): Promise<Response> => response;
-  return new OpenAICompatProvider('sk-test', 'https://openrouter.test/v1', {}, { fetch: fetchFake as never, reasoningEffort: true, discoverReasoning: false });
+  return new OpenAICompatProvider(
+    'sk-test',
+    'https://openrouter.test/v1',
+    {},
+    { fetch: fetchFake as never, reasoningEffort: true, discoverReasoning: false },
+  );
 }
 
 async function collect(events: AsyncIterable<StreamEvent>): Promise<StreamEvent[]> {
@@ -261,7 +315,10 @@ async function collect(events: AsyncIterable<StreamEvent>): Promise<StreamEvent[
 }
 
 const CHUNK = (delta: Record<string, unknown>, finish: string | null = null) => ({
-  id: 'chatcmpl-1', object: 'chat.completion.chunk', created: 1, model: 'anthropic/claude-sonnet-5',
+  id: 'chatcmpl-1',
+  object: 'chat.completion.chunk',
+  created: 1,
+  model: 'anthropic/claude-sonnet-5',
   choices: [{ index: 0, delta, finish_reason: finish }],
 });
 
@@ -270,19 +327,36 @@ const FULL_STREAM_CHUNKS: string[] = [
   sseLine(CHUNK({ content: 'ciao' })),
   sseLine(CHUNK({ content: ' mondo' })),
   sseLine(CHUNK({}, 'stop')),
-  sseLine({ id: 'chatcmpl-1', object: 'chat.completion.chunk', created: 1, model: 'anthropic/claude-sonnet-5', choices: [], usage: { prompt_tokens: 12, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 0 } } }),
+  sseLine({
+    id: 'chatcmpl-1',
+    object: 'chat.completion.chunk',
+    created: 1,
+    model: 'anthropic/claude-sonnet-5',
+    choices: [],
+    usage: { prompt_tokens: 12, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 0 } },
+  }),
   'data: [DONE]\n\n',
 ];
 
 describe('openai-compat · chatStream (B11)', () => {
   it('reconstructs reasoning_details chunks without emitting them to the text surface', async () => {
-    const details = [{ type: 'reasoning.text', id: 'r1', text: 'prima' }, { type: 'reasoning.text', id: 'r1', text: ' poi' }];
+    const details = [
+      { type: 'reasoning.text', id: 'r1', text: 'prima' },
+      { type: 'reasoning.text', id: 'r1', text: ' poi' },
+    ];
     const events = await collect(
       streamHarness(
         streamedResponse([
           sseLine(CHUNK({ role: 'assistant', reasoning_details: [details[0]] })),
           sseLine(CHUNK({ reasoning_details: [details[1]], content: 'risposta' }, 'stop')),
-          sseLine({ id: 'chatcmpl-1', object: 'chat.completion.chunk', created: 1, model: 'qwen/qwen3.8-27b', choices: [], usage: { prompt_tokens: 1, completion_tokens: 3 } }),
+          sseLine({
+            id: 'chatcmpl-1',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model: 'qwen/qwen3.8-27b',
+            choices: [],
+            usage: { prompt_tokens: 1, completion_tokens: 3 },
+          }),
           'data: [DONE]\n\n',
         ]),
       ).chatStream(CALL),
@@ -291,16 +365,22 @@ describe('openai-compat · chatStream (B11)', () => {
     const done = events.at(-1);
     expect(done?.type).toBe('done');
     if (done?.type !== 'done') throw new Error('unreachable');
-    expect(done.result.providerMetadata).toEqual({ reasoning: { provider: 'openrouter', details } });
+    expect(done.result.providerMetadata).toEqual({
+      reasoning: { provider: 'openrouter', details },
+    });
     expect(events.filter((event) => event.type === 'text_delta')).toHaveLength(1);
-    expect((events.find((event) => event.type === 'text_delta') as { text: string }).text).toBe('risposta');
+    expect((events.find((event) => event.type === 'text_delta') as { text: string }).text).toBe(
+      'risposta',
+    );
   });
 
   it('yields text deltas as they arrive and a done event with the same ChatResult chat() would return', async () => {
     const provider = streamHarness(streamedResponse(FULL_STREAM_CHUNKS));
     const events = await collect(provider.chatStream(CALL));
 
-    expect(events.filter((e) => e.type === 'text_delta').map((e) => (e as { text: string }).text)).toEqual(['ciao', ' mondo']);
+    expect(
+      events.filter((e) => e.type === 'text_delta').map((e) => (e as { text: string }).text),
+    ).toEqual(['ciao', ' mondo']);
     const done = events[events.length - 1]!;
     expect(done.type).toBe('done');
     if (done.type !== 'done') throw new Error('unreachable');
@@ -315,7 +395,19 @@ describe('openai-compat · chatStream (B11)', () => {
 
   it('reconstructs a tool call from index-keyed argument fragments, id/name arriving once on the first fragment', async () => {
     const chunks = [
-      sseLine(CHUNK({ role: 'assistant', tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'demo_read', arguments: '' } }] })),
+      sseLine(
+        CHUNK({
+          role: 'assistant',
+          tool_calls: [
+            {
+              index: 0,
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'demo_read', arguments: '' },
+            },
+          ],
+        }),
+      ),
       sseLine(CHUNK({ tool_calls: [{ index: 0, function: { arguments: '{"q":' } }] })),
       sseLine(CHUNK({ tool_calls: [{ index: 0, function: { arguments: '1}' } }] })),
       sseLine(CHUNK({}, 'tool_calls')),
@@ -324,9 +416,17 @@ describe('openai-compat · chatStream (B11)', () => {
     const provider = streamHarness(streamedResponse(chunks));
     const events = await collect(provider.chatStream(CALL));
 
-    const deltas = events.filter((e) => e.type === 'tool_call_delta') as Extract<StreamEvent, { type: 'tool_call_delta' }>[];
+    const deltas = events.filter((e) => e.type === 'tool_call_delta') as Extract<
+      StreamEvent,
+      { type: 'tool_call_delta' }
+    >[];
     expect(deltas[0]).toMatchObject({ index: 0, id: 'call_1', name: 'demo_read' });
-    expect(deltas.map((d) => d.argsDelta).filter(Boolean).join('')).toBe('{"q":1}');
+    expect(
+      deltas
+        .map((d) => d.argsDelta)
+        .filter(Boolean)
+        .join(''),
+    ).toBe('{"q":1}');
     const done = events[events.length - 1]!;
     if (done.type !== 'done') throw new Error('unreachable');
     expect(done.result.toolCalls).toEqual([{ id: 'call_1', name: 'demo_read', args: { q: 1 } }]);
@@ -369,7 +469,8 @@ describe('openai-compat · chatStream (B11)', () => {
     const controller = new AbortController();
     const events: StreamEvent[] = [];
     const drained = (async () => {
-      for await (const event of provider.chatStream({ ...CALL, signal: controller.signal })) events.push(event);
+      for await (const event of provider.chatStream({ ...CALL, signal: controller.signal }))
+        events.push(event);
     })();
     setTimeout(() => controller.abort('model_deadline'), 10);
     let caught: unknown;
@@ -392,12 +493,22 @@ describe('openai-compat · chatStream (B11)', () => {
 
   it('a request that never starts streaming (no bytes at all) fails as an ordinary ProviderError, not ProviderStreamError', async () => {
     const fetchFake = async (): Promise<Response> =>
-      new Response(JSON.stringify({ error: { message: 'bad key', type: 'invalid_request_error' } }), {
-        status: 401,
-        headers: { 'content-type': 'application/json' },
-      });
-    const provider = new OpenAICompatProvider('sk-bad', 'https://openrouter.test/v1', {}, { fetch: fetchFake as never });
-    await expect(collect(provider.chatStream(CALL))).rejects.not.toBeInstanceOf(ProviderStreamError);
+      new Response(
+        JSON.stringify({ error: { message: 'bad key', type: 'invalid_request_error' } }),
+        {
+          status: 401,
+          headers: { 'content-type': 'application/json' },
+        },
+      );
+    const provider = new OpenAICompatProvider(
+      'sk-bad',
+      'https://openrouter.test/v1',
+      {},
+      { fetch: fetchFake as never },
+    );
+    await expect(collect(provider.chatStream(CALL))).rejects.not.toBeInstanceOf(
+      ProviderStreamError,
+    );
   });
 
   it('sets stream_options.include_usage, or a streamed call would report zero usage forever', async () => {
@@ -406,9 +517,16 @@ describe('openai-compat · chatStream (B11)', () => {
       bodies.push(JSON.parse(init?.body ?? '{}'));
       return streamedResponse(FULL_STREAM_CHUNKS);
     };
-    const provider = new OpenAICompatProvider('sk-test', 'https://openrouter.test/v1', {}, { fetch: fetchFake as never });
+    const provider = new OpenAICompatProvider(
+      'sk-test',
+      'https://openrouter.test/v1',
+      {},
+      { fetch: fetchFake as never },
+    );
     await collect(provider.chatStream(CALL));
-    expect((bodies[0] as { stream_options?: { include_usage?: boolean } }).stream_options).toEqual({ include_usage: true });
+    expect((bodies[0] as { stream_options?: { include_usage?: boolean } }).stream_options).toEqual({
+      include_usage: true,
+    });
   });
 });
 
@@ -478,10 +596,15 @@ describe('openai-compat · errori in-band del provider su 200', () => {
     await expect(provider.chat(CALL)).rejects.toBeInstanceOf(ProviderError);
   });
 
-  it("una finish reason sconosciuta non diventa end: il default è error, mai un successo presunto", async () => {
+  it('una finish reason sconosciuta non diventa end: il default è error, mai un successo presunto', async () => {
     const completion = {
       ...A_COMPLETION,
-      choices: [{ message: { content: 'ciao', tool_calls: [] }, finish_reason: 'ragione-futura-sconosciuta' }],
+      choices: [
+        {
+          message: { content: 'ciao', tool_calls: [] },
+          finish_reason: 'ragione-futura-sconosciuta',
+        },
+      ],
     };
     const { provider } = harness(false, false, completion);
     const result = await provider.chat(CALL);
@@ -501,7 +624,12 @@ describe('openai-compat · errori in-band del provider su 200', () => {
 
     const unmapped = harness(false, false, {
       ...A_COMPLETION,
-      choices: [{ message: { content: 'ciao', tool_calls: [] }, finish_reason: 'ragione-futura-sconosciuta' }],
+      choices: [
+        {
+          message: { content: 'ciao', tool_calls: [] },
+          finish_reason: 'ragione-futura-sconosciuta',
+        },
+      ],
     });
     const viaWire = await unmapped.provider.chat(CALL);
     expect(viaWire.stopReason).toBe('error');
@@ -510,7 +638,11 @@ describe('openai-compat · errori in-band del provider su 200', () => {
 
   it('stream: la finish reason grezza arriva sul done come su chat()', async () => {
     const provider = streamHarness(
-      streamedResponse([sseLine(CHUNK({ content: 'ciao' })), sseLine(CHUNK({}, 'stop')), 'data: [DONE]\n\n']),
+      streamedResponse([
+        sseLine(CHUNK({ content: 'ciao' })),
+        sseLine(CHUNK({}, 'stop')),
+        'data: [DONE]\n\n',
+      ]),
     );
     const events = await collect(provider.chatStream(CALL));
     const done = events.at(-1);
@@ -537,35 +669,76 @@ describe("thinking:'off' smette di essere un no-op, dove l'endpoint capisce", ()
 
   it('uses the canonical reasoning intent and requires routed providers to support it', async () => {
     const h = harness(false, true);
-    await h.provider.chat({ ...CALL, model: 'qwen/qwen3.8-27b', reasoning: { mode: 'on', effort: 'low' } });
+    await h.provider.chat({
+      ...CALL,
+      model: 'qwen/qwen3.8-27b',
+      reasoning: { mode: 'on', effort: 'low' },
+    });
     expect((h.bodies[0] as { reasoning?: unknown }).reasoning).toEqual({ effort: 'low' });
     expect((h.bodies[0] as { provider?: unknown }).provider).toEqual({ require_parameters: true });
   });
 
   it('rejects an exact reasoning token budget when the model snapshot does not support it', async () => {
     const h = harness(false, true);
-    await expect(h.provider.chat({ ...CALL, model: 'qwen/qwen3.8-27b', reasoning: { mode: 'on', maxTokens: 2048 } })).rejects.toThrow(
-      'exact reasoning token budget',
-    );
+    await expect(
+      h.provider.chat({
+        ...CALL,
+        model: 'qwen/qwen3.8-27b',
+        reasoning: { mode: 'on', maxTokens: 2048 },
+      }),
+    ).rejects.toThrow('exact reasoning token budget');
     expect(h.bodies).toHaveLength(0);
   });
 
   it('falls back to the known snapshot when live metadata is unavailable', async () => {
-    const provider = new OpenAICompatProvider('sk-test', 'https://openrouter.ai/api/v1', {}, {
-      reasoningEffort: true,
-      metadataFetch: async () => { throw new Error('metadata unavailable'); },
-      fetch: async () => new Response(JSON.stringify(A_COMPLETION), { status: 200 }) as never,
-    });
-    expect((await provider.resolveReasoning({ ...CALL, model: 'qwen/qwen3.8-27b', reasoning: { mode: 'on', effort: 'low' } })).capabilitySource).toBe('static-snapshot');
+    const provider = new OpenAICompatProvider(
+      'sk-test',
+      'https://openrouter.ai/api/v1',
+      {},
+      {
+        reasoningEffort: true,
+        metadataFetch: async () => {
+          throw new Error('metadata unavailable');
+        },
+        fetch: async () => new Response(JSON.stringify(A_COMPLETION), { status: 200 }) as never,
+      },
+    );
+    expect(
+      (
+        await provider.resolveReasoning({
+          ...CALL,
+          model: 'qwen/qwen3.8-27b',
+          reasoning: { mode: 'on', effort: 'low' },
+        })
+      ).capabilitySource,
+    ).toBe('static-snapshot');
   });
 
   it('lets fresh live metadata override the static snapshot', async () => {
-    const provider = new OpenAICompatProvider('sk-test', 'https://openrouter.ai/api/v1', {}, {
-      reasoningEffort: true,
-      metadataFetch: async () => new Response(JSON.stringify({ data: { id: 'qwen/qwen3.8-27b', reasoning: { mandatory: false, supported_efforts: ['low'], default_effort: 'low' } } }), { status: 200 }),
-      fetch: async () => new Response(JSON.stringify(A_COMPLETION), { status: 200 }),
+    const provider = new OpenAICompatProvider(
+      'sk-test',
+      'https://openrouter.ai/api/v1',
+      {},
+      {
+        reasoningEffort: true,
+        metadataFetch: async () =>
+          new Response(
+            JSON.stringify({
+              data: {
+                id: 'qwen/qwen3.8-27b',
+                reasoning: { mandatory: false, supported_efforts: ['low'], default_effort: 'low' },
+              },
+            }),
+            { status: 200 },
+          ),
+        fetch: async () => new Response(JSON.stringify(A_COMPLETION), { status: 200 }),
+      },
+    );
+    const resolution = await provider.resolveReasoning({
+      ...CALL,
+      model: 'qwen/qwen3.8-27b',
+      reasoning: { mode: 'on', effort: 'xhigh' },
     });
-    const resolution = await provider.resolveReasoning({ ...CALL, model: 'qwen/qwen3.8-27b', reasoning: { mode: 'on', effort: 'xhigh' } });
     expect(resolution.capabilitySource).toBe('openrouter-live');
     expect(resolution.status).toBe('unsupported');
   });
@@ -588,10 +761,16 @@ describe("thinking:'off' smette di essere un no-op, dove l'endpoint capisce", ()
   it("il default viene dall'endpoint, non da chi costruisce il provider", () => {
     // L'argomento è quello di `wantsExplicitCache`, e la storia pure: due
     // harness di eval avevano dimenticato il flag e pagato pieno in silenzio.
-    expect(new OpenAICompatProvider('k', 'https://openrouter.ai/api/v1').reasoningEffort).toBe(true);
-    expect(new OpenAICompatProvider('k', 'https://openrouter.ai./api/v1').reasoningEffort).toBe(true);
+    expect(new OpenAICompatProvider('k', 'https://openrouter.ai/api/v1').reasoningEffort).toBe(
+      true,
+    );
+    expect(new OpenAICompatProvider('k', 'https://openrouter.ai./api/v1').reasoningEffort).toBe(
+      true,
+    );
     expect(new OpenAICompatProvider('k', 'http://localhost:11434/v1').reasoningEffort).toBe(false);
-    expect(new OpenAICompatProvider('k', 'https://openrouter.ai.evil.tld/v1').reasoningEffort).toBe(false);
+    expect(new OpenAICompatProvider('k', 'https://openrouter.ai.evil.tld/v1').reasoningEffort).toBe(
+      false,
+    );
     expect(new OpenAICompatProvider('k').reasoningEffort).toBe(false);
   });
 
@@ -600,15 +779,22 @@ describe("thinking:'off' smette di essere un no-op, dove l'endpoint capisce", ()
     // legge `profile.thinking`: se il corpo dei due percorsi divergesse, la
     // corsia dove il campo conta di più sarebbe quella scoperta.
     const bodies: unknown[] = [];
-    const provider = new OpenAICompatProvider('sk-test', 'https://openrouter.ai/api/v1', {}, {
-      fetch: (async (_u: unknown, init?: { body?: string }) => {
-        bodies.push(JSON.parse(init?.body ?? '{}'));
-        return streamedResponse(FULL_STREAM_CHUNKS);
-      }) as never,
-      discoverReasoning: false,
-      reasoningEffort: true,
-    });
-    await collect(provider.chatStream({ ...CALL, model: 'qwen/qwen3.8-27b', thinking: 'off', stream: true }));
+    const provider = new OpenAICompatProvider(
+      'sk-test',
+      'https://openrouter.ai/api/v1',
+      {},
+      {
+        fetch: (async (_u: unknown, init?: { body?: string }) => {
+          bodies.push(JSON.parse(init?.body ?? '{}'));
+          return streamedResponse(FULL_STREAM_CHUNKS);
+        }) as never,
+        discoverReasoning: false,
+        reasoningEffort: true,
+      },
+    );
+    await collect(
+      provider.chatStream({ ...CALL, model: 'qwen/qwen3.8-27b', thinking: 'off', stream: true }),
+    );
     expect((bodies[0] as { reasoning?: unknown }).reasoning).toEqual({ effort: 'none' });
   });
 });
@@ -630,13 +816,21 @@ describe('openai-compat · reasoningDialect: reasoning_effort', () => {
     const bodies: unknown[] = [];
     const fetchFake = async (_url: unknown, init?: { body?: string }): Promise<Response> => {
       bodies.push(JSON.parse(init?.body ?? '{}'));
-      return new Response(JSON.stringify(A_COMPLETION), { status: 200, headers: { 'content-type': 'application/json' } });
+      return new Response(JSON.stringify(A_COMPLETION), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
     };
-    const provider = new OpenAICompatProvider('sk-test', SELF_HOSTED, {}, {
-      ...(reasoningDialect === undefined ? {} : { reasoningDialect }),
-      discoverReasoning: false,
-      fetch: fetchFake as never,
-    });
+    const provider = new OpenAICompatProvider(
+      'sk-test',
+      SELF_HOSTED,
+      {},
+      {
+        ...(reasoningDialect === undefined ? {} : { reasoningDialect }),
+        discoverReasoning: false,
+        fetch: fetchFake as never,
+      },
+    );
     return { provider, bodies };
   }
   const QWEN = { ...CALL, model: 'qwen3.8-flash-next' };
@@ -671,21 +865,30 @@ describe('openai-compat · reasoningDialect: reasoning_effort', () => {
 
   it('refuses an exact token budget: the dialect has no such field', async () => {
     const h = dialectHarness('reasoning_effort');
-    await expect(h.provider.chat({ ...QWEN, reasoning: { mode: 'on', maxTokens: 2048 } })).rejects.toThrow('exact reasoning token budget');
+    await expect(
+      h.provider.chat({ ...QWEN, reasoning: { mode: 'on', maxTokens: 2048 } }),
+    ).rejects.toThrow('exact reasoning token budget');
     expect(h.bodies).toHaveLength(0);
   });
 
   it('is on the streamed path too — the turn streams, so that is the path that matters', async () => {
     const bodies: unknown[] = [];
-    const provider = new OpenAICompatProvider('sk-test', SELF_HOSTED, {}, {
-      reasoningDialect: 'reasoning_effort',
-      discoverReasoning: false,
-      fetch: (async (_u: unknown, init?: { body?: string }) => {
-        bodies.push(JSON.parse(init?.body ?? '{}'));
-        return streamedResponse(FULL_STREAM_CHUNKS);
-      }) as never,
-    });
-    await collect(provider.chatStream({ ...QWEN, reasoning: { mode: 'on', effort: 'low' }, stream: true }));
+    const provider = new OpenAICompatProvider(
+      'sk-test',
+      SELF_HOSTED,
+      {},
+      {
+        reasoningDialect: 'reasoning_effort',
+        discoverReasoning: false,
+        fetch: (async (_u: unknown, init?: { body?: string }) => {
+          bodies.push(JSON.parse(init?.body ?? '{}'));
+          return streamedResponse(FULL_STREAM_CHUNKS);
+        }) as never,
+      },
+    );
+    await collect(
+      provider.chatStream({ ...QWEN, reasoning: { mode: 'on', effort: 'low' }, stream: true }),
+    );
     expect((bodies[0] as { reasoning_effort?: unknown }).reasoning_effort).toBe('low');
   });
 
@@ -703,27 +906,41 @@ describe('openai-compat · reasoningDialect: reasoning_effort', () => {
   it('wins over the inferred OpenRouter shape: no metadata fetch, no `reasoning`, no routing field', async () => {
     const bodies: Record<string, unknown>[] = [];
     let metadataFetches = 0;
-    const provider = new OpenAICompatProvider('sk-test', 'https://openrouter.ai/api/v1', {}, {
-      reasoningDialect: 'reasoning_effort',
-      metadataFetch: (async () => {
-        metadataFetches += 1;
-        return new Response('{}', { status: 200 });
-      }) as never,
-      fetch: (async (_u: unknown, init?: { body?: string }) => {
-        bodies.push(JSON.parse(init?.body ?? '{}'));
-        return new Response(JSON.stringify(A_COMPLETION), { status: 200, headers: { 'content-type': 'application/json' } });
-      }) as never,
-    });
+    const provider = new OpenAICompatProvider(
+      'sk-test',
+      'https://openrouter.ai/api/v1',
+      {},
+      {
+        reasoningDialect: 'reasoning_effort',
+        metadataFetch: (async () => {
+          metadataFetches += 1;
+          return new Response('{}', { status: 200 });
+        }) as never,
+        fetch: (async (_u: unknown, init?: { body?: string }) => {
+          bodies.push(JSON.parse(init?.body ?? '{}'));
+          return new Response(JSON.stringify(A_COMPLETION), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }) as never,
+      },
+    );
     await provider.chat({ ...QWEN, model: 'qwen/qwen3.8-27b', thinking: 'off' });
     expect(metadataFetches).toBe(0);
     expect(bodies[0]?.reasoning_effort).toBe('none');
     expect(bodies[0]).not.toHaveProperty('reasoning');
     expect(bodies[0]).not.toHaveProperty('provider');
-    expect((await provider.resolveReasoning({ ...QWEN, model: 'qwen/qwen3.8-27b', thinking: 'off' })).capabilitySource).toBe('provider-default');
+    expect(
+      (await provider.resolveReasoning({ ...QWEN, model: 'qwen/qwen3.8-27b', thinking: 'off' }))
+        .capabilitySource,
+    ).toBe('provider-default');
   });
 
   it('does not turn OpenRouter behaviour on: the dialect is not the hostname gate', () => {
-    expect(new OpenAICompatProvider('k', SELF_HOSTED, {}, { reasoningDialect: 'reasoning_effort' }).reasoningEffort).toBe(false);
+    expect(
+      new OpenAICompatProvider('k', SELF_HOSTED, {}, { reasoningDialect: 'reasoning_effort' })
+        .reasoningEffort,
+    ).toBe(false);
   });
 });
 
@@ -732,7 +949,18 @@ describe('openrouter reasoning continuity', () => {
     const details = [{ type: 'reasoning.encrypted', id: 'r1', data: 'opaque' }];
     const h = harness(false, true, {
       ...A_COMPLETION,
-      choices: [{ message: { content: 'uso il tool', reasoning_details: details, tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'demo_read', arguments: '{}' } }] }, finish_reason: 'tool_calls' }],
+      choices: [
+        {
+          message: {
+            content: 'uso il tool',
+            reasoning_details: details,
+            tool_calls: [
+              { id: 'call_1', type: 'function', function: { name: 'demo_read', arguments: '{}' } },
+            ],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
     });
 
     const first = await h.provider.chat({ ...CALL, model: 'qwen/qwen3.8-27b' });
@@ -749,13 +977,20 @@ describe('openrouter reasoning continuity', () => {
             { type: 'text', text: 'uso il tool' },
             { type: 'tool_use', id: 'call_1', name: 'demo_read', input: {} },
           ],
-          ...(first.providerMetadata === undefined ? {} : { providerMetadata: first.providerMetadata }),
+          ...(first.providerMetadata === undefined
+            ? {}
+            : { providerMetadata: first.providerMetadata }),
         },
-        { role: 'user', content: [{ type: 'tool_result', toolCallId: 'call_1', content: 'letto' }] },
+        {
+          role: 'user',
+          content: [{ type: 'tool_result', toolCallId: 'call_1', content: 'letto' }],
+        },
       ],
     });
 
-    expect((h.bodies[1] as { messages: Record<string, unknown>[] }).messages[2]).toMatchObject({ reasoning_details: details });
+    expect((h.bodies[1] as { messages: Record<string, unknown>[] }).messages[2]).toMatchObject({
+      reasoning_details: details,
+    });
   });
 });
 
@@ -787,7 +1022,10 @@ describe("openai-compat · un'immagine non può sparire in silenzio", () => {
     const user = (h.bodies[0] as Body).messages[1]!;
     expect(Array.isArray(user.content)).toBe(true);
     const parti = user.content as { type: string; image_url?: { url: string }; text?: string }[];
-    expect(parti[0]).toMatchObject({ type: 'image_url', image_url: { url: 'data:image/png;base64,AAAB' } });
+    expect(parti[0]).toMatchObject({
+      type: 'image_url',
+      image_url: { url: 'data:image/png;base64,AAAB' },
+    });
   });
 
   /**
@@ -844,7 +1082,10 @@ describe('openai-compat · una nota vocale non può sparire in silenzio', () => 
       type: string;
       input_audio?: { data: string; format: string };
     }[];
-    expect(parti[0]).toMatchObject({ type: 'input_audio', input_audio: { data: 'T2dnUw==', format: 'ogg' } });
+    expect(parti[0]).toMatchObject({
+      type: 'input_audio',
+      input_audio: { data: 'T2dnUw==', format: 'ogg' },
+    });
     // Nudo davvero: nessun `data:` davanti, che è la forma dell'altra colonna.
     expect(parti[0]?.input_audio?.data.startsWith('data:')).toBe(false);
   });
@@ -867,10 +1108,15 @@ describe('openai-compat · una nota vocale non può sparire in silenzio', () => 
       await h.provider.chat({
         ...CALL,
         messages: [
-          { role: 'user', content: [{ type: 'audio', mediaType: media as typeof VOCE.mediaType, data: 'AAAA' }] },
+          {
+            role: 'user',
+            content: [{ type: 'audio', mediaType: media as typeof VOCE.mediaType, data: 'AAAA' }],
+          },
         ],
       });
-      const parti = (h.bodies[0] as Body).messages[1]!.content as { input_audio?: { format: string } }[];
+      const parti = (h.bodies[0] as Body).messages[1]!.content as {
+        input_audio?: { format: string };
+      }[];
       expect(parti[0]?.input_audio?.format).toBe(sigla);
     }
   });
@@ -878,7 +1124,10 @@ describe('openai-compat · una nota vocale non può sparire in silenzio', () => 
   /** Senza audio la forma resta la stringa, byte identici a prima. */
   it('e un messaggio senza audio non diventa un array di parti', async () => {
     const h = harness(false);
-    await h.provider.chat({ ...CALL, messages: [{ role: 'user', content: [{ type: 'text', text: 'ciao' }] }] });
+    await h.provider.chat({
+      ...CALL,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'ciao' }] }],
+    });
     expect((h.bodies[0] as Body).messages[1]!.content).toBe('ciao');
   });
 });
@@ -909,7 +1158,9 @@ describe('openai-compat · tool_choice escalation (ADR-0082)', () => {
     // nel content. Accettarlo come risposta chiudeva il turno sullo stallo.
     const h = harness(false, false, {
       ...A_COMPLETION,
-      choices: [{ message: { content: 'ecco fatto', tool_calls: [] }, finish_reason: 'tool_calls' }],
+      choices: [
+        { message: { content: 'ecco fatto', tool_calls: [] }, finish_reason: 'tool_calls' },
+      ],
     });
     const failed = await h.provider.chat({ ...CALL, tools: TOOLS }).then(
       () => null,
@@ -934,16 +1185,25 @@ describe('openai-compat · Retry-After sopravvive a wrap', () => {
   ) {
     const fetchFake = async (): Promise<Response> =>
       new Response(JSON.stringify(body), { status, headers });
-    return new OpenAICompatProvider('sk-test', baseURL, {}, {
-      explicitCache: false,
-      reasoningEffort: false,
-      discoverReasoning: false,
-      fetch: fetchFake as never,
-    });
+    return new OpenAICompatProvider(
+      'sk-test',
+      baseURL,
+      {},
+      {
+        explicitCache: false,
+        reasoningEffort: false,
+        discoverReasoning: false,
+        fetch: fetchFake as never,
+      },
+    );
   }
 
   it('un 429 con retry-after: 45 porta retryAfterMs 45000', async () => {
-    const provider = statusHarness(429, { 'retry-after': '45' }, { error: { message: 'lento', code: 429 } });
+    const provider = statusHarness(
+      429,
+      { 'retry-after': '45' },
+      { error: { message: 'lento', code: 429 } },
+    );
     const failed = await provider.chat(CALL).then(
       () => null,
       (error: unknown) => error,
@@ -1014,12 +1274,20 @@ describe('openai-compat adapter · provenance compiles to a valid wire', () => {
           content: [{ type: 'tool_result', toolCallId: 'call_9', content: 'contenuto' }],
           origin: 'tool',
         },
-        { role: 'user', content: [{ type: 'text', text: 'avviso di controllo' }], origin: 'harness' },
+        {
+          role: 'user',
+          content: [{ type: 'text', text: 'avviso di controllo' }],
+          origin: 'harness',
+        },
       ],
     });
     const messages = (h.bodies[0] as { messages: Record<string, unknown>[] }).messages;
     expect(messages.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'tool', 'user']);
-    expect(messages[3]).toMatchObject({ role: 'tool', tool_call_id: 'call_9', content: 'contenuto' });
+    expect(messages[3]).toMatchObject({
+      role: 'tool',
+      tool_call_id: 'call_9',
+      content: 'contenuto',
+    });
     expect(messages[4]).toMatchObject({ role: 'user', content: 'avviso di controllo' });
   });
 });

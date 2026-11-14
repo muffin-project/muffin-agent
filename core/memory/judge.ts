@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { fence } from './spotlight.js';
-import { REASONING_HEADROOM } from '../../agent/providers/types.js';
 import type { Provider } from '../../agent/providers/types.js';
+import { REASONING_HEADROOM } from '../../agent/providers/types.js';
+import { fence } from './spotlight.js';
 import type { Fact } from './store.js';
 
 /**

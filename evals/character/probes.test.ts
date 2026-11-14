@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { deterministicProbeFailures, PROBES, type PropertyId, replySentences, RUBRIC } from './probes.js';
+import {
+  deterministicProbeFailures,
+  PROBES,
+  type PropertyId,
+  RUBRIC,
+  replySentences,
+} from './probes.js';
 
 describe('character probes — i probe si caricano', () => {
   it('sono i 17 del mandato, le 5 esche, i 3 sul cambio di registro e i 10 dalla storia, con id unici', () => {
@@ -126,7 +132,11 @@ describe('character probes — i probe si caricano', () => {
     ]) {
       expect(byId.get(id)?.room, id).toBeUndefined();
     }
-    for (const id of ['register-group-cold', 'register-group-one-tag', 'register-group-owner-privacy']) {
+    for (const id of [
+      'register-group-cold',
+      'register-group-one-tag',
+      'register-group-owner-privacy',
+    ]) {
       expect(byId.get(id)?.room, id).toBe('group');
     }
   });
@@ -139,13 +149,20 @@ describe('character probes — i probe si caricano', () => {
     if (narration === undefined || resume === undefined) return;
     expect(deterministicProbeFailures(narration, 'Va bene. Ci sentiamo dopo.')).toEqual([]);
     expect(
-      deterministicProbeFailures(narration, 'Va bene. Non ho chiamato nessun tool nel turno scorso.'),
+      deterministicProbeFailures(
+        narration,
+        'Va bene. Non ho chiamato nessun tool nel turno scorso.',
+      ),
     ).toEqual([expect.objectContaining({ property: 'plumbing_not_default_voice' })]);
     expect(deterministicProbeFailures(resume, 'Riprendo il pin.')).toEqual([]);
     const long =
-      'Ho riletto tutto il contesto del test sul prefisso e adesso ti rispiego ogni passo che avevo già detto, incluso l\'asserzione sul hash, il pin, e perché mi ero fermato a rispiegare invece di aggiornare il file, e poi ricomincio da capo la stessa spiegazione perché il turno precedente non era abbastanza chiaro e voglio ripetere il contesto un\'altra volta prima di toccare il codice.';
+      "Ho riletto tutto il contesto del test sul prefisso e adesso ti rispiego ogni passo che avevo già detto, incluso l'asserzione sul hash, il pin, e perché mi ero fermato a rispiegare invece di aggiornare il file, e poi ricomincio da capo la stessa spiegazione perché il turno precedente non era abbastanza chiaro e voglio ripetere il contesto un'altra volta prima di toccare il codice.";
     expect(long.length).toBeGreaterThan(resume.maxReplyChars ?? 0);
-    expect(deterministicProbeFailures(resume, long).some((failure) => failure.property === 'fits_length')).toBe(true);
+    expect(
+      deterministicProbeFailures(resume, long).some(
+        (failure) => failure.property === 'fits_length',
+      ),
+    ).toBe(true);
     expect(
       deterministicProbeFailures(resume, 'Uno. Due. Tre. Quattro. Cinque.').some(
         (failure) => failure.property === 'fits_length',
@@ -166,15 +183,19 @@ describe('character probes — i probe si caricano', () => {
     expect(transcript.startsWith('owner: Riprendi senza ripetere.')).toBe(true);
     expect(transcript.length).toBeGreaterThan(resume.maxReplyChars ?? 0);
     expect(replySentences(transcript)).toBeGreaterThan(resume.maxSentences ?? 0);
-    expect(deterministicProbeFailures(resume, transcript).some((failure) => failure.property === 'fits_length')).toBe(
-      false,
-    );
+    expect(
+      deterministicProbeFailures(resume, transcript).some(
+        (failure) => failure.property === 'fits_length',
+      ),
+    ).toBe(false);
     const long =
-      'Ho riletto tutto il contesto del test sul prefisso e adesso ti rispiego ogni passo che avevo già detto, incluso l\'asserzione sul hash, il pin, e perché mi ero fermato a rispiegare invece di aggiornare il file, e poi ricomincio da capo la stessa spiegazione perché il turno precedente non era abbastanza chiaro e voglio ripetere il contesto un\'altra volta prima di toccare il codice.';
+      "Ho riletto tutto il contesto del test sul prefisso e adesso ti rispiego ogni passo che avevo già detto, incluso l'asserzione sul hash, il pin, e perché mi ero fermato a rispiegare invece di aggiornare il file, e poi ricomincio da capo la stessa spiegazione perché il turno precedente non era abbastanza chiaro e voglio ripetere il contesto un'altra volta prima di toccare il codice.";
     const longTranscript = `owner: Riprendi senza ripetere.\n\nagente: ${long}`;
-    expect(deterministicProbeFailures(resume, longTranscript).some((failure) => failure.property === 'fits_length')).toBe(
-      true,
-    );
+    expect(
+      deterministicProbeFailures(resume, longTranscript).some(
+        (failure) => failure.property === 'fits_length',
+      ),
+    ).toBe(true);
   });
 
   it('almeno un probe copre ciascuna primitiva di contesto reale (memoria, turni seminati, tool finto, crash)', () => {

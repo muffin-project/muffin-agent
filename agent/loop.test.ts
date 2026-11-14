@@ -456,7 +456,10 @@ describe('agent loop', () => {
     const provider = new ScriptedProvider([answer('prima'), answer('dopo')]);
     const { deps: d, store } = deps([], {
       provider,
-      now: () => new Date((t += 120_000)),
+      now: () => {
+        t += 120_000;
+        return new Date(t);
+      },
     });
     store.append(store.open('t1'), {
       role: 'user',
@@ -475,11 +478,15 @@ describe('agent loop', () => {
       const messages = call?.messages ?? [];
       let last = -1;
       messages.forEach((message, index) => {
-        if (message.content.some((block) => block.type === 'text' && block.cache === 'stable')) last = index;
+        if (message.content.some((block) => block.type === 'text' && block.cache === 'stable'))
+          last = index;
       });
       const body = messages
         .slice(0, last + 1)
-        .map((message) => `${message.role}\n${message.content.map((block) => (block.type === 'text' ? block.text : '')).join('')}`)
+        .map(
+          (message) =>
+            `${message.role}\n${message.content.map((block) => (block.type === 'text' ? block.text : '')).join('')}`,
+        )
         .join('\n');
       return `${system}\n${body}`;
     };
@@ -504,8 +511,14 @@ describe('agent loop', () => {
     const provider = new ScriptedProvider([answer('ok')]);
     const { deps: d, store } = deps([], { provider, minimalPrompt: 'SOLO-COMPITO' });
     await runTurn(d, { ...input(store), promptMode: 'minimal' });
-    expect(provider.seen[0]?.system[0]).toMatchObject({ type: 'text', text: 'SOLO-COMPITO', cache: 'stable' });
-    expect(provider.seen[0]?.system[0]?.type === 'text' && provider.seen[0].system[0].text).not.toBe(d.systemPrompts.owner);
+    expect(provider.seen[0]?.system[0]).toMatchObject({
+      type: 'text',
+      text: 'SOLO-COMPITO',
+      cache: 'stable',
+    });
+    expect(
+      provider.seen[0]?.system[0]?.type === 'text' && provider.seen[0].system[0].text,
+    ).not.toBe(d.systemPrompts.owner);
   });
 
   it('carries cache writes to the surface, so a write is distinguishable from no cache', async () => {

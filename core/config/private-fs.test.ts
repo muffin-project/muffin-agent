@@ -1,16 +1,34 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runInit } from '../../cli/init.js';
-import { paths } from './config.js';
+import { snapshotTo } from '../db/migrate.js';
+import { openDb } from '../db/open.js';
+import { saveMcpRegistry } from '../mcp/registry.js';
 import { SessionStore } from '../session/store.js';
 import { JsonlExporter } from '../tracing/tracer.js';
 import { UndoJournal } from '../undo/journal.js';
-import { openDb } from '../db/open.js';
-import { snapshotTo } from '../db/migrate.js';
-import { saveMcpRegistry } from '../mcp/registry.js';
-import { ensurePrivateDir, isSelfOwned, tightenHome, tightenPrivateDb, tightenPrivateFile } from './private-fs.js';
+import { paths } from './config.js';
+import {
+  ensurePrivateDir,
+  isSelfOwned,
+  tightenHome,
+  tightenPrivateDb,
+  tightenPrivateFile,
+} from './private-fs.js';
 
 let tmpRoots: string[] = [];
 let savedUmask: number | undefined;
@@ -104,7 +122,9 @@ describe('private-by-construction under a permissive umask', () => {
     tightenPrivateDb(paths(home).db);
     for (const suffix of ['-wal', '-shm']) {
       const sidecar = `${paths(home).db}${suffix}`;
-      expect(existsSync(sidecar), `expected ${suffix} sidecar while the WAL writer is open`).toBe(true);
+      expect(existsSync(sidecar), `expected ${suffix} sidecar while the WAL writer is open`).toBe(
+        true,
+      );
       expect(mode(sidecar)).toBe(0o600);
     }
     db.pragma('wal_checkpoint(TRUNCATE)');
@@ -192,8 +212,20 @@ function fakeConfig(): Record<string, unknown> {
 
 describe('hardened / service-user-owned material is never chmodded', () => {
   it('isSelfOwned distinguishes self from foreign uid', () => {
-    expect(isSelfOwned('/tmp', () => ({ uid: 1000, mode: 0o755 }), () => 1000)).toBe(true);
-    expect(isSelfOwned('/tmp', () => ({ uid: 0, mode: 0o755 }), () => 1000)).toBe(false);
+    expect(
+      isSelfOwned(
+        '/tmp',
+        () => ({ uid: 1000, mode: 0o755 }),
+        () => 1000,
+      ),
+    ).toBe(true);
+    expect(
+      isSelfOwned(
+        '/tmp',
+        () => ({ uid: 0, mode: 0o755 }),
+        () => 1000,
+      ),
+    ).toBe(false);
   });
 
   it('tightenHome skips foreign-owned entries instead of chmodding them', () => {

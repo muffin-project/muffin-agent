@@ -58,8 +58,8 @@ import { UndoJournal } from '../core/undo/journal.js';
 import { Vault } from '../core/vault/vault.js';
 import {
   buildSystemPromptBlocks,
-  minimalSystemPrompt,
   type IstanzaFacts,
+  minimalSystemPrompt,
   renderSystemPrompts,
   type SystemPromptBlocks,
 } from './context/assemble.js';

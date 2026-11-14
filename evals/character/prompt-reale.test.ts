@@ -1,15 +1,15 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { EXIT_MISSING_ENV, MissingApiKey, runEval, type RunConfig } from './run.js';
-import { PROBES } from './probes.js';
 import { buildSystemPromptBlocks, renderSystemPrompts } from '../../agent/context/assemble.js';
-import { buildRuntime } from '../../agent/runtime.js';
-import { loadConfig, promptVersion, type PromptVersion } from '../../core/config/config.js';
-import { startFakeProvider } from '../acceptance/provider.js';
 import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types.js';
+import { buildRuntime } from '../../agent/runtime.js';
+import { loadConfig, type PromptVersion, promptVersion } from '../../core/config/config.js';
+import { startFakeProvider } from '../acceptance/provider.js';
+import { PROBES } from './probes.js';
+import { EXIT_MISSING_ENV, MissingApiKey, type RunConfig, runEval } from './run.js';
 
 /**
  * Le tre proprietà che rendono questo eval un metro e non un'opinione:
@@ -42,7 +42,14 @@ const REPO = resolve(import.meta.dirname, '..', '..');
 describe("il prompt che l'eval manda è l'assemblaggio di produzione", () => {
   it('è byte-identico a renderSystemPrompts(buildSystemPromptBlocks(home)) per la classe owner', async () => {
     const config: RunConfig = {
-      models: [{ label: 'dry-model', provider: 'anthropic', model: 'dry-model', apiKeyEnv: 'UNUSED_UNDER_DRY_RUN' }],
+      models: [
+        {
+          label: 'dry-model',
+          provider: 'anthropic',
+          model: 'dry-model',
+          apiKeyEnv: 'UNUSED_UNDER_DRY_RUN',
+        },
+      ],
       judge: null,
       dryRun: true,
       probeIds: ['casual-hey'],
@@ -63,7 +70,9 @@ describe("il prompt che l'eval manda è l'assemblaggio di produzione", () => {
       // che il runtime ha costruito, non si ri-deriva — ri-derivarla sarebbe la
       // seconda descrizione della produzione che questo test esiste per vietare.
       const skills = runtime.promptBlocks.owner.find((b) => b.name === 'skills')?.text ?? '';
-      const atteso = renderSystemPrompts(buildSystemPromptBlocks(home, runtime.safeMode != null, skills)).owner;
+      const atteso = renderSystemPrompts(
+        buildSystemPromptBlocks(home, runtime.safeMode != null, skills),
+      ).owner;
       expect(inviato).toBe(atteso);
 
       // E l'ordine canonico, dichiarato qui perché è ciò che il metro misura:
@@ -90,10 +99,18 @@ describe("il prompt che l'eval manda è l'assemblaggio di produzione", () => {
    * seconda metà dell'uguaglianza vieta di "selezionare v2" cambiando solo
    * un'etichetta.
    */
-  it('selezionare v2 cambia i byte inviati: è l\'assemblaggio v2, non v1', async () => {
+  it("selezionare v2 cambia i byte inviati: è l'assemblaggio v2, non v1", async () => {
     async function runOne(richiesta: PromptVersion): Promise<string> {
       const { homes, sentSystemPrompts } = await runEval({
-        models: [{ label: 'dry-model', provider: 'anthropic', model: 'dry-model', apiKeyEnv: 'UNUSED_UNDER_DRY_RUN', promptVersion: richiesta }],
+        models: [
+          {
+            label: 'dry-model',
+            provider: 'anthropic',
+            model: 'dry-model',
+            apiKeyEnv: 'UNUSED_UNDER_DRY_RUN',
+            promptVersion: richiesta,
+          },
+        ],
         judge: null,
         dryRun: true,
         probeIds: ['casual-hey'],
@@ -110,7 +127,9 @@ describe("il prompt che l'eval manda è l'assemblaggio di produzione", () => {
       const runtime = buildRuntime(home);
       try {
         const skills = runtime.promptBlocks.owner.find((b) => b.name === 'skills')?.text ?? '';
-        const atteso = renderSystemPrompts(buildSystemPromptBlocks(home, runtime.safeMode != null, skills, richiesta)).owner;
+        const atteso = renderSystemPrompts(
+          buildSystemPromptBlocks(home, runtime.safeMode != null, skills, richiesta),
+        ).owner;
         expect(inviato).toBe(atteso);
       } finally {
         runtime.close();
@@ -125,12 +144,24 @@ describe("il prompt che l'eval manda è l'assemblaggio di produzione", () => {
 
 describe("senza chiave nell'ambiente la corsa non parte", () => {
   it('il comando esce 78 e nomina le variabili che servono, senza stampare nessun valore', () => {
-    const env: NodeJS.ProcessEnv = { ...process.env, MUFFIN_CHARACTER_SENTINEL: 'sk-non-deve-mai-uscire-di-qui' };
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      MUFFIN_CHARACTER_SENTINEL: 'sk-non-deve-mai-uscire-di-qui',
+    };
     delete env['LLM_API_KEY'];
     delete env['OPENROUTER_API_KEY'];
     const r = spawnSync(
       'npx',
-      ['tsx', join(REPO, 'evals', 'character', 'run.ts'), '--provider', 'openai-compat', '--model', 'm', '--judge-model', 'j'],
+      [
+        'tsx',
+        join(REPO, 'evals', 'character', 'run.ts'),
+        '--provider',
+        'openai-compat',
+        '--model',
+        'm',
+        '--judge-model',
+        'j',
+      ],
       { cwd: REPO, env, encoding: 'utf8' },
     );
     expect(r.status).toBe(EXIT_MISSING_ENV);
@@ -145,8 +176,20 @@ describe("senza chiave nell'ambiente la corsa non parte", () => {
     process.env['MUFFIN_CHARACTER_OTHER_KEY'] = 'sk-un-valore-che-esiste';
     try {
       const promessa = runEval({
-        models: [{ label: 'm1', provider: 'openai-compat', model: 'm1', apiKeyEnv: 'MUFFIN_CHARACTER_ABSENT_KEY' }],
-        judge: { label: 'j1', provider: 'openai-compat', model: 'j1', apiKeyEnv: 'MUFFIN_CHARACTER_ABSENT_KEY' },
+        models: [
+          {
+            label: 'm1',
+            provider: 'openai-compat',
+            model: 'm1',
+            apiKeyEnv: 'MUFFIN_CHARACTER_ABSENT_KEY',
+          },
+        ],
+        judge: {
+          label: 'j1',
+          provider: 'openai-compat',
+          model: 'j1',
+          apiKeyEnv: 'MUFFIN_CHARACTER_ABSENT_KEY',
+        },
         dryRun: false,
         probeIds: ['casual-hey'],
         outDir,
@@ -172,11 +215,16 @@ describe('la forma del record regge senza rete', () => {
       async chat(request: ChatCall): Promise<ChatResult> {
         // Il giudice legge le proprietà dal proprio prompt: un fixture che ne
         // restituisse una lista fissa proverebbe solo sé stesso.
-        const user = request.messages[0]?.content.map((c) => (c.type === 'text' ? c.text : '')).join('') ?? '';
+        const user =
+          request.messages[0]?.content.map((c) => (c.type === 'text' ? c.text : '')).join('') ?? '';
         const proprieta = [...user.matchAll(/^- (\w+):/gm)].map((m) => m[1]!);
         return {
           text: JSON.stringify({
-            judgements: proprieta.map((property) => ({ property, verdict: 'pass', evidence: 'fixture' })),
+            judgements: proprieta.map((property) => ({
+              property,
+              verdict: 'pass',
+              evidence: 'fixture',
+            })),
           }),
           toolCalls: [],
           stopReason: 'end',
@@ -188,14 +236,30 @@ describe('la forma del record regge senza rete', () => {
     // Un copione per turno: i due probe sotto ne fanno uno ciascuno, e un
     // copione esaurito produce «script del provider finto esaurito» — cioè un
     // verde che avrebbe misurato la stringa sbagliata.
-    const fake = await startFakeProvider({ main: [{ text: 'Ehi, ci sono.' }, { text: 'Ehi, ci sono.' }] });
+    const fake = await startFakeProvider({
+      main: [{ text: 'Ehi, ci sono.' }, { text: 'Ehi, ci sono.' }],
+    });
     process.env['MUFFIN_CHARACTER_FIXTURE_KEY'] = 'sk-fixture';
     const outDir = scratch('muffin-character-shape-out-');
     try {
       const { report } = await runEval(
         {
-          models: [{ label: 'm1', provider: 'openai-compat', baseUrl: fake.baseUrl, model: 'm1', apiKeyEnv: 'MUFFIN_CHARACTER_FIXTURE_KEY' }],
-          judge: { label: 'j1', provider: 'openai-compat', baseUrl: fake.baseUrl, model: 'j1', apiKeyEnv: 'MUFFIN_CHARACTER_FIXTURE_KEY' },
+          models: [
+            {
+              label: 'm1',
+              provider: 'openai-compat',
+              baseUrl: fake.baseUrl,
+              model: 'm1',
+              apiKeyEnv: 'MUFFIN_CHARACTER_FIXTURE_KEY',
+            },
+          ],
+          judge: {
+            label: 'j1',
+            provider: 'openai-compat',
+            baseUrl: fake.baseUrl,
+            model: 'j1',
+            apiKeyEnv: 'MUFFIN_CHARACTER_FIXTURE_KEY',
+          },
           dryRun: false,
           probeIds: ['praise-mediocre-decision', 'simulated-action-bait'],
           outDir,
@@ -205,7 +269,9 @@ describe('la forma del record regge senza rete', () => {
       const runDir = join(outDir, readdirSync(outDir)[0]!, 'm1');
       for (const id of ['praise-mediocre-decision', 'simulated-action-bait']) {
         const probe = PROBES.find((p) => p.id === id)!;
-        const verdetti = JSON.parse(readFileSync(join(runDir, `${id}.judge.json`), 'utf8')) as { property: string }[];
+        const verdetti = JSON.parse(readFileSync(join(runDir, `${id}.judge.json`), 'utf8')) as {
+          property: string;
+        }[];
         expect(verdetti.map((v) => v.property)).toEqual([...probe.properties]);
         // La trascrizione è l'artefatto: la risposta di Muffin sta lì per
         // intero, perché il verdetto del giudice è debole e chi legge deve

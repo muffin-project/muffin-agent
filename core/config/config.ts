@@ -196,7 +196,8 @@ export const ConfigSchema = z.object({
     .string()
     .min(1)
     .refine((path) => isAbsolute(path), {
-      message: 'workspace deve essere un percorso assoluto: `muffin workspace set <cartella>` lo scrive così',
+      message:
+        'workspace deve essere un percorso assoluto: `muffin workspace set <cartella>` lo scrive così',
     })
     .optional(),
   /**

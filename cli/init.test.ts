@@ -129,7 +129,9 @@ describe('runInit — the defaults registry it hands `muffin doctor` (core/confi
     runInit({ home: dir, apiKey: 'sk-never-called' });
     const original = readDefaultsRegistry(dir);
     const skillPath = join(dir, 'skills', 'voce', 'SKILL.md');
-    const originalSkillHash = original?.files.find((f) => f.path === 'skills/voce/SKILL.md')?.sha256;
+    const originalSkillHash = original?.files.find(
+      (f) => f.path === 'skills/voce/SKILL.md',
+    )?.sha256;
     expect(originalSkillHash).toBeTruthy();
 
     // The owner edits the voice skill by hand, then runs `muffin init` again

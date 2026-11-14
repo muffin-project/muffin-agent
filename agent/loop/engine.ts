@@ -254,7 +254,8 @@ async function runClaimedTurn(
     // A job stays minimal across a resume, because the record still has
     // `jobId` and this object is rebuilt from the record, not from the
     // caller's TurnInput. A fresh non-job turn opts in through DriveOptions.
-    promptMode: record.jobId !== null || options.promptMode === 'minimal' ? 'minimal' : 'interactive',
+    promptMode:
+      record.jobId !== null || options.promptMode === 'minimal' ? 'minimal' : 'interactive',
     ...(record.replyTo === null ? {} : { replyTo: record.replyTo }),
     ...(options.replyChannel !== undefined ? { replyChannel: options.replyChannel } : {}),
     ...(options.onDelta ? { onDelta: options.onDelta } : {}),

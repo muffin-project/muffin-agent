@@ -95,7 +95,7 @@ export function cmdPromptShow(home: string, argv: string[]): number {
     : { kind: 'owner', connector: surface, externalId: 'preview' };
   const cls: TenantClass = tenantClass(principal, tenant);
 
-  let runtime;
+  let runtime: ReturnType<typeof buildRuntime>;
   try {
     runtime = buildRuntime(home);
   } catch (error) {
@@ -222,7 +222,7 @@ export function cmdPromptVersion(home: string, argv: string[]): number {
     return 78;
   }
 
-  let config;
+  let config: ReturnType<typeof loadConfig>;
   try {
     config = loadConfig(home);
   } catch (error) {

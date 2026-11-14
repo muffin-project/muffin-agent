@@ -480,7 +480,9 @@ describe('quale versione del prompt assembla questa installazione', () => {
     const home = bootHome();
     const v1 = buildSystemPromptBlocks(home, false, '', 'v1');
     const v2 = buildSystemPromptBlocks(home, false, '', 'v2');
-    expect(v1.owner.find((b) => b.name === 'identity')?.text).toBe(v2.owner.find((b) => b.name === 'identity')?.text);
+    expect(v1.owner.find((b) => b.name === 'identity')?.text).toBe(
+      v2.owner.find((b) => b.name === 'identity')?.text,
+    );
     expect(v1.owner.find((b) => b.name === 'identity')?.source).toBe('rot/identity.md');
     expect(v1.owner.map((b) => b.name)).not.toContain('persona');
     expect(v1.owner.map((b) => b.name)).not.toContain('voice');
