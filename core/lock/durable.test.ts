@@ -1,16 +1,17 @@
-import DatabaseCtor from 'better-sqlite3';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import {
   DurableLock,
-  HARD_STALE_MULTIPLIER,
-  ensureColumn,
-  heldBy,
   type DurableLockSpec,
+  ensureColumn,
+  HARD_STALE_MULTIPLIER,
+  heldBy,
 } from './durable.js';
+import { incarnationOf } from './incarnation.js';
 
 /**
  * The shared primitive, on its own — `heldBy`'s ordering and `DurableLock`'s
@@ -178,6 +179,45 @@ describe('DurableLock.refresh — respects the same horizon a reader would (P21)
     expect('release' in other.acquire(pastHard, 2222)).toBe(true);
   });
 
+  it('reacquires past the horizon with the same incarnation and a new token', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-reacquire-'));
+    const db = new DatabaseCtor(join(dir, 'm.db'));
+    try {
+      const lock = new DurableLock(db, SPEC, () => true);
+      lock.acquire(T0, process.pid);
+      const first = lock.recorded()?.holderId ?? '';
+      expect(incarnationOf(first)).not.toBeNull();
+      const past = at(STALE_MS * HARD_STALE_MULTIPLIER + 1_000);
+      expect(lock.refresh(past, process.pid)).toBe(false);
+      expect(lock.reacquire(past, process.pid)).toEqual({ renewed: true });
+      const second = lock.recorded()?.holderId ?? '';
+      expect(second).not.toBe(first);
+      expect(incarnationOf(second)).toBe(incarnationOf(first));
+      expect(lock.isCurrentHolder(process.pid)).toBe(true);
+      expect(lock.ownHolderId()).toBe(second);
+      const stale = db
+        .prepare(`UPDATE zz_test_lock SET taken_at = ? WHERE id = 1 AND pid = ? AND holder_id = ?`)
+        .run(past.toISOString(), process.pid, first);
+      expect(stale.changes).toBe(0);
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not mint when heldBy names another live holder', () => {
+    const db = new DatabaseCtor(':memory:');
+    const ours = new DurableLock(db, SPEC, () => true);
+    ours.acquire(T0, 1111);
+    const token = ours.ownHolderId();
+    const past = at(STALE_MS * HARD_STALE_MULTIPLIER + 1_000);
+    const other = new DurableLock(db, SPEC, () => true);
+    expect('release' in other.acquire(past, 2222)).toBe(true);
+    expect(ours.reacquire(past, 1111)).toEqual({ renewed: false, holder: 2222 });
+    expect(ours.ownHolderId()).toBe(token);
+    expect(ours.isCurrentHolder(1111)).toBe(false);
+  });
+
   it('fails for a pid that is no longer the holder at all', () => {
     const db = new DatabaseCtor(':memory:');
     const lock = new DurableLock(db, SPEC, () => true);
@@ -213,8 +253,12 @@ describe('additive migration: holder_id reaches a table created before this colu
   it('adds the column to an already-installed table rather than silently ignoring it', () => {
     const db = new DatabaseCtor(':memory:');
     // A pre-existing install: the table as it was before `holder_id`.
-    db.exec(`CREATE TABLE zz_test_lock (id INTEGER PRIMARY KEY CHECK (id = 1), pid INTEGER, taken_at TEXT);`);
-    db.prepare(`INSERT INTO zz_test_lock (id, pid, taken_at) VALUES (1, 4242, ?)`).run(T0.toISOString());
+    db.exec(
+      `CREATE TABLE zz_test_lock (id INTEGER PRIMARY KEY CHECK (id = 1), pid INTEGER, taken_at TEXT);`,
+    );
+    db.prepare(`INSERT INTO zz_test_lock (id, pid, taken_at) VALUES (1, 4242, ?)`).run(
+      T0.toISOString(),
+    );
 
     const lock = new DurableLock(db, SPEC, () => true);
     // Would throw "no such column: holder_id" if the migration had not run.
@@ -249,7 +293,9 @@ describe('ensureColumn survives an ALTER someone else already did', () => {
       db.exec(`CREATE TABLE zz_gara (id INTEGER PRIMARY KEY, undone_at TEXT);`);
       // A mismatched DDL used to be accepted as a successful race even though
       // the requested column remained absent for the next prepared statement.
-      expect(() => ensureColumn(db, 'zz_gara', 'mai_vista', 'undone_at TEXT')).toThrow(/duplicate column name/i);
+      expect(() => ensureColumn(db, 'zz_gara', 'mai_vista', 'undone_at TEXT')).toThrow(
+        /duplicate column name/i,
+      );
       const columns = db.prepare(`PRAGMA table_info(zz_gara)`).all() as { name: string }[];
       expect(columns.filter((c) => c.name === 'undone_at').length).toBe(1);
       expect(columns.some((c) => c.name === 'mai_vista')).toBe(false);

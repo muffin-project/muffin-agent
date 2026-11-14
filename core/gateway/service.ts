@@ -1,7 +1,7 @@
 import type { JobStore } from '../scheduler/jobs.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import type { TurnLane } from '../turns/lane.js';
-import { HEARTBEAT_MS, type GatewayLock } from './lock.js';
+import { type GatewayLock, HEARTBEAT_MS } from './lock.js';
 import type { Notifier } from './notify.js';
 
 /**
@@ -223,7 +223,9 @@ export class Gateway {
    * expensive half of boot in the CLI, so the loser of the race has not spawned
    * MCP children or connected a surface by the time it finds out.
    */
-  start(now: Date = this.now()): { started: true } | { started: false; held: string; remedy: string } {
+  start(
+    now: Date = this.now(),
+  ): { started: true } | { started: false; held: string; remedy: string } {
     // Idempotent, because `serve` claims too. The claim deliberately refuses a
     // live holder even when that holder is this same pid (see sendlock.ts), so
     // without this flag a caller that pre-checked would refuse itself.
@@ -243,20 +245,25 @@ export class Gateway {
    * being asked anything, which is the "up but wedged" state this whole slice is
    * about. If ticking stops, the claim goes stale. The REPL does not then start
    * a second runtime (ADR-0103). A later `gateway run` may claim the row.
-   * ADR-0106 slice 1 changes the failed beat: an expired lease with no other
-   * holder is re-acquired in this process, with a new token. It is not handed
-   * to the REPL.
+   * ADR-0106 slice 1: a failed beat with nobody else on the row re-acquires
+   * in this process, with a new token, and does not hand the runtime to the
+   * REPL. A failed beat whose row names another live holder drains, outside
+   * that transaction.
    */
   tick(now: Date = this.now()): void {
     if (this.stopping) return; // see `drain`: clearInterval does not unqueue a fired callback
     if (!this.deps.lock.beat(now, this.state(now), this.pid)) {
       // `beat` is false when this pid no longer holds the current token: the
       // lease is past the hard horizon, or another acquisition owns the row.
-      // Those are different facts. The log line below still calls every false
-      // beat a theft, which is wrong for an expired row with no other holder
-      // (ADR-0106 slice 1 splits them and re-acquires only that case). Either
-      // way this process must not keep ticking on the old token.
-      this.deps.log('gateway: la sua rivendicazione è stata presa da un altro processo — esco');
+      // Those are different facts. Re-acquire only when `heldBy` names nobody.
+      // Either way this beat starts no new effect, and the run already inside
+      // `run()` is left to finish.
+      const renewed = this.deps.lock.reacquire(now, this.pid);
+      if (renewed.renewed) {
+        this.deps.log('gateway: lease scaduta, nessun altro detentore — ri-acquisisco');
+        return;
+      }
+      this.deps.log(`gateway: la riga è tenuta dal pid ${renewed.holder} — esco`);
       void this.drain('lock');
       return;
     }
@@ -336,6 +343,12 @@ export class Gateway {
     this.tickTimer = null;
     // The watchdog timer deliberately survives this line — see its declaration.
 
+    // Before the wait and before release. One short fenced update: a token
+    // past the horizon that is still ours records drain, and a token that is
+    // no longer ours changes 0 rows. `heldBy` is not consulted. `taken_at`
+    // stays. Commit is this statement; the wait below does not hold it.
+    this.deps.lock.markDraining();
+
     this.deps.notify.stopping(STATUS.draining);
     this.deps.log(
       `gateway: ${reason} — drenaggio, nessun turno nuovo` +
@@ -363,6 +376,9 @@ export class Gateway {
     if (this.watchdogTimer) clearInterval(this.watchdogTimer);
     this.watchdogTimer = null;
 
+    // The process is leaving. Same fence as the drain status: a row we no
+    // longer own is not stamped with our exit. A re-acquire never reaches here.
+    this.deps.lock.recordDeparture(this.now().toISOString(), reason);
     // The claim goes before the teardown: from here on there is no scheduler in
     // this process, so a REPL starting now is right to start its own ticker.
     this.deps.lock.release(this.pid);
@@ -424,7 +440,9 @@ export class Gateway {
       // A missing transport means the watchdog never gets fed and systemd kills
       // a healthy process every WatchdogSec. Visible, or it reads as a crash
       // loop with no cause anywhere.
-      this.deps.log(`gateway: notifiche al supervisore non consegnate (${problem}) — watchdog non alimentato`);
+      this.deps.log(
+        `gateway: notifiche al supervisore non consegnate (${problem}) — watchdog non alimentato`,
+      );
     }
 
     // One tick straight away, not only on the interval. Two things go wrong
