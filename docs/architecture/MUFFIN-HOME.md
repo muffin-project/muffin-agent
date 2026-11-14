@@ -157,11 +157,13 @@ are not in the schema until the slice that migrates them: `mode`
 (`persistent` or `ephemeral`, slice 2), `supervisor` (`systemd`, `launchd`,
 `docker`, `external`, or `none`, slice 4), `exited_at` and `exit_reason`
 (written when the process actually leaves, slice 1). A re-acquire after an
-expired lease mints a new `holder_id` and moves `taken_at`. It does not move
-`since`, and it does not revive the old token. An incarnation that is still
-locked does not by itself mean the holder is making progress: a beat older
-than `WATCHDOG_SEC` is "alive but stuck" even though ADR-0094 still calls the
-process alive.
+expired lease mints a new `holder_id` (`mintHolderId`, not `GatewayLock.claim`)
+and moves `taken_at`. It does not move `since`, and it does not revive the old
+token. An incarnation that is still locked does not by itself mean the holder
+is making progress. A beat older than `WATCHDOG_SEC` is "alive but stuck" only
+when the row is not in drain (`status` `drenaggio`, written without moving
+`taken_at`). `taken_at` is not the systemd watchdog ping. ADR-0094 still calls
+that process alive until the hard horizon.
 
 ### G. Replaceable assets — `models/`, copied defaults/persona
 

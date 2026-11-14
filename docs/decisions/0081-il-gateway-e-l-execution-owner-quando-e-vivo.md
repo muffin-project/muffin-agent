@@ -86,5 +86,9 @@ ADR-0106 emenda il punto 1 («né socket né claim → owner locale esplicito»)
 la prima riga del fuori scope («locale-vs-locale»). L'assenza di owner non è
 più un runtime locale per `muffin run`: è un claim `mode=ephemeral` preso da
 quel run, oppure un rifiuto del REPL. Due run concorrenti non sono due owner.
-Il terminale resta cliente quando un owner c'è. Il testo sopra non è stato
-riscritto.
+Il terminale resta cliente quando un owner c'è. Lo stesso punto 1 tratta una
+claim viva col socket muto come conflitto fail closed. Letta da sola è
+immediata. ADR-0106, per due avvii insieme senza owner, aspetta circa 10 s e
+riprova prima di dichiararlo: l'esito resta un solo owner e resta fail closed.
+Quella frase non si legge più come un conflitto immediato. Il testo sopra non
+è stato riscritto.

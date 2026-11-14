@@ -315,13 +315,16 @@ oltre l'orizzonte duro, come se qualcuno avesse rubato la riga. Vale ancora
 quando un altro detentore vivo tiene la riga: non si ruba, e non si rinfresca
 il token scaduto (P21 resta). Non vale più quando la riga è libera. Il GO
 dell'owner del 2026-11-14 fa ri-acquisire nello stesso processo, con un
-`holder_id` nuovo, stile etcd/Chubby. `since` non si muove. Il battito che ha
-visto il fallimento non consegna sotto il token vecchio.
+`holder_id` nuovo (`mintHolderId`, non `GatewayLock.claim`), stile etcd/Chubby.
+`since` non si muove. Il run già in volo finisce: non si abortisce e non si
+rimanda al modello. Il `drain`, se c'è un altro detentore, sta fuori dalla
+transazione di scrittura.
 
 **2. «Come si tiene su».** systemd e launchd restano. Si aggiungono `docker`,
-`external` e `none` (quest'ultimo mai di default). `WATCHDOG=1` resta l'unico
-modo in cui systemd vede un processo vivo ma fermo. Dove il supervisore non ha
-quel ping — Docker, un supervisore esterno — la stessa domanda è
-`muffin gateway status` con il battito più vecchio di `WATCHDOG_SEC`, ed è
-un'uscita distinta dal «non c'è un persistente». Docker non riavvia un
-container che non è uscito: la healthcheck uccide solo quel caso.
+`external` e `none` (quest'ultimo mai di default). `WATCHDOG=1` resta il modo
+in cui systemd vede un processo vivo ma fermo, ed è un timer diverso da
+`taken_at`. Dove il supervisore non ha quel ping — Docker, un supervisore
+esterno — la stessa domanda è `muffin gateway status` uscita 2: incarnazione
+tenuta, battito più vecchio di `WATCHDOG_SEC`, e non in drenaggio. Il
+drenaggio scrive `status = drenaggio` senza muovere `taken_at`. Docker non
+riavvia un container che non è uscito: la healthcheck uccide solo l'uscita 2.

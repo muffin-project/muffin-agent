@@ -44,9 +44,11 @@ Su `dev` @ `7064bec1` il meccanismo è ancora quello. `Gateway.tick` tratta ogni
 un supervisore c'è. `DurableLock.refresh` rifiuta già il caso giusto — pid e
 `holder_id` coincidono ma `heldBy` giudica la riga scaduta — e il suo commento
 nomina il ri-claim come risposta lecita. Il chiamante non distingue «scaduta e
-libera» da «tenuta da un altro». Il commento di `tick` dice ancora che, se il
-battito si ferma, il REPL prende il controllo: ADR-0103 l'ha reso falso, e
-questa decisione non lo resuscita.
+libera» da «tenuta da un altro». A `7064bec1` il commento di `tick` diceva che,
+se il battito si ferma, il REPL prende il controllo: ADR-0103 l'aveva già reso
+falso. Questa PR riscrive quel commento. Il log e il `drain('lock')` che esce
+0 restano il comportamento di questo head, e questa decisione non li consegna
+al REPL.
 
 La ragione di ADR-0081 e ADR-0103 non è il database e non è il motore del
 turno. È **un owner per Home**: una `ModelLane` in-process, un ticker dei job,
@@ -148,25 +150,61 @@ non autorizza più scritture. In Chubby (Burrows, OSDI 2006) un sequencer
 scaduto fa rifiutare l'RPC in ritardo; se il lock è libero il client può
 riprenderlo, e riceve un sequencer nuovo.
 
-Quindi, nello stesso processo, dentro la transazione immediata di `acquire`:
+L'ordine è questo. Dentro `BEGIN IMMEDIATE` stanno solo il controllo di
+`heldBy` e, se la riga è libera, il conio. È lo stesso perimetro di
+`DurableLock.acquire` (`core/lock/durable.ts`): la transazione copre il
+controllo e `mintHolderId`, poi si chiude. Il `drain` non ci entra. Aspettare
+fino a `DRAIN_BUDGET_MS` tenendo la scrittura bloccherebbe l'altra connessione
+e la scrittura del turno in volo, che a sua volta aspetta la transazione che
+aspetta il turno.
 
-1. Se `heldBy` nomina un altro detentore vivo, non si acquisisce. Il log dice
-   chi tiene la riga, non «presa da un altro processo» quando la riga è vuota.
-   Si drena e si esce 0, come `drain('lock')` fa già, così il supervisore
-   riprova e il perdente esce 75.
-2. Se nessuno tiene la riga, si conia un `holder_id` nuovo con lo stesso
-   percorso di `acquire`. L'incarnazione resta quella del processo (ADR-0094).
-   `taken_at` avanza. `since` no. Il token vecchio è morto: una scrittura con
-   quel `holder_id` cambia zero righe.
-3. Il battito che ha visto `refresh` falso non entra in `scheduler.tick` e
-   non consegna. Il lavoro in memoria non continua sotto il token vecchio. Il
-   turno e il job si riprendono dal percorso già esistente (`claim_token`,
-   `job_fires`, #948), sotto il token nuovo. Una seconda chiamata al modello
-   per la stessa occorrenza è il fallimento della slice, non un residuo.
+1. Il battito che vede `refresh` falso non entra in `scheduler.tick` e non
+   avvia un effetto nuovo. Non dice niente del `run()` del battito precedente,
+   che può essere già dentro la chiamata al modello.
+2. Se `heldBy` nomina un altro detentore vivo, non si conia e non si tocca
+   `myHolderId`. `stillOwner` è `lock.isCurrentClaim()` (`cli/gateway.ts`):
+   confronta la riga con il `myHolderId` di questa istanza. Lasciarlo com'è
+   tiene `stillOwner()` falso, e la consegna resta recintata. Il log nomina chi
+   tiene la riga, non «presa da un altro processo» quando la riga è vuota. Si
+   esce dalla transazione, e solo dopo si drena, fuori da ogni scrittura, e
+   si esce 0 come `drain('lock')` fa già. Il supervisore riprova e il
+   perdente esce 75. Non si consegna.
+3. Se non nomina nessuno, nella stessa transazione immediata si chiama
+   `mintHolderId` con la stessa incarnazione e si scrive quel valore sulla riga
+   e in `myHolderId`, come fa `acquire` dopo un conio riuscito. Così il
+   `stillOwner()` del run già in volo resta vero e quel run può finire. Non è
+   il permesso di un'altra chiamata. Non si chiama `GatewayLock.claim`: il suo
+   `onClaim` scrive `since`. `taken_at` avanza. `since` no. Poi la transazione
+   finisce.
+4. Il lavoro già dentro `run()` / `runTurn` è possibilmente fatto. Non si
+   abortisce e non si riconsegna alla lane. `acquire` sostituisce `myHolderId`,
+   quindi dopo la ri-acquisizione un `stillOwner()` in volo torna vero: non è
+   il permesso di una seconda chiamata. Il `claim_token` del turno è un altro
+   `mintHolderId` (`core/turns/store.ts`): ruotare `gateway_lock.holder_id`
+   non fa cambiare zero righe a `checkpoint` / `finish`. Una scrittura col
+   `holder_id` vecchio cambia zero righe sul refresh del lock, non sul turno.
+   Abortire il run e lasciare il processo vivo (l'incarnazione resta bloccata,
+   quindi nessuno reclama) lascerebbe il turno `running`. Interromperlo perché
+   la lane lo «riprenda sotto il token nuovo» chiamerebbe il modello un'altra
+   volta mentre la prima richiesta può essere ancora in volo. Il percorso che
+   già esiste lascia finire il run in memoria. Una seconda chiamata per
+   quell'occorrenza è il fallimento della slice.
 
 P21 resta: è vietato spingere `taken_at` sul token scaduto facendo finta che
 i lettori non l'avessero già giudicato assente. La ri-acquisizione perde la
 corsa se nel frattempo un altro `acquire` ha vinto.
+
+Un passo d'orologio in avanti, più largo dell'orizzonte duro, fa fallire
+`refresh` come il risveglio. Oggi quel salto rilascia la riga (`drain('lock')`).
+La ri-acquisizione invece timbra `taken_at` con lo stesso `now` spostato e
+resta. Un passo indietro successivo lascia `taken_at` nel futuro. `heldBy`
+tratta un `taken_at` futuro come senza scadenza: `now - takenAt` è negativo e
+non supera l'orizzonte (`core/lock/durable.ts`, la nota su R4/R6). Quella nota
+rifiuta di inventare una tolleranza: è una scelta dell'owner. Il caso del
+2026-11-04 non è questo — orologio giusto, `taken_at` vecchio, pid null,
+nessun altro detentore. Un sonno e un passo in avanti si somigliano su un
+orologio solo; l'esposizione nuova è il timbro che sopravvive al passo
+indietro. La tolleranza non si sceglie qui. Sta in «Non deciso qui».
 
 ### Cessione del ruolo: il verbo è `vacate`
 
@@ -257,21 +295,36 @@ attuale il pid 1 è tini, e il gateway è il figlio (`contrib/docker/Dockerfile`
   sonda è la stessa; l'uccisione la fa lui.
 - **none.** Mai di default. `doctor` lo dice.
 
-`muffin gateway status` esce 0 solo con un owner `mode=persistent` il cui
-ultimo battito è entro `WATCHDOG_SEC` (60 s, `core/gateway/unit.ts`). Un
-effimero vivo non è «il gateway è su»: il testo nomina il pid e l'uscita è 1.
-**Vivo ma fermo** è un'uscita a parte, 2: l'incarnazione è ancora tenuta
-(ADR-0094 direbbe vivo, e `heldBy` lo protegge fino all'orizzonte duro, 30
-minuti) ma `taken_at` è più vecchio di `WATCHDOG_SEC`. È la domanda che su
-systemd fa `WATCHDOG=1`, e che `Restart=always` non vede. Su Docker la restart
-policy non riavvia un container unhealthy che non è uscito. La healthcheck
-dello snippet uccide il pid 1 **solo sull'uscita 2**, così `unless-stopped`
-può ripartire. L'uscita 1 (spento, stop volontario, solo effimero, home non
-ancora configurata, persistente in attesa di `vacate`) non uccide: il wait
-dell'entrypoint e `gateway.stopped` restano un `sleep infinity`. Intervallo
-30 s (il battito), timeout 5 s, 3 tentativi, `start_period` 40 s: copre il
-boot, sta sotto l'orizzonte duro, e si muove solo se si muovono `HEARTBEAT_MS`
-o `WATCHDOG_SEC`.
+`muffin gateway status` esce 0 con un owner `mode=persistent` il cui ultimo
+battito è entro `WATCHDOG_SEC` (60 s, `core/gateway/unit.ts`), e anche mentre
+drena. Un effimero vivo non è «il gateway è su»: il testo nomina il pid e
+l'uscita è 1.
+
+**Vivo ma fermo** è l'uscita 2, e `taken_at` non è il ping del watchdog. Su
+systemd `WATCHDOG=1` è un altro timer, tenuto acceso durante il drenaggio di
+proposito (`core/gateway/service.ts`): `tick` torna prima di `lock.beat`
+quando il processo si sta fermando, e `drain` azzera il timer del tick, quindi
+`taken_at` smette di muoversi mentre il ping a systemd continua.
+`notify.stopping` non scrive `gateway_lock`. `DRAIN_BUDGET_MS` e
+`WATCHDOG_SEC` sono entrambi 60 s, e l'ultimo battito può essere già vecchio
+di quasi un `HEARTBEAT_MS`. A metà di un SIGTERM o di un SIGUSR1 la riga
+avrebbe l'incarnazione ancora tenuta e `taken_at` più vecchio di 60 s. Quella
+riga non è un processo fermo: è il drenaggio che il kill non deve abbattere.
+
+Il drenaggio si pubblica sulla riga. Entrando in `drain` si scrive
+`status = drenaggio` senza spostare `taken_at` e senza chiamare `refresh`,
+anche se il token fosse già oltre l'orizzonte. L'uscita 2 richiede le tre
+cose insieme: incarnazione tenuta, `taken_at` più vecchio di `WATCHDOG_SEC`,
+e status diverso da `drenaggio`. La healthcheck uccide il pid 1 solo in quel
+caso, così `unless-stopped` può ripartire. Un drenaggio già più lungo di
+`WATCHDOG_SEC` non è uscita 2: è l'accettazione della slice 4. L'uscita 1
+(spento, stop volontario, solo effimero, home non ancora configurata,
+persistente in attesa di `vacate`) non uccide: il wait dell'entrypoint e
+`gateway.stopped` restano un `sleep infinity`. Intervallo 30 s (il battito),
+timeout 5 s, 3 tentativi, `start_period` 40 s: copre il boot, sta sotto
+l'orizzonte duro, e si muove solo se si muovono `HEARTBEAT_MS` o
+`WATCHDOG_SEC`. I tentativi contano solo se il comando non uccide al primo
+falso 2: per questo il drenaggio non è un 2.
 
 Docker non ha `RestartPreventExitStatus`. Un 78 (config assente, secret
 mancante, root of trust che rifiuta) sul percorso lungo del gateway deve
@@ -338,9 +391,16 @@ eseguito due volte. Si conta invece:
 - (b) turni `waiting` nati da un effimero e fermi da più di 24 h.
 - (c) morti del persistente a settimana dopo la slice 1: è il segnale già
   scritto in ADR-0035.
-- (d) una ri-acquisizione che scrive lo stesso `holder_id`, o una seconda
-  chiamata al modello per la stessa riga di `job_fires`. La mutazione che
-  toglie il token nuovo deve andare rossa.
+- (d) una ri-acquisizione che scrive lo stesso `holder_id`; una seconda
+  chiamata al modello per una richiesta già partita prima del salto
+  d'orologio; un drenaggio che esce 2. La mutazione che riusa il `holder_id`
+  vecchio va rossa, e va rossa anche quella che abortisce il run in volo e
+  lascia chiamare il modello alla lane.
+- (e) il buco del `taken_at` futuro, nominato nel risveglio e lasciato
+  all'owner. Non è un numero inventato qui: è il caso in cui un passo avanti
+  seguito da una ri-acquisizione e da un passo indietro rende la riga senza
+  scadenza. Si distingue dal risveglio del 2026-11-04, che ha l'orologio
+  giusto.
 
 Reversibilità alta per le slice 1–3. Le colonne sono additive. Senza
 `mode=ephemeral` torna il rifiuto di ADR-0103. La ri-acquisizione si spegne
@@ -353,14 +413,20 @@ Questa PR è la decisione, i rimandi, l'evidenza, le colonne descritte in
 `core/gateway/service.ts`. Non è una slice di comportamento.
 
 **Slice 1 — ri-acquisizione al risveglio, e il messaggio.** CRITICAL.
-`service.test.ts`: salto d'orologio oltre l'orizzonte duro, nessun altro
-detentore → lo stesso processo, `holder_id` diverso, `since` invariato, non
-esce, il log non dice «presa da un altro processo». Stesso salto con un altro
-detentore vivo → non acquisisce, non ruba, il log nomina l'altro, esce 0.
-Una scrittura col token vecchio cambia 0 righe. Un job in volo attraverso il
-salto non chiama il modello due volte (`job_fires` una riga). Mutazione: la
-ri-acquisizione che riusa il `holder_id` vecchio fa rosso il test. `doctor`
-riporta `exited_at` / `exit_reason` solo se il processo se n'è andato davvero.
+`service.test.ts`: la richiesta al modello parte prima del salto d'orologio,
+non è solo un job armato e non ancora partito. Oltre l'orizzonte duro, nessun
+altro detentore → lo stesso processo, `holder_id` nuovo da `mintHolderId`
+dentro la transazione immediata, `since` invariato, non si chiama
+`GatewayLock.claim`, non si esce, il log non dice «presa da un altro
+processo». Il run già dentro `run()` finisce: non si abortisce, non passa
+alla lane, una sola chiamata al modello (`job_fires` una riga). Stesso salto
+con un altro detentore vivo → `myHolderId` invariato, `stillOwner()` falso,
+nessun conio, il drain è fuori dalla transazione, il log nomina l'altro, esce
+0, non si consegna. Una scrittura di refresh col `holder_id` vecchio cambia 0
+righe sul lock; `checkpoint` / `finish` del turno non sono quella prova.
+Mutazioni, tutte rosse: riusare il `holder_id` vecchio; abortire il run in
+volo e lasciare che la lane chiami il modello. `doctor` riporta `exited_at` /
+`exit_reason` solo se il processo se n'è andato davvero.
 
 **Slice 2 — run effimero.** `evals/acceptance/scenarios/gateway-ephemeral.accept.ts`,
 senza hatch: `run` esce 0 con una sola chiamata al modello; durante il turno
@@ -391,11 +457,14 @@ riesecuzione.
 75s`, la healthcheck, e non scrive file; `init: true` solo con un'immagine
 di terzi. L'entrypoint ufficiale usa `tini -s`. Sul percorso lungo, 78 non va
 in loop (`sleep infinity`); `init-from-secret` esce ancora 78. `gateway
-status`: effimero → 1; battito più vecchio di `WATCHDOG_SEC` con incarnazione
-viva → 2; la healthcheck uccide il pid 1 solo sul 2. `supervisor.test.ts`:
-unit abilitata e claim `supervisor=none` → warn «avviato a mano». Accettazione:
-`gateway run` come processo sotto un pid 1 simulato, poi SIGTERM → 143 entro
-il drenaggio.
+status`: effimero → 1; incarnazione tenuta, `taken_at` più vecchio di
+`WATCHDOG_SEC` e status diverso da `drenaggio` → 2; un drenaggio già più
+lungo di `WATCHDOG_SEC`, con `status = drenaggio` scritto senza muovere
+`taken_at`, non è 2. La healthcheck uccide il pid 1 solo sul 2.
+`supervisor.test.ts`: unit abilitata e claim `supervisor=none` → warn
+«avviato a mano». Accettazione: `gateway run` come processo sotto un pid 1
+simulato, poi SIGTERM → 143 entro il drenaggio, e per tutta quell'attesa
+`gateway status` non esce 2.
 
 ## Non deciso qui
 
@@ -408,3 +477,8 @@ il drenaggio.
 - I numeri della healthcheck (30 s, 5 s, 3, 40 s) sono legati a
   `HEARTBEAT_MS` e `WATCHDOG_SEC`. Cambiarli insieme a quelle costanti non è
   una decisione nuova; cambiare la regola «si uccide solo l'uscita 2» lo è.
+- La tolleranza su un `taken_at` futuro. `heldBy` non scade una riga datata
+  avanti, e `durable.ts` non indovina la soglia. Un passo d'orologio in
+  avanti seguito dalla ri-acquisizione, e poi un passo indietro, lascia quella
+  riga senza scadenza. Non è il risveglio del 2026-11-04. La soglia, se
+  servirà, la sceglie l'owner. Questa decisione non ne scrive una.
