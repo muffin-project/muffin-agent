@@ -11,6 +11,7 @@ import {
   HARD_STALE_MULTIPLIER,
   heldBy,
 } from './durable.js';
+import { incarnationOf } from './incarnation.js';
 
 /**
  * The shared primitive, on its own — `heldBy`'s ordering and `DurableLock`'s
@@ -187,6 +188,45 @@ describe('DurableLock.refresh — respects the same horizon a reader would (P21)
     // And the row is now honestly stealable — refresh did not touch it.
     const other = new DurableLock(db, SPEC, () => true);
     expect('release' in other.acquire(pastHard, 2222)).toBe(true);
+  });
+
+  it('reacquires past the horizon with the same incarnation and a new token', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-reacquire-'));
+    const db = new DatabaseCtor(join(dir, 'm.db'));
+    try {
+      const lock = new DurableLock(db, SPEC, () => true);
+      lock.acquire(T0, process.pid);
+      const first = lock.recorded()?.holderId ?? '';
+      expect(incarnationOf(first)).not.toBeNull();
+      const past = at(STALE_MS * HARD_STALE_MULTIPLIER + 1_000);
+      expect(lock.refresh(past, process.pid)).toBe(false);
+      expect(lock.reacquire(past, process.pid)).toEqual({ renewed: true });
+      const second = lock.recorded()?.holderId ?? '';
+      expect(second).not.toBe(first);
+      expect(incarnationOf(second)).toBe(incarnationOf(first));
+      expect(lock.isCurrentHolder(process.pid)).toBe(true);
+      expect(lock.ownHolderId()).toBe(second);
+      const stale = db
+        .prepare(`UPDATE zz_test_lock SET taken_at = ? WHERE id = 1 AND pid = ? AND holder_id = ?`)
+        .run(past.toISOString(), process.pid, first);
+      expect(stale.changes).toBe(0);
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not mint when heldBy names another live holder', () => {
+    const db = new DatabaseCtor(':memory:');
+    const ours = new DurableLock(db, SPEC, () => true);
+    ours.acquire(T0, 1111);
+    const token = ours.ownHolderId();
+    const past = at(STALE_MS * HARD_STALE_MULTIPLIER + 1_000);
+    const other = new DurableLock(db, SPEC, () => true);
+    expect('release' in other.acquire(past, 2222)).toBe(true);
+    expect(ours.reacquire(past, 1111)).toEqual({ renewed: false, holder: 2222 });
+    expect(ours.ownHolderId()).toBe(token);
+    expect(ours.isCurrentHolder(1111)).toBe(false);
   });
 
   it('fails for a pid that is no longer the holder at all', () => {
