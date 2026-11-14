@@ -80,7 +80,13 @@ export const RICH_MAX_CHARS = 32_768;
 export const RICH_MAX_BLOCKS = 500;
 /** Official: levels of nested formatting and blocks. */
 export const RICH_MAX_NESTING = 16;
-/** Official: media attachments in total. We emit none, but validate inbound counts. */
+/**
+ * Official: media attachments in total.
+ * Outbound rich never carries them (`OutboundRich` is `InputRichMessage<never>`).
+ * Inbound `RichMessage` carries each attachment as a media block, including
+ * inside lists, quotes, collages, slideshows and details. `normalizeInboundRich`
+ * counts those blocks and refuses the whole message past this limit.
+ */
 export const RICH_MAX_MEDIA = 50;
 /** Official: columns in a table. A wider table is not truncated — the whole answer stays legacy. */
 export const RICH_MAX_TABLE_COLUMNS = 20;
@@ -696,14 +702,65 @@ function splitInline(text: string, depth: number): RichText[] {
  * Defensive by construction: the wire type may claim required fields a real
  * payload omits (`api.ts`'s own warning), so every field is read as
  * `unknown` and coerced, never trusted.
+ *
+ * Past `RICH_MAX_MEDIA` the whole message is refused. A prefix of the blocks
+ * would still be attacker-controlled content, and silence would drop the
+ * message the way a rich-only update used to vanish. The caller receives one
+ * bounded notice and none of the payload.
  */
 export function normalizeInboundRich(message: { rich_message?: unknown }): string | null {
   const rich = message.rich_message as { blocks?: unknown } | undefined;
   if (rich === null || typeof rich !== 'object' || rich === undefined) return null;
   if (!Array.isArray(rich.blocks)) return null;
+  const media = countInboundMedia(rich.blocks);
+  if (media > RICH_MAX_MEDIA) {
+    return `[rich: ${media} allegati, oltre il limite di ${RICH_MAX_MEDIA} — messaggio non letto]`;
+  }
   const lines: string[] = [];
   for (const block of rich.blocks) lines.push(...blockToLines(block, 0));
   return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/** Media block kinds on an inbound `RichMessage`. Official RichBlock* attachments, not the outbound `media` array. */
+const INBOUND_MEDIA_BLOCKS: ReadonlySet<string> = new Set([
+  'animation',
+  'audio',
+  'document',
+  'photo',
+  'video',
+  'voice_note',
+]);
+
+/**
+ * How many media attachments this block tree carries, including ones nested
+ * in lists, quotes, collages, slideshows and details. An iterative walk: a
+ * hostile payload must not turn the limit check into a stack overflow before
+ * the refusal can fire.
+ */
+function countInboundMedia(blocks: unknown[]): number {
+  let count = 0;
+  const stack: unknown[] = [];
+  for (const block of blocks) stack.push(block);
+  while (stack.length > 0) {
+    const block = stack.pop();
+    if (block === null || typeof block !== 'object') continue;
+    const record = block as Record<string, unknown>;
+    const kind = typeof record['type'] === 'string' ? record['type'] : '';
+    if (INBOUND_MEDIA_BLOCKS.has(kind)) count += 1;
+    if (Array.isArray(record['blocks'])) {
+      for (const inner of record['blocks']) stack.push(inner);
+    }
+    if (Array.isArray(record['items'])) {
+      for (const item of record['items']) {
+        if (item === null || typeof item !== 'object') continue;
+        const inner = (item as Record<string, unknown>)['blocks'];
+        if (Array.isArray(inner)) {
+          for (const nested of inner) stack.push(nested);
+        }
+      }
+    }
+  }
+  return count;
 }
 
 /** Placeholder for an unknown rich block kind. Type name only: bounded by construction, no content dump. */

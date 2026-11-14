@@ -13,6 +13,7 @@ import {
   RICH_COMPAT_CHARS,
   RICH_MAX_BLOCKS,
   RICH_MAX_CHARS,
+  RICH_MAX_MEDIA,
   RICH_MAX_NESTING,
   RICH_MAX_TABLE_COLUMNS,
   TELEGRAM_BOT_API_RICH_FLOOR,
@@ -38,6 +39,7 @@ describe('telegram rich · version and limits are explicit surface facts', () =>
     expect(RICH_MAX_CHARS).toBe(32_768);
     expect(RICH_MAX_BLOCKS).toBe(500);
     expect(RICH_MAX_NESTING).toBe(16);
+    expect(RICH_MAX_MEDIA).toBe(50);
     expect(RICH_MAX_TABLE_COLUMNS).toBe(20);
   });
 
@@ -209,6 +211,46 @@ describe('telegram rich · inline builder', () => {
 
   it('links keep label and url apart', () => {
     expect(inlineRich('vedi [qui](https://example.test/q)')).toEqual(['vedi ', { type: 'url', text: ['qui'], url: 'https://example.test/q' }]);
+  });
+});
+
+describe('telegram rich · inbound media count', () => {
+  const photos = (n: number, caption: (i: number) => string) =>
+    Array.from({ length: n }, (_, i) => ({ type: 'photo', caption: { text: caption(i) } }));
+
+  it('reads a message that sits exactly on the media limit', () => {
+    const text = normalizeInboundRich({
+      rich_message: {
+        blocks: [
+          {
+            type: 'list',
+            items: photos(RICH_MAX_MEDIA, (i) => `scatto ${i}`).map((photo) => ({ blocks: [photo] })),
+          },
+        ],
+      },
+    });
+    expect(text).toContain(`[foto: scatto 0]`);
+    expect(text).toContain(`[foto: scatto ${RICH_MAX_MEDIA - 1}]`);
+    expect(text).not.toContain('oltre il limite');
+  });
+
+  it('refuses a message over the media limit without reading any of it', () => {
+    const text = normalizeInboundRich({
+      rich_message: {
+        blocks: [
+          { type: 'paragraph', text: 'segreto da non leggere' },
+          {
+            type: 'collage',
+            blocks: photos(RICH_MAX_MEDIA + 1, (i) => `scatto ${i}`),
+          },
+        ],
+      },
+    });
+    expect(text).toBe(
+      `[rich: ${RICH_MAX_MEDIA + 1} allegati, oltre il limite di ${RICH_MAX_MEDIA} — messaggio non letto]`,
+    );
+    expect(text).not.toContain('segreto');
+    expect(text).not.toContain('scatto');
   });
 });
 
