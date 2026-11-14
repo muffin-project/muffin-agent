@@ -50,9 +50,11 @@ describe('private-by-construction under a permissive umask', () => {
     expect(mode(p.config)).toBe(0o600);
     expect(mode(p.db)).toBe(0o600);
     expect(mode(p.defaultsManifest)).toBe(0o600);
-    // Shipped copies live in the private home too.
-    expect(mode(p.persona)).toBe(0o600);
-    expect(mode(p.voice)).toBe(0o600);
+    // Shipped copies live in the private home too. The character is the sealed
+    // identity and the on-demand voice skill; persona.md and voice.md are not
+    // installed.
+    expect(mode(join(p.rot, 'identity.md'))).toBe(0o600);
+    expect(mode(join(p.home, 'skills', 'voce', 'SKILL.md'))).toBe(0o600);
   });
 
   it('session, trace, undo, db and mcp writers create private files under umask 022', () => {

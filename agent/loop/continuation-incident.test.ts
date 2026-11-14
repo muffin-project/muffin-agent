@@ -152,8 +152,18 @@ describe('Incident A · useful work then provider stalls', () => {
     expect(control).toContain(request);
     expect(control).not.toContain('Build the old animation.');
     expect(controls).toHaveLength(1);
-    expect(messages).toContainEqual(correction);
-    expect(messages.at(-1)).toEqual(grant);
+    // Cache breakpoints are a property of the request, not of the correction.
+    // The last text blocks carry `cache: 'stable'`; the words are unchanged.
+    const bare = (message: (typeof messages)[number]) => ({
+      ...message,
+      content: message.content.map((block) => {
+        if (block.type !== 'text') return block;
+        const { cache: _cache, ...rest } = block;
+        return rest;
+      }),
+    });
+    expect(messages.map(bare)).toContainEqual(correction);
+    expect(bare(messages.at(-1)!)).toEqual(grant);
     expect(w.turns.get(first.turnId)?.inputText).toBe(request);
     // The derived reference is control, never another owner occurrence.
     expect(w.sessions.read(session).filter((m) => m.content === request)).toHaveLength(1);
