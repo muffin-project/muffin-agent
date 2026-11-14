@@ -339,6 +339,11 @@ holder. Stop that process with `muffin gateway stop`. The command logs the
 pid, holder id and stamp it removed. It does not clear a turn or a send lock;
 those are reclaimed once the holder is no longer alive.
 
+A `gateway_lock` that has no `holder_id` column is not cleared, not even from
+the pid. Unlock refuses and names the reason. Starting a current build adds
+the column when the gateway opens the database; the clear then matches that
+holder id, so a claim taken between the check and the write is left in place.
+
 ## How this page stays true
 
 Two install evals own two different claims:

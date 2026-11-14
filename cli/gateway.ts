@@ -278,6 +278,12 @@ export function cmdGatewayStatus(home: string): number {
 export type GatewayUnlockIo = {
   out: (text: string) => void;
   err: (text: string) => void;
+  /**
+   * Runs after the probe has allowed a clear and before the fenced write.
+   * The production command does not set it. Tests use it to re-take the row
+   * in that window: the clear must then match nothing.
+   */
+  beforeClear?: (claim: GatewayClaim) => void;
 };
 
 function claimLines(claim: GatewayClaim): string {
@@ -329,6 +335,7 @@ export function cmdGatewayUnlock(home: string, args: string[], io?: GatewayUnloc
       );
       return 0;
     }
+    io?.beforeClear?.(verdict.claim);
     const changes = clearGatewayClaim(db, verdict.claim);
     if (changes === 0) {
       err(

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import DatabaseCtor from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { EXIT_ALREADY_RUNNING } from '../core/gateway/service.js';
+import { clearGatewayClaim } from '../core/gateway/unlock.js';
 import { mintHolderId } from '../core/lock/incarnation.js';
 import { cmdGatewayUnlock } from './gateway.js';
 
@@ -66,6 +67,42 @@ function seedGateway(
     )
     .run(row.pid, row.takenAt, row.since, row.holderId);
   database.close();
+}
+
+/** A gateway_lock from before `holder_id`. No fence column at all. */
+function seedLegacyGateway(
+  dir: string,
+  row: { pid: number; takenAt: string; since: string },
+): void {
+  const database = new DatabaseCtor(join(dir, 'muffin.db'));
+  database.exec(`
+    CREATE TABLE gateway_lock (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      pid INTEGER,
+      taken_at TEXT,
+      since TEXT,
+      status TEXT
+    )
+  `);
+  database
+    .prepare(
+      `INSERT INTO gateway_lock (id, pid, taken_at, since, status) VALUES (1, ?, ?, ?, 'serving')`,
+    )
+    .run(row.pid, row.takenAt, row.since);
+  database.close();
+}
+
+function readLegacyRow(dir: string): { pid: number | null; since: string; taken_at: string } {
+  const database = new DatabaseCtor(join(dir, 'muffin.db'), { readonly: true });
+  try {
+    return database.prepare(`SELECT pid, since, taken_at FROM gateway_lock WHERE id = 1`).get() as {
+      pid: number | null;
+      since: string;
+      taken_at: string;
+    };
+  } finally {
+    database.close();
+  }
 }
 
 function readRow(dir: string): {
@@ -220,5 +257,82 @@ describe('muffin gateway unlock', () => {
     expect(result.stderr).toContain('GATEWAY UNLOCK: claim rimosso');
     expect(result.stderr).toContain(holderId);
     expect(readRow(dir)).toMatchObject({ pid: null, holder_id: null, since });
+  });
+
+  it('refuses a table with no holder_id column and does not clear it, even when the pid is dead', () => {
+    const dir = home();
+    const since = '2026-11-14T08:00:00.000Z';
+    const takenAt = '2026-11-15T08:00:00.000Z';
+    const pid = deadPid();
+    seedLegacyGateway(dir, { pid, takenAt, since });
+
+    const confirmed: string[] = [];
+    const confirmCode = cmdGatewayUnlock(dir, ['--confirm'], {
+      out: (text) => confirmed.push(text),
+      err: (text) => confirmed.push(text),
+    });
+    expect(confirmCode).not.toBe(0);
+    expect(confirmed.join('')).toContain('holder_id');
+    expect(confirmed.join('')).toContain('solo dal pid');
+    expect(confirmed.join('')).not.toContain('claim rimosso');
+    expect(readLegacyRow(dir)).toMatchObject({ pid, since, taken_at: takenAt });
+
+    const dry: string[] = [];
+    const dryCode = cmdGatewayUnlock(dir, [], {
+      out: (text) => dry.push(text),
+      err: (text) => dry.push(text),
+    });
+    expect(dryCode).not.toBe(0);
+    expect(dry.join('')).not.toContain('non ho scritto nulla');
+    expect(readLegacyRow(dir).pid).toBe(pid);
+  });
+
+  it('a re-take between the probe and the clear is not cleared', () => {
+    const dir = home();
+    const since = '2026-11-14T08:00:00.000Z';
+    const takenAt = '2026-11-15T08:00:00.000Z';
+    // The column exists and the token is null: the shape `ensureColumn` leaves
+    // on a row that predates the fence. The pid is dead, so the probe allows
+    // a clear. The re-take keeps that pid — container reuse — and writes a
+    // new holder id, which is what a current `acquire` does.
+    const pid = deadPid();
+    seedGateway(dir, { pid, holderId: null, takenAt, since });
+    const nextHolder = `${deadIncarnation(join(dir, 'incarnations'))}.${randomUUID()}`;
+    const nextTaken = '2026-11-14T12:00:00.000Z';
+
+    const lines: string[] = [];
+    const code = cmdGatewayUnlock(dir, ['--confirm'], {
+      out: (text) => lines.push(text),
+      err: (text) => lines.push(text),
+      beforeClear: () => {
+        const database = new DatabaseCtor(join(dir, 'muffin.db'));
+        database
+          .prepare(`UPDATE gateway_lock SET holder_id = ?, taken_at = ? WHERE id = 1`)
+          .run(nextHolder, nextTaken);
+        database.close();
+      },
+    });
+
+    expect(code).toBe(1);
+    expect(lines.join('')).toContain('non ho rimosso nulla');
+    expect(lines.join('')).not.toContain('claim rimosso');
+    expect(readRow(dir)).toMatchObject({
+      pid,
+      holder_id: nextHolder,
+      since,
+      taken_at: nextTaken,
+    });
+  });
+
+  it('clearGatewayClaim does not write when the holder id column is absent', () => {
+    const dir = home();
+    const pid = deadPid();
+    const since = '2026-11-14T08:00:00.000Z';
+    const takenAt = '2026-11-15T08:00:00.000Z';
+    seedLegacyGateway(dir, { pid, takenAt, since });
+    const database = new DatabaseCtor(join(dir, 'muffin.db'));
+    expect(clearGatewayClaim(database, { pid, holderId: null })).toBe(0);
+    database.close();
+    expect(readLegacyRow(dir)).toMatchObject({ pid, since, taken_at: takenAt });
   });
 });
