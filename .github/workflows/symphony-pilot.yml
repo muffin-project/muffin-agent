@@ -1,4 +1,11 @@
 name: Symphony OpenCode fixture
+# Il fixture costa ~2m30s (build Docker dell'OpenCode pinnato) e non è un
+# check required: può saltare quando nessuno dei file che prova cambia. Il
+# salto è uno step no-op a livello di job, mai un filtro `paths` sul trigger —
+# l'invariante di `scripts/workflow-public-gate.test.ts` vieta i path filter
+# nel blocco `pull_request`. Il contratto python senza credenziali resta
+# comunque in `verifica` su ogni PR; il valore unico di questo job è il giro
+# vero in Docker contro l'upstream pinnato.
 on:
   pull_request:
   workflow_dispatch:
@@ -12,15 +19,49 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # `fetch-depth: 0` e non il default 1: lo scope gate confronta
+      # `base...head` e con un clone superficiale quel range non ha una
+      # storia da attraversare (stessa ragione di install.yml e ci.yml).
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - name: Build pinned OpenCode worker
+          fetch-depth: 0
+
+      - id: scope
+        name: i file del fixture sono toccati?
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            echo run=true >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if files=$(git diff --name-only "$BASE_SHA...$HEAD_SHA" -- scripts/symphony .github/workflows/symphony-pilot.yml); then
+            if [ -n "$files" ]; then echo run=true >> "$GITHUB_OUTPUT"; else echo run=false >> "$GITHUB_OUTPUT"; fi
+          else
+            # Se il range non è calcolabile, il fixture gira: meglio un job
+            # pesante in più che un'evidenza saltata in silenzio.
+            echo run=true >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.scope.outputs.run == 'false'
+        name: fixture non toccato — no-op veritiero
+        run: |
+          echo "symphony-fixture: scope gate says no symphony file changed; docker fixture skipped, verifica still ran the credential-free contract."
+
+      - if: steps.scope.outputs.run != 'false'
+        name: Build pinned OpenCode worker
         run: docker build -t symphony-opencode:1.18.33-pilot scripts/symphony
-      - name: Real OpenCode and scoped MCP with local model fixture
+
+      - if: steps.scope.outputs.run != 'false'
+        name: Real OpenCode and scoped MCP with local model fixture
         env:
           SYMPHONY_TEST_DOCKER: '1'
           PYTHONDONTWRITEBYTECODE: '1'
         run: python3 -m unittest discover -s scripts/symphony -p 'test_*.py' -v
-      - name: Official pinned Symphony lifecycle and app-server fixtures
+
+      - if: steps.scope.outputs.run != 'false'
+        name: Official pinned Symphony lifecycle and app-server fixtures
         run: bash scripts/symphony/verify-upstream.sh
