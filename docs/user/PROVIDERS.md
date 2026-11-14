@@ -2,8 +2,15 @@
 
 On a terminal, `muffin init` recommends OpenRouter OAuth: a browser loopback on
 this machine, or a one-time code pasted from the browser when SSH is detected.
-Pasting an API key is the advanced path. An empty Enter at the key prompt asks
-before skipping. Headless `muffin init` still reads the key from stdin.
+Pasting an API key is the advanced path. A key whose prefix is OpenRouter or
+Anthropic still selects that provider. When the prefix does not, the same
+question asks which provider it was for and does not save a mismatch.
+Anthropic on that question is a Console/API key. ChatGPT plan connects the
+account `muffin chatgpt login` already uses and records `secret://chatgpt`
+without copying tokens into the account index. A custom OpenAI-compatible
+endpoint takes its URL, key, and model slugs there too. An empty Enter at the
+key prompt asks before skipping. Headless `muffin init` still reads the key
+from stdin and does not ask.
 
 ```sh
 muffin auth login openrouter

@@ -238,6 +238,42 @@ describe('il nome della chiave dice di chi è', () => {
   });
 });
 
+describe('runInit con account ChatGPT già collegato', () => {
+  it('punta secret://chatgpt e completa lo step chiave, senza inventare segreti', () => {
+    const dir = scratchDir('muffin-init-chatgpt-');
+    const steps = runInit({
+      home: dir,
+      provider: 'openai-chatgpt',
+      baseUrl: 'https://api.openai.com/v1',
+      mainModel: 'gpt-test-main',
+      lightModel: 'gpt-test-light',
+      chatgptConnected: true,
+    });
+
+    const config = JSON.parse(readFileSync(paths(dir).config, 'utf8')) as {
+      provider: { kind: string; baseUrl: string; apiKeyRef: string };
+      models: { main: string; light: string };
+    };
+    expect(config.provider.kind).toBe('openai-chatgpt');
+    expect(config.provider.baseUrl).toBe('https://api.openai.com/v1');
+    expect(config.provider.apiKeyRef).toBe('secret://chatgpt');
+    expect(config.models).toEqual({ main: 'gpt-test-main', light: 'gpt-test-light' });
+    expect(steps.find((s) => s.name === 'api key')?.done).toBe(true);
+    expect(existsSync(join(dir, 'secrets', 'chatgpt'))).toBe(false);
+    expect(existsSync(join(dir, 'auth-profiles.json'))).toBe(false);
+  });
+
+  it('senza il flag resta il percorso missing-key di sempre', () => {
+    const dir = scratchDir('muffin-init-chatgpt-noflag-');
+    const steps = runInit({
+      home: dir,
+      provider: 'openai-chatgpt',
+      baseUrl: 'https://api.openai.com/v1',
+    });
+    expect(steps.find((s) => s.name === 'api key')?.done).toBe(false);
+  });
+});
+
 /**
  * La porta pericolosa: `installTree` copia tutto ciò che trova, e uno dei tre
  * alberi che copia è `defaults/rot/` — l'albero **sigillato**.

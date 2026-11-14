@@ -8,6 +8,7 @@ import { SCHEMA as BUDGET_SCHEMA } from '../core/budget/budget.js';
 import { schemaVersionOf, stampFresh } from '../core/db/migrate.js';
 import { seal } from '../core/rot/verify.js';
 import { isShippedDefault, recordCopied } from '../core/config/defaults-drift.js';
+import { CHATGPT_SECRET_REF } from '../core/config/chatgpt-oauth.js';
 import { LEGACY_API_KEY_NAME, apiKeyCandidates, apiKeyNameFor } from '../core/config/providers.js';
 import {
   CONFIG_SCHEMA_VERSION,
@@ -44,6 +45,13 @@ export type InitOptions = {
   mainModel?: string;
   lightModel?: string;
   apiKey?: string;
+  /**
+   * The ChatGPT account just connected (the same session `muffin chatgpt login`
+   * writes). There is no key value to store. Without this the missing-key path
+   * would report the install incomplete. Only meaningful with
+   * `provider: 'openai-chatgpt'`. The AuthProfile index does not copy the tokens.
+   */
+  chatgptConnected?: boolean;
   /** Where `apiKey` is written. `persistent` survives `muffin uninstall`. */
   secretBackend?: SecretBackend;
   /**
@@ -203,6 +211,11 @@ export function runInit(options: InitOptions = {}): InitStep[] {
       : writeSecret(nomeChiave, apiKey, home, backend);
     riferimento = `secret://${nomeChiave}`;
     chiaveDettaglio = `stored 0600 in ${at}`;
+  } else if (options.chatgptConnected === true && effProviderKind === 'openai-chatgpt') {
+    // Same reference `muffin chatgpt` / `muffin auth` read. The session file is
+    // the credential; the AuthProfile index does not receive a copy.
+    riferimento = CHATGPT_SECRET_REF;
+    chiaveDettaglio = 'account collegato (OAuth, consenso browser)';
   } else if (prior?.provider.apiKeyRef && locateSecret(prior.provider.apiKeyRef, home) !== null) {
     riferimento = prior.provider.apiKeyRef;
     chiaveDettaglio = `già presente: ${locateSecret(prior.provider.apiKeyRef, home)?.path} (riferimento esistente conservato)`;
@@ -237,12 +250,21 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   step('api key', chiaveDettaglio, chiaveOk);
 
   const defaults = defaultModels({ provider: effProviderKind });
+  // ChatGPT's schema refuses router and Chat Completions dialect fields. A
+  // prior OpenRouter lane can carry them; choosing the account must not fail
+  // the write by copying those fields onto the new kind.
+  const priorProvider = { ...(prior?.provider ?? {}) };
+  if (effProviderKind === 'openai-chatgpt') {
+    delete priorProvider.routing;
+    delete priorProvider.reasoningDialect;
+    delete priorProvider.routingForFamily;
+  }
   const config: Config = {
     ...DEFAULT_CONFIG,
     ...prior,
     schemaVersion: CONFIG_SCHEMA_VERSION,
     provider: {
-      ...prior?.provider,
+      ...priorProvider,
       kind: effProviderKind,
       ...(effBaseUrl !== undefined ? { baseUrl: effBaseUrl } : {}),
       apiKeyRef: riferimento,

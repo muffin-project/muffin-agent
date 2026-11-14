@@ -195,6 +195,16 @@ describe('describeProviderChoice — say what was inferred, never decide silentl
     expect(line).not.toContain('the-real-secret-must-not-appear');
   });
 
+  it('announces a provider the owner just named, without printing the key', () => {
+    const line = describeProviderChoice(
+      { provider: 'openai-chatgpt', baseUrl: 'https://api.openai.com/v1', reason: 'chosen' },
+      'sk-or-v1-the-real-secret-must-not-appear',
+    );
+    expect(line).toContain('scelto ora');
+    expect(line).toContain('openai-chatgpt');
+    expect(line).not.toContain('sk-or-v1-the-real-secret-must-not-appear');
+  });
+
   it('announces an inferred anthropic provider', () => {
     const choice = {
       provider: 'anthropic' as const,

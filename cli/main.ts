@@ -5,7 +5,7 @@ import { isatty } from 'node:tty';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { assicuraVoce } from '../core/audio/trascrivi.js';
-import { rememberKeyProfile } from '../core/config/auth-profile.js';
+import { keySecretName, rememberKeyProfile } from '../core/config/auth-profile.js';
 import {
   ConfigError,
   loadConfig,
@@ -15,7 +15,7 @@ import {
   paths,
   writeAuthoritativeSecret,
 } from '../core/config/config.js';
-import { ALL_API_KEY_NAMES, LEGACY_API_KEY_NAME } from '../core/config/providers.js';
+import { ALL_API_KEY_NAMES, LEGACY_API_KEY_NAME, providerFor } from '../core/config/providers.js';
 import { checkTemporalWindow, EVERY_INSTANT, normaliseDate } from '../core/memory/recall.js';
 import type { TrustTier } from '../core/policy/types.js';
 import { buildHardenPlan, formatHardenPlan } from '../core/rot/harden.js';
@@ -46,7 +46,12 @@ import {
   resolveLocalHome,
   runInit,
 } from './init.js';
-import { acquireInitCredential } from './init-auth.js';
+import {
+  acquireInitCredential,
+  choiceFromInitPick,
+  initPickOverridesPrior,
+  type InitCredential,
+} from './init-auth.js';
 import { cmdJobsAdd, cmdJobsCap, cmdJobsList, cmdJobsRemove, JOBS_USAGE } from './jobs.js';
 import { cmdJudgments } from './judgments.js';
 import { cmdMcpAdd, cmdMcpList, cmdMcpRemove, MCP_USAGE } from './mcp.js';
@@ -611,7 +616,7 @@ async function cmdInit(argv: string[]): Promise<number> {
     if (probe.available) localRuntime = await askLocalOrApi(probe);
   }
 
-  let openRouterOAuth = false;
+  let picked: InitCredential | undefined;
   if (!localRuntime && !apiKey && !stored && process.stdin.isTTY) {
     const baseFlag = values['base-url'];
     const offerOAuth =
@@ -624,12 +629,12 @@ async function cmdInit(argv: string[]): Promise<number> {
         stderr: (text) => process.stderr.write(text),
         ssh: Boolean(process.env.SSH_CONNECTION || process.env.SSH_TTY),
         stdinIsTTY: true,
+        home,
       });
       if (acquired.kind === 'cancelled') return 1;
-      if (acquired.kind === 'key') {
-        apiKey = acquired.apiKey;
-        openRouterOAuth = acquired.method === 'oauth-pkce';
-      }
+      if (acquired.kind !== 'skip') picked = acquired;
+      if (acquired.kind === 'key') apiKey = acquired.apiKey;
+      if (acquired.kind === 'custom' && acquired.apiKey !== undefined) apiKey = acquired.apiKey;
     }
   }
 
@@ -669,30 +674,28 @@ async function cmdInit(argv: string[]): Promise<number> {
   // `chooseProvider` never sees it, same as an explicit --provider always
   // wins over inference. `describeProviderChoice` still says it out loud
   // through the same call, via the 'local' reason.
+  const directed = picked === undefined ? undefined : choiceFromInitPick(picked);
   const choice = localRuntime
     ? {
         provider: 'openai-compat' as const,
         baseUrl: localRuntime.baseUrl,
         reason: 'local' as const,
       }
-    : openRouterOAuth
-      ? {
-          provider: 'openai-compat' as const,
-          baseUrl: OPENROUTER_BASE_URL,
-          reason: 'oauth' as const,
-        }
-      : chooseProvider(providerFlag, keyForInference, values['base-url']);
+    : (directed ?? chooseProvider(providerFlag, keyForInference, values['base-url']));
   process.stderr.write(
-    describeProviderChoice(choice, openRouterOAuth ? undefined : keyForInference),
+    describeProviderChoice(choice, directed?.reason === 'oauth' ? undefined : keyForInference),
   );
 
   // Modello (owner, verbatim: "chiedere che modello si vuole usare") — asked
   // only when nothing already names one, and only on a TTY; headless keeps
   // today's compiled default from `defaultModels`. Anthropic diretto gets no
   // question at all: one family, nothing to choose among.
-  let mainModel = values.model;
-  let lightModel = values['light-model'];
-  let modelReason: ModelChoiceReason = mainModel || lightModel ? 'explicit' : 'default';
+  const pickedModels =
+    picked?.kind === 'chatgpt' || picked?.kind === 'custom' ? picked.models : undefined;
+  let mainModel = values.model ?? pickedModels?.main;
+  let lightModel = values['light-model'] ?? pickedModels?.light;
+  let modelReason: ModelChoiceReason =
+    values.model || values['light-model'] ? 'explicit' : pickedModels ? 'chosen' : 'default';
   if (!mainModel && process.stdin.isTTY) {
     const pick = localRuntime
       ? await askModelChoice(
@@ -732,11 +735,12 @@ async function cmdInit(argv: string[]): Promise<number> {
   } catch {
     priorProvider = undefined;
   }
+  const overridePrior = initPickOverridesPrior(picked);
   const effProvider =
-    providerFlag ?? (openRouterOAuth ? choice.provider : (priorProvider?.kind ?? choice.provider));
+    providerFlag ?? (overridePrior ? choice.provider : (priorProvider?.kind ?? choice.provider));
   const effBaseUrl =
     values['base-url'] ??
-    (openRouterOAuth ? choice.baseUrl : (priorProvider?.baseUrl ?? choice.baseUrl));
+    (overridePrior ? choice.baseUrl : (priorProvider?.baseUrl ?? choice.baseUrl));
   let steps: InitStep[];
   try {
     steps = runInit({
@@ -747,6 +751,7 @@ async function cmdInit(argv: string[]): Promise<number> {
       ...(mainModel ? { mainModel } : {}),
       ...(lightModel ? { lightModel } : {}),
       ...(apiKey ? { apiKey } : {}),
+      ...(picked?.kind === 'chatgpt' ? { chatgptConnected: true } : {}),
       // The interactive owner flow has one durable source of truth. `runInit`
       // keeps its home default for isolated programmatic fixtures and legacy API
       // callers; the public CLI must not create a competing copy.
@@ -773,19 +778,27 @@ async function cmdInit(argv: string[]): Promise<number> {
     return 1;
   }
 
-  if (openRouterOAuth) {
-    rememberKeyProfile(home, {
-      id: 'default',
-      provider: 'openrouter',
-      method: 'oauth-pkce',
-      secretName: 'openrouter_api_key',
-    });
-    const probeCode = await probeSavedRoute(home, (line) => process.stderr.write(`${line}\n`));
-    if (probeCode !== 0) {
-      process.stderr.write(
-        'La chiave è salvata. Riprova la prova con `muffin doctor --online` senza ripetere il login.\n',
-      );
-      return 1;
+  if (picked?.kind === 'key') {
+    const effId = providerFor({
+      kind: effProvider,
+      ...(effBaseUrl ? { baseUrl: effBaseUrl } : {}),
+    })?.id;
+    if (effId === picked.providerId) {
+      rememberKeyProfile(home, {
+        id: 'default',
+        provider: picked.providerId,
+        method: picked.method,
+        secretName: keySecretName(picked.providerId, 'default'),
+      });
+      if (picked.method === 'oauth-pkce') {
+        const probeCode = await probeSavedRoute(home, (line) => process.stderr.write(`${line}\n`));
+        if (probeCode !== 0) {
+          process.stderr.write(
+            'La chiave è salvata. Riprova la prova con `muffin doctor --online` senza ripetere il login.\n',
+          );
+          return 1;
+        }
+      }
     }
   }
 
