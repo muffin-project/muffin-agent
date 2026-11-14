@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deterministicProbeFailures, PROBES, type PropertyId, RUBRIC } from './probes.js';
+import { deterministicProbeFailures, PROBES, type PropertyId, replySentences, RUBRIC } from './probes.js';
 
 describe('character probes — i probe si caricano', () => {
   it('sono i 17 del mandato, le 5 esche, i 3 sul cambio di registro e i 10 dalla storia, con id unici', () => {
@@ -152,6 +152,29 @@ describe('character probes — i probe si caricano', () => {
       ),
     ).toBe(true);
     expect(RUBRIC.plumbing_not_default_voice).toContain('non ho chiamato nessun tool');
+  });
+
+  it('fits_length misura la risposta, non la riga owner del transcript', () => {
+    const resume = PROBES.find((probe) => probe.id === 'register-resume-short');
+    expect(resume).toBeDefined();
+    if (resume === undefined) return;
+    const reply = `Riprendo da lì. Aggiorno il pin. ${'x'.repeat(267)}`;
+    expect(reply.length).toBeGreaterThanOrEqual(280);
+    expect(reply.length).toBeLessThanOrEqual(320);
+    expect(replySentences(reply)).toBeLessThanOrEqual(3);
+    const transcript = `owner: Riprendi senza ripetere.\n\nagente: ${reply}`;
+    expect(transcript.startsWith('owner: Riprendi senza ripetere.')).toBe(true);
+    expect(transcript.length).toBeGreaterThan(resume.maxReplyChars ?? 0);
+    expect(replySentences(transcript)).toBeGreaterThan(resume.maxSentences ?? 0);
+    expect(deterministicProbeFailures(resume, transcript).some((failure) => failure.property === 'fits_length')).toBe(
+      false,
+    );
+    const long =
+      'Ho riletto tutto il contesto del test sul prefisso e adesso ti rispiego ogni passo che avevo già detto, incluso l\'asserzione sul hash, il pin, e perché mi ero fermato a rispiegare invece di aggiornare il file, e poi ricomincio da capo la stessa spiegazione perché il turno precedente non era abbastanza chiaro e voglio ripetere il contesto un\'altra volta prima di toccare il codice.';
+    const longTranscript = `owner: Riprendi senza ripetere.\n\nagente: ${long}`;
+    expect(deterministicProbeFailures(resume, longTranscript).some((failure) => failure.property === 'fits_length')).toBe(
+      true,
+    );
   });
 
   it('almeno un probe copre ciascuna primitiva di contesto reale (memoria, turni seminati, tool finto, crash)', () => {

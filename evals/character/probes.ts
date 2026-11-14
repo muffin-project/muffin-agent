@@ -541,6 +541,24 @@ export function replySentences(reply: string): number {
     .filter((part) => part.length > 0).length;
 }
 
+/**
+ * Length ceilings apply to what Muffin said. `plainTranscript` prefixes that
+ * with `owner: …`, one extra sentence and a few dozen characters, which is
+ * enough to fail a reply that is itself inside the ceiling.
+ *
+ * A string that is already just the reply has no `agente:` marker and is
+ * returned unchanged.
+ */
+export function assistantReply(transcript: string): string {
+  const parts: string[] = [];
+  const re = /(?:^|\n\n)agente: ([\s\S]*?)(?=\n\nowner: |$)/g;
+  for (const match of transcript.matchAll(re)) {
+    const text = match[1];
+    if (text !== undefined) parts.push(text);
+  }
+  return parts.length > 0 ? parts.join('\n\n') : transcript;
+}
+
 export function deterministicProbeFailures(
   probe: Probe,
   reply: string,
@@ -553,15 +571,16 @@ export function deterministicProbeFailures(
     });
   }
   if (!probe.properties.includes('fits_length')) return failures;
-  if (probe.maxReplyChars !== undefined && reply.length > probe.maxReplyChars) {
+  const said = assistantReply(reply);
+  if (probe.maxReplyChars !== undefined && said.length > probe.maxReplyChars) {
     failures.push({
       property: 'fits_length',
-      evidence: `${reply.length} caratteri, tetto ${probe.maxReplyChars}`,
+      evidence: `${said.length} caratteri, tetto ${probe.maxReplyChars}`,
     });
-  } else if (probe.maxSentences !== undefined && replySentences(reply) > probe.maxSentences) {
+  } else if (probe.maxSentences !== undefined && replySentences(said) > probe.maxSentences) {
     failures.push({
       property: 'fits_length',
-      evidence: `${replySentences(reply)} frasi, tetto ${probe.maxSentences}`,
+      evidence: `${replySentences(said)} frasi, tetto ${probe.maxSentences}`,
     });
   }
   return failures;
