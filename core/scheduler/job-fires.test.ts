@@ -12,6 +12,58 @@ function memStore(now = NOW): { db: DatabaseCtor.Database; fires: JobFireStore }
   return { db, fires: new JobFireStore(db, () => now) };
 }
 
+it('selects only pending Telegram replies from settled goals that should speak', () => {
+  const { db, fires } = memStore();
+  try {
+    const jobs = new JobStore(db, () => NOW);
+    const turns = new TurnStore(db, () => NOW);
+    for (const scene of ['quiet', 'cli', 'unsettled', 'uncertain', 'script', 'pending']) {
+      const channel = scene === 'cli' ? 'cli' : 'telegram:42';
+      const job = scene === 'script'
+        ? jobs.addOnce({ channel, kind: 'script', script: 'true' })
+        : jobs.addOnce({ channel, goal: 'brief', delivery: scene === 'quiet' ? 'silent' : 'deliver' });
+      const scheduledFor = job.nextFireAt.toISOString();
+      fires.claim(job.id, scheduledFor);
+      const turn = turns.create({
+        id: scene,
+        principal: { kind: 'system', source: 'scheduler' },
+        tenant: 'host',
+        surface: channel,
+        sessionId: scene,
+        model: 'fixture',
+        messages: [],
+        taint: 0,
+        jobId: job.id,
+        replyTo: { channel },
+        counters: {
+          iterations: 0,
+          recoveriesUsed: 0,
+          transportRetriesLeft: 0,
+          truncationsUsed: 0,
+          toolCallsMade: 0,
+          nudgedForCompletion: false,
+          usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          spentUsd: 0,
+          resumes: 0,
+          contextBuilt: false,
+        },
+      });
+      fires.bind(job.id, scheduledFor, turn.id);
+      turns.finish(turn.id, {
+        outcome: 'answered', messages: [], taint: 0, counters: turn.counters,
+      }, turn.claimToken);
+      if (scene !== 'unsettled') fires.settle(job.id, scheduledFor);
+      if (scene === 'uncertain') turns.delivered(turn.id, 'possibly_sent');
+    }
+
+    expect(fires.pendingTelegramReply()).toBe('pending');
+    turns.delivered('pending', 'sent');
+    expect(fires.pendingTelegramReply()).toBeUndefined();
+  } finally {
+    db.close();
+  }
+});
+
 describe('JobFireStore — the migration (§ "cosa costruire" 3)', () => {
   it('CREATE TABLE IF NOT EXISTS on a database that already has real jobs/turns rows loses nothing and adds no missing column', () => {
     // A stand-in for the owner's already-installed muffin.db: jobs and turns

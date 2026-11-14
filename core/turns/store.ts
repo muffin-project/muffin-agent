@@ -1232,7 +1232,10 @@ export class TurnStore {
                           -- consegna faceva leggere a recover il sent del
                           -- diagnostico della lease N e chiudeva senza mai
                           -- mandare la risposta (review 2026-09-28).
-                          delivery = NULL,
+                          delivery = CASE
+                            WHEN job_id IS NOT NULL AND reply_to IS NOT NULL THEN 'pending'
+                            ELSE NULL
+                          END,
                           updated_at = @now
          WHERE id = @id AND status = 'continuable'`,
       ),
@@ -2071,8 +2074,8 @@ export class TurnStore {
     return landed === 1;
   }
 
-  /** The other outcome. Never merged with the one above — see `DeliveryState`. */
-  delivered(id: string, delivery: DeliveryState): void {
+  /** The delivery outcome. Null means there is no separate reply to send. */
+  delivered(id: string, delivery: DeliveryState | null): void {
     this.deliveryStmt.run({ id, delivery, now: this.clock().toISOString() });
   }
 

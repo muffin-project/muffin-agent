@@ -94,6 +94,17 @@ function fireTenant(job: Job): string {
   return job.origin.tenant;
 }
 
+// A terminal row without this marker predates journaled scheduled delivery.
+export const SCHEDULED_DELIVERY_VERSION = 1;
+
+function jobReplyTo(job: Job) {
+  const { channel } = job;
+  if (channel === 'telegram' || channel.startsWith('telegram:')) {
+    return { channel, scheduledDeliveryVersion: SCHEDULED_DELIVERY_VERSION };
+  }
+  return { channel };
+}
+
 /**
  * Map a turn's end to a delivery. Kept pure and separate from the runner so the
  * one piece with a decision in it — what the owner sees when the kernel queued
@@ -283,7 +294,7 @@ async function runGoal(
      * doctor` can see it — which is a different and more useful fact than
      * "no record either way".
      */
-    replyTo: { channel: job.channel },
+    replyTo: jobReplyTo(job),
     // `job.channel` is already a `SurfaceRegistry` address — the exact same
     // string `Deliver` uses — so a tool call mid-job (`send_file`) reaches
     // the same destination the job's own text answer will.
@@ -357,7 +368,12 @@ async function resolveBound(
   // between a turn finishing and `Scheduler.settle` running at all). Recover
   // the text and hand back a normal outcome: `Scheduler` delivers and settles
   // exactly as it would for a live run, never calling `runJob` a second time.
-  return { stopped: existing.outcome ?? 'error', text: recoveredText(deps.sessions, existing), turnId: existing.id };
+  return {
+    stopped: existing.outcome ?? 'error',
+    text: recoveredText(deps.sessions, existing),
+    turnId: existing.id,
+    recovered: true,
+  };
 }
 
 /**
@@ -528,7 +544,7 @@ function skipForBudget(
     // resta attribuito alla provenance che l'ha chiesto.
     taint: fireTaint(job),
     counters,
-    replyTo: { channel: job.channel },
+    replyTo: jobReplyTo(job),
   });
   deps.turns.finish(
     turnId,
@@ -624,7 +640,7 @@ async function runScript(
     jobId: job.id,
     taint: fireTaint(job),
     counters,
-    replyTo: { channel: job.channel },
+    replyTo: jobReplyTo(job),
   });
 
   const chiudi = (outcome: TurnOutcome, text: string): JobOutcome => {

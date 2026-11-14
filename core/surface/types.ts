@@ -45,7 +45,11 @@ import type { ConnectorId, Principal, TenantId } from '../policy/types.js';
  * — the scheduler does, into the turn record — must never have to write
  * "consegna fallita" with no reason because the type let the producer omit one.
  */
-export type DeliveryOutcome = { delivered: true } | { delivered: false; why: string };
+export type DeliveryOutcome =
+  | { delivered: true }
+  | { delivered: false; why: string; status?: 'possibly_sent' | 'deferred' };
+
+export type DeliveryTurn = { id: string; recovered?: true };
 
 /** The successful answer, named so call sites read as sentences. */
 export const DELIVERED: DeliveryOutcome = { delivered: true };
@@ -372,7 +376,7 @@ export interface Surface {
    * catches it into a `{ delivered: false }` rather than letting it escape into
    * a caller that was promised a value.
    */
-  deliver(channel: string, text: string): Promise<DeliveryOutcome>;
+  deliver(channel: string, text: string, turn?: DeliveryTurn): Promise<DeliveryOutcome>;
 
   /**
    * Send a file to a channel this surface `handles` — DAY-1 requirement B14, "un file

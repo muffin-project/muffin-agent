@@ -921,6 +921,8 @@ export async function runRepl(
     (e) => {
       if (e.kind === 'delivery_failed') {
         status.line(`job ${e.job.id.slice(0, 8)}: consegna fallita (${e.error})`);
+      } else if (e.kind === 'delivery_uncertain') {
+        status.line(`job ${e.job.id.slice(0, 8)}: consegna incerta (${e.error})`);
       } else if (e.kind === 'yielded') {
         // P21 (1b)/(2) MEDIUM: see the identical branch in `cli/gateway.ts` —
         // an aborted job retried silently on every tick before this.

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { TelegramApiLike } from './api.js';
 import { telegramSurface } from './surface.js';
 
@@ -44,4 +44,23 @@ describe('deliver · un testo vuoto non è una consegna', () => {
     expect(esito.delivered).toBe(true);
     expect(calls).toHaveLength(1);
   });
+});
+
+it('routes scheduled Work to the journal with its exact topic', async () => {
+  const { api, calls } = fake();
+  const journal = vi.fn(async () => 'possibly_sent' as const);
+  const surface = telegramSurface(api, 42, journal);
+  const turn = { id: 'work', recovered: true } as const;
+
+  await expect(surface.deliver('telegram:-123#42', 'report', turn)).resolves.toMatchObject({
+    delivered: false,
+    status: 'possibly_sent',
+  });
+  expect(journal).toHaveBeenCalledWith(turn, { chatId: -123, threadId: 42 }, 'report');
+  await expect(surface.deliver('telegram:-123#bad', 'report', turn)).resolves.toMatchObject({
+    delivered: false,
+  });
+  await expect(surface.deliver('telegram', '', turn)).resolves.toMatchObject({ delivered: false });
+  expect(journal).toHaveBeenCalledTimes(1);
+  expect(calls).toEqual([]);
 });
