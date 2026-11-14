@@ -15,7 +15,7 @@ import { primoMessaggio } from './context.js';
 import { buildFreshCounters, evidenceForContinuation } from './continuation.js';
 import { closeRow } from './durability.js';
 import { type DriveOptions, guidaIlTurno } from './engine.js';
-import { harnessMessage, inputMessage, ownerMessage } from './message-origin.js';
+import { harnessMessage, inputMessage } from './message-origin.js';
 import { initialTaint, spendeIlBudget } from './permissions.js';
 import { providerMessages } from './provider-checkpoint.js';
 import {
@@ -196,6 +196,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     ...(input.onDelta ? { onDelta: input.onDelta } : {}),
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
     ...(input.steer ? { steer: input.steer } : {}),
+    ...(input.promptMode === 'minimal' ? { promptMode: 'minimal' as const } : {}),
   });
 }
 

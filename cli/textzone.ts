@@ -1,8 +1,8 @@
 import { appendFileSync, readFileSync } from 'node:fs';
 import { emitKeypressEvents } from 'node:readline';
-import { premi, statoIniziale, testo, type Key, type Stato } from './editor.js';
+import { type Key, premi, statoIniziale } from './editor.js';
 import type { Fondo } from './fondo.js';
-import { disponi, type Cornice } from './riquadro.js';
+import { type Cornice, disponi } from './riquadro.js';
 
 /**
  * Il terminale attorno al buffer: modo raw, disegno, storia su disco.
@@ -160,11 +160,13 @@ export function makeTextzone(deps: TextzoneDeps) {
     // (un pty senza terminale dietro), questa lettura va come sempre.
     if (fondoDisponibile !== undefined && !fondoDisponibile.aperto) {
       const w = output.columns ?? 80;
-      const altezza = disponi([''], 0, 0, cornice, w).righe.length + (cornice.suggerimenti === '' ? 1 : 0);
+      const altezza =
+        disponi([''], 0, 0, cornice, w).righe.length + (cornice.suggerimenti === '' ? 1 : 0);
       const riga = await rigaDelCursore(input, output);
       if (riga !== null) fondoDisponibile.aggancia(riga, altezza);
     }
-    const fondo = fondoDisponibile !== undefined && fondoDisponibile.aperto ? fondoDisponibile : undefined;
+    const fondo =
+      fondoDisponibile !== undefined && fondoDisponibile.aperto ? fondoDisponibile : undefined;
 
     let stato = statoIniziale(storia);
     let righeDisegnateOra = 0;
@@ -270,7 +272,13 @@ export function makeTextzone(deps: TextzoneDeps) {
           // (`cli/STYLES.md`); il fondo resta con un riquadro vuoto e
           // inattivo, e la risposta comincia nella regione, sopra di lui.
           const w = output.columns ?? 80;
-          const spedito = disponi(stato.righe, stato.riga, stato.colonna, { ...cornice, suggerimenti: '' }, w);
+          const spedito = disponi(
+            stato.righe,
+            stato.riga,
+            stato.colonna,
+            { ...cornice, suggerimenti: '' },
+            w,
+          );
           fondo.nellaRegione();
           output.write(`${spedito.righe.join('\n')}\n`);
           const vuoto = disponi([''], 0, 0, { ...cornice, suggerimenti: '' }, w);
@@ -379,9 +387,18 @@ export function makeTextzone(deps: TextzoneDeps) {
       };
       const onKey = (_ch: string | undefined, key: Key | undefined): void => {
         if (!key) return;
-        if (key.ctrl === true && key.name === 'c') return finisci({ tipo: 'interrotto' });
-        if (key.ctrl === true && key.name === 'd') return finisci({ tipo: 'fine' });
-        if (key.name === 'return' || key.name === 'enter') return finisci({ tipo: 'testo', testo: riga });
+        if (key.ctrl === true && key.name === 'c') {
+          finisci({ tipo: 'interrotto' });
+          return;
+        }
+        if (key.ctrl === true && key.name === 'd') {
+          finisci({ tipo: 'fine' });
+          return;
+        }
+        if (key.name === 'return' || key.name === 'enter') {
+          finisci({ tipo: 'testo', testo: riga });
+          return;
+        }
         if (key.name === 'backspace') {
           if (riga.length > 0) {
             riga = riga.slice(0, -1);
@@ -390,7 +407,8 @@ export function makeTextzone(deps: TextzoneDeps) {
           return;
         }
         const ch = key.sequence ?? '';
-        if (ch.length !== 1 || ch.charCodeAt(0) < 0x20 || key.ctrl === true || key.meta === true) return;
+        if (ch.length !== 1 || ch.charCodeAt(0) < 0x20 || key.ctrl === true || key.meta === true)
+          return;
         riga += ch;
         promptOutput.write(ch);
       };
@@ -409,8 +427,18 @@ export function makeTextzone(deps: TextzoneDeps) {
      */
     redraw: () => {
       if (disegnaCorrente !== undefined) return disegnaCorrente();
-      if (fondoDisponibile !== undefined && fondoDisponibile.aperto && corniceUltima !== undefined) {
-        const vuoto = disponi([''], 0, 0, { ...corniceUltima, suggerimenti: '' }, output.columns ?? 80);
+      if (
+        fondoDisponibile !== undefined &&
+        fondoDisponibile.aperto &&
+        corniceUltima !== undefined
+      ) {
+        const vuoto = disponi(
+          [''],
+          0,
+          0,
+          { ...corniceUltima, suggerimenti: '' },
+          output.columns ?? 80,
+        );
         fondoDisponibile.disegna([...vuoto.righe, ''], null);
       }
     },
@@ -441,7 +469,11 @@ export function makeTextzone(deps: TextzoneDeps) {
  * risponde mai: aspettare di più renderebbe lenta ogni lettura proprio
  * dove il fondo non serve.
  */
-export function rigaDelCursore(input: NodeJS.ReadStream, output: Pick<NodeJS.WriteStream, 'write'>, attesaMs = 250): Promise<number | null> {
+export function rigaDelCursore(
+  input: NodeJS.ReadStream,
+  output: Pick<NodeJS.WriteStream, 'write'>,
+  attesaMs = 250,
+): Promise<number | null> {
   return new Promise((resolve) => {
     let buffer = '';
     let chiuso = false;
@@ -495,7 +527,10 @@ function prefissoComune(parole: readonly string[]): string {
  * della riga di suggerimenti, che è già una riga del riquadro e che il
  * ridisegno già cancella da sé.
  */
-export function completa(riga: string, comandi: readonly string[]): { testo: string; candidati: readonly string[] } {
+export function completa(
+  riga: string,
+  comandi: readonly string[],
+): { testo: string; candidati: readonly string[] } {
   if (!riga.startsWith('/')) return { testo: riga, candidati: [] };
   const candidati = comandi.filter((c) => c.startsWith(riga));
   if (candidati.length === 0) return { testo: riga, candidati: [] };
@@ -515,7 +550,8 @@ function leggiSenzaTty(input: NodeJS.ReadStream): Promise<Esito> {
   // un'attesa che non finisce. E' lo stesso difetto di `cli/prompt.ts` — un
   // input che si e' fermato non e' un input che si fermera' di nuovo — con la
   // differenza che qui lo stream lo sa dire, quindi basta chiederglielo.
-  if (input.readableEnded === true || input.destroyed === true) return Promise.resolve({ tipo: 'fine' });
+  if (input.readableEnded === true || input.destroyed === true)
+    return Promise.resolve({ tipo: 'fine' });
   return new Promise((resolve) => {
     let buffer = '';
     const onData = (chunk: Buffer | string): void => {
