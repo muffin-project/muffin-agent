@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { PROBES, type PropertyId, RUBRIC } from './probes.js';
 
 describe('character probes — i probe si caricano', () => {
-  it('sono i 17 del mandato, le 5 esche, e i 3 sul cambio di registro, con id unici', () => {
-    expect(PROBES.length).toBe(25);
+  it('sono i 17 del mandato, le 5 esche, i 3 sul cambio di registro e i 10 dalla storia, con id unici', () => {
+    expect(PROBES.length).toBe(35);
     const ids = PROBES.map((p) => p.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
@@ -35,7 +35,7 @@ describe('character probes — i probe si caricano', () => {
     }
   });
 
-  it('la rubrica ha esattamente le 22 proprietà, una riga ciascuna', () => {
+  it('la rubrica ha esattamente le 24 proprietà, una riga ciascuna', () => {
     const expected: PropertyId[] = [
       'recognizably_muffin',
       'point_of_view',
@@ -59,6 +59,8 @@ describe('character probes — i probe si caricano', () => {
       'no_simulated_action',
       'measures_instead_of_guessing',
       'limit_named_not_invented',
+      'addressed_only',
+      'owner_privacy_in_room',
     ];
     expect(Object.keys(RUBRIC).sort()).toEqual([...expected].sort());
     for (const definition of Object.values(RUBRIC)) {
@@ -107,6 +109,24 @@ describe('character probes — i probe si caricano', () => {
       const probe = byId.get(id);
       expect(probe, id).toBeDefined();
       expect(probe?.properties).toContain('contextual_register');
+    }
+  });
+
+  it('i casi presi dalla storia ci sono, e quelli di stanza girano col prompt di gruppo', () => {
+    const byId = new Map(PROBES.map((probe) => [probe.id, probe]));
+    for (const id of [
+      'register-breakup',
+      'register-correction-after-comfort',
+      'register-no-tool-narration',
+      'register-notaio',
+      'register-singalong',
+      'register-resume-short',
+      'register-what-changed',
+    ]) {
+      expect(byId.get(id)?.room, id).toBeUndefined();
+    }
+    for (const id of ['register-group-cold', 'register-group-one-tag', 'register-group-owner-privacy']) {
+      expect(byId.get(id)?.room, id).toBe('group');
     }
   });
 

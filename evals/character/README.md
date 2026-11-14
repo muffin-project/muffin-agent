@@ -12,7 +12,7 @@ quindi è Muffin». Si valutano **proprietà**.
 
 ## Com'è fatta
 
-- `probes.ts` — 25 probe come dati: il messaggio (o la breve sequenza) dell'owner,
+- `probes.ts` — 35 probe come dati: il messaggio (o la breve sequenza) dell'owner,
   il **contesto reale** che serve (memoria presente o assente, un tool che
   fallisce, un esito incerto dopo un crash, un MCP da caricare) costruito con le
   primitive vere del runtime, e le proprietà della rubrica che quel probe misura.

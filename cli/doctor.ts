@@ -636,7 +636,7 @@ export async function runDoctor(
   // before this told the owner their copy had fallen behind. Measured on the
   // owner's own machine (docs/evidence/deriva-defaults-2026-08-26.md):
   // shipped files sat at their `init`-day content for weeks and nothing said
-  // so. persona.md and voice.md are no longer prompt sources (ADR-0106); the
+  // so. persona.md and voice.md are no longer prompt sources (ADR-0107); the
   // sealed identity and the skills still are. See defaultsDriftCheck below for the two
   // opposite verdicts this can reach and why they must never be confused.
   const moduleDir = dirname(fileURLToPath(import.meta.url));

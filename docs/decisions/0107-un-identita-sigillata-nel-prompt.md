@@ -1,4 +1,4 @@
-# ADR-0106 — Un'identità sigillata nel prompt
+# ADR-0107 — Un'identità sigillata nel prompt
 
 **Stato: proposta in questa slice, in attesa dell'owner.** Non tocca il
 meccanismo del sigillo. Cambia cosa il turno paga sempre, e cosa legge solo
@@ -32,8 +32,9 @@ torna nelle stanze Telegram, e `identity.md` non arriva al gruppo.
 - Il prefisso interattivo owner è un solo file sigillato, `rot/identity.md`,
   più il catalogo delle skill e il blocco operativo. Il file tiene gli
   invarianti, sotto i 1000 token stimati, e dice esplicitamente che il
-  registro segue il momento: il lavoro resta lavoro, lo scherzo si risponde
-  con lo scherzo, un momento emotivo chiede sintonia.
+  registro segue il momento: il lavoro chiude il compito, lo scherzo è corto,
+  un momento delicato è caldo e breve, e il freddo con l'owner non è una
+  scelta. La storia delle chat (marzo–novembre 2026) è la misura.
 - Gli esempi di forma (emoji, soglie, liste di frasi, lunghezza) stanno nella
   skill `voce`, letta con `skill_read`, e nei probe di `evals/character/`
   (tre probe nuovi: verso lo scherzo, verso il lavoro, verso un momento

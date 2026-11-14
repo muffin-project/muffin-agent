@@ -263,10 +263,10 @@ describe('the owner-class prompt does not move', () => {
     // Ri-fissato 2026-10-18 (docs-hygiene, PR #921): la persona non dichiara
     // più «worker» — nessun meccanismo lo sostiene; la sola differenza nella
     // stringa assemblata è quella parola.
-    // Ri-fissato 2026-11-14 (ADR-0106): un solo patto sigillato, gli esempi di
+    // Ri-fissato 2026-11-14 (ADR-0107): un solo patto sigillato, gli esempi di
     // voce escono dal prefisso. Cold-start deliberato della cache.
-    // Pin precedente: `968d931d68a71a1344f4891fd80710319eceb215fe75806be3df6a688d5a37d8`.
-    '00a316f7449594155d281b599d27c7d6ae0002e285f2a9355e095014408d0d0b';
+    // Pin precedente: `00a316f7449594155d281b599d27c7d6ae0002e285f2a9355e095014408d0d0b`.
+    '5c40b6dc2f86e441f38b7b61720b0ec0e49f7feeb3c9528b3ee092fb3b18a992';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
@@ -380,10 +380,10 @@ describe('the owner-class prompt does not move', () => {
    * `63c6590ed366dbb44d9e2a5ce2b018f9f0ffe3993ec5ea34d555c46cddf0b3f4`.
    */
   // #529: the same scoped-work rule reaches owner and group prompts.
-  // Ri-fissato 2026-11-14 (ADR-0106): l'etichetta di gruppo sta in GROUP_PERSONA,
+  // Ri-fissato 2026-11-14 (ADR-0107): l'etichetta di gruppo sta in GROUP_PERSONA,
   // non in voice.md. Pin precedente:
-  // `40b3537705a3166a4881b573e8d3130cf39192367989554bda100a045cf2d1ae`.
-  const GROUP_PROMPT_SHA_V1 = '86f2fc7b1879c3113ad9e031af9d8a341872bcedd6803073f7b39e10aa9c5293';
+  // `86f2fc7b1879c3113ad9e031af9d8a341872bcedd6803073f7b39e10aa9c5293`.
+  const GROUP_PROMPT_SHA_V1 = '1784c4f457d158fd0aedcfa173c811cc1bee4edd7caf43dbcd36d4dbe0076235';
 
   /**
    * Ri-fissato 2026-10-10: la regola sull'esposizione progressiva chiarisce
@@ -492,7 +492,7 @@ describe('quale versione del prompt assembla questa installazione', () => {
   it('il carattere non è più la parte grossa del prefisso', () => {
     // Era l'affermazione opposta: v1 spendeva il prefisso sul carattere
     // (rapporto > 8 fra i tre file e le regole). Quel rapporto è il difetto
-    // che ADR-0106 chiude. Qui resta solo: le due versioni condividono
+    // che ADR-0107 chiude. Qui resta solo: le due versioni condividono
     // l'identità, e v2 è il blocco operativo più lungo, non un secondo carattere.
     const home = bootHome();
     const conta = (v: PromptVersion) => {
@@ -779,7 +779,7 @@ describe('i pavimenti che la stanza riceve solo da voice.md', () => {
       expect(owner).toMatch(/Il registro segue il momento/);
       expect(owner).toMatch(/Lavoro resta lavoro/);
       expect(owner).toMatch(/Lo scherzo si risponde con lo scherzo/);
-      expect(owner).toMatch(/Un momento emotivo chiede sintonia/);
+      expect(owner).toMatch(/Un momento delicato chiede sintonia/);
     });
 
     it(`${versione}: e continua a non ricevere niente del patto dell'owner`, () => {

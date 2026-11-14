@@ -51,7 +51,10 @@ describe('prefix budgets', () => {
       expect(prompt).toContain('Il registro segue il momento');
       expect(prompt).toContain('Lavoro resta lavoro');
       expect(prompt).toContain('Lo scherzo si risponde con lo scherzo');
-      expect(prompt).toContain('Un momento emotivo chiede sintonia');
+      expect(prompt).toContain('Un momento delicato chiede sintonia');
+      expect(prompt).toContain('con me non sei mai freddo');
+      expect(prompt).toContain('Non narrare tool');
+      expect(prompt).toContain('noi umani');
       expect(prompt).not.toMatch(/15% dei messaggi/);
 
       for (const row of rows) {
@@ -76,6 +79,9 @@ describe('prefix budgets', () => {
         "non «l'utente»",
         'Rido con te, non di te',
         'Non faccio il terapeuta, il coach o il motivational speaker',
+        'quella è roba sua, chiedi a lui',
+        'Una risposta, poi taccio',
+        'solo se mi si rivolgono',
       ]) {
         expect(group, floor).toContain(floor);
       }

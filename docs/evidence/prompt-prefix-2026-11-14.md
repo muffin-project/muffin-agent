@@ -1,6 +1,6 @@
 # Prefisso del prompt — 14 novembre 2026
 
-Decisione che questa nota è stata scritta per cambiare: ADR-0106. Non è
+Decisione che questa nota è stata scritta per cambiare: ADR-0107. Non è
 architettura corrente per il solo fatto di essere più nuova. La misura è sui
 default spediti di questo checkout, stimatore `ceil(caratteri / 4)`, lo stesso
 di `muffin prompt show`. Non è un tokenizer di modello.
@@ -35,8 +35,9 @@ Dopo il taglio, stessa stima, home di `muffin init` (il test
 | work-rules | 2324 | 581 | 1200 |
 | **prefisso owner** | | **~1647** | **4000** |
 
-Gruppo ~1319 token. Modo minimal ~849 token: riga di compito, catalogo, regole
-operative, senza il patto.
+Dopo le regole prese dalla storia (14/11, stesso stimatore, home di init):
+identity 3365 caratteri / ~842 token (tetto 1000), skills ~224, work-rules ~581,
+prefisso owner ~1647 (tetto 4000). Gruppo ~1391. Minimal ~849.
 
 ## Peer
 
@@ -96,7 +97,7 @@ eval or observation that would falsify the chosen option
   Prefisso owner > 4000 o identity > 1000 sullo stimatore del repo.
   Probe register-switch-to-banter, register-switch-to-work,
   register-emotional-attunement rossi a parità di regola nel patto.
-  Una riga di GROUP_PERSONA elencata in ADR-0106 assente dal prompt di gruppo.
+  Una riga di GROUP_PERSONA elencata in ADR-0107 assente dal prompt di gruppo.
   Cinque cache_control, o un 400 da un endpoint che non li capisce.
 
 chosen claim and why

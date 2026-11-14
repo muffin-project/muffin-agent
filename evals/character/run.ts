@@ -403,7 +403,20 @@ async function runProbe(runtime: Runtime, probe: Probe): Promise<{ transcript: T
   const turnIds: string[] = [];
   for (const raw of probe.turns) {
     const text = substitute(raw, vars);
-    const result = await runTurn(runtime.deps, { principal: OWNER, tenant: TENANT, surface: 'cli', session, text });
+    // A group probe has to receive GROUP_PERSONA. Running it as the owner
+    // would grade the sealed pact and call the room untested.
+    const room = probe.room === 'group';
+    const tenant = room ? 'group:telegram:probe' : TENANT;
+    const principal: Principal = room
+      ? { kind: 'member', connector: 'telegram', tenantId: tenant, externalId: '77' }
+      : OWNER;
+    const result = await runTurn(runtime.deps, {
+      principal,
+      tenant,
+      surface: room ? 'telegram' : 'cli',
+      session,
+      text,
+    });
     transcript.push({ role: 'owner', text }, { role: 'agente', text: result.text });
     turnIds.push(result.turnId);
   }
