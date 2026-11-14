@@ -5,6 +5,9 @@ import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
 import { ApprovalStore } from '../core/approvals/store.js';
 import { formatRunStatus, runStatus } from '../core/autonomy/run-status.js';
+import { GatewayLock } from '../core/gateway/lock.js';
+import { createNotifier } from '../core/gateway/notify.js';
+import { Gateway } from '../core/gateway/service.js';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl } from '../core/policy/types.js';
@@ -35,7 +38,7 @@ import { makeLaneRunner } from './turn-lane.js';
  * (the kill boundary: everything the next process needs is on durable rows,
  * and real-SIGKILL survival across that same boundary is already proven by
  * `agent/autonomous-resume-kill.test.ts`, reused here by reference, not
- * re-enacted). The production `TurnLane` resumes the same turn with no owner
+ * re-enacted). The production gateway beat resumes the same turn with no owner
  * message anywhere (S2 autonomous grant), the resumed lease consumes a real
  * ASK through the yolo delegation carry (S3) and answers, and the occurrence
  * settles silently with a queryable receipt that the S1 projection reads as
@@ -224,12 +227,6 @@ async function waitFor(cond: () => boolean, label: string, timeoutMs = 15_000): 
   }
 }
 
-/** Lets the lane beat the test started finish, without a fixed sleep (S2 shape). */
-async function settleLane(lane: TurnLane): Promise<void> {
-  for (let i = 0; i < 600 && lane.isRunning(); i++) await new Promise((r) => setTimeout(r, 5));
-  expect(lane.isRunning()).toBe(false);
-}
-
 describe('#598 assembled · arm-once yolo silent → fire → kill boundary → resume → silent settle', () => {
   it('one lineage, no duplicate effects, zero messages, S1 terminal with silent receipt', async () => {
     // Lease 0 (fire): one settled read, then the lease yields recoverably.
@@ -261,6 +258,9 @@ describe('#598 assembled · arm-once yolo silent → fire → kill boundary → 
     // run through makeJobRunner, deliver to the channel, settle the fire receipt.
     const channelDeliver = vi.fn(async (_channel: string, _text: string) => DELIVERED);
     const events: SchedulerEvent[] = [];
+    const modelLane = new ModelLane();
+    const lock = new GatewayLock(w.db, () => true);
+    const stillOwner = () => lock.isCurrentClaim();
     const sched = new Scheduler(
       w.jobs,
       makeJobRunner(w.deps, w.fires, null, null, w.budget),
@@ -270,16 +270,42 @@ describe('#598 assembled · arm-once yolo silent → fire → kill boundary → 
       () => new Date(),
       undefined,
       (turnId, state) => w.turns.delivered(turnId, state),
-      new ModelLane(),
-      undefined,
+      modelLane,
+      stillOwner,
       (j: Job, opts?: { silent?: boolean }) =>
         w.fires.settle(j.id, j.nextFireAt.toISOString(), opts),
     );
+    const laneMessages: { turnId: string; text: string }[] = [];
+    const laneRunner = makeLaneRunner(
+      w.deps,
+      async (turn, text) => {
+        laneMessages.push({ turnId: turn.id, text });
+      },
+      undefined,
+      undefined,
+      w.auto,
+    );
+    const resumeLane = new TurnLane({
+      turns: w.turns,
+      run: laneRunner,
+      modelLane,
+      stillOwner,
+    });
+    const gateway = new Gateway({
+      lock,
+      notify: createNotifier({}),
+      scheduler: sched,
+      turnLane: resumeLane,
+      jobs: w.jobs,
+      close: () => {},
+      log: () => {},
+    });
+    expect(gateway.start()).toEqual({ started: true });
 
     // The tick fires without a fresh owner message: one armed goal, one fire.
     sched.tick();
     await waitFor(
-      () => events.some((e) => e.kind === 'deferred' || e.kind === 'ran'),
+      () => !sched.isRunning() && events.some((e) => e.kind === 'deferred' || e.kind === 'ran'),
       'the first tick resolving the fire',
     );
     expect(
@@ -313,24 +339,13 @@ describe('#598 assembled · arm-once yolo silent → fire → kill boundary → 
       'S2 link: due() lists the scheduler-bound continuable row',
     ).toContain(turnId);
 
-    // ---- resume: one lane beat, no owner message anywhere in the loop ----
-    const laneMessages: { turnId: string; text: string }[] = [];
-    const laneRunner = makeLaneRunner(
-      w.deps,
-      async (turn, text) => {
-        laneMessages.push({ turnId: turn.id, text });
-      },
-      undefined,
-      undefined,
-      w.auto,
+    // ---- resume: one gateway beat, no owner message anywhere in the loop ----
+    gateway.tick();
+    await waitFor(
+      () => w.turns.get(turnId)?.status === 'done' && !resumeLane.isRunning(),
+      'the gateway beat to resume the bound turn through the shared model lane',
+      2_000,
     );
-    const resumeLane = new TurnLane({
-      turns: w.turns,
-      run: laneRunner,
-      modelLane: new ModelLane(),
-    });
-    resumeLane.tick();
-    await settleLane(resumeLane);
 
     // Same identity, terminal: the durable work continued, not restarted.
     const done = must(w.turns.get(turnId));
@@ -380,7 +395,7 @@ describe('#598 assembled · arm-once yolo silent → fire → kill boundary → 
     expect(consumed?.consumed_at, 'S3 link: the delegation decision was consumed').not.toBeNull();
 
     // ---- settle: the next scheduler tick closes the occurrence ----
-    sched.tick();
+    gateway.tick();
     await waitFor(() => events.some((e) => e.kind === 'ran'), 'the settling tick');
     const ran = events.find((e) => e.kind === 'ran');
     expect(ran, 'the occurrence settled after the resume').toMatchObject({ stopped: 'answered' });
@@ -392,7 +407,7 @@ describe('#598 assembled · arm-once yolo silent → fire → kill boundary → 
       'S3 link: markRan deactivated the armed-once goal',
     ).toBe(false);
     const callsBeforeIdle = w.provider.calls;
-    sched.tick();
+    gateway.tick();
     await new Promise((r) => setTimeout(r, 200));
     expect(w.provider.calls, 'S3 link: an idle tick never re-runs the model').toBe(callsBeforeIdle);
     expect(

@@ -408,7 +408,7 @@ describe('the first model call is not silence (2026-09-25)', () => {
       const draining = (connector as unknown as { drain: () => Promise<void> }).drain();
 
       const deadline = Date.now() + 2_000;
-      while (!calls.some((c) => (c.method === 'sendMessageDraft' || c.method === 'sendRichMessageDraft') && testo(c).includes('sto pensando'))) {
+      while (!calls.some((c) => (c.method === 'sendMessageDraft' || c.method === 'sendRichMessageDraft') && testo(c).includes('aspetto il modello'))) {
         if (Date.now() > deadline) throw new Error(`nessuna anteprima di stato; calls=${JSON.stringify(calls)}`);
         await new Promise((r) => setTimeout(r, 10));
       }

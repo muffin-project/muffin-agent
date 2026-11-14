@@ -3,6 +3,16 @@ import { ProviderError } from '../providers/types.js';
 import { providerErrorReply } from './provider-error-reply.js';
 
 describe('safe provider error replies', () => {
+  it('points an exhausted ChatGPT plan to its usage settings', () => {
+    const reply = providerErrorReply(
+      new ProviderError('private quota detail', false, 429, 'transport', undefined, false, {
+        quota: 'chatgpt-plan',
+      }),
+    );
+    expect(reply).toContain('https://chatgpt.com/settings/usage');
+    expect(reply).not.toContain('private quota detail');
+  });
+
   it('reports a numeric HTTP status without echoing upstream text', () => {
     const reply = providerErrorReply(
       new ProviderError('secret gateway payload', true, 502, 'transport'),

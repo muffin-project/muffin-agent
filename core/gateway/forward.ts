@@ -226,7 +226,9 @@ export class ForwardHost {
         found: true,
         status: row.status,
         stopped: row.outcome,
-        text: lastAssistantText(row),
+        // A provider checkpoint contains model input, including previous replies.
+        // The terminal answer is only available here from the exact execution above.
+        text: null,
         turnId: row.id,
       };
     }
@@ -491,25 +493,6 @@ function sendLine(sock: Socket, event: ServerEvent): void {
   } catch {
     // Una risposta che non parte si scopre alla chiusura.
   }
-}
-
-function lastAssistantText(row: TurnRecord): string | null {
-  const checkpoint = row.providerLease.checkpoint;
-  if (!Array.isArray(checkpoint)) return null;
-  for (let i = checkpoint.length - 1; i >= 0; i -= 1) {
-    const message: unknown = checkpoint[i];
-    if (typeof message !== 'object' || message === null || !('role' in message) || message.role !== 'assistant') continue;
-    if (!('content' in message) || !Array.isArray(message.content)) continue;
-    const text = message.content
-      .filter((block): block is { type: 'text'; text: string } =>
-        typeof block === 'object' && block !== null && 'type' in block && block.type === 'text' &&
-        'text' in block && typeof block.text === 'string',
-      )
-      .map((block) => block.text)
-      .join('');
-    if (text !== '') return text;
-  }
-  return null;
 }
 
 /**

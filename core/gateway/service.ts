@@ -252,11 +252,16 @@ export class Gateway {
       void this.drain('lock');
       return;
     }
-    this.deps.scheduler.tick(now);
-    // After the scheduler, on the same beat. The order is not arbitrary: a job
-    // that comes due creates work the turn lane may then pick up in the same
-    // beat, whereas the reverse ordering would make every job's turn wait a
-    // full interval before anything looked at it.
+    this.deps.scheduler.tick(now, () => {
+      // A due job with unfinished Work would take the token on every beat,
+      // even though the turn lane is the one that can finish it.
+      if (this.stopping) return;
+      const resumedAt = this.now();
+      // The beat's claim may have expired while the job was unwinding.
+      // Recheck before TurnLane's barrier sweep can write to the store.
+      if (this.deps.lock.isCurrentClaim(this.pid, resumedAt)) this.deps.turnLane.tick(resumedAt);
+    });
+    // Still sweep turn barriers on the beat, even when a job holds the token.
     this.deps.turnLane.tick(now);
   }
 

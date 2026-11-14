@@ -2492,6 +2492,7 @@ export class TelegramConnector {
         // `close()`, così `/stop` e `/steer` trovano qualcosa esattamente
         // mentre c'è qualcosa.
         const vivo = this.corsie.open(this.corsia(incoming.chatId));
+        transcript.report({ type: 'preparing_context' });
         return { signal: vivo.controller.signal, steer: () => vivo.correzioni.splice(0) };
       },
       onDelta: (delta: TurnDelta): void => {
