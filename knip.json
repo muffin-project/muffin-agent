@@ -4,27 +4,27 @@
     "cli/main.ts",
     ".claude/hooks/*.mjs",
     ".claude/deleghe.mjs",
-    "docs/derived/architecture-map/build.mjs",
-    "docs/derived/architecture-map/ancore.mjs",
+    "scripts/agent/repo-state.mjs",
     "core/mcp/fixtures/echo-server.mjs",
     "evals/floor/run.ts",
     "evals/memory/acceptance.ts",
+    "evals/memory/corpus.ts",
     "evals/voice/drift.ts",
-    "evals/character/run.ts",
     "evals/system/sandbox-overhead.ts",
-    "evals/acceptance/report.ts",
-    "evals/memory/corpus.ts"
+    "evals/capability-exposure/run.ts",
+    "evals/character/con-la-chiave.ts",
+    "evals/reasoning-ab/con-la-chiave.ts",
+    "evals/e2e/chatgpt-runtime.ts",
+    "evals/e2e/sandbox-probe.mjs"
   ],
   "project": [
     "**/*.ts",
     "**/*.mjs"
   ],
-  "ignore": [
-    "docs/derived/architecture-map/mappa.html",
-    ".claude/worktrees/**"
-  ],
+  "ignore": [],
   "ignoreBinaries": [
     "mktemp",
+    "script",
     "systemd-notify",
     "systemd-analyze",
     "loginctl",
