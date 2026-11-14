@@ -35,10 +35,11 @@ export async function acquireInitCredential(deps: {
     const answer = await ask(
       '\nCollega il modello. OAuth è la strada consigliata; la chiave è il ripiego.\n' +
         '  [1] OpenRouter — browser, oppure un codice se sei in SSH\n' +
-        '  [2] Incolla una chiave API (OpenRouter o Anthropic)\n' +
+        '  [2] Incolla una chiave API (OpenRouter, Groq o Anthropic)\n' +
         '  [3] Salta per ora\n' +
         '  Piano ChatGPT: muffin chatgpt login\n' +
         '  Anthropic: solo chiave Console/API, nessun login claude.ai\n' +
+        '  Groq: solo chiave API (gsk_…), nessun OAuth\n' +
         'Scelta [1]: ',
       input,
       output,
@@ -72,8 +73,8 @@ export async function acquireInitCredential(deps: {
     }
     if (answer === '2') {
       deps.stderr(
-        'Incolla una chiave OpenRouter (sk-or-…) o Anthropic (sk-ant-…). ' +
-          `OpenRouter: ${PROVIDERS.openrouter.keysUrl}\n`,
+        'Incolla una chiave OpenRouter (sk-or-…), Groq (gsk_…) o Anthropic (sk-ant-…). ' +
+          `OpenRouter: ${PROVIDERS.openrouter.keysUrl} · Groq: ${PROVIDERS.groq.keysUrl}\n`,
       );
       const apiKey = await secret(
         'Chiave API (nascosta — invio vuoto chiede conferma): ',

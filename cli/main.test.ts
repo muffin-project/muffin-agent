@@ -116,6 +116,11 @@ describe('muffin init infers the provider from the key — headless, no TTY requ
     expect(config.provider.kind).toBe('openai-compat');
     expect(config.provider.baseUrl).toBe('https://api.groq.com/openai/v1');
     expect(config.provider.apiKeyRef).toBe('secret://groq_api_key');
+
+    const status = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['auth', 'status']);
+    expect(status.code).toBe(0);
+    expect(status.out).toContain('groq default api-key secret://groq_api_key active: main,light');
+    expect(status.out).not.toContain('gsk_realistic_groq_key');
   });
 
   it('an unrecognised key still defaults to anthropic, but now names the reason instead of staying silent', () => {

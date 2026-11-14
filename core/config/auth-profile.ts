@@ -20,7 +20,7 @@ import {
   secretDir,
 } from './config.js';
 import { ensurePrivateDir, tightenPrivateFile } from './private-fs.js';
-import { PROVIDERS, providerFor } from './providers.js';
+import { PROVIDERS, type ProviderId, providerFor } from './providers.js';
 
 /**
  * Account list for providers that authenticate with a stored key.
@@ -29,9 +29,14 @@ import { PROVIDERS, providerFor } from './providers.js';
  * stores a key, a code, or a verifier — only which secret name belongs to
  * which account. Lanes keep their own `apiKeyRef` (ADR-0099); the index does
  * not replace that.
+ *
+ * Which providers land here is the catalog, not a second list: every entry
+ * whose kind is not `openai-chatgpt`, the same cut `ALL_API_KEY_NAMES` makes.
+ * Adding a key-backed provider to `PROVIDERS` is what makes its accounts
+ * listable and switchable.
  */
 
-export type KeyProviderId = 'openrouter' | 'anthropic';
+export type KeyProviderId = Exclude<ProviderId, 'chatgpt'>;
 export type KeyAuthMethod = 'oauth-pkce' | 'api-key';
 
 export type KeyAuthProfile = {
@@ -54,7 +59,14 @@ type Index = {
   selected: Partial<Record<KeyProviderId, string>>;
 };
 
-const KEY_PROVIDERS: readonly KeyProviderId[] = ['openrouter', 'anthropic'];
+export function isKeyProviderId(value: unknown): value is KeyProviderId {
+  if (typeof value !== 'string' || !Object.hasOwn(PROVIDERS, value)) return false;
+  return PROVIDERS[value as ProviderId].kind !== 'openai-chatgpt';
+}
+
+export const KEY_PROVIDERS: readonly KeyProviderId[] = (
+  Object.keys(PROVIDERS) as ProviderId[]
+).filter(isKeyProviderId);
 const ID_PATTERN = /^[a-z0-9]{1,32}$/;
 
 export class AuthProfileError extends Error {
@@ -283,7 +295,7 @@ function isIndex(value: unknown): value is Index {
 function isProfile(value: unknown): value is KeyAuthProfile {
   if (!value || typeof value !== 'object') return false;
   const profile = value as Partial<KeyAuthProfile>;
-  if (profile.provider !== 'openrouter' && profile.provider !== 'anthropic') return false;
+  if (!isKeyProviderId(profile.provider)) return false;
   if (profile.method !== 'oauth-pkce' && profile.method !== 'api-key') return false;
   if (typeof profile.id !== 'string' || typeof profile.secretName !== 'string') return false;
   if (profile.id !== 'default' && !ID_PATTERN.test(profile.id)) return false;

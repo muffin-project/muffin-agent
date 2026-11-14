@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -100,5 +100,31 @@ describe('key auth profiles', () => {
     expect(managedProfileId('openrouter', 'openrouter_api_key_work')).toBe('work');
     expect(managedProfileId('openrouter', 'provider_api_key')).toBeNull();
     expect(managedProfileId('anthropic', 'openrouter_api_key')).toBeNull();
+    expect(managedProfileId('groq', 'groq_api_key')).toBe('default');
+    expect(managedProfileId('groq', 'groq_api_key_work')).toBe('work');
+    expect(managedProfileId('groq', 'openrouter_api_key')).toBeNull();
+  });
+
+  it('discovers a Groq key as a profile without writing the key or an index', () => {
+    const dir = home();
+    runInit({
+      home: dir,
+      provider: 'openai-compat',
+      baseUrl: 'https://api.groq.com/openai/v1',
+      apiKey: 'gsk_discovered_not_in_index',
+    });
+    const found = listKeyProfiles(dir).filter((item) => item.provider === 'groq');
+    expect(found).toEqual([
+      expect.objectContaining({
+        id: 'default',
+        provider: 'groq',
+        method: 'api-key',
+        secretName: 'groq_api_key',
+        secretPresent: true,
+        lanes: ['main', 'light'],
+      }),
+    ]);
+    expect(JSON.stringify(found)).not.toContain('gsk_discovered_not_in_index');
+    expect(existsSync(authProfilePath(dir))).toBe(false);
   });
 });
