@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { BUDGET_FLOOR, QUIET_FLOOR, loadSealedBudgets } from './budgets.js';
+import { BUDGET_FLOOR, QUIET_FLOOR, detectOwnerTimezone, loadSealedBudgets, seedQuietTimezone } from './budgets.js';
 
 /**
  * The sealed file, and the two halves that must not be able to break each other.
@@ -143,5 +144,38 @@ describe('rot/budgets.json', () => {
     const broken = loadSealedBudgets(rot('{ "monthlyUsd": '));
     expect(broken.caps).toEqual(BUDGET_FLOOR);
     expect(broken.notes.join(' ')).toContain('illeggibile');
+  });
+});
+
+describe('il fuso dell\'owner al primo avvio', () => {
+  it('rileva un fuso IANA vero e scarta il fallback neutro o un nome inventato', () => {
+    expect(detectOwnerTimezone('Europe/Rome')).toBe('Europe/Rome');
+    expect(detectOwnerTimezone('UTC')).toBeUndefined();
+    expect(detectOwnerTimezone('Etc/UTC')).toBeUndefined();
+    expect(detectOwnerTimezone('Europe/Roma')).toBeUndefined();
+    expect(detectOwnerTimezone('')).toBeUndefined();
+  });
+
+  it('sostituisce solo il fuso, solo se è ancora quello spedito, e lascia il resto byte per byte', () => {
+    const shipped = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'defaults', 'rot', 'budgets.json');
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-seed-tz-'));
+    try {
+      const file = join(dir, 'budgets.json');
+      const before = readFileSync(shipped, 'utf8');
+      writeFileSync(file, before);
+      expect(seedQuietTimezone(file, 'Europe/Rome')).toBe(true);
+      const after = readFileSync(file, 'utf8');
+      expect(after).toBe(before.replace('"timezone": "UTC"', '"timezone": "Europe/Rome"'));
+      expect(JSON.parse(after).quietHours).toEqual({ ...QUIET_FLOOR, timezone: 'Europe/Rome' });
+      // Già scelto: non si tocca più.
+      expect(seedQuietTimezone(file, 'America/New_York')).toBe(false);
+      expect(readFileSync(file, 'utf8')).toBe(after);
+      // Un nome che il runtime non conosce non entra mai nel file sigillato.
+      writeFileSync(file, before);
+      expect(seedQuietTimezone(file, 'Europe/Roma')).toBe(false);
+      expect(readFileSync(file, 'utf8')).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
