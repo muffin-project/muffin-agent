@@ -225,7 +225,7 @@ describe('M3 acceptance — through the production runtime', () => {
       tools: {} as Record<string, string>,
     };
     // Approve honestly: pin the tools as the owner would.
-    const conn = await connectServer('echo', entry);
+    const conn = await connectServer(entry);
     entry.tools = pinTools(conn.tools);
     await conn.close();
 

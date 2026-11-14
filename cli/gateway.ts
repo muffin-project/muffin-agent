@@ -31,7 +31,6 @@ import {
   resolveLauncher,
   EXIT_PERMANENT,
   LAUNCHD_LABEL,
-  RESTART_SEC,
   STOP_TIMEOUT_SEC,
 } from '../core/gateway/unit.js';
 import { Scheduler, type Deliver } from '../core/scheduler/scheduler.js';

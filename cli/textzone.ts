@@ -1,6 +1,6 @@
 import { appendFileSync, readFileSync } from 'node:fs';
 import { emitKeypressEvents } from 'node:readline';
-import { premi, statoIniziale, testo, type Key, type Stato } from './editor.js';
+import { premi, statoIniziale, type Key } from './editor.js';
 import type { Fondo } from './fondo.js';
 import { disponi, type Cornice } from './riquadro.js';
 

@@ -69,8 +69,6 @@ import type { InputRichBlock, InputRichMessage, RichText } from '@grammyjs/types
 
 /** The Bot API version this surface implements. Named in tests and docs; bump with the changelog checklist. */
 export const TELEGRAM_BOT_API_TARGET = '10.3';
-/** When that version was published, per the official changelog. */
-export const TELEGRAM_BOT_API_TARGET_DATE = '2026-08-24';
 /** Oldest server behaviour the rich lane relies on (`can_stop`, stop updates: both 10.3). */
 export const TELEGRAM_BOT_API_RICH_FLOOR = '10.3';
 

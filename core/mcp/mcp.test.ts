@@ -151,7 +151,7 @@ describe('registry file', () => {
 
 describe('against a real stdio server', () => {
   it('lists, pins, verifies and calls', async () => {
-    const connection = await connectServer('echo', fixtureEntry());
+    const connection = await connectServer(fixtureEntry());
     try {
       expect(connection.tools.map((t) => t.name)).toEqual(['echo']);
       expect(verifyTools(connection.tools, pinTools(connection.tools))).toEqual({ ok: true });
@@ -165,7 +165,7 @@ describe('against a real stdio server', () => {
 
   it('the rug-pull is caught: a changed description suspends the server', async () => {
     // Approve the honest server…
-    const honest = await connectServer('echo', fixtureEntry());
+    const honest = await connectServer(fixtureEntry());
     const pins = pinTools(honest.tools);
     await honest.close();
 
@@ -191,7 +191,7 @@ describe('against a real stdio server', () => {
   }, 20_000);
 
   it('exposes only verified host-owned sessions to embedded event consumers', async () => {
-    const honest = await connectServer('echo', fixtureEntry());
+    const honest = await connectServer(fixtureEntry());
     const pins = pinTools(honest.tools);
     await honest.close();
 
@@ -229,7 +229,7 @@ describe('against a real stdio server', () => {
   }, 20_000);
 
   it('a verified server becomes fenced loop tools with tier-3 results', async () => {
-    const honest = await connectServer('echo', fixtureEntry());
+    const honest = await connectServer(fixtureEntry());
     const pins = pinTools(honest.tools);
     await honest.close();
 

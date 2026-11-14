@@ -66,18 +66,6 @@ const verde = (row: string, title: string): ScenarioEntry => ({
   expectation: { kind: 'verde' },
 });
 
-const rosso = (
-  row: string,
-  title: string,
-  reason: string,
-  closedBy: string,
-  expectFailure: RegExp | ((error: unknown) => boolean),
-): ScenarioEntry => ({
-  row,
-  title: `${row} ${title}`,
-  expectation: { kind: 'atteso-rosso', reason, closedBy, expectFailure },
-});
-
 const provataDalMeccanismo = (row: string, title: string, reason: string): ScenarioEntry => ({
   row,
   title: `${row} ${title}`,

@@ -1,8 +1,8 @@
 import DatabaseCtor from 'better-sqlite3';
-import { copyFileSync, existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { ensurePrivateDir, tightenHome, tightenPrivateDb, tightenPrivateFile } from '../core/config/private-fs.js';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SCHEMA as BUDGET_SCHEMA } from '../core/budget/budget.js';
 import { schemaVersionOf, stampFresh } from '../core/db/migrate.js';

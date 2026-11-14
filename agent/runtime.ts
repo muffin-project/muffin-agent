@@ -13,7 +13,6 @@ import {
   promptVersion,
   readDefaultChannel,
   readSecret,
-  secretDir,
 } from '../core/config/config.js';
 import { tightenHome } from '../core/config/private-fs.js';
 import { requestedWorkspace, resolveWorkspace } from '../core/config/workspace.js';

@@ -30,7 +30,7 @@ export type McpConnection = {
   close(): Promise<void>;
 };
 
-export async function connectServer(server: string, entry: McpServerEntry): Promise<McpConnection> {
+export async function connectServer(entry: McpServerEntry): Promise<McpConnection> {
   const client = new Client({ name: 'muffin', version: '0.2.0' });
   const transport = new StdioClientTransport({
     command: entry.command,

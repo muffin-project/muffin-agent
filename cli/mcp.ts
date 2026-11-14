@@ -83,7 +83,7 @@ export async function cmdMcpAdd(
 
   let connection;
   try {
-    connection = await connectServer(name, entry);
+    connection = await connectServer(entry);
   } catch (error) {
     process.stderr.write(
       `connessione fallita: ${error instanceof Error ? error.message : String(error)}\n`,
@@ -156,7 +156,7 @@ export async function cmdMcpList(home: string, verify: boolean): Promise<number>
       continue;
     }
     try {
-      const connection = await connectServer(name, entry);
+      const connection = await connectServer(entry);
       const verdict = verifyTools(connection.tools, entry.tools);
       await connection.close().catch(() => {});
       if (verdict.ok) {

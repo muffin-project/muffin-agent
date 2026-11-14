@@ -252,7 +252,7 @@ export class OpenAICompatProvider implements Provider {
   constructor(
     apiKey: string,
     baseURL?: string,
-    private readonly headers: Record<string, string> = {},
+    headers: Record<string, string> = {},
     opts: {
       explicitCache?: boolean;
       reasoningEffort?: boolean;

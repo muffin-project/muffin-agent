@@ -49,8 +49,6 @@ import { join } from 'node:path';
 import { attachmentOf, downloadToVault, formatoSticker, safeVaultName, type Downloaded, type MediaSpec } from './media.js';
 import { estraiFotogramma } from '../../core/media/fotogramma.js';
 import { tipoAudio } from '../../agent/audio.js';
-import { loadImage } from '../../agent/images.js';
-import type { AudioBlock, ImageBlock } from '../../agent/providers/types.js';
 import type { Voce } from '../../core/audio/voce.js';
 import type { Vista } from '../../core/vista/vista.js';
 

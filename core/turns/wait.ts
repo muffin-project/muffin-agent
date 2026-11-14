@@ -78,8 +78,6 @@ export const MAX_SUSPENDED_PER_TENANT = 8;
  * adding its evaluator in the same change; `satisfied` below is a `switch` with
  * an exhaustive `default`, so the build says so.
  */
-type WaitKind = 'process_exit' | 'approval';
-
 /**
  * `process_exit:<pid>` o `approval:<id>` — la forma persistita: una stringa,
  * così la colonna resta una colonna.

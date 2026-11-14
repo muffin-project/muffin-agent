@@ -107,7 +107,7 @@ export async function buildMcpTools(registry: McpRegistry, deps: McpDeps = {}): 
   for (const [server, entry] of Object.entries(registry.servers)) {
     let connection: McpConnection;
     try {
-      connection = await connectFn(server, entry);
+      connection = await connectFn(entry);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       report.push(`mcp:${server} — connessione fallita: ${detail}`);

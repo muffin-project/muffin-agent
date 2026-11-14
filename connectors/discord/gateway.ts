@@ -217,14 +217,12 @@ export class DiscordGateway {
   private stopRequested = false;
   private readonly log: (line: string) => void;
   private readonly stato: (connessa: boolean, causa?: string) => void;
-  private readonly now: () => Date;
   private readonly wsFactory: (url: string) => WebSocketLike;
   private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(private readonly deps: DiscordGatewayDeps) {
     this.log = deps.onLog ?? (() => {});
     this.stato = deps.onStato ?? (() => {});
-    this.now = deps.now ?? (() => new Date());
     this.wsFactory = deps.wsFactory ?? ((url) => new WebSocket(url) as unknown as WebSocketLike);
     this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   }

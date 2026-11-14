@@ -361,7 +361,7 @@ export class JobStore {
   private readonly capStmt: Database.Statement;
 
   constructor(
-    private readonly db: Database.Database,
+    db: Database.Database,
     private readonly clock: () => Date = () => new Date(),
   ) {
     db.exec(SCHEMA);
