@@ -140,6 +140,29 @@ lock is free is a dead process, and a process that opens its own file with plain
 file APIs silently drops its lock. The files of dead processes are swept by the
 next process that claims something.
 
+The gateway claim is one row, `gateway_lock`, created by `core/gateway/lock.ts`.
+That file is the schema. The columns on the current `dev` row are:
+
+| Column | Role |
+|---|---|
+| `id` | Always 1. One claim per home. |
+| `pid` | Process that last acquired the row. Not liveness (ADR-0094). |
+| `taken_at` | Last successful beat. A heartbeat, not uptime. |
+| `since` | When this process acquired. Must not move on a beat. |
+| `status` | What the holder is doing, for `muffin gateway status` and `doctor`. |
+| `holder_id` | Fencing token for this acquisition (ADR-0035, amendment 3). |
+
+[ADR-0106](../decisions/0106-il-gateway-e-un-ruolo.md) adds four columns. They
+are not in the schema until the slice that migrates them: `mode`
+(`persistent` or `ephemeral`, slice 2), `supervisor` (`systemd`, `launchd`,
+`docker`, `external`, or `none`, slice 4), `exited_at` and `exit_reason`
+(written when the process actually leaves, slice 1). A re-acquire after an
+expired lease mints a new `holder_id` and moves `taken_at`. It does not move
+`since`, and it does not revive the old token. An incarnation that is still
+locked does not by itself mean the holder is making progress: a beat older
+than `WATCHDOG_SEC` is "alive but stuck" even though ADR-0094 still calls the
+process alive.
+
 ### G. Replaceable assets — `models/`, copied defaults/persona
 
 These are machine/install assets, not canonical personal knowledge. Their loss

@@ -1,6 +1,6 @@
 # ADR-0081 — Il gateway è l'execution owner quando è vivo
 
-**Stato:** accettato · 2026-09-16 · chiude #533 (research accettata, slice minima verso la baseline).
+**Stato:** accettato · 2026-09-16 · chiude #533 (research accettata, slice minima verso la baseline). Emendato da ADR-0106 (2026-11-14): il punto 1 e il fuori scope «locale-vs-locale» non sono più la regola per `muffin run`; il testo sotto resta.
 
 ## Contesto
 
@@ -79,3 +79,12 @@ osservazione), issue #533, incident 12/09/2026.
 - I finding dell'audit non bloccanti restano post-baseline (Agentic e
   Cognitive Harness), classificati `POST-BASELINE` / `BLOCKS OSS RELEASE`
   dove applicabile.
+
+## Emendamento — ADR-0106 (2026-11-14)
+
+ADR-0106 emenda il punto 1 («né socket né claim → owner locale esplicito») e
+la prima riga del fuori scope («locale-vs-locale»). L'assenza di owner non è
+più un runtime locale per `muffin run`: è un claim `mode=ephemeral` preso da
+quel run, oppure un rifiuto del REPL. Due run concorrenti non sono due owner.
+Il terminale resta cliente quando un owner c'è. Il testo sopra non è stato
+riscritto.

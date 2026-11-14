@@ -111,8 +111,11 @@ export class GatewayLock {
 
   /**
    * One beat: push the horizon out and say what it is doing. False means this
-   * process is no longer the holder — a cue to stop, not an error to swallow,
-   * because the only way it happens is that something took the lock over.
+   * process no longer holds the current token — the lease is past the hard
+   * horizon, or another acquisition owns the row. Those are not the same
+   * event. ADR-0106 slice 1 re-acquires only when nobody else holds the row;
+   * stealing a live holder stays forbidden. Callers must not keep writing
+   * under the old token.
    */
   beat(now: Date, status: string, pid: number = process.pid): boolean {
     return this.lock.refresh(now, pid, () => this.beatInfo.run({ status }));

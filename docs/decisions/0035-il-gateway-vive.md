@@ -1,6 +1,6 @@
 # ADR-0035 — Muffin è un processo che vive, non un comando che invochi
 
-**Contesto.** ADR-0022 aveva già deciso la forma: *"un processo OS per il runtime (**gateway**, loop, memoria, scheduler)"*, con systemd a riavviarlo. Quello che è stato costruito è `setInterval(() => scheduler.tick(), 30_000)` **dentro `cli/repl.ts`**: chiudi la finestra e non gira più niente. Nessun servizio, nessun launchd, nessun `daemon` — verificato. È l'undicesima istanza della famiglia "dichiarato e non connesso" e la più grossa, perché non è un file senza lettore: è la **forma del runtime**.
+**Contesto.** Emendato da ADR-0106 (2026-11-14), Emendamento №7 in coda. Il risveglio oltre l'orizzonte duro, se nessun altro tiene la riga, non è più un'uscita; il gateway è un ruolo, non solo un servizio. Il testo sotto resta. ADR-0022 aveva già deciso la forma: *"un processo OS per il runtime (**gateway**, loop, memoria, scheduler)"*, con systemd a riavviarlo. Quello che è stato costruito è `setInterval(() => scheduler.tick(), 30_000)` **dentro `cli/repl.ts`**: chiudi la finestra e non gira più niente. Nessun servizio, nessun launchd, nessun `daemon` — verificato. È l'undicesima istanza della famiglia "dichiarato e non connesso" e la più grossa, perché non è un file senza lettore: è la **forma del runtime**.
 
 Le conseguenze non sono teoriche, sono misurate. `ingestPending` ha un solo chiamante manuale, quindi la memoria non si riempie: **414 fatti nel vecchio contro 0 nel nuovo** (`research/inventario-vecchio-nuovo.md`). Due clausole della DoD di M5 sono non soddisfatte — il trigger a soglia sul consolidamento, e `observe` che nessuno schedula. E la diagnosi generale sta nei verbi, non nelle intenzioni: **31 dei 95 comandi di Hermes presuppongono un processo che gira** (`heartbeat`, `queue`, `steer`, `pause`, `restart`, `undo`, `handoff`, `compress`); i nostri quattordici sono tutti "fai questo adesso ed esci". Un sistema è continuo se il suo vocabolario lo assume.
 
@@ -303,3 +303,25 @@ test che porta un fire deferred fino al settlement passando per
 `core/turns/lane.ts`, oppure un tetto d'età sul deferred che emetta un evento
 diagnostico. Nessuno dei due prima di avere un caso reale: costruire il tetto
 adesso sarebbe infrastruttura per una possibilità ipotetica.
+
+## Emendamento №7 — ADR-0106 (2026-11-14)
+
+ADR-0106 emenda due punti di questo documento. Il testo sopra non è stato
+riscritto.
+
+**1. Il risveglio, nell'Emendamento №3.** Il paragrafo «Il costo, dichiarato»
+fa uscire un `muffin gateway run` senza supervisore quando `refresh()` fallisce
+oltre l'orizzonte duro, come se qualcuno avesse rubato la riga. Vale ancora
+quando un altro detentore vivo tiene la riga: non si ruba, e non si rinfresca
+il token scaduto (P21 resta). Non vale più quando la riga è libera. Il GO
+dell'owner del 2026-11-14 fa ri-acquisire nello stesso processo, con un
+`holder_id` nuovo, stile etcd/Chubby. `since` non si muove. Il battito che ha
+visto il fallimento non consegna sotto il token vecchio.
+
+**2. «Come si tiene su».** systemd e launchd restano. Si aggiungono `docker`,
+`external` e `none` (quest'ultimo mai di default). `WATCHDOG=1` resta l'unico
+modo in cui systemd vede un processo vivo ma fermo. Dove il supervisore non ha
+quel ping — Docker, un supervisore esterno — la stessa domanda è
+`muffin gateway status` con il battito più vecchio di `WATCHDOG_SEC`, ed è
+un'uscita distinta dal «non c'è un persistente». Docker non riavvia un
+container che non è uscito: la healthcheck uccide solo quel caso.
