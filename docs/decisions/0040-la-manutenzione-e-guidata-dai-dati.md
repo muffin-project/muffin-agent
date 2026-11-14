@@ -250,6 +250,10 @@ nella ricerca). Scrivere un compattatore vorrebbe dire pagare chiamate al modell
 per riempire una tabella che nessun percorso di lettura interroga — cioè il
 difetto di questo repo, ma a pagamento. Prima il lettore, poi lo scrittore.
 
+> **Aggiornamento 2026-11-14.** Le due tabelle non si creano più sulle
+> installazioni nuove. Vedi l'emendamento in coda: non è un consumatore nuovo
+> e non è un `DROP`.
+
 **4. L'audit dei predicati: la metà che rileva c'è già, la metà che propone no.**
 L'invariante `predicate_vocabulary` (soglia 80, calibrata sui 43 predicati / 329
 archi del vecchio) rileva il problema, e il suo stesso testo dice cosa manca — *«il
@@ -372,3 +376,34 @@ $ muffin doctor
 Tre righe di `error` diventano una riga con il conteggio e l'arco temporale;
 `keep` ritira senza cancellare; e la domanda esce dalla lista **perché i fatti
 sono cambiati**, non perché qualcuno abbia scritto uno stato.
+
+---
+
+## Emendamento 2026-11-14 — `profiles` e `digests` non si creano più
+
+Il punto 3 resta: non si inventa un consumatore. La misura ripetuta sul codice
+di questo emendamento è la stessa della decisione — nessun percorso di
+produzione legge o scrive `profiles` o `digests`. Quello che cambia è la
+dichiarazione, non la manutenzione.
+
+Un'installazione nuova non esegue più `CREATE TABLE` per quelle due tabelle
+(`core/memory/schema.ts`, aperto da `MemoryStore`). Un database che le ha già
+non viene migrato e non viene potato: le tabelle restano dov'erano, vuote o
+meno. Non è un `DROP`. Non c'è una riga canonica da spostare, e non c'è una
+ragione per riscrivere il file di chi le ha già.
+
+`adoptOwnerState` continua a cancellare, se la tabella c'è, le righe del tenant
+pre-pairing. La guardia è `hasTable`: senza la tabella l'istruzione non parte
+e l'adozione non fallisce. Non è un lettore del piano derivato. È il confine
+di adozione, che non deve promuovere su `host` un riassunto scritto prima
+dell'autenticazione, se quel riassunto è ancora sul disco.
+
+Il drenaggio, la sweep e il registro non si toccano. Se un lettore vero avrà
+bisogno di un riassunto durevole, nasce dal contratto di quel lettore, non da
+queste due tabelle. [#773](https://github.com/muffin-project/muffin-agent/issues/773)
+chiude `digests`; `profiles` è la stessa forma, non un altro piano.
+
+**Falsificatore.** Un database appena aperto da `MemoryStore` che contiene
+`profiles` o `digests`; oppure un database che le aveva e non le ha più dopo
+un avvio; oppure una riga di quelle tabelle, su un tenant pre-pairing, che
+sopravvive a `adoptOwnerState`.

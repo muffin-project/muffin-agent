@@ -91,9 +91,9 @@ Backups and migration discipline are not optional.
 
 ### Derived representations — rebuild them
 
-Embeddings, vector indexes, FTS indexes, generated profiles, summaries, digests,
-ranking caches and materialized views are useful representations of canonical
-state. They are not the identity of the memory system.
+Embeddings, vector indexes, FTS indexes, summaries, ranking caches and
+materialized views are useful representations of canonical state. They are not
+the identity of the memory system.
 
 A future model or retrieval strategy must be free to discard and regenerate
 these without pretending a person forgot their history.

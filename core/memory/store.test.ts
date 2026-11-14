@@ -606,3 +606,46 @@ describe('markEpisodesUndone — D11, muffin undo\'s memory half', () => {
     expect(s.episodeById(GROUP, groupEp)?.undoneAt).toBeUndefined();
   });
 });
+
+describe('memory schema — profiles and digests are not current tables', () => {
+  it('a fresh store has neither table, and opening an older database leaves them in place', () => {
+    const fresh = new DatabaseCtor(':memory:');
+    const has = (db: typeof fresh, name: string) =>
+      db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name);
+    new MemoryStore(fresh);
+    expect(has(fresh, 'episodes')).toBeDefined();
+    expect(has(fresh, 'profiles')).toBeUndefined();
+    expect(has(fresh, 'digests')).toBeUndefined();
+    fresh.close();
+
+    const older = new DatabaseCtor(':memory:');
+    older.exec(`
+      CREATE TABLE profiles (
+        entity_id INTEGER PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        generated_at TEXT NOT NULL,
+        extraction_v INTEGER NOT NULL
+      );
+      CREATE TABLE digests (
+        id INTEGER PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        text TEXT NOT NULL,
+        covers_from TEXT NOT NULL,
+        covers_to TEXT NOT NULL,
+        generated_at TEXT NOT NULL
+      );
+    `);
+    older.prepare(
+      `INSERT INTO digests(id, tenant_id, scope, text, covers_from, covers_to, generated_at)
+       VALUES (1, 'host', 'day', 'già qui', 'a', 'b', '2026-09-11T10:01:00.000Z')`,
+    ).run();
+    new MemoryStore(older);
+    expect(has(older, 'profiles')).toBeDefined();
+    expect(has(older, 'digests')).toBeDefined();
+    expect((older.prepare(`SELECT text FROM digests WHERE id = 1`).get() as { text: string }).text).toBe('già qui');
+    expect(has(older, 'episodes')).toBeDefined();
+    older.close();
+  });
+});
