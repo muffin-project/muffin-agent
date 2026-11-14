@@ -247,18 +247,19 @@ describe('acceptance · A · installazione e ciclo di vita', () => {
 });
 
 /**
- * A2/A3 · identity + persona reach the real system prompt, and `prompt show`
- * does not describe them from a second, parallel assembly.
+ * A2/A3 · the sealed identity reaches the real system prompt, and `prompt show`
+ * does not describe it from a second, parallel assembly.
  *
  * One install, one real `muffin run` against the fake provider, one real
  * `muffin prompt show` — shared across both rows in `beforeAll` because they
  * are two readings of the *same* evidence (DAY-1 requirement A2 "sa chi è e quali
- * limiti ha" is `identity.md`'s claim, A3 "il comportamento è definito" is
- * `persona.md`'s), not two independent turns. Every marker is read from the
- * files this install actually wrote under `inst.home` — never from
+ * limiti ha" is `identity.md`'s claim, A3 "il comportamento è definito" is the
+ * register rule in that same file, with the long examples in the `voce` skill
+ * and not in the prefix), not two independent turns. Every marker is read from
+ * the files this install actually wrote under `inst.home` — never from
  * `defaults/`, which is only the seed `muffin init` copies from once.
  */
-describe('acceptance · A2/A3 · identity + persona wiring', () => {
+describe('acceptance · A2/A3 · identity wiring', () => {
   let inst: Install;
   /** The real request the fake provider received for the one turn this suite runs. */
   let sent: RecordedRequest;
@@ -266,8 +267,9 @@ describe('acceptance · A2/A3 · identity + persona wiring', () => {
   let shown: string;
 
   const IDENTITY_MARKER = 'Non mi dai ragione per farmi contento.';
-  const PERSONA_MARKER = 'Sono una seconda prospettiva con memoria.';
-  const VOICE_MARKER = 'Niente meta-commentary';
+  const REGISTER_MARKER = 'Il registro segue il momento';
+  /** A line that lives only in the skill body, not in the sealed pact. */
+  const VOICE_EXAMPLE = '15% dei messaggi';
 
   beforeAll(async () => {
     inst = await install({ main: [{ text: 'ciao, sono Muffin' }] });
@@ -306,37 +308,25 @@ describe('acceptance · A2/A3 · identity + persona wiring', () => {
   });
 
   scenario('A3', async () => {
-    const installedPersona = readFileSync(join(inst.home, 'persona.md'), 'utf8');
-    const installedVoice = readFileSync(join(inst.home, 'voice.md'), 'utf8');
-    if (!installedPersona.includes(PERSONA_MARKER)) {
-      throw new Error(`fixture rotta: il persona.md installato non contiene "${PERSONA_MARKER}"`);
+    const installedIdentity = readFileSync(join(inst.home, 'rot', 'identity.md'), 'utf8');
+    const installedSkill = readFileSync(join(inst.home, 'skills', 'voce', 'SKILL.md'), 'utf8');
+    if (!installedIdentity.includes(REGISTER_MARKER)) {
+      throw new Error(`fixture rotta: identity.md non contiene "${REGISTER_MARKER}"`);
     }
-    if (!installedVoice.includes(VOICE_MARKER)) {
-      throw new Error(`fixture rotta: il voice.md installato non contiene "${VOICE_MARKER}"`);
+    if (!installedSkill.includes(VOICE_EXAMPLE)) {
+      throw new Error(`fixture rotta: la skill voce non contiene "${VOICE_EXAMPLE}"`);
     }
-
-    for (const [name, marker] of [
-      ['persona.md', PERSONA_MARKER],
-      ['voice.md', VOICE_MARKER],
-    ] as const) {
-      if (!sent.system.includes(marker)) {
-        throw new Error(`il system prompt inviato al provider non contiene ${name} ("${marker}")`);
-      }
-      if (!shown.includes(marker)) {
-        throw new Error(`muffin prompt show non contiene ${name} ("${marker}")`);
-      }
+    if (!sent.system.includes(REGISTER_MARKER)) {
+      throw new Error(`il system prompt inviato al provider non contiene la regola di registro`);
     }
-
-    // The canonical order (agent/context/assemble.ts buildSystemPromptBlocks):
-    // persona, then identity, then voice.
-    const iPersona = sent.system.indexOf(PERSONA_MARKER);
-    const iIdentity = sent.system.indexOf(IDENTITY_MARKER);
-    const iVoice = sent.system.indexOf(VOICE_MARKER);
-    if (!(iPersona < iIdentity && iIdentity < iVoice)) {
-      throw new Error(
-        `ordine canonico violato — atteso persona < identity < voice, trovato persona@${iPersona} ` +
-          `identity@${iIdentity} voice@${iVoice}`,
-      );
+    if (!shown.includes(REGISTER_MARKER)) {
+      throw new Error(`muffin prompt show non contiene la regola di registro`);
+    }
+    if (!sent.system.includes('voce')) {
+      throw new Error('il catalogo delle skill non nomina voce');
+    }
+    if (sent.system.includes(VOICE_EXAMPLE)) {
+      throw new Error('il corpo della skill voce è nel prefisso: doveva restare on-demand');
     }
 
     // The truthfulness claim `prompt show` exists for: byte-identical to what

@@ -433,6 +433,16 @@ describe('agent loop', () => {
     const { deps: d, store } = deps([], { provider });
     await runTurn(d, input(store));
     expect(provider.seen[0]?.system[0]).toMatchObject({ cache: 'stable' });
+    const last = provider.seen[0]?.messages.at(-1);
+    expect(last?.content.some((block) => block.type === 'text' && block.cache === 'stable')).toBe(true);
+  });
+
+  it('a minimal turn does not send the interactive prefix', async () => {
+    const provider = new ScriptedProvider([answer('ok')]);
+    const { deps: d, store } = deps([], { provider, minimalPrompt: 'SOLO-COMPITO' });
+    await runTurn(d, { ...input(store), promptMode: 'minimal' });
+    expect(provider.seen[0]?.system[0]).toMatchObject({ type: 'text', text: 'SOLO-COMPITO', cache: 'stable' });
+    expect(provider.seen[0]?.system[0]?.type === 'text' && provider.seen[0].system[0].text).not.toBe(d.systemPrompts.owner);
   });
 
   it('carries cache writes to the surface, so a write is distinguishable from no cache', async () => {

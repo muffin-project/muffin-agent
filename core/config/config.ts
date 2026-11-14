@@ -29,12 +29,9 @@ export const CONFIG_SCHEMA_VERSION = 3;
 /**
  * Le versioni del system prompt che questa build sa assemblare.
  *
- * `v1` sono i file che `muffin init` copia in `~/.muffin` — `persona.md`,
- * `voice.md` — con `WORK_RULES`. `v2` sono `defaults/v2/` con `WORK_RULES_V2`:
- * lo stesso carattere, la metà operativa riscritta perché era 603 caratteri
- * contro i 19.609 spesi a dire chi è. Convivono di proposito: v1 resta
- * byte-identico e selezionabile, così il ritorno indietro è un flag e non un
- * ripristino.
+ * Both versions read the same sealed identity. `v1` pairs it with
+ * `WORK_RULES`; `v2` pairs it with `WORK_RULES_V2`. The character files are
+ * not versioned. v1 stays the default, so flipping back is a flag.
  *
  * Prima è il default (`promptVersion` sotto), e l'ordine qui è quello che
  * `muffin prompt version` stampa.

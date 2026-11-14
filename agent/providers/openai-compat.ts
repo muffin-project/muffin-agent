@@ -645,7 +645,12 @@ export class OpenAICompatProvider implements Provider {
             unknown
           >)
         : {}),
-      messages: [this.systemMessage(call), ...compileForOpenAI(call.messages).flatMap((message) => toChatMessages(message, this.reasoningEffort))],
+      messages: [
+        this.systemMessage(call),
+        ...compileForOpenAI(call.messages).flatMap((message) =>
+          toChatMessages(message, this.reasoningEffort, this.explicitCache),
+        ),
+      ],
       ...(call.tools && call.tools.length > 0
         ? {
             tools: call.tools.map((t) => ({
@@ -810,9 +815,35 @@ function flatten(block: ContentBlock): string {
  * produced them"). What would be wrong is dropping them on the *Anthropic*
  * path, which is what ADR-0037 fixed.
  */
-function toChatMessages(message: Message, preserveReasoning: boolean): OpenAI.Chat.ChatCompletionMessageParam[] {
+/**
+ * A string unless a cache breakpoint was asked for. Vanilla servers 400 on
+ * unknown fields, and an array of parts is a different shape from the string
+ * they have always received. Parts only when `explicitCache` is on and a
+ * block is marked: OpenRouter's `cache_control`, same marker as the system
+ * message. Elsewhere the mark is a no-op.
+ */
+function textPayload(
+  message: Message,
+  explicitCache: boolean,
+): string | OpenAI.Chat.ChatCompletionContentPartText[] {
+  const texts = message.content.filter((block) => block.type === 'text');
+  const marked = explicitCache && texts.some((block) => block.cache === 'stable');
+  if (!marked) return texts.map(flatten).join('\n');
+  return texts.map((block) => ({
+    type: 'text' as const,
+    text: block.text,
+    ...(block.cache === 'stable' ? { cache_control: { type: 'ephemeral' as const } } : {}),
+  }));
+}
+
+function toChatMessages(
+  message: Message,
+  preserveReasoning: boolean,
+  explicitCache: boolean,
+): OpenAI.Chat.ChatCompletionMessageParam[] {
   const out: OpenAI.Chat.ChatCompletionMessageParam[] = [];
-  const text = message.content.filter((b) => b.type === 'text').map(flatten).join('\n');
+  const textPayloadValue = textPayload(message, explicitCache);
+  const text = typeof textPayloadValue === 'string' ? textPayloadValue : textPayloadValue.map((part) => part.text).join('\n');
   const toolUses = message.content.filter((b) => b.type === 'tool_use');
   const toolResults = message.content.filter((b) => b.type === 'tool_result');
   const immagini = message.content.filter((b) => b.type === 'image');
@@ -820,9 +851,10 @@ function toChatMessages(message: Message, preserveReasoning: boolean): OpenAI.Ch
 
   if (message.role === 'assistant') {
     const reasoning = preserveReasoning ? message.providerMetadata?.reasoning : undefined;
+    const assistantContent = typeof textPayloadValue === 'string' ? (text.length > 0 ? text : null) : textPayloadValue;
     out.push({
       role: 'assistant',
-      content: text.length > 0 ? text : null,
+      content: assistantContent,
       ...(reasoning?.details !== undefined ? ({ reasoning_details: reasoning.details } as Record<string, unknown>) : {}),
       ...(reasoning?.details === undefined && reasoning?.content !== undefined ? ({ reasoning: reasoning.content } as Record<string, unknown>) : {}),
       ...(toolUses.length > 0
@@ -861,9 +893,15 @@ function toChatMessages(message: Message, preserveReasoning: boolean): OpenAI.Ch
         // immagini ci eravamo dati noi, qui e' anche la loro.
         input_audio: { data: b.data, format: formatoAudio(b.mediaType) },
       })),
-      ...(text.length > 0 ? [{ type: 'text' as const, text }] : []),
+      ...(typeof textPayloadValue === 'string'
+        ? text.length > 0
+          ? [{ type: 'text' as const, text }]
+          : []
+        : textPayloadValue),
     ];
     out.push({ role: 'user', content: parti });
+  } else if (typeof textPayloadValue !== 'string') {
+    if (textPayloadValue.length > 0) out.push({ role: 'user', content: textPayloadValue });
   } else if (text.length > 0) {
     out.push({ role: 'user', content: text });
   }

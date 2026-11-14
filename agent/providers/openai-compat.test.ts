@@ -200,6 +200,23 @@ describe('openai-compat · explicit prompt caching', () => {
     expect(parts[0]?.cache_control).toEqual({ type: 'ephemeral' });
     expect(parts[1]?.cache_control).toBeUndefined();
   });
+
+  it('marks a stable message part on OpenRouter and leaves the same mark off a vanilla server', async () => {
+    const marked = {
+      ...CALL,
+      messages: [{ role: 'user' as const, content: [{ type: 'text' as const, text: 'ciao', cache: 'stable' as const }] }],
+    };
+    const openRouter = harness(true);
+    await openRouter.provider.chat(marked);
+    const user = (openRouter.bodies[0] as Body).messages[1]!;
+    expect(user.content).toEqual([{ type: 'text', text: 'ciao', cache_control: { type: 'ephemeral' } }]);
+
+    const local = harness(false);
+    await local.provider.chat(marked);
+    const plain = (local.bodies[0] as Body).messages[1]!;
+    expect(plain.content).toBe('ciao');
+    expect(JSON.stringify(local.bodies[0])).not.toContain('cache_control');
+  });
 });
 
 /**

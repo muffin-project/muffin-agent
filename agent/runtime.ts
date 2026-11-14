@@ -58,6 +58,7 @@ import { UndoJournal } from '../core/undo/journal.js';
 import { Vault } from '../core/vault/vault.js';
 import {
   buildSystemPromptBlocks,
+  minimalSystemPrompt,
   type IstanzaFacts,
   renderSystemPrompts,
   type SystemPromptBlocks,
@@ -1205,15 +1206,17 @@ export function buildRuntime(
   // blocks first and joined once (`renderSystemPrompts`) so `deps.systemPrompts`
   // and `promptBlocks` below describe the identical assembly rather than two
   // calls that could drift apart.
+  const skillsSection = skillsPromptSection(skillScan.skills, promptNonce(home));
   const promptBlocks = buildSystemPromptBlocks(
     home,
     safeMode !== null,
-    skillsPromptSection(skillScan.skills, promptNonce(home)),
+    skillsSection,
     // La versione viene dalla config e da nient'altro: `muffin prompt version`
     // scrive quel campo e `promptVersion` lo legge, quindi il comando non può
     // annunciare una versione diversa da quella che il turno riceve.
     promptVersion(config),
   );
+  const workRules = promptBlocks.owner.find((block) => block.name === 'work-rules')?.text ?? '';
 
   /**
    * Registrato qui e non con gli altri tool più sopra: le sue fonti — la mappa
@@ -1590,6 +1593,9 @@ export function buildRuntime(
       // stay at zero and recall stays keyword-only for its whole life.
       onTurnEnd: ({ tenant }) => consolidation.notify(tenant),
       systemPrompts: renderSystemPrompts(promptBlocks),
+      // Jobs select this. Same boot, same skill catalogue, same operating
+      // block — without the sealed pact.
+      minimalPrompt: minimalSystemPrompt(safeMode !== null, skillsSection, workRules),
       istanza: leggiIstanza,
       // Il fuso dell'owner, non quello del processo — la stessa lettura di
       // `quietHours` poco sopra, mai una seconda. Vedi `LoopDeps.timeZone`.

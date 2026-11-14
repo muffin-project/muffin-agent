@@ -252,6 +252,10 @@ async function runGoal(
      * legacy — indistinguibile da prima, per dichiarazione del campo stesso.
      */
     contentTaint: fireTaint(job),
+    // A goal job is a task, not a conversation. It does not pay the sealed
+    // pact or the guest posture. Observe/proactive turns stay interactive:
+    // those speak to the owner in the owner's register.
+    promptMode: 'minimal',
     // L'attribuzione della spesa, e non un'etichetta: ogni riga di `spend`
     // che questo turno scrive porta questo id, ed è ciò che il gate qui sopra
     // legge al giro successivo. Toglierla non rompe niente oggi e rende il

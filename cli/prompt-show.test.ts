@@ -139,9 +139,9 @@ describe('muffin prompt show', () => {
 
   it('redacts a secret-shaped string instead of printing it verbatim', () => {
     const home = bootHome();
-    const voice = paths(home).voice;
+    const identity = join(paths(home).rot, 'identity.md');
     const fakeKey = 'sk-ant-api03-thisIsNotARealKeyJustShapedLikeOne1234567890';
-    writeFileSync(voice, `${readFileSync(voice, 'utf8')}\n\nMARCATORE-PRIMA ${fakeKey} MARCATORE-DOPO\n`);
+    writeFileSync(identity, `${readFileSync(identity, 'utf8')}\n\nMARCATORE-PRIMA ${fakeKey} MARCATORE-DOPO\n`);
     const { out, code } = capture(() => cmdPromptShow(home, []));
     expect(code).toBe(0);
     expect(out).not.toContain(fakeKey);
@@ -154,8 +154,8 @@ describe('muffin prompt show', () => {
 
   it('redacts a literal secret:// reference too', () => {
     const home = bootHome();
-    const voice = paths(home).voice;
-    writeFileSync(voice, `${readFileSync(voice, 'utf8')}\n\nMARCATORE-REF secret://provider_api_key MARCATORE-FINE\n`);
+    const identity = join(paths(home).rot, 'identity.md');
+    writeFileSync(identity, `${readFileSync(identity, 'utf8')}\n\nMARCATORE-REF secret://provider_api_key MARCATORE-FINE\n`);
     const { out, code } = capture(() => cmdPromptShow(home, []));
     expect(code).toBe(0);
     expect(out).not.toContain('secret://provider_api_key');
@@ -168,13 +168,11 @@ describe('muffin prompt show', () => {
     const { out, code } = capture(() => cmdPromptShow(home, ['--blocks']));
     expect(code).toBe(0);
 
-    const personaHash = sha256(readFileSync(paths(home).persona)).slice(0, 12);
     const identityHash = sha256(readFileSync(join(paths(home).rot, 'identity.md'))).slice(0, 12);
-    const voiceHash = sha256(readFileSync(paths(home).voice)).slice(0, 12);
 
-    expect(out).toContain(`--- blocco: persona (persona.md, sha256 ${personaHash}) ---`);
     expect(out).toContain(`--- blocco: identity (rot/identity.md, sha256 ${identityHash}) ---`);
-    expect(out).toContain(`--- blocco: voice (voice.md, sha256 ${voiceHash}) ---`);
+    expect(out).not.toContain('blocco: voice');
+    expect(out).not.toContain('blocco: persona (persona.md');
     rmSync(home, { recursive: true, force: true });
   });
 

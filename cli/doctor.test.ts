@@ -1420,8 +1420,7 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
     // just copied them from this very checkout, so every one must read as
     // up-to-date, not merely "present".
     for (const relPath of [
-      'persona.md',
-      'voice.md',
+      'skills/voce/SKILL.md',
       'rot/identity.md',
       'rot/policy.json',
       'rot/egress.json',
@@ -1437,10 +1436,10 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
   it('an owner edit reads as ok — "è suo", never a proposal to overwrite it', async () => {
     const dir = home();
     writeFileSync(
-      paths(dir).persona,
+      join(dir, 'skills', 'voce', 'SKILL.md'),
       "testo scritto a mano dall'owner, non spedito da nessun commit\n",
     );
-    const c = await check(dir, 'default persona.md');
+    const c = await check(dir, 'default skills/voce/SKILL.md');
     expect(c?.level).toBe('ok');
     expect(c?.remedy).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });

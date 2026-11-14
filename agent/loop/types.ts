@@ -617,6 +617,14 @@ export type LoopDeps = {
    */
   systemPrompts: SystemPrompts;
   /**
+   * The prompt a `promptMode: 'minimal'` turn sends instead of
+   * `systemPrompts`. Absent means the loop falls back to the code constant
+   * `minimalSystemPrompt` — still minimal, never the interactive prefix.
+   * Production sets it from the same boot that builds `systemPrompts`, so a
+   * job sees the installation's operating block and skill catalogue.
+   */
+  minimalPrompt?: string;
+  /**
    * I fatti d'istanza di `docs/evidence/orizzonte-del-turno-2026-09-03.md`
    * Parte 0 — `cwd`, il primo livello del workspace, provider, job attivi,
    * RoT — nella **coda volatile** (`ambienteSection`), mai qui accanto a
@@ -913,6 +921,16 @@ export type TurnInput = {
    * attempt.
    */
   onProgress?: ((event: TurnEvent) => void) | undefined;
+  /**
+   * Which system prefix this turn pays for.
+   *
+   * Absent is `interactive`: the owner or group prompt, cache-stable, with
+   * the sealed pact on the owner class. `minimal` is a job, a future
+   * subagent, or any other turn that is a task rather than a conversation.
+   * Memory consolidation does not come through here; its model calls use
+   * their own task prompts (`core/memory/extract.ts`, `judge.ts`, `rerank.ts`).
+   */
+  promptMode?: 'interactive' | 'minimal';
 };
 
 /**

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { PROBES, RUBRIC, type PropertyId } from './probes.js';
+import { PROBES, type PropertyId, RUBRIC } from './probes.js';
 
 describe('character probes — i probe si caricano', () => {
-  it('sono i 17 del mandato owner più i 5 sulle esche plausibili, con id unici', () => {
-    expect(PROBES.length).toBe(22);
+  it('sono i 17 del mandato, le 5 esche, e i 3 sul cambio di registro, con id unici', () => {
+    expect(PROBES.length).toBe(25);
     const ids = PROBES.map((p) => p.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
@@ -73,7 +73,10 @@ describe('character probes — i probe si caricano', () => {
     // è una regola del carattere che nessuna corsa può falsificare.
     const misurate = new Set(PROBES.flatMap((p) => p.properties));
     for (const property of Object.keys(RUBRIC)) {
-      expect(misurate.has(property as PropertyId), `${property} non è misurata da nessun probe`).toBe(true);
+      expect(
+        misurate.has(property as PropertyId),
+        `${property} non è misurata da nessun probe`,
+      ).toBe(true);
     }
   });
 
@@ -91,6 +94,19 @@ describe('character probes — i probe si caricano', () => {
       'out-of-reach-limit',
     ]) {
       expect(ids).toContain(id);
+    }
+  });
+
+  it('il cambio di registro è misurato tre volte: verso lo scherzo, verso il lavoro, verso un momento emotivo', () => {
+    const byId = new Map(PROBES.map((probe) => [probe.id, probe]));
+    for (const id of [
+      'register-switch-to-banter',
+      'register-switch-to-work',
+      'register-emotional-attunement',
+    ]) {
+      const probe = byId.get(id);
+      expect(probe, id).toBeDefined();
+      expect(probe?.properties).toContain('contextual_register');
     }
   });
 

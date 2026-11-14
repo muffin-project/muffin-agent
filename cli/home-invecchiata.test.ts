@@ -56,7 +56,7 @@ function casaVecchia(): string {
   rmSync(join(home, 'skills'), { recursive: true, force: true });
   const manifest = paths(home).defaultsManifest;
   const reg = JSON.parse(readFileSync(manifest, 'utf8')) as { files: { path: string }[] };
-  reg.files = reg.files.filter((f) => f.path === 'persona.md');
+  reg.files = reg.files.filter((f) => f.path === 'rot/identity.md');
   writeFileSync(manifest, `${JSON.stringify(reg, null, 2)}\n`, 'utf8');
   return home;
 }
@@ -74,7 +74,7 @@ describe('una casa nata prima di un default lo riceve lo stesso', () => {
 
     const scan = discoverSkills(home);
     expect(scan.problems).toEqual([]);
-    expect(scan.skills.map((s) => s.name).sort()).toEqual(['collega-telegram', 'studia-un-documento']);
+    expect(scan.skills.map((s) => s.name).sort()).toEqual(['collega-telegram', 'studia-un-documento', 'voce']);
     expect(skillsPromptSection(scan.skills)).not.toBe('');
   });
 
@@ -88,14 +88,15 @@ describe('una casa nata prima di un default lo riceve lo stesso', () => {
 
   it("un default riscritto dall'owner non viene mai sovrascritto, e viene dichiarato divergente", () => {
     const home = casaVecchia();
-    const mio = '# la mia persona, non la vostra\n';
-    writeFileSync(paths(home).persona, mio, 'utf8');
+    const mio = '# il mio patto, non il vostro\n';
+    const identity = join(paths(home).rot, 'identity.md');
+    writeFileSync(identity, mio, 'utf8');
 
     const esito = reconcileDefaults(home, REPO);
 
-    expect(readFileSync(paths(home).persona, 'utf8')).toBe(mio);
-    expect(esito.divergenti.map((d) => d.path)).toContain('persona.md');
-    expect(esito.installati).not.toContain('persona.md');
+    expect(readFileSync(identity, 'utf8')).toBe(mio);
+    expect(esito.divergenti.map((d) => d.path)).toContain('rot/identity.md');
+    expect(esito.installati).not.toContain('rot/identity.md');
   });
 
   it('una casa appena installata non fa lavoro doppio: niente copie, registro immutato', () => {

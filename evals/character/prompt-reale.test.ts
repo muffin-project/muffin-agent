@@ -67,12 +67,10 @@ describe("il prompt che l'eval manda è l'assemblaggio di produzione", () => {
       expect(inviato).toBe(atteso);
 
       // E l'ordine canonico, dichiarato qui perché è ciò che il metro misura:
-      // spostare `voice` prima di `persona` cambierebbe il carattere senza
-      // cambiare nessun byte dei file.
+      // l'identità sigillata, poi il catalogo, poi le regole. Gli esempi di
+      // voce non sono un blocco: stanno nella skill `voce`.
       expect(runtime.promptBlocks.owner.map((b) => b.name)).toEqual([
-        'persona',
         'identity',
-        'voice',
         'skills',
         'work-rules',
         'safe-mode',

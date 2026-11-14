@@ -263,12 +263,10 @@ describe('the owner-class prompt does not move', () => {
     // Ri-fissato 2026-10-18 (docs-hygiene, PR #921): la persona non dichiara
     // più «worker» — nessun meccanismo lo sostiene; la sola differenza nella
     // stringa assemblata è quella parola.
-    // Ri-fissato 2026-10-19 (G2 carattere): persona.md e voice.md dicono che
-    // Muffin non è un coach/terapeuta, non costruisce framework o piani
-    // d'azione, ride con l'owner e non tratta un «hey» come un ticket. È un
-    // cold-start deliberato della cache: una volta, non a ogni turno.
-    // Pin precedente: `7e98f233b3da23b3d5c03513b73d337f10b6032d78636a7352ff955afb7c4d95`.
-    '968d931d68a71a1344f4891fd80710319eceb215fe75806be3df6a688d5a37d8';
+    // Ri-fissato 2026-11-14 (ADR-0106): un solo patto sigillato, gli esempi di
+    // voce escono dal prefisso. Cold-start deliberato della cache.
+    // Pin precedente: `968d931d68a71a1344f4891fd80710319eceb215fe75806be3df6a688d5a37d8`.
+    '00a316f7449594155d281b599d27c7d6ae0002e285f2a9355e095014408d0d0b';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
@@ -382,10 +380,10 @@ describe('the owner-class prompt does not move', () => {
    * `63c6590ed366dbb44d9e2a5ce2b018f9f0ffe3993ec5ea34d555c46cddf0b3f4`.
    */
   // #529: the same scoped-work rule reaches owner and group prompts.
-  // Ri-fissato 2026-10-19 (G2 carattere): voice.md dà alla stanza i divieti
-  // espliciti (coach, terapeuta, framework) e «rido con te, non di te».
-  // Pin precedente: `ef99d12c6473eae61ff40ab5b2eaeb87b9644b95ecd54487bb7fa1b0f411275e`.
-  const GROUP_PROMPT_SHA_V1 = '40b3537705a3166a4881b573e8d3130cf39192367989554bda100a045cf2d1ae';
+  // Ri-fissato 2026-11-14 (ADR-0106): l'etichetta di gruppo sta in GROUP_PERSONA,
+  // non in voice.md. Pin precedente:
+  // `40b3537705a3166a4881b573e8d3130cf39192367989554bda100a045cf2d1ae`.
+  const GROUP_PROMPT_SHA_V1 = '86f2fc7b1879c3113ad9e031af9d8a341872bcedd6803073f7b39e10aa9c5293';
 
   /**
    * Ri-fissato 2026-10-10: la regola sull'esposizione progressiva chiarisce
@@ -478,84 +476,39 @@ describe('quale versione del prompt assembla questa installazione', () => {
     }
   });
 
-  it("v2 legge la copia spedita quando la home non ce l'ha ancora, e sono lo stesso testo", () => {
-    // L'installazione su cui questa fetta va provata è **già fatta**: `muffin
-    // init` è passato mesi fa e `~/.muffin/v2/` non esiste. Se v2 sapesse
-    // leggere solo la home, la manopola sarebbe girabile e non avrebbe niente
-    // da montare — un difetto che si vede soltanto su una casa vecchia.
-    const vecchia = mkdtempSync(join(tmpdir(), 'muffin-assemble-vecchia-'));
-    runInit({ home: vecchia, apiKey: 'sk-assemble-never-called' });
-    rmSync(join(vecchia, 'v2'), { recursive: true, force: true });
-    expect(existsSync(join(vecchia, 'v2', 'persona.md'))).toBe(false);
-
-    const daSpedito = renderSystemPrompts(buildSystemPromptBlocks(vecchia, false, '', 'v2'));
-    expect(daSpedito.owner).toContain('## Quando il risultato è incerto');
-    // E la provenienza è dichiarata, non silenziosa: chi guarda `--blocks` deve
-    // vedere che sta leggendo il pacchetto e non la sua home.
-    const blocchi = buildSystemPromptBlocks(vecchia, false, '', 'v2');
-    expect(blocchi.owner.find((b) => b.name === 'persona')?.source).toContain('spedito');
-
-    // Stessa home dopo un init che la ripopola: stesso testo, sorgente diversa.
-    runInit({ home: vecchia, apiKey: 'sk-assemble-never-called' });
-    const daCasa = buildSystemPromptBlocks(vecchia, false, '', 'v2');
-    expect(daCasa.owner.find((b) => b.name === 'persona')?.source).toBe('v2/persona.md');
-    expect(renderSystemPrompts(daCasa).owner).toBe(daSpedito.owner);
+  it('v1 e v2 leggono la stessa identità sigillata e divergono solo sul blocco operativo', () => {
+    const home = bootHome();
+    const v1 = buildSystemPromptBlocks(home, false, '', 'v1');
+    const v2 = buildSystemPromptBlocks(home, false, '', 'v2');
+    expect(v1.owner.find((b) => b.name === 'identity')?.text).toBe(v2.owner.find((b) => b.name === 'identity')?.text);
+    expect(v1.owner.find((b) => b.name === 'identity')?.source).toBe('rot/identity.md');
+    expect(v1.owner.map((b) => b.name)).not.toContain('persona');
+    expect(v1.owner.map((b) => b.name)).not.toContain('voice');
+    expect(v2.owner.find((b) => b.name === 'work-rules')?.source).toContain('WORK_RULES_V2');
+    expect(renderSystemPrompts(v2).owner).toContain('## Quando il risultato è incerto');
+    expect(renderSystemPrompts(v1).owner).not.toContain('## Quando il risultato è incerto');
   });
 
-  it('la metà operativa smette di essere un trentaduesimo del carattere', () => {
-    // La misura che ha motivato la fetta, tenuta come test perché è la sola
-    // affermazione strutturale che v2 fa: non «è scritto meglio» — quello lo
-    // decide l'owner leggendo — ma «esiste».
+  it('il carattere non è più la parte grossa del prefisso', () => {
+    // Era l'affermazione opposta: v1 spendeva il prefisso sul carattere
+    // (rapporto > 8 fra i tre file e le regole). Quel rapporto è il difetto
+    // che ADR-0106 chiude. Qui resta solo: le due versioni condividono
+    // l'identità, e v2 è il blocco operativo più lungo, non un secondo carattere.
     const home = bootHome();
     const conta = (v: PromptVersion) => {
       const b = buildSystemPromptBlocks(home, false, '', v);
       const testo = (nome: string) => b.owner.find((x) => x.name === nome)?.text.length ?? 0;
       return {
-        chiSei: testo('persona') + testo('identity') + testo('voice'),
+        chiSei: testo('identity'),
         comeLavori: testo('work-rules'),
       };
     };
     const v1 = conta('v1');
     const v2 = conta('v2');
-    // Era `> 20` fino al 2026-09-03, poi `> 15`: la riga sul recinto aveva
-    // portato il rapporto v1 da 23,35 a 17,07 (19.335 / 1.133).
-    // Ri-misurato 2026-09-06 (`slice/d13-tool-prima-della-shell`, DAY-1 D13):
-    // la riga sull'ordine tool-poi-shell aggiunge testo a `WORK_RULES`
-    // (1.133 → 1.488 caratteri) e porta il rapporto a 12,99 (19.335 / 1.488).
-    // Ri-misurato di nuovo 2026-09-07 (D13, remeasurement dopo #457/ADR-0074):
-    // la stessa riga corregge "sys.shell chiede sempre" (falso dopo la
-    // separazione in due tool) e aggiunge la clausola sui tool MCP caricati
-    // (1.488 → 1.715 caratteri), rapporto 11,27 (19.335 / 1.715).
-    // `chiSei` non è cambiato: `persona.md`/`identity.md`/`voice.md` restano
-    // gli stessi file. La soglia scende con la misura invece di essere
-    // aggirata, e l'affermazione che il test fa — v1 è pesantemente carattere,
-    // v2 no — regge identica: 11,27 contro il `< 8` di v2 sotto, che è la
-    // riga che porta il peso.
-    // Ri-misurato 2026-09-08 (DAY-1 cutover, «dimentica X»): la stessa riga
-    // nomina `memory_forget` come la porta per dimenticare, mai shell/sqlite —
-    // il difetto misurato in REPL viva quel giorno — (1.715 → 1.858 caratteri),
-    // rapporto 10,41 (19.335 / 1.858). Stessa regola: la soglia scende con la
-    // misura, e v1 resta pesantemente carattere contro il `< 8` di v2.
-    // Ri-misurato 2026-09-17 (`slice/prompt-action-grounding`): la riga sul
-    // resoconto fondato sulle chiamate visibili (1.858 → 2.031 caratteri),
-    // rapporto 9,52 (19.335 / 2.031). Stessa regola ancora: v1 resta
-    // pesantemente carattere contro il `< 8` di v2, che è la riga che porta
-    // il peso dell'affermazione.
-    // Ri-misurato 2026-09-22 (ADR-0091, #645): la riga tool-poi-shell torna a
-    // dire che la shell chiede — entrambe le corsie chiedono il sì (la misura
-    // Linux del giorno: disclosure non ha undo) — e accorcia la riga (2.031 →
-    // 2.022), rapporto v1 9,57 (19.341 / 2.022) e v2 4,32 (17.301 / 4.001).
-    // Soglie invariate: la misura regge, non è stata abbassata.
-    // Ri-misurato 2026-09-30 (`slice/plan-stale-no-autoresume`): la riga «un
-    // messaggio nuovo apre lavoro nuovo» aggiunge testo a `WORK_RULES`
-    // (2.022 → ~2.192 caratteri), rapporto v1 8,89 (19.341 / ~2.192). Stessa
-    // regola: la soglia scende con la misura, e v1 resta pesantemente
-    // carattere contro il `< 8` di v2 — che è la riga che porta il peso
-    // dell'affermazione.
-    expect(v1.chiSei / v1.comeLavori).toBeGreaterThan(8.3);
-    expect(v2.chiSei / v2.comeLavori).toBeLessThan(8);
-    // E il prompt non è cresciuto per farlo: il peso si è spostato.
-    expect(v2.chiSei + v2.comeLavori).toBeLessThan((v1.chiSei + v1.comeLavori) * 1.02);
+    expect(v1.chiSei).toBe(v2.chiSei);
+    expect(v1.chiSei).toBeGreaterThan(0);
+    expect(v1.chiSei).toBeLessThan(4000);
+    expect(v2.comeLavori).toBeGreaterThan(v1.comeLavori);
   });
 });
 
@@ -608,13 +561,13 @@ describe('what a group turn is allowed to be told', () => {
     const runtime = boot(bootHome());
     try {
       const { owner, group } = runtime.deps.systemPrompts;
-      expect(owner).toContain('Sono una seconda prospettiva con memoria.');
-      expect(owner).toContain('Mi importa della persona con cui vivo nel tempo');
-      expect(owner).toContain('Il mio humour è secco, spontaneo e affettuoso.');
+      expect(owner).toContain('Sei una seconda prospettiva con memoria');
+      expect(owner).toContain('La familiarità non è authority');
+      expect(owner).toContain('Non mi dai ragione per farmi contento');
 
       expect(group).not.toContain('seconda prospettiva con memoria');
-      expect(group).not.toContain('Mi importa della persona con cui vivo nel tempo');
-      expect(group).not.toContain('Il mio humour è secco, spontaneo e affettuoso');
+      expect(group).not.toContain('La familiarità non è authority');
+      expect(group).not.toContain('Non mi dai ragione per farmi contento');
     } finally {
       runtime.close();
     }
@@ -642,29 +595,18 @@ describe('what a group turn is allowed to be told', () => {
     }
   });
 
-  it('reuses the voice file rather than growing a second one for groups', () => {
+  it('keeps group etiquette in the guest posture, not in a second voice file', () => {
     const home = bootHome();
     const runtime = boot(home);
     try {
       const { group } = runtime.deps.systemPrompts;
-      // `voice.md` already knows how to behave in a group, and it is the file
-      // whose staleness this repo has already paid for once — shipped, then
-      // opened by nobody for months. A separate group voice would recreate
-      // exactly that: two files, one of them rarely read.
-      expect(group).toContain('Quando parlo in gruppo');
+      expect(group).toContain('In gruppo occupo meno spazio che in privato');
       expect(group).toContain('🧁 è ancora più raro in gruppo');
-      // Byte-identical in both classes, not merely present in both — chiesto ai
-      // blocchi e non a una fetta della stringa resa. Ritagliare da `# Voce`
-      // fino a `## Come lavori` presupponeva che nulla si inserisse fra i due,
-      // e il catalogo delle skill si è inserito lì: il test è andato rosso
-      // mentre la proprietà che afferma era ancora vera. Il confronto fra i
-      // blocchi nominati dice la stessa cosa e non si rompe quando l'assemblaggio
-      // ne guadagna uno.
+      expect(group).toContain('Il registro segue il momento');
       const blocchi = buildSystemPromptBlocks(home, false);
-      const voceOwner = blocchi.owner.find((b) => b.name === 'voice')?.text;
-      const voceGruppo = blocchi.group.find((b) => b.name === 'voice')?.text;
-      expect(voceOwner).toBeTruthy();
-      expect(voceGruppo).toBe(voceOwner);
+      expect(blocchi.owner.find((b) => b.name === 'voice')).toBeUndefined();
+      expect(blocchi.group.find((b) => b.name === 'voice')).toBeUndefined();
+      expect(blocchi.group.find((b) => b.name === 'identity')).toBeUndefined();
     } finally {
       runtime.close();
     }
@@ -708,7 +650,7 @@ describe('what a group turn is allowed to be told', () => {
       }
       // Form rules apply everywhere: a second voice for groups is how the two
       // drift, and drift in this file is measured in emoji thresholds.
-      expect(group).toContain('Niente azioni simulate');
+      expect(group).toContain('deve esserci evidenza');
     } finally {
       runtime.close();
     }
@@ -832,8 +774,12 @@ describe('i pavimenti che la stanza riceve solo da voice.md', () => {
       // board. The plan no longer rides along (ADR-0104); this is the other
       // half — the reply itself should sound like a friend, not a queue.
       expect(owner).toMatch(/Se\s+mi\s+scrivi\s+solo\s+«hey»/);
-      expect(owner).toMatch(/non\s+apro\s+un\s+ticket/);
-      expect(owner).toMatch(/non\s+tiro\s+fuori\s+un\s+piano/);
+      expect(owner).toMatch(/non\s+apri\s+un\s+ticket/);
+      expect(owner).toMatch(/non\s+tiri\s+fuori\s+un\s+piano/);
+      expect(owner).toMatch(/Il registro segue il momento/);
+      expect(owner).toMatch(/Lavoro resta lavoro/);
+      expect(owner).toMatch(/Lo scherzo si risponde con lo scherzo/);
+      expect(owner).toMatch(/Un momento emotivo chiede sintonia/);
     });
 
     it(`${versione}: e continua a non ricevere niente del patto dell'owner`, () => {

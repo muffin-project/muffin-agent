@@ -7,7 +7,7 @@ import { parseArgs } from 'node:util';
  * Voice is observable: emoji, length, how it opens and closes, the phrases it
  * reaches for. Character is not — how it behaves when it has to disagree with
  * you is nowhere in a frequency table, which is why identity.md stays the
- * owner's to write and this only ever feeds voice.md.
+ * owner's to write and this only ever feeds the `voce` skill, not the sealed pact.
  *
  * It measures and shows; it does not decide. A June audit of the old system
  * found the voice solid but drifting — a 🧠 tic, a fixed template on morning
@@ -96,7 +96,7 @@ if (filtered > 0) {
   say('_template mattutino): non sono voce, e lasciati dentro dominano ogni conteggio._');
 }
 say('');
-say('_Materiale da curare, non da copiare. Quello che riconosci come voce va in `voice.md`;_');
+say('_Materiale da curare, non da copiare. Quello che riconosci come voce va nella skill `voce`;_');
 say('_quello che riconosci come deriva si lascia qui._');
 say('');
 
@@ -143,7 +143,7 @@ for (const [emoji, n] of emojiRanked) {
 }
 say('');
 if (overThreshold.length > 0) {
-  say(`**Deriva**: ${overThreshold.join(', ')} — \`voice.md\` dice che nessuna emoji supera il ${maxShare}%.`);
+  say(`**Deriva**: ${overThreshold.join(', ')} — la skill \`voce\` dice che nessuna emoji supera il ${maxShare}%.`);
   say('');
 }
 

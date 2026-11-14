@@ -635,9 +635,9 @@ export async function runDoctor(
   // edited by the owner, agent/context/assemble.ts), but because nothing
   // before this told the owner their copy had fallen behind. Measured on the
   // owner's own machine (docs/evidence/deriva-defaults-2026-08-26.md):
-  // persona.md, voice.md and rot/identity.md sat at their `init`-day content
-  // for weeks — the assembled prompt was half the size HEAD ships — and
-  // nothing anywhere said so. See defaultsDriftCheck below for the two
+  // shipped files sat at their `init`-day content for weeks and nothing said
+  // so. persona.md and voice.md are no longer prompt sources (ADR-0106); the
+  // sealed identity and the skills still are. See defaultsDriftCheck below for the two
   // opposite verdicts this can reach and why they must never be confused.
   const moduleDir = dirname(fileURLToPath(import.meta.url));
   const checkoutRoot =
@@ -647,7 +647,7 @@ export async function runDoctor(
     warn(
       'defaults',
       "nessun registro d'installazione (installazione precedente a questa funzione) e nessun checkout Git leggibile — " +
-        "non so dire se persona.md, voice.md o i default dentro rot/ sono stati aggiornati dall'owner o sono rimasti al giorno di `init`",
+        "non so dire se i default dentro rot/ o le skill sono stati aggiornati dall'owner o sono rimasti al giorno di `init`",
       'esegui da un checkout Git di questo repository per un confronto affidabile',
     );
   } else {

@@ -145,6 +145,11 @@ export type DriveOptions = {
    * l'indirizzo dove mandare la risposta.
    */
   steer?: (() => string[]) | undefined;
+  /**
+   * Fresh turns only. A resumed job does not need it: `jobId` on the record
+   * is enough to keep the minimal prefix. A future subagent sets it here.
+   */
+  promptMode?: 'interactive' | 'minimal';
 };
 
 /**
@@ -246,6 +251,10 @@ async function runClaimedTurn(
     // a QUEL job» ha misurato prima che questa riga esistesse; passare dal
     // record è anche ciò che fa sopravvivere l'attribuzione a una ripresa.
     ...(record.jobId === null ? {} : { jobId: record.jobId }),
+    // A job stays minimal across a resume, because the record still has
+    // `jobId` and this object is rebuilt from the record, not from the
+    // caller's TurnInput. A fresh non-job turn opts in through DriveOptions.
+    promptMode: record.jobId !== null || options.promptMode === 'minimal' ? 'minimal' : 'interactive',
     ...(record.replyTo === null ? {} : { replyTo: record.replyTo }),
     ...(options.replyChannel !== undefined ? { replyChannel: options.replyChannel } : {}),
     ...(options.onDelta ? { onDelta: options.onDelta } : {}),
