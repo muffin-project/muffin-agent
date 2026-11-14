@@ -183,6 +183,8 @@ La forma non è un middleware sul client HTTP: il posto è **il job**. `core/sch
 
 `DurableLock.refresh()` — il battito di un detentore di lunga vita — ora controlla lo stesso orizzonte che `heldBy` usa, prima di spingere avanti `taken_at`: è la correzione di P21. Prima, un gateway che si risvegliava oltre l'orizzonte poteva rifare il battito come se niente fosse, anche se ogni altro lettore (la REPL, tramite `readGateway`) lo aveva già giudicato assente — risorgendo una rivendicazione che il resto del sistema considerava già chiusa. Ora `refresh()` fallisce nello stesso istante in cui un lettore esterno avrebbe giudicato il claim scaduto: lettore e detentore condividono la stessa regola, non due regole che possono disaccordare esattamente attorno a un risveglio.
 
+> **Età del battito, decisa il 2026-11-14 e non scritta qui.** La sottrazione `nowMs - takenAt` resta la regola finché non arriva l'emendamento. L'owner ha scelto l'opzione E come emendamento CRITICAL a parte di ADR-0094, riferito anche dall'Emendamento №7: la morte resta l'incarnazione; l'età di `heldBy` e di `refresh` viene da `process.hrtime` dentro lo stesso boot, su colonne nullable `beat_boot` e `beat_mono_ms`; le righe vecchie, con le colonne nulle, restano su questa regola; l'orologio di parete serve solo al display. Su Linux il tempo in sospensione non entra nell'età (`CLOCK_MONOTONIC`). Su macOS l'id di boot è `sysctl kern.bootsessionuuid`, letto una volta, non `kern.boottime`; la lettura va verificata sul Mac dell'owner, dove il sonno conta. Si scrive dopo le slice 1–3 di ADR-0106 e prima della slice 4. Il testo dell'emendamento non è questa PR. `beat_boot` è l'id del boot, non l'ora di avvio del processo scartata nel paragrafo «PID reuse» più sotto. Il fencing del paragrafo sopra resta: ogni scrittura successiva sulla riga riporta `holder_id`, e `changes === 0` vuol dire che la rivendicazione non c'è più.
+
 Sopra la primitiva, `Scheduler`/`TurnLane` prendono un nuovo `stillOwner` — una lettura fresca e non cache di "è ancora la mia rivendicazione, adesso" (`GatewayLock.isCurrentClaim`) — riverificato nello stesso punto in cui `ModelLane.take` già serializza: prima che un job/turno parta, e per lo scheduler di nuovo prima della consegna. `standDown` da solo non bastava: risponde "esiste un ALTRO gateway", ed è sempre `() => false` per lo scheduler del gateway stesso — nessuna protezione contro un furto della **propria** rivendicazione a metà di un giro lungo. `cli/gateway.ts` collega entrambe le corsie allo stesso `GatewayLock`.
 
 **PID reuse.** Non si legge l'ora di avvio del processo: non esiste un modo portabile ed economico in Node senza un modulo nativo o un sottoprocesso ad ogni controllo di liveness (`ps -o lstart=` su macOS, `/proc/<pid>/stat` su Linux, niente su Windows) — esattamente la dipendenza che PRACTICES §2 dice di togliere invece di presumere quando la sonda non si può eseguire economicamente. Un `holder_id` locale al detentore risolve la stessa domanda — "è la stessa acquisizione, non solo lo stesso numero di pid" — senza dover sapere niente del sistema operativo, ed è altrettanto forte quanto un contatore di generazione monotono, senza una seconda colonna da incrementare nella stessa transazione della prima.
@@ -318,13 +320,25 @@ dell'owner del 2026-11-14 fa ri-acquisire nello stesso processo, con un
 `holder_id` nuovo (`mintHolderId`, non `GatewayLock.claim`), stile etcd/Chubby.
 `since` non si muove. Il run già in volo finisce: non si abortisce e non si
 rimanda al modello. Il `drain`, se c'è un altro detentore, sta fuori dalla
-transazione di scrittura.
+transazione del conio. La scrittura di status è il punto 2, ed è recintata
+da `holder_id`.
 
 **2. «Come si tiene su».** systemd e launchd restano. Si aggiungono `docker`,
 `external` e `none` (quest'ultimo mai di default). `WATCHDOG=1` resta il modo
 in cui systemd vede un processo vivo ma fermo, ed è un timer diverso da
 `taken_at`. Dove il supervisore non ha quel ping — Docker, un supervisore
 esterno — la stessa domanda è `muffin gateway status` uscita 2: incarnazione
-tenuta, battito più vecchio di `WATCHDOG_SEC`, e non in drenaggio. Il
-drenaggio scrive `status = drenaggio` senza muovere `taken_at`. Docker non
-riavvia un container che non è uscito: la healthcheck uccide solo l'uscita 2.
+tenuta, età del battito come la calcola `heldBy` maggiore di `WATCHDOG_SEC`,
+e non in drenaggio. L'età non è il confronto grezzo fra il valore di
+`taken_at` e `WATCHDOG_SEC`. Entrando in drenaggio, prima dell'attesa e prima
+di `release`, una scrittura sola: `UPDATE gateway_lock SET status = 'drenaggio' WHERE id = 1 AND holder_id = <token di questa istanza>`.
+`taken_at` resta dov'è. La scrittura non consulta `heldBy`. Saltare `heldBy`
+lascia il `holder_id` al suo posto: l'Emendamento №3 impone a ogni scrittura
+successiva sulla riga di riportarlo, e `changes === 0` vuol dire che la
+rivendicazione non c'è più. `changes === 0` non pubblica `drenaggio` sul
+nuovo detentore. Un drenaggio più lungo di `WATCHDOG_SEC` non è uscita 2.
+Docker non riavvia un container che non è uscito: la healthcheck uccide solo
+l'uscita 2. L'età di parete che l'Emendamento №3 lascia a `heldBy` è il buco
+già in `durable.ts`. La correzione di radice è l'opzione E, l'emendamento
+CRITICAL di ADR-0094 nominato nel rimando dell'Emendamento №3, dopo le slice
+1–3 di ADR-0106 e prima della slice 4. Il testo non è questa PR.

@@ -9,7 +9,9 @@ sostituisce. Amenda ADR-0103 (primo punto della Decisione, e il Falsificatore),
 ADR-0081 (punto 1, owner locale, e il fuori scope «locale-vs-locale») e
 ADR-0035 (Emendamento №3, il risveglio oltre l'orizzonte duro; «Come si tiene
 su», i supervisori). Il testo di quegli ADR non è riscritto: il rimando sta
-in coda a ciascuno.
+in coda a ciascuno. L'emendamento CRITICAL di ADR-0094 sull'età del battito
+è deciso e calendarizzato (dopo le slice 1–3, prima della slice 4). Il file
+di ADR-0094 non cambia qui.
 
 Numero: **0106 è libero** su ogni ramo remoto al 2026-11-14 (nessun file
 `0106-`). `docs/decisions/prossimo-numero.mjs` stampa `0108`, perché dà il
@@ -166,9 +168,14 @@ aspetta il turno.
    confronta la riga con il `myHolderId` di questa istanza. Lasciarlo com'è
    tiene `stillOwner()` falso, e la consegna resta recintata. Il log nomina chi
    tiene la riga, non «presa da un altro processo» quando la riga è vuota. Si
-   esce dalla transazione, e solo dopo si drena, fuori da ogni scrittura, e
-   si esce 0 come `drain('lock')` fa già. Il supervisore riprova e il
-   perdente esce 75. Non si consegna.
+   esce dalla transazione, e solo dopo si drena. L'unica scrittura di quel
+   drenaggio sul lock è l'update recintato di `status` descritto in «Vivo ma
+   fermo», prima dell'attesa e prima di `release`. Il predicato è il
+   `holder_id` di questa istanza. `taken_at` resta dov'è. La scrittura non
+   consulta `heldBy`. `changes === 0` lascia lo status del nuovo detentore
+   com'è: non si pubblica `drenaggio` sulla sua riga. Si esce 0 come
+   `drain('lock')` fa già. Il supervisore riprova e il perdente esce 75. Non
+   si consegna.
 3. Se non nomina nessuno, nella stessa transazione immediata si chiama
    `mintHolderId` con la stessa incarnazione e si scrive quel valore sulla riga
    e in `myHolderId`, come fa `acquire` dopo un conio riuscito. Così il
@@ -195,16 +202,58 @@ i lettori non l'avessero già giudicato assente. La ri-acquisizione perde la
 corsa se nel frattempo un altro `acquire` ha vinto.
 
 Un passo d'orologio in avanti, più largo dell'orizzonte duro, fa fallire
-`refresh` come il risveglio. Oggi quel salto rilascia la riga (`drain('lock')`).
-La ri-acquisizione invece timbra `taken_at` con lo stesso `now` spostato e
-resta. Un passo indietro successivo lascia `taken_at` nel futuro. `heldBy`
-tratta un `taken_at` futuro come senza scadenza: `now - takenAt` è negativo e
-non supera l'orizzonte (`core/lock/durable.ts`, la nota su R4/R6). Quella nota
-rifiuta di inventare una tolleranza: è una scelta dell'owner. Il caso del
-2026-11-04 non è questo — orologio giusto, `taken_at` vecchio, pid null,
-nessun altro detentore. Un sonno e un passo in avanti si somigliano su un
-orologio solo; l'esposizione nuova è il timbro che sopravvive al passo
-indietro. La tolleranza non si sceglie qui. Sta in «Non deciso qui».
+`refresh` come il risveglio. La ri-acquisizione timbra `taken_at` con lo
+stesso `now` spostato e resta. Un passo indietro successivo lascia
+`taken_at` nel futuro. Lo stesso timbro c'è già su `dev` @ `7064bec1`, senza
+ri-acquisizione: un passo avanti dentro l'orizzonte duro fa scrivere
+`taken_at` da `refresh`, e il passo indietro lo lascia avanti rispetto a
+`now`. `heldBy` calcola l'età come `nowMs - takenAt` (`core/lock/durable.ts`,
+la nota su R4/R6): un valore futuro rende la differenza negativa, e la riga
+non scade. Un gateway che continua a battere riscrive `taken_at` al battito
+successivo. Un detentore morto lo libera il lock di incarnazione di
+ADR-0094, prima del confronto sull'orologio. Resta esposto un detentore vivo
+ma fermo, o il ripiego sul pid, in ritardo pari al salto. Il buco precede
+questa ADR. La decisione è «Il buco dell'orologio». Il caso del 2026-11-04
+ha l'orologio giusto, `taken_at` vecchio, pid null, nessun altro detentore.
+
+### Il buco dell'orologio
+
+Decisione dell'owner, 2026-11-14. Chiude la voce che stava in «Non deciso qui»
+e il falsificatore (e).
+
+Un passo avanti, una ri-acquisizione e un passo indietro lasciano `taken_at`
+nel futuro. Lo stesso esito c'è già senza ri-acquisizione, sul `refresh` che
+`dev` accetta dentro l'orizzonte duro. Un gateway sano riscrive `taken_at` al
+battito successivo. Un detentore morto lo libera il lock di incarnazione di
+ADR-0094. L'esposizione che resta è un detentore vivo ma fermo, oppure il
+ripiego sul pid quando il token non ha incarnazione: l'età supera la soglia
+in ritardo pari al salto. Precede ADR-0106.
+
+**Opzione E, la correzione di radice.** Emendamento CRITICAL a parte di
+ADR-0094. Lo riferiscono l'Emendamento №3 e l'Emendamento №7 di ADR-0035. Si
+scrive dopo le slice 1–3 e prima della slice 4. Il testo di quell'emendamento
+non è questa PR.
+
+La morte resta l'incarnazione. L'età del battito, per `heldBy` e per
+`refresh`, viene da un orologio monotonico legato al boot. Due colonne
+nullable, `beat_boot` e `beat_mono_ms`. Dentro lo stesso boot, `heldBy` e
+`refresh` confrontano `process.hrtime`. Una riga vecchia, con le colonne
+nulle, ricade sulla regola di oggi (`nowMs - takenAt`). L'orologio di parete
+resta solo per il display. Su Linux `process.hrtime` legge `CLOCK_MONOTONIC`:
+il tempo in sospensione non entra nell'età. Su macOS l'id di boot è `sysctl
+kern.bootsessionuuid`, letto una volta, non `kern.boottime`. La lettura va
+verificata sul Mac dell'owner, dove il sonno conta. `beat_boot` è l'id del
+boot, non l'ora di avvio del processo che l'Emendamento №3 di ADR-0035 ha
+scartato.
+
+**Opzione A, scartata.** Una tolleranza sui timestamp futuri — trattare
+`takenAt > now + tolleranza` come scaduto — può espellere un detentore vivo.
+Un salto indietro mette `taken_at` oltre `now` più la tolleranza anche mentre
+il processo batte. Non si adotta.
+
+**Mitigazione B.** Slice a parte, adesso. Non è la correzione di radice e non
+aspetta le slice 1–3. `doctor` segnala un `taken_at` nel futuro. `muffin
+gateway unlock --confirm` libera la riga.
 
 ### Cessione del ruolo: il verbo è `vacate`
 
@@ -295,10 +344,10 @@ attuale il pid 1 è tini, e il gateway è il figlio (`contrib/docker/Dockerfile`
   sonda è la stessa; l'uccisione la fa lui.
 - **none.** Mai di default. `doctor` lo dice.
 
-`muffin gateway status` esce 0 con un owner `mode=persistent` il cui ultimo
-battito è entro `WATCHDOG_SEC` (60 s, `core/gateway/unit.ts`), e anche mentre
-drena. Un effimero vivo non è «il gateway è su»: il testo nomina il pid e
-l'uscita è 1.
+`muffin gateway status` esce 0 con un owner `mode=persistent` la cui età del
+battito, come la calcola `heldBy`, sta entro `WATCHDOG_SEC` (60 s,
+`core/gateway/unit.ts`), e anche mentre drena. Un effimero vivo non è «il
+gateway è su»: il testo nomina il pid e l'uscita è 1.
 
 **Vivo ma fermo** è l'uscita 2, e `taken_at` non è il ping del watchdog. Su
 systemd `WATCHDOG=1` è un altro timer, tenuto acceso durante il drenaggio di
@@ -307,17 +356,40 @@ quando il processo si sta fermando, e `drain` azzera il timer del tick, quindi
 `taken_at` smette di muoversi mentre il ping a systemd continua.
 `notify.stopping` non scrive `gateway_lock`. `DRAIN_BUDGET_MS` e
 `WATCHDOG_SEC` sono entrambi 60 s, e l'ultimo battito può essere già vecchio
-di quasi un `HEARTBEAT_MS`. A metà di un SIGTERM o di un SIGUSR1 la riga
-avrebbe l'incarnazione ancora tenuta e `taken_at` più vecchio di 60 s. Quella
-riga non è un processo fermo: è il drenaggio che il kill non deve abbattere.
+di quasi un `HEARTBEAT_MS`. A metà di un SIGTERM o di un SIGUSR1
+l'incarnazione è ancora tenuta e l'età del battito, calcolata come fa
+`heldBy`, supera `WATCHDOG_SEC`. Quella riga non è un processo fermo: è il
+drenaggio che il kill non deve abbattere.
 
-Il drenaggio si pubblica sulla riga. Entrando in `drain` si scrive
-`status = drenaggio` senza spostare `taken_at` e senza chiamare `refresh`,
-anche se il token fosse già oltre l'orizzonte. L'uscita 2 richiede le tre
-cose insieme: incarnazione tenuta, `taken_at` più vecchio di `WATCHDOG_SEC`,
-e status diverso da `drenaggio`. La healthcheck uccide il pid 1 solo in quel
-caso, così `unless-stopped` può ripartire. Un drenaggio già più lungo di
-`WATCHDOG_SEC` non è uscita 2: è l'accettazione della slice 4. L'uscita 1
+Il drenaggio si pubblica sulla riga. Entrando in `drain`, prima dell'attesa
+e prima di `release`, una sola scrittura corta, committata prima di
+`DRAIN_BUDGET_MS`:
+
+`UPDATE gateway_lock SET status = 'drenaggio' WHERE id = 1 AND holder_id = <token di questa istanza>`
+
+`taken_at` resta dov'è. La scrittura non consulta `heldBy` e non chiama
+`refresh`. Vale anche quando il token è già oltre l'orizzonte: in quel caso
+`refresh` tornerebbe prima di `onRefresh`, e `beatInfo` (`UPDATE gateway_lock
+SET status = @status WHERE id = 1`, `core/gateway/lock.ts`) scriverebbe la
+riga di chiunque la tenga. Il predicato è il `holder_id` dell'Emendamento №3
+di ADR-0035: ogni scrittura successiva sulla riga lo riporta, e
+`changes === 0` vuol dire che la rivendicazione non c'è più. Saltare
+`heldBy` lascia il `holder_id` al suo posto. `heldBy` è il controllo che
+`refresh` aggiunge sopra la recinzione; un token oltre l'orizzonte, con il
+`holder_id` di questa istanza ancora sulla riga, cambia una riga.
+`changes === 0` lascia lo status del nuovo detentore com'è: non si riprova
+contro di lui e non si esegue l'update senza `holder_id`.
+
+L'uscita 2 richiede le tre cose insieme: incarnazione tenuta, età del battito
+maggiore di `WATCHDOG_SEC`, e status diverso da `drenaggio`. L'età è quella
+che calcola `heldBy`, non il confronto grezzo fra il valore di `taken_at` e
+`WATCHDOG_SEC`. Oggi quell'età è `nowMs - takenAt`: un `taken_at` futuro è
+negativo e non è uscita 2. Dopo l'emendamento di ADR-0094 l'età è
+`process.hrtime` dentro lo stesso boot, e la slice 4 usa quella; le righe
+con `beat_boot` nullo restano su `nowMs - takenAt`. La healthcheck uccide il
+pid 1 solo in quel caso, così `unless-stopped` può ripartire. Un drenaggio
+già più lungo di `WATCHDOG_SEC` non è uscita 2: è l'accettazione della slice
+4. L'uscita 1
 (spento, stop volontario, solo effimero, home non ancora configurata,
 persistente in attesa di `vacate`) non uccide: il wait dell'entrypoint e
 `gateway.stopped` restano un `sleep infinity`. Intervallo 30 s (il battito),
@@ -336,7 +408,8 @@ one-shot, continua a uscire 78 davvero.
 abilitata ma il vivo dichiara `supervisor=none`; nessun owner e un'ultima
 uscita registrata; `supervisor=none` in modalità persistente, sempre, col
 rimedio; uscita 2, «vivo ma fermo», col nome del supervisore che dovrebbe
-ucciderlo (watchdog, healthcheck, probe esterna).
+ucciderlo (watchdog, healthcheck, probe esterna); un `taken_at` nel futuro
+(mitigazione B: il rimedio è `muffin gateway unlock --confirm`).
 
 ## Conseguenze
 
@@ -350,7 +423,10 @@ Più difficile: durante un'attività effimera lunga, Telegram e i job restano
 giù finché l'effimero non finisce o non fa `vacate`. Uno script di molti `run`
 paga l'avvio ogni volta. La cessione è un protocollo in più. Sotto Docker il
 78 non si tiene giù da solo: lo tiene l'entrypoint. `muffin resume` resta
-locale e recintato (ADR-0103); non diventa effimero qui.
+locale e recintato (ADR-0103); non diventa effimero qui. Il `taken_at` futuro
+è il buco già in `heldBy`. La correzione di radice è l'emendamento di
+ADR-0094; fino ad allora `doctor` segnala il timbro e `muffin gateway unlock
+--confirm` libera la riga.
 
 ## Alternative scartate
 
@@ -372,6 +448,8 @@ locale e recintato (ADR-0103); non diventa effimero qui.
 | Fondere #910 da sola | Il GO la assorbe nella slice 3, sul `query` di #940. |
 | Healthcheck che uccide su ogni status ≠ 0 | Abbatterebbe l'attesa di init, lo stop volontario e l'attesa di `vacate`. Si uccide solo l'uscita 2. |
 | Rilevare Docker perché il gateway è pid 1 | Nell'immagine il pid 1 è tini. |
+| Tolleranza sui timestamp futuri (opzione A) | Un salto indietro mette `taken_at` oltre `now` più la tolleranza e può espellere un detentore vivo che sta battendo. |
+| Trattare il `taken_at` futuro come esposizione nata qui | `heldBy` già non scade un timbro futuro su `dev` @ `7064bec1`. La ri-acquisizione è un'altra strada per scriverlo, non l'origine del buco. |
 
 ## Falsificatore e reversibilità
 
@@ -393,14 +471,18 @@ eseguito due volte. Si conta invece:
   scritto in ADR-0035.
 - (d) una ri-acquisizione che scrive lo stesso `holder_id`; una seconda
   chiamata al modello per una richiesta già partita prima del salto
-  d'orologio; un drenaggio che esce 2. La mutazione che riusa il `holder_id`
-  vecchio va rossa, e va rossa anche quella che abortisce il run in volo e
-  lascia chiamare il modello alla lane.
-- (e) il buco del `taken_at` futuro, nominato nel risveglio e lasciato
-  all'owner. Non è un numero inventato qui: è il caso in cui un passo avanti
-  seguito da una ri-acquisizione e da un passo indietro rende la riga senza
-  scadenza. Si distingue dal risveglio del 2026-11-04, che ha l'orologio
-  giusto.
+  d'orologio; un drenaggio che esce 2; una scrittura di `drenaggio` che cambia
+  righe con un `holder_id` diverso dal token di questa istanza. La mutazione
+  che riusa il `holder_id` vecchio va rossa, va rossa quella che abortisce il
+  run in volo e lascia chiamare il modello alla lane, e va rossa quella che
+  pubblica `drenaggio` sul nuovo detentore.
+- (e) chiuso dall'owner il 2026-11-14, in «Il buco dell'orologio». Il
+  `taken_at` futuro precede questa ADR. La correzione di radice è l'opzione E.
+  Reintrodurre la tolleranza sui timestamp futuri (opzione A) è il
+  fallimento: un salto indietro può espellere un detentore vivo. La slice
+  dell'emendamento di ADR-0094 va rossa se, con `beat_boot` di questo boot,
+  l'età torna all'orologio di parete, o se una riga con le colonne nulle non
+  ricade sulla regola di oggi.
 
 Reversibilità alta per le slice 1–3. Le colonne sono additive. Senza
 `mode=ephemeral` torna il rifiuto di ADR-0103. La ri-acquisizione si spegne
@@ -452,15 +534,26 @@ sul `query` di #940: stato durevole, mai il testo di un checkpoint. Senza
 gateway, attach esce 1 col rimedio e non resta appeso. Stesso id: niente
 riesecuzione.
 
+**Emendamento di ADR-0094 — età del battito.** CRITICAL, documento a parte.
+Dopo le slice 1–3, prima della slice 4. La decisione è «Il buco
+dell'orologio». Questa PR non contiene quel testo. La slice 4 giudica
+l'uscita 2 sull'età che `heldBy` calcola dopo l'emendamento.
+
+**Mitigazione B — `taken_at` nel futuro.** Slice a parte, adesso. `doctor`
+segnala un `taken_at` futuro; `muffin gateway unlock --confirm` libera la
+riga. Non è l'opzione E e non aspetta le slice 1–3.
+
 **Slice 4 — supervisore di container, e vivo ma fermo.** `unit.test.ts`:
 `--supervisor docker` stampa `restart: unless-stopped`, `stop_grace_period:
 75s`, la healthcheck, e non scrive file; `init: true` solo con un'immagine
 di terzi. L'entrypoint ufficiale usa `tini -s`. Sul percorso lungo, 78 non va
 in loop (`sleep infinity`); `init-from-secret` esce ancora 78. `gateway
-status`: effimero → 1; incarnazione tenuta, `taken_at` più vecchio di
-`WATCHDOG_SEC` e status diverso da `drenaggio` → 2; un drenaggio già più
-lungo di `WATCHDOG_SEC`, con `status = drenaggio` scritto senza muovere
-`taken_at`, non è 2. La healthcheck uccide il pid 1 solo sul 2.
+status`: effimero → 1; incarnazione tenuta, età del battito come la calcola
+`heldBy` maggiore di `WATCHDOG_SEC`, e status diverso da `drenaggio` → 2; un
+drenaggio già più lungo di `WATCHDOG_SEC`, con `status = drenaggio` scritto
+dall'update recintato senza muovere `taken_at`, non è 2. La mutazione in cui
+`holder_id` non è il token di questa istanza cambia 0 righe e non pubblica
+`drenaggio` sul nuovo detentore. La healthcheck uccide il pid 1 solo sul 2.
 `supervisor.test.ts`: unit abilitata e claim `supervisor=none` → warn
 «avviato a mano». Accettazione: `gateway run` come processo sotto un pid 1
 simulato, poi SIGTERM → 143 entro il drenaggio, e per tutta quell'attesa
@@ -477,8 +570,3 @@ simulato, poi SIGTERM → 143 entro il drenaggio, e per tutta quell'attesa
 - I numeri della healthcheck (30 s, 5 s, 3, 40 s) sono legati a
   `HEARTBEAT_MS` e `WATCHDOG_SEC`. Cambiarli insieme a quelle costanti non è
   una decisione nuova; cambiare la regola «si uccide solo l'uscita 2» lo è.
-- La tolleranza su un `taken_at` futuro. `heldBy` non scade una riga datata
-  avanti, e `durable.ts` non indovina la soglia. Un passo d'orologio in
-  avanti seguito dalla ri-acquisizione, e poi un passo indietro, lascia quella
-  riga senza scadenza. Non è il risveglio del 2026-11-04. La soglia, se
-  servirà, la sceglie l'owner. Questa decisione non ne scrive una.

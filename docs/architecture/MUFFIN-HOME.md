@@ -160,10 +160,25 @@ are not in the schema until the slice that migrates them: `mode`
 expired lease mints a new `holder_id` (`mintHolderId`, not `GatewayLock.claim`)
 and moves `taken_at`. It does not move `since`, and it does not revive the old
 token. An incarnation that is still locked does not by itself mean the holder
-is making progress. A beat older than `WATCHDOG_SEC` is "alive but stuck" only
-when the row is not in drain (`status` `drenaggio`, written without moving
-`taken_at`). `taken_at` is not the systemd watchdog ping. ADR-0094 still calls
-that process alive until the hard horizon.
+is making progress. Exit 2 is a held incarnation, a heartbeat older than
+`WATCHDOG_SEC` by the age `heldBy` computes, and a status other than
+`drenaggio`. Entering drain publishes that status with one short update
+before the wait and before release: `UPDATE gateway_lock SET status =
+'drenaggio' WHERE id = 1 AND holder_id = <this instance's token>`. The
+update leaves `taken_at` where it is and does not consult `heldBy`.
+`changes === 0` leaves the new holder's status unchanged. A drain longer
+than `WATCHDOG_SEC` is not exit 2. `taken_at` is not the systemd watchdog
+ping. A future `taken_at` is the same age `heldBy` already computes as
+negative on `dev`; ADR-0106 does not introduce it. The root fix is option
+E, a separate CRITICAL amendment to ADR-0094 (nullable `beat_boot` and
+`beat_mono_ms`; `heldBy` and `refresh` compare `process.hrtime` within the
+same boot; old rows keep today's rule; wall clock for display only),
+decided and scheduled after slices 1–3 and before slice 4. That amendment
+is not written here, and those two columns are not part of the four above.
+A tolerance on a future timestamp is rejected. Until the amendment,
+`doctor` flags a future `taken_at` and `muffin gateway unlock --confirm`
+releases the row. ADR-0094 still calls that process alive until the hard
+horizon.
 
 ### G. Replaceable assets — `models/`, copied defaults/persona
 
