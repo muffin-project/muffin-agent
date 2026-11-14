@@ -665,6 +665,18 @@ export async function runDoctor(
     if (sealedAdoptable.length >= 2) sealedDriftGroupCheck(warn, sealedAdoptable);
   }
 
+  const leftoverPrompt = [
+    existsSync(p.persona) ? 'persona.md' : null,
+    existsSync(p.voice) ? 'voice.md' : null,
+  ].filter((name): name is string => name !== null);
+  if (leftoverPrompt.length > 0) {
+    warn(
+      'prompt sources',
+      `${leftoverPrompt.join(' e ')} ${leftoverPrompt.length === 1 ? 'è ancora nella home' : 'sono ancora nella home'} ma non ${leftoverPrompt.length === 1 ? 'è più una sorgente' : 'sono più sorgenti'} del prompt. Il carattere è rot/identity.md.`,
+      'per adottare il patto spedito, `muffin rot reseal` su rot/identity.md. Questi file si possono lasciare: non vengono letti e non vengono cancellati.',
+    );
+  }
+
   // The caps that bind, and which file they came from. Same shape of invisible
   // fact as the policy matrix above and worse in consequence: for months the
   // sealed `budgets.json` and the unsealed `config.json` carried identical

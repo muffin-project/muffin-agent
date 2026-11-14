@@ -51,9 +51,11 @@ torna nelle stanze Telegram, e `identity.md` non arriva al gruppo.
   `jobId`. I turni che parlano all'owner (osservazione, saluto) restano
   interattivi. Estrazione, giudice e rerank della memoria restano i loro
   prompt di compito, con un tetto, e non ricevono il patto.
-- Il loop marca il prefisso e gli ultimi tre messaggi che hanno testo, mai
-  più di quattro breakpoint. Anthropic e OpenRouter (`explicitCache`) li
-  mandano come `cache_control`. Gli altri endpoint ignorano il marcatore.
+- Il loop marca il blocco di sistema e fino a tre messaggi di storia
+  stabile prima dell'orologio (`origin: runtime`), mai l'orologio e mai
+  ciò che viene dopo. Quattro al massimo. Anthropic e OpenRouter
+  (`explicitCache`) li mandano come `cache_control`. Gli altri endpoint
+  ignorano il marcatore.
 
 ## Alternative
 
@@ -76,9 +78,9 @@ slice: non c'è una misura che lo chieda.
   si trasferisce, emoji più rare, registro).
 - Su Anthropic o OpenRouter una richiesta porta cinque `cache_control`,
   oppure un endpoint che non li capisce li riceve e risponde 400.
-- Le scritture di cache sugli ultimi messaggi superano le letture in modo
-  stabile: allora si smette di marcare il messaggio che contiene l'orologio
-  (`## Questo turno`), non il prefisso.
+- Un marcatore cade sull'orologio o su un messaggio dopo di lui, oppure
+  il prefisso marcato del turno N non è un prefisso byte-identico del
+  turno N+1.
 
 ## Conseguenze
 

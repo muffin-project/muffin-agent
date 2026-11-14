@@ -17,7 +17,14 @@ import type { CapabilityDecl, Principal } from '../../core/policy/types.js';
 import { describeInterrupted } from '../../core/turns/store.js';
 import { priceOf } from '../../core/budget/pricing.js';
 import { startFakeProvider, type FakeProvider } from '../acceptance/provider.js';
-import { PROBES, RUBRIC, type FakeTool, type Probe, type PropertyId } from './probes.js';
+import {
+  deterministicProbeFailures,
+  PROBES,
+  RUBRIC,
+  type FakeTool,
+  type Probe,
+  type PropertyId,
+} from './probes.js';
 
 /**
  * `evals/character/run.ts` — runs the 17 character probes through the real
@@ -801,8 +808,15 @@ export async function runEval(
             tokenRows.push({ model: effectiveLabel(target), probe: probe.id, systemTokens, turnTokens, calls: made.length });
           } else {
             if (PACE_MS > 0) await sleep(PACE_MS);
-            const result = await judgeProvider!.chat(judgeCall(config.judge!.model, buildJudgePrompt(probe, plainTranscript(transcript))));
-            const judgements = parseJudgeOutput(result.text ?? '', probe.properties);
+            const reply = plainTranscript(transcript);
+            const result = await judgeProvider!.chat(judgeCall(config.judge!.model, buildJudgePrompt(probe, reply)));
+            const forced = new Map(
+              deterministicProbeFailures(probe, reply).map((failure) => [failure.property, failure.evidence]),
+            );
+            const judgements = parseJudgeOutput(result.text ?? '', probe.properties).map((judgement) => {
+              const evidence = forced.get(judgement.property);
+              return evidence === undefined ? judgement : { ...judgement, verdict: 'fail' as const, evidence };
+            });
             // La risposta grezza, sempre, accanto al verdetto — non solo quando
             // il verdetto la sopravvive. `parseJudgeOutput` salvava 200
             // caratteri di `raw` come evidenza, che di una risposta **vuota**

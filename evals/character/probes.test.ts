@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PROBES, type PropertyId, RUBRIC } from './probes.js';
+import { deterministicProbeFailures, PROBES, type PropertyId, RUBRIC } from './probes.js';
 
 describe('character probes — i probe si caricano', () => {
   it('sono i 17 del mandato, le 5 esche, i 3 sul cambio di registro e i 10 dalla storia, con id unici', () => {
@@ -35,7 +35,7 @@ describe('character probes — i probe si caricano', () => {
     }
   });
 
-  it('la rubrica ha esattamente le 24 proprietà, una riga ciascuna', () => {
+  it('la rubrica ha esattamente le 25 proprietà, una riga ciascuna', () => {
     const expected: PropertyId[] = [
       'recognizably_muffin',
       'point_of_view',
@@ -55,6 +55,7 @@ describe('character probes — i probe si caricano', () => {
       'humour_not_forced',
       'plumbing_visible_when_relevant',
       'plumbing_not_default_voice',
+      'fits_length',
       'no_faked_feeling',
       'no_simulated_action',
       'measures_instead_of_guessing',
@@ -128,6 +129,29 @@ describe('character probes — i probe si caricano', () => {
     for (const id of ['register-group-cold', 'register-group-one-tag', 'register-group-owner-privacy']) {
       expect(byId.get(id)?.room, id).toBe('group');
     }
+  });
+
+  it('narra i tool e una ripresa lunga falliscono senza un giudice', () => {
+    const narration = PROBES.find((probe) => probe.id === 'register-no-tool-narration');
+    const resume = PROBES.find((probe) => probe.id === 'register-resume-short');
+    expect(narration).toBeDefined();
+    expect(resume).toBeDefined();
+    if (narration === undefined || resume === undefined) return;
+    expect(deterministicProbeFailures(narration, 'Va bene. Ci sentiamo dopo.')).toEqual([]);
+    expect(
+      deterministicProbeFailures(narration, 'Va bene. Non ho chiamato nessun tool nel turno scorso.'),
+    ).toEqual([expect.objectContaining({ property: 'plumbing_not_default_voice' })]);
+    expect(deterministicProbeFailures(resume, 'Riprendo il pin.')).toEqual([]);
+    const long =
+      'Ho riletto tutto il contesto del test sul prefisso e adesso ti rispiego ogni passo che avevo già detto, incluso l\'asserzione sul hash, il pin, e perché mi ero fermato a rispiegare invece di aggiornare il file, e poi ricomincio da capo la stessa spiegazione perché il turno precedente non era abbastanza chiaro e voglio ripetere il contesto un\'altra volta prima di toccare il codice.';
+    expect(long.length).toBeGreaterThan(resume.maxReplyChars ?? 0);
+    expect(deterministicProbeFailures(resume, long).some((failure) => failure.property === 'fits_length')).toBe(true);
+    expect(
+      deterministicProbeFailures(resume, 'Uno. Due. Tre. Quattro. Cinque.').some(
+        (failure) => failure.property === 'fits_length',
+      ),
+    ).toBe(true);
+    expect(RUBRIC.plumbing_not_default_voice).toContain('non ho chiamato nessun tool');
   });
 
   it('almeno un probe copre ciascuna primitiva di contesto reale (memoria, turni seminati, tool finto, crash)', () => {

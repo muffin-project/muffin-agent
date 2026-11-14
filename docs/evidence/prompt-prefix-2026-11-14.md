@@ -83,9 +83,9 @@ evidence for each
   nella skill.
 
 counter-evidence / known failure modes
-  Marcare l'ultimo messaggio marca anche l'orologio («Questo turno»): quella
-  breakpoint non prende, le due precedenti e il prefisso possono. Se le
-  scritture superano le letture, si smette di marcare quel messaggio.
+  L'orologio («Questo turno») sta prima del messaggio corrente e cambia
+  a ogni turno. Un marcatore lì, o dopo, non viene mai riletto: i
+  marcatori stanno sul sistema e sulla storia stabile prima dell'orologio.
   Una home esistente tiene identity.md lungo finché non risigilla.
 
 security/privacy/durability consequences

@@ -1433,6 +1433,21 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('leftover persona.md and voice.md are named as no longer prompt sources', async () => {
+    const dir = home();
+    writeFileSync(join(dir, 'persona.md'), 'vecchio patto\n');
+    writeFileSync(join(dir, 'voice.md'), 'vecchia voce\n');
+    const c = await check(dir, 'prompt sources');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('persona.md');
+    expect(c?.detail).toContain('voice.md');
+    expect(c?.detail).toContain('rot/identity.md');
+    expect(c?.remedy).toContain('rot reseal');
+    expect(existsSync(join(dir, 'persona.md'))).toBe(true);
+    expect(existsSync(join(dir, 'voice.md'))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it('an owner edit reads as ok — "è suo", never a proposal to overwrite it', async () => {
     const dir = home();
     writeFileSync(

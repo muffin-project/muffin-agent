@@ -10,14 +10,15 @@ import type { ContentBlock, Message } from '../providers/types.js';
  * never sees it — the adapters emit `cache_control` only for Anthropic and
  * for OpenRouter (`explicitCache`).
  *
- * The last message of a turn often carries the clock (`## Questo turno`).
- * Marking it still matches Hermes: that breakpoint misses, the two behind it
- * and the system prefix can hit on the next request. The falsifier is a trace
- * where cache writes dominate reads; then stop marking the message that
- * contains the clock.
+ * Wire order is history, memory, the runtime clock, then the current user
+ * message. The clock is rebuilt every turn, so a mark on it — or on anything
+ * after it — writes a prefix the next turn cannot read. Marks stay on the
+ * system block and on stable history (no origin) up to the last text message
+ * before the clock. Memory and harness lines sit in that span but are not
+ * stable, so they are skipped and the breakpoint's prefix stops before them.
  */
 export const MAX_CACHE_BREAKPOINTS = 4;
-/** How many messages, counting from the end, receive a breakpoint. The system prefix takes the remaining slot. */
+/** How many stable history messages before the clock receive a breakpoint. The system prefix takes the remaining slot. */
 export const MESSAGE_CACHE_BREAKPOINTS = 3;
 
 function withoutCache(block: ContentBlock): ContentBlock {
@@ -28,7 +29,7 @@ function withoutCache(block: ContentBlock): ContentBlock {
 
 /**
  * Copies the request and marks the system prefix plus the last text block of
- * each of the last three messages that contain one.
+ * up to three stable history messages before the runtime clock.
  *
  * Does not mutate the transcript. Cache marks are a property of this request,
  * not of the session row: the next request's "last three" are a different
@@ -54,14 +55,20 @@ export function placeCacheBreakpoints(
     content: message.content.map(withoutCache),
   }));
 
+  const clockAt = messagesOut.findIndex((message) => message.origin === 'runtime');
+  // No clock means this request has no stable/volatile seam. Marking the
+  // tail would put the breakpoint on whatever arrived last, which is the
+  // bug this function exists to avoid.
+  if (clockAt === -1) return { system: systemOut, messages: messagesOut };
+
   let marked = 0;
   for (
-    let i = messagesOut.length - 1;
+    let i = clockAt - 1;
     i >= 0 && marked < MESSAGE_CACHE_BREAKPOINTS && used < MAX_CACHE_BREAKPOINTS;
     i--
   ) {
     const message = messagesOut[i];
-    if (message === undefined) continue;
+    if (message === undefined || message.origin !== undefined) continue;
     const content = message.content;
     for (let j = content.length - 1; j >= 0; j--) {
       const block = content[j];
