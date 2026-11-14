@@ -74,7 +74,9 @@ export async function connectServer(entry: McpServerEntry): Promise<McpConnectio
       const parts = Array.isArray(result.content) ? result.content : [];
       const text = parts
         .map((part: { type?: string; text?: string }) =>
-          part.type === 'text' && typeof part.text === 'string' ? part.text : `[${part.type ?? 'unknown'} content]`,
+          part.type === 'text' && typeof part.text === 'string'
+            ? part.text
+            : `[${part.type ?? 'unknown'} content]`,
         )
         .join('\n');
       return { text, isError: result.isError === true };
@@ -94,7 +96,6 @@ export async function connectServer(entry: McpServerEntry): Promise<McpConnectio
   };
 }
 
-
 /**
  * `secret://nome` → il valore, tutto il resto invariato.
  *
@@ -105,7 +106,11 @@ export async function connectServer(entry: McpServerEntry): Promise<McpConnectio
 function resolveEnv(env: Record<string, string>, home?: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
-    out[key] = value.startsWith('secret://') ? (home === undefined ? readSecret(value) : readSecret(value, home)) : value;
+    out[key] = value.startsWith('secret://')
+      ? home === undefined
+        ? readSecret(value)
+        : readSecret(value, home)
+      : value;
   }
   return out;
 }

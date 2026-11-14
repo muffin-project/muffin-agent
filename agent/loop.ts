@@ -34,30 +34,30 @@
  */
 
 export {
-  MAX_RESUMES,
-  type ApprovalRequest,
-  type ApprovalWhere,
-  type Approver,
-  type LoopDeps,
-  type RegisteredTool,
-  type ResumeStream,
-  type SpendEntry,
-  type ToolContext,
-  type ToolOutcome,
-  type TurnRuntimeInfo,
-  type TurnDelta,
-  type TurnEvent,
-  type TurnInput,
-  type TurnResult,
-} from './loop/types.js';
-export { denyText } from './loop/permissions.js';
-export { continueTurn, enqueueTurn, resumeTurn, runTurn } from './loop/entry.js';
-export {
+  askWhichContinuation,
   CONTINUATION_TTL_MS,
   ContinuationGone,
-  askWhichContinuation,
   explicitResumeMessage,
   resolveContinuation,
   resolveFollowup,
   routeContinuationTarget,
 } from './loop/continuation.js';
+export { continueTurn, enqueueTurn, resumeTurn, runTurn } from './loop/entry.js';
+export { denyText } from './loop/permissions.js';
+export {
+  type ApprovalRequest,
+  type ApprovalWhere,
+  type Approver,
+  type LoopDeps,
+  MAX_RESUMES,
+  type RegisteredTool,
+  type ResumeStream,
+  type SpendEntry,
+  type ToolContext,
+  type ToolOutcome,
+  type TurnDelta,
+  type TurnEvent,
+  type TurnInput,
+  type TurnResult,
+  type TurnRuntimeInfo,
+} from './loop/types.js';

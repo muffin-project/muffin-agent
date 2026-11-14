@@ -253,11 +253,13 @@ function assertTimezone(tz: string): void {
 /** Next fire strictly after `after`, in `tz`. Throws JobError on bad input. */
 export function nextFire(cron: string, tz: string, after: Date): Date {
   assertTimezone(tz);
-  let interval;
+  let interval: ReturnType<typeof CronExpressionParser.parse>;
   try {
     interval = CronExpressionParser.parse(cron, { tz, currentDate: after });
   } catch (error) {
-    throw new JobError(`espressione cron non valida: "${cron}" — ${error instanceof Error ? error.message : String(error)}`);
+    throw new JobError(
+      `espressione cron non valida: "${cron}" — ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   return interval.next().toDate();
 }
@@ -415,10 +417,14 @@ export class JobStore {
       `SELECT * FROM jobs WHERE active = 1 AND next_fire_at <= ? ORDER BY next_fire_at`,
     );
     this.getStmt = db.prepare(`SELECT * FROM jobs WHERE id = ?`);
-    this.ranStmt = db.prepare(`UPDATE jobs SET last_run_at = @now, next_fire_at = @next WHERE id = @id AND active = 1`);
+    this.ranStmt = db.prepare(
+      `UPDATE jobs SET last_run_at = @now, next_fire_at = @next WHERE id = @id AND active = 1`,
+    );
     this.disableStmt = db.prepare(`UPDATE jobs SET active = 0 WHERE id = ? AND active = 1`);
     this.capStmt = db.prepare(`UPDATE jobs SET per_job_usd = @cap WHERE id = @id AND active = 1`);
-    this.ranOnceStmt = db.prepare(`UPDATE jobs SET last_run_at = @now, active = 0 WHERE id = @id AND active = 1`);
+    this.ranOnceStmt = db.prepare(
+      `UPDATE jobs SET last_run_at = @now, active = 0 WHERE id = @id AND active = 1`,
+    );
   }
 
   /** Validates, computes the first fire from now, persists. Throws JobError. */
@@ -431,10 +437,17 @@ export class JobStore {
     // tetto non cambia.
     if (spec.perJobUsd !== undefined && spec.perJobUsd !== null) {
       if (!Number.isFinite(spec.perJobUsd) || spec.perJobUsd < 0) {
-        throw new JobError(`tetto per-job non valido: "${spec.perJobUsd}" (attesi dollari, es. 0.50)`);
+        throw new JobError(
+          `tetto per-job non valido: "${spec.perJobUsd}" (attesi dollari, es. 0.50)`,
+        );
       }
     }
-    if (spec.delegation !== undefined && spec.delegation !== 'manual' && spec.delegation !== 'auto' && spec.delegation !== 'yolo') {
+    if (
+      spec.delegation !== undefined &&
+      spec.delegation !== 'manual' &&
+      spec.delegation !== 'auto' &&
+      spec.delegation !== 'yolo'
+    ) {
       throw new JobError(`delega non valida: "${spec.delegation}" (attese manual|auto|yolo)`);
     }
     // Prima di qualunque scrittura, come la delega: un valore che non esiste

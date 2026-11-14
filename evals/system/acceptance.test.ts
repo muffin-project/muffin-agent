@@ -264,13 +264,13 @@ describe('M3 acceptance — through the production runtime', () => {
       // scope (`core/sandbox/confine-sola-lettura.test.ts` proves that one).
       const shell = runtime.deps.tools.find((t) => t.spec.name === 'shell_run_write');
       expect(shell, 'shell tool not registered — sandbox unavailable?').toBeDefined();
-      const escape = join(home, 'ESCAPED.txt');
+      const escapedPath = join(home, 'ESCAPED.txt');
       const out = await shell!.handler(
-        { command: `echo pwned > '${escape}'`, description: 'provo a uscire' },
+        { command: `echo pwned > '${escapedPath}'`, description: 'provo a uscire' },
         toolContext(),
       );
       expect(out.isError).toBe(true);
-      expect(existsSync(escape)).toBe(false);
+      expect(existsSync(escapedPath)).toBe(false);
     },
     20_000,
   );

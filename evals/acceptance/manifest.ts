@@ -143,7 +143,10 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // indipendentemente, il contenuto scritto DOPO il backup sparisce dal
   // restore (sostituisce, non aggiunge) e la copia-di-cortesia che
   // `restoreFrom` mette da parte esiste sul disco.
-  verde('A8', 'backup: `muffin backup` and `muffin restore` — a real snapshot, replacing (not merging) the live database, memory findable after'),
+  verde(
+    'A8',
+    'backup: `muffin backup` and `muffin restore` — a real snapshot, replacing (not merging) the live database, memory findable after',
+  ),
   verde(
     'A9',
     'setup locale: `init --local` builds a second, throwaway home that reuses a persisted secret through the same chain — never a copy — and refuses a directory that is or contains the real home',
@@ -170,13 +173,22 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'B2',
     'busy input: a message sent while a turn is alive is acknowledged at once and answered after it, and /stop interrupts the live turn (ADR-0054)',
   ),
-  verde('B3', 'wait: a turn that asks to wait persists and RELEASES the process instead of holding it'),
-  verde('B4', 'todo: a plan written by one process is readable on demand by the next one in the session (ADR-0104)'),
+  verde(
+    'B3',
+    'wait: a turn that asks to wait persists and RELEASES the process instead of holding it',
+  ),
+  verde(
+    'B4',
+    'todo: a plan written by one process is readable on demand by the next one in the session (ADR-0104)',
+  ),
   verde(
     'B9',
     'todo: a resumed turn that drops granted plan rows settles continuable naming them, never answered — the completion gate, not a sentence',
   ),
-  verde('B5', 'resume: a process killed mid-turn leaves a row the next boot names and the gateway finishes'),
+  verde(
+    'B5',
+    'resume: a process killed mid-turn leaves a row the next boot names and the gateway finishes',
+  ),
   // New (slice/job-fires, owner decision 2026-08-17): the fire-claim/identity
   // gap A1's own comment named as "owned elsewhere" — a real SIGKILL landed
   // between job_fires binding a fire and its turn actually being written,
@@ -188,7 +200,10 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'B7',
     'job-fires: a real SIGKILL between binding a fire and creating its turn, and another between the turn finishing and settlement, both recover to exactly one delivered turn — the model called exactly once',
   ),
-  verde('B11', 'streaming: the real binary, driven with --stream over a pipe, delivers the answer through the SSE path and exits clean'),
+  verde(
+    'B11',
+    'streaming: the real binary, driven with --stream over a pipe, delivers the answer through the SSE path and exits clean',
+  ),
   // New (slice/journey-telegram): B13/B14/D12 were BLOCKER only for lack of a
   // scenario that drives the mechanism over the real Telegram surface — the
   // rows' own text names each mechanism as already in HEAD. This is that
@@ -202,7 +217,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   ),
   verde(
     'B14',
-    'attachment telegram: `send_file` reaches `sendDocument` on the real binary, with the real filename and byte length, to the owner\'s chat',
+    "attachment telegram: `send_file` reaches `sendDocument` on the real binary, with the real filename and byte length, to the owner's chat",
   ),
   // New (slice/b15-owner-nel-rot): B15's authenticated half was already
   // proven — `b-telegram-pairing.accept.ts` shows nobody becomes owner
@@ -218,7 +233,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   ),
   verde(
     'D12',
-    'ask telegram: the ASK shows the command and cwd plus the taint reason, an owner\'s button press resumes the suspended turn exactly once, and a non-owner\'s press decides nothing',
+    "ask telegram: the ASK shows the command and cwd plus the taint reason, an owner's button press resumes the suspended turn exactly once, and a non-owner's press decides nothing",
   ),
   // New (slice/b10-immagini-ed-errori, issue #361): the row was BLOCKER only
   // because the fake Bot API this suite drives `muffin gateway` against had
@@ -270,7 +285,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   provataDalMeccanismo(
     'A11',
     'install pulita: un comando su Ubuntu vuota porta a doctor senza rossi, unit systemd scritta e verificata, update e rollback dalla stessa via',
-    "la regge il job `install` (`.github/workflows/install.yml`, eseguito su GitHub Actions `ubuntu-latest` senza Node preinstallato): `evals/install/ubuntu.sh` rifiuta di partire se `node` è già raggiungibile, esegue `install.sh` da utente con sudo, poi `muffin doctor` senza righe `fail`, `systemd-analyze verify` sulla unit e un avvio in foreground con il suo stesso ExecStart, poi `muffin update` e il rollback. Non è uno scenario della suite di accettazione perché il suo banco è un container pulito, non una home finta",
+    'la regge il job `install` (`.github/workflows/install.yml`, eseguito su GitHub Actions `ubuntu-latest` senza Node preinstallato): `evals/install/ubuntu.sh` rifiuta di partire se `node` è già raggiungibile, esegue `install.sh` da utente con sudo, poi `muffin doctor` senza righe `fail`, `systemd-analyze verify` sulla unit e un avvio in foreground con il suo stesso ExecStart, poi `muffin update` e il rollback. Non è uno scenario della suite di accettazione perché il suo banco è un container pulito, non una home finta',
   ),
   provataDalMeccanismo(
     'B18',
@@ -280,7 +295,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   provataDalMeccanismo(
     'D14',
     "solo l'irreversibile chiede: un ask arriva se e solo se `reversible: 'no'` incontra una riga con `asksForIrreversible`, mai per il taint, la classe o la scorciatoia hardened",
-    "la regge `core/policy/solo-irreversibile.test.ts`, che enumera ogni `CapabilityDecl` spedita (18 tool più le due porte) per owner e membro di gruppo a taint 0-3 e fissa per nome chi chiede (`sys.shell`, `sys.process.kill`, ogni `mcp.<server>.<tool>` senza `readOnlyHint: true` — dal #770 la reversibilità MCP viene dalle `annotations` dichiarate, non più dal solo id server); un ask in più o in meno lo fa rosso, e le tre mutazioni della PR #456 (askAbove restituito, scorciatoia hardened restituita, `asksForIrreversible` su `reply`) lo hanno fatto rosso. Uno scenario di accettazione non aggiunge nulla: la domanda della riga è sul kernel, e il kernel è lo stesso oggetto per il binario e per il test",
+    'la regge `core/policy/solo-irreversibile.test.ts`, che enumera ogni `CapabilityDecl` spedita (18 tool più le due porte) per owner e membro di gruppo a taint 0-3 e fissa per nome chi chiede (`sys.shell`, `sys.process.kill`, ogni `mcp.<server>.<tool>` senza `readOnlyHint: true` — dal #770 la reversibilità MCP viene dalle `annotations` dichiarate, non più dal solo id server); un ask in più o in meno lo fa rosso, e le tre mutazioni della PR #456 (askAbove restituito, scorciatoia hardened restituita, `asksForIrreversible` su `reply`) lo hanno fatto rosso. Uno scenario di accettazione non aggiunge nulla: la domanda della riga è sul kernel, e il kernel è lo stesso oggetto per il binario e per il test',
   ),
   provataDalMeccanismo(
     'B19',
@@ -321,7 +336,10 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'delivery: a job whose channel is not actually connected never has that recorded as `sent` — the ' +
       'turn keeps `failed:<why>`, and `doctor` names it',
   ),
-  verde('C1', 'memory write: something said in one turn is shown to the model recalling a later one'),
+  verde(
+    'C1',
+    'memory write: something said in one turn is shown to the model recalling a later one',
+  ),
   // New (slice/journey-memoria). C2's row named the exact gap: extraction is
   // wired at turn end (`agent/runtime.ts`'s `onTurnEnd`) but nothing had ever
   // driven it through the real binary. `muffin run` cannot demonstrate this —
@@ -353,10 +371,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // both calls surface the right fact (`strategie: … graph`) before writing
   // this: `muffin memory search` without `--history` returns only "da
   // Luigi", with it returns both, "da Mario" marked RITIRATO.
-  verde(
-    'C4',
-    'recall: a superseded fact is invisible to search until --history asks for it',
-  ),
+  verde('C4', 'recall: a superseded fact is invisible to search until --history asks for it'),
   // New (slice/c5-memory-why). C5's row named the exact gap: `muffin memory
   // why` already answered "why do you believe that" for the owner at a
   // terminal (`cli/memory.ts`'s `cmdMemoryWhy`), but the model had no
@@ -368,7 +383,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // tier and original sentence — not a paraphrase.
   verde(
     'C5',
-    'provenance: a real turn calling the memory_why tool gets back the planted episode\'s connector, tier and original sentence',
+    "provenance: a real turn calling the memory_why tool gets back the planted episode's connector, tier and original sentence",
   ),
   // New (slice/journey-memoria). C6's row asked for the temporal graph
   // itself: `factsAsOf`/`nearestFactTo` (`core/memory/store.ts`) and `asOf`
@@ -408,7 +423,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // (`trascrivi.ts`'s own docstring, 02/09/2026).
   verde(
     'C8',
-    'audio: a real Ogg voice note crosses the fake Bot API → vault → transcription → turn, with the original audio kept and the transcript fenced as tainted data, never the owner\'s own prose',
+    "audio: a real Ogg voice note crosses the fake Bot API → vault → transcription → turn, with the original audio kept and the transcript fenced as tainted data, never the owner's own prose",
   ),
   verde(
     'D1',
@@ -439,7 +454,10 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // era vero e non era la domanda della riga. `draft` senza registro di undo
   // non è «in sicurezza», è «non c'è». Ora prova le due metà: il file c'è, e
   // `muffin undo` lo toglie.
-  verde('D2', 'file write: the model writes a real file, and the copy taken first makes it revertible'),
+  verde(
+    'D2',
+    'file write: the model writes a real file, and the copy taken first makes it revertible',
+  ),
   // New (slice/egress-params, mandato inv. 7 / audit P04-1): the row's own
   // BLOCKER text said "solo scenario mancante" — the mechanism (allowlist,
   // redirect recheck, SSRF floor) was already `impl solida`. This scenario is
@@ -511,7 +529,10 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // meccanismo, non che il binario lo raggiunga. D3 copre il disco; questo
   // copre l'altra meta' della domanda della riga — «e un ripristino che disfa
   // anche il turno?».
-  verde('D11', 'checkpoint: `muffin undo` marks the turn and the memory episode, not only the disk'),
+  verde(
+    'D11',
+    'checkpoint: `muffin undo` marks the turn and the memory episode, not only the disk',
+  ),
   // D13, uso dei tool. La domanda della riga è sul comportamento di un
   // modello reale che sceglie fra shell e tool dedicato — un provider finto
   // e deterministico (quello di ogni scenario di accettazione) non può
@@ -523,7 +544,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   provataDalMeccanismo(
     'D13',
     'uso dei tool: il modello sceglie il tool dedicato prima della shell, e la shell in sola lettura non ferma mai il turno su un ask',
-    "la regge la character eval (`evals/character/run.ts --fake-approve`) contro modelli reali (via OpenRouter, non un provider finto scriptato — la scelta del tool è il comportamento sotto misura, non qualcosa che un fake può produrre): tre giri indipendenti, 22 probe, due modelli, zero `ask` su 132 turni misurati — il registro D15 (`turn_tool_calls`, letto da `tool-calls.json` per probe) mostra ogni chiamata, chiesta o no. Un difetto ripetibile (un tool MCP finto ignorato 0/6 volte per `env`/shell) trovato e corretto con una riga di `WORK_RULES`, riverificato 6/6 su tre giri mirati. `docs/evidence/tool-use-2026-09-07.md`",
+    'la regge la character eval (`evals/character/run.ts --fake-approve`) contro modelli reali (via OpenRouter, non un provider finto scriptato — la scelta del tool è il comportamento sotto misura, non qualcosa che un fake può produrre): tre giri indipendenti, 22 probe, due modelli, zero `ask` su 132 turni misurati — il registro D15 (`turn_tool_calls`, letto da `tool-calls.json` per probe) mostra ogni chiamata, chiesta o no. Un difetto ripetibile (un tool MCP finto ignorato 0/6 volte per `env`/shell) trovato e corretto con una riga di `WORK_RULES`, riverificato 6/6 su tre giri mirati. `docs/evidence/tool-use-2026-09-07.md`',
   ),
   // D15, il registro degli effetti. La riga nasce dal costo di ADR-0074: se
   // si chiede solo l'irreversibile, quasi tutto passa in silenzio, e cio' che
@@ -534,7 +555,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   verde(
     'D15',
     'registro degli effetti: una scrittura reversibile passa senza ask e lascia riga della matrice, ' +
-      'reversibilita\' e risorsa; `muffin effects` le rilegge per turno e per giornata, e l\'owner ci arriva ' +
+      "reversibilita' e risorsa; `muffin effects` le rilegge per turno e per giornata, e l'owner ci arriva " +
       'chiedendo "cosa hai fatto oggi?" senza conoscere un comando',
   ),
   // ADR-0091: taint 3 is visible in the owner's shell ASK; a sealed lower
@@ -550,7 +571,10 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // refusing to fire — because `entry()` resolves a row to one manifest line
   // and two `scenario('E1', …)` calls would register two tests with the same
   // title for `report.ts` to disambiguate.
-  verde('E1', 'budget: the monthly cap stops a turn, and a job past its own per-job cap never reaches the model'),
+  verde(
+    'E1',
+    'budget: the monthly cap stops a turn, and a job past its own per-job cap never reaches the model',
+  ),
   verde('E2', 'cost: the REPL answers how much has been spent this month, in dollars'),
   // Extended (slice/journey-lifecycle): still narrower than E3's own full
   // question in one respect (it does not exercise every span shape the row
@@ -582,7 +606,10 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // Narrower than E5's own question — see the scenario's own docstring in
   // e-cost.accept.ts. The row stays `?` in requirements-status.md; only one failure class
   // (the contradiction judge) is proven explicit-and-explained here.
-  verde('E5', 'judge failure: an unreadable judge answer is explained on `muffin memory review`, not repeated verbatim'),
+  verde(
+    'E5',
+    'judge failure: an unreadable judge answer is explained on `muffin memory review`, not repeated verbatim',
+  ),
   // New (slice/journey-capability): the row was BLOCKER only for a missing
   // scenario — the mechanism (sys_inspect, #176) already read from the same
   // authoritative sources as `doctor`/`prompt show`. Proves the acceptance
@@ -622,7 +649,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   ),
   verde(
     'F4',
-    "group exit: added to a group the owner is not in, Muffin greets the room, tells the owner who added it and where, then leaves — never calling the model — and `getUpdates` actually asks for `my_chat_member`",
+    'group exit: added to a group the owner is not in, Muffin greets the room, tells the owner who added it and where, then leaves — never calling the model — and `getUpdates` actually asks for `my_chat_member`',
   ),
   verde(
     'F5',
@@ -634,7 +661,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   ),
   verde(
     'F7',
-    'room capabilities: the same group cannot save before a sealed policy.json names it and can after — the member saves with no approval asked, the bytes land in that room\'s vault tenant and `host` cannot read them, and `shell_run` stays denied in that same room (ADR-0073)',
+    "room capabilities: the same group cannot save before a sealed policy.json names it and can after — the member saves with no approval asked, the bytes land in that room's vault tenant and `host` cannot read them, and `shell_run` stays denied in that same room (ADR-0073)",
   ),
 ] as const;
 

@@ -41,6 +41,7 @@ import {
   partialMessage,
   toolMessage,
 } from './message-origin.js';
+import type { TurnRun } from './run-state.js';
 import {
   continuationDedup,
   drainStream,
@@ -48,7 +49,6 @@ import {
   resolveContinuationSuffix,
   retryDelayMs,
 } from './stream.js';
-import type { TurnRun } from './run-state.js';
 import { runTool } from './tool-call.js';
 import {
   ApprovalRequired,
@@ -865,7 +865,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     // can come back shaped like a success — empty. It is never a completion,
     // and it must never become the provider's `empty` to retry against the
     // same machine: it takes the same two doors as the catch above.
-      if (lastAbortReason !== undefined && result.text === null && result.toolCalls.length === 0) {
+    if (lastAbortReason !== undefined && result.text === null && result.toolCalls.length === 0) {
       chatSpan.setAttributes({
         'muffin.chat_call.duration_ms': Date.now() - chatCallStartedAt,
         'muffin.chat_call.abort_reason': lastAbortReason,
@@ -892,7 +892,9 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     }
     chatSpan.setAttributes({
       'muffin.chat_call.duration_ms': Date.now() - chatCallStartedAt,
-      ...(result.firstTextMs === undefined ? {} : { 'muffin.chat_call.first_text_ms': result.firstTextMs }),
+      ...(result.firstTextMs === undefined
+        ? {}
+        : { 'muffin.chat_call.first_text_ms': result.firstTextMs }),
       ...(lastTelemetry === undefined
         ? {}
         : { 'muffin.chat_call.active_model_ms_after': lastTelemetry.activeModelMsAfter }),
