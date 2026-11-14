@@ -69,8 +69,6 @@ import type { InputRichBlock, InputRichMessage, RichText } from '@grammyjs/types
 
 /** The Bot API version this surface implements. Named in tests and docs; bump with the changelog checklist. */
 export const TELEGRAM_BOT_API_TARGET = '10.3';
-/** When that version was published, per the official changelog. */
-export const TELEGRAM_BOT_API_TARGET_DATE = '2026-08-24';
 /** Oldest server behaviour the rich lane relies on (`can_stop`, stop updates: both 10.3). */
 export const TELEGRAM_BOT_API_RICH_FLOOR = '10.3';
 
@@ -147,9 +145,12 @@ export function planRich(markdown: string): RichPlan {
  */
 export function richFitsHard(message: OutboundRich): string | null {
   const { chars, blocks, depth } = countRich(message);
-  if (chars > RICH_MAX_CHARS) return `rich message ${chars} chars over the ${RICH_MAX_CHARS} protocol maximum`;
-  if (blocks > RICH_MAX_BLOCKS) return `rich message ${blocks} blocks over the ${RICH_MAX_BLOCKS} protocol maximum`;
-  if (depth > RICH_MAX_NESTING) return `rich message nesting ${depth} over the ${RICH_MAX_NESTING} protocol maximum`;
+  if (chars > RICH_MAX_CHARS)
+    return `rich message ${chars} chars over the ${RICH_MAX_CHARS} protocol maximum`;
+  if (blocks > RICH_MAX_BLOCKS)
+    return `rich message ${blocks} blocks over the ${RICH_MAX_BLOCKS} protocol maximum`;
+  if (depth > RICH_MAX_NESTING)
+    return `rich message nesting ${depth} over the ${RICH_MAX_NESTING} protocol maximum`;
   return null;
 }
 
@@ -188,7 +189,9 @@ export function turnRichMessage(input: {
   // un paragrafo senza testo. E un passo multi-riga (un comando su più righe)
   // è più righe, non un paragrafo solo: dentro un blocco il `\n` nudo
   // collassa, e il comando tornerebbe su una riga.
-  const process = input.process.flatMap((line) => line.split('\n')).filter((line) => line.trim() !== '');
+  const process = input.process
+    .flatMap((line) => line.split('\n'))
+    .filter((line) => line.trim() !== '');
   if (process.length > 0) {
     blocks.push({
       type: 'details',
@@ -298,7 +301,8 @@ export function countRich(message: OutboundRich): RichSize {
       case 'divider':
         break;
       case 'list':
-        for (const item of (o['items'] as { blocks: InputRichBlock<never>[] }[] | undefined) ?? []) {
+        for (const item of (o['items'] as { blocks: InputRichBlock<never>[] }[] | undefined) ??
+          []) {
           blocks += 1; // list items count per the official enumeration
           for (const inner of item.blocks) block(inner, level + 1);
         }
@@ -314,7 +318,8 @@ export function countRich(message: OutboundRich): RichSize {
       case 'details':
       case 'collage':
       case 'slideshow':
-        for (const inner of (o['blocks'] as InputRichBlock<never>[] | undefined) ?? []) block(inner, level + 1);
+        for (const inner of (o['blocks'] as InputRichBlock<never>[] | undefined) ?? [])
+          block(inner, level + 1);
         if (o['summary'] !== undefined) text(o['summary'] as RichText, level + 1);
         if (o['credit'] !== undefined) text(o['credit'] as RichText, level + 1);
         if (o['caption'] !== undefined) {
@@ -355,7 +360,10 @@ const BUILD_MAX_DEPTH = 4;
 function buildBlocks(markdown: string, depth: number): Built {
   if (depth > BUILD_MAX_DEPTH) {
     const text = markdown.trim();
-    return { blocks: text === '' ? [] : [{ type: 'paragraph', text: inlineRich(text) }], native: false };
+    return {
+      blocks: text === '' ? [] : [{ type: 'paragraph', text: inlineRich(text) }],
+      native: false,
+    };
   }
   const lines = markdown.split('\n');
   const blocks: InputRichBlock<never>[] = [];
@@ -425,7 +433,11 @@ function buildBlocks(markdown: string, depth: number): Built {
     const heading = /^(#{1,6})\s+(.+)$/.exec(line);
     if (heading) {
       flushPara();
-      blocks.push({ type: 'heading', text: inlineRich(heading[2] ?? ''), size: heading[1]!.length as 1 | 2 | 3 | 4 | 5 | 6 });
+      blocks.push({
+        type: 'heading',
+        text: inlineRich(heading[2] ?? ''),
+        size: heading[1]!.length as 1 | 2 | 3 | 4 | 5 | 6,
+      });
       native = true;
       i++;
       continue;
@@ -454,13 +466,19 @@ function buildBlocks(markdown: string, depth: number): Built {
       blocks.push({
         type: 'details',
         summary: inlineRich(summaryMatch?.[1] ?? 'dettagli'),
-        blocks: innerBuilt.blocks.length > 0 ? innerBuilt.blocks : [{ type: 'paragraph', text: '…' }],
+        blocks:
+          innerBuilt.blocks.length > 0 ? innerBuilt.blocks : [{ type: 'paragraph', text: '…' }],
       });
       native = true;
       i = j + 1;
       continue;
     }
-    if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|?[\s:|-]+\|?[\s:|-]*$/.test(lines[i + 1] ?? '') && (lines[i + 1] ?? '').includes('-')) {
+    if (
+      /^\s*\|.*\|\s*$/.test(line) &&
+      i + 1 < lines.length &&
+      /^\s*\|?[\s:|-]+\|?[\s:|-]*$/.test(lines[i + 1] ?? '') &&
+      (lines[i + 1] ?? '').includes('-')
+    ) {
       const table = buildTable(lines, i);
       if (table.kind === 'over') {
         // Oltre le colonne del protocollo una tabella valida non esiste: resta
@@ -493,12 +511,19 @@ function buildBlocks(markdown: string, depth: number): Built {
       if (long) {
         blocks.push({ type: 'expandable_blockquote', text: inlineRich(quoted) });
       } else {
-        blocks.push({ type: 'blockquote', blocks: [{ type: 'paragraph', text: inlineRich(quoted) }] });
+        blocks.push({
+          type: 'blockquote',
+          blocks: [{ type: 'paragraph', text: inlineRich(quoted) }],
+        });
       }
       i += quoteRun.length;
       continue;
     }
-    const listRun = takeWhile(lines, i, (l) => /^\s*[-*]\s+\[[ xX]\]\s+/.test(l) || /^\s*(?:[-*]|\d+[.)])\s+/.test(l));
+    const listRun = takeWhile(
+      lines,
+      i,
+      (l) => /^\s*[-*]\s+\[[ xX]\]\s+/.test(l) || /^\s*(?:[-*]|\d+[.)])\s+/.test(l),
+    );
     if (listRun.length > 0) {
       const list = buildList(listRun, depth);
       if (list === null) {
@@ -578,7 +603,12 @@ function buildTable(lines: string[], from: number): TableBuild {
   const body = rows.slice(1);
   // A delimiter with no body rows is not a table, it is paragraphs.
   if (body.length === 0) return { kind: 'plain', next: k };
-  const cells: { text?: RichText; is_header?: true; align: 'left' | 'center' | 'right'; valign: 'top' | 'middle' | 'bottom' }[][] = [
+  const cells: {
+    text?: RichText;
+    is_header?: true;
+    align: 'left' | 'center' | 'right';
+    valign: 'top' | 'middle' | 'bottom';
+  }[][] = [
     header.map((cell, c) => ({
       text: inlineRich(cell.trim()),
       is_header: true as const,
@@ -601,7 +631,10 @@ function splitRow(line: string): string[] {
   return trimmed.split('|');
 }
 
-function buildList(run: string[], depth: number): { block: InputRichBlock<never>; checklist: boolean } | null {
+function buildList(
+  run: string[],
+  depth: number,
+): { block: InputRichBlock<never>; checklist: boolean } | null {
   if (depth > BUILD_MAX_DEPTH) return null;
   const ordered = /^\s*\d+[.)]\s+/.test(run[0] ?? '');
   let checklist = false;
@@ -622,7 +655,10 @@ function buildList(run: string[], depth: number): { block: InputRichBlock<never>
     items.push({ blocks: [{ type: 'paragraph', text: inlineRich(text) }] });
   }
   if (ordered) {
-    return { block: { type: 'list', items: items.map((it) => ({ ...it, type: '1' as const })) }, checklist };
+    return {
+      block: { type: 'list', items: items.map((it) => ({ ...it, type: '1' as const })) },
+      checklist,
+    };
   }
   return { block: { type: 'list', items }, checklist };
 }
@@ -647,7 +683,8 @@ function splitInline(text: string, depth: number): RichText[] {
   const out: RichText[] = [];
   // Links first (labels may carry emphasis), then code, then emphasis —
   // the same order `toTelegramHtml` uses, for the same reason.
-  const token = /(\[([^\]]+)\]\((https?:\/\/[^\s)]+)\))|(`([^`\n]+)`)|(\*\*([^*\n]+)\*\*)|(~~([^~\n]+)~~)|((?:^|[\s(])\*([^*\n]+)\*)|((?:^|[\s(])_([^_\n]+)_)/;
+  const token =
+    /(\[([^\]]+)\]\((https?:\/\/[^\s)]+)\))|(`([^`\n]+)`)|(\*\*([^*\n]+)\*\*)|(~~([^~\n]+)~~)|((?:^|[\s(])\*([^*\n]+)\*)|((?:^|[\s(])_([^_\n]+)_)/;
   let rest = text;
   for (;;) {
     const m = token.exec(rest);
@@ -657,21 +694,34 @@ function splitInline(text: string, depth: number): RichText[] {
     }
     if (m.index > 0) out.push(rest.slice(0, m.index));
     if (m[1] !== undefined) {
-      out.push({ type: 'url', text: splitInline(m[2] ?? '', depth + 1) as unknown as RichText, url: m[3] ?? '' });
+      out.push({
+        type: 'url',
+        text: splitInline(m[2] ?? '', depth + 1) as unknown as RichText,
+        url: m[3] ?? '',
+      });
     } else if (m[4] !== undefined) {
       out.push({ type: 'code', text: m[5] ?? '' });
     } else if (m[6] !== undefined) {
       out.push({ type: 'bold', text: splitInline(m[7] ?? '', depth + 1) as unknown as RichText });
     } else if (m[8] !== undefined) {
-      out.push({ type: 'strikethrough', text: splitInline(m[9] ?? '', depth + 1) as unknown as RichText });
+      out.push({
+        type: 'strikethrough',
+        text: splitInline(m[9] ?? '', depth + 1) as unknown as RichText,
+      });
     } else if (m[10] !== undefined) {
       const lead = /^[\s(]/.test(m[10]) ? m[10][0]! : '';
       if (lead !== '') out.push(lead);
-      out.push({ type: 'italic', text: splitInline(m[11] ?? '', depth + 1) as unknown as RichText });
+      out.push({
+        type: 'italic',
+        text: splitInline(m[11] ?? '', depth + 1) as unknown as RichText,
+      });
     } else if (m[12] !== undefined) {
       const lead = /^[\s(]/.test(m[12]) ? m[12][0]! : '';
       if (lead !== '') out.push(lead);
-      out.push({ type: 'italic', text: splitInline(m[13] ?? '', depth + 1) as unknown as RichText });
+      out.push({
+        type: 'italic',
+        text: splitInline(m[13] ?? '', depth + 1) as unknown as RichText,
+      });
     }
     rest = rest.slice(m.index + m[0].length);
   }
@@ -703,7 +753,10 @@ export function normalizeInboundRich(message: { rich_message?: unknown }): strin
   if (!Array.isArray(rich.blocks)) return null;
   const lines: string[] = [];
   for (const block of rich.blocks) lines.push(...blockToLines(block, 0));
-  return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return lines
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 /** Placeholder for an unknown rich block kind. Type name only: bounded by construction, no content dump. */
@@ -721,7 +774,8 @@ function blockToLines(block: unknown, depth: number): string[] {
     case 'paragraph':
       return text(o['text']) === '' ? [] : [text(o['text'])];
     case 'heading': {
-      const size = typeof o['size'] === 'number' ? Math.min(6, Math.max(1, Math.round(o['size']))) : 1;
+      const size =
+        typeof o['size'] === 'number' ? Math.min(6, Math.max(1, Math.round(o['size']))) : 1;
       const t = text(o['text']);
       return t === '' ? [] : [`${'#'.repeat(size)} ${t}`];
     }
@@ -755,36 +809,64 @@ function blockToLines(block: unknown, depth: number): string[] {
         : text(o['text']) === ''
           ? []
           : [text(o['text'])];
-      const credit = typeof o['credit'] === 'string' || typeof o['credit'] === 'object' ? text(o['credit']) : '';
+      const credit =
+        typeof o['credit'] === 'string' || typeof o['credit'] === 'object' ? text(o['credit']) : '';
       const quoted = inner.map((l) => `> ${l}`);
       return credit !== '' ? [...quoted, `> — ${credit}`] : quoted;
     }
     case 'expandable_blockquote': {
       const t = text(o['text']);
-      return t === '' ? [] : ['<details>', '<summary>citazione</summary>', ...t.split('\n').map((l) => `> ${l}`), '</details>'];
+      return t === ''
+        ? []
+        : [
+            '<details>',
+            '<summary>citazione</summary>',
+            ...t.split('\n').map((l) => `> ${l}`),
+            '</details>',
+          ];
     }
     case 'collage':
     case 'slideshow': {
-      const inner = Array.isArray(o['blocks']) ? (o['blocks'] as unknown[]).flatMap((b) => blockToLines(b, depth + 1)) : [];
-      const caption = o['caption'] !== null && typeof o['caption'] === 'object' ? text((o['caption'] as Record<string, unknown>)['text']) : '';
+      const inner = Array.isArray(o['blocks'])
+        ? (o['blocks'] as unknown[]).flatMap((b) => blockToLines(b, depth + 1))
+        : [];
+      const caption =
+        o['caption'] !== null && typeof o['caption'] === 'object'
+          ? text((o['caption'] as Record<string, unknown>)['text'])
+          : '';
       return [...inner, ...(caption !== '' ? [`[didascalia: ${caption}]`] : [])];
     }
     case 'table':
       return tableToLines(o);
     case 'details': {
       const summary = text(o['summary']);
-      const inner = Array.isArray(o['blocks']) ? (o['blocks'] as unknown[]).flatMap((b) => blockToLines(b, depth + 1)) : [];
-      return ['<details>', `<summary>${summary === '' ? 'dettagli' : summary}</summary>`, '', ...inner, '</details>'];
+      const inner = Array.isArray(o['blocks'])
+        ? (o['blocks'] as unknown[]).flatMap((b) => blockToLines(b, depth + 1))
+        : [];
+      return [
+        '<details>',
+        `<summary>${summary === '' ? 'dettagli' : summary}</summary>`,
+        '',
+        ...inner,
+        '</details>',
+      ];
     }
     case 'map': {
-      const loc = o['location'] !== null && typeof o['location'] === 'object' ? (o['location'] as Record<string, unknown>) : {};
+      const loc =
+        o['location'] !== null && typeof o['location'] === 'object'
+          ? (o['location'] as Record<string, unknown>)
+          : {};
       const lat = typeof loc['latitude'] === 'number' ? loc['latitude'] : '?';
       const lon = typeof loc['longitude'] === 'number' ? loc['longitude'] : '?';
       return [`[mappa: ${lat}, ${lon}]`];
     }
     case 'buttons': {
       const labels = Array.isArray(o['buttons'])
-        ? (o['buttons'] as Record<string, unknown>[]).map((b) => (typeof b?.['text'] === 'string' ? (b['text'] as string) : text(b?.['text']))).filter((l) => l !== '')
+        ? (o['buttons'] as Record<string, unknown>[])
+            .map((b) =>
+              typeof b?.['text'] === 'string' ? (b['text'] as string) : text(b?.['text']),
+            )
+            .filter((l) => l !== '')
         : [];
       return [`[pulsanti: ${labels.join(' · ') || 'nessuna etichetta'}]`];
     }
@@ -807,7 +889,9 @@ function blockToLines(block: unknown, depth: number): string[] {
 function itemToLines(item: unknown, index: number, depth: number): string[] {
   if (item === null || typeof item !== 'object') return [];
   const o = item as Record<string, unknown>;
-  const inner = Array.isArray(o['blocks']) ? (o['blocks'] as unknown[]).flatMap((b) => blockToLines(b, depth + 1)) : [];
+  const inner = Array.isArray(o['blocks'])
+    ? (o['blocks'] as unknown[]).flatMap((b) => blockToLines(b, depth + 1))
+    : [];
   const first = inner[0] ?? '';
   const rest = inner.slice(1).map((l) => `  ${l}`);
   let marker: string;
@@ -823,7 +907,8 @@ function itemToLines(item: unknown, index: number, depth: number): string[] {
 }
 
 function tableToLines(o: Record<string, unknown>): string[] {
-  if (!Array.isArray(o['cells']) || (o['cells'] as unknown[]).length === 0) return [unknownRichPlaceholder('table')];
+  if (!Array.isArray(o['cells']) || (o['cells'] as unknown[]).length === 0)
+    return [unknownRichPlaceholder('table')];
   const rows = (o['cells'] as unknown[][]).map((row) =>
     row.map((cell) => {
       if (cell === null || typeof cell !== 'object') return '';
@@ -833,15 +918,24 @@ function tableToLines(o: Record<string, unknown>): string[] {
       // escaped backslash and leaves the `|` live as a cell separator
       // (`js/incomplete-sanitization`). Escaping `\` first keeps every pipe
       // escaped no matter what the sender wrote.
-      return richPlain(c['text'], 0).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\n/g, ' ');
+      return richPlain(c['text'], 0)
+        .replace(/\\/g, '\\\\')
+        .replace(/\|/g, '\\|')
+        .replace(/\n/g, ' ');
     }),
   );
   const width = Math.max(...rows.map((r) => r.length));
   if (width === 0) return [unknownRichPlaceholder('table')];
   const pad = (r: string[]): string[] => [...r, ...Array(Math.max(0, width - r.length)).fill('')];
-  const lines = [`| ${pad(rows[0] ?? []).join(' | ')} |`, `| ${Array(width).fill('---').join(' | ')} |`];
+  const lines = [
+    `| ${pad(rows[0] ?? []).join(' | ')} |`,
+    `| ${Array(width).fill('---').join(' | ')} |`,
+  ];
   for (const row of rows.slice(1)) lines.push(`| ${pad(row).join(' | ')} |`);
-  const caption = typeof o['caption'] === 'string' || typeof o['caption'] === 'object' ? richPlain(o['caption'], 0) : '';
+  const caption =
+    typeof o['caption'] === 'string' || typeof o['caption'] === 'object'
+      ? richPlain(o['caption'], 0)
+      : '';
   if (caption !== '') lines.push(`[didascalia tabella: ${caption}]`);
   return lines;
 }
@@ -858,7 +952,9 @@ function mediaDescriptor(kind: string, o: Record<string, unknown>): string {
   const label = names[kind] ?? kind;
   const captionRaw = o['caption'];
   const caption =
-    captionRaw !== null && typeof captionRaw === 'object' ? richPlain((captionRaw as Record<string, unknown>)['text'], 0) : richPlain(captionRaw, 0);
+    captionRaw !== null && typeof captionRaw === 'object'
+      ? richPlain((captionRaw as Record<string, unknown>)['text'], 0)
+      : richPlain(captionRaw, 0);
   return caption !== '' ? `[${label}: ${caption}]` : `[${label}]`;
 }
 

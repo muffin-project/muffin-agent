@@ -5,7 +5,8 @@ import { redactText, scrubResourceEchoes } from '../../core/tracing/redact.js';
 import { ATTR, type AttributeValue } from '../../core/tracing/types.js';
 import type { ContinuableClass } from '../../core/turns/store.js';
 import { checkCompletion } from '../completion.js';
-import type { TenantClass } from '../context/assemble.js';
+import { minimalSystemPrompt, type TenantClass } from '../context/assemble.js';
+import { placeCacheBreakpoints } from '../context/cache-breakpoints.js';
 import { compactToolResults } from '../context/compact.js';
 import { type RecoveryFailure, recoveryStep } from '../profiles/recovery.js';
 import {
@@ -41,6 +42,7 @@ import {
   partialMessage,
   toolMessage,
 } from './message-origin.js';
+import type { TurnRun } from './run-state.js';
 import {
   continuationDedup,
   drainStream,
@@ -48,7 +50,6 @@ import {
   resolveContinuationSuffix,
   retryDelayMs,
 } from './stream.js';
-import type { TurnRun } from './run-state.js';
 import { runTool } from './tool-call.js';
 import {
   ApprovalRequired,
@@ -541,10 +542,20 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     toolContext.capabilityDiscovery?.activatePending();
 
     const reasoning = reasoningFromLegacyThinking(deps.profile.thinking);
+    // Interactive is the conversation. Minimal is a task: a job, or a future
+    // subagent. The fallback stays minimal on purpose — a forgotten field
+    // must not silently attach the sealed pact to a job.
+    const systemText =
+      input.promptMode === 'minimal'
+        ? (deps.minimalPrompt ?? minimalSystemPrompt(false))
+        : deps.systemPrompts[turnClass];
+    // One breakpoint on the fixed prefix, up to three on the last messages,
+    // never more than four. Copies: the session transcript is not a cache map.
+    const placed = placeCacheBreakpoints([{ type: 'text', text: systemText }], compacted.messages);
     const call: ChatCall = {
       model: deps.model,
-      system: [{ type: 'text', text: deps.systemPrompts[turnClass], cache: 'stable' }],
-      messages: compacted.messages,
+      system: placed.system,
+      messages: placed.messages,
       // Quale conversazione è questa, per chi smista fra più provider a
       // monte: la sessione, che è già l'identità che dura quanto dura il
       // filo del discorso. Vedi `ChatCall.conversation` per cosa ci si
@@ -636,7 +647,6 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     // describes — not a second stopwatch with its own idea of when the
     // request began.
     const chatCallStartedAt = Date.now();
-    let modelLease: ModelCallLease | undefined;
     let lastAbortReason: ReturnType<ModelCallLease['reason']>;
     let lastTelemetry: ModelCallTelemetry | undefined;
 
@@ -714,7 +724,6 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       const lease = execution.beginModelCall(input.signal, (progress) => {
         input.onProgress?.({ type: 'model_status', ...progress });
       });
-      modelLease = lease;
       const callWithBudget: ChatCall = { ...call, stream, signal: lease.signal };
       try {
         if (reasoningResolution?.status === 'unsupported')
@@ -867,7 +876,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     // can come back shaped like a success — empty. It is never a completion,
     // and it must never become the provider's `empty` to retry against the
     // same machine: it takes the same two doors as the catch above.
-      if (lastAbortReason !== undefined && result.text === null && result.toolCalls.length === 0) {
+    if (lastAbortReason !== undefined && result.text === null && result.toolCalls.length === 0) {
       chatSpan.setAttributes({
         'muffin.chat_call.duration_ms': Date.now() - chatCallStartedAt,
         'muffin.chat_call.abort_reason': lastAbortReason,
@@ -894,7 +903,9 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     }
     chatSpan.setAttributes({
       'muffin.chat_call.duration_ms': Date.now() - chatCallStartedAt,
-      ...(result.firstTextMs === undefined ? {} : { 'muffin.chat_call.first_text_ms': result.firstTextMs }),
+      ...(result.firstTextMs === undefined
+        ? {}
+        : { 'muffin.chat_call.first_text_ms': result.firstTextMs }),
       ...(lastTelemetry === undefined
         ? {}
         : { 'muffin.chat_call.active_model_ms_after': lastTelemetry.activeModelMsAfter }),

@@ -6,14 +6,13 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
-  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import DatabaseCtor from 'better-sqlite3';
@@ -759,8 +758,7 @@ export function restartCommand(platform: NodeJS.Platform): { printable: string; 
 /**
  * Il pid che sta servendo adesso, o `null` — mai un booleano. `offerGatewayRestart`
  * deve confrontare un pid PRIMA con un pid DOPO per sapere se un riavvio è
- * davvero successo; «gira qualcosa» non basta a rispondere. Stessa lettura di
- * quella che c'era già in `isGatewayRunning`, generalizzata perché la stessa
+ * davvero successo; «gira qualcosa» non basta a rispondere. La stessa
  * domanda serve anche a `cli/gateway.ts` — un meccanismo solo, non due che
  * possono divergere.
  */
@@ -773,10 +771,6 @@ export function currentGatewayPid(home: string): number | null {
   } finally {
     db.close();
   }
-}
-
-function isGatewayRunning(home: string): boolean {
-  return currentGatewayPid(home) !== null;
 }
 
 /**
