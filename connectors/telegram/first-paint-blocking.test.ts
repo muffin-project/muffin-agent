@@ -1,7 +1,7 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Update } from '@grammyjs/types';
 import { runInit } from '../../cli/init.js';
 import { buildRuntime } from '../../agent/runtime.js';
@@ -55,7 +55,7 @@ const privateMsg = (id: number): Update =>
   }) as unknown as Update;
 
 describe('first paint beats a blocking first tool handler', () => {
-  it('the first running step is sent before the handler body can block the loop', async () => {
+  it('shows preparation before recall and the running step before the first tool can block', async () => {
     type Call = { method: string; text?: string; rich?: unknown; messageId?: number };
     const calls: Call[] = [];
     let nextMessageId = 900;
@@ -123,14 +123,17 @@ describe('first paint beats a blocking first tool handler', () => {
       },
     };
 
-    // Plain `chat()` provider, no streaming: nothing is ever shown before the
-    // tool round, so `tool_start` is literally the transcript's first fact —
-    // no preamble paint can hide behind this assertion.
+    // No streaming or preamble: only status drafts appear before the tool.
+    let releaseModel!: () => void;
+    const modelGate = new Promise<void>((resolve) => {
+      releaseModel = resolve;
+    });
     let n = 0;
     const provider: Provider = {
       kind: 'openai-compat',
       chat: async (): Promise<ChatResult> => {
         if (n++ === 0) {
+          await modelGate;
           return {
             text: '',
             toolCalls: [{ id: 'c1', name: 'sonda_bloccante_xyz', args: {} }],
@@ -147,6 +150,16 @@ describe('first paint beats a blocking first tool handler', () => {
     const workspace = mkdtempSync(join(tmpdir(), 'muffin-firstpaint-ws-'));
     runInit({ home, apiKey: 'sk-firstpaint-never-called' });
     const runtime = buildRuntime(home, workspace);
+    let releaseRecall!: () => void;
+    const recallGate = new Promise<void>((resolve) => {
+      releaseRecall = resolve;
+    });
+    const vectors = runtime.deps.memory?.recall.vectors;
+    if (vectors === undefined) throw new Error('The fixture needs the runtime vector index');
+    const recallSearch = vi.spyOn(vectors, 'search').mockImplementation(async () => {
+      await recallGate;
+      return [];
+    });
     (runtime.deps as any).tools = [...(runtime.deps as any).tools, blockingTool];
     (runtime.deps as any).decide = () => ({ effect: 'allow' as const });
     const loop: LoopDeps = { ...(runtime.deps as any), provider };
@@ -162,9 +175,21 @@ describe('first paint beats a blocking first tool handler', () => {
     });
     (connector as unknown as { meUsername: string }).meUsername = 'MuffinBot';
 
+    let draining: Promise<void> | undefined;
     try {
       inbox.accept([privateMsg(1)], new Date().toISOString());
-      const draining = (connector as unknown as { drain: () => Promise<void> }).drain();
+      draining = (connector as unknown as { drain: () => Promise<void> }).drain();
+      await vi.waitFor(() => expect(recallSearch).toHaveBeenCalledOnce());
+      expect(n).toBe(0);
+      const draftText = () =>
+        calls.filter((c) => c.method === 'sendRichMessageDraft').map((c) => JSON.stringify(c.rich));
+      expect(draftText().at(0) ?? '').toContain('preparo il contesto');
+      expect(draftText().join('')).not.toContain('aspetto il modello');
+      expect(calls.some((c) => c.method === 'sendMessage' || c.method === 'sendRichMessage')).toBe(false);
+      releaseRecall();
+      await vi.waitFor(() => expect(draftText().at(-1) ?? '').toContain('aspetto il modello'));
+      expect(n).toBe(1);
+      releaseModel();
       await entered;
       // THE invariant: started synchronously from the first durable progress
       // fact, before tool execution could monopolise the event loop.
@@ -185,6 +210,10 @@ describe('first paint beats a blocking first tool handler', () => {
       expect(finalText).toContain('sonda_bloccante_xyz');
       expect(finalText).toContain('fatto.');
     } finally {
+      releaseRecall();
+      releaseModel();
+      releaseTool();
+      await draining?.catch(() => {});
       runtime.close();
     }
   });

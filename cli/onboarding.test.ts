@@ -23,7 +23,10 @@ import {
 /** A writable/readable pair that claims to be a TTY, so the prompts engage — same fixture as cli/prompt.test.ts. */
 function fakeTty(): { input: NodeJS.ReadStream; output: NodeJS.WriteStream } {
   const input = Object.assign(new PassThrough(), { isTTY: true }) as unknown as NodeJS.ReadStream;
-  const output = Object.assign(new PassThrough(), { isTTY: true, columns: 80 }) as unknown as NodeJS.WriteStream;
+  const output = Object.assign(new PassThrough(), {
+    isTTY: true,
+    columns: 80,
+  }) as unknown as NodeJS.WriteStream;
   return { input, output };
 }
 
@@ -33,7 +36,9 @@ function fakeTty(): { input: NodeJS.ReadStream; output: NodeJS.WriteStream } {
  * `/models` body; a caller that wants "nothing listening" or "never answers"
  * builds those cases directly instead of using this helper.
  */
-function fakeModelsServer(models: string[]): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+function fakeModelsServer(
+  models: string[],
+): Promise<{ baseUrl: string; close: () => Promise<void> }> {
   return new Promise((resolve) => {
     const server = createServer((_req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -116,7 +121,11 @@ describe('chooseProvider — the decision cmdInit used to make in two different 
 
   it('infers openai-compat from an OpenRouter key and fills its base URL', () => {
     const choice = chooseProvider(undefined, 'sk-or-v1-abc123', undefined);
-    expect(choice).toEqual({ provider: 'openai-compat', baseUrl: OPENROUTER_BASE_URL, reason: 'inferred' });
+    expect(choice).toEqual({
+      provider: 'openai-compat',
+      baseUrl: OPENROUTER_BASE_URL,
+      reason: 'inferred',
+    });
   });
 
   it('an explicit --base-url overrides the inferred OpenRouter default', () => {
@@ -155,14 +164,30 @@ describe('chooseProvider — the decision cmdInit used to make in two different 
 });
 
 describe('describeProviderChoice — say what was inferred, never decide silently', () => {
+  it('names OpenRouter OAuth without repeating the key', () => {
+    const line = describeProviderChoice(
+      { provider: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1', reason: 'oauth' },
+      'sk-or-v1-the-real-secret-must-not-appear',
+    );
+    expect(line).toContain('OpenRouter OAuth');
+    expect(line).not.toContain('sk-or-v1-the-real-secret-must-not-appear');
+  });
+
   it('announces an explicit provider', () => {
-    const line = describeProviderChoice({ provider: 'anthropic', baseUrl: undefined, reason: 'explicit' }, 'sk-ant-x');
+    const line = describeProviderChoice(
+      { provider: 'anthropic', baseUrl: undefined, reason: 'explicit' },
+      'sk-ant-x',
+    );
     expect(line).toContain('anthropic');
     expect(line).toContain('--provider');
   });
 
   it('announces an inferred openai-compat provider with its base URL, and shows only the prefix of the key', () => {
-    const choice = { provider: 'openai-compat' as const, baseUrl: OPENROUTER_BASE_URL, reason: 'inferred' as const };
+    const choice = {
+      provider: 'openai-compat' as const,
+      baseUrl: OPENROUTER_BASE_URL,
+      reason: 'inferred' as const,
+    };
     const line = describeProviderChoice(choice, 'sk-or-v1-the-real-secret-must-not-appear');
     expect(line).toContain('openai-compat');
     expect(line).toContain(OPENROUTER_BASE_URL);
@@ -171,12 +196,20 @@ describe('describeProviderChoice — say what was inferred, never decide silentl
   });
 
   it('announces an inferred anthropic provider', () => {
-    const choice = { provider: 'anthropic' as const, baseUrl: undefined, reason: 'inferred' as const };
+    const choice = {
+      provider: 'anthropic' as const,
+      baseUrl: undefined,
+      reason: 'inferred' as const,
+    };
     expect(describeProviderChoice(choice, 'sk-ant-x')).toContain('dedotto');
   });
 
   it('names the unrecognised key as the reason for the default, distinct from having no key at all', () => {
-    const choice = { provider: 'anthropic' as const, baseUrl: undefined, reason: 'default' as const };
+    const choice = {
+      provider: 'anthropic' as const,
+      baseUrl: undefined,
+      reason: 'default' as const,
+    };
     const withKey = describeProviderChoice(choice, 'xoxb-unknown-shape');
     const withoutKey = describeProviderChoice(choice, undefined);
     expect(withKey).not.toBe(withoutKey);
@@ -185,7 +218,11 @@ describe('describeProviderChoice — say what was inferred, never decide silentl
   });
 
   it('announces a local runtime the same way it announces an inferred key — no key, still said out loud', () => {
-    const choice = { provider: 'openai-compat' as const, baseUrl: 'http://127.0.0.1:11434/v1', reason: 'local' as const };
+    const choice = {
+      provider: 'openai-compat' as const,
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      reason: 'local' as const,
+    };
     const line = describeProviderChoice(choice, undefined);
     expect(line).toContain('openai-compat');
     expect(line).toContain('http://127.0.0.1:11434/v1');
@@ -251,7 +288,11 @@ describe('probeLocalRuntime — real loopback server, never the network', () => 
     const fake = await fakeModelsServer(['qwen3-local', 'llama3.2']);
     try {
       const probe = await probeLocalRuntime(fake.baseUrl);
-      expect(probe).toEqual({ available: true, baseUrl: fake.baseUrl, models: ['qwen3-local', 'llama3.2'] });
+      expect(probe).toEqual({
+        available: true,
+        baseUrl: fake.baseUrl,
+        models: ['qwen3-local', 'llama3.2'],
+      });
     } finally {
       await fake.close();
     }
@@ -290,21 +331,33 @@ describe('probeLocalRuntime — real loopback server, never the network', () => 
 describe('askLocalOrApi — the local-or-API question, asked only once a probe found something', () => {
   it('an empty answer (Enter) accepts the local runtime — it was just detected and costs nothing', async () => {
     const { input, output } = fakeTty();
-    const pending = askLocalOrApi({ available: true, baseUrl: 'http://127.0.0.1:11434/v1', models: ['a'] }, input, output);
+    const pending = askLocalOrApi(
+      { available: true, baseUrl: 'http://127.0.0.1:11434/v1', models: ['a'] },
+      input,
+      output,
+    );
     input.write('\n');
     await expect(pending).resolves.toEqual({ baseUrl: 'http://127.0.0.1:11434/v1', models: ['a'] });
   });
 
   it('"y" also accepts, same convention offerGateway already uses for its Y/n', async () => {
     const { input, output } = fakeTty();
-    const pending = askLocalOrApi({ available: true, baseUrl: 'http://127.0.0.1:11434/v1', models: [] }, input, output);
+    const pending = askLocalOrApi(
+      { available: true, baseUrl: 'http://127.0.0.1:11434/v1', models: [] },
+      input,
+      output,
+    );
     input.write('y\n');
     await expect(pending).resolves.toEqual({ baseUrl: 'http://127.0.0.1:11434/v1', models: [] });
   });
 
   it('"n" declines — the caller falls through to the ordinary API-key prompt', async () => {
     const { input, output } = fakeTty();
-    const pending = askLocalOrApi({ available: true, baseUrl: 'http://127.0.0.1:11434/v1', models: [] }, input, output);
+    const pending = askLocalOrApi(
+      { available: true, baseUrl: 'http://127.0.0.1:11434/v1', models: [] },
+      input,
+      output,
+    );
     input.write('n\n');
     await expect(pending).resolves.toBeUndefined();
   });
@@ -315,14 +368,20 @@ describe('askModelChoice — one numbered menu, reused for OpenRouter families a
     const { input, output } = fakeTty();
     const pending = askModelChoice(OPENROUTER_MODEL_FAMILIES, 'header', input, output);
     input.write('\n');
-    await expect(pending).resolves.toEqual({ main: 'qwen/qwen3.8-27b', light: 'qwen/qwen3.7-flash' });
+    await expect(pending).resolves.toEqual({
+      main: 'qwen/qwen3.8-27b',
+      light: 'qwen/qwen3.7-flash',
+    });
   });
 
   it('a listed number picks that family — API con famiglia scelta', async () => {
     const { input, output } = fakeTty();
     const pending = askModelChoice(OPENROUTER_MODEL_FAMILIES, 'header', input, output);
     input.write('3\n'); // GPT
-    await expect(pending).resolves.toEqual({ main: 'openai/gpt-5.6-terra', light: 'openai/gpt-5-nano' });
+    await expect(pending).resolves.toEqual({
+      main: 'openai/gpt-5.6-terra',
+      light: 'openai/gpt-5-nano',
+    });
   });
 
   it('can choose the OpenRouter Free router by number', async () => {
@@ -336,7 +395,10 @@ describe('askModelChoice — one numbered menu, reused for OpenRouter families a
     const { input, output } = fakeTty();
     const pending = askModelChoice(OPENROUTER_MODEL_FAMILIES, 'header', input, output);
     input.write('my-org/my-custom-model\n');
-    await expect(pending).resolves.toEqual({ main: 'my-org/my-custom-model', light: 'my-org/my-custom-model' });
+    await expect(pending).resolves.toEqual({
+      main: 'my-org/my-custom-model',
+      light: 'my-org/my-custom-model',
+    });
   });
 
   it('a number outside the list is treated the same way — as typed text, not an error', async () => {
@@ -369,7 +431,7 @@ describe('askModelChoice — one numbered menu, reused for OpenRouter families a
   });
 });
 
-describe('OPENROUTER_MODEL_FAMILIES — the owner\'s verbatim default first', () => {
+describe("OPENROUTER_MODEL_FAMILIES — the owner's verbatim default first", () => {
   it('Qwen is first, with the exact ids the owner is actually running', () => {
     expect(OPENROUTER_MODEL_FAMILIES[0]).toEqual({
       label: 'Qwen',
@@ -387,9 +449,13 @@ describe('OPENROUTER_MODEL_FAMILIES — the owner\'s verbatim default first', ()
     });
   });
 
-  it('Anthropic mirrors defaultModels\' own compat pair — picking it changes nothing silently', () => {
+  it("Anthropic mirrors defaultModels' own compat pair — picking it changes nothing silently", () => {
     const anthropic = OPENROUTER_MODEL_FAMILIES.find((f) => f.label === 'Anthropic');
-    expect(anthropic).toEqual({ label: 'Anthropic', main: 'anthropic/claude-sonnet-5', light: 'anthropic/claude-haiku-4.5' });
+    expect(anthropic).toEqual({
+      label: 'Anthropic',
+      main: 'anthropic/claude-sonnet-5',
+      light: 'anthropic/claude-haiku-4.5',
+    });
   });
 });
 

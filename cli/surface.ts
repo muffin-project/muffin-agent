@@ -1162,13 +1162,25 @@ export function attachSendFile(
   deliverFile: (channel: string, file: FileSpec) => Promise<DeliveryOutcome> = registry.deliverFile,
 ): void {
   const vaultRoot = paths(home).vault;
-  const guards = mandatoryGuards(home, vaultRoot);
-  const scope: FsScope = {
-    root: vaultRoot,
-    denyWrite: guards.denyWrite,
-    denyRead: guards.denyRead,
+  /**
+   * Two read scopes, in this order: the project the agent writes into, then the
+   * vault an owner's attachment lands in. The workspace was missing until
+   * 19/10/2026, so a report produced by `fs_write` could not be sent at all —
+   * `send_file` looked only in the vault (G4).
+   */
+  const projectGuards = mandatoryGuards(home, runtime.workspace);
+  const projectScope: FsScope = {
+    root: runtime.workspace,
+    denyWrite: projectGuards.denyWrite,
+    denyRead: projectGuards.denyRead,
   };
-  runtime.register(makeSendFileTool({ scope, deliverFile }), sendFileCapability);
+  const vaultGuards = mandatoryGuards(home, vaultRoot);
+  const vaultScope: FsScope = {
+    root: vaultRoot,
+    denyWrite: vaultGuards.denyWrite,
+    denyRead: vaultGuards.denyRead,
+  };
+  runtime.register(makeSendFileTool({ scopes: [projectScope, vaultScope], deliverFile }), sendFileCapability);
 }
 
 /**

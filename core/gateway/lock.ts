@@ -135,8 +135,8 @@ export class GatewayLock {
    * so a takeover mid-tick is caught before its next effect rather than only
    * discovered, after the fact, on the next `beat()`.
    */
-  isCurrentClaim(pid: number = process.pid): boolean {
-    return this.lock.isCurrentHolder(pid);
+  isCurrentClaim(pid: number = process.pid, now?: Date): boolean {
+    return this.lock.isCurrentHolder(pid, now);
   }
 }
 

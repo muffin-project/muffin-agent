@@ -5,7 +5,6 @@ import type { SessionRef } from '../../core/session/store.js';
 import type { SpanHandle } from '../../core/tracing/types.js';
 import { ATTR } from '../../core/tracing/types.js';
 import type { TurnRecord } from '../../core/turns/store.js';
-import { planTaint } from '../../core/turns/todo.js';
 import {
   approvalFootnote,
   decodeWaitFor,
@@ -638,26 +637,11 @@ async function runClaimedTurn(
     }
 
     /**
-     * The plan, and the taint that comes with it — in that order.
-     *
-     * `raiseCeiling` **before** the rows reach the transcript, because the
-     * whole property is that the turn is *decided* at the tier of everything in
-     * its context — a plan written by a turn that had read the web is model
-     * text shaped by that page, and this turn may not act as if it were not.
-     *
-     * `raiseCeiling`, not `raiseTaint` (ADR-0044 §Riconciliazione 2026-08-28):
-     * the plan item is *this turn's own reinjected past*, not something this
-     * turn did. Stamping this turn's own fresh output at the plan's inherited
-     * tier is what kept a session dirty long after the item that dirtied it —
-     * every clean answer re-poisoning the window it was meant to age out of.
-     */
-    const open = deps.todos.open(input.tenant, input.session.id);
-    snapshot.raiseCeiling(planTaint(open), 'un promemoria aperto di questa sessione');
-
-    /**
-     * The session transcript, and the taint that comes with it — same order,
-     * same reason, one line down from the plan above (ADR-0044 §Revisione,
-     * "la history non lava la provenienza"; a DAY-1 readiness invariant).
+     * The session transcript, and the taint that comes with it — `raiseCeiling`
+     * before the rows reach the transcript, because the whole property is that
+     * the turn is *decided* at the tier of everything in its context (ADR-0044
+     * §Revisione, "la history non lava la provenienza"; a DAY-1 readiness
+     * invariant).
      *
      * `reinjectedHistory` is the same cut `buildContext` renders — computed
      * once here so the two can never disagree about what "reinjected" means
@@ -698,7 +682,6 @@ async function runClaimedTurn(
     const builtContext = buildContext(
       input,
       recalled,
-      open,
       spoken,
       now(),
       deps.model,

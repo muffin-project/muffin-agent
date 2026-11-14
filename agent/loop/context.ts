@@ -1,6 +1,5 @@
-import { ambienteSection, tenantClass, todoSection, type IstanzaFacts } from '../context/assemble.js';
+import { ambienteSection, tenantClass, type IstanzaFacts } from '../context/assemble.js';
 import type { ReinjectedHistory } from '../context/history-taint.js';
-import type { TodoItem } from '../../core/turns/todo.js';
 import type { AudioBlock, ContentBlock, ImageBlock, Message, MessageOrigin } from '../providers/types.js';
 import { harnessMessage, inputMessage, provenanceMessage } from './message-origin.js';
 import type { TurnInput } from './types.js';
@@ -72,7 +71,7 @@ export function userAudios(messages: Message[]): AudioBlock[] {
  * Provider `role` is never the source of truth for what a section is — see
  * `MessageOrigin` and the per-provider compiler (`agent/providers/compile.ts`).
  */
-export type SemanticSectionKey = 'announcement' | 'history' | 'memory' | 'runtime' | 'work' | 'owner';
+export type SemanticSectionKey = 'announcement' | 'history' | 'memory' | 'runtime' | 'owner';
 
 /**
  * One turn's context as typed sections, stable first, volatile last.
@@ -92,8 +91,6 @@ export type SemanticContext = {
   memory: Message | null;
   /** Per-turn facts: clock, surface, model, instance. Always present. */
   runtime: Message;
-  /** Open plan rows, or null when no row is open (zero cost). */
-  work: Message | null;
   /** The current owner input: surface bytes and media ONLY. Always last. */
   owner: Message;
 };
@@ -101,7 +98,6 @@ export type SemanticContext = {
 export type SemanticArgs = {
   input: TurnInput;
   recalled: ContentBlock[];
-  open: TodoItem[];
   spoken: ReinjectedHistory;
   adesso: Date;
   modello: string;
@@ -114,16 +110,6 @@ export type SemanticArgs = {
 export function buildContext(
   input: TurnInput,
   recalled: ContentBlock[],
-  /**
-   * The open plan, read and **taint-accounted by the caller**.
-   *
-   * Passed in rather than read here, and that is the whole point of the
-   * parameter: showing these rows to the model raises the turn's taint, and a
-   * function that both fetched them and rendered them would be the one place
-   * where the raise could be forgotten without anything looking wrong. The
-   * caller has the snapshot; this has the strings.
-   */
-  open: TodoItem[],
   /**
    * The session history, already cut to what will actually be reinjected —
    * **taint-accounted by the caller**, same reasoning as `open` immediately
@@ -176,7 +162,6 @@ export function buildContext(
     assembleSemantic({
       input,
       recalled,
-      open,
       spoken,
       adesso,
       modello,
@@ -196,7 +181,6 @@ export function flattenSemantic(ctx: SemanticContext): Message[] {
     ...ctx.history,
     ...(ctx.memory === null ? [] : [ctx.memory]),
     ctx.runtime,
-    ...(ctx.work === null ? [] : [ctx.work]),
     ctx.owner,
   ];
 }
@@ -205,13 +189,21 @@ export function flattenSemantic(ctx: SemanticContext): Message[] {
  * One turn's context as typed sections.
  *
  * Same inputs as `buildContext` (which delegates here and flattens): the
- * split is the invariant. Memory, runtime facts and open work each ride in
- * their own message with their own provenance, and the current owner input
- * carries ONLY surface bytes and media — never `role: 'user'` as a sack for
- * everything the loop knows.
+ * split is the invariant. Memory and runtime facts each ride in their own
+ * message with their own provenance, and the current owner input carries ONLY
+ * surface bytes and media — never `role: 'user'` as a sack for everything the
+ * loop knows.
+ *
+ * **The plan is absent on purpose.** It used to ride here on every turn of a
+ * session with an open row; that pushed a work board into casual messages in
+ * the same thread (measured on the owner's Telegram DM: four recent `pending`
+ * rows from a video task showed up on every unrelated "hey"). The plan is now
+ * read on demand through the `todo` tool, and the taint it carries rides on
+ * that tool result (`agent/tools/todo.ts`), so a tainted row still cannot be
+ * acted on as if it were clean.
  */
 export function assembleSemantic(args: SemanticArgs): SemanticContext {
-  const { input, recalled, open, spoken, adesso, modello, profilo, istanza, timeZone, undoneTraceIds } = args;
+  const { input, recalled, spoken, adesso, modello, profilo, istanza, timeZone, undoneTraceIds } = args;
   const firstEncounter = args.firstEncounter ?? false;
   const { kept, dropped } = spoken;
 
@@ -282,22 +274,6 @@ export function assembleSemantic(args: SemanticArgs): SemanticContext {
     });
   }
   /**
-   * The plan, on every turn of the session, whether or not anyone asked.
-   *
-   * This is the read half of `todo`, and its placement is the decision: **not**
-   * in `systemPrompts`, which is assembled once at boot and is the cacheable
-   * prefix — a list that changes every turn would go in front of the stable
-   * text and cost the warm prefix on every message, which is the mistake
-   * `docs/history/design-notes/m3-caching-and-per-connector-timing.md` records the peers
-   * avoiding. So it rides in the volatile tail, next to recalled memory, for
-   * the same reason recall does.
-   *
-   * Unconditional, and that is the point: a plan the model has to remember to
-   * ask for is a plan it forgets the moment its own earlier prose is compacted.
-   */
-  const plan = todoSection(open);
-
-  /**
    * Che momento è, e dove stai parlando. Vedi `ambienteSection`: senza,
    * chiedere l'ora faceva partire una richiesta di permesso per `sys.shell`.
    */
@@ -323,9 +299,6 @@ export function assembleSemantic(args: SemanticArgs): SemanticContext {
 
   const runtime = provenanceMessage('user', 'runtime', [{ type: 'text' as const, text: ambiente }]);
 
-  const work: Message | null =
-    plan === '' ? null : provenanceMessage('user', 'work', [{ type: 'text' as const, text: plan }]);
-
   // Le immagini stanno **qui**, non nel record.
   //
   // `drive` svuota `messages` e lo ricostruisce da questa funzione a ogni
@@ -347,7 +320,7 @@ export function assembleSemantic(args: SemanticArgs): SemanticContext {
     input.inputOrigin ?? 'owner',
   );
 
-  return { announcement, history, memory, runtime, work, owner };
+  return { announcement, history, memory, runtime, owner };
 }
 
 /**
@@ -374,7 +347,6 @@ export type AssemblySectionDescriptor = {
     | 'session-replay'
     | 'recall-rendered'
     | 'turn-facts'
-    | 'open-plan-rows'
     | 'surface-input';
   /** Every section here is volatile: the stable prefix lives outside this structure. */
   stability: 'stable' | 'volatile';
@@ -388,7 +360,6 @@ const SECTION_REASON: Record<SemanticSectionKey, AssemblySectionDescriptor['reas
   history: 'session-replay',
   memory: 'recall-rendered',
   runtime: 'turn-facts',
-  work: 'open-plan-rows',
   owner: 'surface-input',
 };
 
@@ -415,7 +386,6 @@ export function describeAssembly(ctx: SemanticContext): AssemblySectionDescripto
     ...ctx.history.map((message) => ({ key: 'history' as const, message })),
     ...(ctx.memory === null ? [] : [{ key: 'memory' as const, message: ctx.memory }]),
     { key: 'runtime' as const, message: ctx.runtime },
-    ...(ctx.work === null ? [] : [{ key: 'work' as const, message: ctx.work }]),
     { key: 'owner' as const, message: ctx.owner },
   ];
   return sections.map(({ key, message }) => {

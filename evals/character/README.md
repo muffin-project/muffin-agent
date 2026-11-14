@@ -62,6 +62,10 @@ nessuna corsa può falsificare — `not_tryhard` lo è stata fino al 03/09/2026.
 npx tsx evals/character/run.ts --dry-run
 ```
 
+Se il tier free risponde `429 free-models-per-min`, distanzia le chiamate fra un
+probe e il suo giudice: `MUFFIN_EVAL_PACE_MS=6000 npx tsx evals/character/run.ts …`
+(default 0, nessun cambiamento di comportamento).
+
 Il dry-run non chiama nessun modello: stampa i probe, i token stimati e il costo
 per una corsa reale. Ri-misurato il 03/09/2026 sul prompt reale di oggi (~5.229
 token di system prompt per una singola chiamata, char/4 come `muffin prompt
@@ -77,6 +81,10 @@ aggiunge il costo dell'output di ciascun modello e quello del giudice, non
 stimati qui: la cifra sopra è **solo la spesa lato input dei modelli sotto
 test**. Una corsa reale costa più di così e va autorizzata dall'owner (regola
 di casa: le chiamate a pagamento le decide lui).
+
+**Mai un runtime locale** (Ollama o simili): ogni misura gira su API, con
+provider, modelli e giudice scelti esplicitamente. Un modello locale non è la
+produzione e il risultato non si trasferisce.
 
 La corsa reale vuole provider, modelli e giudice espliciti, e la chiave da una
 variabile d'ambiente — mai da `~/.muffin`, mai da argv, mai stampata:
@@ -127,6 +135,37 @@ LLM_API_KEY=ollama-local npx tsx evals/character/run.ts \
   --provider openai-compat --base-url http://127.0.0.1:11434/v1 \
   --models gemma4:12b,gemma4:e4b --judge-model qwen3:8b
 ```
+
+**Un modello pinnato, mai `openrouter/free` in una misura.** La produzione può
+restare sull'alias `openrouter/free` (l'owner l'ha deciso): un alias che instrada
+su modelli diversi di giorno in giorno è comodo per chattare e **inutile come
+metro** — due corse identiche misurerebbero due modelli diversi e il verdetto non
+si potrebbe attribuire né al carattere né al modello. Una corsa di misura pinna
+un id concreto, e pinna anche il giudice:
+
+```bash
+OPENROUTER_API_KEY=… npx tsx evals/character/run.ts \
+  --provider openai-compat --base-url https://openrouter.ai/api/v1 \
+  --models <provider>/<modello-a>:free --judge-model <provider>/<modello-b>:free
+```
+
+Sostituisci `<provider>/<modello-a>:free` con un id `:free` **concreto** che
+esiste oggi su OpenRouter; il dry-run (`--dry-run`) dichiara il costo d'input
+prima di autorizzare la corsa.
+
+**La stessa corsa su due versioni del prompt.** `--prompt-version v1|v2`
+seleziona quale system prompt la home del modello assembla (`config.prompt.version`,
+la stessa manopola di `muffin prompt version`). È il solo modo per rispondere a
+«il carattere l'ha ucciso il modello o il prompt?» misurando: lo stesso modello
+due volte, `report.md` con `<modello>@v1` e `<modello>@v2` come due righe
+distinte. In un `--config` la versione può stare **per modello**, così v1 e v2
+convivono in un report solo:
+
+```bash
+npx tsx evals/character/run.ts --provider openai-compat --base-url https://openrouter.ai/api/v1 \
+  --models <id>:free --prompt-version v2 --judge-model <giudice>:free
+```
+
 
 Le trascrizioni finiscono in `evals/character/out/<timestamp>/<modello>/` e
 **non** sono versionate: sono evidenza di una corsa, non del repo. Accanto a

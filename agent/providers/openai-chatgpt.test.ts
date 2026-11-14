@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatGPTModel } from '../../core/config/chatgpt-oauth.js';
 import { OpenAIChatGPTProvider } from './openai-chatgpt.js';
-import { ProviderError, type ChatCall } from './types.js';
+import { type ChatCall, ProviderError } from './types.js';
 
 const tool = {
   name: 'read_file',
@@ -137,6 +137,33 @@ describe('OpenAI ChatGPT plan Responses provider', () => {
       retryable: false,
       source: 'transport',
     });
+  });
+
+  it.each([
+    ['subscription_sharing_usage_limit_exceeded', false],
+    ['rate_limit_exceeded', true],
+  ])('classifies HTTP 429 with code %s', async (code, retryable) => {
+    const provider = new OpenAIChatGPTProvider(
+      { accessToken: async () => 'synthetic-token', listModels: async () => [] },
+      {
+        fetch: async () =>
+          Response.json(
+            { error: { code, message: 'private quota payload' } },
+            {
+              status: 429,
+              headers: { 'x-request-id': 'req_synthetic', 'retry-after': '3' },
+            },
+          ),
+      },
+    );
+    const error = await provider.chat(CALL).catch((failure: unknown) => failure);
+    expect(error).toMatchObject({ status: 429, retryable });
+    expect(String(error)).not.toContain('private quota payload');
+    if (retryable) expect(error).toMatchObject({ retryAfterMs: 3000 });
+    else
+      expect(error).toMatchObject({
+        details: { quota: 'chatgpt-plan', requestId: 'req_synthetic' },
+      });
   });
 
   it('sends full semantic history to the public streaming endpoint and maps a completed response and usage', async () => {
@@ -556,7 +583,11 @@ describe('OpenAI ChatGPT plan Responses provider', () => {
       }),
     ]);
     const failure = await failed.provider.chat(CALL).catch((error: unknown) => error);
-    expect(failure).toMatchObject({ retryable: false });
+    expect(failure).toMatchObject({
+      retryable: false,
+      details: { quota: 'chatgpt-plan' },
+    });
+    expect((failure as Error).message).toContain('resp_fail');
     expect((failure as Error).message).not.toContain('Usage limit reached');
 
     const incomplete = harness([

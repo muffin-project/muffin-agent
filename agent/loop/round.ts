@@ -894,6 +894,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     }
     chatSpan.setAttributes({
       'muffin.chat_call.duration_ms': Date.now() - chatCallStartedAt,
+      ...(result.firstTextMs === undefined ? {} : { 'muffin.chat_call.first_text_ms': result.firstTextMs }),
       ...(lastTelemetry === undefined
         ? {}
         : { 'muffin.chat_call.active_model_ms_after': lastTelemetry.activeModelMsAfter }),

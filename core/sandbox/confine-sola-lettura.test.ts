@@ -25,7 +25,7 @@ import { probeSandbox } from './probe.js';
  * quello è una suite sola per due meccanismi: una garanzia che solo una
  * piattaforma asserisce è una garanzia che deriva.
  *
- * **Le mutazioni che lo devono far cadere**, tutte e tre in codice nostro:
+ * **Le mutazioni che lo devono far cadere**, tutte e quattro in codice nostro:
  *
  *  1. `networkOff()` in `core/sandbox/executor.ts` che non restituisce più il
  *     blocco `network` (o `allowedDomains` che sparisce): srt smette di
@@ -35,6 +35,9 @@ import { probeSandbox } from './probe.js';
  *     «la scrittura fuori dallo scratch fallisce» diventa rossa.
  *  3. `makeShellTool` che chiama `run` invece di `runReadOnly` — quella cade in
  *     `agent/tools/shell.test.ts`, che è dove sta il cablaggio.
+ *  4. `buildReadScope` (`core/sandbox/read-scope.ts`) che non nega più la
+ *     radice, o `execute()` che smette di passare `allowRead`: il canarino
+ *     fuori dal workspace torna leggibile e la sua asserzione diventa rossa.
  */
 const host = platform();
 
@@ -252,14 +255,12 @@ describe.runIf(gate.run)(`le due corsie contengono cose diverse (${gate.why})`, 
       expect(r.code).not.toBe(0);
     });
 
-    it.fails('un file fuori dal workspace e fuori dalla deny-list non e leggibile (ESPOSIZIONE NOTA #645)', async () => {
-      // La corsia in sola lettura lega `--ro-bind / /`: tutto l'host è
-      // leggibile tranne la deny-list finita. Questo test documenta
-      // l'esposizione in eseguibile — oggi il canarino SI legge, quindi il
-      // test fallisce ed `it.fails` resta verde. Quando la superficie di
-      // lettura sarà allow-scoped (workspace + scratch + path di sistema
-      // espliciti), il canarino diventerà illeggibile, `it.fails` andrà rosso
-      // e andrà girato in `it` normale: quel rosso sarà la prova del fix.
+    it('un file fuori dal workspace e fuori dalla deny-list non e leggibile (ex #645, chiuso)', async () => {
+      // La corsia in sola lettura legge solo workspace, scratch di sessione
+      // e path di sistema espliciti (`core/sandbox/read-scope.ts`): il resto
+      // dell'host e negato in lettura. Questo canarino vive fuori dal
+      // workspace e fuori dalla deny-list — prima della slice si leggeva
+      // (`it.fails` verde = esposizione), ora deve restare illeggibile.
       const canarino = join(base, 'fuori-dal-workspace.txt');
       writeFileSync(canarino, 'CANARINO-FUORI-PERIMETRO-645\n');
       const r = await executor.runReadOnly({ command: `cat '${canarino}'`, cwd: workspace });

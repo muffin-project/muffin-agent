@@ -5,7 +5,9 @@
 `npm run e2e:real:preflight` compila e avvia la CLI compilata in una nuova Home
 temporanea, isola `HOME`, `MUFFIN_HOME`, `MUFFIN_WORKSPACE`, le directory XDG e
 `TMPDIR`, inizializza DB/Root of Trust e verifica il sandbox con la stessa env
-isolata. Non richiede una chiave e non chiama il modello: interroga soltanto il
+isolata. Avvia il gateway compilato in foreground, verifica il PID sul socket
+di controllo e lo ferma a fine prova. I turni partono dalla CLI sullo stesso
+gateway. Il preflight non richiede una chiave e non chiama il modello: interroga il
 catalogo pubblico OpenRouter senza autenticazione e verifica identità, supporto
 tool, contesto e prezzi zero. Produce `report.json` con SHA del commit, lockfile
 e stato delle sorgenti runtime; exit 0 indica PASS, 1 FAIL, 2 BLOCKED. Ogni
@@ -67,12 +69,16 @@ una Home di prova già autorizzata, privata e marcata, senza copiare credenziali
 Il root deve essere canonico sotto `/private/tmp`, avere il marker sintetico
 con scope `chatgpt.tokens.use.direct` e non avere socket gateway. Provider e
 modelli main/light devono essere fissati alla route ChatGPT e `gpt-6.1-sol`;
-`--model` diverso viene rifiutato. Il runner crea workspace e sessioni unici,
+`--model` diverso viene rifiutato. La Home inizializzata con `muffin init` deve
+avere solo la CLI attiva e nessun MCP, job o turno pendente. Usa l'embedder locale
+predefinito e lascia assenti le configurazioni di search e judgment. Il runner
+crea workspace e sessioni unici,
 aggiunge un solo profilo temporaneo per esercitare discovery e lo rimuove,
 verificando gli hash originali di config e profili. Usa gli stessi oracoli e
 osserva gli schemi e le chiamate reali Responses, senza registrare prompt,
 header di autorizzazione o token. Il budget condiviso è 10 richieste / 180 s,
-inclusa una risposta già in corso; nessun fallback a provider API. La route
+inclusa una risposta già in corso. Un 429 blocca ulteriori richieste ChatGPT
+della prova. Nessun fallback a provider API. La route
 ChatGPT non supporta `max_output_tokens`: il report dichiara il limite remoto
 di output NOT_ENFORCED e mantiene il limite locale di tempo.
 

@@ -183,7 +183,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'busy input: a message sent while a turn is alive is acknowledged at once and answered after it, and /stop interrupts the live turn (ADR-0054)',
   ),
   verde('B3', 'wait: a turn that asks to wait persists and RELEASES the process instead of holding it'),
-  verde('B4', 'todo: a plan written by one process is shown, unasked, to the next one in the session'),
+  verde('B4', 'todo: a plan written by one process is readable on demand by the next one in the session (ADR-0104)'),
   verde(
     'B9',
     'todo: a resumed turn that drops granted plan rows settles continuable naming them, never answered — the completion gate, not a sentence',

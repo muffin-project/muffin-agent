@@ -106,10 +106,8 @@ export const TODO_STATES: readonly TodoState[] = ['pending', 'done', 'blocked', 
  * `agent/tools/todo.ts` already bounds one `plan` call — 30 items, 500 chars
  * each — but that cap is per call, not per session: nothing stopped a model
  * from calling `plan` again and again, each time adding new steps under new
- * keys, while `agent/context/assemble.ts` renders **every** open row into
- * **every** turn unconditionally (`todoSection`, "empty in, empty out" — the
- * property that lets the loop call it without checking first). A plan that
- * only grows turns that free lunch into an unbounded prompt.
+ * keys, while one `todo list` reads **every** open row back in a single answer.
+ * A plan that only grows turns that free lunch into an unbounded reply.
  *
  * Sixty, in the same spirit as `MAX_SUSPENDED_PER_TENANT` (`core/turns/wait.ts`):
  * high enough that a real multi-step piece of work — the kind this primitive
@@ -412,7 +410,12 @@ export class TodoStore {
     return this.listStmt.all({ tenant, sessionId }) as TodoItem[];
   }
 
-  /** What is still owed — the set the turn's context carries. */
+  /**
+   * What is still owed: rows that are not done. Read at the finish boundary
+   * (did this Turn leave work it created open?) and by the per-session cap —
+   * never pushed into the context, which is why `open` stays a query and not
+   * a section (ADR-0104).
+   */
   open(tenant: string, sessionId: string): TodoItem[] {
     return this.openStmt.all({ tenant, sessionId }) as TodoItem[];
   }

@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { z } from 'zod';
 import { ensurePrivateDir, tightenPrivateFile } from './private-fs.js';
 import { SEARCH_PROVIDER_IDS } from './providers.js';
@@ -178,6 +178,30 @@ export const ConfigSchema = z.object({
     light: z.string().min(1),
     deep: z.string().min(1).optional(),
   }),
+  /**
+   * La cartella in cui lavorano i turni quando nessuna superficie ne sceglie
+   * una standoci dentro.
+   *
+   * Senza questo campo il gateway, che launchd avvia in `~/.muffin`, e
+   * `muffin run`, che inoltra al gateway, finiscono sempre in
+   * `~/muffin-workspace`: una cartella vera, ma non il progetto su cui
+   * l'owner sta lavorando. Il REPL non ne ha bisogno — chi lo apre da un
+   * progetto ha già scelto la cartella con `cd` — mentre le superfici
+   * supervised non hanno un `cd` da cui leggere la scelta. Questo campo è
+   * quella scelta, dichiarata una volta e valida per tutte.
+   *
+   * Assente = comportamento di sempre (`~/muffin-workspace`, o
+   * `MUFFIN_WORKSPACE`). Non può nominare la home né una sua sottocartella:
+   * `resolveWorkspace` rifiuta quel caso da sempre, e `muffin workspace set`
+   * lo rifiuta prima di scrivere, con una frase invece di un silenzio.
+   */
+  workspace: z
+    .string()
+    .min(1)
+    .refine((path) => isAbsolute(path), {
+      message: 'workspace deve essere un percorso assoluto: `muffin workspace set <cartella>` lo scrive così',
+    })
+    .optional(),
   /**
    * Il ragionamento sul turno di conversazione, quando l'owner non vuole quello
    * che il profilo del suo modello dichiara.
