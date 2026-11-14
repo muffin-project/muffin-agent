@@ -1,12 +1,19 @@
-import DatabaseCtor from 'better-sqlite3';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:http';
 import { EventEmitter } from 'node:events';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { DELIVERED } from '../core/surface/types.js';
 import { loadConfig, paths } from '../core/config/config.js';
 import { GatewayLock, readGateway, STALE_AFTER_MS } from '../core/gateway/lock.js';
 import { describeSupervision } from '../core/gateway/notify.js';
@@ -14,13 +21,21 @@ import { LAUNCHD_LABEL } from '../core/gateway/unit.js';
 import { HARD_STALE_MULTIPLIER } from '../core/lock/durable.js';
 import { JobStore } from '../core/scheduler/jobs.js';
 import { Scheduler, type SchedulerEvent } from '../core/scheduler/scheduler.js';
+import { DELIVERED } from '../core/surface/types.js';
 import type { TurnLane } from '../core/turns/lane.js';
 import { ModelLane } from '../core/turns/model-lane.js';
 import { TurnStore } from '../core/turns/store.js';
-import { gatewayStandDown } from './repl.js';
-import { cmdGatewayInstall, cmdGatewayStatus, EXIT_NOT_ACTIVATED } from './gateway.js';
-import { cmdGatewayRestart, cmdGatewayRun, stopCaveat, tickMsFromEnv } from './gateway.js';
+import {
+  cmdGatewayInstall,
+  cmdGatewayRestart,
+  cmdGatewayRun,
+  cmdGatewayStatus,
+  EXIT_NOT_ACTIVATED,
+  stopCaveat,
+  tickMsFromEnv,
+} from './gateway.js';
 import { runInit } from './init.js';
+import { gatewayStandDown } from './repl.js';
 
 /**
  * The wiring, from the command line the owner actually types.
@@ -66,8 +81,16 @@ function holdGateway(dir: string, status = 'in attesa'): void {
 function overdueJob(dir: string): string {
   const db = new DatabaseCtor(paths(dir).db);
   try {
-    const job = new JobStore(db).add({ cron: '0 8 * * *', timezone: 'Europe/Rome', goal: 'brief', channel: 'cli' });
-    db.prepare(`UPDATE jobs SET next_fire_at = ? WHERE id = ?`).run(new Date(Date.now() - 60_000).toISOString(), job.id);
+    const job = new JobStore(db).add({
+      cron: '0 8 * * *',
+      timezone: 'Europe/Rome',
+      goal: 'brief',
+      channel: 'cli',
+    });
+    db.prepare(`UPDATE jobs SET next_fire_at = ? WHERE id = ?`).run(
+      new Date(Date.now() - 60_000).toISOString(),
+      job.id,
+    );
     return job.id;
   } finally {
     db.close();
@@ -116,7 +139,13 @@ function waitingTurn(dir: string): string {
     );
     new TurnStore(db).suspend(
       id,
-      { messages: [], taint: 0, counters, wakeAt: new Date(Date.now() - 60_000).toISOString(), waitFor: null },
+      {
+        messages: [],
+        taint: 0,
+        counters,
+        wakeAt: new Date(Date.now() - 60_000).toISOString(),
+        waitFor: null,
+      },
       created.claimToken,
     );
     return id;
@@ -152,23 +181,34 @@ function muffin(
   // genitori, quindi la sottodirectory fresca non ha nessun `.env`.
   const cwd = mkdtempSync(join(process.cwd(), 'muffin-test-cwd-'));
   homes.push(cwd);
-  const result = spawnSync('node', ['--import', 'tsx', join(process.cwd(), 'cli/main.ts'), ...args], {
-    // HOME and XDG_CONFIG_HOME are redirected into the temp home so `install
-    // --write` can never put a real service unit in the owner's `~/Library` or
-    // `~/.config`. It did exactly that once, and the file outlived the run
-    // because the cleanup was after a failing assertion.
-    //
-    // Il figlio gira in una directory vuota, mai nel checkout: `cli/main.ts`
-    // carica `${cwd}/.env` quando c'è, e un `.env` del founder nella radice
-    // del repo avvelenava lo scenario "off a terminal" con il messaggio di
-    // rifiuto della chiave invece del comando stampato (18/09/2026, stessa
-    // radice dei 18 rossi di `cli/main.test.ts`, verdi in CI).
-    env: { ...process.env, MUFFIN_HOME: dir, HOME: dir, XDG_CONFIG_HOME: join(dir, '.config'), NO_COLOR: '1', ...extraEnv },
-    input: stdin,
-    encoding: 'utf8',
-    timeout,
-    cwd,
-  });
+  const result = spawnSync(
+    'node',
+    ['--import', 'tsx', join(process.cwd(), 'cli/main.ts'), ...args],
+    {
+      // HOME and XDG_CONFIG_HOME are redirected into the temp home so `install
+      // --write` can never put a real service unit in the owner's `~/Library` or
+      // `~/.config`. It did exactly that once, and the file outlived the run
+      // because the cleanup was after a failing assertion.
+      //
+      // Il figlio gira in una directory vuota, mai nel checkout: `cli/main.ts`
+      // carica `${cwd}/.env` quando c'è, e un `.env` del founder nella radice
+      // del repo avvelenava lo scenario "off a terminal" con il messaggio di
+      // rifiuto della chiave invece del comando stampato (18/09/2026, stessa
+      // radice dei 18 rossi di `cli/main.test.ts`, verdi in CI).
+      env: {
+        ...process.env,
+        MUFFIN_HOME: dir,
+        HOME: dir,
+        XDG_CONFIG_HOME: join(dir, '.config'),
+        NO_COLOR: '1',
+        ...extraEnv,
+      },
+      input: stdin,
+      encoding: 'utf8',
+      timeout,
+      cwd,
+    },
+  );
   return { code: result.status ?? -1, out: result.stdout ?? '', err: result.stderr ?? '' };
 }
 
@@ -331,7 +371,13 @@ function fakeCompletionsServer(): Promise<{ url: string; close: () => Promise<vo
           JSON.stringify({
             id: 'fake-1',
             model: 'fake',
-            choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'fatto.' } }],
+            choices: [
+              {
+                index: 0,
+                finish_reason: 'stop',
+                message: { role: 'assistant', content: 'fatto.' },
+              },
+            ],
             usage: { prompt_tokens: 1, completion_tokens: 1 },
           }),
         );
@@ -354,11 +400,20 @@ describe("cmdGatewayRun's own assembly", () => {
     try {
       const dir = mkdtempSync(join(tmpdir(), 'muffin-gw-wiring-'));
       homes.push(dir);
-      runInit({ home: dir, provider: 'openai-compat', baseUrl: fake.url, apiKey: 'sk-fake-local-server' });
+      runInit({
+        home: dir,
+        provider: 'openai-compat',
+        baseUrl: fake.url,
+        apiKey: 'sk-fake-local-server',
+      });
       overdueJob(dir);
 
       const signals = new EventEmitter();
-      const done = cmdGatewayRun(dir, { signals, tickMs: 5, sleep: () => new Promise((r) => setTimeout(r, 1)) });
+      const done = cmdGatewayRun(dir, {
+        signals,
+        tickMs: 5,
+        sleep: () => new Promise((r) => setTimeout(r, 1)),
+      });
 
       // Poll for the fire rather than a fixed sleep: the tick is 5ms but the
       // real HTTP round trip to `fake` is not free, and a flat sleep either
@@ -367,7 +422,9 @@ describe("cmdGatewayRun's own assembly", () => {
       try {
         await vi.waitFor(
           () => {
-            const row = db.prepare(`SELECT delivery FROM turns LIMIT 1`).get() as { delivery: string } | undefined;
+            const row = db.prepare(`SELECT delivery FROM turns LIMIT 1`).get() as
+              | { delivery: string }
+              | undefined;
             expect(row?.delivery).toBe('sent');
           },
           { timeout: 5000, interval: 10 },
@@ -396,7 +453,10 @@ describe("cmdGatewayRun's own assembly", () => {
    * tool result comes back, and captures every request body so the second one
    * can be inspected for what the model was actually handed back.
    */
-  function fakeToolCallServer(toolName: string, argsJson: string): Promise<{ url: string; requests: unknown[]; close: () => Promise<void> }> {
+  function fakeToolCallServer(
+    toolName: string,
+    argsJson: string,
+  ): Promise<{ url: string; requests: unknown[]; close: () => Promise<void> }> {
     const requests: unknown[] = [];
     return new Promise((resolve) => {
       let call = 0;
@@ -409,7 +469,17 @@ describe("cmdGatewayRun's own assembly", () => {
           res.writeHead(200, { 'content-type': 'application/json' });
           const message =
             call === 1
-              ? { role: 'assistant', content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: toolName, arguments: argsJson } }] }
+              ? {
+                  role: 'assistant',
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: 'c1',
+                      type: 'function',
+                      function: { name: toolName, arguments: argsJson },
+                    },
+                  ],
+                }
               : { role: 'assistant', content: 'fatto.' };
           res.end(
             JSON.stringify({
@@ -424,7 +494,11 @@ describe("cmdGatewayRun's own assembly", () => {
       server.listen(0, '127.0.0.1', () => {
         const addr = server.address();
         if (addr === null || typeof addr === 'string') throw new Error('no port assigned');
-        resolve({ url: `http://127.0.0.1:${addr.port}/v1`, requests, close: () => new Promise((r) => server.close(() => r())) });
+        resolve({
+          url: `http://127.0.0.1:${addr.port}/v1`,
+          requests,
+          close: () => new Promise((r) => server.close(() => r())),
+        });
       });
     });
   }
@@ -434,7 +508,12 @@ describe("cmdGatewayRun's own assembly", () => {
     try {
       const dir = mkdtempSync(join(tmpdir(), 'muffin-gw-sendfile-'));
       homes.push(dir);
-      runInit({ home: dir, provider: 'openai-compat', baseUrl: fake.url, apiKey: 'sk-fake-local-server' });
+      runInit({
+        home: dir,
+        provider: 'openai-compat',
+        baseUrl: fake.url,
+        apiKey: 'sk-fake-local-server',
+      });
       // The file send_file will be asked to attach — written before the job
       // fires, exactly like a prior tool call (fs_write, an ingest) would have
       // left it for a real turn to pick up.
@@ -442,13 +521,19 @@ describe("cmdGatewayRun's own assembly", () => {
       overdueJob(dir);
 
       const signals = new EventEmitter();
-      const done = cmdGatewayRun(dir, { signals, tickMs: 5, sleep: () => new Promise((r) => setTimeout(r, 1)) });
+      const done = cmdGatewayRun(dir, {
+        signals,
+        tickMs: 5,
+        sleep: () => new Promise((r) => setTimeout(r, 1)),
+      });
 
       const db = new DatabaseCtor(paths(dir).db, { readonly: true });
       try {
         await vi.waitFor(
           () => {
-            const row = db.prepare(`SELECT delivery FROM turns LIMIT 1`).get() as { delivery: string } | undefined;
+            const row = db.prepare(`SELECT delivery FROM turns LIMIT 1`).get() as
+              | { delivery: string }
+              | undefined;
             expect(row?.delivery).toBe('sent');
           },
           { timeout: 5000, interval: 10 },
@@ -462,7 +547,9 @@ describe("cmdGatewayRun's own assembly", () => {
       // process, whether `send_file` actually ran (and succeeded) rather than
       // the model merely claiming it would in the final text.
       expect(fake.requests).toHaveLength(2);
-      const second = fake.requests[1] as { messages: { role: string; content?: unknown; tool_call_id?: string }[] };
+      const second = fake.requests[1] as {
+        messages: { role: string; content?: unknown; tool_call_id?: string }[];
+      };
       const toolResult = second.messages.find((m) => m.role === 'tool' || 'tool_call_id' in m);
       expect(JSON.stringify(toolResult)).toContain('inviato: report.txt');
 
@@ -480,7 +567,12 @@ describe("cmdGatewayRun's own assembly", () => {
    * and then run both lanes to completion with nothing re-checking ownership
    * inside.
    */
-  function gatedCompletionsServer(): Promise<{ url: string; requests: number; release: () => void; close: () => Promise<void> }> {
+  function gatedCompletionsServer(): Promise<{
+    url: string;
+    requests: number;
+    release: () => void;
+    close: () => Promise<void>;
+  }> {
     let release: () => void = () => {};
     const gate = new Promise<void>((r) => (release = r));
     const state = { requests: 0 };
@@ -496,7 +588,13 @@ describe("cmdGatewayRun's own assembly", () => {
               JSON.stringify({
                 id: 'fake-1',
                 model: 'fake',
-                choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'fatto.' } }],
+                choices: [
+                  {
+                    index: 0,
+                    finish_reason: 'stop',
+                    message: { role: 'assistant', content: 'fatto.' },
+                  },
+                ],
                 usage: { prompt_tokens: 1, completion_tokens: 1 },
               }),
             );
@@ -523,15 +621,27 @@ describe("cmdGatewayRun's own assembly", () => {
     try {
       const dir = mkdtempSync(join(tmpdir(), 'muffin-gw-stillowner-'));
       homes.push(dir);
-      runInit({ home: dir, provider: 'openai-compat', baseUrl: fake.url, apiKey: 'sk-fake-local-server' });
+      runInit({
+        home: dir,
+        provider: 'openai-compat',
+        baseUrl: fake.url,
+        apiKey: 'sk-fake-local-server',
+      });
       overdueJob(dir);
 
       const signals = new EventEmitter();
-      const done = cmdGatewayRun(dir, { signals, tickMs: 5, sleep: () => new Promise((r) => setTimeout(r, 1)) });
+      const done = cmdGatewayRun(dir, {
+        signals,
+        tickMs: 5,
+        sleep: () => new Promise((r) => setTimeout(r, 1)),
+      });
 
       // The job's model call has genuinely reached the server and is held
       // open by the gate — this is "a run in flight", not a guess about timing.
-      await vi.waitFor(() => expect(fake.requests).toBeGreaterThan(0), { timeout: 5000, interval: 5 });
+      await vi.waitFor(() => expect(fake.requests).toBeGreaterThan(0), {
+        timeout: 5000,
+        interval: 5,
+      });
 
       // Steal the claim the way a second live gateway would leave the row: a
       // pid that is actually alive, and a holder_id this instance did not
@@ -540,7 +650,9 @@ describe("cmdGatewayRun's own assembly", () => {
       // run was allowed to finish. The theft that must not deliver is a live
       // holder. Written directly, not through `GatewayLock.claim`, so the
       // token is not this instance's.
-      const holder = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)'], { stdio: 'ignore' });
+      const holder = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)'], {
+        stdio: 'ignore',
+      });
       if (holder.pid === undefined) throw new Error('il detentore vivo non ha un pid');
       try {
         const steal = new DatabaseCtor(paths(dir).db);
@@ -556,7 +668,9 @@ describe("cmdGatewayRun's own assembly", () => {
         await new Promise((r) => setTimeout(r, 300));
 
         const check = new DatabaseCtor(paths(dir).db, { readonly: true });
-        const turn = check.prepare(`SELECT delivery FROM turns LIMIT 1`).get() as { delivery: string | null } | undefined;
+        const turn = check.prepare(`SELECT delivery FROM turns LIMIT 1`).get() as
+          | { delivery: string | null }
+          | undefined;
         check.close();
         expect(turn?.delivery ?? null).not.toBe('sent');
 
@@ -593,7 +707,12 @@ describe("cmdGatewayRun's own assembly", () => {
     try {
       const dir = mkdtempSync(join(tmpdir(), 'muffin-gw-turnlane-stillowner-'));
       homes.push(dir);
-      runInit({ home: dir, provider: 'openai-compat', baseUrl: fake.url, apiKey: 'sk-fake-local-server' });
+      runInit({
+        home: dir,
+        provider: 'openai-compat',
+        baseUrl: fake.url,
+        apiKey: 'sk-fake-local-server',
+      });
 
       let assembled: { turnLane: TurnLane; lock: GatewayLock } | undefined;
       const signals = new EventEmitter();
@@ -610,7 +729,9 @@ describe("cmdGatewayRun's own assembly", () => {
         () => {
           const db = new DatabaseCtor(paths(dir).db, { readonly: true });
           try {
-            const row = db.prepare(`SELECT pid FROM gateway_lock WHERE id = 1`).get() as { pid: number | null } | undefined;
+            const row = db.prepare(`SELECT pid FROM gateway_lock WHERE id = 1`).get() as
+              | { pid: number | null }
+              | undefined;
             expect(row?.pid).toBe(process.pid);
           } finally {
             db.close();
@@ -642,9 +763,9 @@ describe("cmdGatewayRun's own assembly", () => {
       await new Promise((r) => setTimeout(r, 200));
 
       const check = new DatabaseCtor(paths(dir).db, { readonly: true });
-      const row = check.prepare(`SELECT status, claimed_by AS claimedBy FROM turns WHERE id = ?`).get(turnId) as
-        | { status: string; claimedBy: number | null }
-        | undefined;
+      const row = check
+        .prepare(`SELECT status, claimed_by AS claimedBy FROM turns WHERE id = ?`)
+        .get(turnId) as { status: string; claimedBy: number | null } | undefined;
       check.close();
       // Untouched: exactly what `waitingTurn` suspended, claimed by nobody.
       expect(row).toEqual({ status: 'waiting', claimedBy: null });
@@ -669,8 +790,16 @@ describe('the claim can change under a REPL that is already ticking', () => {
   const world = () => {
     const db = new DatabaseCtor(':memory:');
     const jobs = new JobStore(db);
-    const job = jobs.add({ cron: '0 8 * * *', timezone: 'Europe/Rome', goal: 'brief', channel: 'cli' });
-    db.prepare(`UPDATE jobs SET next_fire_at = ? WHERE id = ?`).run(new Date(Date.now() - 60_000).toISOString(), job.id);
+    const job = jobs.add({
+      cron: '0 8 * * *',
+      timezone: 'Europe/Rome',
+      goal: 'brief',
+      channel: 'cli',
+    });
+    db.prepare(`UPDATE jobs SET next_fire_at = ? WHERE id = ?`).run(
+      new Date(Date.now() - 60_000).toISOString(),
+      job.id,
+    );
     const said: string[] = [];
     const events: SchedulerEvent[] = [];
     const delivered: string[] = [];
@@ -772,10 +901,21 @@ describe('the claim can change under a REPL that is already ticking', () => {
     const standDown = gatewayStandDown(w.db, (l) => w.said.push(l), true);
     expect(standDown()).toBe(false); // the REPL now owns the ticker
 
-    const runJob = vi.fn(async () => ({ stopped: 'answered' as const, text: 'brief', turnId: 'turn-repl' }));
+    const runJob = vi.fn(async () => ({
+      stopped: 'answered' as const,
+      text: 'brief',
+      turnId: 'turn-repl',
+    }));
     const replScheduler = new Scheduler(
-      w.jobs, runJob, async (_c, t) => (w.delivered.push(t), DELIVERED),
-      undefined, (e) => w.events.push(e), undefined, standDown, undefined, new ModelLane(),
+      w.jobs,
+      runJob,
+      async (_c, t) => (w.delivered.push(t), DELIVERED),
+      undefined,
+      (e) => w.events.push(e),
+      undefined,
+      standDown,
+      undefined,
+      new ModelLane(),
     );
     replScheduler.tick();
     await flush();
@@ -861,7 +1001,8 @@ describe('muffin gateway install', () => {
     expect(r.out).not.toContain('poi, per attivarla');
     expect(r.err).toContain('poi, per attivarla');
     // Anchored to ~/.muffin and not to the checkout — Hermes' scar, ADR-0035.
-    const anchor = process.platform === 'darwin' ? '<key>WorkingDirectory</key>' : `WorkingDirectory=${dir}`;
+    const anchor =
+      process.platform === 'darwin' ? '<key>WorkingDirectory</key>' : `WorkingDirectory=${dir}`;
     expect(r.out).toContain(anchor);
   });
 
@@ -992,7 +1133,11 @@ describe('muffin gateway restart', () => {
       code = await cmdGatewayRestart(home(), {
         platform: 'linux',
         supervisorProbes: engaged,
-        restart: () => ({ status: 1, stdout: '', stderr: 'Failed to restart muffin-gateway.service: Unit is masked.' }),
+        restart: () => ({
+          status: 1,
+          stdout: '',
+          stderr: 'Failed to restart muffin-gateway.service: Unit is masked.',
+        }),
         readGatewayPid: pidSequence([88175]),
         sleep: noSleep,
         verifyAttempts: 2,
@@ -1067,7 +1212,7 @@ describe('muffin init offers the gateway', () => {
   });
 });
 
-describe('MUFFIN_GATEWAY_TICK_MS — the acceptance suite\'s only way to speed up a spawned gateway', () => {
+describe("MUFFIN_GATEWAY_TICK_MS — the acceptance suite's only way to speed up a spawned gateway", () => {
   it('is undefined on everything a real install would ever set', () => {
     expect(tickMsFromEnv(undefined)).toBeUndefined();
     expect(tickMsFromEnv('')).toBeUndefined();
@@ -1083,7 +1228,6 @@ describe('MUFFIN_GATEWAY_TICK_MS — the acceptance suite\'s only way to speed u
     expect(tickMsFromEnv('250')).toBe(250);
   });
 });
-
 
 /**
  * La cucitura, non il calcolo.
@@ -1102,7 +1246,9 @@ describe('muffin gateway install — quale interprete finisce nella unit', () =>
     const stable = mkdtempSync(join(tmpdir(), 'muffin-bin-stabile-'));
     symlinkSync(process.execPath, join(stable, 'node'));
 
-    const r = muffin(dir, ['gateway', 'install'], '', { PATH: `${stable}${delimiter}${process.env['PATH'] ?? ''}` });
+    const r = muffin(dir, ['gateway', 'install'], '', {
+      PATH: `${stable}${delimiter}${process.env['PATH'] ?? ''}`,
+    });
 
     expect(r.out).toContain(stable);
     // E non quella versionata: averle tutte e due significherebbe non aver
@@ -1111,7 +1257,6 @@ describe('muffin gateway install — quale interprete finisce nella unit', () =>
     rmSync(stable, { recursive: true, force: true });
   });
 });
-
 
 /**
  * La cucitura, non il calcolo.
@@ -1139,7 +1284,9 @@ describe('muffin gateway run — la riga di supervisione', () => {
     // arriva affatto il vitest a sessanta lo dice comunque.
     const r = muffin(dir, ['gateway', 'run'], '', env, 20_000);
 
-    expect(r.err).toContain(`supervisione: ${describeSupervision({ ...process.env, ...env }, process.platform)}`);
+    expect(r.err).toContain(
+      `supervisione: ${describeSupervision({ ...process.env, ...env }, process.platform)}`,
+    );
   }, 60_000);
 });
 
@@ -1159,9 +1306,18 @@ describe('muffin gateway run — la riga di supervisione', () => {
 describe('muffin gateway install --start', () => {
   const zitto = () => {
     const righe: string[] = [];
-    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((c) => { righe.push(String(c)); return true; });
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((c) => {
+      righe.push(String(c));
+      return true;
+    });
     const spyOut = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    return { righe, ripristina: () => { spy.mockRestore(); spyOut.mockRestore(); } };
+    return {
+      righe,
+      ripristina: () => {
+        spy.mockRestore();
+        spyOut.mockRestore();
+      },
+    };
   };
 
   it('esegue la sequenza systemd nell ordine, linger compreso', async () => {
@@ -1174,7 +1330,10 @@ describe('muffin gateway install --start', () => {
         homeDir: dir,
         configHome: join(dir, '.config'),
         identity: { user: 'owner', uid: 1000 },
-        run: (argv) => { visti.push(argv); return { status: 0, stderr: '' }; },
+        run: (argv) => {
+          visti.push(argv);
+          return { status: 0, stderr: '' };
+        },
         // Lo STATO che la verifica post-attivazione (regola della casa,
         // `cli/update.ts`) legge: un pid comparso. Un `run` finto che esce 0
         // non fa girare niente sul serio, quindi senza questa riga
@@ -1187,7 +1346,9 @@ describe('muffin gateway install --start', () => {
       // `currentLauncher()` lo dice — è vero, ed è un avvertimento, non un
       // fallimento dell'attivazione. Quello che non deve essere è 3.
       expect(code).not.toBe(EXIT_NOT_ACTIVATED);
-    } finally { s.ripristina(); }
+    } finally {
+      s.ripristina();
+    }
     expect(visti).toEqual([
       ['systemctl', '--user', 'daemon-reload'],
       ['systemctl', '--user', 'enable', '--now', 'muffin-gateway.service'],
@@ -1196,7 +1357,7 @@ describe('muffin gateway install --start', () => {
     expect(s.righe.join('')).toContain('è un servizio adesso');
   });
 
-it('stampa il passo prima di eseguirlo, non dopo', async () => {
+  it('stampa il passo prima di eseguirlo, non dopo', async () => {
     // `systemctl --user` su una macchina senza bus di sessione non fallisce:
     // aspetta. Se la riga si stampasse dopo, l'owner guarderebbe un cursore
     // fermo senza sapere su quale dei tre comandi. Un runner che lancia è il
@@ -1215,10 +1376,14 @@ it('stampa il passo prima di eseguirlo, non dopo', async () => {
           homeDir: dir,
           configHome: join(dir, '.config'),
           identity: { user: 'owner', uid: 1000 },
-          run: () => { throw new Error('come se non tornasse mai'); },
+          run: () => {
+            throw new Error('come se non tornasse mai');
+          },
         }),
       ).rejects.toThrow('come se non tornasse mai');
-    } finally { s.ripristina(); }
+    } finally {
+      s.ripristina();
+    }
     expect(s.righe.join('')).toContain('systemctl --user daemon-reload');
   });
 
@@ -1233,9 +1398,14 @@ it('stampa il passo prima di eseguirlo, non dopo', async () => {
         homeDir: dir,
         configHome: join(dir, '.config'),
         identity: { user: 'owner', uid: 1000 },
-        run: (argv) => { visti.push(argv); return { status: 1, stderr: 'Failed to connect to bus' }; },
+        run: (argv) => {
+          visti.push(argv);
+          return { status: 1, stderr: 'Failed to connect to bus' };
+        },
       });
-    } finally { s.ripristina(); }
+    } finally {
+      s.ripristina();
+    }
     expect(visti).toHaveLength(1);
     expect(code).toBe(EXIT_NOT_ACTIVATED);
     const detto = s.righe.join('');
@@ -1267,12 +1437,17 @@ it('stampa il passo prima di eseguirlo, non dopo', async () => {
         identity: { user: 'owner', uid: 1000 },
         env,
         runtimeDirExists: (p) => p === '/run/user/1000',
-        run: (argv) => { visti.push(argv); return { status: 0, stderr: '' }; },
+        run: (argv) => {
+          visti.push(argv);
+          return { status: 0, stderr: '' };
+        },
         readGatewayPid: () => 4242,
         verifyAttempts: 1,
         sleep: async () => {},
       });
-    } finally { s.ripristina(); }
+    } finally {
+      s.ripristina();
+    }
     expect(env['XDG_RUNTIME_DIR']).toBe('/run/user/1000');
     expect(env['DBUS_SESSION_BUS_ADDRESS']).toBe('unix:path=/run/user/1000/bus');
     expect(visti.map((a) => a.join(' '))).toEqual([
@@ -1299,7 +1474,9 @@ it('stampa il passo prima di eseguirlo, non dopo', async () => {
         runtimeDirExists: () => false,
         run: () => ({ status: 1, stderr: 'Failed to connect to bus: No medium found' }),
       });
-    } finally { s.ripristina(); }
+    } finally {
+      s.ripristina();
+    }
     expect(code).toBe(EXIT_NOT_ACTIVATED);
     expect(env['XDG_RUNTIME_DIR']).toBeUndefined();
     const detto = s.righe.join('');
@@ -1324,8 +1501,12 @@ it('stampa il passo prima di eseguirlo, non dopo', async () => {
         verifyAttempts: 1,
         verifyIntervalMs: 0,
       });
-    } finally { s.ripristina(); }
-    expect(existsSync(join(dir, '.config', 'systemd', 'user', 'muffin-gateway.service'))).toBe(true);
+    } finally {
+      s.ripristina();
+    }
+    expect(existsSync(join(dir, '.config', 'systemd', 'user', 'muffin-gateway.service'))).toBe(
+      true,
+    );
   });
 
   it('col binario vero, e senza il supervisore sul PATH, dice cosa manca ed esce 3', () => {
@@ -1343,9 +1524,10 @@ it('stampa il passo prima di eseguirlo, non dopo', async () => {
 
     expect(r.code).toBe(EXIT_NOT_ACTIVATED);
     expect(r.err).toContain('si è fermato qui');
-    const unit = process.platform === 'darwin'
-      ? join(dir, 'Library', 'LaunchAgents', 'ai.muffin.gateway.plist')
-      : join(dir, '.config', 'systemd', 'user', 'muffin-gateway.service');
+    const unit =
+      process.platform === 'darwin'
+        ? join(dir, 'Library', 'LaunchAgents', 'ai.muffin.gateway.plist')
+        : join(dir, '.config', 'systemd', 'user', 'muffin-gateway.service');
     expect(existsSync(unit)).toBe(true);
   });
 });
@@ -1456,8 +1638,12 @@ describe('status distingue «fermo» da «non c è»', () => {
     const dir = home();
     const out: string[] = [];
     const err: string[] = [];
-    const o = vi.spyOn(process.stdout, 'write').mockImplementation((c) => (out.push(String(c)), true));
-    const e = vi.spyOn(process.stderr, 'write').mockImplementation((c) => (err.push(String(c)), true));
+    const o = vi
+      .spyOn(process.stdout, 'write')
+      .mockImplementation((c) => (out.push(String(c)), true));
+    const e = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((c) => (err.push(String(c)), true));
     try {
       expect(cmdGatewayStatus(dir)).toBe(1);
     } finally {
@@ -1474,8 +1660,12 @@ describe('status distingue «fermo» da «non c è»', () => {
     writeFileSync(paths(dir).gatewayStopped, `${new Date().toISOString()}\n`, 'utf8');
     const out: string[] = [];
     const err: string[] = [];
-    const o = vi.spyOn(process.stdout, 'write').mockImplementation((c) => (out.push(String(c)), true));
-    const e = vi.spyOn(process.stderr, 'write').mockImplementation((c) => (err.push(String(c)), true));
+    const o = vi
+      .spyOn(process.stdout, 'write')
+      .mockImplementation((c) => (out.push(String(c)), true));
+    const e = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((c) => (err.push(String(c)), true));
     try {
       // Sempre 1: la domanda scriptabile è «è su?», e la risposta è no
       // qualunque sia la ragione.
