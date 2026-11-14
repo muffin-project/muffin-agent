@@ -140,15 +140,6 @@ export function ensurePrivateDir(
 }
 
 /**
- * Ensure the parent of `file` exists and is private. Same fail-closed
- * contract as `ensurePrivateDir`: `false` means the parent was NOT
- * established and the caller must not write.
- */
-export function ensurePrivateParent(file: string, opts: { stat?: StatLike; getuid?: GetUidLike } = {}): boolean {
-  return ensurePrivateDir(dirname(file), opts);
-}
-
-/**
  * Tighten one regular file to `0600` when it is ours. No-op for missing
  * paths, symlinks, sockets, or foreign-owned files. Never throws.
  */

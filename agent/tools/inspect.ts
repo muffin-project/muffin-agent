@@ -11,7 +11,7 @@ import { CAPABILITY_SEARCH_TOOL_NAME, createCapabilityExposure } from '../capabi
 import type { PromptBlock } from '../context/assemble.js';
 import { tenantClass, visibleTools } from '../context/assemble.js';
 import type { RegisteredTool } from '../loop.js';
-import type { Profile, ProfileOrigin } from '../profiles/profile.js';
+import type { Profile } from '../profiles/profile.js';
 import type { CapabilityGap } from './capability-status.js';
 
 /**

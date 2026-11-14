@@ -43,7 +43,6 @@ import {
   type InterpreterProbes,
   LAUNCHD_LABEL,
   planUnit,
-  RESTART_SEC,
   resolveInterpreterDir,
   resolveLauncher,
   STOP_TIMEOUT_SEC,
