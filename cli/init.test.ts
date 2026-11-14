@@ -13,6 +13,7 @@ import {
   writeSecret,
 } from '../core/config/config.js';
 import { readDefaultsRegistry } from '../core/config/defaults-drift.js';
+import { PROVIDERS } from '../core/config/providers.js';
 import { muffinWorkspace } from '../core/config/workspace.js';
 import { sha256 } from '../core/rot/verify.js';
 import { isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
@@ -169,6 +170,25 @@ describe('runInit — the defaults registry it hands `muffin doctor` (core/confi
  * punta al nome vecchio, e nessuno lo riscrive. Quindi si scrive il nome nuovo
  * e si legge il vecchio finché esiste.
  */
+describe('default models follow the catalog endpoint', () => {
+  it('writes Groq production ids for a Groq base URL, not the OpenRouter pair', () => {
+    const dir = scratchDir('muffin-init-groq-models-');
+    const groqModels = PROVIDERS.groq.defaultModels;
+    if (!groqModels) throw new Error('Groq catalog has no default models');
+    runInit({
+      home: dir,
+      provider: 'openai-compat',
+      baseUrl: PROVIDERS.groq.baseUrl,
+      apiKey: 'gsk_not_printed',
+    });
+    const config = loadConfig(dir);
+    expect(config.models.main).toBe(groqModels.main);
+    expect(config.models.light).toBe(groqModels.light);
+    expect(config.models.main).not.toBe('anthropic/claude-sonnet-5');
+    expect(JSON.stringify(config)).not.toContain('gsk_not_printed');
+  });
+});
+
 describe('il nome della chiave dice di chi è', () => {
   it('un install nuovo su OpenRouter registra `openrouter_api_key`', () => {
     const dir = scratchDir('muffin-init-nome-nuovo-');

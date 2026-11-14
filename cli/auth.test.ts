@@ -110,7 +110,7 @@ describe('muffin auth', () => {
     expect(out.join('\n')).not.toContain(CANARY);
   });
 
-  it('does not start OAuth without a terminal or for Anthropic/xAI', async () => {
+  it('does not start OAuth without a terminal or for Anthropic, Groq, or xAI', async () => {
     const { home } = fixture();
     const obtain = vi.fn(async () => CANARY);
     const out: string[] = [];
@@ -123,9 +123,11 @@ describe('muffin auth', () => {
     ).toBe(2);
     expect(await cmdAuth(home, ['login', 'grok'], { out: sink, obtain, stdinIsTTY: true })).toBe(2);
     expect(await cmdAuth(home, ['login', 'xai'], { out: sink, obtain, stdinIsTTY: true })).toBe(2);
+    expect(await cmdAuth(home, ['login', 'groq'], { out: sink, obtain, stdinIsTTY: true })).toBe(2);
     expect(obtain).not.toHaveBeenCalled();
     expect(out.join('\n')).toMatch(/Console\/API key/);
     expect(out.join('\n')).toMatch(/xAI\/Grok/);
+    expect(out.join('\n')).toContain(PROVIDERS.groq.keysUrl);
     expect(out.join('\n')).not.toContain(CANARY);
   });
 
@@ -164,6 +166,37 @@ describe('muffin auth', () => {
     expect(out.join('\n')).toContain('main');
     expect(out.join('\n')).not.toContain('sk-or-v1-work-key');
     expect(readFileSync(join(home, 'config.json'), 'utf8')).not.toContain('sk-or-v1-work-key');
+  });
+
+  it('switches a Groq account on Groq lanes and leaves the other lane alone', async () => {
+    const { home } = fixture();
+    const before = loadConfig(home);
+    saveConfig(
+      {
+        ...before,
+        provider: {
+          kind: 'openai-compat',
+          baseUrl: PROVIDERS.groq.baseUrl,
+          apiKeyRef: 'secret://groq_api_key',
+        },
+      },
+      home,
+    );
+    writeSecret('groq_api_key', 'gsk_default_not_printed', home, 'home');
+    writeSecret('groq_api_key_work', 'gsk_work_not_printed', home, 'home');
+    const out: string[] = [];
+    const code = await cmdAuth(home, ['switch', 'groq', 'work'], {
+      out: (line) => out.push(line),
+      stdinIsTTY: true,
+    });
+    const config = loadConfig(home);
+    expect(code).toBe(0);
+    expect(config.provider.apiKeyRef).toBe('secret://groq_api_key_work');
+    expect(config.models).toEqual(before.models);
+    expect(config.lightProvider?.kind).toBe('anthropic');
+    expect(out.join('\n')).toContain('main');
+    expect(out.join('\n')).not.toContain('gsk_work_not_printed');
+    expect(readFileSync(join(home, 'config.json'), 'utf8')).not.toContain('gsk_work_not_printed');
   });
 
   it('lists profiles without creating a ChatGPT credential file', async () => {

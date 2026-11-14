@@ -22,6 +22,9 @@ describe('come si chiama la chiave', () => {
     expect(apiKeyNameFor({ kind: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1' })).toBe(
       'openrouter_api_key',
     );
+    expect(
+      apiKeyNameFor({ kind: 'openai-compat', baseUrl: 'https://api.groq.com/openai/v1' }),
+    ).toBe('groq_api_key');
   });
 
   /**
@@ -64,6 +67,7 @@ describe('come si chiama la chiave', () => {
    */
   it('la lista completa contiene ogni nome del catalogo, più il vecchio', () => {
     expect(ALL_API_KEY_NAMES).toContain('openrouter_api_key');
+    expect(ALL_API_KEY_NAMES).toContain('groq_api_key');
     expect(ALL_API_KEY_NAMES).toContain(LEGACY_API_KEY_NAME);
     expect(new Set(ALL_API_KEY_NAMES).size).toBe(ALL_API_KEY_NAMES.length);
   });

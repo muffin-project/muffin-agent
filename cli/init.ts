@@ -8,7 +8,12 @@ import { SCHEMA as BUDGET_SCHEMA } from '../core/budget/budget.js';
 import { schemaVersionOf, stampFresh } from '../core/db/migrate.js';
 import { seal } from '../core/rot/verify.js';
 import { isShippedDefault, recordCopied } from '../core/config/defaults-drift.js';
-import { LEGACY_API_KEY_NAME, apiKeyCandidates, apiKeyNameFor } from '../core/config/providers.js';
+import {
+  LEGACY_API_KEY_NAME,
+  apiKeyCandidates,
+  apiKeyNameFor,
+  providerFor,
+} from '../core/config/providers.js';
 import {
   CONFIG_SCHEMA_VERSION,
   DEFAULT_CONFIG,
@@ -236,7 +241,10 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   }
   step('api key', chiaveDettaglio, chiaveOk);
 
-  const defaults = defaultModels({ provider: effProviderKind });
+  const defaults = defaultModels({
+    provider: effProviderKind,
+    ...(effBaseUrl !== undefined ? { baseUrl: effBaseUrl } : {}),
+  });
   const config: Config = {
     ...DEFAULT_CONFIG,
     ...prior,
@@ -305,9 +313,10 @@ export function runInit(options: InitOptions = {}): InitStep[] {
  *
  * A single-model install is how extraction, judging and consolidation end up on
  * a frontier model: each call is small, none of them look expensive, and the
- * bill arrives at the end of the month. The ids differ by provider — through an
- * OpenAI-compatible gateway they carry a vendor prefix, against Anthropic
- * directly they do not.
+ * bill arrives at the end of the month. The ids differ by provider. Anthropic
+ * direct uses bare ids; a generic openai-compat endpoint uses the
+ * OpenRouter-shaped pair. A catalog entry that sets `defaultModels` (Groq)
+ * uses that pair instead — Groq 404s on the OpenRouter ids.
  *
  * Exported so `cmdInit` can compute the same pair for `describeModelChoice`
  * without duplicating the fallback logic — it needs to print what got decided
@@ -316,6 +325,16 @@ export function runInit(options: InitOptions = {}): InitStep[] {
  * function the same question `runInit` asks it internally.
  */
 export function defaultModels(options: InitOptions): { main: string; light: string } {
+  const fromCatalog = providerFor({
+    kind: options.provider ?? 'anthropic',
+    ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
+  })?.defaultModels;
+  if (fromCatalog) {
+    return {
+      main: options.mainModel ?? fromCatalog.main,
+      light: options.lightModel ?? fromCatalog.light,
+    };
+  }
   const compat = (options.provider ?? 'anthropic') === 'openai-compat';
   return {
     main: options.mainModel ?? (compat ? 'anthropic/claude-sonnet-5' : 'claude-sonnet-5'),

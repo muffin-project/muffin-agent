@@ -73,6 +73,28 @@ describe('init credential choice', () => {
     });
   });
 
+  it('names Groq on the shared paste path and does not echo the key', async () => {
+    const { input, output } = fakeTty();
+    const stderr: string[] = [];
+    const pending = acquireInitCredential({
+      input,
+      output,
+      stderr: (text) => stderr.push(text),
+      promptForSecret: async () => 'gsk_pasted_not_echoed',
+      stdinIsTTY: true,
+    });
+    input.write('2\n');
+    await expect(pending).resolves.toEqual({
+      kind: 'key',
+      apiKey: 'gsk_pasted_not_echoed',
+      method: 'api-key',
+    });
+    const text = stderr.join('');
+    expect(text).toContain('gsk_');
+    expect(text).toContain('console.groq.com/keys');
+    expect(text).not.toContain('gsk_pasted_not_echoed');
+  });
+
   it('does not echo a key that an OAuth error tried to carry', async () => {
     const { input, output } = fakeTty();
     const stderr: string[] = [];

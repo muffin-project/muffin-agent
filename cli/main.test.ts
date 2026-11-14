@@ -5,6 +5,7 @@ import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import DatabaseCtor from 'better-sqlite3';
 import { afterAll, describe, expect, it } from 'vitest';
+import { PROVIDERS } from '../core/config/providers.js';
 import { MemoryStore } from '../core/memory/store.js';
 
 /**
@@ -98,6 +99,35 @@ describe('muffin init infers the provider from the key — headless, no TTY requ
     const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'));
     expect(config.provider.kind).toBe('anthropic');
     expect(config.provider.baseUrl).toBeUndefined();
+  });
+
+  it('a Groq-shaped key ends up as openai-compat on the Groq endpoint with its own secret name, and says so', () => {
+    const { dir, xdg } = scratchHome();
+    const r = muffin(
+      { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg },
+      ['init'],
+      'gsk_realistic_groq_key',
+    );
+    expect(r.code).toBe(0);
+    expect(r.err).toContain('openai-compat');
+    expect(r.err).toContain('dedotto dalla chiave');
+    expect(r.err).toContain('gsk_…');
+
+    const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'));
+    expect(config.provider.kind).toBe('openai-compat');
+    expect(config.provider.baseUrl).toBe('https://api.groq.com/openai/v1');
+    expect(config.provider.apiKeyRef).toBe('secret://groq_api_key');
+    const groqModels = PROVIDERS.groq.defaultModels;
+    if (!groqModels) throw new Error('Groq catalog has no default models');
+    expect(config.models.main).toBe(groqModels.main);
+    expect(config.models.light).toBe(groqModels.light);
+    expect(r.err).toContain(groqModels.main);
+    expect(r.err).not.toContain('anthropic/claude-sonnet-5');
+
+    const status = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['auth', 'status']);
+    expect(status.code).toBe(0);
+    expect(status.out).toContain('groq default api-key secret://groq_api_key active: main,light');
+    expect(status.out).not.toContain('gsk_realistic_groq_key');
   });
 
   it('an unrecognised key still defaults to anthropic, but now names the reason instead of staying silent', () => {

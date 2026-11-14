@@ -22,19 +22,27 @@ holds Claude or Grok. ChatGPT plan accounts stay on `muffin chatgpt` profile
 ids; `muffin auth status` lists those too. `muffin auth switch` changes only
 lanes that already use that provider.
 
+The capability probe runs only after that OpenRouter OAuth login, not after
+a pasted API key. The key is saved first. The probe uses the same inference
+check as `muffin doctor --online`. Muffin reports the route as working only
+after that probe passes.
+
 Anthropic is a Console API key, including Max, Ultra, and Team API credits.
 Muffin does not start a claude.ai or Claude Code login and does not read
 `~/.claude`. xAI/Grok OAuth is not part of this client.
 
-The key is saved before the capability probe. The probe uses the same
-inference check as `muffin doctor --online`. Muffin reports the route as
-working only after that probe passes.
+Groq is an API key (`gsk_`) on the same OpenAI-compatible adapter, at
+`https://api.groq.com/openai/v1`. Headless `muffin init` infers it from that
+prefix and stores `secret://groq_api_key`. Further accounts are auth profiles
+(`groq_api_key_<id>`), listed by `muffin auth status` and chosen with
+`muffin auth switch groq <id>`. `muffin auth login groq` refuses: there is no
+Groq OAuth. Keys: https://console.groq.com/keys.
 
 Run `muffin config` in a terminal to choose a lane, connect a provider, view its
 model catalog, and select a model. Choosing OpenRouter with no key offers OAuth
 first. Main and light are independent: changing one preserves the other's
 model, endpoint, credentials and routing settings. The menu supports
-OpenRouter, Anthropic API, ChatGPT plan, and custom OpenAI-compatible
+OpenRouter, Groq, Anthropic API, ChatGPT plan, and custom OpenAI-compatible
 endpoints such as a local Ollama server.
 
 Shortcuts use the same selection path:
@@ -42,6 +50,7 @@ Shortcuts use the same selection path:
 ```sh
 muffin model
 muffin model main --provider openrouter --list
+muffin model main --provider groq --list
 muffin model light --provider openrouter openrouter/free
 muffin model main --provider chatgpt gpt-6.1-sol
 ```

@@ -8,7 +8,7 @@
  */
 
 /** Gli id dei provider conosciuti. Un `enum` di stringhe, così un id sconosciuto in config non passa lo schema. */
-export type ProviderId = 'openrouter' | 'chatgpt' | 'anthropic';
+export type ProviderId = 'openrouter' | 'groq' | 'chatgpt' | 'anthropic';
 
 export type ProviderEntry = {
   id: ProviderId;
@@ -36,6 +36,15 @@ export type ProviderEntry = {
    * che non dice niente sul perché.
    */
   catalogueNeedsKey: boolean;
+  /**
+   * Ids `init` writes when the owner has not named a model.
+   *
+   * Absent means the kind-level pair in `defaultModels`: OpenRouter-shaped
+   * ids for a generic openai-compat endpoint, bare ids for Anthropic. A
+   * provider whose catalog rejects those ids (Groq 404s on
+   * `anthropic/claude-sonnet-5`) names its own production pair here.
+   */
+  defaultModels?: { readonly main: string; readonly light: string };
   /**
    * Il nome sotto cui si registra la chiave di questo provider.
    *
@@ -100,6 +109,19 @@ export const PROVIDERS: Readonly<Record<ProviderId, ProviderEntry>> = {
     modelsPath: '/models',
     catalogueNeedsKey: false,
     secretName: 'openrouter_api_key',
+  },
+  groq: {
+    id: 'groq',
+    label: 'Groq',
+    kind: 'openai-compat',
+    baseUrl: 'https://api.groq.com/openai/v1',
+    keysUrl: 'https://console.groq.com/keys',
+    modelsPath: '/models',
+    catalogueNeedsKey: true,
+    secretName: 'groq_api_key',
+    // Production ids from Groq's catalog (console.groq.com/docs/models),
+    // not preview and not the OpenRouter vendor-prefixed pair.
+    defaultModels: { main: 'llama-3.3-70b-versatile', light: 'llama-3.1-8b-instant' },
   },
   chatgpt: {
     id: 'chatgpt',

@@ -4,6 +4,8 @@ import { join, resolve } from 'node:path';
 import type { verifyInferenceRoute } from '../agent/providers/verify.js';
 import {
   AuthProfileError,
+  isKeyProviderId,
+  KEY_PROVIDERS,
   type KeyAuthProfile,
   type KeyProviderId,
   keySecretName,
@@ -34,7 +36,7 @@ export const AUTH_USAGE = `usage:
   muffin auth list
   muffin auth login openrouter [--new [id]] [--code|--browser]
   muffin auth login chatgpt [profile-id | --new]
-  muffin auth switch <openrouter|anthropic|chatgpt> <profile-id>
+  muffin auth switch <${[...KEY_PROVIDERS, 'chatgpt'].join('|')}> <profile-id>
 `;
 
 const REFUSED_OAUTH =
@@ -73,10 +75,22 @@ export async function cmdAuth(
   return 2;
 }
 
+/**
+ * OpenRouter is the only key-backed provider with an OAuth login. The others
+ * are API keys pasted at init; Anthropic keeps the claude.ai refusal verbatim.
+ */
+function apiKeyOnlyRefusal(provider: string): string | null {
+  if (!isKeyProviderId(provider) || provider === 'openrouter') return null;
+  if (provider === 'anthropic') return REFUSED_OAUTH;
+  const entry = PROVIDERS[provider];
+  return `${entry.label} accepts an API key only. Paste it with \`muffin init\`. Keys: ${entry.keysUrl}`;
+}
+
 async function login(home: string, rest: string[], deps: AuthCommandDeps): Promise<number> {
   const [provider, ...tail] = rest;
-  if (provider === 'anthropic') {
-    deps.out(REFUSED_OAUTH);
+  const refused = provider === undefined ? null : apiKeyOnlyRefusal(provider);
+  if (refused !== null) {
+    deps.out(refused);
     return 2;
   }
   if (provider === 'xai' || provider === 'grok') {
@@ -235,7 +249,7 @@ async function switchProfile(home: string, rest: string[], deps: AuthCommandDeps
       ...(deps.chatgpt ? { connection: deps.chatgpt } : {}),
     });
   }
-  if (provider !== 'openrouter' && provider !== 'anthropic') {
+  if (!isKeyProviderId(provider)) {
     deps.out(AUTH_USAGE.trim());
     return 2;
   }
