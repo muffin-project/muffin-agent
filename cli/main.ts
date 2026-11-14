@@ -15,7 +15,12 @@ import {
   paths,
   writeAuthoritativeSecret,
 } from '../core/config/config.js';
-import { ALL_API_KEY_NAMES, LEGACY_API_KEY_NAME, PROVIDERS } from '../core/config/providers.js';
+import {
+  ALL_API_KEY_NAMES,
+  LEGACY_API_KEY_NAME,
+  PROVIDERS,
+  providerFor,
+} from '../core/config/providers.js';
 import { checkTemporalWindow, EVERY_INSTANT, normaliseDate } from '../core/memory/recall.js';
 import type { TrustTier } from '../core/policy/types.js';
 import { buildHardenPlan, formatHardenPlan } from '../core/rot/harden.js';
@@ -693,13 +698,17 @@ async function cmdInit(argv: string[]): Promise<number> {
   let mainModel = values.model;
   let lightModel = values['light-model'];
   let modelReason: ModelChoiceReason = mainModel || lightModel ? 'explicit' : 'default';
+  const catalogId = providerFor({
+    kind: choice.provider,
+    ...(choice.baseUrl !== undefined ? { baseUrl: choice.baseUrl } : {}),
+  })?.id;
   if (!mainModel && process.stdin.isTTY) {
     const pick = localRuntime
       ? await askModelChoice(
           localModelChoices(localRuntime.models),
           `\nModello (tra quelli offerti da ${localRuntime.baseUrl}):`,
         )
-      : choice.provider === 'openai-compat'
+      : choice.provider === 'openai-compat' && catalogId !== 'groq'
         ? await askModelChoice(OPENROUTER_MODEL_FAMILIES, '\nChe famiglia di modello?')
         : undefined;
     if (pick) {
@@ -710,6 +719,7 @@ async function cmdInit(argv: string[]): Promise<number> {
   }
   const resolvedModels = defaultModels({
     provider: choice.provider,
+    ...(choice.baseUrl !== undefined ? { baseUrl: choice.baseUrl } : {}),
     ...(mainModel ? { mainModel } : {}),
     ...(lightModel ? { lightModel } : {}),
   });

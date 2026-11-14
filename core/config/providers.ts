@@ -37,6 +37,15 @@ export type ProviderEntry = {
    */
   catalogueNeedsKey: boolean;
   /**
+   * Ids `init` writes when the owner has not named a model.
+   *
+   * Absent means the kind-level pair in `defaultModels`: OpenRouter-shaped
+   * ids for a generic openai-compat endpoint, bare ids for Anthropic. A
+   * provider whose catalog rejects those ids (Groq 404s on
+   * `anthropic/claude-sonnet-5`) names its own production pair here.
+   */
+  defaultModels?: { readonly main: string; readonly light: string };
+  /**
    * Il nome sotto cui si registra la chiave di questo provider.
    *
    * Stessa convenzione di `SEARCH_PROVIDERS[id].secretName`, e per la stessa
@@ -110,6 +119,9 @@ export const PROVIDERS: Readonly<Record<ProviderId, ProviderEntry>> = {
     modelsPath: '/models',
     catalogueNeedsKey: true,
     secretName: 'groq_api_key',
+    // Production ids from Groq's catalog (console.groq.com/docs/models),
+    // not preview and not the OpenRouter vendor-prefixed pair.
+    defaultModels: { main: 'llama-3.3-70b-versatile', light: 'llama-3.1-8b-instant' },
   },
   chatgpt: {
     id: 'chatgpt',

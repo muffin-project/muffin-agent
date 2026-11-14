@@ -5,6 +5,7 @@ import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import DatabaseCtor from 'better-sqlite3';
 import { afterAll, describe, expect, it } from 'vitest';
+import { PROVIDERS } from '../core/config/providers.js';
 import { MemoryStore } from '../core/memory/store.js';
 
 /**
@@ -116,6 +117,12 @@ describe('muffin init infers the provider from the key — headless, no TTY requ
     expect(config.provider.kind).toBe('openai-compat');
     expect(config.provider.baseUrl).toBe('https://api.groq.com/openai/v1');
     expect(config.provider.apiKeyRef).toBe('secret://groq_api_key');
+    const groqModels = PROVIDERS.groq.defaultModels;
+    if (!groqModels) throw new Error('Groq catalog has no default models');
+    expect(config.models.main).toBe(groqModels.main);
+    expect(config.models.light).toBe(groqModels.light);
+    expect(r.err).toContain(groqModels.main);
+    expect(r.err).not.toContain('anthropic/claude-sonnet-5');
 
     const status = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['auth', 'status']);
     expect(status.code).toBe(0);
