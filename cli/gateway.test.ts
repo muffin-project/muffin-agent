@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { EventEmitter } from 'node:events';
@@ -533,30 +533,38 @@ describe("cmdGatewayRun's own assembly", () => {
       // open by the gate — this is "a run in flight", not a guess about timing.
       await vi.waitFor(() => expect(fake.requests).toBeGreaterThan(0), { timeout: 5000, interval: 5 });
 
-      // Steal the claim from outside, exactly as a second gateway winning a
-      // legitimate race would leave the row: a fresh pid and a fresh
-      // holder_id, written directly rather than through `GatewayLock.claim`
-      // so this does not depend on this test's own pid being distinguishable
-      // from the real gateway's.
-      const steal = new DatabaseCtor(paths(dir).db);
-      steal
-        .prepare(`UPDATE gateway_lock SET pid = ?, holder_id = ?, taken_at = ? WHERE id = 1`)
-        .run(process.pid + 1, 'a-different-holder', new Date().toISOString());
-      steal.close();
+      // Steal the claim the way a second live gateway would leave the row: a
+      // pid that is actually alive, and a holder_id this instance did not
+      // mint. ADR-0106 re-acquires when `heldBy` names nobody, and a dead pid
+      // is nobody — `process.pid + 1` read as a free row and the in-flight
+      // run was allowed to finish. The theft that must not deliver is a live
+      // holder. Written directly, not through `GatewayLock.claim`, so the
+      // token is not this instance's.
+      const holder = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)'], { stdio: 'ignore' });
+      if (holder.pid === undefined) throw new Error('il detentore vivo non ha un pid');
+      try {
+        const steal = new DatabaseCtor(paths(dir).db);
+        steal
+          .prepare(`UPDATE gateway_lock SET pid = ?, holder_id = ?, taken_at = ? WHERE id = 1`)
+          .run(holder.pid, 'a-different-holder', new Date().toISOString());
+        steal.close();
 
-      // Now let the model call resolve. If `stillOwner` were not wired in,
-      // `Scheduler.run` would proceed straight to `deliver` and the turn's
-      // `delivery` column would read `sent`.
-      fake.release();
-      await new Promise((r) => setTimeout(r, 300));
+        // Now let the model call resolve. If `stillOwner` were not wired in,
+        // `Scheduler.run` would proceed straight to `deliver` and the turn's
+        // `delivery` column would read `sent`.
+        fake.release();
+        await new Promise((r) => setTimeout(r, 300));
 
-      const check = new DatabaseCtor(paths(dir).db, { readonly: true });
-      const turn = check.prepare(`SELECT delivery FROM turns LIMIT 1`).get() as { delivery: string | null } | undefined;
-      check.close();
-      expect(turn?.delivery ?? null).not.toBe('sent');
+        const check = new DatabaseCtor(paths(dir).db, { readonly: true });
+        const turn = check.prepare(`SELECT delivery FROM turns LIMIT 1`).get() as { delivery: string | null } | undefined;
+        check.close();
+        expect(turn?.delivery ?? null).not.toBe('sent');
 
-      signals.emit('SIGTERM');
-      await done;
+        signals.emit('SIGTERM');
+        await done;
+      } finally {
+        holder.kill();
+      }
     } finally {
       await fake.close();
     }
