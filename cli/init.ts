@@ -1,29 +1,34 @@
-import DatabaseCtor from 'better-sqlite3';
-import { copyFileSync, existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { ensurePrivateDir, tightenHome, tightenPrivateDb, tightenPrivateFile } from '../core/config/private-fs.js';
+import { copyFileSync, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import DatabaseCtor from 'better-sqlite3';
 import { SCHEMA as BUDGET_SCHEMA } from '../core/budget/budget.js';
-import { schemaVersionOf, stampFresh } from '../core/db/migrate.js';
-import { seal } from '../core/rot/verify.js';
-import { isShippedDefault, recordCopied } from '../core/config/defaults-drift.js';
-import { LEGACY_API_KEY_NAME, apiKeyCandidates, apiKeyNameFor } from '../core/config/providers.js';
 import {
   CONFIG_SCHEMA_VERSION,
+  type Config,
   DEFAULT_CONFIG,
   loadConfig,
   locateSecret,
+  type PromptVersion,
+  type ProviderKind,
   paths,
+  type SecretBackend,
   saveConfig,
   writeAuthoritativeSecret,
   writeSecret,
-  type Config,
-  type PromptVersion,
-  type ProviderKind,
-  type SecretBackend,
 } from '../core/config/config.js';
+import { isShippedDefault, recordCopied } from '../core/config/defaults-drift.js';
+import {
+  ensurePrivateDir,
+  tightenHome,
+  tightenPrivateDb,
+  tightenPrivateFile,
+} from '../core/config/private-fs.js';
+import { apiKeyCandidates, apiKeyNameFor, LEGACY_API_KEY_NAME } from '../core/config/providers.js';
 import { describeWorkspace } from '../core/config/workspace.js';
+import { schemaVersionOf, stampFresh } from '../core/db/migrate.js';
+import { seal } from '../core/rot/verify.js';
 
 /**
  * Bootstrap.
@@ -94,19 +99,26 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   if (existsSync(home)) tightenHome(home);
   for (const dir of [p.home, p.rot, p.vault, p.traces, p.sessions, p.secrets, p.undo]) {
     if (!ensurePrivateDir(dir)) {
-      throw new Error(`non posso inizializzare ${dir}: la directory privata non è stata stabilita (symlink sulla catena)`);
+      throw new Error(
+        `non posso inizializzare ${dir}: la directory privata non è stata stabilita (symlink sulla catena)`,
+      );
     }
   }
   step('directories', `${p.home} (0700)`);
   // A pre-existing home may also carry a backups dir and a database with
   // sidecars from an older build: same tightening, same ownership guard.
   if (!ensurePrivateDir(join(p.home, 'backups'))) {
-    throw new Error(`non posso inizializzare ${join(p.home, 'backups')}: la directory privata non è stata stabilita (symlink sulla catena)`);
+    throw new Error(
+      `non posso inizializzare ${join(p.home, 'backups')}: la directory privata non è stata stabilita (symlink sulla catena)`,
+    );
   }
   if (existsSync(p.db)) tightenPrivateDb(p.db);
 
   const installed = installTree('rot', p.rot, options.force ?? false);
-  step('root of trust', installed.length > 0 ? `installed ${installed.length} files` : 'already present');
+  step(
+    'root of trust',
+    installed.length > 0 ? `installed ${installed.length} files` : 'already present',
+  );
 
   // Le skill di serie. Senza questo il meccanismo c'è tutto — scoperta, sezione
   // nel prompt, `skill_read` — e non ha niente da scoprire: `skillsPromptSection`
@@ -119,7 +131,10 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   // voice.md lives outside the root of trust on purpose: it is the part that
   // learns, and the ratchet may rewrite it. identity.md is the part that does not.
   const voiceInstalled = installFile('voice.md', p.voice, options.force ?? false);
-  step('voice', voiceInstalled ? 'installed voice.md (modificabile, fuori dal RoT)' : 'already present');
+  step(
+    'voice',
+    voiceInstalled ? 'installed voice.md (modificabile, fuori dal RoT)' : 'already present',
+  );
 
   // La v2 del prompt, accanto alla v1 e non al posto suo. Copiata come le
   // skill — stesso `installTree`, stessa regola «copia, non sovrascrivere» —
@@ -128,7 +143,12 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   // default per sempre `missing`. Copiarli non li **usa**: l'assemblaggio resta
   // su v1 finché `config.prompt.version` non dice altro.
   const v2 = installTree('v2', join(p.home, 'v2'), options.force ?? false);
-  step('prompt v2', v2.length > 0 ? `installed ${v2.length} files (non attivi: config.prompt.version resta v1)` : 'already present');
+  step(
+    'prompt v2',
+    v2.length > 0
+      ? `installed ${v2.length} files (non attivi: config.prompt.version resta v1)`
+      : 'already present',
+  );
 
   // Pure muffin: the same character for every install, which is what stops a
   // fresh one from having none at all. identity.md ships empty by design — it
@@ -143,14 +163,18 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   // `muffin doctor` reads this back through diagnoseDefaultsDrift to tell a
   // never-touched shipped file from an owner edit, no Git required.
   const copiedForRegistry: { path: string; content: Buffer }[] = [];
-  if (personaInstalled) copiedForRegistry.push({ path: 'persona.md', content: readFileSync(p.persona) });
+  if (personaInstalled)
+    copiedForRegistry.push({ path: 'persona.md', content: readFileSync(p.persona) });
   if (voiceInstalled) copiedForRegistry.push({ path: 'voice.md', content: readFileSync(p.voice) });
-  for (const f of installed) copiedForRegistry.push({ path: `rot/${f.relPath}`, content: readFileSync(f.dst) });
+  for (const f of installed)
+    copiedForRegistry.push({ path: `rot/${f.relPath}`, content: readFileSync(f.dst) });
   // Anche le skill: sono il tipo di file che l'owner riscrive, ed è
   // esattamente la distinzione che il registro esiste per tenere —
   // «di serie, mai toccata» contro «modificata da chi la usa».
-  for (const f of skills) copiedForRegistry.push({ path: `skills/${f.relPath}`, content: readFileSync(f.dst) });
-  for (const f of v2) copiedForRegistry.push({ path: `v2/${f.relPath}`, content: readFileSync(f.dst) });
+  for (const f of skills)
+    copiedForRegistry.push({ path: `skills/${f.relPath}`, content: readFileSync(f.dst) });
+  for (const f of v2)
+    copiedForRegistry.push({ path: `v2/${f.relPath}`, content: readFileSync(f.dst) });
   recordCopied(home, copiedForRegistry);
 
   // The CLI layer (cmdInit) owns key acquisition — flag, env, or the interactive
@@ -178,7 +202,10 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   // under it.
   const effProviderKind = options.provider ?? prior?.provider.kind ?? 'anthropic';
   const effBaseUrl = options.baseUrl ?? prior?.provider.baseUrl;
-  const provider = { kind: effProviderKind, ...(effBaseUrl !== undefined ? { baseUrl: effBaseUrl } : {}) };
+  const provider = {
+    kind: effProviderKind,
+    ...(effBaseUrl !== undefined ? { baseUrl: effBaseUrl } : {}),
+  };
   // Il nome viene dal catalogo — `openrouter_api_key`, non `provider_api_key` —
   // e sotto quel nome si **scrive**. Cercare, invece, si fa sotto entrambi:
   // `apiKeyCandidates` mette prima il nome del provider e poi il generico, e
@@ -198,9 +225,10 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   let chiaveOk = true;
   if (apiKey) {
     const backend = options.secretBackend ?? 'home';
-    const at = backend === 'persistent'
-      ? writeAuthoritativeSecret(nomeChiave, apiKey, home)
-      : writeSecret(nomeChiave, apiKey, home, backend);
+    const at =
+      backend === 'persistent'
+        ? writeAuthoritativeSecret(nomeChiave, apiKey, home)
+        : writeSecret(nomeChiave, apiKey, home, backend);
     riferimento = `secret://${nomeChiave}`;
     chiaveDettaglio = `stored 0600 in ${at}`;
   } else if (prior?.provider.apiKeyRef && locateSecret(prior.provider.apiKeyRef, home) !== null) {
@@ -226,11 +254,13 @@ export function runInit(options: InitOptions = {}): InitStep[] {
         (eredita ? ` — col nome vecchio \`${LEGACY_API_KEY_NAME}\`, che resta valido` : '');
     } else if (prior?.provider.apiKeyRef) {
       riferimento = prior.provider.apiKeyRef;
-      chiaveDettaglio = 'missing — riferimento esistente conservato, ma nessun valore trovato: echo -n "$KEY" | muffin init, oppure lanciala in un terminale e incollala al prompt';
+      chiaveDettaglio =
+        'missing — riferimento esistente conservato, ma nessun valore trovato: echo -n "$KEY" | muffin init, oppure lanciala in un terminale e incollala al prompt';
       chiaveOk = false;
     } else {
       riferimento = `secret://${nomeChiave}`;
-      chiaveDettaglio = 'missing — echo -n "$KEY" | muffin init, oppure lanciala in un terminale e incollala al prompt';
+      chiaveDettaglio =
+        'missing — echo -n "$KEY" | muffin init, oppure lanciala in un terminale e incollala al prompt';
       chiaveOk = false;
     }
   }
@@ -256,7 +286,10 @@ export function runInit(options: InitOptions = {}): InitStep[] {
     ...(options.promptVersion ? { prompt: { version: options.promptVersion } } : {}),
   };
   saveConfig(config, home);
-  step('config', prior ? 'esistente conservata (solo bootstrap/mancanti, 0600)' : `${p.config} (0600)`);
+  step(
+    'config',
+    prior ? 'esistente conservata (solo bootstrap/mancanti, 0600)' : `${p.config} (0600)`,
+  );
 
   const db = new DatabaseCtor(p.db);
   db.pragma('journal_mode = WAL');
@@ -319,7 +352,8 @@ export function defaultModels(options: InitOptions): { main: string; light: stri
   const compat = (options.provider ?? 'anthropic') === 'openai-compat';
   return {
     main: options.mainModel ?? (compat ? 'anthropic/claude-sonnet-5' : 'claude-sonnet-5'),
-    light: options.lightModel ?? (compat ? 'anthropic/claude-haiku-4.5' : 'claude-haiku-4-5-20251001'),
+    light:
+      options.lightModel ?? (compat ? 'anthropic/claude-haiku-4.5' : 'claude-haiku-4-5-20251001'),
   };
 }
 
@@ -327,7 +361,9 @@ export function defaultModels(options: InitOptions): { main: string; light: stri
 function installFile(name: string, dest: string, force: boolean): boolean {
   if (!force && existsSync(dest)) return false;
   if (!ensurePrivateDir(dirname(dest))) {
-    throw new Error(`non posso installare ${dest}: la directory privata non è stata stabilita (symlink sulla catena)`);
+    throw new Error(
+      `non posso installare ${dest}: la directory privata non è stata stabilita (symlink sulla catena)`,
+    );
   }
   copyFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'defaults', name), dest);
   tightenPrivateFile(dest);
@@ -349,13 +385,19 @@ function installFile(name: string, dest: string, force: boolean): boolean {
  * scritto»), e una seconda copia della camminata sarebbe stata libera di
  * divergere proprio sul ramo che non si guarda.
  */
-function installTree(sub: string, destDir: string, force: boolean): { relPath: string; dst: string }[] {
+function installTree(
+  sub: string,
+  destDir: string,
+  force: boolean,
+): { relPath: string; dst: string }[] {
   const source = join(dirname(fileURLToPath(import.meta.url)), '..', 'defaults', sub);
   if (!existsSync(source)) return [];
   const copied: { relPath: string; dst: string }[] = [];
   const walk = (from: string, to: string, prefix: string): void => {
     if (!ensurePrivateDir(to)) {
-      throw new Error(`non posso installare in ${to}: la directory privata non è stata stabilita (symlink sulla catena)`);
+      throw new Error(
+        `non posso installare in ${to}: la directory privata non è stata stabilita (symlink sulla catena)`,
+      );
     }
     for (const entry of readdirSync(from)) {
       const src = join(from, entry);
