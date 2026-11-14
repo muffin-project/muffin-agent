@@ -1217,6 +1217,35 @@ describe('doctor asks whether a supervisor, not just a process, is behind the ga
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('reports exited_at only when the process has actually left', async () => {
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    const lock = new GatewayLock(db, () => true);
+    lock.claim(new Date(), 'in attesa', process.pid);
+    db.prepare(`UPDATE gateway_lock SET exited_at = ?, exit_reason = ? WHERE id = 1`).run(
+      '2026-11-14T12:00:00.000Z',
+      'non-uscito',
+    );
+    db.close();
+
+    const live = await runDoctor(dir, { supervisorProbes: { unitFileExists: () => false } });
+    const liveGateway = live.checks.find((x) => x.name === 'gateway');
+    expect(liveGateway?.level).toBe('ok');
+    expect(liveGateway?.detail).not.toContain('non-uscito');
+
+    const goneDb = new DatabaseCtor(paths(dir).db);
+    goneDb
+      .prepare(`UPDATE gateway_lock SET pid = NULL, exited_at = ?, exit_reason = ? WHERE id = 1`)
+      .run('2026-11-14T12:00:00.000Z', 'SIGTERM');
+    goneDb.close();
+    const gone = await runDoctor(dir, { supervisorProbes: { unitFileExists: () => false } });
+    const goneGateway = gone.checks.find((x) => x.name === 'gateway');
+    expect(goneGateway?.detail).toContain('SIGTERM');
+    expect(goneGateway?.detail).toContain('2026-11-14 12:00');
+    expect(goneGateway?.detail).not.toContain('non-uscito');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it('is ok once the unit is installed and the platform confirms it is engaged', async () => {
     const dir = home();
     const engaged: Partial<SupervisorProbes> =

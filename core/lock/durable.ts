@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
-import { holderLiveness, mintHolderId, pidAlive, type Liveness } from './incarnation.js';
+import { holderLiveness, type Liveness, mintHolderId, pidAlive } from './incarnation.js';
 
-export { pidAlive, type Liveness };
+export { type Liveness, pidAlive };
 
 /**
  * One holder at a time, across processes, surviving a hard kill — and, since
@@ -185,7 +185,12 @@ export function heldBy(
  * `core/memory/store.ts` carried its own private duplicate, predating this
  * one, until the P27 follow-up slice folded it in here.
  */
-export function ensureColumn(db: Database.Database, table: string, column: string, ddl: string): void {
+export function ensureColumn(
+  db: Database.Database,
+  table: string,
+  column: string,
+  ddl: string,
+): void {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
   if (columns.some((c) => c.name === column)) return;
   try {
@@ -259,7 +264,9 @@ export class DurableLock {
     // Guarded on `holder_id` as well as `pid`, below — the statement itself
     // stays a plain positional UPDATE; the horizon check that decides whether
     // to run it at all lives in `refresh`, next to `heldBy`'s own rule.
-    this.refreshStmt = db.prepare(`UPDATE ${spec.table} SET taken_at = ? WHERE id = 1 AND pid = ? AND holder_id = ?`);
+    this.refreshStmt = db.prepare(
+      `UPDATE ${spec.table} SET taken_at = ? WHERE id = 1 AND pid = ? AND holder_id = ?`,
+    );
     // `release` stays guarded on `pid` alone, deliberately not on `holder_id`:
     // `GatewayLock.release(pid)` (via `cmdGatewayStop`, and this file's own
     // tests) is legitimately called from an instance that never itself
@@ -308,6 +315,37 @@ export class DurableLock {
   }
 
   /**
+   * Mint a new token for a row `heldBy` says nobody holds, inside one
+   * immediate transaction that contains that check and the mint.
+   *
+   * ADR-0106 slice 1. This is not `refresh`: the expired token stays expired
+   * (P21). It is not `acquire`'s `onClaim` either: callers that store uptime
+   * beside the claim must not move it here. A live holder (`heldBy` returns
+   * a pid) leaves `myHolderId` untouched.
+   */
+  reacquire(
+    now: Date,
+    pid: number = process.pid,
+  ): { renewed: true } | { renewed: false; holder: number } {
+    const claim = this.db.transaction((self: number, at: string): number | null => {
+      const holder = this.currentHolder(Date.parse(at));
+      if (holder !== null) return holder;
+      const holderId = mintHolderId(this.db, self);
+      this.claimStmt.run(self, at, holderId);
+      this.myHolderId = holderId;
+      return null;
+    });
+    const held = claim.immediate(pid, now.toISOString()) as number | null;
+    if (held !== null) return { renewed: false, holder: held };
+    return { renewed: true };
+  }
+
+  /** The token this instance minted. Null until `acquire` or `reacquire` wins. */
+  ownHolderId(): string | null {
+    return this.myHolderId;
+  }
+
+  /**
    * Push the staleness horizon out — the heartbeat of a long-lived holder.
    *
    * Guarded on **both** `pid` and `holder_id`, and — new since P21 — on the
@@ -329,7 +367,8 @@ export class DurableLock {
   refresh(now: Date, pid: number = process.pid, onRefresh?: () => void): boolean {
     const beat = this.db.transaction((at: string, nowMs: number, self: number): boolean => {
       const row = this.recorded();
-      if (row?.pid !== self || row.holderId !== this.myHolderId || this.myHolderId === null) return false;
+      if (row?.pid !== self || row.holderId !== this.myHolderId || this.myHolderId === null)
+        return false;
       if (heldBy(row, nowMs, this.spec.staleAfterMs, () => true) === null) return false;
       if (this.refreshStmt.run(at, self, this.myHolderId).changes === 0) return false;
       onRefresh?.();
@@ -386,7 +425,9 @@ export class DurableLock {
     const row = this.recorded();
     if (row?.pid !== pid || row.holderId !== this.myHolderId) return false;
     // A delayed admission can also require a claim inside the heartbeat horizon.
-    return now === undefined || heldBy(row, now.getTime(), this.spec.staleAfterMs, () => true) !== null;
+    return (
+      now === undefined || heldBy(row, now.getTime(), this.spec.staleAfterMs, () => true) !== null
+    );
   }
 
   private currentHolder(nowMs: number): number | null {

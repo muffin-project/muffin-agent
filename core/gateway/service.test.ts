@@ -1,13 +1,14 @@
-import DatabaseCtor from 'better-sqlite3';
 import { EventEmitter } from 'node:events';
+import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
 import { HARD_STALE_MULTIPLIER } from '../lock/durable.js';
-import { DELIVERED } from '../surface/types.js';
+import { JobFireStore } from '../scheduler/job-fires.js';
 import { JobStore } from '../scheduler/jobs.js';
-import { Scheduler, type FireDeferred, type RunJob } from '../scheduler/scheduler.js';
+import { type FireDeferred, type RunJob, Scheduler } from '../scheduler/scheduler.js';
+import { DELIVERED } from '../surface/types.js';
 import { ModelLane } from '../turns/model-lane.js';
-import { createNotifier } from './notify.js';
 import { GatewayLock, readGateway, STALE_AFTER_MS } from './lock.js';
+import { createNotifier } from './notify.js';
 import { EXIT_STOPPED, Gateway, STATUS } from './service.js';
 
 /**
@@ -28,6 +29,12 @@ function harness(
     sent?: string[];
     /** A lane whose `isRunning` this test drives — for the drain that waits on it. */
     turnLane?: { tick: () => void; isRunning: () => boolean };
+    /**
+     * Wire `stillOwner` to this gateway's claim, the way `cli/gateway.ts` does.
+     * The default stays always-true so the lifecycle tests keep their old
+     * scheduler.
+     */
+    wireStillOwner?: boolean;
   } = {},
 ) {
   const db = new DatabaseCtor(':memory:');
@@ -55,6 +62,8 @@ function harness(
   const signals = new EventEmitter();
   let closed = 0;
 
+  const sent = over.sent;
+  const lock = new GatewayLock(db, () => true);
   const scheduler = new Scheduler(
     jobs,
     over.runJob ?? (async () => ({ stopped: 'answered', text: 'fatto', turnId: 'turn-test' })),
@@ -65,11 +74,11 @@ function harness(
     undefined,
     undefined,
     new ModelLane(),
+    over.wireStillOwner ? () => lock.isCurrentClaim(4242) : () => true,
   );
 
-  const sent = over.sent;
   const gateway = new Gateway({
-    lock: new GatewayLock(db, () => true),
+    lock,
     // Supervised only when the test asked: `WATCHDOG_USEC` of 4 000 µs gives a
     // 2 ms ping, so a 50 ms drain is dozens of beats rather than a coin flip.
     notify: sent
@@ -98,6 +107,7 @@ function harness(
   return {
     db,
     jobs,
+    lock,
     gateway,
     delivered,
     logs,
@@ -113,7 +123,12 @@ function harness(
 
 /** A job that is due the moment the world advances past the next minute. */
 function dueJob(h: ReturnType<typeof harness>): ReturnType<typeof h.jobs.add> {
-  const job = h.jobs.add({ cron: '* * * * *', timezone: 'Europe/Rome', goal: 'brief', channel: 'cli' });
+  const job = h.jobs.add({
+    cron: '* * * * *',
+    timezone: 'Europe/Rome',
+    goal: 'brief',
+    channel: 'cli',
+  });
   h.advance(90_000);
   return job;
 }
@@ -360,7 +375,9 @@ describe('supervision hooks', () => {
       lock: new GatewayLock(db, () => true),
       // A supervisor that is listening, faked at the transport so no systemd is
       // involved: the module under test is the cadence, not the socket.
-      notify: createNotifier({ NOTIFY_SOCKET: '/run/notify', WATCHDOG_USEC: '4000' }, (p) => sent.push(p)),
+      notify: createNotifier({ NOTIFY_SOCKET: '/run/notify', WATCHDOG_USEC: '4000' }, (p) =>
+        sent.push(p),
+      ),
       scheduler: new Scheduler(
         jobs,
         async () => ({ stopped: 'answered', text: '', turnId: 'turn-test' }),
@@ -389,9 +406,12 @@ describe('supervision hooks', () => {
     // and a gateway that announced ready and then lost the lock would have told
     // systemd a crash-loop was a healthy boot.
     await vi.waitFor(() => expect(sent[0]).toMatch(/^READY=1/));
-    await vi.waitFor(() => expect(sent.filter((p) => p.startsWith('WATCHDOG=1')).length).toBeGreaterThan(1), {
-      timeout: 2000,
-    });
+    await vi.waitFor(
+      () => expect(sent.filter((p) => p.startsWith('WATCHDOG=1')).length).toBeGreaterThan(1),
+      {
+        timeout: 2000,
+      },
+    );
 
     signals.emit('SIGTERM');
     await served;
@@ -472,5 +492,158 @@ describe('supervision hooks', () => {
     h.signals.emit('SIGTERM');
     await served;
     expect(h.signals.listenerCount('SIGTERM')).toBe(0);
+  });
+});
+
+describe('ADR-0106 slice 1 — re-acquire, and the message', () => {
+  type LockRow = {
+    holder_id: string | null;
+    since: string | null;
+    taken_at: string | null;
+    status: string | null;
+    pid: number | null;
+    exited_at: string | null;
+    exit_reason: string | null;
+  };
+
+  const rowOf = (db: ReturnType<typeof harness>['db']): LockRow =>
+    db
+      .prepare(
+        `SELECT holder_id, since, taken_at, status, pid, exited_at, exit_reason FROM gateway_lock WHERE id = 1`,
+      )
+      .get() as LockRow;
+
+  it('re-acquires past the hard horizon, finishes the in-flight model call, and does not call claim', async () => {
+    const calls: string[] = [];
+    let release!: (outcome: { stopped: 'answered'; text: string; turnId: string }) => void;
+    const pending = new Promise<{ stopped: 'answered'; text: string; turnId: string }>(
+      (resolve) => {
+        release = resolve;
+      },
+    );
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const claimFire: { run?: (jobId: string, scheduledFor: string) => void } = {};
+    const laneTicks = vi.fn();
+    const h = harness({
+      wireStillOwner: true,
+      turnLane: { tick: laneTicks, isRunning: () => false },
+      runJob: async (job) => {
+        calls.push(job.id);
+        claimFire.run?.(job.id, job.nextFireAt.toISOString());
+        markStarted();
+        return pending;
+      },
+    });
+    const fires = new JobFireStore(h.db);
+    claimFire.run = (jobId, scheduledFor) => {
+      fires.claim(jobId, scheduledFor);
+    };
+    const claims = vi.spyOn(h.lock, 'claim');
+    dueJob(h);
+    expect(h.gateway.start()).toEqual({ started: true });
+    expect(claims).toHaveBeenCalledTimes(1);
+    const before = rowOf(h.db);
+    h.gateway.tick();
+    await started;
+    expect(calls).toEqual([expect.any(String)]);
+
+    laneTicks.mockClear();
+    const schedTicks = vi.spyOn(h.gateway.scheduler, 'tick');
+    h.advance(90_001 + STALE_AFTER_MS * HARD_STALE_MULTIPLIER);
+    h.gateway.tick(h.now());
+
+    const after = rowOf(h.db);
+    expect(schedTicks).not.toHaveBeenCalled();
+    expect(laneTicks).not.toHaveBeenCalled();
+    expect(claims).toHaveBeenCalledTimes(1);
+    expect(after.holder_id).not.toBe(before.holder_id);
+    expect(after.holder_id).toBe(h.lock.ownHolderId());
+    expect(after.since).toBe(before.since);
+    expect(after.exited_at).toBeNull();
+    expect(after.exit_reason).toBeNull();
+    expect(h.logs.join('\n')).not.toContain('presa da un altro processo');
+    expect(h.logs.join('\n')).toContain('ri-acquisisco');
+    expect(h.lock.isCurrentClaim(4242)).toBe(true);
+    // The refresh predicate, with the token this process no longer holds.
+    const stale = h.db
+      .prepare(`UPDATE gateway_lock SET taken_at = ? WHERE id = 1 AND pid = ? AND holder_id = ?`)
+      .run(h.now().toISOString(), 4242, before.holder_id);
+    expect(stale.changes).toBe(0);
+
+    release({ stopped: 'answered', text: 'fatto', turnId: 'turn-test' });
+    await vi.waitFor(() => expect(h.delivered).toEqual(['fatto']));
+    expect(calls).toHaveLength(1);
+    expect((h.db.prepare(`SELECT count(*) AS n FROM job_fires`).get() as { n: number }).n).toBe(1);
+    expect(h.closed()).toBe(0);
+    expect(rowOf(h.db).exited_at).toBeNull();
+  });
+
+  it('drains outside the transaction when another live holder owns the row, and does not publish drain on them', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let wroteDuringDrain = false;
+    const h = harness({
+      wireStillOwner: true,
+      runJob: async () => {
+        markStarted();
+        await gate;
+        h.db.prepare(`SELECT 1`).get();
+        wroteDuringDrain = true;
+        return { stopped: 'answered', text: 'fatto', turnId: 'turn-test' };
+      },
+    });
+    dueJob(h);
+    const served = h.gateway.serve();
+    await started;
+    const ours = h.lock.ownHolderId();
+    h.advance(90_000 + STALE_AFTER_MS * HARD_STALE_MULTIPLIER + 5_000);
+    const other = new GatewayLock(h.db, () => true);
+    expect(other.claim(h.now(), 'in attesa', 9999)).not.toHaveProperty('held');
+    const winner = rowOf(h.db);
+
+    await vi.waitFor(() => expect(h.logs.join('\n')).toContain('pid 9999'));
+    const during = rowOf(h.db);
+    expect(h.lock.ownHolderId()).toBe(ours);
+    expect(h.lock.isCurrentClaim(4242)).toBe(false);
+    expect(during.holder_id).not.toBe(ours);
+    expect(during.status).toBe('in attesa');
+    expect(during.taken_at).toBe(winner.taken_at);
+    expect(during.exit_reason).toBeNull();
+    expect(h.lock.markDraining()).toBe(0);
+    expect(h.logs.join('\n')).not.toContain('presa da un altro processo');
+
+    release();
+    expect(await served).toBe(0);
+    expect(wroteDuringDrain).toBe(true);
+    expect(h.delivered).toEqual([]);
+    expect(rowOf(h.db).status).toBe('in attesa');
+  });
+
+  it('writes drenaggio with the fenced update and records the exit only when the process leaves', async () => {
+    const h = harness();
+    h.gateway.start(h.now());
+    const before = rowOf(h.db);
+    expect(h.lock.markDraining()).toBe(1);
+    const marked = rowOf(h.db);
+    expect(marked.status).toBe('drenaggio');
+    expect(marked.taken_at).toBe(before.taken_at);
+    expect(marked.exited_at).toBeNull();
+
+    await h.gateway.drain('SIGTERM');
+    const after = rowOf(h.db);
+    expect(after.status).toBe('drenaggio');
+    expect(after.taken_at).toBe(before.taken_at);
+    expect(after.pid).toBeNull();
+    expect(after.exited_at).not.toBeNull();
+    expect(after.exit_reason).toBe('SIGTERM');
   });
 });

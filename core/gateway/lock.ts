@@ -1,5 +1,11 @@
 import type Database from 'better-sqlite3';
-import { DurableLock, heldBy, type Liveness, type LockOutcome } from '../lock/durable.js';
+import {
+  DurableLock,
+  ensureColumn,
+  heldBy,
+  type Liveness,
+  type LockOutcome,
+} from '../lock/durable.js';
 import { holderLiveness } from '../lock/incarnation.js';
 
 /**
@@ -48,7 +54,9 @@ CREATE TABLE IF NOT EXISTS gateway_lock (
   taken_at  TEXT,
   since     TEXT,
   status    TEXT,
-  holder_id TEXT
+  holder_id TEXT,
+  exited_at TEXT,
+  exit_reason TEXT
 );
 `;
 
@@ -74,6 +82,9 @@ export class GatewayLock {
   private readonly lock: DurableLock;
   private readonly claimInfo: Database.Statement;
   private readonly beatInfo: Database.Statement;
+  /** Fenced drain publication. Not `beatInfo`: that update has no `holder_id`. */
+  private readonly drainInfo: Database.Statement;
+  private readonly exitInfo: Database.Statement;
 
   constructor(
     db: Database.Database,
@@ -94,11 +105,21 @@ export class GatewayLock {
       },
       alive,
     );
+    ensureColumn(db, 'gateway_lock', 'exited_at', 'exited_at TEXT');
+    ensureColumn(db, 'gateway_lock', 'exit_reason', 'exit_reason TEXT');
     // `since` is set only here: a heartbeat that touched it would reset uptime
     // every thirty seconds, and `doctor` would report a process that has been
     // up for a week as thirty seconds old, forever.
-    this.claimInfo = db.prepare(`UPDATE gateway_lock SET since = @at, status = @status WHERE id = 1`);
+    this.claimInfo = db.prepare(
+      `UPDATE gateway_lock SET since = @at, status = @status WHERE id = 1`,
+    );
     this.beatInfo = db.prepare(`UPDATE gateway_lock SET status = @status WHERE id = 1`);
+    this.drainInfo = db.prepare(
+      `UPDATE gateway_lock SET status = 'drenaggio' WHERE id = 1 AND holder_id = ?`,
+    );
+    this.exitInfo = db.prepare(
+      `UPDATE gateway_lock SET exited_at = ?, exit_reason = ? WHERE id = 1 AND holder_id = ?`,
+    );
   }
 
   /** Claim it for this process, or name the gateway that has it. */
@@ -111,11 +132,53 @@ export class GatewayLock {
 
   /**
    * One beat: push the horizon out and say what it is doing. False means this
-   * process is no longer the holder — a cue to stop, not an error to swallow,
-   * because the only way it happens is that something took the lock over.
+   * process no longer holds the current token — the lease is past the hard
+   * horizon, or another acquisition owns the row. Those are not the same
+   * event. ADR-0106 slice 1 re-acquires only when nobody else holds the row;
+   * stealing a live holder stays forbidden. Callers must not keep writing
+   * under the old token.
    */
   beat(now: Date, status: string, pid: number = process.pid): boolean {
     return this.lock.refresh(now, pid, () => this.beatInfo.run({ status }));
+  }
+
+  /**
+   * Expired lease, same process, new token. The immediate transaction holds
+   * only `heldBy` and the mint (`DurableLock.reacquire`). `since` stays: this
+   * is not `claim`.
+   */
+  reacquire(
+    now: Date,
+    pid: number = process.pid,
+  ): { renewed: true } | { renewed: false; holder: number } {
+    return this.lock.reacquire(now, pid);
+  }
+
+  /** The token this instance holds. Null before a successful claim or re-acquire. */
+  ownHolderId(): string | null {
+    return this.lock.ownHolderId();
+  }
+
+  /**
+   * Publish drain on the row this instance still owns. One short update, no
+   * `heldBy` check, `taken_at` left where it is. `0` means the token is no
+   * longer on the row: the caller must not retry against the new holder and
+   * must not run the unfenced status statement.
+   */
+  markDraining(): number {
+    const token = this.lock.ownHolderId();
+    if (token === null) return 0;
+    return this.drainInfo.run(token).changes;
+  }
+
+  /**
+   * The process is actually leaving. Same fence as `markDraining`. A
+   * re-acquire does not call this: the process did not leave.
+   */
+  recordDeparture(at: string, reason: string): number {
+    const token = this.lock.ownHolderId();
+    if (token === null) return 0;
+    return this.exitInfo.run(at, reason, token).changes;
   }
 
   release(pid: number = process.pid): void {
@@ -171,7 +234,9 @@ export function readGateway(
     return null;
   }
   const judged =
-    row === undefined ? undefined : { pid: row.pid, takenAt: row.taken_at, holderId: row.holder_id ?? null };
+    row === undefined
+      ? undefined
+      : { pid: row.pid, takenAt: row.taken_at, holderId: row.holder_id ?? null };
   const pid = heldBy(judged, now.getTime(), STALE_AFTER_MS, alive);
   if (pid === null || !row) return null;
   return {
@@ -180,6 +245,31 @@ export function readGateway(
     status: row.status ?? 'sconosciuto',
     lastBeat: new Date(row.taken_at ?? now.toISOString()),
   };
+}
+
+/**
+ * The last real exit, and only that. A live holder — including one that just
+ * re-acquired an expired lease — is not an exit, even if an older
+ * `exited_at` is still on the row. Missing columns (a home from before slice
+ * 1) are "no recorded exit", not an error: this reader creates nothing, and
+ * `doctor` opens the database readonly.
+ */
+export function readGatewayDeparture(
+  db: Database.Database,
+  now: Date = new Date(),
+  alive: Liveness = holderLiveness(db),
+): { at: string; reason: string } | null {
+  if (readGateway(db, now, alive) !== null) return null;
+  let row: { exited_at: string | null; exit_reason: string | null } | undefined;
+  try {
+    row = db.prepare(`SELECT exited_at, exit_reason FROM gateway_lock WHERE id = 1`).get() as
+      | { exited_at: string | null; exit_reason: string | null }
+      | undefined;
+  } catch {
+    return null;
+  }
+  if (!row?.exited_at) return null;
+  return { at: row.exited_at, reason: row.exit_reason ?? '' };
 }
 
 /**

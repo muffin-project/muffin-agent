@@ -34,7 +34,7 @@ import { ALL_API_KEY_NAMES } from '../core/config/providers.js';
 import { describeWorkspace } from '../core/config/workspace.js';
 import { currentSchemaVersion, schemaVersionOf } from '../core/db/migrate.js';
 import { askGateway } from '../core/gateway/control-socket.js';
-import { readGateway } from '../core/gateway/lock.js';
+import { readGateway, readGatewayDeparture } from '../core/gateway/lock.js';
 import {
   checkSupervisor,
   realSupervisorProbes,
@@ -1328,6 +1328,11 @@ export async function runDoctor(
     // fire. Constraint 5 of that ADR is "visibile e ammazzabile", and this is
     // the visible half.
     const gateway = readGateway(db);
+    const departure = readGatewayDeparture(db);
+    const uscita =
+      departure === null
+        ? ''
+        : ` · uscito ${departure.at.slice(0, 16).replace('T', ' ')} (${departure.reason})`;
     if (gateway) {
       const since = gateway.since.toLocaleString('it-IT', {
         dateStyle: 'short',
@@ -1447,12 +1452,15 @@ export async function runDoctor(
       ok(
         'gateway',
         'fermo di proposito (`muffin gateway stop`) — resta giù anche dopo un riavvio, ' +
-          'e i job schedulati girano solo mentre una sessione `muffin` è aperta. `muffin gateway start` lo riaccende',
+          'e i job schedulati girano solo mentre una sessione `muffin` è aperta. `muffin gateway start` lo riaccende' +
+          uscita,
       );
     } else {
       warn(
         'gateway',
-        'nessun processo attivo: i job schedulati girano solo mentre una sessione `muffin` è aperta',
+        'nessun processo attivo' +
+          uscita +
+          ': i job schedulati girano solo mentre una sessione `muffin` è aperta',
         'run `muffin gateway install` (o `muffin init`, che te lo propone)',
       );
     }

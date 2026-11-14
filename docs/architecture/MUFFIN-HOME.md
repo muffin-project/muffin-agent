@@ -140,6 +140,47 @@ lock is free is a dead process, and a process that opens its own file with plain
 file APIs silently drops its lock. The files of dead processes are swept by the
 next process that claims something.
 
+The gateway claim is one row, `gateway_lock`, created by `core/gateway/lock.ts`.
+That file is the schema. The columns on the current `dev` row are:
+
+| Column | Role |
+|---|---|
+| `id` | Always 1. One claim per home. |
+| `pid` | Process that last acquired the row. Not liveness (ADR-0094). |
+| `taken_at` | Last successful beat. A heartbeat, not uptime. |
+| `since` | When this process acquired. Must not move on a beat. |
+| `status` | What the holder is doing, for `muffin gateway status` and `doctor`. |
+| `holder_id` | Fencing token for this acquisition (ADR-0035, amendment 3). |
+| `exited_at` | When this process actually left (ADR-0106 slice 1). Empty while it holds the row. |
+| `exit_reason` | Why that exit happened (`SIGTERM`, `lock`, …). `doctor` reads it only when no live holder remains. |
+
+[ADR-0106](../decisions/0106-il-gateway-e-un-ruolo.md) still adds `mode`
+(`persistent` or `ephemeral`, slice 2) and `supervisor` (`systemd`, `launchd`,
+`docker`, `external`, or `none`, slice 4). Those two are not in the schema
+until their slices migrate them. A re-acquire after an
+expired lease mints a new `holder_id` (`mintHolderId`, not `GatewayLock.claim`)
+and moves `taken_at`. It does not move `since`, and it does not revive the old
+token. An incarnation that is still locked does not by itself mean the holder
+is making progress. Exit 2 is a held incarnation, a heartbeat older than
+`WATCHDOG_SEC` by the age `heldBy` computes, and a status other than
+`drenaggio`. Entering drain publishes that status with one short update
+before the wait and before release: `UPDATE gateway_lock SET status =
+'drenaggio' WHERE id = 1 AND holder_id = <this instance's token>`. The
+update leaves `taken_at` where it is and does not consult `heldBy`.
+`changes === 0` leaves the new holder's status unchanged. A drain longer
+than `WATCHDOG_SEC` is not exit 2. `taken_at` is not the systemd watchdog
+ping. A future `taken_at` is the same age `heldBy` already computes as
+negative on `dev`; ADR-0106 does not introduce it. The root fix is option
+E, a separate CRITICAL amendment to ADR-0094 (nullable `beat_boot` and
+`beat_mono_ms`; `heldBy` and `refresh` compare `process.hrtime` within the
+same boot; old rows keep today's rule; wall clock for display only),
+decided and scheduled after slices 1–3 and before slice 4. That amendment
+is not written here. `beat_boot` and `beat_mono_ms` are not columns of this
+schema. A tolerance on a future timestamp is rejected. Until the amendment,
+`doctor` flags a future `taken_at` and `muffin gateway unlock --confirm`
+releases the row. ADR-0094 still calls that process alive until the hard
+horizon.
+
 ### G. Replaceable assets — `models/`, copied defaults/persona
 
 These are machine/install assets, not canonical personal knowledge. Their loss
