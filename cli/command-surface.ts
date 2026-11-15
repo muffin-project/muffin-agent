@@ -62,7 +62,8 @@ export const COMMANDS: readonly CommandSpec[] = [
   },
   {
     name: 'run',
-    summary: 'esegue un obiettivo senza aprire il terminale interattivo',
+    summary:
+      'esegue un obiettivo senza aprire il terminale; sessione nuova, --session ID per continuare',
     audience: 'owner',
     primary: true,
   },
