@@ -1,9 +1,10 @@
 # Character eval — al Day 1, Muffin è riconoscibilmente Muffin?
 
 Questa suite risponde a **una** domanda (`ORCHESTRATION.md` §8): *sui modelli che
-useremo davvero nella finestra DAY-1, il carattere definito in
-`defaults/persona.md`, `defaults/voice.md` e `defaults/rot/identity.md` arriva
-alla risposta — o resta un file che nessuno esegue?*
+useremo davvero nella finestra DAY-1, il carattere definito nel patto sigillato
+(`defaults/rot/identity.md`, registro compreso) arriva alla risposta — o resta
+un file che nessuno esegue?* Gli esempi di forma stanno nella skill `voce`, non
+nel prefisso.
 
 Non risponde a: quale modello è «migliore», se la voce piace, se la prosa è
 identica fra modelli. **Non si valuta il wording**, e non si valuta «ha usato 💀
@@ -11,7 +12,7 @@ quindi è Muffin». Si valutano **proprietà**.
 
 ## Com'è fatta
 
-- `probes.ts` — 22 probe come dati: il messaggio (o la breve sequenza) dell'owner,
+- `probes.ts` — 35 probe come dati: il messaggio (o la breve sequenza) dell'owner,
   il **contesto reale** che serve (memoria presente o assente, un tool che
   fallisce, un esito incerto dopo un crash, un MCP da caricare) costruito con le
   primitive vere del runtime, e le proprietà della rubrica che quel probe misura.
@@ -69,7 +70,7 @@ probe e il suo giudice: `MUFFIN_EVAL_PACE_MS=6000 npx tsx evals/character/run.ts
 Il dry-run non chiama nessun modello: stampa i probe, i token stimati e il costo
 per una corsa reale. Ri-misurato il 03/09/2026 sul prompt reale di oggi (~5.229
 token di system prompt per una singola chiamata, char/4 come `muffin prompt
-show`, 22 probe — i 17 originali più i 5 sulle esche plausibili): **~143k token
+show`, allora 22 probe — i 17 originali più i 5 sulle esche; oggi i probe sono 25, con il cambio di registro): **~143k token
 di input su `claude-sonnet-5`** e **~142.5k su `claude-haiku-4-5-20251001`**,
 cioè ~**$0.43** su `claude-sonnet-5` e ~**$0.14** su `claude-haiku-4-5` — solo
 input, output e giudice esclusi. La cifra del 17/08 (5.620 token di system

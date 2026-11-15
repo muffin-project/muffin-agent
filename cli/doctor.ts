@@ -40,6 +40,12 @@ import {
   realSupervisorProbes,
   type SupervisorProbes,
 } from '../core/gateway/supervisor.js';
+import {
+  futureLockCheckName,
+  futureLockClaims,
+  futureLockDetail,
+  futureLockRemedy,
+} from '../core/lock/future-claim.js';
 import { readConsolidation } from '../core/memory/consolidator.js';
 import { type Embedder, makeEmbedder, OllamaEmbedder } from '../core/memory/embed.js';
 import { readOpenContradictions } from '../core/memory/maintenance.js';
@@ -635,9 +641,9 @@ export async function runDoctor(
   // edited by the owner, agent/context/assemble.ts), but because nothing
   // before this told the owner their copy had fallen behind. Measured on the
   // owner's own machine (docs/evidence/deriva-defaults-2026-08-26.md):
-  // persona.md, voice.md and rot/identity.md sat at their `init`-day content
-  // for weeks — the assembled prompt was half the size HEAD ships — and
-  // nothing anywhere said so. See defaultsDriftCheck below for the two
+  // shipped files sat at their `init`-day content for weeks and nothing said
+  // so. persona.md and voice.md are no longer prompt sources (ADR-0107); the
+  // sealed identity and the skills still are. See defaultsDriftCheck below for the two
   // opposite verdicts this can reach and why they must never be confused.
   const moduleDir = dirname(fileURLToPath(import.meta.url));
   const checkoutRoot =
@@ -647,7 +653,7 @@ export async function runDoctor(
     warn(
       'defaults',
       "nessun registro d'installazione (installazione precedente a questa funzione) e nessun checkout Git leggibile — " +
-        "non so dire se persona.md, voice.md o i default dentro rot/ sono stati aggiornati dall'owner o sono rimasti al giorno di `init`",
+        "non so dire se i default dentro rot/ o le skill sono stati aggiornati dall'owner o sono rimasti al giorno di `init`",
       'esegui da un checkout Git di questo repository per un confronto affidabile',
     );
   } else {
@@ -663,6 +669,18 @@ export async function runDoctor(
         : drift;
     for (const d of rest) defaultsDriftCheck(ok, warn, d);
     if (sealedAdoptable.length >= 2) sealedDriftGroupCheck(warn, sealedAdoptable);
+  }
+
+  const leftoverPrompt = [
+    existsSync(p.persona) ? 'persona.md' : null,
+    existsSync(p.voice) ? 'voice.md' : null,
+  ].filter((name): name is string => name !== null);
+  if (leftoverPrompt.length > 0) {
+    warn(
+      'prompt sources',
+      `${leftoverPrompt.join(' e ')} ${leftoverPrompt.length === 1 ? 'è ancora nella home' : 'sono ancora nella home'} ma non ${leftoverPrompt.length === 1 ? 'è più una sorgente' : 'sono più sorgenti'} del prompt. Il carattere è rot/identity.md.`,
+      'per adottare il patto spedito, `muffin rot reseal` su rot/identity.md. Questi file si possono lasciare: non vengono letti e non vengono cancellati.',
+    );
   }
 
   // The caps that bind, and which file they came from. Same shape of invisible
@@ -1458,6 +1476,13 @@ export async function runDoctor(
       ok('supervisore', supervisor.detail);
     } else {
       warn('supervisore', supervisor.detail, supervisor.remedy);
+    }
+
+    // A future `taken_at` never crosses `heldBy`'s horizon while the holder
+    // still reads as alive. Reported, not tolerated: the comparison in
+    // `heldBy` stays as it is. `futureLockClaims` creates nothing.
+    for (const claim of futureLockClaims(db)) {
+      warn(futureLockCheckName(claim), futureLockDetail(claim), futureLockRemedy(claim));
     }
     db.close();
   } catch (error) {

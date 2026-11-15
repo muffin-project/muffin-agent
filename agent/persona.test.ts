@@ -1,10 +1,10 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runInit } from '../cli/init.js';
-import { buildRuntime } from './runtime.js';
 import { paths } from '../core/config/config.js';
+import { buildRuntime } from './runtime.js';
 
 /**
  * The persona reaches the turn.
@@ -44,16 +44,18 @@ function bootHome(): string {
 describe('persona in the system prompt', () => {
   const workspace = mkdtempSync(join(tmpdir(), 'muffin-persona-ws-'));
 
-  it('carries the voice rules into the prompt the loop actually gets', () => {
+  it('carries the sealed identity into the prompt, and leaves the voice examples in the skill', () => {
     const home = bootHome();
-    const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
+    const runtime = buildRuntime(home, workspace);
+    const prompt = runtime.deps.systemPrompts.owner;
+    runtime.close();
 
-    // Three rules from three different sections of voice.md: a formatting rule,
-    // an honesty rule, and the emoji ceiling. If the file is not read, none of
-    // them can be in here.
-    expect(prompt).toContain('Niente meta-commentary');
-    expect(prompt).toContain('Niente azioni simulate');
-    expect(prompt).toMatch(/15% dei messaggi/);
+    expect(prompt).toContain('Il registro segue il momento');
+    expect(prompt).toContain('Non fingi di ricordare, aver visto, controllato, eseguito');
+    // The catalogue names the skill. The body — the 15% emoji ceiling — does not ride along.
+    expect(prompt).toContain('voce');
+    expect(prompt).not.toMatch(/15% dei messaggi/);
+    expect(prompt).not.toContain('Niente meta-commentary');
   });
 
   it('gives a fresh install a character, without the owner having written a word', () => {
@@ -73,27 +75,23 @@ describe('persona in the system prompt', () => {
     const home = bootHome();
     const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
 
-    expect(prompt).toContain('Sono Muffin');
-    // Two load-bearing promises: a second perspective with memory, not a mirror
-    // of whatever was just said — and honest about whether an action happened.
+    expect(prompt).toContain('Sei Muffin');
     expect(prompt).toMatch(/seconda prospettiva con memoria/);
     expect(prompt).toMatch(/Non fingi di ricordare, aver visto, controllato, eseguito/);
     expect(prompt).toMatch(/Non descrivi un lavoro come completato se non lo è/);
-    // The said/inferred discipline the memory layer enforces in SQL.
-    expect(prompt).toContain('quello che ho inferito');
+    expect(prompt).toContain("Un'inferenza resta un'inferenza");
   });
 
-  it("puts the owner's file after the shared one, so it reads as an overlay", () => {
+  it('states who Muffin is before the limits, in the one sealed file', () => {
     const home = bootHome();
-    const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
-    const shared = prompt.indexOf('Sono Muffin');
-    const owner = prompt.indexOf('Non mi dai ragione');
-    // Both present before comparing: indexOf returns -1 when absent, and -1 is
-    // less than everything, so the ordering assertion alone would pass loudest
-    // exactly when the persona had gone missing.
-    expect(shared).toBeGreaterThan(-1);
-    expect(owner).toBeGreaterThan(-1);
-    expect(shared).toBeLessThan(owner);
+    const runtime = buildRuntime(home, workspace);
+    const prompt = runtime.deps.systemPrompts.owner;
+    runtime.close();
+    const who = prompt.indexOf('Sei Muffin');
+    const limits = prompt.indexOf('Non mi dai ragione');
+    expect(who).toBeGreaterThan(-1);
+    expect(limits).toBeGreaterThan(-1);
+    expect(who).toBeLessThan(limits);
   });
 
   it('strips HTML-comment scaffolding meant for the human editor, not the model', () => {
@@ -143,31 +141,21 @@ describe('persona in the system prompt', () => {
     expect(prompt).toContain('## Chi sei per me');
   });
 
-  it('survives a home where the persona files are actually gone', () => {
-    // This used to write an EMPTY file, which takes the readFileSync path and
-    // never reaches the existsSync guard — so the test's name, comment and
-    // assertion all described a case it did not construct. Removing that guard
-    // left the whole suite green. It is the one line every pre-existing install
-    // depends on: they have no persona.md, and without it boot throws ENOENT.
+  it('survives a home that has no persona.md and no voice.md', () => {
     const home = bootHome();
-    rmSync(paths(home).voice);
-    rmSync(paths(home).persona);
     expect(existsSync(paths(home).voice)).toBe(false);
-    expect(() => buildRuntime(home, workspace)).not.toThrow();
+    expect(existsSync(paths(home).persona)).toBe(false);
+    const runtime = buildRuntime(home, workspace);
+    expect(runtime.deps.systemPrompts.owner).toContain('Il registro segue il momento');
+    runtime.close();
   });
 
-  it('keeps the owner name out of the pure-muffin files', () => {
-    // PRACTICES.md#research-is-evidence-not-authority: persona.md and voice.md ship to every install and must
-    // carry no fact about a specific owner. identity.md is this owner's own
-    // pact — it lives in the Root of Trust exactly because it is personal —
-    // and is allowed to name him (it does, at identity.md:86). This used to
-    // check the whole owner prompt for the name, which broke the day
-    // identity.md stopped being an empty template: the owner's name reaches
-    // the owner prompt legitimately now, through identity.md. Reading the two
-    // pure-muffin files directly is the claim that is actually supposed to hold.
+  it('keeps the owner name out of the shipped identity and the voice skill', () => {
+    // The sealed pact may name the owner once he writes it. The copy we ship,
+    // and the skill every install receives, must not.
     const home = bootHome();
-    expect(readFileSync(paths(home).persona, 'utf8')).not.toMatch(/Giusto/);
-    expect(readFileSync(paths(home).voice, 'utf8')).not.toMatch(/Giusto/);
+    expect(readFileSync(join(paths(home).rot, 'identity.md'), 'utf8')).not.toMatch(/Giusto/);
+    expect(readFileSync(join(home, 'skills', 'voce', 'SKILL.md'), 'utf8')).not.toMatch(/Giusto/);
   });
 
   it('keeps a heading whose answer lives only in a subsection', () => {

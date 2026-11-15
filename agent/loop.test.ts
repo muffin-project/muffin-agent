@@ -431,8 +431,94 @@ describe('agent loop', () => {
     // guarantee.
     const provider = new ScriptedProvider([answer('ok')]);
     const { deps: d, store } = deps([], { provider });
+    store.append(store.open('t1'), {
+      role: 'user',
+      content: 'contesto stabile',
+      surface: 'cli',
+      createdAt: '2026-11-14T09:00:00.000Z',
+      tier: 0,
+    });
     await runTurn(d, input(store));
     expect(provider.seen[0]?.system[0]).toMatchObject({ cache: 'stable' });
+    const messages = provider.seen[0]?.messages ?? [];
+    const clockAt = messages.findIndex((message) => message.origin === 'runtime');
+    expect(clockAt).toBeGreaterThan(0);
+    const marked = (message: (typeof messages)[number] | undefined) =>
+      message?.content.some((block) => block.type === 'text' && block.cache === 'stable') === true;
+    expect(marked(messages[clockAt - 1])).toBe(true);
+    expect(marked(messages[clockAt])).toBe(false);
+    expect(marked(messages.at(-1))).toBe(false);
+    for (const message of messages.slice(clockAt)) expect(marked(message)).toBe(false);
+  });
+
+  it('keeps the marked prefix of one turn a byte-identical prefix of the next', async () => {
+    let t = Date.parse('2026-11-14T10:00:00Z');
+    const provider = new ScriptedProvider([answer('prima'), answer('dopo')]);
+    const { deps: d, store } = deps([], {
+      provider,
+      now: () => {
+        t += 120_000;
+        return new Date(t);
+      },
+    });
+    store.append(store.open('t1'), {
+      role: 'user',
+      content: 'contesto stabile',
+      surface: 'cli',
+      createdAt: '2026-11-14T09:00:00.000Z',
+      tier: 0,
+    });
+    await runTurn(d, input(store));
+    await runTurn(d, input(store));
+    const prefix = (call: ChatCall | undefined): string => {
+      const system = (call?.system ?? [])
+        .filter((block) => block.type === 'text' && block.cache === 'stable')
+        .map((block) => (block.type === 'text' ? block.text : ''))
+        .join('\n');
+      const messages = call?.messages ?? [];
+      let last = -1;
+      messages.forEach((message, index) => {
+        if (message.content.some((block) => block.type === 'text' && block.cache === 'stable'))
+          last = index;
+      });
+      const body = messages
+        .slice(0, last + 1)
+        .map(
+          (message) =>
+            `${message.role}\n${message.content.map((block) => (block.type === 'text' ? block.text : '')).join('')}`,
+        )
+        .join('\n');
+      return `${system}\n${body}`;
+    };
+    const first = prefix(provider.seen[0]);
+    const second = prefix(provider.seen[1]);
+    const clockText = (call: ChatCall | undefined): string => {
+      const block = call?.messages
+        .find((message) => message.origin === 'runtime')
+        ?.content.find((block) => block.type === 'text');
+      return block?.type === 'text' ? block.text : '';
+    };
+    const firstClock = clockText(provider.seen[0]);
+    const secondClock = clockText(provider.seen[1]);
+    expect(firstClock).not.toBe(secondClock);
+    expect(first).not.toContain(firstClock);
+    expect(second).not.toContain(secondClock);
+    expect(second.startsWith(first)).toBe(true);
+    expect(first).toContain('contesto stabile');
+  });
+
+  it('a minimal turn does not send the interactive prefix', async () => {
+    const provider = new ScriptedProvider([answer('ok')]);
+    const { deps: d, store } = deps([], { provider, minimalPrompt: 'SOLO-COMPITO' });
+    await runTurn(d, { ...input(store), promptMode: 'minimal' });
+    expect(provider.seen[0]?.system[0]).toMatchObject({
+      type: 'text',
+      text: 'SOLO-COMPITO',
+      cache: 'stable',
+    });
+    expect(
+      provider.seen[0]?.system[0]?.type === 'text' && provider.seen[0].system[0].text,
+    ).not.toBe(d.systemPrompts.owner);
   });
 
   it('carries cache writes to the surface, so a write is distinguishable from no cache', async () => {

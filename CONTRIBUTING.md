@@ -157,6 +157,13 @@ That normally means:
 - for CRITICAL work, the independent judge path described in `docs/development/JUDGE.md`,
   run by a fresh evaluator rather than the same session being its sole certifier.
 
+Optional fast feedback ships in the repository: `.githooks/pre-push` runs
+`tsc --noEmit`, Biome on the files changed against `origin/dev`, and the tests
+those files affect. Activate it once per clone with
+`git config core.hooksPath .githooks`; bypass it with `MUFFIN_SKIP_HOOKS=1`.
+`npm test` stays the full local suite; CI partitions a few suites across the
+narrow required checks (see `.github/workflows/ci.yml`).
+
 Green Actions are not evidence for behaviour the hosted runner cannot observe,
 such as a fresh public VPS install or an owner-controlled external service.
 Record that acceptance separately and leave it unresolved until it is observed.

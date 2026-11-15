@@ -37,6 +37,7 @@ import {
   cmdGatewayStatus,
   cmdGatewayStop,
   cmdGatewayTurn,
+  cmdGatewayUnlock,
   GATEWAY_USAGE,
 } from './gateway.js';
 import {
@@ -1230,6 +1231,7 @@ async function cmdGateway(argv: string[]): Promise<number> {
   if (sub === 'start') return cmdGatewayStart(home);
   if (sub === 'restart') return cmdGatewayRestart(home);
   if (sub === 'install') return cmdGatewayInstall(home, rest);
+  if (sub === 'unlock') return cmdGatewayUnlock(home, rest);
   process.stderr.write(GATEWAY_USAGE);
   return 78;
 }
@@ -1446,7 +1448,11 @@ async function cmdRun(argv: string[]): Promise<number> {
   });
   const goal = positionals.join(' ').trim();
   if (goal === '') {
-    process.stderr.write(`usage: muffin run "<goal>" [--image FILE]\n`);
+    process.stderr.write(
+      `usage: muffin run "<goal>" [--session ID] [--json] [--image FILE] [--timeout SEC]\n` +
+        `a new session is the default (run-<date>-<hex>). The id is JSON .session and the footer "sessione".\n` +
+        `continue: id=$(muffin run --json "…" | jq -r .session) && muffin run --session "$id" "…"\n`,
+    );
     return 78;
   }
   return runHeadless({

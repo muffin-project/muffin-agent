@@ -17,7 +17,6 @@ import { createLocalJWKSet, type JSONWebKeySet, type JWTPayload, jwtVerify } fro
 import { ensurePrivateDir, tightenPrivateDb, tightenPrivateFile } from './private-fs.js';
 import { THINKING_EFFORTS, type ThinkingEffort } from './thinking.js';
 
-export const CHATGPT_SECRET_REF = 'secret://chatgpt';
 const AUTH_ORIGIN = 'https://auth.openai.com';
 const API_ORIGIN = 'https://api.openai.com';
 const AUTHORIZE_URL = `${AUTH_ORIGIN}/api/accounts/authorize`;

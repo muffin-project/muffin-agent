@@ -1,37 +1,50 @@
 import { join } from 'node:path';
-import { makeTextzone } from './textzone.js';
-import { makeFondo } from './fondo.js';
-import { intestazione } from './riquadro.js';
-import { attachMcp, buildRuntime, type Runtime } from '../agent/runtime.js';
-import { loadProfiles, selectProfile } from '../agent/profiles/profile.js';
-import { Scheduler, type Deliver, type ForegroundGate, type StandDown } from '../core/scheduler/scheduler.js';
-import { makeTraceRetentionTick } from '../core/scheduler/trace-retention.js';
-import { LANE_JOBS, LANE_TURNS, ModelLane } from '../core/turns/model-lane.js';
-import { gatewayTransition, readGateway } from '../core/gateway/lock.js';
-import { localExecAllowed, NO_GATEWAY_REMEDY, resolveExecutionOwner } from '../core/gateway/ownership.js';
-import { mintExecutionId, runViaGateway, UnknownOutcomeError } from '../core/gateway/forward.js';
-import { formatFileReady } from '../core/surface/cli.js';
-import type { ApprovalRequest } from '../agent/loop.js';
-import { describeAbort } from './abort.js';
-import { consolidationBootLine, CONSOLIDATION_TENANT } from '../core/memory/consolidator.js';
-import { reviewBootLine } from '../core/memory/maintenance.js';
 import type Database from 'better-sqlite3';
-import { TICK_MS } from '../core/gateway/service.js';
-import { makeCommitmentLane } from '../agent/commitment-run.js';
-import { makeJobRunner } from '../agent/scheduler-run.js';
-import { runTurn, type TurnDelta, type TurnEvent, type TurnResult } from '../agent/loop.js';
-import { TOOL_PHRASES, toolLine, toolPhrase, toolSubject } from '../agent/tool-phrase.js';
-import { COMANDI as ELENCO_COMANDI, aiuto, debugCommand, eseguiComando, sembraComando, thinkingCommand } from '../agent/comandi.js';
 import type { Controlli, Verbosity } from '../agent/comandi.js';
-import { Pausa } from '../core/runtime/pausa.js';
-import { levaDelega } from '../core/runtime/delega.js';
-import { loadConfig, paths, saveConfig } from '../core/config/config.js';
-import { cmdModel } from './model.js';
-import { makeStatusLine, type StatusLine } from './status-line.js';
-import { styleFor } from './ui.js';
+import {
+  aiuto,
+  COMANDI as ELENCO_COMANDI,
+  eseguiComando,
+  sembraComando,
+} from '../agent/comandi.js';
+import { makeCommitmentLane } from '../agent/commitment-run.js';
+import type { ApprovalRequest } from '../agent/loop.js';
+import { runTurn, type TurnDelta, type TurnEvent, type TurnResult } from '../agent/loop.js';
+import { attachMcp, buildRuntime, type Runtime } from '../agent/runtime.js';
+import { makeJobRunner } from '../agent/scheduler-run.js';
+import { toolLine, toolPhrase } from '../agent/tool-phrase.js';
 import { costUsd } from '../core/budget/pricing.js';
-import { attachSendFile, connectSurfaces, rigaDatata } from './surface.js';
+import { paths } from '../core/config/config.js';
+import { mintExecutionId, runViaGateway, UnknownOutcomeError } from '../core/gateway/forward.js';
+import { gatewayTransition, readGateway } from '../core/gateway/lock.js';
+import {
+  localExecAllowed,
+  NO_GATEWAY_REMEDY,
+  resolveExecutionOwner,
+} from '../core/gateway/ownership.js';
+import { TICK_MS } from '../core/gateway/service.js';
+import { CONSOLIDATION_TENANT, consolidationBootLine } from '../core/memory/consolidator.js';
+import { reviewBootLine } from '../core/memory/maintenance.js';
+import { levaDelega } from '../core/runtime/delega.js';
+import { Pausa } from '../core/runtime/pausa.js';
+import {
+  type Deliver,
+  type ForegroundGate,
+  Scheduler,
+  type StandDown,
+} from '../core/scheduler/scheduler.js';
+import { makeTraceRetentionTick } from '../core/scheduler/trace-retention.js';
+import { formatFileReady } from '../core/surface/cli.js';
 import { OWNER_SESSION_KEY } from '../core/surface/types.js';
+import { LANE_JOBS, LANE_TURNS, ModelLane } from '../core/turns/model-lane.js';
+import { describeAbort } from './abort.js';
+import { makeFondo } from './fondo.js';
+import { cmdModel } from './model.js';
+import { intestazione } from './riquadro.js';
+import { makeStatusLine, type StatusLine } from './status-line.js';
+import { attachSendFile, connectSurfaces, rigaDatata } from './surface.js';
+import { makeTextzone } from './textzone.js';
+import { styleFor } from './ui.js';
 
 /**
  * The REPL.
@@ -71,7 +84,9 @@ export function statusFor(event: TurnEvent): string | null {
     case 'tool_start':
       return `  ${toolLine(event.name, event.args)}…`;
     case 'model_status':
-      return event.status === 'stalled' ? `  modello fermo (${Math.round(event.idleMs / 1000)}s)…` : `  ${event.status.replaceAll('_', ' ')} (${Math.round(event.elapsedMs / 1000)}s)…`;
+      return event.status === 'stalled'
+        ? `  modello fermo (${Math.round(event.idleMs / 1000)}s)…`
+        : `  ${event.status.replaceAll('_', ' ')} (${Math.round(event.elapsedMs / 1000)}s)…`;
     default:
       return null;
   }
@@ -100,8 +115,6 @@ async function waitForForegroundModelLane(
   }
   return false;
 }
-
-
 
 /**
  * How the CLI surface writes inside a REPL, and the one thing it has to do that
@@ -240,7 +253,9 @@ export function formatProgressLine(event: TurnEvent, verbosity: Verbosity): stri
     case 'model':
       return null;
     case 'model_status':
-      return event.status === 'stalled' ? `  ⚠ nessuna attività del modello da ${Math.round(event.idleMs / 1000)}s` : null;
+      return event.status === 'stalled'
+        ? `  ⚠ nessuna attività del modello da ${Math.round(event.idleMs / 1000)}s`
+        : null;
     // Stessa ragione di `tool_retry`, altro budget: l'attesa del re-drive va
     // detta, o lo spinner fermo per due minuti sembra un guasto.
     case 'model_retry':
@@ -351,8 +366,10 @@ export function gatewayStandDown(
   ownedAtBoot: boolean,
 ): StandDown {
   const watch = gatewayTransition(db, say, ownedAtBoot, {
-    taken: (pid) => `scheduler: passato al gateway (pid ${pid}) — i job girano lì adesso, non più in questa finestra`,
-    released: () => `scheduler: il gateway non risponde più — i job tornano a girare in questa finestra`,
+    taken: (pid) =>
+      `scheduler: passato al gateway (pid ${pid}) — i job girano lì adesso, non più in questa finestra`,
+    released: () =>
+      `scheduler: il gateway non risponde più — i job tornano a girare in questa finestra`,
   });
   return () => watch() !== null;
 }
@@ -396,7 +413,8 @@ export function surfaceStandDown(
   return gatewayTransition(db, say, servingAtBoot, {
     taken: (pid) =>
       `superfici: le serve il gateway (pid ${pid}) — questa finestra smette di ricevere, ma manda ancora`,
-    released: () => `superfici: il gateway non risponde più — questa finestra ricomincia a ricevere`,
+    released: () =>
+      `superfici: il gateway non risponde più — questa finestra ricomincia a ricevere`,
   });
 }
 
@@ -431,7 +449,7 @@ export async function runRepl(
   // flag: entrambi ricevono un writer che deve poter cancellare l'attesa in
   // corso prima di scrivere, e un `const` dichiarato più in basso sarebbe nella
   // sua temporal dead zone nel momento in cui glielo si passa.
-/**
+  /**
    * B13: whether *this* turn attaches `TurnInput.onProgress` at all.
    *
    * Gated on **`process.stderr`**'s own TTY-ness, not `process.stdout`'s
@@ -452,7 +470,6 @@ export async function runRepl(
    * hand for `isTTY`.
    */
   const progressEnabled = process.stderr.isTTY === true;
-
 
   /**
    * La riga di stato viva, una per REPL e non una per turno: il timer che la
@@ -479,7 +496,6 @@ export async function runRepl(
    * non tre: senza, un testo multilinea sembra tre turni già spediti. Smorzata,
    * perché è cornice — `cli/STYLES.md`.
    */
-
 
   let runtime: Runtime;
   try {
@@ -528,7 +544,9 @@ export async function runRepl(
     runtime,
     home,
     modelLane,
-    makeReplCliWrite({ cancella: () => cancellaPrompt(), redraw: () => redrawPrompt() }, () => status.clear()),
+    makeReplCliWrite({ cancella: () => cancellaPrompt(), redraw: () => redrawPrompt() }, () =>
+      status.clear(),
+    ),
     // Nessuna corsia da spingere: il REPL cede i turni al gateway (ADR-0035).
     undefined,
     // Le righe dei connettori passano dalla stessa strada delle consegne. Con
@@ -577,7 +595,7 @@ export async function runRepl(
    */
   const streamEnabled = opts.stream ?? process.stdout.isTTY === true;
 
-    /** `muffin --debug` decide il valore iniziale; `/debug` lo cambia da qui in poi. */
+  /** `muffin --debug` decide il valore iniziale; `/debug` lo cambia da qui in poi. */
   let verbosity: Verbosity = opts.debug === true ? 'debug' : 'normale';
 
   // Allowlisted MCP servers, verified against their pins. A suspension is
@@ -634,10 +652,10 @@ export async function runRepl(
           runtime.config.provider.kind === 'openai-chatgpt'
             ? 'ChatGPT plan · https://chatgpt.com/settings/usage'
             : runtime.config.provider.kind === 'anthropic'
-            ? 'Anthropic diretto'
-            : runtime.config.provider.baseUrl?.includes('openrouter.ai')
-              ? 'OpenRouter · OpenAI-compatible'
-              : `OpenAI-compatible · ${runtime.config.provider.baseUrl ?? 'endpoint non dichiarato'}`,
+              ? 'Anthropic diretto'
+              : runtime.config.provider.baseUrl?.includes('openrouter.ai')
+                ? 'OpenRouter · OpenAI-compatible'
+                : `OpenAI-compatible · ${runtime.config.provider.baseUrl ?? 'endpoint non dichiarato'}`,
         ),
         style.dim(`superfici: ${runtime.config.surfaces.enabled.join(', ')}`),
         style.dim(
@@ -762,7 +780,9 @@ export async function runRepl(
     // already steered this turn, and that changes the answer more often than
     // the capability name does.
     if (request.taint > 0) {
-      const label = ['', 'contatto noto', 'gruppo/sconosciuto', 'contenuto esterno (web o tool)'][request.taint];
+      const label = ['', 'contatto noto', 'gruppo/sconosciuto', 'contenuto esterno (web o tool)'][
+        request.taint
+      ];
       status.line(`     contesto: turno a taint ${request.taint}${label ? ` — ${label}` : ''}`);
     }
     // B11: la stessa riga di prompt, ma su stderr (`TextzoneDeps.promptOutput`)
@@ -773,7 +793,9 @@ export async function runRepl(
     // continuava a chiedere l'approvazione di una cosa già annullata.
     const answer = risposta.tipo === 'testo' ? risposta.testo.trim().toLowerCase() : '';
     const allowed = answer === 's' || answer === 'si' || answer === 'sì' || answer === 'y';
-    status.line(`  ${allowed ? '✓' : '✗'} ${request.capability}: ${allowed ? 'consentito' : 'rifiutato'}`);
+    status.line(
+      `  ${allowed ? '✓' : '✗'} ${request.capability}: ${allowed ? 'consentito' : 'rifiutato'}`,
+    );
     return allowed ? 'allow' : 'deny';
   };
   runtime.approvers.set('cli', chiediApprovazione);
@@ -903,7 +925,8 @@ export async function runRepl(
     hasTerminal: () => true,
     onEvent: (e) => {
       if (e.kind === 'undelivered') status.line(`impegno ${e.anchor}: non consegnato — ${e.why}`);
-      else if (e.kind === 'unreachable') status.line(`impegno ${e.anchor}: nessun canale — ${e.remedy}`);
+      else if (e.kind === 'unreachable')
+        status.line(`impegno ${e.anchor}: nessun canale — ${e.remedy}`);
       else if (e.kind === 'failed') status.line(`corsia impegni: giro fallito — ${e.error}`);
     },
   });
@@ -914,51 +937,57 @@ export async function runRepl(
   let scheduler: Scheduler | null = null;
   if (gateway !== null || localExecAllowed()) {
     scheduler = new Scheduler(
-    runtime.jobs,
-    makeJobRunner(runtime.deps, runtime.jobFires, runtime.executor, { cwd: runtime.workspace }, runtime.budget),
-    deliver,
-    foreground,
-    (e) => {
-      if (e.kind === 'delivery_failed') {
-        status.line(`job ${e.job.id.slice(0, 8)}: consegna fallita (${e.error})`);
-      } else if (e.kind === 'yielded') {
-        // P21 (1b)/(2) MEDIUM: see the identical branch in `cli/gateway.ts` —
-        // an aborted job retried silently on every tick before this.
-        status.line(`job ${e.job.id.slice(0, 8)}: ceduto — riproverà al prossimo giro`);
-      } else if (e.kind === 'not_recorded') {
-        status.line(`job ${e.job.id.slice(0, 8)}: esito non registrato — ${e.error}`);
-      }
-    },
-    undefined,
-    standDown,
-    // The outcome lands on the turn's row, same as `cli/gateway.ts`.
-    (turnId, state) => runtime.deps.turns.delivered(turnId, state),
-    // La stessa istanza passata a `connectSurfaces` qui sopra (#533): lo
-    // scheduler di questa finestra e i turni in arrivo che serve si
-    // serializzano fra loro. (Il REPL non ha una `TurnLane` propria —
-    // ADR-0035 cede i turni al gateway — ma i turni in arrivo dalle superfici
-    // che serve quando nessun gateway c'è la usano eccome, via `runWork`.)
-    modelLane,
-    // `stillOwner` — the REPL's scheduler holds no gateway claim to
-    // re-verify, same default as every other REPL/test construction.
-    undefined,
-    // B7: same wiring as `cli/gateway.ts`, so a job the REPL runs (no gateway
-    // installed yet, or its claim gone stale) gets the same identity bridge —
-    // silent receipt included (#598 S4).
-    (job, opts) => runtime.jobFires.settle(job.id, job.nextFireAt.toISOString(), opts),
-    // ADR-0054 §4: la pausa è del database, non di questo processo — un
-    // `/pause` dato dal telefono ferma anche i job che girano qui.
-    () => pausa.attiva(),
-    // ADR-0060: la stessa corsia del gateway, dalla stessa porta. Il REPL cede
-    // allo scheduler del gateway quando c'è (`standDown` qui sopra). Senza
-    // gateway e senza hatch non c'è scheduler qui (ADR-0103: la promessa dei
-    // job vive nel gateway, non nella finestra).
-    commitments,
-    // #838: la stessa retention del gateway, dalla stessa porta — il REPL cede
-    // allo scheduler del gateway quando c'è, quindi pota solo quando nessun
-    // altro processo possiede lo store. Stessa policy del boot, solo un
-    // secondo chiamante.
-    makeTraceRetentionTick(home, runtime.config.traces.retentionDays),
+      runtime.jobs,
+      makeJobRunner(
+        runtime.deps,
+        runtime.jobFires,
+        runtime.executor,
+        { cwd: runtime.workspace },
+        runtime.budget,
+      ),
+      deliver,
+      foreground,
+      (e) => {
+        if (e.kind === 'delivery_failed') {
+          status.line(`job ${e.job.id.slice(0, 8)}: consegna fallita (${e.error})`);
+        } else if (e.kind === 'yielded') {
+          // P21 (1b)/(2) MEDIUM: see the identical branch in `cli/gateway.ts` —
+          // an aborted job retried silently on every tick before this.
+          status.line(`job ${e.job.id.slice(0, 8)}: ceduto — riproverà al prossimo giro`);
+        } else if (e.kind === 'not_recorded') {
+          status.line(`job ${e.job.id.slice(0, 8)}: esito non registrato — ${e.error}`);
+        }
+      },
+      undefined,
+      standDown,
+      // The outcome lands on the turn's row, same as `cli/gateway.ts`.
+      (turnId, state) => runtime.deps.turns.delivered(turnId, state),
+      // La stessa istanza passata a `connectSurfaces` qui sopra (#533): lo
+      // scheduler di questa finestra e i turni in arrivo che serve si
+      // serializzano fra loro. (Il REPL non ha una `TurnLane` propria —
+      // ADR-0035 cede i turni al gateway — ma i turni in arrivo dalle superfici
+      // che serve quando nessun gateway c'è la usano eccome, via `runWork`.)
+      modelLane,
+      // `stillOwner` — the REPL's scheduler holds no gateway claim to
+      // re-verify, same default as every other REPL/test construction.
+      undefined,
+      // B7: same wiring as `cli/gateway.ts`, so a job the REPL runs (no gateway
+      // installed yet, or its claim gone stale) gets the same identity bridge —
+      // silent receipt included (#598 S4).
+      (job, opts) => runtime.jobFires.settle(job.id, job.nextFireAt.toISOString(), opts),
+      // ADR-0054 §4: la pausa è del database, non di questo processo — un
+      // `/pause` dato dal telefono ferma anche i job che girano qui.
+      () => pausa.attiva(),
+      // ADR-0060: la stessa corsia del gateway, dalla stessa porta. Il REPL cede
+      // allo scheduler del gateway quando c'è (`standDown` qui sopra). Senza
+      // gateway e senza hatch non c'è scheduler qui (ADR-0103: la promessa dei
+      // job vive nel gateway, non nella finestra).
+      commitments,
+      // #838: la stessa retention del gateway, dalla stessa porta — il REPL cede
+      // allo scheduler del gateway quando c'è, quindi pota solo quando nessun
+      // altro processo possiede lo store. Stessa policy del boot, solo un
+      // secondo chiamante.
+      makeTraceRetentionTick(home, runtime.config.traces.retentionDays),
     );
   }
   let ticker: ReturnType<typeof setInterval> | null = null;
@@ -975,7 +1004,9 @@ export async function runRepl(
         : `scheduler: del gateway (pid ${gateway.pid}) — i job girano anche senza di te\n`,
     );
   } else {
-    process.stderr.write(`scheduler: nessuno — i job girano solo sul gateway (${NO_GATEWAY_REMEDY})\n`);
+    process.stderr.write(
+      `scheduler: nessuno — i job girano solo sul gateway (${NO_GATEWAY_REMEDY})\n`,
+    );
   }
   // One tick now, not only on the interval — the gateway does the same and for
   // the same reason (`service.ts`): a job that came due while nothing was
@@ -1127,7 +1158,9 @@ export async function runRepl(
               `\nesecuzione: passa al gateway (pid ${proprietario.pid}) — i turni girano lì adesso, non più in questa finestra\n`,
             );
           } else if (proprietario.kind === 'local') {
-            process.stderr.write(`\nesecuzione: il gateway non risponde più — i turni restano fermi (${NO_GATEWAY_REMEDY})\n`);
+            process.stderr.write(
+              `\nesecuzione: il gateway non risponde più — i turni restano fermi (${NO_GATEWAY_REMEDY})\n`,
+            );
           }
         }
         let result: TurnResult;
@@ -1142,7 +1175,8 @@ export async function runRepl(
             {
               ...(onDelta ? { onDelta } : {}),
               ...(onProgress ? { onProgress } : {}),
-              onFile: (file) => status.line(formatFileReady(file.absolutePath, file.bytes, file.caption)),
+              onFile: (file) =>
+                status.line(formatFileReady(file.absolutePath, file.bytes, file.caption)),
               onStarted: (info) => {
                 if (info.model !== '') modelloEsecutore = info.model;
               },
@@ -1200,7 +1234,10 @@ export async function runRepl(
         // Su stderr, come tutto cio' che e' cornice: `muffin > risposte.txt`
         // raccoglie le risposte e lascia questa a schermo.
         if (progressEnabled) {
-          const usd = runtime.config.provider.kind === 'openai-chatgpt' ? null : costUsd(modelloEsecutore, result.usage, runtime.config.provider.baseUrl);
+          const usd =
+            runtime.config.provider.kind === 'openai-chatgpt'
+              ? null
+              : costUsd(modelloEsecutore, result.usage, runtime.config.provider.baseUrl);
           process.stderr.write(
             `${style.dim(closingLine(result.usage, Date.now() - iniziatoAlle, usd) + (runtime.config.provider.kind === 'openai-chatgpt' ? ' · ChatGPT plan' : ''))}\n\n`,
           );
@@ -1239,7 +1276,9 @@ export async function runRepl(
               `→ \`muffin gateway turn ${error.turnId}\` per l'esito, non rimandare alla cieca\n`,
           );
         } else {
-          process.stderr.write(`errore: ${error instanceof Error ? error.message : String(error)}\n`);
+          process.stderr.write(
+            `errore: ${error instanceof Error ? error.message : String(error)}\n`,
+          );
         }
       } finally {
         // Anche su Ctrl+C e su un turno che esplode: uno spinner che gira dopo
