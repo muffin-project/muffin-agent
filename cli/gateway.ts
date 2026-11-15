@@ -47,6 +47,11 @@ import {
   resolveLauncher,
   STOP_TIMEOUT_SEC,
 } from '../core/gateway/unit.js';
+import {
+  clearGatewayClaim,
+  type GatewayClaim,
+  judgeGatewayUnlock,
+} from '../core/gateway/unlock.js';
 import { CONSOLIDATION_TENANT, consolidationBootLine } from '../core/memory/consolidator.js';
 import { reviewBootLine } from '../core/memory/maintenance.js';
 import { Pausa } from '../core/runtime/pausa.js';
@@ -162,6 +167,9 @@ export const GATEWAY_USAGE = `usage:
                                 servizio no
   muffin gateway run            il processo stesso — lo lancia il supervisore,
                                 non tu (vedi \`muffin gateway install\`)
+  muffin gateway unlock         mostra il claim di gateway_lock, senza scrivere
+            [--confirm]         lo rilascia, solo se l'incarnazione non è tenuta
+                                da un processo vivo
 `;
 
 /**
@@ -264,6 +272,87 @@ export function cmdGatewayStatus(home: string): number {
   }
   process.stdout.write(`${describe(info)}\n`);
   return 0;
+}
+
+export type GatewayUnlockIo = {
+  out: (text: string) => void;
+  err: (text: string) => void;
+  /**
+   * Runs after the probe has allowed a clear and before the fenced write.
+   * The production command does not set it. Tests use it to re-take the row
+   * in that window: the clear must then match nothing.
+   */
+  beforeClear?: (claim: GatewayClaim) => void;
+};
+
+function claimLines(claim: GatewayClaim): string {
+  return [
+    `  pid: ${String(claim.pid)}`,
+    `  holder_id: ${claim.holderId ?? '(nessuno)'}`,
+    `  taken_at: ${claim.takenAt ?? '(vuoto)'}`,
+    `  since: ${claim.since ?? '(vuoto)'}`,
+    `  status: ${claim.status ?? '(vuoto)'}`,
+  ].join('\n');
+}
+
+/**
+ * `muffin gateway unlock` — clear a gateway claim by hand.
+ *
+ * Without `--confirm` it only says what it would remove. With `--confirm`
+ * it removes the claim when the incarnation is not held, and refuses when
+ * it is. The refusal is the same either way: a dry run must not look like
+ * permission to evict a live holder.
+ */
+export function cmdGatewayUnlock(home: string, args: string[], io?: GatewayUnlockIo): number {
+  const out = io?.out ?? ((text: string) => process.stdout.write(text));
+  const err = io?.err ?? ((text: string) => process.stderr.write(text));
+  if (args.includes('--help') || args.includes('-h') || args.some((arg) => arg !== '--confirm')) {
+    err(GATEWAY_USAGE);
+    return 78;
+  }
+  const file = paths(home).db;
+  if (!existsSync(file)) {
+    err(`nessun database in ${file}\n`);
+    return 1;
+  }
+  const confirm = args.includes('--confirm');
+  const db = new DatabaseCtor(file, confirm ? {} : { readonly: true });
+  try {
+    const verdict = judgeGatewayUnlock(db);
+    if (verdict.action === 'absent') {
+      out('nessun claim su gateway_lock\n');
+      return 0;
+    }
+    if (verdict.action === 'refuse') {
+      err(`GATEWAY UNLOCK: rifiutato.\n${verdict.reason}\n${claimLines(verdict.claim)}\n`);
+      return EXIT_ALREADY_RUNNING;
+    }
+    if (!confirm) {
+      out(
+        'GATEWAY UNLOCK: non ho scritto nulla. Con --confirm rimuoverei questo claim ' +
+          `(la riga resta, pid e holder_id no):\n${claimLines(verdict.claim)}\n`,
+      );
+      return 0;
+    }
+    io?.beforeClear?.(verdict.claim);
+    const changes = clearGatewayClaim(db, verdict.claim);
+    if (changes === 0) {
+      err(
+        'GATEWAY UNLOCK: non ho rimosso nulla. La riga è cambiata dopo il controllo ' +
+          `(pid o holder_id diversi).\n${claimLines(verdict.claim)}\n`,
+      );
+      return 1;
+    }
+    err(
+      'GATEWAY UNLOCK: claim rimosso da gateway_lock. La riga resta, il detentore no.\n' +
+        `${claimLines(verdict.claim)}\n` +
+        '  incarnazione: non tenuta da un processo vivo\n',
+    );
+    out('gateway_lock: claim rimosso\n');
+    return 0;
+  } finally {
+    db.close();
+  }
 }
 
 /**

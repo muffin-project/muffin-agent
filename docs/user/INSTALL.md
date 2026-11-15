@@ -321,6 +321,29 @@ persistent secret location; the old `--persist` spelling remains a compatibility
 no-op. `muffin uninstall` names a persistent key it leaves behind so it is never
 surprising.
 
+## When a lock is dated in the future
+
+A clock that steps forward and then back can leave a lock stamp ahead of the
+wall clock. `heldBy` does not treat that stamp as expired, and there is no
+tolerance on it. While the holder still reads as alive, the claim does not
+time out.
+
+`muffin doctor` warns when that happens on the gateway lock, the send lock,
+the memory-ingest lock, or a running turn. The line names the holder, how far
+ahead the stamp is, that a clock step is the likely cause, and what to do.
+
+`muffin gateway unlock` prints the gateway claim it would release and writes
+nothing. `muffin gateway unlock --confirm` releases that claim only when the
+holder's incarnation is not locked by a live process. It refuses a live
+holder. Stop that process with `muffin gateway stop`. The command logs the
+pid, holder id and stamp it removed. It does not clear a turn or a send lock;
+those are reclaimed once the holder is no longer alive.
+
+A `gateway_lock` that has no `holder_id` column is not cleared, not even from
+the pid. Unlock refuses and names the reason. Starting a current build adds
+the column when the gateway opens the database; the clear then matches that
+holder id, so a claim taken between the check and the write is left in place.
+
 ## How this page stays true
 
 Two install evals own two different claims:

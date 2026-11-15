@@ -1,15 +1,15 @@
-import DatabaseCtor from 'better-sqlite3';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import {
   DurableLock,
-  HARD_STALE_MULTIPLIER,
-  ensureColumn,
-  heldBy,
   type DurableLockSpec,
+  ensureColumn,
+  HARD_STALE_MULTIPLIER,
+  heldBy,
 } from './durable.js';
 
 /**
@@ -80,6 +80,17 @@ describe('heldBy — liveness and the horizon, asked together', () => {
   it('an empty row, or one with no pid, is free', () => {
     expect(heldBy(undefined, T0.getTime(), STALE_MS, () => true)).toBeNull();
     expect(heldBy({ pid: null, takenAt: null }, T0.getTime(), STALE_MS, () => true)).toBeNull();
+  });
+
+  it('a future taken_at does not expire a live holder — no tolerance is applied', () => {
+    // Owner decision, 2026-11-14: a tolerance at this comparison was rejected.
+    // One millisecond ahead and a day ahead are the same answer. The gap is
+    // reported by `muffin doctor` and cleared, for a stale gateway row, by
+    // `muffin gateway unlock`. It is not closed inside `heldBy`.
+    const byOneMs = { pid: 4242, takenAt: new Date(T0.getTime() + 1).toISOString() };
+    expect(heldBy(byOneMs, T0.getTime(), STALE_MS, () => true)).toBe(4242);
+    const byADay = { pid: 4242, takenAt: new Date(T0.getTime() + 86_400_000).toISOString() };
+    expect(heldBy(byADay, T0.getTime(), STALE_MS, () => true)).toBe(4242);
   });
 });
 
@@ -213,8 +224,12 @@ describe('additive migration: holder_id reaches a table created before this colu
   it('adds the column to an already-installed table rather than silently ignoring it', () => {
     const db = new DatabaseCtor(':memory:');
     // A pre-existing install: the table as it was before `holder_id`.
-    db.exec(`CREATE TABLE zz_test_lock (id INTEGER PRIMARY KEY CHECK (id = 1), pid INTEGER, taken_at TEXT);`);
-    db.prepare(`INSERT INTO zz_test_lock (id, pid, taken_at) VALUES (1, 4242, ?)`).run(T0.toISOString());
+    db.exec(
+      `CREATE TABLE zz_test_lock (id INTEGER PRIMARY KEY CHECK (id = 1), pid INTEGER, taken_at TEXT);`,
+    );
+    db.prepare(`INSERT INTO zz_test_lock (id, pid, taken_at) VALUES (1, 4242, ?)`).run(
+      T0.toISOString(),
+    );
 
     const lock = new DurableLock(db, SPEC, () => true);
     // Would throw "no such column: holder_id" if the migration had not run.
@@ -249,7 +264,9 @@ describe('ensureColumn survives an ALTER someone else already did', () => {
       db.exec(`CREATE TABLE zz_gara (id INTEGER PRIMARY KEY, undone_at TEXT);`);
       // A mismatched DDL used to be accepted as a successful race even though
       // the requested column remained absent for the next prepared statement.
-      expect(() => ensureColumn(db, 'zz_gara', 'mai_vista', 'undone_at TEXT')).toThrow(/duplicate column name/i);
+      expect(() => ensureColumn(db, 'zz_gara', 'mai_vista', 'undone_at TEXT')).toThrow(
+        /duplicate column name/i,
+      );
       const columns = db.prepare(`PRAGMA table_info(zz_gara)`).all() as { name: string }[];
       expect(columns.filter((c) => c.name === 'undone_at').length).toBe(1);
       expect(columns.some((c) => c.name === 'mai_vista')).toBe(false);

@@ -37,6 +37,7 @@ import {
   cmdGatewayStatus,
   cmdGatewayStop,
   cmdGatewayTurn,
+  cmdGatewayUnlock,
   GATEWAY_USAGE,
 } from './gateway.js';
 import {
@@ -1230,6 +1231,7 @@ async function cmdGateway(argv: string[]): Promise<number> {
   if (sub === 'start') return cmdGatewayStart(home);
   if (sub === 'restart') return cmdGatewayRestart(home);
   if (sub === 'install') return cmdGatewayInstall(home, rest);
+  if (sub === 'unlock') return cmdGatewayUnlock(home, rest);
   process.stderr.write(GATEWAY_USAGE);
   return 78;
 }
