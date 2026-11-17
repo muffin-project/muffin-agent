@@ -44,8 +44,9 @@ substituted that path into the profile.
 
 ## What changed
 
-CI installs that build at `/usr/local` and loads the profile on
-`command -v bwrap`'s realpath. The loader exits if that path is
-`/usr/bin/bwrap` or `/bin/bwrap`. The unit test keeps a `systemd-analyze`
+CI installs that build at `/usr/local/bin/bwrap` and loads the profile on
+that binary's realpath. The loader exits if the realpath is `/usr/bin/bwrap`
+or `/bin/bwrap`. The lookup does not use sudo's `secure_path`: the probe
+execs `bwrap` from the job PATH, where `/usr/local/bin` comes first. The unit test keeps a `systemd-analyze`
 diagnostic when it names the unit under test, and drops diagnostics that
 name another absolute path.

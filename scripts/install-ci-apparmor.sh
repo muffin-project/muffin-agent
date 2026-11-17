@@ -24,7 +24,13 @@ if [ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
   cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns
 fi
 
-resolved="$(command -v bwrap)"
+# Prefer the pinned path over `command -v`. This script runs under sudo, and
+# sudo's secure_path is not the PATH of the probe that later execs `bwrap`.
+if [ -x /usr/local/bin/bwrap ]; then
+  resolved=/usr/local/bin/bwrap
+else
+  resolved="$(command -v bwrap)"
+fi
 real="$(readlink -f "$resolved")"
 case "$real" in
   /usr/bin/bwrap | /bin/bwrap)

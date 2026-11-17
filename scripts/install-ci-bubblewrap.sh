@@ -28,5 +28,8 @@ apt-get install -y --no-install-recommends \
 # which denies net_admin (bwrap: loopback: Failed RTM_NEWADDR). The
 # installer attaches only to a Muffin-owned path; CI does the same.
 bash "$here/install/bubblewrap.sh" build / /usr/local
-actual_version="$(bwrap --version)"
+# Absolute path: this script runs under sudo, whose secure_path is not the
+# job PATH. The probe later execs `bwrap` from the job PATH, where
+# /usr/local/bin precedes /usr/bin.
+actual_version="$(/usr/local/bin/bwrap --version)"
 printf 'Installed verified upstream %s (%s).\n' "$actual_version" "$(bash "$here/install/bubblewrap.sh" sha256)"

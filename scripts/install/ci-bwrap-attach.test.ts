@@ -14,5 +14,6 @@ describe('CI bubblewrap attachment', () => {
     const attach = readFileSync('scripts/install-ci-apparmor.sh', 'utf8');
     expect(attach).toContain('/usr/bin/bwrap | /bin/bwrap)');
     expect(attach).toContain('refusing to attach muffin-bwrap');
+    expect(attach).toContain('resolved=/usr/local/bin/bwrap');
   });
 });
