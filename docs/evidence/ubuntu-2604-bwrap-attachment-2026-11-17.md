@@ -47,6 +47,9 @@ substituted that path into the profile.
 CI installs that build at `/usr/local/bin/bwrap` and loads the profile on
 that binary's realpath. The loader exits if the realpath is `/usr/bin/bwrap`
 or `/bin/bwrap`. The lookup does not use sudo's `secure_path`: the probe
-execs `bwrap` from the job PATH, where `/usr/local/bin` comes first. The unit test keeps a `systemd-analyze`
-diagnostic when it names the unit under test, and drops diagnostics that
-name another absolute path.
+execs `bwrap` from the job PATH, where `/usr/local/bin` comes first.
+
+The unit test and the owner-journey check (`e2e-giro-owner`) keep a
+`systemd-analyze` diagnostic when it names the unit under test, and drop
+diagnostics that name another absolute path. The journey still fails when
+verify exits non-zero.

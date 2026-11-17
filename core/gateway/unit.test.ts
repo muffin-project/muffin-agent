@@ -11,6 +11,7 @@ import {
   resolveInterpreterDir,
   resolveLauncher,
   SERVICE_NAME,
+  systemdDiagnosticsForUnit,
   WATCHDOG_SEC,
 } from './unit.js';
 
@@ -341,22 +342,13 @@ describe('la unit systemd passa il parser di systemd', () => {
     // Host units that systemd walks are not this file. Ubuntu 26.04's image
     // warns that CPUAccounting= was removed from xfs_scrub and the guest
     // agent; those lines do not say the muffin unit was rejected.
-    const relevant = diagnosticsForUnit(file, `${verify.stdout ?? ''}${verify.stderr ?? ''}`);
+    const relevant = systemdDiagnosticsForUnit(
+      file,
+      `${verify.stdout ?? ''}${verify.stderr ?? ''}`,
+    );
     expect(relevant).toBe('');
   });
 });
-
-/**
- * Keep a diagnostic when it names the unit under test, or when it names no
- * file at all. Drop lines that name some other absolute path.
- */
-function diagnosticsForUnit(unitPath: string, output: string): string {
-  return output
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && (line.includes(unitPath) || !line.startsWith('/')))
-    .join('\n');
-}
 
 describe('systemd-analyze diagnostics', () => {
   it('ignores host-unit warnings and keeps a complaint about the unit under test', () => {
@@ -366,11 +358,14 @@ describe('systemd-analyze diagnostics', () => {
       '/usr/lib/systemd/system/system-xfs_scrub.slice:15: Support for option CPUAccounting= has been removed and it is ignored',
       '/usr/lib/systemd/system/walinuxagent.service:21: Support for option CPUAccounting= has been removed and it is ignored',
     ].join('\n');
-    expect(diagnosticsForUnit(unit, host)).toBe('');
+    expect(systemdDiagnosticsForUnit(unit, host)).toBe('');
     expect(
-      diagnosticsForUnit(unit, `${host}\n${unit}:12: Unknown key name 'Nope' in section Service`),
+      systemdDiagnosticsForUnit(
+        unit,
+        `${host}\n${unit}:12: Unknown key name 'Nope' in section Service`,
+      ),
     ).toBe(`${unit}:12: Unknown key name 'Nope' in section Service`);
-    expect(diagnosticsForUnit(unit, 'Failed to parse unit.')).toBe('Failed to parse unit.');
+    expect(systemdDiagnosticsForUnit(unit, 'Failed to parse unit.')).toBe('Failed to parse unit.');
   });
 });
 
